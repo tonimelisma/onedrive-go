@@ -7,12 +7,13 @@ import (
 	gosync "sync"
 	"time"
 
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
+
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 // engineRunner is the interface the Orchestrator uses to run sync passes.

@@ -1556,7 +1556,6 @@ func ensureInternalDependencyGraphGuardrails(repoRoot string) error {
 
 	packages := make(map[string]struct{})
 	edges := make(map[[2]string]struct{})
-	synctypesTargets := make(map[string]struct{})
 
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		line = strings.TrimSpace(line)
@@ -1580,9 +1579,6 @@ func ensureInternalDependencyGraphGuardrails(repoRoot string) error {
 				continue
 			}
 			edges[[2]string{pkg, imp}] = struct{}{}
-			if pkg == internalPackagePrefix+"synctypes" {
-				synctypesTargets[imp] = struct{}{}
-			}
 		}
 	}
 
@@ -1599,22 +1595,6 @@ func ensureInternalDependencyGraphGuardrails(repoRoot string) error {
 			len(edges),
 			internalImportEdgeLimit,
 		)
-	}
-
-	for _, forbidden := range [][2]string{
-		{internalPackagePrefix + "cli", internalPackagePrefix + "synctypes"},
-		{internalPackagePrefix + "multisync", internalPackagePrefix + "synctypes"},
-		{internalPackagePrefix + "syncstore", internalPackagePrefix + "sync"},
-	} {
-		if _, ok := edges[forbidden]; ok {
-			return fmt.Errorf("forbidden internal import edge detected: %s -> %s", forbidden[0], forbidden[1])
-		}
-	}
-
-	for target := range synctypesTargets {
-		if target != internalPackagePrefix+"driveid" {
-			return fmt.Errorf("synctypes may only import internal/driveid, found %s", target)
-		}
 	}
 
 	return nil
@@ -2102,7 +2082,7 @@ func slugifyMarkdownHeading(heading string) string {
 }
 
 func ensureSyncStoreMigrationDiscipline(repoRoot string) error {
-	schemaOwnerPath := filepath.Join(repoRoot, "internal", "syncstore", "schema.go")
+	schemaOwnerPath := filepath.Join(repoRoot, "internal", "sync", "schema.go")
 	if _, err := localpath.Stat(schemaOwnerPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -2110,14 +2090,14 @@ func ensureSyncStoreMigrationDiscipline(repoRoot string) error {
 		return fmt.Errorf("stat sync-store schema owner: %w", err)
 	}
 
-	legacySchemaPath := filepath.Join(repoRoot, "internal", "syncstore", "schema.sql")
+	legacySchemaPath := filepath.Join(repoRoot, "internal", "sync", "schema.sql")
 	if _, err := localpath.Stat(legacySchemaPath); err == nil {
 		return fmt.Errorf("legacy sync-store schema file detected: %s", legacySchemaPath)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat legacy sync-store schema file: %w", err)
 	}
 
-	initialMigrationPath := filepath.Join(repoRoot, "internal", "syncstore", "migrations", "00001_init.sql")
+	initialMigrationPath := filepath.Join(repoRoot, "internal", "sync", "migrations", "00001_init.sql")
 	if _, err := localpath.Stat(initialMigrationPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("missing initial sync-store goose migration: %s", initialMigrationPath)
@@ -2173,6 +2153,26 @@ func ensureNoForbiddenProductionPatterns(repoRoot string) error {
 	}
 	if match != "" {
 		return fmt.Errorf("trustedpath usage detected: %s", match)
+	}
+
+	match, err = findTextMatch(goRoots, regexp.MustCompile(`internal/(`+`syncstore|synctypes)`), func(path string) bool {
+		return !strings.HasSuffix(path, ".go")
+	})
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("deleted sync package import/reference detected: %s", match)
+	}
+
+	match, err = findTextMatch(goRoots, regexp.MustCompile(`\bCommit`+`Outcome\b|retry re`+`play`), func(path string) bool {
+		return !strings.HasSuffix(path, ".go")
+	})
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("deleted sync transition vocabulary detected: %s", match)
 	}
 
 	return nil
@@ -2820,10 +2820,10 @@ func ensurePrivilegedPackageCallsStayAtApprovedBoundaries(repoRoot string) error
 		{
 			importPath:  "database/sql",
 			selector:    "Open",
-			description: "sql.Open is only allowed in internal/syncstore/store.go and internal/syncstore/inspector.go",
+			description: "sql.Open is only allowed in internal/sync/store.go and internal/sync/inspector.go",
 			allowed: func(path string) bool {
-				return path == filepath.Join(repoRoot, "internal", "syncstore", "store.go") ||
-					path == filepath.Join(repoRoot, "internal", "syncstore", "inspector.go")
+				return path == filepath.Join(repoRoot, "internal", "sync", "store.go") ||
+					path == filepath.Join(repoRoot, "internal", "sync", "inspector.go")
 			},
 		},
 		{

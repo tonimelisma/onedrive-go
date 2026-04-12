@@ -8,7 +8,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // maxHashRetries is the number of additional download attempts when the
@@ -22,10 +21,10 @@ const maxHashRetries = 2
 // ExecuteDownload downloads a remote file via TransferManager with .partial
 // safety, hash verification with retry, and atomic rename. Exported for use
 // by the engine's conflict resolution path.
-func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ExecutionResult {
+func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOutcome {
 	targetPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionDownload, normalizeSyncTreePathError(err))
+		return e.failedOutcome(action, ActionDownload, normalizeSyncTreePathError(err))
 	}
 
 	driveID := e.resolveDriveID(action)
@@ -40,23 +39,23 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) Executio
 
 	result, err := e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, targetPath, opts)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionDownload, err)
+		return e.failedOutcome(action, ActionDownload, err)
 	}
 
 	return e.downloadOutcome(action, driveID, result.LocalHash, result.EffectiveRemoteHash, result.Size)
 }
 
-// downloadOutcome builds a successful Outcome after download.
+// downloadOutcome builds a successful ActionOutcome after download.
 func (e *Executor) downloadOutcome(
 	action *Action, driveID driveid.ID, localHash, remoteHash string, size int64,
-) ExecutionResult {
-	o := ExecutionResult{
-		Action:          synctypes.ActionDownload,
+) ActionOutcome {
+	o := ActionOutcome{
+		Action:          ActionDownload,
 		Success:         true,
 		Path:            action.Path,
 		DriveID:         driveID,
 		ItemID:          action.ItemID,
-		ItemType:        synctypes.ItemTypeFile,
+		ItemType:        ItemTypeFile,
 		LocalHash:       localHash,
 		RemoteHash:      remoteHash,
 		LocalSize:       size,
@@ -88,7 +87,7 @@ func (e *Executor) downloadOutcome(
 // the baseline, the upload is aborted with a descriptive error. The engine
 // records this as a sync_failure; on the next pass the remote observer will
 // have polled, and the planner will see both changes and detect a conflict.
-func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ExecutionResult {
+func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutcome {
 	driveID := e.resolveDriveID(action)
 
 	// Watch-mode freshness check: verify the remote hasn't changed since
@@ -100,7 +99,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ExecutionR
 		action.View.Baseline.ETag != "" {
 		currentItem, fetchErr := e.items.GetItem(ctx, driveID, action.ItemID)
 		if fetchErr == nil && currentItem.ETag != action.View.Baseline.ETag {
-			return e.failedOutcome(action, synctypes.ActionUpload,
+			return e.failedOutcome(action, ActionUpload,
 				fmt.Errorf("remote eTag changed since last sync (baseline=%s current=%s): potential conflict",
 					action.View.Baseline.ETag, currentItem.ETag))
 		}
@@ -111,7 +110,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ExecutionR
 
 	localPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionUpload, normalizeSyncTreePathError(err))
+		return e.failedOutcome(action, ActionUpload, normalizeSyncTreePathError(err))
 	}
 
 	var (
@@ -122,19 +121,19 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ExecutionR
 	if shouldOverwriteKnownRemoteItem(action) {
 		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, driveops.UploadOpts{})
 		if err != nil {
-			return e.failedOutcome(action, synctypes.ActionUpload, err)
+			return e.failedOutcome(action, ActionUpload, err)
 		}
 		parentID = resolvedUploadParentID(action, result.Item)
 	} else {
 		parentID, err = e.ResolveParentID(action.Path)
 		if err != nil {
-			return e.failedOutcome(action, synctypes.ActionUpload, err)
+			return e.failedOutcome(action, ActionUpload, err)
 		}
 
 		name := filepath.Base(action.Path)
 		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, driveops.UploadOpts{})
 		if err != nil {
-			return e.failedOutcome(action, synctypes.ActionUpload, err)
+			return e.failedOutcome(action, ActionUpload, err)
 		}
 	}
 
@@ -147,14 +146,14 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ExecutionR
 
 	e.confirmRemotePathVisible(ctx, action)
 
-	return ExecutionResult{
-		Action:          synctypes.ActionUpload,
+	return ActionOutcome{
+		Action:          ActionUpload,
 		Success:         true,
 		Path:            action.Path,
 		DriveID:         driveID,
 		ItemID:          result.Item.ID,
 		ParentID:        parentID,
-		ItemType:        synctypes.ItemTypeFile,
+		ItemType:        ItemTypeFile,
 		LocalHash:       result.LocalHash,
 		RemoteHash:      remoteHash,
 		LocalSize:       result.Size,
@@ -172,7 +171,7 @@ func shouldOverwriteKnownRemoteItem(action *Action) bool {
 		return false
 	}
 
-	if action.ConflictInfo != nil && action.ConflictInfo.ConflictType == synctypes.ConflictEditDelete {
+	if action.ConflictInfo != nil && action.ConflictInfo.ConflictType == ConflictEditDelete {
 		return false
 	}
 

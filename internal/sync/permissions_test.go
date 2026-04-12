@@ -15,7 +15,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const permissionsRemoteDriveID = "remote-drive-1"
@@ -58,7 +57,7 @@ func (m *mockPermChecker) ListItemPermissions(_ context.Context, driveID driveid
 func TestFindShortcutForPath(t *testing.T) {
 	t.Parallel()
 
-	shortcuts := []synctypes.Shortcut{
+	shortcuts := []Shortcut{
 		{ItemID: "sc-1", LocalPath: "Shared/TeamDocs"},
 		{ItemID: "sc-2", LocalPath: "Shared/Other"},
 	}
@@ -94,7 +93,7 @@ func TestFindShortcutForPath(t *testing.T) {
 func TestFindShortcutForPath_EmptyLocalPathMatchesConfiguredRoot(t *testing.T) {
 	t.Parallel()
 
-	shortcuts := []synctypes.Shortcut{
+	shortcuts := []Shortcut{
 		{ItemID: "nested", LocalPath: "Nested"},
 		{ItemID: "root", LocalPath: ""},
 	}
@@ -118,8 +117,8 @@ func TestFindShortcutForPath_EmptyLocalPathMatchesConfiguredRoot(t *testing.T) {
 func newTestEngineWithPerms(
 	t *testing.T,
 	checker PermissionChecker,
-	shortcuts []synctypes.Shortcut,
-	baselineEntries []ExecutionResult,
+	shortcuts []Shortcut,
+	baselineEntries []ActionOutcome,
 ) (*testEngine, *Baseline, string) {
 	t.Helper()
 
@@ -129,8 +128,8 @@ func newTestEngineWithPerms(
 func newTestEngineWithPermsAndRoot(
 	t *testing.T,
 	checker PermissionChecker,
-	shortcuts []synctypes.Shortcut,
-	baselineEntries []ExecutionResult,
+	shortcuts []Shortcut,
+	baselineEntries []ActionOutcome,
 	rootItemID string,
 ) (*testEngine, *Baseline, string) {
 	t.Helper()
@@ -165,7 +164,7 @@ func newTestEngineWithPermsAndRoot(
 
 	// Seed baseline entries.
 	for i := range baselineEntries {
-		require.NoError(t, eng.baseline.CommitMutation(ctx, baselineMutationFromExecutionResult(&baselineEntries[i])))
+		require.NoError(t, eng.baseline.CommitMutation(ctx, mutationFromActionOutcome(&baselineEntries[i])))
 	}
 
 	// Register shortcuts.
@@ -201,7 +200,7 @@ func recordRemoteBlockedFailure(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	scopeKey synctypes.ScopeKey,
+	scopeKey ScopeKey,
 	path string,
 ) {
 	t.Helper()
@@ -209,11 +208,11 @@ func recordRemoteBlockedFailure(
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       path,
 		DriveID:    eng.driveID,
-		Direction:  synctypes.DirectionUpload,
+		Direction:  DirectionUpload,
 		ActionType: ActionUpload,
-		Role:       synctypes.FailureRoleHeld,
-		Category:   synctypes.CategoryTransient,
-		IssueType:  synctypes.IssueSharedFolderBlocked,
+		Role:       FailureRoleHeld,
+		Category:   CategoryTransient,
+		IssueType:  IssueSharedFolderBlocked,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
 		ScopeKey:   scopeKey,
@@ -235,19 +234,19 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
-			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
-			DriveID: driveid.New(remoteDriveID), ItemID: "parent-folder-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "parent-folder-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
@@ -264,13 +263,13 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	require.Len(t, issues, 1)
 	assert.Equal(t, driveid.New(remoteDriveID), issues[0].DriveID)
 	assert.Equal(t, "Shared/TeamDocs/sub/file.txt", issues[0].Path)
-	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
+	scopeKey := SKPermRemote("Shared/TeamDocs/sub")
 	assert.Equal(t, scopeKey, issues[0].ScopeKey, "boundary issue should be scoped to the recursive remote permission boundary")
 	assert.True(t, isTestScopeBlocked(eng, scopeKey), "watch mode should create a recursive remote permission scope")
 
 	block, ok := getTestScopeBlock(eng, scopeKey)
 	require.True(t, ok, "remote permission scope should be queryable from the active-scope working set")
-	assert.Equal(t, synctypes.IssueSharedFolderBlocked, block.IssueType)
+	assert.Equal(t, IssueSharedFolderBlocked, block.IssueType)
 	assert.True(t, block.NextTrialAt.IsZero(), "remote permission scopes should rely on recheckPermissions, not trial dispatch")
 
 	nestedUpload := &TrackedAction{
@@ -329,19 +328,19 @@ func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
-			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
-			DriveID: driveid.New(remoteDriveID), ItemID: "parent-folder-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "parent-folder-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
@@ -370,19 +369,19 @@ func TestHandle403_WholeShareReadOnly_BoundaryAtRoot(t *testing.T) {
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
-			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
-			DriveID: driveid.New(remoteDriveID), ItemID: "sub-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "sub-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
@@ -408,19 +407,19 @@ func TestHandle403_APIFailure_FailOpen(t *testing.T) {
 		err: fmt.Errorf("network error"),
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
-			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
-			DriveID: driveid.New(remoteDriveID), ItemID: "sub-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "sub-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
@@ -463,10 +462,10 @@ func TestHandle403_ConfiguredSharedRoot_RecordsRootBoundary(t *testing.T) {
 		},
 	}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "nested",
-			DriveID: driveid.New(engineTestDriveID), ItemID: "nested-id", ParentID: "shared-root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(engineTestDriveID), ItemID: "nested-id", ParentID: "shared-root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
@@ -477,12 +476,12 @@ func TestHandle403_ConfiguredSharedRoot_RecordsRootBoundary(t *testing.T) {
 	decision := applyRemote403Decision(t, eng, ctx, bl, "nested/file.txt", nil)
 	assert.True(t, decision.Matched)
 	assert.Equal(t, permissionCheckActivateDerivedScope, decision.Kind)
-	assert.Equal(t, synctypes.SKPermRemote(""), decision.ScopeKey)
+	assert.Equal(t, SKPermRemote(""), decision.ScopeKey)
 
 	issues := listRemoteBlockedFailures(t, eng, ctx)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "nested/file.txt", issues[0].Path)
-	assert.Equal(t, synctypes.SKPermRemote(""), issues[0].ScopeKey)
+	assert.Equal(t, SKPermRemote(""), issues[0].ScopeKey)
 	assert.Equal(t, []string{""}, eng.permHandler.DeniedPrefixes(ctx))
 }
 
@@ -503,27 +502,27 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
-			DriveID: driveid.New(remoteDriveID), ItemID: "folder-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "folder-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 	newTestWatchState(t, eng)
-	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
+	scopeKey := SKPermRemote("Shared/TeamDocs/sub")
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, "Shared/TeamDocs/sub/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: synctypes.IssueSharedFolderBlocked,
+		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -574,19 +573,19 @@ func TestHandle403_ExistingRemoteScope_AvoidsAPICall(t *testing.T) {
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
-			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
-			DriveID: driveid.New(remoteDriveID), ItemID: "parent-folder-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "parent-folder-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
@@ -606,7 +605,7 @@ func TestHandle403_ExistingRemoteScope_AvoidsAPICall(t *testing.T) {
 
 	issues := listRemoteBlockedFailures(t, eng, ctx)
 	require.Len(t, issues, 1)
-	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs/sub"), issues[0].ScopeKey)
+	assert.Equal(t, SKPermRemote("Shared/TeamDocs/sub"), issues[0].ScopeKey)
 }
 
 // Validates: R-2.10.9, R-2.10.11, R-2.14.4
@@ -618,27 +617,27 @@ func TestRecheckPermissions_APIFailure_FailsOpenAndReleasesScope(t *testing.T) {
 		err: fmt.Errorf("graph unavailable"),
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
-			DriveID: driveid.New(remoteDriveID), ItemID: "folder-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "folder-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 	newTestWatchState(t, eng)
-	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
+	scopeKey := SKPermRemote("Shared/TeamDocs/sub")
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, "Shared/TeamDocs/sub/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: synctypes.IssueSharedFolderBlocked,
+		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -667,27 +666,27 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
-			DriveID: driveid.New(remoteDriveID), ItemID: "folder-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "folder-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
-	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
+	scopeKey := SKPermRemote("Shared/TeamDocs/sub")
 	newTestWatchState(t, eng)
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, "Shared/TeamDocs/sub/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: synctypes.IssueSharedFolderBlocked,
+		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -729,8 +728,8 @@ func TestRecheckPermissions_UnresolvableIssues_FailOpenClearsStaleBoundaries(t *
 	eng, bl, _ := newTestEngineWithPerms(t, checker, nil, nil)
 	ctx := t.Context()
 
-	recordRemoteBlockedFailure(t, eng, ctx, synctypes.SKPermRemote("Shared/NoShortcut/sub"), "Shared/NoShortcut/sub/file.txt")
-	recordRemoteBlockedFailure(t, eng, ctx, synctypes.SKPermRemote("Shared/Other/locked"), "Shared/Other/locked/file.txt")
+	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemote("Shared/NoShortcut/sub"), "Shared/NoShortcut/sub/file.txt")
+	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemote("Shared/Other/locked"), "Shared/Other/locked/file.txt")
 
 	// Recheck with no shortcuts — both issues have sc == nil.
 	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, nil)
@@ -750,17 +749,17 @@ func TestRecheckPermissions_UnresolvedItemID_FailOpenClearsStaleBoundary(t *test
 
 	checker := &mockPermChecker{}
 
-	// synctypes.Shortcut exists but the issue path is NOT in baseline → remoteItemID == "".
-	shortcuts := []synctypes.Shortcut{{
+	// Shortcut exists but the issue path is NOT in baseline → remoteItemID == "".
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
 	// No baseline entries for the issue path.
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, nil)
 	ctx := t.Context()
 
-	recordRemoteBlockedFailure(t, eng, ctx, synctypes.SKPermRemote("Shared/TeamDocs/missing"), "Shared/TeamDocs/missing/file.txt")
+	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemote("Shared/TeamDocs/missing"), "Shared/TeamDocs/missing/file.txt")
 
 	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, shortcuts)
 	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
@@ -783,13 +782,13 @@ func TestRecheckPermissions_ConfiguredSharedRootBoundary_UsesRootItemID(t *testi
 
 	eng, bl, _ := newTestEngineWithPermsAndRoot(t, checker, nil, nil, "shared-root-id")
 	ctx := t.Context()
-	scopeKey := synctypes.SKPermRemote("")
+	scopeKey := SKPermRemote("")
 	newTestWatchState(t, eng)
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, "nested/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: synctypes.IssueSharedFolderBlocked,
+		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -807,23 +806,23 @@ func TestDeniedPrefixes_RemoteScopesOnly(t *testing.T) {
 	eng, _, _ := newTestEngineWithPerms(t, checker, nil, nil)
 	ctx := t.Context()
 
-	recordRemoteBlockedFailure(t, eng, ctx, synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt")
+	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt")
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "file.txt",
-		Direction:  synctypes.DirectionUpload,
-		Category:   synctypes.CategoryActionable,
-		IssueType:  synctypes.IssuePermissionDenied,
+		Direction:  DirectionUpload,
+		Category:   CategoryActionable,
+		IssueType:  IssuePermissionDenied,
 		ErrMsg:     "single-file 403",
 		HTTPStatus: http.StatusForbidden,
 	}, nil))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "Private",
-		Direction: synctypes.DirectionUpload,
-		Role:      synctypes.FailureRoleBoundary,
-		Category:  synctypes.CategoryActionable,
-		IssueType: synctypes.IssueLocalPermissionDenied,
+		Direction: DirectionUpload,
+		Role:      FailureRoleBoundary,
+		Category:  CategoryActionable,
+		IssueType: IssueLocalPermissionDenied,
 		ErrMsg:    "local permission denied",
-		ScopeKey:  synctypes.SKPermDir("Private"),
+		ScopeKey:  SKPermDir("Private"),
 	}, nil))
 
 	assert.Equal(t, []string{"Shared/TeamDocs"}, eng.permHandler.DeniedPrefixes(ctx))
@@ -843,19 +842,19 @@ func TestHandle403_FolderNotFound_RecordsIssue(t *testing.T) {
 		notFoundOn: true, // Return graph.ErrNotFound for unknown keys.
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
-			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
-			DriveID: driveid.New(remoteDriveID), ItemID: "sub-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "sub-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
@@ -888,16 +887,16 @@ func TestHandle403_UnresolvedParent_FallsBackToRoot(t *testing.T) {
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
 	// Only root is in baseline — parent folder "Shared/TeamDocs/newdir" is NOT.
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
-			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
 		},
 	}
 
@@ -931,27 +930,27 @@ func TestRecheckPermissions_StillDenied_KeepsDeniedPrefix(t *testing.T) {
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/sub",
-			DriveID: driveid.New(remoteDriveID), ItemID: "folder-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "folder-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 	newTestWatchState(t, eng)
-	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs/sub")
+	scopeKey := SKPermRemote("Shared/TeamDocs/sub")
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, "Shared/TeamDocs/sub/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: synctypes.IssueSharedFolderBlocked,
+		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -979,24 +978,24 @@ func TestHandle403_ShortcutUsesRemoteDrive(t *testing.T) {
 		perms: map[string][]graph.Permission{
 			// Parent folder on the shortcut's remote drive is read-only.
 			driveid.New(remoteDriveID).String() + ":parent-id": {{ID: "p1", Roles: []string{"read"}}},
-			// synctypes.Shortcut root is also read-only.
+			// Shortcut root is also read-only.
 			driveid.New(remoteDriveID).String() + ":root-id": {{ID: "p2", Roles: []string{"read"}}},
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/Special", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/Special", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/Special",
-			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/Special/sub",
-			DriveID: driveid.New(remoteDriveID), ItemID: "parent-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "parent-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
@@ -1039,32 +1038,32 @@ func TestWalkPermissionBoundary_StopsAtShortcutRoot(t *testing.T) {
 		},
 	}
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
-			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
 		},
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/mid",
-			DriveID: driveid.New(remoteDriveID), ItemID: "mid-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "mid-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/mid/deep",
-			DriveID: driveid.New(remoteDriveID), ItemID: "deep-id", ParentID: "mid-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "deep-id", ParentID: "mid-id", ItemType: ItemTypeFolder,
 		},
 		// Parent above the shortcut root — should never be queried.
 		{
 			Action: ActionDownload, Success: true, Path: "Shared",
-			DriveID: driveid.New(remoteDriveID), ItemID: "above-root", ParentID: "root", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "above-root", ParentID: "root", ItemType: ItemTypeFolder,
 		},
 	}
 
-	eng, bl, _ := newTestEngineWithPerms(t, checker, []synctypes.Shortcut{*sc}, baselineEntries)
+	eng, bl, _ := newTestEngineWithPerms(t, checker, []Shortcut{*sc}, baselineEntries)
 	ctx := t.Context()
 
 	boundary := eng.permHandler.walkPermissionBoundary(ctx, bl, "Shared/TeamDocs/mid/deep", sc, driveid.New(remoteDriveID))
@@ -1099,38 +1098,38 @@ func TestRecheckPermissions_MultipleIssues_PartialResolution(t *testing.T) {
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: synctypes.ObservationDelta, DiscoveredAt: 1000,
+		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
 	}}
 
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/folderA",
-			DriveID: driveid.New(remoteDriveID), ItemID: "folder-a-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "folder-a-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 		{
 			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs/folderB",
-			DriveID: driveid.New(remoteDriveID), ItemID: "folder-b-id", ParentID: "root-id", ItemType: synctypes.ItemTypeFolder,
+			DriveID: driveid.New(remoteDriveID), ItemID: "folder-b-id", ParentID: "root-id", ItemType: ItemTypeFolder,
 		},
 	}
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
-	scopeA := synctypes.SKPermRemote("Shared/TeamDocs/folderA")
-	scopeB := synctypes.SKPermRemote("Shared/TeamDocs/folderB")
+	scopeA := SKPermRemote("Shared/TeamDocs/folderA")
+	scopeB := SKPermRemote("Shared/TeamDocs/folderB")
 	newTestWatchState(t, eng)
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeA, "Shared/TeamDocs/folderA/file.txt")
 	recordRemoteBlockedFailure(t, eng, ctx, scopeB, "Shared/TeamDocs/folderB/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeA,
-		IssueType: synctypes.IssueSharedFolderBlocked,
+		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeB,
-		IssueType: synctypes.IssueSharedFolderBlocked,
+		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -1189,14 +1188,14 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
 
 	// Should have recorded a directory-level local_permission_denied.
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Private", issues[0].Path)
-	assert.Equal(t, synctypes.SKPermDir("Private"), issues[0].ScopeKey)
+	assert.Equal(t, SKPermDir("Private"), issues[0].ScopeKey)
 
 	// Should have created a scope block.
-	assert.True(t, isTestScopeBlocked(eng, synctypes.SKPermDir("Private")), "should create a scope block for the denied directory")
+	assert.True(t, isTestScopeBlocked(eng, SKPermDir("Private")), "should create a scope block for the denied directory")
 }
 
 // Validates: R-2.10.12
@@ -1224,7 +1223,7 @@ func TestHandleLocalPermission_FileLevel(t *testing.T) {
 	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
 
 	// Should have recorded a file-level local_permission_denied (no scope key).
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Docs/secret.txt", issues[0].Path)
@@ -1249,22 +1248,22 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	// Set up watch state so the test can install an active scope block.
 	newTestWatchState(t, eng)
 
-	scopeKey := synctypes.SKPermDir("Private")
+	scopeKey := SKPermDir("Private")
 
 	// Simulate a prior denial: record failure + scope block.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "Private",
 		DriveID:   eng.driveID,
-		Direction: synctypes.DirectionDownload,
-		Role:      synctypes.FailureRoleBoundary,
-		IssueType: synctypes.IssueLocalPermissionDenied,
-		Category:  synctypes.CategoryActionable,
+		Direction: DirectionDownload,
+		Role:      FailureRoleBoundary,
+		IssueType: IssueLocalPermissionDenied,
+		Category:  CategoryActionable,
 		ErrMsg:    "directory not accessible",
 		ScopeKey:  scopeKey,
 	}, nil))
 
 	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
+		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
 	})
 
 	// Directory is now accessible (we didn't chmod 000 it).
@@ -1272,7 +1271,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
 
 	// Failure should be cleared.
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	require.NoError(t, err)
 	assert.Empty(t, issues, "failure should be cleared when directory is accessible")
 
@@ -1302,28 +1301,28 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 
 	newTestWatchState(t, eng)
 
-	scopeKey := synctypes.SKPermDir("Private")
+	scopeKey := SKPermDir("Private")
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "Private",
 		DriveID:   eng.driveID,
-		Direction: synctypes.DirectionDownload,
-		Role:      synctypes.FailureRoleBoundary,
-		IssueType: synctypes.IssueLocalPermissionDenied,
-		Category:  synctypes.CategoryActionable,
+		Direction: DirectionDownload,
+		Role:      FailureRoleBoundary,
+		IssueType: IssueLocalPermissionDenied,
+		Category:  CategoryActionable,
 		ErrMsg:    "directory not accessible",
 		ScopeKey:  scopeKey,
 	}, nil))
 
 	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
+		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
 	})
 
 	decisions := applyLocalPermissionRecheck(t, eng, ctx)
 	requireSinglePermissionDecision(t, decisions, permissionRecheckKeepScope)
 
 	// Failure should remain.
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	require.NoError(t, err)
 	assert.Len(t, issues, 1, "failure should remain when directory is still inaccessible")
 
@@ -1347,9 +1346,9 @@ func TestClearScannerResolvedPermissions_FileLevel(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "secret.txt",
 		DriveID:   eng.driveID,
-		Direction: synctypes.DirectionUpload,
-		IssueType: synctypes.IssueLocalPermissionDenied,
-		Category:  synctypes.CategoryActionable,
+		Direction: DirectionUpload,
+		IssueType: IssueLocalPermissionDenied,
+		Category:  CategoryActionable,
 		ErrMsg:    "permission denied",
 	}, nil))
 
@@ -1358,7 +1357,7 @@ func TestClearScannerResolvedPermissions_FileLevel(t *testing.T) {
 	decisions := applyScannerResolvedPermissions(t, eng, ctx, observed)
 	requireSinglePermissionDecision(t, decisions, permissionRecheckClearFileFailure)
 
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	require.NoError(t, err)
 	assert.Empty(t, issues, "file-level failure should be cleared when scanner observes the file")
 }
@@ -1373,22 +1372,22 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 
 	newTestWatchState(t, eng)
 
-	scopeKey := synctypes.SKPermDir("Private")
+	scopeKey := SKPermDir("Private")
 
 	// Record a directory-level permission failure with scope block.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "Private",
 		DriveID:   eng.driveID,
-		Direction: synctypes.DirectionDownload,
-		Role:      synctypes.FailureRoleBoundary,
-		IssueType: synctypes.IssueLocalPermissionDenied,
-		Category:  synctypes.CategoryActionable,
+		Direction: DirectionDownload,
+		Role:      FailureRoleBoundary,
+		IssueType: IssueLocalPermissionDenied,
+		Category:  CategoryActionable,
 		ErrMsg:    "directory not accessible",
 		ScopeKey:  scopeKey,
 	}, nil))
 
 	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
+		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
 	})
 
 	// Scanner observes a file under the blocked directory — proof that the
@@ -1397,7 +1396,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 	decisions := applyScannerResolvedPermissions(t, eng, ctx, observed)
 	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
 
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	require.NoError(t, err)
 	assert.Empty(t, issues, "dir-level failure should be cleared when scanner observes a child path")
 
@@ -1414,21 +1413,21 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 
 	newTestWatchState(t, eng)
 
-	scopeKey := synctypes.SKPermDir("Private")
+	scopeKey := SKPermDir("Private")
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "Private",
 		DriveID:   eng.driveID,
-		Direction: synctypes.DirectionDownload,
-		Role:      synctypes.FailureRoleBoundary,
-		IssueType: synctypes.IssueLocalPermissionDenied,
-		Category:  synctypes.CategoryActionable,
+		Direction: DirectionDownload,
+		Role:      FailureRoleBoundary,
+		IssueType: IssueLocalPermissionDenied,
+		Category:  CategoryActionable,
 		ErrMsg:    "directory not accessible",
 		ScopeKey:  scopeKey,
 	}, nil))
 
 	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key: scopeKey, IssueType: synctypes.IssueLocalPermissionDenied,
+		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
 	})
 
 	// Scanner observes an unrelated path — should NOT clear the permission failure.
@@ -1436,7 +1435,7 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 	decisions := applyScannerResolvedPermissions(t, eng, ctx, observed)
 	assert.Empty(t, decisions)
 
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	require.NoError(t, err)
 	assert.Len(t, issues, 1, "failure should remain when scanner didn't observe the blocked path")
 

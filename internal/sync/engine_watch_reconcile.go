@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // externalDBChanged checks whether another process (e.g., the CLI) wrote to
@@ -52,7 +50,7 @@ func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
 // engine consumes the approved rows through user-intent dispatch.
 func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 	if rt.deleteCounter != nil && rt.deleteCounter.IsHeld() {
-		rows, err := rt.engine.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
+		rows, err := rt.engine.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateHeld)
 		if err != nil {
 			rt.engine.logger.Warn("failed to check held-delete entries",
 				slog.String("error", err.Error()),
@@ -80,7 +78,7 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 		return
 	}
 
-	localIssues, err := rt.engine.baseline.ListSyncFailuresByIssueType(ctx, synctypes.IssueLocalPermissionDenied)
+	localIssues, err := rt.engine.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	if err != nil {
 		rt.engine.logger.Warn("failed to check local permission failures",
 			slog.String("error", err.Error()),
@@ -98,7 +96,7 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 		return
 	}
 
-	activeScopes := make(map[synctypes.ScopeKey]bool, len(localIssues)+len(remoteIssues))
+	activeScopes := make(map[ScopeKey]bool, len(localIssues)+len(remoteIssues))
 	for i := range localIssues {
 		if localIssues[i].ScopeKey.IsPermDir() {
 			activeScopes[localIssues[i].ScopeKey] = true
@@ -167,8 +165,8 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 	)
 }
 
-func (rt *watchRuntime) logRemoteBlockedChanges(groups []syncstore.VisibleIssueGroup) {
-	current := make(map[synctypes.ScopeKey]string, len(groups))
+func (rt *watchRuntime) logRemoteBlockedChanges(groups []VisibleIssueGroup) {
+	current := make(map[ScopeKey]string, len(groups))
 
 	for i := range groups {
 		group := groups[i]
@@ -205,7 +203,7 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []syncstore.VisibleIssueG
 	rt.lastRemoteBlocked = current
 }
 
-func summarySignature(summary syncstore.IssueSummary) (string, string) {
+func summarySignature(summary IssueSummary) (string, string) {
 	parts := make([]string, 0, len(summary.Groups))
 	for i := range summary.Groups {
 		parts = append(parts, fmt.Sprintf("%d %s", summary.Groups[i].Count, summary.Groups[i].Key))
@@ -265,13 +263,13 @@ func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []Skippe
 			}
 		}
 
-		failures := make([]syncstore.ActionableFailure, len(items))
+		failures := make([]ActionableFailure, len(items))
 		for i := range items {
-			failures[i] = syncstore.ActionableFailure{
+			failures[i] = ActionableFailure{
 				Path:       items[i].Path,
 				DriveID:    eng.driveID,
-				Direction:  synctypes.DirectionUpload,
-				ActionType: synctypes.ActionUpload,
+				Direction:  DirectionUpload,
+				ActionType: ActionUpload,
 				IssueType:  reason,
 				Error:      items[i].Detail,
 				FileSize:   items[i].FileSize,
@@ -299,9 +297,9 @@ func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped [
 	}
 
 	scannerIssueTypes := []string{
-		synctypes.IssueInvalidFilename, synctypes.IssuePathTooLong,
-		synctypes.IssueFileTooLarge, synctypes.IssueCaseCollision,
-		synctypes.IssueHashPanic,
+		IssueInvalidFilename, IssuePathTooLong,
+		IssueFileTooLarge, IssueCaseCollision,
+		IssueHashPanic,
 	}
 	for _, issueType := range scannerIssueTypes {
 		paths := currentByType[issueType]
@@ -369,7 +367,7 @@ func (e *Engine) initReconcileTicker(opts WatchOptions) syncTicker {
 // while reconciliation runs. The goroutine sends a reconcileResult back to the
 // watch loop, and the loop applies shortcut snapshot updates plus buffer
 // injection from its own goroutine.
-func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *syncstore.Baseline) {
+func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *Baseline) {
 	if rt.reconcileActive {
 		rt.engine.logger.Info("full reconciliation skipped — previous still running")
 		return
@@ -384,7 +382,7 @@ func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *sync
 
 func (rt *watchRuntime) performFullReconciliation(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) reconcileResult {
 	result := reconcileResult{}
 	start := rt.engine.nowFunc()
@@ -476,7 +474,7 @@ func (rt *watchRuntime) buildFullReconciliationPlan(
 
 func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	plan *ObservationSessionPlan,
 	scopeSnapshot syncscope.Snapshot,
 	scopeGeneration int64,
@@ -503,7 +501,7 @@ func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
 
 func (rt *watchRuntime) runEnteredScopeReconciliationAsync(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	enteredPaths []string,
 ) {
 	if rt.reconcileActive {

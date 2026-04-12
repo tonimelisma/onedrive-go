@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 type StateAuditOptions struct {
@@ -20,9 +20,9 @@ type StateAuditOptions struct {
 }
 
 type stateAuditOutput struct {
-	Clean          bool                         `json:"clean"`
-	RepairsApplied int                          `json:"repairs_applied,omitempty"`
-	Findings       []syncstore.IntegrityFinding `json:"findings,omitempty"`
+	Clean          bool                          `json:"clean"`
+	RepairsApplied int                           `json:"repairs_applied,omitempty"`
+	Findings       []syncengine.IntegrityFinding `json:"findings,omitempty"`
 }
 
 func RunStateAudit(ctx context.Context, opts StateAuditOptions) (retErr error) {
@@ -39,7 +39,7 @@ func RunStateAudit(ctx context.Context, opts StateAuditOptions) (retErr error) {
 	}
 
 	logger := slog.New(slog.DiscardHandler)
-	store, err := syncstore.NewSyncStore(ctx, opts.DBPath, logger)
+	store, err := syncengine.NewSyncStore(ctx, opts.DBPath, logger)
 	if err != nil {
 		return fmt.Errorf("state audit: open sync store %s: %w", opts.DBPath, err)
 	}

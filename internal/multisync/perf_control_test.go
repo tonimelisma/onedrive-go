@@ -9,11 +9,12 @@ import (
 	"testing"
 	"time"
 
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 // Validates: R-6.6.15, R-6.6.16

@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
 func (r *oneShotRunner) runResultsLoop(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	results <-chan WorkerResult,
 ) error {
 	var outbox []*TrackedAction
@@ -47,7 +45,7 @@ func (r *oneShotRunner) runResultsLoop(
 func (r *oneShotRunner) runResultsLoopIdle(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	results <-chan WorkerResult,
 	fatalErr error,
 ) ([]*TrackedAction, error, bool) {
@@ -66,7 +64,7 @@ func (r *oneShotRunner) runResultsLoopIdle(
 func (r *oneShotRunner) runResultsLoopWithOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	results <-chan WorkerResult,
 	outbox []*TrackedAction,
 	fatalErr error,
@@ -88,7 +86,7 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 func (r *oneShotRunner) handleOneShotWorkerResult(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	outbox []*TrackedAction,
 	fatalErr error,
 	workerResult *WorkerResult,

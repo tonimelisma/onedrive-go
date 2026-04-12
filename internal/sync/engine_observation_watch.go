@@ -6,14 +6,12 @@ import (
 	"log/slog"
 	stdsync "sync"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
 func (rt *watchRuntime) startPrimaryWatchPhase(
 	ctx context.Context,
 	obsWg *stdsync.WaitGroup,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	events chan<- ChangeEvent,
 	errs chan<- error,
 	pollInterval time.Duration,
@@ -49,7 +47,7 @@ func (rt *watchRuntime) startPrimaryWatchPhase(
 		remoteObs.SetWatchObservationPreparer(func(
 			_ context.Context,
 			events []ChangeEvent,
-		) ([]syncstore.ObservedItem, []ChangeEvent, error) {
+		) ([]ObservedItem, []ChangeEvent, error) {
 			scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), rt.currentScopeGeneration(), events)
 			return scoped.observed, scoped.emitted, nil
 		})

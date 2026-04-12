@@ -11,7 +11,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // IsDisposable returns true for files that are safe to remove when they block
@@ -68,21 +67,21 @@ func FindNonDisposable(tree *synctree.Root, dirPath string) string {
 
 // ExecuteLocalDelete removes a local file or folder with S4 safety:
 // for files, verifies hash before delete; mismatch triggers conflict copy.
-func (e *Executor) ExecuteLocalDelete(_ context.Context, action *Action) ExecutionResult {
+func (e *Executor) ExecuteLocalDelete(_ context.Context, action *Action) ActionOutcome {
 	info, err := e.syncTree.Stat(action.Path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// Already gone — success.
 			e.logger.Debug("local delete: already absent", slog.String("path", action.Path))
-			return e.DeleteOutcome(action, synctypes.ActionLocalDelete)
+			return e.DeleteOutcome(action, ActionLocalDelete)
 		}
 
-		return e.failedOutcome(action, synctypes.ActionLocalDelete, normalizeSyncTreePathError(err))
+		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
 	}
 
 	absPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalDelete, normalizeSyncTreePathError(err))
+		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
 	}
 
 	if info.IsDir() {
@@ -97,15 +96,15 @@ func (e *Executor) ExecuteLocalDelete(_ context.Context, action *Action) Executi
 // could be created between the two calls. This is acceptable because the DAG
 // guarantees child deletes complete before parent folder deletes, and new
 // creations would be caught in the next sync pass.
-func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ExecutionResult {
+func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ActionOutcome {
 	relPath, err := e.syncTree.Rel(absPath)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalDelete, normalizeSyncTreePathError(err))
+		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
 	}
 
 	entries, err := e.syncTree.ReadDir(relPath)
 	if err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalDelete, fmt.Errorf("reading dir %s: %w", action.Path, err))
+		return e.failedOutcome(action, ActionLocalDelete, fmt.Errorf("reading dir %s: %w", action.Path, err))
 	}
 
 	if len(entries) > 0 {
@@ -125,7 +124,7 @@ func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ExecutionRe
 		}
 
 		if len(blockers) > 0 {
-			return e.failedOutcome(action, synctypes.ActionLocalDelete,
+			return e.failedOutcome(action, ActionLocalDelete,
 				fmt.Errorf("directory %s blocked by non-disposable files: %v", action.Path, blockers))
 		}
 
@@ -148,27 +147,27 @@ func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ExecutionRe
 				slog.String("path", action.Path), slog.String("error", err.Error()))
 		} else {
 			e.logger.Debug("moved folder to trash", slog.String("path", action.Path))
-			return e.DeleteOutcome(action, synctypes.ActionLocalDelete)
+			return e.DeleteOutcome(action, ActionLocalDelete)
 		}
 	}
 
 	if err := e.syncTree.Remove(relPath); err != nil {
 		return e.failedOutcome(
 			action,
-			synctypes.ActionLocalDelete,
+			ActionLocalDelete,
 			fmt.Errorf("removing dir %s: %w", action.Path, normalizeSyncTreePathError(err)),
 		)
 	}
 
 	e.logger.Debug("deleted local folder", slog.String("path", action.Path))
 
-	return e.DeleteOutcome(action, synctypes.ActionLocalDelete)
+	return e.DeleteOutcome(action, ActionLocalDelete)
 }
 
 // DeleteLocalFile removes a file after verifying its hash matches baseline.
 // Hash mismatch means the file was modified since the planner ran — rename
 // to conflict copy and record as edit-delete conflict (B-133).
-func (e *Executor) DeleteLocalFile(action *Action, absPath string, info os.FileInfo) ExecutionResult {
+func (e *Executor) DeleteLocalFile(action *Action, absPath string, info os.FileInfo) ActionOutcome {
 	baselineHash := ""
 	baselineRemoteHash := ""
 
@@ -181,7 +180,7 @@ func (e *Executor) DeleteLocalFile(action *Action, absPath string, info os.FileI
 	if baselineHash != "" {
 		currentHash, err := e.hashFunc(absPath)
 		if err != nil {
-			return e.failedOutcome(action, synctypes.ActionLocalDelete,
+			return e.failedOutcome(action, ActionLocalDelete,
 				fmt.Errorf("hashing %s before delete: %w", action.Path, err))
 		}
 
@@ -189,15 +188,15 @@ func (e *Executor) DeleteLocalFile(action *Action, absPath string, info os.FileI
 			// File was modified — save as conflict copy instead of deleting.
 			conflictPath, pathErr := e.uniqueConflictCopyPath(absPath)
 			if pathErr != nil {
-				return e.failedOutcome(action, synctypes.ActionLocalDelete, pathErr)
+				return e.failedOutcome(action, ActionLocalDelete, pathErr)
 			}
 			conflictRel, relErr := e.syncTree.Rel(conflictPath)
 			if relErr != nil {
-				return e.failedOutcome(action, synctypes.ActionLocalDelete, normalizeSyncTreePathError(relErr))
+				return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(relErr))
 			}
 
 			if renameErr := e.syncTree.Rename(action.Path, conflictRel); renameErr != nil {
-				return e.failedOutcome(action, synctypes.ActionLocalDelete,
+				return e.failedOutcome(action, ActionLocalDelete,
 					fmt.Errorf("renaming modified file to conflict copy %s: %w", conflictPath, normalizeSyncTreePathError(renameErr)))
 			}
 
@@ -213,14 +212,14 @@ func (e *Executor) DeleteLocalFile(action *Action, absPath string, info os.FileI
 				remoteMtime = action.View.Remote.Mtime
 			}
 
-			return ExecutionResult{
-				Action:       synctypes.ActionConflict,
+			return ActionOutcome{
+				Action:       ActionConflict,
 				Success:      true,
 				Path:         action.Path,
 				DriveID:      e.resolveDriveID(action),
 				ItemID:       action.ItemID,
-				ItemType:     synctypes.ItemTypeFile,
-				ConflictType: synctypes.ConflictEditDelete,
+				ItemType:     ItemTypeFile,
+				ConflictType: ConflictEditDelete,
 				LocalHash:    currentHash,
 				RemoteHash:   baselineRemoteHash,
 				LocalMtime:   info.ModTime().UnixNano(),
@@ -236,22 +235,22 @@ func (e *Executor) DeleteLocalFile(action *Action, absPath string, info os.FileI
 				slog.String("path", action.Path), slog.String("error", err.Error()))
 		} else {
 			e.logger.Debug("moved file to trash", slog.String("path", action.Path))
-			return e.DeleteOutcome(action, synctypes.ActionLocalDelete)
+			return e.DeleteOutcome(action, ActionLocalDelete)
 		}
 	}
 
 	if err := e.syncTree.Remove(action.Path); err != nil {
-		return e.failedOutcome(action, synctypes.ActionLocalDelete, fmt.Errorf("removing %s: %w", action.Path, normalizeSyncTreePathError(err)))
+		return e.failedOutcome(action, ActionLocalDelete, fmt.Errorf("removing %s: %w", action.Path, normalizeSyncTreePathError(err)))
 	}
 
 	e.logger.Debug("deleted local file", slog.String("path", action.Path))
 
-	return e.DeleteOutcome(action, synctypes.ActionLocalDelete)
+	return e.DeleteOutcome(action, ActionLocalDelete)
 }
 
 // ExecuteRemoteDelete removes an item from OneDrive. 404 is treated as
 // success (item already deleted).
-func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) ExecutionResult {
+func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) ActionOutcome {
 	driveID := e.resolveDriveID(action)
 
 	err := e.items.DeleteItem(ctx, driveID, action.ItemID)
@@ -259,20 +258,20 @@ func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) Exec
 		// 404 means already deleted — success.
 		if errors.Is(err, graph.ErrNotFound) {
 			e.logger.Debug("remote delete: already absent", slog.String("path", action.Path))
-			return e.DeleteOutcome(action, synctypes.ActionRemoteDelete)
+			return e.DeleteOutcome(action, ActionRemoteDelete)
 		}
 
-		return e.failedOutcome(action, synctypes.ActionRemoteDelete, fmt.Errorf("deleting remote %s: %w", action.Path, err))
+		return e.failedOutcome(action, ActionRemoteDelete, fmt.Errorf("deleting remote %s: %w", action.Path, err))
 	}
 
 	e.logger.Debug("deleted remote item", slog.String("path", action.Path), slog.String("item_id", action.ItemID))
 
-	return e.DeleteOutcome(action, synctypes.ActionRemoteDelete)
+	return e.DeleteOutcome(action, ActionRemoteDelete)
 }
 
-// DeleteOutcome builds a successful Outcome for a delete action.
-func (e *Executor) DeleteOutcome(action *Action, actionType synctypes.ActionType) ExecutionResult {
-	return ExecutionResult{
+// DeleteOutcome builds a successful ActionOutcome for a delete action.
+func (e *Executor) DeleteOutcome(action *Action, actionType ActionType) ActionOutcome {
+	return ActionOutcome{
 		Action:   actionType,
 		Success:  true,
 		Path:     action.Path,

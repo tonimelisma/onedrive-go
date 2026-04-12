@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -39,9 +38,9 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	cancel()
 	<-done
 
-	assert.Equal(t, synctypes.ChangeCreate, ev.Type)
+	assert.Equal(t, ChangeCreate, ev.Type)
 	assert.Equal(t, "new-file.txt", ev.Path)
-	assert.Equal(t, synctypes.SourceLocal, ev.Source)
+	assert.Equal(t, SourceLocal, ev.Source)
 }
 
 // Validates: R-2.1.2
@@ -118,7 +117,7 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	for !foundPreExisting {
 		select {
 		case ev := <-events:
-			if ev.Path == "pre-populated/already-here.txt" && ev.Type == synctypes.ChangeCreate {
+			if ev.Path == "pre-populated/already-here.txt" && ev.Type == ChangeCreate {
 				foundPreExisting = true
 			}
 		case <-timeout:
@@ -170,12 +169,12 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	for !foundFile || len(foundDirs) < len(wantDirs) {
 		select {
 		case ev := <-events:
-			if ev.Type == synctypes.ChangeCreate {
-				if ev.ItemType == synctypes.ItemTypeFolder && wantDirs[ev.Path] {
+			if ev.Type == ChangeCreate {
+				if ev.ItemType == ItemTypeFolder && wantDirs[ev.Path] {
 					foundDirs[ev.Path] = true
 				}
 
-				if ev.Path == "level1/level2/level3/deep-file.txt" && ev.ItemType == synctypes.ItemTypeFile {
+				if ev.Path == "level1/level2/level3/deep-file.txt" && ev.ItemType == ItemTypeFile {
 					foundFile = true
 				}
 			}
@@ -204,7 +203,7 @@ func waitForLocalCreateEvent(t *testing.T, events <-chan ChangeEvent, wantPath s
 	for {
 		select {
 		case ev := <-events:
-			if ev.Path == wantPath && ev.Type == synctypes.ChangeCreate {
+			if ev.Path == wantPath && ev.Type == ChangeCreate {
 				return
 			}
 		case <-timeout:
@@ -257,9 +256,9 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	cancel()
 	<-done
 
-	require.Equal(t, synctypes.ChangeCreate, ev.Type)
+	require.Equal(t, ChangeCreate, ev.Type)
 	require.Equal(t, "unreadable.txt", ev.Path)
-	require.Equal(t, synctypes.SourceLocal, ev.Source)
+	require.Equal(t, SourceLocal, ev.Source)
 	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
 }
 

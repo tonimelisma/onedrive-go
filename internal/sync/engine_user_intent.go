@@ -6,9 +6,6 @@ import (
 	"log/slog"
 	"math"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const (
@@ -19,14 +16,14 @@ const (
 
 type heldDeleteKey struct {
 	driveID    string
-	actionType synctypes.ActionType
+	actionType ActionType
 	path       string
 	itemID     string
 }
 
 type heldDeletePathKey struct {
 	driveID    string
-	actionType synctypes.ActionType
+	actionType ActionType
 	path       string
 }
 
@@ -43,7 +40,7 @@ func deleteKeyFromAction(action *Action) heldDeleteKey {
 	}
 }
 
-func deleteKeyFromRecord(record *syncstore.HeldDeleteRecord) heldDeleteKey {
+func deleteKeyFromRecord(record *HeldDeleteRecord) heldDeleteKey {
 	if record == nil {
 		return heldDeleteKey{}
 	}
@@ -100,7 +97,7 @@ func (e *Engine) approvedDeleteKeysForPlan(
 	ctx context.Context,
 	plan *ActionPlan,
 ) (map[heldDeleteKey]struct{}, error) {
-	approved, err := e.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
+	approved, err := e.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateApproved)
 	if err != nil {
 		return nil, fmt.Errorf("sync: list approved held deletes: %w", err)
 	}
@@ -180,14 +177,14 @@ func (e *Engine) holdDeleteActions(ctx context.Context, actions []Action) error 
 	}
 
 	now := e.nowFunc().UnixNano()
-	records := make([]syncstore.HeldDeleteRecord, 0, len(actions))
+	records := make([]HeldDeleteRecord, 0, len(actions))
 	for i := range actions {
-		records = append(records, syncstore.HeldDeleteRecord{
+		records = append(records, HeldDeleteRecord{
 			DriveID:       actions[i].DriveID,
 			ItemID:        actions[i].ItemID,
 			Path:          actions[i].Path,
 			ActionType:    actions[i].Type,
-			State:         synctypes.HeldDeleteStateHeld,
+			State:         HeldDeleteStateHeld,
 			HeldAt:        now,
 			LastPlannedAt: now,
 			LastError:     fmt.Sprintf("held by delete safety threshold (threshold: %d)", e.deleteSafetyThreshold),
@@ -253,7 +250,15 @@ func (e *Engine) applyOneShotDeleteProtection(
 }
 
 func (flow *engineFlow) collectApprovedDeleteChanges(ctx context.Context) []PathChanges {
-	records, err := flow.engine.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateApproved)
+	bl, err := flow.engine.baseline.Load(ctx)
+	if err != nil {
+		flow.engine.logger.Warn("load baseline for approved held deletes",
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+
+	records, err := flow.engine.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateApproved)
 	if err != nil {
 		flow.engine.logger.Warn("load approved held deletes",
 			slog.String("error", err.Error()),
@@ -265,7 +270,7 @@ func (flow *engineFlow) collectApprovedDeleteChanges(ctx context.Context) []Path
 	for i := range records {
 		record := records[i]
 		row := syncFailureRowFromHeldDelete(&record)
-		rebuild := flow.rebuildFailureWork(ctx, &row)
+		rebuild := flow.buildRetryCandidate(ctx, bl, &row)
 		switch {
 		case rebuild.err != nil:
 			flow.engine.logger.Warn("rebuild approved held delete",
@@ -287,20 +292,20 @@ func (flow *engineFlow) collectApprovedDeleteChanges(ctx context.Context) []Path
 	return changes
 }
 
-func syncFailureRowFromHeldDelete(record *syncstore.HeldDeleteRecord) syncstore.SyncFailureRow {
-	return syncstore.SyncFailureRow{
+func syncFailureRowFromHeldDelete(record *HeldDeleteRecord) SyncFailureRow {
+	return SyncFailureRow{
 		Path:       record.Path,
 		DriveID:    record.DriveID,
-		Direction:  synctypes.DirectionDelete,
-		Role:       synctypes.FailureRoleItem,
-		Category:   synctypes.CategoryActionable,
-		IssueType:  synctypes.IssueDeleteSafetyHeld,
+		Direction:  DirectionDelete,
+		Role:       FailureRoleItem,
+		Category:   CategoryActionable,
+		IssueType:  IssueDeleteSafetyHeld,
 		ItemID:     record.ItemID,
 		ActionType: record.ActionType,
 	}
 }
 
-func (flow *engineFlow) consumeHeldDelete(ctx context.Context, record *syncstore.HeldDeleteRecord) {
+func (flow *engineFlow) consumeHeldDelete(ctx context.Context, record *HeldDeleteRecord) {
 	if err := flow.engine.baseline.DeleteHeldDelete(ctx, record.DriveID, record.ActionType, record.Path, record.ItemID); err != nil {
 		flow.engine.logger.Warn("consume resolved held delete",
 			slog.String("path", record.Path),
@@ -400,15 +405,15 @@ func (e *Engine) processQueuedConflictResolutions(ctx context.Context) ([]PathCh
 
 func (e *Engine) executeConflictResolution(
 	ctx context.Context,
-	c *syncstore.ConflictRecord,
+	c *ConflictRecord,
 	resolution string,
 ) ([]string, error) {
 	switch resolution {
-	case synctypes.ResolutionKeepBoth:
+	case ResolutionKeepBoth:
 		return e.resolveKeepBoth(ctx, c)
-	case synctypes.ResolutionKeepLocal:
+	case ResolutionKeepLocal:
 		return e.resolveKeepLocal(ctx, c)
-	case synctypes.ResolutionKeepRemote:
+	case ResolutionKeepRemote:
 		return e.resolveKeepRemote(ctx, c)
 	default:
 		return nil, fmt.Errorf("sync: unknown resolution strategy %q", resolution)
@@ -417,7 +422,7 @@ func (e *Engine) executeConflictResolution(
 
 func (rt *watchRuntime) runUserIntentDispatch(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	mode Mode,
 	safety *SafetyConfig,
 ) []*TrackedAction {

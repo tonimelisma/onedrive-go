@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Validates: R-2.10.3, R-2.10.26
@@ -27,7 +26,7 @@ func TestScope_429FallbackInterval(t *testing.T) {
 	result := ss.UpdateScope(&r)
 
 	require.True(t, result.Block)
-	assert.Equal(t, synctypes.SKThrottleDrive(driveid.New("0000000000000001")), result.ScopeKey)
+	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), result.ScopeKey)
 	assert.Zero(t, result.RetryAfter, "429 without Retry-After should have zero RetryAfter")
 }
 
@@ -40,7 +39,7 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 		path       string
 		status     int
 		retryAfter time.Duration
-		wantScope  synctypes.ScopeKey
+		wantScope  ScopeKey
 		wantIssue  string
 	}{
 		{
@@ -48,7 +47,7 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 			path:       "/file-a.txt",
 			status:     429,
 			retryAfter: 90 * time.Second,
-			wantScope:  synctypes.SKThrottleDrive(driveid.New("0000000000000001")),
+			wantScope:  SKThrottleDrive(driveid.New("0000000000000001")),
 			wantIssue:  "rate_limited",
 		},
 		{
@@ -56,7 +55,7 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 			path:       "/doc.docx",
 			status:     503,
 			retryAfter: 120 * time.Second,
-			wantScope:  synctypes.SKService(),
+			wantScope:  SKService(),
 			wantIssue:  "service_outage",
 		},
 	}
@@ -118,7 +117,7 @@ func TestScope_507OwnDrive(t *testing.T) {
 			assert.False(t, result.Block, "path %d (%s) should not trigger block yet", i, p)
 		} else {
 			require.True(t, result.Block, "third unique path must trigger quota:own block")
-			assert.Equal(t, synctypes.SKQuotaOwn(), result.ScopeKey)
+			assert.Equal(t, SKQuotaOwn(), result.ScopeKey)
 			assert.Equal(t, "quota_exceeded", result.IssueType)
 			assert.Zero(t, result.RetryAfter)
 		}
@@ -146,7 +145,7 @@ func TestScope_507Shortcut(t *testing.T) {
 			assert.False(t, result.Block, "path %d should not trigger block yet", i)
 		} else {
 			require.True(t, result.Block, "third unique shortcut path must trigger quota:shortcut block")
-			assert.Equal(t, synctypes.SKQuotaShortcut(shortcutKey), result.ScopeKey)
+			assert.Equal(t, SKQuotaShortcut(shortcutKey), result.ScopeKey)
 			assert.Equal(t, "quota_exceeded", result.IssueType)
 			assert.Zero(t, result.RetryAfter)
 		}
@@ -180,7 +179,7 @@ func TestScope_507IndependentShortcuts(t *testing.T) {
 			assert.False(t, result.Block)
 		} else {
 			require.True(t, result.Block, "shortcut B must trigger independently")
-			assert.Equal(t, synctypes.SKQuotaShortcut(keyB), result.ScopeKey)
+			assert.Equal(t, SKQuotaShortcut(keyB), result.ScopeKey)
 		}
 		advance(1 * time.Second)
 	}
@@ -191,7 +190,7 @@ func TestScope_507IndependentShortcuts(t *testing.T) {
 	rA3 := WorkerResult{Path: "/shared-a/3.txt", HTTPStatus: 507, ShortcutKey: keyA}
 	resultA3 := ss.UpdateScope(&rA3)
 	require.True(t, resultA3.Block, "third unique path on shortcut A should now trigger")
-	assert.Equal(t, synctypes.SKQuotaShortcut(keyA), resultA3.ScopeKey,
+	assert.Equal(t, SKQuotaShortcut(keyA), resultA3.ScopeKey,
 		"shortcut A block must be independent from shortcut B")
 }
 
@@ -214,7 +213,7 @@ func TestScope_5xxSlidingWindow(t *testing.T) {
 			assert.False(t, result.Block, "path %d should not trigger block yet", i)
 		} else {
 			require.True(t, result.Block, "fifth unique path must trigger service block")
-			assert.Equal(t, synctypes.SKService(), result.ScopeKey)
+			assert.Equal(t, SKService(), result.ScopeKey)
 			assert.Equal(t, "service_outage", result.IssueType)
 			assert.Zero(t, result.RetryAfter)
 		}
@@ -279,7 +278,7 @@ func TestScope_SuccessResetsWindow(t *testing.T) {
 	r := WorkerResult{Path: "/e.txt", HTTPStatus: 507}
 	result := ss.UpdateScope(&r)
 	require.True(t, result.Block, "third unique path after reset should trigger quota:own")
-	assert.Equal(t, synctypes.SKQuotaOwn(), result.ScopeKey)
+	assert.Equal(t, SKQuotaOwn(), result.ScopeKey)
 }
 
 // Validates: R-2.10.42
@@ -312,7 +311,7 @@ func TestScope_SuccessResetsShortcutWindow(t *testing.T) {
 	r := WorkerResult{Path: "/sh/e.txt", HTTPStatus: 507, ShortcutKey: shortcutKey}
 	result := ss.UpdateScope(&r)
 	require.True(t, result.Block)
-	assert.Equal(t, synctypes.SKQuotaShortcut(shortcutKey), result.ScopeKey)
+	assert.Equal(t, SKQuotaShortcut(shortcutKey), result.ScopeKey)
 }
 
 // Validates: R-2.10.3
@@ -397,7 +396,7 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// synctypes.ScopeKey type system tests
+// ScopeKey type system tests
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10
@@ -406,27 +405,27 @@ func TestScopeKey_StringRoundTrip(t *testing.T) {
 
 	tests := []struct {
 		name string
-		key  synctypes.ScopeKey
+		key  ScopeKey
 		wire string
 	}{
-		{"throttle:account", synctypes.SKThrottleAccount(), "throttle:account"},
-		{"throttle:target:drive", synctypes.SKThrottleDrive(driveid.New("0000000000000001")), "throttle:target:drive:0000000000000001"},
-		{"throttle:target:shared", synctypes.SKThrottleShared("driveA", "itemB"), "throttle:target:shared:driveA:itemB"},
-		{"service", synctypes.SKService(), "service"},
-		{"quota:own", synctypes.SKQuotaOwn(), "quota:own"},
-		{"disk:local", synctypes.SKDiskLocal(), "disk:local"},
-		{"quota:shortcut", synctypes.SKQuotaShortcut("driveA:itemB"), "quota:shortcut:driveA:itemB"},
-		{"perm:dir", synctypes.SKPermDir("Documents/Private"), "perm:dir:Documents/Private"},
-		{"perm:remote", synctypes.SKPermRemote("Shared/TeamDocs"), "perm:remote:Shared/TeamDocs"},
+		{"throttle:account", SKThrottleAccount(), "throttle:account"},
+		{"throttle:target:drive", SKThrottleDrive(driveid.New("0000000000000001")), "throttle:target:drive:0000000000000001"},
+		{"throttle:target:shared", SKThrottleShared("driveA", "itemB"), "throttle:target:shared:driveA:itemB"},
+		{"service", SKService(), "service"},
+		{"quota:own", SKQuotaOwn(), "quota:own"},
+		{"disk:local", SKDiskLocal(), "disk:local"},
+		{"quota:shortcut", SKQuotaShortcut("driveA:itemB"), "quota:shortcut:driveA:itemB"},
+		{"perm:dir", SKPermDir("Documents/Private"), "perm:dir:Documents/Private"},
+		{"perm:remote", SKPermRemote("Shared/TeamDocs"), "perm:remote:Shared/TeamDocs"},
 	}
 
 	for _, tt := range tests {
 		// String() produces the expected wire format.
 		assert.Equal(t, tt.wire, tt.key.String(), "%s String()", tt.name)
 
-		// synctypes.ParseScopeKey round-trips back to the original key.
-		parsed := synctypes.ParseScopeKey(tt.wire)
-		assert.Equal(t, tt.key, parsed, "%s synctypes.ParseScopeKey round-trip", tt.name)
+		// ParseScopeKey round-trips back to the original key.
+		parsed := ParseScopeKey(tt.wire)
+		assert.Equal(t, tt.key, parsed, "%s ParseScopeKey round-trip", tt.name)
 	}
 }
 
@@ -434,72 +433,72 @@ func TestScopeKey_StringRoundTrip(t *testing.T) {
 func TestParseScopeKey_Unknown(t *testing.T) {
 	t.Parallel()
 
-	// Unknown wire format produces zero-value synctypes.ScopeKey.
-	sk := synctypes.ParseScopeKey("unknown:format")
-	assert.True(t, sk.IsZero(), "unknown format should produce zero synctypes.ScopeKey")
+	// Unknown wire format produces zero-value ScopeKey.
+	sk := ParseScopeKey("unknown:format")
+	assert.True(t, sk.IsZero(), "unknown format should produce zero ScopeKey")
 
-	sk = synctypes.ParseScopeKey("")
-	assert.True(t, sk.IsZero(), "empty string should produce zero synctypes.ScopeKey")
+	sk = ParseScopeKey("")
+	assert.True(t, sk.IsZero(), "empty string should produce zero ScopeKey")
 }
 
 // Validates: R-2.10
 func TestScopeKey_IsZero(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, synctypes.ScopeKey{}.IsZero())
-	assert.False(t, synctypes.SKThrottleAccount().IsZero())
-	assert.False(t, synctypes.SKThrottleDrive(driveid.New("0000000000000001")).IsZero())
-	assert.False(t, synctypes.SKPermDir("x").IsZero())
+	assert.True(t, ScopeKey{}.IsZero())
+	assert.False(t, SKThrottleAccount().IsZero())
+	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsZero())
+	assert.False(t, SKPermDir("x").IsZero())
 }
 
 // Validates: R-2.10
 func TestScopeKey_IsGlobal(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, synctypes.SKThrottleAccount().IsGlobal())
-	assert.False(t, synctypes.SKThrottleDrive(driveid.New("0000000000000001")).IsGlobal())
-	assert.True(t, synctypes.SKService().IsGlobal())
-	assert.False(t, synctypes.SKQuotaOwn().IsGlobal())
-	assert.False(t, synctypes.SKQuotaShortcut("a:b").IsGlobal())
-	assert.False(t, synctypes.SKPermDir("x").IsGlobal())
-	assert.False(t, synctypes.SKPermRemote("x").IsGlobal())
-	assert.False(t, synctypes.SKDiskLocal().IsGlobal())
+	assert.True(t, SKThrottleAccount().IsGlobal())
+	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsGlobal())
+	assert.True(t, SKService().IsGlobal())
+	assert.False(t, SKQuotaOwn().IsGlobal())
+	assert.False(t, SKQuotaShortcut("a:b").IsGlobal())
+	assert.False(t, SKPermDir("x").IsGlobal())
+	assert.False(t, SKPermRemote("x").IsGlobal())
+	assert.False(t, SKDiskLocal().IsGlobal())
 }
 
 // Validates: R-2.10
 func TestScopeKey_IsPermDir(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, synctypes.SKPermDir("Documents").IsPermDir())
-	assert.False(t, synctypes.SKThrottleAccount().IsPermDir())
-	assert.False(t, synctypes.SKQuotaOwn().IsPermDir())
+	assert.True(t, SKPermDir("Documents").IsPermDir())
+	assert.False(t, SKThrottleAccount().IsPermDir())
+	assert.False(t, SKQuotaOwn().IsPermDir())
 }
 
 // Validates: R-2.10.34
 func TestScopeKey_IsPermRemote(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, synctypes.SKPermRemote("Shared/TeamDocs").IsPermRemote())
-	assert.False(t, synctypes.SKPermDir("Documents").IsPermRemote())
-	assert.False(t, synctypes.SKThrottleAccount().IsPermRemote())
+	assert.True(t, SKPermRemote("Shared/TeamDocs").IsPermRemote())
+	assert.False(t, SKPermDir("Documents").IsPermRemote())
+	assert.False(t, SKThrottleAccount().IsPermRemote())
 }
 
 // Validates: R-2.10
 func TestScopeKey_DirPath(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "Documents/Private", synctypes.SKPermDir("Documents/Private").DirPath())
+	assert.Equal(t, "Documents/Private", SKPermDir("Documents/Private").DirPath())
 
 	// DirPath on non-PermDir should panic.
-	assert.Panics(t, func() { synctypes.SKThrottleAccount().DirPath() })
+	assert.Panics(t, func() { SKThrottleAccount().DirPath() })
 }
 
 // Validates: R-2.10.34
 func TestScopeKey_RemotePath(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "Shared/TeamDocs", synctypes.SKPermRemote("Shared/TeamDocs").RemotePath())
-	assert.Panics(t, func() { synctypes.SKThrottleAccount().RemotePath() })
+	assert.Equal(t, "Shared/TeamDocs", SKPermRemote("Shared/TeamDocs").RemotePath())
+	assert.Panics(t, func() { SKThrottleAccount().RemotePath() })
 }
 
 // Validates: R-2.10
@@ -507,19 +506,19 @@ func TestScopeKey_IssueType(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		key  synctypes.ScopeKey
+		key  ScopeKey
 		want string
 	}{
-		{synctypes.SKThrottleAccount(), synctypes.IssueRateLimited},
-		{synctypes.SKThrottleDrive(driveid.New("0000000000000001")), synctypes.IssueRateLimited},
-		{synctypes.SKThrottleShared("driveA", "itemB"), synctypes.IssueRateLimited},
-		{synctypes.SKService(), synctypes.IssueServiceOutage},
-		{synctypes.SKQuotaOwn(), synctypes.IssueQuotaExceeded},
-		{synctypes.SKQuotaShortcut("a:b"), synctypes.IssueQuotaExceeded},
-		{synctypes.SKPermDir("x"), synctypes.IssueLocalPermissionDenied},
-		{synctypes.SKPermRemote("Shared/TeamDocs"), synctypes.IssueSharedFolderBlocked},
-		{synctypes.SKDiskLocal(), synctypes.IssueDiskFull},
-		{synctypes.ScopeKey{}, ""}, // zero value
+		{SKThrottleAccount(), IssueRateLimited},
+		{SKThrottleDrive(driveid.New("0000000000000001")), IssueRateLimited},
+		{SKThrottleShared("driveA", "itemB"), IssueRateLimited},
+		{SKService(), IssueServiceOutage},
+		{SKQuotaOwn(), IssueQuotaExceeded},
+		{SKQuotaShortcut("a:b"), IssueQuotaExceeded},
+		{SKPermDir("x"), IssueLocalPermissionDenied},
+		{SKPermRemote("Shared/TeamDocs"), IssueSharedFolderBlocked},
+		{SKDiskLocal(), IssueDiskFull},
+		{ScopeKey{}, ""}, // zero value
 	}
 
 	for _, tt := range tests {
@@ -531,24 +530,24 @@ func TestScopeKey_IssueType(t *testing.T) {
 func TestScopeKey_Humanize(t *testing.T) {
 	t.Parallel()
 
-	shortcuts := []synctypes.Shortcut{
+	shortcuts := []Shortcut{
 		{RemoteDrive: "driveA", RemoteItem: "itemB", LocalPath: "/mnt/shared/TeamDocs"},
 	}
 
-	assert.Equal(t, "your OneDrive account (rate limited)", synctypes.SKThrottleAccount().Humanize(nil))
-	assert.Equal(t, "this drive (rate limited)", synctypes.SKThrottleDrive(driveid.New("0000000000000001")).Humanize(nil))
-	assert.Equal(t, "/mnt/shared/TeamDocs (rate limited)", synctypes.SKThrottleShared("driveA", "itemB").Humanize(shortcuts))
-	assert.Equal(t, "OneDrive service", synctypes.SKService().Humanize(nil))
-	assert.Equal(t, "your OneDrive storage", synctypes.SKQuotaOwn().Humanize(nil))
-	assert.Equal(t, "local disk", synctypes.SKDiskLocal().Humanize(nil))
-	assert.Equal(t, "Documents/Private", synctypes.SKPermDir("Documents/Private").Humanize(nil))
-	assert.Equal(t, "Shared/TeamDocs", synctypes.SKPermRemote("Shared/TeamDocs").Humanize(nil))
+	assert.Equal(t, "your OneDrive account (rate limited)", SKThrottleAccount().Humanize(nil))
+	assert.Equal(t, "this drive (rate limited)", SKThrottleDrive(driveid.New("0000000000000001")).Humanize(nil))
+	assert.Equal(t, "/mnt/shared/TeamDocs (rate limited)", SKThrottleShared("driveA", "itemB").Humanize(shortcuts))
+	assert.Equal(t, "OneDrive service", SKService().Humanize(nil))
+	assert.Equal(t, "your OneDrive storage", SKQuotaOwn().Humanize(nil))
+	assert.Equal(t, "local disk", SKDiskLocal().Humanize(nil))
+	assert.Equal(t, "Documents/Private", SKPermDir("Documents/Private").Humanize(nil))
+	assert.Equal(t, "Shared/TeamDocs", SKPermRemote("Shared/TeamDocs").Humanize(nil))
 
-	// synctypes.Shortcut found by local path.
-	assert.Equal(t, "/mnt/shared/TeamDocs", synctypes.SKQuotaShortcut("driveA:itemB").Humanize(shortcuts))
+	// Shortcut found by local path.
+	assert.Equal(t, "/mnt/shared/TeamDocs", SKQuotaShortcut("driveA:itemB").Humanize(shortcuts))
 
-	// synctypes.Shortcut not found — falls back to composite key.
-	assert.Equal(t, "driveX:itemY", synctypes.SKQuotaShortcut("driveX:itemY").Humanize(nil))
+	// Shortcut not found — falls back to composite key.
+	assert.Equal(t, "driveX:itemY", SKQuotaShortcut("driveX:itemY").Humanize(nil))
 }
 
 // Validates: R-2.10
@@ -557,7 +556,7 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 
 	tests := []struct {
 		name            string
-		key             synctypes.ScopeKey
+		key             ScopeKey
 		path            string
 		throttleTarget  string
 		shortcutKey     string
@@ -566,40 +565,40 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 		want            bool
 	}{
 		// Global scopes block everything.
-		{"legacy throttle blocks upload", synctypes.SKThrottleAccount(), "/a.txt", "", "", ActionUpload, true, true},
-		{"legacy throttle blocks download", synctypes.SKThrottleAccount(), "/a.txt", "", "", ActionDownload, true, true},
-		{"drive throttle blocks matching drive", synctypes.SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000001", "", ActionUpload, true, true},
-		{"drive throttle passes other drive", synctypes.SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000002", "", ActionUpload, true, false},
-		{"shared throttle blocks matching shared target", synctypes.SKThrottleShared("driveA", "itemB"), "/a.txt", "shared:driveA:itemB", "driveA:itemB", ActionUpload, false, true},
-		{"shared throttle passes other shared target", synctypes.SKThrottleShared("driveA", "itemB"), "/a.txt", "shared:driveA:itemC", "driveA:itemC", ActionUpload, false, false},
-		{"service blocks all", synctypes.SKService(), "/a.txt", "", "sc:1", ActionUpload, false, true},
+		{"legacy throttle blocks upload", SKThrottleAccount(), "/a.txt", "", "", ActionUpload, true, true},
+		{"legacy throttle blocks download", SKThrottleAccount(), "/a.txt", "", "", ActionDownload, true, true},
+		{"drive throttle blocks matching drive", SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000001", "", ActionUpload, true, true},
+		{"drive throttle passes other drive", SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000002", "", ActionUpload, true, false},
+		{"shared throttle blocks matching shared target", SKThrottleShared("driveA", "itemB"), "/a.txt", "shared:driveA:itemB", "driveA:itemB", ActionUpload, false, true},
+		{"shared throttle passes other shared target", SKThrottleShared("driveA", "itemB"), "/a.txt", "shared:driveA:itemC", "driveA:itemC", ActionUpload, false, false},
+		{"service blocks all", SKService(), "/a.txt", "", "sc:1", ActionUpload, false, true},
 
 		// Disk:local blocks downloads only.
-		{"disk blocks download", synctypes.SKDiskLocal(), "/a.txt", "", "", ActionDownload, true, true},
-		{"disk passes upload", synctypes.SKDiskLocal(), "/a.txt", "", "", ActionUpload, true, false},
+		{"disk blocks download", SKDiskLocal(), "/a.txt", "", "", ActionDownload, true, true},
+		{"disk passes upload", SKDiskLocal(), "/a.txt", "", "", ActionUpload, true, false},
 
 		// Quota:own blocks own-drive uploads.
-		{"quota own blocks own upload", synctypes.SKQuotaOwn(), "/a.txt", "", "", ActionUpload, true, true},
-		{"quota own passes download", synctypes.SKQuotaOwn(), "/a.txt", "", "", ActionDownload, true, false},
-		{"quota own passes shortcut upload", synctypes.SKQuotaOwn(), "/a.txt", "", "sc:1", ActionUpload, false, false},
+		{"quota own blocks own upload", SKQuotaOwn(), "/a.txt", "", "", ActionUpload, true, true},
+		{"quota own passes download", SKQuotaOwn(), "/a.txt", "", "", ActionDownload, true, false},
+		{"quota own passes shortcut upload", SKQuotaOwn(), "/a.txt", "", "sc:1", ActionUpload, false, false},
 
 		// Quota:shortcut blocks matching shortcut uploads.
-		{"shortcut blocks matching upload", synctypes.SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:1", ActionUpload, false, true},
-		{"shortcut passes wrong shortcut", synctypes.SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:2", ActionUpload, false, false},
-		{"shortcut passes download", synctypes.SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:1", ActionDownload, false, false},
+		{"shortcut blocks matching upload", SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:1", ActionUpload, false, true},
+		{"shortcut passes wrong shortcut", SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:2", ActionUpload, false, false},
+		{"shortcut passes download", SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:1", ActionDownload, false, false},
 
 		// Perm:dir blocks paths under the directory.
-		{"perm blocks exact dir", synctypes.SKPermDir("Private"), "Private", "", "", ActionUpload, true, true},
-		{"perm blocks subpath", synctypes.SKPermDir("Private"), "Private/secret.txt", "", "", ActionUpload, true, true},
-		{"perm passes outside", synctypes.SKPermDir("Private"), "Public/readme.txt", "", "", ActionUpload, true, false},
+		{"perm blocks exact dir", SKPermDir("Private"), "Private", "", "", ActionUpload, true, true},
+		{"perm blocks subpath", SKPermDir("Private"), "Private/secret.txt", "", "", ActionUpload, true, true},
+		{"perm passes outside", SKPermDir("Private"), "Public/readme.txt", "", "", ActionUpload, true, false},
 
 		// Perm:remote blocks remote mutations recursively, but still allows downloads/local-only work.
-		{"perm remote blocks upload", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionUpload, false, true},
-		{"perm remote blocks nested remote delete", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/nested/file.txt", "", "", ActionRemoteDelete, false, true},
-		{"perm remote blocks folder create", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/newdir", "", "", ActionFolderCreate, false, true},
-		{"perm remote passes download", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionDownload, false, false},
-		{"perm remote passes local delete", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionLocalDelete, false, false},
-		{"perm remote passes outside", synctypes.SKPermRemote("Shared/TeamDocs"), "Shared/Other/file.txt", "", "", ActionUpload, false, false},
+		{"perm remote blocks upload", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionUpload, false, true},
+		{"perm remote blocks nested remote delete", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/nested/file.txt", "", "", ActionRemoteDelete, false, true},
+		{"perm remote blocks folder create", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/newdir", "", "", ActionFolderCreate, false, true},
+		{"perm remote passes download", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionDownload, false, false},
+		{"perm remote passes local delete", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionLocalDelete, false, false},
+		{"perm remote passes outside", SKPermRemote("Shared/TeamDocs"), "Shared/Other/file.txt", "", "", ActionUpload, false, false},
 	}
 
 	for _, tt := range tests {
@@ -612,13 +611,13 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 func TestScopeKeyForResult(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, synctypes.SKThrottleDrive(driveid.New("0000000000000001")), synctypes.ScopeKeyForResult(429, driveid.New("0000000000000001"), ""))
-	assert.Equal(t, synctypes.SKThrottleShared("drive1", "item1"), synctypes.ScopeKeyForResult(429, driveid.ID{}, "drive1:item1"))
-	assert.Equal(t, synctypes.SKService(), synctypes.ScopeKeyForResult(503, driveid.ID{}, ""))
-	assert.Equal(t, synctypes.SKService(), synctypes.ScopeKeyForResult(500, driveid.ID{}, ""))
-	assert.Equal(t, synctypes.SKService(), synctypes.ScopeKeyForResult(502, driveid.ID{}, ""))
-	assert.Equal(t, synctypes.SKQuotaOwn(), synctypes.ScopeKeyForResult(507, driveid.ID{}, ""))
-	assert.Equal(t, synctypes.SKQuotaShortcut("drive1:item1"), synctypes.ScopeKeyForResult(507, driveid.ID{}, "drive1:item1"))
-	assert.True(t, synctypes.ScopeKeyForResult(404, driveid.ID{}, "").IsZero(), "non-scope status should be zero")
-	assert.True(t, synctypes.ScopeKeyForResult(200, driveid.ID{}, "").IsZero(), "success status should be zero")
+	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), ScopeKeyForResult(429, driveid.New("0000000000000001"), ""))
+	assert.Equal(t, SKThrottleShared("drive1", "item1"), ScopeKeyForResult(429, driveid.ID{}, "drive1:item1"))
+	assert.Equal(t, SKService(), ScopeKeyForResult(503, driveid.ID{}, ""))
+	assert.Equal(t, SKService(), ScopeKeyForResult(500, driveid.ID{}, ""))
+	assert.Equal(t, SKService(), ScopeKeyForResult(502, driveid.ID{}, ""))
+	assert.Equal(t, SKQuotaOwn(), ScopeKeyForResult(507, driveid.ID{}, ""))
+	assert.Equal(t, SKQuotaShortcut("drive1:item1"), ScopeKeyForResult(507, driveid.ID{}, "drive1:item1"))
+	assert.True(t, ScopeKeyForResult(404, driveid.ID{}, "").IsZero(), "non-scope status should be zero")
+	assert.True(t, ScopeKeyForResult(200, driveid.ID{}, "").IsZero(), "success status should be zero")
 }

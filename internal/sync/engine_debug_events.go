@@ -2,8 +2,6 @@ package sync
 
 import (
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type engineDebugEventType string
@@ -56,7 +54,7 @@ const (
 type engineDebugEvent struct {
 	Type     engineDebugEventType
 	DriveID  string
-	ScopeKey synctypes.ScopeKey
+	ScopeKey ScopeKey
 	Path     string
 	Observer string
 	Delay    time.Duration

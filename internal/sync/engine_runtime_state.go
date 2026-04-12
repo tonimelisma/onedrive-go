@@ -3,9 +3,6 @@ package sync
 import (
 	"context"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func (rt *watchRuntime) phase() watchRuntimePhase {
@@ -55,7 +52,7 @@ func (rt *watchRuntime) consumeOutboxHead() {
 	rt.loop.outbox = rt.loop.outbox[1:]
 }
 
-func (rt *watchRuntime) replaceActiveScopes(blocks []syncstore.ScopeBlock) {
+func (rt *watchRuntime) replaceActiveScopes(blocks []ScopeBlock) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()
 
@@ -63,53 +60,53 @@ func (rt *watchRuntime) replaceActiveScopes(blocks []syncstore.ScopeBlock) {
 	rt.activeScopes = append(rt.activeScopes, blocks...)
 }
 
-func (rt *watchRuntime) upsertActiveScope(block *syncstore.ScopeBlock) {
+func (rt *watchRuntime) upsertActiveScope(block *ScopeBlock) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()
 
 	rt.activeScopes = UpsertScope(rt.activeScopes, block)
 }
 
-func (rt *watchRuntime) removeActiveScope(key synctypes.ScopeKey) {
+func (rt *watchRuntime) removeActiveScope(key ScopeKey) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()
 
 	rt.activeScopes = RemoveScope(rt.activeScopes, key)
 }
 
-func (rt *watchRuntime) lookupActiveScope(key synctypes.ScopeKey) (syncstore.ScopeBlock, bool) {
+func (rt *watchRuntime) lookupActiveScope(key ScopeKey) (ScopeBlock, bool) {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
 	return LookupScope(rt.activeScopes, key)
 }
 
-func (rt *watchRuntime) hasActiveScope(key synctypes.ScopeKey) bool {
+func (rt *watchRuntime) hasActiveScope(key ScopeKey) bool {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
 	return HasScope(rt.activeScopes, key)
 }
 
-func (rt *watchRuntime) findBlockingScope(ta *TrackedAction) synctypes.ScopeKey {
+func (rt *watchRuntime) findBlockingScope(ta *TrackedAction) ScopeKey {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
 	return FindBlockingScope(rt.activeScopes, ta)
 }
 
-func (rt *watchRuntime) activeScopeKeys() []synctypes.ScopeKey {
+func (rt *watchRuntime) activeScopeKeys() []ScopeKey {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
 	return ScopeKeys(rt.activeScopes)
 }
 
-func (rt *watchRuntime) snapshotActiveScopes() []syncstore.ScopeBlock {
+func (rt *watchRuntime) snapshotActiveScopes() []ScopeBlock {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
-	blocks := make([]syncstore.ScopeBlock, len(rt.activeScopes))
+	blocks := make([]ScopeBlock, len(rt.activeScopes))
 	copy(blocks, rt.activeScopes)
 
 	return blocks
@@ -119,7 +116,7 @@ func (rt *watchRuntime) earliestTrialAt() (time.Time, bool) {
 	return EarliestTrialAt(rt.snapshotActiveScopes())
 }
 
-func (rt *watchRuntime) dueTrials(now time.Time) []synctypes.ScopeKey {
+func (rt *watchRuntime) dueTrials(now time.Time) []ScopeKey {
 	return DueTrials(rt.snapshotActiveScopes(), now)
 }
 

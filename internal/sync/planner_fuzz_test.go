@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const (
@@ -143,12 +142,12 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 
 		itemType := parsePlannerItemType(entry.ItemType)
 		if isFolderLikePath(safePath) {
-			itemType = synctypes.ItemTypeFolder
+			itemType = ItemTypeFolder
 		}
 
 		localHash := entry.LocalHash
 		remoteHash := entry.RemoteHash
-		if itemType != synctypes.ItemTypeFile {
+		if itemType != ItemTypeFile {
 			localHash = ""
 			remoteHash = ""
 		}
@@ -184,8 +183,8 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 		seenChangePaths[safePath] = struct{}{}
 
 		pc := PathChanges{Path: safePath}
-		pc.RemoteEvents = decodePlannerEvents(change.RemoteEvents, synctypes.SourceRemote, safePath)
-		pc.LocalEvents = decodePlannerEvents(change.LocalEvents, synctypes.SourceLocal, safePath)
+		pc.RemoteEvents = decodePlannerEvents(change.RemoteEvents, SourceRemote, safePath)
+		pc.LocalEvents = decodePlannerEvents(change.LocalEvents, SourceLocal, safePath)
 		changes = append(changes, pc)
 	}
 
@@ -204,7 +203,7 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 
 func decodePlannerEvents(
 	rawEvents []plannerFuzzEvent,
-	source synctypes.ChangeSource,
+	source ChangeSource,
 	fallbackPath string,
 ) []ChangeEvent {
 	if len(rawEvents) == 0 {
@@ -217,7 +216,7 @@ func decodePlannerEvents(
 
 		itemType := parsePlannerItemType(raw.ItemType)
 		if isFolderLikePath(fallbackPath) {
-			itemType = synctypes.ItemTypeFolder
+			itemType = ItemTypeFolder
 		}
 
 		eventType := parsePlannerChangeType(raw.Type)
@@ -235,12 +234,12 @@ func decodePlannerEvents(
 			Hash:          raw.Hash,
 			Mtime:         raw.Mtime,
 			ETag:          raw.ETag,
-			IsDeleted:     raw.IsDeleted || eventType == synctypes.ChangeDelete,
+			IsDeleted:     raw.IsDeleted || eventType == ChangeDelete,
 			RemoteDriveID: raw.RemoteDriveID,
 			RemoteItemID:  raw.RemoteItemID,
 		}
 
-		if itemType != synctypes.ItemTypeFile {
+		if itemType != ItemTypeFile {
 			event.Hash = ""
 		}
 
@@ -266,27 +265,27 @@ func parsePlannerMode(raw string) Mode {
 	}
 }
 
-func parsePlannerItemType(raw string) synctypes.ItemType {
+func parsePlannerItemType(raw string) ItemType {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case plannerFolderWord:
-		return synctypes.ItemTypeFolder
+		return ItemTypeFolder
 	case plannerRootWord:
-		return synctypes.ItemTypeRoot
+		return ItemTypeRoot
 	default:
-		return synctypes.ItemTypeFile
+		return ItemTypeFile
 	}
 }
 
-func parsePlannerChangeType(raw string) synctypes.ChangeType {
+func parsePlannerChangeType(raw string) ChangeType {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "create":
-		return synctypes.ChangeCreate
+		return ChangeCreate
 	case "delete":
-		return synctypes.ChangeDelete
+		return ChangeDelete
 	case "move":
-		return synctypes.ChangeMove
+		return ChangeMove
 	default:
-		return synctypes.ChangeModify
+		return ChangeModify
 	}
 }
 

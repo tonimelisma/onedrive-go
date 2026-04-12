@@ -11,8 +11,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type primaryObservationMode string
@@ -66,7 +64,7 @@ type plannedObservationTarget struct {
 	scopeDrive string
 	localPath  string
 	mode       primaryObservationMode
-	shortcut   *synctypes.Shortcut
+	shortcut   *Shortcut
 }
 
 func (e *Engine) usesPrimaryPathScopes() bool {
@@ -129,7 +127,7 @@ func (e *Engine) primaryObservationTarget(scope primaryObservationScope) planned
 	}
 }
 
-func shortcutObservationTarget(sc *synctypes.Shortcut) plannedObservationTarget {
+func shortcutObservationTarget(sc *Shortcut) plannedObservationTarget {
 	target := plannedObservationTarget{
 		kind:       plannedObservationShortcut,
 		driveID:    driveid.New(sc.RemoteDrive),
@@ -140,7 +138,7 @@ func shortcutObservationTarget(sc *synctypes.Shortcut) plannedObservationTarget 
 	}
 
 	switch sc.Observation {
-	case synctypes.ObservationDelta:
+	case ObservationDelta:
 		target.mode = primaryObservationDelta
 	default:
 		target.mode = primaryObservationEnumerate
@@ -243,7 +241,7 @@ func (e *Engine) resolveScopedRootObservationScope(ctx context.Context, configur
 
 func (flow *engineFlow) observePlannedPrimaryScopes(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	phase ObservationPhasePlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
@@ -269,7 +267,7 @@ func (flow *engineFlow) observePlannedPrimaryScopes(
 
 func (flow *engineFlow) observeSinglePrimaryScope(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	scope primaryObservationScope,
 	phase ObservationPhasePlan,
 	fullReconcile bool,
@@ -279,7 +277,7 @@ func (flow *engineFlow) observeSinglePrimaryScope(
 
 func (flow *engineFlow) observePlannedTarget(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	phase ObservationPhasePlan,
 	target plannedObservationTarget,
 	fullReconcile bool,
@@ -296,7 +294,7 @@ func (flow *engineFlow) observePlannedTarget(
 
 func (flow *engineFlow) observePlannedTargetDelta(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	target plannedObservationTarget,
 	fullReconcile bool,
 	fallbackPolicy ObservationPhaseFallbackPolicy,
@@ -360,7 +358,7 @@ func (flow *engineFlow) observePlannedTargetDelta(
 
 func (flow *engineFlow) observePlannedTargetEnumerate(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	target plannedObservationTarget,
 ) (remoteFetchResult, error) {
 	eng := flow.engine
@@ -383,7 +381,7 @@ func (flow *engineFlow) observePlannedTargetEnumerate(
 }
 
 func convertObservedTargetItems(
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	logger *slog.Logger,
 	target plannedObservationTarget,
 	items []graph.Item,
@@ -400,7 +398,7 @@ func convertObservedTargetItems(
 }
 
 func observeTargetOrphansFromItems(
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	target plannedObservationTarget,
 	items []graph.Item,
 ) []ChangeEvent {
@@ -422,7 +420,7 @@ func observeTargetOrphansFromItems(
 
 func (flow *engineFlow) reconcilePrimaryScopeEntries(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	enteredPaths []string,
 	fullPrefixes []string,
 ) (remoteFetchResult, error) {
@@ -455,7 +453,7 @@ func (flow *engineFlow) reconcilePrimaryScopeEntries(
 
 func (flow *engineFlow) reconcileEnteredPrimaryPath(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	enteredPath string,
 ) (remoteFetchResult, error) {
 	eng := flow.engine
@@ -520,7 +518,7 @@ func (flow *engineFlow) reconcileEnteredPrimaryPath(
 
 func (flow *engineFlow) reconcileEnteredRoot(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) (remoteFetchResult, error) {
 	eng := flow.engine
 
@@ -552,7 +550,7 @@ func (flow *engineFlow) reconcileEnteredRoot(
 
 func (flow *engineFlow) reconcileExactEnteredPrimaryScope(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	scope primaryObservationScope,
 ) (remoteFetchResult, error) {
 	eng := flow.engine

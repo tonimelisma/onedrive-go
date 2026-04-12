@@ -9,20 +9,18 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func (e *Engine) hasScopedRoot() bool {
 	return e != nil && e.rootItemID != ""
 }
 
-func (e *Engine) scopedRootShortcut() *synctypes.Shortcut {
+func (e *Engine) scopedRootShortcut() *Shortcut {
 	if !e.hasScopedRoot() {
 		return nil
 	}
 
-	return &synctypes.Shortcut{
+	return &Shortcut{
 		ItemID:      e.rootItemID,
 		RemoteDrive: e.driveID.String(),
 		RemoteItem:  e.rootItemID,
@@ -32,7 +30,7 @@ func (e *Engine) scopedRootShortcut() *synctypes.Shortcut {
 
 func (flow *engineFlow) observeScopedRemote(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	fullReconcile bool,
 	fallbackPolicy ObservationPhaseFallbackPolicy,
 ) ([]ChangeEvent, string, error) {
@@ -108,7 +106,7 @@ func (flow *engineFlow) commitObservedRemote(
 
 func (flow *engineFlow) commitObservedItems(
 	ctx context.Context,
-	observed []syncstore.ObservedItem,
+	observed []ObservedItem,
 	token string,
 ) error {
 	eng := flow.engine
@@ -130,7 +128,7 @@ func (flow *engineFlow) commitObservedItems(
 
 func (rt *watchRuntime) watchScopedRootRemote(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	events chan<- ChangeEvent,
 	interval time.Duration,
 	phase ObservationPhasePlan,

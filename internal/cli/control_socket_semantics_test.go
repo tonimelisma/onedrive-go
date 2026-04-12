@@ -15,29 +15,29 @@ import (
 	"testing"
 	"time"
 
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 type stubResolveConflictStore struct {
 	requestCalls int
-	result       syncstore.ConflictRequestResult
+	result       syncengine.ConflictRequestResult
 	err          error
 }
 
 const controlSocketTestReadHeaderTimeout = 5 * time.Second
 
-func (s *stubResolveConflictStore) ListConflicts(context.Context) ([]syncstore.ConflictRecord, error) {
+func (s *stubResolveConflictStore) ListConflicts(context.Context) ([]syncengine.ConflictRecord, error) {
 	return nil, nil
 }
 
-func (s *stubResolveConflictStore) ListAllConflicts(context.Context) ([]syncstore.ConflictRecord, error) {
+func (s *stubResolveConflictStore) ListAllConflicts(context.Context) ([]syncengine.ConflictRecord, error) {
 	return nil, nil
 }
 
@@ -45,7 +45,7 @@ func (s *stubResolveConflictStore) RequestConflictResolution(
 	context.Context,
 	string,
 	string,
-) (syncstore.ConflictRequestResult, error) {
+) (syncengine.ConflictRequestResult, error) {
 	s.requestCalls++
 	return s.result, s.err
 }
@@ -114,14 +114,14 @@ func TestResolveDeletes_WritesDirectDBIntentForOneShotOwner(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:oneshot@example.com")
 	driveID := driveid.New("drive-oneshot")
 
-	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []syncstore.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []syncengine.HeldDeleteRecord{{
 		DriveID:       driveID,
-		ActionType:    synctypes.ActionRemoteDelete,
+		ActionType:    syncengine.ActionRemoteDelete,
 		Path:          "delete-me.txt",
 		ItemID:        "item-delete",
-		State:         synctypes.HeldDeleteStateHeld,
+		State:         syncengine.HeldDeleteStateHeld,
 		HeldAt:        1,
 		LastPlannedAt: 1,
 	}}))
@@ -149,12 +149,12 @@ func TestResolveDeletes_WritesDirectDBIntentForOneShotOwner(t *testing.T) {
 	assert.Zero(t, postCalls.Load())
 	assert.Contains(t, out.String(), resolveApproveDeletesSuccess)
 
-	reopened, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	reopened, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, reopened.Close(context.Background()))
 	})
-	approved, err := reopened.ListHeldDeletesByState(t.Context(), synctypes.HeldDeleteStateApproved)
+	approved, err := reopened.ListHeldDeletesByState(t.Context(), syncengine.HeldDeleteStateApproved)
 	require.NoError(t, err)
 	require.Len(t, approved, 1)
 	assert.Equal(t, "item-delete", approved[0].ItemID)
@@ -166,16 +166,16 @@ func TestResolveConflict_FallsBackToDBIntentWhenNoDaemonSocketExists(t *testing.
 	cid := driveid.MustCanonicalID("personal:no-daemon@example.com")
 
 	resolver := &stubResolveConflictStore{
-		result: syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestQueued},
+		result: syncengine.ConflictRequestResult{Status: syncengine.ConflictRequestQueued},
 	}
 	cc := &CLIContext{
 		Logger: slog.New(slog.DiscardHandler),
 		Cfg:    &config.ResolvedDrive{CanonicalID: cid},
 	}
 
-	result, err := requestConflictResolution(t.Context(), cc, resolver, "conflict-1", syncstore.ResolutionKeepLocal)
+	result, err := requestConflictResolution(t.Context(), cc, resolver, "conflict-1", syncengine.ResolutionKeepLocal)
 	require.NoError(t, err)
-	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
+	assert.Equal(t, syncengine.ConflictRequestQueued, result.Status)
 	assert.Equal(t, 1, resolver.requestCalls)
 }
 
@@ -194,14 +194,14 @@ func TestResolveConflict_DoesNotFallbackOnTypedWatchDaemonError(t *testing.T) {
 	})
 
 	resolver := &stubResolveConflictStore{
-		result: syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestQueued},
+		result: syncengine.ConflictRequestResult{Status: syncengine.ConflictRequestQueued},
 	}
 	cc := &CLIContext{
 		Logger: slog.New(slog.DiscardHandler),
 		Cfg:    &config.ResolvedDrive{CanonicalID: cid},
 	}
 
-	_, err := requestConflictResolution(t.Context(), cc, resolver, "missing", syncstore.ResolutionKeepLocal)
+	_, err := requestConflictResolution(t.Context(), cc, resolver, "missing", syncengine.ResolutionKeepLocal)
 	require.Error(t, err)
 	assert.True(t, isControlDaemonError(err))
 	assert.Contains(t, err.Error(), string(synccontrol.ErrorConflictNotFound))
@@ -243,14 +243,14 @@ func TestResolveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous(t *testing.T)
 	cid := driveid.MustCanonicalID("personal:probe-failed@example.com")
 	driveID := driveid.New("drive-probe-failed")
 
-	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []syncstore.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []syncengine.HeldDeleteRecord{{
 		DriveID:       driveID,
-		ActionType:    synctypes.ActionRemoteDelete,
+		ActionType:    syncengine.ActionRemoteDelete,
 		Path:          "delete-me.txt",
 		ItemID:        "item-delete",
-		State:         synctypes.HeldDeleteStateHeld,
+		State:         syncengine.HeldDeleteStateHeld,
 		HeldAt:        1,
 		LastPlannedAt: 1,
 	}}))
@@ -274,13 +274,13 @@ func TestResolveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous(t *testing.T)
 	assert.Contains(t, err.Error(), "probe control owner")
 	assert.NotContains(t, out.String(), resolveApproveDeletesSuccess)
 
-	reopened, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	reopened, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, reopened.Close(t.Context()))
 	})
 
-	held, err := reopened.ListHeldDeletesByState(t.Context(), synctypes.HeldDeleteStateHeld)
+	held, err := reopened.ListHeldDeletesByState(t.Context(), syncengine.HeldDeleteStateHeld)
 	require.NoError(t, err)
 	require.Len(t, held, 1)
 }
@@ -304,16 +304,16 @@ func TestResolveConflict_FallsBackToDBIntentWhenWatchSocketPostFails(t *testing.
 	})
 
 	resolver := &stubResolveConflictStore{
-		result: syncstore.ConflictRequestResult{Status: syncstore.ConflictRequestQueued},
+		result: syncengine.ConflictRequestResult{Status: syncengine.ConflictRequestQueued},
 	}
 	cc := &CLIContext{
 		Logger: slog.New(slog.DiscardHandler),
 		Cfg:    &config.ResolvedDrive{CanonicalID: cid},
 	}
 
-	result, err := requestConflictResolution(t.Context(), cc, resolver, "conflict-1", syncstore.ResolutionKeepLocal)
+	result, err := requestConflictResolution(t.Context(), cc, resolver, "conflict-1", syncengine.ResolutionKeepLocal)
 	require.NoError(t, err)
-	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
+	assert.Equal(t, syncengine.ConflictRequestQueued, result.Status)
 	assert.Equal(t, 1, resolver.requestCalls)
 }
 
@@ -326,14 +326,14 @@ func TestResolveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable(t 
 	cid := driveid.MustCanonicalID("personal:no-socket-path@example.com")
 	driveID := driveid.New("drive-direct-fallback")
 
-	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []syncstore.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []syncengine.HeldDeleteRecord{{
 		DriveID:       driveID,
-		ActionType:    synctypes.ActionRemoteDelete,
+		ActionType:    syncengine.ActionRemoteDelete,
 		Path:          "delete-me.txt",
 		ItemID:        "item-delete",
-		State:         synctypes.HeldDeleteStateHeld,
+		State:         syncengine.HeldDeleteStateHeld,
 		HeldAt:        1,
 		LastPlannedAt: 1,
 	}}))
@@ -349,13 +349,13 @@ func TestResolveDeletes_FallsBackToDirectDBWhenControlSocketPathIsUnavailable(t 
 	require.NoError(t, runApproveDeletes(t.Context(), cc))
 	assert.Contains(t, out.String(), resolveApproveDeletesSuccess)
 
-	reopened, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	reopened, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, reopened.Close(t.Context()))
 	})
 
-	approved, err := reopened.ListHeldDeletesByState(t.Context(), synctypes.HeldDeleteStateApproved)
+	approved, err := reopened.ListHeldDeletesByState(t.Context(), syncengine.HeldDeleteStateApproved)
 	require.NoError(t, err)
 	require.Len(t, approved, 1)
 }

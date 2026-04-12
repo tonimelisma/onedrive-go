@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -28,18 +27,18 @@ const testDriveID = synctest.TestDriveID
 
 // emptyBaseline returns a Baseline with initialized but empty maps.
 func emptyBaseline() *Baseline {
-	return syncstore.NewBaselineForTest(nil)
+	return NewBaselineForTest(nil)
 }
 
 // baselineWith creates a Baseline pre-populated with the given entries.
 func baselineWith(entries ...*BaselineEntry) *Baseline {
-	return syncstore.NewBaselineForTest(entries)
+	return NewBaselineForTest(entries)
 }
 
 // newBaselineForTest seeds a baseline using the store-owned test helper so
 // sync tests stay aligned with the current baseline owner.
 func newBaselineForTest(entries []*BaselineEntry) *Baseline {
-	return syncstore.NewBaselineForTest(entries)
+	return NewBaselineForTest(entries)
 }
 
 // actionsOfType filters a flat action list to a single type.
@@ -61,6 +60,26 @@ func testLogger(t *testing.T) *slog.Logger {
 	return synctest.TestLogger(t)
 }
 
+func newTestLogger(tb testing.TB) *slog.Logger {
+	tb.Helper()
+	return synctest.TestLogger(tb)
+}
+
+func newTestStore(tb testing.TB) *SyncStore {
+	tb.Helper()
+
+	dbPath := filepath.Join(tb.TempDir(), "test.db")
+	ctx := synctest.TestContext(tb)
+	mgr, err := NewSyncStore(ctx, dbPath, synctest.TestLogger(tb))
+	require.NoError(tb, err, "NewSyncStore(%q)", dbPath)
+
+	tb.Cleanup(func() {
+		assert.NoError(tb, mgr.Close(context.Background()), "Close()")
+	})
+
+	return mgr
+}
+
 func setTestDirPermissions(t *testing.T, path string, perms os.FileMode) {
 	t.Helper()
 
@@ -78,14 +97,14 @@ func mustOpenSyncTree(t *testing.T, path string) *synctree.Root {
 	return tree
 }
 
-// newTestManager creates a syncstore.SyncStore backed by a temp directory for use in
+// newTestManager creates a SyncStore backed by a temp directory for use in
 // engine tests that need database access (shortcut storage, etc.).
-func newTestManager(t *testing.T) *syncstore.SyncStore {
+func newTestManager(t *testing.T) *SyncStore {
 	t.Helper()
 
 	ctx := synctest.TestContext(t)
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	mgr, err := syncstore.NewSyncStore(ctx, dbPath, synctest.TestLogger(t))
+	mgr, err := NewSyncStore(ctx, dbPath, synctest.TestLogger(t))
 	require.NoError(t, err, "NewSyncStore(%q)", dbPath)
 
 	t.Cleanup(func() {

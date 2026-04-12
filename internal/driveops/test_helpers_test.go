@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
+
+	"github.com/stretchr/testify/require"
 )
 
 func writeTestResponsef(t *testing.T, w io.Writer, format string, args ...any) {

@@ -17,7 +17,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -430,12 +429,12 @@ func TestProcessCommittedScopedWatchBatch_ProcessesShortcutFollowUp(t *testing.T
 
 	events, committed := rt.processCommittedScopedWatchBatch(t.Context(), emptyBaseline(), remoteFetchResult{
 		events: []ChangeEvent{{
-			Source:        synctypes.SourceRemote,
-			Type:          synctypes.ChangeShortcut,
+			Source:        SourceRemote,
+			Type:          ChangeShortcut,
 			DriveID:       driveID,
 			ItemID:        "sc-1",
 			Path:          "SharedDocs",
-			ItemType:      synctypes.ItemTypeFolder,
+			ItemType:      ItemTypeFolder,
 			RemoteDriveID: remoteDriveID.String(),
 			RemoteItemID:  "remote-item-1",
 		}},
@@ -656,15 +655,15 @@ func TestRunWatch_ProcessBatch_DeleteSafety(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a large baseline so that a batch of deletes triggers delete safety.
-	seedOutcomes := make([]ExecutionResult, 20)
+	seedOutcomes := make([]ActionOutcome, 20)
 	for i := range 20 {
-		seedOutcomes[i] = ExecutionResult{
+		seedOutcomes[i] = ActionOutcome{
 			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
 			ItemID:          fmt.Sprintf("item-%02d", i),
-			ItemType:        synctypes.ItemTypeFile,
+			ItemType:        ItemTypeFile,
 			RemoteHash:      fmt.Sprintf("hash%02d", i),
 			LocalHash:       fmt.Sprintf("hash%02d", i),
 			LocalSize:       100,
@@ -685,8 +684,8 @@ func TestRunWatch_ProcessBatch_DeleteSafety(t *testing.T) {
 		batch = append(batch, PathChanges{
 			Path: o.Path,
 			RemoteEvents: []ChangeEvent{{
-				Source:    synctypes.SourceRemote,
-				Type:      synctypes.ChangeDelete,
+				Source:    SourceRemote,
+				Type:      ChangeDelete,
 				Path:      o.Path,
 				IsDeleted: true,
 			}},
@@ -711,7 +710,7 @@ func TestRunWatch_ProcessBatch_DeleteSafety(t *testing.T) {
 	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "counter should be held")
 
 	// Verify held deletes were recorded in the durable held-delete workflow.
-	rows, listErr := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
+	rows, listErr := eng.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateHeld)
 	require.NoError(t, listErr, "ListHeldDeletesByState")
 	assert.Len(t, rows, 20, "should have 20 held-delete entries")
 }
@@ -737,15 +736,15 @@ func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 
 	// Seed baseline with files that will be "deleted" plus one path that
 	// will produce a download (new remote file).
-	seedOutcomes := make([]ExecutionResult, 15)
+	seedOutcomes := make([]ActionOutcome, 15)
 	for i := range 15 {
-		seedOutcomes[i] = ExecutionResult{
+		seedOutcomes[i] = ActionOutcome{
 			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
 			ItemID:          fmt.Sprintf("item-%02d", i),
-			ItemType:        synctypes.ItemTypeFile,
+			ItemType:        ItemTypeFile,
 			RemoteHash:      fmt.Sprintf("hash%02d", i),
 			LocalHash:       fmt.Sprintf("hash%02d", i),
 			LocalSize:       100,
@@ -766,8 +765,8 @@ func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 		batch = append(batch, PathChanges{
 			Path: o.Path,
 			RemoteEvents: []ChangeEvent{{
-				Source:    synctypes.SourceRemote,
-				Type:      synctypes.ChangeDelete,
+				Source:    SourceRemote,
+				Type:      ChangeDelete,
 				Path:      o.Path,
 				IsDeleted: true,
 			}},
@@ -778,14 +777,14 @@ func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 	batch = append(batch, PathChanges{
 		Path: "newfile.txt",
 		RemoteEvents: []ChangeEvent{{
-			Source:   synctypes.SourceRemote,
-			Type:     synctypes.ChangeCreate,
+			Source:   SourceRemote,
+			Type:     ChangeCreate,
 			Path:     "newfile.txt",
 			ItemID:   "item-new",
 			DriveID:  driveID,
 			Hash:     "newhash",
 			Size:     50,
-			ItemType: synctypes.ItemTypeFile,
+			ItemType: ItemTypeFile,
 		}},
 	})
 
@@ -805,7 +804,7 @@ func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 	assert.Equal(t, "newfile.txt", outbox[0].Action.Path)
 
 	// 15 held delete entries should exist.
-	rows, listErr := eng.baseline.ListHeldDeletesByState(ctx, synctypes.HeldDeleteStateHeld)
+	rows, listErr := eng.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateHeld)
 	require.NoError(t, listErr, "ListHeldDeletesByState")
 	assert.Len(t, rows, 15, "should have 15 held-delete entries")
 }
@@ -830,15 +829,15 @@ func TestRunWatch_ProcessBatch_DeleteSafety_BelowThreshold(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline with 5 files.
-	seedOutcomes := make([]ExecutionResult, 5)
+	seedOutcomes := make([]ActionOutcome, 5)
 	for i := range 5 {
-		seedOutcomes[i] = ExecutionResult{
+		seedOutcomes[i] = ActionOutcome{
 			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
 			ItemID:          fmt.Sprintf("item-%02d", i),
-			ItemType:        synctypes.ItemTypeFile,
+			ItemType:        ItemTypeFile,
 			RemoteHash:      fmt.Sprintf("hash%02d", i),
 			LocalHash:       fmt.Sprintf("hash%02d", i),
 			LocalSize:       100,
@@ -859,8 +858,8 @@ func TestRunWatch_ProcessBatch_DeleteSafety_BelowThreshold(t *testing.T) {
 		batch = append(batch, PathChanges{
 			Path: o.Path,
 			RemoteEvents: []ChangeEvent{{
-				Source:    synctypes.SourceRemote,
-				Type:      synctypes.ChangeDelete,
+				Source:    SourceRemote,
+				Type:      ChangeDelete,
 				Path:      o.Path,
 				IsDeleted: true,
 			}},
@@ -942,8 +941,8 @@ func TestEngine_HandleExternalChanges_DeleteSafetyClearance(t *testing.T) {
 
 	// Record held-delete rows.
 	heldDeletes := []HeldDeleteRecord{
-		{Path: "file1.txt", DriveID: driveID, ItemID: "item-1", ActionType: ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
-		{Path: "file2.txt", DriveID: driveID, ItemID: "item-2", ActionType: ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
+		{Path: "file1.txt", DriveID: driveID, ItemID: "item-1", ActionType: ActionRemoteDelete, State: HeldDeleteStateHeld},
+		{Path: "file2.txt", DriveID: driveID, ItemID: "item-2", ActionType: ActionRemoteDelete, State: HeldDeleteStateHeld},
 	}
 	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, heldDeletes))
 
@@ -985,8 +984,8 @@ func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
 
 	// Record two held-delete entries.
 	heldDeletes := []HeldDeleteRecord{
-		{Path: "file1.txt", DriveID: driveID, ItemID: "item-1", ActionType: ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
-		{Path: "file2.txt", DriveID: driveID, ItemID: "item-2", ActionType: ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
+		{Path: "file1.txt", DriveID: driveID, ItemID: "item-1", ActionType: ActionRemoteDelete, State: HeldDeleteStateHeld},
+		{Path: "file2.txt", DriveID: driveID, ItemID: "item-2", ActionType: ActionRemoteDelete, State: HeldDeleteStateHeld},
 	}
 	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, heldDeletes))
 
@@ -1015,39 +1014,39 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	ctx := t.Context()
 	newTestWatchState(t, eng)
 
-	clearedScope := synctypes.SKPermRemote("Shared/TeamDocs")
-	retainedScope := synctypes.SKPermRemote("Shared/Other")
+	clearedScope := SKPermRemote("Shared/TeamDocs")
+	retainedScope := SKPermRemote("Shared/Other")
 
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       clearedScope,
-		IssueType: synctypes.IssueSharedFolderBlocked,
+		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFunc(),
 	})
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       retainedScope,
-		IssueType: synctypes.IssueSharedFolderBlocked,
+		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFunc(),
 	})
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/TeamDocs/file.txt",
 		DriveID:    driveID,
-		Direction:  synctypes.DirectionUpload,
+		Direction:  DirectionUpload,
 		ActionType: ActionUpload,
-		Role:       synctypes.FailureRoleHeld,
-		Category:   synctypes.CategoryTransient,
-		IssueType:  synctypes.IssueSharedFolderBlocked,
+		Role:       FailureRoleHeld,
+		Category:   CategoryTransient,
+		IssueType:  IssueSharedFolderBlocked,
 		ErrMsg:     "blocked by remote permission scope",
 		ScopeKey:   clearedScope,
 	}, nil))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/Other/file.txt",
 		DriveID:    driveID,
-		Direction:  synctypes.DirectionUpload,
+		Direction:  DirectionUpload,
 		ActionType: ActionUpload,
-		Role:       synctypes.FailureRoleHeld,
-		Category:   synctypes.CategoryTransient,
-		IssueType:  synctypes.IssueSharedFolderBlocked,
+		Role:       FailureRoleHeld,
+		Category:   CategoryTransient,
+		IssueType:  IssueSharedFolderBlocked,
 		ErrMsg:     "blocked by remote permission scope",
 		ScopeKey:   retainedScope,
 	}, nil))
@@ -1096,13 +1095,13 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline with a synced file.
-	seedOutcomes := []ExecutionResult{{
+	seedOutcomes := []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "already-synced.txt",
 		DriveID:         driveID,
 		ItemID:          "item-as",
-		ItemType:        synctypes.ItemTypeFile,
+		ItemType:        ItemTypeFile,
 		RemoteHash:      "samehash",
 		LocalHash:       "samehash",
 		LocalSize:       5,
@@ -1119,8 +1118,8 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	batch := []PathChanges{{
 		Path: "already-synced.txt",
 		RemoteEvents: []ChangeEvent{{
-			Source:  synctypes.SourceRemote,
-			Type:    synctypes.ChangeModify,
+			Source:  SourceRemote,
+			Type:    ChangeModify,
 			Path:    "already-synced.txt",
 			ItemID:  "item-as",
 			DriveID: driveID,
@@ -1164,8 +1163,8 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	batch1 := []PathChanges{{
 		Path: "overlapping.txt",
 		RemoteEvents: []ChangeEvent{{
-			Source:  synctypes.SourceRemote,
-			Type:    synctypes.ChangeCreate,
+			Source:  SourceRemote,
+			Type:    ChangeCreate,
 			Path:    "overlapping.txt",
 			DriveID: driveID,
 			ItemID:  "item-1",
@@ -1183,8 +1182,8 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	batch2 := []PathChanges{{
 		Path: "overlapping.txt",
 		RemoteEvents: []ChangeEvent{{
-			Source:  synctypes.SourceRemote,
-			Type:    synctypes.ChangeModify,
+			Source:  SourceRemote,
+			Type:    ChangeModify,
 			Path:    "overlapping.txt",
 			DriveID: driveID,
 			ItemID:  "item-1",
@@ -1292,7 +1291,7 @@ func TestRunWatch_AllObserversDead_ReturnsError(t *testing.T) {
 	case err := <-done:
 		require.Error(t, err, "RunWatch returned nil, want error indicating all observers exited")
 
-		if !errors.Is(err, synctypes.ErrNosyncGuard) {
+		if !errors.Is(err, ErrNosyncGuard) {
 			// Should be the "all observers exited" wrapper, but the observer error
 			// should be logged as a warning. Check it's not a random error.
 			assert.Equal(t, "sync: all observers exited", err.Error())
@@ -1370,9 +1369,9 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 
 	ctx := t.Context()
 	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key:           synctypes.SKService(),
-		IssueType:     synctypes.IssueServiceOutage,
-		TimingSource:  synctypes.ScopeTimingServerRetryAfter,
+		Key:           SKService(),
+		IssueType:     IssueServiceOutage,
+		TimingSource:  ScopeTimingServerRetryAfter,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   eng.nowFunc().Add(5 * time.Second),
@@ -1381,10 +1380,10 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "retry.txt",
 		DriveID:    eng.driveID,
-		Direction:  synctypes.DirectionDownload,
+		Direction:  DirectionDownload,
 		ActionType: ActionDownload,
-		Role:       synctypes.FailureRoleItem,
-		Category:   synctypes.CategoryTransient,
+		Role:       FailureRoleItem,
+		Category:   CategoryTransient,
 		ErrMsg:     "retry later",
 	}, func(_ int) time.Duration {
 		return 5 * time.Second
@@ -1654,13 +1653,13 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a conflict.
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "fail-upload.txt",
 		DriveID:      driveID,
 		ItemID:       "item-fu",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		ConflictType: "edit_edit",
 	}}
 
@@ -1673,7 +1672,7 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	require.NoError(t, err, "ListConflicts")
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal))
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal))
 
 	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts after resolve")
@@ -1717,13 +1716,13 @@ func TestResolveConflict_KeepLocal_FollowUpSyncCommitsToBaseline(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "baseline-commit.txt",
 		DriveID:      driveID,
 		ItemID:       "original-item-id",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		LocalHash:    "old-local-h",
 		RemoteHash:   "old-remote-h",
 		ConflictType: "edit_edit",
@@ -1736,7 +1735,7 @@ func TestResolveConflict_KeepLocal_FollowUpSyncCommitsToBaseline(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal))
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal))
 
 	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, runErr)
@@ -1768,13 +1767,13 @@ func TestResolveConflict_KeepLocal_MinimalRecord_NoPanic(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
 	ctx := t.Context()
 
-	outcomes := []ExecutionResult{{
+	outcomes := []ActionOutcome{{
 		Action:       ActionConflict,
 		Success:      true,
 		Path:         "minimal-conflict.txt",
 		DriveID:      driveID,
 		ItemID:       "item-min",
-		ItemType:     synctypes.ItemTypeFile,
+		ItemType:     ItemTypeFile,
 		ConflictType: "edit_edit",
 	}}
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
@@ -1785,7 +1784,7 @@ func TestResolveConflict_KeepLocal_MinimalRecord_NoPanic(t *testing.T) {
 	require.NoError(t, err, "ListConflicts")
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal), "ResolveConflict")
+	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal), "ResolveConflict")
 
 	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err, "ListConflicts after failed resolve")

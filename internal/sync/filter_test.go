@@ -14,7 +14,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Validates: R-2.4.1, R-2.4.2, R-2.4.3
@@ -85,43 +84,43 @@ func TestFullScan_ConfiguredSilentFiltersSuppressDeleteForExcludedBaselineEntrie
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "real.txt", DriveID: driveid.New("d"), ItemID: "real",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "content"),
 		},
 		&BaselineEntry{
 			Path: "realdir", DriveID: driveid.New("d"), ItemID: "realdir",
-			ItemType: synctypes.ItemTypeFolder,
+			ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
 			Path: "realdir/nested.txt", DriveID: driveid.New("d"), ItemID: "realdir-nested",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "nested"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "nested"),
 		},
 		&BaselineEntry{
 			Path: ".env", DriveID: driveid.New("d"), ItemID: "dot",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "secret"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "secret"),
 		},
 		&BaselineEntry{
 			Path: "vendor", DriveID: driveid.New("d"), ItemID: "vendor",
-			ItemType: synctypes.ItemTypeFolder,
+			ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
 			Path: "vendor/lib.txt", DriveID: driveid.New("d"), ItemID: "vendor-lib",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "vendored"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "vendored"),
 		},
 		&BaselineEntry{
 			Path: "debug.log", DriveID: driveid.New("d"), ItemID: "log",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "noise"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "noise"),
 		},
 		&BaselineEntry{
 			Path: "link.txt", DriveID: driveid.New("d"), ItemID: "link",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "content"),
 		},
 		&BaselineEntry{
 			Path: "aliasdir", DriveID: driveid.New("d"), ItemID: "aliasdir",
-			ItemType: synctypes.ItemTypeFolder,
+			ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
 			Path: "aliasdir/nested.txt", DriveID: driveid.New("d"), ItemID: "aliasdir-nested",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "nested"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "nested"),
 		},
 	)
 

@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -23,8 +22,8 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 	ctx := t.Context()
 
 	ev := ChangeEvent{
-		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "test.txt",
-		ItemType: synctypes.ItemTypeFile,
+		Source: SourceLocal, Type: ChangeCreate, Path: "test.txt",
+		ItemType: ItemTypeFile,
 	}
 
 	obs.TrySend(ctx, events, &ev)
@@ -48,15 +47,15 @@ func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 
 	// Fill the channel.
 	first := ChangeEvent{
-		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "first.txt",
-		ItemType: synctypes.ItemTypeFile,
+		Source: SourceLocal, Type: ChangeCreate, Path: "first.txt",
+		ItemType: ItemTypeFile,
 	}
 	events <- first
 
 	// This should be dropped (channel full).
 	second := ChangeEvent{
-		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "second.txt",
-		ItemType: synctypes.ItemTypeFile,
+		Source: SourceLocal, Type: ChangeCreate, Path: "second.txt",
+		ItemType: ItemTypeFile,
 	}
 
 	obs.TrySend(ctx, events, &second)
@@ -85,8 +84,8 @@ func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
 	events <- ChangeEvent{Path: "fill.txt"}
 
 	ev := ChangeEvent{
-		Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "test.txt",
-		ItemType: synctypes.ItemTypeFile,
+		Source: SourceLocal, Type: ChangeCreate, Path: "test.txt",
+		ItemType: ItemTypeFile,
 	}
 
 	obs.TrySend(ctx, events, &ev)

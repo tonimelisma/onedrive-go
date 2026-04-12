@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -24,9 +26,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
-	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // --- helpers ---
@@ -900,7 +899,7 @@ func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
 
 	requestPath := synccontrol.ConflictResolutionRequestPath(rd.CanonicalID.String(), "conflict-1")
 	request := postControlJSON(t, cfg.ControlSocketPath, requestPath, []byte(`{"resolution":"keep_local"}`))
-	assert.Equal(t, synccontrol.Status(syncstore.ConflictRequestQueued), request.Status)
+	assert.Equal(t, synccontrol.Status(syncengine.ConflictRequestQueued), request.Status)
 
 	assertControlStatusCounts(t, cfg.ControlSocketPath)
 	assertControlTypedIntentErrors(t, cfg.ControlSocketPath, rd.CanonicalID.String())
@@ -930,12 +929,12 @@ func TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector(t *testing.
 
 	seedControlSocketIntentStore(t, rd)
 
-	store, err := syncstore.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
+	store, err := syncengine.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
 	require.NoError(t, err)
 	require.NoError(t, store.ApproveHeldDeletes(t.Context()))
-	result, err := store.RequestConflictResolution(t.Context(), "conflict-1", synctypes.ResolutionKeepLocal)
+	result, err := store.RequestConflictResolution(t.Context(), "conflict-1", syncengine.ResolutionKeepLocal)
 	require.NoError(t, err)
-	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
+	assert.Equal(t, syncengine.ConflictRequestQueued, result.Status)
 
 	dbPath := rd.StatePath()
 	dbDir := filepath.Dir(dbPath)
@@ -1048,36 +1047,36 @@ func assertControlTypedIntentErrors(t *testing.T, socketPath, cid string) {
 func assertDurableIntentStoreUpdated(t *testing.T, rd *config.ResolvedDrive) {
 	t.Helper()
 
-	reopened, err := syncstore.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
+	reopened, err := syncengine.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, reopened.Close(context.Background()))
 	})
 
-	held, err := reopened.ListHeldDeletesByState(t.Context(), synctypes.HeldDeleteStateHeld)
+	held, err := reopened.ListHeldDeletesByState(t.Context(), syncengine.HeldDeleteStateHeld)
 	require.NoError(t, err)
 	assert.Empty(t, held)
-	approved, err := reopened.ListHeldDeletesByState(t.Context(), synctypes.HeldDeleteStateApproved)
+	approved, err := reopened.ListHeldDeletesByState(t.Context(), syncengine.HeldDeleteStateApproved)
 	require.NoError(t, err)
 	require.Len(t, approved, 1)
 
 	conflict, err := reopened.GetConflictRequest(t.Context(), "conflict-1")
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.ConflictStateQueued, conflict.State)
-	assert.Equal(t, synctypes.ResolutionKeepRemote, conflict.RequestedResolution)
+	assert.Equal(t, syncengine.ConflictStateQueued, conflict.State)
+	assert.Equal(t, syncengine.ResolutionKeepRemote, conflict.RequestedResolution)
 }
 
 func seedControlSocketIntentStore(t *testing.T, rd *config.ResolvedDrive) {
 	t.Helper()
 
-	store, err := syncstore.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
+	store, err := syncengine.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
 	require.NoError(t, err)
-	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []syncstore.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []syncengine.HeldDeleteRecord{{
 		DriveID:       rd.DriveID,
 		ItemID:        "item-delete",
 		Path:          "delete-me.txt",
-		ActionType:    synctypes.ActionRemoteDelete,
-		State:         synctypes.HeldDeleteStateHeld,
+		ActionType:    syncengine.ActionRemoteDelete,
+		State:         syncengine.HeldDeleteStateHeld,
 		HeldAt:        1,
 		LastPlannedAt: 1,
 		LastError:     "held",
