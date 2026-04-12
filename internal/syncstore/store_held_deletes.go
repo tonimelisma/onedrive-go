@@ -11,7 +11,7 @@ import (
 
 // UpsertHeldDeletes records delete actions held by the delete safety threshold.
 // Existing approved rows are never downgraded back to held.
-func (m *SyncStore) UpsertHeldDeletes(ctx context.Context, deletes []synctypes.HeldDeleteRecord) (retErr error) {
+func (m *SyncStore) UpsertHeldDeletes(ctx context.Context, deletes []HeldDeleteRecord) (retErr error) {
 	if len(deletes) == 0 {
 		return nil
 	}
@@ -99,7 +99,7 @@ func (m *SyncStore) ApproveHeldDeletes(ctx context.Context) error {
 func (m *SyncStore) ListHeldDeletesByState(
 	ctx context.Context,
 	state string,
-) ([]synctypes.HeldDeleteRecord, error) {
+) ([]HeldDeleteRecord, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT drive_id, action_type, path, item_id, state, held_at, approved_at,
 			last_planned_at, last_error
@@ -161,11 +161,11 @@ func (m *SyncStore) DeleteHeldDelete(
 	return nil
 }
 
-func scanHeldDeleteRows(rows *sql.Rows) ([]synctypes.HeldDeleteRecord, error) {
-	var records []synctypes.HeldDeleteRecord
+func scanHeldDeleteRows(rows *sql.Rows) ([]HeldDeleteRecord, error) {
+	var records []HeldDeleteRecord
 	for rows.Next() {
 		var (
-			record     synctypes.HeldDeleteRecord
+			record     HeldDeleteRecord
 			approvedAt sql.NullInt64
 			lastError  sql.NullString
 		)

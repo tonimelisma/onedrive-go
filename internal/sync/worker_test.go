@@ -62,7 +62,7 @@ func newWorkerTestSetup(t *testing.T) (
 ) {
 	t.Helper()
 
-	mgr := synctest.NewTestStore(t)
+	mgr := newTestManager(t)
 
 	syncRoot := t.TempDir()
 	driveID := driveid.New("0000000000000001")
@@ -98,19 +98,19 @@ func newWorkerTestSetup(t *testing.T) (
 // sends newly-dispatchable dependents to dispatchCh.
 type testDepGraphHelper struct {
 	dg         *DepGraph
-	dispatchCh chan *synctypes.TrackedAction
+	dispatchCh chan *TrackedAction
 }
 
 func newTestDepGraphHelper(t *testing.T) *testDepGraphHelper {
 	t.Helper()
 	return &testDepGraphHelper{
 		dg:         NewDepGraph(synctest.TestLogger(t)),
-		dispatchCh: make(chan *synctypes.TrackedAction, 64),
+		dispatchCh: make(chan *TrackedAction, 64),
 	}
 }
 
 // Add wraps DepGraph.Add and sends ready actions to dispatchCh.
-func (h *testDepGraphHelper) Add(action *synctypes.Action, id int64, deps []int64) {
+func (h *testDepGraphHelper) Add(action *Action, id int64, deps []int64) {
 	ta := h.dg.Add(action, id, deps)
 	if ta != nil {
 		h.dispatchCh <- ta
@@ -118,7 +118,7 @@ func (h *testDepGraphHelper) Add(action *synctypes.Action, id int64, deps []int6
 }
 
 // Dispatch returns the dispatch channel for WorkerPool.
-func (h *testDepGraphHelper) Dispatch() <-chan *synctypes.TrackedAction { return h.dispatchCh }
+func (h *testDepGraphHelper) Dispatch() <-chan *TrackedAction { return h.dispatchCh }
 
 // CompleteCh returns the DepGraph completion channel.
 func (h *testDepGraphHelper) CompleteCh() <-chan struct{} { return h.dg.Done() }
@@ -126,8 +126,8 @@ func (h *testDepGraphHelper) CompleteCh() <-chan struct{} { return h.dg.Done() }
 // drainAndComplete drains the worker result channel, calling dg.Complete
 // for each result and sending newly-ready dependents to dispatchCh. Returns
 // the collected results. This simulates the engine's drain goroutine.
-func (h *testDepGraphHelper) drainAndComplete(results <-chan synctypes.WorkerResult) []synctypes.WorkerResult {
-	var collected []synctypes.WorkerResult
+func (h *testDepGraphHelper) drainAndComplete(results <-chan WorkerResult) []WorkerResult {
+	var collected []WorkerResult
 	for r := range results {
 		collected = append(collected, r)
 		ready, _ := h.dg.Complete(r.ActionID)
@@ -141,10 +141,10 @@ func (h *testDepGraphHelper) drainAndComplete(results <-chan synctypes.WorkerRes
 // runPoolWithDrain starts the pool, drains results in a goroutine (calling
 // Complete on each), waits for all actions to finish, then stops the pool
 // and returns the collected results.
-func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHelper) []synctypes.WorkerResult {
+func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHelper) []WorkerResult {
 	pool.Start(ctx, 4)
 
-	var results []synctypes.WorkerResult
+	var results []WorkerResult
 	done := make(chan struct{})
 	go func() {
 		results = dgh.drainAndComplete(pool.Results())
@@ -158,7 +158,7 @@ func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHe
 }
 
 // countResults counts succeeded and failed results.
-func countResults(results []synctypes.WorkerResult) (succeeded, failed int) {
+func countResults(results []WorkerResult) (succeeded, failed int) {
 	for i := range results {
 		r := &results[i]
 		if r.Success {
@@ -185,7 +185,7 @@ func TestWorkerPool_ClosedDispatchChannelClosesResults(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	dispatchCh := make(chan *synctypes.TrackedAction)
+	dispatchCh := make(chan *TrackedAction)
 	neverDone := make(chan struct{})
 	pool := NewWorkerPool(cfg, dispatchCh, neverDone, mgr, synctest.TestLogger(t), 1)
 
@@ -200,7 +200,7 @@ func TestWorkerPool_ClosedCompletionChannelClosesResults(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	dispatchCh := make(chan *synctypes.TrackedAction)
+	dispatchCh := make(chan *TrackedAction)
 	completeCh := make(chan struct{})
 	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
 
@@ -215,7 +215,7 @@ func TestWorkerPool_ContextCancellationClosesResults(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	dispatchCh := make(chan *synctypes.TrackedAction)
+	dispatchCh := make(chan *TrackedAction)
 	completeCh := make(chan struct{})
 	ctx, cancel := context.WithCancel(t.Context())
 	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
@@ -231,7 +231,7 @@ func TestWorkerPool_StopIsIdempotentAfterResultsClose(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	dispatchCh := make(chan *synctypes.TrackedAction)
+	dispatchCh := make(chan *TrackedAction)
 	completeCh := make(chan struct{})
 	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
 
@@ -253,20 +253,20 @@ func TestWorkerPool_SendResultDropsWhenContextCancellationWins(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	dispatchCh := make(chan *synctypes.TrackedAction)
+	dispatchCh := make(chan *TrackedAction)
 	completeCh := make(chan struct{})
 	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
 
 	// Saturate the results buffer so sendResult cannot complete before shutdown.
-	pool.results <- synctypes.WorkerResult{Path: "buffered.txt", ActionID: 1}
+	pool.results <- WorkerResult{Path: "buffered.txt", ActionID: 1}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	pool.sendResult(ctx, &synctypes.TrackedAction{
+	pool.sendResult(ctx, &TrackedAction{
 		ID: 2,
-		Action: synctypes.Action{
-			Type: synctypes.ActionUpload,
+		Action: Action{
+			Type: ActionUpload,
 			Path: "dropped.txt",
 		},
 	}, nil, fmt.Errorf("shutdown won"))
@@ -288,15 +288,15 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	cfg, mgr, syncRoot := newWorkerTestSetup(t)
 	ctx := t.Context()
 
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type:       synctypes.ActionFolderCreate,
+			Type:       ActionFolderCreate,
 			Path:       "Documents",
 			DriveID:    driveid.New("0000000000000001"),
 			ItemID:     "folder-doc",
 			CreateSide: synctypes.CreateLocal,
-			View: &synctypes.PathView{
-				Remote: &synctypes.RemoteState{
+			View: &PathView{
+				Remote: &RemoteState{
 					ItemID:   "folder-doc",
 					DriveID:  driveid.New("0000000000000001"),
 					ParentID: "root",
@@ -337,14 +337,14 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	ctx := t.Context()
 
 	// Folder create → then download into that folder.
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type:       synctypes.ActionFolderCreate,
+			Type:       ActionFolderCreate,
 			Path:       "NewDir",
 			DriveID:    driveid.New("0000000000000001"),
 			CreateSide: synctypes.CreateLocal,
-			View: &synctypes.PathView{
-				Remote: &synctypes.RemoteState{
+			View: &PathView{
+				Remote: &RemoteState{
 					ItemID:   "newdir-id",
 					DriveID:  driveid.New("0000000000000001"),
 					ParentID: "root",
@@ -353,12 +353,12 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 			},
 		},
 		{
-			Type:    synctypes.ActionDownload,
+			Type:    ActionDownload,
 			Path:    "NewDir/file.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "file-id",
-			View: &synctypes.PathView{
-				Remote: &synctypes.RemoteState{
+			View: &PathView{
+				Remote: &RemoteState{
 					ItemID:   "file-id",
 					DriveID:  driveid.New("0000000000000001"),
 					ParentID: "newdir-id",
@@ -392,14 +392,14 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	ctx := t.Context()
 
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type:    synctypes.ActionDownload,
+			Type:    ActionDownload,
 			Path:    "slow.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "slow-id",
-			View: &synctypes.PathView{
-				Remote: &synctypes.RemoteState{
+			View: &PathView{
+				Remote: &RemoteState{
 					ItemID:  "slow-id",
 					DriveID: driveid.New("0000000000000001"),
 					Size:    100,
@@ -439,13 +439,13 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	ctx := t.Context()
 
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type:    synctypes.ActionLocalDelete,
+			Type:    ActionLocalDelete,
 			Path:    "result-test.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "del-id",
-			View:    &synctypes.PathView{},
+			View:    &PathView{},
 		},
 	}
 
@@ -483,14 +483,14 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	})
 	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
 
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type:    synctypes.ActionDownload,
+			Type:    ActionDownload,
 			Path:    "fail-me.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "fail-id",
-			View: &synctypes.PathView{
-				Remote: &synctypes.RemoteState{
+			View: &PathView{
+				Remote: &RemoteState{
 					ItemID:  "fail-id",
 					DriveID: driveid.New("0000000000000001"),
 					Size:    10,
@@ -549,14 +549,14 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 
 	// Action 0: create folder "Uploads".
 	// Action 1: upload file "Uploads/doc.txt" into that folder.
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type:       synctypes.ActionFolderCreate,
+			Type:       ActionFolderCreate,
 			Path:       "Uploads",
 			DriveID:    driveid.New("0000000000000001"),
 			CreateSide: synctypes.CreateLocal,
-			View: &synctypes.PathView{
-				Remote: &synctypes.RemoteState{
+			View: &PathView{
+				Remote: &RemoteState{
 					ItemID:   "uploads-folder-id",
 					DriveID:  driveid.New("0000000000000001"),
 					ParentID: "root",
@@ -565,10 +565,10 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 			},
 		},
 		{
-			Type:    synctypes.ActionUpload,
+			Type:    ActionUpload,
 			Path:    "Uploads/doc.txt",
 			DriveID: driveid.New("0000000000000001"),
-			View:    &synctypes.PathView{Path: "Uploads/doc.txt"},
+			View:    &PathView{Path: "Uploads/doc.txt"},
 		},
 	}
 
@@ -612,14 +612,14 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	})
 	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
 
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type:    synctypes.ActionDownload,
+			Type:    ActionDownload,
 			Path:    "panic-me.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "panic-id",
-			View: &synctypes.PathView{
-				Remote: &synctypes.RemoteState{
+			View: &PathView{
+				Remote: &RemoteState{
 					ItemID:  "panic-id",
 					DriveID: driveid.New("0000000000000001"),
 					Size:    10,
@@ -661,13 +661,13 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	ctx := t.Context()
 
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type:    synctypes.ActionLocalDelete,
+			Type:    ActionLocalDelete,
 			Path:    "test-no-complete.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "del-id",
-			View:    &synctypes.PathView{},
+			View:    &PathView{},
 		},
 	}
 
@@ -678,7 +678,7 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	pool.Start(ctx, 4)
 
 	// Read one result from the channel — worker must send a result.
-	var result synctypes.WorkerResult
+	var result WorkerResult
 	select {
 	case r := <-pool.Results():
 		result = r
@@ -723,13 +723,13 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	ctx := t.Context()
 
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type:              synctypes.ActionLocalDelete,
+			Type:              ActionLocalDelete,
 			Path:              "shortcut-action.txt",
 			DriveID:           driveid.New("0000000000000001"),
 			ItemID:            "del-id",
-			View:              &synctypes.PathView{},
+			View:              &PathView{},
 			TargetShortcutKey: "remoteDrive:remoteItem",
 			TargetDriveID:     driveid.New("0000000000000002"),
 		},
@@ -741,7 +741,7 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
-	var result synctypes.WorkerResult
+	var result WorkerResult
 	select {
 	case r := <-pool.Results():
 		result = r
@@ -783,14 +783,14 @@ func TestWorkerResult_HTTPStatusAndRetryAfter(t *testing.T) {
 	})
 	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
 
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type:    synctypes.ActionDownload,
+			Type:    ActionDownload,
 			Path:    "throttled.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "throttled-id",
-			View: &synctypes.PathView{
-				Remote: &synctypes.RemoteState{
+			View: &PathView{
+				Remote: &RemoteState{
 					ItemID:  "throttled-id",
 					DriveID: driveid.New("0000000000000001"),
 					Size:    10,
@@ -805,7 +805,7 @@ func TestWorkerResult_HTTPStatusAndRetryAfter(t *testing.T) {
 	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
-	var result synctypes.WorkerResult
+	var result WorkerResult
 	select {
 	case r := <-pool.Results():
 		result = r
@@ -892,7 +892,7 @@ func TestAction_TargetsOwnDrive(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			a := synctypes.Action{TargetShortcutKey: tt.targetShortcutKey}
+			a := Action{TargetShortcutKey: tt.targetShortcutKey}
 			assert.Equal(t, tt.wantOwnDrive, a.TargetsOwnDrive())
 			assert.Equal(t, tt.wantShortcutKey, a.ShortcutKey())
 		})
@@ -921,21 +921,21 @@ func TestEngineOwnsCounters(t *testing.T) {
 	})
 	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
 
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type:    synctypes.ActionLocalDelete,
+			Type:    ActionLocalDelete,
 			Path:    "ok.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "ok-id",
-			View:    &synctypes.PathView{},
+			View:    &PathView{},
 		},
 		{
-			Type:    synctypes.ActionDownload,
+			Type:    ActionDownload,
 			Path:    "fail.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "fail-id",
-			View: &synctypes.PathView{
-				Remote: &synctypes.RemoteState{
+			View: &PathView{
+				Remote: &RemoteState{
 					ItemID:  "fail-id",
 					DriveID: driveid.New("0000000000000001"),
 					Size:    10,

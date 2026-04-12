@@ -7,12 +7,13 @@ import (
 	"path"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type remoteScopeResult struct {
-	observed []synctypes.ObservedItem
-	emitted  []synctypes.ChangeEvent
+	observed []syncstore.ObservedItem
+	emitted  []ChangeEvent
 }
 
 func (e *Engine) buildScopeSnapshot(ctx context.Context) (syncscope.Snapshot, error) {
@@ -39,7 +40,7 @@ func (flow *engineFlow) applyScopeState(
 		return err
 	}
 
-	if err := flow.engine.baseline.ApplyScopeState(ctx, synctypes.ScopeStateApplyRequest{
+	if err := flow.engine.baseline.ApplyScopeState(ctx, syncstore.ScopeStateApplyRequest{
 		State: state,
 	}); err != nil {
 		return fmt.Errorf("apply scope state: %w", err)
@@ -52,11 +53,11 @@ func applyRemoteScope(
 	logger *slog.Logger,
 	snapshot syncscope.Snapshot,
 	generation int64,
-	events []synctypes.ChangeEvent,
+	events []ChangeEvent,
 ) remoteScopeResult {
 	result := remoteScopeResult{
-		observed: make([]synctypes.ObservedItem, 0, len(events)),
-		emitted:  make([]synctypes.ChangeEvent, 0, len(events)),
+		observed: make([]syncstore.ObservedItem, 0, len(events)),
+		emitted:  make([]ChangeEvent, 0, len(events)),
 	}
 
 	for i := range events {
@@ -107,11 +108,11 @@ func applyRemoteScope(
 
 func appendObservedEvent(
 	logger *slog.Logger,
-	items []synctypes.ObservedItem,
-	ev *synctypes.ChangeEvent,
+	items []syncstore.ObservedItem,
+	ev *ChangeEvent,
 	generation int64,
 	reason syncscope.ExclusionReason,
-) []synctypes.ObservedItem {
+) []syncstore.ObservedItem {
 	if ev.ItemID == "" {
 		if logger != nil {
 			logger.Warn("changeEventsToObservedItems: skipping event with empty ItemID",
@@ -124,7 +125,7 @@ func appendObservedEvent(
 
 	filtered := reason != syncscope.ExclusionNone
 
-	return append(items, synctypes.ObservedItem{
+	return append(items, syncstore.ObservedItem{
 		DriveID:          ev.DriveID,
 		ItemID:           ev.ItemID,
 		ParentID:         ev.ParentID,
@@ -198,7 +199,7 @@ func (rt *watchRuntime) handleWatchScopeChange(
 
 	rt.setScopeSnapshot(change.New, session.Generation)
 
-	if p.mode == synctypes.SyncUploadOnly {
+	if p.mode == SyncUploadOnly {
 		plan.Reentry.Pending = false
 		plan.Reentry.Kind = synctypes.ScopeReconcileNone
 	}

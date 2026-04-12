@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/failures"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -26,12 +27,12 @@ const (
 )
 
 type routeOutcome struct {
-	dispatched   []*synctypes.TrackedAction
+	dispatched   []*TrackedAction
 	terminate    bool
 	terminateErr error
 }
 
-func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []*synctypes.TrackedAction {
+func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []*TrackedAction {
 	if flow.depGraph == nil {
 		panic(fmt.Sprintf("dep_graph: complete action %d during %s with nil graph", actionID, reason))
 	}
@@ -49,8 +50,8 @@ func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []
 func (flow *engineFlow) processWorkerResult(
 	ctx context.Context,
 	watch *watchRuntime,
-	r *synctypes.WorkerResult,
-	bl *synctypes.Baseline,
+	r *WorkerResult,
+	bl *syncstore.Baseline,
 ) routeOutcome {
 	if r.IsTrial && !r.TrialScopeKey.IsZero() {
 		return flow.processResult(ctx, watch, resultContext{
@@ -66,8 +67,8 @@ func (flow *engineFlow) processResult(
 	ctx context.Context,
 	watch *watchRuntime,
 	resultCtx resultContext,
-	r *synctypes.WorkerResult,
-	bl *synctypes.Baseline,
+	r *WorkerResult,
+	bl *syncstore.Baseline,
 ) routeOutcome {
 	decision := classifyResult(r)
 	ready := flow.completeDepGraphAction(r.ActionID, "processResult")
@@ -83,9 +84,9 @@ func (flow *engineFlow) routeReadyForClass(
 	ctx context.Context,
 	watch *watchRuntime,
 	class failures.Class,
-	ready []*synctypes.TrackedAction,
-	r *synctypes.WorkerResult,
-) []*synctypes.TrackedAction {
+	ready []*TrackedAction,
+	r *WorkerResult,
+) []*TrackedAction {
 	switch class {
 	case failures.ClassInvalid:
 		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
@@ -102,7 +103,7 @@ func (flow *engineFlow) routeReadyForClass(
 	return nil
 }
 
-func (flow *engineFlow) applySuccessEffects(ctx context.Context, watch *watchRuntime, r *synctypes.WorkerResult) {
+func (flow *engineFlow) applySuccessEffects(ctx context.Context, watch *watchRuntime, r *WorkerResult) {
 	flow.succeeded++
 	flow.clearFailureOnSuccess(ctx, r)
 	flow.consumeHeldDeleteOnSuccess(ctx, r)
@@ -119,8 +120,8 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision *ResultDecision,
-	r *synctypes.WorkerResult,
-	bl *synctypes.Baseline,
+	r *WorkerResult,
+	bl *syncstore.Baseline,
 ) {
 	if flow.scopeController().applyPermissionDecisionFlow(ctx, watch, decision, r, bl) {
 		flow.recordError(decision, r)
@@ -153,9 +154,9 @@ func (flow *engineFlow) processNormalDecision(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision *ResultDecision,
-	ready []*synctypes.TrackedAction,
-	r *synctypes.WorkerResult,
-	bl *synctypes.Baseline,
+	ready []*TrackedAction,
+	r *WorkerResult,
+	bl *syncstore.Baseline,
 ) routeOutcome {
 	scopeCtrl := flow.scopeController()
 
@@ -217,9 +218,9 @@ func (flow *engineFlow) processTrialDecision(
 	watch *watchRuntime,
 	trialScopeKey synctypes.ScopeKey,
 	decision *ResultDecision,
-	ready []*synctypes.TrackedAction,
-	r *synctypes.WorkerResult,
-	bl *synctypes.Baseline,
+	ready []*TrackedAction,
+	r *WorkerResult,
+	bl *syncstore.Baseline,
 ) routeOutcome {
 	scopeCtrl := flow.scopeController()
 	outcome := routeOutcome{}
@@ -291,8 +292,8 @@ func (controller *scopeController) applyTrialPreserveEffects(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision *ResultDecision,
-	r *synctypes.WorkerResult,
-	bl *synctypes.Baseline,
+	r *WorkerResult,
+	bl *syncstore.Baseline,
 ) {
 	if decision.PermissionFlow != permissionFlowNone {
 		if permDecision, handled := controller.resolvePermissionDecision(ctx, decision, r, bl); handled {
@@ -349,7 +350,7 @@ func (controller *scopeController) clearHeldFailureForScope(
 	}
 }
 
-func fatalResultError(r *synctypes.WorkerResult) error {
+func fatalResultError(r *WorkerResult) error {
 	if r.Err != nil {
 		return fmt.Errorf("sync: unauthorized worker result for %s: %w", r.Path, r.Err)
 	}
@@ -360,7 +361,7 @@ func fatalResultError(r *synctypes.WorkerResult) error {
 func (controller *scopeController) applyFatalAuthEffects(
 	ctx context.Context,
 	watch *watchRuntime,
-	r *synctypes.WorkerResult,
+	r *WorkerResult,
 	summaryKey synctypes.SummaryKey,
 ) {
 	flow := controller.flow
@@ -390,8 +391,8 @@ func (controller *scopeController) applyPermissionDecisionFlow(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision *ResultDecision,
-	r *synctypes.WorkerResult,
-	bl *synctypes.Baseline,
+	r *WorkerResult,
+	bl *syncstore.Baseline,
 ) bool {
 	permDecision, handled := controller.resolvePermissionDecision(ctx, decision, r, bl)
 	if !handled {
@@ -404,8 +405,8 @@ func (controller *scopeController) applyPermissionDecisionFlow(
 func (controller *scopeController) resolvePermissionDecision(
 	ctx context.Context,
 	decision *ResultDecision,
-	r *synctypes.WorkerResult,
-	bl *synctypes.Baseline,
+	r *WorkerResult,
+	bl *syncstore.Baseline,
 ) (*PermissionCheckDecision, bool) {
 	flow := controller.flow
 
@@ -431,7 +432,7 @@ func (controller *scopeController) resolvePermissionDecision(
 func (flow *engineFlow) recordFailure(
 	ctx context.Context,
 	decision *ResultDecision,
-	r *synctypes.WorkerResult,
+	r *WorkerResult,
 	delayFn func(int) time.Duration,
 ) {
 	direction := directionFromAction(r.ActionType)
@@ -444,7 +445,7 @@ func (flow *engineFlow) recordFailure(
 	category := decision.Persistence.failureCategory()
 	scopeKey := decision.ScopeEvidence
 
-	if recErr := flow.engine.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	if recErr := flow.engine.baseline.RecordFailure(ctx, &syncstore.SyncFailureParams{
 		Path:       r.Path,
 		DriveID:    driveID,
 		Direction:  direction,

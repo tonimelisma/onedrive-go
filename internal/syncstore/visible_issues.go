@@ -160,7 +160,7 @@ func loadVisibleConflictCount(ctx context.Context, db *sql.DB) (int, error) {
 	return count, nil
 }
 
-func queryAuthScopeBlocks(ctx context.Context, db *sql.DB) ([]*synctypes.ScopeBlock, error) {
+func queryAuthScopeBlocks(ctx context.Context, db *sql.DB) ([]*ScopeBlock, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count
 		FROM scope_blocks
@@ -175,9 +175,9 @@ func queryAuthScopeBlocks(ctx context.Context, db *sql.DB) ([]*synctypes.ScopeBl
 	}
 	defer rows.Close()
 
-	var blocks []*synctypes.ScopeBlock
+	var blocks []*ScopeBlock
 	for rows.Next() {
-		var block synctypes.ScopeBlock
+		var block ScopeBlock
 		var wire string
 		var blockedAt int64
 		var trialInterval int64
@@ -227,10 +227,10 @@ func queryRetryingIssueCount(ctx context.Context, db *sql.DB) (int, error) {
 
 func buildVisibleIssueGroups(
 	conflictCount int,
-	actionable []synctypes.SyncFailureRow,
-	heldDeletes []synctypes.HeldDeleteRecord,
-	remoteBlocked []synctypes.SyncFailureRow,
-	authBlocks []*synctypes.ScopeBlock,
+	actionable []SyncFailureRow,
+	heldDeletes []HeldDeleteRecord,
+	remoteBlocked []SyncFailureRow,
+	authBlocks []*ScopeBlock,
 ) []VisibleIssueGroup {
 	groupIndex := make(map[visibleIssueGroupKey]int)
 	groups := make([]VisibleIssueGroup, 0, len(actionable)+len(authBlocks)+1)
@@ -276,7 +276,7 @@ func buildVisibleIssueSummary(groups []VisibleIssueGroup, retrying int) IssueSum
 	return summary
 }
 
-func querySyncFailureRowsDB(ctx context.Context, db *sql.DB, query string, args ...any) ([]synctypes.SyncFailureRow, error) {
+func querySyncFailureRowsDB(ctx context.Context, db *sql.DB, query string, args ...any) ([]SyncFailureRow, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query sync failures: %w", err)
@@ -286,7 +286,7 @@ func querySyncFailureRowsDB(ctx context.Context, db *sql.DB, query string, args 
 	return scanSyncFailureRows(rows)
 }
 
-func queryHeldDeletesDB(ctx context.Context, db *sql.DB) ([]synctypes.HeldDeleteRecord, error) {
+func queryHeldDeletesDB(ctx context.Context, db *sql.DB) ([]HeldDeleteRecord, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT drive_id, action_type, path, item_id, state, held_at, approved_at,
 			last_planned_at, last_error
@@ -318,7 +318,7 @@ func appendVisibleConflictGroup(groups *[]VisibleIssueGroup, conflictCount int) 
 	})
 }
 
-func addVisibleHeldDeleteGroup(groups *[]VisibleIssueGroup, heldDeletes []synctypes.HeldDeleteRecord) {
+func addVisibleHeldDeleteGroup(groups *[]VisibleIssueGroup, heldDeletes []HeldDeleteRecord) {
 	if len(heldDeletes) == 0 {
 		return
 	}
@@ -339,7 +339,7 @@ func addVisibleHeldDeleteGroup(groups *[]VisibleIssueGroup, heldDeletes []syncty
 func addVisibleActionableGroups(
 	groups *[]VisibleIssueGroup,
 	groupIndex map[visibleIssueGroupKey]int,
-	actionable []synctypes.SyncFailureRow,
+	actionable []SyncFailureRow,
 ) {
 	for i := range actionable {
 		group := ensureVisibleFailureGroup(groups, groupIndex, &actionable[i], 0)
@@ -354,7 +354,7 @@ func addVisibleActionableGroups(
 func addVisibleRemoteBlockedGroups(
 	groups *[]VisibleIssueGroup,
 	groupIndex map[visibleIssueGroupKey]int,
-	remoteBlocked []synctypes.SyncFailureRow,
+	remoteBlocked []SyncFailureRow,
 ) {
 	for i := range remoteBlocked {
 		group := ensureVisibleFailureGroup(groups, groupIndex, &remoteBlocked[i], 1)
@@ -374,7 +374,7 @@ func addVisibleRemoteBlockedGroups(
 func addVisibleAuthScopeGroups(
 	groups *[]VisibleIssueGroup,
 	groupIndex map[visibleIssueGroupKey]int,
-	authBlocks []*synctypes.ScopeBlock,
+	authBlocks []*ScopeBlock,
 ) {
 	for i := range authBlocks {
 		summaryKey := synctypes.SummaryKeyForScopeBlock(authBlocks[i].IssueType, authBlocks[i].Key)
@@ -399,7 +399,7 @@ func addVisibleAuthScopeGroups(
 func ensureVisibleFailureGroup(
 	groups *[]VisibleIssueGroup,
 	groupIndex map[visibleIssueGroupKey]int,
-	row *synctypes.SyncFailureRow,
+	row *SyncFailureRow,
 	visibleCount int,
 ) *VisibleIssueGroup {
 	summaryKey := synctypes.SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)

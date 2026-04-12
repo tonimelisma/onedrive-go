@@ -35,7 +35,7 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 	writeExecTestFile(t, syncRoot, "file.txt", "content")
 
 	dg := NewDepGraph(testLogger(t))
-	dispatchCh := make(chan *synctypes.TrackedAction, 4)
+	dispatchCh := make(chan *TrackedAction, 4)
 	mgr := newTestManager(t)
 	pool := NewWorkerPool(cfg, dispatchCh, dg.Done(), mgr, testLogger(t), 10)
 
@@ -43,11 +43,11 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 
 	pool.Start(ctx, 2)
 
-	action := &synctypes.Action{
-		Type:   synctypes.ActionUpload,
+	action := &Action{
+		Type:   ActionUpload,
 		Path:   "file.txt",
 		ItemID: "item-1",
-		View:   &synctypes.PathView{Remote: &synctypes.RemoteState{ItemID: "parent", ParentID: "root"}},
+		View:   &PathView{Remote: &RemoteState{ItemID: "parent", ParentID: "root"}},
 	}
 	ta := dg.Add(action, 0, nil)
 	if ta != nil {
@@ -78,25 +78,25 @@ func TestFault_BaselineCommitError(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a baseline entry.
-	require.NoError(t, mgr.CommitOutcome(ctx, &synctypes.Outcome{
-		Action: synctypes.ActionDownload, Success: true, Path: "file.txt",
+	require.NoError(t, mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&ExecutionResult{
+		Action: ActionDownload, Success: true, Path: "file.txt",
 		DriveID: driveid.New(engineTestDriveID), ItemID: "item-1",
 		ParentID: "root", ItemType: synctypes.ItemTypeFile, RemoteHash: "hash1",
 		LocalSize:       100,
 		LocalSizeKnown:  true,
 		RemoteSize:      100,
 		RemoteSizeKnown: true,
-	}))
+	})))
 
 	// Close the DB to simulate a fault.
 	require.NoError(t, mgr.Close(t.Context()))
 
 	// CommitOutcome should return an error, not panic.
-	err = mgr.CommitOutcome(ctx, &synctypes.Outcome{
-		Action: synctypes.ActionDownload, Success: true, Path: "file2.txt",
+	err = mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&ExecutionResult{
+		Action: ActionDownload, Success: true, Path: "file2.txt",
 		DriveID: driveid.New(engineTestDriveID), ItemID: "item-2",
 		ParentID: "root", ItemType: synctypes.ItemTypeFile,
-	})
+	}))
 	assert.Error(t, err)
 }
 

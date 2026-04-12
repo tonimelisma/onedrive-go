@@ -4,8 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/tonimelisma/onedrive-go/internal/failures"
 )
 
 // Validates: R-6.8.16, R-6.6.11
@@ -37,20 +35,6 @@ func TestDescribeSummary_KnownKeys(t *testing.T) {
 		assert.NotEmpty(t, descriptor.Action)
 		assert.NotEmpty(t, descriptor.LogSummary)
 	}
-}
-
-// Validates: R-6.8.16
-func TestSummaryKeyForRuntime_RepresentativeMappings(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, SummaryAuthenticationRequired,
-		SummaryKeyForRuntime(failures.ClassFatal, IssueUnauthorized))
-	assert.Equal(t, SummaryServiceOutage,
-		SummaryKeyForRuntime(failures.ClassRetryableTransient, IssueServiceOutage))
-	assert.Equal(t, SummaryRateLimited,
-		SummaryKeyForRuntime(failures.ClassScopeBlockingTransient, IssueRateLimited))
-	assert.Equal(t, SummarySyncFailure,
-		SummaryKeyForRuntime(failures.ClassActionable, ""))
 }
 
 // Validates: R-2.14.3, R-6.8.16

@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const watchOrderingStressIterations = 8
@@ -23,15 +22,15 @@ func TestWatchOrderingStress_UserIntentWakeAndWorkerResultRace(t *testing.T) {
 		ctx := t.Context()
 
 		bl, safety := seedApprovedHeldDelete(t, eng, ctx, "stress-delete-result.txt", "stress-item-result")
-		busy := testWatchRuntime(t, eng).depGraph.Add(&synctypes.Action{
-			Type:    synctypes.ActionUpload,
+		busy := testWatchRuntime(t, eng).depGraph.Add(&Action{
+			Type:    ActionUpload,
 			Path:    "stress-busy-result.txt",
 			DriveID: driveid.New(engineTestDriveID),
 		}, int64(iteration+1), nil)
 		require.NotNil(t, busy)
 
-		results := make(chan synctypes.WorkerResult, 1)
-		results <- synctypes.WorkerResult{
+		results := make(chan WorkerResult, 1)
+		results <- WorkerResult{
 			ActionID:   busy.ID,
 			ActionType: busy.Action.Type,
 			Path:       busy.Action.Path,
@@ -43,7 +42,7 @@ func TestWatchOrderingStress_UserIntentWakeAndWorkerResultRace(t *testing.T) {
 		p := &watchPipeline{
 			bl:          bl,
 			safety:      safety,
-			mode:        synctypes.SyncBidirectional,
+			mode:        SyncBidirectional,
 			results:     results,
 			userIntentC: userIntentC,
 		}
@@ -80,7 +79,7 @@ func TestWatchOrderingStress_RecheckAndUserIntentWakeCoalesce(t *testing.T) {
 		p := &watchPipeline{
 			bl:          bl,
 			safety:      safety,
-			mode:        synctypes.SyncBidirectional,
+			mode:        SyncBidirectional,
 			recheckC:    recheckC,
 			userIntentC: userIntentC,
 		}

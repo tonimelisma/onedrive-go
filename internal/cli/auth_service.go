@@ -10,39 +10,31 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-type authService struct {
-	cc *CLIContext
-}
-
-func newAuthService(cc *CLIContext) *authService {
-	return &authService{cc: cc}
-}
-
-func (s *authService) runLogin(ctx context.Context, useBrowser bool) error {
-	logger := s.cc.Logger
+func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) error {
+	logger := cc.Logger
 	logger.Info("login started", slog.Bool("browser", useBrowser))
 
 	tempPath := pendingTokenPath()
-	ts, err := s.authenticateLogin(ctx, useBrowser, tempPath)
+	ts, err := authenticateLogin(ctx, cc, useBrowser, tempPath)
 	if err != nil {
-		s.cleanupPendingToken(tempPath, "login failure")
+		cleanupPendingToken(cc, tempPath, "login failure")
 		return fmt.Errorf("authenticate account: %w", err)
 	}
 
-	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger, s.cc.httpProvider())
+	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger, cc.httpProvider())
 	if err != nil {
-		s.cleanupPendingToken(tempPath, "discovery failure")
+		cleanupPendingToken(cc, tempPath, "discovery failure")
 		return fmt.Errorf("discovering account: %w", err)
 	}
 
-	if _, reconcileErr := s.cc.reconcileGraphUser(canonicalID, user); reconcileErr != nil {
-		s.cleanupPendingToken(tempPath, "reconciliation failure")
+	if _, reconcileErr := cc.reconcileGraphUser(canonicalID, user); reconcileErr != nil {
+		cleanupPendingToken(cc, tempPath, "reconciliation failure")
 		return reconcileErr
 	}
 
 	finalTokenPath := config.DriveTokenPath(canonicalID)
 	if finalTokenPath == "" {
-		s.cleanupPendingToken(tempPath, "path resolution failure")
+		cleanupPendingToken(cc, tempPath, "path resolution failure")
 		return fmt.Errorf("cannot determine token path for drive %q", canonicalID.String())
 	}
 
@@ -68,7 +60,7 @@ func (s *authService) runLogin(ctx context.Context, useBrowser bool) error {
 	}
 
 	email := canonicalID.Email()
-	syncDir, added, err := config.EnsureDriveInConfig(s.cc.CfgPath, canonicalID, logger)
+	syncDir, added, err := config.EnsureDriveInConfig(cc.CfgPath, canonicalID, logger)
 	if err != nil {
 		return fmt.Errorf("configuring drive: %w", err)
 	}
@@ -79,19 +71,20 @@ func (s *authService) runLogin(ctx context.Context, useBrowser bool) error {
 
 	if !added {
 		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
-		return writef(s.cc.Output(), "Token refreshed for %s.\n", email)
+		return writef(cc.Output(), "Token refreshed for %s.\n", email)
 	}
 
-	return printLoginSuccess(s.cc.Output(), canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
+	return printLoginSuccess(cc.Output(), canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
 }
 
-func (s *authService) authenticateLogin(
+func authenticateLogin(
 	ctx context.Context,
+	cc *CLIContext,
 	useBrowser bool,
 	tempPath string,
 ) (graph.TokenSource, error) {
 	if useBrowser {
-		ts, err := graph.LoginWithBrowser(ctx, tempPath, openBrowser, s.cc.Logger)
+		ts, err := graph.LoginWithBrowser(ctx, tempPath, openBrowser, cc.Logger)
 		if err != nil {
 			return nil, fmt.Errorf("browser login: %w", err)
 		}
@@ -100,9 +93,9 @@ func (s *authService) authenticateLogin(
 	}
 
 	ts, err := graph.Login(ctx, tempPath, func(da graph.DeviceAuth) {
-		writeWarningf(s.cc.Status(), "To sign in, visit: %s\n", da.VerificationURI)
-		writeWarningf(s.cc.Status(), "Enter code: %s\n", da.UserCode)
-	}, s.cc.Logger)
+		writeWarningf(cc.Status(), "To sign in, visit: %s\n", da.VerificationURI)
+		writeWarningf(cc.Status(), "Enter code: %s\n", da.UserCode)
+	}, cc.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("device-code login: %w", err)
 	}
@@ -110,30 +103,26 @@ func (s *authService) authenticateLogin(
 	return ts, nil
 }
 
-func (s *authService) cleanupPendingToken(path string, reason string) {
+func cleanupPendingToken(cc *CLIContext, path string, reason string) {
 	if cleanupErr := removePathIfExists(path); cleanupErr != nil {
-		s.cc.Logger.Warn("failed to remove pending token", "reason", reason, "path", path, "error", cleanupErr)
+		cc.Logger.Warn("failed to remove pending token", "reason", reason, "path", path, "error", cleanupErr)
 	}
 }
 
-func (s *authService) runLogout(purge bool) error {
-	logger := s.cc.Logger
+func runLogoutWithContext(cc *CLIContext, purge bool) error {
+	logger := cc.Logger
 
-	cfg, loadErr := config.LoadOrDefault(s.cc.CfgPath, logger)
+	cfg, loadErr := config.LoadOrDefault(cc.CfgPath, logger)
 	if loadErr != nil {
 		logger.Warn("failed to load config, proceeding with --account only", "error", loadErr)
 		cfg = config.DefaultConfig()
 	}
 
-	account, autoErr := resolveLogoutAccount(cfg, s.cc.Flags.Account, purge, logger)
+	account, autoErr := resolveLogoutAccount(cfg, cc.Flags.Account, purge, logger)
 	if autoErr != nil {
 		return autoErr
 	}
 
 	logger.Info("logout started", "account", account, "purge", purge)
-	return executeLogout(cfg, s.cc.CfgPath, s.cc.Output(), account, purge, logger)
-}
-
-func (s *authService) runWhoami(ctx context.Context) error {
-	return runWhoamiWithContext(ctx, s.cc)
+	return executeLogout(cfg, cc.CfgPath, cc.Output(), account, purge, logger)
 }

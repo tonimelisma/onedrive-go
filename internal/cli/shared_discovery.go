@@ -34,16 +34,9 @@ type sharedDiscoveryResult struct {
 	AccountsDegraded      []accountDegradedNotice
 }
 
-type sharedDiscoveryService struct {
-	cc *CLIContext
-}
-
-func newSharedDiscoveryService(cc *CLIContext) *sharedDiscoveryService {
-	return &sharedDiscoveryService{cc: cc}
-}
-
-func (s *sharedDiscoveryService) discoverTargets(
+func discoverSharedTargets(
 	ctx context.Context,
+	cc *CLIContext,
 	catalog []accountCatalogEntry,
 ) sharedDiscoveryResult {
 	result := sharedDiscoveryResult{}
@@ -63,7 +56,7 @@ func (s *sharedDiscoveryService) discoverTargets(
 			continue
 		}
 
-		accountTargets, accountAuthRequired, accountDegraded := s.discoverTargetsForAccount(ctx, entry)
+		accountTargets, accountAuthRequired, accountDegraded := discoverSharedTargetsForAccount(ctx, cc, entry)
 		result.AccountsRequiringAuth = append(result.AccountsRequiringAuth, accountAuthRequired...)
 		result.AccountsDegraded = append(result.AccountsDegraded, accountDegraded...)
 
@@ -100,11 +93,12 @@ func (s *sharedDiscoveryService) discoverTargets(
 	return result
 }
 
-func (s *sharedDiscoveryService) discoverTargetsForAccount(
+func discoverSharedTargetsForAccount(
 	ctx context.Context,
+	cc *CLIContext,
 	entry *accountCatalogEntry,
 ) ([]sharedDiscoveryTarget, []accountAuthRequirement, []accountDegradedNotice) {
-	logger := s.cc.Logger
+	logger := cc.Logger
 	tokenCandidates := sharedDiscoveryTokenCandidates(entry)
 	if len(tokenCandidates) == 0 {
 		logger.Debug("shared discovery missing account tokens",
@@ -141,8 +135,8 @@ func (s *sharedDiscoveryService) discoverTargetsForAccount(
 		}
 
 		client, err := newGraphClientWithHTTP(
-			s.cc.graphBaseURL(),
-			s.cc.httpProvider().BootstrapMeta(),
+			cc.graphBaseURL(),
+			cc.httpProvider().BootstrapMeta(),
 			ts,
 			logger,
 		)

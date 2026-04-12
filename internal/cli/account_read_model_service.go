@@ -26,18 +26,10 @@ type driveListReadModelSnapshot struct {
 	AccountsDegraded      []accountDegradedNotice
 }
 
-type accountReadModelService struct {
-	cc *CLIContext
-}
+func loadLenientCatalog(ctx context.Context, cc *CLIContext) (accountReadModelSnapshot, error) {
+	logger := cc.Logger
 
-func newAccountReadModelService(cc *CLIContext) *accountReadModelService {
-	return &accountReadModelService{cc: cc}
-}
-
-func (s *accountReadModelService) loadLenientCatalog(ctx context.Context) (accountReadModelSnapshot, error) {
-	logger := s.cc.Logger
-
-	cfg, warnings, err := config.LoadOrDefaultLenient(s.cc.CfgPath, logger)
+	cfg, warnings, err := config.LoadOrDefaultLenient(cc.CfgPath, logger)
 	outcome := config.ClassifyLoadOutcome(err, warnings)
 	if err != nil {
 		return accountReadModelSnapshot{}, fmt.Errorf("loading config: %w", err)
@@ -57,13 +49,14 @@ func (s *accountReadModelService) loadLenientCatalog(ctx context.Context) (accou
 // account identity before building the offline account catalog. The account
 // read model owns this best-effort freshness step so command handlers and
 // downstream discovery helpers do not duplicate `/me` probe logic.
-func (s *accountReadModelService) loadLenientCatalogWithBestEffortIdentityRefresh(
+func loadLenientCatalogWithBestEffortIdentityRefresh(
 	ctx context.Context,
+	cc *CLIContext,
 ) (accountReadModelSnapshot, error) {
-	logger := s.cc.Logger
+	logger := cc.Logger
 
 	for _, tokenCID := range config.DiscoverTokens(logger) {
-		if _, err := s.cc.probeAccountIdentity(ctx, tokenCID, "account-read-model"); err != nil {
+		if _, err := cc.probeAccountIdentity(ctx, tokenCID, "account-read-model"); err != nil {
 			logger.Debug("skip email reconciliation during account read model refresh",
 				"account", tokenCID.String(),
 				"error", err,
@@ -71,42 +64,43 @@ func (s *accountReadModelService) loadLenientCatalogWithBestEffortIdentityRefres
 		}
 	}
 
-	return s.loadLenientCatalog(ctx)
+	return loadLenientCatalog(ctx, cc)
 }
 
-func (s *accountReadModelService) statusAccounts(snapshot accountReadModelSnapshot, history bool) []statusAccount {
+func statusAccounts(cc *CLIContext, snapshot accountReadModelSnapshot, history bool) []statusAccount {
 	return buildStatusAccountsFromCatalog(snapshot.Config, snapshot.Catalog, &liveSyncStateQuerier{
-		logger:        s.cc.Logger,
+		logger:        cc.Logger,
 		history:       history,
-		verbose:       s.cc.Flags.Verbose,
+		verbose:       cc.Flags.Verbose,
 		examplesLimit: defaultVisiblePaths,
 	})
 }
 
-func (s *accountReadModelService) authRequirements(
+func authRequirements(
 	snapshot accountReadModelSnapshot,
 	include func(accountCatalogEntry) bool,
 ) []accountAuthRequirement {
 	return catalogAuthRequirements(snapshot.Catalog, include)
 }
 
-func (s *accountReadModelService) whoamiAuthRequired(
+func whoamiAuthRequired(
 	snapshot accountReadModelSnapshot,
 	authenticatedEmail string,
 ) []accountAuthRequirement {
 	return whoamiAuthRequiredAccounts(snapshot.Catalog, authenticatedEmail)
 }
 
-func (s *accountReadModelService) loadDriveListSnapshot(
+func loadDriveListSnapshot(
 	ctx context.Context,
+	cc *CLIContext,
 	showAll bool,
 ) (driveListReadModelSnapshot, error) {
-	catalogSnapshot, err := s.loadLenientCatalogWithBestEffortIdentityRefresh(ctx)
+	catalogSnapshot, err := loadLenientCatalogWithBestEffortIdentityRefresh(ctx, cc)
 	if err != nil {
 		return driveListReadModelSnapshot{}, err
 	}
 
-	logger := s.cc.Logger
+	logger := cc.Logger
 	configured := buildConfiguredDriveEntries(catalogSnapshot.Config, logger)
 	configuredAuth := catalogAuthByEmail(catalogSnapshot.Catalog)
 	annotateConfiguredDriveAuth(configured, configuredAuth)
@@ -124,10 +118,10 @@ func (s *accountReadModelService) loadDriveListSnapshot(
 		siteLimit,
 		logger,
 		recorder,
-		s.cc.GraphBaseURL,
-		s.cc.httpProvider(),
+		cc.GraphBaseURL,
+		cc.httpProvider(),
 	)
-	sharedDiscovery := newSharedDiscoveryService(s.cc).discoverTargets(ctx, catalogSnapshot.Catalog)
+	sharedDiscovery := discoverSharedTargets(ctx, cc, catalogSnapshot.Catalog)
 	available = append(available, sharedFoldersToEntries(projectSharedFolders(catalogSnapshot.Config, sharedDiscovery.Targets))...)
 	slices.SortFunc(available, func(a, b driveListEntry) int {
 		return cmp.Compare(a.CanonicalID, b.CanonicalID)
@@ -135,7 +129,7 @@ func (s *accountReadModelService) loadDriveListSnapshot(
 	annotateStateDB(available)
 
 	authRequired := mergeAuthRequirements(
-		s.authRequirements(catalogSnapshot, func(accountCatalogEntry) bool {
+		authRequirements(catalogSnapshot, func(accountCatalogEntry) bool {
 			return true
 		}),
 		discoveredAuthRequired,

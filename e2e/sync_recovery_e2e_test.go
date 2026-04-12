@@ -16,6 +16,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -71,10 +72,10 @@ func remoteStateSnapshot(t *testing.T, db *sql.DB) []string {
 	return snapshot
 }
 
-func readRemoteStateRowByPath(t *testing.T, db *sql.DB, relPath string) *synctypes.RemoteStateRow {
+func readRemoteStateRowByPath(t *testing.T, db *sql.DB, relPath string) *syncstore.RemoteStateRow {
 	t.Helper()
 
-	var row synctypes.RemoteStateRow
+	var row syncstore.RemoteStateRow
 	err := db.QueryRowContext(
 		t.Context(),
 		`SELECT drive_id, item_id, path, sync_status FROM remote_state WHERE path = ?`,

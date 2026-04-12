@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ResetInProgressStates performs startup crash recovery using the sync tree to
@@ -20,7 +20,7 @@ import (
 // store owns only durable state transitions and sync_failures persistence.
 func ResetInProgressStates(
 	ctx context.Context,
-	store synctypes.CrashRecoveryStore,
+	store crashRecoveryStore,
 	tree *synctree.Root,
 	delayFn func(int) time.Duration,
 	logger *slog.Logger,
@@ -35,8 +35,8 @@ func ResetInProgressStates(
 	}
 
 	var (
-		deleted []synctypes.RecoveryCandidate
-		pending []synctypes.RecoveryCandidate
+		deleted []syncstore.RecoveryCandidate
+		pending []syncstore.RecoveryCandidate
 	)
 
 	for _, candidate := range candidates {

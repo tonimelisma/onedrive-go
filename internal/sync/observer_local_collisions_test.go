@@ -65,7 +65,7 @@ func TestHasCaseCollisionCached_Detected(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "File.txt"), []byte("a"), 0o600))
 
 	obs := &LocalObserver{
-		Baseline: synctest.EmptyBaseline(),
+		Baseline: emptyBaseline(),
 	}
 
 	// On case-sensitive FS, "file.txt" differs from "File.txt" → collision.
@@ -87,7 +87,7 @@ func TestHasCaseCollisionCached_NoCollision(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("a"), 0o600))
 
 	obs := &LocalObserver{
-		Baseline: synctest.EmptyBaseline(),
+		Baseline: emptyBaseline(),
 	}
 
 	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "newfile.txt", ".")
@@ -102,7 +102,7 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "same.txt"), []byte("a"), 0o600))
 
 	obs := &LocalObserver{
-		Baseline: synctest.EmptyBaseline(),
+		Baseline: emptyBaseline(),
 	}
 
 	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "same.txt", ".")
@@ -114,7 +114,7 @@ func TestHasCaseCollisionCached_UnreadableDir_FailOpen(t *testing.T) {
 	t.Parallel()
 
 	obs := &LocalObserver{
-		Baseline: synctest.EmptyBaseline(),
+		Baseline: emptyBaseline(),
 	}
 
 	// Non-existent directory → ReadDir fails → returns false (fail-open).
@@ -129,7 +129,7 @@ func TestHasCaseCollisionCached_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 
 	obs := &LocalObserver{
-		Baseline: synctest.EmptyBaseline(),
+		Baseline: emptyBaseline(),
 	}
 
 	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "anything.txt", ".")
@@ -148,7 +148,7 @@ func TestHasCaseCollisionCached_BaselineCollision(t *testing.T) {
 	dir := t.TempDir()
 
 	// Baseline has "File.txt" — no file on disk.
-	bl := synctest.BaselineWith(&synctypes.BaselineEntry{Path: "File.txt"})
+	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
 	obs := &LocalObserver{
 		Baseline: bl,
 	}
@@ -165,7 +165,7 @@ func TestHasCaseCollisionCached_BaselineExactMatch(t *testing.T) {
 
 	dir := t.TempDir()
 
-	bl := synctest.BaselineWith(&synctypes.BaselineEntry{Path: "File.txt"})
+	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
 	obs := &LocalObserver{
 		Baseline: bl,
 	}
@@ -181,7 +181,7 @@ func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
 
 	dir := t.TempDir()
 
-	bl := synctest.BaselineWith(&synctypes.BaselineEntry{Path: "File.txt"})
+	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
 	obs := &LocalObserver{
 		Baseline: bl,
 		localWatchState: localWatchState{
@@ -211,7 +211,7 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -258,7 +258,7 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -276,7 +276,7 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	}
 
 	// Collect events within a window.
-	var received []synctypes.ChangeEvent
+	var received []ChangeEvent
 	timeout := time.After(500 * time.Millisecond)
 	for {
 		select {
@@ -334,7 +334,7 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 		CollisionPeers: make(map[string]map[string]struct{}),
 	})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -387,7 +387,7 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 		CollisionPeers: make(map[string]map[string]struct{}),
 	})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -441,7 +441,7 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 		CollisionPeers: make(map[string]map[string]struct{}),
 	})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -460,7 +460,7 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 
 	// Collect events. At most 1 subdirectory should be emitted (the other
 	// should be suppressed by collision check).
-	var received []synctypes.ChangeEvent
+	var received []ChangeEvent
 	timeout := time.After(500 * time.Millisecond)
 	for {
 		select {
@@ -512,7 +512,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 		CollisionPeers: make(map[string]map[string]struct{}),
 	})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -548,7 +548,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 
 	// Expect two events: ChangeCreate for "File.txt" (survivor re-emitted)
 	// and ChangeDelete for "file.txt".
-	var received []synctypes.ChangeEvent
+	var received []ChangeEvent
 	timeout := time.After(1 * time.Second)
 
 	for len(received) < 2 {
@@ -600,7 +600,7 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 		CollisionPeers: make(map[string]map[string]struct{}),
 	})
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -641,7 +641,7 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 
 	// Expect only ChangeDelete for "file.txt". The re-emitted peers
 	// (File.txt and FILE.txt) still collide → suppressed again.
-	var received []synctypes.ChangeEvent
+	var received []ChangeEvent
 	timeout := time.After(1 * time.Second)
 
 	for {
@@ -683,7 +683,7 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 	safetyTickCh := make(chan time.Time, 1)
 	mockWatcher := newMockFsWatcher()
 	obs := &LocalObserver{
-		Baseline: synctest.EmptyBaseline(),
+		Baseline: emptyBaseline(),
 		Logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
 			CollisionPeers: make(map[string]map[string]struct{}),
@@ -708,7 +708,7 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 		"a.txt": {"a.txt", "A.txt"},
 	}
 
-	events := make(chan synctypes.ChangeEvent, 10)
+	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 

@@ -7,14 +7,14 @@ import (
 	stdsync "sync"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
 func (rt *watchRuntime) startPrimaryWatchPhase(
 	ctx context.Context,
 	obsWg *stdsync.WaitGroup,
-	bl *synctypes.Baseline,
-	events chan<- synctypes.ChangeEvent,
+	bl *syncstore.Baseline,
+	events chan<- ChangeEvent,
 	errs chan<- error,
 	pollInterval time.Duration,
 	phase ObservationPhasePlan,
@@ -48,12 +48,12 @@ func (rt *watchRuntime) startPrimaryWatchPhase(
 		remoteObs.SetObsWriter(rt.engine.baseline)
 		remoteObs.SetWatchObservationPreparer(func(
 			_ context.Context,
-			events []synctypes.ChangeEvent,
-		) ([]synctypes.ObservedItem, []synctypes.ChangeEvent, error) {
+			events []ChangeEvent,
+		) ([]syncstore.ObservedItem, []ChangeEvent, error) {
 			scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), rt.currentScopeGeneration(), events)
 			return scoped.observed, scoped.emitted, nil
 		})
-		remoteObs.SetWatchBatchPostProcessor(func(ctx context.Context, primaryEvents []synctypes.ChangeEvent) []synctypes.ChangeEvent {
+		remoteObs.SetWatchBatchPostProcessor(func(ctx context.Context, primaryEvents []ChangeEvent) []ChangeEvent {
 			finalEvents, err := rt.processCommittedPrimaryBatch(
 				ctx,
 				bl,

@@ -24,10 +24,10 @@ func TestS1_NoRemoteDeleteWithoutBaseline(t *testing.T) {
 
 	// Remote has a file, local has nothing, NO baseline.
 	// This should classify as EF14 (download), not a delete.
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "remote-only.txt",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceRemote,
 					Type:     synctypes.ChangeCreate,
@@ -41,16 +41,16 @@ func TestS1_NoRemoteDeleteWithoutBaseline(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	for _, a := range plan.Actions {
-		assert.NotEqual(t, synctypes.ActionRemoteDelete, a.Type,
+		assert.NotEqual(t, ActionRemoteDelete, a.Type,
 			"S1: must not produce remote delete without baseline")
 	}
 
 	// Should produce a download instead.
-	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := actionsOfType(plan.Actions, ActionDownload)
 	assert.Len(t, downloads, 1)
 }
 
@@ -122,11 +122,11 @@ func TestS7_TempFilesFilteredSymmetrically(t *testing.T) {
 // §4: Decision Matrix Edge Cases
 // ---------------------------------------------------------------------------
 
-func assertDeletedLocalFileProducesRemoteDelete(t *testing.T, path string, mode synctypes.SyncMode) {
+func assertDeletedLocalFileProducesRemoteDelete(t *testing.T, path string, mode Mode) {
 	t.Helper()
 
 	planner := NewPlanner(synctest.TestLogger(t))
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:       path,
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
@@ -134,9 +134,9 @@ func assertDeletedLocalFileProducesRemoteDelete(t *testing.T, path string, mode 
 		LocalHash:  "hashA",
 		RemoteHash: "hashA",
 	})
-	changes := []synctypes.PathChanges{{
+	changes := []PathChanges{{
 		Path: path,
-		LocalEvents: []synctypes.ChangeEvent{{
+		LocalEvents: []ChangeEvent{{
 			Source:    synctypes.SourceLocal,
 			Type:      synctypes.ChangeDelete,
 			Path:      path,
@@ -145,14 +145,14 @@ func assertDeletedLocalFileProducesRemoteDelete(t *testing.T, path string, mode 
 		}},
 	}}
 
-	plan, err := planner.Plan(changes, baseline, mode, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, mode, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
-	assert.Len(t, synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete), 1)
+	assert.Len(t, actionsOfType(plan.Actions, ActionRemoteDelete), 1)
 }
 
 // Validates: R-2.3
 func TestEF6_LocalDeletedImpliesLocalChanged(t *testing.T) {
-	assertDeletedLocalFileProducesRemoteDelete(t, "deleted.txt", synctypes.SyncBidirectional)
+	assertDeletedLocalFileProducesRemoteDelete(t, "deleted.txt", SyncBidirectional)
 }
 
 // Validates: R-2.3
@@ -162,7 +162,7 @@ func TestEF6_LocalDeletedImpliesLocalChanged(t *testing.T) {
 func TestEF4_ConvergentEdit_NoTransfer(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:       "converge.txt",
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
@@ -171,10 +171,10 @@ func TestEF4_ConvergentEdit_NoTransfer(t *testing.T) {
 		RemoteHash: "oldHash",
 	})
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "converge.txt",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceRemote,
 					Type:     synctypes.ChangeModify,
@@ -185,7 +185,7 @@ func TestEF4_ConvergentEdit_NoTransfer(t *testing.T) {
 					DriveID:  driveid.New(synctest.TestDriveID),
 				},
 			},
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceLocal,
 					Type:     synctypes.ChangeModify,
@@ -197,14 +197,14 @@ func TestEF4_ConvergentEdit_NoTransfer(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	synced := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
+	synced := actionsOfType(plan.Actions, ActionUpdateSynced)
 	assert.Len(t, synced, 1, "EF4: convergent edit should produce update_synced")
 
-	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
-	uploads := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload)
+	downloads := actionsOfType(plan.Actions, ActionDownload)
+	uploads := actionsOfType(plan.Actions, ActionUpload)
 	assert.Empty(t, downloads, "EF4: no download needed for convergent edit")
 	assert.Empty(t, uploads, "EF4: no upload needed for convergent edit")
 }
@@ -215,10 +215,10 @@ func TestEF4_ConvergentEdit_NoTransfer(t *testing.T) {
 func TestEF11_ConvergentCreate(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "newfile.txt",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceRemote,
 					Type:     synctypes.ChangeCreate,
@@ -229,7 +229,7 @@ func TestEF11_ConvergentCreate(t *testing.T) {
 					DriveID:  driveid.New(synctest.TestDriveID),
 				},
 			},
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceLocal,
 					Type:     synctypes.ChangeCreate,
@@ -241,10 +241,10 @@ func TestEF11_ConvergentCreate(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	synced := synctest.ActionsOfType(plan.Actions, synctypes.ActionUpdateSynced)
+	synced := actionsOfType(plan.Actions, ActionUpdateSynced)
 	assert.Len(t, synced, 1, "EF11: convergent create should adopt")
 }
 
@@ -254,10 +254,10 @@ func TestEF11_ConvergentCreate(t *testing.T) {
 func TestEF12_DivergentCreate(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "newfile.txt",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceRemote,
 					Type:     synctypes.ChangeCreate,
@@ -268,7 +268,7 @@ func TestEF12_DivergentCreate(t *testing.T) {
 					DriveID:  driveid.New(synctest.TestDriveID),
 				},
 			},
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceLocal,
 					Type:     synctypes.ChangeCreate,
@@ -280,10 +280,10 @@ func TestEF12_DivergentCreate(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, synctest.EmptyBaseline(), synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, emptyBaseline(), SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	conflicts := synctest.ActionsOfType(plan.Actions, synctypes.ActionConflict)
+	conflicts := actionsOfType(plan.Actions, ActionConflict)
 	assert.Len(t, conflicts, 1, "EF12: divergent create should conflict")
 	assert.Equal(t, synctypes.ConflictCreateCreate, conflicts[0].ConflictInfo.ConflictType)
 }
@@ -294,7 +294,7 @@ func TestEF12_DivergentCreate(t *testing.T) {
 func TestEF9_EditDeleteAutoResolve(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:       "edited.txt",
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
@@ -303,10 +303,10 @@ func TestEF9_EditDeleteAutoResolve(t *testing.T) {
 		RemoteHash: "oldHash",
 	})
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "edited.txt",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source:    synctypes.SourceRemote,
 					Type:      synctypes.ChangeDelete,
@@ -317,7 +317,7 @@ func TestEF9_EditDeleteAutoResolve(t *testing.T) {
 					IsDeleted: true,
 				},
 			},
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceLocal,
 					Type:     synctypes.ChangeModify,
@@ -329,17 +329,17 @@ func TestEF9_EditDeleteAutoResolve(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	conflicts := synctest.ActionsOfType(plan.Actions, synctypes.ActionConflict)
+	conflicts := actionsOfType(plan.Actions, ActionConflict)
 	assert.Len(t, conflicts, 1, "EF9: local edit + remote delete = conflict")
 	assert.Equal(t, synctypes.ConflictEditDelete, conflicts[0].ConflictInfo.ConflictType)
 }
 
 // Validates: R-2.3
 func TestUploadOnlyMode_ProducesRemoteDeletes(t *testing.T) {
-	assertDeletedLocalFileProducesRemoteDelete(t, "gone.txt", synctypes.SyncUploadOnly)
+	assertDeletedLocalFileProducesRemoteDelete(t, "gone.txt", SyncUploadOnly)
 }
 
 // Validates: R-2.3
@@ -348,7 +348,7 @@ func TestUploadOnlyMode_ProducesRemoteDeletes(t *testing.T) {
 func TestDownloadOnlyMode_SkipsLocalCorruption(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:       "corrupted.txt",
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
@@ -359,10 +359,10 @@ func TestDownloadOnlyMode_SkipsLocalCorruption(t *testing.T) {
 
 	// Local has different hash (corrupted), but in download-only mode
 	// local changes are suppressed.
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "corrupted.txt",
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceLocal,
 					Type:     synctypes.ChangeModify,
@@ -374,7 +374,7 @@ func TestDownloadOnlyMode_SkipsLocalCorruption(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncDownloadOnly, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncDownloadOnly, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// In download-only mode, local changes are suppressed. Since remote
@@ -390,17 +390,17 @@ func TestDownloadOnlyMode_SkipsLocalCorruption(t *testing.T) {
 func TestED8_FolderModeFilteringRegression(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:     "photos",
 		DriveID:  driveid.New(synctest.TestDriveID),
 		ItemID:   "folder1",
 		ItemType: synctypes.ItemTypeFolder,
 	})
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "photos",
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{
 					Source:    synctypes.SourceLocal,
 					Type:      synctypes.ChangeDelete,
@@ -412,10 +412,10 @@ func TestED8_FolderModeFilteringRegression(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
-	remoteDeletes := synctest.ActionsOfType(plan.Actions, synctypes.ActionRemoteDelete)
+	remoteDeletes := actionsOfType(plan.Actions, ActionRemoteDelete)
 	assert.Len(t, remoteDeletes, 1,
 		"ED8: locally deleted folder should produce remote delete")
 }
@@ -430,40 +430,40 @@ func TestED8_FolderModeFilteringRegression(t *testing.T) {
 func TestMoveDetection_AmbiguousSameHashMultipleDeletes(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{
+	baseline := baselineWith(
+		&BaselineEntry{
 			Path: "dir1/file.txt", DriveID: driveid.New(synctest.TestDriveID),
 			ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "sameHash", RemoteHash: "sameHash",
 		},
-		&synctypes.BaselineEntry{
+		&BaselineEntry{
 			Path: "dir2/file.txt", DriveID: driveid.New(synctest.TestDriveID),
 			ItemID: "item2", ItemType: synctypes.ItemTypeFile, LocalHash: "sameHash", RemoteHash: "sameHash",
 		},
 	)
 
 	// Both files deleted locally, one file created at new path.
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "dir1/file.txt",
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{Source: synctypes.SourceLocal, Type: synctypes.ChangeDelete, Path: "dir1/file.txt", ItemType: synctypes.ItemTypeFile, IsDeleted: true},
 			},
 		},
 		{
 			Path: "dir2/file.txt",
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{Source: synctypes.SourceLocal, Type: synctypes.ChangeDelete, Path: "dir2/file.txt", ItemType: synctypes.ItemTypeFile, IsDeleted: true},
 			},
 		},
 		{
 			Path: "dir3/file.txt",
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "dir3/file.txt", ItemType: synctypes.ItemTypeFile, Hash: "sameHash"},
 			},
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Ambiguous: two deletes with same hash → no move detected.
@@ -477,35 +477,35 @@ func TestMoveDetection_AmbiguousSameHashMultipleDeletes(t *testing.T) {
 func TestMoveDetection_AmbiguousSameHashMultipleCreates(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	baseline := synctest.BaselineWith(
-		&synctypes.BaselineEntry{
+	baseline := baselineWith(
+		&BaselineEntry{
 			Path: "original.txt", DriveID: driveid.New(synctest.TestDriveID),
 			ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "sameHash", RemoteHash: "sameHash",
 		},
 	)
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "original.txt",
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{Source: synctypes.SourceLocal, Type: synctypes.ChangeDelete, Path: "original.txt", ItemType: synctypes.ItemTypeFile, IsDeleted: true},
 			},
 		},
 		{
 			Path: "copy1.txt",
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "copy1.txt", ItemType: synctypes.ItemTypeFile, Hash: "sameHash"},
 			},
 		},
 		{
 			Path: "copy2.txt",
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{Source: synctypes.SourceLocal, Type: synctypes.ChangeCreate, Path: "copy2.txt", ItemType: synctypes.ItemTypeFile, Hash: "sameHash"},
 			},
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Ambiguous: one delete, two creates with same hash → no move detected.
@@ -520,16 +520,16 @@ func TestMoveDetection_AmbiguousSameHashMultipleCreates(t *testing.T) {
 func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path: "source.txt", DriveID: driveid.New(synctest.TestDriveID),
 		ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hashA", RemoteHash: "hashA",
 	})
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			// The move event's Path is the destination.
 			Path: "dest.txt",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceRemote,
 					Type:     synctypes.ChangeMove,
@@ -545,7 +545,7 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 		{
 			// A new item appears at the old path.
 			Path: "source.txt",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceRemote,
 					Type:     synctypes.ChangeCreate,
@@ -559,11 +559,11 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Should have a local move for the renamed item.
-	localMoves := synctest.ActionsOfType(plan.Actions, synctypes.ActionLocalMove)
+	localMoves := actionsOfType(plan.Actions, ActionLocalMove)
 	assert.Len(t, localMoves, 1, "should have a local move action")
 
 	if len(localMoves) > 0 {
@@ -572,7 +572,7 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 	}
 
 	// The new item at source.txt should be classified as a download (EF14).
-	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := actionsOfType(plan.Actions, ActionDownload)
 	assert.Len(t, downloads, 1, "new item at old path should be downloaded")
 }
 
@@ -584,9 +584,9 @@ func TestRemoteMove_WithRecreationAtSource(t *testing.T) {
 // TestBuildDependencies_FolderCreateBeforeChild validates that a child
 // download depends on its parent folder create.
 func TestBuildDependencies_FolderCreateBeforeChild(t *testing.T) {
-	actions := []synctypes.Action{
-		{Type: synctypes.ActionFolderCreate, Path: "newdir", CreateSide: synctypes.CreateLocal},
-		{Type: synctypes.ActionDownload, Path: "newdir/file.txt"},
+	actions := []Action{
+		{Type: ActionFolderCreate, Path: "newdir", CreateSide: synctypes.CreateLocal},
+		{Type: ActionDownload, Path: "newdir/file.txt"},
 	}
 
 	deps := buildDependencies(actions)
@@ -601,17 +601,17 @@ func TestBuildDependencies_FolderCreateBeforeChild(t *testing.T) {
 // TestBuildDependencies_ChildDeleteBeforeParent validates that a parent
 // folder delete depends on child deletes completing first.
 func TestBuildDependencies_ChildDeleteBeforeParent(t *testing.T) {
-	actions := []synctypes.Action{
+	actions := []Action{
 		{
-			Type: synctypes.ActionLocalDelete, Path: "dir",
-			View: &synctypes.PathView{
-				Baseline: &synctypes.BaselineEntry{ItemType: synctypes.ItemTypeFolder},
+			Type: ActionLocalDelete, Path: "dir",
+			View: &PathView{
+				Baseline: &BaselineEntry{ItemType: synctypes.ItemTypeFolder},
 			},
 		},
 		{
-			Type: synctypes.ActionLocalDelete, Path: "dir/file.txt",
-			View: &synctypes.PathView{
-				Baseline: &synctypes.BaselineEntry{ItemType: synctypes.ItemTypeFile},
+			Type: ActionLocalDelete, Path: "dir/file.txt",
+			View: &PathView{
+				Baseline: &BaselineEntry{ItemType: synctypes.ItemTypeFile},
 			},
 		},
 	}
@@ -634,12 +634,12 @@ func TestPlan_DeleteSafetyBlocked(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
 	// Create 10-item baseline.
-	baseline := synctest.EmptyBaseline()
-	var changes []synctypes.PathChanges
+	baseline := emptyBaseline()
+	var changes []PathChanges
 
 	for i := range 10 {
 		path := "file" + string(rune('a'+i)) + ".txt"
-		entry := &synctypes.BaselineEntry{
+		entry := &BaselineEntry{
 			Path:       path,
 			DriveID:    driveid.New(synctest.TestDriveID),
 			ItemID:     "item-" + string(rune('a'+i)),
@@ -653,17 +653,17 @@ func TestPlan_DeleteSafetyBlocked(t *testing.T) {
 	// Delete 6 out of 10. Threshold is 5 → 6 > 5 → triggered.
 	for i := range 6 {
 		path := "file" + string(rune('a'+i)) + ".txt"
-		changes = append(changes, synctypes.PathChanges{
+		changes = append(changes, PathChanges{
 			Path: path,
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{Source: synctypes.SourceLocal, Type: synctypes.ChangeDelete, Path: path, ItemType: synctypes.ItemTypeFile, IsDeleted: true},
 			},
 		})
 	}
 
-	config := &synctypes.SafetyConfig{DeleteSafetyThreshold: 5}
+	config := &SafetyConfig{DeleteSafetyThreshold: 5}
 
-	_, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, config, nil)
+	_, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, synctypes.ErrDeleteSafetyThresholdExceeded)
 }

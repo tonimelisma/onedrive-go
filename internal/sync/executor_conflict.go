@@ -16,7 +16,7 @@ import (
 // ExecuteConflict handles conflict resolution. For edit-delete conflicts,
 // the modified local version wins automatically (industry consensus). For
 // all others, keep_both: rename local to a conflict copy, download remote.
-func (e *Executor) ExecuteConflict(ctx context.Context, action *synctypes.Action) synctypes.Outcome {
+func (e *Executor) ExecuteConflict(ctx context.Context, action *Action) ExecutionResult {
 	// Edit-delete: local was modified, remote was deleted. Upload local file
 	// to re-create remote, record as auto-resolved. No conflict copy needed.
 	if action.ConflictInfo != nil && action.ConflictInfo.ConflictType == synctypes.ConflictEditDelete {
@@ -135,7 +135,7 @@ func (e *Executor) conflictCopyPathAvailable(absPath string) (bool, error) {
 // the locally modified file to re-create it on the remote side. The local
 // version wins automatically — industry consensus (rclone, Dropbox, Google
 // Drive, OneDrive official, abraunegg).
-func (e *Executor) ExecuteEditDeleteConflict(ctx context.Context, action *synctypes.Action) synctypes.Outcome {
+func (e *Executor) ExecuteEditDeleteConflict(ctx context.Context, action *Action) ExecutionResult {
 	e.logger.Info("auto-resolving edit-delete conflict: local edit wins",
 		slog.String("path", action.Path),
 	)

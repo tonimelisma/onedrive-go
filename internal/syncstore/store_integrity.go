@@ -208,7 +208,7 @@ func repairIntegritySafeTx(ctx context.Context, tx sqlTxRunner) (int, error) {
 	return repairsApplied, nil
 }
 
-func queryAllConflictsForAudit(ctx context.Context, db *sql.DB) ([]synctypes.ConflictRecord, error) {
+func queryAllConflictsForAudit(ctx context.Context, db *sql.DB) ([]ConflictRecord, error) {
 	return queryConflictRows(
 		ctx,
 		db,
@@ -218,7 +218,7 @@ func queryAllConflictsForAudit(ctx context.Context, db *sql.DB) ([]synctypes.Con
 	)
 }
 
-func queryHeldDeletesForAudit(ctx context.Context, db *sql.DB) ([]synctypes.HeldDeleteRecord, error) {
+func queryHeldDeletesForAudit(ctx context.Context, db *sql.DB) ([]HeldDeleteRecord, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT drive_id, action_type, path, item_id, state, held_at, approved_at,
 			last_planned_at, last_error
@@ -236,7 +236,7 @@ func queryHeldDeletesForAudit(ctx context.Context, db *sql.DB) ([]synctypes.Held
 	return scanHeldDeleteRows(rows)
 }
 
-func queryAllConflictRequestsForAudit(ctx context.Context, db *sql.DB) ([]synctypes.ConflictRequestRecord, error) {
+func queryAllConflictRequestsForAudit(ctx context.Context, db *sql.DB) ([]ConflictRequestRecord, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT conflict_id, requested_resolution, state, requested_at, applying_at, last_error
 		FROM conflict_requests
@@ -250,10 +250,10 @@ func queryAllConflictRequestsForAudit(ctx context.Context, db *sql.DB) ([]syncty
 	}
 	defer rows.Close()
 
-	var requests []synctypes.ConflictRequestRecord
+	var requests []ConflictRequestRecord
 	for rows.Next() {
 		var (
-			record      synctypes.ConflictRequestRecord
+			record      ConflictRequestRecord
 			requestedAt sql.NullInt64
 			applyingAt  sql.NullInt64
 			lastErr     sql.NullString
@@ -285,17 +285,17 @@ func queryAllConflictRequestsForAudit(ctx context.Context, db *sql.DB) ([]syncty
 }
 
 func auditPersistedIntegrity(
-	blocks []*synctypes.ScopeBlock,
-	failures []synctypes.SyncFailureRow,
-	conflicts []synctypes.ConflictRecord,
-	conflictRequests []synctypes.ConflictRequestRecord,
-	heldDeletes []synctypes.HeldDeleteRecord,
+	blocks []*ScopeBlock,
+	failures []SyncFailureRow,
+	conflicts []ConflictRecord,
+	conflictRequests []ConflictRequestRecord,
+	heldDeletes []HeldDeleteRecord,
 ) IntegrityReport {
 	report := IntegrityReport{
 		Findings: make([]IntegrityFinding, 0),
 	}
 
-	scopeBlockByKey := make(map[synctypes.ScopeKey]*synctypes.ScopeBlock, len(blocks))
+	scopeBlockByKey := make(map[synctypes.ScopeKey]*ScopeBlock, len(blocks))
 	projectionSources := make(map[issueGroupKey]map[string]struct{})
 
 	auditScopeBlocks(&report, blocks, scopeBlockByKey, projectionSources)
@@ -308,7 +308,7 @@ func auditPersistedIntegrity(
 	return report
 }
 
-func auditConflictRows(report *IntegrityReport, conflicts []synctypes.ConflictRecord) {
+func auditConflictRows(report *IntegrityReport, conflicts []ConflictRecord) {
 	for i := range conflicts {
 		row := &conflicts[i]
 		if !validConflictResolution(row.Resolution) {
@@ -369,10 +369,10 @@ func validRequestedConflictResolution(resolution string) bool {
 
 func auditConflictRequestRows(
 	report *IntegrityReport,
-	conflicts []synctypes.ConflictRecord,
-	requests []synctypes.ConflictRequestRecord,
+	conflicts []ConflictRecord,
+	requests []ConflictRequestRecord,
 ) {
-	conflictByID := make(map[string]synctypes.ConflictRecord, len(conflicts))
+	conflictByID := make(map[string]ConflictRecord, len(conflicts))
 	for i := range conflicts {
 		conflictByID[conflicts[i].ID] = conflicts[i]
 	}
@@ -431,7 +431,7 @@ func auditConflictRequestRows(
 	}
 }
 
-func auditHeldDeleteRows(report *IntegrityReport, heldDeletes []synctypes.HeldDeleteRecord) {
+func auditHeldDeleteRows(report *IntegrityReport, heldDeletes []HeldDeleteRecord) {
 	for i := range heldDeletes {
 		row := &heldDeletes[i]
 		if row.State != synctypes.HeldDeleteStateHeld && row.State != synctypes.HeldDeleteStateApproved {
@@ -658,7 +658,7 @@ func auditScopeStateConsistency(ctx context.Context, db *sql.DB, report *Integri
 	return nil
 }
 
-func readScopeStateForAudit(ctx context.Context, db *sql.DB) (synctypes.ScopeStateRecord, bool, error) {
+func readScopeStateForAudit(ctx context.Context, db *sql.DB) (ScopeStateRecord, bool, error) {
 	return readScopeStateRecord(ctx, db, "scan scope state for audit")
 }
 
@@ -710,8 +710,8 @@ func listRemoteScopeRowsForAudit(ctx context.Context, db *sql.DB) ([]remoteScope
 
 func auditScopeBlocks(
 	report *IntegrityReport,
-	blocks []*synctypes.ScopeBlock,
-	scopeBlockByKey map[synctypes.ScopeKey]*synctypes.ScopeBlock,
+	blocks []*ScopeBlock,
+	scopeBlockByKey map[synctypes.ScopeKey]*ScopeBlock,
 	projectionSources map[issueGroupKey]map[string]struct{},
 ) {
 	for i := range blocks {
@@ -754,8 +754,8 @@ func auditScopeBlocks(
 
 func auditFailureRows(
 	report *IntegrityReport,
-	failures []synctypes.SyncFailureRow,
-	scopeBlockByKey map[synctypes.ScopeKey]*synctypes.ScopeBlock,
+	failures []SyncFailureRow,
+	scopeBlockByKey map[synctypes.ScopeKey]*ScopeBlock,
 	projectionSources map[issueGroupKey]map[string]struct{},
 ) {
 	for i := range failures {
@@ -767,8 +767,8 @@ func auditFailureRows(
 
 func auditFailureRow(
 	report *IntegrityReport,
-	row *synctypes.SyncFailureRow,
-	scopeBlockByKey map[synctypes.ScopeKey]*synctypes.ScopeBlock,
+	row *SyncFailureRow,
+	scopeBlockByKey map[synctypes.ScopeKey]*ScopeBlock,
 ) {
 	if err := validateAuditedFailureRow(row); err != nil {
 		report.add(integrityCodeInvalidFailureRow, err.Error())
@@ -802,7 +802,7 @@ func auditFailureRow(
 
 func addFailureProjectionSource(
 	projectionSources map[issueGroupKey]map[string]struct{},
-	row *synctypes.SyncFailureRow,
+	row *SyncFailureRow,
 ) {
 	summaryKey := synctypes.SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
 	if summaryKey == "" {
@@ -834,7 +834,7 @@ func addProjectionOverlapFindings(
 	}
 }
 
-func authAccountScopeIsCanonical(block *synctypes.ScopeBlock) bool {
+func authAccountScopeIsCanonical(block *ScopeBlock) bool {
 	return block.IssueType == synctypes.IssueUnauthorized &&
 		block.TimingSource == synctypes.ScopeTimingNone &&
 		block.TrialInterval == 0 &&
@@ -843,7 +843,7 @@ func authAccountScopeIsCanonical(block *synctypes.ScopeBlock) bool {
 		block.TrialCount == 0
 }
 
-func validateAuditedFailureRow(row *synctypes.SyncFailureRow) error {
+func validateAuditedFailureRow(row *SyncFailureRow) error {
 	switch row.Role {
 	case synctypes.FailureRoleHeld:
 		if row.ScopeKey.IsZero() {
@@ -901,12 +901,12 @@ func rowsAffected(result sql.Result) int {
 	return int(rows)
 }
 
-func (i *Inspector) listAllSyncFailures(ctx context.Context) ([]synctypes.SyncFailureRow, error) {
+func (i *Inspector) listAllSyncFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures ORDER BY last_seen_at DESC`)
 	if err != nil {
 		if isMissingTableErr(err) {
-			return []synctypes.SyncFailureRow{}, nil
+			return []SyncFailureRow{}, nil
 		}
 		return nil, fmt.Errorf("query sync failures: %w", err)
 	}

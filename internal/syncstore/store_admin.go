@@ -37,7 +37,7 @@ import (
 
 // ListUnreconciled returns remote_state rows that need action (not synced,
 // filtered, or deleted).
-func (m *SyncStore) ListUnreconciled(ctx context.Context) ([]synctypes.RemoteStateRow, error) {
+func (m *SyncStore) ListUnreconciled(ctx context.Context) ([]RemoteStateRow, error) {
 	return m.queryRemoteStateRows(ctx,
 		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
 			previous_path, sync_status, observed_at
@@ -48,7 +48,7 @@ func (m *SyncStore) ListUnreconciled(ctx context.Context) ([]synctypes.RemoteSta
 
 // ListActionableRemoteState returns remote_state rows with pending or failed status
 // that don't have pending sync_failures (used for initial dispatch, not retry scheduling).
-func (m *SyncStore) ListActionableRemoteState(ctx context.Context) ([]synctypes.RemoteStateRow, error) {
+func (m *SyncStore) ListActionableRemoteState(ctx context.Context) ([]RemoteStateRow, error) {
 	return m.queryRemoteStateRows(ctx,
 		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
 			previous_path, sync_status, observed_at
@@ -60,18 +60,18 @@ func (m *SyncStore) ListActionableRemoteState(ctx context.Context) ([]synctypes.
 }
 
 // queryRemoteStateRows is a shared helper for scanning multiple remote_state rows.
-func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args ...any) ([]synctypes.RemoteStateRow, error) {
+func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args ...any) ([]RemoteStateRow, error) {
 	rows, err := m.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying remote_state: %w", err)
 	}
 	defer rows.Close()
 
-	var result []synctypes.RemoteStateRow
+	var result []RemoteStateRow
 
 	for rows.Next() {
 		var (
-			row      synctypes.RemoteStateRow
+			row      RemoteStateRow
 			parentID sql.NullString
 			hash     sql.NullString
 			size     sql.NullInt64
@@ -254,7 +254,7 @@ func (m *SyncStore) ResetDownloadingStates(ctx context.Context, delayFn func(int
 
 // ListDeletingCandidates returns deleting rows that the crash-recovery
 // filesystem layer must classify as completed deletes or pending retries.
-func (m *SyncStore) ListDeletingCandidates(ctx context.Context) ([]synctypes.RecoveryCandidate, error) {
+func (m *SyncStore) ListDeletingCandidates(ctx context.Context) ([]RecoveryCandidate, error) {
 	candidates, err := m.queryResetCandidates(ctx, synctypes.SyncStatusDeleting)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying deleting candidates: %w", err)
@@ -268,8 +268,8 @@ func (m *SyncStore) ListDeletingCandidates(ctx context.Context) ([]synctypes.Rec
 // `pending` rows become SyncStatusPendingDelete plus transient sync_failures.
 func (m *SyncStore) FinalizeDeletingStates(
 	ctx context.Context,
-	deleted []synctypes.RecoveryCandidate,
-	pending []synctypes.RecoveryCandidate,
+	deleted []RecoveryCandidate,
+	pending []RecoveryCandidate,
 	delayFn func(int) time.Duration,
 ) error {
 	for _, candidate := range deleted {
@@ -305,7 +305,7 @@ func (m *SyncStore) FinalizeDeletingStates(
 
 // queryResetCandidates returns identity info for remote_state rows matching
 // a given status. Used to capture row data before the bulk status update.
-func (m *SyncStore) queryResetCandidates(ctx context.Context, status synctypes.SyncStatus) ([]synctypes.RecoveryCandidate, error) {
+func (m *SyncStore) queryResetCandidates(ctx context.Context, status synctypes.SyncStatus) ([]RecoveryCandidate, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT drive_id, item_id, path FROM remote_state WHERE sync_status = ?`,
 		status,
@@ -315,7 +315,7 @@ func (m *SyncStore) queryResetCandidates(ctx context.Context, status synctypes.S
 	}
 	defer rows.Close()
 
-	var result []synctypes.RecoveryCandidate
+	var result []RecoveryCandidate
 
 	for rows.Next() {
 		var (
@@ -327,7 +327,7 @@ func (m *SyncStore) queryResetCandidates(ctx context.Context, status synctypes.S
 			return nil, fmt.Errorf("scan reset candidate: %w", scanErr)
 		}
 
-		result = append(result, synctypes.RecoveryCandidate{
+		result = append(result, RecoveryCandidate{
 			DriveID: driveID,
 			ItemID:  itemID,
 			Path:    path,
@@ -346,13 +346,13 @@ func (m *SyncStore) queryResetCandidates(ctx context.Context, status synctypes.S
 // them on the next bootstrap sweep.
 func (m *SyncStore) createCrashRecoveryFailures(
 	ctx context.Context,
-	candidates []synctypes.RecoveryCandidate,
+	candidates []RecoveryCandidate,
 	direction synctypes.Direction,
 	actionType synctypes.ActionType,
 	delayFn func(int) time.Duration,
 ) error {
 	for _, candidate := range candidates {
-		if err := m.RecordFailure(ctx, &synctypes.SyncFailureParams{
+		if err := m.RecordFailure(ctx, &SyncFailureParams{
 			Path:       candidate.Path,
 			DriveID:    driveid.New(candidate.DriveID),
 			Direction:  direction,
@@ -394,7 +394,7 @@ func (m *SyncStore) SetDispatchStatus(ctx context.Context, driveID, itemID strin
 // WriteSyncMetadata persists sync metadata after a completed RunOnce pass.
 // Keys: last_sync_time, last_sync_duration_ms, last_sync_error,
 // last_sync_succeeded, last_sync_failed.
-func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *synctypes.SyncReport) (err error) {
+func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *SyncMetadata) (err error) {
 	now := m.nowFunc().UTC().Format(time.RFC3339)
 	durationMS := fmt.Sprintf("%d", report.Duration.Milliseconds())
 	succeeded := fmt.Sprintf("%d", report.Succeeded)

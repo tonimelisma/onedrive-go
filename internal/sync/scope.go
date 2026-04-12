@@ -3,7 +3,7 @@
 //
 // ScopeState maintains sliding windows for scope escalation. The engine
 // calls UpdateScope after each worker result; when a threshold is crossed,
-// it returns a ScopeUpdateResult and the engine creates a ScopeBlock.
+// it returns a ScopeUpdateResult and the engine creates a syncstore.ScopeBlock.
 //
 // Detection thresholds (failure-redesign.md §7.3.1):
 //   - throttle:target:* (429) — immediate, single response
@@ -14,7 +14,7 @@
 // Trial interval computation is centralized in computeTrialInterval()
 // (engine.go), not here. See R-2.10.14.
 //
-// Type definitions (ScopeKey, ScopeKeyKind, ScopeBlock, ScopeUpdateResult,
+// Type definitions (ScopeKey, ScopeKeyKind, syncstore.ScopeBlock, ScopeUpdateResult,
 // ScopeBlockStore) are in synctypes and re-exported via types.go.
 package sync
 
@@ -76,7 +76,7 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 //   - 507 own-drive → sliding window quota:own (3 unique paths / 10s)
 //   - 507 shortcut → sliding window quota:shortcut:$key (3 unique paths / 10s)
 //   - 5xx (no Retry-After) → sliding window service (5 unique paths / 30s)
-func (ss *ScopeState) UpdateScope(r *synctypes.WorkerResult) synctypes.ScopeUpdateResult {
+func (ss *ScopeState) UpdateScope(r *WorkerResult) synctypes.ScopeUpdateResult {
 	targetDriveID := r.TargetDriveID
 	if targetDriveID.IsZero() {
 		targetDriveID = r.DriveID
@@ -125,7 +125,7 @@ func (ss *ScopeState) UpdateScope(r *synctypes.WorkerResult) synctypes.ScopeUpda
 // RecordSuccess resets the sliding window for scopes relevant to the
 // successful action. Per §7.3.1: "A success from any path in the scope
 // shall reset the unique-path failure counter."
-func (ss *ScopeState) RecordSuccess(r *synctypes.WorkerResult) {
+func (ss *ScopeState) RecordSuccess(r *WorkerResult) {
 	// Success resets all potentially-relevant windows for this action's scope.
 	if r.ShortcutKey != "" {
 		delete(ss.windows, synctypes.SKQuotaShortcut(r.ShortcutKey))

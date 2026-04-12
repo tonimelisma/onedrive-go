@@ -7,7 +7,7 @@
 //   - CommitDeltaToken:        persist delta token in own transaction
 //   - DeleteDeltaToken:        remove delta token for drive/scope
 //   - saveDeltaToken:          persist delta token within existing transaction
-//   - CommitOutcome:           atomically apply outcome to baseline + remote_state
+//   - CommitMutation:           atomically apply mutation to baseline + remote_state
 //   - classifyBaselineMutation: map ActionType to one explicit baseline mutation kind
 //   - applySingleOutcome:      dispatch outcome to appropriate DB helper
 //   - updateBaselineCache:     patch in-memory baseline after DB commit
@@ -103,11 +103,11 @@ const (
 // Load reads the entire baseline table into memory, populating ByPath and
 // ByID maps. The result is cached on the manager — subsequent calls return
 // the cached baseline without querying the database. The cache is kept
-// consistent by CommitOutcome(), which incrementally patches the in-memory
+// consistent by CommitMutation(), which incrementally patches the in-memory
 // maps via updateBaselineCache() after each transaction. This is safe
 // because SyncStore exclusively owns the database (sole-writer
 // pattern with SetMaxOpenConns(1)).
-func (m *SyncStore) Load(ctx context.Context) (*synctypes.Baseline, error) {
+func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 	m.baselineMu.Lock()
 	defer m.baselineMu.Unlock()
 
@@ -121,10 +121,10 @@ func (m *SyncStore) Load(ctx context.Context) (*synctypes.Baseline, error) {
 	}
 	defer rows.Close()
 
-	b := &synctypes.Baseline{
-		ByPath:     make(map[string]*synctypes.BaselineEntry),
-		ByID:       make(map[driveid.ItemKey]*synctypes.BaselineEntry),
-		ByDirLower: make(map[synctypes.DirLowerKey][]*synctypes.BaselineEntry),
+	b := &Baseline{
+		ByPath:     make(map[string]*BaselineEntry),
+		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	for rows.Next() {
@@ -136,7 +136,7 @@ func (m *SyncStore) Load(ctx context.Context) (*synctypes.Baseline, error) {
 		b.ByPath[entry.Path] = entry
 		b.ByID[driveid.NewItemKey(entry.DriveID, entry.ItemID)] = entry
 
-		dlk := synctypes.DirLowerKeyFromPath(entry.Path)
+		dlk := DirLowerKeyFromPath(entry.Path)
 		b.ByDirLower[dlk] = append(b.ByDirLower[dlk], entry)
 	}
 
@@ -152,9 +152,9 @@ func (m *SyncStore) Load(ctx context.Context) (*synctypes.Baseline, error) {
 
 // scanBaselineRow scans a single row from the baseline table, handling
 // nullable columns with sql.Null* types.
-func scanBaselineRow(rows *sql.Rows) (*synctypes.BaselineEntry, error) {
+func scanBaselineRow(rows *sql.Rows) (*BaselineEntry, error) {
 	var (
-		e           synctypes.BaselineEntry
+		e           BaselineEntry
 		parentID    sql.NullString
 		localHash   sql.NullString
 		remoteHash  sql.NullString
@@ -217,10 +217,14 @@ func (m *SyncStore) GetDeltaToken(ctx context.Context, driveID, scopeID string) 
 	return token, nil
 }
 
-// CommitOutcome atomically applies a single outcome to the baseline in a
+// CommitMutation atomically applies a single outcome to the baseline in a
 // SQLite transaction. After the DB write, the in-memory baseline cache is
 // updated incrementally (Put or Delete).
-func (m *SyncStore) CommitOutcome(ctx context.Context, outcome *synctypes.Outcome) (err error) {
+func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutation) (err error) {
+	if outcome == nil {
+		return fmt.Errorf("sync: commit mutation requires outcome")
+	}
+
 	if !outcome.Success {
 		return nil
 	}
@@ -268,13 +272,13 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 		}
 	}
 
-	var existing *synctypes.BaselineEntry
+	var existing *BaselineEntry
 	if entry, ok := m.baseline.GetByPath(refresh.Path); ok {
 		existing = entry
 	}
 
 	syncedAt := m.nowFunc().UnixNano()
-	entry := &synctypes.BaselineEntry{
+	entry := &BaselineEntry{
 		Path:           refresh.Path,
 		DriveID:        refresh.DriveID,
 		ItemID:         refresh.ItemID,
@@ -359,7 +363,7 @@ func classifyBaselineMutation(action synctypes.ActionType) (baselineMutationKind
 }
 
 // applySingleOutcome dispatches a single outcome to the appropriate DB helper.
-func applySingleOutcome(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome, syncedAt int64) error {
+func applySingleOutcome(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
 	mutation, err := classifyBaselineMutation(o.Action)
 	if err != nil {
 		return err
@@ -386,7 +390,7 @@ func applySingleOutcome(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcom
 
 // updateBaselineCache applies a single outcome to the in-memory baseline,
 // keeping the cache consistent without a full DB reload.
-func (m *SyncStore) updateBaselineCache(ctx context.Context, o *synctypes.Outcome, syncedAt int64) error {
+func (m *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation, syncedAt int64) error {
 	mutation, err := classifyBaselineMutation(o.Action)
 	if err != nil {
 		m.logger.Warn("baseline cache classification failed, reloading cache from database",
@@ -436,8 +440,8 @@ func (m *SyncStore) reloadBaselineCache(ctx context.Context) error {
 }
 
 // outcomeToEntry converts an Outcome into a BaselineEntry for cache update.
-func outcomeToEntry(o *synctypes.Outcome, syncedAt int64) *synctypes.BaselineEntry {
-	return &synctypes.BaselineEntry{
+func outcomeToEntry(o *BaselineMutation, syncedAt int64) *BaselineEntry {
+	return &BaselineEntry{
 		Path:            o.Path,
 		DriveID:         o.DriveID,
 		ItemID:          o.ItemID,
@@ -520,7 +524,7 @@ func (m *SyncStore) saveDeltaToken(
 // folder create, and update-synced outcomes. Handles the case where a
 // server-side delete+recreate assigns a new item_id for an existing path
 // by removing the stale row first (prevents UNIQUE constraint violation on path).
-func commitUpsert(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome, syncedAt int64) error {
+func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
 	// Remove any stale baseline row at the same path but different identity.
 	// This happens when the server assigns a new item_id for a path that
 	// was previously tracked under a different ID (delete+recreate, or
@@ -565,7 +569,7 @@ func commitDelete(ctx context.Context, tx sqlTxRunner, path string) error {
 // commitMove atomically updates the path for move outcomes. With the ID-based
 // PK, a move is a single UPDATE (not DELETE+INSERT) — the row identity
 // (drive_id, item_id) doesn't change, only the path does.
-func commitMove(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome, syncedAt int64) error {
+func commitMove(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
 	// Upsert handles both the path update and all other field updates.
 	// The ON CONFLICT(drive_id, item_id) clause matches the existing row
 	// and updates path + all mutable fields atomically.
@@ -575,7 +579,7 @@ func commitMove(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome, synce
 // commitConflict inserts a conflict record. Auto-resolved conflicts
 // (Outcome.ResolvedBy == ResolvedByAuto) are inserted as already resolved, and
 // the baseline is updated (the upload created a new remote item).
-func commitConflict(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome, syncedAt int64) error {
+func commitConflict(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
 	conflictID := uuid.New().String()
 
 	resolution := synctypes.ResolutionUnresolved
@@ -624,7 +628,7 @@ func commitConflict(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome, s
 // updateRemoteStateOnOutcome updates remote_state based on a completed action
 // outcome, called from within the same transaction as the baseline update.
 // Silently skips if no matching remote_state row exists (e.g., upload-only mode).
-func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *synctypes.Outcome) error {
+func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
 	if o.ItemID == "" || o.DriveID.IsZero() {
 		return nil
 	}
@@ -713,7 +717,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	}
 	defer rows.Close()
 
-	dbEntries := make(map[string]*synctypes.BaselineEntry)
+	dbEntries := make(map[string]*BaselineEntry)
 
 	for rows.Next() {
 		entry, scanErr := scanBaselineRow(rows)
@@ -772,7 +776,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	return mismatches, nil
 }
 
-func baselineEntriesEqual(a, b *synctypes.BaselineEntry) bool {
+func baselineEntriesEqual(a, b *BaselineEntry) bool {
 	return a.LocalHash == b.LocalHash &&
 		a.RemoteHash == b.RemoteHash &&
 		a.LocalSize == b.LocalSize &&

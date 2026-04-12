@@ -103,7 +103,7 @@ func actionTypeForDirection(direction synctypes.Direction) synctypes.ActionType 
 }
 
 func normalizeFailureParams(
-	params *synctypes.SyncFailureParams,
+	params *SyncFailureParams,
 	delayFn func(int) time.Duration,
 ) (synctypes.FailureCategory, synctypes.FailureRole, string, error) {
 	role, err := resolveFailureRole(params)
@@ -124,7 +124,7 @@ func normalizeFailureParams(
 	return category, role, scopeWire, nil
 }
 
-func resolveFailureRole(params *synctypes.SyncFailureParams) (synctypes.FailureRole, error) {
+func resolveFailureRole(params *SyncFailureParams) (synctypes.FailureRole, error) {
 	if params.Role != "" {
 		return params.Role, nil
 	}
@@ -135,7 +135,7 @@ func resolveFailureRole(params *synctypes.SyncFailureParams) (synctypes.FailureR
 }
 
 func resolveFailureCategory(
-	params *synctypes.SyncFailureParams,
+	params *SyncFailureParams,
 	role synctypes.FailureRole,
 ) synctypes.FailureCategory {
 	if params.Category != "" {
@@ -148,7 +148,7 @@ func resolveFailureCategory(
 }
 
 func validateFailureRoleParams(
-	params *synctypes.SyncFailureParams,
+	params *SyncFailureParams,
 	role synctypes.FailureRole,
 	category synctypes.FailureCategory,
 	delayFn func(int) time.Duration,
@@ -183,7 +183,7 @@ func validateFailureRoleParams(
 	}
 }
 
-func normalizeActionableFailure(failure *synctypes.ActionableFailure) (synctypes.FailureRole, string, error) {
+func normalizeActionableFailure(failure *ActionableFailure) (synctypes.FailureRole, string, error) {
 	role := failure.Role
 	if role == "" {
 		role = synctypes.FailureRoleItem
@@ -239,7 +239,7 @@ func IsActionableIssue(issueType string) bool {
 // local_hash to preserve existing values when new values are empty/zero.
 func (m *SyncStore) RecordFailure(
 	ctx context.Context,
-	p *synctypes.SyncFailureParams,
+	p *SyncFailureParams,
 	delayFn func(int) time.Duration,
 ) (err error) {
 	now := m.nowFunc()
@@ -320,7 +320,7 @@ func (m *SyncStore) RecordFailure(
 
 // readFailureCount queries the current failure count for backoff computation.
 // Returns 0 if the row doesn't exist or the query fails (non-critical).
-func (m *SyncStore) readFailureCount(ctx context.Context, tx sqlTxRunner, p *synctypes.SyncFailureParams) int {
+func (m *SyncStore) readFailureCount(ctx context.Context, tx sqlTxRunner, p *SyncFailureParams) int {
 	var count int
 	if scanErr := tx.QueryRowContext(ctx,
 		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
@@ -412,7 +412,7 @@ func (m *SyncStore) transitionRemoteStateOnFailure(ctx context.Context, tx sqlTx
 }
 
 // ListSyncFailures returns all sync_failures rows ordered by last_seen_at DESC.
-func (m *SyncStore) ListSyncFailures(ctx context.Context) ([]synctypes.SyncFailureRow, error) {
+func (m *SyncStore) ListSyncFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures ORDER BY last_seen_at DESC`)
 	if err != nil {
@@ -425,7 +425,7 @@ func (m *SyncStore) ListSyncFailures(ctx context.Context) ([]synctypes.SyncFailu
 
 // ListActionableFailures returns sync_failures rows where category is actionable.
 // Used by the issues command to show user-actionable file issues.
-func (m *SyncStore) ListActionableFailures(ctx context.Context) ([]synctypes.SyncFailureRow, error) {
+func (m *SyncStore) ListActionableFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE category = 'actionable' ORDER BY last_seen_at DESC`)
@@ -440,7 +440,7 @@ func (m *SyncStore) ListActionableFailures(ctx context.Context) ([]synctypes.Syn
 // ListRemoteBlockedFailures returns the held rows that define the derived
 // remote read-only scopes. These rows remain transient because they represent
 // blocked work, not independent actionable failures.
-func (m *SyncStore) ListRemoteBlockedFailures(ctx context.Context) ([]synctypes.SyncFailureRow, error) {
+func (m *SyncStore) ListRemoteBlockedFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE failure_role = ? AND scope_key LIKE 'perm:remote:%'
@@ -473,7 +473,7 @@ func (m *SyncStore) TakeSyncFailure(
 	ctx context.Context,
 	path string,
 	driveID driveid.ID,
-) (row *synctypes.SyncFailureRow, found bool, err error) {
+) (row *SyncFailureRow, found bool, err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: beginning take sync failure for %s: %w", path, err)
@@ -482,7 +482,7 @@ func (m *SyncStore) TakeSyncFailure(
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback take sync failure transaction for %s", path))
 	}()
 
-	row = &synctypes.SyncFailureRow{}
+	row = &SyncFailureRow{}
 	if scanErr := scanSyncFailureRow(tx.QueryRowContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE path = ? AND drive_id = ?`,
@@ -559,7 +559,7 @@ func (m *SyncStore) MarkSyncFailureActionable(ctx context.Context, path string, 
 // updated with the latest error info.
 func (m *SyncStore) UpsertActionableFailures(
 	ctx context.Context,
-	failures []synctypes.ActionableFailure,
+	failures []ActionableFailure,
 ) (err error) {
 	if len(failures) == 0 {
 		return nil
@@ -708,7 +708,7 @@ func (m *SyncStore) ResetRetryTimesForScope(ctx context.Context, scopeKey syncty
 // PendingRetrySummary returns aggregated counts of transient failures
 // grouped by scope_key, with the earliest next_retry_at per group.
 // Used by the issues command to show pending retries (R-2.10.22).
-func (m *SyncStore) PendingRetrySummary(ctx context.Context) ([]synctypes.PendingRetryGroup, error) {
+func (m *SyncStore) PendingRetrySummary(ctx context.Context) ([]PendingRetryGroup, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT COALESCE(scope_key, ''), COUNT(*), MIN(next_retry_at)
 		 FROM sync_failures
@@ -720,10 +720,10 @@ func (m *SyncStore) PendingRetrySummary(ctx context.Context) ([]synctypes.Pendin
 	}
 	defer rows.Close()
 
-	var result []synctypes.PendingRetryGroup
+	var result []PendingRetryGroup
 
 	for rows.Next() {
-		var g synctypes.PendingRetryGroup
+		var g PendingRetryGroup
 		var minNano int64
 		var wireScopeKey string
 
@@ -749,7 +749,7 @@ func (m *SyncStore) PendingRetrySummary(ctx context.Context) ([]synctypes.Pendin
 
 // ListSyncFailuresForRetry returns transient sync_failures rows whose
 // next_retry_at has expired (ready for retry).
-func (m *SyncStore) ListSyncFailuresForRetry(ctx context.Context, now time.Time) ([]synctypes.SyncFailureRow, error) {
+func (m *SyncStore) ListSyncFailuresForRetry(ctx context.Context, now time.Time) ([]SyncFailureRow, error) {
 	nowNano := now.UnixNano()
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
@@ -804,7 +804,7 @@ func (m *SyncStore) SyncFailureCount(ctx context.Context) (int, error) {
 }
 
 // ListSyncFailuresByIssueType returns all sync_failures rows with the given issue_type.
-func (m *SyncStore) ListSyncFailuresByIssueType(ctx context.Context, issueType string) ([]synctypes.SyncFailureRow, error) {
+func (m *SyncStore) ListSyncFailuresByIssueType(ctx context.Context, issueType string) ([]SyncFailureRow, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE issue_type = ? ORDER BY last_seen_at DESC`, issueType)
@@ -839,7 +839,7 @@ func (m *SyncStore) ClearSyncFailuresByPrefix(ctx context.Context, pathPrefix, i
 func (m *SyncStore) PickTrialCandidate(
 	ctx context.Context,
 	scopeKey synctypes.ScopeKey,
-) (*synctypes.SyncFailureRow, bool, error) {
+) (*SyncFailureRow, bool, error) {
 	wire := scopeKey.String()
 
 	row := m.db.QueryRowContext(ctx,
@@ -850,7 +850,7 @@ func (m *SyncStore) PickTrialCandidate(
 		wire, synctypes.FailureRoleHeld,
 	)
 
-	var r synctypes.SyncFailureRow
+	var r SyncFailureRow
 	err := scanSyncFailureRow(row, &r)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -896,7 +896,7 @@ type syncFailureScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanSyncFailureRow(scanner syncFailureScanner, row *synctypes.SyncFailureRow) error {
+func scanSyncFailureRow(scanner syncFailureScanner, row *SyncFailureRow) error {
 	if row == nil {
 		return fmt.Errorf("sync: scanning sync failure row: nil destination")
 	}
@@ -919,11 +919,11 @@ func scanSyncFailureRow(scanner syncFailureScanner, row *synctypes.SyncFailureRo
 }
 
 // scanSyncFailureRows scans multiple sync_failures rows from a query result.
-func scanSyncFailureRows(rows *sql.Rows) ([]synctypes.SyncFailureRow, error) {
-	var result []synctypes.SyncFailureRow
+func scanSyncFailureRows(rows *sql.Rows) ([]SyncFailureRow, error) {
+	var result []SyncFailureRow
 
 	for rows.Next() {
-		var r synctypes.SyncFailureRow
+		var r SyncFailureRow
 		if scanErr := scanSyncFailureRow(rows, &r); scanErr != nil {
 			return nil, fmt.Errorf("sync: scanning sync failure row: %w", scanErr)
 		}

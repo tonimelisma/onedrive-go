@@ -17,7 +17,7 @@ Implements: R-2.1 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.11 [
 
 Wires the sync pipeline: observers → buffer → planner → executor → SyncStore. Two entry points:
 
-- `RunOnce()`: one-shot sync. Observes all changes, plans, executes, returns `SyncReport`.
+- `RunOnce()`: one-shot sync. Observes all changes, plans, executes, returns `*Report`.
 - `RunWatch()`: continuous sync. Flow: `initWatchInfra → bootstrapSync → startObservers → runWatchLoop`.
 
 `RunOnce()` intentionally keeps the incremental one-shot contract simple:
@@ -42,7 +42,7 @@ one single-drive runtime. CLI single-drive setup and multisync orchestration
 both call that one constructor so watch-only dependencies such as websocket
 wake fetchers, local observation filters/rules, and drive verification cannot
 silently diverge between entrypoints. The lower-level `newEngine(ctx, cfg)`
-constructor remains for same-package tests and narrowly-scoped internal
+constructor remains same-package only around `engineInputs`, for tests and narrowly-scoped internal
 construction seams.
 
 Scoped-root watch sessions and `sync_paths`-scoped primary-drive watch
@@ -379,7 +379,8 @@ success, shutdown, retryable transient, scope-blocking transient, actionable,
 and fatal.
 
 `SummaryKey` is the shared sync-domain rendering key exported by
-`internal/synctypes`. Classification assigns it once so result routing, store
+`internal/synctypes`, while the runtime mapping from result facts to summary
+keys lives in `internal/sync/engine_result_classify.go`. Classification assigns it once so result routing, store
 inspection, and CLI issue/status rendering can all group the same failure
 family without re-inspecting raw HTTP status or filesystem errors.
 
@@ -729,7 +730,7 @@ Sync failure logging follows a tiered approach matching CLAUDE.md policy — ind
 - **Scope block WARN**: `applyScopeBlock()` logs when a scope block activates with scope_key, issue_type, and trial_interval. This is a degraded-but-recoverable event (matching CLAUDE.md Warn).
 - **Scope release INFO**: `releaseScope()` logs when a scope block clears. This is a lifecycle state transition (matching CLAUDE.md Info).
 - **Trial preserve/extend DEBUG**: trial routing logs whether a trial extended or preserved a scope, including scope_key and interval. This is retry detail.
-- **End-of-pass summary**: `logFailureSummary()` aggregates exhausted transient failures by `issue_type`, not by raw error text. Groups with >10 items get one WARN summary with count and sample paths, while per-item detail remains available at DEBUG; groups with ≤10 items get per-item WARN lines. The summary state is tracked separately from `SyncReport.Errors`, so one-shot report errors remain intact after logging. Called at end of `executePlan()`.
+- **End-of-pass summary**: `logFailureSummary()` aggregates exhausted transient failures by `issue_type`, not by raw error text. Groups with >10 items get one WARN summary with count and sample paths, while per-item detail remains available at DEBUG; groups with ≤10 items get per-item WARN lines. The summary state is tracked separately from `Report.Errors`, so one-shot report errors remain intact after logging. Called at end of `executePlan()`.
 - **IssueType population**: `recordFailure()` derives issue_type from HTTP status via `issueTypeForHTTPStatus()` and stores it in sync_failures for display grouping.
 
 ### Shortcut Integration (`engine_shortcuts.go`)

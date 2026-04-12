@@ -8,12 +8,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
-// trackedNode is an internal wrapper around *synctypes.TrackedAction that adds
+// trackedNode is an internal wrapper around *TrackedAction that adds
 // the dependency-tracking fields (depsLeft, dependents). These fields are
 // deliberately not exported on TrackedAction — they are graph internals that
 // workers and the engine never need to touch directly.
 type trackedNode struct {
-	*synctypes.TrackedAction
+	*TrackedAction
 	depsLeft   atomic.Int32
 	dependents []*trackedNode
 }
@@ -87,11 +87,11 @@ func (g *DepGraph) WaitForEmpty() <-chan struct{} {
 // forward references (depID not yet in the graph) are silently dropped.
 // For one-shot mode with arbitrary dependency ordering, use the two-phase
 // Register + WireDeps approach instead.
-func (g *DepGraph) Add(action *synctypes.Action, id int64, depIDs []int64) *synctypes.TrackedAction {
+func (g *DepGraph) Add(action *Action, id int64, depIDs []int64) *TrackedAction {
 	// Wrap the public TrackedAction in an internal trackedNode that carries
 	// the dependency-tracking fields (depsLeft, dependents).
 	node := &trackedNode{
-		TrackedAction: &synctypes.TrackedAction{
+		TrackedAction: &TrackedAction{
 			Action: *action,
 			ID:     id,
 		},
@@ -132,9 +132,9 @@ func (g *DepGraph) Add(action *synctypes.Action, id int64, depIDs []int64) *sync
 // dependencies and determine readiness. Used in the two-phase pattern
 // (Register all, then WireDeps all) to avoid forward-reference issues
 // where parent actions depend on children that haven't been added yet.
-func (g *DepGraph) Register(action *synctypes.Action, id int64) {
+func (g *DepGraph) Register(action *Action, id int64) {
 	node := &trackedNode{
-		TrackedAction: &synctypes.TrackedAction{
+		TrackedAction: &TrackedAction{
 			Action: *action,
 			ID:     id,
 		},
@@ -158,7 +158,7 @@ func (g *DepGraph) Register(action *synctypes.Action, id int64) {
 // All depIDs must reference already-registered actions (guaranteed by
 // the Register-all-first pattern). Returns the TrackedAction if the
 // action is immediately ready (no unresolved deps), nil otherwise.
-func (g *DepGraph) WireDeps(id int64, depIDs []int64) *synctypes.TrackedAction {
+func (g *DepGraph) WireDeps(id int64, depIDs []int64) *TrackedAction {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -223,7 +223,7 @@ func (g *DepGraph) MarkTrial(id int64, scopeKey synctypes.ScopeKey) bool {
 // If id is unknown (not in the graph), a warning is logged and (nil, false)
 // is returned. The bool distinguishes "unknown ID" from "known ID with no
 // dependents" (which returns a non-nil empty slice).
-func (g *DepGraph) Complete(id int64) ([]*synctypes.TrackedAction, bool) {
+func (g *DepGraph) Complete(id int64) ([]*TrackedAction, bool) {
 	g.mu.Lock()
 
 	node, ok := g.actions[id]
@@ -261,8 +261,8 @@ func (g *DepGraph) Complete(id int64) ([]*synctypes.TrackedAction, bool) {
 	g.mu.Unlock()
 
 	// Collect ready dependents, converting internal trackedNode to the
-	// public *synctypes.TrackedAction that callers (engine, tests) expect.
-	ready := make([]*synctypes.TrackedAction, 0, len(dependents))
+	// public *TrackedAction that callers (engine, tests) expect.
+	ready := make([]*TrackedAction, 0, len(dependents))
 
 	for _, dep := range dependents {
 		if dep.depsLeft.Add(-1) == 0 {

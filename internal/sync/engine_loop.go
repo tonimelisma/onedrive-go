@@ -6,16 +6,16 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
 func (r *oneShotRunner) runResultsLoop(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *synctypes.Baseline,
-	results <-chan synctypes.WorkerResult,
+	bl *syncstore.Baseline,
+	results <-chan WorkerResult,
 ) error {
-	var outbox []*synctypes.TrackedAction
+	var outbox []*TrackedAction
 	var fatalErr error
 
 	for {
@@ -47,10 +47,10 @@ func (r *oneShotRunner) runResultsLoop(
 func (r *oneShotRunner) runResultsLoopIdle(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *synctypes.Baseline,
-	results <-chan synctypes.WorkerResult,
+	bl *syncstore.Baseline,
+	results <-chan WorkerResult,
 	fatalErr error,
-) ([]*synctypes.TrackedAction, error, bool) {
+) ([]*TrackedAction, error, bool) {
 	select {
 	case workerResult, ok := <-results:
 		if !ok {
@@ -66,11 +66,11 @@ func (r *oneShotRunner) runResultsLoopIdle(
 func (r *oneShotRunner) runResultsLoopWithOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *synctypes.Baseline,
-	results <-chan synctypes.WorkerResult,
-	outbox []*synctypes.TrackedAction,
+	bl *syncstore.Baseline,
+	results <-chan WorkerResult,
+	outbox []*TrackedAction,
 	fatalErr error,
-) ([]*synctypes.TrackedAction, error, bool) {
+) ([]*TrackedAction, error, bool) {
 	select {
 	case r.dispatchCh <- outbox[0]:
 		return outbox[1:], fatalErr, false
@@ -88,11 +88,11 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 func (r *oneShotRunner) handleOneShotWorkerResult(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *synctypes.Baseline,
-	outbox []*synctypes.TrackedAction,
+	bl *syncstore.Baseline,
+	outbox []*TrackedAction,
 	fatalErr error,
-	workerResult *synctypes.WorkerResult,
-) ([]*synctypes.TrackedAction, error) {
+	workerResult *WorkerResult,
+) ([]*TrackedAction, error) {
 	outcome := r.processWorkerResult(ctx, nil, workerResult, bl)
 	outbox = append(outbox, outcome.dispatched...)
 	if !outcome.terminate || fatalErr != nil {
@@ -131,13 +131,13 @@ func (r *oneShotRunner) completeQueuedDispatchAsShutdown() {
 	}
 }
 
-func (f *engineFlow) completeOutboxAsShutdown(outbox []*synctypes.TrackedAction) {
+func (f *engineFlow) completeOutboxAsShutdown(outbox []*TrackedAction) {
 	for _, ta := range outbox {
 		f.completeTrackedActionAsShutdown(ta)
 	}
 }
 
-func (f *engineFlow) completeTrackedActionAsShutdown(ta *synctypes.TrackedAction) {
+func (f *engineFlow) completeTrackedActionAsShutdown(ta *TrackedAction) {
 	if ta == nil {
 		return
 	}
@@ -152,7 +152,7 @@ func (f *engineFlow) completeTrackedActionAsShutdown(ta *synctypes.TrackedAction
 func (rt *watchRuntime) runWatchUntilQuiescent(
 	ctx context.Context,
 	p *watchPipeline,
-	initialOutbox []*synctypes.TrackedAction,
+	initialOutbox []*TrackedAction,
 ) error {
 	ticker := rt.engine.newTicker(quiescenceLogInterval)
 	defer stopTicker(ticker)
@@ -373,7 +373,7 @@ func (rt *watchRuntime) runBootstrapStep(
 	}
 }
 
-func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *synctypes.TrackedAction, *synctypes.TrackedAction) {
+func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *TrackedAction, *TrackedAction) {
 	outbox := rt.currentOutbox()
 	nextAction := firstOutbox(outbox)
 	if nextAction == nil {
@@ -391,10 +391,10 @@ func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *synctypes.TrackedAct
 func (rt *watchRuntime) handleBootstrapBatch(
 	ctx context.Context,
 	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
-	batch []synctypes.PathChanges,
+	outbox []*TrackedAction,
+	batch []PathChanges,
 	ok bool,
-) ([]*synctypes.TrackedAction, bool) {
+) ([]*TrackedAction, bool) {
 	if !ok {
 		return outbox, true
 	}
@@ -405,10 +405,10 @@ func (rt *watchRuntime) handleBootstrapBatch(
 func (rt *watchRuntime) handleBootstrapWorkerResult(
 	ctx context.Context,
 	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
-	workerResult *synctypes.WorkerResult,
+	outbox []*TrackedAction,
+	workerResult *WorkerResult,
 	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
+) ([]*TrackedAction, bool, error) {
 	if !ok {
 		if contextIsCanceled(ctx) {
 			p.results = nil
@@ -427,7 +427,7 @@ func (rt *watchRuntime) handleBootstrapWorkerResult(
 
 func (rt *watchRuntime) handleBootstrapResultsClosed(
 	ctx context.Context,
-) ([]*synctypes.TrackedAction, bool, error) {
+) ([]*TrackedAction, bool, error) {
 	select {
 	case <-ctx.Done():
 		return nil, false, fmt.Errorf("sync: watch bootstrap context done: %w", ctx.Err())
@@ -446,10 +446,10 @@ func (rt *watchRuntime) logBootstrapWait() {
 func (rt *watchRuntime) handleWatchWorkerResult(
 	ctx context.Context,
 	p *watchPipeline,
-	outbox []*synctypes.TrackedAction,
-	workerResult *synctypes.WorkerResult,
+	outbox []*TrackedAction,
+	workerResult *WorkerResult,
 	ok bool,
-) ([]*synctypes.TrackedAction, bool, error) {
+) ([]*TrackedAction, bool, error) {
 	if !ok {
 		if rt.isDraining() {
 			p.results = nil
@@ -477,7 +477,7 @@ func contextIsCanceled(ctx context.Context) bool {
 func (rt *watchRuntime) handleDrainingWorkerResult(
 	ctx context.Context,
 	p *watchPipeline,
-	workerResult *synctypes.WorkerResult,
+	workerResult *WorkerResult,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -531,7 +531,7 @@ func (rt *watchRuntime) handleDrainingObserverError(
 	return rt.drainLoopDone(p), nil
 }
 
-func firstOutbox(outbox []*synctypes.TrackedAction) *synctypes.TrackedAction {
+func firstOutbox(outbox []*TrackedAction) *TrackedAction {
 	if len(outbox) == 0 {
 		return nil
 	}

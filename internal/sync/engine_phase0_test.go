@@ -47,7 +47,7 @@ func newBootstrapWatchPipelineForTest(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	mode synctypes.SyncMode,
+	mode Mode,
 	workers int,
 ) *watchPipeline {
 	t.Helper()
@@ -63,7 +63,7 @@ func newBootstrapWatchPipelineForTest(
 
 	return &watchPipeline{
 		runtime: rt,
-		safety:  synctypes.DefaultSafetyConfig(),
+		safety:  DefaultSafetyConfig(),
 		pool:    pool,
 		results: pool.Results(),
 		mode:    mode,
@@ -105,7 +105,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
 			PollInterval: time.Hour,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -184,7 +184,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
 			PollInterval: 20 * time.Millisecond,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -241,8 +241,8 @@ func TestWaitForQuiescence_ContextCancel(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	rt.depGraph.Add(&synctypes.Action{
-		Type:    synctypes.ActionDownload,
+	rt.depGraph.Add(&Action{
+		Type:    ActionDownload,
 		Path:    "stuck.txt",
 		DriveID: driveid.New(engineTestDriveID),
 		ItemID:  "stuck-item",
@@ -269,9 +269,9 @@ func TestBootstrapSync_NoChanges(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
-	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, synctypes.SyncBidirectional, 1)
+	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, SyncBidirectional, 1)
 
-	err := testWatchRuntime(t, eng).bootstrapSync(ctx, synctypes.SyncBidirectional, pipe)
+	err := testWatchRuntime(t, eng).bootstrapSync(ctx, SyncBidirectional, pipe)
 	require.NoError(t, err)
 }
 
@@ -297,9 +297,9 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
-	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, synctypes.SyncDownloadOnly, 2)
+	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, SyncDownloadOnly, 2)
 
-	err := testWatchRuntime(t, eng).bootstrapSync(ctx, synctypes.SyncDownloadOnly, pipe)
+	err := testWatchRuntime(t, eng).bootstrapSync(ctx, SyncDownloadOnly, pipe)
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(filepath.Join(syncRoot, "newfile.txt"))
@@ -338,9 +338,9 @@ func TestBootstrapSync_CrashRecovery_MixedDeletingCandidates(t *testing.T) {
 	)
 	require.NoError(t, err, "seed crash-recovery rows")
 
-	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, synctypes.SyncBidirectional, 1)
+	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, SyncBidirectional, 1)
 
-	err = testWatchRuntime(t, eng).bootstrapSync(ctx, synctypes.SyncBidirectional, pipe)
+	err = testWatchRuntime(t, eng).bootstrapSync(ctx, SyncBidirectional, pipe)
 	require.NoError(t, err)
 
 	var goneStatus synctypes.SyncStatus
@@ -376,8 +376,8 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 		Observation:  synctypes.ObservationDelta,
 		DiscoveredAt: 1000,
 	}}
-	baselineEntries := []synctypes.Outcome{{
-		Action:   synctypes.ActionDownload,
+	baselineEntries := []ExecutionResult{{
+		Action:   ActionDownload,
 		Success:  true,
 		Path:     "Shared/TeamDocs",
 		DriveID:  driveid.New(remoteDriveID),
@@ -405,16 +405,16 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 		eng.execCfg.Downloads(), eng.execCfg.Uploads(), nil, eng.logger,
 	))
 
-	plan := &synctypes.ActionPlan{
-		Actions: []synctypes.Action{{
-			Type:    synctypes.ActionUpload,
+	plan := &ActionPlan{
+		Actions: []Action{{
+			Type:    ActionUpload,
 			Path:    "Shared/TeamDocs/file.txt",
 			DriveID: driveid.New(remoteDriveID),
 		}},
 		Deps: [][]int{nil},
 	}
 
-	report := &synctypes.SyncReport{}
+	report := &Report{}
 	done := make(chan error, 1)
 	go func() {
 		done <- runner.executePlan(t.Context(), plan, report, bl)
@@ -460,7 +460,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	recorder := attachDebugEventRecorder(eng)
 	rt := testWatchRuntime(t, eng)
 
-	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
@@ -468,18 +468,18 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 		NextTrialAt:   eng.nowFunc().Add(30 * time.Millisecond),
 	})
 
-	ta := rt.depGraph.Add(&synctypes.Action{
-		Type:    synctypes.ActionDownload,
+	ta := rt.depGraph.Add(&Action{
+		Type:    ActionDownload,
 		Path:    "trial.txt",
 		DriveID: driveid.New(engineTestDriveID),
 		ItemID:  "trial-item",
 	}, 99, nil)
 	require.NotNil(t, ta)
 
-	results <- synctypes.WorkerResult{
+	results <- WorkerResult{
 		ActionID:      99,
 		Path:          "trial.txt",
-		ActionType:    synctypes.ActionDownload,
+		ActionType:    ActionDownload,
 		DriveID:       driveid.New(engineTestDriveID),
 		Success:       false,
 		HTTPStatus:    http.StatusInternalServerError,
@@ -517,7 +517,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "blocked-item",
 		Path:     "blocked.txt",
@@ -526,14 +526,14 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		Size:     42,
 	}}, "", driveID))
 
-	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:           testThrottleScope(),
 		IssueType:     synctypes.IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
 	})
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      blockedPath,
 		DriveID:   driveID,
 		Direction: synctypes.DirectionDownload,
@@ -544,18 +544,18 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		ItemID:    "blocked-item",
 	}, nil))
 
-	ta := rt.depGraph.Add(&synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	ta := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
 		Path:    "trial.txt",
 		DriveID: driveID,
 		ItemID:  "trial-item",
 	}, 1, nil)
 	require.NotNil(t, ta)
 
-	results <- synctypes.WorkerResult{
+	results <- WorkerResult{
 		ActionID:      1,
 		Path:          "trial.txt",
-		ActionType:    synctypes.ActionUpload,
+		ActionType:    ActionUpload,
 		DriveID:       driveID,
 		Success:       true,
 		IsTrial:       true,
@@ -571,7 +571,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	retried := readReadyAction(t, rt.dispatchCh)
 	require.Equal(t, blockedPath, retried.Action.Path,
 		"trial success should re-dispatch the held failure without external observation")
-	assert.Equal(t, synctypes.ActionDownload, retried.Action.Type)
+	assert.Equal(t, ActionDownload, retried.Action.Type)
 }
 
 // Validates: R-2.10.13, R-2.10.11
@@ -589,7 +589,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	accessibleDir := filepath.Join(syncRoot, "Private")
 	require.NoError(t, os.MkdirAll(accessibleDir, 0o750))
 
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []synctypes.ObservedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  eng.driveID,
 		ItemID:   "private-item",
 		Path:     "Private/doc.txt",
@@ -598,7 +598,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		Size:     64,
 	}}, "", eng.driveID))
 
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "Private",
 		DriveID:   eng.driveID,
 		Direction: synctypes.DirectionDownload,
@@ -608,7 +608,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		ErrMsg:    "directory not accessible",
 		ScopeKey:  scopeKey,
 	}, nil))
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "Private/doc.txt",
 		DriveID:   eng.driveID,
 		Direction: synctypes.DirectionDownload,
@@ -618,7 +618,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		ScopeKey:  scopeKey,
 		ItemID:    "private-item",
 	}, nil))
-	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
 		IssueType: synctypes.IssueLocalPermissionDenied,
 		BlockedAt: eng.nowFunc(),
@@ -652,16 +652,16 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	parent := rt.depGraph.Add(&synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	parent := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
 		Path:    "parent.txt",
 		DriveID: driveID,
 		ItemID:  "parent-item",
 	}, 1, nil)
 	require.NotNil(t, parent)
 
-	child := rt.depGraph.Add(&synctypes.Action{
-		Type:    synctypes.ActionUpload,
+	child := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
 		Path:    "child.txt",
 		DriveID: driveID,
 		ItemID:  "child-item",
@@ -671,10 +671,10 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	rt.dispatchCh <- parent
 	readReady(t, rt.dispatchCh)
 
-	results <- synctypes.WorkerResult{
+	results <- WorkerResult{
 		ActionID:   1,
 		Path:       "parent.txt",
-		ActionType: synctypes.ActionUpload,
+		ActionType: ActionUpload,
 		DriveID:    driveID,
 		Success:    false,
 		HTTPStatus: http.StatusTooManyRequests,

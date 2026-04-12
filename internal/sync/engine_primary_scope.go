@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
+	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
@@ -40,7 +41,7 @@ type deferredDeltaToken struct {
 }
 
 type remoteFetchResult struct {
-	events       []synctypes.ChangeEvent
+	events       []ChangeEvent
 	deferred     []deferredDeltaToken
 	fullPrefixes []string
 }
@@ -242,12 +243,12 @@ func (e *Engine) resolveScopedRootObservationScope(ctx context.Context, configur
 
 func (flow *engineFlow) observePlannedPrimaryScopes(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	phase ObservationPhasePlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
 	result := remoteFetchResult{
-		events:       make([]synctypes.ChangeEvent, 0),
+		events:       make([]ChangeEvent, 0),
 		deferred:     make([]deferredDeltaToken, 0),
 		fullPrefixes: make([]string, 0),
 	}
@@ -268,7 +269,7 @@ func (flow *engineFlow) observePlannedPrimaryScopes(
 
 func (flow *engineFlow) observeSinglePrimaryScope(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	scope primaryObservationScope,
 	phase ObservationPhasePlan,
 	fullReconcile bool,
@@ -278,7 +279,7 @@ func (flow *engineFlow) observeSinglePrimaryScope(
 
 func (flow *engineFlow) observePlannedTarget(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	phase ObservationPhasePlan,
 	target plannedObservationTarget,
 	fullReconcile bool,
@@ -295,7 +296,7 @@ func (flow *engineFlow) observePlannedTarget(
 
 func (flow *engineFlow) observePlannedTargetDelta(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	target plannedObservationTarget,
 	fullReconcile bool,
 	fallbackPolicy ObservationPhaseFallbackPolicy,
@@ -359,7 +360,7 @@ func (flow *engineFlow) observePlannedTargetDelta(
 
 func (flow *engineFlow) observePlannedTargetEnumerate(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	target plannedObservationTarget,
 ) (remoteFetchResult, error) {
 	eng := flow.engine
@@ -382,11 +383,11 @@ func (flow *engineFlow) observePlannedTargetEnumerate(
 }
 
 func convertObservedTargetItems(
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	logger *slog.Logger,
 	target plannedObservationTarget,
 	items []graph.Item,
-) []synctypes.ChangeEvent {
+) []ChangeEvent {
 	if target.shortcut != nil {
 		return ConvertShortcutItems(items, target.shortcut, target.driveID, bl, logger)
 	}
@@ -399,10 +400,10 @@ func convertObservedTargetItems(
 }
 
 func observeTargetOrphansFromItems(
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	target plannedObservationTarget,
 	items []graph.Item,
-) []synctypes.ChangeEvent {
+) []ChangeEvent {
 	if target.shortcut != nil {
 		return DetectShortcutOrphans(target.shortcut, target.driveID, items, bl)
 	}
@@ -416,12 +417,12 @@ func observeTargetOrphansFromItems(
 		seen[driveid.NewItemKey(itemDriveID, items[i].ID)] = struct{}{}
 	}
 
-	return bl.FindOrphans(seen, target.driveID, target.localPath)
+	return findBaselineOrphans(bl, seen, target.driveID, target.localPath)
 }
 
 func (flow *engineFlow) reconcilePrimaryScopeEntries(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	enteredPaths []string,
 	fullPrefixes []string,
 ) (remoteFetchResult, error) {
@@ -430,7 +431,7 @@ func (flow *engineFlow) reconcilePrimaryScopeEntries(
 	}
 
 	result := remoteFetchResult{
-		events:       make([]synctypes.ChangeEvent, 0),
+		events:       make([]ChangeEvent, 0),
 		deferred:     make([]deferredDeltaToken, 0),
 		fullPrefixes: make([]string, 0),
 	}
@@ -454,7 +455,7 @@ func (flow *engineFlow) reconcilePrimaryScopeEntries(
 
 func (flow *engineFlow) reconcileEnteredPrimaryPath(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	enteredPath string,
 ) (remoteFetchResult, error) {
 	eng := flow.engine
@@ -478,7 +479,7 @@ func (flow *engineFlow) reconcileEnteredPrimaryPath(
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
 			return remoteFetchResult{
-				events: bl.FindOrphans(nil, eng.driveID, enteredPath),
+				events: findBaselineOrphans(bl, nil, eng.driveID, enteredPath),
 			}, nil
 		}
 
@@ -512,14 +513,14 @@ func (flow *engineFlow) reconcileEnteredPrimaryPath(
 	converter.ScopeRootID = item.ParentID
 
 	events := converter.ConvertItems([]graph.Item{*item})
-	events = append(events, bl.FindOrphans(seenKeysFromEvents(events), eng.driveID, enteredPath)...)
+	events = append(events, findBaselineOrphans(bl, seenKeysFromEvents(events), eng.driveID, enteredPath)...)
 
 	return remoteFetchResult{events: events}, nil
 }
 
 func (flow *engineFlow) reconcileEnteredRoot(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 ) (remoteFetchResult, error) {
 	eng := flow.engine
 
@@ -551,7 +552,7 @@ func (flow *engineFlow) reconcileEnteredRoot(
 
 func (flow *engineFlow) reconcileExactEnteredPrimaryScope(
 	ctx context.Context,
-	bl *synctypes.Baseline,
+	bl *syncstore.Baseline,
 	scope primaryObservationScope,
 ) (remoteFetchResult, error) {
 	eng := flow.engine
@@ -605,7 +606,7 @@ func (flow *engineFlow) resolveEnteredPrimaryItem(ctx context.Context, enteredPa
 	return nil, graph.ErrNotFound
 }
 
-func seenKeysFromEvents(events []synctypes.ChangeEvent) map[driveid.ItemKey]struct{} {
+func seenKeysFromEvents(events []ChangeEvent) map[driveid.ItemKey]struct{} {
 	seen := make(map[driveid.ItemKey]struct{}, len(events))
 	for i := range events {
 		if events[i].IsDeleted {

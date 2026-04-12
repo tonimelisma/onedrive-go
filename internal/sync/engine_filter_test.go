@@ -41,7 +41,7 @@ func TestRunOnce_LocalFilterConfigSuppressesConfiguredUploads(t *testing.T) {
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.localFilter = synctypes.LocalFilterConfig{
+	eng.localFilter = LocalFilterConfig{
 		SkipDotfiles: true,
 		SkipDirs:     []string{"vendor"},
 		SkipFiles:    []string{"*.log"},
@@ -52,7 +52,7 @@ func TestRunOnce_LocalFilterConfigSuppressesConfiguredUploads(t *testing.T) {
 	writeLocalFile(t, syncRoot, "debug.log", "noise")
 	writeLocalFile(t, syncRoot, "keep.txt", "keep")
 
-	report, err := eng.RunOnce(t.Context(), synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"keep.txt"}, uploaded)
@@ -99,7 +99,7 @@ func TestRunOnce_SyncScopeSuppressesConfiguredUploads(t *testing.T) {
 	writeLocalFile(t, syncRoot, "blocked/.odignore", "")
 	writeLocalFile(t, syncRoot, "blocked/secret.txt", "blocked")
 
-	report, err := eng.RunOnce(t.Context(), synctypes.SyncUploadOnly, synctypes.RunOpts{})
+	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"keep.txt"}, uploaded)
@@ -127,7 +127,7 @@ func TestRunOnce_DownloadScopeSuppressesOutOfScopeRemoteItems(t *testing.T) {
 		SyncPaths: []string{"/keep.txt"},
 	}
 
-	report, err := eng.RunOnce(t.Context(), synctypes.SyncDownloadOnly, synctypes.RunOpts{})
+	report, err := eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"keep-item"}, downloaded)

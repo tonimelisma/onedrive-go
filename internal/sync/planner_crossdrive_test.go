@@ -18,7 +18,7 @@ import (
 // Validates: R-6.7.21
 func TestResolvePathDriveID_DirectMatch(t *testing.T) {
 	driveA := driveid.New("driveA")
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "docs/file.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile},
 	})
 
@@ -29,7 +29,7 @@ func TestResolvePathDriveID_DirectMatch(t *testing.T) {
 // Validates: R-6.7.21
 func TestResolvePathDriveID_ParentMatch(t *testing.T) {
 	driveA := driveid.New("driveA")
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "shared", DriveID: driveA, ItemID: "folder1", ItemType: synctypes.ItemTypeFolder},
 	})
 
@@ -40,7 +40,7 @@ func TestResolvePathDriveID_ParentMatch(t *testing.T) {
 
 // Validates: R-6.7.21
 func TestResolvePathDriveID_NoMatch(t *testing.T) {
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "other/file.txt", DriveID: driveid.New("driveX"), ItemID: "x", ItemType: synctypes.ItemTypeFile},
 	})
 
@@ -55,13 +55,13 @@ func TestResolvePathDriveID_NoMatch(t *testing.T) {
 // Validates: R-6.7.21
 func TestIsCrossDriveLocalMove_SameDrive(t *testing.T) {
 	driveA := driveid.New("driveA")
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "old.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hash1"},
 		{Path: "docs", DriveID: driveA, ItemID: "folder1", ItemType: synctypes.ItemTypeFolder},
 	})
-	views := map[string]*synctypes.PathView{
+	views := map[string]*PathView{
 		"old.txt":          {Path: "old.txt", Baseline: bl.ByPath["old.txt"]},
-		"docs/renamed.txt": {Path: "docs/renamed.txt", Local: &synctypes.LocalState{Hash: "hash1"}},
+		"docs/renamed.txt": {Path: "docs/renamed.txt", Local: &LocalState{Hash: "hash1"}},
 	}
 
 	got := isCrossDriveLocalMove("old.txt", "docs/renamed.txt", views, bl)
@@ -72,13 +72,13 @@ func TestIsCrossDriveLocalMove_SameDrive(t *testing.T) {
 func TestIsCrossDriveLocalMove_DifferentDrive(t *testing.T) {
 	driveA := driveid.New("driveA")
 	driveB := driveid.New("driveB")
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "own/file.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hash1"},
 		{Path: "shared", DriveID: driveB, ItemID: "folder1", ItemType: synctypes.ItemTypeFolder},
 	})
-	views := map[string]*synctypes.PathView{
+	views := map[string]*PathView{
 		"own/file.txt":    {Path: "own/file.txt", Baseline: bl.ByPath["own/file.txt"]},
-		"shared/file.txt": {Path: "shared/file.txt", Local: &synctypes.LocalState{Hash: "hash1"}},
+		"shared/file.txt": {Path: "shared/file.txt", Local: &LocalState{Hash: "hash1"}},
 	}
 
 	got := isCrossDriveLocalMove("own/file.txt", "shared/file.txt", views, bl)
@@ -88,12 +88,12 @@ func TestIsCrossDriveLocalMove_DifferentDrive(t *testing.T) {
 // Validates: R-6.7.21
 func TestIsCrossDriveLocalMove_ZeroDrive(t *testing.T) {
 	driveA := driveid.New("driveA")
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "old.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hash1"},
 	})
-	views := map[string]*synctypes.PathView{
+	views := map[string]*PathView{
 		"old.txt":         {Path: "old.txt", Baseline: bl.ByPath["old.txt"]},
-		"unknown/new.txt": {Path: "unknown/new.txt", Local: &synctypes.LocalState{Hash: "hash1"}},
+		"unknown/new.txt": {Path: "unknown/new.txt", Local: &LocalState{Hash: "hash1"}},
 	}
 
 	// Destination has no baseline ancestry → zero drive → conservative false.
@@ -108,9 +108,9 @@ func TestIsCrossDriveLocalMove_ZeroDrive(t *testing.T) {
 // Validates: R-6.7.21
 func TestIsCrossDriveRemoteMove_SameDrive(t *testing.T) {
 	driveA := driveid.New("driveA")
-	view := &synctypes.PathView{
-		Baseline: &synctypes.BaselineEntry{DriveID: driveA},
-		Remote:   &synctypes.RemoteState{DriveID: driveA},
+	view := &PathView{
+		Baseline: &BaselineEntry{DriveID: driveA},
+		Remote:   &RemoteState{DriveID: driveA},
 	}
 
 	assert.False(t, isCrossDriveRemoteMove(view))
@@ -118,9 +118,9 @@ func TestIsCrossDriveRemoteMove_SameDrive(t *testing.T) {
 
 // Validates: R-6.7.21
 func TestIsCrossDriveRemoteMove_DifferentDrive(t *testing.T) {
-	view := &synctypes.PathView{
-		Baseline: &synctypes.BaselineEntry{DriveID: driveid.New("driveA")},
-		Remote:   &synctypes.RemoteState{DriveID: driveid.New("driveB")},
+	view := &PathView{
+		Baseline: &BaselineEntry{DriveID: driveid.New("driveA")},
+		Remote:   &RemoteState{DriveID: driveid.New("driveB")},
 	}
 
 	assert.True(t, isCrossDriveRemoteMove(view))
@@ -128,8 +128,8 @@ func TestIsCrossDriveRemoteMove_DifferentDrive(t *testing.T) {
 
 // Validates: R-6.7.21
 func TestIsCrossDriveRemoteMove_NoBaseline(t *testing.T) {
-	view := &synctypes.PathView{
-		Remote: &synctypes.RemoteState{DriveID: driveid.New("driveA")},
+	view := &PathView{
+		Remote: &RemoteState{DriveID: driveid.New("driveA")},
 	}
 
 	assert.False(t, isCrossDriveRemoteMove(view), "no baseline → false")
@@ -176,21 +176,21 @@ func TestPlan_CrossDriveLocalMove_DecomposesToDeleteAndUpload(t *testing.T) {
 			driveB := driveid.New("driveB")
 			planner := NewPlanner(synctest.TestLogger(t))
 
-			bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+			bl := newBaselineForTest([]*BaselineEntry{
 				{Path: tt.sourcePath, DriveID: driveB, ItemID: tt.targetID, ItemType: synctypes.ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
 				{Path: tt.targetRoot, DriveID: driveA, ItemID: tt.sourceID, ItemType: synctypes.ItemTypeFolder},
 			})
 			if tt.name == "OwnDriveToShortcut" {
-				bl = synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+				bl = newBaselineForTest([]*BaselineEntry{
 					{Path: tt.sourcePath, DriveID: driveA, ItemID: tt.targetID, ItemType: synctypes.ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
 					{Path: tt.targetRoot, DriveID: driveB, ItemID: tt.sourceID, ItemType: synctypes.ItemTypeFolder},
 				})
 			}
 
-			changes := []synctypes.PathChanges{
+			changes := []PathChanges{
 				{
 					Path: tt.sourcePath,
-					LocalEvents: []synctypes.ChangeEvent{{
+					LocalEvents: []ChangeEvent{{
 						Source:    synctypes.SourceLocal,
 						Type:      synctypes.ChangeDelete,
 						Path:      tt.sourcePath,
@@ -200,7 +200,7 @@ func TestPlan_CrossDriveLocalMove_DecomposesToDeleteAndUpload(t *testing.T) {
 				},
 				{
 					Path: tt.targetPath,
-					LocalEvents: []synctypes.ChangeEvent{{
+					LocalEvents: []ChangeEvent{{
 						Source:   synctypes.SourceLocal,
 						Type:     synctypes.ChangeCreate,
 						Path:     tt.targetPath,
@@ -214,16 +214,16 @@ func TestPlan_CrossDriveLocalMove_DecomposesToDeleteAndUpload(t *testing.T) {
 				changes[1].LocalEvents[0].Name = "doc.txt"
 			}
 
-			plan, err := planner.Plan(changes, bl, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+			plan, err := planner.Plan(changes, bl, SyncBidirectional, DefaultSafetyConfig(), nil)
 			require.NoError(t, err)
 			assert.Empty(t, moves(plan), "cross-drive move should not produce a move action")
 
 			var hasDelete, hasUpload bool
 			for i := range plan.Actions {
-				if plan.Actions[i].Type == synctypes.ActionRemoteDelete && plan.Actions[i].Path == tt.sourcePath {
+				if plan.Actions[i].Type == ActionRemoteDelete && plan.Actions[i].Path == tt.sourcePath {
 					hasDelete = true
 				}
-				if plan.Actions[i].Type == synctypes.ActionUpload && plan.Actions[i].Path == tt.targetPath {
+				if plan.Actions[i].Type == ActionUpload && plan.Actions[i].Path == tt.targetPath {
 					hasUpload = true
 				}
 			}
@@ -241,13 +241,13 @@ func TestPlan_LocalUploadUnderShortcutAncestor_HasTargetRootMetadata(t *testing.
 	shortcutDriveID := driveid.New("driveB")
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "shortcut", DriveID: shortcutDriveID, ItemID: "shortcut-root-id", ItemType: synctypes.ItemTypeFolder},
 	})
 
-	changes := []synctypes.PathChanges{{
+	changes := []PathChanges{{
 		Path: "shortcut/new-file.txt",
-		LocalEvents: []synctypes.ChangeEvent{{
+		LocalEvents: []ChangeEvent{{
 			Source:   synctypes.SourceLocal,
 			Type:     synctypes.ChangeCreate,
 			Path:     "shortcut/new-file.txt",
@@ -257,12 +257,12 @@ func TestPlan_LocalUploadUnderShortcutAncestor_HasTargetRootMetadata(t *testing.
 		}},
 	}}
 
-	plan, err := planner.Plan(changes, bl, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, bl, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 	require.Len(t, plan.Actions, 1)
 
 	action := plan.Actions[0]
-	assert.Equal(t, synctypes.ActionUpload, action.Type)
+	assert.Equal(t, ActionUpload, action.Type)
 	assert.Equal(t, shortcutDriveID, action.TargetDriveID)
 	assert.Equal(t, "shortcut-root-id", action.TargetRootItemID)
 	assert.Equal(t, "shortcut", action.TargetRootLocalPath)
@@ -275,14 +275,14 @@ func TestPlan_SameDriveMove_StillWorks(t *testing.T) {
 	driveA := driveid.New("driveA")
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	bl := synctypes.NewBaselineForTest([]*synctypes.BaselineEntry{
+	bl := newBaselineForTest([]*BaselineEntry{
 		{Path: "old-name.txt", DriveID: driveA, ItemID: "item1", ItemType: synctypes.ItemTypeFile, LocalHash: "hash1", RemoteHash: "hash1"},
 	})
 
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "old-name.txt",
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{
 					Source:    synctypes.SourceLocal,
 					Type:      synctypes.ChangeDelete,
@@ -294,7 +294,7 @@ func TestPlan_SameDriveMove_StillWorks(t *testing.T) {
 		},
 		{
 			Path: "new-name.txt",
-			LocalEvents: []synctypes.ChangeEvent{
+			LocalEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceLocal,
 					Type:     synctypes.ChangeCreate,
@@ -307,12 +307,12 @@ func TestPlan_SameDriveMove_StillWorks(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, bl, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, bl, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	mvs := moves(plan)
 	require.Len(t, mvs, 1, "same-drive rename should produce a move action")
-	assert.Equal(t, synctypes.ActionRemoteMove, mvs[0].Type)
+	assert.Equal(t, ActionRemoteMove, mvs[0].Type)
 	assert.Equal(t, "old-name.txt", mvs[0].OldPath)
 	assert.Equal(t, "new-name.txt", mvs[0].Path)
 }

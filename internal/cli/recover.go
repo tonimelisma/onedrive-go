@@ -32,7 +32,7 @@ fresh empty database.`,
 			if err != nil {
 				return fmt.Errorf("read --yes flag: %w", err)
 			}
-			return newRecoverService(mustCLIContext(cmd.Context())).run(cmd, yes)
+			return runRecoverCommand(cmd, mustCLIContext(cmd.Context()), yes)
 		},
 	}
 

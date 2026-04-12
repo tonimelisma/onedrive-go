@@ -202,7 +202,7 @@ func TestSyncStore_RepairIntegritySafePreservesDurableUserIntent(t *testing.T) {
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, store.UpsertHeldDeletes(ctx, []synctypes.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []HeldDeleteRecord{{
 		DriveID:       driveID,
 		ActionType:    synctypes.ActionRemoteDelete,
 		Path:          "/delete-me.txt",
@@ -249,7 +249,7 @@ func TestSyncStore_RepairIntegritySafe_ReleasesLegacyThrottleAccountScope(t *tes
 	driveID := driveid.New(testDriveID)
 	now := time.Now().UTC()
 
-	require.NoError(t, store.UpsertScopeBlock(ctx, &synctypes.ScopeBlock{
+	require.NoError(t, store.UpsertScopeBlock(ctx, &ScopeBlock{
 		Key:           synctypes.SKThrottleAccount(),
 		IssueType:     synctypes.IssueRateLimited,
 		TimingSource:  synctypes.ScopeTimingBackoff,
@@ -257,7 +257,7 @@ func TestSyncStore_RepairIntegritySafe_ReleasesLegacyThrottleAccountScope(t *tes
 		TrialInterval: 30 * time.Second,
 		NextTrialAt:   now.Add(30 * time.Second),
 	}))
-	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
+	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
 		Path:       "shared/rate-limited.txt",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -268,7 +268,7 @@ func TestSyncStore_RepairIntegritySafe_ReleasesLegacyThrottleAccountScope(t *tes
 		ErrMsg:     "rate limited",
 		ScopeKey:   synctypes.SKThrottleAccount(),
 	})
-	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
+	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
 		Path:       "scope-boundary",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -350,7 +350,7 @@ func seedAuditIntegrityProblems(
 	)
 	require.NoError(t, err)
 
-	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
+	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
 		Path:       "docs/CON",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -368,7 +368,7 @@ func seedAuditIntegrityProblems(
 		"docs/CON",
 	)
 	require.NoError(t, err)
-	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
+	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
 		Path:       "service/failure.txt",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -379,7 +379,7 @@ func seedAuditIntegrityProblems(
 		ErrMsg:     "service unavailable",
 		ScopeKey:   synctypes.SKService(),
 	})
-	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
+	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
 		Path:       "auth/account",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -390,7 +390,7 @@ func seedAuditIntegrityProblems(
 		ErrMsg:     "auth required",
 		ScopeKey:   synctypes.SKAuthAccount(),
 	})
-	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
+	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
 		Path:       "Shared/Docs",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -429,7 +429,7 @@ func seedRepairIntegrityProblems(
 	)
 	require.NoError(t, err)
 
-	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
+	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
 		Path:       "docs/CON",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -447,7 +447,7 @@ func seedRepairIntegrityProblems(
 		"docs/CON",
 	)
 	require.NoError(t, err)
-	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
+	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
 		Path:       "Shared/Docs",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -458,7 +458,7 @@ func seedRepairIntegrityProblems(
 		ErrMsg:     "legacy remote boundary",
 		ScopeKey:   synctypes.SKPermRemote("Shared/Docs"),
 	})
-	recordIntegrityFailure(t, store, ctx, &synctypes.SyncFailureParams{
+	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
 		Path:       "Shared/Docs/draft.txt",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
@@ -475,7 +475,7 @@ func recordIntegrityFailure(
 	t *testing.T,
 	store *SyncStore,
 	ctx context.Context,
-	params *synctypes.SyncFailureParams,
+	params *SyncFailureParams,
 ) {
 	t.Helper()
 	require.NoError(t, store.RecordFailure(ctx, params, nil))

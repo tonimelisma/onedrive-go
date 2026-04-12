@@ -13,14 +13,13 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // engineRunner is the interface the Orchestrator uses to run sync passes.
 // Implemented by *sync.Engine; mock implementations are used in tests.
 type engineRunner interface {
-	RunOnce(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) (*synctypes.SyncReport, error)
-	RunWatch(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error
+	RunOnce(ctx context.Context, mode syncengine.Mode, opts syncengine.RunOptions) (*syncengine.Report, error)
+	RunWatch(ctx context.Context, mode syncengine.Mode, opts syncengine.WatchOptions) error
 	Close(ctx context.Context) error
 }
 
@@ -87,14 +86,14 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 // driveWork pairs a DriveRunner with the sync function it will execute.
 type driveWork struct {
 	runner *DriveRunner
-	fn     func(context.Context) (*synctypes.SyncReport, error)
+	fn     func(context.Context) (*syncengine.Report, error)
 }
 
 // RunOnce executes a single sync pass for all configured drives. Each drive
 // runs in its own goroutine via a DriveRunner with panic recovery. RunOnce
 // never returns an error — individual drive errors are captured in each
 // synctypes.DriveReport. The caller inspects reports to determine success or failure.
-func (o *Orchestrator) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) []*synctypes.DriveReport {
+func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.Mode, opts syncengine.RunOptions) []*DriveReport {
 	drives := o.cfg.Drives
 	if len(drives) == 0 {
 		return nil
@@ -124,7 +123,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode synctypes.SyncMode, opt
 	work := o.prepareDriveWork(ctx, mode, opts)
 
 	// Run all drives concurrently.
-	reports := make([]*synctypes.DriveReport, len(work))
+	reports := make([]*DriveReport, len(work))
 	var wg gosync.WaitGroup
 
 	for i, w := range work {
@@ -143,10 +142,10 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode synctypes.SyncMode, opt
 	return reports
 }
 
-func controlFailureReports(drives []*config.ResolvedDrive, err error) []*synctypes.DriveReport {
-	reports := make([]*synctypes.DriveReport, len(drives))
+func controlFailureReports(drives []*config.ResolvedDrive, err error) []*DriveReport {
+	reports := make([]*DriveReport, len(drives))
 	for i, rd := range drives {
-		reports[i] = &synctypes.DriveReport{
+		reports[i] = &DriveReport{
 			CanonicalID: rd.CanonicalID,
 			DisplayName: rd.DisplayName,
 			Err:         err,
@@ -158,7 +157,7 @@ func controlFailureReports(drives []*config.ResolvedDrive, err error) []*synctyp
 // prepareDriveWork resolves sessions and builds engines for each configured
 // drive. Errors are captured as closures that return the error when the
 // DriveRunner executes — no early abort for individual drive failures.
-func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) []driveWork {
+func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode syncengine.Mode, opts syncengine.RunOptions) []driveWork {
 	drives := o.cfg.Drives
 	work := make([]driveWork, 0, len(drives))
 
@@ -170,7 +169,7 @@ func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode synctypes.Sync
 
 			work = append(work, driveWork{
 				runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
-				fn: func(_ context.Context) (*synctypes.SyncReport, error) {
+				fn: func(_ context.Context) (*syncengine.Report, error) {
 					return nil, fmt.Errorf("session error for drive %s: %w", capturedCID, capturedErr)
 				},
 			})
@@ -188,7 +187,7 @@ func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode synctypes.Sync
 // buildEngineWork creates a driveWork item for a successfully-resolved drive.
 // If engine creation fails, the error is captured and reported at run time.
 func (o *Orchestrator) buildEngineWork(
-	ctx context.Context, rd *config.ResolvedDrive, session *driveops.Session, mode synctypes.SyncMode, opts synctypes.RunOpts,
+	ctx context.Context, rd *config.ResolvedDrive, session *driveops.Session, mode syncengine.Mode, opts syncengine.RunOptions,
 ) driveWork {
 	driveCollector := o.registerDrivePerfCollector(rd.CanonicalID.String())
 	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
@@ -204,7 +203,7 @@ func (o *Orchestrator) buildEngineWork(
 
 		return driveWork{
 			runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
-			fn: func(_ context.Context) (*synctypes.SyncReport, error) {
+			fn: func(_ context.Context) (*syncengine.Report, error) {
 				return nil, capturedErr
 			},
 		}
@@ -212,7 +211,7 @@ func (o *Orchestrator) buildEngineWork(
 
 	return driveWork{
 		runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
-		fn: func(c context.Context) (*synctypes.SyncReport, error) {
+		fn: func(c context.Context) (*syncengine.Report, error) {
 			defer func() {
 				o.removeDrivePerfCollector(rd.CanonicalID.String())
 				if closeErr := engine.Close(c); closeErr != nil {
@@ -244,7 +243,7 @@ type watchRunner struct {
 // control-socket reload, it re-reads the config file and diffs the active drive
 // set: stopped drives are removed, new drives are started. Returns nil on
 // clean context cancel.
-func (o *Orchestrator) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error {
+func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.Mode, opts syncengine.WatchOptions) error {
 	drives := o.cfg.Drives
 	if len(drives) == 0 {
 		return fmt.Errorf("sync: no drives configured")
@@ -331,7 +330,7 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode synctypes.SyncMode, op
 
 // startWatchRunner creates and starts a watch-mode engine for a single drive.
 func (o *Orchestrator) startWatchRunner(
-	ctx context.Context, rd *config.ResolvedDrive, mode synctypes.SyncMode, opts synctypes.WatchOpts,
+	ctx context.Context, rd *config.ResolvedDrive, mode syncengine.Mode, opts syncengine.WatchOptions,
 ) (*watchRunner, error) {
 	session, err := o.cfg.Provider.Session(ctx, rd)
 	if err != nil {
@@ -406,7 +405,7 @@ func (o *Orchestrator) removeDrivePerfCollector(canonicalID string) {
 // reload re-reads the config file, diffs the active drive set against running
 // runners, stops removed/paused drives, and starts newly added/resumed drives.
 func (o *Orchestrator) reload(
-	ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts,
+	ctx context.Context, mode syncengine.Mode, opts syncengine.WatchOptions,
 	runners map[driveid.CanonicalID]*watchRunner,
 ) {
 	newCfg, err := config.LoadOrDefault(o.cfg.Holder.Path(), o.logger)

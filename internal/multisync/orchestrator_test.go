@@ -23,6 +23,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
@@ -266,7 +267,7 @@ func TestRunOnce_ZeroDrives(t *testing.T) {
 	cfg := testOrchestratorConfig(t)
 	orch := NewOrchestrator(cfg)
 
-	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	assert.Empty(t, reports)
 }
 
@@ -276,8 +277,8 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
-	expectedReport := &synctypes.SyncReport{
-		Mode:      synctypes.SyncBidirectional,
+	expectedReport := &syncengine.Report{
+		Mode:      syncengine.SyncBidirectional,
 		Downloads: 5,
 	}
 
@@ -286,7 +287,7 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 		return &mockEngine{report: expectedReport}, nil
 	}
 
-	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, reports, 1)
 	assert.Equal(t, rd.CanonicalID, reports[0].CanonicalID)
 	assert.Equal(t, "Test", reports[0].DisplayName)
@@ -303,7 +304,7 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
 	errDelta := errors.New("delta gone")
-	okReport := &synctypes.SyncReport{Mode: synctypes.SyncBidirectional, Uploads: 2}
+	okReport := &syncengine.Report{Mode: syncengine.SyncBidirectional, Uploads: 2}
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
@@ -314,11 +315,11 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 		return &mockEngine{report: okReport}, nil
 	}
 
-	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, reports, 2)
 
 	// Find each drive's report by canonical ID.
-	var failReport, okDriveReport *synctypes.DriveReport
+	var failReport, okDriveReport *DriveReport
 	for i := range reports {
 		if reports[i].CanonicalID == rd1.CanonicalID {
 			failReport = reports[i]
@@ -343,7 +344,7 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 	cfg := testOrchestratorConfig(t, rd1, rd2)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
-	stableReport := &synctypes.SyncReport{Mode: synctypes.SyncBidirectional, Downloads: 1}
+	stableReport := &syncengine.Report{Mode: syncengine.SyncBidirectional, Downloads: 1}
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
@@ -354,10 +355,10 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 		return &mockEngine{report: stableReport}, nil
 	}
 
-	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, reports, 2)
 
-	var panicReport, stableDriveReport *synctypes.DriveReport
+	var panicReport, stableDriveReport *DriveReport
 	for i := range reports {
 		if reports[i].CanonicalID == rd1.CanonicalID {
 			panicReport = reports[i]
@@ -387,10 +388,10 @@ func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
 	var captured *engineFactoryRequest
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		captured = &req
-		return &mockEngine{report: &synctypes.SyncReport{}}, nil
+		return &mockEngine{report: &syncengine.Report{}}, nil
 	}
 
-	work := orch.prepareDriveWork(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	work := orch.prepareDriveWork(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, work, 1)
 
 	_, err := work[0].fn(t.Context())
@@ -416,7 +417,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		captured = &req
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
 				select {
 				case started <- struct{}{}:
 				default:
@@ -428,7 +429,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	wr, err := orch.startWatchRunner(ctx, rd, synctypes.SyncDownloadOnly, synctypes.WatchOpts{})
+	wr, err := orch.startWatchRunner(ctx, rd, syncengine.SyncDownloadOnly, syncengine.WatchOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.True(t, captured.Drive.Websocket)
@@ -464,7 +465,7 @@ func TestRunOnce_ContextCanceled(t *testing.T) {
 		return &mockEngine{err: context.Canceled}, nil
 	}
 
-	reports := orch.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	reports := orch.RunOnce(ctx, syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, reports, 1)
 	assert.ErrorIs(t, reports[0].Err, context.Canceled)
 }
@@ -480,7 +481,7 @@ func TestRunOnce_EngineFactoryError(t *testing.T) {
 		return nil, errors.New("db init failed")
 	}
 
-	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, reports, 1)
 	require.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "db init failed")
@@ -493,7 +494,7 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 	cfg := testOrchestratorConfig(t, rd1, rd2)
 	cfg.Provider.TokenSourceFn = stubTokenSourceFn
 
-	okReport := &synctypes.SyncReport{Mode: synctypes.SyncBidirectional, Downloads: 1}
+	okReport := &syncengine.Report{Mode: syncengine.SyncBidirectional, Downloads: 1}
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
@@ -504,10 +505,10 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 		return &mockEngine{report: okReport}, nil
 	}
 
-	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, reports, 2)
 
-	var failedReport, healthyReport *synctypes.DriveReport
+	var failedReport, healthyReport *DriveReport
 	for i := range reports {
 		switch reports[i].CanonicalID {
 		case rd1.CanonicalID:
@@ -538,7 +539,7 @@ func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 
-	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, reports, 1)
 	require.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "token")
@@ -563,7 +564,7 @@ func TestRunOnce_ZeroDriveID_ReportsError(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 
-	reports := orch.RunOnce(t.Context(), synctypes.SyncBidirectional, synctypes.RunOpts{})
+	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, reports, 1)
 	require.Error(t, reports[0].Err)
 	assert.Contains(t, reports[0].Err.Error(), "drive ID not resolved")
@@ -584,11 +585,11 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runOnceFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.RunOpts) (*synctypes.SyncReport, error) {
+			runOnceFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 				close(started)
 				select {
 				case <-release:
-					return &synctypes.SyncReport{Mode: synctypes.SyncBidirectional}, nil
+					return &syncengine.Report{Mode: syncengine.SyncBidirectional}, nil
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				}
@@ -598,9 +599,9 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	reportsCh := make(chan []*synctypes.DriveReport, 1)
+	reportsCh := make(chan []*DriveReport, 1)
 	go func() {
-		reportsCh <- orch.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+		reportsCh <- orch.RunOnce(ctx, syncengine.SyncBidirectional, syncengine.RunOptions{})
 	}()
 
 	select {
@@ -611,7 +612,7 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 	status := getControlStatus(t, cfg.ControlSocketPath)
 	assert.Equal(t, synccontrol.OwnerModeOneShot, status.OwnerMode)
 
-	watchErr := orch.RunWatch(t.Context(), synctypes.SyncBidirectional, synctypes.WatchOpts{})
+	watchErr := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	require.Error(t, watchErr)
 	var inUse *ControlSocketInUseError
 	require.ErrorAs(t, watchErr, &inUse)
@@ -630,15 +631,15 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 
 // mockEngine implements engineRunner for unit tests.
 type mockEngine struct {
-	report      *synctypes.SyncReport
+	report      *syncengine.Report
 	err         error
 	shouldPanic bool
 	closed      bool
-	runOnceFn   func(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) (*synctypes.SyncReport, error)
-	runWatchFn  func(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error
+	runOnceFn   func(ctx context.Context, mode syncengine.Mode, opts syncengine.RunOptions) (*syncengine.Report, error)
+	runWatchFn  func(ctx context.Context, mode syncengine.Mode, opts syncengine.WatchOptions) error
 }
 
-func (m *mockEngine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) (*synctypes.SyncReport, error) {
+func (m *mockEngine) RunOnce(ctx context.Context, mode syncengine.Mode, opts syncengine.RunOptions) (*syncengine.Report, error) {
 	if m.shouldPanic {
 		panic("mock engine panic")
 	}
@@ -649,7 +650,7 @@ func (m *mockEngine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts 
 	return m.report, m.err
 }
 
-func (m *mockEngine) RunWatch(ctx context.Context, mode synctypes.SyncMode, opts synctypes.WatchOpts) error {
+func (m *mockEngine) RunWatch(ctx context.Context, mode syncengine.Mode, opts syncengine.WatchOptions) error {
 	if m.runWatchFn != nil {
 		return m.runWatchFn(ctx, mode, opts)
 	}
@@ -680,7 +681,7 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
 				close(watchStarted)
 				<-ctx.Done()
 				return ctx.Err()
@@ -693,7 +694,7 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- orch.RunWatch(ctx, synctypes.SyncBidirectional, synctypes.WatchOpts{})
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
 	// Wait for watch to start, then shut down.
@@ -727,7 +728,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				return ctx.Err()
@@ -740,7 +741,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- orch.RunWatch(ctx, synctypes.SyncBidirectional, synctypes.WatchOpts{})
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
 	// Wait until both drives have started.
@@ -771,7 +772,7 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	watchStarted := make(chan struct{})
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
 				close(watchStarted)
 				<-ctx.Done()
 				return ctx.Err()
@@ -781,7 +782,7 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- orch.RunWatch(t.Context(), synctypes.SyncBidirectional, synctypes.WatchOpts{})
+		errCh <- orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
 	select {
@@ -874,7 +875,7 @@ func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
 	watchStarted := make(chan struct{})
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
 				close(watchStarted)
 				<-ctx.Done()
 				return ctx.Err()
@@ -884,7 +885,7 @@ func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- orch.RunWatch(t.Context(), synctypes.SyncBidirectional, synctypes.WatchOpts{})
+		errCh <- orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
 	select {
@@ -960,7 +961,7 @@ func TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector(t *testing.
 	watchStarted := make(chan struct{})
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
 				close(watchStarted)
 				<-ctx.Done()
 				return ctx.Err()
@@ -970,7 +971,7 @@ func TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector(t *testing.
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- orch.RunWatch(t.Context(), synctypes.SyncBidirectional, synctypes.WatchOpts{})
+		errCh <- orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
 	select {
@@ -1071,7 +1072,7 @@ func seedControlSocketIntentStore(t *testing.T, rd *config.ResolvedDrive) {
 
 	store, err := syncstore.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
 	require.NoError(t, err)
-	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []synctypes.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []syncstore.HeldDeleteRecord{{
 		DriveID:       rd.DriveID,
 		ItemID:        "item-delete",
 		Path:          "delete-me.txt",
@@ -1109,7 +1110,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				return ctx.Err()
@@ -1122,7 +1123,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- orch.RunWatch(ctx, synctypes.SyncBidirectional, synctypes.WatchOpts{})
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
 	// Wait for first drive to start.
@@ -1165,7 +1166,7 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				stopped.Add(1)
@@ -1179,7 +1180,7 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- orch.RunWatch(ctx, synctypes.SyncBidirectional, synctypes.WatchOpts{})
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
 	// Wait for both drives to start.
@@ -1221,7 +1222,7 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				stopped.Add(1)
@@ -1235,7 +1236,7 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- orch.RunWatch(ctx, synctypes.SyncBidirectional, synctypes.WatchOpts{})
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
 	// Wait for drive to start.
@@ -1276,7 +1277,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				return ctx.Err()
@@ -1289,7 +1290,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- orch.RunWatch(ctx, synctypes.SyncBidirectional, synctypes.WatchOpts{})
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
 	// Wait for drive to start.
@@ -1335,7 +1336,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ synctypes.SyncMode, _ synctypes.WatchOpts) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				stopped.Add(1)
@@ -1349,7 +1350,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- orch.RunWatch(ctx, synctypes.SyncBidirectional, synctypes.WatchOpts{})
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
 	// Wait for drive to start.
@@ -1391,7 +1392,7 @@ func TestOrchestrator_RunWatch_ZeroDrives(t *testing.T) {
 	cfg := testOrchestratorConfig(t)
 	orch := NewOrchestrator(cfg)
 
-	err := orch.RunWatch(t.Context(), synctypes.SyncBidirectional, synctypes.WatchOpts{})
+	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no drives")
 }

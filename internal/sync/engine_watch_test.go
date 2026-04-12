@@ -66,7 +66,7 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncBidirectional, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncBidirectional, WatchOptions{
 			// Use very long intervals so observers don't fire during test.
 			PollInterval: 1 * time.Hour,
 			Debounce:     1 * time.Hour,
@@ -110,7 +110,7 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 	eng.enableWebsocket = true
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, opts SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, opts SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{
 			started: started,
 			runFn: func(ctx context.Context, _ chan<- struct{}) error {
@@ -141,7 +141,7 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
 			PollInterval: time.Hour,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -185,14 +185,14 @@ func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{started: started}
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
 			PollInterval: time.Hour,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -234,14 +234,14 @@ func TestRunWatch_ScopedRootKeepsPollingOnly(t *testing.T) {
 	eng.rootItemID = "scoped-root"
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{started: started}
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
 			PollInterval: time.Hour,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -292,14 +292,14 @@ func TestRunWatch_SyncPathsScopedPollingDisablesWebsocket(t *testing.T) {
 
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ synctypes.SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{started: started}
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
 			PollInterval: time.Hour,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -382,7 +382,7 @@ func TestRunWatch_RootDeltaSteadyStateProcessesShortcutFollowUp(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
 			PollInterval: time.Hour,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -429,7 +429,7 @@ func TestProcessCommittedScopedWatchBatch_ProcessesShortcutFollowUp(t *testing.T
 	rt.setScopeSnapshot(syncscope.Snapshot{}, 1)
 
 	events, committed := rt.processCommittedScopedWatchBatch(t.Context(), emptyBaseline(), remoteFetchResult{
-		events: []synctypes.ChangeEvent{{
+		events: []ChangeEvent{{
 			Source:        synctypes.SourceRemote,
 			Type:          synctypes.ChangeShortcut,
 			DriveID:       driveID,
@@ -520,7 +520,7 @@ func TestRunWatch_SyncPathsSteadyStateProcessesShortcutFollowUp(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
 			PollInterval: time.Hour,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -555,7 +555,7 @@ func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
 			PollInterval: time.Hour,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -607,7 +607,7 @@ func TestRunWatch_UploadOnly_SkipsRemoteObserver(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
 			PollInterval: 50 * time.Millisecond,
 			Debounce:     10 * time.Millisecond,
 		})
@@ -656,10 +656,10 @@ func TestRunWatch_ProcessBatch_DeleteSafety(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a large baseline so that a batch of deletes triggers delete safety.
-	seedOutcomes := make([]synctypes.Outcome, 20)
+	seedOutcomes := make([]ExecutionResult, 20)
 	for i := range 20 {
-		seedOutcomes[i] = synctypes.Outcome{
-			Action:          synctypes.ActionDownload,
+		seedOutcomes[i] = ExecutionResult{
+			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
@@ -680,11 +680,11 @@ func TestRunWatch_ProcessBatch_DeleteSafety(t *testing.T) {
 	require.NoError(t, err, "Load")
 
 	// Build a batch that would delete all 20 files.
-	var batch []synctypes.PathChanges
+	var batch []PathChanges
 	for _, o := range seedOutcomes {
-		batch = append(batch, synctypes.PathChanges{
+		batch = append(batch, PathChanges{
 			Path: o.Path,
-			RemoteEvents: []synctypes.ChangeEvent{{
+			RemoteEvents: []ChangeEvent{{
 				Source:    synctypes.SourceRemote,
 				Type:      synctypes.ChangeDelete,
 				Path:      o.Path,
@@ -699,7 +699,7 @@ func TestRunWatch_ProcessBatch_DeleteSafety(t *testing.T) {
 	// planner-level check is disabled so the engine can record durable
 	// held-delete intent and keep non-delete work flowing.
 	testWatchRuntime(t, eng).deleteCounter = NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &synctypes.SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
+	safety := &SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
@@ -737,10 +737,10 @@ func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 
 	// Seed baseline with files that will be "deleted" plus one path that
 	// will produce a download (new remote file).
-	seedOutcomes := make([]synctypes.Outcome, 15)
+	seedOutcomes := make([]ExecutionResult, 15)
 	for i := range 15 {
-		seedOutcomes[i] = synctypes.Outcome{
-			Action:          synctypes.ActionDownload,
+		seedOutcomes[i] = ExecutionResult{
+			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
@@ -761,11 +761,11 @@ func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 	require.NoError(t, err, "Load")
 
 	// Build batch: 15 deletes + 1 new remote file (download).
-	var batch []synctypes.PathChanges
+	var batch []PathChanges
 	for _, o := range seedOutcomes {
-		batch = append(batch, synctypes.PathChanges{
+		batch = append(batch, PathChanges{
 			Path: o.Path,
-			RemoteEvents: []synctypes.ChangeEvent{{
+			RemoteEvents: []ChangeEvent{{
 				Source:    synctypes.SourceRemote,
 				Type:      synctypes.ChangeDelete,
 				Path:      o.Path,
@@ -775,9 +775,9 @@ func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 	}
 
 	// Add a new remote file that should produce a download.
-	batch = append(batch, synctypes.PathChanges{
+	batch = append(batch, PathChanges{
 		Path: "newfile.txt",
-		RemoteEvents: []synctypes.ChangeEvent{{
+		RemoteEvents: []ChangeEvent{{
 			Source:   synctypes.SourceRemote,
 			Type:     synctypes.ChangeCreate,
 			Path:     "newfile.txt",
@@ -793,7 +793,7 @@ func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 
 	// Install counter with threshold=10. 15 deletes > 10 → trips.
 	testWatchRuntime(t, eng).deleteCounter = NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &synctypes.SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
+	safety := &SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
@@ -801,7 +801,7 @@ func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "counter should be held")
 
 	require.Len(t, outbox, 1, "one non-delete action should be admitted into the watch loop outbox")
-	assert.Equal(t, synctypes.ActionDownload, outbox[0].Action.Type)
+	assert.Equal(t, ActionDownload, outbox[0].Action.Type)
 	assert.Equal(t, "newfile.txt", outbox[0].Action.Path)
 
 	// 15 held delete entries should exist.
@@ -830,10 +830,10 @@ func TestRunWatch_ProcessBatch_DeleteSafety_BelowThreshold(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline with 5 files.
-	seedOutcomes := make([]synctypes.Outcome, 5)
+	seedOutcomes := make([]ExecutionResult, 5)
 	for i := range 5 {
-		seedOutcomes[i] = synctypes.Outcome{
-			Action:          synctypes.ActionDownload,
+		seedOutcomes[i] = ExecutionResult{
+			Action:          ActionDownload,
 			Success:         true,
 			Path:            fmt.Sprintf("file%02d.txt", i),
 			DriveID:         driveID,
@@ -854,11 +854,11 @@ func TestRunWatch_ProcessBatch_DeleteSafety_BelowThreshold(t *testing.T) {
 	require.NoError(t, err, "Load")
 
 	// Build batch: 5 deletes — below threshold of 10.
-	var batch []synctypes.PathChanges
+	var batch []PathChanges
 	for _, o := range seedOutcomes {
-		batch = append(batch, synctypes.PathChanges{
+		batch = append(batch, PathChanges{
 			Path: o.Path,
-			RemoteEvents: []synctypes.ChangeEvent{{
+			RemoteEvents: []ChangeEvent{{
 				Source:    synctypes.SourceRemote,
 				Type:      synctypes.ChangeDelete,
 				Path:      o.Path,
@@ -870,7 +870,7 @@ func TestRunWatch_ProcessBatch_DeleteSafety_BelowThreshold(t *testing.T) {
 	setupWatchEngine(t, eng)
 
 	testWatchRuntime(t, eng).deleteCounter = NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &synctypes.SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
+	safety := &SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
 
 	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
 
@@ -879,7 +879,7 @@ func TestRunWatch_ProcessBatch_DeleteSafety_BelowThreshold(t *testing.T) {
 
 	require.Len(t, outbox, 5, "all 5 delete actions should be admitted into the watch loop outbox")
 	for i := range outbox {
-		assert.Equal(t, synctypes.ActionLocalDelete, outbox[i].Action.Type)
+		assert.Equal(t, ActionLocalDelete, outbox[i].Action.Type)
 	}
 }
 
@@ -941,9 +941,9 @@ func TestEngine_HandleExternalChanges_DeleteSafetyClearance(t *testing.T) {
 	require.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld())
 
 	// Record held-delete rows.
-	heldDeletes := []synctypes.HeldDeleteRecord{
-		{Path: "file1.txt", DriveID: driveID, ItemID: "item-1", ActionType: synctypes.ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
-		{Path: "file2.txt", DriveID: driveID, ItemID: "item-2", ActionType: synctypes.ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
+	heldDeletes := []HeldDeleteRecord{
+		{Path: "file1.txt", DriveID: driveID, ItemID: "item-1", ActionType: ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
+		{Path: "file2.txt", DriveID: driveID, ItemID: "item-2", ActionType: ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
 	}
 	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, heldDeletes))
 
@@ -984,14 +984,14 @@ func TestEngine_HandleExternalChanges_PartialClear(t *testing.T) {
 	require.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld())
 
 	// Record two held-delete entries.
-	heldDeletes := []synctypes.HeldDeleteRecord{
-		{Path: "file1.txt", DriveID: driveID, ItemID: "item-1", ActionType: synctypes.ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
-		{Path: "file2.txt", DriveID: driveID, ItemID: "item-2", ActionType: synctypes.ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
+	heldDeletes := []HeldDeleteRecord{
+		{Path: "file1.txt", DriveID: driveID, ItemID: "item-1", ActionType: ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
+		{Path: "file2.txt", DriveID: driveID, ItemID: "item-2", ActionType: ActionRemoteDelete, State: synctypes.HeldDeleteStateHeld},
 	}
 	require.NoError(t, eng.baseline.UpsertHeldDeletes(ctx, heldDeletes))
 
 	// Move only file1.txt out of held state — one entry remains held.
-	require.NoError(t, eng.baseline.DeleteHeldDelete(ctx, driveID, synctypes.ActionRemoteDelete, "file1.txt", "item-1"))
+	require.NoError(t, eng.baseline.DeleteHeldDelete(ctx, driveID, ActionRemoteDelete, "file1.txt", "item-1"))
 
 	handleExternalChangesForTest(t, eng, ctx)
 	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "should remain held with one entry still present")
@@ -1018,33 +1018,33 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	clearedScope := synctypes.SKPermRemote("Shared/TeamDocs")
 	retainedScope := synctypes.SKPermRemote("Shared/Other")
 
-	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       clearedScope,
 		IssueType: synctypes.IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFunc(),
 	})
-	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       retainedScope,
 		IssueType: synctypes.IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFunc(),
 	})
 
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/TeamDocs/file.txt",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
-		ActionType: synctypes.ActionUpload,
+		ActionType: ActionUpload,
 		Role:       synctypes.FailureRoleHeld,
 		Category:   synctypes.CategoryTransient,
 		IssueType:  synctypes.IssueSharedFolderBlocked,
 		ErrMsg:     "blocked by remote permission scope",
 		ScopeKey:   clearedScope,
 	}, nil))
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "Shared/Other/file.txt",
 		DriveID:    driveID,
 		Direction:  synctypes.DirectionUpload,
-		ActionType: synctypes.ActionUpload,
+		ActionType: ActionUpload,
 		Role:       synctypes.FailureRoleHeld,
 		Category:   synctypes.CategoryTransient,
 		IssueType:  synctypes.IssueSharedFolderBlocked,
@@ -1096,8 +1096,8 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline with a synced file.
-	seedOutcomes := []synctypes.Outcome{{
-		Action:          synctypes.ActionDownload,
+	seedOutcomes := []ExecutionResult{{
+		Action:          ActionDownload,
 		Success:         true,
 		Path:            "already-synced.txt",
 		DriveID:         driveID,
@@ -1116,9 +1116,9 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	require.NoError(t, err, "Load")
 
 	// A "change" that matches baseline exactly → planner produces empty plan.
-	batch := []synctypes.PathChanges{{
+	batch := []PathChanges{{
 		Path: "already-synced.txt",
-		RemoteEvents: []synctypes.ChangeEvent{{
+		RemoteEvents: []ChangeEvent{{
 			Source:  synctypes.SourceRemote,
 			Type:    synctypes.ChangeModify,
 			Path:    "already-synced.txt",
@@ -1130,7 +1130,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	}}
 
 	setupWatchEngine(t, eng)
-	safety := synctypes.DefaultSafetyConfig()
+	safety := DefaultSafetyConfig()
 
 	// Should return without error or dispatching actions.
 	processBatchForTest(t, eng, ctx, batch, bl, safety)
@@ -1158,12 +1158,12 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	require.NoError(t, err, "Load")
 
 	setupWatchEngine(t, eng)
-	safety := synctypes.DefaultSafetyConfig()
+	safety := DefaultSafetyConfig()
 
 	// First batch: download a file.
-	batch1 := []synctypes.PathChanges{{
+	batch1 := []PathChanges{{
 		Path: "overlapping.txt",
-		RemoteEvents: []synctypes.ChangeEvent{{
+		RemoteEvents: []ChangeEvent{{
 			Source:  synctypes.SourceRemote,
 			Type:    synctypes.ChangeCreate,
 			Path:    "overlapping.txt",
@@ -1180,9 +1180,9 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	require.True(t, testWatchRuntime(t, eng).depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after first batch")
 
 	// Second batch: same path, different content. Should cancel the first.
-	batch2 := []synctypes.PathChanges{{
+	batch2 := []PathChanges{{
 		Path: "overlapping.txt",
-		RemoteEvents: []synctypes.ChangeEvent{{
+		RemoteEvents: []ChangeEvent{{
 			Source:  synctypes.SourceRemote,
 			Type:    synctypes.ChangeModify,
 			Path:    "overlapping.txt",
@@ -1224,7 +1224,7 @@ func TestRunWatch_DownloadOnly_SkipsLocalObserver(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncDownloadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
 			PollInterval: 1 * time.Hour,
 			Debounce:     10 * time.Millisecond,
 		})
@@ -1283,7 +1283,7 @@ func TestRunWatch_AllObserversDead_ReturnsError(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(t.Context(), synctypes.SyncUploadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(t.Context(), SyncUploadOnly, WatchOptions{
 			PollInterval: 1 * time.Hour,
 			Debounce:     10 * time.Millisecond,
 		})
@@ -1335,7 +1335,7 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
 			PollInterval: 100 * time.Millisecond, // short for fast test
 			Debounce:     10 * time.Millisecond,
 		})
@@ -1370,7 +1370,7 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	installManualClock(eng.Engine, clock)
 
 	ctx := t.Context()
-	setTestScopeBlock(t, eng, &synctypes.ScopeBlock{
+	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:           synctypes.SKService(),
 		IssueType:     synctypes.IssueServiceOutage,
 		TimingSource:  synctypes.ScopeTimingServerRetryAfter,
@@ -1379,11 +1379,11 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 		NextTrialAt:   eng.nowFunc().Add(5 * time.Second),
 	})
 
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &synctypes.SyncFailureParams{
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "retry.txt",
 		DriveID:    eng.driveID,
 		Direction:  synctypes.DirectionDownload,
-		ActionType: synctypes.ActionDownload,
+		ActionType: ActionDownload,
 		Role:       synctypes.FailureRoleItem,
 		Category:   synctypes.CategoryTransient,
 		ErrMsg:     "retry later",
@@ -1393,7 +1393,7 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	watchCtx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(watchCtx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(watchCtx, SyncUploadOnly, WatchOptions{
 			PollInterval: 1 * time.Hour,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -1512,7 +1512,7 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(watchCtx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(watchCtx, SyncUploadOnly, WatchOptions{
 			PollInterval:      1 * time.Hour,
 			Debounce:          5 * time.Millisecond,
 			ReconcileInterval: 15 * time.Minute,
@@ -1606,7 +1606,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(ctx, synctypes.SyncUploadOnly, synctypes.WatchOpts{
+		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
 			PollInterval: 1 * time.Second,
 			Debounce:     5 * time.Millisecond,
 		})
@@ -1648,8 +1648,8 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a conflict.
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "fail-upload.txt",
 		DriveID:      driveID,
@@ -1673,7 +1673,7 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	require.NoError(t, err, "ListConflicts after resolve")
 	assert.Empty(t, remaining, "conflict should be resolved once the chosen layout exists")
 
-	report, runErr := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, runErr)
 	require.NotNil(t, report)
 
@@ -1681,7 +1681,7 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, failures)
 	assert.Equal(t, "fail-upload.txt", failures[0].Path)
-	assert.Equal(t, synctypes.ActionUpload, failures[0].ActionType)
+	assert.Equal(t, ActionUpload, failures[0].ActionType)
 	assert.Contains(t, failures[0].LastError, "upload failed")
 }
 
@@ -1711,8 +1711,8 @@ func TestResolveConflict_KeepLocal_FollowUpSyncCommitsToBaseline(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "baseline-commit.txt",
 		DriveID:      driveID,
@@ -1732,7 +1732,7 @@ func TestResolveConflict_KeepLocal_FollowUpSyncCommitsToBaseline(t *testing.T) {
 
 	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, synctypes.ResolutionKeepLocal))
 
-	report, runErr := eng.RunOnce(ctx, synctypes.SyncBidirectional, synctypes.RunOpts{})
+	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, runErr)
 	require.NotNil(t, report)
 
@@ -1762,8 +1762,8 @@ func TestResolveConflict_KeepLocal_MinimalRecord_NoPanic(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
 	ctx := t.Context()
 
-	outcomes := []synctypes.Outcome{{
-		Action:       synctypes.ActionConflict,
+	outcomes := []ExecutionResult{{
+		Action:       ActionConflict,
 		Success:      true,
 		Path:         "minimal-conflict.txt",
 		DriveID:      driveID,
@@ -1799,15 +1799,15 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 
 	// Create a plan with mismatched Actions and Deps.
-	plan := &synctypes.ActionPlan{
-		Actions: []synctypes.Action{
-			{Type: synctypes.ActionDownload, Path: "file.txt"},
-			{Type: synctypes.ActionDownload, Path: "file2.txt"},
+	plan := &ActionPlan{
+		Actions: []Action{
+			{Type: ActionDownload, Path: "file.txt"},
+			{Type: ActionDownload, Path: "file2.txt"},
 		},
 		Deps: [][]int{{1}}, // only 1 dep entry for 2 actions
 	}
 
-	report := &synctypes.SyncReport{}
+	report := &Report{}
 
 	// Should return cleanly without panic.
 	require.NoError(t, newOneShotRunner(eng.Engine).executePlan(t.Context(), plan, report, nil))
@@ -1840,7 +1840,7 @@ func TestEngine_Close_CleansStaleAndIsIdempotent(t *testing.T) {
 	logger := testLogger(t)
 	driveID := driveid.New(engineTestDriveID)
 
-	eng, err := newEngine(t.Context(), &synctypes.EngineConfig{
+	eng, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  syncRoot,
 		DataDir:   dataDir,

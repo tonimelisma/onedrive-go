@@ -23,7 +23,7 @@ func assertPerSideHashNoLoop(t *testing.T, path, localHash, remoteHash string) {
 	t.Helper()
 
 	planner := NewPlanner(synctest.TestLogger(t))
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:       path,
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
@@ -32,9 +32,9 @@ func assertPerSideHashNoLoop(t *testing.T, path, localHash, remoteHash string) {
 		RemoteHash: remoteHash,
 	})
 
-	changes := []synctypes.PathChanges{{
+	changes := []PathChanges{{
 		Path: path,
-		RemoteEvents: []synctypes.ChangeEvent{{
+		RemoteEvents: []ChangeEvent{{
 			Source:   synctypes.SourceRemote,
 			Type:     synctypes.ChangeModify,
 			Path:     path,
@@ -43,7 +43,7 @@ func assertPerSideHashNoLoop(t *testing.T, path, localHash, remoteHash string) {
 			ItemID:   "item1",
 			DriveID:  driveid.New(synctest.TestDriveID),
 		}},
-		LocalEvents: []synctypes.ChangeEvent{{
+		LocalEvents: []ChangeEvent{{
 			Source:   synctypes.SourceLocal,
 			Type:     synctypes.ChangeModify,
 			Path:     path,
@@ -52,10 +52,10 @@ func assertPerSideHashNoLoop(t *testing.T, path, localHash, remoteHash string) {
 		}},
 	}}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
-	assert.Empty(t, synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload))
-	assert.Empty(t, synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload))
+	assert.Empty(t, actionsOfType(plan.Actions, ActionUpload))
+	assert.Empty(t, actionsOfType(plan.Actions, ActionDownload))
 }
 
 // Validates: R-6.7.4
@@ -83,7 +83,7 @@ func TestPerSideHash_PreventsReDownloadLoop(t *testing.T) {
 // produced in every run. This proves the per-side hash scheme prevents
 // infinite sync loops caused by SharePoint enrichment.
 func TestPerSideHash_5RunStabilityProof(t *testing.T) {
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:       "stable.docx",
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
@@ -95,10 +95,10 @@ func TestPerSideHash_5RunStabilityProof(t *testing.T) {
 	for run := range 5 {
 		planner := NewPlanner(synctest.TestLogger(t))
 
-		changes := []synctypes.PathChanges{
+		changes := []PathChanges{
 			{
 				Path: "stable.docx",
-				RemoteEvents: []synctypes.ChangeEvent{
+				RemoteEvents: []ChangeEvent{
 					{
 						Source:   synctypes.SourceRemote,
 						Type:     synctypes.ChangeModify,
@@ -109,7 +109,7 @@ func TestPerSideHash_5RunStabilityProof(t *testing.T) {
 						DriveID:  driveid.New(synctest.TestDriveID),
 					},
 				},
-				LocalEvents: []synctypes.ChangeEvent{
+				LocalEvents: []ChangeEvent{
 					{
 						Source:   synctypes.SourceLocal,
 						Type:     synctypes.ChangeModify,
@@ -121,7 +121,7 @@ func TestPerSideHash_5RunStabilityProof(t *testing.T) {
 			},
 		}
 
-		plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+		plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 		require.NoError(t, err, "run %d", run)
 
 		assert.Empty(t, plan.Actions,
@@ -131,7 +131,7 @@ func TestPerSideHash_5RunStabilityProof(t *testing.T) {
 
 // Validates: R-6.7.17
 func TestZeroHashFallback_5RunStabilityProof(t *testing.T) {
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:            "hashless.docx",
 		DriveID:         driveid.New(synctest.TestDriveID),
 		ItemID:          "item1",
@@ -148,10 +148,10 @@ func TestZeroHashFallback_5RunStabilityProof(t *testing.T) {
 	for run := range 5 {
 		planner := NewPlanner(synctest.TestLogger(t))
 
-		changes := []synctypes.PathChanges{
+		changes := []PathChanges{
 			{
 				Path: "hashless.docx",
-				RemoteEvents: []synctypes.ChangeEvent{
+				RemoteEvents: []ChangeEvent{
 					{
 						Source:   synctypes.SourceRemote,
 						Type:     synctypes.ChangeModify,
@@ -164,7 +164,7 @@ func TestZeroHashFallback_5RunStabilityProof(t *testing.T) {
 						ETag:     "etag-stable",
 					},
 				},
-				LocalEvents: []synctypes.ChangeEvent{
+				LocalEvents: []ChangeEvent{
 					{
 						Source:   synctypes.SourceLocal,
 						Type:     synctypes.ChangeModify,
@@ -177,10 +177,10 @@ func TestZeroHashFallback_5RunStabilityProof(t *testing.T) {
 			},
 		}
 
-		plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+		plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 		require.NoError(t, err, "run %d", run)
-		assert.Empty(t, synctest.ActionsOfType(plan.Actions, synctypes.ActionUpload), "run %d", run)
-		assert.Empty(t, synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload), "run %d", run)
+		assert.Empty(t, actionsOfType(plan.Actions, ActionUpload), "run %d", run)
+		assert.Empty(t, actionsOfType(plan.Actions, ActionDownload), "run %d", run)
 	}
 }
 
@@ -191,7 +191,7 @@ func TestPerSideHash_NormalDriveUnaffected(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 
 	// Normal case: both hashes are the same.
-	baseline := synctest.BaselineWith(&synctypes.BaselineEntry{
+	baseline := baselineWith(&BaselineEntry{
 		Path:       "normal.txt",
 		DriveID:    driveid.New(synctest.TestDriveID),
 		ItemID:     "item1",
@@ -201,10 +201,10 @@ func TestPerSideHash_NormalDriveUnaffected(t *testing.T) {
 	})
 
 	// File actually changed on remote side.
-	changes := []synctypes.PathChanges{
+	changes := []PathChanges{
 		{
 			Path: "normal.txt",
-			RemoteEvents: []synctypes.ChangeEvent{
+			RemoteEvents: []ChangeEvent{
 				{
 					Source:   synctypes.SourceRemote,
 					Type:     synctypes.ChangeModify,
@@ -218,11 +218,11 @@ func TestPerSideHash_NormalDriveUnaffected(t *testing.T) {
 		},
 	}
 
-	plan, err := planner.Plan(changes, baseline, synctypes.SyncBidirectional, synctypes.DefaultSafetyConfig(), nil)
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 
 	// Should produce a download because remote hash changed.
-	downloads := synctest.ActionsOfType(plan.Actions, synctypes.ActionDownload)
+	downloads := actionsOfType(plan.Actions, ActionDownload)
 	assert.Len(t, downloads, 1,
 		"normal drive: remote hash change should produce download")
 }
