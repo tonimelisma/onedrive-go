@@ -11,11 +11,11 @@
 //   - nullKnownInt64:   preserve zero for known values like file sizes
 //
 // Related files:
-//   - store_baseline.go:    baseline CRUD, delta tokens, outcome commits
-//   - store_observation.go: remote state observation persistence
-//   - store_conflicts.go:   conflict management
-//   - store_failures.go:    sync failure recording and queries
-//   - store_admin.go:       state reader/admin operations
+//   - store_write_baseline.go:     baseline CRUD, delta tokens, outcome commits
+//   - store_write_observation.go:  remote state observation persistence
+//   - store_write_conflicts.go:    conflict management
+//   - store_write_failures.go:     sync failure recording and queries
+//   - store_repair.go:             state repair/admin operations
 package sync
 
 import (

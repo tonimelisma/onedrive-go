@@ -9,7 +9,7 @@
 //
 // Related files:
 //   - store.go:            SyncStore type definition and lifecycle
-//   - store_baseline.go:   saveDeltaToken (called from CommitObservation)
+//   - store_write_baseline.go: saveDeltaToken (called from CommitObservation)
 package sync
 
 import (

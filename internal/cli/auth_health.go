@@ -166,7 +166,7 @@ func inspectSavedLogin(
 
 func hasPersistedAuthScope(ctx context.Context, account string, logger *slog.Logger) bool {
 	for _, statePath := range config.DiscoverStateDBsForEmail(account, logger) {
-		hasBlock, err := syncengine.HasAccountAuthScopeAtPath(ctx, statePath, logger)
+		hasBlock, err := hasAccountAuthScopeAtPath(ctx, statePath, logger)
 		if err != nil {
 			logger.Debug("reading auth scope block for auth projection",
 				"account", account,
@@ -182,6 +182,15 @@ func hasPersistedAuthScope(ctx context.Context, account string, logger *slog.Log
 	}
 
 	return false
+}
+
+func hasAccountAuthScopeAtPath(ctx context.Context, statePath string, logger *slog.Logger) (bool, error) {
+	hasBlock, err := syncengine.HasScopeBlockAtPath(ctx, statePath, syncengine.SKAuthAccount(), logger)
+	if err != nil {
+		return false, fmt.Errorf("read auth scope block at %s: %w", statePath, err)
+	}
+
+	return hasBlock, nil
 }
 
 func clearAccountAuthScopes(ctx context.Context, email string, logger *slog.Logger) error {
@@ -207,8 +216,8 @@ func clearAccountAuthScopesWithCount(ctx context.Context, email string, logger *
 		blocks, listErr := store.ListScopeBlocks(ctx)
 		if listErr != nil {
 			errs = append(errs, fmt.Errorf("list scope blocks %s: %w", statePath, listErr))
-		} else if syncengine.ScopeBlocksContainAuth(blocks) {
-			if err := store.DeleteScopeBlock(ctx, syncengine.AuthAccountScopeKey()); err != nil {
+		} else if scopeBlocksContainAuth(blocks) {
+			if err := store.DeleteScopeBlock(ctx, syncengine.SKAuthAccount()); err != nil {
 				errs = append(errs, fmt.Errorf("delete auth scope from %s: %w", statePath, err))
 			} else {
 				clearedCount++
@@ -221,6 +230,16 @@ func clearAccountAuthScopesWithCount(ctx context.Context, email string, logger *
 	}
 
 	return clearedCount, errors.Join(errs...)
+}
+
+func scopeBlocksContainAuth(blocks []*syncengine.ScopeBlock) bool {
+	for _, block := range blocks {
+		if block != nil && block.Key == syncengine.SKAuthAccount() {
+			return true
+		}
+	}
+
+	return false
 }
 
 func authReasonText(reason string) string {

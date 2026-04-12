@@ -686,7 +686,7 @@ func printAffectedDrives(w io.Writer, cfg *config.Config, affected []driveid.Can
 
 // purgeSingleDrive removes only drive-owned state for one drive: the state
 // database, drive metadata, and config section. Account profiles are
-// account-owned read-model state and must survive `drive remove --purge` so
+// account-owned catalog snapshot state and must survive `drive remove --purge` so
 // the remaining logged-in account still has offline identity metadata. Token
 // deletion is handled separately since tokens may be shared (SharePoint).
 func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *slog.Logger) error {

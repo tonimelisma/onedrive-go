@@ -10,7 +10,7 @@
 //
 // Related files:
 //   - store.go:           SyncStore type definition and lifecycle
-//   - store_baseline.go:  commitConflict (inserts conflict records within outcome commits)
+//   - store_write_baseline.go: commitConflict (inserts conflict records within outcome commits)
 package sync
 
 import (

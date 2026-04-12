@@ -110,7 +110,7 @@ For detailed module design, see:
 | Sync-domain summary/rendering key | `internal/sync/summary_keys.go` |
 | Durable sync issue facts | `internal/sync` SQLite tables (`sync_failures`, `scope_blocks`, conflicts) |
 | Account/auth presentation | `internal/authstate` vocabulary projected through `internal/cli/account_catalog_snapshot.go` |
-| Read-only issue/status snapshot | `internal/sync/inspector.go` |
+| Read-only issue/status snapshot | `internal/sync/store_inspect.go` |
 | Production perf counters, live snapshots, and capture bundles | `internal/perf` with session/control-plane ownership split across `internal/cli` and `internal/multisync` |
 | Durable mutation rules | `internal/sync` writable store APIs (`CommitMutation`, scope/failure/conflict helpers) plus engine-owned scope/result flow |
 
@@ -206,4 +206,4 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Production ignored-return audit complete: invariant-bearing results such as `DepGraph.Complete` and dispatch admission booleans are handled explicitly, baseline/account metadata lookups now use explicit helpers or `found` checks, and the remaining ignored returns are limited to explicit value-only helper drops plus documented impossible-error builder writes. [verified]
 - Bare `assert.NoError` audit complete: remaining sites are intentional cleanup, test-plumbing, or pure error-contract assertions, while weak CLI happy-path tests now assert rendered text, JSON shape, and preserved config/state. [verified]
 - Write-path `Close` audit complete: sync-store close failures now propagate on internal baseline verification helpers and `resolve deletes`, while read-only inspector close paths remain best-effort debug logged by design. [verified]
-- Direct handler/service coverage over the `internal/cli/` service split is above the current target: `go test ./internal/cli/... -cover` reports 67.8%. [verified]
+- Direct command/workflow coverage across the flattened `internal/cli/` command flows remains above the current target. [verified]

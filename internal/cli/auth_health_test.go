@@ -26,7 +26,7 @@ func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
 	defer store.Close(t.Context())
 
 	require.NoError(t, store.UpsertScopeBlock(t.Context(), &syncengine.ScopeBlock{
-		Key:          syncengine.AuthAccountScopeKey(),
+		Key:          syncengine.SKAuthAccount(),
 		IssueType:    syncengine.IssueUnauthorized,
 		TimingSource: syncengine.ScopeTimingNone,
 		BlockedAt:    time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),

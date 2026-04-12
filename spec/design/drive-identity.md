@@ -108,7 +108,7 @@ the shared-folder portion of `drive list`, and name-based `drive add` all
 consume the same normalized actionable-target set plus the same
 account-warning projection. Saved-login/auth-required accounts are reported
 from the offline account catalog before any live search is attempted. The
-owning read-model load is also where best-effort `/me` reconciliation runs for
+owning account-catalog snapshot load is also where best-effort `/me` reconciliation runs for
 this slice, so shared discovery itself only consumes the refreshed catalog and
 does not issue a second account-identity probe. Caller-owned account filtering
 stays outside the shared-discovery core: `shared` and name-based `drive add`

@@ -82,6 +82,35 @@ func readDriveStatusSnapshot(
 	return snapshot, driveStateStoreInfo{Status: stateStoreStatusHealthy}
 }
 
+func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
+	if scopeKey.IsZero() {
+		return ""
+	}
+
+	switch scopeKey.Kind {
+	case syncengine.ScopeAuthAccount, syncengine.ScopeThrottleAccount:
+		return statusScopeAccount
+	case syncengine.ScopeThrottleTarget:
+		if scopeKey.IsThrottleShared() {
+			return statusScopeShortcut
+		}
+
+		return statusScopeDrive
+	case syncengine.ScopeService:
+		return statusScopeService
+	case syncengine.ScopeQuotaOwn:
+		return statusScopeDrive
+	case syncengine.ScopeQuotaShortcut, syncengine.ScopePermRemote:
+		return statusScopeShortcut
+	case syncengine.ScopePermDir:
+		return statusScopeDirectory
+	case syncengine.ScopeDiskLocal:
+		return statusScopeDisk
+	default:
+		return "file"
+	}
+}
+
 func buildSyncStateInfo(
 	canonicalID string,
 	snapshot *syncengine.DriveStatusSnapshot,
@@ -140,7 +169,7 @@ func buildFailureGroupJSON(
 	output := make([]failureGroupJSON, 0, len(groups))
 	for i := range groups {
 		group := groups[i]
-		descriptor := syncengine.DescribeIssueSummary(group.SummaryKey)
+		descriptor := syncengine.DescribeSummary(group.SummaryKey)
 		nextActions.add(strings.TrimSpace(descriptor.Action))
 		output = append(output, failureGroupJSON{
 			SummaryKey: string(group.SummaryKey),
@@ -148,7 +177,7 @@ func buildFailureGroupJSON(
 			Title:      descriptor.Title,
 			Reason:     descriptor.Reason,
 			Action:     descriptor.Action,
-			ScopeKind:  syncengine.StatusScopeKind(group.ScopeKey),
+			ScopeKind:  statusScopeKindFromScopeKey(group.ScopeKey),
 			Scope:      group.ScopeLabel,
 			Count:      group.Count,
 			Paths:      sampleStrings(group.Paths, verbose, examplesLimit),
