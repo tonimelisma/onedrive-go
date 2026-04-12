@@ -401,9 +401,9 @@ func ensurePrivilegedPackageCallsStayAtApprovedBoundaries(repoRoot string) error
 		{
 			importPath:  "os/exec",
 			selector:    "CommandContext",
-			description: "exec.CommandContext is only allowed in internal/cli/auth.go and internal/devtool/runner.go",
+			description: "exec.CommandContext is only allowed in internal/cli/auth_login.go and internal/devtool/runner.go",
 			allowed: func(path string) bool {
-				return path == filepath.Join(repoRoot, "internal", "cli", "auth.go") ||
+				return path == filepath.Join(repoRoot, "internal", "cli", "auth_login.go") ||
 					path == filepath.Join(repoRoot, "internal", "devtool", "runner.go")
 			},
 		},
