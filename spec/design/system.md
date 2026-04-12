@@ -152,11 +152,11 @@ Static verification is a first-class architectural constraint, not a best-effort
   Ubuntu CI lane.
 - `go run ./cmd/devtool bench --scenario <name> [--subject <id>] [--runs N]
   [--warmup N] [--json] [--result-json <path>]` is the repo-owned benchmark
-  runner entrypoint. The first delivered slice measures the
-  `startup-empty-config` controlled scenario against the built `onedrive-go`
-  binary, emits a subject-aware JSON result bundle, and keeps broader
-  representative sync scenarios and release report publication in the dedicated
-  benchmarking design.
+  runner entrypoint. The delivered slices measure the
+  `startup-empty-config` controlled scenario and the manual
+  `sync-partial-local-catchup-100m` live representative scenario against the
+  built `onedrive-go` binary, emit a subject-aware JSON result bundle, and keep
+  release report publication in the dedicated benchmarking design.
 - Observation coordination is intentionally split into a pure planner and
   effectful executors. `internal/sync/engine_scope_session.go` is the pure
   scoped-observation planner, while `internal/sync/engine_observation_phase.go`
@@ -202,7 +202,7 @@ Static verification is a first-class architectural constraint, not a best-effort
 ## Planned Improvements
 
 - Resource consumption guarantees documented per component. [planned]
-- Representative benchmark scenarios, reporting, and publication policy are defined in [performance-benchmarking.md](performance-benchmarking.md). The repo-owned `devtool bench` runner and `startup-empty-config` harness-validation scenario are implemented; broader representative sync scenarios, release artifact promotion, and published benchmark reports remain planned. [planned]
+- Representative benchmark scenarios, reporting, and publication policy are defined in [performance-benchmarking.md](performance-benchmarking.md). The repo-owned `devtool bench` runner, the `startup-empty-config` harness-validation scenario, and the manual `sync-partial-local-catchup-100m` live representative scenario are implemented; release artifact promotion and published benchmark reports remain planned. [planned]
 - Production ignored-return audit complete: invariant-bearing results such as `DepGraph.Complete` and dispatch admission booleans are handled explicitly, baseline/account metadata lookups now use explicit helpers or `found` checks, and the remaining ignored returns are limited to explicit value-only helper drops plus documented impossible-error builder writes. [verified]
 - Bare `assert.NoError` audit complete: remaining sites are intentional cleanup, test-plumbing, or pure error-contract assertions, while weak CLI happy-path tests now assert rendered text, JSON shape, and preserved config/state. [verified]
 - Write-path `Close` audit complete: sync-store close failures now propagate on internal baseline verification helpers and `resolve deletes`, while read-only inspector close paths remain best-effort debug logged by design. [verified]

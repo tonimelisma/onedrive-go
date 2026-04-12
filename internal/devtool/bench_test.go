@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,7 +32,10 @@ func TestLookupBenchRegistriesAreSortedAndIncludeBuiltins(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, []string{DefaultBenchSubjectID}, BenchSubjectIDs())
-	assert.Equal(t, []string{startupEmptyConfigScenarioID}, BenchScenarioIDs())
+	assert.Equal(t, []string{
+		startupEmptyConfigScenarioID,
+		syncPartialLocalCatchup100MID,
+	}, BenchScenarioIDs())
 
 	subject, err := LookupBenchSubject(DefaultBenchSubjectID)
 	require.NoError(t, err)
@@ -43,6 +47,20 @@ func TestLookupBenchRegistriesAreSortedAndIncludeBuiltins(t *testing.T) {
 	assert.Equal(t, startupEmptyConfigScenarioID, scenario.ID)
 	assert.Equal(t, startupEmptyConfigDefaultRuns, scenario.DefaultRuns)
 	assert.Equal(t, startupEmptyConfigDefaultWarmups, scenario.DefaultWarmup)
+
+	liveScenario, err := LookupBenchScenario(syncPartialLocalCatchup100MID)
+	require.NoError(t, err)
+	assert.Equal(t, syncPartialLocalCatchup100MID, liveScenario.ID)
+	assert.Equal(t, syncPartialLocalCatchup100MRuns, liveScenario.DefaultRuns)
+	assert.Equal(t, syncPartialLocalCatchup100MWarm, liveScenario.DefaultWarmup)
+	assert.Equal(t, "live", liveScenario.Class)
+	assert.Equal(t, "default-safe", liveScenario.ConfigProfile)
+	assert.Positive(t, liveScenario.Denominators.FileCount)
+	assert.Positive(t, liveScenario.Denominators.DirectoryCount)
+	assert.Positive(t, liveScenario.Denominators.ChangedItemCount)
+	assert.Positive(t, liveScenario.Denominators.ChangedByteCount)
+	assert.Positive(t, liveScenario.Denominators.ExpectedTransfers)
+	assert.Zero(t, liveScenario.Denominators.ExpectedDeletes)
 }
 
 // Validates: R-6.10.14
@@ -56,6 +74,7 @@ func TestLookupBenchSubjectAndScenarioRejectUnknownIDs(t *testing.T) {
 	_, err = LookupBenchScenario("unknown")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), startupEmptyConfigScenarioID)
+	assert.Contains(t, err.Error(), syncPartialLocalCatchup100MID)
 }
 
 // Validates: R-6.10.14
@@ -116,6 +135,21 @@ func TestBenchSampleFailureClassificationHelpers(t *testing.T) {
 
 	aborted := benchAbortedSample(base, assert.AnError)
 	assert.Equal(t, BenchSampleAborted, aborted.Status)
+}
+
+// Validates: R-6.10.14
+func TestFailureExcerptPrefersTailOfLongStructuredStreams(t *testing.T) {
+	t.Parallel()
+
+	startMarker := "start-of-stream-marker:"
+	stderr := []byte(startMarker + strings.Repeat("prefix-", 96) + "terminal failure detail")
+
+	excerpt := failureExcerpt(assert.AnError, nil, stderr)
+
+	assert.Len(t, excerpt, benchFailureExcerptLimit)
+	assert.True(t, strings.HasPrefix(excerpt, "..."))
+	assert.Contains(t, excerpt, "terminal failure detail")
+	assert.NotContains(t, excerpt, startMarker)
 }
 
 // Validates: R-6.10.14

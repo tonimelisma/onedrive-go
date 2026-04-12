@@ -34,6 +34,9 @@ const (
 	startupEmptyConfigScenarioID     = "startup-empty-config"
 	startupEmptyConfigDefaultRuns    = 15
 	startupEmptyConfigDefaultWarmups = 3
+	syncPartialLocalCatchup100MID    = "sync-partial-local-catchup-100m"
+	syncPartialLocalCatchup100MRuns  = 3
+	syncPartialLocalCatchup100MWarm  = 0
 
 	benchSubjectKindRepoCLI = "repo_cli_binary"
 	benchBuildModeRepoHead  = "repo_head"
@@ -160,9 +163,12 @@ type benchMetricStats struct {
 	Max    int64 `json:"max"`
 }
 
+type benchSampleRunner func(context.Context, preparedBenchSubject, benchSamplePhase, int) benchSample
+
 type benchScenarioDefinition struct {
-	Spec BenchScenarioSpec
-	Run  func(context.Context, preparedBenchSubject, benchSamplePhase, int) benchSample
+	Spec    BenchScenarioSpec
+	Run     benchSampleRunner
+	Prepare func(context.Context, string, preparedBenchSubject) (preparedBenchScenario, error)
 }
 
 type benchSubjectDefinition struct {
@@ -182,6 +188,11 @@ type preparedBenchSubject struct {
 	metadata benchResultSubject
 	measure  func(context.Context, benchCommandSpec) (benchMeasuredProcess, error)
 	cleanup  func() error
+}
+
+type preparedBenchScenario struct {
+	run     benchSampleRunner
+	cleanup func() error
 }
 
 type benchCommandSpec struct {
@@ -230,7 +241,10 @@ func LookupBenchSubject(id string) (BenchSubjectSpec, error) {
 }
 
 func BenchScenarioIDs() []string {
-	return []string{startupEmptyConfigScenarioID}
+	return []string{
+		startupEmptyConfigScenarioID,
+		syncPartialLocalCatchup100MID,
+	}
 }
 
 func LookupBenchScenario(id string) (BenchScenarioSpec, error) {
@@ -261,7 +275,13 @@ func runBench(ctx context.Context, runner commandRunner, opts BenchOptions) erro
 	if err != nil {
 		return fmt.Errorf("bench: prepare subject %s: %w", invocation.subjectID, err)
 	}
-	defer warnBenchCleanup(stderr, preparedSubject.cleanup)
+	defer warnBenchCleanup(stderr, "subject", preparedSubject.cleanup)
+
+	preparedScenario, err := prepareBenchScenario(ctx, &invocation.scenarioDef, opts.RepoRoot, preparedSubject)
+	if err != nil {
+		return fmt.Errorf("bench: prepare scenario %s: %w", invocation.scenarioDef.Spec.ID, err)
+	}
+	defer warnBenchCleanup(stderr, "scenario", preparedScenario.cleanup)
 
 	startedAt := time.Now()
 	result := benchResult{
@@ -282,7 +302,7 @@ func runBench(ctx context.Context, runner commandRunner, opts BenchOptions) erro
 
 	result.Samples = collectBenchSamples(
 		ctx,
-		invocation.scenarioDef,
+		preparedScenario.run,
 		preparedSubject,
 		invocation.warmupRuns,
 		invocation.measuredRuns,
@@ -350,12 +370,41 @@ func validateBenchOptions(opts BenchOptions) error {
 	return nil
 }
 
-func warnBenchCleanup(w io.Writer, cleanup func() error) {
+func prepareBenchScenario(
+	ctx context.Context,
+	def *benchScenarioDefinition,
+	repoRoot string,
+	subject preparedBenchSubject,
+) (preparedBenchScenario, error) {
+	if def == nil {
+		return preparedBenchScenario{}, fmt.Errorf("scenario definition is nil")
+	}
+	if def.Prepare == nil {
+		return preparedBenchScenario{
+			run: def.Run,
+		}, nil
+	}
+
+	prepared, err := def.Prepare(ctx, repoRoot, subject)
+	if err != nil {
+		return preparedBenchScenario{}, err
+	}
+	if prepared.run == nil {
+		prepared.run = def.Run
+	}
+	if prepared.run == nil {
+		return preparedBenchScenario{}, fmt.Errorf("scenario %s missing sample runner", def.Spec.ID)
+	}
+
+	return prepared, nil
+}
+
+func warnBenchCleanup(w io.Writer, kind string, cleanup func() error) {
 	if cleanup == nil {
 		return
 	}
 	if cleanupErr := cleanup(); cleanupErr != nil {
-		_, writeErr := fmt.Fprintf(w, "warning: benchmark subject cleanup: %v\n", cleanupErr)
+		_, writeErr := fmt.Fprintf(w, "warning: benchmark %s cleanup: %v\n", kind, cleanupErr)
 		if writeErr != nil {
 			return
 		}
@@ -364,7 +413,7 @@ func warnBenchCleanup(w io.Writer, cleanup func() error) {
 
 func collectBenchSamples(
 	ctx context.Context,
-	scenarioDef benchScenarioDefinition,
+	runSample benchSampleRunner,
 	preparedSubject preparedBenchSubject,
 	warmupRuns int,
 	measuredRuns int,
@@ -372,14 +421,14 @@ func collectBenchSamples(
 ) []benchSample {
 	stop := false
 	for i := 0; i < warmupRuns && !stop; i++ {
-		sample := scenarioDef.Run(ctx, preparedSubject, benchSamplePhaseWarmup, i+1)
+		sample := runSample(ctx, preparedSubject, benchSamplePhaseWarmup, i+1)
 		samples = append(samples, sample)
 		if sample.Status != BenchSampleSuccess {
 			stop = true
 		}
 	}
 	for i := 0; i < measuredRuns && !stop; i++ {
-		sample := scenarioDef.Run(ctx, preparedSubject, benchSamplePhaseMeasured, i+1)
+		sample := runSample(ctx, preparedSubject, benchSamplePhaseMeasured, i+1)
 		samples = append(samples, sample)
 		if sample.Status != BenchSampleSuccess {
 			stop = true
@@ -451,6 +500,8 @@ func lookupBenchScenarioDefinition(id string) (benchScenarioDefinition, error) {
 			},
 			Run: runStartupEmptyConfigSample,
 		}, nil
+	case syncPartialLocalCatchup100MID:
+		return lookupSyncPartialLocalCatchup100MScenario()
 	default:
 		return benchScenarioDefinition{}, fmt.Errorf(
 			"unknown bench scenario %q (known: %s)",
@@ -926,7 +977,15 @@ func failureExcerpt(err error, stdout, stderr []byte) string {
 }
 
 func truncateFailureExcerpt(data []byte) string {
-	return truncateString(strings.TrimSpace(string(data)), benchFailureExcerptLimit)
+	trimmed := strings.TrimSpace(string(data))
+	if len(trimmed) <= benchFailureExcerptLimit {
+		return trimmed
+	}
+	if benchFailureExcerptLimit <= 3 {
+		return trimmed[len(trimmed)-benchFailureExcerptLimit:]
+	}
+
+	return "..." + trimmed[len(trimmed)-(benchFailureExcerptLimit-3):]
 }
 
 func truncateString(value string, limit int) string {

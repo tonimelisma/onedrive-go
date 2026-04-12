@@ -560,6 +560,19 @@ Evidence:
   included folder-list/read failures `a25ff48e-c887-4568-8a15-d7ba89e989f9`,
   `db5d96ce-646a-434e-b457-ad290b70675b`, and
   `820427af-adb4-4134-83e7-22d87e0c037a`.
+- Later on April 12, 2026 another local `go run ./cmd/devtool verify default`
+  hit the same family in `TestE2E_FileOps_RmFile`: `put
+  /onedrive-go-e2e-rm-file-1776033974888448000/test.txt` had already reported
+  success through the shared fixture-seed helper, but the immediate
+  follow-on `rm /onedrive-go-e2e-rm-file-1776033974888448000/test.txt` still
+  saw `GET .../root:/onedrive-go-e2e-rm-file-1776033974888448000/test.txt: = 404
+  itemNotFound`, then `GET .../root:/onedrive-go-e2e-rm-file-1776033974888448000:/children = 404`,
+  and finally a healthy root listing that still omitted the freshly written
+  folder. Representative request IDs from that recurrence included
+  `dedfd276-c419-44a8-b589-8f0b79ba10da`,
+  `90d90008-00f9-47f7-bec4-aff991088c22`,
+  `aa642558-d6d9-40c6-b50b-d61301f0cf37`, and
+  `dd6863d6-e576-42dd-84ba-901a9808143f`.
 Resolution / mitigation: CLI mutation flows now treat destination visibility as
 a bounded driveops-owned convergence concern. `mkdir`, single-file `put`, and
 `mv` wait for the destination path to become readable before reporting success,
@@ -586,6 +599,10 @@ second exact-path `stat` after `put` already reported success. The generic
 `TestE2E_RoundTrip/put` subtest now follows the same rule and does not add its
 own second exact-path `stat`; later `ls_folder` and `stat` subtests still own
 the end-to-end readability assertions for that round-trip. For
+the isolated fast file-op delete cases, the harness now waits for the exact
+target path to become stat-readable before it uses `rm` / `rm --permanent` as
+the next assertion step, so the delete command no longer doubles as the first
+exact-path visibility probe after a softened fixture seed. For
 `TestE2E_Sync_DriveRemoveAndReAdd`, the harness now asserts the thing the test
 actually claims: the durable `baseline` rows survive config removal and are
 reused after drive re-add. It no longer treats follow-on remote path

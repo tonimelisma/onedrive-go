@@ -150,4 +150,4 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.10.12: Repo verification shall enforce that `Validates:` test references and `Implements:` design-doc references resolve to declared requirement IDs. [verified]
 - R-6.10.13: Governed behavioral design docs shall include executable evidence links to exact named tests for the behaviors they claim. [verified]
 - R-6.10.14: Repository tooling shall provide a repo-owned benchmark entrypoint with named scenarios and subject-aware machine-readable result output, separate from default verification. [verified]
-- R-6.10.15: Live representative benchmarks and cross-app comparison runs shall execute in explicit manual or scheduled lanes, not in required default verification. [planned]
+- R-6.10.15: Live representative benchmarks (for example `devtool bench --scenario sync-partial-local-catchup-100m`) and future cross-app comparison runs shall execute in explicit manual or scheduled lanes, not in required default verification. [planned]

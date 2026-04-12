@@ -1113,6 +1113,7 @@ func TestE2E_FileOps_RmFile(t *testing.T) {
 
 	mkdirFixturePath(t, cfgPath, testFolder)
 	putFixtureFile(t, cfgPath, testFile, []byte("remove file test\n"))
+	waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+testFile)
 
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "rm", "/"+testFile)
 	assert.Contains(t, stderr, "Deleted")
@@ -1126,6 +1127,7 @@ func TestE2E_FileOps_RmSubfolder(t *testing.T) {
 	testSubfolder := testFolder + "/subfolder"
 
 	mkdirFixturePath(t, cfgPath, testSubfolder)
+	waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+testSubfolder)
 
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "rm", "-r", "/"+testSubfolder)
 	assert.Contains(t, stderr, "Deleted")
@@ -1140,6 +1142,7 @@ func TestE2E_FileOps_RmPermanent(t *testing.T) {
 
 	mkdirFixturePath(t, cfgPath, testFolder)
 	putFixtureFile(t, cfgPath, permFile, []byte("permanent delete test\n"))
+	waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+permFile)
 
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "rm", "--permanent", "/"+permFile)
 	assert.Contains(t, stderr, "Permanently deleted")
@@ -1186,6 +1189,7 @@ func TestE2E_ErrorCases(t *testing.T) {
 		})
 
 		runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
+		waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+testFolder)
 		output := runCLIWithConfigExpectError(t, cfgPath, nil, "rm", "/"+testFolder)
 		assert.Contains(t, output, "recursive")
 	})
