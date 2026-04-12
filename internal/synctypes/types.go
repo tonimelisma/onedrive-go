@@ -333,17 +333,18 @@ type PathChanges struct {
 // RemoteState captures the current state of a path as observed from
 // the Graph API delta response.
 type RemoteState struct {
-	ItemID    string
-	DriveID   driveid.ID // normalized (lowercase, zero-padded to 16 chars)
-	ParentID  string
-	Name      string
-	ItemType  ItemType
-	Size      int64
-	Hash      string
-	Mtime     int64
-	ETag      string
-	CTag      string
-	IsDeleted bool
+	ItemID     string
+	DriveID    driveid.ID // normalized (lowercase, zero-padded to 16 chars)
+	ParentID   string
+	Name       string
+	ItemType   ItemType
+	Size       int64
+	Hash       string
+	Mtime      int64
+	ETag       string
+	CTag       string
+	IsDeleted  bool
+	IsFiltered bool
 
 	// Shortcut scope identity — populated for items observed through a
 	// shortcut converter, empty for own-drive items. Transient: not

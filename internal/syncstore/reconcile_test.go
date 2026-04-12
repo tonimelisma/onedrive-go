@@ -12,7 +12,7 @@ import (
 )
 
 // Validates: R-2.2, R-2.10.1
-func TestRefreshLocalBaseline_PreservesRemoteMetadataAndMarksRemoteStateSynced(t *testing.T) {
+func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouched(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -41,10 +41,10 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndMarksRemoteStateSynced(t
 	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, sync_status, observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		driveid.New("d1").String(), "item-1", "file.txt", synctypes.ItemTypeFile, "remote-old", 120,
-		seedTime.Add(2*time.Second).UnixNano(), synctypes.SyncStatusPendingDownload, seedTime.UnixNano())
+		seedTime.Add(2*time.Second).UnixNano(), seedTime.UnixNano())
 	require.NoError(t, err)
 
 	refreshTime := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
@@ -75,18 +75,14 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndMarksRemoteStateSynced(t
 	assert.Equal(t, "etag-old", entry.ETag, "etag should be preserved")
 	assert.Equal(t, refreshTime.UnixNano(), entry.SyncedAt)
 
-	var (
-		status synctypes.SyncStatus
-		hash   string
-		size   int64
-		mtime  int64
-	)
+	var hash string
+	var size int64
+	var mtime int64
 	err = mgr.DB().QueryRowContext(ctx,
-		`SELECT sync_status, hash, size, mtime FROM remote_state WHERE drive_id = ? AND item_id = ?`,
+		`SELECT hash, size, mtime FROM remote_state WHERE drive_id = ? AND item_id = ?`,
 		driveid.New("d1").String(), "item-1",
-	).Scan(&status, &hash, &size, &mtime)
+	).Scan(&hash, &size, &mtime)
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusSynced, status)
 	assert.Equal(t, "remote-old", hash, "remote_state hash should not be overwritten")
 	assert.Equal(t, int64(120), size, "remote_state size should not be overwritten")
 	assert.Equal(t, seedTime.Add(2*time.Second).UnixNano(), mtime, "remote_state mtime should not be overwritten")

@@ -30,9 +30,8 @@ func seedInterruptedScopeTransitionState(t *testing.T, syncRoot string) string {
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(t.Context(), `
 		UPDATE remote_state
-		SET sync_status = ?, filter_generation = 1, filter_reason = ?
+		SET is_filtered = 1, filter_generation = 1, filter_reason = ?
 		WHERE item_id = ?`,
-		synctypes.SyncStatusFiltered,
 		synctypes.RemoteFilterPathScope,
 		"drop-item",
 	)
@@ -269,7 +268,7 @@ func TestRunOnce_ScopeExpansionReconcilesPreviouslyFilteredRemoteItems(t *testin
 	filteredRow, found, err := eng.baseline.GetRemoteStateByPath(t.Context(), "drop.txt", driveID)
 	require.NoError(t, err)
 	require.True(t, found)
-	assert.Equal(t, synctypes.SyncStatusFiltered, filteredRow.SyncStatus)
+	assert.True(t, filteredRow.IsFiltered)
 
 	downloaded = nil
 	eng.syncScopeConfig = syncscope.Config{}
@@ -283,7 +282,7 @@ func TestRunOnce_ScopeExpansionReconcilesPreviouslyFilteredRemoteItems(t *testin
 	reenteredRow, reenteredFound, reenteredErr := eng.baseline.GetRemoteStateByPath(t.Context(), "drop.txt", driveID)
 	require.NoError(t, reenteredErr)
 	require.True(t, reenteredFound)
-	assert.Equal(t, synctypes.SyncStatusSynced, reenteredRow.SyncStatus)
+	assert.False(t, reenteredRow.IsFiltered)
 
 	scopeState, found, err := eng.baseline.ReadScopeState(t.Context())
 	require.NoError(t, err)
@@ -335,7 +334,7 @@ func TestRunOnce_StartupRepair_InterruptedScopeTransitionClearsPendingReentryOnS
 	reenteredRow, rowFound, rowErr := reopened.baseline.GetRemoteStateByPath(t.Context(), "drop.txt", driveID)
 	require.NoError(t, rowErr)
 	require.True(t, rowFound)
-	assert.Equal(t, synctypes.SyncStatusSynced, reenteredRow.SyncStatus)
+	assert.False(t, reenteredRow.IsFiltered)
 }
 
 // Validates: R-2.4.5

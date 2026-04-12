@@ -8,7 +8,6 @@ import (
 	stdsync "sync"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -65,7 +64,7 @@ func (rt *watchRuntime) initDeleteProtection(ctx context.Context) {
 }
 
 // loadWatchState loads the baseline and shortcuts for the watch session.
-// Both are loaded once after the initial sync. syncstore.Baseline is live-mutated
+// Both are loaded once after the initial sync. synctypes.Baseline is live-mutated
 // under RWMutex; shortcuts are updated via setShortcuts when they change.
 func (rt *watchRuntime) loadWatchState(ctx context.Context) error {
 	_, err := rt.engine.baseline.Load(ctx)
@@ -155,7 +154,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) err
 	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
-	errs, activeObs, skippedCh, scopeChanges := rt.startObservers(ctx, pipe.bl, mode, rt.buf, opts)
+	errs, activeObs, skippedCh, scopeChanges := rt.startObservers(ctx, pipe.bl, rt.buf, opts)
 	pipe.errs = errs
 	pipe.activeObs = activeObs
 	pipe.skippedCh = skippedCh
@@ -178,7 +177,7 @@ func isWatchShutdownError(ctx context.Context, err error) bool {
 type watchPipeline struct {
 	runtime          *watchRuntime
 	bl               *syncstore.Baseline
-	safety           *SafetyConfig
+	safety           *synctypes.SafetyConfig
 	batchReady       <-chan []PathChanges
 	results          <-chan WorkerResult
 	errs             <-chan error
@@ -321,17 +320,6 @@ func (rt *watchRuntime) initWatchInfra(
 func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watchPipeline) error {
 	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 
-	// Crash recovery: reset in-progress states from prior crash.
-	if err := ResetInProgressStates(
-		ctx,
-		rt.engine.baseline,
-		rt.engine.syncTree,
-		retry.ReconcilePolicy().Delay,
-		rt.engine.logger,
-	); err != nil {
-		rt.engine.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
-	}
-
 	// Load baseline + shortcuts.
 	if err := rt.loadWatchState(ctx); err != nil {
 		return err
@@ -391,7 +379,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 // the number of observers started. The events channel is closed automatically
 // when all observers exit, allowing the bridge goroutine to drain cleanly.
 func (rt *watchRuntime) startObservers(
-	ctx context.Context, bl *syncstore.Baseline, mode Mode, buf *Buffer, opts WatchOptions,
+	ctx context.Context, bl *syncstore.Baseline, buf *Buffer, opts WatchOptions,
 ) (<-chan error, int, <-chan []SkippedItem, <-chan syncscope.Change) {
 	events := make(chan ChangeEvent, watchEventBuf)
 	errs := make(chan error, 2)
@@ -402,59 +390,53 @@ func (rt *watchRuntime) startObservers(
 
 	count := 0
 
-	// Remote observer (skip for upload-only mode).
-	if mode != SyncUploadOnly {
-		obsWg.Add(1)
-		count++
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverRemote})
-		rt.startRemoteObserver(ctx, &obsWg, bl, events, errs, opts)
-	}
+	obsWg.Add(1)
+	count++
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverRemote})
+	rt.startRemoteObserver(ctx, &obsWg, bl, events, errs, opts)
 
 	// Channel for forwarding SkippedItems from safety scans to the engine.
 	// Buffered(2) — at most 2 safety scans could overlap before draining.
 	skippedCh := make(chan []SkippedItem, 2)
 
-	// Local observer (skip for download-only mode).
-	if mode != SyncDownloadOnly {
-		localObs := NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
-		localObs.SetFilterConfig(rt.engine.localFilter)
-		localObs.SetObservationRules(rt.engine.localRules)
-		localObs.SetSafetyScanInterval(opts.SafetyScanInterval)
-		localObs.SetSkippedChannel(skippedCh)
-		localObs.SetScopeSnapshot(rt.currentScopeSnapshot())
-		localObs.SetScopeChangeChannel(rt.scopeChanges)
+	localObs := NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
+	localObs.SetFilterConfig(rt.engine.localFilter)
+	localObs.SetObservationRules(rt.engine.localRules)
+	localObs.SetSafetyScanInterval(opts.SafetyScanInterval)
+	localObs.SetSkippedChannel(skippedCh)
+	localObs.SetScopeSnapshot(rt.currentScopeSnapshot())
+	localObs.SetScopeChangeChannel(rt.scopeChanges)
 
-		if rt.engine.localWatcherFactory != nil {
-			localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
+	if rt.engine.localWatcherFactory != nil {
+		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
+	}
+
+	rt.localObs = localObs
+
+	obsWg.Add(1)
+	count++
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverLocal})
+
+	go func() {
+		defer obsWg.Done()
+		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
+
+		watchErr := localObs.Watch(ctx, rt.engine.syncTree, events)
+		if errors.Is(watchErr, synctypes.ErrWatchLimitExhausted) {
+			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
+			rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
+				slog.Duration("poll_interval", rt.engine.resolvePollInterval(opts)),
+			)
+
+			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, events, rt.engine.resolvePollInterval(opts))
+			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
+			errs <- nil // clean exit after context cancel
+
+			return
 		}
 
-		rt.localObs = localObs
-
-		obsWg.Add(1)
-		count++
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverLocal})
-
-		go func() {
-			defer obsWg.Done()
-			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
-
-			watchErr := localObs.Watch(ctx, rt.engine.syncTree, events)
-			if errors.Is(watchErr, synctypes.ErrWatchLimitExhausted) {
-				rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
-				rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
-					slog.Duration("poll_interval", rt.engine.resolvePollInterval(opts)),
-				)
-
-				rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, events, rt.engine.resolvePollInterval(opts))
-				rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
-				errs <- nil // clean exit after context cancel
-
-				return
-			}
-
-			errs <- watchErr
-		}()
-	}
+		errs <- watchErr
+	}()
 
 	rt.closeWatchEventsWhenObserversExit(&obsWg, events)
 
@@ -476,7 +458,7 @@ func (rt *watchRuntime) startRemoteObserver(
 	}
 	plan, err := rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
 		Session:  &session,
-		SyncMode: SyncBidirectional,
+		SyncMode: synctypes.SyncBidirectional,
 		Purpose:  observationPlanPurposeWatch,
 	})
 	if err != nil {

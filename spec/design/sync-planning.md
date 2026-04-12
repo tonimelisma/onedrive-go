@@ -101,7 +101,10 @@ approval bypass; held-delete approval is durable engine-owned intent.
 ## Design Constraints
 
 - `localDeleted` implies `localChanged` (detectLocalChange returns true when Local is nil). Switch cases must check `localDeleted` before `localChanged` to prevent EF3 from stealing EF6's matches.
-- Folder classifiers use upfront mode filtering (`localChanged = false` for download-only, `remoteChanged = false` for upload-only) parallel to the file classifier. Per-case mode filtering is error-prone (easy to miss a case).
+- Folder and file classifiers always start from full observed truth. Directional
+  modes are admission rules applied after classification, so the planner never
+  has to "pretend one side did not change" just to express upload-only or
+  download-only behavior.
 - `RemoteState` carries `DriveID` for cross-drive correctness. Shared folder items from Drive A in Drive B's delta carry Drive A's DriveID. Planner DriveID propagation: Remote.DriveID wins → Baseline.DriveID fallback → empty for new local items.
 - `RemoteState` carries `RemoteDriveID` and `RemoteItemID` for shortcut scope identity (D-5). These are transient fields populated by `remoteStateFromEvent()` from `ChangeEvent` — not persisted in `remote_state` table. `makeAction()` uses them to populate `Action.targetShortcutKey` and `Action.targetDriveID` so active-scope admission can distinguish own-drive vs shortcut-scoped failures (R-6.8.12, R-6.8.13).
 - The planner detects action dependency cycles using DFS with white/gray/black node coloring after `buildDependencies()`. Cycle detection prevents deadlock in the DepGraph.
@@ -111,7 +114,13 @@ approval bypass; held-delete approval is durable engine-owned intent.
 
 When the Graph API delta endpoint reports a parent folder as deleted, it does NOT report individual child item deletions. Without intervention, the planner generates a single `ActionLocalDelete` for the parent, and the executor's `DeleteLocalFolder` refuses to remove a non-empty directory.
 
-**Solution**: Step 2.5 in `Plan()` — `expandFolderDeleteCascades()` runs after per-path classification but before dependency building. For each folder `ActionLocalDelete` or `ActionCleanup`, it walks `baseline.DescendantsOf(path)` to find all baseline entries under the folder and synthesizes additional delete/cleanup actions.
+**Solution**: Step 2.5 in `Plan()` — `expandFolderDeleteCascades()` runs after
+per-path classification but before dependency building. For each admitted
+folder delete (`ActionLocalDelete`, `ActionRemoteDelete`, or `ActionCleanup`),
+it walks `baseline.DescendantsOf(path)` and rebuilds descendant views with the
+same omitted delete side the parent action implies. This keeps descendant
+download/upload/conflict semantics correct even when observation reported only
+the parent folder delete.
 
 **Deduplication**: Maintains a per-path action-location map so cascade can
 replace an already-planned descendant in place whether that action lives in the
@@ -123,7 +132,9 @@ later cascade revisits a path that an earlier cascade appended.
 - Hash-before-delete (S4): cascaded file deletes go through `DeleteLocalFile` which verifies hash against baseline before deletion — if locally modified, creates conflict copy.
 - Delete safety protection: cascaded actions increase the delete count → threshold check at Step 4 happens after cascade → triggers correctly.
 - Non-disposable check: `DeleteLocalFolder` remains as defense-in-depth.
-- Upload-only mode: cascade is skipped entirely (no local deletions in upload-only).
+- Cascade follows the admitted parent delete action, not the sync-mode slogan.
+  Upload-only still suppresses remote-originated local deletes, but it does
+  cascade admitted local-to-remote folder deletes to their descendants.
 
 ## Cross-Drive Move Guard
 

@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // LocalFilterConfig controls local-only observation exclusions. These filters
@@ -30,80 +30,54 @@ type LocalObservationRules struct {
 	RejectSharePointRootForms bool
 }
 
-// DefaultDeleteSafetyThreshold is the default absolute delete count threshold.
-// Engine uses this when DriveEngineOptions.DeleteSafetyThreshold == 0.
-const DefaultDeleteSafetyThreshold = 1000
+const DefaultDeleteSafetyThreshold = synctypes.DefaultDeleteSafetyThreshold
 
-// SafetyConfig controls delete safety protection thresholds.
-// Single absolute count threshold — no percentages, no per-folder checks.
-type SafetyConfig struct {
-	DeleteSafetyThreshold int
-}
+type SafetyConfig = synctypes.SafetyConfig
 
-// DefaultSafetyConfig returns a SafetyConfig with the default threshold.
 func DefaultSafetyConfig() *SafetyConfig {
-	return &SafetyConfig{
-		DeleteSafetyThreshold: DefaultDeleteSafetyThreshold,
-	}
+	return synctypes.DefaultSafetyConfig()
 }
 
-// Mode controls the directionality of synchronization.
-type Mode int
+type Mode = synctypes.SyncMode
 
 const (
-	SyncBidirectional Mode = iota
-	SyncDownloadOnly
-	SyncUploadOnly
+	SyncBidirectional = synctypes.SyncBidirectional
+	SyncDownloadOnly  = synctypes.SyncDownloadOnly
+	SyncUploadOnly    = synctypes.SyncUploadOnly
 )
 
-func (m Mode) String() string {
-	switch m {
-	case SyncBidirectional:
-		return "bidirectional"
-	case SyncDownloadOnly:
-		return "download-only"
-	case SyncUploadOnly:
-		return "upload-only"
-	default:
-		return fmt.Sprintf("Mode(%d)", int(m))
+type (
+	RunOptions struct {
+		DryRun        bool
+		FullReconcile bool // when true, runs a full delta enumeration + orphan detection
 	}
-}
+	WatchOptions struct {
+		PollInterval       time.Duration   // remote delta polling interval (0 -> 5m)
+		Debounce           time.Duration   // buffer debounce window (0 -> 2s)
+		SafetyScanInterval time.Duration   // local safety scan interval (0 -> 5m) (B-099)
+		ReconcileInterval  time.Duration   // periodic full reconciliation (0 -> 24h, negative = disabled)
+		UserIntentWake     <-chan struct{} // daemon control-plane wakeups for queued user intent
+	}
+	Report struct {
+		Mode     synctypes.SyncMode
+		DryRun   bool
+		Duration time.Duration
 
-// RunOptions holds per-pass options for RunOnce.
-type RunOptions struct {
-	DryRun        bool
-	FullReconcile bool
-}
+		FolderCreates int
+		Moves         int
+		Downloads     int
+		Uploads       int
+		LocalDeletes  int
+		RemoteDeletes int
+		Conflicts     int
+		SyncedUpdates int
+		Cleanups      int
 
-// WatchOptions holds per-watch options for RunWatch.
-type WatchOptions struct {
-	PollInterval       time.Duration
-	Debounce           time.Duration
-	SafetyScanInterval time.Duration
-	ReconcileInterval  time.Duration
-	UserIntentWake     <-chan struct{}
-}
-
-// Report summarizes the result of a single sync pass.
-type Report struct {
-	Mode     Mode
-	DryRun   bool
-	Duration time.Duration
-
-	FolderCreates int
-	Moves         int
-	Downloads     int
-	Uploads       int
-	LocalDeletes  int
-	RemoteDeletes int
-	Conflicts     int
-	SyncedUpdates int
-	Cleanups      int
-
-	Succeeded int
-	Failed    int
-	Errors    []error
-}
+		Succeeded int
+		Failed    int
+		Errors    []error
+	}
+)
 
 // DeltaFetcher fetches a page of delta changes from the Graph API.
 type DeltaFetcher interface {

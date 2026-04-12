@@ -610,7 +610,7 @@ func auditScopeStateConsistency(ctx context.Context, db *sql.DB, report *Integri
 
 	if !found {
 		for i := range rows {
-			if rows[i].Status == synctypes.SyncStatusFiltered {
+			if rows[i].IsFiltered {
 				report.add(
 					integrityCodeScopeStateDrift,
 					fmt.Sprintf("filtered remote row %s exists without scope_state authority", rows[i].Path),
@@ -630,21 +630,21 @@ func auditScopeStateConsistency(ctx context.Context, db *sql.DB, report *Integri
 	for i := range rows {
 		expectedReason := snapshot.ExclusionReason(rows[i].Path)
 		switch {
-		case expectedReason == syncscope.ExclusionNone && rows[i].Status == synctypes.SyncStatusFiltered:
+		case expectedReason == syncscope.ExclusionNone && rows[i].IsFiltered:
 			report.add(
 				integrityCodeScopeStateDrift,
 				fmt.Sprintf("remote row %s is filtered but no longer excluded by scope_state", rows[i].Path),
 			)
 		case expectedReason != syncscope.ExclusionNone:
-			if rows[i].Status != synctypes.SyncStatusFiltered ||
+			if !rows[i].IsFiltered ||
 				rows[i].FilterGeneration != state.Generation ||
 				rows[i].FilterReason != string(expectedReason) {
 				report.add(
 					integrityCodeScopeStateDrift,
 					fmt.Sprintf(
-						"remote row %s disagrees with scope_state (status=%s generation=%d reason=%s expected_generation=%d expected_reason=%s)",
+						"remote row %s disagrees with scope_state (is_filtered=%t generation=%d reason=%s expected_generation=%d expected_reason=%s)",
 						rows[i].Path,
-						rows[i].Status,
+						rows[i].IsFiltered,
 						rows[i].FilterGeneration,
 						rows[i].FilterReason,
 						state.Generation,
@@ -664,13 +664,8 @@ func readScopeStateForAudit(ctx context.Context, db *sql.DB) (ScopeStateRecord, 
 
 func listRemoteScopeRowsForAudit(ctx context.Context, db *sql.DB) ([]remoteScopeRow, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT drive_id, item_id, path, hash, sync_status, filter_generation, filter_reason, NULL, NULL
-		FROM remote_state
-		WHERE sync_status NOT IN (?, ?, ?, ?)`,
-		synctypes.SyncStatusDeleted,
-		synctypes.SyncStatusPendingDelete,
-		synctypes.SyncStatusDownloading,
-		synctypes.SyncStatusDeleting,
+		SELECT drive_id, item_id, path, hash, is_filtered, filter_generation, filter_reason, NULL, NULL
+		FROM remote_state`,
 	)
 	if err != nil {
 		if isMissingTableErr(err) {
@@ -689,7 +684,7 @@ func listRemoteScopeRowsForAudit(ctx context.Context, db *sql.DB) ([]remoteScope
 			&row.ItemID,
 			&row.Path,
 			&row.Hash,
-			&row.Status,
+			&row.IsFiltered,
 			&row.FilterGeneration,
 			&row.FilterReason,
 			&row.BaselinePath,

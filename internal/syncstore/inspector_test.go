@@ -43,10 +43,10 @@ func TestInspector_ReadStatusSnapshot(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = store.DB().ExecContext(ctx, `INSERT INTO remote_state
-		(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
+		(drive_id, item_id, path, parent_id, item_type, hash, observed_at)
 		VALUES
-		(?, 'item-3', '/pending.txt', 'root', 'file', 'pending_download', 1),
-		(?, 'item-4', '/synced.txt', 'root', 'file', 'synced', 1)`,
+		(?, 'item-3', '/pending.txt', 'root', 'file', 'hash-new', 1),
+		(?, 'item-4', '/synced.txt', 'root', 'file', '', 1)`,
 		testDriveID, testDriveID,
 	)
 	require.NoError(t, err)
@@ -71,7 +71,7 @@ func TestInspector_ReadStatusSnapshot(t *testing.T) {
 	assert.Equal(t, "1500", snapshot.SyncMetadata["last_sync_duration_ms"])
 	assert.Equal(t, "network timeout", snapshot.SyncMetadata["last_sync_error"])
 	assert.Equal(t, 1, snapshot.BaselineEntryCount)
-	assert.Equal(t, 1, snapshot.PendingSyncItems)
+	assert.Equal(t, 3, snapshot.RemoteDriftItems)
 	assert.Equal(t, 1, snapshot.Issues.ConflictCount())
 	assert.Equal(t, 1, snapshot.Issues.ActionableCount())
 	assert.Equal(t, 0, snapshot.Issues.RemoteBlockedCount())
@@ -283,7 +283,7 @@ func TestInspector_ReadDriveStatusSnapshot(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "2026-04-10T12:00:00Z", snapshot.SyncMetadata["last_sync_time"])
-	assert.Equal(t, 1, snapshot.PendingSyncItems)
+	assert.Equal(t, 2, snapshot.RemoteDriftItems)
 	require.Len(t, snapshot.IssueGroups, 1)
 	assert.Equal(t, synctypes.SummaryInvalidFilename, snapshot.IssueGroups[0].SummaryKey)
 
@@ -349,10 +349,10 @@ func seedDriveStatusFailures(t *testing.T, store *SyncStore, ctx context.Context
 	t.Helper()
 
 	_, err := store.DB().ExecContext(ctx, `INSERT INTO remote_state
-		(drive_id, item_id, path, parent_id, item_type, sync_status, observed_at)
+		(drive_id, item_id, path, parent_id, item_type, hash, observed_at)
 		VALUES
-		(?, 'pending-item', '/pending.txt', 'root', 'file', 'pending_download', 1),
-		(?, 'synced-item', '/synced.txt', 'root', 'file', 'synced', 1)`,
+		(?, 'pending-item', '/pending.txt', 'root', 'file', 'hash-new', 1),
+		(?, 'synced-item', '/synced.txt', 'root', 'file', '', 1)`,
 		testDriveID,
 		testDriveID,
 	)

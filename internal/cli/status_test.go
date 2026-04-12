@@ -542,7 +542,7 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 	assert.Zero(t, info.IssueCount)
 }
 
-func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
+func TestQuerySyncState_RemoteDriftAndIssues(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.DiscardHandler)
@@ -556,13 +556,16 @@ func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
 
 	ctx := t.Context()
 
-	// Insert remote_state rows with mixed statuses.
-	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, drive_id, item_id, parent_id, item_type, sync_status, observed_at) VALUES
-		('/a.txt', 'd!1', 'i1', 'root', 'file', 'synced', 0),
-		('/b.txt', 'd!1', 'i2', 'root', 'file', 'pending_download', 0),
-		('/c.txt', 'd!1', 'i3', 'root', 'file', 'download_failed', 0),
-		('/d.txt', 'd!1', 'i4', 'root', 'file', 'deleted', 0),
-		('/e.txt', 'd!1', 'i5', 'root', 'file', 'filtered', 0)`)
+	// Insert remote_state rows with mixed drift/filter shapes.
+	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, drive_id, item_id, parent_id, item_type, observed_at, is_filtered) VALUES
+		('/a.txt', 'd!1', 'i1', 'root', 'file', 0, 0),
+		('/b.txt', 'd!1', 'i2', 'root', 'file', 0, 0),
+		('/c.txt', 'd!1', 'i3', 'root', 'file', 0, 0),
+		('/e.txt', 'd!1', 'i5', 'root', 'file', 0, 1)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO baseline (drive_id, item_id, path, parent_id, item_type, remote_hash, remote_mtime, synced_at) VALUES
+		('d!1', 'i1', '/a.txt', 'root', 'file', '', 0, 0),
+		('d!1', 'i4', '/d.txt', 'root', 'file', '', 0, 0)`)
 	require.NoError(t, err)
 
 	// Insert sync_failures rows.
@@ -576,7 +579,7 @@ func TestQuerySyncState_PendingSyncAndIssues(t *testing.T) {
 
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
-	assert.Equal(t, 2, info.PendingSync) // pending_download + download_failed
+	assert.Equal(t, 3, info.RemoteDrift) // remote-only creates plus one baseline row missing on remote
 	assert.Equal(t, 1, info.IssueCount)  // 1 actionable failure
 	assert.Equal(t, 2, info.Retrying)    // 2 transient with failure_count >= 3
 }
@@ -1271,7 +1274,7 @@ func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 		TotalDrives:      2,
 		Ready:            2,
 		TotalIssues:      1,
-		TotalPendingSync: 5,
+		TotalRemoteDrift: 5,
 		TotalRetrying:    3,
 	}
 
@@ -1279,7 +1282,7 @@ func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 	require.NoError(t, printSummaryText(&buf, s))
 
 	output := buf.String()
-	assert.Contains(t, output, "5 pending")
+	assert.Contains(t, output, "5 remote drift")
 	assert.Contains(t, output, "3 retrying")
 }
 
@@ -1291,7 +1294,7 @@ func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
 		LastSyncTime: "2026-03-02T10:30:00Z",
 		FileCount:    45,
 		IssueCount:   0,
-		PendingSync:  3,
+		RemoteDrift:  3,
 		Retrying:     2,
 	}
 
@@ -1299,7 +1302,7 @@ func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
 	require.NoError(t, printSyncStateText(&buf, ss, false))
 
 	output := buf.String()
-	assert.Contains(t, output, "Pending:   3 items")
+	assert.Contains(t, output, "Remote drift: 3 items")
 	assert.Contains(t, output, "Retrying:  2 items")
 }
 
@@ -1653,14 +1656,14 @@ func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
 	accounts := []statusAccount{
 		{
 			Drives: []statusDrive{
-				{State: driveStateReady, SyncState: &syncStateInfo{PendingSync: 3, Retrying: 1}},
-				{State: driveStateReady, SyncState: &syncStateInfo{PendingSync: 2, Retrying: 4}},
+				{State: driveStateReady, SyncState: &syncStateInfo{RemoteDrift: 3, Retrying: 1}},
+				{State: driveStateReady, SyncState: &syncStateInfo{RemoteDrift: 2, Retrying: 4}},
 			},
 		},
 	}
 
 	s := computeSummary(accounts)
-	assert.Equal(t, 5, s.TotalPendingSync)
+	assert.Equal(t, 5, s.TotalRemoteDrift)
 	assert.Equal(t, 5, s.TotalRetrying)
 }
 
@@ -1690,11 +1693,11 @@ func seedDriveStatusFixture(t *testing.T) (string, driveid.CanonicalID) {
 			('d!1', 'baseline-1', '/tracked.txt', 'root', 'file', 'lh', 'rh', 1, 1, 1, 1, 1, 'etag-1');
 
 		INSERT INTO remote_state
-			(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag, sync_status,
+			(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag, is_filtered,
 			 filter_generation, filter_reason, observed_at)
 		VALUES
-			('d!1', 'remote-pending', '/pending.txt', 'root', 'file', 'rh-p', 5, 1, 'etag-p', 'pending_download', 0, '', 2),
-			('d!1', 'remote-synced', '/synced.txt', 'root', 'file', 'rh-s', 5, 1, 'etag-s', 'synced', 0, '', 2);
+			('d!1', 'remote-pending', '/pending.txt', 'root', 'file', 'rh-p', 5, 1, 'etag-p', 0, 0, '', 2),
+			('d!1', 'remote-synced', '/synced.txt', 'root', 'file', 'rh-s', 5, 1, 'etag-s', 0, 0, '', 2);
 
 		INSERT INTO sync_failures
 			(path, drive_id, direction, action_type, category, failure_role, issue_type, item_id,
@@ -1880,11 +1883,13 @@ const statusTestStateSchema = `
 			item_id TEXT NOT NULL,
 			parent_id TEXT NOT NULL,
 			item_type TEXT NOT NULL,
-			sync_status TEXT NOT NULL DEFAULT 'synced',
+			is_filtered INTEGER NOT NULL DEFAULT 0 CHECK(is_filtered IN (0, 1)),
 			size INTEGER,
 			hash TEXT,
 			mtime INTEGER,
 			etag TEXT,
+			filter_generation INTEGER NOT NULL DEFAULT 0,
+			filter_reason TEXT NOT NULL DEFAULT '',
 			observed_at INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE IF NOT EXISTS sync_failures (

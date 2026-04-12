@@ -105,7 +105,7 @@ func TestRunOnce_SharePointRootFormsRecordsActionableFailure(t *testing.T) {
 }
 
 // Validates: R-2.1.3
-func TestRunOnce_DownloadOnly_SkipsLocalScan(t *testing.T) {
+func TestRunOnce_DownloadOnly_ObservesLocalScanButSuppressesUploads(t *testing.T) {
 	t.Parallel()
 
 	// Place a local file that would generate an upload event if scanned.
@@ -125,12 +125,11 @@ func TestRunOnce_DownloadOnly_SkipsLocalScan(t *testing.T) {
 	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
-	// The local file should not appear in uploads because local scan was skipped.
-	assert.Equal(t, 0, report.Uploads, "local scan should be skipped in download-only mode")
+	assert.Equal(t, 0, report.Uploads, "download-only mode should suppress uploads even though local scan still runs")
 }
 
 // Validates: R-2.1.4
-func TestRunOnce_UploadOnly_SkipsDelta(t *testing.T) {
+func TestRunOnce_UploadOnly_StillObservesRemoteDelta(t *testing.T) {
 	t.Parallel()
 
 	deltaCalled := false
@@ -146,7 +145,7 @@ func TestRunOnce_UploadOnly_SkipsDelta(t *testing.T) {
 
 	_, err := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
 	require.NoError(t, err, "RunOnce")
-	assert.False(t, deltaCalled, "Delta should not be called in upload-only mode")
+	assert.True(t, deltaCalled, "upload-only mode should still observe remote delta")
 }
 
 // Validates: R-2.1.1
@@ -417,6 +416,19 @@ func TestRunOnce_DeleteSafety_HoldsDeletesDurably(t *testing.T) {
 	}
 
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
+	observedItems := make([]synctypes.ObservedItem, 0, len(seedOutcomes))
+	for i := range seedOutcomes {
+		observedItems = append(observedItems, synctypes.ObservedItem{
+			DriveID:  driveID,
+			ItemID:   seedOutcomes[i].ItemID,
+			Path:     seedOutcomes[i].Path,
+			ItemType: seedOutcomes[i].ItemType,
+			Hash:     seedOutcomes[i].RemoteHash,
+			Size:     seedOutcomes[i].RemoteSize,
+			Mtime:    seedOutcomes[i].RemoteMtime,
+		})
+	}
+	require.NoError(t, eng.baseline.CommitObservation(ctx, observedItems, "old-token", driveID))
 
 	report, err := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
@@ -465,6 +477,19 @@ func TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold(t *testing.T) {
 	}
 
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
+	observedItems := make([]synctypes.ObservedItem, 0, len(seedOutcomes))
+	for i := range seedOutcomes {
+		observedItems = append(observedItems, synctypes.ObservedItem{
+			DriveID:  driveID,
+			ItemID:   seedOutcomes[i].ItemID,
+			Path:     seedOutcomes[i].Path,
+			ItemType: seedOutcomes[i].ItemType,
+			Hash:     seedOutcomes[i].RemoteHash,
+			Size:     seedOutcomes[i].RemoteSize,
+			Mtime:    seedOutcomes[i].RemoteMtime,
+		})
+	}
+	require.NoError(t, eng.baseline.CommitObservation(ctx, observedItems, "old-token", driveID))
 
 	held := make([]HeldDeleteRecord, 0, len(seedOutcomes))
 	for i := range seedOutcomes {
@@ -517,6 +542,19 @@ func TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold(
 	}
 
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
+	observedItems := make([]synctypes.ObservedItem, 0, len(seedOutcomes))
+	for i := range seedOutcomes {
+		observedItems = append(observedItems, synctypes.ObservedItem{
+			DriveID:  driveID,
+			ItemID:   seedOutcomes[i].ItemID,
+			Path:     seedOutcomes[i].Path,
+			ItemType: seedOutcomes[i].ItemType,
+			Hash:     seedOutcomes[i].RemoteHash,
+			Size:     seedOutcomes[i].RemoteSize,
+			Mtime:    seedOutcomes[i].RemoteMtime,
+		})
+	}
+	require.NoError(t, eng.baseline.CommitObservation(ctx, observedItems, "old-token", driveID))
 
 	staleApprovals := make([]HeldDeleteRecord, 0, len(seedOutcomes))
 	for i := range seedOutcomes {
@@ -1083,115 +1121,11 @@ func newRunOnceFailingDownloadEngine(t *testing.T) (*testEngine, context.Context
 	return eng, t.Context()
 }
 
-// Validates: R-6.5.3, R-2.5.3
-// TestRunOnce_CrashRecovery_ResetsInProgressStates verifies that RunOnce
-// resets downloading/deleting states to their pending equivalents at startup,
-// ensuring crash recovery picks up interrupted work.
-func TestRunOnce_CrashRecovery_ResetsInProgressStates(t *testing.T) {
+// Validates: R-2.5.1
+func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-1"), nil
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	// Simulate a crash by inserting rows with in-progress states directly.
-	now := time.Now().Unix()
-	_, err := eng.baseline.DB().ExecContext(ctx, `
-		INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		VALUES (?, 'item-dl', '/downloading.txt', 'file', 'downloading', ?),
-		       (?, 'item-del', '/deleting.txt', 'file', 'deleting', ?)`,
-		engineTestDriveID, now, engineTestDriveID, now)
-	require.NoError(t, err, "seed in-progress rows")
-
-	// prepareRunOnceState should reset these before one-shot planning begins.
-	runner := newOneShotRunner(eng.Engine)
-	runErr := runner.prepareRunOnceState(ctx)
-	require.NoError(t, runErr, "prepareRunOnceState")
-
-	// Verify the states were reset.
-	var dlStatus, delStatus synctypes.SyncStatus
-	err = eng.baseline.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE item_id = 'item-dl'`).Scan(&dlStatus)
-	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusPendingDownload, dlStatus, "downloading should be reset")
-
-	// deleting → deleted because the file doesn't exist on disk (crash
-	// recovery checks filesystem to determine target state).
-	err = eng.baseline.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE item_id = 'item-del'`).Scan(&delStatus)
-	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusDeleted, delStatus, "deleting with no local file should be marked deleted")
-}
-
-// Validates: R-2.10.41
-func TestRunOnce_CrashRecovery_MixedDeletingCandidates(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-1"), nil
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	writeLocalFile(t, syncRoot, "exists.txt", "still here")
-
-	now := time.Now().Unix()
-	_, err := eng.baseline.DB().ExecContext(ctx, `
-		INSERT INTO remote_state (drive_id, item_id, path, item_type, sync_status, observed_at)
-		VALUES (?, 'gone', '/gone.txt', 'file', 'deleting', ?),
-		       (?, 'exists', '/exists.txt', 'file', 'deleting', ?),
-		       (?, 'bad', '/../bad.txt', 'file', 'deleting', ?)`,
-		engineTestDriveID, now,
-		engineTestDriveID, now,
-		engineTestDriveID, now,
-	)
-	require.NoError(t, err, "seed crash-recovery rows")
-
-	runner := newOneShotRunner(eng.Engine)
-	runErr := runner.prepareRunOnceState(ctx)
-	require.NoError(t, runErr, "prepareRunOnceState")
-
-	var goneStatus synctypes.SyncStatus
-	err = eng.baseline.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE item_id = 'gone'`).Scan(&goneStatus)
-	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusDeleted, goneStatus)
-
-	var existsStatus synctypes.SyncStatus
-	err = eng.baseline.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE item_id = 'exists'`).Scan(&existsStatus)
-	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusPendingDelete, existsStatus)
-
-	var badStatus synctypes.SyncStatus
-	err = eng.baseline.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE item_id = 'bad'`).Scan(&badStatus)
-	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusPendingDelete, badStatus)
-}
-
-// Validates: R-2.5.1, R-2.5.4, R-6.8.15
-func TestRunOnce_CrashRecovery_ReplaysDownloadingStateWithoutFreshDelta(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return deltaPageWithItems([]graph.Item{
@@ -1209,39 +1143,33 @@ func TestRunOnce_CrashRecovery_ReplaysDownloadingStateWithoutFreshDelta(t *testi
 
 	now := time.Now().UnixNano()
 	_, err := eng.baseline.DB().ExecContext(ctx, `
-		INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, sync_status, observed_at)
-		VALUES (?, 'item-dl', 'retry-download.txt', 'file', NULL, 18, ?, 'downloading', ?)`,
+		INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, observed_at)
+		VALUES (?, 'item-dl', 'retry-download.txt', 'file', NULL, 18, ?, ?)`,
 		engineTestDriveID, now, now,
 	)
-	require.NoError(t, err, "seed downloading row")
+	require.NoError(t, err, "seed remote mirror row")
 
 	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
-	assert.Equal(t, 1, report.Downloads, "due crash-recovery download should be replanned in one-shot mode")
+	assert.Equal(t, 1, report.Downloads, "remote mirror drift should be reconciled without a fresh delta event")
 
-	//nolint:gosec // test-controlled tempdir path
+	// #nosec G304 -- test reads a fixed file name rooted in t.TempDir().
 	data, err := os.ReadFile(filepath.Join(syncRoot, "retry-download.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "recovered-download", string(data))
 
-	var status synctypes.SyncStatus
-	err = eng.baseline.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE item_id = 'item-dl'`,
-	).Scan(&status)
+	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusSynced, status)
-
-	failures, err := eng.baseline.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, failures, "successful one-shot retry replay should clear crash-recovery bridge rows")
+	entry, ok := bl.GetByPath("retry-download.txt")
+	require.True(t, ok)
+	assert.Equal(t, "item-dl", entry.ItemID)
 }
 
-// Validates: R-2.5.1, R-2.5.4, R-6.8.15
-func TestRunOnce_CrashRecovery_ReplaysDownloadingStateWithBaselineAndMissingLocalFile(t *testing.T) {
+// Validates: R-2.5.1
+func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return deltaPageWithItems([]graph.Item{
@@ -1280,39 +1208,31 @@ func TestRunOnce_CrashRecovery_ReplaysDownloadingStateWithBaselineAndMissingLoca
 
 	now := time.Now().UnixNano()
 	_, err := eng.baseline.DB().ExecContext(ctx, `
-		INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, sync_status, observed_at, etag)
-		VALUES (?, 'item-dl', 'retry-download.txt', 'file', ?, 18, ?, 'downloading', ?, 'etag-dl')`,
+		INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, observed_at, etag)
+		VALUES (?, 'item-dl', 'retry-download.txt', 'file', ?, 18, ?, ?, 'etag-dl')`,
 		engineTestDriveID, downloadHash, now, now,
 	)
-	require.NoError(t, err, "seed downloading row")
+	require.NoError(t, err, "seed remote mirror row")
 
 	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
-	assert.Equal(t, 1, report.Downloads, "missing local file should force crash-recovery download replay")
+	assert.Equal(t, 0, report.Downloads, "download-only should not auto-resolve two-sided drift")
 
-	//nolint:gosec // test-controlled tempdir path
-	data, err := os.ReadFile(filepath.Join(syncRoot, "retry-download.txt"))
-	require.NoError(t, err)
-	assert.Equal(t, "recovered-download", string(data))
+	_, err = os.Stat(filepath.Join(syncRoot, "retry-download.txt"))
+	require.ErrorIs(t, err, os.ErrNotExist)
 
-	var status synctypes.SyncStatus
-	err = eng.baseline.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE item_id = 'item-dl'`,
-	).Scan(&status)
+	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusSynced, status)
-
-	failures, err := eng.baseline.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, failures, "successful one-shot retry replay should clear crash-recovery bridge rows")
+	entry, ok := bl.GetByPath("retry-download.txt")
+	require.True(t, ok)
+	assert.Equal(t, "etag-dl", entry.ETag)
 }
 
-// Validates: R-2.5.1, R-2.5.4, R-6.8.15
-func TestRunOnce_CrashRecovery_ReplaysDeletingStateWithoutFreshDelta(t *testing.T) {
+// Validates: R-2.5.1
+func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return deltaPageWithItems([]graph.Item{
@@ -1343,36 +1263,18 @@ func TestRunOnce_CrashRecovery_ReplaysDeletingStateWithoutFreshDelta(t *testing.
 		RemoteMtime:     time.Now().UnixNano(),
 		ETag:            "etag-del",
 	}}, "")
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-	_, ok := bl.GetByPath("retry-delete.txt")
-	require.True(t, ok, "seeded baseline entry should exist for delete replay")
-
-	now := time.Now().UnixNano()
-	_, err = eng.baseline.DB().ExecContext(ctx, `
-		INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, sync_status, observed_at)
-		VALUES (?, 'item-del', 'retry-delete.txt', 'file', ?, 9, ?, 'deleting', ?)`,
-		engineTestDriveID, deleteHash, now, now,
-	)
-	require.NoError(t, err, "seed deleting row")
 
 	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
-	assert.Equal(t, 1, report.LocalDeletes, "due crash-recovery delete should be replanned in one-shot mode")
+	assert.Equal(t, 1, report.LocalDeletes, "remote delete drift should be reconciled without a fresh delta event")
 
-	_, err = os.Stat(filepath.Join(syncRoot, "retry-delete.txt"))
+	_, err := os.Stat(filepath.Join(syncRoot, "retry-delete.txt"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 
-	var status synctypes.SyncStatus
-	err = eng.baseline.DB().QueryRowContext(ctx,
-		`SELECT sync_status FROM remote_state WHERE item_id = 'item-del'`,
-	).Scan(&status)
+	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, synctypes.SyncStatusDeleted, status)
-
-	failures, err := eng.baseline.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, failures, "successful one-shot retry replay should clear crash-recovery delete bridge rows")
+	_, found := bl.GetByPath("retry-delete.txt")
+	assert.False(t, found)
 }
 
 func TestResolveSafetyConfig_Default(t *testing.T) {

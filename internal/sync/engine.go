@@ -299,9 +299,9 @@ func (e *Engine) hasPersistedAuthScope(ctx context.Context) (bool, error) {
 
 // RunOnce executes a single sync pass:
 //  1. Load baseline
-//  2. Observe remote (skip if upload-only)
-//  3. Observe local (skip if download-only)
-//  4. Buffer and flush changes
+//  2. Observe remote truth
+//  3. Observe local truth
+//  4. Buffer and flush changes plus durable retry/replay work
 //  5. Early return if no changes
 //  6. Plan actions (flat list + dependency edges)
 //  7. Return early if dry-run

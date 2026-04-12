@@ -246,29 +246,6 @@ func withRuntimeSummary(decision *ResultDecision) ResultDecision {
 	return *decision
 }
 
-// runtimeSummaryKeysByIssueType is immutable process-wide lookup data for
-// classifying runtime issue types without per-result allocations in the sync
-// hot path.
-//
-//nolint:gochecknoglobals // Immutable lookup table; kept package-wide to avoid per-result allocation churn.
-var runtimeSummaryKeysByIssueType = map[string]synctypes.SummaryKey{
-	synctypes.IssueUnauthorized:          synctypes.SummaryAuthenticationRequired,
-	synctypes.IssueQuotaExceeded:         synctypes.SummaryQuotaExceeded,
-	synctypes.IssueServiceOutage:         synctypes.SummaryServiceOutage,
-	synctypes.IssueRateLimited:           synctypes.SummaryRateLimited,
-	synctypes.IssueSharedFolderBlocked:   synctypes.SummarySharedFolderWritesBlocked,
-	synctypes.IssuePermissionDenied:      synctypes.SummaryRemotePermissionDenied,
-	synctypes.IssueLocalPermissionDenied: synctypes.SummaryLocalPermissionDenied,
-	synctypes.IssueInvalidFilename:       synctypes.SummaryInvalidFilename,
-	synctypes.IssuePathTooLong:           synctypes.SummaryPathTooLong,
-	synctypes.IssueFileTooLarge:          synctypes.SummaryFileTooLarge,
-	synctypes.IssueDeleteSafetyHeld:      synctypes.SummaryHeldDeletes,
-	synctypes.IssueCaseCollision:         synctypes.SummaryCaseCollision,
-	synctypes.IssueDiskFull:              synctypes.SummaryDiskFull,
-	synctypes.IssueHashPanic:             synctypes.SummaryHashError,
-	synctypes.IssueFileTooLargeForSpace:  synctypes.SummaryFileTooLargeForSpace,
-}
-
 func runtimeSummaryKey(class failures.Class, issueType string) synctypes.SummaryKey {
 	if key, ok := runtimeSummaryKeyForIssueType(issueType); ok {
 		return key
@@ -285,21 +262,38 @@ func runtimeSummaryKey(class failures.Class, issueType string) synctypes.Summary
 }
 
 func runtimeSummaryKeyForIssueType(issueType string) (synctypes.SummaryKey, bool) {
-	key, ok := runtimeSummaryKeysByIssueType[issueType]
-	return key, ok
-}
-
-func isDeleteLikeSyncStatus(status synctypes.SyncStatus) bool {
-	return status == synctypes.SyncStatusDeleted ||
-		status == synctypes.SyncStatusDeleting ||
-		status == synctypes.SyncStatusDeleteFailed ||
-		status == synctypes.SyncStatusPendingDelete
-}
-
-func isResolvedRemoteSyncStatus(status synctypes.SyncStatus) bool {
-	return status == synctypes.SyncStatusSynced ||
-		status == synctypes.SyncStatusDeleted ||
-		status == synctypes.SyncStatusFiltered
+	switch issueType {
+	case synctypes.IssueInvalidFilename:
+		return synctypes.SummaryInvalidFilename, true
+	case synctypes.IssuePathTooLong:
+		return synctypes.SummaryPathTooLong, true
+	case synctypes.IssueFileTooLarge:
+		return synctypes.SummaryFileTooLarge, true
+	case synctypes.IssueFileTooLargeForSpace:
+		return synctypes.SummaryFileTooLargeForSpace, true
+	case synctypes.IssueDiskFull:
+		return synctypes.SummaryDiskFull, true
+	case synctypes.IssueHashPanic:
+		return synctypes.SummaryHashError, true
+	case synctypes.IssueUnauthorized:
+		return synctypes.SummaryAuthenticationRequired, true
+	case synctypes.IssueQuotaExceeded:
+		return synctypes.SummaryQuotaExceeded, true
+	case synctypes.IssueServiceOutage:
+		return synctypes.SummaryServiceOutage, true
+	case synctypes.IssueRateLimited:
+		return synctypes.SummaryRateLimited, true
+	case synctypes.IssueSharedFolderBlocked:
+		return synctypes.SummarySharedFolderWritesBlocked, true
+	case synctypes.IssuePermissionDenied:
+		return synctypes.SummaryRemotePermissionDenied, true
+	case synctypes.IssueLocalPermissionDenied:
+		return synctypes.SummaryLocalPermissionDenied, true
+	case synctypes.IssueCaseCollision:
+		return synctypes.SummaryCaseCollision, true
+	default:
+		return "", false
+	}
 }
 
 // deriveScopeKey maps a worker result to its typed scope key. Delegates to

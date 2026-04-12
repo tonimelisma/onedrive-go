@@ -17,7 +17,7 @@
             "last_sync_duration": "1500",
             "file_count": 42,
             "issue_count": 3,
-            "pending_sync": 2,
+            "remote_drift": 2,
             "retrying": 1,
             "last_error": "sync: network timeout",
             "issue_groups": [
@@ -94,7 +94,7 @@
     "paused": 1,
     "accounts_requiring_auth": 1,
     "total_issues": 3,
-    "total_pending_sync": 2,
+    "total_remote_drift": 2,
     "total_retrying": 1
   }
 }

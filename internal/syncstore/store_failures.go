@@ -13,8 +13,7 @@
 //
 // Contents:
 //   - IsActionableIssue:                classify issue types requiring user action
-//   - RecordFailure:                    unified failure recording with remote_state transition
-//   - transitionRemoteStateOnFailure:   downloading→download_failed, deleting→delete_failed
+//   - RecordFailure:                    unified failure recording
 //   - ListSyncFailures:                 all failures ordered by last_seen_at
 //   - ListActionableFailures:           user-actionable failures only
 //   - ListSyncFailuresForRetry:         transient failures ready for retry
@@ -34,9 +33,8 @@
 //   - scanSyncFailureRows:              scan multiple failure rows
 //
 // Related files:
-//   - store.go:             SyncStore type definition and lifecycle
-//   - store_observation.go: scanRemoteStateRow (used by transitionRemoteStateOnFailure)
-//   - issue_types.go:       issue type constants referenced by IsActionableIssue
+//   - store.go:       SyncStore type definition and lifecycle
+//   - issue_types.go: issue type constants referenced by IsActionableIssue
 package syncstore
 
 import (
@@ -223,11 +221,6 @@ func IsActionableIssue(issueType string) bool {
 // RecordFailure is the unified failure recording method. It always runs in a
 // transaction and handles all failure types (upload, download, delete).
 //
-// For download/delete failures, it atomically transitions remote_state
-// (downloading→download_failed, deleting→delete_failed). The WHERE clause
-// is a natural no-op when no matching row exists (uploads, pre-upload
-// validation, permission checks).
-//
 // When ItemID is not provided and direction is download/delete, it is
 // auto-resolved from remote_state within the same transaction.
 //
@@ -257,27 +250,20 @@ func (m *SyncStore) RecordFailure(
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback failure transaction for %s", p.Path))
 	}()
 
-	// Step 1: Transition remote_state status for download/delete failures.
-	if direction == synctypes.DirectionDownload || direction == synctypes.DirectionDelete {
-		if transitionErr := m.transitionRemoteStateOnFailure(ctx, tx, p.Path); transitionErr != nil {
-			return transitionErr
-		}
-	}
-
-	// Step 2: Read current failure count and compute backoff.
+	// Step 1: Read current failure count and compute backoff.
 	currentFailures := m.readFailureCount(ctx, tx, p)
 	nextRetryNano := m.computeNextRetry(now, currentFailures, delayFn)
 	newCount := currentFailures + 1
 	nowNano := now.UnixNano()
 
-	// Step 3: Auto-resolve item_id from remote_state for download/delete
+	// Step 2: Auto-resolve item_id from remote_state for download/delete
 	// when caller didn't provide one.
 	itemID, resolveErr := m.resolveItemID(ctx, tx, p.Path, p.DriveID, p.ItemID, direction)
 	if resolveErr != nil {
 		return resolveErr
 	}
 
-	// Step 5: UPSERT into sync_failures with full field set.
+	// Step 3: UPSERT into sync_failures with full field set.
 	// COALESCE preserves existing values when new values are empty/zero.
 	// NOTE: UpsertActionableFailures has a parallel INSERT with different
 	// ON CONFLICT semantics — update both when adding columns.
@@ -376,39 +362,6 @@ func (m *SyncStore) resolveItemID(
 	}
 
 	return resolvedItemID, nil
-}
-
-// transitionRemoteStateOnFailure transitions remote_state status for
-// download/delete failures (downloading→download_failed, deleting→delete_failed).
-// The WHERE clause is a safe no-op when no matching row exists.
-func (m *SyncStore) transitionRemoteStateOnFailure(ctx context.Context, tx sqlTxRunner, path string) error {
-	result, execErr := tx.ExecContext(ctx,
-		`UPDATE remote_state SET
-			sync_status = CASE sync_status
-				WHEN ? THEN ?
-				WHEN ? THEN ?
-			END
-		WHERE path = ? AND sync_status IN (?, ?)`,
-		synctypes.SyncStatusDownloading, synctypes.SyncStatusDownloadFailed,
-		synctypes.SyncStatusDeleting, synctypes.SyncStatusDeleteFailed,
-		path, synctypes.SyncStatusDownloading, synctypes.SyncStatusDeleting,
-	)
-	if execErr != nil {
-		return fmt.Errorf("sync: transitioning remote_state for %s: %w", path, execErr)
-	}
-
-	affected, rowErr := result.RowsAffected()
-	if rowErr != nil {
-		return fmt.Errorf("sync: checking rows affected for %s: %w", path, rowErr)
-	}
-
-	if affected == 0 {
-		m.logger.Debug("RecordFailure: remote_state row already transitioned or absent",
-			slog.String("path", path),
-		)
-	}
-
-	return nil
 }
 
 // ListSyncFailures returns all sync_failures rows ordered by last_seen_at DESC.

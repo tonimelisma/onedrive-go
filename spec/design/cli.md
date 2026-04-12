@@ -437,6 +437,10 @@ Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 
 - **Human-readable names**: Shortcut-scoped failures display local path name, not internal drive IDs.
 - **Scope-aware reason/action copy**: Failure text is selected from `issue_type` plus the raw scope key, so shortcut-scoped quota failures say the shared-folder owner is out of space instead of implying the user's own drive is full.
 - **Single read surface**: `status` is the only sync read command. It always renders the same per-drive sync-health contract for the displayed drives, and `--drive` only filters which drives are shown.
+- **Remote drift line**: `status` shows already-observed remote-side drift in
+  exactly two visible places: the per-drive `Remote drift: N items` line and
+  the aggregate summary's `N remote drift` count. That number means "remote
+  truth has moved ahead of baseline," not "all pending sync work."
 - **Strict command grammar**: CLI mutation lives under one explicit noun, `resolve`, with separate actions for delete approval (`resolve deletes`) and conflict requests (`resolve local|remote|both [path-or-id]`, optional `--all`). Recovery lives under one explicit noun, `recover`.
 - **JSON shape**: `status --json` always emits one top-level `summary` plus `accounts[]`, and each displayed drive may include one nested `sync_state` object with `issue_groups`, `delete_safety`, `delete_safety_total`, `conflicts`, `conflicts_total`, optional `conflict_history`, `conflict_history_total`, `examples_limit`, `verbose`, per-entry action hints, and per-drive `next_actions`.
 - **Live perf overlay**: `status --perf` augments that same per-drive read model with live sync-owner perf when available. Displayed drives gain `sync_state.perf` in JSON and a `PERF` section in text. When no owner or no live snapshot exists, the CLI emits `perf_unavailable_reason` instead of inventing persisted history.

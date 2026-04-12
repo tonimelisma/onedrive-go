@@ -385,8 +385,9 @@ func TestDownloadOnlyMode_SkipsLocalCorruption(t *testing.T) {
 
 // Validates: R-2.3
 // TestED8_FolderModeFilteringRegression validates that folder classifiers
-// use upfront mode filtering. ED8 (locally deleted folder, no remote observation,
-// no remote deletion) should produce ActionRemoteDelete in bidirectional mode.
+// classify from full truth first and then admit the allowed action for the
+// current mode. ED8 (locally deleted folder, no remote observation, no remote
+// deletion) should produce ActionRemoteDelete in bidirectional mode.
 func TestED8_FolderModeFilteringRegression(t *testing.T) {
 	planner := NewPlanner(synctest.TestLogger(t))
 

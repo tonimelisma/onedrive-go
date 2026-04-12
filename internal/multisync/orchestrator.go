@@ -92,7 +92,7 @@ type driveWork struct {
 // RunOnce executes a single sync pass for all configured drives. Each drive
 // runs in its own goroutine via a DriveRunner with panic recovery. RunOnce
 // never returns an error — individual drive errors are captured in each
-// synctypes.DriveReport. The caller inspects reports to determine success or failure.
+// syncengine.Report. The caller inspects reports to determine success or failure.
 func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.Mode, opts syncengine.RunOptions) []*DriveReport {
 	drives := o.cfg.Drives
 	if len(drives) == 0 {

@@ -66,11 +66,13 @@ type statusDrive struct {
 
 // syncStateInfo holds the full per-drive status payload rendered by `status`.
 type syncStateInfo struct {
-	LastSyncTime             string                      `json:"last_sync_time,omitempty"`
-	LastSyncDuration         string                      `json:"last_sync_duration,omitempty"`
-	FileCount                int                         `json:"file_count"`
-	IssueCount               int                         `json:"issue_count"`
-	PendingSync              int                         `json:"pending_sync"`
+	LastSyncTime     string `json:"last_sync_time,omitempty"`
+	LastSyncDuration string `json:"last_sync_duration,omitempty"`
+	FileCount        int    `json:"file_count"`
+	IssueCount       int    `json:"issue_count"`
+	// RemoteDrift is the count of remote-side differences we have already
+	// observed and persisted, but which are not yet reflected in baseline.
+	RemoteDrift              int                         `json:"remote_drift"`
 	Retrying                 int                         `json:"retrying"`
 	LastError                string                      `json:"last_error,omitempty"`
 	IssueGroups              []failureGroupJSON          `json:"issue_groups,omitempty"`
@@ -101,7 +103,7 @@ type statusSummary struct {
 	Paused                int `json:"paused"`
 	AccountsRequiringAuth int `json:"accounts_requiring_auth"`
 	TotalIssues           int `json:"total_issues"`
-	TotalPendingSync      int `json:"total_pending_sync"`
+	TotalRemoteDrift      int `json:"total_remote_drift"`
 	TotalRetrying         int `json:"total_retrying"`
 }
 
@@ -383,7 +385,7 @@ func computeSummary(accounts []statusAccount) statusSummary {
 
 			if d.SyncState != nil {
 				s.TotalIssues += d.SyncState.IssueCount
-				s.TotalPendingSync += d.SyncState.PendingSync
+				s.TotalRemoteDrift += d.SyncState.RemoteDrift
 				s.TotalRetrying += d.SyncState.Retrying
 			}
 		}
@@ -554,7 +556,7 @@ func printSyncStateSummaryLines(w io.Writer, ss *syncStateInfo) error {
 		format string
 	}{
 		{count: ss.FileCount, format: "    Files:     %d\n"},
-		{count: ss.PendingSync, format: "    Pending:   %d items\n"},
+		{count: ss.RemoteDrift, format: "    Remote drift: %d items\n"},
 		{count: ss.IssueCount, format: "    Issues:    %d\n"},
 		{count: ss.Retrying, format: "    Retrying:  %d items\n"},
 	}
@@ -657,8 +659,8 @@ func printSummaryText(w io.Writer, s statusSummary) error {
 
 	extra := fmt.Sprintf("%d issues", s.TotalIssues)
 
-	if s.TotalPendingSync > 0 {
-		extra += fmt.Sprintf(", %d pending", s.TotalPendingSync)
+	if s.TotalRemoteDrift > 0 {
+		extra += fmt.Sprintf(", %d remote drift", s.TotalRemoteDrift)
 	}
 
 	if s.TotalRetrying > 0 {

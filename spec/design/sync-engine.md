@@ -63,7 +63,7 @@ discovered marker directories. The engine then:
   and watch execution paths consume
 - persists the snapshot plus observation metadata in the dedicated
   `scope_state` row, then asks the store to apply row-level
-  `remote_state.sync_status = filtered` transitions atomically
+  `remote_state.is_filtered = 1` transitions atomically
 - predicts the next effective scope generation from the diff between
   persisted and live scope truth instead of letting each runtime path derive
   that independently
@@ -172,11 +172,10 @@ driver/dispatch combinations stay legal, shortcut phases cannot enable
 delta-to-enumerate fallback, and persisted observation metadata is derived
 only from the primary phase.
 
-Upload-only runs and upload-only watch sessions still rebuild and persist local
-scope truth, but they intentionally defer remote re-entry reconciliation on
-scope expansion until a later mode that is allowed to observe/download remote
-state. This preserves the “do not invent remote truth in upload-only mode”
-authority boundary.
+Directional modes still rebuild and persist full scope truth. They continue to
+observe both sides, including remote re-entry candidates, but only admit the
+mutations legal for the selected direction. This preserves the “direction
+constrains execution, not observation” boundary.
 
 ### Watch Bootstrap
 
@@ -257,7 +256,7 @@ The engine relies on a few non-negotiable behavioral invariants:
 | Behavior | Evidence |
 | --- | --- |
 | Watch bootstrap reaches quiescence before local or remote observers start. | `TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts`, `TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts` |
-| Bootstrap subroutines stay directly testable for quiescence, no-change startup, change-driven startup, and crash-recovery cleanup without helper-loop shims. | `TestWaitForQuiescence_EmptyGraph`, `TestWaitForQuiescence_ContextCancel`, `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestBootstrapSync_CrashRecovery_MixedDeletingCandidates` |
+| Bootstrap subroutines stay directly testable for quiescence, no-change startup, change-driven startup, and durable-truth reconciliation without helper-loop shims. | `TestWaitForQuiescence_EmptyGraph`, `TestWaitForQuiescence_ContextCancel`, `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta` |
 | Watch shutdown seals admission, stops retry/trial wake handling, and drops reconcile handoff after drain begins. | `TestRunWatch_ShutdownStopsRetryAndTrialTimers`, `TestRunWatch_ShutdownDropsReconcileResult`, `TestRunFullReconciliationAsync_ShutdownAfterCommit` |
 | Cancellation wins over fatal observer-exit shutdown races, and fallback waits honor cancellation without wall-clock sleeps. | `TestRunWatch_ContextCancel`, `TestRunWatch_CancellationWinsOverFinalObserverExit`, `TestRunWatch_FallbackSleepHonorsCancellation` |
 | Held-delete approval is engine-owned durable intent and authorizes execution only for matching drive/action/path/item identity. | `TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold`, `TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold` |
@@ -870,5 +869,5 @@ One-shot sync uses the same durable workflow: if the planned delete count exceed
 
 ### Rationale
 
-- **Crash recovery requires explicit bridging**: On restart after crash, [`internal/sync/recovery.go`](../../internal/sync/recovery.go) resets `remote_state` items stuck mid-execution to pending or deleted, AND creates `sync_failures` entries so the engine retry sweep can rediscover them. This is necessary because the delta token was already advanced before execution — items that crashed mid-execution won't appear in the next delta response. The planner is idempotent for items that DO appear in observations, but crash recovery items need the `sync_failures` → retrier → planner path.
+- **Crash recovery rebuilds from durable truth**: On restart after crash, the engine no longer repairs synthetic in-progress lanes. `remote_state` already preserves the latest observed remote truth, local disk preserves local truth, and the transfer layer owns resumable upload sessions plus `.partial` download artifacts. A later run therefore reobserves, rescans, and replans from `baseline + remote_state + local disk`, which lets already-observed remote drift settle even when no fresh delta page remains to replay.
 - **Keep control plane separate from the engine**: multi-drive coordination now lives in `internal/multisync`, leaving `internal/sync` focused on the single-drive runtime and conflict APIs.

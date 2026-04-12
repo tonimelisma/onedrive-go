@@ -61,11 +61,11 @@ func TestApplyScopeState_MarksOutOfScopeRowsFiltered(t *testing.T) {
 
 	keepRow := readRemoteStateRow(t, mgr.DB(), "keep-item")
 	require.NotNil(t, keepRow)
-	assert.Equal(t, synctypes.SyncStatusPendingDownload, keepRow.SyncStatus)
+	assert.False(t, keepRow.IsFiltered)
 
 	dropRow := readRemoteStateRow(t, mgr.DB(), "drop-item")
 	require.NotNil(t, dropRow)
-	assert.Equal(t, synctypes.SyncStatusFiltered, dropRow.SyncStatus)
+	assert.True(t, dropRow.IsFiltered)
 	assert.Equal(t, int64(1), dropRow.FilterGeneration)
 	assert.Equal(t, synctypes.RemoteFilterPathScope, dropRow.FilterReason)
 }
@@ -152,69 +152,6 @@ func TestReadScopeState_ReturnsPersistedRecord(t *testing.T) {
 	assert.NotZero(t, record.UpdatedAt)
 }
 
-func TestReactivatedRemoteStatus(t *testing.T) {
-	t.Parallel()
-
-	testCases := []struct {
-		name          string
-		path          string
-		hash          string
-		baselineFound bool
-		baselinePath  string
-		baselineHash  string
-		want          synctypes.SyncStatus
-	}{
-		{
-			name:          "baseline exact match returns synced",
-			path:          "docs/file.txt",
-			hash:          "hash-a",
-			baselineFound: true,
-			baselinePath:  "docs/file.txt",
-			baselineHash:  "hash-a",
-			want:          synctypes.SyncStatusSynced,
-		},
-		{
-			name:          "path mismatch returns pending download",
-			path:          "docs/file.txt",
-			hash:          "hash-a",
-			baselineFound: true,
-			baselinePath:  "docs/other.txt",
-			baselineHash:  "hash-a",
-			want:          synctypes.SyncStatusPendingDownload,
-		},
-		{
-			name:          "hash mismatch returns pending download",
-			path:          "docs/file.txt",
-			hash:          "hash-a",
-			baselineFound: true,
-			baselinePath:  "docs/file.txt",
-			baselineHash:  "hash-b",
-			want:          synctypes.SyncStatusPendingDownload,
-		},
-		{
-			name:          "missing baseline returns pending download",
-			path:          "docs/file.txt",
-			hash:          "hash-a",
-			baselineFound: false,
-			want:          synctypes.SyncStatusPendingDownload,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			assert.Equal(t, tc.want, reactivatedRemoteStatus(
-				tc.path,
-				tc.hash,
-				tc.baselineFound,
-				tc.baselinePath,
-				tc.baselineHash,
-			))
-		})
-	}
-}
-
 // Validates: R-2.4.4, R-2.4.5
 func TestNewSyncStore_RepairsScopeStateDriftOnOpen(t *testing.T) {
 	t.Parallel()
@@ -257,7 +194,7 @@ func TestNewSyncStore_RepairsScopeStateDriftOnOpen(t *testing.T) {
 
 	row := readRemoteStateRow(t, reopened.DB(), "filtered-item")
 	require.NotNil(t, row)
-	assert.Equal(t, synctypes.SyncStatusPendingDownload, row.SyncStatus)
+	assert.False(t, row.IsFiltered)
 	assert.Equal(t, int64(0), row.FilterGeneration)
 	assert.Equal(t, synctypes.RemoteFilterNone, row.FilterReason)
 
@@ -316,9 +253,8 @@ func TestRepairIntegritySafe_ReconcilesFilteredRowsToPersistedScopeState(t *test
 
 	_, err = mgr.DB().ExecContext(ctx, `
 		UPDATE remote_state
-		SET sync_status = ?, filter_generation = 1, filter_reason = ?
+		SET is_filtered = 1, filter_generation = 1, filter_reason = ?
 		WHERE item_id = ?`,
-		synctypes.SyncStatusFiltered,
 		synctypes.RemoteFilterMarkerScope,
 		"drop-item",
 	)
@@ -330,13 +266,13 @@ func TestRepairIntegritySafe_ReconcilesFilteredRowsToPersistedScopeState(t *test
 
 	dropRow := readRemoteStateRow(t, mgr.DB(), "drop-item")
 	require.NotNil(t, dropRow)
-	assert.Equal(t, synctypes.SyncStatusFiltered, dropRow.SyncStatus)
+	assert.True(t, dropRow.IsFiltered)
 	assert.Equal(t, int64(9), dropRow.FilterGeneration)
 	assert.Equal(t, synctypes.RemoteFilterPathScope, dropRow.FilterReason)
 
 	keepRow := readRemoteStateRow(t, mgr.DB(), "keep-item")
 	require.NotNil(t, keepRow)
-	assert.Equal(t, synctypes.SyncStatusPendingDownload, keepRow.SyncStatus)
+	assert.False(t, keepRow.IsFiltered)
 }
 
 // Validates: R-2.4.4, R-2.4.5
@@ -383,7 +319,7 @@ func TestRepairIntegritySafe_ReactivatesFilteredRowsWhenPersistedScopeIncludesPa
 
 	row := readRemoteStateRow(t, mgr.DB(), "reenter-item")
 	require.NotNil(t, row)
-	assert.Equal(t, synctypes.SyncStatusPendingDownload, row.SyncStatus)
+	assert.False(t, row.IsFiltered)
 	assert.Equal(t, int64(0), row.FilterGeneration)
 	assert.Equal(t, synctypes.RemoteFilterNone, row.FilterReason)
 }

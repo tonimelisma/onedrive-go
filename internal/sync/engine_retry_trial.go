@@ -70,7 +70,7 @@ func (rt *watchRuntime) dispatchWorkRequest(
 	request engineWorkRequest,
 	bl *syncstore.Baseline,
 	mode Mode,
-	safety *SafetyConfig,
+	safety *synctypes.SafetyConfig,
 ) ([]*TrackedAction, bool) {
 	if len(request.changes) == 0 {
 		return nil, false
@@ -91,7 +91,7 @@ func (rt *watchRuntime) dispatchPlannerWork(
 	changes []PathChanges,
 	bl *syncstore.Baseline,
 	mode Mode,
-	safety *SafetyConfig,
+	safety *synctypes.SafetyConfig,
 	options dispatchBatchOptions,
 ) ([]*TrackedAction, bool) {
 	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
@@ -141,7 +141,7 @@ func (rt *watchRuntime) runTrialDispatch(
 	ctx context.Context,
 	bl *syncstore.Baseline,
 	mode Mode,
-	safety *SafetyConfig,
+	safety *synctypes.SafetyConfig,
 ) []*TrackedAction {
 	rt.mustAssertPlannerSweepAllowed(rt, "runTrialDispatch", "run trial dispatch")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialSweepStarted})
@@ -168,7 +168,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 	ctx context.Context,
 	bl *syncstore.Baseline,
 	mode Mode,
-	safety *SafetyConfig,
+	safety *synctypes.SafetyConfig,
 	key synctypes.ScopeKey,
 ) []*TrackedAction {
 	for {
@@ -237,7 +237,7 @@ func (rt *watchRuntime) runRetrierSweep(
 	ctx context.Context,
 	bl *syncstore.Baseline,
 	mode Mode,
-	safety *SafetyConfig,
+	safety *synctypes.SafetyConfig,
 ) []*TrackedAction {
 	rt.mustAssertPlannerSweepAllowed(rt, "runRetrierSweep", "run retrier sweep")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepStarted})
@@ -418,20 +418,13 @@ func (e *Engine) effectiveRetryBatchLimit() int {
 	return defaultRetryBatchSize
 }
 
-// remoteStateToChangeEvent converts a sync_failures retry row backed by
-// remote_state into a planner-ready change event.
+// remoteStateToChangeEvent converts current remote mirror truth into a
+// planner-ready remote change event. Remote deletion is represented by mirror
+// absence and handled separately by delete-specific rebuild paths.
 func remoteStateToChangeEvent(rs *syncstore.RemoteStateRow, path string) *ChangeEvent {
-	ct := synctypes.ChangeModify
-	isDeleted := false
-
-	if isDeleteLikeSyncStatus(rs.SyncStatus) {
-		ct = synctypes.ChangeDelete
-		isDeleted = true
-	}
-
 	return &ChangeEvent{
 		Source:    synctypes.SourceRemote,
-		Type:      ct,
+		Type:      synctypes.ChangeModify,
 		Path:      path,
 		ItemID:    rs.ItemID,
 		ParentID:  rs.ParentID,
@@ -442,8 +435,49 @@ func remoteStateToChangeEvent(rs *syncstore.RemoteStateRow, path string) *Change
 		Hash:      rs.Hash,
 		Mtime:     rs.Mtime,
 		ETag:      rs.ETag,
-		IsDeleted: isDeleted,
+		IsDeleted: false,
 	}
+}
+
+func baselineEntryMatchesRemoteState(entry *syncstore.BaselineEntry, rs *syncstore.RemoteStateRow) bool {
+	if entry == nil || rs == nil {
+		return false
+	}
+
+	if entry.DriveID != rs.DriveID || entry.ItemID != rs.ItemID || entry.Path != rs.Path || entry.ItemType != rs.ItemType {
+		return false
+	}
+
+	return entry.RemoteHash == rs.Hash
+}
+
+func (flow *engineFlow) baselineEntryForFailure(ctx context.Context, row *syncstore.SyncFailureRow) *syncstore.BaselineEntry {
+	bl := flow.engine.baseline.Baseline()
+	if bl == nil {
+		var err error
+		bl, err = flow.engine.baseline.Load(ctx)
+		if err != nil {
+			flow.engine.logger.Debug("baselineEntryForFailure: failed to load baseline",
+				slog.String("path", row.Path),
+				slog.String("error", err.Error()),
+			)
+			return nil
+		}
+	}
+
+	if entry, ok := bl.GetByPath(row.Path); ok && entry.DriveID == row.DriveID {
+		return entry
+	}
+	if row.ItemID == "" {
+		return nil
+	}
+
+	entry, ok := bl.GetByID(driveid.NewItemKey(row.DriveID, row.ItemID))
+	if !ok {
+		return nil
+	}
+
+	return entry
 }
 
 // observeLocalFile rebuilds upload-side observation from current local truth.
@@ -579,6 +613,9 @@ func (flow *engineFlow) rebuildRemoteStateBackedFailure(
 	if !found {
 		return failureRebuildResult{resolved: true}
 	}
+	if rs.IsFiltered {
+		return failureRebuildResult{resolved: true}
+	}
 
 	return failureRebuildResult{event: remoteStateToChangeEvent(rs, row.Path)}
 }
@@ -594,6 +631,9 @@ func (flow *engineFlow) rebuildDownloadFailure(
 	if !found {
 		return failureRebuildResult{resolved: true}
 	}
+	if rs.IsFiltered {
+		return failureRebuildResult{resolved: true}
+	}
 
 	event := remoteStateToChangeEvent(rs, row.Path)
 	event.ForcedAction = synctypes.ActionDownload
@@ -606,25 +646,37 @@ func (flow *engineFlow) rebuildLocalDeleteFailure(
 	ctx context.Context,
 	row *syncstore.SyncFailureRow,
 ) failureRebuildResult {
+	entry := flow.baselineEntryForFailure(ctx, row)
+	if entry == nil {
+		return failureRebuildResult{resolved: true}
+	}
+
 	if row.ItemID != "" {
-		rs, found, err := flow.engine.baseline.GetRemoteStateByID(ctx, row.DriveID, row.ItemID)
+		_, found, err := flow.engine.baseline.GetRemoteStateByID(ctx, row.DriveID, row.ItemID)
 		if err != nil {
 			return failureRebuildResult{err: fmt.Errorf("remote state lookup failed: %w", err)}
 		}
 		if found {
-			event := remoteStateToChangeEvent(rs, row.Path)
-			event.ForcedAction = synctypes.ActionLocalDelete
-			event.HasForcedAction = true
-			return failureRebuildResult{event: event}
+			return failureRebuildResult{resolved: true}
 		}
 	}
 
-	rebuild := flow.rebuildRemoteStateBackedFailure(ctx, row)
-	if rebuild.event != nil {
-		rebuild.event.ForcedAction = synctypes.ActionLocalDelete
-		rebuild.event.HasForcedAction = true
-	}
-	return rebuild
+	return failureRebuildResult{event: &ChangeEvent{
+		Source:          synctypes.SourceRemote,
+		Type:            synctypes.ChangeDelete,
+		ForcedAction:    synctypes.ActionLocalDelete,
+		HasForcedAction: true,
+		Path:            entry.Path,
+		ItemID:          entry.ItemID,
+		ParentID:        entry.ParentID,
+		DriveID:         entry.DriveID,
+		ItemType:        entry.ItemType,
+		Name:            filepath.Base(entry.Path),
+		Size:            entry.RemoteSize,
+		Hash:            entry.RemoteHash,
+		Mtime:           entry.RemoteMtime,
+		IsDeleted:       true,
+	}}
 }
 
 func (flow *engineFlow) observeLocalFailurePath(ctx context.Context, row *syncstore.SyncFailureRow) failureRebuildResult {
@@ -816,8 +868,11 @@ func (flow *engineFlow) isDownloadFailureResolved(
 	if !found {
 		return true
 	}
+	if rs.IsFiltered {
+		return true
+	}
 
-	return isResolvedRemoteSyncStatus(rs.SyncStatus)
+	return baselineEntryMatchesRemoteState(flow.baselineEntryForFailure(ctx, row), rs)
 }
 
 func (flow *engineFlow) clearFailureIfResolved(

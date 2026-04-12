@@ -36,25 +36,15 @@ const (
 	strConflict         = "conflict"
 	strUpdateSynced     = "update_synced"
 	strCleanup          = "cleanup"
-
-	// SyncStatus string constants — remote_state sync_status column values.
-	strPendingDownload = "pending_download"
-	strDownloading     = "downloading"
-	strDownloadFailed  = "download_failed"
-	strSynced          = "synced"
-	strPendingDelete   = "pending_delete"
-	strDeleting        = "deleting"
-	strDeleteFailed    = "delete_failed"
-	strDeleted         = "deleted"
-	strFiltered        = "filtered"
-	strPathScope       = "path_scope"
-	strMarkerScope     = "marker_scope"
-	strObsRootDelta    = "root_delta"
-	strObsScopedDelta  = "scoped_delta"
-	strObsScopedEnum   = "scoped_enumerate"
-	strReconcileNone   = "none"
-	strReconcilePaths  = "entered_paths"
-	strReconcileFull   = "full"
+	strFiltered         = "filtered"
+	strPathScope        = "path_scope"
+	strMarkerScope      = "marker_scope"
+	strObsRootDelta     = "root_delta"
+	strObsScopedDelta   = "scoped_delta"
+	strObsScopedEnum    = "scoped_enumerate"
+	strReconcileNone    = "none"
+	strReconcilePaths   = "entered_paths"
+	strReconcileFull    = "full"
 )
 
 // Direction represents the direction of a sync action (upload, download, delete).
@@ -97,24 +87,6 @@ const (
 	ScopeTimingNone             ScopeTimingSource = strTimingNone
 	ScopeTimingBackoff          ScopeTimingSource = strTimingBackoff
 	ScopeTimingServerRetryAfter ScopeTimingSource = strTimingRetryAfter
-)
-
-// SyncStatus represents the sync_status of a remote_state row. Stored as TEXT
-// in SQLite — type SyncStatus string serializes identically to raw strings,
-// so no compatibility shim is needed. Matches the CHECK constraint in the
-// canonical remote_state schema.
-type SyncStatus string
-
-const (
-	SyncStatusPendingDownload SyncStatus = strPendingDownload
-	SyncStatusDownloading     SyncStatus = strDownloading
-	SyncStatusDownloadFailed  SyncStatus = strDownloadFailed
-	SyncStatusSynced          SyncStatus = strSynced
-	SyncStatusPendingDelete   SyncStatus = strPendingDelete
-	SyncStatusDeleting        SyncStatus = strDeleting
-	SyncStatusDeleteFailed    SyncStatus = strDeleteFailed
-	SyncStatusDeleted         SyncStatus = strDeleted
-	SyncStatusFiltered        SyncStatus = strFiltered
 )
 
 // RemoteFilterReason records why a remote_state row is currently filtered.
