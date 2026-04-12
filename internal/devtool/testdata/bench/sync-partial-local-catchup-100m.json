@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "scenario_id": "sync-partial-local-catchup-100m",
+  "remote_scope_path": "/benchmarks/sync-partial-local-catchup-100m",
+  "groups": [
+    {
+      "name": "documents",
+      "file_count": 1600,
+      "size_bytes": 256,
+      "top_level_dirs": 8,
+      "leaf_dirs_per_top": 5,
+      "extension": "txt"
+    },
+    {
+      "name": "metadata",
+      "file_count": 900,
+      "size_bytes": 4096,
+      "top_level_dirs": 5,
+      "leaf_dirs_per_top": 6,
+      "extension": "json"
+    },
+    {
+      "name": "assets",
+      "file_count": 160,
+      "size_bytes": 262144,
+      "top_level_dirs": 4,
+      "leaf_dirs_per_top": 4,
+      "extension": "bin"
+    },
+    {
+      "name": "media",
+      "file_count": 8,
+      "size_bytes": 7352320,
+      "top_level_dirs": 2,
+      "leaf_dirs_per_top": 2,
+      "extension": "dat"
+    }
+  ],
+  "delete_selector": {
+    "modulus": 27,
+    "remainder": 0,
+    "limit": 96
+  },
+  "truncate_selector": {
+    "modulus": 25,
+    "remainder": 7,
+    "limit": 96,
+    "truncate_to_bytes": 0
+  }
+}
