@@ -20,7 +20,7 @@ import (
 const testSharedDiscoveryRemoteFolderPath = "/drives/00000b!remote123/items/remote-folder-1"
 
 // Validates: R-3.6.2, R-3.6.4, R-3.6.6, R-3.6.7
-func TestSharedDiscoveryService_DiscoverTargets_IgnoresNonActionableHits(t *testing.T) {
+func TestSharedDiscovery_IgnoresNonActionableHits(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -89,7 +89,7 @@ func TestSharedDiscoveryService_DiscoverTargets_IgnoresNonActionableHits(t *test
 }
 
 // Validates: R-3.6.6, R-3.6.7, R-3.7
-func TestSharedService_RunList_RefreshesIdentityOnceBeforeSharedDiscovery(t *testing.T) {
+func TestSharedList_RefreshesIdentityOnceBeforeSharedDiscovery(t *testing.T) {
 	setTestDriveHome(t)
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
@@ -157,7 +157,7 @@ func TestSharedService_RunList_RefreshesIdentityOnceBeforeSharedDiscovery(t *tes
 }
 
 // Validates: R-3.6.5, R-3.6.6, R-3.6.7
-func TestSharedDiscoveryService_DiscoverTargets_SearchUnauthorizedReturnsAuthRequired(t *testing.T) {
+func TestSharedDiscovery_SearchUnauthorizedReturnsAuthRequired(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -202,7 +202,7 @@ func TestSharedDiscoveryService_DiscoverTargets_SearchUnauthorizedReturnsAuthReq
 }
 
 // Validates: R-3.6.5, R-3.6.7
-func TestSharedDiscoveryService_DiscoverTargets_NoRepresentativeTokenReturnsDegraded(t *testing.T) {
+func TestSharedDiscovery_NoRepresentativeTokenReturnsDegraded(t *testing.T) {
 	cc := &CLIContext{
 		Logger:       testDriveLogger(t),
 		OutputWriter: &bytes.Buffer{},
@@ -225,7 +225,7 @@ func TestSharedDiscoveryService_DiscoverTargets_NoRepresentativeTokenReturnsDegr
 }
 
 // Validates: R-3.6.2, R-3.6.6, R-3.6.7
-func TestSharedDiscoveryService_DiscoverTargets_IgnoresCallerAccountFilter(t *testing.T) {
+func TestSharedDiscovery_IgnoresCallerAccountFilter(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_other@example.com.json")
 
@@ -279,7 +279,7 @@ func TestSharedDiscoveryService_DiscoverTargets_IgnoresCallerAccountFilter(t *te
 }
 
 // Validates: R-3.6.5, R-3.6.6, R-3.6.7
-func TestSharedDiscoveryService_DiscoverTargets_FallsBackAcrossAccountTokens(t *testing.T) {
+func TestSharedDiscovery_FallsBackAcrossAccountTokens(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -332,7 +332,7 @@ func TestSharedDiscoveryService_DiscoverTargets_FallsBackAcrossAccountTokens(t *
 }
 
 // Validates: R-3.6.7
-func TestSharedService_RunList_JSONIncludesAuthRequiredWhenSearchUnauthorized(t *testing.T) {
+func TestSharedList_JSONIncludesAuthRequiredWhenSearchUnauthorized(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 

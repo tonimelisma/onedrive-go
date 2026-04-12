@@ -1015,7 +1015,7 @@ func addSharedDriveByName(
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	snapshot, err := loadLenientCatalogWithBestEffortIdentityRefresh(ctx, cc)
+	snapshot, err := loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(ctx, cc)
 	if err != nil {
 		return err
 	}

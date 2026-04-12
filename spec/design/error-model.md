@@ -15,7 +15,7 @@ than re-declaring local enums.
 
 Structured sync logs are part of that shared contract: the engine logs the
 classified `failures.Class` and `sync.SummaryKey` together with stable
-run/action identifiers so runtime evidence, persisted rows, and CLI read models
+run/action identifiers so runtime evidence, persisted rows, and CLI snapshot surfaces
 can be compared directly.
 
 ## Related Projections

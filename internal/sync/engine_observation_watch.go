@@ -43,7 +43,7 @@ func (rt *watchRuntime) startPrimaryWatchPhase(
 		}()
 	case observationPhaseDriverRootDelta:
 		remoteObs := NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
-		remoteObs.SetObsWriter(rt.engine.baseline)
+		remoteObs.SetObservationStore(rt.engine.baseline)
 		remoteObs.SetWatchObservationPreparer(func(
 			_ context.Context,
 			events []ChangeEvent,

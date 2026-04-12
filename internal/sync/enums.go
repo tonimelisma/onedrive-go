@@ -234,7 +234,7 @@ func (t ItemType) String() string {
 func (t *ItemType) Scan(src any) error {
 	s, ok := src.(string)
 	if !ok {
-		return fmt.Errorf("synctypes: ItemType.Scan: expected string, got %T", src)
+		return fmt.Errorf("sync: ItemType.Scan: expected string, got %T", src)
 	}
 
 	parsed, err := ParseItemType(s)
@@ -263,7 +263,7 @@ func ParseItemType(s string) (ItemType, error) {
 	case strRoot:
 		return ItemTypeRoot, nil
 	default:
-		return ItemTypeFile, fmt.Errorf("synctypes: unknown item type %q", s)
+		return ItemTypeFile, fmt.Errorf("sync: unknown item type %q", s)
 	}
 }
 
@@ -374,7 +374,7 @@ func ParseActionType(s string) (ActionType, error) {
 	case strCleanup:
 		return ActionCleanup, nil
 	default:
-		return 0, fmt.Errorf("synctypes: invalid ActionType %q", s)
+		return 0, fmt.Errorf("sync: invalid ActionType %q", s)
 	}
 }
 
@@ -382,7 +382,7 @@ func ParseActionType(s string) (ActionType, error) {
 func (a *ActionType) Scan(src any) error {
 	s, ok := src.(string)
 	if !ok {
-		return fmt.Errorf("synctypes: ActionType.Scan: expected string, got %T", src)
+		return fmt.Errorf("sync: ActionType.Scan: expected string, got %T", src)
 	}
 
 	parsed, err := ParseActionType(s)
@@ -403,7 +403,7 @@ func (a ActionType) Value() (driver.Value, error) {
 		ActionUpdateSynced, ActionCleanup:
 		return a.String(), nil
 	default:
-		return nil, fmt.Errorf("synctypes: invalid ActionType %d", a)
+		return nil, fmt.Errorf("sync: invalid ActionType %d", a)
 	}
 }
 

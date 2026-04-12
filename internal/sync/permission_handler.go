@@ -19,7 +19,7 @@ import (
 // Engine. It handles HTTP 403 responses, local permission denials, per-pass
 // permission rechecks, and scanner-resolved permission clearing.
 type PermissionHandler struct {
-	baseline     failureRecorder
+	store        *SyncStore
 	permChecker  PermissionChecker
 	syncTree     *synctree.Root
 	driveID      driveid.ID
@@ -40,7 +40,7 @@ func (ph *PermissionHandler) HasPermChecker() bool {
 // uses these prefixes to suppress remote-mutating actions under known
 // read-only subtrees before they reach execution.
 func (ph *PermissionHandler) DeniedPrefixes(ctx context.Context) []string {
-	issues, err := ph.baseline.ListRemoteBlockedFailures(ctx)
+	issues, err := ph.store.ListRemoteBlockedFailures(ctx)
 	if err != nil {
 		ph.logger.Warn("DeniedPrefixes: failed to list remote blocked failures",
 			slog.String("error", err.Error()),
@@ -293,7 +293,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 		return nil
 	}
 
-	issues, err := ph.baseline.ListRemoteBlockedFailures(ctx)
+	issues, err := ph.store.ListRemoteBlockedFailures(ctx)
 	if err != nil || len(issues) == 0 {
 		return nil
 	}
@@ -602,7 +602,7 @@ func (ph *PermissionHandler) deepestDeniedBoundary(parentDir string) string {
 // at the start of each sync pass. If a directory is now accessible, clears
 // the failure and releases the scope block (R-2.10.13).
 func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []PermissionRecheckDecision {
-	issues, err := ph.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	issues, err := ph.store.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	if err != nil || len(issues) == 0 {
 		return nil
 	}
@@ -654,7 +654,7 @@ func (ph *PermissionHandler) clearScannerResolvedPermissions(
 		return nil
 	}
 
-	issues, err := ph.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	issues, err := ph.store.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
 	if err != nil || len(issues) == 0 {
 		return nil
 	}

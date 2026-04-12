@@ -95,7 +95,7 @@ func actionTypeForDirection(direction Direction) ActionType {
 	case DirectionDelete:
 		return ActionRemoteDelete
 	default:
-		panic(fmt.Sprintf("syncstore: unsupported failure direction %q", direction))
+		panic(fmt.Sprintf("sync: unsupported failure direction %q", direction))
 	}
 }
 

@@ -43,7 +43,7 @@ func runShared(cmd *cobra.Command, _ []string) error {
 }
 
 func runSharedList(ctx context.Context, cc *CLIContext) error {
-	snapshot, err := loadLenientCatalogWithBestEffortIdentityRefresh(ctx, cc)
+	snapshot, err := loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(ctx, cc)
 	if err != nil {
 		return err
 	}

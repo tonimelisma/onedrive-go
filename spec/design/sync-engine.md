@@ -399,7 +399,7 @@ failure persistence shape, retry/trial timing, and log ownership are not
 re-derived from raw `HTTPStatus`, wrapped errors, or `RetryAfter` headers after
 classification. Structured sync logs emit `summary_key` from the same
 `ResultDecision`, which gives tests and operators one normalized failure family
-across runtime logs and the store-owned `status` read model.
+across runtime logs and the store-owned `status` snapshot.
 Permission-flow and fatal-auth side effects follow the same rule: their
 durable writes and scope-activation logs emit the normalized `summary_key`
 instead of inventing a second presentation taxonomy for shared-folder blocked,

@@ -12,7 +12,7 @@ import (
 func runStatusCommand(cc *CLIContext, history bool, showPerf ...bool) error {
 	logger := cc.Logger
 	perfEnabled := len(showPerf) > 0 && showPerf[0]
-	snapshot, err := loadLenientCatalog(context.Background(), cc)
+	snapshot, err := loadAccountCatalogSnapshot(context.Background(), cc)
 	if err != nil {
 		return err
 	}
@@ -44,17 +44,17 @@ func runStatusCommand(cc *CLIContext, history bool, showPerf ...bool) error {
 }
 
 func filterStatusSnapshot(
-	snapshot accountReadModelSnapshot,
+	snapshot accountCatalogSnapshot,
 	selectors []string,
 	logger *slog.Logger,
-) (accountReadModelSnapshot, error) {
+) (accountCatalogSnapshot, error) {
 	if len(selectors) == 0 {
 		return snapshot, nil
 	}
 
 	selectedDrives, err := config.ResolveDrives(snapshot.Config, selectors, true, logger)
 	if err != nil {
-		return accountReadModelSnapshot{}, fmt.Errorf("resolving status drive selectors: %w", err)
+		return accountCatalogSnapshot{}, fmt.Errorf("resolving status drive selectors: %w", err)
 	}
 
 	filtered := *snapshot.Config
@@ -64,7 +64,7 @@ func filterStatusSnapshot(
 		filtered.Drives[rd.CanonicalID] = snapshot.Config.Drives[rd.CanonicalID]
 	}
 
-	return accountReadModelSnapshot{
+	return accountCatalogSnapshot{
 		Config:  &filtered,
 		Catalog: snapshot.Catalog,
 	}, nil

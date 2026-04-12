@@ -3,7 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
-	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -1264,9 +1264,9 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 		}},
 	})
 
-	writer := &mockObservationWriter{}
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
-	obs.ObsWriter = writer
+	store := newTestStore(t)
+	obs.SetObservationStore(store)
 	wakeCh := make(chan struct{}, 1)
 	obs.SetWakeChannel(wakeCh)
 
@@ -1289,7 +1289,7 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 
 	err := <-done
 	require.NoError(t, err)
-	assert.Empty(t, writer.calls, "zero-event wake polls must not commit observations")
+	assert.Empty(t, readDeltaToken(t, store.DB(), driveID.String()), "zero-event wake polls must not commit observations")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "zero-event wake polls must not advance the token")
 }
 
@@ -1865,24 +1865,7 @@ func TestClassifyItem_RemoteTrustsServer(t *testing.T) {
 	}
 }
 
-// mockObservationWriter records CommitObservation calls for test verification.
-type mockObservationWriter struct {
-	calls []mockObsWriterCall
-	err   error
-}
-
-type mockObsWriterCall struct {
-	events   []ObservedItem
-	newToken string
-	driveID  driveid.ID
-}
-
-func (m *mockObservationWriter) CommitObservation(_ context.Context, events []ObservedItem, newToken string, driveID driveid.ID) error {
-	m.calls = append(m.calls, mockObsWriterCall{events: events, newToken: newToken, driveID: driveID})
-	return m.err
-}
-
-// TestWatch_CommitsObservations verifies that Watch calls CommitObservation
+// TestWatch_CommitsObservations verifies that Watch commits observations
 // after each successful FullDelta poll.
 func TestWatch_CommitsObservations(t *testing.T) {
 	t.Parallel()
@@ -1901,9 +1884,9 @@ func TestWatch_CommitsObservations(t *testing.T) {
 		},
 	}
 
-	writer := &mockObservationWriter{}
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
-	obs.ObsWriter = writer
+	store := newTestStore(t)
+	obs.SetObservationStore(store)
 	obs.SleepFunc = noopSleep
 
 	events := make(chan ChangeEvent, 10)
@@ -1924,15 +1907,16 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	err := obs.Watch(ctx, "", events, time.Millisecond)
 	require.NoError(t, err)
 
-	// CommitObservation should have been called.
-	require.GreaterOrEqual(t, len(writer.calls), 1, "CommitObservation should be called")
-	assert.Equal(t, "token-1", writer.calls[0].newToken)
-	assert.Equal(t, driveID, writer.calls[0].driveID)
+	assert.Equal(t, "token-1", readDeltaToken(t, store.DB(), driveID.String()))
+	row := readRemoteStateRow(t, store.DB(), "f1")
+	require.NotNil(t, row, "remote observation should persist mirrored state")
+	assert.Equal(t, driveID, row.DriveID)
+	assert.Equal(t, "a.txt", row.Path)
 }
 
-// TestWatch_ObsWriterError_ContinuesRetry verifies that a CommitObservation
-// error causes the observer to retry (continue loop) rather than crash.
-func TestWatch_ObsWriterError_ContinuesRetry(t *testing.T) {
+// TestWatch_ObservationStoreError_ContinuesRetry verifies that a commit error
+// causes the observer to retry (continue loop) rather than crash.
+func TestWatch_ObservationStoreError_ContinuesRetry(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
@@ -1959,9 +1943,12 @@ func TestWatch_ObsWriterError_ContinuesRetry(t *testing.T) {
 		},
 	}
 
-	writer := &mockObservationWriter{err: fmt.Errorf("simulated commit error")}
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
-	obs.ObsWriter = writer
+	dbPath := filepath.Join(t.TempDir(), "watch.db")
+	store, err := NewSyncStore(t.Context(), dbPath, synctest.TestLogger(t))
+	require.NoError(t, err)
+	require.NoError(t, store.Close(t.Context()))
+	obs.SetObservationStore(store)
 	ctx, cancel := context.WithCancel(t.Context())
 	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
 		pollCount++
@@ -1973,11 +1960,10 @@ func TestWatch_ObsWriterError_ContinuesRetry(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	err := obs.Watch(ctx, "", events, time.Millisecond)
+	err = obs.Watch(ctx, "", events, time.Millisecond)
 	require.NoError(t, err)
 
-	// Should have retried — multiple commit attempts.
-	assert.GreaterOrEqual(t, len(writer.calls), 1, "should retry after commit failure")
+	assert.GreaterOrEqual(t, fetcher.calls, 2, "should retry after observation commit failure")
 }
 
 // Validates: R-2.1.2
@@ -1997,9 +1983,9 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		},
 	}
 
-	writer := &mockObservationWriter{}
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
-	obs.ObsWriter = writer
+	store := newTestStore(t)
+	obs.SetObservationStore(store)
 	ctx, cancel := context.WithCancel(t.Context())
 	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
 		pollCount++
@@ -2015,10 +2001,7 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	err := obs.Watch(ctx, "old-token", events, time.Millisecond)
 	require.NoError(t, err)
 
-	// CommitObservation should NOT have been called (0 events).
-	assert.Empty(t, writer.calls, "should not commit observations when 0 events returned")
-
-	// Internal token should NOT have advanced.
+	assert.Empty(t, readDeltaToken(t, store.DB(), driveID.String()), "should not commit observations when 0 events returned")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "token should not advance when 0 events returned")
 }
 

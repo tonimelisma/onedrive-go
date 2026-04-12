@@ -56,7 +56,7 @@ type StatusSnapshot struct {
 	DurableIntents     DurableIntentCounts
 }
 
-// DriveStatusSnapshot is the per-drive read model consumed by the
+// DriveStatusSnapshot is the per-drive status snapshot consumed by the
 // product-facing status command. It keeps the full per-drive sync-health view
 // in one store-owned projection.
 type DriveStatusSnapshot struct {

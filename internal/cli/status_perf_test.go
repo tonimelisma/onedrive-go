@@ -18,7 +18,7 @@ import (
 )
 
 // Validates: R-6.6.15
-func TestStatusService_Run_SummaryJSON_WithLivePerf(t *testing.T) {
+func TestStatusPerf_SummaryJSON_WithLivePerf(t *testing.T) {
 	setTestDriveHome(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
@@ -57,7 +57,7 @@ func TestStatusService_Run_SummaryJSON_WithLivePerf(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.JSON = true
 
 	require.NoError(t, runStatusCommand(cc, false, true))
@@ -74,7 +74,7 @@ func TestStatusService_Run_SummaryJSON_WithLivePerf(t *testing.T) {
 }
 
 // Validates: R-6.6.15
-func TestStatusService_Run_SummaryText_WithPerfAndNoActiveOwner(t *testing.T) {
+func TestStatusPerf_SummaryText_WithPerfAndNoActiveOwner(t *testing.T) {
 	setTestDriveHome(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
@@ -82,7 +82,7 @@ func TestStatusService_Run_SummaryText_WithPerfAndNoActiveOwner(t *testing.T) {
 	cfgPath := writeStatusPerfConfig(t, cid)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 
 	require.NoError(t, runStatusCommand(cc, false, true))
 
@@ -91,7 +91,7 @@ func TestStatusService_Run_SummaryText_WithPerfAndNoActiveOwner(t *testing.T) {
 }
 
 // Validates: R-6.6.15
-func TestStatusService_Run_FilteredJSON_WithPerfUnavailableFromActiveOwner(t *testing.T) {
+func TestStatusPerf_FilteredJSON_WithPerfUnavailableFromActiveOwner(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	cfgPath, cid := seedDriveStatusFixture(t)
@@ -116,7 +116,7 @@ func TestStatusService_Run_FilteredJSON_WithPerfUnavailableFromActiveOwner(t *te
 	})
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 	cc.Flags.JSON = true
 

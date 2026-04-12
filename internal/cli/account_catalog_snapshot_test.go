@@ -34,7 +34,7 @@ func writeAccessTokenFile(t *testing.T, cid driveid.CanonicalID, accessToken str
 }
 
 // Validates: R-3.7
-func TestAccountReadModelService_LoadLenientCatalogWithBestEffortIdentityRefresh_ProbesEachTokenOnce(t *testing.T) {
+func TestAccountCatalogSnapshot_LoadWithBestEffortIdentityRefresh_ProbesEachTokenOnce(t *testing.T) {
 	setTestDriveHome(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.toml")
@@ -96,7 +96,7 @@ func TestAccountReadModelService_LoadLenientCatalogWithBestEffortIdentityRefresh
 		GraphBaseURL: srv.URL,
 	}
 
-	snapshot, err := loadLenientCatalogWithBestEffortIdentityRefresh(t.Context(), cc)
+	snapshot, err := loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(t.Context(), cc)
 	require.NoError(t, err)
 
 	assert.Len(t, snapshot.Catalog, 2)
@@ -110,7 +110,7 @@ func TestAccountReadModelService_LoadLenientCatalogWithBestEffortIdentityRefresh
 }
 
 // Validates: R-3.7
-func TestAccountReadModelService_LoadLenientCatalogWithBestEffortIdentityRefresh_ProbeFailureKeepsOfflineIdentity(t *testing.T) {
+func TestAccountCatalogSnapshot_LoadWithBestEffortIdentityRefresh_ProbeFailureKeepsOfflineIdentity(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("personal:offline@example.com")
@@ -143,7 +143,7 @@ func TestAccountReadModelService_LoadLenientCatalogWithBestEffortIdentityRefresh
 		GraphBaseURL: srv.URL,
 	}
 
-	snapshot, err := loadLenientCatalogWithBestEffortIdentityRefresh(ctx, cc)
+	snapshot, err := loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(ctx, cc)
 	require.NoError(t, err)
 
 	entry := accountCatalogEntryByEmail(t, snapshot.Catalog, "offline@example.com")

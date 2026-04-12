@@ -64,7 +64,7 @@ func (s *stubResolveConflictQueueStore) Close(context.Context) error {
 	return nil
 }
 
-func TestResolveService_RunApproveDeletesWithStore_CloseFailureSuppressesSuccessOutput(t *testing.T) {
+func TestApproveDeletesWithStore_CloseFailureSuppressesSuccessOutput(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
@@ -79,7 +79,7 @@ func TestResolveService_RunApproveDeletesWithStore_CloseFailureSuppressesSuccess
 	assert.Equal(t, 1, store.closeCalls)
 }
 
-func TestResolveService_RunApproveDeletesWithStore_JoinsApproveAndCloseErrors(t *testing.T) {
+func TestApproveDeletesWithStore_JoinsApproveAndCloseErrors(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
@@ -100,7 +100,7 @@ func TestResolveService_RunApproveDeletesWithStore_JoinsApproveAndCloseErrors(t 
 	assert.Equal(t, 1, store.closeCalls)
 }
 
-func TestResolveService_QueueEachConflictResolution_DryRun(t *testing.T) {
+func TestQueueEachConflictResolution_DryRun(t *testing.T) {
 	t.Parallel()
 
 	var status bytes.Buffer
@@ -114,7 +114,7 @@ func TestResolveService_QueueEachConflictResolution_DryRun(t *testing.T) {
 	assert.Zero(t, store.requestCalls)
 }
 
-func TestResolveService_QueueSingleConflictResolution_AlreadyResolvedIsReplaySafe(t *testing.T) {
+func TestQueueSingleConflictResolution_AlreadyResolvedIsReplaySafe(t *testing.T) {
 	t.Parallel()
 
 	var status bytes.Buffer
@@ -144,7 +144,7 @@ func TestFindSelectedConflict_AmbiguousPrefix(t *testing.T) {
 }
 
 // Validates: R-2.3.12
-func TestResolveService_RequestConflictResolutionConcurrentCLIsLastWriteWinsWhileQueued(t *testing.T) {
+func TestRequestConflictResolutionConcurrentCLIsLastWriteWinsWhileQueued(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	canonicalID := driveid.MustCanonicalID("personal:concurrent-conflicts@example.com")
 	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(canonicalID), slog.New(slog.DiscardHandler))
