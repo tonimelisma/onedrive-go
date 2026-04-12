@@ -426,7 +426,7 @@ The durable row still carries the raw evidence (`issue_type`, `category`,
 remains the read-time normalization rule for testable reprojection.
 
 Derived shared-folder blocked writes and scope-only auth blocks are normalized
-into that same read model, so `status` and watch/runtime summaries all consume
+into that same snapshot, so `status` and watch/runtime summaries all consume
 one store-owned visible-issue taxonomy instead of rebuilding different views
 from raw tables.
 

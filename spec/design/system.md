@@ -109,8 +109,8 @@ For detailed module design, see:
 | Runtime failure class | `internal/failures` + `internal/sync/engine_result_classify.go` |
 | Sync-domain summary/rendering key | `internal/sync/summary_keys.go` |
 | Durable sync issue facts | `internal/sync` SQLite tables (`sync_failures`, `scope_blocks`, conflicts) |
-| Account/auth presentation | `internal/authstate` vocabulary projected through `internal/cli/account_read_model_service.go` |
-| Read-only issue/status read model | `internal/sync/inspector.go` |
+| Account/auth presentation | `internal/authstate` vocabulary projected through `internal/cli/account_catalog_snapshot.go` |
+| Read-only issue/status snapshot | `internal/sync/inspector.go` |
 | Production perf counters, live snapshots, and capture bundles | `internal/perf` with session/control-plane ownership split across `internal/cli` and `internal/multisync` |
 | Durable mutation rules | `internal/sync` writable store APIs (`CommitMutation`, scope/failure/conflict helpers) plus engine-owned scope/result flow |
 

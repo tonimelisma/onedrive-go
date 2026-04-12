@@ -19,7 +19,7 @@ import (
 )
 
 // Validates: R-3.6.4, R-3.6.6, R-3.6.7
-func TestSharedService_RunList_JSON(t *testing.T) {
+func TestSharedList_JSON(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -114,7 +114,7 @@ func TestSharedService_RunList_JSON(t *testing.T) {
 }
 
 // Validates: R-3.6.4, R-3.6.6, R-3.6.7
-func TestSharedService_RunList_JSONKeepsOwnerIdentityEmptyWhenEnrichmentFails(t *testing.T) {
+func TestSharedList_JSONKeepsOwnerIdentityEmptyWhenEnrichmentFails(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -166,7 +166,7 @@ func TestSharedService_RunList_JSONKeepsOwnerIdentityEmptyWhenEnrichmentFails(t 
 }
 
 // Validates: R-3.6.6, R-3.6.7
-func TestSharedService_RunList_JSONHonorsAccountFilter(t *testing.T) {
+func TestSharedList_JSONHonorsAccountFilter(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_other@example.com.json")
@@ -223,7 +223,7 @@ func TestSharedService_RunList_JSONHonorsAccountFilter(t *testing.T) {
 }
 
 // Validates: R-3.6.5, R-3.6.7
-func TestSharedService_RunList_JSONIncludesDegradedAccountWhenSearchFails(t *testing.T) {
+func TestSharedList_JSONIncludesDegradedAccountWhenSearchFails(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -281,7 +281,7 @@ func TestPrintSharedText_UsesUnknownOwnerAndShowsDegradedSection(t *testing.T) {
 }
 
 // Validates: R-3.3.12
-func TestDriveService_RunAdd_RejectsSharedFileSelector(t *testing.T) {
+func TestDriveAdd_RejectsSharedFileSelector(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 

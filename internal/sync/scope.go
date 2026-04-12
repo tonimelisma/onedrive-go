@@ -15,7 +15,8 @@
 // (engine.go), not here. See R-2.10.14.
 //
 // Type definitions (ScopeKey, ScopeKeyKind, ScopeBlock, ScopeUpdateResult,
-// ScopeBlockStore) are in synctypes and re-exported via types.go.
+// ScopeBlockStore) live in the sync package and share the same ownership
+// boundary as the engine and store code that use them.
 package sync
 
 import (

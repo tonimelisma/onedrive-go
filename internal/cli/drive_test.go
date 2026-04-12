@@ -1369,7 +1369,7 @@ func TestSharedDiscoveryNoMatchesError_IncludesExternalGuidance(t *testing.T) {
 }
 
 // Validates: R-3.3.13
-func TestDriveService_RunAdd_SharedTargetFolderAddsCanonicalSharedDrive(t *testing.T) {
+func TestDriveAdd_SharedTargetFolderAddsCanonicalSharedDrive(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -1425,7 +1425,7 @@ func TestDriveService_RunAdd_SharedTargetFolderAddsCanonicalSharedDrive(t *testi
 }
 
 // Validates: R-3.3.12
-func TestDriveService_RunAdd_SharedTargetFileRejectsDirectFileGuidance(t *testing.T) {
+func TestDriveAdd_SharedTargetFileRejectsDirectFileGuidance(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -1473,7 +1473,7 @@ func TestDriveService_RunAdd_SharedTargetFileRejectsDirectFileGuidance(t *testin
 }
 
 // Validates: R-3.6.1, R-3.6.4
-func TestDriveService_RunList_JSONKeepsSharedEntryWithoutOwnerIdentity(t *testing.T) {
+func TestDriveList_JSONKeepsSharedEntryWithoutOwnerIdentity(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -1537,7 +1537,7 @@ func TestDriveService_RunList_JSONKeepsSharedEntryWithoutOwnerIdentity(t *testin
 }
 
 // Validates: R-3.6.5, R-3.6.7
-func TestDriveService_RunList_JSONIncludesSharedDiscoveryDegradedAccount(t *testing.T) {
+func TestDriveList_JSONIncludesSharedDiscoveryDegradedAccount(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -1580,7 +1580,7 @@ func TestDriveService_RunList_JSONIncludesSharedDiscoveryDegradedAccount(t *test
 }
 
 // Validates: R-3.6.5, R-3.3.10
-func TestDriveService_RunList_JSONIncludesSharedDiscoveryAuthRequiredAccount(t *testing.T) {
+func TestDriveList_JSONIncludesSharedDiscoveryAuthRequiredAccount(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -1629,7 +1629,7 @@ func TestDriveService_RunList_JSONIncludesSharedDiscoveryAuthRequiredAccount(t *
 }
 
 // Validates: R-3.3.6
-func TestDriveService_RunAdd_SharedNameHonorsAccountFilter(t *testing.T) {
+func TestDriveAdd_SharedNameHonorsAccountFilter(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_other@example.com.json")
@@ -1689,7 +1689,7 @@ func TestDriveService_RunAdd_SharedNameHonorsAccountFilter(t *testing.T) {
 }
 
 // Validates: R-3.3.6, R-3.6.5
-func TestDriveService_RunAdd_SharedNameNoMatchesIncludesBlockedAccounts(t *testing.T) {
+func TestDriveAdd_SharedNameNoMatchesIncludesBlockedAccounts(t *testing.T) {
 	setTestDriveHome(t)
 
 	profileCID := driveid.MustCanonicalID("personal:user@example.com")
@@ -1907,7 +1907,7 @@ func TestAnnotateConfiguredDriveAuth_AndPrintSections(t *testing.T) {
 }
 
 // Validates: R-2.10.47
-func TestDriveService_RunList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t *testing.T) {
+func TestDriveList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")

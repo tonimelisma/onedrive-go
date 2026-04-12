@@ -28,7 +28,7 @@ type WorkerPool struct {
 	cfg        *ExecutorConfig
 	dispatchCh <-chan *TrackedAction
 	completeCh <-chan struct{}
-	baseline   executionResultWriter
+	baseline   *SyncStore
 	logger     *slog.Logger
 
 	// results reports per-action outcomes back to the engine. The engine
@@ -51,7 +51,7 @@ func NewWorkerPool(
 	cfg *ExecutorConfig,
 	dispatchCh <-chan *TrackedAction,
 	completeCh <-chan struct{},
-	baseline executionResultWriter,
+	baseline *SyncStore,
 	logger *slog.Logger,
 	planSize int,
 ) *WorkerPool {

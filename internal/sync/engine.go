@@ -195,7 +195,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 
 	e.permHandler = &PermissionHandler{
-		baseline:     e.baseline,
+		store:        e.baseline,
 		permChecker:  cfg.PermChecker,
 		syncTree:     syncTree,
 		driveID:      cfg.DriveID,

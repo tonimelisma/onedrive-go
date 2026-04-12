@@ -10,64 +10,64 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/failures"
 )
 
-// accountReadModelSnapshot is the shared offline account/auth projection used
-// by status, whoami, and drive-management commands. Keeping config loading,
+// accountCatalogSnapshot is the shared offline account/auth snapshot used by
+// status, whoami, and drive-management commands. Keeping config loading,
 // warning handling, and catalog construction in one place prevents each
 // command family from rebuilding its own auth/account semantics.
-type accountReadModelSnapshot struct {
+type accountCatalogSnapshot struct {
 	Config  *config.Config
 	Catalog []accountCatalogEntry
 }
 
-type driveListReadModelSnapshot struct {
+type driveListSnapshot struct {
 	Configured            []driveListEntry
 	Available             []driveListEntry
 	AccountsRequiringAuth []accountAuthRequirement
 	AccountsDegraded      []accountDegradedNotice
 }
 
-func loadLenientCatalog(ctx context.Context, cc *CLIContext) (accountReadModelSnapshot, error) {
+func loadAccountCatalogSnapshot(ctx context.Context, cc *CLIContext) (accountCatalogSnapshot, error) {
 	logger := cc.Logger
 
 	cfg, warnings, err := config.LoadOrDefaultLenient(cc.CfgPath, logger)
 	outcome := config.ClassifyLoadOutcome(err, warnings)
 	if err != nil {
-		return accountReadModelSnapshot{}, fmt.Errorf("loading config: %w", err)
+		return accountCatalogSnapshot{}, fmt.Errorf("loading config: %w", err)
 	}
 
 	if outcome.Class == failures.ClassActionable {
 		config.LogWarnings(warnings, logger)
 	}
 
-	return accountReadModelSnapshot{
+	return accountCatalogSnapshot{
 		Config:  cfg,
 		Catalog: buildAccountCatalog(ctx, cfg, logger),
 	}, nil
 }
 
-// loadLenientCatalogWithBestEffortIdentityRefresh refreshes token-backed
+// loadAccountCatalogSnapshotWithBestEffortIdentityRefresh refreshes token-backed
 // account identity before building the offline account catalog. The account
-// read model owns this best-effort freshness step so command handlers and
+// catalog snapshot owns this best-effort freshness step so command handlers and
 // downstream discovery helpers do not duplicate `/me` probe logic.
-func loadLenientCatalogWithBestEffortIdentityRefresh(
+func loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(
 	ctx context.Context,
 	cc *CLIContext,
-) (accountReadModelSnapshot, error) {
+) (accountCatalogSnapshot, error) {
 	logger := cc.Logger
 
 	for _, tokenCID := range config.DiscoverTokens(logger) {
-		if _, err := cc.probeAccountIdentity(ctx, tokenCID, "account-read-model"); err != nil {
-			logger.Debug("skip email reconciliation during account read model refresh",
+		if _, err := cc.probeAccountIdentity(ctx, tokenCID, "account-catalog"); err != nil {
+			logger.Debug("skip email reconciliation during account catalog refresh",
 				"account", tokenCID.String(),
 				"error", err,
 			)
 		}
 	}
 
-	return loadLenientCatalog(ctx, cc)
+	return loadAccountCatalogSnapshot(ctx, cc)
 }
 
-func statusAccounts(cc *CLIContext, snapshot accountReadModelSnapshot, history bool) []statusAccount {
+func statusAccounts(cc *CLIContext, snapshot accountCatalogSnapshot, history bool) []statusAccount {
 	return buildStatusAccountsFromCatalog(snapshot.Config, snapshot.Catalog, &liveSyncStateQuerier{
 		logger:        cc.Logger,
 		history:       history,
@@ -77,14 +77,14 @@ func statusAccounts(cc *CLIContext, snapshot accountReadModelSnapshot, history b
 }
 
 func authRequirements(
-	snapshot accountReadModelSnapshot,
+	snapshot accountCatalogSnapshot,
 	include func(accountCatalogEntry) bool,
 ) []accountAuthRequirement {
 	return catalogAuthRequirements(snapshot.Catalog, include)
 }
 
 func whoamiAuthRequired(
-	snapshot accountReadModelSnapshot,
+	snapshot accountCatalogSnapshot,
 	authenticatedEmail string,
 ) []accountAuthRequirement {
 	return whoamiAuthRequiredAccounts(snapshot.Catalog, authenticatedEmail)
@@ -94,10 +94,10 @@ func loadDriveListSnapshot(
 	ctx context.Context,
 	cc *CLIContext,
 	showAll bool,
-) (driveListReadModelSnapshot, error) {
-	catalogSnapshot, err := loadLenientCatalogWithBestEffortIdentityRefresh(ctx, cc)
+) (driveListSnapshot, error) {
+	catalogSnapshot, err := loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(ctx, cc)
 	if err != nil {
-		return driveListReadModelSnapshot{}, err
+		return driveListSnapshot{}, err
 	}
 
 	logger := cc.Logger
@@ -137,7 +137,7 @@ func loadDriveListSnapshot(
 	)
 	degraded := mergeDegradedNotices(discoveredDegraded, sharedDiscovery.AccountsDegraded)
 
-	return driveListReadModelSnapshot{
+	return driveListSnapshot{
 		Configured:            configured,
 		Available:             available,
 		AccountsRequiringAuth: authRequired,

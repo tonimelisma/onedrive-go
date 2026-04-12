@@ -1403,11 +1403,11 @@ func TestPrintSyncStateText_WithDurableIntentCountsAndHints(t *testing.T) {
 	assert.Contains(t, output, "Next: wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.")
 }
 
-func TestStatusService_Run_FilteredDriveText(t *testing.T) {
+func TestStatusCommand_FilteredDriveText(t *testing.T) {
 	cfgPath, cid := seedDriveStatusFixture(t)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 
 	require.NoError(t, runStatusCommand(cc, true))
@@ -1441,11 +1441,11 @@ func TestStatusService_Run_FilteredDriveText(t *testing.T) {
 	assert.Contains(t, output, "healthy")
 }
 
-func TestStatusService_Run_FilteredDriveJSON(t *testing.T) {
+func TestStatusCommand_FilteredDriveJSON(t *testing.T) {
 	cfgPath, cid := seedDriveStatusFixture(t)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 	cc.Flags.JSON = true
 
@@ -1471,17 +1471,17 @@ func TestStatusService_Run_FilteredDriveJSON(t *testing.T) {
 	assertStatusConflictActionHints(t, syncState, cid.String())
 }
 
-func TestStatusService_Run_AllDrivesJSON_FilteredDriveIsSubset(t *testing.T) {
+func TestStatusCommand_AllDrivesJSON_FilteredDriveIsSubset(t *testing.T) {
 	cfgPath, cids := seedMultiDriveStatusFixture(t, false)
 	selected := cids[0]
 
 	var allOut bytes.Buffer
-	allCtx := newServiceContext(&allOut, cfgPath)
+	allCtx := newCommandContext(&allOut, cfgPath)
 	allCtx.Flags.JSON = true
 	require.NoError(t, runStatusCommand(allCtx, false))
 
 	var filteredOut bytes.Buffer
-	filteredCtx := newServiceContext(&filteredOut, cfgPath)
+	filteredCtx := newCommandContext(&filteredOut, cfgPath)
 	filteredCtx.Flags.JSON = true
 	filteredCtx.Flags.Drive = []string{selected.String()}
 	require.NoError(t, runStatusCommand(filteredCtx, false))
@@ -1502,11 +1502,11 @@ func TestStatusService_Run_AllDrivesJSON_FilteredDriveIsSubset(t *testing.T) {
 	assert.Equal(t, *allSyncState, *filteredSyncState)
 }
 
-func TestStatusService_Run_HistoryIncludesAllDisplayedDrives(t *testing.T) {
+func TestStatusCommand_HistoryIncludesAllDisplayedDrives(t *testing.T) {
 	cfgPath, cids := seedMultiDriveStatusFixture(t, true)
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.JSON = true
 	require.NoError(t, runStatusCommand(cc, true))
 
@@ -1623,7 +1623,7 @@ func assertStatusConflictActionHints(t *testing.T, decoded *syncStateInfo, canon
 	assert.True(t, unresolvedSeen)
 }
 
-func TestStatusService_Run_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
+func TestStatusCommand_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -1633,7 +1633,7 @@ func TestStatusService_Run_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
 	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("not a sqlite database"), 0o600))
 
 	var out bytes.Buffer
-	cc := newServiceContext(&out, cfgPath)
+	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 	cc.Flags.JSON = true
 
