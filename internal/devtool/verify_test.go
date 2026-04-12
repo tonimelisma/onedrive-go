@@ -1570,7 +1570,7 @@ func writeRepoConsistencyDirectories(t *testing.T, repoRoot string) {
 
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repoRoot, "go.mod"),
-		[]byte("module github.com/tonimelisma/onedrive-go\n\ngo 1.25.0\n"),
+		[]byte(fmt.Sprintf("module github.com/tonimelisma/onedrive-go\n\ngo %s\n", dependencyGraphFixtureGoVersion())),
 		0o600,
 	))
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "CLAUDE.md"), []byte("clean\n"), 0o600))
