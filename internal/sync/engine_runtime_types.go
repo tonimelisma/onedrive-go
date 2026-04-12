@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // engineFlow holds mutable per-run execution state shared by one-shot and
@@ -18,7 +16,7 @@ type engineFlow struct {
 
 	depGraph   *DepGraph
 	dispatchCh chan *TrackedAction
-	shortcuts  []synctypes.Shortcut
+	shortcuts  []Shortcut
 
 	succeeded  int
 	failed     int
@@ -40,11 +38,11 @@ func newEngineFlow(engine *Engine) engineFlow {
 	return flow
 }
 
-func (f *engineFlow) setShortcuts(shortcuts []synctypes.Shortcut) {
+func (f *engineFlow) setShortcuts(shortcuts []Shortcut) {
 	f.shortcuts = shortcuts
 }
 
-func (f *engineFlow) getShortcuts() []synctypes.Shortcut {
+func (f *engineFlow) getShortcuts() []Shortcut {
 	return f.shortcuts
 }
 
@@ -74,7 +72,7 @@ type watchRuntimeState struct {
 	// Active scope blocks owned by the watch control flow. The slice is tiny
 	// (usually 0-5 entries), so linear scans keep the logic simple and avoid a
 	// second mirrored subsystem.
-	activeScopes []syncstore.ScopeBlock
+	activeScopes []ScopeBlock
 
 	// Scope detection — sliding window failure tracking.
 	scopeState *ScopeState
@@ -137,7 +135,7 @@ type watchReconcileState struct {
 	// per-scope shared-folder child-set signatures for watch summaries.
 	lastSummaryTotal     int
 	lastSummarySignature string
-	lastRemoteBlocked    map[synctypes.ScopeKey]string
+	lastRemoteBlocked    map[ScopeKey]string
 
 	// Full reconciliation is started by the watch loop and hands its result
 	// back over reconcileResults. The loop owns reconcileActive and applies the
@@ -183,7 +181,7 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 			retryTimerCh: make(chan struct{}, 1),
 		},
 		watchReconcileState: watchReconcileState{
-			lastRemoteBlocked: make(map[synctypes.ScopeKey]string),
+			lastRemoteBlocked: make(map[ScopeKey]string),
 			reconcileResults:  make(chan reconcileResult, 1),
 		},
 	}

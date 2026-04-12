@@ -17,14 +17,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 type reconcileResult struct {
 	events    []ChangeEvent
-	shortcuts []synctypes.Shortcut
+	shortcuts []Shortcut
 }
 
 type driveIdentityProof struct {
@@ -35,7 +33,7 @@ type driveIdentityProof struct {
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is handled by internal/multisync.
 type Engine struct {
-	baseline              *syncstore.SyncStore
+	baseline              *SyncStore
 	planner               *Planner
 	execCfg               *ExecutorConfig
 	fetcher               DeltaFetcher
@@ -111,7 +109,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
 
-	bm, err := syncstore.NewSyncStore(ctx, cfg.DBPath, cfg.Logger)
+	bm, err := NewSyncStore(ctx, cfg.DBPath, cfg.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
@@ -289,7 +287,7 @@ func (e *Engine) hasPersistedAuthScope(ctx context.Context) (bool, error) {
 	}
 
 	for i := range blocks {
-		if blocks[i].Key == synctypes.SKAuthAccount() {
+		if blocks[i].Key == SKAuthAccount() {
 			return true, nil
 		}
 	}
@@ -309,7 +307,7 @@ func (e *Engine) hasPersistedAuthScope(ctx context.Context) (bool, error) {
 //  9. Wait for completion, commit delta token
 
 // ListConflicts returns all unresolved conflicts from the database.
-func (e *Engine) ListConflicts(ctx context.Context) ([]syncstore.ConflictRecord, error) {
+func (e *Engine) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
 	conflicts, err := e.baseline.ListConflicts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing unresolved conflicts: %w", err)
@@ -320,7 +318,7 @@ func (e *Engine) ListConflicts(ctx context.Context) ([]syncstore.ConflictRecord,
 
 // ListAllConflicts returns all conflicts (resolved and unresolved) from the
 // database. Used by `status --history`.
-func (e *Engine) ListAllConflicts(ctx context.Context) ([]syncstore.ConflictRecord, error) {
+func (e *Engine) ListAllConflicts(ctx context.Context) ([]ConflictRecord, error) {
 	conflicts, err := e.baseline.ListAllConflicts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing conflict history: %w", err)
@@ -340,12 +338,12 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 	}
 
 	switch result.Status {
-	case syncstore.ConflictRequestQueued, syncstore.ConflictRequestAlreadyQueued:
+	case ConflictRequestQueued, ConflictRequestAlreadyQueued:
 		_, err := e.processQueuedConflictResolutions(ctx)
 		return err
-	case syncstore.ConflictRequestAlreadyResolved:
+	case ConflictRequestAlreadyResolved:
 		return nil
-	case syncstore.ConflictRequestAlreadyApplying:
+	case ConflictRequestAlreadyApplying:
 		return fmt.Errorf("sync: conflict %s resolution request is %s", conflictID, result.Status)
 	default:
 		return fmt.Errorf("sync: conflict %s resolution request is %s", conflictID, result.Status)
@@ -356,7 +354,7 @@ func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution str
 // restoring the newest untracked conflict copy back to the canonical path and
 // removing only the current unresolved conflict-copy artifacts. Any later
 // upload is ordinary sync work driven by normal observation/planning.
-func (e *Engine) resolveKeepLocal(ctx context.Context, c *syncstore.ConflictRecord) ([]string, error) {
+func (e *Engine) resolveKeepLocal(ctx context.Context, c *ConflictRecord) ([]string, error) {
 	copies, err := e.untrackedConflictCopyPaths(ctx, c.Path)
 	if err != nil {
 		return nil, fmt.Errorf("glob conflict copies for keep-local: %w", err)
@@ -386,7 +384,7 @@ func (e *Engine) resolveKeepLocal(ctx context.Context, c *syncstore.ConflictReco
 // canonical path during conflict detection as the chosen layout. It only
 // removes the current unresolved conflict-copy artifacts; any later baseline
 // convergence or download/upload trouble is ordinary sync work.
-func (e *Engine) resolveKeepRemote(ctx context.Context, c *syncstore.ConflictRecord) ([]string, error) {
+func (e *Engine) resolveKeepRemote(ctx context.Context, c *ConflictRecord) ([]string, error) {
 	if _, err := e.syncTree.Stat(c.Path); err != nil {
 		return nil, fmt.Errorf("confirming remote version at %s: %w", c.Path, err)
 	}
@@ -406,7 +404,7 @@ func (e *Engine) resolveKeepRemote(ctx context.Context, c *syncstore.ConflictRec
 // conflict-copy artifacts as the chosen final layout. The conflict is resolved
 // once that layout exists; later hashing, baseline refresh, or uploads are
 // ordinary sync work driven by normal observation/planning.
-func (e *Engine) resolveKeepBoth(ctx context.Context, c *syncstore.ConflictRecord) ([]string, error) {
+func (e *Engine) resolveKeepBoth(ctx context.Context, c *ConflictRecord) ([]string, error) {
 	if _, err := e.syncTree.Stat(c.Path); err != nil {
 		return nil, fmt.Errorf("confirming original file for keep-both: %w", err)
 	}
@@ -504,7 +502,7 @@ func (e *Engine) conflictResolutionFollowUpChanges(
 
 	var changes []PathChanges
 	for _, path := range sortedPaths {
-		var base *syncstore.BaselineEntry
+		var base *BaselineEntry
 		if entry, ok := bl.GetByPath(path); ok {
 			base = entry
 		}

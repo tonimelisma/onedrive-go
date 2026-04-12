@@ -14,7 +14,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -30,7 +29,7 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "doomed.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile,
+		ItemType: ItemTypeFile,
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -50,7 +49,7 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 	cancel()
 	<-done
 
-	assert.Equal(t, synctypes.ChangeDelete, ev.Type)
+	assert.Equal(t, ChangeDelete, ev.Type)
 	assert.Equal(t, "doomed.txt", ev.Path)
 	assert.True(t, ev.IsDeleted)
 }
@@ -68,7 +67,7 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "subdir", DriveID: driveid.New("d"), ItemID: "d1",
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -90,9 +89,9 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 	cancel()
 	<-done
 
-	require.Equal(t, synctypes.ChangeDelete, ev.Type)
+	require.Equal(t, ChangeDelete, ev.Type)
 	require.Equal(t, "subdir", ev.Path)
-	require.Equal(t, synctypes.ItemTypeFolder, ev.ItemType)
+	require.Equal(t, ItemTypeFolder, ev.ItemType)
 	require.True(t, ev.IsDeleted)
 }
 
@@ -152,11 +151,11 @@ func TestSkipSymlinkDelete_RemainsIgnoredThroughSafetyScan(t *testing.T) {
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "real.txt", DriveID: driveid.New("d"), ItemID: "real",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "content"),
 		},
 		&BaselineEntry{
 			Path: "link.txt", DriveID: driveid.New("d"), ItemID: "link",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "content"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "content"),
 		},
 	)
 
@@ -289,7 +288,7 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 		name       string
 		fsPath     string // original path from fsnotify (potentially NFD)
 		dbRelPath  string // NFC-normalized for baseline lookup
-		baseType   synctypes.ItemType
+		baseType   ItemType
 		wantRemove bool   // expect watcher.Remove() to be called
 		wantPath   string // expected path passed to watcher.Remove()
 	}{
@@ -297,7 +296,7 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 			name:       "NFC folder path",
 			fsPath:     "/sync/r\u00e9sum\u00e9",
 			dbRelPath:  "r\u00e9sum\u00e9",
-			baseType:   synctypes.ItemTypeFolder,
+			baseType:   ItemTypeFolder,
 			wantRemove: true,
 			wantPath:   "/sync/r\u00e9sum\u00e9",
 		},
@@ -305,7 +304,7 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 			name:       "NFD folder path (decomposed)",
 			fsPath:     "/sync/re\u0301sume\u0301",
 			dbRelPath:  "r\u00e9sum\u00e9",
-			baseType:   synctypes.ItemTypeFolder,
+			baseType:   ItemTypeFolder,
 			wantRemove: true,
 			wantPath:   "/sync/re\u0301sume\u0301", // must use original, NOT reconstructed NFC
 		},
@@ -313,7 +312,7 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 			name:       "ASCII folder path",
 			fsPath:     "/sync/photos",
 			dbRelPath:  "photos",
-			baseType:   synctypes.ItemTypeFolder,
+			baseType:   ItemTypeFolder,
 			wantRemove: true,
 			wantPath:   "/sync/photos",
 		},
@@ -321,7 +320,7 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 			name:       "file (not folder) — no Remove call",
 			fsPath:     "/sync/file.txt",
 			dbRelPath:  "file.txt",
-			baseType:   synctypes.ItemTypeFile,
+			baseType:   ItemTypeFile,
 			wantRemove: false,
 		},
 	}
@@ -365,10 +364,10 @@ func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		baseType synctypes.ItemType
+		baseType ItemType
 	}{
-		{"file deletion", synctypes.ItemTypeFile},
-		{"folder deletion", synctypes.ItemTypeFolder},
+		{"file deletion", ItemTypeFile},
+		{"folder deletion", ItemTypeFolder},
 	}
 
 	for _, tt := range tests {
@@ -392,12 +391,12 @@ func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
 
 			select {
 			case ev := <-events:
-				assert.Equal(t, synctypes.ChangeDelete, ev.Type)
+				assert.Equal(t, ChangeDelete, ev.Type)
 				assert.Equal(t, "target", ev.Path)
 				assert.Equal(t, "target", ev.Name)
 				assert.Equal(t, tt.baseType, ev.ItemType)
 				assert.True(t, ev.IsDeleted)
-				assert.Equal(t, synctypes.SourceLocal, ev.Source)
+				assert.Equal(t, SourceLocal, ev.Source)
 			default:
 				require.Fail(t, "expected a ChangeDelete event")
 			}
@@ -440,7 +439,7 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 		Path:     "folder",
 		DriveID:  driveid.New("d"),
 		ItemID:   "f1",
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)

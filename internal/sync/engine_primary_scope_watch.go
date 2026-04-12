@@ -8,12 +8,11 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 )
 
 func (rt *watchRuntime) watchPrimaryScopedRemote(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	events chan<- ChangeEvent,
 	interval time.Duration,
 	phase ObservationPhasePlan,
@@ -63,7 +62,7 @@ func (rt *watchRuntime) watchPrimaryScopedRemote(
 
 func (rt *watchRuntime) observePrimaryScopedWatchPoll(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 	phase ObservationPhasePlan,
 ) (remoteFetchResult, error) {
 	return rt.observeObservationPhase(ctx, bl, phase, false)

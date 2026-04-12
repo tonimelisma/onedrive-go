@@ -17,6 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+	"github.com/tonimelisma/onedrive-go/internal/syncverify"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -24,9 +27,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/syncverify"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
@@ -408,7 +409,7 @@ func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (
 	require.NoError(t, err)
 
 	dbPath := stateDBPathForEnv(canonicalID, env)
-	store, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	store, err := syncengine.NewSyncStore(t.Context(), dbPath, logger)
 	if err != nil {
 		return nil, err
 	}

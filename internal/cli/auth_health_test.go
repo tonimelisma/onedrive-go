@@ -15,21 +15,20 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
 	t.Helper()
 
-	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), testDriveLogger(t))
+	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), testDriveLogger(t))
 	require.NoError(t, err)
 	defer store.Close(t.Context())
 
-	require.NoError(t, store.UpsertScopeBlock(t.Context(), &syncstore.ScopeBlock{
-		Key:          syncstore.AuthAccountScopeKey(),
-		IssueType:    synctypes.IssueUnauthorized,
-		TimingSource: synctypes.ScopeTimingNone,
+	require.NoError(t, store.UpsertScopeBlock(t.Context(), &syncengine.ScopeBlock{
+		Key:          syncengine.AuthAccountScopeKey(),
+		IssueType:    syncengine.IssueUnauthorized,
+		TimingSource: syncengine.ScopeTimingNone,
 		BlockedAt:    time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
 	}))
 }

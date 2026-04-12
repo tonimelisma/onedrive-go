@@ -29,7 +29,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // watchLoop is the main select loop for Watch(). It processes fsnotify events,
@@ -96,7 +95,7 @@ func (o *LocalObserver) watchLoop(
 				o.Logger.Error("sync root deleted, stopping watch",
 					slog.String("sync_root", syncRoot))
 
-				return synctypes.ErrSyncRootDeleted
+				return ErrSyncRootDeleted
 			}
 
 		case <-tickCh:
@@ -105,7 +104,7 @@ func (o *LocalObserver) watchLoop(
 				o.Logger.Error("sync root deleted, stopping watch",
 					slog.String("sync_root", syncRoot))
 
-				return synctypes.ErrSyncRootDeleted
+				return ErrSyncRootDeleted
 			}
 
 			o.runSafetyScan(ctx, tree, events)
@@ -228,8 +227,8 @@ func (o *LocalObserver) handleCreate(
 	}
 
 	ev := ChangeEvent{
-		Source: synctypes.SourceLocal,
-		Type:   synctypes.ChangeCreate,
+		Source: SourceLocal,
+		Type:   ChangeCreate,
 		Path:   dbRelPath,
 		Name:   name,
 		Size:   info.Size(),
@@ -237,7 +236,7 @@ func (o *LocalObserver) handleCreate(
 	}
 
 	if info.IsDir() {
-		ev.ItemType = synctypes.ItemTypeFolder
+		ev.ItemType = ItemTypeFolder
 
 		if addErr := watcher.Add(fsPath); addErr != nil {
 			o.Logger.Warn("failed to add watch on new directory",
@@ -263,7 +262,7 @@ func (o *LocalObserver) handleCreate(
 			return
 		}
 
-		ev.ItemType = synctypes.ItemTypeFile
+		ev.ItemType = ItemTypeFile
 		ev.Hash = o.stableHashOrEmpty(fsPath, dbRelPath)
 	}
 
@@ -281,7 +280,7 @@ func (o *LocalObserver) handleCreate(
 func (o *LocalObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
 	hash, err := ComputeStableHash(fsPath)
 	if err != nil {
-		if errors.Is(err, synctypes.ErrFileChangedDuringHash) {
+		if errors.Is(err, ErrFileChangedDuringHash) {
 			o.Logger.Debug("file metadata still settling, emitting with empty hash",
 				slog.String("path", dbRelPath))
 		} else {
@@ -369,11 +368,11 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 	}
 
 	fileEv := ChangeEvent{
-		Source:   synctypes.SourceLocal,
-		Type:     synctypes.ChangeCreate,
+		Source:   SourceLocal,
+		Type:     ChangeCreate,
 		Path:     entryRelPath,
 		Name:     entryName,
-		ItemType: synctypes.ItemTypeFile,
+		ItemType: ItemTypeFile,
 		Size:     info.Size(),
 		Hash:     o.stableHashOrEmpty(entryFsPath, entryRelPath),
 		Mtime:    info.ModTime().UnixNano(),
@@ -440,11 +439,11 @@ func (o *LocalObserver) scanNewDirectoryChildDir(
 	}
 
 	dirEv := ChangeEvent{
-		Source:   synctypes.SourceLocal,
-		Type:     synctypes.ChangeCreate,
+		Source:   SourceLocal,
+		Type:     ChangeCreate,
 		Path:     entryRelPath,
 		Name:     entryName,
-		ItemType: synctypes.ItemTypeFolder,
+		ItemType: ItemTypeFolder,
 	}
 
 	o.TrySend(ctx, events, &dirEv)
@@ -458,7 +457,7 @@ func (o *LocalObserver) scanNewDirectoryChildDir(
 // HashAndEmit (which has ctx and events from the watchLoop).
 //
 // Stale baseline interaction (B-116): handleWrite reads the live baseline
-// (RWMutex-protected, updated in-place by CommitOutcome). If an action is
+// (RWMutex-protected, updated in-place by CommitMutation). If an action is
 // in-flight (dispatched to workers but not yet committed to baseline), the safety scan
 // may re-emit an event for something already being processed. This is safe:
 // processBatch deduplicates via HasInFlight + CancelByPath (B-122).
@@ -573,7 +572,7 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 
 		// Distinguish retry exhaustion from generic hash failures for
 		// observability — helps diagnose continuously-written files.
-		if errors.Is(err, synctypes.ErrFileChangedDuringHash) {
+		if errors.Is(err, ErrFileChangedDuringHash) {
 			o.Logger.Warn("hash retries exhausted, emitting with empty hash",
 				slog.String("path", req.DbRelPath),
 				slog.Int("retries", req.Retries),
@@ -591,11 +590,11 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	}
 
 	ev := ChangeEvent{
-		Source:   synctypes.SourceLocal,
-		Type:     synctypes.ChangeModify,
+		Source:   SourceLocal,
+		Type:     ChangeModify,
 		Path:     req.DbRelPath,
 		Name:     req.Name,
-		ItemType: synctypes.ItemTypeFile,
+		ItemType: ItemTypeFile,
 		Size:     info.Size(),
 		Hash:     hash,
 		Mtime:    info.ModTime().UnixNano(),
@@ -630,7 +629,7 @@ func (o *LocalObserver) isStaleDeferredHash(req HashRequest) bool {
 }
 
 func (o *LocalObserver) retryDeferredHashOnChange(req HashRequest, err error) bool {
-	if !errors.Is(err, synctypes.ErrFileChangedDuringHash) || req.Retries >= MaxCoalesceRetries {
+	if !errors.Is(err, ErrFileChangedDuringHash) || req.Retries >= MaxCoalesceRetries {
 		return false
 	}
 
@@ -705,7 +704,7 @@ func (o *LocalObserver) HandleDelete(
 		}
 	}
 
-	itemType := synctypes.ItemTypeFile
+	itemType := ItemTypeFile
 
 	if existing, ok := o.Baseline.GetByPath(dbRelPath); ok {
 		itemType = existing.ItemType
@@ -716,7 +715,7 @@ func (o *LocalObserver) HandleDelete(
 	// if the watch was already removed (Remove returns a benign error).
 	// Uses fsPath directly instead of reconstructing from syncRoot + dbRelPath
 	// to avoid NFC/NFD mismatch on macOS HFS+ (B-312).
-	if itemType == synctypes.ItemTypeFolder {
+	if itemType == ItemTypeFolder {
 		if rmErr := watcher.Remove(fsPath); rmErr != nil {
 			o.Logger.Debug("watch removal for deleted directory",
 				slog.String("path", dbRelPath),
@@ -728,8 +727,8 @@ func (o *LocalObserver) HandleDelete(
 	}
 
 	ev := ChangeEvent{
-		Source:    synctypes.SourceLocal,
-		Type:      synctypes.ChangeDelete,
+		Source:    SourceLocal,
+		Type:      ChangeDelete,
 		Path:      dbRelPath,
 		Name:      name,
 		ItemType:  itemType,

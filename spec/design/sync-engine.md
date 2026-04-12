@@ -378,7 +378,7 @@ success, shutdown, retryable transient, scope-blocking transient, actionable,
 and fatal.
 
 `SummaryKey` is the shared sync-domain rendering key exported by
-`internal/synctypes`, while the runtime mapping from result facts to summary
+`internal/sync`, while the runtime mapping from result facts to summary
 keys lives in `internal/sync/engine_result_classify.go`. Classification assigns it once so result routing, store
 inspection, and CLI issue/status rendering can all group the same failure
 family without re-inspecting raw HTTP status or filesystem errors.

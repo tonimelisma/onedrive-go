@@ -105,7 +105,7 @@ stay in `internal/cli`.
 
 The socket speaks JSON over HTTP:
 
-- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives. Watch owners also report pending durable-intent counts: approved held deletes plus queued/applying conflict requests. Those counters come from the read-only `syncstore.ReadDurableIntentCounts` boundary, not from opening a writable `SyncStore`, so status probes do not own checkpoint or close-side DB work. One-shot owners return those counters as zero/omitted because they are only exposing the owner lock/status surface, not running a long-lived intent loop.
+- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives. Watch owners also report pending durable-intent counts: approved held deletes plus queued/applying conflict requests. Those counters come from the read-only `sync.ReadDurableIntentCounts` boundary, not from opening a writable `SyncStore`, so status probes do not own checkpoint or close-side DB work. One-shot owners return those counters as zero/omitted because they are only exposing the owner lock/status surface, not running a long-lived intent loop.
 - `GET /v1/perf` returns the owner mode plus the live aggregate and per-drive perf snapshots currently owned by the active sync runtime. This surface is live-only and returns whatever the owner has collected so far; it does not materialize historical perf state from SQLite.
 - `POST /v1/perf/capture` triggers an explicit local capture bundle from the active owner. The request carries bounded duration plus optional output-dir, trace, and full-detail toggles; the response returns the local artifact paths for the completed bundle.
 - `POST /v1/reload` reloads config in the watch owner.

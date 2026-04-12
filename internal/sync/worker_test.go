@@ -17,10 +17,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -58,7 +56,7 @@ func (m *workerMockUploader) Upload(ctx context.Context, driveID driveid.ID, par
 // ---------------------------------------------------------------------------
 
 func newWorkerTestSetup(t *testing.T) (
-	*ExecutorConfig, *syncstore.SyncStore, string,
+	*ExecutorConfig, *SyncStore, string,
 ) {
 	t.Helper()
 
@@ -294,13 +292,13 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 			Path:       "Documents",
 			DriveID:    driveid.New("0000000000000001"),
 			ItemID:     "folder-doc",
-			CreateSide: synctypes.CreateLocal,
+			CreateSide: CreateLocal,
 			View: &PathView{
 				Remote: &RemoteState{
 					ItemID:   "folder-doc",
 					DriveID:  driveid.New("0000000000000001"),
 					ParentID: "root",
-					ItemType: synctypes.ItemTypeFolder,
+					ItemType: ItemTypeFolder,
 				},
 			},
 		},
@@ -342,13 +340,13 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 			Type:       ActionFolderCreate,
 			Path:       "NewDir",
 			DriveID:    driveid.New("0000000000000001"),
-			CreateSide: synctypes.CreateLocal,
+			CreateSide: CreateLocal,
 			View: &PathView{
 				Remote: &RemoteState{
 					ItemID:   "newdir-id",
 					DriveID:  driveid.New("0000000000000001"),
 					ParentID: "root",
-					ItemType: synctypes.ItemTypeFolder,
+					ItemType: ItemTypeFolder,
 				},
 			},
 		},
@@ -554,13 +552,13 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 			Type:       ActionFolderCreate,
 			Path:       "Uploads",
 			DriveID:    driveid.New("0000000000000001"),
-			CreateSide: synctypes.CreateLocal,
+			CreateSide: CreateLocal,
 			View: &PathView{
 				Remote: &RemoteState{
 					ItemID:   "uploads-folder-id",
 					DriveID:  driveid.New("0000000000000001"),
 					ParentID: "root",
-					ItemType: synctypes.ItemTypeFolder,
+					ItemType: ItemTypeFolder,
 				},
 			},
 		},

@@ -21,8 +21,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
@@ -628,7 +627,7 @@ func TestQuerySyncState_DurableIntentCountsAndActionHints(t *testing.T) {
 
 	logger := slog.New(slog.DiscardHandler)
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	store, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	store, err := syncengine.NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.Close(t.Context()))
@@ -644,31 +643,31 @@ func TestQuerySyncState_DurableIntentCountsAndActionHints(t *testing.T) {
 			('conflict-failed', 'd!1', 'item-3', '/failed.txt', 'edit_edit', 3, 'unresolved')`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.UpsertHeldDeletes(ctx, []syncstore.HeldDeleteRecord{{
+	require.NoError(t, store.UpsertHeldDeletes(ctx, []syncengine.HeldDeleteRecord{{
 		DriveID:       driveid.New("d!1"),
-		ActionType:    synctypes.ActionRemoteDelete,
+		ActionType:    syncengine.ActionRemoteDelete,
 		Path:          "/delete-me.txt",
 		ItemID:        "item-delete",
-		State:         synctypes.HeldDeleteStateHeld,
+		State:         syncengine.HeldDeleteStateHeld,
 		HeldAt:        1,
 		LastPlannedAt: 1,
 	}}))
 	require.NoError(t, store.ApproveHeldDeletes(ctx))
 
-	queued, err := store.RequestConflictResolution(ctx, "conflict-pending", syncstore.ResolutionKeepLocal)
+	queued, err := store.RequestConflictResolution(ctx, "conflict-pending", syncengine.ResolutionKeepLocal)
 	require.NoError(t, err)
-	assert.Equal(t, syncstore.ConflictRequestQueued, queued.Status)
+	assert.Equal(t, syncengine.ConflictRequestQueued, queued.Status)
 
-	resolving, err := store.RequestConflictResolution(ctx, "conflict-resolving", syncstore.ResolutionKeepRemote)
+	resolving, err := store.RequestConflictResolution(ctx, "conflict-resolving", syncengine.ResolutionKeepRemote)
 	require.NoError(t, err)
-	assert.Equal(t, syncstore.ConflictRequestQueued, resolving.Status)
+	assert.Equal(t, syncengine.ConflictRequestQueued, resolving.Status)
 	_, ok, err := store.ClaimConflictResolution(ctx, "conflict-resolving")
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	failed, err := store.RequestConflictResolution(ctx, "conflict-failed", syncstore.ResolutionKeepBoth)
+	failed, err := store.RequestConflictResolution(ctx, "conflict-failed", syncengine.ResolutionKeepBoth)
 	require.NoError(t, err)
-	assert.Equal(t, syncstore.ConflictRequestQueued, failed.Status)
+	assert.Equal(t, syncengine.ConflictRequestQueued, failed.Status)
 	_, ok, err = store.ClaimConflictResolution(ctx, "conflict-failed")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -691,7 +690,7 @@ func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")
-	store, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
+	store, err := syncengine.NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
 
 	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO conflicts
@@ -749,26 +748,26 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 		('/invalid:name.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', ?, '', 1, 0, 0),
 		('/quota/a.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', ?, ?, 1, 0, 0),
 		('/quota/b.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', ?, ?, 1, 0, 0)`,
-		synctypes.IssueInvalidFilename,
-		synctypes.IssueQuotaExceeded, synctypes.SKQuotaShortcut("remote-drive:remote-item").String(),
-		synctypes.IssueQuotaExceeded, synctypes.SKQuotaShortcut("remote-drive:remote-item").String(),
+		syncengine.IssueInvalidFilename,
+		syncengine.IssueQuotaExceeded, syncengine.SKQuotaShortcut("remote-drive:remote-item").String(),
+		syncengine.IssueQuotaExceeded, syncengine.SKQuotaShortcut("remote-drive:remote-item").String(),
 	)
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `INSERT INTO scope_blocks
 		(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
-		VALUES ('auth:account', ?, 'none', 1, 0, 0, 0, 0)`, synctypes.IssueUnauthorized)
+		VALUES ('auth:account', ?, 'none', 1, 0, 0, 0, 0)`, syncengine.IssueUnauthorized)
 	require.NoError(t, err)
 
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
-	invalidDescriptor := synctypes.DescribeSummary(synctypes.SummaryInvalidFilename)
-	quotaDescriptor := synctypes.DescribeSummary(synctypes.SummaryQuotaExceeded)
-	authDescriptor := synctypes.DescribeSummary(synctypes.SummaryAuthenticationRequired)
+	invalidDescriptor := syncengine.DescribeSummary(syncengine.SummaryInvalidFilename)
+	quotaDescriptor := syncengine.DescribeSummary(syncengine.SummaryQuotaExceeded)
+	authDescriptor := syncengine.DescribeSummary(syncengine.SummaryAuthenticationRequired)
 	assert.ElementsMatch(t, []failureGroupJSON{
 		{
-			SummaryKey: string(synctypes.SummaryInvalidFilename),
-			IssueType:  string(synctypes.IssueInvalidFilename),
+			SummaryKey: string(syncengine.SummaryInvalidFilename),
+			IssueType:  string(syncengine.IssueInvalidFilename),
 			Title:      invalidDescriptor.Title,
 			Reason:     invalidDescriptor.Reason,
 			Action:     invalidDescriptor.Action,
@@ -776,8 +775,8 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 			Paths:      []string{"/invalid:name.txt"},
 		},
 		{
-			SummaryKey: string(synctypes.SummaryQuotaExceeded),
-			IssueType:  string(synctypes.IssueQuotaExceeded),
+			SummaryKey: string(syncengine.SummaryQuotaExceeded),
+			IssueType:  string(syncengine.IssueQuotaExceeded),
 			Title:      quotaDescriptor.Title,
 			Reason:     quotaDescriptor.Reason,
 			Action:     quotaDescriptor.Action,
@@ -787,8 +786,8 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 			Paths:      []string{"/quota/a.txt", "/quota/b.txt"},
 		},
 		{
-			SummaryKey: string(synctypes.SummaryAuthenticationRequired),
-			IssueType:  string(synctypes.IssueUnauthorized),
+			SummaryKey: string(syncengine.SummaryAuthenticationRequired),
+			IssueType:  string(syncengine.IssueUnauthorized),
 			Title:      authDescriptor.Title,
 			Reason:     authDescriptor.Reason,
 			Action:     authDescriptor.Action,
@@ -818,14 +817,14 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 						IssueCount: 2,
 						IssueGroups: []failureGroupJSON{
 							{
-								SummaryKey: string(synctypes.SummaryQuotaExceeded),
+								SummaryKey: string(syncengine.SummaryQuotaExceeded),
 								Title:      "QUOTA EXCEEDED",
 								Count:      1,
 								ScopeKind:  "shortcut",
 								Scope:      "Shared/Docs",
 							},
 							{
-								SummaryKey: string(synctypes.SummaryQuotaExceeded),
+								SummaryKey: string(syncengine.SummaryQuotaExceeded),
 								Title:      "QUOTA EXCEEDED",
 								Count:      1,
 								ScopeKind:  "shortcut",
@@ -854,13 +853,13 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 	t.Parallel()
 
-	quotaDescriptor := synctypes.DescribeSummary(synctypes.SummaryQuotaExceeded)
+	quotaDescriptor := syncengine.DescribeSummary(syncengine.SummaryQuotaExceeded)
 	ss := &syncStateInfo{
 		IssueCount: 2,
 		IssueGroups: []failureGroupJSON{
 			{
-				SummaryKey: string(synctypes.SummaryQuotaExceeded),
-				IssueType:  string(synctypes.IssueQuotaExceeded),
+				SummaryKey: string(syncengine.SummaryQuotaExceeded),
+				IssueType:  string(syncengine.IssueQuotaExceeded),
 				Title:      quotaDescriptor.Title,
 				Reason:     quotaDescriptor.Reason,
 				Action:     quotaDescriptor.Action,
@@ -869,8 +868,8 @@ func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T)
 				Scope:      "Shared/Docs",
 			},
 			{
-				SummaryKey: string(synctypes.SummaryQuotaExceeded),
-				IssueType:  string(synctypes.IssueQuotaExceeded),
+				SummaryKey: string(syncengine.SummaryQuotaExceeded),
+				IssueType:  string(syncengine.IssueQuotaExceeded),
 				Title:      quotaDescriptor.Title,
 				Reason:     quotaDescriptor.Reason,
 				Action:     quotaDescriptor.Action,
@@ -988,14 +987,14 @@ func TestPrintStatusJSON_WithIssueGroups(t *testing.T) {
 						IssueCount: 3,
 						IssueGroups: []failureGroupJSON{
 							{
-								SummaryKey: string(synctypes.SummaryQuotaExceeded),
+								SummaryKey: string(syncengine.SummaryQuotaExceeded),
 								Title:      "QUOTA EXCEEDED",
 								Count:      1,
 								ScopeKind:  "shortcut",
 								Scope:      "Shared/Team Docs",
 							},
 							{
-								SummaryKey: string(synctypes.SummaryInvalidFilename),
+								SummaryKey: string(syncengine.SummaryInvalidFilename),
 								Title:      "INVALID FILENAME",
 								Count:      2,
 								ScopeKind:  "file",
@@ -1197,17 +1196,17 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 func TestBuildSyncStateInfo_SamplesSectionsByDefault(t *testing.T) {
 	t.Parallel()
 
-	descriptor := synctypes.DescribeSummary(synctypes.SummaryInvalidFilename)
+	descriptor := syncengine.DescribeSummary(syncengine.SummaryInvalidFilename)
 	paths := []string{"/one", "/two", "/three", "/four", "/five", "/six", "/seven"}
-	deleteRows, conflicts, history := buildStatusSectionRows(paths, syncstore.ResolutionKeepRemote)
+	deleteRows, conflicts, history := buildStatusSectionRows(paths, syncengine.ResolutionKeepRemote)
 
 	info := buildSyncStateInfo(
 		"personal:alice@example.com",
-		&syncstore.DriveStatusSnapshot{
-			IssueGroups: []syncstore.IssueGroupSnapshot{
+		&syncengine.DriveStatusSnapshot{
+			IssueGroups: []syncengine.IssueGroupSnapshot{
 				{
-					SummaryKey:       synctypes.SummaryInvalidFilename,
-					PrimaryIssueType: string(synctypes.IssueInvalidFilename),
+					SummaryKey:       syncengine.SummaryInvalidFilename,
+					PrimaryIssueType: string(syncengine.IssueInvalidFilename),
 					Count:            len(paths),
 					Paths:            paths,
 				},
@@ -1238,15 +1237,15 @@ func TestBuildSyncStateInfo_VerboseExpandsSections(t *testing.T) {
 	t.Parallel()
 
 	paths := []string{"/one", "/two", "/three", "/four", "/five", "/six"}
-	deleteRows, conflicts, history := buildStatusSectionRows(paths, syncstore.ResolutionKeepBoth)
+	deleteRows, conflicts, history := buildStatusSectionRows(paths, syncengine.ResolutionKeepBoth)
 
 	info := buildSyncStateInfo(
 		"personal:alice@example.com",
-		&syncstore.DriveStatusSnapshot{
-			IssueGroups: []syncstore.IssueGroupSnapshot{
+		&syncengine.DriveStatusSnapshot{
+			IssueGroups: []syncengine.IssueGroupSnapshot{
 				{
-					SummaryKey:       synctypes.SummaryInvalidFilename,
-					PrimaryIssueType: string(synctypes.IssueInvalidFilename),
+					SummaryKey:       syncengine.SummaryInvalidFilename,
+					PrimaryIssueType: string(syncengine.IssueInvalidFilename),
 					Count:            len(paths),
 					Paths:            paths,
 				},
@@ -1310,16 +1309,16 @@ func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
 func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
 	t.Parallel()
 
-	quotaDescriptor := synctypes.DescribeSummary(synctypes.SummaryQuotaExceeded)
-	invalidDescriptor := synctypes.DescribeSummary(synctypes.SummaryInvalidFilename)
-	authDescriptor := synctypes.DescribeSummary(synctypes.SummaryAuthenticationRequired)
+	quotaDescriptor := syncengine.DescribeSummary(syncengine.SummaryQuotaExceeded)
+	invalidDescriptor := syncengine.DescribeSummary(syncengine.SummaryInvalidFilename)
+	authDescriptor := syncengine.DescribeSummary(syncengine.SummaryAuthenticationRequired)
 	ss := &syncStateInfo{
 		IssueCount: 3,
 		Retrying:   2,
 		IssueGroups: []failureGroupJSON{
 			{
-				SummaryKey: string(synctypes.SummaryQuotaExceeded),
-				IssueType:  string(synctypes.IssueQuotaExceeded),
+				SummaryKey: string(syncengine.SummaryQuotaExceeded),
+				IssueType:  string(syncengine.IssueQuotaExceeded),
 				Title:      quotaDescriptor.Title,
 				Reason:     quotaDescriptor.Reason,
 				Action:     quotaDescriptor.Action,
@@ -1329,8 +1328,8 @@ func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
 				Paths:      []string{"/quota/a.txt"},
 			},
 			{
-				SummaryKey: string(synctypes.SummaryInvalidFilename),
-				IssueType:  string(synctypes.IssueInvalidFilename),
+				SummaryKey: string(syncengine.SummaryInvalidFilename),
+				IssueType:  string(syncengine.IssueInvalidFilename),
 				Title:      invalidDescriptor.Title,
 				Reason:     invalidDescriptor.Reason,
 				Action:     invalidDescriptor.Action,
@@ -1338,8 +1337,8 @@ func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
 				Paths:      []string{"/bad:name.txt", "/worse:name.txt"},
 			},
 			{
-				SummaryKey: string(synctypes.SummaryAuthenticationRequired),
-				IssueType:  string(synctypes.IssueUnauthorized),
+				SummaryKey: string(syncengine.SummaryAuthenticationRequired),
+				IssueType:  string(syncengine.IssueUnauthorized),
 				Title:      authDescriptor.Title,
 				Reason:     authDescriptor.Reason,
 				Action:     authDescriptor.Action,
@@ -1377,15 +1376,15 @@ func TestPrintSyncStateText_WithDurableIntentCountsAndHints(t *testing.T) {
 			{
 				Path:                "/queued-conflict.txt",
 				ConflictType:        "edit_edit",
-				State:               syncstore.ConflictStateQueued,
-				RequestedResolution: syncstore.ResolutionKeepLocal,
+				State:               syncengine.ConflictStateQueued,
+				RequestedResolution: syncengine.ResolutionKeepLocal,
 				ActionHint:          "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.",
 			},
 			{
 				Path:                "/applying-conflict.txt",
 				ConflictType:        "edit_delete",
-				State:               syncstore.ConflictStateApplying,
-				RequestedResolution: syncstore.ResolutionKeepRemote,
+				State:               syncengine.ConflictStateApplying,
+				RequestedResolution: syncengine.ResolutionKeepRemote,
 				ActionHint:          "wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.",
 			},
 		},
@@ -1603,18 +1602,18 @@ func assertStatusConflictActionHints(t *testing.T, decoded *syncStateInfo, canon
 		switch conflict.Path {
 		case "/queued-conflict.txt":
 			queuedFound = true
-			assert.Equal(t, syncstore.ConflictStateQueued, conflict.State)
-			assert.Equal(t, syncstore.ResolutionKeepLocal, conflict.RequestedResolution)
+			assert.Equal(t, syncengine.ConflictStateQueued, conflict.State)
+			assert.Equal(t, syncengine.ResolutionKeepLocal, conflict.RequestedResolution)
 			assert.Equal(t, "temporary upload failure", conflict.LastRequestError)
 			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" sync` or start `onedrive-go --drive "+canonicalID+" sync --watch` to apply queued resolutions.", conflict.ActionHint)
 		case "/applying-conflict.txt":
 			applyingFound = true
-			assert.Equal(t, syncstore.ConflictStateApplying, conflict.State)
-			assert.Equal(t, syncstore.ResolutionKeepRemote, conflict.RequestedResolution)
+			assert.Equal(t, syncengine.ConflictStateApplying, conflict.State)
+			assert.Equal(t, syncengine.ResolutionKeepRemote, conflict.RequestedResolution)
 			assert.Equal(t, "wait for the active sync owner to finish, then run `onedrive-go --drive "+canonicalID+" status` again if needed.", conflict.ActionHint)
 		case "/needs-choice.txt":
 			unresolvedSeen = true
-			assert.Equal(t, syncstore.ConflictStateUnresolved, conflict.State)
+			assert.Equal(t, syncengine.ConflictStateUnresolved, conflict.State)
 			assert.Empty(t, conflict.RequestedResolution)
 			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" resolve local '/needs-choice.txt'` or replace `local` with `remote` or `both`.", conflict.ActionHint)
 		}
@@ -1676,7 +1675,7 @@ func seedDriveStatusFixture(t *testing.T) (string, driveid.CanonicalID) {
 	cid := driveid.MustCanonicalID("personal:detailed@example.com")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
 
-	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
+	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	ctx := t.Context()
@@ -1723,17 +1722,17 @@ func seedDriveStatusFixture(t *testing.T) (string, driveid.CanonicalID) {
 			('conflict-resolved', 'd!1', 'item-resolved', '/resolved-conflict.txt', 'create_create', 40, 'keep_both', 'lh4', 'rh4', 4, 4, 50, 'user');`)
 	require.NoError(t, err)
 
-	result, err := store.RequestConflictResolution(ctx, "conflict-queued", syncstore.ResolutionKeepLocal)
+	result, err := store.RequestConflictResolution(ctx, "conflict-queued", syncengine.ResolutionKeepLocal)
 	require.NoError(t, err)
-	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
+	assert.Equal(t, syncengine.ConflictRequestQueued, result.Status)
 	_, ok, err := store.ClaimConflictResolution(ctx, "conflict-queued")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NoError(t, store.MarkConflictResolutionFailed(ctx, "conflict-queued", errors.New("temporary upload failure")))
 
-	result, err = store.RequestConflictResolution(ctx, "conflict-applying", syncstore.ResolutionKeepRemote)
+	result, err = store.RequestConflictResolution(ctx, "conflict-applying", syncengine.ResolutionKeepRemote)
 	require.NoError(t, err)
-	assert.Equal(t, syncstore.ConflictRequestQueued, result.Status)
+	assert.Equal(t, syncengine.ConflictRequestQueued, result.Status)
 	_, ok, err = store.ClaimConflictResolution(ctx, "conflict-applying")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -1755,7 +1754,7 @@ func seedMultiDriveStatusFixture(t *testing.T, withHistory bool) (string, []driv
 
 	for i := range cids {
 		require.NoError(t, config.AppendDriveSection(cfgPath, cids[i], filepath.Join("~", fmt.Sprintf("Drive%d", i+1))))
-		store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cids[i]), slog.New(slog.DiscardHandler))
+		store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cids[i]), slog.New(slog.DiscardHandler))
 		require.NoError(t, err)
 
 		_, err = store.DB().ExecContext(t.Context(), `
@@ -1794,23 +1793,23 @@ func seedMultiDriveStatusFixture(t *testing.T, withHistory bool) (string, []driv
 func buildStatusSectionRows(
 	paths []string,
 	resolution string,
-) ([]syncstore.DeleteSafetySnapshot, []syncstore.ConflictStatusSnapshot, []syncstore.ConflictHistorySnapshot) {
-	deleteRows := make([]syncstore.DeleteSafetySnapshot, 0, len(paths))
-	conflicts := make([]syncstore.ConflictStatusSnapshot, 0, len(paths))
-	history := make([]syncstore.ConflictHistorySnapshot, 0, len(paths))
+) ([]syncengine.DeleteSafetySnapshot, []syncengine.ConflictStatusSnapshot, []syncengine.ConflictHistorySnapshot) {
+	deleteRows := make([]syncengine.DeleteSafetySnapshot, 0, len(paths))
+	conflicts := make([]syncengine.ConflictStatusSnapshot, 0, len(paths))
+	history := make([]syncengine.ConflictHistorySnapshot, 0, len(paths))
 	for i := range paths {
-		deleteRows = append(deleteRows, syncstore.DeleteSafetySnapshot{
+		deleteRows = append(deleteRows, syncengine.DeleteSafetySnapshot{
 			Path:       paths[i],
 			State:      stateHeldDeleteHeld,
 			LastSeenAt: int64(i + 1),
 		})
-		conflicts = append(conflicts, syncstore.ConflictStatusSnapshot{
+		conflicts = append(conflicts, syncengine.ConflictStatusSnapshot{
 			ID:           fmt.Sprintf("conflict-%d", i),
 			Path:         paths[i],
 			ConflictType: "edit_edit",
 			DetectedAt:   int64(i + 1),
 		})
-		history = append(history, syncstore.ConflictHistorySnapshot{
+		history = append(history, syncengine.ConflictHistorySnapshot{
 			ID:           fmt.Sprintf("resolved-%d", i),
 			Path:         paths[i],
 			ConflictType: "edit_edit",

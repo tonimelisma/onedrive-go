@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 const (
@@ -63,16 +63,16 @@ func readDriveStatusSnapshot(
 	logger *slog.Logger,
 	history bool,
 	canonicalID string,
-) (syncstore.DriveStatusSnapshot, driveStateStoreInfo) {
+) (syncengine.DriveStatusSnapshot, driveStateStoreInfo) {
 	if !managedPathExists(statePath) {
-		return syncstore.DriveStatusSnapshot{}, driveStateStoreInfo{
+		return syncengine.DriveStatusSnapshot{}, driveStateStoreInfo{
 			Status: stateStoreStatusMissing,
 		}
 	}
 
-	snapshot, err := syncstore.ReadDriveStatusSnapshot(context.Background(), statePath, history, logger)
+	snapshot, err := syncengine.ReadDriveStatusSnapshot(context.Background(), statePath, history, logger)
 	if err != nil {
-		return syncstore.DriveStatusSnapshot{}, driveStateStoreInfo{
+		return syncengine.DriveStatusSnapshot{}, driveStateStoreInfo{
 			Status:       stateStoreStatusDamaged,
 			Error:        err.Error(),
 			RecoveryHint: recoverAwareStateStoreHint(canonicalID),
@@ -84,13 +84,13 @@ func readDriveStatusSnapshot(
 
 func buildSyncStateInfo(
 	canonicalID string,
-	snapshot *syncstore.DriveStatusSnapshot,
+	snapshot *syncengine.DriveStatusSnapshot,
 	storeInfo driveStateStoreInfo,
 	verbose bool,
 	examplesLimit int,
 ) syncStateInfo {
 	if snapshot == nil {
-		snapshot = &syncstore.DriveStatusSnapshot{}
+		snapshot = &syncengine.DriveStatusSnapshot{}
 	}
 
 	if examplesLimit <= 0 {
@@ -128,7 +128,7 @@ func buildSyncStateInfo(
 }
 
 func buildFailureGroupJSON(
-	groups []syncstore.IssueGroupSnapshot,
+	groups []syncengine.IssueGroupSnapshot,
 	verbose bool,
 	examplesLimit int,
 	nextActions *statusActionHintSet,
@@ -140,7 +140,7 @@ func buildFailureGroupJSON(
 	output := make([]failureGroupJSON, 0, len(groups))
 	for i := range groups {
 		group := groups[i]
-		descriptor := syncstore.DescribeIssueSummary(group.SummaryKey)
+		descriptor := syncengine.DescribeIssueSummary(group.SummaryKey)
 		nextActions.add(strings.TrimSpace(descriptor.Action))
 		output = append(output, failureGroupJSON{
 			SummaryKey: string(group.SummaryKey),
@@ -148,7 +148,7 @@ func buildFailureGroupJSON(
 			Title:      descriptor.Title,
 			Reason:     descriptor.Reason,
 			Action:     descriptor.Action,
-			ScopeKind:  syncstore.StatusScopeKind(group.ScopeKey),
+			ScopeKind:  syncengine.StatusScopeKind(group.ScopeKey),
 			Scope:      group.ScopeLabel,
 			Count:      group.Count,
 			Paths:      sampleStrings(group.Paths, verbose, examplesLimit),
@@ -160,7 +160,7 @@ func buildFailureGroupJSON(
 
 func buildDeleteSafetyJSON(
 	canonicalID string,
-	rows []syncstore.DeleteSafetySnapshot,
+	rows []syncengine.DeleteSafetySnapshot,
 	verbose bool,
 	examplesLimit int,
 	info *syncStateInfo,
@@ -198,7 +198,7 @@ func buildDeleteSafetyJSON(
 
 func buildConflictJSON(
 	canonicalID string,
-	rows []syncstore.ConflictStatusSnapshot,
+	rows []syncengine.ConflictStatusSnapshot,
 	verbose bool,
 	examplesLimit int,
 	info *syncStateInfo,
@@ -212,9 +212,9 @@ func buildConflictJSON(
 	output := make([]statusConflictJSON, 0, len(sampled))
 	for i := range rows {
 		switch conflictRequestDisplayState(rows[i]) {
-		case syncstore.ConflictStateQueued:
+		case syncengine.ConflictStateQueued:
 			info.QueuedConflictRequests++
-		case syncstore.ConflictStateApplying:
+		case syncengine.ConflictStateApplying:
 			info.ApplyingConflictRequests++
 		}
 	}
@@ -240,7 +240,7 @@ func buildConflictJSON(
 }
 
 func buildConflictHistoryJSON(
-	rows []syncstore.ConflictHistorySnapshot,
+	rows []syncengine.ConflictHistorySnapshot,
 	verbose bool,
 	examplesLimit int,
 ) []statusConflictHistoryJSON {
@@ -291,49 +291,49 @@ func sampleStrings(values []string, verbose bool, examplesLimit int) []string {
 }
 
 func sampleDeleteSafetyRows(
-	rows []syncstore.DeleteSafetySnapshot,
+	rows []syncengine.DeleteSafetySnapshot,
 	verbose bool,
 	examplesLimit int,
-) []syncstore.DeleteSafetySnapshot {
+) []syncengine.DeleteSafetySnapshot {
 	if verbose || len(rows) <= examplesLimit {
-		out := make([]syncstore.DeleteSafetySnapshot, len(rows))
+		out := make([]syncengine.DeleteSafetySnapshot, len(rows))
 		copy(out, rows)
 		return out
 	}
 
-	out := make([]syncstore.DeleteSafetySnapshot, examplesLimit)
+	out := make([]syncengine.DeleteSafetySnapshot, examplesLimit)
 	copy(out, rows[:examplesLimit])
 	return out
 }
 
 func sampleConflictRows(
-	rows []syncstore.ConflictStatusSnapshot,
+	rows []syncengine.ConflictStatusSnapshot,
 	verbose bool,
 	examplesLimit int,
-) []syncstore.ConflictStatusSnapshot {
+) []syncengine.ConflictStatusSnapshot {
 	if verbose || len(rows) <= examplesLimit {
-		out := make([]syncstore.ConflictStatusSnapshot, len(rows))
+		out := make([]syncengine.ConflictStatusSnapshot, len(rows))
 		copy(out, rows)
 		return out
 	}
 
-	out := make([]syncstore.ConflictStatusSnapshot, examplesLimit)
+	out := make([]syncengine.ConflictStatusSnapshot, examplesLimit)
 	copy(out, rows[:examplesLimit])
 	return out
 }
 
 func sampleConflictHistoryRows(
-	rows []syncstore.ConflictHistorySnapshot,
+	rows []syncengine.ConflictHistorySnapshot,
 	verbose bool,
 	examplesLimit int,
-) []syncstore.ConflictHistorySnapshot {
+) []syncengine.ConflictHistorySnapshot {
 	if verbose || len(rows) <= examplesLimit {
-		out := make([]syncstore.ConflictHistorySnapshot, len(rows))
+		out := make([]syncengine.ConflictHistorySnapshot, len(rows))
 		copy(out, rows)
 		return out
 	}
 
-	out := make([]syncstore.ConflictHistorySnapshot, examplesLimit)
+	out := make([]syncengine.ConflictHistorySnapshot, examplesLimit)
 	copy(out, rows[:examplesLimit])
 	return out
 }
@@ -519,7 +519,7 @@ func printConflictSection(w io.Writer, conflicts []statusConflictJSON, totalCoun
 			return err
 		}
 		switch conflict.State {
-		case syncstore.ConflictStateUnresolved:
+		case syncengine.ConflictStateUnresolved:
 			if err := writeln(w, "      Decision: needed"); err != nil {
 				return err
 			}
@@ -619,9 +619,9 @@ func filterDeleteSafety(rows []deleteSafetyJSON, state string) []deleteSafetyJSO
 	return filtered
 }
 
-func conflictRequestDisplayState(conflict syncstore.ConflictStatusSnapshot) string {
+func conflictRequestDisplayState(conflict syncengine.ConflictStatusSnapshot) string {
 	if conflict.RequestState == "" {
-		return syncstore.ConflictStateUnresolved
+		return syncengine.ConflictStateUnresolved
 	}
 
 	return conflict.RequestState

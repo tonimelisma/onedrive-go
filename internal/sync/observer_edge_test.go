@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -36,7 +35,7 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path:           "racily-clean.txt",
-		ItemType:       synctypes.ItemTypeFile,
+		ItemType:       ItemTypeFile,
 		LocalHash:      hash,
 		LocalSize:      info.Size(),
 		LocalSizeKnown: true,
@@ -53,7 +52,7 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 	// Since the hash matches, no change event should be emitted.
 	for _, ev := range result.Events {
 		if ev.Path == "racily-clean.txt" {
-			assert.NotEqual(t, synctypes.ChangeModify, ev.Type,
+			assert.NotEqual(t, ChangeModify, ev.Type,
 				"racily-clean file with matching hash should not emit ChangeModify")
 		}
 	}
@@ -77,7 +76,7 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 	// Create baseline with a DIFFERENT mtime but same hash.
 	baseline := baselineWith(&BaselineEntry{
 		Path:           "touched.txt",
-		ItemType:       synctypes.ItemTypeFile,
+		ItemType:       ItemTypeFile,
 		LocalHash:      hash,
 		LocalSize:      info.Size(),
 		LocalSizeKnown: true,
@@ -92,7 +91,7 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 	// Mtime differs but hash matches → no event should be emitted.
 	for _, ev := range result.Events {
 		if ev.Path == "touched.txt" {
-			assert.NotEqual(t, synctypes.ChangeModify, ev.Type,
+			assert.NotEqual(t, ChangeModify, ev.Type,
 				"mtime change without content change should not emit ChangeModify")
 		}
 	}
@@ -127,7 +126,7 @@ func TestNosyncGuard_PreventsAllSync(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
-	require.ErrorIs(t, err, synctypes.ErrNosyncGuard)
+	require.ErrorIs(t, err, ErrNosyncGuard)
 	assert.Empty(t, result.Events, ".nosync should prevent all events")
 }
 

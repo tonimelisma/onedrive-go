@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func makeTrackedAction(actionType ActionType, path string) *TrackedAction {
@@ -41,12 +40,12 @@ func TestFindBlockingScope_GlobalPriorityWins(t *testing.T) {
 	t.Parallel()
 
 	blocks := []ScopeBlock{
-		{Key: synctypes.SKService(), IssueType: synctypes.IssueServiceOutage},
-		{Key: synctypes.SKThrottleAccount(), IssueType: synctypes.IssueRateLimited},
+		{Key: SKService(), IssueType: IssueServiceOutage},
+		{Key: SKThrottleAccount(), IssueType: IssueRateLimited},
 	}
 
 	got := FindBlockingScope(blocks, makeTrackedAction(ActionUpload, "file.txt"))
-	assert.Equal(t, synctypes.SKThrottleAccount(), got)
+	assert.Equal(t, SKThrottleAccount(), got)
 }
 
 // Validates: R-2.10.12
@@ -54,17 +53,17 @@ func TestFindBlockingScope_PermDirPrefixMatch(t *testing.T) {
 	t.Parallel()
 
 	blocks := []ScopeBlock{
-		{Key: synctypes.SKPermDir("Private"), IssueType: synctypes.IssueLocalPermissionDenied},
+		{Key: SKPermDir("Private"), IssueType: IssueLocalPermissionDenied},
 	}
 
 	tests := []struct {
 		name string
 		path string
-		want synctypes.ScopeKey
+		want ScopeKey
 	}{
-		{name: "exact", path: "Private", want: synctypes.SKPermDir("Private")},
-		{name: "child", path: "Private/sub/file.txt", want: synctypes.SKPermDir("Private")},
-		{name: "prefix mismatch", path: "PrivateExtra/file.txt", want: synctypes.ScopeKey{}},
+		{name: "exact", path: "Private", want: SKPermDir("Private")},
+		{name: "child", path: "Private/sub/file.txt", want: SKPermDir("Private")},
+		{name: "prefix mismatch", path: "PrivateExtra/file.txt", want: ScopeKey{}},
 	}
 
 	for _, tt := range tests {
@@ -79,15 +78,15 @@ func TestFindBlockingScope_PermDirPrefixMatch(t *testing.T) {
 func TestFindBlockingScope_PermRemote_IsRecursiveDownloadOnly(t *testing.T) {
 	t.Parallel()
 
-	scopeKey := synctypes.SKPermRemote("Shared/TeamDocs")
+	scopeKey := SKPermRemote("Shared/TeamDocs")
 	blocks := []ScopeBlock{
-		{Key: scopeKey, IssueType: synctypes.IssuePermissionDenied},
+		{Key: scopeKey, IssueType: IssuePermissionDenied},
 	}
 
 	tests := []struct {
 		name string
 		ta   *TrackedAction
-		want synctypes.ScopeKey
+		want ScopeKey
 	}{
 		{
 			name: "nested upload blocked",
@@ -102,12 +101,12 @@ func TestFindBlockingScope_PermRemote_IsRecursiveDownloadOnly(t *testing.T) {
 		{
 			name: "download allowed",
 			ta:   makeTrackedAction(ActionDownload, "Shared/TeamDocs/nested/file.txt"),
-			want: synctypes.ScopeKey{},
+			want: ScopeKey{},
 		},
 		{
 			name: "outside subtree allowed",
 			ta:   makeTrackedAction(ActionUpload, "Shared/Other/file.txt"),
-			want: synctypes.ScopeKey{},
+			want: ScopeKey{},
 		},
 	}
 
@@ -123,19 +122,19 @@ func TestFindBlockingScope_QuotaRouting(t *testing.T) {
 	t.Parallel()
 
 	blocks := []ScopeBlock{
-		{Key: synctypes.SKQuotaOwn(), IssueType: synctypes.IssueQuotaExceeded},
-		{Key: synctypes.SKQuotaShortcut("drive1:item1"), IssueType: synctypes.IssueQuotaExceeded},
+		{Key: SKQuotaOwn(), IssueType: IssueQuotaExceeded},
+		{Key: SKQuotaShortcut("drive1:item1"), IssueType: IssueQuotaExceeded},
 	}
 
 	assert.Equal(t,
-		synctypes.SKQuotaOwn(),
+		SKQuotaOwn(),
 		FindBlockingScope(blocks, makeTrackedAction(ActionUpload, "own.txt")),
 	)
 	assert.True(t,
 		FindBlockingScope(blocks, makeTrackedAction(ActionDownload, "own.txt")).IsZero(),
 	)
 	assert.Equal(t,
-		synctypes.SKQuotaShortcut("drive1:item1"),
+		SKQuotaShortcut("drive1:item1"),
 		FindBlockingScope(blocks, makeShortcutTrackedAction(ActionUpload, "Shared/a.txt", "drive1:item1")),
 	)
 	assert.True(t,
@@ -147,11 +146,11 @@ func TestFindBlockingScope_QuotaRouting(t *testing.T) {
 func TestFindBlockingScope_PrefersMoreSpecificPermissionBoundary(t *testing.T) {
 	t.Parallel()
 
-	parent := synctypes.SKPermRemote("Shared")
-	child := synctypes.SKPermRemote("Shared/TeamDocs")
+	parent := SKPermRemote("Shared")
+	child := SKPermRemote("Shared/TeamDocs")
 	blocks := []ScopeBlock{
-		{Key: parent, IssueType: synctypes.IssuePermissionDenied},
-		{Key: child, IssueType: synctypes.IssuePermissionDenied},
+		{Key: parent, IssueType: IssuePermissionDenied},
+		{Key: child, IssueType: IssuePermissionDenied},
 	}
 
 	got := FindBlockingScope(blocks, makeTrackedAction(ActionUpload, "Shared/TeamDocs/file.txt"))
@@ -163,24 +162,24 @@ func TestUpsertScope_ReplaceAndRemove(t *testing.T) {
 	t.Parallel()
 
 	blocks := []ScopeBlock{
-		{Key: synctypes.SKService(), IssueType: synctypes.IssueServiceOutage},
+		{Key: SKService(), IssueType: IssueServiceOutage},
 	}
 
 	updated := UpsertScope(blocks, &ScopeBlock{
-		Key:           synctypes.SKService(),
-		IssueType:     synctypes.IssueServiceOutage,
+		Key:           SKService(),
+		IssueType:     IssueServiceOutage,
 		TrialInterval: 30 * time.Second,
 		TrialCount:    2,
 	})
 
 	require.Len(t, updated, 1)
-	got, ok := LookupScope(updated, synctypes.SKService())
+	got, ok := LookupScope(updated, SKService())
 	require.True(t, ok)
 	assert.Equal(t, 30*time.Second, got.TrialInterval)
 	assert.Equal(t, 2, got.TrialCount)
 
-	removed := RemoveScope(updated, synctypes.SKService())
-	assert.False(t, HasScope(removed, synctypes.SKService()))
+	removed := RemoveScope(updated, SKService())
+	assert.False(t, HasScope(removed, SKService()))
 }
 
 // Validates: R-2.10.5
@@ -190,8 +189,8 @@ func TestExtendScopeTrial(t *testing.T) {
 	now := time.Now().UTC()
 	blocks := []ScopeBlock{
 		{
-			Key:           synctypes.SKThrottleAccount(),
-			IssueType:     synctypes.IssueRateLimited,
+			Key:           SKThrottleAccount(),
+			IssueType:     IssueRateLimited,
 			BlockedAt:     now.Add(-time.Minute),
 			NextTrialAt:   now.Add(10 * time.Second),
 			TrialInterval: 10 * time.Second,
@@ -199,10 +198,10 @@ func TestExtendScopeTrial(t *testing.T) {
 	}
 
 	nextAt := now.Add(30 * time.Second)
-	updated, ok := ExtendScopeTrial(blocks, synctypes.SKThrottleAccount(), nextAt, 20*time.Second)
+	updated, ok := ExtendScopeTrial(blocks, SKThrottleAccount(), nextAt, 20*time.Second)
 	require.True(t, ok)
 
-	got, ok := LookupScope(updated, synctypes.SKThrottleAccount())
+	got, ok := LookupScope(updated, SKThrottleAccount())
 	require.True(t, ok)
 	assert.Equal(t, nextAt, got.NextTrialAt)
 	assert.Equal(t, 20*time.Second, got.TrialInterval)
@@ -215,13 +214,13 @@ func TestDueTrialsAndEarliestTrialAt(t *testing.T) {
 
 	now := time.Now().UTC()
 	blocks := []ScopeBlock{
-		{Key: synctypes.SKThrottleAccount(), NextTrialAt: now.Add(-time.Second)},
-		{Key: synctypes.SKService(), NextTrialAt: now.Add(2 * time.Minute)},
-		{Key: synctypes.SKQuotaOwn()},
+		{Key: SKThrottleAccount(), NextTrialAt: now.Add(-time.Second)},
+		{Key: SKService(), NextTrialAt: now.Add(2 * time.Minute)},
+		{Key: SKQuotaOwn()},
 	}
 
 	due := DueTrials(blocks, now)
-	assert.Equal(t, []synctypes.ScopeKey{synctypes.SKThrottleAccount()}, due)
+	assert.Equal(t, []ScopeKey{SKThrottleAccount()}, due)
 
 	earliest, ok := EarliestTrialAt(blocks)
 	require.True(t, ok)
@@ -233,12 +232,12 @@ func TestScopeKeys(t *testing.T) {
 	t.Parallel()
 
 	blocks := []ScopeBlock{
-		{Key: synctypes.SKService()},
-		{Key: synctypes.SKThrottleAccount()},
+		{Key: SKService()},
+		{Key: SKThrottleAccount()},
 	}
 
 	assert.Equal(t,
-		[]synctypes.ScopeKey{synctypes.SKService(), synctypes.SKThrottleAccount()},
+		[]ScopeKey{SKService(), SKThrottleAccount()},
 		ScopeKeys(blocks),
 	)
 }
@@ -248,7 +247,7 @@ func TestFindBlockingScope_DiskLocal_DownloadsOnly(t *testing.T) {
 	t.Parallel()
 
 	blocks := []ScopeBlock{
-		{Key: synctypes.SKDiskLocal(), IssueType: synctypes.IssueDiskFull},
+		{Key: SKDiskLocal(), IssueType: IssueDiskFull},
 	}
 
 	tests := []struct {
@@ -265,7 +264,7 @@ func TestFindBlockingScope_DiskLocal_DownloadsOnly(t *testing.T) {
 		t.Run(tt.actionType.String(), func(t *testing.T) {
 			got := FindBlockingScope(blocks, makeTrackedAction(tt.actionType, "file.txt"))
 			if tt.wantBlocked {
-				assert.Equal(t, synctypes.SKDiskLocal(), got)
+				assert.Equal(t, SKDiskLocal(), got)
 			} else {
 				assert.True(t, got.IsZero())
 			}

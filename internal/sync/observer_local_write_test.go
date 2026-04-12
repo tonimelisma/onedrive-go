@@ -14,7 +14,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -38,7 +37,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "watchable.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: existingHash,
+		ItemType: ItemTypeFile, LocalHash: existingHash,
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -65,9 +64,9 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	cancel()
 	<-done
 
-	require.Equal(t, synctypes.ChangeModify, ev.Type)
+	require.Equal(t, ChangeModify, ev.Type)
 	require.Equal(t, "watchable.txt", ev.Path)
-	require.Equal(t, synctypes.SourceLocal, ev.Source)
+	require.Equal(t, SourceLocal, ev.Source)
 	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
 }
 
@@ -86,7 +85,7 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "rapid.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: existingHash,
+		ItemType: ItemTypeFile, LocalHash: existingHash,
 	})
 
 	mockWatcher := newMockFsWatcher()
@@ -121,7 +120,7 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 	// Wait for the single coalesced event.
 	select {
 	case ev := <-events:
-		require.Equal(t, synctypes.ChangeModify, ev.Type)
+		require.Equal(t, ChangeModify, ev.Type)
 		require.Equal(t, "rapid.txt", ev.Path)
 		require.Equal(t, hashContent(t, "v2"), ev.Hash)
 	case <-time.After(5 * time.Second):
@@ -151,7 +150,7 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "single.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: existingHash,
+		ItemType: ItemTypeFile, LocalHash: existingHash,
 	})
 
 	mockWatcher := newMockFsWatcher()
@@ -179,7 +178,7 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 
 	select {
 	case ev := <-events:
-		require.Equal(t, synctypes.ChangeModify, ev.Type)
+		require.Equal(t, ChangeModify, ev.Type)
 		require.Equal(t, "single.txt", ev.Path)
 		require.Equal(t, hashContent(t, "modified"), ev.Hash)
 	case <-time.After(5 * time.Second):
@@ -198,7 +197,7 @@ func TestHashAndEmit_DropsStaleGenerationAfterScopeChange(t *testing.T) {
 	filePath := writeTestFile(t, dir, "docs/file.txt", "modified")
 	baseline := baselineWith(&BaselineEntry{
 		Path: "docs/file.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "original"),
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, "original"),
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
@@ -240,11 +239,11 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "fileA.txt", DriveID: driveid.New("d"), ItemID: "a1",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "origA"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "origA"),
 		},
 		&BaselineEntry{
 			Path: "fileB.txt", DriveID: driveid.New("d"), ItemID: "b1",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "origB"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "origB"),
 		},
 	)
 
@@ -282,7 +281,7 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	for len(collected) < 2 {
 		select {
 		case ev := <-events:
-			if ev.Type == synctypes.ChangeModify {
+			if ev.Type == ChangeModify {
 				collected[ev.Path] = ev
 			}
 		case <-timeout:
@@ -310,7 +309,7 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "doomed.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: existingHash,
+		ItemType: ItemTypeFile, LocalHash: existingHash,
 	})
 
 	mockWatcher := newMockFsWatcher()
@@ -348,7 +347,7 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 	// Should get only the Delete event, not a Modify.
 	select {
 	case ev := <-events:
-		require.Equal(t, synctypes.ChangeDelete, ev.Type, "first event should be Delete")
+		require.Equal(t, ChangeDelete, ev.Type, "first event should be Delete")
 		require.Equal(t, "doomed.txt", ev.Path)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "timeout waiting for delete event")
@@ -378,11 +377,11 @@ func TestCancelPendingTimers(t *testing.T) {
 	baseline := baselineWith(
 		&BaselineEntry{
 			Path: "pending1.txt", DriveID: driveid.New("d"), ItemID: "p1",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "old1"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "old1"),
 		},
 		&BaselineEntry{
 			Path: "pending2.txt", DriveID: driveid.New("d"), ItemID: "p2",
-			ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "old2"),
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "old2"),
 		},
 	)
 
@@ -447,7 +446,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	// Baseline with a DIFFERENT hash so the event is not suppressed.
 	baseline := baselineWith(&BaselineEntry{
 		Path: "exhausted.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: "old-hash",
+		ItemType: ItemTypeFile, LocalHash: "old-hash",
 	})
 
 	obs := &LocalObserver{
@@ -475,7 +474,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 
 	select {
 	case ev := <-events:
-		require.Equal(t, synctypes.ChangeModify, ev.Type)
+		require.Equal(t, ChangeModify, ev.Type)
 		require.Equal(t, "exhausted.txt", ev.Path)
 		require.NotEmpty(t, ev.Hash, "hash should be computed for stable file")
 	case <-time.After(time.Second):
@@ -497,7 +496,7 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "noop.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hash,
+		ItemType: ItemTypeFile, LocalHash: hash,
 	})
 
 	obs := &LocalObserver{
@@ -550,7 +549,7 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "existing.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: synctypes.ItemTypeFile, LocalHash: hashContent(t, "old"),
+		ItemType: ItemTypeFile, LocalHash: hashContent(t, "old"),
 	})
 
 	mockWatcher := newMockFsWatcher()

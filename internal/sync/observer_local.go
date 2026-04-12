@@ -24,9 +24,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Constants for the local observer (watch mode).
@@ -174,7 +172,7 @@ func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
 // is a parameter of FullScan, allowing reuse across passes.
 type LocalObserver struct {
-	Baseline           *syncstore.Baseline
+	Baseline           *Baseline
 	Logger             *slog.Logger
 	checkWorkers       int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
 	filterConfig       LocalFilterConfig
@@ -208,7 +206,7 @@ type LocalObserver struct {
 // of parallel goroutines used for file hashing during FullScan (0 → default 4).
 // The baseline must be loaded (from SyncStore.Load); it is read-only
 // during observation.
-func NewLocalObserver(baseline *syncstore.Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
+func NewLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
 	return &LocalObserver{
 		Baseline:        baseline,
 		Logger:          logger,
@@ -404,8 +402,8 @@ func (o *LocalObserver) recordActivity() {
 func (o *LocalObserver) EstimateDirCount() int {
 	count := 1 // sync root always needs a watch
 
-	o.Baseline.ForEachPath(func(_ string, entry *syncstore.BaselineEntry) {
-		if entry.ItemType == synctypes.ItemTypeFolder {
+	o.Baseline.ForEachPath(func(_ string, entry *BaselineEntry) {
+		if entry.ItemType == ItemTypeFolder {
 			count++
 		}
 	})
@@ -434,7 +432,7 @@ func (o *LocalObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 		o.Logger.Warn("nosync guard file detected, aborting watch",
 			slog.String("sync_root", syncRoot))
 
-		return synctypes.ErrNosyncGuard
+		return ErrNosyncGuard
 	}
 
 	watcher, err := o.WatcherFactory()
@@ -450,8 +448,8 @@ func (o *LocalObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 
 	// Walk the sync root to add watches on all existing directories.
 	if walkErr := o.AddWatchesRecursive(ctx, watcher, tree); walkErr != nil {
-		if errors.Is(walkErr, synctypes.ErrWatchLimitExhausted) {
-			return synctypes.ErrWatchLimitExhausted
+		if errors.Is(walkErr, ErrWatchLimitExhausted) {
+			return ErrWatchLimitExhausted
 		}
 
 		return fmt.Errorf("sync: adding initial watches: %w", walkErr)
@@ -477,7 +475,7 @@ func (o *LocalObserver) cancelPendingTimers() {
 }
 
 func isFatalWatchSetupError(err error) bool {
-	return errors.Is(err, synctypes.ErrWatchLimitExhausted) ||
+	return errors.Is(err, ErrWatchLimitExhausted) ||
 		errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded)
 }

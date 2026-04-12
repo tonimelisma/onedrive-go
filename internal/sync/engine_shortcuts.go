@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // maxShortcutConcurrency limits how many shortcut scopes are observed in parallel.
@@ -20,14 +18,14 @@ type shortcutBatchMutationResult struct {
 	SnapshotDirty  bool
 }
 
-// filterOutShortcuts removes synctypes.ChangeShortcut events from a slice —
+// filterOutShortcuts removes ChangeShortcut events from a slice —
 // shortcut discovery is consumed by the post-primary coordinator and should
 // not enter the planner as regular path events.
 func filterOutShortcuts(events []ChangeEvent) []ChangeEvent {
 	n := 0
 
 	for i := range events {
-		if events[i].Type != synctypes.ChangeShortcut {
+		if events[i].Type != ChangeShortcut {
 			events[n] = events[i]
 			n++
 		}
@@ -36,7 +34,7 @@ func filterOutShortcuts(events []ChangeEvent) []ChangeEvent {
 	return events[:n]
 }
 
-// registerShortcuts upserts shortcuts from synctypes.ChangeShortcut events.
+// registerShortcuts upserts shortcuts from ChangeShortcut events.
 // For new shortcuts, detects the source drive type to determine the
 // observation strategy (delta vs enumerate).
 func (coordinator *shortcutCoordinator) registerShortcuts(ctx context.Context, events []ChangeEvent) error {
@@ -51,12 +49,12 @@ func (coordinator *shortcutCoordinator) registerShortcuts(ctx context.Context, e
 			return fmt.Errorf("sync: checking shortcut %s: %w", ev.ItemID, err)
 		}
 
-		sc := synctypes.Shortcut{
+		sc := Shortcut{
 			ItemID:       ev.ItemID,
 			RemoteDrive:  ev.RemoteDriveID,
 			RemoteItem:   ev.RemoteItemID,
 			LocalPath:    ev.Path,
-			Observation:  synctypes.ObservationUnknown,
+			Observation:  ObservationUnknown,
 			DiscoveredAt: eng.nowFunc().Unix(),
 		}
 
@@ -94,7 +92,7 @@ func (coordinator *shortcutCoordinator) registerShortcuts(ctx context.Context, e
 // and returns the set of item IDs that should be skipped during observation.
 // Detects: exact duplicates, prefix nesting (Shared vs Shared/Sub), and
 // conflicts with primary drive baseline entries.
-func detectShortcutCollisionsFromList(shortcuts []synctypes.Shortcut, bl *syncstore.Baseline, logger *slog.Logger) map[string]bool {
+func detectShortcutCollisionsFromList(shortcuts []Shortcut, bl *Baseline, logger *slog.Logger) map[string]bool {
 	collisions := make(map[string]bool)
 
 	// Check shortcut-vs-shortcut: exact duplicates and prefix nesting.
@@ -146,7 +144,7 @@ func detectShortcutCollisionsFromList(shortcuts []synctypes.Shortcut, bl *syncst
 
 	// Check shortcut-vs-shortcut: duplicate source folder.
 	// Sort by ItemID for deterministic winner selection (lowest ID wins).
-	sorted := make([]synctypes.Shortcut, len(shortcuts))
+	sorted := make([]Shortcut, len(shortcuts))
 	copy(sorted, shortcuts)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ItemID < sorted[j].ItemID })
 
@@ -211,25 +209,25 @@ func (coordinator *shortcutCoordinator) detectDriveType(ctx context.Context, rem
 			slog.String("error", err.Error()),
 		)
 
-		return "", synctypes.ObservationEnumerate
+		return "", ObservationEnumerate
 	}
 
 	driveType := drive.DriveType
-	obs := synctypes.ObservationEnumerate
+	obs := ObservationEnumerate
 
 	if driveType == "personal" {
-		obs = synctypes.ObservationDelta
+		obs = ObservationDelta
 	}
 
 	return driveType, obs
 }
 
-// handleRemovedShortcuts processes synctypes.ChangeDelete events for known shortcuts.
+// handleRemovedShortcuts processes ChangeDelete events for known shortcuts.
 // Takes pre-loaded shortcuts to avoid a redundant DB query.
 func (coordinator *shortcutCoordinator) handleRemovedShortcuts(
 	ctx context.Context,
 	deletedItemIDs map[string]bool,
-	shortcuts []synctypes.Shortcut,
+	shortcuts []Shortcut,
 ) error {
 	flow := coordinator.flow
 	eng := flow.engine
@@ -277,12 +275,12 @@ func (coordinator *shortcutCoordinator) handleRemovedShortcuts(
 // shortcutRemovalDecisions returns the scopes that become invalid when a
 // shortcut disappears. These scopes are discarded, not released, because the
 // blocked subtree itself no longer exists.
-func (coordinator *shortcutCoordinator) shortcutRemovalDecisions(ctx context.Context, sc *synctypes.Shortcut) []ShortcutRemovalDecision {
+func (coordinator *shortcutCoordinator) shortcutRemovalDecisions(ctx context.Context, sc *Shortcut) []ShortcutRemovalDecision {
 	flow := coordinator.flow
 	eng := flow.engine
 
 	decisions := []ShortcutRemovalDecision{{
-		ScopeKey: synctypes.SKQuotaShortcut(sc.RemoteDrive + ":" + sc.RemoteItem),
+		ScopeKey: SKQuotaShortcut(sc.RemoteDrive + ":" + sc.RemoteItem),
 	}}
 
 	issues, err := eng.baseline.ListRemoteBlockedFailures(ctx)
@@ -294,7 +292,7 @@ func (coordinator *shortcutCoordinator) shortcutRemovalDecisions(ctx context.Con
 		return decisions
 	}
 
-	seen := map[synctypes.ScopeKey]bool{
+	seen := map[ScopeKey]bool{
 		decisions[0].ScopeKey: true,
 	}
 
@@ -320,7 +318,7 @@ func (coordinator *shortcutCoordinator) shortcutRemovalDecisions(ctx context.Con
 	return decisions
 }
 
-func (coordinator *shortcutCoordinator) loadShortcutSnapshot(ctx context.Context) ([]synctypes.Shortcut, error) {
+func (coordinator *shortcutCoordinator) loadShortcutSnapshot(ctx context.Context) ([]Shortcut, error) {
 	eng := coordinator.flow.engine
 	if eng.baseline == nil {
 		return nil, fmt.Errorf("sync: shortcut store unavailable")
@@ -364,8 +362,8 @@ func (coordinator *shortcutCoordinator) applyShortcutBatchMutations(
 
 func (coordinator *shortcutCoordinator) observeShortcutFollowUp(
 	ctx context.Context,
-	shortcuts []synctypes.Shortcut,
-	bl *syncstore.Baseline,
+	shortcuts []Shortcut,
+	bl *Baseline,
 	fullReconcile bool,
 	collisions map[string]bool,
 	suppressedShortcutTargets map[string]struct{},
@@ -400,8 +398,8 @@ func (coordinator *shortcutCoordinator) observeShortcutFollowUp(
 // Takes pre-loaded shortcuts to avoid redundant DB queries (B-333).
 func (coordinator *shortcutCoordinator) observeShortcutContentFromList(
 	ctx context.Context,
-	shortcuts []synctypes.Shortcut,
-	bl *syncstore.Baseline,
+	shortcuts []Shortcut,
+	bl *Baseline,
 	collisions map[string]bool,
 ) ([]ChangeEvent, error) {
 	return coordinator.observeShortcutFollowUp(
@@ -420,7 +418,7 @@ func (coordinator *shortcutCoordinator) observeShortcutContentFromList(
 // orphans against the baseline.
 func (coordinator *shortcutCoordinator) reconcileShortcutScopes(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *Baseline,
 ) ([]ChangeEvent, error) {
 	flow := coordinator.flow
 	eng := flow.engine
@@ -447,11 +445,11 @@ func splitShortcutBatchEvents(primaryEvents []ChangeEvent) ([]ChangeEvent, map[s
 
 	for i := range primaryEvents {
 		switch primaryEvents[i].Type {
-		case synctypes.ChangeShortcut:
+		case ChangeShortcut:
 			shortcutEvents = append(shortcutEvents, primaryEvents[i])
-		case synctypes.ChangeDelete:
+		case ChangeDelete:
 			removedShortcutIDs[primaryEvents[i].ItemID] = true
-		case synctypes.ChangeCreate, synctypes.ChangeModify, synctypes.ChangeMove:
+		case ChangeCreate, ChangeModify, ChangeMove:
 			// These do not affect shortcut registration/removal directly.
 		}
 	}

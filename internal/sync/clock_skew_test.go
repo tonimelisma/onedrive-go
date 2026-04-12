@@ -9,7 +9,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -29,10 +28,10 @@ func TestClockSkew_BackwardJump_BaselineSyncedAt(t *testing.T) {
 	// Commit at t=2000.
 	mgr.SetNowFunc(func() time.Time { return time.Unix(2000, 0) })
 
-	require.NoError(t, mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&ExecutionResult{
+	require.NoError(t, mgr.CommitMutation(ctx, mutationFromActionOutcome(&ActionOutcome{
 		Action: ActionDownload, Success: true, Path: "file.txt",
 		DriveID: driveID, ItemID: "item-1", ParentID: "root",
-		ItemType: synctypes.ItemTypeFile, RemoteHash: "h1",
+		ItemType: ItemTypeFile, RemoteHash: "h1",
 		LocalSize: 100, LocalSizeKnown: true,
 		RemoteSize: 100, RemoteSizeKnown: true,
 	})))
@@ -47,10 +46,10 @@ func TestClockSkew_BackwardJump_BaselineSyncedAt(t *testing.T) {
 	// Jump backward to t=1000 and update.
 	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
 
-	require.NoError(t, mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&ExecutionResult{
+	require.NoError(t, mgr.CommitMutation(ctx, mutationFromActionOutcome(&ActionOutcome{
 		Action: ActionDownload, Success: true, Path: "file.txt",
 		DriveID: driveID, ItemID: "item-1", ParentID: "root",
-		ItemType: synctypes.ItemTypeFile, RemoteHash: "h2",
+		ItemType: ItemTypeFile, RemoteHash: "h2",
 		LocalSize: 200, LocalSizeKnown: true,
 		RemoteSize: 200, RemoteSizeKnown: true,
 	})))
@@ -79,7 +78,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "file1.txt",
-		Direction:  synctypes.DirectionUpload,
+		Direction:  DirectionUpload,
 		IssueType:  "upload_failed",
 		ErrMsg:     "err",
 		HTTPStatus: 500,
@@ -91,7 +90,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 	// Should still succeed.
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "file2.txt",
-		Direction:  synctypes.DirectionUpload,
+		Direction:  DirectionUpload,
 		IssueType:  "upload_failed",
 		ErrMsg:     "err",
 		HTTPStatus: 500,
@@ -112,15 +111,15 @@ func TestClockSkew_BackwardJump_ConflictDetectedAt(t *testing.T) {
 
 	driveID := driveid.New(synctest.TestDriveID)
 
-	// Record conflict at t=1000 via CommitOutcome with a conflict action.
+	// Record conflict at t=1000 via CommitMutation with a conflict action.
 	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
 
-	require.NoError(t, mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&ExecutionResult{
+	require.NoError(t, mgr.CommitMutation(ctx, mutationFromActionOutcome(&ActionOutcome{
 		Path:         "file.txt",
 		DriveID:      driveID,
 		ItemID:       "item-1",
 		Action:       ActionConflict,
-		ConflictType: synctypes.ConflictEditEdit,
+		ConflictType: ConflictEditEdit,
 		Success:      true,
 	})))
 
@@ -128,12 +127,12 @@ func TestClockSkew_BackwardJump_ConflictDetectedAt(t *testing.T) {
 	mgr.SetNowFunc(func() time.Time { return time.Unix(500, 0) })
 
 	// Record another conflict.
-	require.NoError(t, mgr.CommitMutation(ctx, baselineMutationFromExecutionResult(&ExecutionResult{
+	require.NoError(t, mgr.CommitMutation(ctx, mutationFromActionOutcome(&ActionOutcome{
 		Path:         "other.txt",
 		DriveID:      driveID,
 		ItemID:       "item-2",
 		Action:       ActionConflict,
-		ConflictType: synctypes.ConflictEditEdit,
+		ConflictType: ConflictEditEdit,
 		Success:      true,
 	})))
 

@@ -12,8 +12,6 @@ import (
 	"sort"
 	"sync"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // Buffer collects ChangeEvents from both observers and groups them
@@ -216,10 +214,10 @@ func (b *Buffer) addLocked(ev *ChangeEvent) {
 	// hash correlation in the planner, not ChangeMove events. This
 	// dual-keying stays correct if watch-mode local observation later emits
 	// rename events directly instead of relying only on planner correlation.
-	if ev.Type == synctypes.ChangeMove && ev.OldPath != "" {
+	if ev.Type == ChangeMove && ev.OldPath != "" {
 		synthetic := ChangeEvent{
 			Source:    ev.Source,
-			Type:      synctypes.ChangeDelete,
+			Type:      ChangeDelete,
 			Path:      ev.OldPath,
 			ItemID:    ev.ItemID,
 			ParentID:  ev.ParentID,
@@ -259,19 +257,19 @@ func (b *Buffer) getOrCreate(p string) *PathChanges {
 // remote moves after a follow-up remote modify in the same debounce window.
 func (b *Buffer) routeEvent(pc *PathChanges, ev *ChangeEvent) {
 	switch ev.Source {
-	case synctypes.SourceRemote:
+	case SourceRemote:
 		pc.RemoteEvents = retainRemoteEvents(pc.RemoteEvents, ev)
-	case synctypes.SourceLocal:
+	case SourceLocal:
 		pc.LocalEvents = []ChangeEvent{*ev}
 	}
 }
 
 func retainRemoteEvents(existing []ChangeEvent, ev *ChangeEvent) []ChangeEvent {
-	if ev.Type == synctypes.ChangeMove {
+	if ev.Type == ChangeMove {
 		return []ChangeEvent{*ev}
 	}
 
-	if len(existing) > 0 && existing[0].Type == synctypes.ChangeMove {
+	if len(existing) > 0 && existing[0].Type == ChangeMove {
 		return []ChangeEvent{existing[0], *ev}
 	}
 

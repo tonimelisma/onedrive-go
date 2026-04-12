@@ -3,9 +3,6 @@ package sync
 import (
 	"context"
 	"fmt"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // invariantChecksEnabled gates expensive invariant assertions used by tests
@@ -23,7 +20,7 @@ func (flow *engineFlow) mustAssertInvariants(ctx context.Context, watch *watchRu
 	}
 }
 
-func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey, stage string) {
+func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, watch *watchRuntime, key ScopeKey, stage string) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
@@ -32,7 +29,7 @@ func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, watch *watc
 	}
 }
 
-func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey, stage string) {
+func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, watch *watchRuntime, key ScopeKey, stage string) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
@@ -110,7 +107,7 @@ func (flow *engineFlow) assertCurrentInvariants(ctx context.Context, watch *watc
 func (flow *engineFlow) assertWatchRuntimeInvariants(watch *watchRuntime) error {
 	if watch != nil {
 		activeScopes := watch.snapshotActiveScopes()
-		seen := make(map[synctypes.ScopeKey]struct{}, len(activeScopes))
+		seen := make(map[ScopeKey]struct{}, len(activeScopes))
 		for i := range activeScopes {
 			key := activeScopes[i].Key
 			if _, ok := seen[key]; ok {
@@ -181,13 +178,13 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 		return fmt.Errorf("listing sync failures: %w", err)
 	}
 	facts := summarizePersistedScopeFailures(rows)
-	boundaryKeys := make(map[synctypes.ScopeKey]struct{})
+	boundaryKeys := make(map[ScopeKey]struct{})
 
 	for i := range rows {
-		if err := validatePersistedFailureRow(&rows[i]); err != nil {
+		if err := validateFailureRowState(&rows[i]); err != nil {
 			return err
 		}
-		if rows[i].Role != synctypes.FailureRoleBoundary {
+		if rows[i].Role != FailureRoleBoundary {
 			continue
 		}
 		if _, ok := boundaryKeys[rows[i].ScopeKey]; ok {
@@ -212,7 +209,7 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	return nil
 }
 
-func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey) error {
+func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
 	if watch != nil && flow.scopeController().isScopeBlocked(watch, key) {
 		return fmt.Errorf("released scope %s still active in watch state", key.String())
 	}
@@ -235,14 +232,14 @@ func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRun
 		if rows[i].ScopeKey != key {
 			continue
 		}
-		if rows[i].Role == synctypes.FailureRoleBoundary {
+		if rows[i].Role == FailureRoleBoundary {
 			return fmt.Errorf("released scope %s still has actionable boundary row %s", key.String(), rows[i].Path)
 		}
-		if rows[i].Role == synctypes.FailureRoleHeld {
+		if rows[i].Role == FailureRoleHeld {
 			return fmt.Errorf("released scope %s still has held transient row %s", key.String(), rows[i].Path)
 		}
-		if rows[i].Role == synctypes.FailureRoleItem &&
-			rows[i].Category == synctypes.CategoryTransient &&
+		if rows[i].Role == FailureRoleItem &&
+			rows[i].Category == CategoryTransient &&
 			rows[i].NextRetryAt <= 0 {
 			return fmt.Errorf("released scope %s still has non-retryable transient row %s", key.String(), rows[i].Path)
 		}
@@ -251,7 +248,7 @@ func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRun
 	return nil
 }
 
-func (flow *engineFlow) assertDiscardedScope(ctx context.Context, watch *watchRuntime, key synctypes.ScopeKey) error {
+func (flow *engineFlow) assertDiscardedScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
 	if watch != nil && flow.scopeController().isScopeBlocked(watch, key) {
 		return fmt.Errorf("discarded scope %s still active in watch state", key.String())
 	}
@@ -274,36 +271,6 @@ func (flow *engineFlow) assertDiscardedScope(ctx context.Context, watch *watchRu
 		if rows[i].ScopeKey == key {
 			return fmt.Errorf("discarded scope %s still has failure row %s", key.String(), rows[i].Path)
 		}
-	}
-
-	return nil
-}
-
-func validatePersistedFailureRow(row *syncstore.SyncFailureRow) error {
-	switch row.Role {
-	case synctypes.FailureRoleHeld:
-		if row.ScopeKey.IsZero() {
-			return fmt.Errorf("held row %s is missing scope key", row.Path)
-		}
-		if row.Category != synctypes.CategoryTransient {
-			return fmt.Errorf("held row %s must be transient", row.Path)
-		}
-		if row.NextRetryAt != 0 {
-			return fmt.Errorf("held row %s must not be retryable before release", row.Path)
-		}
-	case synctypes.FailureRoleBoundary:
-		if row.ScopeKey.IsZero() {
-			return fmt.Errorf("boundary row %s is missing scope key", row.Path)
-		}
-		if row.Category != synctypes.CategoryActionable {
-			return fmt.Errorf("boundary row %s must be actionable", row.Path)
-		}
-		if row.NextRetryAt != 0 {
-			return fmt.Errorf("boundary row %s must not have retry timing", row.Path)
-		}
-	case synctypes.FailureRoleItem:
-	default:
-		return fmt.Errorf("row %s has invalid failure role %q", row.Path, row.Role)
 	}
 
 	return nil

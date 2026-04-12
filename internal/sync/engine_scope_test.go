@@ -13,8 +13,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func seedInterruptedScopeTransitionState(t *testing.T, syncRoot string) string {
@@ -26,13 +24,13 @@ func seedInterruptedScopeTransitionState(t *testing.T, syncRoot string) string {
 	require.NoError(t, err)
 
 	dbPath := filepath.Join(filepath.Dir(syncRoot), "test.db")
-	store, err := syncstore.NewSyncStore(t.Context(), dbPath, testLogger(t))
+	store, err := NewSyncStore(t.Context(), dbPath, testLogger(t))
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(t.Context(), `
 		UPDATE remote_state
 		SET is_filtered = 1, filter_generation = 1, filter_reason = ?
 		WHERE item_id = ?`,
-		synctypes.RemoteFilterPathScope,
+		RemoteFilterPathScope,
 		"drop-item",
 	)
 	require.NoError(t, err)
@@ -41,10 +39,10 @@ func seedInterruptedScopeTransitionState(t *testing.T, syncRoot string) string {
 			Generation:            2,
 			EffectiveSnapshotJSON: snapshotJSON,
 			ObservationPlanHash:   "interrupted",
-			ObservationMode:       synctypes.ScopeObservationRootDelta,
+			ObservationMode:       ScopeObservationRootDelta,
 			WebsocketEnabled:      true,
 			PendingReentry:        true,
-			LastReconcileKind:     synctypes.ScopeReconcileEnteredPath,
+			LastReconcileKind:     ScopeReconcileEnteredPath,
 			UpdatedAt:             time.Now().UnixNano(),
 		},
 	}))
@@ -99,7 +97,7 @@ func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
 		event            ChangeEvent
 		wantObserved     int
 		wantFiltered     bool
-		wantEmittedTypes []synctypes.ChangeType
+		wantEmittedTypes []ChangeType
 		wantEmittedPaths []string
 	}{
 		{
@@ -108,17 +106,17 @@ func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
 				SyncPaths: []string{"docs"},
 			},
 			event: ChangeEvent{
-				Source:   synctypes.SourceRemote,
-				Type:     synctypes.ChangeMove,
+				Source:   SourceRemote,
+				Type:     ChangeMove,
 				DriveID:  driveID,
 				ItemID:   "move-1",
 				OldPath:  "docs/keep.txt",
 				Path:     "archive/keep.txt",
-				ItemType: synctypes.ItemTypeFile,
+				ItemType: ItemTypeFile,
 			},
 			wantObserved:     1,
 			wantFiltered:     true,
-			wantEmittedTypes: []synctypes.ChangeType{synctypes.ChangeDelete},
+			wantEmittedTypes: []ChangeType{ChangeDelete},
 			wantEmittedPaths: []string{"docs/keep.txt"},
 		},
 		{
@@ -127,17 +125,17 @@ func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
 				SyncPaths: []string{"docs"},
 			},
 			event: ChangeEvent{
-				Source:   synctypes.SourceRemote,
-				Type:     synctypes.ChangeMove,
+				Source:   SourceRemote,
+				Type:     ChangeMove,
 				DriveID:  driveID,
 				ItemID:   "move-2",
 				OldPath:  "archive/keep.txt",
 				Path:     "docs/keep.txt",
-				ItemType: synctypes.ItemTypeFile,
+				ItemType: ItemTypeFile,
 			},
 			wantObserved:     1,
 			wantFiltered:     false,
-			wantEmittedTypes: []synctypes.ChangeType{synctypes.ChangeCreate},
+			wantEmittedTypes: []ChangeType{ChangeCreate},
 			wantEmittedPaths: []string{"docs/keep.txt"},
 		},
 		{
@@ -146,17 +144,17 @@ func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
 				SyncPaths: []string{"docs"},
 			},
 			event: ChangeEvent{
-				Source:   synctypes.SourceRemote,
-				Type:     synctypes.ChangeMove,
+				Source:   SourceRemote,
+				Type:     ChangeMove,
 				DriveID:  driveID,
 				ItemID:   "move-3",
 				OldPath:  "archive/old.txt",
 				Path:     "archive/new.txt",
-				ItemType: synctypes.ItemTypeFile,
+				ItemType: ItemTypeFile,
 			},
 			wantObserved:     1,
 			wantFiltered:     true,
-			wantEmittedTypes: []synctypes.ChangeType{},
+			wantEmittedTypes: []ChangeType{},
 			wantEmittedPaths: []string{},
 		},
 	}
@@ -172,7 +170,7 @@ func TestApplyRemoteScope_ClassifiesBoundaryMoves(t *testing.T) {
 			require.Len(t, result.observed, tt.wantObserved)
 			assert.Equal(t, tt.wantFiltered, result.observed[0].Filtered)
 
-			gotTypes := make([]synctypes.ChangeType, 0, len(result.emitted))
+			gotTypes := make([]ChangeType, 0, len(result.emitted))
 			gotPaths := make([]string, 0, len(result.emitted))
 			for i := range result.emitted {
 				gotTypes = append(gotTypes, result.emitted[i].Type)
@@ -210,7 +208,7 @@ func TestRunOnce_PersistsEffectiveScopeSnapshot(t *testing.T) {
 	assert.True(t, persisted.AllowsPath("visible.txt"))
 	assert.False(t, persisted.AllowsPath("blocked/secret.txt"))
 	assert.True(t, persisted.HasMarkerDir("blocked"))
-	assert.Equal(t, synctypes.ScopeObservationRootDelta, scopeState.ObservationMode)
+	assert.Equal(t, ScopeObservationRootDelta, scopeState.ObservationMode)
 }
 
 // Validates: R-2.4.5
@@ -329,7 +327,7 @@ func TestRunOnce_StartupRepair_InterruptedScopeTransitionClearsPendingReentryOnS
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.False(t, scopeState.PendingReentry)
-	assert.Equal(t, synctypes.ScopeReconcileNone, scopeState.LastReconcileKind)
+	assert.Equal(t, ScopeReconcileNone, scopeState.LastReconcileKind)
 
 	reenteredRow, rowFound, rowErr := reopened.baseline.GetRemoteStateByPath(t.Context(), "drop.txt", driveID)
 	require.NoError(t, rowErr)
@@ -588,7 +586,7 @@ func TestBuildObservationSessionPlan_ScopedRootUsesScopedRootPhase(t *testing.T)
 	assert.Equal(t, observationPhaseDriverScopedRoot, plan.PrimaryPhase.Driver)
 	assert.Equal(t, observationPhaseDispatchPolicySingleBatch, plan.PrimaryPhase.DispatchPolicy)
 	assert.False(t, flow.websocketEnabledForPrimaryPhase(plan.PrimaryPhase))
-	assert.Equal(t, synctypes.ScopeObservationScopedDelta, flow.scopeObservationMode(&plan))
+	assert.Equal(t, ScopeObservationScopedDelta, flow.scopeObservationMode(&plan))
 }
 
 // Validates: R-2.4.5

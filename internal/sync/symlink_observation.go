@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // statObservedPath returns the followed target info for fsPath while also
@@ -486,7 +485,7 @@ func (o *LocalObserver) addObservedWatch(
 			slog.Int("watches_added", counts.watched),
 		)
 
-		return synctypes.ErrWatchLimitExhausted
+		return ErrWatchLimitExhausted
 	}
 
 	counts.failed++

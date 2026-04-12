@@ -13,7 +13,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // isCaseSensitiveFS returns true if the filesystem at dir distinguishes
@@ -295,7 +294,7 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	// In both cases, we should NOT see two file events.
 	fileEvents := 0
 	for _, ev := range received {
-		if ev.ItemType == synctypes.ItemTypeFile {
+		if ev.ItemType == ItemTypeFile {
 			fileEvents++
 		}
 	}
@@ -354,7 +353,7 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 	// The directory create should be suppressed — case collision with "xyz".
 	select {
 	case ev := <-events:
-		if ev.ItemType == synctypes.ItemTypeFolder && ev.Name == "Xyz" {
+		if ev.ItemType == ItemTypeFolder && ev.Name == "Xyz" {
 			require.FailNow(t, "directory event should be suppressed due to case collision", "got %+v", ev)
 		}
 	case <-time.After(500 * time.Millisecond):
@@ -407,7 +406,7 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 	// The directory create should be suppressed.
 	select {
 	case ev := <-events:
-		if ev.ItemType == synctypes.ItemTypeFolder && ev.Name == docsName {
+		if ev.ItemType == ItemTypeFolder && ev.Name == docsName {
 			require.FailNow(t, "directory event should be suppressed due to case collision", "got %+v", ev)
 		}
 	case <-time.After(500 * time.Millisecond):
@@ -475,7 +474,7 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 
 	dirEvents := 0
 	for _, ev := range received {
-		if ev.ItemType == synctypes.ItemTypeFolder && ev.Path != "parent" {
+		if ev.ItemType == ItemTypeFolder && ev.Path != "parent" {
 			dirEvents++
 		}
 	}
@@ -563,10 +562,10 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	// Verify we got both events.
 	var hasCreate, hasDelete bool
 	for _, ev := range received {
-		if ev.Type == synctypes.ChangeCreate && ev.Name == "File.txt" {
+		if ev.Type == ChangeCreate && ev.Name == "File.txt" {
 			hasCreate = true
 		}
-		if ev.Type == synctypes.ChangeDelete && ev.Name == "file.txt" {
+		if ev.Type == ChangeDelete && ev.Name == "file.txt" {
 			hasDelete = true
 		}
 	}
@@ -657,14 +656,14 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 
 	// Only the delete should come through; re-emitted creates are suppressed.
 	for _, ev := range received {
-		if ev.Type == synctypes.ChangeCreate {
+		if ev.Type == ChangeCreate {
 			assert.FailNow(t, "expected no create events (survivors still collide)", "got %+v", ev)
 		}
 	}
 
 	assert.Len(t, received, 1, "expected exactly 1 event (the delete)")
 	if len(received) == 1 {
-		assert.Equal(t, synctypes.ChangeDelete, received[0].Type)
+		assert.Equal(t, ChangeDelete, received[0].Type)
 		assert.Equal(t, "file.txt", received[0].Name)
 	}
 

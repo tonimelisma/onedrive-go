@@ -11,7 +11,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const (
@@ -45,7 +44,7 @@ func TestNewShortcutConverter_EnablesShortcutBehavior(t *testing.T) {
 
 	bl := emptyBaseline()
 	remoteDriveID := driveid.New("0000000000000099")
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "source-folder-1",
@@ -81,7 +80,7 @@ func TestShortcutConverter_NFCNormalization(t *testing.T) {
 	// NFC composed: precomposed characters.
 	nfc := shortcutTestNFCResume
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -114,7 +113,7 @@ func TestShortcutConverter_MoveDetection(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -141,7 +140,7 @@ func TestShortcutConverter_MoveDetection(t *testing.T) {
 	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, synctest.TestLogger(t))
 
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeMove, events[0].Type, "renamed file in shortcut scope should be ChangeMove")
+	assert.Equal(t, ChangeMove, events[0].Type, "renamed file in shortcut scope should be ChangeMove")
 	assert.Equal(t, "SharedFolder/new-name.txt", events[0].Path, "new path")
 	assert.Equal(t, "SharedFolder/old-name.txt", events[0].OldPath, "old path")
 }
@@ -152,7 +151,7 @@ func TestShortcutConverter_SparseRenameReusesBaselineDirectory(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -165,14 +164,14 @@ func TestShortcutConverter_SparseRenameReusesBaselineDirectory(t *testing.T) {
 			DriveID:  remoteDriveID,
 			ItemID:   "subdir",
 			ParentID: "scope-root",
-			ItemType: synctypes.ItemTypeFolder,
+			ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
 			Path:     "SharedFolder/Subdir/old-name.txt",
 			DriveID:  remoteDriveID,
 			ItemID:   shortcutTestFileItemID,
 			ParentID: "subdir",
-			ItemType: synctypes.ItemTypeFile,
+			ItemType: ItemTypeFile,
 		},
 	)
 
@@ -189,7 +188,7 @@ func TestShortcutConverter_SparseRenameReusesBaselineDirectory(t *testing.T) {
 	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, synctest.TestLogger(t))
 
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeMove, events[0].Type, "sparse rename should still be ChangeMove")
+	assert.Equal(t, ChangeMove, events[0].Type, "sparse rename should still be ChangeMove")
 	assert.Equal(t, "SharedFolder/Subdir/new-name.txt", events[0].Path, "sparse rename should preserve baseline parent directory")
 	assert.Equal(t, "SharedFolder/Subdir/old-name.txt", events[0].OldPath, "old path")
 }
@@ -200,7 +199,7 @@ func TestShortcutConverter_DescendantFollowsSparseMovedParentWithOmittedName(t *
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -213,21 +212,21 @@ func TestShortcutConverter_DescendantFollowsSparseMovedParentWithOmittedName(t *
 			DriveID:  remoteDriveID,
 			ItemID:   "folder-a",
 			ParentID: "scope-root",
-			ItemType: synctypes.ItemTypeFolder,
+			ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
 			Path:     "SharedFolder/FolderB",
 			DriveID:  remoteDriveID,
 			ItemID:   "folder-b",
 			ParentID: "scope-root",
-			ItemType: synctypes.ItemTypeFolder,
+			ItemType: ItemTypeFolder,
 		},
 		&BaselineEntry{
 			Path:     "SharedFolder/FolderA/report.txt",
 			DriveID:  remoteDriveID,
 			ItemID:   shortcutTestFileItemID,
 			ParentID: "folder-a",
-			ItemType: synctypes.ItemTypeFile,
+			ItemType: ItemTypeFile,
 		},
 	)
 
@@ -250,7 +249,7 @@ func TestShortcutConverter_DescendantFollowsSparseMovedParentWithOmittedName(t *
 	}
 
 	require.NotNil(t, fileEvent, "file event should be emitted")
-	assert.Equal(t, synctypes.ChangeMove, fileEvent.Type)
+	assert.Equal(t, ChangeMove, fileEvent.Type)
 	assert.Equal(t, "SharedFolder/FolderB/FolderA/report.txt", fileEvent.Path,
 		"descendant should retain the sparse parent leaf recovered from baseline")
 	assert.Equal(t, "SharedFolder/FolderA/report.txt", fileEvent.OldPath)
@@ -265,7 +264,7 @@ func TestShortcutConverter_DeletedItemNameRecovery(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -292,7 +291,7 @@ func TestShortcutConverter_DeletedItemNameRecovery(t *testing.T) {
 	events := ConvertShortcutItems(items, sc, remoteDriveID, bl, synctest.TestLogger(t))
 
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeDelete, events[0].Type)
+	assert.Equal(t, ChangeDelete, events[0].Type)
 	assert.Equal(t, "budget.xlsx", events[0].Name, "name recovered from baseline")
 	assert.Equal(t, "SharedFolder/budget.xlsx", events[0].Path, "path recovered from baseline")
 }
@@ -306,7 +305,7 @@ func TestShortcutConverter_OrphanWarning(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -327,7 +326,7 @@ func TestShortcutConverter_OrphanWarning(t *testing.T) {
 	events := ConvertShortcutItems(items, sc, remoteDriveID, emptyBaseline(), synctest.TestLogger(t))
 
 	require.Len(t, events, 1)
-	assert.Equal(t, synctypes.ChangeCreate, events[0].Type)
+	assert.Equal(t, ChangeCreate, events[0].Type)
 	// Orphan gets prefixed path with just its own name.
 	assert.Equal(t, "SharedFolder/orphan.txt", events[0].Path, "orphan should get prefixed partial path")
 }
@@ -343,7 +342,7 @@ func TestShortcutConverter_PathPrefix(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -380,7 +379,7 @@ func TestShortcutConverter_ScopeRootSkip(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -419,7 +418,7 @@ func TestShortcutConverter_NestedShortcutSkip(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -505,7 +504,7 @@ func TestPrimaryConverter_ShortcutDetection(t *testing.T) {
 
 	ev := c.ClassifyItem(item, inflight)
 	require.NotNil(t, ev)
-	assert.Equal(t, synctypes.ChangeShortcut, ev.Type)
+	assert.Equal(t, ChangeShortcut, ev.Type)
 	assert.Equal(t, "TeamDocs", ev.Path)
 	assert.Equal(t, "remote-drive", ev.RemoteDriveID)
 }
@@ -534,7 +533,7 @@ func TestPrimaryConverter_ShortcutDetection_NoFolderFacet(t *testing.T) {
 
 	ev := c.ClassifyItem(item, inflight)
 	require.NotNil(t, ev, "shortcut without folder facet should produce an event")
-	assert.Equal(t, synctypes.ChangeShortcut, ev.Type, "RemoteDriveID alone should trigger shortcut classification")
+	assert.Equal(t, ChangeShortcut, ev.Type, "RemoteDriveID alone should trigger shortcut classification")
 	assert.Equal(t, "Testi Shared Folder", ev.Path)
 	assert.Equal(t, "remote-drive-2", ev.RemoteDriveID)
 	assert.Equal(t, "remote-item-2", ev.RemoteItemID)
@@ -560,7 +559,7 @@ func TestPrimaryConverter_RegularFileNotShortcut(t *testing.T) {
 
 	ev := c.ClassifyItem(item, inflight)
 	require.NotNil(t, ev)
-	assert.Equal(t, synctypes.ChangeCreate, ev.Type, "regular file should be ChangeCreate")
+	assert.Equal(t, ChangeCreate, ev.Type, "regular file should be ChangeCreate")
 	assert.Empty(t, ev.RemoteDriveID, "regular file should have empty RemoteDriveID")
 }
 
@@ -606,7 +605,7 @@ func TestConvertItems_TwoPassProcessing(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -645,7 +644,7 @@ func TestConvertItems_HashAndTimestamp(t *testing.T) {
 	remoteDriveID := driveid.New("0000000000000099")
 	ts := time.Date(2026, 6, 15, 12, 30, 0, 0, time.UTC)
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -673,7 +672,7 @@ func TestConvertShortcutItems_NilLogger(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -695,7 +694,7 @@ func TestConvertShortcutItems_NilLoggerPassedDefault(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("0000000000000099")
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -724,7 +723,7 @@ func TestShortcutConverter_CrossSubfolderMove(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -759,7 +758,7 @@ func TestShortcutConverter_CrossSubfolderMove(t *testing.T) {
 	}
 
 	require.NotNil(t, fileEvent, "file event should be emitted")
-	assert.Equal(t, synctypes.ChangeMove, fileEvent.Type, "cross-subfolder move should be ChangeMove")
+	assert.Equal(t, ChangeMove, fileEvent.Type, "cross-subfolder move should be ChangeMove")
 	assert.Equal(t, "Shared/FolderB/file.txt", fileEvent.Path, "new path under FolderB")
 	assert.Equal(t, "Shared/FolderA/file.txt", fileEvent.OldPath, "old path under FolderA")
 }
@@ -773,7 +772,7 @@ func TestShortcutConverter_MixedDriveIDs(t *testing.T) {
 	remoteDriveID := driveid.New("0000000000000099")
 	crossDriveID := driveid.New("0000000000000077")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -812,7 +811,7 @@ func TestShortcutConverter_VaultItemsPassThrough(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "scope-root",
@@ -849,7 +848,7 @@ func TestShortcutConverter_ContentEventsCarryShortcutIdentity(t *testing.T) {
 
 	remoteDriveID := driveid.New("0000000000000099")
 
-	sc := &synctypes.Shortcut{
+	sc := &Shortcut{
 		ItemID:      "sc-1",
 		RemoteDrive: "0000000000000099",
 		RemoteItem:  "source-folder-1",

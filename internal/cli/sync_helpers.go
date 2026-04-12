@@ -7,7 +7,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/sync"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 // newSyncEngine creates a sync.Engine from a driveops.Session and resolved config.
@@ -19,8 +19,8 @@ func newSyncEngine(
 	resolved *config.ResolvedDrive,
 	verifyDrive bool,
 	logger *slog.Logger,
-) (*sync.Engine, error) {
-	engine, err := sync.NewDriveEngine(ctx, session, resolved, sync.DriveEngineOptions{
+) (*syncengine.Engine, error) {
+	engine, err := syncengine.NewDriveEngine(ctx, session, resolved, syncengine.DriveEngineOptions{
 		Logger:      logger,
 		VerifyDrive: verifyDrive,
 	})

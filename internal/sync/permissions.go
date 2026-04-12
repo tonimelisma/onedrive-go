@@ -6,14 +6,12 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // resolveRemoteItemID looks up the remote item ID for a local path from the
 // baseline. Pure data lookup — no store access needed.
-func resolveRemoteItemID(bl *syncstore.Baseline, localPath string, driveID driveid.ID) string {
+func resolveRemoteItemID(bl *Baseline, localPath string, driveID driveid.ID) string {
 	entry, ok := bl.GetByPath(localPath)
 	if !ok {
 		return ""
@@ -28,7 +26,7 @@ func resolveRemoteItemID(bl *syncstore.Baseline, localPath string, driveID drive
 
 // findShortcutForPath returns the first shortcut whose LocalPath is a prefix
 // of (or equal to) the given path. Returns nil if no shortcut matches.
-func findShortcutForPath(shortcuts []synctypes.Shortcut, filePath string) *synctypes.Shortcut {
+func findShortcutForPath(shortcuts []Shortcut, filePath string) *Shortcut {
 	for i := range shortcuts {
 		sc := &shortcuts[i]
 		if sc.LocalPath == "" {

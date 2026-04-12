@@ -10,8 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func seedApprovedHeldDelete(
@@ -24,13 +22,13 @@ func seedApprovedHeldDelete(
 	t.Helper()
 
 	driveID := driveid.New(engineTestDriveID)
-	seedBaseline(t, eng.baseline, ctx, []ExecutionResult{{
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            path,
 		DriveID:         driveID,
 		ItemID:          itemID,
-		ItemType:        synctypes.ItemTypeFile,
+		ItemType:        ItemTypeFile,
 		RemoteHash:      "hash-" + itemID,
 		LocalHash:       "hash-" + itemID,
 		LocalSize:       10,
@@ -44,7 +42,7 @@ func seedApprovedHeldDelete(
 		ItemID:        itemID,
 		Path:          path,
 		ActionType:    ActionRemoteDelete,
-		State:         synctypes.HeldDeleteStateHeld,
+		State:         HeldDeleteStateHeld,
 		HeldAt:        1,
 		LastPlannedAt: 1,
 	}}))
@@ -161,13 +159,13 @@ func TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 	ctx := t.Context()
 
 	driveID := driveid.New(engineTestDriveID)
-	seedBaseline(t, eng.baseline, ctx, []ExecutionResult{{
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "recheck-delete.txt",
 		DriveID:         driveID,
 		ItemID:          "recheck-item",
-		ItemType:        synctypes.ItemTypeFile,
+		ItemType:        ItemTypeFile,
 		RemoteHash:      "hash-recheck",
 		LocalHash:       "hash-recheck",
 		LocalSize:       10,
@@ -180,7 +178,7 @@ func TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 		ItemID:        "recheck-item",
 		Path:          "recheck-delete.txt",
 		ActionType:    ActionRemoteDelete,
-		State:         synctypes.HeldDeleteStateHeld,
+		State:         HeldDeleteStateHeld,
 		HeldAt:        1,
 		LastPlannedAt: 1,
 	}}))
@@ -189,8 +187,8 @@ func TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains(t *testing.T) {
 	require.NoError(t, err)
 	testWatchRuntime(t, eng).lastDataVersion = currentVersion
 
-	dbPath := syncStorePathForTest(t, eng)
-	externalStore, err := syncstore.NewSyncStore(ctx, filepath.Clean(dbPath), testLogger(t))
+	dbPath := syncStorePathForTest(t, ctx, eng)
+	externalStore, err := NewSyncStore(ctx, filepath.Clean(dbPath), testLogger(t))
 	require.NoError(t, err)
 	require.NoError(t, externalStore.ApproveHeldDeletes(ctx))
 	require.NoError(t, externalStore.Close(ctx))

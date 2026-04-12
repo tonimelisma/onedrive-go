@@ -9,7 +9,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/failures"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 const (
@@ -52,9 +51,9 @@ const (
 // re-derive policy from raw HTTP/local error facts.
 type ResultDecision struct {
 	Class             failures.Class
-	SummaryKey        synctypes.SummaryKey
-	ScopeKey          synctypes.ScopeKey
-	ScopeEvidence     synctypes.ScopeKey
+	SummaryKey        SummaryKey
+	ScopeKey          ScopeKey
+	ScopeEvidence     ScopeKey
 	Persistence       resultPersistenceMode
 	PermissionFlow    permissionFlow
 	RunScopeDetection bool
@@ -193,8 +192,8 @@ func classifyLocalResult(r *WorkerResult) ResultDecision {
 	case errors.Is(r.Err, driveops.ErrDiskFull):
 		return withRuntimeSummary(&ResultDecision{
 			Class:         resultScopeBlock,
-			ScopeKey:      synctypes.SKDiskLocal(),
-			ScopeEvidence: synctypes.SKDiskLocal(),
+			ScopeKey:      SKDiskLocal(),
+			ScopeEvidence: SKDiskLocal(),
 			Persistence:   persistTransientFailure,
 			TrialHint:     trialHintExtendOnMatchingScope,
 			IssueType:     issueType,
@@ -246,7 +245,7 @@ func withRuntimeSummary(decision *ResultDecision) ResultDecision {
 	return *decision
 }
 
-func runtimeSummaryKey(class failures.Class, issueType string) synctypes.SummaryKey {
+func runtimeSummaryKey(class failures.Class, issueType string) SummaryKey {
 	if key, ok := runtimeSummaryKeyForIssueType(issueType); ok {
 		return key
 	}
@@ -255,56 +254,56 @@ func runtimeSummaryKey(class failures.Class, issueType string) synctypes.Summary
 		class == failures.ClassScopeBlockingTransient ||
 		class == failures.ClassActionable ||
 		class == failures.ClassFatal {
-		return synctypes.SummarySyncFailure
+		return SummarySyncFailure
 	}
 
 	return ""
 }
 
-func runtimeSummaryKeyForIssueType(issueType string) (synctypes.SummaryKey, bool) {
+func runtimeSummaryKeyForIssueType(issueType string) (SummaryKey, bool) {
 	switch issueType {
-	case synctypes.IssueInvalidFilename:
-		return synctypes.SummaryInvalidFilename, true
-	case synctypes.IssuePathTooLong:
-		return synctypes.SummaryPathTooLong, true
-	case synctypes.IssueFileTooLarge:
-		return synctypes.SummaryFileTooLarge, true
-	case synctypes.IssueFileTooLargeForSpace:
-		return synctypes.SummaryFileTooLargeForSpace, true
-	case synctypes.IssueDiskFull:
-		return synctypes.SummaryDiskFull, true
-	case synctypes.IssueHashPanic:
-		return synctypes.SummaryHashError, true
-	case synctypes.IssueUnauthorized:
-		return synctypes.SummaryAuthenticationRequired, true
-	case synctypes.IssueQuotaExceeded:
-		return synctypes.SummaryQuotaExceeded, true
-	case synctypes.IssueServiceOutage:
-		return synctypes.SummaryServiceOutage, true
-	case synctypes.IssueRateLimited:
-		return synctypes.SummaryRateLimited, true
-	case synctypes.IssueSharedFolderBlocked:
-		return synctypes.SummarySharedFolderWritesBlocked, true
-	case synctypes.IssuePermissionDenied:
-		return synctypes.SummaryRemotePermissionDenied, true
-	case synctypes.IssueLocalPermissionDenied:
-		return synctypes.SummaryLocalPermissionDenied, true
-	case synctypes.IssueCaseCollision:
-		return synctypes.SummaryCaseCollision, true
+	case IssueInvalidFilename:
+		return SummaryInvalidFilename, true
+	case IssuePathTooLong:
+		return SummaryPathTooLong, true
+	case IssueFileTooLarge:
+		return SummaryFileTooLarge, true
+	case IssueFileTooLargeForSpace:
+		return SummaryFileTooLargeForSpace, true
+	case IssueDiskFull:
+		return SummaryDiskFull, true
+	case IssueHashPanic:
+		return SummaryHashError, true
+	case IssueUnauthorized:
+		return SummaryAuthenticationRequired, true
+	case IssueQuotaExceeded:
+		return SummaryQuotaExceeded, true
+	case IssueServiceOutage:
+		return SummaryServiceOutage, true
+	case IssueRateLimited:
+		return SummaryRateLimited, true
+	case IssueSharedFolderBlocked:
+		return SummarySharedFolderWritesBlocked, true
+	case IssuePermissionDenied:
+		return SummaryRemotePermissionDenied, true
+	case IssueLocalPermissionDenied:
+		return SummaryLocalPermissionDenied, true
+	case IssueCaseCollision:
+		return SummaryCaseCollision, true
 	default:
 		return "", false
 	}
 }
 
 // deriveScopeKey maps a worker result to its typed scope key. Delegates to
-// synctypes.ScopeKeyForResult — single source of truth for HTTP status → scope
-// key mapping. Returns the zero-value synctypes.ScopeKey for non-scope statuses.
-func deriveScopeKey(r *WorkerResult) synctypes.ScopeKey {
+// ScopeKeyForResult — single source of truth for HTTP status → scope
+// key mapping. Returns the zero-value ScopeKey for non-scope statuses.
+func deriveScopeKey(r *WorkerResult) ScopeKey {
 	targetDriveID := r.TargetDriveID
 	if targetDriveID.IsZero() {
 		targetDriveID = r.DriveID
 	}
-	return synctypes.ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
+	return ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
 }
 
 // issueTypeForHTTPStatus maps an HTTP status code and error to a sync
@@ -313,15 +312,15 @@ func deriveScopeKey(r *WorkerResult) synctypes.ScopeKey {
 func issueTypeForHTTPStatus(httpStatus int, err error) string {
 	switch {
 	case httpStatus == http.StatusUnauthorized:
-		return synctypes.IssueUnauthorized
+		return IssueUnauthorized
 	case httpStatus == http.StatusTooManyRequests:
-		return synctypes.IssueRateLimited
+		return IssueRateLimited
 	case httpStatus == http.StatusInsufficientStorage:
-		return synctypes.IssueQuotaExceeded
+		return IssueQuotaExceeded
 	case httpStatus == http.StatusForbidden:
-		return synctypes.IssuePermissionDenied
+		return IssuePermissionDenied
 	case httpStatus >= http.StatusInternalServerError:
-		return synctypes.IssueServiceOutage
+		return IssueServiceOutage
 	case httpStatus == http.StatusRequestTimeout:
 		return "request_timeout"
 	case httpStatus == http.StatusPreconditionFailed:
@@ -331,32 +330,32 @@ func issueTypeForHTTPStatus(httpStatus int, err error) string {
 	case httpStatus == http.StatusLocked:
 		return "resource_locked"
 	case errors.Is(err, driveops.ErrDiskFull):
-		return synctypes.IssueDiskFull
+		return IssueDiskFull
 	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
-		return synctypes.IssueFileTooLargeForSpace
+		return IssueFileTooLargeForSpace
 	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):
-		return synctypes.IssueFileTooLarge
+		return IssueFileTooLarge
 	case errors.Is(err, os.ErrPermission):
-		return synctypes.IssueLocalPermissionDenied
+		return IssueLocalPermissionDenied
 	default:
 		return ""
 	}
 }
 
-func (m resultPersistenceMode) failureCategory() synctypes.FailureCategory {
+func (m resultPersistenceMode) failureCategory() FailureCategory {
 	switch m {
 	case persistNone:
 		return ""
 	case persistActionableFailure:
-		return synctypes.CategoryActionable
+		return CategoryActionable
 	case persistTransientFailure:
-		return synctypes.CategoryTransient
+		return CategoryTransient
 	}
 
 	return ""
 }
 
-// directionFromAction maps a synctypes.ActionType to a typed Direction enum.
-func directionFromAction(at synctypes.ActionType) synctypes.Direction {
+// directionFromAction maps a ActionType to a typed Direction enum.
+func directionFromAction(at ActionType) Direction {
 	return at.Direction()
 }

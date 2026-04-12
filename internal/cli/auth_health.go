@@ -13,7 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 const (
@@ -166,7 +166,7 @@ func inspectSavedLogin(
 
 func hasPersistedAuthScope(ctx context.Context, account string, logger *slog.Logger) bool {
 	for _, statePath := range config.DiscoverStateDBsForEmail(account, logger) {
-		hasBlock, err := syncstore.HasAccountAuthScopeAtPath(ctx, statePath, logger)
+		hasBlock, err := syncengine.HasAccountAuthScopeAtPath(ctx, statePath, logger)
 		if err != nil {
 			logger.Debug("reading auth scope block for auth projection",
 				"account", account,
@@ -198,7 +198,7 @@ func clearAccountAuthScopesWithCount(ctx context.Context, email string, logger *
 	clearedCount := 0
 
 	for _, statePath := range config.DiscoverStateDBsForEmail(email, logger) {
-		store, err := syncstore.NewSyncStore(ctx, statePath, logger)
+		store, err := syncengine.NewSyncStore(ctx, statePath, logger)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("open sync store %s: %w", statePath, err))
 			continue
@@ -207,8 +207,8 @@ func clearAccountAuthScopesWithCount(ctx context.Context, email string, logger *
 		blocks, listErr := store.ListScopeBlocks(ctx)
 		if listErr != nil {
 			errs = append(errs, fmt.Errorf("list scope blocks %s: %w", statePath, listErr))
-		} else if syncstore.ScopeBlocksContainAuth(blocks) {
-			if err := store.DeleteScopeBlock(ctx, syncstore.AuthAccountScopeKey()); err != nil {
+		} else if syncengine.ScopeBlocksContainAuth(blocks) {
+			if err := store.DeleteScopeBlock(ctx, syncengine.AuthAccountScopeKey()); err != nil {
 				errs = append(errs, fmt.Errorf("delete auth scope from %s: %w", statePath, err))
 			} else {
 				clearedCount++

@@ -10,7 +10,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 func startDrainLoopForEngine(
@@ -68,15 +67,15 @@ func TestRemotePermissionRecovery_RedispatchesHeldUploadWithoutNewObservation(t 
 		},
 	}
 
-	shortcuts := []synctypes.Shortcut{{
+	shortcuts := []Shortcut{{
 		ItemID:       "shortcut-1",
 		RemoteDrive:  remoteDriveID,
 		RemoteItem:   "root-id",
 		LocalPath:    "Shared/TeamDocs",
-		Observation:  synctypes.ObservationDelta,
+		Observation:  ObservationDelta,
 		DiscoveredAt: 1000,
 	}}
-	baselineEntries := []ExecutionResult{
+	baselineEntries := []ActionOutcome{
 		{
 			Action:   ActionDownload,
 			Success:  true,
@@ -84,7 +83,7 @@ func TestRemotePermissionRecovery_RedispatchesHeldUploadWithoutNewObservation(t 
 			DriveID:  driveid.New(remoteDriveID),
 			ItemID:   "root-id",
 			ParentID: "root",
-			ItemType: synctypes.ItemTypeFolder,
+			ItemType: ItemTypeFolder,
 		},
 		{
 			Action:   ActionDownload,
@@ -93,7 +92,7 @@ func TestRemotePermissionRecovery_RedispatchesHeldUploadWithoutNewObservation(t 
 			DriveID:  driveid.New(remoteDriveID),
 			ItemID:   "folder-id",
 			ParentID: "root-id",
-			ItemType: synctypes.ItemTypeFolder,
+			ItemType: ItemTypeFolder,
 		},
 	}
 
@@ -101,11 +100,11 @@ func TestRemotePermissionRecovery_RedispatchesHeldUploadWithoutNewObservation(t 
 	writeLocalFile(t, syncRoot, blockedPath, "blocked upload payload")
 
 	ctx := t.Context()
-	scopeKey := synctypes.SKPermRemote(boundaryPath)
+	scopeKey := SKPermRemote(boundaryPath)
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, blockedPath)
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: synctypes.IssueSharedFolderBlocked,
+		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 

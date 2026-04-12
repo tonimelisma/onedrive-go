@@ -806,49 +806,11 @@ func TestEnsureInternalDependencyGraphGuardrailsPassesMinimalValidGraph(t *testi
 	repoRoot := t.TempDir()
 	writeDependencyGraphModule(t, repoRoot)
 	writeDependencyGraphPackage(t, repoRoot, "driveid")
-	writeDependencyGraphPackage(t, repoRoot, "synctypes", internalPackagePrefix+"driveid")
-	writeDependencyGraphPackage(t, repoRoot, "sync")
-	writeDependencyGraphPackage(t, repoRoot, "syncstore")
-	writeDependencyGraphPackage(t, repoRoot, "cli")
-	writeDependencyGraphPackage(t, repoRoot, "multisync")
+	writeDependencyGraphPackage(t, repoRoot, "sync", internalPackagePrefix+"driveid")
+	writeDependencyGraphPackage(t, repoRoot, "cli", internalPackagePrefix+"sync")
+	writeDependencyGraphPackage(t, repoRoot, "multisync", internalPackagePrefix+"sync")
 
 	require.NoError(t, ensureInternalDependencyGraphGuardrails(repoRoot))
-}
-
-// Validates: R-6.10.5
-func TestEnsureInternalDependencyGraphGuardrailsFailsOnForbiddenEdge(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	writeDependencyGraphModule(t, repoRoot)
-	writeDependencyGraphPackage(t, repoRoot, "driveid")
-	writeDependencyGraphPackage(t, repoRoot, "synctypes", internalPackagePrefix+"driveid")
-	writeDependencyGraphPackage(t, repoRoot, "sync")
-	writeDependencyGraphPackage(t, repoRoot, "syncstore")
-	writeDependencyGraphPackage(t, repoRoot, "multisync")
-	writeDependencyGraphPackage(t, repoRoot, "cli", internalPackagePrefix+"synctypes")
-
-	err := ensureInternalDependencyGraphGuardrails(repoRoot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "forbidden internal import edge detected")
-	assert.Contains(t, err.Error(), internalPackagePrefix+"cli")
-	assert.Contains(t, err.Error(), internalPackagePrefix+"synctypes")
-}
-
-// Validates: R-6.10.5
-func TestEnsureInternalDependencyGraphGuardrailsFailsWhenSynctypesImportsExtraInternalPackage(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	writeDependencyGraphModule(t, repoRoot)
-	writeDependencyGraphPackage(t, repoRoot, "driveid")
-	writeDependencyGraphPackage(t, repoRoot, "sync")
-	writeDependencyGraphPackage(t, repoRoot, "synctypes", internalPackagePrefix+"driveid", internalPackagePrefix+"sync")
-
-	err := ensureInternalDependencyGraphGuardrails(repoRoot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "synctypes may only import internal/driveid")
-	assert.Contains(t, err.Error(), internalPackagePrefix+"sync")
 }
 
 // Validates: R-6.10.5
@@ -1125,7 +1087,7 @@ func TestRunRepoConsistencyChecksFailsWhenExpandedGovernedDocReferencesUnknownTe
 	assertRepoConsistencyRejectsUnknownEvidenceTest(t, "sync-store.md", []string{
 		"# Sync Store",
 		"",
-		"GOVERNS: internal/syncstore/*.go",
+		"GOVERNS: internal/sync/*.go",
 		"",
 		"## Ownership Contract",
 		"- Owns: sample",
@@ -1778,7 +1740,7 @@ func repoConsistencyDesignDocFixtures() []struct {
 			"- Mutable Runtime Owner: watch orchestrator",
 			"- Error Boundary: drive reports",
 		}, nil),
-		repoConsistencyBehaviorDocFixture("sync-store.md", "Sync Store", "internal/syncstore/*.go", []string{
+		repoConsistencyBehaviorDocFixture("sync-store.md", "Sync Store", "internal/sync/*.go", []string{
 			"- Owns: sqlite sync state",
 			"- Does Not Own: graph calls",
 			"- Source of Truth: sqlite rows",

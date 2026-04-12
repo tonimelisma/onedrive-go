@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 type statusActionHintSet struct {
@@ -95,11 +95,11 @@ func statusConflictActionHint(canonicalID string, conflict *statusConflictJSON) 
 	}
 
 	switch conflict.State {
-	case syncstore.ConflictStateUnresolved:
+	case syncengine.ConflictStateUnresolved:
 		return unresolvedConflictActionHint(canonicalID, conflict.Path, conflict.ID)
-	case syncstore.ConflictStateQueued:
+	case syncengine.ConflictStateQueued:
 		return queuedConflictActionHint(canonicalID)
-	case syncstore.ConflictStateApplying:
+	case syncengine.ConflictStateApplying:
 		return applyingConflictActionHint(canonicalID)
 	default:
 		return ""

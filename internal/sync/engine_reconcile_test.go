@@ -14,7 +14,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,9 +24,9 @@ func TestChangeEventsToObservedItems_RemoteOnly(t *testing.T) {
 	t.Parallel()
 
 	events := []ChangeEvent{
-		{Source: synctypes.SourceRemote, ItemID: "r1", Path: "remote.txt", DriveID: driveid.New(testDriveID)},
-		{Source: synctypes.SourceLocal, Path: "local.txt"},
-		{Source: synctypes.SourceRemote, ItemID: "r2", Path: "remote2.txt", DriveID: driveid.New(testDriveID)},
+		{Source: SourceRemote, ItemID: "r1", Path: "remote.txt", DriveID: driveid.New(testDriveID)},
+		{Source: SourceLocal, Path: "local.txt"},
+		{Source: SourceRemote, ItemID: "r2", Path: "remote2.txt", DriveID: driveid.New(testDriveID)},
 	}
 
 	items := changeEventsToObservedItems(slog.Default(), events)
@@ -42,12 +41,12 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 	driveID := driveid.New(testDriveID)
 	events := []ChangeEvent{
 		{
-			Source:    synctypes.SourceRemote,
+			Source:    SourceRemote,
 			ItemID:    "item1",
 			ParentID:  "parent1",
 			DriveID:   driveID,
 			Path:      "docs/file.txt",
-			ItemType:  synctypes.ItemTypeFile,
+			ItemType:  ItemTypeFile,
 			Hash:      "qxh1",
 			Size:      1024,
 			Mtime:     123456789,
@@ -55,11 +54,11 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 			IsDeleted: false,
 		},
 		{
-			Source:    synctypes.SourceRemote,
+			Source:    SourceRemote,
 			ItemID:    "item2",
 			DriveID:   driveID,
 			Path:      "docs/folder",
-			ItemType:  synctypes.ItemTypeFolder,
+			ItemType:  ItemTypeFolder,
 			IsDeleted: true,
 		},
 	}
@@ -71,14 +70,14 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 	assert.Equal(t, "item1", items[0].ItemID)
 	assert.Equal(t, "parent1", items[0].ParentID)
 	assert.Equal(t, "docs/file.txt", items[0].Path)
-	assert.Equal(t, synctypes.ItemTypeFile, items[0].ItemType)
+	assert.Equal(t, ItemTypeFile, items[0].ItemType)
 	assert.Equal(t, "qxh1", items[0].Hash)
 	assert.Equal(t, int64(1024), items[0].Size)
 	assert.Equal(t, int64(123456789), items[0].Mtime)
 	assert.Equal(t, "etag1", items[0].ETag)
 	assert.False(t, items[0].IsDeleted)
 
-	assert.Equal(t, synctypes.ItemTypeFolder, items[1].ItemType)
+	assert.Equal(t, ItemTypeFolder, items[1].ItemType)
 	assert.True(t, items[1].IsDeleted)
 }
 
@@ -205,9 +204,9 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 	driveID := driveid.New(testDriveID)
 
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: synctypes.ItemTypeFile},
-		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: synctypes.ItemTypeFile},
-		{Path: "c.txt", DriveID: driveID, ItemID: "id-c", ItemType: synctypes.ItemTypeFile},
+		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
+		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: ItemTypeFile},
+		{Path: "c.txt", DriveID: driveID, ItemID: "id-c", ItemType: ItemTypeFile},
 	})
 
 	// Seen set has 2 of 3 items — id-b is missing (orphan).
@@ -220,8 +219,8 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 	require.Len(t, orphans, 1, "should detect 1 orphan")
 	assert.Equal(t, "b.txt", orphans[0].Path)
 	assert.Equal(t, "id-b", orphans[0].ItemID)
-	assert.Equal(t, synctypes.ChangeDelete, orphans[0].Type)
-	assert.Equal(t, synctypes.SourceRemote, orphans[0].Source)
+	assert.Equal(t, ChangeDelete, orphans[0].Type)
+	assert.Equal(t, SourceRemote, orphans[0].Source)
 	assert.True(t, orphans[0].IsDeleted)
 }
 
@@ -231,8 +230,8 @@ func TestFindOrphans_NoOrphans(t *testing.T) {
 	driveID := driveid.New(testDriveID)
 
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: synctypes.ItemTypeFile},
-		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: synctypes.ItemTypeFile},
+		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
+		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: ItemTypeFile},
 	})
 
 	// All baseline items are in the seen set.
@@ -252,8 +251,8 @@ func TestFindOrphans_IgnoresOtherDrives(t *testing.T) {
 	otherDrive := driveid.New("0000000000000002")
 
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: synctypes.ItemTypeFile},
-		{Path: "other.txt", DriveID: otherDrive, ItemID: "id-other", ItemType: synctypes.ItemTypeFile},
+		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
+		{Path: "other.txt", DriveID: otherDrive, ItemID: "id-other", ItemType: ItemTypeFile},
 	})
 
 	// Empty seen set — only driveID's items should be orphaned.
@@ -270,9 +269,9 @@ func TestFindOrphans_WithPathPrefix(t *testing.T) {
 	driveID := driveid.New(testDriveID)
 
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "SharedFolder/a.txt", DriveID: driveID, ItemID: "id-a", ItemType: synctypes.ItemTypeFile},
-		{Path: "SharedFolder/sub/b.txt", DriveID: driveID, ItemID: "id-b", ItemType: synctypes.ItemTypeFile},
-		{Path: "OtherFolder/c.txt", DriveID: driveID, ItemID: "id-c", ItemType: synctypes.ItemTypeFile},
+		{Path: "SharedFolder/a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
+		{Path: "SharedFolder/sub/b.txt", DriveID: driveID, ItemID: "id-b", ItemType: ItemTypeFile},
+		{Path: "OtherFolder/c.txt", DriveID: driveID, ItemID: "id-c", ItemType: ItemTypeFile},
 	})
 
 	// Only id-a is in the seen set. id-b is an orphan under SharedFolder.
@@ -329,8 +328,8 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
-	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: synctypes.ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
 
 	events, token, err := testEngineFlow(t, e).observeRemoteFull(ctx, bl)
 	require.NoError(t, err)
@@ -340,14 +339,14 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	var modifies, deletes int
 	for _, ev := range events {
 		switch ev.Type {
-		case synctypes.ChangeModify:
+		case ChangeModify:
 			modifies++
-		case synctypes.ChangeDelete:
+		case ChangeDelete:
 			deletes++
 			assert.Equal(t, "file2.txt", ev.Path, "orphan should be file2.txt")
 			assert.Equal(t, "f2", ev.ItemID)
 			assert.True(t, ev.IsDeleted)
-		case synctypes.ChangeCreate, synctypes.ChangeMove, synctypes.ChangeShortcut:
+		case ChangeCreate, ChangeMove, ChangeShortcut:
 			// Not expected in this test.
 		}
 	}
@@ -365,9 +364,9 @@ func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 
 	driveID := driveid.New(testDriveID)
 	events := []ChangeEvent{
-		{Source: synctypes.SourceRemote, ItemID: "valid-1", Path: "a.txt", DriveID: driveID},
-		{Source: synctypes.SourceRemote, ItemID: "", Path: "bad.txt", DriveID: driveID},
-		{Source: synctypes.SourceRemote, ItemID: "valid-2", Path: "b.txt", DriveID: driveID},
+		{Source: SourceRemote, ItemID: "valid-1", Path: "a.txt", DriveID: driveID},
+		{Source: SourceRemote, ItemID: "", Path: "bad.txt", DriveID: driveID},
+		{Source: SourceRemote, ItemID: "valid-2", Path: "b.txt", DriveID: driveID},
 	}
 
 	items := changeEventsToObservedItems(slog.Default(), events)
@@ -486,8 +485,8 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
-	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: synctypes.ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
 
 	events, pendingToken, err := testEngineFlow(t, e).observeAndCommitRemoteFull(ctx, bl)
 	require.NoError(t, err)
@@ -496,13 +495,13 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	var modifies, deletes int
 	for _, ev := range events {
 		switch ev.Type {
-		case synctypes.ChangeModify:
+		case ChangeModify:
 			modifies++
-		case synctypes.ChangeDelete:
+		case ChangeDelete:
 			deletes++
 			assert.Equal(t, "file2.txt", ev.Path)
 			assert.True(t, ev.IsDeleted)
-		case synctypes.ChangeCreate, synctypes.ChangeMove, synctypes.ChangeShortcut:
+		case ChangeCreate, ChangeMove, ChangeShortcut:
 			// not expected
 		}
 	}
@@ -582,7 +581,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: synctypes.ItemTypeFile})
+	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 
 	ready := setupWatchEngine(t, e)
 	testWatchRuntime(t, e).buf = NewBuffer(e.logger)

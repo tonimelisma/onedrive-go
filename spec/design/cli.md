@@ -103,7 +103,7 @@ purpose:
 token/account-profile state plus persisted sync state to show best-known auth
 health, but they never probe Graph and never mutate `auth:account`.
 Offline auth-scope detection now goes through the read-only
-`syncstore.HasScopeBlockAtPath` boundary as an exact `auth:account`
+`sync.HasScopeBlockAtPath` boundary as an exact `auth:account`
 scope-block query; CLI auth-health helpers do not open the mutable
 `SyncStore` path just to read persisted auth state.
 
@@ -391,15 +391,15 @@ Implements: R-6.6.14 [verified], R-6.6.15 [verified], R-6.6.16 [verified]
 - If the configured log file cannot be opened, CLI bootstrap warns through the CLI status writer and falls back to console-only logging instead of failing the command before any user-facing work can run.
 - Direct `runSync` and helper-level tests cover caller-visible failure paths such as config-load errors, all-drives-paused/no-drives guidance, and log-file-open fallback warnings through the injected status/output writers rather than process-global stderr assumptions.
 - The status command uses testable helper seams with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. `status` uses the same store-owned per-drive read-helper wrapper for every displayed drive. CLI code does not open writable SQLite paths for read-only sync-state views.
-- Offline auth-health projection uses `syncstore.HasScopeBlockAtPath` for
+- Offline auth-health projection uses `sync.HasScopeBlockAtPath` for
   persisted `auth:account` checks, so read-only CLI account discovery no
   longer pays the writable-store checkpoint/close path.
 - Control-socket status reporting shares that same read-only store boundary.
   CLI status aggregation and daemon `GET /v1/status` both consume
-  `syncstore` read helpers instead of opening writable `SyncStore` handles
+  `internal/sync` read helpers instead of opening writable `SyncStore` handles
   just to count durable intent.
 - Sync-domain issue/status presentation uses the shared
-  [`synctypes.SummaryKey`](../../internal/synctypes/summary_keys.go)
+  [`sync.SummaryKey`](../../internal/sync/summary_keys.go)
   contract. `status` consumes the store-owned issue projection instead of
   rebuilding visible-issue math locally.
 - `status` now preserves the store-owned issue-group projection instead of

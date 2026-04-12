@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/synctypes/actions.go, internal/synctypes/config.go, internal/synctypes/enums.go, internal/synctypes/errors.go, internal/synctypes/types.go
+GOVERNS: internal/sync/planner.go, internal/sync/actions.go, internal/sync/api_types.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/core_types.go
 
 Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.7.7 [verified], R-6.7.17 [verified], R-2.14.2 [verified], R-6.10.6 [verified]
 
@@ -150,14 +150,13 @@ When a cross-drive move is detected, the match is skipped — paths fall through
 
 **Conservative zero-guard**: If either drive ID is unknown (zero), the guard returns `false` (don't decompose). This prevents false positives for items with incomplete baseline data.
 
-## Shared Types (`internal/synctypes/`)
+## Planning Types (`internal/sync/`)
 
-Planning-relevant shared types now live across multiple files in
-`internal/synctypes/`, not a deleted `internal/sync/types.go` shim and not a
-single `types.go` file:
+Planning-relevant domain types now live directly in `internal/sync`, alongside
+the planner that owns their behavior:
 
-- `types.go`: `ChangeEvent`, `BaselineEntry`, `PathView`, `RemoteState`, `LocalState`, `PathChanges`
-- `actions.go`: `Action`, `ActionPlan`, `Outcome`
-- `config.go`: `SafetyConfig`
+- `core_types.go`: `ChangeEvent`, `BaselineEntry`, `PathView`, `RemoteState`, `LocalState`, `PathChanges`
+- `actions.go`: `Action`, `ActionPlan`, `ActionOutcome`
+- `api_types.go`: `SafetyConfig`, sync runtime options, and observation config
 - `enums.go`: `ChangeSource`, `ChangeType`, `ItemType`, `SyncMode`, `ActionType`
 - `errors.go`: `ErrDeleteSafetyThresholdExceeded`, `ErrDependencyCycle`
