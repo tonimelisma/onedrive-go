@@ -20,9 +20,9 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/sync/planner*.go`, `internal/sync/single_path*.go` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |
 | `internal/sync/executor*.go`, `internal/sync/worker*.go`, `internal/sync/dep_graph*.go`, `internal/sync/active_scopes*.go`, `internal/sync/delete_counter*.go`, `internal/localtrash/` | `spec/design/sync-execution.md` | |
 | `internal/sync/engine*.go`, `internal/sync/permissions.go`, `internal/sync/permission_*.go`, `internal/cli/sync_helpers.go` | `spec/design/sync-engine.md` | |
-| `internal/synctypes/` | `spec/design/system.md` | `spec/design/sync-engine.md`, `spec/design/sync-store.md` |
+| `internal/synctypes/` | `spec/design/error-model.md` | `spec/design/sync-store.md`, `spec/design/sync-engine.md` |
 | `internal/multisync/`, `internal/cli/sync.go` | `spec/design/sync-control-plane.md` | `spec/design/sync-engine.md`, `spec/design/config.md` |
-| `internal/syncstore/`, `internal/syncverify/`, `internal/sync/recovery.go`, `internal/sync/recovery_test.go`, `internal/cli/recover.go` | `spec/design/sync-store.md` | `spec/design/data-model.md`, `spec/design/sync-execution.md`, `spec/design/sync-engine.md` |
+| `internal/syncstore/`, `internal/syncverify/`, `internal/cli/recover.go`, `internal/cli/recover_service.go` | `spec/design/sync-store.md` | `spec/design/data-model.md`, `spec/design/sync-execution.md`, `spec/design/sync-engine.md` |
 | `internal/cli/root.go`, `internal/cli/httpclient.go`, `internal/cli/format.go`, `internal/cli/signal.go`, `internal/cli/pidfile.go`, `internal/cli/auth.go`, `internal/cli/ls.go`, `internal/cli/rm.go`, `internal/cli/mkdir.go`, `internal/cli/mv.go`, `internal/cli/cp.go`, `internal/cli/stat.go`, `internal/cli/pause.go`, `internal/cli/resume.go`, `internal/cli/recycle_bin.go`, `internal/cli/status.go`, `internal/cli/perf.go`, `internal/cli/resolve.go`, `main.go` | `spec/design/cli.md` | |
 
 | Working on capability... | Requirements | Design docs |
@@ -40,7 +40,8 @@ Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
 
 - Prefer durable solutions for authority boundaries, state ownership, and side-effect boundaries over expedient patches.
 - Never treat current implementation as a reason to avoid change.
-- The architecture should be extremely robust and full of defensive coding practices.
+- Robustness comes from explicit ownership, simple data flow, and strong invariants, not from adding layers, wrappers, or framework-shaped local architecture.
+- Do not add services, managers, adapters, builders, or DTO-style pass-through types unless they own a real boundary or eliminate duplicated authority.
 - Change modules and packages deliberately when it reduces duplicated authority, hidden coupling, or unclear ownership. No code is sacred, but churn without architectural payoff is not a virtue.
 - App has zero users and hasn't launched yet. There is zero backwards-compatibility requirement anywhere: config format, token/cache files, state DB/schema, CLI flags, command output, and internal APIs can all change. Prefer the best design now and remove compatibility shims rather than carrying old architecture forward.
 
@@ -57,6 +58,16 @@ Optimize first for a codebase that is easy to reason about, easy to test, and ex
 - **Domain types may own behavior.** Keep invariant-preserving behavior with the data it constrains when that improves clarity. Avoid both god objects and anemic "data only" types that force policy into distant helpers.
 - **Composition and dependency inversion are tools, not rituals.** Compose small collaborators with explicit dependencies. Introduce interfaces at consuming boundaries for I/O, policy, or coordination seams; do not manufacture interfaces around every concrete type.
 - **Prefer immutability in decision logic, ownership in runtime logic.** Pure planning inputs and outputs should be treated as values. For long-lived coordinators, optimize for explicit ownership and controlled mutation rather than blanket copying.
+
+### Anti-Fizzbuzz Guardrails
+
+- **No abstraction without authority.** If a new type, package, or layer does not own I/O, policy, lifecycle, or a durable truth boundary, it probably should not exist.
+- **Prefer direct concrete call flow.** Inside one package, a short concrete helper is usually better than a same-process handler/service/manager chain.
+- **Package moves must reduce cognitive load.** If a boundary is collapsed or renamed, remove the old vocabulary everywhere in the same increment.
+- **Avoid ghost architecture.** Do not keep comments, docs, verifier rules, error prefixes, or test names referring to deleted packages, files, or concepts.
+- **Say what the code really does.** Do not call code "pure" if it logs, mutates state, or performs I/O. Use "deterministic" when that is what you mean.
+- **Avoid god packages.** If one package starts owning unrelated reasons to change, split it by authority boundary, not by generic technical phase names.
+- **No fake intermediate boundaries.** If code now lives in `internal/sync`, either document the current file-family ownership clearly or split it again for a real reason; do not pretend deleted packages still exist conceptually.
 
 ### Performance and Simplicity
 
@@ -87,6 +98,7 @@ Project-specific consequences:
 ### General
 
 - Write comments for **why**, invariants, ownership rules, concurrency contracts, and non-obvious tradeoffs. Do not narrate the code line by line.
+- Comments and error prefixes must name the current package or concept, not the package or boundary that used to own the code before a refactor.
 - Functions do one thing, with side effects explicit in their name, signature, or owning type
 - Return concrete types by default. Define small interfaces in the consuming package at I/O, policy, or coordination seams
 - No package-level mutable state
@@ -216,6 +228,7 @@ Work is done in increments. Do not ask permission, do not skip any step.
 2. If the work involves a live CI / E2E / integration failure, search `spec/reference/live-incidents.md` first for an existing matching incident before starting a new investigation trail.
 3. Read the governing design doc and requirements file (see Routing Table above).
 4. Evaluate the codebase to determine if any foundational improvements are needed before starting.
+5. If docs and code disagree about package names, file ownership, or boundaries, fix that drift in the same increment before building more work on top of the stale model.
 
 ### Step 2: Set up worktree
 
@@ -238,10 +251,14 @@ Mandatory, not optional:
 - **Requirements**: if you completed a feature, update status (`implemented` → `verified` once tests pass). Mirror status in the design doc `Implements:` line.
 - **Reference**: if you discovered a new API quirk, update the relevant reference doc upstream.
 - **Live incidents ledger**: if the increment investigates or fixes a live CI / E2E / integration failure, add or update the matching entry in `spec/reference/live-incidents.md` in the same increment. Reuse the existing entry when the incident is clearly recurring instead of creating duplicates.
+- **Refactor hygiene**: package/file renames, deletions, merges, and boundary moves must update in the same increment: `AGENTS.md`, `CLAUDE.md`, routing tables, `GOVERNS:` lists, repo-consistency rules, package comments, error-message prefixes, test names, and design-doc references. Do not leave basic naming cleanup for a follow-up increment.
+- **Deleted-name sweep**: after boundary refactors, grep for deleted package, file, and concept names and remove or justify every remaining reference. Historical references must be explicitly labeled as historical.
 
 ### Step 5: Self-verify
 
 Re-read the governing design doc. Produce a compliance report listing each spec item, whether it was implemented in full, partially, or not at all, and how it was implemented.
+If the increment moved, deleted, or collapsed a boundary, run an architecture-drift sweep and verify that docs, verifier rules, comments, package docs, and user-facing/internal error text use the current package and file names.
+If you deleted a package or file, prove there are no stale references left outside intentionally labeled historical notes.
 
 ### Step 6: Code review checklist
 
@@ -257,10 +274,11 @@ After each increment, run through this entire checklist. If something fails, fix
 4. [ ] **Unit tests**: reported by `go run ./cmd/devtool verify default`
 5. [ ] **Coverage**: reported by `go run ./cmd/devtool verify default`
 6. [ ] **Fast E2E**: reported by `go run ./cmd/devtool verify default`
-7. [ ] **Docs updated**: AGENTS.md, CLAUDE.md, spec/design/, spec/requirements/ as needed
-8. [ ] **Rebase onto latest main**: Immediately before any `gh pr create`, run `git fetch origin` and `git rebase origin/main` in the worktree branch, then verify with `git merge-base --is-ancestor origin/main HEAD`. Never create a PR from a stale merge base. If that verification fails, do not open the PR. If the rebase changes the branch or you resolve conflicts, restart this checklist at item 1 and only continue once the rebased branch is green.
-9. [ ] **Push, review, and CI green**: After item 8 passes, push branch, using `git push --force-with-lease` if the rebase rewrote history, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires the required CI checks to pass and all PR conversations to be resolved before merge. Monitor with `gh pr checks <pr_number> --watch`, wait for Codex PR review to finish, and address or explicitly resolve every actionable review thread before considering the increment complete.
-10. [ ] **Cleanup**: Clean `git status`. From the root repo (not worktree), remove the current worktree after merge. Then force-delete the local branch with `git branch -D` (squash merges create a new commit on main, so Git cannot detect the branch as merged — `git branch -d` will wrongly warn "not fully merged"). Prune stale remote-tracking branches and pull main forward:
+7. [ ] **Docs updated**: `AGENTS.md`, `CLAUDE.md`, the routing table, governed design docs, and verifier rules all match the current code layout
+8. [ ] **Architecture/docs drift sweep**: no stale references to deleted packages, files, or boundaries remain in repo guidance, design docs, repo-consistency checks, package comments, or error strings unless explicitly marked historical
+9. [ ] **Rebase onto latest main**: Immediately before any `gh pr create`, run `git fetch origin` and `git rebase origin/main` in the worktree branch, then verify with `git merge-base --is-ancestor origin/main HEAD`. Never create a PR from a stale merge base. If that verification fails, do not open the PR. If the rebase changes the branch or you resolve conflicts, restart this checklist at item 1 and only continue once the rebased branch is green.
+10. [ ] **Push, review, and CI green**: After item 9 passes, push branch, using `git push --force-with-lease` if the rebase rewrote history, open PR with `gh pr create`, then enable auto-merge with `gh pr merge --auto --squash --delete-branch`. Branch protection requires the required CI checks to pass and all PR conversations to be resolved before merge. Monitor with `gh pr checks <pr_number> --watch`, wait for Codex PR review to finish, and address or explicitly resolve every actionable review thread before considering the increment complete.
+11. [ ] **Cleanup**: Clean `git status`. From the root repo (not worktree), remove the current worktree after merge. Then force-delete the local branch with `git branch -D` (squash merges create a new commit on main, so Git cannot detect the branch as merged — `git branch -d` will wrongly warn "not fully merged"). Prune stale remote-tracking branches and pull main forward:
     cd /Users/tonimelisma/Development/onedrive-go
     rm -f <worktree-path>/.testdata   # remove stale symlink before worktree removal
     git worktree remove <worktree-path>
@@ -269,7 +287,7 @@ After each increment, run through this entire checklist. If something fails, fix
     git checkout main && git pull --ff-only origin main
     echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r && echo "=== Stashes ===" && git stash list && echo "=== Worktrees ===" && git worktree list && echo "=== Open PRs ===" && gh pr list --state open && echo "=== Status ===" && git status
     **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date. Let the human decide what to clean up
-11. [ ] **Increment report**: Present to the human:
+12. [ ] **Increment report**: Present to the human:
     - **What you changed**: What files did you change, why and how
     - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up
     - **Live incidents**: Which `spec/reference/live-incidents.md` entries were added or updated in this increment, or explicitly say `none`
