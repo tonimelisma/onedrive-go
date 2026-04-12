@@ -312,49 +312,59 @@ protection, but held-delete workflow state is stored in `held_deletes`, not in
 
 Implements: R-2.5.1 [verified], R-2.5.4 [verified], R-2.10.41 [verified]
 
-[`internal/sync/recovery.go`](../../internal/sync/recovery.go) handles crash recovery: on startup, it resets items stuck in `downloading`/`deleting` state to `pending_download`, `pending_delete`, or `deleted`. The sync tree decides whether a local delete completed before the crash; the store applies only the durable state transitions. One-shot mode does this in `prepareRunOnceState`; watch mode does it during watch bootstrap before observation starts.
+Crash recovery no longer depends on persisted per-item execution lanes. The
+engine restarts from durable truth:
 
-Engine-level startup characterization covers both one-shot startup and watch bootstrap with mixed deleting candidate sets: missing local paths finalize as `deleted`, existing local paths return to `pending_delete`, and malformed or unreadable local paths fail open to `pending_delete` instead of being treated as successful deletes.
+- `baseline` remains the last agreed state
+- `remote_state` remains the latest observed remote truth
+- local disk remains the authoritative local current state
+- `sync_failures` and `scope_blocks` remain the durable retry / scope owners
 
-Implements: R-2.5.4 [verified]
+On startup, one-shot and watch bootstrap reload that durable state, repair
+persisted scope ownership where required, reobserve current remote truth, rescan
+local truth, and then replan from the same reconciliation rules used in a normal
+pass. If a prior directional run had already advanced the delta token, later
+runs still settle that remote drift from `baseline + remote_state + local disk`
+even when there are no fresh delta events left to consume.
 
-After resetting `remote_state`, crash recovery also creates
-corresponding `sync_failures` entries (category=`transient`, direction matching
-the action, `next_retry_at` computed via `delayFn`) for each item that
-transitioned to a pending state. This bridges `remote_state` to the retry queue
-(`sync_failures`). Without this bridge, items that crashed mid-execution would
-become zombies: the delta token was already advanced (no new events), and the
-retry sweep only queries `sync_failures`. `RecordFailure` uses UPSERT — if a
-`sync_failures` entry already exists from a prior failure before the crash, the
-existing `failure_count` is preserved and incremented, so backoff continues
-from where it left off. The bridge rows keep coarse `direction`, but they also
-preserve the exact replay action: reset downloads persist as
-`ActionDownload`, and reset deletes persist as `ActionLocalDelete`, because the
-`deleting` remote-state lane represents “delete the local item to match a
-remote delete,” not “re-issue a remote delete.”
+Transfer-side crash artifacts remain owned by `driveops`, not by reconciliation
+state. Interrupted downloads resume from `.partial` files when possible and are
+otherwise retried from the durable remote mirror. Interrupted uploads reuse the
+persisted upload-session store when possible; otherwise local-vs-baseline drift
+causes the upload to be replanned normally. Local and remote deletes are
+rediscovered from current truth on the next pass instead of being recovered from
+store-owned in-progress markers.
 
-The retry sweep is the sole retry mechanism for sync actions. In watch mode it
-is integrated directly into the single-owner watch loop; in one-shot mode there
-is no long-lived retry loop. `runRetrierSweep()` periodically sweeps
+The retry sweep remains the sole retry mechanism for sync actions. In watch mode
+it is integrated directly into the single-owner watch loop; in one-shot mode
+there is no long-lived retry loop. `runRetrierSweep()` periodically sweeps
 `sync_failures` for items whose `next_retry_at` has expired and re-injects them
-into the pipeline via buffer → planner → DepGraph. In one-shot mode,
-`prepareRunOnceState` seeds crash-recovery bridge rows with immediate retry
-times, and `RunOnce` merges those due retry rows back into the current planner
-batch on that same invocation instead of leaving them stranded for a later
-timer that does not exist. Download-side retry replay carries an explicit
-forced-download hint through the planner so a resumed download still replans
-even when baseline metadata says the path was previously synced and no fresh
-delta item arrived. The engine calls `DepGraph.Complete` on every worker
-result and records failures in `sync_failures` with exponential backoff via
-`retry.ReconcilePolicy().Delay`. `CommitOutcome` updates baseline and
-`remote_state`, but it does not clear `sync_failures`; the engine owns
-success-side failure cleanup explicitly via `clearFailureOnSuccess`.
-`runTrialDispatch()` handles scope trial candidate selection via
-`PickTrialCandidate` and re-observation.
+into the pipeline via buffer → planner → DepGraph. One-shot mode merges due
+retry rows back into the current planner batch on that same invocation. Retry
+rebuild now derives the current action need from durable truth and the recorded
+action type, not from lifecycle state stored on `remote_state`. The engine calls
+`DepGraph.Complete` on every worker result and records failures in
+`sync_failures` with exponential backoff via `retry.ReconcilePolicy().Delay`.
+`CommitOutcome` updates baseline and `remote_state`, but it does not clear
+`sync_failures`; the engine owns success-side failure cleanup explicitly via
+`clearFailureOnSuccess`. `runTrialDispatch()` handles scope trial candidate
+selection via `PickTrialCandidate` and re-observation.
 
-## Status Computation (`compute_status.go`)
+## Status Projection
 
-Pure function `computeNewStatus()` determines the new `sync_status` for a `remote_state` row based on the action outcome. Used by `CommitObservation`.
+The store-owned status projection no longer reports queue-lane counts from
+`remote_state`. Instead, `Inspector` derives `RemoteDriftItems` by comparing the
+current remote mirror against baseline:
+
+- mirror rows with no matching baseline row
+- mirror rows whose path/type/remote hash/remote mtime differ from baseline
+- baseline rows whose remote item is absent from the current mirror
+
+This keeps `status` aligned with the durable-truth reconciliation model without
+pretending the store can infer exact local-only drift from SQLite alone. Exact
+local drift still requires a live local scan, so the default read-only status
+projection reports durable remote drift, retry/failure summaries, delete safety,
+and conflicts instead of inventing a synthetic global “pending sync” lane count.
 
 ## Disk Space Pre-Check
 

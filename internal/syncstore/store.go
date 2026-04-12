@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/fsroot"
+	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 
 	// Pure-Go SQLite driver (no CGO).
 	_ "modernc.org/sqlite"
@@ -35,11 +36,21 @@ import (
 
 const syncStoreDirPerm = 0o700
 
+// Compile-time interface satisfaction checks.
+var (
+	_ synctypes.ObservationWriter   = (*SyncStore)(nil)
+	_ synctypes.OutcomeWriter       = (*SyncStore)(nil)
+	_ synctypes.StateReader         = (*SyncStore)(nil)
+	_ synctypes.StateAdmin          = (*SyncStore)(nil)
+	_ synctypes.SyncFailureRecorder = (*SyncStore)(nil)
+	_ synctypes.ScopeBlockStore     = (*SyncStore)(nil)
+)
+
 // SyncStore is the sole writer to the sync database. It loads the
 // baseline at pass start and commits outcomes at pass end.
 type SyncStore struct {
 	db         *sql.DB
-	baseline   *Baseline
+	baseline   *synctypes.Baseline
 	baselineMu stdsync.Mutex // guards baseline cache (Load is called from multiple workers)
 	logger     *slog.Logger
 	nowFunc    func() time.Time // injectable for deterministic tests
@@ -126,9 +137,9 @@ func (m *SyncStore) Close(ctx context.Context) error {
 	return nil
 }
 
-// Checkpoint performs WAL checkpoint and optionally prunes soft-deleted rows
-// older than retention. Called: after initial sync, every 30 minutes, and on
-// shutdown. Pass retention=0 to skip pruning (WAL checkpoint only).
+// Checkpoint performs WAL checkpoint and optionally prunes old actionable
+// failures. Called after initial sync, every 30 minutes, and on shutdown.
+// Pass retention=0 to skip pruning (WAL checkpoint only).
 func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) error {
 	if _, err := m.db.ExecContext(ctx,
 		"PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
@@ -140,12 +151,6 @@ func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) err
 	}
 
 	cutoff := m.nowFunc().Add(-retention).UnixNano()
-
-	if _, err := m.db.ExecContext(ctx,
-		`DELETE FROM remote_state WHERE sync_status = 'deleted' AND observed_at < ?`,
-		cutoff); err != nil {
-		return fmt.Errorf("prune deleted remote_state: %w", err)
-	}
 
 	// Actionable failures are kept for user visibility but pruned after retention
 	// to prevent unbounded growth of stale entries.
@@ -188,7 +193,7 @@ func (m *SyncStore) SetNowFunc(fn func() time.Time) {
 // Baseline returns the in-memory baseline cache populated by the most recent
 // Load or Commit call. Returns nil before the first Load/Commit. Used by
 // tests to inspect baseline state without a round-trip through Load().
-func (m *SyncStore) Baseline() *Baseline {
+func (m *SyncStore) Baseline() *synctypes.Baseline {
 	m.baselineMu.Lock()
 	defer m.baselineMu.Unlock()
 

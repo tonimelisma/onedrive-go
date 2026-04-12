@@ -32,7 +32,7 @@ func goldenStatusAccounts() []statusAccount {
 						LastSyncDuration: "1500",
 						FileCount:        42,
 						IssueCount:       3,
-						PendingSync:      2,
+						RemoteDrift:      2,
 						Retrying:         1,
 						LastError:        "sync: network timeout",
 						StateStoreStatus: stateStoreStatusHealthy,

@@ -5,26 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
-	"github.com/tonimelisma/onedrive-go/internal/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctypes"
 )
 
 // RunOnce executes a single sync pass:
 //  1. Load baseline
-//  2. Observe remote (skip if upload-only)
-//  3. Observe local (skip if download-only)
-//  4. Buffer and flush changes
+//  2. Observe remote
+//  3. Observe local
+//  4. Reconcile buffered changes plus durable remote drift
 //  5. Early return if no changes
 //  6. Plan actions (flat list + dependency edges)
 //  7. Return early if dry-run
 //  8. Build DepGraph, start worker pool
 //  9. Wait for completion, commit delta token
-func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Report, error) {
+func (e *Engine) RunOnce(ctx context.Context, mode synctypes.SyncMode, opts synctypes.RunOpts) (*synctypes.SyncReport, error) {
 	start := e.nowFunc()
 	runner := newOneShotRunner(e)
 
@@ -105,12 +106,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	runner.postSyncHousekeeping()
 
 	// Persist sync metadata for status command queries.
-	if metaErr := e.baseline.WriteSyncMetadata(ctx, &syncstore.SyncMetadata{
-		Duration:  report.Duration,
-		Succeeded: report.Succeeded,
-		Failed:    report.Failed,
-		Errors:    report.Errors,
-	}); metaErr != nil {
+	if metaErr := e.baseline.WriteSyncMetadata(ctx, report); metaErr != nil {
 		e.logger.Warn("failed to write sync metadata", slog.String("error", metaErr.Error()))
 	}
 
@@ -120,7 +116,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 func (e *Engine) prepareRunOnceBaseline(
 	ctx context.Context,
 	runner *oneShotRunner,
-) (*syncstore.Baseline, error) {
+) (*synctypes.Baseline, error) {
 	if err := runner.prepareRunOnceState(ctx); err != nil {
 		return nil, err
 	}
@@ -139,32 +135,27 @@ func (e *Engine) prepareRunOnceBaseline(
 func (e *Engine) completeRunOnceWithoutChanges(
 	ctx context.Context,
 	start time.Time,
-	mode Mode,
-	opts RunOptions,
-) *Report {
+	mode synctypes.SyncMode,
+	opts synctypes.RunOpts,
+) *synctypes.SyncReport {
 	e.logger.Info("sync pass complete: no changes detected",
 		slog.Duration("duration", e.since(start)),
 	)
 
-	report := &Report{
+	report := &synctypes.SyncReport{
 		Mode:     mode,
 		DryRun:   opts.DryRun,
 		Duration: e.since(start),
 	}
 	// Persist sync metadata even when no changes detected.
-	if metaErr := e.baseline.WriteSyncMetadata(ctx, &syncstore.SyncMetadata{
-		Duration:  report.Duration,
-		Succeeded: report.Succeeded,
-		Failed:    report.Failed,
-		Errors:    report.Errors,
-	}); metaErr != nil {
+	if metaErr := e.baseline.WriteSyncMetadata(ctx, report); metaErr != nil {
 		e.logger.Warn("failed to write sync metadata", slog.String("error", metaErr.Error()))
 	}
 
 	return report
 }
 
-func (e *Engine) completeDryRunReport(start time.Time, report *Report) *Report {
+func (e *Engine) completeDryRunReport(start time.Time, report *synctypes.SyncReport) *synctypes.SyncReport {
 	report.Duration = e.since(start)
 
 	e.logger.Info("dry-run complete: no changes applied",
@@ -196,20 +187,6 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 		return proofErr
 	}
 	eng.logVerifiedDrive(proof)
-
-	// Crash recovery: reset any in-progress states from a previous crash.
-	// One-shot mode has no long-lived retry loop, so bridge rows created here
-	// must be immediately retryable on this invocation instead of waiting for a
-	// later timer tick that will never happen.
-	if err := ResetInProgressStates(
-		ctx,
-		eng.baseline,
-		eng.syncTree,
-		func(int) time.Duration { return 0 },
-		eng.logger,
-	); err != nil {
-		eng.logger.Warn("failed to reset in-progress states", slog.String("error", err.Error()))
-	}
 
 	bl, err := eng.baseline.Load(ctx)
 	if err != nil {
@@ -251,8 +228,8 @@ func (flow *engineFlow) postSyncHousekeeping() {
 // with satisfied deps go directly to dispatchCh. Scope detection (ScopeState) is
 // absent in one-shot; watch-only lifecycle paths are nil-guarded → no-op.
 func (r *oneShotRunner) executePlan(
-	ctx context.Context, plan *ActionPlan, report *Report,
-	bl *syncstore.Baseline,
+	ctx context.Context, plan *synctypes.ActionPlan, report *synctypes.SyncReport,
+	bl *synctypes.Baseline,
 ) error {
 	if len(plan.Actions) == 0 {
 		return nil
@@ -281,7 +258,7 @@ func (r *oneShotRunner) executePlan(
 	// straight to workers. Scope blocking is watch-mode only (§2.3).
 	depGraph := NewDepGraph(r.engine.logger)
 	r.depGraph = depGraph
-	r.dispatchCh = make(chan *TrackedAction, len(plan.Actions))
+	r.dispatchCh = make(chan *synctypes.TrackedAction, len(plan.Actions))
 
 	// Two-phase graph population: Register all actions first, then wire
 	// dependencies. This avoids forward-reference issues where a parent
@@ -337,9 +314,9 @@ func (r *oneShotRunner) executePlan(
 	return nil
 }
 
-// buildReportFromCounts populates a Report with plan counts.
-func buildReportFromCounts(counts map[synctypes.ActionType]int, mode Mode, opts RunOptions) *Report {
-	return &Report{
+// buildReportFromCounts populates a synctypes.SyncReport with plan counts.
+func buildReportFromCounts(counts map[synctypes.ActionType]int, mode synctypes.SyncMode, opts synctypes.RunOpts) *synctypes.SyncReport {
+	return &synctypes.SyncReport{
 		Mode:          mode,
 		DryRun:        opts.DryRun,
 		FolderCreates: counts[synctypes.ActionFolderCreate],
@@ -356,7 +333,7 @@ func buildReportFromCounts(counts map[synctypes.ActionType]int, mode Mode, opts 
 
 // observeRemote fetches delta changes from the Graph API. Automatically
 // retries with an empty token if synctypes.ErrDeltaExpired is returned (full resync).
-func (flow *engineFlow) observeRemote(ctx context.Context, bl *syncstore.Baseline) ([]ChangeEvent, string, error) {
+func (flow *engineFlow) observeRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	eng := flow.engine
 	savedToken, err := eng.baseline.GetDeltaToken(ctx, eng.driveID.String(), "")
 	if err != nil {
@@ -390,9 +367,9 @@ func (flow *engineFlow) observeRemote(ctx context.Context, bl *syncstore.Baselin
 // retry/trial observation paths.
 func (flow *engineFlow) observeLocal(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *synctypes.Baseline,
 	scopeSnapshot syncscope.Snapshot,
-) (ScanResult, error) {
+) (synctypes.ScanResult, error) {
 	eng := flow.engine
 
 	obs := NewLocalObserver(bl, eng.logger, eng.checkWorkers)
@@ -402,7 +379,7 @@ func (flow *engineFlow) observeLocal(
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {
-		return ScanResult{}, fmt.Errorf("sync: local scan: %w", err)
+		return synctypes.ScanResult{}, fmt.Errorf("sync: local scan: %w", err)
 	}
 
 	return result, nil
@@ -422,24 +399,22 @@ func (flow *engineFlow) observeLocal(
 func (flow *engineFlow) observeChanges(
 	ctx context.Context,
 	watch *watchRuntime,
-	bl *syncstore.Baseline,
-	mode Mode,
+	bl *synctypes.Baseline,
+	mode synctypes.SyncMode,
 	dryRun, fullReconcile bool,
-) ([]PathChanges, []deferredDeltaToken, error) {
+) ([]synctypes.PathChanges, []deferredDeltaToken, error) {
 	scopeSession, observationPlan, err := flow.prepareObservationScope(ctx, watch, mode, fullReconcile)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	remoteEvents, pendingDeltaTokens, err := flow.observeRemoteChanges(
-		ctx, bl, mode, dryRun, &scopeSession, &observationPlan, fullReconcile,
+		ctx, bl, dryRun, &scopeSession, &observationPlan, fullReconcile,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
-	if mode != SyncUploadOnly {
-		observationPlan.Reentry.Pending = false
-	}
+	observationPlan.Reentry.Pending = false
 
 	finalRemoteEvents, shortcutErr := flow.processCommittedPrimaryBatch(
 		ctx,
@@ -457,18 +432,24 @@ func (flow *engineFlow) observeChanges(
 		finalRemoteEvents = filterOutShortcuts(remoteEvents)
 	}
 
-	localResult, err := flow.observeLocalChanges(ctx, watch, bl, mode, scopeSession.Current)
+	localResult, err := flow.observeLocalChanges(ctx, watch, bl, scopeSession.Current)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if err := flow.applyScopeState(ctx, dryRun, &scopeSession, &observationPlan); err != nil {
+	err = flow.applyScopeState(ctx, dryRun, &scopeSession, &observationPlan)
+	if err != nil {
 		return nil, nil, err
 	}
 
 	buf := NewBuffer(flow.engine.logger)
 	buf.AddAll(finalRemoteEvents)
 	buf.AddAll(localResult.Events)
+	remoteDriftEvents, err := flow.synthesizeRemoteMirrorDrift(ctx, bl, scopeSession.Current)
+	if err != nil {
+		return nil, nil, err
+	}
+	buf.AddAll(remoteDriftEvents)
 
 	return buf.FlushImmediate(), pendingDeltaTokens, nil
 }
@@ -476,7 +457,7 @@ func (flow *engineFlow) observeChanges(
 func (flow *engineFlow) prepareObservationScope(
 	ctx context.Context,
 	watch *watchRuntime,
-	mode Mode,
+	mode synctypes.SyncMode,
 	fullReconcile bool,
 ) (ScopeSession, ObservationSessionPlan, error) {
 	scopeSession, err := flow.BuildScopeSession(ctx, watch)
@@ -503,17 +484,12 @@ func (flow *engineFlow) prepareObservationScope(
 
 func (flow *engineFlow) observeRemoteChanges(
 	ctx context.Context,
-	bl *syncstore.Baseline,
-	mode Mode,
+	bl *synctypes.Baseline,
 	dryRun bool,
 	scopeSession *ScopeSession,
 	observationPlan *ObservationSessionPlan,
 	fullReconcile bool,
-) ([]ChangeEvent, []deferredDeltaToken, error) {
-	if mode == SyncUploadOnly {
-		return nil, nil, nil
-	}
-
+) ([]synctypes.ChangeEvent, []deferredDeltaToken, error) {
 	effectiveFullReconcile := effectivePrimaryFullReconcile(fullReconcile, observationPlan)
 	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, observationPlan, effectiveFullReconcile)
 	if err != nil {
@@ -551,7 +527,7 @@ func (flow *engineFlow) observeRemoteChanges(
 
 func (flow *engineFlow) fetchRemoteChanges(
 	ctx context.Context,
-	bl *syncstore.Baseline,
+	bl *synctypes.Baseline,
 	observationPlan *ObservationSessionPlan,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
@@ -561,7 +537,7 @@ func (flow *engineFlow) fetchRemoteChanges(
 func (flow *engineFlow) commitObservedRemoteChanges(
 	ctx context.Context,
 	dryRun bool,
-	observed []syncstore.ObservedItem,
+	observed []synctypes.ObservedItem,
 ) error {
 	if dryRun {
 		return nil
@@ -581,17 +557,12 @@ func (flow *engineFlow) commitObservedRemoteChanges(
 func (flow *engineFlow) observeLocalChanges(
 	ctx context.Context,
 	watch *watchRuntime,
-	bl *syncstore.Baseline,
-	mode Mode,
+	bl *synctypes.Baseline,
 	scopeSnapshot syncscope.Snapshot,
-) (ScanResult, error) {
-	if mode == SyncDownloadOnly {
-		return ScanResult{}, nil
-	}
-
+) (synctypes.ScanResult, error) {
 	localResult, err := flow.observeLocal(ctx, bl, scopeSnapshot)
 	if err != nil {
-		return ScanResult{}, err
+		return synctypes.ScanResult{}, err
 	}
 
 	flow.recordSkippedItems(ctx, localResult.Skipped)
@@ -606,6 +577,110 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.scopeController().clearResolvedRemoteBlockedFailures(ctx, watch, pathSet)
 
 	return localResult, nil
+}
+
+func (flow *engineFlow) synthesizeRemoteMirrorDrift(
+	ctx context.Context,
+	bl *synctypes.Baseline,
+	scopeSnapshot syncscope.Snapshot,
+) ([]synctypes.ChangeEvent, error) {
+	rows, err := flow.engine.baseline.ListRemoteState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing remote mirror state: %w", err)
+	}
+
+	seenRemote := make(map[driveid.ItemKey]struct{}, len(rows))
+	events := make([]synctypes.ChangeEvent, 0, len(rows))
+
+	for i := range rows {
+		row := &rows[i]
+		if row.IsFiltered || scopeSnapshot.ExclusionReason(row.Path) != syncscope.ExclusionNone {
+			continue
+		}
+
+		key := driveid.NewItemKey(row.DriveID, row.ItemID)
+		seenRemote[key] = struct{}{}
+
+		entry, found := bl.GetByID(key)
+		if found && !remoteMirrorDiffers(entry, row) {
+			continue
+		}
+
+		event := synctypes.ChangeEvent{
+			Source:   synctypes.SourceRemote,
+			Type:     synctypes.ChangeModify,
+			Path:     row.Path,
+			ItemID:   row.ItemID,
+			ParentID: row.ParentID,
+			DriveID:  row.DriveID,
+			ItemType: row.ItemType,
+			Name:     filepath.Base(row.Path),
+			Size:     row.Size,
+			Hash:     row.Hash,
+			Mtime:    row.Mtime,
+			ETag:     row.ETag,
+		}
+		if found && entry.Path != row.Path {
+			event.Type = synctypes.ChangeMove
+			event.OldPath = entry.Path
+		}
+
+		events = append(events, event)
+	}
+
+	bl.ForEachPath(func(path string, entry *synctypes.BaselineEntry) {
+		if entry == nil || scopeSnapshot.ExclusionReason(path) != syncscope.ExclusionNone {
+			return
+		}
+
+		key := driveid.NewItemKey(entry.DriveID, entry.ItemID)
+		if _, ok := seenRemote[key]; ok {
+			return
+		}
+
+		events = append(events, synctypes.ChangeEvent{
+			Source:    synctypes.SourceRemote,
+			Type:      synctypes.ChangeDelete,
+			Path:      path,
+			ItemID:    entry.ItemID,
+			ParentID:  entry.ParentID,
+			DriveID:   entry.DriveID,
+			ItemType:  entry.ItemType,
+			Name:      filepath.Base(path),
+			Size:      entry.RemoteSize,
+			Hash:      entry.RemoteHash,
+			Mtime:     entry.RemoteMtime,
+			IsDeleted: true,
+		})
+	})
+
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].Path != events[j].Path {
+			return events[i].Path < events[j].Path
+		}
+		if events[i].Type != events[j].Type {
+			return events[i].Type < events[j].Type
+		}
+		return events[i].OldPath < events[j].OldPath
+	})
+
+	return events, nil
+}
+
+func remoteMirrorDiffers(entry *synctypes.BaselineEntry, row *synctypes.RemoteStateRow) bool {
+	if entry == nil || row == nil {
+		return true
+	}
+	if entry.Path != row.Path || entry.ItemType != row.ItemType {
+		return true
+	}
+	if entry.RemoteHash != row.Hash {
+		return true
+	}
+	if entry.RemoteSizeKnown && entry.RemoteSize != row.Size {
+		return true
+	}
+	return entry.RemoteMtime != row.Mtime
 }
 
 // observeAndCommitRemote wraps observeRemote to persist observations
@@ -623,7 +698,7 @@ func (flow *engineFlow) observeLocalChanges(
 // a deletion was still propagating to the Graph change log, advancing would
 // permanently skip it. Deletions are delivered exactly once in a narrow
 // window (ci_issues.md §20).
-func (flow *engineFlow) observeAndCommitRemote(ctx context.Context, bl *syncstore.Baseline) ([]ChangeEvent, string, error) {
+func (flow *engineFlow) observeAndCommitRemote(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	eng := flow.engine
 
 	events, deltaToken, err := flow.observeRemote(ctx, bl)
@@ -671,7 +746,7 @@ func (flow *engineFlow) commitDeferredDeltaTokens(ctx context.Context, tokens []
 // but not in the full enumeration = deleted remotely but missed by incremental
 // delta. Returns all events (creates/modifies from the full enumeration +
 // synthesized deletes for orphans) and the new delta token.
-func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *syncstore.Baseline) ([]ChangeEvent, string, error) {
+func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	eng := flow.engine
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 
@@ -693,7 +768,7 @@ func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *syncstore.Bas
 	}
 
 	// Detect orphans: baseline entries whose ItemID is not in the seen set.
-	orphans := findBaselineOrphans(bl, seen, eng.driveID, "")
+	orphans := bl.FindOrphans(seen, eng.driveID, "")
 
 	if len(orphans) > 0 {
 		eng.logger.Info("full reconciliation: detected orphaned items",
@@ -714,7 +789,7 @@ func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *syncstore.Bas
 // observeAndCommitRemoteFull wraps observeRemoteFull to persist observations
 // and return the pending delta token for deferred commitment (same deferral
 // pattern as observeAndCommitRemote — see its doc comment for rationale).
-func (flow *engineFlow) observeAndCommitRemoteFull(ctx context.Context, bl *syncstore.Baseline) ([]ChangeEvent, string, error) {
+func (flow *engineFlow) observeAndCommitRemoteFull(ctx context.Context, bl *synctypes.Baseline) ([]synctypes.ChangeEvent, string, error) {
 	events, deltaToken, err := flow.observeRemoteFull(ctx, bl)
 	if err != nil {
 		return nil, "", err
@@ -728,11 +803,11 @@ func (flow *engineFlow) observeAndCommitRemoteFull(ctx context.Context, bl *sync
 	return events, deltaToken, nil
 }
 
-// resolveSafetyConfig returns the appropriate SafetyConfig. The
+// resolveSafetyConfig returns the appropriate synctypes.SafetyConfig. The
 // planner-level delete threshold is disabled here (threshold=MaxInt32) because
 // the engine owns durable delete-safety holds and approvals.
-func (e *Engine) resolveSafetyConfig() *SafetyConfig {
-	return &SafetyConfig{
+func (e *Engine) resolveSafetyConfig() *synctypes.SafetyConfig {
+	return &synctypes.SafetyConfig{
 		DeleteSafetyThreshold: plannerSafetyMax,
 	}
 }

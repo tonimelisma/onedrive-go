@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/migrations/*.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncstore/store_recover.go, internal/syncstore/types.go, internal/syncverify/verify.go, internal/syncverify/report.go, internal/sync/recovery.go, internal/cli/status.go, internal/cli/recover.go
+GOVERNS: internal/syncstore/store.go, internal/syncstore/inspector.go, internal/syncstore/schema.go, internal/syncstore/migrations/*.sql, internal/syncstore/tx.go, internal/syncstore/store_baseline.go, internal/syncstore/store_observation.go, internal/syncstore/store_conflicts.go, internal/syncstore/store_failures.go, internal/syncstore/store_held_deletes.go, internal/syncstore/store_admin.go, internal/syncstore/store_scope_blocks.go, internal/syncstore/shortcuts.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/recover.go
 
 Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.32 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -20,7 +20,6 @@ peer authority; it is rebuilt from store state when the engine starts.
 - Allowed Side Effects: SQLite reads/writes and schema application only.
 - Mutable Runtime Owner: `SyncStore` owns its writable DB handle and internal rebuildable baseline cache. `Inspector` and the package-level read helpers own short-lived read-only DB handles. Neither runs background goroutines; all store boundaries expose synchronous methods only.
 - Error Boundary: The store persists already-classified failure roles and categories from [error-model.md](error-model.md). It does not reinterpret raw external errors into new policy classes.
-- Store-owned durable boundary types such as `BaselineMutation`, `SyncFailureParams`, `ObservedItem`, `ScopeBlock`, and conflict/held-delete records live in `internal/syncstore/types.go`. Verification `Result` and `Report` types live in `internal/syncverify/report.go`.
 
 ## Verified By
 
@@ -32,7 +31,7 @@ peer authority; it is rebuilt from store state when the engine starts.
 | Held-delete approval identity requires matching item ID and repeated approvals are idempotent. | `TestSyncStore_UpsertHeldDeletesRequiresItemID`, `TestSyncStore_HeldDeleteConsumeRequiresMatchingItemID`, `TestSyncStore_DeleteHeldDeleteRequiresMatchingItemID`, `TestSyncStore_ApproveHeldDeletesConcurrentCallsAreIdempotent` |
 | Conflict requests stay mutable while queued, remain idempotent for the same strategy, and reject rewrites once the engine has claimed them. | `TestSyncStore_RequestConflictResolutionSameStrategyIsIdempotent`, `TestSyncStore_RequestConflictResolutionQueuedRequestCanBeOverwrittenBeforeApplying`, `TestSyncStore_RequestConflictResolutionRejectsApplyingAndResolved` |
 | Visible issue grouping comes from one store-owned projection instead of CLI-local reconstruction. | `TestSyncStore_ListVisibleIssueGroups` |
-| Crash-shaped `downloading` / `deleting` residue in the state DB is replayed from durable store truth on the next live sync run, and the immediate rerun is idle. | `TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows` |
+| Directional runs persist remote truth without executing the forbidden direction, and a later live sync settles that already-observed drift directly from durable mirror truth. | `TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta`, `TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta`, `TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta` |
 | Store schema migration uses embedded goose migrations, preserves durable user intent when migrating from schema v1, and rejects missing, empty, or malformed goose history instead of silently guessing. | `TestNewSyncStore_AppliesCurrentGooseMigration`, `TestSyncStore_MigrationProviderFreshDBUpgradesToCurrent`, `TestSyncStore_MigrationFromVersionOnePreservesDurableIntentSemantics`, `TestSyncStore_MigrationFilesIncludeUpDownAndMatchCurrentVersion`, `TestNewSyncStore_RejectsUnversionedExistingStateDB`, `TestNewSyncStore_RejectsEmptyGooseHistory`, `TestNewSyncStore_RejectsMalformedGooseHistoryWithoutLegacyTables`, `TestNewSyncStore_RejectsMalformedGooseHistoryWithLegacyTables`, `TestNewSyncStore_AcceptsPreexistingAppliedGooseHistory` |
 
 `NewSyncStore()` opens SQLite in WAL mode and applies the embedded goose
@@ -54,8 +53,8 @@ lifecycle.
 
 Key operations:
 
-- `CommitObservation()` atomically writes `remote_state` rows and advances the relevant delta token.
-- `CommitMutation()` updates `baseline` and finalizes remote-state transitions per action. `BaselineMutation` is the store-owned persistence input passed from engine execution results. Success-side `sync_failures` cleanup is engine-owned and happens before or after the store commit depending on the result flow.
+- `CommitObservation()` atomically writes pure remote mirror rows and advances the relevant delta token.
+- `CommitOutcome()` updates `baseline` and updates remote mirror truth only when the successful action changed remote truth. Success-side `sync_failures` cleanup is engine-owned and happens before or after the store commit depending on the result flow.
 - `ApplyScopeState(ctx, req)` is the durable sync-scope transition boundary.
   It upserts the singleton `scope_state` row and atomically re-evaluates
   existing `remote_state` rows against the effective snapshot, marking
@@ -63,13 +62,12 @@ Key operations:
 - `UpsertSyncMetadataEntries(ctx, entries)` remains the generic sync-metadata
   writer for status/report metadata only; sync-scope durability no longer
   piggybacks on generic metadata keys.
-- `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and marks a matching `remote_state` row synced.
+- `RefreshLocalBaseline(ctx, LocalBaselineRefresh)` is the explicit reconciliation path used when local disk now represents the chosen truth without a new executor transfer result. It updates only the local-side baseline tuple, preserves known remote-side metadata/`etag`, and leaves `remote_state` as current remote truth.
 - `RequestConflictResolution(ctx, id, resolution)` records conflict-resolution intent without executing side effects. The durable request workflow lives in `conflict_requests`, while `conflicts` remains the derived fact/history table. `ClaimConflictResolution`, `MarkConflictResolutionFailed`, and `ResolveConflict` enforce the durable `queued -> applying` workflow for engine-owned execution. Failed attempts rewrite the request back to `queued` with `last_error` preserved. Successful resolution deletes the request row in the same transaction that marks the conflict resolved in `conflicts`.
 - `UpsertHeldDeletes`, `ApproveHeldDeletes`, `ListHeldDeletesByState`, `ConsumeHeldDelete`, and `DeleteHeldDelete` own the durable delete-safety approval workflow. Approval changes rows from `held` to `approved`; successful engine deletes consume approved rows only when drive, action type, path, and item ID match. Engine planning prunes stale approved rows when the current plan proves a reused path now targets a different item ID.
 - `RecordStaleHeldDeletePrune(ctx, count, at)` records store-owned audit metadata when the engine prunes stale approved held-delete rows after a live plan proves a reused path now points at a different item ID.
 - `RecordFailure(ctx, SyncFailureParams, delayFn)` is the single failure writer. The engine provides classification and retry policy; the store provides transactional persistence and conflict-safe upsert behavior.
 - `TakeSyncFailure(ctx, path, driveID)` is the store-owned read-and-delete boundary for engine-managed failure resolution logging. It returns the authoritative persisted row, including `failure_count`, in the same transaction that removes it.
-- `ResetDownloadingStates(ctx, delayFn)`, `ListDeletingCandidates(ctx)`, and `FinalizeDeletingStates(ctx, deleted, pending, delayFn)` are the state-only crash-recovery primitives. The store no longer probes the sync-root filesystem itself. Their bridge rows preserve the exact replay action (`ActionDownload` for reset downloads, `ActionLocalDelete` for reset deletes) so the engine can re-enter the correct execution lane on the next pass.
 - `ReleaseScope(ctx, scopeKey, now)` is the single durable “scope resolved” transition. It deletes the `scope_blocks` row when one exists, deletes any legacy `boundary` failure row for that scope, and converts all `held` failures for that scope into retryable `item` rows with `next_retry_at = now`.
 - `DiscardScope(ctx, scopeKey)` is the single durable “scope and blocked work are gone” transition. It deletes the `scope_blocks` row when one exists and every `sync_failures` row for that scope.
 
@@ -83,7 +81,7 @@ successful commit, and joins any real rollback failure into the returned
 error. The store therefore never silently discards rollback failures at the
 durable state boundary.
 
-For file rows, `CommitMutation()` persists the comparison tuple the planner
+For file rows, `CommitOutcome()` persists the comparison tuple the planner
 needs later:
 
 - local side: `local_hash`, `local_size`, `local_mtime`
@@ -93,14 +91,14 @@ The store does not fabricate hashes or synthesize fallback decisions. It
 persists exactly what observation and execution learned, including known zero
 sizes. Comparison policy stays in the planner.
 
-For sync-scope filtering, `remote_state.sync_status = filtered` is the durable
+For sync-scope filtering, `remote_state.is_filtered = 1` is the durable
 "currently outside effective sync scope" marker. It is intentionally distinct
-from `deleted` and from retryable download states:
+from remote deletion and from retryable failure state:
 
 - filtered rows stay visible to the engine for later re-entry reconciliation
-- filtered rows are excluded from unreconciled/retry projections
-- an in-scope observation moves a filtered row back to `synced` or
-  `pending_download` based on hash equality
+- filtered rows are excluded from remote-drift planning projections
+- an in-scope observation clears `is_filtered` and restores the row to active
+  mirror truth
 - `filter_generation` records which effective scope generation last filtered
   the row
 - `filter_reason` records whether the row is filtered by `path_scope` or
@@ -140,14 +138,14 @@ against the persisted snapshot and fixes rows that should no longer be
 engine remains the only owner that can consume that persisted signal and clear
 it after a successful re-entry reconciliation.
 
-`CommitMutation()` classifies baseline mutations through one shared
+`CommitOutcome()` classifies baseline mutations through one shared
 ActionType-to-mutation mapping before any transaction writes happen. Unknown
 actions are explicit store errors, not silent no-ops. The in-memory baseline
 cache uses that same classifier after commit; if that path ever encounters an
 impossible unclassified action anyway, the store invalidates and reloads the
 cache from SQLite so durable state remains the only authority.
 
-`RefreshLocalBaseline()` is deliberately narrower than `CommitMutation()`. It
+`RefreshLocalBaseline()` is deliberately narrower than `CommitOutcome()`. It
 exists for local reconciliation paths such as `keep_both`, where the
 engine has authoritative current local disk facts but is not committing a new
 executor-produced remote result. The method preserves the remote-side
@@ -381,24 +379,33 @@ local verification.
 Verification remains read-only all the way through the store boundary:
 per-path stat/rooted-path/hash failures are reported as mismatch rows instead
 of aborting the whole pass, while context cancellation is still fatal to the
-overall verification routine. `syncverify.Report.Mismatches` is sorted by path
+overall verification routine. `VerifyReport.Mismatches` is sorted by path
 before it reaches formatting so test/dev output stays deterministic across map
 iteration order.
 
 ## Crash Recovery Boundary
 
-[`internal/sync/recovery.go`](../../internal/sync/recovery.go)
-owns the sync-root filesystem half of crash recovery. It classifies deleting
-rows as completed deletes or pending retries via
-[`synctree.Root`](../../internal/synctree/synctree.go),
-then calls the store’s state-only recovery primitives. `SyncStore` no longer
-joins sync-root paths or calls `os.Stat` itself.
+`SyncStore` no longer owns per-item startup lane repair because there are no
+persisted execution lanes on `remote_state`. The store’s responsibility is to
+preserve durable truth and durable intent:
 
-Per-candidate stat failures do not abort recovery; they downgrade that path to
-the pending-delete set so the next engine pass retries it. Store-boundary
-failures (`ResetDownloadingStates`, `ListDeletingCandidates`,
-`FinalizeDeletingStates`) still abort the recovery pass with context-wrapped
-errors because the durable-state transition itself is incomplete.
+- `baseline` keeps last agreement
+- `remote_state` keeps current remote truth plus row-local scope metadata
+- `sync_failures` keeps retryable/actionable failure state
+- `scope_blocks`, `held_deletes`, and conflict tables keep their own durable
+  intent / scope ownership
+
+Crash recovery during ordinary sync startup is therefore truth-based rather than
+lane-based. The engine reloads the store, reobserves remote truth, rescans local
+truth, and replans from those authorities. Transfer-side leftovers such as
+`.partial` downloads or resumable upload sessions remain owned by `driveops`,
+not by the store.
+
+Store-owned recovery still exists for damaged databases through
+[`store_recover.go`](../../internal/syncstore/store_recover.go). That explicit
+`recover` flow audits/repairs/rebuilds the database while preserving recoverable
+durable user intent, but it is separate from the normal startup path for an
+otherwise healthy store.
 
 ## Drive Status
 

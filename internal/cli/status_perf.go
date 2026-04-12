@@ -148,7 +148,7 @@ func (ss *syncStateInfo) hasPersistentSummaryData() bool {
 		ss.FileCount > 0 ||
 		ss.IssueCount > 0 ||
 		len(ss.IssueGroups) > 0 ||
-		ss.PendingSync > 0 ||
+		ss.RemoteDrift > 0 ||
 		ss.Retrying > 0 ||
 		ss.LastError != "" ||
 		len(ss.NextActions) > 0 ||

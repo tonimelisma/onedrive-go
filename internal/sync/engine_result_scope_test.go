@@ -656,7 +656,7 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 	assert.Equal(t, synctypes.SKPermRemote("Shared/TeamDocs"), permIssues[0].ScopeKey)
 
 	// remote_state should be empty.
-	failed, err := eng.baseline.ListActionableRemoteState(ctx)
+	failed, err := eng.baseline.ListRemoteState(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, failed, "confirmed read-only 403 should not be in remote_state")
 
@@ -680,7 +680,7 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 	}, nil)
 
 	// No failures should be recorded.
-	failed, err := eng.baseline.ListActionableRemoteState(ctx)
+	failed, err := eng.baseline.ListRemoteState(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, failed)
 

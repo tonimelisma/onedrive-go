@@ -475,7 +475,7 @@ func fullE2ESerialSyncTestNames() []string {
 		"TestE2E_Sync_ResolveKeepRemoteThenSync",
 		"TestE2E_Sync_IdempotentReSync",
 		"TestE2E_Sync_CrashRecoveryIdempotent",
-		"TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows",
+		"TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta",
 		"TestE2E_Resolve_Both_PreservesConflictCopy",
 	}
 }

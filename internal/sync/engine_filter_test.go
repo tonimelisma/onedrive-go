@@ -136,10 +136,10 @@ func TestRunOnce_DownloadScopeSuppressesOutOfScopeRemoteItems(t *testing.T) {
 	keepRow, keepFound, keepErr := eng.baseline.GetRemoteStateByPath(t.Context(), "keep.txt", driveID)
 	require.NoError(t, keepErr)
 	require.True(t, keepFound)
-	assert.Equal(t, synctypes.SyncStatusSynced, keepRow.SyncStatus)
+	assert.False(t, keepRow.IsFiltered)
 
 	dropRow, dropFound, dropErr := eng.baseline.GetRemoteStateByPath(t.Context(), "drop.txt", driveID)
 	require.NoError(t, dropErr)
 	require.True(t, dropFound)
-	assert.Equal(t, synctypes.SyncStatusFiltered, dropRow.SyncStatus)
+	assert.True(t, dropRow.IsFiltered)
 }

@@ -104,7 +104,7 @@ func buildSyncStateInfo(
 		LastSyncTime:           snapshot.SyncMetadata["last_sync_time"],
 		LastSyncDuration:       snapshot.SyncMetadata["last_sync_duration_ms"],
 		FileCount:              snapshot.BaselineEntryCount,
-		PendingSync:            snapshot.PendingSyncItems,
+		RemoteDrift:            snapshot.RemoteDriftItems,
 		Retrying:               snapshot.RetryingItems,
 		LastError:              snapshot.SyncMetadata["last_sync_error"],
 		IssueGroups:            buildFailureGroupJSON(snapshot.IssueGroups, verbose, examplesLimit, nextActions),

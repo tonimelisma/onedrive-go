@@ -344,7 +344,7 @@ Promoted docs: [graph-api-quirks.md#fresh-parent-child-create-lag](graph-api-qui
 ## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup
 
 First seen: 2026-04-05  
-Last seen: 2026-04-10
+Last seen: 2026-04-12
 Area: `e2e_full`, CLI `rm`, forced-overwrite cleanup  
 Suite / test: `go test -tags='e2e e2e_full' ./e2e -run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`; later isolated `TestE2E_Sync_DeleteSafetyThreshold`
 Classification: graph quirk  
@@ -547,6 +547,19 @@ Evidence:
   setup had already used the same parent successfully. That extends the same
   post-mutation visibility family from follow-on read lag to immediate
   follow-on child-create instability.
+- On April 12, 2026 local `go run ./cmd/devtool verify default` hit the same
+  family earlier in `TestE2E_RoundTrip`: `mkdir
+  /onedrive-go-e2e-1776012180531584000/subfolder` and the follow-on
+  `put /onedrive-go-e2e-1776012180531584000/test.txt` both reported success,
+  but the later round-trip assertions never regained a readable parent path.
+  Repeated `ls /onedrive-go-e2e-1776012180531584000` and
+  `stat /onedrive-go-e2e-1776012180531584000/test.txt` calls kept returning
+  `404 itemNotFound` for more than two minutes, and later cleanup still saw
+  the same parent as missing while `GET /items/root/children` returned an
+  otherwise healthy root listing. Representative request IDs from that run
+  included folder-list/read failures `a25ff48e-c887-4568-8a15-d7ba89e989f9`,
+  `db5d96ce-646a-434e-b457-ad290b70675b`, and
+  `820427af-adb4-4134-83e7-22d87e0c037a`.
 Resolution / mitigation: CLI mutation flows now treat destination visibility as
 a bounded driveops-owned convergence concern. `mkdir`, single-file `put`, and
 `mv` wait for the destination path to become readable before reporting success,
@@ -558,6 +571,11 @@ when they are asserting follow-on remote readability after a successful write.
 E2E fixture setup now accepts either exact-path `stat` or parent `ls`
 visibility, so setup helpers stop depending on one specific Graph read model
 being the first one to converge after a mutation.
+The fast file-operation battery no longer chains unrelated assertions through
+one long-lived `TestE2E_RoundTrip` folder. It now uses isolated
+`TestE2E_FileOps_*` cases with fresh remote folders, so one transient
+destination-visibility wobble cannot cascade into later `rm`, `get`, or
+`status` assertions that are trying to prove something else.
 `rm` now keeps the same bounded parent-read check for
 non-root deletes, but once delete intent has already proved the target path is
 gone it downgrades a pure `PathNotVisibleError` on that follow-on parent read
@@ -723,15 +741,15 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
 First seen: 2026-04-05  
 Last seen: 2026-04-05  
 Area: fast-e2e, sync recovery  
-Suite / test: `e2e`, `TestE2E_Sync_CrashRecovery_ReplaysDurableInProgressRows`  
+Suite / test: `e2e`, `TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta`  
 Classification: product bug  
 Status: fixed  
 Recurring: no  
-Summary: A live crash-recovery pass showed that one-shot sync created durable retry bridge rows for interrupted work but did not actually replay them on that same invocation. The live investigation then exposed two related bugs in the same lane: delete-side bridge rows were typed as remote deletes instead of local deletes, and interrupted downloads could still no-op when the baseline said the file was already synced.  
+Summary: A live recovery investigation showed that one-shot sync had tied durable remote observation too closely to in-progress execution lanes. Once the delta token advanced, later runs could lose the ability to settle already-observed remote drift unless that work was restated through synthetic queue-style bridge rows.  
 Evidence:
-- The original live crash-recovery investigation exposed three concrete production gaps: one-shot startup created retry bridge rows without consuming them on that same invocation, delete-side bridge rows preserved the wrong replay action (`ActionRemoteDelete` instead of `ActionLocalDelete`), and interrupted downloads could still no-op when baseline metadata said the file was already synced.
+- The original live recovery investigation exposed that replay depended on queue-style `remote_state` lifecycle rather than durable remote truth plus baseline reconciliation, which made one-shot recovery brittle and over-coupled to startup lane repair.
 - Merged fix: `74da628` (`fix: replay crash recovery in one-shot sync (#420)`).
-Resolution / mitigation: One-shot startup now consumes due retry rows immediately, preserves delete replay as `ActionLocalDelete`, and carries an explicit forced-download hint through planning so missing local files are redownloaded even without a fresh delta event.  
+Resolution / mitigation: The sync engine now persists remote truth in `remote_state`, observes both sides in every mode, and recomputes reconciliation from `baseline + remote_state + local disk`. Directional runs can therefore defer forbidden-direction work without losing it, and later runs settle already-observed remote drift directly from durable truth instead of from crash-shaped queue lanes.  
 Promoted docs: [sync-store.md](../design/sync-store.md), [sync-engine.md](../design/sync-engine.md)
 
 ## LI-20260405-04: Fast E2E download-only tests assumed delta visibility too early
