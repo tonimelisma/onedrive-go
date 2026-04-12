@@ -1,2 +1,2 @@
-// Package devtool provides repo-owned verification and worktree helpers.
+// Package devtool provides repo-owned verification, benchmarking, and worktree helpers.
 package devtool

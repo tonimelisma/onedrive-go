@@ -79,6 +79,79 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.True(t, got.ClassifyLiveQuirks)
 }
 
+// Validates: R-6.10.14
+func TestNewBenchCmdRequiresScenarioFlag(t *testing.T) {
+	t.Parallel()
+
+	cmd := newBenchCmd(
+		func() (string, error) { return testRepoRoot, nil },
+		func(context.Context, devtool.BenchOptions) error { return nil },
+	)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required flag")
+}
+
+// Validates: R-6.10.14
+func TestNewBenchCmdDefaultsSubjectToOnedriveGo(t *testing.T) {
+	t.Parallel()
+
+	var got devtool.BenchOptions
+
+	cmd := newBenchCmd(
+		func() (string, error) { return testRepoRoot, nil },
+		func(_ context.Context, opts devtool.BenchOptions) error {
+			got = opts
+			return nil
+		},
+	)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--scenario", "startup-empty-config"})
+
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, testRepoRoot, got.RepoRoot)
+	assert.Equal(t, devtool.DefaultBenchSubjectID, got.Subject)
+	assert.Equal(t, "startup-empty-config", got.Scenario)
+}
+
+// Validates: R-6.10.14
+func TestNewBenchCmdPassesFlagsThrough(t *testing.T) {
+	t.Parallel()
+
+	var got devtool.BenchOptions
+
+	cmd := newBenchCmd(
+		func() (string, error) { return testRepoRoot, nil },
+		func(_ context.Context, opts devtool.BenchOptions) error {
+			got = opts
+			return nil
+		},
+	)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{
+		"--scenario", "startup-empty-config",
+		"--subject", "onedrive-go",
+		"--runs", "9",
+		"--warmup", "2",
+		"--json",
+		"--result-json", "/tmp/bench-result.json",
+	})
+
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, testRepoRoot, got.RepoRoot)
+	assert.Equal(t, "startup-empty-config", got.Scenario)
+	assert.Equal(t, "onedrive-go", got.Subject)
+	assert.Equal(t, 9, got.Runs)
+	assert.Equal(t, 2, got.Warmup)
+	assert.True(t, got.JSON)
+	assert.Equal(t, "/tmp/bench-result.json", got.ResultJSONPath)
+}
+
 // Validates: R-6.2.1
 func TestNewStateAuditCmdRequiresDBFlag(t *testing.T) {
 	t.Parallel()
@@ -289,7 +362,7 @@ func TestNewRootCmd(t *testing.T) {
 	cmd := newRootCmd()
 	require.NotNil(t, cmd)
 	assert.Equal(t, "devtool", cmd.Use)
-	assert.Len(t, cmd.Commands(), 5)
+	assert.Len(t, cmd.Commands(), 6)
 }
 
 // Validates: R-6.2.1
@@ -313,6 +386,15 @@ func TestDefaultVerifyWrapsRunVerifyError(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "run verify")
+}
+
+// Validates: R-6.10.14
+func TestDefaultBenchWrapsRunBenchError(t *testing.T) {
+	t.Parallel()
+
+	err := defaultBench(context.Background(), devtool.BenchOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run bench")
 }
 
 // Validates: R-6.2.1
