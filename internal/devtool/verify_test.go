@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -38,6 +39,8 @@ type fakeRunner struct {
 	combinedErr         error
 	combinedErrByKey    map[string]error
 }
+
+const dependencyGraphFixtureFallbackGoVersion = "1.24.0"
 
 func (f *fakeRunner) Run(
 	_ context.Context,
@@ -1507,9 +1510,24 @@ func writeDependencyGraphModule(t *testing.T, repoRoot string) {
 	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "internal"), 0o750))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repoRoot, "go.mod"),
-		[]byte("module github.com/tonimelisma/onedrive-go\n\ngo 1.25.0\n"),
+		[]byte(fmt.Sprintf("module github.com/tonimelisma/onedrive-go\n\ngo %s\n", dependencyGraphFixtureGoVersion())),
 		0o600,
 	))
+}
+
+func dependencyGraphFixtureGoVersion() string {
+	version := strings.TrimPrefix(runtime.Version(), "go")
+	if version == runtime.Version() || version == "" {
+		return dependencyGraphFixtureFallbackGoVersion
+	}
+
+	for _, r := range version {
+		if (r < '0' || r > '9') && r != '.' {
+			return dependencyGraphFixtureFallbackGoVersion
+		}
+	}
+
+	return version
 }
 
 func writeDependencyGraphPackage(t *testing.T, repoRoot string, name string, imports ...string) {
