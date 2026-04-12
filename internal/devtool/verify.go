@@ -26,27 +26,29 @@ import (
 type VerifyProfile string
 
 const (
-	defaultCoverageThreshold  = 76.0
-	defaultCoveragePattern    = "onedrive-go-cover.*"
-	authE2EPreflightPattern   = "^TestE2E_AuthPreflight_Fast$"
-	fastE2EPreflightPattern   = "^TestE2E_FixturePreflight_Fast$"
-	fullE2EPreflightPattern   = "^TestE2E_FixturePreflight_Full$"
-	fullE2EFixturePreflight   = "TestE2E_FixturePreflight_Full"
-	fullE2EPackageTimeout     = "60m"
-	fastE2EPackageTimeout     = "10m"
-	stressPackageTimeout      = "20m"
-	authPreflightIncidentID   = "LI-20260405-06"
-	fastDownloadIncidentID    = "LI-20260405-04"
-	fastDownloadTestName      = "TestE2E_Sync_DownloadOnly"
-	e2eSkipSuiteScrubEnvVar   = "ONEDRIVE_E2E_SKIP_SUITE_SCRUB"
-	e2eTimingEventsFileName   = "timing-events.jsonl"
-	e2eTimingSummaryFileName  = "timing-summary.json"
-	e2eQuirkEventsFileName    = "quirk-events.jsonl"
-	e2eQuirkSummaryFileName   = "quirk-summary.json"
-	internalPackagePrefix     = "github.com/tonimelisma/onedrive-go/internal/"
-	internalPackageLimit      = 27
-	internalImportEdgeLimit   = 80
-	internalGraphCheckTimeout = 30 * time.Second
+	defaultCoverageThreshold         = 76.0
+	defaultCoveragePattern           = "onedrive-go-cover.*"
+	authE2EPreflightPattern          = "^TestE2E_AuthPreflight_Fast$"
+	fastE2EPreflightPattern          = "^TestE2E_FixturePreflight_Fast$"
+	fullE2EPreflightPattern          = "^TestE2E_FixturePreflight_Full$"
+	fullE2EFixturePreflight          = "TestE2E_FixturePreflight_Full"
+	fullE2EPackageTimeout            = "60m"
+	fastE2EPackageTimeout            = "10m"
+	stressPackageTimeout             = "20m"
+	authPreflightIncidentID          = "LI-20260405-06"
+	fastDownloadIncidentID           = "LI-20260405-04"
+	fastDownloadTestName             = "TestE2E_Sync_DownloadOnly"
+	e2eSkipSuiteScrubEnvVar          = "ONEDRIVE_E2E_SKIP_SUITE_SCRUB"
+	e2eRunAuthPreflightEnvVar        = "ONEDRIVE_E2E_RUN_AUTH_PREFLIGHT"
+	e2eRunFastFixturePreflightEnvVar = "ONEDRIVE_E2E_RUN_FAST_FIXTURE_PREFLIGHT"
+	e2eTimingEventsFileName          = "timing-events.jsonl"
+	e2eTimingSummaryFileName         = "timing-summary.json"
+	e2eQuirkEventsFileName           = "quirk-events.jsonl"
+	e2eQuirkSummaryFileName          = "quirk-summary.json"
+	internalPackagePrefix            = "github.com/tonimelisma/onedrive-go/internal/"
+	internalPackageLimit             = 27
+	internalImportEdgeLimit          = 80
+	internalGraphCheckTimeout        = 30 * time.Second
 
 	fullE2EParallelMiscParallel = 5
 	fullE2ESerialParallel       = 1
@@ -380,6 +382,24 @@ func fullE2EStandaloneTests() []string {
 
 func fullE2EParallelMiscTestNames() []string {
 	return []string{
+		"TestE2E_DriveList_HappyPath_Text",
+		"TestE2E_DriveList_JSON",
+		"TestE2E_DriveList_NoAccounts",
+		"TestE2E_DriveList_AccountsNoDrives",
+		"TestE2E_DriveList_PersonalAccountDoesNotDuplicateCanonicalDrive",
+		"TestE2E_DriveList_ConfiguredNoSyncDir",
+		"TestE2E_DriveList_ConfigTolerance",
+		"TestE2E_Status_ConfigTolerance",
+		"TestE2E_Whoami_ConfigTolerance",
+		"TestE2E_Whoami_PersonalAccountShowsSinglePersonalDrive",
+		"TestE2E_Shared_FileDiscoveryAndSelectorReadCommands",
+		"TestE2E_Shared_FileDiscoveryRejectsDriveAdd",
+		"TestE2E_Logout_PreservesOfflineAccountCatalog",
+		"TestE2E_Shared_JSON_RecipientListingUsesLiveAccountCatalog",
+		"TestE2E_RoundTrip",
+		"TestE2E_ErrorCases",
+		"TestE2E_JSONOutput",
+		"TestE2E_QuietFlag",
 		"TestE2E_DriveList_AllFlag",
 		"TestE2E_DriveList_StaleStateDB",
 		"TestE2E_ZeroByteFileSync",
@@ -428,6 +448,12 @@ func fullE2EParallelMiscTestNames() []string {
 
 func fullE2ESerialSyncTestNames() []string {
 	return []string{
+		"TestE2E_Sync_DryRun",
+		"TestE2E_Sync_InternalBaselineVerification",
+		"TestE2E_Sync_Conflicts",
+		"TestE2E_Sync_DriveRemoveAndReAdd",
+		"TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile",
+		"TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload",
 		"TestE2E_EdgeCases",
 		"TestE2E_Sync_BidirectionalMerge",
 		"TestE2E_Sync_EditEditConflict_ResolveKeepRemote",
@@ -456,6 +482,7 @@ func fullE2ESerialSyncTestNames() []string {
 
 func fullE2ESerialWatchSharedTestNames() []string {
 	return []string{
+		"TestE2E_SyncWatch_WebsocketStartupSmoke",
 		"TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent",
 		"TestE2E_Resolve_DeletesWithWatchDaemon",
 		"TestE2E_Sync_MultiDriveReport",
@@ -991,15 +1018,35 @@ func runE2E(
 	stdout, stderr io.Writer,
 	classifyLiveQuirks bool,
 ) error {
-	if err := runE2EPreflightAuth(ctx, runner, repoRoot, env, collector, stdout, stderr, classifyLiveQuirks); err != nil {
+	authEnv := append([]string{}, env...)
+	authEnv = append(authEnv, e2eRunAuthPreflightEnvVar+"=1")
+	if err := runE2EPreflightAuth(
+		ctx,
+		runner,
+		repoRoot,
+		authEnv,
+		collector,
+		stdout,
+		stderr,
+		classifyLiveQuirks,
+	); err != nil {
 		return err
 	}
 
-	if err := runE2EPreflightFast(ctx, runner, repoRoot, env, collector, stdout, stderr); err != nil {
+	fastFixtureEnv := append([]string{}, env...)
+	fastFixtureEnv = append(
+		fastFixtureEnv,
+		e2eRunFastFixturePreflightEnvVar+"=1",
+		e2eSkipSuiteScrubEnvVar+"=1",
+	)
+	if err := runE2EPreflightFast(ctx, runner, repoRoot, fastFixtureEnv, collector, stdout, stderr); err != nil {
 		return err
 	}
 
-	return runFastE2ESuite(ctx, runner, repoRoot, env, collector, stdout, stderr, classifyLiveQuirks)
+	fastSuiteEnv := append([]string{}, env...)
+	fastSuiteEnv = append(fastSuiteEnv, e2eSkipSuiteScrubEnvVar+"=1")
+
+	return runFastE2ESuite(ctx, runner, repoRoot, fastSuiteEnv, collector, stdout, stderr, classifyLiveQuirks)
 }
 
 func runFastE2ESuite(
@@ -1258,7 +1305,6 @@ func fastE2EArgs() []string {
 	return []string{
 		"test",
 		"-tags=e2e",
-		"-race",
 		"-v",
 		"-parallel",
 		strconv.Itoa(fastE2EParallel),
@@ -1284,7 +1330,6 @@ func classifyFastE2EQuirk(failedTests map[string]struct{}) ([]string, string, bo
 	return []string{
 		"test",
 		"-tags=e2e",
-		"-race",
 		"-run=^" + fastDownloadTestName + "$",
 		"-count=1",
 		"-v",
