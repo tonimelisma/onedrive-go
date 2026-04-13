@@ -21,19 +21,35 @@ type resolveConflictStore interface {
 }
 
 func runApproveDeletes(ctx context.Context, cc *CLIContext) error {
-	_, err := routeDurableIntent(
-		ctx,
-		func(ctx context.Context) (struct{}, error) {
-			return struct{}{}, approveDeletesDirect(ctx, cc)
-		},
-		func(ctx context.Context, client *controlSocketClient) (struct{}, error) {
-			if err := client.approveHeldDeletes(ctx, cc.Cfg.CanonicalID); err != nil {
-				return struct{}{}, fmt.Errorf("approve held deletes via daemon: %w", err)
-			}
-			return struct{}{}, writeln(cc.Output(), resolveApproveDeletesSuccess)
-		},
-	)
-	return err
+	probe, err := probeControlOwner(ctx)
+	if err != nil && probe.state == controlOwnerStateProbeFailed {
+		return fmt.Errorf("probe control owner: %w", err)
+	}
+
+	switch probe.state {
+	case controlOwnerStateOneShotOwner, controlOwnerStateNoSocket, controlOwnerStatePathUnavailable:
+		return approveDeletesDirect(ctx, cc)
+	case controlOwnerStateWatchOwner:
+		watchErr := probe.client.approveHeldDeletes(ctx, cc.Cfg.CanonicalID)
+		if watchErr != nil {
+			watchErr = fmt.Errorf("approve held deletes via daemon: %w", watchErr)
+		}
+		if watchErr == nil {
+			return writeln(cc.Output(), resolveApproveDeletesSuccess)
+		}
+		if isControlDaemonError(watchErr) {
+			return watchErr
+		}
+		if isControlSocketGone(watchErr) {
+			return approveDeletesDirect(ctx, cc)
+		}
+
+		return watchErr
+	case controlOwnerStateProbeFailed:
+		return fmt.Errorf("probe control owner: %w", err)
+	default:
+		return fmt.Errorf("probe control owner: unhandled probe state %q", probe.state)
+	}
 }
 
 func approveDeletesDirect(ctx context.Context, cc *CLIContext) error {
@@ -114,25 +130,42 @@ func requestConflictResolution(
 	id string,
 	resolution string,
 ) (syncengine.ConflictRequestResult, error) {
-	return routeDurableIntent(
-		ctx,
-		func(ctx context.Context) (syncengine.ConflictRequestResult, error) {
-			result, err := store.RequestConflictResolution(ctx, id, resolution)
-			if err != nil {
-				return syncengine.ConflictRequestResult{}, fmt.Errorf("queue conflict resolution: %w", err)
+	probe, err := probeControlOwner(ctx)
+	if err != nil && probe.state == controlOwnerStateProbeFailed {
+		return syncengine.ConflictRequestResult{}, fmt.Errorf("probe control owner: %w", err)
+	}
+
+	switch probe.state {
+	case controlOwnerStateOneShotOwner, controlOwnerStateNoSocket, controlOwnerStatePathUnavailable:
+		result, requestErr := store.RequestConflictResolution(ctx, id, resolution)
+		if requestErr != nil {
+			return syncengine.ConflictRequestResult{}, fmt.Errorf("queue conflict resolution: %w", requestErr)
+		}
+
+		return result, nil
+	case controlOwnerStateWatchOwner:
+		status, requestErr := probe.client.requestConflictResolution(ctx, cc.Cfg.CanonicalID, id, resolution)
+		if requestErr == nil {
+			return syncengine.ConflictRequestResult{Status: syncengine.ConflictRequestStatus(status)}, nil
+		}
+		if isControlDaemonError(requestErr) {
+			return syncengine.ConflictRequestResult{}, requestErr
+		}
+		if isControlSocketGone(requestErr) {
+			result, directErr := store.RequestConflictResolution(ctx, id, resolution)
+			if directErr != nil {
+				return syncengine.ConflictRequestResult{}, fmt.Errorf("queue conflict resolution: %w", directErr)
 			}
 
 			return result, nil
-		},
-		func(ctx context.Context, client *controlSocketClient) (syncengine.ConflictRequestResult, error) {
-			status, err := client.requestConflictResolution(ctx, cc.Cfg.CanonicalID, id, resolution)
-			if err != nil {
-				return syncengine.ConflictRequestResult{}, err
-			}
+		}
 
-			return syncengine.ConflictRequestResult{Status: syncengine.ConflictRequestStatus(status)}, nil
-		},
-	)
+		return syncengine.ConflictRequestResult{}, requestErr
+	case controlOwnerStateProbeFailed:
+		return syncengine.ConflictRequestResult{}, fmt.Errorf("probe control owner: %w", err)
+	default:
+		return syncengine.ConflictRequestResult{}, fmt.Errorf("probe control owner: unhandled probe state %q", probe.state)
+	}
 }
 
 func queueEachConflictResolution(

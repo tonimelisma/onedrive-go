@@ -133,6 +133,7 @@ type CLIContext struct {
 	Runtime                       *driveops.SessionRuntime      // nil for auth/account commands until Phase 2 swaps in a holder-backed runtime
 	PerfSession                   *perf.Session                 // command-scoped performance collector/logging session
 	syncWatchRunner               syncWatchRunner               // test-only seam for sync --watch command coverage
+	syncRunOnceRunner             syncRunOnceRunner             // test-only seam for one-shot sync command coverage
 	syncDaemonOrchestratorFactory syncDaemonOrchestratorFactory // test-only seam below syncWatchRunner for real daemon-path coverage
 	logCloser                     io.Closer                     // log file closer; nil when no log file is configured
 	statusMu                      sync.Mutex                    // guards statusErr for concurrent progress callbacks

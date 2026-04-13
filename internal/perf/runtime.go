@@ -7,7 +7,8 @@ import (
 
 type Runtime struct {
 	collector *Collector
-	capture   *CaptureManager
+	captureMu sync.Mutex
+	capturing bool
 
 	mu     sync.RWMutex
 	drives map[string]*Collector
@@ -16,7 +17,6 @@ type Runtime struct {
 func NewRuntime(parent *Collector) *Runtime {
 	return &Runtime{
 		collector: NewCollector(parent),
-		capture:   NewCaptureManager(),
 		drives:    make(map[string]*Collector),
 	}
 }
@@ -78,10 +78,23 @@ func (r *Runtime) AggregateSnapshot() Snapshot {
 }
 
 func (r *Runtime) Capture(ctx context.Context, opts CaptureOptions) (CaptureResult, error) {
-	if r == nil || r.capture == nil {
+	if r == nil {
 		return CaptureResult{}, ErrCaptureUnavailable
 	}
 
+	r.captureMu.Lock()
+	if r.capturing {
+		r.captureMu.Unlock()
+		return CaptureResult{}, ErrCaptureInProgress
+	}
+	r.capturing = true
+	r.captureMu.Unlock()
+	defer func() {
+		r.captureMu.Lock()
+		r.capturing = false
+		r.captureMu.Unlock()
+	}()
+
 	aggregate := r.AggregateSnapshot()
-	return r.capture.Capture(ctx, opts, &aggregate, r.SnapshotByDrive())
+	return captureBundle(ctx, opts, &aggregate, r.SnapshotByDrive())
 }

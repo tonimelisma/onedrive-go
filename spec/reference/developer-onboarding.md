@@ -351,7 +351,7 @@ organized by file families.
 | `drive*.go` | Drive add/list/search/remove and drive selection flows |
 | `get*.go`, `put*.go`, `ls.go`, `rm.go`, `mkdir.go`, `mv.go`, `cp.go`, `stat.go` | User-facing file commands |
 | `shared*.go` | Shared item discovery, selection, and shared-target bootstrap |
-| `sync*.go`, `durable_intent_router.go`, `control_client.go` | Sync command wiring, daemon/control-socket interaction, durable user intent routing |
+| `sync*.go`, `resolve*.go`, `recover*.go`, `control_client.go` | Sync command wiring, daemon/control-socket interaction, and durable user-intent workflows |
 | `status*.go`, `resolve*.go`, `recover*.go`, `recycle_bin*.go`, `perf.go` | Read-only status, repair, resolution, recycle-bin, and perf surfaces |
 | `degraded_discovery.go` | CLI-owned degraded discovery behavior and presentation |
 

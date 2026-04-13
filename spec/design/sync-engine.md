@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, sync_helpers.go
+GOVERNS: internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/engine_shortcuts.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
 Implements: R-2.1 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.11 [verified], R-2.3.12 [verified], R-2.4.4 [verified], R-2.4.5 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.3 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.6 [verified], R-2.10.7 [verified], R-2.10.8 [verified], R-2.10.9 [verified], R-2.10.10 [verified], R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.14 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2.10.19 [verified], R-2.10.20 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.26 [verified], R-2.10.28 [verified], R-2.10.29 [verified], R-2.10.30 [verified], R-2.10.31 [verified], R-2.10.36 [verified], R-2.10.37 [verified], R-2.10.38 [verified], R-2.10.43 [verified], R-2.10.45 [verified], R-2.10.46 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified], R-2.14.5 [verified], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.6.7 [verified], R-6.6.8 [verified], R-6.6.9 [verified], R-6.6.10 [verified], R-6.6.12 [verified], R-6.6.13 [verified], R-6.7.27 [verified], R-6.8.15 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.10 [verified], R-6.10.13 [verified]
 
@@ -743,12 +743,14 @@ rules. Shortcut removal still owns the side effects that clear any persisted
 `perm:remote` scope under the removed shortcut and discard its held failures,
 preventing stale recursive write suppression after the share disappears.
 
-## CLI / Engine Boundary (`sync_helpers.go`)
+## CLI / Engine Boundary (`sync_flow.go`, `sync_runtime.go`)
 
-`sync_helpers.go` is the root-package bridge into the single-drive engine. It
-constructs `sync.Engine` instances for engine-facing flows such as one-shot
-sync and watch bootstrap, while the multi-drive `sync` command itself is
-governed by `sync-control-plane.md`.
+There is no standalone CLI-to-engine bridge file anymore. The `sync` command's
+same-package workflow code calls `sync.NewDriveEngine` directly where it needs
+the single-drive runtime, while `runSyncCommand`, `runSyncWatch`, and
+`runSyncOnce` in `internal/cli/sync_flow.go` own the command-side dispatch
+between one-shot and watch execution. `internal/cli/sync_runtime.go` continues
+to own the watch daemon bootstrap path governed by `sync-control-plane.md`.
 
 ## Conflict Resolution
 
