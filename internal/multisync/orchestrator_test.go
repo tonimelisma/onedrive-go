@@ -60,18 +60,13 @@ func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, drives ...*con
 	t.Helper()
 
 	holder := config.NewHolder(config.DefaultConfig(), cfgPath)
-	provider := driveops.NewSessionProvider(
-		holder,
-		driveops.StaticClientResolver(&http.Client{}, &http.Client{}),
-		"test/1.0",
-		slog.Default(),
-	)
+	provider := driveops.NewSessionRuntime(holder, "test/1.0", slog.Default())
 
 	return &OrchestratorConfig{
-		Holder:   holder,
-		Drives:   drives,
-		Provider: provider,
-		Logger:   slog.Default(),
+		Holder:  holder,
+		Drives:  drives,
+		Runtime: provider,
+		Logger:  slog.Default(),
 	}
 }
 
@@ -274,7 +269,7 @@ func TestRunOnce_ZeroDrives(t *testing.T) {
 func TestRunOnce_OneDrive_Success(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:test@example.com", "Test")
 	cfg := testOrchestratorConfig(t, rd)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	expectedReport := &syncengine.Report{
 		Mode:      syncengine.SyncBidirectional,
@@ -300,7 +295,7 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:fail@example.com", "Failing")
 	rd2 := testResolvedDrive(t, "personal:ok@example.com", "Working")
 	cfg := testOrchestratorConfig(t, rd1, rd2)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	errDelta := errors.New("delta gone")
 	okReport := &syncengine.Report{Mode: syncengine.SyncBidirectional, Uploads: 2}
@@ -341,7 +336,7 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:panic@example.com", "Panicking")
 	rd2 := testResolvedDrive(t, "personal:stable@example.com", "Stable")
 	cfg := testOrchestratorConfig(t, rd1, rd2)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	stableReport := &syncengine.Report{Mode: syncengine.SyncBidirectional, Downloads: 1}
 
@@ -381,7 +376,7 @@ func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:websocket@example.com", "Websocket")
 	rd.Websocket = true
 	cfg := testOrchestratorConfig(t, rd)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 	var captured *engineFactoryRequest
@@ -408,7 +403,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	rd.Websocket = true
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 	var captured *engineFactoryRequest
@@ -454,7 +449,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 func TestRunOnce_ContextCanceled(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:cancel@example.com", "Cancel")
 	cfg := testOrchestratorConfig(t, rd)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -473,7 +468,7 @@ func TestRunOnce_ContextCanceled(t *testing.T) {
 func TestRunOnce_EngineFactoryError(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:factory-err@example.com", "FactoryErr")
 	cfg := testOrchestratorConfig(t, rd)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
@@ -491,7 +486,7 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:storefail@example.com", "StoreFail")
 	rd2 := testResolvedDrive(t, "personal:healthy@example.com", "Healthy")
 	cfg := testOrchestratorConfig(t, rd1, rd2)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	okReport := &syncengine.Report{Mode: syncengine.SyncBidirectional, Downloads: 1}
 
@@ -532,7 +527,7 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:notoken@example.com", "NoToken")
 	cfg := testOrchestratorConfig(t, rd)
-	cfg.Provider.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	cfg.Runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return nil, errors.New("token file not found")
 	}
 
@@ -559,7 +554,7 @@ func TestRunOnce_ZeroDriveID_ReportsError(t *testing.T) {
 	require.True(t, rd.DriveID.IsZero())
 
 	cfg := testOrchestratorConfig(t, rd)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 
@@ -576,7 +571,7 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -672,7 +667,7 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:watch1@example.com", "Watch1")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 
@@ -719,7 +714,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 	rd2 := testResolvedDrive(t, "personal:multi2@example.com", "Multi2")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 
@@ -764,7 +759,7 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 
@@ -866,7 +861,7 @@ func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	seedControlSocketIntentStore(t, rd)
 
@@ -925,7 +920,7 @@ func TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector(t *testing.
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	seedControlSocketIntentStore(t, rd)
 
@@ -1101,7 +1096,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd1.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 
@@ -1156,7 +1151,7 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 
@@ -1212,7 +1207,7 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 
@@ -1268,7 +1263,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 
@@ -1326,7 +1321,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
-	cfg.Provider.TokenSourceFn = stubTokenSourceFn
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
 

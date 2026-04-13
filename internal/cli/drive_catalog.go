@@ -11,8 +11,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 )
 
 // sharePointSiteLimit caps the number of SharePoint sites fetched during
@@ -145,7 +145,7 @@ func discoverAvailableDrives(
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	baseURL string,
-	httpProvider *graphhttp.Provider,
+	runtime *driveops.SessionRuntime,
 ) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
 	tokens := config.DiscoverTokens(logger)
 	if len(tokens) == 0 {
@@ -175,7 +175,7 @@ func discoverAvailableDrives(
 				logger,
 				recorder,
 				baseURL,
-				httpProvider,
+				runtime,
 			)
 			mu.Lock()
 			entries = append(entries, tokenEntries...)
@@ -204,7 +204,7 @@ func discoverDrivesForToken(
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	baseURL string,
-	httpProvider *graphhttp.Provider,
+	runtime *driveops.SessionRuntime,
 ) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
@@ -220,7 +220,7 @@ func discoverDrivesForToken(
 
 	client, clientErr := newGraphClientWithHTTP(
 		baseURL,
-		httpProvider.BootstrapMeta(),
+		runtime.BootstrapMeta(),
 		ts,
 		logger,
 	)

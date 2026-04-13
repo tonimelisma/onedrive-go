@@ -165,7 +165,7 @@ func (cc *CLIContext) sharedBootstrapMetaClient(
 		return nil, "", fmt.Errorf("load token source: %w", err)
 	}
 
-	client, err := newGraphClientWithHTTP(cc.graphBaseURL(), cc.httpProvider().BootstrapMeta(), ts, cc.Logger)
+	client, err := newGraphClientWithHTTP(cc.graphBaseURL(), cc.runtime().BootstrapMeta(), ts, cc.Logger)
 	if err != nil {
 		return nil, "", fmt.Errorf("create bootstrap graph client: %w", err)
 	}
@@ -184,18 +184,11 @@ func (cc *CLIContext) sharedTargetClients(ctx context.Context, ref sharedref.Ref
 	}
 
 	accountCID = remapCanonicalIDWithResult(accountCID, &result)
-	httpClients := cc.httpProvider().InteractiveForSharedTarget(accountCID.Email(), ref.RemoteDriveID, ref.RemoteItemID)
-	provider := driveops.NewSessionProvider(
-		nil,
-		driveops.StaticClientResolver(httpClients.Meta, httpClients.Transfer),
-		"onedrive-go/"+version,
-		cc.Logger,
-	)
 	if cc.GraphBaseURL != "" {
-		provider.GraphBaseURL = cc.GraphBaseURL
+		cc.runtime().GraphBaseURL = cc.GraphBaseURL
 	}
 
-	clients, err := provider.ClientsForAccount(ctx, accountCID)
+	clients, err := cc.runtime().SharedTargetClients(ctx, accountCID, ref.RemoteDriveID, ref.RemoteItemID)
 	if err != nil {
 		return nil, fmt.Errorf("create account clients: %w", err)
 	}

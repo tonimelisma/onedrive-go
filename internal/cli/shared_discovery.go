@@ -136,7 +136,7 @@ func discoverSharedTargetsForAccount(
 
 		client, err := newGraphClientWithHTTP(
 			cc.graphBaseURL(),
-			cc.httpProvider().BootstrapMeta(),
+			cc.runtime().BootstrapMeta(),
 			ts,
 			logger,
 		)

@@ -11,11 +11,11 @@ The root package is a thin process entrypoint. The Cobra command tree, CLI boots
 `internal/cli/root.go` handles global flags (`--config`, `--drive`, `--verbose`, `--quiet`, `--debug`, `--json`), config loading via `PersistentPreRunE`, and drive filtering or drive resolution as appropriate for the command. Cobra `RunE` functions are intentionally thin: they parse command-local flags and delegate to command-family helper functions that take `*CLIContext` plus explicit inputs. For larger command families, the `*.go` Cobra wiring file stays small while sibling `auth_*.go`, `drive_*.go`, `status_*.go`, `resolve_*.go`, `recycle_bin_*.go`, `recover_*.go`, and `sync_*.go` files own the workflow logic for those commands. `internal/cli/sync.go` stays in the same package because multi-drive sync reuses the same Phase 1 CLI context but performs its own multi-drive resolution.
 Sync-specific report rendering and watch bootstrap helpers stay in the same package, but they live outside the Cobra wiring file so `internal/cli/sync.go` remains focused on command construction, flag parsing, and multi-drive resolution.
 
-`internal/cli` is also the composition root for Graph-facing HTTP runtime
-policy. Each command/watch runtime owns one `graphhttp.Provider`, which it
-uses to choose bootstrap, target-scoped interactive, or sync HTTP profiles
-without making `internal/cli` the long-term owner of transport constants or
-retry mechanics.
+`internal/cli` is also the composition root for Graph-facing runtime assembly.
+Each command/watch runtime owns one `driveops.SessionRuntime`, which chooses
+bootstrap, target-scoped interactive, or sync HTTP profiles without making
+`internal/cli` the long-term owner of transport constants, retry mechanics,
+or Graph client caches.
 
 `CLIContext` owns two distinct output boundaries:
 
@@ -160,7 +160,7 @@ repair around the config mutation:
 
 - exact old `--account` and exact old canonical `--drive` selectors are remapped in memory
 - one concise status message is emitted for the renamed account
-- single-drive file/session bootstrap flushes the `SessionProvider` token cache,
+- single-drive file/session bootstrap flushes the `SessionRuntime` token cache,
   reloads config, re-resolves the selected drive, and then creates the session
 - shared-target bootstrap rewrites the transient recipient account email before
   the share URL or shared selector is resolved further
@@ -379,8 +379,8 @@ Implements: R-6.6.14 [verified], R-6.6.15 [verified], R-6.6.16 [verified]
 - Command handlers are wiring only. Workflow-owned CLI files own the runtime behavior around `CLIContext`: `auth_*.go` handles login/logout/whoami flows, `drive_*.go` handles list/add/remove/search, `resolve_*.go` owns held-delete approval and conflict-request routing, shared/account-catalog helpers own discovery and auth-required projection, `status_*.go` owns account/drive aggregation plus read-only sync-state inspection, sync-control helpers own pause/resume config mutation, `recycle_bin_*.go` owns list/restore/empty flows, `sync_*.go` owns multi-drive command assembly, and `recover_*.go` owns sync-database recovery.
 - Shared account-catalog helpers own lenient config loading, warning logging, offline account/auth projection, the best-effort account-identity refresh used before live discovery commands build their catalogs, and the typed drive-list snapshot (`configured`, `available`, `accounts_requiring_auth`, `accounts_degraded`) that drive helpers render.
 - Shared discovery helpers are the CLI-owned live-discovery boundary for shared items. They own live search, target normalization, enrichment, deduplication, and auth-vs-degraded classification for `shared`, the shared-folder portion of `drive list`, and name-based `drive add`. They consume whatever refreshed account-catalog slice the caller passes; caller-owned account filtering stays outside this core so `drive list` can remain inventory-consistent while `shared` and name-based `drive add` still honor `--account`. Per-account discovery tries all available token IDs before surfacing auth-required or degraded output. It does not perform its own `/me` reconciliation pass.
-- `SessionProvider` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
-- `CLIContext` owns one `graphhttp.Provider` per command/watch runtime. Bootstrap/auth-discovery flows use `BootstrapMeta()`. Once both account and remote target identity are known, CLI passes target-scoped interactive client resolvers into `driveops.SessionProvider`: configured drives key by drive ID, configured shared roots key by remote root item, and direct shared-item commands key by `(remoteDriveID, remoteItemID)`. Sync paths request `Sync()` profiles instead. HTTP policy constants and client reuse live in `internal/graphhttp`, not `internal/cli`.
+- `SessionRuntime` caches `TokenSource`s by token file path — multiple drives sharing an account share one `TokenSource`, preventing OAuth2 refresh token rotation races.
+- `CLIContext` owns one `driveops.SessionRuntime` per command/watch runtime. Bootstrap/auth-discovery flows use its bootstrap metadata client. Once both account and remote target identity are known, the runtime chooses target-scoped interactive clients directly: configured drives key by drive ID, configured shared roots key by remote root item, and direct shared-item commands key by `(remoteDriveID, remoteItemID)`. Sync paths request the runtime's non-retrying sync sessions instead. HTTP profile constants stay in `internal/graphhttp`; runtime reuse lives in `driveops`, not `internal/cli`.
 - `CLIContext` is the sole owner of command-scoped log-file closers. When sync bootstrap rebuilds the logger from the raw logging config, it swaps the active logger through the CLI context, closes the old closer before installing the replacement, and relies on the top-level `mainWithWriters` runner to close the final active closer exactly once after `Execute()` returns. This top-level cleanup is intentionally outside Cobra post-run hooks so command-log shutdown still happens when a leaf command exits early with an error.
 - `CLIContext` is also the sole owner of command-scoped perf sessions. The top-level `mainWithWriters` runner completes the active session after `Execute()` returns so final perf summaries still emit when Cobra returns an error.
 - CLI handlers use `cmd.Context()` for signal propagation. Exception: upload session cancel paths use `context.Background()` because the cancel must succeed even when the original context is done.
