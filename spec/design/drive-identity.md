@@ -1,6 +1,6 @@
 # Drive Identity
 
-GOVERNS: internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go, drive.go, purge.go
+GOVERNS: internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go, internal/cli/drive.go, internal/cli/drive_*.go, purge.go
 
 Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [verified], R-3.3.13 [verified], R-6.7.2 [verified], R-3.6.4 [verified], R-3.6.5 [verified], R-6.10.6 [verified]
 
@@ -86,11 +86,11 @@ User-editable. Used in CLI output, `--drive` matching, error messages, and logs.
 
 Resolution order: exact canonical ID → exact display_name (case-insensitive) → substring on canonical ID. Ambiguous match → error with suggestions.
 
-## CLI Drive Command (`drive.go`)
+## CLI Drive Command (`drive.go`, `drive_*.go`)
 
 Implements: R-3.3.2 [verified], R-3.3.3 [verified], R-3.3.4 [verified], R-3.3.5 [verified], R-3.3.6 [verified], R-3.3.7 [verified], R-3.3.8 [verified], R-3.3.9 [verified], R-3.3.12 [verified], R-3.3.13 [verified], R-3.6.1 [verified], R-3.6.2 [verified], R-3.6.3 [verified]
 
-`drive list`, `drive add`, `drive remove`, `drive search`. Drive add creates a config section with auto-generated display_name and sync_dir. It accepts canonical drive IDs, shared selectors, raw shared-folder URLs, and shared-folder name search terms; raw URLs and selectors are normalized to canonical shared drive IDs before config writes. Shared-folder name search uses the same shared-discovery projection as `shared` and the shared-folder portion of `drive list`, and it honors `--account` when present. Drive list annotates available drives with state DB presence (R-3.3.3), supports `--all` to remove the SharePoint site cap (R-3.3.4). Drive remove `--purge` works on unconfigured drives with orphaned state (R-3.3.8) and only purges drive-owned state; account-owned token/profile files remain until logout.
+`drive list`, `drive add`, `drive remove`, `drive search`. `internal/cli/drive.go` owns Cobra wiring and flag parsing; sibling `drive_*.go` files own catalog discovery, shared-target normalization, add/remove workflows, and output rendering. Drive add creates a config section with auto-generated display_name and sync_dir. It accepts canonical drive IDs, shared selectors, raw shared-folder URLs, and shared-folder name search terms; raw URLs and selectors are normalized to canonical shared drive IDs before config writes. Shared-folder name search uses the same shared-discovery projection as `shared` and the shared-folder portion of `drive list`, and it honors `--account` when present. Drive list annotates available drives with state DB presence (R-3.3.3), supports `--all` to remove the SharePoint site cap (R-3.3.4). Drive remove `--purge` works on unconfigured drives with orphaned state (R-3.3.8) and only purges drive-owned state; account-owned token/profile files remain until logout.
 
 Shared-folder discovery is best-effort live search via
 `GET /me/drive/root/search(q='*')` to satisfy `R-3.6.2`. Search hits are only

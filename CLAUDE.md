@@ -9,7 +9,7 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/graph/` | `spec/design/graph-client.md` | `spec/reference/graph-api-quirks.md` |
 | `internal/tokenfile/` | `spec/design/graph-client.md` | |
 | `internal/config/` | `spec/design/config.md` | |
-| `internal/driveid/`, `internal/cli/drive.go`, `internal/cli/drive_list.go`, `internal/cli/drive_add.go`, `internal/cli/drive_remove.go`, `internal/cli/drive_search.go` | `spec/design/drive-identity.md` | |
+| `internal/driveid/`, `internal/cli/drive*.go` | `spec/design/drive-identity.md` | |
 | `internal/driveops/`, `internal/cli/get.go`, `internal/cli/put.go` | `spec/design/drive-transfers.md` | |
 | `pkg/quickxorhash/` | `spec/design/drive-transfers.md` | |
 | `internal/retry/` | `spec/design/retry.md` | |
@@ -23,7 +23,7 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/sync/engine*.go`, `internal/sync/permissions.go`, `internal/sync/permission_*.go`, `internal/cli/sync_helpers.go`, `internal/cli/sync_flow.go`, `internal/cli/sync_runtime.go`, `internal/cli/sync_render.go` | `spec/design/sync-engine.md` | |
 | `internal/multisync/`, `internal/cli/sync.go` | `spec/design/sync-control-plane.md` | `spec/design/sync-engine.md`, `spec/design/config.md` |
 | `internal/sync/store*.go`, `internal/sync/db_repair.go`, `internal/sync/db_repair_test.go`, `internal/syncverify/`, `internal/cli/recover.go`, `internal/cli/recover_flow.go` | `spec/design/sync-store.md` | `spec/design/data-model.md`, `spec/design/sync-execution.md`, `spec/design/sync-engine.md` |
-| `internal/cli/root.go`, `internal/cli/httpclient.go`, `internal/cli/format.go`, `internal/cli/signal.go`, `internal/cli/pidfile.go`, `internal/cli/auth.go`, `internal/cli/auth_flow.go`, `internal/cli/account_catalog_snapshot.go`, `internal/cli/shared.go`, `internal/cli/ls.go`, `internal/cli/rm.go`, `internal/cli/mkdir.go`, `internal/cli/mv.go`, `internal/cli/cp.go`, `internal/cli/stat.go`, `internal/cli/pause.go`, `internal/cli/resume.go`, `internal/cli/sync_pause_resume.go`, `internal/cli/recycle_bin.go`, `internal/cli/recycle_bin_flow.go`, `internal/cli/status.go`, `internal/cli/status_snapshot.go`, `internal/cli/status_sync_state.go`, `internal/cli/status_render.go`, `internal/cli/perf.go`, `internal/cli/resolve.go`, `internal/cli/resolve_mutations.go`, `main.go` | `spec/design/cli.md` | |
+| `internal/cli/root.go`, `internal/cli/httpclient.go`, `internal/cli/format.go`, `internal/cli/signal.go`, `internal/cli/pidfile.go`, `internal/cli/auth*.go`, `internal/cli/account_catalog_snapshot.go`, `internal/cli/shared.go`, `internal/cli/ls.go`, `internal/cli/rm.go`, `internal/cli/mkdir.go`, `internal/cli/mv.go`, `internal/cli/cp.go`, `internal/cli/stat.go`, `internal/cli/pause.go`, `internal/cli/resume.go`, `internal/cli/sync_pause_resume.go`, `internal/cli/recycle_bin.go`, `internal/cli/recycle_bin_flow.go`, `internal/cli/status.go`, `internal/cli/status_snapshot.go`, `internal/cli/status_sync_state.go`, `internal/cli/status_render.go`, `internal/cli/perf.go`, `internal/cli/resolve.go`, `internal/cli/resolve_mutations.go`, `main.go` | `spec/design/cli.md` | |
 
 | Working on capability... | Requirements | Design docs |
 |--------------------------|-------------|-------------|
