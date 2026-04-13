@@ -143,6 +143,9 @@ performance data.
 
 - `internal/perf` owns command/session collectors, aggregate counter rollups,
   live per-drive snapshots, and opt-in capture bundle creation.
+- `internal/perf.Runtime` is the single owner of drive registration and
+  capture admission, so perf capture does not route through a second
+  extra runtime object just to gate one in-flight bundle.
 - `internal/cli` owns command-session lifetime and human-visible rendering:
   final/periodic log summaries, `status --perf`, and the `perf capture`
   command.

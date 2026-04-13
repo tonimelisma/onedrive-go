@@ -42,70 +42,7 @@ type syncRunOnceRunner func(
 	controlSocketPath string,
 ) []*multisync.DriveReport
 
-type syncCommandDeps struct {
-	watchRunner   syncWatchRunner
-	runOnceRunner syncRunOnceRunner
-}
-
-func defaultSyncCommandDeps(cc *CLIContext) syncCommandDeps {
-	deps := syncCommandDeps{
-		watchRunner: func(
-			ctx context.Context,
-			holder *config.Holder,
-			selectors []string,
-			mode syncengine.Mode,
-			opts syncengine.WatchOptions,
-			logger *slog.Logger,
-			statusWriter io.Writer,
-			controlSocketPath string,
-		) error {
-			if cc != nil && cc.syncDaemonOrchestratorFactory != nil {
-				return runSyncDaemonWithFactory(
-					ctx,
-					holder,
-					selectors,
-					mode,
-					opts,
-					logger,
-					statusWriter,
-					controlSocketPath,
-					cc.syncDaemonOrchestratorFactory,
-				)
-			}
-
-			return runSyncDaemon(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath)
-		},
-		runOnceRunner: func(
-			ctx context.Context,
-			holder *config.Holder,
-			drives []*config.ResolvedDrive,
-			mode syncengine.Mode,
-			opts syncengine.RunOptions,
-			logger *slog.Logger,
-			controlSocketPath string,
-		) []*multisync.DriveReport {
-			runtime := driveops.NewSessionRuntime(holder, "onedrive-go/"+version, logger)
-
-			orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
-				Holder:            holder,
-				Drives:            drives,
-				Runtime:           runtime,
-				Logger:            logger,
-				ControlSocketPath: controlSocketPath,
-				PerfParent:        perf.FromContext(ctx),
-			})
-
-			return orch.RunOnce(ctx, mode, opts)
-		},
-	}
-	if cc != nil && cc.syncWatchRunner != nil {
-		deps.watchRunner = cc.syncWatchRunner
-	}
-
-	return deps
-}
-
-func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions, deps syncCommandDeps) error {
+func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions) error {
 	logger := cc.Logger
 	rawCfg, err := loadSyncConfigWithEmailReconcile(ctx, cc, logger)
 	if err != nil {
@@ -131,7 +68,7 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
 	if opts.Watch {
-		return deps.watchRunner(ctx, holder, selectors, opts.Mode, syncengine.WatchOptions{
+		return runSyncWatch(ctx, cc, holder, selectors, opts.Mode, syncengine.WatchOptions{
 			PollInterval:       parsePollInterval(rawCfg.PollInterval),
 			SafetyScanInterval: parseDurationOrZero(rawCfg.SafetyScanInterval),
 		}, logger, cc.Status(), controlSocketPath)
@@ -157,7 +94,7 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
 
-	reports := deps.runOnceRunner(ctx, holder, drives, opts.Mode, syncengine.RunOptions{
+	reports := runSyncOnce(ctx, cc, holder, drives, opts.Mode, syncengine.RunOptions{
 		DryRun:        effectiveDryRun,
 		FullReconcile: opts.FullReconcile,
 	}, logger, controlSocketPath)
@@ -165,6 +102,65 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	printDriveReports(reports, cc)
 
 	return driveReportsError(reports)
+}
+
+func runSyncWatch(
+	ctx context.Context,
+	cc *CLIContext,
+	holder *config.Holder,
+	selectors []string,
+	mode syncengine.Mode,
+	opts syncengine.WatchOptions,
+	logger *slog.Logger,
+	statusWriter io.Writer,
+	controlSocketPath string,
+) error {
+	if cc != nil && cc.syncWatchRunner != nil {
+		return cc.syncWatchRunner(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath)
+	}
+	if cc != nil && cc.syncDaemonOrchestratorFactory != nil {
+		return runSyncDaemonWithFactory(
+			ctx,
+			holder,
+			selectors,
+			mode,
+			opts,
+			logger,
+			statusWriter,
+			controlSocketPath,
+			cc.syncDaemonOrchestratorFactory,
+		)
+	}
+
+	return runSyncDaemon(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath)
+}
+
+func runSyncOnce(
+	ctx context.Context,
+	cc *CLIContext,
+	holder *config.Holder,
+	drives []*config.ResolvedDrive,
+	mode syncengine.Mode,
+	opts syncengine.RunOptions,
+	logger *slog.Logger,
+	controlSocketPath string,
+) []*multisync.DriveReport {
+	if cc != nil && cc.syncRunOnceRunner != nil {
+		return cc.syncRunOnceRunner(ctx, holder, drives, mode, opts, logger, controlSocketPath)
+	}
+
+	runtime := driveops.NewSessionRuntime(holder, "onedrive-go/"+version, logger)
+
+	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
+		Holder:            holder,
+		Drives:            drives,
+		Runtime:           runtime,
+		Logger:            logger,
+		ControlSocketPath: controlSocketPath,
+		PerfParent:        perf.FromContext(ctx),
+	})
+
+	return orch.RunOnce(ctx, mode, opts)
 }
 
 func loadSyncConfigWithEmailReconcile(

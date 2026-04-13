@@ -441,10 +441,8 @@ sync_dir = %q
 		StatusWriter: io.Discard,
 		CfgPath:      cfgPath,
 	}
-	deps := defaultSyncCommandDeps(cc)
-
 	called := false
-	deps.runOnceRunner = func(
+	cc.syncRunOnceRunner = func(
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
@@ -471,7 +469,7 @@ sync_dir = %q
 		}
 	}
 
-	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional}, deps)
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
 	require.NoError(t, err)
 	assert.True(t, called)
 }
@@ -495,10 +493,8 @@ sync_dir = %q
 		StatusWriter: io.Discard,
 		CfgPath:      cfgPath,
 	}
-	deps := defaultSyncCommandDeps(cc)
-
 	override := false
-	deps.runOnceRunner = func(
+	cc.syncRunOnceRunner = func(
 		_ context.Context,
 		_ *config.Holder,
 		_ []*config.ResolvedDrive,
@@ -515,7 +511,7 @@ sync_dir = %q
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
 		Mode:   syncengine.SyncBidirectional,
 		DryRun: &override,
-	}, deps)
+	})
 	require.NoError(t, err)
 }
 
@@ -555,7 +551,7 @@ sync_dir = %q
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
 		Mode:  syncengine.SyncBidirectional,
 		Watch: true,
-	}, defaultSyncCommandDeps(cc))
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "watch mode does not support dry-run")
 }
@@ -580,10 +576,8 @@ sync_dir = %q
 		StatusWriter: io.Discard,
 		CfgPath:      cfgPath,
 	}
-	deps := defaultSyncCommandDeps(cc)
-
 	called := false
-	deps.runOnceRunner = func(
+	cc.syncRunOnceRunner = func(
 		context.Context,
 		*config.Holder,
 		[]*config.ResolvedDrive,
@@ -596,7 +590,7 @@ sync_dir = %q
 		return nil
 	}
 
-	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional}, deps)
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve control socket path")
 	assert.False(t, called, "one-shot sync owner must stop before engine startup when the socket path is impossible")
@@ -622,10 +616,8 @@ sync_dir = %q
 		StatusWriter: io.Discard,
 		CfgPath:      cfgPath,
 	}
-	deps := defaultSyncCommandDeps(cc)
-
 	called := false
-	deps.watchRunner = func(
+	cc.syncWatchRunner = func(
 		context.Context,
 		*config.Holder,
 		[]string,
@@ -642,7 +634,7 @@ sync_dir = %q
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
 		Mode:  syncengine.SyncBidirectional,
 		Watch: true,
-	}, deps)
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve control socket path")
 	assert.False(t, called, "watch sync owner must stop before daemon startup when the socket path is impossible")

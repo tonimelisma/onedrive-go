@@ -54,16 +54,16 @@ func TestSession_EmitsPeriodicUpdateAndSummary(t *testing.T) {
 }
 
 // Validates: R-6.6.16
-func TestCaptureManager_DefaultManifestOmitsDriveSnapshots(t *testing.T) {
-	manager := NewCaptureManager()
+func TestRuntimeCapture_DefaultManifestOmitsDriveSnapshots(t *testing.T) {
+	runtime := NewRuntime(nil)
+	runtime.Collector().RecordHTTPRequest(200, time.Millisecond, nil)
+	runtime.RegisterDrive("personal:alice@example.com").RecordTransfer(TransferKindUpload, 1, time.Millisecond)
 	outputDir := filepath.Join(t.TempDir(), "bundle")
 
-	result, err := manager.Capture(t.Context(), CaptureOptions{
+	result, err := runtime.Capture(t.Context(), CaptureOptions{
 		Duration:  10 * time.Millisecond,
 		OutputDir: outputDir,
 		OwnerMode: "watch",
-	}, &Snapshot{HTTPRequestCount: 2}, map[string]Snapshot{
-		"personal:alice@example.com": {UploadCount: 1},
 	})
 	require.NoError(t, err)
 	assert.FileExists(t, result.ManifestPath)
@@ -76,23 +76,23 @@ func TestCaptureManager_DefaultManifestOmitsDriveSnapshots(t *testing.T) {
 	manifest := readCaptureManifest(t, result.ManifestPath)
 	assert.Equal(t, "watch", manifest.OwnerMode)
 	assert.Equal(t, 1, manifest.ManagedDriveCount)
-	assert.Equal(t, 2, manifest.Aggregate.HTTPRequestCount)
+	assert.Equal(t, 1, manifest.Aggregate.HTTPRequestCount)
 	assert.Nil(t, manifest.DriveSnapshots)
 }
 
 // Validates: R-6.6.16
-func TestCaptureManager_FullDetailManifestIncludesDriveSnapshots(t *testing.T) {
-	manager := NewCaptureManager()
+func TestRuntimeCapture_FullDetailManifestIncludesDriveSnapshots(t *testing.T) {
+	runtime := NewRuntime(nil)
+	runtime.Collector().RecordDBTransaction(time.Millisecond)
+	runtime.RegisterDrive("personal:bob@example.com").RecordTransfer(TransferKindDownload, 2, time.Millisecond)
 	outputDir := filepath.Join(t.TempDir(), "bundle")
 
-	result, err := manager.Capture(t.Context(), CaptureOptions{
+	result, err := runtime.Capture(t.Context(), CaptureOptions{
 		Duration:   10 * time.Millisecond,
 		OutputDir:  outputDir,
 		Trace:      true,
 		FullDetail: true,
 		OwnerMode:  "oneshot",
-	}, &Snapshot{DBTransactionCount: 3}, map[string]Snapshot{
-		"personal:bob@example.com": {DownloadCount: 2},
 	})
 	require.NoError(t, err)
 	assert.FileExists(t, result.TracePath)
@@ -100,7 +100,8 @@ func TestCaptureManager_FullDetailManifestIncludesDriveSnapshots(t *testing.T) {
 	manifest := readCaptureManifest(t, result.ManifestPath)
 	require.NotNil(t, manifest.DriveSnapshots)
 	require.Contains(t, manifest.DriveSnapshots, "personal:bob@example.com")
-	assert.Equal(t, 2, manifest.DriveSnapshots["personal:bob@example.com"].DownloadCount)
+	assert.Equal(t, 1, manifest.DriveSnapshots["personal:bob@example.com"].DownloadCount)
+	assert.Equal(t, int64(2), manifest.DriveSnapshots["personal:bob@example.com"].DownloadBytes)
 }
 
 func newTestJSONLogger(buf *lockedBuffer) *slog.Logger {

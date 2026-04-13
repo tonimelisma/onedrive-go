@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func TestNewSyncEngine_EmptySyncDir(t *testing.T) {
@@ -21,7 +22,10 @@ func TestNewSyncEngine_EmptySyncDir(t *testing.T) {
 	}
 	logger := buildLogger(nil, CLIFlags{})
 
-	_, err := newSyncEngine(t.Context(), session, resolved, false, logger)
+	_, err := syncengine.NewDriveEngine(t.Context(), session, resolved, syncengine.DriveEngineOptions{
+		Logger:      logger,
+		VerifyDrive: false,
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sync_dir not configured")
 }
@@ -35,7 +39,10 @@ func TestNewSyncEngine_EmptyStatePath(t *testing.T) {
 	}
 	logger := buildLogger(nil, CLIFlags{})
 
-	_, err := newSyncEngine(t.Context(), session, resolved, false, logger)
+	_, err := syncengine.NewDriveEngine(t.Context(), session, resolved, syncengine.DriveEngineOptions{
+		Logger:      logger,
+		VerifyDrive: false,
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "state DB path")
 }
@@ -65,7 +72,10 @@ func TestNewSyncEngine_InvalidMinFreeSpace(t *testing.T) {
 		},
 	}
 
-	_, err = newSyncEngine(t.Context(), session, resolved, false, logger)
+	_, err = syncengine.NewDriveEngine(t.Context(), session, resolved, syncengine.DriveEngineOptions{
+		Logger:      logger,
+		VerifyDrive: false,
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid min_free_space")
 }
@@ -101,7 +111,10 @@ func TestNewSyncEngine_Success(t *testing.T) {
 		},
 	}
 
-	engine, err := newSyncEngine(t.Context(), session, resolved, true, logger)
+	engine, err := syncengine.NewDriveEngine(t.Context(), session, resolved, syncengine.DriveEngineOptions{
+		Logger:      logger,
+		VerifyDrive: true,
+	})
 	require.NoError(t, err)
 	require.NotNil(t, engine)
 	require.NoError(t, engine.Close(t.Context()))
