@@ -94,6 +94,13 @@ func quietCC() *CLIContext {
 	return &CLIContext{Flags: CLIFlags{Quiet: true}}
 }
 
+func statusCC() (*CLIContext, *bytes.Buffer) {
+	status := &bytes.Buffer{}
+	return &CLIContext{
+		StatusWriter: status,
+	}, status
+}
+
 func newSyncTestContext(parent context.Context, cfgPath string, statusWriter io.Writer) context.Context {
 	cc := &CLIContext{
 		Logger:       slog.New(slog.DiscardHandler),
@@ -183,7 +190,7 @@ func TestPrintNonZero(t *testing.T) {
 func TestPrintSyncReport(t *testing.T) {
 	t.Parallel()
 
-	cc := quietCC()
+	cc, status := statusCC()
 
 	// Dry-run report.
 	printSyncReport(&syncengine.Report{DryRun: true, Mode: syncengine.SyncBidirectional}, cc)
@@ -198,6 +205,33 @@ func TestPrintSyncReport(t *testing.T) {
 		Succeeded: 5,
 		Mode:      syncengine.SyncDownloadOnly,
 	}, cc)
+
+	output := status.String()
+	assert.Contains(t, output, "Dry run")
+	assert.Contains(t, output, "No changes detected")
+	assert.Contains(t, output, "Plan:")
+	assert.Contains(t, output, "Results:")
+}
+
+func TestPrintSyncReport_DeferredOnlyDoesNotRenderFalseIdleOrResults(t *testing.T) {
+	t.Parallel()
+
+	cc, status := statusCC()
+
+	printSyncReport(&syncengine.Report{
+		Mode: syncengine.SyncUploadOnly,
+		DeferredByMode: syncengine.DeferredCounts{
+			Downloads:    1,
+			LocalDeletes: 1,
+		},
+	}, cc)
+
+	output := status.String()
+	assert.Contains(t, output, "Deferred by mode:")
+	assert.Contains(t, output, "Downloads:")
+	assert.Contains(t, output, "Local deletes:")
+	assert.NotContains(t, output, "No changes detected")
+	assert.NotContains(t, output, "Results:")
 }
 
 // --- newSyncCmd ---

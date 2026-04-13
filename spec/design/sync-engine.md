@@ -176,7 +176,10 @@ only from the primary phase.
 Directional modes still rebuild and persist full scope truth. They continue to
 observe both sides, including remote re-entry candidates, but only admit the
 mutations legal for the selected direction. This preserves the “direction
-constrains execution, not observation” boundary.
+constrains execution, not observation” boundary. One-shot planning therefore
+tracks the suppressed action classes separately from executable actions, so
+later runs can still settle the durable truth and the CLI can distinguish
+observed-but-deferred work from a genuinely idle pass.
 
 ### Watch Bootstrap
 

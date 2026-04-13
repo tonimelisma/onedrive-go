@@ -521,6 +521,7 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, runner.runCommands, 2)
+	require.Len(t, runner.combinedCommands, 1)
 
 	assert.Equal(t, "go", runner.runCommands[0].name)
 	assert.Equal(t, []string{
@@ -541,8 +542,57 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 		"-count=50",
 		"-timeout=20m",
 		"./internal/multisync",
-		"./internal/sync",
 	}, runner.runCommands[1].args)
+
+	assert.Equal(t, "go", runner.combinedCommands[0].name)
+	assert.Equal(t, []string{
+		"test",
+		"-json",
+		"-race",
+		"-count=50",
+		"-timeout=30m",
+		"./internal/sync",
+	}, runner.combinedCommands[0].args)
+}
+
+func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	summaryPath := filepath.Join(t.TempDir(), "stress-verify-summary.json")
+	runner := &fakeRunner{
+		combinedOutputs: map[string][]byte{
+			"go test -json -race -count=50 -timeout=30m ./internal/sync": []byte(strings.Join([]string{
+				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestFast","Elapsed":0.125}`,
+				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestSlow","Elapsed":1.5}`,
+				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestSlow","Elapsed":1.0}`,
+				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestMedium","Elapsed":0.75}`,
+			}, "\n")),
+		},
+	}
+
+	stdout := &bytes.Buffer{}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:        repoRoot,
+		Profile:         VerifyStress,
+		SummaryJSONPath: summaryPath,
+		Stdout:          stdout,
+		Stderr:          &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, stdout.String(), "slowest completed sync race tests")
+	assert.Contains(t, stdout.String(), "TestSlow runs=2 total=2.5s max=1.5s")
+	assert.Contains(t, stdout.String(), "sync race x50: pass")
+
+	var summary VerifySummary
+	readVerifySummaryFile(t, summaryPath, &summary)
+	step := requireVerifySummaryStep(t, summary, "sync race x50")
+	require.Len(t, step.SlowTests, 3)
+	assert.Equal(t, "TestSlow", step.SlowTests[0].Test)
+	assert.Equal(t, 2, step.SlowTests[0].Runs)
+	assert.EqualValues(t, 2500, step.SlowTests[0].TotalElapsedMS)
+	assert.EqualValues(t, 1500, step.SlowTests[0].MaxElapsedMS)
 }
 
 // Validates: R-6.2.1

@@ -25,7 +25,10 @@ const (
 	fullE2EFixturePreflight          = "TestE2E_FixturePreflight_Full"
 	fullE2EPackageTimeout            = "60m"
 	fastE2EPackageTimeout            = "10m"
-	stressPackageTimeout             = "20m"
+	stressWatchOrderingTimeout       = "20m"
+	stressMultisyncTimeout           = "20m"
+	stressSyncTimeout                = "30m"
+	stressSlowTestLimit              = 5
 	authPreflightIncidentID          = "LI-20260405-06"
 	fastDownloadIncidentID           = "LI-20260405-04"
 	fastDownloadTestName             = "TestE2E_Sync_DownloadOnly"
@@ -82,10 +85,11 @@ type VerifySummary struct {
 }
 
 type VerifyStepSummary struct {
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	DurationMS int64  `json:"duration_ms"`
-	Error      string `json:"error,omitempty"`
+	Name       string                  `json:"name"`
+	Status     string                  `json:"status"`
+	DurationMS int64                   `json:"duration_ms"`
+	Error      string                  `json:"error,omitempty"`
+	SlowTests  []StressSlowTestSummary `json:"slow_tests,omitempty"`
 }
 
 type ClassifiedRerunSummary struct {
@@ -106,6 +110,13 @@ type E2EBucketSummary struct {
 	Status     string `json:"status"`
 	DurationMS int64  `json:"duration_ms"`
 	Error      string `json:"error,omitempty"`
+}
+
+type StressSlowTestSummary struct {
+	Test           string `json:"test"`
+	Runs           int    `json:"runs"`
+	TotalElapsedMS int64  `json:"total_elapsed_ms"`
+	MaxElapsedMS   int64  `json:"max_elapsed_ms"`
 }
 
 type verifySummaryCollector struct {
@@ -532,65 +543,6 @@ func runIntegration(
 			"./internal/graph/...",
 		); err != nil {
 			return fmt.Errorf("integration tests: %w", err)
-		}
-
-		return nil
-	})
-}
-
-func runStress(
-	ctx context.Context,
-	runner commandRunner,
-	repoRoot string,
-	env []string,
-	collector *verifySummaryCollector,
-	stdout, stderr io.Writer,
-) error {
-	return collector.runStep("stress", func() error {
-		stressCommands := []struct {
-			statusLine string
-			args       []string
-		}{
-			{
-				statusLine: fmt.Sprintf(
-					"==> go test -tags=stress -race -count=50 -timeout=%s "+
-						"-run TestWatchOrderingStress_ ./internal/sync\n",
-					stressPackageTimeout,
-				),
-				args: []string{
-					"go", "test",
-					"-tags=stress",
-					"-race",
-					"-count=50",
-					"-timeout=" + stressPackageTimeout,
-					"-run", "TestWatchOrderingStress_",
-					"./internal/sync",
-				},
-			},
-			{
-				statusLine: fmt.Sprintf(
-					"==> go test -race -count=50 -timeout=%s "+
-						"./internal/multisync ./internal/sync\n",
-					stressPackageTimeout,
-				),
-				args: []string{
-					"go", "test",
-					"-race",
-					"-count=50",
-					"-timeout=" + stressPackageTimeout,
-					"./internal/multisync",
-					"./internal/sync",
-				},
-			},
-		}
-
-		for _, command := range stressCommands {
-			if err := writeStatus(stdout, command.statusLine); err != nil {
-				return fmt.Errorf("write status: %w", err)
-			}
-			if err := runner.Run(ctx, repoRoot, env, stdout, stderr, command.args[0], command.args[1:]...); err != nil {
-				return fmt.Errorf("stress tests: %w", err)
-			}
 		}
 
 		return nil

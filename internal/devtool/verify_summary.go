@@ -23,13 +23,23 @@ func newVerifySummaryCollector(profile VerifyProfile, stdout io.Writer, summaryJ
 }
 
 func (c *verifySummaryCollector) runStep(name string, fn func() error) error {
+	return c.runStepWithSlowTests(name, func() ([]StressSlowTestSummary, error) {
+		return nil, fn()
+	})
+}
+
+func (c *verifySummaryCollector) runStepWithSlowTests(
+	name string,
+	fn func() ([]StressSlowTestSummary, error),
+) error {
 	startedAt := time.Now()
-	err := fn()
+	slowTests, err := fn()
 
 	step := VerifyStepSummary{
 		Name:       name,
 		Status:     verifySummaryStatusPass,
 		DurationMS: durationMS(time.Since(startedAt)),
+		SlowTests:  slowTests,
 	}
 	if err != nil {
 		step.Status = verifySummaryStatusFail
@@ -130,6 +140,7 @@ func (c *verifySummaryCollector) renderText() string {
 
 	for _, step := range c.summary.Steps {
 		builder.WriteString(renderSummaryLine(step.Name, step.Status, step.DurationMS, step.Error))
+		builder.WriteString(renderSlowTestLines(step.SlowTests))
 	}
 	for _, bucket := range c.summary.E2EFullBuckets {
 		errorText := bucket.Error
@@ -171,6 +182,26 @@ func renderSummaryLine(name string, status string, durationMS int64, errorText s
 		fmt.Fprintf(&builder, " [%s]", errorText)
 	}
 	builder.WriteByte('\n')
+	return builder.String()
+}
+
+func renderSlowTestLines(slowTests []StressSlowTestSummary) string {
+	if len(slowTests) == 0 {
+		return ""
+	}
+
+	var builder strings.Builder
+	for _, slow := range slowTests {
+		fmt.Fprintf(
+			&builder,
+			"  slow test: %s runs=%d total=%s max=%s\n",
+			slow.Test,
+			slow.Runs,
+			formatDurationMS(slow.TotalElapsedMS),
+			formatDurationMS(slow.MaxElapsedMS),
+		)
+	}
+
 	return builder.String()
 }
 

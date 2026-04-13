@@ -147,6 +147,19 @@ func assertVerifySummaryHasStep(t *testing.T, summary VerifySummary, name string
 	require.Failf(t, "missing summary step", "step %q not found", name)
 }
 
+func requireVerifySummaryStep(t *testing.T, summary VerifySummary, name string) VerifyStepSummary {
+	t.Helper()
+
+	for _, step := range summary.Steps {
+		if step.Name == name {
+			return step
+		}
+	}
+
+	require.Failf(t, "missing summary step", "step %q not found", name)
+	return VerifyStepSummary{}
+}
+
 func assertVerifyBucketSummary(t *testing.T, summary VerifySummary, name string, status string) {
 	t.Helper()
 

@@ -19,6 +19,8 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260413-01 | Directional one-shot sync reported deferred remote drift as `No changes detected` | fixed | product bug | 2026-04-13 | no |
+| LI-20260412-04 | `internal/sync` stress verification outgrew the old 20-minute race budget | fixed | test harness | 2026-04-13 | yes |
 | LI-20260412-03 | Directional conflict E2Es still expected one-way overwrite semantics | fixed | test bug | 2026-04-12 | no |
 | LI-20260412-02 | Queued conflict resolution could re-detect the same path before follow-up convergence | fixed | product bug | 2026-04-12 | no |
 | LI-20260412-01 | Fast E2E smoke lane silently reran demoted direct file-op tests | fixed | test bug | 2026-04-12 | no |
@@ -83,6 +85,74 @@ conflict regressions for edit/edit, edit/delete, and create/create. Planner
 regression coverage now also asserts that those conflict classes remain
 `ActionConflict` in bidirectional, download-only, and upload-only modes.
 Promoted docs: [sync.md](../requirements/sync.md), [sync-planning.md](../design/sync-planning.md), [sync-execution.md](../design/sync-execution.md)
+
+## LI-20260413-01: Directional one-shot sync reported deferred remote drift as `No changes detected`
+
+First seen: 2026-04-13
+Last seen: 2026-04-13
+Area: scheduled `e2e_full`, one-shot sync reporting, durable remote mirror recovery
+Suite / test: scheduled CI run `24339030634`, `TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta`
+Classification: product bug
+Status: fixed
+Recurring: no
+Summary: The product correctly observed remote-only drift during
+`sync --upload-only`, committed the delta token, and left the local tree
+unchanged for a later `--download-only` pass, but the one-shot report shape
+only carried executable action counts. When a directional pass observed work
+that it was not allowed to execute, the CLI flattened that state into the same
+zero-count bucket as true idle and printed `No changes detected`.
+Evidence:
+- Scheduled CI run `24339030634` on April 13, 2026 failed the `e2e` job in
+  `TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta` because
+  the `--upload-only` pass printed `No changes detected` even though the later
+  `--download-only` pass immediately settled the already-observed remote edit
+  and remote delete.
+- Repository inspection showed [`internal/sync/api_types.go`](../../internal/sync/api_types.go)
+  carrying only executable counts on `Report`, while
+  [`internal/cli/sync_render.go`](../../internal/cli/sync_render.go) treated
+  zero executable counts as proof of idleness.
+- Targeted regression coverage now asserts both the planner-owned deferred
+  counts and the rendered CLI text for upload-only/download-only suppressed
+  work.
+Resolution / mitigation: the planner now carries directionally deferred counts
+for suppressible action classes, one-shot `Report` preserves those counts, and
+the CLI renders them under `Deferred by mode:`. `No changes detected` is now
+reserved for the strict case where both executable and deferred counts are
+zero, and deferred-only runs no longer emit an empty `Results:` section.
+Promoted docs: [sync-engine.md](../design/sync-engine.md), [cli.md](../design/cli.md)
+
+## LI-20260412-04: `internal/sync` stress verification outgrew the old 20-minute race budget
+
+First seen: 2026-04-12
+Last seen: 2026-04-13
+Area: scheduled/manual stress verifier
+Suite / test: scheduled CI runs `24304404999` and `24339030634`, `go run ./cmd/devtool verify stress`
+Classification: test harness
+Status: fixed
+Recurring: yes
+Summary: The second stress verifier command had grown into an `internal/sync`
+package run that no longer fit the shared `20m` timeout budget. `internal/multisync`
+still completed, but the repeated `internal/sync` race/count=50 pass now timed
+out at the package boundary before the verifier could surface which tests were
+dominating runtime.
+Evidence:
+- Scheduled CI run `24339030634` on April 13, 2026 timed out at
+  `FAIL github.com/tonimelisma/onedrive-go/internal/sync 1200.117s`, while the
+  same job still logged `ok .../internal/multisync 76.659s`.
+- The same timeout family already appeared in scheduled run `24304404999` on
+  April 12, 2026, which showed the issue was recurring rather than a one-off
+  timeout dump.
+- The last green scheduled stress run on April 9, 2026 (`24185585854`) still
+  finished `internal/sync` in `589.626s`, which showed the repeated race lane
+  had outgrown the old verifier budget after the larger sync/runtime test
+  surface landed.
+Resolution / mitigation: `verify stress` now runs as three explicit steps:
+watch-ordering stress, `internal/multisync` race x50, and `internal/sync`
+race x50. The long `internal/sync` step now gets its own `30m` timeout,
+executes via `go test -json`, and records a compact slow-test timing summary
+in verifier stdout plus `--summary-json` artifacts. Scheduled/manual CI now
+uploads that stress summary artifact on every run.
+Promoted docs: [system.md](../design/system.md)
 
 ## LI-20260412-02: Queued conflict resolution could re-detect the same path before follow-up convergence
 

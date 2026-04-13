@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // ---------------------------------------------------------------------------
@@ -125,6 +126,7 @@ func TestRunOnce_DownloadOnly_ObservesLocalScanButSuppressesUploads(t *testing.T
 	require.NoError(t, err, "RunOnce")
 
 	assert.Equal(t, 0, report.Uploads, "download-only mode should suppress uploads even though local scan still runs")
+	assert.Equal(t, 1, report.DeferredByMode.Uploads, "download-only mode should report the deferred upload")
 }
 
 // Validates: R-2.1.4
@@ -1162,6 +1164,89 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 	entry, ok := bl.GetByPath("retry-download.txt")
 	require.True(t, ok)
 	assert.Equal(t, "item-dl", entry.ItemID)
+}
+
+// Validates: R-2.1.4, R-2.5.1
+func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	writeLocalFile(t, syncRoot, "remote-edit.txt", "original remote edit")
+	writeLocalFile(t, syncRoot, "remote-delete.txt", "original remote delete")
+
+	editHash := hashContentQuickXor(t, "original remote edit")
+	deleteHash := hashContentQuickXor(t, "original remote delete")
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
+		{
+			Action:          ActionDownload,
+			Success:         true,
+			Path:            "remote-edit.txt",
+			DriveID:         driveID,
+			ItemID:          "item-edit",
+			ItemType:        ItemTypeFile,
+			LocalHash:       editHash,
+			RemoteHash:      editHash,
+			LocalSize:       int64(len("original remote edit")),
+			LocalSizeKnown:  true,
+			RemoteSize:      int64(len("original remote edit")),
+			RemoteSizeKnown: true,
+			LocalMtime:      time.Now().UnixNano(),
+			RemoteMtime:     time.Now().UnixNano(),
+			ETag:            "etag-edit-old",
+		},
+		{
+			Action:          ActionDownload,
+			Success:         true,
+			Path:            "remote-delete.txt",
+			DriveID:         driveID,
+			ItemID:          "item-delete",
+			ItemType:        ItemTypeFile,
+			LocalHash:       deleteHash,
+			RemoteHash:      deleteHash,
+			LocalSize:       int64(len("original remote delete")),
+			LocalSizeKnown:  true,
+			RemoteSize:      int64(len("original remote delete")),
+			RemoteSizeKnown: true,
+			LocalMtime:      time.Now().UnixNano(),
+			RemoteMtime:     time.Now().UnixNano(),
+			ETag:            "etag-delete-old",
+		},
+	}, "")
+
+	now := time.Now().UnixNano()
+	_, err := eng.baseline.DB().ExecContext(ctx, `
+		INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, observed_at, etag)
+		VALUES (?, 'item-edit', 'remote-edit.txt', 'file', 'remote-hash-new', 19, ?, ?, 'etag-edit-new')`,
+		engineTestDriveID, now, now,
+	)
+	require.NoError(t, err, "seed remote mirror edit row")
+
+	report, runErr := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
+	require.NoError(t, runErr, "RunOnce")
+
+	assert.Zero(t, report.Downloads, "upload-only should not execute remote-to-local repair")
+	assert.Zero(t, report.LocalDeletes, "upload-only should not execute remote delete repair")
+	assert.Equal(t, 1, report.DeferredByMode.Downloads, "upload-only should report the deferred remote edit download")
+	assert.Equal(t, 1, report.DeferredByMode.LocalDeletes, "upload-only should report the deferred remote delete")
+
+	editData, err := localpath.ReadFile(filepath.Join(syncRoot, "remote-edit.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "original remote edit", string(editData))
+
+	deleteData, err := localpath.ReadFile(filepath.Join(syncRoot, "remote-delete.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "original remote delete", string(deleteData))
 }
 
 // Validates: R-2.5.1
