@@ -185,8 +185,10 @@ Static verification is a first-class architectural constraint, not a best-effort
   effectful executors. `internal/sync/engine_scope_session.go` is the pure
   scoped-observation planner, while `internal/sync/engine_observation_phase.go`
   and `internal/sync/engine_observation_watch.go` own effectful execution for
-  one-shot/reconcile and watch mode respectively. That keeps driver/fallback/
-  token policy out of orchestration code.
+  one-shot/reconcile and watch mode respectively. Root-delta watch commit/scope
+  policy also lives there now, so `RemoteObserver` stays an observation
+  component instead of carrying engine-owned watch batch adaptation state. That
+  keeps driver/fallback/token policy out of orchestration code.
 - Planner policy also has a repo-owned golden surface. Stable JSON projections
   of `ObservationSessionPlan` live under
   `internal/sync/testdata/observation_session_plan/` and are updated with the
