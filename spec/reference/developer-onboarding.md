@@ -528,7 +528,7 @@ mistake it for optional contributor convenience.
 `cmd/devtool` and `internal/devtool` own:
 
 - `verify`: repo-owned verification profiles
-- `worktree`: worktree creation/bootstrap from freshly fetched `origin/main`
+- `worktree`: worktree creation/bootstrap rooted at `origin/main`; callers must fetch first
 - `bench`: benchmark scenarios and result bundles
 - `state-audit`: sync-state inspection and safe repair surfaces
 - `watch-capture`: raw fsnotify capture tooling
@@ -539,7 +539,7 @@ The file-family split inside `internal/devtool` is also worth knowing:
 | File family | Role |
 | --- | --- |
 | `verify*.go` | Verification profile orchestration, docs checks, repo checks, E2E orchestration, summaries |
-| `worktree.go` | Worktree creation and bootstrap from freshly fetched `origin/main` |
+| `worktree.go` | Worktree creation and bootstrap rooted at `origin/main`; callers must fetch first |
 | `bench*.go` | Benchmark scenarios and result recording |
 | `state_audit.go` | Sync-state inspection and safe repair entrypoints |
 | `watch_capture.go` | Raw watch-event capture tooling |
