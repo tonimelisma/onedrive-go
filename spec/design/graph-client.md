@@ -36,7 +36,7 @@ throttle domain, so login/account discovery/share-URL resolution use
 the bootstrap metadata client and only switch to target-scoped interactive profiles once
 the target is known.
 
-The provider owns the runtime rule that all Graph-facing clients use `Timeout = 0`. Stall detection lives in the transport:
+`driveops.SessionRuntime` owns the runtime rule that all Graph-facing clients use `Timeout = 0`. Stall detection lives in the transport:
 
 - metadata and transfer transports clone `http.DefaultTransport`
 - `ResponseHeaderTimeout` detects servers that accept the connection but stall before sending headers
