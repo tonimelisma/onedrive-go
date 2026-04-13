@@ -8,8 +8,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 )
 
 func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
@@ -36,7 +36,7 @@ func runWhoamiWithContext(ctx context.Context, cc *CLIContext) error {
 		logger,
 		recorder,
 		cc.GraphBaseURL,
-		cc.httpProvider(),
+		cc.runtime(),
 	)
 	if authErr != nil {
 		return authErr
@@ -92,7 +92,7 @@ func fetchAuthenticatedAccount(
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	baseURL string,
-	httpProvider *graphhttp.Provider,
+	runtime *driveops.SessionRuntime,
 ) (authenticatedAccountResult, error) {
 	cid, found, matchErr := matchAuthenticatedDrive(cfg, driveSelector, logger)
 	if matchErr != nil {
@@ -127,7 +127,7 @@ func fetchAuthenticatedAccount(
 	if authResult != nil {
 		return *authResult, nil
 	}
-	client, err := newGraphClientWithHTTP(baseURL, httpProvider.BootstrapMeta(), ts, logger)
+	client, err := newGraphClientWithHTTP(baseURL, runtime.BootstrapMeta(), ts, logger)
 	if err != nil {
 		return authenticatedAccountResult{}, err
 	}

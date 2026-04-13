@@ -39,11 +39,11 @@ type engineFactoryFunc func(ctx context.Context, req engineFactoryRequest) (engi
 // OrchestratorConfig holds the inputs for creating an Orchestrator.
 // The CLI layer populates this from resolved config and HTTP clients.
 // Config and config path are accessed via Holder — a single source of truth
-// shared with SessionProvider. Control-socket reload updates config in one place.
+// shared with SessionRuntime. Control-socket reload updates config in one place.
 type OrchestratorConfig struct {
 	Holder            *config.Holder
 	Drives            []*config.ResolvedDrive
-	Provider          *driveops.SessionProvider // token caching + Session creation
+	Runtime           *driveops.SessionRuntime // token caching + Session creation
 	Logger            *slog.Logger
 	ControlSocketPath string
 	DebugEventHook    func(syncengine.DebugEvent)
@@ -60,8 +60,8 @@ type Orchestrator struct {
 }
 
 // NewOrchestrator creates an Orchestrator with real Engine factory.
-// Token/client caching is handled by the SessionProvider in cfg.Provider.
-// Tests inject stubs via cfg.Provider.TokenSourceFn and engineFactory.
+// Token/client caching is handled by the SessionRuntime in cfg.Runtime.
+// Tests inject stubs via cfg.Runtime.TokenSourceFn and engineFactory.
 func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{
 		cfg: cfg,
@@ -163,7 +163,7 @@ func (o *Orchestrator) prepareDriveWork(ctx context.Context, mode syncengine.Mod
 	work := make([]driveWork, 0, len(drives))
 
 	for _, rd := range drives {
-		session, err := o.cfg.Provider.Session(ctx, rd)
+		session, err := o.cfg.Runtime.SyncSession(ctx, rd)
 		if err != nil {
 			capturedErr := err
 			capturedCID := rd.CanonicalID
@@ -333,7 +333,7 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.Mode, opts 
 func (o *Orchestrator) startWatchRunner(
 	ctx context.Context, rd *config.ResolvedDrive, mode syncengine.Mode, opts syncengine.WatchOptions,
 ) (*watchRunner, error) {
-	session, err := o.cfg.Provider.Session(ctx, rd)
+	session, err := o.cfg.Runtime.SyncSession(ctx, rd)
 	if err != nil {
 		return nil, fmt.Errorf("session error for drive %s: %w", rd.CanonicalID, err)
 	}
@@ -488,13 +488,13 @@ func (o *Orchestrator) reload(
 		started++
 	}
 
-	// Single-point config update — both Orchestrator and SessionProvider
+	// Single-point config update — both Orchestrator and SessionRuntime
 	// read through the shared Holder.
 	o.cfg.Holder.Update(newCfg)
 
 	// Flush cached token sources so the next Session() call re-reads
 	// token files from disk. Handles logout + re-login between reloads.
-	o.cfg.Provider.FlushTokenCache()
+	o.cfg.Runtime.FlushTokenCache()
 
 	o.logger.Info("config reload complete",
 		slog.Int("started", started),

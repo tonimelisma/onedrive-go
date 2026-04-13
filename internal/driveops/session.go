@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -41,26 +42,6 @@ type AccountClients struct {
 	Meta     *graph.Client
 	Transfer *graph.Client
 	Account  driveid.CanonicalID
-}
-
-// HTTPClients is the HTTP client pair used to construct one authenticated
-// graph session.
-type HTTPClients struct {
-	Meta     *http.Client
-	Transfer *http.Client
-}
-
-// ClientResolver resolves the HTTP client pair for a specific drive.
-type ClientResolver func(*config.ResolvedDrive) HTTPClients
-
-// StaticClientResolver returns a resolver that always returns the same pair.
-func StaticClientResolver(metaHTTP, transferHTTP *http.Client) ClientResolver {
-	return func(_ *config.ResolvedDrive) HTTPClients {
-		return HTTPClients{
-			Meta:     metaHTTP,
-			Transfer: transferHTTP,
-		}
-	}
 }
 
 // ResolvedDriveEmail returns the account email for the resolved drive.
@@ -108,13 +89,13 @@ func (s *Session) SetAuthenticatedSuccessHooks(hook func(context.Context)) {
 	}
 }
 
-// SessionProvider caches TokenSources by token file path and creates Sessions
-// on demand. Multiple drives sharing a token path share one TokenSource,
-// preventing OAuth2 refresh token rotation races (two independent refreshes
-// can invalidate each other's refresh tokens).
-type SessionProvider struct {
+// SessionRuntime owns authenticated Graph session construction plus the
+// cached HTTP client profiles and token sources that back those sessions.
+// Multiple drives sharing a token path share one TokenSource, preventing
+// OAuth2 refresh token rotation races (two independent refreshes can
+// invalidate each other's refresh tokens).
+type SessionRuntime struct {
 	holder       *config.Holder
-	resolveHTTP  ClientResolver
 	userAgent    string
 	logger       *slog.Logger
 	GraphBaseURL string
@@ -123,40 +104,54 @@ type SessionProvider struct {
 	// for test injection; defaults to graph.TokenSourceFromPath.
 	TokenSourceFn func(ctx context.Context, tokenPath string, logger *slog.Logger) (graph.TokenSource, error)
 
-	mu         gosync.Mutex
-	tokenCache map[string]graph.TokenSource // keyed by token file path
+	mu                  gosync.Mutex
+	tokenCache          map[string]graph.TokenSource
+	bootstrapMeta       *http.Client
+	interactiveMeta     map[string]*http.Client
+	interactiveTransfer *http.Client
+	syncClients         *graphhttp.ClientSet
 }
 
-// NewSessionProvider creates a SessionProvider with default TokenSourceFn.
-func NewSessionProvider(
-	holder *config.Holder, resolveHTTP ClientResolver,
-	userAgent string, logger *slog.Logger,
-) *SessionProvider {
-	if resolveHTTP == nil {
-		resolveHTTP = StaticClientResolver(nil, nil)
+// NewSessionRuntime creates a SessionRuntime with default TokenSourceFn.
+func NewSessionRuntime(holder *config.Holder, userAgent string, logger *slog.Logger) *SessionRuntime {
+	if logger == nil {
+		logger = slog.Default()
 	}
 
-	return &SessionProvider{
-		holder:        holder,
-		resolveHTTP:   resolveHTTP,
-		userAgent:     userAgent,
-		logger:        logger,
-		TokenSourceFn: graph.TokenSourceFromPath,
-		tokenCache:    make(map[string]graph.TokenSource),
+	return &SessionRuntime{
+		holder:          holder,
+		userAgent:       userAgent,
+		logger:          logger,
+		TokenSourceFn:   graph.TokenSourceFromPath,
+		tokenCache:      make(map[string]graph.TokenSource),
+		interactiveMeta: make(map[string]*http.Client),
 	}
 }
 
-// Session creates or retrieves an authenticated Session for the given
-// resolved drive. Token caching ensures drives sharing a token path
-// reuse the same TokenSource.
-func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive) (*Session, error) {
+// Session creates or retrieves an authenticated interactive Session for the
+// given resolved drive. Configured shared roots use a shared-target throttle
+// key so interactive metadata retries stay scoped to the concrete remote root.
+func (r *SessionRuntime) Session(ctx context.Context, rd *config.ResolvedDrive) (*Session, error) {
+	return r.session(ctx, rd, r.interactiveClientsForDrive(rd))
+}
+
+// SyncSession creates or retrieves the authenticated Session used by sync
+// workers. Sync paths intentionally bypass retry-wrapped HTTP clients.
+func (r *SessionRuntime) SyncSession(ctx context.Context, rd *config.ResolvedDrive) (*Session, error) {
+	return r.session(ctx, rd, r.syncClientSet())
+}
+
+func (r *SessionRuntime) session(
+	ctx context.Context,
+	rd *config.ResolvedDrive,
+	httpClients graphhttp.ClientSet,
+) (*Session, error) {
 	tokenPath := config.DriveTokenPath(rd.CanonicalID)
 	if tokenPath == "" {
 		return nil, fmt.Errorf("cannot determine token path for drive %q", rd.CanonicalID)
 	}
 
-	httpClients := p.resolveHTTP(rd)
-	meta, transfer, err := p.clientsForTokenPath(ctx, tokenPath, httpClients)
+	meta, transfer, err := r.clientsForTokenPath(ctx, tokenPath, httpClients)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
 			return nil, fmt.Errorf("not logged in — run 'onedrive-go login' first: %w", err)
@@ -172,7 +167,7 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 		)
 	}
 
-	p.logger.Debug("session created",
+	r.logger.Debug("session created",
 		slog.String("drive_id", rd.DriveID.String()),
 		slog.String("canonical_id", rd.CanonicalID.String()),
 	)
@@ -186,16 +181,26 @@ func (p *SessionProvider) Session(ctx context.Context, rd *config.ResolvedDrive)
 	}, nil
 }
 
-// ClientsForAccount returns authenticated Graph clients for the token-owning
-// account canonical ID. Shared-file commands use this path because they target
-// account-scoped shared items rather than configured drives.
-func (p *SessionProvider) ClientsForAccount(ctx context.Context, cid driveid.CanonicalID) (*AccountClients, error) {
+// SharedTargetClients returns authenticated Graph clients for the token-owning
+// account canonical ID scoped to one shared remote target. Shared-item
+// commands use this path because they target account-scoped shared items
+// rather than configured drives.
+func (r *SessionRuntime) SharedTargetClients(
+	ctx context.Context,
+	cid driveid.CanonicalID,
+	remoteDriveID string,
+	remoteItemID string,
+) (*AccountClients, error) {
 	tokenPath := config.DriveTokenPath(cid)
 	if tokenPath == "" {
 		return nil, fmt.Errorf("cannot determine token path for account %q", cid.Email())
 	}
 
-	meta, transfer, err := p.clientsForTokenPath(ctx, tokenPath, p.resolveHTTP(nil))
+	meta, transfer, err := r.clientsForTokenPath(
+		ctx,
+		tokenPath,
+		r.interactiveClientsForSharedTarget(cid.Email(), remoteDriveID, remoteItemID),
+	)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
 			return nil, fmt.Errorf("not logged in — run 'onedrive-go login' first: %w", err)
@@ -213,45 +218,45 @@ func (p *SessionProvider) ClientsForAccount(ctx context.Context, cid driveid.Can
 
 // getOrCreateTokenSource returns a cached TokenSource for the given token
 // path, creating one on cache miss. Thread-safe via mutex.
-func (p *SessionProvider) getOrCreateTokenSource(ctx context.Context, tokenPath string) (graph.TokenSource, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+func (r *SessionRuntime) getOrCreateTokenSource(ctx context.Context, tokenPath string) (graph.TokenSource, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	if ts, ok := p.tokenCache[tokenPath]; ok {
+	if ts, ok := r.tokenCache[tokenPath]; ok {
 		return ts, nil
 	}
 
-	ts, err := p.TokenSourceFn(ctx, tokenPath, p.logger)
+	ts, err := r.TokenSourceFn(ctx, tokenPath, r.logger)
 	if err != nil {
 		return nil, err
 	}
 
-	p.tokenCache[tokenPath] = ts
+	r.tokenCache[tokenPath] = ts
 
 	return ts, nil
 }
 
-func (p *SessionProvider) clientsForTokenPath(
+func (r *SessionRuntime) clientsForTokenPath(
 	ctx context.Context,
 	tokenPath string,
-	httpClients HTTPClients,
+	httpClients graphhttp.ClientSet,
 ) (*graph.Client, *graph.Client, error) {
-	ts, err := p.getOrCreateTokenSource(ctx, tokenPath)
+	ts, err := r.getOrCreateTokenSource(ctx, tokenPath)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	baseURL := graph.DefaultBaseURL
-	if p.GraphBaseURL != "" {
-		baseURL = p.GraphBaseURL
+	if r.GraphBaseURL != "" {
+		baseURL = r.GraphBaseURL
 	}
 
-	meta, err := graph.NewClient(baseURL, httpClients.Meta, ts, p.logger, p.userAgent)
+	meta, err := graph.NewClient(baseURL, httpClients.Meta, ts, r.logger, r.userAgent)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create metadata graph client: %w", err)
 	}
 
-	transfer, err := graph.NewClient(baseURL, httpClients.Transfer, ts, p.logger, p.userAgent)
+	transfer, err := graph.NewClient(baseURL, httpClients.Transfer, ts, r.logger, r.userAgent)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create transfer graph client: %w", err)
 	}
@@ -262,24 +267,101 @@ func (p *SessionProvider) clientsForTokenPath(
 // FlushTokenCache clears the cached TokenSources, forcing the next Session()
 // call to re-read token files from disk. Called during daemon control-socket
 // reload to pick up logout/re-login credential changes.
-func (p *SessionProvider) FlushTokenCache() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+func (r *SessionRuntime) FlushTokenCache() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	p.tokenCache = make(map[string]graph.TokenSource)
-	p.logger.Info("token cache flushed")
+	r.tokenCache = make(map[string]graph.TokenSource)
+	r.logger.Info("token cache flushed")
 }
 
-// UpdateConfig replaces the shared raw config snapshot backing the provider's
+// UpdateConfig replaces the shared raw config snapshot backing the runtime's
 // token-resolution holder. Used when a command rewrites canonical IDs in the
 // config and needs subsequent Session() calls to resolve shared-drive tokens
 // through the updated metadata.
-func (p *SessionProvider) UpdateConfig(cfg *config.Config) {
-	if p == nil || p.holder == nil || cfg == nil {
+func (r *SessionRuntime) UpdateConfig(cfg *config.Config) {
+	if r == nil || r.holder == nil || cfg == nil {
 		return
 	}
 
-	p.holder.Update(cfg)
+	r.holder.Update(cfg)
+}
+
+// BootstrapMeta returns the retrying metadata client used before account
+// identity is known.
+func (r *SessionRuntime) BootstrapMeta() *http.Client {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.bootstrapMeta == nil {
+		r.bootstrapMeta = graphhttp.BootstrapMetadataClient(r.logger)
+	}
+
+	return r.bootstrapMeta
+}
+
+func (r *SessionRuntime) interactiveClientsForDrive(rd *config.ResolvedDrive) graphhttp.ClientSet {
+	if rd == nil {
+		return graphhttp.ClientSet{
+			Meta:     r.BootstrapMeta(),
+			Transfer: r.syncClientSet().Transfer,
+		}
+	}
+
+	account := rd.CanonicalID.Email()
+	if rd.RootItemID != "" {
+		return r.interactiveClientsForSharedTarget(account, rd.DriveID.String(), rd.RootItemID)
+	}
+
+	return r.interactiveClientsForKey(interactiveDriveKey(account, rd.DriveID))
+}
+
+func (r *SessionRuntime) interactiveClientsForSharedTarget(
+	account string,
+	remoteDriveID string,
+	remoteItemID string,
+) graphhttp.ClientSet {
+	return r.interactiveClientsForKey(interactiveSharedKey(account, remoteDriveID, remoteItemID))
+}
+
+func (r *SessionRuntime) interactiveClientsForKey(targetKey string) graphhttp.ClientSet {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	meta := r.interactiveMeta[targetKey]
+	if meta == nil {
+		meta = graphhttp.InteractiveMetadataClient(r.logger, &retry.ThrottleGate{})
+		r.interactiveMeta[targetKey] = meta
+	}
+
+	if r.interactiveTransfer == nil {
+		r.interactiveTransfer = graphhttp.InteractiveTransferClient(r.logger)
+	}
+
+	return graphhttp.ClientSet{
+		Meta:     meta,
+		Transfer: r.interactiveTransfer,
+	}
+}
+
+func (r *SessionRuntime) syncClientSet() graphhttp.ClientSet {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.syncClients == nil {
+		clients := graphhttp.SyncClientSet()
+		r.syncClients = &clients
+	}
+
+	return *r.syncClients
+}
+
+func interactiveDriveKey(account string, driveID driveid.ID) string {
+	return account + "|drive:" + driveID.String()
+}
+
+func interactiveSharedKey(account, remoteDriveID, remoteItemID string) string {
+	return account + "|shared:" + remoteDriveID + ":" + remoteItemID
 }
 
 // ResolveItem resolves a remote path to an Item. For root (""), uses GetItem

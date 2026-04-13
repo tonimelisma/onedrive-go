@@ -12,8 +12,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 )
 
 // driveSearchResult represents a search result for JSON output.
@@ -40,7 +40,7 @@ func searchAccountSharePoint(
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	baseURL string,
-	httpProvider *graphhttp.Provider,
+	runtime *driveops.SessionRuntime,
 ) ([]driveSearchResult, []accountAuthRequirement) {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
@@ -56,7 +56,7 @@ func searchAccountSharePoint(
 
 	client, err := newGraphClientWithHTTP(
 		baseURL,
-		httpProvider.BootstrapMeta(),
+		runtime.BootstrapMeta(),
 		ts,
 		logger,
 	)

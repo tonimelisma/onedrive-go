@@ -9,7 +9,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -85,25 +84,12 @@ func defaultSyncCommandDeps(cc *CLIContext) syncCommandDeps {
 			logger *slog.Logger,
 			controlSocketPath string,
 		) []*multisync.DriveReport {
-			httpProvider := graphhttp.NewProvider(logger)
-			provider := driveops.NewSessionProvider(
-				holder,
-				func(_ *config.ResolvedDrive) driveops.HTTPClients {
-					clients := httpProvider.Sync()
-
-					return driveops.HTTPClients{
-						Meta:     clients.Meta,
-						Transfer: clients.Transfer,
-					}
-				},
-				"onedrive-go/"+version,
-				logger,
-			)
+			runtime := driveops.NewSessionRuntime(holder, "onedrive-go/"+version, logger)
 
 			orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
 				Holder:            holder,
 				Drives:            drives,
-				Provider:          provider,
+				Runtime:           runtime,
 				Logger:            logger,
 				ControlSocketPath: controlSocketPath,
 				PerfParent:        perf.FromContext(ctx),

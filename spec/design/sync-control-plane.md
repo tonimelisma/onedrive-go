@@ -204,10 +204,10 @@ to the control-plane boundary.
 
 - No drive-to-drive coordination state exists in memory or in SQLite.
 - Each drive gets its own engine instance and state DB.
-- Session creation goes through `driveops.SessionProvider`, which remains the
+- Session creation goes through `driveops.SessionRuntime`, which remains the
   single owner of token-source caching.
 - Reload updates config through one shared `config.Holder`, so both the
-  control plane and session provider see the same config snapshot.
+  control plane and session runtime see the same config snapshot.
 
 ## Rationale
 

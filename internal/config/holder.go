@@ -3,7 +3,7 @@ package config
 import "sync"
 
 // Holder provides thread-safe access to a mutable *Config and an immutable
-// config file path. Both SessionProvider and the multi-drive control plane
+// config file path. Both SessionRuntime and the multi-drive control plane
 // read through a shared Holder, so control-socket reload updates config in
 // exactly one place.
 type Holder struct {
@@ -37,7 +37,7 @@ func (h *Holder) Path() string {
 
 // Update replaces the config. Thread-safe (write lock). Called on
 // control-socket reload — one call updates config for all consumers
-// (SessionProvider and the control plane).
+// (SessionRuntime and the control plane).
 func (h *Holder) Update(cfg *Config) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

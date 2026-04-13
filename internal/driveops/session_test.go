@@ -16,6 +16,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // stubTokenSource implements graph.TokenSource for tests.
@@ -109,21 +110,21 @@ func TestCleanRemotePath(t *testing.T) {
 	}
 }
 
-// --- NewSessionProvider ---
+// --- NewSessionRuntime ---
 
-func TestNewSessionProvider(t *testing.T) {
+func TestNewSessionRuntime(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
-	p := NewSessionProvider(holder, StaticClientResolver(&http.Client{}, &http.Client{}), "test/1.0", discardLogger())
+	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 
 	require.NotNil(t, p)
 	assert.NotNil(t, p.TokenSourceFn, "default TokenSourceFn should be set")
 }
 
-// --- SessionProvider.Session error paths ---
+// --- SessionRuntime.Session error paths ---
 
-func TestSessionProvider_EmptyTokenPath(t *testing.T) {
+func TestSessionRuntime_EmptyTokenPath(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
-	p := NewSessionProvider(holder, StaticClientResolver(&http.Client{}, &http.Client{}), "test/1.0", discardLogger())
+	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 
 	resolved := &config.ResolvedDrive{
 		CanonicalID: driveid.CanonicalID{}, // zero value → empty token path
@@ -134,9 +135,9 @@ func TestSessionProvider_EmptyTokenPath(t *testing.T) {
 	assert.Contains(t, err.Error(), "token path")
 }
 
-func TestSessionProvider_NotLoggedIn(t *testing.T) {
+func TestSessionRuntime_NotLoggedIn(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
-	p := NewSessionProvider(holder, StaticClientResolver(&http.Client{}, &http.Client{}), "test/1.0", discardLogger())
+	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return nil, graph.ErrNotLoggedIn
 	}
@@ -154,9 +155,9 @@ func TestSessionProvider_NotLoggedIn(t *testing.T) {
 	assert.Contains(t, err.Error(), "login")
 }
 
-func TestSessionProvider_ZeroDriveID(t *testing.T) {
+func TestSessionRuntime_ZeroDriveID(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
-	p := NewSessionProvider(holder, StaticClientResolver(&http.Client{}, &http.Client{}), "test/1.0", discardLogger())
+	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return &stubTokenSource{}, nil
 	}
@@ -176,9 +177,9 @@ func TestSessionProvider_ZeroDriveID(t *testing.T) {
 
 // --- Token caching ---
 
-func TestSessionProvider_TokenCaching(t *testing.T) {
+func TestSessionRuntime_TokenCaching(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
-	p := NewSessionProvider(holder, StaticClientResolver(&http.Client{}, &http.Client{}), "test/1.0", discardLogger())
+	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 
 	var callCount int
 	ts := &stubTokenSource{}
@@ -207,37 +208,43 @@ func TestSessionProvider_TokenCaching(t *testing.T) {
 	assert.Equal(t, 1, callCount, "TokenSourceFn should be called exactly once for the same token path")
 }
 
-func TestSessionProvider_UsesClientResolver(t *testing.T) {
+func TestSessionRuntime_InteractiveClientsReuseThrottleGatePerTarget(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
-	var (
-		resolvedArg *config.ResolvedDrive
-		callCount   int
-	)
-	p := NewSessionProvider(holder, func(rd *config.ResolvedDrive) HTTPClients {
-		callCount++
-		resolvedArg = rd
+	runtime := NewSessionRuntime(holder, "test/1.0", discardLogger())
 
-		return HTTPClients{
-			Meta:     &http.Client{},
-			Transfer: &http.Client{},
-		}
-	}, "test/1.0", discardLogger())
-	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
-		return &stubTokenSource{}, nil
-	}
+	driveA := runtime.interactiveClientsForDrive(&config.ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		DriveID:     driveid.New("drive-a"),
+	})
+	driveAAgain := runtime.interactiveClientsForDrive(&config.ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		DriveID:     driveid.New("drive-a"),
+	})
+	driveB := runtime.interactiveClientsForDrive(&config.ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
+		DriveID:     driveid.New("drive-b"),
+	})
+	shared := runtime.interactiveClientsForSharedTarget("user@example.com", "remote-drive", "remote-item")
+	sharedAgain := runtime.interactiveClientsForSharedTarget("user@example.com", "remote-drive", "remote-item")
 
-	cid, err := driveid.NewCanonicalID("personal:resolver@example.com")
-	require.NoError(t, err)
+	firstRetry, ok := driveA.Meta.Transport.(*retry.RetryTransport)
+	require.True(t, ok)
+	secondRetry, ok := driveAAgain.Meta.Transport.(*retry.RetryTransport)
+	require.True(t, ok)
+	thirdRetry, ok := driveB.Meta.Transport.(*retry.RetryTransport)
+	require.True(t, ok)
+	sharedRetry, ok := shared.Meta.Transport.(*retry.RetryTransport)
+	require.True(t, ok)
+	sharedRetryAgain, ok := sharedAgain.Meta.Transport.(*retry.RetryTransport)
+	require.True(t, ok)
 
-	rd := &config.ResolvedDrive{
-		CanonicalID: cid,
-		DriveID:     driveid.New("d-resolver"),
-	}
-
-	_, err = p.Session(t.Context(), rd)
-	require.NoError(t, err)
-	assert.Equal(t, 1, callCount)
-	assert.Same(t, rd, resolvedArg)
+	assert.Same(t, driveA.Meta, driveAAgain.Meta)
+	assert.Same(t, driveA.Transfer, driveAAgain.Transfer)
+	assert.Same(t, firstRetry.ThrottleGate, secondRetry.ThrottleGate)
+	assert.NotSame(t, firstRetry.ThrottleGate, thirdRetry.ThrottleGate)
+	assert.Same(t, sharedRetry.ThrottleGate, sharedRetryAgain.ThrottleGate)
+	assert.NotSame(t, firstRetry.ThrottleGate, sharedRetry.ThrottleGate)
+	assert.Same(t, driveA.Transfer, shared.Transfer, "interactive transfer client should be shared across targets")
 }
 
 func TestSession_ForTarget_ReturnsSelfForSameDriveAndRoot(t *testing.T) {
@@ -289,9 +296,9 @@ func TestSession_ForTarget_ClonesDriveAndRootWithoutRecreatingClients(t *testing
 
 // --- FlushTokenCache ---
 
-func TestSessionProvider_FlushTokenCache(t *testing.T) {
+func TestSessionRuntime_FlushTokenCache(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
-	p := NewSessionProvider(holder, StaticClientResolver(&http.Client{}, &http.Client{}), "test/1.0", discardLogger())
+	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 
 	var callCount int
 	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
@@ -328,9 +335,9 @@ func TestSessionProvider_FlushTokenCache(t *testing.T) {
 
 // --- Thread safety ---
 
-func TestSessionProvider_ThreadSafety(t *testing.T) {
+func TestSessionRuntime_ThreadSafety(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
-	p := NewSessionProvider(holder, StaticClientResolver(&http.Client{}, &http.Client{}), "test/1.0", discardLogger())
+	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return &stubTokenSource{}, nil
 	}
@@ -375,9 +382,9 @@ func TestSession_Fields(t *testing.T) {
 
 // --- TokenSourceFn error propagation ---
 
-func TestSessionProvider_TokenSourceError(t *testing.T) {
+func TestSessionRuntime_TokenSourceError(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
-	p := NewSessionProvider(holder, StaticClientResolver(&http.Client{}, &http.Client{}), "test/1.0", discardLogger())
+	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return nil, errors.New("disk read failed")
 	}

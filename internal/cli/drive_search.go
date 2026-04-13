@@ -43,7 +43,7 @@ func runDriveSearchWithContext(ctx context.Context, cc *CLIContext, query string
 			logger,
 			recorder,
 			cc.GraphBaseURL,
-			cc.httpProvider(),
+			cc.runtime(),
 		)
 		results = append(results, accountResults...)
 		discoveredAuthRequired = append(discoveredAuthRequired, accountAuthRequired...)

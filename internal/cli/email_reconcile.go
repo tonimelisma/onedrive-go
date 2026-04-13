@@ -36,7 +36,7 @@ func (cc *CLIContext) probeAccountIdentity(
 
 	client, err := newGraphClientWithHTTP(
 		cc.graphBaseURL(),
-		cc.httpProvider().BootstrapMeta(),
+		cc.runtime().BootstrapMeta(),
 		ts,
 		cc.Logger,
 	)
@@ -145,8 +145,8 @@ func (cc *CLIContext) reloadResolvedDriveFromFlags() error {
 	}
 
 	cc.Cfg = resolved
-	if cc.Provider != nil {
-		cc.Provider.UpdateConfig(rawCfg)
+	if cc.Runtime != nil {
+		cc.Runtime.UpdateConfig(rawCfg)
 	}
 
 	return nil
@@ -161,8 +161,8 @@ func (cc *CLIContext) graphBaseURL() string {
 		return cc.GraphBaseURL
 	}
 
-	if cc.Provider != nil && cc.Provider.GraphBaseURL != "" {
-		return cc.Provider.GraphBaseURL
+	if cc.Runtime != nil && cc.Runtime.GraphBaseURL != "" {
+		return cc.Runtime.GraphBaseURL
 	}
 
 	return ""

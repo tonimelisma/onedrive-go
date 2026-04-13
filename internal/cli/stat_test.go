@@ -152,12 +152,7 @@ func TestRunStat_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedProof(t *te
 	}))
 	defer srv.Close()
 
-	provider := driveops.NewSessionProvider(
-		nil,
-		driveops.StaticClientResolver(srv.Client(), srv.Client()),
-		"test-agent",
-		testDriveLogger(t),
-	)
+	provider := driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t))
 	provider.GraphBaseURL = srv.URL
 
 	var out bytes.Buffer
@@ -169,7 +164,7 @@ func TestRunStat_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedProof(t *te
 			CanonicalID: cid,
 			DriveID:     driveid.New("drive-123"),
 		},
-		Provider: provider,
+		Runtime: provider,
 	}
 
 	cmd := newStatCmd()

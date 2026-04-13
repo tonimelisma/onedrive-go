@@ -15,8 +15,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -181,9 +181,9 @@ func discoverAccount(
 	ctx context.Context,
 	ts graph.TokenSource,
 	logger *slog.Logger,
-	httpProvider *graphhttp.Provider,
+	runtime *driveops.SessionRuntime,
 ) (driveid.CanonicalID, *graph.User, string, driveid.ID, error) {
-	client, err := newGraphClientWithHTTP("", httpProvider.BootstrapMeta(), ts, logger)
+	client, err := newGraphClientWithHTTP("", runtime.BootstrapMeta(), ts, logger)
 	if err != nil {
 		return driveid.CanonicalID{}, nil, "", driveid.ID{}, err
 	}

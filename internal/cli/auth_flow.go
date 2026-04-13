@@ -21,7 +21,7 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 		return fmt.Errorf("authenticate account: %w", err)
 	}
 
-	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger, cc.httpProvider())
+	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger, cc.runtime())
 	if err != nil {
 		cleanupPendingToken(cc, tempPath, "discovery failure")
 		return fmt.Errorf("discovering account: %w", err)

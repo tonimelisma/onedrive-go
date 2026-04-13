@@ -119,7 +119,7 @@ func loadDriveListSnapshot(
 		logger,
 		recorder,
 		cc.GraphBaseURL,
-		cc.httpProvider(),
+		cc.runtime(),
 	)
 	sharedDiscovery := discoverSharedTargets(ctx, cc, catalogSnapshot.Catalog)
 	available = append(available, sharedFoldersToEntries(projectSharedFolders(catalogSnapshot.Config, sharedDiscovery.Targets))...)

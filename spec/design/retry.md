@@ -110,7 +110,7 @@ return the result immediately, and let the engine classify it.
 
 `ThrottleGate` is intentionally tiny. It owns only a shared deadline and
 wait operation. Callers that understand the throttle domain create it and own
-its lifetime. Today `graphhttp.Provider` injects one gate per interactive
+its lifetime. Today `driveops.SessionRuntime` creates one gate per interactive
 metadata target profile: own-drive traffic keys by `(account email, driveID)`,
 and shared-target traffic keys by `(account email, remoteDriveID, remoteItemID)`.
 The retry package does not infer account, tenant, drive, or caller identity on

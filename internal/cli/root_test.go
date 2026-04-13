@@ -24,7 +24,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -154,14 +153,7 @@ func TestCliContextFrom_WithCLIContext(t *testing.T) {
 
 func TestCLIContextSession_WrapsProviderError(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	httpProvider := graphhttp.NewProvider(logger)
-	clients := httpProvider.InteractiveForDrive("user@example.com", driveid.New("0000000000000001"))
-	provider := driveops.NewSessionProvider(
-		nil,
-		driveops.StaticClientResolver(clients.Meta, clients.Transfer),
-		"test-agent",
-		logger,
-	)
+	provider := driveops.NewSessionRuntime(nil, "test-agent", logger)
 	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
 		return nil, graph.ErrNotLoggedIn
 	}
@@ -172,7 +164,7 @@ func TestCLIContextSession_WrapsProviderError(t *testing.T) {
 			CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
 			DriveID:     driveid.New("0000000000000001"),
 		},
-		Provider: provider,
+		Runtime: provider,
 	}
 
 	session, err := cc.Session(t.Context())
@@ -184,14 +176,7 @@ func TestCLIContextSession_WrapsProviderError(t *testing.T) {
 
 func TestCLIContextSession_Success(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	httpProvider := graphhttp.NewProvider(logger)
-	clients := httpProvider.InteractiveForDrive("user@example.com", driveid.New("0000000000000001"))
-	provider := driveops.NewSessionProvider(
-		nil,
-		driveops.StaticClientResolver(clients.Meta, clients.Transfer),
-		"test-agent",
-		logger,
-	)
+	provider := driveops.NewSessionRuntime(nil, "test-agent", logger)
 	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
 		return staticTokenSource{}, nil
 	}
@@ -202,7 +187,7 @@ func TestCLIContextSession_Success(t *testing.T) {
 			CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
 			DriveID:     driveid.New("0000000000000001"),
 		},
-		Provider: provider,
+		Runtime: provider,
 	}
 
 	session, err := cc.Session(t.Context())
@@ -243,12 +228,7 @@ func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	provider := driveops.NewSessionProvider(
-		config.NewHolder(rawCfg, configPath),
-		driveops.StaticClientResolver(srv.Client(), srv.Client()),
-		"test-agent",
-		slog.New(slog.DiscardHandler),
-	)
+	provider := driveops.NewSessionRuntime(config.NewHolder(rawCfg, configPath), "test-agent", slog.New(slog.DiscardHandler))
 	provider.GraphBaseURL = srv.URL
 
 	var tokenPaths []string
@@ -273,7 +253,7 @@ func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 			DriveID:     driveid.New("drive-123"),
 			SyncDir:     "~/Business",
 		},
-		Provider: provider,
+		Runtime: provider,
 	}
 
 	session, err := cc.Session(t.Context())

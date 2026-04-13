@@ -247,7 +247,7 @@ successful loads with warnings map to `actionable`, and clean loads map to
 
 ## Config Holder
 
-`config.Holder` wraps `*Config` + immutable config path behind an `RWMutex`. Both `SessionProvider` and `multisync.OrchestratorConfig` share the same `*Holder` instance. On control-socket reload, one `holder.Update(newCfg)` call atomically updates config for all consumers.
+`config.Holder` wraps `*Config` + immutable config path behind an `RWMutex`. Both `SessionRuntime` and `multisync.OrchestratorConfig` share the same `*Holder` instance. On control-socket reload, one `holder.Update(newCfg)` call atomically updates config for all consumers.
 
 ## Runtime Ownership
 
