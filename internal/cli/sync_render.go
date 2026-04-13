@@ -65,6 +65,16 @@ func printNonZero(cc *CLIContext, label string, n int) {
 	}
 }
 
+func reportActionTotal(r *syncengine.Report) int {
+	if r == nil {
+		return 0
+	}
+
+	return r.FolderCreates + r.Moves + r.Downloads + r.Uploads +
+		r.LocalDeletes + r.RemoteDeletes + r.Conflicts +
+		r.SyncedUpdates + r.Cleanups
+}
+
 // printSyncReport formats and prints the sync report to the CLI status stream.
 func printSyncReport(r *syncengine.Report, cc *CLIContext) {
 	if r.DryRun {
@@ -74,27 +84,38 @@ func printSyncReport(r *syncengine.Report, cc *CLIContext) {
 	cc.Statusf("Mode: %s\n", r.Mode)
 	cc.Statusf("Duration: %s\n", r.Duration)
 
-	total := r.FolderCreates + r.Moves + r.Downloads + r.Uploads +
-		r.LocalDeletes + r.RemoteDeletes + r.Conflicts +
-		r.SyncedUpdates + r.Cleanups
+	planTotal := reportActionTotal(r)
+	deferredTotal := r.DeferredByMode.Total()
 
-	if total == 0 {
+	if planTotal == 0 && deferredTotal == 0 {
 		cc.Statusf("No changes detected\n")
 		return
 	}
 
-	cc.Statusf("\nPlan:\n")
-	printNonZero(cc, "Folder creates", r.FolderCreates)
-	printNonZero(cc, "Moves", r.Moves)
-	printNonZero(cc, "Downloads", r.Downloads)
-	printNonZero(cc, "Uploads", r.Uploads)
-	printNonZero(cc, "Local deletes", r.LocalDeletes)
-	printNonZero(cc, "Remote deletes", r.RemoteDeletes)
-	printNonZero(cc, "Conflicts", r.Conflicts)
-	printNonZero(cc, "Synced updates", r.SyncedUpdates)
-	printNonZero(cc, "Cleanups", r.Cleanups)
+	if planTotal > 0 {
+		cc.Statusf("\nPlan:\n")
+		printNonZero(cc, "Folder creates", r.FolderCreates)
+		printNonZero(cc, "Moves", r.Moves)
+		printNonZero(cc, "Downloads", r.Downloads)
+		printNonZero(cc, "Uploads", r.Uploads)
+		printNonZero(cc, "Local deletes", r.LocalDeletes)
+		printNonZero(cc, "Remote deletes", r.RemoteDeletes)
+		printNonZero(cc, "Conflicts", r.Conflicts)
+		printNonZero(cc, "Synced updates", r.SyncedUpdates)
+		printNonZero(cc, "Cleanups", r.Cleanups)
+	}
 
-	if !r.DryRun {
+	if deferredTotal > 0 {
+		cc.Statusf("\nDeferred by mode:\n")
+		printNonZero(cc, "Folder creates", r.DeferredByMode.FolderCreates)
+		printNonZero(cc, "Moves", r.DeferredByMode.Moves)
+		printNonZero(cc, "Downloads", r.DeferredByMode.Downloads)
+		printNonZero(cc, "Uploads", r.DeferredByMode.Uploads)
+		printNonZero(cc, "Local deletes", r.DeferredByMode.LocalDeletes)
+		printNonZero(cc, "Remote deletes", r.DeferredByMode.RemoteDeletes)
+	}
+
+	if !r.DryRun && planTotal > 0 {
 		cc.Statusf("\nResults:\n")
 		cc.Statusf("  Succeeded: %d\n", r.Succeeded)
 		cc.Statusf("  Failed:    %d\n", r.Failed)

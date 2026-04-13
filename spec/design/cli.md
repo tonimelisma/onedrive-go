@@ -261,6 +261,13 @@ Human-readable output mirrors that split with separate
 `Accounts requiring authentication:` and `Accounts with degraded live discovery:`
 sections so degraded discovery never reads like a login failure.
 
+Human-readable one-shot sync output also distinguishes executable work from
+directionally deferred work. `No changes detected` is only correct when the
+sync report has neither executable actions nor planner-owned deferred counts.
+When `--upload-only` or `--download-only` observes work that is real but not
+legal to execute in that direction, the CLI renders a `Deferred by mode:`
+section and omits the empty `Results:` block.
+
 | Command | JSON function(s) | Schema type(s) |
 |---------|------------------|----------------|
 | `ls` | `printItemsJSON` | `lsJSONItem` |

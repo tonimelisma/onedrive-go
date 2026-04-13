@@ -68,6 +68,7 @@ func (p *Planner) Plan(
 	// actions exist so executor-time cross-drive convergence does not need to
 	// rediscover target ownership ad hoc.
 	enrichActionTargets(allActions, baseline)
+	deferred := deferredCountsForMode(changes, baseline, mode, p.logger)
 
 	// Step 3: build dependency edges and verify acyclicity.
 	deps := buildDependencies(allActions)
@@ -77,8 +78,9 @@ func (p *Planner) Plan(
 	}
 
 	plan := &ActionPlan{
-		Actions: allActions,
-		Deps:    deps,
+		Actions:        allActions,
+		Deps:           deps,
+		DeferredByMode: deferred,
 	}
 
 	// Step 4: safety check for delete bursts.
@@ -105,6 +107,12 @@ func (p *Planner) Plan(
 		slog.Int("conflicts", counts[ActionConflict]),
 		slog.Int("synced_updates", counts[ActionUpdateSynced]),
 		slog.Int("cleanups", counts[ActionCleanup]),
+		slog.Int("deferred_folder_creates", deferred.FolderCreates),
+		slog.Int("deferred_moves", deferred.Moves),
+		slog.Int("deferred_downloads", deferred.Downloads),
+		slog.Int("deferred_uploads", deferred.Uploads),
+		slog.Int("deferred_local_deletes", deferred.LocalDeletes),
+		slog.Int("deferred_remote_deletes", deferred.RemoteDeletes),
 	)
 
 	return plan, nil
@@ -238,6 +246,19 @@ func detectMoves(
 	return actions
 }
 
+func detectPotentialMoves(
+	views map[string]*PathView,
+	changes []PathChanges,
+	bl *Baseline,
+) []Action {
+	var actions []Action
+
+	actions = append(actions, detectPotentialRemoteMoves(views, changes)...)
+	actions = append(actions, detectPotentialLocalMoves(views, bl)...)
+
+	return actions
+}
+
 // detectRemoteMoves finds ChangeMove events in remote observations and
 // produces ActionLocalMove actions (rename local file to match remote).
 func detectRemoteMoves(
@@ -249,6 +270,13 @@ func detectRemoteMoves(
 		return nil
 	}
 
+	return detectPotentialRemoteMoves(views, changes)
+}
+
+func detectPotentialRemoteMoves(
+	views map[string]*PathView,
+	changes []PathChanges,
+) []Action {
 	var actions []Action
 
 	for i := range changes {
@@ -314,6 +342,21 @@ func detectLocalMoves(
 		return nil
 	}
 
+	return detectPotentialLocalMovesWithDeniedPrefixes(views, deniedPrefixes, bl)
+}
+
+func detectPotentialLocalMoves(
+	views map[string]*PathView,
+	bl *Baseline,
+) []Action {
+	return detectPotentialLocalMovesWithDeniedPrefixes(views, nil, bl)
+}
+
+func detectPotentialLocalMovesWithDeniedPrefixes(
+	views map[string]*PathView,
+	deniedPrefixes []string,
+	bl *Baseline,
+) []Action {
 	deletesByHash, createsByHash := buildLocalMoveHashMaps(views)
 
 	// Sort hash keys for deterministic move detection order (B-154).
@@ -379,7 +422,8 @@ func buildLocalMoveHashMaps(views map[string]*PathView) (deletesByHash, createsB
 // should NOT be treated as a move (permission denied or cross-drive).
 func shouldSkipLocalMove(
 	deletePath, createPath string, views map[string]*PathView,
-	deniedPrefixes []string, bl *Baseline,
+	deniedPrefixes []string,
+	bl *Baseline,
 ) bool {
 	// Skip local moves under permission-denied folders — can't write to remote.
 	if IsWriteDenied(deletePath, deniedPrefixes) || IsWriteDenied(createPath, deniedPrefixes) {
@@ -391,6 +435,41 @@ func shouldSkipLocalMove(
 	// paths fall through to normal per-path classification which will
 	// produce a delete + upload instead.
 	return isCrossDriveLocalMove(deletePath, createPath, views, bl)
+}
+
+func deferredCountsForMode(
+	changes []PathChanges,
+	baseline *Baseline,
+	mode Mode,
+	logger *slog.Logger,
+) DeferredCounts {
+	if mode == SyncBidirectional {
+		return DeferredCounts{}
+	}
+
+	views := buildPathViews(changes, baseline)
+	fullActions := detectPotentialMoves(views, changes, baseline)
+
+	sortedPaths := make([]string, 0, len(views))
+	for path := range views {
+		sortedPaths = append(sortedPaths, path)
+	}
+	sort.Strings(sortedPaths)
+
+	for _, path := range sortedPaths {
+		fullActions = append(fullActions, classifyPotentialPathView(views[path])...)
+	}
+
+	fullActions = expandFolderDeleteCascades(fullActions, baseline, views, SyncBidirectional, logger)
+
+	var deferred DeferredCounts
+	for i := range fullActions {
+		if !actionAllowedInMode(&fullActions[i], mode) {
+			deferred.AddAction(&fullActions[i])
+		}
+	}
+
+	return deferred
 }
 
 // classifyPathView determines actions for a single path view based on
@@ -414,6 +493,18 @@ func classifyPathView(view *PathView, mode Mode, deniedPrefixes []string) []Acti
 	}
 
 	return filterActionsForMode(classifyFile(view), effectiveMode)
+}
+
+func classifyPotentialPathView(view *PathView) []Action {
+	if forced := classifyForcedAction(view, SyncBidirectional); forced != nil {
+		return forced
+	}
+
+	if resolveItemType(view) == ItemTypeFolder {
+		return classifyFolder(view)
+	}
+
+	return classifyFile(view)
 }
 
 func filterActionsForMode(actions []Action, mode Mode) []Action {
