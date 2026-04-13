@@ -13,7 +13,7 @@ import (
 // ResolveDrive loads configuration and applies the four-layer override chain:
 // defaults -> config file -> environment variables -> CLI flags.
 // It returns the fully resolved drive configuration and the raw parsed config
-// (needed by driveops.SessionProvider for shared drive token resolution).
+// (needed by driveops.SessionRuntime for shared drive token resolution).
 func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*ResolvedDrive, *Config, error) {
 	return newDriveResolver(logger).resolveDrive(env, cli)
 }

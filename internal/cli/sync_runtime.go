@@ -9,7 +9,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -82,15 +81,7 @@ func runSyncDaemonWithFactory(
 		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
 
-	httpProvider := graphhttp.NewProvider(logger)
-	provider := driveops.NewSessionProvider(holder, func(_ *config.ResolvedDrive) driveops.HTTPClients {
-		clients := httpProvider.Sync()
-
-		return driveops.HTTPClients{
-			Meta:     clients.Meta,
-			Transfer: clients.Transfer,
-		}
-	}, "onedrive-go/"+version, logger)
+	runtime := driveops.NewSessionRuntime(holder, "onedrive-go/"+version, logger)
 
 	debugEventHook, closeDebugEvents, err := openSyncDebugEventHookFromEnv(logger)
 	if err != nil {
@@ -114,7 +105,7 @@ func runSyncDaemonWithFactory(
 	orch := orchestratorFactory(&multisync.OrchestratorConfig{
 		Holder:            holder,
 		Drives:            drives,
-		Provider:          provider,
+		Runtime:           runtime,
 		Logger:            logger,
 		ControlSocketPath: controlSocketPath,
 		DebugEventHook:    debugEventHook,

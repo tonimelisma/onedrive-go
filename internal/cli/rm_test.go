@@ -70,12 +70,7 @@ func newRmTestCommand(t *testing.T, cid driveid.CanonicalID, handler http.Handle
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	provider := driveops.NewSessionProvider(
-		nil,
-		driveops.StaticClientResolver(srv.Client(), srv.Client()),
-		"test-agent",
-		testDriveLogger(t),
-	)
+	provider := driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t))
 	provider.GraphBaseURL = srv.URL
 
 	var out bytes.Buffer
@@ -87,7 +82,7 @@ func newRmTestCommand(t *testing.T, cid driveid.CanonicalID, handler http.Handle
 			CanonicalID: cid,
 			DriveID:     driveid.New("drive-123"),
 		},
-		Provider: provider,
+		Runtime: provider,
 	}
 
 	cmd := newRmCmd()

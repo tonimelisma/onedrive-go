@@ -9,8 +9,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 )
 
 // addNewDrive adds a new drive to the config with a computed default sync_dir.
@@ -61,7 +61,7 @@ func addSharedDrive(
 	cid driveid.CanonicalID,
 	preResolvedName string,
 	logger *slog.Logger,
-	httpProvider *graphhttp.Provider,
+	runtime *driveops.SessionRuntime,
 ) error {
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
@@ -98,7 +98,7 @@ func addSharedDrive(
 	if displayName == "" {
 		var resolveErr error
 
-		displayName, resolveErr = resolveSharedDisplayName(ctx, cid, tokenPath, cfg, logger, httpProvider)
+		displayName, resolveErr = resolveSharedDisplayName(ctx, cid, tokenPath, cfg, logger, runtime)
 		if resolveErr != nil {
 			displayName = config.DefaultDisplayName(cid)
 			logger.Warn("could not derive shared drive display name, using fallback",
@@ -127,14 +127,14 @@ func resolveSharedDisplayName(
 	tokenPath string,
 	cfg *config.Config,
 	logger *slog.Logger,
-	httpProvider *graphhttp.Provider,
+	runtime *driveops.SessionRuntime,
 ) (string, error) {
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		return "", fmt.Errorf("load token source: %w", err)
 	}
 
-	client, err := newGraphClientWithHTTP("", httpProvider.BootstrapMeta(), ts, logger)
+	client, err := newGraphClientWithHTTP("", runtime.BootstrapMeta(), ts, logger)
 	if err != nil {
 		return "", err
 	}
@@ -234,7 +234,7 @@ func addSharedDriveByName(
 		return sharedDiscoveryNoMatchesError(selector, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
 
 	case 1:
-		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), matches[0].cid, matches[0].displayName, logger, cc.httpProvider())
+		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), matches[0].cid, matches[0].displayName, logger, cc.runtime())
 
 	default:
 		if err := writef(cc.Output(), "Multiple shared folders match %q — be more specific:\n\n", selector); err != nil {

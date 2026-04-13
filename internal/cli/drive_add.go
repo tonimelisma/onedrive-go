@@ -26,7 +26,7 @@ func runDriveAddWithContext(ctx context.Context, cc *CLIContext, args []string) 
 			return fmt.Errorf("parse shared drive identity: %w", err)
 		}
 
-		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.httpProvider())
+		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.runtime())
 	}
 
 	selector := ""
@@ -74,7 +74,7 @@ func runDriveAddWithContext(ctx context.Context, cc *CLIContext, args []string) 
 			return fmt.Errorf("shared files are direct stat/get/put targets, not drives")
 		}
 
-		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.httpProvider())
+		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.runtime())
 	}
 
 	return addNewDrive(cc.Output(), cc.CfgPath, cid, logger)

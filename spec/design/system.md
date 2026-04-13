@@ -21,7 +21,7 @@ internal/
   failures/                   Shared runtime/domain failure classes (leaf, stdlib-only)
   fsroot/                     Root-bound managed-state file capabilities
   graph/                      Graph API client: auth, Graph normalization, items CRUD, delta, transfers
-  graphhttp/                  Graph-facing HTTP client profiles and shared throttle coordination
+  graphhttp/                  Graph-facing HTTP client profile construction
   localpath/                  Explicit arbitrary-local-path boundary helpers
   localtrash/                 OS-local trash behavior for sync execution
   logfile/                    Log file creation, rotation, retention
@@ -61,7 +61,7 @@ root pkg → internal/cli/ → internal/graphhttp/ → internal/retry/
 - `driveid`, `failures`, `tokenfile`, and `retry` are leaf packages (no internal imports).
 - Both `graph` and `config` import `tokenfile` for token file I/O.
 - Callers pass token paths to `graph` — no config coupling.
-- `graphhttp` owns Graph-facing HTTP transport/client policy. `driveops` stays transport-policy agnostic and consumes injected clients through a resolver.
+- `graphhttp` owns Graph-facing HTTP transport/client profile construction. `driveops` owns the session runtime that reuses those profiles and chooses between bootstrap, interactive, and sync paths.
 
 ## Event-Driven Sync Pipeline
 

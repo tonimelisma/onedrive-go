@@ -1,7 +1,8 @@
-// Package graphhttp owns Graph-facing HTTP client construction and shared HTTP
-// runtime state such as target-scoped retry throttle coordination.
+// Package graphhttp owns Graph-facing HTTP client profile construction.
 //
-// It is intentionally narrower than internal/graph: graphhttp builds client
-// profiles, while graph.Client maps and normalizes Graph API behavior over the
-// injected *http.Client values.
+// It is intentionally narrower than internal/graph: graphhttp builds the
+// concrete metadata and transfer *http.Client profiles, while graph.Client maps
+// and normalizes Graph API behavior over those injected clients. Stateful
+// runtime reuse and target-scoped throttle ownership live one layer up in
+// driveops.SessionRuntime.
 package graphhttp

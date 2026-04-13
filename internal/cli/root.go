@@ -117,9 +117,9 @@ func (f CLIFlags) SingleDrive() (string, error) {
 // CLIContext bundles resolved config, flags, and logger. Created in
 // PersistentPreRunE with two-phase initialization:
 //   - Phase 1 (always): Flags + Logger + CfgPath + Env populated for every command.
-//   - Phase 2 (data commands): Cfg + Provider populated after config resolution.
+//   - Phase 2 (data commands): Cfg + Runtime populated after config resolution.
 //
-// Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/Provider.
+// Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/Runtime.
 type CLIContext struct {
 	Flags                         CLIFlags
 	Logger                        *slog.Logger
@@ -129,9 +129,8 @@ type CLIContext struct {
 	Env                           config.EnvOverrides           // env overrides (always set in Phase 1)
 	GraphBaseURL                  string                        // internal test seam for live Graph command coverage
 	SharedTarget                  *sharedTarget                 // nil for ordinary drive/path commands
-	HTTPProvider                  *graphhttp.Provider           // Graph-facing HTTP runtime policy
 	Cfg                           *config.ResolvedDrive         // nil for auth/account commands
-	Provider                      *driveops.SessionProvider     // nil for auth/account commands; created in Phase 2
+	Runtime                       *driveops.SessionRuntime      // nil for auth/account commands until Phase 2 swaps in a holder-backed runtime
 	PerfSession                   *perf.Session                 // command-scoped performance collector/logging session
 	syncWatchRunner               syncWatchRunner               // test-only seam for sync --watch command coverage
 	syncDaemonOrchestratorFactory syncDaemonOrchestratorFactory // test-only seam below syncWatchRunner for real daemon-path coverage
@@ -188,41 +187,16 @@ func (cc *CLIContext) closeCommandLogger() error {
 	return nil
 }
 
-func (cc *CLIContext) httpProvider() *graphhttp.Provider {
+func (cc *CLIContext) runtime() *driveops.SessionRuntime {
 	if cc == nil {
-		return graphhttp.NewProvider(slog.Default())
+		return driveops.NewSessionRuntime(nil, "onedrive-go/"+version, slog.Default())
 	}
 
-	if cc.HTTPProvider == nil {
-		cc.HTTPProvider = graphhttp.NewProvider(cc.Logger)
+	if cc.Runtime == nil {
+		cc.Runtime = driveops.NewSessionRuntime(nil, "onedrive-go/"+version, cc.Logger)
 	}
 
-	return cc.HTTPProvider
-}
-
-func (cc *CLIContext) interactiveHTTPClients(rd *config.ResolvedDrive) driveops.HTTPClients {
-	provider := cc.httpProvider()
-	if rd == nil {
-		syncClients := provider.Sync()
-
-		return driveops.HTTPClients{
-			Meta:     provider.BootstrapMeta(),
-			Transfer: syncClients.Transfer,
-		}
-	}
-
-	account := rd.CanonicalID.Email()
-	var clients graphhttp.ClientSet
-	if rd.RootItemID != "" {
-		clients = provider.InteractiveForSharedTarget(account, rd.DriveID.String(), rd.RootItemID)
-	} else {
-		clients = provider.InteractiveForDrive(account, rd.DriveID)
-	}
-
-	return driveops.HTTPClients{
-		Meta:     clients.Meta,
-		Transfer: clients.Transfer,
-	}
+	return cc.Runtime
 }
 
 // cliContextKey is the context key for CLIContext.
@@ -254,11 +228,11 @@ func mustCLIContext(ctx context.Context) *CLIContext {
 	return cc
 }
 
-// Session is a shorthand for cc.Provider.Session(ctx, cc.Cfg).
+// Session is a shorthand for cc.Runtime.Session(ctx, cc.Cfg).
 // Eliminates 7 identical boilerplate blocks across file operation commands.
 func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
-	if cc.Provider != nil && cc.GraphBaseURL != "" {
-		cc.Provider.GraphBaseURL = cc.GraphBaseURL
+	if cc.Runtime != nil && cc.GraphBaseURL != "" {
+		cc.Runtime.GraphBaseURL = cc.GraphBaseURL
 	}
 
 	accountCID, err := config.TokenAccountCanonicalID(cc.Cfg.CanonicalID)
@@ -271,14 +245,14 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 			return nil, fmt.Errorf("probe account identity: %w", probeErr)
 		}
 		if result.Changed() {
-			cc.Provider.FlushTokenCache()
+			cc.Runtime.FlushTokenCache()
 			if reloadErr := cc.reloadResolvedDriveFromFlags(); reloadErr != nil {
 				return nil, reloadErr
 			}
 		}
 	}
 
-	session, err := cc.Provider.Session(ctx, cc.Cfg)
+	session, err := cc.Runtime.Session(ctx, cc.Cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create drive session: %w", err)
 	}
@@ -294,7 +268,7 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 // newGraphClient creates a graph.Client with the standard HTTP client,
 // user-agent, and base URL. Eliminates boilerplate repeated across commands.
 func newGraphClient(ts graph.TokenSource, logger *slog.Logger) (*graph.Client, error) {
-	return newGraphClientWithHTTP("", graphhttp.NewProvider(logger).BootstrapMeta(), ts, logger)
+	return newGraphClientWithHTTP("", graphhttp.BootstrapMetadataClient(logger), ts, logger)
 }
 
 func newGraphClientWithHTTP(
@@ -342,7 +316,7 @@ func initializeCLIContext(
 		StatusWriter: statusWriter,
 		CfgPath:      config.ResolveConfigPath(env, config.CLIOverrides{ConfigPath: flags.ConfigPath}, logger),
 		Env:          env,
-		HTTPProvider: graphhttp.NewProvider(logger),
+		Runtime:      driveops.NewSessionRuntime(nil, "onedrive-go/"+version, logger),
 	}
 
 	ctx := cmd.Context()
@@ -390,15 +364,8 @@ func initializeResolvedCLIContext(cmd *cobra.Command, cc *CLIContext) error {
 	if err := cc.replaceCommandLogger(dualLogger, closer); err != nil {
 		return err
 	}
-	cc.HTTPProvider = graphhttp.NewProvider(cc.Logger)
-
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
-	cc.Provider = driveops.NewSessionProvider(
-		holder,
-		cc.interactiveHTTPClients,
-		"onedrive-go/"+version,
-		cc.Logger,
-	)
+	cc.Runtime = driveops.NewSessionRuntime(holder, "onedrive-go/"+version, cc.Logger)
 
 	return nil
 }
@@ -549,7 +516,7 @@ func completeRootCommandPerf(cmd *cobra.Command, err error) {
 
 // loadAndResolve resolves the effective configuration from the four-layer
 // override chain. Returns the resolved drive config and the raw parsed config
-// (needed by SessionProvider for shared drive token resolution).
+// (needed by SessionRuntime for shared drive token resolution).
 func loadAndResolve(
 	cmd *cobra.Command, flags CLIFlags, env config.EnvOverrides, logger *slog.Logger,
 ) (*config.ResolvedDrive, *config.Config, error) {
