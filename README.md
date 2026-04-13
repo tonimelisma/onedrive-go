@@ -57,8 +57,9 @@ go test -race ./...               # Test with race detector
 golangci-lint run                 # Lint
 ```
 
-Use `go run ./cmd/devtool worktree add --path <path> --branch <branch>` to
-create a fresh worktree from `origin/main`.
+Use `git fetch origin` before
+`go run ./cmd/devtool worktree add --path <path> --branch <branch>` so the new
+worktree starts from the current `origin/main`.
 
 See [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), and the
 [system architecture doc](spec/design/system.md) for repo workflow and

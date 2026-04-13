@@ -253,7 +253,7 @@ The repo does not rely on each contributor improvising their own workflow.
 Pick a small change and do it the repo's way:
 
 - claim the work
-- create a fresh worktree from `origin/main`
+- run `git fetch origin`, then create a fresh worktree from `origin/main`
 - write or adjust tests first when behavior changes
 - update docs in the same increment
 - run `go run ./cmd/devtool verify default`
@@ -528,7 +528,7 @@ mistake it for optional contributor convenience.
 `cmd/devtool` and `internal/devtool` own:
 
 - `verify`: repo-owned verification profiles
-- `worktree`: worktree creation/bootstrap from `origin/main`
+- `worktree`: worktree creation/bootstrap from freshly fetched `origin/main`
 - `bench`: benchmark scenarios and result bundles
 - `state-audit`: sync-state inspection and safe repair surfaces
 - `watch-capture`: raw fsnotify capture tooling
@@ -539,7 +539,7 @@ The file-family split inside `internal/devtool` is also worth knowing:
 | File family | Role |
 | --- | --- |
 | `verify*.go` | Verification profile orchestration, docs checks, repo checks, E2E orchestration, summaries |
-| `worktree.go` | Worktree creation and bootstrap from `origin/main` |
+| `worktree.go` | Worktree creation and bootstrap from freshly fetched `origin/main` |
 | `bench*.go` | Benchmark scenarios and result recording |
 | `state_audit.go` | Sync-state inspection and safe repair entrypoints |
 | `watch_capture.go` | Raw watch-event capture tooling |
@@ -566,8 +566,9 @@ stay value-oriented.
 
 ### Why does the repo prefer worktrees and PR increments?
 
-Because the workflow is designed around clean, reviewable increments from
-`origin/main`, with verification and docs updated in the same change.
+Because the workflow is designed around clean, reviewable increments from a
+freshly fetched `origin/main`, with verification and docs updated in the same
+change.
 
 ### Why are there so many docs?
 
