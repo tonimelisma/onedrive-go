@@ -517,6 +517,15 @@ live credentials, missing `.testdata`, missing allowlist entries, remote-reset
 failures, and seed failures surface as `fixture_failed` benchmark outcomes
 instead of opaque setup crashes.
 
+The remote-scope visibility probe treats the parent `ls` output as a set of
+exact entry names, not substring evidence. Sibling entries such as
+`test-scope-backup` must not satisfy visibility for `test-scope`.
+
+Per-sample runtime cleanup is part of the same benchmark outcome contract. If a
+sample finishes its measured command successfully but teardown of the sample's
+isolated runtime root fails, the runner downgrades that sample to
+`fixture_failed` instead of silently discarding the cleanup error.
+
 ## Publication Rules
 
 - Default local verification and required CI remain correctness-focused.

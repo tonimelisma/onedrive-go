@@ -111,7 +111,12 @@ approval bypass; held-delete approval is durable engine-owned intent.
 - Planner-owned `DeferredByMode` reporting counts only work suppressed by the
   requested sync direction. Permission-denied prefixes first downgrade a path's
   capability to download-only, and actions eliminated by that permission
-  contract are excluded from deferred-direction reporting.
+  contract are excluded from deferred-direction reporting. The one exception is
+  folder-delete cascade synthesis for omitted descendants: when a writable
+  ancestor folder delete is itself suppressed by the requested direction,
+  cascade-only descendant deletes inherit that suppressed parent contract for
+  deferred reporting even if a deeper denied prefix would individually allow
+  the descendant delete.
 - `RemoteState` carries `DriveID` for cross-drive correctness. Shared folder items from Drive A in Drive B's delta carry Drive A's DriveID. Planner DriveID propagation: Remote.DriveID wins → Baseline.DriveID fallback → empty for new local items.
 - `RemoteState` carries `RemoteDriveID` and `RemoteItemID` for shortcut scope identity (D-5). These are transient fields populated by `remoteStateFromEvent()` from `ChangeEvent` — not persisted in `remote_state` table. `makeAction()` uses them to populate `Action.targetShortcutKey` and `Action.targetDriveID` so active-scope admission can distinguish own-drive vs shortcut-scoped failures (R-6.8.12, R-6.8.13).
 - The planner detects action dependency cycles using DFS with white/gray/black node coloring after `buildDependencies()`. Cycle detection prevents deadlock in the DepGraph.

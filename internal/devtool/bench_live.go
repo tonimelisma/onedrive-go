@@ -382,19 +382,24 @@ func (s *benchLiveScenarioState) runSample(
 	if runtimeErr != nil {
 		return benchFixtureFailureSample(sample, runtimeErr)
 	}
-	defer func() {
-		if cleanupErr := localpath.RemoveAll(runtime.rootDir); cleanupErr != nil && sample.Status == BenchSampleSuccess {
-			sample = benchFixtureFailureSample(sample, fmt.Errorf("cleanup sample runtime: %w", cleanupErr))
-		}
-	}()
 
 	scopeRoot := filepath.Join(runtime.syncDir, filepath.FromSlash(s.fixture.ScopeRootRelativePath))
 	preparedSample, preparedOK := s.prepareMeasuredCatchup(ctx, subject, runtime, scopeRoot, sample)
 	if !preparedOK {
-		return preparedSample
+		return finalizeBenchLiveSampleRuntime(runtime.rootDir, preparedSample)
 	}
 
-	return s.measureCatchupSample(ctx, subject, runtime, scopeRoot, preparedSample)
+	measuredSample := s.measureCatchupSample(ctx, subject, runtime, scopeRoot, preparedSample)
+
+	return finalizeBenchLiveSampleRuntime(runtime.rootDir, measuredSample)
+}
+
+func finalizeBenchLiveSampleRuntime(runtimeRoot string, sample benchSample) benchSample {
+	if cleanupErr := localpath.RemoveAll(runtimeRoot); cleanupErr != nil && sample.Status == BenchSampleSuccess {
+		return benchFixtureFailureSample(sample, fmt.Errorf("cleanup sample runtime: %w", cleanupErr))
+	}
+
+	return sample
 }
 
 func (s *benchLiveScenarioState) prepareMeasuredCatchup(
@@ -816,7 +821,7 @@ func waitForBenchRemoteScopeVisible(
 		}
 
 		listProcess, listErr := subject.measure(ctx, runtime.commandSpec("ls", parentPath))
-		if listErr == nil && strings.Contains(string(listProcess.Stdout), scopeBase) {
+		if listErr == nil && benchRemoteScopeVisibleInListing(listProcess.Stdout, scopeBase) {
 			return nil
 		}
 
@@ -862,6 +867,16 @@ func waitForBenchRemoteScopeVisible(
 			)
 		}
 	}
+}
+
+func benchRemoteScopeVisibleInListing(stdout []byte, scopeBase string) bool {
+	for _, line := range strings.Split(string(stdout), "\n") {
+		if strings.TrimSpace(line) == scopeBase {
+			return true
+		}
+	}
+
+	return false
 }
 
 func classifyBenchVisibilityError(stderr []byte, err error) error {

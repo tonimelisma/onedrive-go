@@ -2606,6 +2606,7 @@ func TestPlan_DeniedPrefix_AllowsDownloads(t *testing.T) {
 	assert.Len(t, downloads, 1, "downloads should proceed under denied prefix")
 }
 
+// Validates: R-2.14.2
 func TestPlan_UploadOnly_DeniedPrefix_DoesNotReportDeferredDownloads(t *testing.T) {
 	t.Parallel()
 
@@ -2638,6 +2639,7 @@ func TestPlan_UploadOnly_DeniedPrefix_DoesNotReportDeferredDownloads(t *testing.
 	assert.Zero(t, plan.DeferredByMode.Downloads, "permission-driven download overrides must not be reported as deferred")
 }
 
+// Validates: R-2.14.2
 func TestPlan_UploadOnly_DeniedPrefix_DoesNotReportDeferredUploads(t *testing.T) {
 	t.Parallel()
 
@@ -2788,6 +2790,56 @@ func TestPlan_DeniedPrefix_LocalDelete_Suppressed(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Empty(t, plan.Actions, "local absence under denied prefix must not propagate a remote delete")
+}
+
+// Validates: R-2.14.2
+func TestPlan_UploadOnly_DeferredFolderDeleteCascadeCountsDeniedDescendants(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(synctest.TestLogger(t))
+
+	baseline := baselineWith(
+		&BaselineEntry{
+			Path: "Writable", ItemType: ItemTypeFolder,
+			DriveID: driveid.New(synctest.TestDriveID), ItemID: "folder-root",
+		},
+		&BaselineEntry{
+			Path: "Writable/ReadOnly", ItemType: ItemTypeFolder,
+			DriveID: driveid.New(synctest.TestDriveID), ItemID: "folder-denied",
+		},
+		&BaselineEntry{
+			Path: "Writable/ReadOnly/file.txt", ItemType: ItemTypeFile,
+			DriveID: driveid.New(synctest.TestDriveID), ItemID: "file-denied",
+			LocalHash: "aaa", RemoteHash: "aaa",
+		},
+	)
+
+	changes := []PathChanges{{
+		Path: "Writable",
+		RemoteEvents: []ChangeEvent{{
+			Type:      ChangeDelete,
+			Path:      "Writable",
+			ItemType:  ItemTypeFolder,
+			IsDeleted: true,
+		}},
+	}}
+
+	plan, err := planner.Plan(
+		changes,
+		baseline,
+		SyncUploadOnly,
+		DefaultSafetyConfig(),
+		[]string{"Writable/ReadOnly"},
+	)
+	require.NoError(t, err)
+
+	assert.Empty(t, actionsOfType(plan.Actions, ActionLocalDelete), "upload-only should suppress remote-origin local deletes")
+	assert.Equal(
+		t,
+		3,
+		plan.DeferredByMode.LocalDeletes,
+		"deferred local delete counts should include cascaded descendants even when part of the subtree is permission-denied",
+	)
 }
 
 // Validates: R-2.14.2

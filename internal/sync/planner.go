@@ -456,10 +456,15 @@ func deferredCountsForMode(
 	}
 
 	fullActions = expandFolderDeleteCascades(fullActions, baseline, views, SyncBidirectional, logger)
+	suppressedCascadeModes := suppressedFolderDeleteCascadeModes(fullActions, mode, deniedPrefixes)
 
 	var deferred DeferredCounts
 	for i := range fullActions {
-		if !actionAllowedInMode(&fullActions[i], deferredReportingModeForAction(&fullActions[i], mode, deniedPrefixes)) {
+		reportingMode := deferredReportingModeForAction(&fullActions[i], mode, deniedPrefixes)
+		if overrideMode, ok := deferredCascadedDeleteReportingMode(&fullActions[i], views, suppressedCascadeModes); ok {
+			reportingMode = overrideMode
+		}
+		if !actionAllowedInMode(&fullActions[i], reportingMode) {
 			deferred.AddAction(&fullActions[i])
 		}
 	}
@@ -529,6 +534,73 @@ func deferredReportingModeForAction(action *Action, requestedMode Mode, deniedPr
 	}
 
 	return effectiveModeForPath(action.Path, requestedMode, deniedPrefixes)
+}
+
+type suppressedFolderDeleteCascadeMode struct {
+	Path string
+	Mode Mode
+}
+
+func suppressedFolderDeleteCascadeModes(
+	actions []Action,
+	requestedMode Mode,
+	deniedPrefixes []string,
+) []suppressedFolderDeleteCascadeMode {
+	suppressed := make([]suppressedFolderDeleteCascadeMode, 0)
+
+	for i := range actions {
+		if !shouldCascadeFolderDelete(&actions[i]) {
+			continue
+		}
+
+		reportingMode := deferredReportingModeForAction(&actions[i], requestedMode, deniedPrefixes)
+		if actionAllowedInMode(&actions[i], reportingMode) {
+			continue
+		}
+
+		suppressed = append(suppressed, suppressedFolderDeleteCascadeMode{
+			Path: actions[i].Path,
+			Mode: reportingMode,
+		})
+	}
+
+	return suppressed
+}
+
+func deferredCascadedDeleteReportingMode(
+	action *Action,
+	observedViews map[string]*PathView,
+	suppressed []suppressedFolderDeleteCascadeMode,
+) (Mode, bool) {
+	if action == nil {
+		return SyncBidirectional, false
+	}
+	if action.Type != ActionLocalDelete && action.Type != ActionRemoteDelete {
+		return SyncBidirectional, false
+	}
+	if _, observed := observedViews[action.Path]; observed {
+		return SyncBidirectional, false
+	}
+
+	bestMatchLength := -1
+	bestMode := SyncBidirectional
+	for _, candidate := range suppressed {
+		if action.Path == candidate.Path || !strings.HasPrefix(action.Path, candidate.Path+"/") {
+			continue
+		}
+		if len(candidate.Path) <= bestMatchLength {
+			continue
+		}
+
+		bestMatchLength = len(candidate.Path)
+		bestMode = candidate.Mode
+	}
+
+	if bestMatchLength < 0 {
+		return SyncBidirectional, false
+	}
+
+	return bestMode, true
 }
 
 func filterActionsForMode(actions []Action, mode Mode) []Action {
