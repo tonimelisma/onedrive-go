@@ -35,6 +35,7 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | R-6 Non-Functional | `spec/requirements/non-functional.md` | `spec/design/system.md`, `spec/design/retry.md` |
 
 Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
+New contributors should start with `spec/reference/developer-onboarding.md`.
 
 ## Eng Philosophy
 
