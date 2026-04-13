@@ -1,0 +1,371 @@
+package devtool
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// Validates: R-6.10.5
+func TestEnsureInternalDependencyGraphGuardrailsPassesMinimalValidGraph(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeDependencyGraphModule(t, repoRoot)
+	writeDependencyGraphPackage(t, repoRoot, "driveid")
+	writeDependencyGraphPackage(t, repoRoot, "sync", internalPackagePrefix+"driveid")
+	writeDependencyGraphPackage(t, repoRoot, "cli", internalPackagePrefix+"sync")
+	writeDependencyGraphPackage(t, repoRoot, "multisync", internalPackagePrefix+"sync")
+
+	require.NoError(t, ensureInternalDependencyGraphGuardrails(repoRoot))
+}
+
+// Validates: R-6.10.5
+func TestEnsureInternalDependencyGraphGuardrailsFailsOnPackageCountLimit(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeDependencyGraphModule(t, repoRoot)
+	for i := 0; i <= internalPackageLimit; i++ {
+		writeDependencyGraphPackage(t, repoRoot, fmt.Sprintf("pkg%02d", i))
+	}
+
+	err := ensureInternalDependencyGraphGuardrails(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal package graph exceeds limit")
+	assert.Contains(t, err.Error(), "28 packages")
+}
+
+// Validates: R-6.10.5
+func TestEnsureInternalDependencyGraphGuardrailsFailsOnImportEdgeLimit(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeDependencyGraphModule(t, repoRoot)
+	for i := 0; i < 14; i++ {
+		name := fmt.Sprintf("pkg%02d", i)
+		var imports []string
+		for j := i + 1; j < 14; j++ {
+			imports = append(imports, internalPackagePrefix+fmt.Sprintf("pkg%02d", j))
+		}
+		writeDependencyGraphPackage(t, repoRoot, name, imports...)
+	}
+
+	err := ensureInternalDependencyGraphGuardrails(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal package graph exceeds limit")
+	assert.Contains(t, err.Error(), "91 import edges")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnHTTPClientDoOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	badDir := filepath.Join(repoRoot, "internal", "bad")
+	require.NoError(t, os.MkdirAll(badDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(badDir, "bad_http.go"),
+		[]byte(strings.Join([]string{
+			"package bad",
+			"",
+			"import \"net/http\"",
+			"",
+			"type wrapper struct {",
+			"\tclient *http.Client",
+			"}",
+			"",
+			"func do(req *http.Request, w wrapper) (*http.Response, error) {",
+			"\treturn w.client.Do(req)",
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "http.Client.Do")
+	assert.Contains(t, err.Error(), "bad_http.go")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksAllowsApprovedHTTPClientDoBoundary(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	graphDir := filepath.Join(repoRoot, "internal", "graph")
+	require.NoError(t, os.MkdirAll(graphDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(graphDir, "client_preauth.go"),
+		[]byte(strings.Join([]string{
+			"package graph",
+			"",
+			"import \"net/http\"",
+			"",
+			"type client struct {",
+			"\thttpClient *http.Client",
+			"}",
+			"",
+			"func (c *client) do(req *http.Request) (*http.Response, error) {",
+			"\treturn c.httpClient.Do(req)",
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	require.NoError(t, runRepoConsistencyChecks(repoRoot))
+}
+
+// Validates: R-6.2.1
+func TestRunRepoConsistencyChecksFailsOnCLIProcessGlobalOutput(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	cliDir := filepath.Join(repoRoot, "internal", "cli")
+	require.NoError(t, os.MkdirAll(cliDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cliDir, "bad_output.go"),
+		[]byte(strings.Join([]string{
+			"package cli",
+			"",
+			"import (",
+			"\t\"fmt\"",
+			"\t\"os\"",
+			")",
+			"",
+			"func badOutput() {",
+			"\tfmt.Fprintln(os.Stderr, \"oops\")",
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cli output boundary violation")
+	assert.Contains(t, err.Error(), "bad_output.go")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnExecCommandContextOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_exec.go", []string{
+		"package bad",
+		"",
+		"import (",
+		"\t\"context\"",
+		"\t\"os/exec\"",
+		")",
+		"",
+		"func run(ctx context.Context) error {",
+		"\treturn exec.CommandContext(ctx, \"echo\", \"nope\").Run()",
+		"}",
+		"",
+	}, "exec.CommandContext")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnExecCommandOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_exec_command.go", []string{
+		"package bad",
+		"",
+		"import \"os/exec\"",
+		"",
+		"func run() error {",
+		"\treturn exec.Command(\"echo\", \"nope\").Run()",
+		"}",
+		"",
+	}, "exec.Command")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnSQLOpenOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_sql.go", []string{
+		"package bad",
+		"",
+		"import \"database/sql\"",
+		"",
+		"func open() (*sql.DB, error) {",
+		"\treturn sql.Open(\"sqlite\", \"file:test.db\")",
+		"}",
+		"",
+	}, "sql.Open")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnSignalNotifyOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_signal.go", []string{
+		"package bad",
+		"",
+		"import (",
+		"\t\"os\"",
+		"\t\"os/signal\"",
+		")",
+		"",
+		"func watch(ch chan os.Signal) {",
+		"\tsignal.Notify(ch)",
+		"}",
+		"",
+	}, "signal.Notify")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnSignalStopOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_signal_stop.go", []string{
+		"package bad",
+		"",
+		"import (",
+		"\t\"os\"",
+		"\t\"os/signal\"",
+		")",
+		"",
+		"func watch(ch chan os.Signal) {",
+		"\tsignal.Stop(ch)",
+		"}",
+		"",
+	}, "signal.Stop")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnOSExitOutsideApprovedBoundary(t *testing.T) {
+	t.Parallel()
+
+	assertRepoConsistencyRejectsPrivilegedCall(t, "bad_exit.go", []string{
+		"package bad",
+		"",
+		"import \"os\"",
+		"",
+		"func exitNow() {",
+		"\tos.Exit(1)",
+		"}",
+		"",
+	}, "os.Exit")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksIgnoresTestSupportOSExitOutsideProductionRoots(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	testutilDir := filepath.Join(repoRoot, "testutil")
+	require.NoError(t, os.MkdirAll(testutilDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(testutilDir, "testenv.go"),
+		[]byte(strings.Join([]string{
+			"package testutil",
+			"",
+			"import \"os\"",
+			"",
+			"func fatal() {",
+			"\tos.Exit(1)",
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.NoError(t, err)
+}
+
+// Validates: R-6.2.1
+func TestRunRepoConsistencyChecksFailsOnRawOSFilesystemCallInGuardedPackage(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	syncDir := filepath.Join(repoRoot, "internal", "sync")
+	require.NoError(t, os.MkdirAll(syncDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(syncDir, "bad_fs.go"),
+		[]byte(strings.Join([]string{
+			"package sync",
+			"",
+			"import \"os\"",
+			"",
+			"func badFS(path string) error {",
+			"\t_, err := os.Stat(path)",
+			"\treturn err",
+			"}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "raw os filesystem call detected")
+	assert.Contains(t, err.Error(), "bad_fs.go")
+}
+
+// Validates: R-6.2.1
+func TestRunRepoConsistencyChecksFailsOnStaleFilterSemanticsWording(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	requirementsDir := filepath.Join(repoRoot, "spec", "requirements")
+	require.NoError(t, os.MkdirAll(requirementsDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(requirementsDir, "sync.md"),
+		[]byte("Filter settings are per-drive only.\n"),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stale filter semantics wording")
+	assert.Contains(t, err.Error(), "sync.md")
+}
+
+func assertRepoConsistencyRejectsPrivilegedCall(
+	t *testing.T,
+	filename string,
+	source []string,
+	want string,
+) {
+	t.Helper()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	badDir := filepath.Join(repoRoot, "internal", "bad")
+	require.NoError(t, os.MkdirAll(badDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(badDir, filename),
+		[]byte(strings.Join(source, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), want)
+	assert.Contains(t, err.Error(), filename)
+}
