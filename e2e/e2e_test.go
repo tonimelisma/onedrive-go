@@ -443,7 +443,7 @@ func pollCLIWithConfigContains(
 				timeout, expected, args, stdout, stderr)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -467,7 +467,7 @@ func pollCLIWithConfigSuccess(t *testing.T, cfgPath string, env map[string]strin
 				timeout, args, stdout, stderr)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -504,7 +504,7 @@ func pollCLIWithConfigRetryingTransientGraphFailures(
 				timeout, args, stdout, stderr)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -530,7 +530,7 @@ func pollCLIWithConfigNotContains(
 				timeout, unexpected, args, stdout, stderr)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -584,7 +584,7 @@ func pollRemoteEventually(
 				timeout, description, args, stdout, stderr)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -778,7 +778,7 @@ func waitForRemoteFixtureSeedVisible(
 			)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -938,7 +938,7 @@ func requireSyncEventuallyConverges(
 			)
 		}
 
-		time.Sleep(5 * time.Second)
+		sleepForLiveTestPropagation(5 * time.Second)
 	}
 
 	return last

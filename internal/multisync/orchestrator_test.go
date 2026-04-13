@@ -1296,8 +1296,9 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgPath, []byte("{{invalid toml"), 0o600))
 	postControlReload(t, cfg.ControlSocketPath)
 
-	// Give reload time to process — the drive should still be running.
-	time.Sleep(200 * time.Millisecond)
+	assert.Never(t, func() bool {
+		return started.Load() > 1
+	}, 200*time.Millisecond, 10*time.Millisecond, "drive should still be running after invalid config reload")
 	assert.Equal(t, int32(1), started.Load(), "drive should still be running after invalid config reload")
 
 	cancel()
@@ -1357,10 +1358,15 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused_until", "2000-01-01T00:00:00Z"))
 	postControlReload(t, cfg.ControlSocketPath)
 
-	// The expired timed pause is cleared by ClearExpiredPauses during reload.
-	// The drive is already running and remains in newActive, so it is NOT
-	// stopped and NOT restarted — avoiding unnecessary downtime.
-	time.Sleep(200 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		reloadedCfg, err := config.LoadOrDefault(cfgPath, slog.Default())
+		if err != nil {
+			return false
+		}
+		d := reloadedCfg.Drives[rd.CanonicalID]
+		return d.Paused == nil && d.PausedUntil == nil
+	}, 5*time.Second, 10*time.Millisecond)
+
 	assert.Equal(t, int32(0), stopped.Load(), "drive should NOT be stopped — expired pause is cleared, drive stays running")
 	assert.Equal(t, int32(1), started.Load(), "drive should NOT be restarted — it was already running")
 

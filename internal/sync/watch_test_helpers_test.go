@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -15,6 +17,8 @@ type watchObserverTestOptions struct {
 	DirNameCache          map[string]map[string][]string
 	RecentLocalDeletes    map[string]struct{}
 	HashFunc              func(path string) (string, error)
+	AfterFunc             func(time.Duration, func()) syncTimer
+	AfterSafetyScan       func()
 	SafetyTickFunc        func(time.Duration) (<-chan time.Time, func())
 }
 
@@ -50,9 +54,42 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 	if opts.HashFunc != nil {
 		obs.HashFunc = opts.HashFunc
 	}
+	if opts.AfterFunc != nil {
+		obs.AfterFunc = opts.AfterFunc
+	}
+	if opts.AfterSafetyScan != nil {
+		obs.AfterSafetyScan = opts.AfterSafetyScan
+	}
 	if opts.SafetyTickFunc != nil {
 		obs.SafetyTickFunc = opts.SafetyTickFunc
 	}
 
 	return obs
+}
+
+func startMockWatch(
+	t *testing.T,
+	obs *LocalObserver,
+	watcher *mockFsWatcher,
+	dir string,
+	events chan ChangeEvent,
+) (context.CancelFunc, <-chan error) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "watch exited before becoming ready")
+	case <-watcher.Added():
+	case <-time.After(5 * time.Second):
+		cancel()
+		require.Fail(t, "timeout waiting for mock watch setup")
+	}
+
+	return cancel, done
 }

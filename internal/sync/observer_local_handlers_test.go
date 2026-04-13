@@ -30,6 +30,8 @@ import (
 type mockFsWatcher struct {
 	events   chan fsnotify.Event
 	errs     chan error
+	addOne   stdsync.Once
+	addCh    chan struct{}
 	closeOne stdsync.Once // idempotent Close prevents panic on double-close
 }
 
@@ -37,13 +39,27 @@ func newMockFsWatcher() *mockFsWatcher {
 	return &mockFsWatcher{
 		events: make(chan fsnotify.Event, 10),
 		errs:   make(chan error, 10),
+		addCh:  make(chan struct{}),
 	}
 }
 
-func (m *mockFsWatcher) Add(string) error              { return nil }
+func (m *mockFsWatcher) Add(string) error {
+	if m.addCh == nil {
+		m.addCh = make(chan struct{})
+	}
+	m.addOne.Do(func() { close(m.addCh) })
+	return nil
+}
 func (m *mockFsWatcher) Remove(string) error           { return nil }
 func (m *mockFsWatcher) Events() <-chan fsnotify.Event { return m.events }
 func (m *mockFsWatcher) Errors() <-chan error          { return m.errs }
+func (m *mockFsWatcher) Added() <-chan struct{} {
+	if m.addCh == nil {
+		m.addCh = make(chan struct{})
+	}
+
+	return m.addCh
+}
 
 func (m *mockFsWatcher) Close() error {
 	m.closeOne.Do(func() { close(m.events); close(m.errs) })
@@ -161,7 +177,6 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	writeTestFile(t, dir, "temp.tmp", "temporary")
 
 	// Then create a valid file — should produce an event.
-	time.Sleep(50 * time.Millisecond)
 	writeTestFile(t, dir, "valid.txt", "keep")
 
 	var ev ChangeEvent
@@ -198,15 +213,7 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	// Let the watcher start, then cancel.
-	time.Sleep(50 * time.Millisecond)
+	cancel, done := startLocalWatch(t, obs, dir, events)
 	cancel()
 
 	select {
@@ -229,6 +236,7 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	writeTestFile(t, dir, "safety-scan.txt", "content")
 
 	recorder := newSleepRecorder()
 	mockWatcher := newMockFsWatcher()
@@ -238,7 +246,7 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 		Baseline: emptyBaseline(),
 		Logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
-			PendingTimers: make(map[string]*time.Timer),
+			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan HashRequest, HashRequestBufSize),
 		},
 		SleepFunc: recorder.sleep,
@@ -259,6 +267,14 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
+	select {
+	case err := <-done:
+		require.NoError(t, err, "watch exited before becoming ready")
+	case <-mockWatcher.Added():
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for mock watch setup")
+	}
+
 	// Step 1: Inject a watcher error → watchLoop sleeps with initial backoff (1s).
 	mockWatcher.errs <- errors.New("test watcher error 1")
 	recorder.waitForCalls(t, 1)
@@ -271,11 +287,12 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	// The safety scan resets errBackoff to retry.WatchLocalPolicy().Base.
 	tickCh <- time.Now()
 
-	// Give watchLoop time to process the tick before we send the next error.
-	// Without this, both tickCh and errs could be ready in watchLoop's select
-	// simultaneously, and Go would pick non-deterministically — potentially
-	// processing the error before the tick resets the backoff.
-	time.Sleep(10 * time.Millisecond)
+	select {
+	case ev := <-events:
+		require.Equal(t, "safety-scan.txt", ev.Path)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for safety-scan event")
+	}
 
 	// Step 3: Inject another watcher error → should use initial backoff (1s),
 	// NOT the escalated value (2s), because the safety scan reset it.
@@ -304,7 +321,7 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 		Baseline: emptyBaseline(),
 		Logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
-			PendingTimers: make(map[string]*time.Timer),
+			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan HashRequest, HashRequestBufSize),
 		},
 		SleepFunc: recorder.sleep,
@@ -325,6 +342,14 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	go func() {
 		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "watch exited before becoming ready")
+	case <-mockWatcher.Added():
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for mock watch setup")
+	}
 
 	// Inject two consecutive errors.
 	mockWatcher.errs <- errors.New("error 1")
@@ -460,9 +485,10 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 		Baseline: baseline,
 		Logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
-			PendingTimers: make(map[string]*time.Timer),
+			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan HashRequest, HashRequestBufSize),
 		},
+		AfterFunc: realAfterFunc,
 		SleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
 		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}

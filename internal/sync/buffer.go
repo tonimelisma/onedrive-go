@@ -14,14 +14,53 @@ import (
 	"time"
 )
 
+type debounceTimer interface {
+	Chan() <-chan time.Time
+	Stop() bool
+	Reset(time.Duration) bool
+}
+
+type realDebounceTimer struct {
+	timer *time.Timer
+}
+
+func (t *realDebounceTimer) Chan() <-chan time.Time {
+	if t == nil || t.timer == nil {
+		return nil
+	}
+
+	return t.timer.C
+}
+
+func (t *realDebounceTimer) Stop() bool {
+	if t == nil || t.timer == nil {
+		return false
+	}
+
+	return t.timer.Stop()
+}
+
+func (t *realDebounceTimer) Reset(delay time.Duration) bool {
+	if t == nil || t.timer == nil {
+		return false
+	}
+
+	return t.timer.Reset(delay)
+}
+
+func newRealDebounceTimer(delay time.Duration) debounceTimer {
+	return &realDebounceTimer{timer: time.NewTimer(delay)}
+}
+
 // Buffer collects ChangeEvents from both observers and groups them
 // by path into PathChanges values for the planner. All methods are
 // safe for concurrent use.
 type Buffer struct {
-	mu      sync.Mutex // guards pending and notify
-	pending map[string]*PathChanges
-	notify  chan struct{} // signaled on Add/AddAll when FlushDebounced is active; nil otherwise
-	logger  *slog.Logger
+	mu       sync.Mutex // guards pending and notify
+	pending  map[string]*PathChanges
+	notify   chan struct{} // signaled on Add/AddAll when FlushDebounced is active; nil otherwise
+	logger   *slog.Logger
+	newTimer func(time.Duration) debounceTimer
 }
 
 // NewBuffer creates an empty Buffer ready to accept events.
@@ -29,8 +68,9 @@ func NewBuffer(logger *slog.Logger) *Buffer {
 	logger.Debug("buffer created")
 
 	return &Buffer{
-		pending: make(map[string]*PathChanges),
-		logger:  logger,
+		pending:  make(map[string]*PathChanges),
+		logger:   logger,
+		newTimer: newRealDebounceTimer,
 	}
 }
 
@@ -121,7 +161,7 @@ func (b *Buffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-c
 func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- []PathChanges) {
 	defer close(out)
 
-	timer := time.NewTimer(debounce)
+	timer := b.newTimer(debounce)
 	timer.Stop() // start idle — no events yet
 	defer timer.Stop()
 
@@ -150,14 +190,17 @@ func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out c
 			}
 
 			// New event arrived — reset the debounce timer.
-			if !timer.Stop() && timerActive {
-				<-timer.C
+			if timerActive && !timer.Stop() {
+				select {
+				case <-timer.Chan():
+				default:
+				}
 			}
 
 			timer.Reset(debounce)
 			timerActive = true
 
-		case <-timer.C:
+		case <-timer.Chan():
 			timerActive = false
 
 			if batch := b.FlushImmediate(); batch != nil {

@@ -257,7 +257,7 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 			t.Log("warning: file appeared remotely while paused (test environment may not support pause in watch mode)")
 			break
 		}
-		time.Sleep(2 * time.Second)
+		sleepForLiveTestPropagation(2 * time.Second)
 	}
 
 	// Resume the drive.
@@ -410,7 +410,7 @@ func pollForDrive2File(
 				timeout, expected, driveID, args, stdout)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -432,7 +432,7 @@ func waitForStderrContains(t *testing.T, stderr *syncBuffer, target string, time
 				timeout, target, stderr.String())
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		sleepForLiveTestPropagation(500 * time.Millisecond)
 	}
 }
 
@@ -468,6 +468,6 @@ func waitForDaemonReady(t *testing.T, stderr *syncBuffer, timeout time.Duration)
 				timeout, output)
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		sleepForLiveTestPropagation(500 * time.Millisecond)
 	}
 }

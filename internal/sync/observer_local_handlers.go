@@ -502,7 +502,7 @@ func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 		Name:       name,
 		Generation: o.currentScopeGeneration(),
 	}
-	timer := time.AfterFunc(cooldown, func() {
+	timer := o.AfterFunc(cooldown, func() {
 		select {
 		case o.HashRequests <- req:
 		default:
@@ -644,7 +644,7 @@ func (o *LocalObserver) retryDeferredHashOnChange(req HashRequest, err error) bo
 
 	retryReq := req
 	retryReq.Retries++
-	timer := time.AfterFunc(cooldown, func() {
+	timer := o.AfterFunc(cooldown, func() {
 		select {
 		case o.HashRequests <- retryReq:
 		default:
@@ -781,6 +781,9 @@ func (o *LocalObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 	o.DirNameCache = make(map[string]map[string][]string)
 	o.CollisionPeers = make(map[string]map[string]struct{})
 	o.RecentLocalDeletes = make(map[string]struct{})
+	if o.AfterSafetyScan != nil {
+		o.AfterSafetyScan()
+	}
 
 	// Log timing and resource counts for operational visibility (B-101).
 	elapsed := time.Since(start)

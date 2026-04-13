@@ -353,7 +353,7 @@ func pollStatusSyncStateForDrive(
 			)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -583,7 +583,7 @@ func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 			putErr.Error(),
 		)
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 
 	waitForRemoteFixtureSeedVisible(t, cfgPath, env, drive, remotePath)
@@ -703,7 +703,7 @@ func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 			)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -840,7 +840,7 @@ func pollLocalFileExists(t *testing.T, path string, timeout time.Duration) {
 				"after %v waiting for %s to exist", timeout, path)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -869,7 +869,7 @@ func pollLocalFileContent(t *testing.T, path, expected string, timeout time.Dura
 				timeout, path, expected, last)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -889,7 +889,7 @@ func pollLocalDirGone(t *testing.T, path string, timeout time.Duration) {
 				"after %v waiting for %s to be removed", timeout, path)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
@@ -1046,7 +1046,7 @@ func cleanupRemoteFolderForDrive(t *testing.T, driveID, folder string) {
 		lastStderr = stderr
 		lastErr = err
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 
 	t.Logf(

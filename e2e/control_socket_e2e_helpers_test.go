@@ -74,7 +74,7 @@ func postControlSocket(t *testing.T, env map[string]string, requestPath string) 
 			lastErr = err
 		}
 
-		time.Sleep(200 * time.Millisecond)
+		sleepForLiveTestPropagation(200 * time.Millisecond)
 	}
 
 	require.NoError(t, lastErr, "post control socket %s", requestPath)
@@ -141,7 +141,7 @@ func getControlSocketStatus(t *testing.T, env map[string]string) synccontrol.Sta
 			lastErr = err
 		}
 
-		time.Sleep(200 * time.Millisecond)
+		sleepForLiveTestPropagation(200 * time.Millisecond)
 	}
 
 	require.NoError(t, lastErr, "get control socket status")

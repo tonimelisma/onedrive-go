@@ -46,7 +46,7 @@ func waitForFastDaemonReady(t *testing.T, stderr *fastSyncBuffer, timeout time.D
 			return
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		sleepForLiveTestPropagation(500 * time.Millisecond)
 	}
 
 	require.FailNowf(t, "daemon did not become ready", "stderr so far: %s", stderr.String())

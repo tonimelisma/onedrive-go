@@ -14,6 +14,130 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
+type manualDebounceClock struct {
+	mu     stdsync.Mutex
+	now    time.Time
+	timers []*manualDebounceTimer
+}
+
+type manualDebounceTimer struct {
+	clock   *manualDebounceClock
+	ch      chan time.Time
+	at      time.Time
+	active  bool
+	stopped bool
+}
+
+func newManualDebounceClock(start time.Time) *manualDebounceClock {
+	return &manualDebounceClock{now: start}
+}
+
+func (c *manualDebounceClock) NewTimer(delay time.Duration) debounceTimer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	timer := &manualDebounceTimer{
+		clock:  c,
+		ch:     make(chan time.Time, 1),
+		at:     c.now.Add(delay),
+		active: true,
+	}
+	c.timers = append(c.timers, timer)
+
+	return timer
+}
+
+func (c *manualDebounceClock) Advance(delay time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(delay)
+	now := c.now
+
+	var ready []*manualDebounceTimer
+	for _, timer := range c.timers {
+		if timer == nil || timer.stopped || !timer.active || timer.at.After(now) {
+			continue
+		}
+		timer.active = false
+		ready = append(ready, timer)
+	}
+	c.mu.Unlock()
+
+	for _, timer := range ready {
+		select {
+		case timer.ch <- now:
+		default:
+		}
+	}
+}
+
+func (c *manualDebounceClock) ActiveTimerCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	count := 0
+	for _, timer := range c.timers {
+		if timer == nil || timer.stopped || !timer.active {
+			continue
+		}
+		count++
+	}
+
+	return count
+}
+
+func (c *manualDebounceClock) HasActiveTimerAt(at time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, timer := range c.timers {
+		if timer == nil || timer.stopped || !timer.active {
+			continue
+		}
+		if timer.at.Equal(at) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (t *manualDebounceTimer) Chan() <-chan time.Time {
+	return t.ch
+}
+
+func (t *manualDebounceTimer) Stop() bool {
+	if t == nil || t.clock == nil {
+		return false
+	}
+
+	t.clock.mu.Lock()
+	defer t.clock.mu.Unlock()
+
+	if t.stopped || !t.active {
+		return false
+	}
+	t.active = false
+	t.stopped = true
+
+	return true
+}
+
+func (t *manualDebounceTimer) Reset(delay time.Duration) bool {
+	if t == nil || t.clock == nil {
+		return false
+	}
+
+	t.clock.mu.Lock()
+	defer t.clock.mu.Unlock()
+
+	wasActive := t.active && !t.stopped
+	t.active = true
+	t.stopped = false
+	t.at = t.clock.now.Add(delay)
+
+	return wasActive
+}
+
 // findPathChanges returns the PathChanges entry with the given path,
 // or nil if not found.
 func findPathChanges(changes []PathChanges, p string) *PathChanges {
@@ -552,6 +676,9 @@ func TestFlushDebounced_DebounceResets(t *testing.T) {
 	// Keep a wide gap between the pre-reset sleep and the debounce window so
 	// race-enabled verify runs do not turn scheduler delay into a false failure.
 	debounce := 200 * time.Millisecond
+	start := time.Date(2026, time.April, 13, 12, 0, 0, 0, time.UTC)
+	clock := newManualDebounceClock(start)
+	buf.newTimer = clock.NewTimer
 	out := buf.FlushDebounced(ctx, debounce)
 
 	// Add first event.
@@ -561,13 +688,29 @@ func TestFlushDebounced_DebounceResets(t *testing.T) {
 		ItemID: "r1", DriveID: driveid.New(synctest.TestDriveID), ItemType: ItemTypeFile,
 	})
 
+	require.Eventually(t, func() bool {
+		return clock.HasActiveTimerAt(start.Add(debounce))
+	}, 5*time.Second, time.Millisecond)
+
 	// Wait less than debounce, then add second event — timer should reset.
-	time.Sleep(20 * time.Millisecond)
+	clock.Advance(20 * time.Millisecond)
 	buf.Add(&ChangeEvent{
 		Source: SourceLocal, Type: ChangeCreate,
 		Path: "reset-second.txt", Name: "reset-second.txt",
 		ItemType: ItemTypeFile,
 	})
+
+	require.Eventually(t, func() bool {
+		return clock.HasActiveTimerAt(start.Add(20*time.Millisecond + debounce))
+	}, 5*time.Second, time.Millisecond)
+
+	select {
+	case batch := <-out:
+		require.Failf(t, "unexpected early batch", "%+v", batch)
+	default:
+	}
+
+	clock.Advance(debounce)
 
 	// Both events should arrive in a single batch.
 	select {
@@ -598,7 +741,6 @@ func TestFlushDebounced_ContextCancel(t *testing.T) {
 		ItemID: "cd1", DriveID: driveid.New(synctest.TestDriveID), ItemType: ItemTypeFile,
 	})
 
-	time.Sleep(20 * time.Millisecond) // let the signal propagate
 	cancel()
 
 	// The final drain should deliver the event.
@@ -684,8 +826,6 @@ func TestBuffer_FlushDebounced_FinalDrainNoDeadlock(t *testing.T) {
 		Path: "deadlock-test.txt", Name: "deadlock-test.txt",
 		ItemID: "dl1", DriveID: driveid.New(synctest.TestDriveID), ItemType: ItemTypeFile,
 	})
-
-	time.Sleep(10 * time.Millisecond) // let the signal propagate
 
 	// Cancel context — the debounce goroutine should exit via the
 	// non-blocking send, discarding the final batch if the channel is full.

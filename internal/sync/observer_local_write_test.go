@@ -82,6 +82,7 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 	dir := t.TempDir()
 	filePath := writeTestFile(t, dir, "rapid.txt", "v1")
 	existingHash := hashContent(t, "v1")
+	start := time.Date(2026, time.April, 13, 12, 0, 0, 0, time.UTC)
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "rapid.txt", DriveID: driveid.New("d"), ItemID: "i1",
@@ -89,19 +90,16 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 	})
 
 	mockWatcher := newMockFsWatcher()
+	clock := newManualClock(start)
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
+		AfterFunc:             clock.AfterFunc,
 		WriteCoalesceCooldown: 100 * time.Millisecond,
 	})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
 
 	// Write new content so the hash differs from baseline.
 	require.NoError(t, os.WriteFile(filePath, []byte("v2"), 0o600))
@@ -111,11 +109,21 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 		Name: filePath, Op: fsnotify.Write,
 	}
 
-	time.Sleep(20 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return clock.HasPendingTimerAt(start.Add(100 * time.Millisecond))
+	}, 5*time.Second, time.Millisecond)
+
+	clock.Advance(20 * time.Millisecond)
 
 	mockWatcher.events <- fsnotify.Event{
 		Name: filePath, Op: fsnotify.Write,
 	}
+
+	require.Eventually(t, func() bool {
+		return clock.HasPendingTimerAt(start.Add(120 * time.Millisecond))
+	}, 5*time.Second, time.Millisecond)
+
+	clock.Advance(100 * time.Millisecond)
 
 	// Wait for the single coalesced event.
 	select {
@@ -147,6 +155,7 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "single.txt", "original")
 	existingHash := hashContent(t, "original")
+	start := time.Date(2026, time.April, 13, 12, 0, 0, 0, time.UTC)
 
 	baseline := baselineWith(&BaselineEntry{
 		Path: "single.txt", DriveID: driveid.New("d"), ItemID: "i1",
@@ -154,19 +163,16 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 	})
 
 	mockWatcher := newMockFsWatcher()
+	clock := newManualClock(start)
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
+		AfterFunc:             clock.AfterFunc,
 		WriteCoalesceCooldown: 50 * time.Millisecond,
 	})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
 
 	// Write new content.
 	filePath := filepath.Join(dir, "single.txt")
@@ -175,6 +181,12 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 	mockWatcher.events <- fsnotify.Event{
 		Name: filePath, Op: fsnotify.Write,
 	}
+
+	require.Eventually(t, func() bool {
+		return clock.HasPendingTimerAt(start.Add(50 * time.Millisecond))
+	}, 5*time.Second, time.Millisecond)
+
+	clock.Advance(50 * time.Millisecond)
 
 	select {
 	case ev := <-events:
@@ -248,19 +260,16 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	)
 
 	mockWatcher := newMockFsWatcher()
+	clock := newManualClock(time.Date(2026, time.April, 13, 12, 0, 0, 0, time.UTC))
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
+		AfterFunc:             clock.AfterFunc,
 		WriteCoalesceCooldown: 50 * time.Millisecond,
 	})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
 
 	// Write new content to both files.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "fileA.txt"), []byte("newA"), 0o600))
@@ -273,6 +282,12 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	mockWatcher.events <- fsnotify.Event{
 		Name: filepath.Join(dir, "fileB.txt"), Op: fsnotify.Write,
 	}
+
+	require.Eventually(t, func() bool {
+		return clock.ActiveTimerCount() == 2
+	}, 5*time.Second, time.Millisecond)
+
+	clock.Advance(50 * time.Millisecond)
 
 	// Collect both events.
 	collected := make(map[string]ChangeEvent)
@@ -313,19 +328,16 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 	})
 
 	mockWatcher := newMockFsWatcher()
+	clock := newManualClock(time.Date(2026, time.April, 13, 12, 0, 0, 0, time.UTC))
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
+		AfterFunc:             clock.AfterFunc,
 		WriteCoalesceCooldown: 200 * time.Millisecond,
 	})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
 
 	// Modify and send Write event (starts 200ms timer).
 	require.NoError(t, os.WriteFile(filePath, []byte("modified"), 0o600))
@@ -334,8 +346,9 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 		Name: filePath, Op: fsnotify.Write,
 	}
 
-	// Give watchLoop time to process the Write event.
-	time.Sleep(20 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return clock.ActiveTimerCount() == 1
+	}, 5*time.Second, time.Millisecond)
 
 	// Delete the file before timer fires.
 	require.NoError(t, os.Remove(filePath))
@@ -343,6 +356,10 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 	mockWatcher.events <- fsnotify.Event{
 		Name: filePath, Op: fsnotify.Remove,
 	}
+
+	require.Eventually(t, func() bool {
+		return clock.ActiveTimerCount() == 0
+	}, 5*time.Second, time.Millisecond)
 
 	// Should get only the Delete event, not a Modify.
 	select {
@@ -353,12 +370,12 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 		require.Fail(t, "timeout waiting for delete event")
 	}
 
-	// Wait past the original timer window — no Modify should appear.
+	clock.Advance(400 * time.Millisecond)
+
 	select {
 	case ev := <-events:
 		require.Fail(t, "unexpected event after delete", "%+v", ev)
-	case <-time.After(400 * time.Millisecond):
-		// Good — timer was canceled.
+	default:
 	}
 
 	cancel()
@@ -386,18 +403,15 @@ func TestCancelPendingTimers(t *testing.T) {
 	)
 
 	mockWatcher := newMockFsWatcher()
+	clock := newManualClock(time.Date(2026, time.April, 13, 12, 0, 0, 0, time.UTC))
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
+		AfterFunc:             clock.AfterFunc,
 		WriteCoalesceCooldown: 5 * time.Second, // very long — timers should NOT fire
 	})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 
 	// Send Write events for two paths (creates timers with 5s cooldown).
 	mockWatcher.events <- fsnotify.Event{
@@ -407,8 +421,9 @@ func TestCancelPendingTimers(t *testing.T) {
 		Name: filepath.Join(dir, "pending2.txt"), Op: fsnotify.Write,
 	}
 
-	// Give watchLoop time to process both events and create timers.
-	time.Sleep(50 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return clock.ActiveTimerCount() == 2
+	}, 5*time.Second, time.Millisecond)
 
 	// Cancel context — should trigger cancelPendingTimers via defer.
 	cancel()
@@ -419,6 +434,8 @@ func TestCancelPendingTimers(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "Watch did not return after context cancellation")
 	}
+
+	assert.Zero(t, clock.ActiveTimerCount(), "all coalesce timers should be stopped on watch exit")
 
 	// Drain any events — there should be none (timers were canceled).
 	select {
@@ -454,9 +471,10 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 100 * time.Millisecond,
 		localWatchState: localWatchState{
-			PendingTimers: make(map[string]*time.Timer),
+			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan HashRequest, 10),
 		},
+		AfterFunc: realAfterFunc,
 	}
 
 	events := make(chan ChangeEvent, 5)
@@ -504,9 +522,10 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 100 * time.Millisecond,
 		localWatchState: localWatchState{
-			PendingTimers: make(map[string]*time.Timer),
+			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan HashRequest, 10),
 		},
+		AfterFunc: realAfterFunc,
 	}
 
 	events := make(chan ChangeEvent, 5)
@@ -553,26 +572,27 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 	})
 
 	mockWatcher := newMockFsWatcher()
+	clock := newManualClock(time.Date(2026, time.April, 13, 12, 0, 0, 0, time.UTC))
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
+		AfterFunc:             clock.AfterFunc,
 		WriteCoalesceCooldown: 50 * time.Millisecond,
 	})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
 
 	// Send a Write event for the lowercase file.
 	mockWatcher.events <- fsnotify.Event{
 		Name: filePath, Op: fsnotify.Write,
 	}
+
+	require.Eventually(t, func() bool {
+		return clock.ActiveTimerCount() == 1
+	}, 5*time.Second, time.Millisecond)
+
+	clock.Advance(50 * time.Millisecond)
 
 	// No event should be emitted — the case collision suppresses it.
 	select {
@@ -608,12 +628,13 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 					"existing.txt": {"existing.txt", "Existing.txt"},
 				},
 			},
-			PendingTimers: make(map[string]*time.Timer),
+			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan HashRequest, HashRequestBufSize),
 		},
 		// Pre-populate dirNameCache with a different-cased entry.
 		// This simulates a collision without requiring a case-sensitive FS.
 		WriteCoalesceCooldown: 50 * time.Millisecond,
+		AfterFunc:             realAfterFunc,
 		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			return nil
 		},
@@ -626,16 +647,8 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	// Wait for watcher setup.
-	time.Sleep(100 * time.Millisecond)
 
 	// Send a Write event for "existing.txt" — hashAndEmit should detect
 	// the collision via the pre-populated cache and suppress the event.
@@ -644,7 +657,6 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 		Op:   fsnotify.Write,
 	}
 
-	// Wait for write coalesce cooldown + processing.
 	select {
 	case ev := <-events:
 		require.FailNow(t, "expected no event (collision via cached lookup)", "got %+v", ev)

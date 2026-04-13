@@ -125,6 +125,8 @@ linters:
       forbid:
         - pattern: ^os\.(Open|OpenFile|ReadFile|WriteFile|Create|CreateTemp|Mkdir|MkdirAll|ReadDir|Stat|Lstat|Remove|RemoveAll|Rename|Chmod|Chtimes|Symlink|Readlink|Truncate)$
           msg: use fsroot, synctree, or localpath filesystem boundaries instead of raw os.* calls
+        - pattern: ^time\.Sleep$
+          msg: use explicit test synchronization instead of wall-clock sleep
 
     gocyclo:
       min-complexity: 15
@@ -256,6 +258,11 @@ linters:
       - path: _test\.go
         linters:
           - forbidigo
+        text: use fsroot, synctree, or localpath filesystem boundaries instead of raw os\.\* calls
+      - path-except: _test\.go
+        linters:
+          - forbidigo
+        text: use explicit test synchronization instead of wall-clock sleep
       - path: internal/(fsroot|synctree|localpath)/
         linters:
           - forbidigo

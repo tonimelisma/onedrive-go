@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // isCaseSensitiveFS returns true if the filesystem at dir distinguishes
@@ -211,17 +209,8 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	// Wait for watcher setup, then send a synthetic Create event for
-	// "existing.txt" (lowercase) — different case than the on-disk file.
-	time.Sleep(100 * time.Millisecond)
 	mockWatcher.events <- fsnotify.Event{
 		Name: filepath.Join(dir, "existing.txt"),
 		Op:   fsnotify.Create,
@@ -258,17 +247,8 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	// Wait for watcher setup, then send a Create event for the subdirectory
-	// to trigger scanNewDirectory.
-	time.Sleep(100 * time.Millisecond)
 	mockWatcher.events <- fsnotify.Event{
 		Name: subDir,
 		Op:   fsnotify.Create,
@@ -334,17 +314,8 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 	})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	// Wait for watcher setup, then send Create event for the directory "Xyz"
-	// which should collide with the file "xyz".
-	time.Sleep(100 * time.Millisecond)
 	mockWatcher.events <- fsnotify.Event{
 		Name: xyzDir,
 		Op:   fsnotify.Create,
@@ -387,15 +358,8 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 	})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
 
 	// Send Create for "docs" (lowercase) — should collide with "Docs".
 	mockWatcher.events <- fsnotify.Event{
@@ -441,15 +405,8 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 	})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
 
 	// Send Create for parent directory → triggers scanNewDirectory.
 	mockWatcher.events <- fsnotify.Event{
@@ -512,15 +469,8 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
 
 	// Send Create for "file.txt" — should be suppressed (collision with "File.txt").
 	mockWatcher.events <- fsnotify.Event{
@@ -600,23 +550,14 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 	})
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
 
 	// Send Create for "file.txt" — suppressed, collision with "File.txt".
 	mockWatcher.events <- fsnotify.Event{
 		Name: lowerPath,
 		Op:   fsnotify.Create,
 	}
-
-	time.Sleep(100 * time.Millisecond)
 
 	// Send Create for "FILE.txt" — suppressed, collision with "File.txt".
 	mockWatcher.events <- fsnotify.Event{
@@ -625,9 +566,10 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 	}
 
 	// Drain any spurious events.
-	time.Sleep(300 * time.Millisecond)
-	for len(events) > 0 {
-		<-events
+	select {
+	case ev := <-events:
+		require.FailNow(t, "expected no create events before delete", "got %+v", ev)
+	case <-time.After(300 * time.Millisecond):
 	}
 
 	// Delete "file.txt" from disk.
@@ -680,26 +622,22 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 	writeTestFile(t, dir, "a.txt", "content")
 
 	safetyTickCh := make(chan time.Time, 1)
+	safetyScanComplete := make(chan struct{})
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
-		Baseline: emptyBaseline(),
-		Logger:   synctest.TestLogger(t),
-		localWatchState: localWatchState{
-			CollisionPeers: make(map[string]map[string]struct{}),
-			DirNameCache:   make(map[string]map[string][]string),
-			PendingTimers:  make(map[string]*time.Timer),
-			HashRequests:   make(chan HashRequest, HashRequestBufSize),
-		},
-		SleepFunc: func(_ context.Context, _ time.Duration) error {
-			return nil
-		},
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
+		CollisionPeers: make(map[string]map[string]struct{}),
+		DirNameCache:   make(map[string]map[string][]string),
 		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return safetyTickCh, func() {}
 		},
-		WatcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
+		AfterSafetyScan: func() {
+			select {
+			case <-safetyScanComplete:
+			default:
+				close(safetyScanComplete)
+			}
 		},
-	}
+	})
 
 	// Pre-populate collision peers and dir name cache.
 	obs.AddCollisionPeer("a.txt", "A.txt")
@@ -708,21 +646,17 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
 
 	// Trigger safety scan.
 	safetyTickCh <- time.Now()
 
-	// Wait for safety scan to complete, then stop the watchLoop.
-	time.Sleep(500 * time.Millisecond)
+	select {
+	case <-safetyScanComplete:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "timeout waiting for safety scan completion")
+	}
 	cancel()
 	<-done
 

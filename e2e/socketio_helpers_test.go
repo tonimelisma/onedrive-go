@@ -83,7 +83,7 @@ func waitForSocketIOConnected(t *testing.T, eventsPath string, timeout time.Dura
 			}
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		sleepForLiveTestPropagation(500 * time.Millisecond)
 	}
 
 	require.FailNowf(t, "socket.io did not connect within the startup window", "events: %+v", readSocketIODebugEvents(t, eventsPath))
@@ -107,7 +107,7 @@ func waitForObserverStarted(
 			}
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		sleepForLiveTestPropagation(500 * time.Millisecond)
 	}
 
 	require.FailNowf(
@@ -144,7 +144,7 @@ func waitForSocketIOEventAfter(
 			}
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		sleepForLiveTestPropagation(500 * time.Millisecond)
 	}
 
 	require.FailNowf(t, "socket.io event did not arrive", "target=%s events=%+v", target, readSocketIODebugEvents(t, eventsPath))
@@ -201,7 +201,7 @@ func waitForSocketIOWakeAndLocalFileAfter(
 			)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 

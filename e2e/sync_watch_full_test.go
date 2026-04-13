@@ -196,7 +196,7 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/conflict-watch.txt", "remote conflict version")
 
 	// Give delta time to pick up the remote change before triggering local.
-	time.Sleep(5 * time.Second)
+	sleepForLiveTestPropagation(5 * time.Second)
 
 	// Now modify local — fsnotify fires, daemon runs a sync pass that sees
 	// both the local change and the remote change from the delta feed.
@@ -269,7 +269,7 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 				"remote content never became 'version 2 modified' within %v", daemonPollTimeout)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 
 	// Graceful shutdown.
@@ -483,7 +483,7 @@ func TestE2E_SyncWatch_RapidChurn(t *testing.T) {
 				"remote content never became 'final version' within %v", daemonPollTimeout)
 		}
 
-		time.Sleep(pollBackoff(attempt))
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 
 	// Graceful shutdown.
@@ -587,12 +587,12 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 			t.Log("warning: file appeared remotely while paused (test environment may not support pause)")
 			break
 		}
-		time.Sleep(1 * time.Second)
+		sleepForLiveTestPropagation(1 * time.Second)
 	}
 
 	// Wait for pause to expire (5s total from pause command), then use the
 	// control socket to trigger clearExpiredPauses.
-	time.Sleep(4 * time.Second)
+	sleepForLiveTestPropagation(4 * time.Second)
 	postControlSocket(t, env, "/v1/reload")
 
 	// Poll until file appears remotely (daemon should now be unpaused).

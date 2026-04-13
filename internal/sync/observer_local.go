@@ -63,9 +63,9 @@ type HashRequest struct {
 // does not sprawl across unrelated fields.
 type localWatchState struct {
 	// Write coalescing fields (B-107). Single watch-loop owner.
-	PendingTimers           map[string]*time.Timer // per-path timers; watchLoop-only (no mutex needed)
-	pendingTimerGenerations map[string]int64       // path -> scope generation for PendingTimers entries; watchLoop-only
-	HashRequests            chan HashRequest       // timer callback → watchLoop
+	PendingTimers           map[string]syncTimer // per-path timers; watchLoop-only (no mutex needed)
+	pendingTimerGenerations map[string]int64     // path -> scope generation for PendingTimers entries; watchLoop-only
+	HashRequests            chan HashRequest     // timer callback → watchLoop
 
 	// dirNameCache caches lowercase→original name mappings per directory for
 	// O(1) case collision lookups. Built lazily on first check; invalidated
@@ -114,7 +114,7 @@ type localWatchState struct {
 
 func newLocalWatchState() localWatchState {
 	return localWatchState{
-		PendingTimers:           make(map[string]*time.Timer),
+		PendingTimers:           make(map[string]syncTimer),
 		pendingTimerGenerations: make(map[string]int64),
 		HashRequests:            make(chan HashRequest, HashRequestBufSize),
 		DirNameCache:            make(map[string]map[string][]string),
@@ -189,6 +189,9 @@ type LocalObserver struct {
 	// (e.g., to simulate panics in the hash phase).
 	HashFunc func(path string) (string, error)
 
+	AfterFunc       func(delay time.Duration, fn func()) syncTimer // injectable for deterministic tests
+	AfterSafetyScan func()                                         // test hook: called after safety-scan state reset completes
+
 	WriteCoalesceCooldown time.Duration // 0 → defaultWriteCoalesceCooldown; injectable for tests
 
 	// skippedCh forwards SkippedItems from safety scans to the engine for
@@ -212,6 +215,7 @@ func NewLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int)
 		Logger:          logger,
 		checkWorkers:    checkWorkers,
 		HashFunc:        driveops.ComputeQuickXorHash,
+		AfterFunc:       realAfterFunc,
 		SleepFunc:       TimeSleep,
 		localWatchState: newLocalWatchState(),
 		SafetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
@@ -288,9 +292,9 @@ func (o *LocalObserver) installScopeSnapshot(snapshot syncscope.Snapshot) {
 	o.scopeSnapshot = snapshot
 }
 
-func (o *LocalObserver) recordPendingTimer(path string, generation int64, timer *time.Timer) {
+func (o *LocalObserver) recordPendingTimer(path string, generation int64, timer syncTimer) {
 	if o.PendingTimers == nil {
-		o.PendingTimers = make(map[string]*time.Timer)
+		o.PendingTimers = make(map[string]syncTimer)
 	}
 	if o.pendingTimerGenerations == nil {
 		o.pendingTimerGenerations = make(map[string]int64)

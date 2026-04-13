@@ -5,6 +5,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
@@ -20,6 +21,13 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
+)
+
+//nolint:gochecknoglobals // sync tests share one schema template cache to amortize repeated store initialization cost.
+var (
+	testStoreTemplateOnce stdsync.Once
+	testStoreTemplateData []byte
+	errTestStoreTemplate  error
 )
 
 // testDriveID is the canonical drive ID used by engine tests.
@@ -70,7 +78,9 @@ func newTestStore(tb testing.TB) *SyncStore {
 
 	dbPath := filepath.Join(tb.TempDir(), "test.db")
 	ctx := synctest.TestContext(tb)
-	mgr, err := NewSyncStore(ctx, dbPath, synctest.TestLogger(tb))
+	require.NoError(tb, os.WriteFile(dbPath, loadTestStoreTemplate(tb), 0o600), "WriteFile(%q)", dbPath)
+
+	mgr, err := openSyncStore(ctx, dbPath, synctest.TestLogger(tb), false)
 	require.NoError(tb, err, "NewSyncStore(%q)", dbPath)
 
 	tb.Cleanup(func() {
@@ -104,7 +114,9 @@ func newTestManager(t *testing.T) *SyncStore {
 
 	ctx := synctest.TestContext(t)
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	mgr, err := NewSyncStore(ctx, dbPath, synctest.TestLogger(t))
+	require.NoError(t, os.WriteFile(dbPath, loadTestStoreTemplate(t), 0o600), "WriteFile(%q)", dbPath)
+
+	mgr, err := openSyncStore(ctx, dbPath, synctest.TestLogger(t), false)
 	require.NoError(t, err, "NewSyncStore(%q)", dbPath)
 
 	t.Cleanup(func() {
@@ -112,6 +124,92 @@ func newTestManager(t *testing.T) *SyncStore {
 	})
 
 	return mgr
+}
+
+func loadTestStoreTemplate(tb testing.TB) []byte {
+	tb.Helper()
+
+	testStoreTemplateOnce.Do(func() {
+		templateDir, err := os.MkdirTemp("", "sync-store-template-")
+		if err != nil {
+			errTestStoreTemplate = fmt.Errorf("create sync store template dir: %w", err)
+			return
+		}
+		defer os.RemoveAll(templateDir)
+
+		templatePath := filepath.Join(templateDir, "template.db")
+		store, err := NewSyncStore(context.Background(), templatePath, slog.New(slog.DiscardHandler))
+		if err != nil {
+			errTestStoreTemplate = fmt.Errorf("create sync store template: %w", err)
+			return
+		}
+		if closeErr := store.Close(context.Background()); closeErr != nil {
+			errTestStoreTemplate = fmt.Errorf("close sync store template: %w", closeErr)
+			return
+		}
+
+		//nolint:gosec // templatePath is created by this helper inside a private temp dir.
+		testStoreTemplateData, err = os.ReadFile(templatePath)
+		if err != nil {
+			errTestStoreTemplate = fmt.Errorf("read sync store template: %w", err)
+		}
+	})
+
+	require.NoError(tb, errTestStoreTemplate)
+
+	return append([]byte(nil), testStoreTemplateData...)
+}
+
+func schemaFingerprint(tb testing.TB, db *sql.DB) []string {
+	tb.Helper()
+
+	rows, err := db.QueryContext(tb.Context(), `
+		SELECT type, name, IFNULL(sql, '')
+		FROM sqlite_schema
+		WHERE type IN ('table', 'index', 'trigger', 'view')
+		ORDER BY type, name
+	`)
+	require.NoError(tb, err)
+	defer func() {
+		require.NoError(tb, rows.Close())
+	}()
+
+	var result []string
+	for rows.Next() {
+		var itemType string
+		var name string
+		var ddl string
+		require.NoError(tb, rows.Scan(&itemType, &name, &ddl))
+		result = append(result, fmt.Sprintf("%s|%s|%s", itemType, name, ddl))
+	}
+	require.NoError(tb, rows.Err())
+
+	return result
+}
+
+func journalMode(tb testing.TB, db *sql.DB) string {
+	tb.Helper()
+
+	var mode string
+	require.NoError(tb, db.QueryRowContext(tb.Context(), "PRAGMA journal_mode").Scan(&mode))
+
+	return mode
+}
+
+func TestNewTestStore_TemplateMatchesFreshStore(t *testing.T) {
+	t.Parallel()
+
+	freshPath := filepath.Join(t.TempDir(), "fresh.db")
+	fresh, err := NewSyncStore(t.Context(), freshPath, newTestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, fresh.Close(context.Background()))
+	})
+
+	templateBacked := newTestStore(t)
+
+	assert.Equal(t, schemaFingerprint(t, fresh.DB()), schemaFingerprint(t, templateBacked.DB()))
+	assert.Equal(t, journalMode(t, fresh.DB()), journalMode(t, templateBacked.DB()))
 }
 
 // discardLogger returns a logger that writes to nowhere, suitable for tests.

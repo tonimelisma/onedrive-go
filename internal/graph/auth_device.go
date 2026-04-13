@@ -10,6 +10,33 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
+type (
+	deviceAuthRequester  func(context.Context, *oauth2.Config) (*oauth2.DeviceAuthResponse, error)
+	deviceTokenExchanger func(context.Context, *oauth2.Config, *oauth2.DeviceAuthResponse) (*oauth2.Token, error)
+)
+
+func requestDeviceAuth(ctx context.Context, cfg *oauth2.Config) (*oauth2.DeviceAuthResponse, error) {
+	auth, err := cfg.DeviceAuth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("device auth request: %w", err)
+	}
+
+	return auth, nil
+}
+
+func exchangeDeviceAccessToken(
+	ctx context.Context,
+	cfg *oauth2.Config,
+	auth *oauth2.DeviceAuthResponse,
+) (*oauth2.Token, error) {
+	tok, err := cfg.DeviceAccessToken(ctx, auth)
+	if err != nil {
+		return nil, fmt.Errorf("device access token: %w", err)
+	}
+
+	return tok, nil
+}
+
 // doLogin implements the device code flow. Accepts a pre-built oauth2.Config
 // so tests can inject a mock endpoint.
 func doLogin(
@@ -19,11 +46,23 @@ func doLogin(
 	display func(DeviceAuth),
 	logger *slog.Logger,
 ) (TokenSource, error) {
+	return doLoginWithFlow(ctx, tokenPath, cfg, display, logger, requestDeviceAuth, exchangeDeviceAccessToken)
+}
+
+func doLoginWithFlow(
+	ctx context.Context,
+	tokenPath string,
+	cfg *oauth2.Config,
+	display func(DeviceAuth),
+	logger *slog.Logger,
+	requestAuth deviceAuthRequester,
+	exchangeToken deviceTokenExchanger,
+) (TokenSource, error) {
 	logger.Info("starting device code auth flow",
 		slog.String("path", tokenPath),
 	)
 
-	da, err := cfg.DeviceAuth(ctx)
+	da, err := requestAuth(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("graph: device auth request failed: %w", err)
 	}
@@ -35,7 +74,7 @@ func doLogin(
 		VerificationURI: da.VerificationURI,
 	})
 
-	tok, err := cfg.DeviceAccessToken(ctx, da)
+	tok, err := exchangeToken(ctx, cfg, da)
 	if err != nil {
 		return nil, fmt.Errorf("graph: device code authorization failed: %w", err)
 	}

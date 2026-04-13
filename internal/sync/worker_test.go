@@ -409,11 +409,28 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
+	started := make(chan struct{})
+	cfg.SetDownloads(&workerMockDownloader{
+		downloadFn: func(ctx context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			select {
+			case <-started:
+			default:
+				close(started)
+			}
+			<-ctx.Done()
+			return 0, ctx.Err()
+		},
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+
 	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
-	// Give workers a moment to pick up the action.
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for worker download start")
+	}
 
 	// Stop should not hang.
 	done := make(chan struct{})
