@@ -748,11 +748,8 @@ func sortIssueGroups(groups []IssueGroupSnapshot) {
 		if groups[i].Count != groups[j].Count {
 			return groups[i].Count > groups[j].Count
 		}
-
-		left := DescribeSummary(groups[i].SummaryKey).Title
-		right := DescribeSummary(groups[j].SummaryKey).Title
-		if left != right {
-			return left < right
+		if groups[i].SummaryKey != groups[j].SummaryKey {
+			return string(groups[i].SummaryKey) < string(groups[j].SummaryKey)
 		}
 
 		return groups[i].ScopeLabel < groups[j].ScopeLabel

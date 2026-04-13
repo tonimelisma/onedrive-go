@@ -63,7 +63,7 @@ Implements: R-6.2.8 [verified], R-1.3.6 [verified], R-1.5.2 [verified], R-1.7.2 
 | `stat` | `stat.go` | Display item metadata |
 | `sync` | `sync.go` | Multi-drive sync command (see [sync-control-plane.md](sync-control-plane.md)) |
 | `pause`, `resume` | `pause.go`, `resume.go` | Pause/resume sync through CLI-owned config-mutation helpers. `resume` also cleans up stale config keys from expired timed pauses (paused=true + past paused_until). |
-| `status` | `status.go` | Display account/drive status. It always renders the same per-drive sync-health contract for the displayed drives, and `--drive` only filters which drives are shown. |
+| `status` | `status.go` | Display account/drive status. `status.go` owns Cobra wiring, `status_snapshot.go` owns account/drive snapshot assembly, `status_sync_state.go` owns raw sync-state shaping, and `status_render*.go` plus `status_issue_descriptors.go` own final human/JSON rendering. |
 | `perf` | `perf.go` | Inspect live sync-owner performance and capture an explicit local profile bundle through the control socket. |
 | `resolve` | `resolve.go` | Record durable user decisions for held deletes and conflicts (`resolve deletes`, `resolve local|remote|both`, optional `--all`) |
 | `recover` | `recover.go` | Repair, rebuild, or reset the selected drive's sync database after explicit confirmation |
@@ -390,7 +390,7 @@ Implements: R-6.6.14 [verified], R-6.6.15 [verified], R-6.6.16 [verified]
 - Control-socket probing and log file opens use resolved paths from the CLI/config layer; the socket itself is owned by `internal/multisync`.
 - If the configured log file cannot be opened, CLI bootstrap warns through the CLI status writer and falls back to console-only logging instead of failing the command before any user-facing work can run.
 - Direct `runSync` and helper-level tests cover caller-visible failure paths such as config-load errors, all-drives-paused/no-drives guidance, and log-file-open fallback warnings through the injected status/output writers rather than process-global stderr assumptions.
-- The status command uses testable helper seams with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. `status` uses the same store-owned per-drive read-helper wrapper for every displayed drive. CLI code does not open writable SQLite paths for read-only sync-state views.
+- The status command uses testable helper seams with narrowed interfaces (`accountMetaReader`, `accountAuthChecker`, `syncStateQuerier`), decoupling status aggregation from Cobra wiring. `status.go` stays thin, `status_snapshot.go` owns account/drive aggregation, `status_sync_state.go` turns store snapshots into CLI payloads, and `status_render*.go` plus `status_issue_descriptors.go` own presentation. CLI code does not open writable SQLite paths for read-only sync-state views.
 - Offline auth-health projection uses `sync.HasScopeBlockAtPath` for
   persisted `auth:account` checks, so read-only CLI account discovery no
   longer pays the writable-store checkpoint/close path.
@@ -446,7 +446,7 @@ Implements: R-2.3.3 [verified], R-2.3.4 [verified], R-2.3.5 [verified], R-2.3.6 
 - **Live perf overlay**: `status --perf` augments that same per-drive snapshot with live sync-owner perf when available. Displayed drives gain `sync_state.perf` in JSON and a `PERF` section in text. When no owner or no live snapshot exists, the CLI emits `perf_unavailable_reason` instead of inventing persisted history.
 - **Derived shared-folder issues**: `perm:remote` is displayed from held blocked-write rows, not from a standalone boundary issue. The CLI shows one visible issue per denied boundary only while blocked write intent still exists.
 - **Automatic shared-folder recovery**: shared-folder write blocks have no manual CLI controls. The engine rechecks permission state automatically during normal sync/watch passes while blocked writes still exist.
-- **Shared summary descriptors**: Every sync issue renders from the shared `SummaryKey` descriptor table, with the humanized scope shown separately. This keeps sync logs and `status` grouped by the same normalized issue family without duplicating display taxonomies in each layer.
+- **Shared summary keys, CLI-owned descriptors**: Every sync issue is grouped by the shared `SummaryKey`, while CLI-owned descriptor tables in `status_issue_descriptors.go` turn that key into user-facing title/reason/action text. This keeps logs, store projections, and `status` aligned on grouping without making `internal/sync` own CLI copy.
 - **Store-owned snapshot**: `status` renders one store-owned `DriveStatusSnapshot` per displayed drive, while narrower read-only helpers serve aggregate or daemon-only projections. The CLI does not rebuild issue/conflict/delete-safety state locally.
 - **Auth scope display**: `auth:account` renders as an account-level `Authentication required` issue with no path list.
 - **Held-delete approval**: held deletes remain visible under detailed `status`, and `resolve deletes` moves only that drive's held-delete rows from `held` to `approved`. The engine consumes approved rows after successful matching delete execution.

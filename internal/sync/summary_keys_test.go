@@ -6,37 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Validates: R-6.8.16, R-6.6.11
-func TestDescribeSummary_KnownKeys(t *testing.T) {
-	t.Parallel()
-
-	keys := []SummaryKey{
-		SummaryConflictUnresolved,
-		SummaryAuthenticationRequired,
-		SummaryQuotaExceeded,
-		SummaryServiceOutage,
-		SummaryRateLimited,
-		SummarySharedFolderWritesBlocked,
-		SummaryLocalPermissionDenied,
-		SummaryRemotePermissionDenied,
-		SummaryInvalidFilename,
-		SummaryPathTooLong,
-		SummaryFileTooLarge,
-		SummaryFileTooLargeForSpace,
-		SummaryHeldDeletes,
-		SummarySyncFailure,
-	}
-
-	for _, key := range keys {
-		descriptor := DescribeSummary(key)
-		assert.Equal(t, key, descriptor.Key)
-		assert.NotEmpty(t, descriptor.Title)
-		assert.NotEmpty(t, descriptor.Reason)
-		assert.NotEmpty(t, descriptor.Action)
-		assert.NotEmpty(t, descriptor.LogSummary)
-	}
-}
-
 // Validates: R-2.14.3, R-6.8.16
 func TestSummaryKeyForPersistedFailure_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
@@ -59,4 +28,23 @@ func TestSummaryKeyForScopeBlock_RepresentativeMappings(t *testing.T) {
 		SummaryKeyForScopeBlock(IssueServiceOutage, SKService()))
 	assert.Equal(t, SummaryRateLimited,
 		SummaryKeyForScopeBlock("", SKThrottleAccount()))
+}
+
+// Validates: R-6.8.16
+func TestSummaryKeyForIssueType_RepresentativeMappings(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, SummaryAuthenticationRequired, mustSummaryKeyForIssueType(t, IssueUnauthorized))
+	assert.Equal(t, SummaryQuotaExceeded, mustSummaryKeyForIssueType(t, IssueQuotaExceeded))
+	assert.Equal(t, SummaryInvalidFilename, mustSummaryKeyForIssueType(t, IssueInvalidFilename))
+	assert.Equal(t, SummaryDiskFull, mustSummaryKeyForIssueType(t, IssueDiskFull))
+}
+
+func mustSummaryKeyForIssueType(t *testing.T, issueType string) SummaryKey {
+	t.Helper()
+
+	key, ok := summaryKeyForIssueType(issueType)
+	assert.True(t, ok)
+
+	return key
 }

@@ -14,7 +14,8 @@
 //   - store_write_baseline.go:     baseline CRUD, delta tokens, outcome commits
 //   - store_write_observation.go:  remote state observation persistence
 //   - store_write_conflicts.go:    conflict management
-//   - store_write_failures.go:     sync failure recording and queries
+//   - store_read_failures.go:      sync failure query helpers
+//   - store_write_failures.go:     sync failure recording and mutation helpers
 //   - store_repair.go:             state repair/admin operations
 package sync
 

@@ -10,9 +10,9 @@ import (
 )
 
 func goldenStatusAccounts() []statusAccount {
-	invalidDescriptor := syncengine.DescribeSummary(syncengine.SummaryInvalidFilename)
-	authDescriptor := syncengine.DescribeSummary(syncengine.SummaryAuthenticationRequired)
-	sharedDescriptor := syncengine.DescribeSummary(syncengine.SummarySharedFolderWritesBlocked)
+	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
+	authDescriptor := describeStatusSummary(syncengine.SummaryAuthenticationRequired)
+	sharedDescriptor := describeStatusSummary(syncengine.SummarySharedFolderWritesBlocked)
 
 	return []statusAccount{
 		{

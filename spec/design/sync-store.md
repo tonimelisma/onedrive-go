@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/schema.go, internal/sync/migrations/*.sql, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_remote_state.go, internal/sync/store_write_conflicts.go, internal/sync/store_write_failures.go, internal/sync/store_write_held_deletes.go, internal/sync/store_write_intents.go, internal/sync/store_repair.go, internal/sync/store_write_scope_blocks.go, internal/sync/shortcuts.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go, internal/cli/recover.go, internal/cli/recover_flow.go
+GOVERNS: internal/sync/store.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/schema.go, internal/sync/migrations/*.sql, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_conflicts.go, internal/sync/store_write_failures.go, internal/sync/store_write_held_deletes.go, internal/sync/store_write_intents.go, internal/sync/store_repair.go, internal/sync/store_write_scope_blocks.go, internal/sync/shortcuts.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go, internal/cli/recover.go, internal/cli/recover_flow.go
 
 Implements: R-2.4.4 [verified], R-2.4.5 [verified], R-2.5 [verified], R-2.5.5 [verified], R-2.3.2 [verified], R-2.3.3 [verified], R-2.3.5 [verified], R-2.3.6 [verified], R-2.3.7 [verified], R-2.3.8 [verified], R-2.3.9 [verified], R-2.7 [verified], R-2.15.1 [verified], R-2.10.1 [verified], R-2.10.2 [verified], R-2.10.4 [verified], R-2.10.5 [verified], R-2.10.14 [verified], R-2.10.22 [verified], R-2.10.32 [verified], R-2.10.33 [verified], R-2.10.34 [verified], R-2.10.41 [verified], R-2.10.45 [verified], R-2.14.3 [verified], R-2.14.5 [verified], R-6.6.11 [verified], R-6.7.17 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -412,12 +412,13 @@ otherwise healthy store.
 Each displayed drive in `status` reads one store-owned `DriveStatusSnapshot`
 from `Inspector`. `internal/sync` owns grouping, scope labeling, pending-retry
 aggregation, delete-safety separation, unresolved-conflict/request joins, and
-optional resolved conflict history; CLI only formats that snapshot. Grouping
-and display use the persisted `scope_key`, `issue_type`, `category`,
-`failure_role`, and shortcut metadata, but the user-facing grouping key is
-still the shared `sync.SummaryKey`. This keeps per-drive `status`
+optional resolved conflict history; CLI owns the final human wording and
+section rendering for that snapshot. Grouping uses the persisted `scope_key`,
+`issue_type`, `category`, `failure_role`, and shortcut metadata, while the
+shared grouping key remains `sync.SummaryKey`. This keeps per-drive `status`
 presentation aligned with aggregate `status` and sync-runtime logging without
-persisting a second summary column in SQLite.
+persisting a second summary column in SQLite or a second copy table in
+`internal/sync`.
 
 Retryable transient item failures intentionally surface through
 the detailed/read-only retry projection rather than the visible grouped-issue list.
