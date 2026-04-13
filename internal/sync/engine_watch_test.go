@@ -1672,15 +1672,21 @@ func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
 	require.NoError(t, err, "ListConflicts")
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal))
+	requestResult, err := eng.baseline.RequestConflictResolution(ctx, conflicts[0].ID, ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, requestResult.Status)
 
 	remaining, err := eng.ListConflicts(ctx)
-	require.NoError(t, err, "ListConflicts after resolve")
-	assert.Empty(t, remaining, "conflict should be resolved once the chosen layout exists")
+	require.NoError(t, err, "ListConflicts after queueing resolution")
+	require.Len(t, remaining, 1, "queued user intent should remain unresolved until the engine executes it")
 
 	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, runErr)
 	require.NotNil(t, report)
+
+	remaining, err = eng.ListConflicts(ctx)
+	require.NoError(t, err, "ListConflicts after follow-up sync")
+	assert.Empty(t, remaining, "conflict should resolve once the engine establishes the chosen layout")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
@@ -1735,7 +1741,9 @@ func TestResolveConflict_KeepLocal_FollowUpSyncCommitsToBaseline(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, conflicts, 1)
 
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal))
+	requestResult, err := eng.baseline.RequestConflictResolution(ctx, conflicts[0].ID, ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, requestResult.Status)
 
 	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, runErr)
@@ -1753,6 +1761,208 @@ func TestResolveConflict_KeepLocal_FollowUpSyncCommitsToBaseline(t *testing.T) {
 	assert.Empty(t, entry.RemoteHash, "mock returns no hash")
 	assert.Equal(t, int64(14), entry.LocalSize)
 	assert.True(t, entry.LocalSizeKnown)
+}
+
+// Validates: R-2.3.5
+func TestResolveConflict_KeepLocal_FollowUpSyncDoesNotRedetectConflictWhenRemoteDeltaStillShowsLoser(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	localContent := "resolved local"
+	remoteContent := "remote winner"
+	localHash := hashContentQuickXor(t, localContent)
+	remoteHash := hashContentQuickXor(t, remoteContent)
+	uploadCalled := false
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID:           "item-follow-local",
+					Name:         "follow-up-keep-local.txt",
+					ParentID:     "root",
+					DriveID:      driveID,
+					QuickXorHash: remoteHash,
+					Size:         int64(len(remoteContent)),
+					ModifiedAt:   time.Unix(25, 0).UTC(),
+					ETag:         "etag-remote",
+				},
+			}, "token-1"), nil
+		},
+		uploadToItemFn: func(_ context.Context, _ driveid.ID, itemID string, _ io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalled = true
+			assert.Equal(t, "item-follow-local", itemID)
+			assert.Equal(t, int64(len(localContent)), size)
+
+			return &graph.Item{
+				ID:           itemID,
+				Name:         "follow-up-keep-local.txt",
+				ETag:         "etag-uploaded",
+				QuickXorHash: localHash,
+				Size:         size,
+			}, nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
+		{
+			Action:          ActionUpload,
+			Success:         true,
+			Path:            "follow-up-keep-local.txt",
+			DriveID:         driveID,
+			ItemID:          "item-follow-local",
+			ParentID:        "root",
+			ItemType:        ItemTypeFile,
+			LocalHash:       "baseline-local",
+			RemoteHash:      "baseline-remote",
+			LocalSize:       int64(len("baseline")),
+			LocalSizeKnown:  true,
+			RemoteSize:      int64(len("baseline")),
+			RemoteSizeKnown: true,
+			LocalMtime:      time.Unix(10, 0).UnixNano(),
+			RemoteMtime:     time.Unix(10, 0).UnixNano(),
+			ETag:            "etag-baseline",
+		},
+		{
+			Action:       ActionConflict,
+			Success:      true,
+			Path:         "follow-up-keep-local.txt",
+			DriveID:      driveID,
+			ItemID:       "item-follow-local",
+			ItemType:     ItemTypeFile,
+			LocalHash:    localHash,
+			RemoteHash:   remoteHash,
+			LocalMtime:   time.Unix(20, 0).UnixNano(),
+			RemoteMtime:  time.Unix(25, 0).UnixNano(),
+			ConflictType: ConflictEditEdit,
+		},
+	}, "token-0")
+
+	writeLocalFile(t, syncRoot, "follow-up-keep-local.txt", remoteContent)
+	writeLocalFile(t, syncRoot, "follow-up-keep-local.conflict-20260115-120000.txt", localContent)
+
+	conflicts, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	require.Len(t, conflicts, 1)
+
+	requestResult, err := eng.baseline.RequestConflictResolution(ctx, conflicts[0].ID, ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, requestResult.Status)
+
+	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	require.NoError(t, runErr)
+	require.NotNil(t, report)
+	assert.True(t, uploadCalled, "keep-local follow-up should upload the chosen local winner")
+	assert.Zero(t, report.Conflicts, "manual resolution should not redetect the same path as a new conflict")
+
+	remaining, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "manual keep-local resolution should stay resolved after the follow-up sync")
+}
+
+// Validates: R-2.3.5
+func TestResolveConflict_KeepRemote_FollowUpSyncDoesNotRedetectConflictWhenRemoteDeltaStillShowsWinner(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remoteContent := engineResolvedRemoteVersion
+	remoteHash := hashContentQuickXor(t, remoteContent)
+	uploadCalled := false
+	downloadCalled := false
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID:           "item-follow-remote",
+					Name:         "follow-up-keep-remote.txt",
+					ParentID:     "root",
+					DriveID:      driveID,
+					QuickXorHash: remoteHash,
+					Size:         int64(len(remoteContent)),
+					ModifiedAt:   time.Unix(25, 0).UTC(),
+					ETag:         "etag-remote",
+				},
+			}, "token-1"), nil
+		},
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalled = true
+			return nil, fmt.Errorf("unexpected upload")
+		},
+		uploadToItemFn: func(_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalled = true
+			return nil, fmt.Errorf("unexpected overwrite upload")
+		},
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			downloadCalled = true
+			return 0, fmt.Errorf("unexpected download")
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
+		{
+			Action:          ActionUpload,
+			Success:         true,
+			Path:            "follow-up-keep-remote.txt",
+			DriveID:         driveID,
+			ItemID:          "item-follow-remote",
+			ParentID:        "root",
+			ItemType:        ItemTypeFile,
+			LocalHash:       "baseline-local",
+			RemoteHash:      "baseline-remote",
+			LocalSize:       int64(len("baseline")),
+			LocalSizeKnown:  true,
+			RemoteSize:      int64(len("baseline")),
+			RemoteSizeKnown: true,
+			LocalMtime:      time.Unix(10, 0).UnixNano(),
+			RemoteMtime:     time.Unix(10, 0).UnixNano(),
+			ETag:            "etag-baseline",
+		},
+		{
+			Action:       ActionConflict,
+			Success:      true,
+			Path:         "follow-up-keep-remote.txt",
+			DriveID:      driveID,
+			ItemID:       "item-follow-remote",
+			ItemType:     ItemTypeFile,
+			LocalHash:    hashContentQuickXor(t, "local loser"),
+			RemoteHash:   remoteHash,
+			LocalMtime:   time.Unix(20, 0).UnixNano(),
+			RemoteMtime:  time.Unix(25, 0).UnixNano(),
+			ConflictType: ConflictEditEdit,
+		},
+	}, "token-0")
+
+	writeLocalFile(t, syncRoot, "follow-up-keep-remote.txt", remoteContent)
+	writeLocalFile(t, syncRoot, "follow-up-keep-remote.conflict-20260115-120000.txt", "local loser")
+
+	conflicts, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	require.Len(t, conflicts, 1)
+
+	requestResult, err := eng.baseline.RequestConflictResolution(ctx, conflicts[0].ID, ResolutionKeepRemote)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, requestResult.Status)
+
+	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	require.NoError(t, runErr)
+	require.NotNil(t, report)
+	assert.False(t, uploadCalled, "keep-remote follow-up should not upload")
+	assert.False(t, downloadCalled, "keep-remote follow-up should not re-download")
+	assert.Zero(t, report.Conflicts, "manual keep-remote resolution should not redetect a fresh conflict")
+	assert.Equal(t, 1, report.SyncedUpdates, "follow-up sync should refresh baseline ownership without extra transfer")
+
+	remaining, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "manual keep-remote resolution should stay resolved after the follow-up sync")
 }
 
 // ---------------------------------------------------------------------------

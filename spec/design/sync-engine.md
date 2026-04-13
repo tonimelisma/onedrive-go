@@ -795,6 +795,11 @@ or baseline failure is ordinary sync failure, not a conflict-workflow state.
   chosen final layout, mark the conflict resolved, then let ordinary local
   observation/baseline convergence handle the files like any other local state.
 
+Queued manual resolutions also synthesize one immediate follow-up change view
+for the canonical conflicted path before normal planning. This keeps the same
+`sync` pass from re-detecting the just-resolved conflict when the next delta
+page still reports the losing side of the edit race.
+
 If the engine cannot establish the chosen layout itself, such as a restore or
 cleanup filesystem failure, the conflict stays unresolved and the request
 returns to `queued` with `last_error` recorded.

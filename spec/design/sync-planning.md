@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/planner.go, internal/sync/actions.go, internal/sync/api_types.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/core_types.go
 
-Implements: R-2.2 [verified], R-2.3.1 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.7.7 [verified], R-6.7.17 [verified], R-2.14.2 [verified], R-6.10.6 [verified]
+Implements: R-2.1.3 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.4.1 [verified], R-6.4.2 [verified], R-6.4.3 [verified], R-6.7.7 [verified], R-6.7.17 [verified], R-2.14.2 [verified], R-6.10.6 [verified]
 
 ## Overview
 
@@ -104,7 +104,10 @@ approval bypass; held-delete approval is durable engine-owned intent.
 - Folder and file classifiers always start from full observed truth. Directional
   modes are admission rules applied after classification, so the planner never
   has to "pretend one side did not change" just to express upload-only or
-  download-only behavior.
+  download-only behavior. That includes true conflicts: EF5, EF9, and EF12
+  still emit `ActionConflict` in bidirectional, download-only, and upload-only
+  modes alike, while directional filtering only suppresses ordinary one-way
+  reconciliation actions.
 - `RemoteState` carries `DriveID` for cross-drive correctness. Shared folder items from Drive A in Drive B's delta carry Drive A's DriveID. Planner DriveID propagation: Remote.DriveID wins → Baseline.DriveID fallback → empty for new local items.
 - `RemoteState` carries `RemoteDriveID` and `RemoteItemID` for shortcut scope identity (D-5). These are transient fields populated by `remoteStateFromEvent()` from `ChangeEvent` — not persisted in `remote_state` table. `makeAction()` uses them to populate `Action.targetShortcutKey` and `Action.targetDriveID` so active-scope admission can distinguish own-drive vs shortcut-scoped failures (R-6.8.12, R-6.8.13).
 - The planner detects action dependency cycles using DFS with white/gray/black node coloring after `buildDependencies()`. Cycle detection prevents deadlock in the DepGraph.

@@ -462,81 +462,194 @@ func (e *Engine) cleanupUntrackedConflictCopies(paths []string) error {
 
 func (e *Engine) conflictResolutionFollowUpChanges(
 	ctx context.Context,
+	conflict *ConflictRecord,
+	resolution string,
 	paths []string,
 ) []PathChanges {
 	if len(paths) == 0 {
 		return nil
 	}
 
+	scopeSnapshot, ok := e.conflictResolutionFollowUpScopeSnapshot(ctx)
+	if !ok {
+		return nil
+	}
+
+	bl, ok := e.conflictResolutionFollowUpBaseline(ctx)
+	if !ok {
+		return nil
+	}
+
+	forcedAction, forceAction := conflictResolutionForcedAction(resolution)
+	var changes []PathChanges
+	for _, path := range uniqueSortedNonEmptyPaths(paths) {
+		changes = e.conflictResolutionFollowUpPathChanges(
+			changes,
+			path,
+			conflict,
+			resolution,
+			bl,
+			scopeSnapshot,
+			forcedAction,
+			forceAction,
+		)
+	}
+
+	return changes
+}
+
+func (e *Engine) conflictResolutionFollowUpScopeSnapshot(ctx context.Context) (syncscope.Snapshot, bool) {
 	scopeSnapshot, err := e.buildScopeSnapshot(ctx)
 	if err != nil {
 		e.logger.Warn("build scope snapshot for conflict follow-up",
 			slog.String("error", err.Error()),
 		)
-		return nil
+		return syncscope.Snapshot{}, false
 	}
 
+	return scopeSnapshot, true
+}
+
+func (e *Engine) conflictResolutionFollowUpBaseline(ctx context.Context) (*Baseline, bool) {
+	bl := e.baseline.Baseline()
+	if bl != nil {
+		return bl, true
+	}
+
+	loaded, err := e.baseline.Load(ctx)
+	if err != nil {
+		e.logger.Warn("load baseline for conflict follow-up",
+			slog.String("error", err.Error()),
+		)
+		return nil, false
+	}
+
+	return loaded, true
+}
+
+func uniqueSortedNonEmptyPaths(paths []string) []string {
 	uniquePaths := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
 		if path != "" {
 			uniquePaths[path] = struct{}{}
 		}
 	}
+
 	sortedPaths := make([]string, 0, len(uniquePaths))
 	for path := range uniquePaths {
 		sortedPaths = append(sortedPaths, path)
 	}
 	sort.Strings(sortedPaths)
+	return sortedPaths
+}
 
-	bl := e.baseline.Baseline()
-	if bl == nil {
-		var loadErr error
-		bl, loadErr = e.baseline.Load(ctx)
-		if loadErr != nil {
-			e.logger.Warn("load baseline for conflict follow-up",
-				slog.String("error", loadErr.Error()),
-			)
+func (e *Engine) conflictResolutionFollowUpPathChanges(
+	changes []PathChanges,
+	path string,
+	conflict *ConflictRecord,
+	resolution string,
+	bl *Baseline,
+	scopeSnapshot syncscope.Snapshot,
+	forcedAction ActionType,
+	forceAction bool,
+) []PathChanges {
+	var base *BaselineEntry
+	if entry, ok := bl.GetByPath(path); ok {
+		base = entry
+	}
+
+	observation, observeErr := ObserveSinglePathWithScope(
+		e.logger,
+		e.syncTree,
+		path,
+		base,
+		e.nowFunc().UnixNano(),
+		nil,
+		e.localFilter,
+		e.localRules,
+		scopeSnapshot,
+	)
+	if observeErr != nil {
+		e.logger.Warn("observe conflict follow-up path",
+			slog.String("path", path),
+			slog.String("error", observeErr.Error()),
+		)
+		return changes
+	}
+	if observation.Skipped != nil {
+		e.logger.Warn("conflict follow-up path requires normal sync attention",
+			slog.String("path", observation.Skipped.Path),
+			slog.String("reason", observation.Skipped.Reason),
+			slog.String("detail", observation.Skipped.Detail),
+		)
+		return changes
+	}
+
+	event := *observation.Event
+	if forceAction && conflict != nil && path == conflict.Path {
+		event.ForcedAction = forcedAction
+		event.HasForcedAction = true
+	}
+	changes = mergePathChangeBatches(changes, pathChangesFromEvent(&event))
+
+	if conflict == nil || path != conflict.Path {
+		return changes
+	}
+
+	remoteEvent := conflictResolutionRemoteEvent(conflict, resolution, &event)
+	return mergePathChangeBatches(changes, pathChangesFromEvent(remoteEvent))
+}
+
+func conflictResolutionForcedAction(resolution string) (ActionType, bool) {
+	switch resolution {
+	case ResolutionKeepLocal:
+		return ActionUpload, true
+	case ResolutionKeepRemote, ResolutionKeepBoth:
+		return ActionUpdateSynced, true
+	default:
+		return ActionType(0), false
+	}
+}
+
+func conflictResolutionRemoteEvent(
+	conflict *ConflictRecord,
+	resolution string,
+	localEvent *ChangeEvent,
+) *ChangeEvent {
+	if conflict == nil || conflict.Path == "" {
+		return nil
+	}
+
+	event := &ChangeEvent{
+		Source:    SourceRemote,
+		Type:      ChangeModify,
+		Path:      conflict.Path,
+		ItemID:    conflict.ItemID,
+		DriveID:   conflict.DriveID,
+		ItemType:  ItemTypeFile,
+		Name:      filepath.Base(conflict.Path),
+		IsDeleted: false,
+	}
+
+	switch resolution {
+	case ResolutionKeepLocal:
+		event.Hash = conflict.RemoteHash
+		event.Mtime = conflict.RemoteMtime
+		return event
+	case ResolutionKeepRemote, ResolutionKeepBoth:
+		if localEvent == nil {
 			return nil
 		}
+		event.ParentID = localEvent.ParentID
+		event.ItemType = localEvent.ItemType
+		event.Name = localEvent.Name
+		event.Size = localEvent.Size
+		event.Hash = localEvent.Hash
+		event.Mtime = localEvent.Mtime
+		return event
+	default:
+		return nil
 	}
-
-	var changes []PathChanges
-	for _, path := range sortedPaths {
-		var base *BaselineEntry
-		if entry, ok := bl.GetByPath(path); ok {
-			base = entry
-		}
-
-		observation, observeErr := ObserveSinglePathWithScope(
-			e.logger,
-			e.syncTree,
-			path,
-			base,
-			e.nowFunc().UnixNano(),
-			nil,
-			e.localFilter,
-			e.localRules,
-			scopeSnapshot,
-		)
-		if observeErr != nil {
-			e.logger.Warn("observe conflict follow-up path",
-				slog.String("path", path),
-				slog.String("error", observeErr.Error()),
-			)
-			continue
-		}
-		if observation.Skipped != nil {
-			e.logger.Warn("conflict follow-up path requires normal sync attention",
-				slog.String("path", observation.Skipped.Path),
-				slog.String("reason", observation.Skipped.Reason),
-				slog.String("detail", observation.Skipped.Detail),
-			)
-			continue
-		}
-		changes = mergePathChangeBatches(changes, pathChangesFromEvent(observation.Event))
-	}
-
-	return changes
 }
 
 func conflictCopyGlob(relPath string) string {
