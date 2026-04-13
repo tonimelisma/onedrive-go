@@ -1,6 +1,6 @@
 # Sync Execution
 
-GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go, internal/sync/delete_counter.go, internal/localtrash/trash.go, status.go
+GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go, internal/sync/delete_counter.go, internal/localtrash/trash.go
 
 Implements: R-2.3 [verified], R-2.8.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.5.3 [verified], R-6.7.25 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -390,6 +390,9 @@ Scope block classification remains in the sync engine: `classifyResult` maps `dr
 - Targeted `-race` stress tests for DepGraph, active-scope admission helpers, Buffer, and WorkerPool run through `go run ./cmd/devtool verify stress`. The verifier runs the dedicated `TestWatchOrderingStress_*` probes in `internal/sync` behind the `stress` build tag, then repeats `./internal/multisync ./internal/sync` under `-race -count=50 -timeout=20m` so the merged runtime package is stressed as a unit. [verified]
 - Watch shutdown and active worker-pool cancellation are covered by direct lifecycle tests, including real watch-loop shutdown races and worker-pool close behavior. [verified]
 
-## CLI Status (`status.go`)
+## Status Surface
 
-The `status` command reads config, token files, and state databases to display account and drive status. Concurrent-reader safe while sync is running.
+Execution does not own the CLI `status` command. It contributes only the raw
+results that the engine persists into store-owned snapshots. The read-only
+status contract itself is specified in [sync-store.md](sync-store.md) and the
+CLI rendering contract in [cli.md](cli.md).

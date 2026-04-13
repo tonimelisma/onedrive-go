@@ -64,9 +64,11 @@ The docs and code stay aligned through a small number of explicit classifier
 entry points:
 
 - `internal/failures`: shared `Class` and `LogOwner` definitions.
-- `internal/sync/summary_keys.go`: shared `SummaryKey`,
-  `SummaryDescriptor`, and the normalization helpers that map runtime results,
-  persisted failures, and scope blocks into one rendering key.
+- `internal/sync/summary_keys.go`: shared `SummaryKey` plus the normalization
+  helpers that map runtime results, persisted failures, and scope blocks into
+  one stable grouping key.
+- `internal/cli/status_issue_descriptors.go`: CLI-owned title/reason/action
+  tables for rendering `SummaryKey` values on status surfaces.
 - `internal/config/failure_class.go`: classify config load results into
   `success`, `actionable`, or `fatal`.
 - `internal/sync/engine_result_classify.go`: classify each `WorkerResult` into
@@ -106,7 +108,7 @@ automatic permission rechecks decide when that derived scope clears.
 | Boundary | Evidence |
 |----------|----------|
 | Shared failure classes | `internal/failures/failures_test.go`, `internal/config/failure_class_test.go`, `internal/cli/failure_class_test.go` |
-| Shared summary key mapping and descriptors | `internal/sync/summary_keys_test.go` (`TestDescribeSummary_KnownKeys`, `TestSummaryKeyForPersistedFailure_RepresentativeMappings`, `TestSummaryKeyForScopeBlock_RepresentativeMappings`), `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`, `TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_RemoteRetriesAndSkips`, `TestClassifyResult_StorageScopes`, `TestClassifyResult_LocalErrors`) |
+| Shared summary key mapping plus CLI-owned status descriptors | `internal/sync/summary_keys_test.go` (`TestSummaryKeyForPersistedFailure_RepresentativeMappings`, `TestSummaryKeyForScopeBlock_RepresentativeMappings`, `TestSummaryKeyForIssueType_RepresentativeMappings`), `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`, `TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_RemoteRetriesAndSkips`, `TestClassifyResult_StorageScopes`, `TestClassifyResult_LocalErrors`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesIssueGroupScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestBuildSyncStateInfo_SamplesSectionsByDefault`, `TestPrintSyncStateText_WithIssueGroups`), `internal/cli/status_golden_test.go` |
 | Structured sync log schema from classified results | `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`) |
 | Sync result classification and persistence mapping | `internal/sync/engine_result_scope_test.go` (`TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_StorageScopes`, `TestDiskLocalScopeBlock_FullCycle`, `TestRetryPipeline_TransientFailure_IntegratedRetrier`) |
 | Trial routing from classified decisions | `internal/sync/engine_result_scope_test.go` (`TestProcessTrialResultV2_Success_ClearsScope`, `TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure`, `TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends`) |

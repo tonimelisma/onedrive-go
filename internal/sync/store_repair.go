@@ -11,7 +11,8 @@
 //
 // Related files:
 //   - store.go:          SyncStore type definition and lifecycle
-//   - store_write_failures.go: failure recording and queries
+//   - store_read_failures.go:  failure query helpers
+//   - store_write_failures.go: failure recording and mutation helpers
 package sync
 
 import (
