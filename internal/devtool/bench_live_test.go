@@ -260,6 +260,39 @@ func TestWaitForBenchRemoteScopeVisibleRetriesTransientFailures(t *testing.T) {
 }
 
 // Validates: R-6.10.14
+func TestWaitForBenchRemoteScopeVisibleRequiresExactScopeNameMatch(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	subject := preparedBenchSubject{
+		measure: func(_ context.Context, spec benchCommandSpec) (benchMeasuredProcess, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				assert.Equal(t, []string{"--config", "", "--drive", "", "stat", "--json", "/benchmarks/test"}, spec.Arg)
+				return benchMeasuredProcess{Stderr: []byte("not found")}, assert.AnError
+			case 2:
+				assert.Equal(t, []string{"--config", "", "--drive", "", "ls", "/benchmarks"}, spec.Arg)
+				return benchMeasuredProcess{Stdout: []byte("test-backup\nother-entry\n")}, nil
+			case 3:
+				assert.Equal(t, []string{"--config", "", "--drive", "", "stat", "--json", "/benchmarks/test"}, spec.Arg)
+				return benchMeasuredProcess{}, nil
+			default:
+				require.Failf(t, "unexpected extra call", "spec.Arg=%v", spec.Arg)
+				return benchMeasuredProcess{}, nil
+			}
+		},
+	}
+
+	err := waitForBenchRemoteScopeVisible(t.Context(), subject, benchLiveCommandRuntime{
+		configPath: "",
+		driveID:    "",
+	}, "/benchmarks/test")
+	require.NoError(t, err)
+	assert.Equal(t, 3, callCount, "a sibling name should not satisfy scope visibility")
+}
+
+// Validates: R-6.10.14
 func TestClassifyBenchVisibilityErrorAllowsRetryableFamilies(t *testing.T) {
 	t.Parallel()
 
@@ -342,6 +375,96 @@ func TestPrepareAndMeasureCatchupSampleRestoresFixtureAndReadsPerfSummary(t *tes
 	assert.EqualValues(t, 42, result.PerfSummary.DurationMS)
 	assert.Equal(t, 2, result.PerfSummary.DownloadCount)
 	assert.EqualValues(t, 1500, result.ElapsedMicros)
+}
+
+// Validates: R-6.10.14
+func TestRunSampleReturnsFixtureFailureWhenRuntimeCleanupFails(t *testing.T) {
+	repoRoot := t.TempDir()
+	credentialDir := filepath.Join(repoRoot, ".testdata")
+	require.NoError(t, localpath.MkdirAll(credentialDir, 0o700))
+	require.NoError(t, localpath.WriteFile(
+		filepath.Join(credentialDir, "token_personal_user@example.com.json"),
+		[]byte(`{"token":"x"}`),
+		0o600,
+	))
+	require.NoError(t, localpath.WriteFile(filepath.Join(credentialDir, "account_user@example.com.json"), []byte(`{}`), 0o600))
+	require.NoError(t, localpath.WriteFile(filepath.Join(credentialDir, "drive_user@example.com.json"), []byte(`{}`), 0o600))
+
+	t.Setenv("ONEDRIVE_TEST_DRIVE", "personal:user@example.com")
+	t.Setenv("ONEDRIVE_ALLOWED_TEST_ACCOUNTS", "personal:user@example.com")
+	t.Setenv("ONEDRIVE_TEST_DRIVE_2", "")
+
+	fixture := benchLiveFixturePlan{
+		Manifest: benchLiveFixtureManifest{
+			RemoteScopePath: "/benchmarks/test-scope",
+		},
+		ScopeRootRelativePath: "benchmarks/test-scope",
+		Files: []benchLiveFileEntry{
+			{RelativePath: "docs/a.txt", SizeBytes: 64},
+		},
+		Directories: []string{"docs"},
+		Mutations: benchLiveMutationPlan{
+			Deletes: []benchLiveMutationEntry{
+				{File: benchLiveFileEntry{RelativePath: "docs/a.txt", SizeBytes: 64}},
+			},
+		},
+	}
+
+	state := &benchLiveScenarioState{
+		repoRoot: repoRoot,
+		fixture:  fixture,
+		workRoot: t.TempDir(),
+	}
+	state.setupOnce.Do(func() {})
+
+	var runtimeRoot string
+	callCount := 0
+	subject := preparedBenchSubject{
+		measure: func(_ context.Context, spec benchCommandSpec) (benchMeasuredProcess, error) {
+			callCount++
+			runtimeRoot = spec.CWD
+			scopeRoot := filepath.Join(spec.CWD, "sync-root", filepath.FromSlash(fixture.ScopeRootRelativePath))
+			logPath := filepath.Join(spec.CWD, "bench.log")
+
+			require.Equal(
+				t,
+				[]string{"--config", filepath.Join(spec.CWD, "config.toml"), "--drive", "personal:user@example.com", "sync", "--download-only"},
+				spec.Arg,
+			)
+
+			if callCount == 1 {
+				require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.Files))
+				return benchMeasuredProcess{}, nil
+			}
+			require.Equal(t, 2, callCount, "runSample should only measure baseline and catchup once each")
+
+			require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.Files))
+			require.NoError(t, writeBenchLivePerfLog(logPath, &perf.Snapshot{
+				DurationMS:        42,
+				Result:            "success",
+				DownloadCount:     1,
+				DownloadBytes:     64,
+				ReconcileRunCount: 1,
+			}))
+			require.NoError(t, localpath.Chmod(spec.CWD, 0o500))
+
+			return benchMeasuredProcess{
+				ElapsedMicros: 1234,
+				PeakRSSBytes:  8192,
+			}, nil
+		},
+	}
+
+	sample := state.runSample(t.Context(), subject, benchSamplePhaseMeasured, 1)
+	assert.Equal(t, BenchSampleFixtureFailed, sample.Status)
+	assert.Contains(t, sample.FailureExcerpt, "cleanup sample runtime")
+
+	if runtimeRoot != "" {
+		if _, err := localpath.Stat(runtimeRoot); err == nil {
+			require.NoError(t, localpath.Chmod(runtimeRoot, 0o700))
+			require.NoError(t, localpath.RemoveAll(runtimeRoot))
+		}
+	}
 }
 
 func sumBenchLiveFixtureBytes(files []benchLiveFileEntry) int64 {
