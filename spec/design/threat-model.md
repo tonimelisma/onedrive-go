@@ -69,11 +69,11 @@ Explicit non-goals:
 | Mitigation | Evidence |
 |------------|----------|
 | Rooted filesystem boundaries and atomic replacement writes | `internal/fsroot/fsroot_test.go` (`TestRoot_AtomicWrite_WritesFileAtomically`, `TestRoot_AtomicWrite_RejectsRootEscape`), `internal/localpath/localpath_test.go` (`TestAtomicWrite`, `TestAtomicWrite_CleansTempOnRenameFailure`) |
-| Graph normalization, redaction, and pre-auth boundary discipline | `internal/graph/client_test.go` (`TestDo_DebugLogsNeverExposeBearerToken`, `TestDoPreAuth_ErrorBodyCappedAt64KiB`, `TestDoOnce_401_RefreshSucceeds`), `internal/devtool/verify_test.go` (`TestRunRepoConsistencyChecksFailsOnHTTPClientDoOutsideApprovedBoundary`) |
+| Graph normalization, redaction, and pre-auth boundary discipline | `internal/graph/client_test.go` (`TestDo_DebugLogsNeverExposeBearerToken`, `TestDoPreAuth_ErrorBodyCappedAt64KiB`, `TestDoOnce_401_RefreshSucceeds`), `internal/devtool/verify_repo_checks_test.go` (`TestRunRepoConsistencyChecksFailsOnHTTPClientDoOutsideApprovedBoundary`) |
 | Managed token/config file validation and rooted writes | `internal/graph/auth_test.go` (`TestSaveToken_AtomicWrite`, `TestLoadToken_InvalidJSON`), `internal/config/write_test.go` (`TestAtomicWriteFile_WritesFile`) |
 | Observer-side invalid-path and permission containment | `internal/sync/permissions_test.go` (`TestHandleLocalPermission_DirectoryLevel`, `TestHandle403_ExistingRemoteScope_AvoidsAPICall`), `internal/sync/engine_watch_test.go` (`TestRunWatch_AllObserversDead_ReturnsError`) |
 | Durable state authority and crash recovery | `internal/sync/db_repair_test.go` (`TestRepairStateDB_RepairsReadableStoreInPlace`, `TestRepairStateDB_RebuildPreservesDurableIntent`), `internal/sync/engine_run_once_test.go` (`TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta`, `TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`) |
-| Privileged API boundaries kept narrow by repo verification | `internal/devtool/verify_test.go` (`TestRunRepoConsistencyChecksFailsOnExecCommandContextOutsideApprovedBoundary`, `TestRunRepoConsistencyChecksFailsOnSQLOpenOutsideApprovedBoundary`, `TestRunRepoConsistencyChecksFailsOnSignalNotifyOutsideApprovedBoundary`) |
+| Privileged API boundaries kept narrow by repo verification | `internal/devtool/verify_repo_checks_test.go` (`TestRunRepoConsistencyChecksFailsOnExecCommandContextOutsideApprovedBoundary`, `TestRunRepoConsistencyChecksFailsOnSQLOpenOutsideApprovedBoundary`, `TestRunRepoConsistencyChecksFailsOnSignalNotifyOutsideApprovedBoundary`) |
 
 ## Residual Risks And Follow-Ups
 
