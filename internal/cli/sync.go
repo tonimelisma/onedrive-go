@@ -67,7 +67,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		Watch:         watch,
 		DryRun:        dryRun,
 		FullReconcile: fullReconcile,
-	}, defaultSyncCommandDeps(cc))
+	})
 }
 
 func syncDryRunOverride(cmd *cobra.Command) (bool, bool, error) {

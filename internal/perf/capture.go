@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
-	"sync"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
@@ -45,11 +44,6 @@ type CaptureResult struct {
 	TracePath     string `json:"trace_path,omitempty"`
 }
 
-type CaptureManager struct {
-	mu     sync.Mutex
-	active bool
-}
-
 type captureManifest struct {
 	OwnerMode         string              `json:"owner_mode"`
 	StartedAt         time.Time           `json:"started_at"`
@@ -60,33 +54,12 @@ type captureManifest struct {
 	DriveSnapshots    map[string]Snapshot `json:"drive_snapshots,omitempty"`
 }
 
-func NewCaptureManager() *CaptureManager {
-	return &CaptureManager{}
-}
-
-func (m *CaptureManager) Capture(
+func captureBundle(
 	ctx context.Context,
 	opts CaptureOptions,
 	aggregate *Snapshot,
 	driveSnapshots map[string]Snapshot,
 ) (CaptureResult, error) {
-	if m == nil {
-		return CaptureResult{}, ErrCaptureUnavailable
-	}
-
-	m.mu.Lock()
-	if m.active {
-		m.mu.Unlock()
-		return CaptureResult{}, ErrCaptureInProgress
-	}
-	m.active = true
-	m.mu.Unlock()
-	defer func() {
-		m.mu.Lock()
-		m.active = false
-		m.mu.Unlock()
-	}()
-
 	outputDir, err := prepareCaptureDir(opts.OutputDir)
 	if err != nil {
 		return CaptureResult{}, err
