@@ -2606,6 +2606,69 @@ func TestPlan_DeniedPrefix_AllowsDownloads(t *testing.T) {
 	assert.Len(t, downloads, 1, "downloads should proceed under denied prefix")
 }
 
+func TestPlan_UploadOnly_DeniedPrefix_DoesNotReportDeferredDownloads(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(synctest.TestLogger(t))
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "Shared/ReadOnly/file.txt", ItemType: ItemTypeFile,
+		LocalHash: "aaa", RemoteHash: "aaa",
+	})
+
+	changes := []PathChanges{{
+		Path: "Shared/ReadOnly/file.txt",
+		RemoteEvents: []ChangeEvent{{
+			Type: ChangeModify, Path: "Shared/ReadOnly/file.txt",
+			ItemType: ItemTypeFile, Hash: "bbb",
+		}},
+	}}
+
+	plan, err := planner.Plan(
+		changes,
+		baseline,
+		SyncUploadOnly,
+		DefaultSafetyConfig(),
+		[]string{"Shared/ReadOnly"},
+	)
+	require.NoError(t, err)
+
+	downloads := actionsOfType(plan.Actions, ActionDownload)
+	assert.Len(t, downloads, 1, "denied prefixes should still execute downloads in upload-only mode")
+	assert.Zero(t, plan.DeferredByMode.Downloads, "permission-driven download overrides must not be reported as deferred")
+}
+
+func TestPlan_UploadOnly_DeniedPrefix_DoesNotReportDeferredUploads(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(synctest.TestLogger(t))
+
+	baseline := baselineWith(&BaselineEntry{
+		Path: "Shared/ReadOnly/file.txt", ItemType: ItemTypeFile,
+		LocalHash: "aaa", RemoteHash: "aaa",
+	})
+
+	changes := []PathChanges{{
+		Path: "Shared/ReadOnly/file.txt",
+		LocalEvents: []ChangeEvent{{
+			Type: ChangeModify, Path: "Shared/ReadOnly/file.txt",
+			ItemType: ItemTypeFile, Hash: "bbb",
+		}},
+	}}
+
+	plan, err := planner.Plan(
+		changes,
+		baseline,
+		SyncUploadOnly,
+		DefaultSafetyConfig(),
+		[]string{"Shared/ReadOnly"},
+	)
+	require.NoError(t, err)
+
+	assert.Empty(t, actionsOfType(plan.Actions, ActionUpload), "denied prefixes should suppress remote writes")
+	assert.Zero(t, plan.DeferredByMode.Uploads, "permission-suppressed uploads must not be reported as deferred")
+}
+
 // Validates: R-2.14.2
 func TestPlan_DeniedPrefix_OutsideDenied_Normal(t *testing.T) {
 	t.Parallel()
