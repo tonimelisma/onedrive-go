@@ -145,7 +145,20 @@ func (e *Executor) confirmRemotePathVisible(ctx context.Context, action *Action)
 }
 
 func (e *Executor) pathConvergenceForAction(action *Action) (driveops.PathConvergence, string, bool) {
+	if action == nil {
+		return nil, "", false
+	}
+
+	return e.pathConvergenceForPath(action, action.Path)
+}
+
+func (e *Executor) pathConvergenceForPath(action *Action, actionPath string) (driveops.PathConvergence, string, bool) {
 	if e.pathConvergenceFactory == nil || action == nil {
+		return nil, "", false
+	}
+
+	cleanPath := filepath.ToSlash(actionPath)
+	if cleanPath == "" || cleanPath == "." {
 		return nil, "", false
 	}
 
@@ -155,12 +168,12 @@ func (e *Executor) pathConvergenceForAction(action *Action) (driveops.PathConver
 	}
 
 	if targetDriveID.Equal(e.driveID) {
-		return e.pathConvergenceFactory.ForTarget(targetDriveID, e.rootItemID), action.Path, true
+		return e.pathConvergenceFactory.ForTarget(targetDriveID, e.rootItemID), cleanPath, true
 	}
 
 	if action.TargetRootItemID == "" || action.TargetRootLocalPath == "" {
 		e.logger.Debug("skip cross-drive path convergence without target root metadata",
-			slog.String("path", action.Path),
+			slog.String("path", actionPath),
 			slog.String("target_drive_id", targetDriveID.String()),
 			slog.String("target_root_item_id", action.TargetRootItemID),
 			slog.String("target_root_local_path", action.TargetRootLocalPath),
@@ -169,10 +182,10 @@ func (e *Executor) pathConvergenceForAction(action *Action) (driveops.PathConver
 		return nil, "", false
 	}
 
-	targetPath, ok := targetRelativePath(action.Path, action.TargetRootLocalPath)
+	targetPath, ok := targetRelativePath(cleanPath, action.TargetRootLocalPath)
 	if !ok {
 		e.logger.Debug("skip cross-drive path convergence with mismatched target root prefix",
-			slog.String("path", action.Path),
+			slog.String("path", actionPath),
 			slog.String("target_drive_id", targetDriveID.String()),
 			slog.String("target_root_local_path", action.TargetRootLocalPath),
 		)
@@ -180,7 +193,37 @@ func (e *Executor) pathConvergenceForAction(action *Action) (driveops.PathConver
 		return nil, "", false
 	}
 
+	if targetPath == "" {
+		return nil, "", false
+	}
+
 	return e.pathConvergenceFactory.ForTarget(targetDriveID, action.TargetRootItemID), targetPath, true
+}
+
+// waitRemoteParentVisible blocks parent-based remote creates until the already
+// known parent path becomes readable through the shared convergence boundary.
+// This keeps sync from spending a freshly created parent item ID on child
+// create/upload routes before Graph has converged the parent path.
+func (e *Executor) waitRemoteParentVisible(ctx context.Context, action *Action) error {
+	if action == nil {
+		return nil
+	}
+
+	parentPath := filepath.Dir(action.Path)
+	if parentPath == "." || parentPath == "" {
+		return nil
+	}
+
+	pathConvergence, remotePath, ok := e.pathConvergenceForPath(action, parentPath)
+	if !ok || remotePath == "" {
+		return nil
+	}
+
+	if _, err := pathConvergence.WaitPathVisible(ctx, remotePath); err != nil {
+		return fmt.Errorf("wait for parent path %q visibility: %w", parentPath, err)
+	}
+
+	return nil
 }
 
 func targetRelativePath(actionPath, targetRootLocalPath string) (string, bool) {
@@ -276,6 +319,10 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Actio
 	parentID, err := e.ResolveParentID(action.Path)
 	if err != nil {
 		return e.failedOutcome(action, ActionFolderCreate, err)
+	}
+
+	if waitErr := e.waitRemoteParentVisible(ctx, action); waitErr != nil {
+		return e.failedOutcome(action, ActionFolderCreate, waitErr)
 	}
 
 	driveID := e.resolveDriveID(action)

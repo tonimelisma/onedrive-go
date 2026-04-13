@@ -391,9 +391,15 @@ func (e *Engine) processQueuedConflictResolutions(ctx context.Context) ([]PathCh
 				return nil, fmt.Errorf("sync: mark conflict resolved: %w", err)
 			}
 
+			conflictFollowUpChanges := e.conflictResolutionFollowUpChanges(
+				ctx,
+				&claimed.ConflictRecord,
+				claimed.RequestedResolution,
+				affectedPaths,
+			)
 			followUpChanges = mergePathChangeBatches(
 				followUpChanges,
-				e.conflictResolutionFollowUpChanges(ctx, affectedPaths),
+				conflictFollowUpChanges,
 			)
 		}
 

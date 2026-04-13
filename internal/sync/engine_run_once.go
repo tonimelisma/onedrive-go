@@ -33,7 +33,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		slog.Bool("dry_run", opts.DryRun),
 	)
 
-	bl, err := e.prepareRunOnceBaseline(ctx, runner)
+	bl, followUpChanges, err := e.prepareRunOnceBaseline(ctx, runner)
 	if err != nil {
 		return nil, err
 	}
@@ -46,8 +46,15 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	if err != nil {
 		return nil, err
 	}
-	changes = mergePathChangeBatches(changes, runner.collectDueRetryChanges(ctx, pathSetFromBatch(changes)))
-	changes = mergePathChangeBatches(changes, runner.collectApprovedDeleteChanges(ctx))
+	// Queued conflict resolutions can materialize a new chosen layout before
+	// the next observer pass. Merge that follow-up view in before planning so
+	// the same run converges instead of re-detecting the just-resolved conflict.
+	changes = mergePathChangeBatches(
+		changes,
+		followUpChanges,
+		runner.collectDueRetryChanges(ctx, pathSetFromBatch(changes)),
+		runner.collectApprovedDeleteChanges(ctx),
+	)
 	e.collector().RecordObserve(len(changes), e.since(observeStart))
 
 	// Step 5: Early return if no changes.
@@ -120,20 +127,20 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 func (e *Engine) prepareRunOnceBaseline(
 	ctx context.Context,
 	runner *oneShotRunner,
-) (*Baseline, error) {
+) (*Baseline, []PathChanges, error) {
 	if err := runner.prepareRunOnceState(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if _, processErr := e.processQueuedConflictResolutions(ctx); processErr != nil {
-		return nil, processErr
+	followUpChanges, processErr := e.processQueuedConflictResolutions(ctx)
+	if processErr != nil {
+		return nil, nil, processErr
 	}
-
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: reloading baseline after queued user intent: %w", err)
+		return nil, nil, fmt.Errorf("sync: reloading baseline after queued user intent: %w", err)
 	}
 
-	return bl, nil
+	return bl, followUpChanges, nil
 }
 
 func (e *Engine) completeRunOnceWithoutChanges(

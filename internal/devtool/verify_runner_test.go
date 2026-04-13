@@ -420,6 +420,38 @@ func TestFullE2EExecutionManifestCoversTaggedTestsExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestFastE2EExecutionManifestKeepsOnlySmokeLiveTests(t *testing.T) {
+	t.Parallel()
+
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+
+	fastTests, err := discoverTaggedE2ETests(filepath.Join(repoRoot, "e2e"), "e2e")
+	require.NoError(t, err)
+
+	assert.Contains(t, fastTests, "TestE2E_AuthPreflight_Fast")
+	assert.Contains(t, fastTests, "TestE2E_FixturePreflight_Fast")
+	assert.Contains(t, fastTests, "TestE2E_FileOpsSmokeCRUD")
+	assert.Contains(t, fastTests, "TestE2E_Sync_UploadOnly")
+	assert.Contains(t, fastTests, "TestE2E_Sync_DownloadOnly")
+	assert.Contains(t, fastTests, "TestE2E_SyncWatch_WebsocketDisabledLongPollRegression")
+
+	assert.NotContains(t, fastTests, "TestE2E_FileOps_Whoami")
+	assert.NotContains(t, fastTests, "TestE2E_FileOps_LsRoot")
+	assert.NotContains(t, fastTests, "TestE2E_FileOps_Mkdir")
+	assert.NotContains(t, fastTests, "TestE2E_FileOps_Put")
+	assert.NotContains(t, fastTests, "TestE2E_FileOps_LsFolder")
+	assert.NotContains(t, fastTests, "TestE2E_FileOps_Stat")
+	assert.NotContains(t, fastTests, "TestE2E_FileOps_Get")
+	assert.NotContains(t, fastTests, "TestE2E_FileOps_RmFile")
+	assert.NotContains(t, fastTests, "TestE2E_FileOps_RmSubfolder")
+	assert.NotContains(t, fastTests, "TestE2E_FileOps_RmPermanent")
+	assert.NotContains(t, fastTests, "TestE2E_FileOps_Status")
+	assert.NotContains(t, fastTests, "TestE2E_ErrorCases")
+	assert.NotContains(t, fastTests, "TestE2E_JSONOutput")
+	assert.NotContains(t, fastTests, "TestE2E_QuietFlag")
+}
+
 func TestFullE2EBucketsOwnDemotedFastTests(t *testing.T) {
 	t.Parallel()
 
@@ -437,6 +469,11 @@ func TestFullE2EBucketsOwnDemotedFastTests(t *testing.T) {
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DriveRemoveAndReAdd")
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile")
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload")
+	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DirectionalModes_PreserveEditEditConflict")
+	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict")
+	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict")
+	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges")
+	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges")
 
 	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_SyncWatch_WebsocketStartupSmoke")
 }

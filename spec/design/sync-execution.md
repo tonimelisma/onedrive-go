@@ -280,10 +280,17 @@ re-uploading or re-downloading the same file forever.
 
 **Watch-Mode Upload Freshness Check**: In watch mode, `ExecuteUpload` performs a pre-flight eTag comparison before uploading. The debounce-based event batching can split simultaneous local+remote changes across passes: a local fsnotify event may trigger an upload before the remote observer has polled the collaborator's edit. The freshness check fetches the item's current remote eTag via `GetItem` and compares it against the baseline eTag. If they differ, the upload is aborted with a descriptive error (recorded in `sync_failures`). On the next pass, the remote observer will have polled, the planner will see both changes, and a proper conflict will be detected. Cost: one additional `GetItem` API call per upload in watch mode only — controlled by `ExecutorConfig.watchMode` (set by `initWatchInfra`).
 
-After a successful remote upload, the executor asks the injected
+Before sync spends a parent-route remote create under an already-known parent
+folder (`ActionFolderCreate` with `CreateRemote`, or a true new-file upload
+without remote item identity), the executor first asks the injected
+`driveops.PathConvergence` capability to confirm that the parent path is
+readable. This keeps dependent child creates from racing a freshly created
+parent item ID before Graph has converged the parent's ordinary path view.
+
+After a successful remote upload, the executor still asks the same
 `driveops.PathConvergence` capability to confirm that the destination path is
-readable. This is intentionally warn-only; the sync engine does not retry or
-sleep on its own.
+readable. That post-success destination probe remains intentionally warn-only;
+the sync engine does not add its own second retry loop or sleep budget there.
 
 ### Deletes (`executor_delete.go`)
 Implements: R-6.2.4 [verified]
@@ -298,6 +305,9 @@ occupies this path."
 
 ### Conflicts (`executor_conflict.go`)
 Default: keep both versions. Remote version at original path, local version renamed to `<name>.conflict-<timestamp>.<ext>`. Conflict recorded in `conflicts` table.
+Conflict actions are mode-invariant planner outputs: once planning has emitted
+`ActionConflict`, execution preserves both sides (or auto-keeps local for
+edit-delete) in bidirectional, download-only, and upload-only runs alike.
 
 ## Issue Types (`issue_types.go`)
 
