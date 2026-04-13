@@ -86,7 +86,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 
 	// Step 7: Build report from plan counts.
 	counts := CountByType(plan.Actions)
-	report := buildReportFromCounts(counts, mode, opts)
+	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
 
 	if opts.DryRun {
 		return e.completeDryRunReport(start, report), nil
@@ -103,11 +103,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 
 	report.Duration = e.since(start)
 
-	e.logger.Info("sync pass complete",
-		slog.Duration("duration", report.Duration),
-		slog.Int("succeeded", report.Succeeded),
-		slog.Int("failed", report.Failed),
-	)
+	e.logRunOnceCompletion(report)
 
 	runner.postSyncHousekeeping()
 
@@ -176,9 +172,33 @@ func (e *Engine) completeDryRunReport(start time.Time, report *Report) *Report {
 
 	e.logger.Info("dry-run complete: no changes applied",
 		slog.Duration("duration", report.Duration),
+		slog.Int("deferred_folder_creates", report.DeferredByMode.FolderCreates),
+		slog.Int("deferred_moves", report.DeferredByMode.Moves),
+		slog.Int("deferred_downloads", report.DeferredByMode.Downloads),
+		slog.Int("deferred_uploads", report.DeferredByMode.Uploads),
+		slog.Int("deferred_local_deletes", report.DeferredByMode.LocalDeletes),
+		slog.Int("deferred_remote_deletes", report.DeferredByMode.RemoteDeletes),
 	)
 
 	return report
+}
+
+func (e *Engine) logRunOnceCompletion(report *Report) {
+	if report == nil {
+		return
+	}
+
+	e.logger.Info("sync pass complete",
+		slog.Duration("duration", report.Duration),
+		slog.Int("succeeded", report.Succeeded),
+		slog.Int("failed", report.Failed),
+		slog.Int("deferred_folder_creates", report.DeferredByMode.FolderCreates),
+		slog.Int("deferred_moves", report.DeferredByMode.Moves),
+		slog.Int("deferred_downloads", report.DeferredByMode.Downloads),
+		slog.Int("deferred_uploads", report.DeferredByMode.Uploads),
+		slog.Int("deferred_local_deletes", report.DeferredByMode.LocalDeletes),
+		slog.Int("deferred_remote_deletes", report.DeferredByMode.RemoteDeletes),
+	)
 }
 
 func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
@@ -330,20 +350,27 @@ func (r *oneShotRunner) executePlan(
 	return nil
 }
 
-// buildReportFromCounts populates a Report with plan counts.
-func buildReportFromCounts(counts map[ActionType]int, mode Mode, opts RunOptions) *Report {
+// buildReportFromCounts populates a Report with plan counts and directionally
+// deferred work observed by the planner.
+func buildReportFromCounts(
+	counts map[ActionType]int,
+	deferred DeferredCounts,
+	mode Mode,
+	opts RunOptions,
+) *Report {
 	return &Report{
-		Mode:          mode,
-		DryRun:        opts.DryRun,
-		FolderCreates: counts[ActionFolderCreate],
-		Moves:         counts[ActionLocalMove] + counts[ActionRemoteMove],
-		Downloads:     counts[ActionDownload],
-		Uploads:       counts[ActionUpload],
-		LocalDeletes:  counts[ActionLocalDelete],
-		RemoteDeletes: counts[ActionRemoteDelete],
-		Conflicts:     counts[ActionConflict],
-		SyncedUpdates: counts[ActionUpdateSynced],
-		Cleanups:      counts[ActionCleanup],
+		Mode:           mode,
+		DryRun:         opts.DryRun,
+		FolderCreates:  counts[ActionFolderCreate],
+		Moves:          counts[ActionLocalMove] + counts[ActionRemoteMove],
+		Downloads:      counts[ActionDownload],
+		Uploads:        counts[ActionUpload],
+		LocalDeletes:   counts[ActionLocalDelete],
+		RemoteDeletes:  counts[ActionRemoteDelete],
+		Conflicts:      counts[ActionConflict],
+		SyncedUpdates:  counts[ActionUpdateSynced],
+		Cleanups:       counts[ActionCleanup],
+		DeferredByMode: deferred,
 	}
 }
 

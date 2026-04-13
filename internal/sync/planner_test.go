@@ -1438,6 +1438,7 @@ func TestPlan_DownloadOnly_SuppressesUploads(t *testing.T) {
 
 	uploads := actionsOfType(plan.Actions, ActionUpload)
 	assert.Empty(t, uploads, "download-only: expected 0 uploads")
+	assert.Equal(t, 1, plan.DeferredByMode.Uploads, "download-only should report the deferred upload")
 }
 
 func TestPlan_UploadOnly_SuppressesDownloads(t *testing.T) {
@@ -1474,6 +1475,37 @@ func TestPlan_UploadOnly_SuppressesDownloads(t *testing.T) {
 
 	downloads := actionsOfType(plan.Actions, ActionDownload)
 	assert.Empty(t, downloads, "upload-only: expected 0 downloads")
+	assert.Equal(t, 1, plan.DeferredByMode.Downloads, "upload-only should report the deferred download")
+}
+
+func TestPlan_UploadOnly_RemoteDeleteIsCountedAsDeferredLocalDelete(t *testing.T) {
+	planner := NewPlanner(synctest.TestLogger(t))
+
+	baseline := baselineWith(&BaselineEntry{
+		Path:       "planner-ul-delete.txt",
+		DriveID:    driveid.New(synctest.TestDriveID),
+		ItemID:     "item-ul-delete",
+		ItemType:   ItemTypeFile,
+		LocalHash:  "hash-old",
+		RemoteHash: "hash-old",
+	})
+
+	changes := []PathChanges{{
+		Path: "planner-ul-delete.txt",
+		RemoteEvents: []ChangeEvent{{
+			Source:    SourceRemote,
+			Type:      ChangeDelete,
+			Path:      "planner-ul-delete.txt",
+			ItemType:  ItemTypeFile,
+			IsDeleted: true,
+		}},
+	}}
+
+	plan, err := planner.Plan(changes, baseline, SyncUploadOnly, DefaultSafetyConfig(), nil)
+	require.NoError(t, err, "Plan()")
+
+	assert.Empty(t, actionsOfType(plan.Actions, ActionLocalDelete), "upload-only should suppress local deletes from remote drift")
+	assert.Equal(t, 1, plan.DeferredByMode.LocalDeletes, "upload-only should report the deferred local delete")
 }
 
 func TestPlan_DownloadOnly_SuppressesFolderCreateRemote(t *testing.T) {

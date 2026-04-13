@@ -665,14 +665,11 @@ func failedGoTestsFromJSON(output []byte) map[string]struct{} {
 			continue
 		}
 
-		var event struct {
-			Action string
-			Test   string
-		}
+		var event goTestJSONEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			continue
 		}
-		if event.Action != "fail" || event.Test == "" {
+		if event.Action != verifySummaryStatusFail || event.Test == "" {
 			continue
 		}
 
