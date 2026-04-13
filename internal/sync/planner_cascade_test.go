@@ -457,6 +457,103 @@ func TestCascade_LocallyDeletedFolderWithChangedRemoteDescendant_ReclassifiesDes
 	assert.Empty(t, remoteDeletes, "local recreation should replace parent remote delete when a descendant is preserved")
 }
 
+func TestCascade_RemotelyDeletedFolderWithNewLocalDescendant_RecreatesParentRemotely(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner(synctest.TestLogger(t))
+	driveID := driveid.New(synctest.TestDriveID)
+
+	baseline := baselineWith(
+		&BaselineEntry{
+			Path:     plannerCascadeFolderPath,
+			ItemType: ItemTypeFolder,
+			ItemID:   "folder-id",
+			DriveID:  driveID,
+		},
+	)
+
+	changes := []PathChanges{
+		{
+			Path: plannerCascadeFolderPath,
+			RemoteEvents: []ChangeEvent{
+				{
+					Source:    SourceRemote,
+					Type:      ChangeDelete,
+					Path:      plannerCascadeFolderPath,
+					ItemType:  ItemTypeFolder,
+					ItemID:    "folder-id",
+					DriveID:   driveID,
+					IsDeleted: true,
+				},
+			},
+		},
+		{
+			Path: "folder/local-only",
+			LocalEvents: []ChangeEvent{
+				{
+					Source:   SourceLocal,
+					Type:     ChangeCreate,
+					Path:     "folder/local-only",
+					ItemType: ItemTypeFolder,
+				},
+			},
+		},
+		{
+			Path: "folder/local-only/stuff.txt",
+			LocalEvents: []ChangeEvent{
+				{
+					Source:   SourceLocal,
+					Type:     ChangeCreate,
+					Path:     "folder/local-only/stuff.txt",
+					ItemType: ItemTypeFile,
+					Hash:     "local-hash",
+				},
+			},
+		},
+	}
+
+	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
+	require.NoError(t, err)
+
+	folderCreates := actionsOfType(plan.Actions, ActionFolderCreate)
+	require.Len(t, folderCreates, 2)
+
+	folderCreateByPath := make(map[string]Action, len(folderCreates))
+	for i := range folderCreates {
+		folderCreateByPath[folderCreates[i].Path] = folderCreates[i]
+	}
+
+	parentCreate, ok := folderCreateByPath[plannerCascadeFolderPath]
+	require.True(t, ok, "deleted parent should be recreated remotely when new local descendants need it")
+	assert.Equal(t, CreateRemote, parentCreate.CreateSide)
+
+	childCreate, ok := folderCreateByPath["folder/local-only"]
+	require.True(t, ok, "new local child folder should still upload")
+	assert.Equal(t, CreateRemote, childCreate.CreateSide)
+
+	uploads := actionsOfType(plan.Actions, ActionUpload)
+	require.Len(t, uploads, 1)
+	assert.Equal(t, "folder/local-only/stuff.txt", uploads[0].Path)
+
+	localDeletes := actionsOfType(plan.Actions, ActionLocalDelete)
+	assert.Empty(t, localDeletes, "preserved new local subtree should replace parent local delete")
+
+	var parentCreateIdx, childCreateIdx, uploadIdx int
+	for i := range plan.Actions {
+		switch {
+		case plan.Actions[i].Type == ActionFolderCreate && plan.Actions[i].Path == plannerCascadeFolderPath:
+			parentCreateIdx = i
+		case plan.Actions[i].Type == ActionFolderCreate && plan.Actions[i].Path == "folder/local-only":
+			childCreateIdx = i
+		case plan.Actions[i].Type == ActionUpload && plan.Actions[i].Path == "folder/local-only/stuff.txt":
+			uploadIdx = i
+		}
+	}
+
+	assert.Contains(t, plan.Deps[childCreateIdx], parentCreateIdx, "child folder create should wait for parent recreation")
+	assert.Contains(t, plan.Deps[uploadIdx], childCreateIdx, "upload should wait for child folder create")
+}
+
 // TestCascade_BothSidesDeleted verifies cleanup actions for descendants when
 // both sides are deleted.
 func TestCascade_BothSidesDeleted(t *testing.T) {

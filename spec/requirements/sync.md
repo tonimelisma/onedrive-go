@@ -6,8 +6,8 @@ Bidirectional file synchronization between a local directory and OneDrive.
 
 - R-2.1.1: When the user runs `sync`, the system shall perform one-shot bidirectional sync. [verified]
 - R-2.1.2: When `--watch` is passed, the system shall run continuously, detecting changes via filesystem events (inotify/FSEvents) and remote delta polling. [verified]
-- R-2.1.3: When `--download-only` is passed, the system shall still observe both local and remote truth, but it shall only execute remote-to-local reconciliation work. Local-to-remote mutations shall remain deferred until a mode that permits them. [verified]
-- R-2.1.4: When `--upload-only` is passed, the system shall still observe both local and remote truth, but it shall only execute local-to-remote reconciliation work. Remote-to-local mutations shall remain deferred until a mode that permits them. [verified]
+- R-2.1.3: When `--download-only` is passed, the system shall still observe both local and remote truth, but it shall only execute remote-to-local reconciliation work. Local-to-remote mutations shall remain deferred until a mode that permits them. Real two-sided conflicts shall still be surfaced as conflicts; `--download-only` shall not authorize remote changes to silently overwrite divergent local content. [verified]
+- R-2.1.4: When `--upload-only` is passed, the system shall still observe both local and remote truth, but it shall only execute local-to-remote reconciliation work. Remote-to-local mutations shall remain deferred until a mode that permits them. Real two-sided conflicts shall still be surfaced as conflicts; `--upload-only` shall not authorize local changes to silently overwrite divergent remote content. [verified]
 - R-2.1.5: When `--dry-run` is passed, the system shall preview operations without executing. [verified]
 - R-2.1.6: When `--full` is passed, the system shall perform full reconciliation (fresh delta enumeration + orphan detection). [verified]
 

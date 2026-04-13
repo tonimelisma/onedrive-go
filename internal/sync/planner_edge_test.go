@@ -10,6 +10,125 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
+type directionalConflictFixture struct {
+	name         string
+	conflictType string
+	build        func() ([]PathChanges, *Baseline)
+}
+
+type directionalConflictModeCase struct {
+	name string
+	mode Mode
+}
+
+func directionalConflictClassificationFixtures() []directionalConflictFixture {
+	return []directionalConflictFixture{
+		{
+			name:         "edit_edit",
+			conflictType: ConflictEditEdit,
+			build: func() ([]PathChanges, *Baseline) {
+				return []PathChanges{
+						{
+							Path: "shared.txt",
+							RemoteEvents: []ChangeEvent{{
+								Source:   SourceRemote,
+								Type:     ChangeModify,
+								Path:     "shared.txt",
+								ItemType: ItemTypeFile,
+								Hash:     "remote-hash",
+								ItemID:   "item-shared",
+								DriveID:  driveid.New(synctest.TestDriveID),
+							}},
+							LocalEvents: []ChangeEvent{{
+								Source:   SourceLocal,
+								Type:     ChangeModify,
+								Path:     "shared.txt",
+								ItemType: ItemTypeFile,
+								Hash:     "local-hash",
+							}},
+						},
+					}, baselineWith(&BaselineEntry{
+						Path:       "shared.txt",
+						DriveID:    driveid.New(synctest.TestDriveID),
+						ItemID:     "item-shared",
+						ItemType:   ItemTypeFile,
+						LocalHash:  "base-hash",
+						RemoteHash: "base-hash",
+					})
+			},
+		},
+		{
+			name:         "edit_delete",
+			conflictType: ConflictEditDelete,
+			build: func() ([]PathChanges, *Baseline) {
+				return []PathChanges{
+						{
+							Path: "fragile.txt",
+							RemoteEvents: []ChangeEvent{{
+								Source:    SourceRemote,
+								Type:      ChangeDelete,
+								Path:      "fragile.txt",
+								ItemType:  ItemTypeFile,
+								ItemID:    "item-fragile",
+								DriveID:   driveid.New(synctest.TestDriveID),
+								IsDeleted: true,
+							}},
+							LocalEvents: []ChangeEvent{{
+								Source:   SourceLocal,
+								Type:     ChangeModify,
+								Path:     "fragile.txt",
+								ItemType: ItemTypeFile,
+								Hash:     "local-hash",
+							}},
+						},
+					}, baselineWith(&BaselineEntry{
+						Path:       "fragile.txt",
+						DriveID:    driveid.New(synctest.TestDriveID),
+						ItemID:     "item-fragile",
+						ItemType:   ItemTypeFile,
+						LocalHash:  "base-hash",
+						RemoteHash: "base-hash",
+					})
+			},
+		},
+		{
+			name:         "create_create",
+			conflictType: ConflictCreateCreate,
+			build: func() ([]PathChanges, *Baseline) {
+				return []PathChanges{
+					{
+						Path: "new.txt",
+						RemoteEvents: []ChangeEvent{{
+							Source:   SourceRemote,
+							Type:     ChangeCreate,
+							Path:     "new.txt",
+							ItemType: ItemTypeFile,
+							Hash:     "remote-hash",
+							ItemID:   "item-new",
+							DriveID:  driveid.New(synctest.TestDriveID),
+						}},
+						LocalEvents: []ChangeEvent{{
+							Source:   SourceLocal,
+							Type:     ChangeCreate,
+							Path:     "new.txt",
+							ItemType: ItemTypeFile,
+							Hash:     "local-hash",
+						}},
+					},
+				}, emptyBaseline()
+			},
+		},
+	}
+}
+
+func directionalConflictModeCases() []directionalConflictModeCase {
+	return []directionalConflictModeCase{
+		{name: "bidirectional", mode: SyncBidirectional},
+		{name: "download_only", mode: SyncDownloadOnly},
+		{name: "upload_only", mode: SyncUploadOnly},
+	}
+}
+
 // ---------------------------------------------------------------------------
 // §3: Safety Invariant Tests
 // ---------------------------------------------------------------------------
@@ -380,6 +499,26 @@ func TestDownloadOnlyMode_SkipsLocalCorruption(t *testing.T) {
 	// didn't change, this is EF1 (no-op).
 	assert.Empty(t, plan.Actions,
 		"download-only: corrupted local with unchanged remote = no action")
+}
+
+// Validates: R-2.1.3, R-2.1.4, R-2.2
+func TestConflictClassificationsRemainConflictsAcrossSyncModes(t *testing.T) {
+	for _, conflictFixture := range directionalConflictClassificationFixtures() {
+		for _, modeCase := range directionalConflictModeCases() {
+			t.Run(conflictFixture.name+"_"+modeCase.name, func(t *testing.T) {
+				planner := NewPlanner(synctest.TestLogger(t))
+				changes, baseline := conflictFixture.build()
+
+				plan, err := planner.Plan(changes, baseline, modeCase.mode, DefaultSafetyConfig(), nil)
+				require.NoError(t, err)
+				require.Len(t, plan.Actions, 1, "true conflicts must not be filtered out by sync mode")
+
+				conflicts := actionsOfType(plan.Actions, ActionConflict)
+				require.Len(t, conflicts, 1, "mode %s should still surface a conflict", modeCase.name)
+				assert.Equal(t, conflictFixture.conflictType, conflicts[0].ConflictInfo.ConflictType)
+			})
+		}
+	}
 }
 
 // Validates: R-2.3

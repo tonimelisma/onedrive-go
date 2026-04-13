@@ -129,6 +129,9 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 		if err != nil {
 			return e.failedOutcome(action, ActionUpload, err)
 		}
+		if waitErr := e.waitRemoteParentVisible(ctx, action); waitErr != nil {
+			return e.failedOutcome(action, ActionUpload, waitErr)
+		}
 
 		name := filepath.Base(action.Path)
 		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, driveops.UploadOpts{})

@@ -124,19 +124,15 @@ func buildPathViews(changes []PathChanges, baseline *Baseline) map[string]*PathV
 		if len(pc.RemoteEvents) > 0 {
 			last := &pc.RemoteEvents[len(pc.RemoteEvents)-1]
 			view.Remote = remoteStateFromEvent(last)
-			view.ForcedAction = last.ForcedAction
-			view.HasForcedAction = last.HasForcedAction
 		}
+		applyForcedActionFromEvents(view, pc.RemoteEvents)
 
 		// Local state from the latest local event. ChangeDelete means absent.
 		if len(pc.LocalEvents) > 0 {
 			last := &pc.LocalEvents[len(pc.LocalEvents)-1]
 			view.Local = localStateFromEvent(last)
-			if last.HasForcedAction {
-				view.ForcedAction = last.ForcedAction
-				view.HasForcedAction = true
-			}
 		}
+		applyForcedActionFromEvents(view, pc.LocalEvents)
 
 		// Baseline lookup.
 		if baselineEntry, found := baseline.GetByPath(pc.Path); found {
@@ -475,18 +471,38 @@ func classifyForcedAction(view *PathView, mode Mode) []Action {
 			return nil
 		}
 		return []Action{MakeAction(ActionDownload, view)}
-	case ActionUpload,
-		ActionLocalDelete,
+	case ActionUpload:
+		if mode == SyncDownloadOnly {
+			return nil
+		}
+		return []Action{MakeAction(ActionUpload, view)}
+	case ActionUpdateSynced:
+		return []Action{MakeAction(ActionUpdateSynced, view)}
+	case ActionLocalDelete,
 		ActionRemoteDelete,
 		ActionLocalMove,
 		ActionRemoteMove,
 		ActionFolderCreate,
 		ActionConflict,
-		ActionUpdateSynced,
 		ActionCleanup:
 		return nil
 	default:
 		return nil
+	}
+}
+
+func applyForcedActionFromEvents(view *PathView, events []ChangeEvent) {
+	if view == nil {
+		return
+	}
+
+	for i := range events {
+		if !events[i].HasForcedAction {
+			continue
+		}
+
+		view.ForcedAction = events[i].ForcedAction
+		view.HasForcedAction = true
 	}
 }
 
@@ -1124,24 +1140,26 @@ func expandFolderDeleteCascades(
 		}
 
 		descendants := baseline.DescendantsOf(a.Path)
-		if len(descendants) == 0 {
-			continue
+		preserveRemoteDescendant := false
+		if len(descendants) > 0 {
+			logger.Debug("cascading folder delete to descendants",
+				slog.String("folder", a.Path),
+				slog.Int("descendant_count", len(descendants)),
+			)
+
+			preserveRemoteDescendant = applyFolderDeleteCascade(
+				actions,
+				existingActionIndex,
+				descendants,
+				views,
+				mode,
+				cascadeKind,
+				&cascaded,
+			)
 		}
-
-		logger.Debug("cascading folder delete to descendants",
-			slog.String("folder", a.Path),
-			slog.Int("descendant_count", len(descendants)),
-		)
-
-		preserveRemoteDescendant := applyFolderDeleteCascade(
-			actions,
-			existingActionIndex,
-			descendants,
-			views,
-			mode,
-			cascadeKind,
-			&cascaded,
-		)
+		if !preserveRemoteDescendant && subtreeActionRequiresParent(actions, cascaded, a.Path) {
+			preserveRemoteDescendant = true
+		}
 
 		if !preserveRemoteDescendant {
 			continue
@@ -1260,6 +1278,24 @@ func applyFolderDeleteCascade(
 	}
 
 	return preserveRemoteDescendant
+}
+
+func subtreeActionRequiresParent(actions []Action, cascaded []Action, parentPath string) bool {
+	prefix := parentPath + "/"
+
+	for i := range actions {
+		if strings.HasPrefix(actions[i].Path, prefix) && actionRequiresParentFolder(actions[i].Type) {
+			return true
+		}
+	}
+
+	for i := range cascaded {
+		if strings.HasPrefix(cascaded[i].Path, prefix) && actionRequiresParentFolder(cascaded[i].Type) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func buildCascadedDescendantView(
