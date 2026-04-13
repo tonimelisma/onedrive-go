@@ -23,6 +23,8 @@ import (
 // RunWatch tests
 // ---------------------------------------------------------------------------
 
+const engineResolvedLocalVersion = "resolved local"
+
 type stubSocketIOWakeSource struct {
 	started chan struct{}
 	runFn   func(context.Context, chan<- struct{}) error
@@ -1735,7 +1737,7 @@ func TestResolveConflict_KeepLocal_FollowUpSyncCommitsToBaseline(t *testing.T) {
 	}}
 	seedBaseline(t, eng.baseline, ctx, outcomes, "")
 	writeLocalFile(t, syncRoot, "baseline-commit.txt", "remote-version")
-	writeLocalFile(t, syncRoot, "baseline-commit.conflict-20260115-120000.txt", "resolved local")
+	writeLocalFile(t, syncRoot, "baseline-commit.conflict-20260115-120000.txt", engineResolvedLocalVersion)
 
 	conflicts, err := eng.ListConflicts(ctx)
 	require.NoError(t, err)
@@ -1768,7 +1770,7 @@ func TestResolveConflict_KeepLocal_FollowUpSyncDoesNotRedetectConflictWhenRemote
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-	localContent := "resolved local"
+	localContent := engineResolvedLocalVersion
 	remoteContent := "remote winner"
 	localHash := hashContentQuickXor(t, localContent)
 	remoteHash := hashContentQuickXor(t, remoteContent)
@@ -1963,6 +1965,168 @@ func TestResolveConflict_KeepRemote_FollowUpSyncDoesNotRedetectConflictWhenRemot
 	remaining, err := eng.ListConflicts(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "manual keep-remote resolution should stay resolved after the follow-up sync")
+}
+
+func TestConflictResolutionFollowUpPathChanges_IgnoresResolvedObservationWithoutEvent(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	ctx := t.Context()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "docs"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "docs", "keep.txt"), []byte("keep"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "docs", "drop.txt"), []byte("drop"), 0o600))
+
+	scopeSnapshot, err := syncscope.NewSnapshot(syncscope.Config{
+		SyncPaths: []string{"/docs/keep.txt"},
+	}, nil)
+	require.NoError(t, err)
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	changes := eng.conflictResolutionFollowUpPathChanges(
+		nil,
+		"docs/drop.txt",
+		&ConflictRecord{Path: "docs/drop.txt"},
+		ResolutionKeepLocal,
+		bl,
+		scopeSnapshot,
+		ActionUpload,
+		true,
+	)
+
+	assert.Empty(t, changes)
+}
+
+func TestConflictResolutionRemoteEvent_KeepLocalEditDeleteMarksRemoteDeleted(t *testing.T) {
+	t.Parallel()
+
+	event := conflictResolutionRemoteEvent(
+		&ConflictRecord{
+			Path:         "docs/file.txt",
+			ItemID:       "deleted-item-id",
+			DriveID:      driveid.New(engineTestDriveID),
+			ConflictType: ConflictEditDelete,
+			RemoteHash:   "remote-hash",
+			RemoteMtime:  time.Unix(25, 0).UnixNano(),
+		},
+		ResolutionKeepLocal,
+		&ChangeEvent{
+			Source:   SourceLocal,
+			Type:     ChangeModify,
+			Path:     "docs/file.txt",
+			ParentID: "root",
+			ItemType: ItemTypeFile,
+			Name:     "file.txt",
+			Size:     int64(len("local winner")),
+			Hash:     "local-hash",
+			Mtime:    time.Unix(30, 0).UnixNano(),
+		},
+	)
+
+	require.NotNil(t, event)
+	assert.True(t, event.IsDeleted, "keep-local follow-up must preserve deleted-remote semantics")
+	assert.Equal(t, "deleted-item-id", event.ItemID)
+	assert.Equal(t, driveid.New(engineTestDriveID), event.DriveID)
+}
+
+// Validates: R-2.3.5
+func TestResolveConflict_KeepLocal_EditDeleteFollowUpSyncRecreatesDeletedRemote(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	localContent := engineResolvedLocalVersion
+	localHash := hashContentQuickXor(t, localContent)
+	uploadCalled := false
+	overwriteCalled := false
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalled = true
+			assert.Equal(t, "root", parentID)
+			assert.Equal(t, "follow-up-edit-delete.txt", name)
+			assert.Equal(t, int64(len(localContent)), size)
+
+			return &graph.Item{
+				ID:           "recreated-item-id",
+				ParentID:     parentID,
+				Name:         name,
+				ETag:         "etag-recreated",
+				QuickXorHash: localHash,
+				Size:         size,
+			}, nil
+		},
+		uploadToItemFn: func(_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			overwriteCalled = true
+			return nil, fmt.Errorf("unexpected overwrite upload")
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
+		{
+			Action:          ActionUpload,
+			Success:         true,
+			Path:            "follow-up-edit-delete.txt",
+			DriveID:         driveID,
+			ItemID:          "deleted-item-id",
+			ParentID:        "root",
+			ItemType:        ItemTypeFile,
+			LocalHash:       "baseline-local",
+			RemoteHash:      "baseline-remote",
+			LocalSize:       int64(len("baseline")),
+			LocalSizeKnown:  true,
+			RemoteSize:      int64(len("baseline")),
+			RemoteSizeKnown: true,
+			LocalMtime:      time.Unix(10, 0).UnixNano(),
+			RemoteMtime:     time.Unix(10, 0).UnixNano(),
+			ETag:            "etag-baseline",
+		},
+		{
+			Action:       ActionConflict,
+			Success:      true,
+			Path:         "follow-up-edit-delete.txt",
+			DriveID:      driveID,
+			ItemID:       "deleted-item-id",
+			ItemType:     ItemTypeFile,
+			LocalHash:    localHash,
+			RemoteHash:   "remote-hash",
+			LocalMtime:   time.Unix(20, 0).UnixNano(),
+			RemoteMtime:  time.Unix(25, 0).UnixNano(),
+			ConflictType: ConflictEditDelete,
+		},
+	}, "token-0")
+
+	writeLocalFile(t, syncRoot, "follow-up-edit-delete.txt", "stale remote placeholder")
+	writeLocalFile(t, syncRoot, "follow-up-edit-delete.conflict-20260115-120000.txt", localContent)
+
+	conflicts, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	require.Len(t, conflicts, 1)
+
+	requestResult, err := eng.baseline.RequestConflictResolution(ctx, conflicts[0].ID, ResolutionKeepLocal)
+	require.NoError(t, err)
+	assert.Equal(t, ConflictRequestQueued, requestResult.Status)
+
+	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	require.NoError(t, runErr)
+	require.NotNil(t, report)
+
+	assert.True(t, uploadCalled, "keep-local edit_delete follow-up should recreate remote through the parent path")
+	assert.False(t, overwriteCalled, "keep-local edit_delete follow-up must not overwrite a deleted remote item by ID")
+	assert.Zero(t, report.Conflicts)
+
+	remaining, err := eng.ListConflicts(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, remaining)
 }
 
 // ---------------------------------------------------------------------------

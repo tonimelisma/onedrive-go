@@ -37,7 +37,10 @@ the parent-path upload route. Parent-path upload remains the create path for
 new local files whose remote identity does not exist yet. This matters for
 conflict resolution too: `keep-local` restores the local conflict copy, then
 overwrites the known remote item instead of depending on a fresh parent create
-route during Graph consistency lag.
+route during Graph consistency lag. The one exception is `edit_delete`
+follow-up work: once the planner still knows the remote side is deleted,
+`ExecuteUpload` must recreate through the parent path rather than attempting an
+overwrite-by-item-ID against a deleted remote item.
 
 Post-success remote path confirmation is delegated to an injected
 `driveops.PathConvergenceFactory`. The executor resolves the action's

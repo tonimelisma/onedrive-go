@@ -798,7 +798,13 @@ or baseline failure is ordinary sync failure, not a conflict-workflow state.
 Queued manual resolutions also synthesize one immediate follow-up change view
 for the canonical conflicted path before normal planning. This keeps the same
 `sync` pass from re-detecting the just-resolved conflict when the next delta
-page still reports the losing side of the edit race.
+page still reports the losing side of the edit race. Follow-up observation may
+also resolve silently with no event (for example when scope policy now excludes
+the path), in which case the engine treats that path as already settled and
+does not synthesize a fake local change. For `keep_local` on `edit_delete`, the
+synthetic remote side preserves deleted-remote semantics so forced upload
+follow-up recreates through the parent path instead of trying to overwrite a
+remote item that no longer exists.
 
 If the engine cannot establish the chosen layout itself, such as a restore or
 cleanup filesystem failure, the conflict stays unresolved and the request

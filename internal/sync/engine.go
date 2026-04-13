@@ -584,6 +584,12 @@ func (e *Engine) conflictResolutionFollowUpPathChanges(
 		)
 		return changes
 	}
+	if observation.Event == nil {
+		e.logger.Debug("conflict follow-up path already resolved without event",
+			slog.String("path", path),
+		)
+		return changes
+	}
 
 	event := *observation.Event
 	if forceAction && conflict != nil && path == conflict.Path {
@@ -633,6 +639,10 @@ func conflictResolutionRemoteEvent(
 
 	switch resolution {
 	case ResolutionKeepLocal:
+		if conflict.ConflictType == ConflictEditDelete {
+			event.Type = ChangeDelete
+			event.IsDeleted = true
+		}
 		event.Hash = conflict.RemoteHash
 		event.Mtime = conflict.RemoteMtime
 		return event
