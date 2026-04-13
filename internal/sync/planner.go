@@ -68,7 +68,7 @@ func (p *Planner) Plan(
 	// actions exist so executor-time cross-drive convergence does not need to
 	// rediscover target ownership ad hoc.
 	enrichActionTargets(allActions, baseline)
-	deferred := deferredCountsForMode(changes, baseline, mode, p.logger)
+	deferred := deferredCountsForMode(changes, baseline, mode, deniedPrefixes, p.logger)
 
 	// Step 3: build dependency edges and verify acyclicity.
 	deps := buildDependencies(allActions)
@@ -249,12 +249,13 @@ func detectMoves(
 func detectPotentialMoves(
 	views map[string]*PathView,
 	changes []PathChanges,
+	deniedPrefixes []string,
 	bl *Baseline,
 ) []Action {
 	var actions []Action
 
 	actions = append(actions, detectPotentialRemoteMoves(views, changes)...)
-	actions = append(actions, detectPotentialLocalMoves(views, bl)...)
+	actions = append(actions, detectPotentialLocalMovesWithDeniedPrefixes(views, deniedPrefixes, bl)...)
 
 	return actions
 }
@@ -343,13 +344,6 @@ func detectLocalMoves(
 	}
 
 	return detectPotentialLocalMovesWithDeniedPrefixes(views, deniedPrefixes, bl)
-}
-
-func detectPotentialLocalMoves(
-	views map[string]*PathView,
-	bl *Baseline,
-) []Action {
-	return detectPotentialLocalMovesWithDeniedPrefixes(views, nil, bl)
 }
 
 func detectPotentialLocalMovesWithDeniedPrefixes(
@@ -441,6 +435,7 @@ func deferredCountsForMode(
 	changes []PathChanges,
 	baseline *Baseline,
 	mode Mode,
+	deniedPrefixes []string,
 	logger *slog.Logger,
 ) DeferredCounts {
 	if mode == SyncBidirectional {
@@ -448,7 +443,7 @@ func deferredCountsForMode(
 	}
 
 	views := buildPathViews(changes, baseline)
-	fullActions := detectPotentialMoves(views, changes, baseline)
+	fullActions := detectPotentialMoves(views, changes, deniedPrefixes, baseline)
 
 	sortedPaths := make([]string, 0, len(views))
 	for path := range views {
@@ -457,14 +452,14 @@ func deferredCountsForMode(
 	sort.Strings(sortedPaths)
 
 	for _, path := range sortedPaths {
-		fullActions = append(fullActions, classifyPotentialPathView(views[path])...)
+		fullActions = append(fullActions, classifyPotentialPathView(views[path], deniedPrefixes)...)
 	}
 
 	fullActions = expandFolderDeleteCascades(fullActions, baseline, views, SyncBidirectional, logger)
 
 	var deferred DeferredCounts
 	for i := range fullActions {
-		if !actionAllowedInMode(&fullActions[i], mode) {
+		if !actionAllowedInMode(&fullActions[i], deferredReportingModeForAction(&fullActions[i], mode, deniedPrefixes)) {
 			deferred.AddAction(&fullActions[i])
 		}
 	}
@@ -476,11 +471,7 @@ func deferredCountsForMode(
 // the item type and sync mode. Paths under deniedPrefixes are treated
 // as download-only (remote writes suppressed).
 func classifyPathView(view *PathView, mode Mode, deniedPrefixes []string) []Action {
-	// Under a denied prefix, behave as download-only: we cannot write to remote.
-	effectiveMode := mode
-	if IsWriteDenied(view.Path, deniedPrefixes) {
-		effectiveMode = SyncDownloadOnly
-	}
+	effectiveMode := effectiveModeForPath(view.Path, mode, deniedPrefixes)
 
 	if forced := classifyForcedAction(view, effectiveMode); forced != nil {
 		return forced
@@ -495,16 +486,49 @@ func classifyPathView(view *PathView, mode Mode, deniedPrefixes []string) []Acti
 	return filterActionsForMode(classifyFile(view), effectiveMode)
 }
 
-func classifyPotentialPathView(view *PathView) []Action {
-	if forced := classifyForcedAction(view, SyncBidirectional); forced != nil {
+func classifyPotentialPathView(view *PathView, deniedPrefixes []string) []Action {
+	potentialMode := capabilityModeForPath(view.Path, deniedPrefixes)
+
+	if forced := classifyForcedAction(view, potentialMode); forced != nil {
 		return forced
 	}
 
 	if resolveItemType(view) == ItemTypeFolder {
-		return classifyFolder(view)
+		return filterActionsForMode(classifyFolder(view), potentialMode)
 	}
 
-	return classifyFile(view)
+	return filterActionsForMode(classifyFile(view), potentialMode)
+}
+
+func effectiveModeForPath(filePath string, requestedMode Mode, deniedPrefixes []string) Mode {
+	if IsWriteDenied(filePath, deniedPrefixes) {
+		return SyncDownloadOnly
+	}
+
+	return requestedMode
+}
+
+func capabilityModeForPath(filePath string, deniedPrefixes []string) Mode {
+	if IsWriteDenied(filePath, deniedPrefixes) {
+		return SyncDownloadOnly
+	}
+
+	return SyncBidirectional
+}
+
+func deferredReportingModeForAction(action *Action, requestedMode Mode, deniedPrefixes []string) Mode {
+	if action == nil {
+		return requestedMode
+	}
+
+	if action.Type == ActionLocalMove {
+		// Remote-move detection currently keys only off the requested sync
+		// direction. Deferred reporting must mirror that contract until move
+		// planning itself becomes permission-aware.
+		return requestedMode
+	}
+
+	return effectiveModeForPath(action.Path, requestedMode, deniedPrefixes)
 }
 
 func filterActionsForMode(actions []Action, mode Mode) []Action {
