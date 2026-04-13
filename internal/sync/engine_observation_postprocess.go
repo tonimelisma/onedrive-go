@@ -2,11 +2,37 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
+
+type fatalObserverError struct {
+	err error
+}
+
+func (e fatalObserverError) Error() string {
+	return e.err.Error()
+}
+
+func (e fatalObserverError) Unwrap() error {
+	return e.err
+}
+
+func newFatalObserverError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	return fatalObserverError{err: err}
+}
+
+func isFatalObserverError(err error) bool {
+	var fatal fatalObserverError
+	return errors.As(err, &fatal)
+}
 
 func (flow *engineFlow) processCommittedPrimaryBatch(
 	ctx context.Context,
@@ -96,6 +122,43 @@ func (rt *watchRuntime) processCommittedScopedWatchBatch(
 	}
 
 	return finalEvents, true
+}
+
+func (rt *watchRuntime) processCommittedPrimaryWatchBatch(
+	ctx context.Context,
+	bl *Baseline,
+	primaryEvents []ChangeEvent,
+	newToken string,
+) ([]ChangeEvent, error) {
+	scopeSnapshot := rt.currentScopeSnapshot()
+	scopeGeneration := rt.currentScopeGeneration()
+	scoped := applyRemoteScope(rt.engine.logger, scopeSnapshot, scopeGeneration, primaryEvents)
+
+	if err := rt.commitObservedItems(ctx, scoped.observed, newToken); err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+
+		return nil, newFatalObserverError(fmt.Errorf("commit primary watch observations: %w", err))
+	}
+
+	finalEvents, err := rt.processCommittedPrimaryBatch(
+		ctx,
+		bl,
+		scoped.emitted,
+		scopeSnapshot,
+		scopeGeneration,
+		false,
+		false,
+	)
+	if err != nil {
+		rt.engine.logger.Warn("shortcut processing failed during remote watch batch",
+			slog.String("error", err.Error()),
+		)
+		return filterOutShortcuts(scoped.emitted), nil
+	}
+
+	return finalEvents, nil
 }
 
 func (rt *watchRuntime) logCommittedScopedBatchFailure(step string, err error, eventCount int) {

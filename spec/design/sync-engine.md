@@ -127,15 +127,16 @@ watch-side executor instead of branching on ad hoc top-level watch strategy
 fields in orchestration code.
 
 Root-delta watch is also part of the same coordinator flow now. The engine
-still commits primary-drive observations atomically inside
-`RemoteObserver.Watch`, but once that commit succeeds it runs one engine-owned
-post-primary batch handler that consumes `ChangeShortcut`, updates durable
-shortcut truth, builds a shortcut follow-up phase, observes shortcut content,
-reapplies remote scope to that content, and only then emits the final batch to
-the watch buffer. Scoped-root watch, scoped-target watch, one-shot sync, and
-periodic reconciliation use that same shortcut-batch helper; steady-state
-watch no longer waits for periodic reconciliation to discover shortcut
-content.
+now owns the whole root-delta watch batch pipeline. `RemoteObserver.Watch`
+only polls and normalizes raw primary-drive events. After each successful poll,
+the engine-owned watch batch handler reapplies remote scope, commits
+`remote_state` rows plus the delta token atomically, consumes `ChangeShortcut`,
+updates durable shortcut truth, builds a shortcut follow-up phase, observes
+shortcut content, reapplies remote scope to that content, and only then lets
+the observer emit the final batch to the watch buffer. Scoped-root watch,
+scoped-target watch, one-shot sync, and periodic reconciliation use that same
+shortcut-batch helper; steady-state watch no longer waits for periodic
+reconciliation to discover shortcut content.
 
 That post-primary coordinator is intentionally split into two ownership
 boundaries inside `engine_shortcuts.go`:

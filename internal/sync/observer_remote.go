@@ -30,15 +30,13 @@ type watchStepResult struct {
 	woke bool
 }
 
-type WatchObservationPreparer func(
+// RemoteWatchBatchHandler lets the engine translate a raw remote poll into the
+// final planner-visible batch after any watch-owned commit or shortcut policy.
+type RemoteWatchBatchHandler func(
 	ctx context.Context,
 	events []ChangeEvent,
-) ([]ObservedItem, []ChangeEvent, error)
-
-type WatchBatchPostProcessor func(
-	ctx context.Context,
-	events []ChangeEvent,
-) []ChangeEvent
+	newToken string,
+) ([]ChangeEvent, error)
 
 // RemoteObserver transforms Graph API delta responses into []ChangeEvent.
 // It handles pagination, path materialization, change classification, and
@@ -50,10 +48,6 @@ type RemoteObserver struct {
 	logger    *slog.Logger
 	driveID   driveid.ID
 	SleepFunc func(ctx context.Context, d time.Duration) error
-	store     *SyncStore // nil-safe: when set, observations are committed atomically with delta token
-	wakeCh    <-chan struct{}
-	prepWatch WatchObservationPreparer
-	postWatch WatchBatchPostProcessor
 
 	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
 	// The watch loop is the only writer; helper calls may read concurrently.
@@ -99,35 +93,6 @@ func NewRemoteObserver(
 	obs.Converter = NewPrimaryConverter(baseline, driveID, logger, &obs.stats)
 
 	return obs
-}
-
-// SetObservationStore sets the sync store used to commit delta observations
-// atomically with the delta token during watch mode. When non-nil, each poll
-// cycle commits observations before returning events to the engine.
-func (o *RemoteObserver) SetObservationStore(store *SyncStore) {
-	o.store = store
-}
-
-// SetWakeChannel installs an optional remote wake signal source. When set,
-// watch-mode sleeps become interruptible: a wake signal triggers an immediate
-// delta cycle while delta tokens and observations remain owned by Watch().
-func (o *RemoteObserver) SetWakeChannel(wakeCh <-chan struct{}) {
-	o.wakeCh = wakeCh
-}
-
-// SetWatchObservationPreparer installs an optional adapter that can rewrite
-// polled remote events into a commit projection plus a separate emitted event
-// stream. Scope filtering uses this to persist filtered remote_state rows
-// without handing out-of-scope changes to the planner.
-func (o *RemoteObserver) SetWatchObservationPreparer(preparer WatchObservationPreparer) {
-	o.prepWatch = preparer
-}
-
-// SetWatchBatchPostProcessor installs an optional adapter that can transform a
-// successfully committed watch batch before individual events are emitted to
-// the engine. The callback runs only after commitWatchObservation succeeds.
-func (o *RemoteObserver) SetWatchBatchPostProcessor(processor WatchBatchPostProcessor) {
-	o.postWatch = processor
 }
 
 // FullDelta fetches all delta pages and returns the accumulated change events
@@ -186,11 +151,20 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 
 // Watch continuously polls for remote delta changes and sends events to the
 // provided channel. It blocks until the context is canceled, returning nil.
-// On transient errors, it applies exponential backoff (starting at 5s, capped
-// at the poll interval). On ErrDeltaExpired (410), it resets the token and
-// retries with a full resync. The delta token is tracked internally — use
-// CurrentDeltaToken() to read the latest value.
-func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events chan<- ChangeEvent, interval time.Duration) error {
+// The optional batch handler lets the engine own watch-mode commit/scope policy
+// without mutating RemoteObserver after construction. On transient errors, it
+// applies exponential backoff (starting at 5s, capped at the poll interval).
+// On ErrDeltaExpired (410), it resets the token and retries with a full
+// resync. The delta token is tracked internally — use CurrentDeltaToken() to
+// read the latest value.
+func (o *RemoteObserver) Watch(
+	ctx context.Context,
+	savedToken string,
+	events chan<- ChangeEvent,
+	interval time.Duration,
+	wakeCh <-chan struct{},
+	handleBatch RemoteWatchBatchHandler,
+) error {
 	if interval < MinPollInterval {
 		o.logger.Warn("poll interval below minimum, clamping",
 			slog.Duration("requested", interval),
@@ -212,13 +186,13 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 	bo.SetMaxOverride(interval)
 
 	for {
-		o.drainWakeSignals()
+		drainWakeSignals(wakeCh)
 
 		token := o.CurrentDeltaToken()
 
 		polledEvents, newToken, err := o.FullDelta(ctx, token)
 		if err != nil {
-			result := o.handleWatchPollError(ctx, bo, err)
+			result := o.handleWatchPollError(ctx, bo, err, wakeCh)
 			if result.err != nil {
 				return result.err
 			}
@@ -229,7 +203,7 @@ func (o *RemoteObserver) Watch(ctx context.Context, savedToken string, events ch
 			continue
 		}
 
-		result := o.handleWatchBatch(ctx, events, polledEvents, newToken, interval, bo)
+		result := o.handleWatchBatch(ctx, events, polledEvents, newToken, interval, bo, wakeCh, handleBatch)
 		if result.err != nil {
 			return result.err
 		}
@@ -246,25 +220,23 @@ func (o *RemoteObserver) handleWatchBatch(
 	newToken string,
 	interval time.Duration,
 	bo *retry.Backoff,
+	wakeCh <-chan struct{},
+	handleBatch RemoteWatchBatchHandler,
 ) watchStepResult {
 	if len(polledEvents) == 0 {
-		return o.handleZeroEventPoll(ctx, interval, bo)
+		return o.handleZeroEventPoll(ctx, interval, bo, wakeCh)
 	}
 
-	observed, emitted, prepErr := o.prepareWatchObservation(ctx, polledEvents)
-	if prepErr != nil {
-		return watchStepResult{err: prepErr}
-	}
-
-	if !o.commitWatchObservation(ctx, observed, newToken) {
-		if ctx.Err() != nil {
-			return watchStepResult{stop: true}
+	emitted := polledEvents
+	if handleBatch != nil {
+		var handleErr error
+		emitted, handleErr = handleBatch(ctx, polledEvents, newToken)
+		if handleErr != nil {
+			if watchShouldStop(ctx, handleErr) {
+				return watchStepResult{stop: true}
+			}
+			return watchStepResult{err: handleErr}
 		}
-		return watchStepResult{}
-	}
-
-	if o.postWatch != nil {
-		emitted = o.postWatch(ctx, emitted)
 	}
 
 	o.emitWatchEvents(ctx, events, emitted)
@@ -272,10 +244,15 @@ func (o *RemoteObserver) handleWatchBatch(
 	o.setDeltaToken(newToken)
 	bo.Reset()
 
-	return o.sleepWatch(ctx, interval, "interval")
+	return o.sleepWatch(ctx, interval, "interval", wakeCh)
 }
 
-func (o *RemoteObserver) handleWatchPollError(ctx context.Context, bo *retry.Backoff, err error) watchStepResult {
+func (o *RemoteObserver) handleWatchPollError(
+	ctx context.Context,
+	bo *retry.Backoff,
+	err error,
+	wakeCh <-chan struct{},
+) watchStepResult {
 	if watchShouldStop(ctx, err) {
 		return watchStepResult{stop: true}
 	}
@@ -295,7 +272,7 @@ func (o *RemoteObserver) handleWatchPollError(ctx context.Context, bo *retry.Bac
 		slog.Int("consecutive_errors", bo.Consecutive()),
 	)
 
-	result := o.sleepWatch(ctx, delay, "backoff")
+	result := o.sleepWatch(ctx, delay, "backoff", wakeCh)
 	if result.stop || result.err != nil {
 		return result
 	}
@@ -306,7 +283,12 @@ func (o *RemoteObserver) handleWatchPollError(ctx context.Context, bo *retry.Bac
 	return watchStepResult{}
 }
 
-func (o *RemoteObserver) handleZeroEventPoll(ctx context.Context, interval time.Duration, bo *retry.Backoff) watchStepResult {
+func (o *RemoteObserver) handleZeroEventPoll(
+	ctx context.Context,
+	interval time.Duration,
+	bo *retry.Backoff,
+	wakeCh <-chan struct{},
+) watchStepResult {
 	// Skip token advancement and observation commit when 0 events are
 	// returned. The old token replays the same empty window at zero cost,
 	// but avoids advancing past deletions still propagating through the
@@ -314,45 +296,7 @@ func (o *RemoteObserver) handleZeroEventPoll(ctx context.Context, interval time.
 	o.logger.Debug("watch: delta returned 0 events, skipping token advancement")
 	bo.Reset()
 
-	return o.sleepWatch(ctx, interval, "zero-event")
-}
-
-func (o *RemoteObserver) commitWatchObservation(
-	ctx context.Context,
-	observed []ObservedItem,
-	newToken string,
-) bool {
-	// Commit observations atomically with delta token before sending events
-	// to the channel. This ensures remote state is durable even if the engine
-	// crashes before processing the events.
-	if o.store == nil {
-		return true
-	}
-
-	if commitErr := o.store.CommitObservation(ctx, observed, newToken, o.driveID); commitErr != nil {
-		if ctx.Err() != nil {
-			return false
-		}
-		o.logger.Error("failed to commit observations in watch",
-			slog.String("error", commitErr.Error()),
-			slog.Int("events", len(observed)),
-		)
-		// Retry on next poll — token replay is idempotent.
-		return false
-	}
-
-	return true
-}
-
-func (o *RemoteObserver) prepareWatchObservation(
-	ctx context.Context,
-	polledEvents []ChangeEvent,
-) ([]ObservedItem, []ChangeEvent, error) {
-	if o.prepWatch == nil {
-		return changeEventsToObservedItems(o.logger, polledEvents), polledEvents, nil
-	}
-
-	return o.prepWatch(ctx, polledEvents)
+	return o.sleepWatch(ctx, interval, "zero-event", wakeCh)
 }
 
 func (o *RemoteObserver) emitWatchEvents(ctx context.Context, events chan<- ChangeEvent, polledEvents []ChangeEvent) {
@@ -369,8 +313,13 @@ func (o *RemoteObserver) emitWatchEvents(ctx context.Context, events chan<- Chan
 	}
 }
 
-func (o *RemoteObserver) sleepWatch(ctx context.Context, delay time.Duration, phase string) watchStepResult {
-	if o.wakeCh == nil {
+func (o *RemoteObserver) sleepWatch(
+	ctx context.Context,
+	delay time.Duration,
+	phase string,
+	wakeCh <-chan struct{},
+) watchStepResult {
+	if wakeCh == nil {
 		return o.sleepForWatch(ctx, delay, phase)
 	}
 
@@ -382,7 +331,7 @@ func (o *RemoteObserver) sleepWatch(ctx context.Context, delay time.Duration, ph
 		return watchStepResult{stop: true}
 	case <-timer.C:
 		return watchStepResult{}
-	case <-o.wakeCh:
+	case <-wakeCh:
 		o.logger.Debug("remote watch awakened",
 			slog.String("phase", phase),
 			slog.String("drive_id", o.driveID.String()),
@@ -403,14 +352,14 @@ func (o *RemoteObserver) sleepForWatch(ctx context.Context, delay time.Duration,
 	return watchStepResult{}
 }
 
-func (o *RemoteObserver) drainWakeSignals() {
-	if o.wakeCh == nil {
+func drainWakeSignals(wakeCh <-chan struct{}) {
+	if wakeCh == nil {
 		return
 	}
 
 	for {
 		select {
-		case <-o.wakeCh:
+		case <-wakeCh:
 		default:
 			return
 		}
