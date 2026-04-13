@@ -761,9 +761,9 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
-	invalidDescriptor := syncengine.DescribeSummary(syncengine.SummaryInvalidFilename)
-	quotaDescriptor := syncengine.DescribeSummary(syncengine.SummaryQuotaExceeded)
-	authDescriptor := syncengine.DescribeSummary(syncengine.SummaryAuthenticationRequired)
+	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
+	quotaDescriptor := describeStatusSummary(syncengine.SummaryQuotaExceeded)
+	authDescriptor := describeStatusSummary(syncengine.SummaryAuthenticationRequired)
 	assert.ElementsMatch(t, []failureGroupJSON{
 		{
 			SummaryKey: string(syncengine.SummaryInvalidFilename),
@@ -853,7 +853,7 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 	t.Parallel()
 
-	quotaDescriptor := syncengine.DescribeSummary(syncengine.SummaryQuotaExceeded)
+	quotaDescriptor := describeStatusSummary(syncengine.SummaryQuotaExceeded)
 	ss := &syncStateInfo{
 		IssueCount: 2,
 		IssueGroups: []failureGroupJSON{
@@ -1196,7 +1196,7 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 func TestBuildSyncStateInfo_SamplesSectionsByDefault(t *testing.T) {
 	t.Parallel()
 
-	descriptor := syncengine.DescribeSummary(syncengine.SummaryInvalidFilename)
+	descriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
 	paths := []string{"/one", "/two", "/three", "/four", "/five", "/six", "/seven"}
 	deleteRows, conflicts, history := buildStatusSectionRows(paths, syncengine.ResolutionKeepRemote)
 
@@ -1309,9 +1309,9 @@ func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
 func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
 	t.Parallel()
 
-	quotaDescriptor := syncengine.DescribeSummary(syncengine.SummaryQuotaExceeded)
-	invalidDescriptor := syncengine.DescribeSummary(syncengine.SummaryInvalidFilename)
-	authDescriptor := syncengine.DescribeSummary(syncengine.SummaryAuthenticationRequired)
+	quotaDescriptor := describeStatusSummary(syncengine.SummaryQuotaExceeded)
+	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
+	authDescriptor := describeStatusSummary(syncengine.SummaryAuthenticationRequired)
 	ss := &syncStateInfo{
 		IssueCount: 3,
 		Retrying:   2,
