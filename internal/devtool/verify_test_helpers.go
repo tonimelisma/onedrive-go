@@ -39,7 +39,11 @@ type fakeRunner struct {
 	combinedErrByKey    map[string]error
 }
 
-const dependencyGraphFixtureFallbackGoVersion = "1.24.0"
+const (
+	dependencyGraphFixtureFallbackGoVersion = "1.24.0"
+	testFixtureDirectoryPerm                = 0o750
+	testFixtureFilePerm                     = 0o600
+)
 
 func (f *fakeRunner) Run(
 	_ context.Context,
@@ -186,12 +190,11 @@ func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 func writeDependencyGraphModule(t *testing.T, repoRoot string) {
 	t.Helper()
 
-	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "internal"), 0o750))
-	require.NoError(t, os.WriteFile(
+	ensureTestFixtureDir(t, filepath.Join(repoRoot, "internal"))
+	writeTestFixtureFile(t,
 		filepath.Join(repoRoot, "go.mod"),
 		[]byte(fmt.Sprintf("module github.com/tonimelisma/onedrive-go\n\ngo %s\n", dependencyGraphFixtureGoVersion())),
-		0o600,
-	))
+	)
 }
 
 func dependencyGraphFixtureGoVersion() string {
@@ -213,7 +216,7 @@ func writeDependencyGraphPackage(t *testing.T, repoRoot string, name string, imp
 	t.Helper()
 
 	dir := filepath.Join(repoRoot, "internal", name)
-	require.NoError(t, os.MkdirAll(dir, 0o750))
+	ensureTestFixtureDir(t, dir)
 
 	lines := []string{"package " + name}
 	if len(imports) > 0 {
@@ -225,11 +228,10 @@ func writeDependencyGraphPackage(t *testing.T, repoRoot string, name string, imp
 	}
 	lines = append(lines, "")
 
-	require.NoError(t, os.WriteFile(
+	writeTestFixtureFile(t,
 		filepath.Join(dir, name+".go"),
 		[]byte(strings.Join(lines, "\n")),
-		0o600,
-	))
+	)
 }
 
 func writeRepoConsistencyDirectories(t *testing.T, repoRoot string) {
@@ -244,21 +246,20 @@ func writeRepoConsistencyDirectories(t *testing.T, repoRoot string) {
 		filepath.Join(repoRoot, "cmd"),
 		filepath.Join(repoRoot, ".github", "workflows"),
 	} {
-		require.NoError(t, os.MkdirAll(dir, 0o750))
+		ensureTestFixtureDir(t, dir)
 	}
 
-	require.NoError(t, os.WriteFile(
+	writeTestFixtureFile(t,
 		filepath.Join(repoRoot, "go.mod"),
 		[]byte(fmt.Sprintf("module github.com/tonimelisma/onedrive-go\n\ngo %s\n", dependencyGraphFixtureGoVersion())),
-		0o600,
-	))
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "CLAUDE.md"), []byte("clean\n"), 0o600))
+	)
+	writeTestFixtureFile(t, filepath.Join(repoRoot, "CLAUDE.md"), []byte("clean\n"))
 }
 
 func writeRepoConsistencyRequirements(t *testing.T, repoRoot string) {
 	t.Helper()
 
-	require.NoError(t, os.WriteFile(
+	writeTestFixtureFile(t,
 		filepath.Join(repoRoot, "spec", "requirements", "non-functional.md"),
 		[]byte(strings.Join([]string{
 			"# R-6 Non-Functional",
@@ -276,9 +277,8 @@ func writeRepoConsistencyRequirements(t *testing.T, repoRoot string) {
 			"- R-6.10.13: sample [verified]",
 			"",
 		}, "\n")),
-		0o600,
-	))
-	require.NoError(t, os.WriteFile(
+	)
+	writeTestFixtureFile(t,
 		filepath.Join(repoRoot, "spec", "requirements", "sync.md"),
 		[]byte(strings.Join([]string{
 			"# R-2 Sync",
@@ -290,14 +290,13 @@ func writeRepoConsistencyRequirements(t *testing.T, repoRoot string) {
 			"- R-2.10.41: sample [verified]",
 			"",
 		}, "\n")),
-		0o600,
-	))
+	)
 }
 
 func writeRepoConsistencyDesignDocs(t *testing.T, repoRoot string) {
 	t.Helper()
 
-	require.NoError(t, os.WriteFile(
+	writeTestFixtureFile(t,
 		filepath.Join(repoRoot, "spec", "design", "system.md"),
 		[]byte(strings.Join([]string{
 			"# System",
@@ -308,17 +307,16 @@ func writeRepoConsistencyDesignDocs(t *testing.T, repoRoot string) {
 			"- [degraded-mode.md](degraded-mode.md)",
 			"",
 		}, "\n")),
-		0o600,
-	))
+	)
 	for _, doc := range repoConsistencyDesignDocFixtures() {
-		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "spec", "design", doc.name), []byte(doc.content), 0o600))
+		writeTestFixtureFile(t, filepath.Join(repoRoot, "spec", "design", doc.name), []byte(doc.content))
 	}
 }
 
 func writeRepoConsistencyReferenceDocs(t *testing.T, repoRoot string) {
 	t.Helper()
 
-	require.NoError(t, os.WriteFile(
+	writeTestFixtureFile(t,
 		filepath.Join(repoRoot, "spec", "reference", "graph-api-quirks.md"),
 		[]byte(strings.Join([]string{
 			"# Graph API Quirks",
@@ -329,9 +327,8 @@ func writeRepoConsistencyReferenceDocs(t *testing.T, repoRoot string) {
 			"Sample quirk.",
 			"",
 		}, "\n")),
-		0o600,
-	))
-	require.NoError(t, os.WriteFile(
+	)
+	writeTestFixtureFile(t,
 		filepath.Join(repoRoot, "spec", "reference", "live-incidents.md"),
 		[]byte(strings.Join([]string{
 			"# Live Incidents",
@@ -342,8 +339,7 @@ func writeRepoConsistencyReferenceDocs(t *testing.T, repoRoot string) {
 			"Promoted docs: [graph-api-quirks.md#fixture-quirk](graph-api-quirks.md#fixture-quirk)",
 			"",
 		}, "\n")),
-		0o600,
-	))
+	)
 }
 
 func repoConsistencyDesignDocFixtures() []struct {
@@ -479,8 +475,8 @@ func repoConsistencyBehaviorDocFixture(
 func writeRepoConsistencyCodeFixtures(t *testing.T, repoRoot string) {
 	t.Helper()
 
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "internal", "clean.go"), []byte("package internal\n"), 0o600))
-	require.NoError(t, os.WriteFile(
+	writeTestFixtureFile(t, filepath.Join(repoRoot, "internal", "clean.go"), []byte("package internal\n"))
+	writeTestFixtureFile(t,
 		filepath.Join(repoRoot, "internal", "fixture_test.go"),
 		[]byte(strings.Join([]string{
 			"package internal",
@@ -491,8 +487,21 @@ func writeRepoConsistencyCodeFixtures(t *testing.T, repoRoot string) {
 			"func TestFixtureEvidence(t *testing.T) {}",
 			"",
 		}, "\n")),
-		0o600,
-	))
+	)
+}
+
+func ensureTestFixtureDir(t *testing.T, dir string) {
+	t.Helper()
+
+	//nolint:forbidigo // Verifier repo-consistency tests need raw fixture trees with exact paths.
+	require.NoError(t, os.MkdirAll(dir, testFixtureDirectoryPerm))
+}
+
+func writeTestFixtureFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+
+	//nolint:forbidigo // Verifier repo-consistency tests need raw fixture files with exact paths.
+	require.NoError(t, os.WriteFile(path, data, testFixtureFilePerm))
 }
 
 // Ensure the fake runner still satisfies the commandRunner contract if the
