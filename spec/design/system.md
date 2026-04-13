@@ -9,10 +9,13 @@ Implements: R-6.1.4 [verified], R-6.1.5 [verified], R-6.9.1 [verified]
 ```
 .                             Root package (thin process entrypoint)
 cmd/
-  devtool/                    Repo-owned verification and worktree bootstrap tooling
+  devtool/                    Repo-owned developer-tooling entrypoint
 internal/
+  authstate/                  Shared auth-health vocabulary and user-facing auth copy
   cli/                        Cobra command tree, CLI bootstrap, output formatting, command handlers
+  clishape/                   Pure-data contract for CLI grammar
   config/                     TOML config, drive sections, XDG paths, override chain
+  devtool/                    Verifier, benchmark, worktree, watch-capture, and state-audit helpers
   driveid/                    Type-safe drive identity: ID, CanonicalID, ItemKey (leaf, stdlib-only)
   driveops/                   Authenticated drive access: sessions, transfers, hashing
   failures/                   Shared runtime/domain failure classes (leaf, stdlib-only)
@@ -20,18 +23,25 @@ internal/
   graph/                      Graph API client: auth, Graph normalization, items CRUD, delta, transfers
   graphhttp/                  Graph-facing HTTP client profiles and shared throttle coordination
   localpath/                  Explicit arbitrary-local-path boundary helpers
+  localtrash/                 OS-local trash behavior for sync execution
   logfile/                    Log file creation, rotation, retention
   multisync/                  Multi-drive sync control plane and watch reload
   perf/                       Command-scoped and live sync performance instrumentation plus capture bundles
   retry/                      Retry policies, exponential backoff with jitter, retry transport
-  sync/                       Single-drive sync engine (see pipeline below)
+  sharedref/                  Shared item selector parsing and formatting
   sync/                       Single-drive sync engine, durable SQLite sync state, and read-only inspection
+  synccontrol/                JSON-over-HTTP Unix-socket protocol shared by CLI and multisync owner
+  syncscope/                  Configured sync-scope normalization and ignore-marker projection
+  synctest/                   Shared sync-package test helpers (test-only)
   synctree/                   Root-bound sync runtime filesystem capability
+  syncverify/                 Baseline-versus-local sync verification helpers
   tokenfile/                  Pure OAuth token file I/O (leaf, stdlib + oauth2 only)
 pkg/
   quickxorhash/               QuickXorHash algorithm (vendored from rclone, BSD-0)
 e2e/                          E2E test suite (not production code)
+scripts/                      Developer and CI-supporting helper scripts
 testutil/                     Shared test helpers (not production code)
+spec/                         Requirements, design docs, and reference docs
 ```
 
 ## Dependency Rules
@@ -101,6 +111,17 @@ For detailed module design, see:
 | Degraded mode | [degraded-mode.md](degraded-mode.md) |
 | Performance benchmarking | [performance-benchmarking.md](performance-benchmarking.md) |
 | CLI commands | [cli.md](cli.md) |
+
+## Cross-Cutting Reference Docs
+
+| Topic | Reference |
+|--------|-----------|
+| New developer onboarding | [../reference/developer-onboarding.md](../reference/developer-onboarding.md) |
+| Graph API quirks | [../reference/graph-api-quirks.md](../reference/graph-api-quirks.md) |
+| OneDrive sync behavior | [../reference/onedrive-sync-behavior.md](../reference/onedrive-sync-behavior.md) |
+| OneDrive glossary | [../reference/onedrive-glossary.md](../reference/onedrive-glossary.md) |
+| Live incidents ledger | [../reference/live-incidents.md](../reference/live-incidents.md) |
+| Sync ecosystem patterns | [../reference/sync-ecosystem.md](../reference/sync-ecosystem.md) |
 
 ## Source Of Truth Map
 

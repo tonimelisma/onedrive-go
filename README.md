@@ -39,13 +39,31 @@ Requires Go 1.24+.
 
 ## Development
 
+New contributors should start with the
+[new developer onboarding guide](spec/reference/developer-onboarding.md) for a
+repo-wide architecture tour and reading order.
+
+The canonical local verification entrypoint is:
+
+```bash
+go run ./cmd/devtool verify default
+```
+
+Direct package-level commands are still useful during short loops:
+
 ```bash
 go build ./...                    # Build
 go test -race ./...               # Test with race detector
 golangci-lint run                 # Lint
 ```
 
-See [CLAUDE.md](CLAUDE.md) for architecture, conventions, and contribution guidelines.
+Use `git fetch origin` before
+`go run ./cmd/devtool worktree add --path <path> --branch <branch>` so the new
+worktree starts from the current `origin/main`.
+
+See [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), and the
+[system architecture doc](spec/design/system.md) for repo workflow and
+architecture details.
 
 ## License
 
