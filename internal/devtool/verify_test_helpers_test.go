@@ -493,14 +493,12 @@ func writeRepoConsistencyCodeFixtures(t *testing.T, repoRoot string) {
 func ensureTestFixtureDir(t *testing.T, dir string) {
 	t.Helper()
 
-	//nolint:forbidigo // Verifier repo-consistency tests need raw fixture trees with exact paths.
 	require.NoError(t, os.MkdirAll(dir, testFixtureDirectoryPerm))
 }
 
 func writeTestFixtureFile(t *testing.T, path string, data []byte) {
 	t.Helper()
 
-	//nolint:forbidigo // Verifier repo-consistency tests need raw fixture files with exact paths.
 	require.NoError(t, os.WriteFile(path, data, testFixtureFilePerm))
 }
 
