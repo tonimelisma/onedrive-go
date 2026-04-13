@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 func newSingleItemServer(t *testing.T, body string) *httptest.Server {
@@ -623,7 +622,7 @@ func TestListChildren_RootTransient404RetryExhausted(t *testing.T) {
 	_, err := client.ListChildren(t.Context(), driveid.New("d"), "root")
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrNotFound)
-	assert.Equal(t, retry.RootChildrenPolicy().MaxAttempts, attempts)
+	assert.Equal(t, testRetryPolicy().MaxAttempts, attempts)
 }
 
 // Validates: R-6.7.12

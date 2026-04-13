@@ -76,6 +76,11 @@ Two OAuth2 flows:
 - **PKCE authorization code flow** (`--browser`): localhost callback with code verifier
 
 Token refresh is automatic. Tokens stored as JSON files via `tokenfile` package (strict JSON — rejects unknown fields). `tokenfile.Load` returns `ErrNotFound` sentinel (never nil,nil).
+The device-code boundary intentionally stays narrow: production calls
+`oauth2.Config.DeviceAuth` and `DeviceAccessToken` directly, while unit tests
+can inject those two calls independently to cover cancel/save/error behavior
+without waiting on real polling intervals. One smoke test still runs through
+the real oauth polling integration.
 
 ## Quirk Normalization (`normalize.go`)
 
@@ -127,7 +132,11 @@ The client owns its safety guards and Graph-specific request metadata:
 - `copyDestinationPolicy`: transient 404 retry policy for copy requests whose destination folder is already visible by path but not yet accepted by Graph's copy verifier
 - `deltaPreferHeader`: prebuilt alias-ID delta header
 
-These are instance fields on `graph.Client`, not package globals. Tests in package `graph` override them per client instance instead of mutating shared process state.
+These are instance fields on `graph.Client`, not package globals. Tests in
+package `graph` override them per client instance instead of mutating shared
+process state, and the shared `newTestClient` helper installs the fast test
+policy across all client-owned retry paths by default so unit tests do not pay
+production backoff windows accidentally.
 
 `graph` intentionally stops at the Graph-boundary retry. After the
 five-attempt `/me/drives` budget is exhausted, the client returns the final

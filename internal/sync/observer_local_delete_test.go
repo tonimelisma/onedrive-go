@@ -338,7 +338,7 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 			})
 
 			obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-			obs.PendingTimers = make(map[string]*time.Timer)
+			obs.PendingTimers = make(map[string]syncTimer)
 			obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
 			events := make(chan ChangeEvent, 10)
@@ -383,7 +383,7 @@ func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
 			})
 
 			obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-			obs.PendingTimers = make(map[string]*time.Timer)
+			obs.PendingTimers = make(map[string]syncTimer)
 			obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
 			events := make(chan ChangeEvent, 10)
@@ -411,11 +411,11 @@ func TestHandleDelete_CancelsCoalesceTimer(t *testing.T) {
 
 	watcher := newRecordingFsWatcher()
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.PendingTimers = make(map[string]*time.Timer)
+	obs.PendingTimers = make(map[string]syncTimer)
 	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
 	// Set up a pending timer for "file.txt".
-	obs.PendingTimers["file.txt"] = time.AfterFunc(time.Hour, func() {})
+	obs.PendingTimers["file.txt"] = realAfterFunc(time.Hour, func() {})
 
 	events := make(chan ChangeEvent, 10)
 	obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/file.txt", "file.txt", "file.txt", events)
@@ -443,7 +443,7 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 	})
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.PendingTimers = make(map[string]*time.Timer)
+	obs.PendingTimers = make(map[string]syncTimer)
 	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
 	events := make(chan ChangeEvent, 10)

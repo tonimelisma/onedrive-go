@@ -1064,6 +1064,37 @@ func (c *manualClock) Advance(delay time.Duration) {
 	}
 }
 
+func (c *manualClock) ActiveTimerCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	count := 0
+	for _, timer := range c.timers {
+		if timer == nil || timer.stopped || timer.fired {
+			continue
+		}
+		count++
+	}
+
+	return count
+}
+
+func (c *manualClock) HasPendingTimerAt(at time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, timer := range c.timers {
+		if timer == nil || timer.stopped || timer.fired {
+			continue
+		}
+		if timer.at.Equal(at) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (t *manualSyncTimer) Stop() bool {
 	if t == nil || t.clock == nil {
 		return false

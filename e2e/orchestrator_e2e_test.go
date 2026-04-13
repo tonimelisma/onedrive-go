@@ -463,7 +463,7 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 			t.Log("warning: paused drive2 file appeared remotely (pause may not be effective)")
 			break
 		}
-		time.Sleep(2 * time.Second)
+		sleepForLiveTestPropagation(2 * time.Second)
 	}
 	// Final check.
 	d2Args := []string{"--config", cfgPath, "--drive", drive2, "--debug", "stat", "/" + testFolder2 + "/paused.txt"}
