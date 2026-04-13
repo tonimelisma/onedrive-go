@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -11,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,6 +88,16 @@ func testOAuthConfig(t *testing.T, tokenPath string, endpoint *oauth2.Endpoint) 
 // noopDisplay discards the device auth display callback.
 func noopDisplay(_ DeviceAuth) {}
 
+func testDeviceAuthResponse() *oauth2.DeviceAuthResponse {
+	return &oauth2.DeviceAuthResponse{
+		DeviceCode:      "test-device-code",
+		UserCode:        "ABCD-1234",
+		VerificationURI: "https://microsoft.com/devicelogin",
+		Expiry:          time.Now().Add(15 * time.Minute),
+		Interval:        1,
+	}
+}
+
 // Validates: R-3.1.1
 func TestDoLogin_Success(t *testing.T) {
 	endpoint := newMockOAuthServer(t, nil)
@@ -123,35 +133,40 @@ func TestDoLogin_Success(t *testing.T) {
 func TestDoLogin_TokenEndpointErrors(t *testing.T) {
 	tests := []struct {
 		name        string
-		body        string
+		err         error
 		wantMessage string
 	}{
 		{
 			name:        "user declined",
-			body:        `{"error":"access_denied","error_description":"user declined"}`,
+			err:         errors.New("access_denied"),
 			wantMessage: "access_denied",
 		},
 		{
 			name:        "expired code",
-			body:        `{"error":"expired_token","error_description":"device code expired"}`,
+			err:         errors.New("expired_token"),
 			wantMessage: "expired_token",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			endpoint := newMockOAuthServer(t, func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				_, err := w.Write([]byte(tt.body))
-				assert.NoError(t, err)
-			})
-
 			tmpDir := t.TempDir()
 			tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
-			cfg := testOAuthConfig(t, tokenPath, endpoint)
+			cfg := oauthConfig(tokenPath, slog.Default())
 
-			_, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
+			_, err := doLoginWithFlow(
+				t.Context(),
+				tokenPath,
+				cfg,
+				noopDisplay,
+				slog.Default(),
+				func(context.Context, *oauth2.Config) (*oauth2.DeviceAuthResponse, error) {
+					return testDeviceAuthResponse(), nil
+				},
+				func(context.Context, *oauth2.Config, *oauth2.DeviceAuthResponse) (*oauth2.Token, error) {
+					return nil, tt.err
+				},
+			)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantMessage)
 		})
@@ -159,59 +174,64 @@ func TestDoLogin_TokenEndpointErrors(t *testing.T) {
 }
 
 func TestDoLogin_ContextCancel(t *testing.T) {
-	endpoint := newMockOAuthServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_, err := w.Write([]byte(`{"error":"authorization_pending"}`))
-		assert.NoError(t, err)
-	})
-
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
-	cfg := testOAuthConfig(t, tokenPath, endpoint)
+	cfg := oauthConfig(tokenPath, slog.Default())
 
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err := doLogin(ctx, tokenPath, cfg, noopDisplay, slog.Default())
+	_, err := doLoginWithFlow(
+		ctx,
+		tokenPath,
+		cfg,
+		noopDisplay,
+		slog.Default(),
+		func(context.Context, *oauth2.Config) (*oauth2.DeviceAuthResponse, error) {
+			return testDeviceAuthResponse(), nil
+		},
+		func(ctx context.Context, _ *oauth2.Config, _ *oauth2.DeviceAuthResponse) (*oauth2.Token, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
-func TestDoLogin_PendingThenSuccess(t *testing.T) {
-	var polls atomic.Int32
-
-	endpoint := newMockOAuthServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		n := polls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-
-		// First two polls return pending, third returns token.
-		if n <= 2 {
-			w.WriteHeader(http.StatusBadRequest)
-			_, err := w.Write([]byte(`{"error":"authorization_pending"}`))
-			assert.NoError(t, err)
-
-			return
-		}
-
-		_, err := w.Write([]byte(testTokenJSON))
-		assert.NoError(t, err)
-	})
-
+func TestDoLogin_ExchangeSuccess(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "pending.json")
-	cfg := testOAuthConfig(t, tokenPath, endpoint)
+	cfg := oauthConfig(tokenPath, slog.Default())
 
-	ts, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
+	var displayed DeviceAuth
+	ts, err := doLoginWithFlow(
+		t.Context(),
+		tokenPath,
+		cfg,
+		func(da DeviceAuth) {
+			displayed = da
+		},
+		slog.Default(),
+		func(context.Context, *oauth2.Config) (*oauth2.DeviceAuthResponse, error) {
+			return testDeviceAuthResponse(), nil
+		},
+		func(context.Context, *oauth2.Config, *oauth2.DeviceAuthResponse) (*oauth2.Token, error) {
+			return &oauth2.Token{
+				AccessToken:  "test-access-token",
+				TokenType:    "Bearer",
+				RefreshToken: "test-refresh-token",
+				Expiry:       time.Now().Add(time.Hour),
+			}, nil
+		},
+	)
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
 	tok, tokenErr := ts.Token()
 	require.NoError(t, tokenErr)
 	assert.Equal(t, "test-access-token", tok)
-
-	// Should have polled at least 3 times.
-	assert.GreaterOrEqual(t, polls.Load(), int32(3))
+	assert.Equal(t, "ABCD-1234", displayed.UserCode)
 }
 
 // Validates: R-3.1

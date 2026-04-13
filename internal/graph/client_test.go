@@ -98,6 +98,14 @@ func newTestClient(t *testing.T, url string) *Client {
 	t.Helper()
 
 	client := MustNewClient(normalizeTestBaseURL(url), retryHTTPClient(http.DefaultClient, testRetryPolicy()), staticToken("test-token"), slog.Default(), "test-agent")
+	client.driveDiscoveryPolicy = testRetryPolicy()
+	client.rootChildrenPolicy = testRetryPolicy()
+	client.downloadMetadataPolicy = testRetryPolicy()
+	client.createFolderReadbackPolicy = testRetryPolicy()
+	client.simpleUploadMtimePolicy = testRetryPolicy()
+	client.uploadSessionCreatePolicy = testRetryPolicy()
+	client.copyDestinationPolicy = testRetryPolicy()
+	client.simpleUploadCreatePolicy = testRetryPolicy()
 	client.uploadURLValidator = allowTestUploadURL
 	client.copyMonitorValidator = allowTestCopyMonitorURL
 	client.socketIOValidator = allowTestSocketIONotificationURL

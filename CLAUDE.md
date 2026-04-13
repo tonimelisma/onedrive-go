@@ -201,6 +201,7 @@ Project-specific consequences:
 
 - **Test the contract, not the implementation.** Tests should break when behavior changes, not when you refactor internals. Test through exported APIs. Only test unexported functions when the logic is complex and the exported surface doesn't exercise it.
 - **Failure injection is mandatory for I/O paths.** Use interfaces to inject: network failures, partial reads, slow responses, disk-full errors. Every I/O path must have at least one failure test.
+- **Use explicit synchronization, not wall-clock sleeps.** `time.Sleep` is banned in test code. Use readiness channels, injected clocks/timers, or observable state transitions instead. The only acceptable exception is a narrowly justified live E2E helper that waits on external process or provider propagation and carries a specific `nolint`.
 - **Test concurrent code with the race detector and stress.** `-race` is in the DoD checklist, but also: write tests that exercise concurrent paths with `sync.WaitGroup` barriers. Use `-count=100` on flaky-candidate tests.
 - **Golden files for complex output.** Sync plans, conflict reports, any structured output — compare against checked-in golden files, not inline string assertions. Update with `-update` flag.
 - **Mocks implement the full interface contract.** A mock that returns `nil, nil` is a lie. Mocks should simulate realistic behavior: latency, partial results, error conditions. Use `testify/mock` with explicit expectations.

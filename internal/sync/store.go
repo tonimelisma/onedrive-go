@@ -50,6 +50,10 @@ type SyncStore struct {
 // schema, and returns a ready-to-use manager. The database uses WAL mode with
 // synchronous=FULL for crash-safe durability.
 func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*SyncStore, error) {
+	return openSyncStore(ctx, dbPath, logger, true)
+}
+
+func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool) (*SyncStore, error) {
 	root, _, err := fsroot.OpenPath(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("prepare sync store path: %w", err)
@@ -74,13 +78,15 @@ func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*Syn
 	// Sole-writer pattern: only one connection writes at a time.
 	db.SetMaxOpenConns(1)
 
-	if err := applySchema(ctx, db); err != nil {
-		baseErr := fmt.Errorf("apply sync store schema: %w", err)
-		if closeErr := db.Close(); closeErr != nil {
-			return nil, errors.Join(baseErr, fmt.Errorf("close sync store database: %w", closeErr))
-		}
+	if ensureSchema {
+		if err := applySchema(ctx, db); err != nil {
+			baseErr := fmt.Errorf("apply sync store schema: %w", err)
+			if closeErr := db.Close(); closeErr != nil {
+				return nil, errors.Join(baseErr, fmt.Errorf("close sync store database: %w", closeErr))
+			}
 
-		return nil, baseErr
+			return nil, baseErr
+		}
 	}
 
 	logger.Info("sync store initialized", slog.String("db_path", dbPath))

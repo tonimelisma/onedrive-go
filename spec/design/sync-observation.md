@@ -168,6 +168,7 @@ Per-path retained history is intentionally bounded. Local observation keeps only
 Observation has a few explicit mutable-runtime owners:
 
 - `Buffer.mu` guards exactly `pending` and `notify`. The debounce goroutine owns the lifetime of the output channel created by `FlushDebounced`.
+- `Buffer` debounce timers and `LocalObserver` deferred-hash timers are instance-owned timer boundaries. Production uses wall-clock timers; tests inject per-instance manual timers/clocks and watcher-ready signals instead of sleep-based synchronization.
 - `LocalObserver.localWatchState` is the single mutable owner for one local
   watch run: pending timers, generation-tagged deferred hash work, watch
   registrations, collision caches, and the effective scope snapshot all live

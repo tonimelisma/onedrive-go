@@ -1346,7 +1346,13 @@ func TestWatch_ContextCancellation(t *testing.T) {
 	}
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	pollStarted := make(chan struct{})
 	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
+		select {
+		case <-pollStarted:
+		default:
+			close(pollStarted)
+		}
 		// Block until canceled.
 		<-ctx.Done()
 		return ctx.Err()
@@ -1360,8 +1366,11 @@ func TestWatch_ContextCancellation(t *testing.T) {
 		done <- obs.Watch(ctx, "", events, time.Hour, nil, nil)
 	}()
 
-	// Let the first poll complete, then cancel.
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-pollStarted:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for remote watch sleep")
+	}
 	cancel()
 
 	select {
