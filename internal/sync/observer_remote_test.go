@@ -1100,7 +1100,7 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 		}
 	}()
 
-	err := obs.Watch(ctx, "", events, time.Millisecond)
+	err := obs.Watch(ctx, "", events, time.Millisecond, nil, nil)
 	require.NoError(t, err, "Watch returned error")
 
 	assert.GreaterOrEqual(t, fetcher.calls, 2)
@@ -1131,7 +1131,6 @@ func TestWatch_WakeSignalTriggersImmediatePoll(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	wakeCh := make(chan struct{}, 1)
-	obs.SetWakeChannel(wakeCh)
 
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -1151,7 +1150,7 @@ func TestWatch_WakeSignalTriggersImmediatePoll(t *testing.T) {
 		}
 	}()
 
-	err := obs.Watch(ctx, "", events, time.Hour)
+	err := obs.Watch(ctx, "", events, time.Hour, wakeCh, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, fetcher.CallCount(), "wake should trigger a second delta cycle before fallback polling")
 }
@@ -1180,7 +1179,6 @@ func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	wakeCh := make(chan struct{}, 1)
-	obs.SetWakeChannel(wakeCh)
 
 	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -1201,7 +1199,7 @@ func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 		}
 	}()
 
-	err := obs.Watch(ctx, "", events, time.Hour)
+	err := obs.Watch(ctx, "", events, time.Hour, wakeCh, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, fetcher.CallCount(), "burst wakes should collapse into one pending delta cycle")
 }
@@ -1239,7 +1237,7 @@ func TestWatch_BackoffOnError(t *testing.T) {
 		cancel()
 	}()
 
-	err := obs.Watch(ctx, "", events, time.Minute)
+	err := obs.Watch(ctx, "", events, time.Minute, nil, nil)
 	require.NoError(t, err, "Watch returned error")
 
 	// First sleep should be 5s (initial backoff), second should be 10s (doubled).
@@ -1266,16 +1264,23 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	store := newTestStore(t)
-	obs.SetObservationStore(store)
 	wakeCh := make(chan struct{}, 1)
-	obs.SetWakeChannel(wakeCh)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, "old-token", make(chan ChangeEvent, 1), time.Hour)
+		done <- obs.Watch(
+			ctx,
+			"old-token",
+			make(chan ChangeEvent, 1),
+			time.Hour,
+			wakeCh,
+			func(ctx context.Context, events []ChangeEvent, newToken string) ([]ChangeEvent, error) {
+				return events, store.CommitObservation(ctx, changeEventsToObservedItems(obs.logger, events), newToken, driveID)
+			},
+		)
 	}()
 
 	require.Eventually(t, func() bool {
@@ -1322,7 +1327,7 @@ func TestWatch_DeltaExpiredResets(t *testing.T) {
 		cancel()
 	}()
 
-	err := obs.Watch(ctx, "old-expired-token", events, time.Millisecond)
+	err := obs.Watch(ctx, "old-expired-token", events, time.Millisecond, nil, nil)
 	require.NoError(t, err, "Watch returned error")
 
 	// After delta expired, token should have been reset to "" for resync,
@@ -1352,7 +1357,7 @@ func TestWatch_ContextCancellation(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, "", events, time.Hour)
+		done <- obs.Watch(ctx, "", events, time.Hour, nil, nil)
 	}()
 
 	// Let the first poll complete, then cancel.
@@ -1413,7 +1418,7 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 		return origSleep(ctx, d)
 	}
 
-	err := obs.Watch(ctx, "initial-token", events, time.Millisecond)
+	err := obs.Watch(ctx, "initial-token", events, time.Millisecond, nil, nil)
 	require.NoError(t, err, "Watch returned error")
 
 	// Token should have been updated by successful polls.
@@ -1444,7 +1449,7 @@ func TestWatch_IntervalClamping(t *testing.T) {
 
 	events := make(chan ChangeEvent, 10)
 	// Pass zero interval — should be clamped to MinPollInterval (30s).
-	err := obs.Watch(t.Context(), "", events, 0)
+	err := obs.Watch(t.Context(), "", events, 0, nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stop after first sleep")
 
@@ -1886,7 +1891,6 @@ func TestWatch_CommitsObservations(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	store := newTestStore(t)
-	obs.SetObservationStore(store)
 	obs.SleepFunc = noopSleep
 
 	events := make(chan ChangeEvent, 10)
@@ -1904,7 +1908,16 @@ func TestWatch_CommitsObservations(t *testing.T) {
 		}
 	}()
 
-	err := obs.Watch(ctx, "", events, time.Millisecond)
+	err := obs.Watch(
+		ctx,
+		"",
+		events,
+		time.Millisecond,
+		nil,
+		func(ctx context.Context, events []ChangeEvent, newToken string) ([]ChangeEvent, error) {
+			return events, store.CommitObservation(ctx, changeEventsToObservedItems(obs.logger, events), newToken, driveID)
+		},
+	)
 	require.NoError(t, err)
 
 	assert.Equal(t, "token-1", readDeltaToken(t, store.DB(), driveID.String()))
@@ -1914,16 +1927,16 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	assert.Equal(t, "a.txt", row.Path)
 }
 
-// TestWatch_ObservationStoreError_ContinuesRetry verifies that a commit error
-// causes the observer to retry (continue loop) rather than crash.
-func TestWatch_ObservationStoreError_ContinuesRetry(t *testing.T) {
+// TestWatch_BatchHandlerError_ReturnsError verifies that watch-owned batch
+// policy errors stop the watch loop instead of being retried inside the
+// observer.
+func TestWatch_BatchHandlerError_ReturnsError(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	pollCount := 0
 
 	// Pages must include a non-root item so events > 0 (the zero-event
-	// guard skips CommitObservation entirely when events are empty).
+	// guard skips the batch handler entirely when events are empty).
 	fetcher := &mockDeltaFetcher{
 		pages: []mockDeltaPage{
 			{page: &graph.DeltaPage{
@@ -1944,26 +1957,16 @@ func TestWatch_ObservationStoreError_ContinuesRetry(t *testing.T) {
 	}
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
-	dbPath := filepath.Join(t.TempDir(), "watch.db")
-	store, err := NewSyncStore(t.Context(), dbPath, synctest.TestLogger(t))
-	require.NoError(t, err)
-	require.NoError(t, store.Close(t.Context()))
-	obs.SetObservationStore(store)
 	ctx, cancel := context.WithCancel(t.Context())
-	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
-		pollCount++
-		if pollCount >= 3 {
-			cancel()
-			return ctx.Err()
-		}
-		return nil
-	}
+	defer cancel()
 
 	events := make(chan ChangeEvent, 10)
-	err = obs.Watch(ctx, "", events, time.Millisecond)
-	require.NoError(t, err)
-
-	assert.GreaterOrEqual(t, fetcher.calls, 2, "should retry after observation commit failure")
+	err := obs.Watch(ctx, "", events, time.Millisecond, nil, func(context.Context, []ChangeEvent, string) ([]ChangeEvent, error) {
+		return nil, filepath.ErrBadPattern
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, filepath.ErrBadPattern)
+	assert.Equal(t, 1, fetcher.calls, "watch should stop on batch policy failure")
 }
 
 // Validates: R-2.1.2
@@ -1985,7 +1988,6 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	store := newTestStore(t)
-	obs.SetObservationStore(store)
 	ctx, cancel := context.WithCancel(t.Context())
 	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
 		pollCount++
@@ -1998,7 +2000,16 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	}
 
 	events := make(chan ChangeEvent, 10)
-	err := obs.Watch(ctx, "old-token", events, time.Millisecond)
+	err := obs.Watch(
+		ctx,
+		"old-token",
+		events,
+		time.Millisecond,
+		nil,
+		func(ctx context.Context, events []ChangeEvent, newToken string) ([]ChangeEvent, error) {
+			return events, store.CommitObservation(ctx, changeEventsToObservedItems(obs.logger, events), newToken, driveID)
+		},
+	)
 	require.NoError(t, err)
 
 	assert.Empty(t, readDeltaToken(t, store.DB(), driveID.String()), "should not commit observations when 0 events returned")

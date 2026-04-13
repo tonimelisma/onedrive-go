@@ -471,9 +471,9 @@ func (rt *watchRuntime) startRemoteObserver(
 	rt.startPrimaryWatchPhase(ctx, obsWg, bl, events, errs, pollInterval, plan.PrimaryPhase)
 }
 
-func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context, remoteObs *RemoteObserver) {
-	if !rt.engine.enableWebsocket || rt.engine.socketIOFetcher == nil || remoteObs == nil {
-		return
+func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan struct{} {
+	if !rt.engine.enableWebsocket || rt.engine.socketIOFetcher == nil {
+		return nil
 	}
 
 	rt.engine.logger.Info("starting socket.io wake source",
@@ -481,7 +481,6 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context, remoteObs *
 	)
 
 	wakeCh := make(chan struct{}, 1)
-	remoteObs.SetWakeChannel(wakeCh)
 
 	stopCh := make(chan struct{})
 	rt.socketIOWakeStop = stopCh
@@ -515,6 +514,8 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context, remoteObs *
 			)
 		}
 	}()
+
+	return wakeCh
 }
 
 func (rt *watchRuntime) emitSocketIOLifecycleEvent(event SocketIOLifecycleEvent) {

@@ -43,38 +43,8 @@ func (rt *watchRuntime) startPrimaryWatchPhase(
 		}()
 	case observationPhaseDriverRootDelta:
 		remoteObs := NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
-		remoteObs.SetObservationStore(rt.engine.baseline)
-		remoteObs.SetWatchObservationPreparer(func(
-			_ context.Context,
-			events []ChangeEvent,
-		) ([]ObservedItem, []ChangeEvent, error) {
-			scoped := applyRemoteScope(rt.engine.logger, rt.currentScopeSnapshot(), rt.currentScopeGeneration(), events)
-			return scoped.observed, scoped.emitted, nil
-		})
-		remoteObs.SetWatchBatchPostProcessor(func(ctx context.Context, primaryEvents []ChangeEvent) []ChangeEvent {
-			finalEvents, err := rt.processCommittedPrimaryBatch(
-				ctx,
-				bl,
-				primaryEvents,
-				rt.currentScopeSnapshot(),
-				rt.currentScopeGeneration(),
-				false,
-				false,
-			)
-			if err != nil {
-				rt.engine.logger.Warn("shortcut processing failed during remote watch batch",
-					slog.String("error", err.Error()),
-				)
-				return filterOutShortcuts(primaryEvents)
-			}
-
-			return finalEvents
-		})
 		rt.remoteObs = remoteObs
-
-		if rt.websocketEnabledForPrimaryPhase(phase) {
-			rt.startSocketIOWakeSource(ctx, remoteObs)
-		}
+		wakeCh := rt.startSocketIOWakeSource(ctx)
 
 		savedToken, tokenErr := rt.engine.baseline.GetDeltaToken(ctx, rt.engine.driveID.String(), "")
 		if tokenErr != nil {
@@ -86,7 +56,16 @@ func (rt *watchRuntime) startPrimaryWatchPhase(
 		go func() {
 			defer obsWg.Done()
 			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
-			errs <- remoteObs.Watch(ctx, savedToken, events, pollInterval)
+			errs <- remoteObs.Watch(
+				ctx,
+				savedToken,
+				events,
+				pollInterval,
+				wakeCh,
+				func(ctx context.Context, polledEvents []ChangeEvent, newToken string) ([]ChangeEvent, error) {
+					return rt.processCommittedPrimaryWatchBatch(ctx, bl, polledEvents, newToken)
+				},
+			)
 		}()
 	default:
 		go func() {

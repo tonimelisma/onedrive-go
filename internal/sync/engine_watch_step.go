@@ -266,6 +266,10 @@ func (rt *watchRuntime) transitionWatchMaintenanceEvent(
 	case watchEventUserIntentWake:
 		return watchTransition{markUserIntentPending: true}, true, nil
 	case watchEventObserverError:
+		if isFatalObserverError(event.observerErr) {
+			return watchTransition{}, true, event.observerErr
+		}
+
 		rt.logObserverError(event.observerErr)
 		if err := rt.handleObserverExit(p, ctx.Err() != nil); err != nil {
 			return watchTransition{}, true, err
