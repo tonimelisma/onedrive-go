@@ -647,41 +647,41 @@ func (o *Orchestrator) handleControlCommand(
 		cmd.response <- controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.StatusStopping}}
 		return true
 	case controlCommandApproveHeldDeletes:
-		err := o.approveHeldDeletes(ctx, cmd.driveID)
-		if err == nil {
-			o.wakeRunner(runners, cmd.driveID)
-		}
+		err := o.approveHeldDeletes(ctx, runners, cmd.driveID)
 		cmd.response <- responseForMutation(synccontrol.StatusApproved, err)
 	case controlCommandRequestConflictResolution:
-		result, err := o.requestConflictResolution(ctx, cmd.driveID, cmd.conflictID, cmd.resolution)
-		if err == nil {
-			o.wakeRunner(runners, cmd.driveID)
-		}
+		result, err := o.requestConflictResolution(ctx, runners, cmd.driveID, cmd.conflictID, cmd.resolution)
 		cmd.response <- responseForConflictRequest(&result, err)
 	}
 
 	return false
 }
 
-func (o *Orchestrator) approveHeldDeletes(ctx context.Context, cid driveid.CanonicalID) error {
-	store, err := o.openDriveStore(ctx, cid)
+func (o *Orchestrator) approveHeldDeletes(
+	ctx context.Context,
+	runners map[driveid.CanonicalID]*watchRunner,
+	cid driveid.CanonicalID,
+) error {
+	wr, err := o.watchRunnerForMutation(runners, cid)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if closeErr := store.Close(ctx); closeErr != nil {
-			o.logger.Warn("close sync store after held-delete approval",
-				slog.String("drive", cid.String()),
-				slog.String("error", closeErr.Error()),
-			)
-		}
-	}()
 
-	if err := store.ApproveHeldDeletes(ctx); err != nil {
+	response, err := wr.sendMutation(ctx, syncengine.WatchMutationRequest{
+		Kind: syncengine.WatchMutationApproveHeldDeletes,
+	})
+	if err != nil {
 		return newControlRequestError(
 			http.StatusInternalServerError,
 			synccontrol.ErrorInternal,
 			fmt.Errorf("approve held deletes for %s: %w", cid.String(), err),
+		)
+	}
+	if response.Err != nil {
+		return newControlRequestError(
+			http.StatusInternalServerError,
+			synccontrol.ErrorInternal,
+			fmt.Errorf("approve held deletes for %s: %w", cid.String(), response.Err),
 		)
 	}
 
@@ -690,31 +690,79 @@ func (o *Orchestrator) approveHeldDeletes(ctx context.Context, cid driveid.Canon
 
 func (o *Orchestrator) requestConflictResolution(
 	ctx context.Context,
+	runners map[driveid.CanonicalID]*watchRunner,
 	cid driveid.CanonicalID,
 	conflictID string,
 	resolution string,
 ) (syncengine.ConflictRequestResult, error) {
-	store, err := o.openDriveStore(ctx, cid)
+	wr, err := o.watchRunnerForMutation(runners, cid)
 	if err != nil {
 		return syncengine.ConflictRequestResult{}, err
 	}
-	defer func() {
-		if closeErr := store.Close(ctx); closeErr != nil {
-			o.logger.Warn("close sync store after conflict request",
-				slog.String("drive", cid.String()),
-				slog.String("error", closeErr.Error()),
-			)
-		}
-	}()
 
-	result, err := store.RequestConflictResolution(ctx, conflictID, resolution)
+	response, err := wr.sendMutation(ctx, syncengine.WatchMutationRequest{
+		Kind:       syncengine.WatchMutationRequestConflictResolution,
+		ConflictID: conflictID,
+		Resolution: resolution,
+	})
 	if err != nil {
-		return syncengine.ConflictRequestResult{}, classifyConflictRequestError(
+		return syncengine.ConflictRequestResult{}, newControlRequestError(
+			http.StatusInternalServerError,
+			synccontrol.ErrorInternal,
 			fmt.Errorf("request conflict resolution for %s: %w", cid.String(), err),
 		)
 	}
+	if response.Err != nil {
+		return syncengine.ConflictRequestResult{}, classifyConflictRequestError(
+			fmt.Errorf("request conflict resolution for %s: %w", cid.String(), response.Err),
+		)
+	}
 
-	return result, nil
+	return response.ConflictRequestResult, nil
+}
+
+func (o *Orchestrator) watchRunnerForMutation(
+	runners map[driveid.CanonicalID]*watchRunner,
+	cid driveid.CanonicalID,
+) (*watchRunner, error) {
+	wr := runners[cid]
+	if wr != nil {
+		return wr, nil
+	}
+
+	return nil, newControlRequestError(
+		http.StatusNotFound,
+		synccontrol.ErrorDriveNotManaged,
+		fmt.Errorf("drive %q is not managed by this sync process", cid.String()),
+	)
+}
+
+func (wr *watchRunner) sendMutation(
+	ctx context.Context,
+	request syncengine.WatchMutationRequest,
+) (syncengine.WatchMutationResponse, error) {
+	if wr == nil || wr.mutationRequests == nil {
+		return syncengine.WatchMutationResponse{}, fmt.Errorf("watch runner is not accepting mutations")
+	}
+
+	request.Response = make(chan syncengine.WatchMutationResponse, 1)
+
+	select {
+	case wr.mutationRequests <- request:
+	case <-wr.done:
+		return syncengine.WatchMutationResponse{}, fmt.Errorf("watch runner stopped before accepting mutation")
+	case <-ctx.Done():
+		return syncengine.WatchMutationResponse{}, fmt.Errorf("waiting for watch mutation acceptance: %w", ctx.Err())
+	}
+
+	select {
+	case response := <-request.Response:
+		return response, nil
+	case <-wr.done:
+		return syncengine.WatchMutationResponse{}, fmt.Errorf("watch runner stopped before completing mutation")
+	case <-ctx.Done():
+		return syncengine.WatchMutationResponse{}, fmt.Errorf("waiting for watch mutation response: %w", ctx.Err())
+	}
 }
 
 func closeListenerAndRemoveSocket(listener net.Listener, path string) error {
@@ -734,37 +782,6 @@ func closeListenerAndRemoveSocket(listener net.Listener, path string) error {
 	return err
 }
 
-func (o *Orchestrator) openDriveStore(ctx context.Context, cid driveid.CanonicalID) (*syncengine.SyncStore, error) {
-	for _, rd := range o.cfg.Drives {
-		if !rd.CanonicalID.Equal(cid) {
-			continue
-		}
-		dbPath := rd.StatePath()
-		if dbPath == "" {
-			return nil, newControlRequestError(
-				http.StatusInternalServerError,
-				synccontrol.ErrorStoreOpenFailed,
-				fmt.Errorf("cannot determine state DB path for drive %q", cid.String()),
-			)
-		}
-		store, err := syncengine.NewSyncStore(ctx, dbPath, o.logger)
-		if err != nil {
-			return nil, newControlRequestError(
-				http.StatusInternalServerError,
-				synccontrol.ErrorStoreOpenFailed,
-				fmt.Errorf("open sync store for %s: %w", cid.String(), err),
-			)
-		}
-		return store, nil
-	}
-
-	return nil, newControlRequestError(
-		http.StatusNotFound,
-		synccontrol.ErrorDriveNotManaged,
-		fmt.Errorf("drive %q is not managed by this sync process", cid.String()),
-	)
-}
-
 func classifyConflictRequestError(err error) error {
 	message := err.Error()
 	switch {
@@ -774,16 +791,5 @@ func classifyConflictRequestError(err error) error {
 		return newControlRequestError(http.StatusNotFound, synccontrol.ErrorConflictNotFound, err)
 	default:
 		return newControlRequestError(http.StatusInternalServerError, synccontrol.ErrorInternal, err)
-	}
-}
-
-func (o *Orchestrator) wakeRunner(runners map[driveid.CanonicalID]*watchRunner, cid driveid.CanonicalID) {
-	wr := runners[cid]
-	if wr == nil || wr.userIntentWake == nil {
-		return
-	}
-	select {
-	case wr.userIntentWake <- struct{}{}:
-	default:
 	}
 }

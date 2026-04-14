@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -11,16 +12,19 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// PermissionHandler encapsulates all permission-related logic extracted from
-// Engine. It handles HTTP 403 responses, local permission denials, per-pass
-// permission rechecks, and scanner-resolved permission clearing.
+// PermissionHandler encapsulates capability-aware permission handling. It owns
+// remote write classification, local read/write denial handling, and
+// maintenance rechecks that are the only path allowed to clear permission
+// blocks.
 type PermissionHandler struct {
 	store        *SyncStore
 	permChecker  PermissionChecker
+	remoteReader driveops.Downloader
 	syncTree     *synctree.Root
 	driveID      driveid.ID
 	accountEmail string
@@ -36,9 +40,14 @@ func (ph *PermissionHandler) HasPermChecker() bool {
 	return ph.permChecker != nil
 }
 
-// DeniedPrefixes returns all active remote read-only boundaries. The planner
-// uses these prefixes to suppress remote-mutating actions under known
-// read-only subtrees before they reach execution.
+// HasRemoteReadProbe reports whether the handler can probe remote readability.
+func (ph *PermissionHandler) HasRemoteReadProbe() bool {
+	return ph.remoteReader != nil
+}
+
+// DeniedPrefixes returns all active remote write-denied boundaries. The
+// planner uses these prefixes to suppress remote-mutating actions under known
+// blocked shared subtrees before they reach execution.
 func (ph *PermissionHandler) DeniedPrefixes(ctx context.Context) []string {
 	issues, err := ph.store.ListRemoteBlockedFailures(ctx)
 	if err != nil {
@@ -53,7 +62,7 @@ func (ph *PermissionHandler) DeniedPrefixes(ctx context.Context) []string {
 	var prefixes []string
 
 	for i := range issues {
-		if !issues[i].ScopeKey.IsPermRemote() {
+		if !issues[i].ScopeKey.IsPermRemoteWrite() {
 			continue
 		}
 
@@ -71,22 +80,27 @@ func (ph *PermissionHandler) DeniedPrefixes(ctx context.Context) []string {
 	return prefixes
 }
 
-// handle403 is called when a worker reports an HTTP 403 on a write action.
-// It queries the Graph API to determine whether the folder is truly read-only
-// and returns a decision for the engine to apply.
-func (ph *PermissionHandler) handle403(
+// handleRemoteWrite403 is called when a worker reports an HTTP 403 while
+// attempting a remote write action on shared content. It queries Graph
+// permissions to determine whether the folder is truly not writable and
+// returns a decision for the engine to apply.
+func (ph *PermissionHandler) handleRemoteWrite403(
 	ctx context.Context,
 	bl *Baseline,
-	failedPath string,
-	actionType ActionType,
+	r *WorkerResult,
 	shortcuts []Shortcut,
 ) PermissionCheckDecision {
 	if ph.permChecker == nil {
 		return PermissionCheckDecision{}
 	}
 
+	failedPath := r.FailurePath
+	if failedPath == "" {
+		failedPath = r.Path
+	}
+
 	if boundary, ok := ph.activeRemoteBoundary(ctx, failedPath); ok {
-		ph.logger.Debug("handle403: path already under known remote read-only boundary",
+		ph.logger.Debug("handleRemoteWrite403: path already under known remote write-denied boundary",
 			slog.String("path", failedPath),
 			slog.String("boundary", boundary),
 		)
@@ -122,11 +136,11 @@ func (ph *PermissionHandler) handle403(
 	// Query permissions on the parent folder.
 	perms, err := ph.permChecker.ListItemPermissions(ctx, remoteDriveID, parentItemID)
 	if err != nil {
-		return ph.handlePermissionCheckError(ctx, err, failedPath, parentFolder, actionType, remoteDriveID)
+		return ph.handlePermissionCheckError(ctx, err, failedPath, parentFolder, r.ActionType, remoteDriveID)
 	}
 
 	access := graph.EvaluateWriteAccess(perms, ph.accountEmail)
-	ph.logger.Debug("handle403: evaluated folder permissions",
+	ph.logger.Debug("handleRemoteWrite403: evaluated folder permissions",
 		slog.String("path", failedPath),
 		slog.String("account_email", ph.accountEmail),
 		slog.String("access", access.String()),
@@ -135,13 +149,13 @@ func (ph *PermissionHandler) handle403(
 
 	switch access {
 	case graph.PermissionWriteAccessWritable:
-		ph.logger.Debug("handle403: transient 403, folder is writable",
+		ph.logger.Debug("handleRemoteWrite403: transient 403, folder is writable",
 			slog.String("path", failedPath),
 		)
 
 		return PermissionCheckDecision{}
 	case graph.PermissionWriteAccessInconclusive:
-		ph.logger.Warn("handle403: permission evidence inconclusive, not suppressing",
+		ph.logger.Warn("handleRemoteWrite403: permission evidence inconclusive, not suppressing",
 			slog.String("path", failedPath),
 		)
 
@@ -154,10 +168,10 @@ func (ph *PermissionHandler) handle403(
 
 	return ph.remoteBoundaryDecision(
 		boundary,
-		"folder is read-only (no write access)",
+		"folder is not writable",
 		http.StatusForbidden,
 		failedPath,
-		actionType,
+		r.ActionType,
 		remoteDriveID,
 	)
 }
@@ -175,7 +189,7 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 	remoteDriveID driveid.ID,
 ) PermissionCheckDecision {
 	if errors.Is(err, graph.ErrNotFound) {
-		ph.logger.Warn("handle403: folder not found, recording as permission denied",
+		ph.logger.Warn("handleRemoteWrite403: folder not found, recording as remote write denied",
 			slog.String("path", parentFolder),
 		)
 
@@ -189,7 +203,7 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 		)
 	}
 
-	ph.logger.Warn("handle403: permission check failed, not suppressing",
+	ph.logger.Warn("handleRemoteWrite403: permission check failed, not suppressing",
 		slog.String("path", failedPath),
 		slog.String("error", err.Error()),
 	)
@@ -215,7 +229,7 @@ func (ph *PermissionHandler) remoteBoundaryDecision(
 	actionType ActionType,
 	failureDriveID driveid.ID,
 ) PermissionCheckDecision {
-	scopeKey := SKPermRemote(boundary)
+	scopeKey := SKPermRemoteWrite(boundary)
 
 	return PermissionCheckDecision{
 		Matched: true,
@@ -227,7 +241,7 @@ func (ph *PermissionHandler) remoteBoundaryDecision(
 			ActionType: actionType,
 			Role:       FailureRoleHeld,
 			Category:   CategoryTransient,
-			IssueType:  IssueSharedFolderBlocked,
+			IssueType:  IssueRemoteWriteDenied,
 			ErrMsg:     errMsg,
 			HTTPStatus: httpStatus,
 			ScopeKey:   scopeKey,
@@ -272,18 +286,18 @@ func (ph *PermissionHandler) walkPermissionBoundary(
 	return boundary
 }
 
-// recheckPermissions re-queries all permission_denied sync_failures at the
-// start of each sync pass. If a folder is now writable, the issue is cleared
-// and writes resume. Runs every pass (typically 5 min in watch mode).
-func (ph *PermissionHandler) recheckPermissions(
+// recheckRemoteWritePermissions re-queries all remote write-denied held rows at
+// the start of each sync pass. If a folder is now writable, the scope is
+// released and writes resume.
+func (ph *PermissionHandler) recheckRemoteWritePermissions(
 	ctx context.Context,
 	bl *Baseline,
 	shortcuts []Shortcut,
 ) []PermissionRecheckDecision {
-	return ph.recheckPermissionsForScopeKeys(ctx, bl, shortcuts, nil)
+	return ph.recheckRemoteWritePermissionsForScopeKeys(ctx, bl, shortcuts, nil)
 }
 
-func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
+func (ph *PermissionHandler) recheckRemoteWritePermissionsForScopeKeys(
 	ctx context.Context,
 	bl *Baseline,
 	shortcuts []Shortcut,
@@ -303,7 +317,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 
 	for i := range issues {
 		issue := &issues[i]
-		if !issue.ScopeKey.IsPermRemote() {
+		if !issue.ScopeKey.IsPermRemoteWrite() {
 			continue
 		}
 		if seen[issue.ScopeKey] {
@@ -322,7 +336,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 				Kind:     permissionRecheckReleaseScope,
 				Path:     boundaryPath,
 				ScopeKey: issue.ScopeKey,
-				Reason:   "shortcut no longer present; releasing remote permission boundary",
+				Reason:   "shortcut no longer present; releasing remote write scope",
 			})
 			continue
 		}
@@ -335,7 +349,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 				Kind:     permissionRecheckReleaseScope,
 				Path:     boundaryPath,
 				ScopeKey: issue.ScopeKey,
-				Reason:   "remote permission boundary no longer resolvable; releasing stale scope",
+				Reason:   "remote write boundary no longer resolvable; releasing stale scope",
 			})
 			continue
 		}
@@ -346,7 +360,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 				Kind:     permissionRecheckReleaseScope,
 				Path:     boundaryPath,
 				ScopeKey: issue.ScopeKey,
-				Reason:   "permission recheck inconclusive; failing open",
+				Reason:   "remote write recheck inconclusive; failing open",
 			})
 			continue
 		}
@@ -357,7 +371,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 				Kind:     permissionRecheckReleaseScope,
 				Path:     boundaryPath,
 				ScopeKey: issue.ScopeKey,
-				Reason:   "permission granted; releasing remote permission boundary",
+				Reason:   "remote write permission granted; releasing remote write scope",
 			})
 			continue
 		case graph.PermissionWriteAccessInconclusive:
@@ -365,7 +379,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 				Kind:     permissionRecheckReleaseScope,
 				Path:     boundaryPath,
 				ScopeKey: issue.ScopeKey,
-				Reason:   "permission recheck inconclusive; failing open",
+				Reason:   "remote write recheck inconclusive; failing open",
 			})
 			continue
 		case graph.PermissionWriteAccessReadOnly:
@@ -375,7 +389,78 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 			Kind:     permissionRecheckKeepScope,
 			Path:     boundaryPath,
 			ScopeKey: issue.ScopeKey,
-			Reason:   "remote permission boundary still denied",
+			Reason:   "remote write boundary still denied",
+		})
+	}
+
+	return decisions
+}
+
+var errRemoteReadProbeSatisfied = errors.New("sync: remote read probe satisfied")
+
+type remoteReadProbeWriter struct {
+	written bool
+}
+
+func (w *remoteReadProbeWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if !w.written {
+		w.written = true
+		return 1, errRemoteReadProbeSatisfied
+	}
+
+	return 0, errRemoteReadProbeSatisfied
+}
+
+func (ph *PermissionHandler) probeRemoteRead(
+	ctx context.Context,
+	driveID driveid.ID,
+	itemID string,
+) bool {
+	if ph.remoteReader == nil || itemID == "" {
+		return false
+	}
+
+	writer := &remoteReadProbeWriter{}
+
+	var err error
+	if downloader, ok := ph.remoteReader.(driveops.RangeDownloader); ok {
+		_, err = downloader.DownloadRange(ctx, driveID, itemID, writer, 0)
+	} else {
+		_, err = ph.remoteReader.Download(ctx, driveID, itemID, writer)
+	}
+
+	return err == nil || errors.Is(err, errRemoteReadProbeSatisfied)
+}
+
+func (ph *PermissionHandler) recheckRemoteReadPermissions(
+	ctx context.Context,
+) []PermissionRecheckDecision {
+	if ph.remoteReader == nil {
+		return nil
+	}
+
+	issues, err := ph.store.ListSyncFailuresByIssueType(ctx, IssueRemoteReadDenied)
+	if err != nil || len(issues) == 0 {
+		return nil
+	}
+
+	decisions := make([]PermissionRecheckDecision, 0, len(issues))
+	for i := range issues {
+		issue := &issues[i]
+		if issue.ItemID == "" {
+			continue
+		}
+		if !ph.probeRemoteRead(ctx, issue.DriveID, issue.ItemID) {
+			continue
+		}
+		decisions = append(decisions, PermissionRecheckDecision{
+			Kind:    permissionRecheckClearFileFailure,
+			Path:    issue.Path,
+			DriveID: issue.DriveID,
+			Reason:  "remote read permission restored",
 		})
 	}
 
@@ -455,14 +540,21 @@ func remoteBoundaryParent(boundary string, rootPath string) (string, bool) {
 	return parent, true
 }
 
-// handleLocalPermission processes os.ErrPermission results from workers.
-// It walks up from the failed path to find the deepest inaccessible ancestor
-// directory, records a local_permission_denied failure, and creates a scope
-// block for the directory subtree (R-2.10.12).
+// handleLocalPermission processes local permission failures using the concrete
+// capability and path reported by the worker result.
 func (ph *PermissionHandler) handleLocalPermission(
 	_ context.Context,
 	r *WorkerResult,
 ) PermissionCheckDecision {
+	capability := r.FailureCapability
+	if capability == PermissionCapabilityUnknown {
+		capability = defaultLocalCapabilityForAction(r.ActionType)
+	}
+	targetPath := r.FailurePath
+	if targetPath == "" {
+		targetPath = r.Path
+	}
+
 	// If the sync root itself is inaccessible, WARN loudly — don't silently
 	// block everything behind a scope block. The sync root being inaccessible
 	// is fundamentally different from a subdirectory denial: ALL operations
@@ -474,65 +566,62 @@ func (ph *PermissionHandler) handleLocalPermission(
 		)
 
 		return ph.localFilePermissionDecision(
-			r.Path,
+			targetPath,
 			r.ActionType,
-			"sync root directory not accessible (check filesystem permissions)",
+			capability,
+			fmt.Sprintf("sync root directory not %s (check filesystem permissions)", localCapabilityAdjective(capability)),
 		)
 	}
 
-	// Walk up from the file's parent directory to find the deepest inaccessible ancestor.
-	absPath, absErr := ph.syncTree.Abs(r.Path)
+	absPath, absErr := ph.syncTree.Abs(targetPath)
 	if absErr != nil {
 		ph.logger.Warn("handleLocalPermission: failed to resolve sync-tree path",
-			slog.String("path", r.Path),
+			slog.String("path", targetPath),
 			slog.String("error", absErr.Error()),
 		)
 
 		return ph.localFilePermissionDecision(
-			r.Path,
+			targetPath,
 			r.ActionType,
-			"file not accessible (check filesystem permissions)",
+			capability,
+			fmt.Sprintf("path not %s (check filesystem permissions)", localCapabilityAdjective(capability)),
 		)
 	}
 	parentDir := filepath.Dir(absPath)
 
-	// Check if the parent directory is accessible (readable). os.Stat is
-	// insufficient — it succeeds on chmod 000 dirs because stat() only needs
-	// parent execute permission. os.Open tests actual read access.
-	if isDirAccessible(ph.syncTree, parentDir) {
-		// Parent directory is accessible — this is a file-level permission issue.
+	if isDirAccessibleForCapability(ph.syncTree, parentDir, capability) {
 		return ph.localFilePermissionDecision(
-			r.Path,
+			targetPath,
 			r.ActionType,
-			"file not accessible (check filesystem permissions)",
+			capability,
+			fmt.Sprintf("path not %s (check filesystem permissions)", localCapabilityAdjective(capability)),
 		)
 	}
 
-	// Parent directory is inaccessible — walk up to find the deepest denied ancestor.
-	boundary := ph.deepestDeniedBoundary(parentDir)
+	boundary := ph.deepestDeniedBoundary(parentDir, capability)
 
-	// Convert boundary to relative path for recording.
 	relBoundary, relErr := ph.syncTree.Rel(boundary)
 	if relErr != nil {
-		// Shouldn't happen — boundary is under syncRoot. Fall back to recording at file level.
 		ph.logger.Warn("handleLocalPermission: failed to relativize boundary path",
 			slog.String("boundary", boundary),
 			slog.String("error", relErr.Error()),
 		)
 
 		return ph.localFilePermissionDecision(
-			r.Path,
+			targetPath,
 			r.ActionType,
-			"file not accessible (check filesystem permissions)",
+			capability,
+			fmt.Sprintf("path not %s (check filesystem permissions)", localCapabilityAdjective(capability)),
 		)
 	}
 
-	return ph.localDirectoryPermissionDecision(relBoundary, r.Path, r.ActionType)
+	return ph.localDirectoryPermissionDecision(relBoundary, targetPath, r.ActionType, capability)
 }
 
 func (ph *PermissionHandler) localFilePermissionDecision(
 	path string,
 	actionType ActionType,
+	capability PermissionCapability,
 	errMsg string,
 ) PermissionCheckDecision {
 	return PermissionCheckDecision{
@@ -544,7 +633,7 @@ func (ph *PermissionHandler) localFilePermissionDecision(
 			Direction:  directionFromAction(actionType),
 			ActionType: actionType,
 			Role:       FailureRoleItem,
-			IssueType:  IssueLocalPermissionDenied,
+			IssueType:  issueTypeForPermissionCapability(capability),
 			Category:   CategoryActionable,
 			ErrMsg:     errMsg,
 		},
@@ -555,8 +644,10 @@ func (ph *PermissionHandler) localDirectoryPermissionDecision(
 	boundaryPath string,
 	triggerPath string,
 	actionType ActionType,
+	capability PermissionCapability,
 ) PermissionCheckDecision {
-	scopeKey := SKPermDir(boundaryPath)
+	scopeKey := localScopeKeyForCapability(boundaryPath, capability)
+	issueType := issueTypeForPermissionCapability(capability)
 
 	return PermissionCheckDecision{
 		Matched:  true,
@@ -568,14 +659,14 @@ func (ph *PermissionHandler) localDirectoryPermissionDecision(
 			Direction:  directionFromAction(actionType),
 			ActionType: actionType,
 			Role:       FailureRoleBoundary,
-			IssueType:  IssueLocalPermissionDenied,
+			IssueType:  issueType,
 			Category:   CategoryActionable,
-			ErrMsg:     "directory not accessible (check filesystem permissions)",
+			ErrMsg:     fmt.Sprintf("directory not %s (check filesystem permissions)", localCapabilityAdjective(capability)),
 			ScopeKey:   scopeKey,
 		},
 		ScopeBlock: ScopeBlock{
 			Key:          scopeKey,
-			IssueType:    IssueLocalPermissionDenied,
+			IssueType:    issueType,
 			TimingSource: ScopeTimingNone,
 			BlockedAt:    ph.nowFn(),
 		},
@@ -584,26 +675,75 @@ func (ph *PermissionHandler) localDirectoryPermissionDecision(
 	}
 }
 
-func (ph *PermissionHandler) deepestDeniedBoundary(parentDir string) string {
+const localCapabilityAccessible = "accessible"
+
+func localScopeKeyForCapability(path string, capability PermissionCapability) ScopeKey {
+	switch capability {
+	case PermissionCapabilityUnknown:
+		return ScopeKey{}
+	case PermissionCapabilityLocalRead:
+		return SKPermLocalRead(path)
+	case PermissionCapabilityLocalWrite:
+		return SKPermLocalWrite(path)
+	case PermissionCapabilityRemoteRead, PermissionCapabilityRemoteWrite:
+		return ScopeKey{}
+	default:
+		return ScopeKey{}
+	}
+}
+
+func localCapabilityAdjective(capability PermissionCapability) string {
+	switch capability {
+	case PermissionCapabilityUnknown:
+		return localCapabilityAccessible
+	case PermissionCapabilityLocalRead:
+		return "readable"
+	case PermissionCapabilityLocalWrite:
+		return "writable"
+	case PermissionCapabilityRemoteRead, PermissionCapabilityRemoteWrite:
+		return localCapabilityAccessible
+	default:
+		return localCapabilityAccessible
+	}
+}
+
+func defaultLocalCapabilityForAction(actionType ActionType) PermissionCapability {
+	switch actionType {
+	case ActionUpload:
+		return PermissionCapabilityLocalRead
+	case ActionDownload, ActionLocalDelete, ActionLocalMove, ActionFolderCreate, ActionConflict, ActionCleanup:
+		return PermissionCapabilityLocalWrite
+	case ActionRemoteDelete, ActionRemoteMove, ActionUpdateSynced:
+		return PermissionCapabilityUnknown
+	default:
+		return PermissionCapabilityUnknown
+	}
+}
+
+func (ph *PermissionHandler) deepestDeniedBoundary(parentDir string, capability PermissionCapability) string {
 	boundary := parentDir
+	rootPath := filepath.Clean(ph.syncTree.Path())
 	for {
+		if filepath.Clean(boundary) == rootPath {
+			return boundary
+		}
 		parent := filepath.Dir(boundary)
 		if parent == boundary {
 			return boundary
 		}
-		if isDirAccessible(ph.syncTree, parent) {
+		if _, err := ph.syncTree.Rel(parent); err != nil {
+			return boundary
+		}
+		if isDirAccessibleForCapability(ph.syncTree, parent, capability) {
 			return boundary
 		}
 		boundary = parent
 	}
 }
 
-// recheckLocalPermissions rechecks directory-level local permission denials
-// at the start of each sync pass. If a directory is now accessible, clears
-// the failure and releases the scope block (R-2.10.13).
 func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []PermissionRecheckDecision {
-	issues, err := ph.store.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
-	if err != nil || len(issues) == 0 {
+	issues := ph.listLocalPermissionIssues(ctx)
+	if len(issues) == 0 {
 		return nil
 	}
 
@@ -612,94 +752,73 @@ func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []Perm
 	for i := range issues {
 		issue := &issues[i]
 
-		// Only recheck directory-level issues (those with a perm:dir: scope key).
-		if !issue.ScopeKey.IsPermDir() {
-			continue
-		}
-
-		dirPath := issue.ScopeKey.DirPath()
-		if !isDirAccessible(ph.syncTree, dirPath) {
-			// Still inaccessible — keep the block.
+		switch {
+		case issue.ScopeKey.IsPermLocalRead():
+			if !isDirAccessibleForCapability(ph.syncTree, issue.ScopeKey.DirPath(), PermissionCapabilityLocalRead) {
+				decisions = append(decisions, PermissionRecheckDecision{
+					Kind:     permissionRecheckKeepScope,
+					Path:     issue.Path,
+					ScopeKey: issue.ScopeKey,
+					Reason:   "local read scope still denied",
+				})
+				continue
+			}
 			decisions = append(decisions, PermissionRecheckDecision{
-				Kind:     permissionRecheckKeepScope,
+				Kind:     permissionRecheckReleaseScope,
 				Path:     issue.Path,
 				ScopeKey: issue.ScopeKey,
-				Reason:   "local permission denial still active",
+				Reason:   "local read permission restored",
 			})
-			continue
+		case issue.ScopeKey.IsPermLocalWrite():
+			if !isDirAccessibleForCapability(ph.syncTree, issue.ScopeKey.DirPath(), PermissionCapabilityLocalWrite) {
+				decisions = append(decisions, PermissionRecheckDecision{
+					Kind:     permissionRecheckKeepScope,
+					Path:     issue.Path,
+					ScopeKey: issue.ScopeKey,
+					Reason:   "local write scope still denied",
+				})
+				continue
+			}
+			decisions = append(decisions, PermissionRecheckDecision{
+				Kind:     permissionRecheckReleaseScope,
+				Path:     issue.Path,
+				ScopeKey: issue.ScopeKey,
+				Reason:   "local write permission restored",
+			})
+		case issue.IssueType == IssueLocalReadDenied:
+			if isFileReadable(ph.syncTree, issue.Path) {
+				decisions = append(decisions, PermissionRecheckDecision{
+					Kind:    permissionRecheckClearFileFailure,
+					Path:    issue.Path,
+					DriveID: issue.DriveID,
+					Reason:  "local read permission restored",
+				})
+			}
+		case issue.IssueType == IssueLocalWriteDenied:
+			if isPathWritable(ph.syncTree, issue.Path) {
+				decisions = append(decisions, PermissionRecheckDecision{
+					Kind:    permissionRecheckClearFileFailure,
+					Path:    issue.Path,
+					DriveID: issue.DriveID,
+					Reason:  "local write permission restored",
+				})
+			}
 		}
-
-		decisions = append(decisions, PermissionRecheckDecision{
-			Kind:     permissionRecheckReleaseScope,
-			Path:     issue.Path,
-			ScopeKey: issue.ScopeKey,
-			Reason:   "local permission restored, clearing denial",
-		})
 	}
 
 	return decisions
 }
 
-// clearScannerResolvedPermissions checks whether the scanner observed paths
-// that were previously blocked by local_permission_denied failures. If the
-// scanner successfully accessed a path (it appeared in events), the
-// permission issue is resolved — clear the failure and release any scope block.
-//
-// Implements R-2.10.10. Complements recheckLocalPermissions (R-2.10.13).
-func (ph *PermissionHandler) clearScannerResolvedPermissions(
-	ctx context.Context,
-	observedPaths map[string]bool,
-) []PermissionRecheckDecision {
-	if len(observedPaths) == 0 {
+func (ph *PermissionHandler) listLocalPermissionIssues(ctx context.Context) []SyncFailureRow {
+	readIssues, readErr := ph.store.ListSyncFailuresByIssueType(ctx, IssueLocalReadDenied)
+	writeIssues, writeErr := ph.store.ListSyncFailuresByIssueType(ctx, IssueLocalWriteDenied)
+	if readErr != nil && writeErr != nil {
 		return nil
 	}
 
-	issues, err := ph.store.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
-	if err != nil || len(issues) == 0 {
-		return nil
-	}
+	issues := make([]SyncFailureRow, 0, len(readIssues)+len(writeIssues))
+	issues = append(issues, readIssues...)
+	issues = append(issues, writeIssues...)
 
-	var decisions []PermissionRecheckDecision
-
-	for i := range issues {
-		issue := &issues[i]
-
-		resolved := false
-		if issue.ScopeKey.IsPermDir() {
-			// Directory-level: resolved if any observed path falls under the directory.
-			dirPath := issue.ScopeKey.DirPath()
-			for p := range observedPaths {
-				if p == dirPath || strings.HasPrefix(p, dirPath+"/") {
-					resolved = true
-					break
-				}
-			}
-		} else {
-			// File-level: resolved if the file itself was observed.
-			resolved = observedPaths[issue.Path]
-		}
-
-		if !resolved {
-			continue
-		}
-
-		if issue.ScopeKey.IsZero() {
-			decisions = append(decisions, PermissionRecheckDecision{
-				Kind:    permissionRecheckClearFileFailure,
-				Path:    issue.Path,
-				DriveID: issue.DriveID,
-				Reason:  "scanner resolved permission denial",
-			})
-			continue
-		}
-
-		decisions = append(decisions, PermissionRecheckDecision{
-			Kind:     permissionRecheckReleaseScope,
-			Path:     issue.Path,
-			ScopeKey: issue.ScopeKey,
-			Reason:   "scanner resolved permission denial",
-		})
-	}
-
-	return decisions
+	return issues
 }

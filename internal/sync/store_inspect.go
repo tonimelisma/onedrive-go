@@ -235,7 +235,7 @@ func (s IssueSummary) ActionableCount() int {
 	total := 0
 	for _, group := range s.Groups {
 		if group.Key == SummaryConflictUnresolved ||
-			group.Key == SummarySharedFolderWritesBlocked ||
+			group.Key == SummaryRemoteWriteDenied ||
 			group.Key == SummaryAuthenticationRequired {
 			continue
 		}
@@ -246,7 +246,7 @@ func (s IssueSummary) ActionableCount() int {
 }
 
 func (s IssueSummary) RemoteBlockedCount() int {
-	return s.countForKey(SummarySharedFolderWritesBlocked)
+	return s.countForKey(SummaryRemoteWriteDenied)
 }
 
 func (s IssueSummary) AuthRequiredCount() int {
@@ -727,9 +727,9 @@ func statusIssueScope(
 			return statusScopeService, scopeKey.Humanize(shortcuts)
 		case ScopeQuotaOwn:
 			return statusScopeDrive, scopeKey.Humanize(shortcuts)
-		case ScopeQuotaShortcut, ScopePermRemote:
+		case ScopeQuotaShortcut, ScopePermRemoteWrite:
 			return statusScopeShortcut, scopeKey.Humanize(shortcuts)
-		case ScopePermDir:
+		case ScopePermLocalRead, ScopePermLocalWrite:
 			return statusScopeDirectory, scopeKey.Humanize(shortcuts)
 		case ScopeDiskLocal:
 			return statusScopeDisk, scopeKey.Humanize(shortcuts)
@@ -986,7 +986,8 @@ func (i *Inspector) listConflictHistory(ctx context.Context) ([]ConflictHistoryS
 func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
-		WHERE failure_role = ? AND scope_key LIKE 'perm:remote:%'
+		WHERE failure_role = ?
+			AND (scope_key LIKE 'perm:remote-write:%' OR scope_key LIKE 'perm:remote:%')
 		ORDER BY last_seen_at DESC`,
 		FailureRoleHeld,
 	)

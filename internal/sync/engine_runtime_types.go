@@ -2,7 +2,6 @@ package sync
 
 import (
 	"sync"
-	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
@@ -23,9 +22,7 @@ type engineFlow struct {
 	syncErrors []error
 	summaries  []failureSummaryEntry
 
-	scopeCtrl    scopeController
-	shortcutCtrl shortcutCoordinator
-	runID        string
+	runID string
 }
 
 func newEngineFlow(engine *Engine) engineFlow {
@@ -33,7 +30,6 @@ func newEngineFlow(engine *Engine) engineFlow {
 		engine: engine,
 		runID:  engine.nextRuntimeRunID(),
 	}
-	flow.initPolicyControllers()
 
 	return flow
 }
@@ -96,8 +92,7 @@ type watchObservationState struct {
 	buf *Buffer
 
 	// Delete safety protection: rolling counter + durable held-delete state.
-	deleteCounter   *DeleteCounter
-	lastDataVersion int64
+	deleteCounter *DeleteCounter
 
 	// Observer references — set in startObservers, nil'd on shutdown.
 	remoteObs       *RemoteObserver
@@ -125,9 +120,6 @@ type watchTimerState struct {
 	// Retry timer — watch loop retrier sweeps sync_failures on each tick.
 	retryTimer   syncTimer
 	retryTimerCh chan struct{} // persistent, buffered(1)
-
-	// Throttling: tracks last recheckPermissions call time (R-2.10.9).
-	lastPermRecheck time.Time
 }
 
 type watchReconcileState struct {

@@ -235,15 +235,16 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 	}
 	flow.setShortcuts(shortcuts)
 
-	// Recheck permissions — clear any permission_denied issues
-	// for folders that have become writable since the last pass.
+	// Periodic permission maintenance is the only mechanism that clears
+	// permission-backed issues and scopes.
 	if eng.permHandler.HasPermChecker() && scErr == nil {
-		decisions := eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
-		flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, decisions)
+		flow.scopeController().applyPermissionRecheckDecisions(
+			ctx,
+			nil,
+			eng.permHandler.recheckRemoteWritePermissions(ctx, bl, shortcuts),
+		)
 	}
-
-	// Recheck local permission denials — clear scope blocks for
-	// directories that have become accessible since the last pass (R-2.10.13).
+	flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckRemoteReadPermissions(ctx))
 	flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckLocalPermissions(ctx))
 
 	return nil
@@ -475,7 +476,7 @@ func (flow *engineFlow) observeChanges(
 		finalRemoteEvents = filterOutShortcuts(remoteEvents)
 	}
 
-	localResult, err := flow.observeLocalChanges(ctx, watch, bl, scopeSession.Current)
+	localResult, err := flow.observeLocalChanges(ctx, bl, scopeSession.Current)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -599,7 +600,6 @@ func (flow *engineFlow) commitObservedRemoteChanges(
 
 func (flow *engineFlow) observeLocalChanges(
 	ctx context.Context,
-	watch *watchRuntime,
 	bl *Baseline,
 	scopeSnapshot syncscope.Snapshot,
 ) (ScanResult, error) {
@@ -610,14 +610,6 @@ func (flow *engineFlow) observeLocalChanges(
 
 	flow.recordSkippedItems(ctx, localResult.Skipped)
 	flow.clearResolvedSkippedItems(ctx, localResult.Skipped)
-
-	pathSet := pathSetFromEvents(localResult.Events)
-	flow.scopeController().applyPermissionRecheckDecisions(
-		ctx,
-		watch,
-		flow.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSet),
-	)
-	flow.scopeController().clearResolvedRemoteBlockedFailures(ctx, watch, pathSet)
 
 	return localResult, nil
 }

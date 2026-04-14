@@ -24,7 +24,13 @@ const maxHashRetries = 2
 func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOutcome {
 	targetPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, ActionDownload, normalizeSyncTreePathError(err))
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionDownload,
+			normalizeSyncTreePathError(err),
+			action.Path,
+			PermissionCapabilityUnknown,
+		)
 	}
 
 	driveID := e.resolveDriveID(action)
@@ -39,7 +45,13 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOu
 
 	result, err := e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, targetPath, opts)
 	if err != nil {
-		return e.failedOutcome(action, ActionDownload, err)
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionDownload,
+			err,
+			action.Path,
+			inferFailureCapabilityFromError(err, PermissionCapabilityLocalWrite, PermissionCapabilityRemoteRead),
+		)
 	}
 
 	return e.downloadOutcome(action, driveID, result.LocalHash, result.EffectiveRemoteHash, result.Size)
@@ -99,9 +111,14 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 		action.View.Baseline.ETag != "" {
 		currentItem, fetchErr := e.items.GetItem(ctx, driveID, action.ItemID)
 		if fetchErr == nil && currentItem.ETag != action.View.Baseline.ETag {
-			return e.failedOutcome(action, ActionUpload,
+			return e.failedOutcomeWithFailure(
+				action,
+				ActionUpload,
 				fmt.Errorf("remote eTag changed since last sync (baseline=%s current=%s): potential conflict",
-					action.View.Baseline.ETag, currentItem.ETag))
+					action.View.Baseline.ETag, currentItem.ETag),
+				action.Path,
+				PermissionCapabilityUnknown,
+			)
 		}
 		// If GetItem fails (transient error, item deleted), proceed with
 		// the upload — the server-side conflict resolution (or a 404) will
@@ -110,7 +127,13 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 
 	localPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, ActionUpload, normalizeSyncTreePathError(err))
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionUpload,
+			normalizeSyncTreePathError(err),
+			action.Path,
+			PermissionCapabilityUnknown,
+		)
 	}
 
 	var (
@@ -121,22 +144,34 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 	if shouldOverwriteKnownRemoteItem(action) {
 		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, driveops.UploadOpts{})
 		if err != nil {
-			return e.failedOutcome(action, ActionUpload, err)
+			return e.failedOutcomeWithFailure(
+				action,
+				ActionUpload,
+				err,
+				action.Path,
+				inferFailureCapabilityFromError(err, PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite),
+			)
 		}
 		parentID = resolvedUploadParentID(action, result.Item)
 	} else {
 		parentID, err = e.ResolveParentID(action.Path)
 		if err != nil {
-			return e.failedOutcome(action, ActionUpload, err)
+			return e.failedOutcomeWithFailure(action, ActionUpload, err, action.Path, PermissionCapabilityUnknown)
 		}
 		if waitErr := e.waitRemoteParentVisible(ctx, action); waitErr != nil {
-			return e.failedOutcome(action, ActionUpload, waitErr)
+			return e.failedOutcomeWithFailure(action, ActionUpload, waitErr, action.Path, PermissionCapabilityUnknown)
 		}
 
 		name := filepath.Base(action.Path)
 		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, driveops.UploadOpts{})
 		if err != nil {
-			return e.failedOutcome(action, ActionUpload, err)
+			return e.failedOutcomeWithFailure(
+				action,
+				ActionUpload,
+				err,
+				action.Path,
+				inferFailureCapabilityFromError(err, PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite),
+			)
 		}
 	}
 

@@ -24,7 +24,7 @@ runtime package that implements it.
 - Owns: Multi-drive sync lifecycle, drive-set resolution for sync, per-drive engine startup/shutdown, reload diffing, control-socket ownership, and per-drive panic/error isolation.
 - Does Not Own: Single-drive observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
 - Source of Truth: The current `config.Holder` snapshot plus the `runners` map owned by the watch-mode orchestrator loop.
-- Allowed Side Effects: Session creation, engine construction/closure, Unix control-socket bind/unlink, per-drive goroutine startup, durable user-intent writes routed through the selected drive store, and control-plane logging.
+- Allowed Side Effects: Session creation, engine construction/closure, Unix control-socket bind/unlink, per-drive goroutine startup, read-only status/projection reads, watch-runner mutation forwarding, runner-owned durable user-intent writes in watch mode, direct durable user-intent writes when no watch owner is active, and control-plane logging.
 - Mutable Runtime Owner: `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one drive.
 - Error Boundary: The control plane converts drive startup, panic, and watch-runner failures into isolated `DriveReport` or log outcomes. Engine-internal errors remain inside the single-drive boundary.
 
@@ -110,8 +110,8 @@ The socket speaks JSON over HTTP:
 - `POST /v1/perf/capture` triggers an explicit local capture bundle from the active owner. The request carries bounded duration plus optional output-dir, trace, and full-detail toggles; the response returns the local artifact paths for the completed bundle.
 - `POST /v1/reload` reloads config in the watch owner.
 - `POST /v1/stop` asks the watch owner to stop cleanly.
-- `POST /v1/drives/{canonical-id}/held-deletes/approve` records durable held-delete approval for that drive and marks a pending user-intent pass for the runner.
-- `POST /v1/drives/{canonical-id}/conflicts/{conflict-id}/resolution-request` records durable conflict-resolution intent and marks a pending user-intent pass for the runner.
+- `POST /v1/drives/{canonical-id}/held-deletes/approve` forwards an explicit mutation request to the owning watch runner. The runner performs the durable write on its engine-owned store and then marks a pending user-intent pass.
+- `POST /v1/drives/{canonical-id}/conflicts/{conflict-id}/resolution-request` forwards an explicit mutation request to the owning watch runner. The runner performs the durable write on its engine-owned store and then marks a pending user-intent pass.
 
 One-shot sync exposes status plus the direct perf endpoints above. Durable
 mutation requests still return a busy response with
@@ -135,10 +135,12 @@ Only `watch_owner` is a live RPC mutation target. `oneshot_owner`,
 selected drive store. `probe_failed` is authoritative and is surfaced as an
 error instead of being collapsed into "no daemon". After a successful
 `watch_owner` probe, one narrower fallback remains: if the watch socket
-disappears between `GET /v1/status` and the mutation POST, the CLI may fall
-back to the same direct durable-intent write. Typed daemon application errors
-and other ambiguous POST failures remain authoritative and are reported rather
-than falling back.
+disappears between `GET /v1/status` and the mutation POST, the CLI must
+re-probe ownership. Direct durable-intent fallback is allowed only when that
+fresh probe proves watch mode is gone (`oneshot_owner`, `no_socket`, or
+`path_unavailable`). Typed daemon application errors and ambiguous POST or
+re-probe failures remain authoritative and are reported rather than falling
+back.
 
 Error responses have the shape `{status, code, message}`. Stable codes are
 `invalid_request`, `foreground_sync_running`, `drive_not_managed`,
@@ -169,8 +171,8 @@ runner set.
 - The `RunWatch` select loop is the single writer for the `runners` map.
 - `startWatchRunner` creates one goroutine per running drive. That goroutine owns closing the runner's `done` channel exactly once on exit.
 - The control command channel is internal to `RunWatch`; socket handlers send commands into that channel and wait for one response.
-- The control plane itself owns no timers; reload, stop, and durable user-intent wakeups are event-driven through control-socket requests and context cancellation.
-- Control-socket mutation handlers do not force immediate dispatch themselves. They record durable intent and signal the single-owner engine/runtime boundary, which coalesces repeated wakes and guarantees one later user-intent pass once ordinary outbox work yields capacity.
+- The control plane itself owns no timers; reload, stop, and mutation forwarding are event-driven through control-socket requests and context cancellation.
+- Control-socket mutation handlers never open a second writable `SyncStore` in watch mode. They forward typed mutation requests into the owning watch runner, and the single-owner engine/runtime boundary performs the durable write and later user-intent admission.
 - The control plane owns live perf registration for active drives, but not the
   counters themselves. `internal/perf` owns the aggregate/live snapshot state;
   the control plane only exposes that state through the local socket and

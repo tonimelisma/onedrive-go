@@ -11,13 +11,15 @@ import (
 // depGraph.Complete. Failed items are recorded in sync_failures for retry
 // by the engine retry sweep.
 type WorkerResult struct {
-	Path       string
-	ItemID     string
-	DriveID    driveid.ID
-	ActionType ActionType
-	Success    bool
-	ErrMsg     string
-	HTTPStatus int // from graph.GraphError, 0 if not a Graph API error
+	Path              string
+	ItemID            string
+	DriveID           driveid.ID
+	ActionType        ActionType
+	Success           bool
+	ErrMsg            string
+	HTTPStatus        int // from graph.GraphError, 0 if not a Graph API error
+	FailurePath       string
+	FailureCapability PermissionCapability
 
 	// Err is the full error for classification (context.Canceled, os.ErrPermission, etc.).
 	// The engine uses errors.Is to distinguish shutdown from genuine failures.

@@ -18,7 +18,7 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := context.Background()
 	driveID := driveid.New(testDriveID)
-	scopeKey := SKPermRemote("Shared/Docs")
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "bad:name.txt",
@@ -37,7 +37,7 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 		ActionType: ActionUpload,
 		Role:       FailureRoleHeld,
 		Category:   CategoryTransient,
-		IssueType:  IssueSharedFolderBlocked,
+		IssueType:  IssueRemoteWriteDenied,
 		ErrMsg:     "blocked",
 		ScopeKey:   scopeKey,
 	}, nil))
@@ -48,7 +48,7 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 		ActionType: ActionUpload,
 		Role:       FailureRoleHeld,
 		Category:   CategoryTransient,
-		IssueType:  IssueSharedFolderBlocked,
+		IssueType:  IssueRemoteWriteDenied,
 		ErrMsg:     "blocked",
 		ScopeKey:   scopeKey,
 	}, nil))
@@ -65,7 +65,7 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 	require.Len(t, groups, 3)
 	assert.Equal(t, SummaryAuthenticationRequired, groups[0].SummaryKey)
 	assert.Equal(t, SummaryInvalidFilename, groups[1].SummaryKey)
-	assert.Equal(t, SummarySharedFolderWritesBlocked, groups[2].SummaryKey)
+	assert.Equal(t, SummaryRemoteWriteDenied, groups[2].SummaryKey)
 	assert.Equal(t, 2, groups[2].Count)
 	assert.Equal(t, 1, groups[2].VisibleCount)
 	require.NotNil(t, groups[2].RemoteBlocked)
@@ -77,6 +77,6 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 	assert.ElementsMatch(t, []IssueGroupCount{
 		{Key: SummaryAuthenticationRequired, Count: 1},
 		{Key: SummaryInvalidFilename, Count: 1},
-		{Key: SummarySharedFolderWritesBlocked, Count: 1},
+		{Key: SummaryRemoteWriteDenied, Count: 1},
 	}, summary.Groups)
 }

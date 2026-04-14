@@ -415,8 +415,8 @@ func TestScopeKey_StringRoundTrip(t *testing.T) {
 		{"quota:own", SKQuotaOwn(), "quota:own"},
 		{"disk:local", SKDiskLocal(), "disk:local"},
 		{"quota:shortcut", SKQuotaShortcut("driveA:itemB"), "quota:shortcut:driveA:itemB"},
-		{"perm:dir", SKPermDir("Documents/Private"), "perm:dir:Documents/Private"},
-		{"perm:remote", SKPermRemote("Shared/TeamDocs"), "perm:remote:Shared/TeamDocs"},
+		{"perm:local-write", SKPermLocalWrite("Documents/Private"), "perm:local-write:Documents/Private"},
+		{"perm:remote-write", SKPermRemoteWrite("Shared/TeamDocs"), "perm:remote-write:Shared/TeamDocs"},
 	}
 
 	for _, tt := range tests {
@@ -448,7 +448,7 @@ func TestScopeKey_IsZero(t *testing.T) {
 	assert.True(t, ScopeKey{}.IsZero())
 	assert.False(t, SKThrottleAccount().IsZero())
 	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsZero())
-	assert.False(t, SKPermDir("x").IsZero())
+	assert.False(t, SKPermLocalWrite("x").IsZero())
 }
 
 // Validates: R-2.10
@@ -460,34 +460,34 @@ func TestScopeKey_IsGlobal(t *testing.T) {
 	assert.True(t, SKService().IsGlobal())
 	assert.False(t, SKQuotaOwn().IsGlobal())
 	assert.False(t, SKQuotaShortcut("a:b").IsGlobal())
-	assert.False(t, SKPermDir("x").IsGlobal())
-	assert.False(t, SKPermRemote("x").IsGlobal())
+	assert.False(t, SKPermLocalWrite("x").IsGlobal())
+	assert.False(t, SKPermRemoteWrite("x").IsGlobal())
 	assert.False(t, SKDiskLocal().IsGlobal())
 }
 
 // Validates: R-2.10
-func TestScopeKey_IsPermDir(t *testing.T) {
+func TestScopeKey_IsPermLocalWrite(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, SKPermDir("Documents").IsPermDir())
-	assert.False(t, SKThrottleAccount().IsPermDir())
-	assert.False(t, SKQuotaOwn().IsPermDir())
+	assert.True(t, SKPermLocalWrite("Documents").IsPermLocalWrite())
+	assert.False(t, SKThrottleAccount().IsPermLocalWrite())
+	assert.False(t, SKQuotaOwn().IsPermLocalWrite())
 }
 
 // Validates: R-2.10.34
-func TestScopeKey_IsPermRemote(t *testing.T) {
+func TestScopeKey_IsPermRemoteWrite(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, SKPermRemote("Shared/TeamDocs").IsPermRemote())
-	assert.False(t, SKPermDir("Documents").IsPermRemote())
-	assert.False(t, SKThrottleAccount().IsPermRemote())
+	assert.True(t, SKPermRemoteWrite("Shared/TeamDocs").IsPermRemoteWrite())
+	assert.False(t, SKPermLocalWrite("Documents").IsPermRemoteWrite())
+	assert.False(t, SKThrottleAccount().IsPermRemoteWrite())
 }
 
 // Validates: R-2.10
 func TestScopeKey_DirPath(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "Documents/Private", SKPermDir("Documents/Private").DirPath())
+	assert.Equal(t, "Documents/Private", SKPermLocalWrite("Documents/Private").DirPath())
 
 	// DirPath on non-PermDir should panic.
 	assert.Panics(t, func() { SKThrottleAccount().DirPath() })
@@ -497,7 +497,7 @@ func TestScopeKey_DirPath(t *testing.T) {
 func TestScopeKey_RemotePath(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "Shared/TeamDocs", SKPermRemote("Shared/TeamDocs").RemotePath())
+	assert.Equal(t, "Shared/TeamDocs", SKPermRemoteWrite("Shared/TeamDocs").RemotePath())
 	assert.Panics(t, func() { SKThrottleAccount().RemotePath() })
 }
 
@@ -515,8 +515,8 @@ func TestScopeKey_IssueType(t *testing.T) {
 		{SKService(), IssueServiceOutage},
 		{SKQuotaOwn(), IssueQuotaExceeded},
 		{SKQuotaShortcut("a:b"), IssueQuotaExceeded},
-		{SKPermDir("x"), IssueLocalPermissionDenied},
-		{SKPermRemote("Shared/TeamDocs"), IssueSharedFolderBlocked},
+		{SKPermLocalWrite("x"), IssueLocalWriteDenied},
+		{SKPermRemoteWrite("Shared/TeamDocs"), IssueRemoteWriteDenied},
 		{SKDiskLocal(), IssueDiskFull},
 		{ScopeKey{}, ""}, // zero value
 	}
@@ -540,8 +540,8 @@ func TestScopeKey_Humanize(t *testing.T) {
 	assert.Equal(t, "OneDrive service", SKService().Humanize(nil))
 	assert.Equal(t, "your OneDrive storage", SKQuotaOwn().Humanize(nil))
 	assert.Equal(t, "local disk", SKDiskLocal().Humanize(nil))
-	assert.Equal(t, "Documents/Private", SKPermDir("Documents/Private").Humanize(nil))
-	assert.Equal(t, "Shared/TeamDocs", SKPermRemote("Shared/TeamDocs").Humanize(nil))
+	assert.Equal(t, "Documents/Private", SKPermLocalWrite("Documents/Private").Humanize(nil))
+	assert.Equal(t, "Shared/TeamDocs", SKPermRemoteWrite("Shared/TeamDocs").Humanize(nil))
 
 	// Shortcut found by local path.
 	assert.Equal(t, "/mnt/shared/TeamDocs", SKQuotaShortcut("driveA:itemB").Humanize(shortcuts))
@@ -551,58 +551,70 @@ func TestScopeKey_Humanize(t *testing.T) {
 }
 
 // Validates: R-2.10
-func TestScopeKey_BlocksAction(t *testing.T) {
+func TestScopeKey_BlocksTrackedAction(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name            string
 		key             ScopeKey
 		path            string
+		oldPath         string
 		throttleTarget  string
 		shortcutKey     string
 		actionType      ActionType
+		createSide      FolderCreateSide
 		targetsOwnDrive bool
 		want            bool
 	}{
 		// Global scopes block everything.
-		{"legacy throttle blocks upload", SKThrottleAccount(), "/a.txt", "", "", ActionUpload, true, true},
-		{"legacy throttle blocks download", SKThrottleAccount(), "/a.txt", "", "", ActionDownload, true, true},
-		{"drive throttle blocks matching drive", SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000001", "", ActionUpload, true, true},
-		{"drive throttle passes other drive", SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000002", "", ActionUpload, true, false},
-		{"shared throttle blocks matching shared target", SKThrottleShared("driveA", "itemB"), "/a.txt", "shared:driveA:itemB", "driveA:itemB", ActionUpload, false, true},
-		{"shared throttle passes other shared target", SKThrottleShared("driveA", "itemB"), "/a.txt", "shared:driveA:itemC", "driveA:itemC", ActionUpload, false, false},
-		{"service blocks all", SKService(), "/a.txt", "", "sc:1", ActionUpload, false, true},
+		{name: "legacy throttle blocks upload", key: SKThrottleAccount(), path: "/a.txt", actionType: ActionUpload, targetsOwnDrive: true, want: true},
+		{name: "legacy throttle blocks download", key: SKThrottleAccount(), path: "/a.txt", actionType: ActionDownload, targetsOwnDrive: true, want: true},
+		{name: "drive throttle blocks matching drive", key: SKThrottleDrive(driveid.New("0000000000000001")), path: "/a.txt", actionType: ActionUpload, targetsOwnDrive: true, want: true},
+		{name: "drive throttle passes other drive", key: SKThrottleDrive(driveid.New("0000000000000001")), path: "/a.txt", actionType: ActionUpload, shortcutKey: "", targetsOwnDrive: false, want: false},
+		{name: "shared throttle blocks matching shared target", key: SKThrottleShared("driveA", "itemB"), path: "/a.txt", shortcutKey: "driveA:itemB", actionType: ActionUpload, want: true},
+		{name: "shared throttle passes other shared target", key: SKThrottleShared("driveA", "itemB"), path: "/a.txt", shortcutKey: "driveA:itemC", actionType: ActionUpload, want: false},
+		{name: "service blocks all", key: SKService(), path: "/a.txt", shortcutKey: "sc:1", actionType: ActionUpload, want: true},
 
 		// Disk:local blocks downloads only.
-		{"disk blocks download", SKDiskLocal(), "/a.txt", "", "", ActionDownload, true, true},
-		{"disk passes upload", SKDiskLocal(), "/a.txt", "", "", ActionUpload, true, false},
+		{name: "disk blocks download", key: SKDiskLocal(), path: "/a.txt", actionType: ActionDownload, targetsOwnDrive: true, want: true},
+		{name: "disk passes upload", key: SKDiskLocal(), path: "/a.txt", actionType: ActionUpload, targetsOwnDrive: true, want: false},
 
 		// Quota:own blocks own-drive uploads.
-		{"quota own blocks own upload", SKQuotaOwn(), "/a.txt", "", "", ActionUpload, true, true},
-		{"quota own passes download", SKQuotaOwn(), "/a.txt", "", "", ActionDownload, true, false},
-		{"quota own passes shortcut upload", SKQuotaOwn(), "/a.txt", "", "sc:1", ActionUpload, false, false},
+		{name: "quota own blocks own upload", key: SKQuotaOwn(), path: "/a.txt", actionType: ActionUpload, targetsOwnDrive: true, want: true},
+		{name: "quota own passes download", key: SKQuotaOwn(), path: "/a.txt", actionType: ActionDownload, targetsOwnDrive: true, want: false},
+		{name: "quota own passes shortcut upload", key: SKQuotaOwn(), path: "/a.txt", shortcutKey: "sc:1", actionType: ActionUpload, want: false},
 
 		// Quota:shortcut blocks matching shortcut uploads.
-		{"shortcut blocks matching upload", SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:1", ActionUpload, false, true},
-		{"shortcut passes wrong shortcut", SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:2", ActionUpload, false, false},
-		{"shortcut passes download", SKQuotaShortcut("sc:1"), "/a.txt", "", "sc:1", ActionDownload, false, false},
+		{name: "shortcut blocks matching upload", key: SKQuotaShortcut("sc:1"), path: "/a.txt", shortcutKey: "sc:1", actionType: ActionUpload, want: true},
+		{name: "shortcut passes wrong shortcut", key: SKQuotaShortcut("sc:1"), path: "/a.txt", shortcutKey: "sc:2", actionType: ActionUpload, want: false},
+		{name: "shortcut passes download", key: SKQuotaShortcut("sc:1"), path: "/a.txt", shortcutKey: "sc:1", actionType: ActionDownload, want: false},
 
-		// Perm:dir blocks paths under the directory.
-		{"perm blocks exact dir", SKPermDir("Private"), "Private", "", "", ActionUpload, true, true},
-		{"perm blocks subpath", SKPermDir("Private"), "Private/secret.txt", "", "", ActionUpload, true, true},
-		{"perm passes outside", SKPermDir("Private"), "Public/readme.txt", "", "", ActionUpload, true, false},
+		// Local read scopes block uploads that need local readability.
+		{name: "perm local read blocks exact dir", key: SKPermLocalRead("Private"), path: "Private", actionType: ActionUpload, targetsOwnDrive: true, want: true},
+		{name: "perm local read blocks subpath", key: SKPermLocalRead("Private"), path: "Private/secret.txt", actionType: ActionUpload, targetsOwnDrive: true, want: true},
+		{name: "perm local read passes outside", key: SKPermLocalRead("Private"), path: "Public/readme.txt", actionType: ActionUpload, targetsOwnDrive: true, want: false},
 
-		// Perm:remote blocks remote mutations recursively, but still allows downloads/local-only work.
-		{"perm remote blocks upload", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionUpload, false, true},
-		{"perm remote blocks nested remote delete", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/nested/file.txt", "", "", ActionRemoteDelete, false, true},
-		{"perm remote blocks folder create", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/newdir", "", "", ActionFolderCreate, false, true},
-		{"perm remote passes download", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionDownload, false, false},
-		{"perm remote passes local delete", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", "", ActionLocalDelete, false, false},
-		{"perm remote passes outside", SKPermRemote("Shared/TeamDocs"), "Shared/Other/file.txt", "", "", ActionUpload, false, false},
+		// Perm:remote-write blocks remote mutations recursively, but still allows downloads/local-only work.
+		{name: "perm remote blocks upload", key: SKPermRemoteWrite("Shared/TeamDocs"), path: "Shared/TeamDocs/file.txt", actionType: ActionUpload, want: true},
+		{name: "perm remote blocks nested remote delete", key: SKPermRemoteWrite("Shared/TeamDocs"), path: "Shared/TeamDocs/nested/file.txt", actionType: ActionRemoteDelete, want: true},
+		{name: "perm remote blocks folder create", key: SKPermRemoteWrite("Shared/TeamDocs"), path: "Shared/TeamDocs/newdir", actionType: ActionFolderCreate, createSide: CreateRemote, want: true},
+		{name: "perm remote passes download", key: SKPermRemoteWrite("Shared/TeamDocs"), path: "Shared/TeamDocs/file.txt", actionType: ActionDownload, want: false},
+		{name: "perm remote passes local delete", key: SKPermRemoteWrite("Shared/TeamDocs"), path: "Shared/TeamDocs/file.txt", actionType: ActionLocalDelete, want: false},
+		{name: "perm remote passes outside", key: SKPermRemoteWrite("Shared/TeamDocs"), path: "Shared/Other/file.txt", actionType: ActionUpload, want: false},
 	}
 
 	for _, tt := range tests {
-		got := tt.key.BlocksAction(tt.path, tt.throttleTarget, tt.shortcutKey, tt.actionType, tt.targetsOwnDrive)
+		action := Action{
+			Type:              tt.actionType,
+			Path:              tt.path,
+			OldPath:           tt.oldPath,
+			CreateSide:        tt.createSide,
+			TargetShortcutKey: tt.shortcutKey,
+		}
+		if tt.targetsOwnDrive {
+			action.TargetDriveID = driveid.New("0000000000000001")
+		}
+		got := tt.key.BlocksTrackedAction(&TrackedAction{Action: action})
 		assert.Equal(t, tt.want, got, tt.name)
 	}
 }

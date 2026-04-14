@@ -12,7 +12,7 @@ import (
 func goldenStatusAccounts() []statusAccount {
 	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
 	authDescriptor := describeStatusSummary(syncengine.SummaryAuthenticationRequired)
-	sharedDescriptor := describeStatusSummary(syncengine.SummarySharedFolderWritesBlocked)
+	sharedDescriptor := describeStatusSummary(syncengine.SummaryRemoteWriteDenied)
 
 	return []statusAccount{
 		{
@@ -64,8 +64,8 @@ func goldenStatusAccounts() []statusAccount {
 								Paths:      nil,
 							},
 							{
-								SummaryKey: string(syncengine.SummarySharedFolderWritesBlocked),
-								IssueType:  string(syncengine.IssueSharedFolderBlocked),
+								SummaryKey: string(syncengine.SummaryRemoteWriteDenied),
+								IssueType:  string(syncengine.IssueRemoteWriteDenied),
 								Title:      sharedDescriptor.Title,
 								Reason:     sharedDescriptor.Reason,
 								Action:     sharedDescriptor.Action,

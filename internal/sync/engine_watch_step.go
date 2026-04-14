@@ -20,7 +20,8 @@ const (
 	watchEventScopeChange            watchEventKind = "scope_change"
 	watchEventScopeChangesClosed     watchEventKind = "scope_changes_closed"
 	watchEventRecheckTick            watchEventKind = "recheck_tick"
-	watchEventUserIntentWake         watchEventKind = "user_intent_wake"
+	watchEventMutationRequest        watchEventKind = "mutation_request"
+	watchEventMutationRequestsClosed watchEventKind = "mutation_requests_closed"
 	watchEventReconcileTick          watchEventKind = "reconcile_tick"
 	watchEventReconcileResult        watchEventKind = "reconcile_result"
 	watchEventReconcileResultsClosed watchEventKind = "reconcile_results_closed"
@@ -37,6 +38,7 @@ type watchEvent struct {
 	workerResult    *WorkerResult
 	skipped         []SkippedItem
 	scopeChange     *syncscope.Change
+	mutationRequest *WatchMutationRequest
 	reconcileResult reconcileResult
 	observerErr     error
 }
@@ -83,8 +85,12 @@ func (rt *watchRuntime) waitWatchEvent(ctx context.Context, p *watchPipeline) wa
 		return watchEvent{kind: watchEventScopeChange, scopeChange: &scopeChange}
 	case <-p.recheckC:
 		return watchEvent{kind: watchEventRecheckTick}
-	case <-p.userIntentC:
-		return watchEvent{kind: watchEventUserIntentWake}
+	case mutationRequest, ok := <-p.mutationC:
+		if !ok {
+			return watchEvent{kind: watchEventMutationRequestsClosed}
+		}
+
+		return watchEvent{kind: watchEventMutationRequest, mutationRequest: &mutationRequest}
 	case <-p.reconcileC:
 		return watchEvent{kind: watchEventReconcileTick}
 	case result, ok := <-p.reconcileResults:
@@ -191,7 +197,8 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 		watchEventScopeChange,
 		watchEventScopeChangesClosed,
 		watchEventRecheckTick,
-		watchEventUserIntentWake,
+		watchEventMutationRequest,
+		watchEventMutationRequestsClosed,
 		watchEventReconcileTick,
 		watchEventReconcileResult,
 		watchEventReconcileResultsClosed,
@@ -242,7 +249,8 @@ func (rt *watchRuntime) transitionWatchObservationEvent(
 		watchEventWorkerResult,
 		watchEventResultsClosed,
 		watchEventRecheckTick,
-		watchEventUserIntentWake,
+		watchEventMutationRequest,
+		watchEventMutationRequestsClosed,
 		watchEventObserverError,
 		watchEventObserverErrorsClosed,
 		watchEventTrialTick,
@@ -262,9 +270,12 @@ func (rt *watchRuntime) transitionWatchMaintenanceEvent(
 	switch event.kind {
 	case watchEventRecheckTick:
 		rt.handleRecheckTick(ctx)
-		return watchTransition{markUserIntentPending: true}, true, nil
-	case watchEventUserIntentWake:
-		return watchTransition{markUserIntentPending: true}, true, nil
+		return watchTransition{}, true, nil
+	case watchEventMutationRequest:
+		return rt.handleWatchMutationRequest(ctx, event.mutationRequest), true, nil
+	case watchEventMutationRequestsClosed:
+		p.mutationC = nil
+		return watchTransition{}, true, nil
 	case watchEventObserverError:
 		if isFatalObserverError(event.observerErr) {
 			return watchTransition{}, true, event.observerErr

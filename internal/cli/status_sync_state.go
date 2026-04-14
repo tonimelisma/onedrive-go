@@ -98,9 +98,9 @@ func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
 		return statusScopeService
 	case syncengine.ScopeQuotaOwn:
 		return statusScopeDrive
-	case syncengine.ScopeQuotaShortcut, syncengine.ScopePermRemote:
+	case syncengine.ScopeQuotaShortcut, syncengine.ScopePermRemoteWrite:
 		return statusScopeShortcut
-	case syncengine.ScopePermDir:
+	case syncengine.ScopePermLocalRead, syncengine.ScopePermLocalWrite:
 		return statusScopeDirectory
 	case syncengine.ScopeDiskLocal:
 		return statusScopeDisk

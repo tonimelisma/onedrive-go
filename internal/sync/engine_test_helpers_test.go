@@ -506,7 +506,7 @@ func setTestScopeBlock(t *testing.T, eng *testEngine, block *ScopeBlock) {
 	if block.TimingSource != ScopeTimingNone && block.NextTrialAt.IsZero() {
 		block.NextTrialAt = block.BlockedAt.Add(block.TrialInterval)
 	}
-	if !block.Key.IsPermRemote() {
+	if !block.Key.IsPermRemoteWrite() {
 		require.NoError(t, eng.baseline.UpsertScopeBlock(context.Background(), block))
 	}
 	if eng.runtime != nil {
@@ -729,11 +729,6 @@ func processBatchForTest(
 ) []*TrackedAction {
 	t.Helper()
 	return testWatchRuntime(t, eng).processBatch(ctx, batch, bl, SyncBidirectional, safety)
-}
-
-func externalDBChangedForTest(t *testing.T, eng *testEngine, ctx context.Context) bool {
-	t.Helper()
-	return testWatchRuntime(t, eng).externalDBChanged(ctx)
 }
 
 type debugEventRecorder struct {
@@ -1151,11 +1146,6 @@ func syncStorePathForTest(t *testing.T, ctx context.Context, eng *testEngine) st
 	require.NoError(t, rows.Err(), "iterate PRAGMA database_list")
 	require.FailNow(t, "main database path not found")
 	return ""
-}
-
-func handleExternalChangesForTest(t *testing.T, eng *testEngine, ctx context.Context) {
-	t.Helper()
-	testWatchRuntime(t, eng).handleExternalChanges(ctx)
 }
 
 func runFullReconciliationAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *Baseline) {

@@ -218,12 +218,12 @@ func TestInspector_ReadGroupedIssueProjection(t *testing.T) {
 		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, next_retry_at, first_seen_at, last_seen_at)
 		VALUES
 		('/invalid:name.txt', ?, 'upload', 'upload', 'item', 'actionable', ?, '', 1, NULL, 1, 1),
-		('/blocked/a.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, NULL, 1, 1),
-		('/blocked/b.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, NULL, 1, 2),
+		('/blocked/a.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote-write:Shared/Docs', 1, NULL, 1, 1),
+		('/blocked/b.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote-write:Shared/Docs', 1, NULL, 1, 2),
 		('/retry.txt', ?, 'upload', 'upload', 'item', 'transient', '', '', 4, ?, 1, 1)`,
 		testDriveID, IssueInvalidFilename,
-		testDriveID, IssueSharedFolderBlocked,
-		testDriveID, IssueSharedFolderBlocked,
+		testDriveID, IssueRemoteWriteDenied,
+		testDriveID, IssueRemoteWriteDenied,
 		testDriveID, time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC).UnixNano(),
 	)
 	require.NoError(t, err)
@@ -254,7 +254,7 @@ func TestInspector_ReadGroupedIssueProjection(t *testing.T) {
 	assert.Len(t, current.Conflicts, 1)
 	assert.Equal(t, "/conflict.txt", current.Conflicts[0].Path)
 	assert.Len(t, current.Groups, 3)
-	assert.Equal(t, SummarySharedFolderWritesBlocked, current.Groups[0].SummaryKey)
+	assert.Equal(t, SummaryRemoteWriteDenied, current.Groups[0].SummaryKey)
 	assert.Equal(t, "Shared/Docs", current.Groups[0].ScopeLabel)
 	assert.Equal(t, []string{"/blocked/a.txt", "/blocked/b.txt"}, current.Groups[0].Paths)
 	assert.Len(t, current.HeldDeletes, 2)
@@ -458,11 +458,11 @@ func TestInspector_ReadStatusSnapshot_StaysConsistentWithDriveStatusSnapshot(t *
 	_, err = store.DB().ExecContext(ctx, `INSERT INTO sync_failures
 		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, next_retry_at, first_seen_at, last_seen_at)
 		VALUES
-		('/blocked/a.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, NULL, 1, 1),
-		('/blocked/b.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, NULL, 1, 2),
+		('/blocked/a.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote-write:Shared/Docs', 1, NULL, 1, 1),
+		('/blocked/b.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote-write:Shared/Docs', 1, NULL, 1, 2),
 		('/invalid:name.txt', ?, 'upload', 'upload', 'item', 'actionable', ?, '', 1, NULL, 1, 1)`,
-		testDriveID, IssueSharedFolderBlocked,
-		testDriveID, IssueSharedFolderBlocked,
+		testDriveID, IssueRemoteWriteDenied,
+		testDriveID, IssueRemoteWriteDenied,
 		testDriveID, IssueInvalidFilename,
 	)
 	require.NoError(t, err)
@@ -510,12 +510,12 @@ func TestInspector_ReadStatusSnapshot_IssueSummary(t *testing.T) {
 	_, err = store.DB().ExecContext(ctx, `INSERT INTO sync_failures
 		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
 		VALUES
-		('/blocked/a.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, 1, 1),
-		('/blocked/b.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote:Shared/Docs', 1, 1, 1),
+		('/blocked/a.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote-write:Shared/Docs', 1, 1, 1),
+		('/blocked/b.txt', ?, 'upload', 'upload', 'held', 'transient', ?, 'perm:remote-write:Shared/Docs', 1, 1, 1),
 		('/invalid:name.txt', ?, 'upload', 'upload', 'item', 'actionable', ?, '', 1, 1, 1),
 		('/retry.txt', ?, 'upload', 'upload', 'item', 'transient', '', '', 4, 1, 1)`,
-		testDriveID, IssueSharedFolderBlocked,
-		testDriveID, IssueSharedFolderBlocked,
+		testDriveID, IssueRemoteWriteDenied,
+		testDriveID, IssueRemoteWriteDenied,
 		testDriveID, IssueInvalidFilename,
 		testDriveID,
 	)
@@ -541,7 +541,7 @@ func TestInspector_ReadStatusSnapshot_IssueSummary(t *testing.T) {
 	assert.Equal(t, 1, snapshot.Issues.RetryingCount())
 	assert.ElementsMatch(t, []IssueGroupCount{
 		{Key: SummaryConflictUnresolved, Count: 1, ScopeKind: "file"},
-		{Key: SummarySharedFolderWritesBlocked, Count: 1, ScopeKind: "shortcut", Scope: "Shared/Docs"},
+		{Key: SummaryRemoteWriteDenied, Count: 1, ScopeKind: "shortcut", Scope: "Shared/Docs"},
 		{Key: SummaryInvalidFilename, Count: 1, ScopeKind: "file"},
 		{Key: SummaryAuthenticationRequired, Count: 1, ScopeKind: "account", Scope: "your OneDrive account authorization"},
 	}, snapshot.Issues.Groups)

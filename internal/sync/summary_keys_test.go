@@ -12,8 +12,8 @@ func TestSummaryKeyForPersistedFailure_RepresentativeMappings(t *testing.T) {
 
 	assert.Equal(t, SummaryInvalidFilename,
 		SummaryKeyForPersistedFailure(IssueInvalidFilename, CategoryActionable, FailureRoleItem))
-	assert.Equal(t, SummarySharedFolderWritesBlocked,
-		SummaryKeyForPersistedFailure(IssueSharedFolderBlocked, CategoryTransient, FailureRoleHeld))
+	assert.Equal(t, SummaryRemoteWriteDenied,
+		SummaryKeyForPersistedFailure(IssueRemoteWriteDenied, CategoryTransient, FailureRoleHeld))
 	assert.Equal(t, SummarySyncFailure,
 		SummaryKeyForPersistedFailure("", CategoryActionable, FailureRoleItem))
 }

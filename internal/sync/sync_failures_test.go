@@ -438,9 +438,9 @@ func TestLocalIssueActionability(t *testing.T) {
 		{IssueInvalidFilename, true},
 		{IssuePathTooLong, true},
 		{IssueFileTooLarge, true},
-		{IssuePermissionDenied, true},
+		{IssueRemoteWriteDenied, true},
 		{IssueQuotaExceeded, true},
-		{IssueLocalPermissionDenied, true},
+		{IssueLocalWriteDenied, true},
 		{IssueCaseCollision, true},
 		{IssueDiskFull, true},
 		{IssueFileTooLargeForSpace, true},
@@ -639,21 +639,21 @@ func TestListLocalIssuesByType(t *testing.T) {
 		Path: "a.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: "upload_failed", ErrMsg: "err",
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path: "b.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "b.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssueRemoteWriteDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path: "c.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "c.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssueRemoteWriteDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path: "d.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: "upload_failed", ErrMsg: "err",
 	}, nil))
 
 	// Query by permission_denied type.
-	issues, err := mgr.ListSyncFailuresByIssueType(ctx, IssuePermissionDenied)
+	issues, err := mgr.ListSyncFailuresByIssueType(ctx, IssueRemoteWriteDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 2)
-	assert.Equal(t, IssuePermissionDenied, issues[0].IssueType)
-	assert.Equal(t, IssuePermissionDenied, issues[1].IssueType)
+	assert.Equal(t, IssueRemoteWriteDenied, issues[0].IssueType)
+	assert.Equal(t, IssueRemoteWriteDenied, issues[1].IssueType)
 
 	// Query by upload_failed type.
 	issues, err = mgr.ListSyncFailuresByIssueType(ctx, "upload_failed")
@@ -672,20 +672,20 @@ func TestClearLocalIssuesByPrefix(t *testing.T) {
 
 	// Record issues at various paths.
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path: "shared", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "shared", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssueRemoteWriteDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path: "shared/file.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "shared/file.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssueRemoteWriteDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path: "shared/sub/file.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "shared/sub/file.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssueRemoteWriteDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path: "other/file.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "other/file.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssueRemoteWriteDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 
 	// Clear by prefix "shared".
-	err := mgr.ClearSyncFailuresByPrefix(ctx, "shared", IssuePermissionDenied)
+	err := mgr.ClearSyncFailuresByPrefix(ctx, "shared", IssueRemoteWriteDenied)
 	require.NoError(t, err)
 
 	// Only "other/file.txt" should remain.
@@ -701,14 +701,14 @@ func TestClearLocalIssuesByPrefix_TypeFiltering(t *testing.T) {
 
 	// Record a permission_denied and an upload_failed at the same prefix.
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path: "shared/a.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssuePermissionDenied, ErrMsg: "read-only", HTTPStatus: 403,
+		Path: "shared/a.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssueRemoteWriteDenied, ErrMsg: "read-only", HTTPStatus: 403,
 	}, nil))
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path: "shared/b.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: "upload_failed", ErrMsg: "err", HTTPStatus: 500,
 	}, nil))
 
 	// Clear permission_denied only.
-	err := mgr.ClearSyncFailuresByPrefix(ctx, "shared", IssuePermissionDenied)
+	err := mgr.ClearSyncFailuresByPrefix(ctx, "shared", IssueRemoteWriteDenied)
 	require.NoError(t, err)
 
 	// upload_failed should remain.

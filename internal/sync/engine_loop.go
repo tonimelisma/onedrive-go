@@ -283,7 +283,6 @@ func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.skippedCh = nil
 	p.scopeChanges = nil
 	p.recheckC = nil
-	p.userIntentC = nil
 	p.reconcileC = nil
 }
 

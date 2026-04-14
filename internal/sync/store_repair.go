@@ -59,7 +59,7 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 	return nil
 }
 
-// DropLegacyRemoteBlockedScope removes old persisted perm:remote authority
+// DropLegacyRemoteBlockedScope removes old persisted remote-write authority
 // rows while leaving held failures intact. New code derives the runtime scope
 // entirely from the held rows.
 func (m *SyncStore) DropLegacyRemoteBlockedScope(

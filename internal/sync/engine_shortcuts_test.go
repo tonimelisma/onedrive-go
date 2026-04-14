@@ -453,8 +453,8 @@ func TestHandleRemovedShortcuts_ClearsRemotePermissionScopesUnderRemovedShortcut
 		DiscoveredAt: 1000,
 	}))
 
-	removedScope := SKPermRemote("SharedFolder/locked")
-	otherScope := SKPermRemote("OtherFolder/locked")
+	removedScope := SKPermRemoteWrite("SharedFolder/locked")
+	otherScope := SKPermRemoteWrite("OtherFolder/locked")
 	removedQuotaScope := SKQuotaShortcut("remote-drive-1:remote-item-1")
 	otherQuotaScope := SKQuotaShortcut("remote-drive-2:remote-item-2")
 
@@ -506,7 +506,7 @@ func seedShortcutRemovalFailures(
 			ActionType: ActionUpload,
 			Role:       FailureRoleHeld,
 			Category:   CategoryTransient,
-			IssueType:  IssueSharedFolderBlocked,
+			IssueType:  IssueRemoteWriteDenied,
 			ErrMsg:     "blocked by remote permission scope",
 			ScopeKey:   removedScope,
 		},
@@ -527,7 +527,7 @@ func seedShortcutRemovalFailures(
 			ActionType: ActionUpload,
 			Role:       FailureRoleHeld,
 			Category:   CategoryTransient,
-			IssueType:  IssueSharedFolderBlocked,
+			IssueType:  IssueRemoteWriteDenied,
 			ErrMsg:     "blocked by remote permission scope",
 			ScopeKey:   otherScope,
 		},
@@ -562,7 +562,7 @@ func seedShortcutRemovalScopeBlocks(
 	blocks := []ScopeBlock{
 		{
 			Key:       removedScope,
-			IssueType: IssueSharedFolderBlocked,
+			IssueType: IssueRemoteWriteDenied,
 			BlockedAt: now,
 		},
 		{
@@ -575,7 +575,7 @@ func seedShortcutRemovalScopeBlocks(
 		},
 		{
 			Key:       otherScope,
-			IssueType: IssueSharedFolderBlocked,
+			IssueType: IssueRemoteWriteDenied,
 			BlockedAt: now,
 		},
 		{

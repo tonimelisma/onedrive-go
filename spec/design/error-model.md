@@ -44,7 +44,7 @@ These projections intentionally answer different questions:
 | `success` | The operation completed and durable/runtime state should advance normally. | Commit success, clear stale transient state. |
 | `shutdown` | Work stopped because the caller canceled or the process is shutting down. | Stop cleanly; do not invent retry or actionable rows purely because the process is exiting. |
 | `retryable transient` | A specific item failed for a condition that is expected to clear without human action. | Persist `sync_failures` row with `category='transient'`, `failure_role='item'`, and `next_retry_at`. |
-| `scope-blocking transient` | A wider transient condition makes a whole scope unsafe to keep dispatching. | Persist `scope_blocks` plus held/boundary failure rows when the scope is durable; derived scopes such as `perm:remote` persist held blocked-write rows only and recover through automatic permission recheck while blocked writes still exist. |
+| `scope-blocking transient` | A wider transient condition makes a whole scope unsafe to keep dispatching. | Persist `scope_blocks` plus held/boundary failure rows when the scope is durable; derived scopes such as `perm:remote-write` persist held blocked-write rows only and recover through automatic permission recheck while blocked writes still exist. |
 | `actionable` | Automatic retry is not appropriate; the user must fix content, permissions, or configuration. | Persist/display actionable failure with reason and user action. |
 | `fatal` | The current command or drive runtime cannot continue safely. | Abort the current flow and return an error immediately. |
 
@@ -82,7 +82,7 @@ entry points:
 The durable projection of the error model is intentionally small:
 
 - `retryable transient` -> `sync_failures.category='transient'`, `failure_role='item'`
-- `scope-blocking transient` -> `scope_blocks` row plus `sync_failures.failure_role='held'` and `'boundary'` when the scope itself is durable; derived `perm:remote` uses only `held` blocked-write rows
+- `scope-blocking transient` -> `scope_blocks` row plus `sync_failures.failure_role='held'` and `'boundary'` when the scope itself is durable; derived `perm:remote-write` uses only `held` blocked-write rows
 - `actionable` -> `sync_failures.category='actionable'`
 - `success` -> baseline/remote-state commit plus explicit failure cleanup where required
 - `shutdown` and `fatal` -> returned to the caller unless a higher boundary intentionally converts them into one of the durable classes above
@@ -90,7 +90,7 @@ The durable projection of the error model is intentionally small:
 This keeps durable state as a record of policy decisions, not a copy of every
 raw error string seen in the process.
 
-Derived `perm:remote` scopes do not need a second persistence lane for manual
+Derived `perm:remote-write` scopes do not need a second persistence lane for manual
 boundary revalidation. Held blocked-write rows are the durable authority, and
 automatic permission rechecks decide when that derived scope clears.
 

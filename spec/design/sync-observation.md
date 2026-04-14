@@ -189,15 +189,16 @@ Remote shared-folder permission handling lives in the sync engine (`permission_h
 
 The observation layer only intersects with permission handling in two places:
 
-- the local scanner can prove a previously inaccessible local path is accessible again, which lets the engine auto-clear `perm:dir` failures
 - the shared `CanReuseBaselineHash` helper keeps upload retry/trial reconstruction logic consistent with normal local observation
 - `ObserveSinglePath` keeps retry/trial reconstruction aligned with current local validation and hash-failure semantics instead of maintaining a separate engine-local observer variant
 
 Remote 403 detection itself is engine-owned: the engine confirms denials with
-`ListItemPermissions`, records one persisted `perm:remote:{localPath}`
-boundary, and switches that subtree to download-only mode through the planner
-and the watch loop's active-scope working set. There is no separate in-memory
-permission cache in the observation layer.
+`ListItemPermissions`, records one persisted `perm:remote-write:{localPath}`
+boundary for shared write denial, and switches that subtree to download-only
+mode through the planner and the watch loop's active-scope working set. Remote
+read denial is item-level `remote_read_denied`, not a recursive observation
+scope. There is no separate in-memory permission cache in the observation
+layer, and observation batches do not clear permission state.
 
 ## Design Constraints
 

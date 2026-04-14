@@ -232,18 +232,18 @@ func TestEngine_AssertCurrentScopeInvariants_DetectsOrphanedPermissionScope(t *t
 
 	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
-	scopeKey := SKPermRemote("Shared/Docs")
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
 	require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
 		Key:          scopeKey,
-		IssueType:    IssuePermissionDenied,
+		IssueType:    IssueRemoteWriteDenied,
 		TimingSource: ScopeTimingNone,
 		BlockedAt:    eng.nowFn(),
 	}))
 
 	err := assertTestCurrentScopeInvariants(t, eng, ctx)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "legacy persisted perm:remote scope")
+	assert.Contains(t, err.Error(), "persisted remote-write scope")
 }
 
 func TestEngine_DrainingDispatchAdmissionPanicsWithQueuedOutbox(t *testing.T) {
@@ -338,11 +338,11 @@ func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testin
 
 	t.Run("release", func(t *testing.T) {
 		eng := newSingleOwnerEngineWithContext(t, ctx)
-		scopeKey := SKPermRemote("Shared/Docs")
+		scopeKey := SKPermRemoteWrite("Shared/Docs")
 
 		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
 			Key:          scopeKey,
-			IssueType:    IssuePermissionDenied,
+			IssueType:    IssueRemoteWriteDenied,
 			TimingSource: ScopeTimingNone,
 			BlockedAt:    eng.nowFn(),
 		}))
@@ -352,7 +352,7 @@ func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testin
 			Direction: DirectionUpload,
 			Role:      FailureRoleBoundary,
 			Category:  CategoryActionable,
-			IssueType: IssuePermissionDenied,
+			IssueType: IssueRemoteWriteDenied,
 			ScopeKey:  scopeKey,
 			ErrMsg:    "read-only boundary",
 		}, nil))
@@ -411,10 +411,10 @@ func TestEngine_RepairPersistedScopes_ReleasesOrphanedRemotePermissionScope(t *t
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 	eng.nowFn = func() time.Time { return now }
 
-	scopeKey := SKPermRemote("Shared/Docs")
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
 	require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
 		Key:          scopeKey,
-		IssueType:    IssuePermissionDenied,
+		IssueType:    IssueRemoteWriteDenied,
 		TimingSource: ScopeTimingNone,
 		BlockedAt:    now.Add(-time.Minute),
 	}))
@@ -599,9 +599,9 @@ func quotaRepairCaseWithRehomedCandidate() *repairPersistedScopesCase {
 				Direction:  DirectionUpload,
 				Role:       FailureRoleBoundary,
 				Category:   CategoryActionable,
-				IssueType:  IssuePermissionDenied,
+				IssueType:  IssueRemoteWriteDenied,
 				HTTPStatus: http.StatusForbidden,
-				ScopeKey:   SKPermRemote("Shared/Docs"),
+				ScopeKey:   SKPermRemoteWrite("Shared/Docs"),
 				ErrMsg:     "boundary rehomed from preserved quota candidate",
 			}, nil))
 		},

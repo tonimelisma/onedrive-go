@@ -185,7 +185,7 @@ observed-but-deferred work from a genuinely idle pass.
 
 `RunWatch` no longer calls `RunOnce` for its initial sync. Instead:
 
-1. **`initWatchInfra`** creates `watchRuntime`, DepGraph, WorkerPool, Buffer, and tickers, repairs persisted scopes according to the startup policy matrix, and loads watch-owned active scope state from surviving `scope_blocks` plus derived `perm:remote` held rows — but does NOT load baseline or start observers.
+1. **`initWatchInfra`** creates `watchRuntime`, DepGraph, WorkerPool, Buffer, and tickers, repairs persisted scopes according to the startup policy matrix, and loads watch-owned active scope state from surviving `scope_blocks` plus derived `perm:remote-write` held rows — but does NOT load baseline or start observers.
 2. **`bootstrapSync`** loads baseline, observes initial changes, and dispatches them through the same single-owner watch loop machinery that steady-state mode uses. It runs until the graph is empty and no more bootstrap work is pending.
 3. **`startObservers`** launches remote and local observers AFTER bootstrap — they see the post-bootstrap baseline.
 4. **`runWatchLoop`** runs the steady-state select loop.
@@ -227,13 +227,14 @@ The engine relies on a few non-negotiable behavioral invariants:
    scope-release path. Scope release also triggers an immediate retrier wakeup,
    so re-entry happens through the normal retrier/planner path without
    any new external observation.
-5. **Permission recheck release**: both local permission recovery paths
-   (`recheckLocalPermissions` and `clearScannerResolvedPermissions`) and the
-   remote Graph-backed `recheckPermissions` path clear the active scope and
-   release held transient failures through the same scope-release operation.
-   Remote permission rechecks fail open: inconclusive API results or stale
-   shortcut boundaries clear the stored denial instead of continuing to
-   suppress writes on stale evidence.
+5. **Permission recheck release**: capability-matched periodic permission
+   rechecks are the only path that clears permission state. Local rechecks
+   probe `local_read` / `local_write` capabilities directly; remote rechecks
+   probe `remote_write` via Graph permissions and `remote_read` via a no-write
+   read probe. Scanner batches, mixed watch batches, and external DB mutations
+   do not clear permission blocks. Remote permission rechecks fail open:
+   inconclusive API results or stale shortcut boundaries clear the stored
+   denial instead of continuing to suppress writes on stale evidence.
 6. **Scope-block ordering**: when a worker result creates or reinforces a
    scope block, the engine must record the failing action, cascade-record
    blocked dependents, and apply the block before any dependent action is
@@ -250,10 +251,10 @@ The engine relies on a few non-negotiable behavioral invariants:
    afterward. Already-dispatched actions may still finish if workers produce
    results before they exit.
 9. **Durable-intent admission gate**: watch-mode user intent is level-triggered
-   loop state, not an edge-triggered channel contract. Recheck ticks and live
-   control-socket wakes may both set `userIntentPending`, but only
-   `settleWatchAdmission` may clear it, and only when ordinary outbox work is
-   empty and `depGraph` has no remaining in-flight actions.
+   loop state, not an edge-triggered channel contract. Explicit watch mutation
+   requests may set `userIntentPending`, but only `settleWatchAdmission` may
+   clear it, and only when ordinary outbox work is empty and `depGraph` has
+   no remaining in-flight actions.
 
 ## Verified By
 
@@ -264,8 +265,8 @@ The engine relies on a few non-negotiable behavioral invariants:
 | Watch shutdown seals admission, stops retry/trial wake handling, and drops reconcile handoff after drain begins. | `TestRunWatch_ShutdownStopsRetryAndTrialTimers`, `TestRunWatch_ShutdownDropsReconcileResult`, `TestRunFullReconciliationAsync_ShutdownAfterCommit` |
 | Cancellation wins over fatal observer-exit shutdown races, and fallback waits honor cancellation without wall-clock sleeps. | `TestRunWatch_ContextCancel`, `TestRunWatch_CancellationWinsOverFinalObserverExit`, `TestRunWatch_FallbackSleepHonorsCancellation` |
 | Held-delete approval is engine-owned durable intent and authorizes execution only for matching drive/action/path/item identity. | `TestRunOnce_DeleteSafety_ApprovedDeletesBypassHold`, `TestRunOnce_DeleteSafety_StaleApprovalWithDifferentItemIDDoesNotBypassHold` |
-| User-intent wakes from both live control-socket mutations and offline recheck/data-version detection stay pending until both the watch outbox and the in-flight dependency graph drain, so a wake received while other work is queued or still executing is not lost. | `TestRunWatchStep_UserIntentWakeStaysPendingUntilOutboxDrains`, `TestRunWatchStep_RecheckWakeStaysPendingUntilOutboxDrains`, `TestRunWatchStep_UserIntentWakeStaysPendingUntilInFlightCompletes`, `TestRunWatchStep_WorkerResultCompletionAdmitsPendingUserIntent` |
-| Repeated wakes coalesce into one durable-intent dispatch regardless of whether the select loop sees recheck ticks, live socket wakes, or worker-result completion first. The scheduled/manual stress lane compiles additional watch-order probes under the `stress` build tag so dual-ready select races stay out of `verify default`. | `TestRunWatchStep_RepeatedUserIntentWakesCoalesceWhileInFlight`, `TestRunWatchStep_RecheckAndUserIntentWakeCoalesceWhenBothReady`, `TestRunWatchStep_DrainDoesNotAdmitPendingUserIntent`, `TestWatchOrderingStress_UserIntentWakeAndWorkerResultRace`, `TestWatchOrderingStress_RecheckAndUserIntentWakeCoalesce` |
+| Watch-mode durable mutations are forwarded into the owning runner, which performs the store write and marks one later user-intent pass without opening a second writable store connection. | `TestHandleWatchMutationRequest_ApproveHeldDeletesReleasesDeleteCounter`, `TestHandleWatchMutationRequest_ConflictResolutionQueuesDurableIntent`, `TestOrchestrator_ControlSocket_QueuesDurableUserIntent` |
+| Pending durable intent still stays queued until normal admission can append it after ordinary outbox and in-flight work settle, and shutdown seals admission even if intent is already pending. | `TestRunWatchStep_PendingUserIntentStaysQueuedUntilOutboxDrains`, `TestRunWatchStep_WorkerResultCompletionAdmitsPendingUserIntent`, `TestRunWatchStep_DrainDoesNotAdmitPendingUserIntent` |
 
 ### Runtime Ownership
 
@@ -439,11 +440,12 @@ Implements: R-2.10.3 [verified], R-2.10.17 [verified], R-2.10.18 [verified], R-2
 - **success** → `Complete` + `RecordSuccess` (scope window reset) + counter + `clearFailureOnSuccess` (engine owns failure lifecycle exclusively — D-6)
 - **requeue** (transient) → `recordFailure` with `retry.ReconcilePolicy().Delay` + `Complete` + `feedScopeDetection` + arm retry timer
 - **scopeBlock** (429, 507) → `recordFailure` with `retry.ReconcilePolicy().Delay` + `feedScopeDetection` + `Complete` + `armTrialTimer()` (belt-and-suspenders)
-- **skip** (non-retryable) → `handle403` side effect. Confirmed remote read-only
-  403s record the triggering blocked write as one held transient row with
-  `scope_key='perm:remote:{boundary}'` and skip duplicate file-level failure
-  recording; other skips use `recordFailure` with nil delayFn (no
-  `next_retry_at`) + `Complete`
+- **skip** (non-retryable) → permission side effect. Confirmed remote
+  write-denied 403s record the triggering blocked write as one held transient
+  row with `scope_key='perm:remote-write:{boundary}'` and skip duplicate
+  file-level failure recording. Remote read-denied 403s record item-level
+  `remote_read_denied` failures with no recursive scope. Other skips use
+  `recordFailure` with nil delayFn (no `next_retry_at`) + `Complete`
 - **shutdown** → `Complete` (no failure recorded)
 - **fatal** (401) → activate scope block `auth:account` with `timing_source='none'` + `Complete` + terminate one-shot/watch execution without creating a per-path `sync_failures` row
 
@@ -451,9 +453,9 @@ Scope-blocked actions are not held in memory. Instead, `processWorkerResult`
 records the failure in `sync_failures` and calls `depGraph.Complete()`. When
 the scope clears, `releaseScope` marks held descendants retryable immediately
 and kicks the retry sweep so they re-enter via the engine-owned retry work
-path and the normal planner/DepGraph flow. `perm:remote` is special: it has no
-persisted `scope_blocks` row, so the watch runtime rebuilds that scope from
-held blocked-write rows only.
+path and the normal planner/DepGraph flow. `perm:remote-write` is special: it
+has no persisted `scope_blocks` row, so the watch runtime rebuilds that scope
+from held blocked-write rows only.
 
 Trial result routing uses the shared `processResult()` entry with explicit
 trial policy. The `TrialScopeKey ScopeKey` from `WorkerResult` identifies the
@@ -514,7 +516,7 @@ explicit event -> transition -> effect -> admission pipeline. One loop-owned
 state object keeps the runtime phase plus an outbox slice of
 ready-but-not-yet-dispatched actions. Each iteration waits for one event
 (dispatch readiness, buffered observation, worker result, retry/trial tick,
-scope change, user-intent wake, reconcile activity, observer exit, or
+scope change, mutation request, reconcile activity, observer exit, or
 cancellation), computes one transition, applies the resulting side effects,
 and then runs one shared admission pass. This preserves the actor-style
 single-owner discipline while making the admission boundary explicit: event
@@ -564,8 +566,8 @@ engine runs `repairPersistedScopes()` against durable store state.
 
 Policy matrix:
 
-- `perm:dir` survives only while a matching `boundary` row exists
-- `perm:remote` survives only while at least one held blocked-write row still exists; any legacy persisted `perm:remote` scope row or boundary row is normalized away at startup
+- `perm:local-read` and `perm:local-write` survive only while a matching `boundary` row exists
+- `perm:remote-write` survives only while at least one held blocked-write row still exists; any legacy persisted `perm:remote` scope row or boundary row is normalized away at startup
 - `quota:own` and `quota:shortcut:*` survive only while at least one scoped failure row exists
 - scoped-failure-backed scopes survive restart when they still have scoped failures or when `preserve_until` is still in the future
 - `throttle:target:*` and `service` survive restart only when `timing_source='server_retry_after'`; expired deadlines trial immediately rather than auto-releasing
@@ -585,7 +587,7 @@ In-memory data structure in `scope.go`: sliding windows (`ScopeKey` →
 structs (see sync-execution.md § ScopeKey Type System). Engine-internal — no
 cross-engine coordination (each engine discovers independently). Active scope
 runtime state is owned by the watch loop, while persisted scope blocks live in
-the `scope_blocks` table for restart/recovery. `perm:remote` is the exception:
+the `scope_blocks` table for restart/recovery. `perm:remote-write` is the exception:
 its watch-time scope is rebuilt from held blocked-write rows, not from
 `scope_blocks`.
 
@@ -596,7 +598,7 @@ Implements: R-2.10.43 [verified]
 Scope key `SKDiskLocal` is created by `classifyResult()` when a download fails
 with `ErrDiskFull` (deterministic signal — immediate, no sliding window).
 Unlike target-scoped throttles and `SKService`, `SKDiskLocal` blocks downloads only —
-`ScopeKey.BlocksAction()` returns true only for `ActionDownload`. Uploads,
+`ScopeKey.BlocksTrackedAction()` returns true only for `ActionDownload`. Uploads,
 deletes, and moves continue because they either free space or don't consume it.
 Admission priority still places `SKDiskLocal` between `SKService` and
 `SKQuotaOwn`. `disk:local` uses its own trial curve: 5-minute initial
@@ -633,35 +635,34 @@ Implements: R-2.10.12 [verified], R-2.10.13 [verified], R-2.10.10 [verified]
 directly. Local permission detection returns explicit decisions that the engine
 applies through `scopeController`, which owns the actual lifecycle mutation.
 
-`os.ErrPermission` -> check parent directory accessibility via
-`handleLocalPermission()`. Inaccessible directory: return an
-`activate_boundary_scope` decision for `SKPermDir(path)`. Accessible
-directory: return a `record_file_failure` decision. Directory-level issues are
-rechecked at the start of each sync pass via `recheckLocalPermissions()`.
-
-**Scanner-driven auto-clear** (R-2.10.10): `clearScannerResolvedPermissions()`
-returns `PermissionRecheckDecision` values when the scanner proves previously
-blocked paths are accessible again. File-level failures are cleared directly.
-Directory-level permission scopes are released through `scopeController.releaseScope()`.
+`os.ErrPermission` -> classify by the failed action's required local
+capability via `handleLocalPermission()`. Inaccessible directory: return an
+`activate_boundary_scope` decision for `SKPermLocalRead(path)` or
+`SKPermLocalWrite(path)`. Accessible directory: return a
+`record_file_failure` decision for item-level `local_read_denied` or
+`local_write_denied`. Periodic `recheckLocalPermissions()` is the only path
+that clears local permission state: directory scopes recheck with
+capability-matched `access(2)` semantics, and item-level failures recheck with
+the matching file open/probe.
 
 ### Remote Shared Permission Handling
 
 Implements: R-2.10.9 [verified], R-2.10.17 [verified], R-2.10.23 [verified], R-2.10.24 [verified], R-2.10.25 [verified], R-2.10.38 [verified], R-2.14.1 [verified], R-2.14.2 [verified], R-2.14.3 [verified], R-2.14.4 [verified]
 
-`handle403()` is the single remote-permission entry point for write failures on
-shared content. Like the local permission path, it returns a decision for the
-engine to apply through `scopeController`:
+`handleRemoteWrite403()` is the single remote-permission entry point for write
+failures on shared content. Like the local permission path, it returns a
+decision for the engine to apply through `scopeController`:
 
-- First it checks whether the failing path is already under an active derived `perm:remote:{localPath}` boundary. If so, it short-circuits without another Graph permission walk.
+- First it checks whether the failing path is already under an active derived `perm:remote-write:{localPath}` boundary. If so, it short-circuits without another Graph permission walk.
 - Otherwise it resolves the relevant shortcut, calls `ListItemPermissions` on the target folder, and runs the caller-aware graph permission classifier to confirm whether the 403 is a real write denial or a transient/inconclusive failure.
 - On confirmed denial it walks upward, still using `ListItemPermissions`, to find the highest denied ancestor but never above the shortcut root.
 - On confirmed denial it records the triggering blocked write as one held
-  transient row with `scope_key='perm:remote:{boundary}'` and the shortcut's
+  transient row with `scope_key='perm:remote-write:{boundary}'` and the shortcut's
   remote drive ID. That held row is the durable authority for the derived
   scope.
 - If a broader-scope trial (for example `service`) discovers a more specific
   confirmed remote permission boundary, the engine rehomes the candidate into
-  the new `perm:remote` held row and removes the older broader-scope held
+  the new `perm:remote-write` held row and removes the older broader-scope held
   candidate instead of duplicating blocked work across scopes.
 
 The graph-side classifier is intentionally stricter than raw `roles`
@@ -672,21 +673,29 @@ and an unrelated owner row for the sharer. The engine therefore treats
 evaluation; unrelated owner/write rows do not defeat a confirmed read-only
 boundary.
 
-`perm:remote` is recursive and download-only while blocked write intent exists:
+`perm:remote-write` is recursive and download-only while blocked write intent exists:
 
 - uploads, folder creates, remote moves, and remote deletes are blocked for the boundary path and every descendant
 - downloads continue so the subtree remains readable and delta/reconciliation can keep it current
 - if the last blocked write disappears, the derived scope is forgotten immediately instead of leaving behind a remembered read-only boundary
 
-`recheckPermissions()` revisits visible derived `perm:remote` scopes at the start
-of each sync pass and returns explicit release/keep decisions:
+Remote read denial is modeled separately. Download/read 403s do not create a
+recursive scope because the engine has no reliable shared-subtree read-boundary
+oracle for block-download scenarios. Instead, the engine records item-level
+`remote_read_denied` failures and clears them only through periodic read probes.
+
+Periodic remote permission maintenance revisits visible derived
+`perm:remote-write` scopes and item-level `remote_read_denied` failures and
+returns explicit release/keep decisions:
 
 - writable again -> `releaseScope`
 - Graph/API failure or stale shortcut boundary -> fail open via `releaseScope`
 - still denied -> keep the boundary active
+- readable again -> clear the item-level `remote_read_denied` failure
+- read probe still denied -> keep the item-level failure active
 
 Shortcut removal also returns explicit discard decisions for any
-`perm:remote:*` boundary under the removed shortcut plus the matching
+`perm:remote-write:*` boundary under the removed shortcut plus the matching
 `quota:shortcut:*` scope. Removed shortcuts discard blocked work instead of
 releasing it back into dispatch, and watch mode rebuilds active scopes from the
 post-removal durable state immediately.
@@ -716,11 +725,6 @@ silencing unrelated shortcuts.
 
 **Trial path separation**: `processWorkerResult()` checks `IsTrial` and routes through explicit trial policy inside the shared result router. This eliminates the prior fragile pattern where all trial failures collapsed into one branch. Success releases the scope, matching evidence extends it, inconclusive outcomes preserve it, and scope detection is never called for trial results because the original scope is already blocked.
 
-**External perm:dir clearance**: `handleExternalChanges()` checks whether
-`local_permission_denied` failures were cleared via CLI-side store mutation.
-Iterates the watch loop's `activeScopes`, filters via `ScopeKey.IsPermDir()`,
-and releases cleared blocks via `releaseScope()`.
-
 **Watch mode summary**: `logWatchSummary()` logs a periodic one-liner at the recheck interval (10s) showing actionable issue counts by type. Only logs when the count changes to avoid noisy output.
 
 ### Failure Logging (R-6.6.8, R-6.6.10, R-6.6.12)
@@ -743,8 +747,9 @@ registers them, and plans shortcut-scoped observation targets. The actual
 delta/enumerate execution path is shared with primary scoped observation, so
 shortcut scopes and `sync_paths` scopes use the same target-level observation
 rules. Shortcut removal still owns the side effects that clear any persisted
-`perm:remote` scope under the removed shortcut and discard its held failures,
-preventing stale recursive write suppression after the share disappears.
+`perm:remote-write` scope under the removed shortcut and discard its held
+failures, preventing stale recursive write suppression after the share
+disappears.
 
 ## CLI / Engine Boundary (`sync_flow.go`, `sync_runtime.go`)
 
@@ -878,7 +883,13 @@ in the DB when no watch daemon is running. If a foreground one-shot sync owns
 the socket, the CLI writes durable DB intent directly instead of sending a
 mutation RPC.
 
-**External change detection**: A 10-second `recheckTicker` in the `RunWatch()` select loop runs `PRAGMA data_version` to detect offline CLI writes. When the data version changes, `handleExternalChanges()` queries held-delete rows. If no `state='held'` rows remain, it calls `counter.Release()`. Socket approval and recheck/data-version detection do not inject best-effort edge-triggered dispatch directly into the outbox. Instead, both wake sources set one watch-loop-owned pending-user-intent flag. The watch loop clears that flag only when it can append a user-intent pass after ordinary outbox work drains, so a wake received while other actions are already queued is preserved rather than lost. Repeated wakes coalesce while one user-intent pass is already pending. On that later user-intent pass, approved deletes are rebuilt into planner events and dispatched normally.
+**Watch-owned mutation routing**: Watch mode no longer polls `PRAGMA data_version`
+or reconciles external DB mutations. Control-socket mutation requests are
+forwarded into the owning watch runner, the runner performs the durable write
+on its engine-owned store, and then one watch-loop-owned pending-user-intent
+flag is set. The watch loop clears that flag only when it can append a
+user-intent pass after ordinary outbox work drains, so a mutation received
+while other actions are already queued is preserved rather than lost.
 
 **Consumption and stale approvals**: Approved rows are consumed only after the matching delete action succeeds. Matching requires the same drive, action type, path, and item ID. A stale approval for a reused path with a different item ID does not authorize the current delete. After an engine pass has a current plan, approved rows for the same drive/action/path but a different planned item ID are pruned as obsolete engine-owned intent. The engine records the prune count/time in `sync_metadata` so status and audits can explain that cleanup later. Other approved rows stay durable until they are consumed or rebuilt by approved-intent dispatch, which avoids deleting legitimate approvals just because a watch batch did not include that path. Approved deletes are excluded from delete-safety counters and holds, so the protection does not retrigger for work the user already approved.
 

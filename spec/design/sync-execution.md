@@ -83,7 +83,8 @@ package.
 - **`FindBlockingScope(blocks, ta) ScopeKey`**: Check whether an action matches
   any active scope block. Returns the blocking key or zero. Priority-ordered:
   global scopes (throttle, service) first, then narrow scopes (disk, quota),
-  then dynamic-key scopes (`quota:shortcut`, `perm:dir`, `perm:remote`).
+  then dynamic-key scopes (`quota:shortcut`, `perm:local-read`,
+  `perm:local-write`, `perm:remote-write`).
 - **`UpsertScope(blocks, block) []ScopeBlock`**: Return a copy with the scope
   inserted or replaced by key.
 - **`RemoveScope(blocks, key) []ScopeBlock`**: Return a copy with the scope
@@ -140,21 +141,21 @@ Implements: R-2.10.3 [verified], R-2.10.26 [verified], R-2.10.42 [verified]
 
 ### ScopeKey Type System
 
-All scope keys are typed `ScopeKey{Kind ScopeKeyKind, Param string}` — a comparable value type usable as map key. Active runtime kinds are `ScopeAuthAccount`, `ScopeThrottleTarget` (Param = `"drive:<targetDriveID>"` or `"shared:<remoteDrive>:<remoteItem>"`), `ScopeService`, `ScopeQuotaOwn`, `ScopeQuotaShortcut` (Param = `"remoteDrive:remoteItem"`), `ScopePermDir` (Param = relative dir path), `ScopePermRemote` (Param = relative boundary path), and `ScopeDiskLocal`. `ScopeThrottleAccount` remains parseable only as a legacy persisted key so startup repair can release old rows safely. Pre-built singletons remain for non-parameterized scopes (`SKAuthAccount`, `SKService`, `SKQuotaOwn`, `SKDiskLocal`); constructor functions cover parameterized scopes (`SKThrottleDrive`, `SKThrottleShared`, `SKQuotaShortcut(key)`, `SKPermDir(path)`, `SKPermRemote(path)`).
+All scope keys are typed `ScopeKey{Kind ScopeKeyKind, Param string}` — a comparable value type usable as map key. Active runtime kinds are `ScopeAuthAccount`, `ScopeThrottleTarget` (Param = `"drive:<targetDriveID>"` or `"shared:<remoteDrive>:<remoteItem>"`), `ScopeService`, `ScopeQuotaOwn`, `ScopeQuotaShortcut` (Param = `"remoteDrive:remoteItem"`), `ScopePermLocalRead` (Param = relative dir path), `ScopePermLocalWrite` (Param = relative dir path), `ScopePermRemoteWrite` (Param = relative boundary path), and `ScopeDiskLocal`. `ScopeThrottleAccount` remains parseable only as a legacy persisted key so startup repair can release old rows safely. Pre-built singletons remain for non-parameterized scopes (`SKAuthAccount`, `SKService`, `SKQuotaOwn`, `SKDiskLocal`); constructor functions cover parameterized scopes (`SKThrottleDrive`, `SKThrottleShared`, `SKQuotaShortcut(key)`, `SKPermLocalRead(path)`, `SKPermLocalWrite(path)`, `SKPermRemoteWrite(path)`).
 
 Methods on `ScopeKey` centralize logic that was previously scattered across 9+ files:
-- **`BlocksAction(path, throttleTargetKey, shortcutKey, actionType, targetsOwnDrive)`** — scope-specific action blocking (used by `blockedScope()`)
+- **`BlocksTrackedAction(ta)`** — scope-specific action blocking against the concrete action instance. Permission scopes consult `Action.PermissionCapabilities()` and `Action.ScopePathsForCapability(...)` instead of raw action-type-only gating.
 - ~~`MaxTrialInterval()`~~ — removed; interval computation is centralized in the engine's scope-aware trial timing helper
 - **`Humanize(shortcuts)`** — user-friendly description for display
 - **`IssueType()`** — maps scope kind to `sync_failures.issue_type` constant
 - **`IsGlobal()`** — true only for scopes that block across all actions without a target parameter (for example `service` and the legacy `throttle:account` cleanup path)
-- **`IsPermDir()` / `DirPath()`** — type-safe access for local directory permission scopes
-- **`IsPermRemote()` / `RemotePath()`** — type-safe access for remote shared-folder permission scopes
+- **`IsPermLocalRead()` / `IsPermLocalWrite()` / `DirPath()`** — type-safe access for local directory permission scopes
+- **`IsPermRemoteWrite()` / `RemotePath()`** — type-safe access for remote shared-folder permission scopes
 - **`IsZero()`** — detects the zero-value (invalid) key
-- **`String()` / `ParseScopeKey(s)`** — wire format serialization for SQLite `scope_key` columns. The active wire format is `"auth:account"`, `"throttle:target:drive:<id>"`, `"throttle:target:shared:<drive>:<item>"`, `"service"`, `"quota:own"`, `"quota:shortcut:X"`, `"perm:dir:X"`, `"perm:remote:X"`, `"disk:local"`. `"throttle:account"` remains parseable only for legacy startup cleanup.
+- **`String()` / `ParseScopeKey(s)`** — wire format serialization for SQLite `scope_key` columns. The active wire format is `"auth:account"`, `"throttle:target:drive:<id>"`, `"throttle:target:shared:<drive>:<item>"`, `"service"`, `"quota:own"`, `"quota:shortcut:X"`, `"perm:local-read:X"`, `"perm:local-write:X"`, `"perm:remote-write:X"`, `"disk:local"`. `"throttle:account"`, `"perm:dir:X"`, and `"perm:remote:X"` remain parseable only for legacy startup cleanup.
 - **`ScopeKeyForResult(httpStatus, targetDriveID, shortcutKey)`** — single source of truth for HTTP status → scope key classification, replacing scattered switch/if chains in `classifyResult` and `deriveScopeKey`.
 
-`ScopePermRemote` is the recursive download-only shared-folder scope. `BlocksAction` returns true for uploads, folder creates, remote moves, and remote deletes at the boundary path and every descendant, while allowing downloads to continue.
+`ScopePermRemoteWrite` is the recursive download-only shared-folder scope. `BlocksTrackedAction` returns true for uploads, remote-side folder creates, remote moves, and remote deletes at the boundary path and every descendant, while allowing downloads and local-only actions to continue.
 
 ### Persisted Failure And Scope Shapes
 

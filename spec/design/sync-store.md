@@ -177,7 +177,7 @@ Important columns:
 - `held`: work currently blocked behind an active scope
 - `boundary`: the actionable row that defines a scope-backed condition
 
-`perm:remote` is a special case: it uses only `held` rows. There is no normal
+`perm:remote-write` is a special case: it uses only `held` rows. There is no normal
 `boundary` row for shared-folder read-only state because the blocked writes are
 the only durable authority for that derived scope.
 
@@ -212,8 +212,8 @@ Important columns:
 
 `scope_blocks` stores scope-level timing state only. Runtime watch admission
 still uses the engine-owned `activeScopes` working set, but that working set
-is ephemeral and rebuildable from this table plus derived `perm:remote` held
-rows.
+is ephemeral and rebuildable from this table plus derived
+`perm:remote-write` held rows.
 
 `timing_source` distinguishes locally computed backoff from explicit server
 deadlines. Startup repair uses this to decide whether a persisted
@@ -244,7 +244,7 @@ scope. The store is responsible for persisting those transitions atomically.
 
 That split keeps the data model honest:
 
-- one derived `perm:remote:Shared/Docs` scope can block many held upload rows without any persisted `scope_blocks` row
+- one derived `perm:remote-write:Shared/Docs` scope can block many held upload rows without any persisted `scope_blocks` row
 - one `throttle:target:drive:*` scope can block only that drive, while one `throttle:target:shared:*` scope can block only that shared boundary
 - one `quota:shortcut:*` scope can outlive many individual path failures
 - one `auth:account` scope can represent an account-level authorization stop without fabricating a path-level failure row
@@ -346,8 +346,9 @@ The store owns sync-state integrity inspection and deterministic safe repair.
 - `SyncStore.RepairIntegritySafe(ctx)` applies only repairs that do not guess
   user intent: it normalizes illegal `auth:account` timing fields, clears
   impossible retry timestamps on non-retryable rows, normalizes deterministic
-  scope-state drift, and removes legacy persisted `perm:remote` scope/boundary
-  authorities that are now derived from held rows. It must not silently delete
+  scope-state drift, and removes persisted remote-write scope/boundary
+  authorities (including legacy `perm:remote` rows) that are now derived from
+  held rows. It must not silently delete
   approved held deletes or queued conflict-resolution requests.
 - Durable-intent integrity findings include invalid `conflict_requests`
   workflow states, missing request/applying timestamps, request rows that

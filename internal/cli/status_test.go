@@ -606,8 +606,8 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures
 		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
 		VALUES
-		('/blocked/a.txt', 'd!1', 'upload', 'upload', 'held', 'transient', 'shared_folder_write_blocked', 'perm:remote:Shared/Docs', 1, 0, 0),
-		('/blocked/b.txt', 'd!1', 'upload', 'upload', 'held', 'transient', 'shared_folder_write_blocked', 'perm:remote:Shared/Docs', 1, 0, 0),
+		('/blocked/a.txt', 'd!1', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote-write:Shared/Docs', 1, 0, 0),
+		('/blocked/b.txt', 'd!1', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote-write:Shared/Docs', 1, 0, 0),
 		('/actionable.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', 'invalid_filename', '', 1, 0, 0)`)
 	require.NoError(t, err)
 

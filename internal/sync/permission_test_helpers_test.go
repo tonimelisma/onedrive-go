@@ -7,6 +7,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newRemoteWriteWorkerResult(path string) *WorkerResult {
+	return &WorkerResult{
+		Path:              path,
+		FailurePath:       path,
+		ActionType:        ActionUpload,
+		FailureCapability: PermissionCapabilityRemoteWrite,
+	}
+}
+
 func applyRemote403Decision(
 	t *testing.T,
 	eng *testEngine,
@@ -17,7 +26,7 @@ func applyRemote403Decision(
 ) PermissionCheckDecision {
 	t.Helper()
 
-	decision := eng.permHandler.handle403(ctx, bl, path, ActionUpload, shortcuts)
+	decision := eng.permHandler.handleRemoteWrite403(ctx, bl, newRemoteWriteWorkerResult(path), shortcuts)
 	rt, ok := lookupTestWatchRuntime(eng)
 	if !ok {
 		rt = newWatchRuntime(eng.Engine)
@@ -54,7 +63,7 @@ func applyRemotePermissionRecheck(
 ) []PermissionRecheckDecision {
 	t.Helper()
 
-	decisions := eng.permHandler.recheckPermissions(ctx, bl, shortcuts)
+	decisions := eng.permHandler.recheckRemoteWritePermissions(ctx, bl, shortcuts)
 	rt, ok := lookupTestWatchRuntime(eng)
 	if !ok {
 		rt = newWatchRuntime(eng.Engine)
@@ -68,24 +77,6 @@ func applyLocalPermissionRecheck(t *testing.T, eng *testEngine, ctx context.Cont
 	t.Helper()
 
 	decisions := eng.permHandler.recheckLocalPermissions(ctx)
-	rt, ok := lookupTestWatchRuntime(eng)
-	if !ok {
-		rt = newWatchRuntime(eng.Engine)
-		rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
-	}
-	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
-	return decisions
-}
-
-func applyScannerResolvedPermissions(
-	t *testing.T,
-	eng *testEngine,
-	ctx context.Context,
-	observed map[string]bool,
-) []PermissionRecheckDecision {
-	t.Helper()
-
-	decisions := eng.permHandler.clearScannerResolvedPermissions(ctx, observed)
 	rt, ok := lookupTestWatchRuntime(eng)
 	if !ok {
 		rt = newWatchRuntime(eng.Engine)

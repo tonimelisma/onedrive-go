@@ -212,7 +212,7 @@ func recordRemoteBlockedFailure(
 		ActionType: ActionUpload,
 		Role:       FailureRoleHeld,
 		Category:   CategoryTransient,
-		IssueType:  IssueSharedFolderBlocked,
+		IssueType:  IssueRemoteWriteDenied,
 		ErrMsg:     "folder is read-only",
 		HTTPStatus: http.StatusForbidden,
 		ScopeKey:   scopeKey,
@@ -263,13 +263,13 @@ func TestHandle403_ReadOnlyFolder_RecordsIssueAtBoundary(t *testing.T) {
 	require.Len(t, issues, 1)
 	assert.Equal(t, driveid.New(remoteDriveID), issues[0].DriveID)
 	assert.Equal(t, "Shared/TeamDocs/sub/file.txt", issues[0].Path)
-	scopeKey := SKPermRemote("Shared/TeamDocs/sub")
+	scopeKey := SKPermRemoteWrite("Shared/TeamDocs/sub")
 	assert.Equal(t, scopeKey, issues[0].ScopeKey, "boundary issue should be scoped to the recursive remote permission boundary")
 	assert.True(t, isTestScopeBlocked(eng, scopeKey), "watch mode should create a recursive remote permission scope")
 
 	block, ok := getTestScopeBlock(eng, scopeKey)
 	require.True(t, ok, "remote permission scope should be queryable from the active-scope working set")
-	assert.Equal(t, IssueSharedFolderBlocked, block.IssueType)
+	assert.Equal(t, IssueRemoteWriteDenied, block.IssueType)
 	assert.True(t, block.NextTrialAt.IsZero(), "remote permission scopes should rely on recheckPermissions, not trial dispatch")
 
 	nestedUpload := &TrackedAction{
@@ -347,7 +347,7 @@ func TestHandle403_TransientError_NoSuppression(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	decision := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", ActionUpload, shortcuts)
+	decision := eng.permHandler.handleRemoteWrite403(ctx, bl, newRemoteWriteWorkerResult("Shared/TeamDocs/sub/file.txt"), shortcuts)
 	assert.False(t, decision.Matched, "handle403 should fail open for transient 403")
 
 	// No issue should be recorded — transient 403.
@@ -426,7 +426,7 @@ func TestHandle403_APIFailure_FailOpen(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	decision := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/file.txt", ActionUpload, shortcuts)
+	decision := eng.permHandler.handleRemoteWrite403(ctx, bl, newRemoteWriteWorkerResult("Shared/TeamDocs/sub/file.txt"), shortcuts)
 	assert.False(t, decision.Matched, "API failures should fail open")
 
 	// No issue — fail-open when API is unavailable.
@@ -443,7 +443,7 @@ func TestHandle403_NoShortcutMatch_Ignored(t *testing.T) {
 	ctx := t.Context()
 
 	// Path not under any shortcut.
-	decision := eng.permHandler.handle403(ctx, bl, "Documents/file.txt", ActionUpload, nil)
+	decision := eng.permHandler.handleRemoteWrite403(ctx, bl, newRemoteWriteWorkerResult("Documents/file.txt"), nil)
 	assert.False(t, decision.Matched, "non-shortcut paths should not trigger permission suppression")
 
 	issues := listRemoteBlockedFailures(t, eng, ctx)
@@ -476,12 +476,12 @@ func TestHandle403_ConfiguredSharedRoot_RecordsRootBoundary(t *testing.T) {
 	decision := applyRemote403Decision(t, eng, ctx, bl, "nested/file.txt", nil)
 	assert.True(t, decision.Matched)
 	assert.Equal(t, permissionCheckActivateDerivedScope, decision.Kind)
-	assert.Equal(t, SKPermRemote(""), decision.ScopeKey)
+	assert.Equal(t, SKPermRemoteWrite(""), decision.ScopeKey)
 
 	issues := listRemoteBlockedFailures(t, eng, ctx)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "nested/file.txt", issues[0].Path)
-	assert.Equal(t, SKPermRemote(""), issues[0].ScopeKey)
+	assert.Equal(t, SKPermRemoteWrite(""), issues[0].ScopeKey)
 	assert.Equal(t, []string{""}, eng.permHandler.DeniedPrefixes(ctx))
 }
 
@@ -517,12 +517,12 @@ func TestRecheckPermissions_GrantDetected_IssueCleared(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 	newTestWatchState(t, eng)
-	scopeKey := SKPermRemote("Shared/TeamDocs/sub")
+	scopeKey := SKPermRemoteWrite("Shared/TeamDocs/sub")
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, "Shared/TeamDocs/sub/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: IssueSharedFolderBlocked,
+		IssueType: IssueRemoteWriteDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -598,14 +598,14 @@ func TestHandle403_ExistingRemoteScope_AvoidsAPICall(t *testing.T) {
 	callCount := len(checker.calls)
 	require.NotZero(t, callCount, "initial 403 should consult Graph permissions")
 
-	second := eng.permHandler.handle403(ctx, bl, "Shared/TeamDocs/sub/deeper/file-b.txt", ActionUpload, shortcuts)
+	second := eng.permHandler.handleRemoteWrite403(ctx, bl, newRemoteWriteWorkerResult("Shared/TeamDocs/sub/deeper/file-b.txt"), shortcuts)
 	require.True(t, second.Matched)
 	assert.Equal(t, permissionCheckNone, second.Kind, "known denied boundary should short-circuit to a no-op decision")
 	assert.Len(t, checker.calls, callCount, "known denied boundary should short-circuit further permission API calls")
 
 	issues := listRemoteBlockedFailures(t, eng, ctx)
 	require.Len(t, issues, 1)
-	assert.Equal(t, SKPermRemote("Shared/TeamDocs/sub"), issues[0].ScopeKey)
+	assert.Equal(t, SKPermRemoteWrite("Shared/TeamDocs/sub"), issues[0].ScopeKey)
 }
 
 // Validates: R-2.10.9, R-2.10.11, R-2.14.4
@@ -632,12 +632,12 @@ func TestRecheckPermissions_APIFailure_FailsOpenAndReleasesScope(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 	newTestWatchState(t, eng)
-	scopeKey := SKPermRemote("Shared/TeamDocs/sub")
+	scopeKey := SKPermRemoteWrite("Shared/TeamDocs/sub")
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, "Shared/TeamDocs/sub/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: IssueSharedFolderBlocked,
+		IssueType: IssueRemoteWriteDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -680,13 +680,13 @@ func TestRecheckPermissions_StillDenied_NoChange(t *testing.T) {
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
-	scopeKey := SKPermRemote("Shared/TeamDocs/sub")
+	scopeKey := SKPermRemoteWrite("Shared/TeamDocs/sub")
 	newTestWatchState(t, eng)
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, "Shared/TeamDocs/sub/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: IssueSharedFolderBlocked,
+		IssueType: IssueRemoteWriteDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -728,8 +728,8 @@ func TestRecheckPermissions_UnresolvableIssues_FailOpenClearsStaleBoundaries(t *
 	eng, bl, _ := newTestEngineWithPerms(t, checker, nil, nil)
 	ctx := t.Context()
 
-	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemote("Shared/NoShortcut/sub"), "Shared/NoShortcut/sub/file.txt")
-	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemote("Shared/Other/locked"), "Shared/Other/locked/file.txt")
+	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemoteWrite("Shared/NoShortcut/sub"), "Shared/NoShortcut/sub/file.txt")
+	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemoteWrite("Shared/Other/locked"), "Shared/Other/locked/file.txt")
 
 	// Recheck with no shortcuts — both issues have sc == nil.
 	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, nil)
@@ -759,7 +759,7 @@ func TestRecheckPermissions_UnresolvedItemID_FailOpenClearsStaleBoundary(t *test
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, nil)
 	ctx := t.Context()
 
-	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemote("Shared/TeamDocs/missing"), "Shared/TeamDocs/missing/file.txt")
+	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemoteWrite("Shared/TeamDocs/missing"), "Shared/TeamDocs/missing/file.txt")
 
 	decisions := applyRemotePermissionRecheck(t, eng, ctx, bl, shortcuts)
 	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
@@ -782,13 +782,13 @@ func TestRecheckPermissions_ConfiguredSharedRootBoundary_UsesRootItemID(t *testi
 
 	eng, bl, _ := newTestEngineWithPermsAndRoot(t, checker, nil, nil, "shared-root-id")
 	ctx := t.Context()
-	scopeKey := SKPermRemote("")
+	scopeKey := SKPermRemoteWrite("")
 	newTestWatchState(t, eng)
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, "nested/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: IssueSharedFolderBlocked,
+		IssueType: IssueRemoteWriteDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -806,12 +806,12 @@ func TestDeniedPrefixes_RemoteScopesOnly(t *testing.T) {
 	eng, _, _ := newTestEngineWithPerms(t, checker, nil, nil)
 	ctx := t.Context()
 
-	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt")
+	recordRemoteBlockedFailure(t, eng, ctx, SKPermRemoteWrite("Shared/TeamDocs"), "Shared/TeamDocs/file.txt")
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "file.txt",
 		Direction:  DirectionUpload,
 		Category:   CategoryActionable,
-		IssueType:  IssuePermissionDenied,
+		IssueType:  IssueRemoteWriteDenied,
 		ErrMsg:     "single-file 403",
 		HTTPStatus: http.StatusForbidden,
 	}, nil))
@@ -820,9 +820,9 @@ func TestDeniedPrefixes_RemoteScopesOnly(t *testing.T) {
 		Direction: DirectionUpload,
 		Role:      FailureRoleBoundary,
 		Category:  CategoryActionable,
-		IssueType: IssueLocalPermissionDenied,
+		IssueType: IssueLocalWriteDenied,
 		ErrMsg:    "local permission denied",
-		ScopeKey:  SKPermDir("Private"),
+		ScopeKey:  SKPermLocalWrite("Private"),
 	}, nil))
 
 	assert.Equal(t, []string{"Shared/TeamDocs"}, eng.permHandler.DeniedPrefixes(ctx))
@@ -945,12 +945,12 @@ func TestRecheckPermissions_StillDenied_KeepsDeniedPrefix(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 	newTestWatchState(t, eng)
-	scopeKey := SKPermRemote("Shared/TeamDocs/sub")
+	scopeKey := SKPermRemoteWrite("Shared/TeamDocs/sub")
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, "Shared/TeamDocs/sub/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: IssueSharedFolderBlocked,
+		IssueType: IssueRemoteWriteDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -1002,7 +1002,7 @@ func TestHandle403_ShortcutUsesRemoteDrive(t *testing.T) {
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
 
-	decision := eng.permHandler.handle403(ctx, bl, "Shared/Special/sub/file.txt", ActionUpload, shortcuts)
+	decision := eng.permHandler.handleRemoteWrite403(ctx, bl, newRemoteWriteWorkerResult("Shared/Special/sub/file.txt"), shortcuts)
 	assert.True(t, decision.Matched, "handle403 should match a read-only shortcut folder")
 	assert.Equal(t, permissionCheckActivateDerivedScope, decision.Kind)
 
@@ -1116,20 +1116,20 @@ func TestRecheckPermissions_MultipleIssues_PartialResolution(t *testing.T) {
 
 	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
 	ctx := t.Context()
-	scopeA := SKPermRemote("Shared/TeamDocs/folderA")
-	scopeB := SKPermRemote("Shared/TeamDocs/folderB")
+	scopeA := SKPermRemoteWrite("Shared/TeamDocs/folderA")
+	scopeB := SKPermRemoteWrite("Shared/TeamDocs/folderB")
 	newTestWatchState(t, eng)
 
 	recordRemoteBlockedFailure(t, eng, ctx, scopeA, "Shared/TeamDocs/folderA/file.txt")
 	recordRemoteBlockedFailure(t, eng, ctx, scopeB, "Shared/TeamDocs/folderB/file.txt")
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeA,
-		IssueType: IssueSharedFolderBlocked,
+		IssueType: IssueRemoteWriteDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeB,
-		IssueType: IssueSharedFolderBlocked,
+		IssueType: IssueRemoteWriteDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 
@@ -1187,15 +1187,15 @@ func TestHandleLocalPermission_DirectoryLevel(t *testing.T) {
 	assert.True(t, decision.Matched)
 	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
 
-	// Should have recorded a directory-level local_permission_denied.
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	// Should have recorded a directory-level local_write_denied scope.
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalWriteDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Private", issues[0].Path)
-	assert.Equal(t, SKPermDir("Private"), issues[0].ScopeKey)
+	assert.Equal(t, SKPermLocalWrite("Private"), issues[0].ScopeKey)
 
 	// Should have created a scope block.
-	assert.True(t, isTestScopeBlocked(eng, SKPermDir("Private")), "should create a scope block for the denied directory")
+	assert.True(t, isTestScopeBlocked(eng, SKPermLocalWrite("Private")), "should create a scope block for the denied directory")
 }
 
 // Validates: R-2.10.12
@@ -1222,8 +1222,9 @@ func TestHandleLocalPermission_FileLevel(t *testing.T) {
 	assert.True(t, decision.Matched)
 	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
 
-	// Should have recorded a file-level local_permission_denied (no scope key).
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	// Uploads require local-read capability, so this remains a file-level
+	// local_read_denied with no scope key.
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalReadDenied)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "Docs/secret.txt", issues[0].Path)
@@ -1248,7 +1249,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	// Set up watch state so the test can install an active scope block.
 	newTestWatchState(t, eng)
 
-	scopeKey := SKPermDir("Private")
+	scopeKey := SKPermLocalWrite("Private")
 
 	// Simulate a prior denial: record failure + scope block.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
@@ -1256,14 +1257,14 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 		DriveID:   eng.driveID,
 		Direction: DirectionDownload,
 		Role:      FailureRoleBoundary,
-		IssueType: IssueLocalPermissionDenied,
+		IssueType: IssueLocalWriteDenied,
 		Category:  CategoryActionable,
 		ErrMsg:    "directory not accessible",
 		ScopeKey:  scopeKey,
 	}, nil))
 
 	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
+		Key: scopeKey, IssueType: IssueLocalWriteDenied,
 	})
 
 	// Directory is now accessible (we didn't chmod 000 it).
@@ -1271,7 +1272,7 @@ func TestRecheckLocalPermissions_Restored(t *testing.T) {
 	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
 
 	// Failure should be cleared.
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalWriteDenied)
 	require.NoError(t, err)
 	assert.Empty(t, issues, "failure should be cleared when directory is accessible")
 
@@ -1301,28 +1302,28 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 
 	newTestWatchState(t, eng)
 
-	scopeKey := SKPermDir("Private")
+	scopeKey := SKPermLocalWrite("Private")
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "Private",
 		DriveID:   eng.driveID,
 		Direction: DirectionDownload,
 		Role:      FailureRoleBoundary,
-		IssueType: IssueLocalPermissionDenied,
+		IssueType: IssueLocalWriteDenied,
 		Category:  CategoryActionable,
 		ErrMsg:    "directory not accessible",
 		ScopeKey:  scopeKey,
 	}, nil))
 
 	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
+		Key: scopeKey, IssueType: IssueLocalWriteDenied,
 	})
 
 	decisions := applyLocalPermissionRecheck(t, eng, ctx)
 	requireSinglePermissionDecision(t, decisions, permissionRecheckKeepScope)
 
 	// Failure should remain.
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalWriteDenied)
 	require.NoError(t, err)
 	assert.Len(t, issues, 1, "failure should remain when directory is still inaccessible")
 
@@ -1331,11 +1332,11 @@ func TestRecheckLocalPermissions_StillDenied(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// clearScannerResolvedPermissions tests (R-2.10.10)
+// Periodic local permission rechecks are the only clearance path.
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.10
-func TestClearScannerResolvedPermissions_FileLevel(t *testing.T) {
+func TestLocalPermissionRecheck_FileLevel(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -1347,23 +1348,21 @@ func TestClearScannerResolvedPermissions_FileLevel(t *testing.T) {
 		Path:      "secret.txt",
 		DriveID:   eng.driveID,
 		Direction: DirectionUpload,
-		IssueType: IssueLocalPermissionDenied,
+		IssueType: IssueLocalWriteDenied,
 		Category:  CategoryActionable,
 		ErrMsg:    "permission denied",
 	}, nil))
 
-	// Scanner observes the file — proof of accessibility.
-	observed := map[string]bool{"secret.txt": true}
-	decisions := applyScannerResolvedPermissions(t, eng, ctx, observed)
+	decisions := applyLocalPermissionRecheck(t, eng, ctx)
 	requireSinglePermissionDecision(t, decisions, permissionRecheckClearFileFailure)
 
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalWriteDenied)
 	require.NoError(t, err)
 	assert.Empty(t, issues, "file-level failure should be cleared when scanner observes the file")
 }
 
 // Validates: R-2.10.10
-func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
+func TestLocalPermissionRecheck_DirLevel(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -1372,7 +1371,7 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 
 	newTestWatchState(t, eng)
 
-	scopeKey := SKPermDir("Private")
+	scopeKey := SKPermLocalWrite("Private")
 
 	// Record a directory-level permission failure with scope block.
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
@@ -1380,31 +1379,30 @@ func TestClearScannerResolvedPermissions_DirLevel(t *testing.T) {
 		DriveID:   eng.driveID,
 		Direction: DirectionDownload,
 		Role:      FailureRoleBoundary,
-		IssueType: IssueLocalPermissionDenied,
+		IssueType: IssueLocalWriteDenied,
 		Category:  CategoryActionable,
 		ErrMsg:    "directory not accessible",
 		ScopeKey:  scopeKey,
 	}, nil))
 
 	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
+		Key: scopeKey, IssueType: IssueLocalWriteDenied,
 	})
 
-	// Scanner observes a file under the blocked directory — proof that the
-	// directory is now traversable.
-	observed := map[string]bool{"Private/doc.txt": true}
-	decisions := applyScannerResolvedPermissions(t, eng, ctx, observed)
+	require.NoError(t, eng.syncTree.MkdirAll("Private", 0o755))
+
+	decisions := applyLocalPermissionRecheck(t, eng, ctx)
 	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
 
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalWriteDenied)
 	require.NoError(t, err)
 	assert.Empty(t, issues, "dir-level failure should be cleared when scanner observes a child path")
 
-	assert.False(t, isTestScopeBlocked(eng, scopeKey), "scope block should be released when scanner proves directory is accessible")
+	assert.False(t, isTestScopeBlocked(eng, scopeKey), "scope block should be released when the periodic recheck proves the directory is accessible")
 }
 
 // Validates: R-2.10.10
-func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
+func TestLocalPermissionRecheck_NoFalsePositives(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -1413,33 +1411,31 @@ func TestClearScannerResolvedPermissions_NoFalsePositives(t *testing.T) {
 
 	newTestWatchState(t, eng)
 
-	scopeKey := SKPermDir("Private")
+	scopeKey := SKPermLocalWrite("Private")
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "Private",
 		DriveID:   eng.driveID,
 		Direction: DirectionDownload,
 		Role:      FailureRoleBoundary,
-		IssueType: IssueLocalPermissionDenied,
+		IssueType: IssueLocalWriteDenied,
 		Category:  CategoryActionable,
 		ErrMsg:    "directory not accessible",
 		ScopeKey:  scopeKey,
 	}, nil))
 
 	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key: scopeKey, IssueType: IssueLocalPermissionDenied,
+		Key: scopeKey, IssueType: IssueLocalWriteDenied,
 	})
 
-	// Scanner observes an unrelated path — should NOT clear the permission failure.
-	observed := map[string]bool{"Public/readme.txt": true}
-	decisions := applyScannerResolvedPermissions(t, eng, ctx, observed)
-	assert.Empty(t, decisions)
+	decisions := applyLocalPermissionRecheck(t, eng, ctx)
+	requireSinglePermissionDecision(t, decisions, permissionRecheckKeepScope)
 
-	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	issues, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalWriteDenied)
 	require.NoError(t, err)
 	assert.Len(t, issues, 1, "failure should remain when scanner didn't observe the blocked path")
 
-	assert.True(t, isTestScopeBlocked(eng, scopeKey), "scope block should remain when scanner didn't observe the blocked path")
+	assert.True(t, isTestScopeBlocked(eng, scopeKey), "scope block should remain when the periodic recheck still cannot access the blocked path")
 }
 
 func TestPathSetFromEvents(t *testing.T) {

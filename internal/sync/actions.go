@@ -79,6 +79,120 @@ type Action struct {
 	TargetRootLocalPath string
 }
 
+// PermissionCapabilities returns the concrete capabilities this action
+// requires when admitted against active permission scopes.
+func (a *Action) PermissionCapabilities() []PermissionCapability {
+	if a == nil {
+		return nil
+	}
+
+	switch a.Type {
+	case ActionUpload:
+		return uniqueCapabilities(PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite)
+	case ActionDownload:
+		return uniqueCapabilities(PermissionCapabilityRemoteRead, PermissionCapabilityLocalWrite)
+	case ActionLocalDelete:
+		return uniqueCapabilities(PermissionCapabilityLocalWrite)
+	case ActionRemoteDelete:
+		return uniqueCapabilities(PermissionCapabilityRemoteWrite)
+	case ActionLocalMove:
+		return uniqueCapabilities(PermissionCapabilityLocalWrite)
+	case ActionRemoteMove:
+		return uniqueCapabilities(PermissionCapabilityRemoteWrite)
+	case ActionFolderCreate:
+		if a.CreateSide == CreateLocal {
+			return uniqueCapabilities(PermissionCapabilityLocalWrite)
+		}
+		if a.CreateSide == CreateRemote {
+			return uniqueCapabilities(PermissionCapabilityRemoteWrite)
+		}
+		return nil
+	case ActionConflict:
+		if a.ConflictInfo != nil && a.ConflictInfo.ConflictType == ConflictEditDelete {
+			return uniqueCapabilities(PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite)
+		}
+		return uniqueCapabilities(PermissionCapabilityRemoteRead, PermissionCapabilityLocalWrite)
+	case ActionUpdateSynced, ActionCleanup:
+		return nil
+	default:
+		return nil
+	}
+}
+
+// ScopePathsForCapability returns the action paths relevant to the given
+// permission capability when matching recursive scope boundaries.
+func (a *Action) ScopePathsForCapability(capability PermissionCapability) []string {
+	if a == nil {
+		return nil
+	}
+
+	switch capability {
+	case PermissionCapabilityLocalRead:
+		return nonEmptyPaths(a.Path)
+	case PermissionCapabilityRemoteRead:
+		return nonEmptyPaths(a.Path)
+	case PermissionCapabilityLocalWrite:
+		switch a.Type {
+		case ActionLocalMove:
+			return nonEmptyPaths(a.Path, a.OldPath)
+		case ActionDownload,
+			ActionUpload,
+			ActionLocalDelete,
+			ActionRemoteDelete,
+			ActionRemoteMove,
+			ActionFolderCreate,
+			ActionConflict,
+			ActionUpdateSynced,
+			ActionCleanup:
+			return nonEmptyPaths(a.Path)
+		default:
+			return nil
+		}
+	case PermissionCapabilityRemoteWrite:
+		switch a.Type {
+		case ActionRemoteMove:
+			return nonEmptyPaths(a.OldPath, a.Path)
+		case ActionDownload,
+			ActionUpload,
+			ActionLocalDelete,
+			ActionRemoteDelete,
+			ActionLocalMove,
+			ActionFolderCreate,
+			ActionConflict,
+			ActionUpdateSynced,
+			ActionCleanup:
+			return nonEmptyPaths(a.Path)
+		default:
+			return nil
+		}
+	case PermissionCapabilityUnknown:
+		return nil
+	default:
+		return nil
+	}
+}
+
+func nonEmptyPaths(paths ...string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+
+	return out
+}
+
 // TargetsOwnDrive returns true if this action targets the user's own drive.
 // Used by scope detection to determine scope key for 507/quota failures (R-6.8.13).
 func (a *Action) TargetsOwnDrive() bool {
@@ -125,24 +239,26 @@ type ActionPlan struct {
 // ActionOutcome is the result of executing a single action. Self-contained —
 // has everything the SyncStore needs to update the database.
 type ActionOutcome struct {
-	Action          ActionType
-	Success         bool
-	Error           error
-	Path            string
-	OldPath         string // for moves
-	DriveID         driveid.ID
-	ItemID          string // from API response after upload
-	ParentID        string
-	ItemType        ItemType
-	LocalHash       string
-	RemoteHash      string
-	LocalSize       int64
-	LocalSizeKnown  bool
-	RemoteSize      int64
-	RemoteSizeKnown bool
-	LocalMtime      int64 // local mtime at sync time
-	RemoteMtime     int64 // remote mtime at sync time; zero means unknown
-	ETag            string
-	ConflictType    string // ConflictEditDelete etc. (conflicts only)
-	ResolvedBy      string // ResolvedByAuto for auto-resolved conflicts, "" otherwise
+	Action            ActionType
+	Success           bool
+	Error             error
+	Path              string
+	OldPath           string // for moves
+	DriveID           driveid.ID
+	ItemID            string // from API response after upload
+	ParentID          string
+	ItemType          ItemType
+	LocalHash         string
+	RemoteHash        string
+	LocalSize         int64
+	LocalSizeKnown    bool
+	RemoteSize        int64
+	RemoteSizeKnown   bool
+	LocalMtime        int64 // local mtime at sync time
+	RemoteMtime       int64 // remote mtime at sync time; zero means unknown
+	ETag              string
+	ConflictType      string // ConflictEditDelete etc. (conflicts only)
+	ResolvedBy        string // ResolvedByAuto for auto-resolved conflicts, "" otherwise
+	FailurePath       string
+	FailureCapability PermissionCapability
 }

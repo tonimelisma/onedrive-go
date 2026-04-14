@@ -11,118 +11,25 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
 
-// externalDBChanged checks whether another process (e.g., the CLI) wrote to
-// the database since the last check. Uses PRAGMA data_version — changes every
-// time another connection commits a write. The engine's own writes don't
-// change it. Returns true if the version advanced.
-func (rt *watchRuntime) externalDBChanged(ctx context.Context) bool {
-	dv, err := rt.engine.baseline.DataVersion(ctx)
-	if err != nil {
-		rt.engine.logger.Warn("failed to check data_version",
-			slog.String("error", err.Error()),
-		)
-
-		return false
-	}
-
-	if dv == rt.lastDataVersion {
-		return false
-	}
-
-	rt.lastDataVersion = dv
-
-	return true
-}
-
-// handleRecheckTick processes a recheck timer tick: detects external DB
-// changes (e.g., `resolve deletes`) and logs a watch summary.
+// handleRecheckTick processes the watch maintenance tick. Periodic permission
+// rechecks are the only mechanism allowed to clear permission blocks or
+// item-level permission failures; this tick also drives watch summaries.
 func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
-	if rt.externalDBChanged(ctx) {
-		rt.handleExternalChanges(ctx)
+	bl, err := rt.engine.baseline.Load(ctx)
+	if err == nil {
+		if rt.engine.permHandler.HasPermChecker() && !rt.scopeController().isObservationSuppressed(rt) {
+			shortcuts := rt.getShortcuts()
+			rt.scopeController().applyPermissionRecheckDecisions(
+				ctx,
+				rt,
+				rt.engine.permHandler.recheckRemoteWritePermissions(ctx, bl, shortcuts),
+			)
+		}
 	}
-
+	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckRemoteReadPermissions(ctx))
+	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
 	rt.logWatchSummary(ctx)
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRecheckTickHandled})
-}
-
-// handleExternalChanges reacts to external DB modifications detected via
-// PRAGMA data_version. Approved held deletes release the rolling counter; the
-// engine consumes the approved rows through user-intent dispatch.
-func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
-	if rt.deleteCounter != nil && rt.deleteCounter.IsHeld() {
-		rows, err := rt.engine.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateHeld)
-		if err != nil {
-			rt.engine.logger.Warn("failed to check held-delete entries",
-				slog.String("error", err.Error()),
-			)
-
-			return
-		}
-
-		if len(rows) == 0 {
-			rt.deleteCounter.Release()
-			rt.engine.logger.Info("delete safety threshold cleared by user")
-		}
-	}
-
-	rt.clearResolvedPermissionScopes(ctx)
-	rt.mustAssertInvariants(ctx, rt, "handle external changes")
-}
-
-// clearResolvedPermissionScopes checks if any permission scope blocks have had
-// their sync_failures cleared (by user action via CLI), and releases the
-// corresponding scope blocks.
-func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
-	scopeKeys := rt.scopeController().scopeBlockKeys(rt)
-	if len(scopeKeys) == 0 {
-		return
-	}
-
-	localIssues, err := rt.engine.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
-	if err != nil {
-		rt.engine.logger.Warn("failed to check local permission failures",
-			slog.String("error", err.Error()),
-		)
-
-		return
-	}
-
-	remoteIssues, err := rt.engine.baseline.ListRemoteBlockedFailures(ctx)
-	if err != nil {
-		rt.engine.logger.Warn("failed to check remote permission failures",
-			slog.String("error", err.Error()),
-		)
-
-		return
-	}
-
-	activeScopes := make(map[ScopeKey]bool, len(localIssues)+len(remoteIssues))
-	for i := range localIssues {
-		if localIssues[i].ScopeKey.IsPermDir() {
-			activeScopes[localIssues[i].ScopeKey] = true
-		}
-	}
-	for i := range remoteIssues {
-		if remoteIssues[i].ScopeKey.IsPermRemote() {
-			activeScopes[remoteIssues[i].ScopeKey] = true
-		}
-	}
-
-	for _, key := range scopeKeys {
-		if (key.IsPermDir() || key.IsPermRemote()) && !activeScopes[key] {
-			if err := rt.scopeController().releaseScope(ctx, rt, key); err != nil {
-				rt.engine.logger.Warn("failed to release externally-cleared permission scope",
-					slog.String("scope", key.String()),
-					slog.String("error", err.Error()),
-				)
-				continue
-			}
-
-			rt.engine.logger.Info("permission scope block cleared by user",
-				slog.String("scope", key.String()),
-			)
-		}
-	}
 }
 
 // logWatchSummary logs a periodic one-liner summary of actionable issues
@@ -170,7 +77,7 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []VisibleIssueGroup) {
 
 	for i := range groups {
 		group := groups[i]
-		if group.RemoteBlocked == nil || !group.ScopeKey.IsPermRemote() {
+		if group.RemoteBlocked == nil || !group.ScopeKey.IsPermRemoteWrite() {
 			continue
 		}
 
