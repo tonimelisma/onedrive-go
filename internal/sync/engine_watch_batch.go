@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -19,21 +18,17 @@ func (rt *watchRuntime) processBatch(
 	mode Mode, safety *SafetyConfig,
 ) []*TrackedAction {
 	return rt.planAndDispatchBatch(ctx, batch, bl, mode, safety, dispatchBatchOptions{
-		applyDeleteCounter:   true,
-		deduplicateInFlight:  true,
-		runPeriodicPermCheck: true,
-		clearScannerResolved: true,
+		applyDeleteCounter:  true,
+		deduplicateInFlight: true,
 	})
 }
 
 type dispatchBatchOptions struct {
-	applyDeleteCounter   bool
-	deduplicateInFlight  bool
-	runPeriodicPermCheck bool
-	clearScannerResolved bool
-	trialScopeKey        ScopeKey
-	trialPath            string
-	trialDriveID         driveid.ID
+	applyDeleteCounter  bool
+	deduplicateInFlight bool
+	trialScopeKey       ScopeKey
+	trialPath           string
+	trialDriveID        driveid.ID
 }
 
 func (rt *watchRuntime) planAndDispatchBatch(
@@ -48,21 +43,6 @@ func (rt *watchRuntime) planAndDispatchBatch(
 		slog.Int("paths", len(batch)),
 	)
 	rt.engine.collector().RecordWatchBatch(len(batch))
-
-	if opts.runPeriodicPermCheck {
-		rt.periodicPermRecheck(ctx, bl)
-	}
-
-	// R-2.10.10: use scanner output as proof-of-accessibility to clear
-	// permission denials for paths observed in this batch.
-	if opts.clearScannerResolved {
-		rt.scopeController().applyPermissionRecheckDecisions(
-			ctx,
-			rt,
-			rt.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch)),
-		)
-		rt.scopeController().clearResolvedRemoteBlockedFailures(ctx, rt, pathSetFromBatch(batch))
-	}
 
 	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
 	planStart := rt.engine.nowFunc()
@@ -116,32 +96,6 @@ func (rt *watchRuntime) planAndDispatchBatch(
 	}
 
 	return dispatch
-}
-
-// periodicPermRecheck runs permission rechecks at most once per 60 seconds.
-// Throttled to avoid API hammering (R-2.10.9).
-func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *Baseline) {
-	const permRecheckInterval = 60 * time.Second
-
-	now := rt.engine.nowFunc()
-	if now.Sub(rt.lastPermRecheck) < permRecheckInterval {
-		return
-	}
-
-	rt.lastPermRecheck = now
-
-	// recheckPermissions calls the Graph API — skip during outage or
-	// throttle to avoid wasting API calls (R-2.10.30). Local permission
-	// rechecks (filesystem-only) proceed regardless.
-	if rt.engine.permHandler.HasPermChecker() && !rt.scopeController().isObservationSuppressed(rt) {
-		shortcuts, err := rt.engine.baseline.ListShortcuts(ctx)
-		if err == nil {
-			decisions := rt.engine.permHandler.recheckPermissions(ctx, bl, shortcuts)
-			rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
-		}
-	}
-
-	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
 }
 
 // deduplicateInFlight cancels in-flight actions for paths that appear in the
@@ -249,13 +203,7 @@ func (rt *watchRuntime) findTrialActionIndex(plan *ActionPlan, opts dispatchBatc
 		if action.Path != opts.trialPath {
 			continue
 		}
-		if !opts.trialScopeKey.BlocksAction(
-			action.Path,
-			action.ThrottleTargetKey(),
-			action.ShortcutKey(),
-			action.Type,
-			action.TargetsOwnDrive(),
-		) {
+		if !opts.trialScopeKey.BlocksTrackedAction(&TrackedAction{Action: *action}) {
 			continue
 		}
 		return i
@@ -263,13 +211,7 @@ func (rt *watchRuntime) findTrialActionIndex(plan *ActionPlan, opts dispatchBatc
 
 	for i := range plan.Actions {
 		action := &plan.Actions[i]
-		if opts.trialScopeKey.BlocksAction(
-			action.Path,
-			action.ThrottleTargetKey(),
-			action.ShortcutKey(),
-			action.Type,
-			action.TargetsOwnDrive(),
-		) {
+		if opts.trialScopeKey.BlocksTrackedAction(&TrackedAction{Action: *action}) {
 			return i
 		}
 	}

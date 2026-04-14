@@ -869,10 +869,38 @@ func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
 	watchStarted := make(chan struct{})
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, opts syncengine.WatchOptions) error {
 				close(watchStarted)
-				<-ctx.Done()
-				return ctx.Err()
+				for {
+					select {
+					case request := <-opts.MutationRequests:
+						store, err := syncengine.NewSyncStore(ctx, rd.StatePath(), slog.Default())
+						if err != nil {
+							request.Response <- syncengine.WatchMutationResponse{Err: err}
+							continue
+						}
+
+						switch request.Kind {
+						case syncengine.WatchMutationApproveHeldDeletes:
+							err = store.ApproveHeldDeletes(ctx)
+							request.Response <- syncengine.WatchMutationResponse{Err: err}
+						case syncengine.WatchMutationRequestConflictResolution:
+							result, requestErr := store.RequestConflictResolution(ctx, request.ConflictID, request.Resolution)
+							request.Response <- syncengine.WatchMutationResponse{
+								ConflictRequestResult: result,
+								Err:                   requestErr,
+							}
+						default:
+							request.Response <- syncengine.WatchMutationResponse{
+								Err: fmt.Errorf("unknown mutation kind %q", request.Kind),
+							}
+						}
+
+						require.NoError(t, store.Close(ctx))
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
 			},
 		}, nil
 	}

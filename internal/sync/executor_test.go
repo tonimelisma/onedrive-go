@@ -386,6 +386,8 @@ func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeFailure(t, &o)
+	assert.Equal(t, action.Path, o.FailurePath)
+	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability)
 }
 
 // ---------------------------------------------------------------------------
@@ -603,6 +605,8 @@ func TestExecutor_Download_APIError(t *testing.T) {
 
 	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
+	assert.Equal(t, action.Path, o.FailurePath)
+	assert.Equal(t, PermissionCapabilityRemoteRead, o.FailureCapability)
 }
 
 func TestExecutor_Download_ParentDirCreated(t *testing.T) {
@@ -811,6 +815,33 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 
 	assert.Equal(t, "uploaded1", o.ItemID)
 	assert.Equal(t, "root", o.ParentID)
+}
+
+func TestExecutor_Upload_APIError(t *testing.T) {
+	t.Parallel()
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrForbidden
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
+	e := NewExecution(cfg, emptyBaseline())
+
+	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
+
+	action := &Action{
+		Type:    ActionUpload,
+		Path:    "exec-small.txt",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View:    &PathView{Path: "exec-small.txt"},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	assert.Equal(t, action.Path, o.FailurePath)
+	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability)
 }
 
 func TestExecutor_Upload_UsesPathConvergence(t *testing.T) {
@@ -1334,14 +1365,23 @@ func TestExecutor_RemoteDelete_ErrorHandling(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		path      string
-		itemID    string
-		deleteErr error
-		wantOK    bool
+		name                  string
+		path                  string
+		itemID                string
+		deleteErr             error
+		wantOK                bool
+		wantFailurePath       string
+		wantFailureCapability PermissionCapability
 	}{
 		{name: "404IsSuccess", path: "exec-already-deleted.txt", itemID: "item2", deleteErr: graph.ErrNotFound, wantOK: true},
-		{name: "403Skip", path: "exec-forbidden-del.txt", itemID: "item3", deleteErr: graph.ErrForbidden},
+		{
+			name:                  "403Skip",
+			path:                  "exec-forbidden-del.txt",
+			itemID:                "item3",
+			deleteErr:             graph.ErrForbidden,
+			wantFailurePath:       "exec-forbidden-del.txt",
+			wantFailureCapability: PermissionCapabilityRemoteWrite,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1372,6 +1412,8 @@ func TestExecutor_RemoteDelete_ErrorHandling(t *testing.T) {
 			}
 
 			requireOutcomeFailure(t, &o)
+			assert.Equal(t, tt.wantFailurePath, o.FailurePath)
+			assert.Equal(t, tt.wantFailureCapability, o.FailureCapability)
 		})
 	}
 }
@@ -1812,7 +1854,52 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 
-	assert.ErrorIs(t, o.Error, graph.ErrForbidden)
+	require.ErrorIs(t, o.Error, graph.ErrForbidden)
+	assert.Equal(t, action.OldPath, o.FailurePath)
+	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability)
+}
+
+func TestInferFailureCapabilityFromError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		err              error
+		localCapability  PermissionCapability
+		remoteCapability PermissionCapability
+		want             PermissionCapability
+	}{
+		{
+			name:             "wrapped local permission",
+			err:              fmt.Errorf("opening local file: %w", os.ErrPermission),
+			localCapability:  PermissionCapabilityLocalRead,
+			remoteCapability: PermissionCapabilityRemoteWrite,
+			want:             PermissionCapabilityLocalRead,
+		},
+		{
+			name:             "wrapped remote forbidden",
+			err:              fmt.Errorf("uploading remote file: %w", graph.ErrForbidden),
+			localCapability:  PermissionCapabilityLocalRead,
+			remoteCapability: PermissionCapabilityRemoteWrite,
+			want:             PermissionCapabilityRemoteWrite,
+		},
+		{
+			name:             "non permission error",
+			err:              fmt.Errorf("something else"),
+			localCapability:  PermissionCapabilityLocalRead,
+			remoteCapability: PermissionCapabilityRemoteWrite,
+			want:             PermissionCapabilityUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := inferFailureCapabilityFromError(tt.err, tt.localCapability, tt.remoteCapability)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 // Fix 11: Test moveOutcome View field propagation.

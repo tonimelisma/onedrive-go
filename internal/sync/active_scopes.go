@@ -19,17 +19,13 @@ func FindBlockingScope(blocks []ScopeBlock, ta *TrackedAction) ScopeKey {
 		return ScopeKey{}
 	}
 
-	scKey := ta.Action.ShortcutKey()
-	throttleTargetKey := ta.Action.ThrottleTargetKey()
-	targetsOwn := ta.Action.TargetsOwnDrive()
-
 	bestRank := scopePriorityMax
 	bestSpecificity := -1
 	var best ScopeKey
 
 	for i := range blocks {
 		key := blocks[i].Key
-		if !key.BlocksAction(ta.Action.Path, throttleTargetKey, scKey, ta.Action.Type, targetsOwn) {
+		if !key.BlocksTrackedAction(ta) {
 			continue
 		}
 
@@ -173,8 +169,9 @@ const (
 	scopePriorityDiskLocal
 	scopePriorityQuotaOwn
 	scopePriorityQuotaShortcut
-	scopePriorityPermDir
-	scopePriorityPermRemote
+	scopePriorityPermLocalRead
+	scopePriorityPermLocalWrite
+	scopePriorityPermRemoteWrite
 )
 
 const scopePriorityMax = 99
@@ -195,10 +192,12 @@ func scopePriority(key ScopeKey) int {
 		return scopePriorityQuotaOwn
 	case ScopeQuotaShortcut:
 		return scopePriorityQuotaShortcut
-	case ScopePermDir:
-		return scopePriorityPermDir
-	case ScopePermRemote:
-		return scopePriorityPermRemote
+	case ScopePermLocalRead:
+		return scopePriorityPermLocalRead
+	case ScopePermLocalWrite:
+		return scopePriorityPermLocalWrite
+	case ScopePermRemoteWrite:
+		return scopePriorityPermRemoteWrite
 	default:
 		return scopePriorityMax
 	}

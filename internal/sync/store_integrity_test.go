@@ -343,8 +343,8 @@ func seedAuditIntegrityProblems(
 		int64(time.Minute),
 		time.Date(2026, 4, 3, 11, 0, 0, 0, time.UTC).UnixNano(),
 		time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC).UnixNano(),
-		SKPermRemote("Shared/Docs").String(),
-		IssueSharedFolderBlocked,
+		SKPermRemoteWrite("Shared/Docs").String(),
+		IssueRemoteWriteDenied,
 		time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC).UnixNano(),
 	)
 	require.NoError(t, err)
@@ -396,9 +396,9 @@ func seedAuditIntegrityProblems(
 		ActionType: ActionFolderCreate,
 		Role:       FailureRoleBoundary,
 		Category:   CategoryActionable,
-		IssueType:  IssuePermissionDenied,
+		IssueType:  IssueRemoteWriteDenied,
 		ErrMsg:     "legacy remote boundary",
-		ScopeKey:   SKPermRemote("Shared/Docs"),
+		ScopeKey:   SKPermRemoteWrite("Shared/Docs"),
 	})
 }
 
@@ -422,8 +422,8 @@ func seedRepairIntegrityProblems(
 		int64(5*time.Minute),
 		time.Date(2026, 4, 3, 10, 5, 0, 0, time.UTC).UnixNano(),
 		time.Date(2026, 4, 3, 10, 10, 0, 0, time.UTC).UnixNano(),
-		SKPermRemote("Shared/Docs").String(),
-		IssueSharedFolderBlocked,
+		SKPermRemoteWrite("Shared/Docs").String(),
+		IssueRemoteWriteDenied,
 		time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC).UnixNano(),
 	)
 	require.NoError(t, err)
@@ -453,9 +453,9 @@ func seedRepairIntegrityProblems(
 		ActionType: ActionFolderCreate,
 		Role:       FailureRoleBoundary,
 		Category:   CategoryActionable,
-		IssueType:  IssuePermissionDenied,
+		IssueType:  IssueRemoteWriteDenied,
 		ErrMsg:     "legacy remote boundary",
-		ScopeKey:   SKPermRemote("Shared/Docs"),
+		ScopeKey:   SKPermRemoteWrite("Shared/Docs"),
 	})
 	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
 		Path:       "Shared/Docs/draft.txt",
@@ -464,9 +464,9 @@ func seedRepairIntegrityProblems(
 		ActionType: ActionUpload,
 		Role:       FailureRoleHeld,
 		Category:   CategoryTransient,
-		IssueType:  IssueSharedFolderBlocked,
+		IssueType:  IssueRemoteWriteDenied,
 		ErrMsg:     "read-only",
-		ScopeKey:   SKPermRemote("Shared/Docs"),
+		ScopeKey:   SKPermRemoteWrite("Shared/Docs"),
 	})
 }
 

@@ -100,11 +100,11 @@ func TestRemotePermissionRecovery_RedispatchesHeldUploadWithoutNewObservation(t 
 	writeLocalFile(t, syncRoot, blockedPath, "blocked upload payload")
 
 	ctx := t.Context()
-	scopeKey := SKPermRemote(boundaryPath)
+	scopeKey := SKPermRemoteWrite(boundaryPath)
 	recordRemoteBlockedFailure(t, eng, ctx, scopeKey, blockedPath)
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: IssueSharedFolderBlocked,
+		IssueType: IssueRemoteWriteDenied,
 		BlockedAt: eng.nowFn().Add(-time.Minute),
 	})
 

@@ -31,10 +31,11 @@ func describeStatusSummary(key syncengine.SummaryKey) statusSummaryDescriptor {
 	case syncengine.SummaryQuotaExceeded,
 		syncengine.SummaryServiceOutage,
 		syncengine.SummaryRateLimited,
-		syncengine.SummarySharedFolderWritesBlocked,
-		syncengine.SummaryRemotePermissionDenied:
+		syncengine.SummaryRemoteWriteDenied,
+		syncengine.SummaryRemoteReadDenied:
 		return describeRemoteStatusSummary(string(key))
-	case syncengine.SummaryLocalPermissionDenied,
+	case syncengine.SummaryLocalReadDenied,
+		syncengine.SummaryLocalWriteDenied,
 		syncengine.SummaryInvalidFilename,
 		syncengine.SummaryPathTooLong,
 		syncengine.SummaryFileTooLarge,
@@ -88,17 +89,17 @@ func describeRemoteStatusSummary(key string) statusSummaryDescriptor {
 			"OneDrive asked this remote location to slow down.",
 			"Wait for the retry window to expire (automatic retry in progress).",
 		)
-	case string(syncengine.SummarySharedFolderWritesBlocked):
+	case string(syncengine.SummaryRemoteWriteDenied):
 		return newStatusSummaryDescriptor(
 			"SHARED FOLDER WRITES BLOCKED",
 			"This shared folder is read-only for your current write attempts. Downloads continue normally.",
 			"Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",
 		)
-	case string(syncengine.SummaryRemotePermissionDenied):
+	case string(syncengine.SummaryRemoteReadDenied):
 		return newStatusSummaryDescriptor(
-			"PERMISSION DENIED",
-			"You don't have write access to this location.",
-			"Ask the drive owner to grant you edit permissions.",
+			"REMOTE READ BLOCKED",
+			"This remote content can no longer be downloaded with your current permissions.",
+			"Restore access to the shared item, or remove the blocked content from this sync scope.",
 		)
 	default:
 		return newStatusSummaryDescriptor(
@@ -111,11 +112,17 @@ func describeRemoteStatusSummary(key string) statusSummaryDescriptor {
 
 func describeFilesystemStatusSummary(key string) statusSummaryDescriptor {
 	switch key {
-	case string(syncengine.SummaryLocalPermissionDenied):
+	case string(syncengine.SummaryLocalReadDenied):
 		return newStatusSummaryDescriptor(
-			"LOCAL PERMISSION DENIED",
-			"The local directory or file is not accessible.",
-			"Check filesystem permissions (e.g., chmod +r).",
+			"LOCAL READ BLOCKED",
+			"The local source file or directory can no longer be read.",
+			"Restore local read access so uploads and conflict recovery can read the source content.",
+		)
+	case string(syncengine.SummaryLocalWriteDenied):
+		return newStatusSummaryDescriptor(
+			"LOCAL WRITE BLOCKED",
+			"The local destination path can no longer be created, renamed, or updated.",
+			"Restore local write access so downloads and local filesystem updates can complete.",
 		)
 	case string(syncengine.SummaryInvalidFilename):
 		return newStatusSummaryDescriptor(

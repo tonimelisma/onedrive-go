@@ -286,7 +286,7 @@ func TestResolveDeletes_DoesNotFallbackWhenControlProbeIsAmbiguous(t *testing.T)
 }
 
 // Validates: R-2.3.12, R-2.9.3
-func TestResolveConflict_FallsBackToDBIntentWhenWatchSocketPostFails(t *testing.T) {
+func TestResolveConflict_DoesNotFallbackToDBIntentWhenWatchSocketPostFailsButWatchOwnerRemains(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	cid := driveid.MustCanonicalID("personal:watch-disappears@example.com")
 	startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch}, func(w http.ResponseWriter, _ *http.Request) {
@@ -301,6 +301,42 @@ func TestResolveConflict_FallsBackToDBIntentWhenWatchSocketPostFails(t *testing.
 			return
 		}
 		assert.NoError(t, conn.Close())
+	})
+
+	resolver := &stubResolveConflictStore{
+		result: syncengine.ConflictRequestResult{Status: syncengine.ConflictRequestQueued},
+	}
+	cc := &CLIContext{
+		Logger: slog.New(slog.DiscardHandler),
+		Cfg:    &config.ResolvedDrive{CanonicalID: cid},
+	}
+
+	_, err := requestConflictResolution(t.Context(), cc, resolver, "conflict-1", syncengine.ResolutionKeepLocal)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "watch daemon is still active")
+	assert.Zero(t, resolver.requestCalls)
+}
+
+// Validates: R-2.3.12, R-2.9.3
+func TestResolveConflict_FallsBackToDBIntentWhenWatchSocketPostFailsAndSocketDisappears(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cid := driveid.MustCanonicalID("personal:watch-disappears@example.com")
+	socketPath, err := config.ControlSocketPath()
+	require.NoError(t, err)
+
+	startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch}, func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijack unavailable", http.StatusInternalServerError)
+			return
+		}
+		conn, _, hijackErr := hijacker.Hijack()
+		if hijackErr != nil {
+			t.Errorf("hijack control socket connection: %v", hijackErr)
+			return
+		}
+		assert.NoError(t, conn.Close())
+		assert.NoError(t, os.Remove(socketPath))
 	})
 
 	resolver := &stubResolveConflictStore{

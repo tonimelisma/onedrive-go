@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -292,10 +295,12 @@ func (e *Executor) ExecuteFolderCreate(ctx context.Context, action *Action) Acti
 // createLocalFolder creates a directory on the local filesystem.
 func (e *Executor) createLocalFolder(action *Action) ActionOutcome {
 	if err := e.syncTree.MkdirAll(action.Path, localDirPerms); err != nil {
-		return e.failedOutcome(
+		return e.failedOutcomeWithFailure(
 			action,
 			ActionFolderCreate,
 			fmt.Errorf("creating local folder %s: %w", action.Path, normalizeSyncTreePathError(err)),
+			action.Path,
+			PermissionCapabilityLocalWrite,
 		)
 	}
 
@@ -318,11 +323,11 @@ func (e *Executor) createLocalFolder(action *Action) ActionOutcome {
 func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) ActionOutcome {
 	parentID, err := e.ResolveParentID(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, ActionFolderCreate, err)
+		return e.failedOutcomeWithFailure(action, ActionFolderCreate, err, action.Path, PermissionCapabilityUnknown)
 	}
 
 	if waitErr := e.waitRemoteParentVisible(ctx, action); waitErr != nil {
-		return e.failedOutcome(action, ActionFolderCreate, waitErr)
+		return e.failedOutcomeWithFailure(action, ActionFolderCreate, waitErr, action.Path, PermissionCapabilityUnknown)
 	}
 
 	driveID := e.resolveDriveID(action)
@@ -330,7 +335,13 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Actio
 
 	item, err := e.items.CreateFolder(ctx, driveID, parentID, name)
 	if err != nil {
-		return e.failedOutcome(action, ActionFolderCreate, fmt.Errorf("creating remote folder %s: %w", action.Path, err))
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionFolderCreate,
+			fmt.Errorf("creating remote folder %s: %w", action.Path, err),
+			action.Path,
+			inferFailureCapabilityFromError(err, PermissionCapabilityUnknown, PermissionCapabilityRemoteWrite),
+		)
 	}
 
 	e.logger.Debug("created remote folder",
@@ -366,18 +377,22 @@ func (e *Executor) ExecuteMove(ctx context.Context, action *Action) ActionOutcom
 func (e *Executor) ExecuteLocalMove(action *Action) ActionOutcome {
 	// Ensure parent directory exists.
 	if err := e.syncTree.MkdirAll(filepath.Dir(action.Path), localDirPerms); err != nil {
-		return e.failedOutcome(
+		return e.failedOutcomeWithFailure(
 			action,
 			ActionLocalMove,
 			fmt.Errorf("creating parent for move target %s: %w", action.Path, normalizeSyncTreePathError(err)),
+			action.Path,
+			PermissionCapabilityLocalWrite,
 		)
 	}
 
 	if err := e.syncTree.Rename(action.OldPath, action.Path); err != nil {
-		return e.failedOutcome(
+		return e.failedOutcomeWithFailure(
 			action,
 			ActionLocalMove,
 			fmt.Errorf("renaming %s -> %s: %w", action.OldPath, action.Path, normalizeSyncTreePathError(err)),
+			action.OldPath,
+			PermissionCapabilityLocalWrite,
 		)
 	}
 
@@ -392,14 +407,20 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 
 	newParentID, err := e.ResolveParentID(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, ActionRemoteMove, err)
+		return e.failedOutcomeWithFailure(action, ActionRemoteMove, err, action.OldPath, PermissionCapabilityUnknown)
 	}
 
 	newName := filepath.Base(action.Path)
 
 	item, err := e.items.MoveItem(ctx, driveID, action.ItemID, newParentID, newName)
 	if err != nil {
-		return e.failedOutcome(action, ActionRemoteMove, fmt.Errorf("moving %s -> %s: %w", action.OldPath, action.Path, err))
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionRemoteMove,
+			fmt.Errorf("moving %s -> %s: %w", action.OldPath, action.Path, err),
+			action.OldPath,
+			inferFailureCapabilityFromError(err, PermissionCapabilityUnknown, PermissionCapabilityRemoteWrite),
+		)
 	}
 
 	e.logger.Debug("remote move complete",
@@ -620,6 +641,39 @@ func (e *Executor) failedOutcome(action *Action, actionType ActionType, err erro
 		Path:    action.Path,
 		DriveID: e.resolveDriveID(action),
 		ItemID:  action.ItemID,
+	}
+}
+
+func (e *Executor) failedOutcomeWithFailure(
+	action *Action,
+	actionType ActionType,
+	err error,
+	failurePath string,
+	failureCapability PermissionCapability,
+) ActionOutcome {
+	outcome := e.failedOutcome(action, actionType, err)
+	if failurePath != "" {
+		outcome.FailurePath = failurePath
+	}
+	outcome.FailureCapability = failureCapability
+
+	return outcome
+}
+
+func inferFailureCapabilityFromError(
+	err error,
+	localCapability PermissionCapability,
+	remoteCapability PermissionCapability,
+) PermissionCapability {
+	switch {
+	case errors.Is(err, os.ErrPermission):
+		return localCapability
+	case errors.Is(err, graph.ErrForbidden):
+		return remoteCapability
+	case ExtractHTTPStatus(err) == http.StatusForbidden:
+		return remoteCapability
+	default:
+		return PermissionCapabilityUnknown
 	}
 }
 

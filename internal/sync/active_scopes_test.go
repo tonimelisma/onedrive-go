@@ -53,7 +53,7 @@ func TestFindBlockingScope_PermDirPrefixMatch(t *testing.T) {
 	t.Parallel()
 
 	blocks := []ScopeBlock{
-		{Key: SKPermDir("Private"), IssueType: IssueLocalPermissionDenied},
+		{Key: SKPermLocalWrite("Private"), IssueType: IssueLocalWriteDenied},
 	}
 
 	tests := []struct {
@@ -61,8 +61,8 @@ func TestFindBlockingScope_PermDirPrefixMatch(t *testing.T) {
 		path string
 		want ScopeKey
 	}{
-		{name: "exact", path: "Private", want: SKPermDir("Private")},
-		{name: "child", path: "Private/sub/file.txt", want: SKPermDir("Private")},
+		{name: "exact", path: "Private", want: SKPermLocalWrite("Private")},
+		{name: "child", path: "Private/sub/file.txt", want: SKPermLocalWrite("Private")},
 		{name: "prefix mismatch", path: "PrivateExtra/file.txt", want: ScopeKey{}},
 	}
 
@@ -78,9 +78,9 @@ func TestFindBlockingScope_PermDirPrefixMatch(t *testing.T) {
 func TestFindBlockingScope_PermRemote_IsRecursiveDownloadOnly(t *testing.T) {
 	t.Parallel()
 
-	scopeKey := SKPermRemote("Shared/TeamDocs")
+	scopeKey := SKPermRemoteWrite("Shared/TeamDocs")
 	blocks := []ScopeBlock{
-		{Key: scopeKey, IssueType: IssuePermissionDenied},
+		{Key: scopeKey, IssueType: IssueRemoteWriteDenied},
 	}
 
 	tests := []struct {
@@ -146,11 +146,11 @@ func TestFindBlockingScope_QuotaRouting(t *testing.T) {
 func TestFindBlockingScope_PrefersMoreSpecificPermissionBoundary(t *testing.T) {
 	t.Parallel()
 
-	parent := SKPermRemote("Shared")
-	child := SKPermRemote("Shared/TeamDocs")
+	parent := SKPermRemoteWrite("Shared")
+	child := SKPermRemoteWrite("Shared/TeamDocs")
 	blocks := []ScopeBlock{
-		{Key: parent, IssueType: IssuePermissionDenied},
-		{Key: child, IssueType: IssuePermissionDenied},
+		{Key: parent, IssueType: IssueRemoteWriteDenied},
+		{Key: child, IssueType: IssueRemoteWriteDenied},
 	}
 
 	got := FindBlockingScope(blocks, makeTrackedAction(ActionUpload, "Shared/TeamDocs/file.txt"))

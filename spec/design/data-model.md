@@ -122,8 +122,8 @@ Key columns:
 `scope_blocks` is separate from `sync_failures` because scope-level timing state
 and item-level failure state are different entities with different cardinality.
 The watch loop keeps only a rebuildable in-memory working set; durable truth
-remains in SQLite. `perm:remote` is the exception: its scope is derived from
-held blocked-write rows and is not persisted in `scope_blocks`.
+remains in SQLite. `perm:remote-write` is the exception: its scope is derived
+from held blocked-write rows and is not persisted in `scope_blocks`.
 
 `preserve_until` makes preserve semantics durable without inventing duplicate
 held rows. A preserved scope may therefore survive restart even when no

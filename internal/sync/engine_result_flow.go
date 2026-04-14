@@ -415,7 +415,7 @@ func (controller *scopeController) resolvePermissionDecision(
 		if bl == nil || !flow.engine.permHandler.HasPermChecker() {
 			return nil, false
 		}
-		permDecision := flow.engine.permHandler.handle403(ctx, bl, r.Path, r.ActionType, flow.getShortcuts())
+		permDecision := flow.engine.permHandler.handleRemoteWrite403(ctx, bl, r, flow.getShortcuts())
 		return &permDecision, true
 	case permissionFlowLocalPermission:
 		permDecision := flow.engine.permHandler.handleLocalPermission(ctx, r)

@@ -32,9 +32,8 @@ const (
 	// file management from triggering false positives.
 	deleteCounterWindow = 5 * time.Minute
 
-	// recheckInterval is how often the engine checks for external DB
-	// changes (e.g., `resolve deletes` via the CLI). Uses PRAGMA data_version
-	// — one integer comparison per tick, essentially free.
+	// recheckInterval is the cadence for watch-mode maintenance such as
+	// permission rechecks and watch summaries.
 	recheckInterval = 10 * time.Second
 )
 
@@ -54,11 +53,8 @@ const quiescenceLogInterval = 30 * time.Second
 
 // initDeleteProtection sets up the rolling delete counter. Held and approved
 // held-delete rows are durable user intent, so startup must not clear them.
-func (rt *watchRuntime) initDeleteProtection(ctx context.Context) {
+func (rt *watchRuntime) initDeleteProtection() {
 	rt.deleteCounter = NewDeleteCounter(rt.engine.deleteSafetyThreshold, deleteCounterWindow, rt.engine.nowFunc)
-	if dv, dvErr := rt.engine.baseline.DataVersion(ctx); dvErr == nil {
-		rt.lastDataVersion = dv
-	}
 }
 
 // loadWatchState loads the baseline and shortcuts for the watch session.
@@ -184,7 +180,7 @@ type watchPipeline struct {
 	reconcileC       <-chan time.Time
 	reconcileResults <-chan reconcileResult
 	recheckC         <-chan time.Time
-	userIntentC      <-chan struct{}
+	mutationC        <-chan WatchMutationRequest
 	activeObs        int
 	mode             Mode
 	pool             *WorkerPool // for bootstrapSync to access Results()
@@ -218,7 +214,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// changes — see executor_transfer.go).
 	rt.engine.execCfg.SetWatchMode(true)
 
-	rt.initDeleteProtection(ctx)
+	rt.initDeleteProtection()
 
 	// Normalize persisted scope rows before loading runtime scope state.
 	// Startup must not trust stale scope rows blindly; the durable store is
@@ -272,7 +268,7 @@ func (rt *watchRuntime) initWatchInfra(
 		reconcileC:       tickerChan(reconcileTicker),
 		reconcileResults: rt.reconcileResults,
 		recheckC:         tickerChan(recheckTicker),
-		userIntentC:      opts.UserIntentWake,
+		mutationC:        opts.MutationRequests,
 		mode:             mode,
 		pool:             pool,
 	}
@@ -331,11 +327,17 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 	pipe.bl = bl
 
-	// Permission rechecks.
+	// Periodic permission maintenance is the only path that clears permission
+	// blocks and item-level permission failures.
 	if rt.engine.permHandler.HasPermChecker() {
 		shortcuts := rt.getShortcuts()
-		rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckPermissions(ctx, bl, shortcuts))
+		rt.scopeController().applyPermissionRecheckDecisions(
+			ctx,
+			rt,
+			rt.engine.permHandler.recheckRemoteWritePermissions(ctx, bl, shortcuts),
+		)
 	}
+	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckRemoteReadPermissions(ctx))
 	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
 
 	// Observe changes.

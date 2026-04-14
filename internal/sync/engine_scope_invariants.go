@@ -195,10 +195,10 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 
 	for i := range blocks {
 		key := blocks[i].Key
-		if key.IsPermRemote() {
-			return fmt.Errorf("legacy persisted perm:remote scope %s should have been normalized away", key.String())
+		if key.IsPermRemoteWrite() {
+			return fmt.Errorf("persisted remote-write scope %s should not survive startup repair", key.String())
 		}
-		if !key.IsPermDir() {
+		if !key.IsPermLocalRead() && !key.IsPermLocalWrite() {
 			continue
 		}
 		if !facts.boundaryKeys[key] {
