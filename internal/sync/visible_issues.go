@@ -204,10 +204,10 @@ func visibleRemoteBoundaryPath(boundary string) string {
 func buildVisibleIssueSummary(groups []VisibleIssueGroup, retrying int) IssueSummary {
 	counts := make(map[SummaryKey]int)
 	for i := range groups {
-		if groups[i].SummaryKey == "" || groups[i].VisibleCount <= 0 {
+		if groups[i].SummaryKey == "" || groups[i].Count <= 0 {
 			continue
 		}
-		counts[groups[i].SummaryKey] += groups[i].VisibleCount
+		counts[groups[i].SummaryKey] += groups[i].Count
 	}
 
 	summary := IssueSummary{

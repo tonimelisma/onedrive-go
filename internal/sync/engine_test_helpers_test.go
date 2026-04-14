@@ -415,6 +415,18 @@ func runTestTrialDispatch(t *testing.T, eng *testEngine, ctx context.Context) []
 	return testWatchRuntime(t, eng).runTrialDispatch(ctx, bl, SyncBidirectional, safety)
 }
 
+func externalDBChangedForTest(t *testing.T, eng *testEngine, ctx context.Context) bool {
+	t.Helper()
+
+	return testWatchRuntime(t, eng).externalDBChanged(ctx)
+}
+
+func handleExternalChangesForTest(t *testing.T, eng *testEngine, ctx context.Context) {
+	t.Helper()
+
+	testWatchRuntime(t, eng).handleExternalChanges(ctx)
+}
+
 func setTestScopeBlock(t *testing.T, eng *testEngine, block *ScopeBlock) {
 	t.Helper()
 

@@ -239,7 +239,13 @@ func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) Acti
 			return e.DeleteOutcome(action, ActionRemoteDelete)
 		}
 
-		return e.failedOutcome(action, ActionRemoteDelete, fmt.Errorf("deleting remote %s: %w", action.Path, err))
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionRemoteDelete,
+			fmt.Errorf("deleting remote %s: %w", action.Path, err),
+			action.Path,
+			inferFailureCapabilityFromError(err, PermissionCapabilityUnknown, PermissionCapabilityRemoteWrite),
+		)
 	}
 
 	e.logger.Debug("deleted remote item", slog.String("path", action.Path), slog.String("item_id", action.ItemID))

@@ -49,9 +49,24 @@ func SKPermDir(dirPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermDir, Param: dirPath}
 }
 
+// SKPermLocalRead returns the scope key for a local read-denied directory.
+func SKPermLocalRead(dirPath string) ScopeKey {
+	return SKPermDir(dirPath)
+}
+
+// SKPermLocalWrite returns the scope key for a local write-denied directory.
+func SKPermLocalWrite(dirPath string) ScopeKey {
+	return SKPermDir(dirPath)
+}
+
 // SKPermRemote returns the scope key for a remote read-only boundary.
 func SKPermRemote(boundaryPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermRemote, Param: boundaryPath}
+}
+
+// SKPermRemoteWrite returns the scope key for a remote write-denied boundary.
+func SKPermRemoteWrite(boundaryPath string) ScopeKey {
+	return SKPermRemote(boundaryPath)
 }
 
 // IsZero returns true for the zero-value ScopeKey (Kind == 0).
@@ -134,9 +149,24 @@ func (sk ScopeKey) IsPermDir() bool {
 	return sk.Kind == ScopePermDir
 }
 
+// IsPermLocalRead returns true for local read-denied directory scopes.
+func (sk ScopeKey) IsPermLocalRead() bool {
+	return sk.IsPermDir()
+}
+
+// IsPermLocalWrite returns true for local write-denied directory scopes.
+func (sk ScopeKey) IsPermLocalWrite() bool {
+	return sk.IsPermDir()
+}
+
 // IsPermRemote returns true for remote read-only subtree scopes.
 func (sk ScopeKey) IsPermRemote() bool {
 	return sk.Kind == ScopePermRemote
+}
+
+// IsPermRemoteWrite returns true for remote write-denied subtree scopes.
+func (sk ScopeKey) IsPermRemoteWrite() bool {
+	return sk.IsPermRemote()
 }
 
 // DirPath returns the directory path for a ScopePermDir key.

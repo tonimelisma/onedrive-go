@@ -77,10 +77,10 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 	assert.ElementsMatch(t, []IssueGroupCount{
 		{Key: SummaryAuthenticationRequired, Count: 1},
 		{Key: SummaryInvalidFilename, Count: 1},
-		{Key: SummaryRemoteWriteDenied, Count: 1},
+		{Key: SummaryRemoteWriteDenied, Count: 2},
 	}, summary.Groups)
 
 	count, err := mgr.CountVisibleIssues(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 3, count)
+	assert.Equal(t, 4, count)
 }

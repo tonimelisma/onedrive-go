@@ -106,24 +106,26 @@ type ActionPlan struct {
 // ActionOutcome is the result of executing a single action. Self-contained —
 // has everything the SyncStore needs to update the database.
 type ActionOutcome struct {
-	Action          ActionType
-	Success         bool
-	Error           error
-	Path            string
-	OldPath         string // for moves
-	DriveID         driveid.ID
-	ItemID          string // from API response after upload
-	ParentID        string
-	ItemType        ItemType
-	LocalHash       string
-	RemoteHash      string
-	LocalSize       int64
-	LocalSizeKnown  bool
-	RemoteSize      int64
-	RemoteSizeKnown bool
-	LocalMtime      int64 // local mtime at sync time
-	RemoteMtime     int64 // remote mtime at sync time; zero means unknown
-	ETag            string
-	ConflictType    string // ConflictEditDelete etc. (conflicts only)
-	ResolvedBy      string // ResolvedByAuto for auto-resolved conflicts, "" otherwise
+	Action            ActionType
+	Success           bool
+	Error             error
+	Path              string
+	FailurePath       string
+	OldPath           string // for moves
+	DriveID           driveid.ID
+	ItemID            string // from API response after upload
+	ParentID          string
+	ItemType          ItemType
+	FailureCapability PermissionCapability
+	LocalHash         string
+	RemoteHash        string
+	LocalSize         int64
+	LocalSizeKnown    bool
+	RemoteSize        int64
+	RemoteSizeKnown   bool
+	LocalMtime        int64 // local mtime at sync time
+	RemoteMtime       int64 // remote mtime at sync time; zero means unknown
+	ETag              string
+	ConflictType      string // ConflictEditDelete etc. (conflicts only)
+	ResolvedBy        string // ResolvedByAuto for auto-resolved conflicts, "" otherwise
 }

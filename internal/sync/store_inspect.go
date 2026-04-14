@@ -385,16 +385,16 @@ func (b *groupedIssueProjectionBuilder) addGroupedPath(
 	issueType string,
 	scopeKey ScopeKey,
 	path string,
-) bool {
+) {
 	if summaryKey == "" {
-		return false
+		return
 	}
 
 	key := issueGroupKey{summaryKey: summaryKey, scopeKey: scopeKey.String()}
 	if idx, ok := b.groupIndex[key]; ok {
 		b.snapshot.Groups[idx].Paths = append(b.snapshot.Groups[idx].Paths, path)
 		b.snapshot.Groups[idx].Count++
-		return false
+		return
 	}
 
 	b.groupIndex[key] = len(b.snapshot.Groups)
@@ -406,7 +406,6 @@ func (b *groupedIssueProjectionBuilder) addGroupedPath(
 		Paths:            []string{path},
 		Count:            1,
 	})
-	return true
 }
 
 func (b *groupedIssueProjectionBuilder) addScopeOnlyGroup(
@@ -448,9 +447,8 @@ func (b *groupedIssueProjectionBuilder) addRemoteBlocked(rows []SyncFailureRow) 
 	for i := range rows {
 		row := rows[i]
 		summaryKey := SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
-		if b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path) {
-			b.addSummary(summaryKey, row.ScopeKey, row.Role)
-		}
+		b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path)
+		b.addSummary(summaryKey, row.ScopeKey, row.Role)
 	}
 }
 
@@ -560,7 +558,8 @@ func (i *Inspector) listActionableFailures(ctx context.Context) ([]SyncFailureRo
 func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
-		WHERE failure_role = ? AND scope_key LIKE 'perm:remote:%'
+		WHERE failure_role = ?
+			AND (scope_key LIKE 'perm:remote-write:%' OR scope_key LIKE 'perm:remote:%')
 		ORDER BY last_seen_at DESC`,
 		FailureRoleHeld,
 	)
