@@ -93,9 +93,9 @@ func (rt *watchRuntime) warnPhaseWebsocketFallbackIfNeeded(phase ObservationPhas
 		if rt.engine.enableWebsocket {
 			rt.engine.emitDebugEvent(engineDebugEvent{
 				Type: engineDebugEventWebsocketFallback,
-				Note: "sync_paths",
+				Note: "scoped_targets",
 			})
-			rt.engine.logger.Warn("websocket watch is not supported for sync_paths-scoped sessions; falling back to polling",
+			rt.engine.logger.Warn("websocket watch is not supported for scoped-target sessions; falling back to polling",
 				slog.String("drive_id", rt.engine.driveID.String()),
 			)
 		}

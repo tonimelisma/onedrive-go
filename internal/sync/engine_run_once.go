@@ -11,7 +11,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
 
 // RunOnce executes a single sync pass:
@@ -33,7 +32,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		slog.Bool("dry_run", opts.DryRun),
 	)
 
-	bl, followUpChanges, err := e.prepareRunOnceBaseline(ctx, runner)
+	bl, err := e.prepareRunOnceBaseline(ctx, runner)
 	if err != nil {
 		return nil, err
 	}
@@ -46,14 +45,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	if err != nil {
 		return nil, err
 	}
-	// Queued conflict resolutions can materialize a new chosen layout before
-	// the next observer pass. Merge that follow-up view in before planning so
-	// the same run converges instead of re-detecting the just-resolved conflict.
 	changes = mergePathChangeBatches(
 		changes,
-		followUpChanges,
 		runner.collectDueRetryChanges(ctx, pathSetFromBatch(changes)),
-		runner.collectApprovedDeleteChanges(ctx),
 	)
 	e.collector().RecordObserve(len(changes), e.since(observeStart))
 
@@ -70,12 +64,6 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
-	}
-	if !opts.DryRun {
-		plan, err = e.applyOneShotDeleteProtection(ctx, plan)
-		if err != nil {
-			return nil, fmt.Errorf("sync: applying delete safety threshold: %w", err)
-		}
 	}
 	e.collector().RecordPlan(len(plan.Actions), e.since(planStart))
 
@@ -123,20 +111,16 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 func (e *Engine) prepareRunOnceBaseline(
 	ctx context.Context,
 	runner *oneShotRunner,
-) (*Baseline, []PathChanges, error) {
+) (*Baseline, error) {
 	if err := runner.prepareRunOnceState(ctx); err != nil {
-		return nil, nil, err
-	}
-	followUpChanges, processErr := e.processQueuedConflictResolutions(ctx)
-	if processErr != nil {
-		return nil, nil, processErr
+		return nil, err
 	}
 	bl, err := e.baseline.Load(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sync: reloading baseline after queued user intent: %w", err)
+		return nil, fmt.Errorf("sync: loading baseline after startup preparation: %w", err)
 	}
 
-	return bl, followUpChanges, nil
+	return bl, nil
 }
 
 func (e *Engine) completeRunOnceWithoutChanges(
@@ -229,22 +213,15 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 		return fmt.Errorf("sync: loading baseline: %w", err)
 	}
 
-	shortcuts, scErr := flow.shortcutCoordinator().loadShortcutSnapshot(ctx)
-	if scErr != nil {
-		eng.logger.Warn("failed to load shortcuts", slog.String("error", scErr.Error()))
+	// Recheck permissions — clear any permission_denied issues
+	// for folders that have become writable since the last pass.
+	if eng.permHandler.HasPermChecker() {
+		decisions := eng.permHandler.recheckPermissions(ctx, bl)
+		flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, decisions)
 	}
-	flow.setShortcuts(shortcuts)
 
-	// Periodic permission maintenance is the only mechanism that clears
-	// permission-backed issues and scopes.
-	if eng.permHandler.HasPermChecker() && scErr == nil {
-		flow.scopeController().applyPermissionRecheckDecisions(
-			ctx,
-			nil,
-			eng.permHandler.recheckRemoteWritePermissions(ctx, bl, shortcuts),
-		)
-	}
-	flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckRemoteReadPermissions(ctx))
+	// Recheck local permission denials — clear scope blocks for
+	// directories that have become accessible since the last pass (R-2.10.13).
 	flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckLocalPermissions(ctx))
 
 	return nil
@@ -412,14 +389,12 @@ func (flow *engineFlow) observeRemote(ctx context.Context, bl *Baseline) ([]Chan
 func (flow *engineFlow) observeLocal(
 	ctx context.Context,
 	bl *Baseline,
-	scopeSnapshot syncscope.Snapshot,
 ) (ScanResult, error) {
 	eng := flow.engine
 
 	obs := NewLocalObserver(bl, eng.logger, eng.checkWorkers)
 	obs.SetFilterConfig(eng.localFilter)
 	obs.SetObservationRules(eng.localRules)
-	obs.SetScopeSnapshot(scopeSnapshot)
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {
@@ -434,8 +409,7 @@ func (flow *engineFlow) observeLocal(
 //
 // Observations (remote_state rows) are committed immediately. The delta token
 // is returned but NOT committed — the caller must commit it only after the
-// planner approves the changes (prevents delete safety holds from
-// permanently consuming deletion events). Skipped entirely for dry-run.
+// planner approves the changes. Skipped entirely for dry-run.
 //
 // When fullReconcile is true, runs a fresh delta with empty token (enumerates
 // ALL remote items) and detects orphans — baseline entries not in the full
@@ -447,41 +421,33 @@ func (flow *engineFlow) observeChanges(
 	mode Mode,
 	dryRun, fullReconcile bool,
 ) ([]PathChanges, []deferredDeltaToken, error) {
-	scopeSession, observationPlan, err := flow.prepareObservationScope(ctx, watch, mode, fullReconcile)
+	observationSession, observationPlan, err := flow.prepareObservationSession(ctx, mode, fullReconcile)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	remoteEvents, pendingDeltaTokens, err := flow.observeRemoteChanges(
-		ctx, bl, dryRun, &scopeSession, &observationPlan, fullReconcile,
+		ctx, bl, dryRun, &observationSession, &observationPlan, fullReconcile,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
 	observationPlan.Reentry.Pending = false
 
-	finalRemoteEvents, shortcutErr := flow.processCommittedPrimaryBatch(
+	finalRemoteEvents := flow.processCommittedPrimaryBatch(
 		ctx,
 		bl,
 		remoteEvents,
-		scopeSession.Current,
-		scopeSession.Generation,
 		dryRun,
 		fullReconcile,
 	)
-	if shortcutErr != nil {
-		flow.engine.logger.Warn("shortcut processing failed, continuing without shortcut content",
-			slog.String("error", shortcutErr.Error()),
-		)
-		finalRemoteEvents = filterOutShortcuts(remoteEvents)
-	}
 
-	localResult, err := flow.observeLocalChanges(ctx, bl, scopeSession.Current)
+	localResult, err := flow.observeLocalChanges(ctx, watch, bl)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	err = flow.applyScopeState(ctx, dryRun, &scopeSession, &observationPlan)
+	err = flow.applyObservationState(ctx, dryRun, &observationSession, &observationPlan)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -489,7 +455,7 @@ func (flow *engineFlow) observeChanges(
 	buf := NewBuffer(flow.engine.logger)
 	buf.AddAll(finalRemoteEvents)
 	buf.AddAll(localResult.Events)
-	remoteDriftEvents, err := flow.synthesizeRemoteMirrorDrift(ctx, bl, scopeSession.Current)
+	remoteDriftEvents, err := flow.synthesizeRemoteMirrorDrift(ctx, bl)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -498,39 +464,34 @@ func (flow *engineFlow) observeChanges(
 	return buf.FlushImmediate(), pendingDeltaTokens, nil
 }
 
-func (flow *engineFlow) prepareObservationScope(
+func (flow *engineFlow) prepareObservationSession(
 	ctx context.Context,
-	watch *watchRuntime,
 	mode Mode,
 	fullReconcile bool,
-) (ScopeSession, ObservationSessionPlan, error) {
-	scopeSession, err := flow.BuildScopeSession(ctx, watch)
+) (ObservationSession, ObservationSessionPlan, error) {
+	observationSession, err := flow.BuildObservationSession(ctx)
 	if err != nil {
-		return ScopeSession{}, ObservationSessionPlan{}, err
-	}
-
-	if watch != nil {
-		watch.setScopeSnapshot(scopeSession.Current, scopeSession.Generation)
+		return ObservationSession{}, ObservationSessionPlan{}, err
 	}
 
 	observationPlan, err := flow.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
-		Session:       &scopeSession,
+		Session:       &observationSession,
 		SyncMode:      mode,
 		FullReconcile: fullReconcile,
 		Purpose:       observationPlanPurposeOneShot,
 	})
 	if err != nil {
-		return ScopeSession{}, ObservationSessionPlan{}, err
+		return ObservationSession{}, ObservationSessionPlan{}, err
 	}
 
-	return scopeSession, observationPlan, nil
+	return observationSession, observationPlan, nil
 }
 
 func (flow *engineFlow) observeRemoteChanges(
 	ctx context.Context,
 	bl *Baseline,
 	dryRun bool,
-	scopeSession *ScopeSession,
+	observationSession *ObservationSession,
 	observationPlan *ObservationSessionPlan,
 	fullReconcile bool,
 ) ([]ChangeEvent, []deferredDeltaToken, error) {
@@ -557,16 +518,17 @@ func (flow *engineFlow) observeRemoteChanges(
 		fetchResult.deferred = nil
 	}
 
-	scopedRemote := applyRemoteScope(flow.engine.logger, scopeSession.Current, scopeSession.Generation, fetchResult.events)
+	projectedRemote := projectRemoteObservations(flow.engine.logger, fetchResult.events)
 	if err := flow.commitObservedRemoteChanges(
 		ctx,
 		dryRun,
-		scopedRemote.observed,
+		projectedRemote.observed,
 	); err != nil {
 		return nil, nil, err
 	}
 
-	return scopedRemote.emitted, fetchResult.deferred, nil
+	_ = observationSession
+	return projectedRemote.emitted, fetchResult.deferred, nil
 }
 
 func (flow *engineFlow) fetchRemoteChanges(
@@ -600,10 +562,10 @@ func (flow *engineFlow) commitObservedRemoteChanges(
 
 func (flow *engineFlow) observeLocalChanges(
 	ctx context.Context,
+	watch *watchRuntime,
 	bl *Baseline,
-	scopeSnapshot syncscope.Snapshot,
 ) (ScanResult, error) {
-	localResult, err := flow.observeLocal(ctx, bl, scopeSnapshot)
+	localResult, err := flow.observeLocal(ctx, bl)
 	if err != nil {
 		return ScanResult{}, err
 	}
@@ -611,13 +573,20 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.recordSkippedItems(ctx, localResult.Skipped)
 	flow.clearResolvedSkippedItems(ctx, localResult.Skipped)
 
+	pathSet := pathSetFromEvents(localResult.Events)
+	flow.scopeController().applyPermissionRecheckDecisions(
+		ctx,
+		watch,
+		flow.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSet),
+	)
+	flow.scopeController().clearResolvedRemoteBlockedFailures(ctx, watch, pathSet)
+
 	return localResult, nil
 }
 
 func (flow *engineFlow) synthesizeRemoteMirrorDrift(
 	ctx context.Context,
 	bl *Baseline,
-	scopeSnapshot syncscope.Snapshot,
 ) ([]ChangeEvent, error) {
 	rows, err := flow.engine.baseline.ListRemoteState(ctx)
 	if err != nil {
@@ -629,9 +598,6 @@ func (flow *engineFlow) synthesizeRemoteMirrorDrift(
 
 	for i := range rows {
 		row := &rows[i]
-		if row.IsFiltered || scopeSnapshot.ExclusionReason(row.Path) != syncscope.ExclusionNone {
-			continue
-		}
 
 		key := driveid.NewItemKey(row.DriveID, row.ItemID)
 		seenRemote[key] = struct{}{}
@@ -664,7 +630,7 @@ func (flow *engineFlow) synthesizeRemoteMirrorDrift(
 	}
 
 	bl.ForEachPath(func(path string, entry *BaselineEntry) {
-		if entry == nil || scopeSnapshot.ExclusionReason(path) != syncscope.ExclusionNone {
+		if entry == nil {
 			return
 		}
 
@@ -724,9 +690,8 @@ func remoteMirrorDiffers(entry *BaselineEntry, row *RemoteStateRow) bool {
 // Observations (remote_state rows) are committed immediately so the baseline
 // reflects the current remote state. The delta token is NOT committed here —
 // it is returned to the caller, who must commit it only after the planner
-// approves the changes. This prevents delete safety holds from permanently
-// consuming deletion events: if the planner rejects the plan, the token stays
-// at its old position and the next sync replays the same delta window.
+// approves the changes: if the planner rejects the plan, the token stays at
+// its old position and the next sync replays the same delta window.
 //
 // When delta returns 0 events, the token is NOT advanced. The old token
 // still covers the same window — replaying it costs nothing (O(1)). But if
@@ -838,11 +803,9 @@ func (flow *engineFlow) observeAndCommitRemoteFull(ctx context.Context, bl *Base
 	return events, deltaToken, nil
 }
 
-// resolveSafetyConfig returns the appropriate SafetyConfig. The
-// planner-level delete threshold is disabled here (threshold=MaxInt32) because
-// the engine owns durable delete-safety holds and approvals.
+// resolveSafetyConfig returns the planner safety settings for a run-once pass.
+// Batch delete protection is disabled; only per-item executor-time safety
+// checks remain.
 func (e *Engine) resolveSafetyConfig() *SafetyConfig {
-	return &SafetyConfig{
-		DeleteSafetyThreshold: plannerSafetyMax,
-	}
+	return &SafetyConfig{}
 }

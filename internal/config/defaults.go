@@ -10,16 +10,14 @@ import (
 // of the four-layer override chain and are chosen to be safe, reasonable
 // starting points that work for most users without any config file.
 const (
-	defaultIgnoreMarker          = ".odignore"
-	defaultTransferWorkers       = 8
-	defaultCheckWorkers          = 4
-	defaultDeleteSafetyThreshold = 1000
-	defaultMinFreeSpace          = "1GB"
-	defaultPollInterval          = "5m"
-	defaultSafetyScanInterval    = "5m"
-	defaultLogLevel              = "info"
-	defaultLogFormat             = "auto"
-	defaultLogRetentionDays      = 30
+	defaultTransferWorkers    = 8
+	defaultCheckWorkers       = 4
+	defaultMinFreeSpace       = "1GB"
+	defaultPollInterval       = "5m"
+	defaultSafetyScanInterval = "5m"
+	defaultLogLevel           = "info"
+	defaultLogFormat          = "auto"
+	defaultLogRetentionDays   = 30
 )
 
 // DefaultConfig returns a Config populated with all default values.
@@ -27,20 +25,11 @@ const (
 // fields retain defaults) and as the fallback when no config file exists.
 func DefaultConfig() *Config {
 	return &Config{
-		FilterConfig:    defaultFilterConfig(),
 		TransfersConfig: defaultTransfersConfig(),
 		SafetyConfig:    defaultSafetyConfig(),
 		SyncConfig:      defaultSyncConfig(),
 		LoggingConfig:   defaultLoggingConfig(),
 		Drives:          make(map[driveid.CanonicalID]Drive),
-	}
-}
-
-func defaultFilterConfig() FilterConfig {
-	return FilterConfig{
-		SkipDotfiles: false,
-		SkipSymlinks: false,
-		IgnoreMarker: defaultIgnoreMarker,
 	}
 }
 
@@ -53,9 +42,8 @@ func defaultTransfersConfig() TransfersConfig {
 
 func defaultSafetyConfig() SafetyConfig {
 	return SafetyConfig{
-		DeleteSafetyThreshold: defaultDeleteSafetyThreshold,
-		MinFreeSpace:          defaultMinFreeSpace,
-		UseLocalTrash:         defaultUseLocalTrash(),
+		MinFreeSpace:  defaultMinFreeSpace,
+		UseLocalTrash: defaultUseLocalTrash(),
 	}
 }
 

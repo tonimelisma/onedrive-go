@@ -318,7 +318,6 @@ able to scan this table and place every top-level code area.
 | `internal/sharedref` | Shared item selector parsing/formatting | You are working on shared links or shared item targeting |
 | `internal/sync` | Single-drive sync engine, observation, planning, execution, store, repair, and raw issue/status facts | You are changing sync behavior |
 | `internal/synccontrol` | JSON-over-HTTP Unix-socket protocol shared by CLI and multisync owner | You are changing daemon/control-socket communication |
-| `internal/syncscope` | Configured sync scope normalization and ignore-marker projection | You are changing sync path filtering or effective scope calculation |
 | `internal/synctest` | Shared sync-package test helpers | You are writing sync-adjacent tests |
 | `internal/synctree` | Rooted filesystem capability for sync-runtime operations under one sync root | You are changing sync-local filesystem interaction |
 | `internal/syncverify` | Re-hash local files against the persisted baseline | You are changing baseline verification or recover/state-audit behavior |
@@ -355,8 +354,8 @@ organized by file families.
 | `drive*.go` | Drive add/list/search/remove and drive selection flows |
 | `get*.go`, `put*.go`, `ls.go`, `rm.go`, `mkdir.go`, `mv.go`, `cp.go`, `stat.go` | User-facing file commands |
 | `shared*.go` | Shared item discovery, selection, and shared-target bootstrap |
-| `sync*.go`, `resolve*.go`, `recover*.go`, `control_client.go` | Sync command wiring, daemon/control-socket interaction, and durable user-intent workflows |
-| `status*.go`, `resolve*.go`, `recover*.go`, `recycle_bin*.go`, `perf.go` | Read-only status snapshot assembly, final issue rendering, repair, resolution, recycle-bin, and perf surfaces |
+| `sync*.go`, `recover*.go`, `control_client.go` | Sync command wiring, daemon/control-socket interaction, and recovery workflows |
+| `status*.go`, `recover*.go`, `recycle_bin*.go`, `perf.go` | Read-only status snapshot assembly, final issue rendering, repair, recycle-bin, and perf surfaces |
 | `degraded_discovery.go` | CLI-owned degraded discovery behavior and presentation |
 
 The right way to read `internal/cli` is by command family, not by filename
@@ -414,12 +413,12 @@ when you treat it as several file families sharing one single-drive owner.
 | --- | --- |
 | `observer_*`, `scanner.go`, `item_converter.go`, `socketio*`, `buffer.go`, `local_hash_reuse.go` | Observation: remote and local change capture plus dedupe/buffering |
 | `planner*.go`, `single_path.go`, `actions.go` | Pure planning: turn observed change plus baseline into deterministic actions |
-| `executor*.go`, `worker*.go`, `dep_graph.go`, `active_scopes.go`, `delete_counter.go` | Execution: worker dispatch, dependency ordering, scope admission, big-delete safety |
+| `executor*.go`, `worker*.go`, `dep_graph.go`, `active_scopes.go` | Execution: worker dispatch, dependency ordering, scope admission, and conflict-safe file application |
 | `engine*.go`, `permissions*.go`, `scope*.go`, `debug_event_sink.go` | Runtime orchestration, watch behavior, policy control, permission boundaries, lifecycle |
 | `store*.go`, `schema.go`, `tx.go`, `db_repair.go` | Durable SQLite state, projection helpers, migrations, repair, and recovery |
 | `summary_keys.go`, `visible_issues.go`, `issue_types.go`, `failure_messages.go` | Shared issue classification, summary keys, and raw read-only issue facts consumed by the CLI |
 | `core_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go` | Common sync-domain vocabulary |
-| `inotify_*`, `symlink_observation.go`, `shortcuts.go` | Platform or feature-specific observation/runtime helpers |
+| `inotify_*`, `symlink_observation.go`, `engine_scoped_root.go` | Platform or feature-specific observation/runtime helpers |
 
 If you are debugging sync behavior, first decide which stage owns the problem:
 
@@ -460,7 +459,7 @@ A new developer should know where truth lives before changing any behavior.
 | Per-drive sync state | `internal/sync` SQLite DB | One DB per drive |
 | Remote observation mirror | `remote_state` table | Latest observed remote truth |
 | Confirmed synced state | `baseline` table | Shared local/remote agreement |
-| Durable sync issues | `sync_failures`, `scope_blocks`, conflicts, held deletes | Sync recovery and user-intent surfaces |
+| Durable sync issues | `sync_failures`, `scope_blocks` | Sync recovery and restart-safe failure state |
 | Log files | `internal/logfile` | Durable operational history, not authoritative state |
 | Perf live snapshots/captures | `internal/perf` | Live or explicit capture surfaces, not a second persistent DB |
 

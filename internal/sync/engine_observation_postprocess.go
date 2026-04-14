@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
 
 type fatalObserverError struct {
@@ -38,66 +36,27 @@ func (flow *engineFlow) processCommittedPrimaryBatch(
 	ctx context.Context,
 	bl *Baseline,
 	primaryEvents []ChangeEvent,
-	snapshot syncscope.Snapshot,
-	generation int64,
 	dryRun bool,
 	fullReconcile bool,
-) ([]ChangeEvent, error) {
-	visiblePrimary := filterOutShortcuts(append([]ChangeEvent(nil), primaryEvents...))
-	if dryRun {
-		return visiblePrimary, nil
-	}
+) []ChangeEvent {
+	_ = ctx
+	_ = bl
+	_ = dryRun
+	_ = fullReconcile
 
-	mutations, err := flow.shortcutCoordinator().applyShortcutBatchMutations(ctx, primaryEvents)
-	if err != nil {
-		return nil, err
-	}
-	visiblePrimary = mutations.VisiblePrimary
-	if !mutations.SnapshotDirty && !fullReconcile {
-		return visiblePrimary, nil
-	}
-
-	shortcuts, err := flow.shortcutCoordinator().loadShortcutSnapshot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	flow.setShortcuts(shortcuts)
-
-	if flow.scopeController().isObservationSuppressed(flow.watch) {
-		flow.engine.logger.Debug("suppressing shortcut observation — global scope block active")
-		return visiblePrimary, nil
-	}
-
-	suppressedShortcutTargets := flow.scopeController().suppressedShortcutTargets(flow.watch)
-	shortcutEvents, err := flow.shortcutCoordinator().observeShortcutFollowUp(
-		ctx,
-		shortcuts,
-		bl,
-		fullReconcile,
-		nil,
-		suppressedShortcutTargets,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	filteredShortcuts := applyRemoteScope(flow.engine.logger, snapshot, generation, shortcutEvents).emitted
-	return append(visiblePrimary, filteredShortcuts...), nil
+	return append([]ChangeEvent(nil), primaryEvents...)
 }
 
 func (rt *watchRuntime) processCommittedScopedWatchBatch(
 	ctx context.Context,
 	bl *Baseline,
 	result remoteFetchResult,
-	fullReconcile bool,
 ) ([]ChangeEvent, bool) {
-	scopeSnapshot := rt.currentScopeSnapshot()
-	scopeGeneration := rt.currentScopeGeneration()
-	scoped := applyRemoteScope(rt.engine.logger, scopeSnapshot, scopeGeneration, result.events)
+	projected := projectRemoteObservations(rt.engine.logger, result.events)
 
-	if len(scoped.observed) > 0 {
-		if err := rt.commitObservedItems(ctx, scoped.observed, ""); err != nil {
-			rt.logCommittedScopedBatchFailure("commit observations", err, len(scoped.observed))
+	if len(projected.observed) > 0 {
+		if err := rt.commitObservedItems(ctx, projected.observed, ""); err != nil {
+			rt.logCommittedScopedBatchFailure("commit observations", err, len(projected.observed))
 			return nil, false
 		}
 	}
@@ -107,19 +66,13 @@ func (rt *watchRuntime) processCommittedScopedWatchBatch(
 		return nil, false
 	}
 
-	finalEvents, err := rt.processCommittedPrimaryBatch(
+	finalEvents := rt.processCommittedPrimaryBatch(
 		ctx,
 		bl,
-		scoped.emitted,
-		scopeSnapshot,
-		scopeGeneration,
+		projected.emitted,
 		false,
-		fullReconcile,
+		false,
 	)
-	if err != nil {
-		rt.logCommittedPrimaryBatchFailure(err, fullReconcile)
-		return filterOutShortcuts(scoped.emitted), true
-	}
 
 	return finalEvents, true
 }
@@ -130,11 +83,9 @@ func (rt *watchRuntime) processCommittedPrimaryWatchBatch(
 	primaryEvents []ChangeEvent,
 	newToken string,
 ) ([]ChangeEvent, error) {
-	scopeSnapshot := rt.currentScopeSnapshot()
-	scopeGeneration := rt.currentScopeGeneration()
-	scoped := applyRemoteScope(rt.engine.logger, scopeSnapshot, scopeGeneration, primaryEvents)
+	projected := projectRemoteObservations(rt.engine.logger, primaryEvents)
 
-	if err := rt.commitObservedItems(ctx, scoped.observed, newToken); err != nil {
+	if err := rt.commitObservedItems(ctx, projected.observed, newToken); err != nil {
 		if ctx.Err() != nil {
 			return nil, err
 		}
@@ -142,21 +93,13 @@ func (rt *watchRuntime) processCommittedPrimaryWatchBatch(
 		return nil, newFatalObserverError(fmt.Errorf("commit primary watch observations: %w", err))
 	}
 
-	finalEvents, err := rt.processCommittedPrimaryBatch(
+	finalEvents := rt.processCommittedPrimaryBatch(
 		ctx,
 		bl,
-		scoped.emitted,
-		scopeSnapshot,
-		scopeGeneration,
+		projected.emitted,
 		false,
 		false,
 	)
-	if err != nil {
-		rt.engine.logger.Warn("shortcut processing failed during remote watch batch",
-			slog.String("error", err.Error()),
-		)
-		return filterOutShortcuts(scoped.emitted), nil
-	}
 
 	return finalEvents, nil
 }
@@ -168,13 +111,4 @@ func (rt *watchRuntime) logCommittedScopedBatchFailure(step string, err error, e
 	}
 
 	rt.engine.logger.Error(fmt.Sprintf("failed to %s for scoped watch batch", step), attrs...)
-}
-
-func (rt *watchRuntime) logCommittedPrimaryBatchFailure(err error, fullReconcile bool) {
-	message := "shortcut processing failed during scoped watch batch"
-	if fullReconcile {
-		message = "shortcut reconciliation failed during full reconciliation"
-	}
-
-	rt.engine.logger.Warn(message, slog.String("error", err.Error()))
 }

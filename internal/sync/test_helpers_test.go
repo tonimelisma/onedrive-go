@@ -108,7 +108,7 @@ func mustOpenSyncTree(t *testing.T, path string) *synctree.Root {
 }
 
 // newTestManager creates a SyncStore backed by a temp directory for use in
-// engine tests that need database access (shortcut storage, etc.).
+// engine tests that need database access (shared storage, etc.).
 func newTestManager(t *testing.T) *SyncStore {
 	t.Helper()
 

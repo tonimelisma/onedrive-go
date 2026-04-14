@@ -7,14 +7,6 @@ import (
 	"log/slog"
 )
 
-// ReadStatusSnapshot opens a read-only inspector for one status projection and
-// closes it before returning so callers do not own inspector lifecycle.
-func ReadStatusSnapshot(ctx context.Context, dbPath string, logger *slog.Logger) (StatusSnapshot, error) {
-	return readWithInspector(dbPath, logger, func(inspector *Inspector) (StatusSnapshot, error) {
-		return inspector.ReadStatusSnapshot(ctx), nil
-	})
-}
-
 // ReadDriveStatusSnapshot opens a read-only inspector for one per-drive status
 // projection and closes it before returning so callers do not own inspector
 // lifecycle.
@@ -26,18 +18,6 @@ func ReadDriveStatusSnapshot(
 ) (DriveStatusSnapshot, error) {
 	return readWithInspector(dbPath, logger, func(inspector *Inspector) (DriveStatusSnapshot, error) {
 		return inspector.ReadDriveStatusSnapshot(ctx, history)
-	})
-}
-
-// ReadDurableIntentCounts opens a read-only inspector for one durable-intent
-// count projection and closes it before returning.
-func ReadDurableIntentCounts(
-	ctx context.Context,
-	dbPath string,
-	logger *slog.Logger,
-) (DurableIntentCounts, error) {
-	return readWithInspector(dbPath, logger, func(inspector *Inspector) (DurableIntentCounts, error) {
-		return inspector.ReadDurableIntentCounts(ctx)
 	})
 }
 

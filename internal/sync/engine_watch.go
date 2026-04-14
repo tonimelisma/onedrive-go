@@ -8,7 +8,6 @@ import (
 	stdsync "sync"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -26,14 +25,9 @@ const (
 	// mode. Large enough for typical batches without blocking workers.
 	watchResultBuf = 4096
 
-	// deleteCounterWindow is the rolling time window for the watch-mode
-	// delete safety counter. Deletes within this window accumulate toward
-	// the threshold. Expired entries drop off, preventing normal sustained
-	// file management from triggering false positives.
-	deleteCounterWindow = 5 * time.Minute
-
-	// recheckInterval is the cadence for watch-mode maintenance such as
-	// permission rechecks and watch summaries.
+	// recheckInterval is how often the engine checks for external DB
+	// changes from other SQLite connections. Uses PRAGMA data_version
+	// — one integer comparison per tick, essentially free.
 	recheckInterval = 10 * time.Second
 )
 
@@ -51,29 +45,20 @@ const minReconcileInterval = 15 * time.Minute
 // for in-flight actions to complete.
 const quiescenceLogInterval = 30 * time.Second
 
-// initDeleteProtection sets up the rolling delete counter. Held and approved
-// held-delete rows are durable user intent, so startup must not clear them.
-func (rt *watchRuntime) initDeleteProtection() {
-	rt.deleteCounter = NewDeleteCounter(rt.engine.deleteSafetyThreshold, deleteCounterWindow, rt.engine.nowFunc)
+// initRecheckState seeds the cross-connection change detector used by watch
+// recheck ticks.
+func (rt *watchRuntime) initRecheckState(ctx context.Context) {
+	if dv, dvErr := rt.engine.baseline.DataVersion(ctx); dvErr == nil {
+		rt.lastDataVersion = dv
+	}
 }
 
-// loadWatchState loads the baseline and shortcuts for the watch session.
-// Both are loaded once after the initial sync. Baseline is live-mutated
-// under RWMutex; shortcuts are updated via setShortcuts when they change.
+// loadWatchState loads the baseline for the watch session.
 func (rt *watchRuntime) loadWatchState(ctx context.Context) error {
 	_, err := rt.engine.baseline.Load(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: loading baseline for watch: %w", err)
 	}
-
-	shortcuts, scErr := rt.shortcutCoordinator().loadShortcutSnapshot(ctx)
-	if scErr != nil {
-		rt.engine.logger.Warn("failed to load shortcuts for watch mode",
-			slog.String("error", scErr.Error()),
-		)
-	}
-
-	rt.setShortcuts(shortcuts)
 
 	return nil
 }
@@ -148,11 +133,10 @@ func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) err
 	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
-	errs, activeObs, skippedCh, scopeChanges := rt.startObservers(ctx, pipe.bl, rt.buf, opts)
+	errs, activeObs, skippedCh := rt.startObservers(ctx, pipe.bl, rt.buf, opts)
 	pipe.errs = errs
 	pipe.activeObs = activeObs
 	pipe.skippedCh = skippedCh
-	pipe.scopeChanges = scopeChanges
 
 	// Step 4: Run the watch loop.
 	return rt.runWatchLoop(ctx, pipe)
@@ -176,11 +160,9 @@ type watchPipeline struct {
 	results          <-chan WorkerResult
 	errs             <-chan error
 	skippedCh        <-chan []SkippedItem
-	scopeChanges     <-chan syncscope.Change
 	reconcileC       <-chan time.Time
 	reconcileResults <-chan reconcileResult
 	recheckC         <-chan time.Time
-	mutationC        <-chan WatchMutationRequest
 	activeObs        int
 	mode             Mode
 	pool             *WorkerPool // for bootstrapSync to access Results()
@@ -214,7 +196,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// changes — see executor_transfer.go).
 	rt.engine.execCfg.SetWatchMode(true)
 
-	rt.initDeleteProtection()
+	rt.initRecheckState(ctx)
 
 	// Normalize persisted scope rows before loading runtime scope state.
 	// Startup must not trust stale scope rows blindly; the durable store is
@@ -268,7 +250,6 @@ func (rt *watchRuntime) initWatchInfra(
 		reconcileC:       tickerChan(reconcileTicker),
 		reconcileResults: rt.reconcileResults,
 		recheckC:         tickerChan(recheckTicker),
-		mutationC:        opts.MutationRequests,
 		mode:             mode,
 		pool:             pool,
 	}
@@ -314,30 +295,20 @@ func (rt *watchRuntime) initWatchInfra(
 func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watchPipeline) error {
 	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 
-	// Load baseline + shortcuts.
+	// Load baseline for watch startup.
 	if err := rt.loadWatchState(ctx); err != nil {
 		return err
 	}
-	if _, processErr := rt.engine.processQueuedConflictResolutions(ctx); processErr != nil {
-		return processErr
-	}
 	bl, err := rt.engine.baseline.Load(ctx)
 	if err != nil {
-		return fmt.Errorf("sync: reloading baseline after queued user intent: %w", err)
+		return fmt.Errorf("sync: reloading baseline after watch startup: %w", err)
 	}
 	pipe.bl = bl
 
-	// Periodic permission maintenance is the only path that clears permission
-	// blocks and item-level permission failures.
+	// Permission rechecks.
 	if rt.engine.permHandler.HasPermChecker() {
-		shortcuts := rt.getShortcuts()
-		rt.scopeController().applyPermissionRecheckDecisions(
-			ctx,
-			rt,
-			rt.engine.permHandler.recheckRemoteWritePermissions(ctx, bl, shortcuts),
-		)
+		rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckPermissions(ctx, bl))
 	}
-	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckRemoteReadPermissions(ctx))
 	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
 
 	// Observe changes.
@@ -345,8 +316,6 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
-	changes = mergePathChangeBatches(changes, rt.collectApprovedDeleteChanges(ctx))
-
 	if len(changes) == 0 {
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 		rt.engine.logger.Info("bootstrap sync complete: no changes detected")
@@ -354,8 +323,6 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 
 	// Commit the deferred delta token before dispatching bootstrap actions.
-	// Bootstrap uses watch-mode delete safety (rolling counter), not planner-level
-	// threshold, so the token is always safe to commit here.
 	if err := rt.commitDeferredDeltaTokens(ctx, pendingTokens); err != nil {
 		return err
 	}
@@ -380,7 +347,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 // when all observers exit, allowing the bridge goroutine to drain cleanly.
 func (rt *watchRuntime) startObservers(
 	ctx context.Context, bl *Baseline, buf *Buffer, opts WatchOptions,
-) (<-chan error, int, <-chan []SkippedItem, <-chan syncscope.Change) {
+) (<-chan error, int, <-chan []SkippedItem) {
 	events := make(chan ChangeEvent, watchEventBuf)
 	errs := make(chan error, 2)
 
@@ -404,8 +371,6 @@ func (rt *watchRuntime) startObservers(
 	localObs.SetObservationRules(rt.engine.localRules)
 	localObs.SetSafetyScanInterval(opts.SafetyScanInterval)
 	localObs.SetSkippedChannel(skippedCh)
-	localObs.SetScopeSnapshot(rt.currentScopeSnapshot())
-	localObs.SetScopeChangeChannel(rt.scopeChanges)
 
 	if rt.engine.localWatcherFactory != nil {
 		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
@@ -440,7 +405,7 @@ func (rt *watchRuntime) startObservers(
 
 	rt.closeWatchEventsWhenObserversExit(&obsWg, events)
 
-	return errs, count, skippedCh, rt.scopeChanges
+	return errs, count, skippedCh
 }
 
 func (rt *watchRuntime) startRemoteObserver(
@@ -452,9 +417,8 @@ func (rt *watchRuntime) startRemoteObserver(
 	opts WatchOptions,
 ) {
 	pollInterval := rt.engine.resolvePollInterval(opts)
-	session := ScopeSession{
-		Current:    rt.currentScopeSnapshot(),
-		Generation: rt.currentScopeGeneration(),
+	session := ObservationSession{
+		Generation: 1,
 	}
 	plan, err := rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
 		Session:  &session,

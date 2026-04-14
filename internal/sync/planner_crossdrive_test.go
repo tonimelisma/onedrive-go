@@ -237,19 +237,19 @@ func TestPlan_CrossDriveLocalMove_DecomposesToDeleteAndUpload(t *testing.T) {
 func TestPlan_LocalUploadUnderShortcutAncestor_HasTargetRootMetadata(t *testing.T) {
 	t.Parallel()
 
-	shortcutDriveID := driveid.New("driveB")
+	sharedDriveID := driveid.New("driveB")
 	planner := NewPlanner(synctest.TestLogger(t))
 
 	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "shortcut", DriveID: shortcutDriveID, ItemID: "shortcut-root-id", ItemType: ItemTypeFolder},
+		{Path: "shared", DriveID: sharedDriveID, ItemID: "shared-root-id", ItemType: ItemTypeFolder},
 	})
 
 	changes := []PathChanges{{
-		Path: "shortcut/new-file.txt",
+		Path: "shared/new-file.txt",
 		LocalEvents: []ChangeEvent{{
 			Source:   SourceLocal,
 			Type:     ChangeCreate,
-			Path:     "shortcut/new-file.txt",
+			Path:     "shared/new-file.txt",
 			ItemType: ItemTypeFile,
 			Name:     "new-file.txt",
 			Hash:     "hash1",
@@ -262,9 +262,9 @@ func TestPlan_LocalUploadUnderShortcutAncestor_HasTargetRootMetadata(t *testing.
 
 	action := plan.Actions[0]
 	assert.Equal(t, ActionUpload, action.Type)
-	assert.Equal(t, shortcutDriveID, action.TargetDriveID)
-	assert.Equal(t, "shortcut-root-id", action.TargetRootItemID)
-	assert.Equal(t, "shortcut", action.TargetRootLocalPath)
+	assert.Equal(t, sharedDriveID, action.TargetDriveID)
+	assert.Equal(t, "shared-root-id", action.TargetRootItemID)
+	assert.Equal(t, "shared", action.TargetRootLocalPath)
 }
 
 // Validates: R-6.7.21

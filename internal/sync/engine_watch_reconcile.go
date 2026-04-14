@@ -7,29 +7,103 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
 
-// handleRecheckTick processes the watch maintenance tick. Periodic permission
-// rechecks are the only mechanism allowed to clear permission blocks or
-// item-level permission failures; this tick also drives watch summaries.
+// externalDBChanged checks whether another process (e.g., the CLI) wrote to
+// the database since the last check. Uses PRAGMA data_version — changes every
+// time another connection commits a write. The engine's own writes don't
+// change it. Returns true if the version advanced.
+func (rt *watchRuntime) externalDBChanged(ctx context.Context) bool {
+	dv, err := rt.engine.baseline.DataVersion(ctx)
+	if err != nil {
+		rt.engine.logger.Warn("failed to check data_version",
+			slog.String("error", err.Error()),
+		)
+
+		return false
+	}
+
+	if dv == rt.lastDataVersion {
+		return false
+	}
+
+	rt.lastDataVersion = dv
+
+	return true
+}
+
+// handleRecheckTick processes a recheck timer tick: detects external DB
+// changes and logs a watch summary.
 func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
-	bl, err := rt.engine.baseline.Load(ctx)
-	if err == nil {
-		if rt.engine.permHandler.HasPermChecker() && !rt.scopeController().isObservationSuppressed(rt) {
-			shortcuts := rt.getShortcuts()
-			rt.scopeController().applyPermissionRecheckDecisions(
-				ctx,
-				rt,
-				rt.engine.permHandler.recheckRemoteWritePermissions(ctx, bl, shortcuts),
+	if rt.externalDBChanged(ctx) {
+		rt.handleExternalChanges(ctx)
+	}
+
+	rt.logWatchSummary(ctx)
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRecheckTickHandled})
+}
+
+// handleExternalChanges reacts to external DB modifications detected via
+// PRAGMA data_version.
+func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
+	rt.clearResolvedPermissionScopes(ctx)
+	rt.mustAssertInvariants(ctx, rt, "handle external changes")
+}
+
+// clearResolvedPermissionScopes checks if any permission scope blocks have had
+// their sync_failures cleared externally and releases the corresponding scope
+// blocks.
+func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
+	scopeKeys := rt.scopeController().scopeBlockKeys(rt)
+	if len(scopeKeys) == 0 {
+		return
+	}
+
+	localIssues, err := rt.engine.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	if err != nil {
+		rt.engine.logger.Warn("failed to check local permission failures",
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	remoteIssues, err := rt.engine.baseline.ListRemoteBlockedFailures(ctx)
+	if err != nil {
+		rt.engine.logger.Warn("failed to check remote permission failures",
+			slog.String("error", err.Error()),
+		)
+
+		return
+	}
+
+	activeScopes := make(map[ScopeKey]bool, len(localIssues)+len(remoteIssues))
+	for i := range localIssues {
+		if localIssues[i].ScopeKey.IsPermDir() {
+			activeScopes[localIssues[i].ScopeKey] = true
+		}
+	}
+	for i := range remoteIssues {
+		if remoteIssues[i].ScopeKey.IsPermRemote() {
+			activeScopes[remoteIssues[i].ScopeKey] = true
+		}
+	}
+
+	for _, key := range scopeKeys {
+		if (key.IsPermDir() || key.IsPermRemote()) && !activeScopes[key] {
+			if err := rt.scopeController().releaseScope(ctx, rt, key); err != nil {
+				rt.engine.logger.Warn("failed to release externally-cleared permission scope",
+					slog.String("scope", key.String()),
+					slog.String("error", err.Error()),
+				)
+				continue
+			}
+
+			rt.engine.logger.Info("permission scope block cleared by user",
+				slog.String("scope", key.String()),
 			)
 		}
 	}
-	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckRemoteReadPermissions(ctx))
-	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
-	rt.logWatchSummary(ctx)
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRecheckTickHandled})
 }
 
 // logWatchSummary logs a periodic one-liner summary of actionable issues
@@ -77,7 +151,7 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []VisibleIssueGroup) {
 
 	for i := range groups {
 		group := groups[i]
-		if group.RemoteBlocked == nil || !group.ScopeKey.IsPermRemoteWrite() {
+		if group.RemoteBlocked == nil || !group.ScopeKey.IsPermRemote() {
 			continue
 		}
 
@@ -272,8 +346,8 @@ func (e *Engine) initReconcileTicker(opts WatchOptions) syncTicker {
 // runFullReconciliationAsync spawns a goroutine for full delta enumeration +
 // orphan detection. Non-blocking — the watch loop continues processing events
 // while reconciliation runs. The goroutine sends a reconcileResult back to the
-// watch loop, and the loop applies shortcut snapshot updates plus buffer
-// injection from its own goroutine.
+// watch loop, and the loop feeds the returned events into its buffer from its
+// own goroutine.
 func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *Baseline) {
 	if rt.reconcileActive {
 		rt.engine.logger.Info("full reconciliation skipped — previous still running")
@@ -299,9 +373,7 @@ func (rt *watchRuntime) performFullReconciliation(
 
 	rt.engine.logger.Info("periodic full reconciliation starting")
 
-	scopeSnapshot := rt.currentScopeSnapshot()
-	scopeGeneration := rt.currentScopeGeneration()
-	plan, err := rt.buildFullReconciliationPlan(ctx, scopeSnapshot, scopeGeneration)
+	plan, err := rt.buildFullReconciliationPlan(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			rt.engine.logger.Error("full reconciliation planning failed",
@@ -311,7 +383,7 @@ func (rt *watchRuntime) performFullReconciliation(
 		return result
 	}
 
-	scopedPrimary, err := rt.observeCommittedFullReconciliationBatch(ctx, bl, &plan, scopeSnapshot, scopeGeneration)
+	projectedPrimary, err := rt.observeCommittedFullReconciliationBatch(ctx, bl, &plan)
 	if err != nil {
 		if ctx.Err() == nil {
 			rt.engine.logger.Error("full reconciliation failed",
@@ -326,21 +398,13 @@ func (rt *watchRuntime) performFullReconciliation(
 		return result
 	}
 
-	events, shortcutErr := rt.processCommittedPrimaryBatch(
+	events := rt.processCommittedPrimaryBatch(
 		ctx,
 		bl,
-		scopedPrimary.emitted,
-		scopeSnapshot,
-		scopeGeneration,
+		projectedPrimary.emitted,
 		false,
 		true,
 	)
-	if shortcutErr != nil {
-		rt.engine.logger.Warn("shortcut reconciliation failed during full reconciliation",
-			slog.String("error", shortcutErr.Error()),
-		)
-		events = filterOutShortcuts(scopedPrimary.emitted)
-	}
 	if len(events) == 0 {
 		rt.engine.logger.Info("periodic full reconciliation complete: no changes",
 			slog.Duration("duration", rt.engine.since(start)),
@@ -349,9 +413,6 @@ func (rt *watchRuntime) performFullReconciliation(
 	}
 
 	result.events = events
-	if refreshed, refreshErr := rt.shortcutCoordinator().loadShortcutSnapshot(ctx); refreshErr == nil {
-		result.shortcuts = refreshed
-	}
 
 	rt.engine.logger.Info("periodic full reconciliation complete",
 		slog.Int("events", len(events)),
@@ -361,15 +422,8 @@ func (rt *watchRuntime) performFullReconciliation(
 	return result
 }
 
-func (rt *watchRuntime) buildFullReconciliationPlan(
-	ctx context.Context,
-	scopeSnapshot syncscope.Snapshot,
-	scopeGeneration int64,
-) (ObservationSessionPlan, error) {
-	session := ScopeSession{
-		Current:    scopeSnapshot,
-		Generation: scopeGeneration,
-	}
+func (rt *watchRuntime) buildFullReconciliationPlan(ctx context.Context) (ObservationSessionPlan, error) {
+	session := ObservationSession{Generation: 1}
 
 	return rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
 		Session:       &session,
@@ -383,91 +437,25 @@ func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
 	ctx context.Context,
 	bl *Baseline,
 	plan *ObservationSessionPlan,
-	scopeSnapshot syncscope.Snapshot,
-	scopeGeneration int64,
-) (remoteScopeResult, error) {
+) (remoteObservationResult, error) {
 	fetchResult, err := rt.observeObservationPhase(ctx, bl, plan.PrimaryPhase, true)
 	if err != nil {
-		return remoteScopeResult{}, err
+		return remoteObservationResult{}, err
 	}
 
-	scopedPrimary := applyRemoteScope(rt.engine.logger, scopeSnapshot, scopeGeneration, fetchResult.events)
-	if commitErr := rt.commitObservedItems(ctx, scopedPrimary.observed, ""); commitErr != nil {
-		return remoteScopeResult{}, fmt.Errorf("commit full reconciliation observations: %w", commitErr)
+	projectedPrimary := projectRemoteObservations(rt.engine.logger, fetchResult.events)
+	if commitErr := rt.commitObservedItems(ctx, projectedPrimary.observed, ""); commitErr != nil {
+		return remoteObservationResult{}, fmt.Errorf("commit full reconciliation observations: %w", commitErr)
 	}
 	if tokenErr := rt.commitDeferredDeltaTokens(ctx, fetchResult.deferred); tokenErr != nil {
-		return remoteScopeResult{}, fmt.Errorf("commit full reconciliation delta tokens: %w", tokenErr)
+		return remoteObservationResult{}, fmt.Errorf("commit full reconciliation delta tokens: %w", tokenErr)
 	}
 
 	if rt.afterReconcileCommit != nil {
 		rt.afterReconcileCommit()
 	}
 
-	return scopedPrimary, nil
-}
-
-func (rt *watchRuntime) runEnteredScopeReconciliationAsync(
-	ctx context.Context,
-	bl *Baseline,
-	enteredPaths []string,
-) {
-	if rt.reconcileActive {
-		rt.engine.logger.Info("scope re-entry reconciliation skipped — previous still running")
-		return
-	}
-	rt.reconcileActive = true
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileStarted})
-
-	go func() {
-		result := reconcileResult{}
-
-		fetchResult, err := rt.reconcilePrimaryScopeEntries(ctx, bl, enteredPaths, nil)
-		if err != nil {
-			if ctx.Err() == nil {
-				rt.engine.logger.Error("scope re-entry reconciliation failed",
-					slog.String("error", err.Error()),
-				)
-			}
-			rt.finishFullReconciliation(ctx, result)
-			return
-		}
-
-		scopeSnapshot := rt.currentScopeSnapshot()
-		scoped := applyRemoteScope(rt.engine.logger, scopeSnapshot, rt.currentScopeGeneration(), fetchResult.events)
-		if commitErr := rt.commitObservedItems(ctx, scoped.observed, ""); commitErr != nil {
-			rt.engine.logger.Error("failed to commit scope re-entry observations",
-				slog.String("error", commitErr.Error()),
-			)
-			rt.finishFullReconciliation(ctx, result)
-			return
-		}
-		if tokenErr := rt.commitDeferredDeltaTokens(ctx, fetchResult.deferred); tokenErr != nil {
-			rt.engine.logger.Error("failed to commit scope re-entry delta tokens",
-				slog.String("error", tokenErr.Error()),
-			)
-			rt.finishFullReconciliation(ctx, result)
-			return
-		}
-
-		finalEvents, shortcutErr := rt.processCommittedPrimaryBatch(
-			ctx,
-			bl,
-			scoped.emitted,
-			scopeSnapshot,
-			rt.currentScopeGeneration(),
-			false,
-			false,
-		)
-		if shortcutErr != nil {
-			rt.engine.logger.Warn("shortcut processing failed during scope re-entry reconciliation",
-				slog.String("error", shortcutErr.Error()),
-			)
-			finalEvents = filterOutShortcuts(scoped.emitted)
-		}
-
-		result.events = finalEvents
-		rt.finishFullReconciliation(ctx, result)
-	}()
+	return projectedPrimary, nil
 }
 
 func (rt *watchRuntime) finishFullReconciliation(ctx context.Context, result reconcileResult) {
@@ -484,18 +472,11 @@ func (rt *watchRuntime) finishFullReconciliation(ctx context.Context, result rec
 func (rt *watchRuntime) applyReconcileResult(ctx context.Context, result reconcileResult) {
 	rt.reconcileActive = false
 
-	if len(result.shortcuts) > 0 {
-		rt.setShortcuts(result.shortcuts)
-	}
-
 	for i := range result.events {
 		rt.buf.Add(&result.events[i])
 	}
 
-	session := ScopeSession{
-		Current:    rt.currentScopeSnapshot(),
-		Generation: rt.currentScopeGeneration(),
-	}
+	session := ObservationSession{Generation: 1}
 	plan, err := rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
 		Session:  &session,
 		SyncMode: SyncBidirectional,
@@ -510,7 +491,7 @@ func (rt *watchRuntime) applyReconcileResult(ctx context.Context, result reconci
 	}
 	plan.Reentry.Pending = false
 
-	if err := rt.applyScopeState(ctx, false, &session, &plan); err != nil {
+	if err := rt.applyObservationState(ctx, false, &session, &plan); err != nil {
 		rt.engine.logger.Warn("failed to persist scope state after reconciliation",
 			slog.String("error", err.Error()),
 		)

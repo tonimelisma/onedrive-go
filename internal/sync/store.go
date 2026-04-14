@@ -1,4 +1,4 @@
-// Package sync persists sync baseline, observation, conflict, failure, and scope state.
+// Package sync persists sync baseline, observation, failure, scope-block, and metadata state.
 //
 // Contents:
 //   - SyncStore:    struct definition (db, baseline, logger, nowFunc)
@@ -13,7 +13,6 @@
 // Related files:
 //   - store_write_baseline.go:     baseline CRUD, delta tokens, outcome commits
 //   - store_write_observation.go:  remote state observation persistence
-//   - store_write_conflicts.go:    conflict management
 //   - store_read_failures.go:      sync failure query helpers
 //   - store_write_failures.go:     sync failure recording and mutation helpers
 //   - store_repair.go:             state repair/admin operations
@@ -97,22 +96,6 @@ func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensu
 		nowFunc: time.Now,
 	}
 
-	repairsApplied, repairErr := store.repairScopeStateConsistencyOnOpen(ctx)
-	if repairErr != nil {
-		baseErr := fmt.Errorf("repair sync store scope state: %w", repairErr)
-		if closeErr := db.Close(); closeErr != nil {
-			return nil, errors.Join(baseErr, fmt.Errorf("close sync store database: %w", closeErr))
-		}
-
-		return nil, baseErr
-	}
-	if repairsApplied > 0 {
-		logger.Info("sync store scope state repaired",
-			slog.Int("repairs", repairsApplied),
-			slog.String("db_path", dbPath),
-		)
-	}
-
 	return store, nil
 }
 
@@ -157,6 +140,18 @@ func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) err
 	}
 
 	return nil
+}
+
+// DataVersion returns SQLite's PRAGMA data_version, which changes every time
+// another connection commits a write. The engine's own writes don't change it.
+// Used to detect external store mutations without polling the full table.
+func (m *SyncStore) DataVersion(ctx context.Context) (int64, error) {
+	var version int64
+	if err := m.db.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version); err != nil {
+		return 0, fmt.Errorf("sync: PRAGMA data_version: %w", err)
+	}
+
+	return version, nil
 }
 
 // DB returns the underlying *sql.DB for tests that need to verify schema or

@@ -14,20 +14,17 @@ type ScopeKeyKind int
 const (
 	ScopeAuthAccount     ScopeKeyKind = iota + 1 // no Param
 	ScopeThrottleAccount                         // legacy only; no Param
-	ScopeThrottleTarget                          // Param = "drive:<targetDriveID>" or "shared:<remoteDrive>:<remoteItem>"
+	ScopeThrottleTarget                          // Param = "drive:<targetDriveID>"
 	ScopeService                                 // no Param
 	ScopeQuotaOwn                                // no Param
-	ScopeQuotaShortcut                           // Param = "remoteDrive:remoteItem"
-	ScopePermLocalRead                           // Param = relative directory path
-	ScopePermLocalWrite                          // Param = relative directory path
-	ScopePermRemoteWrite                         // Param = local boundary path
+	ScopePermDir                                 // Param = relative directory path
+	ScopePermRemote                              // Param = local boundary path
 	ScopeDiskLocal                               // no Param
 )
 
 // ScopeKey identifies a scope block. The Kind discriminator determines the
 // semantics; Param carries per-instance data for parameterized scopes
-// (ScopeQuotaShortcut, ScopePermLocalRead, ScopePermLocalWrite,
-// ScopePermRemoteWrite). Comparable, so usable
+// (ScopeThrottleTarget, ScopePermDir, ScopePermRemote). Comparable, so usable
 // as a map key.
 type ScopeKey struct {
 	Kind  ScopeKeyKind
@@ -47,29 +44,14 @@ func SKThrottleDrive(targetDriveID driveid.ID) ScopeKey {
 	return ScopeKey{Kind: ScopeThrottleTarget, Param: throttleDriveParam(targetDriveID)}
 }
 
-// SKThrottleShared returns the target-scoped throttle key for one shared root/item.
-func SKThrottleShared(remoteDriveID, remoteItemID string) ScopeKey {
-	return ScopeKey{Kind: ScopeThrottleTarget, Param: throttleSharedParam(remoteDriveID, remoteItemID)}
+// SKPermDir returns the scope key for a local directory permission block.
+func SKPermDir(dirPath string) ScopeKey {
+	return ScopeKey{Kind: ScopePermDir, Param: dirPath}
 }
 
-// SKQuotaShortcut returns the scope key for a shortcut quota block.
-func SKQuotaShortcut(compositeKey string) ScopeKey {
-	return ScopeKey{Kind: ScopeQuotaShortcut, Param: compositeKey}
-}
-
-// SKPermLocalRead returns the scope key for a local read-denied directory scope.
-func SKPermLocalRead(dirPath string) ScopeKey {
-	return ScopeKey{Kind: ScopePermLocalRead, Param: dirPath}
-}
-
-// SKPermLocalWrite returns the scope key for a local write-denied directory scope.
-func SKPermLocalWrite(dirPath string) ScopeKey {
-	return ScopeKey{Kind: ScopePermLocalWrite, Param: dirPath}
-}
-
-// SKPermRemoteWrite returns the scope key for a remote write-denied boundary.
-func SKPermRemoteWrite(boundaryPath string) ScopeKey {
-	return ScopeKey{Kind: ScopePermRemoteWrite, Param: boundaryPath}
+// SKPermRemote returns the scope key for a remote read-only boundary.
+func SKPermRemote(boundaryPath string) ScopeKey {
+	return ScopeKey{Kind: ScopePermRemote, Param: boundaryPath}
 }
 
 // IsZero returns true for the zero-value ScopeKey (Kind == 0).
@@ -80,18 +62,14 @@ func (sk ScopeKey) IsZero() bool {
 // Wire-format strings for scope keys stored in SQLite scope_key columns.
 // Used by String() and ParseScopeKey() — the only serialization boundary.
 const (
-	WireAuthAccount      = "auth:account"
-	WireThrottleAccount  = "throttle:account"
-	WireThrottleTarget   = "throttle:target:"
-	WireService          = "service"
-	WireQuotaOwn         = "quota:own"
-	WireQuotaShortcut    = "quota:shortcut:"    // prefix for parameterized key
-	WirePermLocalRead    = "perm:local-read:"   // prefix for parameterized key
-	WirePermLocalWrite   = "perm:local-write:"  // prefix for parameterized key
-	WirePermRemoteWrite  = "perm:remote-write:" // prefix for parameterized key
-	WireLegacyPermDir    = "perm:dir:"          // legacy startup cleanup only
-	WireLegacyPermRemote = "perm:remote:"       // legacy startup cleanup only
-	WireDiskLocal        = "disk:local"
+	WireAuthAccount     = "auth:account"
+	WireThrottleAccount = "throttle:account"
+	WireThrottleTarget  = "throttle:target:"
+	WireService         = "service"
+	WireQuotaOwn        = "quota:own"
+	WirePermDir         = "perm:dir:"    // prefix for parameterized key
+	WirePermRemote      = "perm:remote:" // prefix for parameterized key
+	WireDiskLocal       = "disk:local"
 )
 
 // String serializes to the wire format stored in SQLite scope_key columns.
@@ -108,14 +86,10 @@ func (sk ScopeKey) String() string {
 		return WireService
 	case ScopeQuotaOwn:
 		return WireQuotaOwn
-	case ScopeQuotaShortcut:
-		return WireQuotaShortcut + sk.Param
-	case ScopePermLocalRead:
-		return WirePermLocalRead + sk.Param
-	case ScopePermLocalWrite:
-		return WirePermLocalWrite + sk.Param
-	case ScopePermRemoteWrite:
-		return WirePermRemoteWrite + sk.Param
+	case ScopePermDir:
+		return WirePermDir + sk.Param
+	case ScopePermRemote:
+		return WirePermRemote + sk.Param
 	case ScopeDiskLocal:
 		return WireDiskLocal
 	default:
@@ -139,18 +113,10 @@ func ParseScopeKey(s string) ScopeKey {
 		return SKQuotaOwn()
 	case s == WireDiskLocal:
 		return SKDiskLocal()
-	case strings.HasPrefix(s, WireQuotaShortcut):
-		return SKQuotaShortcut(strings.TrimPrefix(s, WireQuotaShortcut))
-	case strings.HasPrefix(s, WirePermLocalRead):
-		return SKPermLocalRead(strings.TrimPrefix(s, WirePermLocalRead))
-	case strings.HasPrefix(s, WirePermLocalWrite):
-		return SKPermLocalWrite(strings.TrimPrefix(s, WirePermLocalWrite))
-	case strings.HasPrefix(s, WirePermRemoteWrite):
-		return SKPermRemoteWrite(strings.TrimPrefix(s, WirePermRemoteWrite))
-	case strings.HasPrefix(s, WireLegacyPermDir):
-		return SKPermLocalWrite(strings.TrimPrefix(s, WireLegacyPermDir))
-	case strings.HasPrefix(s, WireLegacyPermRemote):
-		return SKPermRemoteWrite(strings.TrimPrefix(s, WireLegacyPermRemote))
+	case strings.HasPrefix(s, WirePermDir):
+		return SKPermDir(strings.TrimPrefix(s, WirePermDir))
+	case strings.HasPrefix(s, WirePermRemote):
+		return SKPermRemote(strings.TrimPrefix(s, WirePermRemote))
 	default:
 		return ScopeKey{}
 	}
@@ -163,35 +129,30 @@ func (sk ScopeKey) IsGlobal() bool {
 	return sk.Kind == ScopeAuthAccount || sk.Kind == ScopeThrottleAccount || sk.Kind == ScopeService
 }
 
-// IsPermLocalRead returns true for local read-denied directory scope blocks.
-func (sk ScopeKey) IsPermLocalRead() bool {
-	return sk.Kind == ScopePermLocalRead
+// IsPermDir returns true for local directory permission scope blocks.
+func (sk ScopeKey) IsPermDir() bool {
+	return sk.Kind == ScopePermDir
 }
 
-// IsPermLocalWrite returns true for local write-denied directory scope blocks.
-func (sk ScopeKey) IsPermLocalWrite() bool {
-	return sk.Kind == ScopePermLocalWrite
+// IsPermRemote returns true for remote read-only subtree scopes.
+func (sk ScopeKey) IsPermRemote() bool {
+	return sk.Kind == ScopePermRemote
 }
 
-// IsPermRemoteWrite returns true for remote write-denied subtree scopes.
-func (sk ScopeKey) IsPermRemoteWrite() bool {
-	return sk.Kind == ScopePermRemoteWrite
-}
-
-// DirPath returns the directory path for a local permission scope key.
-// Panics if called on a non-local-permission key (defensive — caller bug).
+// DirPath returns the directory path for a ScopePermDir key.
+// Panics if called on a non-PermDir key (defensive — caller bug).
 func (sk ScopeKey) DirPath() string {
-	if sk.Kind != ScopePermLocalRead && sk.Kind != ScopePermLocalWrite {
-		panic("ScopeKey.DirPath() called on non-local-permission key")
+	if sk.Kind != ScopePermDir {
+		panic("ScopeKey.DirPath() called on non-PermDir key")
 	}
 	return sk.Param
 }
 
-// RemotePath returns the local boundary path for a ScopePermRemoteWrite key.
-// Panics if called on a non-remote-write key (defensive — caller bug).
+// RemotePath returns the local boundary path for a ScopePermRemote key.
+// Panics if called on a non-PermRemote key (defensive — caller bug).
 func (sk ScopeKey) RemotePath() string {
-	if sk.Kind != ScopePermRemoteWrite {
-		panic("ScopeKey.RemotePath() called on non-remote-write key")
+	if sk.Kind != ScopePermRemote {
+		panic("ScopeKey.RemotePath() called on non-PermRemote key")
 	}
 	return sk.Param
 }
@@ -206,11 +167,6 @@ func (sk ScopeKey) IsThrottleDrive() bool {
 	return sk.Kind == ScopeThrottleTarget && strings.HasPrefix(sk.Param, throttleDrivePrefix)
 }
 
-// IsThrottleShared returns true when the throttle scope applies to one shared target.
-func (sk ScopeKey) IsThrottleShared() bool {
-	return sk.Kind == ScopeThrottleTarget && strings.HasPrefix(sk.Param, throttleSharedPrefix)
-}
-
 // ThrottleTargetKey returns the normalized target key for a target-scoped throttle.
 // Panics if called on a non-target throttle key.
 func (sk ScopeKey) ThrottleTargetKey() string {
@@ -218,15 +174,6 @@ func (sk ScopeKey) ThrottleTargetKey() string {
 		panic("ScopeKey.ThrottleTargetKey() called on non-target throttle key")
 	}
 	return sk.Param
-}
-
-// ThrottleShortcutKey returns the "remoteDrive:remoteItem" suffix for a shared
-// target throttle key. Panics if called on a non-shared throttle key.
-func (sk ScopeKey) ThrottleShortcutKey() string {
-	if !sk.IsThrottleShared() {
-		panic("ScopeKey.ThrottleShortcutKey() called on non-shared throttle key")
-	}
-	return strings.TrimPrefix(sk.Param, throttleSharedPrefix)
 }
 
 // IssueType returns the issue_type constant for this scope key's kind.
@@ -239,14 +186,12 @@ func (sk ScopeKey) IssueType() string {
 		return IssueRateLimited
 	case ScopeService:
 		return IssueServiceOutage
-	case ScopeQuotaOwn, ScopeQuotaShortcut:
+	case ScopeQuotaOwn:
 		return IssueQuotaExceeded
-	case ScopePermLocalRead:
-		return IssueLocalReadDenied
-	case ScopePermLocalWrite:
-		return IssueLocalWriteDenied
-	case ScopePermRemoteWrite:
-		return IssueRemoteWriteDenied
+	case ScopePermDir:
+		return IssueLocalPermissionDenied
+	case ScopePermRemote:
+		return IssueSharedFolderBlocked
 	case ScopeDiskLocal:
 		return IssueDiskFull
 	default:
@@ -255,38 +200,21 @@ func (sk ScopeKey) IssueType() string {
 }
 
 // Humanize translates a scope key to a user-friendly description (R-2.10.22).
-// For shortcut scopes, looks up the shortcut's local path from the provided
-// list. For permission scopes, returns the directory/boundary path. For global
-// scopes, returns a plain English description.
-func (sk ScopeKey) Humanize(shortcuts []Shortcut) string {
+// For directory- and subtree-scoped blocks, returns the stored local path. For
+// global scopes, returns a plain English description.
+func (sk ScopeKey) Humanize() string {
 	switch sk.Kind {
 	case ScopeAuthAccount:
 		return "your OneDrive account authorization"
 	case ScopeThrottleAccount:
 		return "your OneDrive account (rate limited)"
 	case ScopeThrottleTarget:
-		if sk.IsThrottleShared() {
-			shortcutKey := sk.ThrottleShortcutKey()
-			for i := range shortcuts {
-				if shortcuts[i].RemoteDrive+":"+shortcuts[i].RemoteItem == shortcutKey {
-					return shortcuts[i].LocalPath + " (rate limited)"
-				}
-			}
-			return shortcutKey
-		}
 		return "this drive (rate limited)"
 	case ScopeService:
 		return "OneDrive service"
 	case ScopeQuotaOwn:
-		return "your OneDrive storage"
-	case ScopeQuotaShortcut:
-		for i := range shortcuts {
-			if shortcuts[i].RemoteDrive+":"+shortcuts[i].RemoteItem == sk.Param {
-				return shortcuts[i].LocalPath
-			}
-		}
-		return sk.Param // fallback to composite key
-	case ScopePermLocalRead, ScopePermLocalWrite, ScopePermRemoteWrite:
+		return "this drive storage"
+	case ScopePermDir, ScopePermRemote:
 		if sk.Param == "" {
 			return "/"
 		}
@@ -298,62 +226,39 @@ func (sk ScopeKey) Humanize(shortcuts []Shortcut) string {
 	}
 }
 
-// BlocksTrackedAction returns true if this scope key blocks the given tracked
-// action based on the concrete capabilities the action instance requires.
-func (sk ScopeKey) BlocksTrackedAction(ta *TrackedAction) bool {
-	if ta == nil {
-		return false
-	}
-
-	action := &ta.Action
-
+// BlocksAction returns true if this scope key blocks the given action.
+// Replaces the scattered string-matching logic from blockedScope().
+func (sk ScopeKey) BlocksAction(
+	path string,
+	throttleTargetKey string,
+	actionType ActionType,
+) bool {
 	switch sk.Kind {
 	case ScopeAuthAccount, ScopeThrottleAccount, ScopeService:
 		return true // global blocks
 	case ScopeThrottleTarget:
-		throttleTargetKey := action.ThrottleTargetKey()
 		return throttleTargetKey != "" && throttleTargetKey == sk.Param
 	case ScopeDiskLocal:
-		return action.Type == ActionDownload
+		return actionType == ActionDownload
 	case ScopeQuotaOwn:
-		return action.TargetsOwnDrive() && action.Type == ActionUpload
-	case ScopeQuotaShortcut:
-		return action.ShortcutKey() == sk.Param && action.Type == ActionUpload
-	case ScopePermLocalRead:
-		return scopeBlocksCapability(sk.Param, action, PermissionCapabilityLocalRead)
-	case ScopePermLocalWrite:
-		return scopeBlocksCapability(sk.Param, action, PermissionCapabilityLocalWrite)
-	case ScopePermRemoteWrite:
-		return scopeBlocksCapability(sk.Param, action, PermissionCapabilityRemoteWrite)
+		return actionType == ActionUpload
+	case ScopePermDir:
+		return path == sk.Param || strings.HasPrefix(path, sk.Param+"/")
+	case ScopePermRemote:
+		if !scopePathMatches(path, sk.Param) {
+			return false
+		}
+		switch actionType {
+		case ActionUpload, ActionRemoteDelete, ActionRemoteMove, ActionFolderCreate:
+			return true
+		case ActionDownload, ActionLocalDelete, ActionLocalMove, ActionConflict, ActionUpdateSynced, ActionCleanup:
+			return false
+		default:
+			return false
+		}
 	default:
 		return false
 	}
-}
-
-func scopeBlocksCapability(boundary string, action *Action, capability PermissionCapability) bool {
-	if action == nil {
-		return false
-	}
-
-	required := action.PermissionCapabilities()
-	matchedCapability := false
-	for _, cap := range required {
-		if cap == capability {
-			matchedCapability = true
-			break
-		}
-	}
-	if !matchedCapability {
-		return false
-	}
-
-	for _, path := range action.ScopePathsForCapability(capability) {
-		if scopePathMatches(path, boundary) {
-			return true
-		}
-	}
-
-	return false
 }
 
 func scopePathMatches(path, boundary string) bool {
@@ -367,16 +272,9 @@ func scopePathMatches(path, boundary string) bool {
 // ScopeKeyForResult maps one worker result target and HTTP status code to a
 // ScopeKey. Returns the zero-value for non-scope statuses. This is the single
 // source of truth for HTTP status → scope key classification.
-func ScopeKeyForResult(httpStatus int, targetDriveID driveid.ID, shortcutKey string) ScopeKey {
+func ScopeKeyForResult(httpStatus int, targetDriveID driveid.ID) ScopeKey {
 	switch {
 	case httpStatus == http.StatusTooManyRequests:
-		if shortcutKey != "" {
-			remoteDriveID, remoteItemID, ok := strings.Cut(shortcutKey, ":")
-			if !ok || remoteDriveID == "" || remoteItemID == "" {
-				return ScopeKey{}
-			}
-			return SKThrottleShared(remoteDriveID, remoteItemID)
-		}
 		if targetDriveID.IsZero() {
 			return ScopeKey{}
 		}
@@ -384,9 +282,6 @@ func ScopeKeyForResult(httpStatus int, targetDriveID driveid.ID, shortcutKey str
 	case httpStatus == http.StatusServiceUnavailable:
 		return SKService()
 	case httpStatus == http.StatusInsufficientStorage:
-		if shortcutKey != "" {
-			return SKQuotaShortcut(shortcutKey)
-		}
 		return SKQuotaOwn()
 	case httpStatus >= http.StatusInternalServerError:
 		return SKService()
@@ -396,14 +291,9 @@ func ScopeKeyForResult(httpStatus int, targetDriveID driveid.ID, shortcutKey str
 }
 
 const (
-	throttleDrivePrefix  = "drive:"
-	throttleSharedPrefix = "shared:"
+	throttleDrivePrefix = "drive:"
 )
 
 func throttleDriveParam(targetDriveID driveid.ID) string {
 	return throttleDrivePrefix + targetDriveID.String()
-}
-
-func throttleSharedParam(remoteDriveID, remoteItemID string) string {
-	return throttleSharedPrefix + remoteDriveID + ":" + remoteItemID
 }

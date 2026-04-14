@@ -28,7 +28,7 @@ The authoritative record of what has been successfully synced. Each entry record
 The authoritative record of what the server has, populated from delta query observations. Each item has a state machine: `observed` → `syncing` → `synced`. Used by the planner alongside the baseline and local scan.
 
 ### Sync Failure
-A persistent record of a file that failed to sync. Two categories: **transient** (retried automatically with exponential backoff) and **actionable** (requires user intervention or an explicit safety approval such as `resolve deletes`, depending on the issue type). Stored in the `sync_failures` table.
+A persistent record of a file that failed to sync. Two categories: **transient** (retried automatically with exponential backoff) and **actionable** (requires user intervention such as fixing permissions, disk space, or naming problems). Stored in the `sync_failures` table.
 
 ### Action
 The planner's output — a decision about what to do with a specific path. Types: `ActionDownload`, `ActionUpload`, `ActionLocalDelete`, `ActionRemoteDelete`, `ActionConflict`, `ActionMkdir`, `ActionRmdir`, `ActionNoop`, `ActionCleanup`.
@@ -54,7 +54,7 @@ A sync mode (`sync --full`) that runs a fresh delta with no token (enumerates AL
 ## Data Architecture
 
 ### Sync Store
-The unified SQLite database per drive containing three tables: `remote_state`, `baseline`, and `sync_failures`. Accessed through typed sub-interfaces (`ObservationWriter`, `OutcomeWriter`, `FailureRecorder`, `StateReader`, `StateAdmin`).
+The unified SQLite database per drive containing the baseline, remote mirror, retry/failure state, scope blocks, delta tokens, and sync metadata. It is the durable source of truth for restart-safe sync state.
 
 ### Session Store
 File-based persistence for upload session resume. Session files are keyed by a hash of `(driveID, localPath)` and store the upload URL, expiration, and byte offset.

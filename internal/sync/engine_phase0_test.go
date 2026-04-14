@@ -15,32 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
-
-type blockingPermChecker struct {
-	enterOnce sync.Once
-	enterCh   chan struct{}
-	releaseCh chan struct{}
-	perms     []graph.Permission
-}
-
-func newBlockingPermChecker(perms []graph.Permission) *blockingPermChecker {
-	return &blockingPermChecker{
-		enterCh:   make(chan struct{}),
-		releaseCh: make(chan struct{}),
-		perms:     perms,
-	}
-}
-
-func (c *blockingPermChecker) ListItemPermissions(_ context.Context, _ driveid.ID, _ string) ([]graph.Permission, error) {
-	c.enterOnce.Do(func() {
-		close(c.enterCh)
-	})
-	<-c.releaseCh
-	return c.perms, nil
-}
 
 func newBootstrapWatchPipelineForTest(
 	t *testing.T,
@@ -357,93 +333,6 @@ func TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T
 }
 
 // Validates: R-6.8.9
-func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
-	t.Parallel()
-
-	remoteDriveID := "remote-drive-phase0"
-	checker := newBlockingPermChecker([]graph.Permission{{ID: "p1", Roles: []string{"read"}}})
-	shortcuts := []Shortcut{{
-		ItemID:       "shortcut-1",
-		RemoteDrive:  remoteDriveID,
-		RemoteItem:   "root-id",
-		LocalPath:    "Shared/TeamDocs",
-		Observation:  ObservationDelta,
-		DiscoveredAt: 1000,
-	}}
-	baselineEntries := []ActionOutcome{{
-		Action:   ActionDownload,
-		Success:  true,
-		Path:     "Shared/TeamDocs",
-		DriveID:  driveid.New(remoteDriveID),
-		ItemID:   "root-id",
-		ParentID: "root",
-		ItemType: ItemTypeFolder,
-	}}
-
-	eng, bl, syncRoot := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
-	runner := newOneShotRunner(eng.Engine)
-	runner.setShortcuts(shortcuts)
-	writeLocalFile(t, syncRoot, "Shared/TeamDocs/file.txt", "phase0")
-
-	uploadMock := &engineMockClient{
-		uploadFn: func(_ context.Context, _ driveid.ID, _ string, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return nil, &graph.GraphError{
-				StatusCode: http.StatusForbidden,
-				Err:        graph.ErrForbidden,
-				Message:    "read-only shortcut",
-			}
-		},
-	}
-	eng.execCfg.SetUploads(uploadMock)
-	eng.execCfg.SetTransferMgr(driveops.NewTransferManager(
-		eng.execCfg.Downloads(), eng.execCfg.Uploads(), nil, eng.logger,
-	))
-
-	plan := &ActionPlan{
-		Actions: []Action{{
-			Type:    ActionUpload,
-			Path:    "Shared/TeamDocs/file.txt",
-			DriveID: driveid.New(remoteDriveID),
-		}},
-		Deps: [][]int{nil},
-	}
-
-	report := &Report{}
-	done := make(chan error, 1)
-	go func() {
-		done <- runner.executePlan(t.Context(), plan, report, bl)
-	}()
-
-	select {
-	case <-checker.enterCh:
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "permission check did not start")
-	}
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-		require.Fail(t, "executePlan returned before drain side effects finished")
-	case <-time.After(150 * time.Millisecond):
-	}
-
-	close(checker.releaseCh)
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "executePlan did not finish after permission check released")
-	}
-
-	permIssues, err := eng.baseline.ListRemoteBlockedFailures(t.Context())
-	require.NoError(t, err)
-	require.Len(t, permIssues, 1, "executePlan should wait for the blocked write row to be recorded before returning")
-	assert.Equal(t, "Shared/TeamDocs/file.txt", permIssues[0].Path)
-	assert.Equal(t, SKPermRemoteWrite("Shared/TeamDocs"), permIssues[0].ScopeKey)
-	assert.GreaterOrEqual(t, report.Failed, 1)
-}
-
 // Validates: R-2.10.5
 func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testing.T) {
 	t.Parallel()
@@ -579,7 +468,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	rt := testWatchRuntime(t, eng)
 	rt.buf = NewBuffer(eng.logger)
 
-	scopeKey := SKPermLocalWrite("Private")
+	scopeKey := SKPermDir("Private")
 	accessibleDir := filepath.Join(syncRoot, "Private")
 	require.NoError(t, os.MkdirAll(accessibleDir, 0o750))
 
@@ -597,7 +486,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		DriveID:   eng.driveID,
 		Direction: DirectionDownload,
 		Role:      FailureRoleBoundary,
-		IssueType: IssueLocalWriteDenied,
+		IssueType: IssueLocalPermissionDenied,
 		Category:  CategoryActionable,
 		ErrMsg:    "directory not accessible",
 		ScopeKey:  scopeKey,
@@ -614,7 +503,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	}, nil))
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: IssueLocalWriteDenied,
+		IssueType: IssueLocalPermissionDenied,
 		BlockedAt: eng.nowFunc(),
 	})
 

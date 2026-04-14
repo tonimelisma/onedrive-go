@@ -79,4 +79,8 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 		{Key: SummaryInvalidFilename, Count: 1},
 		{Key: SummaryRemoteWriteDenied, Count: 1},
 	}, summary.Groups)
+
+	count, err := mgr.CountVisibleIssues(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
 }

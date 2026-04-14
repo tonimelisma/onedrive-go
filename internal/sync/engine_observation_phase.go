@@ -137,7 +137,7 @@ func (flow *engineFlow) executeParallelTargetObservationPhase(
 	var mu stdsync.Mutex
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(maxShortcutConcurrency)
+	g.SetLimit(len(phase.Targets))
 
 	for i := range phase.Targets {
 		target := phase.Targets[i]
@@ -208,20 +208,14 @@ func (flow *engineFlow) logIsolatedTargetObservationFailure(target plannedObserv
 	attrs := []any{
 		slog.String("path", target.localPath),
 		slog.String("drive_id", target.driveID.String()),
+		slog.String("scope_id", target.scopeID),
 		slog.String("error", err.Error()),
-	}
-	if target.shortcut != nil {
-		attrs = append(attrs, slog.String("item_id", target.shortcut.ItemID))
 	}
 
 	flow.engine.logger.Warn("target observation failed, skipping", attrs...)
 }
 
 func observationTargetLogID(target plannedObservationTarget) string {
-	if target.shortcut != nil {
-		return target.shortcut.ItemID
-	}
-
 	if target.localPath != "" {
 		return target.localPath
 	}

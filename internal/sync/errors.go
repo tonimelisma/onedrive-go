@@ -46,10 +46,6 @@ var ErrFileChangedDuringHash = errors.New("sync: file changed during hashing")
 // Planner errors
 // ---------------------------------------------------------------------------
 
-// ErrDeleteSafetyThresholdExceeded indicates that planned deletes exceeded the
-// configured safety threshold and must be held for durable user approval.
-var ErrDeleteSafetyThresholdExceeded = errors.New("sync: delete safety threshold exceeded")
-
 // ErrDependencyCycle indicates that the action plan contains a dependency
 // cycle, making topological ordering impossible. This is a planner bug —
 // well-formed sync actions should always form a DAG (B-313).

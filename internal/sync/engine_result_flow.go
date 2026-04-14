@@ -104,7 +104,6 @@ func (flow *engineFlow) routeReadyForClass(
 func (flow *engineFlow) applySuccessEffects(ctx context.Context, watch *watchRuntime, r *WorkerResult) {
 	flow.succeeded++
 	flow.clearFailureOnSuccess(ctx, r)
-	flow.consumeHeldDeleteOnSuccess(ctx, r)
 	if watch != nil {
 		watch.scopeState.RecordSuccess(r)
 	}
@@ -415,7 +414,7 @@ func (controller *scopeController) resolvePermissionDecision(
 		if bl == nil || !flow.engine.permHandler.HasPermChecker() {
 			return nil, false
 		}
-		permDecision := flow.engine.permHandler.handleRemoteWrite403(ctx, bl, r, flow.getShortcuts())
+		permDecision := flow.engine.permHandler.handle403(ctx, bl, r.Path, r.ActionType)
 		return &permDecision, true
 	case permissionFlowLocalPermission:
 		permDecision := flow.engine.permHandler.handleLocalPermission(ctx, r)

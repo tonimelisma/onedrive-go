@@ -1,4 +1,4 @@
-// Package sync persists sync baseline, observation, conflict, failure, and scope state.
+// Package sync persists sync baseline, observation, failure, scope-block, and metadata state.
 //
 // Contents:
 //   - CommitObservation:        atomically persist remote mirror state + advance delta token
@@ -23,18 +23,17 @@ import (
 
 const (
 	sqlGetRemoteStateRow = `SELECT drive_id, item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path, is_filtered, observed_at,
-		filter_generation, filter_reason
+		hash, size, mtime, etag, previous_path, observed_at
 		FROM remote_state WHERE drive_id = ? AND item_id = ?`
 
 	sqlInsertRemoteState = `INSERT INTO remote_state
 		(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-		 previous_path, is_filtered, observed_at, filter_generation, filter_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 previous_path, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	sqlUpdateRemoteState = `UPDATE remote_state SET
 		path = ?, parent_id = ?, item_type = ?, hash = ?, size = ?, mtime = ?, etag = ?,
-		previous_path = ?, is_filtered = ?, observed_at = ?, filter_generation = ?, filter_reason = ?
+		previous_path = ?, observed_at = ?
 		WHERE drive_id = ? AND item_id = ?`
 )
 
@@ -141,17 +140,13 @@ func observedRemoteStateUpdate(
 	item *ObservedItem,
 ) (changed bool, previousPath string) {
 	pathChanged := item.Path != "" && item.Path != existing.Path
-	filterGeneration := initialFilterGeneration(item)
 	changed = pathChanged ||
 		item.ParentID != existing.ParentID ||
 		item.ItemType != existing.ItemType ||
 		item.Hash != existing.Hash ||
 		item.Size != existing.Size ||
 		item.Mtime != existing.Mtime ||
-		item.ETag != existing.ETag ||
-		item.Filtered != existing.IsFiltered ||
-		filterGeneration != existing.FilterGeneration ||
-		item.FilterReason != existing.FilterReason
+		item.ETag != existing.ETag
 
 	if pathChanged {
 		previousPath = existing.Path
@@ -180,10 +175,7 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item 
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
 		sql.NullString{},
-		boolToInt(item.Filtered),
 		now,
-		initialFilterGeneration(item),
-		string(item.FilterReason),
 	)
 	if err != nil {
 		return fmt.Errorf("sync: inserting remote_state for %s: %w", item.Path, err)
@@ -199,18 +191,11 @@ func (m *SyncStore) updateRemoteStateFromObs(
 	previousPath string,
 	now int64,
 ) error {
-	filterGeneration := int64(0)
-	filterReason := ""
-	if item.Filtered {
-		filterGeneration = initialFilterGeneration(item)
-		filterReason = string(item.FilterReason)
-	}
-
 	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
 		item.Path, nullString(item.ParentID), item.ItemType,
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
-		nullString(previousPath), boolToInt(item.Filtered), now, filterGeneration, filterReason,
+		nullString(previousPath), now,
 		item.DriveID.String(), item.ItemID,
 	)
 	if err != nil {
@@ -218,14 +203,4 @@ func (m *SyncStore) updateRemoteStateFromObs(
 	}
 
 	return nil
-}
-
-func initialFilterGeneration(item *ObservedItem) int64 {
-	if item == nil || !item.Filtered {
-		return 0
-	}
-	if item.FilterGeneration > 0 {
-		return item.FilterGeneration
-	}
-	return 1
 }

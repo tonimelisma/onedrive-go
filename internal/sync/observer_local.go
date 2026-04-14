@@ -23,7 +23,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -49,11 +48,10 @@ const MaxCoalesceRetries = 3
 // HashRequest is sent from timer callbacks to the watchLoop goroutine when a
 // write coalesce timer fires and the file should be hashed (B-107).
 type HashRequest struct {
-	FsPath     string
-	DbRelPath  string
-	Name       string
-	Generation int64
-	Retries    int // number of re-schedules already attempted
+	FsPath    string
+	DbRelPath string
+	Name      string
+	Retries   int // number of re-schedules already attempted
 }
 
 // localWatchState is the single mutable owner for one LocalObserver watch
@@ -63,9 +61,8 @@ type HashRequest struct {
 // does not sprawl across unrelated fields.
 type localWatchState struct {
 	// Write coalescing fields (B-107). Single watch-loop owner.
-	PendingTimers           map[string]syncTimer // per-path timers; watchLoop-only (no mutex needed)
-	pendingTimerGenerations map[string]int64     // path -> scope generation for PendingTimers entries; watchLoop-only
-	HashRequests            chan HashRequest     // timer callback → watchLoop
+	PendingTimers map[string]syncTimer // per-path timers; watchLoop-only (no mutex needed)
+	HashRequests  chan HashRequest     // timer callback → watchLoop
 
 	// dirNameCache caches lowercase→original name mappings per directory for
 	// O(1) case collision lookups. Built lazily on first check; invalidated
@@ -87,41 +84,26 @@ type localWatchState struct {
 	CollisionPeers map[string]map[string]struct{} // dbRelPath → set of peer dbRelPaths
 
 	// excludedSymlinkPaths tracks alias paths that local observation excluded
-	// because skip_symlinks=true. Delete detection consults this set so a
+	// under the built-in symlink safety rules. Delete detection consults this set so a
 	// silently excluded symlink does not later reappear as a synthetic delete.
 	// Paths stay recorded until the same alias is observed as a real file/dir
 	// again or the observer is recreated. Single-goroutine access only.
 	excludedSymlinkPaths map[string]struct{}
 
-	// scopeSnapshot is the effective sync scope currently applied to local
-	// observation. It is rebuilt by the engine before scans/watch startup and
-	// updated in watch mode when ignore markers appear or disappear.
-	scopeSnapshot syncscope.Snapshot
-
-	// scopeChanges forwards watch-mode scope transitions (marker create/delete/
-	// rename) back to the engine so remote filtering and reconciliation can
-	// react to the new effective scope.
-	scopeChanges chan<- syncscope.Change
-
 	// watchedDirs tracks fsnotify registrations owned by this observer. The
 	// watch loop is the single writer, so no mutex is needed.
 	watchedDirs map[string]struct{}
-
-	// scopeGeneration invalidates deferred local work when marker-driven scope
-	// changes occur. The watch loop is the single writer after startup.
-	scopeGeneration int64
 }
 
 func newLocalWatchState() localWatchState {
 	return localWatchState{
-		PendingTimers:           make(map[string]syncTimer),
-		pendingTimerGenerations: make(map[string]int64),
-		HashRequests:            make(chan HashRequest, HashRequestBufSize),
-		DirNameCache:            make(map[string]map[string][]string),
-		RecentLocalDeletes:      make(map[string]struct{}),
-		CollisionPeers:          make(map[string]map[string]struct{}),
-		excludedSymlinkPaths:    make(map[string]struct{}),
-		watchedDirs:             make(map[string]struct{}),
+		PendingTimers:        make(map[string]syncTimer),
+		HashRequests:         make(chan HashRequest, HashRequestBufSize),
+		DirNameCache:         make(map[string]map[string][]string),
+		RecentLocalDeletes:   make(map[string]struct{}),
+		CollisionPeers:       make(map[string]map[string]struct{}),
+		excludedSymlinkPaths: make(map[string]struct{}),
+		watchedDirs:          make(map[string]struct{}),
 	}
 }
 
@@ -257,64 +239,12 @@ func (o *LocalObserver) SetObservationRules(rules LocalObservationRules) {
 	o.observationRules = rules
 }
 
-// SetScopeSnapshot installs the effective sync scope for local observation.
-// The snapshot is a value type, so later engine mutations cannot silently
-// change an already-running observer.
-func (o *LocalObserver) SetScopeSnapshot(snapshot syncscope.Snapshot) {
-	o.installScopeSnapshot(snapshot)
-}
-
-// SetScopeChangeChannel sets the optional channel used by watch mode to report
-// marker-driven scope changes back to the engine.
-func (o *LocalObserver) SetScopeChangeChannel(ch chan<- syncscope.Change) {
-	o.scopeChanges = ch
-}
-
-func (o *LocalObserver) currentScopeGeneration() int64 {
-	if o.scopeGeneration <= 0 {
-		return 1
-	}
-
-	return o.scopeGeneration
-}
-
-func (o *LocalObserver) installScopeSnapshot(snapshot syncscope.Snapshot) {
-	if o.scopeGeneration <= 0 {
-		o.scopeGeneration = 1
-		o.scopeSnapshot = snapshot
-		return
-	}
-
-	if syncscope.DiffSnapshots(o.scopeSnapshot, snapshot).HasChanges() {
-		o.scopeGeneration++
-	}
-
-	o.scopeSnapshot = snapshot
-}
-
-func (o *LocalObserver) recordPendingTimer(path string, generation int64, timer syncTimer) {
+func (o *LocalObserver) recordPendingTimer(path string, timer syncTimer) {
 	if o.PendingTimers == nil {
 		o.PendingTimers = make(map[string]syncTimer)
 	}
-	if o.pendingTimerGenerations == nil {
-		o.pendingTimerGenerations = make(map[string]int64)
-	}
 
 	o.PendingTimers[path] = timer
-	o.pendingTimerGenerations[path] = generation
-}
-
-func (o *LocalObserver) clearPendingTimerIfGeneration(path string, generation int64) {
-	if o.pendingTimerGenerations != nil {
-		if currentGeneration, ok := o.pendingTimerGenerations[path]; ok && currentGeneration != generation {
-			return
-		}
-	}
-
-	delete(o.PendingTimers, path)
-	if o.pendingTimerGenerations != nil {
-		delete(o.pendingTimerGenerations, path)
-	}
 }
 
 func (o *LocalObserver) cancelPendingTimer(path string) {
@@ -322,15 +252,6 @@ func (o *LocalObserver) cancelPendingTimer(path string) {
 		timer.Stop()
 		delete(o.PendingTimers, path)
 	}
-	if o.pendingTimerGenerations != nil {
-		delete(o.pendingTimerGenerations, path)
-	}
-}
-
-// BuildScopeSnapshot discovers the effective local marker state under the
-// current sync root and combines it with the configured sync scope.
-func (o *LocalObserver) BuildScopeSnapshot(ctx context.Context, tree *synctree.Root, cfg syncscope.Config) (syncscope.Snapshot, error) {
-	return BuildScopeSnapshot(ctx, tree, cfg, o.Logger)
 }
 
 // SetSafetyScanInterval overrides the default 5-minute safety scan interval.
@@ -472,9 +393,6 @@ func (o *LocalObserver) cancelPendingTimers() {
 	for path, timer := range o.PendingTimers {
 		timer.Stop()
 		delete(o.PendingTimers, path)
-		if o.pendingTimerGenerations != nil {
-			delete(o.pendingTimerGenerations, path)
-		}
 	}
 }
 

@@ -15,9 +15,6 @@ const (
 	// Scanner-detectable (hash phase).
 	IssueHashPanic = "hash_panic"
 
-	// Delete safety threshold protection.
-	IssueDeleteSafetyHeld = "delete_safety_held"
-
 	// Runtime (execution-time).
 	IssueUnauthorized         = "unauthorized"
 	IssueRemoteWriteDenied    = "remote_write_denied"

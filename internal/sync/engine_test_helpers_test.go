@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -369,78 +368,6 @@ func newDownloadDeltaMock(driveID driveid.ID, item *graph.Item, token string, co
 	}
 }
 
-func newTwoFileDownloadDeltaMock(
-	t *testing.T,
-	driveID driveid.ID,
-	contents map[string]string,
-	downloaded *[]string,
-	token string,
-) *engineMockClient {
-	t.Helper()
-
-	return &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-				{
-					ID:           "keep-item",
-					Name:         "keep.txt",
-					ParentID:     "root",
-					DriveID:      driveID,
-					QuickXorHash: hashContentQuickXor(t, contents["keep-item"]),
-					Size:         int64(len(contents["keep-item"])),
-				},
-				{
-					ID:           "drop-item",
-					Name:         "drop.txt",
-					ParentID:     "root",
-					DriveID:      driveID,
-					QuickXorHash: hashContentQuickXor(t, contents["drop-item"]),
-					Size:         int64(len(contents["drop-item"])),
-				},
-			}, token), nil
-		},
-		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
-			*downloaded = append(*downloaded, itemID)
-			n, err := w.Write([]byte(contents[itemID]))
-			return int64(n), err
-		},
-	}
-}
-
-func mustReadFileUnderRoot(t *testing.T, root, relativePath string) []byte {
-	t.Helper()
-
-	cleanRoot := filepath.Clean(root)
-	fullPath := filepath.Clean(filepath.Join(cleanRoot, relativePath))
-	rootPrefix := cleanRoot + string(os.PathSeparator)
-	require.True(t, strings.HasPrefix(fullPath, rootPrefix), "path must stay within sync root")
-
-	data, err := os.ReadFile(fullPath)
-	require.NoError(t, err, "reading resolved file")
-
-	return data
-}
-
-func readFileUnderRootIfExists(t *testing.T, root, relativePath string) ([]byte, bool) {
-	t.Helper()
-
-	cleanRoot := filepath.Clean(root)
-	fullPath := filepath.Clean(filepath.Join(cleanRoot, relativePath))
-	rootPrefix := cleanRoot + string(os.PathSeparator)
-	require.True(t, strings.HasPrefix(fullPath, rootPrefix), "path must stay within sync root")
-
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, false
-		}
-		require.NoError(t, err, "reading resolved file if present")
-	}
-
-	return data, true
-}
-
 // setupWatchEngine initializes an engine with DepGraph + dispatchCh + watchRuntime
 // for processBatch tests. Returns the dispatchCh for reading dispatched actions.
 // Replaces the old two-call pattern of setupWatchEngine + newTestWatchState.
@@ -557,23 +484,6 @@ func testScopeController(t *testing.T, eng *testEngine) *scopeController {
 	return testEngineFlow(t, eng).scopeController()
 }
 
-func testShortcutCoordinator(t *testing.T, eng *testEngine) *shortcutCoordinator {
-	t.Helper()
-
-	return testEngineFlow(t, eng).shortcutCoordinator()
-}
-
-func handleRemovedShortcutsForTest(
-	t *testing.T,
-	eng *testEngine,
-	ctx context.Context,
-	deletedItemIDs map[string]bool,
-	shortcuts []Shortcut,
-) error {
-	t.Helper()
-	return testShortcutCoordinator(t, eng).handleRemovedShortcuts(ctx, deletedItemIDs, shortcuts)
-}
-
 func loadActiveScopesForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
 	t.Helper()
 	return testScopeController(t, eng).loadActiveScopes(ctx, testWatchRuntime(t, eng))
@@ -622,11 +532,6 @@ func recordRetryTrialSkippedItemForTest(
 func isObservationSuppressedForTest(t *testing.T, eng *testEngine, watch *watchRuntime) bool {
 	t.Helper()
 	return testScopeController(t, eng).isObservationSuppressed(watch)
-}
-
-func suppressedShortcutTargetsForTest(t *testing.T, eng *testEngine, watch *watchRuntime) map[string]struct{} {
-	t.Helper()
-	return testScopeController(t, eng).suppressedShortcutTargets(watch)
 }
 
 func releaseTestScope(t *testing.T, eng *testEngine, ctx context.Context, key ScopeKey) error {
@@ -726,9 +631,9 @@ func processBatchForTest(
 	batch []PathChanges,
 	bl *Baseline,
 	safety *SafetyConfig,
-) []*TrackedAction {
+) {
 	t.Helper()
-	return testWatchRuntime(t, eng).processBatch(ctx, batch, bl, SyncBidirectional, safety)
+	testWatchRuntime(t, eng).processBatch(ctx, batch, bl, SyncBidirectional, safety)
 }
 
 type debugEventRecorder struct {
@@ -1137,7 +1042,7 @@ func syncStorePathForTest(t *testing.T, ctx context.Context, eng *testEngine) st
 		var name string
 		var file string
 		require.NoError(t, rows.Scan(&seq, &name, &file), "scan PRAGMA database_list")
-		if name == "main" {
+		if name == sqliteMainDatabaseName {
 			require.NotEmpty(t, file, "main database path should not be empty")
 			return file
 		}

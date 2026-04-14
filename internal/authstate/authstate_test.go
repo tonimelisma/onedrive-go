@@ -58,6 +58,8 @@ func TestHealthHelpers(t *testing.T) {
 		Reason: ReasonInvalidSavedLogin,
 		Action: "Run 'onedrive-go login' to sign in.",
 	}, RequiredHealth(ReasonInvalidSavedLogin))
+	assert.Equal(t, Health{}, RequiredHealth("unknown"))
+	assert.Equal(t, PresentationForReason(ReasonSyncAuthRejected), UnauthorizedIssuePresentation())
 }
 
 func TestErrorMessage(t *testing.T) {

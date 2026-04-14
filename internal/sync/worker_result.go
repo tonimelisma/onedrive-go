@@ -31,13 +31,10 @@ type WorkerResult struct {
 	RetryAfter time.Duration
 
 	// TargetDriveID is the actual drive ID targeted by this action. For
-	// own-drive actions, equals DriveID. For shortcut actions, equals the
-	// sharer's drive. Flows through the pipeline without lookup (R-6.8.12).
+	// normal drives, equals DriveID. For shared-folder drives rooted below the
+	// remote drive root, it still names the backing drive so classification and
+	// cleanup use one consistent authority boundary.
 	TargetDriveID driveid.ID
-
-	// ShortcutKey identifies the shortcut scope. Format: "remoteDrive:remoteItem".
-	// Empty for own-drive actions. Used by updateScope for 507 scope keys (R-2.10.16).
-	ShortcutKey string
 
 	// IsTrial is true if this was a scope trial action (R-2.10.5).
 	IsTrial bool
@@ -57,9 +54,6 @@ func (r *WorkerResult) ThrottleTargetKey() string {
 		return ""
 	}
 
-	if r.ShortcutKey != "" {
-		return throttleSharedPrefix + r.ShortcutKey
-	}
 	targetDriveID := r.TargetDriveID
 	if targetDriveID.IsZero() {
 		targetDriveID = r.DriveID

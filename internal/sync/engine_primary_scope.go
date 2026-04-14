@@ -10,7 +10,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
 
 type primaryObservationMode string
@@ -53,8 +52,7 @@ type primaryObservationScope struct {
 type plannedObservationTargetKind string
 
 const (
-	plannedObservationPrimary  plannedObservationTargetKind = "primary"
-	plannedObservationShortcut plannedObservationTargetKind = "shortcut"
+	plannedObservationPrimary plannedObservationTargetKind = "primary"
 )
 
 type plannedObservationTarget struct {
@@ -64,16 +62,6 @@ type plannedObservationTarget struct {
 	scopeDrive string
 	localPath  string
 	mode       primaryObservationMode
-	shortcut   *Shortcut
-}
-
-func (e *Engine) usesPrimaryPathScopes() bool {
-	cfg, err := syncscope.NormalizeConfig(e.syncScopeConfig)
-	if err != nil {
-		return false
-	}
-
-	return len(cfg.SyncPaths) > 0
 }
 
 func (e *Engine) primaryObservationMode() primaryObservationMode {
@@ -82,38 +70,6 @@ func (e *Engine) primaryObservationMode() primaryObservationMode {
 	}
 
 	return primaryObservationEnumerate
-}
-
-func (e *Engine) resolvePrimaryObservationScopes(ctx context.Context) ([]plannedObservationTarget, bool, error) {
-	cfg, err := syncscope.NormalizeConfig(e.syncScopeConfig)
-	if err != nil {
-		return nil, false, fmt.Errorf("normalize sync scope config: %w", err)
-	}
-	if len(cfg.SyncPaths) == 0 {
-		return nil, false, nil
-	}
-
-	byPath := make(map[string]primaryObservationScope, len(cfg.SyncPaths))
-	for _, configuredPath := range cfg.SyncPaths {
-		scope, err := e.resolvePrimaryObservationScope(ctx, configuredPath)
-		if err != nil {
-			return nil, false, fmt.Errorf("resolve configured sync path %q: %w", configuredPath, err)
-		}
-
-		if scope.localPath == "" {
-			return nil, true, nil
-		}
-
-		byPath[scope.localPath] = scope
-	}
-
-	collapsedPaths := syncscope.CollapseRelativePaths(mapKeys(byPath))
-	scopes := make([]plannedObservationTarget, 0, len(collapsedPaths))
-	for _, localPath := range collapsedPaths {
-		scopes = append(scopes, e.primaryObservationTarget(byPath[localPath]))
-	}
-
-	return scopes, false, nil
 }
 
 func (e *Engine) primaryObservationTarget(scope primaryObservationScope) plannedObservationTarget {
@@ -125,26 +81,6 @@ func (e *Engine) primaryObservationTarget(scope primaryObservationScope) planned
 		localPath:  scope.localPath,
 		mode:       scope.mode,
 	}
-}
-
-func shortcutObservationTarget(sc *Shortcut) plannedObservationTarget {
-	target := plannedObservationTarget{
-		kind:       plannedObservationShortcut,
-		driveID:    driveid.New(sc.RemoteDrive),
-		scopeID:    sc.RemoteItem,
-		scopeDrive: sc.RemoteDrive,
-		localPath:  sc.LocalPath,
-		shortcut:   sc,
-	}
-
-	switch sc.Observation {
-	case ObservationDelta:
-		target.mode = primaryObservationDelta
-	default:
-		target.mode = primaryObservationEnumerate
-	}
-
-	return target
 }
 
 func (e *Engine) resolvePrimaryObservationScope(ctx context.Context, configuredPath string) (primaryObservationScope, error) {
@@ -386,10 +322,6 @@ func convertObservedTargetItems(
 	target plannedObservationTarget,
 	items []graph.Item,
 ) []ChangeEvent {
-	if target.shortcut != nil {
-		return ConvertShortcutItems(items, target.shortcut, target.driveID, bl, logger)
-	}
-
 	converter := NewPrimaryConverter(bl, target.driveID, logger, nil)
 	converter.PathPrefix = target.localPath
 	converter.ScopeRootID = target.scopeID
@@ -402,10 +334,6 @@ func observeTargetOrphansFromItems(
 	target plannedObservationTarget,
 	items []graph.Item,
 ) []ChangeEvent {
-	if target.shortcut != nil {
-		return DetectShortcutOrphans(target.shortcut, target.driveID, items, bl)
-	}
-
 	seen := make(map[driveid.ItemKey]struct{}, len(items))
 	for i := range items {
 		itemDriveID := target.driveID
@@ -619,7 +547,7 @@ func seenKeysFromEvents(events []ChangeEvent) map[driveid.ItemKey]struct{} {
 
 func pathCoveredByAny(prefixes []string, candidate string) bool {
 	for _, prefix := range prefixes {
-		if syncscope.CoversPath(prefix, candidate) {
+		if prefix == "" || prefix == candidate || strings.HasPrefix(candidate, prefix+"/") {
 			return true
 		}
 	}
@@ -629,14 +557,14 @@ func pathCoveredByAny(prefixes []string, candidate string) bool {
 
 func joinScopePath(parent, child string) string {
 	if parent == "" {
-		return syncscope.NormalizeRelativePath(child)
+		return normalizeObservedPath(child)
 	}
 
-	return syncscope.NormalizeRelativePath(slashpath.Join(parent, child))
+	return normalizeObservedPath(slashpath.Join(parent, child))
 }
 
 func parentObservedPath(relPath string) string {
-	normalized := syncscope.NormalizeRelativePath(relPath)
+	normalized := normalizeObservedPath(relPath)
 	if normalized == "" {
 		return ""
 	}
@@ -665,13 +593,13 @@ func matchObservedChild(children []graph.Item, name string) (graph.Item, bool) {
 	return graph.Item{}, false
 }
 
-func mapKeys[V any](values map[string]V) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
+func normalizeObservedPath(raw string) string {
+	normalized := strings.TrimPrefix(slashpath.Clean("/"+nfcNormalize(raw)), "/")
+	if normalized == "." {
+		return ""
 	}
 
-	return keys
+	return normalized
 }
 
 func deferredTokensForPrimary(token string, eng *Engine, fullReconcile bool, eventCount int) []deferredDeltaToken {

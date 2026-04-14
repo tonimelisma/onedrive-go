@@ -64,54 +64,18 @@ func (m *SyncStore) ReadVisibleIssueSummary(ctx context.Context) (IssueSummary, 
 	return projection.summary, nil
 }
 
-func (i *Inspector) ListVisibleIssueGroups(ctx context.Context) ([]VisibleIssueGroup, error) {
-	projection, err := loadVisibleIssueProjection(ctx, i.db, i.logger)
-	if err != nil {
-		return nil, err
-	}
-	return projection.groups, nil
-}
-
-func (i *Inspector) CountVisibleIssues(ctx context.Context) (int, error) {
-	summary, err := i.ReadVisibleIssueSummary(ctx)
-	if err != nil {
-		return 0, err
-	}
-	return summary.VisibleTotal(), nil
-}
-
-func (i *Inspector) ReadVisibleIssueSummary(ctx context.Context) (IssueSummary, error) {
-	projection, err := loadVisibleIssueProjection(ctx, i.db, i.logger)
-	if err != nil {
-		return IssueSummary{}, err
-	}
-	return projection.summary, nil
-}
-
 func loadVisibleIssueProjection(
 	ctx context.Context,
 	db *sql.DB,
 	logger *slog.Logger,
 ) (visibleIssueProjection, error) {
-	conflictCount, err := loadVisibleConflictCount(ctx, db)
-	if err != nil {
-		return visibleIssueProjection{}, err
-	}
-
 	actionable, err := querySyncFailureRowsDB(ctx, db,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE category = 'actionable'
-		AND (issue_type IS NULL OR issue_type != ?)
 		ORDER BY last_seen_at DESC`,
-		IssueDeleteSafetyHeld,
 	)
 	if err != nil {
 		return visibleIssueProjection{}, fmt.Errorf("sync: listing visible actionable failures: %w", err)
-	}
-
-	heldDeletes, err := queryHeldDeletesDB(ctx, db)
-	if err != nil {
-		return visibleIssueProjection{}, fmt.Errorf("sync: listing visible held deletes: %w", err)
 	}
 
 	remoteBlocked, err := querySyncFailureRowsDB(ctx, db,
@@ -135,11 +99,10 @@ func loadVisibleIssueProjection(
 		return visibleIssueProjection{}, fmt.Errorf("sync: counting retrying sync failures: %w", err)
 	}
 
-	groups := buildVisibleIssueGroups(conflictCount, actionable, heldDeletes, remoteBlocked, authBlocks)
+	groups := buildVisibleIssueGroups(actionable, remoteBlocked, authBlocks)
 	if logger != nil {
 		logger.Debug("loaded visible issue projection",
 			slog.Int("groups", len(groups)),
-			slog.Int("conflicts", conflictCount),
 		)
 	}
 
@@ -147,16 +110,6 @@ func loadVisibleIssueProjection(
 		groups:  groups,
 		summary: buildVisibleIssueSummary(groups, retrying),
 	}, nil
-}
-
-func loadVisibleConflictCount(ctx context.Context, db *sql.DB) (int, error) {
-	var count int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'`,
-	).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count visible conflicts: %w", err)
-	}
-	return count, nil
 }
 
 func queryAuthScopeBlocks(ctx context.Context, db *sql.DB) ([]*ScopeBlock, error) {
@@ -225,18 +178,14 @@ func queryRetryingIssueCount(ctx context.Context, db *sql.DB) (int, error) {
 }
 
 func buildVisibleIssueGroups(
-	conflictCount int,
 	actionable []SyncFailureRow,
-	heldDeletes []HeldDeleteRecord,
 	remoteBlocked []SyncFailureRow,
 	authBlocks []*ScopeBlock,
 ) []VisibleIssueGroup {
 	groupIndex := make(map[visibleIssueGroupKey]int)
 	groups := make([]VisibleIssueGroup, 0, len(actionable)+len(authBlocks)+1)
 
-	appendVisibleConflictGroup(&groups, conflictCount)
 	addVisibleActionableGroups(&groups, groupIndex, actionable)
-	addVisibleHeldDeleteGroup(&groups, heldDeletes)
 	addVisibleRemoteBlockedGroups(&groups, groupIndex, remoteBlocked)
 	addVisibleAuthScopeGroups(&groups, groupIndex, authBlocks)
 	finalizeVisibleIssueGroups(groups)
@@ -283,56 +232,6 @@ func querySyncFailureRowsDB(ctx context.Context, db *sql.DB, query string, args 
 	defer rows.Close()
 
 	return scanSyncFailureRows(rows)
-}
-
-func queryHeldDeletesDB(ctx context.Context, db *sql.DB) ([]HeldDeleteRecord, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT drive_id, action_type, path, item_id, state, held_at, approved_at,
-			last_planned_at, last_error
-		FROM held_deletes
-		WHERE state = ?
-		ORDER BY last_planned_at DESC`,
-		HeldDeleteStateHeld,
-	)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("query held deletes: %w", err)
-	}
-	defer rows.Close()
-
-	return scanHeldDeleteRows(rows)
-}
-
-func appendVisibleConflictGroup(groups *[]VisibleIssueGroup, conflictCount int) {
-	if conflictCount <= 0 {
-		return
-	}
-
-	*groups = append(*groups, VisibleIssueGroup{
-		SummaryKey:   SummaryConflictUnresolved,
-		Count:        conflictCount,
-		VisibleCount: conflictCount,
-	})
-}
-
-func addVisibleHeldDeleteGroup(groups *[]VisibleIssueGroup, heldDeletes []HeldDeleteRecord) {
-	if len(heldDeletes) == 0 {
-		return
-	}
-
-	group := VisibleIssueGroup{
-		SummaryKey:   SummaryHeldDeletes,
-		IssueType:    IssueDeleteSafetyHeld,
-		Count:        len(heldDeletes),
-		VisibleCount: len(heldDeletes),
-		Paths:        make([]string, 0, len(heldDeletes)),
-	}
-	for i := range heldDeletes {
-		group.Paths = append(group.Paths, heldDeletes[i].Path)
-	}
-	*groups = append(*groups, group)
 }
 
 func addVisibleActionableGroups(

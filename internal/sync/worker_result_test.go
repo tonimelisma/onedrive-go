@@ -26,11 +26,5 @@ func TestWorkerResult_ThrottleTargetKey(t *testing.T) {
 		DriveID: driveID,
 	}).ThrottleTargetKey())
 
-	assert.Equal(t, throttleSharedPrefix+"remote-drive:remote-item", (&WorkerResult{
-		DriveID:       driveID,
-		TargetDriveID: targetDriveID,
-		ShortcutKey:   "remote-drive:remote-item",
-	}).ThrottleTargetKey())
-
 	assert.Empty(t, (&WorkerResult{}).ThrottleTargetKey())
 }

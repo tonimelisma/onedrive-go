@@ -148,7 +148,7 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 	// Find the file event.
 	var fileEvent *ChangeEvent
 	for i := range events {
-		if events[i].ItemID == shortcutTestFileItemID {
+		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
 
 			break
@@ -206,7 +206,7 @@ func TestFullDelta_ModifiedFile_SparseFieldsRecoveredFromBaseline(t *testing.T) 
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
 					{
-						ID: shortcutTestFileItemID, Name: "", ParentID: "", DriveID: driveid.New(synctest.TestDriveID),
+						ID: sharedTestFileItemID, Name: "", ParentID: "", DriveID: driveid.New(synctest.TestDriveID),
 						QuickXorHash: "new-hash", Size: 512,
 					},
 				},
@@ -250,7 +250,7 @@ func TestFullDelta_MovedFile(t *testing.T) {
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
 					// File moved from old-folder to new-folder.
-					{ID: shortcutTestFileItemID, Name: "doc.txt", ParentID: "folder-new", DriveID: driveid.New(synctest.TestDriveID)},
+					{ID: sharedTestFileItemID, Name: "doc.txt", ParentID: "folder-new", DriveID: driveid.New(synctest.TestDriveID)},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -263,7 +263,7 @@ func TestFullDelta_MovedFile(t *testing.T) {
 
 	var moveEvent *ChangeEvent
 	for i := range events {
-		if events[i].ItemID == shortcutTestFileItemID {
+		if events[i].ItemID == sharedTestFileItemID {
 			moveEvent = &events[i]
 
 			break
@@ -299,7 +299,7 @@ func TestFullDelta_MovedFile_SparseNameRecoveredFromBaseline(t *testing.T) {
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
 				Items: []graph.Item{
-					{ID: shortcutTestFileItemID, Name: "", ParentID: "folder-new", DriveID: driveid.New(synctest.TestDriveID)},
+					{ID: sharedTestFileItemID, Name: "", ParentID: "folder-new", DriveID: driveid.New(synctest.TestDriveID)},
 				},
 				DeltaLink: "delta-link",
 			},
@@ -342,7 +342,7 @@ func TestFullDelta_DescendantFollowsSparseRenamedParentWithOmittedParentReferenc
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
 					// Descendant arrives in the same sparse batch as its renamed parent.
-					{ID: shortcutTestFileItemID, Name: "q1.txt", ParentID: "reports", DriveID: driveid.New(synctest.TestDriveID), QuickXorHash: "new-hash"},
+					{ID: sharedTestFileItemID, Name: "q1.txt", ParentID: "reports", DriveID: driveid.New(synctest.TestDriveID), QuickXorHash: "new-hash"},
 					// Parent name changed, but Graph omits unchanged parentReference.
 					{ID: "reports", Name: "Statements", ParentID: "", DriveID: driveid.New(synctest.TestDriveID), IsFolder: true},
 				},
@@ -357,7 +357,7 @@ func TestFullDelta_DescendantFollowsSparseRenamedParentWithOmittedParentReferenc
 
 	var fileEvent *ChangeEvent
 	for i := range events {
-		if events[i].ItemID == shortcutTestFileItemID {
+		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
 			break
 		}
@@ -480,7 +480,7 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 			{
 				page: &graph.DeltaPage{
 					Items: []graph.Item{
-						{ID: shortcutTestFileItemID, Name: "report.pdf", ParentID: "d1", DriveID: driveid.New(synctest.TestDriveID)},
+						{ID: sharedTestFileItemID, Name: "report.pdf", ParentID: "d1", DriveID: driveid.New(synctest.TestDriveID)},
 					},
 					DeltaLink: "delta-link",
 				},
@@ -495,7 +495,7 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 	// Find file event.
 	var fileEvent *ChangeEvent
 	for i := range events {
-		if events[i].ItemID == shortcutTestFileItemID {
+		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
 
 			break
@@ -562,7 +562,7 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 
 	var fileEvent *ChangeEvent
 	for i := range events {
-		if events[i].ItemID == shortcutTestFileItemID {
+		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
 
 			break
@@ -2026,83 +2026,9 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Shortcut detection (6.4a.2)
+// Embedded shared-folder link handling
 // ---------------------------------------------------------------------------
 
-// Validates: R-6.7.20
-// TestClassifyItem_ShortcutDetection verifies that items with a remoteItem
-// facet (RemoteDriveID + IsFolder) are classified as ChangeShortcut events
-// instead of regular folder creates/modifies.
-func TestClassifyItem_ShortcutDetection(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(synctest.TestDriveID)
-	bl := emptyBaseline()
-	obs := NewRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
-
-	inflight := map[driveid.ItemKey]InflightParent{
-		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
-	}
-
-	// A shortcut folder: IsFolder=true with RemoteDriveID pointing to another drive.
-	item := &graph.Item{
-		ID:            "shortcut-1",
-		Name:          "TeamDocs",
-		ParentID:      "root",
-		DriveID:       driveID,
-		IsFolder:      true,
-		RemoteDriveID: "source-drive-abc",
-		RemoteItemID:  "source-item-123",
-	}
-
-	ev := obs.Converter.ClassifyItem(item, inflight)
-	require.NotNil(t, ev, "shortcut should produce an event")
-
-	assert.Equal(t, ChangeShortcut, ev.Type, "shortcut should be classified as ChangeShortcut")
-	assert.Equal(t, "shortcut-1", ev.ItemID)
-	assert.Equal(t, "TeamDocs", ev.Path)
-	assert.Equal(t, ItemTypeFolder, ev.ItemType)
-	assert.Equal(t, "source-drive-abc", ev.RemoteDriveID)
-	assert.Equal(t, "source-item-123", ev.RemoteItemID)
-}
-
-// TestClassifyItem_ShortcutDetection_NotFolder verifies that items with
-// RemoteDriveID but NOT IsFolder are still classified as shortcuts. The Graph
-// API delta endpoint may return shared folder shortcuts without the folder
-// facet (IsFolder=false). RemoteDriveID alone is sufficient.
-func TestClassifyItem_ShortcutDetection_NotFolder(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(synctest.TestDriveID)
-	bl := emptyBaseline()
-	obs := NewRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
-
-	inflight := map[driveid.ItemKey]InflightParent{
-		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
-	}
-
-	// A shared folder shortcut without the folder facet — should still be
-	// classified as a shortcut because RemoteDriveID is set.
-	item := &graph.Item{
-		ID:            "shared-file-1",
-		Name:          "Shared Folder",
-		ParentID:      "root",
-		DriveID:       driveID,
-		IsFolder:      false,
-		RemoteDriveID: "source-drive-abc",
-		RemoteItemID:  "source-item-456",
-	}
-
-	ev := obs.Converter.ClassifyItem(item, inflight)
-	require.NotNil(t, ev, "shortcut without folder facet should produce an event")
-
-	assert.Equal(t, ChangeShortcut, ev.Type, "item with RemoteDriveID should be ChangeShortcut regardless of IsFolder")
-	assert.Equal(t, "source-drive-abc", ev.RemoteDriveID)
-	assert.Equal(t, "source-item-456", ev.RemoteItemID)
-}
-
-// TestClassifyItem_RegularFileNoRemoteDriveID verifies that a regular file
-// without RemoteDriveID is classified normally (not as a shortcut).
 func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
 	t.Parallel()
 
@@ -2129,25 +2055,18 @@ func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
 	assert.Equal(t, ChangeCreate, ev.Type, "regular file without RemoteDriveID should be ChangeCreate")
 }
 
-// TestClassifyItem_ShortcutDeleted verifies that a deleted shortcut produces
-// a ChangeDelete event (not ChangeShortcut) so the planner can handle cleanup.
-func TestClassifyItem_ShortcutDeleted(t *testing.T) {
+func TestClassifyItem_EmbeddedSharedLinkIgnored(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	bl := baselineWith(&BaselineEntry{
-		Path:    "TeamDocs",
-		DriveID: driveID,
-		ItemID:  "shortcut-1",
-	})
-	obs := NewRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(nil, emptyBaseline(), driveID, synctest.TestLogger(t))
 
 	inflight := map[driveid.ItemKey]InflightParent{
 		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
 	}
 
 	item := &graph.Item{
-		ID:            "shortcut-1",
+		ID:            "shared-link-1",
 		Name:          "TeamDocs",
 		ParentID:      "root",
 		DriveID:       driveID,
@@ -2158,15 +2077,10 @@ func TestClassifyItem_ShortcutDeleted(t *testing.T) {
 	}
 
 	ev := obs.Converter.ClassifyItem(item, inflight)
-	require.NotNil(t, ev, "deleted shortcut should produce an event")
-
-	assert.Equal(t, ChangeDelete, ev.Type, "deleted shortcut should be ChangeDelete")
-	assert.Equal(t, "TeamDocs", ev.Path)
+	assert.Nil(t, ev, "embedded shared-folder links should be ignored in a normal drive")
 }
 
-// TestFullDelta_ShortcutsInDelta verifies that shortcuts appear in FullDelta
-// output with ChangeShortcut type and populated remote fields.
-func TestFullDelta_ShortcutsInDelta(t *testing.T) {
+func TestFullDelta_EmbeddedSharedLinksIgnored(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
@@ -2194,22 +2108,7 @@ func TestFullDelta_ShortcutsInDelta(t *testing.T) {
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err)
 
-	// Should have 2 events: 1 file create + 1 shortcut.
-	require.Len(t, events, 2)
-
-	// Find the shortcut event.
-	var shortcutEvent *ChangeEvent
-	for i := range events {
-		if events[i].Type == ChangeShortcut {
-			shortcutEvent = &events[i]
-
-			break
-		}
-	}
-
-	require.NotNil(t, shortcutEvent, "should have a ChangeShortcut event")
-	assert.Equal(t, "sc-1", shortcutEvent.ItemID)
-	assert.Equal(t, "SharedFolder", shortcutEvent.Path)
-	assert.Equal(t, "remote-drive-1", shortcutEvent.RemoteDriveID)
-	assert.Equal(t, "remote-item-1", shortcutEvent.RemoteItemID)
+	require.Len(t, events, 1)
+	assert.Equal(t, "f1", events[0].ItemID)
+	assert.Equal(t, "myfile.txt", events[0].Path)
 }

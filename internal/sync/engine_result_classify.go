@@ -360,7 +360,7 @@ func deriveScopeKey(r *WorkerResult) ScopeKey {
 	if targetDriveID.IsZero() {
 		targetDriveID = r.DriveID
 	}
-	return ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
+	return ScopeKeyForResult(r.HTTPStatus, targetDriveID)
 }
 
 func issueTypeForResult(r *WorkerResult) string {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -48,7 +49,7 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 
 	activeScopes := make([]ScopeBlock, 0, len(blocks))
 	for i := range blocks {
-		if blocks[i].Key.IsPermRemoteWrite() {
+		if blocks[i].Key.IsPermRemote() {
 			continue
 		}
 		activeScopes = append(activeScopes, *blocks[i])
@@ -60,7 +61,7 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 	}
 	seenRemote := make(map[ScopeKey]bool, len(remoteHeld))
 	for i := range remoteHeld {
-		if !remoteHeld[i].ScopeKey.IsPermRemoteWrite() || seenRemote[remoteHeld[i].ScopeKey] {
+		if !remoteHeld[i].ScopeKey.IsPermRemote() || seenRemote[remoteHeld[i].ScopeKey] {
 			continue
 		}
 		seenRemote[remoteHeld[i].ScopeKey] = true
@@ -126,7 +127,7 @@ func (controller *scopeController) dropLegacyRemoteScopes(
 	flow := controller.flow
 
 	for i := range blocks {
-		if !blocks[i].Key.IsPermRemoteWrite() {
+		if !blocks[i].Key.IsPermRemote() {
 			continue
 		}
 		if err := flow.engine.baseline.DropLegacyRemoteBlockedScope(ctx, blocks[i].Key); err != nil {
@@ -182,11 +183,13 @@ func (controller *scopeController) loadRepairedPersistedFailures(
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing sync failures: %w", err)
 	}
-	if controller.clearResolvedPersistedRemoteFailures(ctx, failures) {
-		failures, err = flow.engine.baseline.ListSyncFailures(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("sync: relisting sync failures after remote blocked cleanup: %w", err)
-		}
+	if !controller.clearResolvedPersistedRemoteFailures(ctx, failures) {
+		return failures, nil
+	}
+
+	failures, err = flow.engine.baseline.ListSyncFailures(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: relisting sync failures after remote cleanup: %w", err)
 	}
 
 	return failures, nil
@@ -207,7 +210,7 @@ func (controller *scopeController) clearResolvedPersistedRemoteFailures(
 
 	remoteResolved := false
 	for i := range failures {
-		if failures[i].Role != FailureRoleHeld || !failures[i].ScopeKey.IsPermRemoteWrite() {
+		if failures[i].Role != FailureRoleHeld || !failures[i].ScopeKey.IsPermRemote() {
 			continue
 		}
 		if flow.buildRetryCandidate(ctx, bl, &failures[i]).resolved {
@@ -229,7 +232,7 @@ func (controller *scopeController) repairPersistedNonAuthScopes(
 	facts := summarizePersistedScopeFailures(failures)
 
 	for i := range blocks {
-		if blocks[i].Key == SKAuthAccount() || blocks[i].Key.IsPermRemoteWrite() {
+		if blocks[i].Key == SKAuthAccount() || blocks[i].Key.IsPermRemote() {
 			continue
 		}
 
@@ -329,9 +332,9 @@ func scopeStartupPolicyFor(key ScopeKey) scopeStartupPolicy {
 	switch {
 	case key == SKAuthAccount():
 		return scopeStartupRevalidateAuth
-	case key.IsPermLocalRead(), key.IsPermLocalWrite():
+	case key.IsPermDir(), key.IsPermRemote():
 		return scopeStartupRequiresBoundary
-	case key == SKQuotaOwn() || key.Kind == ScopeQuotaShortcut:
+	case key == SKQuotaOwn():
 		return scopeStartupRequiresScopedFailures
 	case key.IsThrottleTarget(), key == SKThrottleAccount(), key == SKService():
 		return scopeStartupServerTimedOnly
@@ -619,35 +622,12 @@ func scopeTimingSource(retryAfter time.Duration) ScopeTimingSource {
 }
 
 // isObservationSuppressed returns true if a global scope block is active,
-// meaning all shortcut observation polling should be skipped to avoid wasting
+// meaning all remote observation polling should be skipped to avoid wasting
 // API calls. Target-scoped 429 blocks are handled separately.
 func (controller *scopeController) isObservationSuppressed(watch *watchRuntime) bool {
 	return controller.isScopeBlocked(watch, SKAuthAccount()) ||
 		controller.isScopeBlocked(watch, SKThrottleAccount()) ||
 		controller.isScopeBlocked(watch, SKService())
-}
-
-// suppressedShortcutTargets returns the exact shared shortcut targets whose
-// observation should be skipped while target-scoped 429 blocks are active.
-// Own-drive throttles do not suppress shortcut observation.
-func (controller *scopeController) suppressedShortcutTargets(watch *watchRuntime) map[string]struct{} {
-	keys := controller.scopeBlockKeys(watch)
-	if len(keys) == 0 {
-		return nil
-	}
-
-	var suppressed map[string]struct{}
-	for i := range keys {
-		if !keys[i].IsThrottleShared() {
-			continue
-		}
-		if suppressed == nil {
-			suppressed = make(map[string]struct{})
-		}
-		suppressed[keys[i].ThrottleShortcutKey()] = struct{}{}
-	}
-
-	return suppressed
 }
 
 // feedScopeDetection feeds a worker result into scope detection sliding
@@ -767,6 +747,119 @@ func (controller *scopeController) discardScope(ctx context.Context, watch *watc
 	return nil
 }
 
+func pathMatchesPrefix(path string, prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
+}
+
+func (controller *scopeController) clearResolvedRemoteBlockedFailures(
+	ctx context.Context,
+	watch *watchRuntime,
+	changedPaths map[string]bool,
+) {
+	if len(changedPaths) == 0 {
+		return
+	}
+
+	flow := controller.flow
+	rows, err := flow.engine.baseline.ListRemoteBlockedFailures(ctx)
+	if err != nil {
+		flow.engine.logger.Warn("failed to list remote blocked failures for cleanup",
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	clearedScopes := make(map[ScopeKey]bool)
+	bl, err := flow.engine.baseline.Load(ctx)
+	if err != nil {
+		flow.engine.logger.Warn("failed to load baseline for remote blocked cleanup",
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	for i := range rows {
+		if !remoteBlockedFailureRelevant(&rows[i], changedPaths) {
+			continue
+		}
+		if flow.buildRetryCandidate(ctx, bl, &rows[i]).resolved {
+			flow.clearFailureCandidate(ctx, &rows[i], "cleanupResolvedRemoteBlockedFailures")
+			clearedScopes[rows[i].ScopeKey] = true
+		}
+	}
+
+	if watch == nil || len(clearedScopes) == 0 {
+		return
+	}
+
+	controller.releaseResolvedRemoteScopes(ctx, watch, clearedScopes)
+}
+
+func remoteBlockedFailureRelevant(
+	row *SyncFailureRow,
+	changedPaths map[string]bool,
+) bool {
+	boundary := row.ScopeKey.RemotePath()
+	for changedPath := range changedPaths {
+		if pathMatchesPrefix(row.Path, changedPath) ||
+			pathMatchesPrefix(changedPath, row.Path) ||
+			pathMatchesPrefix(boundary, changedPath) ||
+			pathMatchesPrefix(changedPath, boundary) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (controller *scopeController) releaseResolvedRemoteScopes(
+	ctx context.Context,
+	watch *watchRuntime,
+	clearedScopes map[ScopeKey]bool,
+) {
+	flow := controller.flow
+	remainingScopes, ok := controller.remainingRemoteBlockedScopes(ctx)
+	if !ok {
+		return
+	}
+
+	for key := range clearedScopes {
+		if remainingScopes[key] {
+			continue
+		}
+		if err := controller.releaseScope(ctx, watch, key); err != nil {
+			flow.engine.logger.Warn("failed to clear resolved remote blocked scope",
+				slog.String("scope_key", key.String()),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+}
+
+func (controller *scopeController) remainingRemoteBlockedScopes(
+	ctx context.Context,
+) (map[ScopeKey]bool, bool) {
+	flow := controller.flow
+
+	remainingRows, err := flow.engine.baseline.ListRemoteBlockedFailures(ctx)
+	if err != nil {
+		flow.engine.logger.Warn("failed to relist remote blocked failures after cleanup",
+			slog.String("error", err.Error()),
+		)
+		return nil, false
+	}
+
+	remainingScopes := make(map[ScopeKey]bool, len(remainingRows))
+	for i := range remainingRows {
+		remainingScopes[remainingRows[i].ScopeKey] = true
+	}
+
+	return remainingScopes, true
+}
+
 // admitReady applies watch-mode trial interception and scope admission to a
 // ready action set, returning the actions that should enter the watch loop's
 // outbox. It is the single admission path used by both newly-planned actions
@@ -782,7 +875,8 @@ func (controller *scopeController) admitReady(
 
 	for _, ta := range ready {
 		if ta.IsTrial {
-			if ta.TrialScopeKey.BlocksTrackedAction(ta) {
+			if ta.TrialScopeKey.BlocksAction(ta.Action.Path,
+				ta.Action.ThrottleTargetKey(), ta.Action.Type) {
 				dispatch = append(dispatch, ta)
 			} else {
 				// Trial candidate no longer matches scope — clear stale failure,
@@ -991,7 +1085,7 @@ func (controller *scopeController) recordCascadeFailure(
 		driveID = flow.engine.driveID
 	}
 
-	issueType := issueTypeForResult(parentResult)
+	issueType := issueTypeForHTTPStatus(parentResult.HTTPStatus, parentResult.Err)
 
 	if err := flow.engine.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       action.Path,

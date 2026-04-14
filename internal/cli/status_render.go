@@ -211,7 +211,7 @@ func printSyncStateSummaryLines(w io.Writer, ss *syncStateInfo) error {
 		}
 	}
 
-	return printStatusDurableIntentLines(w, ss)
+	return nil
 }
 
 func printSyncStateStoreLines(w io.Writer, ss *syncStateInfo) error {
@@ -255,34 +255,6 @@ func writeOptionalStatusValueLine(w io.Writer, value string, format string) erro
 	}
 
 	return writef(w, format, value)
-}
-
-func printStatusDurableIntentLines(w io.Writer, ss *syncStateInfo) error {
-	if err := writeOptionalStatusCountLine(
-		w,
-		ss.ApprovedDeletesWaiting,
-		"    Approved deletes waiting: %d\n",
-	); err != nil {
-		return err
-	}
-
-	if err := writeOptionalStatusCountLine(
-		w,
-		ss.QueuedConflictRequests,
-		"    Queued conflict resolutions: %d\n",
-	); err != nil {
-		return err
-	}
-
-	if err := writeOptionalStatusCountLine(
-		w,
-		ss.ApplyingConflictRequests,
-		"    Applying conflicts: %d\n",
-	); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func printSummaryText(w io.Writer, s statusSummary) error {
