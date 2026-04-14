@@ -508,7 +508,6 @@ func (s *benchLiveScenarioState) prepareRemoteFixture(ctx context.Context, subje
 		credentialDir,
 		liveConfig.PrimaryDrive,
 		seedSyncDir,
-		s.fixture.Manifest.RemoteScopePath,
 	)
 	if err != nil {
 		return err
@@ -552,7 +551,6 @@ func (s *benchLiveScenarioState) newSampleRuntime() (benchLiveCommandRuntime, er
 		credentialDir,
 		liveConfig.PrimaryDrive,
 		"",
-		s.fixture.Manifest.RemoteScopePath,
 	)
 }
 
@@ -589,7 +587,6 @@ func createBenchLiveRuntime(
 	credentialDir string,
 	driveID string,
 	syncDir string,
-	remoteScopePath string,
 ) (benchLiveCommandRuntime, error) {
 	runtimeRoot, err := localpath.MkdirTemp(workRoot, "runtime-*")
 	if err != nil {
@@ -620,10 +617,9 @@ func createBenchLiveRuntime(
 	logPath := filepath.Join(runtimeRoot, "bench.log")
 	configPath := filepath.Join(runtimeRoot, "config.toml")
 	configBody := fmt.Sprintf(
-		"log_level = %q\nlog_file = %q\nsync_paths = [%q]\n\n[%q]\nsync_dir = %q\n",
+		"log_level = %q\nlog_file = %q\n\n[%q]\nsync_dir = %q\n",
 		"info",
 		logPath,
-		remoteScopePath,
 		driveID,
 		syncDir,
 	)

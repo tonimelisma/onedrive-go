@@ -1,4 +1,4 @@
-// Package sync persists sync baseline, observation, conflict, failure, and scope state.
+// Package sync persists sync baseline, observation, failure, scope-block, and metadata state.
 //
 // Contents:
 //   - ResetFailure:             reset single failed path
@@ -249,7 +249,7 @@ func (m *SyncStore) ReleaseScope(
 // it are no longer valid" transition.
 //
 // This is used when the blocked subtree itself disappears, for example when a
-// shortcut is removed. Discarding differs from release: held descendants are
+// configured root disappears. Discarding differs from release: held descendants are
 // deleted instead of made retryable.
 func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err error) {
 	wire := scopeKey.String()

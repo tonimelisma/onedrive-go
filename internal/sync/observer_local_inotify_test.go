@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -162,33 +161,6 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrWatchLimitExhausted,
 		"Watch should return ErrWatchLimitExhausted, got: %v", err)
-}
-
-func TestAddWatchedDescendants_ENOSPCRollsBackNewSubtreeOnly(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "entered", "child", "grand"), 0o700))
-
-	watcher := newEnospcWatcher(1) // child succeeds, grand fails
-
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	snapshot, err := syncscope.NewSnapshot(syncscope.Config{SyncPaths: []string{"entered"}}, nil)
-	require.NoError(t, err)
-	obs.SetScopeSnapshot(snapshot)
-	obs.watchedDirs = map[string]struct{}{
-		filepath.Clean(root):                           {},
-		filepath.Clean(filepath.Join(root, "entered")): {},
-	}
-
-	tree := mustOpenSyncTree(t, root)
-	obs.addWatchedDescendants(t.Context(), watcher, tree, "entered")
-
-	assert.Equal(t, []string{filepath.Join(root, "entered", "child")}, watcher.removedPaths)
-	assert.Contains(t, obs.watchedDirs, filepath.Clean(root))
-	assert.Contains(t, obs.watchedDirs, filepath.Clean(filepath.Join(root, "entered")))
-	assert.NotContains(t, obs.watchedDirs, filepath.Clean(filepath.Join(root, "entered", "child")))
-	assert.NotContains(t, obs.watchedDirs, filepath.Clean(filepath.Join(root, "entered", "child", "grand")))
 }
 
 // ---------------------------------------------------------------------------

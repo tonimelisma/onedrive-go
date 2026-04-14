@@ -180,17 +180,6 @@ func (e *Executor) ExecuteEditDeleteConflict(ctx context.Context, action *Action
 	return o
 }
 
-// ConflictCopyGlob returns the glob pattern for finding conflict copies of a
-// given absolute file path. The pattern matches "<stem>.conflict-*<ext>" in the
-// same directory. Used during conflict resolution cleanup.
-func ConflictCopyGlob(absPath string) string {
-	dir := filepath.Dir(absPath)
-	name := filepath.Base(absPath)
-	stem, ext := ConflictStemExt(name)
-
-	return filepath.Join(dir, fmt.Sprintf("%s.conflict-*%s", stem, ext))
-}
-
 // ConflictCopyPath generates a timestamped conflict copy path.
 // "file.txt" -> "file.conflict-20260101-120000.txt"
 // ".bashrc"  -> ".bashrc.conflict-20260101-120000" (dotfile: no separate ext)

@@ -41,25 +41,24 @@ type ScanResult struct {
 //	Buffer synthetic deletes: Source, Type, Path, ItemID, ParentID, DriveID,
 //	  ItemType, Name, IsDeleted. No Size/Hash/Mtime (move context only).
 type ChangeEvent struct {
-	Source          ChangeSource
-	Type            ChangeType
-	ForcedAction    ActionType // retry/crash-recovery hint; valid only when HasForcedAction is true
-	HasForcedAction bool
-	Path            string     // NFC-normalized, relative to sync root
-	OldPath         string     // for moves only
-	ItemID          string     // server-assigned (remote only; empty for local)
-	ParentID        string     // server parent ID (remote only)
-	DriveID         driveid.ID // normalized (lowercase, zero-padded to 16 chars)
-	ItemType        ItemType
-	Name            string // URL-decoded, NFC-normalized
-	Size            int64
-	Hash            string // QuickXorHash (base64); empty for folders
-	Mtime           int64  // Unix nanoseconds
-	ETag            string // remote only
-	CTag            string // remote only
-	IsDeleted       bool
-	RemoteDriveID   string // for shortcuts: source drive containing shared content
-	RemoteItemID    string // for shortcuts: source folder ID on the remote drive
+	Source           ChangeSource
+	Type             ChangeType
+	ForcedAction     ActionType // retry/crash-recovery hint; valid only when HasForcedAction is true
+	HasForcedAction  bool
+	Path             string     // NFC-normalized, relative to sync root
+	OldPath          string     // for moves only
+	ItemID           string     // server-assigned (remote only; empty for local)
+	ParentID         string     // server parent ID (remote only)
+	DriveID          driveid.ID // normalized (lowercase, zero-padded to 16 chars)
+	ItemType         ItemType
+	Name             string // URL-decoded, NFC-normalized
+	Size             int64
+	Hash             string // QuickXorHash (base64); empty for folders
+	Mtime            int64  // Unix nanoseconds
+	ETag             string // remote only
+	CTag             string // remote only
+	IsDeleted        bool
+	TargetRootItemID string // configured remote root item for scoped-root observation
 }
 
 // BaselineEntry represents the confirmed synced state of a single path.
@@ -263,8 +262,8 @@ func (b *Baseline) DescendantsOf(prefix string) []*BaselineEntry {
 // narrow window and permanently lost if the client's token advances past them.
 //
 // When pathPrefix is non-empty, only entries under that prefix are considered
-// (used for shortcut-scoped orphan detection). When empty, all entries for the
-// given driveID are checked.
+// (used for scoped-root observation). When empty, all entries for the given
+// driveID are checked.
 //
 // Returns synthesized ChangeDelete events for each orphan, which can be fed
 // through the normal planner + executor pipeline.
@@ -333,24 +332,18 @@ type PathChanges struct {
 // RemoteState captures the current state of a path as observed from
 // the Graph API delta response.
 type RemoteState struct {
-	ItemID     string
-	DriveID    driveid.ID // normalized (lowercase, zero-padded to 16 chars)
-	ParentID   string
-	Name       string
-	ItemType   ItemType
-	Size       int64
-	Hash       string
-	Mtime      int64
-	ETag       string
-	CTag       string
-	IsDeleted  bool
-	IsFiltered bool
-
-	// Shortcut scope identity — populated for items observed through a
-	// shortcut converter, empty for own-drive items. Transient: not
-	// persisted in the remote_state table.
-	RemoteDriveID string // shortcut source drive
-	RemoteItemID  string // shortcut source folder
+	ItemID           string
+	DriveID          driveid.ID // normalized (lowercase, zero-padded to 16 chars)
+	ParentID         string
+	Name             string
+	ItemType         ItemType
+	Size             int64
+	Hash             string
+	Mtime            int64
+	ETag             string
+	CTag             string
+	IsDeleted        bool
+	TargetRootItemID string
 }
 
 // LocalState captures the current state of a path as observed from
@@ -388,58 +381,10 @@ type ConflictRecord struct {
 	RemoteHash   string
 	LocalMtime   int64
 	RemoteMtime  int64
-	Resolution   string // final outcome: unresolved, keep_local, keep_remote, keep_both
+	Resolution   string // final outcome for internal bookkeeping
 	ResolvedAt   int64  // 0 if unresolved
-	ResolvedBy   string // ResolvedByUser, ResolvedByAuto, or "" if unresolved
+	ResolvedBy   string // ResolvedByAuto or "" if unresolved
 }
-
-// ConflictRequestRecord is the durable user-intent workflow for one conflict.
-// It embeds the conflict facts needed for engine-owned execution while keeping
-// request lifecycle ownership separate from the derived conflict ledger.
-type ConflictRequestRecord struct {
-	ConflictRecord
-	State               string // queued, applying
-	RequestedResolution string
-	RequestedAt         int64
-	ApplyingAt          int64
-	LastError           string
-}
-
-// HeldDeleteRecord is the durable user-approval ledger for delete safety
-// threshold holds. It records safety holds and approvals separately from
-// ordinary sync failures.
-type HeldDeleteRecord struct {
-	DriveID       driveid.ID
-	ItemID        string
-	Path          string
-	ActionType    ActionType
-	State         string
-	HeldAt        int64
-	ApprovedAt    int64
-	LastPlannedAt int64
-	LastError     string
-}
-
-// Shortcut represents a OneDrive shortcut or shared folder that requires
-// separate observation on the source drive. Stored in the shortcuts table.
-// Note: the shortcuts table has a read_only column that is no longer used —
-// permission state lives entirely in sync_failures + in-memory permission cache.
-type Shortcut struct {
-	ItemID       string // shortcut item ID in the user's drive
-	RemoteDrive  string // source drive ID
-	RemoteItem   string // source folder ID
-	LocalPath    string // local filesystem path for this shortcut's content
-	DriveType    string // source drive type: "personal", "business", "documentLibrary"
-	Observation  string // "unknown", "delta", or "enumerate"
-	DiscoveredAt int64  // unix timestamp when first seen
-}
-
-// Shortcut observation strategies.
-const (
-	ObservationUnknown   = "unknown"
-	ObservationDelta     = "delta"
-	ObservationEnumerate = "enumerate"
-)
 
 // VerifyResult describes the verification status of a single file.
 type VerifyResult struct {

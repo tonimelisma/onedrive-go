@@ -21,11 +21,6 @@ type sqlTxRunner interface {
 	PrepareContext(context.Context, string) (*sql.Stmt, error)
 }
 
-type sqlCommitTx interface {
-	sqlTxRunner
-	Commit() error
-}
-
 type perfTx struct {
 	*sql.Tx
 	collector *perf.Collector

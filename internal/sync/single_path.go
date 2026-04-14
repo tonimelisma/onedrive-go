@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -60,38 +59,10 @@ func ObserveSinglePathWithFilter(
 	filter LocalFilterConfig,
 	rules LocalObservationRules,
 ) (SinglePathObservation, error) {
-	return ObserveSinglePathWithScope(
-		logger,
-		syncTree,
-		relPath,
-		base,
-		observeStartNano,
-		hashFunc,
-		filter,
-		rules,
-		syncscope.Snapshot{},
-	)
-}
-
-// ObserveSinglePathWithScope applies the canonical single-path reconstruction
-// semantics together with the effective bidirectional sync scope. Paths
-// outside the active scope resolve silently because the engine no longer owns
-// them for planning.
-func ObserveSinglePathWithScope(
-	logger *slog.Logger,
-	syncTree *synctree.Root,
-	relPath string,
-	base *BaselineEntry,
-	observeStartNano int64,
-	hashFunc func(string) (string, error),
-	filter LocalFilterConfig,
-	rules LocalObservationRules,
-	scopeSnapshot syncscope.Snapshot,
-) (SinglePathObservation, error) {
 	path := nfcNormalize(filepath.ToSlash(relPath))
 	name := nfcNormalize(filepath.Base(path))
 
-	if observation, resolved := resolveSinglePathWithoutStat(name, path, filter, rules, scopeSnapshot); resolved {
+	if observation, resolved := resolveSinglePathWithoutStat(name, path, filter, rules); resolved {
 		return observation, nil
 	}
 
@@ -100,7 +71,7 @@ func ObserveSinglePathWithScope(
 		return SinglePathObservation{}, err
 	}
 
-	if observation, resolved := resolveSinglePathWithInfo(name, path, info, isSymlink, filter, rules, scopeSnapshot); resolved {
+	if observation, resolved := resolveSinglePathWithInfo(name, path, info, isSymlink, filter, rules); resolved {
 		return observation, nil
 	}
 
@@ -118,16 +89,7 @@ func resolveSinglePathWithoutStat(
 	path string,
 	filter LocalFilterConfig,
 	rules LocalObservationRules,
-	scopeSnapshot syncscope.Snapshot,
 ) (SinglePathObservation, bool) {
-	if scopeSnapshot.IsMarkerFile(path) {
-		return SinglePathObservation{Resolved: true}, true
-	}
-
-	if !scopeSnapshot.AllowsPath(path) && !scopeSnapshot.ShouldTraverseDir(path) {
-		return SinglePathObservation{Resolved: true}, true
-	}
-
 	if skip := shouldObserveWithFilter(name, path, observedKindUnknown, filter, rules); skip != nil {
 		if skip.Reason == "" {
 			return SinglePathObservation{Resolved: true}, true
@@ -164,17 +126,12 @@ func resolveSinglePathWithInfo(
 	isSymlink bool,
 	filter LocalFilterConfig,
 	rules LocalObservationRules,
-	scopeSnapshot syncscope.Snapshot,
 ) (SinglePathObservation, bool) {
 	if info == nil {
 		return SinglePathObservation{Resolved: true}, true
 	}
 
 	if shouldSkipObservedSymlink(isSymlink, filter) {
-		return SinglePathObservation{Resolved: true}, true
-	}
-
-	if !singlePathAllowedByScope(path, info, scopeSnapshot) {
 		return SinglePathObservation{Resolved: true}, true
 	}
 
@@ -196,14 +153,6 @@ func resolveSinglePathWithInfo(
 		Detail:   fmt.Sprintf("file size %d bytes exceeds 250 GB limit", info.Size()),
 		FileSize: info.Size(),
 	}}, true
-}
-
-func singlePathAllowedByScope(path string, info os.FileInfo, scopeSnapshot syncscope.Snapshot) bool {
-	if info.IsDir() {
-		return scopeSnapshot.ShouldTraverseDir(path) && scopeSnapshot.AllowsPath(path)
-	}
-
-	return scopeSnapshot.AllowsPath(path)
 }
 
 func singlePathItemType(info os.FileInfo) ItemType {

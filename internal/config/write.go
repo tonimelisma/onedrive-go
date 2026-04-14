@@ -37,20 +37,11 @@ func defaultConfigTemplate() string {
 # ── Global settings ──
 # Uncomment and modify to override defaults.
 
-# Sync filters
-# skip_files = []
-# skip_dirs = []
-# skip_dotfiles = false
-# skip_symlinks = false
-# sync_paths = []
-# ignore_marker = %q
-
 # Transfers
 # transfer_workers = %d
 # check_workers = %d
 
 # Safety
-# delete_safety_threshold = %d
 # min_free_space = %q
 # use_local_trash = %t      # platform default
 
@@ -69,12 +60,9 @@ func defaultConfigTemplate() string {
 # ── Drives ──
 # Added automatically by 'login' and 'drive add'.
 # Each section name is the canonical drive identifier.
-# Filter settings may be set globally and overridden per drive below.
 `,
-		defaultIgnoreMarker,
 		defaultTransferWorkers,
 		defaultCheckWorkers,
-		defaultDeleteSafetyThreshold,
 		defaultMinFreeSpace,
 		defaultUseLocalTrash(),
 		defaultPollInterval,

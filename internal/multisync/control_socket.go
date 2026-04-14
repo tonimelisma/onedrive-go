@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,16 +37,11 @@ const (
 	controlCommandStatus controlCommandKind = iota
 	controlCommandReload
 	controlCommandStop
-	controlCommandApproveHeldDeletes
-	controlCommandRequestConflictResolution
 )
 
 type controlCommand struct {
-	kind       controlCommandKind
-	driveID    driveid.CanonicalID
-	conflictID string
-	resolution string
-	response   chan controlResponse
+	kind     controlCommandKind
+	response chan controlResponse
 }
 
 type controlResponse struct {
@@ -63,28 +57,6 @@ type ControlSocketInUseError struct {
 
 func (e *ControlSocketInUseError) Error() string {
 	return fmt.Sprintf("another sync process is already running (control socket %s is live)", e.Path)
-}
-
-type controlRequestError struct {
-	status int
-	code   synccontrol.ErrorCode
-	err    error
-}
-
-func (e *controlRequestError) Error() string {
-	return e.err.Error()
-}
-
-func (e *controlRequestError) Unwrap() error {
-	return e.err
-}
-
-func newControlRequestError(status int, code synccontrol.ErrorCode, err error) error {
-	return &controlRequestError{
-		status: status,
-		code:   code,
-		err:    err,
-	}
 }
 
 type controlSocketServer struct {
@@ -364,11 +336,7 @@ func (o *Orchestrator) handlePerfCaptureRequest(
 }
 
 func parseControlCommand(r *http.Request) (controlCommand, bool) {
-	if cmd, ok := parseRootControlCommand(r); ok {
-		return cmd, true
-	}
-
-	return parseDriveControlCommand(r)
+	return parseRootControlCommand(r)
 }
 
 func parseRootControlCommand(r *http.Request) (controlCommand, bool) {
@@ -382,54 +350,6 @@ func parseRootControlCommand(r *http.Request) (controlCommand, bool) {
 	default:
 		return controlCommand{}, false
 	}
-}
-
-func parseDriveControlCommand(r *http.Request) (controlCommand, bool) {
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) < 4 || parts[0] != "v1" || parts[1] != "drives" || r.Method != http.MethodPost {
-		return controlCommand{}, false
-	}
-
-	rawDrive, err := url.PathUnescape(parts[2])
-	if err != nil {
-		return controlCommand{}, false
-	}
-	cid, err := driveid.NewCanonicalID(rawDrive)
-	if err != nil {
-		return controlCommand{}, false
-	}
-
-	if len(parts) == 5 && parts[3] == "held-deletes" && parts[4] == "approve" {
-		return controlCommand{kind: controlCommandApproveHeldDeletes, driveID: cid}, true
-	}
-
-	return parseConflictResolutionCommand(r, parts, cid)
-}
-
-func parseConflictResolutionCommand(
-	r *http.Request,
-	parts []string,
-	cid driveid.CanonicalID,
-) (controlCommand, bool) {
-	if len(parts) != 6 || parts[3] != "conflicts" || parts[5] != "resolution-request" {
-		return controlCommand{}, false
-	}
-
-	conflictID, err := url.PathUnescape(parts[4])
-	if err != nil {
-		return controlCommand{}, false
-	}
-	var body synccontrol.ConflictResolutionRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		return controlCommand{}, false
-	}
-
-	return controlCommand{
-		kind:       controlCommandRequestConflictResolution,
-		driveID:    cid,
-		conflictID: conflictID,
-		resolution: body.Resolution,
-	}, true
 }
 
 func writeControlResponse(w http.ResponseWriter, response controlResponse) {
@@ -477,27 +397,11 @@ func resolvedDriveIDs(drives []*config.ResolvedDrive) []string {
 }
 
 func (o *Orchestrator) controlStatus(ctx context.Context, mode synccontrol.OwnerMode) synccontrol.StatusResponse {
-	status := synccontrol.StatusResponse{
+	_ = ctx
+	return synccontrol.StatusResponse{
 		OwnerMode: mode,
 		Drives:    resolvedDriveIDs(o.cfg.Drives),
 	}
-	if mode != synccontrol.OwnerModeWatch {
-		return status
-	}
-
-	counts, err := o.countDurableIntents(ctx)
-	if err != nil {
-		o.logger.Warn("control status intent counts unavailable",
-			slog.String("error", err.Error()),
-		)
-		return status
-	}
-
-	status.PendingHeldDeleteApprovals = counts.PendingHeldDeleteApprovals
-	status.PendingConflictRequests = counts.PendingConflictRequests
-	status.ApplyingConflictRequests = counts.ApplyingConflictRequests
-
-	return status
 }
 
 func (o *Orchestrator) controlPerfStatus(mode synccontrol.OwnerMode) synccontrol.PerfStatusResponse {
@@ -560,76 +464,6 @@ func perfCaptureErrorStatus(err error) (int, synccontrol.ErrorCode) {
 	}
 }
 
-func (o *Orchestrator) countDurableIntents(ctx context.Context) (syncengine.DurableIntentCounts, error) {
-	var total syncengine.DurableIntentCounts
-	for _, rd := range o.cfg.Drives {
-		dbPath := rd.StatePath()
-		if dbPath == "" {
-			continue
-		}
-		if _, err := localpath.Stat(dbPath); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return syncengine.DurableIntentCounts{}, fmt.Errorf("stat sync store for %s: %w", rd.CanonicalID.String(), err)
-		}
-
-		counts, err := syncengine.ReadDurableIntentCounts(ctx, dbPath, o.logger)
-		if err != nil {
-			return syncengine.DurableIntentCounts{}, fmt.Errorf("count durable intents for %s: %w", rd.CanonicalID.String(), err)
-		}
-
-		total.PendingHeldDeleteApprovals += counts.PendingHeldDeleteApprovals
-		total.PendingConflictRequests += counts.PendingConflictRequests
-		total.ApplyingConflictRequests += counts.ApplyingConflictRequests
-	}
-
-	return total, nil
-}
-
-func responseForMutation(status synccontrol.Status, err error) controlResponse {
-	if err != nil {
-		return errorControlResponse(err)
-	}
-
-	return controlResponse{Body: synccontrol.MutationResponse{Status: status}}
-}
-
-func responseForConflictRequest(result *syncengine.ConflictRequestResult, err error) controlResponse {
-	if err != nil {
-		return errorControlResponse(err)
-	}
-	switch result.Status {
-	case syncengine.ConflictRequestQueued, syncengine.ConflictRequestAlreadyQueued, syncengine.ConflictRequestAlreadyResolved:
-		return controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.Status(result.Status)}}
-	case syncengine.ConflictRequestAlreadyApplying:
-		return controlResponse{
-			StatusCode: http.StatusConflict,
-			Code:       synccontrol.ErrorConflictAlreadyApplying,
-			Err:        fmt.Errorf("conflict resolution is already applying"),
-		}
-	default:
-		return controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.Status(result.Status)}}
-	}
-}
-
-func errorControlResponse(err error) controlResponse {
-	var reqErr *controlRequestError
-	if errors.As(err, &reqErr) {
-		return controlResponse{
-			StatusCode: reqErr.status,
-			Code:       reqErr.code,
-			Err:        reqErr.err,
-		}
-	}
-
-	return controlResponse{
-		StatusCode: http.StatusInternalServerError,
-		Code:       synccontrol.ErrorInternal,
-		Err:        err,
-	}
-}
-
 func (o *Orchestrator) handleControlCommand(
 	ctx context.Context,
 	cmd *controlCommand,
@@ -646,123 +480,9 @@ func (o *Orchestrator) handleControlCommand(
 	case controlCommandStop:
 		cmd.response <- controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.StatusStopping}}
 		return true
-	case controlCommandApproveHeldDeletes:
-		err := o.approveHeldDeletes(ctx, runners, cmd.driveID)
-		cmd.response <- responseForMutation(synccontrol.StatusApproved, err)
-	case controlCommandRequestConflictResolution:
-		result, err := o.requestConflictResolution(ctx, runners, cmd.driveID, cmd.conflictID, cmd.resolution)
-		cmd.response <- responseForConflictRequest(&result, err)
 	}
 
 	return false
-}
-
-func (o *Orchestrator) approveHeldDeletes(
-	ctx context.Context,
-	runners map[driveid.CanonicalID]*watchRunner,
-	cid driveid.CanonicalID,
-) error {
-	wr, err := o.watchRunnerForMutation(runners, cid)
-	if err != nil {
-		return err
-	}
-
-	response, err := wr.sendMutation(ctx, syncengine.WatchMutationRequest{
-		Kind: syncengine.WatchMutationApproveHeldDeletes,
-	})
-	if err != nil {
-		return newControlRequestError(
-			http.StatusInternalServerError,
-			synccontrol.ErrorInternal,
-			fmt.Errorf("approve held deletes for %s: %w", cid.String(), err),
-		)
-	}
-	if response.Err != nil {
-		return newControlRequestError(
-			http.StatusInternalServerError,
-			synccontrol.ErrorInternal,
-			fmt.Errorf("approve held deletes for %s: %w", cid.String(), response.Err),
-		)
-	}
-
-	return nil
-}
-
-func (o *Orchestrator) requestConflictResolution(
-	ctx context.Context,
-	runners map[driveid.CanonicalID]*watchRunner,
-	cid driveid.CanonicalID,
-	conflictID string,
-	resolution string,
-) (syncengine.ConflictRequestResult, error) {
-	wr, err := o.watchRunnerForMutation(runners, cid)
-	if err != nil {
-		return syncengine.ConflictRequestResult{}, err
-	}
-
-	response, err := wr.sendMutation(ctx, syncengine.WatchMutationRequest{
-		Kind:       syncengine.WatchMutationRequestConflictResolution,
-		ConflictID: conflictID,
-		Resolution: resolution,
-	})
-	if err != nil {
-		return syncengine.ConflictRequestResult{}, newControlRequestError(
-			http.StatusInternalServerError,
-			synccontrol.ErrorInternal,
-			fmt.Errorf("request conflict resolution for %s: %w", cid.String(), err),
-		)
-	}
-	if response.Err != nil {
-		return syncengine.ConflictRequestResult{}, classifyConflictRequestError(
-			fmt.Errorf("request conflict resolution for %s: %w", cid.String(), response.Err),
-		)
-	}
-
-	return response.ConflictRequestResult, nil
-}
-
-func (o *Orchestrator) watchRunnerForMutation(
-	runners map[driveid.CanonicalID]*watchRunner,
-	cid driveid.CanonicalID,
-) (*watchRunner, error) {
-	wr := runners[cid]
-	if wr != nil {
-		return wr, nil
-	}
-
-	return nil, newControlRequestError(
-		http.StatusNotFound,
-		synccontrol.ErrorDriveNotManaged,
-		fmt.Errorf("drive %q is not managed by this sync process", cid.String()),
-	)
-}
-
-func (wr *watchRunner) sendMutation(
-	ctx context.Context,
-	request syncengine.WatchMutationRequest,
-) (syncengine.WatchMutationResponse, error) {
-	if wr == nil || wr.mutationRequests == nil {
-		return syncengine.WatchMutationResponse{}, fmt.Errorf("watch runner is not accepting mutations")
-	}
-
-	request.Response = make(chan syncengine.WatchMutationResponse, 1)
-
-	select {
-	case wr.mutationRequests <- request:
-	case <-wr.done:
-		return syncengine.WatchMutationResponse{}, fmt.Errorf("watch runner stopped before accepting mutation")
-	case <-ctx.Done():
-		return syncengine.WatchMutationResponse{}, fmt.Errorf("waiting for watch mutation acceptance: %w", ctx.Err())
-	}
-
-	select {
-	case response := <-request.Response:
-		return response, nil
-	case <-wr.done:
-		return syncengine.WatchMutationResponse{}, fmt.Errorf("watch runner stopped before completing mutation")
-	case <-ctx.Done():
-		return syncengine.WatchMutationResponse{}, fmt.Errorf("waiting for watch mutation response: %w", ctx.Err())
-	}
 }
 
 func closeListenerAndRemoveSocket(listener net.Listener, path string) error {
@@ -780,16 +500,4 @@ func closeListenerAndRemoveSocket(listener net.Listener, path string) error {
 	}
 
 	return err
-}
-
-func classifyConflictRequestError(err error) error {
-	message := err.Error()
-	switch {
-	case strings.Contains(message, "unknown resolution strategy"):
-		return newControlRequestError(http.StatusBadRequest, synccontrol.ErrorInvalidResolution, err)
-	case strings.Contains(message, "conflict") && strings.Contains(message, "not found"):
-		return newControlRequestError(http.StatusNotFound, synccontrol.ErrorConflictNotFound, err)
-	default:
-		return newControlRequestError(http.StatusInternalServerError, synccontrol.ErrorInternal, err)
-	}
 }

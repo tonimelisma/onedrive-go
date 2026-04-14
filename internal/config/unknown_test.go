@@ -18,19 +18,19 @@ func TestLoad_UnknownKey_TopLevel(t *testing.T) {
 
 // Validates: R-4.8.1
 func TestLoad_UnknownKey_TypoInFlatKey(t *testing.T) {
-	path := writeTestConfig(t, `skip_file = ["*.tmp"]`)
+	path := writeTestConfig(t, `transfer_worker = 8`)
 	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
-	assert.Contains(t, err.Error(), "skip_files")
+	assert.Contains(t, err.Error(), "transfer_workers")
 }
 
 // Validates: R-4.8.1
 func TestLoad_UnknownKey_TypoInFilter(t *testing.T) {
-	path := writeTestConfig(t, `skip_file = ["*.tmp"]`)
+	path := writeTestConfig(t, `poll_interva = "5m"`)
 	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "skip_files")
+	assert.Contains(t, err.Error(), "poll_interval")
 }
 
 // Validates: R-4.8.1
@@ -74,11 +74,7 @@ func TestLoad_DriveSection_ValidKeysPass(t *testing.T) {
 sync_dir = "~/OneDrive"
 display_name = "home"
 paused = false
-skip_dotfiles = true
-skip_dirs = ["vendor"]
-skip_files = ["*.log"]
-sync_paths = ["/Projects"]
-ignore_marker = ".syncignore"
+owner = "Alice Smith"
 `)
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
@@ -95,8 +91,8 @@ func TestLevenshtein(t *testing.T) {
 		{"", "abc", 3},
 		{"abc", "abc", 0},
 		{"abc", "abd", 1},
-		{"skip_file", "skip_files", 1},
-		{"skip_file", "skip_files", 1},
+		{"poll_interva", "poll_interval", 1},
+		{"transfer_worker", "transfer_workers", 1},
 		{"completely_different", "xyz", 19},
 	}
 
@@ -108,13 +104,13 @@ func TestLevenshtein(t *testing.T) {
 }
 
 func TestClosestMatch_Found(t *testing.T) {
-	known := []string{"skip_files", "skip_dirs", "skip_dotfiles"}
-	assert.Equal(t, "skip_files", closestMatch("skip_file", known))
-	assert.Equal(t, "skip_dirs", closestMatch("skip_dir", known))
+	known := []string{"transfer_workers", "poll_interval", "display_name"}
+	assert.Equal(t, "transfer_workers", closestMatch("transfer_worker", known))
+	assert.Equal(t, "poll_interval", closestMatch("poll_interva", known))
 }
 
 func TestClosestMatch_NotFound(t *testing.T) {
-	known := []string{"skip_files", "skip_dirs"}
+	known := []string{"transfer_workers", "poll_interval"}
 	assert.Empty(t, closestMatch("completely_unrelated", known))
 }
 

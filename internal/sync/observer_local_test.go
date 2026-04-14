@@ -627,9 +627,9 @@ func TestFullScan_NFCNormalization(t *testing.T) {
 
 	dir := t.TempDir()
 	// NFD decomposed: e + combining acute accent (U+0301).
-	nfdName := shortcutTestNFDResume
+	nfdName := sharedTestNFDResume
 	// NFC composed: precomposed characters.
-	nfcName := shortcutTestNFCResume
+	nfcName := sharedTestNFCResume
 
 	writeTestFile(t, dir, nfdName, "resume content")
 

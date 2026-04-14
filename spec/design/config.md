@@ -22,7 +22,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | Behavior | Evidence |
 | --- | --- |
 | Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
-| `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_PerDriveOverrides`, `TestBuildResolvedDrive_TimedPauseExpired` |
+| `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithDriveMetadata`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 
@@ -84,15 +84,8 @@ This table is the authoritative config-package view of the current schema.
 
 | Key | Type | Default / effective default | Valid range / shape | Command class | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `skip_files` | `[]string` | `[]` | glob patterns | `sync` | Local-observation skip filter. |
-| `skip_dirs` | `[]string` | `[]` | directory names | `sync` | Local-observation skip filter. |
-| `skip_dotfiles` | `bool` | `false` | boolean | `sync` | Local-observation skip filter. |
-| `skip_symlinks` | `bool` | `false` | boolean | `sync` | `false` follows symlink targets; `true` suppresses them. |
-| `sync_paths` | `[]string` | full-drive scope | absolute drive-root paths starting with `/` | `sync` | Bidirectional sync-scope narrowing. |
-| `ignore_marker` | `string` | `.odignore` | non-empty filename | `sync` | Presence-only directory exclusion marker. |
 | `transfer_workers` | `int` | `8` | `4..64` | `sync`, `transfer commands` | Shared transfer worker-pool size. |
 | `check_workers` | `int` | `4` | `1..16` | `sync` | Parallel local hashing worker count. |
-| `delete_safety_threshold` | `int` | `1000` | `>= 1` | `sync` | Delete safety protection threshold. |
 | `min_free_space` | `string` | `1GB` | parseable size string; `0` disables | `sync`, `get`, shared download commands | Disk reservation floor for downloads. |
 | `use_local_trash` | `bool` | macOS: `true`; Linux: `false` | boolean | `sync` | Local delete handling. |
 | `poll_interval` | `string` | `5m` | duration `>= 30s` | `sync --watch` | Remote observation fallback poll cadence. |
@@ -113,11 +106,6 @@ This table is the authoritative config-package view of the current schema.
 | `paused_until` | `string?` | empty | RFC3339 timestamp when present | `sync`, `pause`, `resume`, `status`, `drive list` | Timed pause expiry owned by config resolution. |
 | `display_name` | `string` | derived by `DefaultDisplayName()` when omitted | string | `display`, selector matching | Human-facing label for status and drive selection. |
 | `owner` | `string` | empty | string | `display` | Shared-drive owner label. |
-| `skip_dotfiles` | `bool?` | inherit global `skip_dotfiles` | boolean when present | `sync` | Per-drive filter override. |
-| `skip_dirs` | `[]string` | inherit global `skip_dirs` | directory names | `sync` | Per-drive filter override. |
-| `skip_files` | `[]string` | inherit global `skip_files` | glob patterns | `sync` | Per-drive filter override. |
-| `sync_paths` | `[]string` | inherit global `sync_paths` | absolute drive-root paths starting with `/` | `sync` | Per-drive sync-scope override. |
-| `ignore_marker` | `string` | inherit global `ignore_marker` | non-empty filename when present | `sync` | Per-drive marker override. |
 
 ## Config File Manipulation
 
@@ -139,25 +127,20 @@ text intact. Email reconciliation uses this instead of re-encoding TOML.
 
 Implements: R-3.4.1 [verified], R-3.4.3 [verified]
 
-Each drive section contains per-drive settings (`sync_dir`, filter overrides, paused state). `buildResolvedDrive` starts from global defaults and then applies per-drive overrides for filter and sync behavior fields, so drives can share sane defaults without forcing identical filter policy. When a drive section omits `sync_dir`, `buildResolvedDrive` computes the deterministic default local path for that canonical ID before command-specific validation runs. Drive resolution (`ResolveDrive`) matches by exact canonical ID → exact display_name (case-insensitive) → substring. Ambiguous matches produce an error with suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` — the raw config is needed by shared drive token resolution.
+Each drive section contains per-drive settings (`sync_dir`, paused state, and
+display metadata). When a drive section omits `sync_dir`,
+`buildResolvedDrive` computes the deterministic default local path for that
+canonical ID before command-specific validation runs. Drive resolution
+(`ResolveDrive`) matches by exact canonical ID → exact display_name
+(case-insensitive) → substring. Ambiguous matches produce an error with
+suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` —
+the raw config is needed by shared drive token resolution.
 
-`skip_dotfiles`, `skip_dirs`, `skip_files`, and `skip_symlinks` are live
-local-observation controls. The sync engine threads their resolved values into
-the local observer so full scans, watch mode, and retry/trial single-path
-reconstruction all apply the same exclusions. `skip_symlinks` defaults to
-`false`, matching `abraunegg/onedrive`: symlink targets are followed unless the
-user explicitly opts out.
-
-`sync_paths` and `ignore_marker` are live bidirectional sync-scope controls,
-not local-only scanner filters. `buildResolvedDrive` merges them through the
-same global-default plus per-drive override chain as the other filter fields,
-and `NewDriveEngine` passes the resolved scope into the engine. Validation
-requires every configured `sync_paths` entry to start with `/`, and
-`ignore_marker` to be non-empty when present. The config layer owns only the
-normalized user intent; runtime marker discovery and persisted effective-scope
-state live in the observation/engine/store layers.
-
-`websocket` is a live watch-mode control. When `websocket = true`, eligible full-drive watch sessions fetch a OneDrive Socket.IO endpoint and establish an outbound websocket wake source. The wake source does not replace delta: it only interrupts the normal wait so the remote observer runs delta sooner. `poll_interval` remains the fallback poll cadence even when websocket is enabled. Scoped-root sessions and `sync_paths`-scoped remote watch sessions fall back to polling with a warning because only drive-root Socket.IO behavior is currently verified.
+`websocket` is a live watch-mode control. When `websocket = true`, watch mode
+fetches a OneDrive Socket.IO endpoint and establishes an outbound websocket
+wake source. The wake source does not replace delta: it only interrupts the
+normal wait so the remote observer runs delta sooner. `poll_interval` remains
+the fallback poll cadence even when websocket is enabled.
 
 ### Pause State
 

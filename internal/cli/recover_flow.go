@@ -68,18 +68,6 @@ func recoverHintForDrive(canonicalID string) string {
 	return fmt.Sprintf("Run 'onedrive-go --drive %s recover' to repair, rebuild, or reset the sync database.", canonicalID)
 }
 
-func formatRecoverableStoreError(canonicalID string, err error) error {
-	if err == nil {
-		return nil
-	}
-
-	return fmt.Errorf("%w\n%s", err, recoverHintForDrive(canonicalID))
-}
-
-func recoverAwareStoreOpenError(canonicalID string, err error) error {
-	return formatRecoverableStoreError(canonicalID, err)
-}
-
 func recoverAwareStateStoreHint(canonicalID string) string {
 	return recoverHintForDrive(canonicalID)
 }

@@ -189,7 +189,6 @@ func TestCreateBenchLiveRuntimeCopiesCredentialsAndWritesConfig(t *testing.T) {
 		credentialDir,
 		"personal:user@example.com",
 		"",
-		"/benchmarks/test-scope",
 	)
 	require.NoError(t, err)
 
@@ -203,7 +202,6 @@ func TestCreateBenchLiveRuntimeCopiesCredentialsAndWritesConfig(t *testing.T) {
 
 	configBody, err := localpath.ReadFile(runtime.configPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(configBody), `sync_paths = ["/benchmarks/test-scope"]`)
 	assert.Contains(t, string(configBody), `["personal:user@example.com"]`)
 	assert.Contains(t, string(configBody), runtime.syncDir)
 }

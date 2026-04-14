@@ -35,19 +35,7 @@ func validateDrives(cfg *Config) []error {
 // Empty sync_dir is valid — runtime defaults are computed in buildResolvedDrive().
 // This supports minimal drive sections during initial setup.
 func validateSingleDrive(id driveid.CanonicalID, drive *Drive, syncDirs map[string]string) []error {
-	var errs []error
-
-	idStr := id.String()
-
-	for _, p := range drive.SyncPaths {
-		if !strings.HasPrefix(p, "/") {
-			errs = append(errs, fmt.Errorf("drive %q: sync_paths: path %q must start with /", idStr, p))
-		}
-	}
-
-	errs = append(errs, checkDriveSyncDirUniqueness(idStr, drive, syncDirs)...)
-
-	return errs
+	return checkDriveSyncDirUniqueness(id.String(), drive, syncDirs)
 }
 
 // checkDriveSyncDirUniqueness ensures no two drives share the same expanded sync_dir.

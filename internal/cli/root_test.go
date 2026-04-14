@@ -570,10 +570,6 @@ func TestAnnotationTreeWalk(t *testing.T) {
 		"onedrive-go stat":                true,
 		"onedrive-go mv":                  true,
 		"onedrive-go cp":                  true,
-		"onedrive-go resolve deletes":     true,
-		"onedrive-go resolve local":       true,
-		"onedrive-go resolve remote":      true,
-		"onedrive-go resolve both":        true,
 		"onedrive-go recover":             true,
 		"onedrive-go recycle-bin list":    true,
 		"onedrive-go recycle-bin restore": true,
@@ -614,7 +610,7 @@ func TestAnnotationTreeWalk(t *testing.T) {
 
 	// Verify the dataCommands set doesn't have stale entries.
 	for path := range dataCommands {
-		// Split "onedrive-go ls" → ["ls"], "onedrive-go resolve local" → ["resolve", "local"]
+		// Split "onedrive-go ls" → ["ls"], "onedrive-go recycle-bin list" → ["recycle-bin", "list"]
 		parts := strings.SplitN(path, " ", 2)
 		var args []string
 		if len(parts) == 2 {
@@ -1333,10 +1329,9 @@ func TestMain_UnknownCommandReturnsFailure(t *testing.T) {
 	assert.Equal(t, 1, Main([]string{"definitely-not-a-real-command"}))
 }
 
-func TestMainWithWriters_StatusResolveRecoverHelpSucceeds(t *testing.T) {
+func TestMainWithWriters_StatusRecoverHelpSucceeds(t *testing.T) {
 	for _, args := range [][]string{
 		{"status", "--help"},
-		{"resolve", "--help"},
 		{"recover", "--help"},
 	} {
 		var stdoutBuf bytes.Buffer

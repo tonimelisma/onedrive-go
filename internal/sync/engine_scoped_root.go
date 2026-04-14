@@ -7,25 +7,13 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 func (e *Engine) hasScopedRoot() bool {
 	return e != nil && e.rootItemID != ""
-}
-
-func (e *Engine) scopedRootShortcut() *Shortcut {
-	if !e.hasScopedRoot() {
-		return nil
-	}
-
-	return &Shortcut{
-		ItemID:      e.rootItemID,
-		RemoteDrive: e.driveID.String(),
-		RemoteItem:  e.rootItemID,
-		LocalPath:   "",
-	}
 }
 
 func (flow *engineFlow) observeScopedRemote(
@@ -35,8 +23,7 @@ func (flow *engineFlow) observeScopedRemote(
 	fallbackPolicy ObservationPhaseFallbackPolicy,
 ) ([]ChangeEvent, string, error) {
 	eng := flow.engine
-	sc := eng.scopedRootShortcut()
-	if sc == nil {
+	if !eng.hasScopedRoot() {
 		return nil, "", fmt.Errorf("sync: scoped remote observation requires a root item ID")
 	}
 
@@ -62,9 +49,9 @@ func (flow *engineFlow) observeScopedRemote(
 			fullReconcile = true
 		}
 		if err == nil {
-			events := ConvertShortcutItems(items, sc, eng.driveID, bl, eng.logger)
+			events := convertScopedRootItems(items, eng.rootItemID, eng.driveID, bl, eng.logger)
 			if fullReconcile {
-				events = append(events, DetectShortcutOrphans(sc, eng.driveID, items, bl)...)
+				events = append(events, detectScopedRootOrphans(items, eng.driveID, bl)...)
 			}
 
 			return events, newToken, nil
@@ -90,10 +77,32 @@ func (flow *engineFlow) observeScopedRemote(
 		return nil, "", fmt.Errorf("sync: scoped recursive listing: %w", err)
 	}
 
-	events := ConvertShortcutItems(items, sc, eng.driveID, bl, eng.logger)
-	events = append(events, DetectShortcutOrphans(sc, eng.driveID, items, bl)...)
+	events := convertScopedRootItems(items, eng.rootItemID, eng.driveID, bl, eng.logger)
+	events = append(events, detectScopedRootOrphans(items, eng.driveID, bl)...)
 
 	return events, "", nil
+}
+
+func convertScopedRootItems(
+	items []graph.Item,
+	scopeRootID string,
+	remoteDriveID driveid.ID,
+	bl *Baseline,
+	logger *slog.Logger,
+) []ChangeEvent {
+	converter := NewPrimaryConverter(bl, remoteDriveID, logger, nil)
+	converter.ScopeRootID = scopeRootID
+	return converter.ConvertItems(items)
+}
+
+func detectScopedRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []ChangeEvent {
+	seen := make(map[driveid.ItemKey]struct{}, len(items))
+	for i := range items {
+		itemDriveID := resolveItemDriveIDWithFallback(&items[i], remoteDriveID)
+		seen[driveid.NewItemKey(itemDriveID, items[i].ID)] = struct{}{}
+	}
+
+	return findBaselineOrphans(bl, seen, remoteDriveID, "")
 }
 
 func (flow *engineFlow) commitObservedRemote(
@@ -159,7 +168,7 @@ func (rt *watchRuntime) watchScopedRootRemote(
 			continue
 		}
 
-		finalEvents, committed := rt.processCommittedScopedWatchBatch(ctx, bl, result, false)
+		finalEvents, committed := rt.processCommittedScopedWatchBatch(ctx, bl, result)
 		if !committed {
 			continue
 		}

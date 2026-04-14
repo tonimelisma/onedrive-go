@@ -7,16 +7,15 @@ type scopeController struct {
 	flow *engineFlow
 }
 
-// shortcutCoordinator owns shortcut registration, observation, and scope
-// cleanup policy for one sync run.
-type shortcutCoordinator struct {
-	flow *engineFlow
+func (flow *engineFlow) initPolicyControllers() {
+	flow.scopeCtrl.flow = flow
 }
 
 func (flow *engineFlow) scopeController() *scopeController {
-	return &scopeController{flow: flow}
-}
+	// engineFlow is copied by value into one-shot/watch runtimes and some
+	// same-package tests. Rebinding on access keeps the controller attached to
+	// the live run owner instead of a stale copy.
+	flow.initPolicyControllers()
 
-func (flow *engineFlow) shortcutCoordinator() *shortcutCoordinator {
-	return &shortcutCoordinator{flow: flow}
+	return &flow.scopeCtrl
 }

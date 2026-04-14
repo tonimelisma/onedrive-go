@@ -30,7 +30,7 @@ func TestSharedList_JSON(t *testing.T) {
 			writeTestResponse(t, w, `{
 				"value": [
 					{
-						"id": "local-shortcut-1",
+						"id": "local-shared-1",
 						"name": "Shared Folder",
 						"size": 0,
 						"createdDateTime": "2024-01-01T00:00:00Z",
@@ -42,7 +42,7 @@ func TestSharedList_JSON(t *testing.T) {
 						}
 					},
 					{
-						"id": "local-shortcut-2",
+						"id": "local-shared-2",
 						"name": "shared-file.docx",
 						"size": 2048,
 						"createdDateTime": "2024-02-01T00:00:00Z",
@@ -125,7 +125,7 @@ func TestSharedList_JSONKeepsOwnerIdentityEmptyWhenEnrichmentFails(t *testing.T)
 			writeTestResponse(t, w, `{
 				"value": [
 					{
-						"id": "local-shortcut-1",
+						"id": "local-shared-1",
 						"name": "Shared Folder",
 						"folder": {"childCount": 3},
 						"remoteItem": {
@@ -177,7 +177,7 @@ func TestSharedList_JSONHonorsAccountFilter(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			writeTestResponse(t, w, `{
 				"value": [{
-					"id": "local-shortcut-1",
+					"id": "local-shared-1",
 					"name": "Shared Folder",
 					"folder": {"childCount": 3},
 					"remoteItem": {

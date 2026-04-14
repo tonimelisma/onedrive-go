@@ -264,28 +264,21 @@ func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome
 	}
 
 	r := WorkerResult{
-		Path:              ta.Action.Path,
-		ItemID:            ta.Action.ItemID,
-		DriveID:           driveID,
-		ActionType:        ta.Action.Type,
-		Err:               actionErr,
-		HTTPStatus:        ExtractHTTPStatus(actionErr),
-		RetryAfter:        ExtractRetryAfter(actionErr),
-		FailurePath:       ta.Action.Path,
-		FailureCapability: PermissionCapabilityUnknown,
-		TargetDriveID:     ta.Action.TargetDriveID,
-		ShortcutKey:       ta.Action.ShortcutKey(),
-		IsTrial:           ta.IsTrial,
-		TrialScopeKey:     ta.TrialScopeKey,
-		ActionID:          ta.ID,
+		Path:          ta.Action.Path,
+		ItemID:        ta.Action.ItemID,
+		DriveID:       driveID,
+		ActionType:    ta.Action.Type,
+		Err:           actionErr,
+		HTTPStatus:    ExtractHTTPStatus(actionErr),
+		RetryAfter:    ExtractRetryAfter(actionErr),
+		TargetDriveID: ta.Action.TargetDriveID,
+		IsTrial:       ta.IsTrial,
+		TrialScopeKey: ta.TrialScopeKey,
+		ActionID:      ta.ID,
 	}
 
 	if outcome != nil {
 		r.Success = outcome.Success
-		if outcome.FailurePath != "" {
-			r.FailurePath = outcome.FailurePath
-		}
-		r.FailureCapability = outcome.FailureCapability
 		if outcome.Error != nil {
 			r.ErrMsg = outcome.Error.Error()
 			r.Err = outcome.Error

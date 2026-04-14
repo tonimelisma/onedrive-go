@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -468,83 +467,6 @@ func TestCommit_Move(t *testing.T) {
 	assert.Equal(t, "i", entry.ItemID)
 }
 
-// Validates: R-2.2, R-2.3.2
-func TestCommit_Conflict(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
-
-	outcomes := []BaselineMutation{{
-		Action:       ActionConflict,
-		Success:      true,
-		Path:         "conflict.txt",
-		DriveID:      driveid.New("d"),
-		ItemID:       "i",
-		ItemType:     ItemTypeFile,
-		LocalHash:    "local-h",
-		RemoteHash:   "remote-h",
-		ConflictType: "edit_edit",
-	}}
-
-	commitAll(t, mgr, ctx, outcomes)
-
-	// Verify conflict row was inserted with a valid UUID.
-	var id, conflictPath, conflictType, resolution string
-
-	err := mgr.DB().QueryRowContext(ctx,
-		"SELECT id, path, conflict_type, resolution FROM conflicts LIMIT 1",
-	).Scan(&id, &conflictPath, &conflictType, &resolution)
-	require.NoError(t, err)
-
-	_, uuidErr := uuid.Parse(id)
-	require.NoError(t, uuidErr, "conflict id = %q is not a valid UUID", id)
-	assert.Equal(t, "conflict.txt", conflictPath)
-	assert.Equal(t, "edit_edit", conflictType)
-	assert.Equal(t, "unresolved", resolution)
-}
-
-// Validates: R-2.2, R-2.3.2
-func TestCommit_Conflict_StoresRemoteMtime(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
-
-	remoteMtime := int64(1700000000000000000) // non-zero nanosecond timestamp
-	outcomes := []BaselineMutation{{
-		Action:       ActionConflict,
-		Success:      true,
-		Path:         "mtime-test.txt",
-		DriveID:      driveid.New("d"),
-		ItemID:       "i",
-		ItemType:     ItemTypeFile,
-		LocalHash:    "local-h",
-		RemoteHash:   "remote-h",
-		LocalMtime:   1600000000000000000,
-		RemoteMtime:  remoteMtime,
-		ConflictType: "edit_edit",
-	}}
-
-	commitAll(t, mgr, ctx, outcomes)
-
-	// Verify remote_mtime is stored as non-zero.
-	var storedRemoteMtime sql.NullInt64
-
-	err := mgr.DB().QueryRowContext(ctx,
-		"SELECT remote_mtime FROM conflicts WHERE path = ?", "mtime-test.txt",
-	).Scan(&storedRemoteMtime)
-	require.NoError(t, err)
-	assert.True(t, storedRemoteMtime.Valid, "remote_mtime should be valid")
-	assert.Equal(t, remoteMtime, storedRemoteMtime.Int64)
-}
-
 // Validates: R-6.5.2
 func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	t.Parallel()
@@ -726,172 +648,6 @@ func TestLoad_NullableFields(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // seedConflict inserts a conflict via CommitMutation and returns its UUID.
-func seedConflict(t *testing.T, mgr *SyncStore, path, conflictType string) string {
-	t.Helper()
-
-	ctx := t.Context()
-
-	outcomes := []BaselineMutation{{
-		Action:       ActionConflict,
-		Success:      true,
-		Path:         path,
-		DriveID:      driveid.New("d"),
-		ItemID:       "item-" + path,
-		ItemType:     ItemTypeFile,
-		LocalHash:    "local-h",
-		RemoteHash:   "remote-h",
-		ConflictType: conflictType,
-	}}
-
-	commitAll(t, mgr, ctx, outcomes)
-
-	// Retrieve the UUID.
-	var id string
-
-	err := mgr.DB().QueryRowContext(ctx,
-		"SELECT id FROM conflicts WHERE path = ? ORDER BY detected_at DESC LIMIT 1", path,
-	).Scan(&id)
-	require.NoError(t, err, "retrieving conflict ID for %s", path)
-
-	return id
-}
-
-// Validates: R-2.3.2
-func TestListConflicts_Empty(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	conflicts, err := mgr.ListConflicts(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, conflicts)
-}
-
-// Validates: R-2.3.2
-func TestListConflicts_WithConflicts(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
-
-	seedConflict(t, mgr, "a.txt", "edit_edit")
-	seedConflict(t, mgr, "b.txt", "edit_delete")
-
-	ctx := t.Context()
-
-	conflicts, err := mgr.ListConflicts(ctx)
-	require.NoError(t, err)
-	require.Len(t, conflicts, 2)
-	assert.Equal(t, "a.txt", conflicts[0].Path)
-	assert.Equal(t, "b.txt", conflicts[1].Path)
-}
-
-// Validates: R-2.3.2
-func TestListConflicts_OnlyUnresolved(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
-
-	id := seedConflict(t, mgr, "resolved.txt", "edit_edit")
-	seedConflict(t, mgr, "pending.txt", "edit_edit")
-
-	ctx := t.Context()
-
-	// Resolve the first conflict.
-	require.NoError(t, mgr.ResolveConflict(ctx, id, ResolutionKeepBoth))
-
-	conflicts, err := mgr.ListConflicts(ctx)
-	require.NoError(t, err)
-	require.Len(t, conflicts, 1)
-	assert.Equal(t, "pending.txt", conflicts[0].Path)
-}
-
-// Validates: R-2.3.2
-func TestGetConflict_ByID(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
-
-	id := seedConflict(t, mgr, "lookup.txt", "create_create")
-	ctx := t.Context()
-
-	c, err := mgr.GetConflict(ctx, id)
-	require.NoError(t, err)
-	assert.Equal(t, id, c.ID)
-	assert.Equal(t, "lookup.txt", c.Path)
-	assert.Equal(t, "create_create", c.ConflictType)
-}
-
-// Validates: R-2.3.2
-func TestGetConflict_ByPath(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
-
-	seedConflict(t, mgr, "bypath.txt", "edit_edit")
-	ctx := t.Context()
-
-	c, err := mgr.GetConflict(ctx, "bypath.txt")
-	require.NoError(t, err)
-	assert.Equal(t, "bypath.txt", c.Path)
-}
-
-func TestGetConflict_NotFound(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	_, err := mgr.GetConflict(ctx, "nonexistent")
-	require.Error(t, err)
-}
-
-// Validates: R-2.3.2
-func TestResolveConflict(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
-
-	id := seedConflict(t, mgr, "resolve-me.txt", "edit_edit")
-	ctx := t.Context()
-
-	require.NoError(t, mgr.ResolveConflict(ctx, id, ResolutionKeepLocal))
-
-	// Verify resolution was recorded.
-	var resolution, resolvedBy string
-	var resolvedAt int64
-
-	err := mgr.DB().QueryRowContext(ctx,
-		"SELECT resolution, resolved_at, resolved_by FROM conflicts WHERE id = ?", id,
-	).Scan(&resolution, &resolvedAt, &resolvedBy)
-	require.NoError(t, err)
-	assert.Equal(t, ResolutionKeepLocal, resolution)
-	assert.Equal(t, "user", resolvedBy)
-	assert.NotZero(t, resolvedAt)
-}
-
-func TestResolveConflict_AlreadyResolved(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
-
-	id := seedConflict(t, mgr, "double-resolve.txt", "edit_edit")
-	ctx := t.Context()
-
-	// First resolve succeeds.
-	require.NoError(t, mgr.ResolveConflict(ctx, id, ResolutionKeepBoth))
-
-	// Second resolve fails (already resolved).
-	err := mgr.ResolveConflict(ctx, id, ResolutionKeepLocal)
-	require.Error(t, err)
-}
-
 // Validates: R-2.2
 func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 	t.Parallel()
@@ -987,100 +743,6 @@ func TestSchemaBootstrap_Idempotent(t *testing.T) {
 	b, err := mgr2.Load(ctx)
 	require.NoError(t, err)
 	assert.NotNil(t, b)
-}
-
-// Validates: R-2.3.2
-func TestCommitConflict_AutoResolved(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
-
-	outcomes := []BaselineMutation{{
-		Action:          ActionConflict,
-		Success:         true,
-		Path:            "auto-resolved.txt",
-		DriveID:         driveid.New("d"),
-		ItemID:          "new-item",
-		ParentID:        "root",
-		ItemType:        ItemTypeFile,
-		LocalHash:       "local-h",
-		RemoteHash:      "remote-h",
-		LocalSize:       512,
-		LocalSizeKnown:  true,
-		RemoteSize:      512,
-		RemoteSizeKnown: true,
-		LocalMtime:      fixedTime.UnixNano(),
-		RemoteMtime:     fixedTime.UnixNano(),
-		ConflictType:    "edit_delete",
-		ResolvedBy:      "auto",
-	}}
-
-	commitAll(t, mgr, ctx, outcomes)
-
-	// Verify conflict row was inserted as already resolved.
-	var resolution, resolvedBy string
-	var resolvedAt int64
-
-	err := mgr.DB().QueryRowContext(ctx,
-		"SELECT resolution, resolved_at, resolved_by FROM conflicts WHERE path = ?",
-		"auto-resolved.txt",
-	).Scan(&resolution, &resolvedAt, &resolvedBy)
-	require.NoError(t, err)
-	assert.Equal(t, ResolutionKeepLocal, resolution)
-	assert.Equal(t, "auto", resolvedBy)
-	assert.NotZero(t, resolvedAt)
-
-	// Verify baseline was also updated (auto-resolve upserts baseline).
-	entry, ok := mgr.Baseline().GetByPath("auto-resolved.txt")
-	require.True(t, ok, "baseline entry not found for auto-resolved conflict")
-	assert.Equal(t, "new-item", entry.ItemID)
-	assert.Equal(t, "local-h", entry.LocalHash)
-}
-
-// Validates: R-2.3.2
-func TestListAllConflicts(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
-
-	// Seed an unresolved conflict.
-	seedConflict(t, mgr, "unresolved.txt", "edit_edit")
-
-	// Seed and resolve a conflict.
-	resolvedID := seedConflict(t, mgr, "resolved-file.txt", "edit_delete")
-	ctx := t.Context()
-
-	require.NoError(t, mgr.ResolveConflict(ctx, resolvedID, ResolutionKeepLocal))
-
-	// ListConflicts should return only unresolved.
-	unresolved, err := mgr.ListConflicts(ctx)
-	require.NoError(t, err)
-	require.Len(t, unresolved, 1)
-	assert.Equal(t, "unresolved.txt", unresolved[0].Path)
-
-	// ListAllConflicts should return both.
-	all, err := mgr.ListAllConflicts(ctx)
-	require.NoError(t, err)
-	require.Len(t, all, 2)
-
-	// Verify resolution fields are populated.
-	var found bool
-
-	for i := range all {
-		if all[i].Path == "resolved-file.txt" {
-			found = true
-			assert.Equal(t, ResolutionKeepLocal, all[i].Resolution)
-			assert.Equal(t, "user", all[i].ResolvedBy)
-			assert.NotZero(t, all[i].ResolvedAt)
-		}
-	}
-
-	assert.True(t, found, "resolved-file.txt not found in ListAllConflicts results")
 }
 
 // ---------------------------------------------------------------------------
@@ -1347,124 +1009,6 @@ func TestCommitMutation_Move(t *testing.T) {
 	assert.Equal(t, "p2", entry.ParentID)
 }
 
-// Validates: R-2.3.2
-func TestCommitMutation_Conflict_AutoResolved(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
-
-	outcome := BaselineMutation{
-		Action:       ActionConflict,
-		Success:      true,
-		Path:         "co-conflict.txt",
-		DriveID:      driveid.New("d"),
-		ItemID:       "new-item",
-		ItemType:     ItemTypeFile,
-		LocalHash:    "lh",
-		RemoteHash:   "rh",
-		ConflictType: ConflictEditEdit,
-		ResolvedBy:   ResolvedByAuto,
-	}
-
-	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
-
-	// Auto-resolved conflict should update baseline.
-	entry, ok := mgr.Baseline().GetByPath("co-conflict.txt")
-	require.True(t, ok, "baseline entry not found for auto-resolved conflict")
-	assert.Equal(t, "new-item", entry.ItemID)
-
-	// Conflict row should exist.
-	var resolution string
-
-	err := mgr.DB().QueryRowContext(ctx,
-		"SELECT resolution FROM conflicts WHERE path = ?", "co-conflict.txt",
-	).Scan(&resolution)
-	require.NoError(t, err)
-	assert.Equal(t, ResolutionKeepLocal, resolution)
-}
-
-// Validates: R-2.3.2
-func TestCommitMutation_Conflict_Unresolved(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
-
-	outcome := BaselineMutation{
-		Action:       ActionConflict,
-		Success:      true,
-		Path:         "co-unresolved.txt",
-		DriveID:      driveid.New("d"),
-		ItemID:       "i",
-		ItemType:     ItemTypeFile,
-		ConflictType: ConflictEditEdit,
-	}
-
-	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
-
-	// Unresolved conflict should NOT update baseline.
-	_, ok := mgr.Baseline().GetByPath("co-unresolved.txt")
-	assert.False(t, ok, "baseline entry should not exist for unresolved conflict")
-}
-
-// Validates: R-2.3.2
-func TestCommitMutation_EditDeleteConflict_DeletesBaseline(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
-
-	// First, create a baseline entry for the file.
-	setupOutcome := BaselineMutation{
-		Action:   ActionDownload,
-		Success:  true,
-		Path:     "edit-delete-target.txt",
-		DriveID:  driveid.New("d"),
-		ItemID:   "i1",
-		ItemType: ItemTypeFile,
-	}
-	require.NoError(t, mgr.CommitMutation(ctx, &setupOutcome))
-
-	// Verify baseline entry exists.
-	_, ok := mgr.Baseline().GetByPath("edit-delete-target.txt")
-	require.True(t, ok, "baseline entry should exist after download")
-
-	// Now commit an unresolved edit-delete conflict (B-133).
-	conflictOutcome := BaselineMutation{
-		Action:       ActionConflict,
-		Success:      true,
-		Path:         "edit-delete-target.txt",
-		DriveID:      driveid.New("d"),
-		ItemID:       "i1",
-		ItemType:     ItemTypeFile,
-		ConflictType: ConflictEditDelete,
-		LocalHash:    "modified-hash",
-		RemoteHash:   "baseline-remote-hash",
-	}
-	require.NoError(t, mgr.CommitMutation(ctx, &conflictOutcome))
-
-	// Baseline entry should be deleted — the original file was renamed to conflict copy.
-	_, ok = mgr.Baseline().GetByPath("edit-delete-target.txt")
-	assert.False(t, ok, "baseline entry should be deleted for unresolved edit-delete conflict")
-
-	// Conflict record should exist.
-	var conflictType, resolution string
-
-	err := mgr.DB().QueryRowContext(ctx,
-		"SELECT conflict_type, resolution FROM conflicts WHERE path = ?", "edit-delete-target.txt",
-	).Scan(&conflictType, &resolution)
-	require.NoError(t, err)
-	assert.Equal(t, ConflictEditDelete, conflictType)
-	assert.Equal(t, ResolutionUnresolved, resolution)
-}
-
 // Validates: R-2.2
 func TestCommitMutation_SkipsFailedOutcome(t *testing.T) {
 	t.Parallel()
@@ -1702,17 +1246,17 @@ func TestCommitDeltaToken_CompositeKey_DifferentScopes(t *testing.T) {
 	// Primary delta (scope_id="").
 	require.NoError(t, mgr.CommitDeltaToken(ctx, "primary-token", "drv1", "", "drv1"))
 
-	// Shortcut-scoped delta (scope_id=remoteItemID, scope_drive=remoteDriveID).
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "shortcut-token", "drv1", "item123", "drv2"))
+	// Shared-root-scoped delta (scope_id=remoteItemID, scope_drive=remoteDriveID).
+	require.NoError(t, mgr.CommitDeltaToken(ctx, "shared-root-token", "drv1", "item123", "drv2"))
 
 	// Both should be independently retrievable.
 	primary, err := mgr.GetDeltaToken(ctx, "drv1", "")
 	require.NoError(t, err)
 	assert.Equal(t, "primary-token", primary)
 
-	shortcut, err := mgr.GetDeltaToken(ctx, "drv1", "item123")
+	sharedRoot, err := mgr.GetDeltaToken(ctx, "drv1", "item123")
 	require.NoError(t, err)
-	assert.Equal(t, "shortcut-token", shortcut)
+	assert.Equal(t, "shared-root-token", sharedRoot)
 }
 
 // Validates: R-2.15.1
@@ -1980,144 +1524,6 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 	assert.GreaterOrEqual(t, b.Len(), 100)
 }
 
-// TestConflictRecord_NameField verifies that ConflictRecord.Name is populated
-// as path.Base(Path) by the shared scanConflict function (B-071).
-// Validates: R-2.3.2
-func TestConflictRecord_NameField(t *testing.T) {
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	_, err := mgr.Load(ctx)
-	require.NoError(t, err)
-
-	// Insert a conflict with a nested path.
-	outcome := &BaselineMutation{
-		Action:       ActionConflict,
-		Success:      true,
-		Path:         "docs/notes/readme.md",
-		DriveID:      driveid.New(testDriveID),
-		ItemID:       "item-name-test",
-		ConflictType: ConflictEditEdit,
-		LocalHash:    "localH",
-		RemoteHash:   "remoteH",
-		LocalMtime:   100,
-		RemoteMtime:  200,
-	}
-
-	require.NoError(t, mgr.CommitMutation(ctx, outcome))
-
-	// Verify via ListConflicts.
-	conflicts, err := mgr.ListConflicts(ctx)
-	require.NoError(t, err)
-	require.Len(t, conflicts, 1)
-	assert.Equal(t, "readme.md", conflicts[0].Name)
-
-	// Verify via GetConflict.
-	c, err := mgr.GetConflict(ctx, conflicts[0].ID)
-	require.NoError(t, err)
-	assert.Equal(t, "readme.md", c.Name)
-}
-
-// TestPruneResolvedConflicts verifies that PruneResolvedConflicts deletes
-// resolved conflicts older than the retention period while preserving
-// newer resolved and all unresolved conflicts (B-087).
-// setupPruneTestConflicts populates a test manager with three conflicts:
-// - An "old" resolved conflict (detected 120 days ago)
-// - A "new" resolved conflict (detected 10 days ago)
-// - An unresolved conflict (detected 120 days ago)
-// Returns the IDs of the old and new resolved conflicts.
-func setupPruneTestConflicts(t *testing.T, mgr *SyncStore, ctx context.Context, now time.Time) (oldID, newID string) {
-	t.Helper()
-
-	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -120) })
-
-	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
-		Action: ActionConflict, Success: true,
-		Path: "old-resolved.txt", DriveID: driveid.New(testDriveID),
-		ItemID: "item-old", ConflictType: ConflictEditEdit,
-		LocalHash: "lh1", RemoteHash: "rh1", LocalMtime: 100, RemoteMtime: 200,
-	}))
-
-	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -100) })
-
-	conflicts, err := mgr.ListConflicts(ctx)
-	require.NoError(t, err)
-
-	oldID = conflicts[0].ID
-	require.NoError(t, mgr.ResolveConflict(ctx, oldID, "keep_local"))
-
-	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -10) })
-
-	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
-		Action: ActionConflict, Success: true,
-		Path: "new-resolved.txt", DriveID: driveid.New(testDriveID),
-		ItemID: "item-new", ConflictType: ConflictEditEdit,
-		LocalHash: "lh2", RemoteHash: "rh2", LocalMtime: 300, RemoteMtime: 400,
-	}))
-
-	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -5) })
-
-	conflicts, err = mgr.ListConflicts(ctx)
-	require.NoError(t, err)
-
-	for i := range conflicts {
-		if conflicts[i].Path == "new-resolved.txt" {
-			newID = conflicts[i].ID
-		}
-	}
-
-	require.NoError(t, mgr.ResolveConflict(ctx, newID, "keep_remote"))
-
-	mgr.SetNowFunc(func() time.Time { return now.AddDate(0, 0, -120) })
-
-	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
-		Action: ActionConflict, Success: true,
-		Path: "unresolved.txt", DriveID: driveid.New(testDriveID),
-		ItemID: "item-unresolved", ConflictType: ConflictEditEdit,
-		LocalHash: "lh3", RemoteHash: "rh3", LocalMtime: 500, RemoteMtime: 600,
-	}))
-
-	return oldID, newID
-}
-
-// TestPruneResolvedConflicts verifies that PruneResolvedConflicts deletes
-// resolved conflicts older than the retention period while preserving
-// newer resolved and all unresolved conflicts (B-087).
-// Validates: R-2.3.2
-func TestPruneResolvedConflicts(t *testing.T) {
-	mgr := newTestStore(t)
-	ctx := t.Context()
-	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-
-	mgr.SetNowFunc(func() time.Time { return now })
-
-	_, err := mgr.Load(ctx)
-	require.NoError(t, err)
-
-	oldID, newID := setupPruneTestConflicts(t, mgr, ctx, now)
-
-	mgr.SetNowFunc(func() time.Time { return now })
-
-	pruned, err := mgr.PruneResolvedConflicts(ctx, 90*24*time.Hour)
-	require.NoError(t, err)
-	assert.Equal(t, 1, pruned, "only old resolved should be pruned")
-
-	// Old resolved should be gone.
-	c, err := mgr.GetConflict(ctx, oldID)
-	assert.True(t, err != nil || c == nil, "old resolved conflict should have been pruned")
-
-	// New resolved should still exist.
-	c, err = mgr.GetConflict(ctx, newID)
-	require.NoError(t, err)
-	assert.Equal(t, "keep_remote", c.Resolution)
-
-	// Unresolved conflict should still exist.
-	unresolved, err := mgr.ListConflicts(ctx)
-	require.NoError(t, err)
-	require.Len(t, unresolved, 1)
-	assert.Equal(t, "unresolved.txt", unresolved[0].Path)
-}
-
 // Validates: R-2.2
 // TestCheckCacheConsistency verifies that CheckCacheConsistency detects
 // mismatches between the in-memory baseline cache and the database (B-198).
@@ -2168,7 +1574,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	// Verify all expected tables exist by querying sqlite_master.
 	expectedTables := []string{
-		"baseline", "delta_tokens", "conflicts", "sync_metadata",
+		"baseline", "delta_tokens", "sync_metadata",
 		"remote_state", "sync_failures",
 	}
 
@@ -2216,12 +1622,12 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 		"/bad-file.txt", "d!abc123", "upload", "upload", "item", "transient", "invalid_filename", 1700000000, 1700000000)
 	require.NoError(t, err)
 
-	// Verify remote_state CHECK constraint rejects invalid filter booleans.
+	// Verify remote_state CHECK constraint rejects invalid item types.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, is_filtered, observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"d!abc123", "item2", "/bad.txt", "file", 2, 1700000000)
-	require.Error(t, err, "invalid filter state should be rejected by CHECK constraint")
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type, observed_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"d!abc123", "item2", "/bad.txt", "bogus", 1700000000)
+	require.Error(t, err, "invalid item type should be rejected by CHECK constraint")
 }
 
 // Validates: R-2.2
@@ -2375,16 +1781,4 @@ func TestBaselineEntryCount_WithEntries(t *testing.T) {
 	count, err := mgr.BaselineEntryCount(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
-}
-
-// Validates: R-2.3.2
-func TestUnresolvedConflictCount_Empty(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	count, err := mgr.UnresolvedConflictCount(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 0, count)
 }

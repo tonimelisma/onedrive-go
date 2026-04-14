@@ -442,6 +442,28 @@ func TestDefaultCleanupAuditWrapsError(t *testing.T) {
 }
 
 // Validates: R-6.2.1
+func TestDefaultWatchCaptureWrapsError(t *testing.T) {
+	t.Parallel()
+
+	err := defaultWatchCapture(context.Background(), devtool.WatchCaptureOptions{
+		Scenario: "unknown-scenario",
+		Stdout:   io.Discard,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run watch capture")
+}
+
+// Validates: R-6.2.1
+func TestRequireFlagPanicsForUnknownFlag(t *testing.T) {
+	t.Parallel()
+
+	cmd := &cobra.Command{Use: "test"}
+	assert.Panics(t, func() {
+		requireFlag(cmd, "missing")
+	})
+}
+
+// Validates: R-6.2.1
 func TestMainIntegrationHelpersUseRealFilesystemState(t *testing.T) {
 	t.Parallel()
 

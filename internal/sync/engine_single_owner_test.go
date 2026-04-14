@@ -375,7 +375,7 @@ func TestEngine_ReleaseAndDiscardScope_MaintainInvariantsInOneShotMode(t *testin
 
 	t.Run("discard", func(t *testing.T) {
 		eng := newSingleOwnerEngineWithContext(t, ctx)
-		scopeKey := SKQuotaShortcut("drive:item")
+		scopeKey := SKQuotaOwn()
 
 		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
 			Key:           scopeKey,
@@ -544,7 +544,7 @@ func quotaRepairCaseWithActivePreserve() *repairPersistedScopesCase {
 	return &repairPersistedScopesCase{
 		name: "preserves empty scoped quota while preserve deadline is active",
 		scopeBlock: ScopeBlock{
-			Key:           SKQuotaShortcut("drive:item"),
+			Key:           SKQuotaOwn(),
 			IssueType:     IssueQuotaExceeded,
 			TimingSource:  ScopeTimingBackoff,
 			TrialInterval: 30 * time.Second,
@@ -553,7 +553,7 @@ func quotaRepairCaseWithActivePreserve() *repairPersistedScopesCase {
 		},
 		verify: func(t *testing.T, env repairPersistedScopesEnv) {
 			t.Helper()
-			assert.True(t, isTestScopeBlocked(env.eng, SKQuotaShortcut("drive:item")))
+			assert.True(t, isTestScopeBlocked(env.eng, SKQuotaOwn()))
 		},
 	}
 }
@@ -562,7 +562,7 @@ func quotaRepairCaseWithExpiredPreserve() *repairPersistedScopesCase {
 	return &repairPersistedScopesCase{
 		name: "discards empty scoped quota after preserve deadline expires",
 		scopeBlock: ScopeBlock{
-			Key:           SKQuotaShortcut("drive:item"),
+			Key:           SKQuotaOwn(),
 			IssueType:     IssueQuotaExceeded,
 			TimingSource:  ScopeTimingBackoff,
 			TrialInterval: 30 * time.Second,
@@ -571,7 +571,7 @@ func quotaRepairCaseWithExpiredPreserve() *repairPersistedScopesCase {
 		},
 		verify: func(t *testing.T, env repairPersistedScopesEnv) {
 			t.Helper()
-			assert.False(t, isTestScopeBlocked(env.eng, SKQuotaShortcut("drive:item")))
+			assert.False(t, isTestScopeBlocked(env.eng, SKQuotaOwn()))
 
 			failures, err := env.eng.baseline.ListSyncFailures(env.ctx())
 			require.NoError(t, err)
@@ -1415,7 +1415,6 @@ func TestGetRemoteStateByPath_Found(t *testing.T) {
 	assert.Equal(t, int64(4096), row.Size)
 	assert.Equal(t, int64(1000000000), row.Mtime)
 	assert.Equal(t, "etag-1", row.ETag)
-	assert.False(t, row.IsFiltered)
 }
 
 func TestGetRemoteStateByPath_NotFound(t *testing.T) {

@@ -5,24 +5,25 @@ package sync
 type SummaryKey string
 
 const (
-	SummaryConflictUnresolved     SummaryKey = "conflict_unresolved"
-	SummaryAuthenticationRequired SummaryKey = "authentication_required"
-	SummaryQuotaExceeded          SummaryKey = "quota_exceeded"
-	SummaryServiceOutage          SummaryKey = "service_outage"
-	SummaryRateLimited            SummaryKey = "rate_limited"
-	SummaryRemoteWriteDenied      SummaryKey = "remote_write_denied"
-	SummaryRemoteReadDenied       SummaryKey = "remote_read_denied"
-	SummaryLocalReadDenied        SummaryKey = "local_read_denied"
-	SummaryLocalWriteDenied       SummaryKey = "local_write_denied"
-	SummaryInvalidFilename        SummaryKey = "invalid_filename"
-	SummaryPathTooLong            SummaryKey = "path_too_long"
-	SummaryFileTooLarge           SummaryKey = "file_too_large"
-	SummaryHeldDeletes            SummaryKey = "held_deletes"
-	SummaryCaseCollision          SummaryKey = "case_collision"
-	SummaryDiskFull               SummaryKey = "disk_full"
-	SummaryHashError              SummaryKey = "hash_error"
-	SummaryFileTooLargeForSpace   SummaryKey = "file_too_large_for_space"
-	SummarySyncFailure            SummaryKey = "sync_failure"
+	SummaryAuthenticationRequired    SummaryKey = "authentication_required"
+	SummaryQuotaExceeded             SummaryKey = "quota_exceeded"
+	SummaryServiceOutage             SummaryKey = "service_outage"
+	SummaryRateLimited               SummaryKey = "rate_limited"
+	SummaryRemoteWriteDenied         SummaryKey = "remote_write_denied"
+	SummaryRemoteReadDenied          SummaryKey = "remote_read_denied"
+	SummaryLocalReadDenied           SummaryKey = "local_read_denied"
+	SummaryLocalWriteDenied          SummaryKey = "local_permission_denied"
+	SummarySharedFolderWritesBlocked SummaryKey = "remote_write_denied"
+	SummaryLocalPermissionDenied     SummaryKey = "local_permission_denied"
+	SummaryRemotePermissionDenied    SummaryKey = "remote_write_denied"
+	SummaryInvalidFilename           SummaryKey = "invalid_filename"
+	SummaryPathTooLong               SummaryKey = "path_too_long"
+	SummaryFileTooLarge              SummaryKey = "file_too_large"
+	SummaryCaseCollision             SummaryKey = "case_collision"
+	SummaryDiskFull                  SummaryKey = "disk_full"
+	SummaryHashError                 SummaryKey = "hash_error"
+	SummaryFileTooLargeForSpace      SummaryKey = "file_too_large_for_space"
+	SummarySyncFailure               SummaryKey = "sync_failure"
 )
 
 // SummaryKeyForPersistedFailure maps a persisted sync_failures row to the
@@ -98,8 +99,6 @@ func summaryKeyForFilesystemIssueType(issueType string) (SummaryKey, bool) {
 		return SummaryPathTooLong, true
 	case IssueFileTooLarge:
 		return SummaryFileTooLarge, true
-	case IssueDeleteSafetyHeld:
-		return SummaryHeldDeletes, true
 	case IssueCaseCollision:
 		return SummaryCaseCollision, true
 	case IssueDiskFull:

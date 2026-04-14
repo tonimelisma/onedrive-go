@@ -2,12 +2,8 @@ package sync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"sort"
 	"sync/atomic"
 	"time"
 
@@ -16,13 +12,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 type reconcileResult struct {
-	events    []ChangeEvent
-	shortcuts []Shortcut
+	events []ChangeEvent
 }
 
 type driveIdentityProof struct {
@@ -33,33 +27,31 @@ type driveIdentityProof struct {
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is handled by internal/multisync.
 type Engine struct {
-	baseline              *SyncStore
-	planner               *Planner
-	execCfg               *ExecutorConfig
-	fetcher               DeltaFetcher
-	socketIOFetcher       SocketIOEndpointFetcher
-	itemsClient           ItemClient
-	driveVerifier         DriveVerifier      // optional (B-074)
-	folderDelta           FolderDeltaFetcher // optional: for shortcut observation (6.4b)
-	recursiveLister       RecursiveLister    // optional: for shortcut observation (6.4b)
-	permHandler           *PermissionHandler // encapsulates all permission logic (6.4c)
-	syncRoot              string
-	syncTree              *synctree.Root
-	driveID               driveid.ID
-	driveType             string
-	rootItemID            string
-	logger                *slog.Logger
-	perfCollector         *perf.Collector
-	sessionStore          *driveops.SessionStore // for CleanStale() housekeeping
-	transferWorkers       int                    // goroutine count for the worker pool
-	checkWorkers          int                    // goroutine limit for parallel file hashing
-	localFilter           LocalFilterConfig
-	localRules            LocalObservationRules
-	syncScopeConfig       syncscope.Config
-	enableWebsocket       bool
-	deleteSafetyThreshold int   // from config; 0 means use default
-	minFreeSpace          int64 // startup disk-scope revalidation threshold
-	diskAvailableFn       func(string) (uint64, error)
+	baseline        *SyncStore
+	planner         *Planner
+	execCfg         *ExecutorConfig
+	fetcher         DeltaFetcher
+	socketIOFetcher SocketIOEndpointFetcher
+	itemsClient     ItemClient
+	driveVerifier   DriveVerifier      // optional (B-074)
+	folderDelta     FolderDeltaFetcher // optional: scoped-root delta observation
+	recursiveLister RecursiveLister    // optional: scoped-root recursive enumeration fallback
+	permHandler     *PermissionHandler // encapsulates all permission logic (6.4c)
+	syncRoot        string
+	syncTree        *synctree.Root
+	driveID         driveid.ID
+	driveType       string
+	rootItemID      string
+	logger          *slog.Logger
+	perfCollector   *perf.Collector
+	sessionStore    *driveops.SessionStore // for CleanStale() housekeeping
+	transferWorkers int                    // goroutine count for the worker pool
+	checkWorkers    int                    // goroutine limit for parallel file hashing
+	localFilter     LocalFilterConfig
+	localRules      LocalObservationRules
+	enableWebsocket bool
+	minFreeSpace    int64 // startup disk-scope revalidation threshold
+	diskAvailableFn func(string) (uint64, error)
 
 	// Test/debug-only invariant checks. Production keeps this disabled;
 	// tests enable it to catch lifecycle and scope regressions immediately.
@@ -82,7 +74,7 @@ type Engine struct {
 	retryBatchLimit int
 
 	// socketIOWakeSourceFactory is a test seam for watch-mode websocket
-	// wakeups. Production uses NewSocketIOWakeSource.
+	// wakeups. Production uses NewSocketIOWakeSourceWithOptions.
 	socketIOWakeSourceFactory func(
 		SocketIOEndpointFetcher,
 		driveid.ID,
@@ -147,44 +139,36 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
 	))
 
-	// Default threshold if not set by config.
-	deleteSafetyThreshold := cfg.DeleteSafetyThreshold
-	if deleteSafetyThreshold == 0 {
-		deleteSafetyThreshold = DefaultDeleteSafetyThreshold
-	}
-
 	e := &Engine{
-		baseline:              bm,
-		planner:               NewPlanner(cfg.Logger),
-		execCfg:               execCfg,
-		fetcher:               cfg.Fetcher,
-		socketIOFetcher:       cfg.SocketIOFetcher,
-		itemsClient:           cfg.Items,
-		driveVerifier:         cfg.DriveVerifier,
-		folderDelta:           cfg.FolderDelta,
-		recursiveLister:       cfg.RecursiveLister,
-		sessionStore:          sessionStore,
-		syncRoot:              cfg.SyncRoot,
-		syncTree:              syncTree,
-		driveID:               cfg.DriveID,
-		driveType:             cfg.DriveType,
-		rootItemID:            cfg.RootItemID,
-		logger:                cfg.Logger,
-		perfCollector:         cfg.PerfCollector,
-		transferWorkers:       cfg.TransferWorkers,
-		checkWorkers:          cfg.CheckWorkers,
-		localFilter:           cfg.LocalFilter,
-		localRules:            cfg.LocalRules,
-		syncScopeConfig:       cfg.SyncScope,
-		enableWebsocket:       cfg.EnableWebsocket,
-		deleteSafetyThreshold: deleteSafetyThreshold,
-		minFreeSpace:          cfg.MinFreeSpace,
-		diskAvailableFn:       driveops.DiskAvailable,
-		nowFn:                 time.Now,
-		afterFunc:             realAfterFunc,
-		newTicker:             realNewTicker,
-		sleepFn:               realSleep,
-		jitterFn:              realJitter,
+		baseline:        bm,
+		planner:         NewPlanner(cfg.Logger),
+		execCfg:         execCfg,
+		fetcher:         cfg.Fetcher,
+		socketIOFetcher: cfg.SocketIOFetcher,
+		itemsClient:     cfg.Items,
+		driveVerifier:   cfg.DriveVerifier,
+		folderDelta:     cfg.FolderDelta,
+		recursiveLister: cfg.RecursiveLister,
+		sessionStore:    sessionStore,
+		syncRoot:        cfg.SyncRoot,
+		syncTree:        syncTree,
+		driveID:         cfg.DriveID,
+		driveType:       cfg.DriveType,
+		rootItemID:      cfg.RootItemID,
+		logger:          cfg.Logger,
+		perfCollector:   cfg.PerfCollector,
+		transferWorkers: cfg.TransferWorkers,
+		checkWorkers:    cfg.CheckWorkers,
+		localFilter:     cfg.LocalFilter,
+		localRules:      cfg.LocalRules,
+		enableWebsocket: cfg.EnableWebsocket,
+		minFreeSpace:    cfg.MinFreeSpace,
+		diskAvailableFn: driveops.DiskAvailable,
+		nowFn:           time.Now,
+		afterFunc:       realAfterFunc,
+		newTicker:       realNewTicker,
+		sleepFn:         realSleep,
+		jitterFn:        realJitter,
 		socketIOWakeSourceFactory: func(
 			fetcher SocketIOEndpointFetcher,
 			driveID driveid.ID,
@@ -197,7 +181,6 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	e.permHandler = &PermissionHandler{
 		store:        e.baseline,
 		permChecker:  cfg.PermChecker,
-		remoteReader: cfg.Downloads,
 		syncTree:     syncTree,
 		driveID:      cfg.DriveID,
 		accountEmail: cfg.AccountEmail,
@@ -306,371 +289,3 @@ func (e *Engine) hasPersistedAuthScope(ctx context.Context) (bool, error) {
 //  7. Return early if dry-run
 //  8. Build DepGraph, start worker pool
 //  9. Wait for completion, commit delta token
-
-// ListConflicts returns all unresolved conflicts from the database.
-func (e *Engine) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
-	conflicts, err := e.baseline.ListConflicts(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("sync: listing unresolved conflicts: %w", err)
-	}
-
-	return conflicts, nil
-}
-
-// ListAllConflicts returns all conflicts (resolved and unresolved) from the
-// database. Used by `status --history`.
-func (e *Engine) ListAllConflicts(ctx context.Context) ([]ConflictRecord, error) {
-	conflicts, err := e.baseline.ListAllConflicts(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("sync: listing conflict history: %w", err)
-	}
-
-	return conflicts, nil
-}
-
-// ResolveConflict queues and immediately processes a conflict resolution
-// through the same engine-owned path used by daemon/user-intent processing.
-// CLI commands must not call this; they persist requests via SyncStore or the
-// control socket so a running engine remains the sole side-effect owner.
-func (e *Engine) ResolveConflict(ctx context.Context, conflictID, resolution string) error {
-	result, err := e.baseline.RequestConflictResolution(ctx, conflictID, resolution)
-	if err != nil {
-		return fmt.Errorf("sync: request conflict resolution: %w", err)
-	}
-
-	switch result.Status {
-	case ConflictRequestQueued, ConflictRequestAlreadyQueued:
-		_, err := e.processQueuedConflictResolutions(ctx)
-		return err
-	case ConflictRequestAlreadyResolved:
-		return nil
-	case ConflictRequestAlreadyApplying:
-		return fmt.Errorf("sync: conflict %s resolution request is %s", conflictID, result.Status)
-	default:
-		return fmt.Errorf("sync: conflict %s resolution request is %s", conflictID, result.Status)
-	}
-}
-
-// resolveKeepLocal establishes the chosen on-disk layout for "keep local" by
-// restoring the newest untracked conflict copy back to the canonical path and
-// removing only the current unresolved conflict-copy artifacts. Any later
-// upload is ordinary sync work driven by normal observation/planning.
-func (e *Engine) resolveKeepLocal(ctx context.Context, c *ConflictRecord) ([]string, error) {
-	copies, err := e.untrackedConflictCopyPaths(ctx, c.Path)
-	if err != nil {
-		return nil, fmt.Errorf("glob conflict copies for keep-local: %w", err)
-	}
-	if len(copies) == 0 {
-		return nil, fmt.Errorf("restoring conflict copy to %s: conflict copy not found", c.Path)
-	}
-
-	selected := copies[len(copies)-1]
-	if err := e.syncTree.Rename(selected, c.Path); err != nil {
-		return nil, fmt.Errorf("restoring conflict copy to %s: %w", c.Path, err)
-	}
-
-	e.logger.Debug("restored conflict copy for keep-local",
-		slog.String("from", filepath.Base(selected)),
-		slog.String("to", c.Path),
-	)
-
-	if err := e.cleanupUntrackedConflictCopies(copies[:len(copies)-1]); err != nil {
-		return nil, err
-	}
-
-	return []string{c.Path}, nil
-}
-
-// resolveKeepRemote treats the remote-version file already materialized at the
-// canonical path during conflict detection as the chosen layout. It only
-// removes the current unresolved conflict-copy artifacts; any later baseline
-// convergence or download/upload trouble is ordinary sync work.
-func (e *Engine) resolveKeepRemote(ctx context.Context, c *ConflictRecord) ([]string, error) {
-	if _, err := e.syncTree.Stat(c.Path); err != nil {
-		return nil, fmt.Errorf("confirming remote version at %s: %w", c.Path, err)
-	}
-
-	copies, err := e.untrackedConflictCopyPaths(ctx, c.Path)
-	if err != nil {
-		return nil, fmt.Errorf("glob conflict copies for keep-remote: %w", err)
-	}
-	if err := e.cleanupUntrackedConflictCopies(copies); err != nil {
-		return nil, err
-	}
-
-	return []string{c.Path}, nil
-}
-
-// resolveKeepBoth treats the current original path plus the unresolved
-// conflict-copy artifacts as the chosen final layout. The conflict is resolved
-// once that layout exists; later hashing, baseline refresh, or uploads are
-// ordinary sync work driven by normal observation/planning.
-func (e *Engine) resolveKeepBoth(ctx context.Context, c *ConflictRecord) ([]string, error) {
-	if _, err := e.syncTree.Stat(c.Path); err != nil {
-		return nil, fmt.Errorf("confirming original file for keep-both: %w", err)
-	}
-
-	copies, err := e.untrackedConflictCopyPaths(ctx, c.Path)
-	if err != nil {
-		return nil, fmt.Errorf("glob conflict copies for keep-both: %w", err)
-	}
-	if len(copies) == 0 {
-		return nil, fmt.Errorf("confirming conflict copies for keep-both: none found for %s", c.Path)
-	}
-
-	paths := append([]string{c.Path}, copies...)
-	return paths, nil
-}
-
-func (e *Engine) untrackedConflictCopyPaths(ctx context.Context, relPath string) ([]string, error) {
-	matches, err := e.syncTree.Glob(conflictCopyGlob(relPath))
-	if err != nil {
-		return nil, fmt.Errorf("glob conflict copy paths: %w", err)
-	}
-	sort.Strings(matches)
-
-	bl, err := e.baseline.Load(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("load baseline for conflict copy classification: %w", err)
-	}
-
-	copies := make([]string, 0, len(matches))
-	for _, match := range matches {
-		if _, tracked := bl.GetByPath(match); tracked {
-			continue
-		}
-		copies = append(copies, match)
-	}
-
-	return copies, nil
-}
-
-func (e *Engine) cleanupUntrackedConflictCopies(paths []string) error {
-	for _, relPath := range paths {
-		if relPath == "" {
-			continue
-		}
-		if err := e.syncTree.Remove(relPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove conflict copy %s: %w", filepath.Base(relPath), err)
-		}
-		e.logger.Debug("removed unresolved conflict copy",
-			slog.String("file", filepath.Base(relPath)),
-		)
-	}
-
-	return nil
-}
-
-func (e *Engine) conflictResolutionFollowUpChanges(
-	ctx context.Context,
-	conflict *ConflictRecord,
-	resolution string,
-	paths []string,
-) []PathChanges {
-	if len(paths) == 0 {
-		return nil
-	}
-
-	scopeSnapshot, ok := e.conflictResolutionFollowUpScopeSnapshot(ctx)
-	if !ok {
-		return nil
-	}
-
-	bl, ok := e.conflictResolutionFollowUpBaseline(ctx)
-	if !ok {
-		return nil
-	}
-
-	forcedAction, forceAction := conflictResolutionForcedAction(resolution)
-	var changes []PathChanges
-	for _, path := range uniqueSortedNonEmptyPaths(paths) {
-		changes = e.conflictResolutionFollowUpPathChanges(
-			changes,
-			path,
-			conflict,
-			resolution,
-			bl,
-			scopeSnapshot,
-			forcedAction,
-			forceAction,
-		)
-	}
-
-	return changes
-}
-
-func (e *Engine) conflictResolutionFollowUpScopeSnapshot(ctx context.Context) (syncscope.Snapshot, bool) {
-	scopeSnapshot, err := e.buildScopeSnapshot(ctx)
-	if err != nil {
-		e.logger.Warn("build scope snapshot for conflict follow-up",
-			slog.String("error", err.Error()),
-		)
-		return syncscope.Snapshot{}, false
-	}
-
-	return scopeSnapshot, true
-}
-
-func (e *Engine) conflictResolutionFollowUpBaseline(ctx context.Context) (*Baseline, bool) {
-	bl := e.baseline.Baseline()
-	if bl != nil {
-		return bl, true
-	}
-
-	loaded, err := e.baseline.Load(ctx)
-	if err != nil {
-		e.logger.Warn("load baseline for conflict follow-up",
-			slog.String("error", err.Error()),
-		)
-		return nil, false
-	}
-
-	return loaded, true
-}
-
-func uniqueSortedNonEmptyPaths(paths []string) []string {
-	uniquePaths := make(map[string]struct{}, len(paths))
-	for _, path := range paths {
-		if path != "" {
-			uniquePaths[path] = struct{}{}
-		}
-	}
-
-	sortedPaths := make([]string, 0, len(uniquePaths))
-	for path := range uniquePaths {
-		sortedPaths = append(sortedPaths, path)
-	}
-	sort.Strings(sortedPaths)
-	return sortedPaths
-}
-
-func (e *Engine) conflictResolutionFollowUpPathChanges(
-	changes []PathChanges,
-	path string,
-	conflict *ConflictRecord,
-	resolution string,
-	bl *Baseline,
-	scopeSnapshot syncscope.Snapshot,
-	forcedAction ActionType,
-	forceAction bool,
-) []PathChanges {
-	var base *BaselineEntry
-	if entry, ok := bl.GetByPath(path); ok {
-		base = entry
-	}
-
-	observation, observeErr := ObserveSinglePathWithScope(
-		e.logger,
-		e.syncTree,
-		path,
-		base,
-		e.nowFunc().UnixNano(),
-		nil,
-		e.localFilter,
-		e.localRules,
-		scopeSnapshot,
-	)
-	if observeErr != nil {
-		e.logger.Warn("observe conflict follow-up path",
-			slog.String("path", path),
-			slog.String("error", observeErr.Error()),
-		)
-		return changes
-	}
-	if observation.Skipped != nil {
-		e.logger.Warn("conflict follow-up path requires normal sync attention",
-			slog.String("path", observation.Skipped.Path),
-			slog.String("reason", observation.Skipped.Reason),
-			slog.String("detail", observation.Skipped.Detail),
-		)
-		return changes
-	}
-	if observation.Event == nil {
-		e.logger.Debug("conflict follow-up path already resolved without event",
-			slog.String("path", path),
-		)
-		return changes
-	}
-
-	event := *observation.Event
-	if forceAction && conflict != nil && path == conflict.Path {
-		event.ForcedAction = forcedAction
-		event.HasForcedAction = true
-	}
-	changes = mergePathChangeBatches(changes, pathChangesFromEvent(&event))
-
-	if conflict == nil || path != conflict.Path {
-		return changes
-	}
-
-	remoteEvent := conflictResolutionRemoteEvent(conflict, resolution, &event)
-	return mergePathChangeBatches(changes, pathChangesFromEvent(remoteEvent))
-}
-
-func conflictResolutionForcedAction(resolution string) (ActionType, bool) {
-	switch resolution {
-	case ResolutionKeepLocal:
-		return ActionUpload, true
-	case ResolutionKeepRemote, ResolutionKeepBoth:
-		return ActionUpdateSynced, true
-	default:
-		return ActionType(0), false
-	}
-}
-
-func conflictResolutionRemoteEvent(
-	conflict *ConflictRecord,
-	resolution string,
-	localEvent *ChangeEvent,
-) *ChangeEvent {
-	if conflict == nil || conflict.Path == "" {
-		return nil
-	}
-
-	event := &ChangeEvent{
-		Source:    SourceRemote,
-		Type:      ChangeModify,
-		Path:      conflict.Path,
-		ItemID:    conflict.ItemID,
-		DriveID:   conflict.DriveID,
-		ItemType:  ItemTypeFile,
-		Name:      filepath.Base(conflict.Path),
-		IsDeleted: false,
-	}
-
-	switch resolution {
-	case ResolutionKeepLocal:
-		if conflict.ConflictType == ConflictEditDelete {
-			event.Type = ChangeDelete
-			event.IsDeleted = true
-		}
-		event.Hash = conflict.RemoteHash
-		event.Mtime = conflict.RemoteMtime
-		return event
-	case ResolutionKeepRemote, ResolutionKeepBoth:
-		if localEvent == nil {
-			return nil
-		}
-		event.ParentID = localEvent.ParentID
-		event.ItemType = localEvent.ItemType
-		event.Name = localEvent.Name
-		event.Size = localEvent.Size
-		event.Hash = localEvent.Hash
-		event.Mtime = localEvent.Mtime
-		return event
-	default:
-		return nil
-	}
-}
-
-func conflictCopyGlob(relPath string) string {
-	dir := filepath.Dir(relPath)
-	name := filepath.Base(relPath)
-	stem, ext := ConflictStemExt(name)
-	pattern := fmt.Sprintf("%s.conflict-*%s", stem, ext)
-	if dir == "." {
-		return pattern
-	}
-
-	return filepath.Join(dir, pattern)
-}

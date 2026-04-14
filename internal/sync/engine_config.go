@@ -8,7 +8,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
 
 // DriveEngineOptions carries the small set of construction decisions that are
@@ -87,25 +86,15 @@ func newEngineConfigForDrive(
 		PermChecker:            session.Meta,
 		Logger:                 logger,
 		EnableWebsocket:        resolved.Websocket,
-		LocalFilter: LocalFilterConfig{
-			SkipDotfiles: resolved.SkipDotfiles,
-			SkipSymlinks: resolved.SkipSymlinks,
-			SkipDirs:     resolved.SkipDirs,
-			SkipFiles:    resolved.SkipFiles,
-		},
+		LocalFilter:            LocalFilterConfig{},
 		LocalRules: LocalObservationRules{
 			RejectSharePointRootForms: resolved.CanonicalID.IsSharePoint(),
 		},
-		SyncScope: syncscope.Config{
-			SyncPaths:    append([]string(nil), resolved.SyncPaths...),
-			IgnoreMarker: resolved.IgnoreMarker,
-		},
-		UseLocalTrash:         resolved.UseLocalTrash,
-		TransferWorkers:       resolved.TransferWorkers,
-		CheckWorkers:          resolved.CheckWorkers,
-		DeleteSafetyThreshold: resolved.DeleteSafetyThreshold,
-		MinFreeSpace:          minFree,
-		PerfCollector:         opts.PerfCollector,
+		UseLocalTrash:   resolved.UseLocalTrash,
+		TransferWorkers: resolved.TransferWorkers,
+		CheckWorkers:    resolved.CheckWorkers,
+		MinFreeSpace:    minFree,
+		PerfCollector:   opts.PerfCollector,
 	}
 
 	if opts.VerifyDrive {

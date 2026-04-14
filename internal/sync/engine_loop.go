@@ -281,7 +281,6 @@ func (rt *watchRuntime) completeDrainOutbox() {
 func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.batchReady = nil
 	p.skippedCh = nil
-	p.scopeChanges = nil
 	p.recheckC = nil
 	p.reconcileC = nil
 }

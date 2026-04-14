@@ -135,17 +135,6 @@ func (o *LocalObserver) HandleFsEvent(
 	dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 	name := nfcNormalize(filepath.Base(fsEvent.Name))
 
-	if o.shouldRebuildScopeForEvent(fsEvent, fsEvent.Name, dbRelPath) {
-		o.handleMarkerEvent(ctx, watcher, tree)
-		if o.scopeSnapshot.IsMarkerFile(dbRelPath) {
-			return
-		}
-	}
-
-	if !o.scopeAllowsUnknown(dbRelPath) {
-		return
-	}
-
 	// Unified observation filter (Stage 1: name + path length).
 	// Watch handlers don't collect SkippedItems — the safety scan (FullScan
 	// every 5 min) catches them for recording to sync_failures.
@@ -197,14 +186,6 @@ func (o *LocalObserver) handleCreate(
 
 	o.forgetExcludedSymlink(dbRelPath)
 
-	if info.IsDir() {
-		if !o.scopeAllowsDir(dbRelPath) {
-			return
-		}
-	} else if !o.scopeAllowsFile(dbRelPath) {
-		return
-	}
-
 	if skip := shouldObserveWithFilter(name, dbRelPath, infoKind(info), o.filterConfig, o.observationRules); skip != nil {
 		return
 	}
@@ -246,10 +227,6 @@ func (o *LocalObserver) handleCreate(
 				o.watchedDirs = make(map[string]struct{})
 			}
 			o.watchedDirs[filepath.Clean(fsPath)] = struct{}{}
-		}
-
-		if !o.scopeSnapshot.AllowsPath(dbRelPath) {
-			return
 		}
 
 		// Scan directory contents for files created before the watch was
@@ -336,14 +313,6 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 
 	info, kind, ok := o.scanNewDirectoryEntryInfo(entry, entryFsPath, entryRelPath)
 	if !ok {
-		return
-	}
-
-	if kind == observedKindDir {
-		if !o.scopeAllowsDir(entryRelPath) {
-			return
-		}
-	} else if !o.scopeAllowsFile(entryRelPath) {
 		return
 	}
 
@@ -434,10 +403,6 @@ func (o *LocalObserver) scanNewDirectoryChildDir(
 		o.watchedDirs[filepath.Clean(entryFsPath)] = struct{}{}
 	}
 
-	if !o.scopeSnapshot.AllowsPath(entryRelPath) {
-		return
-	}
-
 	dirEv := ChangeEvent{
 		Source:   SourceLocal,
 		Type:     ChangeCreate,
@@ -482,10 +447,6 @@ func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 		return
 	}
 
-	if !o.scopeAllowsFile(dbRelPath) {
-		return
-	}
-
 	cooldown := o.WriteCoalesceCooldown
 	if cooldown == 0 {
 		cooldown = defaultWriteCoalesceCooldown
@@ -497,10 +458,9 @@ func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 	// Schedule deferred hash after cooldown. Timer callback sends to
 	// hashRequests channel (non-blocking); watchLoop picks it up via select.
 	req := HashRequest{
-		FsPath:     fsPath,
-		DbRelPath:  dbRelPath,
-		Name:       name,
-		Generation: o.currentScopeGeneration(),
+		FsPath:    fsPath,
+		DbRelPath: dbRelPath,
+		Name:      name,
 	}
 	timer := o.AfterFunc(cooldown, func() {
 		select {
@@ -511,7 +471,7 @@ func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 				slog.String("path", dbRelPath))
 		}
 	})
-	o.recordPendingTimer(dbRelPath, req.Generation, timer)
+	o.recordPendingTimer(dbRelPath, timer)
 }
 
 // HashAndEmit is called from the watchLoop when a write coalesce timer fires.
@@ -519,9 +479,6 @@ func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 // from the baseline. Runs in the watchLoop goroutine (same thread as handleWrite).
 func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, req HashRequest, events chan<- ChangeEvent) {
 	req = o.prepareDeferredHashRequest(req)
-	if o.isStaleDeferredHash(req) {
-		return
-	}
 
 	info, isSymlink, err := statObservedPath(req.FsPath)
 	if err != nil {
@@ -539,10 +496,6 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	o.forgetExcludedSymlink(req.DbRelPath)
 
 	if info.IsDir() {
-		return
-	}
-
-	if !o.scopeAllowsFile(req.DbRelPath) {
 		return
 	}
 
@@ -604,28 +557,9 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 }
 
 func (o *LocalObserver) prepareDeferredHashRequest(req HashRequest) HashRequest {
-	if req.Generation == 0 {
-		req.Generation = o.currentScopeGeneration()
-	}
-
-	o.clearPendingTimerIfGeneration(req.DbRelPath, req.Generation)
+	delete(o.PendingTimers, req.DbRelPath)
 
 	return req
-}
-
-func (o *LocalObserver) isStaleDeferredHash(req HashRequest) bool {
-	currentGeneration := o.currentScopeGeneration()
-	if req.Generation == currentGeneration {
-		return false
-	}
-
-	o.Logger.Debug("dropping stale deferred hash after scope change",
-		slog.String("path", req.DbRelPath),
-		slog.Int64("request_generation", req.Generation),
-		slog.Int64("current_generation", currentGeneration),
-	)
-
-	return true
 }
 
 func (o *LocalObserver) retryDeferredHashOnChange(req HashRequest, err error) bool {
@@ -654,7 +588,7 @@ func (o *LocalObserver) retryDeferredHashOnChange(req HashRequest, err error) bo
 				slog.Int("retry", retryReq.Retries))
 		}
 	})
-	o.recordPendingTimer(req.DbRelPath, req.Generation, timer)
+	o.recordPendingTimer(req.DbRelPath, timer)
 
 	return true
 }

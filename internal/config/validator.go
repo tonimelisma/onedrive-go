@@ -32,7 +32,6 @@ func (configValidator) collect(cfg *Config) []error {
 	var errs []error
 
 	errs = append(errs, validateDrives(cfg)...)
-	errs = append(errs, validateFilter(&cfg.FilterConfig)...)
 	errs = append(errs, validateTransfers(&cfg.TransfersConfig)...)
 	errs = append(errs, validateSafety(&cfg.SafetyConfig)...)
 	errs = append(errs, validateSync(&cfg.SyncConfig)...)

@@ -395,74 +395,6 @@ func TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage(t *testing.T) {
 }
 
 // Validates: R-6.8.16, R-6.6.11
-func TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked(t *testing.T) {
-	t.Parallel()
-
-	remoteDriveID := permissionsRemoteDriveID
-	checker := &mockPermChecker{
-		perms: map[string][]graph.Permission{
-			driveid.New(remoteDriveID).String() + ":root-id": {{ID: "p1", Roles: []string{"read"}}},
-		},
-	}
-	shortcuts := []Shortcut{{
-		ItemID:       "sc-1",
-		RemoteDrive:  remoteDriveID,
-		RemoteItem:   "root-id",
-		LocalPath:    "Shared/TeamDocs",
-		Observation:  ObservationDelta,
-		DiscoveredAt: 1000,
-	}}
-	baselineEntries := []ActionOutcome{{
-		Action:   ActionDownload,
-		Success:  true,
-		Path:     "Shared/TeamDocs",
-		DriveID:  driveid.New(remoteDriveID),
-		ItemID:   "root-id",
-		ParentID: "root",
-		ItemType: ItemTypeFolder,
-	}}
-
-	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	eng.logger = logger
-	eng.permHandler.logger = logger
-
-	ctx := t.Context()
-	flow := setupEngineDepGraph(t, eng, 1)
-	flow.setShortcuts(shortcuts)
-
-	processWorkerResultForTest(t, eng, ctx, &WorkerResult{
-		ActionID:   1,
-		Path:       "Shared/TeamDocs/file.txt",
-		ActionType: ActionUpload,
-		Success:    false,
-		HTTPStatus: http.StatusForbidden,
-		ErrMsg:     "403 Forbidden",
-	}, bl)
-
-	rows, err := eng.baseline.ListRemoteBlockedFailures(ctx)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, IssueRemoteWriteDenied, rows[0].IssueType)
-	assert.Equal(t, CategoryTransient, rows[0].Category)
-	assert.Equal(t, FailureRoleHeld, rows[0].Role)
-	assert.Equal(t, SKPermRemoteWrite("Shared/TeamDocs"), rows[0].ScopeKey)
-
-	snapshot := readDriveStatusSnapshotForTest(t, eng, ctx)
-	group := requireIssueGroupSummaryKey(t, &snapshot, SummaryRemoteWriteDenied)
-	assert.Equal(t, 1, group.Count)
-	assert.Equal(t, []string{"Shared/TeamDocs/file.txt"}, group.Paths)
-	assert.Equal(t, SKPermRemoteWrite("Shared/TeamDocs"), group.ScopeKey)
-
-	output := logBuf.String()
-	assert.Contains(t, output, "run_id=run-")
-	assert.Contains(t, output, "summary_key=remote_write_denied")
-	assert.Contains(t, output, "failure_class=actionable")
-	assert.Contains(t, output, "log_owner=sync")
-	assert.Contains(t, output, "issue_type="+IssueRemoteWriteDenied)
-}
-
 // Validates: R-6.8.16, R-6.6.11
 func TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired(t *testing.T) {
 	t.Parallel()
@@ -531,21 +463,21 @@ func TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied(t *testing
 	rows, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, IssueLocalReadDenied, rows[0].IssueType)
+	assert.Equal(t, IssueLocalPermissionDenied, rows[0].IssueType)
 	assert.Equal(t, CategoryActionable, rows[0].Category)
 	assert.Equal(t, FailureRoleItem, rows[0].Role)
 
 	snapshot := readDriveStatusSnapshotForTest(t, eng, ctx)
-	group := requireIssueGroupSummaryKey(t, &snapshot, SummaryLocalReadDenied)
+	group := requireIssueGroupSummaryKey(t, &snapshot, SummaryLocalPermissionDenied)
 	assert.Equal(t, 1, group.Count)
 	assert.Equal(t, []string{"file.txt"}, group.Paths)
 
 	output := logBuf.String()
 	assert.Contains(t, output, "run_id=run-")
-	assert.Contains(t, output, "summary_key=local_read_denied")
+	assert.Contains(t, output, "summary_key=local_permission_denied")
 	assert.Contains(t, output, "failure_class=actionable")
 	assert.Contains(t, output, "log_owner=sync")
-	assert.Contains(t, output, "issue_type="+IssueLocalReadDenied)
+	assert.Contains(t, output, "issue_type="+IssueLocalPermissionDenied)
 }
 
 // Validates: R-2.10.5
@@ -569,7 +501,7 @@ func TestHandleWatchWorkerResult_UnauthorizedStopsWatchLoop(t *testing.T) {
 // setupEngineDepGraph creates a DepGraph on the engine and adds a dummy action
 // for the given actionID so that processWorkerResult can call Complete without
 // panicking on nil depGraph or unknown ID.
-func setupEngineDepGraph(t *testing.T, eng *testEngine, actionID int64) *engineFlow {
+func setupEngineDepGraph(t *testing.T, eng *testEngine, actionID int64) {
 	t.Helper()
 
 	flow := newEngineFlow(eng.Engine)
@@ -578,8 +510,6 @@ func setupEngineDepGraph(t *testing.T, eng *testEngine, actionID int64) *engineF
 	dummyAction := &Action{Path: "dummy", Type: ActionDownload}
 	flow.depGraph.Add(dummyAction, actionID, nil)
 	eng.flow = &flow
-
-	return &flow
 }
 
 func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
@@ -606,61 +536,6 @@ func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
 	assert.Equal(t, DirectionUpload, issues[0].Direction)
 	assert.Equal(t, "connection reset", issues[0].LastError)
 	assert.Equal(t, 503, issues[0].HTTPStatus)
-}
-
-func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
-	t.Parallel()
-
-	remoteDriveID := permissionsRemoteDriveID
-
-	checker := &mockPermChecker{
-		perms: map[string][]graph.Permission{
-			driveid.New(remoteDriveID).String() + ":root-id": {{ID: "p1", Roles: []string{"read"}}},
-		},
-	}
-
-	shortcuts := []Shortcut{{
-		ItemID: "sc-1", RemoteDrive: remoteDriveID, RemoteItem: "root-id",
-		LocalPath: "Shared/TeamDocs", Observation: ObservationDelta, DiscoveredAt: 1000,
-	}}
-
-	baselineEntries := []ActionOutcome{
-		{
-			Action: ActionDownload, Success: true, Path: "Shared/TeamDocs",
-			DriveID: driveid.New(remoteDriveID), ItemID: "root-id", ParentID: "root", ItemType: ItemTypeFolder,
-		},
-	}
-
-	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
-	ctx := t.Context()
-	flow := setupEngineDepGraph(t, eng, 0)
-
-	// Seed the latest shortcut snapshot so getShortcuts() returns it for handle403.
-	flow.setShortcuts(shortcuts)
-
-	flow.processWorkerResult(ctx, nil, &WorkerResult{
-		Path:       "Shared/TeamDocs/file.txt",
-		ActionType: ActionUpload,
-		Success:    false,
-		ErrMsg:     "403 Forbidden",
-		HTTPStatus: 403,
-	}, bl)
-
-	// Confirmed remote read-only should collapse to one held blocked-write row.
-	permIssues, err := eng.baseline.ListRemoteBlockedFailures(ctx)
-	require.NoError(t, err)
-	require.Len(t, permIssues, 1, "confirmed remote denial should record one blocked write row")
-	assert.Equal(t, "Shared/TeamDocs/file.txt", permIssues[0].Path)
-	assert.Equal(t, SKPermRemoteWrite("Shared/TeamDocs"), permIssues[0].ScopeKey)
-
-	// remote_state should be empty.
-	failed, err := eng.baseline.ListRemoteState(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, failed, "confirmed read-only 403 should not be in remote_state")
-
-	allFailures, err := eng.baseline.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	assert.Len(t, allFailures, 1, "confirmed remote denial should not leave a duplicate file-level failure behind")
 }
 
 func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
@@ -784,9 +659,9 @@ func TestClassifyResult_LifecycleAndAuth(t *testing.T) {
 		},
 		{
 			name:            "403_forbidden",
-			result:          WorkerResult{HTTPStatus: http.StatusForbidden, Err: graph.ErrForbidden, ActionType: ActionUpload},
+			result:          WorkerResult{HTTPStatus: http.StatusForbidden, Err: graph.ErrForbidden},
 			wantClass:       resultSkip,
-			wantSummaryKey:  SummaryRemoteWriteDenied,
+			wantSummaryKey:  SummaryRemotePermissionDenied,
 			wantPersistence: persistActionableFailure,
 			wantPermission:  permissionFlowRemote403,
 		},
@@ -842,9 +717,8 @@ func TestClassifyResult_StorageScopes(t *testing.T) {
 		{
 			name: "507_own_drive",
 			result: WorkerResult{
-				HTTPStatus:  http.StatusInsufficientStorage,
-				Err:         errors.New("insufficient storage"),
-				ShortcutKey: "",
+				HTTPStatus: http.StatusInsufficientStorage,
+				Err:        errors.New("insufficient storage"),
 			},
 			wantClass:       resultScopeBlock,
 			wantScope:       SKQuotaOwn(),
@@ -853,14 +727,14 @@ func TestClassifyResult_StorageScopes(t *testing.T) {
 			wantScopeDetect: true,
 		},
 		{
-			name: "507_shortcut_drive",
+			name: "507_shared_root_drive",
 			result: WorkerResult{
-				HTTPStatus:  http.StatusInsufficientStorage,
-				Err:         errors.New("insufficient storage"),
-				ShortcutKey: "drive1:item1",
+				HTTPStatus:    http.StatusInsufficientStorage,
+				Err:           errors.New("insufficient storage"),
+				TargetDriveID: driveid.New("drive1"),
 			},
 			wantClass:       resultScopeBlock,
-			wantScope:       SKQuotaShortcut("drive1:item1"),
+			wantScope:       SKQuotaOwn(),
 			wantSummaryKey:  SummaryQuotaExceeded,
 			wantPersistence: persistTransientFailure,
 			wantScopeDetect: true,
@@ -872,12 +746,12 @@ func TestClassifyResult_LocalErrors(t *testing.T) {
 	t.Parallel()
 
 	assertClassifyResultCases(t, []classifyResultCase{
-		{name: "os_err_permission", result: WorkerResult{Err: os.ErrPermission}, wantClass: resultSkip, wantSummaryKey: SummaryLocalWriteDenied, wantPersistence: persistActionableFailure, wantPermission: permissionFlowLocalPermission},
+		{name: "os_err_permission", result: WorkerResult{Err: os.ErrPermission}, wantClass: resultSkip, wantSummaryKey: SummaryLocalPermissionDenied, wantPersistence: persistActionableFailure, wantPermission: permissionFlowLocalPermission},
 		{
 			name:            "wrapped_os_err_permission",
 			result:          WorkerResult{Err: fmt.Errorf("cannot write: %w", os.ErrPermission)},
 			wantClass:       resultSkip,
-			wantSummaryKey:  SummaryLocalWriteDenied,
+			wantSummaryKey:  SummaryLocalPermissionDenied,
 			wantPersistence: persistActionableFailure,
 			wantPermission:  permissionFlowLocalPermission,
 		},
@@ -1274,99 +1148,11 @@ func TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure(t 
 	require.NoError(t, err)
 	require.Len(t, failures, 1)
 	assert.Equal(t, FailureRoleItem, failures[0].Role)
-	assert.Equal(t, IssueLocalReadDenied, failures[0].IssueType)
+	assert.Equal(t, IssueLocalPermissionDenied, failures[0].IssueType)
 	assert.True(t, failures[0].ScopeKey.IsZero(), "file-level local permission preserve should not rewrite the original scope")
 }
 
 // Validates: R-2.10.5, R-2.10.14, R-2.14.1
-func TestProcessTrialResultV2_Preserve_Remote403RehomesCandidateToPermissionScope(t *testing.T) {
-	t.Parallel()
-
-	remoteDriveID := permissionsRemoteDriveID
-	checker := &mockPermChecker{
-		perms: map[string][]graph.Permission{
-			driveid.New(remoteDriveID).String() + ":root-id": {{ID: "p1", Roles: []string{"read"}}},
-		},
-	}
-	shortcuts := []Shortcut{{
-		ItemID:       "sc-1",
-		RemoteDrive:  remoteDriveID,
-		RemoteItem:   "root-id",
-		LocalPath:    "Shared/TeamDocs",
-		Observation:  ObservationDelta,
-		DiscoveredAt: 1000,
-	}}
-	baselineEntries := []ActionOutcome{{
-		Action:   ActionDownload,
-		Success:  true,
-		Path:     "Shared/TeamDocs",
-		DriveID:  driveid.New(remoteDriveID),
-		ItemID:   "root-id",
-		ParentID: "root",
-		ItemType: ItemTypeFolder,
-	}}
-
-	eng, bl, _ := newTestEngineWithPerms(t, checker, shortcuts, baselineEntries)
-	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	setupWatchEngine(t, eng)
-	testEngineFlow(t, eng).setShortcuts(shortcuts)
-
-	ctx := t.Context()
-	now := eng.nowFunc()
-	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key:           SKService(),
-		IssueType:     IssueServiceOutage,
-		BlockedAt:     now,
-		TrialInterval: 30 * time.Second,
-		NextTrialAt:   now.Add(30 * time.Second),
-		TrialCount:    4,
-	})
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
-		Path:      "Shared/TeamDocs/file.txt",
-		DriveID:   eng.driveID,
-		Direction: DirectionUpload,
-		Role:      FailureRoleHeld,
-		Category:  CategoryTransient,
-		ScopeKey:  SKService(),
-		ItemID:    "i1",
-	}, nil))
-
-	testWatchRuntime(t, eng).depGraph.Add(&Action{
-		Type:    ActionUpload,
-		Path:    "Shared/TeamDocs/file.txt",
-		DriveID: eng.driveID,
-		ItemID:  "i1",
-	}, 55, nil)
-
-	processWorkerResultDetailedForTest(t, eng, ctx, &WorkerResult{
-		ActionID:      55,
-		IsTrial:       true,
-		TrialScopeKey: SKService(),
-		ActionType:    ActionUpload,
-		Path:          "Shared/TeamDocs/file.txt",
-		DriveID:       eng.driveID,
-		Success:       false,
-		HTTPStatus:    http.StatusForbidden,
-		Err:           graph.ErrForbidden,
-		ErrMsg:        "read-only",
-	}, bl)
-
-	got, ok := getTestScopeBlock(eng, SKService())
-	require.True(t, ok)
-	assert.Equal(t, 30*time.Second, got.TrialInterval)
-	assert.Equal(t, now.Add(30*time.Second), got.NextTrialAt)
-	assert.Equal(t, 4, got.TrialCount)
-	assert.True(t, isTestScopeBlocked(eng, SKPermRemoteWrite("Shared/TeamDocs")),
-		"preserved candidate should activate the more specific permission scope")
-
-	failures, err := eng.baseline.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	require.Len(t, failures, 1)
-	assert.Equal(t, "Shared/TeamDocs/file.txt", failures[0].Path)
-	assert.Equal(t, FailureRoleHeld, failures[0].Role)
-	assert.Equal(t, SKPermRemoteWrite("Shared/TeamDocs"), failures[0].ScopeKey)
-}
-
 // Validates: R-2.10.5, R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.43
 func TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends(t *testing.T) {
 	t.Parallel()
@@ -1399,12 +1185,6 @@ func TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends(t *testing.T) {
 			want:     trialOutcomeExtend,
 		},
 		{
-			name:     "quota_shortcut_matching_507_extends",
-			scopeKey: SKQuotaShortcut("drive1:item1"),
-			result:   WorkerResult{HTTPStatus: http.StatusInsufficientStorage, ShortcutKey: "drive1:item1"},
-			want:     trialOutcomeExtend,
-		},
-		{
 			name:     "disk_full_extends",
 			scopeKey: SKDiskLocal(),
 			result:   WorkerResult{Err: driveops.ErrDiskFull},
@@ -1420,12 +1200,6 @@ func TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends(t *testing.T) {
 			name:     "service_does_not_extend_throttle_error",
 			scopeKey: SKService(),
 			result:   WorkerResult{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled},
-			want:     trialOutcomePreserve,
-		},
-		{
-			name:     "quota_shortcut_mismatch_preserves",
-			scopeKey: SKQuotaShortcut("drive1:item1"),
-			result:   WorkerResult{HTTPStatus: http.StatusInsufficientStorage, ShortcutKey: "drive2:item2"},
 			want:     trialOutcomePreserve,
 		},
 	}
@@ -1566,28 +1340,25 @@ func TestDeriveScopeKey(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		httpStatus  int
-		shortcutKey string
-		want        ScopeKey
+		name       string
+		httpStatus int
+		want       ScopeKey
 	}{
-		{"429_throttle", 429, "", testThrottleScope()},
-		{"503_service", 503, "", SKService()},
-		{"507_own", 507, "", SKQuotaOwn()},
-		{"507_shortcut", 507, "drive1:item1", SKQuotaShortcut("drive1:item1")},
-		{"500_service", 500, "", SKService()},
-		{"502_service", 502, "", SKService()},
-		{"200_empty", 200, "", ScopeKey{}},
-		{"404_empty", 404, "", ScopeKey{}},
+		{"429_throttle", 429, testThrottleScope()},
+		{"503_service", 503, SKService()},
+		{"507_own", 507, SKQuotaOwn()},
+		{"500_service", 500, SKService()},
+		{"502_service", 502, SKService()},
+		{"200_empty", 200, ScopeKey{}},
+		{"404_empty", 404, ScopeKey{}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			r := &WorkerResult{
-				HTTPStatus:  tt.httpStatus,
-				ShortcutKey: tt.shortcutKey,
-				DriveID:     testThrottleDriveID(),
+				HTTPStatus: tt.httpStatus,
+				DriveID:    testThrottleDriveID(),
 			}
 			assert.Equal(t, tt.want, deriveScopeKey(r))
 		})
@@ -1678,7 +1449,7 @@ func TestRecordFailure_PopulatesScopeKey_429(t *testing.T) {
 }
 
 // Validates: R-2.10.11
-func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
+func TestRecordFailure_PopulatesScopeKey_507Quota(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -1687,19 +1458,18 @@ func TestRecordFailure_PopulatesScopeKey_507Shortcut(t *testing.T) {
 	setupEngineDepGraph(t, eng, 1)
 
 	processWorkerResultForTest(t, eng, ctx, &WorkerResult{
-		Path:        "shared/file.txt",
-		ActionType:  ActionUpload,
-		Success:     false,
-		ErrMsg:      "quota exceeded",
-		HTTPStatus:  507,
-		ShortcutKey: "driveA:item42",
-		ActionID:    1,
+		Path:       "shared/file.txt",
+		ActionType: ActionUpload,
+		Success:    false,
+		ErrMsg:     "quota exceeded",
+		HTTPStatus: 507,
+		ActionID:   1,
 	}, nil)
 
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, SKQuotaShortcut("driveA:item42"), issues[0].ScopeKey)
+	assert.Equal(t, SKQuotaOwn(), issues[0].ScopeKey)
 }
 
 // ---------------------------------------------------------------------------
@@ -2308,7 +2078,7 @@ func TestClearResolvedSkippedItems_DoesNotAffectRuntimeIssues(t *testing.T) {
 	// Record a runtime failure (permission denied — not scanner-detectable).
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path: "Shared/folder", DriveID: driveID, Direction: DirectionUpload,
-		IssueType: IssueRemoteWriteDenied, Category: CategoryActionable, ErrMsg: "read-only",
+		IssueType: IssuePermissionDenied, Category: CategoryActionable, ErrMsg: "read-only",
 		HTTPStatus: 403,
 	}, nil))
 
@@ -2320,7 +2090,7 @@ func TestClearResolvedSkippedItems_DoesNotAffectRuntimeIssues(t *testing.T) {
 	remaining, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
-	assert.Equal(t, IssueRemoteWriteDenied, remaining[0].IssueType)
+	assert.Equal(t, IssuePermissionDenied, remaining[0].IssueType)
 }
 
 // Validates: R-2.10.2
@@ -2419,37 +2189,13 @@ func TestIsObservationSuppressed_TargetScopedThrottleDoesNotSuppressAllShortcuts
 	// Initially not suppressed.
 	assert.False(t, isObservationSuppressedForTest(t, eng, testWatchRuntime(t, eng)))
 
-	// Target-scoped throttle should not suppress all shortcut observation.
+	// Target-scoped throttle should not suppress all shared observation.
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:           testThrottleScope(),
 		IssueType:     IssueRateLimited,
 		TrialInterval: 30 * time.Second,
 	})
 	assert.False(t, isObservationSuppressedForTest(t, eng, testWatchRuntime(t, eng)))
-}
-
-// Validates: R-2.10.30
-func TestSuppressedShortcutTargets_TracksOnlyMatchingSharedTargets(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	watch := testWatchRuntime(t, eng)
-
-	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key:           SKThrottleShared("drive-a", "item-a"),
-		IssueType:     IssueRateLimited,
-		TrialInterval: 30 * time.Second,
-	})
-	setTestScopeBlock(t, eng, &ScopeBlock{
-		Key:           testThrottleScope(),
-		IssueType:     IssueRateLimited,
-		TrialInterval: 30 * time.Second,
-	})
-
-	suppressed := suppressedShortcutTargetsForTest(t, eng, watch)
-	require.Len(t, suppressed, 1)
-	_, ok := suppressed["drive-a:item-a"]
-	assert.True(t, ok)
 }
 
 // Validates: R-2.10.30
@@ -2551,41 +2297,36 @@ func TestIssueTypeForHTTPStatus(t *testing.T) {
 		name       string
 		httpStatus int
 		err        error
-		actionType ActionType
 		want       string
 	}{
-		{"429_rate_limited", http.StatusTooManyRequests, nil, ActionUpload, IssueRateLimited},
-		{"401_unauthorized", http.StatusUnauthorized, graph.ErrUnauthorized, ActionUpload, IssueUnauthorized},
-		{"507_quota_exceeded", http.StatusInsufficientStorage, nil, ActionUpload, IssueQuotaExceeded},
-		{"403_permission_denied", http.StatusForbidden, nil, ActionUpload, IssueRemoteWriteDenied},
-		{"400_invalid_request", http.StatusBadRequest, genericInvalidRequestErr, ActionUpload, ""},
-		{"400_object_handle_message_only", http.StatusBadRequest, objectHandleErr, ActionUpload, ""},
-		{"400_normal", http.StatusBadRequest, errors.New("bad request"), ActionUpload, ""},
-		{"500_service_outage", http.StatusInternalServerError, nil, ActionUpload, IssueServiceOutage},
-		{"503_service_outage", http.StatusServiceUnavailable, nil, ActionUpload, IssueServiceOutage},
-		{"408_request_timeout", http.StatusRequestTimeout, nil, ActionUpload, "request_timeout"},
-		{"412_transient_conflict", http.StatusPreconditionFailed, nil, ActionUpload, "transient_conflict"},
-		{"404_transient_not_found", http.StatusNotFound, nil, ActionUpload, "transient_not_found"},
-		{"423_resource_locked", http.StatusLocked, nil, ActionUpload, "resource_locked"},
-		{"permission_error", 0, os.ErrPermission, ActionDownload, IssueLocalWriteDenied},
+		{"429_rate_limited", http.StatusTooManyRequests, nil, IssueRateLimited},
+		{"401_unauthorized", http.StatusUnauthorized, graph.ErrUnauthorized, IssueUnauthorized},
+		{"507_quota_exceeded", http.StatusInsufficientStorage, nil, IssueQuotaExceeded},
+		{"403_permission_denied", http.StatusForbidden, nil, IssuePermissionDenied},
+		{"400_invalid_request", http.StatusBadRequest, genericInvalidRequestErr, ""},
+		{"400_object_handle_message_only", http.StatusBadRequest, objectHandleErr, ""},
+		{"400_normal", http.StatusBadRequest, errors.New("bad request"), ""},
+		{"500_service_outage", http.StatusInternalServerError, nil, IssueServiceOutage},
+		{"503_service_outage", http.StatusServiceUnavailable, nil, IssueServiceOutage},
+		{"408_request_timeout", http.StatusRequestTimeout, nil, "request_timeout"},
+		{"412_transient_conflict", http.StatusPreconditionFailed, nil, "transient_conflict"},
+		{"404_transient_not_found", http.StatusNotFound, nil, "transient_not_found"},
+		{"423_resource_locked", http.StatusLocked, nil, "resource_locked"},
+		{"permission_error", 0, os.ErrPermission, IssueLocalPermissionDenied},
 		// Validates: R-2.10.43
-		{"disk_full", 0, driveops.ErrDiskFull, ActionDownload, IssueDiskFull},
-		{"wrapped_disk_full", 0, fmt.Errorf("download: %w", driveops.ErrDiskFull), ActionDownload, IssueDiskFull},
+		{"disk_full", 0, driveops.ErrDiskFull, IssueDiskFull},
+		{"wrapped_disk_full", 0, fmt.Errorf("download: %w", driveops.ErrDiskFull), IssueDiskFull},
 		// Validates: R-2.10.44
-		{"file_too_large_for_space", 0, driveops.ErrFileTooLargeForSpace, ActionDownload, IssueFileTooLargeForSpace},
-		{"file_exceeds_onedrive_limit", 0, driveops.ErrFileExceedsOneDriveLimit, ActionUpload, IssueFileTooLarge},
-		{"unknown_status", 418, nil, ActionUpload, ""},
-		{"zero_status_no_error", 0, nil, ActionUpload, ""},
+		{"file_too_large_for_space", 0, driveops.ErrFileTooLargeForSpace, IssueFileTooLargeForSpace},
+		{"file_exceeds_onedrive_limit", 0, driveops.ErrFileExceedsOneDriveLimit, IssueFileTooLarge},
+		{"unknown_status", 418, nil, ""},
+		{"zero_status_no_error", 0, nil, ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := issueTypeForResult(&WorkerResult{
-				HTTPStatus: tt.httpStatus,
-				Err:        tt.err,
-				ActionType: tt.actionType,
-			})
+			got := issueTypeForHTTPStatus(tt.httpStatus, tt.err)
 			assert.Equal(t, tt.want, got)
 		})
 	}

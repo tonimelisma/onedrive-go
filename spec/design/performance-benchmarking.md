@@ -491,9 +491,9 @@ The implemented v1 representative sync scenario is
 - defaults: `runs=3`, `warmup=0`
 - command under test: `onedrive-go sync --download-only`
 
-The scenario keeps a benchmark-owned remote scope under
-`/benchmarks/sync-partial-local-catchup-100m` and uses `sync_paths` so the
-subject syncs only that subtree. The checked-in manifest defines four file
+The scenario keeps a benchmark-owned remote tree under
+`/benchmarks/sync-partial-local-catchup-100m` and binds the benchmark drive's
+`sync_dir` directly to that dedicated local root. The checked-in manifest defines four file
 bands totaling exactly 100 MiB:
 
 - `documents`: 1600 files × 256 B

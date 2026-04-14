@@ -42,32 +42,21 @@ type statusDrive struct {
 
 // syncStateInfo holds the full per-drive status payload rendered by `status`.
 type syncStateInfo struct {
-	LastSyncTime             string                      `json:"last_sync_time,omitempty"`
-	LastSyncDuration         string                      `json:"last_sync_duration,omitempty"`
-	FileCount                int                         `json:"file_count"`
-	IssueCount               int                         `json:"issue_count"`
-	RemoteDrift              int                         `json:"remote_drift"`
-	Retrying                 int                         `json:"retrying"`
-	LastError                string                      `json:"last_error,omitempty"`
-	IssueGroups              []failureGroupJSON          `json:"issue_groups,omitempty"`
-	DeleteSafety             []deleteSafetyJSON          `json:"delete_safety,omitempty"`
-	DeleteSafetyTotal        int                         `json:"delete_safety_total"`
-	Conflicts                []statusConflictJSON        `json:"conflicts,omitempty"`
-	ConflictsTotal           int                         `json:"conflicts_total"`
-	ConflictHistory          []statusConflictHistoryJSON `json:"conflict_history,omitempty"`
-	ConflictHistoryTotal     int                         `json:"conflict_history_total"`
-	NextActions              []string                    `json:"next_actions,omitempty"`
-	ExamplesLimit            int                         `json:"examples_limit"`
-	Verbose                  bool                        `json:"verbose"`
-	StateStoreStatus         string                      `json:"state_store_status"`
-	StateStoreError          string                      `json:"state_store_error,omitempty"`
-	StateStoreRecoveryHint   string                      `json:"state_store_recovery_hint,omitempty"`
-	HeldDeletesWaiting       int                         `json:"held_deletes_waiting,omitempty"`
-	ApprovedDeletesWaiting   int                         `json:"approved_deletes_waiting,omitempty"`
-	QueuedConflictRequests   int                         `json:"queued_conflict_requests,omitempty"`
-	ApplyingConflictRequests int                         `json:"applying_conflict_requests,omitempty"`
-	Perf                     *perf.Snapshot              `json:"perf,omitempty"`
-	PerfUnavailableReason    string                      `json:"perf_unavailable_reason,omitempty"`
+	LastSyncTime           string             `json:"last_sync_time,omitempty"`
+	LastSyncDuration       string             `json:"last_sync_duration,omitempty"`
+	FileCount              int                `json:"file_count"`
+	IssueCount             int                `json:"issue_count"`
+	RemoteDrift            int                `json:"remote_drift"`
+	Retrying               int                `json:"retrying"`
+	LastError              string             `json:"last_error,omitempty"`
+	IssueGroups            []failureGroupJSON `json:"issue_groups,omitempty"`
+	ExamplesLimit          int                `json:"examples_limit"`
+	Verbose                bool               `json:"verbose"`
+	StateStoreStatus       string             `json:"state_store_status"`
+	StateStoreError        string             `json:"state_store_error,omitempty"`
+	StateStoreRecoveryHint string             `json:"state_store_recovery_hint,omitempty"`
+	Perf                   *perf.Snapshot     `json:"perf,omitempty"`
+	PerfUnavailableReason  string             `json:"perf_unavailable_reason,omitempty"`
 }
 
 // statusSummary aggregates health info across all drives.
@@ -370,6 +359,6 @@ func querySyncStateWithOptions(
 	examplesLimit int,
 ) *syncStateInfo {
 	snapshot, storeInfo := readDriveStatusSnapshot(statePath, logger, history, canonicalID)
-	info := buildSyncStateInfo(canonicalID, &snapshot, storeInfo, verbose, examplesLimit)
+	info := buildSyncStateInfo(&snapshot, storeInfo, verbose, examplesLimit)
 	return &info
 }

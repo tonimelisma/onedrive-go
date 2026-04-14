@@ -27,7 +27,6 @@ type ResolvedDrive struct {
 	DriveID     driveid.ID
 	RootItemID  string // virtual root item for folder-scoped shared drives; empty = drive root
 
-	FilterConfig
 	TransfersConfig
 	SafetyConfig
 	SyncConfig
@@ -155,7 +154,6 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		Paused:          drive.IsPaused(time.Now()),
 		PausedUntil:     pausedUntil,
 		SyncDir:         expandTilde(drive.SyncDir),
-		FilterConfig:    cfg.FilterConfig,
 		TransfersConfig: cfg.TransfersConfig,
 		SafetyConfig:    cfg.SafetyConfig,
 		SyncConfig:      cfg.SyncConfig,
@@ -281,30 +279,9 @@ func ResolveAccountNames(cid driveid.CanonicalID, logger *slog.Logger) (orgName,
 // applyDriveOverrides selectively replaces global config values with per-drive
 // values for fields that the drive explicitly sets.
 func applyDriveOverrides(resolved *ResolvedDrive, drive *Drive, logger *slog.Logger) {
-	if drive.SkipDotfiles != nil {
-		resolved.SkipDotfiles = *drive.SkipDotfiles
-		logger.Debug("per-drive override applied", "field", "skip_dotfiles", "value", *drive.SkipDotfiles)
-	}
-
-	if drive.SkipDirs != nil {
-		resolved.SkipDirs = drive.SkipDirs
-		logger.Debug("per-drive override applied", "field", "skip_dirs", "count", len(drive.SkipDirs))
-	}
-
-	if drive.SkipFiles != nil {
-		resolved.SkipFiles = drive.SkipFiles
-		logger.Debug("per-drive override applied", "field", "skip_files", "count", len(drive.SkipFiles))
-	}
-
-	if drive.SyncPaths != nil {
-		resolved.SyncPaths = drive.SyncPaths
-		logger.Debug("per-drive override applied", "field", "sync_paths", "count", len(drive.SyncPaths))
-	}
-
-	if drive.IgnoreMarker != "" {
-		resolved.IgnoreMarker = drive.IgnoreMarker
-		logger.Debug("per-drive override applied", "field", "ignore_marker", "value", drive.IgnoreMarker)
-	}
+	_ = resolved
+	_ = drive
+	_ = logger
 }
 
 // expandTilde replaces a leading "~/" with the user's home directory.

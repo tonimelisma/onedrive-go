@@ -41,15 +41,6 @@ func TestAction_ThrottleTargetKey(t *testing.T) {
 			want: throttleDriveParam(driveID),
 		},
 		{
-			name: "shared target uses shared boundary",
-			action: &Action{
-				DriveID:           driveID,
-				TargetDriveID:     targetDriveID,
-				TargetShortcutKey: "remote-drive:remote-item",
-			},
-			want: throttleSharedPrefix + "remote-drive:remote-item",
-		},
-		{
 			name:   "zero value action",
 			action: &Action{},
 			want:   "",

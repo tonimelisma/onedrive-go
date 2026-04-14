@@ -246,22 +246,16 @@ func remote403PermissionFlow(r *WorkerResult) permissionFlow {
 	if r == nil || r.HTTPStatus != http.StatusForbidden {
 		return permissionFlowNone
 	}
-	if effectiveRemotePermissionCapability(r) == PermissionCapabilityRemoteWrite {
-		return permissionFlowRemote403
-	}
 
-	return permissionFlowNone
+	return permissionFlowRemote403
 }
 
 func localPermissionDecisionFlow(r *WorkerResult) permissionFlow {
 	if r == nil || !errors.Is(r.Err, os.ErrPermission) {
 		return permissionFlowNone
 	}
-	if effectiveLocalPermissionCapability(r).IsLocal() {
-		return permissionFlowLocalPermission
-	}
 
-	return permissionFlowNone
+	return permissionFlowLocalPermission
 }
 
 func withRuntimeSummary(decision *ResultDecision) ResultDecision {
@@ -360,7 +354,7 @@ func deriveScopeKey(r *WorkerResult) ScopeKey {
 	if targetDriveID.IsZero() {
 		targetDriveID = r.DriveID
 	}
-	return ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
+	return ScopeKeyForResult(r.HTTPStatus, targetDriveID)
 }
 
 func issueTypeForResult(r *WorkerResult) string {
@@ -369,6 +363,36 @@ func issueTypeForResult(r *WorkerResult) string {
 	}
 	if issueType, ok := issueTypeForFilesystemResult(r); ok {
 		return issueType
+	}
+
+	return ""
+}
+
+// issueTypeForHTTPStatus preserves the older direct status/error helper used by
+// some tests and cascade paths while the classifier now carries richer
+// capability-aware WorkerResult state.
+func issueTypeForHTTPStatus(httpStatus int, err error) string {
+	result := &WorkerResult{
+		HTTPStatus: httpStatus,
+		Err:        err,
+	}
+	if issueType, ok := issueTypeForHTTPResult(result); ok {
+		switch issueType {
+		case IssueRemoteWriteDenied:
+			return IssuePermissionDenied
+		case IssueLocalWriteDenied:
+			return IssueLocalPermissionDenied
+		default:
+			return issueType
+		}
+	}
+	if issueType, ok := issueTypeForFilesystemResult(result); ok {
+		switch issueType {
+		case IssueLocalWriteDenied:
+			return IssueLocalPermissionDenied
+		default:
+			return issueType
+		}
 	}
 
 	return ""
@@ -457,6 +481,9 @@ func effectiveRemotePermissionCapability(r *WorkerResult) PermissionCapability {
 	if r.FailureCapability == PermissionCapabilityRemoteRead || r.FailureCapability == PermissionCapabilityRemoteWrite {
 		return r.FailureCapability
 	}
+	if !hasPermissionActionContext(r) {
+		return PermissionCapabilityUnknown
+	}
 
 	switch r.ActionType {
 	case ActionDownload:
@@ -477,6 +504,9 @@ func effectiveLocalPermissionCapability(r *WorkerResult) PermissionCapability {
 	if r.FailureCapability == PermissionCapabilityLocalRead || r.FailureCapability == PermissionCapabilityLocalWrite {
 		return r.FailureCapability
 	}
+	if !hasPermissionActionContext(r) {
+		return PermissionCapabilityUnknown
+	}
 
 	switch r.ActionType {
 	case ActionUpload:
@@ -490,6 +520,14 @@ func effectiveLocalPermissionCapability(r *WorkerResult) PermissionCapability {
 	default:
 		return PermissionCapabilityUnknown
 	}
+}
+
+func hasPermissionActionContext(r *WorkerResult) bool {
+	if r == nil {
+		return false
+	}
+
+	return r.ActionID != 0 || r.Path != "" || !r.DriveID.IsZero() || !r.TargetDriveID.IsZero()
 }
 
 func (m resultPersistenceMode) failureCategory() FailureCategory {

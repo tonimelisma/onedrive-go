@@ -1,9 +1,6 @@
 package sync
 
-import (
-	"context"
-	"time"
-)
+import "time"
 
 func (rt *watchRuntime) phase() watchRuntimePhase {
 	return rt.loop.phase
@@ -156,21 +153,4 @@ func (rt *watchRuntime) hasRetryTimer() bool {
 	defer rt.timerMu.RUnlock()
 
 	return rt.retryTimer != nil
-}
-
-func (rt *watchRuntime) queueUserIntentDispatch() {
-	rt.userIntentPending = true
-}
-
-func (rt *watchRuntime) settleWatchAdmission(
-	ctx context.Context,
-	p *watchPipeline,
-) {
-	outbox := rt.currentOutbox()
-	if !rt.userIntentPending || len(outbox) > 0 || rt.depGraph.InFlightCount() > 0 {
-		return
-	}
-
-	rt.userIntentPending = false
-	rt.appendOutbox(rt.runUserIntentDispatch(ctx, p.bl, p.mode, p.safety))
 }

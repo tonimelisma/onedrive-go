@@ -22,6 +22,14 @@ execution.
 - Mutable Runtime Owner: Backoff counters are request-scoped. Shared 429 coordination is optional and explicitly caller-owned via `ThrottleGate`; `RetryTransport` only consults or mutates that gate when one is injected. The package has no package-level mutable state, background goroutines, or long-lived channels.
 - Error Boundary: `retry` consumes already-normalized retryable signals from [error-model.md](error-model.md). It never upgrades actionable or fatal conditions into retryable ones on its own.
 
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| Retry policy curves and backoff timing remain package-owned value logic. | `internal/retry/backoff_test.go`, `internal/retry/policy_test.go`, `internal/retry/named_test.go` |
+| Shared `Retry-After` coordination stays optional and caller-injected. | `internal/retry/throttle_gate_test.go`, `internal/retry/transport_test.go` |
+| CLI/control-plane callers use retry without reinterpreting retryable versus fatal conditions themselves. | `internal/cli/control_client_additional_test.go`, `internal/multisync/orchestrator_test.go`, `internal/graph/client_test.go` |
+
 ## Named Policies
 
 | Policy | Use Case | MaxAttempts | Initial | Max |

@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,37 +29,6 @@ func moves(plan *ActionPlan) []Action {
 	}
 
 	return result
-}
-
-func buildRemoteDeleteSet(prefix, itemPrefix, hash string, count int) ([]*BaselineEntry, []PathChanges) {
-	var entries []*BaselineEntry
-	var changes []PathChanges
-
-	for i := range count {
-		path := fmt.Sprintf("%s-%c.txt", prefix, rune('a'+i))
-		itemID := fmt.Sprintf("%s-%c", itemPrefix, rune('a'+i))
-		entries = append(entries, &BaselineEntry{
-			Path:       path,
-			DriveID:    driveid.New(synctest.TestDriveID),
-			ItemID:     itemID,
-			ItemType:   ItemTypeFile,
-			LocalHash:  hash,
-			RemoteHash: hash,
-		})
-		changes = append(changes, PathChanges{
-			Path: path,
-			RemoteEvents: []ChangeEvent{{
-				Source:    SourceRemote,
-				Type:      ChangeDelete,
-				Path:      path,
-				ItemType:  ItemTypeFile,
-				ItemID:    itemID,
-				IsDeleted: true,
-			}},
-		})
-	}
-
-	return entries, changes
 }
 
 // ---------------------------------------------------------------------------
@@ -1263,145 +1231,6 @@ func TestDetectMoves_MovedPathsExcluded(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Delete Safety Tests
-// ---------------------------------------------------------------------------
-
-// Validates: R-6.2.5, R-6.4.1
-func TestDeleteSafety_BelowThreshold(t *testing.T) {
-	// Delete count at or below threshold → no trigger.
-	planner := NewPlanner(synctest.TestLogger(t))
-
-	// 20 baseline items, delete 10. Threshold is 10 → exactly at threshold, allowed.
-	var entries []*BaselineEntry
-	var changes []PathChanges
-
-	for i := range 20 {
-		p := fmt.Sprintf("planner-safe-%c.txt", rune('a'+i))
-		itemID := fmt.Sprintf("safe-%c", rune('a'+i))
-		entries = append(entries, &BaselineEntry{
-			Path:       p,
-			DriveID:    driveid.New(synctest.TestDriveID),
-			ItemID:     itemID,
-			ItemType:   ItemTypeFile,
-			LocalHash:  "hashSafe",
-			RemoteHash: "hashSafe",
-		})
-	}
-
-	// Delete exactly 10.
-	for i := range 10 {
-		changes = append(changes, PathChanges{
-			Path: entries[i].Path,
-			RemoteEvents: []ChangeEvent{
-				{
-					Source:    SourceRemote,
-					Type:      ChangeDelete,
-					Path:      entries[i].Path,
-					ItemType:  ItemTypeFile,
-					ItemID:    entries[i].ItemID,
-					IsDeleted: true,
-				},
-			},
-		})
-	}
-
-	baseline := baselineWith(entries...)
-
-	config := &SafetyConfig{DeleteSafetyThreshold: 10}
-
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
-	require.NoError(t, err, "at threshold should be allowed")
-	require.NotNil(t, plan)
-}
-
-// Validates: R-6.2.5, R-6.4.1
-func TestDeleteSafety_ExceedsThreshold(t *testing.T) {
-	// Delete count exceeds threshold → ErrDeleteSafetyThresholdExceeded.
-	planner := NewPlanner(synctest.TestLogger(t))
-
-	entries, changes := buildRemoteDeleteSet("planner-bigdel", "bdi", "hashBD", 20)
-	baseline := baselineWith(entries...)
-
-	// 20 deletes > threshold of 10.
-	config := &SafetyConfig{DeleteSafetyThreshold: 10}
-
-	_, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
-	require.ErrorIs(t, err, ErrDeleteSafetyThresholdExceeded)
-}
-
-// Validates: R-6.2.5, R-6.4.1
-func TestDeleteSafety_NoTrigger(t *testing.T) {
-	// Few deletes well within threshold → no error.
-	planner := NewPlanner(synctest.TestLogger(t))
-
-	var entries []*BaselineEntry
-
-	for i := range 20 {
-		p := fmt.Sprintf("planner-safe-%c.txt", rune('a'+i))
-		itemID := fmt.Sprintf("safe-%c", rune('a'+i))
-		entries = append(entries, &BaselineEntry{
-			Path:       p,
-			DriveID:    driveid.New(synctest.TestDriveID),
-			ItemID:     itemID,
-			ItemType:   ItemTypeFile,
-			LocalHash:  "hashSafe",
-			RemoteHash: "hashSafe",
-		})
-	}
-
-	// Delete only 2 (well below default threshold of 1000).
-	changes := []PathChanges{
-		{
-			Path: entries[0].Path,
-			RemoteEvents: []ChangeEvent{
-				{
-					Source:    SourceRemote,
-					Type:      ChangeDelete,
-					Path:      entries[0].Path,
-					ItemType:  ItemTypeFile,
-					ItemID:    entries[0].ItemID,
-					IsDeleted: true,
-				},
-			},
-		},
-		{
-			Path: entries[1].Path,
-			RemoteEvents: []ChangeEvent{
-				{
-					Source:    SourceRemote,
-					Type:      ChangeDelete,
-					Path:      entries[1].Path,
-					ItemType:  ItemTypeFile,
-					ItemID:    entries[1].ItemID,
-					IsDeleted: true,
-				},
-			},
-		},
-	}
-
-	baseline := baselineWith(entries...)
-
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
-	require.NoError(t, err)
-	require.NotNil(t, plan)
-}
-
-// Validates: R-6.2.5, R-6.4.1
-func TestDeleteSafety_ThresholdZero_Disabled(t *testing.T) {
-	// Threshold of 0 disables delete safety protection.
-	planner := NewPlanner(synctest.TestLogger(t))
-
-	entries, changes := buildRemoteDeleteSet("planner-disabled", "dis", "hashDis", 20)
-	baseline := baselineWith(entries...)
-
-	config := &SafetyConfig{DeleteSafetyThreshold: 0}
-
-	plan, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
-	require.NoError(t, err, "threshold=0 disables protection")
-	require.NotNil(t, plan)
-}
-
-// ---------------------------------------------------------------------------
 // Mode Filtering Tests
 // ---------------------------------------------------------------------------
 
@@ -1868,46 +1697,27 @@ func TestMakeAction_BaselineFallbackDriveID(t *testing.T) {
 	assert.Equal(t, driveid.New(synctest.TestDriveID), action.DriveID, "DriveID from Baseline")
 }
 
-// Validates: R-6.8.12, R-6.8.13
-func TestMakeAction_ShortcutEnrichment(t *testing.T) {
+// Validates: R-6.8.12
+func TestMakeAction_LeavesTargetDriveForLaterEnrichment(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name            string
 		remote          *RemoteState
-		wantOwnDrive    bool
-		wantShortcutKey string
 		wantTargetDrive driveid.ID
 	}{
 		{
-			name: "own-drive item has empty shortcut fields",
+			name: "own-drive item leaves target drive empty",
 			remote: &RemoteState{
 				ItemID:   "item-1",
 				DriveID:  driveid.New(synctest.TestDriveID),
 				ItemType: ItemTypeFile,
 			},
-			wantOwnDrive:    true,
-			wantShortcutKey: "",
 			wantTargetDrive: driveid.ID{},
 		},
 		{
-			name: "shortcut item has populated shortcut fields",
-			remote: &RemoteState{
-				ItemID:        "item-2",
-				DriveID:       driveid.New(synctest.TestDriveID),
-				ItemType:      ItemTypeFile,
-				RemoteDriveID: "0000000000000099",
-				RemoteItemID:  "source-folder-1",
-			},
-			wantOwnDrive:    false,
-			wantShortcutKey: "0000000000000099:source-folder-1",
-			wantTargetDrive: driveid.New("0000000000000099"),
-		},
-		{
-			name:            "nil remote has empty shortcut fields",
+			name:            "nil remote leaves target drive empty",
 			remote:          nil,
-			wantOwnDrive:    true,
-			wantShortcutKey: "",
 			wantTargetDrive: driveid.ID{},
 		},
 	}
@@ -1922,8 +1732,6 @@ func TestMakeAction_ShortcutEnrichment(t *testing.T) {
 
 			action := MakeAction(ActionDownload, view)
 
-			assert.Equal(t, tt.wantOwnDrive, action.TargetsOwnDrive(), "TargetsOwnDrive()")
-			assert.Equal(t, tt.wantShortcutKey, action.ShortcutKey(), "ShortcutKey()")
 			assert.Equal(t, tt.wantTargetDrive, action.TargetDriveID, "TargetDriveID")
 		})
 	}
@@ -2864,17 +2672,17 @@ func TestPlan_DeniedPrefix_SuppressesRemoteFolderCreate(t *testing.T) {
 	assert.Empty(t, plan.Actions, "download-only permission subtrees must not create remote folders")
 }
 
-// Validates: R-6.8.12, R-6.8.13
-func TestPlan_ShortcutAction_HasTargetShortcutKey(t *testing.T) {
-	// Integration test: a shortcut ChangeEvent flows through Plan() and the
-	// resulting Action carries targetShortcutKey and targetDriveID so that
-	// active-scope matching can distinguish own-drive vs shortcut-scoped failures.
+// Validates: R-6.8.12
+func TestPlan_SharedRootAction_HasTargetMetadata(t *testing.T) {
+	// Integration test: a shared-root ChangeEvent flows through Plan() and the
+	// resulting Action carries target drive and root metadata for execution-time
+	// convergence without a separate shared-root identity field.
 	t.Parallel()
 
 	const (
-		shortcutPath    = "Shortcuts/shared/doc.txt"
+		sharedRootPath  = "Shared/shared/doc.txt"
 		remoteDriveID   = "AAAA000000000099" // sharer's drive
-		remoteItemID    = "shortcut-folder-id"
+		remoteItemID    = "shared-root-folder-id"
 		fileItemID      = "file-item-1"
 		fileParentID    = "parent-1"
 		ownDriveIDValue = synctest.TestDriveID
@@ -2882,17 +2690,17 @@ func TestPlan_ShortcutAction_HasTargetShortcutKey(t *testing.T) {
 
 	planner := NewPlanner(synctest.TestLogger(t))
 
-	// Baseline entry for the file under the shortcut path — represents
-	// a previously synced shortcut item living on the sharer's drive.
+	// Baseline entry for the file under the shared-root path — represents
+	// a previously synced item living on the sharer's drive.
 	baseline := baselineWith(&BaselineEntry{
-		Path:       "Shortcuts/shared",
+		Path:       "Shared/shared",
 		DriveID:    driveid.New(remoteDriveID),
 		ItemID:     remoteItemID,
 		ItemType:   ItemTypeFolder,
 		LocalHash:  "",
 		RemoteHash: "",
 	}, &BaselineEntry{
-		Path:       shortcutPath,
+		Path:       sharedRootPath,
 		DriveID:    driveid.New(remoteDriveID),
 		ItemID:     fileItemID,
 		ItemType:   ItemTypeFile,
@@ -2900,24 +2708,23 @@ func TestPlan_ShortcutAction_HasTargetShortcutKey(t *testing.T) {
 		RemoteHash: "hashOld",
 	})
 
-	// Simulate a remote modify event as produced by the shortcut converter:
-	// the ChangeEvent carries RemoteDriveID/RemoteItemID identifying the
-	// shortcut scope, and a new hash to trigger a download action.
+	// Simulate a remote modify event for a separately configured shared-root
+	// drive. The event carries the configured root item so later target-root
+	// enrichment can route convergence requests correctly.
 	changes := []PathChanges{
 		{
-			Path: shortcutPath,
+			Path: sharedRootPath,
 			RemoteEvents: []ChangeEvent{
 				{
-					Source:        SourceRemote,
-					Type:          ChangeModify,
-					Path:          shortcutPath,
-					ItemType:      ItemTypeFile,
-					ItemID:        fileItemID,
-					DriveID:       driveid.New(remoteDriveID),
-					ParentID:      fileParentID,
-					Hash:          "hashNew",
-					RemoteDriveID: remoteDriveID,
-					RemoteItemID:  remoteItemID,
+					Source:           SourceRemote,
+					Type:             ChangeModify,
+					Path:             sharedRootPath,
+					ItemType:         ItemTypeFile,
+					ItemID:           fileItemID,
+					DriveID:          driveid.New(remoteDriveID),
+					ParentID:         fileParentID,
+					Hash:             "hashNew",
+					TargetRootItemID: remoteItemID,
 				},
 			},
 		},
@@ -2926,16 +2733,13 @@ func TestPlan_ShortcutAction_HasTargetShortcutKey(t *testing.T) {
 	plan, err := planner.Plan(changes, baseline, SyncBidirectional, DefaultSafetyConfig(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, plan)
-	require.NotEmpty(t, plan.Actions, "expected at least one action for shortcut change")
+	require.NotEmpty(t, plan.Actions, "expected at least one action for shared-root change")
 
 	action := plan.Actions[0]
-	assert.False(t, action.TargetsOwnDrive(), "shortcut action should NOT target own drive")
-	assert.Equal(t, remoteDriveID+":"+remoteItemID, action.ShortcutKey(),
-		"ShortcutKey should be remoteDrive:remoteItem")
 	assert.Equal(t, driveid.New(remoteDriveID), action.TargetDriveID,
 		"TargetDriveID should be the sharer's drive")
-	assert.Equal(t, remoteItemID, action.TargetRootItemID, "TargetRootItemID should identify the shortcut root")
-	assert.Equal(t, "Shortcuts/shared", action.TargetRootLocalPath, "TargetRootLocalPath should identify the local shortcut root")
+	assert.Equal(t, remoteItemID, action.TargetRootItemID, "TargetRootItemID should identify the configured shared root")
+	assert.Equal(t, "Shared/shared", action.TargetRootLocalPath, "TargetRootLocalPath should identify the local shared root")
 }
 
 func TestIsWriteDenied(t *testing.T) {

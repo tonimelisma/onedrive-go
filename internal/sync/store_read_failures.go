@@ -1,4 +1,4 @@
-// Package sync persists sync baseline, observation, conflict, failure, and scope state.
+// Package sync persists sync baseline, observation, failure, scope-block, and metadata state.
 //
 // sync_failures read paths stay separate from mutation paths so query-heavy
 // status/retry helpers do not hide behind write-prefixed filenames.

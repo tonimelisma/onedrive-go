@@ -2,6 +2,13 @@
 
 Implements: R-6.2.1 [verified], R-6.2.2 [verified], R-6.3.1 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified]
 
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| Package boundaries and privileged-call discipline remain verifier-enforced, not convention-only. | `internal/devtool/verify_repo_checks_test.go`, `cmd/devtool/main_test.go` |
+| The product continues to split multi-drive control, single-drive sync, Graph I/O, and rooted filesystem access into explicit authority boundaries. | `spec/design/sync-control-plane.md`, `spec/design/sync-engine.md`, `spec/design/graph-client.md`, `spec/design/drive-transfers.md` |
+
 ## Package Structure
 
 Implements: R-6.1.4 [verified], R-6.1.5 [verified], R-6.9.1 [verified]
@@ -31,7 +38,6 @@ internal/
   sharedref/                  Shared item selector parsing and formatting
   sync/                       Single-drive sync engine, durable SQLite sync state, and read-only inspection
   synccontrol/                JSON-over-HTTP Unix-socket protocol shared by CLI and multisync owner
-  syncscope/                  Configured sync-scope normalization and ignore-marker projection
   synctest/                   Shared sync-package test helpers (test-only)
   synctree/                   Root-bound sync runtime filesystem capability
   syncverify/                 Baseline-versus-local sync verification helpers
@@ -236,5 +242,5 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Representative benchmark scenarios, reporting, and publication policy are defined in [performance-benchmarking.md](performance-benchmarking.md). The repo-owned `devtool bench` runner, the `startup-empty-config` harness-validation scenario, and the manual `sync-partial-local-catchup-100m` live representative scenario are implemented; release artifact promotion and published benchmark reports remain planned. [planned]
 - Production ignored-return audit complete: invariant-bearing results such as `DepGraph.Complete` and dispatch admission booleans are handled explicitly, baseline/account metadata lookups now use explicit helpers or `found` checks, and the remaining ignored returns are limited to explicit value-only helper drops plus documented impossible-error builder writes. [verified]
 - Bare `assert.NoError` audit complete: remaining sites are intentional cleanup, test-plumbing, or pure error-contract assertions, while weak CLI happy-path tests now assert rendered text, JSON shape, and preserved config/state. [verified]
-- Write-path `Close` audit complete: sync-store close failures now propagate on internal baseline verification helpers and `resolve deletes`, while read-only inspector close paths remain best-effort debug logged by design. [verified]
+- Write-path `Close` audit complete: sync-store close failures now propagate on internal baseline verification helpers and store-mutating repair flows, while read-only inspector close paths remain best-effort debug logged by design. [verified]
 - Direct command/workflow coverage across the flattened `internal/cli/` command flows remains above the current target. [verified]

@@ -1,4 +1,4 @@
-// Package sync persists sync baseline, observation, conflict, failure, and scope state.
+// Package sync persists sync baseline, observation, failure, scope-block, and metadata state.
 //
 // Contents:
 //   - ListRemoteState:          current remote mirror rows
@@ -19,14 +19,12 @@ import (
 
 const (
 	sqlGetRemoteStateByPath = `SELECT drive_id, item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path, is_filtered, observed_at,
-		filter_generation, filter_reason
+		hash, size, mtime, etag, previous_path, observed_at
 		FROM remote_state
 		WHERE path = ? AND drive_id = ?`
 
 	sqlGetRemoteStateByID = `SELECT drive_id, item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path, is_filtered, observed_at,
-		filter_generation, filter_reason
+		hash, size, mtime, etag, previous_path, observed_at
 		FROM remote_state
 		WHERE drive_id = ? AND item_id = ?`
 )
@@ -35,7 +33,7 @@ const (
 func (m *SyncStore) ListRemoteState(ctx context.Context) ([]RemoteStateRow, error) {
 	return m.queryRemoteStateRows(ctx,
 		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path, is_filtered, observed_at, filter_generation, filter_reason
+			previous_path, observed_at
 		FROM remote_state`,
 	)
 }
@@ -58,14 +56,12 @@ func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args
 			mtime    sql.NullInt64
 			etag     sql.NullString
 			prevPath sql.NullString
-			filtered int
-			reason   sql.NullString
 		)
 
 		if err := rows.Scan(
 			&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
 			&hash, &size, &mtime, &etag,
-			&prevPath, &filtered, &row.ObservedAt, &row.FilterGeneration, &reason,
+			&prevPath, &row.ObservedAt,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
 		}
@@ -74,8 +70,6 @@ func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args
 		row.Hash = hash.String
 		row.ETag = etag.String
 		row.PreviousPath = prevPath.String
-		row.IsFiltered = filtered != 0
-		row.FilterReason = RemoteFilterReason(reason.String)
 
 		if size.Valid {
 			row.Size = size.Int64
@@ -141,21 +135,19 @@ func scanRemoteStateRowWithQuerier(
 	scan func(dest ...any) error,
 ) (*RemoteStateRow, error) {
 	var (
-		row          RemoteStateRow
-		parentID     sql.NullString
-		hash         sql.NullString
-		size         sql.NullInt64
-		mtime        sql.NullInt64
-		etag         sql.NullString
-		prevPath     sql.NullString
-		filterReason sql.NullString
-		isFiltered   int
+		row      RemoteStateRow
+		parentID sql.NullString
+		hash     sql.NullString
+		size     sql.NullInt64
+		mtime    sql.NullInt64
+		etag     sql.NullString
+		prevPath sql.NullString
 	)
 
 	if err := scan(
 		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
-		&prevPath, &isFiltered, &row.ObservedAt, &row.FilterGeneration, &filterReason,
+		&prevPath, &row.ObservedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -164,8 +156,6 @@ func scanRemoteStateRowWithQuerier(
 	row.Hash = hash.String
 	row.ETag = etag.String
 	row.PreviousPath = prevPath.String
-	row.IsFiltered = isFiltered != 0
-	row.FilterReason = RemoteFilterReason(filterReason.String)
 
 	if size.Valid {
 		row.Size = size.Int64

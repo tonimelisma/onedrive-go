@@ -80,14 +80,6 @@ func TestValidate_CheckWorkers_Boundaries(t *testing.T) {
 	assert.NoError(t, Validate(cfg))
 }
 
-func TestValidate_DeleteSafetyThreshold_BelowMin(t *testing.T) {
-	cfg := validConfig()
-	cfg.DeleteSafetyThreshold = 0
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "delete_safety_threshold")
-}
-
 func TestValidate_PollInterval_TooShort(t *testing.T) {
 	cfg := validConfig()
 	cfg.PollInterval = "10s"
@@ -154,23 +146,6 @@ func TestValidate_LogRetentionDays_BelowMin(t *testing.T) {
 	err := Validate(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "log_retention_days")
-}
-
-func TestValidate_SyncPaths_MustStartWithSlash(t *testing.T) {
-	cfg := validConfig()
-	cfg.SyncPaths = []string{"/Documents", "Photos"}
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sync_paths")
-	assert.Contains(t, err.Error(), "Photos")
-}
-
-func TestValidate_IgnoreMarker_Empty(t *testing.T) {
-	cfg := validConfig()
-	cfg.IgnoreMarker = ""
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ignore_marker")
 }
 
 // Validates: R-4.8.2

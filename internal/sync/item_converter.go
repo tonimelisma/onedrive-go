@@ -24,11 +24,11 @@ type InflightParent struct {
 
 // ItemConverter converts []graph.Item into []ChangeEvent with full path
 // materialization, NFC normalization, move detection, and deleted-item name
-// recovery. Both RemoteObserver (primary drive) and shortcut observation share
-// this single conversion pipeline, configured via boolean flags.
+// recovery. Primary-drive and scoped-root observation both use this single
+// conversion pipeline, configured by path-prefix and root-item fields.
 //
 // Design: the inflight map is a parameter, not a field. RemoteObserver
-// accumulates inflight across delta pages; shortcuts populate it once per
+// accumulates inflight across delta pages; scoped-root callers populate it once per
 // batch. Same methods, different lifetime.
 type ItemConverter struct {
 	Baseline *Baseline
@@ -37,75 +37,36 @@ type ItemConverter struct {
 	Stats    *ObserverCounters // nil-safe: primary observer provides this
 
 	// PathPrefix is prepended to materialized paths. Empty for the primary
-	// drive; set to sc.LocalPath for shortcut scopes.
+	// drive; set for scoped-root observation that maps a remote subtree into a
+	// local subpath.
 	PathPrefix string
 
-	// ScopeRootID is the shortcut's RemoteItem ID. Items with this ID are
-	// the scope root and should be skipped (equivalent to IsRoot for shortcuts).
-	// Empty for primary drive.
+	// ScopeRootID is the configured remote root item for scoped observation.
+	// Items with this ID are the root itself and should be skipped because the
+	// sync root owns that directory already. Empty for full-drive observation.
 	ScopeRootID string
 
-	// SkipNestedShortcuts skips items with a non-empty RemoteItemID. Enabled
-	// for shortcut scopes to avoid recursing into nested shortcuts.
-	SkipNestedShortcuts bool
-
 	// EnableVaultFilter enables Personal Vault exclusion (B-271). Only
-	// applicable to the primary drive — shortcuts never contain vault folders.
+	// applicable to the primary drive.
 	EnableVaultFilter bool
-
-	// EnableShortcutDetect enables ChangeShortcut event emission for items
-	// with a remoteItem facet (6.4a.2). Only the primary drive detects
-	// shortcuts — within a shortcut scope, these are nested shortcuts and
-	// are skipped instead.
-	EnableShortcutDetect bool
-
-	// ShortcutDriveID and ShortcutItemID identify the shortcut scope's
-	// source drive and folder. Set for shortcut converters, empty for
-	// primary drive. Propagated to content ChangeEvents so the planner
-	// can populate Action.targetShortcutKey for scope-based failure
-	// handling (D-5, R-6.8.12, R-6.8.13).
-	ShortcutDriveID string
-	ShortcutItemID  string
 }
 
-// NewPrimaryConverter creates an ItemConverter for primary drive observation.
-// Vault filter and shortcut detection are enabled.
+// NewPrimaryConverter creates an ItemConverter for primary-drive or
+// separately-configured shared-root observation. Embedded shared-folder items
+// are ignored; shared content syncs only when configured as its own drive.
 func NewPrimaryConverter(baseline *Baseline, driveID driveid.ID, logger *slog.Logger, stats *ObserverCounters) *ItemConverter {
 	return &ItemConverter{
-		Baseline:             baseline,
-		DriveID:              driveID,
-		Logger:               logger,
-		Stats:                stats,
-		EnableVaultFilter:    true,
-		EnableShortcutDetect: true,
-	}
-}
-
-// NewShortcutConverter creates an ItemConverter for shortcut scope observation.
-// Path prefix, scope root skip, and nested shortcut skip are enabled.
-// A nil logger is replaced with slog.Default() to prevent panics.
-func NewShortcutConverter(
-	baseline *Baseline, remoteDriveID driveid.ID, logger *slog.Logger, sc *Shortcut,
-) *ItemConverter {
-	if logger == nil {
-		logger = slog.Default()
-	}
-
-	return &ItemConverter{
-		Baseline:            baseline,
-		DriveID:             remoteDriveID,
-		Logger:              logger,
-		PathPrefix:          sc.LocalPath,
-		ScopeRootID:         sc.RemoteItem,
-		SkipNestedShortcuts: true,
-		ShortcutDriveID:     sc.RemoteDrive,
-		ShortcutItemID:      sc.RemoteItem,
+		Baseline:          baseline,
+		DriveID:           driveID,
+		Logger:            logger,
+		Stats:             stats,
+		EnableVaultFilter: true,
 	}
 }
 
 // ConvertItems converts a batch of graph.Items into ChangeEvents using
 // two-pass processing: register all items in inflight, then classify all.
-// Used by shortcut observation where all items arrive in a single batch.
+// Used by scoped-root observation where all items arrive in a single batch.
 func (c *ItemConverter) ConvertItems(items []graph.Item) []ChangeEvent {
 	inflight := make(map[driveid.ItemKey]InflightParent, len(items))
 
@@ -155,12 +116,12 @@ func (c *ItemConverter) registerInflight(item *graph.Item, inflight map[driveid.
 }
 
 // ClassifyItem converts a single graph.Item into a ChangeEvent. Returns nil
-// for items that should be skipped (root, vault descendants, scope root,
-// nested shortcuts).
+// for items that should be skipped (root, vault descendants, configured root,
+// embedded shared-folder items).
 func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.ItemKey]InflightParent) *ChangeEvent {
 	itemDriveID := c.resolveItemDriveID(item)
 
-	// Skip root items (applies to both primary and shortcut scopes).
+	// Skip root items for both full-drive and scoped-root observation.
 	if item.IsRoot {
 		c.Logger.Debug("skipping root item", slog.String("item_id", item.ID))
 
@@ -200,19 +161,20 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.Item
 		return nil
 	}
 
-	// Skip scope root for shortcut scopes (the shortcut folder itself).
+	// Skip the configured observation root itself.
 	if c.ScopeRootID != "" && item.ID == c.ScopeRootID {
 		c.Logger.Debug("skipping scope root item", slog.String("item_id", item.ID))
 
 		return nil
 	}
 
-	// Skip nested shortcuts in shortcut scopes — items that themselves
-	// reference another drive. These need their own separate observation.
-	if c.SkipNestedShortcuts && item.RemoteItemID != "" {
-		c.Logger.Warn("nested shortcut detected in observation, skipping",
+	// Embedded shared-folder items are never synced inside another drive.
+	// Shared content must be configured as its own drive root instead.
+	if item.RemoteDriveID != "" || item.RemoteItemID != "" {
+		c.Logger.Debug("ignoring embedded shared-folder item",
 			slog.String("item_id", item.ID),
 			slog.String("name", item.Name),
+			slog.String("remote_drive", item.RemoteDriveID),
 		)
 
 		return nil
@@ -222,14 +184,6 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[driveid.Item
 	// any items whose parent chain includes a vault folder.
 	if c.shouldSkipVaultItem(item, inflight, itemDriveID) {
 		return nil
-	}
-
-	// Shortcut detection (6.4a.2): items with a remoteItem facet pointing to
-	// another drive are shortcuts. The folder facet may be absent on shared
-	// folder shortcuts returned by the delta endpoint — RemoteDriveID alone
-	// is sufficient to identify a shortcut.
-	if c.EnableShortcutDetect && item.RemoteDriveID != "" && !item.IsDeleted {
-		return c.classifyShortcut(item, inflight, itemDriveID, existing)
 	}
 
 	return c.classifyAndConvert(item, inflight, itemDriveID, existing)
@@ -248,20 +202,19 @@ func (c *ItemConverter) classifyAndConvert(
 	}
 
 	ev := ChangeEvent{
-		Source:        SourceRemote,
-		ItemID:        item.ID,
-		ParentID:      item.ParentID,
-		DriveID:       itemDriveID,
-		ItemType:      ClassifyItemType(item),
-		Name:          name,
-		Size:          item.Size,
-		Hash:          hash,
-		Mtime:         ToUnixNano(item.ModifiedAt),
-		ETag:          item.ETag,
-		CTag:          item.CTag,
-		IsDeleted:     item.IsDeleted,
-		RemoteDriveID: c.ShortcutDriveID,
-		RemoteItemID:  c.ShortcutItemID,
+		Source:           SourceRemote,
+		ItemID:           item.ID,
+		ParentID:         item.ParentID,
+		DriveID:          itemDriveID,
+		ItemType:         ClassifyItemType(item),
+		Name:             name,
+		Size:             item.Size,
+		Hash:             hash,
+		Mtime:            ToUnixNano(item.ModifiedAt),
+		ETag:             item.ETag,
+		CTag:             item.CTag,
+		IsDeleted:        item.IsDeleted,
+		TargetRootItemID: c.ScopeRootID,
 	}
 
 	switch {
@@ -306,41 +259,6 @@ func (c *ItemConverter) classifyAndConvert(
 	}
 
 	return &ev
-}
-
-// classifyShortcut builds a ChangeShortcut event for a shortcut/shared folder.
-func (c *ItemConverter) classifyShortcut(
-	item *graph.Item,
-	inflight map[driveid.ItemKey]InflightParent,
-	itemDriveID driveid.ID,
-	existing *BaselineEntry,
-) *ChangeEvent {
-	name := effectiveItemName(item, existing)
-	relPath := c.materializePathWithBaselineFallback(item, inflight, itemDriveID, existing, name)
-
-	c.Logger.Info("detected shortcut",
-		slog.String("item_id", item.ID),
-		slog.String("name", name),
-		slog.String("path", relPath),
-		slog.String("remote_drive", item.RemoteDriveID),
-		slog.String("remote_item", item.RemoteItemID),
-	)
-
-	return &ChangeEvent{
-		Source:        SourceRemote,
-		Type:          ChangeShortcut,
-		Path:          relPath,
-		ItemID:        item.ID,
-		ParentID:      item.ParentID,
-		DriveID:       itemDriveID,
-		ItemType:      ItemTypeFolder,
-		Name:          name,
-		Mtime:         ToUnixNano(item.ModifiedAt),
-		ETag:          item.ETag,
-		CTag:          item.CTag,
-		RemoteDriveID: item.RemoteDriveID,
-		RemoteItemID:  item.RemoteItemID,
-	}
 }
 
 func effectiveItemName(item *graph.Item, existing *BaselineEntry) string {
@@ -411,8 +329,8 @@ func (c *ItemConverter) materializePathFromParts(
 				break
 			}
 
-			// Stop at scope root for shortcut scopes — the scope root
-			// is the shortcut folder, not a real parent in the path.
+			// Stop at the configured observation root — it is the sync root,
+			// not a real parent segment in the local relative path.
 			if c.ScopeRootID != "" && parentID == c.ScopeRootID {
 				break
 			}
@@ -424,7 +342,7 @@ func (c *ItemConverter) materializePathFromParts(
 			continue
 		}
 
-		// Baseline shortcut: prepend this item's full stored path.
+		// Baseline entry found: prepend this item's full stored path.
 		if entry, ok := c.Baseline.GetByID(parentKey); ok && entry.Path != "" {
 			slices.Reverse(segments)
 			resolvedPath := entry.Path + "/" + strings.Join(segments, "/")
@@ -448,8 +366,8 @@ func (c *ItemConverter) materializePathFromParts(
 	return c.applyPrefix(relPath)
 }
 
-// applyPrefix prepends the path prefix (shortcut local path) to a relative
-// path. Returns the path unchanged when no prefix is configured.
+// applyPrefix prepends the configured local root prefix to a relative path.
+// Returns the path unchanged when no prefix is configured.
 func (c *ItemConverter) applyPrefix(relPath string) string {
 	if c.PathPrefix == "" {
 		return relPath
@@ -520,9 +438,7 @@ func (c *ItemConverter) resolveItemDriveID(item *graph.Item) driveid.ID {
 }
 
 // resolveItemDriveIDWithFallback returns the item's DriveID when non-zero,
-// otherwise returns the fallback. This is the shared logic behind
-// ItemConverter.resolveItemDriveID and detectShortcutOrphans — both need
-// the same "item DriveID or scope default" resolution.
+// otherwise returns the fallback.
 func resolveItemDriveIDWithFallback(item *graph.Item, fallback driveid.ID) driveid.ID {
 	if item.DriveID.IsZero() {
 		return fallback
@@ -539,32 +455,4 @@ func resolveParentDriveID(item *graph.Item, itemDriveID driveid.ID) driveid.ID {
 	}
 
 	return itemDriveID
-}
-
-// ConvertShortcutItems converts graph.Items from a shortcut scope into
-// ChangeEvents using the unified item conversion pipeline. This is a thin
-// wrapper creating a shortcut-configured ItemConverter and calling ConvertItems.
-// Exported for use by the sync engine's shortcut observation logic.
-func ConvertShortcutItems(
-	items []graph.Item, sc *Shortcut, remoteDriveID driveid.ID, bl *Baseline, logger *slog.Logger,
-) []ChangeEvent {
-	conv := NewShortcutConverter(bl, remoteDriveID, logger, sc)
-
-	return conv.ConvertItems(items)
-}
-
-// DetectShortcutOrphans finds baseline entries belonging to a shortcut scope
-// that are no longer present in the full enumeration. Delegates to
-// Baseline.FindOrphans with a path prefix filter for the shortcut's local path.
-// Exported for use by the sync engine's shortcut observation logic.
-func DetectShortcutOrphans(
-	sc *Shortcut, remoteDriveID driveid.ID, items []graph.Item, bl *Baseline,
-) []ChangeEvent {
-	seen := make(map[driveid.ItemKey]struct{}, len(items))
-	for i := range items {
-		itemDriveID := resolveItemDriveIDWithFallback(&items[i], remoteDriveID)
-		seen[driveid.NewItemKey(itemDriveID, items[i].ID)] = struct{}{}
-	}
-
-	return findBaselineOrphans(bl, seen, remoteDriveID, sc.LocalPath)
 }

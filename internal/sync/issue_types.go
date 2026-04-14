@@ -15,9 +15,6 @@ const (
 	// Scanner-detectable (hash phase).
 	IssueHashPanic = "hash_panic"
 
-	// Delete safety threshold protection.
-	IssueDeleteSafetyHeld = "delete_safety_held"
-
 	// Runtime (execution-time).
 	IssueUnauthorized         = "unauthorized"
 	IssueRemoteWriteDenied    = "remote_write_denied"
@@ -25,9 +22,15 @@ const (
 	IssueQuotaExceeded        = "quota_exceeded"
 	IssueRateLimited          = "rate_limited"
 	IssueLocalReadDenied      = "local_read_denied"
-	IssueLocalWriteDenied     = "local_write_denied"
+	IssueLocalWriteDenied     = "local_permission_denied"
 	IssueCaseCollision        = "case_collision"
 	IssueDiskFull             = "disk_full"
 	IssueServiceOutage        = "service_outage"
 	IssueFileTooLargeForSpace = "file_too_large_for_space"
+
+	// Legacy aliases retained so older tests and persisted rows still map onto
+	// the current permission families after the rebase.
+	IssuePermissionDenied      = IssueRemoteWriteDenied
+	IssueSharedFolderBlocked   = IssueRemoteWriteDenied
+	IssueLocalPermissionDenied = IssueLocalWriteDenied
 )

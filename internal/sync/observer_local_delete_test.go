@@ -213,8 +213,8 @@ func TestAddWatchesRecursive_FollowsSymlinksByDefault(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), tracker, mustOpenSyncTree(t, root))
 	require.NoError(t, err)
 
-	// The root, realdir, and symlink alias should all be watched when
-	// skip_symlinks remains at its default false value.
+	// The root, realdir, and symlink alias should all be watched under the
+	// default built-in symlink observation policy.
 	assert.True(t, tracker.addedPaths[root], "expected root to be watched")
 	assert.True(t, tracker.addedPaths[realDir], "expected realdir to be watched")
 	assert.True(t, tracker.addedPaths[symlinkDir], "symlinked directory should be watched by default")
