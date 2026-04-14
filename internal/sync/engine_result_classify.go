@@ -96,7 +96,8 @@ func classifyResult(r *WorkerResult) ResultDecision {
 
 func classifyHTTPResult(r *WorkerResult) (ResultDecision, bool) {
 	scopeEvidence := deriveScopeKey(r)
-	issueType := issueTypeForHTTPStatus(r.HTTPStatus, r.Err)
+	issueType := issueTypeForResult(r)
+	permissionDecisionFlow := remote403PermissionFlow(r)
 
 	switch {
 	case r.HTTPStatus == 0:
@@ -114,7 +115,7 @@ func classifyHTTPResult(r *WorkerResult) (ResultDecision, bool) {
 		return withRuntimeSummary(&ResultDecision{
 			Class:          resultSkip,
 			Persistence:    persistActionableFailure,
-			PermissionFlow: permissionFlowRemote403,
+			PermissionFlow: permissionDecisionFlow,
 			TrialHint:      trialHintPreserve,
 			IssueType:      issueType,
 			LogOwner:       failures.LogOwnerSync,
@@ -186,7 +187,8 @@ func isRetryableHTTPStatus(status int) bool {
 }
 
 func classifyLocalResult(r *WorkerResult) ResultDecision {
-	issueType := issueTypeForHTTPStatus(r.HTTPStatus, r.Err)
+	issueType := issueTypeForResult(r)
+	permissionDecisionFlow := localPermissionDecisionFlow(r)
 
 	switch {
 	case errors.Is(r.Err, driveops.ErrDiskFull):
@@ -222,7 +224,7 @@ func classifyLocalResult(r *WorkerResult) ResultDecision {
 		return withRuntimeSummary(&ResultDecision{
 			Class:          resultSkip,
 			Persistence:    persistActionableFailure,
-			PermissionFlow: permissionFlowLocalPermission,
+			PermissionFlow: permissionDecisionFlow,
 			TrialHint:      trialHintPreserve,
 			IssueType:      issueType,
 			LogOwner:       failures.LogOwnerSync,
@@ -238,6 +240,28 @@ func classifyLocalResult(r *WorkerResult) ResultDecision {
 			LogLevel:    slog.LevelWarn,
 		})
 	}
+}
+
+func remote403PermissionFlow(r *WorkerResult) permissionFlow {
+	if r == nil || r.HTTPStatus != http.StatusForbidden {
+		return permissionFlowNone
+	}
+	if effectiveRemotePermissionCapability(r) == PermissionCapabilityRemoteWrite {
+		return permissionFlowRemote403
+	}
+
+	return permissionFlowNone
+}
+
+func localPermissionDecisionFlow(r *WorkerResult) permissionFlow {
+	if r == nil || !errors.Is(r.Err, os.ErrPermission) {
+		return permissionFlowNone
+	}
+	if effectiveLocalPermissionCapability(r).IsLocal() {
+		return permissionFlowLocalPermission
+	}
+
+	return permissionFlowNone
 }
 
 func withRuntimeSummary(decision *ResultDecision) ResultDecision {
@@ -261,6 +285,25 @@ func runtimeSummaryKey(class failures.Class, issueType string) SummaryKey {
 }
 
 func runtimeSummaryKeyForIssueType(issueType string) (SummaryKey, bool) {
+	if key, ok := runtimeSummaryKeyForPathIssue(issueType); ok {
+		return key, true
+	}
+	if key, ok := runtimeSummaryKeyForServiceIssue(issueType); ok {
+		return key, true
+	}
+	if key, ok := runtimeSummaryKeyForPermissionIssue(issueType); ok {
+		return key, true
+	}
+
+	switch issueType {
+	case IssueCaseCollision:
+		return SummaryCaseCollision, true
+	default:
+		return "", false
+	}
+}
+
+func runtimeSummaryKeyForPathIssue(issueType string) (SummaryKey, bool) {
 	switch issueType {
 	case IssueInvalidFilename:
 		return SummaryInvalidFilename, true
@@ -274,6 +317,13 @@ func runtimeSummaryKeyForIssueType(issueType string) (SummaryKey, bool) {
 		return SummaryDiskFull, true
 	case IssueHashPanic:
 		return SummaryHashError, true
+	default:
+		return "", false
+	}
+}
+
+func runtimeSummaryKeyForServiceIssue(issueType string) (SummaryKey, bool) {
+	switch issueType {
 	case IssueUnauthorized:
 		return SummaryAuthenticationRequired, true
 	case IssueQuotaExceeded:
@@ -282,14 +332,21 @@ func runtimeSummaryKeyForIssueType(issueType string) (SummaryKey, bool) {
 		return SummaryServiceOutage, true
 	case IssueRateLimited:
 		return SummaryRateLimited, true
-	case IssueSharedFolderBlocked:
-		return SummarySharedFolderWritesBlocked, true
-	case IssuePermissionDenied:
-		return SummaryRemotePermissionDenied, true
-	case IssueLocalPermissionDenied:
-		return SummaryLocalPermissionDenied, true
-	case IssueCaseCollision:
-		return SummaryCaseCollision, true
+	default:
+		return "", false
+	}
+}
+
+func runtimeSummaryKeyForPermissionIssue(issueType string) (SummaryKey, bool) {
+	switch issueType {
+	case IssueRemoteWriteDenied:
+		return SummaryRemoteWriteDenied, true
+	case IssueRemoteReadDenied:
+		return SummaryRemoteReadDenied, true
+	case IssueLocalReadDenied:
+		return SummaryLocalReadDenied, true
+	case IssueLocalWriteDenied:
+		return SummaryLocalWriteDenied, true
 	default:
 		return "", false
 	}
@@ -306,39 +363,132 @@ func deriveScopeKey(r *WorkerResult) ScopeKey {
 	return ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
 }
 
-// issueTypeForHTTPStatus maps an HTTP status code and error to a sync
-// failure issue type. Used by recordFailure to populate the issue_type
-// column. Returns empty string for generic/unknown failures.
-func issueTypeForHTTPStatus(httpStatus int, err error) string {
-	switch {
+func issueTypeForResult(r *WorkerResult) string {
+	if issueType, ok := issueTypeForHTTPResult(r); ok {
+		return issueType
+	}
+	if issueType, ok := issueTypeForFilesystemResult(r); ok {
+		return issueType
+	}
+
+	return ""
+}
+
+func issueTypeForHTTPResult(r *WorkerResult) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+
+	switch httpStatus := r.HTTPStatus; {
 	case httpStatus == http.StatusUnauthorized:
-		return IssueUnauthorized
+		return IssueUnauthorized, true
 	case httpStatus == http.StatusTooManyRequests:
-		return IssueRateLimited
+		return IssueRateLimited, true
 	case httpStatus == http.StatusInsufficientStorage:
-		return IssueQuotaExceeded
+		return IssueQuotaExceeded, true
 	case httpStatus == http.StatusForbidden:
-		return IssuePermissionDenied
+		return issueTypeForForbiddenResult(r), true
 	case httpStatus >= http.StatusInternalServerError:
-		return IssueServiceOutage
+		return IssueServiceOutage, true
 	case httpStatus == http.StatusRequestTimeout:
-		return "request_timeout"
+		return "request_timeout", true
 	case httpStatus == http.StatusPreconditionFailed:
-		return "transient_conflict"
+		return "transient_conflict", true
 	case httpStatus == http.StatusNotFound:
-		return "transient_not_found"
+		return "transient_not_found", true
 	case httpStatus == http.StatusLocked:
-		return "resource_locked"
-	case errors.Is(err, driveops.ErrDiskFull):
-		return IssueDiskFull
-	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
-		return IssueFileTooLargeForSpace
-	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):
-		return IssueFileTooLarge
-	case errors.Is(err, os.ErrPermission):
-		return IssueLocalPermissionDenied
+		return "resource_locked", true
 	default:
-		return ""
+		return "", false
+	}
+}
+
+func issueTypeForForbiddenResult(r *WorkerResult) string {
+	switch effectiveRemotePermissionCapability(r) {
+	case PermissionCapabilityRemoteRead:
+		return IssueRemoteReadDenied
+	case PermissionCapabilityUnknown,
+		PermissionCapabilityLocalRead,
+		PermissionCapabilityLocalWrite,
+		PermissionCapabilityRemoteWrite:
+		return IssueRemoteWriteDenied
+	default:
+		return IssueRemoteWriteDenied
+	}
+}
+
+func issueTypeForFilesystemResult(r *WorkerResult) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+
+	switch err := r.Err; {
+	case errors.Is(err, driveops.ErrDiskFull):
+		return IssueDiskFull, true
+	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
+		return IssueFileTooLargeForSpace, true
+	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):
+		return IssueFileTooLarge, true
+	case errors.Is(err, os.ErrPermission):
+		return issueTypeForLocalPermissionResult(r), true
+	default:
+		return "", false
+	}
+}
+
+func issueTypeForLocalPermissionResult(r *WorkerResult) string {
+	switch effectiveLocalPermissionCapability(r) {
+	case PermissionCapabilityLocalRead:
+		return IssueLocalReadDenied
+	case PermissionCapabilityUnknown,
+		PermissionCapabilityLocalWrite,
+		PermissionCapabilityRemoteRead,
+		PermissionCapabilityRemoteWrite:
+		return IssueLocalWriteDenied
+	default:
+		return IssueLocalWriteDenied
+	}
+}
+
+func effectiveRemotePermissionCapability(r *WorkerResult) PermissionCapability {
+	if r == nil {
+		return PermissionCapabilityUnknown
+	}
+	if r.FailureCapability == PermissionCapabilityRemoteRead || r.FailureCapability == PermissionCapabilityRemoteWrite {
+		return r.FailureCapability
+	}
+
+	switch r.ActionType {
+	case ActionDownload:
+		return PermissionCapabilityRemoteRead
+	case ActionUpload, ActionRemoteDelete, ActionRemoteMove, ActionFolderCreate, ActionConflict:
+		return PermissionCapabilityRemoteWrite
+	case ActionLocalDelete, ActionLocalMove, ActionUpdateSynced, ActionCleanup:
+		return PermissionCapabilityUnknown
+	default:
+		return PermissionCapabilityUnknown
+	}
+}
+
+func effectiveLocalPermissionCapability(r *WorkerResult) PermissionCapability {
+	if r == nil {
+		return PermissionCapabilityUnknown
+	}
+	if r.FailureCapability == PermissionCapabilityLocalRead || r.FailureCapability == PermissionCapabilityLocalWrite {
+		return r.FailureCapability
+	}
+
+	switch r.ActionType {
+	case ActionUpload:
+		return PermissionCapabilityLocalRead
+	case ActionDownload, ActionLocalDelete, ActionLocalMove, ActionFolderCreate, ActionCleanup:
+		return PermissionCapabilityLocalWrite
+	case ActionConflict:
+		return PermissionCapabilityLocalWrite
+	case ActionRemoteDelete, ActionRemoteMove, ActionUpdateSynced:
+		return PermissionCapabilityUnknown
+	default:
+		return PermissionCapabilityUnknown
 	}
 }
 

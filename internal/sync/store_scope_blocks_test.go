@@ -190,7 +190,7 @@ func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
 	// Use specific values that exercise edge cases in serialization:
 	// - Timestamps with nanosecond precision
 	// - Duration in nanoseconds
-	// - Parameterized scope key (perm:dir)
+	// - Parameterized scope key (perm:local-write)
 	original := &ScopeBlock{
 		Key:           SKQuotaShortcut("drive1:item1"),
 		IssueType:     IssueQuotaExceeded,
@@ -225,8 +225,8 @@ func TestSyncStore_ScopeBlock_Roundtrip_ZeroNextTrialAt(t *testing.T) {
 	ctx := context.Background()
 
 	original := &ScopeBlock{
-		Key:           SKPermRemote("Shared/TeamDocs"),
-		IssueType:     IssuePermissionDenied,
+		Key:           SKPermRemoteWrite("Shared/TeamDocs"),
+		IssueType:     IssueRemoteWriteDenied,
 		TimingSource:  ScopeTimingNone,
 		BlockedAt:     time.Date(2025, 3, 14, 9, 26, 53, 123456789, time.UTC),
 		TrialInterval: 0,

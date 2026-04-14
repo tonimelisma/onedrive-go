@@ -159,19 +159,6 @@ func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) err
 	return nil
 }
 
-// DataVersion returns SQLite's PRAGMA data_version, which changes every time
-// another connection commits a write. The engine's own writes don't change it.
-// Used to detect CLI→DB modifications (e.g. `resolve deletes`) without polling
-// the full table.
-func (m *SyncStore) DataVersion(ctx context.Context) (int64, error) {
-	var version int64
-	if err := m.db.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version); err != nil {
-		return 0, fmt.Errorf("sync: PRAGMA data_version: %w", err)
-	}
-
-	return version, nil
-}
-
 // DB returns the underlying *sql.DB for tests that need to verify schema or
 // run raw queries. Do not use in production code — use the typed methods on
 // SyncStore instead to maintain interface compliance.

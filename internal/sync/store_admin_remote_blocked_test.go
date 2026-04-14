@@ -34,8 +34,8 @@ func recordStoreRemoteBlockedFailure(
 		Role:       FailureRoleHeld,
 		Category:   CategoryTransient,
 		ErrMsg:     "shared folder is read-only",
-		IssueType:  IssueSharedFolderBlocked,
-		ScopeKey:   SKPermRemote(boundary),
+		IssueType:  IssueRemoteWriteDenied,
+		ScopeKey:   SKPermRemoteWrite(boundary),
 	}, nil))
 }
 
@@ -93,11 +93,11 @@ func TestSyncStore_DropLegacyRemoteBlockedScope_RemovesOnlyLegacyAuthorityRows(t
 	ctx := context.Background()
 	driveID := driveid.New("drive1")
 	boundary := testRemoteBlockedBoundaryTeamDocs
-	scopeKey := SKPermRemote(boundary)
+	scopeKey := SKPermRemoteWrite(boundary)
 
 	require.NoError(t, mgr.UpsertScopeBlock(ctx, &ScopeBlock{
 		Key:          scopeKey,
-		IssueType:    IssueSharedFolderBlocked,
+		IssueType:    IssueRemoteWriteDenied,
 		TimingSource: ScopeTimingNone,
 		BlockedAt:    time.Date(2025, 4, 2, 10, 0, 0, 0, time.UTC),
 	}))
@@ -107,7 +107,7 @@ func TestSyncStore_DropLegacyRemoteBlockedScope_RemovesOnlyLegacyAuthorityRows(t
 		Direction:  DirectionUpload,
 		Role:       FailureRoleBoundary,
 		Category:   CategoryActionable,
-		IssueType:  IssuePermissionDenied,
+		IssueType:  IssueRemoteWriteDenied,
 		ErrMsg:     "legacy boundary",
 		ScopeKey:   scopeKey,
 		ActionType: ActionFolderCreate,

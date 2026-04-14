@@ -36,7 +36,7 @@ func seedLocalPermissionDeniedIssue(t *testing.T, store *SyncStore, path string,
 	t.Helper()
 
 	role := FailureRoleItem
-	if scopeKey.IsPermDir() {
+	if scopeKey.IsPermLocalWrite() {
 		role = FailureRoleBoundary
 	}
 
@@ -46,7 +46,7 @@ func seedLocalPermissionDeniedIssue(t *testing.T, store *SyncStore, path string,
 		Direction:  DirectionDownload,
 		ActionType: ActionDownload,
 		Role:       role,
-		IssueType:  IssueLocalPermissionDenied,
+		IssueType:  IssueLocalWriteDenied,
 		Category:   CategoryActionable,
 		ErrMsg:     "permission denied",
 		ScopeKey:   scopeKey,
@@ -60,7 +60,12 @@ func TestPermHandler_Handle403_NilChecker(t *testing.T) {
 
 	ph, _, _ := newTestPermHandler(t, nil)
 
-	result := ph.handle403(t.Context(), &Baseline{}, "some/path.txt", ActionUpload, nil)
+	result := ph.handleRemoteWrite403(t.Context(), &Baseline{}, &WorkerResult{
+		Path:              "some/path.txt",
+		FailurePath:       "some/path.txt",
+		ActionType:        ActionUpload,
+		FailureCapability: PermissionCapabilityRemoteWrite,
+	}, nil)
 	assert.False(t, result.Matched)
 }
 
@@ -71,7 +76,12 @@ func TestPermHandler_Handle403_NoShortcutMatch(t *testing.T) {
 	checker := &mockPermChecker{perms: map[string][]graph.Permission{}}
 	ph, _, _ := newTestPermHandler(t, checker)
 
-	result := ph.handle403(t.Context(), &Baseline{}, "unmatched/path.txt", ActionUpload, nil)
+	result := ph.handleRemoteWrite403(t.Context(), &Baseline{}, &WorkerResult{
+		Path:              "unmatched/path.txt",
+		FailurePath:       "unmatched/path.txt",
+		ActionType:        ActionUpload,
+		FailureCapability: PermissionCapabilityRemoteWrite,
+	}, nil)
 	assert.False(t, result.Matched)
 }
 
@@ -92,8 +102,8 @@ func TestPermHandler_HandlePermissionCheckError_NotFound(t *testing.T) {
 	assert.Equal(t, permissionCheckActivateDerivedScope, result.Kind)
 	assert.Equal(t, "failed/file.txt", result.Failure.Path)
 	assert.Equal(t, driveid.New("remote-drive-1"), result.Failure.DriveID)
-	assert.Equal(t, IssueSharedFolderBlocked, result.Failure.IssueType)
-	assert.Equal(t, SKPermRemote("failed"), result.ScopeKey)
+	assert.Equal(t, IssueRemoteWriteDenied, result.Failure.IssueType)
+	assert.Equal(t, SKPermRemoteWrite("failed"), result.ScopeKey)
 }
 
 func TestPermHandler_HandlePermissionCheckError_OtherError(t *testing.T) {
@@ -128,7 +138,7 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 
 	require.True(t, decision.Matched)
 	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
-	assert.Equal(t, IssueLocalPermissionDenied, decision.Failure.IssueType)
+	assert.Equal(t, IssueLocalWriteDenied, decision.Failure.IssueType)
 	assert.Equal(t, CategoryActionable, decision.Failure.Category)
 }
 
@@ -151,8 +161,8 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 	require.True(t, decision.Matched)
 	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
 	assert.Equal(t, "blocked", decision.Failure.Path)
-	assert.Equal(t, IssueLocalPermissionDenied, decision.Failure.IssueType)
-	assert.Equal(t, SKPermDir("blocked"), decision.ScopeBlock.Key)
+	assert.Equal(t, IssueLocalWriteDenied, decision.Failure.IssueType)
+	assert.Equal(t, SKPermLocalWrite("blocked"), decision.ScopeBlock.Key)
 }
 
 func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
@@ -184,7 +194,7 @@ func TestPermHandler_RecheckLocalPermissions_Restored(t *testing.T) {
 	subDir := filepath.Join(syncRoot, "restored")
 	require.NoError(t, os.MkdirAll(subDir, 0o750))
 
-	scopeKey := SKPermDir("restored")
+	scopeKey := SKPermLocalWrite("restored")
 	seedLocalPermissionDeniedIssue(t, store, "restored", scopeKey)
 
 	decisions := ph.recheckLocalPermissions(t.Context())
@@ -203,57 +213,11 @@ func TestPermHandler_RecheckLocalPermissions_StillDenied(t *testing.T) {
 	require.NoError(t, os.MkdirAll(subDir, 0o750))
 	require.NoError(t, os.Chmod(subDir, 0o000))
 
-	scopeKey := SKPermDir("blocked")
+	scopeKey := SKPermLocalWrite("blocked")
 	seedLocalPermissionDeniedIssue(t, store, "blocked", scopeKey)
 
 	decisions := ph.recheckLocalPermissions(t.Context())
 
 	require.Len(t, decisions, 1)
 	assert.Equal(t, permissionRecheckKeepScope, decisions[0].Kind)
-}
-
-func TestPermHandler_ClearScannerResolved_FileLevel(t *testing.T) {
-	t.Parallel()
-
-	ph, store, _ := newTestPermHandler(t, nil)
-	seedLocalPermissionDeniedIssue(t, store, "docs/file.txt", ScopeKey{})
-
-	observed := map[string]bool{"docs/file.txt": true}
-	decisions := ph.clearScannerResolvedPermissions(t.Context(), observed)
-
-	require.Len(t, decisions, 1)
-	assert.Equal(t, permissionRecheckClearFileFailure, decisions[0].Kind)
-	assert.Equal(t, "docs/file.txt", decisions[0].Path)
-}
-
-func TestPermHandler_ClearScannerResolved_DirLevel(t *testing.T) {
-	t.Parallel()
-
-	ph, store, _ := newTestPermHandler(t, nil)
-
-	scopeKey := SKPermDir("blocked")
-	seedLocalPermissionDeniedIssue(t, store, "blocked", scopeKey)
-
-	observed := map[string]bool{"blocked/child.txt": true}
-	decisions := ph.clearScannerResolvedPermissions(t.Context(), observed)
-
-	require.Len(t, decisions, 1)
-	assert.Equal(t, permissionRecheckReleaseScope, decisions[0].Kind)
-	assert.Equal(t, scopeKey, decisions[0].ScopeKey)
-}
-
-func TestPermHandler_ClearScannerResolved_ReleasesScopedIssueInOneShotMode(t *testing.T) {
-	t.Parallel()
-
-	ph, store, _ := newTestPermHandler(t, nil)
-
-	scopeKey := SKPermDir("blocked")
-	seedLocalPermissionDeniedIssue(t, store, "blocked", scopeKey)
-
-	observed := map[string]bool{"blocked/child.txt": true}
-	decisions := ph.clearScannerResolvedPermissions(t.Context(), observed)
-
-	require.Len(t, decisions, 1)
-	assert.Equal(t, permissionRecheckReleaseScope, decisions[0].Kind)
-	assert.Equal(t, scopeKey, decisions[0].ScopeKey, "scoped permission recovery should release the scope in one-shot mode too")
 }

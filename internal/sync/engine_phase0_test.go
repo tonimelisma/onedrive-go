@@ -440,7 +440,7 @@ func TestPhase0_ExecutePlan_WaitsForDrainSideEffects(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, permIssues, 1, "executePlan should wait for the blocked write row to be recorded before returning")
 	assert.Equal(t, "Shared/TeamDocs/file.txt", permIssues[0].Path)
-	assert.Equal(t, SKPermRemote("Shared/TeamDocs"), permIssues[0].ScopeKey)
+	assert.Equal(t, SKPermRemoteWrite("Shared/TeamDocs"), permIssues[0].ScopeKey)
 	assert.GreaterOrEqual(t, report.Failed, 1)
 }
 
@@ -579,7 +579,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	rt := testWatchRuntime(t, eng)
 	rt.buf = NewBuffer(eng.logger)
 
-	scopeKey := SKPermDir("Private")
+	scopeKey := SKPermLocalWrite("Private")
 	accessibleDir := filepath.Join(syncRoot, "Private")
 	require.NoError(t, os.MkdirAll(accessibleDir, 0o750))
 
@@ -597,7 +597,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		DriveID:   eng.driveID,
 		Direction: DirectionDownload,
 		Role:      FailureRoleBoundary,
-		IssueType: IssueLocalPermissionDenied,
+		IssueType: IssueLocalWriteDenied,
 		Category:  CategoryActionable,
 		ErrMsg:    "directory not accessible",
 		ScopeKey:  scopeKey,
@@ -614,7 +614,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	}, nil))
 	setTestScopeBlock(t, eng, &ScopeBlock{
 		Key:       scopeKey,
-		IssueType: IssueLocalPermissionDenied,
+		IssueType: IssueLocalWriteDenied,
 		BlockedAt: eng.nowFunc(),
 	})
 

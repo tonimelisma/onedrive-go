@@ -298,7 +298,7 @@ func (coordinator *shortcutCoordinator) shortcutRemovalDecisions(ctx context.Con
 
 	for i := range issues {
 		issue := &issues[i]
-		if !issue.ScopeKey.IsPermRemote() {
+		if !issue.ScopeKey.IsPermRemoteWrite() {
 			continue
 		}
 

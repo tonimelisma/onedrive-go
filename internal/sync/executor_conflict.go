@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,17 +24,27 @@ func (e *Executor) ExecuteConflict(ctx context.Context, action *Action) ActionOu
 
 	absPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedOutcome(action, ActionConflict, normalizeSyncTreePathError(err))
+		return e.failedConflictOutcome(
+			action,
+			normalizeSyncTreePathError(err),
+			action.Path,
+			PermissionCapabilityLocalWrite,
+		)
 	}
 
 	// Step 1: Rename local to conflict copy (if it exists).
 	conflictPath, err := e.uniqueConflictCopyPath(absPath)
 	if err != nil {
-		return e.failedOutcome(action, ActionConflict, err)
+		return e.failedConflictOutcome(action, err, action.Path, PermissionCapabilityLocalWrite)
 	}
 	conflictRel, err := e.syncTree.Rel(conflictPath)
 	if err != nil {
-		return e.failedOutcome(action, ActionConflict, normalizeSyncTreePathError(err))
+		return e.failedConflictOutcome(
+			action,
+			normalizeSyncTreePathError(err),
+			action.Path,
+			PermissionCapabilityLocalWrite,
+		)
 	}
 	localExists := true
 
@@ -42,8 +53,12 @@ func (e *Executor) ExecuteConflict(ctx context.Context, action *Action) ActionOu
 			// Local file absent — skip rename, proceed to download.
 			localExists = false
 		} else {
-			return e.failedOutcome(action, ActionConflict,
-				fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(conflictPath), normalizeSyncTreePathError(err)))
+			return e.failedConflictOutcome(
+				action,
+				fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(conflictPath), normalizeSyncTreePathError(err)),
+				action.Path,
+				PermissionCapabilityLocalWrite,
+			)
 		}
 	}
 
@@ -67,8 +82,12 @@ func (e *Executor) ExecuteConflict(ctx context.Context, action *Action) ActionOu
 			}
 		}
 
-		return e.failedOutcome(action, ActionConflict,
-			fmt.Errorf("downloading remote during conflict resolution for %s: %w", action.Path, downloadOutcome.Error))
+		return e.failedConflictOutcome(
+			action,
+			fmt.Errorf("downloading remote during conflict resolution for %s: %w", action.Path, downloadOutcome.Error),
+			conflictFailurePath(&downloadOutcome, action.Path),
+			conflictFailureCapability(&downloadOutcome, PermissionCapabilityLocalWrite, PermissionCapabilityRemoteRead),
+		)
 	}
 
 	// Build conflict outcome from the download result.
@@ -140,9 +159,12 @@ func (e *Executor) ExecuteEditDeleteConflict(ctx context.Context, action *Action
 
 	uploadOutcome := e.ExecuteUpload(ctx, action)
 	if !uploadOutcome.Success {
-		return e.failedOutcome(action, ActionConflict,
-			fmt.Errorf("uploading local during edit-delete auto-resolve for %s: %w",
-				action.Path, uploadOutcome.Error))
+		return e.failedConflictOutcome(
+			action,
+			fmt.Errorf("uploading local during edit-delete auto-resolve for %s: %w", action.Path, uploadOutcome.Error),
+			conflictFailurePath(&uploadOutcome, action.Path),
+			conflictFailureCapability(&uploadOutcome, PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite),
+		)
 	}
 
 	// Build conflict outcome from the upload result.
@@ -198,4 +220,54 @@ func ConflictStemExt(name string) (string, string) {
 	stem := name[:len(name)-len(ext)]
 
 	return stem, ext
+}
+
+func (e *Executor) failedConflictOutcome(
+	action *Action,
+	err error,
+	failurePath string,
+	failureCapability PermissionCapability,
+) ActionOutcome {
+	outcome := e.failedOutcome(action, ActionConflict, err)
+	if failurePath != "" {
+		outcome.FailurePath = failurePath
+	}
+	outcome.FailureCapability = failureCapability
+
+	return outcome
+}
+
+func conflictFailurePath(outcome *ActionOutcome, fallback string) string {
+	if outcome == nil {
+		return fallback
+	}
+	if outcome.FailurePath != "" {
+		return outcome.FailurePath
+	}
+	if outcome.Path != "" {
+		return outcome.Path
+	}
+
+	return fallback
+}
+
+func conflictFailureCapability(
+	outcome *ActionOutcome,
+	localCapability PermissionCapability,
+	remoteCapability PermissionCapability,
+) PermissionCapability {
+	if outcome == nil {
+		return PermissionCapabilityUnknown
+	}
+	if outcome.FailureCapability != PermissionCapabilityUnknown {
+		return outcome.FailureCapability
+	}
+	if errors.Is(outcome.Error, os.ErrPermission) {
+		return localCapability
+	}
+	if ExtractHTTPStatus(outcome.Error) == http.StatusForbidden {
+		return remoteCapability
+	}
+
+	return PermissionCapabilityUnknown
 }

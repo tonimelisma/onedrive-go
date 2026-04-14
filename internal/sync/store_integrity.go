@@ -548,10 +548,18 @@ func listLegacyRemoteScopeKeys(ctx context.Context, tx sqlTxRunner) ([]string, e
 	rows, err := tx.QueryContext(ctx, `
 		SELECT DISTINCT scope_key
 		FROM (
-			SELECT scope_key FROM scope_blocks WHERE scope_key LIKE 'perm:remote:%'
+			SELECT scope_key
+			FROM scope_blocks
+			WHERE scope_key LIKE 'perm:remote:%'
+			   OR scope_key LIKE 'perm:remote-write:%'
 			UNION
-			SELECT scope_key FROM sync_failures
-			WHERE failure_role = ? AND scope_key LIKE 'perm:remote:%'
+			SELECT scope_key
+			FROM sync_failures
+			WHERE failure_role = ?
+			  AND (
+				scope_key LIKE 'perm:remote:%'
+				OR scope_key LIKE 'perm:remote-write:%'
+			  )
 		)`,
 		FailureRoleBoundary,
 	)
@@ -716,10 +724,10 @@ func auditScopeBlocks(
 			report.add(integrityCodeInvalidScopeBlock, err.Error())
 		}
 
-		if block.Key.IsPermRemote() {
+		if block.Key.IsPermRemoteWrite() {
 			report.add(
 				integrityCodeLegacyRemoteScope,
-				fmt.Sprintf("legacy persisted perm:remote scope %s must be derived from held rows only", block.Key.String()),
+				fmt.Sprintf("persisted remote-write scope %s must be derived from held rows only", block.Key.String()),
 			)
 		}
 		if block.Key == SKThrottleAccount() {
@@ -775,16 +783,16 @@ func auditFailureRow(
 		)
 	}
 
-	if row.Role == FailureRoleBoundary && row.ScopeKey.IsPermRemote() {
+	if row.Role == FailureRoleBoundary && row.ScopeKey.IsPermRemoteWrite() {
 		report.add(
 			integrityCodeLegacyRemoteBoundary,
-			fmt.Sprintf("legacy perm:remote boundary row %s should be derived from held rows only", row.Path),
+			fmt.Sprintf("remote-write boundary row %s should be derived from held rows only", row.Path),
 		)
 	}
 
 	if (row.Role == FailureRoleHeld || row.Role == FailureRoleBoundary) &&
 		!row.ScopeKey.IsZero() &&
-		!row.ScopeKey.IsPermRemote() {
+		!row.ScopeKey.IsPermRemoteWrite() {
 		if _, ok := scopeBlockByKey[row.ScopeKey]; !ok {
 			report.add(
 				integrityCodeMissingScopeBlock,
@@ -804,7 +812,7 @@ func addFailureProjectionSource(
 	}
 
 	sourceType := "failure"
-	if row.Role == FailureRoleHeld && row.ScopeKey.IsPermRemote() {
+	if row.Role == FailureRoleHeld && row.ScopeKey.IsPermRemoteWrite() {
 		sourceType = "held_remote"
 	}
 	addProjectionSource(projectionSources, issueGroupKey{

@@ -44,7 +44,8 @@ func (m *SyncStore) ListActionableFailures(ctx context.Context) ([]SyncFailureRo
 func (m *SyncStore) ListRemoteBlockedFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
-		WHERE failure_role = ? AND scope_key LIKE 'perm:remote:%'
+		WHERE failure_role = ?
+			AND (scope_key LIKE 'perm:remote-write:%' OR scope_key LIKE 'perm:remote:%')
 		ORDER BY last_seen_at DESC`,
 		FailureRoleHeld,
 	)

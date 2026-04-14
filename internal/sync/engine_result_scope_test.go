@@ -444,23 +444,23 @@ func TestProcessWorkerResult_EndToEndSummaryKey_SharedFolderWritesBlocked(t *tes
 	rows, err := eng.baseline.ListRemoteBlockedFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, IssueSharedFolderBlocked, rows[0].IssueType)
+	assert.Equal(t, IssueRemoteWriteDenied, rows[0].IssueType)
 	assert.Equal(t, CategoryTransient, rows[0].Category)
 	assert.Equal(t, FailureRoleHeld, rows[0].Role)
-	assert.Equal(t, SKPermRemote("Shared/TeamDocs"), rows[0].ScopeKey)
+	assert.Equal(t, SKPermRemoteWrite("Shared/TeamDocs"), rows[0].ScopeKey)
 
 	snapshot := readDriveStatusSnapshotForTest(t, eng, ctx)
-	group := requireIssueGroupSummaryKey(t, &snapshot, SummarySharedFolderWritesBlocked)
+	group := requireIssueGroupSummaryKey(t, &snapshot, SummaryRemoteWriteDenied)
 	assert.Equal(t, 1, group.Count)
 	assert.Equal(t, []string{"Shared/TeamDocs/file.txt"}, group.Paths)
-	assert.Equal(t, SKPermRemote("Shared/TeamDocs"), group.ScopeKey)
+	assert.Equal(t, SKPermRemoteWrite("Shared/TeamDocs"), group.ScopeKey)
 
 	output := logBuf.String()
 	assert.Contains(t, output, "run_id=run-")
-	assert.Contains(t, output, "summary_key=shared_folder_writes_blocked")
+	assert.Contains(t, output, "summary_key=remote_write_denied")
 	assert.Contains(t, output, "failure_class=actionable")
 	assert.Contains(t, output, "log_owner=sync")
-	assert.Contains(t, output, "issue_type="+IssueSharedFolderBlocked)
+	assert.Contains(t, output, "issue_type="+IssueRemoteWriteDenied)
 }
 
 // Validates: R-6.8.16, R-6.6.11
@@ -531,21 +531,21 @@ func TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied(t *testing
 	rows, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, IssueLocalPermissionDenied, rows[0].IssueType)
+	assert.Equal(t, IssueLocalReadDenied, rows[0].IssueType)
 	assert.Equal(t, CategoryActionable, rows[0].Category)
 	assert.Equal(t, FailureRoleItem, rows[0].Role)
 
 	snapshot := readDriveStatusSnapshotForTest(t, eng, ctx)
-	group := requireIssueGroupSummaryKey(t, &snapshot, SummaryLocalPermissionDenied)
+	group := requireIssueGroupSummaryKey(t, &snapshot, SummaryLocalReadDenied)
 	assert.Equal(t, 1, group.Count)
 	assert.Equal(t, []string{"file.txt"}, group.Paths)
 
 	output := logBuf.String()
 	assert.Contains(t, output, "run_id=run-")
-	assert.Contains(t, output, "summary_key=local_permission_denied")
+	assert.Contains(t, output, "summary_key=local_read_denied")
 	assert.Contains(t, output, "failure_class=actionable")
 	assert.Contains(t, output, "log_owner=sync")
-	assert.Contains(t, output, "issue_type="+IssueLocalPermissionDenied)
+	assert.Contains(t, output, "issue_type="+IssueLocalReadDenied)
 }
 
 // Validates: R-2.10.5
@@ -651,7 +651,7 @@ func TestProcessWorkerResult_403ReadOnly_SkipsRemoteState(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, permIssues, 1, "confirmed remote denial should record one blocked write row")
 	assert.Equal(t, "Shared/TeamDocs/file.txt", permIssues[0].Path)
-	assert.Equal(t, SKPermRemote("Shared/TeamDocs"), permIssues[0].ScopeKey)
+	assert.Equal(t, SKPermRemoteWrite("Shared/TeamDocs"), permIssues[0].ScopeKey)
 
 	// remote_state should be empty.
 	failed, err := eng.baseline.ListRemoteState(ctx)
@@ -784,9 +784,9 @@ func TestClassifyResult_LifecycleAndAuth(t *testing.T) {
 		},
 		{
 			name:            "403_forbidden",
-			result:          WorkerResult{HTTPStatus: http.StatusForbidden, Err: graph.ErrForbidden},
+			result:          WorkerResult{HTTPStatus: http.StatusForbidden, Err: graph.ErrForbidden, ActionType: ActionUpload},
 			wantClass:       resultSkip,
-			wantSummaryKey:  SummaryRemotePermissionDenied,
+			wantSummaryKey:  SummaryRemoteWriteDenied,
 			wantPersistence: persistActionableFailure,
 			wantPermission:  permissionFlowRemote403,
 		},
@@ -872,12 +872,12 @@ func TestClassifyResult_LocalErrors(t *testing.T) {
 	t.Parallel()
 
 	assertClassifyResultCases(t, []classifyResultCase{
-		{name: "os_err_permission", result: WorkerResult{Err: os.ErrPermission}, wantClass: resultSkip, wantSummaryKey: SummaryLocalPermissionDenied, wantPersistence: persistActionableFailure, wantPermission: permissionFlowLocalPermission},
+		{name: "os_err_permission", result: WorkerResult{Err: os.ErrPermission}, wantClass: resultSkip, wantSummaryKey: SummaryLocalWriteDenied, wantPersistence: persistActionableFailure, wantPermission: permissionFlowLocalPermission},
 		{
 			name:            "wrapped_os_err_permission",
 			result:          WorkerResult{Err: fmt.Errorf("cannot write: %w", os.ErrPermission)},
 			wantClass:       resultSkip,
-			wantSummaryKey:  SummaryLocalPermissionDenied,
+			wantSummaryKey:  SummaryLocalWriteDenied,
 			wantPersistence: persistActionableFailure,
 			wantPermission:  permissionFlowLocalPermission,
 		},
@@ -1274,7 +1274,7 @@ func TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure(t 
 	require.NoError(t, err)
 	require.Len(t, failures, 1)
 	assert.Equal(t, FailureRoleItem, failures[0].Role)
-	assert.Equal(t, IssueLocalPermissionDenied, failures[0].IssueType)
+	assert.Equal(t, IssueLocalReadDenied, failures[0].IssueType)
 	assert.True(t, failures[0].ScopeKey.IsZero(), "file-level local permission preserve should not rewrite the original scope")
 }
 
@@ -1356,7 +1356,7 @@ func TestProcessTrialResultV2_Preserve_Remote403RehomesCandidateToPermissionScop
 	assert.Equal(t, 30*time.Second, got.TrialInterval)
 	assert.Equal(t, now.Add(30*time.Second), got.NextTrialAt)
 	assert.Equal(t, 4, got.TrialCount)
-	assert.True(t, isTestScopeBlocked(eng, SKPermRemote("Shared/TeamDocs")),
+	assert.True(t, isTestScopeBlocked(eng, SKPermRemoteWrite("Shared/TeamDocs")),
 		"preserved candidate should activate the more specific permission scope")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
@@ -1364,7 +1364,7 @@ func TestProcessTrialResultV2_Preserve_Remote403RehomesCandidateToPermissionScop
 	require.Len(t, failures, 1)
 	assert.Equal(t, "Shared/TeamDocs/file.txt", failures[0].Path)
 	assert.Equal(t, FailureRoleHeld, failures[0].Role)
-	assert.Equal(t, SKPermRemote("Shared/TeamDocs"), failures[0].ScopeKey)
+	assert.Equal(t, SKPermRemoteWrite("Shared/TeamDocs"), failures[0].ScopeKey)
 }
 
 // Validates: R-2.10.5, R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.43
@@ -2308,7 +2308,7 @@ func TestClearResolvedSkippedItems_DoesNotAffectRuntimeIssues(t *testing.T) {
 	// Record a runtime failure (permission denied — not scanner-detectable).
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path: "Shared/folder", DriveID: driveID, Direction: DirectionUpload,
-		IssueType: IssuePermissionDenied, Category: CategoryActionable, ErrMsg: "read-only",
+		IssueType: IssueRemoteWriteDenied, Category: CategoryActionable, ErrMsg: "read-only",
 		HTTPStatus: 403,
 	}, nil))
 
@@ -2320,7 +2320,7 @@ func TestClearResolvedSkippedItems_DoesNotAffectRuntimeIssues(t *testing.T) {
 	remaining, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
-	assert.Equal(t, IssuePermissionDenied, remaining[0].IssueType)
+	assert.Equal(t, IssueRemoteWriteDenied, remaining[0].IssueType)
 }
 
 // Validates: R-2.10.2
@@ -2551,36 +2551,41 @@ func TestIssueTypeForHTTPStatus(t *testing.T) {
 		name       string
 		httpStatus int
 		err        error
+		actionType ActionType
 		want       string
 	}{
-		{"429_rate_limited", http.StatusTooManyRequests, nil, IssueRateLimited},
-		{"401_unauthorized", http.StatusUnauthorized, graph.ErrUnauthorized, IssueUnauthorized},
-		{"507_quota_exceeded", http.StatusInsufficientStorage, nil, IssueQuotaExceeded},
-		{"403_permission_denied", http.StatusForbidden, nil, IssuePermissionDenied},
-		{"400_invalid_request", http.StatusBadRequest, genericInvalidRequestErr, ""},
-		{"400_object_handle_message_only", http.StatusBadRequest, objectHandleErr, ""},
-		{"400_normal", http.StatusBadRequest, errors.New("bad request"), ""},
-		{"500_service_outage", http.StatusInternalServerError, nil, IssueServiceOutage},
-		{"503_service_outage", http.StatusServiceUnavailable, nil, IssueServiceOutage},
-		{"408_request_timeout", http.StatusRequestTimeout, nil, "request_timeout"},
-		{"412_transient_conflict", http.StatusPreconditionFailed, nil, "transient_conflict"},
-		{"404_transient_not_found", http.StatusNotFound, nil, "transient_not_found"},
-		{"423_resource_locked", http.StatusLocked, nil, "resource_locked"},
-		{"permission_error", 0, os.ErrPermission, IssueLocalPermissionDenied},
+		{"429_rate_limited", http.StatusTooManyRequests, nil, ActionUpload, IssueRateLimited},
+		{"401_unauthorized", http.StatusUnauthorized, graph.ErrUnauthorized, ActionUpload, IssueUnauthorized},
+		{"507_quota_exceeded", http.StatusInsufficientStorage, nil, ActionUpload, IssueQuotaExceeded},
+		{"403_permission_denied", http.StatusForbidden, nil, ActionUpload, IssueRemoteWriteDenied},
+		{"400_invalid_request", http.StatusBadRequest, genericInvalidRequestErr, ActionUpload, ""},
+		{"400_object_handle_message_only", http.StatusBadRequest, objectHandleErr, ActionUpload, ""},
+		{"400_normal", http.StatusBadRequest, errors.New("bad request"), ActionUpload, ""},
+		{"500_service_outage", http.StatusInternalServerError, nil, ActionUpload, IssueServiceOutage},
+		{"503_service_outage", http.StatusServiceUnavailable, nil, ActionUpload, IssueServiceOutage},
+		{"408_request_timeout", http.StatusRequestTimeout, nil, ActionUpload, "request_timeout"},
+		{"412_transient_conflict", http.StatusPreconditionFailed, nil, ActionUpload, "transient_conflict"},
+		{"404_transient_not_found", http.StatusNotFound, nil, ActionUpload, "transient_not_found"},
+		{"423_resource_locked", http.StatusLocked, nil, ActionUpload, "resource_locked"},
+		{"permission_error", 0, os.ErrPermission, ActionDownload, IssueLocalWriteDenied},
 		// Validates: R-2.10.43
-		{"disk_full", 0, driveops.ErrDiskFull, IssueDiskFull},
-		{"wrapped_disk_full", 0, fmt.Errorf("download: %w", driveops.ErrDiskFull), IssueDiskFull},
+		{"disk_full", 0, driveops.ErrDiskFull, ActionDownload, IssueDiskFull},
+		{"wrapped_disk_full", 0, fmt.Errorf("download: %w", driveops.ErrDiskFull), ActionDownload, IssueDiskFull},
 		// Validates: R-2.10.44
-		{"file_too_large_for_space", 0, driveops.ErrFileTooLargeForSpace, IssueFileTooLargeForSpace},
-		{"file_exceeds_onedrive_limit", 0, driveops.ErrFileExceedsOneDriveLimit, IssueFileTooLarge},
-		{"unknown_status", 418, nil, ""},
-		{"zero_status_no_error", 0, nil, ""},
+		{"file_too_large_for_space", 0, driveops.ErrFileTooLargeForSpace, ActionDownload, IssueFileTooLargeForSpace},
+		{"file_exceeds_onedrive_limit", 0, driveops.ErrFileExceedsOneDriveLimit, ActionUpload, IssueFileTooLarge},
+		{"unknown_status", 418, nil, ActionUpload, ""},
+		{"zero_status_no_error", 0, nil, ActionUpload, ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := issueTypeForHTTPStatus(tt.httpStatus, tt.err)
+			got := issueTypeForResult(&WorkerResult{
+				HTTPStatus: tt.httpStatus,
+				Err:        tt.err,
+				ActionType: tt.actionType,
+			})
 			assert.Equal(t, tt.want, got)
 		})
 	}

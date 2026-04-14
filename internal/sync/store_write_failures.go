@@ -203,7 +203,8 @@ func normalizeActionableFailure(failure *ActionableFailure) (FailureRole, string
 func IsActionableIssue(issueType string) bool {
 	switch issueType {
 	case IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge,
-		IssuePermissionDenied, IssueQuotaExceeded, IssueLocalPermissionDenied,
+		IssueRemoteWriteDenied, IssueRemoteReadDenied, IssueQuotaExceeded,
+		IssueLocalReadDenied, IssueLocalWriteDenied,
 		IssueCaseCollision, IssueDiskFull, IssueFileTooLargeForSpace,
 		IssueDeleteSafetyHeld:
 		return true

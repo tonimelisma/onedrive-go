@@ -20,6 +20,13 @@ type resolveConflictStore interface {
 	Close(context.Context) error
 }
 
+type conflictRecordLister interface {
+	ListConflicts(context.Context) ([]syncengine.ConflictRecord, error)
+	ListAllConflicts(context.Context) ([]syncengine.ConflictRecord, error)
+}
+
+type conflictResolutionRequester func(string, string) (syncengine.ConflictRequestResult, error)
+
 func runApproveDeletes(ctx context.Context, cc *CLIContext) error {
 	probe, err := probeControlOwner(ctx)
 	if err != nil && probe.state == controlOwnerStateProbeFailed {
@@ -41,6 +48,10 @@ func runApproveDeletes(ctx context.Context, cc *CLIContext) error {
 			return watchErr
 		}
 		if isControlSocketGone(watchErr) {
+			if fallbackErr := requireDirectMutationFallback(ctx); fallbackErr != nil {
+				return fmt.Errorf("approve held deletes via daemon: %w", fallbackErr)
+			}
+
 			return approveDeletesDirect(ctx, cc)
 		}
 
@@ -101,6 +112,15 @@ func runResolve(
 	resolveAll bool,
 	dryRun bool,
 ) error {
+	probe, err := probeControlOwner(ctx)
+	if err != nil && probe.state == controlOwnerStateProbeFailed {
+		return fmt.Errorf("probe control owner: %w", err)
+	}
+
+	if probe.state == controlOwnerStateWatchOwner {
+		return runResolveViaWatchOwner(ctx, cc, probe, args, resolution, resolveAll, dryRun)
+	}
+
 	store, err := openWritableStoreForContext(ctx, cc)
 	if err != nil {
 		return err
@@ -137,12 +157,7 @@ func requestConflictResolution(
 
 	switch probe.state {
 	case controlOwnerStateOneShotOwner, controlOwnerStateNoSocket, controlOwnerStatePathUnavailable:
-		result, requestErr := store.RequestConflictResolution(ctx, id, resolution)
-		if requestErr != nil {
-			return syncengine.ConflictRequestResult{}, fmt.Errorf("queue conflict resolution: %w", requestErr)
-		}
-
-		return result, nil
+		return requestConflictResolutionDirect(ctx, cc, store, id, resolution)
 	case controlOwnerStateWatchOwner:
 		status, requestErr := probe.client.requestConflictResolution(ctx, cc.Cfg.CanonicalID, id, resolution)
 		if requestErr == nil {
@@ -152,12 +167,11 @@ func requestConflictResolution(
 			return syncengine.ConflictRequestResult{}, requestErr
 		}
 		if isControlSocketGone(requestErr) {
-			result, directErr := store.RequestConflictResolution(ctx, id, resolution)
-			if directErr != nil {
-				return syncengine.ConflictRequestResult{}, fmt.Errorf("queue conflict resolution: %w", directErr)
+			if fallbackErr := requireDirectMutationFallback(ctx); fallbackErr != nil {
+				return syncengine.ConflictRequestResult{}, fmt.Errorf("request conflict resolution via daemon: %w", fallbackErr)
 			}
 
-			return result, nil
+			return requestConflictResolutionDirect(ctx, cc, store, id, resolution)
 		}
 
 		return syncengine.ConflictRequestResult{}, requestErr
@@ -176,27 +190,11 @@ func queueEachConflictResolution(
 	resolution string,
 	dryRun bool,
 ) error {
-	if len(conflicts) == 0 {
-		cc.Statusf("No unresolved conflicts.\n")
-		return nil
+	requestFn := func(id string, resolution string) (syncengine.ConflictRequestResult, error) {
+		return requestConflictResolution(ctx, cc, store, id, resolution)
 	}
 
-	for i := range conflicts {
-		conflict := &conflicts[i]
-		if dryRun {
-			cc.Statusf("Would resolve %s as %s\n", conflict.Path, resolution)
-			continue
-		}
-
-		result, err := requestConflictResolution(ctx, cc, store, conflict.ID, resolution)
-		if err != nil {
-			return fmt.Errorf("resolving %s: %w", conflict.Path, err)
-		}
-
-		writeQueuedConflictStatus(cc, conflict.Path, resolution, result.Status)
-	}
-
-	return nil
+	return queueConflictResolutions(cc, conflicts, resolution, dryRun, requestFn)
 }
 
 func queueSingleConflictResolution(
@@ -207,46 +205,11 @@ func queueSingleConflictResolution(
 	resolution string,
 	dryRun bool,
 ) error {
-	conflicts, err := store.ListConflicts(ctx)
-	if err != nil {
-		return fmt.Errorf("list conflicts: %w", err)
+	requestFn := func(id string, resolution string) (syncengine.ConflictRequestResult, error) {
+		return requestConflictResolution(ctx, cc, store, id, resolution)
 	}
 
-	target, found, err := findSelectedConflict(conflicts, idOrPath)
-	if err != nil {
-		return err
-	}
-
-	if !found {
-		allConflicts, listErr := store.ListAllConflicts(ctx)
-		if listErr != nil {
-			return fmt.Errorf("list conflict history: %w", listErr)
-		}
-
-		resolvedConflict, resolved, findResolvedErr := findSelectedConflict(allConflicts, idOrPath)
-		if findResolvedErr != nil {
-			return findResolvedErr
-		}
-		if resolved && resolvedConflict.Resolution != syncengine.ResolutionUnresolved {
-			cc.Statusf("Conflict %s already resolved as %s\n", resolvedConflict.Path, resolvedConflict.Resolution)
-			return nil
-		}
-
-		return fmt.Errorf("conflict not found: %s", idOrPath)
-	}
-
-	if dryRun {
-		cc.Statusf("Would resolve %s as %s\n", target.Path, resolution)
-		return nil
-	}
-
-	result, err := requestConflictResolution(ctx, cc, store, target.ID, resolution)
-	if err != nil {
-		return err
-	}
-
-	writeQueuedConflictStatus(cc, target.Path, resolution, result.Status)
-	return nil
+	return queueSingleConflictResolutionFromLister(ctx, cc, store, idOrPath, resolution, dryRun, requestFn)
 }
 
 func findSelectedConflict(conflicts []syncengine.ConflictRecord, idOrPath string) (*syncengine.ConflictRecord, bool, error) {
@@ -293,6 +256,253 @@ func writeQueuedConflictStatus(
 	default:
 		cc.Statusf("Resolution request for %s returned status %s\n", conflictPath, status)
 	}
+}
+
+func runResolveViaWatchOwner(
+	ctx context.Context,
+	cc *CLIContext,
+	probe controlOwnerProbe,
+	args []string,
+	resolution string,
+	resolveAll bool,
+	dryRun bool,
+) (err error) {
+	inspector, err := openConflictInspectorForContext(cc)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := inspector.Close(); closeErr != nil {
+			cc.Logger.Debug("close resolve inspector", "error", closeErr.Error())
+		}
+	}()
+
+	if resolveAll {
+		return runResolveAllViaWatchOwner(ctx, cc, probe.client, inspector, resolution, dryRun)
+	}
+
+	return runResolveOneViaWatchOwner(ctx, cc, probe.client, inspector, args[0], resolution, dryRun)
+}
+
+func runResolveAllViaWatchOwner(
+	ctx context.Context,
+	cc *CLIContext,
+	client *controlSocketClient,
+	inspector *syncengine.Inspector,
+	resolution string,
+	dryRun bool,
+) error {
+	conflicts, err := inspector.ListConflicts(ctx)
+	if err != nil {
+		return fmt.Errorf("list conflicts: %w", err)
+	}
+	requestFn := func(id string, resolution string) (syncengine.ConflictRequestResult, error) {
+		return requestConflictResolutionViaWatchOwner(ctx, cc, client, id, resolution)
+	}
+
+	return queueConflictResolutions(cc, conflicts, resolution, dryRun, requestFn)
+}
+
+func runResolveOneViaWatchOwner(
+	ctx context.Context,
+	cc *CLIContext,
+	client *controlSocketClient,
+	inspector *syncengine.Inspector,
+	idOrPath string,
+	resolution string,
+	dryRun bool,
+) error {
+	requestFn := func(id string, resolution string) (syncengine.ConflictRequestResult, error) {
+		return requestConflictResolutionViaWatchOwner(ctx, cc, client, id, resolution)
+	}
+
+	return queueSingleConflictResolutionFromLister(ctx, cc, inspector, idOrPath, resolution, dryRun, requestFn)
+}
+
+func queueConflictResolutions(
+	cc *CLIContext,
+	conflicts []syncengine.ConflictRecord,
+	resolution string,
+	dryRun bool,
+	requestFn conflictResolutionRequester,
+) error {
+	if len(conflicts) == 0 {
+		cc.Statusf("No unresolved conflicts.\n")
+		return nil
+	}
+
+	for i := range conflicts {
+		conflict := &conflicts[i]
+		if dryRun {
+			cc.Statusf("Would resolve %s as %s\n", conflict.Path, resolution)
+			continue
+		}
+
+		result, err := requestFn(conflict.ID, resolution)
+		if err != nil {
+			return fmt.Errorf("resolving %s: %w", conflict.Path, err)
+		}
+
+		writeQueuedConflictStatus(cc, conflict.Path, resolution, result.Status)
+	}
+
+	return nil
+}
+
+func queueSingleConflictResolutionFromLister(
+	ctx context.Context,
+	cc *CLIContext,
+	lister conflictRecordLister,
+	idOrPath string,
+	resolution string,
+	dryRun bool,
+	requestFn conflictResolutionRequester,
+) error {
+	conflicts, err := lister.ListConflicts(ctx)
+	if err != nil {
+		return fmt.Errorf("list conflicts: %w", err)
+	}
+
+	target, found, err := findSelectedConflict(conflicts, idOrPath)
+	if err != nil {
+		return err
+	}
+
+	if !found {
+		allConflicts, listErr := lister.ListAllConflicts(ctx)
+		if listErr != nil {
+			return fmt.Errorf("list conflict history: %w", listErr)
+		}
+
+		resolvedConflict, resolved, findResolvedErr := findSelectedConflict(allConflicts, idOrPath)
+		if findResolvedErr != nil {
+			return findResolvedErr
+		}
+		if resolved && resolvedConflict.Resolution != syncengine.ResolutionUnresolved {
+			cc.Statusf("Conflict %s already resolved as %s\n", resolvedConflict.Path, resolvedConflict.Resolution)
+			return nil
+		}
+
+		return fmt.Errorf("conflict not found: %s", idOrPath)
+	}
+
+	if dryRun {
+		cc.Statusf("Would resolve %s as %s\n", target.Path, resolution)
+		return nil
+	}
+
+	result, err := requestFn(target.ID, resolution)
+	if err != nil {
+		return err
+	}
+
+	writeQueuedConflictStatus(cc, target.Path, resolution, result.Status)
+	return nil
+}
+
+func requestConflictResolutionViaWatchOwner(
+	ctx context.Context,
+	cc *CLIContext,
+	client *controlSocketClient,
+	id string,
+	resolution string,
+) (syncengine.ConflictRequestResult, error) {
+	status, requestErr := client.requestConflictResolution(ctx, cc.Cfg.CanonicalID, id, resolution)
+	if requestErr == nil {
+		return syncengine.ConflictRequestResult{Status: syncengine.ConflictRequestStatus(status)}, nil
+	}
+	if isControlDaemonError(requestErr) {
+		return syncengine.ConflictRequestResult{}, requestErr
+	}
+	if !isControlSocketGone(requestErr) {
+		return syncengine.ConflictRequestResult{}, requestErr
+	}
+	if fallbackErr := requireDirectMutationFallback(ctx); fallbackErr != nil {
+		return syncengine.ConflictRequestResult{}, fmt.Errorf("request conflict resolution via daemon: %w", fallbackErr)
+	}
+
+	return requestConflictResolutionDirect(ctx, cc, nil, id, resolution)
+}
+
+func requestConflictResolutionDirect(
+	ctx context.Context,
+	cc *CLIContext,
+	store resolveConflictStore,
+	id string,
+	resolution string,
+) (result syncengine.ConflictRequestResult, err error) {
+	storeClosed := false
+	openedLocalStore := false
+	if store == nil {
+		store, err = openWritableStoreForContext(ctx, cc)
+		if err != nil {
+			return syncengine.ConflictRequestResult{}, err
+		}
+		openedLocalStore = true
+	}
+	defer func() {
+		if !openedLocalStore || storeClosed || store == nil {
+			return
+		}
+
+		if closeErr := store.Close(ctx); closeErr != nil {
+			closeErr = fmt.Errorf("close sync store: %w", closeErr)
+			if err == nil {
+				err = closeErr
+				return
+			}
+			err = errors.Join(err, closeErr)
+		}
+	}()
+
+	result, err = store.RequestConflictResolution(ctx, id, resolution)
+	if err != nil {
+		return syncengine.ConflictRequestResult{}, fmt.Errorf("queue conflict resolution: %w", err)
+	}
+
+	if openedLocalStore {
+		storeClosed = true
+		if closeErr := store.Close(ctx); closeErr != nil {
+			return syncengine.ConflictRequestResult{}, fmt.Errorf("close sync store: %w", closeErr)
+		}
+	}
+
+	return result, nil
+}
+
+func requireDirectMutationFallback(ctx context.Context) error {
+	probe, err := probeControlOwner(ctx)
+	if err != nil && probe.state == controlOwnerStateProbeFailed {
+		return fmt.Errorf("re-probe control owner: %w", err)
+	}
+
+	switch probe.state {
+	case controlOwnerStateOneShotOwner, controlOwnerStateNoSocket, controlOwnerStatePathUnavailable:
+		return nil
+	case controlOwnerStateWatchOwner:
+		return fmt.Errorf("watch daemon is still active; refusing direct database write")
+	case controlOwnerStateProbeFailed:
+		return fmt.Errorf("re-probe control owner: %w", err)
+	default:
+		return fmt.Errorf("re-probe control owner: unhandled probe state %q", probe.state)
+	}
+}
+
+func openConflictInspectorForContext(cc *CLIContext) (*syncengine.Inspector, error) {
+	dbPath := cc.Cfg.StatePath()
+	if dbPath == "" {
+		return nil, fmt.Errorf("cannot determine state DB path for drive %q", cc.Cfg.CanonicalID)
+	}
+
+	inspector, err := syncengine.OpenInspector(dbPath, cc.Logger)
+	if err != nil {
+		return nil, recoverAwareStoreOpenError(
+			cc.Cfg.CanonicalID.String(),
+			fmt.Errorf("open read-only sync store: %w", err),
+		)
+	}
+
+	return inspector, nil
 }
 
 func openWritableStoreForContext(ctx context.Context, cc *CLIContext) (*syncengine.SyncStore, error) {

@@ -15,10 +15,10 @@ func TestEngineFlow_PolicyControllersAreRunOwned(t *testing.T) {
 	scopeCtrl := flow.scopeController()
 	shortcutCtrl := flow.shortcutCoordinator()
 
-	assert.Same(t, &flow.scopeCtrl, scopeCtrl)
-	assert.Same(t, &flow.shortcutCtrl, shortcutCtrl)
 	assert.Same(t, &flow, scopeCtrl.flow)
 	assert.Same(t, &flow, shortcutCtrl.flow)
+	assert.NotSame(t, scopeCtrl, flow.scopeController())
+	assert.NotSame(t, shortcutCtrl, flow.shortcutCoordinator())
 }
 
 func TestEngineFlow_PolicyControllersRebindAfterValueCopy(t *testing.T) {
@@ -31,8 +31,6 @@ func TestEngineFlow_PolicyControllersRebindAfterValueCopy(t *testing.T) {
 	scopeCtrl := copied.scopeController()
 	shortcutCtrl := copied.shortcutCoordinator()
 
-	assert.Same(t, &copied.scopeCtrl, scopeCtrl)
-	assert.Same(t, &copied.shortcutCtrl, shortcutCtrl)
 	assert.Same(t, &copied, scopeCtrl.flow)
 	assert.Same(t, &copied, shortcutCtrl.flow)
 	assert.NotSame(t, &original, scopeCtrl.flow)

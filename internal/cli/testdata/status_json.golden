@@ -44,8 +44,8 @@
                 "paths": null
               },
               {
-                "summary_key": "shared_folder_writes_blocked",
-                "issue_type": "shared_folder_write_blocked",
+                "summary_key": "remote_write_denied",
+                "issue_type": "remote_write_denied",
                 "title": "SHARED FOLDER WRITES BLOCKED",
                 "reason": "This shared folder is read-only for your current write attempts. Downloads continue normally.",
                 "action": "Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",

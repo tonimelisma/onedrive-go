@@ -37,11 +37,11 @@ type (
 		FullReconcile bool // when true, runs a full delta enumeration + orphan detection
 	}
 	WatchOptions struct {
-		PollInterval       time.Duration   // remote delta polling interval (0 -> 5m)
-		Debounce           time.Duration   // buffer debounce window (0 -> 2s)
-		SafetyScanInterval time.Duration   // local safety scan interval (0 -> 5m) (B-099)
-		ReconcileInterval  time.Duration   // periodic full reconciliation (0 -> 24h, negative = disabled)
-		UserIntentWake     <-chan struct{} // daemon control-plane wakeups for queued user intent
+		PollInterval       time.Duration // remote delta polling interval (0 -> 5m)
+		Debounce           time.Duration // buffer debounce window (0 -> 2s)
+		SafetyScanInterval time.Duration // local safety scan interval (0 -> 5m) (B-099)
+		ReconcileInterval  time.Duration // periodic full reconciliation (0 -> 24h, negative = disabled)
+		MutationRequests   <-chan WatchMutationRequest
 	}
 	Report struct {
 		Mode     Mode
