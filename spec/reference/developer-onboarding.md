@@ -78,7 +78,7 @@ The product surface is easier to understand if you group it by capability:
 - Drive management: drive catalog/search/add/remove flows and drive selection
 - Bidirectional sync: one-shot and `--watch`, with conflict tracking and
   resolution
-- Read-only health and repair: `status`, `recover`, `resolve`, `perf`
+- Read-only health and repair: `status`, `recover`, `perf`
 - Developer tooling: `go run ./cmd/devtool ...`
 
 The product is not just "a CLI wrapper around Graph". The difficult part of
@@ -349,13 +349,15 @@ organized by file families.
 
 | File family | Role |
 | --- | --- |
-| `root.go`, `doc.go`, `format.go`, `signal.go` | CLI bootstrap, process wiring, shared output boundaries, signal handling |
-| `auth*.go`, `account_catalog*.go`, `email_reconcile.go` | Login/logout/whoami, account catalog projection, auth-health, email reconciliation |
-| `drive*.go` | Drive add/list/search/remove and drive selection flows |
-| `get*.go`, `put*.go`, `ls.go`, `rm.go`, `mkdir.go`, `mv.go`, `cp.go`, `stat.go` | User-facing file commands |
-| `shared*.go` | Shared item discovery, selection, and shared-target bootstrap |
-| `sync*.go`, `recover*.go`, `control_client.go` | Sync command wiring, daemon/control-socket interaction, and recovery workflows |
-| `status*.go`, `recover*.go`, `recycle_bin*.go`, `perf.go` | Read-only status snapshot assembly, final issue rendering, repair, recycle-bin, and perf surfaces |
+| `root.go`, `doc.go`, `format.go`, `signal.go`, `cleanup.go`, `failure_class.go` | CLI bootstrap, process wiring, shared output boundaries, signal handling, error classification |
+| `auth*.go`, `account_catalog.go`, `account_catalog_snapshot.go`, `email_reconcile.go` | Login/logout/whoami, account catalog projection, auth-health, email reconciliation |
+| `drive.go`, `drive_add.go`, `drive_catalog.go`, `drive_cleanup.go`, `drive_list.go`, `drive_list_render.go`, `drive_remove.go`, `drive_search.go` | Drive add/list/search/remove, catalog projection, and drive selection flows |
+| `get.go`, `get_shared.go`, `put.go`, `put_shared.go`, `ls.go`, `rm.go`, `mkdir.go`, `mv.go`, `cp.go`, `stat.go`, `purge.go` | User-facing file commands including shared-item get/put |
+| `shared.go`, `shared_discovery.go`, `shared_target.go` | Shared item discovery, selection, and shared-target bootstrap |
+| `sync.go`, `sync_flow.go`, `sync_runtime.go`, `sync_render.go`, `sync_cli_format.go`, `sync_debug_events.go`, `sync_pause_resume.go`, `control_client.go` | Sync command wiring, daemon/control-socket interaction, and sync lifecycle |
+| `recover.go`, `recover_flow.go` | State recovery workflows |
+| `status.go`, `status_snapshot.go`, `status_sync_state.go`, `status_issue_descriptors.go`, `status_render.go`, `status_render_sections.go`, `status_perf.go` | Read-only status snapshot assembly and final issue rendering |
+| `recycle_bin.go`, `recycle_bin_flow.go`, `perf.go`, `pause.go`, `resume.go` | Recycle-bin, perf, and pause/resume surfaces |
 | `degraded_discovery.go` | CLI-owned degraded discovery behavior and presentation |
 
 The right way to read `internal/cli` is by command family, not by filename
@@ -411,13 +413,21 @@ when you treat it as several file families sharing one single-drive owner.
 
 | File family | Role |
 | --- | --- |
-| `observer_*`, `scanner.go`, `item_converter.go`, `socketio*`, `buffer.go`, `local_hash_reuse.go` | Observation: remote and local change capture plus dedupe/buffering |
+| `observer_local*.go`, `observer_remote.go`, `scanner.go`, `item_converter.go`, `socketio*.go`, `buffer.go`, `local_hash_reuse.go`, `observed_items.go` | Observation: remote and local change capture plus dedupe/buffering |
 | `planner*.go`, `single_path.go`, `actions.go` | Pure planning: turn observed change plus baseline into deterministic actions |
-| `executor*.go`, `worker*.go`, `dep_graph.go`, `active_scopes.go` | Execution: worker dispatch, dependency ordering, scope admission, and conflict-safe file application |
-| `engine*.go`, `permissions*.go`, `scope*.go`, `debug_event_sink.go` | Runtime orchestration, watch behavior, policy control, permission boundaries, lifecycle |
-| `store*.go`, `schema.go`, `tx.go`, `db_repair.go` | Durable SQLite state, projection helpers, migrations, repair, and recovery |
-| `summary_keys.go`, `visible_issues.go`, `issue_types.go`, `failure_messages.go` | Shared issue classification, summary keys, and raw read-only issue facts consumed by the CLI |
-| `core_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go` | Common sync-domain vocabulary |
+| `executor*.go`, `worker*.go`, `worker_result.go`, `dep_graph.go`, `active_scopes.go` | Execution: worker dispatch, dependency ordering, scope admission, and conflict-safe file application |
+| `engine.go`, `engine_config.go`, `engine_loop.go`, `engine_run_once.go`, `engine_watch*.go` | Runtime orchestration: main loop, one-shot run, watch lifecycle and batch reconciliation |
+| `engine_observation_*.go` | Engine-owned observation phase: session construction, validation, postprocessing, projection |
+| `engine_result_*.go`, `engine_results.go`, `engine_retry_trial.go` | Result classification, retry-trial decisions, and scope-level result flow |
+| `engine_primary_scope*.go`, `engine_scope_invariants.go`, `engine_scope_lifecycle.go` | Scope lifecycle: primary scope selection, mount/unmount, invariant enforcement |
+| `engine_runtime_state.go`, `engine_runtime_types.go`, `engine_time.go`, `engine_log_fields.go`, `engine_policy_controllers.go` | Engine runtime state, time helpers, structured logging, and policy controllers |
+| `permissions.go`, `permission_capability.go`, `permission_decisions.go`, `permission_handler.go` | Capability-based permission boundaries and denied-path policy |
+| `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, scope blocking, and scope key canonicalization |
+| `debug_event_sink.go` | Debug event recording for test and diagnostic observability |
+| `store.go`, `store_inspect.go`, `store_integrity.go`, `store_repair.go`, `store_types.go`, `schema.go`, `tx.go`, `db_repair.go` | Durable SQLite state: schema, transactions, integrity checks, inspection, and repair |
+| `store_read_*.go`, `store_write_*.go` | Store I/O: read projections (failures, remote state, snapshots) and write operations (baseline, failures, observation, scope blocks) |
+| `summary_keys.go`, `visible_issues.go`, `issue_types.go` | Shared issue classification, summary keys, and raw read-only issue facts consumed by the CLI |
+| `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |
 | `inotify_*`, `symlink_observation.go`, `engine_scoped_root.go` | Platform or feature-specific observation/runtime helpers |
 
 If you are debugging sync behavior, first decide which stage owns the problem:
@@ -546,9 +556,9 @@ The file-family split inside `internal/devtool` is also worth knowing:
 
 | File family | Role |
 | --- | --- |
-| `verify*.go` | Verification profile orchestration, docs checks, repo checks, E2E orchestration, summaries |
+| `verify.go`, `verify_docs.go`, `verify_e2e.go`, `verify_repo_checks.go`, `verify_stress.go`, `verify_summary.go` | Verification profile orchestration, docs checks, repo checks, E2E orchestration, stress profiles, summaries |
 | `worktree.go` | Worktree creation and bootstrap rooted at `origin/main`; callers must fetch first |
-| `bench*.go` | Benchmark scenarios and result recording |
+| `bench.go`, `bench_live.go` | Benchmark scenarios, result recording, and live benchmark runs against real accounts |
 | `state_audit.go` | Sync-state inspection and safe repair entrypoints |
 | `watch_capture.go` | Raw watch-event capture tooling |
 | `cleanup_audit.go` | Read-only git cleanup classification |
