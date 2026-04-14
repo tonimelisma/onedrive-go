@@ -384,8 +384,6 @@ func repoConsistencyDesignDocFixtures() []struct {
 			"- Error Boundary: CLI error rendering",
 		}, []string{
 			"Run `onedrive-go status`.",
-			"Run `onedrive-go --drive <id> resolve deletes` after reviewing held deletes.",
-			"Run `onedrive-go --drive <id> resolve local <target>` to queue a specific conflict choice.",
 			"Run 'onedrive-go --drive <id> recover' when the state DB is damaged.",
 		}),
 		{

@@ -18,9 +18,7 @@ import (
 func expectedGlobalSchemaKeys() []string {
 	return []string{
 		"check_workers",
-		"delete_safety_threshold",
 		"dry_run",
-		"ignore_marker",
 		"log_file",
 		"log_format",
 		"log_level",
@@ -28,11 +26,6 @@ func expectedGlobalSchemaKeys() []string {
 		"min_free_space",
 		"poll_interval",
 		"safety_scan_interval",
-		"skip_dirs",
-		"skip_dotfiles",
-		"skip_files",
-		"skip_symlinks",
-		"sync_paths",
 		"transfer_workers",
 		"use_local_trash",
 		"websocket",
@@ -42,15 +35,10 @@ func expectedGlobalSchemaKeys() []string {
 func expectedDriveSchemaKeys() []string {
 	return []string{
 		"display_name",
-		"ignore_marker",
 		"owner",
 		"paused",
 		"paused_until",
-		"skip_dirs",
-		"skip_dotfiles",
-		"skip_files",
 		"sync_dir",
-		"sync_paths",
 	}
 }
 

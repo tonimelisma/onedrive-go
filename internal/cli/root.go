@@ -415,7 +415,7 @@ func addRootSubcommands(cmd *cobra.Command) {
 		newSharedCmd(),
 		newDriveCmd(), newLsCmd(), newGetCmd(), newPutCmd(),
 		newRmCmd(), newMkdirCmd(), newStatCmd(), newSyncCmd(),
-		newPauseCmd(), newResumeCmd(), newResolveCmd(), newRecoverCmd(),
+		newPauseCmd(), newResumeCmd(), newRecoverCmd(),
 		newMvCmd(), newCpCmd(),
 		newRecycleBinCmd(),
 	)

@@ -5,8 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -149,7 +147,6 @@ func TestNewStatusCmd_Structure(t *testing.T) {
 	assert.Contains(t, cmd.Short, "sync status")
 	assert.Contains(t, cmd.Long, "same per-drive sync-health contract")
 	assert.Contains(t, cmd.Long, "--drive to filter")
-	assert.Contains(t, cmd.Long, "--history")
 	assert.Contains(t, cmd.Long, "--verbose")
 }
 
@@ -525,11 +522,6 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 		VALUES ('/test.txt', 'd!123', 'item1', 'root', 'file', 0)`)
 	require.NoError(t, err)
 
-	// Insert an unresolved conflict.
-	_, err = db.ExecContext(ctx, `INSERT INTO conflicts (id, path, drive_id, item_id, parent_id, item_type, conflict_type, resolution, detected_at)
-		VALUES ('c1', '/conflict.txt', 'd!123', 'item2', 'root', 'file', 'edit_edit', 'unresolved', 0)`)
-	require.NoError(t, err)
-
 	require.NoError(t, db.Close())
 
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
@@ -555,12 +547,12 @@ func TestQuerySyncState_RemoteDriftAndIssues(t *testing.T) {
 
 	ctx := t.Context()
 
-	// Insert remote_state rows with mixed drift/filter shapes.
-	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, drive_id, item_id, parent_id, item_type, observed_at, is_filtered) VALUES
-		('/a.txt', 'd!1', 'i1', 'root', 'file', 0, 0),
-		('/b.txt', 'd!1', 'i2', 'root', 'file', 0, 0),
-		('/c.txt', 'd!1', 'i3', 'root', 'file', 0, 0),
-		('/e.txt', 'd!1', 'i5', 'root', 'file', 0, 1)`)
+	// Insert remote_state rows with mixed drift shapes.
+	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, drive_id, item_id, parent_id, item_type, observed_at) VALUES
+		('/a.txt', 'd!1', 'i1', 'root', 'file', 1),
+		('/b.txt', 'd!1', 'i2', 'root', 'file', 1),
+		('/c.txt', 'd!1', 'i3', 'root', 'file', 1),
+		('/e.txt', 'd!1', 'i5', 'root', 'file', 1)`)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `INSERT INTO baseline (drive_id, item_id, path, parent_id, item_type, remote_hash, remote_mtime, synced_at) VALUES
 		('d!1', 'i1', '/a.txt', 'root', 'file', '', 0, 0),
@@ -578,7 +570,7 @@ func TestQuerySyncState_RemoteDriftAndIssues(t *testing.T) {
 
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
-	assert.Equal(t, 3, info.RemoteDrift) // remote-only creates plus one baseline row missing on remote
+	assert.Equal(t, 4, info.RemoteDrift) // three remote-only creates plus one baseline row missing on remote
 	assert.Equal(t, 1, info.IssueCount)  // 1 actionable failure
 	assert.Equal(t, 2, info.Retrying)    // 2 transient with failure_count >= 3
 }
@@ -599,10 +591,6 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 
 	ctx := t.Context()
 
-	_, err = db.ExecContext(ctx, `INSERT INTO conflicts (id, path, drive_id, item_id, parent_id, item_type, conflict_type, resolution, detected_at)
-		VALUES ('c1', '/conflict.txt', 'd!123', 'item2', 'root', 'file', 'edit_edit', 'unresolved', 0)`)
-	require.NoError(t, err)
-
 	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures
 		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
 		VALUES
@@ -621,68 +609,6 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 	assert.Equal(t, 4, info.IssueCount)
 }
 
-// Validates: R-2.3.6, R-2.3.12
-func TestQuerySyncState_DurableIntentCountsAndActionHints(t *testing.T) {
-	t.Parallel()
-
-	logger := slog.New(slog.DiscardHandler)
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	store, err := syncengine.NewSyncStore(t.Context(), dbPath, logger)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, store.Close(t.Context()))
-	}()
-
-	ctx := t.Context()
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO conflicts
-			(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
-		VALUES
-			('conflict-pending', 'd!1', 'item-1', '/pending.txt', 'edit_edit', 1, 'unresolved'),
-			('conflict-resolving', 'd!1', 'item-2', '/resolving.txt', 'edit_edit', 2, 'unresolved'),
-			('conflict-failed', 'd!1', 'item-3', '/failed.txt', 'edit_edit', 3, 'unresolved')`)
-	require.NoError(t, err)
-
-	require.NoError(t, store.UpsertHeldDeletes(ctx, []syncengine.HeldDeleteRecord{{
-		DriveID:       driveid.New("d!1"),
-		ActionType:    syncengine.ActionRemoteDelete,
-		Path:          "/delete-me.txt",
-		ItemID:        "item-delete",
-		State:         syncengine.HeldDeleteStateHeld,
-		HeldAt:        1,
-		LastPlannedAt: 1,
-	}}))
-	require.NoError(t, store.ApproveHeldDeletes(ctx))
-
-	queued, err := store.RequestConflictResolution(ctx, "conflict-pending", syncengine.ResolutionKeepLocal)
-	require.NoError(t, err)
-	assert.Equal(t, syncengine.ConflictRequestQueued, queued.Status)
-
-	resolving, err := store.RequestConflictResolution(ctx, "conflict-resolving", syncengine.ResolutionKeepRemote)
-	require.NoError(t, err)
-	assert.Equal(t, syncengine.ConflictRequestQueued, resolving.Status)
-	_, ok, err := store.ClaimConflictResolution(ctx, "conflict-resolving")
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	failed, err := store.RequestConflictResolution(ctx, "conflict-failed", syncengine.ResolutionKeepBoth)
-	require.NoError(t, err)
-	assert.Equal(t, syncengine.ConflictRequestQueued, failed.Status)
-	_, ok, err = store.ClaimConflictResolution(ctx, "conflict-failed")
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.NoError(t, store.MarkConflictResolutionFailed(ctx, "conflict-failed", assert.AnError))
-
-	info := querySyncState("personal:alice@example.com", dbPath, logger)
-	require.NotNil(t, info)
-	assert.Equal(t, 1, info.ApprovedDeletesWaiting)
-	assert.Equal(t, 2, info.QueuedConflictRequests)
-	assert.Equal(t, 1, info.ApplyingConflictRequests)
-	assert.Contains(t, info.NextActions, "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to execute approved deletes.")
-	assert.Contains(t, info.NextActions, "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.")
-	assert.Contains(t, info.NextActions, "wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.")
-}
-
 // Validates: R-6.10.5
 func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
 	t.Parallel()
@@ -693,9 +619,9 @@ func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
 	store, err := syncengine.NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
 
-	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO conflicts
-		(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
-		VALUES ('c1', 'd!1', 'item-1', '/conflict.txt', 'edit_edit', 1, 'unresolved')`)
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO baseline
+		(path, drive_id, item_id, parent_id, item_type, synced_at)
+		VALUES ('/tracked.txt', 'd!1', 'item-1', 'root', 'file', 1)`)
 	require.NoError(t, err)
 
 	walPath := dbPath + "-wal"
@@ -737,20 +663,15 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 
 	ctx := t.Context()
 
-	_, err = db.ExecContext(ctx, `INSERT INTO shortcuts
-		(item_id, remote_drive, remote_item, local_path, drive_type, observation, discovered_at)
-		VALUES ('shortcut-1', 'remote-drive', 'remote-item', 'Shared/Team Docs', 'business', 'delta', 1)`)
-	require.NoError(t, err)
-
 	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures
 		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
 		VALUES
 		('/invalid:name.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', ?, '', 1, 0, 0),
-		('/quota/a.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', ?, ?, 1, 0, 0),
-		('/quota/b.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', ?, ?, 1, 0, 0)`,
+		('/blocked/a.txt', 'd!1', 'upload', 'upload', 'held', 'transient', ?, ?, 1, 0, 0),
+		('/blocked/b.txt', 'd!1', 'upload', 'upload', 'held', 'transient', ?, ?, 1, 0, 0)`,
 		syncengine.IssueInvalidFilename,
-		syncengine.IssueQuotaExceeded, syncengine.SKQuotaShortcut("remote-drive:remote-item").String(),
-		syncengine.IssueQuotaExceeded, syncengine.SKQuotaShortcut("remote-drive:remote-item").String(),
+		syncengine.IssueSharedFolderBlocked, syncengine.SKPermRemote("Shared/Team Docs").String(),
+		syncengine.IssueSharedFolderBlocked, syncengine.SKPermRemote("Shared/Team Docs").String(),
 	)
 	require.NoError(t, err)
 
@@ -762,7 +683,7 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
 	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
-	quotaDescriptor := describeStatusSummary(syncengine.SummaryQuotaExceeded)
+	sharedDescriptor := describeStatusSummary(syncengine.SummarySharedFolderWritesBlocked)
 	authDescriptor := describeStatusSummary(syncengine.SummaryAuthenticationRequired)
 	assert.ElementsMatch(t, []failureGroupJSON{
 		{
@@ -775,15 +696,15 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 			Paths:      []string{"/invalid:name.txt"},
 		},
 		{
-			SummaryKey: string(syncengine.SummaryQuotaExceeded),
-			IssueType:  string(syncengine.IssueQuotaExceeded),
-			Title:      quotaDescriptor.Title,
-			Reason:     quotaDescriptor.Reason,
-			Action:     quotaDescriptor.Action,
+			SummaryKey: string(syncengine.SummarySharedFolderWritesBlocked),
+			IssueType:  string(syncengine.IssueSharedFolderBlocked),
+			Title:      sharedDescriptor.Title,
+			Reason:     sharedDescriptor.Reason,
+			Action:     sharedDescriptor.Action,
 			Count:      2,
-			ScopeKind:  "shortcut",
+			ScopeKind:  "directory",
 			Scope:      "Shared/Team Docs",
-			Paths:      []string{"/quota/a.txt", "/quota/b.txt"},
+			Paths:      []string{"/blocked/a.txt", "/blocked/b.txt"},
 		},
 		{
 			SummaryKey: string(syncengine.SummaryAuthenticationRequired),
@@ -820,14 +741,14 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 								SummaryKey: string(syncengine.SummaryQuotaExceeded),
 								Title:      "QUOTA EXCEEDED",
 								Count:      1,
-								ScopeKind:  "shortcut",
+								ScopeKind:  "drive",
 								Scope:      "Shared/Docs",
 							},
 							{
 								SummaryKey: string(syncengine.SummaryQuotaExceeded),
 								Title:      "QUOTA EXCEEDED",
 								Count:      1,
-								ScopeKind:  "shortcut",
+								ScopeKind:  "drive",
 								Scope:      "Shared/Design",
 							},
 						},
@@ -864,7 +785,7 @@ func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T)
 				Reason:     quotaDescriptor.Reason,
 				Action:     quotaDescriptor.Action,
 				Count:      1,
-				ScopeKind:  "shortcut",
+				ScopeKind:  "drive",
 				Scope:      "Shared/Docs",
 			},
 			{
@@ -874,7 +795,7 @@ func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T)
 				Reason:     quotaDescriptor.Reason,
 				Action:     quotaDescriptor.Action,
 				Count:      1,
-				ScopeKind:  "shortcut",
+				ScopeKind:  "drive",
 				Scope:      "Shared/Design",
 			},
 		},
@@ -990,7 +911,7 @@ func TestPrintStatusJSON_WithIssueGroups(t *testing.T) {
 								SummaryKey: string(syncengine.SummaryQuotaExceeded),
 								Title:      "QUOTA EXCEEDED",
 								Count:      1,
-								ScopeKind:  "shortcut",
+								ScopeKind:  "drive",
 								Scope:      "Shared/Team Docs",
 							},
 							{
@@ -1015,7 +936,7 @@ func TestPrintStatusJSON_WithIssueGroups(t *testing.T) {
 	require.Len(t, result.Accounts[0].Drives, 1)
 	require.NotNil(t, result.Accounts[0].Drives[0].SyncState)
 	require.Len(t, result.Accounts[0].Drives[0].SyncState.IssueGroups, 2)
-	assert.Equal(t, "shortcut", result.Accounts[0].Drives[0].SyncState.IssueGroups[0].ScopeKind)
+	assert.Equal(t, "drive", result.Accounts[0].Drives[0].SyncState.IssueGroups[0].ScopeKind)
 	assert.Equal(t, "Shared/Team Docs", result.Accounts[0].Drives[0].SyncState.IssueGroups[0].Scope)
 }
 
@@ -1193,79 +1114,6 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	assert.Contains(t, output, "3 issues")
 }
 
-func TestBuildSyncStateInfo_SamplesSectionsByDefault(t *testing.T) {
-	t.Parallel()
-
-	descriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
-	paths := []string{"/one", "/two", "/three", "/four", "/five", "/six", "/seven"}
-	deleteRows, conflicts, history := buildStatusSectionRows(paths, syncengine.ResolutionKeepRemote)
-
-	info := buildSyncStateInfo(
-		"personal:alice@example.com",
-		&syncengine.DriveStatusSnapshot{
-			IssueGroups: []syncengine.IssueGroupSnapshot{
-				{
-					SummaryKey:       syncengine.SummaryInvalidFilename,
-					PrimaryIssueType: string(syncengine.IssueInvalidFilename),
-					Count:            len(paths),
-					Paths:            paths,
-				},
-			},
-			DeleteSafety:    deleteRows,
-			Conflicts:       conflicts,
-			ConflictHistory: history,
-		},
-		driveStateStoreInfo{Status: stateStoreStatusHealthy},
-		false,
-		defaultVisiblePaths,
-	)
-
-	require.Len(t, info.IssueGroups, 1)
-	assert.Equal(t, descriptor.Action, info.IssueGroups[0].Action)
-	assert.Len(t, info.IssueGroups[0].Paths, defaultVisiblePaths)
-	assert.Len(t, info.DeleteSafety, defaultVisiblePaths)
-	assert.Len(t, info.Conflicts, defaultVisiblePaths)
-	assert.Len(t, info.ConflictHistory, defaultVisiblePaths)
-	assert.Equal(t, len(paths), info.DeleteSafetyTotal)
-	assert.Equal(t, len(paths), info.ConflictsTotal)
-	assert.Equal(t, len(paths), info.ConflictHistoryTotal)
-	assert.Equal(t, defaultVisiblePaths, info.ExamplesLimit)
-	assert.False(t, info.Verbose)
-}
-
-func TestBuildSyncStateInfo_VerboseExpandsSections(t *testing.T) {
-	t.Parallel()
-
-	paths := []string{"/one", "/two", "/three", "/four", "/five", "/six"}
-	deleteRows, conflicts, history := buildStatusSectionRows(paths, syncengine.ResolutionKeepBoth)
-
-	info := buildSyncStateInfo(
-		"personal:alice@example.com",
-		&syncengine.DriveStatusSnapshot{
-			IssueGroups: []syncengine.IssueGroupSnapshot{
-				{
-					SummaryKey:       syncengine.SummaryInvalidFilename,
-					PrimaryIssueType: string(syncengine.IssueInvalidFilename),
-					Count:            len(paths),
-					Paths:            paths,
-				},
-			},
-			DeleteSafety:    deleteRows,
-			Conflicts:       conflicts,
-			ConflictHistory: history,
-		},
-		driveStateStoreInfo{Status: stateStoreStatusHealthy},
-		true,
-		defaultVisiblePaths,
-	)
-
-	assert.Len(t, info.IssueGroups[0].Paths, len(paths))
-	assert.Len(t, info.DeleteSafety, len(paths))
-	assert.Len(t, info.Conflicts, len(paths))
-	assert.Len(t, info.ConflictHistory, len(paths))
-	assert.True(t, info.Verbose)
-}
-
 func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 	t.Parallel()
 
@@ -1323,7 +1171,7 @@ func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
 				Reason:     quotaDescriptor.Reason,
 				Action:     quotaDescriptor.Action,
 				Count:      1,
-				ScopeKind:  "shortcut",
+				ScopeKind:  "drive",
 				Scope:      "Shared/Team Docs",
 				Paths:      []string{"/quota/a.txt"},
 			},
@@ -1352,173 +1200,6 @@ func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, printSyncStateText(&buf, ss, false))
 	requireGoldenText(t, "status_sync_state_with_issue_groups.golden", buf.String())
-}
-
-// Validates: R-2.3.6, R-2.3.12
-func TestPrintSyncStateText_WithDurableIntentCountsAndHints(t *testing.T) {
-	t.Parallel()
-
-	ss := &syncStateInfo{
-		StateStoreStatus:         stateStoreStatusHealthy,
-		DeleteSafetyTotal:        1,
-		ApprovedDeletesWaiting:   1,
-		QueuedConflictRequests:   1,
-		ApplyingConflictRequests: 1,
-		DeleteSafety: []deleteSafetyJSON{
-			{
-				Path:       "/approved-delete.txt",
-				State:      stateHeldDeleteApproved,
-				ActionHint: "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to execute approved deletes.",
-			},
-		},
-		ConflictsTotal: 2,
-		Conflicts: []statusConflictJSON{
-			{
-				Path:                "/queued-conflict.txt",
-				ConflictType:        "edit_edit",
-				State:               syncengine.ConflictStateQueued,
-				RequestedResolution: syncengine.ResolutionKeepLocal,
-				ActionHint:          "run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.",
-			},
-			{
-				Path:                "/applying-conflict.txt",
-				ConflictType:        "edit_delete",
-				State:               syncengine.ConflictStateApplying,
-				RequestedResolution: syncengine.ResolutionKeepRemote,
-				ActionHint:          "wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.",
-			},
-		},
-	}
-
-	var buf bytes.Buffer
-	require.NoError(t, printSyncStateText(&buf, ss, false))
-
-	output := buf.String()
-	assert.Contains(t, output, "Approved deletes waiting: 1")
-	assert.Contains(t, output, "/approved-delete.txt")
-	assert.Contains(t, output, "Queued conflict resolutions: 1")
-	assert.Contains(t, output, "Applying conflicts: 1")
-	assert.Contains(t, output, "Next: run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to execute approved deletes.")
-	assert.Contains(t, output, "Next: run `onedrive-go --drive personal:alice@example.com sync` or start `onedrive-go --drive personal:alice@example.com sync --watch` to apply queued resolutions.")
-	assert.Contains(t, output, "Next: wait for the active sync owner to finish, then run `onedrive-go --drive personal:alice@example.com status` again if needed.")
-}
-
-func TestStatusCommand_FilteredDriveText(t *testing.T) {
-	cfgPath, cid := seedDriveStatusFixture(t)
-
-	var out bytes.Buffer
-	cc := newCommandContext(&out, cfgPath)
-	cc.Flags.Drive = []string{cid.String()}
-
-	require.NoError(t, runStatusCommand(cc, true))
-
-	output := out.String()
-	assert.Contains(t, output, "ISSUES")
-	assert.Contains(t, output, "INVALID FILENAME")
-	assert.Contains(t, output, "/bad:name.txt")
-	assert.Contains(t, output, "DELETE SAFETY")
-	assert.Contains(t, output, "Held deletes requiring approval: 1")
-	assert.Contains(t, output, "/held-delete.txt")
-	assert.Contains(t, output, "Next: run `onedrive-go --drive "+cid.String()+" resolve deletes`.")
-	assert.Contains(t, output, "Approved deletes waiting for sync: 1")
-	assert.Contains(t, output, "/approved-delete.txt")
-	assert.Contains(t, output, "Next: run `onedrive-go --drive "+cid.String()+" sync` or start `onedrive-go --drive "+cid.String()+" sync --watch` to execute approved deletes.")
-	assert.Contains(t, output, "CONFLICTS")
-	assert.Contains(t, output, "/needs-choice.txt [edit_edit]")
-	assert.Contains(t, output, "Decision: needed")
-	assert.Contains(t, output, "Next: run `onedrive-go --drive "+cid.String()+" resolve local '/needs-choice.txt'` or replace `local` with `remote` or `both`.")
-	assert.Contains(t, output, "/queued-conflict.txt [edit_edit]")
-	assert.Contains(t, output, "Decision: keep_local (queued)")
-	assert.Contains(t, output, "Last attempt: temporary upload failure")
-	assert.Contains(t, output, "Next: run `onedrive-go --drive "+cid.String()+" sync` or start `onedrive-go --drive "+cid.String()+" sync --watch` to apply queued resolutions.")
-	assert.Contains(t, output, "/applying-conflict.txt [edit_delete]")
-	assert.Contains(t, output, "Decision: keep_remote (applying)")
-	assert.Contains(t, output, "Next: wait for the active sync owner to finish, then run `onedrive-go --drive "+cid.String()+" status` again if needed.")
-	assert.Contains(t, output, "CONFLICT HISTORY")
-	assert.Contains(t, output, "/resolved-conflict.txt [create_create]")
-	assert.Contains(t, output, "Resolved: keep_both by user")
-	assert.Contains(t, output, "State DB:")
-	assert.Contains(t, output, "healthy")
-}
-
-func TestStatusCommand_FilteredDriveJSON(t *testing.T) {
-	cfgPath, cid := seedDriveStatusFixture(t)
-
-	var out bytes.Buffer
-	cc := newCommandContext(&out, cfgPath)
-	cc.Flags.Drive = []string{cid.String()}
-	cc.Flags.JSON = true
-
-	require.NoError(t, runStatusCommand(cc, true))
-
-	var decoded statusOutput
-	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
-	drive, syncState := requireSingleStatusDriveJSON(t, decoded, cid.String())
-	assert.Equal(t, cid.String(), drive.CanonicalID)
-	require.NotNil(t, syncState)
-	assert.Equal(t, stateStoreStatusHealthy, syncState.StateStoreStatus)
-	assert.Equal(t, defaultVisiblePaths, syncState.ExamplesLimit)
-	assert.False(t, syncState.Verbose)
-	assert.Len(t, syncState.IssueGroups, 1)
-	assert.Equal(t, 2, syncState.DeleteSafetyTotal)
-	assert.Len(t, syncState.DeleteSafety, 2)
-	assert.Equal(t, 3, syncState.ConflictsTotal)
-	assert.Len(t, syncState.Conflicts, 3)
-	assert.Equal(t, 1, syncState.ConflictHistoryTotal)
-	assert.Len(t, syncState.ConflictHistory, 1)
-	assertStatusNextActions(t, syncState, cid.String())
-	assertStatusDeleteSafetyActionHints(t, syncState, cid.String())
-	assertStatusConflictActionHints(t, syncState, cid.String())
-}
-
-func TestStatusCommand_AllDrivesJSON_FilteredDriveIsSubset(t *testing.T) {
-	cfgPath, cids := seedMultiDriveStatusFixture(t, false)
-	selected := cids[0]
-
-	var allOut bytes.Buffer
-	allCtx := newCommandContext(&allOut, cfgPath)
-	allCtx.Flags.JSON = true
-	require.NoError(t, runStatusCommand(allCtx, false))
-
-	var filteredOut bytes.Buffer
-	filteredCtx := newCommandContext(&filteredOut, cfgPath)
-	filteredCtx.Flags.JSON = true
-	filteredCtx.Flags.Drive = []string{selected.String()}
-	require.NoError(t, runStatusCommand(filteredCtx, false))
-
-	var allDecoded statusOutput
-	require.NoError(t, json.Unmarshal(allOut.Bytes(), &allDecoded))
-	var filteredDecoded statusOutput
-	require.NoError(t, json.Unmarshal(filteredOut.Bytes(), &filteredDecoded))
-
-	assert.Equal(t, 2, allDecoded.Summary.TotalDrives)
-	assert.Equal(t, 1, filteredDecoded.Summary.TotalDrives)
-
-	allDrive, allSyncState := findStatusDriveJSON(t, allDecoded, selected.String())
-	filteredDrive, filteredSyncState := requireSingleStatusDriveJSON(t, filteredDecoded, selected.String())
-	assert.Equal(t, allDrive, filteredDrive)
-	require.NotNil(t, allSyncState)
-	require.NotNil(t, filteredSyncState)
-	assert.Equal(t, *allSyncState, *filteredSyncState)
-}
-
-func TestStatusCommand_HistoryIncludesAllDisplayedDrives(t *testing.T) {
-	cfgPath, cids := seedMultiDriveStatusFixture(t, true)
-
-	var out bytes.Buffer
-	cc := newCommandContext(&out, cfgPath)
-	cc.Flags.JSON = true
-	require.NoError(t, runStatusCommand(cc, true))
-
-	var decoded statusOutput
-	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
-	assert.Equal(t, len(cids), decoded.Summary.TotalDrives)
-
-	for i := range cids {
-		_, syncState := findStatusDriveJSON(t, decoded, cids[i].String())
-		require.NotNil(t, syncState)
-		require.Len(t, syncState.ConflictHistory, 1)
-	}
 }
 
 func requireSingleStatusDriveJSON(
@@ -1558,71 +1239,6 @@ func findStatusDriveJSON(
 	return foundDrive, foundDrive.SyncState
 }
 
-func assertStatusNextActions(t *testing.T, decoded *syncStateInfo, canonicalID string) {
-	t.Helper()
-
-	assert.Contains(t, decoded.NextActions, "run `onedrive-go --drive "+canonicalID+" resolve deletes`.")
-	assert.Contains(t, decoded.NextActions, "run `onedrive-go --drive "+canonicalID+" sync` or start `onedrive-go --drive "+canonicalID+" sync --watch` to execute approved deletes.")
-	assert.Contains(t, decoded.NextActions, "run `onedrive-go --drive "+canonicalID+" resolve local '/needs-choice.txt'` or replace `local` with `remote` or `both`.")
-	assert.Contains(t, decoded.NextActions, "run `onedrive-go --drive "+canonicalID+" sync` or start `onedrive-go --drive "+canonicalID+" sync --watch` to apply queued resolutions.")
-	assert.Contains(t, decoded.NextActions, "wait for the active sync owner to finish, then run `onedrive-go --drive "+canonicalID+" status` again if needed.")
-}
-
-func assertStatusDeleteSafetyActionHints(t *testing.T, decoded *syncStateInfo, canonicalID string) {
-	t.Helper()
-
-	var (
-		heldSeen     bool
-		approvedSeen bool
-	)
-	for _, row := range decoded.DeleteSafety {
-		switch row.Path {
-		case "/held-delete.txt":
-			heldSeen = true
-			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" resolve deletes`.", row.ActionHint)
-		case "/approved-delete.txt":
-			approvedSeen = true
-			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" sync` or start `onedrive-go --drive "+canonicalID+" sync --watch` to execute approved deletes.", row.ActionHint)
-		}
-	}
-	assert.True(t, heldSeen)
-	assert.True(t, approvedSeen)
-}
-
-func assertStatusConflictActionHints(t *testing.T, decoded *syncStateInfo, canonicalID string) {
-	t.Helper()
-
-	var (
-		queuedFound    bool
-		applyingFound  bool
-		unresolvedSeen bool
-	)
-	for i := range decoded.Conflicts {
-		conflict := decoded.Conflicts[i]
-		switch conflict.Path {
-		case "/queued-conflict.txt":
-			queuedFound = true
-			assert.Equal(t, syncengine.ConflictStateQueued, conflict.State)
-			assert.Equal(t, syncengine.ResolutionKeepLocal, conflict.RequestedResolution)
-			assert.Equal(t, "temporary upload failure", conflict.LastRequestError)
-			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" sync` or start `onedrive-go --drive "+canonicalID+" sync --watch` to apply queued resolutions.", conflict.ActionHint)
-		case "/applying-conflict.txt":
-			applyingFound = true
-			assert.Equal(t, syncengine.ConflictStateApplying, conflict.State)
-			assert.Equal(t, syncengine.ResolutionKeepRemote, conflict.RequestedResolution)
-			assert.Equal(t, "wait for the active sync owner to finish, then run `onedrive-go --drive "+canonicalID+" status` again if needed.", conflict.ActionHint)
-		case "/needs-choice.txt":
-			unresolvedSeen = true
-			assert.Equal(t, syncengine.ConflictStateUnresolved, conflict.State)
-			assert.Empty(t, conflict.RequestedResolution)
-			assert.Equal(t, "run `onedrive-go --drive "+canonicalID+" resolve local '/needs-choice.txt'` or replace `local` with `remote` or `both`.", conflict.ActionHint)
-		}
-	}
-	assert.True(t, queuedFound)
-	assert.True(t, applyingFound)
-	assert.True(t, unresolvedSeen)
-}
-
 func TestStatusCommand_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -1646,7 +1262,6 @@ func TestStatusCommand_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
 	assert.Equal(t, stateStoreStatusDamaged, syncState.StateStoreStatus)
 	assert.NotEmpty(t, syncState.StateStoreError)
 	assert.Equal(t, recoverHintForDrive(cid.String()), syncState.StateStoreRecoveryHint)
-	assert.Contains(t, syncState.NextActions, recoverHintForDrive(cid.String()))
 }
 
 func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
@@ -1664,162 +1279,6 @@ func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
 	s := computeSummary(accounts)
 	assert.Equal(t, 5, s.TotalRemoteDrift)
 	assert.Equal(t, 5, s.TotalRetrying)
-}
-
-func seedDriveStatusFixture(t *testing.T) (string, driveid.CanonicalID) {
-	t.Helper()
-
-	setTestDriveHome(t)
-
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	cid := driveid.MustCanonicalID("personal:detailed@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
-
-	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-
-	ctx := t.Context()
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO sync_metadata (key, value)
-		VALUES
-			('last_sync_time', '2026-04-03T10:30:00Z'),
-			('last_sync_duration_ms', '1500');
-
-		INSERT INTO baseline
-			(drive_id, item_id, path, parent_id, item_type, local_hash, remote_hash,
-			 local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
-		VALUES
-			('d!1', 'baseline-1', '/tracked.txt', 'root', 'file', 'lh', 'rh', 1, 1, 1, 1, 1, 'etag-1');
-
-		INSERT INTO remote_state
-			(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag, is_filtered,
-			 filter_generation, filter_reason, observed_at)
-		VALUES
-			('d!1', 'remote-pending', '/pending.txt', 'root', 'file', 'rh-p', 5, 1, 'etag-p', 0, 0, '', 2),
-			('d!1', 'remote-synced', '/synced.txt', 'root', 'file', 'rh-s', 5, 1, 'etag-s', 0, 0, '', 2);
-
-		INSERT INTO sync_failures
-			(path, drive_id, direction, action_type, category, failure_role, issue_type, item_id,
-			 failure_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at,
-			 file_size, local_hash, scope_key)
-		VALUES
-			('/bad:name.txt', 'd!1', 'upload', 'upload', 'actionable', 'item', 'invalid_filename',
-			 'bad-item', 1, NULL, 'bad filename', NULL, 1, 2, NULL, NULL, '');
-
-		INSERT INTO held_deletes
-			(drive_id, action_type, path, item_id, state, held_at, approved_at, last_planned_at, last_error)
-		VALUES
-			('d!1', 'remote_delete', '/held-delete.txt', 'held-item', 'held', 1, NULL, 2, ''),
-			('d!1', 'remote_delete', '/approved-delete.txt', 'approved-item', 'approved', 1, 3, 2, '');
-
-		INSERT INTO conflicts
-			(id, drive_id, item_id, path, conflict_type, detected_at, resolution,
-			 local_hash, remote_hash, local_mtime, remote_mtime, resolved_at, resolved_by)
-		VALUES
-			('conflict-needs-choice', 'd!1', 'item-choice', '/needs-choice.txt', 'edit_edit', 10, 'unresolved', 'lh1', 'rh1', 1, 1, NULL, NULL),
-			('conflict-queued', 'd!1', 'item-queued', '/queued-conflict.txt', 'edit_edit', 20, 'unresolved', 'lh2', 'rh2', 2, 2, NULL, NULL),
-			('conflict-applying', 'd!1', 'item-applying', '/applying-conflict.txt', 'edit_delete', 30, 'unresolved', 'lh3', 'rh3', 3, 3, NULL, NULL),
-			('conflict-resolved', 'd!1', 'item-resolved', '/resolved-conflict.txt', 'create_create', 40, 'keep_both', 'lh4', 'rh4', 4, 4, 50, 'user');`)
-	require.NoError(t, err)
-
-	result, err := store.RequestConflictResolution(ctx, "conflict-queued", syncengine.ResolutionKeepLocal)
-	require.NoError(t, err)
-	assert.Equal(t, syncengine.ConflictRequestQueued, result.Status)
-	_, ok, err := store.ClaimConflictResolution(ctx, "conflict-queued")
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.NoError(t, store.MarkConflictResolutionFailed(ctx, "conflict-queued", errors.New("temporary upload failure")))
-
-	result, err = store.RequestConflictResolution(ctx, "conflict-applying", syncengine.ResolutionKeepRemote)
-	require.NoError(t, err)
-	assert.Equal(t, syncengine.ConflictRequestQueued, result.Status)
-	_, ok, err = store.ClaimConflictResolution(ctx, "conflict-applying")
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.NoError(t, store.Close(context.Background()))
-
-	return cfgPath, cid
-}
-
-func seedMultiDriveStatusFixture(t *testing.T, withHistory bool) (string, []driveid.CanonicalID) {
-	t.Helper()
-
-	setTestDriveHome(t)
-
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	cids := []driveid.CanonicalID{
-		driveid.MustCanonicalID("personal:first@example.com"),
-		driveid.MustCanonicalID("business:second@example.com"),
-	}
-
-	for i := range cids {
-		require.NoError(t, config.AppendDriveSection(cfgPath, cids[i], filepath.Join("~", fmt.Sprintf("Drive%d", i+1))))
-		store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cids[i]), slog.New(slog.DiscardHandler))
-		require.NoError(t, err)
-
-		_, err = store.DB().ExecContext(t.Context(), `
-			INSERT INTO sync_metadata (key, value)
-			VALUES ('last_sync_time', ?);
-
-			INSERT INTO baseline
-				(drive_id, item_id, path, parent_id, item_type, local_hash, remote_hash,
-				 local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
-			VALUES
-				('d!1', ?, '/tracked.txt', 'root', 'file', 'lh', 'rh', 1, 1, 1, 1, 1, 'etag-1');`,
-			fmt.Sprintf("2026-04-0%dT10:30:00Z", i+1),
-			fmt.Sprintf("baseline-%d", i+1),
-		)
-		require.NoError(t, err)
-
-		if withHistory {
-			_, err = store.DB().ExecContext(t.Context(), `
-				INSERT INTO conflicts
-					(id, drive_id, item_id, path, conflict_type, detected_at, resolution, resolved_at, resolved_by)
-				VALUES
-					(?, 'd!1', ?, ?, 'edit_edit', 10, 'keep_remote', 20, 'user')`,
-				fmt.Sprintf("resolved-%d", i+1),
-				fmt.Sprintf("item-%d", i+1),
-				fmt.Sprintf("/resolved-%d.txt", i+1),
-			)
-			require.NoError(t, err)
-		}
-
-		require.NoError(t, store.Close(context.Background()))
-	}
-
-	return cfgPath, cids
-}
-
-func buildStatusSectionRows(
-	paths []string,
-	resolution string,
-) ([]syncengine.DeleteSafetySnapshot, []syncengine.ConflictStatusSnapshot, []syncengine.ConflictHistorySnapshot) {
-	deleteRows := make([]syncengine.DeleteSafetySnapshot, 0, len(paths))
-	conflicts := make([]syncengine.ConflictStatusSnapshot, 0, len(paths))
-	history := make([]syncengine.ConflictHistorySnapshot, 0, len(paths))
-	for i := range paths {
-		deleteRows = append(deleteRows, syncengine.DeleteSafetySnapshot{
-			Path:       paths[i],
-			State:      stateHeldDeleteHeld,
-			LastSeenAt: int64(i + 1),
-		})
-		conflicts = append(conflicts, syncengine.ConflictStatusSnapshot{
-			ID:           fmt.Sprintf("conflict-%d", i),
-			Path:         paths[i],
-			ConflictType: "edit_edit",
-			DetectedAt:   int64(i + 1),
-		})
-		history = append(history, syncengine.ConflictHistorySnapshot{
-			ID:           fmt.Sprintf("resolved-%d", i),
-			Path:         paths[i],
-			ConflictType: "edit_edit",
-			DetectedAt:   int64(i + 1),
-			Resolution:   resolution,
-			ResolvedAt:   int64(i + 10),
-		})
-	}
-
-	return deleteRows, conflicts, history
 }
 
 // createTestStateDB creates a minimal SQLite DB with tables matching the sync schema.
@@ -1848,48 +1307,23 @@ const statusTestStateSchema = `
 			remote_mtime INTEGER,
 			synced_at INTEGER NOT NULL
 		);
-		CREATE TABLE IF NOT EXISTS conflicts (
-			id TEXT PRIMARY KEY,
-			path TEXT NOT NULL,
-			drive_id TEXT NOT NULL,
-			item_id TEXT NOT NULL,
-			parent_id TEXT NOT NULL,
-			item_type TEXT NOT NULL,
-			conflict_type TEXT NOT NULL,
-			resolution TEXT NOT NULL DEFAULT 'unresolved',
-			state TEXT NOT NULL DEFAULT 'unresolved',
-			requested_resolution TEXT,
-			requested_at INTEGER,
-			resolving_at INTEGER,
-			resolution_error TEXT,
-			detected_at INTEGER NOT NULL,
-			local_hash TEXT,
-			local_mtime INTEGER,
-			resolved_at INTEGER,
-			resolved_by TEXT,
-			size INTEGER,
-			remote_hash TEXT,
-			mtime INTEGER,
-			remote_mtime INTEGER
-		);
 		CREATE TABLE IF NOT EXISTS sync_metadata (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS remote_state (
-			path TEXT PRIMARY KEY,
 			drive_id TEXT NOT NULL,
 			item_id TEXT NOT NULL,
+			path TEXT NOT NULL,
 			parent_id TEXT NOT NULL,
 			item_type TEXT NOT NULL,
-			is_filtered INTEGER NOT NULL DEFAULT 0 CHECK(is_filtered IN (0, 1)),
 			size INTEGER,
 			hash TEXT,
 			mtime INTEGER,
 			etag TEXT,
-			filter_generation INTEGER NOT NULL DEFAULT 0,
-			filter_reason TEXT NOT NULL DEFAULT '',
-			observed_at INTEGER NOT NULL DEFAULT 0
+			previous_path TEXT,
+			observed_at INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (drive_id, item_id)
 		);
 		CREATE TABLE IF NOT EXISTS sync_failures (
 			path TEXT NOT NULL,
@@ -1911,18 +1345,6 @@ const statusTestStateSchema = `
 			scope_key TEXT,
 			PRIMARY KEY (path, drive_id)
 		);
-		CREATE TABLE IF NOT EXISTS held_deletes (
-			drive_id TEXT NOT NULL,
-			action_type TEXT NOT NULL,
-			path TEXT NOT NULL,
-			item_id TEXT NOT NULL CHECK(item_id <> ''),
-			state TEXT NOT NULL,
-			held_at INTEGER NOT NULL,
-			approved_at INTEGER,
-			last_planned_at INTEGER NOT NULL,
-			last_error TEXT,
-			PRIMARY KEY (drive_id, action_type, path, item_id)
-		);
 		CREATE TABLE IF NOT EXISTS scope_blocks (
 			scope_key TEXT PRIMARY KEY,
 			issue_type TEXT NOT NULL,
@@ -1932,15 +1354,5 @@ const statusTestStateSchema = `
 			next_trial_at INTEGER NOT NULL,
 			preserve_until INTEGER NOT NULL,
 			trial_count INTEGER NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS shortcuts (
-			item_id TEXT PRIMARY KEY,
-			remote_drive TEXT NOT NULL,
-			remote_item TEXT NOT NULL,
-			local_path TEXT NOT NULL,
-			drive_type TEXT NOT NULL DEFAULT '',
-			observation TEXT NOT NULL DEFAULT 'unknown',
-			read_only INTEGER NOT NULL DEFAULT 0,
-			discovered_at INTEGER NOT NULL
 		);
 	`

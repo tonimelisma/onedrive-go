@@ -17,6 +17,13 @@ Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [veri
 - Mutable Runtime Owner: None. Identity values are pure value types and CLI-local state is invocation-scoped.
 - Error Boundary: Parsing and matching errors stop at the CLI/config boundary; identity types do not translate transport or filesystem failures.
 
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| Canonical drive IDs remain the single typed identity format for personal, business, SharePoint, and shared drives. | `internal/driveid/canonical_test.go`, `internal/driveid/id_test.go`, `internal/driveid/itemkey_test.go` |
+| CLI drive rendering and matching continue to derive display/match behavior from canonical identity rather than ad hoc strings. | `TestBuildConfiguredDriveEntries_OneDrive_WithSyncDir`, `TestPrintDriveListText_SharedDrive`, `TestDriveListEntry_SharedFieldsJSON` |
+
 ## Canonical Drive ID
 
 Format: `type:email[:site:library]` or `shared:email:sourceDriveID:sourceItemID`.

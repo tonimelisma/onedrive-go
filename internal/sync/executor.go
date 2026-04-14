@@ -606,9 +606,9 @@ func (e *Executor) ResolveParentID(relPath string) (string, error) {
 }
 
 // resolveDriveID returns the action's DriveID when present. Brand-new local
-// items under shortcut subtrees still arrive with a zero action DriveID, so
-// inherit the parent folder's baseline drive before falling back to the
-// executor's configured default drive.
+// items can still arrive with a zero action DriveID, so inherit the parent
+// folder's baseline drive before falling back to the executor's configured
+// default drive.
 func (e *Executor) resolveDriveID(action *Action) driveid.ID {
 	if !action.DriveID.IsZero() {
 		return action.DriveID

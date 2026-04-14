@@ -28,7 +28,7 @@ func Root() CommandSpec {
 			command("login", boolFlag("browser")),
 			command("logout", boolFlag("purge")),
 			command("whoami"),
-			command("status", boolFlag("history"), boolFlag("perf")),
+			command("status", boolFlag("perf")),
 			command("shared"),
 			command("ls"),
 			command("get"),
@@ -64,16 +64,6 @@ func Root() CommandSpec {
 					command("add"),
 					command("remove", boolFlag("purge")),
 					command("search"),
-				},
-			},
-			{
-				Name:     "resolve",
-				Runnable: false,
-				Subcommands: []CommandSpec{
-					command("deletes"),
-					command("local", boolFlag("all"), boolFlag("dry-run")),
-					command("remote", boolFlag("all"), boolFlag("dry-run")),
-					command("both", boolFlag("all"), boolFlag("dry-run")),
 				},
 			},
 			{

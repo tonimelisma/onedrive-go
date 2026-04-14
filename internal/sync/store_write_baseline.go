@@ -1,4 +1,4 @@
-// Package sync persists sync baseline, observation, conflict, failure, and scope state.
+// Package sync persists sync baseline, observation, failure, and scope state.
 //
 // Contents:
 //   - Load:                    read baseline table into memory
@@ -16,7 +16,6 @@
 //   - commitUpsert:            INSERT/UPDATE baseline for download/upload/create
 //   - commitDelete:            DELETE baseline for delete/cleanup
 //   - commitMove:              UPDATE path for move outcomes
-//   - commitConflict:          INSERT conflict record
 //   - updateRemoteStateOnOutcome: update remote_state in same transaction
 //   - CheckCacheConsistency:   verify in-memory cache matches DB
 //
@@ -30,8 +29,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-
-	"github.com/google/uuid"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -63,12 +60,6 @@ const (
 
 	sqlDeleteBaseline = `DELETE FROM baseline WHERE path = ?`
 
-	sqlInsertConflict = `INSERT INTO conflicts
-		(id, drive_id, item_id, path, conflict_type, detected_at,
-		 local_hash, remote_hash, local_mtime, remote_mtime,
-		 resolution, resolved_at, resolved_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-
 	sqlUpsertDeltaCursor = `INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, cursor, updated_at)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(drive_id, scope_id) DO UPDATE SET
@@ -96,7 +87,6 @@ const (
 	baselineMutationUpsert baselineMutationKind = iota
 	baselineMutationDelete
 	baselineMutationMove
-	baselineMutationConflict
 )
 
 // Load reads the entire baseline table into memory, populating ByPath and
@@ -200,7 +190,7 @@ func scanBaselineRow(rows *sql.Rows) (*BaselineEntry, error) {
 
 // GetDeltaToken returns the saved delta token for a drive and scope, or empty
 // string if no token has been saved yet. Use scopeID="" for the primary
-// drive-level delta; use a remoteItem.id for shortcut-scoped deltas.
+// drive-level delta; use a remote root item ID for scoped-root deltas.
 func (m *SyncStore) GetDeltaToken(ctx context.Context, driveID, scopeID string) (string, error) {
 	var token string
 
@@ -336,14 +326,12 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 
 func classifyBaselineMutation(action ActionType) (baselineMutationKind, error) {
 	switch action {
-	case ActionDownload, ActionUpload, ActionFolderCreate, ActionUpdateSynced:
+	case ActionDownload, ActionUpload, ActionFolderCreate, ActionConflict, ActionUpdateSynced:
 		return baselineMutationUpsert, nil
 	case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
 		return baselineMutationDelete, nil
 	case ActionLocalMove, ActionRemoteMove:
 		return baselineMutationMove, nil
-	case ActionConflict:
-		return baselineMutationConflict, nil
 	default:
 		return 0, fmt.Errorf("sync: classifying baseline mutation for %s: unknown action type", action.String())
 	}
@@ -363,8 +351,6 @@ func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutatio
 		err = commitDelete(ctx, tx, o.Path)
 	case baselineMutationMove:
 		err = commitMove(ctx, tx, o, syncedAt)
-	case baselineMutationConflict:
-		err = commitConflict(ctx, tx, o, syncedAt)
 	}
 
 	if err != nil {
@@ -401,14 +387,6 @@ func (m *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation
 	case baselineMutationMove:
 		m.baseline.Delete(o.OldPath)
 		m.baseline.Put(mutationToEntry(o, syncedAt))
-	case baselineMutationConflict:
-		if o.ResolvedBy == ResolvedByAuto {
-			m.baseline.Put(mutationToEntry(o, syncedAt))
-		} else if o.ConflictType == ConflictEditDelete {
-			// Unresolved edit-delete conflict from local delete: the original file
-			// is gone (renamed to conflict copy), so remove the baseline entry.
-			m.baseline.Delete(o.Path)
-		}
 	}
 
 	return nil
@@ -474,7 +452,7 @@ func mutationFromActionOutcome(o *ActionOutcome) *BaselineMutation {
 // CommitDeltaToken persists a delta token in its own transaction, separate
 // from baseline updates. Used after all actions in a pass complete.
 // Use scopeID="" and scopeDrive=driveID for the primary drive-level delta.
-// For shortcut-scoped deltas, scopeID=remoteItem.id and scopeDrive=remoteItem.driveId.
+// For scoped-root deltas, scopeID=remoteRootItemID and scopeDrive=remoteDriveID.
 func (m *SyncStore) CommitDeltaToken(ctx context.Context, token, driveID, scopeID, scopeDrive string) (err error) {
 	if token == "" {
 		return nil
@@ -506,7 +484,6 @@ func (m *SyncStore) CommitDeltaToken(ctx context.Context, token, driveID, scopeI
 }
 
 // DeleteDeltaToken removes a delta token for a specific drive and scope.
-// Used when a shortcut is removed to clean up its scoped delta token.
 func (m *SyncStore) DeleteDeltaToken(ctx context.Context, driveID, scopeID string) error {
 	_, err := m.db.ExecContext(ctx,
 		`DELETE FROM delta_tokens WHERE drive_id = ? AND scope_id = ?`,
@@ -587,55 +564,6 @@ func commitMove(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, synced
 	return commitUpsert(ctx, tx, o, syncedAt)
 }
 
-// commitConflict inserts a conflict record. Auto-resolved conflicts
-// (ActionOutcome.ResolvedBy == ResolvedByAuto) are inserted as already resolved, and
-// the baseline is updated (the upload created a new remote item).
-func commitConflict(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
-	conflictID := uuid.New().String()
-
-	resolution := ResolutionUnresolved
-	var resolvedAt sql.NullInt64
-	var resolvedBy sql.NullString
-
-	if o.ResolvedBy == ResolvedByAuto {
-		resolution = ResolutionKeepLocal
-		resolvedAt = sql.NullInt64{Int64: syncedAt, Valid: true}
-		resolvedBy = sql.NullString{String: ResolvedByAuto, Valid: true}
-	}
-
-	_, err := tx.ExecContext(ctx, sqlInsertConflict,
-		conflictID, o.DriveID,
-		nullString(o.ItemID),
-		o.Path, o.ConflictType, syncedAt,
-		nullString(o.LocalHash),
-		nullString(o.RemoteHash),
-		nullOptionalInt64(o.LocalMtime),
-		nullOptionalInt64(o.RemoteMtime),
-		resolution, resolvedAt, resolvedBy,
-	)
-	if err != nil {
-		return fmt.Errorf("sync: inserting conflict for %s: %w", o.Path, err)
-	}
-
-	// Auto-resolved conflicts also update the baseline (the upload created
-	// a new remote item that should be tracked).
-	if o.ResolvedBy == ResolvedByAuto {
-		if upsertErr := commitUpsert(ctx, tx, o, syncedAt); upsertErr != nil {
-			return upsertErr
-		}
-	}
-
-	// Unresolved edit-delete conflict from local delete: the original file is
-	// gone (renamed to conflict copy), so remove the baseline entry (B-133).
-	if o.ResolvedBy == "" && o.ConflictType == ConflictEditDelete {
-		if delErr := commitDelete(ctx, tx, o.Path); delErr != nil {
-			return delErr
-		}
-	}
-
-	return nil
-}
-
 // updateRemoteStateOnOutcome updates the remote mirror when execution produces
 // authoritative new remote truth.
 func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
@@ -648,8 +576,8 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO remote_state (
 				drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-				previous_path, is_filtered, observed_at, filter_generation, filter_reason
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, '')
+				previous_path, observed_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(drive_id, item_id) DO UPDATE SET
 				path = excluded.path,
 				parent_id = excluded.parent_id,
@@ -659,10 +587,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 				mtime = excluded.mtime,
 				etag = excluded.etag,
 				previous_path = excluded.previous_path,
-				is_filtered = 0,
-				observed_at = excluded.observed_at,
-				filter_generation = 0,
-				filter_reason = ''`,
+				observed_at = excluded.observed_at`,
 			o.DriveID.String(), o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
 			nullString(o.RemoteHash), nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown), nullOptionalInt64(o.RemoteMtime),
 			nullString(o.ETag), sql.NullString{}, syncedAt,
@@ -680,16 +605,41 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 	case ActionRemoteMove:
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE remote_state
-			 SET path = ?, previous_path = ?, observed_at = ?, is_filtered = 0, filter_generation = 0, filter_reason = ''
+			 SET path = ?, previous_path = ?, observed_at = ?
 			 WHERE drive_id = ? AND item_id = ?`,
 			o.Path, nullString(o.OldPath), syncedAt, o.DriveID.String(), o.ItemID,
 		); err != nil {
 			return fmt.Errorf("sync: updating remote_state for remote move %s: %w", o.Path, err)
 		}
+	case ActionConflict:
+		if o.ConflictType != ConflictEditDelete || o.ResolvedBy != ResolvedByAuto {
+			return nil
+		}
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO remote_state (
+				drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+				previous_path, observed_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(drive_id, item_id) DO UPDATE SET
+				path = excluded.path,
+				parent_id = excluded.parent_id,
+				item_type = excluded.item_type,
+				hash = excluded.hash,
+				size = excluded.size,
+				mtime = excluded.mtime,
+				etag = excluded.etag,
+				previous_path = excluded.previous_path,
+				observed_at = excluded.observed_at`,
+			o.DriveID.String(), o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
+			nullString(o.RemoteHash), nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown), nullOptionalInt64(o.RemoteMtime),
+			nullString(o.ETag), sql.NullString{}, syncedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("sync: updating remote_state for auto conflict upload %s: %w", o.Path, err)
+		}
 	case ActionDownload,
 		ActionLocalDelete,
 		ActionLocalMove,
-		ActionConflict,
 		ActionUpdateSynced,
 		ActionCleanup:
 		return nil

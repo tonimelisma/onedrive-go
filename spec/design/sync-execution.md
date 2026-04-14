@@ -1,412 +1,126 @@
 # Sync Execution
 
-GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go, internal/sync/delete_counter.go, internal/localtrash/trash.go
+GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go, internal/localtrash/trash.go
 
-Implements: R-2.3 [verified], R-2.8.3 [verified], R-5.1 [verified], R-6.4 [implemented], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.5.3 [verified], R-6.7.25 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-2.10.5 [verified], R-2.10.11 [verified], R-2.10.15 [verified], R-2.10.16 [verified], R-2.10.41 [verified], R-2.10.42 [verified], R-2.10.43 [verified], R-2.10.44 [verified], R-2.14.2 [verified], R-6.3.4 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
 
-## Executor (`executor.go`)
+## Overview
 
-Implements: R-6.8.9 [verified]
+Execution takes an `ActionPlan`, dispatches ready work through a dependency
+graph, runs workers, and returns one `ActionOutcome` per completed action.
 
-Thin action dispatcher. Takes an `ActionPlan` and dispatches actions to workers
-via `DepGraph` plus the engine's active-scope admission logic. Actions are
-dispatched based on dependency satisfaction, not fixed phase ordering. Workers
-produce individual `ActionOutcome` values committed per-action by the SyncStore.
+The executor does **not** own retry policy, durable failure classification, or
+scope lifecycle. It performs one action and reports the concrete outcome.
 
 ## Ownership Contract
 
-- Owns: Action dispatch, dependency tracking, worker execution, local trash interaction, and per-action success commits.
-- Does Not Own: Planning, retry scheduling, scope activation policy, or durable failure classification.
-- Source of Truth: The `ActionPlan`, engine-owned dispatch/done channels, and baseline/outcome state supplied by the store boundary.
-- Allowed Side Effects: Filesystem mutation under rooted capabilities, Graph transfer calls, local trash operations, and store success commits.
-- Mutable Runtime Owner: The engine owns dispatch state (`DepGraph`, dispatch channel, done signal). `WorkerPool` owns worker goroutines and the results channel it closes once after worker exit.
-- Error Boundary: Execution returns raw `WorkerResult` values and driveops/graph errors upward. The engine owns mapping those results into [error-model.md](error-model.md) classes.
-
-Action methods call the graph client directly and return `ActionOutcome` — no retry
-loop, no error classification, and no executor-owned sleep budget. The
-following were removed as part of the retry-to-transport refactoring:
-`withRetry()`, `classifyError()`, `classifyStatusCode()`, `calcExecBackoff()`,
-`errClass` type + constants, `sleepFunc` field. Hash mismatch retry
-(`downloadWithHashRetry`) is unchanged — it's a data integrity mechanism
-orthogonal to the retry redesign.
-
-`ExecuteUpload` uses the narrowest proven remote identity available. When the
-action already carries a non-empty `ItemID`, execution overwrites that remote
-item by ID through `driveops.UploadFileToItem` instead of recreating it through
-the parent-path upload route. Parent-path upload remains the create path for
-new local files whose remote identity does not exist yet. This matters for
-conflict resolution too: `keep-local` restores the local conflict copy, then
-overwrites the known remote item instead of depending on a fresh parent create
-route during Graph consistency lag. The one exception is `edit_delete`
-follow-up work: once the planner still knows the remote side is deleted,
-`ExecuteUpload` must recreate through the parent path rather than attempting an
-overwrite-by-item-ID against a deleted remote item.
-
-Post-success remote path confirmation is delegated to an injected
-`driveops.PathConvergenceFactory`. The executor resolves the action's
-effective target drive, then asks the factory for the matching convergence
-capability:
-
-- same-drive actions reuse the engine's current drive/root session and probe
-  `action.Path` directly
-- cross-drive shortcut actions use planner-supplied `TargetRootItemID` and
-  `TargetRootLocalPath` metadata to derive the target-drive-relative path and
-  then probe through a target-scoped session
-
-The confirmation remains best-effort: `ErrPathNotVisible` and other
-convergence probe failures are logged at Warn and do not turn a successful
-mutation into a failed outcome. If shortcut-root metadata is missing or does
-not match the action path, the executor logs at Debug and skips the probe
-instead of guessing a target path.
-
-## DepGraph (`dep_graph.go`)
-
-Pure dependency graph with no channels, no callbacks, and no scope awareness. Tracks actions by sequential ID and resolves dependency edges. Methods return data — callers decide what to do with ready actions.
-
-- **`Add(action, id, depIDs) *TrackedAction`**: Insert an action. Returns the action if immediately ready (all deps satisfied or unknown), nil if waiting on dependencies.
-- **`Complete(id) ([]*TrackedAction, bool)`**: Mark done, delete from both `actions` and `byPath` maps (D-10 fix), return newly-ready dependents. Returns `(nil, false)` for unknown IDs.
-- **`HasInFlight(path) bool`**: Check if a path has an in-flight action.
-- **`CancelByPath(path)`**: Cancel and clean up byPath entry for a path.
-- **`InFlightCount() int`**: Returns `len(actions)` — accurate because `Complete` deletes from the map.
-
-The D-10 fix ensures completed actions are removed from the `actions` map. Without this deletion, a completed action would linger, and a subsequent `Add` could wire a dependency edge to it, causing the dependent to wait forever.
-
-`TrackedAction` struct is defined here: pairs an `Action` with an ID, cancel function, trial metadata (`IsTrial`, `TrialScopeKey`), and dependency tracking (`depsLeft`, `dependents`).
-
-## Active Scope Helpers (`active_scopes.go`)
-
-`active_scopes.go` no longer owns a runtime subsystem. It provides pure helper
-functions over an engine-owned `[]ScopeBlock` working set. There is no mutex,
-no write-through cache, and no persistence layer in a separate dispatch
-package.
-
-- **`FindBlockingScope(blocks, ta) ScopeKey`**: Check whether an action matches
-  any active scope block. Returns the blocking key or zero. Priority-ordered:
-  global scopes (throttle, service) first, then narrow scopes (disk, quota),
-  then dynamic-key scopes (`quota:shortcut`, `perm:local-read`,
-  `perm:local-write`, `perm:remote-write`).
-- **`UpsertScope(blocks, block) []ScopeBlock`**: Return a copy with the scope
-  inserted or replaced by key.
-- **`RemoveScope(blocks, key) []ScopeBlock`**: Return a copy with the scope
-  removed.
-- **`LookupScope(blocks, key) (ScopeBlock, bool)`**: Return a value copy of the
-  active block.
-- **`ExtendScopeTrial(blocks, key, nextAt, interval)`**: Return a copy with the
-  scope's trial metadata updated and `TrialCount` incremented.
-- **`DueTrials(blocks, now)` / `EarliestTrialAt(blocks)` / `ScopeKeys(blocks)`**: Pure helpers for
-  watch-loop timer scheduling and scope iteration.
-
-The watch loop owns runtime scope state. `scope_blocks` remains the persisted
-restart/recovery record; store transactions update it, then the watch loop
-updates its own in-memory working set.
-
-### Persisted Scope Blocks (`scope_blocks` table)
-
-Scope blocks survive crashes. The `scope_blocks` table is the persisted
-restart/recovery record. In watch mode the engine loads those rows into its own
-single-owner runtime working set; there is no separate write-through cache
-subsystem. Typically 0-5 rows.
-
-```sql
-CREATE TABLE scope_blocks (
-    scope_key      TEXT PRIMARY KEY,
-    issue_type     TEXT NOT NULL,
-    timing_source  TEXT NOT NULL,
-    blocked_at     INTEGER NOT NULL,     -- unix nanos
-    trial_interval INTEGER NOT NULL,     -- nanoseconds
-    next_trial_at  INTEGER NOT NULL,     -- unix nanos
-    preserve_until INTEGER NOT NULL,     -- unix nanos, 0 when not preserved
-    trial_count    INTEGER NOT NULL DEFAULT 0
-);
-```
-
-No FK between `scope_blocks` and `sync_failures` — intentional. Scope release
-and discard are transactional lifecycle operations in the store layer, not
-schema-level cascades.
-
-### ScopeBlockStore Interface
-
-`ScopeBlockStore` is the persistence interface for scope-block rows.
-Implemented by `SyncStore` in `store_write_scope_blocks.go`:
-- `UpsertScopeBlock(ctx, block) error` — INSERT OR REPLACE
-- `DeleteScopeBlock(ctx, key) error` — DELETE WHERE
-- `ListScopeBlocks(ctx) ([]*ScopeBlock, error)` — SELECT all rows
-
-Fixes D-2 (no `onHeld` callback, no cross-lock paths), D-8 (scope blocks
-persisted, survive crash).
-
-## Scope Detection (`scope.go`)
-
-Implements: R-2.10.3 [verified], R-2.10.26 [verified], R-2.10.42 [verified]
-
-### ScopeKey Type System
-
-All scope keys are typed `ScopeKey{Kind ScopeKeyKind, Param string}` — a comparable value type usable as map key. Active runtime kinds are `ScopeAuthAccount`, `ScopeThrottleTarget` (Param = `"drive:<targetDriveID>"` or `"shared:<remoteDrive>:<remoteItem>"`), `ScopeService`, `ScopeQuotaOwn`, `ScopeQuotaShortcut` (Param = `"remoteDrive:remoteItem"`), `ScopePermLocalRead` (Param = relative dir path), `ScopePermLocalWrite` (Param = relative dir path), `ScopePermRemoteWrite` (Param = relative boundary path), and `ScopeDiskLocal`. `ScopeThrottleAccount` remains parseable only as a legacy persisted key so startup repair can release old rows safely. Pre-built singletons remain for non-parameterized scopes (`SKAuthAccount`, `SKService`, `SKQuotaOwn`, `SKDiskLocal`); constructor functions cover parameterized scopes (`SKThrottleDrive`, `SKThrottleShared`, `SKQuotaShortcut(key)`, `SKPermLocalRead(path)`, `SKPermLocalWrite(path)`, `SKPermRemoteWrite(path)`).
-
-Methods on `ScopeKey` centralize logic that was previously scattered across 9+ files:
-- **`BlocksTrackedAction(ta)`** — scope-specific action blocking against the concrete action instance. Permission scopes consult `Action.PermissionCapabilities()` and `Action.ScopePathsForCapability(...)` instead of raw action-type-only gating.
-- ~~`MaxTrialInterval()`~~ — removed; interval computation is centralized in the engine's scope-aware trial timing helper
-- **`Humanize(shortcuts)`** — user-friendly description for display
-- **`IssueType()`** — maps scope kind to `sync_failures.issue_type` constant
-- **`IsGlobal()`** — true only for scopes that block across all actions without a target parameter (for example `service` and the legacy `throttle:account` cleanup path)
-- **`IsPermLocalRead()` / `IsPermLocalWrite()` / `DirPath()`** — type-safe access for local directory permission scopes
-- **`IsPermRemoteWrite()` / `RemotePath()`** — type-safe access for remote shared-folder permission scopes
-- **`IsZero()`** — detects the zero-value (invalid) key
-- **`String()` / `ParseScopeKey(s)`** — wire format serialization for SQLite `scope_key` columns. The active wire format is `"auth:account"`, `"throttle:target:drive:<id>"`, `"throttle:target:shared:<drive>:<item>"`, `"service"`, `"quota:own"`, `"quota:shortcut:X"`, `"perm:local-read:X"`, `"perm:local-write:X"`, `"perm:remote-write:X"`, `"disk:local"`. `"throttle:account"`, `"perm:dir:X"`, and `"perm:remote:X"` remain parseable only for legacy startup cleanup.
-- **`ScopeKeyForResult(httpStatus, targetDriveID, shortcutKey)`** — single source of truth for HTTP status → scope key classification, replacing scattered switch/if chains in `classifyResult` and `deriveScopeKey`.
-
-`ScopePermRemoteWrite` is the recursive download-only shared-folder scope. `BlocksTrackedAction` returns true for uploads, remote-side folder creates, remote moves, and remote deletes at the boundary path and every descendant, while allowing downloads and local-only actions to continue.
-
-### Persisted Failure And Scope Shapes
-
-The execution layer relies on two explicit persisted models:
-
-- `sync_failures.failure_role` = `item`, `held`, `boundary`
-- `scope_blocks.timing_source` = `none`, `backoff`, `server_retry_after`
-- `scope_blocks.preserve_until` = bounded preserve deadline for scoped-failure-backed restart repair
-
-Those columns are important to execution correctness:
-
-- trial dispatch reads only `held` rows
-- permission and startup repair reason about `boundary` rows explicitly
-- restart logic preserves only server-timed throttle/service scopes, but may keep scoped-failure-backed scopes while `preserve_until` is still active
-- watch-mode `activeScopes` is rebuilt from persisted scope rows and never becomes a peer source of truth
-
-### Scope Escalation
-
-`ScopeState` maintains sliding windows for scope escalation detection and
-records successes that reset windows. In watch mode it is owned by the
-single-owner watch loop. Windows are keyed by `ScopeKey` (not string).
-
-- **Immediate blocks** (server signals): 429 → `SKThrottleDrive(targetDriveID)` or `SKThrottleShared(shortcutKey)` (single response triggers). 503 with Retry-After → `SKService` (single response triggers).
-- **Sliding window detection**: 507 → 3 unique paths in 10s → `SKQuotaOwn` or `SKQuotaShortcut(key)`. 5xx → 5 unique paths in 30s → `SKService`.
-- **Success resets**: `RecordSuccess()` clears sliding windows for the relevant scope — a successful request proves the service is up.
-
-## Worker Pool (`worker.go`)
-
-Implements: R-2.10.16 [verified], R-6.8.12 [verified]
-
-Flat pool of `transfer_workers` goroutines. Decoupled from dispatch infrastructure: accepts `dispatchCh <-chan *TrackedAction` (actions to execute) and `completeCh <-chan struct{}` (engine-owned completion signal) as constructor parameters instead of holding a reference to the dispatch infrastructure. Workers are pure executors — they execute actions, persist success outcomes, and send `WorkerResult` to the engine. Workers never call `DepGraph.Complete()` — the engine owns all completion decisions.
-
-`WorkerResult` carries target drive identity (`TargetDriveID`, `ShortcutKey`) from the action, `RetryAfter` from `GraphError`, the full `error` for classification, `ActionID` for DepGraph routing, `IsTrial` and `TrialScopeKey ScopeKey` for scope trial routing. `WorkerResult.DriveID` is the concrete drive the action actually executed against: workers prefer the executor outcome drive, fall back to the planned action drive, and finally use `TargetDriveID` for shortcut-targeted actions whose concrete drive was only resolved at execution time. The engine classifies and routes each result.
-
-Planner-produced `Action` values also carry target-root metadata for
-cross-drive convergence:
-
-- `TargetDriveID`: concrete remote drive for execution
-- `TargetRootItemID`: remote root item for the shortcut subtree
-- `TargetRootLocalPath`: local sync path that maps to that remote root
-
-The planner fills these once from remote shortcut identity and baseline
-ancestry so execution does not rediscover target ownership ad hoc.
-
-### Mutable Runtime Ownership
-
-- `DepGraph` is engine-owned mutable state. Execution code never mutates it behind the engine's back.
-- `WorkerPool` owns worker goroutine lifecycle and closes `results` exactly once after all workers exit.
-- Workers own only per-action local state plus the cancellation function stored on their current `TrackedAction`.
-- There are no long-lived mutexes in the sync execution helpers; coordination flows through explicit channel ownership instead of shared mutable maps.
-
-### Channel And Timer Ownership
-
-The execution path relies on a small set of long-lived channels with strict
-ownership rules:
-
-- **`dispatchCh`**: owned by the engine. Created by `executePlan` in one-shot
-  mode and by `initWatchInfra` in watch mode. Written by one-shot admission
-  code or by the single watch loop's outbox flush. Read by worker goroutines
-  only. Production code intentionally does not close it; workers exit via
-  `completeCh`/context cancellation. Workers also treat channel close as terminal
-  so tests and defensive cleanup cannot leak goroutines.
-- **Worker `results` channel**: owned by `WorkerPool`. Created in
-  `NewWorkerPool`, written only by workers through `sendResult`, read by
-  the engine-owned result loop in both one-shot and watch mode. Closed exactly
-  once after all worker goroutines exit; `Stop()` participates in that cleanup
-  but is no longer the only closer. If shutdown cancellation wins before a
-  blocked send can complete, the unsent result is intentionally dropped
-  instead of inventing a second shutdown channel or a shadow completion path.
-- **Trial timer delivery (`trialCh`)**: owned by the engine and created once
-  in `NewEngine`. Written only by `time.AfterFunc` callbacks scheduled by
-  `armTrialTimer`. Read by the watch loop in watch mode. The channel is never
-  closed; shutdown stops the current timer via `stopTrialTimer()`.
-- **Retry timer delivery (`retryTimerCh`)**: owned by watch-mode engine state
-  and created in `initWatchInfra`. Written by `armRetryTimer`'s
-  `time.AfterFunc` callback and by inline engine wakeups that need an
-  immediate retrier pass (for example, due items or batch spillover). Read
-  only by the watch loop. Like `trialCh`, it is persistent and never closed;
-  the timer object is replaced or stopped as needed.
-- **Bootstrap completion barrier**: there is no separate "bootstrap finished"
-  signal channel between bootstrap and observer startup. The barrier is the
-  unified engine loop itself: `bootstrapSync` keeps consuming ready batches,
-  worker results, retry ticks, and trial ticks until the graph is empty and no
-  bootstrap work remains. One-shot mode uses the same internal loop with a
-  one-shot configuration and returns only after the results channel closes and
-  all result side effects have been applied.
-- **Observer error signaling (`errs`)**: owned by `startObservers`. Created by
-  the engine, written once per observer goroutine on exit, read only by the
-  watch loop. It is not explicitly closed because the watch loop tracks
-  observer lifetimes by counting terminal sends rather than ranging until
-  close.
-- **Observer event bridge (`events`)**: owned by `startObservers`. Local and
-  remote observers write `ChangeEvent` values into it; a dedicated bridge
-  goroutine reads from it and adds them to the watch buffer. The engine closes
-  `events` only after all observer goroutines finish, ensuring the bridge can
-  drain remaining events cleanly.
-- **Skipped-item forwarding (`skippedCh`)**: owned by `startObservers`.
-  Created by the engine, written by the local observer's safety scan path, and
-  read by the watch loop for issue recording and resolution cleanup. It is not
-  closed; shutdown relies on context cancellation and watch-loop exit rather
-  than channel completion.
+- Owns: dispatch, dependency satisfaction, worker execution, local trash integration, conflict-copy creation, and success outcomes
+- Does Not Own: planning, retry scheduling, scope activation policy, or store schema
+- Source of Truth: planner-produced `ActionPlan` plus the rooted capabilities injected into the executor
+- Allowed Side Effects: sync-root filesystem mutation, Graph transfer calls, and store success commits through the engine
+- Mutable Runtime Owner: Each executor instance owns only one action plan, one dependency graph, and one bounded worker pool for the lifetime of that execution pass. The engine owns higher-level admission, retries, and scope state.
+- Error Boundary: Workers and executor helpers return concrete action outcomes and execution errors; the engine classifies those outcomes into retries, failures, scope transitions, and durable state changes.
 
 ## Verified By
 
 | Behavior | Evidence |
 | --- | --- |
-| Worker results channel closes when dispatch ends or the engine completion signal fires. | `TestWorkerPool_ClosedDispatchChannelClosesResults`, `TestWorkerPool_ClosedCompletionChannelClosesResults`, `TestWorkerPool_ContextCancellationClosesResults` |
-| Worker shutdown is idempotent and result ownership stays with `WorkerPool`. | `TestWorkerPool_StopIsIdempotentAfterResultsClose`, `TestWorkerPool_ResultChannel` |
-| Result delivery semantics stay explicit: successful sends are delivered normally, but blocked sends are dropped when shutdown cancellation wins. | `TestWorkerPool_SendResultDropsWhenContextCancellationWins` |
-| Workers never mutate dependency completion directly; the engine owns `DepGraph.Complete()`. | `TestWorker_NeverCallsComplete`, `TestWorkerPool_DependencyChain` |
+| Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
+| Local edit versus remote delete is auto-resolved without a durable conflict mailbox. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ConflictCopy` |
+| Execution keeps ordinary per-item delete safety and routes concrete failures back to the engine instead of persisting manual approval state. | `TestExecutor_LocalDelete_HashMismatch_ConflictCopy`, `TestExecutor_SyncedUpdate`, `TestExecutor_SyncedUpdate_BaselineFallback` |
 
-## Action Execution
+## Worker And Dependency Model
 
-### Downloads (`executor_transfer.go`)
-`.partial` file + hash verify + atomic rename. Uses `TransferManager` from `driveops`.
+`DepGraph` is the execution-time dependency graph. It tracks:
 
-### Uploads (`executor_transfer.go`)
-Simple PUT (≤4 MiB) or resumable session (>4 MiB). Post-upload validation detects SharePoint enrichment.
+- which actions are in flight
+- which dependencies remain unsatisfied
+- which dependents become ready after completion
 
-Business/SharePoint may still create one extra version on modified re-upload
-even when upload-session creation includes `fileSystemInfo`. The product does
-not attempt version-history cleanup or other futile workarounds for that
-server bug. Instead it accepts the extra version and relies on per-side
-baseline hashes so the next planner run sees stable truth instead of
-re-uploading or re-downloading the same file forever.
+Workers run independent actions concurrently up to the configured worker limit.
+The engine owns the worker pool lifecycle and result drain.
 
-**Watch-Mode Upload Freshness Check**: In watch mode, `ExecuteUpload` performs a pre-flight eTag comparison before uploading. The debounce-based event batching can split simultaneous local+remote changes across passes: a local fsnotify event may trigger an upload before the remote observer has polled the collaborator's edit. The freshness check fetches the item's current remote eTag via `GetItem` and compares it against the baseline eTag. If they differ, the upload is aborted with a descriptive error (recorded in `sync_failures`). On the next pass, the remote observer will have polled, the planner will see both changes, and a proper conflict will be detected. Cost: one additional `GetItem` API call per upload in watch mode only — controlled by `ExecutorConfig.watchMode` (set by `initWatchInfra`).
+## File And Folder Mutation
 
-Before sync spends a parent-route remote create under an already-known parent
-folder (`ActionFolderCreate` with `CreateRemote`, or a true new-file upload
-without remote item identity), the executor first asks the injected
-`driveops.PathConvergence` capability to confirm that the parent path is
-readable. This keeps dependent child creates from racing a freshly created
-parent item ID before Graph has converged the parent's ordinary path view.
+### Uploads and downloads
 
-After a successful remote upload, the executor still asks the same
-`driveops.PathConvergence` capability to confirm that the destination path is
-readable. That post-success destination probe remains intentionally warn-only;
-the sync engine does not add its own second retry loop or sleep budget there.
+Execution delegates transfer mechanics to `driveops.TransferManager`.
 
-### Deletes (`executor_delete.go`)
-Implements: R-6.2.4 [verified]
+- downloads use atomic local writes and integrity verification
+- uploads prefer overwrite-by-item-ID when the planner already knows the
+  authoritative remote item
+- true creates still use parent-path upload because no remote item identity
+  exists yet
 
-Hash-before-delete guard for local deletions (verifies the file hasn't changed since planning). Remote deletes use `If-Match` with eTag. Local deletes go to OS trash if configured via [`internal/localtrash/trash.go`](../../internal/localtrash/trash.go). When a local folder delete would fail due to non-empty directory containing only disposable files (OS junk like `.DS_Store`, editor temps like `.swp`, invalid OneDrive names), `deleteLocalFolder` auto-removes them before retrying the folder delete.
+### Local deletes
 
-Remote delete semantics remain intentionally item-ID authoritative inside sync.
-The executor does **not** call `DeleteResolvedPath()` /
-`PermanentDeleteResolvedPath()` for planned remote deletes, because sync intent
-is bound to one observed remote item identity rather than "whatever currently
-occupies this path."
+Local delete keeps the ordinary per-item safety rule:
 
-### Conflicts (`executor_conflict.go`)
-Default: keep both versions. Remote version at original path, local version renamed to `<name>.conflict-<timestamp>.<ext>`. Conflict recorded in `conflicts` table.
-Conflict actions are mode-invariant planner outputs: once planning has emitted
-`ActionConflict`, execution preserves both sides (or auto-keeps local for
-edit-delete) in bidirectional, download-only, and upload-only runs alike.
+- if the file still hashes to the baseline hash, delete it
+- if the file changed after planning, do **not** delete newer local content;
+  auto-resolve as an edit/delete conflict and recreate the remote file
 
-## Issue Types (`issue_types.go`)
+Directory delete also preserves non-disposable local content by refusing to
+remove directories blocked by non-disposable children.
 
-Issue type constants for failure classification (e.g., `IssueInvalidFilename`, `IssuePathTooLong`, `IssueFileTooLarge`, `IssueDeleteSafetyHeld`). Moved from the deleted `upload_validation.go`. The upload validation functions (`filterInvalidUploads`, `validateUploadActions`, `validateSingleUpload`, `ValidationFailure`, `removeActionsByIndex`) have been removed entirely — all validation now happens in the observation layer via `shouldObserve()` (Stage 1) and post-stat size checks (Stage 2). See `spec/design/sync-observation.md`.
+### Trash behavior
 
-`IssueDeleteSafetyHeld` remains the display classification for delete-safety
-protection, but held-delete workflow state is stored in `held_deletes`, not in
-`sync_failures`. The `issues` projection displays those rows in a dedicated
-"HELD DELETES" section.
+- remote deletes go through OneDrive recycle bin by default
+- local deletes may go through OS trash depending on configuration and platform
 
-## Crash Recovery
+## Conflict Execution
 
-Implements: R-2.5.1 [verified], R-2.5.4 [verified], R-2.10.41 [verified]
+`ActionConflict` is immediate execution work. There is no durable
+conflict-request mailbox.
 
-Crash recovery no longer depends on persisted per-item execution lanes. The
-engine restarts from durable truth:
+### Edit/edit and create/create
 
-- `baseline` remains the last agreed state
-- `remote_state` remains the latest observed remote truth
-- local disk remains the authoritative local current state
-- `sync_failures` and `scope_blocks` remain the durable retry / scope owners
+The executor preserves both versions:
 
-On startup, one-shot and watch bootstrap reload that durable state, repair
-persisted scope ownership where required, reobserve current remote truth, rescan
-local truth, and then replan from the same reconciliation rules used in a normal
-pass. If a prior directional run had already advanced the delta token, later
-runs still settle that remote drift from `baseline + remote_state + local disk`
-even when there are no fresh delta events left to consume.
+1. rename local file to `<stem>.conflict-<timestamp><ext>`
+2. download remote file back to the canonical path
 
-Transfer-side crash artifacts remain owned by `driveops`, not by reconciliation
-state. Interrupted downloads resume from `.partial` files when possible and are
-otherwise retried from the durable remote mirror. Interrupted uploads reuse the
-persisted upload-session store when possible; otherwise local-vs-baseline drift
-causes the upload to be replanned normally. Local and remote deletes are
-rediscovered from current truth on the next pass instead of being recovered from
-store-owned in-progress markers.
+If the download fails, the executor restores the original local file from the
+conflict copy.
 
-The retry sweep remains the sole retry mechanism for sync actions. In watch mode
-it is integrated directly into the single-owner watch loop; in one-shot mode
-there is no long-lived retry loop. `runRetrierSweep()` periodically sweeps
-`sync_failures` for items whose `next_retry_at` has expired and re-injects them
-into the pipeline via buffer → planner → DepGraph. One-shot mode merges due
-retry rows back into the current planner batch on that same invocation. Retry
-rebuild now derives the current action need from durable truth and the recorded
-action type, not from lifecycle state stored on `remote_state`. The engine calls
-`DepGraph.Complete` on every worker result and records failures in
-`sync_failures` with exponential backoff via `retry.ReconcilePolicy().Delay`.
-`CommitMutation` updates baseline and `remote_state`, but it does not clear
-`sync_failures`; the engine owns success-side failure cleanup explicitly via
-`clearFailureOnSuccess`. `runTrialDispatch()` handles scope trial candidate
-selection via `PickTrialCandidate` and re-observation.
+### Edit/delete
 
-## Status Projection
+The executor auto-resolves `ConflictEditDelete` with local-wins behavior:
 
-The store-owned status projection no longer reports queue-lane counts from
-`remote_state`. Instead, `Inspector` derives `RemoteDriftItems` by comparing the
-current remote mirror against baseline:
+1. keep the local file in place
+2. upload it to recreate the remote item
 
-- mirror rows with no matching baseline row
-- mirror rows whose path/type/remote hash/remote mtime differ from baseline
-- baseline rows whose remote item is absent from the current mirror
+No conflict copy is needed for this case.
 
-This keeps `status` aligned with the durable-truth reconciliation model without
-pretending the store can infer exact local-only drift from SQLite alone. Exact
-local drift still requires a live local scan, so the default read-only status
-projection reports durable remote drift, retry/failure summaries, delete safety,
-and conflicts instead of inventing a synthetic global “pending sync” lane count.
+## Shared-Root Execution
 
-## Disk Space Pre-Check
+For configured drives rooted below the remote drive root, execution uses
+planner-supplied target metadata:
 
-Implements: R-2.10.43 [verified], R-2.10.44 [verified], R-6.2.6 [verified], R-6.4.7 [verified]
+- `TargetDriveID`
+- `TargetRootItemID`
+- `TargetRootLocalPath`
 
-Disk space pre-checks now live in `TransferManager.DownloadToFile` (see [drive-transfers.md](drive-transfers.md#disk-space-pre-check)), giving every download caller automatic protection. The sync engine wires the check via `driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable)` when constructing the TransferManager in `NewEngine`.
+That metadata is used for:
 
-Config wiring: `min_free_space` string (default "1GB") is parsed via `config.ParseSize()` and threaded from `ResolvedDrive` through `EngineConfig.MinFreeSpace` to `TransferManager` via `WithDiskCheck`. Zero disables the check (R-6.4.7).
+- target-scoped remote calls
+- path convergence checks after successful remote mutation
+- correct scope classification for target-drive results
 
-Scope block classification remains in the sync engine: `classifyResult` maps `driveops.ErrDiskFull` → `disk:local` scope block, `driveops.ErrFileTooLargeForSpace` → per-file skip.
+## Scope Helpers
 
-## Design Constraints
+`active_scopes.go` is no longer a separate runtime subsystem. It provides pure
+helper functions over an engine-owned slice of active scope blocks.
 
-- Dotfile conflict naming: `filepath.Ext(".bashrc")` returns `.bashrc`, not `""`. The `conflictStemExt` helper detects single-dot dotfiles and treats extension as empty.
-- Delete ordering: depth-first (deepest first), and files before folders at the same depth. `resolveItemType` is a tiebreaker in the sort comparator.
-- Ephemeral `Executor` struct per call via `NewExecution(cfg, bl)` — always initializes all mutable fields at construction. Prevents nil-map panics from temporal coupling.
-- Edit-delete conflicts (local edit, remote delete) auto-resolve: local modified version wins and is uploaded. Conflict recorded as `resolved_by: "auto"`.
-- Individual worker failures increment `report.Failed` and collect errors in `report.Errors`, but `RunOnce()` returns nil. Tests check `report.Failed >= 1`, not `err != nil`.
-- Two concurrency knobs: `transfer_workers` (default 8, range 4-64) for file operations, `check_workers` (default 4, range 1-16) for QuickXorHash computation.
-- All executor write operations use `containedPath()` with `filepath.IsLocal()` to confine local filesystem writes to the sync root directory. This is defense-in-depth against path reconstruction bugs, not input validation (the OneDrive API is the source of truth, not an attacker). Symlink escape is prevented by resolving symlinks on the parent directory via `filepath.EvalSymlinks`.
-- Conflict-copy naming keeps the readable second-precision timestamp base, but uniqueness is enforced against the filesystem by the executor: if `<name>.conflict-YYYYMMDD-HHMMSS.ext` already exists, later copies append ordinal suffixes before the extension (`-2`, `-3`, ...). `*.conflict-*` globbing still discovers both the base and suffixed copies for keep-local, keep-both, and cleanup flows.
-- Concurrent folder creates via Graph API `$batch` for sibling folders at same depth. Diminishing returns after first sync. [planned]
-- Targeted `-race` stress tests for DepGraph, active-scope admission helpers, Buffer, and WorkerPool run through `go run ./cmd/devtool verify stress`. The verifier runs the dedicated `TestWatchOrderingStress_*` probes in `internal/sync` behind the `stress` build tag, then repeats `./internal/multisync ./internal/sync` under `-race -count=50 -timeout=20m` so the merged runtime package is stressed as a unit. [verified]
-- Watch shutdown and active worker-pool cancellation are covered by direct lifecycle tests, including real watch-loop shutdown races and worker-pool close behavior. [verified]
+Execution itself does not decide whether an action is blocked. The engine asks
+those helpers before dispatch and after worker results.
 
-## Status Surface
+## What Execution No Longer Owns
 
-Execution does not own the CLI `status` command. It contributes only the raw
-results that the engine persists into store-owned snapshots. The read-only
-status contract itself is specified in [sync-store.md](sync-store.md) and the
-CLI rendering contract in [cli.md](cli.md).
+Execution no longer includes:
+
+- delete counters or held-delete approval workflows
+- durable conflict request application
+- embedded shared-folder runtime machinery inside another drive
+
+Those concepts were removed from the current architecture.

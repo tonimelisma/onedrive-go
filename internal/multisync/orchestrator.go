@@ -233,11 +233,10 @@ func (o *Orchestrator) buildEngineWork(
 
 // watchRunner holds per-drive state for a running watch-mode engine.
 type watchRunner struct {
-	canonID          driveid.CanonicalID
-	engine           engineRunner
-	cancel           context.CancelFunc
-	mutationRequests chan syncengine.WatchMutationRequest
-	done             chan struct{} // closed exactly once by the goroutine started in startWatchRunner
+	canonID driveid.CanonicalID
+	engine  engineRunner
+	cancel  context.CancelFunc
+	done    chan struct{} // closed exactly once by the goroutine started in startWatchRunner
 }
 
 // RunWatch runs all configured (non-paused) drives in watch mode. On
@@ -352,17 +351,14 @@ func (o *Orchestrator) startWatchRunner(
 	}
 
 	driveCtx, driveCancel := context.WithCancel(ctx)
-	mutationRequests := make(chan syncengine.WatchMutationRequest, 1)
 	done := make(chan struct{})
 
 	wr := &watchRunner{
-		canonID:          rd.CanonicalID,
-		engine:           engine,
-		cancel:           driveCancel,
-		mutationRequests: mutationRequests,
-		done:             done,
+		canonID: rd.CanonicalID,
+		engine:  engine,
+		cancel:  driveCancel,
+		done:    done,
 	}
-	opts.MutationRequests = mutationRequests
 
 	go func() {
 		defer close(done)

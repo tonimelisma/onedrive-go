@@ -2,8 +2,7 @@ package sync
 
 import (
 	"sync"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
+	"time"
 )
 
 // engineFlow holds mutable per-run execution state shared by one-shot and
@@ -15,14 +14,14 @@ type engineFlow struct {
 
 	depGraph   *DepGraph
 	dispatchCh chan *TrackedAction
-	shortcuts  []Shortcut
 
 	succeeded  int
 	failed     int
 	syncErrors []error
 	summaries  []failureSummaryEntry
 
-	runID string
+	scopeCtrl scopeController
+	runID     string
 }
 
 func newEngineFlow(engine *Engine) engineFlow {
@@ -30,16 +29,9 @@ func newEngineFlow(engine *Engine) engineFlow {
 		engine: engine,
 		runID:  engine.nextRuntimeRunID(),
 	}
+	flow.initPolicyControllers()
 
 	return flow
-}
-
-func (f *engineFlow) setShortcuts(shortcuts []Shortcut) {
-	f.shortcuts = shortcuts
-}
-
-func (f *engineFlow) getShortcuts() []Shortcut {
-	return f.shortcuts
 }
 
 type oneShotRunner struct {
@@ -76,30 +68,18 @@ type watchRuntimeState struct {
 	// Monotonic action ID counter owned by the watch control flow. Prevents
 	// ID collisions across batches without introducing cross-goroutine sync.
 	nextActionID int64
-
-	// userIntentPending makes durable user-intent admission level-triggered at
-	// the watch-loop boundary. Wakes can arrive while ordinary outbox work is
-	// still draining; this flag ensures the next user-intent pass is not lost.
-	userIntentPending bool
 }
 
 type watchObservationState struct {
-	// scopeMu guards scopeSnapshot so observer goroutines can read the current
-	// effective scope while the watch loop remains the single writer.
-	scopeMu sync.RWMutex
-
 	// Event buffer — watch-loop retry/trial work injects events via buf.Add().
 	buf *Buffer
 
-	// Delete safety protection: rolling counter + durable held-delete state.
-	deleteCounter *DeleteCounter
+	// Cross-connection SQLite commit detector for watch recheck ticks.
+	lastDataVersion int64
 
 	// Observer references — set in startObservers, nil'd on shutdown.
-	remoteObs       *RemoteObserver
-	localObs        *LocalObserver
-	scopeSnapshot   syncscope.Snapshot
-	scopeGeneration int64
-	scopeChanges    chan syncscope.Change
+	remoteObs *RemoteObserver
+	localObs  *LocalObserver
 
 	// Socket.IO wake source lifecycle, when enabled for full-drive watch.
 	socketIOWakeStop chan struct{}
@@ -120,6 +100,9 @@ type watchTimerState struct {
 	// Retry timer — watch loop retrier sweeps sync_failures on each tick.
 	retryTimer   syncTimer
 	retryTimerCh chan struct{} // persistent, buffered(1)
+
+	// Throttling: tracks last recheckPermissions call time (R-2.10.9).
+	lastPermRecheck time.Time
 }
 
 type watchReconcileState struct {
@@ -131,7 +114,7 @@ type watchReconcileState struct {
 
 	// Full reconciliation is started by the watch loop and hands its result
 	// back over reconcileResults. The loop owns reconcileActive and applies the
-	// returned events/shortcut snapshot on receipt.
+	// returned events on receipt.
 	reconcileActive  bool
 	reconcileResults chan reconcileResult
 
@@ -157,7 +140,6 @@ type watchRuntimePhase string
 const (
 	watchRuntimePhaseRunning  watchRuntimePhase = "running"
 	watchRuntimePhaseDraining watchRuntimePhase = "draining"
-	scopeChangeChannelBuf                       = 8
 )
 
 func newWatchRuntime(engine *Engine) *watchRuntime {
@@ -177,7 +159,6 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 			reconcileResults:  make(chan reconcileResult, 1),
 		},
 	}
-	rt.scopeChanges = make(chan syncscope.Change, scopeChangeChannelBuf)
 	rt.watch = rt
 
 	return rt

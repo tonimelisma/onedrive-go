@@ -110,21 +110,9 @@ func AssertDevSafe() {
 		"Example: source scripts/dev-env.sh && go run . <command>")
 }
 
-// UploadSessionDir returns the directory for persisted upload session files.
-// These are JSON files containing pre-authenticated upload URLs, stored with
-// 0700 directory permissions for security.
-func UploadSessionDir() string {
-	dir := DefaultDataDir()
-	if dir == "" {
-		return ""
-	}
-
-	return filepath.Join(dir, "upload-sessions")
-}
-
 // ControlSocketPath returns the Unix-domain control socket path. The socket is
-// the single local IPC boundary for daemon status, reload, and durable user
-// intent requests.
+// the single local IPC boundary for daemon status, reload, stop, and perf
+// requests.
 func ControlSocketPath() (string, error) {
 	dir := DefaultDataDir()
 	if dir == "" {

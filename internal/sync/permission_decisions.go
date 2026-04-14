@@ -50,12 +50,6 @@ type PermissionRecheckDecision struct {
 	Reason   string
 }
 
-// ShortcutRemovalDecision explicitly describes scope state to discard when a
-// shortcut disappears. The engine applies these through discardScope.
-type ShortcutRemovalDecision struct {
-	ScopeKey ScopeKey
-}
-
 func (controller *scopeController) applyPermissionCheckDecision(
 	ctx context.Context,
 	watch *watchRuntime,
@@ -225,21 +219,4 @@ func (controller *scopeController) recordExplicitFailure(ctx context.Context, pa
 		slog.String("issue_type", params.IssueType),
 	)
 	flow.engine.logger.Debug("permission failure recorded", fields...)
-}
-
-func (controller *scopeController) applyShortcutRemovalDecisionsWithWatch(
-	ctx context.Context,
-	watch *watchRuntime,
-	decisions []ShortcutRemovalDecision,
-) {
-	flow := controller.flow
-
-	for i := range decisions {
-		if err := controller.discardScope(ctx, watch, decisions[i].ScopeKey); err != nil {
-			flow.engine.logger.Warn("failed to discard shortcut scope",
-				slog.String("scope_key", decisions[i].ScopeKey.String()),
-				slog.String("error", err.Error()),
-			)
-		}
-	}
 }

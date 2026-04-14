@@ -18,14 +18,10 @@ const maxLevenshteinDistance = 3
 // state — config loading is infrequent so the allocation is negligible.
 func newKnownGlobalKeys() map[string]bool {
 	return map[string]bool{
-		// Filter settings
-		"skip_files": true, "skip_dirs": true, "skip_dotfiles": true,
-		"skip_symlinks": true, "sync_paths": true, "ignore_marker": true,
 		// Transfer settings
 		"transfer_workers": true, "check_workers": true,
 		// Safety settings
-		"delete_safety_threshold": true,
-		"min_free_space":          true, "use_local_trash": true,
+		"min_free_space": true, "use_local_trash": true,
 		// Sync settings
 		"poll_interval": true, "websocket": true, "dry_run": true,
 		"safety_scan_interval": true,
@@ -55,8 +51,6 @@ func newKnownGlobalKeysList() []string {
 func newKnownDriveKeys() map[string]bool {
 	return map[string]bool{
 		"sync_dir": true, "paused": true, "paused_until": true, "display_name": true, "owner": true,
-		"skip_dotfiles": true, "skip_dirs": true, "skip_files": true,
-		"sync_paths": true, "ignore_marker": true,
 	}
 }
 

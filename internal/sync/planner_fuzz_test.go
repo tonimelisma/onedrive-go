@@ -28,11 +28,10 @@ const (
 )
 
 type plannerFuzzCase struct {
-	Mode                  string                   `json:"mode"`
-	DeleteSafetyThreshold int                      `json:"delete_safety_threshold"`
-	DeniedPrefixes        []string                 `json:"denied_prefixes"`
-	Baseline              []plannerFuzzBaselineRow `json:"baseline"`
-	Changes               []plannerFuzzPathChanges `json:"changes"`
+	Mode           string                   `json:"mode"`
+	DeniedPrefixes []string                 `json:"denied_prefixes"`
+	Baseline       []plannerFuzzBaselineRow `json:"baseline"`
+	Changes        []plannerFuzzPathChanges `json:"changes"`
 }
 
 type plannerFuzzBaselineRow struct {
@@ -196,7 +195,7 @@ func decodePlannerFuzzCase(data []byte) (decodedPlannerFuzzCase, bool) {
 		changes:        changes,
 		baseline:       baseline,
 		mode:           parsePlannerMode(raw.Mode),
-		config:         &SafetyConfig{DeleteSafetyThreshold: raw.DeleteSafetyThreshold},
+		config:         DefaultSafetyConfig(),
 		deniedPrefixes: sanitizePlannerPrefixes(raw.DeniedPrefixes),
 	}, true
 }
@@ -221,22 +220,21 @@ func decodePlannerEvents(
 
 		eventType := parsePlannerChangeType(raw.Type)
 		event := ChangeEvent{
-			Source:        source,
-			Type:          eventType,
-			Path:          fallbackPath,
-			OldPath:       sanitizePlannerOptionalPath(raw.OldPath),
-			ItemID:        defaultPlannerString(raw.ItemID, fmt.Sprintf("event-item-%d", i)),
-			ParentID:      raw.ParentID,
-			DriveID:       parsePlannerDriveID(raw.DriveID, fmt.Sprintf("drive-%d", i%2+1)),
-			ItemType:      itemType,
-			Name:          path.Base(fallbackPath),
-			Size:          raw.Size,
-			Hash:          raw.Hash,
-			Mtime:         raw.Mtime,
-			ETag:          raw.ETag,
-			IsDeleted:     raw.IsDeleted || eventType == ChangeDelete,
-			RemoteDriveID: raw.RemoteDriveID,
-			RemoteItemID:  raw.RemoteItemID,
+			Source:           source,
+			Type:             eventType,
+			Path:             fallbackPath,
+			OldPath:          sanitizePlannerOptionalPath(raw.OldPath),
+			ItemID:           defaultPlannerString(raw.ItemID, fmt.Sprintf("event-item-%d", i)),
+			ParentID:         raw.ParentID,
+			DriveID:          parsePlannerDriveID(raw.DriveID, fmt.Sprintf("drive-%d", i%2+1)),
+			ItemType:         itemType,
+			Name:             path.Base(fallbackPath),
+			Size:             raw.Size,
+			Hash:             raw.Hash,
+			Mtime:            raw.Mtime,
+			ETag:             raw.ETag,
+			IsDeleted:        raw.IsDeleted || eventType == ChangeDelete,
+			TargetRootItemID: raw.RemoteItemID,
 		}
 
 		if itemType != ItemTypeFile {
@@ -440,7 +438,6 @@ func summarizePlannerPlan(plan *ActionPlan) *plannerPlanSummary {
 			OldPath:             action.OldPath,
 			DriveID:             action.DriveID.String(),
 			ItemID:              action.ItemID,
-			TargetShortcutKey:   action.TargetShortcutKey,
 			TargetDriveID:       action.TargetDriveID.String(),
 			TargetRootItemID:    action.TargetRootItemID,
 			TargetRootLocalPath: action.TargetRootLocalPath,
@@ -472,7 +469,6 @@ type plannerActionSummary struct {
 	ItemID              string `json:"item_id,omitempty"`
 	HasView             bool   `json:"has_view,omitempty"`
 	ConflictType        string `json:"conflict_type,omitempty"`
-	TargetShortcutKey   string `json:"target_shortcut_key,omitempty"`
 	TargetDriveID       string `json:"target_drive_id,omitempty"`
 	TargetRootItemID    string `json:"target_root_item_id,omitempty"`
 	TargetRootLocalPath string `json:"target_root_local_path,omitempty"`
@@ -554,7 +550,6 @@ func plannerFuzzSeeds() [][]byte {
 	return [][]byte{
 		[]byte(`{
 			"mode":"bidirectional",
-			"delete_safety_threshold":1000,
 			"baseline":[
 				{"path":"converge.txt","drive_id":"drive-1","item_id":"item-1","item_type":"file","local_hash":"old","remote_hash":"old"}
 			],
@@ -564,7 +559,6 @@ func plannerFuzzSeeds() [][]byte {
 		}`),
 		[]byte(`{
 			"mode":"bidirectional",
-			"delete_safety_threshold":1000,
 			"baseline":[
 				{"path":"folder","drive_id":"drive-1","item_id":"folder-1","item_type":"folder"},
 				{"path":"folder/child.txt","drive_id":"drive-1","item_id":"file-1","item_type":"file","local_hash":"same","remote_hash":"same"}
@@ -575,10 +569,9 @@ func plannerFuzzSeeds() [][]byte {
 		}`),
 		[]byte(`{
 			"mode":"bidirectional",
-			"delete_safety_threshold":1000,
 			"baseline":[
 				{"path":"own/file.txt","drive_id":"drive-a","item_id":"item-1","item_type":"file","local_hash":"hash-1","remote_hash":"hash-1"},
-				{"path":"shared","drive_id":"drive-b","item_id":"shortcut-root","item_type":"folder"}
+				{"path":"shared","drive_id":"drive-b","item_id":"shared-root","item_type":"folder"}
 			],
 			"changes":[
 				{"path":"own/file.txt","local_events":[{"type":"delete","item_type":"file","is_deleted":true}]},
@@ -587,7 +580,6 @@ func plannerFuzzSeeds() [][]byte {
 		}`),
 		[]byte(`{
 			"mode":"download-only",
-			"delete_safety_threshold":1000,
 			"denied_prefixes":["shared"],
 			"baseline":[
 				{"path":"planner-replay.txt","drive_id":"drive-1","item_id":"item-1","item_type":"file","local_hash":"hash-a","remote_hash":"hash-a","etag":"etag-a"}

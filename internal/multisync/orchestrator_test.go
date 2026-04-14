@@ -130,31 +130,6 @@ func postControlJSON(t *testing.T, socketPath string, path string, body []byte) 
 	return decoded
 }
 
-func postControlJSONStatus(
-	t *testing.T,
-	socketPath string,
-	path string,
-	body []byte,
-	wantStatus int,
-) synccontrol.MutationResponse {
-	t.Helper()
-
-	client := controlTestClient(socketPath)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, synccontrol.HTTPBaseURL+path, bytes.NewReader(body))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-
-	// #nosec G704 -- fixed Unix-domain test socket client.
-	resp, err := client.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, wantStatus, resp.StatusCode)
-
-	var decoded synccontrol.MutationResponse
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&decoded))
-	return decoded
-}
-
 func controlTestClient(socketPath string) *http.Client {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -810,8 +785,8 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	}
 }
 
-// Validates: R-2.9.1, R-2.9.3
-func TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict(t *testing.T) {
+// Validates: R-2.9.1
+func TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:oneshot@example.com", "OneShot")
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
@@ -826,15 +801,12 @@ func TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict(t *testing.
 	status := getControlStatus(t, cfg.ControlSocketPath)
 	assert.Equal(t, synccontrol.OwnerModeOneShot, status.OwnerMode)
 	assert.Equal(t, []string{rd.CanonicalID.String()}, status.Drives)
-	assert.Zero(t, status.PendingHeldDeleteApprovals)
-	assert.Zero(t, status.PendingConflictRequests)
-	assert.Zero(t, status.ApplyingConflictRequests)
 
 	client := controlTestClient(cfg.ControlSocketPath)
 	req, err := http.NewRequestWithContext(
 		t.Context(),
 		http.MethodPost,
-		synccontrol.HTTPBaseURL+synccontrol.HeldDeletesApprovePath(rd.CanonicalID.String()),
+		synccontrol.HTTPBaseURL+synccontrol.PathReload,
 		http.NoBody,
 	)
 	require.NoError(t, err)
@@ -850,267 +822,6 @@ func TestOrchestrator_OneShotControlSocket_StatusAndMutationConflict(t *testing.
 	assert.Equal(t, synccontrol.StatusError, decoded.Status)
 	assert.Equal(t, synccontrol.ErrorForegroundSyncRunning, decoded.Code)
 	assert.Contains(t, decoded.Message, "foreground sync")
-}
-
-// Validates: R-2.3.5, R-2.3.6, R-2.9.3
-func TestOrchestrator_ControlSocket_QueuesDurableUserIntent(t *testing.T) {
-	dataHome := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dataHome)
-
-	rd := testResolvedDrive(t, "personal:intent@example.com", "Intent")
-	cfgPath := writeTestConfig(t, rd.CanonicalID)
-	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
-	cfg.ControlSocketPath = shortControlSocketPath(t)
-	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
-
-	seedControlSocketIntentStore(t, rd)
-
-	orch := NewOrchestrator(cfg)
-	watchStarted := make(chan struct{})
-	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
-		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, opts syncengine.WatchOptions) error {
-				close(watchStarted)
-				for {
-					select {
-					case request := <-opts.MutationRequests:
-						store, err := syncengine.NewSyncStore(ctx, rd.StatePath(), slog.Default())
-						if err != nil {
-							request.Response <- syncengine.WatchMutationResponse{Err: err}
-							continue
-						}
-
-						switch request.Kind {
-						case syncengine.WatchMutationApproveHeldDeletes:
-							err = store.ApproveHeldDeletes(ctx)
-							request.Response <- syncengine.WatchMutationResponse{Err: err}
-						case syncengine.WatchMutationRequestConflictResolution:
-							result, requestErr := store.RequestConflictResolution(ctx, request.ConflictID, request.Resolution)
-							request.Response <- syncengine.WatchMutationResponse{
-								ConflictRequestResult: result,
-								Err:                   requestErr,
-							}
-						default:
-							request.Response <- syncengine.WatchMutationResponse{
-								Err: fmt.Errorf("unknown mutation kind %q", request.Kind),
-							}
-						}
-
-						require.NoError(t, store.Close(ctx))
-					case <-ctx.Done():
-						return ctx.Err()
-					}
-				}
-			},
-		}, nil
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
-
-	select {
-	case <-watchStarted:
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "RunWatch did not start in time")
-	}
-
-	approvePath := synccontrol.HeldDeletesApprovePath(rd.CanonicalID.String())
-	approve := postControlJSON(t, cfg.ControlSocketPath, approvePath, nil)
-	assert.Equal(t, synccontrol.StatusApproved, approve.Status)
-
-	requestPath := synccontrol.ConflictResolutionRequestPath(rd.CanonicalID.String(), "conflict-1")
-	request := postControlJSON(t, cfg.ControlSocketPath, requestPath, []byte(`{"resolution":"keep_local"}`))
-	assert.Equal(t, synccontrol.Status(syncengine.ConflictRequestQueued), request.Status)
-
-	assertControlStatusCounts(t, cfg.ControlSocketPath)
-	assertControlTypedIntentErrors(t, cfg.ControlSocketPath, rd.CanonicalID.String())
-	assertDurableIntentStoreUpdated(t, rd)
-
-	stop := postControlJSON(t, cfg.ControlSocketPath, synccontrol.PathStop, nil)
-	assert.Equal(t, synccontrol.StatusStopping, stop.Status)
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
-}
-
-// Validates: R-2.9.3, R-2.10.4
-func TestOrchestrator_ControlSocket_StatusCountsUseReadOnlyInspector(t *testing.T) {
-	dataHome := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dataHome)
-
-	rd := testResolvedDrive(t, "personal:readonly-status@example.com", "ReadOnlyStatus")
-	cfgPath := writeTestConfig(t, rd.CanonicalID)
-	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
-	cfg.ControlSocketPath = shortControlSocketPath(t)
-	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
-
-	seedControlSocketIntentStore(t, rd)
-
-	store, err := syncengine.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
-	require.NoError(t, err)
-	require.NoError(t, store.ApproveHeldDeletes(t.Context()))
-	result, err := store.RequestConflictResolution(t.Context(), "conflict-1", syncengine.ResolutionKeepLocal)
-	require.NoError(t, err)
-	assert.Equal(t, syncengine.ConflictRequestQueued, result.Status)
-
-	dbPath := rd.StatePath()
-	dbDir := filepath.Dir(dbPath)
-	walPath := dbPath + "-wal"
-	shmPath := dbPath + "-shm"
-	require.Eventually(t, func() bool {
-		_, walErr := os.Stat(walPath)
-		_, shmErr := os.Stat(shmPath)
-		return walErr == nil && shmErr == nil
-	}, time.Second, 10*time.Millisecond, "WAL sidecars were not created")
-
-	require.NoError(t, os.Chmod(dbPath, 0o400))
-	// #nosec G302 -- test intentionally makes the directory read-only to prove status uses a read-only DB path.
-	require.NoError(t, os.Chmod(dbDir, 0o500))
-	t.Cleanup(func() {
-		// #nosec G302 -- cleanup restores the test directory so the writable store can close cleanly.
-		assert.NoError(t, os.Chmod(dbDir, 0o700))
-		assert.NoError(t, os.Chmod(dbPath, 0o600))
-		assert.NoError(t, store.Close(context.Background()))
-	})
-
-	orch := NewOrchestrator(cfg)
-	watchStarted := make(chan struct{})
-	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
-		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
-				close(watchStarted)
-				<-ctx.Done()
-				return ctx.Err()
-			},
-		}, nil
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
-
-	select {
-	case <-watchStarted:
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "RunWatch did not start in time")
-	}
-
-	status := getControlStatus(t, cfg.ControlSocketPath)
-	assert.Equal(t, 1, status.PendingHeldDeleteApprovals)
-	assert.Equal(t, 1, status.PendingConflictRequests)
-	assert.Zero(t, status.ApplyingConflictRequests)
-
-	stop := postControlJSON(t, cfg.ControlSocketPath, synccontrol.PathStop, nil)
-	assert.Equal(t, synccontrol.StatusStopping, stop.Status)
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
-}
-
-func assertControlStatusCounts(t *testing.T, socketPath string) {
-	t.Helper()
-
-	status := getControlStatus(t, socketPath)
-	assert.Equal(t, 1, status.PendingHeldDeleteApprovals)
-	assert.Equal(t, 1, status.PendingConflictRequests)
-	assert.Zero(t, status.ApplyingConflictRequests)
-}
-
-func assertControlTypedIntentErrors(t *testing.T, socketPath, cid string) {
-	t.Helper()
-
-	unknownDrive := postControlJSONStatus(
-		t,
-		socketPath,
-		synccontrol.HeldDeletesApprovePath("personal:unknown@example.com"),
-		nil,
-		http.StatusNotFound,
-	)
-	assert.Equal(t, synccontrol.ErrorDriveNotManaged, unknownDrive.Code)
-
-	invalidResolution := postControlJSONStatus(
-		t,
-		socketPath,
-		synccontrol.ConflictResolutionRequestPath(cid, "conflict-1"),
-		[]byte(`{"resolution":"not_a_strategy"}`),
-		http.StatusBadRequest,
-	)
-	assert.Equal(t, synccontrol.ErrorInvalidResolution, invalidResolution.Code)
-
-	missingConflict := postControlJSONStatus(
-		t,
-		socketPath,
-		synccontrol.ConflictResolutionRequestPath(cid, "missing-conflict"),
-		[]byte(`{"resolution":"keep_local"}`),
-		http.StatusNotFound,
-	)
-	assert.Equal(t, synccontrol.ErrorConflictNotFound, missingConflict.Code)
-
-	overwrittenStrategy := postControlJSONStatus(
-		t,
-		socketPath,
-		synccontrol.ConflictResolutionRequestPath(cid, "conflict-1"),
-		[]byte(`{"resolution":"keep_remote"}`),
-		http.StatusOK,
-	)
-	assert.Equal(t, synccontrol.StatusQueued, overwrittenStrategy.Status)
-}
-
-func assertDurableIntentStoreUpdated(t *testing.T, rd *config.ResolvedDrive) {
-	t.Helper()
-
-	reopened, err := syncengine.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, reopened.Close(context.Background()))
-	})
-
-	held, err := reopened.ListHeldDeletesByState(t.Context(), syncengine.HeldDeleteStateHeld)
-	require.NoError(t, err)
-	assert.Empty(t, held)
-	approved, err := reopened.ListHeldDeletesByState(t.Context(), syncengine.HeldDeleteStateApproved)
-	require.NoError(t, err)
-	require.Len(t, approved, 1)
-
-	conflict, err := reopened.GetConflictRequest(t.Context(), "conflict-1")
-	require.NoError(t, err)
-	assert.Equal(t, syncengine.ConflictStateQueued, conflict.State)
-	assert.Equal(t, syncengine.ResolutionKeepRemote, conflict.RequestedResolution)
-}
-
-func seedControlSocketIntentStore(t *testing.T, rd *config.ResolvedDrive) {
-	t.Helper()
-
-	store, err := syncengine.NewSyncStore(t.Context(), rd.StatePath(), slog.Default())
-	require.NoError(t, err)
-	require.NoError(t, store.UpsertHeldDeletes(t.Context(), []syncengine.HeldDeleteRecord{{
-		DriveID:       rd.DriveID,
-		ItemID:        "item-delete",
-		Path:          "delete-me.txt",
-		ActionType:    syncengine.ActionRemoteDelete,
-		State:         syncengine.HeldDeleteStateHeld,
-		HeldAt:        1,
-		LastPlannedAt: 1,
-		LastError:     "held",
-	}}))
-	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO conflicts
-		(id, drive_id, item_id, path, conflict_type, detected_at, resolution)
-		VALUES ('conflict-1', ?, 'item-conflict', 'conflict.txt', 'edit_edit', 1, 'unresolved')`,
-		rd.DriveID.String(),
-	)
-	require.NoError(t, err)
-	require.NoError(t, store.Close(t.Context()))
 }
 
 // Validates: R-2.4

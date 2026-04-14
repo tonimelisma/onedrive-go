@@ -38,17 +38,9 @@ func writeTestConfig(t *testing.T, content string) string {
 // Validates: R-4.1.1
 func TestLoad_ValidFullConfig(t *testing.T) {
 	tomlContent := `
-skip_files = ["*.tmp", "*.swp"]
-skip_dirs = ["node_modules", ".git"]
-skip_dotfiles = true
-skip_symlinks = true
-sync_paths = ["/Documents", "/Photos"]
-ignore_marker = ".syncignore"
-
 transfer_workers = 16
 check_workers = 8
 
-delete_safety_threshold = 500
 min_free_space = "2GB"
 use_local_trash = false
 
@@ -67,17 +59,9 @@ log_retention_days = 7
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{"*.tmp", "*.swp"}, cfg.SkipFiles)
-	assert.Equal(t, []string{"node_modules", ".git"}, cfg.SkipDirs)
-	assert.True(t, cfg.SkipDotfiles)
-	assert.True(t, cfg.SkipSymlinks)
-	assert.Equal(t, []string{"/Documents", "/Photos"}, cfg.SyncPaths)
-	assert.Equal(t, ".syncignore", cfg.IgnoreMarker)
-
 	assert.Equal(t, 16, cfg.TransferWorkers)
 	assert.Equal(t, 8, cfg.CheckWorkers)
 
-	assert.Equal(t, 500, cfg.DeleteSafetyThreshold)
 	assert.Equal(t, "2GB", cfg.MinFreeSpace)
 	assert.False(t, cfg.UseLocalTrash)
 
@@ -208,7 +192,7 @@ func TestLoad_PartialConfig_UsesDefaults(t *testing.T) {
 	assert.Equal(t, "warn", cfg.LogLevel)
 	assert.Equal(t, 8, cfg.TransferWorkers)
 	assert.Equal(t, "5m", cfg.PollInterval)
-	assert.Equal(t, ".odignore", cfg.IgnoreMarker)
+	assert.Equal(t, "1GB", cfg.MinFreeSpace)
 }
 
 // --- Two-pass decode: drive section tests ---
@@ -235,8 +219,6 @@ display_name = "home"
 // Validates: R-4.1.1, R-3.4.1
 func TestLoad_MultipleDriveSections(t *testing.T) {
 	path := writeTestConfig(t, `
-skip_dotfiles = true
-
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
 display_name = "home"
@@ -244,7 +226,6 @@ display_name = "home"
 ["business:alice@contoso.com"]
 sync_dir = "~/OneDrive - Contoso"
 display_name = "work"
-skip_dirs = ["node_modules", ".git", "vendor"]
 `)
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
@@ -257,7 +238,6 @@ skip_dirs = ["node_modules", ".git", "vendor"]
 	business := cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")]
 	assert.Equal(t, "~/OneDrive - Contoso", business.SyncDir)
 	assert.Equal(t, "work", business.DisplayName)
-	assert.Equal(t, []string{"node_modules", ".git", "vendor"}, business.SkipDirs)
 }
 
 func TestLoad_DriveWithAllFields(t *testing.T) {
@@ -266,9 +246,7 @@ func TestLoad_DriveWithAllFields(t *testing.T) {
 sync_dir = "~/OneDrive"
 display_name = "home"
 paused = true
-skip_dotfiles = true
-skip_dirs = ["vendor"]
-skip_files = ["*.log"]
+owner = "Alice Smith"
 `)
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
@@ -278,10 +256,7 @@ skip_files = ["*.log"]
 	assert.Equal(t, "home", d.DisplayName)
 	require.NotNil(t, d.Paused)
 	assert.True(t, *d.Paused)
-	require.NotNil(t, d.SkipDotfiles)
-	assert.True(t, *d.SkipDotfiles)
-	assert.Equal(t, []string{"vendor"}, d.SkipDirs)
-	assert.Equal(t, []string{"*.log"}, d.SkipFiles)
+	assert.Equal(t, "Alice Smith", d.Owner)
 }
 
 func TestLoad_SharePointDrive(t *testing.T) {
@@ -482,15 +457,14 @@ func TestResolveDrive_NoConfigFile(t *testing.T) {
 }
 
 // Validates: R-4.3
-func TestResolveDrive_PerDriveOverridesApplied(t *testing.T) {
+func TestResolveDrive_UsesDriveFieldsAndGlobalRuntimeSettings(t *testing.T) {
 	path := writeTestConfig(t, `
-skip_dotfiles = false
+log_level = "debug"
+poll_interval = "10m"
 
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
-skip_dotfiles = true
-skip_dirs = ["vendor"]
-skip_files = ["*.log"]
+display_name = "home"
 `)
 	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
@@ -499,16 +473,16 @@ skip_files = ["*.log"]
 	)
 	require.NoError(t, err)
 
-	assert.True(t, resolved.SkipDotfiles)
-	assert.Equal(t, []string{"vendor"}, resolved.SkipDirs)
-	assert.Equal(t, []string{"*.log"}, resolved.SkipFiles)
+	assert.Equal(t, "home", resolved.DisplayName)
+	assert.Equal(t, "debug", resolved.LogLevel)
+	assert.Equal(t, "10m", resolved.PollInterval)
 }
 
 // Validates: R-4.3
 func TestResolveDrive_GlobalSettingsUsedWhenNoDriveOverride(t *testing.T) {
 	path := writeTestConfig(t, `
-skip_dotfiles = true
 log_level = "debug"
+poll_interval = "10m"
 
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
@@ -520,8 +494,8 @@ sync_dir = "~/OneDrive"
 	)
 	require.NoError(t, err)
 
-	assert.True(t, resolved.SkipDotfiles)
 	assert.Equal(t, "debug", resolved.LogLevel)
+	assert.Equal(t, "10m", resolved.PollInterval)
 }
 
 // --- Edge case: drive section is not a table ---
@@ -905,7 +879,7 @@ display_name = "home"
 
 ["business:alice@contoso.com"]
 sync_dir = "~/Work"
-skip_dirs = ["vendor"]
+owner = "Alice Smith"
 `)
 
 	strictCfg := DefaultConfig()

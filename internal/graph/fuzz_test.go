@@ -15,7 +15,7 @@ func FuzzDriveItemUnmarshal(f *testing.F) {
 	f.Add([]byte(`{"id":"abc","name":"test.txt","size":100}`))
 	f.Add([]byte(`{"id":"x","name":"folder","folder":{"childCount":5},"root":{}}`))
 	f.Add([]byte(`{"id":"y","name":"deleted","deleted":{}}`))
-	f.Add([]byte(`{"id":"z","name":"shortcut","remoteItem":{"id":"ri","parentReference":{"driveId":"d1"}}}`))
+	f.Add([]byte(`{"id":"z","name":"shared-link","remoteItem":{"id":"ri","parentReference":{"driveId":"d1"}}}`))
 	f.Add([]byte(`{"id":"","name":"","size":-1,"file":{"hashes":{"quickXorHash":"abc"}}}`))
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`null`))

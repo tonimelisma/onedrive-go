@@ -172,31 +172,6 @@ func TestS1_NoRemoteDeleteWithoutBaseline(t *testing.T) {
 	assert.Len(t, downloads, 1)
 }
 
-// Validates: R-6.2.5, R-6.4.1
-// TestS5_DeleteSafetyThresholdBoundary validates that delete safety protection
-// uses a simple absolute count threshold with no percentage or per-folder checks.
-func TestS5_DeleteSafetyThresholdBoundary(t *testing.T) {
-	t.Run("above_threshold_blocked", func(t *testing.T) {
-		// 11 deletes > threshold of 10 → triggered.
-		assert.True(t, exceedsDeleteThreshold(11, 10))
-	})
-
-	t.Run("below_threshold_allowed", func(t *testing.T) {
-		// 9 deletes < threshold of 10 → allowed.
-		assert.False(t, exceedsDeleteThreshold(9, 10))
-	})
-
-	t.Run("exactly_at_threshold_allowed", func(t *testing.T) {
-		// 10 deletes = threshold of 10 → NOT greater than, so allowed.
-		assert.False(t, exceedsDeleteThreshold(10, 10))
-	})
-
-	t.Run("threshold_zero_disables", func(t *testing.T) {
-		// Threshold of 0 disables protection entirely.
-		assert.False(t, exceedsDeleteThreshold(99999, 0))
-	})
-}
-
 // Validates: R-2.3
 // TestS7_PartialFilesNeverUploaded validates Safety Invariant S7:
 // .partial files are excluded by the local observer and should never
@@ -760,51 +735,6 @@ func TestBuildDependencies_ChildDeleteBeforeParent(t *testing.T) {
 	// Action 0 (parent delete) should depend on action 1 (child delete).
 	require.Len(t, deps, 2)
 	assert.Contains(t, deps[0], 1, "parent folder delete should depend on child delete")
-}
-
-// ---------------------------------------------------------------------------
-// §3: Planner-level safety check integration
-// ---------------------------------------------------------------------------
-
-// Validates: R-6.2.5, R-6.4.1
-// TestPlan_DeleteSafetyBlocked validates that the planner returns
-// ErrDeleteSafetyThresholdExceeded when planned deletions exceed the threshold.
-func TestPlan_DeleteSafetyBlocked(t *testing.T) {
-	planner := NewPlanner(synctest.TestLogger(t))
-
-	// Create 10-item baseline.
-	baseline := emptyBaseline()
-	var changes []PathChanges
-
-	for i := range 10 {
-		path := "file" + string(rune('a'+i)) + ".txt"
-		entry := &BaselineEntry{
-			Path:       path,
-			DriveID:    driveid.New(synctest.TestDriveID),
-			ItemID:     "item-" + string(rune('a'+i)),
-			ItemType:   ItemTypeFile,
-			LocalHash:  "hash",
-			RemoteHash: "hash",
-		}
-		baseline.Put(entry)
-	}
-
-	// Delete 6 out of 10. Threshold is 5 → 6 > 5 → triggered.
-	for i := range 6 {
-		path := "file" + string(rune('a'+i)) + ".txt"
-		changes = append(changes, PathChanges{
-			Path: path,
-			LocalEvents: []ChangeEvent{
-				{Source: SourceLocal, Type: ChangeDelete, Path: path, ItemType: ItemTypeFile, IsDeleted: true},
-			},
-		})
-	}
-
-	config := &SafetyConfig{DeleteSafetyThreshold: 5}
-
-	_, err := planner.Plan(changes, baseline, SyncBidirectional, config, nil)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrDeleteSafetyThresholdExceeded)
 }
 
 // ---------------------------------------------------------------------------

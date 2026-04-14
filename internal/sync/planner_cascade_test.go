@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -628,48 +627,4 @@ func TestCascade_EmptyFolder(t *testing.T) {
 	localDeletes := actionsOfType(plan.Actions, ActionLocalDelete)
 	assert.Len(t, localDeletes, 1)
 	assert.Equal(t, "empty", localDeletes[0].Path)
-}
-
-// Validates: R-6.2.5, R-6.4.1
-// TestCascade_DeleteSafetyProtection verifies that cascaded actions increase
-// the delete count and trigger delete safety protection if threshold is exceeded.
-func TestCascade_DeleteSafetyProtection(t *testing.T) {
-	t.Parallel()
-
-	planner := NewPlanner(synctest.TestLogger(t))
-	driveID := driveid.New(synctest.TestDriveID)
-
-	// Create a folder with 5 children.
-	entries := []*BaselineEntry{
-		{Path: "bigfolder", ItemType: ItemTypeFolder, ItemID: "bf1", DriveID: driveID},
-	}
-
-	for i := range 5 {
-		entries = append(entries, &BaselineEntry{
-			Path: fmt.Sprintf("bigfolder/file%d.txt", i), ItemType: ItemTypeFile,
-			ItemID: fmt.Sprintf("bf%d", i+2), DriveID: driveID,
-			LocalHash: fmt.Sprintf("h%d", i), RemoteHash: fmt.Sprintf("h%d", i),
-		})
-	}
-
-	baseline := baselineWith(entries...)
-
-	changes := []PathChanges{
-		{
-			Path: "bigfolder",
-			RemoteEvents: []ChangeEvent{
-				{
-					Source: SourceRemote, Type: ChangeDelete,
-					Path: "bigfolder", ItemType: ItemTypeFolder,
-					ItemID: "bf1", DriveID: driveID, IsDeleted: true,
-				},
-			},
-		},
-	}
-
-	// Set threshold to 3 — cascade produces 6 deletes, which exceeds it.
-	safety := &SafetyConfig{DeleteSafetyThreshold: 3}
-
-	_, err := planner.Plan(changes, baseline, SyncBidirectional, safety, nil)
-	assert.ErrorIs(t, err, ErrDeleteSafetyThresholdExceeded, "cascaded deletes should trigger delete safety protection")
 }

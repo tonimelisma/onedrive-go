@@ -106,12 +106,7 @@ func recoverResultMessage(result syncengine.StateDBRepairResult) string {
 	case syncengine.StateDBRepairRepair:
 		return fmt.Sprintf("Recovered sync database in place. Applied %d deterministic repair(s).", result.RepairsApplied)
 	case syncengine.StateDBRepairRebuild:
-		return fmt.Sprintf(
-			"Rebuilt sync database and preserved %d held delete approvals, %d unresolved conflicts, and %d queued conflict requests.",
-			result.PreservedHeldDeletes,
-			result.PreservedConflicts,
-			result.PreservedRequests,
-		)
+		return "Rebuilt sync database from authoritative state."
 	case syncengine.StateDBRepairReset:
 		return "Reset sync database from scratch. The drive will need a full re-sync."
 	default:

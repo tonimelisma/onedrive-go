@@ -49,21 +49,13 @@
                 "title": "SHARED FOLDER WRITES BLOCKED",
                 "reason": "This shared folder is read-only for your current write attempts. Downloads continue normally.",
                 "action": "Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",
-                "scope_kind": "shortcut",
+                "scope_kind": "directory",
                 "scope": "Shared/Docs",
                 "count": 1,
                 "paths": [
                   "Shared/Docs/report.docx"
                 ]
               }
-            ],
-            "delete_safety_total": 0,
-            "conflicts_total": 0,
-            "conflict_history_total": 0,
-            "next_actions": [
-              "Rename the file to remove invalid characters.",
-              "Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.",
-              "Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended."
             ],
             "examples_limit": 5,
             "verbose": false,

@@ -19,31 +19,11 @@ import (
 // separate decode pass. Map keys are validated CanonicalIDs — invalid keys
 // are rejected at parse time.
 type Config struct {
-	FilterConfig
 	TransfersConfig
 	SafetyConfig
 	SyncConfig
 	LoggingConfig
 	Drives map[driveid.CanonicalID]Drive `toml:"-"` // parsed via two-pass decode, keyed by canonical ID
-}
-
-// FilterConfig controls which files and directories are included in sync.
-// These patterns are matched against the relative path within the sync directory.
-type FilterConfig struct {
-	SkipFiles    []string `toml:"skip_files"`
-	SkipDirs     []string `toml:"skip_dirs"`
-	SkipDotfiles bool     `toml:"skip_dotfiles"`
-	SkipSymlinks bool     `toml:"skip_symlinks"`
-
-	// SyncPaths narrows sync to selected absolute drive-root paths. Scope is
-	// enforced bidirectionally by local observation, remote observation, and
-	// persisted sync-state filtering.
-	SyncPaths []string `toml:"sync_paths"`
-
-	// IgnoreMarker excludes any directory containing this filename from sync.
-	// The marker is a presence-only check; contents are ignored and the marker
-	// file itself is never synced.
-	IgnoreMarker string `toml:"ignore_marker"`
 }
 
 // TransfersConfig controls live worker counts. Upload fragment sizing is a
@@ -60,9 +40,8 @@ type TransfersConfig struct {
 // SafetyConfig controls protective defaults and thresholds that prevent
 // accidental data loss during sync operations.
 type SafetyConfig struct {
-	DeleteSafetyThreshold int    `toml:"delete_safety_threshold"`
-	MinFreeSpace          string `toml:"min_free_space"`
-	UseLocalTrash         bool   `toml:"use_local_trash"`
+	MinFreeSpace  string `toml:"min_free_space"`
+	UseLocalTrash bool   `toml:"use_local_trash"`
 }
 
 // SyncConfig controls live sync behavior: remote observation, periodic safety
@@ -87,16 +66,11 @@ type LoggingConfig struct {
 // Per-drive fields override global settings when set (pointer fields distinguish
 // "not specified" from "set to zero value").
 type Drive struct {
-	SyncDir      string   `toml:"sync_dir"`
-	Paused       *bool    `toml:"paused,omitempty"`
-	PausedUntil  *string  `toml:"paused_until,omitempty"`
-	DisplayName  string   `toml:"display_name,omitempty"`
-	Owner        string   `toml:"owner,omitempty"` // drive owner name; for shared drives: "{Owner}'s {FolderName}"
-	SkipDotfiles *bool    `toml:"skip_dotfiles,omitempty"`
-	SkipDirs     []string `toml:"skip_dirs,omitempty"`
-	SkipFiles    []string `toml:"skip_files,omitempty"`
-	SyncPaths    []string `toml:"sync_paths,omitempty"`
-	IgnoreMarker string   `toml:"ignore_marker,omitempty"`
+	SyncDir     string  `toml:"sync_dir"`
+	Paused      *bool   `toml:"paused,omitempty"`
+	PausedUntil *string `toml:"paused_until,omitempty"`
+	DisplayName string  `toml:"display_name,omitempty"`
+	Owner       string  `toml:"owner,omitempty"` // drive owner name; for shared drives: "{Owner}'s {FolderName}"
 }
 
 // IsPaused returns whether this drive is currently paused. This is the single

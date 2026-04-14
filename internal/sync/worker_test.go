@@ -740,13 +740,12 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 
 	actions := []Action{
 		{
-			Type:              ActionLocalDelete,
-			Path:              "shortcut-action.txt",
-			DriveID:           driveid.New("0000000000000001"),
-			ItemID:            "del-id",
-			View:              &PathView{},
-			TargetShortcutKey: "remoteDrive:remoteItem",
-			TargetDriveID:     driveid.New("0000000000000002"),
+			Type:          ActionLocalDelete,
+			Path:          "shared-action.txt",
+			DriveID:       driveid.New("0000000000000001"),
+			ItemID:        "del-id",
+			View:          &PathView{},
+			TargetDriveID: driveid.New("0000000000000002"),
 		},
 	}
 
@@ -764,12 +763,10 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 		require.Fail(t, "timeout waiting for worker result")
 	}
 
-	assert.Equal(t, "shortcut-action.txt", result.Path)
+	assert.Equal(t, "shared-action.txt", result.Path)
 	assert.Equal(t, driveid.New("0000000000000001"), result.DriveID)
 	assert.Equal(t, driveid.New("0000000000000002"), result.TargetDriveID,
 		"TargetDriveID should flow through from Action")
-	assert.Equal(t, "remoteDrive:remoteItem", result.ShortcutKey,
-		"ShortcutKey should flow through from Action")
 	assert.False(t, result.IsTrial, "should not be a trial action")
 	assert.Empty(t, result.TrialScopeKey, "no trial scope key")
 	assert.Equal(t, int64(77), result.ActionID, "ActionID should match TrackedAction.ID")
@@ -875,43 +872,6 @@ func TestExtractRetryAfter_Nil(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, time.Duration(0), ExtractRetryAfter(nil))
-}
-
-// ---------------------------------------------------------------------------
-// Action drive identity methods (R-6.8.13)
-// ---------------------------------------------------------------------------
-
-// Validates: R-6.8.13, R-2.10.16, R-2.10.17
-func TestAction_TargetsOwnDrive(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name              string
-		targetShortcutKey string
-		wantOwnDrive      bool
-		wantShortcutKey   string
-	}{
-		{
-			name:            "own-drive action",
-			wantOwnDrive:    true,
-			wantShortcutKey: "",
-		},
-		{
-			name:              "shortcut action",
-			targetShortcutKey: "remoteDrive:remoteItem",
-			wantOwnDrive:      false,
-			wantShortcutKey:   "remoteDrive:remoteItem",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			a := Action{TargetShortcutKey: tt.targetShortcutKey}
-			assert.Equal(t, tt.wantOwnDrive, a.TargetsOwnDrive())
-			assert.Equal(t, tt.wantShortcutKey, a.ShortcutKey())
-		})
-	}
 }
 
 // ---------------------------------------------------------------------------

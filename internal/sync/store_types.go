@@ -63,37 +63,31 @@ type ActionableFailure struct {
 // ObservedItem represents a single item from a delta API response, ready
 // for CommitObservation to process against existing remote_state.
 type ObservedItem struct {
-	DriveID          driveid.ID
-	ItemID           string
-	ParentID         string
-	Path             string
-	ItemType         ItemType
-	Hash             string
-	Size             int64
-	Mtime            int64
-	ETag             string
-	IsDeleted        bool
-	Filtered         bool
-	FilterGeneration int64
-	FilterReason     RemoteFilterReason
+	DriveID   driveid.ID
+	ItemID    string
+	ParentID  string
+	Path      string
+	ItemType  ItemType
+	Hash      string
+	Size      int64
+	Mtime     int64
+	ETag      string
+	IsDeleted bool
 }
 
 // RemoteStateRow represents a row from the remote_state table.
 type RemoteStateRow struct {
-	DriveID          driveid.ID
-	ItemID           string
-	Path             string
-	ParentID         string
-	ItemType         ItemType
-	Hash             string
-	Size             int64
-	Mtime            int64
-	ETag             string
-	PreviousPath     string
-	IsFiltered       bool
-	ObservedAt       int64
-	FilterGeneration int64
-	FilterReason     RemoteFilterReason
+	DriveID      driveid.ID
+	ItemID       string
+	Path         string
+	ParentID     string
+	ItemType     ItemType
+	Hash         string
+	Size         int64
+	Mtime        int64
+	ETag         string
+	PreviousPath string
+	ObservedAt   int64
 }
 
 // PendingRetryGroup aggregates transient failures by scope_key, with the

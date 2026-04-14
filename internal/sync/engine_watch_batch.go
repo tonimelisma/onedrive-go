@@ -2,33 +2,33 @@ package sync
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // processBatch plans and dispatches a batch of path changes. On planner
-// error (e.g. delete safety threshold), the batch is skipped and the loop
-// continues. In-flight actions for overlapping paths are canceled and
-// replaced (B-122 deduplication).
+// error, the batch is skipped and the loop continues. In-flight actions for
+// overlapping paths are canceled and replaced (B-122 deduplication).
 func (rt *watchRuntime) processBatch(
 	ctx context.Context, batch []PathChanges, bl *Baseline,
 	mode Mode, safety *SafetyConfig,
 ) []*TrackedAction {
 	return rt.planAndDispatchBatch(ctx, batch, bl, mode, safety, dispatchBatchOptions{
-		applyDeleteCounter:  true,
-		deduplicateInFlight: true,
+		deduplicateInFlight:  true,
+		runPeriodicPermCheck: true,
+		clearScannerResolved: true,
 	})
 }
 
 type dispatchBatchOptions struct {
-	applyDeleteCounter  bool
-	deduplicateInFlight bool
-	trialScopeKey       ScopeKey
-	trialPath           string
-	trialDriveID        driveid.ID
+	deduplicateInFlight  bool
+	runPeriodicPermCheck bool
+	clearScannerResolved bool
+	trialScopeKey        ScopeKey
+	trialPath            string
+	trialDriveID         driveid.ID
 }
 
 func (rt *watchRuntime) planAndDispatchBatch(
@@ -44,18 +44,25 @@ func (rt *watchRuntime) planAndDispatchBatch(
 	)
 	rt.engine.collector().RecordWatchBatch(len(batch))
 
+	if opts.runPeriodicPermCheck {
+		rt.periodicPermRecheck(ctx, bl)
+	}
+
+	// R-2.10.10: use scanner output as proof-of-accessibility to clear
+	// permission denials for paths observed in this batch.
+	if opts.clearScannerResolved {
+		rt.scopeController().applyPermissionRecheckDecisions(
+			ctx,
+			rt,
+			rt.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch)),
+		)
+		rt.scopeController().clearResolvedRemoteBlockedFailures(ctx, rt, pathSetFromBatch(batch))
+	}
+
 	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
 	planStart := rt.engine.nowFunc()
 	plan, err := rt.engine.planner.Plan(batch, bl, mode, safety, denied)
 	if err != nil {
-		if errors.Is(err, ErrDeleteSafetyThresholdExceeded) {
-			rt.engine.logger.Warn("delete safety threshold triggered, skipping batch",
-				slog.Int("paths", len(batch)),
-			)
-
-			return nil
-		}
-
 		rt.engine.logger.Error("planner error, skipping batch",
 			slog.String("error", err.Error()),
 		)
@@ -69,23 +76,6 @@ func (rt *watchRuntime) planAndDispatchBatch(
 		return nil
 	}
 
-	// Rolling-window delete safety threshold: count planned deletes and
-	// filter them out if the counter trips. Non-delete actions continue
-	// flowing. The planner-level check is disabled in watch mode
-	// (threshold=MaxInt32) — this counter replaces it.
-	if opts.applyDeleteCounter && rt.deleteCounter != nil {
-		plan, err = rt.applyDeleteCounter(ctx, plan)
-		if err != nil {
-			rt.engine.logger.Error("delete protection failed",
-				slog.String("error", err.Error()),
-			)
-			return nil
-		}
-		if len(plan.Actions) == 0 {
-			return nil
-		}
-	}
-
 	if opts.deduplicateInFlight {
 		rt.deduplicateInFlight(plan)
 	}
@@ -96,6 +86,29 @@ func (rt *watchRuntime) planAndDispatchBatch(
 	}
 
 	return dispatch
+}
+
+// periodicPermRecheck runs permission rechecks at most once per 60 seconds.
+// Throttled to avoid API hammering (R-2.10.9).
+func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *Baseline) {
+	const permRecheckInterval = 60 * time.Second
+
+	now := rt.engine.nowFunc()
+	if now.Sub(rt.lastPermRecheck) < permRecheckInterval {
+		return
+	}
+
+	rt.lastPermRecheck = now
+
+	// recheckPermissions calls the Graph API — skip during outage or
+	// throttle to avoid wasting API calls (R-2.10.30). Local permission
+	// rechecks (filesystem-only) proceed regardless.
+	if rt.engine.permHandler.HasPermChecker() && !rt.scopeController().isObservationSuppressed(rt) {
+		decisions := rt.engine.permHandler.recheckPermissions(ctx, bl)
+		rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
+	}
+
+	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
 }
 
 // deduplicateInFlight cancels in-flight actions for paths that appear in the
@@ -203,7 +216,11 @@ func (rt *watchRuntime) findTrialActionIndex(plan *ActionPlan, opts dispatchBatc
 		if action.Path != opts.trialPath {
 			continue
 		}
-		if !opts.trialScopeKey.BlocksTrackedAction(&TrackedAction{Action: *action}) {
+		if !opts.trialScopeKey.BlocksAction(
+			action.Path,
+			action.ThrottleTargetKey(),
+			action.Type,
+		) {
 			continue
 		}
 		return i
@@ -211,7 +228,11 @@ func (rt *watchRuntime) findTrialActionIndex(plan *ActionPlan, opts dispatchBatc
 
 	for i := range plan.Actions {
 		action := &plan.Actions[i]
-		if opts.trialScopeKey.BlocksTrackedAction(&TrackedAction{Action: *action}) {
+		if opts.trialScopeKey.BlocksAction(
+			action.Path,
+			action.ThrottleTargetKey(),
+			action.Type,
+		) {
 			return i
 		}
 	}
@@ -224,84 +245,4 @@ func (rt *watchRuntime) findTrialActionIndex(plan *ActionPlan, opts dispatchBatc
 func (flow *engineFlow) setDispatch(ctx context.Context, action *Action) {
 	_ = ctx
 	_ = action
-}
-
-// isDeleteAction returns true if the action type is a local or remote delete.
-func isDeleteAction(t ActionType) bool {
-	return t == ActionLocalDelete || t == ActionRemoteDelete
-}
-
-// applyDeleteCounter counts unapproved planned deletes, feeds them to the
-// rolling counter, and — if the counter is held — filters unapproved delete
-// actions out of the plan and records them in the held-delete ledger.
-func (rt *watchRuntime) applyDeleteCounter(
-	ctx context.Context,
-	plan *ActionPlan,
-) (*ActionPlan, error) {
-	approved, err := rt.engine.approvedDeleteKeysForPlan(ctx, plan)
-	if err != nil {
-		return nil, fmt.Errorf("load approved deletes: %w", err)
-	}
-
-	deleteCount := 0
-	for i := range plan.Actions {
-		action := &plan.Actions[i]
-		if isDeleteAction(action.Type) {
-			if _, ok := approved[deleteKeyFromAction(action)]; ok {
-				continue
-			}
-			deleteCount++
-		}
-	}
-
-	if deleteCount == 0 {
-		return plan, nil
-	}
-
-	tripped := rt.deleteCounter.Add(deleteCount)
-	if tripped {
-		rt.engine.logger.Warn("delete safety threshold triggered in watch mode",
-			slog.Int("delete_count", rt.deleteCounter.Count()),
-			slog.Int("threshold", rt.deleteCounter.Threshold()),
-		)
-	}
-
-	if !rt.deleteCounter.IsHeld() {
-		return plan, nil
-	}
-
-	var heldDeletes []Action
-	for i := range plan.Actions {
-		action := &plan.Actions[i]
-		if isDeleteAction(action.Type) {
-			if _, ok := approved[deleteKeyFromAction(action)]; ok {
-				continue
-			}
-			heldDeletes = append(heldDeletes, plan.Actions[i])
-		}
-	}
-
-	rt.recordHeldDeletes(ctx, heldDeletes)
-
-	return filterActionPlan(plan, func(action *Action) bool {
-		if !isDeleteAction(action.Type) {
-			return true
-		}
-		_, ok := approved[deleteKeyFromAction(action)]
-		return ok
-	}), nil
-}
-
-// recordHeldDeletes writes held delete actions to the held-delete ledger.
-func (rt *watchRuntime) recordHeldDeletes(ctx context.Context, actions []Action) {
-	if err := rt.engine.holdDeleteActions(ctx, actions); err != nil {
-		rt.engine.logger.Error("failed to record held deletes",
-			slog.Int("count", len(actions)),
-			slog.String("error", err.Error()),
-		)
-	}
-
-	rt.engine.logger.Info("held delete actions recorded",
-		slog.Int("count", len(actions)),
-	)
 }

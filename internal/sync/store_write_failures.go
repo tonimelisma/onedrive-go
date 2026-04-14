@@ -1,4 +1,4 @@
-// Package sync persists sync baseline, observation, conflict, failure, and scope state.
+// Package sync persists sync baseline, observation, failure, scope-block, and metadata state.
 //
 // sync_failures is the durable per-item failure table.
 //
@@ -203,10 +203,8 @@ func normalizeActionableFailure(failure *ActionableFailure) (FailureRole, string
 func IsActionableIssue(issueType string) bool {
 	switch issueType {
 	case IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge,
-		IssueRemoteWriteDenied, IssueRemoteReadDenied, IssueQuotaExceeded,
-		IssueLocalReadDenied, IssueLocalWriteDenied,
-		IssueCaseCollision, IssueDiskFull, IssueFileTooLargeForSpace,
-		IssueDeleteSafetyHeld:
+		IssuePermissionDenied, IssueQuotaExceeded, IssueLocalPermissionDenied,
+		IssueCaseCollision, IssueDiskFull, IssueFileTooLargeForSpace:
 		return true
 	default:
 		return false
@@ -574,8 +572,8 @@ func (m *SyncStore) ClearResolvedActionableFailures(ctx context.Context, issueTy
 }
 
 // DeleteSyncFailuresByScope removes all sync_failures rows matching the
-// given scope_key. Used when a scope source is removed (e.g., shortcut
-// deleted) to clean up orphaned failure records.
+// given scope_key. Used when the source subtree disappears to clean up
+// orphaned failure records.
 func (m *SyncStore) DeleteSyncFailuresByScope(ctx context.Context, scopeKey ScopeKey) error {
 	wire := scopeKey.String()
 

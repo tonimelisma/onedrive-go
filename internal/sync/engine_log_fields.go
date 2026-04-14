@@ -31,9 +31,6 @@ func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *WorkerResul
 		slog.String("path", r.Path),
 	}
 
-	if r.ShortcutKey != "" {
-		fields = append(fields, slog.String("shortcut_key", r.ShortcutKey))
-	}
 	if r.HTTPStatus != 0 {
 		fields = append(fields, slog.Int("http_status", r.HTTPStatus))
 	}

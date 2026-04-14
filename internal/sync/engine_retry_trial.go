@@ -75,10 +75,9 @@ func (rt *watchRuntime) dispatchWorkRequest(
 	}
 
 	options := dispatchBatchOptions{
-		applyDeleteCounter: request.reason == engineWorkRetry,
-		trialScopeKey:      request.trialScopeKey,
-		trialPath:          request.trialPath,
-		trialDriveID:       request.trialDriveID,
+		trialScopeKey: request.trialScopeKey,
+		trialPath:     request.trialPath,
+		trialDriveID:  request.trialDriveID,
 	}
 
 	return rt.dispatchPlannerWork(ctx, request.changes, bl, mode, safety, options)
@@ -95,13 +94,6 @@ func (rt *watchRuntime) dispatchPlannerWork(
 	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
 	plan, err := rt.engine.planner.Plan(changes, bl, mode, safety, denied)
 	if err != nil {
-		if errors.Is(err, ErrDeleteSafetyThresholdExceeded) {
-			rt.engine.logger.Warn("internal work request blocked by delete protection",
-				slog.Int("paths", len(changes)),
-			)
-			return nil, false
-		}
-
 		rt.engine.logger.Error("internal work request planning failed",
 			slog.String("error", err.Error()),
 			slog.Int("paths", len(changes)),
@@ -111,19 +103,6 @@ func (rt *watchRuntime) dispatchPlannerWork(
 
 	if len(plan.Actions) == 0 {
 		return nil, false
-	}
-
-	if options.applyDeleteCounter && rt.deleteCounter != nil {
-		plan, err = rt.applyDeleteCounter(ctx, plan)
-		if err != nil {
-			rt.engine.logger.Error("delete protection failed",
-				slog.String("error", err.Error()),
-			)
-			return nil, false
-		}
-		if len(plan.Actions) == 0 {
-			return nil, false
-		}
 	}
 
 	return rt.dispatchBatchActions(ctx, plan, options)
@@ -578,9 +557,9 @@ func (flow *engineFlow) buildRetryCandidate(
 
 	switch failureActionType(row) {
 	case ActionUpload, ActionFolderCreate:
-		return flow.buildLocalObservationRetryCandidate(ctx, bl, row)
+		return flow.buildLocalObservationRetryCandidate(bl, row)
 	case ActionRemoteMove:
-		return flow.buildRemoteMoveRetryCandidate(ctx, bl, row)
+		return flow.buildRemoteMoveRetryCandidate(bl, row)
 	case ActionRemoteDelete:
 		return flow.buildRemoteDeleteRetryCandidate(bl, row)
 	case ActionDownload:
@@ -607,7 +586,7 @@ func (flow *engineFlow) buildMirrorRetryCandidate(
 	if err != nil {
 		return retryCandidate{err: fmt.Errorf("remote state lookup failed: %w", err)}
 	}
-	if !found || rs.IsFiltered {
+	if !found {
 		return retryCandidate{resolved: true}
 	}
 	if baselineEntryMatchesRemoteState(baselineEntryForFailureInBaseline(bl, row), rs) {
@@ -662,16 +641,10 @@ func (flow *engineFlow) buildLocalDeleteRetryCandidate(
 }
 
 func (flow *engineFlow) buildLocalObservationRetryCandidate(
-	ctx context.Context,
 	bl *Baseline,
 	row *SyncFailureRow,
 ) retryCandidate {
-	scopeSnapshot, err := flow.engine.buildScopeSnapshot(ctx)
-	if err != nil {
-		return retryCandidate{err: fmt.Errorf("build scope snapshot: %w", err)}
-	}
-
-	result, err := ObserveSinglePathWithScope(
+	result, err := ObserveSinglePathWithFilter(
 		flow.engine.logger,
 		flow.engine.syncTree,
 		row.Path,
@@ -680,7 +653,6 @@ func (flow *engineFlow) buildLocalObservationRetryCandidate(
 		nil,
 		flow.engine.localFilter,
 		flow.engine.localRules,
-		scopeSnapshot,
 	)
 	if err != nil {
 		return retryCandidate{err: err}
@@ -694,11 +666,10 @@ func (flow *engineFlow) buildLocalObservationRetryCandidate(
 }
 
 func (flow *engineFlow) buildRemoteMoveRetryCandidate(
-	ctx context.Context,
 	bl *Baseline,
 	row *SyncFailureRow,
 ) retryCandidate {
-	rebuild := flow.buildLocalObservationRetryCandidate(ctx, bl, row)
+	rebuild := flow.buildLocalObservationRetryCandidate(bl, row)
 	if rebuild.err != nil || rebuild.skipped != nil || rebuild.resolved || rebuild.event == nil || row.ItemID == "" {
 		return rebuild
 	}

@@ -124,8 +124,8 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 			TrialCount:    2,
 		},
 		{
-			Key:           SKQuotaShortcut("drive1:item1"),
-			IssueType:     IssueQuotaExceeded,
+			Key:           SKPermRemote("Shared/TeamDocs"),
+			IssueType:     IssueSharedFolderBlocked,
 			TimingSource:  ScopeTimingBackoff,
 			BlockedAt:     now.Add(-5 * time.Minute),
 			TrialInterval: time.Minute,
@@ -158,11 +158,11 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 	assert.Equal(t, now.Add(5*time.Second), ta.PreserveUntil)
 	assert.Equal(t, 0, ta.TrialCount)
 
-	// Verify quota:shortcut round-trip (parameterized key).
-	qs := byKey[SKQuotaShortcut("drive1:item1")]
-	require.NotNil(t, qs, "quota:shortcut block should be listed")
-	assert.Equal(t, IssueQuotaExceeded, qs.IssueType)
-	assert.Equal(t, 5, qs.TrialCount)
+	// Verify perm:remote round-trip (parameterized key).
+	remotePerm := byKey[SKPermRemote("Shared/TeamDocs")]
+	require.NotNil(t, remotePerm, "perm:remote block should be listed")
+	assert.Equal(t, IssueSharedFolderBlocked, remotePerm.IssueType)
+	assert.Equal(t, 5, remotePerm.TrialCount)
 }
 
 // Validates: R-2.10.8
@@ -192,8 +192,8 @@ func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
 	// - Duration in nanoseconds
 	// - Parameterized scope key (perm:local-write)
 	original := &ScopeBlock{
-		Key:           SKQuotaShortcut("drive1:item1"),
-		IssueType:     IssueQuotaExceeded,
+		Key:           SKPermRemote("Shared/TeamDocs"),
+		IssueType:     IssueSharedFolderBlocked,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Date(2025, 3, 14, 9, 26, 53, 123456789, time.UTC),
 		TrialInterval: 2*time.Minute + 500*time.Millisecond,

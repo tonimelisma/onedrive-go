@@ -93,8 +93,10 @@ func TestStatusPerf_SummaryText_WithPerfAndNoActiveOwner(t *testing.T) {
 // Validates: R-6.6.15
 func TestStatusPerf_FilteredJSON_WithPerfUnavailableFromActiveOwner(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	setTestDriveHome(t)
 
-	cfgPath, cid := seedDriveStatusFixture(t)
+	cid := driveid.MustCanonicalID("personal:perf-unavailable@example.com")
+	cfgPath := writeStatusPerfConfig(t, cid)
 	startCLIControlSocket(t, synccontrol.StatusResponse{
 		OwnerMode: synccontrol.OwnerModeWatch,
 		Drives:    []string{cid.String()},

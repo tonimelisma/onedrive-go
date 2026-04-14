@@ -1487,7 +1487,7 @@ func TestDriveList_JSONKeepsSharedEntryWithoutOwnerIdentity(t *testing.T) {
 			writeTestResponse(t, w, `{"id":"drive-personal","name":"OneDrive","driveType":"personal"}`)
 		case testDriveSearchAllPath:
 			writeTestResponse(t, w, `{"value":[{
-				"id":"local-shortcut-1",
+				"id":"local-shared-1",
 				"name":"Shared Folder",
 				"folder":{"childCount":1},
 				"remoteItem":{

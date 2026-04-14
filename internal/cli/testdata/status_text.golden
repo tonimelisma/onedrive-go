@@ -34,12 +34,6 @@ Account: Alice Example (alice@example.com) [personal]
       Shared/Docs/report.docx
       Next: Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.
 
-    DELETE SAFETY
-    No delete-safety entries.
-
-    CONFLICTS
-    No unresolved conflicts.
-
 Account: bob@example.com [business]
   Auth:  authentication_required
   Reason: The saved login for this account is invalid or unreadable.

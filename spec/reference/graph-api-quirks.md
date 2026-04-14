@@ -170,14 +170,14 @@ its folder-scoped delta feed is ready. A direct `GET /drives/{driveID}/root:/pat
 can return `200` for the folder while the immediate first
 `GET /drives/{driveID}/items/{folderID}/delta` still returns HTTP 404
 `itemNotFound`. This showed up in the fast E2E lane on April 6, 2026 for a
-fresh `sync_paths` bootstrap: the selected folder existed and contained files,
+fresh shared-root drive bootstrap: the selected folder existed and contained files,
 but initial scoped delta still lagged the folder lookup path.
 
 Runtime policy:
 - treat this as a Graph readiness quirk, not as proof the configured path is invalid
-- when a personal `sync_paths` scoped bootstrap already resolved the folder by
-  path but folder-scoped delta still fails, fall back to recursive subtree
-  enumeration for that scope instead of failing the whole sync pass
+- when a personal shared-root bootstrap already resolved the folder by path
+  but folder-scoped delta still fails, fall back to recursive subtree
+  enumeration for that root instead of failing the whole sync pass
 - keep retrying scoped delta on later passes once the folder feed becomes ready
 
 ### Ephemeral Deletion Events

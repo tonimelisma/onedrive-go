@@ -143,16 +143,15 @@ func TestMatchDrive_NoMatch_Error(t *testing.T) {
 
 func TestBuildResolvedDrive_GlobalDefaults(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.SkipDotfiles = true
-	cfg.LogLevel = "debug"
+	cfg.LogLevel = logLevelDebug
 
 	drive := &Drive{SyncDir: "~/OneDrive"}
 	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), resolved.CanonicalID)
 	assert.False(t, resolved.Paused)
-	assert.True(t, resolved.SkipDotfiles)
-	assert.Equal(t, "debug", resolved.LogLevel)
+	assert.Equal(t, logLevelDebug, resolved.LogLevel)
+	assert.Equal(t, cfg.PollInterval, resolved.PollInterval)
 }
 
 func TestBuildResolvedDrive_PausedDefault(t *testing.T) {
@@ -192,29 +191,21 @@ func TestBuildResolvedDrive_PausedExplicitFalse(t *testing.T) {
 	assert.False(t, resolved.Paused)
 }
 
-func TestBuildResolvedDrive_PerDriveOverrides(t *testing.T) {
+func TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.SkipDotfiles = false
-	cfg.SyncPaths = []string{"/Documents"}
-	cfg.IgnoreMarker = ".odignore"
+	cfg.LogLevel = "debug"
+	cfg.DryRun = true
 
-	skipDot := true
 	drive := &Drive{
-		SyncDir:      "~/OneDrive",
-		SkipDotfiles: &skipDot,
-		SkipDirs:     []string{"vendor"},
-		SkipFiles:    []string{"*.log"},
-		SyncPaths:    []string{"/Projects"},
-		IgnoreMarker: ".syncignore",
+		SyncDir:     "~/OneDrive",
+		DisplayName: "home",
 	}
 
 	resolved := buildResolvedDrive(cfg, driveid.MustCanonicalID("personal:toni@outlook.com"), drive, testLogger(t))
 
-	assert.True(t, resolved.SkipDotfiles)
-	assert.Equal(t, []string{"vendor"}, resolved.SkipDirs)
-	assert.Equal(t, []string{"*.log"}, resolved.SkipFiles)
-	assert.Equal(t, []string{"/Projects"}, resolved.SyncPaths)
-	assert.Equal(t, ".syncignore", resolved.IgnoreMarker)
+	assert.Equal(t, "debug", resolved.LogLevel)
+	assert.True(t, resolved.DryRun)
+	assert.Equal(t, "home", resolved.DisplayName)
 }
 
 func TestBuildResolvedDrive_SharedCanonicalSetsRootItem(t *testing.T) {
@@ -397,7 +388,6 @@ func TestStatePath_SharePoint_ColonsReplaced(t *testing.T) {
 // Validates: R-4.1.1, R-3.4.1
 func TestLoad_FullConfigWithDrives(t *testing.T) {
 	path := writeTestConfig(t, `
-skip_dotfiles = false
 log_level = "debug"
 
 ["personal:toni@outlook.com"]
@@ -407,13 +397,10 @@ display_name = "home"
 ["business:alice@contoso.com"]
 sync_dir = "~/OneDrive-Work"
 display_name = "work"
-skip_dotfiles = true
-skip_dirs = ["vendor"]
 `)
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
 
-	assert.False(t, cfg.SkipDotfiles)
 	assert.Equal(t, "debug", cfg.LogLevel)
 
 	require.Len(t, cfg.Drives, 2)
@@ -423,7 +410,6 @@ skip_dirs = ["vendor"]
 
 func TestResolveDrive_FullIntegration(t *testing.T) {
 	path := writeTestConfig(t, `
-skip_dotfiles = false
 log_level = "debug"
 
 ["personal:toni@outlook.com"]
@@ -433,28 +419,23 @@ display_name = "home"
 ["business:alice@contoso.com"]
 sync_dir = "~/OneDrive-Work"
 display_name = "work"
-skip_dotfiles = true
-skip_dirs = ["vendor"]
 `)
-	// Resolve work drive: per-drive overrides should apply.
 	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{Drive: "work"},
 		testLogger(t),
 	)
 	require.NoError(t, err)
-	assert.True(t, resolved.SkipDotfiles)
-	assert.Equal(t, []string{"vendor"}, resolved.SkipDirs)
+	assert.Equal(t, "work", resolved.DisplayName)
 	assert.Equal(t, "debug", resolved.LogLevel)
 
-	// Resolve home drive: uses global settings.
 	resolved, _, err = ResolveDrive(
 		EnvOverrides{ConfigPath: path},
 		CLIOverrides{Drive: "home"},
 		testLogger(t),
 	)
 	require.NoError(t, err)
-	assert.False(t, resolved.SkipDotfiles)
+	assert.Equal(t, "home", resolved.DisplayName)
 	assert.Equal(t, "debug", resolved.LogLevel)
 }
 

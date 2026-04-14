@@ -1070,10 +1070,10 @@ func TestDeleteSyncFailuresByScope(t *testing.T) {
 		path     string
 		scopeKey ScopeKey
 	}{
-		{"a.txt", SKQuotaShortcut("drive1:item1")},
-		{"b.txt", SKQuotaShortcut("drive1:item1")},
+		{"a.txt", SKPermRemote("shared/team-a")},
+		{"b.txt", SKPermRemote("shared/team-a")},
 		{"c.txt", SKThrottleAccount()},
-		{"d.txt", SKQuotaShortcut("drive2:item2")},
+		{"d.txt", SKPermRemote("shared/team-b")},
 	} {
 		err := mgr.RecordFailure(ctx, &SyncFailureParams{
 			Path:      p.path,
@@ -1093,7 +1093,7 @@ func TestDeleteSyncFailuresByScope(t *testing.T) {
 	require.Len(t, all, 4)
 
 	// Delete by scope key.
-	err = mgr.DeleteSyncFailuresByScope(ctx, SKQuotaShortcut("drive1:item1"))
+	err = mgr.DeleteSyncFailuresByScope(ctx, SKPermRemote("shared/team-a"))
 	require.NoError(t, err)
 
 	// Verify only 2 remain (c.txt and d.txt).

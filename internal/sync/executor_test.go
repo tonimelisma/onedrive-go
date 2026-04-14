@@ -245,8 +245,8 @@ func TestExecutor_CreateRemoteFolder_UsesPathConvergence(t *testing.T) {
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
 	e := NewExecution(cfg, baselineWith(&BaselineEntry{
-		Path:     "shortcut",
-		ItemID:   "shortcut-parent-id",
+		Path:     "shared",
+		ItemID:   "shared-parent-id",
 		DriveID:  driveid.New("00000000000000ff"),
 		ItemType: ItemTypeFolder,
 	}))
@@ -325,14 +325,14 @@ func TestExecutor_CreateRemoteFolder_WaitsForParentVisibilityBeforeCreate(t *tes
 func TestExecutor_CreateRemoteFolder_CrossDriveParentUsesTargetScopedPathConvergence(t *testing.T) {
 	t.Parallel()
 
-	const shortcutParent = "shortcut-parent-id"
+	const sharedParent = "shared-parent-id"
 
 	var capturedDriveID driveid.ID
 
 	items := &executorMockItemClient{
 		createFolderFn: func(_ context.Context, driveID driveid.ID, parentID, _ string) (*graph.Item, error) {
 			capturedDriveID = driveID
-			assert.Equal(t, shortcutParent, parentID)
+			assert.Equal(t, sharedParent, parentID)
 			return &graph.Item{ID: "new-folder-id", ETag: "etag1"}, nil
 		},
 	}
@@ -340,19 +340,19 @@ func TestExecutor_CreateRemoteFolder_CrossDriveParentUsesTargetScopedPathConverg
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
 	e := NewExecution(cfg, baselineWith(&BaselineEntry{
-		Path:     "shortcut",
-		ItemID:   shortcutParent,
+		Path:     "shared",
+		ItemID:   sharedParent,
 		DriveID:  driveid.New("00000000000000ff"),
 		ItemType: ItemTypeFolder,
 	}))
 
 	action := &Action{
 		Type:                ActionFolderCreate,
-		Path:                "shortcut/photos",
+		Path:                "shared/photos",
 		CreateSide:          CreateRemote,
-		TargetRootItemID:    shortcutParent,
-		TargetRootLocalPath: "shortcut",
-		View:                &PathView{Path: "shortcut/photos"},
+		TargetRootItemID:    sharedParent,
+		TargetRootLocalPath: "shared",
+		View:                &PathView{Path: "shared/photos"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
@@ -360,7 +360,7 @@ func TestExecutor_CreateRemoteFolder_CrossDriveParentUsesTargetScopedPathConverg
 	assert.Equal(t, driveid.New("00000000000000ff"), capturedDriveID)
 	assert.Equal(t, []executorPathConvergenceTarget{{
 		driveID:    driveid.New("00000000000000ff"),
-		rootItemID: shortcutParent,
+		rootItemID: sharedParent,
 	}}, pathConvergence.targets)
 	assert.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
 }
@@ -477,8 +477,8 @@ func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
 	e := NewExecution(cfg, baselineWith(&BaselineEntry{
-		Path:     "shortcut",
-		ItemID:   "shortcut-parent-id",
+		Path:     "shared",
+		ItemID:   "shared-parent-id",
 		DriveID:  driveid.New("00000000000000ff"),
 		ItemType: ItemTypeFolder,
 	}))
@@ -509,28 +509,28 @@ func TestExecutor_RemoteMove_CrossDriveUsesTargetScopedPathConvergence(t *testin
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
 	e := NewExecution(cfg, baselineWith(&BaselineEntry{
-		Path:     "shortcut",
-		ItemID:   "shortcut-parent-id",
+		Path:     "shared",
+		ItemID:   "shared-parent-id",
 		DriveID:  driveid.New("00000000000000ff"),
 		ItemType: ItemTypeFolder,
 	}))
 
 	action := &Action{
 		Type:                ActionRemoteMove,
-		Path:                "shortcut/renamed.txt",
-		OldPath:             "shortcut/original.txt",
+		Path:                "shared/renamed.txt",
+		OldPath:             "shared/original.txt",
 		ItemID:              "item1",
 		DriveID:             driveid.New("00000000000000ff"),
-		TargetRootItemID:    "shortcut-root-id",
-		TargetRootLocalPath: "shortcut",
-		View:                &PathView{Path: "shortcut/renamed.txt"},
+		TargetRootItemID:    "shared-root-id",
+		TargetRootLocalPath: "shared",
+		View:                &PathView{Path: "shared/renamed.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, []executorPathConvergenceTarget{{
 		driveID:    driveid.New("00000000000000ff"),
-		rootItemID: "shortcut-root-id",
+		rootItemID: "shared-root-id",
 	}}, pathConvergence.targets)
 	assert.Equal(t, []string{"renamed.txt"}, pathConvergence.waitCalls)
 }
@@ -936,14 +936,14 @@ func TestExecutor_Upload_PathConvergenceProbeFailureIsNonFatal(t *testing.T) {
 func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *testing.T) {
 	t.Parallel()
 
-	const shortcutParent = "shortcut-parent-id"
+	const sharedParent = "shared-parent-id"
 
 	var capturedDriveID driveid.ID
 
 	ul := &executorMockUploader{
 		uploadFn: func(_ context.Context, driveID driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			capturedDriveID = driveID
-			assert.Equal(t, shortcutParent, parentID)
+			assert.Equal(t, sharedParent, parentID)
 			return &graph.Item{ID: "uploaded1", ETag: "etag1", QuickXorHash: "abc"}, nil
 		},
 	}
@@ -951,20 +951,20 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
 	e := NewExecution(cfg, baselineWith(&BaselineEntry{
-		Path:     "shortcut",
-		ItemID:   shortcutParent,
+		Path:     "shared",
+		ItemID:   sharedParent,
 		DriveID:  driveid.New("00000000000000ff"),
 		ItemType: ItemTypeFolder,
 	}))
 
-	writeExecTestFile(t, syncRoot, "shortcut/exec-small.txt", "hello")
+	writeExecTestFile(t, syncRoot, "shared/exec-small.txt", "hello")
 
 	action := &Action{
 		Type:                ActionUpload,
-		Path:                "shortcut/exec-small.txt",
-		TargetRootItemID:    shortcutParent,
-		TargetRootLocalPath: "shortcut",
-		View:                &PathView{Path: "shortcut/exec-small.txt"},
+		Path:                "shared/exec-small.txt",
+		TargetRootItemID:    sharedParent,
+		TargetRootLocalPath: "shared",
+		View:                &PathView{Path: "shared/exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -972,7 +972,7 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 	assert.Equal(t, driveid.New("00000000000000ff"), capturedDriveID)
 	assert.Equal(t, []executorPathConvergenceTarget{{
 		driveID:    driveid.New("00000000000000ff"),
-		rootItemID: shortcutParent,
+		rootItemID: sharedParent,
 	}}, pathConvergence.targets)
 	assert.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
 }
@@ -980,11 +980,11 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 func TestExecutor_Upload_CrossDriveWithoutTargetRootMetadataSkipsPathConvergence(t *testing.T) {
 	t.Parallel()
 
-	const shortcutParent = "shortcut-parent-id"
+	const sharedParent = "shared-parent-id"
 
 	ul := &executorMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			assert.Equal(t, shortcutParent, parentID)
+			assert.Equal(t, sharedParent, parentID)
 			return &graph.Item{ID: "uploaded1", ETag: "etag1", QuickXorHash: "abc"}, nil
 		},
 	}
@@ -992,18 +992,18 @@ func TestExecutor_Upload_CrossDriveWithoutTargetRootMetadataSkipsPathConvergence
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
 	e := NewExecution(cfg, baselineWith(&BaselineEntry{
-		Path:     "shortcut",
-		ItemID:   shortcutParent,
+		Path:     "shared",
+		ItemID:   sharedParent,
 		DriveID:  driveid.New("00000000000000ff"),
 		ItemType: ItemTypeFolder,
 	}))
 
-	writeExecTestFile(t, syncRoot, "shortcut/exec-small.txt", "hello")
+	writeExecTestFile(t, syncRoot, "shared/exec-small.txt", "hello")
 
 	action := &Action{
 		Type: ActionUpload,
-		Path: "shortcut/exec-small.txt",
-		View: &PathView{Path: "shortcut/exec-small.txt"},
+		Path: "shared/exec-small.txt",
+		View: &PathView{Path: "shared/exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1192,7 +1192,14 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	t.Parallel()
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	uploader := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			assert.Equal(t, graphRootID, parentID)
+			assert.Equal(t, "exec-modified.txt", name)
+			return &graph.Item{ID: "uploaded-item", ETag: "etag1", QuickXorHash: "remote-hash"}, nil
+		},
+	}
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, uploader)
 	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-modified.txt", "new content")
@@ -1212,34 +1219,34 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 
-	// B-133: outcome should be ActionConflict (not ActionLocalDelete) so it's tracked.
-	assert.Equal(t, ActionConflict, o.Action, "expected ActionConflict")
+	assert.Equal(t, ActionConflict, o.Action, "expected ActionConflict so the engine records the auto-resolution")
 	assert.Equal(t, ConflictEditDelete, o.ConflictType, "expected ConflictEditDelete")
-	assert.Equal(t, "baseline-remote-hash", o.RemoteHash)
+	assert.Equal(t, ResolvedByAuto, o.ResolvedBy)
+	assert.Equal(t, "uploaded-item", o.ItemID)
 
-	// Original should be gone.
-	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-modified.txt"))
-	assert.True(t, os.IsNotExist(statErr), "original file should have been renamed")
+	contents, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "new content", string(contents), "local file should remain in place")
 
-	// Conflict copy should exist.
 	entries, err := os.ReadDir(syncRoot)
 	require.NoError(t, err)
-	found := false
-
 	for _, entry := range entries {
-		if strings.Contains(entry.Name(), ".conflict-") {
-			found = true
-		}
+		assert.NotContains(t, entry.Name(), ".conflict-", "edit-delete auto-resolution should not create a conflict copy")
 	}
-
-	assert.True(t, found, "expected conflict copy to be created")
 }
 
 // Validates: R-6.2.4
 func TestExecutor_LocalDelete_HashMismatch_ConflictCopyCollisionGetsSuffix(t *testing.T) {
 	t.Parallel()
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	uploader := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			assert.Equal(t, graphRootID, parentID)
+			assert.Equal(t, "exec-modified.txt", name)
+			return &graph.Item{ID: "uploaded-item", ETag: "etag1", QuickXorHash: "remote-hash"}, nil
+		},
+	}
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, uploader)
 	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-modified.txt", "new content")
@@ -1260,17 +1267,18 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopyCollisionGetsSuffix(t *te
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, ActionConflict, o.Action)
+	assert.Equal(t, ResolvedByAuto, o.ResolvedBy)
 
-	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-modified.txt"))
-	assert.True(t, os.IsNotExist(statErr), "original file should have been renamed")
+	currentData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "new content", string(currentData))
 
 	existingData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.conflict-20260115-120000.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "existing conflict", string(existingData))
 
-	suffixedData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.conflict-20260115-120000-2.txt"))
-	require.NoError(t, err)
-	assert.Equal(t, "new content", string(suffixedData))
+	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-modified.conflict-20260115-120000-2.txt"))
+	assert.True(t, os.IsNotExist(statErr), "auto-resolve should not create a suffixed conflict copy")
 }
 
 func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {

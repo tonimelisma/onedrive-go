@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -16,14 +15,11 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
 
 // ---------------------------------------------------------------------------
 // RunWatch tests
 // ---------------------------------------------------------------------------
-
-const engineResolvedLocalVersion = "resolved local"
 
 type stubSocketIOWakeSource struct {
 	started chan struct{}
@@ -265,278 +261,6 @@ func TestRunWatch_ScopedRootKeepsPollingOnly(t *testing.T) {
 	}, "websocket scoped-root fallback")
 }
 
-// Validates: R-2.4.5, R-2.8.5
-func TestRunWatch_SyncPathsScopedPollingDisablesWebsocket(t *testing.T) {
-	t.Parallel()
-
-	const docsPath = "Docs"
-
-	mock := &engineMockClient{
-		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
-			if remotePath == docsPath {
-				return &graph.Item{ID: "docs-id", Name: docsPath, IsFolder: true}, nil
-			}
-
-			return nil, graph.ErrNotFound
-		},
-		folderDeltaFn: func(_ context.Context, _ driveid.ID, folderID, token string) ([]graph.Item, string, error) {
-			return nil, "docs-token", nil
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
-	eng.driveType = driveid.DriveTypePersonal
-	eng.enableWebsocket = true
-	eng.syncScopeConfig = syncscope.Config{
-		SyncPaths: []string{"/" + docsPath},
-	}
-
-	recorder := attachDebugEventRecorder(eng)
-	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
-		return &stubSocketIOWakeSource{started: started}
-	}
-
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
-			PollInterval: time.Hour,
-			Debounce:     5 * time.Millisecond,
-		})
-	}()
-
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
-	}, "remote observer started")
-
-	select {
-	case <-started:
-		require.FailNow(t, "wake source should not start for sync_paths-scoped watch")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	cancel()
-	require.NoError(t, <-done)
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventWebsocketFallback && event.Note == "sync_paths"
-	}, "websocket sync_paths fallback")
-}
-
-// Validates: R-3.4.2
-func TestRunWatch_RootDeltaSteadyStateProcessesShortcutFollowUp(t *testing.T) {
-	t.Parallel()
-
-	const shortcutContent = "shortcut report"
-
-	driveID := driveid.New(engineTestDriveID)
-	remoteDriveID := driveid.New("0000000000000099")
-	var deltaCalls atomic.Int32
-
-	mock := &engineMockClient{
-		deltaFn: func(ctx context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			switch deltaCalls.Add(1) {
-			case 1:
-				return deltaPageWithItems([]graph.Item{
-					{ID: "root", IsRoot: true, DriveID: driveID},
-				}, "token-bootstrap"), nil
-			case 2:
-				return deltaPageWithItems([]graph.Item{
-					{ID: "root", IsRoot: true, DriveID: driveID},
-					{
-						ID:            "sc-1",
-						Name:          "SharedDocs",
-						ParentID:      "root",
-						DriveID:       driveID,
-						IsFolder:      true,
-						RemoteDriveID: remoteDriveID.String(),
-						RemoteItemID:  "remote-item-1",
-					},
-				}, "token-watch"), nil
-			default:
-				<-ctx.Done()
-				return nil, ctx.Err()
-			}
-		},
-		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
-			assert.Equal(t, remoteDriveID, gotDriveID)
-			assert.Equal(t, "remote-item-1", folderID)
-			return []graph.Item{{
-				ID:           "shortcut-file",
-				Name:         "report.txt",
-				ParentID:     "remote-item-1",
-				DriveID:      remoteDriveID,
-				QuickXorHash: hashContentQuickXor(t, shortcutContent),
-				Size:         int64(len(shortcutContent)),
-			}}, nil
-		},
-		downloadFn: func(_ context.Context, gotDriveID driveid.ID, itemID string, w io.Writer) (int64, error) {
-			assert.Equal(t, remoteDriveID, gotDriveID)
-			assert.Equal(t, "shortcut-file", itemID)
-			n, err := w.Write([]byte(shortcutContent))
-			return int64(n), err
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
-			PollInterval: time.Hour,
-			Debounce:     5 * time.Millisecond,
-		})
-	}()
-
-	require.Eventually(t, func() bool {
-		data, ok := readFileUnderRootIfExists(t, syncRoot, filepath.Join("SharedDocs", "report.txt"))
-		return ok && string(data) == shortcutContent
-	}, 10*time.Second, 25*time.Millisecond)
-
-	cancel()
-	require.NoError(t, <-done)
-
-	shortcut, found, err := eng.baseline.GetShortcut(context.Background(), "sc-1")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.NotNil(t, shortcut)
-	assert.Equal(t, "SharedDocs", shortcut.LocalPath)
-	assert.GreaterOrEqual(t, deltaCalls.Load(), int32(2))
-}
-
-// Validates: R-2.4.5, R-3.4.2
-func TestProcessCommittedScopedWatchBatch_ProcessesShortcutFollowUp(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-	remoteDriveID := driveid.New("0000000000000098")
-
-	mock := &engineMockClient{
-		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
-			assert.Equal(t, remoteDriveID, gotDriveID)
-			assert.Equal(t, "remote-item-1", folderID)
-			return []graph.Item{{
-				ID:       "shortcut-file",
-				Name:     "report.txt",
-				ParentID: "remote-item-1",
-				DriveID:  remoteDriveID,
-			}}, nil
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
-	rt := newWatchRuntime(eng.Engine)
-	rt.setScopeSnapshot(syncscope.Snapshot{}, 1)
-
-	events, committed := rt.processCommittedScopedWatchBatch(t.Context(), emptyBaseline(), remoteFetchResult{
-		events: []ChangeEvent{{
-			Source:        SourceRemote,
-			Type:          ChangeShortcut,
-			DriveID:       driveID,
-			ItemID:        "sc-1",
-			Path:          "SharedDocs",
-			ItemType:      ItemTypeFolder,
-			RemoteDriveID: remoteDriveID.String(),
-			RemoteItemID:  "remote-item-1",
-		}},
-	}, false)
-	require.True(t, committed)
-	require.Len(t, events, 1)
-	assert.Equal(t, "SharedDocs/report.txt", events[0].Path)
-}
-
-// Validates: R-2.4.5, R-3.4.2
-func TestRunWatch_SyncPathsSteadyStateProcessesShortcutFollowUp(t *testing.T) {
-	t.Parallel()
-
-	const (
-		docsPath        = "Docs"
-		shortcutContent = "sync paths shortcut report"
-		tokenWatch      = "token-watch"
-	)
-
-	driveID := driveid.New(engineTestDriveID)
-	remoteDriveID := driveid.New("0000000000000097")
-	var folderDeltaCalls atomic.Int32
-
-	mock := &engineMockClient{
-		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
-			switch remotePath {
-			case docsPath:
-				return &graph.Item{ID: "docs-id", Name: docsPath, IsFolder: true}, nil
-			default:
-				return nil, graph.ErrNotFound
-			}
-		},
-		folderDeltaFn: func(_ context.Context, gotDriveID driveid.ID, folderID, _ string) ([]graph.Item, string, error) {
-			assert.Equal(t, driveID, gotDriveID)
-			assert.Equal(t, "docs-id", folderID)
-
-			switch folderDeltaCalls.Add(1) {
-			case 1:
-				return nil, "token-bootstrap", nil
-			case 2:
-				return []graph.Item{
-					{
-						ID:            "sc-1",
-						Name:          "SharedDocs",
-						ParentID:      "docs-id",
-						DriveID:       driveID,
-						IsFolder:      true,
-						RemoteDriveID: remoteDriveID.String(),
-						RemoteItemID:  "remote-item-1",
-					},
-				}, tokenWatch, nil
-			default:
-				return nil, tokenWatch, nil
-			}
-		},
-		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
-			assert.Equal(t, remoteDriveID, gotDriveID)
-			assert.Equal(t, "remote-item-1", folderID)
-			return []graph.Item{{
-				ID:           "shortcut-file",
-				Name:         "report.txt",
-				ParentID:     "remote-item-1",
-				DriveID:      remoteDriveID,
-				QuickXorHash: hashContentQuickXor(t, shortcutContent),
-				Size:         int64(len(shortcutContent)),
-			}}, nil
-		},
-		downloadFn: func(_ context.Context, gotDriveID driveid.ID, itemID string, w io.Writer) (int64, error) {
-			assert.Equal(t, remoteDriveID, gotDriveID)
-			assert.Equal(t, "shortcut-file", itemID)
-			n, err := w.Write([]byte(shortcutContent))
-			return int64(n), err
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
-	eng.driveType = driveid.DriveTypePersonal
-	eng.syncScopeConfig = syncscope.Config{
-		SyncPaths: []string{"/" + docsPath},
-	}
-
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
-			PollInterval: time.Hour,
-			Debounce:     5 * time.Millisecond,
-		})
-	}()
-
-	require.Eventually(t, func() bool {
-		data, ok := readFileUnderRootIfExists(t, syncRoot, filepath.Join("Docs", "SharedDocs", "report.txt"))
-		return ok && string(data) == shortcutContent
-	}, 10*time.Second, 25*time.Millisecond)
-
-	cancel()
-	require.NoError(t, <-done)
-	assert.GreaterOrEqual(t, folderDeltaCalls.Load(), int32(2))
-}
-
 // Validates: R-2.8.3, R-6.8.9, R-6.10.10
 func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 	t.Parallel()
@@ -636,11 +360,8 @@ func TestRunWatch_UploadOnly_StartsRemoteObserver(t *testing.T) {
 	}), "upload-only watch must start a remote observer")
 }
 
-// Validates: R-6.2.5, R-6.4.2, R-6.4.3
-// TestRunWatch_ProcessBatch_DeleteSafety verifies that the rolling delete
-// counter in watch mode holds delete actions when the threshold is exceeded,
-// records them as actionable issues, and prevents dispatch.
-func TestRunWatch_ProcessBatch_DeleteSafety(t *testing.T) {
+// TestEngine_ExternalDBChanged verifies the PRAGMA data_version detection.
+func TestEngine_ExternalDBChanged(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -655,72 +376,23 @@ func TestRunWatch_ProcessBatch_DeleteSafety(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
+	newTestWatchState(t, eng)
 
-	// Seed a large baseline so that a batch of deletes triggers delete safety.
-	seedOutcomes := make([]ActionOutcome, 20)
-	for i := range 20 {
-		seedOutcomes[i] = ActionOutcome{
-			Action:          ActionDownload,
-			Success:         true,
-			Path:            fmt.Sprintf("file%02d.txt", i),
-			DriveID:         driveID,
-			ItemID:          fmt.Sprintf("item-%02d", i),
-			ItemType:        ItemTypeFile,
-			RemoteHash:      fmt.Sprintf("hash%02d", i),
-			LocalHash:       fmt.Sprintf("hash%02d", i),
-			LocalSize:       100,
-			LocalSizeKnown:  true,
-			RemoteSize:      100,
-			RemoteSizeKnown: true,
-		}
-	}
+	// Seed the initial data_version.
+	dv, err := eng.baseline.DataVersion(ctx)
+	require.NoError(t, err)
+	testWatchRuntime(t, eng).lastDataVersion = dv
 
-	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
+	// No external changes yet — should return false.
+	assert.False(t, externalDBChangedForTest(t, eng, ctx), "no external changes")
 
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err, "Load")
-
-	// Build a batch that would delete all 20 files.
-	var batch []PathChanges
-	for _, o := range seedOutcomes {
-		batch = append(batch, PathChanges{
-			Path: o.Path,
-			RemoteEvents: []ChangeEvent{{
-				Source:    SourceRemote,
-				Type:      ChangeDelete,
-				Path:      o.Path,
-				IsDeleted: true,
-			}},
-		})
-	}
-
-	setupWatchEngine(t, eng)
-
-	// Install a rolling delete counter with threshold=10 on the engine. The
-	// planner-level check is disabled so the engine can record durable
-	// held-delete intent and keep non-delete work flowing.
-	testWatchRuntime(t, eng).deleteCounter = NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
-
-	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
-
-	// Verify no actions were admitted into the watch loop outbox (all 20 are
-	// deletes and the rolling counter held them as issues).
-	assert.Empty(t, outbox)
-
-	// Verify counter is now held.
-	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "counter should be held")
-
-	// Verify held deletes were recorded in the durable held-delete workflow.
-	rows, listErr := eng.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateHeld)
-	require.NoError(t, listErr, "ListHeldDeletesByState")
-	assert.Len(t, rows, 20, "should have 20 held-delete entries")
+	// Engine's own writes don't change data_version, so repeated checks
+	// should still return false.
+	assert.False(t, externalDBChangedForTest(t, eng, ctx), "still no external changes")
 }
 
-// Validates: R-6.2.5, R-6.4.2
-// TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow verifies that non-delete
-// actions are dispatched even when the delete counter is held.
-func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
+// Validates: R-2.10.9, R-2.14.3
+func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -735,152 +407,67 @@ func TestRunWatch_ProcessBatch_DeleteSafety_NonDeletesFlow(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
+	newTestWatchState(t, eng)
 
-	// Seed baseline with files that will be "deleted" plus one path that
-	// will produce a download (new remote file).
-	seedOutcomes := make([]ActionOutcome, 15)
-	for i := range 15 {
-		seedOutcomes[i] = ActionOutcome{
-			Action:          ActionDownload,
-			Success:         true,
-			Path:            fmt.Sprintf("file%02d.txt", i),
-			DriveID:         driveID,
-			ItemID:          fmt.Sprintf("item-%02d", i),
-			ItemType:        ItemTypeFile,
-			RemoteHash:      fmt.Sprintf("hash%02d", i),
-			LocalHash:       fmt.Sprintf("hash%02d", i),
-			LocalSize:       100,
-			LocalSizeKnown:  true,
-			RemoteSize:      100,
-			RemoteSizeKnown: true,
-		}
-	}
+	clearedScope := SKPermRemote("Shared/TeamDocs")
+	retainedScope := SKPermRemote("Shared/Other")
 
-	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
-
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err, "Load")
-
-	// Build batch: 15 deletes + 1 new remote file (download).
-	var batch []PathChanges
-	for _, o := range seedOutcomes {
-		batch = append(batch, PathChanges{
-			Path: o.Path,
-			RemoteEvents: []ChangeEvent{{
-				Source:    SourceRemote,
-				Type:      ChangeDelete,
-				Path:      o.Path,
-				IsDeleted: true,
-			}},
-		})
-	}
-
-	// Add a new remote file that should produce a download.
-	batch = append(batch, PathChanges{
-		Path: "newfile.txt",
-		RemoteEvents: []ChangeEvent{{
-			Source:   SourceRemote,
-			Type:     ChangeCreate,
-			Path:     "newfile.txt",
-			ItemID:   "item-new",
-			DriveID:  driveID,
-			Hash:     "newhash",
-			Size:     50,
-			ItemType: ItemTypeFile,
-		}},
+	setTestScopeBlock(t, eng, &ScopeBlock{
+		Key:       clearedScope,
+		IssueType: IssueSharedFolderBlocked,
+		BlockedAt: eng.nowFunc(),
+	})
+	setTestScopeBlock(t, eng, &ScopeBlock{
+		Key:       retainedScope,
+		IssueType: IssueSharedFolderBlocked,
+		BlockedAt: eng.nowFunc(),
 	})
 
-	setupWatchEngine(t, eng)
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:       "Shared/TeamDocs/file.txt",
+		DriveID:    driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		Role:       FailureRoleHeld,
+		Category:   CategoryTransient,
+		IssueType:  IssueSharedFolderBlocked,
+		ErrMsg:     "blocked by remote permission scope",
+		ScopeKey:   clearedScope,
+	}, nil))
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:       "Shared/Other/file.txt",
+		DriveID:    driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		Role:       FailureRoleHeld,
+		Category:   CategoryTransient,
+		IssueType:  IssueSharedFolderBlocked,
+		ErrMsg:     "blocked by remote permission scope",
+		ScopeKey:   retainedScope,
+	}, nil))
 
-	// Install counter with threshold=10. 15 deletes > 10 → trips.
-	testWatchRuntime(t, eng).deleteCounter = NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
+	require.NoError(t, eng.baseline.ClearSyncFailure(ctx, "Shared/TeamDocs/file.txt", driveID))
 
-	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
+	handleExternalChangesForTest(t, eng, ctx)
 
-	// Counter should be held.
-	assert.True(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "counter should be held")
+	assert.False(t, isTestScopeBlocked(eng, clearedScope),
+		"clearing a remote permission issue externally should release that scope")
+	assert.True(t, isTestScopeBlocked(eng, retainedScope),
+		"unrelated remote permission scopes must remain blocked")
 
-	require.Len(t, outbox, 1, "one non-delete action should be admitted into the watch loop outbox")
-	assert.Equal(t, ActionDownload, outbox[0].Action.Type)
-	assert.Equal(t, "newfile.txt", outbox[0].Action.Path)
+	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFunc())
+	require.NoError(t, err)
+	assert.Empty(t, retryable, "clearing the last blocked write should forget the remote scope instead of retrying it")
 
-	// 15 held delete entries should exist.
-	rows, listErr := eng.baseline.ListHeldDeletesByState(ctx, HeldDeleteStateHeld)
-	require.NoError(t, listErr, "ListHeldDeletesByState")
-	assert.Len(t, rows, 15, "should have 15 held-delete entries")
-}
+	remainingIssues, err := eng.baseline.ListRemoteBlockedFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, remainingIssues, 1, "only the uncleared blocked write should remain")
+	assert.Equal(t, "Shared/Other/file.txt", remainingIssues[0].Path)
 
-// Validates: R-6.2.5, R-6.4.3
-// TestRunWatch_ProcessBatch_DeleteSafety_BelowThreshold verifies that the
-// rolling counter allows deletes through when below the threshold.
-func TestRunWatch_ProcessBatch_DeleteSafety_BelowThreshold(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-1"), nil
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	// Seed baseline with 5 files.
-	seedOutcomes := make([]ActionOutcome, 5)
-	for i := range 5 {
-		seedOutcomes[i] = ActionOutcome{
-			Action:          ActionDownload,
-			Success:         true,
-			Path:            fmt.Sprintf("file%02d.txt", i),
-			DriveID:         driveID,
-			ItemID:          fmt.Sprintf("item-%02d", i),
-			ItemType:        ItemTypeFile,
-			RemoteHash:      fmt.Sprintf("hash%02d", i),
-			LocalHash:       fmt.Sprintf("hash%02d", i),
-			LocalSize:       100,
-			LocalSizeKnown:  true,
-			RemoteSize:      100,
-			RemoteSizeKnown: true,
-		}
-	}
-
-	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
-
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err, "Load")
-
-	// Build batch: 5 deletes — below threshold of 10.
-	var batch []PathChanges
-	for _, o := range seedOutcomes {
-		batch = append(batch, PathChanges{
-			Path: o.Path,
-			RemoteEvents: []ChangeEvent{{
-				Source:    SourceRemote,
-				Type:      ChangeDelete,
-				Path:      o.Path,
-				IsDeleted: true,
-			}},
-		})
-	}
-
-	setupWatchEngine(t, eng)
-
-	testWatchRuntime(t, eng).deleteCounter = NewDeleteCounter(10, 5*time.Minute, time.Now)
-	safety := &SafetyConfig{DeleteSafetyThreshold: plannerSafetyMax}
-
-	outbox := processBatchForTest(t, eng, ctx, batch, bl, safety)
-
-	// Counter should NOT be held.
-	assert.False(t, testWatchRuntime(t, eng).deleteCounter.IsHeld(), "counter should not trip at 5 < 10")
-
-	require.Len(t, outbox, 5, "all 5 delete actions should be admitted into the watch loop outbox")
-	for i := range outbox {
-		assert.Equal(t, ActionLocalDelete, outbox[i].Action.Type)
+	select {
+	case <-testWatchRuntime(t, eng).retryTimerCh:
+	default:
+		require.Fail(t, "expected immediate retry wakeup after remote permission clearance")
 	}
 }
 
@@ -1444,531 +1031,6 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverFallbackStopped
 	}, "fallback stopped")
-}
-
-func TestResolveConflict_KeepLocal_TransferFails(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return nil, fmt.Errorf("upload failed: network error")
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	// Seed a conflict.
-	outcomes := []ActionOutcome{{
-		Action:       ActionConflict,
-		Success:      true,
-		Path:         "fail-upload.txt",
-		DriveID:      driveID,
-		ItemID:       "item-fu",
-		ItemType:     ItemTypeFile,
-		ConflictType: "edit_edit",
-	}}
-
-	seedBaseline(t, eng.baseline, ctx, outcomes, "")
-
-	writeLocalFile(t, syncRoot, "fail-upload.txt", "remote-data")
-	writeLocalFile(t, syncRoot, "fail-upload.conflict-20260115-120000.txt", "local-data")
-
-	conflicts, err := eng.ListConflicts(ctx)
-	require.NoError(t, err, "ListConflicts")
-	require.Len(t, conflicts, 1)
-
-	requestResult, err := eng.baseline.RequestConflictResolution(ctx, conflicts[0].ID, ResolutionKeepLocal)
-	require.NoError(t, err)
-	assert.Equal(t, ConflictRequestQueued, requestResult.Status)
-
-	remaining, err := eng.ListConflicts(ctx)
-	require.NoError(t, err, "ListConflicts after queueing resolution")
-	require.Len(t, remaining, 1, "queued user intent should remain unresolved until the engine executes it")
-
-	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
-	require.NoError(t, runErr)
-	require.NotNil(t, report)
-
-	remaining, err = eng.ListConflicts(ctx)
-	require.NoError(t, err, "ListConflicts after follow-up sync")
-	assert.Empty(t, remaining, "conflict should resolve once the engine establishes the chosen layout")
-
-	failures, err := eng.baseline.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	require.NotEmpty(t, failures)
-	assert.Equal(t, "fail-upload.txt", failures[0].Path)
-	assert.Equal(t, ActionUpload, failures[0].ActionType)
-	assert.Contains(t, failures[0].LastError, "upload failed")
-}
-
-// ---------------------------------------------------------------------------
-// Regression: keep_local follow-up sync work still updates baseline normally
-// ---------------------------------------------------------------------------
-
-func TestResolveConflict_KeepLocal_FollowUpSyncCommitsToBaseline(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems(nil, "token-1"), nil
-		},
-		uploadFn: func(_ context.Context, _ driveid.ID, _, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{
-				ID:           "resolved-item-id",
-				Name:         name,
-				ETag:         "etag-resolved",
-				QuickXorHash: "",
-			}, nil
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	outcomes := []ActionOutcome{{
-		Action:       ActionConflict,
-		Success:      true,
-		Path:         "baseline-commit.txt",
-		DriveID:      driveID,
-		ItemID:       "original-item-id",
-		ItemType:     ItemTypeFile,
-		LocalHash:    "old-local-h",
-		RemoteHash:   "old-remote-h",
-		ConflictType: "edit_edit",
-	}}
-	seedBaseline(t, eng.baseline, ctx, outcomes, "")
-	writeLocalFile(t, syncRoot, "baseline-commit.txt", "remote-version")
-	writeLocalFile(t, syncRoot, "baseline-commit.conflict-20260115-120000.txt", engineResolvedLocalVersion)
-
-	conflicts, err := eng.ListConflicts(ctx)
-	require.NoError(t, err)
-	require.Len(t, conflicts, 1)
-
-	requestResult, err := eng.baseline.RequestConflictResolution(ctx, conflicts[0].ID, ResolutionKeepLocal)
-	require.NoError(t, err)
-	assert.Equal(t, ConflictRequestQueued, requestResult.Status)
-
-	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
-	require.NoError(t, runErr)
-	require.NotNil(t, report)
-
-	bl, loadErr := eng.baseline.Load(ctx)
-	require.NoError(t, loadErr, "baseline.Load")
-
-	entry, ok := bl.GetByPath("baseline-commit.txt")
-	require.True(t, ok, "baseline entry not found after follow-up sync")
-
-	assert.Equal(t, "resolved-item-id", entry.ItemID)
-	assert.Equal(t, "etag-resolved", entry.ETag)
-	assert.NotEmpty(t, entry.LocalHash, "baseline LocalHash should be set (computed from local file)")
-	assert.Empty(t, entry.RemoteHash, "mock returns no hash")
-	assert.Equal(t, int64(14), entry.LocalSize)
-	assert.True(t, entry.LocalSizeKnown)
-}
-
-// Validates: R-2.3.5
-func TestResolveConflict_KeepLocal_FollowUpSyncDoesNotRedetectConflictWhenRemoteDeltaStillShowsLoser(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-	localContent := engineResolvedLocalVersion
-	remoteContent := "remote winner"
-	localHash := hashContentQuickXor(t, localContent)
-	remoteHash := hashContentQuickXor(t, remoteContent)
-	uploadCalled := false
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-				{
-					ID:           "item-follow-local",
-					Name:         "follow-up-keep-local.txt",
-					ParentID:     "root",
-					DriveID:      driveID,
-					QuickXorHash: remoteHash,
-					Size:         int64(len(remoteContent)),
-					ModifiedAt:   time.Unix(25, 0).UTC(),
-					ETag:         "etag-remote",
-				},
-			}, "token-1"), nil
-		},
-		uploadToItemFn: func(_ context.Context, _ driveid.ID, itemID string, _ io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			uploadCalled = true
-			assert.Equal(t, "item-follow-local", itemID)
-			assert.Equal(t, int64(len(localContent)), size)
-
-			return &graph.Item{
-				ID:           itemID,
-				Name:         "follow-up-keep-local.txt",
-				ETag:         "etag-uploaded",
-				QuickXorHash: localHash,
-				Size:         size,
-			}, nil
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
-		{
-			Action:          ActionUpload,
-			Success:         true,
-			Path:            "follow-up-keep-local.txt",
-			DriveID:         driveID,
-			ItemID:          "item-follow-local",
-			ParentID:        "root",
-			ItemType:        ItemTypeFile,
-			LocalHash:       "baseline-local",
-			RemoteHash:      "baseline-remote",
-			LocalSize:       int64(len("baseline")),
-			LocalSizeKnown:  true,
-			RemoteSize:      int64(len("baseline")),
-			RemoteSizeKnown: true,
-			LocalMtime:      time.Unix(10, 0).UnixNano(),
-			RemoteMtime:     time.Unix(10, 0).UnixNano(),
-			ETag:            "etag-baseline",
-		},
-		{
-			Action:       ActionConflict,
-			Success:      true,
-			Path:         "follow-up-keep-local.txt",
-			DriveID:      driveID,
-			ItemID:       "item-follow-local",
-			ItemType:     ItemTypeFile,
-			LocalHash:    localHash,
-			RemoteHash:   remoteHash,
-			LocalMtime:   time.Unix(20, 0).UnixNano(),
-			RemoteMtime:  time.Unix(25, 0).UnixNano(),
-			ConflictType: ConflictEditEdit,
-		},
-	}, "token-0")
-
-	writeLocalFile(t, syncRoot, "follow-up-keep-local.txt", remoteContent)
-	writeLocalFile(t, syncRoot, "follow-up-keep-local.conflict-20260115-120000.txt", localContent)
-
-	conflicts, err := eng.ListConflicts(ctx)
-	require.NoError(t, err)
-	require.Len(t, conflicts, 1)
-
-	requestResult, err := eng.baseline.RequestConflictResolution(ctx, conflicts[0].ID, ResolutionKeepLocal)
-	require.NoError(t, err)
-	assert.Equal(t, ConflictRequestQueued, requestResult.Status)
-
-	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
-	require.NoError(t, runErr)
-	require.NotNil(t, report)
-	assert.True(t, uploadCalled, "keep-local follow-up should upload the chosen local winner")
-	assert.Zero(t, report.Conflicts, "manual resolution should not redetect the same path as a new conflict")
-
-	remaining, err := eng.ListConflicts(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, remaining, "manual keep-local resolution should stay resolved after the follow-up sync")
-}
-
-// Validates: R-2.3.5
-func TestResolveConflict_KeepRemote_FollowUpSyncDoesNotRedetectConflictWhenRemoteDeltaStillShowsWinner(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-	remoteContent := engineResolvedRemoteVersion
-	remoteHash := hashContentQuickXor(t, remoteContent)
-	uploadCalled := false
-	downloadCalled := false
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-				{
-					ID:           "item-follow-remote",
-					Name:         "follow-up-keep-remote.txt",
-					ParentID:     "root",
-					DriveID:      driveID,
-					QuickXorHash: remoteHash,
-					Size:         int64(len(remoteContent)),
-					ModifiedAt:   time.Unix(25, 0).UTC(),
-					ETag:         "etag-remote",
-				},
-			}, "token-1"), nil
-		},
-		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			uploadCalled = true
-			return nil, fmt.Errorf("unexpected upload")
-		},
-		uploadToItemFn: func(_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			uploadCalled = true
-			return nil, fmt.Errorf("unexpected overwrite upload")
-		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
-			downloadCalled = true
-			return 0, fmt.Errorf("unexpected download")
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
-		{
-			Action:          ActionUpload,
-			Success:         true,
-			Path:            "follow-up-keep-remote.txt",
-			DriveID:         driveID,
-			ItemID:          "item-follow-remote",
-			ParentID:        "root",
-			ItemType:        ItemTypeFile,
-			LocalHash:       "baseline-local",
-			RemoteHash:      "baseline-remote",
-			LocalSize:       int64(len("baseline")),
-			LocalSizeKnown:  true,
-			RemoteSize:      int64(len("baseline")),
-			RemoteSizeKnown: true,
-			LocalMtime:      time.Unix(10, 0).UnixNano(),
-			RemoteMtime:     time.Unix(10, 0).UnixNano(),
-			ETag:            "etag-baseline",
-		},
-		{
-			Action:       ActionConflict,
-			Success:      true,
-			Path:         "follow-up-keep-remote.txt",
-			DriveID:      driveID,
-			ItemID:       "item-follow-remote",
-			ItemType:     ItemTypeFile,
-			LocalHash:    hashContentQuickXor(t, "local loser"),
-			RemoteHash:   remoteHash,
-			LocalMtime:   time.Unix(20, 0).UnixNano(),
-			RemoteMtime:  time.Unix(25, 0).UnixNano(),
-			ConflictType: ConflictEditEdit,
-		},
-	}, "token-0")
-
-	writeLocalFile(t, syncRoot, "follow-up-keep-remote.txt", remoteContent)
-	writeLocalFile(t, syncRoot, "follow-up-keep-remote.conflict-20260115-120000.txt", "local loser")
-
-	conflicts, err := eng.ListConflicts(ctx)
-	require.NoError(t, err)
-	require.Len(t, conflicts, 1)
-
-	requestResult, err := eng.baseline.RequestConflictResolution(ctx, conflicts[0].ID, ResolutionKeepRemote)
-	require.NoError(t, err)
-	assert.Equal(t, ConflictRequestQueued, requestResult.Status)
-
-	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
-	require.NoError(t, runErr)
-	require.NotNil(t, report)
-	assert.False(t, uploadCalled, "keep-remote follow-up should not upload")
-	assert.False(t, downloadCalled, "keep-remote follow-up should not re-download")
-	assert.Zero(t, report.Conflicts, "manual keep-remote resolution should not redetect a fresh conflict")
-	assert.Equal(t, 1, report.SyncedUpdates, "follow-up sync should refresh baseline ownership without extra transfer")
-
-	remaining, err := eng.ListConflicts(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, remaining, "manual keep-remote resolution should stay resolved after the follow-up sync")
-}
-
-func TestConflictResolutionFollowUpPathChanges_IgnoresResolvedObservationWithoutEvent(t *testing.T) {
-	t.Parallel()
-
-	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	ctx := t.Context()
-
-	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "docs"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "docs", "keep.txt"), []byte("keep"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "docs", "drop.txt"), []byte("drop"), 0o600))
-
-	scopeSnapshot, err := syncscope.NewSnapshot(syncscope.Config{
-		SyncPaths: []string{"/docs/keep.txt"},
-	}, nil)
-	require.NoError(t, err)
-
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-
-	changes := eng.conflictResolutionFollowUpPathChanges(
-		nil,
-		"docs/drop.txt",
-		&ConflictRecord{Path: "docs/drop.txt"},
-		ResolutionKeepLocal,
-		bl,
-		scopeSnapshot,
-		ActionUpload,
-		true,
-	)
-
-	assert.Empty(t, changes)
-}
-
-func TestConflictResolutionRemoteEvent_KeepLocalEditDeleteMarksRemoteDeleted(t *testing.T) {
-	t.Parallel()
-
-	event := conflictResolutionRemoteEvent(
-		&ConflictRecord{
-			Path:         "docs/file.txt",
-			ItemID:       "deleted-item-id",
-			DriveID:      driveid.New(engineTestDriveID),
-			ConflictType: ConflictEditDelete,
-			RemoteHash:   "remote-hash",
-			RemoteMtime:  time.Unix(25, 0).UnixNano(),
-		},
-		ResolutionKeepLocal,
-		&ChangeEvent{
-			Source:   SourceLocal,
-			Type:     ChangeModify,
-			Path:     "docs/file.txt",
-			ParentID: "root",
-			ItemType: ItemTypeFile,
-			Name:     "file.txt",
-			Size:     int64(len("local winner")),
-			Hash:     "local-hash",
-			Mtime:    time.Unix(30, 0).UnixNano(),
-		},
-	)
-
-	require.NotNil(t, event)
-	assert.True(t, event.IsDeleted, "keep-local follow-up must preserve deleted-remote semantics")
-	assert.Equal(t, "deleted-item-id", event.ItemID)
-	assert.Equal(t, driveid.New(engineTestDriveID), event.DriveID)
-}
-
-// Validates: R-2.3.5
-func TestResolveConflict_KeepLocal_EditDeleteFollowUpSyncRecreatesDeletedRemote(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-	localContent := engineResolvedLocalVersion
-	localHash := hashContentQuickXor(t, localContent)
-	uploadCalled := false
-	overwriteCalled := false
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-1"), nil
-		},
-		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			uploadCalled = true
-			assert.Equal(t, "root", parentID)
-			assert.Equal(t, "follow-up-edit-delete.txt", name)
-			assert.Equal(t, int64(len(localContent)), size)
-
-			return &graph.Item{
-				ID:           "recreated-item-id",
-				ParentID:     parentID,
-				Name:         name,
-				ETag:         "etag-recreated",
-				QuickXorHash: localHash,
-				Size:         size,
-			}, nil
-		},
-		uploadToItemFn: func(_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			overwriteCalled = true
-			return nil, fmt.Errorf("unexpected overwrite upload")
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
-	ctx := t.Context()
-
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
-		{
-			Action:          ActionUpload,
-			Success:         true,
-			Path:            "follow-up-edit-delete.txt",
-			DriveID:         driveID,
-			ItemID:          "deleted-item-id",
-			ParentID:        "root",
-			ItemType:        ItemTypeFile,
-			LocalHash:       "baseline-local",
-			RemoteHash:      "baseline-remote",
-			LocalSize:       int64(len("baseline")),
-			LocalSizeKnown:  true,
-			RemoteSize:      int64(len("baseline")),
-			RemoteSizeKnown: true,
-			LocalMtime:      time.Unix(10, 0).UnixNano(),
-			RemoteMtime:     time.Unix(10, 0).UnixNano(),
-			ETag:            "etag-baseline",
-		},
-		{
-			Action:       ActionConflict,
-			Success:      true,
-			Path:         "follow-up-edit-delete.txt",
-			DriveID:      driveID,
-			ItemID:       "deleted-item-id",
-			ItemType:     ItemTypeFile,
-			LocalHash:    localHash,
-			RemoteHash:   "remote-hash",
-			LocalMtime:   time.Unix(20, 0).UnixNano(),
-			RemoteMtime:  time.Unix(25, 0).UnixNano(),
-			ConflictType: ConflictEditDelete,
-		},
-	}, "token-0")
-
-	writeLocalFile(t, syncRoot, "follow-up-edit-delete.txt", "stale remote placeholder")
-	writeLocalFile(t, syncRoot, "follow-up-edit-delete.conflict-20260115-120000.txt", localContent)
-
-	conflicts, err := eng.ListConflicts(ctx)
-	require.NoError(t, err)
-	require.Len(t, conflicts, 1)
-
-	requestResult, err := eng.baseline.RequestConflictResolution(ctx, conflicts[0].ID, ResolutionKeepLocal)
-	require.NoError(t, err)
-	assert.Equal(t, ConflictRequestQueued, requestResult.Status)
-
-	report, runErr := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
-	require.NoError(t, runErr)
-	require.NotNil(t, report)
-
-	assert.True(t, uploadCalled, "keep-local edit_delete follow-up should recreate remote through the parent path")
-	assert.False(t, overwriteCalled, "keep-local edit_delete follow-up must not overwrite a deleted remote item by ID")
-	assert.Zero(t, report.Conflicts)
-
-	remaining, err := eng.ListConflicts(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, remaining)
-}
-
-// ---------------------------------------------------------------------------
-// Regression: sparse conflict records still resolve layout without panic
-// ---------------------------------------------------------------------------
-
-func TestResolveConflict_KeepLocal_MinimalRecord_NoPanic(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-
-	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	ctx := t.Context()
-
-	outcomes := []ActionOutcome{{
-		Action:       ActionConflict,
-		Success:      true,
-		Path:         "minimal-conflict.txt",
-		DriveID:      driveID,
-		ItemID:       "item-min",
-		ItemType:     ItemTypeFile,
-		ConflictType: "edit_edit",
-	}}
-	seedBaseline(t, eng.baseline, ctx, outcomes, "")
-	writeLocalFile(t, syncRoot, "minimal-conflict.txt", "remote data")
-	writeLocalFile(t, syncRoot, "minimal-conflict.conflict-20260115-120000.txt", "minimal data")
-
-	conflicts, err := eng.ListConflicts(ctx)
-	require.NoError(t, err, "ListConflicts")
-	require.Len(t, conflicts, 1)
-
-	require.NoError(t, eng.ResolveConflict(ctx, conflicts[0].ID, ResolutionKeepLocal), "ResolveConflict")
-
-	remaining, err := eng.ListConflicts(ctx)
-	require.NoError(t, err, "ListConflicts after failed resolve")
-	assert.Empty(t, remaining, "expected 0 unresolved conflicts")
 }
 
 // ---------------------------------------------------------------------------

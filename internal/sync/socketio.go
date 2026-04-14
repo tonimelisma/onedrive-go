@@ -83,17 +83,6 @@ type SocketIOWakeSource struct {
 	backoffMax       time.Duration
 }
 
-// NewSocketIOWakeSource creates a wake source for one drive root.
-func NewSocketIOWakeSource(
-	fetcher SocketIOEndpointFetcher,
-	driveID driveid.ID,
-	logger *slog.Logger,
-) *SocketIOWakeSource {
-	return NewSocketIOWakeSourceWithOptions(fetcher, driveID, SocketIOWakeSourceOptions{
-		Logger: logger,
-	})
-}
-
 func NewSocketIOWakeSourceWithOptions(
 	fetcher SocketIOEndpointFetcher,
 	driveID driveid.ID,

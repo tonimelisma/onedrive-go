@@ -19,7 +19,7 @@ import (
 var migrationFS embed.FS
 
 const (
-	currentMigrationVersion = int64(3)
+	currentMigrationVersion = int64(1)
 	recoverDriveStateDBHint = "run 'onedrive-go --drive <id> recover' to repair, rebuild, or reset this drive state DB"
 )
 

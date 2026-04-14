@@ -16,7 +16,6 @@ import (
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 const (
@@ -58,11 +57,6 @@ func (e *controlDaemonError) Error() string {
 		return string(e.code)
 	}
 	return e.message
-}
-
-func isControlDaemonError(err error) bool {
-	var daemonErr *controlDaemonError
-	return errors.As(err, &daemonErr)
 }
 
 func probeControlOwner(ctx context.Context) (controlOwnerProbe, error) {
@@ -177,43 +171,6 @@ func (c *controlSocketClient) capturePerf(
 	}
 
 	return response, nil
-}
-
-func (c *controlSocketClient) approveHeldDeletes(ctx context.Context, cid driveid.CanonicalID) error {
-	path := synccontrol.HeldDeletesApprovePath(cid.String())
-	response, err := c.postJSON(ctx, path, nil)
-	if err != nil {
-		return err
-	}
-	if response.Message != "" && response.Status == synccontrol.StatusError {
-		return &controlDaemonError{
-			statusCode: http.StatusInternalServerError,
-			code:       response.Code,
-			message:    response.Message,
-		}
-	}
-	return nil
-}
-
-func (c *controlSocketClient) requestConflictResolution(
-	ctx context.Context,
-	cid driveid.CanonicalID,
-	conflictID string,
-	resolution string,
-) (string, error) {
-	path := synccontrol.ConflictResolutionRequestPath(cid.String(), conflictID)
-	response, err := c.postJSON(ctx, path, synccontrol.ConflictResolutionRequest{Resolution: resolution})
-	if err != nil {
-		return "", err
-	}
-	if response.Message != "" && response.Status == synccontrol.StatusError {
-		return "", &controlDaemonError{
-			statusCode: http.StatusInternalServerError,
-			code:       response.Code,
-			message:    response.Message,
-		}
-	}
-	return string(response.Status), nil
 }
 
 func (c *controlSocketClient) reload(ctx context.Context) error {

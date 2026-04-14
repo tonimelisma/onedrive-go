@@ -1,7 +1,5 @@
 package cli
 
-import "time"
-
 // defaultVisiblePaths caps sampled per-drive status rows and issue-group paths
 // when --verbose is not set.
 const defaultVisiblePaths = 5
@@ -24,12 +22,4 @@ func itemNoun(n int) string {
 	}
 
 	return "items"
-}
-
-func formatNanoTimestamp(nanos int64) string {
-	if nanos == 0 {
-		return ""
-	}
-
-	return time.Unix(0, nanos).UTC().Format(time.RFC3339)
 }

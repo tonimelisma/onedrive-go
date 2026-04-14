@@ -14,10 +14,6 @@ func validateObservationSessionPlan(plan *ObservationSessionPlan, sessionBacked 
 		return fmt.Errorf("invalid primary observation phase: %w", err)
 	}
 
-	if err := validateShortcutObservationPhase(plan.ShortcutPhase); err != nil {
-		return fmt.Errorf("invalid shortcut observation phase: %w", err)
-	}
-
 	return nil
 }
 
@@ -94,47 +90,12 @@ func validatePrimaryObservationPhase(phase ObservationPhasePlan) error {
 	return nil
 }
 
-func validateShortcutObservationPhase(phase ObservationPhasePlan) error {
-	if phase.Driver == "" {
-		return validateObservationPhasePlan(phase)
-	}
-	if err := validateObservationPhasePlan(phase); err != nil {
-		return err
-	}
-	if phase.Driver != observationPhaseDriverScopedTarget {
-		return fmt.Errorf("shortcut phase requires scoped_targets driver")
-	}
-	if phase.DispatchPolicy != observationPhaseDispatchPolicyParallelTargets {
-		return fmt.Errorf("shortcut phase requires parallel target dispatch")
-	}
-	if phase.ErrorPolicy != observationPhaseErrorPolicyIsolateTarget {
-		return fmt.Errorf("shortcut phase requires isolate_target error policy")
-	}
-	if phase.FallbackPolicy != observationPhaseFallbackPolicyNone {
-		return fmt.Errorf("shortcut phase cannot fall back")
-	}
-	if phase.TokenCommitPolicy != observationPhaseTokenCommitPolicyAfterPhaseSuccess {
-		return fmt.Errorf("shortcut phase requires commit_after_phase_success token policy")
-	}
-
-	return nil
-}
-
-func (flow *engineFlow) validatePrimaryScopePersistence(plan *ObservationSessionPlan) error {
+func (flow *engineFlow) validatePrimaryObservationPersistence(plan *ObservationSessionPlan) error {
 	if err := validatePrimaryObservationPhase(plan.PrimaryPhase); err != nil {
 		return fmt.Errorf("primary persistence requires valid primary phase: %w", err)
 	}
 	if plan.Hash == "" {
 		return fmt.Errorf("primary persistence requires a non-empty plan hash")
-	}
-
-	primaryOnly := ObservationSessionPlan{
-		PrimaryPhase: plan.PrimaryPhase,
-		Reentry:      plan.Reentry,
-		Hash:         plan.Hash,
-	}
-	if flow.scopeObservationMode(plan) != flow.scopeObservationMode(&primaryOnly) {
-		return fmt.Errorf("shortcut phase must not affect persisted observation mode")
 	}
 
 	return nil

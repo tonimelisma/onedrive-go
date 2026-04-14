@@ -61,22 +61,13 @@ func TestNewDriveEngine_PropagatesWatchCapabilities(t *testing.T) {
 		CanonicalID: driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents"),
 		SyncDir:     syncDir,
 		RootItemID:  "shared-root-id",
-		FilterConfig: config.FilterConfig{
-			SkipDotfiles: true,
-			SkipSymlinks: true,
-			SkipDirs:     []string{"vendor"},
-			SkipFiles:    []string{"*.tmp"},
-			SyncPaths:    []string{"/Projects/report.txt"},
-			IgnoreMarker: ".syncignore",
-		},
 		TransfersConfig: config.TransfersConfig{
 			TransferWorkers: 3,
 			CheckWorkers:    4,
 		},
 		SafetyConfig: config.SafetyConfig{
-			UseLocalTrash:         true,
-			DeleteSafetyThreshold: 42,
-			MinFreeSpace:          "1MiB",
+			UseLocalTrash: true,
+			MinFreeSpace:  "1MiB",
 		},
 		SyncConfig: config.SyncConfig{
 			Websocket: true,
@@ -102,17 +93,10 @@ func TestNewDriveEngine_PropagatesWatchCapabilities(t *testing.T) {
 	assert.NotNil(t, eng.folderDelta)
 	assert.NotNil(t, eng.recursiveLister)
 	assert.NotNil(t, eng.permHandler)
-	assert.True(t, eng.localFilter.SkipDotfiles)
-	assert.True(t, eng.localFilter.SkipSymlinks)
-	assert.Equal(t, []string{"vendor"}, eng.localFilter.SkipDirs)
-	assert.Equal(t, []string{"*.tmp"}, eng.localFilter.SkipFiles)
-	assert.Equal(t, []string{"/Projects/report.txt"}, eng.syncScopeConfig.SyncPaths)
-	assert.Equal(t, ".syncignore", eng.syncScopeConfig.IgnoreMarker)
 	assert.True(t, eng.localRules.RejectSharePointRootForms)
 	assert.NotNil(t, eng.execCfg.trashFunc)
 	assert.Equal(t, 3, eng.transferWorkers)
 	assert.Equal(t, 4, eng.checkWorkers)
-	assert.Equal(t, 42, eng.deleteSafetyThreshold)
 	assert.Equal(t, int64(1024*1024), eng.minFreeSpace)
 }
 

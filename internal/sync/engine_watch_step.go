@@ -3,8 +3,6 @@ package sync
 import (
 	"context"
 	"fmt"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
 
 type watchEventKind string
@@ -17,11 +15,7 @@ const (
 	watchEventResultsClosed          watchEventKind = "results_closed"
 	watchEventSkipped                watchEventKind = "skipped"
 	watchEventSkippedClosed          watchEventKind = "skipped_closed"
-	watchEventScopeChange            watchEventKind = "scope_change"
-	watchEventScopeChangesClosed     watchEventKind = "scope_changes_closed"
 	watchEventRecheckTick            watchEventKind = "recheck_tick"
-	watchEventMutationRequest        watchEventKind = "mutation_request"
-	watchEventMutationRequestsClosed watchEventKind = "mutation_requests_closed"
 	watchEventReconcileTick          watchEventKind = "reconcile_tick"
 	watchEventReconcileResult        watchEventKind = "reconcile_result"
 	watchEventReconcileResultsClosed watchEventKind = "reconcile_results_closed"
@@ -37,19 +31,16 @@ type watchEvent struct {
 	batch           []PathChanges
 	workerResult    *WorkerResult
 	skipped         []SkippedItem
-	scopeChange     *syncscope.Change
-	mutationRequest *WatchMutationRequest
 	reconcileResult reconcileResult
 	observerErr     error
 }
 
 type watchTransition struct {
-	consumeOutboxHead     bool
-	appendOutbox          []*TrackedAction
-	markUserIntentPending bool
-	startReconcile        bool
-	beginDrain            bool
-	done                  bool
+	consumeOutboxHead bool
+	appendOutbox      []*TrackedAction
+	startReconcile    bool
+	beginDrain        bool
+	done              bool
 }
 
 //nolint:gocyclo // The watch loop deliberately centralizes all event decoding in one owner boundary.
@@ -77,20 +68,8 @@ func (rt *watchRuntime) waitWatchEvent(ctx context.Context, p *watchPipeline) wa
 		}
 
 		return watchEvent{kind: watchEventSkipped, skipped: skipped}
-	case scopeChange, ok := <-p.scopeChanges:
-		if !ok {
-			return watchEvent{kind: watchEventScopeChangesClosed}
-		}
-
-		return watchEvent{kind: watchEventScopeChange, scopeChange: &scopeChange}
 	case <-p.recheckC:
 		return watchEvent{kind: watchEventRecheckTick}
-	case mutationRequest, ok := <-p.mutationC:
-		if !ok {
-			return watchEvent{kind: watchEventMutationRequestsClosed}
-		}
-
-		return watchEvent{kind: watchEventMutationRequest, mutationRequest: &mutationRequest}
 	case <-p.reconcileC:
 		return watchEvent{kind: watchEventReconcileTick}
 	case result, ok := <-p.reconcileResults:
@@ -123,8 +102,8 @@ func (rt *watchRuntime) transitionWatchEvent(
 		return transition, err
 	}
 
-	if transition, handled, err := rt.transitionWatchObservationEvent(ctx, p, event); handled {
-		return transition, err
+	if transition, handled := rt.transitionWatchObservationEvent(ctx, p, event); handled {
+		return transition, nil
 	}
 
 	if transition, handled, err := rt.transitionWatchMaintenanceEvent(ctx, p, event); handled {
@@ -150,17 +129,12 @@ func (rt *watchRuntime) applyWatchTransition(
 	if len(transition.appendOutbox) > 0 {
 		rt.appendOutbox(transition.appendOutbox)
 	}
-	if transition.markUserIntentPending {
-		rt.queueUserIntentDispatch()
-	}
 	if transition.startReconcile {
 		rt.runFullReconciliationAsync(ctx, p.bl)
 	}
 	if transition.done {
 		return true, nil
 	}
-
-	rt.settleWatchAdmission(ctx, p)
 	return false, nil
 }
 
@@ -194,11 +168,7 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 		return watchTransition{}, true, fmt.Errorf("sync: worker results channel closed unexpectedly")
 	case watchEventSkipped,
 		watchEventSkippedClosed,
-		watchEventScopeChange,
-		watchEventScopeChangesClosed,
 		watchEventRecheckTick,
-		watchEventMutationRequest,
-		watchEventMutationRequestsClosed,
 		watchEventReconcileTick,
 		watchEventReconcileResult,
 		watchEventReconcileResultsClosed,
@@ -217,49 +187,38 @@ func (rt *watchRuntime) transitionWatchObservationEvent(
 	ctx context.Context,
 	p *watchPipeline,
 	event *watchEvent,
-) (watchTransition, bool, error) {
+) (watchTransition, bool) {
 	switch event.kind {
 	case watchEventSkipped:
 		rt.recordSkippedItems(ctx, event.skipped)
 		rt.clearResolvedSkippedItems(ctx, event.skipped)
-		return watchTransition{}, true, nil
+		return watchTransition{}, true
 	case watchEventSkippedClosed:
 		p.skippedCh = nil
-		return watchTransition{}, true, nil
-	case watchEventScopeChange:
-		if err := rt.handleWatchScopeChange(ctx, p, event.scopeChange); err != nil {
-			return watchTransition{}, true, err
-		}
-
-		return watchTransition{}, true, nil
-	case watchEventScopeChangesClosed:
-		p.scopeChanges = nil
-		return watchTransition{}, true, nil
+		return watchTransition{}, true
 	case watchEventReconcileTick:
-		return watchTransition{startReconcile: true}, true, nil
+		return watchTransition{startReconcile: true}, true
 	case watchEventReconcileResult:
 		rt.applyReconcileResult(ctx, event.reconcileResult)
-		return watchTransition{}, true, nil
+		return watchTransition{}, true
 	case watchEventReconcileResultsClosed:
 		p.reconcileResults = nil
-		return watchTransition{}, true, nil
+		return watchTransition{}, true
 	case watchEventDispatchReady,
 		watchEventBatchReady,
 		watchEventBatchClosed,
 		watchEventWorkerResult,
 		watchEventResultsClosed,
 		watchEventRecheckTick,
-		watchEventMutationRequest,
-		watchEventMutationRequestsClosed,
 		watchEventObserverError,
 		watchEventObserverErrorsClosed,
 		watchEventTrialTick,
 		watchEventRetryTick,
 		watchEventContextCanceled:
-		return watchTransition{}, false, nil
+		return watchTransition{}, false
 	}
 
-	return watchTransition{}, false, nil
+	return watchTransition{}, false
 }
 
 func (rt *watchRuntime) transitionWatchMaintenanceEvent(
@@ -270,11 +229,6 @@ func (rt *watchRuntime) transitionWatchMaintenanceEvent(
 	switch event.kind {
 	case watchEventRecheckTick:
 		rt.handleRecheckTick(ctx)
-		return watchTransition{}, true, nil
-	case watchEventMutationRequest:
-		return rt.handleWatchMutationRequest(ctx, event.mutationRequest), true, nil
-	case watchEventMutationRequestsClosed:
-		p.mutationC = nil
 		return watchTransition{}, true, nil
 	case watchEventObserverError:
 		if isFatalObserverError(event.observerErr) {
@@ -310,8 +264,6 @@ func (rt *watchRuntime) transitionWatchMaintenanceEvent(
 		watchEventResultsClosed,
 		watchEventSkipped,
 		watchEventSkippedClosed,
-		watchEventScopeChange,
-		watchEventScopeChangesClosed,
 		watchEventReconcileTick,
 		watchEventReconcileResult,
 		watchEventReconcileResultsClosed:

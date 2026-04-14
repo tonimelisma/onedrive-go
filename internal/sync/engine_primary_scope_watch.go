@@ -34,7 +34,7 @@ func (rt *watchRuntime) watchPrimaryScopedRemote(
 			continue
 		}
 
-		finalEvents, committed := rt.processCommittedScopedWatchBatch(ctx, bl, result, false)
+		finalEvents, committed := rt.processCommittedScopedWatchBatch(ctx, bl, result)
 		if !committed {
 			continue
 		}
@@ -78,7 +78,7 @@ func (rt *watchRuntime) handlePrimaryScopedPollError(
 	}
 
 	delay := bo.Next()
-	rt.engine.logger.Warn("scoped sync_paths watch poll failed, backing off",
+	rt.engine.logger.Warn("scoped target watch poll failed, backing off",
 		slog.String("error", err.Error()),
 		slog.Duration("backoff", delay),
 		slog.String("drive_id", rt.engine.driveID.String()),
@@ -116,7 +116,7 @@ func (rt *watchRuntime) sleepPrimaryScopedWatch(
 		return true, nil
 	}
 
-	return false, fmt.Errorf("scoped sync_paths watch %s sleep: %w", label, sleepErr)
+	return false, fmt.Errorf("scoped target watch %s sleep: %w", label, sleepErr)
 }
 
 func primaryScopedWatchStopped(ctx context.Context, err error) bool {

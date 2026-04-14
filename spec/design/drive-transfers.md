@@ -17,6 +17,14 @@ Unified download/upload manager shared by both CLI file operations and the sync 
 - Mutable Runtime Owner: Each `TransferManager` instance owns only request-scoped transfer state and managed session cleanup work. The package has no package-level mutable state or long-lived goroutines.
 - Error Boundary: `driveops` translates transfer-specific failures into domain sentinels such as disk-space and hash errors. Retry scheduling and user-facing remediation are owned by higher layers.
 
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| Downloads use partial-file resume plus hash verification before the final atomic rename. | `internal/driveops/download_test.go`, `internal/driveops/hash_test.go`, `internal/localpath/localpath_test.go` (`TestAtomicWrite`) |
+| Uploads keep simple-upload and upload-session mechanics inside the transfer boundary. | `internal/driveops/upload_test.go`, `internal/graph/upload_test.go`, `internal/graph/upload_session_test.go` |
+| Sync execution reuses the same transfer boundary instead of inventing a second transfer path. | `internal/sync/executor_test.go`, `internal/cli/sync_helpers_test.go` |
+
 ### Download
 
 Implements: R-6.2.3 [verified]
@@ -84,9 +92,9 @@ Sync execution uses the same split deliberately: when planning already knows
 the authoritative remote `itemID`, uploads overwrite that item by ID instead of
 recreating the file through the parent-path route. Parent-based uploads remain
 for true creates where no remote item identity exists yet. This keeps ordinary
-edits and `resolve local` on the narrower overwrite boundary
-and avoids teaching parent-creation consistency gaps to flows that already have
-stable remote identity.
+edits and local-wins edit/delete conflict recovery on the narrower overwrite
+boundary and avoids teaching parent-creation consistency gaps to flows that
+already have stable remote identity.
 
 `driveops` is the single owner of post-success path convergence and
 path-authoritative delete reconciliation for one resolved drive session.
@@ -138,8 +146,9 @@ Sync execution consumes the same capability for post-success visibility
 confirmation after remote folder create, upload, and move. Those sync probes
 stay best-effort and warn-only, but they no longer own a second retry budget
 or sleep loop. For same-drive actions the executor reuses its current session.
-For cross-drive shortcut actions it asks the factory for a target-scoped
-session and probes the target-drive-relative path rooted at the shortcut's
+For cross-drive shared-root actions it asks the factory for a target-scoped
+session and probes the target-drive-relative path rooted at that configured
+shared root's
 remote root item. If that root metadata is missing, sync skips the probe
 instead of guessing and touching the wrong remote boundary.
 

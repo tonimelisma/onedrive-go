@@ -22,12 +22,6 @@ func describeStatusSummary(key syncengine.SummaryKey) statusSummaryDescriptor {
 			presentation.Reason,
 			presentation.Action,
 		)
-	case syncengine.SummaryConflictUnresolved:
-		return newStatusSummaryDescriptor(
-			"UNRESOLVED CONFLICT",
-			"Local and remote changes diverged and both versions were preserved.",
-			"Review the conflict copies, then run 'onedrive-go resolve local|remote|both <path>'.",
-		)
 	case syncengine.SummaryQuotaExceeded,
 		syncengine.SummaryServiceOutage,
 		syncengine.SummaryRateLimited,
@@ -41,8 +35,7 @@ func describeStatusSummary(key syncengine.SummaryKey) statusSummaryDescriptor {
 		syncengine.SummaryFileTooLarge,
 		syncengine.SummaryCaseCollision:
 		return describeFilesystemStatusSummary(string(key))
-	case syncengine.SummaryHeldDeletes,
-		syncengine.SummaryDiskFull,
+	case syncengine.SummaryDiskFull,
 		syncengine.SummaryHashError,
 		syncengine.SummaryFileTooLargeForSpace:
 		return describeLocalRuntimeStatusSummary(string(key))
@@ -140,7 +133,7 @@ func describeFilesystemStatusSummary(key string) statusSummaryDescriptor {
 		return newStatusSummaryDescriptor(
 			"FILE TOO LARGE",
 			"The file exceeds the maximum upload size.",
-			"Reduce the file size or exclude it via skip_files.",
+			"Reduce the file size or move it out of the sync dir.",
 		)
 	case string(syncengine.SummaryCaseCollision):
 		return newStatusSummaryDescriptor(
@@ -159,12 +152,6 @@ func describeFilesystemStatusSummary(key string) statusSummaryDescriptor {
 
 func describeLocalRuntimeStatusSummary(key string) statusSummaryDescriptor {
 	switch key {
-	case string(syncengine.SummaryHeldDeletes):
-		return newStatusSummaryDescriptor(
-			"HELD DELETES",
-			"Delete safety threshold triggered - too many deletes in one batch.",
-			"Run `resolve deletes` to approve, or investigate first.",
-		)
 	case string(syncengine.SummaryDiskFull):
 		return newStatusSummaryDescriptor(
 			"DISK FULL",

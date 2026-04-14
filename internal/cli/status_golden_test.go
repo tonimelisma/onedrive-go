@@ -37,11 +37,6 @@ func goldenStatusAccounts() []statusAccount {
 						LastError:        "sync: network timeout",
 						StateStoreStatus: stateStoreStatusHealthy,
 						ExamplesLimit:    defaultVisiblePaths,
-						NextActions: []string{
-							invalidDescriptor.Action,
-							authDescriptor.Action,
-							sharedDescriptor.Action,
-						},
 						IssueGroups: []failureGroupJSON{
 							{
 								SummaryKey: string(syncengine.SummaryInvalidFilename),
@@ -70,7 +65,7 @@ func goldenStatusAccounts() []statusAccount {
 								Reason:     sharedDescriptor.Reason,
 								Action:     sharedDescriptor.Action,
 								Count:      1,
-								ScopeKind:  "shortcut",
+								ScopeKind:  "directory",
 								Scope:      "Shared/Docs",
 								Paths:      []string{"Shared/Docs/report.docx"},
 							},

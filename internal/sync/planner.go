@@ -25,11 +25,12 @@ func NewPlanner(logger *slog.Logger) *Planner {
 // Plan takes buffered changes, the current baseline, sync mode, safety
 // config, and denied prefixes, and produces an ActionPlan. Paths under
 // deniedPrefixes are treated as download-only (remote writes suppressed).
-// Returns ErrDeleteSafetyThresholdExceeded if planned deletes exceed safety thresholds.
 func (p *Planner) Plan(
 	changes []PathChanges, baseline *Baseline, mode Mode, config *SafetyConfig,
 	deniedPrefixes []string,
 ) (*ActionPlan, error) {
+	_ = config
+
 	p.logger.Info("planning sync actions",
 		slog.Int("changes", len(changes)),
 		slog.Int("baseline_entries", baseline.Len()),
@@ -64,7 +65,7 @@ func (p *Planner) Plan(
 	// executor can remove children before the parent directory.
 	allActions = expandFolderDeleteCascades(allActions, baseline, views, mode, p.logger)
 
-	// Step 2.6: Fill target-drive and shortcut-root metadata once after all
+	// Step 2.6: Fill target-drive and configured-root metadata once after all
 	// actions exist so executor-time cross-drive convergence does not need to
 	// rediscover target ownership ad hoc.
 	enrichActionTargets(allActions, baseline)
@@ -83,18 +84,7 @@ func (p *Planner) Plan(
 		DeferredByMode: deferred,
 	}
 
-	// Step 4: safety check for delete bursts.
 	counts := CountByType(plan.Actions)
-	deleteCount := counts[ActionLocalDelete] + counts[ActionRemoteDelete]
-
-	if exceedsDeleteThreshold(deleteCount, config.DeleteSafetyThreshold) {
-		p.logger.Warn("delete safety threshold triggered",
-			slog.Int("delete_count", deleteCount),
-			slog.Int("threshold", config.DeleteSafetyThreshold),
-		)
-
-		return nil, ErrDeleteSafetyThresholdExceeded
-	}
 
 	p.logger.Info("plan complete",
 		slog.Int("total_actions", len(plan.Actions)),
@@ -184,9 +174,8 @@ func resolvePathDriveID(p string, bl *Baseline) driveid.ID {
 }
 
 // isCrossDriveLocalMove returns true when a hash-correlated delete+create
-// pair spans different drives (e.g., own drive → shortcut folder). The
-// Graph API MoveItem is a single-drive operation, so cross-drive moves
-// must be decomposed into a delete + upload.
+// pair spans different drives. The Graph API MoveItem is a single-drive
+// operation, so cross-drive moves must be decomposed into a delete + upload.
 func isCrossDriveLocalMove(deletePath, createPath string, views map[string]*PathView, bl *Baseline) bool {
 	// Source drive comes from the deleted item's baseline.
 	deleteView := views[deletePath]
@@ -886,19 +875,18 @@ func classifyFolderNoBaseline(view *PathView) []Action {
 // remoteStateFromEvent constructs a RemoteState from a ChangeEvent.
 func remoteStateFromEvent(ev *ChangeEvent) *RemoteState {
 	return &RemoteState{
-		ItemID:        ev.ItemID,
-		DriveID:       ev.DriveID,
-		ParentID:      ev.ParentID,
-		Name:          ev.Name,
-		ItemType:      ev.ItemType,
-		Size:          ev.Size,
-		Hash:          ev.Hash,
-		Mtime:         ev.Mtime,
-		ETag:          ev.ETag,
-		CTag:          ev.CTag,
-		IsDeleted:     ev.IsDeleted,
-		RemoteDriveID: ev.RemoteDriveID,
-		RemoteItemID:  ev.RemoteItemID,
+		ItemID:           ev.ItemID,
+		DriveID:          ev.DriveID,
+		ParentID:         ev.ParentID,
+		Name:             ev.Name,
+		ItemType:         ev.ItemType,
+		Size:             ev.Size,
+		Hash:             ev.Hash,
+		Mtime:            ev.Mtime,
+		ETag:             ev.ETag,
+		CTag:             ev.CTag,
+		IsDeleted:        ev.IsDeleted,
+		TargetRootItemID: ev.TargetRootItemID,
 	}
 }
 
@@ -1117,14 +1105,6 @@ func MakeAction(actionType ActionType, view *PathView) Action {
 		a.ItemID = view.Baseline.ItemID
 	}
 
-	// Shortcut scope enrichment (D-5): flow shortcut identity from
-	// observation through to the action so active-scope matching can
-	// distinguish own-drive vs shortcut-scoped failures (R-6.8.12, R-6.8.13).
-	if view.Remote != nil && view.Remote.RemoteDriveID != "" {
-		a.TargetShortcutKey = view.Remote.RemoteDriveID + ":" + view.Remote.RemoteItemID
-		a.TargetDriveID = driveid.New(view.Remote.RemoteDriveID)
-	}
-
 	return a
 }
 
@@ -1164,7 +1144,7 @@ func resolveActionTargetDriveID(action *Action, baseline *Baseline) driveid.ID {
 
 func populateActionTargetRootFromRemote(action *Action, baseline *Baseline) {
 	if action.TargetRootItemID == "" && action.View != nil && action.View.Remote != nil {
-		action.TargetRootItemID = action.View.Remote.RemoteItemID
+		action.TargetRootItemID = action.View.Remote.TargetRootItemID
 	}
 	if action.TargetRootItemID == "" || action.TargetRootLocalPath != "" {
 		return
@@ -1669,10 +1649,4 @@ func detectDependencyCycle(deps [][]int) error {
 	}
 
 	return nil
-}
-
-// exceedsDeleteThreshold returns true if the planned delete count exceeds
-// the configured threshold. A threshold of 0 disables the check.
-func exceedsDeleteThreshold(deleteCount, threshold int) bool {
-	return threshold > 0 && deleteCount > threshold
 }

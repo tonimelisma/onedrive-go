@@ -8,8 +8,7 @@
 // Detection thresholds (failure-redesign.md §7.3.1):
 //   - throttle:target:* (429) — immediate, single response
 //   - service (5xx, 503+Retry-After) — 5 unique paths in 30s
-//   - quota:own (507, own-drive) — 3 unique paths in 10s
-//   - quota:shortcut:$key (507, shortcut) — 3 unique paths in 10s
+//   - quota:own (507) — 3 unique paths in 10s
 //
 // Trial interval computation is centralized in computeTrialInterval()
 // (engine.go), not here. See R-2.10.14.
@@ -70,10 +69,9 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 // ScopeUpdateResult indicating whether a new scope block should be created.
 //
 // Per R-2.10.3 and failure-redesign.md §7.3.1:
-//   - 429 → immediate target-scoped throttle block (server signal)
+//   - 429 → immediate target-drive throttle block (server signal)
 //   - 503 with Retry-After → immediate service block (server signal)
-//   - 507 own-drive → sliding window quota:own (3 unique paths / 10s)
-//   - 507 shortcut → sliding window quota:shortcut:$key (3 unique paths / 10s)
+//   - 507 → sliding window quota:own (3 unique paths / 10s)
 //   - 5xx (no Retry-After) → sliding window service (5 unique paths / 30s)
 func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 	targetDriveID := r.TargetDriveID
@@ -84,7 +82,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 	switch {
 	case r.HTTPStatus == http.StatusTooManyRequests:
 		// Immediate block — server signal, single response triggers (R-2.10.26).
-		scopeKey := ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
+		scopeKey := ScopeKeyForResult(r.HTTPStatus, targetDriveID)
 		if scopeKey.IsZero() {
 			return ScopeUpdateResult{}
 		}
@@ -105,13 +103,14 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 		}
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
-		// Quota failure — scope depends on target drive (R-2.10.1, R-2.10.17).
-		sk := ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
+		// Quota failure — a drive-scoped quota block suppresses uploads until the
+		// backing drive has space again.
+		sk := ScopeKeyForResult(r.HTTPStatus, targetDriveID)
 		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded)
 
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
-		sk := ScopeKeyForResult(r.HTTPStatus, targetDriveID, r.ShortcutKey)
+		sk := ScopeKeyForResult(r.HTTPStatus, targetDriveID)
 		return ss.checkWindow(sk, r.Path,
 			serviceWindowThreshold, serviceWindowDuration,
 			IssueServiceOutage)
@@ -126,11 +125,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 // shall reset the unique-path failure counter."
 func (ss *ScopeState) RecordSuccess(r *WorkerResult) {
 	// Success resets all potentially-relevant windows for this action's scope.
-	if r.ShortcutKey != "" {
-		delete(ss.windows, SKQuotaShortcut(r.ShortcutKey))
-	} else {
-		delete(ss.windows, SKQuotaOwn())
-	}
+	delete(ss.windows, SKQuotaOwn())
 	// Also reset service window — a successful request proves the service is up.
 	delete(ss.windows, SKService())
 }

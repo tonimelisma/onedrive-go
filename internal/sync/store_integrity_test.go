@@ -69,81 +69,6 @@ func TestInspector_AuditIntegrityReportsPersistedProblems(t *testing.T) {
 	})
 }
 
-// Validates: R-2.3.6, R-2.3.12
-func TestSyncStore_AuditIntegrityReportsDurableIntentWorkflowProblems(t *testing.T) {
-	t.Parallel()
-
-	store := newTestStore(t)
-	ctx := t.Context()
-
-	_, err := store.DB().ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`)
-	require.NoError(t, err)
-	_, err = store.DB().ExecContext(ctx, `PRAGMA foreign_keys = OFF`)
-	require.NoError(t, err)
-	_, err = store.DB().ExecContext(ctx, `
-		INSERT INTO conflicts
-			(id, drive_id, path, conflict_type, detected_at, resolution, resolved_at, resolved_by)
-		VALUES
-			('conflict-missing-request', ?, '/conflict-a.txt', 'edit_edit', 1, 'unresolved', NULL, NULL),
-			('conflict-missing-resolving-at', ?, '/conflict-b.txt', 'edit_edit', 2, 'unresolved', NULL, NULL),
-			('conflict-resolved-unresolved', ?, '/conflict-c.txt', 'edit_edit', 3, 'unresolved', 33, 'user'),
-			('conflict-invalid-state', ?, '/conflict-d.txt', 'edit_edit', 4, 'unresolved', NULL, NULL),
-			('conflict-invalid-resolution', ?, '/conflict-e.txt', 'edit_edit', 5, 'manual', NULL, NULL),
-			('conflict-request-on-resolved', ?, '/conflict-f.txt', 'edit_edit', 6, 'keep_local', 66, 'user');
-		INSERT INTO conflict_requests
-			(conflict_id, requested_resolution, state, requested_at, applying_at, last_error)
-		VALUES
-			('conflict-missing-request', '', 'queued', NULL, NULL, NULL),
-			('conflict-missing-resolving-at', 'keep_local', 'applying', 2, NULL, NULL),
-			('conflict-invalid-state', 'keep_remote', 'manual', 4, NULL, NULL),
-			('conflict-request-on-resolved', 'keep_remote', 'queued', 6, NULL, NULL),
-			('conflict-orphaned', 'keep_both', 'queued', 7, NULL, NULL);
-		INSERT INTO held_deletes
-			(drive_id, action_type, path, item_id, state, held_at, approved_at, last_planned_at)
-		VALUES
-			(?, 'remote_delete', '/delete-a.txt', '', 'held', 1, NULL, 1),
-			(?, 'remote_delete', '/delete-b.txt', 'item-b', 'approved', 1, NULL, 1),
-			(?, 'remote_delete', '/delete-c.txt', 'item-c', 'manual', 1, NULL, 1)`,
-		testDriveID,
-		testDriveID,
-		testDriveID,
-		testDriveID,
-		testDriveID,
-		testDriveID,
-		testDriveID,
-		testDriveID,
-		testDriveID,
-	)
-	require.NoError(t, err)
-	_, err = store.DB().ExecContext(ctx, `PRAGMA foreign_keys = ON`)
-	require.NoError(t, err)
-	_, err = store.DB().ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`)
-	require.NoError(t, err)
-
-	report, err := store.AuditIntegrity(ctx)
-	require.NoError(t, err)
-
-	var codes []string
-	var details []string
-	for _, finding := range report.Findings {
-		codes = append(codes, finding.Code)
-		details = append(details, finding.Detail)
-	}
-
-	assert.Contains(t, codes, integrityCodeInvalidConflictWorkflow)
-	assert.Contains(t, codes, integrityCodeInvalidHeldDelete)
-	assert.Contains(t, details, "conflict conflict-missing-request is queued without requested_resolution")
-	assert.Contains(t, details, "conflict conflict-missing-resolving-at is applying without applying_at")
-	assert.Contains(t, details, "conflict conflict-resolved-unresolved is unresolved with resolved_at set")
-	assert.Contains(t, details, `conflict conflict-invalid-state has invalid workflow state "manual"`)
-	assert.Contains(t, details, `conflict conflict-invalid-resolution has invalid final resolution "manual"`)
-	assert.Contains(t, details, "conflict request conflict-request-on-resolved targets already resolved conflict")
-	assert.Contains(t, details, "conflict request conflict-orphaned has no conflict row")
-	assert.Contains(t, details, "held delete /delete-a.txt is missing item_id")
-	assert.Contains(t, details, "approved held delete /delete-b.txt is missing approved_at")
-	assert.Contains(t, details, `held delete /delete-c.txt has invalid state "manual"`)
-}
-
 // Validates: R-2.10.47
 func TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations(t *testing.T) {
 	t.Parallel()
@@ -191,52 +116,6 @@ func TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations(t *testi
 	}
 	assert.True(t, itemRowFound)
 	assert.True(t, heldRowFound)
-}
-
-// Validates: R-2.3.6, R-2.3.12
-func TestSyncStore_RepairIntegritySafePreservesDurableUserIntent(t *testing.T) {
-	t.Parallel()
-
-	store := newTestStore(t)
-	ctx := t.Context()
-	driveID := driveid.New(testDriveID)
-
-	require.NoError(t, store.UpsertHeldDeletes(ctx, []HeldDeleteRecord{{
-		DriveID:       driveID,
-		ActionType:    ActionRemoteDelete,
-		Path:          "/delete-me.txt",
-		ItemID:        "item-delete",
-		State:         HeldDeleteStateHeld,
-		HeldAt:        1,
-		LastPlannedAt: 1,
-	}}))
-	require.NoError(t, store.ApproveHeldDeletes(ctx))
-
-	_, err := store.DB().ExecContext(ctx, `
-		INSERT INTO conflicts
-			(id, drive_id, path, conflict_type, detected_at, resolution)
-		VALUES
-			('conflict-requested', ?, '/conflict.txt', 'edit_edit', 1, 'unresolved')`,
-		testDriveID,
-	)
-	require.NoError(t, err)
-	result, err := store.RequestConflictResolution(ctx, "conflict-requested", ResolutionKeepLocal)
-	require.NoError(t, err)
-	assert.Equal(t, ConflictRequestQueued, result.Status)
-
-	repairs, err := store.RepairIntegritySafe(ctx)
-	require.NoError(t, err)
-	assert.Zero(t, repairs)
-
-	approved, err := store.ListHeldDeletesByState(ctx, HeldDeleteStateApproved)
-	require.NoError(t, err)
-	require.Len(t, approved, 1)
-	assert.Equal(t, "item-delete", approved[0].ItemID)
-
-	request, err := store.GetConflictRequest(ctx, "conflict-requested")
-	require.NoError(t, err)
-	assert.Equal(t, ConflictStateQueued, request.State)
-	assert.Equal(t, ResolutionKeepLocal, request.RequestedResolution)
 }
 
 // Validates: R-2.10.47

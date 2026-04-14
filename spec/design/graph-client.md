@@ -69,6 +69,14 @@ This keeps domain-specific logic close to its tests without reopening the public
 - Mutable Runtime Owner: `Client` instances are immutable after construction except for request-scoped state inside individual method calls. Browser auth owns its callback goroutine, server, and result channel only for the lifetime of `LoginWithBrowser`.
 - Error Boundary: `graph` is the first translation boundary from wire/auth/HTTP failures into the domain model described in [error-model.md](error-model.md). Higher layers may add context, but they do not reinterpret raw Graph payloads directly.
 
+## Verified By
+
+| Behavior | Evidence |
+| --- | --- |
+| Auth flows, token persistence, and browser/device login remain Graph-boundary responsibilities. | `internal/graph/auth_test.go`, `internal/graph/auth_browser_test.go`, `internal/graph/auth_device_test.go` |
+| Graph request normalization and error translation stay inside the Graph boundary. | `internal/graph/client_test.go`, `internal/graph/errors_test.go`, `internal/graph/normalize_test.go` |
+| Drive, shared-item, and upload-session quirks are handled at the Graph edge rather than in CLI or sync. | `internal/graph/drives_test.go`, `internal/graph/drives_shared_test.go`, `internal/graph/upload_session_test.go`, `internal/graph/upload_test.go` |
+
 ## Authentication (`auth.go`)
 
 Two OAuth2 flows:

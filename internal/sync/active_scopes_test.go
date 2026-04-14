@@ -22,19 +22,6 @@ func makeTrackedAction(actionType ActionType, path string) *TrackedAction {
 	}
 }
 
-func makeShortcutTrackedAction(actionType ActionType, path, shortcutKey string) *TrackedAction {
-	return &TrackedAction{
-		Action: Action{
-			Type:              actionType,
-			Path:              path,
-			DriveID:           driveid.New("d"),
-			ItemID:            "item1",
-			TargetShortcutKey: shortcutKey,
-		},
-		ID: 1,
-	}
-}
-
 // Validates: R-2.10.11, R-2.10.15
 func TestFindBlockingScope_GlobalPriorityWins(t *testing.T) {
 	t.Parallel()
@@ -123,7 +110,6 @@ func TestFindBlockingScope_QuotaRouting(t *testing.T) {
 
 	blocks := []ScopeBlock{
 		{Key: SKQuotaOwn(), IssueType: IssueQuotaExceeded},
-		{Key: SKQuotaShortcut("drive1:item1"), IssueType: IssueQuotaExceeded},
 	}
 
 	assert.Equal(t,
@@ -132,13 +118,6 @@ func TestFindBlockingScope_QuotaRouting(t *testing.T) {
 	)
 	assert.True(t,
 		FindBlockingScope(blocks, makeTrackedAction(ActionDownload, "own.txt")).IsZero(),
-	)
-	assert.Equal(t,
-		SKQuotaShortcut("drive1:item1"),
-		FindBlockingScope(blocks, makeShortcutTrackedAction(ActionUpload, "Shared/a.txt", "drive1:item1")),
-	)
-	assert.True(t,
-		FindBlockingScope(blocks, makeShortcutTrackedAction(ActionUpload, "Shared/b.txt", "drive2:item2")).IsZero(),
 	)
 }
 

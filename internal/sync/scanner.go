@@ -8,7 +8,7 @@
 //   - classifyLocalChange:   compares local state against baseline
 //   - detectDeletions:       finds baseline entries missing from walk
 //   - ComputeStableHash:     double-stat hash for actively-written files
-//   - ShouldObserve:         unified observation filter (Stage 1: name + path)
+//   - shouldObserveWithFilter: unified observation filter (Stage 1: name + path)
 //   - IsOversizedFile:       Stage 2 observation filter (file size > 250GB)
 //   - ValidateOneDriveName:  returns reason + detail for invalid names
 //   - IsAlwaysExcluded:      OneDrive-incompatible name filtering
@@ -316,18 +316,6 @@ func (o *LocalObserver) makeWalkFunc(
 		// Normalize: forward slashes for cross-platform consistency + NFC Unicode.
 		dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 		name := nfcNormalize(d.Name())
-
-		if o.scopeSnapshot.IsMarkerFile(dbRelPath) {
-			return SkipEntry(d)
-		}
-
-		if d.IsDir() && o.scopeSnapshot.HasMarkerDir(dbRelPath) {
-			return filepath.SkipDir
-		}
-
-		if !o.scopeAllowsUnknown(dbRelPath) {
-			return SkipEntry(d)
-		}
 
 		if d.Type()&fs.ModeSymlink != 0 {
 			if o.filterConfig.SkipSymlinks {
@@ -808,10 +796,6 @@ func (o *LocalObserver) detectDeletions(observed map[string]bool) []ChangeEvent 
 }
 
 func (o *LocalObserver) shouldSuppressDeleteForExcludedPath(path string, entry *BaselineEntry) bool {
-	if !o.scopeSnapshot.AllowsPath(path) {
-		return true
-	}
-
 	if o.hasExcludedSymlinkAncestor(path) {
 		return true
 	}
@@ -917,20 +901,6 @@ func (o *LocalObserver) IsOversizedFile(size int64, path string) bool {
 		return true
 	}
 	return false
-}
-
-// ShouldObserve checks whether a local filesystem entry should enter the sync
-// pipeline. Returns nil for valid entries (observe). Returns a non-nil
-// *SkippedItem for rejected entries: Reason=="" for internal exclusions
-// (temp files — not user-actionable), Reason!="" for user-actionable
-// rejections that should be recorded.
-//
-// Called from FullScan walk, watch event handlers, and watch setup.
-// Expects NFC-normalized name and path. This is Stage 1 of the two-stage
-// observation filter — cheap string checks only (no syscall). Stage 2
-// (file size > 250GB) is checked after stat in processEntry/hashAndEmit.
-func ShouldObserve(name, path string) *SkippedItem {
-	return shouldObserveWithFilter(name, path, observedKindUnknown, LocalFilterConfig{}, LocalObservationRules{})
 }
 
 func shouldObserveWithFilter(

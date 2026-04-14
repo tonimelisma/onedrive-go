@@ -31,7 +31,8 @@ type watchStepResult struct {
 }
 
 // RemoteWatchBatchHandler lets the engine translate a raw remote poll into the
-// final planner-visible batch after any watch-owned commit or shortcut policy.
+// final planner-visible batch after any watch-owned commit or follow-up
+// reconciliation policy.
 type RemoteWatchBatchHandler func(
 	ctx context.Context,
 	events []ChangeEvent,

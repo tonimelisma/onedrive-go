@@ -1,9 +1,7 @@
 package config
 
 import (
-	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -13,27 +11,10 @@ const (
 	maxTransferWorkers    = 64
 	minCheckWorkers       = 1
 	maxCheckWorkers       = 16
-	minDeleteSafety       = 1
 	minLogRetention       = 1
 	minPollInterval       = 30 * time.Second
 	minSafetyScanInterval = 10 * time.Second
 )
-
-func validateFilter(f *FilterConfig) []error {
-	var errs []error
-
-	for _, p := range f.SyncPaths {
-		if !strings.HasPrefix(p, "/") {
-			errs = append(errs, fmt.Errorf("sync_paths: path %q must start with /", p))
-		}
-	}
-
-	if f.IgnoreMarker == "" {
-		errs = append(errs, errors.New("ignore_marker: must not be empty"))
-	}
-
-	return errs
-}
 
 func validateTransfers(t *TransfersConfig) []error {
 	var errs []error
@@ -52,16 +33,7 @@ func validateTransfers(t *TransfersConfig) []error {
 }
 
 func validateSafety(s *SafetyConfig) []error {
-	var errs []error
-
-	if s.DeleteSafetyThreshold < minDeleteSafety {
-		errs = append(errs, fmt.Errorf("delete_safety_threshold: must be >= %d, got %d",
-			minDeleteSafety, s.DeleteSafetyThreshold))
-	}
-
-	errs = append(errs, validateSafetyRemaining(s)...)
-
-	return errs
+	return validateSafetyRemaining(s)
 }
 
 func validateSafetyRemaining(s *SafetyConfig) []error {

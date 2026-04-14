@@ -120,29 +120,6 @@ const (
 	ScopeReconcileFull        ScopeReconcileKind = strReconcileFull
 )
 
-// Resolution strategy constants for conflict resolution.
-const (
-	ResolutionKeepLocal  = "keep_local"
-	ResolutionKeepRemote = "keep_remote"
-	ResolutionKeepBoth   = "keep_both"
-	ResolutionUnresolved = "unresolved"
-)
-
-// Conflict workflow state constants. Resolution is the final user choice;
-// state is the engine-owned lifecycle for queued resolution work.
-const (
-	ConflictStateUnresolved = "unresolved"
-	ConflictStateQueued     = "queued"
-	ConflictStateApplying   = "applying"
-	ConflictStateResolved   = "resolved"
-)
-
-// Held-delete workflow state constants.
-const (
-	HeldDeleteStateHeld     = "held"
-	HeldDeleteStateApproved = "approved"
-)
-
 // Conflict type constants.
 const (
 	ConflictEditEdit     = "edit_edit"
@@ -153,7 +130,6 @@ const (
 // ResolvedBy constants for conflict resolution attribution.
 const (
 	ResolvedByAuto = "auto"
-	ResolvedByUser = "user"
 )
 
 // ChangeSource identifies the origin of a change event.
@@ -185,7 +161,6 @@ const (
 	ChangeModify
 	ChangeDelete
 	ChangeMove
-	ChangeShortcut // shortcut/shared folder detected (remote only)
 )
 
 func (t ChangeType) String() string {
@@ -198,8 +173,6 @@ func (t ChangeType) String() string {
 		return strDelete
 	case ChangeMove:
 		return strMove
-	case ChangeShortcut:
-		return "shortcut"
 	default:
 		return fmt.Sprintf("ChangeType(%d)", int(t))
 	}

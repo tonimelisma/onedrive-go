@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/syncscope"
 )
 
 const (
@@ -21,9 +19,6 @@ const (
 	integrityCodeLegacyRemoteBoundary     = "legacy_remote_boundary"
 	integrityCodeVisibleProjectionOverlap = "visible_projection_overlap"
 	integrityCodeBaselineCacheMismatch    = "baseline_cache_mismatch"
-	integrityCodeScopeStateDrift          = "scope_state_drift"
-	integrityCodeInvalidConflictWorkflow  = "invalid_conflict_workflow"
-	integrityCodeInvalidHeldDelete        = "invalid_held_delete_workflow"
 )
 
 // IntegrityFinding is one stable integrity problem detected in persisted sync
@@ -73,24 +68,7 @@ func (i *Inspector) AuditIntegrity(ctx context.Context) (IntegrityReport, error)
 		return IntegrityReport{}, fmt.Errorf("list scope blocks for integrity audit: %w", err)
 	}
 
-	conflicts, err := queryAllConflictsForAudit(ctx, i.db)
-	if err != nil {
-		return IntegrityReport{}, fmt.Errorf("list conflicts for integrity audit: %w", err)
-	}
-	conflictRequests, err := queryAllConflictRequestsForAudit(ctx, i.db)
-	if err != nil {
-		return IntegrityReport{}, fmt.Errorf("list conflict requests for integrity audit: %w", err)
-	}
-
-	heldDeletes, err := queryHeldDeletesForAudit(ctx, i.db)
-	if err != nil {
-		return IntegrityReport{}, fmt.Errorf("list held deletes for integrity audit: %w", err)
-	}
-
-	report := auditPersistedIntegrity(blocks, failures, conflicts, conflictRequests, heldDeletes)
-	if err := auditScopeStateConsistency(ctx, i.db, &report); err != nil {
-		return IntegrityReport{}, err
-	}
+	report := auditPersistedIntegrity(blocks, failures)
 	report.sort()
 
 	return report, nil
@@ -109,24 +87,7 @@ func (m *SyncStore) AuditIntegrity(ctx context.Context) (IntegrityReport, error)
 		return IntegrityReport{}, fmt.Errorf("list scope blocks for integrity audit: %w", err)
 	}
 
-	conflicts, err := queryAllConflictsForAudit(ctx, m.db)
-	if err != nil {
-		return IntegrityReport{}, fmt.Errorf("list conflicts for integrity audit: %w", err)
-	}
-	conflictRequests, err := queryAllConflictRequestsForAudit(ctx, m.db)
-	if err != nil {
-		return IntegrityReport{}, fmt.Errorf("list conflict requests for integrity audit: %w", err)
-	}
-
-	heldDeletes, err := queryHeldDeletesForAudit(ctx, m.db)
-	if err != nil {
-		return IntegrityReport{}, fmt.Errorf("list held deletes for integrity audit: %w", err)
-	}
-
-	report := auditPersistedIntegrity(blocks, failures, conflicts, conflictRequests, heldDeletes)
-	if auditErr := auditScopeStateConsistency(ctx, m.db, &report); auditErr != nil {
-		return IntegrityReport{}, auditErr
-	}
+	report := auditPersistedIntegrity(blocks, failures)
 
 	if _, loadErr := m.Load(ctx); loadErr != nil {
 		return IntegrityReport{}, fmt.Errorf("load baseline for integrity audit: %w", loadErr)
@@ -181,7 +142,6 @@ func repairIntegritySafeTx(ctx context.Context, tx sqlTxRunner) (int, error) {
 		{run: repairLegacyThrottleAccountScope},
 		{run: repairAuthScopeTiming},
 		{run: repairNonRetryableFailureTiming},
-		{run: repairScopeStateConsistencyTx},
 	}
 
 	for _, step := range repairSteps {
@@ -207,88 +167,9 @@ func repairIntegritySafeTx(ctx context.Context, tx sqlTxRunner) (int, error) {
 	return repairsApplied, nil
 }
 
-func queryAllConflictsForAudit(ctx context.Context, db *sql.DB) ([]ConflictRecord, error) {
-	return queryConflictRows(
-		ctx,
-		db,
-		sqlListAllConflicts,
-		"query conflicts for audit",
-		"iterate conflict audit rows",
-	)
-}
-
-func queryHeldDeletesForAudit(ctx context.Context, db *sql.DB) ([]HeldDeleteRecord, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT drive_id, action_type, path, item_id, state, held_at, approved_at,
-			last_planned_at, last_error
-		FROM held_deletes
-		ORDER BY last_planned_at, path`)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return nil, nil
-		}
-
-		return nil, fmt.Errorf("query held deletes for audit: %w", err)
-	}
-	defer rows.Close()
-
-	return scanHeldDeleteRows(rows)
-}
-
-func queryAllConflictRequestsForAudit(ctx context.Context, db *sql.DB) ([]ConflictRequestRecord, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT conflict_id, requested_resolution, state, requested_at, applying_at, last_error
-		FROM conflict_requests
-		ORDER BY requested_at, conflict_id`)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return nil, nil
-		}
-
-		return nil, fmt.Errorf("query conflict requests for audit: %w", err)
-	}
-	defer rows.Close()
-
-	var requests []ConflictRequestRecord
-	for rows.Next() {
-		var (
-			record      ConflictRequestRecord
-			requestedAt sql.NullInt64
-			applyingAt  sql.NullInt64
-			lastErr     sql.NullString
-		)
-		if err := rows.Scan(
-			&record.ID,
-			&record.RequestedResolution,
-			&record.State,
-			&requestedAt,
-			&applyingAt,
-			&lastErr,
-		); err != nil {
-			return nil, fmt.Errorf("scan conflict request audit row: %w", err)
-		}
-		if requestedAt.Valid {
-			record.RequestedAt = requestedAt.Int64
-		}
-		if applyingAt.Valid {
-			record.ApplyingAt = applyingAt.Int64
-		}
-		record.LastError = lastErr.String
-		requests = append(requests, record)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate conflict request audit rows: %w", err)
-	}
-
-	return requests, nil
-}
-
 func auditPersistedIntegrity(
 	blocks []*ScopeBlock,
 	failures []SyncFailureRow,
-	conflicts []ConflictRecord,
-	conflictRequests []ConflictRequestRecord,
-	heldDeletes []HeldDeleteRecord,
 ) IntegrityReport {
 	report := IntegrityReport{
 		Findings: make([]IntegrityFinding, 0),
@@ -299,159 +180,9 @@ func auditPersistedIntegrity(
 
 	auditScopeBlocks(&report, blocks, scopeBlockByKey, projectionSources)
 	auditFailureRows(&report, failures, scopeBlockByKey, projectionSources)
-	auditConflictRows(&report, conflicts)
-	auditConflictRequestRows(&report, conflicts, conflictRequests)
-	auditHeldDeleteRows(&report, heldDeletes)
 	addProjectionOverlapFindings(&report, projectionSources)
 
 	return report
-}
-
-func auditConflictRows(report *IntegrityReport, conflicts []ConflictRecord) {
-	for i := range conflicts {
-		row := &conflicts[i]
-		if !validConflictResolution(row.Resolution) {
-			report.add(
-				integrityCodeInvalidConflictWorkflow,
-				fmt.Sprintf("conflict %s has invalid final resolution %q", row.ID, row.Resolution),
-			)
-		}
-		if row.Resolution == ResolutionUnresolved {
-			if row.ResolvedAt != 0 {
-				report.add(
-					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is unresolved with resolved_at set", row.ID),
-				)
-			}
-			if row.ResolvedBy != "" {
-				report.add(
-					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is unresolved with resolved_by %q", row.ID, row.ResolvedBy),
-				)
-			}
-			continue
-		}
-
-		if row.ResolvedAt == 0 {
-			report.add(
-				integrityCodeInvalidConflictWorkflow,
-				fmt.Sprintf("conflict %s is resolved without resolved_at", row.ID),
-			)
-		}
-		if row.ResolvedBy != "" && row.ResolvedBy != ResolvedByUser && row.ResolvedBy != ResolvedByAuto {
-			report.add(
-				integrityCodeInvalidConflictWorkflow,
-				fmt.Sprintf("conflict %s has invalid resolved_by %q", row.ID, row.ResolvedBy),
-			)
-		}
-	}
-}
-
-func validConflictResolution(resolution string) bool {
-	switch resolution {
-	case ResolutionUnresolved, ResolutionKeepBoth,
-		ResolutionKeepLocal, ResolutionKeepRemote:
-		return true
-	default:
-		return false
-	}
-}
-
-func validRequestedConflictResolution(resolution string) bool {
-	switch resolution {
-	case ResolutionKeepBoth, ResolutionKeepLocal, ResolutionKeepRemote:
-		return true
-	default:
-		return false
-	}
-}
-
-func auditConflictRequestRows(
-	report *IntegrityReport,
-	conflicts []ConflictRecord,
-	requests []ConflictRequestRecord,
-) {
-	conflictByID := make(map[string]ConflictRecord, len(conflicts))
-	for i := range conflicts {
-		conflictByID[conflicts[i].ID] = conflicts[i]
-	}
-
-	for i := range requests {
-		row := &requests[i]
-		if !validRequestedConflictResolution(row.RequestedResolution) {
-			report.add(
-				integrityCodeInvalidConflictWorkflow,
-				fmt.Sprintf("conflict %s has invalid requested resolution %q", row.ID, row.RequestedResolution),
-			)
-		}
-
-		conflict, ok := conflictByID[row.ID]
-		if !ok {
-			report.add(
-				integrityCodeInvalidConflictWorkflow,
-				fmt.Sprintf("conflict request %s has no conflict row", row.ID),
-			)
-			continue
-		}
-		if conflict.Resolution != ResolutionUnresolved {
-			report.add(
-				integrityCodeInvalidConflictWorkflow,
-				fmt.Sprintf("conflict request %s targets already resolved conflict", row.ID),
-			)
-		}
-
-		switch row.State {
-		case ConflictStateQueued:
-			if row.RequestedResolution == "" {
-				report.add(
-					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is queued without requested_resolution", row.ID),
-				)
-			}
-		case ConflictStateApplying:
-			if row.RequestedResolution == "" {
-				report.add(
-					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is applying without requested_resolution", row.ID),
-				)
-			}
-			if row.ApplyingAt == 0 {
-				report.add(
-					integrityCodeInvalidConflictWorkflow,
-					fmt.Sprintf("conflict %s is applying without applying_at", row.ID),
-				)
-			}
-		default:
-			report.add(
-				integrityCodeInvalidConflictWorkflow,
-				fmt.Sprintf("conflict %s has invalid workflow state %q", row.ID, row.State),
-			)
-		}
-	}
-}
-
-func auditHeldDeleteRows(report *IntegrityReport, heldDeletes []HeldDeleteRecord) {
-	for i := range heldDeletes {
-		row := &heldDeletes[i]
-		if row.State != HeldDeleteStateHeld && row.State != HeldDeleteStateApproved {
-			report.add(
-				integrityCodeInvalidHeldDelete,
-				fmt.Sprintf("held delete %s has invalid state %q", row.Path, row.State),
-			)
-		}
-		if row.ItemID == "" {
-			report.add(
-				integrityCodeInvalidHeldDelete,
-				fmt.Sprintf("held delete %s is missing item_id", row.Path),
-			)
-		}
-		if row.State == HeldDeleteStateApproved && row.ApprovedAt == 0 {
-			report.add(
-				integrityCodeInvalidHeldDelete,
-				fmt.Sprintf("approved held delete %s is missing approved_at", row.Path),
-			)
-		}
-	}
 }
 
 func repairAuthScopeTiming(ctx context.Context, tx sqlTxRunner) (int, error) {
@@ -602,112 +333,6 @@ func deleteLegacyRemoteScopeAuthorities(ctx context.Context, tx sqlTxRunner, sco
 	repairsApplied += rowsAffected(deleteBoundaryResult)
 
 	return repairsApplied, nil
-}
-
-func auditScopeStateConsistency(ctx context.Context, db *sql.DB, report *IntegrityReport) error {
-	state, found, err := readScopeStateForAudit(ctx, db)
-	if err != nil {
-		return fmt.Errorf("read scope state for integrity audit: %w", err)
-	}
-
-	rows, err := listRemoteScopeRowsForAudit(ctx, db)
-	if err != nil {
-		return fmt.Errorf("list remote scope rows for integrity audit: %w", err)
-	}
-
-	if !found {
-		for i := range rows {
-			if rows[i].IsFiltered {
-				report.add(
-					integrityCodeScopeStateDrift,
-					fmt.Sprintf("filtered remote row %s exists without scope_state authority", rows[i].Path),
-				)
-			}
-		}
-
-		return nil
-	}
-
-	snapshot, err := syncscope.UnmarshalSnapshot(state.EffectiveSnapshotJSON)
-	if err != nil {
-		report.add(integrityCodeScopeStateDrift, fmt.Sprintf("scope_state snapshot is invalid JSON: %v", err))
-		return nil
-	}
-
-	for i := range rows {
-		expectedReason := snapshot.ExclusionReason(rows[i].Path)
-		switch {
-		case expectedReason == syncscope.ExclusionNone && rows[i].IsFiltered:
-			report.add(
-				integrityCodeScopeStateDrift,
-				fmt.Sprintf("remote row %s is filtered but no longer excluded by scope_state", rows[i].Path),
-			)
-		case expectedReason != syncscope.ExclusionNone:
-			if !rows[i].IsFiltered ||
-				rows[i].FilterGeneration != state.Generation ||
-				rows[i].FilterReason != string(expectedReason) {
-				report.add(
-					integrityCodeScopeStateDrift,
-					fmt.Sprintf(
-						"remote row %s disagrees with scope_state (is_filtered=%t generation=%d reason=%s expected_generation=%d expected_reason=%s)",
-						rows[i].Path,
-						rows[i].IsFiltered,
-						rows[i].FilterGeneration,
-						rows[i].FilterReason,
-						state.Generation,
-						expectedReason,
-					),
-				)
-			}
-		}
-	}
-
-	return nil
-}
-
-func readScopeStateForAudit(ctx context.Context, db *sql.DB) (ScopeStateRecord, bool, error) {
-	return readScopeStateRecord(ctx, db, "scan scope state for audit")
-}
-
-func listRemoteScopeRowsForAudit(ctx context.Context, db *sql.DB) ([]remoteScopeRow, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT drive_id, item_id, path, hash, is_filtered, filter_generation, filter_reason, NULL, NULL
-		FROM remote_state`,
-	)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return nil, nil
-		}
-
-		return nil, fmt.Errorf("query remote scope rows for audit: %w", err)
-	}
-	defer rows.Close()
-
-	var result []remoteScopeRow
-	for rows.Next() {
-		var row remoteScopeRow
-		if err := rows.Scan(
-			&row.DriveID,
-			&row.ItemID,
-			&row.Path,
-			&row.Hash,
-			&row.IsFiltered,
-			&row.FilterGeneration,
-			&row.FilterReason,
-			&row.BaselinePath,
-			&row.BaselineHash,
-		); err != nil {
-			return nil, fmt.Errorf("scan remote scope row for audit: %w", err)
-		}
-
-		result = append(result, row)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate remote scope rows for audit: %w", err)
-	}
-
-	return result, nil
 }
 
 func auditScopeBlocks(

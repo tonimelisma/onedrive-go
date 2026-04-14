@@ -19,6 +19,7 @@ func TestClassifyCommandError(t *testing.T) {
 	assert.Equal(t, failures.ClassShutdown, classifyCommandError(context.Canceled))
 	assert.Equal(t, failures.ClassShutdown, classifyCommandError(context.DeadlineExceeded))
 	assert.Equal(t, failures.ClassActionable, classifyCommandError(graph.ErrNotLoggedIn))
+	assert.Equal(t, failures.ClassActionable, classifyCommandError(graph.ErrUnauthorized))
 	assert.Equal(t, failures.ClassFatal, classifyCommandError(errors.New("boom")))
 }
 
@@ -31,9 +32,12 @@ func TestCommandFailurePresentationForClass(t *testing.T) {
 		exitCode int
 		reason   string
 	}{
+		{class: failures.ClassInvalid, exitCode: 1, reason: "invalid failure class"},
 		{class: failures.ClassSuccess, exitCode: 0, reason: "completed successfully"},
 		{class: failures.ClassShutdown, exitCode: 1, reason: "shutdown or cancellation"},
 		{class: failures.ClassActionable, exitCode: 1, reason: "needs user action"},
+		{class: failures.ClassRetryableTransient, exitCode: 1, reason: "failed temporarily"},
+		{class: failures.ClassScopeBlockingTransient, exitCode: 1, reason: "failed temporarily"},
 		{class: failures.ClassFatal, exitCode: 1, reason: "failed fatally"},
 	}
 
@@ -43,4 +47,8 @@ func TestCommandFailurePresentationForClass(t *testing.T) {
 		assert.Contains(t, presentation.Reason, tt.reason)
 		assert.NotEmpty(t, presentation.Action)
 	}
+
+	presentation := commandFailurePresentationForClass(failures.Class(255))
+	assert.Equal(t, 1, presentation.ExitCode)
+	assert.Contains(t, presentation.Reason, "failed fatally")
 }

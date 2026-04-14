@@ -28,21 +28,6 @@ func TestValidateObservationPhasePlan_RejectsInvalidDispatchForDriver(t *testing
 	assert.Contains(t, err.Error(), "single_batch")
 }
 
-// Validates: R-2.4.5, R-3.4.2
-func TestValidateShortcutObservationPhase_RejectsFallback(t *testing.T) {
-	t.Parallel()
-
-	err := validateShortcutObservationPhase(ObservationPhasePlan{
-		Driver:            observationPhaseDriverScopedTarget,
-		DispatchPolicy:    observationPhaseDispatchPolicyParallelTargets,
-		ErrorPolicy:       observationPhaseErrorPolicyIsolateTarget,
-		FallbackPolicy:    observationPhaseFallbackPolicyDeltaToEnumerate,
-		TokenCommitPolicy: observationPhaseTokenCommitPolicyAfterPhaseSuccess,
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot fall back")
-}
-
 // Validates: R-2.4.5
 func TestExecuteObservationPhase_RejectsInvalidPhase(t *testing.T) {
 	t.Parallel()

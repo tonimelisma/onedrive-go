@@ -13,20 +13,11 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 	cfg := DefaultConfig()
 	require.NotNil(t, cfg)
 
-	// Filter defaults (using promoted field access)
-	assert.Equal(t, ".odignore", cfg.IgnoreMarker)
-	assert.False(t, cfg.SkipDotfiles)
-	assert.False(t, cfg.SkipSymlinks)
-	assert.Empty(t, cfg.SkipFiles)
-	assert.Empty(t, cfg.SkipDirs)
-	assert.Empty(t, cfg.SyncPaths)
-
 	// Transfers defaults
 	assert.Equal(t, 8, cfg.TransferWorkers)
 	assert.Equal(t, 4, cfg.CheckWorkers)
 
 	// Safety defaults
-	assert.Equal(t, 1000, cfg.DeleteSafetyThreshold)
 	assert.Equal(t, "1GB", cfg.MinFreeSpace)
 	assert.Equal(t, runtime.GOOS == "darwin", cfg.UseLocalTrash) // platform-specific default
 
@@ -114,9 +105,8 @@ func TestConfig_EmbeddedStructPromotion(t *testing.T) {
 	cfg := DefaultConfig()
 
 	// These should compile and work because of struct embedding.
-	assert.False(t, cfg.SkipDotfiles)
 	assert.Equal(t, 8, cfg.TransferWorkers)
-	assert.Equal(t, 1000, cfg.DeleteSafetyThreshold)
+	assert.Equal(t, "1GB", cfg.MinFreeSpace)
 	assert.Equal(t, "5m", cfg.PollInterval)
 	assert.Equal(t, "info", cfg.LogLevel)
 }

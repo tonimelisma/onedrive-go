@@ -839,7 +839,10 @@ func requireSyncWithModeEventuallyConverges(
 func conflictCopiesForPath(t *testing.T, absPath string) []string {
 	t.Helper()
 
-	matches, err := filepath.Glob(syncengine.ConflictCopyGlob(absPath))
+	dir := filepath.Dir(absPath)
+	name := filepath.Base(absPath)
+	stem, ext := syncengine.ConflictStemExt(name)
+	matches, err := filepath.Glob(filepath.Join(dir, fmt.Sprintf("%s.conflict-*%s", stem, ext)))
 	require.NoError(t, err)
 	return matches
 }

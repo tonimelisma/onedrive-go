@@ -163,7 +163,7 @@ Suite / test: local `go run ./cmd/devtool verify e2e-full`, `TestE2E_ConflictDet
 Classification: product bug
 Status: fixed
 Recurring: no
-Summary: A queued `resolve local` or `resolve remote` request could establish
+Summary: A legacy manual conflict-choice request could establish
 the chosen file layout correctly and still let the immediately following
 one-shot sync pass plan a brand-new conflict for the same canonical path. The
 engine resolved the conflict row and changed the local layout, but the next
@@ -174,9 +174,9 @@ edit/edit conflict instead of converging the winner.
 Evidence:
 - Local `go run ./cmd/devtool verify e2e-full` on April 12, 2026 failed in
   `TestE2E_ConflictDetectionAndResolution` after the test queued
-  `resolve local` and ran a normal `sync`; the conflict remained visible
+  the keep-local choice and ran a normal `sync`; the conflict remained visible
   instead of clearing.
-- Targeted unit reproduction in
+- Historical targeted unit reproduction in
   [`internal/sync/engine_watch_test.go`](../../internal/sync/engine_watch_test.go)
   showed `TestResolveConflict_KeepLocal_FollowUpSyncDoesNotRedetectConflictWhenRemoteDeltaStillShowsLoser`
   re-planning a new `edit_edit` conflict when the next remote delta still
@@ -904,10 +904,10 @@ Status: fixed
 Recurring: no
 Summary: A full-suite keep-local resolution proved that sync upload execution still recreated files through the parent-path upload route even when the conflict record already carried the authoritative remote `itemID`. During the live run, the small-file overwrite first hit the simple-upload `404` fallback and then exhausted the parent-based `createUploadSession` retry budget on the same folder. The Graph inconsistency was already known, but the executor widened its exposure by ignoring the narrower item-ID overwrite route it already had available.
 Evidence:
-- Local `go run ./cmd/devtool verify e2e-full` on April 7, 2026 failed in `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal` while resolving `e2e-sync-cc-1775631264479623000/collision.txt` with `resolve local`.
-- The child CLI log showed `resolve local` restoring the conflict copy, then attempting a parent-path simple upload followed by repeated `POST /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s8842f8751f7c491fbfd30ddaa2fc0031:/collision.txt:/createUploadSession` failures ending with request ID `9dce082f-97ae-4f6c-9cc2-69b650dcf4c1`.
+- Local `go run ./cmd/devtool verify e2e-full` on April 7, 2026 failed in `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal` while resolving `e2e-sync-cc-1775631264479623000/collision.txt` with the legacy keep-local conflict command.
+- The child CLI log showed that legacy keep-local flow restoring the conflict copy, then attempting a parent-path simple upload followed by repeated `POST /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s8842f8751f7c491fbfd30ddaa2fc0031:/collision.txt:/createUploadSession` failures ending with request ID `9dce082f-97ae-4f6c-9cc2-69b650dcf4c1`.
 - [graph-api-quirks.md](graph-api-quirks.md) already documented the broader fresh-parent `createUploadSession` `404 itemNotFound` family; this incident showed the executor still depended on that family in an overwrite flow that already had stable remote item identity.
-Resolution / mitigation: `ExecuteUpload` now overwrites by item ID whenever the action carries a non-empty `ItemID`, using parent-path upload only for true create flows with no remote identity yet. `resolve local` therefore restores the local conflict copy and then overwrites the known remote item directly instead of recreating it through the parent route.
+Resolution / mitigation: `ExecuteUpload` now overwrites by item ID whenever the action carries a non-empty `ItemID`, using parent-path upload only for true create flows with no remote identity yet. The legacy keep-local flow therefore restored the local conflict copy and then overwrote the known remote item directly instead of recreating it through the parent route.
 Promoted docs: [drive-transfers.md](../design/drive-transfers.md), [sync-execution.md](../design/sync-execution.md), [graph-api-quirks.md](graph-api-quirks.md)
 
 ## LI-20260407-01: Follow-on `put` lost a freshly visible parent path
@@ -926,7 +926,7 @@ Evidence:
 - [graph-api-quirks.md](graph-api-quirks.md) already records the broader path-visibility lag family for adjacent `mkdir` / `put` / `mv` flows; this incident showed the same family could hit pre-upload parent resolution too.
 - Local `go run ./cmd/devtool verify default` on April 8, 2026 hit the same family in fast E2E `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`: after `mkdir /.../docs` succeeded, the harness still timed out polling `stat /.../docs` before the follow-on helper-driven `put`, even though the product `put` command already owns parent convergence through `WaitPathVisible()`.
 - Local `go run ./cmd/devtool verify default` on April 9, 2026 hit the same
-  family one step later in that same fast E2E `sync_paths` setup: the second
+  family one step later in that same fast E2E legacy path-narrowing setup: the second
   `put /e2e-sync-scope-file-1775722231752954000/docs/other.txt` still failed
   resolving parent `/.../docs` even after `WaitPathVisible()`, because the
   exact parent path kept returning `404 itemNotFound` and the old visibility
@@ -958,12 +958,12 @@ Suite / test: `e2e`, `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDow
 Classification: graph quirk
 Status: fixed
 Recurring: no
-Summary: A newly created folder in a personal drive could resolve successfully by path, but the immediate first folder-scoped delta request for that same folder still returned `404 itemNotFound`. This caused `sync_paths` bootstrap to fail even though the configured folder was real and readable.
+Summary: A newly created folder in a personal drive could resolve successfully by path, but the immediate first folder-scoped delta request for that same folder still returned `404 itemNotFound`. This caused legacy path-narrowing bootstrap to fail even though the configured folder was real and readable.
 Evidence:
 - [graph-api-quirks.md](graph-api-quirks.md) documents the folder-scoped delta readiness lag and dates it to the fast E2E lane on April 6, 2026.
 - The original live investigation showed that a newly created personal-drive scope could resolve successfully by path while the first folder-scoped delta call for that same scope still returned transient `404 itemNotFound`, which is why the long-term fix falls back to recursive enumeration for that scope instead of trusting immediate folder-scoped delta readiness.
 - Merged fix: `74da628` (`fix: replay crash recovery in one-shot sync (#420)`), which included the scoped-delta fallback.
-Resolution / mitigation: `sync_paths` primary-scope observation now mirrors scoped-root behavior and falls back to recursive enumeration when folder-scoped delta is temporarily unavailable for the already-resolved scope.
+Resolution / mitigation: the old primary-scope path-narrowing observation now mirrored scoped-root behavior and fell back to recursive enumeration when folder-scoped delta was temporarily unavailable for the already-resolved scope. This note is historical because path-narrowing inside a drive has since been removed.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
 
 ## LI-20260405-05: One-shot crash recovery left durable work unreplayed
@@ -994,7 +994,7 @@ Recurring: yes
 Summary: The tests treated direct remote visibility or newly-unblocked remote state as proof that the next incremental download-only sync pass would converge immediately. In live CI that assumption was false: first-pass sync could still lag delta visibility or hit a documented transient download-metadata `404`, even though a later pass converged correctly.
 Evidence:
 - [sync_e2e_test.go](../../e2e/sync_e2e_test.go#L340) now explicitly waits for the local synced file after delta catches up.
-- [sync_scope_e2e_test.go](../../e2e/sync_scope_e2e_test.go#L35) now uses the same eventual-convergence helper for exact-file `sync_paths` download coverage.
+- [sync_scope_e2e_test.go](../../e2e/sync_scope_e2e_test.go#L35) now uses the same eventual-convergence helper for the legacy exact-file path-narrowing download coverage.
 - [graph-api-quirks.md](graph-api-quirks.md) already documents delta endpoint consistency lag as a live behavior.
 - Merged fix chain is included in `74da628` after the earlier test hardening commit on the same PR line.
 - April 7, 2026 local `go run ./cmd/devtool verify default` reproduced the same symptom once in the fast E2E lane, while an immediate targeted rerun of `go test -tags=e2e ./e2e -run '^TestE2E_Sync_DownloadOnly$' -count=1` passed, consistent with intermittent delta visibility lag rather than a deterministic product regression.
@@ -1009,7 +1009,7 @@ Evidence:
   because the immediate `sync --download-only --force` pass saw `No changes
   detected` while `GET /root:/.../docs/report.txt`, `GET /root:/.../docs`, and
   `GET /root:/...` all still returned `404 itemNotFound`. The delta page later
-  returned only unrelated root items and one shortcut, with no events for the
+  returned only unrelated root items and one embedded shared-folder link item, with no events for the
   fresh scoped subtree.
 - An immediate isolated rerun on April 10, 2026 passed:
   `go test -tags=e2e ./e2e -run TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile -count=1`

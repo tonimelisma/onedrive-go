@@ -196,7 +196,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 		}
 	}
 
-	// Remote item (shared/shortcut items surfaced by Graph item queries).
+	// Remote item metadata for embedded shared-folder items surfaced by Graph.
 	if d.RemoteItem != nil {
 		item.RemoteItemID = d.RemoteItem.ID
 		if d.RemoteItem.ParentReference != nil {

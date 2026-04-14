@@ -28,8 +28,7 @@ SELECT COUNT(*) FROM (
 	LEFT JOIN baseline b
 	  ON b.drive_id = rs.drive_id
 	 AND b.item_id = rs.item_id
-	WHERE rs.is_filtered = 0
-	  AND (
+	WHERE (
 		b.item_id IS NULL OR
 		b.path <> rs.path OR
 		b.item_type <> rs.item_type OR
@@ -45,17 +44,6 @@ SELECT COUNT(*) FROM (
 	WHERE rs.item_id IS NULL
 ) remote_drift`
 
-// StatusSnapshot is the read-only aggregate projection consumed by status
-// summaries and daemon/control-plane readers. It intentionally exposes counts
-// and metadata only, not raw tables.
-type StatusSnapshot struct {
-	SyncMetadata       map[string]string
-	BaselineEntryCount int
-	Issues             IssueSummary
-	RemoteDriftItems   int
-	DurableIntents     DurableIntentCounts
-}
-
 // DriveStatusSnapshot is the per-drive status snapshot consumed by the
 // product-facing status command. It keeps the full per-drive sync-health view
 // in one store-owned projection.
@@ -65,53 +53,15 @@ type DriveStatusSnapshot struct {
 	RemoteDriftItems   int
 	RetryingItems      int
 	IssueGroups        []IssueGroupSnapshot
-	DeleteSafety       []DeleteSafetySnapshot
-	Conflicts          []ConflictStatusSnapshot
-	ConflictHistory    []ConflictHistorySnapshot
 }
 
 // groupedIssueProjection is the internal grouped sync-health projection shared
-// by aggregate status readers and store/package tests. It stays unexported so
-// the public store read surface has one product-facing per-drive projection.
+// by the per-drive status snapshot builder and store/package tests. It stays
+// unexported so the public store read surface has one product-facing per-drive
+// projection.
 type groupedIssueProjection struct {
-	Conflicts      []ConflictRecord
 	Groups         []IssueGroupSnapshot
-	HeldDeletes    []HeldDeleteSnapshot
 	PendingRetries []PendingRetrySnapshot
-}
-
-// DeleteSafetySnapshot is one held-delete approval row exposed through the
-// per-drive status projection.
-type DeleteSafetySnapshot struct {
-	Path       string
-	State      string
-	LastSeenAt int64
-	ApprovedAt int64
-}
-
-// ConflictStatusSnapshot is one unresolved conflict plus any active queued or
-// applying request metadata.
-type ConflictStatusSnapshot struct {
-	ID                  string
-	Path                string
-	ConflictType        string
-	DetectedAt          int64
-	RequestedResolution string
-	RequestState        string
-	LastRequestError    string
-	LastRequestedAt     int64
-}
-
-// ConflictHistorySnapshot is one resolved conflict record exposed when the
-// caller opts into resolved conflict history.
-type ConflictHistorySnapshot struct {
-	ID           string
-	Path         string
-	ConflictType string
-	DetectedAt   int64
-	Resolution   string
-	ResolvedAt   int64
-	ResolvedBy   string
 }
 
 // IssueGroupSnapshot is one visible grouped issue family in the read-only
@@ -123,13 +73,6 @@ type IssueGroupSnapshot struct {
 	ScopeLabel       string
 	Paths            []string
 	Count            int
-}
-
-// HeldDeleteSnapshot is one held-delete entry surfaced in the sync-health read
-// model. Held deletes stay distinct from generic grouped failures.
-type HeldDeleteSnapshot struct {
-	Path       string
-	LastSeenAt int64
 }
 
 // PendingRetrySnapshot is one aggregated transient retry group in the
@@ -155,7 +98,6 @@ const (
 	statusScopeFile      = "file"
 	statusScopeDirectory = "directory"
 	statusScopeDrive     = "drive"
-	statusScopeShortcut  = "shortcut"
 	statusScopeAccount   = "account"
 	statusScopeService   = "service"
 	statusScopeDisk      = "disk"
@@ -207,15 +149,11 @@ func (a issueGroupAccumulator) Groups() []IssueGroupCount {
 }
 
 // IssueSummary is the store-owned aggregate view of visible issues for the
-// status command. It centralizes how conflicts, actionable rows, and special
-// derived scopes count toward status.
+// status command. It centralizes how actionable rows and special derived
+// scopes count toward status.
 type IssueSummary struct {
 	Groups   []IssueGroupCount
 	Retrying int
-}
-
-func (s groupedIssueProjection) Empty() bool {
-	return len(s.Groups) == 0 && len(s.HeldDeletes) == 0
 }
 
 func (s IssueSummary) VisibleTotal() int {
@@ -228,14 +166,13 @@ func (s IssueSummary) VisibleTotal() int {
 }
 
 func (s IssueSummary) ConflictCount() int {
-	return s.countForKey(SummaryConflictUnresolved)
+	return 0
 }
 
 func (s IssueSummary) ActionableCount() int {
 	total := 0
 	for _, group := range s.Groups {
-		if group.Key == SummaryConflictUnresolved ||
-			group.Key == SummaryRemoteWriteDenied ||
+		if group.Key == SummarySharedFolderWritesBlocked ||
 			group.Key == SummaryAuthenticationRequired {
 			continue
 		}
@@ -246,7 +183,7 @@ func (s IssueSummary) ActionableCount() int {
 }
 
 func (s IssueSummary) RemoteBlockedCount() int {
-	return s.countForKey(SummaryRemoteWriteDenied)
+	return s.countForKey(SummarySharedFolderWritesBlocked)
 }
 
 func (s IssueSummary) AuthRequiredCount() int {
@@ -299,15 +236,6 @@ func (i *Inspector) Close() error {
 	return nil
 }
 
-func (i *Inspector) ReadDurableIntentCounts(ctx context.Context) (DurableIntentCounts, error) {
-	counts, err := countDurableIntents(ctx, i.db)
-	if err != nil {
-		return DurableIntentCounts{}, fmt.Errorf("read durable intent counts: %w", err)
-	}
-
-	return counts, nil
-}
-
 // HasScopeBlock reports whether the read-only store currently contains the
 // requested scope block. Missing scope-block tables are treated as empty so
 // partially initialized state databases can still be inspected.
@@ -326,60 +254,6 @@ func (i *Inspector) HasScopeBlock(ctx context.Context, key ScopeKey) (bool, erro
 	}
 
 	return false, fmt.Errorf("query scope block %s: %w", key, err)
-}
-
-// ReadStatusSnapshot returns the CLI status projection for a sync state DB.
-// Missing tables are tolerated so older or partially initialized DBs still
-// yield best-effort status information.
-func (i *Inspector) ReadStatusSnapshot(ctx context.Context) StatusSnapshot {
-	snapshot := StatusSnapshot{
-		SyncMetadata: make(map[string]string),
-	}
-
-	rows, err := i.db.QueryContext(ctx, "SELECT key, value FROM sync_metadata")
-	if err == nil {
-		defer rows.Close()
-
-		for rows.Next() {
-			var key, value string
-			if scanErr := rows.Scan(&key, &value); scanErr == nil {
-				snapshot.SyncMetadata[key] = value
-			}
-		}
-		if rowErr := rows.Err(); rowErr != nil {
-			i.logger.Debug("read sync metadata snapshot", slog.String("error", rowErr.Error()))
-		}
-	}
-
-	snapshot.BaselineEntryCount = i.countOrZero(ctx, "baseline entries", "SELECT COUNT(*) FROM baseline")
-	counts, err := i.ReadDurableIntentCounts(ctx)
-	if err != nil {
-		i.logger.Debug("read durable intent counts", slog.String("error", err.Error()))
-	} else {
-		snapshot.DurableIntents = counts
-	}
-	projection, err := i.readGroupedIssueProjectionModel(ctx)
-	if err != nil {
-		i.logger.Debug("read visible issue status projection", slog.String("error", err.Error()))
-	} else {
-		projection.summary.Groups = appendConflictSummaryCount(
-			projection.summary.Groups,
-			i.countOrZero(ctx, "unresolved conflicts", "SELECT COUNT(*) FROM conflicts WHERE resolution = 'unresolved'"),
-		)
-		projection.summary.Retrying = i.countOrZero(
-			ctx,
-			"retrying sync failures",
-			"SELECT COUNT(*) FROM sync_failures WHERE category = 'transient' AND failure_count >= 3",
-		)
-		snapshot.Issues = projection.summary
-	}
-	snapshot.RemoteDriftItems = i.countOrZero(
-		ctx,
-		"remote drift items",
-		sqlCountRemoteDriftItems,
-	)
-
-	return snapshot
 }
 
 // ReadDriveStatusSnapshot returns the per-drive status projection used by the
@@ -422,46 +296,9 @@ func (i *Inspector) ReadDriveStatusSnapshot(ctx context.Context, history bool) (
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status projection: %w", err)
 	}
 	snapshot.IssueGroups = projection.snapshot.Groups
-
-	deleteSafety, err := i.listDeleteSafety(ctx)
-	if err != nil {
-		return DriveStatusSnapshot{}, fmt.Errorf("list delete safety rows: %w", err)
-	}
-	snapshot.DeleteSafety = deleteSafety
-
-	conflicts, err := i.listDriveStatusConflicts(ctx)
-	if err != nil {
-		return DriveStatusSnapshot{}, fmt.Errorf("list unresolved conflicts: %w", err)
-	}
-	snapshot.Conflicts = conflicts
-
-	if history {
-		conflictHistory, err := i.listConflictHistory(ctx)
-		if err != nil {
-			return DriveStatusSnapshot{}, fmt.Errorf("list conflict history: %w", err)
-		}
-		snapshot.ConflictHistory = conflictHistory
-	}
+	_ = history
 
 	return snapshot, nil
-}
-
-// readGroupedIssueProjection returns the grouped sync-health projection used by
-// internal readers and tests. history only widens the auxiliary conflicts
-// slice for callers that also want resolved conflict history.
-func (i *Inspector) readGroupedIssueProjection(ctx context.Context, history bool) (groupedIssueProjection, error) {
-	projection, err := i.readGroupedIssueProjectionModel(ctx)
-	if err != nil {
-		return groupedIssueProjection{}, err
-	}
-
-	conflicts, err := i.listConflicts(ctx, history)
-	if err != nil {
-		return groupedIssueProjection{}, fmt.Errorf("list conflicts: %w", err)
-	}
-	projection.snapshot.Conflicts = conflicts
-
-	return projection.snapshot, nil
 }
 
 type groupedIssueProjectionModel struct {
@@ -470,19 +307,9 @@ type groupedIssueProjectionModel struct {
 }
 
 func (i *Inspector) readGroupedIssueProjectionModel(ctx context.Context) (groupedIssueProjectionModel, error) {
-	shortcuts, err := i.listShortcuts(ctx)
-	if err != nil {
-		return groupedIssueProjectionModel{}, fmt.Errorf("list shortcuts: %w", err)
-	}
-
 	actionableFailures, err := i.listActionableFailures(ctx)
 	if err != nil {
 		return groupedIssueProjectionModel{}, fmt.Errorf("list actionable failures: %w", err)
-	}
-
-	heldDeletes, err := i.listHeldDeletes(ctx)
-	if err != nil {
-		return groupedIssueProjectionModel{}, fmt.Errorf("list held deletes: %w", err)
 	}
 
 	remoteBlocked, err := i.listRemoteBlockedFailures(ctx)
@@ -502,25 +329,20 @@ func (i *Inspector) readGroupedIssueProjectionModel(ctx context.Context) (groupe
 
 	return buildGroupedIssueProjection(
 		actionableFailures,
-		heldDeletes,
 		remoteBlocked,
 		scopeBlocks,
 		pendingRetries,
-		shortcuts,
 	), nil
 }
 
 func buildGroupedIssueProjection(
 	actionableFailures []SyncFailureRow,
-	heldDeletes []HeldDeleteRecord,
 	remoteBlocked []SyncFailureRow,
 	scopeBlocks []*ScopeBlock,
 	pendingRetries []PendingRetryGroup,
-	shortcuts []Shortcut,
 ) groupedIssueProjectionModel {
-	builder := newGroupedIssueProjectionBuilder(shortcuts, len(pendingRetries))
+	builder := newGroupedIssueProjectionBuilder(len(pendingRetries))
 	builder.addActionableFailures(actionableFailures)
-	builder.addHeldDeletes(heldDeletes)
 	builder.addRemoteBlocked(remoteBlocked)
 	builder.addAuthScopeBlocks(scopeBlocks)
 	builder.addPendingRetries(pendingRetries)
@@ -533,20 +355,17 @@ type issueGroupKey struct {
 }
 
 type groupedIssueProjectionBuilder struct {
-	shortcuts   []Shortcut
 	groupCounts issueGroupAccumulator
 	groupIndex  map[issueGroupKey]int
 	snapshot    groupedIssueProjection
 }
 
-func newGroupedIssueProjectionBuilder(shortcuts []Shortcut, pendingRetryCap int) *groupedIssueProjectionBuilder {
+func newGroupedIssueProjectionBuilder(pendingRetryCap int) *groupedIssueProjectionBuilder {
 	return &groupedIssueProjectionBuilder{
-		shortcuts:   shortcuts,
 		groupCounts: make(issueGroupAccumulator),
 		groupIndex:  make(map[issueGroupKey]int),
 		snapshot: groupedIssueProjection{
 			Groups:         make([]IssueGroupSnapshot, 0),
-			HeldDeletes:    make([]HeldDeleteSnapshot, 0),
 			PendingRetries: make([]PendingRetrySnapshot, 0, pendingRetryCap),
 		},
 	}
@@ -557,7 +376,7 @@ func (b *groupedIssueProjectionBuilder) addSummary(
 	scopeKey ScopeKey,
 	role FailureRole,
 ) {
-	scopeKind, scope := statusIssueScope(scopeKey, role, b.shortcuts)
+	scopeKind, scope := statusIssueScope(scopeKey, role)
 	b.groupCounts.Add(key, 1, scopeKind, scope)
 }
 
@@ -566,16 +385,16 @@ func (b *groupedIssueProjectionBuilder) addGroupedPath(
 	issueType string,
 	scopeKey ScopeKey,
 	path string,
-) bool {
+) {
 	if summaryKey == "" {
-		return false
+		return
 	}
 
 	key := issueGroupKey{summaryKey: summaryKey, scopeKey: scopeKey.String()}
 	if idx, ok := b.groupIndex[key]; ok {
 		b.snapshot.Groups[idx].Paths = append(b.snapshot.Groups[idx].Paths, path)
 		b.snapshot.Groups[idx].Count++
-		return false
+		return
 	}
 
 	b.groupIndex[key] = len(b.snapshot.Groups)
@@ -583,11 +402,10 @@ func (b *groupedIssueProjectionBuilder) addGroupedPath(
 		SummaryKey:       summaryKey,
 		PrimaryIssueType: issueType,
 		ScopeKey:         scopeKey,
-		ScopeLabel:       scopeKey.Humanize(b.shortcuts),
+		ScopeLabel:       scopeKey.Humanize(),
 		Paths:            []string{path},
 		Count:            1,
 	})
-	return true
 }
 
 func (b *groupedIssueProjectionBuilder) addScopeOnlyGroup(
@@ -609,7 +427,7 @@ func (b *groupedIssueProjectionBuilder) addScopeOnlyGroup(
 		SummaryKey:       summaryKey,
 		PrimaryIssueType: issueType,
 		ScopeKey:         scopeKey,
-		ScopeLabel:       scopeKey.Humanize(b.shortcuts),
+		ScopeLabel:       scopeKey.Humanize(),
 		Paths:            []string{},
 		Count:            1,
 	})
@@ -625,24 +443,12 @@ func (b *groupedIssueProjectionBuilder) addActionableFailures(rows []SyncFailure
 	}
 }
 
-func (b *groupedIssueProjectionBuilder) addHeldDeletes(rows []HeldDeleteRecord) {
-	for i := range rows {
-		row := rows[i]
-		b.snapshot.HeldDeletes = append(b.snapshot.HeldDeletes, HeldDeleteSnapshot{
-			Path:       row.Path,
-			LastSeenAt: row.LastPlannedAt,
-		})
-		b.addSummary(SummaryHeldDeletes, ScopeKey{}, FailureRoleItem)
-	}
-}
-
 func (b *groupedIssueProjectionBuilder) addRemoteBlocked(rows []SyncFailureRow) {
 	for i := range rows {
 		row := rows[i]
 		summaryKey := SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
-		if b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path) {
-			b.addSummary(summaryKey, row.ScopeKey, row.Role)
-		}
+		b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path)
+		b.addSummary(summaryKey, row.ScopeKey, row.Role)
 	}
 }
 
@@ -665,7 +471,7 @@ func (b *groupedIssueProjectionBuilder) addPendingRetries(groups []PendingRetryG
 		group := groups[i]
 		b.snapshot.PendingRetries = append(b.snapshot.PendingRetries, PendingRetrySnapshot{
 			ScopeKey:     group.ScopeKey,
-			ScopeLabel:   group.ScopeKey.Humanize(b.shortcuts),
+			ScopeLabel:   group.ScopeKey.Humanize(),
 			Count:        group.Count,
 			EarliestNext: group.EarliestNext,
 		})
@@ -685,54 +491,26 @@ func (b *groupedIssueProjectionBuilder) projection() groupedIssueProjectionModel
 	}
 }
 
-func appendConflictSummaryCount(groups []IssueGroupCount, count int) []IssueGroupCount {
-	if count <= 0 {
-		return groups
-	}
-
-	groups = append(groups, IssueGroupCount{
-		Key:       SummaryConflictUnresolved,
-		Count:     count,
-		ScopeKind: statusScopeFile,
-	})
-	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].Key != groups[j].Key {
-			return string(groups[i].Key) < string(groups[j].Key)
-		}
-		if groups[i].ScopeKind != groups[j].ScopeKind {
-			return groups[i].ScopeKind < groups[j].ScopeKind
-		}
-
-		return groups[i].Scope < groups[j].Scope
-	})
-
-	return groups
-}
-
 func statusIssueScope(
 	scopeKey ScopeKey,
 	role FailureRole,
-	shortcuts []Shortcut,
 ) (string, string) {
 	if !scopeKey.IsZero() {
 		switch scopeKey.Kind {
 		case ScopeAuthAccount, ScopeThrottleAccount:
-			return statusScopeAccount, scopeKey.Humanize(shortcuts)
+			return statusScopeAccount, scopeKey.Humanize()
 		case ScopeThrottleTarget:
-			if scopeKey.IsThrottleShared() {
-				return statusScopeShortcut, scopeKey.Humanize(shortcuts)
-			}
-			return statusScopeDrive, scopeKey.Humanize(shortcuts)
+			return statusScopeDrive, scopeKey.Humanize()
 		case ScopeService:
-			return statusScopeService, scopeKey.Humanize(shortcuts)
+			return statusScopeService, scopeKey.Humanize()
 		case ScopeQuotaOwn:
-			return statusScopeDrive, scopeKey.Humanize(shortcuts)
-		case ScopeQuotaShortcut, ScopePermRemoteWrite:
-			return statusScopeShortcut, scopeKey.Humanize(shortcuts)
-		case ScopePermLocalRead, ScopePermLocalWrite:
-			return statusScopeDirectory, scopeKey.Humanize(shortcuts)
+			return statusScopeDrive, scopeKey.Humanize()
+		case ScopePermRemote:
+			return statusScopeDirectory, scopeKey.Humanize()
+		case ScopePermDir:
+			return statusScopeDirectory, scopeKey.Humanize()
 		case ScopeDiskLocal:
-			return statusScopeDisk, scopeKey.Humanize(shortcuts)
+			return statusScopeDisk, scopeKey.Humanize()
 		}
 	}
 
@@ -760,53 +538,11 @@ func sortIssueGroups(groups []IssueGroupSnapshot) {
 	}
 }
 
-func (i *Inspector) ListConflicts(ctx context.Context) ([]ConflictRecord, error) {
-	return i.listConflicts(ctx, false)
-}
-
-func (i *Inspector) ListAllConflicts(ctx context.Context) ([]ConflictRecord, error) {
-	return i.listConflicts(ctx, true)
-}
-
-func (i *Inspector) listConflicts(ctx context.Context, history bool) ([]ConflictRecord, error) {
-	query := sqlListConflicts
-	if history {
-		query = sqlListAllConflicts
-	}
-
-	rows, err := i.db.QueryContext(ctx, query)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return []ConflictRecord{}, nil
-		}
-		return nil, fmt.Errorf("query conflicts: %w", err)
-	}
-	defer rows.Close()
-
-	var conflicts []ConflictRecord
-	for rows.Next() {
-		conflict, err := scanConflictRow(rows)
-		if err != nil {
-			return nil, err
-		}
-
-		conflicts = append(conflicts, *conflict)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate conflicts: %w", err)
-	}
-
-	return conflicts, nil
-}
-
 func (i *Inspector) listActionableFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE category = 'actionable'
-		AND (issue_type IS NULL OR issue_type != ?)
 		ORDER BY last_seen_at DESC`,
-		IssueDeleteSafetyHeld,
 	)
 	if err != nil {
 		if isMissingTableErr(err) {
@@ -817,170 +553,6 @@ func (i *Inspector) listActionableFailures(ctx context.Context) ([]SyncFailureRo
 	defer rows.Close()
 
 	return scanSyncFailureRows(rows)
-}
-
-func (i *Inspector) listHeldDeletes(ctx context.Context) ([]HeldDeleteRecord, error) {
-	rows, err := i.db.QueryContext(ctx,
-		`SELECT drive_id, action_type, path, item_id, state, held_at, approved_at,
-			last_planned_at, last_error
-		FROM held_deletes
-		WHERE state = ?
-		ORDER BY last_planned_at DESC`,
-		HeldDeleteStateHeld,
-	)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return []HeldDeleteRecord{}, nil
-		}
-		return nil, fmt.Errorf("query held deletes: %w", err)
-	}
-	defer rows.Close()
-
-	return scanHeldDeleteRows(rows)
-}
-
-func (i *Inspector) listDeleteSafety(ctx context.Context) ([]DeleteSafetySnapshot, error) {
-	rows, err := i.db.QueryContext(ctx, `
-		SELECT path, state, last_planned_at, approved_at
-		FROM held_deletes
-		WHERE state IN (?, ?)
-		ORDER BY CASE state
-			WHEN ? THEN 0
-			WHEN ? THEN 1
-			ELSE 2
-		END, last_planned_at DESC, path`,
-		HeldDeleteStateHeld,
-		HeldDeleteStateApproved,
-		HeldDeleteStateHeld,
-		HeldDeleteStateApproved,
-	)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return []DeleteSafetySnapshot{}, nil
-		}
-		return nil, fmt.Errorf("query delete safety rows: %w", err)
-	}
-	defer rows.Close()
-
-	var snapshots []DeleteSafetySnapshot
-	for rows.Next() {
-		var (
-			snapshot   DeleteSafetySnapshot
-			approvedAt sql.NullInt64
-		)
-
-		if err := rows.Scan(
-			&snapshot.Path,
-			&snapshot.State,
-			&snapshot.LastSeenAt,
-			&approvedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan delete safety row: %w", err)
-		}
-		if approvedAt.Valid {
-			snapshot.ApprovedAt = approvedAt.Int64
-		}
-
-		snapshots = append(snapshots, snapshot)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate delete safety rows: %w", err)
-	}
-
-	return snapshots, nil
-}
-
-func (i *Inspector) listDriveStatusConflicts(ctx context.Context) ([]ConflictStatusSnapshot, error) {
-	rows, err := i.db.QueryContext(ctx, `
-		SELECT c.id, c.path, c.conflict_type, c.detected_at,
-		       COALESCE(r.requested_resolution, ''),
-		       COALESCE(r.state, ''),
-		       COALESCE(r.requested_at, 0),
-		       COALESCE(r.last_error, '')
-		FROM conflicts c
-		LEFT JOIN conflict_requests r ON r.conflict_id = c.id
-		WHERE c.resolution = ?
-		ORDER BY c.detected_at, c.path`,
-		ResolutionUnresolved,
-	)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return []ConflictStatusSnapshot{}, nil
-		}
-		return nil, fmt.Errorf("query unresolved conflicts for drive status: %w", err)
-	}
-	defer rows.Close()
-
-	var snapshots []ConflictStatusSnapshot
-	for rows.Next() {
-		var snapshot ConflictStatusSnapshot
-		if err := rows.Scan(
-			&snapshot.ID,
-			&snapshot.Path,
-			&snapshot.ConflictType,
-			&snapshot.DetectedAt,
-			&snapshot.RequestedResolution,
-			&snapshot.RequestState,
-			&snapshot.LastRequestedAt,
-			&snapshot.LastRequestError,
-		); err != nil {
-			return nil, fmt.Errorf("scan drive status conflict row: %w", err)
-		}
-
-		snapshots = append(snapshots, snapshot)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate drive status conflict rows: %w", err)
-	}
-
-	return snapshots, nil
-}
-
-func (i *Inspector) listConflictHistory(ctx context.Context) ([]ConflictHistorySnapshot, error) {
-	rows, err := i.db.QueryContext(ctx, `
-		SELECT id, path, conflict_type, detected_at, resolution, resolved_at, resolved_by
-		FROM conflicts
-		WHERE resolution != ?
-		ORDER BY resolved_at DESC, detected_at DESC, path`,
-		ResolutionUnresolved,
-	)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return []ConflictHistorySnapshot{}, nil
-		}
-		return nil, fmt.Errorf("query conflict history: %w", err)
-	}
-	defer rows.Close()
-
-	var snapshots []ConflictHistorySnapshot
-	for rows.Next() {
-		var (
-			snapshot   ConflictHistorySnapshot
-			resolvedAt sql.NullInt64
-			resolvedBy sql.NullString
-		)
-		if err := rows.Scan(
-			&snapshot.ID,
-			&snapshot.Path,
-			&snapshot.ConflictType,
-			&snapshot.DetectedAt,
-			&snapshot.Resolution,
-			&resolvedAt,
-			&resolvedBy,
-		); err != nil {
-			return nil, fmt.Errorf("scan conflict history row: %w", err)
-		}
-		if resolvedAt.Valid {
-			snapshot.ResolvedAt = resolvedAt.Int64
-		}
-		snapshot.ResolvedBy = resolvedBy.String
-		snapshots = append(snapshots, snapshot)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate conflict history rows: %w", err)
-	}
-
-	return snapshots, nil
 }
 
 func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailureRow, error) {
@@ -1000,43 +572,6 @@ func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailur
 	defer rows.Close()
 
 	return scanSyncFailureRows(rows)
-}
-
-func (i *Inspector) listShortcuts(ctx context.Context) ([]Shortcut, error) {
-	rows, err := i.db.QueryContext(ctx,
-		`SELECT item_id, remote_drive, remote_item, local_path, drive_type, observation, discovered_at
-		FROM shortcuts ORDER BY item_id`)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return []Shortcut{}, nil
-		}
-		return nil, fmt.Errorf("query shortcuts: %w", err)
-	}
-	defer rows.Close()
-
-	var shortcuts []Shortcut
-	for rows.Next() {
-		var shortcut Shortcut
-		if err := rows.Scan(
-			&shortcut.ItemID,
-			&shortcut.RemoteDrive,
-			&shortcut.RemoteItem,
-			&shortcut.LocalPath,
-			&shortcut.DriveType,
-			&shortcut.Observation,
-			&shortcut.DiscoveredAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan shortcut row: %w", err)
-		}
-
-		shortcuts = append(shortcuts, shortcut)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate shortcut rows: %w", err)
-	}
-
-	return shortcuts, nil
 }
 
 func (i *Inspector) listScopeBlocks(ctx context.Context) ([]*ScopeBlock, error) {
