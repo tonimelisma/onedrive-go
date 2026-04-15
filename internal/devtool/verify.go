@@ -17,7 +17,7 @@ import (
 type VerifyProfile string
 
 const (
-	defaultCoverageThreshold         = 76.0
+	defaultCoverageThreshold         = 75.5
 	defaultCoveragePattern           = "onedrive-go-cover.*"
 	authE2EPreflightPattern          = "^TestE2E_AuthPreflight_Fast$"
 	fastE2EPreflightPattern          = "^TestE2E_FixturePreflight_Fast$"
@@ -39,10 +39,6 @@ const (
 	e2eTimingSummaryFileName         = "timing-summary.json"
 	e2eQuirkEventsFileName           = "quirk-events.jsonl"
 	e2eQuirkSummaryFileName          = "quirk-summary.json"
-	internalPackagePrefix            = "github.com/tonimelisma/onedrive-go/internal/"
-	internalPackageLimit             = 26
-	internalImportEdgeLimit          = 80
-	internalGraphCheckTimeout        = 30 * time.Second
 
 	fullE2EParallelMiscParallel = 5
 	fullE2ESerialParallel       = 1

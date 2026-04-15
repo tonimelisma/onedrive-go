@@ -15,7 +15,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/failures"
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
 	"github.com/tonimelisma/onedrive-go/internal/logfile"
@@ -464,7 +464,7 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 	if err != nil {
 		class := classifyCommandError(err)
 		presentation := commandFailurePresentationForClass(class)
-		if class != failures.ClassShutdown {
+		if class != errclass.ClassShutdown {
 			if authMessage := authErrorMessage(err); authMessage != "" {
 				writeWarningf(statusWriter, "%s\n", authMessage)
 			} else {

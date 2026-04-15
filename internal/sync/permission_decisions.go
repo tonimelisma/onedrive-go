@@ -6,7 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/failures"
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
 type PermissionCheckDecisionKind int
@@ -117,7 +117,7 @@ func (controller *scopeController) logPermissionCheckDecision(
 	case permissionFlowLocalPermission:
 		if decision.Kind == permissionCheckActivateBoundaryScope {
 			fields := append(controller.flow.summaryLogFields(
-				failures.ClassActionable,
+				errclass.ClassActionable,
 				summaryKey,
 				decision.TriggerPath,
 				decision.ScopeBlock.Key,
@@ -145,7 +145,7 @@ func (controller *scopeController) logRemotePermissionDecision(
 		scopeKey = decision.ScopeBlock.Key
 	}
 	fields := append(controller.flow.summaryLogFields(
-		failures.ClassActionable,
+		errclass.ClassActionable,
 		summaryKey,
 		decision.TriggerPath,
 		scopeKey,
@@ -201,7 +201,7 @@ func (controller *scopeController) recordExplicitFailure(ctx context.Context, pa
 
 	if err := flow.engine.baseline.RecordFailure(ctx, params, nil); err != nil {
 		fields := append(flow.summaryLogFields(
-			failures.ClassActionable,
+			errclass.ClassActionable,
 			summaryKey,
 			params.Path,
 			params.ScopeKey,
@@ -211,7 +211,7 @@ func (controller *scopeController) recordExplicitFailure(ctx context.Context, pa
 	}
 
 	fields := append(flow.summaryLogFields(
-		failures.ClassActionable,
+		errclass.ClassActionable,
 		summaryKey,
 		params.Path,
 		params.ScopeKey,

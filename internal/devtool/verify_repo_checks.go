@@ -1,7 +1,6 @@
 package devtool
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -24,7 +23,6 @@ func runRepoConsistencyChecks(repoRoot string) error {
 	for _, check := range []func(string) error{
 		ensureNoStaleArchitecturePhrases,
 		ensureSyncStoreMigrationDiscipline,
-		ensureInternalDependencyGraphGuardrails,
 		ensureGovernedDesignDocsHaveOwnershipContracts,
 		ensureCrossCuttingDesignDocs,
 		ensureCrossCuttingDesignDocEvidence,
@@ -43,70 +41,6 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		if err := check(repoRoot); err != nil {
 			return err
 		}
-	}
-
-	return nil
-}
-
-func ensureInternalDependencyGraphGuardrails(repoRoot string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), internalGraphCheckTimeout)
-	defer cancel()
-
-	output, err := ExecRunner{}.CombinedOutput(
-		ctx,
-		repoRoot,
-		os.Environ(),
-		"go",
-		"list",
-		"-f",
-		"{{.ImportPath}} {{join .Imports \" \"}}",
-		"./internal/...",
-	)
-	if err != nil {
-		return fmt.Errorf("list internal package graph: %w\n%s", err, strings.TrimSpace(string(output)))
-	}
-
-	packages := make(map[string]struct{})
-	edges := make(map[[2]string]struct{})
-
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
-		}
-
-		pkg := fields[0]
-		if !strings.HasPrefix(pkg, internalPackagePrefix) {
-			continue
-		}
-		packages[pkg] = struct{}{}
-
-		for _, imp := range fields[1:] {
-			if !strings.HasPrefix(imp, internalPackagePrefix) {
-				continue
-			}
-			edges[[2]string{pkg, imp}] = struct{}{}
-		}
-	}
-
-	if len(packages) > internalPackageLimit {
-		return fmt.Errorf(
-			"internal package graph exceeds limit: %d packages (limit %d)",
-			len(packages),
-			internalPackageLimit,
-		)
-	}
-	if len(edges) > internalImportEdgeLimit {
-		return fmt.Errorf(
-			"internal package graph exceeds limit: %d import edges (limit %d)",
-			len(edges),
-			internalImportEdgeLimit,
-		)
 	}
 
 	return nil

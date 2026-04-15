@@ -25,7 +25,7 @@ internal/
   devtool/                    Verifier, benchmark, worktree, watch-capture, and state-audit helpers
   driveid/                    Type-safe drive identity: ID, CanonicalID, ItemKey (leaf, stdlib-only)
   driveops/                   Authenticated drive access: sessions, transfers, hashing
-  failures/                   Shared runtime/domain failure classes (leaf, stdlib-only)
+  errclass/                   Shared runtime failure class enum (leaf, stdlib-only)
   fsroot/                     Root-bound managed-state file capabilities
   graph/                      Graph API client: auth, Graph normalization, items CRUD, delta, transfers
   graphhttp/                  Graph-facing HTTP client profile construction
@@ -55,7 +55,7 @@ spec/                         Requirements, design docs, and reference docs
 ```
 root pkg → internal/cli/ → internal/graphhttp/ → internal/retry/
                          → internal/driveops/  → internal/graph/ → pkg/*
-                         → internal/failures/
+                         → internal/errclass/
                          → internal/perf/
                          → internal/multisync/ → internal/perf/
                                               → internal/sync/ → internal/driveops/
@@ -64,7 +64,7 @@ root pkg → internal/cli/ → internal/graphhttp/ → internal/retry/
 
 - No cycles. `driveops` does NOT import `sync`. `graph` does NOT import `config`.
 - `multisync` owns multi-drive lifecycle; `sync` owns the single-drive runtime.
-- `driveid`, `failures`, `tokenfile`, and `retry` are leaf packages (no internal imports).
+- `driveid`, `errclass`, `tokenfile`, and `retry` are leaf packages (no internal imports).
 - Both `graph` and `config` import `tokenfile` for token file I/O.
 - Callers pass token paths to `graph` — no config coupling.
 - `graphhttp` owns Graph-facing HTTP transport/client profile construction. `driveops` owns the session runtime that reuses those profiles and chooses between bootstrap, interactive, and sync paths.
@@ -133,7 +133,7 @@ For detailed module design, see:
 
 | Concern | Owner |
 |---------|-------|
-| Runtime failure class | `internal/failures` + `internal/sync/engine_result_classify.go` |
+| Runtime failure class | `internal/errclass` + `internal/sync/engine_result_classify.go` |
 | Sync-domain summary key | `internal/sync/summary_keys.go` |
 | Status issue title/reason/action rendering | `internal/cli/status_issue_descriptors.go` |
 | Durable sync issue facts | `internal/sync` SQLite tables (`sync_failures`, `scope_blocks`, conflicts) |
