@@ -42,7 +42,6 @@ transfer_workers = 16
 check_workers = 8
 
 min_free_space = "2GB"
-use_local_trash = false
 
 poll_interval = "10m"
 websocket = false
@@ -63,7 +62,6 @@ log_retention_days = 7
 	assert.Equal(t, 8, cfg.CheckWorkers)
 
 	assert.Equal(t, "2GB", cfg.MinFreeSpace)
-	assert.False(t, cfg.UseLocalTrash)
 
 	assert.Equal(t, "10m", cfg.PollInterval)
 	assert.False(t, cfg.Websocket)

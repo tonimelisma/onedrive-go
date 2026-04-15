@@ -90,7 +90,6 @@ func newEngineConfigForDrive(
 		LocalRules: LocalObservationRules{
 			RejectSharePointRootForms: resolved.CanonicalID.IsSharePoint(),
 		},
-		UseLocalTrash:   resolved.UseLocalTrash,
 		TransferWorkers: resolved.TransferWorkers,
 		CheckWorkers:    resolved.CheckWorkers,
 		MinFreeSpace:    minFree,

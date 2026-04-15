@@ -1,8 +1,8 @@
 # Sync Execution
 
-GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go, internal/localtrash/trash.go
+GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go
 
-Implements: R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.4.5 [verified], R-6.4.6 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
+Implements: R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
 
 ## Overview
 
@@ -14,7 +14,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 ## Ownership Contract
 
-- Owns: dispatch, dependency satisfaction, worker execution, local trash integration, conflict-copy creation, and success outcomes
+- Owns: dispatch, dependency satisfaction, worker execution, conflict-copy creation, and success outcomes
 - Does Not Own: planning, retry scheduling, scope activation policy, or store schema
 - Source of Truth: planner-produced `ActionPlan` plus the rooted capabilities injected into the executor
 - Allowed Side Effects: sync-root filesystem mutation, Graph transfer calls, and store success commits through the engine
@@ -62,11 +62,6 @@ Local delete keeps the ordinary per-item safety rule:
 
 Directory delete also preserves non-disposable local content by refusing to
 remove directories blocked by non-disposable children.
-
-### Trash behavior
-
-- remote deletes go through OneDrive recycle bin by default
-- local deletes may go through OS trash depending on configuration and platform
 
 ## Conflict Execution
 
