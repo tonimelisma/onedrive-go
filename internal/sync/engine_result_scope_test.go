@@ -18,7 +18,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/failures"
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -609,7 +609,7 @@ func TestProcessWorkerResult_UnauthorizedTerminatesRouting(t *testing.T) {
 type classifyResultCase struct {
 	name              string
 	result            WorkerResult
-	wantClass         failures.Class
+	wantClass         errclass.Class
 	wantScope         ScopeKey
 	wantSummaryKey    SummaryKey
 	wantPersistence   resultPersistenceMode

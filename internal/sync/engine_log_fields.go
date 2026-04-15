@@ -3,7 +3,7 @@ package sync
 import (
 	"log/slog"
 
-	"github.com/tonimelisma/onedrive-go/internal/failures"
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
 func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *WorkerResult) []any {
@@ -24,7 +24,7 @@ func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *WorkerResul
 		slog.Int64("action_id", r.ActionID),
 		slog.String("summary_key", string(decision.SummaryKey)),
 		slog.String("failure_class", decision.Class.String()),
-		slog.String("log_owner", decision.LogOwner.String()),
+		slog.String("log_owner", "sync"),
 		slog.String("scope_key", decision.ScopeKey.String()),
 		slog.String("drive_id", driveID.String()),
 		slog.String("action_type", r.ActionType.String()),
@@ -42,7 +42,7 @@ func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *WorkerResul
 }
 
 func (flow *engineFlow) summaryLogFields(
-	class failures.Class,
+	class errclass.Class,
 	summaryKey SummaryKey,
 	path string,
 	scopeKey ScopeKey,
@@ -55,7 +55,7 @@ func (flow *engineFlow) summaryLogFields(
 		slog.String("run_id", flow.runID),
 		slog.String("summary_key", string(summaryKey)),
 		slog.String("failure_class", class.String()),
-		slog.String("log_owner", failures.LogOwnerSync.String()),
+		slog.String("log_owner", "sync"),
 		slog.String("scope_key", scopeKey.String()),
 		slog.String("path", path),
 	}

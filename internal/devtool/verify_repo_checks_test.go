@@ -1,7 +1,6 @@
 package devtool
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,57 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// Validates: R-6.10.5
-func TestEnsureInternalDependencyGraphGuardrailsPassesMinimalValidGraph(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	writeDependencyGraphModule(t, repoRoot)
-	writeDependencyGraphPackage(t, repoRoot, "driveid")
-	writeDependencyGraphPackage(t, repoRoot, "sync", internalPackagePrefix+"driveid")
-	writeDependencyGraphPackage(t, repoRoot, "cli", internalPackagePrefix+"sync")
-	writeDependencyGraphPackage(t, repoRoot, "multisync", internalPackagePrefix+"sync")
-
-	require.NoError(t, ensureInternalDependencyGraphGuardrails(repoRoot))
-}
-
-// Validates: R-6.10.5
-func TestEnsureInternalDependencyGraphGuardrailsFailsOnPackageCountLimit(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	writeDependencyGraphModule(t, repoRoot)
-	for i := 0; i <= internalPackageLimit; i++ {
-		writeDependencyGraphPackage(t, repoRoot, fmt.Sprintf("pkg%02d", i))
-	}
-
-	err := ensureInternalDependencyGraphGuardrails(repoRoot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "internal package graph exceeds limit")
-	assert.Contains(t, err.Error(), "27 packages")
-}
-
-// Validates: R-6.10.5
-func TestEnsureInternalDependencyGraphGuardrailsFailsOnImportEdgeLimit(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	writeDependencyGraphModule(t, repoRoot)
-	for i := 0; i < 14; i++ {
-		name := fmt.Sprintf("pkg%02d", i)
-		var imports []string
-		for j := i + 1; j < 14; j++ {
-			imports = append(imports, internalPackagePrefix+fmt.Sprintf("pkg%02d", j))
-		}
-		writeDependencyGraphPackage(t, repoRoot, name, imports...)
-	}
-
-	err := ensureInternalDependencyGraphGuardrails(repoRoot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "internal package graph exceeds limit")
-	assert.Contains(t, err.Error(), "91 import edges")
-}
 
 // Validates: R-6.10.5
 func TestRunRepoConsistencyChecksFailsOnHTTPClientDoOutsideApprovedBoundary(t *testing.T) {

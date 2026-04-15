@@ -7,7 +7,7 @@ import (
 	"slices"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/failures"
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
 // accountCatalogSnapshot is the shared offline account/auth snapshot used by
@@ -35,7 +35,7 @@ func loadAccountCatalogSnapshot(ctx context.Context, cc *CLIContext) (accountCat
 		return accountCatalogSnapshot{}, fmt.Errorf("loading config: %w", err)
 	}
 
-	if outcome.Class == failures.ClassActionable {
+	if outcome.Class == errclass.ClassActionable {
 		config.LogWarnings(warnings, logger)
 	}
 

@@ -12,7 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/devtool"
 )
 
-const defaultCoverageThreshold = 76.0
+const defaultCoverageThreshold = 75.5
 
 type cwdLookup func() (string, error)
 

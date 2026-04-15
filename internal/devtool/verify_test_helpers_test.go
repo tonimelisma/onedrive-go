@@ -200,16 +200,6 @@ func writeRepoConsistencyFixtures(t *testing.T, repoRoot string) {
 	writeRepoConsistencyCodeFixtures(t, repoRoot)
 }
 
-func writeDependencyGraphModule(t *testing.T, repoRoot string) {
-	t.Helper()
-
-	ensureTestFixtureDir(t, filepath.Join(repoRoot, "internal"))
-	writeTestFixtureFile(t,
-		filepath.Join(repoRoot, "go.mod"),
-		[]byte(fmt.Sprintf("module github.com/tonimelisma/onedrive-go\n\ngo %s\n", dependencyGraphFixtureGoVersion())),
-	)
-}
-
 func dependencyGraphFixtureGoVersion() string {
 	version := strings.TrimPrefix(runtime.Version(), "go")
 	if version == runtime.Version() || version == "" {
@@ -223,28 +213,6 @@ func dependencyGraphFixtureGoVersion() string {
 	}
 
 	return version
-}
-
-func writeDependencyGraphPackage(t *testing.T, repoRoot string, name string, imports ...string) {
-	t.Helper()
-
-	dir := filepath.Join(repoRoot, "internal", name)
-	ensureTestFixtureDir(t, dir)
-
-	lines := []string{"package " + name}
-	if len(imports) > 0 {
-		lines = append(lines, "", "import (")
-		for _, path := range imports {
-			lines = append(lines, fmt.Sprintf("\t_ %q", path))
-		}
-		lines = append(lines, ")")
-	}
-	lines = append(lines, "")
-
-	writeTestFixtureFile(t,
-		filepath.Join(dir, name+".go"),
-		[]byte(strings.Join(lines, "\n")),
-	)
 }
 
 func writeRepoConsistencyDirectories(t *testing.T, repoRoot string) {

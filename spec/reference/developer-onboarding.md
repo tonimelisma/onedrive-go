@@ -305,7 +305,7 @@ able to scan this table and place every top-level code area.
 | `internal/devtool` | Repo-owned verifier, benchmarks, worktree tooling, watch capture, state audit, cleanup audit | You are changing developer workflow or repo consistency policy |
 | `internal/driveid` | Type-safe drive identity types and canonicalization | You are touching drive selectors or canonical drive identity |
 | `internal/driveops` | `SessionRuntime`, authenticated drive sessions, transfer operations, and path-convergence workflows | You are changing runtime reuse, get/put behavior, or local transfer rules |
-| `internal/failures` | Canonical runtime failure classes | You are changing cross-boundary failure classification |
+| `internal/errclass` | Canonical runtime failure class enum | You are changing cross-boundary failure classification |
 | `internal/fsroot` | Root-bound filesystem capabilities for managed state files | You are touching durable repo-managed file writes outside sync roots |
 | `internal/graph` | Graph API semantics, normalization, auth, delta, item CRUD, transfer session behavior | You are changing Graph behavior or provider quirks |
 | `internal/graphhttp` | Stateless Graph-facing HTTP transport profiles and transport defaults | You are changing HTTP runtime policy or profile construction |

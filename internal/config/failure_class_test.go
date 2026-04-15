@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/tonimelisma/onedrive-go/internal/failures"
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
 // Validates: R-6.8.16
@@ -17,11 +17,11 @@ func TestClassifyLoadOutcome(t *testing.T) {
 		name     string
 		err      error
 		warnings []ConfigWarning
-		want     failures.Class
+		want     errclass.Class
 	}{
-		{name: "fatal_error", err: errors.New("bad config"), want: failures.ClassFatal},
-		{name: "warnings_are_actionable", warnings: []ConfigWarning{{Message: "bad key"}}, want: failures.ClassActionable},
-		{name: "clean_success", want: failures.ClassSuccess},
+		{name: "fatal_error", err: errors.New("bad config"), want: errclass.ClassFatal},
+		{name: "warnings_are_actionable", warnings: []ConfigWarning{{Message: "bad key"}}, want: errclass.ClassActionable},
+		{name: "clean_success", want: errclass.ClassSuccess},
 	}
 
 	for _, tt := range tests {

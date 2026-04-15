@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/tonimelisma/onedrive-go/internal/failures"
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -15,12 +15,12 @@ import (
 func TestClassifyCommandError(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, failures.ClassSuccess, classifyCommandError(nil))
-	assert.Equal(t, failures.ClassShutdown, classifyCommandError(context.Canceled))
-	assert.Equal(t, failures.ClassShutdown, classifyCommandError(context.DeadlineExceeded))
-	assert.Equal(t, failures.ClassActionable, classifyCommandError(graph.ErrNotLoggedIn))
-	assert.Equal(t, failures.ClassActionable, classifyCommandError(graph.ErrUnauthorized))
-	assert.Equal(t, failures.ClassFatal, classifyCommandError(errors.New("boom")))
+	assert.Equal(t, errclass.ClassSuccess, classifyCommandError(nil))
+	assert.Equal(t, errclass.ClassShutdown, classifyCommandError(context.Canceled))
+	assert.Equal(t, errclass.ClassShutdown, classifyCommandError(context.DeadlineExceeded))
+	assert.Equal(t, errclass.ClassActionable, classifyCommandError(graph.ErrNotLoggedIn))
+	assert.Equal(t, errclass.ClassActionable, classifyCommandError(graph.ErrUnauthorized))
+	assert.Equal(t, errclass.ClassFatal, classifyCommandError(errors.New("boom")))
 }
 
 // Validates: R-6.8.16
@@ -28,17 +28,17 @@ func TestCommandFailurePresentationForClass(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		class    failures.Class
+		class    errclass.Class
 		exitCode int
 		reason   string
 	}{
-		{class: failures.ClassInvalid, exitCode: 1, reason: "invalid failure class"},
-		{class: failures.ClassSuccess, exitCode: 0, reason: "completed successfully"},
-		{class: failures.ClassShutdown, exitCode: 1, reason: "shutdown or cancellation"},
-		{class: failures.ClassActionable, exitCode: 1, reason: "needs user action"},
-		{class: failures.ClassRetryableTransient, exitCode: 1, reason: "failed temporarily"},
-		{class: failures.ClassScopeBlockingTransient, exitCode: 1, reason: "failed temporarily"},
-		{class: failures.ClassFatal, exitCode: 1, reason: "failed fatally"},
+		{class: errclass.ClassInvalid, exitCode: 1, reason: "invalid failure class"},
+		{class: errclass.ClassSuccess, exitCode: 0, reason: "completed successfully"},
+		{class: errclass.ClassShutdown, exitCode: 1, reason: "shutdown or cancellation"},
+		{class: errclass.ClassActionable, exitCode: 1, reason: "needs user action"},
+		{class: errclass.ClassRetryableTransient, exitCode: 1, reason: "failed temporarily"},
+		{class: errclass.ClassScopeBlockingTransient, exitCode: 1, reason: "failed temporarily"},
+		{class: errclass.ClassFatal, exitCode: 1, reason: "failed fatally"},
 	}
 
 	for _, tt := range tests {
@@ -48,7 +48,7 @@ func TestCommandFailurePresentationForClass(t *testing.T) {
 		assert.NotEmpty(t, presentation.Action)
 	}
 
-	presentation := commandFailurePresentationForClass(failures.Class(255))
+	presentation := commandFailurePresentationForClass(errclass.Class(255))
 	assert.Equal(t, 1, presentation.ExitCode)
 	assert.Contains(t, presentation.Reason, "failed fatally")
 }

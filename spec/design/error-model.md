@@ -9,12 +9,12 @@ sync runtime, durable persistence, and CLI presentation. Each boundary owns
 one translation step from raw errors into this shared model. Higher layers may
 add context, but they do not invent a second classification scheme.
 
-`internal/failures` is the executable leaf package that names the shared
-classes and log owners. Boundary packages consume that shared vocabulary rather
-than re-declaring local enums.
+`internal/errclass` is the executable leaf package that defines the shared
+`Class` type. Boundary packages consume this shared vocabulary rather than
+re-declaring local enums.
 
 Structured sync logs are part of that shared contract: the engine logs the
-classified `failures.Class` and `sync.SummaryKey` together with stable
+classified `errclass.Class` and `sync.SummaryKey` together with stable
 run/action identifiers so runtime evidence, persisted rows, and CLI snapshot surfaces
 can be compared directly.
 
@@ -22,7 +22,7 @@ can be compared directly.
 
 The repository keeps three related but distinct projections of failure state:
 
-- `failures.Class`: the runtime execution contract used by sync routing,
+- `errclass.Class`: the runtime execution contract used by sync routing,
   retry/trial policy, and CLI exit behavior.
 - `sync.SummaryKey`: the shared sync-domain rendering key used for
   structured logs, read-only issue summaries, and human-facing sync issue
@@ -63,7 +63,7 @@ Each boundary owns exactly one translation step:
 The docs and code stay aligned through a small number of explicit classifier
 entry points:
 
-- `internal/failures`: shared `Class` and `LogOwner` definitions.
+- `internal/errclass`: the `Class` type — runtime execution contract shared across sync, config, and CLI.
 - `internal/sync/summary_keys.go`: shared `SummaryKey` plus the normalization
   helpers that map runtime results, persisted failures, and scope blocks into
   one stable grouping key.
@@ -73,7 +73,7 @@ entry points:
   `success`, `actionable`, or `fatal`.
 - `internal/sync/engine_result_classify.go`: classify each `WorkerResult` into
   a full `ResultDecision` carrying class, shared summary key, persistence
-  mode, trial hint, scope evidence, and log ownership.
+  mode, trial hint, and scope evidence.
 - `internal/cli/failure_class.go`: classify command-returned errors into exit
   behavior and reason/action text without inspecting raw transport payloads.
 
@@ -100,14 +100,13 @@ automatic permission rechecks decide when that derived scope clears.
 - The boundary that understands the invariant owns the classification.
 - Retry/backoff consumes the classified result; it does not classify on its own.
 - User-facing messaging consumes the classified result; it does not inspect raw HTTP or filesystem payloads directly.
-- Logging ownership follows the classified result (`failures.LogOwner`) instead
-  of duplicate per-layer ad hoc logging.
+- The sync package owns logging for its classified results; no cross-package log-ownership enum is required.
 
 ## Verified By
 
 | Boundary | Evidence |
 |----------|----------|
-| Shared failure classes | `internal/failures/failures_test.go`, `internal/config/failure_class_test.go`, `internal/cli/failure_class_test.go` |
+| Shared failure classes | `internal/errclass/errclass_test.go`, `internal/config/failure_class_test.go`, `internal/cli/failure_class_test.go` |
 | Shared summary key mapping plus CLI-owned status descriptors | `internal/sync/summary_keys_test.go` (`TestSummaryKeyForPersistedFailure_RepresentativeMappings`, `TestSummaryKeyForScopeBlock_RepresentativeMappings`, `TestSummaryKeyForIssueType_RepresentativeMappings`), `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`, `TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_RemoteRetriesAndSkips`, `TestClassifyResult_StorageScopes`, `TestClassifyResult_LocalErrors`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesIssueGroupScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues`, `TestPrintSyncStateText_WithIssueGroups`), `internal/cli/status_golden_test.go` |
 | Structured sync log schema from classified results | `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`) |
 | Sync result classification and persistence mapping | `internal/sync/engine_result_scope_test.go` (`TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_StorageScopes`, `TestDiskLocalScopeBlock_FullCycle`, `TestRetryPipeline_TransientFailure_IntegratedRetrier`) |
