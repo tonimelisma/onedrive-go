@@ -38,7 +38,7 @@ func TestEnsureInternalDependencyGraphGuardrailsFailsOnPackageCountLimit(t *test
 	err := ensureInternalDependencyGraphGuardrails(repoRoot)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "internal package graph exceeds limit")
-	assert.Contains(t, err.Error(), "28 packages")
+	assert.Contains(t, err.Error(), "27 packages")
 }
 
 // Validates: R-6.10.5
