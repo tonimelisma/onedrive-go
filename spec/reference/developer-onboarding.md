@@ -300,7 +300,7 @@ able to scan this table and place every top-level code area.
 | --- | --- | --- |
 | `internal/authstate` | Shared auth-health vocabulary and user-facing auth copy | You are working on auth status, `whoami`, or unauthorized sync presentation |
 | `internal/cli` | Cobra command tree, CLI bootstrap, output formatting, command-family workflows, and final user-facing issue rendering | You are changing any user-facing command or command wiring |
-| `internal/clishape` | Pure-data CLI grammar contracts | You are changing CLI grammar or shape validation without pulling in runtime behavior |
+
 | `internal/config` | TOML config loading, validation, path resolution, drive sections, and account reconciliation helpers | You are changing config semantics or lookup rules |
 | `internal/devtool` | Repo-owned verifier, benchmarks, worktree tooling, watch capture, state audit, cleanup audit | You are changing developer workflow or repo consistency policy |
 | `internal/driveid` | Type-safe drive identity types and canonicalization | You are touching drive selectors or canonical drive identity |

@@ -40,7 +40,7 @@ const (
 	e2eQuirkEventsFileName           = "quirk-events.jsonl"
 	e2eQuirkSummaryFileName          = "quirk-summary.json"
 	internalPackagePrefix            = "github.com/tonimelisma/onedrive-go/internal/"
-	internalPackageLimit             = 27
+	internalPackageLimit             = 26
 	internalImportEdgeLimit          = 80
 	internalGraphCheckTimeout        = 30 * time.Second
 
