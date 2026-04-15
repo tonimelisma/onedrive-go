@@ -1,8 +1,6 @@
 package config
 
 import (
-	"runtime"
-
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
@@ -42,16 +40,8 @@ func defaultTransfersConfig() TransfersConfig {
 
 func defaultSafetyConfig() SafetyConfig {
 	return SafetyConfig{
-		MinFreeSpace:  defaultMinFreeSpace,
-		UseLocalTrash: defaultUseLocalTrash(),
+		MinFreeSpace: defaultMinFreeSpace,
 	}
-}
-
-// defaultUseLocalTrash returns the platform-specific default for UseLocalTrash.
-// macOS: true — desktop users always have ~/.Trash.
-// Linux: false — servers/NAS/containers typically don't have XDG trash; desktop users opt in.
-func defaultUseLocalTrash() bool {
-	return runtime.GOOS == platformDarwin
 }
 
 func defaultSyncConfig() SyncConfig {

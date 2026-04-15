@@ -87,7 +87,6 @@ This table is the authoritative config-package view of the current schema.
 | `transfer_workers` | `int` | `8` | `4..64` | `sync`, `transfer commands` | Shared transfer worker-pool size. |
 | `check_workers` | `int` | `4` | `1..16` | `sync` | Parallel local hashing worker count. |
 | `min_free_space` | `string` | `1GB` | parseable size string; `0` disables | `sync`, `get`, shared download commands | Disk reservation floor for downloads. |
-| `use_local_trash` | `bool` | macOS: `true`; Linux: `false` | boolean | `sync` | Local delete handling. |
 | `poll_interval` | `string` | `5m` | duration `>= 30s` | `sync --watch` | Remote observation fallback poll cadence. |
 | `websocket` | `bool` | `false` | boolean | `sync --watch` | Enables Socket.IO remote wakeups where supported. |
 | `dry_run` | `bool` | `false` | boolean | `sync` | Config-owned default for dry-run sync. CLI flag may override. |
@@ -112,8 +111,7 @@ This table is the authoritative config-package view of the current schema.
 The config file is read with a TOML parser (`BurntSushi/toml`) but written with line-based text edits (`toml_lines.go`). This preserves all comments — both the initial defaults template and user additions. No TOML round-trip serialization.
 
 The first-login template is generated from the same default constants the
-runtime uses, so commented-out defaults stay aligned with the real schema even
-when platform-specific defaults such as `use_local_trash` differ.
+runtime uses, so commented-out defaults stay aligned with the real schema.
 
 All authoritative config/account/drive-metadata writes go through
 `fsroot.Root.AtomicWrite`. The config package does not leave temp-file and

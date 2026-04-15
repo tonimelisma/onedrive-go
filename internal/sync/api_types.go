@@ -130,7 +130,6 @@ type engineInputs struct {
 	LocalFilter            LocalFilterConfig
 	LocalRules             LocalObservationRules
 	EnableWebsocket        bool
-	UseLocalTrash          bool
 	TransferWorkers        int
 	CheckWorkers           int
 	MinFreeSpace           int64
