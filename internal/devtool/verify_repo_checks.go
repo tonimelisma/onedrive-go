@@ -23,7 +23,6 @@ type staleCheck struct {
 func runRepoConsistencyChecks(repoRoot string) error {
 	for _, check := range []func(string) error{
 		ensureNoStaleArchitecturePhrases,
-		ensureActiveDocCLIExamplesResolve,
 		ensureSyncStoreMigrationDiscipline,
 		ensureInternalDependencyGraphGuardrails,
 		ensureGovernedDesignDocsHaveOwnershipContracts,

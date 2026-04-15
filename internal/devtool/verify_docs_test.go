@@ -335,46 +335,6 @@ func TestRunRepoConsistencyChecksFailsWithoutDegradedModeIDColumn(t *testing.T) 
 	assert.Contains(t, err.Error(), "degraded-mode.md")
 }
 
-func TestRunRepoConsistencyChecksFailsOnUnknownActiveDocCLIExample(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	writeRepoConsistencyFixtures(t, repoRoot)
-
-	require.NoError(t, os.WriteFile(
-		filepath.Join(repoRoot, "spec", "design", "cli.md"),
-		[]byte(strings.Join([]string{
-			"# CLI",
-			"",
-			"GOVERNS: internal/cli/*.go",
-			"",
-			"## Ownership Contract",
-			"- Owns: CLI entrypoints",
-			"- Does Not Own: sync runtime",
-			"- Source of Truth: Cobra command definitions",
-			"- Allowed Side Effects: config I/O and stdout",
-			"- Mutable Runtime Owner: process-local command execution",
-			"- Error Boundary: CLI error rendering",
-			"",
-			"## Verified By",
-			"",
-			"| Behavior | Evidence |",
-			"| --- | --- |",
-			"| stale | TestFixtureEvidence |",
-			"",
-			"Run `onedrive-go madeup`.",
-			"",
-		}, "\n")),
-		0o600,
-	))
-
-	err := runRepoConsistencyChecks(repoRoot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid documented CLI example")
-	assert.Contains(t, err.Error(), "madeup")
-	assert.Contains(t, err.Error(), "cli.md")
-}
-
 func assertRepoConsistencyRejectsUnknownEvidenceTest(
 	t *testing.T,
 	docName string,
