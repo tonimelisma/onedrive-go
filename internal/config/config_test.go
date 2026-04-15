@@ -1,7 +1,6 @@
 package config
 
 import (
-	"runtime"
 	"testing"
 	"time"
 
@@ -19,7 +18,6 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 
 	// Safety defaults
 	assert.Equal(t, "1GB", cfg.MinFreeSpace)
-	assert.Equal(t, runtime.GOOS == "darwin", cfg.UseLocalTrash) // platform-specific default
 
 	// Sync defaults
 	assert.Equal(t, "5m", cfg.PollInterval)

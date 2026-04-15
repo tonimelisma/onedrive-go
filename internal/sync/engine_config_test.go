@@ -66,8 +66,7 @@ func TestNewDriveEngine_PropagatesWatchCapabilities(t *testing.T) {
 			CheckWorkers:    4,
 		},
 		SafetyConfig: config.SafetyConfig{
-			UseLocalTrash: true,
-			MinFreeSpace:  "1MiB",
+			MinFreeSpace: "1MiB",
 		},
 		SyncConfig: config.SyncConfig{
 			Websocket: true,
@@ -94,7 +93,6 @@ func TestNewDriveEngine_PropagatesWatchCapabilities(t *testing.T) {
 	assert.NotNil(t, eng.recursiveLister)
 	assert.NotNil(t, eng.permHandler)
 	assert.True(t, eng.localRules.RejectSharePointRootForms)
-	assert.NotNil(t, eng.execCfg.trashFunc)
 	assert.Equal(t, 3, eng.transferWorkers)
 	assert.Equal(t, 4, eng.checkWorkers)
 	assert.Equal(t, int64(1024*1024), eng.minFreeSpace)

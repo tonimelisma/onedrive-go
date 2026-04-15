@@ -10,7 +10,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -121,10 +120,6 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		cfg.PathConvergenceFactory,
 	)
 	execCfg.SetRootItemID(cfg.RootItemID)
-
-	if cfg.UseLocalTrash {
-		execCfg.SetTrashFunc(localtrash.Default)
-	}
 
 	// Construct sessionStore and TransferManager together so the TM is
 	// immutable after creation (no post-hoc field mutation). Disk space

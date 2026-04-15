@@ -30,7 +30,6 @@ internal/
   graph/                      Graph API client: auth, Graph normalization, items CRUD, delta, transfers
   graphhttp/                  Graph-facing HTTP client profile construction
   localpath/                  Explicit arbitrary-local-path boundary helpers
-  localtrash/                 OS-local trash behavior for sync execution
   logfile/                    Log file creation, rotation, retention
   multisync/                  Multi-drive sync control plane and watch reload
   perf/                       Command-scoped and live sync performance instrumentation plus capture bundles

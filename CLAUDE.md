@@ -20,7 +20,7 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/logfile/` | `spec/design/cli.md` | `spec/requirements/configuration.md` |
 | `internal/sync/observer*.go`, `internal/sync/scanner*.go`, `internal/sync/socketio*.go`, `internal/sync/item_converter*.go`, `internal/sync/local_hash_reuse.go` | `spec/design/sync-observation.md` | `spec/reference/onedrive-sync-behavior.md` |
 | `internal/sync/planner*.go`, `internal/sync/single_path*.go` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |
-| `internal/sync/executor*.go`, `internal/sync/worker*.go`, `internal/sync/dep_graph*.go`, `internal/sync/active_scopes*.go`, `internal/localtrash/` | `spec/design/sync-execution.md` | |
+| `internal/sync/executor*.go`, `internal/sync/worker*.go`, `internal/sync/dep_graph*.go`, `internal/sync/active_scopes*.go` | `spec/design/sync-execution.md` | |
 | `internal/sync/engine*.go`, `internal/sync/permissions.go`, `internal/sync/permission_*.go`, `internal/cli/sync_flow.go`, `internal/cli/sync_runtime.go`, `internal/cli/sync_render.go` | `spec/design/sync-engine.md` | |
 | `internal/multisync/`, `internal/cli/sync.go` | `spec/design/sync-control-plane.md` | `spec/design/sync-engine.md`, `spec/design/config.md` |
 | `internal/sync/store*.go`, `internal/sync/db_repair.go`, `internal/sync/db_repair_test.go`, `internal/syncverify/`, `internal/cli/recover.go`, `internal/cli/recover_flow.go` | `spec/design/sync-store.md` | `spec/design/data-model.md`, `spec/design/sync-execution.md`, `spec/design/sync-engine.md` |

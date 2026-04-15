@@ -141,17 +141,6 @@ func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ActionOutco
 		}
 	}
 
-	// Try trash before permanent delete.
-	if e.trashFunc != nil {
-		if err := e.trashFunc(absPath); err != nil {
-			e.logger.Warn("failed to trash folder, falling back to permanent delete",
-				slog.String("path", action.Path), slog.String("error", err.Error()))
-		} else {
-			e.logger.Debug("moved folder to trash", slog.String("path", action.Path))
-			return e.DeleteOutcome(action, ActionLocalDelete)
-		}
-	}
-
 	if err := e.syncTree.Remove(relPath); err != nil {
 		return e.failedOutcome(
 			action,
@@ -203,17 +192,6 @@ func (e *Executor) DeleteLocalFile(ctx context.Context, action *Action, absPath 
 			}
 
 			return e.ExecuteEditDeleteConflict(ctx, &conflictAction)
-		}
-	}
-
-	// Try trash before permanent delete.
-	if e.trashFunc != nil {
-		if err := e.trashFunc(absPath); err != nil {
-			e.logger.Warn("failed to trash file, falling back to permanent delete",
-				slog.String("path", action.Path), slog.String("error", err.Error()))
-		} else {
-			e.logger.Debug("moved file to trash", slog.String("path", action.Path))
-			return e.DeleteOutcome(action, ActionLocalDelete)
 		}
 	}
 

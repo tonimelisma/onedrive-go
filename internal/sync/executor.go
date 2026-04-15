@@ -53,7 +53,6 @@ type ExecutorConfig struct {
 	// Injectable for testing.
 	nowFunc                func() time.Time
 	hashFunc               func(filePath string) (string, error)
-	trashFunc              func(absPath string) error // nil = permanent delete (os.Remove)
 	pathConvergenceFactory driveops.PathConvergenceFactory
 }
 
@@ -96,13 +95,6 @@ func (cfg *ExecutorConfig) SetWatchMode(enabled bool) {
 // IsWatchMode returns true if the executor is operating in watch mode.
 func (cfg *ExecutorConfig) IsWatchMode() bool {
 	return cfg.watchMode
-}
-
-// SetTrashFunc sets the trash function for moving deleted files to the OS trash
-// instead of permanently deleting them. When nil, files are permanently deleted.
-// Called by the engine when UseLocalTrash is configured.
-func (cfg *ExecutorConfig) SetTrashFunc(fn func(absPath string) error) {
-	cfg.trashFunc = fn
 }
 
 // SetTransferMgr sets the transfer manager for unified download/upload with

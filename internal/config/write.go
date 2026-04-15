@@ -43,7 +43,6 @@ func defaultConfigTemplate() string {
 
 # Safety
 # min_free_space = %q
-# use_local_trash = %t      # platform default
 
 # Sync runtime
 # poll_interval = %q
@@ -64,7 +63,6 @@ func defaultConfigTemplate() string {
 		defaultTransferWorkers,
 		defaultCheckWorkers,
 		defaultMinFreeSpace,
-		defaultUseLocalTrash(),
 		defaultPollInterval,
 		defaultSafetyScanInterval,
 		defaultLogLevel,

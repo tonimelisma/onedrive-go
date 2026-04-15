@@ -310,7 +310,6 @@ able to scan this table and place every top-level code area.
 | `internal/graph` | Graph API semantics, normalization, auth, delta, item CRUD, transfer session behavior | You are changing Graph behavior or provider quirks |
 | `internal/graphhttp` | Stateless Graph-facing HTTP transport profiles and transport defaults | You are changing HTTP runtime policy or profile construction |
 | `internal/localpath` | Explicit arbitrary local-path filesystem operations | You are doing local file I/O outside a rooted capability |
-| `internal/localtrash` | OS-local trash behavior for sync execution | You are changing how sync moves local deletes into trash |
 | `internal/logfile` | Log file creation, rotation, retention | You are changing logging file lifecycle |
 | `internal/multisync` | Multi-drive sync control plane and watch reload | You are changing `sync` orchestration across drives |
 | `internal/perf` | Production-visible perf sessions, counters, live snapshots, and capture bundles | You are changing performance instrumentation or capture behavior |

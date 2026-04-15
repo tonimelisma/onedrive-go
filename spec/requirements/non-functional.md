@@ -43,8 +43,6 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.4.2: The system shall not require manual delete-approval workflows. Deletion safety is per-item and automatic; large delete batches execute through the normal engine path once ordinary per-item safety checks pass. [verified]
 - R-6.4.3: Removed delete-safety configuration keys shall be rejected as unknown configuration rather than silently ignored or mapped to hidden defaults. [verified]
 - R-6.4.4: Remote deletions shall go to the OneDrive recycle bin by default. [verified]
-- R-6.4.5: Local deletions triggered by remote changes shall go to OS trash on macOS (`use_local_trash`). [verified]
-- R-6.4.6: On Linux, local trash shall be opt-in (default off; servers/NAS typically lack XDG trash). [verified]
 - R-6.4.7: The system shall support configurable disk space reservation (`min_free_space`, default 1 GB). When available space falls below this threshold, downloads shall be scope-blocked. Set to 0 to disable. [verified]
 - R-6.4.8: All local filesystem writes shall be confined to the sync root directory. The executor validates resolved paths via `containedPath()` to prevent escape from path reconstruction bugs. [verified]
 

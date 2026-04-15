@@ -105,8 +105,7 @@ func TestNewSyncEngine_Success(t *testing.T) {
 			CheckWorkers:    3,
 		},
 		SafetyConfig: config.SafetyConfig{
-			UseLocalTrash: true,
-			MinFreeSpace:  "1MiB",
+			MinFreeSpace: "1MiB",
 		},
 	}
 
