@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/failures"
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
 type resultContext struct {
@@ -81,20 +81,20 @@ func (flow *engineFlow) processResult(
 func (flow *engineFlow) routeReadyForClass(
 	ctx context.Context,
 	watch *watchRuntime,
-	class failures.Class,
+	class errclass.Class,
 	ready []*TrackedAction,
 	r *WorkerResult,
 ) []*TrackedAction {
 	switch class {
-	case failures.ClassInvalid:
+	case errclass.ClassInvalid:
 		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
-	case failures.ClassSuccess:
+	case errclass.ClassSuccess:
 		return flow.scopeController().admitReady(ctx, watch, ready)
-	case failures.ClassShutdown:
+	case errclass.ClassShutdown:
 		flow.scopeController().completeSubtree(ready)
-	case failures.ClassFatal:
+	case errclass.ClassFatal:
 		flow.scopeController().completeSubtree(ready)
-	case failures.ClassRetryableTransient, failures.ClassScopeBlockingTransient, failures.ClassActionable:
+	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient, errclass.ClassActionable:
 		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
 	}
 
@@ -129,7 +129,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 
 	if decision.RunScopeDetection {
 		flow.scopeController().feedScopeDetection(ctx, watch, r)
-	} else if decision.Class == failures.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero() {
+	} else if decision.Class == errclass.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero() {
 		flow.scopeController().applyScopeBlock(ctx, watch, ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  decision.ScopeKey,
@@ -137,7 +137,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 		})
 	}
 
-	if decision.Class == failures.ClassScopeBlockingTransient && watch != nil {
+	if decision.Class == errclass.ClassScopeBlockingTransient && watch != nil {
 		watch.armTrialTimer()
 	}
 	if decision.Persistence == persistTransientFailure && watch != nil {
@@ -190,20 +190,20 @@ func (flow *engineFlow) processNormalDecision(
 	}
 
 	switch decision.Class {
-	case failures.ClassInvalid:
+	case errclass.ClassInvalid:
 		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r, bl)
 		outcome.terminate = true
 		outcome.terminateErr = fmt.Errorf("classify worker result: invalid failure class")
-	case failures.ClassSuccess:
+	case errclass.ClassSuccess:
 		flow.applySuccessEffects(ctx, watch, r)
-	case failures.ClassShutdown:
+	case errclass.ClassShutdown:
 		return outcome
-	case failures.ClassFatal:
+	case errclass.ClassFatal:
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.SummaryKey)
 		flow.recordError(decision, r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
-	case failures.ClassRetryableTransient, failures.ClassScopeBlockingTransient, failures.ClassActionable:
+	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient, errclass.ClassActionable:
 		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r, bl)
 	}
 
@@ -233,7 +233,7 @@ func (flow *engineFlow) processTrialDecision(
 		}
 		outcome.dispatched = flow.routeReadyForClass(ctx, watch, resultSuccess, ready, r)
 	case trialOutcomeShutdown:
-		flow.routeReadyForClass(ctx, watch, failures.ClassShutdown, ready, r)
+		flow.routeReadyForClass(ctx, watch, errclass.ClassShutdown, ready, r)
 	case trialOutcomeExtend:
 		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
 		scopeCtrl.rehomeHeldFailure(ctx, r, trialScopeKey)
@@ -245,7 +245,7 @@ func (flow *engineFlow) processTrialDecision(
 		scopeCtrl.applyTrialPreserveEffects(ctx, watch, decision, r, bl)
 		flow.recordError(decision, r)
 	case trialOutcomeFatal:
-		flow.routeReadyForClass(ctx, watch, failures.ClassFatal, ready, r)
+		flow.routeReadyForClass(ctx, watch, errclass.ClassFatal, ready, r)
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.SummaryKey)
 		flow.recordError(decision, r)
 		outcome.terminate = true
@@ -300,7 +300,7 @@ func (controller *scopeController) applyTrialPreserveEffects(
 		return
 	}
 
-	if decision.Class == failures.ClassScopeBlockingTransient && decision.ScopeKey == SKDiskLocal() {
+	if decision.Class == errclass.ClassScopeBlockingTransient && decision.ScopeKey == SKDiskLocal() {
 		controller.applyScopeBlock(ctx, watch, ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  decision.ScopeKey,
@@ -365,7 +365,7 @@ func (controller *scopeController) applyFatalAuthEffects(
 
 	if err := controller.activateAuthScope(ctx, watch); err != nil {
 		fields := append(flow.summaryLogFields(
-			failures.ClassFatal,
+			errclass.ClassFatal,
 			summaryKey,
 			r.Path,
 			SKAuthAccount(),
@@ -376,7 +376,7 @@ func (controller *scopeController) applyFatalAuthEffects(
 
 	flow.engine.logger.Error("authentication required: sync stopping",
 		flow.summaryLogFields(
-			failures.ClassFatal,
+			errclass.ClassFatal,
 			summaryKey,
 			r.Path,
 			SKAuthAccount(),

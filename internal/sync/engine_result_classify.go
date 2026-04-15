@@ -3,21 +3,20 @@ package sync
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"os"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/failures"
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
 const (
-	resultSuccess    = failures.ClassSuccess
-	resultRequeue    = failures.ClassRetryableTransient
-	resultScopeBlock = failures.ClassScopeBlockingTransient
-	resultSkip       = failures.ClassActionable
-	resultShutdown   = failures.ClassShutdown
-	resultFatal      = failures.ClassFatal
+	resultSuccess    = errclass.ClassSuccess
+	resultRequeue    = errclass.ClassRetryableTransient
+	resultScopeBlock = errclass.ClassScopeBlockingTransient
+	resultSkip       = errclass.ClassActionable
+	resultShutdown   = errclass.ClassShutdown
+	resultFatal      = errclass.ClassFatal
 )
 
 type resultPersistenceMode int
@@ -50,7 +49,7 @@ const (
 // routing. The decision is behavior-complete so downstream code does not
 // re-derive policy from raw HTTP/local error facts.
 type ResultDecision struct {
-	Class             failures.Class
+	Class             errclass.Class
 	SummaryKey        SummaryKey
 	ScopeKey          ScopeKey
 	ScopeEvidence     ScopeKey
@@ -60,8 +59,6 @@ type ResultDecision struct {
 	RecordSuccess     bool
 	TrialHint         trialHint
 	IssueType         string
-	LogOwner          failures.LogOwner
-	LogLevel          slog.Level
 }
 
 // classifyResult is a pure function that maps a WorkerResult to a
@@ -73,8 +70,6 @@ func classifyResult(r *WorkerResult) ResultDecision {
 			Class:         resultSuccess,
 			RecordSuccess: true,
 			TrialHint:     trialHintRelease,
-			LogOwner:      failures.LogOwnerSync,
-			LogLevel:      slog.LevelInfo,
 		})
 	}
 
@@ -82,8 +77,6 @@ func classifyResult(r *WorkerResult) ResultDecision {
 		return withRuntimeSummary(&ResultDecision{
 			Class:     resultShutdown,
 			TrialHint: trialHintShutdown,
-			LogOwner:  failures.LogOwnerSync,
-			LogLevel:  slog.LevelInfo,
 		})
 	}
 
@@ -108,8 +101,6 @@ func classifyHTTPResult(r *WorkerResult) (ResultDecision, bool) {
 			Persistence: persistActionableFailure,
 			TrialHint:   trialHintFatal,
 			IssueType:   issueType,
-			LogOwner:    failures.LogOwnerSync,
-			LogLevel:    slog.LevelError,
 		}), true
 	case r.HTTPStatus == http.StatusForbidden:
 		return withRuntimeSummary(&ResultDecision{
@@ -118,8 +109,6 @@ func classifyHTTPResult(r *WorkerResult) (ResultDecision, bool) {
 			PermissionFlow: permissionDecisionFlow,
 			TrialHint:      trialHintPreserve,
 			IssueType:      issueType,
-			LogOwner:       failures.LogOwnerSync,
-			LogLevel:       slog.LevelWarn,
 		}), true
 	case r.HTTPStatus == http.StatusTooManyRequests:
 		return withRuntimeSummary(&ResultDecision{
@@ -130,8 +119,6 @@ func classifyHTTPResult(r *WorkerResult) (ResultDecision, bool) {
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
 			IssueType:         issueType,
-			LogOwner:          failures.LogOwnerSync,
-			LogLevel:          slog.LevelWarn,
 		}), true
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		return withRuntimeSummary(&ResultDecision{
@@ -142,8 +129,6 @@ func classifyHTTPResult(r *WorkerResult) (ResultDecision, bool) {
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
 			IssueType:         issueType,
-			LogOwner:          failures.LogOwnerSync,
-			LogLevel:          slog.LevelWarn,
 		}), true
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		return withRuntimeSummary(&ResultDecision{
@@ -153,8 +138,6 @@ func classifyHTTPResult(r *WorkerResult) (ResultDecision, bool) {
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
 			IssueType:         issueType,
-			LogOwner:          failures.LogOwnerSync,
-			LogLevel:          slog.LevelWarn,
 		}), true
 	case isRetryableHTTPStatus(r.HTTPStatus):
 		return withRuntimeSummary(&ResultDecision{
@@ -164,8 +147,6 @@ func classifyHTTPResult(r *WorkerResult) (ResultDecision, bool) {
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
 			IssueType:         issueType,
-			LogOwner:          failures.LogOwnerSync,
-			LogLevel:          slog.LevelWarn,
 		}), true
 	default:
 		return withRuntimeSummary(&ResultDecision{
@@ -173,8 +154,6 @@ func classifyHTTPResult(r *WorkerResult) (ResultDecision, bool) {
 			Persistence: persistActionableFailure,
 			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
-			LogOwner:    failures.LogOwnerSync,
-			LogLevel:    slog.LevelWarn,
 		}), true
 	}
 }
@@ -199,8 +178,6 @@ func classifyLocalResult(r *WorkerResult) ResultDecision {
 			Persistence:   persistTransientFailure,
 			TrialHint:     trialHintExtendOnMatchingScope,
 			IssueType:     issueType,
-			LogOwner:      failures.LogOwnerSync,
-			LogLevel:      slog.LevelWarn,
 		})
 	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
 		return withRuntimeSummary(&ResultDecision{
@@ -208,8 +185,6 @@ func classifyLocalResult(r *WorkerResult) ResultDecision {
 			Persistence: persistActionableFailure,
 			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
-			LogOwner:    failures.LogOwnerSync,
-			LogLevel:    slog.LevelWarn,
 		})
 	case errors.Is(r.Err, driveops.ErrFileExceedsOneDriveLimit):
 		return withRuntimeSummary(&ResultDecision{
@@ -217,8 +192,6 @@ func classifyLocalResult(r *WorkerResult) ResultDecision {
 			Persistence: persistActionableFailure,
 			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
-			LogOwner:    failures.LogOwnerSync,
-			LogLevel:    slog.LevelWarn,
 		})
 	case errors.Is(r.Err, os.ErrPermission):
 		return withRuntimeSummary(&ResultDecision{
@@ -227,8 +200,6 @@ func classifyLocalResult(r *WorkerResult) ResultDecision {
 			PermissionFlow: permissionDecisionFlow,
 			TrialHint:      trialHintPreserve,
 			IssueType:      issueType,
-			LogOwner:       failures.LogOwnerSync,
-			LogLevel:       slog.LevelWarn,
 		})
 	default:
 		return withRuntimeSummary(&ResultDecision{
@@ -236,8 +207,6 @@ func classifyLocalResult(r *WorkerResult) ResultDecision {
 			Persistence: persistActionableFailure,
 			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
-			LogOwner:    failures.LogOwnerSync,
-			LogLevel:    slog.LevelWarn,
 		})
 	}
 }
@@ -263,15 +232,15 @@ func withRuntimeSummary(decision *ResultDecision) ResultDecision {
 	return *decision
 }
 
-func runtimeSummaryKey(class failures.Class, issueType string) SummaryKey {
+func runtimeSummaryKey(class errclass.Class, issueType string) SummaryKey {
 	if key, ok := runtimeSummaryKeyForIssueType(issueType); ok {
 		return key
 	}
 
-	if class == failures.ClassRetryableTransient ||
-		class == failures.ClassScopeBlockingTransient ||
-		class == failures.ClassActionable ||
-		class == failures.ClassFatal {
+	if class == errclass.ClassRetryableTransient ||
+		class == errclass.ClassScopeBlockingTransient ||
+		class == errclass.ClassActionable ||
+		class == errclass.ClassFatal {
 		return SummarySyncFailure
 	}
 

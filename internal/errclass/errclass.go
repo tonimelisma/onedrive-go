@@ -1,11 +1,10 @@
-// Package failures defines the repository's canonical runtime failure classes.
-// Boundaries may add local context, but they should not invent a second class
-// vocabulary once a result has been translated here.
-package failures
+// Package errclass defines the repository's canonical runtime failure classes,
+// documented in spec/design/error-model.md. Boundary packages consume this
+// shared vocabulary rather than re-declaring local enums.
+package errclass
 
 const (
 	classInvalidString = "invalid"
-	logOwnerNoneString = "none"
 )
 
 // Class is the executable source of truth for the cross-cutting failure model
@@ -46,30 +45,4 @@ func (c Class) String() string {
 	}
 
 	return classInvalidString
-}
-
-// LogOwner identifies which boundary owns logging and presentation for a
-// classified failure.
-type LogOwner uint8
-
-const (
-	LogOwnerNone LogOwner = iota
-	LogOwnerConfig
-	LogOwnerCLI
-	LogOwnerSync
-)
-
-func (o LogOwner) String() string {
-	switch o {
-	case LogOwnerNone:
-		return logOwnerNoneString
-	case LogOwnerConfig:
-		return "config"
-	case LogOwnerCLI:
-		return "cli"
-	case LogOwnerSync:
-		return "sync"
-	}
-
-	return logOwnerNoneString
 }
