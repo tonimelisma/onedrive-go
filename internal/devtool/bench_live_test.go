@@ -13,9 +13,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
 // Validates: R-6.10.14
@@ -87,10 +84,10 @@ func TestPerturbBenchLiveFixtureAppliesDeletesAndTruncates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = localpath.Stat(filepath.Join(scopeRoot, "docs", "a.txt"))
+	_, err = stat(filepath.Join(scopeRoot, "docs", "a.txt"))
 	require.Error(t, err)
 
-	info, err := localpath.Stat(filepath.Join(scopeRoot, "media", "c.bin"))
+	info, err := stat(filepath.Join(scopeRoot, "media", "c.bin"))
 	require.NoError(t, err)
 	assert.Zero(t, info.Size())
 }
@@ -176,13 +173,12 @@ func TestCreateBenchLiveRuntimeCopiesCredentialsAndWritesConfig(t *testing.T) {
 
 	workRoot := t.TempDir()
 	credentialDir := t.TempDir()
-	require.NoError(t, localpath.WriteFile(
+	require.NoError(t, writeFile(
 		filepath.Join(credentialDir, "token_personal_user@example.com.json"),
 		[]byte(`{"token":"x"}`),
-		0o600,
 	))
-	require.NoError(t, localpath.WriteFile(filepath.Join(credentialDir, "account_user@example.com.json"), []byte(`{}`), 0o600))
-	require.NoError(t, localpath.WriteFile(filepath.Join(credentialDir, "drive_user@example.com.json"), []byte(`{}`), 0o600))
+	require.NoError(t, writeFile(filepath.Join(credentialDir, "account_user@example.com.json"), []byte(`{}`)))
+	require.NoError(t, writeFile(filepath.Join(credentialDir, "drive_user@example.com.json"), []byte(`{}`)))
 
 	runtime, err := createBenchLiveRuntime(
 		workRoot,
@@ -193,14 +189,14 @@ func TestCreateBenchLiveRuntimeCopiesCredentialsAndWritesConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	dataRoot := filepath.Join(benchRuntimeEnvValue(runtime.env, "XDG_DATA_HOME"), "onedrive-go")
-	_, err = localpath.Stat(filepath.Join(dataRoot, "token_personal_user@example.com.json"))
+	_, err = stat(filepath.Join(dataRoot, "token_personal_user@example.com.json"))
 	require.NoError(t, err)
-	_, err = localpath.Stat(filepath.Join(dataRoot, "account_user@example.com.json"))
+	_, err = stat(filepath.Join(dataRoot, "account_user@example.com.json"))
 	require.NoError(t, err)
-	_, err = localpath.Stat(filepath.Join(dataRoot, "drive_user@example.com.json"))
+	_, err = stat(filepath.Join(dataRoot, "drive_user@example.com.json"))
 	require.NoError(t, err)
 
-	configBody, err := localpath.ReadFile(runtime.configPath)
+	configBody, err := readFile(runtime.configPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(configBody), `["personal:user@example.com"]`)
 	assert.Contains(t, string(configBody), runtime.syncDir)
@@ -328,8 +324,8 @@ func TestPrepareAndMeasureCatchupSampleRestoresFixtureAndReadsPerfSummary(t *tes
 	require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.Files))
 
 	logPath := filepath.Join(runtimeRoot, "bench.log")
-	require.NoError(t, localpath.MkdirAll(runtimeRoot, 0o700))
-	require.NoError(t, localpath.WriteFile(logPath, []byte{}, 0o600))
+	require.NoError(t, mkdirAll(runtimeRoot, 0o700))
+	require.NoError(t, writeFile(logPath, []byte{}))
 
 	state := &benchLiveScenarioState{
 		fixture: *fixture,
@@ -343,7 +339,7 @@ func TestPrepareAndMeasureCatchupSampleRestoresFixtureAndReadsPerfSummary(t *tes
 			}
 
 			require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.Files))
-			require.NoError(t, writeBenchLivePerfLog(logPath, &perf.Snapshot{
+			require.NoError(t, writeBenchLivePerfLog(logPath, &benchPerfSummary{
 				DurationMS:        42,
 				Result:            "success",
 				DownloadCount:     2,
@@ -379,14 +375,13 @@ func TestPrepareAndMeasureCatchupSampleRestoresFixtureAndReadsPerfSummary(t *tes
 func TestRunSampleReturnsFixtureFailureWhenRuntimeCleanupFails(t *testing.T) {
 	repoRoot := t.TempDir()
 	credentialDir := filepath.Join(repoRoot, ".testdata")
-	require.NoError(t, localpath.MkdirAll(credentialDir, 0o700))
-	require.NoError(t, localpath.WriteFile(
+	require.NoError(t, mkdirAll(credentialDir, 0o700))
+	require.NoError(t, writeFile(
 		filepath.Join(credentialDir, "token_personal_user@example.com.json"),
 		[]byte(`{"token":"x"}`),
-		0o600,
 	))
-	require.NoError(t, localpath.WriteFile(filepath.Join(credentialDir, "account_user@example.com.json"), []byte(`{}`), 0o600))
-	require.NoError(t, localpath.WriteFile(filepath.Join(credentialDir, "drive_user@example.com.json"), []byte(`{}`), 0o600))
+	require.NoError(t, writeFile(filepath.Join(credentialDir, "account_user@example.com.json"), []byte(`{}`)))
+	require.NoError(t, writeFile(filepath.Join(credentialDir, "drive_user@example.com.json"), []byte(`{}`)))
 
 	t.Setenv("ONEDRIVE_TEST_DRIVE", "personal:user@example.com")
 	t.Setenv("ONEDRIVE_ALLOWED_TEST_ACCOUNTS", "personal:user@example.com")
@@ -437,14 +432,15 @@ func TestRunSampleReturnsFixtureFailureWhenRuntimeCleanupFails(t *testing.T) {
 			require.Equal(t, 2, callCount, "runSample should only measure baseline and catchup once each")
 
 			require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.Files))
-			require.NoError(t, writeBenchLivePerfLog(logPath, &perf.Snapshot{
+			require.NoError(t, writeBenchLivePerfLog(logPath, &benchPerfSummary{
 				DurationMS:        42,
 				Result:            "success",
 				DownloadCount:     1,
 				DownloadBytes:     64,
 				ReconcileRunCount: 1,
 			}))
-			require.NoError(t, localpath.Chmod(spec.CWD, 0o500))
+			//nolint:gosec // directories need execute bits; this test intentionally makes the directory read-only.
+			require.NoError(t, os.Chmod(spec.CWD, 0o500))
 
 			return benchMeasuredProcess{
 				ElapsedMicros: 1234,
@@ -458,9 +454,10 @@ func TestRunSampleReturnsFixtureFailureWhenRuntimeCleanupFails(t *testing.T) {
 	assert.Contains(t, sample.FailureExcerpt, "cleanup sample runtime")
 
 	if runtimeRoot != "" {
-		if _, err := localpath.Stat(runtimeRoot); err == nil {
-			require.NoError(t, localpath.Chmod(runtimeRoot, 0o700))
-			require.NoError(t, localpath.RemoveAll(runtimeRoot))
+		if _, err := stat(runtimeRoot); err == nil {
+			//nolint:gosec // directory permissions require execute bits; 0700 is the intended private runtime root.
+			require.NoError(t, os.Chmod(runtimeRoot, 0o700))
+			require.NoError(t, removeAll(runtimeRoot))
 		}
 	}
 }
@@ -474,13 +471,13 @@ func sumBenchLiveFixtureBytes(files []benchLiveFileEntry) int64 {
 	return total
 }
 
-func writeBenchLivePerfLog(path string, snapshot *perf.Snapshot) error {
+func writeBenchLivePerfLog(path string, snapshot *benchPerfSummary) error {
 	record := struct {
 		Msg string `json:"msg"`
-		perf.Snapshot
+		benchPerfSummary
 	}{
-		Msg:      "performance summary",
-		Snapshot: *snapshot,
+		Msg:              "performance summary",
+		benchPerfSummary: *snapshot,
 	}
 
 	data, err := json.Marshal(record)

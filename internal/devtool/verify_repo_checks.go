@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 type staleCheck struct {
@@ -140,7 +138,7 @@ func ensureNoResurrectedFiles(repoRoot string) error {
 	}
 
 	for _, check := range checks {
-		if _, err := localpath.Stat(check.path); err == nil {
+		if _, err := stat(check.path); err == nil {
 			return errors.New(check.err)
 		}
 	}
@@ -367,7 +365,7 @@ func ensurePackageSelectorStaysAtApprovedBoundary(repoRoot string, rule packageS
 }
 
 func scanPackageSelectorBoundaryRoot(root string, rule packageSelectorBoundaryRule) error {
-	info, statErr := localpath.Stat(root)
+	info, statErr := stat(root)
 	if statErr != nil {
 		return fmt.Errorf("stat %s: %w", root, statErr)
 	}
@@ -409,7 +407,7 @@ func scanPackageSelectorFile(path string, rule packageSelectorBoundaryRule) erro
 }
 
 func findHTTPClientDoCall(path string) (string, error) {
-	data, readErr := localpath.ReadFile(path)
+	data, readErr := readFile(path)
 	if readErr != nil {
 		return "", fmt.Errorf("read %s: %w", path, readErr)
 	}
@@ -430,7 +428,7 @@ func findHTTPClientDoCall(path string) (string, error) {
 }
 
 func findPackageSelectorCall(path string, importPath, selector string) (string, error) {
-	data, readErr := localpath.ReadFile(path)
+	data, readErr := readFile(path)
 	if readErr != nil {
 		return "", fmt.Errorf("read %s: %w", path, readErr)
 	}
@@ -543,7 +541,7 @@ func findTextMatch(roots []string, pattern *regexp.Regexp, skip func(path string
 }
 
 func findTextMatchInRoot(root string, pattern *regexp.Regexp, skip func(path string) bool) (string, error) {
-	info, err := localpath.Stat(root)
+	info, err := stat(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
@@ -607,7 +605,7 @@ func (f matchFoundError) Error() string {
 }
 
 func scanFileForPattern(path string, pattern *regexp.Regexp) (string, error) {
-	data, err := localpath.ReadFile(path)
+	data, err := readFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", path, err)
 	}

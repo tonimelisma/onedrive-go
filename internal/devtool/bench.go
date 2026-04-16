@@ -15,9 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
 const (
@@ -142,7 +139,7 @@ type benchSample struct {
 	StdoutBytes     int64             `json:"stdout_bytes"`
 	StderrBytes     int64             `json:"stderr_bytes"`
 	FailureExcerpt  string            `json:"failure_excerpt,omitempty"`
-	PerfSummary     *perf.Snapshot    `json:"perf_summary,omitempty"`
+	PerfSummary     *benchPerfSummary `json:"perf_summary,omitempty"`
 }
 
 type benchSummary struct {
@@ -213,7 +210,50 @@ type benchMeasuredProcess struct {
 
 type benchPerfLogLine struct {
 	Msg string `json:"msg"`
-	perf.Snapshot
+	benchPerfSummary
+}
+
+type benchPerfSummary struct {
+	StartedAt time.Time `json:"started_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+
+	DurationMS int64  `json:"duration_ms"`
+	Result     string `json:"result,omitempty"`
+
+	CommandItems int   `json:"command_items,omitempty"`
+	CommandBytes int64 `json:"command_bytes,omitempty"`
+
+	HTTPRequestCount      int   `json:"http_request_count,omitempty"`
+	HTTPSuccessCount      int   `json:"http_success_count,omitempty"`
+	HTTPClientErrorCount  int   `json:"http_client_error_count,omitempty"`
+	HTTPServerErrorCount  int   `json:"http_server_error_count,omitempty"`
+	HTTPTransportErrors   int   `json:"http_transport_errors,omitempty"`
+	HTTPRetryCount        int   `json:"http_retry_count,omitempty"`
+	HTTPRequestTimeMS     int64 `json:"http_request_time_ms,omitempty"`
+	HTTPRetryBackoffMS    int64 `json:"http_retry_backoff_ms,omitempty"`
+	DBTransactionCount    int   `json:"db_transaction_count,omitempty"`
+	DBTransactionTimeMS   int64 `json:"db_transaction_time_ms,omitempty"`
+	DownloadCount         int   `json:"download_count,omitempty"`
+	DownloadBytes         int64 `json:"download_bytes,omitempty"`
+	UploadCount           int   `json:"upload_count,omitempty"`
+	UploadBytes           int64 `json:"upload_bytes,omitempty"`
+	TransferTimeMS        int64 `json:"transfer_time_ms,omitempty"`
+	ObserveRunCount       int   `json:"observe_run_count,omitempty"`
+	ObservedPathCount     int   `json:"observed_path_count,omitempty"`
+	ObserveTimeMS         int64 `json:"observe_time_ms,omitempty"`
+	PlanRunCount          int   `json:"plan_run_count,omitempty"`
+	PlannedActionCount    int   `json:"planned_action_count,omitempty"`
+	PlanTimeMS            int64 `json:"plan_time_ms,omitempty"`
+	ExecuteRunCount       int   `json:"execute_run_count,omitempty"`
+	ExecuteActionCount    int   `json:"execute_action_count,omitempty"`
+	ExecuteSucceededCount int   `json:"execute_succeeded_count,omitempty"`
+	ExecuteFailedCount    int   `json:"execute_failed_count,omitempty"`
+	ExecuteTimeMS         int64 `json:"execute_time_ms,omitempty"`
+	ReconcileRunCount     int   `json:"reconcile_run_count,omitempty"`
+	ReconcileEventCount   int   `json:"reconcile_event_count,omitempty"`
+	ReconcileTimeMS       int64 `json:"reconcile_time_ms,omitempty"`
+	WatchBatchCount       int   `json:"watch_batch_count,omitempty"`
+	WatchPathCount        int   `json:"watch_path_count,omitempty"`
 }
 
 type startupDriveListJSONOutput struct {
@@ -521,7 +561,7 @@ func prepareOnedriveGoBenchSubject(
 		return preparedBenchSubject{}, err
 	}
 
-	buildRoot, err := localpath.MkdirTemp(os.TempDir(), "onedrive-go-bench-*")
+	buildRoot, err := mkdirTemp(os.TempDir(), "onedrive-go-bench-*")
 	if err != nil {
 		return preparedBenchSubject{}, fmt.Errorf("create build root: %w", err)
 	}
@@ -538,7 +578,7 @@ func prepareOnedriveGoBenchSubject(
 		"./",
 	)
 	if buildErr != nil {
-		if cleanupErr := localpath.RemoveAll(buildRoot); cleanupErr != nil {
+		if cleanupErr := removeAll(buildRoot); cleanupErr != nil {
 			return preparedBenchSubject{}, fmt.Errorf("cleanup failed build root: %w", cleanupErr)
 		}
 		return preparedBenchSubject{}, fmt.Errorf(
@@ -561,7 +601,7 @@ func prepareOnedriveGoBenchSubject(
 			return runMeasuredCommand(ctx, executablePath, spec.CWD, spec.Env, args...)
 		},
 		cleanup: func() error {
-			return localpath.RemoveAll(buildRoot)
+			return removeAll(buildRoot)
 		},
 	}, nil
 }
@@ -587,12 +627,12 @@ func runStartupEmptyConfigSample(
 		Status:    BenchSampleSuccess,
 	}
 
-	runtimeRoot, err := localpath.MkdirTemp(os.TempDir(), "onedrive-go-bench-runtime-*")
+	runtimeRoot, err := mkdirTemp(os.TempDir(), "onedrive-go-bench-runtime-*")
 	if err != nil {
 		return benchFixtureFailureSample(sample, fmt.Errorf("create runtime root: %w", err))
 	}
 	defer func() {
-		if cleanupErr := localpath.RemoveAll(runtimeRoot); cleanupErr != nil && sample.Status == BenchSampleSuccess {
+		if cleanupErr := removeAll(runtimeRoot); cleanupErr != nil && sample.Status == BenchSampleSuccess {
 			sample = benchFixtureFailureSample(sample, fmt.Errorf("cleanup runtime root: %w", cleanupErr))
 		}
 	}()
@@ -602,7 +642,7 @@ func runStartupEmptyConfigSample(
 	dataHome := filepath.Join(runtimeRoot, "data")
 	cacheHome := filepath.Join(runtimeRoot, "cache")
 	for _, path := range []string{homeDir, configHome, dataHome, cacheHome} {
-		if mkdirErr := localpath.MkdirAll(path, benchResultDirPerm); mkdirErr != nil {
+		if mkdirErr := mkdirAll(path, benchResultDirPerm); mkdirErr != nil {
 			return benchFixtureFailureSample(sample, fmt.Errorf("create runtime path %s: %w", path, mkdirErr))
 		}
 	}
@@ -610,7 +650,7 @@ func runStartupEmptyConfigSample(
 	logPath := filepath.Join(runtimeRoot, "bench.log")
 	configPath := filepath.Join(runtimeRoot, "config.toml")
 	configBody := fmt.Sprintf("log_level = \"info\"\nlog_file = %q\n", logPath)
-	if writeErr := localpath.WriteFile(configPath, []byte(configBody), benchResultFilePerm); writeErr != nil {
+	if writeErr := writeFile(configPath, []byte(configBody)); writeErr != nil {
 		return benchFixtureFailureSample(sample, fmt.Errorf("write benchmark config: %w", writeErr))
 	}
 
@@ -692,8 +732,8 @@ func validateStartupEmptyConfigOutput(stdout []byte) error {
 	return nil
 }
 
-func readPerformanceSummary(logPath string, stderr []byte) (*perf.Snapshot, error) {
-	if data, err := localpath.ReadFile(logPath); err == nil {
+func readPerformanceSummary(logPath string, stderr []byte) (*benchPerfSummary, error) {
+	if data, err := readFile(logPath); err == nil {
 		if snapshot, parseErr := readPerformanceSummaryFromJSONLog(data); parseErr == nil {
 			return snapshot, nil
 		}
@@ -703,14 +743,14 @@ func readPerformanceSummary(logPath string, stderr []byte) (*perf.Snapshot, erro
 		return snapshot, nil
 	}
 
-	if _, err := localpath.ReadFile(logPath); err != nil {
+	if _, err := readFile(logPath); err != nil {
 		return nil, fmt.Errorf("read perf summary: log file unavailable and stderr summary not found: %w", err)
 	}
 
 	return nil, fmt.Errorf("read perf summary: no performance summary found in log file or stderr")
 }
 
-func readPerformanceSummaryFromJSONLog(data []byte) (*perf.Snapshot, error) {
+func readPerformanceSummaryFromJSONLog(data []byte) (*benchPerfSummary, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
@@ -723,7 +763,7 @@ func readPerformanceSummaryFromJSONLog(data []byte) (*perf.Snapshot, error) {
 			continue
 		}
 		if record.Msg == "performance summary" {
-			snapshot := record.Snapshot
+			snapshot := record.benchPerfSummary
 			return &snapshot, nil
 		}
 	}
@@ -734,7 +774,7 @@ func readPerformanceSummaryFromJSONLog(data []byte) (*perf.Snapshot, error) {
 	return nil, fmt.Errorf("performance summary not found in JSON log")
 }
 
-func readPerformanceSummaryFromTextLog(data []byte) (*perf.Snapshot, error) {
+func readPerformanceSummaryFromTextLog(data []byte) (*benchPerfSummary, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -742,7 +782,7 @@ func readPerformanceSummaryFromTextLog(data []byte) (*perf.Snapshot, error) {
 			continue
 		}
 
-		snapshot := perf.Snapshot{}
+		snapshot := benchPerfSummary{}
 		if value, ok := extractLogfmtValue(line, "duration_ms"); ok {
 			if duration, err := parseInt64Value(value); err == nil {
 				snapshot.DurationMS = duration
@@ -1000,7 +1040,7 @@ func truncateString(value string, limit int) string {
 }
 
 func writeBenchResultJSON(path string, data []byte) error {
-	if err := localpath.AtomicWrite(
+	if err := atomicWrite(
 		path,
 		data,
 		benchResultFilePerm,

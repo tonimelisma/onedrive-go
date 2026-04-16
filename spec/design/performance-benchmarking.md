@@ -49,7 +49,6 @@ The implementation should stay deliberately small:
 | --- | --- |
 | The repo already has a machine-readable timing-summary foundation for live E2E timing windows rather than only human log output. | `TestE2ETimingRecorderWritesEventsAndAggregatedSummary`, `TestE2ETimingRecorderLoadsExistingEventsAcrossProcesses` |
 | The verifier already owns machine-readable run summaries instead of forcing downstream tooling to scrape console text. | `TestRunVerifyWritesSummaryJSONOnSuccess`, `TestRunVerifyWritesSummaryJSONOnFailure` |
-| Repo-owned diagnostic scenario tooling is already an accepted pattern under `cmd/devtool` for reproducible, named capture flows. | `TestRunWatchCaptureWritesJSON`, `TestLookupWatchCaptureScenarioStepOrder` |
 | Repo-owned benchmarking now has a subject-aware `devtool bench` entrypoint with named scenarios, JSON result bundles, and deterministic summary aggregation. | `TestNewBenchCmdRequiresScenarioFlag`, `TestNewBenchCmdDefaultsSubjectToOnedriveGo`, `TestNewBenchCmdPassesFlagsThrough`, `TestRunBenchRequiresRepoRootAndScenario`, `TestLookupBenchRegistriesAreSortedAndIncludeBuiltins`, `TestRunBenchStartupEmptyConfigSucceeds` |
 | The benchmark runner now owns one canonical live representative catch-up scenario with a checked-in deterministic fixture contract, stable denominator math, and fixture-failure reporting that stays inside benchmark results. | `TestLoadBenchLiveFixturePlanIsDeterministicAndSized`, `TestLoadBenchLiveFixturePlanMutationSelectionIsStable`, `TestPrepareBenchScenarioUsesPreparedRunnerAndCleanup`, `TestLiveCatchupScenarioMissingPrerequisitesReturnsFixtureFailure` |
 
@@ -465,7 +464,7 @@ The result bundle is subject-aware and records:
 - environment metadata
 - run metadata
 - per-sample proof metrics
-- per-sample `internal/perf.Snapshot` explanation metrics when available
+- per-sample benchmark perf-summary metrics when available
 - aggregate summary statistics
 
 Per-sample proof metrics are stored in integer microseconds and bytes:
