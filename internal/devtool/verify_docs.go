@@ -11,8 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
-
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 var (
@@ -28,7 +26,7 @@ type liveIncidentDocPromotion struct {
 
 func ensureRecurringIncidentPromotedDocsResolve(repoRoot string) error {
 	liveIncidentsPath := filepath.Join(repoRoot, "spec", "reference", "live-incidents.md")
-	data, err := localpath.ReadFile(liveIncidentsPath)
+	data, err := readFile(liveIncidentsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -123,7 +121,7 @@ func validatePromotedDocLink(basePath string, target string) error {
 		resolvedPath = filepath.Clean(filepath.Join(filepath.Dir(basePath), filepath.FromSlash(pathPart)))
 	}
 
-	if _, err := localpath.Stat(resolvedPath); err != nil {
+	if _, err := stat(resolvedPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("missing target %s", resolvedPath)
 		}
@@ -147,7 +145,7 @@ func validatePromotedDocLink(basePath string, target string) error {
 }
 
 func markdownDocumentHasAnchor(path string, fragment string) (bool, error) {
-	data, err := localpath.ReadFile(path)
+	data, err := readFile(path)
 	if err != nil {
 		return false, fmt.Errorf("read target %s: %w", path, err)
 	}
@@ -204,7 +202,7 @@ func ensureGovernedDesignDocsHaveOwnershipContracts(repoRoot string) error {
 	}
 
 	for _, path := range designDocs {
-		data, readErr := localpath.ReadFile(path)
+		data, readErr := readFile(path)
 		if readErr != nil {
 			return fmt.Errorf("read %s: %w", path, readErr)
 		}
@@ -241,7 +239,7 @@ func ownershipContractBullets() []string {
 
 func ensureCrossCuttingDesignDocs(repoRoot string) error {
 	systemPath := filepath.Join(repoRoot, "spec", "design", "system.md")
-	systemData, err := localpath.ReadFile(systemPath)
+	systemData, err := readFile(systemPath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", systemPath, err)
 	}
@@ -249,7 +247,7 @@ func ensureCrossCuttingDesignDocs(repoRoot string) error {
 	systemText := string(systemData)
 	for _, name := range requiredCrossCuttingDesignDocs() {
 		path := filepath.Join(repoRoot, "spec", "design", name)
-		if _, statErr := localpath.Stat(path); statErr != nil {
+		if _, statErr := stat(path); statErr != nil {
 			return fmt.Errorf("required cross-cutting design doc missing: %s", path)
 		}
 		if !strings.Contains(systemText, name) {
@@ -313,7 +311,7 @@ func ensureGovernedBehaviorDocsHaveEvidence(repoRoot string) error {
 
 func ensureDocsContainSnippets(docKind string, checks []docSnippetCheck) error {
 	for _, check := range checks {
-		data, err := localpath.ReadFile(check.path)
+		data, err := readFile(check.path)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", check.path, err)
 		}
@@ -388,7 +386,7 @@ func loadRequirementRegistry(repoRoot string) (map[string]struct{}, error) {
 
 	registry := make(map[string]struct{})
 	for _, path := range requirementFiles {
-		data, readErr := localpath.ReadFile(path)
+		data, readErr := readFile(path)
 		if readErr != nil {
 			return nil, fmt.Errorf("read %s: %w", path, readErr)
 		}
@@ -409,7 +407,7 @@ func loadRequirementRegistry(repoRoot string) (map[string]struct{}, error) {
 }
 
 func validateRequirementReferencesInTestFile(path string, registry map[string]struct{}) ([]string, error) {
-	data, err := localpath.ReadFile(path)
+	data, err := readFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
@@ -477,7 +475,7 @@ func validateRequirementReferencesInFile(
 	registry map[string]struct{},
 	parse func(string) ([]string, error),
 ) ([]string, error) {
-	data, err := localpath.ReadFile(path)
+	data, err := readFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
@@ -585,7 +583,7 @@ func loadTestRegistry(repoRoot string) (map[string]struct{}, error) {
 			return nil
 		}
 
-		data, readErr := localpath.ReadFile(path)
+		data, readErr := readFile(path)
 		if readErr != nil {
 			return fmt.Errorf("read %s: %w", path, readErr)
 		}
@@ -620,7 +618,7 @@ func loadTestRegistry(repoRoot string) (map[string]struct{}, error) {
 }
 
 func validateEvidenceDocReferences(check evidenceDocCheck, testRegistry map[string]struct{}) ([]string, error) {
-	data, err := localpath.ReadFile(check.path)
+	data, err := readFile(check.path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", check.path, err)
 	}

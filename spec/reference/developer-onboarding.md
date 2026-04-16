@@ -49,7 +49,7 @@ The most important repo-wide idea is ownership.
   lifecycle.
 - `internal/sync` owns the single-drive sync runtime and durable sync-state
   mutation rules.
-- `internal/devtool` owns verification, worktree creation, benchmarks, state
+- `internal/devtool` owns verification, worktree creation, benchmarks, cleanup
   audit, and other repo tooling.
 
 If you remember only one sentence, remember this:
@@ -137,9 +137,7 @@ This is not optional repo furniture. `devtool` is the repo-owned way to:
 
 - run verification profiles
 - create and bootstrap worktrees
-- run watch-capture diagnostics
 - run benchmark scenarios
-- audit and repair sync state
 - inspect cleanup candidates
 
 ### FAQ
@@ -302,7 +300,7 @@ able to scan this table and place every top-level code area.
 | `internal/cli` | Cobra command tree, CLI bootstrap, output formatting, command-family workflows, and final user-facing issue rendering | You are changing any user-facing command or command wiring |
 
 | `internal/config` | TOML config loading, validation, path resolution, drive sections, and account reconciliation helpers | You are changing config semantics or lookup rules |
-| `internal/devtool` | Repo-owned verifier, benchmarks, worktree tooling, watch capture, state audit, cleanup audit | You are changing developer workflow or repo consistency policy |
+| `internal/devtool` | Repo-owned verifier, benchmarks, worktree tooling, and cleanup audit | You are changing developer workflow or repo consistency policy |
 | `internal/driveid` | Type-safe drive identity types and canonicalization | You are touching drive selectors or canonical drive identity |
 | `internal/driveops` | `SessionRuntime`, authenticated drive sessions, transfer operations, and path-convergence workflows | You are changing runtime reuse, get/put behavior, or local transfer rules |
 | `internal/errclass` | Canonical runtime failure class enum | You are changing cross-boundary failure classification |
@@ -319,7 +317,7 @@ able to scan this table and place every top-level code area.
 | `internal/synccontrol` | JSON-over-HTTP Unix-socket protocol shared by CLI and multisync owner | You are changing daemon/control-socket communication |
 | `internal/synctest` | Shared sync-package test helpers | You are writing sync-adjacent tests |
 | `internal/synctree` | Rooted filesystem capability for sync-runtime operations under one sync root | You are changing sync-local filesystem interaction |
-| `internal/syncverify` | Re-hash local files against the persisted baseline | You are changing baseline verification or recover/state-audit behavior |
+| `internal/syncverify` | Re-hash local files against the persisted baseline | You are changing baseline verification or recover behavior |
 | `internal/tokenfile` | OAuth token file I/O | You are changing token persistence semantics |
 
 ### 5.3 Test and support code
@@ -547,8 +545,6 @@ mistake it for optional contributor convenience.
 - `verify`: repo-owned verification profiles
 - `worktree`: worktree creation/bootstrap rooted at `origin/main`; callers must fetch first
 - `bench`: benchmark scenarios and result bundles
-- `state-audit`: sync-state inspection and safe repair surfaces
-- `watch-capture`: raw fsnotify capture tooling
 - `cleanup-audit`: read-only git cleanup classification
 
 The file-family split inside `internal/devtool` is also worth knowing:
@@ -558,8 +554,6 @@ The file-family split inside `internal/devtool` is also worth knowing:
 | `verify.go`, `verify_docs.go`, `verify_e2e.go`, `verify_repo_checks.go`, `verify_stress.go`, `verify_summary.go` | Verification profile orchestration, docs checks, repo checks, E2E orchestration, stress profiles, summaries |
 | `worktree.go` | Worktree creation and bootstrap rooted at `origin/main`; callers must fetch first |
 | `bench.go`, `bench_live.go` | Benchmark scenarios, result recording, and live benchmark runs against real accounts |
-| `state_audit.go` | Sync-state inspection and safe repair entrypoints |
-| `watch_capture.go` | Raw watch-event capture tooling |
 | `cleanup_audit.go` | Read-only git cleanup classification |
 | `runner.go` | Shared subprocess execution helpers for repo tooling |
 

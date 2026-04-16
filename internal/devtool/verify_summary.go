@@ -6,8 +6,6 @@ import (
 	"io"
 	"strings"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 func newVerifySummaryCollector(profile VerifyProfile, stdout io.Writer, summaryJSONPath string, e2eLogDir string) *verifySummaryCollector {
@@ -119,7 +117,7 @@ func (c *verifySummaryCollector) finalize(runErr error) error {
 		return fmt.Errorf("marshal verify summary: %w", err)
 	}
 	data = append(data, '\n')
-	if err := localpath.AtomicWrite(
+	if err := atomicWrite(
 		c.summaryJSONPath,
 		data,
 		verifySummaryFilePerm,

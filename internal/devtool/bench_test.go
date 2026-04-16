@@ -10,8 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // Validates: R-6.10.14
@@ -111,7 +109,7 @@ func TestWriteBenchResultJSONWritesExactPayload(t *testing.T) {
 
 	require.NoError(t, writeBenchResultJSON(path, payload))
 
-	data, err := localpath.ReadFile(path)
+	data, err := readFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, payload, data)
 }

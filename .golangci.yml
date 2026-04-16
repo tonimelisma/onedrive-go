@@ -259,6 +259,10 @@ linters:
         linters:
           - forbidigo
         text: use fsroot, synctree, or localpath filesystem boundaries instead of raw os\.\* calls
+      - path: internal/devtool/
+        linters:
+          - forbidigo
+        text: use fsroot, synctree, or localpath filesystem boundaries instead of raw os\.\* calls
       - path-except: _test\.go
         linters:
           - forbidigo
@@ -266,3 +270,6 @@ linters:
       - path: internal/(fsroot|synctree|localpath)/
         linters:
           - forbidigo
+      - path: internal/devtool/(fsutil|live_env)\.go
+        linters:
+          - gosec

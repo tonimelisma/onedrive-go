@@ -16,9 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
 const (
@@ -121,7 +118,7 @@ func lookupSyncPartialLocalCatchup100MScenario() (benchScenarioDefinition, error
 			repoRoot string,
 			_ preparedBenchSubject,
 		) (preparedBenchScenario, error) {
-			workRoot, err := localpath.MkdirTemp(os.TempDir(), "onedrive-go-bench-live-*")
+			workRoot, err := mkdirTemp(os.TempDir(), "onedrive-go-bench-live-*")
 			if err != nil {
 				return preparedBenchScenario{}, fmt.Errorf("create live benchmark work root: %w", err)
 			}
@@ -135,7 +132,7 @@ func lookupSyncPartialLocalCatchup100MScenario() (benchScenarioDefinition, error
 			return preparedBenchScenario{
 				run: state.runSample,
 				cleanup: func() error {
-					return localpath.RemoveAll(workRoot)
+					return removeAll(workRoot)
 				},
 			}, nil
 		},
@@ -395,7 +392,7 @@ func (s *benchLiveScenarioState) runSample(
 }
 
 func finalizeBenchLiveSampleRuntime(runtimeRoot string, sample benchSample) benchSample {
-	if cleanupErr := localpath.RemoveAll(runtimeRoot); cleanupErr != nil && sample.Status == BenchSampleSuccess {
+	if cleanupErr := removeAll(runtimeRoot); cleanupErr != nil && sample.Status == BenchSampleSuccess {
 		return benchFixtureFailureSample(sample, fmt.Errorf("cleanup sample runtime: %w", cleanupErr))
 	}
 
@@ -477,7 +474,7 @@ func (s *benchLiveScenarioState) ensurePrepared(ctx context.Context, subject pre
 }
 
 func (s *benchLiveScenarioState) prepareRemoteFixture(ctx context.Context, subject preparedBenchSubject) error {
-	liveConfig, err := testutil.LoadLiveTestConfig(s.repoRoot)
+	liveConfig, err := loadBenchLiveConfig(s.repoRoot)
 	if err != nil {
 		return fmt.Errorf("load live benchmark config: %w", err)
 	}
@@ -492,7 +489,7 @@ func (s *benchLiveScenarioState) prepareRemoteFixture(ctx context.Context, subje
 	}
 
 	seedSyncDir := filepath.Join(s.workRoot, "seed-sync-root")
-	mkdirErr := localpath.MkdirAll(seedSyncDir, benchLiveFixtureDirPerm)
+	mkdirErr := mkdirAll(seedSyncDir, benchLiveFixtureDirPerm)
 	if mkdirErr != nil {
 		return fmt.Errorf("create seed sync root: %w", mkdirErr)
 	}
@@ -536,7 +533,7 @@ func (s *benchLiveScenarioState) prepareRemoteFixture(ctx context.Context, subje
 }
 
 func (s *benchLiveScenarioState) newSampleRuntime() (benchLiveCommandRuntime, error) {
-	liveConfig, err := testutil.LoadLiveTestConfig(s.repoRoot)
+	liveConfig, err := loadBenchLiveConfig(s.repoRoot)
 	if err != nil {
 		return benchLiveCommandRuntime{}, fmt.Errorf("load live benchmark config: %w", err)
 	}
@@ -575,7 +572,7 @@ func validateBenchAllowlist(driveID string) error {
 
 func locateBenchCredentialDir(repoRoot string) (string, error) {
 	dir := filepath.Join(repoRoot, ".testdata")
-	if _, err := localpath.Stat(dir); err != nil {
+	if _, err := stat(dir); err != nil {
 		return "", fmt.Errorf("live benchmark requires %s (run scripts/bootstrap-test-credentials.sh first)", dir)
 	}
 
@@ -588,7 +585,7 @@ func createBenchLiveRuntime(
 	driveID string,
 	syncDir string,
 ) (benchLiveCommandRuntime, error) {
-	runtimeRoot, err := localpath.MkdirTemp(workRoot, "runtime-*")
+	runtimeRoot, err := mkdirTemp(workRoot, "runtime-*")
 	if err != nil {
 		return benchLiveCommandRuntime{}, fmt.Errorf("create benchmark runtime root: %w", err)
 	}
@@ -601,13 +598,13 @@ func createBenchLiveRuntime(
 	dataHome := filepath.Join(runtimeRoot, "data")
 	cacheHome := filepath.Join(runtimeRoot, "cache")
 	for _, dir := range []string{homeDir, configHome, dataHome, cacheHome, syncDir} {
-		if err := localpath.MkdirAll(dir, benchLiveFixtureDirPerm); err != nil {
+		if err := mkdirAll(dir, benchLiveFixtureDirPerm); err != nil {
 			return benchLiveCommandRuntime{}, fmt.Errorf("create benchmark runtime path %s: %w", dir, err)
 		}
 	}
 
 	dataDir := filepath.Join(dataHome, "onedrive-go")
-	if err := localpath.MkdirAll(dataDir, benchLiveFixtureDirPerm); err != nil {
+	if err := mkdirAll(dataDir, benchLiveFixtureDirPerm); err != nil {
 		return benchLiveCommandRuntime{}, fmt.Errorf("create benchmark data dir: %w", err)
 	}
 	if err := copyBenchCredentials(credentialDir, dataDir, driveID); err != nil {
@@ -623,7 +620,7 @@ func createBenchLiveRuntime(
 		driveID,
 		syncDir,
 	)
-	if err := localpath.WriteFile(configPath, []byte(configBody), benchResultFilePerm); err != nil {
+	if err := writeFile(configPath, []byte(configBody)); err != nil {
 		return benchLiveCommandRuntime{}, fmt.Errorf("write benchmark config: %w", err)
 	}
 
@@ -691,11 +688,11 @@ func benchTokenFileName(driveID string) (string, error) {
 }
 
 func copyBenchFile(src string, dst string) error {
-	data, err := localpath.ReadFile(src)
+	data, err := readFile(src)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", src, err)
 	}
-	if err := localpath.WriteFile(dst, data, benchLiveFilePerm); err != nil {
+	if err := writeFile(dst, data); err != nil {
 		return fmt.Errorf("write %s: %w", dst, err)
 	}
 
@@ -703,13 +700,13 @@ func copyBenchFile(src string, dst string) error {
 }
 
 func materializeBenchLiveFixture(scopeRoot string, files []benchLiveFileEntry) error {
-	if err := localpath.MkdirAll(scopeRoot, benchLiveFixtureDirPerm); err != nil {
+	if err := mkdirAll(scopeRoot, benchLiveFixtureDirPerm); err != nil {
 		return fmt.Errorf("create fixture scope root: %w", err)
 	}
 
 	for _, entry := range files {
 		targetPath := filepath.Join(scopeRoot, filepath.FromSlash(entry.RelativePath))
-		if err := localpath.MkdirAll(filepath.Dir(targetPath), benchLiveFixtureDirPerm); err != nil {
+		if err := mkdirAll(filepath.Dir(targetPath), benchLiveFixtureDirPerm); err != nil {
 			return fmt.Errorf("create fixture parent for %s: %w", entry.RelativePath, err)
 		}
 		if err := writeBenchLiveFile(targetPath, entry); err != nil {
@@ -721,7 +718,7 @@ func materializeBenchLiveFixture(scopeRoot string, files []benchLiveFileEntry) e
 }
 
 func writeBenchLiveFile(targetPath string, entry benchLiveFileEntry) (err error) {
-	file, err := localpath.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, benchLiveFilePerm)
+	file, err := openFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, benchLiveFilePerm)
 	if err != nil {
 		return fmt.Errorf("open fixture file %s: %w", entry.RelativePath, err)
 	}
@@ -909,7 +906,7 @@ func benchPollBackoff(attempt int) time.Duration {
 }
 
 func resetBenchLogFile(logPath string) error {
-	if err := localpath.WriteFile(logPath, []byte{}, benchResultFilePerm); err != nil {
+	if err := writeFile(logPath, []byte{}); err != nil {
 		return fmt.Errorf("reset benchmark log file: %w", err)
 	}
 
@@ -919,7 +916,7 @@ func resetBenchLogFile(logPath string) error {
 func perturbBenchLiveFixture(scopeRoot string, mutations benchLiveMutationPlan) error {
 	for _, entry := range mutations.Deletes {
 		targetPath := filepath.Join(scopeRoot, filepath.FromSlash(entry.File.RelativePath))
-		if err := localpath.Remove(targetPath); err != nil {
+		if err := remove(targetPath); err != nil {
 			return fmt.Errorf("delete %s: %w", entry.File.RelativePath, err)
 		}
 	}
@@ -935,7 +932,7 @@ func perturbBenchLiveFixture(scopeRoot string, mutations benchLiveMutationPlan) 
 }
 
 func truncateBenchLiveFile(path string, size int64) (err error) {
-	file, err := localpath.OpenFile(path, os.O_WRONLY, benchLiveFilePerm)
+	file, err := openFile(path, os.O_WRONLY, benchLiveFilePerm)
 	if err != nil {
 		return fmt.Errorf("open %s for truncate: %w", path, err)
 	}
@@ -1061,7 +1058,7 @@ func assertBenchLiveFixtureSeen(
 }
 
 func verifyBenchLiveFile(path string, entry benchLiveFileEntry) (err error) {
-	file, err := localpath.Open(path)
+	file, err := open(path)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", entry.RelativePath, err)
 	}

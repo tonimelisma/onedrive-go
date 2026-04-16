@@ -13,8 +13,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 type recordedCommand struct {
@@ -127,7 +125,7 @@ func (f *fakeRunner) CombinedOutput(
 func readVerifySummaryFile(t *testing.T, path string, summary *VerifySummary) {
 	t.Helper()
 
-	data, err := localpath.ReadFile(path)
+	data, err := readFile(path)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, summary))
 }

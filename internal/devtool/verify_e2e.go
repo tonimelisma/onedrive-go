@@ -15,8 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 func fullE2EParallelMiscBucket() fullE2EBucketSpec {
@@ -235,7 +233,7 @@ func resetE2EArtifacts(logDir string) error {
 		e2eQuirkSummaryFileName,
 	} {
 		path := filepath.Join(logDir, name)
-		if err := localpath.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}
 	}
@@ -249,7 +247,7 @@ func readE2EQuirkEventCount(logDir string) (int, error) {
 	}
 
 	summaryPath := filepath.Join(logDir, e2eQuirkSummaryFileName)
-	data, err := localpath.ReadFile(summaryPath)
+	data, err := readFile(summaryPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil
@@ -269,7 +267,7 @@ func readE2EQuirkEventCount(logDir string) (int, error) {
 }
 
 func discoverTaggedE2ETests(e2eDir string, buildExpression string) ([]string, error) {
-	entries, err := localpath.ReadDir(e2eDir)
+	entries, err := readDir(e2eDir)
 	if err != nil {
 		return nil, fmt.Errorf("read e2e dir: %w", err)
 	}
@@ -282,7 +280,7 @@ func discoverTaggedE2ETests(e2eDir string, buildExpression string) ([]string, er
 		}
 
 		path := filepath.Join(e2eDir, entry.Name())
-		data, err := localpath.ReadFile(path)
+		data, err := readFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}

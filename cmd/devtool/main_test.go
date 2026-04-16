@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -150,73 +149,6 @@ func TestNewBenchCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, 2, got.Warmup)
 	assert.True(t, got.JSON)
 	assert.Equal(t, "/tmp/bench-result.json", got.ResultJSONPath)
-}
-
-// Validates: R-6.2.1
-func TestNewStateAuditCmdRequiresDBFlag(t *testing.T) {
-	t.Parallel()
-
-	cmd := newStateAuditCmd(func(context.Context, devtool.StateAuditOptions) error { return nil })
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "required flag")
-}
-
-// Validates: R-6.2.1
-func TestNewStateAuditCmdPassesFlagsThrough(t *testing.T) {
-	t.Parallel()
-
-	var got devtool.StateAuditOptions
-
-	cmd := newStateAuditCmd(func(_ context.Context, opts devtool.StateAuditOptions) error {
-		got = opts
-		return nil
-	})
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"--db", "/tmp/state.db", "--json", "--repair-safe"})
-
-	require.NoError(t, cmd.Execute())
-	assert.Equal(t, "/tmp/state.db", got.DBPath)
-	assert.True(t, got.JSON)
-	assert.True(t, got.RepairSafe)
-}
-
-// Validates: R-6.2.1
-func TestNewWatchCaptureCmdRequiresScenarioFlag(t *testing.T) {
-	t.Parallel()
-
-	cmd := newWatchCaptureCmd(func(context.Context, devtool.WatchCaptureOptions) error { return nil })
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "required flag")
-}
-
-// Validates: R-6.2.1
-func TestNewWatchCaptureCmdPassesFlagsThrough(t *testing.T) {
-	t.Parallel()
-
-	var got devtool.WatchCaptureOptions
-
-	cmd := newWatchCaptureCmd(func(_ context.Context, opts devtool.WatchCaptureOptions) error {
-		got = opts
-		return nil
-	})
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"--scenario", "marker_create", "--json", "--repeat", "3", "--settle", "750ms"})
-
-	require.NoError(t, cmd.Execute())
-	assert.Equal(t, "marker_create", got.Scenario)
-	assert.True(t, got.JSON)
-	assert.Equal(t, 3, got.Repeat)
-	assert.Equal(t, 750*time.Millisecond, got.Settle)
 }
 
 // Validates: R-6.10.11
@@ -362,7 +294,7 @@ func TestNewRootCmd(t *testing.T) {
 	cmd := newRootCmd()
 	require.NotNil(t, cmd)
 	assert.Equal(t, "devtool", cmd.Use)
-	assert.Len(t, cmd.Commands(), 6)
+	assert.Len(t, cmd.Commands(), 4)
 }
 
 // Validates: R-6.2.1
@@ -416,18 +348,6 @@ func TestDefaultAddWorktreeWrapsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "add worktree")
 }
 
-// Validates: R-6.2.1
-func TestDefaultStateAuditWrapsError(t *testing.T) {
-	t.Parallel()
-
-	err := defaultStateAudit(context.Background(), devtool.StateAuditOptions{
-		DBPath: filepath.Join(t.TempDir(), "missing.db"),
-		Stdout: io.Discard,
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "run state audit")
-}
-
 // Validates: R-6.10.11
 func TestDefaultCleanupAuditWrapsError(t *testing.T) {
 	t.Parallel()
@@ -439,18 +359,6 @@ func TestDefaultCleanupAuditWrapsError(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "run cleanup audit")
-}
-
-// Validates: R-6.2.1
-func TestDefaultWatchCaptureWrapsError(t *testing.T) {
-	t.Parallel()
-
-	err := defaultWatchCapture(context.Background(), devtool.WatchCaptureOptions{
-		Scenario: "unknown-scenario",
-		Stdout:   io.Discard,
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "run watch capture")
 }
 
 // Validates: R-6.2.1
