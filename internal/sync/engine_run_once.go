@@ -47,7 +47,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	// The pending delta token is returned but NOT committed yet — it is
 	// deferred until after the planner approves the changes (step 6).
 	observeStart := e.nowFunc()
-	changes, pendingDeltaTokens, err := runner.observeChanges(ctx, nil, bl, opts.DryRun, opts.FullReconcile)
+	changes, pendingCursorCommit, err := runner.observeChanges(ctx, nil, bl, opts.DryRun, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 
 	// Step 5: Early return if no changes.
 	if len(changes) == 0 {
-		if commitErr := runner.commitDeferredDeltaTokens(ctx, pendingDeltaTokens); commitErr != nil {
+		if commitErr := runner.commitPendingPrimaryCursor(ctx, pendingCursorCommit); commitErr != nil {
 			return nil, commitErr
 		}
 		return e.completeRunOnceWithoutChanges(ctx, start, mode, opts), nil
@@ -77,7 +77,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	e.collector().RecordPlan(len(plan.Actions), e.since(planStart))
 
 	// Planner approved — commit the deferred delta token now.
-	if err := runner.commitDeferredDeltaTokens(ctx, pendingDeltaTokens); err != nil {
+	if err := runner.commitPendingPrimaryCursor(ctx, pendingCursorCommit); err != nil {
 		return nil, err
 	}
 
@@ -104,14 +104,15 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 
 	runner.postSyncHousekeeping()
 
-	// Persist sync metadata for status command queries.
-	if metaErr := e.baseline.WriteSyncMetadata(ctx, &SyncMetadata{
-		Duration:  report.Duration,
-		Succeeded: report.Succeeded,
-		Failed:    report.Failed,
-		Errors:    report.Errors,
+	// Persist one-shot status for status command queries.
+	if metaErr := e.baseline.WriteSyncRunStatus(ctx, &SyncRunReport{
+		CompletedAt: e.nowFunc(),
+		Duration:    report.Duration,
+		Succeeded:   report.Succeeded,
+		Failed:      report.Failed,
+		Errors:      report.Errors,
 	}); metaErr != nil {
-		e.logger.Warn("failed to write sync metadata", slog.String("error", metaErr.Error()))
+		e.logger.Warn("failed to write one-shot sync status", slog.String("error", metaErr.Error()))
 	}
 
 	return report, nil
@@ -147,14 +148,15 @@ func (e *Engine) completeRunOnceWithoutChanges(
 		DryRun:   opts.DryRun,
 		Duration: e.since(start),
 	}
-	// Persist sync metadata even when no changes detected.
-	if metaErr := e.baseline.WriteSyncMetadata(ctx, &SyncMetadata{
-		Duration:  report.Duration,
-		Succeeded: report.Succeeded,
-		Failed:    report.Failed,
-		Errors:    report.Errors,
+	// Persist one-shot status even when no changes are detected.
+	if metaErr := e.baseline.WriteSyncRunStatus(ctx, &SyncRunReport{
+		CompletedAt: e.nowFunc(),
+		Duration:    report.Duration,
+		Succeeded:   report.Succeeded,
+		Failed:      report.Failed,
+		Errors:      report.Errors,
 	}); metaErr != nil {
-		e.logger.Warn("failed to write sync metadata", slog.String("error", metaErr.Error()))
+		e.logger.Warn("failed to write one-shot sync status", slog.String("error", metaErr.Error()))
 	}
 
 	return report
@@ -429,9 +431,9 @@ func (flow *engineFlow) observeChanges(
 	watch *watchRuntime,
 	bl *Baseline,
 	dryRun, fullReconcile bool,
-) ([]PathChanges, []deferredDeltaToken, error) {
+) ([]PathChanges, *pendingPrimaryCursorCommit, error) {
 	plan := flow.buildPrimaryRootObservationPlan(fullReconcile)
-	remoteEvents, pendingDeltaTokens, err := flow.observeRemoteChanges(
+	remoteEvents, pendingCursorCommit, err := flow.observeRemoteChanges(
 		ctx, bl, dryRun, plan,
 	)
 	if err != nil {
@@ -460,7 +462,7 @@ func (flow *engineFlow) observeChanges(
 	}
 	buf.AddAll(remoteDriftEvents)
 
-	return buf.FlushImmediate(), pendingDeltaTokens, nil
+	return buf.FlushImmediate(), pendingCursorCommit, nil
 }
 
 func (flow *engineFlow) observeRemoteChanges(
@@ -468,7 +470,7 @@ func (flow *engineFlow) observeRemoteChanges(
 	bl *Baseline,
 	dryRun bool,
 	plan primaryRootObservationPlan,
-) ([]ChangeEvent, []deferredDeltaToken, error) {
+) ([]ChangeEvent, *pendingPrimaryCursorCommit, error) {
 	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, plan)
 	if err != nil {
 		return nil, nil, err
@@ -476,7 +478,7 @@ func (flow *engineFlow) observeRemoteChanges(
 
 	// Dry-run previews must never advance remote observation cursors.
 	if dryRun {
-		fetchResult.deferred = nil
+		fetchResult.pending = nil
 	}
 
 	projectedRemote := projectRemoteObservations(flow.engine.logger, fetchResult.events)
@@ -488,7 +490,7 @@ func (flow *engineFlow) observeRemoteChanges(
 		return nil, nil, err
 	}
 
-	return projectedRemote.emitted, fetchResult.deferred, nil
+	return projectedRemote.emitted, fetchResult.pending, nil
 }
 
 func (flow *engineFlow) fetchRemoteChanges(
@@ -641,68 +643,31 @@ func remoteMirrorDiffers(entry *BaselineEntry, row *RemoteStateRow) bool {
 	return entry.RemoteMtime != row.Mtime
 }
 
-// observeAndCommitRemote wraps observeRemote to persist observations
-// and return the pending delta token for deferred commitment.
-//
-// Observations (remote_state rows) are committed immediately so the baseline
-// reflects the current remote state. The delta token is NOT committed here —
-// it is returned to the caller, who must commit it only after the planner
-// approves the changes: if the planner rejects the plan, the token stays at
-// its old position and the next sync replays the same delta window.
-//
-// When delta returns 0 events, the token is NOT advanced. The old token
-// still covers the same window — replaying it costs nothing (O(1)). But if
-// a deletion was still propagating to the Graph change log, advancing would
-// permanently skip it. Deletions are delivered exactly once in a narrow
-// window (ci_issues.md §20).
-func (flow *engineFlow) observeAndCommitRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
-	eng := flow.engine
-
-	events, deltaToken, err := flow.observeRemote(ctx, bl)
-	if err != nil {
-		return nil, "", err
+// commitPendingPrimaryCursor advances the primary observation cursor after the
+// planner approves the changes. Full reconciliations also persist the restart-
+// safe full-remote cadence timestamp here.
+func (flow *engineFlow) commitPendingPrimaryCursor(
+	ctx context.Context,
+	pending *pendingPrimaryCursorCommit,
+) error {
+	if pending == nil || pending.token == "" {
+		return nil
 	}
 
-	// Skip token advancement when no events were returned. The old token
-	// replays the same empty window at zero cost, but avoids advancing
-	// past deletions still propagating through the Graph change log.
-	if len(events) == 0 {
-		eng.logger.Debug("delta returned 0 events, skipping token advancement")
-		return events, "", nil
+	if err := flow.engine.baseline.CommitObservationCursor(
+		ctx,
+		driveid.New(pending.driveID),
+		pending.token,
+	); err != nil {
+		return fmt.Errorf("sync: committing primary observation cursor for root %q: %w", pending.rootID, err)
 	}
-
-	// Commit observations WITHOUT the delta token. The token is deferred
-	// until after the planner approves the changes.
-	if commitErr := flow.commitObservedRemote(ctx, events, ""); commitErr != nil {
-		return nil, "", commitErr
-	}
-
-	return events, deltaToken, nil
-}
-
-// commitDeferredDeltaTokens advances one or more delta tokens after the
-// planner approves the changes. No-op when the slice is empty.
-func (flow *engineFlow) commitDeferredDeltaTokens(ctx context.Context, tokens []deferredDeltaToken) error {
-	for i := range tokens {
-		if tokens[i].token == "" {
-			continue
-		}
-
-		if err := flow.engine.baseline.CommitObservationCursor(
+	if pending.markFullRemoteReconcile {
+		if err := flow.engine.baseline.MarkFullRemoteReconcile(
 			ctx,
-			driveid.New(tokens[i].driveID),
-			tokens[i].token,
+			driveid.New(pending.driveID),
+			flow.engine.nowFunc(),
 		); err != nil {
-			return fmt.Errorf("sync: committing deferred delta token for root %q: %w", tokens[i].rootID, err)
-		}
-		if tokens[i].markFullRemoteReconcile {
-			if err := flow.engine.baseline.MarkFullRemoteReconcile(
-				ctx,
-				driveid.New(tokens[i].driveID),
-				flow.engine.nowFunc(),
-			); err != nil {
-				return fmt.Errorf("sync: marking full remote reconcile for root %q: %w", tokens[i].rootID, err)
-			}
+			return fmt.Errorf("sync: marking full remote reconcile for root %q: %w", pending.rootID, err)
 		}
 	}
 
@@ -751,23 +716,6 @@ func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]
 	)
 
 	return events, token, nil
-}
-
-// observeAndCommitRemoteFull wraps observeRemoteFull to persist observations
-// and return the pending delta token for deferred commitment (same deferral
-// pattern as observeAndCommitRemote — see its doc comment for rationale).
-func (flow *engineFlow) observeAndCommitRemoteFull(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
-	events, deltaToken, err := flow.observeRemoteFull(ctx, bl)
-	if err != nil {
-		return nil, "", err
-	}
-
-	// Commit observations without the delta token — token deferred to caller.
-	if commitErr := flow.commitObservedRemote(ctx, events, ""); commitErr != nil {
-		return nil, "", commitErr
-	}
-
-	return events, deltaToken, nil
 }
 
 // resolveSafetyConfig returns the planner safety settings for a run-once pass.

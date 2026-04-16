@@ -10,26 +10,24 @@ import (
 )
 
 const (
-	sqlReadObservationState = `SELECT configured_drive_id, cursor, updated_at, last_full_remote_reconcile_at
+	sqlReadObservationState = `SELECT configured_drive_id, cursor, last_full_remote_reconcile_at
 		FROM observation_state WHERE singleton_id = 1`
 	sqlEnsureObservationStateRow = `INSERT INTO observation_state
-		(singleton_id, configured_drive_id, cursor, updated_at, last_full_remote_reconcile_at)
-		VALUES (1, '', '', 0, 0)
+		(singleton_id, configured_drive_id, cursor, last_full_remote_reconcile_at)
+		VALUES (1, '', '', 0)
 		ON CONFLICT(singleton_id) DO NOTHING`
 	sqlUpsertObservationState = `INSERT INTO observation_state
-		(singleton_id, configured_drive_id, cursor, updated_at, last_full_remote_reconcile_at)
-		VALUES (1, ?, ?, ?, ?)
+		(singleton_id, configured_drive_id, cursor, last_full_remote_reconcile_at)
+		VALUES (1, ?, ?, ?)
 		ON CONFLICT(singleton_id) DO UPDATE SET
 			configured_drive_id = excluded.configured_drive_id,
 			cursor = excluded.cursor,
-			updated_at = excluded.updated_at,
 			last_full_remote_reconcile_at = excluded.last_full_remote_reconcile_at`
 )
 
 type ObservationState struct {
 	ConfiguredDriveID         driveid.ID
 	Cursor                    string
-	UpdatedAt                 int64
 	LastFullRemoteReconcileAt int64
 }
 
@@ -99,7 +97,6 @@ func (m *SyncStore) ReadObservationState(ctx context.Context) (*ObservationState
 	if err := m.db.QueryRowContext(ctx, sqlReadObservationState).Scan(
 		&configuredDriveID,
 		&state.Cursor,
-		&state.UpdatedAt,
 		&state.LastFullRemoteReconcileAt,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
@@ -135,7 +132,6 @@ func (m *SyncStore) CommitObservationCursor(
 	}
 
 	state.Cursor = cursor
-	state.UpdatedAt = m.nowFunc().UnixNano()
 	if writeErr := m.writeObservationStateTx(ctx, tx, state); writeErr != nil {
 		return writeErr
 	}
@@ -153,12 +149,10 @@ func (m *SyncStore) ClearObservationCursor(ctx context.Context) error {
 		return err
 	}
 	state.Cursor = ""
-	state.UpdatedAt = 0
 
 	if _, execErr := m.db.ExecContext(ctx, sqlUpsertObservationState,
 		state.ConfiguredDriveID.String(),
 		state.Cursor,
-		state.UpdatedAt,
 		state.LastFullRemoteReconcileAt,
 	); execErr != nil {
 		return fmt.Errorf("sync: clearing observation cursor: %w", execErr)
@@ -234,7 +228,6 @@ func (m *SyncStore) readObservationStateTx(
 	if err := tx.QueryRowContext(ctx, sqlReadObservationState).Scan(
 		&configuredDriveID,
 		&state.Cursor,
-		&state.UpdatedAt,
 		&state.LastFullRemoteReconcileAt,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
@@ -282,7 +275,6 @@ func (m *SyncStore) writeObservationStateTx(
 	if _, err := tx.ExecContext(ctx, sqlUpsertObservationState,
 		state.ConfiguredDriveID.String(),
 		state.Cursor,
-		state.UpdatedAt,
 		state.LastFullRemoteReconcileAt,
 	); err != nil {
 		return fmt.Errorf("sync: writing observation_state: %w", err)

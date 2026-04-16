@@ -29,13 +29,13 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 
 	err := db.QueryRowContext(t.Context(),
 		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path, observed_at
+			previous_path
 		FROM remote_state WHERE item_id = ?`,
 		itemID,
 	).Scan(
 		&row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
-		&prevPath, &row.ObservedAt,
+		&prevPath,
 	)
 	if err == sql.ErrNoRows {
 		return nil

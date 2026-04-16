@@ -1,10 +1,11 @@
-// Package sync persists sync baseline, observation, failure, scope-block, and metadata state.
+// Package sync persists sync baseline, observation, failure, scope-block, and
+// run-status state.
 //
 // Contents:
 //   - ResetFailure:             reset single failed path
 //   - ResetAllFailures:         reset all failed rows
-//   - WriteSyncMetadata:        persist sync report after RunOnce
-//   - ReadSyncMetadata:         retrieve all sync metadata key-value pairs
+//   - WriteSyncRunStatus:       persist one-shot status after RunOnce
+//   - ReadSyncRunStatus:        retrieve the typed one-shot status row
 //   - ReleaseScope:             atomic scope release + failure unblock
 //   - DiscardScope:             atomic scope discard + failure delete
 //   - BaselineEntryCount:       count of entries in baseline table
@@ -59,133 +60,118 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 	return nil
 }
 
-// DropLegacyRemoteBlockedScope removes old persisted remote-write authority
-// rows while leaving held failures intact. New code derives the runtime scope
-// entirely from the held rows.
-func (m *SyncStore) DropLegacyRemoteBlockedScope(
+// DeleteRemotePermissionScopeAuthorities removes invalid persisted
+// `perm:remote:*` scope rows. Remote permission scopes are rebuilt from held
+// failures at startup and should not survive in `scope_blocks` or boundary
+// rows on their own.
+func (m *SyncStore) DeleteRemotePermissionScopeAuthorities(
 	ctx context.Context,
 	scopeKey ScopeKey,
 ) (err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
-		return fmt.Errorf("sync: begin remote legacy cleanup tx for %s: %w", scopeKey.String(), err)
+		return fmt.Errorf("sync: begin remote permission scope cleanup tx for %s: %w", scopeKey.String(), err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback remote legacy cleanup tx for %s", scopeKey.String()))
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback remote permission scope cleanup tx for %s", scopeKey.String()))
 	}()
 
 	if _, execErr := tx.ExecContext(ctx,
 		`DELETE FROM scope_blocks WHERE scope_key = ?`, scopeKey.String(),
 	); execErr != nil {
-		return fmt.Errorf("sync: deleting legacy remote scope block %s: %w", scopeKey.String(), execErr)
+		return fmt.Errorf("sync: deleting remote permission scope block %s: %w", scopeKey.String(), execErr)
 	}
 
 	if _, execErr := tx.ExecContext(ctx,
 		`DELETE FROM sync_failures WHERE scope_key = ? AND failure_role = ?`,
 		scopeKey.String(), FailureRoleBoundary,
 	); execErr != nil {
-		return fmt.Errorf("sync: deleting legacy remote scope boundary %s: %w", scopeKey.String(), execErr)
+		return fmt.Errorf("sync: deleting remote permission scope boundary %s: %w", scopeKey.String(), execErr)
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing remote legacy cleanup for %s: %w", scopeKey.String(), err)
+		return fmt.Errorf("sync: committing remote permission scope cleanup for %s: %w", scopeKey.String(), err)
 	}
 
 	return nil
 }
 
-// WriteSyncMetadata persists sync metadata after a completed RunOnce pass.
-// Keys: last_sync_time, last_sync_duration_ms, last_sync_error,
-// last_sync_succeeded, last_sync_failed.
-func (m *SyncStore) WriteSyncMetadata(ctx context.Context, report *SyncMetadata) (err error) {
-	now := m.nowFunc().UTC().Format(time.RFC3339)
-	durationMS := fmt.Sprintf("%d", report.Duration.Milliseconds())
-	succeeded := fmt.Sprintf("%d", report.Succeeded)
-	failed := fmt.Sprintf("%d", report.Failed)
+const sqlEnsureRunStatusRow = `INSERT INTO run_status
+	(singleton_id, last_completed_at, last_duration_ms, last_succeeded_count, last_failed_count, last_error)
+	VALUES (1, 0, 0, 0, 0, '')
+	ON CONFLICT(singleton_id) DO NOTHING`
 
-	syncErr := ""
-	if len(report.Errors) > 0 {
-		syncErr = report.Errors[0].Error()
-	}
-
-	pairs := [][2]string{
-		{"last_sync_time", now},
-		{"last_sync_duration_ms", durationMS},
-		{"last_sync_error", syncErr},
-		{"last_sync_succeeded", succeeded},
-		{"last_sync_failed", failed},
-	}
-
+// WriteSyncRunStatus persists the typed one-shot status row after a completed
+// RunOnce pass.
+func (m *SyncStore) WriteSyncRunStatus(ctx context.Context, report *SyncRunReport) (err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
-		return fmt.Errorf("sync metadata begin tx: %w", err)
+		return fmt.Errorf("sync: begin run-status tx: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync metadata rollback")
+		err = finalizeTxRollback(err, tx, "sync: rollback run-status tx")
 	}()
 
-	const upsertSQL = `INSERT INTO sync_metadata (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+	if _, execErr := tx.ExecContext(ctx, sqlEnsureRunStatusRow); execErr != nil {
+		return fmt.Errorf("sync: ensuring run_status row: %w", execErr)
+	}
 
-	for _, kv := range pairs {
-		if _, execErr := tx.ExecContext(ctx, upsertSQL, kv[0], kv[1]); execErr != nil {
-			return fmt.Errorf("sync metadata upsert %s: %w", kv[0], execErr)
-		}
+	lastError := ""
+	if len(report.Errors) > 0 {
+		lastError = report.Errors[0].Error()
+	}
+
+	completedAt := report.CompletedAt
+	if completedAt.IsZero() {
+		completedAt = m.nowFunc()
+	}
+
+	if _, execErr := tx.ExecContext(ctx, `
+		UPDATE run_status
+		SET last_completed_at = ?,
+			last_duration_ms = ?,
+			last_succeeded_count = ?,
+			last_failed_count = ?,
+			last_error = ?
+		WHERE singleton_id = 1`,
+		completedAt.UnixNano(),
+		report.Duration.Milliseconds(),
+		report.Succeeded,
+		report.Failed,
+		lastError,
+	); execErr != nil {
+		return fmt.Errorf("sync: updating run_status: %w", execErr)
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit sync metadata reset: %w", err)
+		return fmt.Errorf("sync: commit run-status tx: %w", err)
 	}
 
 	return nil
 }
 
-// ReadSyncMetadata retrieves all sync metadata key-value pairs.
-// Returns an empty map if the table doesn't exist or has no rows.
-func (m *SyncStore) ReadSyncMetadata(ctx context.Context) (map[string]string, error) {
-	result := make(map[string]string)
-
-	rows, err := m.db.QueryContext(ctx, `SELECT key, value FROM sync_metadata`)
-	if err != nil {
-		exists, existsErr := m.syncMetadataTableExists(ctx)
-		if existsErr != nil {
-			return nil, existsErr
-		}
-
-		if !exists {
-			return result, nil
-		}
-
-		return nil, fmt.Errorf("sync metadata query: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return nil, fmt.Errorf("sync metadata scan: %w", err)
-		}
-
-		result[k] = v
+// ReadSyncRunStatus retrieves the typed one-shot status row.
+func (m *SyncStore) ReadSyncRunStatus(ctx context.Context) (*SyncRunStatus, error) {
+	if _, err := m.db.ExecContext(ctx, sqlEnsureRunStatusRow); err != nil {
+		return nil, fmt.Errorf("sync: ensuring run_status row: %w", err)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate sync metadata rows: %w", err)
+	status := &SyncRunStatus{}
+	if err := m.db.QueryRowContext(ctx, `
+		SELECT last_completed_at, last_duration_ms, last_succeeded_count, last_failed_count, last_error
+		FROM run_status
+		WHERE singleton_id = 1`,
+	).Scan(
+		&status.LastCompletedAt,
+		&status.LastDurationMs,
+		&status.LastSucceededCount,
+		&status.LastFailedCount,
+		&status.LastError,
+	); err != nil {
+		return nil, fmt.Errorf("sync: reading run_status: %w", err)
 	}
 
-	return result, nil
-}
-
-func (m *SyncStore) syncMetadataTableExists(ctx context.Context) (bool, error) {
-	row := m.db.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_metadata')`)
-
-	var exists int
-	if err := row.Scan(&exists); err != nil {
-		return false, fmt.Errorf("sync metadata schema check: %w", err)
-	}
-
-	return exists == 1, nil
+	return status, nil
 }
 
 // ReleaseScope atomically applies the semantic "this scope condition has

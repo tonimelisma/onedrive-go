@@ -32,13 +32,13 @@ import (
 // SQL statements for baseline operations.
 const (
 	sqlLoadBaseline = `SELECT item_id, path, parent_id, item_type,
-		local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, synced_at, etag
+		local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag
 		FROM baseline`
 
 	sqlUpsertBaseline = `INSERT INTO baseline
 		(item_id, path, parent_id, item_type, local_hash, remote_hash,
-		 local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(item_id) DO UPDATE SET
 		 path = excluded.path,
 		 parent_id = excluded.parent_id,
@@ -49,7 +49,6 @@ const (
 		 remote_size = excluded.remote_size,
 		 local_mtime = excluded.local_mtime,
 		 remote_mtime = excluded.remote_mtime,
-		 synced_at = excluded.synced_at,
 		 etag = excluded.etag`
 
 	sqlDeleteBaseline = `DELETE FROM baseline WHERE path = ?`
@@ -148,7 +147,7 @@ func scanBaselineRow(rows *sql.Rows, configuredDriveID driveid.ID) (*BaselineEnt
 
 	err := rows.Scan(
 		&e.ItemID, &e.Path, &parentID, &e.ItemType,
-		&localHash, &remoteHash, &localSize, &remoteSize, &localMtime, &remoteMtime, &e.SyncedAt, &etag,
+		&localHash, &remoteHash, &localSize, &remoteSize, &localMtime, &remoteMtime, &etag,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning baseline row: %w", err)
@@ -219,9 +218,7 @@ func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 		outcome.DriveID = state.ConfiguredDriveID
 	}
 
-	syncedAt := m.nowFunc().UnixNano()
-
-	if applyErr := applySingleMutation(ctx, tx, outcome, syncedAt); applyErr != nil {
+	if applyErr := applySingleMutation(ctx, tx, outcome); applyErr != nil {
 		return applyErr
 	}
 
@@ -230,7 +227,7 @@ func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 	}
 
 	// Update in-memory baseline cache incrementally.
-	if cacheErr := m.updateBaselineCache(ctx, outcome, syncedAt); cacheErr != nil {
+	if cacheErr := m.updateBaselineCache(ctx, outcome); cacheErr != nil {
 		return cacheErr
 	}
 
@@ -252,7 +249,6 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 		existing = entry
 	}
 
-	syncedAt := m.nowFunc().UnixNano()
 	entry := &BaselineEntry{
 		Path:           refresh.Path,
 		DriveID:        refresh.DriveID,
@@ -262,7 +258,6 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 		LocalSize:      refresh.LocalSize,
 		LocalSizeKnown: refresh.LocalSizeKnown,
 		LocalMtime:     refresh.LocalMtime,
-		SyncedAt:       syncedAt,
 	}
 
 	if existing != nil {
@@ -304,7 +299,6 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 		nullKnownInt64(entry.RemoteSize, entry.RemoteSizeKnown),
 		nullOptionalInt64(entry.LocalMtime),
 		nullOptionalInt64(entry.RemoteMtime),
-		entry.SyncedAt,
 		nullString(entry.ETag),
 	)
 	if err != nil {
@@ -334,7 +328,7 @@ func classifyBaselineMutation(action ActionType) (baselineMutationKind, error) {
 }
 
 // applySingleMutation dispatches a single mutation to the appropriate DB helper.
-func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
+func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
 	mutation, err := classifyBaselineMutation(o.Action)
 	if err != nil {
 		return err
@@ -342,11 +336,11 @@ func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutatio
 
 	switch mutation {
 	case baselineMutationUpsert:
-		err = commitUpsert(ctx, tx, o, syncedAt)
+		err = commitUpsert(ctx, tx, o)
 	case baselineMutationDelete:
 		err = commitDelete(ctx, tx, o.Path)
 	case baselineMutationMove:
-		err = commitMove(ctx, tx, o, syncedAt)
+		err = commitMove(ctx, tx, o)
 	}
 
 	if err != nil {
@@ -354,12 +348,12 @@ func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutatio
 	}
 
 	// Update remote_state in the same transaction.
-	return updateRemoteStateOnOutcome(ctx, tx, o, syncedAt)
+	return updateRemoteStateOnOutcome(ctx, tx, o)
 }
 
 // updateBaselineCache applies a single outcome to the in-memory baseline,
 // keeping the cache consistent without a full DB reload.
-func (m *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation, syncedAt int64) error {
+func (m *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation) error {
 	mutation, err := classifyBaselineMutation(o.Action)
 	if err != nil {
 		m.logger.Warn("baseline cache classification failed, reloading cache from database",
@@ -377,12 +371,12 @@ func (m *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation
 
 	switch mutation {
 	case baselineMutationUpsert:
-		m.baseline.Put(mutationToEntry(o, syncedAt))
+		m.baseline.Put(mutationToEntry(o))
 	case baselineMutationDelete:
 		m.baseline.Delete(o.Path)
 	case baselineMutationMove:
 		m.baseline.Delete(o.OldPath)
-		m.baseline.Put(mutationToEntry(o, syncedAt))
+		m.baseline.Put(mutationToEntry(o))
 	}
 
 	return nil
@@ -401,7 +395,7 @@ func (m *SyncStore) reloadBaselineCache(ctx context.Context) error {
 }
 
 // mutationToEntry converts a BaselineMutation into a BaselineEntry for cache update.
-func mutationToEntry(o *BaselineMutation, syncedAt int64) *BaselineEntry {
+func mutationToEntry(o *BaselineMutation) *BaselineEntry {
 	return &BaselineEntry{
 		Path:            o.Path,
 		DriveID:         o.DriveID,
@@ -416,7 +410,6 @@ func mutationToEntry(o *BaselineMutation, syncedAt int64) *BaselineEntry {
 		RemoteSizeKnown: o.RemoteSizeKnown,
 		LocalMtime:      o.LocalMtime,
 		RemoteMtime:     o.RemoteMtime,
-		SyncedAt:        syncedAt,
 		ETag:            o.ETag,
 	}
 }
@@ -449,7 +442,7 @@ func mutationFromActionOutcome(o *ActionOutcome) *BaselineMutation {
 // folder create, and update-synced outcomes. Handles the case where a
 // server-side delete+recreate assigns a new item_id for an existing path
 // by removing the stale row first (prevents UNIQUE constraint violation on path).
-func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
+func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
 	// Remove any stale baseline row at the same path but different identity.
 	// This happens when the server assigns a new item_id for a path that
 	// was previously tracked under a different ID (delete+recreate, or
@@ -471,7 +464,6 @@ func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, sync
 		nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown),
 		nullOptionalInt64(o.LocalMtime),
 		nullOptionalInt64(o.RemoteMtime),
-		syncedAt,
 		nullString(o.ETag),
 	)
 	if err != nil {
@@ -494,16 +486,16 @@ func commitDelete(ctx context.Context, tx sqlTxRunner, path string) error {
 // commitMove atomically updates the path for move outcomes. With the ID-based
 // PK, a move is a single UPDATE (not DELETE+INSERT) — the row identity
 // (item_id) doesn't change, only the path does.
-func commitMove(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
+func commitMove(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
 	// Upsert handles both the path update and all other field updates.
 	// The ON CONFLICT(item_id) clause matches the existing row
 	// and updates path + all mutable fields atomically.
-	return commitUpsert(ctx, tx, o, syncedAt)
+	return commitUpsert(ctx, tx, o)
 }
 
 // updateRemoteStateOnOutcome updates the remote mirror when execution produces
 // authoritative new remote truth.
-func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
+func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
 	if o.ItemID == "" || o.DriveID.IsZero() {
 		return nil
 	}
@@ -513,8 +505,8 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO remote_state (
 				item_id, path, parent_id, item_type, hash, size, mtime, etag,
-				previous_path, observed_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				previous_path
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(item_id) DO UPDATE SET
 				path = excluded.path,
 				parent_id = excluded.parent_id,
@@ -523,11 +515,10 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 				size = excluded.size,
 				mtime = excluded.mtime,
 				etag = excluded.etag,
-				previous_path = excluded.previous_path,
-				observed_at = excluded.observed_at`,
+				previous_path = excluded.previous_path`,
 			o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
 			nullString(o.RemoteHash), nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown), nullOptionalInt64(o.RemoteMtime),
-			nullString(o.ETag), sql.NullString{}, syncedAt,
+			nullString(o.ETag), sql.NullString{},
 		)
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
@@ -542,9 +533,9 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 	case ActionRemoteMove:
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE remote_state
-			 SET path = ?, previous_path = ?, observed_at = ?
+			 SET path = ?, previous_path = ?
 			 WHERE item_id = ?`,
-			o.Path, nullString(o.OldPath), syncedAt, o.ItemID,
+			o.Path, nullString(o.OldPath), o.ItemID,
 		); err != nil {
 			return fmt.Errorf("sync: updating remote_state for remote move %s: %w", o.Path, err)
 		}
@@ -555,8 +546,8 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO remote_state (
 				item_id, path, parent_id, item_type, hash, size, mtime, etag,
-				previous_path, observed_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				previous_path
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(item_id) DO UPDATE SET
 				path = excluded.path,
 				parent_id = excluded.parent_id,
@@ -565,11 +556,10 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 				size = excluded.size,
 				mtime = excluded.mtime,
 				etag = excluded.etag,
-				previous_path = excluded.previous_path,
-				observed_at = excluded.observed_at`,
+				previous_path = excluded.previous_path`,
 			o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
 			nullString(o.RemoteHash), nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown), nullOptionalInt64(o.RemoteMtime),
-			nullString(o.ETag), sql.NullString{}, syncedAt,
+			nullString(o.ETag), sql.NullString{},
 		)
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for auto conflict upload %s: %w", o.Path, err)

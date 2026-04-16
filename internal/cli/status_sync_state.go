@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"log/slog"
+	"strconv"
+	"time"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -88,12 +90,12 @@ func buildSyncStateInfo(
 	}
 
 	info := syncStateInfo{
-		LastSyncTime:           snapshot.SyncMetadata["last_sync_time"],
-		LastSyncDuration:       snapshot.SyncMetadata["last_sync_duration_ms"],
+		LastSyncTime:           formatStatusSyncTime(snapshot.RunStatus.LastCompletedAt),
+		LastSyncDuration:       formatStatusDurationMs(snapshot.RunStatus.LastDurationMs),
 		FileCount:              snapshot.BaselineEntryCount,
 		RemoteDrift:            snapshot.RemoteDriftItems,
 		Retrying:               snapshot.RetryingItems,
-		LastError:              snapshot.SyncMetadata["last_sync_error"],
+		LastError:              snapshot.RunStatus.LastError,
 		IssueGroups:            buildFailureGroupJSON(snapshot.IssueGroups, verbose, examplesLimit),
 		StateStoreStatus:       storeInfo.Status,
 		StateStoreError:        storeInfo.Error,
@@ -105,6 +107,22 @@ func buildSyncStateInfo(
 	info.IssueCount = issueGroupTotal(info.IssueGroups)
 
 	return info
+}
+
+func formatStatusSyncTime(unixNano int64) string {
+	if unixNano <= 0 {
+		return ""
+	}
+
+	return time.Unix(0, unixNano).UTC().Format(time.RFC3339)
+}
+
+func formatStatusDurationMs(durationMs int64) string {
+	if durationMs <= 0 {
+		return ""
+	}
+
+	return strconv.FormatInt(durationMs, 10)
 }
 
 func buildFailureGroupJSON(

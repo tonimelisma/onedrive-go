@@ -19,6 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260416-01 | Fast E2E suite preflight assumed local `.testdata` always carried `drive_*.json` | fixed | test harness | 2026-04-16 | no |
 | LI-20260413-01 | Directional one-shot sync reported deferred remote drift as `No changes detected` | fixed | product bug | 2026-04-13 | no |
 | LI-20260412-04 | `internal/sync` stress verification outgrew the old 20-minute race budget | fixed | test harness | 2026-04-13 | yes |
 | LI-20260412-03 | Directional conflict E2Es still expected one-way overwrite semantics | fixed | test bug | 2026-04-12 | no |
@@ -42,6 +43,47 @@ Promotion contract:
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | fixed | test bug | 2026-04-08 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260416-01: Fast E2E suite preflight assumed local `.testdata` always carried `drive_*.json`
+
+First seen: 2026-04-16
+Last seen: 2026-04-16
+Area: fast E2E, suite isolation bootstrap, drive-session identity
+Suite / test: local `go run ./cmd/devtool verify default`, fast E2E auth preflight setup
+Classification: test harness
+Status: fixed
+Recurring: no
+Summary: The E2E suite isolation harness copied `config.toml`, tokens, and any
+metadata files from `.testdata/` into a temporary XDG data root, then used the
+CLI itself to scrub old `e2e-*` folders before auth preflight. On April 16,
+the local credential bundle contained valid tokens and config but no
+`drive_*.json` files, so the scrub command reached `driveops.SessionRuntime`
+with a configured drive whose backing Graph drive ID was still zero. The
+product error was accurate for that isolated state, but the harness had
+incorrectly assumed older local credential bundles would always contain cached
+drive metadata.
+Evidence:
+- Local `go run ./cmd/devtool verify default` on April 16, 2026 failed the
+  fast E2E auth preflight setup while scrubbing root artifacts for
+  `personal:testitesti18@outlook.com`, with
+  `create drive session: drive ID not resolved ... re-run 'onedrive-go login'`.
+- Inspecting the shared local `.testdata/` bundle showed `token_*.json` and
+  `config.toml`, but no `drive_*.json` files, even though
+  [`scripts/bootstrap-test-credentials.sh`](../../scripts/bootstrap-test-credentials.sh)
+  and the config docs already describe drive metadata as part of the durable
+  credential bundle.
+- The suite isolation code in
+  [`e2e/testenv_test.go`](../../e2e/testenv_test.go) copied whatever metadata
+  existed but never repaired missing personal/business drive metadata before
+  invoking CLI commands that require a resolved backing drive ID.
+Resolution / mitigation: the E2E isolation bootstrap now repairs missing
+personal/business `drive_*.json` files inside the temporary app-data root by
+calling `/me/drive` through the saved token before suite scrub starts. Existing
+metadata files are preserved, and sharepoint/shared-root test drives still fail
+loudly if their required metadata is missing because that identity cannot be
+reconstructed from `/me/drive` alone. Unit coverage lives in
+[`e2e/drive_metadata_bootstrap_test.go`](../../e2e/drive_metadata_bootstrap_test.go).
+Promoted docs: [developer-onboarding.md](developer-onboarding.md), [config.md](../design/config.md)
 
 ## LI-20260412-03: Directional conflict E2Es still expected one-way overwrite semantics
 

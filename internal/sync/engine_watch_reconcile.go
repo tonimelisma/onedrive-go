@@ -433,8 +433,8 @@ func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
 	if commitErr := rt.commitObservedItems(ctx, projectedPrimary.observed, ""); commitErr != nil {
 		return remoteObservationResult{}, fmt.Errorf("commit full reconciliation observations: %w", commitErr)
 	}
-	if tokenErr := rt.commitDeferredDeltaTokens(ctx, fetchResult.deferred); tokenErr != nil {
-		return remoteObservationResult{}, fmt.Errorf("commit full reconciliation delta tokens: %w", tokenErr)
+	if tokenErr := rt.commitPendingPrimaryCursor(ctx, fetchResult.pending); tokenErr != nil {
+		return remoteObservationResult{}, fmt.Errorf("commit full reconciliation primary cursor: %w", tokenErr)
 	}
 	if armErr := rt.armFullReconcileTimer(ctx); armErr != nil {
 		return remoteObservationResult{}, fmt.Errorf("arm full reconciliation timer: %w", armErr)

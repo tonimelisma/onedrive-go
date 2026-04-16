@@ -40,10 +40,10 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"item-1", "file.txt", ItemTypeFile, "remote-old", 120,
-		seedTime.Add(2*time.Second).UnixNano(), seedTime.UnixNano())
+		seedTime.Add(2*time.Second).UnixNano())
 	require.NoError(t, err)
 
 	refreshTime := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
@@ -72,7 +72,6 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	assert.Equal(t, int64(120), entry.RemoteSize, "remote metadata should be preserved")
 	assert.Equal(t, seedTime.Add(2*time.Second).UnixNano(), entry.RemoteMtime, "remote metadata should be preserved")
 	assert.Equal(t, "etag-old", entry.ETag, "etag should be preserved")
-	assert.Equal(t, refreshTime.UnixNano(), entry.SyncedAt)
 
 	var hash string
 	var size int64

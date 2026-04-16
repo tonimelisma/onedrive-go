@@ -73,10 +73,10 @@ func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 	ctx := t.Context()
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO baseline (path, item_id, parent_id, item_type,
-		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"/test.txt", "item1", "parent1", "file",
-		"hash1", "hash1", 100, 100, 1700000000, 1700000000, 1700000000, "etag1")
+		"hash1", "hash1", 100, 100, 1700000000, 1700000000, "etag1")
 	require.NoError(t, err)
 
 	// Close should checkpoint and remove the WAL file.
@@ -115,24 +115,21 @@ func TestCheckpoint_DoesNotPruneRemoteMirrorRows(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	now := time.Now()
-	oldTime := now.Add(-48 * time.Hour).UnixNano() // 2 days ago
-	newTime := now.Add(-12 * time.Hour).UnixNano() // 12 hours ago
-	retention := 24 * time.Hour                    // 1 day retention
+	retention := 24 * time.Hour // 1 day retention
 
 	// Checkpoint no longer treats remote_state as a lifecycle queue, so mirror
 	// rows are never pruned by age.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?)`,
-		"old-item", "/old.txt", "file", oldTime)
+		`INSERT INTO remote_state (item_id, path, item_type)
+		 VALUES (?, ?, ?)`,
+		"old-item", "/old.txt", "file")
 	require.NoError(t, err)
 
 	// Insert a second row to ensure older/newer mirror entries both survive.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?)`,
-		"new-item", "/new.txt", "file", newTime)
+		`INSERT INTO remote_state (item_id, path, item_type)
+		 VALUES (?, ?, ?)`,
+		"new-item", "/new.txt", "file")
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
@@ -191,13 +188,11 @@ func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	oldTime := time.Now().Add(-48 * time.Hour).UnixNano()
-
 	// Insert an old remote mirror row.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?)`,
-		"item1", "/old.txt", "file", oldTime)
+		`INSERT INTO remote_state (item_id, path, item_type)
+		 VALUES (?, ?, ?)`,
+		"item1", "/old.txt", "file")
 	require.NoError(t, err)
 
 	// Zero retention = WAL checkpoint only, no pruning.
@@ -259,7 +254,6 @@ func TestCommit_Download(t *testing.T) {
 	assert.True(t, entry.DriveID.Equal(driveid.New("drive1")), "DriveID mismatch")
 	assert.Equal(t, "item1", entry.ItemID)
 	assert.Equal(t, "abc123", entry.LocalHash)
-	assert.Equal(t, fixedTime.UnixNano(), entry.SyncedAt)
 }
 
 // Validates: R-6.5.2
@@ -363,7 +357,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	// Second commit: convergent edit updates synced_at.
+	// Second commit: convergent edit updates the stored baseline tuple.
 	t2 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
 	mgr.SetNowFunc(func() time.Time { return t2 })
 
@@ -375,7 +369,6 @@ func TestCommit_UpdateSynced(t *testing.T) {
 
 	entry, ok := mgr.Baseline().GetByPath("file.txt")
 	require.True(t, ok)
-	assert.Equal(t, t2.UnixNano(), entry.SyncedAt)
 	assert.Equal(t, updatedHash, entry.LocalHash)
 }
 
@@ -542,33 +535,6 @@ func TestCommit_DeltaTokenRoundTrip(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCommit_SyncedAtFromNowFunc(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	// Use a distinctive fixed time to verify nowFunc is used.
-	fixedTime := time.Date(2025, 6, 15, 12, 30, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
-
-	outcomes := []BaselineMutation{{
-		Action: ActionDownload, Success: true,
-		Path: "f.txt", DriveID: driveid.New("d"), ItemID: "i", ItemType: ItemTypeFile,
-		LocalHash: "h", RemoteHash: "h",
-		LocalSize: 10, LocalSizeKnown: true,
-		RemoteSize: 10, RemoteSizeKnown: true,
-		LocalMtime: 999, RemoteMtime: 999,
-	}}
-
-	commitAll(t, mgr, ctx, outcomes)
-
-	entry, ok := mgr.Baseline().GetByPath("f.txt")
-	require.True(t, ok)
-	assert.Equal(t, fixedTime.UnixNano(), entry.SyncedAt)
-}
-
-// Validates: R-2.2
 func TestCommit_RefreshesCache(t *testing.T) {
 	t.Parallel()
 
@@ -619,9 +585,9 @@ func TestLoad_NullableFields(t *testing.T) {
 	// Insert a row with NULL parent_id, hashes, size, mtimes, etag directly.
 	_, err := mgr.DB().ExecContext(ctx,
 		`INSERT INTO baseline (path, item_id, parent_id, item_type,
-		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
-		 VALUES (?, ?, NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL)`,
-		"root", "root-id", "root", time.Now().UnixNano(),
+		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		 VALUES (?, ?, NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
+		"root", "root-id", "root",
 	)
 	require.NoError(t, err)
 
@@ -783,7 +749,6 @@ func TestCommitMutation_Download(t *testing.T) {
 	require.True(t, ok, "baseline entry not found")
 	assert.Equal(t, "i1", entry.ItemID)
 	assert.Equal(t, "lh", entry.LocalHash)
-	assert.Equal(t, fixedTime.UnixNano(), entry.SyncedAt)
 }
 
 // Validates: R-2.2
@@ -1086,7 +1051,7 @@ func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
 	err := mgr.updateBaselineCache(ctx, &BaselineMutation{
 		Action: ActionType(999),
 		Path:   "ignored.txt",
-	}, time.Now().UnixNano())
+	})
 	require.NoError(t, err)
 
 	entry, ok := mgr.Baseline().GetByPath("cached.txt")
@@ -1516,7 +1481,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	// Verify all expected tables exist by querying sqlite_master.
 	expectedTables := []string{
-		"baseline", "observation_state", "sync_metadata",
+		"baseline", "observation_state", "run_status",
 		"remote_state", "sync_failures",
 	}
 
@@ -1537,9 +1502,9 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	// Verify remote_state table structure: insert + query.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?)`,
-		"item1", "/test.txt", "file", 1700000000)
+		`INSERT INTO remote_state (item_id, path, item_type)
+		 VALUES (?, ?, ?)`,
+		"item1", "/test.txt", "file")
 	require.NoError(t, err)
 
 	// Verify sync_failures table structure: insert + query.
@@ -1551,9 +1516,9 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	// Verify remote_state CHECK constraint rejects invalid item types.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?)`,
-		"item2", "/bad.txt", "bogus", 1700000000)
+		`INSERT INTO remote_state (item_id, path, item_type)
+		 VALUES (?, ?, ?)`,
+		"item2", "/bad.txt", "bogus")
 	require.Error(t, err, "invalid item type should be rejected by CHECK constraint")
 }
 
@@ -1566,105 +1531,107 @@ func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
 
 	// Insert an active item at a path.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?)`,
-		"item1", "/test.txt", "file", 1700000000)
+		`INSERT INTO remote_state (item_id, path, item_type)
+		 VALUES (?, ?, ?)`,
+		"item1", "/test.txt", "file")
 	require.NoError(t, err)
 
 	// Another item at the same path should be rejected by the mirror's unique path index.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?)`,
-		"item2", "/test.txt", "file", 1700000000)
+		`INSERT INTO remote_state (item_id, path, item_type)
+		 VALUES (?, ?, ?)`,
+		"item2", "/test.txt", "file")
 	require.Error(t, err, "duplicate active path should be rejected")
 }
 
-// --- Sync metadata tests (6.2b) ---
+// --- One-shot status tests (6.2b) ---
 
 // Validates: R-2.2
-func TestWriteSyncMetadata_RoundTrip(t *testing.T) {
+func TestWriteSyncRunStatus_RoundTrip(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
+	completedAt := time.Date(2026, 4, 3, 10, 30, 0, 0, time.UTC)
 
-	report := &SyncMetadata{
-		Duration:  1500 * time.Millisecond,
-		Succeeded: 42,
-		Failed:    3,
-		Errors:    []error{fmt.Errorf("some sync error")},
+	report := &SyncRunReport{
+		CompletedAt: completedAt,
+		Duration:    1500 * time.Millisecond,
+		Succeeded:   42,
+		Failed:      3,
+		Errors:      []error{fmt.Errorf("some sync error")},
 	}
 
-	require.NoError(t, mgr.WriteSyncMetadata(ctx, report))
+	require.NoError(t, mgr.WriteSyncRunStatus(ctx, report))
 
-	meta, err := mgr.ReadSyncMetadata(ctx)
+	status, err := mgr.ReadSyncRunStatus(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "1500", meta["last_sync_duration_ms"])
-	assert.Equal(t, "42", meta["last_sync_succeeded"])
-	assert.Equal(t, "3", meta["last_sync_failed"])
-	assert.Equal(t, "some sync error", meta["last_sync_error"])
-	assert.NotEmpty(t, meta["last_sync_time"])
+	assert.Equal(t, completedAt.UnixNano(), status.LastCompletedAt)
+	assert.Equal(t, int64(1500), status.LastDurationMs)
+	assert.Equal(t, 42, status.LastSucceededCount)
+	assert.Equal(t, 3, status.LastFailedCount)
+	assert.Equal(t, "some sync error", status.LastError)
 }
 
 // Validates: R-2.2
-func TestWriteSyncMetadata_Upsert(t *testing.T) {
+func TestWriteSyncRunStatus_Upsert(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	report1 := &SyncMetadata{Duration: 1 * time.Second, Succeeded: 10}
-	require.NoError(t, mgr.WriteSyncMetadata(ctx, report1))
+	report1 := &SyncRunReport{CompletedAt: time.Unix(10, 0), Duration: 1 * time.Second, Succeeded: 10}
+	require.NoError(t, mgr.WriteSyncRunStatus(ctx, report1))
 
-	report2 := &SyncMetadata{Duration: 2 * time.Second, Succeeded: 20}
-	require.NoError(t, mgr.WriteSyncMetadata(ctx, report2))
+	report2 := &SyncRunReport{CompletedAt: time.Unix(20, 0), Duration: 2 * time.Second, Succeeded: 20}
+	require.NoError(t, mgr.WriteSyncRunStatus(ctx, report2))
 
-	meta, err := mgr.ReadSyncMetadata(ctx)
+	status, err := mgr.ReadSyncRunStatus(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "20", meta["last_sync_succeeded"], "should be from second write")
-	assert.Equal(t, "2000", meta["last_sync_duration_ms"])
+	assert.Equal(t, time.Unix(20, 0).UnixNano(), status.LastCompletedAt)
+	assert.Equal(t, 20, status.LastSucceededCount, "should be from second write")
+	assert.Equal(t, int64(2000), status.LastDurationMs)
 }
 
 // Validates: R-2.2
-func TestWriteSyncMetadata_NoErrors(t *testing.T) {
+func TestWriteSyncRunStatus_NoErrors(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	report := &SyncMetadata{Duration: 500 * time.Millisecond, Succeeded: 5}
-	require.NoError(t, mgr.WriteSyncMetadata(ctx, report))
+	report := &SyncRunReport{CompletedAt: time.Unix(30, 0), Duration: 500 * time.Millisecond, Succeeded: 5}
+	require.NoError(t, mgr.WriteSyncRunStatus(ctx, report))
 
-	meta, err := mgr.ReadSyncMetadata(ctx)
+	status, err := mgr.ReadSyncRunStatus(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, meta["last_sync_error"])
+	assert.Empty(t, status.LastError)
 }
 
 // Validates: R-2.2
-func TestReadSyncMetadata_EmptyDB(t *testing.T) {
+func TestReadSyncRunStatus_EmptyDB(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	meta, err := mgr.ReadSyncMetadata(ctx)
+	status, err := mgr.ReadSyncRunStatus(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, meta)
+	assert.Equal(t, &SyncRunStatus{}, status)
 }
 
 // Validates: R-2.2
-func TestReadSyncMetadata_MissingTableReturnsEmpty(t *testing.T) {
+func TestReadSyncRunStatus_MissingTableFails(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := mgr.db.ExecContext(ctx, `DROP TABLE sync_metadata`)
+	_, err := mgr.db.ExecContext(ctx, `DROP TABLE run_status`)
 	require.NoError(t, err)
 
-	meta, err := mgr.ReadSyncMetadata(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, meta)
+	_, err = mgr.ReadSyncRunStatus(ctx)
+	require.Error(t, err)
 }
 
 // Validates: R-2.2

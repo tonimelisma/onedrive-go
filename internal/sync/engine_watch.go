@@ -312,7 +312,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 
 	// Observe changes.
-	changes, pendingTokens, err := rt.observeChanges(ctx, rt, bl, false, fullReconcile)
+	changes, pendingCursorCommit, err := rt.observeChanges(ctx, rt, bl, false, fullReconcile)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
@@ -326,7 +326,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 
 	// Commit the deferred delta token before dispatching bootstrap actions.
-	if err := rt.commitDeferredDeltaTokens(ctx, pendingTokens); err != nil {
+	if err := rt.commitPendingPrimaryCursor(ctx, pendingCursorCommit); err != nil {
 		return err
 	}
 

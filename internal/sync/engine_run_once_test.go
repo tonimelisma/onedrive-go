@@ -720,9 +720,9 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 
 	now := time.Now().UnixNano()
 	_, err := eng.baseline.DB().ExecContext(ctx, `
-		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, observed_at)
-		VALUES ('item-dl', 'retry-download.txt', 'file', NULL, 18, ?, ?)`,
-		now, now,
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES ('item-dl', 'retry-download.txt', 'file', NULL, 18, ?)`,
+		now,
 	)
 	require.NoError(t, err, "seed remote mirror row")
 
@@ -802,9 +802,9 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 
 	now := time.Now().UnixNano()
 	_, err := eng.baseline.DB().ExecContext(ctx, `
-		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, observed_at, etag)
-		VALUES ('item-edit', 'remote-edit.txt', 'file', 'remote-hash-new', 19, ?, ?, 'etag-edit-new')`,
-		now, now,
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
+		VALUES ('item-edit', 'remote-edit.txt', 'file', 'remote-hash-new', 19, ?, 'etag-edit-new')`,
+		now,
 	)
 	require.NoError(t, err, "seed remote mirror edit row")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
@@ -870,9 +870,9 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 
 	now := time.Now().UnixNano()
 	_, err := eng.baseline.DB().ExecContext(ctx, `
-		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, observed_at, etag)
-		VALUES ('item-dl', 'retry-download.txt', 'file', ?, 18, ?, ?, 'etag-dl')`,
-		downloadHash, now, now,
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
+		VALUES ('item-dl', 'retry-download.txt', 'file', ?, 18, ?, 'etag-dl')`,
+		downloadHash, now,
 	)
 	require.NoError(t, err, "seed remote mirror row")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))

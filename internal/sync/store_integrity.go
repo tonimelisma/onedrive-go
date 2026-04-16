@@ -140,6 +140,7 @@ func repairIntegritySafeTx(ctx context.Context, tx sqlTxRunner) (int, error) {
 		run func(context.Context, sqlTxRunner) (int, error)
 	}{
 		{run: repairLegacyThrottleAccountScope},
+		{run: repairPersistedRemotePermissionScopes},
 		{run: repairAuthScopeTiming},
 		{run: repairNonRetryableFailureTiming},
 	}
@@ -148,18 +149,6 @@ func repairIntegritySafeTx(ctx context.Context, tx sqlTxRunner) (int, error) {
 		rows, err := step.run(ctx, tx)
 		if err != nil {
 			return 0, err
-		}
-		repairsApplied += rows
-	}
-
-	legacyScopeKeys, err := listLegacyRemoteScopeKeys(ctx, tx)
-	if err != nil {
-		return 0, err
-	}
-	for _, scopeKey := range legacyScopeKeys {
-		rows, deleteErr := deleteLegacyRemoteScopeAuthorities(ctx, tx, scopeKey)
-		if deleteErr != nil {
-			return 0, deleteErr
 		}
 		repairsApplied += rows
 	}
@@ -258,6 +247,32 @@ func repairLegacyThrottleAccountScope(ctx context.Context, tx sqlTxRunner) (int,
 	return repairsApplied, nil
 }
 
+func repairPersistedRemotePermissionScopes(ctx context.Context, tx sqlTxRunner) (int, error) {
+	repairsApplied := 0
+
+	deleteScopeResult, err := tx.ExecContext(ctx, `
+		DELETE FROM scope_blocks
+		WHERE scope_key LIKE 'perm:remote:%'
+		   OR scope_key LIKE 'perm:remote-write:%'`)
+	if err != nil {
+		return 0, fmt.Errorf("sync: delete persisted remote permission scopes: %w", err)
+	}
+	repairsApplied += rowsAffected(deleteScopeResult)
+
+	deleteBoundaryResult, err := tx.ExecContext(ctx, `
+		DELETE FROM sync_failures
+		WHERE failure_role = ?
+		  AND (scope_key LIKE 'perm:remote:%' OR scope_key LIKE 'perm:remote-write:%')`,
+		FailureRoleBoundary,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sync: delete persisted remote permission boundaries: %w", err)
+	}
+	repairsApplied += rowsAffected(deleteBoundaryResult)
+
+	return repairsApplied, nil
+}
+
 func repairNonRetryableFailureTiming(ctx context.Context, tx sqlTxRunner) (int, error) {
 	retryResult, err := tx.ExecContext(ctx, `
 		UPDATE sync_failures
@@ -273,66 +288,6 @@ func repairNonRetryableFailureTiming(ctx context.Context, tx sqlTxRunner) (int, 
 	}
 
 	return rowsAffected(retryResult), nil
-}
-
-func listLegacyRemoteScopeKeys(ctx context.Context, tx sqlTxRunner) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT DISTINCT scope_key
-		FROM (
-			SELECT scope_key
-			FROM scope_blocks
-			WHERE scope_key LIKE 'perm:remote:%'
-			   OR scope_key LIKE 'perm:remote-write:%'
-			UNION
-			SELECT scope_key
-			FROM sync_failures
-			WHERE failure_role = ?
-			  AND (
-				scope_key LIKE 'perm:remote:%'
-				OR scope_key LIKE 'perm:remote-write:%'
-			  )
-		)`,
-		FailureRoleBoundary,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("sync: list legacy remote scope repairs: %w", err)
-	}
-	defer rows.Close()
-
-	var legacyScopeKeys []string
-	for rows.Next() {
-		var scopeKey string
-		if err := rows.Scan(&scopeKey); err != nil {
-			return nil, fmt.Errorf("sync: scan legacy remote scope repair row: %w", err)
-		}
-		legacyScopeKeys = append(legacyScopeKeys, scopeKey)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterate legacy remote scope repair rows: %w", err)
-	}
-
-	return legacyScopeKeys, nil
-}
-
-func deleteLegacyRemoteScopeAuthorities(ctx context.Context, tx sqlTxRunner, scopeKey string) (int, error) {
-	repairsApplied := 0
-
-	deleteScopeResult, err := tx.ExecContext(ctx, `DELETE FROM scope_blocks WHERE scope_key = ?`, scopeKey)
-	if err != nil {
-		return 0, fmt.Errorf("sync: delete legacy remote scope block %s: %w", scopeKey, err)
-	}
-	repairsApplied += rowsAffected(deleteScopeResult)
-
-	deleteBoundaryResult, err := tx.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE scope_key = ? AND failure_role = ?`,
-		scopeKey, FailureRoleBoundary,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("sync: delete legacy remote scope boundary %s: %w", scopeKey, err)
-	}
-	repairsApplied += rowsAffected(deleteBoundaryResult)
-
-	return repairsApplied, nil
 }
 
 func auditScopeBlocks(

@@ -31,7 +31,7 @@ narrowed back to whole-drive or separately configured shared-root drives.
 | `sync_failures` | Per-path retryable and actionable failures | `path` |
 | `scope_blocks` | Durable scope-level blocking conditions and trial timing | `scope_key` |
 | `observation_state` | Configured drive owner, primary cursor, full-reconcile cadence | singleton row |
-| `sync_metadata` | Last-run/report metadata for status and diagnostics | `key` |
+| `run_status` | Typed one-shot status/report projection for `status` | singleton row |
 
 ## `baseline`
 
@@ -41,7 +41,6 @@ successfully converged state for one item:
 - identity: `item_id`, `parent_id`, `path`, `item_type`
 - local comparison facts: `local_hash`, `local_size`, `local_mtime`
 - remote comparison facts: `remote_hash`, `remote_size`, `remote_mtime`, `etag`
-- commit timestamp: `synced_at`
 
 The table is keyed by item identity, not by path, so moves stay atomic
 `UPDATE`s instead of delete/reinsert churn. Because each state DB owns exactly
@@ -55,7 +54,6 @@ saw. It stores:
 - identity: `item_id`, `parent_id`
 - materialized path: `path`, `previous_path`
 - remote facts: `item_type`, `hash`, `size`, `mtime`, `etag`
-- observation timestamp: `observed_at`
 
 Remote deletion is represented by row absence. If a baseline row exists and
 the corresponding `remote_state` row is missing, later runs rediscover remote
@@ -110,18 +108,24 @@ identity and cadence:
 
 - `configured_drive_id`: the configured drive that owns this DB
 - `cursor`: the one primary remote observation cursor for this DB
-- `updated_at`: when that cursor last changed
 - `last_full_remote_reconcile_at`: when the last successful full primary remote observation finished
 
 The cursor is committed atomically with the corresponding remote observation
 writes. The persisted full-reconcile timestamp makes the 24-hour full-remote
 reconcile rule restart-safe in both one-shot and watch mode.
 
-## `sync_metadata`
+## `run_status`
 
-`sync_metadata` stores summary/report facts from completed runs, such as last
-run timing and counters used by status and diagnostics. It is explicitly
-non-authoritative for planning and observation.
+`run_status` stores the typed one-shot status projection used by `status`:
+
+- `last_completed_at`
+- `last_duration_ms`
+- `last_succeeded_count`
+- `last_failed_count`
+- `last_error`
+
+It is explicitly non-authoritative for planning and observation. Watch mode
+does not invent a one-shot run timestamp.
 
 ## Schema Discipline
 

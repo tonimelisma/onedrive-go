@@ -1,4 +1,5 @@
-// Package sync persists sync baseline, observation, failure, scope-block, and metadata state.
+// Package sync persists sync baseline, observation, failure, scope-block, and
+// run-status state.
 //
 // The engine persists active scope rows here for restart/recovery. Watch mode
 // loads them into its single-owner runtime working set at startup; there is no
@@ -10,7 +11,6 @@
 // Related files:
 //   - active_scopes.go: stateless active-scope helper functions
 //   - scope_key.go:     ScopeKey, ParseScopeKey, ScopeKey.String()
-//   - migrations/:      canonical schema migration history
 package sync
 
 import (

@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS baseline (
     remote_size     INTEGER,
     local_mtime     INTEGER,
     remote_mtime    INTEGER,
-    synced_at       INTEGER NOT NULL CHECK(synced_at > 0),
     etag            TEXT
 );
 
@@ -32,13 +31,16 @@ CREATE TABLE IF NOT EXISTS observation_state (
     singleton_id                  INTEGER PRIMARY KEY CHECK(singleton_id = 1),
     configured_drive_id           TEXT    NOT NULL DEFAULT '',
     cursor                        TEXT    NOT NULL DEFAULT '',
-    updated_at                    INTEGER NOT NULL DEFAULT 0,
     last_full_remote_reconcile_at INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS sync_metadata (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS run_status (
+    singleton_id           INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+    last_completed_at      INTEGER NOT NULL DEFAULT 0,
+    last_duration_ms       INTEGER NOT NULL DEFAULT 0,
+    last_succeeded_count   INTEGER NOT NULL DEFAULT 0,
+    last_failed_count      INTEGER NOT NULL DEFAULT 0,
+    last_error             TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS remote_state (
@@ -50,8 +52,7 @@ CREATE TABLE IF NOT EXISTS remote_state (
     size          INTEGER,
     mtime         INTEGER,
     etag          TEXT,
-    previous_path TEXT,
-    observed_at   INTEGER NOT NULL CHECK(observed_at > 0)
+    previous_path TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_remote_state_parent ON remote_state(parent_id);
@@ -130,16 +131,16 @@ func canonicalSyncStoreColumns() map[string][]string {
 	return map[string][]string{
 		"baseline": {
 			"item_id", "path", "parent_id", "item_type", "local_hash", "remote_hash",
-			"local_size", "remote_size", "local_mtime", "remote_mtime", "synced_at", "etag",
+			"local_size", "remote_size", "local_mtime", "remote_mtime", "etag",
 		},
 		"observation_state": {
-			"singleton_id", "configured_drive_id", "cursor", "updated_at", "last_full_remote_reconcile_at",
+			"singleton_id", "configured_drive_id", "cursor", "last_full_remote_reconcile_at",
 		},
-		"sync_metadata": {
-			"key", "value",
+		"run_status": {
+			"singleton_id", "last_completed_at", "last_duration_ms", "last_succeeded_count", "last_failed_count", "last_error",
 		},
 		"remote_state": {
-			"item_id", "path", "parent_id", "item_type", "hash", "size", "mtime", "etag", "previous_path", "observed_at",
+			"item_id", "path", "parent_id", "item_type", "hash", "size", "mtime", "etag", "previous_path",
 		},
 		"sync_failures": {
 			"path", "direction", "action_type", "category", "failure_role", "issue_type", "item_id",
@@ -172,6 +173,9 @@ func applySchema(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
 		return fmt.Errorf("sync: ensuring observation_state row: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, sqlEnsureRunStatusRow); err != nil {
+		return fmt.Errorf("sync: ensuring run_status row: %w", err)
+	}
 
 	return nil
 }
@@ -192,6 +196,9 @@ func createCanonicalSchema(ctx context.Context, db *sql.DB) (err error) {
 	}
 	if _, err = tx.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
 		return fmt.Errorf("seed observation_state row: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, sqlEnsureRunStatusRow); err != nil {
+		return fmt.Errorf("seed run_status row: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema transaction: %w", err)

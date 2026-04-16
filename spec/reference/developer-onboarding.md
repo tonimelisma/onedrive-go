@@ -332,6 +332,13 @@ able to scan this table and place every top-level code area.
 | `scripts/check-oauth2-fork.sh` | OAuth dependency fork checks |
 | `scripts/dev-env.sh` | Local development environment helper |
 
+Live-test note: `.testdata/` should contain `token_*.json`, `config.toml`,
+and any available `account_*.json` / `drive_*.json` files from
+`bootstrap-test-credentials.sh`. The E2E isolation harness now repairs missing
+personal/business `drive_*.json` files inside its temporary app-data root from
+the saved token before suite scrub, but shared-root and SharePoint fixtures
+still require their bootstrapped metadata.
+
 ### FAQ
 
 **Do I need to know every package on day one?**
@@ -414,7 +421,7 @@ when you treat it as several file families sharing one single-drive owner.
 | `planner*.go`, `single_path.go`, `actions.go` | Pure planning: turn observed change plus baseline into deterministic actions |
 | `executor*.go`, `worker*.go`, `worker_result.go`, `dep_graph.go`, `active_scopes.go` | Execution: worker dispatch, dependency ordering, scope admission, and conflict-safe file application |
 | `engine.go`, `engine_config.go`, `engine_loop.go`, `engine_run_once.go`, `engine_watch*.go` | Runtime orchestration: main loop, one-shot run, watch lifecycle and batch reconciliation |
-| `engine_primary_root*.go`, `engine_observation_postprocess.go`, `engine_observation_projection.go` | Engine-owned primary-root observation: root selection, shared-root fallback, postprocessing, projection |
+| `engine_primary_root*.go`, `engine_observation_postprocess.go`, `observed_items.go` | Engine-owned primary-root observation: root selection, shared-root fallback, postprocessing, and remote observation projection |
 | `engine_result_*.go`, `engine_results.go`, `engine_retry_trial.go` | Result classification, retry-trial decisions, and scope-level result flow |
 | `engine_scope_invariants.go`, `engine_scope_lifecycle.go` | Failure-scope lifecycle: mount/unmount and invariant enforcement for retry/permission scopes |
 | `engine_runtime_state.go`, `engine_runtime_types.go`, `engine_time.go`, `engine_log_fields.go`, `engine_policy_controllers.go` | Engine runtime state, time helpers, structured logging, and policy controllers |

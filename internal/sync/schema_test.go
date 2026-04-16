@@ -23,15 +23,14 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"baseline",
 		"observation_state",
 		"remote_state",
+		"run_status",
 		"scope_blocks",
 		"sync_failures",
-		"sync_metadata",
 	}, tables)
 
 	state, err := store.ReadObservationState(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, state)
-	assert.Zero(t, state.UpdatedAt)
 	assert.Zero(t, state.LastFullRemoteReconcileAt)
 }
 

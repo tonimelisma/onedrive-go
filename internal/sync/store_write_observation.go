@@ -23,22 +23,22 @@ import (
 
 const (
 	sqlGetRemoteStateRow = `SELECT item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path, observed_at
+		hash, size, mtime, etag, previous_path
 		FROM remote_state WHERE item_id = ?`
 
 	sqlInsertRemoteState = `INSERT INTO remote_state
 		(item_id, path, parent_id, item_type, hash, size, mtime, etag,
-		 previous_path, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 previous_path)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	sqlUpdateRemoteState = `UPDATE remote_state SET
 		path = ?, parent_id = ?, item_type = ?, hash = ?, size = ?, mtime = ?, etag = ?,
-		previous_path = ?, observed_at = ?
+		previous_path = ?
 		WHERE item_id = ?`
 )
 
-// CommitObservation atomically persists observed remote mirror state and
-// advances the delta token in a single transaction.
+// CommitObservation atomically persists observed remote mirror state and may
+// also advance the primary observation cursor in the same transaction.
 func (m *SyncStore) CommitObservation(ctx context.Context, events []ObservedItem, newToken string, driveID driveid.ID) error {
 	return m.commitObservation(ctx, events, newToken, driveID)
 }
@@ -68,20 +68,17 @@ func (m *SyncStore) commitObservation(
 		driveID = state.ConfiguredDriveID
 	}
 
-	now := m.nowFunc().UnixNano()
-
 	for i := range events {
 		if !driveID.IsZero() {
 			events[i].DriveID = driveID
 		}
-		if processErr := m.processObservedItem(ctx, tx, &events[i], now); processErr != nil {
+		if processErr := m.processObservedItem(ctx, tx, &events[i]); processErr != nil {
 			return processErr
 		}
 	}
 
 	if newToken != "" {
 		state.Cursor = newToken
-		state.UpdatedAt = now
 		if saveErr := m.writeObservationStateTx(ctx, tx, state); saveErr != nil {
 			return saveErr
 		}
@@ -99,14 +96,14 @@ func (m *SyncStore) commitObservation(
 	return nil
 }
 
-func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *ObservedItem, now int64) error {
+func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *ObservedItem) error {
 	existing := m.scanRemoteStateRow(ctx, tx, item.DriveID.String(), item.ItemID)
 
 	if existing == nil {
 		if item.IsDeleted {
 			return nil
 		}
-		return m.insertRemoteState(ctx, tx, item, now)
+		return m.insertRemoteState(ctx, tx, item)
 	}
 
 	if item.IsDeleted {
@@ -118,7 +115,7 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 		return nil
 	}
 
-	return m.updateRemoteStateFromObs(ctx, tx, item, previousPath, now)
+	return m.updateRemoteStateFromObs(ctx, tx, item, previousPath)
 }
 
 func deleteObservedRemoteState(
@@ -172,14 +169,13 @@ func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driv
 	return row
 }
 
-func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *ObservedItem, now int64) error {
+func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *ObservedItem) error {
 	_, err := tx.ExecContext(ctx, sqlInsertRemoteState,
 		item.ItemID, item.Path,
 		nullString(item.ParentID), item.ItemType,
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
 		sql.NullString{},
-		now,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: inserting remote_state for %s: %w", item.Path, err)
@@ -193,13 +189,12 @@ func (m *SyncStore) updateRemoteStateFromObs(
 	tx sqlTxRunner,
 	item *ObservedItem,
 	previousPath string,
-	now int64,
 ) error {
 	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
 		item.Path, nullString(item.ParentID), item.ItemType,
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
-		nullString(previousPath), now,
+		nullString(previousPath),
 		item.ItemID,
 	)
 	if err != nil {

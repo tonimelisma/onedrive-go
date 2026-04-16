@@ -77,7 +77,6 @@ type BaselineEntry struct {
 	RemoteSizeKnown bool
 	LocalMtime      int64 // local mtime at sync time (Unix nanoseconds)
 	RemoteMtime     int64 // remote mtime at sync time; zero means unknown
-	SyncedAt        int64 // when this entry was last confirmed synced
 	ETag            string
 }
 
