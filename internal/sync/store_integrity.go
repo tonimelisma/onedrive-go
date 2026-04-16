@@ -529,6 +529,11 @@ func rowsAffected(result sql.Result) int {
 }
 
 func (i *Inspector) listAllSyncFailures(ctx context.Context) ([]SyncFailureRow, error) {
+	configuredDriveID, err := configuredDriveIDForDB(ctx, i.db)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures ORDER BY last_seen_at DESC`)
 	if err != nil {
@@ -539,5 +544,5 @@ func (i *Inspector) listAllSyncFailures(ctx context.Context) ([]SyncFailureRow, 
 	}
 	defer rows.Close()
 
-	return scanSyncFailureRows(rows)
+	return scanSyncFailureRows(rows, configuredDriveID)
 }

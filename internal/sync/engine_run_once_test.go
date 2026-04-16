@@ -242,8 +242,7 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	assert.Equal(t, 0, bl.Len(), "dry-run should not commit")
 
 	// Verify delta token is not saved (dry-run must not advance the token).
-	savedToken, err := eng.baseline.GetDeltaToken(ctx, eng.driveID.String(), "")
-	require.NoError(t, err, "GetDeltaToken")
+	savedToken := readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String())
 	assert.Empty(t, savedToken, "dry-run should not save delta token")
 }
 
@@ -309,8 +308,7 @@ func TestRunOnce_SharedConfiguredRootUsesScopedDeltaAndToken(t *testing.T) {
 	assert.Equal(t, 1, folderDeltaCalls)
 	assert.GreaterOrEqual(t, report.Downloads, 1)
 
-	token, err := eng.baseline.GetDeltaToken(t.Context(), driveID.String(), "shared-root")
-	require.NoError(t, err)
+	token := readObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
 	assert.Equal(t, "scoped-token-1", token)
 }
 
@@ -378,8 +376,7 @@ func TestRunOnce_DryRun_SharedConfiguredRootDoesNotSaveScopedDeltaToken(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, 0, bl.Len())
 
-	token, err := eng.baseline.GetDeltaToken(t.Context(), driveID.String(), "shared-root")
-	require.NoError(t, err)
+	token := readObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
 	assert.Empty(t, token)
 }
 
@@ -472,8 +469,7 @@ func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
 	require.NoError(t, err, "RunOnce")
 
 	// Verify delta token was saved.
-	token, err := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
-	require.NoError(t, err, "GetDeltaToken")
+	token := readObservationCursorForTest(t, eng.baseline, ctx, engineTestDriveID)
 	assert.Equal(t, "new-delta-token", token)
 }
 
@@ -560,6 +556,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 		ItemID:  "seed-1",
 	}}
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "stale-token")
+	require.NoError(t, eng.baseline.MarkFullRemoteReconcile(ctx, driveID, time.Now()))
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
@@ -658,8 +655,7 @@ func TestRunOnce_DeltaTokenCommittedWithObservations(t *testing.T) {
 
 	// Delta token IS advanced — committed atomically with observations.
 	// Failed items are tracked in remote_state, not by rolling back the token.
-	token, tokenErr := eng.baseline.GetDeltaToken(ctx, engineTestDriveID, "")
-	require.NoError(t, tokenErr, "GetDeltaToken")
+	token := readObservationCursorForTest(t, eng.baseline, ctx, engineTestDriveID)
 	assert.Equal(t, "new-token-after-observation", token,
 		"delta token should advance with observations even when actions fail")
 }
@@ -724,9 +720,9 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 
 	now := time.Now().UnixNano()
 	_, err := eng.baseline.DB().ExecContext(ctx, `
-		INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, observed_at)
-		VALUES (?, 'item-dl', 'retry-download.txt', 'file', NULL, 18, ?, ?)`,
-		engineTestDriveID, now, now,
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, observed_at)
+		VALUES ('item-dl', 'retry-download.txt', 'file', NULL, 18, ?, ?)`,
+		now, now,
 	)
 	require.NoError(t, err, "seed remote mirror row")
 
@@ -806,11 +802,13 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 
 	now := time.Now().UnixNano()
 	_, err := eng.baseline.DB().ExecContext(ctx, `
-		INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, observed_at, etag)
-		VALUES (?, 'item-edit', 'remote-edit.txt', 'file', 'remote-hash-new', 19, ?, ?, 'etag-edit-new')`,
-		engineTestDriveID, now, now,
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, observed_at, etag)
+		VALUES ('item-edit', 'remote-edit.txt', 'file', 'remote-hash-new', 19, ?, ?, 'etag-edit-new')`,
+		now, now,
 	)
 	require.NoError(t, err, "seed remote mirror edit row")
+	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
+	require.NoError(t, eng.baseline.MarkFullRemoteReconcile(ctx, driveID, time.Now()))
 
 	report, runErr := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
@@ -872,11 +870,13 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 
 	now := time.Now().UnixNano()
 	_, err := eng.baseline.DB().ExecContext(ctx, `
-		INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, observed_at, etag)
-		VALUES (?, 'item-dl', 'retry-download.txt', 'file', ?, 18, ?, ?, 'etag-dl')`,
-		engineTestDriveID, downloadHash, now, now,
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, observed_at, etag)
+		VALUES ('item-dl', 'retry-download.txt', 'file', ?, 18, ?, ?, 'etag-dl')`,
+		downloadHash, now, now,
 	)
 	require.NoError(t, err, "seed remote mirror row")
+	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
+	require.NoError(t, eng.baseline.MarkFullRemoteReconcile(ctx, driveID, time.Now()))
 
 	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")

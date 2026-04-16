@@ -46,7 +46,6 @@ min_free_space = "2GB"
 poll_interval = "10m"
 websocket = false
 dry_run = true
-safety_scan_interval = "15m"
 
 log_level = "debug"
 log_file = "/tmp/onedrive-go.log"
@@ -66,7 +65,6 @@ log_retention_days = 7
 	assert.Equal(t, "10m", cfg.PollInterval)
 	assert.False(t, cfg.Websocket)
 	assert.True(t, cfg.DryRun)
-	assert.Equal(t, "15m", cfg.SafetyScanInterval)
 
 	assert.Equal(t, "debug", cfg.LogLevel)
 	assert.Equal(t, "/tmp/onedrive-go.log", cfg.LogFile)

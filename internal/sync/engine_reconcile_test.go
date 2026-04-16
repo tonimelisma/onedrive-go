@@ -120,7 +120,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a known delta token.
-	require.NoError(t, e.baseline.CommitDeltaToken(ctx, "old-token", driveID.String(), "", driveID.String()))
+	saveObservationCursorForTest(t, e.baseline, ctx, driveID.String(), "old-token")
 
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -132,8 +132,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	assert.Empty(t, pendingToken, "no pending token when 0 events")
 
 	// Token should NOT have been advanced.
-	savedToken, err := e.baseline.GetDeltaToken(ctx, driveID.String(), "")
-	require.NoError(t, err)
+	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Equal(t, "old-token", savedToken, "token should not advance when 0 events returned")
 }
 
@@ -175,7 +174,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a known delta token.
-	require.NoError(t, e.baseline.CommitDeltaToken(ctx, "old-token", driveID.String(), "", driveID.String()))
+	saveObservationCursorForTest(t, e.baseline, ctx, driveID.String(), "old-token")
 
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -188,8 +187,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	// Token should be returned as pending — NOT yet committed to DB.
 	assert.Equal(t, "new-token", pendingToken, "pending token should be returned")
 
-	savedToken, err := e.baseline.GetDeltaToken(ctx, driveID.String(), "")
-	require.NoError(t, err)
+	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Equal(t, "old-token", savedToken,
 		"token should NOT be committed to DB by observeAndCommitRemote — it is deferred")
 }
@@ -210,9 +208,9 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 	})
 
 	// Seen set has 2 of 3 items — id-b is missing (orphan).
-	seen := map[driveid.ItemKey]struct{}{
-		driveid.NewItemKey(driveID, "id-a"): {},
-		driveid.NewItemKey(driveID, "id-c"): {},
+	seen := map[string]struct{}{
+		"id-a": {},
+		"id-c": {},
 	}
 
 	orphans := findBaselineOrphans(bl, seen, driveID, "")
@@ -235,9 +233,9 @@ func TestFindOrphans_NoOrphans(t *testing.T) {
 	})
 
 	// All baseline items are in the seen set.
-	seen := map[driveid.ItemKey]struct{}{
-		driveid.NewItemKey(driveID, "id-a"): {},
-		driveid.NewItemKey(driveID, "id-b"): {},
+	seen := map[string]struct{}{
+		"id-a": {},
+		"id-b": {},
 	}
 
 	orphans := findBaselineOrphans(bl, seen, driveID, "")
@@ -256,7 +254,7 @@ func TestFindOrphans_IgnoresOtherDrives(t *testing.T) {
 	})
 
 	// Empty seen set — only driveID's items should be orphaned.
-	seen := map[driveid.ItemKey]struct{}{}
+	seen := map[string]struct{}{}
 
 	orphans := findBaselineOrphans(bl, seen, driveID, "")
 	require.Len(t, orphans, 1, "should only detect orphans for the specified drive")
@@ -276,8 +274,8 @@ func TestFindOrphans_WithPathPrefix(t *testing.T) {
 
 	// Only id-a is in the seen set. id-b is an orphan under SharedFolder.
 	// id-c is outside the prefix — should NOT be detected.
-	seen := map[driveid.ItemKey]struct{}{
-		driveid.NewItemKey(driveID, "id-a"): {},
+	seen := map[string]struct{}{
+		"id-a": {},
 	}
 
 	orphans := findBaselineOrphans(bl, seen, driveID, "SharedFolder")
@@ -375,72 +373,69 @@ func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 	assert.Equal(t, "valid-2", items[1].ItemID)
 }
 
-// ---------------------------------------------------------------------------
-// resolveReconcileInterval tests (Item 5)
-// ---------------------------------------------------------------------------
-
-func TestResolveReconcileInterval_Default(t *testing.T) {
+func TestShouldRunFullRemoteReconcile_NoCursor(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
-	d := e.resolveReconcileInterval(WatchOptions{})
-	assert.Equal(t, 24*time.Hour, d)
+
+	shouldRun, err := e.shouldRunFullRemoteReconcile(t.Context(), false)
+	require.NoError(t, err)
+	assert.True(t, shouldRun)
 }
 
-func TestResolveReconcileInterval_Disabled(t *testing.T) {
+func TestShouldRunFullRemoteReconcile_Overdue(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
-	d := e.resolveReconcileInterval(WatchOptions{ReconcileInterval: -1})
-	assert.Equal(t, time.Duration(0), d)
+	clock := newManualClock(time.Unix(1_000, 0))
+	installManualClock(e.Engine, clock)
+	require.NoError(t, e.baseline.CommitObservationCursor(t.Context(), e.driveID, "token-1"))
+	require.NoError(t, e.baseline.MarkFullRemoteReconcile(
+		t.Context(),
+		e.driveID,
+		clock.Now().Add(-fullRemoteReconcileInterval-time.Minute),
+	))
+
+	shouldRun, err := e.shouldRunFullRemoteReconcile(t.Context(), false)
+	require.NoError(t, err)
+	assert.True(t, shouldRun)
 }
 
-func TestResolveReconcileInterval_Custom(t *testing.T) {
+func TestShouldRunFullRemoteReconcile_WithinCadence(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
-	d := e.resolveReconcileInterval(WatchOptions{ReconcileInterval: 2 * time.Hour})
-	assert.Equal(t, 2*time.Hour, d)
+	clock := newManualClock(time.Unix(2_000, 0))
+	installManualClock(e.Engine, clock)
+	require.NoError(t, e.baseline.CommitObservationCursor(t.Context(), e.driveID, "token-1"))
+	require.NoError(t, e.baseline.MarkFullRemoteReconcile(
+		t.Context(),
+		e.driveID,
+		clock.Now().Add(-23*time.Hour),
+	))
+
+	shouldRun, err := e.shouldRunFullRemoteReconcile(t.Context(), false)
+	require.NoError(t, err)
+	assert.False(t, shouldRun)
 }
 
-func TestResolveReconcileInterval_ClampsBelowMinimum(t *testing.T) {
+func TestFullRemoteReconcileDelay_UsesPersistedTimestamp(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
-	d := e.resolveReconcileInterval(WatchOptions{ReconcileInterval: 1 * time.Minute})
-	assert.Equal(t, minReconcileInterval, d, "should be clamped to 15 minutes")
+	clock := newManualClock(time.Unix(3_000, 0))
+	installManualClock(e.Engine, clock)
+	require.NoError(t, e.baseline.MarkFullRemoteReconcile(
+		t.Context(),
+		e.driveID,
+		clock.Now().Add(-23*time.Hour),
+	))
+
+	delay, err := e.fullRemoteReconcileDelay(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, time.Hour, delay)
 }
 
-// ---------------------------------------------------------------------------
-// newReconcileTicker tests (Item 6)
-// ---------------------------------------------------------------------------
-
-func TestNewReconcileTicker_Zero(t *testing.T) {
-	t.Parallel()
-
-	e, _ := newTestEngine(t, &engineMockClient{})
-	ticker := e.newReconcileTicker(0)
-	assert.Nil(t, ticker, "zero duration should return nil")
-}
-
-func TestNewReconcileTicker_Negative(t *testing.T) {
-	t.Parallel()
-
-	e, _ := newTestEngine(t, &engineMockClient{})
-	ticker := e.newReconcileTicker(-1)
-	assert.Nil(t, ticker, "negative duration should return nil")
-}
-
-func TestNewReconcileTicker_Positive(t *testing.T) {
-	t.Parallel()
-
-	e, _ := newTestEngine(t, &engineMockClient{})
-	ticker := e.newReconcileTicker(time.Hour)
-	require.NotNil(t, ticker, "positive duration should return non-nil ticker")
-	ticker.Stop()
-}
-
-// ---------------------------------------------------------------------------
 // observeAndCommitRemoteFull tests (Item 6)
 // ---------------------------------------------------------------------------
 
@@ -512,8 +507,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	// Token should be returned as pending — NOT committed to DB.
 	assert.Equal(t, "full-token", pendingToken, "pending token should be returned")
 
-	savedToken, err := e.baseline.GetDeltaToken(ctx, driveID.String(), "")
-	require.NoError(t, err)
+	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Empty(t, savedToken, "token should NOT be committed to DB by observeAndCommitRemoteFull — it is deferred")
 }
 
@@ -531,7 +525,7 @@ func waitForReconcileDone(t *testing.T, eng *testEngine) {
 
 	select {
 	case result := <-rt.reconcileResults:
-		rt.applyReconcileResult(context.Background(), result)
+		rt.applyReconcileResult(result)
 	case <-time.After(10 * time.Second):
 		require.Fail(t, "reconcile result was not delivered within 10s")
 	}
@@ -810,8 +804,7 @@ func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHand
 	default:
 	}
 
-	savedToken, tokenErr := eng.baseline.GetDeltaToken(t.Context(), driveID.String(), "")
-	require.NoError(t, tokenErr)
+	savedToken := readObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
 	assert.Equal(t, "watch-reconcile-token", savedToken)
 
 	cancel()
@@ -882,9 +875,8 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 
 	// Verify observations WERE committed to SQLite — proving we took
 	// the post-commit shutdown path, not the commit-failed path.
-	// CommitObservation saves delta token with scopeID="" (primary drive scope).
-	savedToken, tokenErr := e.baseline.GetDeltaToken(t.Context(), driveID.String(), "")
-	require.NoError(t, tokenErr)
+	// CommitObservation saves the primary observation cursor for this drive DB.
+	savedToken := readObservationCursorForTest(t, e.baseline, t.Context(), driveID.String())
 	assert.Equal(t, "shutdown-tok", savedToken,
 		"delta token should be saved — CommitObservation must have succeeded")
 

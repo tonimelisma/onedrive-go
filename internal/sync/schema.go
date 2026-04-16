@@ -3,163 +3,298 @@ package sync
 import (
 	"context"
 	"database/sql"
-	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
-
-	"github.com/pressly/goose/v3"
+	"slices"
 )
 
-// migrationFS is the authoritative sync-store schema history. New stores apply
-// all embedded migrations; existing stores must already be goose-managed so we
-// never guess at durable user-intent shape.
-//
-//go:embed migrations/*.sql
-var migrationFS embed.FS
-
 const (
-	currentMigrationVersion = int64(1)
 	recoverDriveStateDBHint = "run 'onedrive-go --drive <id> recover' to repair, rebuild, or reset this drive state DB"
-)
+	canonicalSchemaSQL      = `
+CREATE TABLE IF NOT EXISTS baseline (
+    item_id         TEXT    NOT NULL PRIMARY KEY,
+    path            TEXT    NOT NULL UNIQUE,
+    parent_id       TEXT,
+    item_type       TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
+    local_hash      TEXT,
+    remote_hash     TEXT,
+    local_size      INTEGER,
+    remote_size     INTEGER,
+    local_mtime     INTEGER,
+    remote_mtime    INTEGER,
+    synced_at       INTEGER NOT NULL CHECK(synced_at > 0),
+    etag            TEXT
+);
 
-const (
-	gooseHistoryRebuildGuidance = "rebuild or migrate the drive state DB and run sync again"
-	gooseHistoryMalformedPrefix = "existing sync store has malformed goose migration history"
+CREATE INDEX IF NOT EXISTS idx_baseline_parent ON baseline(parent_id);
+
+CREATE TABLE IF NOT EXISTS observation_state (
+    singleton_id                  INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+    configured_drive_id           TEXT    NOT NULL DEFAULT '',
+    cursor                        TEXT    NOT NULL DEFAULT '',
+    updated_at                    INTEGER NOT NULL DEFAULT 0,
+    last_full_remote_reconcile_at INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS sync_metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS remote_state (
+    item_id       TEXT    NOT NULL PRIMARY KEY,
+    path          TEXT    NOT NULL UNIQUE,
+    parent_id     TEXT,
+    item_type     TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
+    hash          TEXT,
+    size          INTEGER,
+    mtime         INTEGER,
+    etag          TEXT,
+    previous_path TEXT,
+    observed_at   INTEGER NOT NULL CHECK(observed_at > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_state_parent ON remote_state(parent_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_state_path ON remote_state(path);
+
+CREATE TABLE IF NOT EXISTS sync_failures (
+    path           TEXT    NOT NULL PRIMARY KEY,
+    direction      TEXT    NOT NULL CHECK(direction IN ('download', 'upload', 'delete')),
+    action_type    TEXT    NOT NULL CHECK(action_type IN (
+                    'download', 'upload', 'local_delete', 'remote_delete',
+                    'local_move', 'remote_move', 'folder_create', 'conflict',
+                    'update_synced', 'cleanup')),
+    category       TEXT    NOT NULL CHECK(category IN ('transient', 'actionable')),
+    failure_role   TEXT    NOT NULL CHECK(failure_role IN ('item', 'held', 'boundary')),
+    issue_type     TEXT,
+    item_id        TEXT,
+    failure_count  INTEGER NOT NULL DEFAULT 0,
+    next_retry_at  INTEGER,
+    last_error     TEXT,
+    http_status    INTEGER,
+    first_seen_at  INTEGER NOT NULL,
+    last_seen_at   INTEGER NOT NULL,
+    file_size      INTEGER,
+    local_hash     TEXT,
+    scope_key      TEXT    NOT NULL DEFAULT '',
+    CHECK (
+        (action_type = 'upload' AND direction = 'upload')
+        OR (action_type IN ('local_delete', 'remote_delete') AND direction = 'delete')
+        OR (action_type IN (
+            'download', 'folder_create', 'local_move', 'remote_move',
+            'conflict', 'update_synced', 'cleanup'
+        ) AND direction = 'download')
+    ),
+    CHECK (
+        failure_role = 'item'
+        OR (failure_role = 'held'
+            AND category = 'transient'
+            AND scope_key <> ''
+            AND next_retry_at IS NULL)
+        OR (failure_role = 'boundary'
+            AND category = 'actionable'
+            AND scope_key <> ''
+            AND next_retry_at IS NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_failures_retry ON sync_failures(next_retry_at)
+    WHERE next_retry_at IS NOT NULL AND category = 'transient';
+CREATE INDEX IF NOT EXISTS idx_sync_failures_scope_role
+    ON sync_failures(scope_key, failure_role);
+CREATE INDEX IF NOT EXISTS idx_sync_failures_remote_blocked
+    ON sync_failures(scope_key, last_seen_at DESC)
+    WHERE failure_role = 'held' AND scope_key LIKE 'perm:remote:%';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_failures_boundary_scope
+    ON sync_failures(scope_key)
+    WHERE failure_role = 'boundary';
+
+CREATE TABLE IF NOT EXISTS scope_blocks (
+    scope_key      TEXT PRIMARY KEY,
+    issue_type     TEXT NOT NULL,
+    timing_source  TEXT NOT NULL CHECK(timing_source IN ('none', 'backoff', 'server_retry_after')),
+    blocked_at     INTEGER NOT NULL,
+    trial_interval INTEGER NOT NULL,
+    next_trial_at  INTEGER NOT NULL,
+    preserve_until INTEGER NOT NULL DEFAULT 0,
+    trial_count    INTEGER NOT NULL DEFAULT 0
+);`
 )
 
 // ErrIncompatibleSchema marks a state DB that cannot be trusted under the
-// current durable-intent schema. The state is rebuildable, but user intent is
-// now part of the DB, so incompatible stores fail loudly instead of mutating.
+// current canonical schema. The state is rebuildable, so incompatible stores
+// fail loudly instead of being guessed at or partially imported.
 var ErrIncompatibleSchema = errors.New("sync: incompatible sync store schema")
 
+func canonicalSyncStoreColumns() map[string][]string {
+	return map[string][]string{
+		"baseline": {
+			"item_id", "path", "parent_id", "item_type", "local_hash", "remote_hash",
+			"local_size", "remote_size", "local_mtime", "remote_mtime", "synced_at", "etag",
+		},
+		"observation_state": {
+			"singleton_id", "configured_drive_id", "cursor", "updated_at", "last_full_remote_reconcile_at",
+		},
+		"sync_metadata": {
+			"key", "value",
+		},
+		"remote_state": {
+			"item_id", "path", "parent_id", "item_type", "hash", "size", "mtime", "etag", "previous_path", "observed_at",
+		},
+		"sync_failures": {
+			"path", "direction", "action_type", "category", "failure_role", "issue_type", "item_id",
+			"failure_count", "next_retry_at", "last_error", "http_status", "first_seen_at", "last_seen_at",
+			"file_size", "local_hash", "scope_key",
+		},
+		"scope_blocks": {
+			"scope_key", "issue_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "preserve_until", "trial_count",
+		},
+	}
+}
+
 func applySchema(ctx context.Context, db *sql.DB) error {
-	if err := ensureGooseManagedOrEmpty(ctx, db); err != nil {
-		return fmt.Errorf("sync: check migration state: %w", err)
+	userTables, err := listUserTables(ctx, db)
+	if err != nil {
+		return fmt.Errorf("sync: inspect schema tables: %w", err)
 	}
 
-	migrations, err := fs.Sub(migrationFS, "migrations")
-	if err != nil {
-		return fmt.Errorf("sync: open embedded migrations: %w", err)
+	if len(userTables) == 0 {
+		if err := createCanonicalSchema(ctx, db); err != nil {
+			return fmt.Errorf("sync: create canonical schema: %w", err)
+		}
+		return nil
 	}
 
-	provider, err := goose.NewProvider(
-		goose.DialectSQLite3,
-		db,
-		migrations,
-		goose.WithLogger(goose.NopLogger()),
-		goose.WithDisableGlobalRegistry(true),
-	)
-	if err != nil {
-		return fmt.Errorf("sync: configure migrations: %w", err)
-	}
-	if _, upErr := provider.Up(ctx); upErr != nil {
-		return fmt.Errorf("sync: apply migrations: %w", upErr)
+	if err := validateCanonicalSchema(ctx, db, userTables); err != nil {
+		return err
 	}
 
-	version, err := provider.GetDBVersion(ctx)
-	if err != nil {
-		return fmt.Errorf("sync: read migration version: %w", err)
-	}
-	if version != currentMigrationVersion {
-		return fmt.Errorf(
-			"%w: found migration version %d, expected version %d; %s",
-			ErrIncompatibleSchema,
-			version,
-			currentMigrationVersion,
-			recoverDriveStateDBHint,
-		)
+	if _, err := db.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
+		return fmt.Errorf("sync: ensuring observation_state row: %w", err)
 	}
 
 	return nil
 }
 
-func ensureGooseManagedOrEmpty(ctx context.Context, db *sql.DB) error {
-	hasGooseVersion, err := tableExists(ctx, db, goose.DefaultTablename)
+func createCanonicalSchema(ctx context.Context, db *sql.DB) (err error) {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin schema transaction: %w", err)
 	}
-	if hasGooseVersion {
-		latestApplied, historyErr := latestAppliedGooseVersion(ctx, db)
-		if historyErr != nil {
-			return errors.Join(
-				fmt.Errorf("%w: %s; %s", ErrIncompatibleSchema, gooseHistoryMalformedPrefix, gooseHistoryRebuildGuidance),
-				fmt.Errorf("inspect goose migration history: %w", historyErr),
-			)
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback())
 		}
-		if !latestApplied.Valid {
+	}()
+
+	if _, err = tx.ExecContext(ctx, canonicalSchemaSQL); err != nil {
+		return fmt.Errorf("apply schema DDL: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
+		return fmt.Errorf("seed observation_state row: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema transaction: %w", err)
+	}
+
+	return nil
+}
+
+func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []string) error {
+	expectedColumnsByTable := canonicalSyncStoreColumns()
+	expectedTables := make([]string, 0, len(expectedColumnsByTable))
+	for tableName := range expectedColumnsByTable {
+		expectedTables = append(expectedTables, tableName)
+	}
+	slices.Sort(expectedTables)
+	slices.Sort(actualTables)
+
+	if !slices.Equal(expectedTables, actualTables) {
+		return fmt.Errorf(
+			"%w: sync store tables do not match the current schema; found %v, expected %v; %s",
+			ErrIncompatibleSchema,
+			actualTables,
+			expectedTables,
+			recoverDriveStateDBHint,
+		)
+	}
+
+	for _, tableName := range expectedTables {
+		actualColumns, err := listTableColumns(ctx, db, tableName)
+		if err != nil {
+			return fmt.Errorf("sync: inspect schema columns for %s: %w", tableName, err)
+		}
+
+		expectedColumns := append([]string(nil), expectedColumnsByTable[tableName]...)
+		slices.Sort(expectedColumns)
+		slices.Sort(actualColumns)
+		if !slices.Equal(expectedColumns, actualColumns) {
 			return fmt.Errorf(
-				"%w: existing sync store has no applied goose migrations; %s",
+				"%w: sync store table %s does not match the current schema; found columns %v, expected %v; %s",
 				ErrIncompatibleSchema,
-				gooseHistoryRebuildGuidance,
+				tableName,
+				actualColumns,
+				expectedColumns,
+				recoverDriveStateDBHint,
 			)
 		}
-		if latestApplied.Int64 < 0 {
-			return fmt.Errorf(
-				"%w: %s; %s: negative version %d",
-				ErrIncompatibleSchema,
-				gooseHistoryMalformedPrefix,
-				gooseHistoryRebuildGuidance,
-				latestApplied.Int64,
-			)
-		}
-
-		return nil
 	}
 
-	hasTables, err := hasNonGooseUserTables(ctx, db)
-	if err != nil {
-		return err
-	}
-	if !hasTables {
-		return nil
-	}
-
-	return fmt.Errorf(
-		"%w: existing sync store has no goose migration history; %s",
-		ErrIncompatibleSchema,
-		recoverDriveStateDBHint,
-	)
+	return nil
 }
 
-func tableExists(ctx context.Context, db *sql.DB, tableName string) (bool, error) {
-	var count int
-	err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM sqlite_master
-		WHERE type = 'table'
-		  AND name = ?`, tableName).Scan(&count)
-	if err != nil {
-		return false, fmt.Errorf("sync: inspect table %s: %w", tableName, err)
-	}
-
-	return count > 0, nil
-}
-
-func latestAppliedGooseVersion(ctx context.Context, db *sql.DB) (sql.NullInt64, error) {
-	var version sql.NullInt64
-	err := db.QueryRowContext(ctx, `
-		SELECT MAX(version_id)
-		FROM `+goose.DefaultTablename+`
-		WHERE is_applied = 1`).Scan(&version)
-	if err != nil {
-		return sql.NullInt64{}, fmt.Errorf("sync: inspect goose migration history: %w", err)
-	}
-
-	return version, nil
-}
-
-func hasNonGooseUserTables(ctx context.Context, db *sql.DB) (bool, error) {
-	var count int
-	err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*)
+func listUserTables(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT name
 		FROM sqlite_master
 		WHERE type = 'table'
 		  AND name NOT LIKE 'sqlite_%'
-		  AND name <> ?`, goose.DefaultTablename).Scan(&count)
+		ORDER BY name`)
 	if err != nil {
-		return false, fmt.Errorf("sync: inspect schema tables: %w", err)
+		return nil, fmt.Errorf("query sqlite_master tables: %w", err)
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			return nil, fmt.Errorf("scan sqlite_master table row: %w", err)
+		}
+		tables = append(tables, tableName)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sqlite_master tables: %w", err)
 	}
 
-	return count > 0, nil
+	return tables, nil
+}
+
+func listTableColumns(ctx context.Context, db *sql.DB, tableName string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+tableName+`)`)
+	if err != nil {
+		return nil, fmt.Errorf("query table info for %s: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var (
+			cid          int
+			name         string
+			columnType   string
+			notNull      int
+			defaultValue sql.NullString
+			pk           int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return nil, fmt.Errorf("scan table info for %s: %w", tableName, err)
+		}
+		columns = append(columns, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate table info for %s: %w", tableName, err)
+	}
+
+	return columns, nil
 }

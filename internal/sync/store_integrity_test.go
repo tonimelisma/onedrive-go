@@ -13,20 +13,21 @@ import (
 )
 
 // Validates: R-2.5.6
-func TestNewSyncStore_AppliesCurrentGooseMigration(t *testing.T) {
+func TestNewSyncStore_StoresObservationStateRow(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-
-	var version int64
-	err := store.DB().QueryRowContext(t.Context(), `
-		SELECT version_id
-		FROM goose_db_version
-		WHERE is_applied = 1
-		ORDER BY version_id DESC
-		LIMIT 1`).Scan(&version)
+	state, err := store.ReadObservationState(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, currentMigrationVersion, version)
+	require.NotNil(t, state)
+
+	var configuredDriveID string
+	err = store.DB().QueryRowContext(t.Context(), `
+		SELECT configured_drive_id
+		FROM observation_state
+		WHERE singleton_id = 1`).Scan(&configuredDriveID)
+	require.NoError(t, err)
+	assert.Empty(t, configuredDriveID)
 }
 
 // Validates: R-2.10.47
@@ -179,10 +180,11 @@ func TestSyncStore_AuditIntegrityIncludesBaselineCacheMismatch(t *testing.T) {
 
 	store := newTestStore(t)
 	ctx := t.Context()
+	require.NoError(t, store.CommitObservationCursor(ctx, driveid.New(testDriveID), ""))
 
 	_, err := store.DB().ExecContext(ctx, `INSERT INTO baseline
-		(path, drive_id, item_id, parent_id, item_type, synced_at, local_hash)
-		VALUES ('/docs/file.txt', ?, 'item-1', 'root', 'file', 1, 'hash-a')`, testDriveID)
+		(path, item_id, parent_id, item_type, synced_at, local_hash)
+		VALUES ('/docs/file.txt', 'item-1', 'root', 'file', 1, 'hash-a')`)
 	require.NoError(t, err)
 
 	_, err = store.Load(ctx)

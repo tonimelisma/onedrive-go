@@ -25,7 +25,6 @@ func expectedGlobalSchemaKeys() []string {
 		"log_retention_days",
 		"min_free_space",
 		"poll_interval",
-		"safety_scan_interval",
 		"transfer_workers",
 		"websocket",
 	}

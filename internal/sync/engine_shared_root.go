@@ -12,35 +12,34 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-func (e *Engine) hasScopedRoot() bool {
+func (e *Engine) hasSharedRoot() bool {
 	return e != nil && e.rootItemID != ""
 }
 
-func (flow *engineFlow) observeScopedRemote(
+func (flow *engineFlow) observeSharedRootRemote(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-	fallbackPolicy ObservationPhaseFallbackPolicy,
 ) ([]ChangeEvent, string, error) {
 	eng := flow.engine
-	if !eng.hasScopedRoot() {
-		return nil, "", fmt.Errorf("sync: scoped remote observation requires a root item ID")
+	if !eng.hasSharedRoot() {
+		return nil, "", fmt.Errorf("sync: shared-root observation requires a root item ID")
 	}
 
-	if eng.folderDelta != nil {
+	if eng.sharedRootObservationMode() == sharedRootObservationDelta {
 		token := ""
 		if !fullReconcile {
-			savedToken, err := eng.baseline.GetDeltaToken(ctx, eng.driveID.String(), eng.rootItemID)
+			state, err := eng.baseline.ReadObservationState(ctx)
 			if err != nil {
-				return nil, "", fmt.Errorf("sync: getting scoped delta token: %w", err)
+				return nil, "", fmt.Errorf("sync: reading observation state: %w", err)
 			}
 
-			token = savedToken
+			token = state.Cursor
 		}
 
 		items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.rootItemID, token)
 		if err != nil && errors.Is(err, graph.ErrGone) && !fullReconcile {
-			eng.logger.Warn("scoped delta token expired, performing full scoped resync",
+			eng.logger.Warn("shared-root delta token expired, performing full shared-root resync",
 				slog.String("drive_id", eng.driveID.String()),
 				slog.String("root_item_id", eng.rootItemID),
 			)
@@ -49,19 +48,19 @@ func (flow *engineFlow) observeScopedRemote(
 			fullReconcile = true
 		}
 		if err == nil {
-			events := convertScopedRootItems(items, eng.rootItemID, eng.driveID, bl, eng.logger)
+			events := convertSharedRootItems(items, eng.rootItemID, eng.driveID, bl, eng.logger)
 			if fullReconcile {
-				events = append(events, detectScopedRootOrphans(items, eng.driveID, bl)...)
+				events = append(events, detectSharedRootOrphans(items, eng.driveID, bl)...)
 			}
 
 			return events, newToken, nil
 		}
 
-		if fallbackPolicy != observationPhaseFallbackPolicyDeltaToEnumerate || eng.recursiveLister == nil {
-			return nil, "", fmt.Errorf("sync: scoped folder delta: %w", err)
+		if eng.recursiveLister == nil {
+			return nil, "", fmt.Errorf("sync: shared-root delta: %w", err)
 		}
 
-		eng.logger.Warn("scoped folder delta unavailable, falling back to recursive listing",
+		eng.logger.Warn("shared-root delta unavailable, falling back to recursive listing",
 			slog.String("drive_id", eng.driveID.String()),
 			slog.String("root_item_id", eng.rootItemID),
 			slog.String("error", err.Error()),
@@ -69,37 +68,36 @@ func (flow *engineFlow) observeScopedRemote(
 	}
 
 	if eng.recursiveLister == nil {
-		return nil, "", fmt.Errorf("sync: recursive lister not available for scoped root %s", eng.rootItemID)
+		return nil, "", fmt.Errorf("sync: recursive lister not available for shared root %s", eng.rootItemID)
 	}
 
 	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, eng.driveID, eng.rootItemID)
 	if err != nil {
-		return nil, "", fmt.Errorf("sync: scoped recursive listing: %w", err)
+		return nil, "", fmt.Errorf("sync: shared-root recursive listing: %w", err)
 	}
 
-	events := convertScopedRootItems(items, eng.rootItemID, eng.driveID, bl, eng.logger)
-	events = append(events, detectScopedRootOrphans(items, eng.driveID, bl)...)
+	events := convertSharedRootItems(items, eng.rootItemID, eng.driveID, bl, eng.logger)
+	events = append(events, detectSharedRootOrphans(items, eng.driveID, bl)...)
 
 	return events, "", nil
 }
 
-func convertScopedRootItems(
+func convertSharedRootItems(
 	items []graph.Item,
-	scopeRootID string,
+	rootItemID string,
 	remoteDriveID driveid.ID,
 	bl *Baseline,
 	logger *slog.Logger,
 ) []ChangeEvent {
 	converter := NewPrimaryConverter(bl, remoteDriveID, logger, nil)
-	converter.ScopeRootID = scopeRootID
+	converter.ScopeRootID = rootItemID
 	return converter.ConvertItems(items)
 }
 
-func detectScopedRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []ChangeEvent {
-	seen := make(map[driveid.ItemKey]struct{}, len(items))
+func detectSharedRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []ChangeEvent {
+	seen := make(map[string]struct{}, len(items))
 	for i := range items {
-		itemDriveID := resolveItemDriveIDWithFallback(&items[i], remoteDriveID)
-		seen[driveid.NewItemKey(itemDriveID, items[i].ID)] = struct{}{}
+		seen[items[i].ID] = struct{}{}
 	}
 
 	return findBaselineOrphans(bl, seen, remoteDriveID, "")
@@ -120,14 +118,6 @@ func (flow *engineFlow) commitObservedItems(
 ) error {
 	eng := flow.engine
 
-	if eng.hasScopedRoot() {
-		if err := eng.baseline.CommitObservationForScope(ctx, observed, token, eng.driveID, eng.rootItemID); err != nil {
-			return fmt.Errorf("sync: committing scoped observations: %w", err)
-		}
-
-		return nil
-	}
-
 	if err := eng.baseline.CommitObservation(ctx, observed, token, eng.driveID); err != nil {
 		return fmt.Errorf("sync: committing observations: %w", err)
 	}
@@ -135,12 +125,11 @@ func (flow *engineFlow) commitObservedItems(
 	return nil
 }
 
-func (rt *watchRuntime) watchScopedRootRemote(
+func (rt *watchRuntime) watchSharedRootRemote(
 	ctx context.Context,
 	bl *Baseline,
 	events chan<- ChangeEvent,
 	interval time.Duration,
-	phase ObservationPhasePlan,
 ) error {
 	if interval < MinPollInterval {
 		interval = MinPollInterval
@@ -150,9 +139,9 @@ func (rt *watchRuntime) watchScopedRootRemote(
 	bo.SetMaxOverride(interval)
 
 	for {
-		result, err := rt.observeObservationPhase(ctx, bl, phase, false)
+		result, err := rt.executeSharedRootObservation(ctx, bl, false)
 		if err != nil {
-			stop, handleErr := rt.handleScopedRootPollError(ctx, bo, err)
+			stop, handleErr := rt.handleSharedRootPollError(ctx, bo, err)
 			if handleErr != nil || stop {
 				return handleErr
 			}
@@ -161,49 +150,49 @@ func (rt *watchRuntime) watchScopedRootRemote(
 
 		if len(result.events) == 0 {
 			bo.Reset()
-			stop, sleepErr := rt.sleepScopedRootWatch(ctx, interval, "zero-event")
+			stop, sleepErr := rt.sleepSharedRootWatch(ctx, interval, "zero-event")
 			if sleepErr != nil || stop {
 				return sleepErr
 			}
 			continue
 		}
 
-		finalEvents, committed := rt.processCommittedScopedWatchBatch(ctx, bl, result)
+		finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, result)
 		if !committed {
 			continue
 		}
 
-		if stop := rt.dispatchScopedRootEvents(ctx, events, finalEvents); stop {
+		if stop := rt.dispatchSharedRootEvents(ctx, events, finalEvents); stop {
 			return nil
 		}
 		bo.Reset()
-		if stop, sleepErr := rt.sleepScopedRootWatch(ctx, interval, "interval"); sleepErr != nil || stop {
+		if stop, sleepErr := rt.sleepSharedRootWatch(ctx, interval, "interval"); sleepErr != nil || stop {
 			return sleepErr
 		}
 	}
 }
 
-func (rt *watchRuntime) handleScopedRootPollError(
+func (rt *watchRuntime) handleSharedRootPollError(
 	ctx context.Context,
 	bo *retry.Backoff,
 	err error,
 ) (bool, error) {
-	if scopedRootWatchStopped(ctx, err) {
+	if sharedRootWatchStopped(ctx, err) {
 		return true, nil
 	}
 
 	delay := bo.Next()
-	rt.engine.logger.Warn("scoped remote watch poll failed, backing off",
+	rt.engine.logger.Warn("shared-root watch poll failed, backing off",
 		slog.String("error", err.Error()),
 		slog.Duration("backoff", delay),
 		slog.String("drive_id", rt.engine.driveID.String()),
 		slog.String("root_item_id", rt.engine.rootItemID),
 	)
 
-	return rt.sleepScopedRootWatch(ctx, delay, "backoff")
+	return rt.sleepSharedRootWatch(ctx, delay, "backoff")
 }
 
-func (rt *watchRuntime) dispatchScopedRootEvents(
+func (rt *watchRuntime) dispatchSharedRootEvents(
 	ctx context.Context,
 	events chan<- ChangeEvent,
 	polledEvents []ChangeEvent,
@@ -219,7 +208,7 @@ func (rt *watchRuntime) dispatchScopedRootEvents(
 	return false
 }
 
-func (rt *watchRuntime) sleepScopedRootWatch(
+func (rt *watchRuntime) sleepSharedRootWatch(
 	ctx context.Context,
 	delay time.Duration,
 	label string,
@@ -228,13 +217,13 @@ func (rt *watchRuntime) sleepScopedRootWatch(
 	if sleepErr == nil {
 		return false, nil
 	}
-	if scopedRootWatchStopped(ctx, sleepErr) {
+	if sharedRootWatchStopped(ctx, sleepErr) {
 		return true, nil
 	}
 
-	return false, fmt.Errorf("scoped remote watch %s sleep: %w", label, sleepErr)
+	return false, fmt.Errorf("shared-root watch %s sleep: %w", label, sleepErr)
 }
 
-func scopedRootWatchStopped(ctx context.Context, err error) bool {
+func sharedRootWatchStopped(ctx context.Context, err error) bool {
 	return ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

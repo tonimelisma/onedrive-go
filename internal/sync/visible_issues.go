@@ -225,13 +225,18 @@ func buildVisibleIssueSummary(groups []VisibleIssueGroup, retrying int) IssueSum
 }
 
 func querySyncFailureRowsDB(ctx context.Context, db *sql.DB, query string, args ...any) ([]SyncFailureRow, error) {
+	configuredDriveID, err := configuredDriveIDForDB(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query sync failures: %w", err)
 	}
 	defer rows.Close()
 
-	return scanSyncFailureRows(rows)
+	return scanSyncFailureRows(rows, configuredDriveID)
 }
 
 func addVisibleActionableGroups(

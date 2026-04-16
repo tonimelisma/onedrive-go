@@ -97,14 +97,6 @@ func TestValidate_PollInterval_InvalidFormat(t *testing.T) {
 	assert.Contains(t, err.Error(), "poll_interval")
 }
 
-func TestValidate_SafetyScanInterval_TooShort(t *testing.T) {
-	cfg := validConfig()
-	cfg.SafetyScanInterval = "5s"
-	err := Validate(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "safety_scan_interval")
-}
-
 // Validates: R-4.8.2
 func TestValidate_LogLevel_Invalid(t *testing.T) {
 	cfg := validConfig()

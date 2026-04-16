@@ -33,8 +33,8 @@ type Engine struct {
 	socketIOFetcher SocketIOEndpointFetcher
 	itemsClient     ItemClient
 	driveVerifier   DriveVerifier      // optional (B-074)
-	folderDelta     FolderDeltaFetcher // optional: scoped-root delta observation
-	recursiveLister RecursiveLister    // optional: scoped-root recursive enumeration fallback
+	folderDelta     FolderDeltaFetcher // optional: shared-root delta observation
+	recursiveLister RecursiveLister    // optional: shared-root recursive enumeration fallback
 	permHandler     *PermissionHandler // encapsulates all permission logic (6.4c)
 	syncRoot        string
 	syncTree        *synctree.Root
