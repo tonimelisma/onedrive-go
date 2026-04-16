@@ -327,8 +327,8 @@ able to scan this table and place every top-level code area.
 | `internal/synctest` | Sync-specific shared test helpers |
 | `testutil` | Repo-wide test helpers |
 | `e2e` | Live provider coverage, fixture preflight, and CLI/sync end-to-end behavior |
-| `scripts/bootstrap-test-credentials.sh` | One-time live-test credential bootstrap |
-| `scripts/migrate-test-data-to-ci.sh` | Move local `.testdata/` into CI secrets storage |
+| `scripts/bootstrap-test-credentials.sh` | One-time live-test credential bootstrap that rebuilds `.testdata/` with token files, `catalog.json`, and `config.toml` |
+| `scripts/migrate-test-data-to-ci.sh` | Move local `.testdata/` tokens, `catalog.json`, `config.toml`, and fixture env into CI secrets storage |
 | `scripts/check-oauth2-fork.sh` | OAuth dependency fork checks |
 | `scripts/dev-env.sh` | Local development environment helper |
 
@@ -473,7 +473,7 @@ A new developer should know where truth lives before changing any behavior.
 | Per-drive sync state | `internal/sync` SQLite DB | One DB per drive |
 | Remote observation mirror | `remote_state` table | Latest observed remote truth |
 | Confirmed synced state | `baseline` table | Shared local/remote agreement |
-| Durable sync issues | `sync_failures`, `scope_blocks` | Sync recovery and restart-safe failure state |
+| Durable sync issues | `sync_failures`, `scope_blocks`, catalog account-auth state | Sync recovery and restart-safe failure state |
 | Log files | `internal/logfile` | Durable operational history, not authoritative state |
 | Perf live snapshots/captures | `internal/perf` | Live or explicit capture surfaces, not a second persistent DB |
 

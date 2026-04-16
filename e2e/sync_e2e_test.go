@@ -816,8 +816,8 @@ func copyTokenFile(t *testing.T, srcDir, dstDir string) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(dstDir, name), data, 0o600))
 
-	// Copy account profile and drive metadata files.
-	testutil.CopyMetadataFiles(srcDir, dstDir)
+	// Copy the managed inventory catalog.
+	testutil.CopyCatalogFile(srcDir, dstDir)
 }
 
 // ---------------------------------------------------------------------------
@@ -989,8 +989,8 @@ func copyTokenFileForDrive(t *testing.T, srcDir, dstDir, driveID string) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(dstDir, name), data, 0o600))
 
-	// Copy account profile and drive metadata files.
-	testutil.CopyMetadataFiles(srcDir, dstDir)
+	// Copy the managed inventory catalog.
+	testutil.CopyCatalogFile(srcDir, dstDir)
 }
 
 // runCLIWithConfigAllDrives runs the CLI without --drive flag (syncs all drives).

@@ -160,9 +160,10 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		LoggingConfig:   cfg.LoggingConfig,
 	}
 
-	// Two-source drive ID resolution: prefer drive metadata file (per-drive,
-	// accurate for SharePoint libraries and shared drives), then shared
-	// canonical ID (embeds the remote drive ID). Otherwise DriveID stays zero.
+	// Two-source drive ID resolution: prefer catalog-backed drive metadata
+	// (per-drive, accurate for SharePoint libraries and shared drives), then
+	// the shared canonical ID (embeds the remote drive ID). Otherwise DriveID
+	// stays zero.
 	driveMeta, _, driveMetaErr := LookupDriveMetadata(canonicalID)
 	if driveMetaErr != nil {
 		logger.Debug("could not load drive metadata", "canonical_id", canonicalID.String(), "error", driveMetaErr)
@@ -170,7 +171,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 
 	if driveMeta != nil && driveMeta.DriveID != "" {
 		resolved.DriveID = driveid.New(driveMeta.DriveID)
-		logger.Debug("resolved drive ID from drive metadata",
+		logger.Debug("resolved drive ID from catalog metadata",
 			"drive_id", resolved.DriveID.String(),
 			"canonical_id", canonicalID.String(),
 		)

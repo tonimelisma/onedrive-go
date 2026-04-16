@@ -320,7 +320,7 @@ func auditScopeBlocks(
 		if block.Key == SKAuthAccount() && !authAccountScopeIsCanonical(block) {
 			report.add(
 				integrityCodeInvalidAuthScopeTiming,
-				"auth:account scope must use timing_source='none' with zero trial metadata",
+				"legacy auth:account scope must use timing_source='none' with zero trial metadata",
 			)
 		}
 

@@ -1,19 +1,17 @@
 package config
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
-// AccountProfile holds cached API data about the account owner. Persisted
-// alongside the OAuth token in the account file. Updated on every login.
+// AccountProfile holds cached API data about the account owner. Persisted in
+// the managed catalog and updated on every login.
 type AccountProfile struct {
 	UserID         string `json:"user_id"`
 	DisplayName    string `json:"display_name"`
@@ -21,16 +19,10 @@ type AccountProfile struct {
 	PrimaryDriveID string `json:"primary_drive_id"`
 }
 
-// accountFile is the on-disk format for account files. Contains just the
-// profile — the OAuth token continues to be managed by tokenfile.Save/Load
-// in the same file (account files ARE the token files, renamed and relocated).
-type accountFile struct {
-	Profile *AccountProfile `json:"profile"`
-}
-
-// AccountFilePath returns the path for an account's file (token + profile).
-// Only valid for personal and business canonical IDs — SharePoint and shared
-// drives use their parent account's file.
+// AccountFilePath returns the legacy path shape for an account profile file.
+// The managed catalog now owns account profiles in steady state; this helper
+// remains for tests that validate the historical naming convention directly.
+// Only valid for personal and business canonical IDs.
 func AccountFilePath(cid driveid.CanonicalID) string {
 	if cid.IsZero() {
 		return ""
@@ -70,79 +62,97 @@ func accountCIDForDrive(cid driveid.CanonicalID) driveid.CanonicalID {
 	}
 }
 
-// LookupAccountProfile reads the profile from an account file. The returned
-// found flag is false when the account file is not applicable, missing, or
-// lacks a profile block.
+// LookupAccountProfile reads the profile from the managed catalog. The returned
+// found flag is false when the catalog has no account entry or the entry lacks
+// cached profile fields.
 func LookupAccountProfile(cid driveid.CanonicalID) (*AccountProfile, bool, error) {
-	path := AccountFilePath(cid)
-	if path == "" {
+	if cid.IsZero() || (!cid.IsPersonal() && !cid.IsBusiness()) {
 		return nil, false, nil
 	}
 
-	root, name, err := fsroot.OpenPath(path)
+	catalog, err := LoadCatalog()
 	if err != nil {
-		return nil, false, fmt.Errorf("opening account root: %w", err)
+		return nil, false, fmt.Errorf("loading catalog: %w", err)
 	}
 
-	data, err := root.ReadFile(name)
-	if errors.Is(err, fs.ErrNotExist) {
+	account, found := catalog.AccountByCanonicalID(cid)
+	if !found {
 		return nil, false, nil
 	}
 
-	if err != nil {
-		return nil, false, fmt.Errorf("reading account file: %w", err)
-	}
-
-	var af accountFile
-	if err := json.Unmarshal(data, &af); err != nil {
-		return nil, false, fmt.Errorf("decoding account file: %w", err)
-	}
-
-	if af.Profile == nil {
+	if account.UserID == "" && account.DisplayName == "" && account.OrgName == "" && account.PrimaryDriveID == "" {
 		return nil, false, nil
 	}
 
-	return af.Profile, true, nil
+	return &AccountProfile{
+		UserID:         account.UserID,
+		DisplayName:    account.DisplayName,
+		OrgName:        account.OrgName,
+		PrimaryDriveID: account.PrimaryDriveID,
+	}, true, nil
 }
 
-// SaveAccountProfile writes the profile to an account file. Creates
-// parent directories as needed. Atomic write (temp file + rename).
-func SaveAccountProfile(cid driveid.CanonicalID, profile *AccountProfile) (err error) {
-	path := AccountFilePath(cid)
-	if path == "" {
-		return fmt.Errorf("cannot determine account file path for %s", cid)
+// SaveAccountProfile writes the profile to the managed catalog.
+func SaveAccountProfile(cid driveid.CanonicalID, profile *AccountProfile) error {
+	if cid.IsZero() || (!cid.IsPersonal() && !cid.IsBusiness()) {
+		return fmt.Errorf("cannot determine account catalog entry for %s", cid)
 	}
 
-	af := accountFile{Profile: profile}
+	return UpdateCatalog(func(catalog *Catalog) error {
+		account := CatalogAccount{
+			CanonicalID: cid.String(),
+			Email:       cid.Email(),
+			DriveType:   cid.DriveType(),
+		}
+		if existing, found := catalog.AccountByCanonicalID(cid); found {
+			account = existing
+		}
 
-	data, err := json.MarshalIndent(af, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encoding account profile: %w", err)
-	}
+		if profile != nil {
+			account.UserID = profile.UserID
+			account.DisplayName = profile.DisplayName
+			account.OrgName = profile.OrgName
+			account.PrimaryDriveID = profile.PrimaryDriveID
+		}
 
-	root, name, err := fsroot.OpenPath(path)
-	if err != nil {
-		return fmt.Errorf("opening account root: %w", err)
-	}
-
-	if err := root.AtomicWrite(name, data, configFilePermissions, configDirPermissions, ".account-*.tmp"); err != nil {
-		return fmt.Errorf("writing account file: %w", err)
-	}
-
-	return nil
+		catalog.UpsertAccount(&account)
+		return nil
+	})
 }
 
-// DiscoverAccountProfiles scans the data directory for account profile files
-// and returns the canonical IDs they represent. Account files follow the naming
-// convention: account_{type}_{email}.json. This is the profile-file counterpart
-// of DiscoverTokens — it finds accounts that may no longer have tokens (logged
-// out but not purged).
+// DiscoverAccountProfiles enumerates catalog-backed account identities that
+// still have cached account profile data.
 func DiscoverAccountProfiles(logger *slog.Logger) []driveid.CanonicalID {
-	return discoverAccountProfilesIn(DefaultDataDir(), logger)
+	catalog, err := LoadCatalog()
+	if err != nil {
+		logger.Debug("cannot load catalog for account discovery", "error", err)
+		return nil
+	}
+
+	var ids []driveid.CanonicalID
+	for _, key := range catalog.SortedAccountKeys() {
+		account := catalog.Accounts[key]
+		if account.UserID == "" && account.DisplayName == "" && account.OrgName == "" && account.PrimaryDriveID == "" {
+			continue
+		}
+
+		cid, err := driveid.NewCanonicalID(account.CanonicalID)
+		if err != nil {
+			logger.Debug("skipping malformed catalog account", "canonical_id", account.CanonicalID, "error", err)
+			continue
+		}
+
+		ids = append(ids, cid)
+	}
+
+	slices.SortFunc(ids, func(a, b driveid.CanonicalID) int {
+		return strings.Compare(a.String(), b.String())
+	})
+	return ids
 }
 
-// discoverAccountProfilesIn scans dir for account profile files and extracts
-// canonical IDs. Files that don't match the naming convention are silently skipped.
+// discoverAccountProfilesIn remains as the filename-scanning helper used by
+// unit tests that validate the old managed-file naming convention directly.
 func discoverAccountProfilesIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
 	return discoverCIDFiles(dir, "account_", logger)
 }

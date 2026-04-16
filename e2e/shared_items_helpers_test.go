@@ -390,17 +390,12 @@ sync_dir = %q
 }
 
 func copyFixtureMetadataFiles(srcDir, dstDir string) error {
-	for _, prefix := range []string{"account_", "drive_"} {
-		matches, err := filepath.Glob(filepath.Join(srcDir, prefix+"*.json"))
-		if err != nil {
-			return fmt.Errorf("glob fixture metadata for %s: %w", prefix, err)
-		}
-
-		for _, match := range matches {
-			if err := copyFixtureFile(match, filepath.Join(dstDir, filepath.Base(match)), 0o600); err != nil {
-				return err
-			}
-		}
+	if err := copyFixtureFile(
+		filepath.Join(srcDir, "catalog.json"),
+		filepath.Join(dstDir, "catalog.json"),
+		0o600,
+	); err != nil {
+		return err
 	}
 
 	return nil

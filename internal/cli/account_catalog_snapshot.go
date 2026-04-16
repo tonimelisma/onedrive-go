@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
@@ -16,6 +17,7 @@ import (
 // command family from rebuilding its own auth/account semantics.
 type accountCatalogSnapshot struct {
 	Config  *config.Config
+	Stored  *config.Catalog
 	Catalog []accountCatalogEntry
 }
 
@@ -39,9 +41,15 @@ func loadAccountCatalogSnapshot(ctx context.Context, cc *CLIContext) (accountCat
 		config.LogWarnings(warnings, logger)
 	}
 
+	stored, err := config.LoadCatalog()
+	if err != nil {
+		return accountCatalogSnapshot{}, fmt.Errorf("loading catalog: %w", err)
+	}
+
 	return accountCatalogSnapshot{
 		Config:  cfg,
-		Catalog: buildAccountCatalog(ctx, cfg, logger),
+		Stored:  stored,
+		Catalog: buildAccountCatalogWithStored(ctx, cfg, stored, logger),
 	}, nil
 }
 
@@ -55,10 +63,24 @@ func loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(
 ) (accountCatalogSnapshot, error) {
 	logger := cc.Logger
 
-	for _, tokenCID := range config.DiscoverTokens(logger) {
+	stored, err := config.LoadCatalog()
+	if err != nil {
+		return accountCatalogSnapshot{}, fmt.Errorf("loading catalog: %w", err)
+	}
+
+	for _, key := range stored.SortedAccountKeys() {
+		account := stored.Accounts[key]
+		tokenCID, err := driveid.NewCanonicalID(account.CanonicalID)
+		if err != nil {
+			logger.Debug("skip malformed catalog account during identity refresh",
+				"canonical_id", account.CanonicalID,
+				"error", err,
+			)
+			continue
+		}
 		if _, err := cc.probeAccountIdentity(ctx, tokenCID, "account-catalog"); err != nil {
 			logger.Debug("skip email reconciliation during account catalog refresh",
-				"account", tokenCID.String(),
+				"account", account.CanonicalID,
 				"error", err,
 			)
 		}

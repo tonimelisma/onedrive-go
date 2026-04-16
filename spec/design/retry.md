@@ -181,7 +181,7 @@ timed by local backoff or explicit server `Retry-After`. The persisted
 scoped-failure-backed scopes whose held rows may temporarily disappear or
 change shape during preserve handling. It does not make locally timed
 `throttle:target:*` or `service` scopes survive restart, and it does not apply
-to non-trial `auth:account`.
+to catalog-owned account-auth state.
 
 ### Restart semantics
 
@@ -192,7 +192,7 @@ Startup repair applies persisted-scope policy before any admission begins:
 - non-server-timed throttle/service scopes are cleared on startup
 - legacy persisted `throttle:account` scopes are released on startup instead of being migrated, because they do not encode the throttled remote boundary
 - scoped-failure-backed scopes may survive restart while `preserve_until` is still in the future even if no same-scope held rows remain
-- `auth:account` is revalidated from one startup proof call instead of trial timing
+- catalog-owned account-auth state is revalidated from one startup proof call instead of trial timing
 - `disk:local` is revalidated against current free space instead of trusting stale persisted timing
 
 ## Deleted Mechanisms

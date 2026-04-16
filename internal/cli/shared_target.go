@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"strings"
 
@@ -52,7 +51,7 @@ func resolveSharedTargetBootstrap(
 		}, true, nil
 	}
 
-	accountEmail, err := resolveRawShareAccountEmail(cc.Flags.Account, cc.Logger)
+	accountEmail, err := resolveRawShareAccountEmail(cc.Flags.Account)
 	if err != nil {
 		return nil, false, err
 	}
@@ -116,22 +115,36 @@ func isSharedTargetInput(raw string) bool {
 	return parsed.Scheme == "http" || parsed.Scheme == "https"
 }
 
-func resolveRawShareAccountEmail(explicit string, logger *slog.Logger) (string, error) {
+func resolveRawShareAccountEmail(explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
 
-	tokens := config.DiscoverTokens(logger)
+	stored, err := config.LoadCatalog()
+	if err != nil {
+		return "", fmt.Errorf("loading catalog: %w", err)
+	}
+
 	seen := make(map[string]struct{})
 	var emails []string
 
-	for _, tokenID := range tokens {
-		if _, ok := seen[tokenID.Email()]; ok {
+	for _, key := range stored.SortedAccountKeys() {
+		account := stored.Accounts[key]
+		if account.Email == "" {
 			continue
 		}
+		if _, ok := seen[account.Email]; ok {
+			continue
+		}
+		if tokenCID, parseErr := driveid.NewCanonicalID(account.CanonicalID); parseErr == nil {
+			tokenPath := config.DriveTokenPath(tokenCID)
+			if tokenPath == "" || !managedPathExists(tokenPath) {
+				continue
+			}
+		}
 
-		seen[tokenID.Email()] = struct{}{}
-		emails = append(emails, tokenID.Email())
+		seen[account.Email] = struct{}{}
+		emails = append(emails, account.Email)
 	}
 
 	switch len(emails) {
@@ -148,7 +161,12 @@ func (cc *CLIContext) sharedBootstrapMetaClient(
 	ctx context.Context,
 	accountEmail string,
 ) (*graph.Client, string, error) {
-	accountCID := findTokenFallback(accountEmail, cc.Logger)
+	stored, err := config.LoadCatalog()
+	if err != nil {
+		return nil, "", fmt.Errorf("loading catalog: %w", err)
+	}
+
+	accountCID := catalogAccountTokenCID(stored, accountEmail)
 	result, err := cc.probeAccountIdentity(ctx, accountCID, "shared-account")
 	if err != nil {
 		return nil, "", fmt.Errorf("probe account identity: %w", err)
@@ -177,7 +195,12 @@ func (cc *CLIContext) sharedBootstrapMetaClient(
 }
 
 func (cc *CLIContext) sharedTargetClients(ctx context.Context, ref sharedref.Ref) (*driveops.AccountClients, error) {
-	accountCID := findTokenFallback(ref.AccountEmail, cc.Logger)
+	stored, err := config.LoadCatalog()
+	if err != nil {
+		return nil, fmt.Errorf("loading catalog: %w", err)
+	}
+
+	accountCID := catalogAccountTokenCID(stored, ref.AccountEmail)
 	result, err := cc.probeAccountIdentity(ctx, accountCID, "shared-account")
 	if err != nil {
 		return nil, fmt.Errorf("probe account identity: %w", err)

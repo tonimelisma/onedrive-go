@@ -6,12 +6,12 @@ Authentication, account management, drive types, and shared drive support.
 
 - R-3.1.1: When the user runs `login`, the system shall authenticate via device code flow (default). [verified]
 - R-3.1.2: When `--browser` is passed, the system shall use PKCE authorization code flow with localhost callback. [verified]
-- R-3.1.3: When the user runs `logout`, the system shall remove the authentication token and config sections, preserving state databases, account profiles, and drive metadata. [verified]
-- R-3.1.4: When `--purge` is passed with logout, the system shall also delete state databases, account profiles, and drive metadata. `--purge` shall work after a prior non-purge logout. [verified]
-- R-3.1.5: When the user runs `whoami`, the system shall display authenticated account information plus any accounts requiring authentication. The auth-required set may come from orphaned account profiles with no saved login, invalid saved-login files on disk, or persisted sync-time `auth:account` rejection. Each auth-required entry shall include the account identity, drive type, and retained state-database count when known. If authenticated live discovery degrades after `/me` succeeds but `/me/drives` still exhausts its transient retry budget, the command shall keep the authenticated account visible and report that separately from auth-required state. [verified]
+- R-3.1.3: When the user runs `logout`, the system shall remove the authentication token and configured drive sections while preserving retained state databases and the managed catalog inventory for that account. [verified]
+- R-3.1.4: When `--purge` is passed with logout, the system shall also delete retained state databases and remove the purged account and owned drives from the managed catalog. `--purge` shall work after a prior non-purge logout. [verified]
+- R-3.1.5: When the user runs `whoami`, the system shall display authenticated account information plus any accounts requiring authentication. The auth-required set may come from catalog-known accounts with no saved login, invalid saved-login files on disk, or a persisted catalog auth-requirement reason. Each auth-required entry shall include the account identity, drive type, and retained state-database count when known. If authenticated live discovery degrades after `/me` succeeds but `/me/drives` still exhausts its transient retry budget, the command shall keep the authenticated account visible and report that separately from auth-required state. [verified]
 - R-3.1.6: When `--json` is passed, `whoami` shall output structured JSON with user info, drives, `accounts_requiring_auth`, and `accounts_degraded`. [verified]
 - R-3.1.7: When `logout` runs without `--account`, account auto-selection shall use the durable offline account catalog rather than only configured drives. Plain `logout` shall auto-select only when exactly one known account has a usable saved login. When multiple accounts have usable saved logins, `--account` is required. When no known account has a usable saved login, plain `logout` shall not auto-select an account. [verified]
-- R-3.1.8: Degraded discovery is a command-local overlay, not a durable account state. It shall not be persisted to config, metadata, or state DBs, and it shall clear automatically on a later successful discovery command. [verified]
+- R-3.1.8: Degraded discovery is a command-local overlay, not a durable account state. It shall not be persisted to config, catalog inventory, or state DBs, and it shall clear automatically on a later successful discovery command. [verified]
 
 ## R-3.2 Drive Types [verified]
 
@@ -61,7 +61,8 @@ The system shall support all four drive types:
   delete the state database. This works both for configured drives (removing
   config section and state database) and for available drives that retain a
   state database from a previous removal (deleting only the state database).
-  The account token, account profile, and sync directory are always preserved.
+  The account token and sync directory are always preserved; the catalog drive
+  record is removed only when no longer needed as retained inventory.
   [verified]
 - R-3.3.9: When the user runs `drive search <term>`, the system shall search SharePoint sites by name across all business accounts, returning up to 50 matching sites with their document libraries and canonical IDs. When `--account` is passed, the search is restricted to that business account. Business accounts that cannot be searched because authentication is required shall be reported as account-level auth-required results instead of being silently skipped. [verified]
 - R-3.3.10: When `--json` is passed, `drive list` shall output structured JSON with `configured`, `available`, `accounts_requiring_auth`, and `accounts_degraded` arrays. Configured drive entries shall include auth status when authentication is required. [verified]

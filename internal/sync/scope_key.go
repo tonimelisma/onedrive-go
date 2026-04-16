@@ -139,7 +139,7 @@ func ParseScopeKey(s string) ScopeKey {
 
 // IsGlobal returns true for scope blocks that affect ALL actions. Target-scoped
 // throttles are intentionally not global; only the legacy throttle:account key,
-// auth:account, and service remain process-wide.
+// legacy auth:account key, and service remain process-wide.
 func (sk ScopeKey) IsGlobal() bool {
 	return sk.Kind == ScopeAuthAccount || sk.Kind == ScopeThrottleAccount || sk.Kind == ScopeService
 }

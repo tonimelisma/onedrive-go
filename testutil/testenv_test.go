@@ -285,29 +285,24 @@ func TestCopyFile(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
-func TestCopyMetadataFiles(t *testing.T) {
+func TestCopyCatalogFile(t *testing.T) {
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()
 
-	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "account_a.json"), []byte("account"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "drive_b.json"), []byte("drive"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "catalog.json"), []byte("catalog"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "other.json"), []byte("ignore"), 0o600))
 
-	CopyMetadataFiles(srcDir, dstDir)
+	CopyCatalogFile(srcDir, dstDir)
 
-	accountData, err := localpath.ReadFile(filepath.Join(dstDir, "account_a.json"))
+	catalogData, err := localpath.ReadFile(filepath.Join(dstDir, "catalog.json"))
 	require.NoError(t, err)
-	assert.Equal(t, "account", string(accountData))
-
-	driveData, err := localpath.ReadFile(filepath.Join(dstDir, "drive_b.json"))
-	require.NoError(t, err)
-	assert.Equal(t, "drive", string(driveData))
+	assert.Equal(t, "catalog", string(catalogData))
 
 	_, err = os.Stat(filepath.Join(dstDir, "other.json"))
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestCopyMetadataFiles_MaterializesCatalogMetadata(t *testing.T) {
+func TestCopyCatalogFile_CopiesManagedCatalog(t *testing.T) {
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()
 
@@ -325,19 +320,13 @@ func TestCopyMetadataFiles_MaterializesCatalogMetadata(t *testing.T) {
       "owner_account_canonical_id": "personal:alice@example.com",
       "remote_drive_id": "drive-alice"
     }
-  }
+	}
 }`
 	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "catalog.json"), []byte(catalog), 0o600))
 
-	CopyMetadataFiles(srcDir, dstDir)
+	CopyCatalogFile(srcDir, dstDir)
 
-	accountData, err := localpath.ReadFile(filepath.Join(dstDir, "account_personal_alice@example.com.json"))
+	catalogData, err := localpath.ReadFile(filepath.Join(dstDir, "catalog.json"))
 	require.NoError(t, err)
-	assert.Contains(t, string(accountData), `"primary_drive_id": "drive-alice"`)
-	assert.Contains(t, string(accountData), `"display_name": "Alice Example"`)
-
-	driveData, err := localpath.ReadFile(filepath.Join(dstDir, "drive_personal_alice@example.com.json"))
-	require.NoError(t, err)
-	assert.Contains(t, string(driveData), `"drive_id": "drive-alice"`)
-	assert.Contains(t, string(driveData), `"account_canonical_id": "personal:alice@example.com"`)
+	assert.JSONEq(t, catalog, string(catalogData))
 }

@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -36,6 +38,7 @@ type Engine struct {
 	folderDelta     FolderDeltaFetcher // optional: shared-root delta observation
 	recursiveLister RecursiveLister    // optional: shared-root recursive enumeration fallback
 	permHandler     *PermissionHandler // encapsulates all permission logic (6.4c)
+	dataDir         string
 	syncRoot        string
 	syncTree        *synctree.Root
 	driveID         driveid.ID
@@ -145,6 +148,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		folderDelta:     cfg.FolderDelta,
 		recursiveLister: cfg.RecursiveLister,
 		sessionStore:    sessionStore,
+		dataDir:         cfg.DataDir,
 		syncRoot:        cfg.SyncRoot,
 		syncTree:        syncTree,
 		driveID:         cfg.DriveID,
@@ -228,8 +232,8 @@ func (e *Engine) Close(ctx context.Context) error {
 }
 
 // proveDriveIdentity performs the single startup proof call used by one-shot
-// and watch-mode bootstrap. The proof remains ephemeral; persisted auth state
-// is still owned by scope_blocks.
+// and watch-mode bootstrap. The proof remains ephemeral; durable account-auth
+// state is owned by the managed catalog.
 func (e *Engine) proveDriveIdentity(ctx context.Context) (driveIdentityProof, error) {
 	if e.driveVerifier == nil {
 		return driveIdentityProof{}, nil
@@ -259,19 +263,52 @@ func (e *Engine) logVerifiedDrive(proof driveIdentityProof) {
 	)
 }
 
-func (e *Engine) hasPersistedAuthScope(ctx context.Context) (bool, error) {
-	blocks, err := e.baseline.ListScopeBlocks(ctx)
+func (e *Engine) hasPersistedAccountAuthRequirement() (bool, error) {
+	if e == nil || e.permHandler == nil || e.permHandler.accountEmail == "" {
+		return false, nil
+	}
+
+	stored, err := config.LoadCatalogForDataDir(e.dataDir)
 	if err != nil {
-		return false, fmt.Errorf("sync: listing scope blocks: %w", err)
+		return false, fmt.Errorf("sync: loading catalog: %w", err)
 	}
 
-	for i := range blocks {
-		if blocks[i].Key == SKAuthAccount() {
-			return true, nil
-		}
+	accountEntry, found := stored.AccountByEmail(e.permHandler.accountEmail)
+	if !found {
+		return false, nil
 	}
 
-	return false, nil
+	return accountEntry.AuthRequirementReason == authstate.ReasonSyncAuthRejected, nil
+}
+
+func (e *Engine) repairPersistedAccountAuthRequirement(
+	ctx context.Context,
+	required bool,
+	proof driveIdentityProof,
+	proofErr error,
+) error {
+	if !required {
+		return nil
+	}
+	if e == nil || e.permHandler == nil || e.permHandler.accountEmail == "" {
+		return nil
+	}
+	if !proof.attempted {
+		return fmt.Errorf("sync: revalidating catalog auth requirement: drive verifier required")
+	}
+	if proofErr != nil {
+		return proofErr
+	}
+	if err := config.ClearAccountAuthRequirementInDataDir(e.dataDir, e.permHandler.accountEmail); err != nil {
+		return fmt.Errorf("sync: clearing catalog auth requirement: %w", err)
+	}
+
+	e.logger.Info("released catalog auth requirement after successful startup proof",
+		slog.String("account", e.permHandler.accountEmail),
+	)
+
+	_ = ctx
+	return nil
 }
 
 // RunOnce executes a single sync pass:

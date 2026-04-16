@@ -12,7 +12,7 @@ Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [veri
 
 - Owns: Canonical drive-identity formats, parsing/formatting, display-name rules, and CLI drive matching semantics.
 - Does Not Own: Config scanning, token resolution, Graph discovery, or sync runtime policy.
-- Source of Truth: Canonical IDs derived from authenticated account and drive metadata; display names are config-owned user-facing labels layered on top of those identities.
+- Source of Truth: Canonical IDs derived from authenticated account data plus catalog-backed drive metadata; display names are config-owned user-facing labels layered on top of those identities.
 - Allowed Side Effects: The leaf `driveid` package is pure. CLI drive commands governed here perform config mutations through the config layer, not through identity types.
 - Mutable Runtime Owner: None. Identity values are pure value types and CLI-local state is invocation-scoped.
 - Error Boundary: Parsing and matching errors stop at the CLI/config boundary; identity types do not translate transport or filesystem failures.
@@ -147,9 +147,9 @@ bootstrap stays independent of live discovery quality.
 
 - `driveid` stays pure value logic. Runtime drive-ID resolution is config-owned:
   shared drives recover the source drive ID from the canonical shared selector,
-  while personal/business/SharePoint drives use drive metadata managed by the
-  config layer rather than token-file side metadata.
-- SharePoint document libraries have their OWN drive_id, different from the business account's primary drive. Drive metadata files (`drive_*.json`) store the correct per-drive ID.
+  while personal/business/SharePoint drives use catalog-backed drive metadata
+  managed by the config layer rather than token-file side metadata.
+- SharePoint document libraries have their OWN drive_id, different from the business account's primary drive. Catalog drive records store the correct per-drive ID.
 
 ### Rationale
 
