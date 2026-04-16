@@ -140,9 +140,14 @@ func TestSaveDriveMetadata_CreatesDirectory(t *testing.T) {
 
 	require.NoError(t, SaveDriveMetadata(cid, &DriveMetadata{DriveID: "d123"}))
 
-	path := DriveMetadataPath(cid)
+	path := CatalogPath()
 	_, statErr := os.Stat(path)
-	assert.NoError(t, statErr)
+	require.NoError(t, statErr)
+
+	loaded, found, err := LookupDriveMetadata(cid)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "d123", loaded.DriveID)
 }
 
 // Validates: R-3.1.4

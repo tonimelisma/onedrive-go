@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
@@ -225,15 +226,7 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
 	assert.Equal(t, 0, runner.depGraph.InFlightCount(), "fatal termination should drain queued ready actions as shutdown")
 
-	blocks, blockErr := eng.baseline.ListScopeBlocks(ctx)
-	require.NoError(t, blockErr)
-	require.Len(t, blocks, 1)
-	assert.Equal(t, SKAuthAccount(), blocks[0].Key)
-	assert.Equal(t, IssueUnauthorized, blocks[0].IssueType)
-	assert.Equal(t, ScopeTimingNone, blocks[0].TimingSource)
-	assert.Zero(t, blocks[0].TrialInterval)
-	assert.True(t, blocks[0].NextTrialAt.IsZero())
-	assert.True(t, blocks[0].PreserveUntil.IsZero())
+	assert.Equal(t, authstate.ReasonSyncAuthRejected, loadCatalogAuthRequirementForTest(t, eng))
 
 	failures, failureErr := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, failureErr)
@@ -355,6 +348,20 @@ func requireIssueGroupSummaryKey(
 	return IssueGroupSnapshot{}
 }
 
+func findIssueGroupSummaryKey(snapshot *DriveStatusSnapshot, key SummaryKey) (IssueGroupSnapshot, bool) {
+	if snapshot == nil {
+		return IssueGroupSnapshot{}, false
+	}
+
+	for i := range snapshot.IssueGroups {
+		if snapshot.IssueGroups[i].SummaryKey == key {
+			return snapshot.IssueGroups[i], true
+		}
+	}
+
+	return IssueGroupSnapshot{}, false
+}
+
 // Validates: R-6.8.16, R-6.6.11
 func TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage(t *testing.T) {
 	t.Parallel()
@@ -417,28 +424,22 @@ func TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired(t *testin
 	require.True(t, outcome.terminate)
 	require.ErrorIs(t, outcome.terminateErr, graph.ErrUnauthorized)
 
-	blocks, err := eng.baseline.ListScopeBlocks(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-	assert.Equal(t, SKAuthAccount(), blocks[0].Key)
-	assert.Equal(t, IssueUnauthorized, blocks[0].IssueType)
+	assert.Equal(t, authstate.ReasonSyncAuthRejected, loadCatalogAuthRequirementForTest(t, eng))
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, failures)
 
 	snapshot := readDriveStatusSnapshotForTest(t, eng, ctx)
-	group := requireIssueGroupSummaryKey(t, &snapshot, SummaryAuthenticationRequired)
-	assert.Equal(t, 1, group.Count)
-	assert.Equal(t, SKAuthAccount(), group.ScopeKey)
-	assert.Empty(t, group.Paths)
+	_, found := findIssueGroupSummaryKey(&snapshot, SummaryAuthenticationRequired)
+	assert.False(t, found)
 
 	output := logBuf.String()
 	assert.Contains(t, output, "run_id=run-")
 	assert.Contains(t, output, "summary_key=authentication_required")
 	assert.Contains(t, output, "failure_class=fatal")
 	assert.Contains(t, output, "log_owner=sync")
-	assert.Contains(t, output, "scope_key=auth:account")
+	assert.NotContains(t, output, "scope_key=auth:account")
 }
 
 // Validates: R-6.8.16, R-6.6.11
@@ -588,13 +589,7 @@ func TestProcessWorkerResult_UnauthorizedTerminatesRouting(t *testing.T) {
 	require.ErrorIs(t, outcome.terminateErr, graph.ErrUnauthorized)
 	assert.True(t, outcome.terminate)
 
-	authBlock, ok := getTestScopeBlock(eng, SKAuthAccount())
-	require.True(t, ok, "fatal unauthorized should persist an auth scope block")
-	assert.Equal(t, IssueUnauthorized, authBlock.IssueType)
-	assert.Equal(t, ScopeTimingNone, authBlock.TimingSource)
-	assert.Zero(t, authBlock.TrialInterval)
-	assert.True(t, authBlock.NextTrialAt.IsZero())
-	assert.True(t, authBlock.PreserveUntil.IsZero())
+	assert.Equal(t, authstate.ReasonSyncAuthRejected, loadCatalogAuthRequirementForTest(t, eng))
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
@@ -1080,13 +1075,7 @@ func TestProcessTrialResultV2_Fatal401DoesNotExtendScope(t *testing.T) {
 	assert.Equal(t, now.Add(45*time.Second), got.NextTrialAt, "fatal unauthorized must not reschedule the original scope")
 	assert.Equal(t, 3, got.TrialCount)
 
-	authBlock, authOK := getTestScopeBlock(eng, SKAuthAccount())
-	require.True(t, authOK, "trial unauthorized should activate the auth scope")
-	assert.Equal(t, IssueUnauthorized, authBlock.IssueType)
-	assert.Equal(t, ScopeTimingNone, authBlock.TimingSource)
-	assert.Zero(t, authBlock.TrialInterval)
-	assert.True(t, authBlock.NextTrialAt.IsZero())
-	assert.True(t, authBlock.PreserveUntil.IsZero())
+	assert.Equal(t, authstate.ReasonSyncAuthRejected, loadCatalogAuthRequirementForTest(t, eng))
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)

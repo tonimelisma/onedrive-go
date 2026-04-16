@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -744,10 +745,10 @@ func TestEngine_RepairPersistedScopes_ThrottleAndServicePolicy(t *testing.T) {
 }
 
 // Validates: R-2.10.45, R-2.10.46
-func TestEngine_PrepareRunOnceState_RevalidatesPersistedAuthScope(t *testing.T) {
+func TestEngine_PrepareRunOnceState_RevalidatesPersistedCatalogAuthRequirement(t *testing.T) {
 	t.Parallel()
 
-	t.Run("successful probe clears persisted auth scope", func(t *testing.T) {
+	t.Run("successful probe clears persisted catalog auth requirement", func(t *testing.T) {
 		t.Parallel()
 
 		eng := newSingleOwnerEngine(t)
@@ -757,21 +758,16 @@ func TestEngine_PrepareRunOnceState_RevalidatesPersistedAuthScope(t *testing.T) 
 		}
 		eng.driveVerifier = verifier
 
-		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
-			Key:          SKAuthAccount(),
-			IssueType:    IssueUnauthorized,
-			TimingSource: ScopeTimingNone,
-			BlockedAt:    eng.nowFunc(),
-		}))
+		setCatalogAuthRequirementForTest(t, eng, authstate.ReasonSyncAuthRejected)
 
 		runner := newOneShotRunner(eng.Engine)
 		err := runner.prepareRunOnceState(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, 1, verifier.calls, "startup auth repair should use exactly one proof call")
-		assert.False(t, isTestScopeBlocked(eng, SKAuthAccount()))
+		assert.Empty(t, loadCatalogAuthRequirementForTest(t, eng))
 	})
 
-	t.Run("unauthorized probe keeps auth scope and aborts startup", func(t *testing.T) {
+	t.Run("unauthorized probe keeps catalog auth requirement and aborts startup", func(t *testing.T) {
 		t.Parallel()
 
 		eng := newSingleOwnerEngine(t)
@@ -779,21 +775,16 @@ func TestEngine_PrepareRunOnceState_RevalidatesPersistedAuthScope(t *testing.T) 
 		verifier := &countingDriveVerifier{err: graph.ErrUnauthorized}
 		eng.driveVerifier = verifier
 
-		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
-			Key:          SKAuthAccount(),
-			IssueType:    IssueUnauthorized,
-			TimingSource: ScopeTimingNone,
-			BlockedAt:    eng.nowFunc(),
-		}))
+		setCatalogAuthRequirementForTest(t, eng, authstate.ReasonSyncAuthRejected)
 
 		runner := newOneShotRunner(eng.Engine)
 		err := runner.prepareRunOnceState(ctx)
 		require.ErrorIs(t, err, graph.ErrUnauthorized)
 		assert.Equal(t, 1, verifier.calls)
-		assert.True(t, isTestScopeBlocked(eng, SKAuthAccount()))
+		assert.Equal(t, authstate.ReasonSyncAuthRejected, loadCatalogAuthRequirementForTest(t, eng))
 	})
 
-	t.Run("non auth probe error leaves auth scope untouched", func(t *testing.T) {
+	t.Run("non auth probe error leaves catalog auth requirement untouched", func(t *testing.T) {
 		t.Parallel()
 
 		eng := newSingleOwnerEngine(t)
@@ -802,18 +793,13 @@ func TestEngine_PrepareRunOnceState_RevalidatesPersistedAuthScope(t *testing.T) 
 		verifier := &countingDriveVerifier{err: probeErr}
 		eng.driveVerifier = verifier
 
-		require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
-			Key:          SKAuthAccount(),
-			IssueType:    IssueUnauthorized,
-			TimingSource: ScopeTimingNone,
-			BlockedAt:    eng.nowFunc(),
-		}))
+		setCatalogAuthRequirementForTest(t, eng, authstate.ReasonSyncAuthRejected)
 
 		runner := newOneShotRunner(eng.Engine)
 		err := runner.prepareRunOnceState(ctx)
 		require.ErrorIs(t, err, probeErr)
 		assert.Equal(t, 1, verifier.calls)
-		assert.True(t, isTestScopeBlocked(eng, SKAuthAccount()))
+		assert.Equal(t, authstate.ReasonSyncAuthRejected, loadCatalogAuthRequirementForTest(t, eng))
 	})
 }
 

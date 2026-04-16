@@ -47,10 +47,10 @@ func purgeDrive(w io.Writer, cfgPath string, driveID driveid.CanonicalID, logger
 	return writeln(w, "Sync directory untouched — delete manually if desired.")
 }
 
-// purgeOrphanedDriveState removes state DB and drive metadata files for a
-// drive that is no longer in config. Unlike purgeSingleDrive (which also
-// removes the drive's config section), this only deletes drive-owned data files
-// left behind from a previous `drive remove` without --purge.
+// purgeOrphanedDriveState removes the retained state DB for a drive that is no
+// longer in config. Unlike purgeSingleDrive (which also removes the drive's
+// config section), this only deletes drive-owned state left behind from a
+// previous `drive remove` without --purge.
 func purgeOrphanedDriveState(w io.Writer, cid driveid.CanonicalID, logger *slog.Logger) error {
 	removed, err := removeDriveDataFiles(cid, logger)
 	if err != nil {
@@ -64,13 +64,13 @@ func purgeOrphanedDriveState(w io.Writer, cid driveid.CanonicalID, logger *slog.
 	return writef(w, "Purged %d orphaned data file(s) for %s.\n", removed, cid.String())
 }
 
-// purgeSingleDrive removes only drive-owned state for one drive: the state
-// database, drive metadata, and config section. Account profiles are
-// account-owned catalog snapshot state and must survive `drive remove --purge` so
-// the remaining logged-in account still has offline identity metadata. Token
-// deletion is handled separately since tokens may be shared (SharePoint).
+// purgeSingleDrive removes only drive-owned state for one drive: the state DB
+// and config section. Account profiles and drive inventory live in the managed
+// catalog, so `drive remove --purge` may drop the drive record separately
+// without touching the owning account record. Token deletion is handled
+// separately since tokens may be shared (SharePoint).
 func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *slog.Logger) error {
-	// Remove state DB and drive metadata (best-effort, errors logged).
+	// Remove retained state (best-effort, errors logged).
 	if _, err := removeDriveDataFiles(canonicalID, logger); err != nil {
 		logger.Warn("errors removing drive data files", "drive", canonicalID.String(), "error", err)
 	}

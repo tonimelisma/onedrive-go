@@ -18,53 +18,45 @@ const (
 )
 
 type accountCatalogEntry struct {
+	AccountCanonicalID    driveid.CanonicalID
 	Email                 string
 	DriveType             string
 	DisplayName           string
 	OrgName               string
 	Configured            bool
 	ConfiguredDriveIDs    []driveid.CanonicalID
-	ProfileDriveIDs       []driveid.CanonicalID
 	TokenDriveIDs         []driveid.CanonicalID
 	RepresentativeTokenID driveid.CanonicalID
 	StateDBCount          int
 	SavedLoginState       string
+	AuthRequirementReason string
 	HasPersistedAuthScope bool
 	AuthHealth            accountAuthHealth
 }
 
 func buildAccountCatalog(ctx context.Context, cfg *config.Config, logger *slog.Logger) []accountCatalogEntry {
+	stored, err := config.LoadCatalog()
+	if err != nil {
+		logger.Debug("loading catalog for account projection", "error", err)
+		stored = config.DefaultCatalog()
+	}
+	return buildAccountCatalogWithStored(ctx, cfg, stored, logger)
+}
+
+func buildAccountCatalogWithStored(
+	ctx context.Context,
+	cfg *config.Config,
+	stored *config.Catalog,
+	logger *slog.Logger,
+) []accountCatalogEntry {
 	grouped, order := groupDrivesByAccount(cfg)
-	byEmail := make(map[string]*accountCatalogEntry, len(order))
+	byEmail := make(map[string]*accountCatalogEntry)
 
-	ensureEntry := func(email string) *accountCatalogEntry {
-		entry, ok := byEmail[email]
-		if ok {
-			return entry
-		}
-
-		entry = &accountCatalogEntry{Email: email}
-		byEmail[email] = entry
-		return entry
+	if stored == nil {
+		stored = config.DefaultCatalog()
 	}
-
-	for _, email := range order {
-		entry := ensureEntry(email)
-		entry.Configured = true
-		for _, cid := range grouped[email] {
-			entry.ConfiguredDriveIDs = appendUniqueCanonicalID(entry.ConfiguredDriveIDs, cid)
-		}
-	}
-
-	for _, cid := range config.DiscoverAccountProfiles(logger) {
-		entry := ensureEntry(cid.Email())
-		entry.ProfileDriveIDs = appendUniqueCanonicalID(entry.ProfileDriveIDs, cid)
-	}
-
-	for _, cid := range config.DiscoverTokens(logger) {
-		entry := ensureEntry(cid.Email())
-		entry.TokenDriveIDs = appendUniqueCanonicalID(entry.TokenDriveIDs, cid)
-	}
+	populateCatalogAccounts(byEmail, stored)
+	populateConfiguredAccounts(byEmail, grouped, order)
 
 	emails := make([]string, 0, len(byEmail))
 	for email := range byEmail {
@@ -76,21 +68,77 @@ func buildAccountCatalog(ctx context.Context, cfg *config.Config, logger *slog.L
 	for _, email := range emails {
 		entry := byEmail[email]
 		slices.SortFunc(entry.ConfiguredDriveIDs, compareCanonicalID)
-		slices.SortFunc(entry.ProfileDriveIDs, compareCanonicalID)
 		slices.SortFunc(entry.TokenDriveIDs, compareCanonicalID)
 
 		entry.RepresentativeTokenID = representativeTokenID(entry.TokenDriveIDs)
-		entry.DriveType = accountCatalogDriveType(entry)
-		entry.DisplayName, entry.OrgName = accountCatalogNames(entry, logger)
+		if entry.DriveType == "" {
+			entry.DriveType = accountCatalogDriveType(entry)
+		}
+		if entry.DisplayName == "" && entry.OrgName == "" {
+			entry.DisplayName, entry.OrgName = accountCatalogNames(entry, logger)
+		}
 		entry.StateDBCount = len(config.DiscoverStateDBsForEmail(entry.Email, logger))
 		entry.SavedLoginState = inspectSavedLoginState(ctx, entry, logger)
-		entry.HasPersistedAuthScope = hasPersistedAuthScope(ctx, entry.Email, logger)
-		entry.AuthHealth = deriveAccountAuthHealth(entry.SavedLoginState, entry.HasPersistedAuthScope)
+		entry.AuthHealth = deriveAccountAuthHealth(entry.SavedLoginState, entry.AuthRequirementReason)
 
 		result = append(result, *entry)
 	}
 
 	return result
+}
+
+func ensureAccountCatalogEntry(byEmail map[string]*accountCatalogEntry, email string) *accountCatalogEntry {
+	if entry, ok := byEmail[email]; ok {
+		return entry
+	}
+
+	entry := &accountCatalogEntry{Email: email}
+	byEmail[email] = entry
+	return entry
+}
+
+func populateCatalogAccounts(byEmail map[string]*accountCatalogEntry, stored *config.Catalog) {
+	for _, key := range stored.SortedAccountKeys() {
+		account := stored.Accounts[key]
+		if account.Email == "" {
+			continue
+		}
+
+		entry := ensureAccountCatalogEntry(byEmail, account.Email)
+		accountCID, err := driveid.NewCanonicalID(account.CanonicalID)
+		if err == nil {
+			entry.AccountCanonicalID = accountCID
+			entry.TokenDriveIDs = appendUniqueCanonicalID(entry.TokenDriveIDs, accountCID)
+		}
+		entry.DriveType = account.DriveType
+		entry.DisplayName = account.DisplayName
+		entry.OrgName = account.OrgName
+		entry.AuthRequirementReason = account.AuthRequirementReason
+		entry.HasPersistedAuthScope = account.AuthRequirementReason == authReasonSyncAuthRejected
+	}
+}
+
+func populateConfiguredAccounts(
+	byEmail map[string]*accountCatalogEntry,
+	grouped map[string][]driveid.CanonicalID,
+	order []string,
+) {
+	for _, email := range order {
+		entry := ensureAccountCatalogEntry(byEmail, email)
+		entry.Configured = true
+		for _, cid := range grouped[email] {
+			entry.ConfiguredDriveIDs = appendUniqueCanonicalID(entry.ConfiguredDriveIDs, cid)
+		}
+		if entry.AccountCanonicalID.IsZero() {
+			entry.AccountCanonicalID = configAccountCIDForCatalog(grouped[email])
+			if !entry.AccountCanonicalID.IsZero() {
+				entry.TokenDriveIDs = appendUniqueCanonicalID(entry.TokenDriveIDs, entry.AccountCanonicalID)
+			}
+		}
+		if entry.DriveType == "" {
+			entry.DriveType = accountDriveType(grouped[email])
+		}
+	}
 }
 
 func catalogEntryByEmail(catalog []accountCatalogEntry, email string) (accountCatalogEntry, bool) {
@@ -163,6 +211,21 @@ func searchableBusinessTokenIDs(catalog []accountCatalogEntry, accountFilter str
 	return result
 }
 
+func catalogTokenIDs(catalog []accountCatalogEntry) []driveid.CanonicalID {
+	var result []driveid.CanonicalID
+
+	for i := range catalog {
+		entry := &catalog[i]
+		if entry.RepresentativeTokenID.IsZero() {
+			continue
+		}
+		result = appendUniqueCanonicalID(result, entry.RepresentativeTokenID)
+	}
+
+	slices.SortFunc(result, compareCanonicalID)
+	return result
+}
+
 func appendUniqueCanonicalID(ids []driveid.CanonicalID, cid driveid.CanonicalID) []driveid.CanonicalID {
 	for _, existing := range ids {
 		if existing == cid {
@@ -183,12 +246,12 @@ func representativeTokenID(ids []driveid.CanonicalID) driveid.CanonicalID {
 
 func accountCatalogDriveType(entry *accountCatalogEntry) string {
 	switch {
+	case !entry.AccountCanonicalID.IsZero():
+		return entry.AccountCanonicalID.DriveType()
 	case len(entry.ConfiguredDriveIDs) > 0:
 		return accountDriveType(entry.ConfiguredDriveIDs)
 	case len(entry.TokenDriveIDs) > 0:
 		return accountDriveType(entry.TokenDriveIDs)
-	case len(entry.ProfileDriveIDs) > 0:
-		return accountDriveType(entry.ProfileDriveIDs)
 	default:
 		return ""
 	}
@@ -211,16 +274,16 @@ func accountCatalogPreferredDriveIDs(entry *accountCatalogEntry) []driveid.Canon
 	case len(entry.TokenDriveIDs) > 0:
 		return entry.TokenDriveIDs
 	default:
-		return entry.ProfileDriveIDs
+		return nil
 	}
 }
 
 func accountCatalogAllDriveIDs(entry *accountCatalogEntry) []driveid.CanonicalID {
-	ids := make([]driveid.CanonicalID, 0, len(entry.ConfiguredDriveIDs)+len(entry.ProfileDriveIDs)+len(entry.TokenDriveIDs))
-	for _, cid := range entry.ConfiguredDriveIDs {
-		ids = appendUniqueCanonicalID(ids, cid)
+	ids := make([]driveid.CanonicalID, 0, len(entry.ConfiguredDriveIDs)+len(entry.TokenDriveIDs)+1)
+	if !entry.AccountCanonicalID.IsZero() {
+		ids = appendUniqueCanonicalID(ids, entry.AccountCanonicalID)
 	}
-	for _, cid := range entry.ProfileDriveIDs {
+	for _, cid := range entry.ConfiguredDriveIDs {
 		ids = appendUniqueCanonicalID(ids, cid)
 	}
 	for _, cid := range entry.TokenDriveIDs {
@@ -242,16 +305,41 @@ func inspectSavedLoginState(ctx context.Context, entry *accountCatalogEntry, log
 	}
 }
 
-func deriveAccountAuthHealth(savedLoginState string, hasPersistedAuthScope bool) accountAuthHealth {
+func deriveAccountAuthHealth(savedLoginState string, authRequirementReason string) accountAuthHealth {
 	switch savedLoginState {
 	case savedLoginStateMissing:
 		return authstate.RequiredHealth(authReasonMissingLogin)
 	case savedLoginStateInvalid:
 		return authstate.RequiredHealth(authReasonInvalidSavedLogin)
 	default:
-		if hasPersistedAuthScope {
-			return authstate.RequiredHealth(authReasonSyncAuthRejected)
+		if authRequirementReason != "" {
+			return authstate.RequiredHealth(authRequirementReason)
 		}
 		return authstate.ReadyHealth()
+	}
+}
+
+func configAccountCIDForCatalog(ids []driveid.CanonicalID) driveid.CanonicalID {
+	for _, cid := range ids {
+		accountCID := configAccountCIDForDrive(cid)
+		if !accountCID.IsZero() {
+			return accountCID
+		}
+	}
+	return driveid.CanonicalID{}
+}
+
+func configAccountCIDForDrive(cid driveid.CanonicalID) driveid.CanonicalID {
+	switch {
+	case cid.IsPersonal(), cid.IsBusiness():
+		return cid
+	case cid.IsSharePoint():
+		accountCID, err := driveid.Construct(driveid.DriveTypeBusiness, cid.Email())
+		if err != nil {
+			return driveid.CanonicalID{}
+		}
+		return accountCID
+	default:
+		return driveid.CanonicalID{}
 	}
 }

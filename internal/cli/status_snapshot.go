@@ -85,8 +85,7 @@ func runStatusCommand(cc *CLIContext, history bool, showPerf ...bool) error {
 	}
 
 	if len(snapshot.Config.Drives) == 0 {
-		tokens := config.DiscoverTokens(logger)
-		if len(tokens) > 0 {
+		if len(snapshot.Catalog) > 0 {
 			return writeln(cc.Output(), "No drives configured. Run 'onedrive-go drive add' to add a drive.")
 		}
 

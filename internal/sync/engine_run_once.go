@@ -200,19 +200,25 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 	eng := r.engine
 	flow := &r.engineFlow
 
+	hasAccountAuthRequirement, err := eng.hasPersistedAccountAuthRequirement()
+	if err != nil {
+		return err
+	}
+
 	proof, proofErr := eng.proveDriveIdentity(ctx)
 	if proofErr != nil {
-		hasAuthScope, err := eng.hasPersistedAuthScope(ctx)
-		if err != nil {
-			return err
-		}
-		if !hasAuthScope {
+		if !hasAccountAuthRequirement {
 			return proofErr
 		}
 	}
 
-	if err := flow.scopeController().repairPersistedScopes(ctx, nil, proof, proofErr); err != nil {
-		return fmt.Errorf("sync: repairing persisted scopes: %w", err)
+	repairErr := flow.scopeController().repairPersistedScopes(ctx, nil)
+	if repairErr != nil {
+		return fmt.Errorf("sync: repairing persisted scopes: %w", repairErr)
+	}
+	authRepairErr := eng.repairPersistedAccountAuthRequirement(ctx, hasAccountAuthRequirement, proof, proofErr)
+	if authRepairErr != nil {
+		return authRepairErr
 	}
 	if proofErr != nil {
 		return proofErr

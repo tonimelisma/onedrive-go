@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -42,6 +43,31 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 		return moveErr
 	}
 
+	persistLoginMetadata(canonicalID, user, orgName, primaryDriveID, logger)
+
+	email := canonicalID.Email()
+	syncDir, added, err := config.EnsureDriveInConfig(cc.CfgPath, canonicalID, logger)
+	if err != nil {
+		return fmt.Errorf("configuring drive: %w", err)
+	}
+
+	clearLoginAuthRequirement(ctx, email, logger)
+
+	if !added {
+		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
+		return writef(cc.Output(), "Token refreshed for %s.\n", email)
+	}
+
+	return printLoginSuccess(cc.Output(), canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
+}
+
+func persistLoginMetadata(
+	canonicalID driveid.CanonicalID,
+	user *graph.User,
+	orgName string,
+	primaryDriveID driveid.ID,
+	logger *slog.Logger,
+) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if profileErr := config.SaveAccountProfile(canonicalID, &config.AccountProfile{
 		UserID:         user.ID,
@@ -56,25 +82,75 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 		DriveID:  primaryDriveID.String(),
 		CachedAt: now,
 	}); driveMetaErr != nil {
-		logger.Warn("failed to save drive metadata", "error", driveMetaErr)
+		logger.Warn("failed to save catalog drive metadata", "error", driveMetaErr)
 	}
 
-	email := canonicalID.Email()
-	syncDir, added, err := config.EnsureDriveInConfig(cc.CfgPath, canonicalID, logger)
-	if err != nil {
-		return fmt.Errorf("configuring drive: %w", err)
+	if catalogErr := config.UpdateCatalog(func(catalog *config.Catalog) error {
+		account := buildLoginCatalogAccount(canonicalID, user, orgName, primaryDriveID, catalog)
+		drive := buildLoginCatalogDrive(canonicalID, primaryDriveID, catalog)
+		catalog.UpsertAccount(&account)
+		catalog.UpsertDrive(&drive)
+		return nil
+	}); catalogErr != nil {
+		logger.Warn("failed to update catalog after login", "error", catalogErr)
 	}
+}
 
-	if clearErr := clearAccountAuthScopes(ctx, email, logger); clearErr != nil {
+func buildLoginCatalogAccount(
+	canonicalID driveid.CanonicalID,
+	user *graph.User,
+	orgName string,
+	primaryDriveID driveid.ID,
+	catalog *config.Catalog,
+) config.CatalogAccount {
+	account := config.CatalogAccount{
+		CanonicalID:           canonicalID.String(),
+		Email:                 canonicalID.Email(),
+		DriveType:             canonicalID.DriveType(),
+		UserID:                user.ID,
+		DisplayName:           user.DisplayName,
+		OrgName:               orgName,
+		PrimaryDriveID:        primaryDriveID.String(),
+		PrimaryDriveCanonical: canonicalID.String(),
+	}
+	if existing, found := catalog.AccountByCanonicalID(canonicalID); found {
+		account.AuthRequirementReason = existing.AuthRequirementReason
+	}
+	return account
+}
+
+func buildLoginCatalogDrive(
+	canonicalID driveid.CanonicalID,
+	primaryDriveID driveid.ID,
+	catalog *config.Catalog,
+) config.CatalogDrive {
+	drive := config.CatalogDrive{
+		CanonicalID:           canonicalID.String(),
+		OwnerAccountCanonical: canonicalID.String(),
+		DriveType:             canonicalID.DriveType(),
+		DisplayName:           config.DefaultDisplayName(canonicalID),
+		PrimaryForAccount:     true,
+		RemoteDriveID:         primaryDriveID.String(),
+	}
+	if existing, found := catalog.DriveByCanonicalID(canonicalID); found {
+		drive = existing
+		drive.OwnerAccountCanonical = canonicalID.String()
+		drive.DriveType = canonicalID.DriveType()
+		drive.PrimaryForAccount = true
+		drive.RemoteDriveID = primaryDriveID.String()
+	}
+	return drive
+}
+
+func clearLoginAuthRequirement(ctx context.Context, email string, logger *slog.Logger) {
+	stored, loadCatalogErr := config.LoadCatalog()
+	if loadCatalogErr != nil {
+		logger.Warn("loading catalog for auth cleanup", "account", email, "error", loadCatalogErr)
+		return
+	}
+	if clearErr := clearAccountAuthScopesWithCatalog(ctx, stored, email, logger); clearErr != nil {
 		logger.Warn("clearing stale auth scopes after login", "account", email, "error", clearErr)
 	}
-
-	if !added {
-		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
-		return writef(cc.Output(), "Token refreshed for %s.\n", email)
-	}
-
-	return printLoginSuccess(cc.Output(), canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
 }
 
 func authenticateLogin(
@@ -118,11 +194,16 @@ func runLogoutWithContext(cc *CLIContext, purge bool) error {
 		cfg = config.DefaultConfig()
 	}
 
-	account, autoErr := resolveLogoutAccount(cfg, cc.Flags.Account, purge, logger)
+	stored, catalogErr := config.LoadCatalog()
+	if catalogErr != nil {
+		return fmt.Errorf("loading catalog: %w", catalogErr)
+	}
+
+	account, autoErr := resolveLogoutAccountWithCatalog(cfg, stored, cc.Flags.Account, purge, logger)
 	if autoErr != nil {
 		return autoErr
 	}
 
 	logger.Info("logout started", "account", account, "purge", purge)
-	return executeLogout(cfg, cc.CfgPath, cc.Output(), account, purge, logger)
+	return executeLogout(cfg, stored, cc.CfgPath, cc.Output(), account, purge, logger)
 }

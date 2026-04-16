@@ -54,21 +54,8 @@ type w7LiveSharedOutput struct {
 	} `json:"accounts_degraded"`
 }
 
-func accountProfilePathForDriveID(dataHome, driveID string) string {
-	parts := strings.SplitN(driveID, ":", 2)
-	if len(parts) != 2 {
-		return ""
-	}
-
-	return filepath.Join(dataHome, "onedrive-go", "account_"+parts[0]+"_"+parts[1]+".json")
-}
-
-func driveMetadataPathForDriveID(dataHome, driveID string) string {
-	return filepath.Join(
-		dataHome,
-		"onedrive-go",
-		"drive_"+strings.ReplaceAll(driveID, ":", "_")+".json",
-	)
+func catalogPathForDataHome(dataHome string) string {
+	return filepath.Join(dataHome, "onedrive-go", "catalog.json")
 }
 
 // Validates: R-3.1.3, R-3.1.5, R-3.1.6, R-3.3.2, R-3.3.10
@@ -81,8 +68,7 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 	email := strings.SplitN(drive, ":", 2)[1]
 	dataHome := env["XDG_DATA_HOME"]
 	tokenPath := filepath.Join(dataHome, "onedrive-go", testutil.TokenFileName(drive))
-	accountProfilePath := accountProfilePathForDriveID(dataHome, drive)
-	driveMetadataPath := driveMetadataPathForDriveID(dataHome, drive)
+	catalogPath := catalogPathForDataHome(dataHome)
 
 	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
 		t, cfgPath, env, "", transientGraphRetryTimeout, "whoami", "--json",
@@ -104,11 +90,8 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 	_, tokenErr := os.Stat(tokenPath)
 	assert.True(t, os.IsNotExist(tokenErr), "logout should remove the token file")
 
-	_, profileErr := os.Stat(accountProfilePath)
-	require.NoError(t, profileErr, "logout should preserve the account profile")
-
-	_, metadataErr := os.Stat(driveMetadataPath)
-	require.NoError(t, metadataErr, "logout should preserve drive metadata")
+	_, catalogErr := os.Stat(catalogPath)
+	require.NoError(t, catalogErr, "logout should preserve the managed catalog")
 
 	cfgBytes, readErr := os.ReadFile(cfgPath)
 	require.NoError(t, readErr)

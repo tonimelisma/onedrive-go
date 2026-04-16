@@ -16,8 +16,9 @@ func TestDegradedDiscoveryHelpers(t *testing.T) {
 	assert.Empty(t, degradedAction("unknown"))
 	assert.NotContains(t, degradedReasonText(driveCatalogUnavailableReason), "temporarily unavailable")
 	assert.NotContains(t, degradedAction(driveCatalogUnavailableReason), "few seconds")
-	assert.Contains(t, degradedAction(driveCatalogUnavailableReason), "clears automatically")
-	assert.Contains(t, degradedAction(sharedDiscoveryUnavailableReason), "No manual repair is required")
+	assert.Contains(t, degradedAction(driveCatalogUnavailableReason), "No action is needed")
+	assert.Contains(t, degradedAction(driveCatalogUnavailableReason), "again later")
+	assert.Contains(t, degradedAction(sharedDiscoveryUnavailableReason), "known")
 
 	merged := mergeDegradedNotices(
 		[]accountDegradedNotice{

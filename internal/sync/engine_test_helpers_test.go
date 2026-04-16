@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -207,7 +208,10 @@ func (m *engineMockClient) UploadToItem(ctx context.Context, driveID driveid.ID,
 	}, nil
 }
 
-const engineTestDriveID = "0000000000000001"
+const (
+	engineTestDriveID = "0000000000000001"
+	engineTestEmail   = "sync-user@example.com"
+)
 
 func testThrottleDriveID() driveid.ID {
 	return driveid.New(engineTestDriveID)
@@ -264,18 +268,23 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 	t.Helper()
 
 	tmpDir := t.TempDir()
+	dataDir := filepath.Join(tmpDir, "data")
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")
 
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750), "creating sync root")
+	require.NoError(t, os.MkdirAll(dataDir, 0o750), "creating test data dir")
 
 	logger := testLogger(t)
 	driveID := driveid.New(engineTestDriveID)
+	accountEmail := engineTestEmail
 
 	eng, err := newEngine(ctx, &engineInputs{
 		DBPath:                 dbPath,
 		SyncRoot:               syncRoot,
+		DataDir:                dataDir,
 		DriveID:                driveID,
+		AccountEmail:           accountEmail,
 		Fetcher:                mock,
 		SocketIOFetcher:        mock,
 		Items:                  mock,
@@ -294,6 +303,15 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 		Engine: eng,
 		flow:   &flow,
 	}
+	require.NoError(t, config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
+		account := config.CatalogAccount{
+			CanonicalID: fmt.Sprintf("personal:%s", accountEmail),
+			Email:       accountEmail,
+			DriveType:   "personal",
+		}
+		catalog.UpsertAccount(&account)
+		return nil
+	}))
 
 	t.Cleanup(func() {
 		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")
@@ -316,17 +334,22 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 	t.Helper()
 
 	tmpDir := t.TempDir()
+	dataDir := filepath.Join(tmpDir, "data")
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")
 
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750), "creating sync root")
+	require.NoError(t, os.MkdirAll(dataDir, 0o750), "creating test data dir")
 
 	driveID := driveid.New(engineTestDriveID)
+	accountEmail := "sync-user@example.com"
 
 	eng, err := newEngine(ctx, &engineInputs{
 		DBPath:                 dbPath,
 		SyncRoot:               syncRoot,
+		DataDir:                dataDir,
 		DriveID:                driveID,
+		AccountEmail:           accountEmail,
 		Fetcher:                mock,
 		SocketIOFetcher:        mock,
 		Items:                  mock,
@@ -345,6 +368,15 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 		Engine: eng,
 		flow:   &flow,
 	}
+	require.NoError(t, config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
+		account := config.CatalogAccount{
+			CanonicalID: fmt.Sprintf("personal:%s", accountEmail),
+			Email:       accountEmail,
+			DriveType:   "personal",
+		}
+		catalog.UpsertAccount(&account)
+		return nil
+	}))
 
 	t.Cleanup(func() {
 		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")
@@ -579,7 +611,42 @@ func assertDiscardedScopeForTest(t *testing.T, eng *testEngine, ctx context.Cont
 func repairPersistedScopesForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
-	return testScopeController(t, eng).repairPersistedScopes(ctx, rt, driveIdentityProof{}, nil)
+	return testScopeController(t, eng).repairPersistedScopes(ctx, rt)
+}
+
+func setCatalogAuthRequirementForTest(t *testing.T, eng *testEngine, reason string) {
+	t.Helper()
+
+	email := eng.permHandler.accountEmail
+	require.NotEmpty(t, email)
+
+	require.NoError(t, config.UpdateCatalogForDataDir(eng.dataDir, func(catalog *config.Catalog) error {
+		account := config.CatalogAccount{
+			CanonicalID: email,
+			Email:       email,
+			DriveType:   "test",
+		}
+		if existing, found := catalog.AccountByEmail(email); found {
+			account = existing
+		}
+		account.AuthRequirementReason = reason
+		catalog.UpsertAccount(&account)
+		return nil
+	}))
+}
+
+func loadCatalogAuthRequirementForTest(t *testing.T, eng *testEngine) string {
+	t.Helper()
+
+	stored, err := config.LoadCatalogForDataDir(eng.dataDir)
+	require.NoError(t, err)
+
+	account, found := stored.AccountByEmail(eng.permHandler.accountEmail)
+	if !found {
+		return ""
+	}
+
+	return account.AuthRequirementReason
 }
 
 func admitReadyForTest(t *testing.T, eng *testEngine, ctx context.Context, ready []*TrackedAction) []*TrackedAction {

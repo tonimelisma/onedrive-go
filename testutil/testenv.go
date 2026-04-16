@@ -4,7 +4,6 @@ package testutil
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -18,26 +17,6 @@ import (
 const metadataDirPerms = 0o755
 
 const sharedFixtureEnvPath = ".testdata/fixtures.env"
-
-type credentialCatalog struct {
-	Accounts map[string]credentialCatalogAccount `json:"accounts"`
-	Drives   map[string]credentialCatalogDrive   `json:"drives"`
-}
-
-type credentialCatalogAccount struct {
-	CanonicalID    string `json:"canonical_id"`
-	DisplayName    string `json:"display_name"`
-	OrgName        string `json:"org_name,omitempty"`
-	PrimaryDriveID string `json:"primary_drive_id"`
-}
-
-type credentialCatalogDrive struct {
-	CanonicalID             string `json:"canonical_id"`
-	OwnerAccountCanonicalID string `json:"owner_account_canonical_id"`
-	RemoteDriveID           string `json:"remote_drive_id"`
-	OwnerName               string `json:"owner_name,omitempty"`
-	OwnerEmail              string `json:"owner_email,omitempty"`
-}
 
 // LiveFixtures captures durable live Graph fixtures loaded from the test
 // environment. The values stay as strings so testutil's exported API does not
@@ -289,37 +268,18 @@ func TokenFileName(driveID string) string {
 	return "token_" + parts[0] + "_" + parts[1] + ".json"
 }
 
-// metadataFilePerms is owner-only read/write for metadata files.
+// metadataFilePerms is owner-only read/write for managed test credential files.
 const metadataFilePerms = 0o600
 
-// CopyMetadataFiles copies all account_*.json and drive_*.json files from
-// srcDir to dstDir. When the durable test credential layout only provides
-// catalog.json, the helper materializes the per-file account and drive
-// metadata that the isolated CLI runtime expects.
-func CopyMetadataFiles(srcDir, dstDir string) {
-	copiedMetadata := false
-	for _, prefix := range []string{"account_", "drive_"} {
-		matches, err := filepath.Glob(filepath.Join(srcDir, prefix+"*.json"))
-		if err != nil {
-			continue
-		}
-
-		for _, m := range matches {
-			CopyFile(m, filepath.Join(dstDir, filepath.Base(m)), metadataFilePerms)
-			copiedMetadata = true
-		}
-	}
-
-	if copiedMetadata {
+// CopyCatalogFile copies the managed catalog from srcDir to dstDir when present.
+// Missing catalogs are silently skipped; copy failures are fatal.
+func CopyCatalogFile(srcDir, dstDir string) {
+	src := filepath.Join(srcDir, "catalog.json")
+	if _, err := localpath.Stat(src); err != nil {
 		return
 	}
 
-	catalogPath := filepath.Join(srcDir, "catalog.json")
-	if _, err := localpath.Stat(catalogPath); err != nil {
-		return
-	}
-
-	materializeCatalogMetadata(catalogPath, dstDir)
+	CopyFile(src, filepath.Join(dstDir, "catalog.json"), metadataFilePerms)
 }
 
 // CopyFile copies a file from src to dst with the given permissions.
@@ -357,90 +317,4 @@ func CopyFile(src, dst string, perm os.FileMode) {
 		fmt.Fprintf(os.Stderr, "FATAL: closing %s: %v\n", dst, closeErr)
 		os.Exit(1)
 	}
-}
-
-func materializeCatalogMetadata(catalogPath, dstDir string) {
-	data, err := localpath.ReadFile(catalogPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: cannot read %s: %v\n", catalogPath, err)
-		os.Exit(1)
-	}
-
-	var catalog credentialCatalog
-	if err := json.Unmarshal(data, &catalog); err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: cannot decode %s: %v\n", catalogPath, err)
-		os.Exit(1)
-	}
-
-	for _, account := range catalog.Accounts {
-		accountPath := filepath.Join(dstDir, accountFileName(account.CanonicalID))
-		accountBody, err := json.MarshalIndent(map[string]any{
-			"profile": map[string]string{
-				"user_id":          account.PrimaryDriveID,
-				"display_name":     account.DisplayName,
-				"org_name":         account.OrgName,
-				"primary_drive_id": account.PrimaryDriveID,
-			},
-		}, "", "  ")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "FATAL: cannot encode account metadata for %s: %v\n", account.CanonicalID, err)
-			os.Exit(1)
-		}
-		writeMetadataFile(accountPath, accountBody)
-	}
-
-	for _, drive := range catalog.Drives {
-		owner := catalog.Accounts[drive.OwnerAccountCanonicalID]
-		ownerName := drive.OwnerName
-		if ownerName == "" {
-			ownerName = owner.DisplayName
-		}
-		ownerEmail := drive.OwnerEmail
-		if ownerEmail == "" {
-			ownerEmail = canonicalIDEmail(drive.OwnerAccountCanonicalID)
-		}
-
-		drivePath := filepath.Join(dstDir, driveFileName(drive.CanonicalID))
-		driveBody, err := json.MarshalIndent(map[string]string{
-			"drive_id":             drive.RemoteDriveID,
-			"account_canonical_id": drive.OwnerAccountCanonicalID,
-			"owner_name":           ownerName,
-			"owner_email":          ownerEmail,
-		}, "", "  ")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "FATAL: cannot encode drive metadata for %s: %v\n", drive.CanonicalID, err)
-			os.Exit(1)
-		}
-		writeMetadataFile(drivePath, driveBody)
-	}
-}
-
-func writeMetadataFile(path string, data []byte) {
-	if err := localpath.AtomicWrite(path, append(data, '\n'), metadataFilePerms, metadataDirPerms, ".testdata-*.tmp"); err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: cannot write %s: %v\n", path, err)
-		os.Exit(1)
-	}
-}
-
-func accountFileName(canonicalID string) string {
-	parts := strings.SplitN(canonicalID, ":", 2)
-	if len(parts) != 2 {
-		fmt.Fprintf(os.Stderr, "FATAL: cannot derive account file from canonical ID %q\n", canonicalID)
-		os.Exit(1)
-	}
-
-	return "account_" + parts[0] + "_" + parts[1] + ".json"
-}
-
-func driveFileName(canonicalID string) string {
-	return "drive_" + strings.ReplaceAll(canonicalID, ":", "_") + ".json"
-}
-
-func canonicalIDEmail(canonicalID string) string {
-	parts := strings.SplitN(canonicalID, ":", 2)
-	if len(parts) != 2 {
-		return ""
-	}
-
-	return parts[1]
 }

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"time"
 )
 
 // RemoteBlockedGroup is the first-class derived view for one active
@@ -89,17 +88,12 @@ func loadVisibleIssueProjection(
 		return visibleIssueProjection{}, fmt.Errorf("sync: listing visible remote blocked failures: %w", err)
 	}
 
-	authBlocks, err := queryAuthScopeBlocks(ctx, db)
-	if err != nil {
-		return visibleIssueProjection{}, fmt.Errorf("sync: listing visible auth scope blocks: %w", err)
-	}
-
 	retrying, err := queryRetryingIssueCount(ctx, db)
 	if err != nil {
 		return visibleIssueProjection{}, fmt.Errorf("sync: counting retrying sync failures: %w", err)
 	}
 
-	groups := buildVisibleIssueGroups(actionable, remoteBlocked, authBlocks)
+	groups := buildVisibleIssueGroups(actionable, remoteBlocked)
 	if logger != nil {
 		logger.Debug("loaded visible issue projection",
 			slog.Int("groups", len(groups)),
@@ -110,57 +104,6 @@ func loadVisibleIssueProjection(
 		groups:  groups,
 		summary: buildVisibleIssueSummary(groups, retrying),
 	}, nil
-}
-
-func queryAuthScopeBlocks(ctx context.Context, db *sql.DB) ([]*ScopeBlock, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count
-		FROM scope_blocks
-		WHERE scope_key = ?`,
-		SKAuthAccount().String(),
-	)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("query auth scope blocks: %w", err)
-	}
-	defer rows.Close()
-
-	var blocks []*ScopeBlock
-	for rows.Next() {
-		var block ScopeBlock
-		var wire string
-		var blockedAt int64
-		var trialInterval int64
-		var nextTrialAt int64
-		var preserveUntil int64
-		if err := rows.Scan(
-			&wire,
-			&block.IssueType,
-			&block.TimingSource,
-			&blockedAt,
-			&trialInterval,
-			&nextTrialAt,
-			&preserveUntil,
-			&block.TrialCount,
-		); err != nil {
-			return nil, fmt.Errorf("scan auth scope block: %w", err)
-		}
-		block.Key = ParseScopeKey(wire)
-		block.BlockedAt = time.Unix(0, blockedAt)
-		block.TrialInterval = time.Duration(trialInterval)
-		block.NextTrialAt = time.Unix(0, nextTrialAt)
-		if preserveUntil > 0 {
-			block.PreserveUntil = time.Unix(0, preserveUntil)
-		}
-		blocks = append(blocks, &block)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate auth scope blocks: %w", err)
-	}
-
-	return blocks, nil
 }
 
 func isMissingTableErr(err error) bool {
@@ -180,14 +123,12 @@ func queryRetryingIssueCount(ctx context.Context, db *sql.DB) (int, error) {
 func buildVisibleIssueGroups(
 	actionable []SyncFailureRow,
 	remoteBlocked []SyncFailureRow,
-	authBlocks []*ScopeBlock,
 ) []VisibleIssueGroup {
 	groupIndex := make(map[visibleIssueGroupKey]int)
-	groups := make([]VisibleIssueGroup, 0, len(actionable)+len(authBlocks)+1)
+	groups := make([]VisibleIssueGroup, 0, len(actionable)+1)
 
 	addVisibleActionableGroups(&groups, groupIndex, actionable)
 	addVisibleRemoteBlockedGroups(&groups, groupIndex, remoteBlocked)
-	addVisibleAuthScopeGroups(&groups, groupIndex, authBlocks)
 	finalizeVisibleIssueGroups(groups)
 
 	return groups
@@ -271,31 +212,6 @@ func addVisibleRemoteBlockedGroups(
 			}
 		}
 		group.RemoteBlocked.BlockedPaths = append(group.RemoteBlocked.BlockedPaths, remoteBlocked[i].Path)
-	}
-}
-
-func addVisibleAuthScopeGroups(
-	groups *[]VisibleIssueGroup,
-	groupIndex map[visibleIssueGroupKey]int,
-	authBlocks []*ScopeBlock,
-) {
-	for i := range authBlocks {
-		summaryKey := SummaryKeyForScopeBlock(authBlocks[i].IssueType, authBlocks[i].Key)
-		groupKey := visibleIssueGroupKey{
-			summaryKey: summaryKey,
-			scopeKey:   authBlocks[i].Key,
-		}
-		if _, ok := groupIndex[groupKey]; ok {
-			continue
-		}
-		*groups = append(*groups, VisibleIssueGroup{
-			SummaryKey:   summaryKey,
-			IssueType:    authBlocks[i].IssueType,
-			ScopeKey:     authBlocks[i].Key,
-			Count:        1,
-			VisibleCount: 1,
-		})
-		groupIndex[groupKey] = len(*groups) - 1
 	}
 }
 

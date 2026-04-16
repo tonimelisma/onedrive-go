@@ -7,7 +7,7 @@ TOML configuration, service integration, and interactive setup.
 - R-4.1.1: The system shall use TOML format with drive sections keyed by canonical ID. [verified]
 - R-4.1.2: The system shall support XDG paths (Linux: `~/.config/onedrive-go/`, macOS: `~/Library/Application Support/onedrive-go/`). [verified]
 - R-4.1.3: The system shall support `--config` flag and `ONEDRIVE_GO_CONFIG` env var overrides. [verified]
-- R-4.1.4: `config.toml` shall contain drive sections only. Account saved-login state, account profiles, drive metadata, and retained sync state shall be persisted outside the config file. [verified]
+- R-4.1.4: `config.toml` shall contain drive sections only. Durable account and drive inventory shall live in a managed `catalog.json`, saved-login state shall live in token files, and retained sync state shall live in per-drive state DBs. [verified]
 
 ## R-4.2 Config Auto-Creation [verified]
 

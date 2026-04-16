@@ -134,13 +134,16 @@ The engine classifies worker results into:
 Runtime scope state is an in-memory working set rebuilt from `scope_blocks` at
 startup. Current persisted scope families are:
 
-- `auth:account`
 - `quota:own`
 - `throttle:target:drive:*`
 - `service`
 - `perm:dir:*`
 - `perm:remote:*`
 - `disk:local`
+
+Account-auth rejection is no longer a persisted sync scope. Durable
+account-auth state lives in the managed catalog, and sync consults that catalog
+before startup proof and after fatal unauthorized results.
 
 Permission scopes are revalidated automatically; there is no manual retry or
 manual recheck CLI for them.

@@ -79,7 +79,7 @@ not a mailbox for user decisions.
 
 ## `scope_blocks`
 
-`scope_blocks` stores active blocking conditions that outlive a process:
+`scope_blocks` stores active sync blocking conditions that outlive a process:
 
 - identity: `scope_key`
 - visible issue type: `issue_type`
@@ -87,11 +87,11 @@ not a mailbox for user decisions.
   `next_trial_at`, `preserve_until`, `trial_count`
 
 The engine rebuilds its in-memory active-scope working set from this table at
-startup and owns all runtime mutations thereafter.
+startup and owns all runtime mutations thereafter. Durable account-auth state
+is not stored here; it lives in the managed catalog.
 
 Current persisted scope keys are:
 
-- `auth:account`
 - `quota:own`
 - `throttle:target:drive:<driveID>`
 - `service`
@@ -99,7 +99,8 @@ Current persisted scope keys are:
 - `perm:remote:<localPath>`
 - `disk:local`
 
-Legacy `throttle:account` remains parseable for startup cleanup only.
+Legacy `throttle:account` and `auth:account` rows remain parseable for startup
+cleanup only.
 
 ## `observation_state`
 
