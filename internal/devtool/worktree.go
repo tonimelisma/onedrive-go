@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 type includeEntry struct {
@@ -28,13 +26,13 @@ type worktreeFS struct {
 
 func defaultWorktreeFS() worktreeFS {
 	return worktreeFS{
-		readFile:  localpath.ReadFile,
-		stat:      localpath.Stat,
-		mkdirAll:  localpath.MkdirAll,
-		removeAll: localpath.RemoveAll,
-		symlink:   localpath.Symlink,
+		readFile:  readFile,
+		stat:      stat,
+		mkdirAll:  mkdirAll,
+		removeAll: removeAll,
+		symlink:   symlink,
 		writeFile: func(path string, data []byte, perm os.FileMode) error {
-			return localpath.AtomicWrite(path, data, perm, worktreeDirPerm, ".worktree-include-*.tmp")
+			return atomicWrite(path, data, perm, worktreeDirPerm, ".worktree-include-*.tmp")
 		},
 	}
 }

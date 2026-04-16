@@ -22,7 +22,7 @@ internal/
   cli/                        Cobra command tree, CLI bootstrap, output formatting, command handlers
 
   config/                     TOML config, drive sections, XDG paths, override chain
-  devtool/                    Verifier, benchmark, worktree, watch-capture, and state-audit helpers
+  devtool/                    Verifier, benchmark, worktree, and cleanup-audit helpers
   driveid/                    Type-safe drive identity: ID, CanonicalID, ItemKey (leaf, stdlib-only)
   driveops/                   Authenticated drive access: sessions, transfers, hashing
   errclass/                   Shared runtime failure class enum (leaf, stdlib-only)
@@ -167,7 +167,7 @@ performance data.
 Static verification is a first-class architectural constraint, not a best-effort hygiene step.
 
 - `golangci-lint` runs with `default: none`; every enabled linter is an explicit policy choice.
-- `depguard` enforces architectural import boundaries, and `forbidigo` bans raw filesystem `os.*` calls outside the explicit boundary packages (`fsroot`, `synctree`, `localpath`).
+- `depguard` enforces architectural import boundaries, and `forbidigo` bans raw filesystem `os.*` calls in production/runtime packages outside the explicit boundary packages (`fsroot`, `synctree`, `localpath`). Repo tooling under `internal/devtool` is allowed to use stdlib filesystem calls directly because it does not participate in product runtime authority.
 - Test-time synchronization is linted as well: direct `time.Sleep` is banned in test code, so unit and integration tests use explicit readiness handshakes or injected clocks/timers instead of wall-clock waits. The narrow exception set is live E2E helpers that wait on external process or provider propagation and carry an explicit `nolint` justification.
 - `nolintlint` requires both a specific linter name and a short justification. Unused exclusions are surfaced with `linters.exclusions.warn-unused`.
 - Inline suppressions are reserved for the small documented exception set where the code is correct and the linter cannot express that shape cleanly: interface-mandated receiver shapes, validated subprocess/request dispatch that the linter cannot follow across helper boundaries, non-cryptographic jitter, `driver.Valuer` SQL `NULL` semantics, fixed placeholder SQL, and intentional test fixtures/mocks.
@@ -175,14 +175,6 @@ Static verification is a first-class architectural constraint, not a best-effort
 - The verifier implementation is split by concrete ownership inside `internal/devtool`: `verify.go` owns profile orchestration and shared runners, `verify_summary.go` owns end-of-run summaries, `verify_e2e.go` owns fast/full live-suite orchestration, `verify_docs.go` owns doc/traceability validation, and `verify_repo_checks.go` owns repo-consistency and privileged-boundary enforcement. This split is structural only; `go run ./cmd/devtool verify ...` remains the single behavior contract and developer entrypoint.
 - Verifier tests mirror that ownership split instead of one monolithic test file: `verify_runner_test.go` covers profile orchestration and summaries, `verify_docs_test.go` covers doc/traceability validation, `verify_repo_checks_test.go` covers repo-consistency and privileged-boundary rules, and `verify_test_helpers_test.go` owns the shared fake runner plus repo fixture builders.
 - `go run ./cmd/devtool cleanup-audit` is the read-only git-state cleanup classifier. It fetches/prunes `origin`, then classifies local worktrees, local branches, and remote branches as `safe_remove`, `keep_attached`, `keep_dirty`, `keep_unmerged`, or `keep_main` without deleting anything.
-- `go run ./cmd/devtool watch-capture --scenario <name> [--json] [--repeat N]
-  [--settle D]` captures raw per-OS fsnotify event sequences for scoped-watch
-  scenarios into a stable JSON shape. The command is diagnostic tooling only;
-  product CLI stays unchanged. Checked-in captures under
-  `internal/sync/testdata/watch_capture/<goos>/<scenario>/<variant>.json`
-  back the replay tests in `internal/sync`. Those fixtures now cover
-  both `darwin` and `linux`, with Linux replay exercised in the default
-  Ubuntu CI lane.
 - `go run ./cmd/devtool bench --scenario <name> [--subject <id>] [--runs N]
   [--warmup N] [--json] [--result-json <path>]` is the repo-owned benchmark
   runner entrypoint. The delivered slices measure the
@@ -226,7 +218,6 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Managed repo-state files use `internal/fsroot` root capabilities.
 - Sync-runtime filesystem operations under one configured sync root use `internal/synctree`.
 - Arbitrary local file paths outside those rooted domains use `internal/localpath` as the explicit trust boundary. `localpath.AtomicWrite` is the default arbitrary-path writer when replace-in-place semantics matter.
-- Sync-state integrity inspection and deterministic safe repair live behind `internal/sync` and surface operationally through `go run ./cmd/devtool state-audit`.
 - Append-only log file creation in `internal/logfile` is the single documented exception to atomic replace-style writes. It is allowed because the log is an append-only operational artifact, not an authoritative config/state file.
 - `fsroot.Root` and `synctree.Root` carry unexported injectable ops so managed-state and sync-runtime I/O failure paths can be tested deterministically without package-level test hooks.
 

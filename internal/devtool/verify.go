@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 type VerifyProfile string
@@ -257,7 +255,7 @@ func prepareCoverageFile(plan verifyPlan, coverageFile string) (string, func() e
 		return coverageFile, func() error { return nil }, nil
 	}
 
-	f, err := localpath.CreateTemp(os.TempDir(), defaultCoveragePattern)
+	f, err := createTemp(os.TempDir(), defaultCoveragePattern)
 	if err != nil {
 		return "", nil, fmt.Errorf("create coverage file: %w", err)
 	}
@@ -268,7 +266,7 @@ func prepareCoverageFile(plan verifyPlan, coverageFile string) (string, func() e
 	}
 
 	return coverageFile, func() error {
-		if err := localpath.Remove(coverageFile); err != nil && !os.IsNotExist(err) {
+		if err := remove(coverageFile); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove coverage file %s: %w", coverageFile, err)
 		}
 
