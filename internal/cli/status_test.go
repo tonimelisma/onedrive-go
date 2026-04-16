@@ -511,15 +511,16 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 
 	ctx := t.Context()
 
-	_, err = db.ExecContext(ctx, `INSERT INTO sync_metadata (key, value) VALUES
-		('last_sync_time', '2026-03-02T10:30:00Z'),
-		('last_sync_duration_ms', '1500'),
-		('last_sync_error', '')`)
+	_, err = db.ExecContext(ctx, `UPDATE run_status
+		SET last_completed_at = ?, last_duration_ms = 1500, last_succeeded_count = 0, last_failed_count = 0, last_error = ''
+		WHERE singleton_id = 1`,
+		time.Date(2026, 3, 2, 10, 30, 0, 0, time.UTC).UnixNano(),
+	)
 	require.NoError(t, err)
 
 	// Insert a baseline entry.
-	_, err = db.ExecContext(ctx, `INSERT INTO baseline (path, item_id, parent_id, item_type, synced_at)
-		VALUES ('/test.txt', 'item1', 'root', 'file', 1)`)
+	_, err = db.ExecContext(ctx, `INSERT INTO baseline (path, item_id, parent_id, item_type)
+		VALUES ('/test.txt', 'item1', 'root', 'file')`)
 	require.NoError(t, err)
 
 	require.NoError(t, db.Close())
@@ -548,15 +549,15 @@ func TestQuerySyncState_RemoteDriftAndIssues(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert remote_state rows with mixed drift shapes.
-	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, item_id, parent_id, item_type, observed_at) VALUES
-		('/a.txt', 'i1', 'root', 'file', 1),
-		('/b.txt', 'i2', 'root', 'file', 1),
-		('/c.txt', 'i3', 'root', 'file', 1),
-		('/e.txt', 'i5', 'root', 'file', 1)`)
+	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, item_id, parent_id, item_type) VALUES
+		('/a.txt', 'i1', 'root', 'file'),
+		('/b.txt', 'i2', 'root', 'file'),
+		('/c.txt', 'i3', 'root', 'file'),
+		('/e.txt', 'i5', 'root', 'file')`)
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `INSERT INTO baseline (item_id, path, parent_id, item_type, remote_hash, remote_mtime, synced_at) VALUES
-		('i1', '/a.txt', 'root', 'file', '', 0, 1),
-		('i4', '/d.txt', 'root', 'file', '', 0, 1)`)
+	_, err = db.ExecContext(ctx, `INSERT INTO baseline (item_id, path, parent_id, item_type, remote_hash, remote_mtime) VALUES
+		('i1', '/a.txt', 'root', 'file', '', 0),
+		('i4', '/d.txt', 'root', 'file', '', 0)`)
 	require.NoError(t, err)
 
 	// Insert sync_failures rows.
@@ -620,8 +621,8 @@ func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO baseline
-		(path, item_id, parent_id, item_type, synced_at)
-		VALUES ('/tracked.txt', 'item-1', 'root', 'file', 1)`)
+		(path, item_id, parent_id, item_type)
+		VALUES ('/tracked.txt', 'item-1', 'root', 'file')`)
 	require.NoError(t, err)
 
 	walPath := dbPath + "-wal"

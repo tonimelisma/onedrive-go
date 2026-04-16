@@ -56,11 +56,11 @@ func (flow *engineFlow) observeSharedRootRemote(
 			return events, newToken, nil
 		}
 
-		if eng.recursiveLister == nil {
+		if eng.recursiveLister == nil || !shouldFallbackSharedRootDelta(err) {
 			return nil, "", fmt.Errorf("sync: shared-root delta: %w", err)
 		}
 
-		eng.logger.Warn("shared-root delta unavailable, falling back to recursive listing",
+		eng.logger.Warn("shared-root delta unsupported or not ready, falling back to recursive listing",
 			slog.String("drive_id", eng.driveID.String()),
 			slog.String("root_item_id", eng.rootItemID),
 			slog.String("error", err.Error()),
@@ -90,8 +90,12 @@ func convertSharedRootItems(
 	logger *slog.Logger,
 ) []ChangeEvent {
 	converter := NewPrimaryConverter(bl, remoteDriveID, logger, nil)
-	converter.ScopeRootID = rootItemID
+	converter.RootItemID = rootItemID
 	return converter.ConvertItems(items)
+}
+
+func shouldFallbackSharedRootDelta(err error) bool {
+	return errors.Is(err, graph.ErrMethodNotAllowed) || errors.Is(err, graph.ErrNotFound)
 }
 
 func detectSharedRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []ChangeEvent {
@@ -101,14 +105,6 @@ func detectSharedRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *B
 	}
 
 	return findBaselineOrphans(bl, seen, remoteDriveID, "")
-}
-
-func (flow *engineFlow) commitObservedRemote(
-	ctx context.Context,
-	events []ChangeEvent,
-	token string,
-) error {
-	return flow.commitObservedItems(ctx, changeEventsToObservedItems(flow.engine.logger, events), token)
 }
 
 func (flow *engineFlow) commitObservedItems(

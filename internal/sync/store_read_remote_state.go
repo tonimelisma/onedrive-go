@@ -19,12 +19,12 @@ import (
 
 const (
 	sqlGetRemoteStateByPath = `SELECT item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path, observed_at
+		hash, size, mtime, etag, previous_path
 		FROM remote_state
 		WHERE path = ?`
 
 	sqlGetRemoteStateByID = `SELECT item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path, observed_at
+		hash, size, mtime, etag, previous_path
 		FROM remote_state
 		WHERE item_id = ?`
 )
@@ -38,7 +38,7 @@ func (m *SyncStore) ListRemoteState(ctx context.Context) ([]RemoteStateRow, erro
 
 	return m.queryRemoteStateRows(ctx,
 		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path, observed_at
+			previous_path
 		FROM remote_state`,
 		configuredDriveID,
 	)
@@ -72,7 +72,7 @@ func (m *SyncStore) queryRemoteStateRows(
 		if err := rows.Scan(
 			&row.ItemID, &row.Path, &parentID, &row.ItemType,
 			&hash, &size, &mtime, &etag,
-			&prevPath, &row.ObservedAt,
+			&prevPath,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
 		}
@@ -166,7 +166,7 @@ func scanRemoteStateRowWithQuerier(
 	if err := scan(
 		&row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
-		&prevPath, &row.ObservedAt,
+		&prevPath,
 	); err != nil {
 		return nil, err
 	}

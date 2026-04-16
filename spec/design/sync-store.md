@@ -13,7 +13,7 @@ Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [
 - remote mirror persistence
 - retry/actionable failure persistence
 - scope-block persistence
-- sync metadata persistence
+- one-shot run-status persistence
 - read-only inspectors used by CLI status and recovery
 
 It does **not** own planning policy, conflict-resolution policy, delete-safety
@@ -32,7 +32,7 @@ policy, or live watch-mode coordination. Those belong to the engine.
 
 | Behavior | Evidence |
 | --- | --- |
-| The store remains the sole durable authority for baseline, remote mirror, failure, scope-block, and sync-metadata rows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestWriteSyncMetadata_RoundTrip`, `TestSyncStore_FailureAdminMutations` |
+| The store remains the sole durable authority for baseline, remote mirror, failure, scope-block, observation-state, and run-status rows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestWriteSyncRunStatus_RoundTrip`, `TestSyncStore_FailureAdminMutations` |
 | Read-only snapshot helpers back status/recovery without reopening deleted conflict/delete-approval workflows. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestQuerySyncState_UsesReadOnlyProjectionHelper` |
 | Store repair and schema validation stay store-owned and transactional. | `TestRepairStateDB_RepairsReadableStoreInPlace`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema` |
 
@@ -83,7 +83,7 @@ runtime-owned decision.
 
 - reset/remove retry rows
 - release/discard scope state
-- sync metadata writes
+- one-shot run-status writes
 - integrity-oriented repair primitives used by `recover`
 
 ## Read Responsibilities

@@ -1,71 +1,82 @@
 # OneDrive Glossary
 
-Project-specific vocabulary. For standard Microsoft Graph API terms (DriveItem, delta token, facet, etc.), see [Microsoft's official documentation](https://learn.microsoft.com/en-us/graph/api/resources/driveitem).
+Project-specific vocabulary. For standard Microsoft Graph API terms such as
+`DriveItem`, delta, and facets, see Microsoft's official documentation.
 
 ## Drive Identity
 
+### Configured Drive
+One user-configured sync target. A configured drive owns exactly one config
+entry, one sync engine, one state DB, and one primary remote observation root.
+
 ### Canonical ID
-A structured string identifying a drive configuration: `type:email` (personal/business) or `type:email:site:library` (SharePoint) or `type:email:sourceDriveID:sourceItemID` (shared). Parsed and validated by the `driveid.CanonicalID` type. Used as the key in TOML config drive sections.
+The structured config identity string for a configured drive, such as
+`personal:email@example.com` or `shared:email@example.com:<driveID>:<itemID>`.
 
-### Display Name
-The human-facing identity for a drive, auto-derived at `drive add` time. Personal/business = email, SharePoint = `"site / lib"`, shared = `"{FirstName}'s {FolderName}"`. User-editable. CLI `--drive` flag matches display names first.
+### Backing Drive ID
+The Microsoft Graph drive ID of the remote drive behind a configured drive.
+For shared-root drives this is still the sharer's real drive ID.
 
-### Drive ID (`driveid.ID`)
-A type-safe wrapper around the raw drive ID string from Microsoft. Normalizes to lowercase and zero-pads to 16 characters on construction, preventing the driveId truncation and casing bugs documented in `graph-api-quirks.md`.
+### Drive Root
+The actual root of the backing drive in Microsoft Graph.
 
-### ItemKey
-A composite key `(DriveID, ItemID)` representing a globally unique item identity across drives. Replaces ad-hoc `driveID+":"+itemID` string concatenation.
+### Shared Root
+The configured remote root item for a shared-root drive. This is below the
+backing drive root and is identified by `RootItemID`.
 
-### Token Canonical ID
-The canonical ID used for token file resolution. SharePoint drives share their business account's token. Shared drives share their parent account's token. Resolved by `config.TokenCanonicalID()`.
+### Shared-Root Drive
+A separately configured shared folder added with `drive add`. It is mounted as
+its own configured drive and synced as its own engine and DB.
+
+### Embedded Shared-Folder Shortcut Item
+A shared-folder link item that appears inside another drive's delta stream.
+Sync ignores these instead of creating nested sync runtimes.
 
 ## Sync Engine
 
 ### Baseline
-The authoritative record of what has been successfully synced. Each entry records the item's ID, drive ID, path, hash, size, and mtime at the time of last successful sync. The planner uses the baseline as the "common ancestor" for three-way merge decisions.
+The authoritative durable record of successfully converged item truth for this
+configured drive. It stores per-item identity plus local and remote comparison
+facts used by planning.
 
 ### Remote State
-The authoritative record of what the server has, populated from delta query observations. Each item has a state machine: `observed` → `syncing` → `synced`. Used by the planner alongside the baseline and local scan.
+The durable mirror of the latest observed remote truth for this configured
+drive. It stores only the latest remote facts, not a per-row state machine.
 
-### Sync Failure
-A persistent record of a file that failed to sync. Two categories: **transient** (retried automatically with exponential backoff) and **actionable** (requires user intervention such as fixing permissions, disk space, or naming problems). Stored in the `sync_failures` table.
+### Primary Observation Cursor
+The one persisted remote observation cursor for a configured drive. It lives in
+`observation_state.cursor`.
 
-### Action
-The planner's output — a decision about what to do with a specific path. Types: `ActionDownload`, `ActionUpload`, `ActionLocalDelete`, `ActionRemoteDelete`, `ActionConflict`, `ActionMkdir`, `ActionRmdir`, `ActionNoop`, `ActionCleanup`.
+### Full Remote Reconcile
+The full primary remote observation path that re-enumerates remote truth and
+detects remote orphans. Its restart-safe cadence is owned by
+`observation_state.last_full_remote_reconcile_at`.
 
-### PathView
-A unified view of a path's state across all three data sources (local scan, remote state, baseline). The planner operates on PathViews.
-
-### Observation
-The process of scanning for changes — either locally (filesystem walk + inotify) or remotely (delta query). Observations produce `ChangeEvent` values that feed into the buffer and planner.
-
-### Reconciler
-The component that detects items stuck in `syncing` state after a crash and resets them to `observed` for re-planning. Runs at the start of each sync cycle.
-
-### Orchestrator
-The top-level multi-drive sync coordinator. Manages multiple DriveRunners, owns the Unix control socket, handles config reload, and coordinates pause/resume. Implemented in `internal/multisync`. Even single-drive `sync` still goes through the control plane so watch and one-shot share the same drive-lifecycle rules.
-
-### DriveRunner
-A per-drive goroutine wrapping a sync Engine. Provides panic recovery and error isolation between drives. Implemented in `internal/multisync`.
-
-### Full Reconciliation
-A sync mode (`sync --full`) that runs a fresh delta with no token (enumerates ALL remote items) and compares against baseline to detect orphans — items present in baseline but absent from the server. Corrects deletions missed by incremental delta.
+### Scope
+Reserved for failure/blocking scope only, such as `scope_blocks`, permission
+scope, throttle scope, quota scope, or auth scope. Observation roots are not
+called scopes.
 
 ## Data Architecture
 
 ### Sync Store
-The unified SQLite database per drive containing the baseline, remote mirror, retry/failure state, scope blocks, delta tokens, and sync metadata. It is the durable source of truth for restart-safe sync state.
+The per-drive SQLite database containing `baseline`, `remote_state`,
+`sync_failures`, `scope_blocks`, `observation_state`, and `run_status`.
+
+### Run Status
+The typed singleton status row used by one-shot `status` output. It stores last
+completed one-shot time, duration, success/failure counts, and last error.
 
 ### Session Store
-File-based persistence for upload session resume. Session files are keyed by a hash of `(driveID, localPath)` and store the upload URL, expiration, and byte offset.
-
-### Transfer Manager
-The unified download/upload component shared between CLI (`get`/`put`) and sync engine. Handles simple upload vs chunked upload routing, download resume via `.partial` files, and hash verification.
+File-based persistence for resumable upload sessions. Separate from the sync
+store.
 
 ## CLI
 
 ### CLIContext
-The per-command context struct stored in `cmd.Context()`. Contains flags, logger, config path, and optionally the resolved config and session provider. Two-phase initialization: Phase 1 (always) sets flags/logger, Phase 2 (data commands only) loads config.
+Per-command context containing flags, logger, and resolved config/runtime
+inputs.
 
 ### Session Provider
-Caches `TokenSource` instances by token file path. Multiple drives sharing a token path share one `TokenSource`, preventing OAuth2 refresh token rotation races.
+The token-source cache keyed by token file path so multiple configured drives
+that share credentials do not race refreshes.

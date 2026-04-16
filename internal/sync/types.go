@@ -41,11 +41,12 @@ type BaselineMutation struct {
 	ResolvedBy      string
 }
 
-// SyncMetadata is the durable sync-pass projection persisted after a completed
-// run.
-type SyncMetadata struct {
-	Duration  time.Duration
-	Succeeded int
-	Failed    int
-	Errors    []error
+// SyncRunReport is the durable one-shot status projection persisted after a
+// completed run.
+type SyncRunReport struct {
+	CompletedAt time.Time
+	Duration    time.Duration
+	Succeeded   int
+	Failed      int
+	Errors      []error
 }

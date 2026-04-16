@@ -169,10 +169,11 @@ func TestReadDriveStatusSnapshotAndScopeBlockHelpers(t *testing.T) {
 	driveID := driveid.New(testDriveID)
 	scopeKey := SKPermRemote("Shared/Docs")
 
-	require.NoError(t, store.WriteSyncMetadata(t.Context(), &SyncMetadata{
-		Duration:  2 * time.Second,
-		Succeeded: 3,
-		Failed:    1,
+	require.NoError(t, store.WriteSyncRunStatus(t.Context(), &SyncRunReport{
+		CompletedAt: time.Date(2026, 4, 3, 10, 30, 0, 0, time.UTC),
+		Duration:    2 * time.Second,
+		Succeeded:   3,
+		Failed:      1,
 	}))
 	require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
 		Action:          ActionDownload,
@@ -204,7 +205,7 @@ func TestReadDriveStatusSnapshotAndScopeBlockHelpers(t *testing.T) {
 	snapshot, err := ReadDriveStatusSnapshot(t.Context(), dbPath, false, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 1, snapshot.BaselineEntryCount)
-	assert.Equal(t, "3", snapshot.SyncMetadata["last_sync_succeeded"])
+	assert.Equal(t, 3, snapshot.RunStatus.LastSucceededCount)
 	require.Len(t, snapshot.IssueGroups, 1)
 	assert.Equal(t, SummaryInvalidFilename, snapshot.IssueGroups[0].SummaryKey)
 

@@ -90,7 +90,7 @@ func (controller *scopeController) repairPersistedScopes(
 	if listScopeErr != nil {
 		return fmt.Errorf("sync: listing scope blocks: %w", listScopeErr)
 	}
-	if err := controller.dropLegacyRemoteScopes(ctx, blocks); err != nil {
+	if err := controller.dropPersistedRemotePermissionScopes(ctx, blocks); err != nil {
 		return err
 	}
 	releasedLegacyThrottle, err := controller.releaseLegacyThrottleAccountScopes(ctx, blocks)
@@ -120,7 +120,7 @@ func (controller *scopeController) repairPersistedScopes(
 	return nil
 }
 
-func (controller *scopeController) dropLegacyRemoteScopes(
+func (controller *scopeController) dropPersistedRemotePermissionScopes(
 	ctx context.Context,
 	blocks []*ScopeBlock,
 ) error {
@@ -130,8 +130,8 @@ func (controller *scopeController) dropLegacyRemoteScopes(
 		if !blocks[i].Key.IsPermRemote() {
 			continue
 		}
-		if err := flow.engine.baseline.DropLegacyRemoteBlockedScope(ctx, blocks[i].Key); err != nil {
-			return fmt.Errorf("sync: dropping legacy remote scope %s: %w", blocks[i].Key.String(), err)
+		if err := flow.engine.baseline.DeleteRemotePermissionScopeAuthorities(ctx, blocks[i].Key); err != nil {
+			return fmt.Errorf("sync: dropping invalid remote permission scope %s: %w", blocks[i].Key.String(), err)
 		}
 	}
 
