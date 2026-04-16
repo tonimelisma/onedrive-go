@@ -107,14 +107,16 @@ func TestSharedList_JSON(t *testing.T) {
 	assert.Equal(t, "shared:user@example.com:b!drive1234567891:source-item-file", parsed.Items[0].Selector)
 	assert.Equal(t, "file", parsed.Items[0].Type)
 	assert.Equal(t, "bob@example.com", parsed.Items[0].SharedByEmail)
+	assert.Equal(t, sharedOwnerIdentityStatusAvailable, parsed.Items[0].OwnerIdentityStatus)
 
 	assert.Equal(t, "shared:user@example.com:b!drive1234567890:source-item-folder", parsed.Items[1].Selector)
 	assert.Equal(t, "folder", parsed.Items[1].Type)
 	assert.Equal(t, "alice@example.com", parsed.Items[1].SharedByEmail)
+	assert.Equal(t, sharedOwnerIdentityStatusAvailable, parsed.Items[1].OwnerIdentityStatus)
 }
 
 // Validates: R-3.6.4, R-3.6.6, R-3.6.7
-func TestSharedList_JSONKeepsOwnerIdentityEmptyWhenEnrichmentFails(t *testing.T) {
+func TestSharedList_JSONIncludesRetryableOwnerIdentityStatusWhenEnrichmentFails(t *testing.T) {
 	setTestDriveHome(t)
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 
@@ -162,6 +164,7 @@ func TestSharedList_JSONKeepsOwnerIdentityEmptyWhenEnrichmentFails(t *testing.T)
 	require.Len(t, parsed.Items, 1)
 	assert.Empty(t, parsed.Items[0].SharedByEmail)
 	assert.Empty(t, parsed.Items[0].SharedByName)
+	assert.Equal(t, sharedOwnerIdentityStatusUnavailableRetryable, parsed.Items[0].OwnerIdentityStatus)
 	assert.Empty(t, parsed.AccountsDegraded)
 }
 
@@ -260,22 +263,24 @@ func TestSharedList_JSONIncludesDegradedAccountWhenSearchFails(t *testing.T) {
 	assert.Equal(t, sharedDiscoveryUnavailableReason, parsed.AccountsDegraded[0].Reason)
 }
 
-func TestPrintSharedText_UsesUnknownOwnerAndShowsDegradedSection(t *testing.T) {
+func TestPrintSharedText_ExplainsRetryableOwnerIdentityGapAndShowsDegradedSection(t *testing.T) {
 	var out bytes.Buffer
 
 	err := printSharedText(&out, []sharedListItem{{
-		Selector:     "shared:user@example.com:drive:item",
-		Type:         "folder",
-		Name:         "Shared Folder",
-		AccountEmail: "user@example.com",
-		ModifiedAt:   "2024-01-01T00:00:00Z",
+		Selector:            "shared:user@example.com:drive:item",
+		Type:                "folder",
+		Name:                "Shared Folder",
+		AccountEmail:        "user@example.com",
+		ModifiedAt:          "2024-01-01T00:00:00Z",
+		OwnerIdentityStatus: sharedOwnerIdentityStatusUnavailableRetryable,
 	}}, nil, []accountDegradedNotice{
 		sharedDiscoveryDegradedNotice("user@example.com", "User", driveid.DriveTypePersonal),
 	})
 	require.NoError(t, err)
 
 	text := out.String()
-	assert.Contains(t, text, "unknown")
+	assert.Contains(t, text, "owner unavailable from Microsoft Graph; try again later")
+	assert.NotContains(t, text, "unknown")
 	assert.Contains(t, text, "Accounts with degraded shared discovery:")
 	assert.Contains(t, text, degradedReasonText(sharedDiscoveryUnavailableReason))
 }

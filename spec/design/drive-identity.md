@@ -107,8 +107,15 @@ into unstable selectors. For actionable hits, the CLI enriches owner metadata
 through `GET /drives/{driveId}/items/{itemId}`. If owner identity still
 remains unavailable after enrichment, `drive list` keeps the folder visible
 with a deterministic display name
-`"{folderName-or-'shared item'} (shared {remoteDriveID}:{remoteItemID})"` and
-`shared` emits the item with empty owner fields instead of dropping it.
+`"{folderName-or-'shared item'} (shared {remoteDriveID}:{remoteItemID})"`.
+The shared-discovery projection also carries explicit owner-identity status:
+`available` when name or email is present, `unavailable_retryable` when the
+item is actionable but Graph still omitted owner identity after the enrichment
+attempt. `shared` and `drive list` present the retryable gap as plain-language
+guidance ("owner unavailable from Microsoft Graph; try again later") instead
+of bare `unknown` placeholders or ambiguous omitted fields. JSON output keeps
+owner name/email optional, but the owner-identity status field is the
+authoritative machine-readable signal for this state.
 
 `internal/cli` owns one shared-discovery pipeline for this slice. `shared`,
 the shared-folder portion of `drive list`, and name-based `drive add` all

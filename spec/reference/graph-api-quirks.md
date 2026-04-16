@@ -790,8 +790,10 @@ Runtime policy:
 - search remains the primary shared-discovery surface
 - actionable results are still enriched with `GetItem`
 - if owner identity is still missing after enrichment, `drive list` keeps the
-  item visible with a deterministic display name and `shared` emits empty
-  owner fields instead of dropping the target
+  item visible with a deterministic display name, and both `drive list` and
+  `shared` surface an explicit retryable owner-identity gap ("owner
+  unavailable from Microsoft Graph; try again later") instead of dropping the
+  target or silently relying on omitted owner fields
 - deprecated `sharedWithMe` evidence may still be useful for forensics, but it
   is not a runtime discovery fallback
 
