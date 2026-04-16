@@ -28,7 +28,7 @@ internal/
   errclass/                   Shared runtime failure class enum (leaf, stdlib-only)
   fsroot/                     Root-bound managed-state file capabilities
   graph/                      Graph API client: auth, Graph normalization, items CRUD, delta, transfers
-  graphhttp/                  Graph-facing HTTP client profile construction
+  graphtransport/             Graph-facing HTTP transport profile construction
   localpath/                  Explicit arbitrary-local-path boundary helpers
   logfile/                    Log file creation, rotation, retention
   multisync/                  Multi-drive sync control plane and watch reload
@@ -52,7 +52,7 @@ spec/                         Requirements, design docs, and reference docs
 ## Dependency Rules
 
 ```
-root pkg → internal/cli/ → internal/graphhttp/ → internal/retry/
+root pkg → internal/cli/ → internal/graphtransport/ → internal/retry/
                          → internal/driveops/  → internal/graph/ → pkg/*
                          → internal/errclass/
                          → internal/perf/
@@ -66,7 +66,7 @@ root pkg → internal/cli/ → internal/graphhttp/ → internal/retry/
 - `driveid`, `errclass`, `tokenfile`, and `retry` are leaf packages (no internal imports).
 - Both `graph` and `config` import `tokenfile` for token file I/O.
 - Callers pass token paths to `graph` — no config coupling.
-- `graphhttp` owns Graph-facing HTTP transport/client profile construction. `driveops` owns the session runtime that reuses those profiles and chooses between bootstrap, interactive, and sync paths.
+- `graphtransport` owns Graph-facing HTTP transport profile construction. `driveops` owns the session runtime that reuses those profiles and chooses between bootstrap, interactive, and sync paths.
 
 ## Event-Driven Sync Pipeline
 

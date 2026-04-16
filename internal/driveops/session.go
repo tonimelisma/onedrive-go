@@ -13,7 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
+	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -109,7 +109,7 @@ type SessionRuntime struct {
 	bootstrapMeta       *http.Client
 	interactiveMeta     map[string]*http.Client
 	interactiveTransfer *http.Client
-	syncClients         *graphhttp.ClientSet
+	syncClients         *graphtransport.ClientSet
 }
 
 // NewSessionRuntime creates a SessionRuntime with default TokenSourceFn.
@@ -144,7 +144,7 @@ func (r *SessionRuntime) SyncSession(ctx context.Context, rd *config.ResolvedDri
 func (r *SessionRuntime) session(
 	ctx context.Context,
 	rd *config.ResolvedDrive,
-	httpClients graphhttp.ClientSet,
+	httpClients graphtransport.ClientSet,
 ) (*Session, error) {
 	tokenPath := config.DriveTokenPath(rd.CanonicalID)
 	if tokenPath == "" {
@@ -239,7 +239,7 @@ func (r *SessionRuntime) getOrCreateTokenSource(ctx context.Context, tokenPath s
 func (r *SessionRuntime) clientsForTokenPath(
 	ctx context.Context,
 	tokenPath string,
-	httpClients graphhttp.ClientSet,
+	httpClients graphtransport.ClientSet,
 ) (*graph.Client, *graph.Client, error) {
 	ts, err := r.getOrCreateTokenSource(ctx, tokenPath)
 	if err != nil {
@@ -294,15 +294,15 @@ func (r *SessionRuntime) BootstrapMeta() *http.Client {
 	defer r.mu.Unlock()
 
 	if r.bootstrapMeta == nil {
-		r.bootstrapMeta = graphhttp.BootstrapMetadataClient(r.logger)
+		r.bootstrapMeta = graphtransport.BootstrapMetadataClient(r.logger)
 	}
 
 	return r.bootstrapMeta
 }
 
-func (r *SessionRuntime) interactiveClientsForDrive(rd *config.ResolvedDrive) graphhttp.ClientSet {
+func (r *SessionRuntime) interactiveClientsForDrive(rd *config.ResolvedDrive) graphtransport.ClientSet {
 	if rd == nil {
-		return graphhttp.ClientSet{
+		return graphtransport.ClientSet{
 			Meta:     r.BootstrapMeta(),
 			Transfer: r.syncClientSet().Transfer,
 		}
@@ -320,36 +320,36 @@ func (r *SessionRuntime) interactiveClientsForSharedTarget(
 	account string,
 	remoteDriveID string,
 	remoteItemID string,
-) graphhttp.ClientSet {
+) graphtransport.ClientSet {
 	return r.interactiveClientsForKey(interactiveSharedKey(account, remoteDriveID, remoteItemID))
 }
 
-func (r *SessionRuntime) interactiveClientsForKey(targetKey string) graphhttp.ClientSet {
+func (r *SessionRuntime) interactiveClientsForKey(targetKey string) graphtransport.ClientSet {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	meta := r.interactiveMeta[targetKey]
 	if meta == nil {
-		meta = graphhttp.InteractiveMetadataClient(r.logger, &retry.ThrottleGate{})
+		meta = graphtransport.InteractiveMetadataClient(r.logger, &retry.ThrottleGate{})
 		r.interactiveMeta[targetKey] = meta
 	}
 
 	if r.interactiveTransfer == nil {
-		r.interactiveTransfer = graphhttp.InteractiveTransferClient(r.logger)
+		r.interactiveTransfer = graphtransport.InteractiveTransferClient(r.logger)
 	}
 
-	return graphhttp.ClientSet{
+	return graphtransport.ClientSet{
 		Meta:     meta,
 		Transfer: r.interactiveTransfer,
 	}
 }
 
-func (r *SessionRuntime) syncClientSet() graphhttp.ClientSet {
+func (r *SessionRuntime) syncClientSet() graphtransport.ClientSet {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.syncClients == nil {
-		clients := graphhttp.SyncClientSet()
+		clients := graphtransport.SyncClientSet()
 		r.syncClients = &clients
 	}
 

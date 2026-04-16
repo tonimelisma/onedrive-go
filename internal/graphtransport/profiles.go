@@ -1,4 +1,4 @@
-package graphhttp
+package graphtransport
 
 import (
 	"log/slog"
