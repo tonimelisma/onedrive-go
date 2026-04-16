@@ -254,13 +254,6 @@ func (o *LocalObserver) cancelPendingTimer(path string) {
 	}
 }
 
-// SetSafetyScanInterval overrides the default 5-minute safety scan interval.
-// Zero means use the default. Called by the engine when WatchOpts specifies
-// a custom interval (e.g., for faster tests).
-func (o *LocalObserver) SetSafetyScanInterval(d time.Duration) {
-	o.safetyScanInterval = d
-}
-
 // SetWatcherFactory overrides the default fsnotify watcher factory. Used by
 // tests to inject a mock factory that simulates inotify watch limit exhaustion
 // (ENOSPC) or other platform-specific failure modes.

@@ -293,54 +293,60 @@ func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped [
 	}
 }
 
-// resolveReconcileInterval returns the configured reconcile interval or the
-// default. Negative values disable periodic reconciliation. Values below
-// minReconcileInterval are clamped up.
-func (e *Engine) resolveReconcileInterval(opts WatchOptions) time.Duration {
-	if opts.ReconcileInterval < 0 {
-		return 0
+func (e *Engine) fullRemoteReconcileDelay(ctx context.Context) (time.Duration, error) {
+	state, err := e.baseline.ReadObservationState(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("sync: reading observation state for reconcile cadence: %w", err)
+	}
+	if state.LastFullRemoteReconcileAt == 0 {
+		return 0, nil
 	}
 
-	if opts.ReconcileInterval > 0 {
-		if opts.ReconcileInterval < minReconcileInterval {
-			e.logger.Warn("reconcile interval below minimum, clamping",
-				slog.Duration("requested", opts.ReconcileInterval),
-				slog.Duration("minimum", minReconcileInterval),
-			)
+	dueAt := time.Unix(0, state.LastFullRemoteReconcileAt).Add(fullRemoteReconcileInterval)
+	delay := dueAt.Sub(e.nowFunc())
+	if delay < 0 {
+		return 0, nil
+	}
 
-			return minReconcileInterval
+	return delay, nil
+}
+
+func (e *Engine) shouldRunFullRemoteReconcile(ctx context.Context, requested bool) (bool, error) {
+	if requested {
+		return true, nil
+	}
+
+	state, err := e.baseline.ReadObservationState(ctx)
+	if err != nil {
+		return false, fmt.Errorf("sync: reading observation state for full reconcile: %w", err)
+	}
+	if state.Cursor == "" || state.LastFullRemoteReconcileAt == 0 {
+		return true, nil
+	}
+
+	dueAt := time.Unix(0, state.LastFullRemoteReconcileAt).Add(fullRemoteReconcileInterval)
+	return !e.nowFunc().Before(dueAt), nil
+}
+
+func (rt *watchRuntime) armFullReconcileTimer(ctx context.Context) error {
+	delay, err := rt.engine.fullRemoteReconcileDelay(ctx)
+	if err != nil {
+		return err
+	}
+
+	rt.resetReconcileTimer(rt.engine.afterFunc(delay, func() {
+		select {
+		case rt.reconcileCh <- rt.engine.nowFunc():
+		default:
 		}
+	}))
 
-		return opts.ReconcileInterval
-	}
-
-	return defaultReconcileInterval
-}
-
-// newReconcileTicker creates a ticker for periodic reconciliation. Returns
-// nil if the interval is 0 (disabled).
-func (e *Engine) newReconcileTicker(interval time.Duration) syncTicker {
-	if interval <= 0 {
-		return nil
-	}
-
-	return e.newTicker(interval)
-}
-
-// initReconcileTicker creates the periodic full-reconciliation timer.
-func (e *Engine) initReconcileTicker(opts WatchOptions) syncTicker {
-	interval := e.resolveReconcileInterval(opts)
-	ticker := e.newReconcileTicker(interval)
-
-	if ticker == nil {
-		return nil
-	}
-
-	e.logger.Info("periodic full reconciliation enabled",
-		slog.Duration("interval", interval),
+	rt.engine.logger.Info("full remote reconciliation armed",
+		slog.Duration("delay", delay),
+		slog.Duration("interval", fullRemoteReconcileInterval),
 	)
 
-	return ticker
+	return nil
 }
 
 // runFullReconciliationAsync spawns a goroutine for full delta enumeration +
@@ -373,17 +379,8 @@ func (rt *watchRuntime) performFullReconciliation(
 
 	rt.engine.logger.Info("periodic full reconciliation starting")
 
-	plan, err := rt.buildFullReconciliationPlan(ctx)
-	if err != nil {
-		if ctx.Err() == nil {
-			rt.engine.logger.Error("full reconciliation planning failed",
-				slog.String("error", err.Error()),
-			)
-		}
-		return result
-	}
-
-	projectedPrimary, err := rt.observeCommittedFullReconciliationBatch(ctx, bl, &plan)
+	plan := rt.buildPrimaryRootObservationPlan(true)
+	projectedPrimary, err := rt.observeCommittedFullReconciliationBatch(ctx, bl, plan)
 	if err != nil {
 		if ctx.Err() == nil {
 			rt.engine.logger.Error("full reconciliation failed",
@@ -422,23 +419,12 @@ func (rt *watchRuntime) performFullReconciliation(
 	return result
 }
 
-func (rt *watchRuntime) buildFullReconciliationPlan(ctx context.Context) (ObservationSessionPlan, error) {
-	session := ObservationSession{Generation: 1}
-
-	return rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
-		Session:       &session,
-		SyncMode:      SyncBidirectional,
-		FullReconcile: true,
-		Purpose:       observationPlanPurposeWatch,
-	})
-}
-
 func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
 	ctx context.Context,
 	bl *Baseline,
-	plan *ObservationSessionPlan,
+	plan primaryRootObservationPlan,
 ) (remoteObservationResult, error) {
-	fetchResult, err := rt.observeObservationPhase(ctx, bl, plan.PrimaryPhase, true)
+	fetchResult, err := rt.executePrimaryRootObservation(ctx, bl, plan)
 	if err != nil {
 		return remoteObservationResult{}, err
 	}
@@ -449,6 +435,9 @@ func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
 	}
 	if tokenErr := rt.commitDeferredDeltaTokens(ctx, fetchResult.deferred); tokenErr != nil {
 		return remoteObservationResult{}, fmt.Errorf("commit full reconciliation delta tokens: %w", tokenErr)
+	}
+	if armErr := rt.armFullReconcileTimer(ctx); armErr != nil {
+		return remoteObservationResult{}, fmt.Errorf("arm full reconciliation timer: %w", armErr)
 	}
 
 	if rt.afterReconcileCommit != nil {
@@ -469,32 +458,11 @@ func (rt *watchRuntime) finishFullReconciliation(ctx context.Context, result rec
 	}
 }
 
-func (rt *watchRuntime) applyReconcileResult(ctx context.Context, result reconcileResult) {
+func (rt *watchRuntime) applyReconcileResult(result reconcileResult) {
 	rt.reconcileActive = false
 
 	for i := range result.events {
 		rt.buf.Add(&result.events[i])
-	}
-
-	session := ObservationSession{Generation: 1}
-	plan, err := rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
-		Session:  &session,
-		SyncMode: SyncBidirectional,
-		Purpose:  observationPlanPurposeWatch,
-	})
-	if err != nil {
-		rt.engine.logger.Warn("failed to rebuild scope plan after reconciliation",
-			slog.String("error", err.Error()),
-		)
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileApplied})
-		return
-	}
-	plan.Reentry.Pending = false
-
-	if err := rt.applyObservationState(ctx, false, &session, &plan); err != nil {
-		rt.engine.logger.Warn("failed to persist scope state after reconciliation",
-			slog.String("error", err.Error()),
-		)
 	}
 
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileApplied})

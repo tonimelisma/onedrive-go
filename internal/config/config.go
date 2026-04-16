@@ -46,10 +46,9 @@ type SafetyConfig struct {
 // SyncConfig controls live sync behavior: remote observation, periodic safety
 // scans, and one-shot dry-run execution.
 type SyncConfig struct {
-	PollInterval       string `toml:"poll_interval"`
-	Websocket          bool   `toml:"websocket"`
-	DryRun             bool   `toml:"dry_run"`
-	SafetyScanInterval string `toml:"safety_scan_interval"`
+	PollInterval string `toml:"poll_interval"`
+	Websocket    bool   `toml:"websocket"`
+	DryRun       bool   `toml:"dry_run"`
 }
 
 // LoggingConfig controls log output behavior: level, format, and rotation.

@@ -196,7 +196,7 @@ func TestBaseline_PutGetByIDDeleteAndLen(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, original, gotByPath)
 
-	gotByID, ok := bl.GetByID(driveid.NewItemKey(driveID, original.ItemID))
+	gotByID, ok := bl.GetByID(original.ItemID)
 	require.True(t, ok)
 	assert.Equal(t, original, gotByID)
 
@@ -208,10 +208,10 @@ func TestBaseline_PutGetByIDDeleteAndLen(t *testing.T) {
 	}
 	bl.Put(replacement)
 
-	_, ok = bl.GetByID(driveid.NewItemKey(driveID, original.ItemID))
+	_, ok = bl.GetByID(original.ItemID)
 	assert.False(t, ok, "stale item ID should be removed when a path is reassigned")
 
-	gotByID, ok = bl.GetByID(driveid.NewItemKey(driveID, replacement.ItemID))
+	gotByID, ok = bl.GetByID(replacement.ItemID)
 	require.True(t, ok)
 	assert.Equal(t, replacement, gotByID)
 
@@ -227,7 +227,7 @@ func TestBaseline_PutGetByIDDeleteAndLen(t *testing.T) {
 	_, ok = bl.GetByPath(replacement.Path)
 	assert.False(t, ok)
 
-	_, ok = bl.GetByID(driveid.NewItemKey(driveID, replacement.ItemID))
+	_, ok = bl.GetByID(replacement.ItemID)
 	assert.False(t, ok)
 
 	assert.Empty(t, bl.GetCaseVariants("docs", "readme.txt"))

@@ -60,6 +60,65 @@ degrade when the derivation proves no daemon can exist.
 
 Config entrypoints still accept full path strings, so `managed_io.go` establishes the managed root per call via `fsroot.OpenPath` or `fsroot.Open`. This keeps the path trust boundary explicit without broad `gosec` carve-outs.
 
+## Persisted Facts And Lifecycle
+
+`config.toml` persists drive sections only. It never contains account sections.
+Durable account and drive lifecycle facts are split across managed files:
+
+- `config.toml`: configured drive sections keyed by canonical drive ID
+- `token_*.json` / account file: saved login owned by the account
+- `account_*.json`: cached account profile
+- `drive_*.json`: cached drive metadata
+- `state_*.db`: retained sync state, including persisted `auth:account` scope blocks
+
+The config file itself is durable even when it has zero drive sections. Removing
+the final configured drive or logging out the final configured account leaves
+`config.toml` in place with only the global template/comments that remain after
+text-level edits.
+
+### Derived Account States
+
+CLI account surfaces derive one lifecycle state from the durable facts above:
+
+| State | Durable facts |
+| --- | --- |
+| `logged_in_with_configured_drives` | usable saved login + at least one configured drive |
+| `logged_in_without_configured_drives` | usable saved login + zero configured drives |
+| `auth_required_missing_login` | known account metadata/state remains but no usable saved login exists |
+| `auth_required_invalid_saved_login` | token file exists but the saved login is invalid or unreadable |
+| `auth_required_sync_rejected` | usable saved login plus persisted sync-time `auth:account` rejection |
+| `absent` | no durable account facts remain |
+
+### Derived Drive States
+
+Drive surfaces derive one lifecycle state per canonical drive ID:
+
+| State | Durable facts |
+| --- | --- |
+| `configured_ready` | drive section exists and account auth is ready |
+| `configured_auth_required` | drive section exists and account auth is required |
+| `available_with_retained_state` | no drive section, but retained state DB still exists |
+| `available_without_retained_state` | drive is discoverable/authenticated but has no retained state DB |
+| `absent` | no configured or discoverable drive fact exists |
+
+### Transition Summary
+
+| Operation | Durable mutation |
+| --- | --- |
+| `login` | write saved login, write account profile, write primary-drive metadata, append primary drive section |
+| `drive add` | append one drive section; shared drive add also writes shared drive metadata |
+| `drive remove` | delete one drive section only |
+| `drive remove --purge` | delete one drive section plus drive-owned retained state and drive metadata |
+| `logout` | delete saved login and all configured drive sections for the selected account |
+| `logout --purge` | `logout` durable mutations plus delete retained state DBs, drive metadata, and account profiles for the selected account |
+| external token deletion | removes saved login only; account profile/state may still keep the account known |
+| invalid/unreadable token file | keeps the saved-login file path but moves the derived account state to `auth_required_invalid_saved_login` |
+| persisted sync auth rejection creation | keeps other durable facts intact but moves the derived account state to `auth_required_sync_rejected` |
+| successful authenticated proof | clears persisted `auth:account` scope blocks and returns the derived account state to the matching logged-in state |
+
+Degraded discovery is intentionally outside this lifecycle model. It is a
+command-local discovery overlay, not a persisted account or drive state.
+
 ## Internal Organization
 
 `config` stays one package, but the responsibilities are separated internally so each layer has one job:
@@ -90,7 +149,6 @@ This table is the authoritative config-package view of the current schema.
 | `poll_interval` | `string` | `5m` | duration `>= 30s` | `sync --watch` | Remote observation fallback poll cadence. |
 | `websocket` | `bool` | `false` | boolean | `sync --watch` | Enables Socket.IO remote wakeups where supported. |
 | `dry_run` | `bool` | `false` | boolean | `sync` | Config-owned default for dry-run sync. CLI flag may override. |
-| `safety_scan_interval` | `string` | `5m` | duration `>= 10s` | `sync --watch` | Local safety-scan cadence. |
 | `log_level` | `string` | `info` | `debug`, `info`, `warn`, `error` | `all CLI` | File-log verbosity. |
 | `log_file` | `string` | `""` (platform default location) | path string | `all CLI` | Empty means standard managed log path. |
 | `log_format` | `string` | `auto` | `auto`, `json`, `text` | `all CLI` | File-log format. |
@@ -242,6 +300,9 @@ successful loads with warnings map to `actionable`, and clean loads map to
 ## Auto-Creation
 
 `login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads account profile only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`.
+
+Removing a drive or logging out an account deletes the relevant drive sections
+through `DeleteDriveSection()`, but it does not delete `config.toml` itself.
 
 When no config file exists, `DiscoverTokens()` scans the data dir for `token_*.json` files and extracts canonical IDs from filenames. One token → auto-select. Multiple → prompt with list.
 

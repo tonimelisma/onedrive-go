@@ -447,7 +447,7 @@ func baselineEntryForFailureInBaseline(bl *Baseline, row *SyncFailureRow) *Basel
 		return nil
 	}
 
-	entry, ok := bl.GetByID(driveid.NewItemKey(row.DriveID, row.ItemID))
+	entry, ok := bl.GetByID(row.ItemID)
 	if !ok {
 		return nil
 	}
@@ -674,7 +674,7 @@ func (flow *engineFlow) buildRemoteMoveRetryCandidate(
 		return rebuild
 	}
 
-	oldEntry, ok := bl.GetByID(driveid.NewItemKey(row.DriveID, row.ItemID))
+	oldEntry, ok := bl.GetByID(row.ItemID)
 	if !ok || oldEntry.Path == row.Path {
 		return rebuild
 	}
@@ -689,7 +689,7 @@ func (flow *engineFlow) buildRemoteMoveRetryCandidate(
 func (flow *engineFlow) buildRemoteDeleteRetryCandidate(bl *Baseline, row *SyncFailureRow) retryCandidate {
 	entry, ok := bl.GetByPath(row.Path)
 	if !ok && row.ItemID != "" {
-		entry, ok = bl.GetByID(driveid.NewItemKey(row.DriveID, row.ItemID))
+		entry, ok = bl.GetByID(row.ItemID)
 	}
 	if !ok {
 		return retryCandidate{resolved: true}

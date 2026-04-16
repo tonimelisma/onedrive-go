@@ -23,7 +23,6 @@ func TestDefaultConfig_AllFieldsPopulated(t *testing.T) {
 	assert.Equal(t, "5m", cfg.PollInterval)
 	assert.False(t, cfg.Websocket)
 	assert.False(t, cfg.DryRun)
-	assert.Equal(t, "5m", cfg.SafetyScanInterval)
 
 	// Logging defaults
 	assert.Equal(t, "info", cfg.LogLevel)

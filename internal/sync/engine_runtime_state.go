@@ -154,3 +154,15 @@ func (rt *watchRuntime) hasRetryTimer() bool {
 
 	return rt.retryTimer != nil
 }
+
+func (rt *watchRuntime) resetReconcileTimer(next syncTimer) {
+	rt.timerMu.Lock()
+	defer rt.timerMu.Unlock()
+
+	if rt.reconcileTimer != nil {
+		rt.reconcileTimer.Stop()
+		rt.reconcileTimer = nil
+	}
+
+	rt.reconcileTimer = next
+}

@@ -31,15 +31,10 @@ const (
 	recheckInterval = 10 * time.Second
 )
 
-// defaultReconcileInterval is the default interval for periodic full
-// reconciliation in daemon mode. A full enumeration of 100K items costs
-// ~500 API calls (~17% of a single 5-minute rate window), so 24h is safe.
-const defaultReconcileInterval = 24 * time.Hour
-
-// minReconcileInterval is the minimum allowed reconcile interval. A full
-// enumeration of 100K items costs ~500 API calls; anything under 15 minutes
-// risks rate-limit exhaustion.
-const minReconcileInterval = 15 * time.Minute
+const (
+	fullRemoteReconcileInterval = 24 * time.Hour
+	localFullScanInterval       = 5 * time.Minute
+)
 
 // quiescenceLogInterval is how often bootstrapSync logs while waiting
 // for in-flight actions to complete.
@@ -234,8 +229,8 @@ func (rt *watchRuntime) initWatchInfra(
 	rt.buf = buf
 	batchReady := buf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
-	// Tickers.
-	reconcileTicker := rt.engine.initReconcileTicker(opts)
+	// Tickers/timers.
+	rt.resetReconcileTimer(nil)
 	recheckTicker := rt.engine.newTicker(recheckInterval)
 
 	// Arm retrier timer from DB — picks up items from prior crash or prior pass.
@@ -247,7 +242,7 @@ func (rt *watchRuntime) initWatchInfra(
 		safety:           rt.engine.resolveSafetyConfig(),
 		batchReady:       batchReady,
 		results:          pool.Results(),
-		reconcileC:       tickerChan(reconcileTicker),
+		reconcileC:       rt.reconcileCh,
 		reconcileResults: rt.reconcileResults,
 		recheckC:         tickerChan(recheckTicker),
 		mode:             mode,
@@ -265,7 +260,7 @@ func (rt *watchRuntime) initWatchInfra(
 		}
 
 		stopTicker(recheckTicker)
-		stopTicker(reconcileTicker)
+		rt.resetReconcileTimer(nil)
 
 		inFlight := depGraph.InFlightCount()
 		if inFlight > 0 {
@@ -311,13 +306,21 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
 
+	fullReconcile, err := rt.engine.shouldRunFullRemoteReconcile(ctx, false)
+	if err != nil {
+		return fmt.Errorf("sync: deciding bootstrap full reconcile: %w", err)
+	}
+
 	// Observe changes.
-	changes, pendingTokens, err := rt.observeChanges(ctx, rt, bl, mode, false, false)
+	changes, pendingTokens, err := rt.observeChanges(ctx, rt, bl, false, fullReconcile)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
 	if len(changes) == 0 {
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
+		if err := rt.armFullReconcileTimer(ctx); err != nil {
+			return fmt.Errorf("sync: arming full reconcile timer: %w", err)
+		}
 		rt.engine.logger.Info("bootstrap sync complete: no changes detected")
 		return nil
 	}
@@ -337,6 +340,9 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 	rt.postSyncHousekeeping()
+	if err := rt.armFullReconcileTimer(ctx); err != nil {
+		return fmt.Errorf("sync: arming full reconcile timer: %w", err)
+	}
 	rt.engine.logger.Info("bootstrap sync complete")
 	return nil
 }
@@ -369,7 +375,6 @@ func (rt *watchRuntime) startObservers(
 	localObs := NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
 	localObs.SetFilterConfig(rt.engine.localFilter)
 	localObs.SetObservationRules(rt.engine.localRules)
-	localObs.SetSafetyScanInterval(opts.SafetyScanInterval)
 	localObs.SetSkippedChannel(skippedCh)
 
 	if rt.engine.localWatcherFactory != nil {
@@ -390,10 +395,10 @@ func (rt *watchRuntime) startObservers(
 		if errors.Is(watchErr, ErrWatchLimitExhausted) {
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
 			rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
-				slog.Duration("poll_interval", rt.engine.resolvePollInterval(opts)),
+				slog.Duration("scan_interval", localFullScanInterval),
 			)
 
-			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, events, rt.engine.resolvePollInterval(opts))
+			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, events, localFullScanInterval)
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
 			errs <- nil // clean exit after context cancel
 
@@ -417,24 +422,8 @@ func (rt *watchRuntime) startRemoteObserver(
 	opts WatchOptions,
 ) {
 	pollInterval := rt.engine.resolvePollInterval(opts)
-	session := ObservationSession{
-		Generation: 1,
-	}
-	plan, err := rt.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
-		Session:  &session,
-		SyncMode: SyncBidirectional,
-		Purpose:  observationPlanPurposeWatch,
-	})
-	if err != nil {
-		go func() {
-			defer obsWg.Done()
-			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
-			errs <- err
-		}()
-
-		return
-	}
-	rt.startPrimaryWatchPhase(ctx, obsWg, bl, events, errs, pollInterval, plan.PrimaryPhase)
+	plan := rt.buildPrimaryRootObservationPlan(false)
+	rt.startPrimaryRootWatch(ctx, obsWg, bl, events, errs, pollInterval, plan)
 }
 
 func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan struct{} {

@@ -40,9 +40,9 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, hash, size, mtime, observed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		driveid.New("d1").String(), "item-1", "file.txt", ItemTypeFile, "remote-old", 120,
+		`INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, observed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"item-1", "file.txt", ItemTypeFile, "remote-old", 120,
 		seedTime.Add(2*time.Second).UnixNano(), seedTime.UnixNano())
 	require.NoError(t, err)
 
@@ -78,8 +78,8 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	var size int64
 	var mtime int64
 	err = mgr.DB().QueryRowContext(ctx,
-		`SELECT hash, size, mtime FROM remote_state WHERE drive_id = ? AND item_id = ?`,
-		driveid.New("d1").String(), "item-1",
+		`SELECT hash, size, mtime FROM remote_state WHERE item_id = ?`,
+		"item-1",
 	).Scan(&hash, &size, &mtime)
 	require.NoError(t, err)
 	assert.Equal(t, "remote-old", hash, "remote_state hash should not be overwritten")

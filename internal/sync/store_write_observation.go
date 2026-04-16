@@ -1,7 +1,7 @@
 // Package sync persists sync baseline, observation, failure, scope-block, and metadata state.
 //
 // Contents:
-//   - CommitObservation:        atomically persist remote mirror state + advance delta token
+//   - CommitObservation:        atomically persist remote mirror state + advance observation cursor
 //   - processObservedItem:      handle single observed item within transaction
 //   - scanRemoteStateRow:       read one remote_state row
 //   - insertRemoteState:        insert new remote_state row
@@ -9,7 +9,7 @@
 //
 // Related files:
 //   - store.go:            SyncStore type definition and lifecycle
-//   - store_write_baseline.go: saveDeltaToken (called from CommitObservation)
+//   - store_observation_state.go: observation state helpers
 package sync
 
 import (
@@ -22,36 +22,25 @@ import (
 )
 
 const (
-	sqlGetRemoteStateRow = `SELECT drive_id, item_id, path, parent_id, item_type,
+	sqlGetRemoteStateRow = `SELECT item_id, path, parent_id, item_type,
 		hash, size, mtime, etag, previous_path, observed_at
-		FROM remote_state WHERE drive_id = ? AND item_id = ?`
+		FROM remote_state WHERE item_id = ?`
 
 	sqlInsertRemoteState = `INSERT INTO remote_state
-		(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+		(item_id, path, parent_id, item_type, hash, size, mtime, etag,
 		 previous_path, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	sqlUpdateRemoteState = `UPDATE remote_state SET
 		path = ?, parent_id = ?, item_type = ?, hash = ?, size = ?, mtime = ?, etag = ?,
 		previous_path = ?, observed_at = ?
-		WHERE drive_id = ? AND item_id = ?`
+		WHERE item_id = ?`
 )
 
 // CommitObservation atomically persists observed remote mirror state and
 // advances the delta token in a single transaction.
 func (m *SyncStore) CommitObservation(ctx context.Context, events []ObservedItem, newToken string, driveID driveid.ID) error {
-	return m.commitObservation(ctx, events, newToken, driveID, "")
-}
-
-// CommitObservationForScope is the folder-scoped variant of CommitObservation.
-func (m *SyncStore) CommitObservationForScope(
-	ctx context.Context,
-	events []ObservedItem,
-	newToken string,
-	driveID driveid.ID,
-	scopeID string,
-) error {
-	return m.commitObservation(ctx, events, newToken, driveID, scopeID)
+	return m.commitObservation(ctx, events, newToken, driveID)
 }
 
 func (m *SyncStore) commitObservation(
@@ -59,7 +48,6 @@ func (m *SyncStore) commitObservation(
 	events []ObservedItem,
 	newToken string,
 	driveID driveid.ID,
-	scopeID string,
 ) (err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
@@ -69,16 +57,32 @@ func (m *SyncStore) commitObservation(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation transaction")
 	}()
 
+	state, err := m.readObservationStateTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if ensureErr := m.ensureConfiguredDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
+		return ensureErr
+	}
+	if !state.ConfiguredDriveID.IsZero() {
+		driveID = state.ConfiguredDriveID
+	}
+
 	now := m.nowFunc().UnixNano()
 
 	for i := range events {
+		if !driveID.IsZero() {
+			events[i].DriveID = driveID
+		}
 		if processErr := m.processObservedItem(ctx, tx, &events[i], now); processErr != nil {
 			return processErr
 		}
 	}
 
 	if newToken != "" {
-		if saveErr := m.saveDeltaToken(ctx, tx, driveID.String(), scopeID, driveID.String(), newToken, now); saveErr != nil {
+		state.Cursor = newToken
+		state.UpdatedAt = now
+		if saveErr := m.writeObservationStateTx(ctx, tx, state); saveErr != nil {
 			return saveErr
 		}
 	}
@@ -90,7 +94,6 @@ func (m *SyncStore) commitObservation(
 	m.logger.Debug("observations committed",
 		slog.Int("items", len(events)),
 		slog.String("drive_id", driveID.String()),
-		slog.String("scope_id", scopeID),
 	)
 
 	return nil
@@ -125,8 +128,7 @@ func deleteObservedRemoteState(
 	existingPath string,
 ) error {
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM remote_state WHERE drive_id = ? AND item_id = ?`,
-		item.DriveID.String(),
+		`DELETE FROM remote_state WHERE item_id = ?`,
 		item.ItemID,
 	); err != nil {
 		return fmt.Errorf("sync: deleting remote_state for %s: %w", existingPath, err)
@@ -156,9 +158,11 @@ func observedRemoteStateUpdate(
 }
 
 func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *RemoteStateRow {
+	configuredDriveID := driveid.New(driveID)
 	row, err := scanRemoteStateRowWithQuerier(
+		configuredDriveID,
 		func(dest ...any) error {
-			return tx.QueryRowContext(ctx, sqlGetRemoteStateRow, driveID, itemID).Scan(dest...)
+			return tx.QueryRowContext(ctx, sqlGetRemoteStateRow, itemID).Scan(dest...)
 		},
 	)
 	if err != nil {
@@ -170,7 +174,7 @@ func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driv
 
 func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *ObservedItem, now int64) error {
 	_, err := tx.ExecContext(ctx, sqlInsertRemoteState,
-		item.DriveID.String(), item.ItemID, item.Path,
+		item.ItemID, item.Path,
 		nullString(item.ParentID), item.ItemType,
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
@@ -196,7 +200,7 @@ func (m *SyncStore) updateRemoteStateFromObs(
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
 		nullString(previousPath), now,
-		item.DriveID.String(), item.ItemID,
+		item.ItemID,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: updating remote_state for %s: %w", item.Path, err)

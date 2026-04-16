@@ -199,7 +199,7 @@ func (rt *watchRuntime) transitionWatchObservationEvent(
 	case watchEventReconcileTick:
 		return watchTransition{startReconcile: true}, true
 	case watchEventReconcileResult:
-		rt.applyReconcileResult(ctx, event.reconcileResult)
+		rt.applyReconcileResult(event.reconcileResult)
 		return watchTransition{}, true
 	case watchEventReconcileResultsClosed:
 		p.reconcileResults = nil

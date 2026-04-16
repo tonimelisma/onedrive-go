@@ -7,13 +7,12 @@ import (
 
 // Validation range constants.
 const (
-	minTransferWorkers    = 4
-	maxTransferWorkers    = 64
-	minCheckWorkers       = 1
-	maxCheckWorkers       = 16
-	minLogRetention       = 1
-	minPollInterval       = 30 * time.Second
-	minSafetyScanInterval = 10 * time.Second
+	minTransferWorkers = 4
+	maxTransferWorkers = 64
+	minCheckWorkers    = 1
+	maxCheckWorkers    = 16
+	minLogRetention    = 1
+	minPollInterval    = 30 * time.Second
 )
 
 func validateTransfers(t *TransfersConfig) []error {
@@ -52,7 +51,6 @@ func validateSync(s *SyncConfig) []error {
 	var errs []error
 
 	errs = append(errs, validateDurationMin("poll_interval", s.PollInterval, minPollInterval)...)
-	errs = append(errs, validateDurationMin("safety_scan_interval", s.SafetyScanInterval, minSafetyScanInterval)...)
 
 	return errs
 }

@@ -72,10 +72,10 @@ func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 	// Write some data to ensure WAL has content.
 	ctx := t.Context()
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO baseline (path, drive_id, item_id, parent_id, item_type,
+		`INSERT INTO baseline (path, item_id, parent_id, item_type,
 		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"/test.txt", "drv1", "item1", "parent1", "file",
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"/test.txt", "item1", "parent1", "file",
 		"hash1", "hash1", 100, 100, 1700000000, 1700000000, 1700000000, "etag1")
 	require.NoError(t, err)
 
@@ -123,16 +123,16 @@ func TestCheckpoint_DoesNotPruneRemoteMirrorRows(t *testing.T) {
 	// Checkpoint no longer treats remote_state as a lifecycle queue, so mirror
 	// rows are never pruned by age.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"drv1", "old-item", "/old.txt", "file", oldTime)
+		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
+		 VALUES (?, ?, ?, ?)`,
+		"old-item", "/old.txt", "file", oldTime)
 	require.NoError(t, err)
 
 	// Insert a second row to ensure older/newer mirror entries both survive.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"drv1", "new-item", "/new.txt", "file", newTime)
+		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
+		 VALUES (?, ?, ?, ?)`,
+		"new-item", "/new.txt", "file", newTime)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
@@ -157,23 +157,23 @@ func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
 
 	// Insert an actionable failure older than retention (should be pruned).
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"/old-issue.txt", "", "upload", "upload", "item", "actionable", oldTime, oldTime)
+		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"/old-issue.txt", "upload", "upload", "item", "actionable", oldTime, oldTime)
 	require.NoError(t, err)
 
 	// Insert an actionable failure newer than retention (should survive).
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"/new-issue.txt", "", "upload", "upload", "item", "actionable", newTime, newTime)
+		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"/new-issue.txt", "upload", "upload", "item", "actionable", newTime, newTime)
 	require.NoError(t, err)
 
 	// Insert a transient failure (should never be pruned regardless of age).
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"/pending-issue.txt", "", "upload", "upload", "item", "transient", oldTime, oldTime)
+		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"/pending-issue.txt", "upload", "upload", "item", "transient", oldTime, oldTime)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
@@ -195,9 +195,9 @@ func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
 
 	// Insert an old remote mirror row.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"drv1", "item1", "/old.txt", "file", oldTime)
+		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
+		 VALUES (?, ?, ?, ?)`,
+		"item1", "/old.txt", "file", oldTime)
 	require.NoError(t, err)
 
 	// Zero retention = WAL checkpoint only, no pruning.
@@ -219,7 +219,7 @@ func TestLoad_EmptyBaseline(t *testing.T) {
 	b, err := mgr.Load(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 0, b.Len())
-	_, idOk := b.GetByID(driveid.NewItemKey(driveid.ID{}, "nonexistent"))
+	_, idOk := b.GetByID("nonexistent")
 	assert.False(t, idOk)
 }
 
@@ -530,13 +530,12 @@ func TestCommit_DeltaTokenRoundTrip(t *testing.T) {
 
 			for step, token := range tc.tokenSteps {
 				commitAll(t, mgr, ctx, outcomes)
-				require.NoError(t, mgr.CommitDeltaToken(ctx, token, tc.driveID, "", tc.driveID))
+				saveObservationCursorForTest(t, mgr, ctx, tc.driveID, token)
 				outcomes[0].LocalHash = fmt.Sprintf("h-%d", step+2)
 				outcomes[0].RemoteHash = outcomes[0].LocalHash
 			}
 
-			savedToken, err := mgr.GetDeltaToken(ctx, tc.driveID, "")
-			require.NoError(t, err)
+			savedToken := readObservationCursorForTest(t, mgr, ctx, tc.driveID)
 			assert.Equal(t, tc.tokenSteps[len(tc.tokenSteps)-1], savedToken)
 		})
 	}
@@ -599,15 +598,15 @@ func TestCommit_RefreshesCache(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestGetDeltaToken_Empty(t *testing.T) {
+func TestReadObservationState_EmptyCursor(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	token, err := mgr.GetDeltaToken(ctx, "nonexistent-drive", "")
+	state, err := mgr.ReadObservationState(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, token)
+	assert.Empty(t, state.Cursor)
 }
 
 // Validates: R-2.2
@@ -619,10 +618,10 @@ func TestLoad_NullableFields(t *testing.T) {
 
 	// Insert a row with NULL parent_id, hashes, size, mtimes, etag directly.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO baseline (path, drive_id, item_id, parent_id, item_type,
+		`INSERT INTO baseline (path, item_id, parent_id, item_type,
 		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
-		 VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL)`,
-		"root", "d", "root-id", "root", time.Now().UnixNano(),
+		 VALUES (?, ?, NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL)`,
+		"root", "root-id", "root", time.Now().UnixNano(),
 	)
 	require.NoError(t, err)
 
@@ -1176,20 +1175,20 @@ func TestCommitMutation_Upload_NewItemID_SamePath(t *testing.T) {
 	assert.Equal(t, "hash2", entry.RemoteHash)
 
 	// Old ID should no longer exist in ByID.
-	_, ok = mgr.Baseline().GetByID(driveid.NewItemKey(driveID, "old-id"))
+	_, ok = mgr.Baseline().GetByID("old-id")
 	assert.False(t, ok, "old ID should be removed from ByID")
 
 	// New ID should exist in ByID.
-	_, ok = mgr.Baseline().GetByID(driveid.NewItemKey(driveID, "new-id"))
+	_, ok = mgr.Baseline().GetByID("new-id")
 	assert.True(t, ok, "new ID should exist in ByID")
 }
 
 // ---------------------------------------------------------------------------
-// CommitDeltaToken tests
+// Observation cursor tests
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.15.1
-func TestCommitDeltaToken(t *testing.T) {
+func TestCommitObservationCursor(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1197,15 +1196,14 @@ func TestCommitDeltaToken(t *testing.T) {
 
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-abc", "d", "", "d"))
+	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-abc"))
 
-	token, err := mgr.GetDeltaToken(ctx, "d", "")
-	require.NoError(t, err)
+	token := readObservationCursorForTest(t, mgr, ctx, "d")
 	assert.Equal(t, "token-abc", token)
 }
 
 // Validates: R-2.15.1
-func TestCommitDeltaToken_Update(t *testing.T) {
+func TestCommitObservationCursor_Update(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1213,75 +1211,25 @@ func TestCommitDeltaToken_Update(t *testing.T) {
 
 	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-1", "d", "", "d"))
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "token-2", "d", "", "d"))
+	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-1"))
+	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-2"))
 
-	token, err := mgr.GetDeltaToken(ctx, "d", "")
-	require.NoError(t, err)
+	token := readObservationCursorForTest(t, mgr, ctx, "d")
 	assert.Equal(t, "token-2", token)
 }
 
 // Validates: R-2.15.1
-func TestCommitDeltaToken_EmptyIsNoop(t *testing.T) {
+func TestClearObservationCursor(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	// Empty token should be a no-op.
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "", "d", "", "d"))
+	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-1"))
+	require.NoError(t, mgr.ClearObservationCursor(ctx))
 
-	token, err := mgr.GetDeltaToken(ctx, "d", "")
-	require.NoError(t, err)
+	token := readObservationCursorForTest(t, mgr, ctx, "d")
 	assert.Empty(t, token)
-}
-
-// Validates: R-2.15.1
-func TestCommitDeltaToken_CompositeKey_DifferentScopes(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	// Primary delta (scope_id="").
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "primary-token", "drv1", "", "drv1"))
-
-	// Shared-root-scoped delta (scope_id=remoteItemID, scope_drive=remoteDriveID).
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "shared-root-token", "drv1", "item123", "drv2"))
-
-	// Both should be independently retrievable.
-	primary, err := mgr.GetDeltaToken(ctx, "drv1", "")
-	require.NoError(t, err)
-	assert.Equal(t, "primary-token", primary)
-
-	sharedRoot, err := mgr.GetDeltaToken(ctx, "drv1", "item123")
-	require.NoError(t, err)
-	assert.Equal(t, "shared-root-token", sharedRoot)
-}
-
-// Validates: R-2.15.1
-func TestCommitDeltaToken_CompositeKey_UpdatePreservesOtherScopes(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	// Save two scoped tokens.
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "tok-a", "drv1", "", "drv1"))
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "tok-b", "drv1", "scope1", "drv2"))
-
-	// Update only the primary.
-	require.NoError(t, mgr.CommitDeltaToken(ctx, "tok-a-updated", "drv1", "", "drv1"))
-
-	// Primary should be updated.
-	primary, err := mgr.GetDeltaToken(ctx, "drv1", "")
-	require.NoError(t, err)
-	assert.Equal(t, "tok-a-updated", primary)
-
-	// Other scope should be unchanged.
-	scoped, err := mgr.GetDeltaToken(ctx, "drv1", "scope1")
-	require.NoError(t, err)
-	assert.Equal(t, "tok-b", scoped)
 }
 
 // ---------------------------------------------------------------------------
@@ -1296,7 +1244,7 @@ func TestBaseline_GetByPath(t *testing.T) {
 		ByPath: map[string]*BaselineEntry{
 			"docs/readme.md": {Path: "docs/readme.md", ItemID: "item1", DriveID: driveid.New("d1")},
 		},
-		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByID:       make(map[string]*BaselineEntry),
 		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
@@ -1313,21 +1261,19 @@ func TestBaseline_GetByID(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New("d1")
-	key := driveid.NewItemKey(driveID, "item1")
 	entry := &BaselineEntry{Path: "test.txt", ItemID: "item1", DriveID: driveID}
 
 	b := &Baseline{
 		ByPath:     make(map[string]*BaselineEntry),
-		ByID:       map[driveid.ItemKey]*BaselineEntry{key: entry},
+		ByID:       map[string]*BaselineEntry{"item1": entry},
 		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
-	got, ok := b.GetByID(key)
+	got, ok := b.GetByID("item1")
 	require.True(t, ok)
 	assert.Equal(t, "test.txt", got.Path)
 
-	missingKey := driveid.NewItemKey(driveID, "nonexistent")
-	_, ok = b.GetByID(missingKey)
+	_, ok = b.GetByID("nonexistent")
 	assert.False(t, ok)
 }
 
@@ -1337,7 +1283,7 @@ func TestBaseline_Put(t *testing.T) {
 
 	b := &Baseline{
 		ByPath:     make(map[string]*BaselineEntry),
-		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByID:       make(map[string]*BaselineEntry),
 		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
@@ -1353,8 +1299,7 @@ func TestBaseline_Put(t *testing.T) {
 	require.True(t, ok, "entry not found after Put")
 	assert.Equal(t, "item-new", got.ItemID)
 
-	key := driveid.NewItemKey(driveid.New("d1"), "item-new")
-	gotByID, ok := b.GetByID(key)
+	gotByID, ok := b.GetByID("item-new")
 	require.True(t, ok, "entry not found by ID after Put")
 	assert.Equal(t, "new/file.txt", gotByID.Path)
 }
@@ -1367,11 +1312,10 @@ func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
 
 	driveID := driveid.New("d1")
 	oldEntry := &BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "old-id"}
-	oldKey := driveid.NewItemKey(driveID, "old-id")
 
 	b := &Baseline{
 		ByPath:     map[string]*BaselineEntry{"file.txt": oldEntry},
-		ByID:       map[driveid.ItemKey]*BaselineEntry{oldKey: oldEntry},
+		ByID:       map[string]*BaselineEntry{"old-id": oldEntry},
 		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
@@ -1384,12 +1328,11 @@ func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
 	require.True(t, ok, "entry not found by path")
 	assert.Equal(t, "new-id", got.ItemID)
 
-	newKey := driveid.NewItemKey(driveID, "new-id")
-	_, ok = b.GetByID(newKey)
+	_, ok = b.GetByID("new-id")
 	assert.True(t, ok, "new ID not found in ByID")
 
 	// Old ID should be gone.
-	_, ok = b.GetByID(oldKey)
+	_, ok = b.GetByID("old-id")
 	assert.False(t, ok, "stale old ID should be removed from ByID")
 
 	// Only 1 entry total.
@@ -1402,11 +1345,10 @@ func TestBaseline_Delete(t *testing.T) {
 
 	driveID := driveid.New("d1")
 	entry := &BaselineEntry{Path: "delete-me.txt", DriveID: driveID, ItemID: "item-del"}
-	key := driveid.NewItemKey(driveID, "item-del")
 
 	b := &Baseline{
 		ByPath:     map[string]*BaselineEntry{"delete-me.txt": entry},
-		ByID:       map[driveid.ItemKey]*BaselineEntry{key: entry},
+		ByID:       map[string]*BaselineEntry{"item-del": entry},
 		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
@@ -1415,7 +1357,7 @@ func TestBaseline_Delete(t *testing.T) {
 	_, ok := b.GetByPath("delete-me.txt")
 	assert.False(t, ok, "entry still exists after Delete")
 
-	_, ok = b.GetByID(key)
+	_, ok = b.GetByID("item-del")
 	assert.False(t, ok, "entry still exists in ByID after Delete")
 
 	// Deleting nonexistent path should not panic.
@@ -1431,7 +1373,7 @@ func TestBaseline_Len(t *testing.T) {
 			"a.txt": {Path: "a.txt"},
 			"b.txt": {Path: "b.txt"},
 		},
-		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByID:       make(map[string]*BaselineEntry),
 		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
@@ -1447,7 +1389,7 @@ func TestBaseline_ForEachPath(t *testing.T) {
 			"a.txt": {Path: "a.txt", ItemID: "i1"},
 			"b.txt": {Path: "b.txt", ItemID: "i2"},
 		},
-		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByID:       make(map[string]*BaselineEntry),
 		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
@@ -1467,7 +1409,7 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 
 	b := &Baseline{
 		ByPath:     make(map[string]*BaselineEntry),
-		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByID:       make(map[string]*BaselineEntry),
 		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
@@ -1574,7 +1516,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	// Verify all expected tables exist by querying sqlite_master.
 	expectedTables := []string{
-		"baseline", "delta_tokens", "sync_metadata",
+		"baseline", "observation_state", "sync_metadata",
 		"remote_state", "sync_failures",
 	}
 
@@ -1587,46 +1529,31 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 		assert.Equal(t, table, name)
 	}
 
-	// Verify delta_tokens composite key: two tokens for same drive_id,
-	// different scope_id should coexist.
-	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, cursor, updated_at)
-		VALUES (?, ?, ?, ?, ?)`,
-		"d!abc123", "", "d!abc123", "primary-token", 1700000000)
-	require.NoError(t, err)
+	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d!abc123"), "primary-token"))
 
-	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, cursor, updated_at)
-		VALUES (?, ?, ?, ?, ?)`,
-		"d!abc123", "shared-folder-id", "d!other456", "scoped-token", 1700000001)
+	state, err := mgr.ReadObservationState(ctx)
 	require.NoError(t, err)
-
-	var count int
-	err = mgr.DB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM delta_tokens WHERE drive_id = ?`, "d!abc123",
-	).Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 2, count)
+	assert.Equal(t, "primary-token", state.Cursor)
 
 	// Verify remote_state table structure: insert + query.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"d!abc123", "item1", "/test.txt", "file", 1700000000)
+		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
+		 VALUES (?, ?, ?, ?)`,
+		"item1", "/test.txt", "file", 1700000000)
 	require.NoError(t, err)
 
 	// Verify sync_failures table structure: insert + query.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, drive_id, direction, action_type, failure_role, category, issue_type, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"/bad-file.txt", "d!abc123", "upload", "upload", "item", "transient", "invalid_filename", 1700000000, 1700000000)
+		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, issue_type, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"/bad-file.txt", "upload", "upload", "item", "transient", "invalid_filename", 1700000000, 1700000000)
 	require.NoError(t, err)
 
 	// Verify remote_state CHECK constraint rejects invalid item types.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"d!abc123", "item2", "/bad.txt", "bogus", 1700000000)
+		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
+		 VALUES (?, ?, ?, ?)`,
+		"item2", "/bad.txt", "bogus", 1700000000)
 	require.Error(t, err, "invalid item type should be rejected by CHECK constraint")
 }
 
@@ -1639,16 +1566,16 @@ func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
 
 	// Insert an active item at a path.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"d!abc123", "item1", "/test.txt", "file", 1700000000)
+		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
+		 VALUES (?, ?, ?, ?)`,
+		"item1", "/test.txt", "file", 1700000000)
 	require.NoError(t, err)
 
 	// Another item at the same path should be rejected by the mirror's unique path index.
 	_, err = mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (drive_id, item_id, path, item_type, observed_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"d!abc123", "item2", "/test.txt", "file", 1700000000)
+		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
+		 VALUES (?, ?, ?, ?)`,
+		"item2", "/test.txt", "file", 1700000000)
 	require.Error(t, err, "duplicate active path should be rejected")
 }
 

@@ -1294,7 +1294,7 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 
 	err := <-done
 	require.NoError(t, err)
-	assert.Empty(t, readDeltaToken(t, store.DB(), driveID.String()), "zero-event wake polls must not commit observations")
+	assert.Empty(t, readObservationCursor(t, store.DB(), driveID.String()), "zero-event wake polls must not commit observations")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "zero-event wake polls must not advance the token")
 }
 
@@ -1828,8 +1828,8 @@ func TestClassifyItem_RemoteTrustsServer(t *testing.T) {
 	bl := emptyBaseline()
 	obs := NewRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
 
-	inflight := map[driveid.ItemKey]InflightParent{
-		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
+	inflight := map[string]InflightParent{
+		"root": {Name: "", IsRoot: true},
 	}
 
 	tests := []struct {
@@ -1929,7 +1929,7 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.Equal(t, "token-1", readDeltaToken(t, store.DB(), driveID.String()))
+	assert.Equal(t, "token-1", readObservationCursor(t, store.DB(), driveID.String()))
 	row := readRemoteStateRow(t, store.DB(), "f1")
 	require.NotNil(t, row, "remote observation should persist mirrored state")
 	assert.Equal(t, driveID, row.DriveID)
@@ -2021,7 +2021,7 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.Empty(t, readDeltaToken(t, store.DB(), driveID.String()), "should not commit observations when 0 events returned")
+	assert.Empty(t, readObservationCursor(t, store.DB(), driveID.String()), "should not commit observations when 0 events returned")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "token should not advance when 0 events returned")
 }
 
@@ -2036,8 +2036,8 @@ func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
 	bl := emptyBaseline()
 	obs := NewRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
 
-	inflight := map[driveid.ItemKey]InflightParent{
-		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
+	inflight := map[string]InflightParent{
+		"root": {Name: "", IsRoot: true},
 	}
 
 	item := &graph.Item{
@@ -2061,8 +2061,8 @@ func TestClassifyItem_EmbeddedSharedLinkIgnored(t *testing.T) {
 	driveID := driveid.New(synctest.TestDriveID)
 	obs := NewRemoteObserver(nil, emptyBaseline(), driveID, synctest.TestLogger(t))
 
-	inflight := map[driveid.ItemKey]InflightParent{
-		driveid.NewItemKey(driveID, "root"): {Name: "", IsRoot: true},
+	inflight := map[string]InflightParent{
+		"root": {Name: "", IsRoot: true},
 	}
 
 	item := &graph.Item{

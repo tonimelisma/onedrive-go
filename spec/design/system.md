@@ -190,18 +190,13 @@ Static verification is a first-class architectural constraint, not a best-effort
   `sync-partial-local-catchup-100m` live representative scenario against the
   built `onedrive-go` binary, emit a subject-aware JSON result bundle, and keep
   release report publication in the dedicated benchmarking design.
-- Observation coordination is intentionally split into a pure planner and
-  effectful executors. `internal/sync/engine_scope_session.go` is the pure
-  scoped-observation planner, while `internal/sync/engine_observation_phase.go`
-  and `internal/sync/engine_observation_watch.go` own effectful execution for
-  one-shot/reconcile and watch mode respectively. Root-delta watch commit/scope
-  policy also lives there now, so `RemoteObserver` stays an observation
-  component instead of carrying engine-owned watch batch adaptation state. That
-  keeps driver/fallback/token policy out of orchestration code.
-- Planner policy also has a repo-owned golden surface. Stable JSON projections
-  of `ObservationSessionPlan` live under
-  `internal/sync/testdata/observation_session_plan/` and are updated with the
-  standard local `-update` golden workflow in same-package tests.
+- Observation coordination is intentionally single-root. `internal/sync/engine_primary_root.go`
+  owns the primary remote-root plan for the configured drive, while
+  `internal/sync/engine_run_once.go`, `internal/sync/engine_watch.go`, and
+  `internal/sync/engine_watch_reconcile.go` execute that one root in one-shot,
+  watch, and full-reconcile paths. Shared-root fallback policy lives alongside
+  that execution rather than behind a separate session/phase framework, so the
+  runtime reflects the real product model directly.
 - Repo-consistency checks in `cmd/devtool verify` enforce the repo-level architecture constraints linters do not express cleanly: governed design docs must carry ownership contracts, required cross-cutting docs must exist and be linked from this document, production `internal/cli` code must not bypass its output-writer boundary with direct process-global stdout/stderr writes, guarded runtime packages must not reintroduce raw `os.*` filesystem calls, known stale wording classes for filter ownership are rejected in live docs, recurring `spec/reference/live-incidents.md` `Promoted docs:` links must resolve to real files/anchors, `internal/graph/client_preauth.go` remains the only raw production `http.Client.Do` boundary, `exec.CommandContext` is limited to validated browser launch and devtool runner entrypoints, `sql.Open` is limited to `internal/sync`, `signal.Notify` is limited to `internal/cli/signal.go`, and the internal dependency graph stays inside explicit guardrails: at most 26 internal packages, at most 80 internal import edges, with `internal/sync` as the single sync-domain owner package and deleted split-package references rejected by repo consistency checks.
 - The same repo-consistency pass also forbids raw `exec.Command` in production, narrows `signal.Stop` and `os.Exit` to the documented process-lifecycle entrypoints, validates that `Validates:` and `Implements:` references resolve to declared requirement IDs, enforces that governed lifecycle docs cite exact named tests in their evidence sections, and enforces the degraded-mode evidence-table structure that links each `DM-*` row to named tests.
 - `go run ./cmd/devtool worktree add --path <path> --branch <branch>` is the canonical way to create new worktrees from `origin/main`. It applies `.worktreeinclude` immediately so the new worktree is ready for fast E2E and local development.

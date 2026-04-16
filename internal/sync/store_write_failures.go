@@ -14,8 +14,8 @@
 // Contents:
 //   - IsActionableIssue:               classify issue types requiring user action
 //   - RecordFailure:                   unified failure recording
-//   - ClearSyncFailure:                remove by path + drive
-//   - TakeSyncFailure:                 atomically load + remove by path + drive
+//   - ClearSyncFailure:                remove by path
+//   - TakeSyncFailure:                 atomically load + remove by path
 //   - ClearSyncFailureByPath:          remove by path (any drive)
 //   - ClearActionableSyncFailures:     remove all actionable failures
 //   - ClearSyncFailuresByPrefix:       remove by path prefix + issue type
@@ -46,7 +46,7 @@ import (
 
 // Shared column list for all sync_failures SELECT queries. Must match
 // the scan order in scanSyncFailureRows. Update both when adding columns.
-const sqlSelectSyncFailureCols = `path, drive_id, direction, action_type, failure_role, category,
+const sqlSelectSyncFailureCols = `path, direction, action_type, failure_role, category,
 		COALESCE(issue_type, ''), COALESCE(item_id, ''),
 		failure_count, COALESCE(next_retry_at, 0),
 		COALESCE(last_error, ''), COALESCE(http_status, 0),
@@ -243,6 +243,17 @@ func (m *SyncStore) RecordFailure(
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback failure transaction for %s", p.Path))
 	}()
 
+	state, err := m.readObservationStateTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if ensureErr := m.ensureConfiguredDriveIDTx(ctx, tx, p.DriveID, state); ensureErr != nil {
+		return ensureErr
+	}
+	if !state.ConfiguredDriveID.IsZero() {
+		p.DriveID = state.ConfiguredDriveID
+	}
+
 	// Step 1: Read current failure count and compute backoff.
 	currentFailures := m.readFailureCount(ctx, tx, p)
 	nextRetryNano := m.computeNextRetry(now, currentFailures, delayFn)
@@ -251,7 +262,7 @@ func (m *SyncStore) RecordFailure(
 
 	// Step 2: Auto-resolve item_id from remote_state for download/delete
 	// when caller didn't provide one.
-	itemID, resolveErr := m.resolveItemID(ctx, tx, p.Path, p.DriveID, p.ItemID, direction)
+	itemID, resolveErr := m.resolveItemID(ctx, tx, p.Path, p.ItemID, direction)
 	if resolveErr != nil {
 		return resolveErr
 	}
@@ -262,11 +273,11 @@ func (m *SyncStore) RecordFailure(
 	// ON CONFLICT semantics — update both when adding columns.
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO sync_failures
-			(path, drive_id, direction, action_type, failure_role, category, issue_type, item_id,
+			(path, direction, action_type, failure_role, category, issue_type, item_id,
 			 failure_count, next_retry_at, last_error, http_status,
 			 first_seen_at, last_seen_at, file_size, local_hash, scope_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(path, drive_id) DO UPDATE SET
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET
 			direction = excluded.direction,
 			action_type = excluded.action_type,
 			failure_role = excluded.failure_role,
@@ -281,7 +292,7 @@ func (m *SyncStore) RecordFailure(
 			file_size = COALESCE(excluded.file_size, sync_failures.file_size),
 			local_hash = COALESCE(excluded.local_hash, sync_failures.local_hash),
 			scope_key = excluded.scope_key`,
-		p.Path, p.DriveID.String(), direction, actionType, role, category,
+		p.Path, direction, actionType, role, category,
 		nullString(p.IssueType), nullString(itemID),
 		newCount, nextRetryNano, p.ErrMsg, p.HTTPStatus,
 		nowNano, nowNano, nullOptionalInt64(p.FileSize), nullString(p.LocalHash), scopeWire,
@@ -302,8 +313,8 @@ func (m *SyncStore) RecordFailure(
 func (m *SyncStore) readFailureCount(ctx context.Context, tx sqlTxRunner, p *SyncFailureParams) int {
 	var count int
 	if scanErr := tx.QueryRowContext(ctx,
-		`SELECT failure_count FROM sync_failures WHERE path = ? AND drive_id = ?`,
-		p.Path, p.DriveID.String(),
+		`SELECT failure_count FROM sync_failures WHERE path = ?`,
+		p.Path,
 	).Scan(&count); scanErr != nil && scanErr != sql.ErrNoRows {
 		m.logger.Warn("RecordFailure: failed to read failure count, using 0",
 			slog.String("path", p.Path),
@@ -334,7 +345,6 @@ func (m *SyncStore) resolveItemID(
 	ctx context.Context,
 	tx sqlTxRunner,
 	path string,
-	driveID driveid.ID,
 	itemID string,
 	direction Direction,
 ) (string, error) {
@@ -348,8 +358,8 @@ func (m *SyncStore) resolveItemID(
 
 	var resolvedItemID string
 	if scanErr := tx.QueryRowContext(ctx,
-		`SELECT item_id FROM remote_state WHERE path = ? AND drive_id = ?`,
-		path, driveID.String(),
+		`SELECT item_id FROM remote_state WHERE path = ?`,
+		path,
 	).Scan(&resolvedItemID); scanErr != nil && scanErr != sql.ErrNoRows {
 		return "", fmt.Errorf("sync: reading item_id for %s: %w", path, scanErr)
 	}
@@ -357,11 +367,11 @@ func (m *SyncStore) resolveItemID(
 	return resolvedItemID, nil
 }
 
-// ClearSyncFailure removes a specific sync_failures row by path and drive.
+// ClearSyncFailure removes a specific sync_failures row by path.
 func (m *SyncStore) ClearSyncFailure(ctx context.Context, path string, driveID driveid.ID) error {
 	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE path = ? AND drive_id = ?`,
-		path, driveID.String())
+		`DELETE FROM sync_failures WHERE path = ?`,
+		path)
 	if err != nil {
 		return fmt.Errorf("sync: clearing sync failure for %s: %w", path, err)
 	}
@@ -370,7 +380,7 @@ func (m *SyncStore) ClearSyncFailure(ctx context.Context, path string, driveID d
 }
 
 // TakeSyncFailure atomically loads and removes a specific sync_failures row by
-// path and drive. Returns found=false when no matching row exists.
+// path. Returns found=false when no matching row exists.
 func (m *SyncStore) TakeSyncFailure(
 	ctx context.Context,
 	path string,
@@ -384,12 +394,20 @@ func (m *SyncStore) TakeSyncFailure(
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback take sync failure transaction for %s", path))
 	}()
 
+	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveID)
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: reading configured drive for taken sync failure %s: %w", path, err)
+	}
+	if matchErr := ensureMatchingConfiguredDriveID(driveID, configuredDriveID); matchErr != nil {
+		return nil, false, matchErr
+	}
+
 	row = &SyncFailureRow{}
 	if scanErr := scanSyncFailureRow(tx.QueryRowContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
-		WHERE path = ? AND drive_id = ?`,
-		path, driveID.String(),
-	), row); scanErr != nil {
+		WHERE path = ?`,
+		path,
+	), row, configuredDriveID); scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			return nil, false, nil
 		}
@@ -397,8 +415,8 @@ func (m *SyncStore) TakeSyncFailure(
 	}
 
 	result, err := tx.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE path = ? AND drive_id = ?`,
-		path, driveID.String())
+		`DELETE FROM sync_failures WHERE path = ?`,
+		path)
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: deleting taken sync failure for %s: %w", path, err)
 	}
@@ -446,8 +464,8 @@ func (m *SyncStore) MarkSyncFailureActionable(ctx context.Context, path string, 
 	_, err := m.db.ExecContext(ctx,
 		`UPDATE sync_failures
 		SET category = 'actionable', failure_role = 'item', next_retry_at = NULL
-		WHERE path = ? AND drive_id = ?`,
-		path, driveID.String())
+		WHERE path = ?`,
+		path)
 	if err != nil {
 		return fmt.Errorf("sync: marking sync failure actionable for %s: %w", path, err)
 	}
@@ -478,16 +496,30 @@ func (m *SyncStore) UpsertActionableFailures(
 		err = finalizeTxRollback(err, tx, "sync: rollback actionable failure upsert")
 	}()
 
+	state, err := m.readObservationStateTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for i := range failures {
+		if failures[i].DriveID.IsZero() {
+			continue
+		}
+		if ensureErr := m.ensureConfiguredDriveIDTx(ctx, tx, failures[i].DriveID, state); ensureErr != nil {
+			return ensureErr
+		}
+		break
+	}
+
 	// NOTE: RecordFailure has a parallel INSERT with different ON CONFLICT
 	// semantics (COALESCE, failure_count increment) — update both when
 	// adding columns.
 	stmt, err := tx.PrepareContext(ctx,
 		`INSERT INTO sync_failures
-			(path, drive_id, direction, action_type, failure_role, category, issue_type, item_id,
+			(path, direction, action_type, failure_role, category, issue_type, item_id,
 			 failure_count, next_retry_at, last_error, http_status,
 			 first_seen_at, last_seen_at, file_size, local_hash, scope_key)
-		VALUES (?, ?, ?, ?, ?, 'actionable', ?, '', 1, NULL, ?, 0, ?, ?, ?, '', ?)
-		ON CONFLICT(path, drive_id) DO UPDATE SET
+		VALUES (?, ?, ?, ?, 'actionable', ?, '', 1, NULL, ?, 0, ?, ?, ?, '', ?)
+		ON CONFLICT(path) DO UPDATE SET
 			direction = excluded.direction,
 			action_type = excluded.action_type,
 			failure_role = excluded.failure_role,
@@ -512,7 +544,7 @@ func (m *SyncStore) UpsertActionableFailures(
 		direction, actionType := normalizeFailureIdentity(f.Direction, f.ActionType)
 
 		if _, execErr := stmt.ExecContext(ctx,
-			f.Path, f.DriveID.String(), direction, actionType, role,
+			f.Path, direction, actionType, role,
 			nullString(f.IssueType), f.Error,
 			nowNano, nowNano, f.FileSize, scopeWire,
 		); execErr != nil {

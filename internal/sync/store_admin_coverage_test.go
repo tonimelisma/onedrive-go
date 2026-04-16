@@ -27,14 +27,14 @@ func insertFailureForCoverageTest(
 	t.Helper()
 
 	now := time.Now().UnixNano()
+	require.NoError(t, store.CommitObservationCursor(t.Context(), driveID, ""))
 	_, err := store.DB().ExecContext(t.Context(),
 		`INSERT INTO sync_failures (
-			path, drive_id, direction, action_type, category, failure_role, issue_type,
+			path, direction, action_type, category, failure_role, issue_type,
 			item_id, failure_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at,
 			file_size, local_hash, scope_key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		path,
-		driveID.String(),
 		DirectionUpload,
 		ActionUpload,
 		category,
@@ -243,9 +243,8 @@ func TestSyncStore_RemoteStateLookupAndDeltaTokenDeletion(t *testing.T) {
 	assert.False(t, found)
 	assert.Nil(t, row)
 
-	require.NoError(t, store.DeleteDeltaToken(t.Context(), driveID.String(), ""))
+	require.NoError(t, store.ClearObservationCursor(t.Context()))
 
-	token, err := store.GetDeltaToken(t.Context(), driveID.String(), "")
-	require.NoError(t, err)
+	token := readObservationCursorForTest(t, store, t.Context(), driveID.String())
 	assert.Empty(t, token)
 }

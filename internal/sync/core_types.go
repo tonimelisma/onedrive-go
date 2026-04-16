@@ -58,7 +58,7 @@ type ChangeEvent struct {
 	ETag             string // remote only
 	CTag             string // remote only
 	IsDeleted        bool
-	TargetRootItemID string // configured remote root item for scoped-root observation
+	TargetRootItemID string // configured remote root item for shared-root observation
 }
 
 // BaselineEntry represents the confirmed synced state of a single path.
@@ -106,8 +106,8 @@ func DirLowerKeyFromPath(path string) DirLowerKey {
 type Baseline struct {
 	mu         sync.RWMutex
 	ByPath     map[string]*BaselineEntry
-	ByID       map[driveid.ItemKey]*BaselineEntry // keyed by (driveID, itemID) pair
-	ByDirLower map[DirLowerKey][]*BaselineEntry   // case-insensitive sibling index
+	ByID       map[string]*BaselineEntry        // keyed by item_id within this per-drive DB
+	ByDirLower map[DirLowerKey][]*BaselineEntry // case-insensitive sibling index
 }
 
 // GetByPath returns the baseline entry for the given relative path.
@@ -122,14 +122,14 @@ func (b *Baseline) GetByPath(path string) (*BaselineEntry, bool) {
 	return entry, ok
 }
 
-// GetByID returns the baseline entry for the given (driveID, itemID) pair.
+// GetByID returns the baseline entry for the given item ID.
 // Thread-safe: holds a read lock during access. The returned pointer must not
 // be mutated by the caller; mutations outside the lock are not thread-safe.
-func (b *Baseline) GetByID(key driveid.ItemKey) (*BaselineEntry, bool) {
+func (b *Baseline) GetByID(itemID string) (*BaselineEntry, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	entry, ok := b.ByID[key]
+	entry, ok := b.ByID[itemID]
 
 	return entry, ok
 }
@@ -147,7 +147,7 @@ func (b *Baseline) GetCaseVariants(dir, name string) []*BaselineEntry {
 }
 
 // Put inserts or updates a baseline entry in both maps. If the path already
-// exists with a different (driveID, itemID), the stale ByID entry is removed
+// exists with a different item ID, the stale ByID entry is removed
 // first to prevent orphaned entries (e.g., server-side delete+recreate
 // assigns a new item_id for the same path).
 // Thread-safe: holds a write lock during access.
@@ -155,18 +155,15 @@ func (b *Baseline) Put(entry *BaselineEntry) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	newKey := driveid.NewItemKey(entry.DriveID, entry.ItemID)
-
 	// Remove stale ByID entry if the path is being reassigned to a new ID.
 	if old, ok := b.ByPath[entry.Path]; ok {
-		oldKey := driveid.NewItemKey(old.DriveID, old.ItemID)
-		if oldKey != newKey {
-			delete(b.ByID, oldKey)
+		if old.ItemID != entry.ItemID {
+			delete(b.ByID, old.ItemID)
 		}
 	}
 
 	b.ByPath[entry.Path] = entry
-	b.ByID[newKey] = entry
+	b.ByID[entry.ItemID] = entry
 
 	// Maintain ByDirLower index: update existing entry or append new one.
 	dlk := DirLowerKeyFromPath(entry.Path)
@@ -193,7 +190,7 @@ func (b *Baseline) Delete(path string) {
 	defer b.mu.Unlock()
 
 	if entry, ok := b.ByPath[path]; ok {
-		delete(b.ByID, driveid.NewItemKey(entry.DriveID, entry.ItemID))
+		delete(b.ByID, entry.ItemID)
 	}
 
 	delete(b.ByPath, path)
@@ -262,12 +259,12 @@ func (b *Baseline) DescendantsOf(prefix string) []*BaselineEntry {
 // narrow window and permanently lost if the client's token advances past them.
 //
 // When pathPrefix is non-empty, only entries under that prefix are considered
-// (used for scoped-root observation). When empty, all entries for the given
+// (used for shared-root observation). When empty, all entries for the given
 // driveID are checked.
 //
 // Returns synthesized ChangeDelete events for each orphan, which can be fed
 // through the normal planner + executor pipeline.
-func (b *Baseline) FindOrphans(seen map[driveid.ItemKey]struct{}, driveID driveid.ID, pathPrefix string) []ChangeEvent {
+func (b *Baseline) FindOrphans(seen map[string]struct{}, driveID driveid.ID, pathPrefix string) []ChangeEvent {
 	var orphans []ChangeEvent
 
 	b.mu.RLock()
@@ -282,8 +279,7 @@ func (b *Baseline) FindOrphans(seen map[driveid.ItemKey]struct{}, driveID drivei
 			continue
 		}
 
-		key := driveid.NewItemKey(entry.DriveID, entry.ItemID)
-		if _, ok := seen[key]; ok {
+		if _, ok := seen[entry.ItemID]; ok {
 			continue
 		}
 
@@ -306,13 +302,13 @@ func (b *Baseline) FindOrphans(seen map[driveid.ItemKey]struct{}, driveID drivei
 func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
 	bl := &Baseline{
 		ByPath:     make(map[string]*BaselineEntry, len(entries)),
-		ByID:       make(map[driveid.ItemKey]*BaselineEntry, len(entries)),
+		ByID:       make(map[string]*BaselineEntry, len(entries)),
 		ByDirLower: make(map[DirLowerKey][]*BaselineEntry, len(entries)),
 	}
 
 	for _, e := range entries {
 		bl.ByPath[e.Path] = e
-		bl.ByID[driveid.NewItemKey(e.DriveID, e.ItemID)] = e
+		bl.ByID[e.ItemID] = e
 
 		dlk := DirLowerKeyFromPath(e.Path)
 		bl.ByDirLower[dlk] = append(bl.ByDirLower[dlk], e)

@@ -69,8 +69,7 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
 	if opts.Watch {
 		return runSyncWatch(ctx, cc, holder, selectors, opts.Mode, syncengine.WatchOptions{
-			PollInterval:       parsePollInterval(rawCfg.PollInterval),
-			SafetyScanInterval: parseDurationOrZero(rawCfg.SafetyScanInterval),
+			PollInterval: parsePollInterval(rawCfg.PollInterval),
 		}, logger, cc.Status(), controlSocketPath)
 	}
 

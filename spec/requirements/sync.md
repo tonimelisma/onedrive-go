@@ -55,7 +55,7 @@ drives.
 - R-2.5.3: On startup, the system shall not require persisted in-progress lane state to recover interrupted work. Incomplete actions shall be rediscovered from durable truth plus transfer/session artifacts and then replanned normally. [verified]
 - R-2.5.4: When a prior run has already advanced remote observation, later runs shall still rediscover already-observed remote drift from durable `remote_state` and reconcile it without requiring synthetic pending-state bridge rows or fresh delta events. [verified]
 - R-2.5.5: The product shall provide one supported `recover` command that performs store-owned sync-state recovery: it first attempts deterministic safe in-place repair, then rebuilds the DB while preserving recoverable durable user intent, and finally resets the DB from scratch if salvage is impossible. The recovery path shall report what it did and shall require explicit user confirmation before mutation. [verified]
-- R-2.5.6: The sync state DB shall use an embedded goose migration history, reject existing state stores that contain user tables without migration history, and provide clear rebuild/migrate guidance instead of silently guessing at or erasing durable user intent. [verified]
+- R-2.5.6: The sync state DB shall bootstrap directly into the current canonical schema, reject non-canonical existing state stores loudly, and provide clear recover/reset guidance instead of silently guessing at or erasing durable user intent. [verified]
 
 ## R-2.6 Pause / Resume [verified]
 
@@ -75,7 +75,7 @@ is not part of the normal product CLI.
 - R-2.8.1: The system shall reload `config.toml` on control-socket reload request. [verified]
 - R-2.8.2: The system shall use the Unix control socket as the single live sync-owner lock. [verified]
 - R-2.8.3: The system shall support two-signal shutdown. First SIGINT/SIGTERM cancels watch mode, seals new work admission, and lets already-admitted work follow the normal shutdown path; second signal forces immediate exit. [verified]
-- R-2.8.4: The system shall run periodic full reconciliation (default every 24 hours) to detect missed delta deletions. [verified]
+- R-2.8.4: The system shall run periodic full reconciliation (default every 24 hours) to detect missed delta deletions. The cadence shall survive process restarts by persisting the last successful full primary remote observation. [verified]
 - R-2.8.5: The system shall support WebSocket subscription for near-instant remote change notification. [verified]
 
 ## R-2.9 RPC / Control Socket [verified]

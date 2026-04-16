@@ -36,10 +36,8 @@ type (
 		FullReconcile bool // when true, runs a full delta enumeration + orphan detection
 	}
 	WatchOptions struct {
-		PollInterval       time.Duration // remote delta polling interval (0 -> 5m)
-		Debounce           time.Duration // buffer debounce window (0 -> 2s)
-		SafetyScanInterval time.Duration // local safety scan interval (0 -> 5m) (B-099)
-		ReconcileInterval  time.Duration // periodic full reconciliation (0 -> 24h, negative = disabled)
+		PollInterval time.Duration // remote delta polling interval (0 -> 5m)
+		Debounce     time.Duration // buffer debounce window (0 -> 2s)
 	}
 	Report struct {
 		Mode     Mode
@@ -91,14 +89,14 @@ type DriveVerifier interface {
 	Drive(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
 }
 
-// FolderDeltaFetcher provides folder-scoped delta enumeration for scoped-root
-// observation.
+// FolderDeltaFetcher provides shared-root delta enumeration for separately
+// configured shared-root drives.
 type FolderDeltaFetcher interface {
 	DeltaFolderAll(ctx context.Context, driveID driveid.ID, folderID, token string) ([]graph.Item, string, error)
 }
 
-// RecursiveLister provides recursive children enumeration for scoped-root
-// observation when folder-scoped delta is not supported.
+// RecursiveLister provides recursive children enumeration for shared-root
+// observation when shared-root delta is not supported.
 type RecursiveLister interface {
 	ListChildrenRecursive(ctx context.Context, driveID driveid.ID, folderID string) ([]graph.Item, error)
 }
