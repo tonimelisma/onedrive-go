@@ -16,17 +16,26 @@ import (
 )
 
 type sharedDiscoveryTarget struct {
-	Selector      string
-	IsFolder      bool
-	Name          string
-	AccountEmail  string
-	SharedByName  string
-	SharedByEmail string
-	ModifiedAt    string
-	Size          int64
-	RemoteDriveID string
-	RemoteItemID  string
+	Selector            string
+	IsFolder            bool
+	Name                string
+	AccountEmail        string
+	SharedByName        string
+	SharedByEmail       string
+	OwnerIdentityStatus sharedOwnerIdentityStatus
+	ModifiedAt          string
+	Size                int64
+	RemoteDriveID       string
+	RemoteItemID        string
 }
+
+type sharedOwnerIdentityStatus string
+
+const (
+	sharedOwnerIdentityStatusAvailable            sharedOwnerIdentityStatus = "available"
+	sharedOwnerIdentityStatusUnavailableRetryable sharedOwnerIdentityStatus = "unavailable_retryable"
+	sharedOwnerUnavailableRetryLaterText                                    = "owner unavailable from Microsoft Graph; try again later"
+)
 
 type sharedDiscoveryResult struct {
 	Targets               []sharedDiscoveryTarget
@@ -235,15 +244,16 @@ func searchSharedTargets(
 				RemoteDriveID: item.RemoteDriveID,
 				RemoteItemID:  item.RemoteItemID,
 			}.String(),
-			IsFolder:      item.IsFolder,
-			Name:          item.Name,
-			AccountEmail:  accountEmail,
-			SharedByName:  item.SharedOwnerName,
-			SharedByEmail: item.SharedOwnerEmail,
-			ModifiedAt:    formatAPITime(item.ModifiedAt),
-			Size:          item.Size,
-			RemoteDriveID: item.RemoteDriveID,
-			RemoteItemID:  item.RemoteItemID,
+			IsFolder:            item.IsFolder,
+			Name:                item.Name,
+			AccountEmail:        accountEmail,
+			SharedByName:        item.SharedOwnerName,
+			SharedByEmail:       item.SharedOwnerEmail,
+			OwnerIdentityStatus: sharedOwnerIdentityStatusForIdentity(item.SharedOwnerName, item.SharedOwnerEmail),
+			ModifiedAt:          formatAPITime(item.ModifiedAt),
+			Size:                item.Size,
+			RemoteDriveID:       item.RemoteDriveID,
+			RemoteItemID:        item.RemoteItemID,
 		})
 	}
 
@@ -302,7 +312,7 @@ func enrichSharedTarget(
 	target *sharedDiscoveryTarget,
 	logger *slog.Logger,
 ) {
-	if target == nil || target.SharedByEmail != "" {
+	if target == nil || target.OwnerIdentityStatus == sharedOwnerIdentityStatusAvailable {
 		return
 	}
 
@@ -327,6 +337,8 @@ func enrichSharedTarget(
 	if enriched.SharedOwnerEmail != "" {
 		target.SharedByEmail = enriched.SharedOwnerEmail
 	}
+
+	target.OwnerIdentityStatus = sharedOwnerIdentityStatusForIdentity(target.SharedByName, target.SharedByEmail)
 }
 
 type sharedFolderInfo struct {
@@ -446,4 +458,12 @@ func sharedRemoteIdentityDisplayName(remoteDriveID, remoteItemID, fallbackName s
 	}
 
 	return fmt.Sprintf("%s (shared %s:%s)", fallbackName, remoteDriveID, remoteItemID)
+}
+
+func sharedOwnerIdentityStatusForIdentity(name, email string) sharedOwnerIdentityStatus {
+	if name != "" || email != "" {
+		return sharedOwnerIdentityStatusAvailable
+	}
+
+	return sharedOwnerIdentityStatusUnavailableRetryable
 }

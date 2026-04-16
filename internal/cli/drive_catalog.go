@@ -29,18 +29,19 @@ const driveStateAvailable = "available"
 
 // driveListEntry represents one drive in the list output.
 type driveListEntry struct {
-	CanonicalID string `json:"canonical_id"`
-	DisplayName string `json:"display_name,omitempty"`
-	SyncDir     string `json:"sync_dir,omitempty"`
-	State       string `json:"state"`
-	AuthState   string `json:"auth_state,omitempty"`
-	AuthReason  string `json:"auth_reason,omitempty"`
-	Source      string `json:"source"` // "configured" or "available"
-	SiteName    string `json:"site_name,omitempty"`
-	LibraryName string `json:"library_name,omitempty"`
-	OwnerName   string `json:"owner_name,omitempty"`
-	OwnerEmail  string `json:"owner_email,omitempty"`
-	HasStateDB  bool   `json:"has_state_db,omitempty"`
+	CanonicalID         string                    `json:"canonical_id"`
+	DisplayName         string                    `json:"display_name,omitempty"`
+	SyncDir             string                    `json:"sync_dir,omitempty"`
+	State               string                    `json:"state"`
+	AuthState           string                    `json:"auth_state,omitempty"`
+	AuthReason          string                    `json:"auth_reason,omitempty"`
+	Source              string                    `json:"source"` // "configured" or "available"
+	SiteName            string                    `json:"site_name,omitempty"`
+	LibraryName         string                    `json:"library_name,omitempty"`
+	OwnerName           string                    `json:"owner_name,omitempty"`
+	OwnerEmail          string                    `json:"owner_email,omitempty"`
+	OwnerIdentityStatus sharedOwnerIdentityStatus `json:"owner_identity_status,omitempty"`
+	HasStateDB          bool                      `json:"has_state_db,omitempty"`
 
 	// parsedCID holds the pre-parsed canonical ID, avoiding string→CanonicalID
 	// re-parsing in annotateStateDB. Not serialized to JSON — internal only.
@@ -441,13 +442,14 @@ func sharedFoldersToEntries(folders []sharedFolderInfo) []driveListEntry {
 	for i := range folders {
 		f := &folders[i]
 		entries = append(entries, driveListEntry{
-			CanonicalID: f.cid.String(),
-			DisplayName: f.displayName,
-			State:       driveStateAvailable,
-			Source:      "available",
-			OwnerName:   f.target.SharedByName,
-			OwnerEmail:  f.target.SharedByEmail,
-			parsedCID:   f.cid,
+			CanonicalID:         f.cid.String(),
+			DisplayName:         f.displayName,
+			State:               driveStateAvailable,
+			Source:              "available",
+			OwnerName:           f.target.SharedByName,
+			OwnerEmail:          f.target.SharedByEmail,
+			OwnerIdentityStatus: f.target.OwnerIdentityStatus,
+			parsedCID:           f.cid,
 		})
 	}
 

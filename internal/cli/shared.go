@@ -10,16 +10,17 @@ import (
 )
 
 type sharedListItem struct {
-	Selector      string `json:"selector"`
-	Type          string `json:"type"`
-	Name          string `json:"name"`
-	AccountEmail  string `json:"account_email"`
-	SharedByName  string `json:"shared_by_name,omitempty"`
-	SharedByEmail string `json:"shared_by_email,omitempty"`
-	ModifiedAt    string `json:"modified_at"`
-	Size          int64  `json:"size,omitempty"`
-	RemoteDriveID string `json:"remote_drive_id"`
-	RemoteItemID  string `json:"remote_item_id"`
+	Selector            string                    `json:"selector"`
+	Type                string                    `json:"type"`
+	Name                string                    `json:"name"`
+	AccountEmail        string                    `json:"account_email"`
+	SharedByName        string                    `json:"shared_by_name,omitempty"`
+	SharedByEmail       string                    `json:"shared_by_email,omitempty"`
+	OwnerIdentityStatus sharedOwnerIdentityStatus `json:"owner_identity_status,omitempty"`
+	ModifiedAt          string                    `json:"modified_at"`
+	Size                int64                     `json:"size,omitempty"`
+	RemoteDriveID       string                    `json:"remote_drive_id"`
+	RemoteItemID        string                    `json:"remote_item_id"`
 }
 
 type sharedListJSONOutput struct {
@@ -62,16 +63,17 @@ func sharedListItemsFromTargets(targets []sharedDiscoveryTarget) []sharedListIte
 
 	for i := range targets {
 		items = append(items, sharedListItem{
-			Selector:      targets[i].Selector,
-			Type:          sharedItemType(targets[i].IsFolder),
-			Name:          targets[i].Name,
-			AccountEmail:  targets[i].AccountEmail,
-			SharedByName:  targets[i].SharedByName,
-			SharedByEmail: targets[i].SharedByEmail,
-			ModifiedAt:    targets[i].ModifiedAt,
-			Size:          targets[i].Size,
-			RemoteDriveID: targets[i].RemoteDriveID,
-			RemoteItemID:  targets[i].RemoteItemID,
+			Selector:            targets[i].Selector,
+			Type:                sharedItemType(targets[i].IsFolder),
+			Name:                targets[i].Name,
+			AccountEmail:        targets[i].AccountEmail,
+			SharedByName:        targets[i].SharedByName,
+			SharedByEmail:       targets[i].SharedByEmail,
+			OwnerIdentityStatus: targets[i].OwnerIdentityStatus,
+			ModifiedAt:          targets[i].ModifiedAt,
+			Size:                targets[i].Size,
+			RemoteDriveID:       targets[i].RemoteDriveID,
+			RemoteItemID:        targets[i].RemoteItemID,
 		})
 	}
 
@@ -226,6 +228,9 @@ func sharedOwnerLabel(item *sharedListItem) string {
 	if item.SharedByName != "" {
 		return item.SharedByName
 	}
+	if item.OwnerIdentityStatus == sharedOwnerIdentityStatusUnavailableRetryable {
+		return sharedOwnerUnavailableRetryLaterText
+	}
 
-	return "unknown"
+	return sharedOwnerUnavailableRetryLaterText
 }
