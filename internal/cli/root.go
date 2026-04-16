@@ -17,7 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/graphhttp"
+	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
 	"github.com/tonimelisma/onedrive-go/internal/logfile"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
@@ -269,7 +269,7 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 // newGraphClient creates a graph.Client with the standard HTTP client,
 // user-agent, and base URL. Eliminates boilerplate repeated across commands.
 func newGraphClient(ts graph.TokenSource, logger *slog.Logger) (*graph.Client, error) {
-	return newGraphClientWithHTTP("", graphhttp.BootstrapMetadataClient(logger), ts, logger)
+	return newGraphClientWithHTTP("", graphtransport.BootstrapMetadataClient(logger), ts, logger)
 }
 
 func newGraphClientWithHTTP(
