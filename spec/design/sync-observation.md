@@ -30,8 +30,8 @@ The observation stack has four main pieces:
 | Behavior | Evidence |
 | --- | --- |
 | Whole-drive observation emits normalized change events without writing the sync DB directly. | `TestBuffer_WatchAndSafetyScanConflictingTypes`, `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestNosyncGuard_PreventsAllSync` |
-| Normal drives ignore embedded shared-folder shortcut items instead of creating nested follow-up sync runtimes. | `internal/sync/observer_remote_test.go`, `internal/sync/engine_observation_validation_test.go`, `internal/sync/remote_state_mirror_test.go` |
-| Shared-root drives still support scoped remote observation as separately configured drives. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
+| Normal drives ignore embedded shared-folder shortcut items instead of creating nested follow-up sync runtimes. | `internal/sync/observer_remote_test.go`, `internal/sync/remote_state_mirror_test.go` |
+| Shared-root drives still support remote observation rooted at their configured shared root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 
 ## Remote Observation
 

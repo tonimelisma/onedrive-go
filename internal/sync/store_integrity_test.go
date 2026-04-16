@@ -183,8 +183,8 @@ func TestSyncStore_AuditIntegrityIncludesBaselineCacheMismatch(t *testing.T) {
 	require.NoError(t, store.CommitObservationCursor(ctx, driveid.New(testDriveID), ""))
 
 	_, err := store.DB().ExecContext(ctx, `INSERT INTO baseline
-		(path, item_id, parent_id, item_type, synced_at, local_hash)
-		VALUES ('/docs/file.txt', 'item-1', 'root', 'file', 1, 'hash-a')`)
+		(path, item_id, parent_id, item_type, local_hash)
+		VALUES ('/docs/file.txt', 'item-1', 'root', 'file', 'hash-a')`)
 	require.NoError(t, err)
 
 	_, err = store.Load(ctx)

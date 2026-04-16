@@ -343,9 +343,9 @@ func TestCommitMutation_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	// Insert a remote_state row so the download outcome has something to update.
 	_, err = mgr.DB().ExecContext(ctx,
 		`INSERT INTO remote_state
-			(item_id, path, parent_id, item_type, observed_at)
-		VALUES (?, ?, ?, ?, ?)`,
-		"item-1", "docs/file.txt", "file", "file", 1)
+			(item_id, path, parent_id, item_type)
+		VALUES (?, ?, ?, ?)`,
+		"item-1", "docs/file.txt", "file", "file")
 	require.NoError(t, err)
 
 	// Commit a successful download outcome.
@@ -409,9 +409,9 @@ func TestCommitMutation_Success_DoesNotClearSyncFailures(t *testing.T) {
 
 			_, err = mgr.DB().ExecContext(ctx,
 				`INSERT INTO remote_state
-						(item_id, path, parent_id, item_type, observed_at)
-					VALUES (?, ?, ?, ?, ?)`,
-				"item-1", tt.path, "root", "file", 1)
+						(item_id, path, parent_id, item_type)
+					VALUES (?, ?, ?, ?)`,
+				"item-1", tt.path, "root", "file")
 			require.NoError(t, err)
 
 			outcome := &BaselineMutation{
@@ -965,9 +965,9 @@ func TestRecordFailure_DownloadResolvesItemIDFromRemoteMirror(t *testing.T) {
 
 	// Insert a remote mirror row so RecordFailure can resolve item_id.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
-		VALUES (?, ?, 'file', ?)`,
-		"item1", "hello.txt", 999,
+		`INSERT INTO remote_state (item_id, path, item_type)
+		VALUES (?, ?, 'file')`,
+		"item1", "hello.txt",
 	)
 	require.NoError(t, err)
 
@@ -1001,9 +1001,9 @@ func TestRecordFailure_UploadPreservesRemoteMirrorRow(t *testing.T) {
 
 	// Insert a mirror row — uploads should not mutate remote truth.
 	_, err := mgr.DB().ExecContext(ctx,
-		`INSERT INTO remote_state (item_id, path, item_type, observed_at)
-		VALUES (?, ?, 'file', ?)`,
-		"item1", "hello.txt", 999,
+		`INSERT INTO remote_state (item_id, path, item_type)
+		VALUES (?, ?, 'file')`,
+		"item1", "hello.txt",
 	)
 	require.NoError(t, err)
 

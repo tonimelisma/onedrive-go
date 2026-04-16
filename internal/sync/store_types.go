@@ -87,7 +87,16 @@ type RemoteStateRow struct {
 	Mtime        int64
 	ETag         string
 	PreviousPath string
-	ObservedAt   int64
+}
+
+// SyncRunStatus is the typed one-shot status row persisted for product-facing
+// status output.
+type SyncRunStatus struct {
+	LastCompletedAt    int64
+	LastDurationMs     int64
+	LastSucceededCount int
+	LastFailedCount    int
+	LastError          string
 }
 
 // PendingRetryGroup aggregates transient failures by scope_key, with the

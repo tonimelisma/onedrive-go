@@ -41,10 +41,10 @@ type ItemConverter struct {
 	// local subpath.
 	PathPrefix string
 
-	// ScopeRootID is the configured remote root item for shared-root observation.
+	// RootItemID is the configured remote root item for shared-root observation.
 	// Items with this ID are the root itself and should be skipped because the
 	// sync root owns that directory already. Empty for full-drive observation.
-	ScopeRootID string
+	RootItemID string
 
 	// EnableVaultFilter enables Personal Vault exclusion (B-271). Only
 	// applicable to the primary drive.
@@ -160,8 +160,8 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 	}
 
 	// Skip the configured observation root itself.
-	if c.ScopeRootID != "" && item.ID == c.ScopeRootID {
-		c.Logger.Debug("skipping scope root item", slog.String("item_id", item.ID))
+	if c.RootItemID != "" && item.ID == c.RootItemID {
+		c.Logger.Debug("skipping configured shared root item", slog.String("item_id", item.ID))
 
 		return nil
 	}
@@ -212,7 +212,7 @@ func (c *ItemConverter) classifyAndConvert(
 		ETag:             item.ETag,
 		CTag:             item.CTag,
 		IsDeleted:        item.IsDeleted,
-		TargetRootItemID: c.ScopeRootID,
+		TargetRootItemID: c.RootItemID,
 	}
 
 	switch {
@@ -327,7 +327,7 @@ func (c *ItemConverter) materializePathFromParts(
 
 			// Stop at the configured observation root — it is the sync root,
 			// not a real parent segment in the local relative path.
-			if c.ScopeRootID != "" && parentID == c.ScopeRootID {
+			if c.RootItemID != "" && parentID == c.RootItemID {
 				break
 			}
 

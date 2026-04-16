@@ -46,7 +46,7 @@ SELECT COUNT(*) FROM (
 // product-facing status command. It keeps the full per-drive sync-health view
 // in one store-owned projection.
 type DriveStatusSnapshot struct {
-	SyncMetadata       map[string]string
+	RunStatus          SyncRunStatus
 	BaselineEntryCount int
 	RemoteDriftItems   int
 	RetryingItems      int
@@ -258,23 +258,20 @@ func (i *Inspector) HasScopeBlock(ctx context.Context, key ScopeKey) (bool, erro
 // product-facing status command. Missing tables are tolerated so older or
 // partially initialized DBs still yield best-effort status information.
 func (i *Inspector) ReadDriveStatusSnapshot(ctx context.Context, history bool) (DriveStatusSnapshot, error) {
-	snapshot := DriveStatusSnapshot{
-		SyncMetadata: make(map[string]string),
-	}
+	snapshot := DriveStatusSnapshot{}
 
-	rows, err := i.db.QueryContext(ctx, "SELECT key, value FROM sync_metadata")
-	if err == nil {
-		defer rows.Close()
-
-		for rows.Next() {
-			var key, value string
-			if scanErr := rows.Scan(&key, &value); scanErr == nil {
-				snapshot.SyncMetadata[key] = value
-			}
-		}
-		if rowErr := rows.Err(); rowErr != nil {
-			i.logger.Debug("read drive status sync metadata snapshot", slog.String("error", rowErr.Error()))
-		}
+	if err := i.db.QueryRowContext(ctx, `
+		SELECT last_completed_at, last_duration_ms, last_succeeded_count, last_failed_count, last_error
+		FROM run_status
+		WHERE singleton_id = 1`,
+	).Scan(
+		&snapshot.RunStatus.LastCompletedAt,
+		&snapshot.RunStatus.LastDurationMs,
+		&snapshot.RunStatus.LastSucceededCount,
+		&snapshot.RunStatus.LastFailedCount,
+		&snapshot.RunStatus.LastError,
+	); err != nil && !isMissingTableErr(err) && err != sql.ErrNoRows {
+		i.logger.Debug("read drive status run status snapshot", slog.String("error", err.Error()))
 	}
 
 	snapshot.BaselineEntryCount = i.countOrZero(ctx, "baseline entries", "SELECT COUNT(*) FROM baseline")

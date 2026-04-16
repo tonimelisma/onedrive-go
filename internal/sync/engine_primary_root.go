@@ -12,7 +12,7 @@ const (
 	sharedRootObservationEnumerate sharedRootObservationMode = "enumerate"
 )
 
-type deferredDeltaToken struct {
+type pendingPrimaryCursorCommit struct {
 	driveID                 string
 	rootID                  string
 	token                   string
@@ -20,8 +20,8 @@ type deferredDeltaToken struct {
 }
 
 type remoteFetchResult struct {
-	events   []ChangeEvent
-	deferred []deferredDeltaToken
+	events  []ChangeEvent
+	pending *pendingPrimaryCursorCommit
 }
 
 type primaryRootObservationKind string
@@ -79,15 +79,15 @@ func (flow *engineFlow) executeDriveRootObservation(
 	if fullReconcile {
 		events, token, err := flow.observeRemoteFull(ctx, bl)
 		return remoteFetchResult{
-			events:   events,
-			deferred: deferredTokensForPrimary(token, flow.engine, true, len(events)),
+			events:  events,
+			pending: primaryCursorCommit(token, flow.engine, true, len(events)),
 		}, err
 	}
 
 	events, token, err := flow.observeRemote(ctx, bl)
 	return remoteFetchResult{
-		events:   events,
-		deferred: deferredTokensForPrimary(token, flow.engine, false, len(events)),
+		events:  events,
+		pending: primaryCursorCommit(token, flow.engine, false, len(events)),
 	}, err
 }
 
@@ -98,12 +98,17 @@ func (flow *engineFlow) executeSharedRootObservation(
 ) (remoteFetchResult, error) {
 	events, token, err := flow.observeSharedRootRemote(ctx, bl, fullReconcile)
 	return remoteFetchResult{
-		events:   events,
-		deferred: deferredTokensForPrimary(token, flow.engine, fullReconcile, len(events)),
+		events:  events,
+		pending: primaryCursorCommit(token, flow.engine, fullReconcile, len(events)),
 	}, err
 }
 
-func deferredTokensForPrimary(token string, eng *Engine, fullReconcile bool, eventCount int) []deferredDeltaToken {
+func primaryCursorCommit(
+	token string,
+	eng *Engine,
+	fullReconcile bool,
+	eventCount int,
+) *pendingPrimaryCursorCommit {
 	if token == "" {
 		return nil
 	}
@@ -116,10 +121,10 @@ func deferredTokensForPrimary(token string, eng *Engine, fullReconcile bool, eve
 		rootID = eng.rootItemID
 	}
 
-	return []deferredDeltaToken{{
+	return &pendingPrimaryCursorCommit{
 		driveID:                 eng.driveID.String(),
 		rootID:                  rootID,
 		token:                   token,
 		markFullRemoteReconcile: fullReconcile,
-	}}
+	}
 }

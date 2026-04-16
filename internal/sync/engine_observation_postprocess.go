@@ -61,8 +61,8 @@ func (rt *watchRuntime) processCommittedSharedRootWatchBatch(
 		}
 	}
 
-	if err := rt.commitDeferredDeltaTokens(ctx, result.deferred); err != nil {
-		rt.logCommittedSharedRootBatchFailure("commit delta tokens", err, 0)
+	if err := rt.commitPendingPrimaryCursor(ctx, result.pending); err != nil {
+		rt.logCommittedSharedRootBatchFailure("commit primary cursor", err, 0)
 		return nil, false
 	}
 
