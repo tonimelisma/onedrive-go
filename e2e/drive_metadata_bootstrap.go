@@ -2,13 +2,10 @@ package e2e
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 type driveMetadataFetcher func(context.Context, string) (*config.DriveMetadata, error)
@@ -37,17 +34,12 @@ func ensureTestDriveMetadataForDrive(
 		return fmt.Errorf("parse test drive canonical ID %q: %w", driveID, err)
 	}
 
-	metadataPath := config.DriveMetadataPath(cid)
-	if metadataPath == "" {
-		return fmt.Errorf("determine drive metadata path for %s", driveID)
+	_, found, lookupErr := config.LookupDriveMetadata(cid)
+	if lookupErr != nil {
+		return fmt.Errorf("lookup drive metadata for %s: %w", driveID, lookupErr)
 	}
-
-	_, statErr := localpath.Stat(metadataPath)
-	if statErr == nil {
+	if found {
 		return nil
-	}
-	if !errors.Is(statErr, fs.ErrNotExist) {
-		return fmt.Errorf("stat drive metadata for %s: %w", driveID, statErr)
 	}
 
 	switch {
