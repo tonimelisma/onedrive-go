@@ -957,10 +957,11 @@ func TestDeriveSharedDisplayName_NoIdentityFallsBackToRemoteIdentity(t *testing.
 func TestPrintDriveListText_SharedDrive(t *testing.T) {
 	available := []driveListEntry{
 		{
-			CanonicalID: "shared:user@example.com:drive1:item1",
-			State:       "available",
-			Source:      "available",
-			OwnerEmail:  "alice@example.com",
+			CanonicalID:         "shared:user@example.com:drive1:item1",
+			State:               "available",
+			Source:              "available",
+			OwnerEmail:          "alice@example.com",
+			OwnerIdentityStatus: sharedOwnerIdentityStatusAvailable,
 		},
 	}
 	var buf bytes.Buffer
@@ -972,7 +973,7 @@ func TestPrintDriveListText_SharedDrive(t *testing.T) {
 func TestPrintDriveListText_SharedAndSharePoint(t *testing.T) {
 	available := []driveListEntry{
 		{CanonicalID: "sharepoint:u@c.com:site:lib", State: "available", Source: "available", SiteName: "Marketing"},
-		{CanonicalID: "shared:u@c.com:d:i", State: "available", Source: "available", OwnerEmail: "bob@example.com"},
+		{CanonicalID: "shared:u@c.com:d:i", State: "available", Source: "available", OwnerEmail: "bob@example.com", OwnerIdentityStatus: sharedOwnerIdentityStatusAvailable},
 	}
 	var buf bytes.Buffer
 	require.NoError(t, printDriveListText(&buf, nil, available, nil, nil))
@@ -981,20 +982,38 @@ func TestPrintDriveListText_SharedAndSharePoint(t *testing.T) {
 	assert.Contains(t, output, "(shared by bob@example.com)")
 }
 
+func TestPrintDriveListText_SharedDriveExplainsRetryableOwnerIdentityGap(t *testing.T) {
+	available := []driveListEntry{
+		{
+			CanonicalID:         "shared:user@example.com:drive1:item1",
+			DisplayName:         "Folder (shared drive1:item1)",
+			State:               "available",
+			Source:              "available",
+			OwnerIdentityStatus: sharedOwnerIdentityStatusUnavailableRetryable,
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, printDriveListText(&buf, nil, available, nil, nil))
+	output := buf.String()
+	assert.Contains(t, output, "owner unavailable from Microsoft Graph; try again later")
+}
+
 // --- driveListEntry JSON ---
 
 func TestDriveListEntry_SharedFieldsJSON(t *testing.T) {
 	entry := driveListEntry{
-		CanonicalID: "shared:user@example.com:driveX:itemY",
-		State:       "available",
-		Source:      "available",
-		OwnerName:   "Alice",
-		OwnerEmail:  "alice@example.com",
+		CanonicalID:         "shared:user@example.com:driveX:itemY",
+		State:               "available",
+		Source:              "available",
+		OwnerName:           "Alice",
+		OwnerEmail:          "alice@example.com",
+		OwnerIdentityStatus: sharedOwnerIdentityStatusAvailable,
 	}
 	data, err := json.Marshal(entry)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"owner_name":"Alice"`)
 	assert.Contains(t, string(data), `"owner_email":"alice@example.com"`)
+	assert.Contains(t, string(data), `"owner_identity_status":"available"`)
 }
 
 func TestDriveListEntry_SharedFieldsOmittedWhenEmpty(t *testing.T) {
@@ -1007,6 +1026,19 @@ func TestDriveListEntry_SharedFieldsOmittedWhenEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "owner_name")
 	assert.NotContains(t, string(data), "owner_email")
+	assert.NotContains(t, string(data), "owner_identity_status")
+}
+
+func TestDriveListEntry_SharedRetryableOwnerIdentityJSON(t *testing.T) {
+	entry := driveListEntry{
+		CanonicalID:         "shared:user@example.com:driveX:itemY",
+		State:               "available",
+		Source:              "available",
+		OwnerIdentityStatus: sharedOwnerIdentityStatusUnavailableRetryable,
+	}
+	data, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"owner_identity_status":"unavailable_retryable"`)
 }
 
 // --- addSharedDrive ---
@@ -1130,17 +1162,19 @@ func TestEnrichSharedTarget_AlreadyHasEmail(t *testing.T) {
 	client := newTestGraphClient(t, "http://should-not-be-called")
 
 	item := &sharedDiscoveryTarget{
-		Name:          "Shared Folder",
-		SharedByEmail: "owner@example.com",
-		SharedByName:  "Owner",
-		RemoteDriveID: "b!abc123",
-		RemoteItemID:  "01DEFGH",
+		Name:                "Shared Folder",
+		SharedByEmail:       "owner@example.com",
+		SharedByName:        "Owner",
+		OwnerIdentityStatus: sharedOwnerIdentityStatusAvailable,
+		RemoteDriveID:       "b!abc123",
+		RemoteItemID:        "01DEFGH",
 	}
 
 	enrichSharedTarget(t.Context(), client, item, slog.Default())
 
 	assert.Equal(t, "owner@example.com", item.SharedByEmail)
 	assert.Equal(t, "Owner", item.SharedByName)
+	assert.Equal(t, sharedOwnerIdentityStatusAvailable, item.OwnerIdentityStatus)
 }
 
 // Validates: R-3.6.4
@@ -1170,15 +1204,17 @@ func TestEnrichSharedTarget_MissingEmail_GetItemSucceeds(t *testing.T) {
 	client := newTestGraphClient(t, srv.URL)
 
 	item := &sharedDiscoveryTarget{
-		Name:          "Shared Folder",
-		RemoteDriveID: "b!abc123",
-		RemoteItemID:  "01DEFGH",
+		Name:                "Shared Folder",
+		OwnerIdentityStatus: sharedOwnerIdentityStatusUnavailableRetryable,
+		RemoteDriveID:       "b!abc123",
+		RemoteItemID:        "01DEFGH",
 	}
 
 	enrichSharedTarget(t.Context(), client, item, slog.Default())
 
 	assert.Equal(t, "Bob Jones", item.SharedByName)
 	assert.Equal(t, "bob@contoso.com", item.SharedByEmail)
+	assert.Equal(t, sharedOwnerIdentityStatusAvailable, item.OwnerIdentityStatus)
 }
 
 func TestEnrichSharedTarget_MissingEmail_GetItemFails(t *testing.T) {
@@ -1191,10 +1227,11 @@ func TestEnrichSharedTarget_MissingEmail_GetItemFails(t *testing.T) {
 	client := newTestGraphClient(t, srv.URL)
 
 	item := &sharedDiscoveryTarget{
-		Name:          "Shared Folder",
-		SharedByName:  "Partial",
-		RemoteDriveID: "b!abc123",
-		RemoteItemID:  "01DEFGH",
+		Name:                "Shared Folder",
+		SharedByName:        "Partial",
+		OwnerIdentityStatus: sharedOwnerIdentityStatusAvailable,
+		RemoteDriveID:       "b!abc123",
+		RemoteItemID:        "01DEFGH",
 	}
 
 	enrichSharedTarget(t.Context(), client, item, slog.Default())
@@ -1202,14 +1239,16 @@ func TestEnrichSharedTarget_MissingEmail_GetItemFails(t *testing.T) {
 	// Original fields preserved on failure.
 	assert.Equal(t, "Partial", item.SharedByName)
 	assert.Empty(t, item.SharedByEmail)
+	assert.Equal(t, sharedOwnerIdentityStatusAvailable, item.OwnerIdentityStatus)
 }
 
 func TestEnrichSharedTarget_NoRemoteDriveID(t *testing.T) {
 	client := newTestGraphClient(t, "http://should-not-be-called")
 
 	item := &sharedDiscoveryTarget{
-		Name:         "Shared Folder",
-		RemoteItemID: "01DEFGH",
+		Name:                "Shared Folder",
+		OwnerIdentityStatus: sharedOwnerIdentityStatusUnavailableRetryable,
+		RemoteItemID:        "01DEFGH",
 		// RemoteDriveID is empty — should not make API call
 	}
 
@@ -1217,6 +1256,7 @@ func TestEnrichSharedTarget_NoRemoteDriveID(t *testing.T) {
 
 	assert.Empty(t, item.SharedByName)
 	assert.Empty(t, item.SharedByEmail)
+	assert.Equal(t, sharedOwnerIdentityStatusUnavailableRetryable, item.OwnerIdentityStatus)
 }
 
 // Validates: R-3.6.4
@@ -1244,15 +1284,17 @@ func TestEnrichSharedTarget_GetItemReturnsNameOnly(t *testing.T) {
 	client := newTestGraphClient(t, srv.URL)
 
 	item := &sharedDiscoveryTarget{
-		Name:          "Shared Folder",
-		RemoteDriveID: "b!abc123",
-		RemoteItemID:  "01DEFGH",
+		Name:                "Shared Folder",
+		OwnerIdentityStatus: sharedOwnerIdentityStatusUnavailableRetryable,
+		RemoteDriveID:       "b!abc123",
+		RemoteItemID:        "01DEFGH",
 	}
 
 	enrichSharedTarget(t.Context(), client, item, slog.Default())
 
 	assert.Equal(t, "Bob Jones", item.SharedByName)
 	assert.Empty(t, item.SharedByEmail) // only name, no email
+	assert.Equal(t, sharedOwnerIdentityStatusAvailable, item.OwnerIdentityStatus)
 }
 
 // --- searchSharedTargets tests ---

@@ -236,8 +236,8 @@ func printAvailableDrives(w io.Writer, entries []driveListEntry) error {
 			parts = append(parts, entries[i].SiteName)
 		}
 
-		if entries[i].OwnerEmail != "" {
-			parts = append(parts, "shared by "+entries[i].OwnerEmail)
+		if ownerLabel := driveListSharedOwnerLabel(&entries[i]); ownerLabel != "" {
+			parts = append(parts, ownerLabel)
 		}
 
 		label := ""
@@ -256,4 +256,21 @@ func printAvailableDrives(w io.Writer, entries []driveListEntry) error {
 	}
 
 	return writeln(w, "\nRun 'onedrive-go drive add <canonical-id>' to add a drive.")
+}
+
+func driveListSharedOwnerLabel(entry *driveListEntry) string {
+	if entry == nil {
+		return ""
+	}
+	if entry.OwnerEmail != "" {
+		return "shared by " + entry.OwnerEmail
+	}
+	if entry.OwnerName != "" {
+		return "shared by " + entry.OwnerName
+	}
+	if entry.OwnerIdentityStatus == sharedOwnerIdentityStatusUnavailableRetryable {
+		return sharedOwnerUnavailableRetryLaterText
+	}
+
+	return ""
 }

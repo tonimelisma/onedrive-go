@@ -84,6 +84,7 @@ func TestSharedDiscovery_IgnoresNonActionableHits(t *testing.T) {
 	require.Len(t, result.Targets, 1)
 	assert.Equal(t, "shared:user@example.com:00000b!remote123:remote-folder-1", result.Targets[0].Selector)
 	assert.Equal(t, "alice@example.com", result.Targets[0].SharedByEmail)
+	assert.Equal(t, sharedOwnerIdentityStatusAvailable, result.Targets[0].OwnerIdentityStatus)
 	assert.Empty(t, result.AccountsRequiringAuth)
 	assert.Empty(t, result.AccountsDegraded)
 }
@@ -151,6 +152,7 @@ func TestSharedList_RefreshesIdentityOnceBeforeSharedDiscovery(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))
 	require.Len(t, parsed.Items, 1)
 	assert.Equal(t, "Search Result", parsed.Items[0].Name)
+	assert.Equal(t, sharedOwnerIdentityStatusAvailable, parsed.Items[0].OwnerIdentityStatus)
 	assert.Equal(t, int32(1), meCalls.Load())
 	assert.Empty(t, parsed.AccountsRequiringAuth)
 	assert.Empty(t, parsed.AccountsDegraded)
