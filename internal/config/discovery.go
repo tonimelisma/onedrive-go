@@ -10,14 +10,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// cidFileSuffix is the file extension for all CID-based files (tokens, account
-// profiles). Both token_*.json and account_*.json share this extension.
+// cidFileSuffix is the file extension for legacy CID-based file-name tests.
+// Token files still use this extension in steady state; account_*.json remains
+// only as a legacy naming convention exercised by unit tests.
 const cidFileSuffix = ".json"
 
 // discoverCIDFiles scans dir for files matching "{prefix}_{type}_{email}.json"
 // and returns the canonical IDs extracted from filenames. This is the shared
-// implementation behind DiscoverTokens and DiscoverAccountProfiles — both follow
-// the same naming convention, differing only in prefix ("token_" vs "account_").
+// implementation behind DiscoverTokens and legacy account-profile filename
+// tests — both follow the same naming convention, differing only in prefix
+// ("token_" vs "account_").
 func discoverCIDFiles(dir, prefix string, logger *slog.Logger) []driveid.CanonicalID {
 	return discoverCIDFilesWithIO(dir, prefix, logger, defaultConfigIO())
 }

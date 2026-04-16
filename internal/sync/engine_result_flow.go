@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
@@ -362,26 +364,34 @@ func (controller *scopeController) applyFatalAuthEffects(
 	summaryKey SummaryKey,
 ) {
 	flow := controller.flow
+	logFields := flow.summaryLogFields(
+		errclass.ClassFatal,
+		summaryKey,
+		r.Path,
+		ScopeKey{},
+	)
 
-	if err := controller.activateAuthScope(ctx, watch); err != nil {
-		fields := append(flow.summaryLogFields(
-			errclass.ClassFatal,
-			summaryKey,
-			r.Path,
-			SKAuthAccount(),
-		), slog.String("error", err.Error()))
-		flow.engine.logger.Warn("fatal unauthorized: failed to persist auth scope", fields...)
-		return
+	if flow.engine.permHandler != nil && flow.engine.permHandler.accountEmail != "" {
+		if err := config.SetAccountAuthRequirementInDataDir(
+			flow.engine.dataDir,
+			flow.engine.permHandler.accountEmail,
+			authstate.ReasonSyncAuthRejected,
+		); err != nil {
+			fields := append([]any{}, logFields...)
+			fields = append(fields,
+				slog.String("account", flow.engine.permHandler.accountEmail),
+				slog.String("error", err.Error()),
+			)
+			flow.engine.logger.Warn("fatal unauthorized: failed to persist catalog auth requirement", fields...)
+		}
 	}
 
 	flow.engine.logger.Error("authentication required: sync stopping",
-		flow.summaryLogFields(
-			errclass.ClassFatal,
-			summaryKey,
-			r.Path,
-			SKAuthAccount(),
-		)...,
+		logFields...,
 	)
+
+	_ = ctx
+	_ = watch
 }
 
 func (controller *scopeController) applyPermissionDecisionFlow(

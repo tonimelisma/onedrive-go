@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -62,8 +61,8 @@ func (r *EmailReconcileResult) RemapCanonicalID(cid driveid.CanonicalID) (drivei
 
 // ReconcileAccountEmail detects an account rename by matching the stable Graph
 // user GUID to stored account profiles of the same account type. When the
-// current Graph email differs, it rewrites owned config sections and managed
-// files from the old email to the current one.
+// current Graph email differs, it rewrites owned config sections, token/state
+// paths, and catalog ownership from the old email to the current one.
 func ReconcileAccountEmail(
 	configPath string,
 	currentAccount driveid.CanonicalID,
@@ -107,6 +106,9 @@ func ReconcileAccountEmail(
 	if err := plan.apply(configPath); err != nil {
 		return result, err
 	}
+	if err := reconcileCatalogEmail(accountRenames, currentEmail); err != nil {
+		return result, err
+	}
 
 	result.AccountRenames = plan.accountRenames()
 	result.DriveRenames = plan.driveRenames()
@@ -118,7 +120,6 @@ type emailReconcilePlan struct {
 	accountRenameMap map[driveid.CanonicalID]driveid.CanonicalID
 	driveRenameMap   map[driveid.CanonicalID]driveid.CanonicalID
 	pathRenames      []managedPathRename
-	metadataWrites   []driveMetadataWrite
 }
 
 type managedPathRename struct {
@@ -126,14 +127,8 @@ type managedPathRename struct {
 	target string
 }
 
-type driveMetadataWrite struct {
-	source string
-	target string
-	meta   *DriveMetadata
-}
-
 func (p *emailReconcilePlan) hasChanges() bool {
-	return len(p.accountRenameMap) > 0 || len(p.driveRenameMap) > 0 || len(p.pathRenames) > 0 || len(p.metadataWrites) > 0
+	return len(p.accountRenameMap) > 0 || len(p.driveRenameMap) > 0 || len(p.pathRenames) > 0
 }
 
 func (p *emailReconcilePlan) accountRenames() []CanonicalIDRename {
@@ -218,7 +213,6 @@ func buildEmailReconcilePlan(
 	for from := range accountRenames {
 		ownedOldAccounts[from.String()] = from
 		oldEmails = append(oldEmails, from.Email())
-		addPathRename(plan, AccountFilePath(from), AccountFilePath(accountRenames[from]))
 		addPathRename(plan, DriveTokenPath(from), DriveTokenPath(accountRenames[from]))
 	}
 
@@ -232,14 +226,6 @@ func buildEmailReconcilePlan(
 
 	for _, oldEmail := range oldEmails {
 		collectStateRenames(plan, oldEmail, currentEmail, ownedOldAccounts, logger)
-
-		if err := collectDriveMetadataChanges(plan, oldEmail, currentEmail, ownedOldAccounts, logger); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := collectCurrentEmailMetadataRepairs(plan, currentEmail, ownedOldAccounts, logger); err != nil {
-		return nil, err
 	}
 
 	return plan, nil
@@ -359,96 +345,48 @@ func collectStateRenames(
 	}
 }
 
-func collectDriveMetadataChanges(
-	plan *emailReconcilePlan,
-	oldEmail string,
-	currentEmail string,
-	ownedOldAccounts map[string]driveid.CanonicalID,
-	logger *slog.Logger,
-) error {
-	paths := DiscoverDriveMetadataForEmail(oldEmail, logger)
-	for _, path := range paths {
-		if pathRenameExists(plan.pathRenames, path) || metadataWriteExists(plan.metadataWrites, path) {
-			continue
-		}
-
-		name := filepath.Base(path)
-		switch managedFileDriveType(name, "drive_", ".json") {
-		case driveid.DriveTypePersonal:
-			if ownedOldAccountOfType(ownedOldAccounts, driveid.DriveTypePersonal, oldEmail) {
-				addPathRename(plan, path, rewriteManagedEmailPath(path, oldEmail, currentEmail))
-			}
-		case driveid.DriveTypeBusiness, driveid.DriveTypeSharePoint:
-			if ownedOldAccountOfType(ownedOldAccounts, driveid.DriveTypeBusiness, oldEmail) {
-				addPathRename(plan, path, rewriteManagedEmailPath(path, oldEmail, currentEmail))
-			}
-		case driveid.DriveTypeShared:
-			meta, err := loadDriveMetadata(path)
-			if err != nil {
-				return fmt.Errorf("load shared drive metadata %s: %w", path, err)
-			}
-
-			updated, changed, err := rewriteSharedAccountCID(meta, plan.accountRenameMap)
-			if err != nil {
-				return fmt.Errorf("rewrite shared drive metadata %s: %w", path, err)
-			}
-			if !changed {
-				continue
-			}
-
-			plan.metadataWrites = append(plan.metadataWrites, driveMetadataWrite{
-				source: path,
-				target: rewriteManagedEmailPath(path, oldEmail, currentEmail),
-				meta:   updated,
-			})
-		}
+func reconcileCatalogEmail(accountRenames map[driveid.CanonicalID]driveid.CanonicalID, currentEmail string) error {
+	if len(accountRenames) == 0 {
+		return nil
 	}
 
-	return nil
-}
+	return UpdateCatalog(func(catalog *Catalog) error {
+		for from, to := range accountRenames {
+			account, found := catalog.AccountByCanonicalID(from)
+			if found {
+				catalog.DeleteAccount(from)
+				account.CanonicalID = to.String()
+				account.Email = currentEmail
+				account.DriveType = to.DriveType()
+				if account.PrimaryDriveCanonical == from.String() {
+					account.PrimaryDriveCanonical = to.String()
+				}
+				catalog.UpsertAccount(&account)
+			}
 
-func collectCurrentEmailMetadataRepairs(
-	plan *emailReconcilePlan,
-	currentEmail string,
-	ownedOldAccounts map[string]driveid.CanonicalID,
-	logger *slog.Logger,
-) error {
-	paths := DiscoverDriveMetadataForEmail(currentEmail, logger)
-	for _, path := range paths {
-		if metadataWriteExists(plan.metadataWrites, path) {
-			continue
+			for _, key := range catalog.SortedDriveKeys() {
+				drive := catalog.Drives[key]
+				driveCID, err := driveid.NewCanonicalID(drive.CanonicalID)
+				if err != nil {
+					continue
+				}
+				if drive.OwnerAccountCanonical == from.String() {
+					drive.OwnerAccountCanonical = to.String()
+				}
+				updatedCID, err := driveCID.WithEmail(currentEmail)
+				if err != nil || driveCID.Equal(updatedCID) {
+					catalog.UpsertDrive(&drive)
+					continue
+				}
+				catalog.DeleteDrive(driveCID)
+				drive.CanonicalID = updatedCID.String()
+				drive.DriveType = updatedCID.DriveType()
+				catalog.UpsertDrive(&drive)
+			}
 		}
 
-		name := filepath.Base(path)
-		if managedFileDriveType(name, "drive_", ".json") != driveid.DriveTypeShared {
-			continue
-		}
-
-		meta, err := loadDriveMetadata(path)
-		if err != nil {
-			return fmt.Errorf("load shared drive metadata %s: %w", path, err)
-		}
-
-		if _, ok := ownedOldAccounts[meta.AccountCanonicalID]; !ok {
-			continue
-		}
-
-		updated, changed, err := rewriteSharedAccountCID(meta, plan.accountRenameMap)
-		if err != nil {
-			return fmt.Errorf("rewrite current-email shared drive metadata %s: %w", path, err)
-		}
-		if !changed {
-			continue
-		}
-
-		plan.metadataWrites = append(plan.metadataWrites, driveMetadataWrite{
-			source: path,
-			target: path,
-			meta:   updated,
-		})
-	}
-
-	return nil
+		return nil
+	})
 }
 
 func ownedOldAccountOfType(
@@ -484,16 +422,6 @@ func managedFileDriveType(name, prefix, suffix string) string {
 func pathRenameExists(renames []managedPathRename, source string) bool {
 	for i := range renames {
 		if renames[i].source == source {
-			return true
-		}
-	}
-
-	return false
-}
-
-func metadataWriteExists(writes []driveMetadataWrite, source string) bool {
-	for i := range writes {
-		if writes[i].source == source || writes[i].target == source {
 			return true
 		}
 	}
@@ -542,71 +470,31 @@ func rewriteManagedEmailPath(path string, oldEmail string, newEmail string) stri
 }
 
 func sharedStateOwnedByRenamedAccount(path string, ownedOldAccounts map[string]driveid.CanonicalID) (bool, error) {
-	metaPath := filepath.Join(
-		filepath.Dir(path),
-		strings.TrimSuffix(strings.Replace(filepath.Base(path), "state_", "drive_", 1), ".db")+".json",
-	)
-	meta, err := loadDriveMetadata(metaPath)
+	catalog, err := LoadCatalog()
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, fmt.Errorf("matching shared metadata missing")
+		return false, fmt.Errorf("loading catalog for shared state reconciliation: %w", err)
+	}
+
+	for _, key := range catalog.SortedDriveKeys() {
+		drive := catalog.Drives[key]
+		driveCID, cidErr := driveid.NewCanonicalID(drive.CanonicalID)
+		if cidErr != nil {
+			continue
+		}
+		if DriveStatePath(driveCID) != path {
+			continue
 		}
 
-		return false, err
+		_, ok := ownedOldAccounts[drive.OwnerAccountCanonical]
+		return ok, nil
 	}
 
-	_, ok := ownedOldAccounts[meta.AccountCanonicalID]
-
-	return ok, nil
-}
-
-func loadDriveMetadata(path string) (*DriveMetadata, error) {
-	data, err := readManagedFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var meta DriveMetadata
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, fmt.Errorf("decode drive metadata: %w", err)
-	}
-
-	return &meta, nil
-}
-
-func rewriteSharedAccountCID(
-	meta *DriveMetadata,
-	accountRenames map[driveid.CanonicalID]driveid.CanonicalID,
-) (*DriveMetadata, bool, error) {
-	if meta == nil || meta.AccountCanonicalID == "" {
-		return meta, false, nil
-	}
-
-	accountCID, err := driveid.NewCanonicalID(meta.AccountCanonicalID)
-	if err != nil {
-		return nil, false, fmt.Errorf("parse shared account canonical ID %q: %w", meta.AccountCanonicalID, err)
-	}
-
-	updatedCID, ok := accountRenames[accountCID]
-	if !ok {
-		return meta, false, nil
-	}
-
-	cloned := *meta
-	cloned.AccountCanonicalID = updatedCID.String()
-
-	return &cloned, true, nil
+	return false, fmt.Errorf("matching catalog drive missing")
 }
 
 func (p *emailReconcilePlan) validate() error {
 	for _, rename := range p.pathRenames {
 		if err := validateManagedRename(rename.source, rename.target); err != nil {
-			return err
-		}
-	}
-
-	for _, write := range p.metadataWrites {
-		if err := validateManagedRename(write.source, write.target); err != nil {
 			return err
 		}
 	}
@@ -645,12 +533,6 @@ func (p *emailReconcilePlan) apply(configPath string) error {
 		}
 	}
 
-	for _, write := range p.metadataWrites {
-		if err := writeDriveMetadata(write); err != nil {
-			return err
-		}
-	}
-
 	if err := RenameDriveSections(configPath, p.driveRenameMap); err != nil {
 		return fmt.Errorf("rename drive sections: %w", err)
 	}
@@ -677,37 +559,6 @@ func renameManagedPathIfPresent(source string, target string) error {
 
 	if err := root.Rename(sourceName, targetName); err != nil {
 		return fmt.Errorf("rename %s to %s: %w", source, target, err)
-	}
-
-	return nil
-}
-
-func writeDriveMetadata(change driveMetadataWrite) error {
-	if change.meta == nil || change.target == "" {
-		return nil
-	}
-
-	data, err := json.MarshalIndent(change.meta, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode drive metadata %s: %w", change.target, err)
-	}
-
-	writeErr := atomicWriteFile(change.target, data)
-	if writeErr != nil {
-		return fmt.Errorf("write drive metadata %s: %w", change.target, writeErr)
-	}
-
-	if change.source == "" || change.source == change.target {
-		return nil
-	}
-
-	root, sourceName, err := fsroot.OpenPath(change.source)
-	if err != nil {
-		return fmt.Errorf("open drive metadata root for %s: %w", change.source, err)
-	}
-
-	if err := root.Remove(sourceName); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove original drive metadata %s: %w", change.source, err)
 	}
 
 	return nil

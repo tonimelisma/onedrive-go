@@ -132,9 +132,14 @@ func TestSaveAccountProfile_CreatesDirectory(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	path := AccountFilePath(cid)
+	path := CatalogPath()
 	_, statErr := os.Stat(path)
-	assert.NoError(t, statErr)
+	require.NoError(t, statErr)
+
+	profile, found, lookupErr := LookupAccountProfile(cid)
+	require.NoError(t, lookupErr)
+	require.True(t, found)
+	assert.Equal(t, "Alice", profile.DisplayName)
 }
 
 func TestAccountCIDForDrive_PersonalReturnsSelf(t *testing.T) {

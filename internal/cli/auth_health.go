@@ -13,7 +13,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 const (
@@ -71,7 +70,13 @@ func (r *authProofRecorder) recordSuccess(ctx context.Context, email, proofSourc
 	r.cleared[email] = true
 	r.mu.Unlock()
 
-	clearedCount, err := clearAccountAuthScopesWithCount(ctx, email, r.logger)
+	stored, loadErr := config.LoadCatalog()
+	if loadErr != nil {
+		r.logger.Debug("loading catalog for auth proof cleanup", "account", email, "error", loadErr)
+		return
+	}
+
+	clearedCount, err := clearAccountAuthScopesWithCount(ctx, stored, email, r.logger)
 	if err != nil {
 		// Auth-scope repair is best-effort maintenance. Successful direct API
 		// commands must not surface sync-store repair failures to end users just
@@ -144,7 +149,13 @@ func inspectSavedLogin(
 ) string {
 	tokenID := canonicalIDForToken(account, driveIDs)
 	if tokenID.IsZero() {
-		tokenID = findTokenFallback(account, logger)
+		stored, err := config.LoadCatalog()
+		if err == nil {
+			tokenID = catalogAccountTokenCID(stored, account)
+		}
+		if tokenID.IsZero() {
+			tokenID = findTokenFallback(account, logger)
+		}
 	}
 
 	tokenPath := config.DriveTokenPath(tokenID)
@@ -165,81 +176,58 @@ func inspectSavedLogin(
 }
 
 func hasPersistedAuthScope(ctx context.Context, account string, logger *slog.Logger) bool {
-	for _, statePath := range config.DiscoverStateDBsForEmail(account, logger) {
-		hasBlock, err := hasAccountAuthScopeAtPath(ctx, statePath, logger)
-		if err != nil {
-			logger.Debug("reading auth scope block for auth projection",
-				"account", account,
-				"path", statePath,
-				"error", err,
-			)
-			continue
-		}
-
-		if hasBlock {
-			return true
-		}
-	}
-
-	return false
-}
-
-func hasAccountAuthScopeAtPath(ctx context.Context, statePath string, logger *slog.Logger) (bool, error) {
-	hasBlock, err := syncengine.HasScopeBlockAtPath(ctx, statePath, syncengine.SKAuthAccount(), logger)
+	_ = ctx
+	stored, err := config.LoadCatalog()
 	if err != nil {
-		return false, fmt.Errorf("read auth scope block at %s: %w", statePath, err)
+		logger.Debug("loading catalog for auth projection", "account", account, "error", err)
+		return false
 	}
 
-	return hasBlock, nil
+	accountEntry, found := stored.AccountByEmail(account)
+	if !found {
+		return false
+	}
+
+	return accountEntry.AuthRequirementReason == authReasonSyncAuthRejected
 }
 
 func clearAccountAuthScopes(ctx context.Context, email string, logger *slog.Logger) error {
-	_, err := clearAccountAuthScopesWithCount(ctx, email, logger)
+	_, err := clearAccountAuthScopesWithCount(ctx, nil, email, logger)
 	return err
 }
 
-func clearAccountAuthScopesWithCount(ctx context.Context, email string, logger *slog.Logger) (int, error) {
+func clearAccountAuthScopesWithCatalog(ctx context.Context, stored *config.Catalog, email string, logger *slog.Logger) error {
+	_, err := clearAccountAuthScopesWithCount(ctx, stored, email, logger)
+	return err
+}
+
+func clearAccountAuthScopesWithCount(ctx context.Context, stored *config.Catalog, email string, logger *slog.Logger) (int, error) {
 	if email == "" {
 		return 0, nil
 	}
 
-	var errs []error
-	clearedCount := 0
-
-	for _, statePath := range config.DiscoverStateDBsForEmail(email, logger) {
-		store, err := syncengine.NewSyncStore(ctx, statePath, logger)
+	_ = ctx
+	if stored == nil {
+		var err error
+		stored, err = config.LoadCatalog()
 		if err != nil {
-			errs = append(errs, fmt.Errorf("open sync store %s: %w", statePath, err))
-			continue
-		}
-
-		blocks, listErr := store.ListScopeBlocks(ctx)
-		if listErr != nil {
-			errs = append(errs, fmt.Errorf("list scope blocks %s: %w", statePath, listErr))
-		} else if scopeBlocksContainAuth(blocks) {
-			if err := store.DeleteScopeBlock(ctx, syncengine.SKAuthAccount()); err != nil {
-				errs = append(errs, fmt.Errorf("delete auth scope from %s: %w", statePath, err))
-			} else {
-				clearedCount++
-			}
-		}
-
-		if err := store.Close(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("close sync store %s: %w", statePath, err))
+			return 0, fmt.Errorf("loading catalog: %w", err)
 		}
 	}
 
-	return clearedCount, errors.Join(errs...)
-}
-
-func scopeBlocksContainAuth(blocks []*syncengine.ScopeBlock) bool {
-	for _, block := range blocks {
-		if block != nil && block.Key == syncengine.SKAuthAccount() {
-			return true
-		}
+	accountEntry, found := stored.AccountByEmail(email)
+	if !found || accountEntry.AuthRequirementReason == "" {
+		return 0, nil
 	}
 
-	return false
+	accountEntry.AuthRequirementReason = ""
+	stored.UpsertAccount(&accountEntry)
+	if err := config.SaveCatalog(stored); err != nil {
+		return 0, fmt.Errorf("writing catalog: %w", err)
+	}
+
+	logger.Info("cleared catalog auth requirement after successful proof", "account", email)
+	return 1, nil
 }
 
 func authReasonText(reason string) string {

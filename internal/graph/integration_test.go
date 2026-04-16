@@ -102,9 +102,9 @@ func newIntegrationClient(t *testing.T) *Client {
 	return MustNewClient(DefaultBaseURL, httpClient, ts, logger, "onedrive-go/test")
 }
 
-// driveIDForTest reads drive_id from the drive metadata file for the test drive.
-// The metadata file is in the isolated data dir (copied from .testdata/ by
-// setupIntegrationIsolation). No env var needed — metadata is in the file.
+// driveIDForTest reads drive_id from the managed catalog entry for the test
+// drive. The catalog is in the isolated data dir (copied from .testdata/ by
+// setupIntegrationIsolation). No extra env var is needed.
 func driveIDForTest(t *testing.T) driveid.ID {
 	t.Helper()
 
@@ -114,10 +114,10 @@ func driveIDForTest(t *testing.T) driveid.ID {
 	cid := driveid.MustCanonicalID(drive)
 
 	meta, found, err := config.LookupDriveMetadata(cid)
-	require.NoError(t, err, "reading drive metadata for drive %q", drive)
-	require.True(t, found, "drive metadata file missing — re-run scripts/bootstrap-test-credentials.sh")
-	require.NotNil(t, meta, "drive metadata should be present when found is true")
-	require.NotEmpty(t, meta.DriveID, "drive metadata has empty drive_id")
+	require.NoError(t, err, "reading catalog drive metadata for drive %q", drive)
+	require.True(t, found, "catalog drive metadata missing — re-run scripts/bootstrap-test-credentials.sh")
+	require.NotNil(t, meta, "catalog drive metadata should be present when found is true")
+	require.NotEmpty(t, meta.DriveID, "catalog drive metadata has empty drive_id")
 
 	return driveid.New(meta.DriveID)
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Upload test data to Azure Key Vault for CI.
-# Uploads: token files (pure OAuth), account profiles, drive metadata,
-# config.toml, and fixtures.env. fixtures.env is the durable carrier for live
+# Uploads: token files (pure OAuth), catalog.json, config.toml, and
+# fixtures.env. fixtures.env is the durable carrier for live
 # shared-item fixtures such as ONEDRIVE_TEST_SHARED_LINK,
 # ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER, and
 # ONEDRIVE_TEST_READONLY_SHARED_FOLDER.
@@ -48,39 +48,18 @@ for token_file in "$TESTDATA"/token_*.json; do
         --output none
 done
 
-# Upload account profiles (flat layout: account_*.json).
-for account_file in "$TESTDATA"/account_*.json; do
-    [ -f "$account_file" ] || continue
-
-    filename=$(basename "$account_file")
-    sanitized=$(echo "$filename" | sed 's/^account_//; s/\.json$//; s/[:@._]/-/g')
-    secret_name="onedrive-account-${sanitized}"
-
-    echo "Uploading: $filename → $secret_name"
+# Upload catalog as a separate secret.
+if [ -f "$TESTDATA/catalog.json" ]; then
+    echo "Uploading: catalog.json → onedrive-test-catalog"
     az keyvault secret set \
         --vault-name "$VAULT_NAME" \
-        --name "$secret_name" \
-        --file "$account_file" \
+        --name "onedrive-test-catalog" \
+        --file "$TESTDATA/catalog.json" \
         --content-type "application/json" \
         --output none
-done
-
-# Upload drive metadata (flat layout: drive_*.json).
-for drive_file in "$TESTDATA"/drive_*.json; do
-    [ -f "$drive_file" ] || continue
-
-    filename=$(basename "$drive_file")
-    sanitized=$(echo "$filename" | sed 's/^drive_//; s/\.json$//; s/[:@._]/-/g')
-    secret_name="onedrive-drivemeta-${sanitized}"
-
-    echo "Uploading: $filename → $secret_name"
-    az keyvault secret set \
-        --vault-name "$VAULT_NAME" \
-        --name "$secret_name" \
-        --file "$drive_file" \
-        --content-type "application/json" \
-        --output none
-done
+else
+    echo "WARNING: catalog.json not found in .testdata/"
+fi
 
 # Upload config as a separate secret.
 if [ -f "$TESTDATA/config.toml" ]; then

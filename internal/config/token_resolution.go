@@ -10,8 +10,8 @@ import (
 // DriveTokenPath returns the token file path for a canonical drive ID.
 // Personal and business drives have their own token. SharePoint drives
 // share the business account's token (same OAuth session). Shared drives
-// piggyback on their parent account's token, resolved via drive metadata
-// files (no config dependency).
+// piggyback on their parent account's token, resolved via catalog-backed
+// drive ownership (no config dependency).
 //
 // Examples:
 //
@@ -37,7 +37,7 @@ func DriveTokenPath(canonicalID driveid.CanonicalID) string {
 // TokenAccountCanonicalID resolves which account owns the OAuth token for a
 // drive. Personal and business drives own their token. SharePoint drives use
 // the business account's token. Shared drives use their parent account's token
-// from drive metadata.
+// from catalog-backed drive metadata.
 func TokenAccountCanonicalID(cid driveid.CanonicalID) (driveid.CanonicalID, error) {
 	if cid.IsZero() {
 		return driveid.CanonicalID{}, nil
@@ -53,7 +53,7 @@ func TokenAccountCanonicalID(cid driveid.CanonicalID) (driveid.CanonicalID, erro
 // tokenAccountCID resolves which account owns the OAuth token for a drive.
 // Personal and business drives own their token. SharePoint drives use the
 // business account's token. Shared drives use their parent account's
-// token, determined from the drive metadata file.
+// token, determined from the managed catalog.
 func tokenAccountCID(cid driveid.CanonicalID) driveid.CanonicalID {
 	tokenCID, err := TokenAccountCanonicalID(cid)
 	if err != nil {
@@ -63,9 +63,9 @@ func tokenAccountCID(cid driveid.CanonicalID) driveid.CanonicalID {
 	return tokenCID
 }
 
-// resolveSharedTokenCID reads the drive metadata file for a shared drive
-// to find its parent account's canonical ID. Returns a zero CID if the
-// drive metadata is missing or lacks an account_canonical_id.
+// resolveSharedTokenCID reads the catalog-backed drive metadata for a shared
+// drive to find its parent account's canonical ID. Returns a zero CID if the
+// catalog entry is missing or lacks an account_canonical_id.
 func resolveSharedTokenCID(cid driveid.CanonicalID) (driveid.CanonicalID, error) {
 	meta, found, err := LookupDriveMetadata(cid)
 	if err != nil {

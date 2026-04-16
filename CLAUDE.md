@@ -216,11 +216,11 @@ Run against live OneDrive accounts. Test account names are never committed — u
 
 1. **Bootstrap** — run once per test account (interactive, requires browser):
    ./scripts/bootstrap-test-credentials.sh   # opens browser for OAuth login
-   Creates `.testdata/` with token files and `config.toml`. Run multiple times to add accounts (config accumulates drive sections).
+   Creates `.testdata/` with token files, `catalog.json`, and `config.toml`. Run multiple times to add accounts (config accumulates drive sections and the catalog accumulates inventory).
 
 2. **Migrate to CI** — upload `.testdata/` to Azure Key Vault:
    az login                                   # if not already logged in
-   ./scripts/migrate-test-data-to-ci.sh       # uploads tokens + config to Key Vault
+   ./scripts/migrate-test-data-to-ci.sh       # uploads tokens + catalog + config to Key Vault
 
 ## Dev Process
 

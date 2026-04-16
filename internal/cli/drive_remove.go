@@ -23,6 +23,10 @@ func runDriveRemoveWithContext(cc *CLIContext, purge bool) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+	stored, err := config.LoadCatalog()
+	if err != nil {
+		return fmt.Errorf("loading catalog: %w", err)
+	}
 
 	cid, cidErr := driveid.NewCanonicalID(driveSelector)
 	if cidErr != nil {
@@ -36,13 +40,57 @@ func runDriveRemoveWithContext(cc *CLIContext, purge bool) error {
 
 	if !inConfig && purge {
 		logger.Info("purging orphaned drive state", "drive", cid.String())
-		return purgeOrphanedDriveState(cc.Output(), cid, logger)
+		if err := purgeOrphanedDriveState(cc.Output(), cid, logger); err != nil {
+			return err
+		}
+		prunePurgedDriveCatalogEntry(stored, cid)
+		return saveCatalog(stored)
 	}
 
 	logger.Info("removing drive", "drive", cid.String(), "purge", purge)
 	if purge {
-		return purgeDrive(cc.Output(), cc.CfgPath, cid, logger)
+		if err := purgeDrive(cc.Output(), cc.CfgPath, cid, logger); err != nil {
+			return err
+		}
+		prunePurgedDriveCatalogEntry(stored, cid)
+		return saveCatalog(stored)
 	}
 
-	return removeDrive(cc.Output(), cc.CfgPath, cid, cfg.Drives[cid].SyncDir, logger)
+	if err := removeDrive(cc.Output(), cc.CfgPath, cid, cfg.Drives[cid].SyncDir, logger); err != nil {
+		return err
+	}
+	return saveCatalog(stored)
+}
+
+func prunePurgedDriveCatalogEntry(stored *config.Catalog, cid driveid.CanonicalID) {
+	if stored == nil || cid.IsZero() {
+		return
+	}
+
+	drive, found := stored.DriveByCanonicalID(cid)
+	if !found {
+		return
+	}
+
+	drive.RetainedStatePresent = false
+	accountCID, accountErr := driveid.NewCanonicalID(drive.OwnerAccountCanonical)
+	if drive.PrimaryForAccount || (accountErr == nil && accountOwnsPrimaryDrive(stored, accountCID, cid)) {
+		stored.UpsertDrive(&drive)
+		return
+	}
+
+	stored.DeleteDrive(cid)
+}
+
+func accountOwnsPrimaryDrive(stored *config.Catalog, accountCID, driveCID driveid.CanonicalID) bool {
+	if stored == nil || accountCID.IsZero() || driveCID.IsZero() {
+		return false
+	}
+
+	account, found := stored.AccountByCanonicalID(accountCID)
+	if !found {
+		return false
+	}
+
+	return account.PrimaryDriveCanonical == driveCID.String()
 }

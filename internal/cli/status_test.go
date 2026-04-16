@@ -600,14 +600,9 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 		('/actionable.txt', 'upload', 'upload', 'item', 'actionable', 'invalid_filename', '', 1, 0, 0)`)
 	require.NoError(t, err)
 
-	_, err = db.ExecContext(ctx, `INSERT INTO scope_blocks
-		(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
-		VALUES ('auth:account', 'unauthorized', 'none', 1, 0, 0, 0, 0)`)
-	require.NoError(t, err)
-
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
-	assert.Equal(t, 4, info.IssueCount)
+	assert.Equal(t, 3, info.IssueCount)
 }
 
 // Validates: R-6.10.5
@@ -676,16 +671,10 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = db.ExecContext(ctx, `INSERT INTO scope_blocks
-		(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
-		VALUES ('auth:account', ?, 'none', 1, 0, 0, 0, 0)`, syncengine.IssueUnauthorized)
-	require.NoError(t, err)
-
 	info := querySyncState("personal:alice@example.com", dbPath, logger)
 	require.NotNil(t, info)
 	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
 	sharedDescriptor := describeStatusSummary(syncengine.SummarySharedFolderWritesBlocked)
-	authDescriptor := describeStatusSummary(syncengine.SummaryAuthenticationRequired)
 	assert.ElementsMatch(t, []failureGroupJSON{
 		{
 			SummaryKey: string(syncengine.SummaryInvalidFilename),
@@ -706,16 +695,6 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 			ScopeKind:  "directory",
 			Scope:      "Shared/Team Docs",
 			Paths:      []string{"/blocked/a.txt", "/blocked/b.txt"},
-		},
-		{
-			SummaryKey: string(syncengine.SummaryAuthenticationRequired),
-			IssueType:  string(syncengine.IssueUnauthorized),
-			Title:      authDescriptor.Title,
-			Reason:     authDescriptor.Reason,
-			Action:     authDescriptor.Action,
-			Count:      1,
-			ScopeKind:  "account",
-			Scope:      "your OneDrive account authorization",
 		},
 	}, info.IssueGroups)
 }

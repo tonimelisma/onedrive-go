@@ -110,8 +110,6 @@ func assertEmailReconcileFixtureRenamed(
 
 	_, oldTokenErr := os.Stat(DriveTokenPath(fixture.oldBusiness))
 	require.ErrorIs(t, oldTokenErr, os.ErrNotExist)
-	_, oldAccountErr := os.Stat(AccountFilePath(fixture.oldBusiness))
-	require.ErrorIs(t, oldAccountErr, os.ErrNotExist)
 	_, oldBusinessStateErr := os.Stat(DriveStatePath(fixture.oldBusiness))
 	require.ErrorIs(t, oldBusinessStateErr, os.ErrNotExist)
 	_, oldSharePointStateErr := os.Stat(DriveStatePath(fixture.oldSharePoint))
@@ -120,7 +118,6 @@ func assertEmailReconcileFixtureRenamed(
 	require.ErrorIs(t, oldSharedStateErr, os.ErrNotExist)
 
 	assert.FileExists(t, DriveTokenPath(fixture.newBusiness))
-	assert.FileExists(t, AccountFilePath(fixture.newBusiness))
 	assert.FileExists(t, DriveStatePath(fixture.newBusiness))
 	assert.FileExists(t, DriveStatePath(fixture.newSharePoint))
 	assert.FileExists(t, DriveStatePath(fixture.newShared))

@@ -109,6 +109,28 @@ func addNewDrive(w io.Writer, cfgPath string, cid driveid.CanonicalID, logger *s
 	}
 
 	driveDisplayName := config.DefaultDisplayName(cid)
+	if catalogErr := config.UpdateCatalog(func(catalog *config.Catalog) error {
+		drive := config.CatalogDrive{
+			CanonicalID:           cid.String(),
+			OwnerAccountCanonical: configAccountCIDForDrive(cid).String(),
+			DriveType:             cid.DriveType(),
+			DisplayName:           driveDisplayName,
+		}
+		if existing, found := catalog.DriveByCanonicalID(cid); found {
+			drive = existing
+			if drive.OwnerAccountCanonical == "" {
+				drive.OwnerAccountCanonical = configAccountCIDForDrive(cid).String()
+			}
+			if drive.DisplayName == "" {
+				drive.DisplayName = driveDisplayName
+			}
+		}
+		catalog.UpsertDrive(&drive)
+		return nil
+	}); catalogErr != nil {
+		return fmt.Errorf("updating catalog: %w", catalogErr)
+	}
+
 	return writef(w, "Added drive %s (%s) -> %s\n", driveDisplayName, cid.String(), syncDir)
 }
 
@@ -144,10 +166,16 @@ func addSharedDrive(
 		return writef(w, "Drive %s is already configured.\n", cid.String())
 	}
 
+	stored, err := config.LoadCatalog()
+	if err != nil {
+		return fmt.Errorf("loading catalog: %w", err)
+	}
+
 	// Shared drives don't have their own token — find the parent account.
-	// DriveTokenPath(sharedCID) reads drive metadata which doesn't exist yet
-	// for new drives. Probe the filesystem for existing personal/business tokens.
-	parentCID := findTokenFallback(cid.Email(), logger)
+	parentCID := catalogAccountTokenCID(stored, cid.Email())
+	if parentCID.IsZero() {
+		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
+	}
 
 	tokenPath := config.DriveTokenPath(parentCID)
 	if tokenPath == "" {
@@ -158,12 +186,12 @@ func addSharedDrive(
 		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
 	}
 
-	// Register drive metadata so DriveTokenPath works for this shared drive
+	// Register catalog ownership so DriveTokenPath works for this shared drive
 	// in subsequent operations.
 	if saveErr := config.SaveDriveMetadata(cid, &config.DriveMetadata{
 		AccountCanonicalID: parentCID.String(),
 	}); saveErr != nil {
-		return fmt.Errorf("registering shared drive metadata: %w", saveErr)
+		return fmt.Errorf("registering shared drive catalog metadata: %w", saveErr)
 	}
 
 	displayName := preResolvedName
@@ -186,6 +214,25 @@ func addSharedDrive(
 
 	if err := config.SetDriveKey(cfgPath, cid, "display_name", displayName); err != nil {
 		return fmt.Errorf("writing display_name to config: %w", err)
+	}
+
+	if err := config.UpdateCatalog(func(catalog *config.Catalog) error {
+		drive := config.CatalogDrive{
+			CanonicalID:           cid.String(),
+			OwnerAccountCanonical: parentCID.String(),
+			DriveType:             cid.DriveType(),
+			DisplayName:           displayName,
+		}
+		if existing, found := catalog.DriveByCanonicalID(cid); found {
+			drive = existing
+			drive.OwnerAccountCanonical = parentCID.String()
+			drive.DriveType = cid.DriveType()
+			drive.DisplayName = displayName
+		}
+		catalog.UpsertDrive(&drive)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("updating catalog: %w", err)
 	}
 
 	return writef(w, "Added drive %s (%s) -> %s\n", displayName, cid.String(), syncDir)

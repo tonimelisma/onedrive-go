@@ -514,16 +514,15 @@ func TestResolveLogoutAccount_PurgeAutoSelectsSingleKnownAccountWithoutSavedLogi
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
-	// Create an orphaned account profile (no token).
-	require.NoError(t, os.WriteFile(
-		filepath.Join(dataDir, "account_personal_alice@outlook.com.json"),
-		[]byte(`{"profile":{"user_id":"u1","display_name":"Alice"}}`), 0o600,
+	require.NoError(t, config.SaveAccountProfile(
+		driveid.MustCanonicalID("personal:alice@outlook.com"),
+		&config.AccountProfile{UserID: "u1", DisplayName: "Alice"},
 	))
 
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
 
-	email, err := resolveLogoutAccount(cfg, "", true, logger)
+	email, err := resolveLogoutAccount(cfg, true, logger)
 	require.NoError(t, err)
 	assert.Equal(t, "alice@outlook.com", email)
 }
@@ -536,15 +535,15 @@ func TestResolveLogoutAccount_PlainLogoutRequiresUsableSavedLogin(t *testing.T) 
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
-	require.NoError(t, os.WriteFile(
-		filepath.Join(dataDir, "account_personal_alice@outlook.com.json"),
-		[]byte(`{"profile":{"user_id":"u1"}}`), 0o600,
+	require.NoError(t, config.SaveAccountProfile(
+		driveid.MustCanonicalID("personal:alice@outlook.com"),
+		&config.AccountProfile{UserID: "u1"},
 	))
 
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
 
-	_, err := resolveLogoutAccount(cfg, "", false, logger)
+	_, err := resolveLogoutAccount(cfg, false, logger)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no accounts with saved logins are available for plain logout")
 	assert.Contains(t, err.Error(), "alice@outlook.com")
@@ -560,7 +559,7 @@ func TestResolveLogoutAccount_AutoSelectsSingleKnownAccountWithUsableSavedLogin(
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
 
-	email, err := resolveLogoutAccount(cfg, "", false, logger)
+	email, err := resolveLogoutAccount(cfg, false, logger)
 	require.NoError(t, err)
 	assert.Equal(t, "alice@outlook.com", email)
 }
@@ -576,7 +575,7 @@ func TestResolveLogoutAccount_MultipleUsableSavedLoginsRequireAccount(t *testing
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
 
-	_, err := resolveLogoutAccount(cfg, "", false, logger)
+	_, err := resolveLogoutAccount(cfg, false, logger)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "multiple accounts with saved logins")
 	assert.Contains(t, err.Error(), "alice@outlook.com")
@@ -591,16 +590,16 @@ func TestFindWhoamiAuthRequiredAccounts(t *testing.T) {
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
-	// Account profile without token → logged out.
-	require.NoError(t, os.WriteFile(
-		filepath.Join(dataDir, "account_personal_alice@outlook.com.json"),
-		[]byte(`{"profile":{"user_id":"u1","display_name":"Alice Smith"}}`), 0o600,
+	// Catalog account without token -> auth required.
+	require.NoError(t, config.SaveAccountProfile(
+		driveid.MustCanonicalID("personal:alice@outlook.com"),
+		&config.AccountProfile{UserID: "u1", DisplayName: "Alice Smith"},
 	))
 
-	// Account profile WITH token → still authenticated.
-	require.NoError(t, os.WriteFile(
-		filepath.Join(dataDir, "account_business_bob@contoso.com.json"),
-		[]byte(`{"profile":{"user_id":"u2","display_name":"Bob Jones"}}`), 0o600,
+	// Catalog account WITH token -> still authenticated.
+	require.NoError(t, config.SaveAccountProfile(
+		driveid.MustCanonicalID("business:bob@contoso.com"),
+		&config.AccountProfile{UserID: "u2", DisplayName: "Bob Jones"},
 	))
 	writeTestTokenFile(t, dataDir, "token_business_bob@contoso.com.json")
 
@@ -630,15 +629,10 @@ func TestPurgeOrphanedFiles(t *testing.T) {
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
-	// Create orphaned files for alice.
-	files := []string{
-		"state_personal_alice@outlook.com.db",
-		"drive_personal_alice@outlook.com.json",
-		"account_personal_alice@outlook.com.json",
-	}
-	for _, f := range files {
-		require.NoError(t, os.WriteFile(filepath.Join(dataDir, f), []byte(`{}`), 0o600))
-	}
+	// Create an orphaned state DB for alice. Catalog-backed metadata is not a
+	// filesystem artifact anymore, so purge cleanup only removes retained state.
+	aliceState := "state_personal_alice@outlook.com.db"
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, aliceState), []byte(`{}`), 0o600))
 
 	// Also create a file for bob — should NOT be removed.
 	require.NoError(t, os.WriteFile(
@@ -650,14 +644,12 @@ func TestPurgeOrphanedFiles(t *testing.T) {
 	err := purgeOrphanedFiles(io.Discard, "alice@outlook.com", logger)
 	require.NoError(t, err)
 
-	// Alice's files should be gone.
-	for _, f := range files {
-		_, statErr := os.Stat(filepath.Join(dataDir, f))
-		assert.True(t, os.IsNotExist(statErr), "expected %s to be deleted", f)
-	}
+	// Alice's retained state should be gone.
+	_, statErr := os.Stat(filepath.Join(dataDir, aliceState))
+	assert.True(t, os.IsNotExist(statErr), "expected %s to be deleted", aliceState)
 
 	// Bob's file should remain.
-	_, statErr := os.Stat(filepath.Join(dataDir, "state_personal_bob@outlook.com.db"))
+	_, statErr = os.Stat(filepath.Join(dataDir, "state_personal_bob@outlook.com.db"))
 	assert.NoError(t, statErr, "bob's state DB should remain")
 }
 

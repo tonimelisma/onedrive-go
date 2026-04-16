@@ -3,23 +3,17 @@
 package e2e
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"go/build"
-	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
@@ -45,8 +39,6 @@ var (
 // testCredentialDir holds the path to .testdata/ (repo-root-relative).
 // Token files and config are read from here, never from production dirs.
 var testCredentialDir string
-
-const driveMetadataBootstrapTimeout = 30 * time.Second
 
 // validateTestData checks that .testdata/ has the expected structure before
 // tests start. Catches bootstrap failures with actionable error messages.
@@ -172,9 +164,8 @@ func setupIsolation() func() {
 		)
 	}
 
-	// Copy account profile and drive metadata files from .testdata/.
-	testutil.CopyMetadataFiles(testCredentialDir, appDataDir)
-	ensureIsolatedDriveMetadata(appDataDir, driveIDs)
+	// Copy the managed inventory catalog from .testdata/.
+	testutil.CopyCatalogFile(testCredentialDir, appDataDir)
 
 	testDataDir = appDataDir
 
@@ -214,56 +205,6 @@ func setupIsolation() func() {
 
 		os.RemoveAll(tempRoot)
 	}
-}
-
-func ensureIsolatedDriveMetadata(appDataDir string, driveIDs []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), driveMetadataBootstrapTimeout)
-	defer cancel()
-
-	if err := ensureTestDriveMetadata(ctx, driveIDs, func(
-		ctx context.Context,
-		driveID string,
-	) (*config.DriveMetadata, error) {
-		return fetchPrimaryDriveMetadata(ctx, appDataDir, driveID)
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: preparing isolated drive metadata: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func fetchPrimaryDriveMetadata(
-	ctx context.Context,
-	appDataDir string,
-	driveID string,
-) (*config.DriveMetadata, error) {
-	tokenPath := filepath.Join(appDataDir, testutil.TokenFileName(driveID))
-	logger := slog.New(slog.DiscardHandler)
-
-	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
-	if err != nil {
-		return nil, fmt.Errorf("load token source for %s: %w", driveID, err)
-	}
-
-	client, err := graph.NewClient(
-		graph.DefaultBaseURL,
-		http.DefaultClient,
-		ts,
-		logger,
-		"onedrive-go/e2e-drive-metadata-bootstrap",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create graph client for %s: %w", driveID, err)
-	}
-
-	primary, err := client.PrimaryDrive(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch primary drive for %s: %w", driveID, err)
-	}
-
-	return &config.DriveMetadata{
-		DriveID:  primary.ID.String(),
-		CachedAt: time.Now().UTC().Format(time.RFC3339),
-	}, nil
 }
 
 // verifyIsolation hard-crashes the process if any production path could leak

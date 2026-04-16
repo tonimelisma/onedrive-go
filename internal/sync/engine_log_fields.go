@@ -25,10 +25,12 @@ func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *WorkerResul
 		slog.String("summary_key", string(decision.SummaryKey)),
 		slog.String("failure_class", decision.Class.String()),
 		slog.String("log_owner", "sync"),
-		slog.String("scope_key", decision.ScopeKey.String()),
 		slog.String("drive_id", driveID.String()),
 		slog.String("action_type", r.ActionType.String()),
 		slog.String("path", r.Path),
+	}
+	if !decision.ScopeKey.IsZero() {
+		fields = append(fields, slog.String("scope_key", decision.ScopeKey.String()))
 	}
 
 	if r.HTTPStatus != 0 {
@@ -51,12 +53,16 @@ func (flow *engineFlow) summaryLogFields(
 		return nil
 	}
 
-	return []any{
+	fields := []any{
 		slog.String("run_id", flow.runID),
 		slog.String("summary_key", string(summaryKey)),
 		slog.String("failure_class", class.String()),
 		slog.String("log_owner", "sync"),
-		slog.String("scope_key", scopeKey.String()),
 		slog.String("path", path),
 	}
+	if !scopeKey.IsZero() {
+		fields = append(fields, slog.String("scope_key", scopeKey.String()))
+	}
+
+	return fields
 }

@@ -1138,6 +1138,26 @@ func writeTestTokenFile(t *testing.T, dir, name string) {
 		Expiry:       time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	require.NoError(t, tokenfile.Save(filepath.Join(dir, name), tok))
+
+	inner := strings.TrimSuffix(strings.TrimPrefix(name, "token_"), ".json")
+	parts := strings.SplitN(inner, "_", 2)
+	require.Len(t, parts, 2)
+
+	cid, err := driveid.Construct(parts[0], parts[1])
+	require.NoError(t, err)
+
+	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+		account := config.CatalogAccount{
+			CanonicalID: cid.String(),
+			Email:       cid.Email(),
+			DriveType:   cid.DriveType(),
+		}
+		if existing, found := catalog.AccountByCanonicalID(cid); found {
+			account = existing
+		}
+		catalog.UpsertAccount(&account)
+		return nil
+	}))
 }
 
 // --- enrichSharedTarget tests ---
@@ -1847,7 +1867,6 @@ func TestPurgeOrphanedDriveState_NoStateDB(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 	statePath := config.DriveStatePath(cid)
-	metaPath := config.DriveMetadataPath(cid)
 	var out bytes.Buffer
 
 	// No state DB on disk — should succeed with "no orphaned state" message.
@@ -1856,8 +1875,6 @@ func TestPurgeOrphanedDriveState_NoStateDB(t *testing.T) {
 
 	_, stateErr := os.Stat(statePath)
 	assert.True(t, os.IsNotExist(stateErr), "state DB should remain absent")
-	_, metaErr := os.Stat(metaPath)
-	assert.True(t, os.IsNotExist(metaErr), "drive metadata should remain absent")
 }
 
 func TestSortedDriveSearchResults_ReturnsSortedClone(t *testing.T) {

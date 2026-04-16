@@ -40,6 +40,13 @@ func validateIntegrationTestData(credDir, driveID string) {
 		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
 		os.Exit(1)
 	}
+
+	catalogPath := filepath.Join(credDir, "catalog.json")
+	if _, statErr := os.Stat(catalogPath); statErr != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: catalog.json not found at %s\n", catalogPath)
+		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to rebuild test credentials.")
+		os.Exit(1)
+	}
 }
 
 // setupIntegrationIsolation overrides HOME and XDG directories to temp
@@ -103,8 +110,8 @@ func setupIntegrationIsolation() func() {
 		0o600,
 	)
 
-	// Copy account profile and drive metadata files from .testdata/.
-	testutil.CopyMetadataFiles(integrationTestCredentialDir, appDataDir)
+	// Copy the managed inventory catalog from .testdata/.
+	testutil.CopyCatalogFile(integrationTestCredentialDir, appDataDir)
 
 	// Copy config.toml from .testdata/ to isolated config dir.
 	appConfigDir := filepath.Join(tempConfig, "onedrive-go")

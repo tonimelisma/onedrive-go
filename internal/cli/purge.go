@@ -9,13 +9,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// removeDriveDataFiles deletes the state database and drive metadata files for
-// a drive. Best-effort: attempts both removals and returns a joined error if
-// either fails (ignoring "not found" — idempotent). This is the shared
-// primitive used by purgeSingleDrive (auth.go) and purgeOrphanedDriveState
-// (drive.go) to avoid duplicated file-removal logic.
+// removeDriveDataFiles deletes the retained per-drive state DB for one drive.
+// The catalog owns drive inventory; the state DB is the only drive-owned file
+// artifact that survives `drive remove` and is purged here. Best-effort:
+// ignores "not found" so repeated cleanup stays idempotent.
 //
-// Returns the number of files actually removed (0–2) so callers can report
+// Returns the number of files actually removed (0–1) so callers can report
 // what happened.
 func removeDriveDataFiles(cid driveid.CanonicalID, logger *slog.Logger) (int, error) {
 	removed := 0
@@ -31,19 +30,6 @@ func removeDriveDataFiles(cid driveid.CanonicalID, logger *slog.Logger) (int, er
 			errs = append(errs, fmt.Errorf("removing state database %s: %w", statePath, err))
 		} else if removedPath {
 			logger.Info("removed state database", "path", statePath)
-			removed++
-		}
-	}
-
-	// Remove drive metadata file.
-	metaPath := config.DriveMetadataPath(cid)
-	if metaPath != "" {
-		removedPath, err := removeManagedPath(metaPath)
-		if err != nil {
-			logger.Warn("failed to remove drive metadata", "path", metaPath, "error", err)
-			errs = append(errs, fmt.Errorf("removing drive metadata %s: %w", metaPath, err))
-		} else if removedPath {
-			logger.Info("removed drive metadata", "path", metaPath)
 			removed++
 		}
 	}

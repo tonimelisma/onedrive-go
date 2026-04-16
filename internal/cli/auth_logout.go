@@ -17,12 +17,26 @@ import (
 // durable offline account catalog. Plain logout auto-selects only when exactly
 // one known account still has a usable saved login. Purge-only cleanup may
 // auto-select a single known account even when its saved login is already gone.
-func resolveLogoutAccount(cfg *config.Config, accountFlag string, purge bool, logger *slog.Logger) (string, error) {
+func resolveLogoutAccount(cfg *config.Config, purge bool, logger *slog.Logger) (string, error) {
+	stored, err := config.LoadCatalog()
+	if err != nil {
+		return "", fmt.Errorf("loading catalog: %w", err)
+	}
+	return resolveLogoutAccountWithCatalog(cfg, stored, "", purge, logger)
+}
+
+func resolveLogoutAccountWithCatalog(
+	cfg *config.Config,
+	stored *config.Catalog,
+	accountFlag string,
+	purge bool,
+	logger *slog.Logger,
+) (string, error) {
 	if accountFlag != "" {
 		return accountFlag, nil
 	}
 
-	catalog := buildAccountCatalog(context.Background(), cfg, logger)
+	catalog := buildAccountCatalogWithStored(context.Background(), cfg, stored, logger)
 	known := knownAccountCatalogEntries(catalog)
 	if len(known) == 0 {
 		return "", fmt.Errorf("no accounts configured — nothing to log out")
@@ -66,41 +80,18 @@ func joinCatalogEmails(entries []accountCatalogEntry) string {
 
 // executeLogout performs the actual logout: finds affected drives, deletes
 // token, and optionally purges config sections and state databases.
-func executeLogout(cfg *config.Config, cfgPath string, w io.Writer, account string, purge bool, logger *slog.Logger) error {
-	// Find all drives belonging to this account.
+func executeLogout(
+	cfg *config.Config,
+	stored *config.Catalog,
+	cfgPath string,
+	w io.Writer,
+	account string,
+	purge bool,
+	logger *slog.Logger,
+) error {
 	affected := drivesForAccount(cfg, account)
-
-	// Determine canonical ID for the token path. We need any drive ID with this
-	// account email to derive the token path (all drives for one account share a token).
-	tokenCanonicalID := canonicalIDForToken(account, affected)
-	if tokenCanonicalID.IsZero() {
-		// No drives in config — probe the filesystem for an existing token.
-		tokenCanonicalID = findTokenFallback(account, logger)
-	}
-
-	tokenPath := config.DriveTokenPath(tokenCanonicalID)
-
-	// Delete the token file. graph.Logout handles "not found" gracefully
-	// (returns nil), so this works even after a prior logout.
-	if tokenPath != "" {
-		if err := graph.Logout(tokenPath, logger); err != nil {
-			return fmt.Errorf("remove token file: %w", err)
-		}
-
-		if err := writef(w, "Token removed for %s.\n", account); err != nil {
-			return err
-		}
-	} else if !purge {
-		return fmt.Errorf(
-			"no saved login was found for %s — run 'onedrive-go logout --purge --account %s' to remove retained state",
-			account,
-			account,
-		)
-	} else {
-		// Purge after prior logout — token already gone, that's fine.
-		if err := writef(w, "Token already removed for %s.\n", account); err != nil {
-			return err
-		}
+	if err := removeLogoutToken(w, stored, account, affected, purge, logger); err != nil {
+		return err
 	}
 
 	if err := printAffectedDrives(w, cfg, affected); err != nil {
@@ -108,21 +99,76 @@ func executeLogout(cfg *config.Config, cfgPath string, w io.Writer, account stri
 	}
 
 	if purge {
-		if err := purgeAccountDrives(w, cfgPath, affected, logger); err != nil {
-			return fmt.Errorf("purging account drives: %w", err)
-		}
-
-		// Also purge orphaned files (state DBs, drive metadata, account profiles)
-		// that may remain from a prior non-purge logout or from drives that were
-		// removed from config but left data on disk.
-		if err := purgeOrphanedFiles(w, account, logger); err != nil {
-			return fmt.Errorf("purging orphaned files: %w", err)
-		}
-
-		return writeln(w, "Sync directories untouched — your files remain on disk.")
+		return executePurgeLogout(cfgPath, w, stored, account, affected, logger)
 	}
 
-	if clearErr := clearAccountAuthScopes(context.Background(), account, logger); clearErr != nil {
+	return executePlainLogout(cfgPath, w, stored, account, affected, logger)
+}
+
+func removeLogoutToken(
+	w io.Writer,
+	stored *config.Catalog,
+	account string,
+	affected []driveid.CanonicalID,
+	purge bool,
+	logger *slog.Logger,
+) error {
+	tokenCanonicalID := canonicalIDForToken(account, affected)
+	if tokenCanonicalID.IsZero() {
+		tokenCanonicalID = catalogAccountTokenCID(stored, account)
+	}
+
+	tokenPath := config.DriveTokenPath(tokenCanonicalID)
+	if tokenPath != "" {
+		if err := graph.Logout(tokenPath, logger); err != nil {
+			return fmt.Errorf("remove token file: %w", err)
+		}
+		return writef(w, "Token removed for %s.\n", account)
+	}
+
+	if !purge {
+		return fmt.Errorf(
+			"no saved login was found for %s — run 'onedrive-go logout --purge --account %s' to remove retained state",
+			account,
+			account,
+		)
+	}
+
+	return writef(w, "Token already removed for %s.\n", account)
+}
+
+func executePurgeLogout(
+	cfgPath string,
+	w io.Writer,
+	stored *config.Catalog,
+	account string,
+	affected []driveid.CanonicalID,
+	logger *slog.Logger,
+) error {
+	if err := purgeAccountDrives(w, cfgPath, affected, logger); err != nil {
+		return fmt.Errorf("purging account drives: %w", err)
+	}
+	if err := purgeOrphanedFiles(w, account, logger); err != nil {
+		return fmt.Errorf("purging orphaned files: %w", err)
+	}
+
+	removeCatalogEntriesForPurgedAccount(stored, account)
+	if err := saveCatalog(stored); err != nil {
+		return err
+	}
+
+	return writeln(w, "Sync directories untouched — your files remain on disk.")
+}
+
+func executePlainLogout(
+	cfgPath string,
+	w io.Writer,
+	stored *config.Catalog,
+	account string,
+	affected []driveid.CanonicalID,
+	logger *slog.Logger,
+) error {
+	if clearErr := clearAccountAuthScopesWithCatalog(context.Background(), stored, account, logger); clearErr != nil {
 		logger.Warn("clearing stale auth scopes during logout", "account", account, "error", clearErr)
 	}
 
@@ -134,13 +180,18 @@ func executeLogout(cfg *config.Config, cfgPath string, w io.Writer, account stri
 		return err
 	}
 
+	if err := updateCatalogAfterLogout(stored, account); err != nil {
+		return fmt.Errorf("updating catalog after logout: %w", err)
+	}
+
 	return writeln(w, "Sync directories untouched — your files remain on disk.")
 }
 
-// purgeOrphanedFiles removes state databases, drive metadata files, and
-// account profile files for the given email. Idempotent — ignores files
-// that don't exist. This handles cleanup after a prior non-purge logout
-// where config sections and tokens were removed but data files remained.
+// purgeOrphanedFiles removes state databases for the given email. Inventory and
+// cached profile metadata live in the managed catalog, so purge cleanup only
+// needs to clear retained per-drive state files. Idempotent — ignores files
+// that don't exist. This handles cleanup after a prior non-purge logout where
+// config sections and tokens were removed but state DBs remained.
 func purgeOrphanedFiles(w io.Writer, email string, logger *slog.Logger) error {
 	var errs []error
 
@@ -154,42 +205,6 @@ func purgeOrphanedFiles(w io.Writer, email string, logger *slog.Logger) error {
 			func(removedPath string) error {
 				return writef(w, "Purged orphaned state DB: %s\n", filepath.Base(removedPath))
 			},
-		); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	// Remove orphaned drive metadata files.
-	for _, path := range config.DiscoverDriveMetadataForEmail(email, logger) {
-		if err := removeOrphanedPath(
-			path,
-			logger,
-			"failed to remove orphaned drive metadata",
-			"removed orphaned drive metadata",
-			nil,
-		); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	// Remove account profile files. Discover actual profiles on disk rather
-	// than guessing drive types, so we handle any type that exists.
-	for _, profileCID := range config.DiscoverAccountProfiles(logger) {
-		if profileCID.Email() != email {
-			continue
-		}
-
-		profilePath := config.AccountFilePath(profileCID)
-		if profilePath == "" {
-			continue
-		}
-
-		if err := removeOrphanedPath(
-			profilePath,
-			logger,
-			"failed to remove account profile",
-			"removed account profile",
-			nil,
 		); err != nil {
 			errs = append(errs, err)
 		}
@@ -258,6 +273,70 @@ func canonicalIDForToken(account string, driveIDs []driveid.CanonicalID) driveid
 	}
 
 	return driveid.CanonicalID{}
+}
+
+func catalogAccountTokenCID(stored *config.Catalog, email string) driveid.CanonicalID {
+	if stored == nil || email == "" {
+		return driveid.CanonicalID{}
+	}
+
+	account, found := stored.AccountByEmail(email)
+	if !found {
+		return driveid.CanonicalID{}
+	}
+
+	cid, err := driveid.NewCanonicalID(account.CanonicalID)
+	if err != nil {
+		return driveid.CanonicalID{}
+	}
+
+	return cid
+}
+
+func updateCatalogAfterLogout(stored *config.Catalog, email string) error {
+	if stored == nil || email == "" {
+		return nil
+	}
+
+	account, found := stored.AccountByEmail(email)
+	if !found {
+		return nil
+	}
+	account.AuthRequirementReason = ""
+	stored.UpsertAccount(&account)
+	return saveCatalog(stored)
+}
+
+func removeCatalogEntriesForPurgedAccount(stored *config.Catalog, email string) {
+	if stored == nil || email == "" {
+		return
+	}
+
+	account, found := stored.AccountByEmail(email)
+	if !found {
+		return
+	}
+
+	accountCID, err := driveid.NewCanonicalID(account.CanonicalID)
+	if err == nil {
+		drives := stored.DrivesForAccount(accountCID)
+		for i := range drives {
+			drive := &drives[i]
+			driveCID, cidErr := driveid.NewCanonicalID(drive.CanonicalID)
+			if cidErr != nil {
+				continue
+			}
+			stored.DeleteDrive(driveCID)
+		}
+		stored.DeleteAccount(accountCID)
+	}
+}
+
+func saveCatalog(stored *config.Catalog) error {
+	if err := config.SaveCatalog(stored); err != nil {
+		return fmt.Errorf("writing catalog: %w", err)
+	}
+	return nil
 }
 
 // printAffectedDrives lists drives that can no longer sync after logout.

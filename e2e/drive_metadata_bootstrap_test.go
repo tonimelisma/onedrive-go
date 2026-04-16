@@ -3,7 +3,6 @@ package e2e
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -55,9 +54,10 @@ func TestEnsureTestDriveMetadata_SkipsExistingMetadata(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	data, readErr := os.ReadFile(config.DriveMetadataPath(cid))
-	require.NoError(t, readErr)
-	assert.Contains(t, string(data), "existing-drive")
+	meta, found, lookupErr := config.LookupDriveMetadata(cid)
+	require.NoError(t, lookupErr)
+	require.True(t, found)
+	assert.Equal(t, "existing-drive", meta.DriveID)
 }
 
 // Validates: R-6

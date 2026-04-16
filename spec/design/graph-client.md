@@ -300,8 +300,8 @@ Transparent token refresh on 401 inside `doOnce()`, independent of retry transpo
 Ordinary Graph `401` is intentionally **not** a sync trial or backoff signal.
 The graph boundary gets exactly one lifecycle retry: refresh the saved login
 and retry the request once. If that still fails, callers receive
-`ErrUnauthorized`. Sync treats that as a fatal `auth:account` condition for the
-current pass or watch session, and CLI surfaces present it as
+`ErrUnauthorized`. Sync treats that as a fatal catalog-owned account-auth
+condition for the current pass or watch session, and CLI surfaces present it as
 `Authentication required`.
 
 This policy is evidence-driven. The repository documents one spurious `401`
@@ -313,7 +313,7 @@ generic runtime retry or sync-trial behavior exists for that case.
 
 `Client` also exposes an optional per-instance authenticated-success hook. The
 hook fires only after a normal authenticated Graph request succeeds. CLI code
-uses this as a proof boundary to clear stale `auth:account` scope blocks after
+uses this as a proof boundary to clear stale catalog auth requirements after
 live account or drive commands succeed. Pre-authenticated upload/download URLs
 never invoke the hook, so pre-auth transport success is not mistaken for proof
 that ordinary Graph auth is healthy.

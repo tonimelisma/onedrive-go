@@ -13,7 +13,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 - Owns: Config-file schema, override resolution, path discovery, drive-section resolution, token-path resolution, and validation policy.
 - Does Not Own: OAuth exchange, Graph request behavior, sync runtime orchestration, or durable sync-store contents.
 - Source of Truth: The loaded `Config` snapshot plus derived `ResolvedDrive` values. `Holder` is the single in-process source of truth for reloadable config state.
-- Allowed Side Effects: Reading and writing config and managed metadata files through `fsroot`, plus statting arbitrary user-selected local paths through `localpath`.
+- Allowed Side Effects: Reading and writing config and managed inventory/state files through `fsroot`, plus statting arbitrary user-selected local paths through `localpath`.
 - Mutable Runtime Owner: `config.Holder` owns the current `*Config` pointer behind `Holder.mu`. The package starts no background goroutines, owns no long-lived channels, and uses no timers.
 - Error Boundary: `config` translates parse/load/validation outcomes into either fatal errors or warnings before callers act, following [error-model.md](error-model.md).
 
@@ -42,7 +42,7 @@ Platform-specific paths following XDG (Linux) and Application Support (macOS) co
 `DefaultDataDir()`. Unix socket path length is platform-bounded, so when the
 full data-dir socket path is too long the config layer derives a stable,
 hash-named runtime directory under `os.TempDir()` and places only the socket
-there. Durable state, tokens, logs, and drive metadata remain under the normal
+there. Durable state, tokens, logs, and catalog/state artifacts remain under the normal
 config/data/cache roots.
 
 `ControlSocketPath()` returns `(path, error)`, not an empty-string sentinel.
@@ -55,7 +55,7 @@ degrade when the derivation proves no daemon can exist.
 
 `config` uses two filesystem boundaries, not ad hoc `os.*` calls:
 
-- `fsroot` for repo-managed state selected by the config layer: config files, tokens, account metadata, drive metadata, state DB path discovery
+- `fsroot` for repo-managed state selected by the config layer: config files, catalog, tokens, and state DB path discovery
 - `localpath` for arbitrary local paths supplied by the user or derived from config semantics: `sync_dir` existence/type validation
 
 Config entrypoints still accept full path strings, so `managed_io.go` establishes the managed root per call via `fsroot.OpenPath` or `fsroot.Open`. This keeps the path trust boundary explicit without broad `gosec` carve-outs.
@@ -66,10 +66,9 @@ Config entrypoints still accept full path strings, so `managed_io.go` establishe
 Durable account and drive lifecycle facts are split across managed files:
 
 - `config.toml`: configured drive sections keyed by canonical drive ID
-- `token_*.json` / account file: saved login owned by the account
-- `account_*.json`: cached account profile
-- `drive_*.json`: cached drive metadata
-- `state_*.db`: retained sync state, including persisted `auth:account` scope blocks
+- `catalog.json`: durable account inventory, drive inventory, profile cache, ownership, and account-level auth requirement
+- `token_*.json`: saved login owned by the account
+- `state_*.db`: retained per-drive sync state
 
 The config file itself is durable even when it has zero drive sections. Removing
 the final configured drive or logging out the final configured account leaves
@@ -86,35 +85,36 @@ CLI account surfaces derive one lifecycle state from the durable facts above:
 | `logged_in_without_configured_drives` | usable saved login + zero configured drives |
 | `auth_required_missing_login` | known account metadata/state remains but no usable saved login exists |
 | `auth_required_invalid_saved_login` | token file exists but the saved login is invalid or unreadable |
-| `auth_required_sync_rejected` | usable saved login plus persisted sync-time `auth:account` rejection |
+| `auth_required_sync_rejected` | usable saved login plus a persisted catalog auth requirement |
 | `absent` | no durable account facts remain |
 
-### Derived Drive States
+### Derived Drive Inventory States
 
-Drive surfaces derive one lifecycle state per canonical drive ID:
+Drive surfaces derive inventory state per canonical drive ID. Authentication
+remains account-scoped; drive inventory is separate from whether its owning
+account currently has a usable saved login.
 
 | State | Durable facts |
 | --- | --- |
-| `configured_ready` | drive section exists and account auth is ready |
-| `configured_auth_required` | drive section exists and account auth is required |
-| `available_with_retained_state` | no drive section, but retained state DB still exists |
-| `available_without_retained_state` | drive is discoverable/authenticated but has no retained state DB |
-| `absent` | no configured or discoverable drive fact exists |
+| `configured` | drive section exists in `config.toml` |
+| `retained_state` | no drive section, but a retained state DB still exists |
+| `known_catalog_only` | the catalog knows the drive, but no config section or retained state DB exists |
+| `absent` | no durable drive fact exists |
 
 ### Transition Summary
 
 | Operation | Durable mutation |
 | --- | --- |
-| `login` | write saved login, write account profile, write primary-drive metadata, append primary drive section |
-| `drive add` | append one drive section; shared drive add also writes shared drive metadata |
+| `login` | write saved login, upsert account/primary-drive catalog records, append primary drive section |
+| `drive add` | append one drive section and upsert one catalog drive record |
 | `drive remove` | delete one drive section only |
-| `drive remove --purge` | delete one drive section plus drive-owned retained state and drive metadata |
+| `drive remove --purge` | delete one drive section plus drive-owned retained state; prune the catalog drive record when no longer needed |
 | `logout` | delete saved login and all configured drive sections for the selected account |
-| `logout --purge` | `logout` durable mutations plus delete retained state DBs, drive metadata, and account profiles for the selected account |
-| external token deletion | removes saved login only; account profile/state may still keep the account known |
+| `logout --purge` | `logout` durable mutations plus delete retained state DBs and purge the selected account/drives from the catalog |
+| external token deletion | removes saved login only; catalog/state may still keep the account known |
 | invalid/unreadable token file | keeps the saved-login file path but moves the derived account state to `auth_required_invalid_saved_login` |
-| persisted sync auth rejection creation | keeps other durable facts intact but moves the derived account state to `auth_required_sync_rejected` |
-| successful authenticated proof | clears persisted `auth:account` scope blocks and returns the derived account state to the matching logged-in state |
+| persisted catalog auth requirement creation | keeps other durable facts intact but moves the derived account state to `auth_required_sync_rejected` |
+| successful authenticated proof | clears the persisted catalog auth requirement and returns the derived account state to the matching logged-in state |
 
 Degraded discovery is intentionally outside this lifecycle model. It is a
 command-local discovery overlay, not a persisted account or drive state.
@@ -210,12 +210,13 @@ Default sync directories are computed deterministically from the canonical ID + 
 
 ## Token Resolution
 
-`DriveTokenPath()` determines which OAuth token file a drive uses. Shared and SharePoint drives share their account's primary token. Resolution scans configured drives to determine account type — this is business logic in `config`, not identity logic in `driveid`.
+`DriveTokenPath()` determines which OAuth token file a drive uses. Shared and SharePoint drives share their account's primary token. Resolution uses catalog ownership for shared drives and canonical account type rules for the other drive types — this is business logic in `config`, not identity logic in `driveid`.
 
 `TokenAccountCanonicalID()` is the authoritative token-owner lookup for
 runtime callers that need the owning account identity itself instead of only
 the token file path. SharePoint resolves to the business account with the same
-email. Shared drives resolve through `drive_*.json` metadata.
+email. Shared drives resolve through catalog ownership, not by scanning config
+or legacy metadata files.
 
 ## Email Reconciliation
 
@@ -225,10 +226,10 @@ Implements: R-3.7.1 [verified], R-3.7.2 [verified]
 current authenticated account type, stable Graph user GUID, and current Graph
 email, it:
 
-- finds stored personal/business account profiles with the same `UserID`
+- finds stored personal/business catalog accounts with the same `UserID`
 - computes exact old → new canonical-ID rewrites
-- renames owned managed files (`token_*`, `account_*`, `state_*`, `drive_*`)
-- rewrites shared-drive `DriveMetadata.AccountCanonicalID`
+- renames owned managed files (`token_*`, `state_*`)
+- rewrites catalog account IDs and owned drive ownership/canonical IDs
 - rewrites config section headers in place through `RenameDriveSections()`
 
 Ownership stays in `config` because the package already owns canonical-ID to
@@ -238,7 +239,7 @@ The reconciliation planner is conservative about authority:
 
 - personal/business ownership comes from the canonical-ID type
 - SharePoint ownership comes from token-owner resolution to the business account
-- shared-drive ownership comes from `drive_*.json` metadata, not by guessing
+- shared-drive ownership comes from the managed catalog, not by guessing
 
 Before any file mutation, the planner validates that every target path is free.
 Existing target paths are treated as collisions rather than being overwritten,
@@ -247,7 +248,7 @@ authorities.
 
 ## Optional Metadata Lookups
 
-Cached account and drive metadata are optional state, not exceptional control flow. `LookupAccountProfile(cid)` and `LookupDriveMetadata(cid)` both return `(*T, found bool, error)`:
+Catalog-backed account and drive metadata are optional state, not exceptional control flow. `LookupAccountProfile(cid)` and `LookupDriveMetadata(cid)` both return `(*T, found bool, error)`:
 
 - `found=false, err=nil`: no cached metadata applies to that canonical ID (missing file, wrong drive type, shared drive, or metadata intentionally absent)
 - `found=true, err=nil`: valid cached metadata loaded
@@ -299,7 +300,7 @@ successful loads with warnings map to `actionable`, and clean loads map to
 
 ## Auto-Creation
 
-`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads account profile only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`.
+`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads catalog-backed account profile data only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`.
 
 Removing a drive or logging out an account deletes the relevant drive sections
 through `DeleteDriveSection()`, but it does not delete `config.toml` itself.

@@ -102,8 +102,10 @@ func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 	_, stateErr := os.Stat(config.DriveStatePath(cid))
 	require.NoError(t, stateErr, "plain logout must preserve the state DB")
 
-	_, metaErr := os.Stat(config.DriveMetadataPath(cid))
-	require.NoError(t, metaErr, "plain logout must preserve drive metadata")
+	meta, found, metaErr := config.LookupDriveMetadata(cid)
+	require.NoError(t, metaErr, "plain logout must preserve catalog drive metadata")
+	require.True(t, found, "plain logout must preserve catalog drive metadata")
+	assert.Equal(t, "drive-123", meta.DriveID)
 
 	profile, found, profileErr := config.LookupAccountProfile(cid)
 	require.NoError(t, profileErr)

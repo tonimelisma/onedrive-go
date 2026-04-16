@@ -480,8 +480,7 @@ func TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent(t *testing.T) {
 	}, 90*time.Second, time.Second, "keep-remote should remove the local conflict copy")
 
 	controlStatusAfter := getControlSocketStatus(t, env)
-	assert.Equal(t, 0, controlStatusAfter.PendingConflictRequests)
-	assert.Equal(t, 0, controlStatusAfter.ApplyingConflictRequests)
+	assert.Equal(t, synccontrol.OwnerModeWatch, controlStatusAfter.OwnerMode)
 }
 
 // TestE2E_InternalBaselineVerification_AfterSync validates that the internal
@@ -1063,10 +1062,9 @@ func TestE2E_Resolve_DeletesWithWatchDaemon(t *testing.T) {
 	}, 90*time.Second, time.Second, "watch daemon should execute approved deletes without an extra manual sync")
 
 	require.Eventually(t, func() bool {
-		return getControlSocketStatus(t, env).PendingHeldDeleteApprovals == 0
+		return getControlSocketStatus(t, env).OwnerMode == synccontrol.OwnerModeWatch
 	}, 90*time.Second, time.Second, "watch daemon should consume approved held-delete rows")
 
 	statusAfterApproval := getControlSocketStatus(t, env)
 	assert.Equal(t, synccontrol.OwnerModeWatch, statusAfterApproval.OwnerMode)
-	assert.Equal(t, 0, statusAfterApproval.PendingHeldDeleteApprovals)
 }

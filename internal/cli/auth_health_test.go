@@ -31,6 +31,25 @@ func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
 		TimingSource: syncengine.ScopeTimingNone,
 		BlockedAt:    time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
 	}))
+
+	accountCID := cid
+	if cid.IsSharePoint() {
+		accountCID = driveid.MustCanonicalID("business:" + cid.Email())
+	}
+	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+		account := config.CatalogAccount{
+			CanonicalID:           accountCID.String(),
+			Email:                 accountCID.Email(),
+			DriveType:             accountCID.DriveType(),
+			AuthRequirementReason: authReasonSyncAuthRejected,
+		}
+		if existing, found := catalog.AccountByCanonicalID(accountCID); found {
+			account = existing
+			account.AuthRequirementReason = authReasonSyncAuthRejected
+		}
+		catalog.UpsertAccount(&account)
+		return nil
+	}))
 }
 
 // Validates: R-2.10.47

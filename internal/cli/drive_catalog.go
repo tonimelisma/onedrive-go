@@ -148,7 +148,7 @@ func discoverAvailableDrives(
 	baseURL string,
 	runtime *driveops.SessionRuntime,
 ) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
-	tokens := config.DiscoverTokens(logger)
+	tokens := catalogTokenIDs(catalog)
 	if len(tokens) == 0 {
 		return nil, nil, nil
 	}

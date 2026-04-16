@@ -18,24 +18,18 @@ func TestRemoveDriveDataFiles_BothExist(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
-	// Create both state DB and drive metadata files.
+	// Create the retained state DB.
 	statePath := config.DriveStatePath(cid)
 	require.NotEmpty(t, statePath)
 	require.NoError(t, os.WriteFile(statePath, []byte("fake-db"), 0o600))
 
-	metaPath := config.DriveMetadataPath(cid)
-	require.NotEmpty(t, metaPath)
-	require.NoError(t, os.WriteFile(metaPath, []byte(`{"drive_id":"d1"}`), 0o600))
-
 	removed, err := removeDriveDataFiles(cid, testDriveLogger(t))
 	require.NoError(t, err)
-	assert.Equal(t, 2, removed)
+	assert.Equal(t, 1, removed)
 
-	// Both files should be gone.
+	// The state DB should be gone.
 	_, statErr := os.Stat(statePath)
 	assert.True(t, os.IsNotExist(statErr), "state DB should be deleted")
-	_, metaErr := os.Stat(metaPath)
-	assert.True(t, os.IsNotExist(metaErr), "drive metadata should be deleted")
 }
 
 func TestRemoveDriveDataFiles_OnlyStateDB(t *testing.T) {
