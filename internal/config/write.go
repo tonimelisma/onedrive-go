@@ -48,7 +48,6 @@ func defaultConfigTemplate() string {
 # poll_interval = %q
 # websocket = false
 # dry_run = false
-# safety_scan_interval = %q
 
 # Logging
 # log_level = %q
@@ -64,7 +63,6 @@ func defaultConfigTemplate() string {
 		defaultCheckWorkers,
 		defaultMinFreeSpace,
 		defaultPollInterval,
-		defaultSafetyScanInterval,
 		defaultLogLevel,
 		"",
 		defaultLogFormat,

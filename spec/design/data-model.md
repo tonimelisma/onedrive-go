@@ -6,15 +6,15 @@ Implements: R-2.5.1 [verified], R-2.5.2 [verified], R-2.5.4 [verified], R-2.10.3
 
 | Behavior | Evidence |
 | --- | --- |
-| The per-drive SQLite schema remains intentionally narrow and excludes deleted manual conflict/delete-approval state. | `internal/sync/schema_migration_test.go`, `internal/sync/store_integrity_test.go`, `internal/sync/baseline_test.go` |
+| The per-drive SQLite schema remains intentionally narrow and excludes deleted manual conflict/delete-approval state. | `internal/sync/schema_test.go`, `internal/sync/store_integrity_test.go`, `internal/sync/baseline_test.go` |
 | Baseline, remote mirror, failure, and scope-block tables remain the durable sync authority surfaces. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestSyncStore_FailureAdminMutations` |
 
 ## One Database Per Drive
 
 Each configured drive owns one SQLite state DB. The DB is opened in WAL mode
-with `synchronous=FULL`, a 5-second busy timeout, and embedded goose migration
-history. The file is durable authority for restart-safe sync state; watch-mode
-runtime state is a rebuildable in-memory projection.
+with `synchronous=FULL` and a 5-second busy timeout. The file is durable
+authority for restart-safe sync state; watch-mode runtime state is a
+rebuildable in-memory projection.
 
 The current schema is intentionally narrow. It does **not** store manual
 conflict-resolution requests, held-delete approvals, embedded shared-folder
@@ -26,11 +26,11 @@ narrowed back to whole-drive or separately configured shared-root drives.
 
 | Table | Purpose | Key |
 | --- | --- | --- |
-| `baseline` | Last known synced truth for paths/items | `(drive_id, item_id)` and unique `path` |
-| `remote_state` | Latest observed remote mirror truth | `(drive_id, item_id)` |
-| `sync_failures` | Per-path retryable and actionable failures | `(path, drive_id)` |
+| `baseline` | Last known synced truth for paths/items | `item_id` and unique `path` |
+| `remote_state` | Latest observed remote mirror truth | `item_id` |
+| `sync_failures` | Per-path retryable and actionable failures | `path` |
 | `scope_blocks` | Durable scope-level blocking conditions and trial timing | `scope_key` |
-| `delta_tokens` | Remote observation cursors | `(drive_id, scope_id)` |
+| `observation_state` | Configured drive owner, primary cursor, full-reconcile cadence | singleton row |
 | `sync_metadata` | Last-run/report metadata for status and diagnostics | `key` |
 
 ## `baseline`
@@ -38,20 +38,21 @@ narrowed back to whole-drive or separately configured shared-root drives.
 `baseline` is the planner's common ancestor. Each row records the last
 successfully converged state for one item:
 
-- identity: `drive_id`, `item_id`, `parent_id`, `path`, `item_type`
+- identity: `item_id`, `parent_id`, `path`, `item_type`
 - local comparison facts: `local_hash`, `local_size`, `local_mtime`
 - remote comparison facts: `remote_hash`, `remote_size`, `remote_mtime`, `etag`
 - commit timestamp: `synced_at`
 
-The table is keyed by remote identity, not by path, so moves stay atomic
-`UPDATE`s instead of delete/reinsert churn.
+The table is keyed by item identity, not by path, so moves stay atomic
+`UPDATE`s instead of delete/reinsert churn. Because each state DB owns exactly
+one configured drive, `drive_id` is not duplicated onto every row.
 
 ## `remote_state`
 
 `remote_state` is the durable mirror of what remote observation most recently
 saw. It stores:
 
-- identity: `drive_id`, `item_id`, `parent_id`
+- identity: `item_id`, `parent_id`
 - materialized path: `path`, `previous_path`
 - remote facts: `item_type`, `hash`, `size`, `mtime`, `etag`
 - observation timestamp: `observed_at`
@@ -69,7 +70,7 @@ remote truth; planning and permission policy decide what work is admissible.
 `sync_failures` is the durable ledger for retryable and actionable per-path
 problems. Important columns:
 
-- path identity: `path`, `drive_id`, `direction`, `action_type`, `item_id`
+- path identity: `path`, `direction`, `action_type`, `item_id`
 - classification: `category`, `issue_type`, `scope_key`
 - retry metadata: `failure_count`, `next_retry_at`
 - operator/debug facts: `last_error`, `http_status`, `file_size`, `local_hash`
@@ -102,15 +103,19 @@ Current persisted scope keys are:
 
 Legacy `throttle:account` remains parseable for startup cleanup only.
 
-## `delta_tokens`
+## `observation_state`
 
-`delta_tokens` stores remote observation cursors. `scope_id=""` is the primary
-cursor for a drive-root session. Shared-root drives may also store scoped
-cursors keyed by their configured remote root item ID and scope drive ID.
+`observation_state` is the single durable owner of per-drive observation
+identity and cadence:
 
-Tokens are committed atomically with the corresponding remote observation
-writes. They describe what Graph has reported, not what the planner has acted
-on yet.
+- `configured_drive_id`: the configured drive that owns this DB
+- `cursor`: the one primary remote observation cursor for this DB
+- `updated_at`: when that cursor last changed
+- `last_full_remote_reconcile_at`: when the last successful full primary remote observation finished
+
+The cursor is committed atomically with the corresponding remote observation
+writes. The persisted full-reconcile timestamp makes the 24-hour full-remote
+reconcile rule restart-safe in both one-shot and watch mode.
 
 ## `sync_metadata`
 
@@ -118,13 +123,13 @@ on yet.
 run timing and counters used by status and diagnostics. It is explicitly
 non-authoritative for planning and observation.
 
-## Migration Discipline
+## Schema Discipline
 
-The embedded goose history is authoritative. Fresh DBs start at
-`internal/sync/migrations/00001_init.sql`, and existing DBs are trusted only
-when they already contain valid goose history. Stores with user tables but no
-migration history are rejected loudly instead of guessed forward.
+`internal/sync/schema.go` owns the full canonical schema directly. Fresh DBs
+bootstrap that schema in one transaction, seed the singleton
+`observation_state` row, and reopen against the same shape.
 
-Because the current schema no longer carries durable manual-intent tables,
-state DB compatibility is simpler than before: the DB is authoritative for
-sync truth and retry/scope state, not for queued user decisions.
+Existing DBs are trusted only when they already match the current canonical
+table and column layout. Stores with stale or incompatible user tables are
+rejected loudly with recover/reset guidance instead of being migrated or
+guessed forward.

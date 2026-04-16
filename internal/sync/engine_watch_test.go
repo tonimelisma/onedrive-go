@@ -228,7 +228,7 @@ func TestRunWatch_ScopedRootKeepsPollingOnly(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	eng.enableWebsocket = true
-	eng.rootItemID = "scoped-root"
+	eng.rootItemID = "shared-root"
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
 	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
@@ -250,15 +250,15 @@ func TestRunWatch_ScopedRootKeepsPollingOnly(t *testing.T) {
 
 	select {
 	case <-started:
-		require.FailNow(t, "wake source should not start for scoped-root watch")
+		require.FailNow(t, "wake source should not start for shared-root watch")
 	case <-time.After(100 * time.Millisecond):
 	}
 
 	cancel()
 	require.NoError(t, <-done)
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventWebsocketFallback && event.Note == "scoped_root"
-	}, "websocket scoped-root fallback")
+		return event.Type == engineDebugEventWebsocketFallback && event.Note == "shared_root"
+	}, "websocket shared-root fallback")
 }
 
 // Validates: R-2.8.3, R-6.8.9, R-6.10.10
@@ -857,6 +857,22 @@ func installTickerCreatedSignal(eng *testEngine, interval time.Duration) <-chan 
 	return tickerCreated
 }
 
+func installAfterFuncCreatedSignal(eng *testEngine, delay time.Duration) <-chan struct{} {
+	timerCreated := make(chan struct{})
+	var timerCreatedOnce atomic.Bool
+	origAfterFunc := eng.afterFunc
+	eng.afterFunc = func(nextDelay time.Duration, fn func()) syncTimer {
+		timer := origAfterFunc(nextDelay, fn)
+		if nextDelay == delay && timerCreatedOnce.CompareAndSwap(false, true) {
+			close(timerCreated)
+		}
+
+		return timer
+	}
+
+	return timerCreated
+}
+
 func waitForSignal(t *testing.T, ch <-chan struct{}, description string) {
 	t.Helper()
 
@@ -901,7 +917,13 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return watcher, nil
 	}
-	reconcileTickerCreated := installTickerCreatedSignal(eng, 15*time.Minute)
+	reconcileTimerCreated := installAfterFuncCreatedSignal(eng, 15*time.Minute)
+	saveObservationCursorForTest(t, eng.baseline, t.Context(), engineTestDriveID, "seed-token")
+	require.NoError(t, eng.baseline.MarkFullRemoteReconcile(
+		t.Context(),
+		driveid.New(engineTestDriveID),
+		clock.Now().Add(-fullRemoteReconcileInterval+15*time.Minute),
+	))
 
 	watchCtx, cancel := context.WithCancel(t.Context())
 	eng.watchRuntimeHook = func(rt *watchRuntime) {
@@ -913,9 +935,8 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- eng.RunWatch(watchCtx, SyncUploadOnly, WatchOptions{
-			PollInterval:      1 * time.Hour,
-			Debounce:          5 * time.Millisecond,
-			ReconcileInterval: 15 * time.Minute,
+			PollInterval: 1 * time.Hour,
+			Debounce:     5 * time.Millisecond,
 		})
 	}()
 
@@ -923,7 +944,7 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 	waitForSignal(t, watcher.Added(), "local watch setup did not add any watcher")
-	waitForSignal(t, reconcileTickerCreated, "reconcile ticker was not created")
+	waitForSignal(t, reconcileTimerCreated, "reconcile timer was not created")
 
 	clock.Advance(15 * time.Minute)
 	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
@@ -1001,7 +1022,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return watcher, nil
 	}
-	tickerCreated := installTickerCreatedSignal(eng, 1*time.Second)
+	tickerCreated := installTickerCreatedSignal(eng, localFullScanInterval)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -1016,7 +1037,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 		return event.Type == engineDebugEventObserverFallbackStarted
 	}, "fallback started")
 	waitForSignal(t, tickerCreated, "fallback ticker was not created")
-	clock.Advance(1 * time.Second)
+	clock.Advance(localFullScanInterval)
 	waitForSignal(t, sleepStarted, "fallback jitter sleep did not start")
 
 	cancel()

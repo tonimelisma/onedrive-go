@@ -167,7 +167,7 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigWithOptions(t, syncDir,
-		"poll_interval = \"30s\"\nsafety_scan_interval = \"30s\"\n")
+		"poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-conf-%d", time.Now().UnixNano())
@@ -222,15 +222,15 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 // a file, waits for upload, then modifies it and verifies the remote gets
 // the new content.
 //
-// Uses safety_scan_interval=30s as a fallback for missed fsnotify events,
-// and waits for "local observer starting watch" before creating files to
-// eliminate the watch setup race.
+// Uses poll_interval=30s for remote observation, and waits for
+// "local observer starting watch" before creating files to eliminate the watch
+// setup race.
 func TestE2E_SyncWatch_FileModification(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigWithOptions(t, syncDir,
-		"poll_interval = \"30s\"\nsafety_scan_interval = \"30s\"\n")
+		"poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-mod-%d", time.Now().UnixNano())
@@ -280,15 +280,15 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 // TestE2E_SyncWatch_FileDeletion starts an upload-only daemon, creates a file,
 // waits for upload, then deletes it and verifies it disappears remotely.
 //
-// Uses safety_scan_interval=30s as a fallback for missed fsnotify events, and
-// waits for "local observer starting watch" before creating files so the test
-// does not race daemon bootstrap against the first watched delete.
+// Uses poll_interval=30s for remote observation, and waits for
+// "local observer starting watch" before creating files so the test does not
+// race daemon bootstrap against the first watched delete.
 func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigWithOptions(t, syncDir,
-		"poll_interval = \"30s\"\nsafety_scan_interval = \"30s\"\n")
+		"poll_interval = \"30s\"\n")
 	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-del-%d", time.Now().UnixNano())

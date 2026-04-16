@@ -24,7 +24,6 @@ func newKnownGlobalKeys() map[string]bool {
 		"min_free_space": true,
 		// Sync settings
 		"poll_interval": true, "websocket": true, "dry_run": true,
-		"safety_scan_interval": true,
 		// Logging settings
 		"log_level": true, "log_file": true, "log_format": true, "log_retention_days": true,
 	}

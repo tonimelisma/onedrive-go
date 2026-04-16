@@ -25,9 +25,9 @@ type accountDegradedNotice struct {
 func degradedReasonText(reason string) string {
 	switch reason {
 	case driveCatalogUnavailableReason:
-		return "Live drive discovery is temporarily unavailable even though the saved login still works."
+		return "This command could not complete live drive discovery for this account."
 	case sharedDiscoveryUnavailableReason:
-		return "Live shared-item discovery is temporarily unavailable even though the saved login still works."
+		return "This command could not complete live shared-item discovery for this account."
 	default:
 		return ""
 	}
@@ -36,11 +36,15 @@ func degradedReasonText(reason string) string {
 func degradedAction(reason string) string {
 	switch reason {
 	case driveCatalogUnavailableReason:
-		return "Retry 'onedrive-go whoami' or 'onedrive-go drive list' in a few seconds. " +
-			"Direct commands against configured drives may still work."
+		return "No manual repair is required. Retry 'onedrive-go whoami' or " +
+			"'onedrive-go drive list' later; this warning clears automatically " +
+			"after a successful discovery. Configured drives and direct " +
+			"commands against known drives may still work."
 	case sharedDiscoveryUnavailableReason:
-		return "Retry 'onedrive-go shared' or 'onedrive-go drive list' in a few seconds. " +
-			"Configured drives and direct commands against known shared targets may still work."
+		return "No manual repair is required. Retry 'onedrive-go shared' or " +
+			"'onedrive-go drive list' later; this warning clears automatically " +
+			"after a successful discovery. Configured drives and direct commands " +
+			"against already-known shared targets may still work."
 	default:
 		return ""
 	}

@@ -16,6 +16,11 @@ The engine is the single-drive runtime owner. It coordinates:
 - scope lifecycle
 - watch-mode reconcile and maintenance work
 
+Watch mode uses two fixed internal cadences:
+
+- a restart-safe 24-hour full primary remote reconcile driven by `observation_state.last_full_remote_reconcile_at`
+- a fixed 5-minute recurring local full scan for watch safety and no-watcher fallback
+
 The engine does **not** own multi-drive orchestration or control-socket
 lifecycle. Those belong to `internal/multisync`.
 

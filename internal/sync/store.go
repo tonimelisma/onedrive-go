@@ -27,6 +27,7 @@ import (
 	stdsync "sync"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 
 	// Pure-Go SQLite driver (no CGO).
@@ -43,6 +44,9 @@ type SyncStore struct {
 	baselineMu stdsync.Mutex // guards baseline cache (Load is called from multiple workers)
 	logger     *slog.Logger
 	nowFunc    func() time.Time // injectable for deterministic tests
+
+	configuredDriveMu       stdsync.RWMutex
+	cachedConfiguredDriveID driveid.ID
 }
 
 // NewSyncStore opens the SQLite database at dbPath, applies the canonical

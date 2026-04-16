@@ -152,6 +152,22 @@ func TestLogoutCommand_NoAccountsConfigured(t *testing.T) {
 	assert.Contains(t, err.Error(), "no accounts configured")
 }
 
+// Validates: R-3.1.3
+func TestLogoutCommand_AutoSelectsSingleKnownAccountWithoutConfiguredDrives(t *testing.T) {
+	setTestDriveHome(t)
+
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_alice@example.com.json")
+
+	var out bytes.Buffer
+	cc := newCommandContext(&out, t.TempDir()+"/config.toml")
+
+	require.NoError(t, runLogoutWithContext(cc, false))
+
+	_, tokenErr := os.Stat(filepath.Join(config.DefaultDataDir(), "token_personal_alice@example.com.json"))
+	assert.True(t, os.IsNotExist(tokenErr), "plain logout should remove the lone saved login even without configured drives")
+	assert.Contains(t, out.String(), "Token removed for alice@example.com.")
+}
+
 // Validates: R-3.1.4
 func TestLogoutCommand_PurgeRemovesAccountProfile(t *testing.T) {
 	setTestDriveHome(t)

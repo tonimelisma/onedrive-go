@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/schema.go, internal/sync/migrations/*.sql, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_repair.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go, internal/cli/recover.go, internal/cli/recover_flow.go
+GOVERNS: internal/sync/store.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_repair.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go, internal/cli/recover.go, internal/cli/recover_flow.go
 
 Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [verified], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -8,7 +8,7 @@ Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [
 
 `SyncStore` is the sole durable owner of per-drive sync state. It owns:
 
-- schema application and migration validation
+- canonical schema application and validation
 - baseline persistence
 - remote mirror persistence
 - retry/actionable failure persistence
@@ -23,8 +23,8 @@ policy, or live watch-mode coordination. Those belong to the engine.
 
 - Owns: SQLite truth, transactions, restart-safe rows, and read-only snapshot helpers.
 - Does Not Own: Graph calls, local filesystem observation, planner decisions, or watch-loop runtime state.
-- Source of Truth: Embedded goose migrations plus the rows they define.
-- Allowed Side Effects: SQLite reads, writes, migrations, checkpoints, and read-only inspection.
+- Source of Truth: The current canonical SQLite schema plus the rows it defines.
+- Allowed Side Effects: SQLite reads, writes, schema bootstrap/validation, checkpoints, and read-only inspection.
 - Mutable Runtime Owner: `SyncStore` owns its DB handle and rebuildable in-memory baseline cache. No background goroutines.
 - Error Boundary: Store methods add SQLite/store context, but they do not invent new sync policy.
 
@@ -34,7 +34,7 @@ policy, or live watch-mode coordination. Those belong to the engine.
 | --- | --- |
 | The store remains the sole durable authority for baseline, remote mirror, failure, scope-block, and sync-metadata rows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestWriteSyncMetadata_RoundTrip`, `TestSyncStore_FailureAdminMutations` |
 | Read-only snapshot helpers back status/recovery without reopening deleted conflict/delete-approval workflows. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestQuerySyncState_UsesReadOnlyProjectionHelper` |
-| Store repair and migration behavior stay store-owned and transactional. | `TestRepairStateDB_RepairsReadableStoreInPlace`, `TestSyncStore_MigrationProviderFreshDBUpgradesToCurrent`, `TestNewSyncStore_RejectsUnversionedExistingStateDB` |
+| Store repair and schema validation stay store-owned and transactional. | `TestRepairStateDB_RepairsReadableStoreInPlace`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema` |
 
 ## Write Responsibilities
 
@@ -43,7 +43,7 @@ policy, or live watch-mode coordination. Those belong to the engine.
 `CommitObservation()` is the remote-observation boundary. It atomically:
 
 - upserts or deletes `remote_state` rows derived from observation
-- advances the matching `delta_tokens` cursor
+- advances `observation_state.cursor`
 
 Observation never writes planner state or runtime intent.
 
@@ -110,16 +110,12 @@ from SQLite instead of creating a second authority.
 
 1. prepares the managed DB path
 2. opens SQLite in WAL mode
-3. applies embedded goose migrations
+3. creates or validates the current canonical schema
 4. returns a ready store
 
-The current schema version is `1`. Old tables for durable conflict requests,
-held deletes, embedded shared-folder registries, and sync-scope snapshots were removed in
-the current architecture. New DBs therefore bootstrap directly into the
-simplified schema.
-
-Stores with missing or malformed goose history are rejected loudly. Recovery is
-the supported path when the DB cannot be trusted.
+There is no migration history in the current architecture. New DBs bootstrap
+directly into the simplified schema. Non-canonical stores are rejected loudly,
+and recovery is the supported path when the DB cannot be trusted.
 
 ## What The Store No Longer Owns
 

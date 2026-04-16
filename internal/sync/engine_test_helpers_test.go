@@ -1163,6 +1163,23 @@ func seedBaseline(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []
 	}
 
 	if deltaToken != "" {
-		require.NoError(t, mgr.CommitDeltaToken(ctx, deltaToken, engineTestDriveID, "", engineTestDriveID), "seed CommitDeltaToken")
+		require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New(engineTestDriveID), deltaToken), "seed CommitObservationCursor")
 	}
+}
+
+func saveObservationCursorForTest(t *testing.T, mgr *SyncStore, ctx context.Context, driveID string, cursor string) {
+	t.Helper()
+	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New(driveID), cursor))
+}
+
+func readObservationCursorForTest(t *testing.T, mgr *SyncStore, ctx context.Context, expectedDriveID string) string {
+	t.Helper()
+
+	state, err := mgr.ReadObservationState(ctx)
+	require.NoError(t, err)
+	if expectedDriveID != "" && (!state.ConfiguredDriveID.IsZero() || state.Cursor != "") {
+		require.Equal(t, driveid.New(expectedDriveID).String(), state.ConfiguredDriveID.String())
+	}
+
+	return state.Cursor
 }

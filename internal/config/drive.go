@@ -25,7 +25,7 @@ type ResolvedDrive struct {
 	PausedUntil string // RFC3339 timestamp; empty when not timed
 	SyncDir     string // absolute path after tilde expansion
 	DriveID     driveid.ID
-	RootItemID  string // virtual root item for folder-scoped shared drives; empty = drive root
+	RootItemID  string // configured remote root item for shared-root drives; empty = drive root
 
 	TransfersConfig
 	SafetyConfig

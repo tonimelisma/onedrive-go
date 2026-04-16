@@ -416,9 +416,9 @@ when you treat it as several file families sharing one single-drive owner.
 | `planner*.go`, `single_path.go`, `actions.go` | Pure planning: turn observed change plus baseline into deterministic actions |
 | `executor*.go`, `worker*.go`, `worker_result.go`, `dep_graph.go`, `active_scopes.go` | Execution: worker dispatch, dependency ordering, scope admission, and conflict-safe file application |
 | `engine.go`, `engine_config.go`, `engine_loop.go`, `engine_run_once.go`, `engine_watch*.go` | Runtime orchestration: main loop, one-shot run, watch lifecycle and batch reconciliation |
-| `engine_observation_*.go` | Engine-owned observation phase: session construction, validation, postprocessing, projection |
+| `engine_primary_root*.go`, `engine_observation_postprocess.go`, `engine_observation_projection.go` | Engine-owned primary-root observation: root selection, shared-root fallback, postprocessing, projection |
 | `engine_result_*.go`, `engine_results.go`, `engine_retry_trial.go` | Result classification, retry-trial decisions, and scope-level result flow |
-| `engine_primary_scope*.go`, `engine_scope_invariants.go`, `engine_scope_lifecycle.go` | Scope lifecycle: primary scope selection, mount/unmount, invariant enforcement |
+| `engine_scope_invariants.go`, `engine_scope_lifecycle.go` | Failure-scope lifecycle: mount/unmount and invariant enforcement for retry/permission scopes |
 | `engine_runtime_state.go`, `engine_runtime_types.go`, `engine_time.go`, `engine_log_fields.go`, `engine_policy_controllers.go` | Engine runtime state, time helpers, structured logging, and policy controllers |
 | `permissions.go`, `permission_capability.go`, `permission_decisions.go`, `permission_handler.go` | Capability-based permission boundaries and denied-path policy |
 | `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, scope blocking, and scope key canonicalization |
@@ -427,7 +427,7 @@ when you treat it as several file families sharing one single-drive owner.
 | `store_read_*.go`, `store_write_*.go` | Store I/O: read projections (failures, remote state, snapshots) and write operations (baseline, failures, observation, scope blocks) |
 | `summary_keys.go`, `visible_issues.go`, `issue_types.go` | Shared issue classification, summary keys, and raw read-only issue facts consumed by the CLI |
 | `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |
-| `inotify_*`, `symlink_observation.go`, `engine_scoped_root.go` | Platform or feature-specific observation/runtime helpers |
+| `inotify_*`, `symlink_observation.go`, `engine_shared_root.go` | Platform or feature-specific observation/runtime helpers |
 
 If you are debugging sync behavior, first decide which stage owns the problem:
 

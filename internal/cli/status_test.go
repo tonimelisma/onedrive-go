@@ -518,8 +518,8 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert a baseline entry.
-	_, err = db.ExecContext(ctx, `INSERT INTO baseline (path, drive_id, item_id, parent_id, item_type, synced_at)
-		VALUES ('/test.txt', 'd!123', 'item1', 'root', 'file', 0)`)
+	_, err = db.ExecContext(ctx, `INSERT INTO baseline (path, item_id, parent_id, item_type, synced_at)
+		VALUES ('/test.txt', 'item1', 'root', 'file', 1)`)
 	require.NoError(t, err)
 
 	require.NoError(t, db.Close())
@@ -548,22 +548,22 @@ func TestQuerySyncState_RemoteDriftAndIssues(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert remote_state rows with mixed drift shapes.
-	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, drive_id, item_id, parent_id, item_type, observed_at) VALUES
-		('/a.txt', 'd!1', 'i1', 'root', 'file', 1),
-		('/b.txt', 'd!1', 'i2', 'root', 'file', 1),
-		('/c.txt', 'd!1', 'i3', 'root', 'file', 1),
-		('/e.txt', 'd!1', 'i5', 'root', 'file', 1)`)
+	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, item_id, parent_id, item_type, observed_at) VALUES
+		('/a.txt', 'i1', 'root', 'file', 1),
+		('/b.txt', 'i2', 'root', 'file', 1),
+		('/c.txt', 'i3', 'root', 'file', 1),
+		('/e.txt', 'i5', 'root', 'file', 1)`)
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `INSERT INTO baseline (drive_id, item_id, path, parent_id, item_type, remote_hash, remote_mtime, synced_at) VALUES
-		('d!1', 'i1', '/a.txt', 'root', 'file', '', 0, 0),
-		('d!1', 'i4', '/d.txt', 'root', 'file', '', 0, 0)`)
+	_, err = db.ExecContext(ctx, `INSERT INTO baseline (item_id, path, parent_id, item_type, remote_hash, remote_mtime, synced_at) VALUES
+		('i1', '/a.txt', 'root', 'file', '', 0, 1),
+		('i4', '/d.txt', 'root', 'file', '', 0, 1)`)
 	require.NoError(t, err)
 
 	// Insert sync_failures rows.
-	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures (path, drive_id, direction, action_type, failure_role, category, failure_count, first_seen_at, last_seen_at) VALUES
-		('/x.txt', 'd!1', 'upload', 'upload', 'item', 'transient', 3, 0, 0),
-		('/y.txt', 'd!1', 'upload', 'upload', 'item', 'transient', 5, 0, 0),
-		('/z.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', 1, 0, 0)`)
+	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures (path, direction, action_type, failure_role, category, failure_count, first_seen_at, last_seen_at) VALUES
+		('/x.txt', 'upload', 'upload', 'item', 'transient', 3, 0, 0),
+		('/y.txt', 'upload', 'upload', 'item', 'transient', 5, 0, 0),
+		('/z.txt', 'upload', 'upload', 'item', 'actionable', 1, 0, 0)`)
 	require.NoError(t, err)
 
 	require.NoError(t, db.Close())
@@ -592,11 +592,11 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 	ctx := t.Context()
 
 	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures
-		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
+		(path, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
 		VALUES
-		('/blocked/a.txt', 'd!1', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote-write:Shared/Docs', 1, 0, 0),
-		('/blocked/b.txt', 'd!1', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote-write:Shared/Docs', 1, 0, 0),
-		('/actionable.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', 'invalid_filename', '', 1, 0, 0)`)
+		('/blocked/a.txt', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote-write:Shared/Docs', 1, 0, 0),
+		('/blocked/b.txt', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote-write:Shared/Docs', 1, 0, 0),
+		('/actionable.txt', 'upload', 'upload', 'item', 'actionable', 'invalid_filename', '', 1, 0, 0)`)
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `INSERT INTO scope_blocks
@@ -620,8 +620,8 @@ func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO baseline
-		(path, drive_id, item_id, parent_id, item_type, synced_at)
-		VALUES ('/tracked.txt', 'd!1', 'item-1', 'root', 'file', 1)`)
+		(path, item_id, parent_id, item_type, synced_at)
+		VALUES ('/tracked.txt', 'item-1', 'root', 'file', 1)`)
 	require.NoError(t, err)
 
 	walPath := dbPath + "-wal"
@@ -664,11 +664,11 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 	ctx := t.Context()
 
 	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures
-		(path, drive_id, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
+		(path, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
 		VALUES
-		('/invalid:name.txt', 'd!1', 'upload', 'upload', 'item', 'actionable', ?, '', 1, 0, 0),
-		('/blocked/a.txt', 'd!1', 'upload', 'upload', 'held', 'transient', ?, ?, 1, 0, 0),
-		('/blocked/b.txt', 'd!1', 'upload', 'upload', 'held', 'transient', ?, ?, 1, 0, 0)`,
+		('/invalid:name.txt', 'upload', 'upload', 'item', 'actionable', ?, '', 1, 0, 0),
+		('/blocked/a.txt', 'upload', 'upload', 'held', 'transient', ?, ?, 1, 0, 0),
+		('/blocked/b.txt', 'upload', 'upload', 'held', 'transient', ?, ?, 1, 0, 0)`,
 		syncengine.IssueInvalidFilename,
 		syncengine.IssueSharedFolderBlocked, syncengine.SKPermRemote("Shared/Team Docs").String(),
 		syncengine.IssueSharedFolderBlocked, syncengine.SKPermRemote("Shared/Team Docs").String(),
@@ -1285,74 +1285,7 @@ func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
 func createTestStateDB(t *testing.T, dbPath string) {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", "file:"+dbPath)
+	store, err := syncengine.NewSyncStore(t.Context(), dbPath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	defer db.Close()
-
-	_, err = db.ExecContext(t.Context(), statusTestStateSchema)
-	require.NoError(t, err)
+	require.NoError(t, store.Close(t.Context()))
 }
-
-const statusTestStateSchema = `
-		CREATE TABLE IF NOT EXISTS baseline (
-			path TEXT PRIMARY KEY,
-			drive_id TEXT NOT NULL,
-			item_id TEXT NOT NULL,
-			parent_id TEXT NOT NULL,
-			item_type TEXT NOT NULL,
-			size INTEGER,
-			remote_hash TEXT,
-			local_hash TEXT,
-			mtime INTEGER,
-			remote_mtime INTEGER,
-			synced_at INTEGER NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS sync_metadata (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS remote_state (
-			drive_id TEXT NOT NULL,
-			item_id TEXT NOT NULL,
-			path TEXT NOT NULL,
-			parent_id TEXT NOT NULL,
-			item_type TEXT NOT NULL,
-			size INTEGER,
-			hash TEXT,
-			mtime INTEGER,
-			etag TEXT,
-			previous_path TEXT,
-			observed_at INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (drive_id, item_id)
-		);
-		CREATE TABLE IF NOT EXISTS sync_failures (
-			path TEXT NOT NULL,
-			drive_id TEXT NOT NULL,
-			direction TEXT NOT NULL CHECK(direction IN ('download', 'upload', 'delete')),
-			action_type TEXT NOT NULL CHECK(action_type IN ('download', 'upload', 'local_delete', 'remote_delete', 'local_move', 'remote_move', 'folder_create', 'conflict', 'update_synced', 'cleanup')),
-			failure_role TEXT NOT NULL DEFAULT 'item' CHECK(failure_role IN ('item', 'held', 'boundary')),
-			category TEXT NOT NULL CHECK(category IN ('transient', 'actionable')),
-			issue_type TEXT,
-			item_id TEXT,
-			failure_count INTEGER NOT NULL DEFAULT 0,
-			next_retry_at INTEGER,
-			last_error TEXT,
-			http_status INTEGER,
-			first_seen_at INTEGER NOT NULL,
-			last_seen_at INTEGER NOT NULL,
-			file_size INTEGER,
-			local_hash TEXT,
-			scope_key TEXT,
-			PRIMARY KEY (path, drive_id)
-		);
-		CREATE TABLE IF NOT EXISTS scope_blocks (
-			scope_key TEXT PRIMARY KEY,
-			issue_type TEXT NOT NULL,
-			timing_source TEXT NOT NULL,
-			blocked_at INTEGER NOT NULL,
-			trial_interval INTEGER NOT NULL,
-			next_trial_at INTEGER NOT NULL,
-			preserve_until INTEGER NOT NULL,
-			trial_count INTEGER NOT NULL
-		);
-	`

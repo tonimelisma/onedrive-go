@@ -23,11 +23,10 @@ type Inspector struct {
 // "not fully converged yet"; exact local-only drift still requires a live scan.
 const sqlCountRemoteDriftItems = `
 SELECT COUNT(*) FROM (
-	SELECT rs.drive_id, rs.item_id
+	SELECT rs.item_id
 	FROM remote_state rs
 	LEFT JOIN baseline b
-	  ON b.drive_id = rs.drive_id
-	 AND b.item_id = rs.item_id
+	  ON b.item_id = rs.item_id
 	WHERE (
 		b.item_id IS NULL OR
 		b.path <> rs.path OR
@@ -36,11 +35,10 @@ SELECT COUNT(*) FROM (
 		COALESCE(b.remote_mtime, 0) <> COALESCE(rs.mtime, 0)
 	  )
 	UNION
-	SELECT b.drive_id, b.item_id
+	SELECT b.item_id
 	FROM baseline b
 	LEFT JOIN remote_state rs
-	  ON rs.drive_id = b.drive_id
-	 AND rs.item_id = b.item_id
+	  ON rs.item_id = b.item_id
 	WHERE rs.item_id IS NULL
 ) remote_drift`
 
@@ -539,6 +537,11 @@ func sortIssueGroups(groups []IssueGroupSnapshot) {
 }
 
 func (i *Inspector) listActionableFailures(ctx context.Context) ([]SyncFailureRow, error) {
+	configuredDriveID, err := configuredDriveIDForDB(ctx, i.db)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE category = 'actionable'
@@ -552,10 +555,15 @@ func (i *Inspector) listActionableFailures(ctx context.Context) ([]SyncFailureRo
 	}
 	defer rows.Close()
 
-	return scanSyncFailureRows(rows)
+	return scanSyncFailureRows(rows, configuredDriveID)
 }
 
 func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailureRow, error) {
+	configuredDriveID, err := configuredDriveIDForDB(ctx, i.db)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE failure_role = ?
@@ -571,7 +579,7 @@ func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailur
 	}
 	defer rows.Close()
 
-	return scanSyncFailureRows(rows)
+	return scanSyncFailureRows(rows, configuredDriveID)
 }
 
 func (i *Inspector) listScopeBlocks(ctx context.Context) ([]*ScopeBlock, error) {

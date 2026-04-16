@@ -24,23 +24,88 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
-func TestUniqueAccounts(t *testing.T) {
-	cfg := &config.Config{
-		Drives: map[driveid.CanonicalID]config.Drive{
-			driveid.MustCanonicalID("personal:alice@example.com"):   {},
-			driveid.MustCanonicalID("business:alice@example.com"):   {},
-			driveid.MustCanonicalID("personal:bob@example.com"):     {},
-			driveid.MustCanonicalID("business:charlie@example.com"): {},
+func TestAccountLifecycle(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry accountCatalogEntry
+		want  accountLifecycleView
+	}{
+		{
+			name: "configured usable login",
+			entry: accountCatalogEntry{
+				Email:           "ready@example.com",
+				Configured:      true,
+				SavedLoginState: savedLoginStateUsable,
+			},
+			want: accountLifecycleView{
+				State:               accountLifecycleLoggedInWithConfigured,
+				Known:               true,
+				HasUsableSavedLogin: true,
+				HasConfiguredDrives: true,
+				SelectableForLogout: true,
+				SelectableForPurge:  true,
+			},
+		},
+		{
+			name: "usable login without configured drives",
+			entry: accountCatalogEntry{
+				Email:           "discovered@example.com",
+				SavedLoginState: savedLoginStateUsable,
+			},
+			want: accountLifecycleView{
+				State:               accountLifecycleLoggedInWithoutConfigured,
+				Known:               true,
+				HasUsableSavedLogin: true,
+				SelectableForLogout: true,
+				SelectableForPurge:  true,
+			},
+		},
+		{
+			name: "missing login",
+			entry: accountCatalogEntry{
+				Email:           "missing@example.com",
+				SavedLoginState: savedLoginStateMissing,
+			},
+			want: accountLifecycleView{
+				State:              accountLifecycleAuthRequiredMissingLogin,
+				Known:              true,
+				SelectableForPurge: true,
+			},
+		},
+		{
+			name: "invalid login",
+			entry: accountCatalogEntry{
+				Email:           "invalid@example.com",
+				SavedLoginState: savedLoginStateInvalid,
+			},
+			want: accountLifecycleView{
+				State:              accountLifecycleAuthRequiredInvalidLogin,
+				Known:              true,
+				SelectableForPurge: true,
+			},
+		},
+		{
+			name: "persisted auth rejection",
+			entry: accountCatalogEntry{
+				Email:                 "rejected@example.com",
+				SavedLoginState:       savedLoginStateUsable,
+				HasPersistedAuthScope: true,
+			},
+			want: accountLifecycleView{
+				State:               accountLifecycleAuthRequiredSyncRejected,
+				Known:               true,
+				HasUsableSavedLogin: true,
+				SelectableForLogout: true,
+				SelectableForPurge:  true,
+			},
 		},
 	}
 
-	accounts := uniqueAccounts(cfg)
-
-	// Should have 3 unique emails (alice appears twice but only counted once).
-	assert.Len(t, accounts, 3)
-	assert.Contains(t, accounts, "alice@example.com")
-	assert.Contains(t, accounts, "bob@example.com")
-	assert.Contains(t, accounts, "charlie@example.com")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, accountLifecycle(&tt.entry))
+		})
+	}
 }
 
 func TestCanonicalIDForToken(t *testing.T) {
@@ -442,9 +507,7 @@ func TestOpenBrowser_CommandStartFailure(t *testing.T) {
 }
 
 // Validates: R-3.1.4
-func TestResolveLogoutAccount_FallbackToProfiles(t *testing.T) {
-	// When config is empty but orphaned account profiles exist, --purge should
-	// auto-select the single orphan.
+func TestResolveLogoutAccount_PurgeAutoSelectsSingleKnownAccountWithoutSavedLogin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -460,15 +523,13 @@ func TestResolveLogoutAccount_FallbackToProfiles(t *testing.T) {
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
 
-	// With purge=true, should auto-select the single orphaned account.
 	email, err := resolveLogoutAccount(cfg, "", true, logger)
 	require.NoError(t, err)
 	assert.Equal(t, "alice@outlook.com", email)
 }
 
-// Validates: R-3.1.4
-func TestResolveLogoutAccount_NoPurgeShowsOrphans(t *testing.T) {
-	// Without --purge, should show an error listing orphaned accounts.
+// Validates: R-3.1.3
+func TestResolveLogoutAccount_PlainLogoutRequiresUsableSavedLogin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -485,8 +546,41 @@ func TestResolveLogoutAccount_NoPurgeShowsOrphans(t *testing.T) {
 
 	_, err := resolveLogoutAccount(cfg, "", false, logger)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "orphaned data remains for")
+	assert.Contains(t, err.Error(), "no accounts with saved logins are available for plain logout")
 	assert.Contains(t, err.Error(), "alice@outlook.com")
+}
+
+// Validates: R-3.1.3
+func TestResolveLogoutAccount_AutoSelectsSingleKnownAccountWithUsableSavedLogin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_alice@outlook.com.json")
+
+	cfg := config.DefaultConfig()
+	logger := slog.Default()
+
+	email, err := resolveLogoutAccount(cfg, "", false, logger)
+	require.NoError(t, err)
+	assert.Equal(t, "alice@outlook.com", email)
+}
+
+// Validates: R-3.1.3
+func TestResolveLogoutAccount_MultipleUsableSavedLoginsRequireAccount(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_alice@outlook.com.json")
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_bob@contoso.com.json")
+
+	cfg := config.DefaultConfig()
+	logger := slog.Default()
+
+	_, err := resolveLogoutAccount(cfg, "", false, logger)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multiple accounts with saved logins")
+	assert.Contains(t, err.Error(), "alice@outlook.com")
+	assert.Contains(t, err.Error(), "bob@contoso.com")
 }
 
 // Validates: R-3.1.5

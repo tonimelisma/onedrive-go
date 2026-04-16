@@ -127,7 +127,7 @@ hashes are absent.
 
 ## Delta Queries (`delta.go`)
 
-Paginated delta with normalization pipeline. Returns `[]Item` (clean, normalized). HTTP 410 → `ErrGone` sentinel, caller triggers full re-enumeration. Supports folder-scoped delta for shared folders.
+Paginated delta with normalization pipeline. Returns `[]Item` (clean, normalized). HTTP 410 → `ErrGone` sentinel, caller triggers full re-enumeration. Supports shared-root delta for separately configured shared folders.
 
 The client owns its safety guards and Graph-specific request metadata:
 

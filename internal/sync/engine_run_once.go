@@ -37,11 +37,17 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		return nil, err
 	}
 
+	fullReconcile, err := e.shouldRunFullRemoteReconcile(ctx, opts.FullReconcile)
+	if err != nil {
+		return nil, err
+	}
+	opts.FullReconcile = fullReconcile
+
 	// Steps 2-4: Observe remote + local, buffer, and flush.
 	// The pending delta token is returned but NOT committed yet — it is
 	// deferred until after the planner approves the changes (step 6).
 	observeStart := e.nowFunc()
-	changes, pendingDeltaTokens, err := runner.observeChanges(ctx, nil, bl, mode, opts.DryRun, opts.FullReconcile)
+	changes, pendingDeltaTokens, err := runner.observeChanges(ctx, nil, bl, opts.DryRun, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -53,6 +59,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 
 	// Step 5: Early return if no changes.
 	if len(changes) == 0 {
+		if commitErr := runner.commitDeferredDeltaTokens(ctx, pendingDeltaTokens); commitErr != nil {
+			return nil, commitErr
+		}
 		return e.completeRunOnceWithoutChanges(ctx, start, mode, opts), nil
 	}
 
@@ -356,10 +365,11 @@ func buildReportFromCounts(
 // retries with an empty token if ErrDeltaExpired is returned (full resync).
 func (flow *engineFlow) observeRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
 	eng := flow.engine
-	savedToken, err := eng.baseline.GetDeltaToken(ctx, eng.driveID.String(), "")
+	state, err := eng.baseline.ReadObservationState(ctx)
 	if err != nil {
-		return nil, "", fmt.Errorf("sync: getting delta token: %w", err)
+		return nil, "", fmt.Errorf("sync: reading observation state: %w", err)
 	}
+	savedToken := state.Cursor
 
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 
@@ -418,21 +428,15 @@ func (flow *engineFlow) observeChanges(
 	ctx context.Context,
 	watch *watchRuntime,
 	bl *Baseline,
-	mode Mode,
 	dryRun, fullReconcile bool,
 ) ([]PathChanges, []deferredDeltaToken, error) {
-	observationSession, observationPlan, err := flow.prepareObservationSession(ctx, mode, fullReconcile)
-	if err != nil {
-		return nil, nil, err
-	}
-
+	plan := flow.buildPrimaryRootObservationPlan(fullReconcile)
 	remoteEvents, pendingDeltaTokens, err := flow.observeRemoteChanges(
-		ctx, bl, dryRun, &observationSession, &observationPlan, fullReconcile,
+		ctx, bl, dryRun, plan,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
-	observationPlan.Reentry.Pending = false
 
 	finalRemoteEvents := flow.processCommittedPrimaryBatch(
 		ctx,
@@ -443,11 +447,6 @@ func (flow *engineFlow) observeChanges(
 	)
 
 	localResult, err := flow.observeLocalChanges(ctx, watch, bl)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	err = flow.applyObservationState(ctx, dryRun, &observationSession, &observationPlan)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -464,56 +463,18 @@ func (flow *engineFlow) observeChanges(
 	return buf.FlushImmediate(), pendingDeltaTokens, nil
 }
 
-func (flow *engineFlow) prepareObservationSession(
-	ctx context.Context,
-	mode Mode,
-	fullReconcile bool,
-) (ObservationSession, ObservationSessionPlan, error) {
-	observationSession, err := flow.BuildObservationSession(ctx)
-	if err != nil {
-		return ObservationSession{}, ObservationSessionPlan{}, err
-	}
-
-	observationPlan, err := flow.BuildObservationSessionPlan(ctx, ObservationPlanRequest{
-		Session:       &observationSession,
-		SyncMode:      mode,
-		FullReconcile: fullReconcile,
-		Purpose:       observationPlanPurposeOneShot,
-	})
-	if err != nil {
-		return ObservationSession{}, ObservationSessionPlan{}, err
-	}
-
-	return observationSession, observationPlan, nil
-}
-
 func (flow *engineFlow) observeRemoteChanges(
 	ctx context.Context,
 	bl *Baseline,
 	dryRun bool,
-	observationSession *ObservationSession,
-	observationPlan *ObservationSessionPlan,
-	fullReconcile bool,
+	plan primaryRootObservationPlan,
 ) ([]ChangeEvent, []deferredDeltaToken, error) {
-	effectiveFullReconcile := effectivePrimaryFullReconcile(fullReconcile, observationPlan)
-	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, observationPlan, effectiveFullReconcile)
+	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, plan)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if observationPlan.Reentry.Pending {
-		reentryResult, err := flow.reconcilePrimaryScopeEntries(ctx, bl, observationPlan.Reentry.Paths, fetchResult.fullPrefixes)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		fetchResult.events = append(fetchResult.events, reentryResult.events...)
-		fetchResult.deferred = append(fetchResult.deferred, reentryResult.deferred...)
-	}
-
-	// Dry-run previews must never advance remote observation cursors, regardless
-	// of whether the events came from root delta, scoped-root delta, scoped
-	// targets, or targeted re-entry reconciliation.
+	// Dry-run previews must never advance remote observation cursors.
 	if dryRun {
 		fetchResult.deferred = nil
 	}
@@ -527,17 +488,15 @@ func (flow *engineFlow) observeRemoteChanges(
 		return nil, nil, err
 	}
 
-	_ = observationSession
 	return projectedRemote.emitted, fetchResult.deferred, nil
 }
 
 func (flow *engineFlow) fetchRemoteChanges(
 	ctx context.Context,
 	bl *Baseline,
-	observationPlan *ObservationSessionPlan,
-	fullReconcile bool,
+	plan primaryRootObservationPlan,
 ) (remoteFetchResult, error) {
-	return flow.executeObservationPhase(ctx, bl, observationPlan.PrimaryPhase, fullReconcile)
+	return flow.executePrimaryRootObservation(ctx, bl, plan)
 }
 
 func (flow *engineFlow) commitObservedRemoteChanges(
@@ -593,16 +552,15 @@ func (flow *engineFlow) synthesizeRemoteMirrorDrift(
 		return nil, fmt.Errorf("sync: listing remote mirror state: %w", err)
 	}
 
-	seenRemote := make(map[driveid.ItemKey]struct{}, len(rows))
+	seenRemote := make(map[string]struct{}, len(rows))
 	events := make([]ChangeEvent, 0, len(rows))
 
 	for i := range rows {
 		row := &rows[i]
 
-		key := driveid.NewItemKey(row.DriveID, row.ItemID)
-		seenRemote[key] = struct{}{}
+		seenRemote[row.ItemID] = struct{}{}
 
-		entry, found := bl.GetByID(key)
+		entry, found := bl.GetByID(row.ItemID)
 		if found && !remoteMirrorDiffers(entry, row) {
 			continue
 		}
@@ -634,8 +592,7 @@ func (flow *engineFlow) synthesizeRemoteMirrorDrift(
 			return
 		}
 
-		key := driveid.NewItemKey(entry.DriveID, entry.ItemID)
-		if _, ok := seenRemote[key]; ok {
+		if _, ok := seenRemote[entry.ItemID]; ok {
 			return
 		}
 
@@ -731,10 +688,21 @@ func (flow *engineFlow) commitDeferredDeltaTokens(ctx context.Context, tokens []
 			continue
 		}
 
-		if err := flow.engine.baseline.CommitDeltaToken(
-			ctx, tokens[i].token, tokens[i].driveID, tokens[i].scopeID, tokens[i].scopeDrive,
+		if err := flow.engine.baseline.CommitObservationCursor(
+			ctx,
+			driveid.New(tokens[i].driveID),
+			tokens[i].token,
 		); err != nil {
-			return fmt.Errorf("sync: committing deferred delta token for scope %q: %w", tokens[i].scopeID, err)
+			return fmt.Errorf("sync: committing deferred delta token for root %q: %w", tokens[i].rootID, err)
+		}
+		if tokens[i].markFullRemoteReconcile {
+			if err := flow.engine.baseline.MarkFullRemoteReconcile(
+				ctx,
+				driveid.New(tokens[i].driveID),
+				flow.engine.nowFunc(),
+			); err != nil {
+				return fmt.Errorf("sync: marking full remote reconcile for root %q: %w", tokens[i].rootID, err)
+			}
 		}
 	}
 
@@ -757,14 +725,13 @@ func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]
 	}
 
 	// Build seen set from all non-deleted events in the full enumeration.
-	seen := make(map[driveid.ItemKey]struct{}, len(events))
+	seen := make(map[string]struct{}, len(events))
 	for i := range events {
 		if events[i].IsDeleted {
 			continue
 		}
 
-		key := driveid.NewItemKey(events[i].DriveID, events[i].ItemID)
-		seen[key] = struct{}{}
+		seen[events[i].ItemID] = struct{}{}
 	}
 
 	// Detect orphans: baseline entries whose ItemID is not in the seen set.

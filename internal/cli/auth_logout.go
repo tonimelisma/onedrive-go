@@ -7,104 +7,61 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
-	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-// resolveLogoutAccount determines the account email for logout. Uses the
-// account flag if provided, otherwise auto-selects when there is exactly one
-// account. When config is empty (prior logout removed config sections), falls
-// back to discovering orphaned account profiles on disk.
+// resolveLogoutAccount determines the account email for logout from the
+// durable offline account catalog. Plain logout auto-selects only when exactly
+// one known account still has a usable saved login. Purge-only cleanup may
+// auto-select a single known account even when its saved login is already gone.
 func resolveLogoutAccount(cfg *config.Config, accountFlag string, purge bool, logger *slog.Logger) (string, error) {
 	if accountFlag != "" {
 		return accountFlag, nil
 	}
 
-	// Collect unique account emails from configured drives.
-	accounts := uniqueAccounts(cfg)
-
-	if len(accounts) == 1 {
-		return accounts[0], nil
-	}
-
-	if len(accounts) > 1 {
-		return "", fmt.Errorf(
-			"multiple accounts configured — specify with --account:\n  %s",
-			strings.Join(accounts, "\n  "),
-		)
-	}
-
-	// No accounts in config — check for orphaned account profiles (logged out
-	// but not purged). This enables `logout --purge` after a prior `logout`.
-	orphanEmails := discoverOrphanedEmails(logger)
-
-	if len(orphanEmails) == 0 {
+	catalog := buildAccountCatalog(context.Background(), cfg, logger)
+	known := knownAccountCatalogEntries(catalog)
+	if len(known) == 0 {
 		return "", fmt.Errorf("no accounts configured — nothing to log out")
 	}
 
-	if !purge {
+	selectable := logoutSelectableAccountEntries(catalog)
+	if len(selectable) == 1 {
+		return selectable[0].Email, nil
+	}
+
+	if len(selectable) > 1 {
 		return "", fmt.Errorf(
-			"no accounts configured, but orphaned data remains for:\n  %s\n"+
-				"run 'onedrive-go logout --purge --account <email>' to remove",
-			strings.Join(orphanEmails, "\n  "),
+			"multiple accounts with saved logins — specify with --account:\n  %s",
+			joinCatalogEmails(selectable),
 		)
 	}
 
-	if len(orphanEmails) == 1 {
-		return orphanEmails[0], nil
+	if purge && len(known) == 1 {
+		return known[0].Email, nil
 	}
 
 	return "", fmt.Errorf(
-		"multiple orphaned accounts — specify with --account:\n  %s",
-		strings.Join(orphanEmails, "\n  "),
+		"no accounts with saved logins are available for plain logout.\n"+
+			"Retained data remains for:\n  %s\n"+
+			"Run 'onedrive-go logout --purge --account <email>' to remove retained state",
+		joinCatalogEmails(known),
 	)
 }
 
-// discoverOrphanedEmails returns unique emails from account profiles on disk
-// that lack a token file. Used by resolveLogoutAccount to find accounts that
-// were logged out but not purged.
-func discoverOrphanedEmails(logger *slog.Logger) []string {
-	profiles := config.DiscoverAccountProfiles(logger)
-
-	seen := make(map[string]bool)
-	var emails []string
-
-	for _, cid := range profiles {
-		email := cid.Email()
-		if seen[email] {
-			continue
+func joinCatalogEmails(entries []accountCatalogEntry) string {
+	result := ""
+	for i := range entries {
+		if i > 0 {
+			result += "\n  "
 		}
-
-		// Check if token still exists — if so, not orphaned.
-		tokenPath := config.DriveTokenPath(cid)
-		if tokenPath != "" && managedPathExists(tokenPath) {
-			continue
-		}
-
-		seen[email] = true
-		emails = append(emails, email)
+		result += entries[i].Email
 	}
 
-	return emails
-}
-
-// uniqueAccounts extracts unique account emails from all configured drives.
-func uniqueAccounts(cfg *config.Config) []string {
-	seen := make(map[string]bool)
-	var accounts []string
-
-	for id := range cfg.Drives {
-		email := id.Email()
-		if !seen[email] {
-			seen[email] = true
-			accounts = append(accounts, email)
-		}
-	}
-
-	return accounts
+	return result
 }
 
 // executeLogout performs the actual logout: finds affected drives, deletes
@@ -134,7 +91,11 @@ func executeLogout(cfg *config.Config, cfgPath string, w io.Writer, account stri
 			return err
 		}
 	} else if !purge {
-		return fmt.Errorf("cannot determine token path for account %q", account)
+		return fmt.Errorf(
+			"no saved login was found for %s — run 'onedrive-go logout --purge --account %s' to remove retained state",
+			account,
+			account,
+		)
 	} else {
 		// Purge after prior logout — token already gone, that's fine.
 		if err := writef(w, "Token already removed for %s.\n", account); err != nil {

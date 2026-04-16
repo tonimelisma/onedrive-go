@@ -8,14 +8,13 @@ import (
 // of the four-layer override chain and are chosen to be safe, reasonable
 // starting points that work for most users without any config file.
 const (
-	defaultTransferWorkers    = 8
-	defaultCheckWorkers       = 4
-	defaultMinFreeSpace       = "1GB"
-	defaultPollInterval       = "5m"
-	defaultSafetyScanInterval = "5m"
-	defaultLogLevel           = "info"
-	defaultLogFormat          = "auto"
-	defaultLogRetentionDays   = 30
+	defaultTransferWorkers  = 8
+	defaultCheckWorkers     = 4
+	defaultMinFreeSpace     = "1GB"
+	defaultPollInterval     = "5m"
+	defaultLogLevel         = "info"
+	defaultLogFormat        = "auto"
+	defaultLogRetentionDays = 30
 )
 
 // DefaultConfig returns a Config populated with all default values.
@@ -46,9 +45,8 @@ func defaultSafetyConfig() SafetyConfig {
 
 func defaultSyncConfig() SyncConfig {
 	return SyncConfig{
-		PollInterval:       defaultPollInterval,
-		Websocket:          false,
-		SafetyScanInterval: defaultSafetyScanInterval,
+		PollInterval: defaultPollInterval,
+		Websocket:    false,
 	}
 }
 

@@ -54,13 +54,13 @@ Important properties:
 The product now has two observation shapes:
 
 - drive-root observation for ordinary drives
-- scoped-root observation for separately configured shared-root drives
+- shared-root observation for separately configured shared-root drives
 
 There is no nested shared-folder-following runtime inside another synced drive.
 If a normal drive's delta stream contains an embedded shared-folder link item,
 observation ignores it.
 
-For shared-root drives, observation may use folder-scoped delta or recursive
+For shared-root drives, observation may use shared-root delta or recursive
 enumeration depending on drive type and Graph support.
 
 ## Item Conversion
@@ -76,7 +76,7 @@ It owns:
 - malformed sparse-item rejection
 - remote-root metadata propagation for configured shared-root drives
 
-`ChangeEvent.TargetRootItemID` carries the configured remote root for scoped
+`ChangeEvent.TargetRootItemID` carries the configured remote root for shared-root
 drives so later planning and execution can derive the correct target root.
 
 ## Local Observation

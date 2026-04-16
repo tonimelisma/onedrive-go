@@ -105,7 +105,7 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 	)
 
 	var events []ChangeEvent
-	inflight := make(map[driveid.ItemKey]InflightParent)
+	inflight := make(map[string]InflightParent)
 	token := savedToken
 	lastProgressLog := time.Now()
 
@@ -447,7 +447,7 @@ func TimeSleep(ctx context.Context, d time.Duration) error {
 // inflight map so that pass 2 can correctly classify vault descendants even
 // when the child appears before its vault parent in the response.
 func (o *RemoteObserver) fetchPage(
-	ctx context.Context, token string, page int, inflight map[driveid.ItemKey]InflightParent,
+	ctx context.Context, token string, page int, inflight map[string]InflightParent,
 ) ([]ChangeEvent, string, bool, error) {
 	dp, err := o.fetcher.Delta(ctx, o.driveID, token)
 	if err != nil {

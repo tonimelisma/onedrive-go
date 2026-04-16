@@ -10,6 +10,8 @@ Authentication, account management, drive types, and shared drive support.
 - R-3.1.4: When `--purge` is passed with logout, the system shall also delete state databases, account profiles, and drive metadata. `--purge` shall work after a prior non-purge logout. [verified]
 - R-3.1.5: When the user runs `whoami`, the system shall display authenticated account information plus any accounts requiring authentication. The auth-required set may come from orphaned account profiles with no saved login, invalid saved-login files on disk, or persisted sync-time `auth:account` rejection. Each auth-required entry shall include the account identity, drive type, and retained state-database count when known. If authenticated live discovery degrades after `/me` succeeds but `/me/drives` still exhausts its transient retry budget, the command shall keep the authenticated account visible and report that separately from auth-required state. [verified]
 - R-3.1.6: When `--json` is passed, `whoami` shall output structured JSON with user info, drives, `accounts_requiring_auth`, and `accounts_degraded`. [verified]
+- R-3.1.7: When `logout` runs without `--account`, account auto-selection shall use the durable offline account catalog rather than only configured drives. Plain `logout` shall auto-select only when exactly one known account has a usable saved login. When multiple accounts have usable saved logins, `--account` is required. When no known account has a usable saved login, plain `logout` shall not auto-select an account. [verified]
+- R-3.1.8: Degraded discovery is a command-local overlay, not a durable account state. It shall not be persisted to config, metadata, or state DBs, and it shall clear automatically on a later successful discovery command. [verified]
 
 ## R-3.2 Drive Types [verified]
 
@@ -52,7 +54,9 @@ The system shall support all four drive types:
   account remains logged in), the state database is preserved (so a future
   `drive add` avoids a full re-sync), and the sync directory is preserved (the
   user's files remain on disk). After removal, the drive appears as "available"
-  in `drive list` and can be re-added with `drive add`. [verified]
+  in `drive list` and can be re-added with `drive add`. Removing the final
+  configured drive leaves `config.toml` in place with zero drive sections.
+  [verified]
 - R-3.3.8: When `--purge` is passed to `drive remove`, the system shall also
   delete the state database. This works both for configured drives (removing
   config section and state database) and for available drives that retain a

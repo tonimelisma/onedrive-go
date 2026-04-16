@@ -47,7 +47,7 @@ func (flow *engineFlow) processCommittedPrimaryBatch(
 	return append([]ChangeEvent(nil), primaryEvents...)
 }
 
-func (rt *watchRuntime) processCommittedScopedWatchBatch(
+func (rt *watchRuntime) processCommittedSharedRootWatchBatch(
 	ctx context.Context,
 	bl *Baseline,
 	result remoteFetchResult,
@@ -56,13 +56,13 @@ func (rt *watchRuntime) processCommittedScopedWatchBatch(
 
 	if len(projected.observed) > 0 {
 		if err := rt.commitObservedItems(ctx, projected.observed, ""); err != nil {
-			rt.logCommittedScopedBatchFailure("commit observations", err, len(projected.observed))
+			rt.logCommittedSharedRootBatchFailure("commit observations", err, len(projected.observed))
 			return nil, false
 		}
 	}
 
 	if err := rt.commitDeferredDeltaTokens(ctx, result.deferred); err != nil {
-		rt.logCommittedScopedBatchFailure("commit delta tokens", err, 0)
+		rt.logCommittedSharedRootBatchFailure("commit delta tokens", err, 0)
 		return nil, false
 	}
 
@@ -104,11 +104,11 @@ func (rt *watchRuntime) processCommittedPrimaryWatchBatch(
 	return finalEvents, nil
 }
 
-func (rt *watchRuntime) logCommittedScopedBatchFailure(step string, err error, eventCount int) {
+func (rt *watchRuntime) logCommittedSharedRootBatchFailure(step string, err error, eventCount int) {
 	attrs := []any{slog.String("error", err.Error())}
 	if eventCount > 0 {
 		attrs = append(attrs, slog.Int("events", eventCount))
 	}
 
-	rt.engine.logger.Error(fmt.Sprintf("failed to %s for scoped watch batch", step), attrs...)
+	rt.engine.logger.Error(fmt.Sprintf("failed to %s for shared-root watch batch", step), attrs...)
 }

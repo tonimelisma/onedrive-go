@@ -24,13 +24,16 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 		prevPath sql.NullString
 	)
 
+	configuredDriveID, driveErr := configuredDriveIDForDB(t.Context(), db)
+	require.NoError(t, driveErr)
+
 	err := db.QueryRowContext(t.Context(),
-		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
 			previous_path, observed_at
 		FROM remote_state WHERE item_id = ?`,
 		itemID,
 	).Scan(
-		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+		&row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
 		&prevPath, &row.ObservedAt,
 	)
@@ -40,6 +43,7 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 
 	require.NoError(t, err)
 
+	row.DriveID = configuredDriveID
 	row.ParentID = parentID.String
 	row.Hash = hash.String
 	row.ETag = etag.String
@@ -54,12 +58,12 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 	return &row
 }
 
-func readDeltaToken(t *testing.T, db *sql.DB, driveID string) string {
+func readObservationCursor(t *testing.T, db *sql.DB, driveID string) string {
 	t.Helper()
 
 	var token string
 	err := db.QueryRowContext(t.Context(),
-		`SELECT cursor FROM delta_tokens WHERE drive_id = ? AND scope_id = ''`,
+		`SELECT cursor FROM observation_state WHERE singleton_id = 1 AND configured_drive_id = ?`,
 		driveID,
 	).Scan(&token)
 	if err == sql.ErrNoRows {
@@ -97,7 +101,7 @@ func TestCommitObservation_NewItemCreatesMirrorRowAndToken(t *testing.T) {
 	assert.Equal(t, "hash1", row.Hash)
 	assert.Equal(t, int64(100), row.Size)
 	assert.Equal(t, "etag1", row.ETag)
-	assert.Equal(t, "delta-token-1", readDeltaToken(t, mgr.DB(), testDriveID))
+	assert.Equal(t, "delta-token-1", readObservationCursor(t, mgr.DB(), testDriveID))
 }
 
 // Validates: R-2.2
@@ -126,7 +130,7 @@ func TestCommitObservation_DeleteRemovesMirrorRow(t *testing.T) {
 	}}, "delta-token-2", driveID))
 
 	assert.Nil(t, readRemoteStateRow(t, mgr.DB(), "item1"))
-	assert.Equal(t, "delta-token-2", readDeltaToken(t, mgr.DB(), testDriveID))
+	assert.Equal(t, "delta-token-2", readObservationCursor(t, mgr.DB(), testDriveID))
 }
 
 // Validates: R-2.2

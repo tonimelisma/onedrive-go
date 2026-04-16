@@ -8,7 +8,7 @@ import (
 
 // findBaselineOrphans identifies baseline entries that are not present in the
 // seen set from a full enumeration and synthesizes remote delete events for them.
-func findBaselineOrphans(bl *Baseline, seen map[driveid.ItemKey]struct{}, driveID driveid.ID, pathPrefix string) []ChangeEvent {
+func findBaselineOrphans(bl *Baseline, seen map[string]struct{}, driveID driveid.ID, pathPrefix string) []ChangeEvent {
 	var orphans []ChangeEvent
 
 	bl.ForEachPath(func(path string, entry *BaselineEntry) {
@@ -19,8 +19,7 @@ func findBaselineOrphans(bl *Baseline, seen map[driveid.ItemKey]struct{}, driveI
 			return
 		}
 
-		key := driveid.NewItemKey(entry.DriveID, entry.ItemID)
-		if _, ok := seen[key]; ok {
+		if _, ok := seen[entry.ItemID]; ok {
 			return
 		}
 

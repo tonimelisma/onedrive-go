@@ -1,26 +1,10 @@
 package sync
 
-import (
-	"context"
-	"log/slog"
-)
+import "log/slog"
 
 type remoteObservationResult struct {
 	observed []ObservedItem
 	emitted  []ChangeEvent
-}
-
-func (flow *engineFlow) applyObservationState(
-	ctx context.Context,
-	dryRun bool,
-	session *ObservationSession,
-	plan *ObservationSessionPlan,
-) error {
-	_ = ctx
-	_ = dryRun
-	_ = session
-	_ = plan
-	return nil
 }
 
 func projectRemoteObservations(

@@ -2,8 +2,8 @@
 //
 // Contents:
 //   - ListRemoteState:          current remote mirror rows
-//   - GetRemoteStateByPath:     point lookup by path + drive
-//   - GetRemoteStateByID:       point lookup by drive + item ID
+//   - GetRemoteStateByPath:     point lookup by path
+//   - GetRemoteStateByID:       point lookup by item ID
 //   - queryRemoteStateRows:     shared multi-row remote_state scanner
 //   - scanRemoteStateRowWithQuerier: shared single-row remote_state scanner
 package sync
@@ -18,27 +18,38 @@ import (
 )
 
 const (
-	sqlGetRemoteStateByPath = `SELECT drive_id, item_id, path, parent_id, item_type,
+	sqlGetRemoteStateByPath = `SELECT item_id, path, parent_id, item_type,
 		hash, size, mtime, etag, previous_path, observed_at
 		FROM remote_state
-		WHERE path = ? AND drive_id = ?`
+		WHERE path = ?`
 
-	sqlGetRemoteStateByID = `SELECT drive_id, item_id, path, parent_id, item_type,
+	sqlGetRemoteStateByID = `SELECT item_id, path, parent_id, item_type,
 		hash, size, mtime, etag, previous_path, observed_at
 		FROM remote_state
-		WHERE drive_id = ? AND item_id = ?`
+		WHERE item_id = ?`
 )
 
 // ListRemoteState returns the current remote mirror rows.
 func (m *SyncStore) ListRemoteState(ctx context.Context) ([]RemoteStateRow, error) {
+	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveid.ID{})
+	if err != nil {
+		return nil, fmt.Errorf("sync: reading configured drive for remote_state: %w", err)
+	}
+
 	return m.queryRemoteStateRows(ctx,
-		`SELECT drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
 			previous_path, observed_at
 		FROM remote_state`,
+		configuredDriveID,
 	)
 }
 
-func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args ...any) ([]RemoteStateRow, error) {
+func (m *SyncStore) queryRemoteStateRows(
+	ctx context.Context,
+	query string,
+	configuredDriveID driveid.ID,
+	args ...any,
+) ([]RemoteStateRow, error) {
 	rows, err := m.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying remote_state: %w", err)
@@ -59,13 +70,14 @@ func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args
 		)
 
 		if err := rows.Scan(
-			&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+			&row.ItemID, &row.Path, &parentID, &row.ItemType,
 			&hash, &size, &mtime, &etag,
 			&prevPath, &row.ObservedAt,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
 		}
 
+		row.DriveID = configuredDriveID
 		row.ParentID = parentID.String
 		row.Hash = hash.String
 		row.ETag = etag.String
@@ -88,50 +100,57 @@ func (m *SyncStore) queryRemoteStateRows(ctx context.Context, query string, args
 	return result, nil
 }
 
-// GetRemoteStateByPath looks up the current remote_state row for a path+drive
-// combination.
+func (m *SyncStore) getRemoteStateRow(
+	ctx context.Context,
+	driveID driveid.ID,
+	query string,
+	arg string,
+	contextLabel string,
+) (*RemoteStateRow, bool, error) {
+	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveID)
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: reading configured drive for %s: %w", contextLabel, err)
+	}
+	if matchErr := ensureMatchingConfiguredDriveID(driveID, configuredDriveID); matchErr != nil {
+		return nil, false, matchErr
+	}
+
+	row, err := scanRemoteStateRowWithQuerier(
+		configuredDriveID,
+		func(dest ...any) error {
+			return m.db.QueryRowContext(ctx, query, arg).Scan(dest...)
+		},
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("sync: %s %s: %w", contextLabel, arg, err)
+	}
+
+	return row, true, nil
+}
+
+// GetRemoteStateByPath looks up the current remote_state row for a path.
 func (m *SyncStore) GetRemoteStateByPath(
 	ctx context.Context,
 	path string,
 	driveID driveid.ID,
 ) (*RemoteStateRow, bool, error) {
-	row, err := scanRemoteStateRowWithQuerier(
-		func(dest ...any) error {
-			return m.db.QueryRowContext(ctx, sqlGetRemoteStateByPath, path, driveID.String()).Scan(dest...)
-		},
-	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("sync: GetRemoteStateByPath %s: %w", path, err)
-	}
-
-	return row, true, nil
+	return m.getRemoteStateRow(ctx, driveID, sqlGetRemoteStateByPath, path, "GetRemoteStateByPath")
 }
 
-// GetRemoteStateByID looks up the exact remote_state row for a drive+item ID.
+// GetRemoteStateByID looks up the exact remote_state row for an item ID.
 func (m *SyncStore) GetRemoteStateByID(
 	ctx context.Context,
 	driveID driveid.ID,
 	itemID string,
 ) (*RemoteStateRow, bool, error) {
-	row, err := scanRemoteStateRowWithQuerier(
-		func(dest ...any) error {
-			return m.db.QueryRowContext(ctx, sqlGetRemoteStateByID, driveID.String(), itemID).Scan(dest...)
-		},
-	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("sync: GetRemoteStateByID %s: %w", itemID, err)
-	}
-
-	return row, true, nil
+	return m.getRemoteStateRow(ctx, driveID, sqlGetRemoteStateByID, itemID, "GetRemoteStateByID")
 }
 
 func scanRemoteStateRowWithQuerier(
+	configuredDriveID driveid.ID,
 	scan func(dest ...any) error,
 ) (*RemoteStateRow, error) {
 	var (
@@ -145,13 +164,14 @@ func scanRemoteStateRowWithQuerier(
 	)
 
 	if err := scan(
-		&row.DriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+		&row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
 		&prevPath, &row.ObservedAt,
 	); err != nil {
 		return nil, err
 	}
 
+	row.DriveID = configuredDriveID
 	row.ParentID = parentID.String
 	row.Hash = hash.String
 	row.ETag = etag.String

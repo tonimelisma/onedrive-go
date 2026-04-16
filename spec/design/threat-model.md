@@ -7,7 +7,7 @@ Implements: R-6.10.7 [verified]
 | Behavior | Evidence |
 | --- | --- |
 | Threat-boundary claims are backed by rooted filesystem, Graph redaction, and repo-consistency enforcement tests. | `internal/fsroot/fsroot_test.go`, `internal/localpath/localpath_test.go`, `internal/graph/client_test.go`, `internal/devtool/verify_repo_checks_test.go` |
-| Durable-state and degraded-mode trust assumptions are exercised by sync-store and recovery tests. | `internal/sync/db_repair_test.go`, `internal/sync/schema_migration_test.go`, `internal/cli/status_test.go` |
+| Durable-state and degraded-mode trust assumptions are exercised by sync-store and recovery tests. | `internal/sync/db_repair_test.go`, `internal/sync/schema_test.go`, `internal/cli/status_test.go` |
 
 ## Assets
 

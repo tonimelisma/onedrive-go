@@ -116,6 +116,8 @@ type watchReconcileState struct {
 	// back over reconcileResults. The loop owns reconcileActive and applies the
 	// returned events on receipt.
 	reconcileActive  bool
+	reconcileTimer   syncTimer
+	reconcileCh      chan time.Time
 	reconcileResults chan reconcileResult
 
 	// afterReconcileCommit is a test-only hook called after CommitObservation
@@ -156,6 +158,7 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 		},
 		watchReconcileState: watchReconcileState{
 			lastRemoteBlocked: make(map[ScopeKey]string),
+			reconcileCh:       make(chan time.Time, 1),
 			reconcileResults:  make(chan reconcileResult, 1),
 		},
 	}

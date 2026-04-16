@@ -3,10 +3,6 @@
 // Contents:
 //   - Load:                    read baseline table into memory
 //   - scanBaselineRow:         scan single baseline row with nullable handling
-//   - GetDeltaToken:           retrieve saved delta token for drive/scope
-//   - CommitDeltaToken:        persist delta token in own transaction
-//   - DeleteDeltaToken:        remove delta token for drive/scope
-//   - saveDeltaToken:          persist delta token within existing transaction
 //   - CommitMutation:          atomically apply mutation to baseline + remote_state
 //   - classifyBaselineMutation: map ActionType to one explicit baseline mutation kind
 //   - applySingleMutation:     dispatch mutation to appropriate DB helper
@@ -21,7 +17,7 @@
 //
 // Related files:
 //   - store.go:             SyncStore type definition and lifecycle
-//   - store_write_observation.go: CommitObservation calls saveDeltaToken
+//   - store_write_observation.go: CommitObservation advances the observation cursor
 package sync
 
 import (
@@ -35,17 +31,15 @@ import (
 
 // SQL statements for baseline operations.
 const (
-	sqlLoadBaseline = `SELECT drive_id, item_id, path, parent_id, item_type,
+	sqlLoadBaseline = `SELECT item_id, path, parent_id, item_type,
 		local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, synced_at, etag
 		FROM baseline`
 
-	sqlGetDeltaCursor = `SELECT cursor FROM delta_tokens WHERE drive_id = ? AND scope_id = ?`
-
 	sqlUpsertBaseline = `INSERT INTO baseline
-		(drive_id, item_id, path, parent_id, item_type, local_hash, remote_hash,
+		(item_id, path, parent_id, item_type, local_hash, remote_hash,
 		 local_size, remote_size, local_mtime, remote_mtime, synced_at, etag)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(drive_id, item_id) DO UPDATE SET
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(item_id) DO UPDATE SET
 		 path = excluded.path,
 		 parent_id = excluded.parent_id,
 		 item_type = excluded.item_type,
@@ -59,13 +53,6 @@ const (
 		 etag = excluded.etag`
 
 	sqlDeleteBaseline = `DELETE FROM baseline WHERE path = ?`
-
-	sqlUpsertDeltaCursor = `INSERT INTO delta_tokens (drive_id, scope_id, scope_drive, cursor, updated_at)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(drive_id, scope_id) DO UPDATE SET
-		 scope_drive = excluded.scope_drive,
-		 cursor = excluded.cursor,
-		 updated_at = excluded.updated_at`
 )
 
 // LocalBaselineRefresh is the explicit reconciliation input used by convergence
@@ -104,6 +91,11 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 		return m.baseline, nil
 	}
 
+	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveid.ID{})
+	if err != nil {
+		return nil, fmt.Errorf("sync: loading configured drive for baseline: %w", err)
+	}
+
 	rows, err := m.db.QueryContext(ctx, sqlLoadBaseline)
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline: %w", err)
@@ -112,18 +104,18 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 
 	b := &Baseline{
 		ByPath:     make(map[string]*BaselineEntry),
-		ByID:       make(map[driveid.ItemKey]*BaselineEntry),
+		ByID:       make(map[string]*BaselineEntry),
 		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
 	}
 
 	for rows.Next() {
-		entry, err := scanBaselineRow(rows)
+		entry, err := scanBaselineRow(rows, configuredDriveID)
 		if err != nil {
 			return nil, err
 		}
 
 		b.ByPath[entry.Path] = entry
-		b.ByID[driveid.NewItemKey(entry.DriveID, entry.ItemID)] = entry
+		b.ByID[entry.ItemID] = entry
 
 		dlk := DirLowerKeyFromPath(entry.Path)
 		b.ByDirLower[dlk] = append(b.ByDirLower[dlk], entry)
@@ -141,7 +133,7 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 
 // scanBaselineRow scans a single row from the baseline table, handling
 // nullable columns with sql.Null* types.
-func scanBaselineRow(rows *sql.Rows) (*BaselineEntry, error) {
+func scanBaselineRow(rows *sql.Rows, configuredDriveID driveid.ID) (*BaselineEntry, error) {
 	var (
 		e           BaselineEntry
 		parentID    sql.NullString
@@ -155,13 +147,14 @@ func scanBaselineRow(rows *sql.Rows) (*BaselineEntry, error) {
 	)
 
 	err := rows.Scan(
-		&e.DriveID, &e.ItemID, &e.Path, &parentID, &e.ItemType,
+		&e.ItemID, &e.Path, &parentID, &e.ItemType,
 		&localHash, &remoteHash, &localSize, &remoteSize, &localMtime, &remoteMtime, &e.SyncedAt, &etag,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning baseline row: %w", err)
 	}
 
+	e.DriveID = configuredDriveID
 	e.ParentID = parentID.String
 	e.LocalHash = localHash.String
 	e.RemoteHash = remoteHash.String
@@ -186,24 +179,6 @@ func scanBaselineRow(rows *sql.Rows) (*BaselineEntry, error) {
 	}
 
 	return &e, nil
-}
-
-// GetDeltaToken returns the saved delta token for a drive and scope, or empty
-// string if no token has been saved yet. Use scopeID="" for the primary
-// drive-level delta; use a remote root item ID for scoped-root deltas.
-func (m *SyncStore) GetDeltaToken(ctx context.Context, driveID, scopeID string) (string, error) {
-	var token string
-
-	err := m.db.QueryRowContext(ctx, sqlGetDeltaCursor, driveID, scopeID).Scan(&token)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-
-	if err != nil {
-		return "", fmt.Errorf("sync: getting delta token for drive %s scope %q: %w", driveID, scopeID, err)
-	}
-
-	return token, nil
 }
 
 // CommitMutation atomically applies a single mutation to the baseline in a
@@ -232,6 +207,17 @@ func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 	defer func() {
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback outcome transaction for %s", outcome.Path))
 	}()
+
+	state, err := m.readObservationStateTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if ensureErr := m.ensureConfiguredDriveIDTx(ctx, tx, outcome.DriveID, state); ensureErr != nil {
+		return ensureErr
+	}
+	if !state.ConfiguredDriveID.IsZero() {
+		outcome.DriveID = state.ConfiguredDriveID
+	}
 
 	syncedAt := m.nowFunc().UnixNano()
 
@@ -296,8 +282,18 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback refresh local baseline transaction for %s", refresh.Path))
 	}()
 
+	state, err := m.readObservationStateTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if ensureErr := m.ensureConfiguredDriveIDTx(ctx, tx, entry.DriveID, state); ensureErr != nil {
+		return ensureErr
+	}
+	if !state.ConfiguredDriveID.IsZero() {
+		entry.DriveID = state.ConfiguredDriveID
+	}
+
 	_, err = tx.ExecContext(ctx, sqlUpsertBaseline,
-		entry.DriveID.String(),
 		entry.ItemID,
 		entry.Path,
 		nullString(entry.ParentID),
@@ -449,65 +445,6 @@ func mutationFromActionOutcome(o *ActionOutcome) *BaselineMutation {
 	}
 }
 
-// CommitDeltaToken persists a delta token in its own transaction, separate
-// from baseline updates. Used after all actions in a pass complete.
-// Use scopeID="" and scopeDrive=driveID for the primary drive-level delta.
-// For scoped-root deltas, scopeID=remoteRootItemID and scopeDrive=remoteDriveID.
-func (m *SyncStore) CommitDeltaToken(ctx context.Context, token, driveID, scopeID, scopeDrive string) (err error) {
-	if token == "" {
-		return nil
-	}
-
-	tx, err := beginPerfTx(ctx, m.db)
-	if err != nil {
-		return fmt.Errorf("sync: beginning delta token transaction: %w", err)
-	}
-	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback delta token transaction for drive %s scope %q", driveID, scopeID))
-	}()
-
-	updatedAt := m.nowFunc().UnixNano()
-	if saveErr := m.saveDeltaToken(ctx, tx, driveID, scopeID, scopeDrive, token, updatedAt); saveErr != nil {
-		return saveErr
-	}
-
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing delta token transaction: %w", err)
-	}
-
-	m.logger.Debug("delta token committed",
-		slog.String("drive_id", driveID),
-		slog.String("scope_id", scopeID),
-	)
-
-	return nil
-}
-
-// DeleteDeltaToken removes a delta token for a specific drive and scope.
-func (m *SyncStore) DeleteDeltaToken(ctx context.Context, driveID, scopeID string) error {
-	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM delta_tokens WHERE drive_id = ? AND scope_id = ?`,
-		driveID, scopeID)
-	if err != nil {
-		return fmt.Errorf("sync: deleting delta token for drive %s scope %s: %w", driveID, scopeID, err)
-	}
-
-	return nil
-}
-
-// saveDeltaToken persists the delta token in the same transaction as
-// baseline updates.
-func (m *SyncStore) saveDeltaToken(
-	ctx context.Context, tx sqlTxRunner, driveID, scopeID, scopeDrive, token string, updatedAt int64,
-) error {
-	_, err := tx.ExecContext(ctx, sqlUpsertDeltaCursor, driveID, scopeID, scopeDrive, token, updatedAt)
-	if err != nil {
-		return fmt.Errorf("sync: saving delta token for drive %s scope %q: %w", driveID, scopeID, err)
-	}
-
-	return nil
-}
-
 // commitUpsert inserts or updates a baseline entry for download, upload,
 // folder create, and update-synced outcomes. Handles the case where a
 // server-side delete+recreate assigns a new item_id for an existing path
@@ -518,14 +455,14 @@ func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, sync
 	// was previously tracked under a different ID (delete+recreate, or
 	// re-upload after server-side deletion).
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM baseline WHERE path = ? AND NOT (drive_id = ? AND item_id = ?)`,
-		o.Path, o.DriveID, o.ItemID,
+		`DELETE FROM baseline WHERE path = ? AND item_id <> ?`,
+		o.Path, o.ItemID,
 	); err != nil {
 		return fmt.Errorf("sync: clearing stale baseline for %s: %w", o.Path, err)
 	}
 
 	_, err := tx.ExecContext(ctx, sqlUpsertBaseline,
-		o.DriveID, o.ItemID, o.Path,
+		o.ItemID, o.Path,
 		nullString(o.ParentID),
 		o.ItemType.String(),
 		nullString(o.LocalHash),
@@ -556,10 +493,10 @@ func commitDelete(ctx context.Context, tx sqlTxRunner, path string) error {
 
 // commitMove atomically updates the path for move outcomes. With the ID-based
 // PK, a move is a single UPDATE (not DELETE+INSERT) — the row identity
-// (drive_id, item_id) doesn't change, only the path does.
+// (item_id) doesn't change, only the path does.
 func commitMove(ctx context.Context, tx sqlTxRunner, o *BaselineMutation, syncedAt int64) error {
 	// Upsert handles both the path update and all other field updates.
-	// The ON CONFLICT(drive_id, item_id) clause matches the existing row
+	// The ON CONFLICT(item_id) clause matches the existing row
 	// and updates path + all mutable fields atomically.
 	return commitUpsert(ctx, tx, o, syncedAt)
 }
@@ -575,10 +512,10 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 	case ActionUpload, ActionFolderCreate:
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO remote_state (
-				drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+				item_id, path, parent_id, item_type, hash, size, mtime, etag,
 				previous_path, observed_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(drive_id, item_id) DO UPDATE SET
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(item_id) DO UPDATE SET
 				path = excluded.path,
 				parent_id = excluded.parent_id,
 				item_type = excluded.item_type,
@@ -588,7 +525,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 				etag = excluded.etag,
 				previous_path = excluded.previous_path,
 				observed_at = excluded.observed_at`,
-			o.DriveID.String(), o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
+			o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
 			nullString(o.RemoteHash), nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown), nullOptionalInt64(o.RemoteMtime),
 			nullString(o.ETag), sql.NullString{}, syncedAt,
 		)
@@ -597,8 +534,8 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 		}
 	case ActionRemoteDelete:
 		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM remote_state WHERE drive_id = ? AND item_id = ?`,
-			o.DriveID.String(), o.ItemID,
+			`DELETE FROM remote_state WHERE item_id = ?`,
+			o.ItemID,
 		); err != nil {
 			return fmt.Errorf("sync: deleting remote_state for remote delete %s: %w", o.Path, err)
 		}
@@ -606,8 +543,8 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE remote_state
 			 SET path = ?, previous_path = ?, observed_at = ?
-			 WHERE drive_id = ? AND item_id = ?`,
-			o.Path, nullString(o.OldPath), syncedAt, o.DriveID.String(), o.ItemID,
+			 WHERE item_id = ?`,
+			o.Path, nullString(o.OldPath), syncedAt, o.ItemID,
 		); err != nil {
 			return fmt.Errorf("sync: updating remote_state for remote move %s: %w", o.Path, err)
 		}
@@ -617,10 +554,10 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 		}
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO remote_state (
-				drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
+				item_id, path, parent_id, item_type, hash, size, mtime, etag,
 				previous_path, observed_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(drive_id, item_id) DO UPDATE SET
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(item_id) DO UPDATE SET
 				path = excluded.path,
 				parent_id = excluded.parent_id,
 				item_type = excluded.item_type,
@@ -630,7 +567,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 				etag = excluded.etag,
 				previous_path = excluded.previous_path,
 				observed_at = excluded.observed_at`,
-			o.DriveID.String(), o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
+			o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
 			nullString(o.RemoteHash), nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown), nullOptionalInt64(o.RemoteMtime),
 			nullString(o.ETag), sql.NullString{}, syncedAt,
 		)
@@ -660,6 +597,11 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
+	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveid.ID{})
+	if err != nil {
+		return 0, fmt.Errorf("sync: loading configured drive for consistency check: %w", err)
+	}
+
 	rows, err := m.db.QueryContext(ctx, sqlLoadBaseline)
 	if err != nil {
 		return 0, fmt.Errorf("sync: querying baseline for consistency check: %w", err)
@@ -669,7 +611,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	dbEntries := make(map[string]*BaselineEntry)
 
 	for rows.Next() {
-		entry, scanErr := scanBaselineRow(rows)
+		entry, scanErr := scanBaselineRow(rows, configuredDriveID)
 		if scanErr != nil {
 			return 0, scanErr
 		}
