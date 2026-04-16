@@ -7,6 +7,7 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | When modifying... | Read first | Also consult |
 |-------------------|-----------|--------------|
 | `internal/graph/` | `spec/design/graph-client.md` | `spec/reference/graph-api-quirks.md` |
+| `internal/graphtransport/` | `spec/design/graph-client.md` | |
 | `internal/tokenfile/` | `spec/design/graph-client.md` | |
 | `internal/config/` | `spec/design/config.md` | |
 | `internal/driveid/`, `internal/cli/drive*.go` | `spec/design/drive-identity.md` | |

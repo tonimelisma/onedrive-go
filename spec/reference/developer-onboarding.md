@@ -42,7 +42,7 @@ The most important repo-wide idea is ownership.
 - `internal/cli` owns command wiring, output, and turning lower-layer results
   into user-facing behavior.
 - `internal/graph` owns Graph API semantics, normalization, and auth flows.
-- `internal/graphhttp` owns stateless Graph-facing HTTP profile construction.
+- `internal/graphtransport` owns stateless Graph-facing HTTP transport profile construction.
 - `internal/driveops` owns `SessionRuntime`, authenticated sessions, and
   transfer operations.
 - `internal/multisync` owns multi-drive orchestration and control-socket
@@ -144,9 +144,9 @@ This is not optional repo furniture. `devtool` is the repo-owned way to:
 
 ### FAQ
 
-**Why are `graph`, `graphhttp`, and `driveops` separate?**
+**Why are `graph`, `graphtransport`, and `driveops` separate?**
 
-`graph` owns Graph API semantics and normalization. `graphhttp` owns stateless
+`graph` owns Graph API semantics and normalization. `graphtransport` owns stateless
 HTTP profile construction. `driveops.SessionRuntime` owns the command-scoped
 runtime reuse of those profiles, plus authenticated sessions and higher-level
 file workflows. The split keeps API behavior, transport policy, and runtime
@@ -308,7 +308,7 @@ able to scan this table and place every top-level code area.
 | `internal/errclass` | Canonical runtime failure class enum | You are changing cross-boundary failure classification |
 | `internal/fsroot` | Root-bound filesystem capabilities for managed state files | You are touching durable repo-managed file writes outside sync roots |
 | `internal/graph` | Graph API semantics, normalization, auth, delta, item CRUD, transfer session behavior | You are changing Graph behavior or provider quirks |
-| `internal/graphhttp` | Stateless Graph-facing HTTP transport profiles and transport defaults | You are changing HTTP runtime policy or profile construction |
+| `internal/graphtransport` | Stateless Graph-facing HTTP transport profiles and transport defaults | You are changing HTTP runtime policy or profile construction |
 | `internal/localpath` | Explicit arbitrary local-path filesystem operations | You are doing local file I/O outside a rooted capability |
 | `internal/logfile` | Log file creation, rotation, retention | You are changing logging file lifecycle |
 | `internal/multisync` | Multi-drive sync control plane and watch reload | You are changing `sync` orchestration across drives |
@@ -378,7 +378,7 @@ in:
 
 | Package or file family | Role |
 | --- | --- |
-| `internal/graphhttp` | Builds stateless Graph-facing HTTP client profiles and transport defaults |
+| `internal/graphtransport` | Builds stateless Graph-facing HTTP transport profiles and transport defaults |
 | `internal/graph/auth.go`, `normalize.go`, `errors.go` | Authentication and Graph-specific normalization/error handling |
 | `internal/graph/delta.go`, `items.go`, `socketio.go`, `transfers.go` | Graph API surfaces for sync, file ops, websocket/bootstrap, and transfers |
 | `internal/driveops` | `SessionRuntime`, authenticated drive/file operations, and transfer/path-convergence workflows |
@@ -390,16 +390,16 @@ in:
 If you are working on an issue that smells like "Graph did something odd",
 decide which layer actually owns it:
 
-- HTTP transport or profile construction -> `internal/graphhttp`
+- HTTP transport or profile construction -> `internal/graphtransport`
 - Graph endpoint semantics or normalization -> `internal/graph`
 - command-scoped runtime reuse, authenticated sessions, or transfer behavior -> `internal/driveops`
 - retry/backoff -> `internal/retry`
 
 ### FAQ
 
-**Why does the repo have `graph`, `graphhttp`, and `driveops`?**
+**Why does the repo have `graph`, `graphtransport`, and `driveops`?**
 
-`graph` speaks Graph. `graphhttp` builds the raw HTTP profiles Graph work needs.
+`graph` speaks Graph. `graphtransport` builds the raw HTTP transport profiles Graph work needs.
 `driveops.SessionRuntime` chooses and reuses those profiles for concrete
 command/watch work, then `driveops` layers authenticated drive/file workflows
 on top. That keeps API semantics, transport construction, and runtime reuse
@@ -461,7 +461,7 @@ A new developer should know where truth lives before changing any behavior.
 | User config | `internal/config` TOML file | Drive sections, overrides, pause state, account metadata |
 | OAuth token persistence | `internal/tokenfile` files | Shared by config and graph boundaries |
 | Remote truth | Microsoft Graph / OneDrive | Observed through `internal/graph` |
-| Graph HTTP policy | `internal/graphhttp` | Shared runtime transport policy, not user config |
+| Graph HTTP policy | `internal/graphtransport` | Shared runtime transport policy, not user config |
 | Graph session/runtime reuse | `internal/driveops.SessionRuntime` | Command-scoped bootstrap, interactive, and sync client reuse |
 | Status issue title/reason/action rendering | `internal/cli/status_issue_descriptors.go` | Final human-facing status copy belongs to the CLI |
 | Read-only sync issue/status snapshot | `internal/sync` store inspection helpers | Raw durable issue facts stay in sync-owned read paths |
@@ -622,7 +622,7 @@ use this:
 4. `spec/design/config.md`
 5. `internal/config/*`
 6. `spec/design/graph-client.md`
-7. `internal/graph/*` and `internal/graphhttp/*`
+7. `internal/graph/*` and `internal/graphtransport/*`
 8. `spec/design/drive-transfers.md`
 9. `internal/driveops/*`
 
@@ -677,7 +677,7 @@ If you want one compact model of the whole repo, use this:
 
 - the CLI owns user interaction
 - graph owns remote API semantics
-- graphhttp owns stateless HTTP profile construction
+- graphtransport owns stateless HTTP transport profile construction
 - driveops owns session runtime reuse and transfer behavior
 - multisync owns multi-drive orchestration
 - sync owns one drive's runtime and durable sync state
