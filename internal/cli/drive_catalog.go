@@ -142,14 +142,14 @@ func annotateConfiguredDriveAuth(entries []driveListEntry, authByEmail map[strin
 func discoverAvailableDrives(
 	ctx context.Context,
 	cfg *config.Config,
-	catalog []accountCatalogEntry,
+	accounts []accountView,
 	spSiteLimit int,
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	baseURL string,
 	runtime *driveops.SessionRuntime,
 ) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
-	tokens := catalogTokenIDs(catalog)
+	tokens := accountViewTokenIDs(accounts)
 	if len(tokens) == 0 {
 		return nil, nil, nil
 	}
@@ -172,7 +172,7 @@ func discoverAvailableDrives(
 				ctx,
 				tokenCID,
 				cfg,
-				catalog,
+				accounts,
 				spSiteLimit,
 				logger,
 				recorder,
@@ -201,7 +201,7 @@ func discoverDrivesForToken(
 	ctx context.Context,
 	tokenCID driveid.CanonicalID,
 	cfg *config.Config,
-	catalog []accountCatalogEntry,
+	accounts []accountView,
 	spSiteLimit int,
 	logger *slog.Logger,
 	recorder *authProofRecorder,
@@ -237,7 +237,7 @@ func discoverDrivesForToken(
 		ctx,
 		client,
 		cfg,
-		catalog,
+		accounts,
 		tokenCID,
 		logger,
 	)
@@ -263,7 +263,7 @@ func discoverAccessibleDrives(
 	ctx context.Context,
 	client accessibleDriveCatalogClient,
 	cfg *config.Config,
-	catalog []accountCatalogEntry,
+	accounts []accountView,
 	tokenCID driveid.CanonicalID,
 	logger *slog.Logger,
 ) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
@@ -278,7 +278,7 @@ func discoverAccessibleDrives(
 			degradedDiscoveryLogAttrs(tokenCID.Email(), graphMeDrivesEndpoint, err)...,
 		)
 
-		notice := tokenDriveCatalogDegradedNotice(catalog, tokenCID, logger)
+		notice := tokenDriveCatalogDegradedNotice(accounts, tokenCID, logger)
 		entries := appendPrimaryDriveFallbackEntry(ctx, nil, client, cfg, tokenCID.Email(), logger)
 		return entries, nil, []accountDegradedNotice{notice}
 	}
@@ -292,11 +292,11 @@ func discoverAccessibleDrives(
 }
 
 func tokenDriveCatalogDegradedNotice(
-	catalog []accountCatalogEntry,
+	accounts []accountView,
 	tokenCID driveid.CanonicalID,
 	logger *slog.Logger,
 ) accountDegradedNotice {
-	entry, found := catalogEntryByEmail(catalog, tokenCID.Email())
+	entry, found := accountViewByEmail(accounts, tokenCID.Email())
 	if found {
 		return driveCatalogDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType)
 	}

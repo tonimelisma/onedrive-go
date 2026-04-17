@@ -40,7 +40,7 @@ func writeAccessTokenFile(t *testing.T, cid driveid.CanonicalID, accessToken str
 }
 
 // Validates: R-3.7
-func TestAccountCatalogSnapshot_LoadWithBestEffortIdentityRefresh_ProbesEachTokenOnce(t *testing.T) {
+func TestAccountViewSnapshot_LoadWithBestEffortIdentityRefresh_ProbesEachTokenOnce(t *testing.T) {
 	setTestDriveHome(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.toml")
@@ -105,12 +105,14 @@ func TestAccountCatalogSnapshot_LoadWithBestEffortIdentityRefresh_ProbesEachToke
 		GraphBaseURL: srv.URL,
 	}
 
-	snapshot, err := loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(t.Context(), cc)
+	snapshot, err := loadAccountViewSnapshotWithBestEffortIdentityRefresh(t.Context(), cc)
 	require.NoError(t, err)
 
-	assert.Len(t, snapshot.Catalog, 2)
-	accountCatalogEntryByEmail(t, snapshot.Catalog, "renamed@example.com")
-	accountCatalogEntryByEmail(t, snapshot.Catalog, "alice@contoso.com")
+	assert.Len(t, snapshot.Accounts, 2)
+	_, found := accountViewByEmail(snapshot.Accounts, "renamed@example.com")
+	require.True(t, found)
+	_, found = accountViewByEmail(snapshot.Accounts, "alice@contoso.com")
+	require.True(t, found)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -119,7 +121,7 @@ func TestAccountCatalogSnapshot_LoadWithBestEffortIdentityRefresh_ProbesEachToke
 }
 
 // Validates: R-3.7
-func TestAccountCatalogSnapshot_LoadWithBestEffortIdentityRefresh_ProbeFailureKeepsOfflineIdentity(t *testing.T) {
+func TestAccountViewSnapshot_LoadWithBestEffortIdentityRefresh_ProbeFailureKeepsOfflineIdentity(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("personal:offline@example.com")
@@ -152,17 +154,18 @@ func TestAccountCatalogSnapshot_LoadWithBestEffortIdentityRefresh_ProbeFailureKe
 		GraphBaseURL: srv.URL,
 	}
 
-	snapshot, err := loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(ctx, cc)
+	snapshot, err := loadAccountViewSnapshotWithBestEffortIdentityRefresh(ctx, cc)
 	require.NoError(t, err)
 
-	entry := accountCatalogEntryByEmail(t, snapshot.Catalog, "offline@example.com")
+	entry, found := accountViewByEmail(snapshot.Accounts, "offline@example.com")
+	require.True(t, found)
 	assert.Equal(t, "Offline User", entry.DisplayName)
 	assert.Equal(t, cid, entry.RepresentativeTokenID)
 	assert.GreaterOrEqual(t, meCalls.Load(), int32(1))
 }
 
 // Validates: R-3.1.5
-func TestAccountCatalogSnapshot_Load_RejectsConfiguredDriveMissingCatalogEntry(t *testing.T) {
+func TestAccountViewSnapshot_Load_RejectsConfiguredDriveMissingCatalogEntry(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -173,7 +176,7 @@ func TestAccountCatalogSnapshot_Load_RejectsConfiguredDriveMissingCatalogEntry(t
 		account.DisplayName = "Test User"
 	})
 
-	_, err := loadAccountCatalogSnapshot(t.Context(), &CLIContext{
+	_, err := loadAccountViewSnapshot(t.Context(), &CLIContext{
 		Logger:       testDriveLogger(t),
 		OutputWriter: &bytes.Buffer{},
 		StatusWriter: &bytes.Buffer{},
@@ -185,7 +188,7 @@ func TestAccountCatalogSnapshot_Load_RejectsConfiguredDriveMissingCatalogEntry(t
 }
 
 // Validates: R-3.1.5
-func TestAccountCatalogSnapshot_Load_RejectsDriveOwnerMissingCatalogAccount(t *testing.T) {
+func TestAccountViewSnapshot_Load_RejectsDriveOwnerMissingCatalogAccount(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -195,7 +198,7 @@ func TestAccountCatalogSnapshot_Load_RejectsDriveOwnerMissingCatalogAccount(t *t
 		drive.OwnerAccountCanonical = "business:owner@example.com"
 	})
 
-	_, err := loadAccountCatalogSnapshot(t.Context(), &CLIContext{
+	_, err := loadAccountViewSnapshot(t.Context(), &CLIContext{
 		Logger:       testDriveLogger(t),
 		OutputWriter: &bytes.Buffer{},
 		StatusWriter: &bytes.Buffer{},
@@ -207,7 +210,7 @@ func TestAccountCatalogSnapshot_Load_RejectsDriveOwnerMissingCatalogAccount(t *t
 }
 
 // Validates: R-3.1.5
-func TestAccountCatalogSnapshot_Load_RejectsPrimaryDriveOwnedByDifferentAccount(t *testing.T) {
+func TestAccountViewSnapshot_Load_RejectsPrimaryDriveOwnedByDifferentAccount(t *testing.T) {
 	setTestDriveHome(t)
 
 	accountCID := driveid.MustCanonicalID("personal:user@example.com")
@@ -233,7 +236,7 @@ func TestAccountCatalogSnapshot_Load_RejectsPrimaryDriveOwnedByDifferentAccount(
 		drive.RemoteDriveID = snapshotTestPrimaryDriveUser
 	})
 
-	_, err := loadAccountCatalogSnapshot(t.Context(), &CLIContext{
+	_, err := loadAccountViewSnapshot(t.Context(), &CLIContext{
 		Logger:       testDriveLogger(t),
 		OutputWriter: &bytes.Buffer{},
 		StatusWriter: &bytes.Buffer{},

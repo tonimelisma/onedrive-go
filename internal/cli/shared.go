@@ -44,12 +44,12 @@ func runShared(cmd *cobra.Command, _ []string) error {
 }
 
 func runSharedList(ctx context.Context, cc *CLIContext) error {
-	snapshot, err := loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(ctx, cc)
+	snapshot, err := loadAccountViewSnapshotWithBestEffortIdentityRefresh(ctx, cc)
 	if err != nil {
 		return err
 	}
 
-	discovery := discoverSharedTargets(ctx, cc, filterAccountCatalog(snapshot.Catalog, cc.Flags.Account))
+	discovery := discoverSharedTargets(ctx, cc, filterAccountViews(snapshot.Accounts, cc.Flags.Account))
 	items := sharedListItemsFromTargets(discovery.Targets)
 	if cc.Flags.JSON {
 		return printSharedJSON(cc.Output(), items, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
@@ -138,17 +138,17 @@ func printSharedText(
 	return nil
 }
 
-func filterAccountCatalog(catalog []accountCatalogEntry, account string) []accountCatalogEntry {
+func filterAccountViews(views []accountView, account string) []accountView {
 	if account == "" {
-		return catalog
+		return views
 	}
 
-	filtered := make([]accountCatalogEntry, 0, len(catalog))
-	for i := range catalog {
-		if catalog[i].Email != account {
+	filtered := make([]accountView, 0, len(views))
+	for i := range views {
+		if views[i].Email != account {
 			continue
 		}
-		filtered = append(filtered, catalog[i])
+		filtered = append(filtered, views[i])
 	}
 
 	return filtered

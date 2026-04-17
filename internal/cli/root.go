@@ -135,7 +135,7 @@ type CLIContext struct {
 	syncWatchRunner               syncWatchRunner               // test-only seam for sync --watch command coverage
 	syncRunOnceRunner             syncRunOnceRunner             // test-only seam for one-shot sync command coverage
 	syncDaemonOrchestratorFactory syncDaemonOrchestratorFactory // test-only seam below syncWatchRunner for real daemon-path coverage
-	statusLiveOverlayLoader       func(context.Context, *CLIContext, []accountCatalogEntry) map[string]statusAccountLiveOverlay
+	statusLiveOverlayLoader       func(context.Context, *CLIContext, []accountView) map[string]statusAccountLiveOverlay
 	logCloser                     io.Closer  // log file closer; nil when no log file is configured
 	statusMu                      sync.Mutex // guards statusErr for concurrent progress callbacks
 	statusErr                     error

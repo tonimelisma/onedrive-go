@@ -20,10 +20,10 @@ type accountLifecycleView struct {
 	SelectableForPurge  bool
 }
 
-func accountLifecycle(entry *accountCatalogEntry) accountLifecycleView {
+func accountLifecycle(entry *accountView) accountLifecycleView {
 	view := accountLifecycleView{
 		Known:               entry != nil && entry.Email != "",
-		HasUsableSavedLogin: entry != nil && entry.SavedLoginState == savedLoginStateUsable,
+		HasUsableSavedLogin: entry != nil && entry.SavedLoginReason == "",
 		HasConfiguredDrives: entry != nil && entry.Configured,
 	}
 	view.SelectableForLogout = view.Known && view.HasUsableSavedLogin
@@ -32,9 +32,9 @@ func accountLifecycle(entry *accountCatalogEntry) accountLifecycleView {
 	switch {
 	case !view.Known:
 		view.State = accountLifecycleAbsent
-	case entry.SavedLoginState == savedLoginStateMissing:
+	case entry.SavedLoginReason == authReasonMissingLogin:
 		view.State = accountLifecycleAuthRequiredMissingLogin
-	case entry.SavedLoginState == savedLoginStateInvalid:
+	case entry.SavedLoginReason == authReasonInvalidSavedLogin:
 		view.State = accountLifecycleAuthRequiredInvalidLogin
 	case entry.AuthRequirementReason == authReasonSyncAuthRejected:
 		view.State = accountLifecycleAuthRequiredSyncRejected
@@ -47,25 +47,25 @@ func accountLifecycle(entry *accountCatalogEntry) accountLifecycleView {
 	return view
 }
 
-func knownAccountCatalogEntries(catalog []accountCatalogEntry) []accountCatalogEntry {
-	known := make([]accountCatalogEntry, 0, len(catalog))
-	for i := range catalog {
-		if !accountLifecycle(&catalog[i]).Known {
+func knownAccountViews(views []accountView) []accountView {
+	known := make([]accountView, 0, len(views))
+	for i := range views {
+		if !accountLifecycle(&views[i]).Known {
 			continue
 		}
-		known = append(known, catalog[i])
+		known = append(known, views[i])
 	}
 
 	return known
 }
 
-func logoutSelectableAccountEntries(catalog []accountCatalogEntry) []accountCatalogEntry {
-	selectable := make([]accountCatalogEntry, 0, len(catalog))
-	for i := range catalog {
-		if !accountLifecycle(&catalog[i]).SelectableForLogout {
+func logoutSelectableAccountViews(views []accountView) []accountView {
+	selectable := make([]accountView, 0, len(views))
+	for i := range views {
+		if !accountLifecycle(&views[i]).SelectableForLogout {
 			continue
 		}
-		selectable = append(selectable, catalog[i])
+		selectable = append(selectable, views[i])
 	}
 
 	return selectable

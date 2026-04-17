@@ -91,12 +91,12 @@ type statusOutput struct {
 func runStatusCommand(cc *CLIContext, history bool, showPerf ...bool) error {
 	logger := cc.Logger
 	perfEnabled := len(showPerf) > 0 && showPerf[0]
-	snapshot, err := loadAccountCatalogSnapshot(context.Background(), cc)
+	snapshot, err := loadAccountViewSnapshot(context.Background(), cc)
 	if err != nil {
 		return err
 	}
 
-	if len(snapshot.Catalog) == 0 && len(snapshot.Config.Drives) == 0 {
+	if len(snapshot.Accounts) == 0 && len(snapshot.Config.Drives) == 0 {
 		return writeln(cc.Output(), "No accounts configured. Run 'onedrive-go login' to get started.")
 	}
 
@@ -104,7 +104,7 @@ func runStatusCommand(cc *CLIContext, history bool, showPerf ...bool) error {
 	if err != nil {
 		return err
 	}
-	if len(filteredSnapshot.Catalog) == 0 && len(filteredSnapshot.Config.Drives) == 0 {
+	if len(filteredSnapshot.Accounts) == 0 && len(filteredSnapshot.Config.Drives) == 0 {
 		if cc.Flags.Account != "" {
 			return writeln(cc.Output(), "No matching accounts selected.")
 		}
@@ -119,7 +119,7 @@ func runStatusCommand(cc *CLIContext, history bool, showPerf ...bool) error {
 	if liveOverlayLoader == nil {
 		liveOverlayLoader = loadStatusLiveOverlay
 	}
-	applyStatusLiveOverlay(accounts, liveOverlayLoader(context.Background(), cc, filteredSnapshot.Catalog))
+	applyStatusLiveOverlay(accounts, liveOverlayLoader(context.Background(), cc, filteredSnapshot.Accounts))
 	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(context.Background(), perfEnabled))
 	if cc.Flags.JSON {
 		return printStatusJSON(cc.Output(), accounts)
@@ -129,11 +129,11 @@ func runStatusCommand(cc *CLIContext, history bool, showPerf ...bool) error {
 }
 
 func filterStatusSnapshot(
-	snapshot accountCatalogSnapshot,
+	snapshot accountViewSnapshot,
 	account string,
 	selectors []string,
 	logger *slog.Logger,
-) (accountCatalogSnapshot, error) {
+) (accountViewSnapshot, error) {
 	if account == "" && len(selectors) == 0 {
 		return snapshot, nil
 	}
@@ -149,7 +149,7 @@ func filterStatusSnapshot(
 	if len(selectors) > 0 {
 		selectedDrives, err := config.ResolveDrives(snapshot.Config, selectors, true, logger)
 		if err != nil {
-			return accountCatalogSnapshot{}, fmt.Errorf("resolving status drive selectors: %w", err)
+			return accountViewSnapshot{}, fmt.Errorf("resolving status drive selectors: %w", err)
 		}
 
 		for i := range selectedDrives {
@@ -167,20 +167,20 @@ func filterStatusSnapshot(
 		}
 	}
 
-	filteredCatalog := snapshot.Catalog
+	filteredAccounts := snapshot.Accounts
 	if len(selectedAccounts) > 0 {
-		filteredCatalog = make([]accountCatalogEntry, 0, len(snapshot.Catalog))
-		for i := range snapshot.Catalog {
-			if _, keep := selectedAccounts[snapshot.Catalog[i].Email]; keep {
-				filteredCatalog = append(filteredCatalog, snapshot.Catalog[i])
+		filteredAccounts = make([]accountView, 0, len(snapshot.Accounts))
+		for i := range snapshot.Accounts {
+			if _, keep := selectedAccounts[snapshot.Accounts[i].Email]; keep {
+				filteredAccounts = append(filteredAccounts, snapshot.Accounts[i])
 			}
 		}
 	}
 
-	return accountCatalogSnapshot{
-		Config:  &filtered,
-		Stored:  snapshot.Stored,
-		Catalog: filteredCatalog,
+	return accountViewSnapshot{
+		Config:   &filtered,
+		Stored:   snapshot.Stored,
+		Accounts: filteredAccounts,
 	}, nil
 }
 
@@ -232,26 +232,26 @@ func buildStatusAccountsWith(
 	return accounts
 }
 
-func buildStatusAccountsFromCatalog(
+func buildStatusAccountsFromViews(
 	cfg *config.Config,
-	catalog []accountCatalogEntry,
+	views []accountView,
 	syncQ syncStateQuerier,
 ) []statusAccount {
-	accounts := make([]statusAccount, 0, len(catalog))
+	accounts := make([]statusAccount, 0, len(views))
 
-	for i := range catalog {
-		entry := catalog[i]
-		driveIDs := append([]driveid.CanonicalID(nil), entry.ConfiguredDriveIDs...)
+	for i := range views {
+		view := views[i]
+		driveIDs := append([]driveid.CanonicalID(nil), view.ConfiguredDriveIDs...)
 		sort.Slice(driveIDs, func(i, j int) bool { return driveIDs[i].String() < driveIDs[j].String() })
 		acct := statusAccount{
-			Email:       entry.Email,
-			DriveType:   entry.DriveType,
-			UserID:      entry.UserID,
-			AuthState:   entry.AuthHealth.State,
-			AuthReason:  string(entry.AuthHealth.Reason),
-			AuthAction:  entry.AuthHealth.Action,
-			DisplayName: entry.DisplayName,
-			OrgName:     entry.OrgName,
+			Email:       view.Email,
+			DriveType:   view.DriveType,
+			UserID:      view.UserID,
+			AuthState:   view.AuthHealth.State,
+			AuthReason:  string(view.AuthHealth.Reason),
+			AuthAction:  view.AuthHealth.Action,
+			DisplayName: view.DisplayName,
+			OrgName:     view.OrgName,
 			Drives:      make([]statusDrive, 0, len(driveIDs)),
 		}
 

@@ -73,7 +73,7 @@ func TestSharedDiscovery_IgnoresNonActionableHits(t *testing.T) {
 		GraphBaseURL: srv.URL,
 	}
 
-	result := discoverSharedTargets(t.Context(), cc, []accountCatalogEntry{{
+	result := discoverSharedTargets(t.Context(), cc, []accountView{{
 		Email:                 "user@example.com",
 		DisplayName:           "User Example",
 		DriveType:             driveid.DriveTypePersonal,
@@ -188,7 +188,7 @@ func TestSharedDiscovery_SearchUnauthorizedReturnsAuthRequired(t *testing.T) {
 		GraphBaseURL: srv.URL,
 	}
 
-	result := discoverSharedTargets(t.Context(), cc, []accountCatalogEntry{{
+	result := discoverSharedTargets(t.Context(), cc, []accountView{{
 		Email:                 "user@example.com",
 		DisplayName:           "User Example",
 		DriveType:             driveid.DriveTypePersonal,
@@ -212,7 +212,7 @@ func TestSharedDiscovery_NoRepresentativeTokenReturnsDegraded(t *testing.T) {
 		CfgPath:      filepath.Join(t.TempDir(), "config.toml"),
 	}
 
-	result := discoverSharedTargets(t.Context(), cc, []accountCatalogEntry{{
+	result := discoverSharedTargets(t.Context(), cc, []accountView{{
 		Email:       "user@example.com",
 		DisplayName: "User Example",
 		DriveType:   driveid.DriveTypePersonal,
@@ -265,7 +265,7 @@ func TestSharedDiscovery_IgnoresCallerAccountFilter(t *testing.T) {
 		GraphBaseURL: srv.URL,
 	}
 
-	result := discoverSharedTargets(t.Context(), cc, []accountCatalogEntry{{
+	result := discoverSharedTargets(t.Context(), cc, []accountView{{
 		Email:                 "other@example.com",
 		DisplayName:           "Other Example",
 		DriveType:             driveid.DriveTypePersonal,
@@ -318,7 +318,7 @@ func TestSharedDiscovery_FallsBackAcrossAccountTokens(t *testing.T) {
 		GraphBaseURL: srv.URL,
 	}
 
-	result := discoverSharedTargets(t.Context(), cc, []accountCatalogEntry{{
+	result := discoverSharedTargets(t.Context(), cc, []accountView{{
 		Email:                 "user@example.com",
 		DisplayName:           "User Example",
 		DriveType:             driveid.DriveTypeBusiness,
