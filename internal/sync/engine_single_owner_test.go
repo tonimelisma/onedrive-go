@@ -744,6 +744,52 @@ func TestEngine_RepairPersistedScopes_ThrottleAndServicePolicy(t *testing.T) {
 	}
 }
 
+// Validates: R-2.10.5
+func TestEngine_RepairPersistedScopes_IgnoresUnknownLegacyScopeKeysWithoutDeletingUnscopedFailures(t *testing.T) {
+	t.Parallel()
+
+	env := newRepairPersistedScopesEnv(t)
+	ctx := env.ctx()
+
+	_, err := env.eng.baseline.db.ExecContext(
+		ctx,
+		`INSERT INTO scope_blocks
+			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"auth:account",
+		IssueUnauthorized,
+		ScopeTimingNone,
+		env.now.UnixNano(),
+		int64(0),
+		int64(0),
+		int64(0),
+		0,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, env.eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:      "keep.txt",
+		DriveID:   driveid.New("drive1"),
+		Direction: DirectionUpload,
+		Role:      FailureRoleItem,
+		Category:  CategoryActionable,
+		IssueType: IssueInvalidFilename,
+		ErrMsg:    "keep unrelated failure",
+	}, nil))
+
+	require.NoError(t, repairPersistedScopesForTest(t, env.eng, ctx))
+
+	blocks, err := env.eng.baseline.ListScopeBlocks(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
+
+	failures, err := env.eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	assert.Equal(t, "keep.txt", failures[0].Path)
+	assert.True(t, failures[0].ScopeKey.IsZero())
+}
+
 // Validates: R-2.10.45, R-2.10.46
 func TestEngine_PrepareRunOnceState_RevalidatesPersistedCatalogAuthRequirement(t *testing.T) {
 	t.Parallel()

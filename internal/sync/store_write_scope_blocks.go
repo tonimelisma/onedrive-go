@@ -160,6 +160,12 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*ScopeBlock, error) 
 			PreserveUntil: preserveUntil,
 			TrialCount:    trialCount,
 		}
+		if block.Key.IsZero() {
+			// Old or unknown persisted scope keys are no longer part of the
+			// steady-state runtime model. Skip them here so startup repair never
+			// treats an unrecognized wire key as an empty scope.
+			continue
+		}
 		result = append(result, block)
 	}
 

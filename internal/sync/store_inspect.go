@@ -577,6 +577,9 @@ func (i *Inspector) listScopeBlocks(ctx context.Context) ([]*ScopeBlock, error) 
 			TrialInterval: time.Duration(intervalNano),
 			TrialCount:    trialCount,
 		}
+		if block.Key.IsZero() {
+			continue
+		}
 		if nextTrialNano != 0 {
 			block.NextTrialAt = time.Unix(0, nextTrialNano).UTC()
 		}
