@@ -7,7 +7,7 @@ Implements: R-2.5.1 [verified], R-2.5.2 [verified], R-2.5.4 [verified], R-2.10.3
 | Behavior | Evidence |
 | --- | --- |
 | The per-drive SQLite schema remains intentionally narrow and excludes deleted manual conflict/delete-approval state. | `internal/sync/schema_test.go`, `internal/sync/store_integrity_test.go`, `internal/sync/baseline_test.go` |
-| Baseline, remote mirror, failure, and scope-block tables remain the durable sync authority surfaces. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestSyncStore_FailureAdminMutations` |
+| Baseline, current local/remote snapshots, latest planned actions, retry state, and scope-block timers remain the durable sync authority surfaces. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestSyncStore_FailureAdminMutations` |
 
 ## One Database Per Drive
 
@@ -27,10 +27,13 @@ narrowed back to whole-drive or separately configured shared-root drives.
 | Table | Purpose | Key |
 | --- | --- | --- |
 | `baseline` | Last known synced truth for paths/items | `item_id` and unique `path` |
+| `local_state` | Latest observed admissible local snapshot truth | `path` |
 | `remote_state` | Latest observed remote mirror truth | `item_id` |
+| `planned_actions` | Latest generated action plan only | `action_id` |
+| `retry_state` | Pending retryable and blocked work for the latest intent | `action_id` |
 | `sync_failures` | Per-path retryable and actionable failures | `path` |
 | `scope_blocks` | Durable scope-level blocking conditions and trial timing | `scope_key` |
-| `observation_state` | Configured drive owner, primary cursor, full-reconcile cadence | singleton row |
+| `observation_state` | Configured drive owner, primary cursor, and persisted refresh cadence | singleton row |
 | `run_status` | Typed one-shot status/report projection for `status` | singleton row |
 
 ## `baseline`
@@ -59,9 +62,45 @@ Remote deletion is represented by row absence. If a baseline row exists and
 the corresponding `remote_state` row is missing, later runs rediscover remote
 delete drift from durable state alone.
 
-`remote_state` no longer carries filtered-row fields such as `is_filtered`,
-`filter_generation`, or `filter_reason`. Observation now stores only raw
-remote truth; planning and permission policy decide what work is admissible.
+`remote_state` persists `content_identity` in addition to the remote facts so
+later SQLite-side planning can infer remote rename/move intent from durable
+state rather than short-lived event envelopes.
+
+## `local_state`
+
+`local_state` is the durable mirror of the latest admissible local snapshot:
+
+- identity/materialization: `path`, `item_type`
+- local facts: `hash`, `size`, `mtime`, `content_identity`
+- observation timestamp: `observed_at`
+
+Ignored content does not enter `local_state`. The table stores only current
+local truth that can participate in reconciliation.
+
+## `planned_actions`
+
+`planned_actions` stores the latest generated plan only. Rows carry:
+
+- plan identity: `plan_id`, `action_id`
+- target path facts: `path`, `old_path`, `action_type`
+- source/target identities for execution preconditions
+- dependency ordering via `dependency_key`
+- latest action `status`
+
+The table is intentionally not an action history log. Each new plan generation
+replaces the previous rows.
+
+## `retry_state`
+
+`retry_state` is the durable ledger for pending retryable and blocked work
+aligned with the latest generated plan:
+
+- plan/action identity: `plan_id`, `action_id`
+- work identity: `path`, `action_type`
+- blocking linkage: `scope_key`, `blocked`
+- retry timing: `attempt_count`, `next_retry_at`
+- operator/debug facts: `last_error`
+- timestamps: `first_seen_at`, `last_seen_at`
 
 ## `sync_failures`
 
@@ -84,11 +123,11 @@ not a mailbox for user decisions.
 - identity: `scope_key`
 - visible issue type: `issue_type`
 - timing state: `timing_source`, `blocked_at`, `trial_interval`,
-  `next_trial_at`, `preserve_until`, `trial_count`
+  `next_trial_at`, `trial_count`
 
 The engine rebuilds its in-memory active-scope working set from this table at
-startup and owns all runtime mutations thereafter. Durable account-auth state
-is not stored here; it lives in the managed catalog.
+startup and owns all runtime mutations thereafter. `scope_blocks` is timing
+authority only; concrete blocked work belongs in `retry_state`.
 
 Current persisted scope keys are:
 
@@ -108,11 +147,12 @@ identity and cadence:
 
 - `configured_drive_id`: the configured drive that owns this DB
 - `cursor`: the one primary remote observation cursor for this DB
-- `last_full_remote_reconcile_at`: when the last successful full primary remote observation finished
+- `remote_refresh_mode`, `last_full_remote_refresh_at`, `next_full_remote_refresh_at`
+- `local_refresh_mode`, `last_full_local_refresh_at`, `next_full_local_refresh_at`
 
 The cursor is committed atomically with the corresponding remote observation
-writes. The persisted full-reconcile timestamp makes the 24-hour full-remote
-reconcile rule restart-safe in both one-shot and watch mode.
+writes. The persisted local/remote refresh timestamps and modes make periodic
+full-refresh cadence restart-safe in both one-shot and watch mode.
 
 ## `run_status`
 

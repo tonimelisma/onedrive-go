@@ -10,24 +10,43 @@ import (
 )
 
 const (
-	sqlReadObservationState = `SELECT configured_drive_id, cursor, last_full_remote_reconcile_at
+	sqlReadObservationState = `SELECT
+			configured_drive_id,
+			cursor,
+			remote_refresh_mode,
+			last_full_remote_refresh_at,
+			next_full_remote_refresh_at,
+			local_refresh_mode,
+			last_full_local_refresh_at,
+			next_full_local_refresh_at
 		FROM observation_state WHERE singleton_id = 1`
 	sqlEnsureObservationStateRow = `INSERT INTO observation_state
-		(singleton_id, configured_drive_id, cursor, last_full_remote_reconcile_at)
-		VALUES (1, '', '', 0)
+		(singleton_id, configured_drive_id, cursor, remote_refresh_mode, last_full_remote_refresh_at, next_full_remote_refresh_at, local_refresh_mode, last_full_local_refresh_at, next_full_local_refresh_at)
+		VALUES (1, '', '', '', 0, 0, '', 0, 0)
 		ON CONFLICT(singleton_id) DO NOTHING`
 	sqlUpsertObservationState = `INSERT INTO observation_state
-		(singleton_id, configured_drive_id, cursor, last_full_remote_reconcile_at)
-		VALUES (1, ?, ?, ?)
+		(singleton_id, configured_drive_id, cursor, remote_refresh_mode, last_full_remote_refresh_at, next_full_remote_refresh_at, local_refresh_mode, last_full_local_refresh_at, next_full_local_refresh_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(singleton_id) DO UPDATE SET
 			configured_drive_id = excluded.configured_drive_id,
 			cursor = excluded.cursor,
-			last_full_remote_reconcile_at = excluded.last_full_remote_reconcile_at`
+			remote_refresh_mode = excluded.remote_refresh_mode,
+			last_full_remote_refresh_at = excluded.last_full_remote_refresh_at,
+			next_full_remote_refresh_at = excluded.next_full_remote_refresh_at,
+			local_refresh_mode = excluded.local_refresh_mode,
+			last_full_local_refresh_at = excluded.last_full_local_refresh_at,
+			next_full_local_refresh_at = excluded.next_full_local_refresh_at`
 )
 
 type ObservationState struct {
 	ConfiguredDriveID         driveid.ID
 	Cursor                    string
+	RemoteRefreshMode         string
+	LastFullRemoteRefreshAt   int64
+	NextFullRemoteRefreshAt   int64
+	LocalRefreshMode          string
+	LastFullLocalRefreshAt    int64
+	NextFullLocalRefreshAt    int64
 	LastFullRemoteReconcileAt int64
 }
 
@@ -97,10 +116,16 @@ func (m *SyncStore) ReadObservationState(ctx context.Context) (*ObservationState
 	if err := m.db.QueryRowContext(ctx, sqlReadObservationState).Scan(
 		&configuredDriveID,
 		&state.Cursor,
-		&state.LastFullRemoteReconcileAt,
+		&state.RemoteRefreshMode,
+		&state.LastFullRemoteRefreshAt,
+		&state.NextFullRemoteRefreshAt,
+		&state.LocalRefreshMode,
+		&state.LastFullLocalRefreshAt,
+		&state.NextFullLocalRefreshAt,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
+	state.LastFullRemoteReconcileAt = state.LastFullRemoteRefreshAt
 
 	if configuredDriveID != "" {
 		state.ConfiguredDriveID = driveid.New(configuredDriveID)
@@ -153,7 +178,12 @@ func (m *SyncStore) ClearObservationCursor(ctx context.Context) error {
 	if _, execErr := m.db.ExecContext(ctx, sqlUpsertObservationState,
 		state.ConfiguredDriveID.String(),
 		state.Cursor,
-		state.LastFullRemoteReconcileAt,
+		state.RemoteRefreshMode,
+		state.LastFullRemoteRefreshAt,
+		state.NextFullRemoteRefreshAt,
+		state.LocalRefreshMode,
+		state.LastFullLocalRefreshAt,
+		state.NextFullLocalRefreshAt,
 	); execErr != nil {
 		return fmt.Errorf("sync: clearing observation cursor: %w", execErr)
 	}
@@ -182,7 +212,8 @@ func (m *SyncStore) MarkFullRemoteReconcile(
 		return ensureErr
 	}
 
-	state.LastFullRemoteReconcileAt = at.UnixNano()
+	state.LastFullRemoteRefreshAt = at.UnixNano()
+	state.LastFullRemoteReconcileAt = state.LastFullRemoteRefreshAt
 	if writeErr := m.writeObservationStateTx(ctx, tx, state); writeErr != nil {
 		return writeErr
 	}
@@ -228,10 +259,16 @@ func (m *SyncStore) readObservationStateTx(
 	if err := tx.QueryRowContext(ctx, sqlReadObservationState).Scan(
 		&configuredDriveID,
 		&state.Cursor,
-		&state.LastFullRemoteReconcileAt,
+		&state.RemoteRefreshMode,
+		&state.LastFullRemoteRefreshAt,
+		&state.NextFullRemoteRefreshAt,
+		&state.LocalRefreshMode,
+		&state.LastFullLocalRefreshAt,
+		&state.NextFullLocalRefreshAt,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
+	state.LastFullRemoteReconcileAt = state.LastFullRemoteRefreshAt
 
 	if configuredDriveID != "" {
 		state.ConfiguredDriveID = driveid.New(configuredDriveID)
@@ -275,7 +312,12 @@ func (m *SyncStore) writeObservationStateTx(
 	if _, err := tx.ExecContext(ctx, sqlUpsertObservationState,
 		state.ConfiguredDriveID.String(),
 		state.Cursor,
-		state.LastFullRemoteReconcileAt,
+		state.RemoteRefreshMode,
+		state.LastFullRemoteRefreshAt,
+		state.NextFullRemoteRefreshAt,
+		state.LocalRefreshMode,
+		state.LastFullLocalRefreshAt,
+		state.NextFullLocalRefreshAt,
 	); err != nil {
 		return fmt.Errorf("sync: writing observation_state: %w", err)
 	}
