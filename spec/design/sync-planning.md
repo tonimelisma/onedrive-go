@@ -13,6 +13,14 @@ The planner is a deterministic function:
 It owns only classification and ordering. It does not touch SQLite, Graph, or
 the local filesystem.
 
+In the clean-cut SQLite refactor, comparison and reconciliation are moving
+down into SQLite before planner materialization. `internal/sync/sqlite_compare.go`
+now computes durable snapshot-vs-baseline comparison and desired-outcome rows
+from `baseline`, `local_state`, and `remote_state`. `planned_actions` can now
+also be materialized from those reconciliation rows, replacing the latest plan
+generation atomically in SQLite. The legacy planner still consumes event-shaped
+inputs until the next increment deletes that boundary.
+
 ## Ownership Contract
 
 - Owns: path classification, move detection, action dependency ordering, and directional deferral reporting
@@ -37,6 +45,16 @@ the local filesystem.
 - `Mode`: bidirectional, download-only, or upload-only
 - `SafetyConfig`: current planner-facing safety knobs; no delete-approval workflow remains
 - `deniedPrefixes`: engine-owned read-only subtrees, typically from permission policy
+
+SQLite-side pre-planning inputs now exist in parallel:
+
+- `local_state`: latest admissible local snapshot
+- `remote_state`: latest admissible remote snapshot
+- `baseline`: last converged synced truth
+
+Those rows feed `comparison_state` and `reconciliation_state`, including the
+new invariant that a baseline row absent from both snapshots becomes
+`baseline_remove`.
 
 ## Pipeline
 

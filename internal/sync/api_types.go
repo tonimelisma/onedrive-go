@@ -37,7 +37,7 @@ type (
 	}
 	WatchOptions struct {
 		PollInterval time.Duration // remote delta polling interval (0 -> 5m)
-		Debounce     time.Duration // buffer debounce window (0 -> 2s)
+		Debounce     time.Duration // local/remote observation debounce window before replanning (0 -> 5s)
 	}
 	Report struct {
 		Mode     Mode

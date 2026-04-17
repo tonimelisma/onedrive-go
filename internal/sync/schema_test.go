@@ -21,7 +21,10 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{
 		"baseline",
+		"local_state",
 		"observation_state",
+		"planned_actions",
+		"retry_state",
 		"remote_state",
 		"run_status",
 		"scope_blocks",
@@ -31,7 +34,10 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 	state, err := store.ReadObservationState(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, state)
-	assert.Zero(t, state.LastFullRemoteReconcileAt)
+	assert.Zero(t, state.LastFullRemoteRefreshAt)
+	assert.Zero(t, state.NextFullRemoteRefreshAt)
+	assert.Zero(t, state.LastFullLocalRefreshAt)
+	assert.Zero(t, state.NextFullLocalRefreshAt)
 }
 
 // Validates: R-2.5.6

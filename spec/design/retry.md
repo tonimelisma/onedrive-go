@@ -47,7 +47,8 @@ execution.
 
 `ReconcilePolicy()` is the single retry curve for transient item failures in
 the sync engine. The store never imports the retry package directly; the engine
-passes `retry.ReconcilePolicy().Delay` into `RecordFailure`.
+passes `retry.ReconcilePolicy().Delay` into `RecordFailure`, and the store
+persists the resulting ready/trial scheduling into `retry_state`.
 
 `DriveDiscoveryPolicy()` is intentionally longer than the earlier
 three-attempt budget because `/me/drives` is a discovery/catalog surface, not a
@@ -128,7 +129,7 @@ its own.
 
 Sync has exactly two retry mechanisms:
 
-1. per-item transient retry through `sync_failures.next_retry_at`
+1. per-item transient retry through `retry_state.next_retry_at`
 2. scope recovery through persisted `scope_blocks` plus real trial actions
 
 The dependency graph is not a retry system. Workers never sleep for retry
@@ -137,19 +138,20 @@ engine.
 
 ### Per-item transient retry
 
-- transient failures are recorded in `sync_failures` with `failure_role='item'`
+- transient failures are still recorded in `sync_failures` for reporting and issue inspection
+- retryable work is mirrored into `retry_state`, which is the durable authority for retry readiness
 - `next_retry_at` is computed from `ReconcilePolicy()`
-- the engine-owned retry sweep rebuilds planner input from durable state and feeds it back through the normal planner -> dispatch pipeline
+- the engine-owned retry sweep reads ready rows from `retry_state`, enriches them from current durable truth when needed, then rebuilds planner input through the normal planner -> dispatch pipeline
 - upload-side redispatch uses `ObserveSinglePath()` so retry/trial reconstruction follows the same local validation, oversized-file, and empty-hash-on-failure rules as normal observation
 
 ### Scope retry via trial actions
 
 When the engine activates a scope block, blocked descendants are recorded in
-`sync_failures` with `failure_role='held'`. Recovery happens through trial
-actions:
+`sync_failures` with `failure_role='held'` and mirrored into blocked
+`retry_state` rows. Recovery happens through trial actions:
 
-- `runTrialDispatch()` picks a held row for each due scope via `PickTrialCandidate`
-- `createEventFromDB()` / the retry-trial rebuild path reconstruct planner input from current durable state or single-path local observation
+- `runTrialDispatch()` picks one blocked retry row at random for each due scope via `PickRetryTrialCandidate`
+- the retry-trial rebuild path reconstructs planner input from current durable state or single-path local observation
 - success -> `releaseScope`
 - matching-scope persistence evidence -> `extendScopeTrial`
 - inconclusive trial outcomes -> `preserveScopeTrial`
@@ -165,7 +167,7 @@ actions:
 
 - delete the scope row
 - delete the boundary row (`failure_role='boundary'`)
-- convert held rows back to retryable item rows immediately
+- convert held rows back to retryable item rows immediately in both `sync_failures` and `retry_state`
 
 ### Trial timing
 
@@ -200,6 +202,7 @@ Startup repair applies persisted-scope policy before any admission begins:
 The sync engine does not carry a circuit breaker, retry queue inside the graph,
 or transport-level sync retry layer. The durable retry model is:
 
-- `sync_failures`
-- `scope_blocks`
+- `retry_state` for pending retryable or blocked work
+- `sync_failures` for issue reporting and failure enrichment
+- `scope_blocks` for trial timing only
 - engine-owned retry/trial loops

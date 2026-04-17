@@ -764,6 +764,10 @@ func TestIsAlwaysExcluded(t *testing.T) {
 		{"tmp uppercase", "FILE.TMP", true},
 		{"partial mixed case", "Download.Partial", true},
 		{"db uppercase", "DATA.DB", false},
+		{"ds store", ".DS_Store", true},
+		{"thumbs db", "Thumbs.db", true},
+		{"appledouble", "._file.txt", true},
+		{"macosx dir", "__MACOSX", true},
 
 		// Prefix-based exclusions.
 		{"tilde prefix", "~backup", true},

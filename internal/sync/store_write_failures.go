@@ -300,6 +300,26 @@ func (m *SyncStore) RecordFailure(
 	if err != nil {
 		return fmt.Errorf("sync: recording sync failure for %s: %w", p.Path, err)
 	}
+	if category == CategoryTransient && role != FailureRoleBoundary {
+		retryRow, retryErr := plannedActionIdentityForRetryTx(ctx, tx, p.Path, actionType)
+		if retryErr != nil {
+			return retryErr
+		}
+		retryRow.ScopeKey = p.ScopeKey
+		retryRow.Blocked = role == FailureRoleHeld
+		retryRow.AttemptCount = newCount
+		retryRow.LastError = p.ErrMsg
+		retryRow.FirstSeenAt = nowNano
+		retryRow.LastSeenAt = nowNano
+		if nextRetryNano != nil {
+			retryRow.NextRetryAt = *nextRetryNano
+		}
+		if retryErr := upsertRetryStateTx(ctx, tx, &retryRow); retryErr != nil {
+			return retryErr
+		}
+	} else if retryErr := deleteRetryStateByPathTx(ctx, tx, p.Path); retryErr != nil {
+		return retryErr
+	}
 
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing failure for %s: %w", p.Path, err)
@@ -375,6 +395,9 @@ func (m *SyncStore) ClearSyncFailure(ctx context.Context, path string, driveID d
 	if err != nil {
 		return fmt.Errorf("sync: clearing sync failure for %s: %w", path, err)
 	}
+	if _, err := m.db.ExecContext(ctx, `DELETE FROM retry_state WHERE path = ?`, path); err != nil {
+		return fmt.Errorf("sync: clearing retry_state for %s: %w", path, err)
+	}
 
 	return nil
 }
@@ -427,6 +450,9 @@ func (m *SyncStore) TakeSyncFailure(
 	if affected != 1 {
 		return nil, false, fmt.Errorf("sync: deleting taken sync failure for %s: expected 1 row, got %d", path, affected)
 	}
+	if retryErr := deleteRetryStateByPathTx(ctx, tx, path); retryErr != nil {
+		return nil, false, retryErr
+	}
 
 	if err = tx.Commit(); err != nil {
 		return nil, false, fmt.Errorf("sync: committing take sync failure for %s: %w", path, err)
@@ -442,6 +468,9 @@ func (m *SyncStore) ClearSyncFailureByPath(ctx context.Context, path string) err
 		`DELETE FROM sync_failures WHERE path = ?`, path)
 	if err != nil {
 		return fmt.Errorf("sync: clearing sync failure for %s: %w", path, err)
+	}
+	if _, err := m.db.ExecContext(ctx, `DELETE FROM retry_state WHERE path = ?`, path); err != nil {
+		return fmt.Errorf("sync: clearing retry_state for %s: %w", path, err)
 	}
 
 	return nil
@@ -468,6 +497,9 @@ func (m *SyncStore) MarkSyncFailureActionable(ctx context.Context, path string, 
 		path)
 	if err != nil {
 		return fmt.Errorf("sync: marking sync failure actionable for %s: %w", path, err)
+	}
+	if _, err := m.db.ExecContext(ctx, `DELETE FROM retry_state WHERE path = ?`, path); err != nil {
+		return fmt.Errorf("sync: clearing retry_state for actionable %s: %w", path, err)
 	}
 
 	return nil
@@ -550,6 +582,9 @@ func (m *SyncStore) UpsertActionableFailures(
 		); execErr != nil {
 			return fmt.Errorf("sync: upsert actionable failure for %s: %w", f.Path, execErr)
 		}
+		if retryErr := deleteRetryStateByPathTx(ctx, tx, f.Path); retryErr != nil {
+			return retryErr
+		}
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -614,6 +649,9 @@ func (m *SyncStore) DeleteSyncFailuresByScope(ctx context.Context, scopeKey Scop
 	if err != nil {
 		return fmt.Errorf("sync: deleting failures for scope %s: %w", wire, err)
 	}
+	if err := deleteRetryStateByScopeTx(ctx, m.db, wire); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -671,6 +709,9 @@ func (m *SyncStore) SetScopeRetryAtNow(ctx context.Context, scopeKey ScopeKey, n
 	)
 	if err != nil {
 		return 0, fmt.Errorf("sync: setting scope retry-at for %s: %w", wire, err)
+	}
+	if retryErr := markRetryStateScopeReadyTx(ctx, m.db, wire, nowNano); retryErr != nil {
+		return 0, retryErr
 	}
 
 	affected, err := result.RowsAffected()

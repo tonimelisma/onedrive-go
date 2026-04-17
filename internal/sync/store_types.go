@@ -63,30 +63,74 @@ type ActionableFailure struct {
 // ObservedItem represents a single item from a delta API response, ready
 // for CommitObservation to process against existing remote_state.
 type ObservedItem struct {
-	DriveID   driveid.ID
-	ItemID    string
-	ParentID  string
-	Path      string
-	ItemType  ItemType
-	Hash      string
-	Size      int64
-	Mtime     int64
-	ETag      string
-	IsDeleted bool
+	DriveID         driveid.ID
+	ItemID          string
+	ParentID        string
+	Path            string
+	ItemType        ItemType
+	Hash            string
+	Size            int64
+	Mtime           int64
+	ETag            string
+	ContentIdentity string
+	IsDeleted       bool
 }
 
 // RemoteStateRow represents a row from the remote_state table.
 type RemoteStateRow struct {
-	DriveID      driveid.ID
-	ItemID       string
+	DriveID         driveid.ID
+	ItemID          string
+	Path            string
+	ParentID        string
+	ItemType        ItemType
+	Hash            string
+	Size            int64
+	Mtime           int64
+	ETag            string
+	ContentIdentity string
+	PreviousPath    string
+}
+
+// LocalStateRow represents a row from the local_state table.
+type LocalStateRow struct {
+	Path            string
+	ItemType        ItemType
+	Hash            string
+	Size            int64
+	Mtime           int64
+	ContentIdentity string
+	ObservedAt      int64
+}
+
+// PlannedActionRow represents a row from the planned_actions table. The table
+// stores only the latest generated plan for the drive.
+type PlannedActionRow struct {
+	ActionID                   string
+	PlanID                     string
+	Path                       string
+	ActionType                 ActionType
+	OldPath                    string
+	SourceIdentity             string
+	TargetIdentity             string
+	DependencyKey              string
+	PreconditionLocalIdentity  string
+	PreconditionRemoteIdentity string
+	Status                     string
+}
+
+// RetryStateRow represents a row from the retry_state table.
+type RetryStateRow struct {
+	ActionID     string
+	PlanID       string
 	Path         string
-	ParentID     string
-	ItemType     ItemType
-	Hash         string
-	Size         int64
-	Mtime        int64
-	ETag         string
-	PreviousPath string
+	ActionType   ActionType
+	ScopeKey     ScopeKey
+	Blocked      bool
+	AttemptCount int
+	NextRetryAt  int64
+	LastError    string
+	FirstSeenAt  int64
+	LastSeenAt   int64
 }
 
 // SyncRunStatus is the typed one-shot status row persisted for product-facing

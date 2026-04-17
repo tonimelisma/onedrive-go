@@ -1817,11 +1817,11 @@ func TestObserverStats_HashesComputed(t *testing.T) {
 // Remote observer trusts server — no name filtering
 // ---------------------------------------------------------------------------
 
-// TestClassifyItem_RemoteTrustsServer validates that the remote observer does
-// NOT filter items by name validity. If OneDrive sends an item in a delta
-// response, it exists on OneDrive — filtering it would be silent data loss.
-// Only root and vault items are filtered.
-func TestClassifyItem_RemoteTrustsServer(t *testing.T) {
+// TestClassifyItem_RemoteAppliesSymmetricIgnorePolicy validates that the
+// remote observer drops the same junk-file names as local observation while
+// still trusting server-provided names that are not part of the symmetric
+// ignore set.
+func TestClassifyItem_RemoteAppliesSymmetricIgnorePolicy(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
@@ -1836,29 +1836,29 @@ func TestClassifyItem_RemoteTrustsServer(t *testing.T) {
 		name      string
 		itemName  string
 		isDeleted bool
+		wantEvent bool
 	}{
-		// Names that the local observer would exclude — remote observer
-		// must still produce events for these because they exist on OneDrive.
-		{".tmp file", "data.tmp", false},
-		{".partial file", "download.partial", false},
-		{"tilde backup", "~backup.txt", false},
-		{"dot-tilde lock", ".~lock.file", false},
-		{".swp file", "file.swp", false},
-		{".crdownload", "file.crdownload", false},
-		{"reserved name CON", "CON", false},
-		{"trailing dot", "file.", false},
-		{"trailing space", "file ", false},
-		{"tilde-dollar", "~$document.docx", false},
+		// Symmetric ignore policy removes local/remote junk together.
+		{".tmp file", "data.tmp", false, false},
+		{".partial file", "download.partial", false, false},
+		{"tilde backup", "~backup.txt", false, false},
+		{"dot-tilde lock", ".~lock.file", false, false},
+		{".swp file", "file.swp", false, false},
+		{".crdownload", "file.crdownload", false, false},
+		{"reserved name CON", "CON", false, true},
+		{"trailing dot", "file.", false, true},
+		{"trailing space", "file ", false, true},
+		{"tilde-dollar", "~$document.docx", false, true},
 
 		// Valid names produce events as before.
-		{"normal file", "hello.txt", false},
-		{"db file", "data.db", false},
-		{"pdf file", "report.pdf", false},
+		{"normal file", "hello.txt", false, true},
+		{"db file", "data.db", false, true},
+		{"pdf file", "report.pdf", false, true},
 
-		// Deleted items also pass through.
-		{"deleted .tmp", "data.tmp", true},
-		{"deleted tilde", "~backup.txt", true},
-		{"deleted .partial", "download.partial", true},
+		// Deleted junk items are ignored symmetrically too.
+		{"deleted .tmp", "data.tmp", true, false},
+		{"deleted tilde", "~backup.txt", true, false},
+		{"deleted .partial", "download.partial", true, false},
 	}
 
 	for _, tt := range tests {
@@ -1874,7 +1874,12 @@ func TestClassifyItem_RemoteTrustsServer(t *testing.T) {
 			}
 
 			ev := obs.Converter.ClassifyItem(item, inflight)
-			assert.NotNil(t, ev, "remote observer must produce event for %q (server data is authoritative)", tt.itemName)
+			if tt.wantEvent {
+				assert.NotNil(t, ev, "remote observer must produce event for %q", tt.itemName)
+				return
+			}
+
+			assert.Nil(t, ev, "remote observer must ignore symmetric junk item %q", tt.itemName)
 		})
 	}
 }

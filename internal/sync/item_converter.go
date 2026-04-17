@@ -145,6 +145,17 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 		existing = baselineEntry
 	}
 
+	name := effectiveItemName(item, existing)
+	if IsAlwaysExcluded(name) {
+		c.Logger.Debug("ignoring symmetric snapshot-junk item",
+			slog.String("item_id", item.ID),
+			slog.String("name", name),
+			slog.String("drive_id", itemDriveID.String()),
+		)
+
+		return nil
+	}
+
 	// Non-deleted items need a materializable leaf name. Deleted items may
 	// recover their name from the baseline later in classifyAndConvert.
 	// Delta query updates are allowed to omit unchanged properties, so an

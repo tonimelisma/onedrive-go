@@ -576,6 +576,40 @@ func TestReadObservationState_EmptyCursor(t *testing.T) {
 }
 
 // Validates: R-2.2
+func TestMarkFullLocalRefresh_PersistsNextRefreshAt(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	at := time.Unix(10_000, 0)
+
+	require.NoError(t, mgr.MarkFullLocalRefresh(ctx, driveid.New("drive-1"), at, localRefreshModeWatchDegraded))
+
+	state, err := mgr.ReadObservationState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, localRefreshModeWatchDegraded, state.LocalRefreshMode)
+	assert.Equal(t, at.UnixNano(), state.LastFullLocalRefreshAt)
+	assert.Equal(t, at.Add(time.Hour).UnixNano(), state.NextFullLocalRefreshAt)
+}
+
+// Validates: R-2.2
+func TestMarkFullRemoteRefresh_PersistsNextRefreshAt(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	at := time.Unix(20_000, 0)
+
+	require.NoError(t, mgr.MarkFullRemoteRefresh(ctx, driveid.New("drive-1"), at, remoteRefreshModeDeltaHealthy))
+
+	state, err := mgr.ReadObservationState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, remoteRefreshModeDeltaHealthy, state.RemoteRefreshMode)
+	assert.Equal(t, at.UnixNano(), state.LastFullRemoteRefreshAt)
+	assert.Equal(t, at.Add(24*time.Hour).UnixNano(), state.NextFullRemoteRefreshAt)
+}
+
+// Validates: R-2.2
 func TestLoad_NullableFields(t *testing.T) {
 	t.Parallel()
 
@@ -1481,8 +1515,8 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	// Verify all expected tables exist by querying sqlite_master.
 	expectedTables := []string{
-		"baseline", "observation_state", "run_status",
-		"remote_state", "sync_failures",
+		"baseline", "local_state", "observation_state", "planned_actions",
+		"retry_state", "run_status", "remote_state", "sync_failures",
 	}
 
 	for _, table := range expectedTables {

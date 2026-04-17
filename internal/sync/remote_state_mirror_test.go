@@ -164,3 +164,24 @@ func TestCommitObservation_MoveUpdatesPreviousPath(t *testing.T) {
 	assert.Equal(t, "new.txt", row.Path)
 	assert.Equal(t, "old.txt", row.PreviousPath)
 }
+
+// Validates: R-2.11
+func TestCommitObservation_IgnoresSymmetricJunkRows(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := context.Background()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item-junk",
+		ParentID: "root",
+		Path:     ".DS_Store",
+		ItemType: ItemTypeFile,
+		Hash:     "hash-junk",
+	}}, "delta-token-junk", driveID))
+
+	assert.Nil(t, readRemoteStateRow(t, mgr.DB(), "item-junk"))
+	assert.Equal(t, "delta-token-junk", readObservationCursor(t, mgr.DB(), testDriveID))
+}
