@@ -147,9 +147,9 @@ Conflicts are engine-owned and immediate:
 
 - edit/edit and create/create preserve both versions by renaming local to a
   conflict copy and downloading remote to the canonical path
-- edit/delete is auto-resolved with local-wins upload
-- executor-time local-delete hash mismatch also routes through that same
-  edit/delete recovery path
+- edit/delete is planner-expanded into a local-wins upload
+- executor-time local-delete hash mismatch now reports a stale precondition so
+  the next replan can emit that upload from current truth
 
 There is no durable conflict-request workflow and no CLI `resolve` command.
 

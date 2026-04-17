@@ -1189,11 +1189,13 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 }
 
 // Validates: R-6.2.4
-func TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolve(t *testing.T) {
+func TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition(t *testing.T) {
 	t.Parallel()
 
+	uploadCalled := false
 	uploader := &executorMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalled = true
 			assert.Equal(t, graphRootID, parentID)
 			assert.Equal(t, "exec-modified.txt", name)
 			return &graph.Item{ID: "uploaded-item", ETag: "etag1", QuickXorHash: "remote-hash"}, nil
@@ -1217,12 +1219,10 @@ func TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolve(t *testing.T) {
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
-	requireOutcomeSuccess(t, &o)
-
-	assert.Equal(t, ActionUpload, o.Action, "expected ActionUpload for edit-delete auto-resolution")
-	assert.Equal(t, ConflictEditDelete, o.ConflictType, "expected ConflictEditDelete")
-	assert.Equal(t, ResolvedByAuto, o.ResolvedBy)
-	assert.Equal(t, "uploaded-item", o.ItemID)
+	require.False(t, o.Success)
+	assert.Equal(t, ActionLocalDelete, o.Action)
+	require.Error(t, o.Error)
+	assert.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 
 	contents, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.txt"))
 	require.NoError(t, err)
@@ -1233,14 +1233,17 @@ func TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolve(t *testing.T) {
 	for _, entry := range entries {
 		assert.NotContains(t, entry.Name(), ".conflict-", "edit-delete auto-resolution should not create a conflict copy")
 	}
+	assert.False(t, uploadCalled, "executor should not invent upload intent for stale local delete")
 }
 
 // Validates: R-6.2.4
-func TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolveDoesNotCreateConflictCopy(t *testing.T) {
+func TestExecutor_LocalDelete_HashMismatch_DoesNotCreateConflictCopy(t *testing.T) {
 	t.Parallel()
 
+	uploadCalled := false
 	uploader := &executorMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalled = true
 			assert.Equal(t, graphRootID, parentID)
 			assert.Equal(t, "exec-modified.txt", name)
 			return &graph.Item{ID: "uploaded-item", ETag: "etag1", QuickXorHash: "remote-hash"}, nil
@@ -1265,9 +1268,10 @@ func TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolveDoesNotCreateCon
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
-	requireOutcomeSuccess(t, &o)
-	assert.Equal(t, ActionUpload, o.Action)
-	assert.Equal(t, ResolvedByAuto, o.ResolvedBy)
+	require.False(t, o.Success)
+	assert.Equal(t, ActionLocalDelete, o.Action)
+	require.Error(t, o.Error)
+	assert.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 
 	currentData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.txt"))
 	require.NoError(t, err)
@@ -1279,6 +1283,7 @@ func TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolveDoesNotCreateCon
 
 	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-modified.conflict-20260115-120000-2.txt"))
 	assert.True(t, os.IsNotExist(statErr), "auto-resolve should not create a suffixed conflict copy")
+	assert.False(t, uploadCalled, "executor should not invent upload intent for stale local delete")
 }
 
 func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {

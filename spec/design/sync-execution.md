@@ -26,8 +26,8 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Behavior | Evidence |
 | --- | --- |
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
-| Local edit versus remote delete is auto-resolved without a durable conflict mailbox. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolve` |
-| Execution keeps ordinary per-item delete safety and routes concrete failures back to the engine instead of persisting manual approval state. | `TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolve`, `TestExecutor_SyncedUpdate`, `TestExecutor_SyncedUpdate_BaselineFallback` |
+| Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes requeue for replan instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition` |
+| Execution keeps ordinary per-item delete safety and routes concrete failures back to the engine instead of persisting manual approval state. | `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestExecutor_SyncedUpdate`, `TestExecutor_SyncedUpdate_BaselineFallback` |
 
 ## Worker And Dependency Model
 
@@ -58,7 +58,7 @@ Local delete keeps the ordinary per-item safety rule:
 
 - if the file still hashes to the baseline hash, delete it
 - if the file changed after planning, do **not** delete newer local content;
-  auto-resolve as an edit/delete conflict and recreate the remote file
+  return a stale-precondition failure so the engine replans from current truth
 
 Directory delete also preserves non-disposable local content by refusing to
 remove directories blocked by non-disposable children.
@@ -83,12 +83,14 @@ an abstract conflict action to roll the pair back.
 
 ### Edit/delete
 
-The executor auto-resolves `ConflictEditDelete` with local-wins behavior:
+The planner expands `ConflictEditDelete` into a concrete `ActionUpload`. The
+executor then performs that upload as ordinary concrete work:
 
 1. keep the local file in place
 2. upload it to recreate the remote item
 
-No conflict copy is needed for this case.
+No conflict copy is needed for this case, and the executor does not invent the
+upload from a stale local delete.
 
 ## Shared-Root Execution
 
