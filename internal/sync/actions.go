@@ -43,7 +43,7 @@ func (c *DeferredCounts) AddAction(action *Action) {
 		c.LocalDeletes++
 	case ActionRemoteDelete:
 		c.RemoteDeletes++
-	case ActionConflictCopy, ActionConflict, ActionUpdateSynced, ActionCleanup:
+	case ActionConflictCopy, ActionUpdateSynced, ActionCleanup:
 		return
 	}
 }

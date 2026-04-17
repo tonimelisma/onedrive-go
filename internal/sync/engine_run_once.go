@@ -74,7 +74,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	}
 
 	counts := CountByType(plan.Actions)
-	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
+	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
 
 	if len(plan.Actions) == 0 {
 		if report.DeferredByMode.Total() > 0 {
@@ -151,7 +151,7 @@ func (e *Engine) runOnceDryRun(
 	e.collector().RecordPlan(len(plan.Actions), e.since(planStart))
 
 	counts := CountByType(plan.Actions)
-	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
+	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
 
 	return e.completeDryRunReport(start, report), nil
 }
@@ -411,6 +411,7 @@ func (r *oneShotRunner) executePlan(
 // deferred work observed by the planner.
 func buildReportFromCounts(
 	counts map[ActionType]int,
+	conflicts int,
 	deferred DeferredCounts,
 	mode Mode,
 	opts RunOptions,
@@ -424,7 +425,7 @@ func buildReportFromCounts(
 		Uploads:        counts[ActionUpload],
 		LocalDeletes:   counts[ActionLocalDelete],
 		RemoteDeletes:  counts[ActionRemoteDelete],
-		Conflicts:      conflictCountByType(counts),
+		Conflicts:      conflicts,
 		SyncedUpdates:  counts[ActionUpdateSynced],
 		Cleanups:       counts[ActionCleanup],
 		DeferredByMode: deferred,

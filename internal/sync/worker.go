@@ -225,8 +225,6 @@ func (wp *WorkerPool) dispatchAction(
 		return exec.ExecuteLocalDelete(ctx, action)
 	case ActionRemoteDelete:
 		return exec.ExecuteRemoteDelete(ctx, action)
-	case ActionConflict:
-		return exec.ExecuteConflict(ctx, action)
 	case ActionUpdateSynced:
 		return exec.ExecuteSyncedUpdate(action)
 	case ActionCleanup:

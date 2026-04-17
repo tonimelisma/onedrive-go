@@ -1586,15 +1586,16 @@ func appendDrainOutcome(
 	return append(outbox, outcome.dispatched...), false
 }
 
-// readReadyAction reads one TrackedAction from the ready channel
-// with a 1s timeout.
+// readReadyAction reads one TrackedAction from the ready channel with a race-
+// detector-friendly timeout. Full verifier runs can make SQLite replans take
+// longer than the narrower unit-test-only budget.
 func readReadyAction(t *testing.T, ready <-chan *TrackedAction) *TrackedAction {
 	t.Helper()
 
 	select {
 	case ta := <-ready:
 		return ta
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		require.Fail(t, "timed out waiting for action on ready channel")
 	}
 

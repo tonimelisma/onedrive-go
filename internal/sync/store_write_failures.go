@@ -63,7 +63,6 @@ func normalizeFailureActionType(direction Direction, actionType ActionType) Acti
 		ActionRemoteMove,
 		ActionFolderCreate,
 		ActionConflictCopy,
-		ActionConflict,
 		ActionUpdateSynced,
 		ActionCleanup:
 		return actionType

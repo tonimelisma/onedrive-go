@@ -1189,7 +1189,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 }
 
 // Validates: R-6.2.4
-func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
+func TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolve(t *testing.T) {
 	t.Parallel()
 
 	uploader := &executorMockUploader{
@@ -1219,7 +1219,7 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 
-	assert.Equal(t, ActionConflict, o.Action, "expected ActionConflict so the engine records the auto-resolution")
+	assert.Equal(t, ActionUpload, o.Action, "expected ActionUpload for edit-delete auto-resolution")
 	assert.Equal(t, ConflictEditDelete, o.ConflictType, "expected ConflictEditDelete")
 	assert.Equal(t, ResolvedByAuto, o.ResolvedBy)
 	assert.Equal(t, "uploaded-item", o.ItemID)
@@ -1236,7 +1236,7 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopy(t *testing.T) {
 }
 
 // Validates: R-6.2.4
-func TestExecutor_LocalDelete_HashMismatch_ConflictCopyCollisionGetsSuffix(t *testing.T) {
+func TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolveDoesNotCreateConflictCopy(t *testing.T) {
 	t.Parallel()
 
 	uploader := &executorMockUploader{
@@ -1266,7 +1266,7 @@ func TestExecutor_LocalDelete_HashMismatch_ConflictCopyCollisionGetsSuffix(t *te
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
-	assert.Equal(t, ActionConflict, o.Action)
+	assert.Equal(t, ActionUpload, o.Action)
 	assert.Equal(t, ResolvedByAuto, o.ResolvedBy)
 
 	currentData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.txt"))
@@ -1446,8 +1446,8 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 
 	writeExecTestFile(t, syncRoot, "exec-conflict.txt", "local version")
 
-	action := &Action{
-		Type:    ActionConflict,
+	copyAction := &Action{
+		Type:    ActionConflictCopy,
 		Path:    "exec-conflict.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
@@ -1461,9 +1461,14 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
 	}
 
-	o := e.ExecuteConflict(t.Context(), action)
-	requireOutcomeSuccess(t, &o)
+	copyOutcome := e.ExecuteConflictCopy(t.Context(), copyAction)
+	requireOutcomeSuccess(t, &copyOutcome)
+	assert.Equal(t, "edit_edit", copyOutcome.ConflictType)
 
+	downloadAction := *copyAction
+	downloadAction.Type = ActionDownload
+	o := e.ExecuteDownload(t.Context(), &downloadAction)
+	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, "edit_edit", o.ConflictType)
 
 	// Original path should have remote content.
@@ -1506,8 +1511,8 @@ func TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix(t *
 	writeExecTestFile(t, syncRoot, "exec-conflict.txt", "local version")
 	writeExecTestFile(t, syncRoot, "exec-conflict.conflict-20260115-120000.txt", "existing conflict")
 
-	action := &Action{
-		Type:    ActionConflict,
+	copyAction := &Action{
+		Type:    ActionConflictCopy,
 		Path:    "exec-conflict.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
@@ -1521,7 +1526,12 @@ func TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix(t *
 		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
 	}
 
-	o := e.ExecuteConflict(t.Context(), action)
+	copyOutcome := e.ExecuteConflictCopy(t.Context(), copyAction)
+	requireOutcomeSuccess(t, &copyOutcome)
+
+	downloadAction := *copyAction
+	downloadAction.Type = ActionDownload
+	o := e.ExecuteDownload(t.Context(), &downloadAction)
 	requireOutcomeSuccess(t, &o)
 
 	originalData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-conflict.txt"))
@@ -1573,7 +1583,7 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 	writeExecTestFile(t, syncRoot, "folder/exec-ed-file.txt", "locally modified data")
 
 	action := &Action{
-		Type:    ActionConflict,
+		Type:    ActionUpload,
 		Path:    "folder/exec-ed-file.txt",
 		ItemID:  "deleted-item",
 		DriveID: driveid.New(synctest.TestDriveID),
@@ -1600,12 +1610,12 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 		},
 	}
 
-	o := e.ExecuteConflict(t.Context(), action)
+	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 
 	assert.True(t, uploadCalled, "expected upload to be called for edit-delete auto-resolve")
 	assert.False(t, uploadToItemCalled, "edit-delete auto-resolve should not overwrite a deleted item ID")
-	assert.Equal(t, ActionConflict, o.Action)
+	assert.Equal(t, ActionUpload, o.Action)
 	assert.Equal(t, "edit_delete", o.ConflictType)
 	assert.Equal(t, "auto", o.ResolvedBy)
 	assert.Equal(t, "new-item", o.ItemID)
@@ -1801,8 +1811,9 @@ func TestConflictStemExt(t *testing.T) {
 	}
 }
 
-// Fix 9: Test conflict download-failure restore path.
-func TestExecutor_Conflict_DownloadFails_RestoresLocal(t *testing.T) {
+// Fix 9: Test concrete conflict actions leave the preserved local copy in place
+// when the dependent download fails.
+func TestExecutor_ConflictDownloadFails_LeavesConflictCopy(t *testing.T) {
 	t.Parallel()
 
 	dl := &executorMockDownloader{
@@ -1817,8 +1828,8 @@ func TestExecutor_Conflict_DownloadFails_RestoresLocal(t *testing.T) {
 	originalContent := "precious local data"
 	writeExecTestFile(t, syncRoot, "exec-restore.txt", originalContent)
 
-	action := &Action{
-		Type:    ActionConflict,
+	copyAction := &Action{
+		Type:    ActionConflictCopy,
 		Path:    "exec-restore.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
@@ -1828,13 +1839,32 @@ func TestExecutor_Conflict_DownloadFails_RestoresLocal(t *testing.T) {
 		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
 	}
 
-	o := e.ExecuteConflict(t.Context(), action)
+	copyOutcome := e.ExecuteConflictCopy(t.Context(), copyAction)
+	requireOutcomeSuccess(t, &copyOutcome)
+
+	downloadAction := *copyAction
+	downloadAction.Type = ActionDownload
+	o := e.ExecuteDownload(t.Context(), &downloadAction)
 	requireOutcomeFailure(t, &o)
 
-	// Original file should be restored after download failure.
-	data, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-restore.txt"))
-	require.NoError(t, err, "original file should have been restored")
-	assert.Equal(t, originalContent, string(data))
+	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-restore.txt"))
+	assert.True(t, os.IsNotExist(statErr), "canonical path should remain absent until the retrying download succeeds")
+
+	entries, err := os.ReadDir(syncRoot)
+	require.NoError(t, err)
+
+	conflictFound := false
+	for _, entry := range entries {
+		if !strings.Contains(entry.Name(), ".conflict-") {
+			continue
+		}
+		conflictData, readErr := localpath.ReadFile(filepath.Join(syncRoot, entry.Name()))
+		require.NoError(t, readErr)
+		if string(conflictData) == originalContent {
+			conflictFound = true
+		}
+	}
+	assert.True(t, conflictFound, "preserved local content should remain in the conflict copy after download failure")
 }
 
 // Fix 10: Test executeRemoteMove API error.

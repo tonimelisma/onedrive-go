@@ -319,7 +319,7 @@ func classifyBaselineMutation(action ActionType) (baselineMutationKind, error) {
 	switch action {
 	case ActionConflictCopy:
 		return baselineMutationNoop, nil
-	case ActionDownload, ActionUpload, ActionFolderCreate, ActionConflict, ActionUpdateSynced:
+	case ActionDownload, ActionUpload, ActionFolderCreate, ActionUpdateSynced:
 		return baselineMutationUpsert, nil
 	case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
 		return baselineMutationDelete, nil
@@ -554,31 +554,6 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 			o.Path, nullString(o.OldPath), o.ItemID,
 		); err != nil {
 			return fmt.Errorf("sync: updating remote_state for remote move %s: %w", o.Path, err)
-		}
-	case ActionConflict:
-		if o.ConflictType != ConflictEditDelete || o.ResolvedBy != ResolvedByAuto {
-			return nil
-		}
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO remote_state (
-				item_id, path, parent_id, item_type, hash, size, mtime, etag,
-				previous_path
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(item_id) DO UPDATE SET
-				path = excluded.path,
-				parent_id = excluded.parent_id,
-				item_type = excluded.item_type,
-				hash = excluded.hash,
-				size = excluded.size,
-				mtime = excluded.mtime,
-				etag = excluded.etag,
-				previous_path = excluded.previous_path`,
-			o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
-			nullString(o.RemoteHash), nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown), nullOptionalInt64(o.RemoteMtime),
-			nullString(o.ETag), sql.NullString{},
-		)
-		if err != nil {
-			return fmt.Errorf("sync: updating remote_state for auto conflict upload %s: %w", o.Path, err)
 		}
 	case ActionDownload,
 		ActionLocalDelete,

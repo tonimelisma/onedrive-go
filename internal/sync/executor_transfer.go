@@ -54,7 +54,9 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOu
 		)
 	}
 
-	return e.downloadOutcome(action, driveID, result.LocalHash, result.EffectiveRemoteHash, result.Size)
+	outcome := e.downloadOutcome(action, driveID, result.LocalHash, result.EffectiveRemoteHash, result.Size)
+	decorateConflictOutcome(action, &outcome)
+	return outcome
 }
 
 // downloadOutcome builds a successful ActionOutcome after download.
@@ -184,7 +186,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 
 	e.confirmRemotePathVisible(ctx, action)
 
-	return ActionOutcome{
+	outcome := ActionOutcome{
 		Action:          ActionUpload,
 		Success:         true,
 		Path:            action.Path,
@@ -202,6 +204,8 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 		RemoteMtime:     remoteMtime,
 		ETag:            result.Item.ETag,
 	}
+	decorateConflictOutcome(action, &outcome)
+	return outcome
 }
 
 func shouldOverwriteKnownRemoteItem(action *Action) bool {

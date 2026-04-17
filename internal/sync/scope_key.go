@@ -270,7 +270,7 @@ func (sk ScopeKey) BlocksAction(
 		switch actionType {
 		case ActionUpload, ActionRemoteDelete, ActionRemoteMove, ActionFolderCreate:
 			return true
-		case ActionDownload, ActionLocalDelete, ActionLocalMove, ActionConflictCopy, ActionConflict, ActionUpdateSynced, ActionCleanup:
+		case ActionDownload, ActionLocalDelete, ActionLocalMove, ActionConflictCopy, ActionUpdateSynced, ActionCleanup:
 			return false
 		default:
 			return false

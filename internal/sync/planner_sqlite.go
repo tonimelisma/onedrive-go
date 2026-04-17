@@ -85,7 +85,7 @@ func logActionPlanSummary(logger *slog.Logger, message string, plan *ActionPlan)
 		slog.Int("uploads", counts[ActionUpload]),
 		slog.Int("local_deletes", counts[ActionLocalDelete]),
 		slog.Int("remote_deletes", counts[ActionRemoteDelete]),
-		slog.Int("conflicts", conflictCountByType(counts)),
+		slog.Int("conflicts", CountConflicts(plan.Actions)),
 		slog.Int("synced_updates", counts[ActionUpdateSynced]),
 		slog.Int("cleanups", counts[ActionCleanup]),
 		slog.Int("deferred_folder_creates", plan.DeferredByMode.FolderCreates),

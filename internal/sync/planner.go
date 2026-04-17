@@ -84,7 +84,7 @@ func actionAllowedInMode(action *Action, mode Mode) bool {
 			return mode != SyncDownloadOnly
 		}
 		return true
-	case ActionConflictCopy, ActionConflict, ActionUpdateSynced, ActionCleanup:
+	case ActionConflictCopy, ActionUpdateSynced, ActionCleanup:
 		return true
 	default:
 		return true
@@ -163,11 +163,14 @@ func classifyFileLocalPresent(
 		if view.Local != nil && view.Local.Hash == view.Remote.Hash {
 			return []Action{MakeAction(ActionUpdateSynced, view)} // EF4: convergent edit
 		}
-		return []Action{makeConflictAction(view, ConflictEditEdit)} // EF5
+		return []Action{
+			makeConflictCopyAction(view, ConflictEditEdit),
+			makeConflictResolvedAction(ActionDownload, view, ConflictEditEdit),
+		} // EF5
 	case !localChanged && remoteDeleted:
 		return []Action{MakeAction(ActionLocalDelete, view)} // EF8
 	case localChanged && remoteDeleted:
-		return []Action{makeConflictAction(view, ConflictEditDelete)} // EF9
+		return []Action{makeConflictResolvedAction(ActionUpload, view, ConflictEditDelete)} // EF9
 	}
 
 	return nil
@@ -184,7 +187,10 @@ func classifyFileNoBaseline(view *PathView) []Action {
 		if view.Local.Hash == view.Remote.Hash {
 			return []Action{MakeAction(ActionUpdateSynced, view)} // EF11: convergent create
 		}
-		return []Action{makeConflictAction(view, ConflictCreateCreate)} // EF12
+		return []Action{
+			makeConflictCopyAction(view, ConflictCreateCreate),
+			makeConflictResolvedAction(ActionDownload, view, ConflictCreateCreate),
+		} // EF12
 
 	case hasLocal && !hasRemote:
 		return []Action{MakeAction(ActionUpload, view)} // EF13
@@ -604,14 +610,6 @@ func makeConflictRecord(view *PathView, driveID driveid.ID, conflictType string)
 	return record
 }
 
-// makeConflictAction constructs an ActionConflict with ConflictInfo populated.
-func makeConflictAction(view *PathView, conflictType string) Action {
-	action := MakeAction(ActionConflict, view)
-	action.ConflictInfo = makeConflictRecord(view, action.DriveID, conflictType)
-
-	return action
-}
-
 func makeConflictCopyAction(view *PathView, conflictType string) Action {
 	action := MakeAction(ActionConflictCopy, view)
 	action.ConflictInfo = makeConflictRecord(view, action.DriveID, conflictType)
@@ -723,7 +721,6 @@ func expandFolderDeleteCascades(
 			ActionRemoteMove,
 			ActionFolderCreate,
 			ActionConflictCopy,
-			ActionConflict,
 			ActionUpdateSynced:
 			panic(fmt.Sprintf("unexpected folder cascade action type %s", a.Type.String()))
 		}
@@ -776,7 +773,6 @@ func cascadeDeleteKindForAction(actionType ActionType) (cascadeDeleteKind, bool)
 		ActionRemoteMove,
 		ActionFolderCreate,
 		ActionConflictCopy,
-		ActionConflict,
 		ActionUpdateSynced:
 		return 0, false
 	}
@@ -1006,8 +1002,26 @@ func CountByType(actions []Action) map[ActionType]int {
 	return counts
 }
 
-func conflictCountByType(counts map[ActionType]int) int {
-	return counts[ActionConflict] + counts[ActionConflictCopy]
+func CountConflicts(actions []Action) int {
+	if len(actions) == 0 {
+		return 0
+	}
+
+	seen := make(map[string]struct{})
+	total := 0
+	for i := range actions {
+		if actions[i].ConflictInfo == nil {
+			continue
+		}
+		key := actions[i].Path + "\x00" + actions[i].ConflictInfo.ConflictType
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		total++
+	}
+
+	return total
 }
 
 // detectDependencyCycle performs a DFS to check for cycles in the dependency

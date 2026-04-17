@@ -124,8 +124,9 @@ replaced with one-sided deferral coverage
 (`TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges`,
 `TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges`) plus explicit directional
 conflict regressions for edit/edit, edit/delete, and create/create. Planner
-regression coverage now also asserts that those conflict classes remain
-`ActionConflict` in bidirectional, download-only, and upload-only modes.
+regression coverage now also asserts that those conflict classes expand into
+concrete conflict-copy plus resolved upload/download work in bidirectional,
+download-only, and upload-only modes.
 Promoted docs: [sync.md](../requirements/sync.md), [sync-planning.md](../design/sync-planning.md), [sync-execution.md](../design/sync-execution.md)
 
 ## LI-20260413-01: Directional one-shot sync reported deferred remote drift as `No changes detected`
