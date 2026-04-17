@@ -40,6 +40,15 @@ func (s *stubSocketIOWakeSource) Run(ctx context.Context, wakes chan<- struct{})
 	return nil
 }
 
+// Validates: R-2.8.3
+func TestResolveDebounce_DefaultIsFiveSeconds(t *testing.T) {
+	t.Parallel()
+
+	eng := &Engine{}
+	assert.Equal(t, 5*time.Second, eng.resolveDebounce(WatchOptions{}))
+	assert.Equal(t, 1500*time.Millisecond, eng.resolveDebounce(WatchOptions{Debounce: 1500 * time.Millisecond}))
+}
+
 // Validates: R-2.8.3, R-6.10.10
 // TestRunWatch_ContextCancel verifies that canceling the context causes
 // RunWatch to return nil (clean shutdown), including during bootstrap.

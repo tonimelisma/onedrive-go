@@ -107,6 +107,7 @@ The engine decides how those become durable actionable issues.
 `Buffer` owns short-lived event coalescing only:
 
 - debounce bursts of path changes
+- wait 5 seconds from the last local or remote observation before triggering replanning by default
 - keep one pending entry per path
 - flush deterministically on shutdown/final drain
 

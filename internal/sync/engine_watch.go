@@ -19,7 +19,7 @@ const periodicScanJitterDivisor = 10
 // Default watch intervals.
 const (
 	defaultPollInterval = 5 * time.Minute
-	defaultDebounce     = 2 * time.Second
+	defaultDebounce     = 5 * time.Second
 	watchEventBuf       = 256
 	// watchResultBuf is the buffer size for the worker result channel in watch
 	// mode. Large enough for typical batches without blocking workers.
