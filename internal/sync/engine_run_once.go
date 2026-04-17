@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -80,6 +81,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		if report.DeferredByMode.Total() > 0 {
 			report.Duration = e.since(start)
 			e.logRunOnceCompletion(report)
+			e.writeOneShotRunStatusBestEffort(ctx, report)
 			return report, nil
 		}
 		return e.completeRunOnceWithoutChanges(ctx, start, mode, opts), nil
@@ -104,16 +106,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 
 	runner.postSyncHousekeeping()
 
-	// Persist one-shot status for status command queries.
-	if metaErr := e.baseline.WriteSyncRunStatus(ctx, &SyncRunReport{
-		CompletedAt: e.nowFunc(),
-		Duration:    report.Duration,
-		Succeeded:   report.Succeeded,
-		Failed:      report.Failed,
-		Errors:      report.Errors,
-	}); metaErr != nil {
-		e.logger.Warn("failed to write one-shot sync status", slog.String("error", metaErr.Error()))
-	}
+	e.writeOneShotRunStatusBestEffort(ctx, report)
 
 	return report, nil
 }
@@ -210,7 +203,16 @@ func (e *Engine) completeRunOnceWithoutChanges(
 		DryRun:   opts.DryRun,
 		Duration: e.since(start),
 	}
-	// Persist one-shot status even when no changes are detected.
+	e.writeOneShotRunStatusBestEffort(ctx, report)
+
+	return report
+}
+
+func (e *Engine) writeOneShotRunStatusBestEffort(ctx context.Context, report *Report) {
+	if report == nil {
+		return
+	}
+
 	if metaErr := e.baseline.WriteSyncRunStatus(ctx, &SyncRunReport{
 		CompletedAt: e.nowFunc(),
 		Duration:    report.Duration,
@@ -220,8 +222,6 @@ func (e *Engine) completeRunOnceWithoutChanges(
 	}); metaErr != nil {
 		e.logger.Warn("failed to write one-shot sync status", slog.String("error", metaErr.Error()))
 	}
-
-	return report
 }
 
 func (e *Engine) completeDryRunReport(start time.Time, report *Report) *Report {
@@ -527,19 +527,46 @@ func (flow *engineFlow) buildCurrentActionPlan(
 	mode Mode,
 	safety *SafetyConfig,
 ) (*ActionPlan, error) {
-	comparisons, err := flow.engine.baseline.QueryComparisonState(ctx)
+	tx, err := beginPerfTx(ctx, flow.engine.baseline.db)
+	if err != nil {
+		return nil, fmt.Errorf("sync: beginning sqlite planner read transaction: %w", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			flow.engine.logger.Debug("sqlite planner read transaction rollback failed",
+				slog.String("error", rollbackErr.Error()),
+			)
+		}
+	}()
+
+	comparisons, err := queryComparisonStateWithRunner(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
 	}
-	reconciliations, err := flow.engine.baseline.QueryReconciliationState(ctx)
+	reconciliations, err := queryReconciliationStateWithRunner(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
 	}
-	localRows, err := flow.engine.baseline.ListLocalState(ctx)
+	localRows, err := listLocalStateRows(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing local_state rows: %w", err)
 	}
-	remoteRows, err := flow.engine.baseline.ListRemoteState(ctx)
+	observationState, err := flow.engine.baseline.readObservationStateTx(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: reading observation state for remote_state: %w", err)
+	}
+	configuredDriveID := observationState.ConfiguredDriveID
+	if configuredDriveID.IsZero() {
+		configuredDriveID = flow.engine.driveID
+	}
+	remoteRows, err := queryRemoteStateRowsWithRunner(
+		ctx,
+		tx,
+		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
+			previous_path
+		FROM remote_state`,
+		configuredDriveID,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing remote_state rows: %w", err)
 	}

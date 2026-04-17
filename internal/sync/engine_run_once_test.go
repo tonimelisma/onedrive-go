@@ -160,6 +160,36 @@ func TestRunOnce_DownloadOnly_ObservesLocalScanButSuppressesUploads(t *testing.T
 	assert.Equal(t, 1, report.DeferredByMode.Uploads, "download-only mode should report the deferred upload")
 }
 
+// Validates: R-2.1.3
+func TestRunOnce_DownloadOnly_PersistsStatusForDeferredOnlyPass(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	writeLocalFile(t, syncRoot, "local-only.txt", "should not be uploaded")
+
+	ctx := t.Context()
+
+	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
+	require.NoError(t, err, "RunOnce")
+	assert.Equal(t, 1, report.DeferredByMode.Uploads)
+
+	status, err := eng.baseline.ReadSyncRunStatus(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.NotZero(t, status.LastCompletedAt, "deferred-only passes must still persist completion time")
+	assert.GreaterOrEqual(t, status.LastDurationMs, int64(0))
+	assert.Zero(t, status.LastSucceededCount)
+	assert.Zero(t, status.LastFailedCount)
+}
+
 // Validates: R-2.1.4
 func TestRunOnce_UploadOnly_StillObservesRemoteDelta(t *testing.T) {
 	t.Parallel()
