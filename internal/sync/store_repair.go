@@ -238,6 +238,10 @@ func (m *SyncStore) ReleaseScope(
 // configured root disappears. Discarding differs from release: held descendants are
 // deleted instead of made retryable.
 func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err error) {
+	if scopeKey.IsZero() {
+		return fmt.Errorf("sync: discard scope: missing scope key")
+	}
+
 	wire := scopeKey.String()
 
 	tx, err := beginPerfTx(ctx, m.db)

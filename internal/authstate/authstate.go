@@ -2,19 +2,17 @@
 // CLI auth surfaces and the unauthorized sync issue presentation.
 package authstate
 
-import (
-	"errors"
-
-	"github.com/tonimelisma/onedrive-go/internal/graph"
-)
-
 const (
 	StateReady                  = "ready"
 	StateAuthenticationRequired = "authentication_required"
+)
 
-	ReasonMissingLogin      = "missing_login"
-	ReasonInvalidSavedLogin = "invalid_saved_login"
-	ReasonSyncAuthRejected  = "sync_auth_rejected"
+type Reason string
+
+const (
+	ReasonMissingLogin      Reason = "missing_login"
+	ReasonInvalidSavedLogin Reason = "invalid_saved_login"
+	ReasonSyncAuthRejected  Reason = "sync_auth_rejected"
 )
 
 type Presentation struct {
@@ -25,7 +23,7 @@ type Presentation struct {
 
 type Health struct {
 	State  string
-	Reason string
+	Reason Reason
 	Action string
 }
 
@@ -33,7 +31,7 @@ func ReadyHealth() Health {
 	return Health{State: StateReady}
 }
 
-func RequiredHealth(reason string) Health {
+func RequiredHealth(reason Reason) Health {
 	presentation := PresentationForReason(reason)
 	if presentation.Title == "" {
 		return Health{}
@@ -46,7 +44,7 @@ func RequiredHealth(reason string) Health {
 	}
 }
 
-func PresentationForReason(reason string) Presentation {
+func PresentationForReason(reason Reason) Presentation {
 	switch reason {
 	case ReasonMissingLogin:
 		return Presentation{
@@ -73,15 +71,4 @@ func PresentationForReason(reason string) Presentation {
 
 func UnauthorizedIssuePresentation() Presentation {
 	return PresentationForReason(ReasonSyncAuthRejected)
-}
-
-func ErrorMessage(err error) string {
-	switch {
-	case errors.Is(err, graph.ErrNotLoggedIn):
-		return "Authentication required: no saved login was found for this account. Run 'onedrive-go login'."
-	case errors.Is(err, graph.ErrUnauthorized):
-		return "Authentication required: OneDrive rejected the saved login for this account. Run 'onedrive-go login'."
-	default:
-		return ""
-	}
 }

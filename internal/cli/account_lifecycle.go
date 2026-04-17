@@ -36,7 +36,7 @@ func accountLifecycle(entry *accountCatalogEntry) accountLifecycleView {
 		view.State = accountLifecycleAuthRequiredMissingLogin
 	case entry.SavedLoginState == savedLoginStateInvalid:
 		view.State = accountLifecycleAuthRequiredInvalidLogin
-	case entry.HasPersistedAuthScope:
+	case entry.AuthRequirementReason == authReasonSyncAuthRejected:
 		view.State = accountLifecycleAuthRequiredSyncRejected
 	case view.HasConfiguredDrives:
 		view.State = accountLifecycleLoggedInWithConfigured

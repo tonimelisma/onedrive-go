@@ -164,8 +164,7 @@ func ScopeKeys(blocks []ScopeBlock) []ScopeKey {
 }
 
 const (
-	scopePriorityAuthAccount = iota
-	scopePriorityThrottleAccount
+	scopePriorityThrottleAccount = iota
 	scopePriorityThrottleTarget
 	scopePriorityService
 	scopePriorityDiskLocal
@@ -178,8 +177,6 @@ const scopePriorityMax = 99
 
 func scopePriority(key ScopeKey) int {
 	switch key.Kind {
-	case ScopeAuthAccount:
-		return scopePriorityAuthAccount
 	case ScopeThrottleAccount:
 		return scopePriorityThrottleAccount
 	case ScopeThrottleTarget:

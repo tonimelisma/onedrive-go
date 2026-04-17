@@ -439,7 +439,7 @@ func TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired(t *testin
 	assert.Contains(t, output, "summary_key=authentication_required")
 	assert.Contains(t, output, "failure_class=fatal")
 	assert.Contains(t, output, "log_owner=sync")
-	assert.NotContains(t, output, "scope_key=auth:account")
+	assert.NotContains(t, output, "scope_key=")
 }
 
 // Validates: R-6.8.16, R-6.6.11

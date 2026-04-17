@@ -78,7 +78,7 @@ func goldenStatusAccounts() []statusAccount {
 			Email:      "bob@example.com",
 			DriveType:  "business",
 			AuthState:  authStateAuthenticationNeeded,
-			AuthReason: authReasonInvalidSavedLogin,
+			AuthReason: string(authReasonInvalidSavedLogin),
 			AuthAction: authAction(authReasonInvalidSavedLogin),
 			Drives: []statusDrive{
 				{

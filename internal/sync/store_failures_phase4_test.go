@@ -222,6 +222,16 @@ func TestSyncStore_ReleaseScope_NoScopeBlock(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Validates: R-2.10.11
+func TestSyncStore_DiscardScope_RejectsZeroScopeKey(t *testing.T) {
+	t.Parallel()
+	mgr := newTestStore(t)
+
+	err := mgr.DiscardScope(context.Background(), ScopeKey{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing scope key")
+}
+
 // Validates: R-2.10.38
 func TestSyncStore_DiscardScope(t *testing.T) {
 	t.Parallel()

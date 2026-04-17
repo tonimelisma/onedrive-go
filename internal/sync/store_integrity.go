@@ -10,7 +10,6 @@ import (
 
 const (
 	integrityCodeInvalidScopeBlock        = "invalid_scope_block"
-	integrityCodeInvalidAuthScopeTiming   = "invalid_auth_scope_timing"
 	integrityCodeLegacyThrottleScope      = "legacy_throttle_scope"
 	integrityCodeLegacyRemoteScope        = "legacy_remote_scope"
 	integrityCodeInvalidFailureRow        = "invalid_failure_row"
@@ -141,7 +140,6 @@ func repairIntegritySafeTx(ctx context.Context, tx sqlTxRunner) (int, error) {
 	}{
 		{run: repairLegacyThrottleAccountScope},
 		{run: repairPersistedRemotePermissionScopes},
-		{run: repairAuthScopeTiming},
 		{run: repairNonRetryableFailureTiming},
 	}
 
@@ -172,37 +170,6 @@ func auditPersistedIntegrity(
 	addProjectionOverlapFindings(&report, projectionSources)
 
 	return report
-}
-
-func repairAuthScopeTiming(ctx context.Context, tx sqlTxRunner) (int, error) {
-	authResult, err := tx.ExecContext(ctx, `
-		UPDATE scope_blocks
-		SET issue_type = ?,
-			timing_source = ?,
-			trial_interval = 0,
-			next_trial_at = 0,
-			preserve_until = 0,
-			trial_count = 0
-		WHERE scope_key = ?
-		  AND (
-			issue_type <> ?
-			OR timing_source <> ?
-			OR trial_interval <> 0
-			OR next_trial_at <> 0
-			OR preserve_until <> 0
-			OR trial_count <> 0
-		  )`,
-		IssueUnauthorized,
-		ScopeTimingNone,
-		SKAuthAccount().String(),
-		IssueUnauthorized,
-		ScopeTimingNone,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("sync: normalize auth scope timing: %w", err)
-	}
-
-	return rowsAffected(authResult), nil
 }
 
 func repairLegacyThrottleAccountScope(ctx context.Context, tx sqlTxRunner) (int, error) {
@@ -317,13 +284,6 @@ func auditScopeBlocks(
 			)
 		}
 
-		if block.Key == SKAuthAccount() && !authAccountScopeIsCanonical(block) {
-			report.add(
-				integrityCodeInvalidAuthScopeTiming,
-				"legacy auth:account scope must use timing_source='none' with zero trial metadata",
-			)
-		}
-
 		summaryKey := SummaryKeyForScopeBlock(block.IssueType, block.Key)
 		if summaryKey != "" {
 			addProjectionSource(projectionSources, issueGroupKey{
@@ -414,15 +374,6 @@ func addProjectionOverlapFindings(
 			fmt.Sprintf("visible issue projection %s/%s is backed by overlapping durable sources", groupKey.summaryKey, groupKey.scopeKey),
 		)
 	}
-}
-
-func authAccountScopeIsCanonical(block *ScopeBlock) bool {
-	return block.IssueType == IssueUnauthorized &&
-		block.TimingSource == ScopeTimingNone &&
-		block.TrialInterval == 0 &&
-		block.NextTrialAt.IsZero() &&
-		block.PreserveUntil.IsZero() &&
-		block.TrialCount == 0
 }
 
 func validateFailureRowState(row *SyncFailureRow) error {

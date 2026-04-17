@@ -11,20 +11,17 @@ import (
 )
 
 // cidFileSuffix is the file extension for legacy CID-based file-name tests.
-// Token files still use this extension in steady state; account_*.json remains
-// only as a legacy naming convention exercised by unit tests.
+// Token files still use this extension in steady state.
 const cidFileSuffix = ".json"
 
-// discoverCIDFiles scans dir for files matching "{prefix}_{type}_{email}.json"
-// and returns the canonical IDs extracted from filenames. This is the shared
-// implementation behind DiscoverTokens and legacy account-profile filename
-// tests — both follow the same naming convention, differing only in prefix
-// ("token_" vs "account_").
-func discoverCIDFiles(dir, prefix string, logger *slog.Logger) []driveid.CanonicalID {
-	return discoverCIDFilesWithIO(dir, prefix, logger, defaultConfigIO())
+// discoverCIDFiles scans dir for token files matching
+// "token_{type}_{email}.json" and returns the canonical IDs extracted from
+// filenames.
+func discoverCIDFiles(dir string, logger *slog.Logger) []driveid.CanonicalID {
+	return discoverCIDFilesWithIO(dir, logger, defaultConfigIO())
 }
 
-func discoverCIDFilesWithIO(dir, prefix string, logger *slog.Logger, io configIO) []driveid.CanonicalID {
+func discoverCIDFilesWithIO(dir string, logger *slog.Logger, io configIO) []driveid.CanonicalID {
 	if dir == "" {
 		return nil
 	}
@@ -32,7 +29,7 @@ func discoverCIDFilesWithIO(dir, prefix string, logger *slog.Logger, io configIO
 	entries, err := io.readManagedDir(dir)
 	if err != nil {
 		logger.Debug("cannot read data directory for file discovery",
-			"dir", dir, "prefix", prefix, "error", err)
+			"dir", dir, "kind", "token", "error", err)
 
 		return nil
 	}
@@ -45,14 +42,14 @@ func discoverCIDFilesWithIO(dir, prefix string, logger *slog.Logger, io configIO
 		}
 
 		name := e.Name()
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, cidFileSuffix) {
+		if !strings.HasPrefix(name, "token_") || !strings.HasSuffix(name, cidFileSuffix) {
 			continue
 		}
 
 		// Strip prefix and suffix, then split on first "_" to recover
 		// {type} and {email}. Emails may contain underscores, so only the
 		// first underscore separates type from email.
-		inner := strings.TrimPrefix(name, prefix)
+		inner := strings.TrimPrefix(name, "token_")
 		inner = strings.TrimSuffix(inner, cidFileSuffix)
 
 		parts := strings.SplitN(inner, "_", 2)
@@ -75,7 +72,7 @@ func discoverCIDFilesWithIO(dir, prefix string, logger *slog.Logger, io configIO
 	slices.SortFunc(ids, func(a, b driveid.CanonicalID) int {
 		return cmp.Compare(a.String(), b.String())
 	})
-	logger.Debug("file discovery complete", "dir", dir, "prefix", prefix, "count", len(ids))
+	logger.Debug("file discovery complete", "dir", dir, "count", len(ids))
 
 	return ids
 }
@@ -83,7 +80,7 @@ func discoverCIDFilesWithIO(dir, prefix string, logger *slog.Logger, io configIO
 // discoverFilesForEmail scans dir for files matching "{prefix}*{suffix}" that
 // contain the given email at an underscore boundary. Returns full file paths.
 // This is the shared implementation behind DiscoverStateDBsForEmail and
-// DiscoverDriveMetadataForEmail.
+// drive identity lookups.
 func discoverFilesForEmail(dir, prefix, suffix, email string, logger *slog.Logger) []string {
 	return discoverFilesForEmailWithIO(dir, prefix, suffix, email, logger, defaultConfigIO())
 }

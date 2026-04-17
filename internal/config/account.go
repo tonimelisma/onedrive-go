@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -19,33 +18,10 @@ type AccountProfile struct {
 	PrimaryDriveID string `json:"primary_drive_id"`
 }
 
-// AccountFilePath returns the legacy path shape for an account profile file.
-// The managed catalog now owns account profiles in steady state; this helper
-// remains for tests that validate the historical naming convention directly.
-// Only valid for personal and business canonical IDs.
-func AccountFilePath(cid driveid.CanonicalID) string {
-	if cid.IsZero() {
-		return ""
-	}
-
-	if !cid.IsPersonal() && !cid.IsBusiness() {
-		return ""
-	}
-
-	dataDir := DefaultDataDir()
-	if dataDir == "" {
-		return ""
-	}
-
-	sanitized := cid.DriveType() + "_" + cid.Email()
-
-	return filepath.Join(dataDir, "account_"+sanitized+".json")
-}
-
 // accountCIDForDrive returns the account canonical ID that owns this drive.
 // Personal and business drives own themselves. SharePoint drives belong to
-// the business account with the same email. Shared drives are resolved
-// via drive metadata (not handled here — caller uses LoadDriveMetadata).
+// the business account with the same email. Shared drives are resolved by the
+// caller via the catalog-backed drive identity.
 func accountCIDForDrive(cid driveid.CanonicalID) driveid.CanonicalID {
 	switch {
 	case cid.IsPersonal(), cid.IsBusiness():
@@ -149,10 +125,4 @@ func DiscoverAccountProfiles(logger *slog.Logger) []driveid.CanonicalID {
 		return strings.Compare(a.String(), b.String())
 	})
 	return ids
-}
-
-// discoverAccountProfilesIn remains as the filename-scanning helper used by
-// unit tests that validate the old managed-file naming convention directly.
-func discoverAccountProfilesIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
-	return discoverCIDFiles(dir, "account_", logger)
 }

@@ -332,12 +332,11 @@ able to scan this table and place every top-level code area.
 | `scripts/check-oauth2-fork.sh` | OAuth dependency fork checks |
 | `scripts/dev-env.sh` | Local development environment helper |
 
-Live-test note: `.testdata/` should contain `token_*.json`, `config.toml`,
-and any available `account_*.json` / `drive_*.json` files from
-`bootstrap-test-credentials.sh`. The E2E isolation harness now repairs missing
-personal/business `drive_*.json` files inside its temporary app-data root from
-the saved token before suite scrub, but shared-root and SharePoint fixtures
-still require their bootstrapped metadata.
+Live-test note: `.testdata/` should contain `token_*.json`, `catalog.json`,
+`config.toml`, and any expected state DB fixtures from
+`bootstrap-test-credentials.sh`. The E2E isolation harness copies that
+catalog-era fixture layout directly; it does not reconstruct legacy account or
+drive JSON artifacts.
 
 ### FAQ
 

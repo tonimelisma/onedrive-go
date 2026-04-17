@@ -206,7 +206,7 @@ func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 		DisplayName:    "Business User",
 		PrimaryDriveID: "drive-123",
 	}))
-	require.NoError(t, config.SaveDriveMetadata(oldCID, &config.DriveMetadata{
+	require.NoError(t, config.SaveDriveIdentity(oldCID, &config.DriveIdentity{
 		DriveID: "drive-123",
 	}))
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_user@example.com.json")

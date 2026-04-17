@@ -46,7 +46,7 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 
 	activeScopes := make([]ScopeBlock, 0, len(blocks))
 	for i := range blocks {
-		if blocks[i].Key == SKAuthAccount() || blocks[i].Key.IsPermRemote() {
+		if blocks[i].Key.IsPermRemote() {
 			continue
 		}
 		activeScopes = append(activeScopes, *blocks[i])
@@ -205,7 +205,7 @@ func (controller *scopeController) repairPersistedNonAuthScopes(
 	facts := summarizePersistedScopeFailures(failures)
 
 	for i := range blocks {
-		if blocks[i].Key == SKAuthAccount() || blocks[i].Key.IsPermRemote() {
+		if blocks[i].Key.IsPermRemote() {
 			continue
 		}
 

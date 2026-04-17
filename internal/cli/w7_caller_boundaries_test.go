@@ -24,6 +24,7 @@ func setupConfiguredInvalidSavedLogin(t *testing.T) (string, driveid.CanonicalID
 	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
 		DisplayName: "Blocked User",
 	}))
+	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "drive-blocked"}))
 	writeInvalidSavedLoginFile(t, cid)
 	require.NoError(t, touchStateDBForAccount(t, cid))
 
@@ -76,7 +77,7 @@ func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 		DisplayName: "Alice Smith",
 		OrgName:     "Contoso",
 	}))
-	require.NoError(t, config.SaveDriveMetadata(cid, &config.DriveMetadata{
+	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{
 		DriveID:  "drive-123",
 		CachedAt: time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
 	}))
@@ -102,10 +103,10 @@ func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 	_, stateErr := os.Stat(config.DriveStatePath(cid))
 	require.NoError(t, stateErr, "plain logout must preserve the state DB")
 
-	meta, found, metaErr := config.LookupDriveMetadata(cid)
-	require.NoError(t, metaErr, "plain logout must preserve catalog drive metadata")
-	require.True(t, found, "plain logout must preserve catalog drive metadata")
-	assert.Equal(t, "drive-123", meta.DriveID)
+	identity, found, identityErr := config.LookupDriveIdentity(cid)
+	require.NoError(t, identityErr, "plain logout must preserve the catalog drive identity")
+	require.True(t, found, "plain logout must preserve the catalog drive identity")
+	assert.Equal(t, "drive-123", identity.DriveID)
 
 	profile, found, profileErr := config.LookupAccountProfile(cid)
 	require.NoError(t, profileErr)
@@ -114,7 +115,7 @@ func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 
 	_, syncDirErr := os.Stat(syncDir)
 	require.NoError(t, syncDirErr, "plain logout must leave sync directories untouched")
-	assert.False(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
 
 	assert.Contains(t, out.String(), "Token removed for alice@contoso.com.")
 	assert.Contains(t, out.String(), "State databases kept.")
@@ -161,6 +162,10 @@ func TestRunWhoamiWithContext_InvalidDriveSelectorReturnsMatchError(t *testing.T
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:ready@example.com")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		DisplayName: "Ready User",
+	}))
+	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "drive-ready"}))
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_ready@example.com.json")
 
 	var out bytes.Buffer
@@ -184,16 +189,18 @@ func TestRunWhoamiWithContext_MultipleConfiguredDrivesRequireSelector(t *testing
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(
-		cfgPath,
-		driveid.MustCanonicalID("personal:alice@example.com"),
-		"~/OneDrive Alice",
-	))
-	require.NoError(t, config.AppendDriveSection(
-		cfgPath,
-		driveid.MustCanonicalID("business:bob@contoso.com"),
-		"~/OneDrive Bob",
-	))
+	aliceCID := driveid.MustCanonicalID("personal:alice@example.com")
+	bobCID := driveid.MustCanonicalID("business:bob@contoso.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, aliceCID, "~/OneDrive Alice"))
+	require.NoError(t, config.AppendDriveSection(cfgPath, bobCID, "~/OneDrive Bob"))
+	require.NoError(t, config.SaveAccountProfile(aliceCID, &config.AccountProfile{
+		DisplayName: "Alice",
+	}))
+	require.NoError(t, config.SaveAccountProfile(bobCID, &config.AccountProfile{
+		DisplayName: "Bob",
+	}))
+	require.NoError(t, config.SaveDriveIdentity(aliceCID, &config.DriveIdentity{DriveID: "drive-alice"}))
+	require.NoError(t, config.SaveDriveIdentity(bobCID, &config.DriveIdentity{DriveID: "drive-bob"}))
 
 	var out bytes.Buffer
 	cc := &CLIContext{
