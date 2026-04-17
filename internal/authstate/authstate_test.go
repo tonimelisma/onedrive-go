@@ -31,7 +31,7 @@ func TestPresentationForReason(t *testing.T) {
 			name:       "sync auth rejected",
 			reason:     ReasonSyncAuthRejected,
 			wantReason: "The last sync attempt for this account was rejected by OneDrive.",
-			wantAction: "Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.",
+			wantAction: "Run 'onedrive-go status' to re-check access, or 'onedrive-go login' to sign in again.",
 		},
 	}
 

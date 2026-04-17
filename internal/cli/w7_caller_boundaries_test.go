@@ -21,10 +21,12 @@ func setupConfiguredInvalidSavedLogin(t *testing.T) (string, driveid.CanonicalID
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("business:blocked@example.com")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive - Contoso"))
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "Blocked User",
-	}))
-	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "drive-blocked"}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = "Blocked User"
+	})
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = "drive-blocked"
+	})
 	writeInvalidSavedLoginFile(t, cid)
 	require.NoError(t, touchStateDBForAccount(t, cid))
 
@@ -48,9 +50,9 @@ func setupUnconfiguredInvalidSavedLoginCID(
 ) driveid.CanonicalID {
 	t.Helper()
 
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: displayName,
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = displayName
+	})
 	writeInvalidSavedLoginFile(t, cid)
 	require.NoError(t, touchStateDBForAccount(t, cid))
 
@@ -73,14 +75,14 @@ func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive - Contoso"))
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "Alice Smith",
-		OrgName:     "Contoso",
-	}))
-	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{
-		DriveID:  "drive-123",
-		CachedAt: time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = "Alice Smith"
+		account.OrgName = "Contoso"
+	})
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = "drive-123"
+		drive.CachedAt = time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	})
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_alice@contoso.com.json")
 	seedAuthScope(t, cid)
 
@@ -103,14 +105,12 @@ func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 	_, stateErr := os.Stat(config.DriveStatePath(cid))
 	require.NoError(t, stateErr, "plain logout must preserve the state DB")
 
-	identity, found, identityErr := config.LookupDriveIdentity(cid)
-	require.NoError(t, identityErr, "plain logout must preserve the catalog drive identity")
-	require.True(t, found, "plain logout must preserve the catalog drive identity")
-	assert.Equal(t, "drive-123", identity.DriveID)
+	identity, found := loadCatalogDrive(t, cid)
+	require.True(t, found, "plain logout must preserve the catalog drive record")
+	assert.Equal(t, "drive-123", identity.RemoteDriveID)
 
-	profile, found, profileErr := config.LookupAccountProfile(cid)
-	require.NoError(t, profileErr)
-	require.True(t, found, "plain logout must preserve the account profile")
+	profile, found := loadCatalogAccount(t, cid)
+	require.True(t, found, "plain logout must preserve the catalog account")
 	assert.Equal(t, "Alice Smith", profile.DisplayName)
 
 	_, syncDirErr := os.Stat(syncDir)
@@ -123,13 +123,13 @@ func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 }
 
 // Validates: R-3.1.5, R-3.1.6
-func TestRunWhoamiWithContext_AuthRequiredOnlyJSON(t *testing.T) {
+func TestRunStatusCommand_AuthRequiredOnlyJSON(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("personal:orphan@example.com")
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "Orphan User",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = accountCatalogTestOrphanUser
+	})
 	require.NoError(t, touchStateDBForAccount(t, cid))
 
 	var out bytes.Buffer
@@ -143,29 +143,30 @@ func TestRunWhoamiWithContext_AuthRequiredOnlyJSON(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, runWhoamiWithContext(t.Context(), cc))
+	require.NoError(t, runStatusCommand(cc, false))
 
-	var decoded whoamiOutput
+	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
-	assert.Nil(t, decoded.User)
-	assert.Empty(t, decoded.Drives)
-	require.Len(t, decoded.AccountsRequiringAuth, 1)
-	assert.Equal(t, "orphan@example.com", decoded.AccountsRequiringAuth[0].Email)
-	assert.Equal(t, authReasonMissingLogin, decoded.AccountsRequiringAuth[0].Reason)
-	assert.Equal(t, 1, decoded.AccountsRequiringAuth[0].StateDBs)
+	require.Len(t, decoded.Accounts, 1)
+	assert.Equal(t, "orphan@example.com", decoded.Accounts[0].Email)
+	assert.Equal(t, authStateAuthenticationNeeded, decoded.Accounts[0].AuthState)
+	assert.Equal(t, string(authReasonMissingLogin), decoded.Accounts[0].AuthReason)
+	assert.Empty(t, decoded.Accounts[0].Drives)
 }
 
 // Validates: R-3.5.1, R-3.1.5
-func TestRunWhoamiWithContext_InvalidDriveSelectorReturnsMatchError(t *testing.T) {
+func TestRunStatusCommand_InvalidDriveSelectorReturnsMatchError(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:ready@example.com")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "Ready User",
-	}))
-	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "drive-ready"}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = "Ready User"
+	})
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = "drive-ready"
+	})
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_ready@example.com.json")
 
 	var out bytes.Buffer
@@ -179,40 +180,9 @@ func TestRunWhoamiWithContext_InvalidDriveSelectorReturnsMatchError(t *testing.T
 		},
 	}
 
-	err := runWhoamiWithContext(t.Context(), cc)
+	err := runStatusCommand(cc, false)
 	require.Error(t, err)
-	assert.EqualError(t, err, `no drive matching "missing"`)
-}
-
-// Validates: R-3.5.1
-func TestRunWhoamiWithContext_MultipleConfiguredDrivesRequireSelector(t *testing.T) {
-	setTestDriveHome(t)
-
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	aliceCID := driveid.MustCanonicalID("personal:alice@example.com")
-	bobCID := driveid.MustCanonicalID("business:bob@contoso.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, aliceCID, "~/OneDrive Alice"))
-	require.NoError(t, config.AppendDriveSection(cfgPath, bobCID, "~/OneDrive Bob"))
-	require.NoError(t, config.SaveAccountProfile(aliceCID, &config.AccountProfile{
-		DisplayName: "Alice",
-	}))
-	require.NoError(t, config.SaveAccountProfile(bobCID, &config.AccountProfile{
-		DisplayName: "Bob",
-	}))
-	require.NoError(t, config.SaveDriveIdentity(aliceCID, &config.DriveIdentity{DriveID: "drive-alice"}))
-	require.NoError(t, config.SaveDriveIdentity(bobCID, &config.DriveIdentity{DriveID: "drive-bob"}))
-
-	var out bytes.Buffer
-	cc := &CLIContext{
-		Logger:       testDriveLogger(t),
-		OutputWriter: &out,
-		StatusWriter: &out,
-		CfgPath:      cfgPath,
-	}
-
-	err := runWhoamiWithContext(t.Context(), cc)
-	require.Error(t, err)
-	assert.EqualError(t, err, "multiple drives configured — specify with --drive")
+	assert.EqualError(t, err, `resolving status drive selectors: resolving selector "missing": no drive matching "missing"`)
 }
 
 // Validates: R-3.3.2
@@ -273,9 +243,9 @@ func TestDriveList_JSONSurfacesOrphanedMissingLogin(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("personal:orphan@example.com")
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "Orphan User",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = "Orphan User"
+	})
 	require.NoError(t, touchStateDBForAccount(t, cid))
 
 	var out bytes.Buffer

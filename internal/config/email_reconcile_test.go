@@ -13,6 +13,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
+const (
+	emailReconcileTestUser123       = "user-123"
+	emailReconcileTestBusinessUser  = "Business User"
+	emailReconcileTestDriveBusiness = "drive-business"
+)
+
 func writeManagedFixture(t *testing.T, path string, data []byte) {
 	t.Helper()
 
@@ -45,16 +51,18 @@ func seedEmailReconcileFixture(t *testing.T) emailReconcileFixture {
 		personal:      driveid.MustCanonicalID("personal:user@example.com"),
 	}
 
-	require.NoError(t, SaveAccountProfile(fixture.oldBusiness, &AccountProfile{
-		UserID:         "user-123",
-		DisplayName:    "Business User",
-		PrimaryDriveID: "drive-business",
-	}))
-	require.NoError(t, SaveAccountProfile(fixture.personal, &AccountProfile{
-		UserID:         "other-user",
-		DisplayName:    "Personal User",
-		PrimaryDriveID: "drive-personal",
-	}))
+	seedCatalogAccount(t, fixture.oldBusiness, func(account *CatalogAccount) {
+		account.UserID = emailReconcileTestUser123
+		account.DisplayName = emailReconcileTestBusinessUser
+		account.PrimaryDriveID = emailReconcileTestDriveBusiness
+		account.PrimaryDriveCanonical = fixture.oldBusiness.String()
+	})
+	seedCatalogAccount(t, fixture.personal, func(account *CatalogAccount) {
+		account.UserID = "other-user"
+		account.DisplayName = "Personal User"
+		account.PrimaryDriveID = "drive-personal"
+		account.PrimaryDriveCanonical = fixture.personal.String()
+	})
 
 	writeManagedFixture(t, DriveTokenPath(fixture.oldBusiness), []byte(`{"token":"old-business"}`))
 	writeManagedFixture(t, DriveTokenPath(fixture.personal), []byte(`{"token":"personal"}`))
@@ -63,16 +71,18 @@ func seedEmailReconcileFixture(t *testing.T) emailReconcileFixture {
 	writeManagedFixture(t, DriveStatePath(fixture.oldShared), []byte("shared-state"))
 	writeManagedFixture(t, DriveStatePath(fixture.personal), []byte("personal-state"))
 
-	require.NoError(t, SaveDriveIdentity(fixture.oldBusiness, &DriveIdentity{DriveID: "drive-business"}))
-	require.NoError(t, SaveDriveIdentity(fixture.oldSharePoint, &DriveIdentity{
-		DriveID: "drive-sharepoint",
-		SiteID:  "site-123",
-	}))
-	require.NoError(t, SaveDriveIdentity(fixture.oldShared, &DriveIdentity{
-		AccountCanonicalID: fixture.oldBusiness.String(),
-		OwnerName:          "Alice",
-		OwnerEmail:         "alice@example.com",
-	}))
+	seedCatalogDrive(t, fixture.oldBusiness, func(drive *CatalogDrive) {
+		drive.RemoteDriveID = emailReconcileTestDriveBusiness
+	})
+	seedCatalogDrive(t, fixture.oldSharePoint, func(drive *CatalogDrive) {
+		drive.RemoteDriveID = "drive-sharepoint"
+		drive.SiteID = "site-123"
+	})
+	seedCatalogDrive(t, fixture.oldShared, func(drive *CatalogDrive) {
+		drive.OwnerAccountCanonical = fixture.oldBusiness.String()
+		drive.SharedOwnerName = "Alice"
+		drive.SharedOwnerEmail = "alice@example.com"
+	})
 
 	writeConfigFixture(t, fixture.configPath, []byte(`# config
 ["business:user@example.com"]
@@ -124,10 +134,9 @@ func assertEmailReconcileFixtureRenamed(
 	assert.FileExists(t, DriveStatePath(fixture.personal))
 	assert.FileExists(t, DriveTokenPath(fixture.personal))
 
-	sharedIdentity, found, err := LookupDriveIdentity(fixture.newShared)
-	require.NoError(t, err)
+	sharedIdentity, found := loadCatalogDrive(t, fixture.newShared)
 	require.True(t, found)
-	assert.Equal(t, fixture.newBusiness.String(), sharedIdentity.AccountCanonicalID)
+	assert.Equal(t, fixture.newBusiness.String(), sharedIdentity.OwnerAccountCanonical)
 
 	cfg, err := Load(fixture.configPath, logger)
 	require.NoError(t, err)
@@ -157,7 +166,7 @@ func TestReconcileAccountEmail_RenamesOwnedArtifacts(t *testing.T) {
 	result, err := ReconcileAccountEmail(
 		fixture.configPath,
 		fixture.newBusiness,
-		"user-123",
+		emailReconcileTestUser123,
 		"renamed@example.com",
 		logger,
 	)
@@ -172,11 +181,12 @@ func TestReconcileAccountEmail_NoOpWhenEmailUnchanged(t *testing.T) {
 	logger := testLogger(t)
 
 	current := driveid.MustCanonicalID("business:user@example.com")
-	require.NoError(t, SaveAccountProfile(current, &AccountProfile{
-		UserID:         "user-123",
-		DisplayName:    "Business User",
-		PrimaryDriveID: "drive-business",
-	}))
+	seedCatalogAccount(t, current, func(account *CatalogAccount) {
+		account.UserID = emailReconcileTestUser123
+		account.DisplayName = emailReconcileTestBusinessUser
+		account.PrimaryDriveID = emailReconcileTestDriveBusiness
+		account.PrimaryDriveCanonical = current.String()
+	})
 	writeManagedFixture(t, DriveTokenPath(current), []byte(`{"token":"business"}`))
 
 	configPath := filepath.Join(t.TempDir(), "config.toml")
@@ -184,7 +194,7 @@ func TestReconcileAccountEmail_NoOpWhenEmailUnchanged(t *testing.T) {
 sync_dir = "~/Business"
 `))
 
-	result, err := ReconcileAccountEmail(configPath, current, "user-123", "user@example.com", logger)
+	result, err := ReconcileAccountEmail(configPath, current, emailReconcileTestUser123, "user@example.com", logger)
 	require.NoError(t, err)
 	assert.False(t, result.Changed())
 	assert.FileExists(t, DriveTokenPath(current))
@@ -197,11 +207,12 @@ func TestReconcileAccountEmail_IdempotentRerun(t *testing.T) {
 
 	oldBusiness := driveid.MustCanonicalID("business:user@example.com")
 	newBusiness := driveid.MustCanonicalID("business:renamed@example.com")
-	require.NoError(t, SaveAccountProfile(oldBusiness, &AccountProfile{
-		UserID:         "user-123",
-		DisplayName:    "Business User",
-		PrimaryDriveID: "drive-business",
-	}))
+	seedCatalogAccount(t, oldBusiness, func(account *CatalogAccount) {
+		account.UserID = emailReconcileTestUser123
+		account.DisplayName = emailReconcileTestBusinessUser
+		account.PrimaryDriveID = emailReconcileTestDriveBusiness
+		account.PrimaryDriveCanonical = oldBusiness.String()
+	})
 	writeManagedFixture(t, DriveTokenPath(oldBusiness), []byte(`{"token":"old-business"}`))
 
 	configPath := filepath.Join(t.TempDir(), "config.toml")
@@ -209,11 +220,11 @@ func TestReconcileAccountEmail_IdempotentRerun(t *testing.T) {
 sync_dir = "~/Business"
 `))
 
-	first, err := ReconcileAccountEmail(configPath, newBusiness, "user-123", "renamed@example.com", logger)
+	first, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", logger)
 	require.NoError(t, err)
 	require.True(t, first.Changed())
 
-	second, err := ReconcileAccountEmail(configPath, newBusiness, "user-123", "renamed@example.com", logger)
+	second, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", logger)
 	require.NoError(t, err)
 	assert.False(t, second.Changed())
 }
@@ -225,11 +236,12 @@ func TestReconcileAccountEmail_CollisionFailsWithoutMutation(t *testing.T) {
 
 	oldBusiness := driveid.MustCanonicalID("business:user@example.com")
 	newBusiness := driveid.MustCanonicalID("business:renamed@example.com")
-	require.NoError(t, SaveAccountProfile(oldBusiness, &AccountProfile{
-		UserID:         "user-123",
-		DisplayName:    "Business User",
-		PrimaryDriveID: "drive-business",
-	}))
+	seedCatalogAccount(t, oldBusiness, func(account *CatalogAccount) {
+		account.UserID = emailReconcileTestUser123
+		account.DisplayName = emailReconcileTestBusinessUser
+		account.PrimaryDriveID = emailReconcileTestDriveBusiness
+		account.PrimaryDriveCanonical = oldBusiness.String()
+	})
 	writeManagedFixture(t, DriveTokenPath(oldBusiness), []byte(`{"token":"old"}`))
 	writeManagedFixture(t, DriveTokenPath(newBusiness), []byte(`{"token":"new"}`))
 
@@ -238,7 +250,7 @@ func TestReconcileAccountEmail_CollisionFailsWithoutMutation(t *testing.T) {
 sync_dir = "~/Business"
 `))
 
-	_, err := ReconcileAccountEmail(configPath, newBusiness, "user-123", "renamed@example.com", logger)
+	_, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", logger)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "target already exists")
 	assert.FileExists(t, DriveTokenPath(oldBusiness))

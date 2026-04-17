@@ -210,7 +210,7 @@ func printSharedAuthSection(w io.Writer, needsSpacing bool, authRequired []accou
 		return err
 	}
 
-	return printAccountAuthRequirementsText(w, "Authentication required:", authRequired)
+	return printAccountAuthRequirementsText(w, authRequired)
 }
 
 func maybeWriteBlankLine(w io.Writer, needsSpacing bool) error {

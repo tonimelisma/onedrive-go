@@ -70,13 +70,7 @@ func (r *authProofRecorder) recordSuccess(ctx context.Context, email, proofSourc
 	r.cleared[email] = true
 	r.mu.Unlock()
 
-	stored, loadErr := config.LoadCatalog()
-	if loadErr != nil {
-		r.logger.Debug("loading catalog for auth proof cleanup", "account", email, "error", loadErr)
-		return
-	}
-
-	clearedCount, err := clearAccountAuthRequirementWithCount(ctx, stored, email, r.logger)
+	clearedCount, err := clearAccountAuthRequirementWithCount(ctx, email, config.AuthClearSourceCLIProof, r.logger)
 	if err != nil {
 		// Auth-scope repair is best-effort maintenance. Successful direct API
 		// commands must not surface sync-store repair failures to end users just
@@ -121,24 +115,6 @@ func attachDriveAuthProof(session interface {
 	}
 
 	session.SetAuthenticatedSuccessHooks(recorder.Hook(email, proofSource))
-}
-
-func inspectAccountAuth(
-	ctx context.Context,
-	account string,
-	driveIDs []driveid.CanonicalID,
-	logger *slog.Logger,
-) accountAuthHealth {
-	savedLoginReason := inspectSavedLogin(ctx, account, driveIDs, logger)
-	if savedLoginReason != "" {
-		return authstate.RequiredHealth(savedLoginReason)
-	}
-
-	if hasPersistedAccountAuthRequirement(ctx, account, logger) {
-		return authstate.RequiredHealth(authReasonSyncAuthRejected)
-	}
-
-	return authstate.ReadyHealth()
 }
 
 func inspectSavedLogin(
@@ -192,27 +168,34 @@ func hasPersistedAccountAuthRequirement(ctx context.Context, account string, log
 }
 
 func clearAccountAuthRequirement(ctx context.Context, email string, logger *slog.Logger) error {
-	_, err := clearAccountAuthRequirementWithCount(ctx, nil, email, logger)
+	_, err := clearAccountAuthRequirementWithCount(ctx, email, config.AuthClearSourceCLIProof, logger)
 	return err
 }
 
-func clearAccountAuthRequirementWithCatalog(ctx context.Context, stored *config.Catalog, email string, logger *slog.Logger) error {
-	_, err := clearAccountAuthRequirementWithCount(ctx, stored, email, logger)
+func clearAccountAuthRequirementForSource(
+	ctx context.Context,
+	email string,
+	source config.AuthClearSource,
+	logger *slog.Logger,
+) error {
+	_, err := clearAccountAuthRequirementWithCount(ctx, email, source, logger)
 	return err
 }
 
-func clearAccountAuthRequirementWithCount(ctx context.Context, stored *config.Catalog, email string, logger *slog.Logger) (int, error) {
+func clearAccountAuthRequirementWithCount(
+	ctx context.Context,
+	email string,
+	source config.AuthClearSource,
+	logger *slog.Logger,
+) (int, error) {
 	if email == "" {
 		return 0, nil
 	}
 
 	_ = ctx
-	if stored == nil {
-		var err error
-		stored, err = config.LoadCatalog()
-		if err != nil {
-			return 0, fmt.Errorf("loading catalog: %w", err)
-		}
+	stored, err := config.LoadCatalog()
+	if err != nil {
+		return 0, fmt.Errorf("loading catalog: %w", err)
 	}
 
 	accountEntry, found := stored.AccountByEmail(email)
@@ -220,13 +203,14 @@ func clearAccountAuthRequirementWithCount(ctx context.Context, stored *config.Ca
 		return 0, nil
 	}
 
-	accountEntry.AuthRequirementReason = ""
-	stored.UpsertAccount(&accountEntry)
-	if err := config.SaveCatalog(stored); err != nil {
-		return 0, fmt.Errorf("writing catalog: %w", err)
+	if err := config.ClearAccountAuthRequirement(config.DefaultDataDir(), email, source); err != nil {
+		return 0, fmt.Errorf("clearing auth requirement: %w", err)
 	}
 
-	logger.Info("cleared catalog auth requirement after successful proof", "account", email)
+	logger.Info("cleared catalog auth requirement",
+		"account", email,
+		"source", source,
+	)
 	return 1, nil
 }
 
@@ -304,12 +288,12 @@ func sortAccountAuthRequirements(items []accountAuthRequirement) {
 	})
 }
 
-func printAccountAuthRequirementsText(w io.Writer, header string, items []accountAuthRequirement) error {
+func printAccountAuthRequirementsText(w io.Writer, items []accountAuthRequirement) error {
 	if len(items) == 0 {
 		return nil
 	}
 
-	if err := writeln(w, header); err != nil {
+	if err := writeln(w, "Authentication required:"); err != nil {
 		return err
 	}
 

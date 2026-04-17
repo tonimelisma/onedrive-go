@@ -21,13 +21,11 @@ import (
 func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
 	t.Helper()
 
-	if _, found, err := config.LookupDriveIdentity(cid); err != nil {
-		require.NoError(t, err)
-	} else if !found {
-		require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{
-			DriveID: "drive-auth",
-		}))
-	}
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
+		if drive.RemoteDriveID == "" {
+			drive.RemoteDriveID = "drive-auth"
+		}
+	})
 	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), testDriveLogger(t))
 	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
@@ -135,10 +133,11 @@ func TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
 
 	var out bytes.Buffer
 	cc := &CLIContext{
-		Logger:       testDriveLogger(t),
-		OutputWriter: &out,
-		CfgPath:      cfgPath,
-		Flags:        CLIFlags{JSON: true},
+		Logger:                  testDriveLogger(t),
+		OutputWriter:            &out,
+		CfgPath:                 cfgPath,
+		Flags:                   CLIFlags{JSON: true},
+		statusLiveOverlayLoader: noStatusLiveOverlay,
 	}
 
 	require.NoError(t, runStatusCommand(cc, false))
@@ -163,10 +162,11 @@ func TestStatusCommand_DoesNotClearPersistedAuthScope(t *testing.T) {
 
 	var out bytes.Buffer
 	cc := &CLIContext{
-		Logger:       testDriveLogger(t),
-		OutputWriter: &out,
-		StatusWriter: &out,
-		CfgPath:      cfgPath,
+		Logger:                  testDriveLogger(t),
+		OutputWriter:            &out,
+		StatusWriter:            &out,
+		CfgPath:                 cfgPath,
+		statusLiveOverlayLoader: noStatusLiveOverlay,
 	}
 
 	require.NoError(t, runStatusCommand(cc, false))
@@ -227,6 +227,6 @@ func TestAuthReasonTextAndAction_ReturnExpectedStrings(t *testing.T) {
 
 	assert.Equal(t, "Run 'onedrive-go login' to sign in.", authAction(authReasonMissingLogin))
 	assert.Equal(t, "Run 'onedrive-go login' to sign in.", authAction(authReasonInvalidSavedLogin))
-	assert.Equal(t, "Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.", authAction(authReasonSyncAuthRejected))
+	assert.Equal(t, "Run 'onedrive-go status' to re-check access, or 'onedrive-go login' to sign in again.", authAction(authReasonSyncAuthRejected))
 	assert.Empty(t, authAction("unknown"))
 }

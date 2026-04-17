@@ -21,6 +21,7 @@ type accountCatalogEntry struct {
 	AccountCanonicalID    driveid.CanonicalID
 	Email                 string
 	DriveType             string
+	UserID                string
 	DisplayName           string
 	OrgName               string
 	Configured            bool
@@ -110,6 +111,7 @@ func populateCatalogAccounts(byEmail map[string]*accountCatalogEntry, stored *co
 			entry.TokenDriveIDs = appendUniqueCanonicalID(entry.TokenDriveIDs, accountCID)
 		}
 		entry.DriveType = account.DriveType
+		entry.UserID = account.UserID
 		entry.DisplayName = account.DisplayName
 		entry.OrgName = account.OrgName
 		entry.AuthRequirementReason = account.AuthRequirementReason
@@ -246,6 +248,18 @@ func compareCanonicalID(a, b driveid.CanonicalID) int {
 
 func representativeTokenID(ids []driveid.CanonicalID) driveid.CanonicalID {
 	return canonicalIDForToken("", ids)
+}
+
+func accountDriveType(ids []driveid.CanonicalID) string {
+	for _, cid := range ids {
+		if !cid.IsSharePoint() {
+			return cid.DriveType()
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0].DriveType()
 }
 
 func accountCatalogDriveType(entry *accountCatalogEntry) string {

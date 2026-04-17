@@ -188,8 +188,19 @@ func addSharedDrive(
 
 	// Register catalog ownership so DriveTokenPath works for this shared drive
 	// in subsequent operations.
-	if saveErr := config.SaveDriveIdentity(cid, &config.DriveIdentity{
-		AccountCanonicalID: parentCID.String(),
+	if saveErr := config.UpdateCatalog(func(catalog *config.Catalog) error {
+		drive := config.CatalogDrive{
+			CanonicalID:           cid.String(),
+			OwnerAccountCanonical: parentCID.String(),
+			DriveType:             cid.DriveType(),
+		}
+		if existing, found := catalog.DriveByCanonicalID(cid); found {
+			drive = existing
+			drive.OwnerAccountCanonical = parentCID.String()
+			drive.DriveType = cid.DriveType()
+		}
+		catalog.UpsertDrive(&drive)
+		return nil
 	}); saveErr != nil {
 		return fmt.Errorf("registering shared drive catalog entry: %w", saveErr)
 	}
@@ -301,7 +312,7 @@ func sharedDiscoveryNoMatchesError(
 	var buf strings.Builder
 
 	if len(authRequired) > 0 {
-		if err := printAccountAuthRequirementsText(&buf, "Authentication required:", authRequired); err != nil {
+		if err := printAccountAuthRequirementsText(&buf, authRequired); err != nil {
 			return fmt.Errorf("render auth-required shared discovery error: %w", err)
 		}
 		_, _ = buf.WriteString("\n")

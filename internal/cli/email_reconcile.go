@@ -16,11 +16,12 @@ func (cc *CLIContext) probeAccountIdentity(
 ) (config.EmailReconcileResult, error) {
 	var zero config.EmailReconcileResult
 
-	profile, found, err := config.LookupAccountProfile(accountCID)
+	catalog, err := config.LoadCatalog()
 	if err != nil {
-		return zero, fmt.Errorf("lookup account profile: %w", err)
+		return zero, fmt.Errorf("load catalog for account probe: %w", err)
 	}
-	if !found || profile.UserID == "" {
+	account, found := catalog.AccountByCanonicalID(accountCID)
+	if !found || account.UserID == "" {
 		return zero, nil
 	}
 

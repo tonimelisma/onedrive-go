@@ -372,7 +372,7 @@ func (controller *scopeController) applyFatalAuthEffects(
 	)
 
 	if flow.engine.permHandler != nil && flow.engine.permHandler.accountEmail != "" {
-		if err := config.SetAccountAuthRequirementInDataDir(
+		if err := config.MarkAccountAuthRequired(
 			flow.engine.dataDir,
 			flow.engine.permHandler.accountEmail,
 			authstate.ReasonSyncAuthRejected,

@@ -12,7 +12,7 @@ import (
 )
 
 // accountCatalogSnapshot is the shared offline account/auth snapshot used by
-// status, whoami, and drive-management commands. Keeping config loading,
+// status and drive-management commands. Keeping config loading,
 // warning handling, and catalog construction in one place prevents each
 // command family from rebuilding its own auth/account semantics.
 type accountCatalogSnapshot struct {
@@ -31,7 +31,7 @@ type driveListSnapshot struct {
 func loadAccountCatalogSnapshot(ctx context.Context, cc *CLIContext) (accountCatalogSnapshot, error) {
 	logger := cc.Logger
 
-	cfg, warnings, err := config.LoadOrDefaultLenient(cc.CfgPath, logger)
+	validated, warnings, err := config.LoadValidatedState(cc.CfgPath, true, logger)
 	outcome := config.ClassifyLoadOutcome(err, warnings)
 	if err != nil {
 		return accountCatalogSnapshot{}, fmt.Errorf("loading config: %w", err)
@@ -41,101 +41,11 @@ func loadAccountCatalogSnapshot(ctx context.Context, cc *CLIContext) (accountCat
 		config.LogWarnings(warnings, logger)
 	}
 
-	stored, err := config.LoadCatalog()
-	if err != nil {
-		return accountCatalogSnapshot{}, fmt.Errorf("loading catalog: %w", err)
-	}
-	if err := validateConfiguredDrivesInCatalog(cfg, stored); err != nil {
-		return accountCatalogSnapshot{}, err
-	}
-	if err := validateCatalogDriveOwners(stored); err != nil {
-		return accountCatalogSnapshot{}, err
-	}
-	if err := validatePrimaryDriveOwnership(stored); err != nil {
-		return accountCatalogSnapshot{}, err
-	}
-
 	return accountCatalogSnapshot{
-		Config:  cfg,
-		Stored:  stored,
-		Catalog: buildAccountCatalogWithStored(ctx, cfg, stored, logger),
+		Config:  validated.Config,
+		Stored:  validated.Catalog,
+		Catalog: buildAccountCatalogWithStored(ctx, validated.Config, validated.Catalog, logger),
 	}, nil
-}
-
-func validateConfiguredDrivesInCatalog(cfg *config.Config, stored *config.Catalog) error {
-	if cfg == nil {
-		cfg = config.DefaultConfig()
-	}
-	if stored == nil {
-		stored = config.DefaultCatalog()
-	}
-
-	for cid := range cfg.Drives {
-		_, found := stored.DriveByCanonicalID(cid)
-		if !found {
-			return fmt.Errorf("catalog invariant: configured drive %s has no catalog entry", cid)
-		}
-	}
-
-	return validateCatalogDriveOwners(stored)
-}
-
-func validateCatalogDriveOwners(stored *config.Catalog) error {
-	if stored == nil {
-		stored = config.DefaultCatalog()
-	}
-
-	for _, key := range stored.SortedDriveKeys() {
-		drive := stored.Drives[key]
-		if drive.OwnerAccountCanonical == "" {
-			return fmt.Errorf("catalog invariant: drive %s has no owning account", drive.CanonicalID)
-		}
-		ownerCID, err := driveid.NewCanonicalID(drive.OwnerAccountCanonical)
-		if err != nil {
-			return fmt.Errorf("catalog invariant: drive %s has malformed owning account %q: %w", drive.CanonicalID, drive.OwnerAccountCanonical, err)
-		}
-		if _, found := stored.AccountByCanonicalID(ownerCID); !found {
-			return fmt.Errorf("catalog invariant: drive %s owner %s is missing from the catalog", drive.CanonicalID, ownerCID)
-		}
-	}
-
-	return nil
-}
-
-func validatePrimaryDriveOwnership(stored *config.Catalog) error {
-	if stored == nil {
-		stored = config.DefaultCatalog()
-	}
-
-	for _, key := range stored.SortedAccountKeys() {
-		account := stored.Accounts[key]
-		if account.PrimaryDriveCanonical == "" {
-			continue
-		}
-		primaryCID, err := driveid.NewCanonicalID(account.PrimaryDriveCanonical)
-		if err != nil {
-			return fmt.Errorf(
-				"catalog invariant: account %s has malformed primary drive %q: %w",
-				account.CanonicalID,
-				account.PrimaryDriveCanonical,
-				err,
-			)
-		}
-		drive, found := stored.DriveByCanonicalID(primaryCID)
-		if !found {
-			return fmt.Errorf("catalog invariant: account %s primary drive %s is missing from the catalog", account.CanonicalID, primaryCID)
-		}
-		if drive.OwnerAccountCanonical != account.CanonicalID {
-			return fmt.Errorf(
-				"catalog invariant: account %s primary drive %s is owned by %s",
-				account.CanonicalID,
-				primaryCID,
-				drive.OwnerAccountCanonical,
-			)
-		}
-	}
-
-	return nil
 }
 
 // loadAccountCatalogSnapshotWithBestEffortIdentityRefresh refreshes token-backed
@@ -188,13 +98,6 @@ func authRequirements(
 	include func(accountCatalogEntry) bool,
 ) []accountAuthRequirement {
 	return catalogAuthRequirements(snapshot.Catalog, include)
-}
-
-func whoamiAuthRequired(
-	snapshot accountCatalogSnapshot,
-	authenticatedEmail string,
-) []accountAuthRequirement {
-	return whoamiAuthRequiredAccounts(snapshot.Catalog, authenticatedEmail)
 }
 
 func loadDriveListSnapshot(

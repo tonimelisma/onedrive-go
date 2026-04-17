@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -22,6 +21,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+)
+
+const (
+	authTestUserID1          = "u1"
+	authTestDisplayNameAlice = "Alice"
 )
 
 func TestAccountLifecycle(t *testing.T) {
@@ -222,66 +226,25 @@ func TestFindTokenFallback_ExistingToken(t *testing.T) {
 	}
 }
 
-func TestPrintWhoamiText(t *testing.T) {
-	user := &graph.User{
-		ID:          "user-789",
-		DisplayName: "Test User",
-		Email:       "test@example.com",
-	}
-
-	drives := []graph.Drive{
-		{
-			ID:         driveid.New("drive-abc"),
-			Name:       "OneDrive",
-			DriveType:  "personal",
-			QuotaUsed:  1073741824, // 1 GB
-			QuotaTotal: 5368709120, // 5 GB
-		},
-	}
-
-	var buf bytes.Buffer
-	require.NoError(t, printWhoamiText(&buf, user, drives, nil, nil))
-	output := buf.String()
-
-	assert.Contains(t, output, "Test User")
-	assert.Contains(t, output, "test@example.com")
-	assert.Contains(t, output, "user-789")
-	assert.Contains(t, output, "OneDrive")
-	assert.Contains(t, output, "personal")
-	assert.Contains(t, output, "drive-abc")
-}
-
-func TestPrintWhoamiText_IncludesDegradedSection(t *testing.T) {
-	var buf bytes.Buffer
-	require.NoError(t, printWhoamiText(&buf, nil, nil, nil, []accountDegradedNotice{
-		driveCatalogDegradedNotice("user@example.com", "Test User", driveid.DriveTypePersonal),
-	}))
-
-	output := buf.String()
-	assert.Contains(t, output, "Accounts with degraded live discovery:")
-	assert.Contains(t, output, "Test User (user@example.com)")
-	assert.Contains(t, output, degradedReasonText(driveCatalogUnavailableReason))
-}
-
-type fakeWhoamiDriveClient struct {
+type fakeLiveDriveCatalogClient struct {
 	drives     []graph.Drive
 	drivesErr  error
 	primary    *graph.Drive
 	primaryErr error
 }
 
-func (f fakeWhoamiDriveClient) Drives(context.Context) ([]graph.Drive, error) {
+func (f fakeLiveDriveCatalogClient) Drives(context.Context) ([]graph.Drive, error) {
 	return f.drives, f.drivesErr
 }
 
-func (f fakeWhoamiDriveClient) PrimaryDrive(context.Context) (*graph.Drive, error) {
+func (f fakeLiveDriveCatalogClient) PrimaryDrive(context.Context) (*graph.Drive, error) {
 	return f.primary, f.primaryErr
 }
 
-func TestWhoamiDrives_DegradesToPrimaryDrive(t *testing.T) {
-	result := whoamiDrives(
+func TestDiscoverLiveDriveCatalog_DegradesToPrimaryDrive(t *testing.T) {
+	result := discoverLiveDriveCatalog(
 		t.Context(),
-		fakeWhoamiDriveClient{
+		fakeLiveDriveCatalogClient{
 			drivesErr: graph.ErrForbidden,
 			primary: &graph.Drive{
 				ID:        driveid.New("drive-primary"),
@@ -289,45 +252,35 @@ func TestWhoamiDrives_DegradesToPrimaryDrive(t *testing.T) {
 				DriveType: driveid.DriveTypePersonal,
 			},
 		},
-		accountAuthRequirement{
-			Email:     "user@example.com",
-			DriveType: driveid.DriveTypePersonal,
-		},
-		&graph.User{
-			Email:       "user@example.com",
-			DisplayName: "Test User",
-		},
+		"user@example.com",
+		"Test User",
+		driveid.DriveTypePersonal,
 		slog.Default(),
 	)
-	require.Nil(t, result.authResult)
-	require.Len(t, result.drives, 1)
-	assert.Equal(t, "OneDrive", result.drives[0].Name)
-	require.Len(t, result.degraded, 1)
-	assert.Equal(t, "user@example.com", result.degraded[0].Email)
-	assert.Equal(t, driveCatalogUnavailableReason, result.degraded[0].Reason)
+	assert.Equal(t, accountAuthHealth{}, result.AuthHealth)
+	require.Len(t, result.LiveDrives, 1)
+	assert.Equal(t, "OneDrive", result.LiveDrives[0].Name)
+	require.NotNil(t, result.Degraded)
+	assert.Equal(t, "user@example.com", result.Degraded.Email)
+	assert.Equal(t, driveCatalogUnavailableReason, result.Degraded.Reason)
 }
 
-func TestWhoamiDrives_DegradesWithoutPrimaryDrive(t *testing.T) {
-	result := whoamiDrives(
+func TestDiscoverLiveDriveCatalog_DegradesWithoutPrimaryDrive(t *testing.T) {
+	result := discoverLiveDriveCatalog(
 		t.Context(),
-		fakeWhoamiDriveClient{
+		fakeLiveDriveCatalogClient{
 			drivesErr:  graph.ErrForbidden,
 			primaryErr: graph.ErrForbidden,
 		},
-		accountAuthRequirement{
-			Email:     "user@example.com",
-			DriveType: driveid.DriveTypeBusiness,
-		},
-		&graph.User{
-			Email:       "user@example.com",
-			DisplayName: "Test User",
-		},
+		"user@example.com",
+		"Test User",
+		driveid.DriveTypeBusiness,
 		slog.Default(),
 	)
-	require.Nil(t, result.authResult)
-	assert.Empty(t, result.drives)
-	require.Len(t, result.degraded, 1)
-	assert.Equal(t, driveid.DriveTypeBusiness, result.degraded[0].DriveType)
+	assert.Equal(t, accountAuthHealth{}, result.AuthHealth)
+	assert.Empty(t, result.LiveDrives)
+	require.NotNil(t, result.Degraded)
+	assert.Equal(t, driveid.DriveTypeBusiness, result.Degraded.DriveType)
 }
 
 func TestPrintLoginSuccess_DoesNotPanic(t *testing.T) {
@@ -514,10 +467,10 @@ func TestResolveLogoutAccount_PurgeAutoSelectsSingleKnownAccountWithoutSavedLogi
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
-	require.NoError(t, config.SaveAccountProfile(
-		driveid.MustCanonicalID("personal:alice@outlook.com"),
-		&config.AccountProfile{UserID: "u1", DisplayName: "Alice"},
-	))
+	seedCatalogAccount(t, driveid.MustCanonicalID("personal:alice@outlook.com"), func(account *config.CatalogAccount) {
+		account.UserID = authTestUserID1
+		account.DisplayName = authTestDisplayNameAlice
+	})
 
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
@@ -535,10 +488,9 @@ func TestResolveLogoutAccount_PlainLogoutRequiresUsableSavedLogin(t *testing.T) 
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
-	require.NoError(t, config.SaveAccountProfile(
-		driveid.MustCanonicalID("personal:alice@outlook.com"),
-		&config.AccountProfile{UserID: "u1"},
-	))
+	seedCatalogAccount(t, driveid.MustCanonicalID("personal:alice@outlook.com"), func(account *config.CatalogAccount) {
+		account.UserID = authTestUserID1
+	})
 
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
@@ -583,7 +535,7 @@ func TestResolveLogoutAccount_MultipleUsableSavedLoginsRequireAccount(t *testing
 }
 
 // Validates: R-3.1.5
-func TestFindWhoamiAuthRequiredAccounts(t *testing.T) {
+func TestCatalogAuthRequirements_FindsOfflineAuthRequiredAccounts(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -591,16 +543,16 @@ func TestFindWhoamiAuthRequiredAccounts(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
 	// Catalog account without token -> auth required.
-	require.NoError(t, config.SaveAccountProfile(
-		driveid.MustCanonicalID("personal:alice@outlook.com"),
-		&config.AccountProfile{UserID: "u1", DisplayName: "Alice Smith"},
-	))
+	seedCatalogAccount(t, driveid.MustCanonicalID("personal:alice@outlook.com"), func(account *config.CatalogAccount) {
+		account.UserID = authTestUserID1
+		account.DisplayName = snapshotTestDisplayNameAliceSmith
+	})
 
 	// Catalog account WITH token -> still authenticated.
-	require.NoError(t, config.SaveAccountProfile(
-		driveid.MustCanonicalID("business:bob@contoso.com"),
-		&config.AccountProfile{UserID: "u2", DisplayName: "Bob Jones"},
-	))
+	seedCatalogAccount(t, driveid.MustCanonicalID("business:bob@contoso.com"), func(account *config.CatalogAccount) {
+		account.UserID = "u2"
+		account.DisplayName = "Bob Jones"
+	})
 	writeTestTokenFile(t, dataDir, "token_business_bob@contoso.com.json")
 
 	// Also create a state DB for alice to verify the count.
@@ -612,7 +564,9 @@ func TestFindWhoamiAuthRequiredAccounts(t *testing.T) {
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
 
-	authRequired := findWhoamiAuthRequiredAccounts(t.Context(), cfg, "", logger)
+	authRequired := catalogAuthRequirements(buildAccountCatalog(t.Context(), cfg, logger), func(accountCatalogEntry) bool {
+		return true
+	})
 	require.Len(t, authRequired, 1)
 	assert.Equal(t, "alice@outlook.com", authRequired[0].Email)
 	assert.Equal(t, "personal", authRequired[0].DriveType)
@@ -653,140 +607,8 @@ func TestPurgeOrphanedFiles(t *testing.T) {
 	assert.NoError(t, statErr, "bob's state DB should remain")
 }
 
-// Validates: R-3.1.6
-func TestPrintWhoamiJSON(t *testing.T) {
-	t.Parallel()
-
-	user := &graph.User{
-		ID:          "user-123",
-		DisplayName: "Alice Smith",
-		Email:       "alice@example.com",
-	}
-
-	drives := []graph.Drive{
-		{
-			ID:         driveid.New("drive-abc"),
-			Name:       "OneDrive",
-			DriveType:  "personal",
-			QuotaUsed:  1073741824,
-			QuotaTotal: 5368709120,
-		},
-	}
-
-	authRequired := []accountAuthRequirement{
-		{
-			Email:       "bob@example.com",
-			DriveType:   "business",
-			DisplayName: "Bob Jones",
-			Reason:      authReasonSyncAuthRejected,
-			Action:      authAction(authReasonSyncAuthRejected),
-			StateDBs:    1,
-		},
-	}
-
-	var buf bytes.Buffer
-	err := printWhoamiJSON(&buf, user, drives, authRequired, nil)
-	require.NoError(t, err)
-
-	var decoded whoamiOutput
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
-
-	require.NotNil(t, decoded.User)
-	assert.Equal(t, "user-123", decoded.User.ID)
-	assert.Equal(t, "Alice Smith", decoded.User.DisplayName)
-	assert.Equal(t, "alice@example.com", decoded.User.Email)
-
-	require.Len(t, decoded.Drives, 1)
-	assert.Contains(t, decoded.Drives[0].ID, "drive-abc")
-	assert.Equal(t, "OneDrive", decoded.Drives[0].Name)
-	assert.Equal(t, "personal", decoded.Drives[0].DriveType)
-	assert.Equal(t, int64(1073741824), decoded.Drives[0].QuotaUsed)
-
-	require.Len(t, decoded.AccountsRequiringAuth, 1)
-	assert.Equal(t, "bob@example.com", decoded.AccountsRequiringAuth[0].Email)
-	assert.Equal(t, authReasonSyncAuthRejected, decoded.AccountsRequiringAuth[0].Reason)
-}
-
-// Validates: R-3.1.6
-func TestPrintWhoamiJSON_AuthRequiredOnly(t *testing.T) {
-	t.Parallel()
-
-	authRequired := []accountAuthRequirement{
-		{
-			Email:     "carol@outlook.com",
-			DriveType: "personal",
-			Reason:    authReasonMissingLogin,
-			Action:    authAction(authReasonMissingLogin),
-			StateDBs:  2,
-		},
-	}
-
-	var buf bytes.Buffer
-	err := printWhoamiJSON(&buf, nil, nil, authRequired, nil)
-	require.NoError(t, err)
-
-	var decoded whoamiOutput
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
-
-	assert.Nil(t, decoded.User)
-	assert.Empty(t, decoded.Drives)
-	require.Len(t, decoded.AccountsRequiringAuth, 1)
-	assert.Equal(t, "carol@outlook.com", decoded.AccountsRequiringAuth[0].Email)
-	assert.Equal(t, authReasonMissingLogin, decoded.AccountsRequiringAuth[0].Reason)
-}
-
-// Validates: R-3.1.6
-func TestPrintWhoamiJSON_Empty(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	err := printWhoamiJSON(&buf, nil, nil, nil, nil)
-	require.NoError(t, err)
-
-	var decoded whoamiOutput
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
-
-	assert.Nil(t, decoded.User)
-	assert.Empty(t, decoded.Drives)
-	assert.Empty(t, decoded.AccountsRequiringAuth)
-}
-
-// Validates: R-3.1.5
-func TestPrintWhoamiAuthRequiredText(t *testing.T) {
-	var buf bytes.Buffer
-
-	authRequired := []accountAuthRequirement{
-		{
-			Email:       "alice@outlook.com",
-			DriveType:   "personal",
-			DisplayName: "Alice Smith",
-			Reason:      authReasonMissingLogin,
-			Action:      authAction(authReasonMissingLogin),
-			StateDBs:    2,
-		},
-		{
-			Email:     "bob@contoso.com",
-			DriveType: "business",
-			Reason:    authReasonSyncAuthRejected,
-			Action:    authAction(authReasonSyncAuthRejected),
-			StateDBs:  0,
-		},
-	}
-
-	require.NoError(t, printWhoamiAuthRequiredText(&buf, authRequired))
-	output := buf.String()
-
-	assert.Contains(t, output, "Accounts requiring authentication:")
-	assert.Contains(t, output, "Alice Smith (alice@outlook.com)")
-	assert.Contains(t, output, "2 state databases")
-	assert.Contains(t, output, "bob@contoso.com")
-	assert.Contains(t, output, "no state databases")
-	assert.Contains(t, output, "No saved login was found")
-	assert.Contains(t, output, "re-check access")
-}
-
 // Validates: R-2.10.47
-func TestRunWhoamiWithContext_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedProof(t *testing.T) {
+func TestRunStatusCommand_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedProof(t *testing.T) {
 	setTestDriveHome(t)
 
 	const graphDrivesPath = "/me/drives"
@@ -829,6 +651,6 @@ func TestRunWhoamiWithContext_ClearsPersistedAuthScopeAfterSuccessfulAuthenticat
 		GraphBaseURL: srv.URL,
 	}
 
-	require.NoError(t, runWhoamiWithContext(t.Context(), cc))
+	require.NoError(t, runStatusCommand(cc, false))
 	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
 }
