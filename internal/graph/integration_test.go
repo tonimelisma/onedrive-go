@@ -113,13 +113,13 @@ func driveIDForTest(t *testing.T) driveid.ID {
 
 	cid := driveid.MustCanonicalID(drive)
 
-	meta, found, err := config.LookupDriveMetadata(cid)
-	require.NoError(t, err, "reading catalog drive metadata for drive %q", drive)
-	require.True(t, found, "catalog drive metadata missing — re-run scripts/bootstrap-test-credentials.sh")
-	require.NotNil(t, meta, "catalog drive metadata should be present when found is true")
-	require.NotEmpty(t, meta.DriveID, "catalog drive metadata has empty drive_id")
+	identity, found, err := config.LookupDriveIdentity(cid)
+	require.NoError(t, err, "reading catalog drive identity for drive %q", drive)
+	require.True(t, found, "catalog drive identity missing — re-run scripts/bootstrap-test-credentials.sh")
+	require.NotNil(t, identity, "catalog drive identity should be present when found is true")
+	require.NotEmpty(t, identity.DriveID, "catalog drive identity has empty drive_id")
 
-	return driveid.New(meta.DriveID)
+	return driveid.New(identity.DriveID)
 }
 
 // TestIntegration_GetItem verifies GetItem returns a properly normalized Item

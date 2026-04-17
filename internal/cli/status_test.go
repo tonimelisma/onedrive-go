@@ -217,12 +217,12 @@ func TestBuildStatusAccountsWith_AuthenticationRequiredStates(t *testing.T) {
 		{
 			name:       "missing token",
 			savedLogin: savedLoginStateMissing,
-			wantReason: authReasonMissingLogin,
+			wantReason: string(authReasonMissingLogin),
 		},
 		{
 			name:       "invalid saved login",
 			savedLogin: savedLoginStateInvalid,
-			wantReason: authReasonInvalidSavedLogin,
+			wantReason: string(authReasonInvalidSavedLogin),
 		},
 	}
 
@@ -971,7 +971,7 @@ func TestPrintStatusText_WithAuthRequiredReasonAndAction(t *testing.T) {
 			Email:      "alice@example.com",
 			DriveType:  "personal",
 			AuthState:  authStateAuthenticationNeeded,
-			AuthReason: authReasonSyncAuthRejected,
+			AuthReason: string(authReasonSyncAuthRejected),
 			AuthAction: authAction(authReasonSyncAuthRejected),
 			Drives: []statusDrive{
 				{
@@ -1225,6 +1225,10 @@ func TestStatusCommand_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:damaged@example.com")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		DisplayName: "Damaged User",
+	}))
+	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "drive-damaged"}))
 	require.NoError(t, os.MkdirAll(filepath.Dir(config.DriveStatePath(cid)), 0o700))
 	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("not a sqlite database"), 0o600))
 

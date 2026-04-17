@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -614,7 +615,7 @@ func repairPersistedScopesForTest(t *testing.T, eng *testEngine, ctx context.Con
 	return testScopeController(t, eng).repairPersistedScopes(ctx, rt)
 }
 
-func setCatalogAuthRequirementForTest(t *testing.T, eng *testEngine, reason string) {
+func setCatalogAuthRequirementForTest(t *testing.T, eng *testEngine, reason authstate.Reason) {
 	t.Helper()
 
 	email := eng.permHandler.accountEmail
@@ -635,7 +636,7 @@ func setCatalogAuthRequirementForTest(t *testing.T, eng *testEngine, reason stri
 	}))
 }
 
-func loadCatalogAuthRequirementForTest(t *testing.T, eng *testEngine) string {
+func loadCatalogAuthRequirementForTest(t *testing.T, eng *testEngine) authstate.Reason {
 	t.Helper()
 
 	stored, err := config.LoadCatalogForDataDir(eng.dataDir)

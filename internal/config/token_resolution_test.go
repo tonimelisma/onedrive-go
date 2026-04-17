@@ -32,12 +32,12 @@ func TestDriveTokenPath_SharePoint_SharesBusinessToken(t *testing.T) {
 	assert.NotContains(t, path, "sharepoint")
 }
 
-func TestDriveTokenPath_Shared_WithDriveMetadata(t *testing.T) {
+func TestDriveTokenPath_Shared_WithDriveIdentity(t *testing.T) {
 	setTestDataDir(t)
 	sharedCID := driveid.MustCanonicalID("shared:alice@outlook.com:b!abc123:01DEFGH")
 
-	// Register drive metadata with parent account.
-	require.NoError(t, SaveDriveMetadata(sharedCID, &DriveMetadata{
+	// Register drive identity with parent account.
+	require.NoError(t, SaveDriveIdentity(sharedCID, &DriveIdentity{
 		AccountCanonicalID: "personal:alice@outlook.com",
 	}))
 
@@ -51,7 +51,7 @@ func TestDriveTokenPath_Shared_WithBusinessAccount(t *testing.T) {
 	setTestDataDir(t)
 	sharedCID := driveid.MustCanonicalID("shared:alice@contoso.com:b!TG9yZW0:01ABCDEF")
 
-	require.NoError(t, SaveDriveMetadata(sharedCID, &DriveMetadata{
+	require.NoError(t, SaveDriveIdentity(sharedCID, &DriveIdentity{
 		AccountCanonicalID: "business:alice@contoso.com",
 	}))
 
@@ -60,12 +60,12 @@ func TestDriveTokenPath_Shared_WithBusinessAccount(t *testing.T) {
 	assert.Contains(t, path, "token_business_alice@contoso.com.json")
 }
 
-func TestDriveTokenPath_Shared_NoDriveMetadata(t *testing.T) {
+func TestDriveTokenPath_Shared_NoDriveIdentity(t *testing.T) {
 	setTestDataDir(t)
 	sharedCID := driveid.MustCanonicalID("shared:alice@outlook.com:drv123:item456")
 
 	path := DriveTokenPath(sharedCID)
-	assert.Empty(t, path, "shared drive without metadata can't resolve token")
+	assert.Empty(t, path, "shared drive without drive identity can't resolve token")
 }
 
 func TestDriveTokenPath_ZeroID(t *testing.T) {
@@ -107,7 +107,7 @@ func TestTokenAccountCID_Shared(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("shared:me@outlook.com:b!TG9yZW0:01ABCDEF")
 
-	require.NoError(t, SaveDriveMetadata(cid, &DriveMetadata{
+	require.NoError(t, SaveDriveIdentity(cid, &DriveIdentity{
 		AccountCanonicalID: "personal:me@outlook.com",
 	}))
 
@@ -119,7 +119,7 @@ func TestTokenAccountCanonicalID_Shared(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("shared:me@outlook.com:b!TG9yZW0:01ABCDEF")
 
-	require.NoError(t, SaveDriveMetadata(cid, &DriveMetadata{
+	require.NoError(t, SaveDriveIdentity(cid, &DriveIdentity{
 		AccountCanonicalID: "personal:me@outlook.com",
 	}))
 
@@ -128,19 +128,19 @@ func TestTokenAccountCanonicalID_Shared(t *testing.T) {
 	assert.Equal(t, "personal:me@outlook.com", got.String())
 }
 
-func TestTokenAccountCID_Shared_NoMetadata(t *testing.T) {
+func TestTokenAccountCID_Shared_NoDriveIdentity(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("shared:nobody@example.com:b!TG9yZW0:01ABCDEF")
 
 	got := tokenAccountCID(cid)
-	assert.True(t, got.IsZero(), "should return zero CID when metadata is missing")
+	assert.True(t, got.IsZero(), "should return zero CID when drive identity is missing")
 }
 
-func TestResolveSharedTokenCID_ValidMetadata(t *testing.T) {
+func TestResolveSharedTokenCID_ValidDriveIdentity(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("shared:alice@outlook.com:b!abc123:01DEFGH")
 
-	require.NoError(t, SaveDriveMetadata(cid, &DriveMetadata{
+	require.NoError(t, SaveDriveIdentity(cid, &DriveIdentity{
 		AccountCanonicalID: "personal:alice@outlook.com",
 		OwnerName:          "Bob",
 		OwnerEmail:         "bob@contoso.com",
@@ -151,7 +151,7 @@ func TestResolveSharedTokenCID_ValidMetadata(t *testing.T) {
 	assert.Equal(t, "personal:alice@outlook.com", got.String())
 }
 
-func TestResolveSharedTokenCID_MissingMetadata(t *testing.T) {
+func TestResolveSharedTokenCID_MissingDriveIdentity(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("shared:alice@outlook.com:b!abc123:01DEFGH")
 
@@ -164,8 +164,8 @@ func TestResolveSharedTokenCID_EmptyAccountCID(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("shared:alice@outlook.com:b!abc123:01DEFGH")
 
-	// Save metadata without AccountCanonicalID.
-	require.NoError(t, SaveDriveMetadata(cid, &DriveMetadata{
+	// Save drive identity without AccountCanonicalID.
+	require.NoError(t, SaveDriveIdentity(cid, &DriveIdentity{
 		OwnerName:  "Bob",
 		OwnerEmail: "bob@contoso.com",
 	}))
@@ -179,15 +179,15 @@ func TestDriveTokenPath_Shared_EndToEnd(t *testing.T) {
 	dataDir := setTestDataDir(t)
 	sharedCID := driveid.MustCanonicalID("shared:alice@outlook.com:b!abc123:01DEFGH")
 
-	// Before metadata: returns empty.
+	// Before drive identity: returns empty.
 	assert.Empty(t, DriveTokenPath(sharedCID))
 
-	// Register drive metadata.
-	require.NoError(t, SaveDriveMetadata(sharedCID, &DriveMetadata{
+	// Register drive identity.
+	require.NoError(t, SaveDriveIdentity(sharedCID, &DriveIdentity{
 		AccountCanonicalID: "personal:alice@outlook.com",
 	}))
 
-	// After metadata: returns token path for the personal account.
+	// After drive identity: returns token path for the personal account.
 	path := DriveTokenPath(sharedCID)
 	assert.Equal(t, filepath.Join(dataDir, "token_personal_alice@outlook.com.json"), path)
 }

@@ -160,18 +160,18 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		LoggingConfig:   cfg.LoggingConfig,
 	}
 
-	// Two-source drive ID resolution: prefer catalog-backed drive metadata
+	// Two-source drive ID resolution: prefer the catalog-backed drive identity
 	// (per-drive, accurate for SharePoint libraries and shared drives), then
 	// the shared canonical ID (embeds the remote drive ID). Otherwise DriveID
 	// stays zero.
-	driveMeta, _, driveMetaErr := LookupDriveMetadata(canonicalID)
-	if driveMetaErr != nil {
-		logger.Debug("could not load drive metadata", "canonical_id", canonicalID.String(), "error", driveMetaErr)
+	driveIdentity, _, driveIdentityErr := LookupDriveIdentity(canonicalID)
+	if driveIdentityErr != nil {
+		logger.Debug("could not load drive identity", "canonical_id", canonicalID.String(), "error", driveIdentityErr)
 	}
 
-	if driveMeta != nil && driveMeta.DriveID != "" {
-		resolved.DriveID = driveid.New(driveMeta.DriveID)
-		logger.Debug("resolved drive ID from catalog metadata",
+	if driveIdentity != nil && driveIdentity.DriveID != "" {
+		resolved.DriveID = driveid.New(driveIdentity.DriveID)
+		logger.Debug("resolved drive ID from catalog drive identity",
 			"drive_id", resolved.DriveID.String(),
 			"canonical_id", canonicalID.String(),
 		)
@@ -315,7 +315,7 @@ func DiscoverTokens(logger *slog.Logger) []driveid.CanonicalID {
 // discoverTokensIn scans dir for token files and extracts canonical IDs.
 // Files that don't match the token naming convention are silently skipped.
 func discoverTokensIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
-	return discoverCIDFiles(dir, "token_", logger)
+	return discoverCIDFiles(dir, logger)
 }
 
 // DriveStatePath returns the state DB path for a canonical drive ID.

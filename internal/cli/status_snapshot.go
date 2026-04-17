@@ -206,7 +206,7 @@ func buildStatusAccountsFromCatalog(
 			Email:       email,
 			DriveType:   entry.DriveType,
 			AuthState:   entry.AuthHealth.State,
-			AuthReason:  entry.AuthHealth.Reason,
+			AuthReason:  string(entry.AuthHealth.Reason),
 			AuthAction:  entry.AuthHealth.Action,
 			DisplayName: entry.DisplayName,
 			OrgName:     entry.OrgName,
@@ -288,7 +288,7 @@ func buildSingleAccountStatusWith(
 
 	authHealth := checker.CheckAccountAuth(context.Background(), email, driveIDs)
 	acct.AuthState = authHealth.State
-	acct.AuthReason = authHealth.Reason
+	acct.AuthReason = string(authHealth.Reason)
 	acct.AuthAction = authHealth.Action
 
 	for _, cid := range driveIDs {

@@ -8,15 +8,13 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 const (
-	catalogFileName    = "catalog.json"
-	catalogSchemaV1    = 1
-	authReasonMissing  = "missing_login"
-	authReasonInvalid  = "invalid_saved_login"
-	authReasonRejected = "sync_auth_rejected"
+	catalogFileName = "catalog.json"
+	catalogSchemaV1 = 1
 )
 
 // Catalog is the managed inventory authority for accounts and drives.
@@ -29,15 +27,15 @@ type Catalog struct {
 }
 
 type CatalogAccount struct {
-	CanonicalID           string `json:"canonical_id"`
-	Email                 string `json:"email"`
-	DriveType             string `json:"drive_type"`
-	UserID                string `json:"user_id,omitempty"`
-	DisplayName           string `json:"display_name,omitempty"`
-	OrgName               string `json:"org_name,omitempty"`
-	PrimaryDriveID        string `json:"primary_drive_id,omitempty"`
-	PrimaryDriveCanonical string `json:"primary_drive_canonical_id,omitempty"`
-	AuthRequirementReason string `json:"auth_requirement_reason,omitempty"`
+	CanonicalID           string           `json:"canonical_id"`
+	Email                 string           `json:"email"`
+	DriveType             string           `json:"drive_type"`
+	UserID                string           `json:"user_id,omitempty"`
+	DisplayName           string           `json:"display_name,omitempty"`
+	OrgName               string           `json:"org_name,omitempty"`
+	PrimaryDriveID        string           `json:"primary_drive_id,omitempty"`
+	PrimaryDriveCanonical string           `json:"primary_drive_canonical_id,omitempty"`
+	AuthRequirementReason authstate.Reason `json:"auth_requirement_reason,omitempty"`
 }
 
 type CatalogDrive struct {
@@ -150,11 +148,11 @@ func UpdateCatalogForDataDir(dataDir string, update func(*Catalog) error) error 
 	return SaveCatalogForDataDir(dataDir, catalog)
 }
 
-func SetAccountAuthRequirement(email, reason string) error {
+func SetAccountAuthRequirement(email string, reason authstate.Reason) error {
 	return SetAccountAuthRequirementInDataDir(DefaultDataDir(), email, reason)
 }
 
-func SetAccountAuthRequirementInDataDir(dataDir, email, reason string) error {
+func SetAccountAuthRequirementInDataDir(dataDir, email string, reason authstate.Reason) error {
 	if email == "" {
 		return nil
 	}

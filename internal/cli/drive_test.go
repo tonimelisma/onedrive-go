@@ -1949,7 +1949,7 @@ func TestAnnotateConfiguredDriveAuth_AndPrintSections(t *testing.T) {
 	})
 
 	assert.Equal(t, authStateAuthenticationNeeded, configured[0].AuthState)
-	assert.Equal(t, authReasonMissingLogin, configured[0].AuthReason)
+	assert.Equal(t, string(authReasonMissingLogin), configured[0].AuthReason)
 	assert.Equal(t, "required", driveAuthLabel(&configured[0]))
 	assert.Equal(t, authStateReady, driveAuthLabel(nil))
 	assert.Nil(t, optionalAuthRequirements(nil))
@@ -2000,5 +2000,5 @@ func TestDriveList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t *testing.T
 	}
 
 	require.NoError(t, runDriveListWithContext(t.Context(), cc, false))
-	assert.False(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
 }

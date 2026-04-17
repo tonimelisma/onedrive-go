@@ -61,7 +61,6 @@ func TestInspector_AuditIntegrityReportsPersistedProblems(t *testing.T) {
 	}
 
 	assert.Subset(t, codes, []string{
-		integrityCodeInvalidAuthScopeTiming,
 		integrityCodeLegacyRemoteScope,
 		integrityCodeInvalidFailureTiming,
 		integrityCodeMissingScopeBlock,
@@ -81,7 +80,7 @@ func TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations(t *testi
 
 	repairs, err := store.RepairIntegritySafe(ctx)
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, repairs, 4)
+	assert.GreaterOrEqual(t, repairs, 3)
 
 	report, err := store.AuditIntegrity(ctx)
 	require.NoError(t, err)
@@ -89,13 +88,7 @@ func TestSyncStore_RepairIntegritySafeNormalizesDeterministicViolations(t *testi
 
 	blocks, err := store.ListScopeBlocks(ctx)
 	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-	assert.Equal(t, SKAuthAccount(), blocks[0].Key)
-	assert.Equal(t, ScopeTimingNone, blocks[0].TimingSource)
-	assert.Zero(t, blocks[0].TrialInterval)
-	assert.True(t, blocks[0].NextTrialAt.IsZero())
-	assert.True(t, blocks[0].PreserveUntil.IsZero())
-	assert.Zero(t, blocks[0].TrialCount)
+	assert.Empty(t, blocks)
 
 	rows, err := store.ListSyncFailures(ctx)
 	require.NoError(t, err)
@@ -215,15 +208,7 @@ func seedAuditIntegrityProblems(
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO scope_blocks
 			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
-		VALUES
-			(?, ?, 'backoff', ?, ?, ?, ?, 2),
-			(?, ?, 'none', ?, 0, 0, 0, 0)`,
-		SKAuthAccount().String(),
-		IssueUnauthorized,
-		time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC).UnixNano(),
-		int64(time.Minute),
-		time.Date(2026, 4, 3, 11, 0, 0, 0, time.UTC).UnixNano(),
-		time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC).UnixNano(),
+		VALUES (?, ?, 'none', ?, 0, 0, 0, 0)`,
 		SKPermRemoteWrite("Shared/Docs").String(),
 		IssueRemoteWriteDenied,
 		time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC).UnixNano(),
@@ -260,17 +245,6 @@ func seedAuditIntegrityProblems(
 		ScopeKey:   SKService(),
 	})
 	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
-		Path:       "auth/account",
-		DriveID:    driveID,
-		Direction:  DirectionUpload,
-		ActionType: ActionUpload,
-		Role:       FailureRoleBoundary,
-		Category:   CategoryActionable,
-		IssueType:  IssueUnauthorized,
-		ErrMsg:     "auth required",
-		ScopeKey:   SKAuthAccount(),
-	})
-	recordIntegrityFailure(t, store, ctx, &SyncFailureParams{
 		Path:       "Shared/Docs",
 		DriveID:    driveID,
 		Direction:  DirectionUpload,
@@ -294,15 +268,7 @@ func seedRepairIntegrityProblems(
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO scope_blocks
 			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
-		VALUES
-			(?, ?, 'backoff', ?, ?, ?, ?, 3),
-			(?, ?, 'none', ?, 0, 0, 0, 0)`,
-		SKAuthAccount().String(),
-		IssueUnauthorized,
-		time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC).UnixNano(),
-		int64(5*time.Minute),
-		time.Date(2026, 4, 3, 10, 5, 0, 0, time.UTC).UnixNano(),
-		time.Date(2026, 4, 3, 10, 10, 0, 0, time.UTC).UnixNano(),
+		VALUES (?, ?, 'none', ?, 0, 0, 0, 0)`,
 		SKPermRemoteWrite("Shared/Docs").String(),
 		IssueRemoteWriteDenied,
 		time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC).UnixNano(),

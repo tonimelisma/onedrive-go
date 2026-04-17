@@ -30,8 +30,8 @@ import (
 
 // --- helpers ---
 
-// setupXDGIsolation sets XDG_DATA_HOME to a temp dir and creates drive
-// metadata files for each CID. This gives buildResolvedDrive (called during
+// setupXDGIsolation sets XDG_DATA_HOME to a temp dir and creates catalog drive
+// identity for each CID. This gives buildResolvedDrive (called during
 // control-socket reload → ResolveDrives) a non-zero DriveID, which is required
 // for Session() to succeed.
 func setupXDGIsolation(t *testing.T, cids ...driveid.CanonicalID) {
@@ -41,7 +41,7 @@ func setupXDGIsolation(t *testing.T, cids ...driveid.CanonicalID) {
 	t.Setenv("XDG_DATA_HOME", xdgDir)
 
 	for _, cid := range cids {
-		require.NoError(t, config.SaveDriveMetadata(cid, &config.DriveMetadata{
+		require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{
 			DriveID: "test-drive-id",
 		}))
 	}
@@ -829,7 +829,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:existing@example.com", "Existing")
 	rd2CID := driveid.MustCanonicalID("personal:added@example.com")
 
-	// XDG isolation so buildResolvedDrive finds drive metadata during reload.
+	// XDG isolation so buildResolvedDrive finds catalog drive identity during reload.
 	setupXDGIsolation(t, rd1.CanonicalID, rd2CID)
 
 	cfgPath := writeTestConfig(t, rd1.CanonicalID)

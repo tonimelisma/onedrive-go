@@ -23,7 +23,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | --- | --- |
 | Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
-| Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithDriveMetadata`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
+| Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithDriveIdentity`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
@@ -248,7 +248,7 @@ authorities.
 
 ## Optional Metadata Lookups
 
-Catalog-backed account and drive metadata are optional state, not exceptional control flow. `LookupAccountProfile(cid)` and `LookupDriveMetadata(cid)` both return `(*T, found bool, error)`:
+Catalog-backed account profiles and drive identity are optional state, not exceptional control flow. `LookupAccountProfile(cid)` and `LookupDriveIdentity(cid)` both return `(*T, found bool, error)`:
 
 - `found=false, err=nil`: no cached metadata applies to that canonical ID (missing file, wrong drive type, shared drive, or metadata intentionally absent)
 - `found=true, err=nil`: valid cached metadata loaded

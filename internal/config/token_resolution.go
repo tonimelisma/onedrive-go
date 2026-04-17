@@ -17,7 +17,7 @@ import (
 //
 //	"personal:toni@outlook.com"                    -> "{dataDir}/token_personal_toni@outlook.com.json"
 //	"sharepoint:alice@contoso.com:marketing:Docs"  -> "{dataDir}/token_business_alice@contoso.com.json"
-//	"shared:alice@outlook.com:drv123:item456"      -> "{dataDir}/token_personal_alice@outlook.com.json" (via drive metadata)
+//	"shared:alice@outlook.com:drv123:item456"      -> "{dataDir}/token_personal_alice@outlook.com.json" (via drive identity)
 func DriveTokenPath(canonicalID driveid.CanonicalID) string {
 	dataDir := DefaultDataDir()
 	if dataDir == "" || canonicalID.IsZero() {
@@ -37,7 +37,7 @@ func DriveTokenPath(canonicalID driveid.CanonicalID) string {
 // TokenAccountCanonicalID resolves which account owns the OAuth token for a
 // drive. Personal and business drives own their token. SharePoint drives use
 // the business account's token. Shared drives use their parent account's token
-// from catalog-backed drive metadata.
+// from the catalog-backed drive identity.
 func TokenAccountCanonicalID(cid driveid.CanonicalID) (driveid.CanonicalID, error) {
 	if cid.IsZero() {
 		return driveid.CanonicalID{}, nil
@@ -63,21 +63,21 @@ func tokenAccountCID(cid driveid.CanonicalID) driveid.CanonicalID {
 	return tokenCID
 }
 
-// resolveSharedTokenCID reads the catalog-backed drive metadata for a shared
+// resolveSharedTokenCID reads the catalog-backed drive identity for a shared
 // drive to find its parent account's canonical ID. Returns a zero CID if the
 // catalog entry is missing or lacks an account_canonical_id.
 func resolveSharedTokenCID(cid driveid.CanonicalID) (driveid.CanonicalID, error) {
-	meta, found, err := LookupDriveMetadata(cid)
+	identity, found, err := LookupDriveIdentity(cid)
 	if err != nil {
-		return driveid.CanonicalID{}, fmt.Errorf("lookup shared drive metadata for %s: %w", cid, err)
+		return driveid.CanonicalID{}, fmt.Errorf("lookup shared drive identity for %s: %w", cid, err)
 	}
-	if !found || meta.AccountCanonicalID == "" {
+	if !found || identity.AccountCanonicalID == "" {
 		return driveid.CanonicalID{}, nil
 	}
 
-	accountCID, err := driveid.NewCanonicalID(meta.AccountCanonicalID)
+	accountCID, err := driveid.NewCanonicalID(identity.AccountCanonicalID)
 	if err != nil {
-		return driveid.CanonicalID{}, fmt.Errorf("parse shared account canonical ID %q: %w", meta.AccountCanonicalID, err)
+		return driveid.CanonicalID{}, fmt.Errorf("parse shared account canonical ID %q: %w", identity.AccountCanonicalID, err)
 	}
 
 	return accountCID, nil

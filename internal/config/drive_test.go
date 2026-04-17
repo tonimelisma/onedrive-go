@@ -628,12 +628,12 @@ func TestCollectOtherSyncDirs_SkipsEmptyBaseName(t *testing.T) {
 
 // --- cleanup-correctness tests (no token metadata fallback) ---
 
-func TestBuildResolvedDrive_DriveIDFromMetadataOnly(t *testing.T) {
+func TestBuildResolvedDrive_DriveIDFromDriveIdentityOnly(t *testing.T) {
 	dataDir := setTestDataDir(t)
 	cid := driveid.MustCanonicalID("personal:meta@example.com")
 
-	// Write drive metadata with a drive_id.
-	require.NoError(t, SaveDriveMetadata(cid, &DriveMetadata{DriveID: "abcdef0123456789"}))
+	// Write drive identity with a drive_id.
+	require.NoError(t, SaveDriveIdentity(cid, &DriveIdentity{DriveID: "abcdef0123456789"}))
 
 	// Also need a token file for discovery.
 	writeTokenFile(t, dataDir, "token_personal_meta@example.com.json")

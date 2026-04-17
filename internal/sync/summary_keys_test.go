@@ -22,8 +22,6 @@ func TestSummaryKeyForPersistedFailure_RepresentativeMappings(t *testing.T) {
 func TestSummaryKeyForScopeBlock_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, SummaryAuthenticationRequired,
-		SummaryKeyForScopeBlock(IssueUnauthorized, SKAuthAccount()))
 	assert.Equal(t, SummaryServiceOutage,
 		SummaryKeyForScopeBlock(IssueServiceOutage, SKService()))
 	assert.Equal(t, SummaryRateLimited,

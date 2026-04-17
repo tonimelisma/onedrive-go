@@ -26,12 +26,12 @@ const (
 type accountAuthHealth = authstate.Health
 
 type accountAuthRequirement struct {
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name,omitempty"`
-	DriveType   string `json:"drive_type,omitempty"`
-	Reason      string `json:"reason"`
-	Action      string `json:"action,omitempty"`
-	StateDBs    int    `json:"state_dbs,omitempty"`
+	Email       string           `json:"email"`
+	DisplayName string           `json:"display_name,omitempty"`
+	DriveType   string           `json:"drive_type,omitempty"`
+	Reason      authstate.Reason `json:"reason"`
+	Action      string           `json:"action,omitempty"`
+	StateDBs    int              `json:"state_dbs,omitempty"`
 }
 
 type accountAuthChecker interface {
@@ -76,7 +76,7 @@ func (r *authProofRecorder) recordSuccess(ctx context.Context, email, proofSourc
 		return
 	}
 
-	clearedCount, err := clearAccountAuthScopesWithCount(ctx, stored, email, r.logger)
+	clearedCount, err := clearAccountAuthRequirementWithCount(ctx, stored, email, r.logger)
 	if err != nil {
 		// Auth-scope repair is best-effort maintenance. Successful direct API
 		// commands must not surface sync-store repair failures to end users just
@@ -134,7 +134,7 @@ func inspectAccountAuth(
 		return authstate.RequiredHealth(savedLoginReason)
 	}
 
-	if hasPersistedAuthScope(ctx, account, logger) {
+	if hasPersistedAccountAuthRequirement(ctx, account, logger) {
 		return authstate.RequiredHealth(authReasonSyncAuthRejected)
 	}
 
@@ -146,7 +146,7 @@ func inspectSavedLogin(
 	account string,
 	driveIDs []driveid.CanonicalID,
 	logger *slog.Logger,
-) string {
+) authstate.Reason {
 	tokenID := canonicalIDForToken(account, driveIDs)
 	if tokenID.IsZero() {
 		stored, err := config.LoadCatalog()
@@ -175,7 +175,7 @@ func inspectSavedLogin(
 	return authReasonInvalidSavedLogin
 }
 
-func hasPersistedAuthScope(ctx context.Context, account string, logger *slog.Logger) bool {
+func hasPersistedAccountAuthRequirement(ctx context.Context, account string, logger *slog.Logger) bool {
 	_ = ctx
 	stored, err := config.LoadCatalog()
 	if err != nil {
@@ -191,17 +191,17 @@ func hasPersistedAuthScope(ctx context.Context, account string, logger *slog.Log
 	return accountEntry.AuthRequirementReason == authReasonSyncAuthRejected
 }
 
-func clearAccountAuthScopes(ctx context.Context, email string, logger *slog.Logger) error {
-	_, err := clearAccountAuthScopesWithCount(ctx, nil, email, logger)
+func clearAccountAuthRequirement(ctx context.Context, email string, logger *slog.Logger) error {
+	_, err := clearAccountAuthRequirementWithCount(ctx, nil, email, logger)
 	return err
 }
 
-func clearAccountAuthScopesWithCatalog(ctx context.Context, stored *config.Catalog, email string, logger *slog.Logger) error {
-	_, err := clearAccountAuthScopesWithCount(ctx, stored, email, logger)
+func clearAccountAuthRequirementWithCatalog(ctx context.Context, stored *config.Catalog, email string, logger *slog.Logger) error {
+	_, err := clearAccountAuthRequirementWithCount(ctx, stored, email, logger)
 	return err
 }
 
-func clearAccountAuthScopesWithCount(ctx context.Context, stored *config.Catalog, email string, logger *slog.Logger) (int, error) {
+func clearAccountAuthRequirementWithCount(ctx context.Context, stored *config.Catalog, email string, logger *slog.Logger) (int, error) {
 	if email == "" {
 		return 0, nil
 	}
@@ -230,11 +230,11 @@ func clearAccountAuthScopesWithCount(ctx context.Context, stored *config.Catalog
 	return 1, nil
 }
 
-func authReasonText(reason string) string {
+func authReasonText(reason authstate.Reason) string {
 	return authstate.PresentationForReason(reason).Reason
 }
 
-func authAction(reason string) string {
+func authAction(reason authstate.Reason) string {
 	return authstate.PresentationForReason(reason).Action
 }
 
@@ -348,5 +348,12 @@ func printAccountAuthRequirementsText(w io.Writer, header string, items []accoun
 }
 
 func authErrorMessage(err error) string {
-	return authstate.ErrorMessage(err)
+	switch {
+	case errors.Is(err, graph.ErrNotLoggedIn):
+		return "Authentication required: no saved login was found for this account. Run 'onedrive-go login'."
+	case errors.Is(err, graph.ErrUnauthorized):
+		return "Authentication required: OneDrive rejected the saved login for this account. Run 'onedrive-go login'."
+	default:
+		return ""
+	}
 }

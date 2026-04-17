@@ -181,7 +181,7 @@ func TestLogoutCommand_PurgeRemovesAccountProfile(t *testing.T) {
 	}))
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_alice@contoso.com.json")
 	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("fake-db"), 0o600))
-	require.NoError(t, config.SaveDriveMetadata(cid, &config.DriveMetadata{DriveID: "d1"}))
+	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "d1"}))
 
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
@@ -199,10 +199,10 @@ func TestLogoutCommand_PurgeRemovesAccountProfile(t *testing.T) {
 	_, stateErr := os.Stat(config.DriveStatePath(cid))
 	assert.True(t, os.IsNotExist(stateErr), "logout --purge should remove state DB")
 
-	meta, found, metaErr := config.LookupDriveMetadata(cid)
-	require.NoError(t, metaErr)
+	identity, found, identityErr := config.LookupDriveIdentity(cid)
+	require.NoError(t, identityErr)
 	assert.False(t, found, "logout --purge should remove drive catalog metadata")
-	assert.Nil(t, meta)
+	assert.Nil(t, identity)
 
 	profile, found, profileErr := config.LookupAccountProfile(cid)
 	require.NoError(t, profileErr)
@@ -227,7 +227,7 @@ func TestDriveRemove_PurgePreservesAccountProfile(t *testing.T) {
 	}))
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_alice@contoso.com.json")
 	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("fake-db"), 0o600))
-	require.NoError(t, config.SaveDriveMetadata(cid, &config.DriveMetadata{DriveID: "d1"}))
+	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "d1"}))
 
 	var out bytes.Buffer
 	cc := newCommandContext(&out, cfgPath)
@@ -242,10 +242,10 @@ func TestDriveRemove_PurgePreservesAccountProfile(t *testing.T) {
 	_, stateErr := os.Stat(config.DriveStatePath(cid))
 	assert.True(t, os.IsNotExist(stateErr), "drive remove --purge should remove the drive state DB")
 
-	meta, found, metaErr := config.LookupDriveMetadata(cid)
-	require.NoError(t, metaErr)
+	identity, found, identityErr := config.LookupDriveIdentity(cid)
+	require.NoError(t, identityErr)
 	assert.False(t, found, "drive remove --purge should remove drive catalog metadata")
-	assert.Nil(t, meta)
+	assert.Nil(t, identity)
 
 	_, tokenErr := os.Stat(config.DriveTokenPath(cid))
 	require.NoError(t, tokenErr, "drive remove --purge must preserve the account token")

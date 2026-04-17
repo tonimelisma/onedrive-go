@@ -177,6 +177,44 @@ func TestSyncStore_ListScopeBlocks_Empty(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+// Validates: R-2.10.8
+func TestSyncStore_ListScopeBlocks_SkipsUnknownWireKeys(t *testing.T) {
+	t.Parallel()
+	mgr := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	_, err := mgr.db.ExecContext(
+		ctx,
+		`INSERT INTO scope_blocks
+			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"auth:account",
+		IssueUnauthorized,
+		ScopeTimingNone,
+		now.UnixNano(),
+		int64(0),
+		int64(0),
+		int64(0),
+		0,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.UpsertScopeBlock(ctx, &ScopeBlock{
+		Key:           SKService(),
+		IssueType:     IssueServiceOutage,
+		TimingSource:  ScopeTimingBackoff,
+		BlockedAt:     now,
+		TrialInterval: 5 * time.Second,
+		NextTrialAt:   now.Add(5 * time.Second),
+	}))
+
+	got, err := mgr.ListScopeBlocks(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, SKService(), got[0].Key)
+}
+
 // ---------------------------------------------------------------------------
 // Round-trip: all field types survive serialization
 // ---------------------------------------------------------------------------

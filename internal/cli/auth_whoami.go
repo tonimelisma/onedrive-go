@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -252,7 +253,7 @@ func whoamiDrives(
 
 func authRequiredResult(
 	authRequired accountAuthRequirement,
-	reason string,
+	reason authstate.Reason,
 ) *authenticatedAccountResult {
 	authRequired.Reason = reason
 	authRequired.Action = authAction(reason)

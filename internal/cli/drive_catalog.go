@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -130,7 +131,7 @@ func annotateConfiguredDriveAuth(entries []driveListEntry, authByEmail map[strin
 		}
 
 		entries[i].AuthState = health.State
-		entries[i].AuthReason = health.Reason
+		entries[i].AuthReason = string(health.Reason)
 	}
 }
 
@@ -365,7 +366,7 @@ func tokenDiscoveryAuthRequirement(
 
 func tokenAuthRequirement(
 	tokenCID driveid.CanonicalID,
-	reason string,
+	reason authstate.Reason,
 	logger *slog.Logger,
 ) accountAuthRequirement {
 	return authRequirement(

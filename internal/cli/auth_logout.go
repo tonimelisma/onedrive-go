@@ -168,8 +168,8 @@ func executePlainLogout(
 	affected []driveid.CanonicalID,
 	logger *slog.Logger,
 ) error {
-	if clearErr := clearAccountAuthScopesWithCatalog(context.Background(), stored, account, logger); clearErr != nil {
-		logger.Warn("clearing stale auth scopes during logout", "account", account, "error", clearErr)
+	if clearErr := clearAccountAuthRequirementWithCatalog(context.Background(), stored, account, logger); clearErr != nil {
+		logger.Warn("clearing stale account auth requirement during logout", "account", account, "error", clearErr)
 	}
 
 	if err := removeAccountDriveConfigs(cfgPath, affected, logger); err != nil {

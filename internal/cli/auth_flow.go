@@ -78,11 +78,11 @@ func persistLoginMetadata(
 		logger.Warn("failed to save account profile", "error", profileErr)
 	}
 
-	if driveMetaErr := config.SaveDriveMetadata(canonicalID, &config.DriveMetadata{
+	if driveIdentityErr := config.SaveDriveIdentity(canonicalID, &config.DriveIdentity{
 		DriveID:  primaryDriveID.String(),
 		CachedAt: now,
-	}); driveMetaErr != nil {
-		logger.Warn("failed to save catalog drive metadata", "error", driveMetaErr)
+	}); driveIdentityErr != nil {
+		logger.Warn("failed to save catalog drive identity", "error", driveIdentityErr)
 	}
 
 	if catalogErr := config.UpdateCatalog(func(catalog *config.Catalog) error {
@@ -148,8 +148,8 @@ func clearLoginAuthRequirement(ctx context.Context, email string, logger *slog.L
 		logger.Warn("loading catalog for auth cleanup", "account", email, "error", loadCatalogErr)
 		return
 	}
-	if clearErr := clearAccountAuthScopesWithCatalog(ctx, stored, email, logger); clearErr != nil {
-		logger.Warn("clearing stale auth scopes after login", "account", email, "error", clearErr)
+	if clearErr := clearAccountAuthRequirementWithCatalog(ctx, stored, email, logger); clearErr != nil {
+		logger.Warn("clearing stale account auth requirement after login", "account", email, "error", clearErr)
 	}
 }
 

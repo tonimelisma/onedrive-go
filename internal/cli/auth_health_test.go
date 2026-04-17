@@ -7,11 +7,11 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -21,16 +21,16 @@ import (
 func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
 	t.Helper()
 
+	if _, found, err := config.LookupDriveIdentity(cid); err != nil {
+		require.NoError(t, err)
+	} else if !found {
+		require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{
+			DriveID: "drive-auth",
+		}))
+	}
 	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), testDriveLogger(t))
 	require.NoError(t, err)
-	defer store.Close(t.Context())
-
-	require.NoError(t, store.UpsertScopeBlock(t.Context(), &syncengine.ScopeBlock{
-		Key:          syncengine.SKAuthAccount(),
-		IssueType:    syncengine.IssueUnauthorized,
-		TimingSource: syncengine.ScopeTimingNone,
-		BlockedAt:    time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
-	}))
+	require.NoError(t, store.Close(t.Context()))
 
 	accountCID := cid
 	if cid.IsSharePoint() {
@@ -41,11 +41,11 @@ func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
 			CanonicalID:           accountCID.String(),
 			Email:                 accountCID.Email(),
 			DriveType:             accountCID.DriveType(),
-			AuthRequirementReason: authReasonSyncAuthRejected,
+			AuthRequirementReason: authstate.ReasonSyncAuthRejected,
 		}
 		if existing, found := catalog.AccountByCanonicalID(accountCID); found {
 			account = existing
-			account.AuthRequirementReason = authReasonSyncAuthRejected
+			account.AuthRequirementReason = authstate.ReasonSyncAuthRejected
 		}
 		catalog.UpsertAccount(&account)
 		return nil
@@ -65,10 +65,10 @@ func TestClearAccountAuthScopes_ClearsPersistedAuthScope(t *testing.T) {
 	}
 
 	logger := testDriveLogger(t)
-	require.True(t, hasPersistedAuthScope(t.Context(), "user@example.com", logger))
+	require.True(t, hasPersistedAccountAuthRequirement(t.Context(), "user@example.com", logger))
 
-	require.NoError(t, clearAccountAuthScopes(t.Context(), "user@example.com", logger))
-	assert.False(t, hasPersistedAuthScope(t.Context(), "user@example.com", logger))
+	require.NoError(t, clearAccountAuthRequirement(t.Context(), "user@example.com", logger))
+	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), "user@example.com", logger))
 }
 
 // Validates: R-2.10.47
@@ -97,7 +97,7 @@ func TestAttachAccountAuthProof_ClearsOnAuthenticatedSuccess(t *testing.T) {
 
 	_, err := client.Me(t.Context())
 	require.NoError(t, err)
-	assert.False(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
 }
 
 // Validates: R-2.10.47
@@ -120,7 +120,7 @@ func TestAttachAccountAuthProof_DoesNotClearOnUnauthorized(t *testing.T) {
 
 	_, err := client.Me(t.Context())
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
-	assert.True(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.True(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
 }
 
 // Validates: R-2.10.45, R-2.10.47
@@ -147,7 +147,7 @@ func TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
 	require.Len(t, decoded.Accounts, 1)
 	assert.Equal(t, authStateAuthenticationNeeded, decoded.Accounts[0].AuthState)
-	assert.Equal(t, authReasonSyncAuthRejected, decoded.Accounts[0].AuthReason)
+	assert.Equal(t, string(authReasonSyncAuthRejected), decoded.Accounts[0].AuthReason)
 	assert.Equal(t, 1, decoded.Summary.AccountsRequiringAuth)
 }
 
@@ -170,7 +170,7 @@ func TestStatusCommand_DoesNotClearPersistedAuthScope(t *testing.T) {
 	}
 
 	require.NoError(t, runStatusCommand(cc, false))
-	assert.True(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.True(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
 }
 
 // Validates: R-2.10.45
