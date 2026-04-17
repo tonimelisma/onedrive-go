@@ -93,7 +93,8 @@ delta visibility is not sufficient.
 `RunWatch()` is the long-lived runtime. It owns:
 
 - observer startup and shutdown
-- buffered change intake
+- dirty-signal intake and debounce
+- snapshot refresh and SQLite reconciliation after debounce
 - action admission and dispatch
 - worker result drain
 - retry and trial timer scheduling
@@ -102,6 +103,12 @@ delta visibility is not sufficient.
 
 The watch loop is the single owner of mutable runtime state. Other packages may
 signal it, but they do not mutate its runtime data structures directly.
+
+Local watcher events, remote delta batches, websocket wakes, and full
+reconciliation results are scheduler hints only. After 5 seconds without a new
+local or remote observation, watch mode refreshes current truth, runs SQL
+comparison/reconciliation, builds the current actionable set in Go, and then
+admits runnable actions.
 
 ### Recheck And External DB Changes
 

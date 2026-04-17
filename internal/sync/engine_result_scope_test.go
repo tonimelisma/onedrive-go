@@ -1661,7 +1661,7 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	batches := make(chan []PathChanges, 2)
+	batches := make(chan DirtyBatch, 2)
 	results := make(chan WorkerResult, 2)
 	done := make(chan error, 1)
 
@@ -1676,18 +1676,15 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 		})
 	}()
 
-	batches <- []PathChanges{{
-		Path: "alpha.txt",
-		RemoteEvents: []ChangeEvent{{
-			Source:  SourceRemote,
-			Type:    ChangeCreate,
-			Path:    "alpha.txt",
-			DriveID: driveID,
-			ItemID:  "alpha-item",
-			Hash:    "alpha-hash",
-			Size:    10,
-		}},
-	}}
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "alpha-item",
+		Path:     "alpha.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "alpha-hash",
+		Size:     10,
+	}}, "", driveID))
+	batches <- DirtyBatch{Paths: []string{"alpha.txt"}}
 
 	first := readReadyAction(t, ready)
 	require.Equal(t, "alpha.txt", first.Action.Path)
@@ -1710,21 +1707,33 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	batches <- []PathChanges{{
-		Path: "beta.txt",
-		RemoteEvents: []ChangeEvent{{
-			Source:  SourceRemote,
-			Type:    ChangeCreate,
-			Path:    "beta.txt",
-			DriveID: driveID,
-			ItemID:  "beta-item",
-			Hash:    "beta-hash",
-			Size:    12,
-		}},
-	}}
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "beta-item",
+		Path:     "beta.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "beta-hash",
+		Size:     12,
+	}}, "", driveID))
+	batches <- DirtyBatch{Paths: []string{"beta.txt"}}
 
-	second := readReadyAction(t, ready)
-	require.Equal(t, "beta.txt", second.Action.Path, "steady-state watch loop should keep processing later batches")
+	var second *TrackedAction
+	for i := 0; i < 2; i++ {
+		candidate := readReadyAction(t, ready)
+		if candidate.Action.Path == "beta.txt" {
+			second = candidate
+			break
+		}
+
+		results <- WorkerResult{
+			ActionID:   candidate.ID,
+			Path:       candidate.Action.Path,
+			DriveID:    driveID,
+			ActionType: candidate.Action.Type,
+			Success:    true,
+		}
+	}
+	require.NotNil(t, second, "steady-state watch loop should keep processing later batches")
 
 	cancel()
 	close(results)

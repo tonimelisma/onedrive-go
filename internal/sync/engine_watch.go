@@ -136,7 +136,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) err
 	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
-	errs, activeObs, skippedCh := rt.startObservers(ctx, pipe.bl, rt.buf, opts)
+	errs, activeObs, skippedCh := rt.startObservers(ctx, pipe.bl, rt.dirtyBuf, opts)
 	pipe.errs = errs
 	pipe.activeObs = activeObs
 	pipe.skippedCh = skippedCh
@@ -159,7 +159,7 @@ type watchPipeline struct {
 	runtime          *watchRuntime
 	bl               *Baseline
 	safety           *SafetyConfig
-	batchReady       <-chan []PathChanges
+	batchReady       <-chan DirtyBatch
 	results          <-chan WorkerResult
 	errs             <-chan error
 	skippedCh        <-chan []SkippedItem
@@ -229,11 +229,11 @@ func (rt *watchRuntime) initWatchInfra(
 	pool := NewWorkerPool(rt.engine.execCfg, rt.dispatchCh, neverDone, rt.engine.baseline, rt.engine.logger, watchResultBuf)
 	pool.Start(ctx, rt.engine.transferWorkers)
 
-	// Buffer promoted to watchRuntime so observed and reconciliation work share
-	// the same debounce/planning path the watch loop already owns.
-	buf := NewBuffer(rt.engine.logger)
-	rt.buf = buf
-	batchReady := buf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
+	// DirtyBuffer is the watch scheduler boundary. Observation marks dirty
+	// paths/scopes only; snapshot refresh and planning happen after debounce.
+	dirtyBuf := NewDirtyBuffer(rt.engine.logger)
+	rt.dirtyBuf = dirtyBuf
+	batchReady := dirtyBuf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
 	// Tickers/timers.
 	rt.resetReconcileTimer(nil)
@@ -318,11 +318,23 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 
 	// Observe changes.
-	changes, pendingCursorCommit, err := rt.observeChanges(ctx, rt, bl, false, fullReconcile)
+	pendingCursorCommit, err := rt.observeCurrentTruth(ctx, rt, bl, false, fullReconcile)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
-	if len(changes) == 0 {
+	planStart := rt.engine.nowFunc()
+	plan, err := rt.buildCurrentActionPlan(ctx, bl, mode, pipe.safety)
+	if err != nil {
+		return fmt.Errorf("sync: bootstrap planning failed: %w", err)
+	}
+	rt.engine.collector().RecordPlan(len(plan.Actions), rt.engine.since(planStart))
+	if err := rt.materializeCurrentActionPlan(ctx, plan, false); err != nil {
+		return fmt.Errorf("sync: bootstrap plan materialization failed: %w", err)
+	}
+	if len(plan.Actions) == 0 {
+		if err := rt.commitPendingPrimaryCursor(ctx, pendingCursorCommit); err != nil {
+			return err
+		}
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 		if err := rt.armFullReconcileTimer(ctx); err != nil {
 			return fmt.Errorf("sync: arming full reconcile timer: %w", err)
@@ -337,7 +349,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 
 	// Dispatch through watch pipeline (same path as steady-state batches).
-	initialOutbox := rt.processBatch(ctx, changes, bl, mode, pipe.safety)
+	initialOutbox, _ := rt.dispatchCurrentPlan(ctx, plan, dispatchBatchOptions{})
 
 	// Wait for all bootstrap actions to complete.
 	if err := rt.runWatchUntilQuiescent(ctx, pipe, initialOutbox); err != nil {
@@ -358,14 +370,14 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 // the number of observers started. The events channel is closed automatically
 // when all observers exit, allowing the bridge goroutine to drain cleanly.
 func (rt *watchRuntime) startObservers(
-	ctx context.Context, bl *Baseline, buf *Buffer, opts WatchOptions,
+	ctx context.Context, bl *Baseline, dirtyBuf *DirtyBuffer, opts WatchOptions,
 ) (<-chan error, int, <-chan []SkippedItem) {
 	events := make(chan ChangeEvent, watchEventBuf)
 	errs := make(chan error, 2)
 
 	var obsWg stdsync.WaitGroup
 
-	rt.startWatchEventBridge(ctx, buf, events)
+	rt.startWatchEventBridge(ctx, dirtyBuf, events)
 
 	count := 0
 
@@ -552,7 +564,7 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event SocketIOLifecycleEvent)
 
 func (rt *watchRuntime) startWatchEventBridge(
 	ctx context.Context,
-	buf *Buffer,
+	dirtyBuf *DirtyBuffer,
 	events <-chan ChangeEvent,
 ) {
 	go func() {
@@ -563,7 +575,15 @@ func (rt *watchRuntime) startWatchEventBridge(
 					return
 				}
 
-				buf.Add(&ev)
+				if dirtyBuf == nil {
+					continue
+				}
+				if ev.Path != "" {
+					dirtyBuf.MarkPath(ev.Path)
+				}
+				if ev.OldPath != "" {
+					dirtyBuf.MarkPath(ev.OldPath)
+				}
 			case <-ctx.Done():
 				return
 			}

@@ -471,8 +471,21 @@ func (rt *watchRuntime) finishFullReconciliation(ctx context.Context, result rec
 func (rt *watchRuntime) applyReconcileResult(result reconcileResult) {
 	rt.reconcileActive = false
 
-	for i := range result.events {
-		rt.buf.Add(&result.events[i])
+	if rt.dirtyBuf != nil {
+		if len(result.events) == 0 {
+			rt.dirtyBuf.MarkFullRefresh()
+		}
+		for i := range result.events {
+			if result.events[i].Path != "" {
+				rt.dirtyBuf.MarkPath(result.events[i].Path)
+			}
+			if result.events[i].OldPath != "" {
+				rt.dirtyBuf.MarkPath(result.events[i].OldPath)
+			}
+		}
+	}
+	if rt.dirtyBuf == nil && rt.buf != nil {
+		rt.buf.AddAll(result.events)
 	}
 
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileApplied})

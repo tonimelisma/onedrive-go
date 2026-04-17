@@ -713,7 +713,68 @@ func processBatchForTest(
 	safety *SafetyConfig,
 ) {
 	t.Helper()
-	testWatchRuntime(t, eng).processBatch(ctx, batch, bl, SyncBidirectional, safety)
+
+	var remoteEvents []ChangeEvent
+	for i := range batch {
+		remoteEvents = append(remoteEvents, batch[i].RemoteEvents...)
+	}
+	if len(remoteEvents) > 0 {
+		projected := projectRemoteObservations(eng.logger, remoteEvents)
+		require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, projected.observed, ""))
+	}
+
+	_ = testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
+		Paths: pathsFromBatchForTest(batch),
+	}, bl, SyncBidirectional, safety)
+}
+
+func pathsFromBatchForTest(batch []PathChanges) []string {
+	if len(batch) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(batch))
+	paths := make([]string, 0, len(batch))
+	for i := range batch {
+		if batch[i].Path != "" {
+			if _, ok := seen[batch[i].Path]; !ok {
+				seen[batch[i].Path] = struct{}{}
+				paths = append(paths, batch[i].Path)
+			}
+		}
+		for j := range batch[i].RemoteEvents {
+			if batch[i].RemoteEvents[j].OldPath == "" {
+				continue
+			}
+			if _, ok := seen[batch[i].RemoteEvents[j].OldPath]; ok {
+				continue
+			}
+			seen[batch[i].RemoteEvents[j].OldPath] = struct{}{}
+			paths = append(paths, batch[i].RemoteEvents[j].OldPath)
+		}
+		for j := range batch[i].LocalEvents {
+			if batch[i].LocalEvents[j].OldPath == "" {
+				continue
+			}
+			if _, ok := seen[batch[i].LocalEvents[j].OldPath]; ok {
+				continue
+			}
+			seen[batch[i].LocalEvents[j].OldPath] = struct{}{}
+			paths = append(paths, batch[i].LocalEvents[j].OldPath)
+		}
+	}
+
+	return paths
+}
+
+func containsTrackedActionPath(actions []*TrackedAction, want string) bool {
+	for i := range actions {
+		if actions[i] != nil && actions[i].Action.Path == want {
+			return true
+		}
+	}
+
+	return false
 }
 
 type debugEventRecorder struct {

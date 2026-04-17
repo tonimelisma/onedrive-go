@@ -151,16 +151,16 @@ func (e *Engine) runOnceDryRun(
 	return e.completeDryRunReport(start, report), nil
 }
 
-func (r *oneShotRunner) materializeSQLitePlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
+func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
 	if dryRun {
 		return nil
 	}
 
-	if err := r.engine.baseline.PruneRetryStateToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
+	if err := flow.engine.baseline.PruneRetryStateToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
 		return fmt.Errorf("sync: pruning retry_state to current actions: %w", err)
 	}
 
-	if err := r.engine.baseline.PruneScopeBlocksWithoutBlockedRetries(ctx); err != nil {
+	if err := flow.engine.baseline.PruneScopeBlocksWithoutBlockedRetries(ctx); err != nil {
 		return fmt.Errorf("sync: pruning scope blocks without blocked retries: %w", err)
 	}
 
@@ -551,30 +551,30 @@ func (flow *engineFlow) observeChanges(
 	return buf.FlushImmediate(), pendingCursorCommit, nil
 }
 
-func (r *oneShotRunner) buildSQLiteActionPlan(
+func (flow *engineFlow) buildCurrentActionPlan(
 	ctx context.Context,
 	bl *Baseline,
 	mode Mode,
 	safety *SafetyConfig,
 ) (*ActionPlan, error) {
-	comparisons, err := r.engine.baseline.QueryComparisonState(ctx)
+	comparisons, err := flow.engine.baseline.QueryComparisonState(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
 	}
-	reconciliations, err := r.engine.baseline.QueryReconciliationState(ctx)
+	reconciliations, err := flow.engine.baseline.QueryReconciliationState(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
 	}
-	localRows, err := r.engine.baseline.ListLocalState(ctx)
+	localRows, err := flow.engine.baseline.ListLocalState(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing local_state rows: %w", err)
 	}
-	remoteRows, err := r.engine.baseline.ListRemoteState(ctx)
+	remoteRows, err := flow.engine.baseline.ListRemoteState(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing remote_state rows: %w", err)
 	}
 
-	return r.engine.planner.PlanCurrentState(
+	return flow.engine.planner.PlanCurrentState(
 		comparisons,
 		reconciliations,
 		localRows,
@@ -583,6 +583,19 @@ func (r *oneShotRunner) buildSQLiteActionPlan(
 		mode,
 		safety,
 	)
+}
+
+func (r *oneShotRunner) materializeSQLitePlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
+	return r.materializeCurrentActionPlan(ctx, plan, dryRun)
+}
+
+func (r *oneShotRunner) buildSQLiteActionPlan(
+	ctx context.Context,
+	bl *Baseline,
+	mode Mode,
+	safety *SafetyConfig,
+) (*ActionPlan, error) {
+	return r.buildCurrentActionPlan(ctx, bl, mode, safety)
 }
 
 func retryWorkKeysForActions(actions []Action) []RetryWorkKey {
@@ -673,7 +686,7 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.recordSkippedItems(ctx, localResult.Skipped)
 	flow.clearResolvedSkippedItems(ctx, localResult.Skipped)
 
-	pathSet := pathSetFromEvents(localResult.Events)
+	pathSet := pathSetFromLocalRows(localResult.Rows)
 	flow.scopeController().applyPermissionRecheckDecisions(
 		ctx,
 		watch,
