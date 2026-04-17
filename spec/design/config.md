@@ -1,6 +1,6 @@
 # Configuration
 
-GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
+GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/catalog_lifecycle.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
 
 Implements: R-3.7 [verified], R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -10,7 +10,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 
 ## Ownership Contract
 
-- Owns: Config-file schema, override resolution, path discovery, drive-section resolution, token-path resolution, and validation policy.
+- Owns: Config-file schema, catalog schema, durable lifecycle mutation rules for config/catalog-managed inventory, override resolution, path discovery, drive-section resolution, token-path resolution, and validation policy.
 - Does Not Own: OAuth exchange, Graph request behavior, sync runtime orchestration, or durable sync-store contents.
 - Source of Truth: The loaded `Config` snapshot plus derived `ResolvedDrive` values. `Holder` is the single in-process source of truth for reloadable config state.
 - Allowed Side Effects: Reading and writing config and managed inventory/state files through `fsroot`, plus statting arbitrary user-selected local paths through `localpath`.
@@ -69,6 +69,11 @@ Durable account and drive lifecycle facts are split across managed files:
 - `catalog.json`: durable account inventory, drive inventory, profile cache, ownership, and account-level auth requirement
 - `token_*.json`: saved login owned by the account
 - `state_*.db`: retained per-drive sync state
+
+`config` owns both the persistence mechanics and the durable lifecycle rules
+that coordinate these artifacts. CLI commands may still own Graph/OAuth flows,
+token deletion, and user interaction, but they do not hand-edit `CatalogAccount`
+or `CatalogDrive` records directly for product behavior.
 
 The config file itself is durable even when it has zero drive sections. Removing
 the final configured drive or logging out the final configured account leaves

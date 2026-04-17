@@ -2,7 +2,6 @@ package config
 
 import (
 	"log/slog"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -21,10 +20,7 @@ const (
 func setConfigTestHome(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
-	require.NoError(t, os.Setenv("HOME", home))
-	t.Cleanup(func() {
-		require.NoError(t, os.Unsetenv("HOME"))
-	})
+	t.Setenv("HOME", home)
 }
 
 func testConfigLogger() *slog.Logger {
