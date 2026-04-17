@@ -54,6 +54,10 @@ Local observation writes belong to `local_state`; the canonical store now owns
 durable current-truth tables for both sides even though planner/executor
 cutovers may still arrive in later increments.
 
+One-shot full scans replace the entire `local_state` snapshot in one
+transaction. The stored rows represent the latest admissible local truth for
+that pass, not a journal of local events.
+
 ### Outcome writes
 
 `CommitMutation()` is the successful-execution boundary. It updates `baseline`
@@ -74,6 +78,9 @@ category, scope key, and retry delay; the store persists them transactionally.
 surfaces. They own the latest planned intent and persisted retryable work,
 while `sync_failures` remains the current reporting and legacy retry surface
 until the engine cutover is complete.
+
+Each planning pass replaces `planned_actions` wholesale with the latest plan
+generation. The store does not retain historical action generations.
 
 Supporting failure mutations include:
 

@@ -51,6 +51,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	if err != nil {
 		return nil, err
 	}
+	if err := runner.materializeSQLitePlan(ctx, opts.DryRun); err != nil {
+		return nil, err
+	}
 	changes = mergePathChangeBatches(
 		changes,
 		runner.collectDueRetryChanges(ctx, pathSetFromBatch(changes)),
@@ -116,6 +119,18 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	}
 
 	return report, nil
+}
+
+func (r *oneShotRunner) materializeSQLitePlan(ctx context.Context, dryRun bool) error {
+	if dryRun {
+		return nil
+	}
+
+	if err := r.engine.baseline.MaterializePlannedActions(ctx, r.runID); err != nil {
+		return fmt.Errorf("sync: materializing sqlite planned actions: %w", err)
+	}
+
+	return nil
 }
 
 func (e *Engine) prepareRunOnceBaseline(
@@ -458,6 +473,9 @@ func (flow *engineFlow) observeChanges(
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := flow.commitObservedLocalSnapshot(ctx, dryRun, bl, localResult); err != nil {
+		return nil, nil, err
+	}
 
 	buf := NewBuffer(flow.engine.logger)
 	buf.AddAll(finalRemoteEvents)
@@ -549,6 +567,38 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.scopeController().clearResolvedRemoteBlockedFailures(ctx, watch, pathSet)
 
 	return localResult, nil
+}
+
+func (flow *engineFlow) commitObservedLocalSnapshot(
+	ctx context.Context,
+	dryRun bool,
+	bl *Baseline,
+	localResult ScanResult,
+) error {
+	if dryRun {
+		return nil
+	}
+
+	observedAt := flow.engine.nowFunc().UnixNano()
+	rows := buildLocalStateRows(bl, localResult, observedAt)
+	if err := flow.engine.baseline.ReplaceLocalState(ctx, rows); err != nil {
+		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
+	}
+	mode := localRefreshModeWatchHealthy
+	state, err := flow.engine.baseline.ReadObservationState(ctx)
+	if err == nil && state != nil {
+		mode = state.LocalRefreshMode
+	}
+	if err := flow.engine.baseline.MarkFullLocalRefresh(
+		ctx,
+		flow.engine.driveID,
+		time.Unix(0, observedAt),
+		mode,
+	); err != nil {
+		return fmt.Errorf("sync: marking full local refresh: %w", err)
+	}
+
+	return nil
 }
 
 func (flow *engineFlow) synthesizeRemoteMirrorDrift(
