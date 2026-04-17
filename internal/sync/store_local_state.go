@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 )
 
@@ -66,18 +67,32 @@ func (m *SyncStore) ListLocalState(ctx context.Context) ([]LocalStateRow, error)
 
 	var result []LocalStateRow
 	for rows.Next() {
-		var row LocalStateRow
+		var (
+			row             LocalStateRow
+			hash            sql.NullString
+			size            sql.NullInt64
+			mtime           sql.NullInt64
+			contentIdentity sql.NullString
+		)
 		if err := rows.Scan(
 			&row.Path,
 			&row.ItemType,
-			&row.Hash,
-			&row.Size,
-			&row.Mtime,
-			&row.ContentIdentity,
+			&hash,
+			&size,
+			&mtime,
+			&contentIdentity,
 			&row.ObservedAt,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning local_state row: %w", err)
 		}
+		row.Hash = hash.String
+		if size.Valid {
+			row.Size = size.Int64
+		}
+		if mtime.Valid {
+			row.Mtime = mtime.Int64
+		}
+		row.ContentIdentity = contentIdentity.String
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
