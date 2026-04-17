@@ -16,8 +16,10 @@ the local filesystem.
 In the clean-cut SQLite refactor, comparison and reconciliation are moving
 down into SQLite before planner materialization. `internal/sync/sqlite_compare.go`
 now computes durable snapshot-vs-baseline comparison and desired-outcome rows
-from `baseline`, `local_state`, and `remote_state`. The legacy planner still
-consumes event-shaped inputs until the next increment deletes that boundary.
+from `baseline`, `local_state`, and `remote_state`. `planned_actions` can now
+also be materialized from those reconciliation rows, replacing the latest plan
+generation atomically in SQLite. The legacy planner still consumes event-shaped
+inputs until the next increment deletes that boundary.
 
 ## Ownership Contract
 
