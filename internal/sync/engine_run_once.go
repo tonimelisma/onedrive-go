@@ -652,6 +652,7 @@ func retryWorkKeysForActions(actions []Action) []RetryWorkKey {
 	for i := range actions {
 		key := RetryWorkKey{
 			Path:       actions[i].Path,
+			OldPath:    actions[i].OldPath,
 			ActionType: actions[i].Type,
 		}
 		if _, ok := seen[key]; ok {

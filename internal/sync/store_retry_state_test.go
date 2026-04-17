@@ -27,7 +27,6 @@ func TestUpsertRetryStateAndPruneToCurrentActions(t *testing.T) {
 		LastSeenAt:   2,
 	}))
 	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
-		PlanID:       "old-plan",
 		Path:         "drop.txt",
 		ActionType:   ActionDownload,
 		AttemptCount: 1,
@@ -183,7 +182,7 @@ func TestRecordFailure_MirrorsTransientAndHeldRowsIntoRetryState(t *testing.T) {
 
 	assert.False(t, byPath["retry.txt"].Blocked)
 	assert.Equal(t, now.Add(time.Minute).UnixNano(), byPath["retry.txt"].NextRetryAt)
-	assert.Empty(t, byPath["retry.txt"].PlanID)
+	assert.NotEmpty(t, byPath["retry.txt"].WorkKey)
 
 	assert.True(t, byPath["blocked.txt"].Blocked)
 	assert.Equal(t, int64(0), byPath["blocked.txt"].NextRetryAt)

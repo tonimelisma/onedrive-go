@@ -75,9 +75,9 @@ CREATE TABLE IF NOT EXISTS local_state (
 );
 
 CREATE TABLE IF NOT EXISTS retry_state (
-    action_id       INTEGER NOT NULL PRIMARY KEY,
-    plan_id         TEXT    NOT NULL,
+    work_key        TEXT    NOT NULL PRIMARY KEY,
     path            TEXT    NOT NULL,
+    old_path        TEXT    NOT NULL DEFAULT '',
     action_type     TEXT    NOT NULL,
     scope_key       TEXT    NOT NULL DEFAULT '',
     blocked         INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0, 1)),
@@ -88,7 +88,6 @@ CREATE TABLE IF NOT EXISTS retry_state (
     last_seen_at    INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS idx_retry_state_plan_id ON retry_state(plan_id);
 CREATE INDEX IF NOT EXISTS idx_retry_state_scope_key ON retry_state(scope_key);
 CREATE INDEX IF NOT EXISTS idx_retry_state_blocked ON retry_state(blocked);
 
@@ -97,7 +96,7 @@ CREATE TABLE IF NOT EXISTS sync_failures (
     direction      TEXT    NOT NULL CHECK(direction IN ('download', 'upload', 'delete')),
     action_type    TEXT    NOT NULL CHECK(action_type IN (
                     'download', 'upload', 'local_delete', 'remote_delete',
-                    'local_move', 'remote_move', 'folder_create', 'conflict',
+                    'local_move', 'remote_move', 'folder_create', 'conflict_copy',
                     'update_synced', 'cleanup')),
     category       TEXT    NOT NULL CHECK(category IN ('transient', 'actionable')),
     failure_role   TEXT    NOT NULL CHECK(failure_role IN ('item', 'held', 'boundary')),
@@ -117,7 +116,7 @@ CREATE TABLE IF NOT EXISTS sync_failures (
         OR (action_type IN ('local_delete', 'remote_delete') AND direction = 'delete')
         OR (action_type IN (
             'download', 'folder_create', 'local_move', 'remote_move',
-            'conflict', 'update_synced', 'cleanup'
+            'conflict_copy', 'update_synced', 'cleanup'
         ) AND direction = 'download')
     ),
     CHECK (
@@ -182,7 +181,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"path", "item_type", "hash", "size", "mtime", "content_identity", "observed_at",
 		},
 		"retry_state": {
-			"action_id", "plan_id", "path", "action_type", "scope_key", "blocked",
+			"work_key", "path", "old_path", "action_type", "scope_key", "blocked",
 			"attempt_count", "next_retry_at", "last_error", "first_seen_at", "last_seen_at",
 		},
 		"sync_failures": {

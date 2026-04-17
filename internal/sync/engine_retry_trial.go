@@ -36,6 +36,7 @@ func actionWorkKey(action *Action) RetryWorkKey {
 
 	return RetryWorkKey{
 		Path:       action.Path,
+		OldPath:    action.OldPath,
 		ActionType: action.Type,
 	}
 }
@@ -260,6 +261,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 				}
 				work := RetryWorkKey{
 					Path:       failures[i].Path,
+					OldPath:    "",
 					ActionType: failureActionType(&failures[i]),
 				}
 				if planContainsWorkKey(plan, work) {
@@ -284,7 +286,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 		return nil
 	}
 
-	work := RetryWorkKey{Path: retryRow.Path, ActionType: retryRow.ActionType}
+	work := RetryWorkKey{Path: retryRow.Path, OldPath: retryRow.OldPath, ActionType: retryRow.ActionType}
 	subset := selectedActionPlanByKeys(plan, []RetryWorkKey{work})
 	if subset == nil || len(subset.Actions) == 0 {
 		if row, rowErr := rt.retryStateRowAsFailure(ctx, retryRow); rowErr == nil {
@@ -361,6 +363,7 @@ func (rt *watchRuntime) runRetrierSweep(
 
 		work := RetryWorkKey{
 			Path:       retryRows[i].Path,
+			OldPath:    retryRows[i].OldPath,
 			ActionType: retryRows[i].ActionType,
 		}
 		if !planContainsWorkKey(plan, work) {

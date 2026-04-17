@@ -11,6 +11,7 @@ import (
 // are optional — zero values are preserved via COALESCE on conflict.
 type SyncFailureParams struct {
 	Path       string
+	OldPath    string
 	DriveID    driveid.ID
 	Direction  Direction
 	Role       FailureRole
@@ -104,9 +105,9 @@ type LocalStateRow struct {
 
 // RetryStateRow represents a row from the retry_state table.
 type RetryStateRow struct {
-	ActionID     string
-	PlanID       string
+	WorkKey      string
 	Path         string
+	OldPath      string
 	ActionType   ActionType
 	ScopeKey     ScopeKey
 	Blocked      bool
@@ -140,5 +141,6 @@ type PendingRetryGroup struct {
 // persists only delayed obligations, not the executable action set.
 type RetryWorkKey struct {
 	Path       string
+	OldPath    string
 	ActionType ActionType
 }

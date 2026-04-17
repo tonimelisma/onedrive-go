@@ -242,7 +242,7 @@ type benchPerfSummary struct {
 	ObservedPathCount     int   `json:"observed_path_count,omitempty"`
 	ObserveTimeMS         int64 `json:"observe_time_ms,omitempty"`
 	PlanRunCount          int   `json:"plan_run_count,omitempty"`
-	PlannedActionCount    int   `json:"planned_action_count,omitempty"`
+	ActionableActionCount int   `json:"actionable_action_count,omitempty"`
 	PlanTimeMS            int64 `json:"plan_time_ms,omitempty"`
 	ExecuteRunCount       int   `json:"execute_run_count,omitempty"`
 	ExecuteActionCount    int   `json:"execute_action_count,omitempty"`
@@ -812,7 +812,7 @@ func readPerformanceSummaryFromTextLog(data []byte) (*benchPerfSummary, error) {
 		populateSnapshotInt(line, "observed_paths", func(v int64) { snapshot.ObservedPathCount = int(v) })
 		populateSnapshotInt64(line, "observe_time_ms", func(v int64) { snapshot.ObserveTimeMS = v })
 		populateSnapshotInt(line, "plan_runs", func(v int64) { snapshot.PlanRunCount = int(v) })
-		populateSnapshotInt(line, "planned_actions", func(v int64) { snapshot.PlannedActionCount = int(v) })
+		populateSnapshotInt(line, "actionable_actions", func(v int64) { snapshot.ActionableActionCount = int(v) })
 		populateSnapshotInt64(line, "plan_time_ms", func(v int64) { snapshot.PlanTimeMS = v })
 		populateSnapshotInt(line, "execute_runs", func(v int64) { snapshot.ExecuteRunCount = int(v) })
 		populateSnapshotInt(line, "execute_actions", func(v int64) { snapshot.ExecuteActionCount = int(v) })

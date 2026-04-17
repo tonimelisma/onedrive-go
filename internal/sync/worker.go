@@ -267,6 +267,7 @@ func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome
 
 	r := WorkerResult{
 		Path:          ta.Action.Path,
+		OldPath:       ta.Action.OldPath,
 		ItemID:        ta.Action.ItemID,
 		DriveID:       driveID,
 		ActionType:    ta.Action.Type,

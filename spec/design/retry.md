@@ -142,7 +142,7 @@ engine.
 - retryable work is mirrored into `retry_state`, which is the durable authority for retry readiness
 - `next_retry_at` is computed from `ReconcilePolicy()`
 - the engine-owned retry sweep reads ready rows from `retry_state`, refreshes current local snapshot truth, replans from SQLite snapshots plus baseline, prunes stale retry rows, then dispatches only the current matching actions plus any still-required dependencies
-- retry rows are keyed to semantic work, not to a durable SQLite action-plan table
+- retry rows are keyed to semantic work (`action_type`, `old_path`, `path`), not to a durable SQLite action-plan table
 
 ### Scope retry via trial actions
 

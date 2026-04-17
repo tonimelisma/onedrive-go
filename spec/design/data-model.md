@@ -29,7 +29,7 @@ narrowed back to whole-drive or separately configured shared-root drives.
 | `baseline` | Last known synced truth for paths/items | `item_id` and unique `path` |
 | `local_state` | Latest observed admissible local snapshot truth | `path` |
 | `remote_state` | Latest observed remote mirror truth | `item_id` |
-| `retry_state` | Pending retryable and blocked work for the latest semantic intent | `action_id` |
+| `retry_state` | Pending retryable and blocked work for the latest semantic intent | `work_key` |
 | `sync_failures` | Per-path retryable and actionable failures | `path` |
 | `scope_blocks` | Durable scope-level blocking conditions and trial timing | `scope_key` |
 | `observation_state` | Configured drive owner, primary cursor, and persisted refresh cadence | singleton row |
@@ -81,15 +81,16 @@ local truth that can participate in reconciliation.
 `retry_state` is the durable ledger for pending retryable and blocked work
 aligned with the latest runtime-owned actionable set:
 
-- semantic work identity: `action_id`, `plan_id`, `path`, `action_type`
+- semantic work identity: `work_key`, `path`, `old_path`, `action_type`
 - blocking linkage: `scope_key`, `blocked`
 - retry timing: `attempt_count`, `next_retry_at`
 - operator/debug facts: `last_error`
 - timestamps: `first_seen_at`, `last_seen_at`
 
-`action_id` is no longer a foreign key into a durable action-plan table. It is
-just the stable serialized identity for one semantic unit of retryable work.
-`plan_id` remains a non-authoritative provenance field and may be empty.
+`work_key` is the stable serialized identity for one semantic unit of retryable
+work. It is derived from `action_type`, `old_path`, and `path`, so replans can
+prune stale delayed work against the current actionable set without inventing a
+durable executable plan table.
 
 ## `sync_failures`
 
