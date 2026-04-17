@@ -238,25 +238,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 	work := RetryWorkKey{Path: retryRow.Path, OldPath: retryRow.OldPath, ActionType: retryRow.ActionType}
 	subset := selectedActionPlanByKeys(plan, []RetryWorkKey{work})
 	if subset == nil || len(subset.Actions) == 0 {
-		if deleteErr := rt.engine.baseline.DeleteRetryStateByWork(ctx, work); deleteErr != nil {
-			rt.engine.logger.Warn("runTrialDispatch: failed to delete stale blocked retry work",
-				slog.String("scope_key", key.String()),
-				slog.String("path", retryRow.Path),
-				slog.String("action", retryRow.ActionType.String()),
-				slog.String("error", deleteErr.Error()),
-			)
-		}
-		rt.engine.logger.Debug("runTrialDispatch: current action set no longer contains blocked retry work",
-			slog.String("scope_key", key.String()),
-			slog.String("path", retryRow.Path),
-			slog.String("action", retryRow.ActionType.String()),
-		)
-		if err := rt.scopeController().discardScope(ctx, rt, key); err != nil {
-			rt.engine.logger.Warn("runTrialDispatch: failed to discard stale blocked scope",
-				slog.String("scope_key", key.String()),
-				slog.String("error", err.Error()),
-			)
-		}
+		rt.clearStaleTrialRetryWork(ctx, key, retryRow)
 		return nil
 	}
 
@@ -308,6 +290,61 @@ func (rt *watchRuntime) handleMissingTrialCandidate(
 		slog.String("scope_key", key.String()),
 	)
 	return nil
+}
+
+func (rt *watchRuntime) clearStaleTrialRetryWork(
+	ctx context.Context,
+	key ScopeKey,
+	row *RetryStateRow,
+) {
+	if row == nil {
+		return
+	}
+
+	scopeKey := row.ScopeKey
+	if scopeKey.IsZero() {
+		scopeKey = key
+	}
+
+	work := RetryWorkKey{
+		Path:       row.Path,
+		OldPath:    row.OldPath,
+		ActionType: row.ActionType,
+	}
+
+	if err := rt.engine.baseline.ClearHeldRetryWork(ctx, work, scopeKey); err != nil {
+		rt.engine.logger.Warn("runTrialDispatch: failed to clear stale blocked retry work",
+			slog.String("scope_key", scopeKey.String()),
+			slog.String("path", row.Path),
+			slog.String("action", row.ActionType.String()),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	rt.engine.logger.Debug("runTrialDispatch: current action set no longer contains blocked retry work",
+		slog.String("scope_key", scopeKey.String()),
+		slog.String("path", row.Path),
+		slog.String("action", row.ActionType.String()),
+	)
+
+	if _, found, err := rt.engine.baseline.PickRetryTrialCandidate(ctx, scopeKey); err != nil {
+		rt.engine.logger.Warn("runTrialDispatch: failed to relist blocked retry work after stale clear",
+			slog.String("scope_key", scopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+		return
+	} else if found {
+		rt.scopeController().preserveScopeTrial(ctx, rt, scopeKey)
+		return
+	}
+
+	if err := rt.scopeController().discardScope(ctx, rt, scopeKey); err != nil {
+		rt.engine.logger.Warn("runTrialDispatch: failed to discard stale blocked scope",
+			slog.String("scope_key", scopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 // runRetrierSweep processes a batch of due retry_state rows and routes them
@@ -584,9 +621,12 @@ func (flow *engineFlow) retryFailureRowForStore(
 	ctx context.Context,
 	row *RetryStateRow,
 ) (*SyncFailureRow, error) {
-	configuredDriveID, err := flow.engine.baseline.configuredDriveIDForRead(ctx, flow.engine.driveID)
+	configuredDriveID, err := flow.engine.baseline.configuredDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
 		return nil, fmt.Errorf("load configured drive for retry_state row: %w", err)
+	}
+	if configuredDriveID.IsZero() {
+		configuredDriveID = flow.engine.driveID
 	}
 
 	return retryFailureRow(row, configuredDriveID), nil
