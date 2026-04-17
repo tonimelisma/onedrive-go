@@ -6,26 +6,28 @@ Implements: R-2.1.3 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [v
 
 ## Overview
 
-The planner is a deterministic function:
+The executable planner boundary is still the deterministic function:
 
 `Plan(changes, baseline, mode, safetyConfig, deniedPrefixes) -> ActionPlan`
 
-It owns only classification and ordering. It does not touch SQLite, Graph, or
-the local filesystem.
+It owns only classification and ordering for the worker-dispatch path. It does
+not touch SQLite, Graph, or the local filesystem.
 
-In the clean-cut SQLite refactor, comparison and reconciliation are moving
-down into SQLite before planner materialization. `internal/sync/sqlite_compare.go`
-now computes durable snapshot-vs-baseline comparison and desired-outcome rows
-from `baseline`, `local_state`, and `remote_state`. `planned_actions` can now
-also be materialized from those reconciliation rows, replacing the latest plan
-generation atomically in SQLite. The legacy planner still consumes event-shaped
-inputs until the next increment deletes that boundary.
+SQLite planning now exists alongside that boundary. `internal/sync/sqlite_compare.go`
+computes durable snapshot-vs-baseline comparison and reconciliation rows from
+`baseline`, `local_state`, and `remote_state`, and `planned_actions` can be
+materialized from those rows as the latest persisted plan generation. The
+runtime is therefore hybrid today:
+
+- the deterministic in-memory planner produces executable `ActionPlan`s
+- SQLite comparison/reconciliation/planned-actions materialization persists the
+  current latest plan truth from snapshots
 
 ## Ownership Contract
 
-- Owns: path classification, move detection, action dependency ordering, and directional deferral reporting
+- Owns: path classification, move detection, action dependency ordering, and directional deferral reporting for executable worker dispatch
 - Does Not Own: observation, execution, retry timing, scope persistence, or remote/local I/O
-- Source of Truth: `PathChanges`, baseline snapshot, sync mode, and denied-prefix policy supplied by the engine
+- Source of Truth: `PathChanges`, baseline snapshot, sync mode, and denied-prefix policy supplied by the engine for executable planning. SQLite snapshot tables own the durable comparison inputs used by `comparison_state`, `reconciliation_state`, and `planned_actions`.
 - Allowed Side Effects: none
 - Mutable Runtime Owner: None. Planning is deterministic value transformation over one input set and owns no long-lived mutable runtime state.
 - Error Boundary: planner errors stop at invalid or unsupported planning states. Transport, filesystem, store, and execution failures stay outside the planner boundary.
@@ -46,15 +48,16 @@ inputs until the next increment deletes that boundary.
 - `SafetyConfig`: current planner-facing safety knobs; no delete-approval workflow remains
 - `deniedPrefixes`: engine-owned read-only subtrees, typically from permission policy
 
-SQLite-side pre-planning inputs now exist in parallel:
+SQLite-side planning inputs now exist in parallel:
 
 - `local_state`: latest admissible local snapshot
 - `remote_state`: latest admissible remote snapshot
 - `baseline`: last converged synced truth
 
 Those rows feed `comparison_state` and `reconciliation_state`, including the
-new invariant that a baseline row absent from both snapshots becomes
-`baseline_remove`.
+invariant that a baseline row absent from both snapshots becomes
+`baseline_remove`, and can then be materialized into latest-generation
+`planned_actions`.
 
 ## Pipeline
 
