@@ -32,15 +32,15 @@ type liveDriveCatalogResult struct {
 func loadStatusLiveOverlay(
 	ctx context.Context,
 	cc *CLIContext,
-	catalog []accountCatalogEntry,
+	accounts []accountView,
 ) map[string]statusAccountLiveOverlay {
 	logger := cc.Logger
 	recorder := newAuthProofRecorder(logger)
-	overlays := make(map[string]statusAccountLiveOverlay, len(catalog))
+	overlays := make(map[string]statusAccountLiveOverlay, len(accounts))
 
-	for i := range catalog {
-		entry := catalog[i]
-		if entry.SavedLoginState != savedLoginStateUsable || entry.RepresentativeTokenID.IsZero() {
+	for i := range accounts {
+		entry := accounts[i]
+		if entry.SavedLoginReason != "" || entry.RepresentativeTokenID.IsZero() {
 			continue
 		}
 

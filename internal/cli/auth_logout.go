@@ -14,7 +14,7 @@ import (
 )
 
 // resolveLogoutAccount determines the account email for logout from the
-// durable offline account catalog. Plain logout auto-selects only when exactly
+// validated offline account view. Plain logout auto-selects only when exactly
 // one known account still has a usable saved login. Purge-only cleanup may
 // auto-select a single known account even when its saved login is already gone.
 func resolveLogoutAccount(cfg *config.Config, purge bool, logger *slog.Logger) (string, error) {
@@ -36,13 +36,13 @@ func resolveLogoutAccountWithCatalog(
 		return accountFlag, nil
 	}
 
-	catalog := buildAccountCatalogWithStored(context.Background(), cfg, stored, logger)
-	known := knownAccountCatalogEntries(catalog)
+	views := buildAccountViews(context.Background(), cfg, stored, logger)
+	known := knownAccountViews(views)
 	if len(known) == 0 {
 		return "", fmt.Errorf("no accounts configured — nothing to log out")
 	}
 
-	selectable := logoutSelectableAccountEntries(catalog)
+	selectable := logoutSelectableAccountViews(views)
 	if len(selectable) == 1 {
 		return selectable[0].Email, nil
 	}
@@ -50,7 +50,7 @@ func resolveLogoutAccountWithCatalog(
 	if len(selectable) > 1 {
 		return "", fmt.Errorf(
 			"multiple accounts with saved logins — specify with --account:\n  %s",
-			joinCatalogEmails(selectable),
+			joinAccountViewEmails(selectable),
 		)
 	}
 
@@ -62,11 +62,11 @@ func resolveLogoutAccountWithCatalog(
 		"no accounts with saved logins are available for plain logout.\n"+
 			"Retained data remains for:\n  %s\n"+
 			"Run 'onedrive-go logout --purge --account <email>' to remove retained state",
-		joinCatalogEmails(known),
+		joinAccountViewEmails(known),
 	)
 }
 
-func joinCatalogEmails(entries []accountCatalogEntry) string {
+func joinAccountViewEmails(entries []accountView) string {
 	result := ""
 	for i := range entries {
 		if i > 0 {

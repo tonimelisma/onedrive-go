@@ -353,7 +353,7 @@ organized by file families.
 | File family | Role |
 | --- | --- |
 | `root.go`, `doc.go`, `format.go`, `signal.go`, `cleanup.go`, `failure_class.go` | CLI bootstrap, process wiring, shared output boundaries, signal handling, error classification |
-| `auth*.go`, `account_catalog.go`, `account_catalog_snapshot.go`, `email_reconcile.go` | Login/logout, account catalog projection, auth-health, email reconciliation |
+| `auth*.go`, `account_view.go`, `account_view_snapshot.go`, `email_reconcile.go` | Login/logout, account view projection, auth-health, email reconciliation |
 | `drive.go`, `drive_add.go`, `drive_catalog.go`, `drive_cleanup.go`, `drive_list.go`, `drive_list_render.go`, `drive_remove.go`, `drive_search.go` | Drive add/list/search/remove, catalog projection, and drive selection flows |
 | `get.go`, `get_shared.go`, `put.go`, `put_shared.go`, `ls.go`, `rm.go`, `mkdir.go`, `mv.go`, `cp.go`, `stat.go`, `purge.go` | User-facing file commands including shared-item get/put |
 | `shared.go`, `shared_discovery.go`, `shared_target.go` | Shared item discovery, selection, and shared-target bootstrap |

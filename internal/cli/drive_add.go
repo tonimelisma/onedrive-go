@@ -351,12 +351,12 @@ func addSharedDriveByName(
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	snapshot, err := loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(ctx, cc)
+	snapshot, err := loadAccountViewSnapshotWithBestEffortIdentityRefresh(ctx, cc)
 	if err != nil {
 		return err
 	}
 
-	discovery := discoverSharedTargets(ctx, cc, filterAccountCatalog(snapshot.Catalog, cc.Flags.Account))
+	discovery := discoverSharedTargets(ctx, cc, filterAccountViews(snapshot.Accounts, cc.Flags.Account))
 	matches := searchSharedDrives(selector, projectSharedFolders(cfg, discovery.Targets))
 
 	switch len(matches) {

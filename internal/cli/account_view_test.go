@@ -15,26 +15,26 @@ import (
 )
 
 const (
-	accountCatalogTestReadyUser  = "Ready User"
-	accountCatalogTestDriveReady = "drive-ready"
-	accountCatalogTestOrphanUser = "Orphan User"
+	accountViewTestReadyUser  = "Ready User"
+	accountViewTestDriveReady = "drive-ready"
+	accountViewTestOrphanUser = "Orphan User"
 )
 
-func accountCatalogEntryByEmail(t *testing.T, catalog []accountCatalogEntry, email string) accountCatalogEntry {
+func requireAccountViewByEmail(t *testing.T, views []accountView, email string) accountView {
 	t.Helper()
 
-	for i := range catalog {
-		if catalog[i].Email == email {
-			return catalog[i]
+	for i := range views {
+		if views[i].Email == email {
+			return views[i]
 		}
 	}
 
-	require.FailNow(t, "catalog entry not found", "email=%s", email)
-	return accountCatalogEntry{}
+	require.FailNow(t, "account view not found", "email=%s", email)
+	return accountView{}
 }
 
 // Validates: R-3.1.5, R-2.10.47
-func TestBuildAccountCatalog_ConfiguredAccountWithUsableSavedLoginIsReady(t *testing.T) {
+func TestBuildAccountViews_ConfiguredAccountWithUsableSavedLoginIsReady(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("personal:ready@example.com")
@@ -42,72 +42,80 @@ func TestBuildAccountCatalog_ConfiguredAccountWithUsableSavedLoginIsReady(t *tes
 	cfg.Drives[cid] = config.Drive{SyncDir: "~/OneDrive"}
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_ready@example.com.json")
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
-		account.DisplayName = accountCatalogTestReadyUser
+		account.DisplayName = accountViewTestReadyUser
 	})
 	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
-		drive.RemoteDriveID = accountCatalogTestDriveReady
+		drive.RemoteDriveID = accountViewTestDriveReady
 	})
+	stored, err := config.LoadCatalog()
+	require.NoError(t, err)
 
-	catalog := buildAccountCatalog(t.Context(), cfg, testDriveLogger(t))
-	entry := accountCatalogEntryByEmail(t, catalog, "ready@example.com")
+	views := buildAccountViews(t.Context(), cfg, stored, testDriveLogger(t))
+	entry := requireAccountViewByEmail(t, views, "ready@example.com")
 
 	assert.True(t, entry.Configured)
 	assert.Equal(t, driveid.DriveTypePersonal, entry.DriveType)
-	assert.Equal(t, accountCatalogTestReadyUser, entry.DisplayName)
-	assert.Equal(t, savedLoginStateUsable, entry.SavedLoginState)
+	assert.Equal(t, accountViewTestReadyUser, entry.DisplayName)
+	assert.Empty(t, entry.SavedLoginReason)
 	assert.Empty(t, entry.AuthRequirementReason)
 	assert.Equal(t, authstate.StateReady, entry.AuthHealth.State)
 }
 
 // Validates: R-3.1.5
-func TestBuildAccountCatalog_OrphanedProfileWithoutTokenRequiresAuthentication(t *testing.T) {
+func TestBuildAccountViews_OrphanedProfileWithoutTokenRequiresAuthentication(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("personal:orphan@example.com")
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
-		account.DisplayName = accountCatalogTestOrphanUser
+		account.DisplayName = accountViewTestOrphanUser
 	})
 	require.NoError(t, touchStateDBForAccount(t, cid))
+	stored, err := config.LoadCatalog()
+	require.NoError(t, err)
 
-	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
-	entry := accountCatalogEntryByEmail(t, catalog, "orphan@example.com")
+	views := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	entry := requireAccountViewByEmail(t, views, "orphan@example.com")
 
 	assert.False(t, entry.Configured)
-	assert.Equal(t, accountCatalogTestOrphanUser, entry.DisplayName)
-	assert.Equal(t, savedLoginStateMissing, entry.SavedLoginState)
+	assert.Equal(t, accountViewTestOrphanUser, entry.DisplayName)
+	assert.Equal(t, authstate.ReasonMissingLogin, entry.SavedLoginReason)
 	assert.Equal(t, 1, entry.StateDBCount)
 	assert.Equal(t, authstate.StateAuthenticationRequired, entry.AuthHealth.State)
 	assert.Equal(t, authstate.ReasonMissingLogin, entry.AuthHealth.Reason)
 }
 
 // Validates: R-3.3.2, R-3.3.9
-func TestBuildAccountCatalog_TokenBackedCatalogAccountIsIncluded(t *testing.T) {
+func TestBuildAccountViews_TokenBackedCatalogAccountIsIncluded(t *testing.T) {
 	setTestDriveHome(t)
 
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_discovered@contoso.com.json")
+	stored, err := config.LoadCatalog()
+	require.NoError(t, err)
 
-	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
-	entry := accountCatalogEntryByEmail(t, catalog, "discovered@contoso.com")
+	views := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	entry := requireAccountViewByEmail(t, views, "discovered@contoso.com")
 
 	assert.False(t, entry.Configured)
 	assert.Equal(t, driveid.DriveTypeBusiness, entry.DriveType)
-	assert.Equal(t, savedLoginStateUsable, entry.SavedLoginState)
+	assert.Empty(t, entry.SavedLoginReason)
 	assert.Equal(t, authstate.StateReady, entry.AuthHealth.State)
 }
 
 // Validates: R-3.1.5
-func TestBuildAccountCatalog_StateDBWithoutCatalogIsExcluded(t *testing.T) {
+func TestBuildAccountViews_StateDBWithoutCatalogIsExcluded(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("personal:orphan@example.com")
 	require.NoError(t, touchStateDBForAccount(t, cid))
+	stored, err := config.LoadCatalog()
+	require.NoError(t, err)
 
-	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
-	assert.Empty(t, catalog)
+	views := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	assert.Empty(t, views)
 }
 
 // Validates: R-2.10.45, R-2.10.47
-func TestBuildAccountCatalog_PersistedAuthScopeWinsOnlyWhenSavedLoginIsOtherwiseUsable(t *testing.T) {
+func TestBuildAccountViews_PersistedAuthScopeWinsOnlyWhenSavedLoginIsOtherwiseUsable(t *testing.T) {
 	setTestDriveHome(t)
 
 	usableCID := driveid.MustCanonicalID("personal:usable@example.com")
@@ -119,16 +127,18 @@ func TestBuildAccountCatalog_PersistedAuthScopeWinsOnlyWhenSavedLoginIsOtherwise
 		account.DisplayName = "Missing User"
 	})
 	seedAuthScope(t, missingCID)
+	stored, err := config.LoadCatalog()
+	require.NoError(t, err)
 
-	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
+	views := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
 
-	usable := accountCatalogEntryByEmail(t, catalog, "usable@example.com")
-	assert.Equal(t, savedLoginStateUsable, usable.SavedLoginState)
+	usable := requireAccountViewByEmail(t, views, "usable@example.com")
+	assert.Empty(t, usable.SavedLoginReason)
 	assert.Equal(t, authstate.ReasonSyncAuthRejected, usable.AuthRequirementReason)
 	assert.Equal(t, authstate.ReasonSyncAuthRejected, usable.AuthHealth.Reason)
 
-	missing := accountCatalogEntryByEmail(t, catalog, "missing@example.com")
-	assert.Equal(t, savedLoginStateMissing, missing.SavedLoginState)
+	missing := requireAccountViewByEmail(t, views, "missing@example.com")
+	assert.Equal(t, authstate.ReasonMissingLogin, missing.SavedLoginReason)
 	assert.Equal(t, authstate.ReasonSyncAuthRejected, missing.AuthRequirementReason)
 	assert.Equal(t, authstate.ReasonMissingLogin, missing.AuthHealth.Reason)
 }

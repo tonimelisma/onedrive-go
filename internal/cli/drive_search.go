@@ -20,13 +20,13 @@ func runDriveSearchWithContext(ctx context.Context, cc *CLIContext, query string
 	logger := cc.Logger
 	recorder := newAuthProofRecorder(logger)
 
-	snapshot, err := loadAccountCatalogSnapshotWithBestEffortIdentityRefresh(ctx, cc)
+	snapshot, err := loadAccountViewSnapshotWithBestEffortIdentityRefresh(ctx, cc)
 	if err != nil {
 		return err
 	}
 
-	businessTokens := searchableBusinessTokenIDs(snapshot.Catalog, cc.Flags.Account)
-	businessAuthRequired := authRequirements(snapshot, func(entry accountCatalogEntry) bool {
+	businessTokens := searchableBusinessTokenIDs(snapshot.Accounts, cc.Flags.Account)
+	businessAuthRequired := authRequirements(snapshot, func(entry accountView) bool {
 		if cc.Flags.Account != "" && entry.Email != cc.Flags.Account {
 			return false
 		}
