@@ -68,30 +68,59 @@ root pkg → internal/cli/ → internal/graphtransport/ → internal/retry/
 - Callers pass token paths to `graph` — no config coupling.
 - `graphtransport` owns Graph-facing HTTP transport profile construction. `driveops` owns the session runtime that reuses those profiles and chooses between bootstrap, interactive, and sync paths.
 
-## Event-Driven Sync Pipeline
+## SQLite-Backed Sync Pipeline
 
-The sync engine uses an event-driven pipeline. One-shot sync is "collect all events, then process as one batch." Watch mode is the same pipeline triggered incrementally.
+The sync engine now has two cooperating data flows:
+
+- an observation-to-execution flow that still uses normalized change events and
+  the in-memory planner boundary
+- a SQLite-backed durable-truth flow that persists current local/remote
+  snapshots, comparison rows, reconciliation rows, retry state, scope timing,
+  and the latest generated plan generation
+
+The current runtime is therefore hybrid rather than purely event-driven or
+purely snapshot-driven.
 
 ```
 Remote Observer ──┐
                   ├──→ Change Buffer ──→ Planner ──→ Executor ──→ Baseline
 Local Observer  ──┘         │                │            │           │
-                      debounce/dedup    pure function   workers    per-action
-                                        (no I/O)      (parallel)   commit
+                      debounce/dedup    deterministic   workers    per-action
+                                       ActionPlan      (parallel)   commit
+
+Remote Obs ───────────────→ remote_state ──┐
+Local Scan/Obs ───────────→ local_state  ──┼──→ comparison_state
+Baseline ─────────────────→ baseline     ──┘    → reconciliation_state
+                                                → planned_actions
+                                                → retry_state / scope_blocks
 ```
 
 ### Design Principles
 
-1. **No database coordination.** Observers produce ephemeral events. The planner reads baseline (cached in memory). The executor writes outcomes per-action. The database is never the coordination mechanism between stages.
-2. **Remote state separation.** Three-table model: `remote_state` (observed), `baseline` (confirmed synced), `sync_failures` (issues). Remote observations persist at observation time, decoupling the delta token from sync success. See [data-model.md](data-model.md).
-3. **Pure-function planning.** The planner has no I/O. `Plan(changes, baseline, mode, safety) → ActionPlan`. Every decision is deterministic and reproducible.
+1. **Durable truth lives in SQLite.** `local_state`, `remote_state`,
+   `baseline`, `planned_actions`, `retry_state`, `scope_blocks`, and
+   `observation_state` are the durable authority surfaces. Observation and
+   execution rebuild working state from those tables rather than inventing a
+   second durable coordinator.
+2. **Event buffering is still the executable planner boundary.** The runtime
+   still feeds `ChangeEvent` batches through `Buffer` into the deterministic
+   planner boundary for executable `ActionPlan` construction.
+3. **SQLite comparison and reconciliation run in parallel.**
+   `comparison_state`, `reconciliation_state`, and `planned_actions`
+   materialization compute the latest snapshot-vs-baseline truth from SQLite
+   without taking ownership of worker dispatch yet.
 4. **Watch-primary.** `sync --watch` is the primary runtime mode. All components serve both one-shot and watch modes.
 5. **Interface-driven testability.** All I/O (filesystem, network, database) is behind interfaces.
 6. **Boundary-owned error translation.** Each boundary normalizes the failures it understands once, and downstream layers consume that shared contract. See [error-model.md](error-model.md).
 
 ### Rationale
 
-Event-driven processing was chosen over four alternatives (shared mutable DB, multi-table split, deferred persistence, pure snapshot pipeline) because it eliminates database coordination anti-patterns: tombstone split, synthetic ID lifecycle, SQLITE_BUSY during execution, incomplete lifecycle predicates, pipeline phase ordering, and asymmetric filter application. The event-driven model generalizes correctly — watch mode is the natural case, one-shot is the degenerate batch case.
+The current design deliberately keeps durable truth and executable planning
+separate while the SQLite-first refactor lands in slices. Current and synced
+truth are now explicit in SQLite, but the worker-dispatching planner path still
+uses the older event-shaped boundary. This preserves the tested executor and
+dependency-graph runtime while snapshot persistence, retry/state ownership, and
+latest-plan materialization move into durable SQLite surfaces.
 
 ## Module Design Docs
 
