@@ -8,10 +8,14 @@ import (
 const (
 	sqlDeletePlannedActions = `DELETE FROM planned_actions`
 	sqlInsertPlannedAction  = `INSERT INTO planned_actions
-		(action_id, plan_id, path, action_type, old_path, source_identity, target_identity, dependency_key, precondition_local_identity, precondition_remote_identity, status)
+		(action_id, plan_id, path, action_type, old_path,
+		 source_identity, target_identity, dependency_key,
+		 precondition_local_identity, precondition_remote_identity, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	sqlListPlannedActions = `SELECT
-		action_id, plan_id, path, action_type, old_path, source_identity, target_identity, dependency_key, precondition_local_identity, precondition_remote_identity, status
+		action_id, plan_id, path, action_type, old_path,
+		source_identity, target_identity, dependency_key,
+		precondition_local_identity, precondition_remote_identity, status
 		FROM planned_actions
 		ORDER BY action_id`
 )
@@ -35,7 +39,6 @@ func (m *SyncStore) ReplacePlannedActions(
 
 	for i := range actions {
 		row := actions[i]
-		row.ActionID = fmt.Sprintf("%d", i+1)
 		row.PlanID = planID
 		if row.Status == "" {
 			row.Status = "pending"
@@ -130,15 +133,15 @@ func plannedActionForReconciliation(row SQLiteReconciliationRow) (PlannedActionR
 		action.ActionType = ActionUpload
 	case "download":
 		action.ActionType = ActionDownload
-	case "local_delete":
+	case strLocalDelete:
 		action.ActionType = ActionLocalDelete
-	case "remote_delete":
+	case strRemoteDelete:
 		action.ActionType = ActionRemoteDelete
-	case "local_move":
+	case strLocalMove:
 		action.ActionType = ActionLocalMove
-	case "remote_move":
+	case strRemoteMove:
 		action.ActionType = ActionRemoteMove
-	case "update_synced":
+	case strUpdateSynced:
 		action.ActionType = ActionUpdateSynced
 	case "conflict_edit_edit":
 		action.ActionType = ActionConflict

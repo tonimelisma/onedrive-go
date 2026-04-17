@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"strconv"
@@ -10,6 +11,8 @@ import (
 )
 
 const (
+	retryStateActionIDMask = 0x7fffffffffffffff
+
 	sqlUpsertRetryState = `INSERT INTO retry_state
 		(action_id, plan_id, path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -65,7 +68,7 @@ func retryStateSyntheticActionID(path string, actionType ActionType) int64 {
 	_, _ = h.Write([]byte(path))
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(actionType.String()))
-	value := int64(h.Sum64() & 0x7fffffffffffffff)
+	value := int64(h.Sum64() & retryStateActionIDMask)
 	if value == 0 {
 		return 1
 	}
@@ -73,7 +76,7 @@ func retryStateSyntheticActionID(path string, actionType ActionType) int64 {
 	return value
 }
 
-func retryStateActionID(row RetryStateRow) (int64, error) {
+func retryStateActionID(row *RetryStateRow) (int64, error) {
 	if row.ActionID == "" {
 		return retryStateSyntheticActionID(row.Path, row.ActionType), nil
 	}
@@ -89,11 +92,11 @@ func retryStateActionID(row RetryStateRow) (int64, error) {
 	return parsed, nil
 }
 
-func (m *SyncStore) UpsertRetryState(ctx context.Context, row RetryStateRow) error {
+func (m *SyncStore) UpsertRetryState(ctx context.Context, row *RetryStateRow) error {
 	return upsertRetryStateTx(ctx, m.db, row)
 }
 
-func upsertRetryStateTx(ctx context.Context, runner sqlTxRunner, row RetryStateRow) error {
+func upsertRetryStateTx(ctx context.Context, runner sqlTxRunner, row *RetryStateRow) error {
 	actionID, err := retryStateActionID(row)
 	if err != nil {
 		return err
@@ -166,16 +169,16 @@ func plannedActionIdentityForRetryTx(
 	var actionID int64
 	err := runner.QueryRowContext(ctx, sqlLookupPlannedActionForRetry, path, actionType.String()).
 		Scan(&actionID, &row.PlanID)
-	switch {
-	case err == nil:
+	if err == nil {
 		row.ActionID = strconv.FormatInt(actionID, 10)
 		return row, nil
-	case err == sql.ErrNoRows:
+	}
+	if errors.Is(err, sql.ErrNoRows) {
 		row.ActionID = strconv.FormatInt(retryStateSyntheticActionID(path, actionType), 10)
 		return row, nil
-	default:
-		return RetryStateRow{}, fmt.Errorf("sync: looking up planned action for retry %s: %w", path, err)
 	}
+
+	return RetryStateRow{}, fmt.Errorf("sync: looking up planned action for retry %s: %w", path, err)
 }
 
 func (m *SyncStore) DeleteRetryStateByActionID(ctx context.Context, actionID string) error {
@@ -234,7 +237,7 @@ func (m *SyncStore) PickRetryTrialCandidate(
 	row := m.db.QueryRowContext(ctx, sqlPickRetryTrialCandidate, scopeKey.String())
 	var parsed RetryStateRow
 	if err := scanRetryStateRow(row, &parsed); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, false, nil
 		}
 
@@ -286,7 +289,7 @@ func scanRetryStateRow(scanner retryStateScanner, row *RetryStateRow) error {
 		&row.FirstSeenAt,
 		&row.LastSeenAt,
 	); err != nil {
-		return err
+		return fmt.Errorf("sync: scanning retry_state row: %w", err)
 	}
 
 	row.ActionID = strconv.FormatInt(actionID, 10)

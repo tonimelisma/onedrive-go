@@ -21,6 +21,38 @@ import (
 // Tests
 // ---------------------------------------------------------------------------
 
+func newRunOnceBidirectionalMock(driveID driveid.ID) *engineMockClient {
+	return &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID: "remote-file-1", Name: "remote.txt", ParentID: "root",
+					DriveID: driveID, Size: 42, QuickXorHash: "remotehash1",
+				},
+			}, "token-after"), nil
+		},
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write([]byte("remote-content"))
+			return int64(n), err
+		},
+		uploadFn: func(
+			_ context.Context,
+			_ driveid.ID,
+			_ string,
+			name string,
+			_ io.ReaderAt,
+			_ int64,
+			_ time.Time,
+			_ graph.ProgressFunc,
+		) (*graph.Item, error) {
+			return &graph.Item{
+				ID: "uploaded-id", Name: name, Size: 13, QuickXorHash: "localhash1",
+			}, nil
+		},
+	}
+}
+
 func TestNewEngine_ZeroDriveID_ReturnsError(t *testing.T) {
 	t.Parallel()
 
@@ -153,27 +185,7 @@ func TestRunOnce_Bidirectional_FullRun(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-				{
-					ID: "remote-file-1", Name: "remote.txt", ParentID: "root",
-					DriveID: driveID, Size: 42, QuickXorHash: "remotehash1",
-				},
-			}, "token-after"), nil
-		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write([]byte("remote-content"))
-			return int64(n), err
-		},
-		uploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{
-				ID: "uploaded-id", Name: name, Size: 13, QuickXorHash: "localhash1",
-			}, nil
-		},
-	}
+	mock := newRunOnceBidirectionalMock(driveID)
 
 	eng, syncRoot := newTestEngine(t, mock)
 
@@ -206,26 +218,7 @@ func TestRunOnce_PersistsLocalSnapshotAndSQLitePlan(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-				{
-					ID: "remote-file-1", Name: "remote.txt", ParentID: "root",
-					DriveID: driveID, Size: 42, QuickXorHash: "remotehash1",
-				},
-			}, "token-after"), nil
-		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write([]byte("remote-content"))
-			return int64(n), err
-		},
-		uploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{
-				ID: "uploaded-id", Name: name, Size: 13, QuickXorHash: "localhash1",
-			}, nil
-		},
-	}
+	mock := newRunOnceBidirectionalMock(driveID)
 
 	eng, syncRoot := newTestEngine(t, mock)
 	writeLocalFile(t, syncRoot, "local.txt", "local-content")

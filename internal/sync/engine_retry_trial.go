@@ -377,6 +377,12 @@ func (flow *engineFlow) retryStateRowAsFailure(
 	}
 
 	driveID := flow.engine.driveID
+	if configuredDriveID, configErr := flow.engine.baseline.configuredDriveIDForRead(
+		ctx,
+		driveid.ID{},
+	); configErr == nil && !configuredDriveID.IsZero() {
+		driveID = configuredDriveID
+	}
 	parsed := &SyncFailureRow{
 		Path:         row.Path,
 		DriveID:      driveID,
@@ -395,7 +401,7 @@ func (flow *engineFlow) retryStateRowAsFailure(
 		parsed.Role = FailureRoleHeld
 	}
 
-	enriched, found, err := flow.engine.baseline.GetSyncFailureByPath(ctx, row.Path, driveID)
+	enriched, found, err := flow.engine.baseline.GetSyncFailureByPath(ctx, row.Path, driveid.ID{})
 	if err != nil {
 		return nil, err
 	}

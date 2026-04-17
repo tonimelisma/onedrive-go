@@ -51,8 +51,8 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	if err != nil {
 		return nil, err
 	}
-	if err := runner.materializeSQLitePlan(ctx, opts.DryRun); err != nil {
-		return nil, err
+	if materializeErr := runner.materializeSQLitePlan(ctx, opts.DryRun); materializeErr != nil {
+		return nil, materializeErr
 	}
 	changes = mergePathChangeBatches(
 		changes,
@@ -479,8 +479,8 @@ func (flow *engineFlow) observeChanges(
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := flow.commitObservedLocalSnapshot(ctx, dryRun, bl, localResult); err != nil {
-		return nil, nil, err
+	if commitLocalErr := flow.commitObservedLocalSnapshot(ctx, dryRun, bl, localResult); commitLocalErr != nil {
+		return nil, nil, commitLocalErr
 	}
 
 	buf := NewBuffer(flow.engine.logger)

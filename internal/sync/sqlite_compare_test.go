@@ -9,8 +9,8 @@ import (
 
 func comparisonKindsByPath(rows []SQLiteComparisonRow) map[string]string {
 	out := make(map[string]string, len(rows))
-	for _, row := range rows {
-		out[row.Path] = row.ComparisonKind
+	for i := range rows {
+		out[rows[i].Path] = rows[i].ComparisonKind
 	}
 
 	return out
@@ -18,8 +18,8 @@ func comparisonKindsByPath(rows []SQLiteComparisonRow) map[string]string {
 
 func reconciliationKindsByPath(rows []SQLiteReconciliationRow) map[string]string {
 	out := make(map[string]string, len(rows))
-	for _, row := range rows {
-		out[row.Path] = row.ReconciliationKind
+	for i := range rows {
+		out[rows[i].Path] = rows[i].ReconciliationKind
 	}
 
 	return out

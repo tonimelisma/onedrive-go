@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -18,17 +17,6 @@ import (
 // names invalid for OneDrive.
 func IsDisposable(name string) bool {
 	// OS junk files.
-	lower := strings.ToLower(name)
-	if lower == ".ds_store" || lower == "thumbs.db" || lower == "__macosx" {
-		return true
-	}
-
-	// Apple resource forks (._filename).
-	if strings.HasPrefix(name, "._") {
-		return true
-	}
-
-	// Editor temps and partial downloads.
 	if IsAlwaysExcluded(name) {
 		return true
 	}

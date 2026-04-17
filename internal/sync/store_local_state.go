@@ -119,7 +119,7 @@ func buildLocalStateRows(
 	}
 
 	for i := range result.Events {
-		event := result.Events[i]
+		event := &result.Events[i]
 		if event.Source != SourceLocal {
 			continue
 		}
@@ -151,7 +151,7 @@ func buildLocalStateRows(
 	return rows
 }
 
-func localStateRowFromEvent(event ChangeEvent, observedAt int64) LocalStateRow {
+func localStateRowFromEvent(event *ChangeEvent, observedAt int64) LocalStateRow {
 	row := LocalStateRow{
 		Path:       event.Path,
 		ItemType:   event.ItemType,

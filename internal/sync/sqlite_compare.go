@@ -152,7 +152,7 @@ SELECT
 FROM comparison_state
 ORDER BY path`
 
-sqlQueryReconciliationState = `
+	sqlQueryReconciliationState = `
 WITH
 all_paths AS (
 	SELECT path FROM baseline
@@ -338,11 +338,11 @@ func (m *SyncStore) QueryComparisonState(ctx context.Context) ([]SQLiteCompariso
 	var results []SQLiteComparisonRow
 	for rows.Next() {
 		var (
-			row                                         SQLiteComparisonRow
-			itemType                                    sql.NullString
-			baselinePresent, localPresent               int
-			remotePresent, localChanged, remoteChanged  int
-			currentEqual                                int
+			row                                        SQLiteComparisonRow
+			itemType                                   sql.NullString
+			baselinePresent, localPresent              int
+			remotePresent, localChanged, remoteChanged int
+			currentEqual                               int
 		)
 		if err := rows.Scan(
 			&row.Path,

@@ -21,7 +21,7 @@ func TestUpsertRetryStateAndPruneToLatestPlan(t *testing.T) {
 		{Path: "keep.txt", ActionType: ActionUpload},
 	}))
 
-	require.NoError(t, store.UpsertRetryState(ctx, RetryStateRow{
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
 		PlanID:       "old-plan",
 		Path:         "keep.txt",
 		ActionType:   ActionUpload,
@@ -31,7 +31,7 @@ func TestUpsertRetryStateAndPruneToLatestPlan(t *testing.T) {
 		FirstSeenAt:  1,
 		LastSeenAt:   2,
 	}))
-	require.NoError(t, store.UpsertRetryState(ctx, RetryStateRow{
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
 		PlanID:       "old-plan",
 		Path:         "drop.txt",
 		ActionType:   ActionDownload,
@@ -59,7 +59,7 @@ func TestRetryStateReadyAndTrialCandidateQueries(t *testing.T) {
 	ctx := t.Context()
 	now := time.Unix(50, 0)
 
-	require.NoError(t, store.UpsertRetryState(ctx, RetryStateRow{
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
 		Path:         "retry-now.txt",
 		ActionType:   ActionDownload,
 		AttemptCount: 1,
@@ -68,7 +68,7 @@ func TestRetryStateReadyAndTrialCandidateQueries(t *testing.T) {
 		FirstSeenAt:  1,
 		LastSeenAt:   2,
 	}))
-	require.NoError(t, store.UpsertRetryState(ctx, RetryStateRow{
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
 		Path:         "retry-later.txt",
 		ActionType:   ActionUpload,
 		AttemptCount: 1,
@@ -77,7 +77,7 @@ func TestRetryStateReadyAndTrialCandidateQueries(t *testing.T) {
 		FirstSeenAt:  3,
 		LastSeenAt:   4,
 	}))
-	require.NoError(t, store.UpsertRetryState(ctx, RetryStateRow{
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
 		Path:         "blocked.txt",
 		ActionType:   ActionRemoteDelete,
 		ScopeKey:     SKService(),
@@ -123,7 +123,7 @@ func TestPruneScopeBlocksWithoutBlockedRetries(t *testing.T) {
 		NextTrialAt:   time.Unix(260, 0),
 	}))
 
-	require.NoError(t, store.UpsertRetryState(ctx, RetryStateRow{
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
 		Path:         "blocked.txt",
 		ActionType:   ActionUpload,
 		ScopeKey:     SKService(),

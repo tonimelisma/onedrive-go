@@ -314,7 +314,7 @@ func (m *SyncStore) RecordFailure(
 		if nextRetryNano != nil {
 			retryRow.NextRetryAt = *nextRetryNano
 		}
-		if retryErr := upsertRetryStateTx(ctx, tx, retryRow); retryErr != nil {
+		if retryErr := upsertRetryStateTx(ctx, tx, &retryRow); retryErr != nil {
 			return retryErr
 		}
 	} else if retryErr := deleteRetryStateByPathTx(ctx, tx, p.Path); retryErr != nil {
@@ -450,8 +450,8 @@ func (m *SyncStore) TakeSyncFailure(
 	if affected != 1 {
 		return nil, false, fmt.Errorf("sync: deleting taken sync failure for %s: expected 1 row, got %d", path, affected)
 	}
-	if err := deleteRetryStateByPathTx(ctx, tx, path); err != nil {
-		return nil, false, err
+	if retryErr := deleteRetryStateByPathTx(ctx, tx, path); retryErr != nil {
+		return nil, false, retryErr
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -710,8 +710,8 @@ func (m *SyncStore) SetScopeRetryAtNow(ctx context.Context, scopeKey ScopeKey, n
 	if err != nil {
 		return 0, fmt.Errorf("sync: setting scope retry-at for %s: %w", wire, err)
 	}
-	if err := markRetryStateScopeReadyTx(ctx, m.db, wire, nowNano); err != nil {
-		return 0, err
+	if retryErr := markRetryStateScopeReadyTx(ctx, m.db, wire, nowNano); retryErr != nil {
+		return 0, retryErr
 	}
 
 	affected, err := result.RowsAffected()

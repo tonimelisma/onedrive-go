@@ -21,11 +21,15 @@ const (
 			next_full_local_refresh_at
 		FROM observation_state WHERE singleton_id = 1`
 	sqlEnsureObservationStateRow = `INSERT INTO observation_state
-		(singleton_id, configured_drive_id, cursor, remote_refresh_mode, last_full_remote_refresh_at, next_full_remote_refresh_at, local_refresh_mode, last_full_local_refresh_at, next_full_local_refresh_at)
+		(singleton_id, configured_drive_id, cursor,
+		 remote_refresh_mode, last_full_remote_refresh_at, next_full_remote_refresh_at,
+		 local_refresh_mode, last_full_local_refresh_at, next_full_local_refresh_at)
 		VALUES (1, '', '', '', 0, 0, '', 0, 0)
 		ON CONFLICT(singleton_id) DO NOTHING`
 	sqlUpsertObservationState = `INSERT INTO observation_state
-		(singleton_id, configured_drive_id, cursor, remote_refresh_mode, last_full_remote_refresh_at, next_full_remote_refresh_at, local_refresh_mode, last_full_local_refresh_at, next_full_local_refresh_at)
+		(singleton_id, configured_drive_id, cursor,
+		 remote_refresh_mode, last_full_remote_refresh_at, next_full_remote_refresh_at,
+		 local_refresh_mode, last_full_local_refresh_at, next_full_local_refresh_at)
 		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(singleton_id) DO UPDATE SET
 			configured_drive_id = excluded.configured_drive_id,
@@ -43,6 +47,9 @@ const (
 	remoteRefreshModeDeltaDegraded = "delta_degraded"
 	localRefreshModeWatchHealthy   = "watch_healthy"
 	localRefreshModeWatchDegraded  = "watch_degraded"
+
+	remoteRefreshDegradedInterval = time.Hour
+	localRefreshDegradedInterval  = time.Hour
 )
 
 type ObservationState struct {
@@ -78,18 +85,18 @@ func normalizeLocalRefreshMode(mode string) string {
 func remoteRefreshIntervalForMode(mode string) time.Duration {
 	switch normalizeRemoteRefreshMode(mode) {
 	case remoteRefreshModeDeltaDegraded:
-		return time.Hour
+		return remoteRefreshDegradedInterval
 	default:
-		return 24 * time.Hour
+		return fullRemoteReconcileInterval
 	}
 }
 
 func localRefreshIntervalForMode(mode string) time.Duration {
 	switch normalizeLocalRefreshMode(mode) {
 	case localRefreshModeWatchDegraded:
-		return time.Hour
+		return localRefreshDegradedInterval
 	default:
-		return 5 * time.Minute
+		return localFullScanInterval
 	}
 }
 
@@ -268,32 +275,16 @@ func (m *SyncStore) MarkFullRemoteRefresh(
 	at time.Time,
 	mode string,
 ) error {
-	tx, err := beginPerfTx(ctx, m.db)
-	if err != nil {
-		return fmt.Errorf("sync: beginning full reconcile state transaction: %w", err)
-	}
-	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback full reconcile state transaction")
-	}()
-
-	state, err := m.readObservationStateTx(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if ensureErr := m.ensureConfiguredDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
-		return ensureErr
-	}
-
-	applyRemoteRefreshSchedule(state, at, mode)
-	if writeErr := m.writeObservationStateTx(ctx, tx, state); writeErr != nil {
-		return writeErr
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing full reconcile state transaction: %w", err)
-	}
-
-	return nil
+	return m.markObservationRefresh(
+		ctx,
+		driveID,
+		"sync: beginning full reconcile state transaction",
+		"sync: rollback full reconcile state transaction",
+		"sync: committing full reconcile state transaction",
+		func(state *ObservationState) {
+			applyRemoteRefreshSchedule(state, at, mode)
+		},
+	)
 }
 
 func (m *SyncStore) MarkFullLocalRefresh(
@@ -302,12 +293,32 @@ func (m *SyncStore) MarkFullLocalRefresh(
 	at time.Time,
 	mode string,
 ) (err error) {
+	return m.markObservationRefresh(
+		ctx,
+		driveID,
+		"sync: beginning full local refresh transaction",
+		"sync: rollback full local refresh transaction",
+		"sync: committing full local refresh transaction",
+		func(state *ObservationState) {
+			applyLocalRefreshSchedule(state, at, mode)
+		},
+	)
+}
+
+func (m *SyncStore) markObservationRefresh(
+	ctx context.Context,
+	driveID driveid.ID,
+	beginMessage string,
+	rollbackMessage string,
+	commitMessage string,
+	update func(*ObservationState),
+) (err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning full local refresh transaction: %w", err)
+		return fmt.Errorf("%s: %w", beginMessage, err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback full local refresh transaction")
+		err = finalizeTxRollback(err, tx, rollbackMessage)
 	}()
 
 	state, err := m.readObservationStateTx(ctx, tx)
@@ -318,13 +329,13 @@ func (m *SyncStore) MarkFullLocalRefresh(
 		return ensureErr
 	}
 
-	applyLocalRefreshSchedule(state, at, mode)
+	update(state)
 	if writeErr := m.writeObservationStateTx(ctx, tx, state); writeErr != nil {
 		return writeErr
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing full local refresh transaction: %w", err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		return fmt.Errorf("%s: %w", commitMessage, commitErr)
 	}
 
 	return nil
