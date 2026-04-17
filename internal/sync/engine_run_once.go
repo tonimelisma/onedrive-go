@@ -129,6 +129,12 @@ func (r *oneShotRunner) materializeSQLitePlan(ctx context.Context, dryRun bool) 
 	if err := r.engine.baseline.MaterializePlannedActions(ctx, r.runID); err != nil {
 		return fmt.Errorf("sync: materializing sqlite planned actions: %w", err)
 	}
+	if err := r.engine.baseline.PruneRetryStateToLatestPlan(ctx); err != nil {
+		return fmt.Errorf("sync: pruning retry_state to latest plan: %w", err)
+	}
+	if err := r.engine.baseline.PruneScopeBlocksWithoutBlockedRetries(ctx); err != nil {
+		return fmt.Errorf("sync: pruning scope blocks without blocked retries: %w", err)
+	}
 
 	return nil
 }

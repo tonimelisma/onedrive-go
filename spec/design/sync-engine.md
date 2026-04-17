@@ -25,6 +25,12 @@ Watch mode persists its full-refresh cadence in `observation_state`:
 
 One-shot still performs a full local scan at startup for every run.
 
+Retry and trial admission now read from `retry_state`:
+
+- ready per-item retry work comes from unblocked `retry_state` rows whose `next_retry_at` is due
+- scope trials sample one blocked `retry_state` row at random for each due scope
+- `sync_failures` remains available for issue reporting and candidate enrichment, but it is no longer the retry scheduler
+
 The engine does **not** own multi-drive orchestration or control-socket
 lifecycle. Those belong to `internal/multisync`.
 
@@ -155,6 +161,10 @@ before startup proof and after fatal unauthorized results.
 
 Permission scopes are revalidated automatically; there is no manual retry or
 manual recheck CLI for them.
+
+`scope_blocks` remains timer-only metadata. Releasing or discarding a scope
+updates the blocked retry ledger transactionally so no orphaned blocked retry
+rows survive a scope transition.
 
 ## What The Engine No Longer Owns
 

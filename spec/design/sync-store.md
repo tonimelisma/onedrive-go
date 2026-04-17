@@ -75,9 +75,9 @@ path failures. The engine/classifier supplies the already-decided issue type,
 category, scope key, and retry delay; the store persists them transactionally.
 
 `retry_state` and `planned_actions` now exist as first-class durable authority
-surfaces. They own the latest planned intent and persisted retryable work,
-while `sync_failures` remains the current reporting and legacy retry surface
-until the engine cutover is complete.
+surfaces. They own the latest planned intent and persisted retryable work.
+`sync_failures` remains the reporting and failure-enrichment surface, but it no
+longer decides which retryable rows are due or which blocked row is trialed.
 
 Each planning pass replaces `planned_actions` wholesale with the latest plan
 generation. The store does not retain historical action generations.
@@ -95,7 +95,9 @@ Supporting failure mutations include:
 scope-block boundary. The engine remains the sole owner of when scopes are set,
 preserved, retried, released, or discarded; the store just persists that
 runtime-owned decision. `scope_blocks` is timer/trial metadata authority, not a
-second owner of blocked work.
+second owner of blocked work. When a scope is released or discarded, the store
+updates both `sync_failures` and `retry_state` in the same transaction so the
+retry ledger cannot lag the scope transition.
 
 ### Repair/admin writes
 

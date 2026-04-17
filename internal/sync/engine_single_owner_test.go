@@ -2203,7 +2203,7 @@ func TestRetrierSweep_UploadSkippedCandidateBecomesActionableFailure(t *testing.
 	assert.Equal(t, IssueFileTooLarge, failures[0].IssueType)
 }
 
-func TestTrialDispatch_SkippedHeldCandidateBecomesActionableAndContinues(t *testing.T) {
+func TestTrialDispatch_RandomBlockedRetrySelectionLeavesNonSelectedHeldFailuresUntouched(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -2252,20 +2252,24 @@ func TestTrialDispatch_SkippedHeldCandidateBecomesActionableAndContinues(t *test
 	require.NoError(t, err)
 	require.Len(t, failures, 2)
 
-	var actionableBad, heldTrial bool
+	var oversizedSeen, heldTrial bool
 	for i := range failures {
 		switch failures[i].Path {
 		case "oversized.bin":
-			actionableBad = true
-			assert.Equal(t, CategoryActionable, failures[i].Category)
-			assert.Equal(t, IssueFileTooLarge, failures[i].IssueType)
+			oversizedSeen = true
+			if failures[i].Category == CategoryActionable {
+				assert.Equal(t, IssueFileTooLarge, failures[i].IssueType)
+			} else {
+				assert.Equal(t, CategoryTransient, failures[i].Category)
+				assert.Equal(t, FailureRoleHeld, failures[i].Role)
+			}
 		case "trial.txt":
 			heldTrial = true
 			assert.Equal(t, FailureRoleHeld, failures[i].Role)
 		}
 	}
 
-	assert.True(t, actionableBad)
+	assert.True(t, oversizedSeen)
 	assert.True(t, heldTrial)
 	assert.True(t, isTestScopeBlocked(eng, sk))
 }

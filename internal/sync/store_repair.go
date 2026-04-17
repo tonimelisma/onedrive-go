@@ -223,6 +223,9 @@ func (m *SyncStore) ReleaseScope(
 	); execErr != nil {
 		return fmt.Errorf("sync: unblocking failures for scope %s: %w", wire, execErr)
 	}
+	if retryErr := markRetryStateScopeReadyTx(ctx, tx, wire, nowNano); retryErr != nil {
+		return retryErr
+	}
 
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing release-scope for %s: %w", wire, err)
@@ -262,6 +265,9 @@ func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err er
 		`DELETE FROM sync_failures WHERE scope_key = ?`, wire,
 	); execErr != nil {
 		return fmt.Errorf("sync: deleting scoped failures %s: %w", wire, execErr)
+	}
+	if retryErr := deleteRetryStateByScopeTx(ctx, tx, wire); retryErr != nil {
+		return retryErr
 	}
 
 	if err = tx.Commit(); err != nil {
