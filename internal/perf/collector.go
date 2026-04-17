@@ -42,7 +42,7 @@ type Snapshot struct {
 	ObservedPathCount     int   `json:"observed_path_count,omitempty"`
 	ObserveTimeMS         int64 `json:"observe_time_ms,omitempty"`
 	PlanRunCount          int   `json:"plan_run_count,omitempty"`
-	PlannedActionCount    int   `json:"planned_action_count,omitempty"`
+	ActionableActionCount int   `json:"actionable_action_count,omitempty"`
 	PlanTimeMS            int64 `json:"plan_time_ms,omitempty"`
 	ExecuteRunCount       int   `json:"execute_run_count,omitempty"`
 	ExecuteActionCount    int   `json:"execute_action_count,omitempty"`
@@ -178,7 +178,7 @@ func (c *Collector) RecordObserve(paths int, duration time.Duration) {
 func (c *Collector) RecordPlan(actions int, duration time.Duration) {
 	c.apply(func(snapshot *Snapshot) {
 		snapshot.PlanRunCount++
-		snapshot.PlannedActionCount += actions
+		snapshot.ActionableActionCount += actions
 		snapshot.PlanTimeMS += durationMS(duration)
 	})
 }

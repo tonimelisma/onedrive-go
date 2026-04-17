@@ -6,22 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-type engineWorkReason int
-
 const (
-	engineWorkObserved engineWorkReason = iota
-	engineWorkRetry
-	engineWorkTrial
-
-	// defaultRetryBatchSize limits how many sync_failures are processed per retry
-	// sweep so a large durable retry queue cannot monopolize the watch loop.
+	// defaultRetryBatchSize limits how many retry_state rows are processed per
+	// retry sweep so a large durable retry queue cannot monopolize the watch loop.
 	defaultRetryBatchSize = 1024
 )
 
@@ -30,82 +23,176 @@ const (
 	failureResolutionSourceRetryResolved = "retry_resolution"
 )
 
-type engineWorkRequest struct {
-	reason        engineWorkReason
-	changes       []PathChanges
-	trialScopeKey ScopeKey
-	trialPath     string
-	trialDriveID  driveid.ID
-}
-
 type retryCandidate struct {
-	event    *ChangeEvent
 	skipped  *SkippedItem
 	resolved bool
 	err      error
 }
 
-func pathChangesFromEvent(ev *ChangeEvent) []PathChanges {
-	if ev == nil {
+func actionWorkKey(action *Action) RetryWorkKey {
+	if action == nil {
+		return RetryWorkKey{}
+	}
+
+	return RetryWorkKey{
+		Path:       action.Path,
+		OldPath:    action.OldPath,
+		ActionType: action.Type,
+	}
+}
+
+//nolint:gocyclo // The subset builder keeps dependency closure and remapping in one place.
+func selectedActionPlanByKeys(plan *ActionPlan, keys []RetryWorkKey) *ActionPlan {
+	if plan == nil || len(plan.Actions) == 0 || len(keys) == 0 {
 		return nil
 	}
 
-	pc := PathChanges{Path: ev.Path}
-	switch ev.Source {
-	case SourceRemote:
-		pc.RemoteEvents = append(pc.RemoteEvents, *ev)
-	case SourceLocal:
-		pc.LocalEvents = append(pc.LocalEvents, *ev)
-	default:
+	selected := make(map[int]struct{}, len(keys))
+	queue := make([]int, 0, len(keys))
+
+	for _, key := range keys {
+		for i := range plan.Actions {
+			if actionWorkKey(&plan.Actions[i]) != key {
+				continue
+			}
+			if _, ok := selected[i]; ok {
+				break
+			}
+			selected[i] = struct{}{}
+			queue = append(queue, i)
+			break
+		}
+	}
+
+	for len(queue) > 0 {
+		idx := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		for _, depIdx := range plan.Deps[idx] {
+			if _, ok := selected[depIdx]; ok {
+				continue
+			}
+			selected[depIdx] = struct{}{}
+			queue = append(queue, depIdx)
+		}
+	}
+
+	if len(selected) == 0 {
 		return nil
 	}
 
-	return []PathChanges{pc}
+	ordered := make([]int, 0, len(selected))
+	for idx := range selected {
+		ordered = append(ordered, idx)
+	}
+	sort.Ints(ordered)
+
+	remap := make(map[int]int, len(ordered))
+	actions := make([]Action, 0, len(ordered))
+	deps := make([][]int, 0, len(ordered))
+	for newIdx, oldIdx := range ordered {
+		remap[oldIdx] = newIdx
+		actions = append(actions, plan.Actions[oldIdx])
+		deps = append(deps, nil)
+	}
+
+	for newIdx, oldIdx := range ordered {
+		oldDeps := plan.Deps[oldIdx]
+		if len(oldDeps) == 0 {
+			continue
+		}
+		newDeps := make([]int, 0, len(oldDeps))
+		for _, oldDep := range oldDeps {
+			newDep, ok := remap[oldDep]
+			if !ok {
+				continue
+			}
+			newDeps = append(newDeps, newDep)
+		}
+		deps[newIdx] = newDeps
+	}
+
+	return &ActionPlan{
+		Actions:        actions,
+		Deps:           deps,
+		DeferredByMode: DeferredCounts{},
+	}
 }
 
-func (rt *watchRuntime) dispatchWorkRequest(
+func (rt *watchRuntime) refreshCurrentActionPlan(
 	ctx context.Context,
-	request engineWorkRequest,
 	bl *Baseline,
 	mode Mode,
 	safety *SafetyConfig,
-) ([]*TrackedAction, bool) {
-	if len(request.changes) == 0 {
-		return nil, false
-	}
-
-	options := dispatchBatchOptions{
-		trialScopeKey: request.trialScopeKey,
-		trialPath:     request.trialPath,
-		trialDriveID:  request.trialDriveID,
-	}
-
-	return rt.dispatchPlannerWork(ctx, request.changes, bl, mode, safety, options)
-}
-
-func (rt *watchRuntime) dispatchPlannerWork(
-	ctx context.Context,
-	changes []PathChanges,
-	bl *Baseline,
-	mode Mode,
-	safety *SafetyConfig,
-	options dispatchBatchOptions,
-) ([]*TrackedAction, bool) {
-	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
-	plan, err := rt.engine.planner.Plan(changes, bl, mode, safety, denied)
+) (*ActionPlan, error) {
+	localResult, err := rt.observeLocalChanges(ctx, rt, bl)
 	if err != nil {
-		rt.engine.logger.Error("internal work request planning failed",
+		return nil, fmt.Errorf("sync: local refresh before retry/trial planning: %w", err)
+	}
+	observedAt := rt.engine.nowFunc().UnixNano()
+	rows := buildLocalStateRows(localResult, observedAt)
+	replaceErr := rt.engine.baseline.ReplaceLocalState(ctx, rows)
+	if replaceErr != nil {
+		return nil, fmt.Errorf("sync: replacing local snapshot before retry/trial planning: %w", replaceErr)
+	}
+
+	plan, err := rt.buildCurrentActionPlan(ctx, bl, mode, safety)
+	if err != nil {
+		return nil, fmt.Errorf("sync: building current action plan for retry/trial: %w", err)
+	}
+	if err := rt.materializeCurrentActionPlan(ctx, plan, false); err != nil {
+		return nil, fmt.Errorf("sync: materializing current action plan for retry/trial: %w", err)
+	}
+
+	return plan, nil
+}
+
+func planContainsWorkKey(plan *ActionPlan, key RetryWorkKey) bool {
+	if plan == nil {
+		return false
+	}
+
+	for i := range plan.Actions {
+		if actionWorkKey(&plan.Actions[i]) == key {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (flow *engineFlow) reconcileStaleRetryCandidate(
+	ctx context.Context,
+	bl *Baseline,
+	row *RetryStateRow,
+	source string,
+) {
+	if row == nil {
+		return
+	}
+
+	failureRow, err := flow.retryStateRowAsFailure(ctx, row)
+	if err != nil {
+		flow.engine.logger.Warn("stale retry candidate hydration failed",
+			slog.String("path", row.Path),
+			slog.String("source", source),
 			slog.String("error", err.Error()),
-			slog.Int("paths", len(changes)),
 		)
-		return nil, false
+		return
 	}
 
-	if len(plan.Actions) == 0 {
-		return nil, false
+	candidate := flow.buildRetryCandidate(ctx, bl, failureRow)
+	switch {
+	case candidate.err != nil:
+		flow.engine.logger.Warn("stale retry candidate rebuild failed",
+			slog.String("path", row.Path),
+			slog.String("source", source),
+			slog.String("error", candidate.err.Error()),
+		)
+	case candidate.skipped != nil:
+		flow.recordRetryTrialSkippedItem(ctx, failureRow, candidate.skipped)
+	case candidate.resolved:
+		flow.clearFailureCandidate(ctx, failureRow, source)
 	}
-
-	return rt.dispatchBatchActions(ctx, plan, options)
 }
 
 // runTrialDispatch handles due scope trials without re-observing through a
@@ -148,67 +235,82 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 	safety *SafetyConfig,
 	key ScopeKey,
 ) []*TrackedAction {
-	for {
-		retryRow, found, err := rt.engine.baseline.PickRetryTrialCandidate(ctx, key)
-		if err != nil {
-			rt.engine.logger.Warn("runTrialDispatch: failed to pick trial candidate",
-				slog.String("scope_key", key.String()),
-				slog.String("error", err.Error()),
-			)
-			return nil
-		}
-
-		if !found {
-			rt.engine.logger.Debug("runTrialDispatch: no usable trial candidate; preserving scope",
-				slog.String("scope_key", key.String()),
-			)
-			rt.scopeController().preserveScopeTrial(ctx, rt, key)
-			return nil
-		}
-
-		row, err := rt.retryStateRowAsFailure(ctx, retryRow)
-		if err != nil {
-			rt.engine.logger.Warn("runTrialDispatch: failed to hydrate retry candidate",
-				slog.String("scope_key", key.String()),
-				slog.String("path", retryRow.Path),
-				slog.String("error", err.Error()),
-			)
-			return nil
-		}
-		if rt.depGraph.HasInFlight(row.Path) {
-			return nil
-		}
-
-		rebuild := rt.buildRetryCandidate(ctx, bl, row)
-		switch {
-		case rebuild.err != nil:
-			rt.engine.logger.Warn("runTrialDispatch: failed to rebuild trial candidate",
-				slog.String("scope_key", key.String()),
-				slog.String("path", row.Path),
-				slog.String("error", rebuild.err.Error()),
-			)
-			return nil
-		case rebuild.skipped != nil:
-			rt.recordRetryTrialSkippedItem(ctx, row, rebuild.skipped)
-			continue
-		case rebuild.resolved:
-			rt.clearFailureCandidate(ctx, row, "runTrialDispatch")
-			continue
-		case rebuild.event == nil:
-			continue
-		}
-
-		outbox, accepted := rt.dispatchWorkRequest(ctx, engineWorkRequest{
-			reason:        engineWorkTrial,
-			changes:       pathChangesFromEvent(rebuild.event),
-			trialScopeKey: key,
-			trialPath:     row.Path,
-			trialDriveID:  row.DriveID,
-		}, bl, mode, safety)
-		if accepted {
-			return outbox
-		}
+	plan, err := rt.refreshCurrentActionPlan(ctx, bl, mode, safety)
+	if err != nil {
+		rt.engine.logger.Warn("runTrialDispatch: failed to refresh current action plan",
+			slog.String("scope_key", key.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil
 	}
+
+	retryRow, found, err := rt.engine.baseline.PickRetryTrialCandidate(ctx, key)
+	if err != nil {
+		rt.engine.logger.Warn("runTrialDispatch: failed to pick trial candidate",
+			slog.String("scope_key", key.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+
+	if !found {
+		if failures, listErr := rt.engine.baseline.ListSyncFailures(ctx); listErr == nil {
+			for i := range failures {
+				if failures[i].Role != FailureRoleHeld || failures[i].ScopeKey != key {
+					continue
+				}
+				work := RetryWorkKey{
+					Path:       failures[i].Path,
+					OldPath:    "",
+					ActionType: failureActionType(&failures[i]),
+				}
+				if planContainsWorkKey(plan, work) {
+					continue
+				}
+				rt.reconcileStaleRetryCandidate(ctx, bl, &RetryStateRow{
+					Path:       failures[i].Path,
+					ActionType: failureActionType(&failures[i]),
+					ScopeKey:   failures[i].ScopeKey,
+					Blocked:    failures[i].Role == FailureRoleHeld,
+				}, "runTrialDispatch")
+			}
+		}
+		rt.engine.logger.Debug("runTrialDispatch: no usable trial candidate; preserving scope",
+			slog.String("scope_key", key.String()),
+		)
+		rt.scopeController().preserveScopeTrial(ctx, rt, key)
+		return nil
+	}
+
+	if rt.depGraph.HasInFlight(retryRow.Path) {
+		return nil
+	}
+
+	work := RetryWorkKey{Path: retryRow.Path, OldPath: retryRow.OldPath, ActionType: retryRow.ActionType}
+	subset := selectedActionPlanByKeys(plan, []RetryWorkKey{work})
+	if subset == nil || len(subset.Actions) == 0 {
+		if row, rowErr := rt.retryStateRowAsFailure(ctx, retryRow); rowErr == nil {
+			rt.clearFailureCandidate(ctx, row, "runTrialDispatch")
+		}
+		rt.engine.logger.Debug("runTrialDispatch: current action set no longer contains blocked retry work",
+			slog.String("scope_key", key.String()),
+			slog.String("path", retryRow.Path),
+			slog.String("action", retryRow.ActionType.String()),
+		)
+		rt.scopeController().preserveScopeTrial(ctx, rt, key)
+		return nil
+	}
+
+	outbox, accepted := rt.dispatchCurrentPlan(ctx, subset, dispatchBatchOptions{
+		trialScopeKey: key,
+		trialPath:     retryRow.Path,
+		trialDriveID:  rt.engine.driveID,
+	})
+	if accepted {
+		return outbox
+	}
+
+	return nil
 }
 
 // runRetrierSweep processes a batch of due sync_failures and routes them back
@@ -239,9 +341,19 @@ func (rt *watchRuntime) runRetrierSweep(
 		return nil
 	}
 
-	request := engineWorkRequest{reason: engineWorkRetry}
+	plan, err := rt.refreshCurrentActionPlan(ctx, bl, mode, safety)
+	if err != nil {
+		rt.engine.logger.Warn("retrier sweep: failed to refresh current action plan",
+			slog.String("error", err.Error()),
+		)
+		rt.armRetryTimer(ctx)
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepCompleted})
+		return nil
+	}
+
 	dispatchedRows := 0
 	batchLimit := rt.engine.effectiveRetryBatchLimit()
+	keys := make([]RetryWorkKey, 0, len(retryRows))
 
 	for i := range retryRows {
 		if dispatchedRows >= batchLimit {
@@ -249,46 +361,31 @@ func (rt *watchRuntime) runRetrierSweep(
 			break
 		}
 
-		row, rowErr := rt.retryStateRowAsFailure(ctx, &retryRows[i])
-		if rowErr != nil {
-			rt.engine.logger.Warn("retrier sweep: failed to hydrate retry candidate",
-				slog.String("path", retryRows[i].Path),
-				slog.String("error", rowErr.Error()),
-			)
-			continue
+		work := RetryWorkKey{
+			Path:       retryRows[i].Path,
+			OldPath:    retryRows[i].OldPath,
+			ActionType: retryRows[i].ActionType,
 		}
-		if rt.depGraph.HasInFlight(row.Path) {
-			continue
-		}
-		rebuild := rt.buildRetryCandidate(ctx, bl, row)
-		switch {
-		case rebuild.err != nil:
-			rt.engine.logger.Warn("retrier sweep: failed to rebuild retry candidate",
-				slog.String("path", row.Path),
-				slog.String("error", rebuild.err.Error()),
-			)
-			continue
-		case rebuild.skipped != nil:
-			rt.recordRetryTrialSkippedItem(ctx, row, rebuild.skipped)
-			continue
-		case rebuild.resolved:
-			rt.clearFailureCandidate(ctx, row, "runRetrierSweep")
-			continue
-		case rebuild.event == nil:
+		if !planContainsWorkKey(plan, work) {
+			rt.reconcileStaleRetryCandidate(ctx, bl, &retryRows[i], "runRetrierSweep")
 			continue
 		}
 
-		request.changes = append(request.changes, pathChangesFromEvent(rebuild.event)...)
+		if rt.depGraph.HasInFlight(retryRows[i].Path) {
+			continue
+		}
+		keys = append(keys, work)
 		dispatchedRows++
 	}
 
-	if dispatchedRows == 0 {
+	subset := selectedActionPlanByKeys(plan, keys)
+	if dispatchedRows == 0 || subset == nil || len(subset.Actions) == 0 {
 		rt.armRetryTimer(ctx)
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepCompleted})
 		return nil
 	}
 
-	dispatch, dispatched := rt.dispatchWorkRequest(ctx, request, bl, mode, safety)
+	dispatch, dispatched := rt.dispatchCurrentPlan(ctx, subset, dispatchBatchOptions{})
 	if !dispatched {
 		rt.engine.logger.Debug("retrier sweep produced no dispatchable work",
 			slog.Int("candidate_rows", dispatchedRows),
@@ -303,69 +400,6 @@ func (rt *watchRuntime) runRetrierSweep(
 		Count: len(dispatch),
 	})
 	return dispatch
-}
-
-func (flow *engineFlow) collectDueRetryChanges(
-	ctx context.Context,
-	observedPaths map[string]bool,
-) []PathChanges {
-	bl, loadErr := flow.engine.baseline.Load(ctx)
-	if loadErr != nil {
-		flow.engine.logger.Warn("one-shot retry rebuild: failed to load baseline",
-			slog.String("error", loadErr.Error()),
-		)
-		return nil
-	}
-
-	retryRows, err := flow.engine.baseline.ListRetryStateReady(ctx, flow.engine.nowFunc())
-	if err != nil {
-		flow.engine.logger.Warn("one-shot retry rebuild: failed to list retriable items",
-			slog.String("error", err.Error()),
-		)
-		return nil
-	}
-	if len(retryRows) == 0 {
-		return nil
-	}
-
-	var changes []PathChanges
-
-	for i := range retryRows {
-		row, rowErr := flow.retryStateRowAsFailure(ctx, &retryRows[i])
-		if rowErr != nil {
-			flow.engine.logger.Warn("one-shot retry rebuild: failed to hydrate retry candidate",
-				slog.String("path", retryRows[i].Path),
-				slog.String("error", rowErr.Error()),
-			)
-			continue
-		}
-		if observedPaths[row.Path] {
-			continue
-		}
-
-		rebuild := flow.buildRetryCandidate(ctx, bl, row)
-		switch {
-		case rebuild.err != nil:
-			flow.engine.logger.Warn("one-shot retry rebuild: failed to rebuild retry candidate",
-				slog.String("path", row.Path),
-				slog.String("error", rebuild.err.Error()),
-			)
-		case rebuild.skipped != nil:
-			flow.recordRetryTrialSkippedItem(ctx, row, rebuild.skipped)
-		case rebuild.resolved:
-			flow.clearFailureCandidate(ctx, row, "collectDueRetryChanges")
-		case rebuild.event != nil:
-			changes = append(changes, pathChangesFromEvent(rebuild.event)...)
-		}
-	}
-
-	if len(changes) > 0 {
-		flow.engine.logger.Info("one-shot retry rebuild",
-			slog.Int("paths", len(changes)),
-		)
-	}
-
-	return changes
 }
 
 func (flow *engineFlow) retryStateRowAsFailure(
@@ -424,72 +458,12 @@ func (flow *engineFlow) retryStateRowAsFailure(
 	return enriched, nil
 }
 
-func mergePathChangeBatches(batches ...[]PathChanges) []PathChanges {
-	merged := make(map[string]*PathChanges)
-
-	for _, batch := range batches {
-		for i := range batch {
-			path := batch[i].Path
-			if path == "" {
-				continue
-			}
-
-			entry, ok := merged[path]
-			if !ok {
-				entry = &PathChanges{Path: path}
-				merged[path] = entry
-			}
-
-			entry.RemoteEvents = append(entry.RemoteEvents, batch[i].RemoteEvents...)
-			entry.LocalEvents = append(entry.LocalEvents, batch[i].LocalEvents...)
-		}
-	}
-
-	if len(merged) == 0 {
-		return nil
-	}
-
-	paths := make([]string, 0, len(merged))
-	for path := range merged {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
-	result := make([]PathChanges, 0, len(paths))
-	for _, path := range paths {
-		result = append(result, *merged[path])
-	}
-
-	return result
-}
-
 func (e *Engine) effectiveRetryBatchLimit() int {
 	if e.retryBatchLimit > 0 {
 		return e.retryBatchLimit
 	}
 
 	return defaultRetryBatchSize
-}
-
-// remoteStateToChangeEvent converts current remote mirror truth into a
-// planner-ready remote change event. Remote deletion is represented by mirror
-// absence and handled separately by delete-specific rebuild paths.
-func remoteStateToChangeEvent(rs *RemoteStateRow, path string) *ChangeEvent {
-	return &ChangeEvent{
-		Source:    SourceRemote,
-		Type:      ChangeModify,
-		Path:      path,
-		ItemID:    rs.ItemID,
-		ParentID:  rs.ParentID,
-		DriveID:   rs.DriveID,
-		ItemType:  rs.ItemType,
-		Name:      filepath.Base(path),
-		Size:      rs.Size,
-		Hash:      rs.Hash,
-		Mtime:     rs.Mtime,
-		ETag:      rs.ETag,
-		IsDeleted: false,
-	}
 }
 
 func baselineEntryMatchesRemoteState(entry *BaselineEntry, rs *RemoteStateRow) bool {
@@ -645,8 +619,8 @@ func (flow *engineFlow) buildRetryCandidate(
 		return flow.buildMirrorRetryCandidate(ctx, bl, row, true)
 	case ActionLocalDelete:
 		return flow.buildLocalDeleteRetryCandidate(ctx, bl, row)
-	case ActionLocalMove,
-		ActionConflict,
+	case ActionConflictCopy,
+		ActionLocalMove,
 		ActionUpdateSynced,
 		ActionCleanup:
 		return flow.buildMirrorRetryCandidate(ctx, bl, row, false)
@@ -671,14 +645,9 @@ func (flow *engineFlow) buildMirrorRetryCandidate(
 	if baselineEntryMatchesRemoteState(baselineEntryForFailureInBaseline(bl, row), rs) {
 		return retryCandidate{resolved: true}
 	}
+	_ = forceDownload
 
-	event := remoteStateToChangeEvent(rs, row.Path)
-	if forceDownload {
-		event.ForcedAction = ActionDownload
-		event.HasForcedAction = true
-	}
-
-	return retryCandidate{event: event}
+	return retryCandidate{}
 }
 
 func (flow *engineFlow) buildLocalDeleteRetryCandidate(
@@ -701,22 +670,7 @@ func (flow *engineFlow) buildLocalDeleteRetryCandidate(
 		}
 	}
 
-	return retryCandidate{event: &ChangeEvent{
-		Source:          SourceRemote,
-		Type:            ChangeDelete,
-		ForcedAction:    ActionLocalDelete,
-		HasForcedAction: true,
-		Path:            entry.Path,
-		ItemID:          entry.ItemID,
-		ParentID:        entry.ParentID,
-		DriveID:         entry.DriveID,
-		ItemType:        entry.ItemType,
-		Name:            filepath.Base(entry.Path),
-		Size:            entry.RemoteSize,
-		Hash:            entry.RemoteHash,
-		Mtime:           entry.RemoteMtime,
-		IsDeleted:       true,
-	}}
+	return retryCandidate{}
 }
 
 func (flow *engineFlow) buildLocalObservationRetryCandidate(
@@ -738,7 +692,6 @@ func (flow *engineFlow) buildLocalObservationRetryCandidate(
 	}
 
 	return retryCandidate{
-		event:    result.Event,
 		skipped:  result.Skipped,
 		resolved: result.Resolved,
 	}
@@ -749,7 +702,7 @@ func (flow *engineFlow) buildRemoteMoveRetryCandidate(
 	row *SyncFailureRow,
 ) retryCandidate {
 	rebuild := flow.buildLocalObservationRetryCandidate(bl, row)
-	if rebuild.err != nil || rebuild.skipped != nil || rebuild.resolved || rebuild.event == nil || row.ItemID == "" {
+	if rebuild.err != nil || rebuild.skipped != nil || rebuild.resolved || row.ItemID == "" {
 		return rebuild
 	}
 
@@ -758,17 +711,13 @@ func (flow *engineFlow) buildRemoteMoveRetryCandidate(
 		return rebuild
 	}
 
-	moveEvent := *rebuild.event
-	moveEvent.Type = ChangeMove
-	moveEvent.OldPath = oldEntry.Path
-
-	return retryCandidate{event: &moveEvent}
+	return retryCandidate{}
 }
 
 func (flow *engineFlow) buildRemoteDeleteRetryCandidate(bl *Baseline, row *SyncFailureRow) retryCandidate {
-	entry, ok := bl.GetByPath(row.Path)
+	_, ok := bl.GetByPath(row.Path)
 	if !ok && row.ItemID != "" {
-		entry, ok = bl.GetByID(row.ItemID)
+		_, ok = bl.GetByID(row.ItemID)
 	}
 	if !ok {
 		return retryCandidate{resolved: true}
@@ -782,19 +731,7 @@ func (flow *engineFlow) buildRemoteDeleteRetryCandidate(bl *Baseline, row *SyncF
 		return retryCandidate{err: statErr}
 	}
 
-	return retryCandidate{event: &ChangeEvent{
-		Source:          SourceLocal,
-		Type:            ChangeDelete,
-		ForcedAction:    ActionRemoteDelete,
-		HasForcedAction: true,
-		Path:            row.Path,
-		DriveID:         row.DriveID,
-		ItemType:        entry.ItemType,
-		Name:            filepath.Base(row.Path),
-		Size:            entry.LocalSize,
-		Mtime:           entry.LocalMtime,
-		IsDeleted:       true,
-	}}
+	return retryCandidate{}
 }
 
 // clearFailureOnSuccess removes the sync_failures row for a successfully

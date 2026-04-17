@@ -70,45 +70,46 @@ root pkg → internal/cli/ → internal/graphtransport/ → internal/retry/
 
 ## SQLite-Backed Sync Pipeline
 
-The sync engine now has two cooperating data flows:
+The sync engine is now snapshot-first:
 
-- an observation-to-execution flow that still uses normalized change events and
-  the in-memory planner boundary
-- a SQLite-backed durable-truth flow that persists current local/remote
-  snapshots, comparison rows, reconciliation rows, retry state, scope timing,
-  and the latest generated plan generation
-
-The current runtime is therefore hybrid rather than purely event-driven or
-purely snapshot-driven.
+- observation produces dirty signals and current observation facts
+- SQLite persists current local/remote snapshots, baseline, retry state,
+  scope timing, and refresh cadence
+- SQLite computes structural diff and reconciliation outcomes
+- Go builds the current actionable set, executes it, and publishes baseline
 
 ```
 Remote Observer ──┐
-                  ├──→ Change Buffer ──→ Planner ──→ Executor ──→ Baseline
-Local Observer  ──┘         │                │            │           │
-                      debounce/dedup    deterministic   workers    per-action
-                                       ActionPlan      (parallel)   commit
+                  ├──→ Dirty Buffer ──→ refresh snapshots ──────────────┐
+Local Observer  ──┘         │                                           │
+                      debounce/wake                                     │
 
-Remote Obs ───────────────→ remote_state ──┐
-Local Scan/Obs ───────────→ local_state  ──┼──→ comparison_state
-Baseline ─────────────────→ baseline     ──┘    → reconciliation_state
-                                                → planned_actions
-                                                → retry_state / scope_blocks
+Remote Obs ───────────────→ remote_state ──┐                            │
+Local Scan/Obs ───────────→ local_state  ──┼──→ comparison_state ──→ reconciliation_state
+Baseline ─────────────────→ baseline     ──┘                            │
+                                                                         │
+retry_state / scope_blocks / observation_state ──────────────────────────┤
+                                                                         ↓
+                                                          Go actionable-set planner
+                                                                         ↓
+                                                               Executor / workers
+                                                                         ↓
+                                                                  baseline publish
 ```
 
 ### Design Principles
 
 1. **Durable truth lives in SQLite.** `local_state`, `remote_state`,
-   `baseline`, `planned_actions`, `retry_state`, `scope_blocks`, and
+   `baseline`, `retry_state`, `scope_blocks`, and
    `observation_state` are the durable authority surfaces. Observation and
    execution rebuild working state from those tables rather than inventing a
    second durable coordinator.
-2. **Event buffering is still the executable planner boundary.** The runtime
-   still feeds `ChangeEvent` batches through `Buffer` into the deterministic
-   planner boundary for executable `ActionPlan` construction.
-3. **SQLite comparison and reconciliation run in parallel.**
-   `comparison_state`, `reconciliation_state`, and `planned_actions`
-   materialization compute the latest snapshot-vs-baseline truth from SQLite
-   without taking ownership of worker dispatch yet.
+2. **Dirty buffering is runtime scheduling only.** The runtime uses a buffer to
+   coalesce dirty signals and wake replans, not to define sync truth.
+3. **SQLite owns structural diff and reconciliation.**
+   `comparison_state` and `reconciliation_state` compute the latest
+   snapshot-vs-baseline truth from SQLite, while Go owns the executable
+   action set, dependency ordering, and admission.
 4. **Watch-primary.** `sync --watch` is the primary runtime mode. All components serve both one-shot and watch modes.
 5. **Interface-driven testability.** All I/O (filesystem, network, database) is behind interfaces.
 6. **Boundary-owned error translation.** Each boundary normalizes the failures it understands once, and downstream layers consume that shared contract. See [error-model.md](error-model.md).
@@ -116,10 +117,10 @@ Baseline ─────────────────→ baseline     ─
 ### Rationale
 
 The current design deliberately keeps durable truth and executable planning
-separate while the SQLite-first refactor lands in slices. Current and synced
-truth are now explicit in SQLite, but the worker-dispatching planner path still
-uses the older event-shaped boundary. This preserves the tested executor and
-dependency-graph runtime while snapshot persistence, retry/state ownership, and
+separate. Current and synced truth are explicit in SQLite, while the
+worker-dispatching actionable set remains runtime-owned in Go. This preserves
+the tested executor and dependency-graph runtime while snapshot persistence,
+retry/state ownership, and
 latest-plan materialization move into durable SQLite surfaces.
 
 ## Module Design Docs
@@ -164,11 +165,11 @@ For detailed module design, see:
 | Runtime failure class | `internal/errclass` + `internal/sync/engine_result_classify.go` |
 | Sync-domain summary key | `internal/sync/summary_keys.go` |
 | Status issue title/reason/action rendering | `internal/cli/status_issue_descriptors.go` |
-| Durable sync issue facts | `internal/sync` SQLite tables (`sync_failures`, `scope_blocks`, conflicts) plus catalog-owned account auth state |
+| Durable sync issue facts | `internal/sync` SQLite tables (`sync_failures`, `retry_state`, `scope_blocks`) plus catalog-owned account auth state |
 | Account/auth presentation | `internal/authstate` vocabulary projected through `internal/cli/account_view_snapshot.go` |
 | Read-only issue/status snapshot | `internal/sync/store_inspect.go` |
 | Production perf counters, live snapshots, and capture bundles | `internal/perf` with session/control-plane ownership split across `internal/cli` and `internal/multisync` |
-| Durable mutation rules | `internal/sync` writable store APIs (`CommitMutation`, scope/failure/conflict helpers) plus engine-owned scope/result flow |
+| Durable mutation rules | `internal/sync` writable store APIs (`CommitMutation`, scope/failure helpers) plus engine-owned scope/result flow |
 
 ## Production Performance Instrumentation
 

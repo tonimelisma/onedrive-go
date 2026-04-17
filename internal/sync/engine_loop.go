@@ -388,14 +388,14 @@ func (rt *watchRuntime) handleBootstrapBatch(
 	ctx context.Context,
 	p *watchPipeline,
 	outbox []*TrackedAction,
-	batch []PathChanges,
+	batch DirtyBatch,
 	ok bool,
 ) ([]*TrackedAction, bool) {
 	if !ok {
 		return outbox, true
 	}
 
-	return append(outbox, rt.processBatch(ctx, batch, p.bl, p.mode, p.safety)...), false
+	return append(outbox, rt.processDirtyBatch(ctx, batch, p.bl, p.mode, p.safety)...), false
 }
 
 func (rt *watchRuntime) handleBootstrapWorkerResult(

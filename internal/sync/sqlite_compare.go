@@ -60,7 +60,8 @@ comparison_state AS (
 		CASE
 			WHEN b.path IS NULL OR l.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(l.item_type, '') THEN 1
-			WHEN COALESCE(b.local_hash, '') <> COALESCE(l.hash, '') THEN 1
+			WHEN COALESCE(b.local_hash, '') <> '' OR COALESCE(l.hash, '') <> '' THEN
+				CASE WHEN COALESCE(b.local_hash, '') <> COALESCE(l.hash, '') THEN 1 ELSE 0 END
 			WHEN COALESCE(b.local_size, 0) <> COALESCE(l.size, 0) THEN 1
 			WHEN COALESCE(b.local_mtime, 0) <> COALESCE(l.mtime, 0) THEN 1
 			ELSE 0
@@ -68,7 +69,8 @@ comparison_state AS (
 		CASE
 			WHEN b.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
-			WHEN COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '') THEN 1
+			WHEN COALESCE(b.remote_hash, '') <> '' OR COALESCE(r.hash, '') <> '' THEN
+				CASE WHEN COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '') THEN 1 ELSE 0 END
 			WHEN COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0) THEN 1
 			WHEN COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0) THEN 1
 			WHEN COALESCE(b.etag, '') <> COALESCE(r.etag, '') THEN 1
@@ -196,13 +198,15 @@ remote_move_targets AS (
 comparison_flags AS (
 	SELECT
 		p.path,
+		COALESCE(b.item_type, l.item_type, r.item_type, '') AS item_type,
 		CASE WHEN b.path IS NOT NULL THEN 1 ELSE 0 END AS baseline_present,
 		CASE WHEN l.path IS NOT NULL THEN 1 ELSE 0 END AS local_present,
 		CASE WHEN r.path IS NOT NULL THEN 1 ELSE 0 END AS remote_present,
 		CASE
 			WHEN b.path IS NULL OR l.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(l.item_type, '') THEN 1
-			WHEN COALESCE(b.local_hash, '') <> COALESCE(l.hash, '') THEN 1
+			WHEN COALESCE(b.local_hash, '') <> '' OR COALESCE(l.hash, '') <> '' THEN
+				CASE WHEN COALESCE(b.local_hash, '') <> COALESCE(l.hash, '') THEN 1 ELSE 0 END
 			WHEN COALESCE(b.local_size, 0) <> COALESCE(l.size, 0) THEN 1
 			WHEN COALESCE(b.local_mtime, 0) <> COALESCE(l.mtime, 0) THEN 1
 			ELSE 0
@@ -210,7 +214,8 @@ comparison_flags AS (
 		CASE
 			WHEN b.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
-			WHEN COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '') THEN 1
+			WHEN COALESCE(b.remote_hash, '') <> '' OR COALESCE(r.hash, '') <> '' THEN
+				CASE WHEN COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '') THEN 1 ELSE 0 END
 			WHEN COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0) THEN 1
 			WHEN COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0) THEN 1
 			WHEN COALESCE(b.etag, '') <> COALESCE(r.etag, '') THEN 1
@@ -240,6 +245,7 @@ comparison_flags AS (
 comparison_state AS (
 	SELECT
 		path,
+		item_type,
 		baseline_present,
 		local_present,
 		remote_present,
@@ -273,19 +279,27 @@ comparison_state AS (
 reconciliation_state AS (
 	SELECT
 		path,
+		item_type,
 		comparison_kind,
+		local_move_target,
+		local_move_source,
+		remote_move_target,
+		remote_move_source,
 		CASE
 			WHEN comparison_kind = 'both_missing' THEN 'baseline_remove'
 			WHEN comparison_kind = 'local_move_source' THEN 'local_move'
 			WHEN comparison_kind = 'local_move_dest' THEN 'local_move'
 			WHEN comparison_kind = 'remote_move_source' THEN 'remote_move'
 			WHEN comparison_kind = 'remote_move_dest' THEN 'remote_move'
+			WHEN comparison_kind = 'local_only_create' AND item_type = 'folder' THEN 'folder_create_remote'
 			WHEN comparison_kind = 'local_only_create' THEN 'upload'
+			WHEN comparison_kind = 'remote_only_create' AND item_type = 'folder' THEN 'folder_create_local'
 			WHEN comparison_kind = 'remote_only_create' THEN 'download'
 			WHEN comparison_kind = 'create_equal' THEN 'update_synced'
 			WHEN comparison_kind = 'create_conflict' THEN 'conflict_create_create'
 			WHEN comparison_kind = 'unchanged' THEN 'noop'
 			WHEN comparison_kind = 'equal_again' THEN 'update_synced'
+			WHEN comparison_kind = 'local_missing' AND item_type = 'folder' AND remote_changed = 0 THEN 'folder_create_local'
 			WHEN comparison_kind = 'local_missing' AND remote_changed = 0 THEN 'remote_delete'
 			WHEN comparison_kind = 'local_missing' AND remote_changed = 1 THEN 'download'
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 0 THEN 'local_delete'
@@ -298,7 +312,15 @@ reconciliation_state AS (
 		END AS reconciliation_kind
 	FROM comparison_state
 )
-SELECT path, comparison_kind, reconciliation_kind
+SELECT
+	path,
+	item_type,
+	comparison_kind,
+	reconciliation_kind,
+	local_move_target,
+	local_move_source,
+	remote_move_target,
+	remote_move_source
 FROM reconciliation_state
 ORDER BY path`
 )
@@ -324,12 +346,24 @@ type SQLiteComparisonRow struct {
 
 type SQLiteReconciliationRow struct {
 	Path               string
+	ItemType           ItemType
 	ComparisonKind     string
 	ReconciliationKind string
+	LocalMoveTarget    string
+	LocalMoveSource    string
+	RemoteMoveTarget   string
+	RemoteMoveSource   string
 }
 
 func (m *SyncStore) QueryComparisonState(ctx context.Context) ([]SQLiteComparisonRow, error) {
-	rows, err := m.db.QueryContext(ctx, sqlQueryComparisonState)
+	return queryComparisonStateWithRunner(ctx, m.db)
+}
+
+func queryComparisonStateWithRunner(
+	ctx context.Context,
+	runner sqlTxRunner,
+) ([]SQLiteComparisonRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlQueryComparisonState)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
 	}
@@ -387,7 +421,14 @@ func (m *SyncStore) QueryComparisonState(ctx context.Context) ([]SQLiteCompariso
 }
 
 func (m *SyncStore) QueryReconciliationState(ctx context.Context) ([]SQLiteReconciliationRow, error) {
-	rows, err := m.db.QueryContext(ctx, sqlQueryReconciliationState)
+	return queryReconciliationStateWithRunner(ctx, m.db)
+}
+
+func queryReconciliationStateWithRunner(
+	ctx context.Context,
+	runner sqlTxRunner,
+) ([]SQLiteReconciliationRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlQueryReconciliationState)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
 	}
@@ -395,9 +436,28 @@ func (m *SyncStore) QueryReconciliationState(ctx context.Context) ([]SQLiteRecon
 
 	var results []SQLiteReconciliationRow
 	for rows.Next() {
-		var row SQLiteReconciliationRow
-		if err := rows.Scan(&row.Path, &row.ComparisonKind, &row.ReconciliationKind); err != nil {
+		var (
+			row      SQLiteReconciliationRow
+			itemType sql.NullString
+		)
+		if err := rows.Scan(
+			&row.Path,
+			&itemType,
+			&row.ComparisonKind,
+			&row.ReconciliationKind,
+			&row.LocalMoveTarget,
+			&row.LocalMoveSource,
+			&row.RemoteMoveTarget,
+			&row.RemoteMoveSource,
+		); err != nil {
 			return nil, fmt.Errorf("sync: scanning reconciliation state row: %w", err)
+		}
+		if itemType.Valid {
+			parsed, err := ParseItemType(itemType.String)
+			if err != nil {
+				return nil, fmt.Errorf("sync: parsing reconciliation state item type %q: %w", itemType.String, err)
+			}
+			row.ItemType = parsed
 		}
 		results = append(results, row)
 	}

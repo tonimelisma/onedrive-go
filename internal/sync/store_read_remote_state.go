@@ -36,7 +36,7 @@ func (m *SyncStore) ListRemoteState(ctx context.Context) ([]RemoteStateRow, erro
 		return nil, fmt.Errorf("sync: reading configured drive for remote_state: %w", err)
 	}
 
-	return m.queryRemoteStateRows(ctx,
+	return queryRemoteStateRowsWithRunner(ctx, m.db,
 		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
 			previous_path
 		FROM remote_state`,
@@ -44,13 +44,14 @@ func (m *SyncStore) ListRemoteState(ctx context.Context) ([]RemoteStateRow, erro
 	)
 }
 
-func (m *SyncStore) queryRemoteStateRows(
+func queryRemoteStateRowsWithRunner(
 	ctx context.Context,
+	runner sqlTxRunner,
 	query string,
 	configuredDriveID driveid.ID,
 	args ...any,
 ) ([]RemoteStateRow, error) {
-	rows, err := m.db.QueryContext(ctx, query, args...)
+	rows, err := runner.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying remote_state: %w", err)
 	}

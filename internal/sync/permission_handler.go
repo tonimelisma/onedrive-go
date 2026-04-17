@@ -42,13 +42,15 @@ func (ph *PermissionHandler) HasPermChecker() bool {
 	return ph.permChecker != nil
 }
 
-// DeniedPrefixes returns all active remote read-only boundaries. The planner
-// uses these prefixes to suppress remote-mutating actions under known
-// read-only subtrees before they reach execution.
-func (ph *PermissionHandler) DeniedPrefixes(ctx context.Context) []string {
+// ActiveRemoteBlockedBoundaries returns all persisted remote permission
+// boundaries currently blocking write admission under read-only subtrees.
+// The watch/runtime path uses these boundaries for active-scope checks;
+// the legacy dry-run planner still consumes the same path list until that
+// preview path is moved onto snapshot reconciliation.
+func (ph *PermissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) []string {
 	issues, err := ph.store.ListRemoteBlockedFailures(ctx)
 	if err != nil {
-		ph.logger.Warn("DeniedPrefixes: failed to list remote blocked failures",
+		ph.logger.Warn("ActiveRemoteBlockedBoundaries: failed to list remote blocked failures",
 			slog.String("error", err.Error()),
 		)
 
@@ -203,7 +205,7 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 }
 
 func (ph *PermissionHandler) activeRemoteBoundary(ctx context.Context, failedPath string) (string, bool) {
-	for _, boundary := range ph.DeniedPrefixes(ctx) {
+	for _, boundary := range ph.ActiveRemoteBlockedBoundaries(ctx) {
 		if remoteBoundaryContainsPath(failedPath, boundary) {
 			return boundary, true
 		}

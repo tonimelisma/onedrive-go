@@ -167,6 +167,9 @@ func (e *Executor) DeleteLocalFile(ctx context.Context, action *Action, absPath 
 			e.logger.Warn("local delete: hash mismatch, keeping local file and recreating remote",
 				slog.String("path", action.Path),
 			)
+			e.logger.Info("auto-resolving edit-delete conflict: local edit wins",
+				slog.String("path", action.Path),
+			)
 
 			conflictAction := *action
 			conflictAction.ConflictInfo = &ConflictRecord{
@@ -179,7 +182,7 @@ func (e *Executor) DeleteLocalFile(ctx context.Context, action *Action, absPath 
 				LocalMtime:   info.ModTime().UnixNano(),
 			}
 
-			return e.ExecuteEditDeleteConflict(ctx, &conflictAction)
+			return e.ExecuteUpload(ctx, &conflictAction)
 		}
 	}
 

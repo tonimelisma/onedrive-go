@@ -52,84 +52,45 @@ func TestReplaceLocalState_ReplacesWholeSnapshot(t *testing.T) {
 }
 
 // Validates: R-2.1.3
-func TestBuildLocalStateRows_ReconstructsCurrentSnapshotFromBaselineAndScan(t *testing.T) {
+func TestBuildLocalStateRows_UsesDirectSnapshotRows(t *testing.T) {
 	t.Parallel()
 
-	rows := buildLocalStateRows(localStateBaselineFixture(), ScanResult{
-		Events: localStateEventFixture(),
+	rows := buildLocalStateRows(ScanResult{
+		Rows: []LocalStateRow{
+			{
+				Path:     "folder",
+				ItemType: ItemTypeFolder,
+				Mtime:    606,
+			},
+			{
+				Path:            "fresh.txt",
+				ItemType:        ItemTypeFile,
+				Hash:            "hash-fresh",
+				Size:            40,
+				Mtime:           505,
+				ContentIdentity: "hash-fresh",
+			},
+			{
+				Path:            "kept.txt",
+				ItemType:        ItemTypeFile,
+				Hash:            "hash-kept",
+				Size:            10,
+				Mtime:           101,
+				ContentIdentity: "hash-kept",
+			},
+			{
+				Path:            "new-name.txt",
+				ItemType:        ItemTypeFile,
+				Hash:            "hash-moved",
+				Size:            30,
+				Mtime:           404,
+				ContentIdentity: "hash-moved",
+			},
+		},
 	}, 999)
 
 	require.Len(t, rows, 4)
 	assert.Equal(t, expectedLocalStateRows(), rows)
-}
-
-func localStateBaselineFixture() *Baseline {
-	return baselineWith(
-		&BaselineEntry{
-			Path:           "kept.txt",
-			ItemID:         "item-kept",
-			ItemType:       ItemTypeFile,
-			LocalHash:      "hash-kept",
-			LocalSize:      10,
-			LocalSizeKnown: true,
-			LocalMtime:     101,
-		},
-		&BaselineEntry{
-			Path:           "deleted.txt",
-			ItemID:         "item-deleted",
-			ItemType:       ItemTypeFile,
-			LocalHash:      "hash-deleted",
-			LocalSize:      20,
-			LocalSizeKnown: true,
-			LocalMtime:     202,
-		},
-		&BaselineEntry{
-			Path:           "old-name.txt",
-			ItemID:         "item-moved",
-			ItemType:       ItemTypeFile,
-			LocalHash:      "hash-moved",
-			LocalSize:      30,
-			LocalSizeKnown: true,
-			LocalMtime:     303,
-		},
-	)
-}
-
-func localStateEventFixture() []ChangeEvent {
-	return []ChangeEvent{
-		{
-			Source:   SourceLocal,
-			Type:     ChangeDelete,
-			Path:     "deleted.txt",
-			ItemType: ItemTypeFile,
-		},
-		{
-			Source:   SourceLocal,
-			Type:     ChangeMove,
-			Path:     "new-name.txt",
-			OldPath:  "old-name.txt",
-			ItemType: ItemTypeFile,
-			Hash:     "hash-moved",
-			Size:     30,
-			Mtime:    404,
-		},
-		{
-			Source:   SourceLocal,
-			Type:     ChangeCreate,
-			Path:     "fresh.txt",
-			ItemType: ItemTypeFile,
-			Hash:     "hash-fresh",
-			Size:     40,
-			Mtime:    505,
-		},
-		{
-			Source:   SourceLocal,
-			Type:     ChangeCreate,
-			Path:     "folder",
-			ItemType: ItemTypeFolder,
-			Mtime:    606,
-		},
-	}
 }
 
 func expectedLocalStateRows() []LocalStateRow {

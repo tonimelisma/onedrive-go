@@ -8,84 +8,90 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// processBatch plans and dispatches a batch of path changes. On planner
-// error, the batch is skipped and the loop continues. In-flight actions for
-// overlapping paths are canceled and replaced (B-122 deduplication).
-func (rt *watchRuntime) processBatch(
-	ctx context.Context, batch []PathChanges, bl *Baseline,
-	mode Mode, safety *SafetyConfig,
-) []*TrackedAction {
-	return rt.planAndDispatchBatch(ctx, batch, bl, mode, safety, dispatchBatchOptions{
-		deduplicateInFlight:  true,
-		runPeriodicPermCheck: true,
-		clearScannerResolved: true,
-	})
-}
-
-type dispatchBatchOptions struct {
-	deduplicateInFlight  bool
-	runPeriodicPermCheck bool
-	clearScannerResolved bool
-	trialScopeKey        ScopeKey
-	trialPath            string
-	trialDriveID         driveid.ID
-}
-
-func (rt *watchRuntime) planAndDispatchBatch(
+// processDirtyBatch refreshes current truth and replans from SQLite-owned
+// comparison/reconciliation state. Dirty batches are scheduler hints only;
+// the actionable set comes from snapshots plus baseline, never from the batch
+// payload itself.
+func (rt *watchRuntime) processDirtyBatch(
 	ctx context.Context,
-	batch []PathChanges,
+	batch DirtyBatch,
 	bl *Baseline,
 	mode Mode,
 	safety *SafetyConfig,
-	opts dispatchBatchOptions,
 ) []*TrackedAction {
-	rt.engine.logger.Info("processing watch batch",
-		slog.Int("paths", len(batch)),
+	rt.engine.logger.Info("processing watch dirty batch",
+		slog.Int("paths", len(batch.Paths)),
+		slog.Bool("full_refresh", batch.FullRefresh),
 	)
-	rt.engine.collector().RecordWatchBatch(len(batch))
+	rt.engine.collector().RecordWatchBatch(len(batch.Paths))
 
-	if opts.runPeriodicPermCheck {
-		rt.periodicPermRecheck(ctx, bl)
-	}
+	rt.periodicPermRecheck(ctx, bl)
 
-	// R-2.10.10: use scanner output as proof-of-accessibility to clear
-	// permission denials for paths observed in this batch.
-	if opts.clearScannerResolved {
-		rt.scopeController().applyPermissionRecheckDecisions(
-			ctx,
-			rt,
-			rt.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSetFromBatch(batch)),
-		)
-		rt.scopeController().clearResolvedRemoteBlockedFailures(ctx, rt, pathSetFromBatch(batch))
-	}
-
-	denied := rt.engine.permHandler.DeniedPrefixes(ctx)
-	planStart := rt.engine.nowFunc()
-	plan, err := rt.engine.planner.Plan(batch, bl, mode, safety, denied)
+	observeStart := rt.engine.nowFunc()
+	localResult, err := rt.observeLocalChanges(ctx, rt, bl)
 	if err != nil {
-		rt.engine.logger.Error("planner error, skipping batch",
+		rt.engine.logger.Error("watch local refresh failed, skipping dirty batch",
 			slog.String("error", err.Error()),
 		)
+		return nil
+	}
+	commitErr := rt.commitObservedLocalSnapshot(ctx, false, localResult)
+	if commitErr != nil {
+		rt.engine.logger.Error("watch local snapshot commit failed, skipping dirty batch",
+			slog.String("error", commitErr.Error()),
+		)
+		return nil
+	}
+	rt.engine.collector().RecordObserve(len(batch.Paths), rt.engine.since(observeStart))
 
+	planStart := rt.engine.nowFunc()
+	plan, err := rt.buildCurrentActionPlan(ctx, bl, mode, safety)
+	if err != nil {
+		rt.engine.logger.Error("watch sqlite planning failed, skipping dirty batch",
+			slog.String("error", err.Error()),
+		)
 		return nil
 	}
 	rt.engine.collector().RecordPlan(len(plan.Actions), rt.engine.since(planStart))
 
-	if len(plan.Actions) == 0 {
-		rt.engine.logger.Debug("empty plan for batch, nothing to do")
+	if err := rt.materializeCurrentActionPlan(ctx, plan, false); err != nil {
+		rt.engine.logger.Error("watch action-state materialization failed, skipping dirty batch",
+			slog.String("error", err.Error()),
+		)
 		return nil
 	}
 
-	if opts.deduplicateInFlight {
-		rt.deduplicateInFlight(plan)
+	if len(plan.Actions) == 0 {
+		rt.engine.logger.Debug("empty sqlite action plan for dirty batch")
+		return nil
 	}
 
-	dispatch, dispatched := rt.dispatchBatchActions(ctx, plan, opts)
+	rt.deduplicateInFlight(plan)
+
+	dispatch, dispatched := rt.dispatchCurrentPlan(ctx, plan, dispatchBatchOptions{})
 	if !dispatched {
 		return nil
 	}
 
 	return dispatch
+}
+
+type dispatchBatchOptions struct {
+	trialScopeKey ScopeKey
+	trialPath     string
+	trialDriveID  driveid.ID
+}
+
+func (rt *watchRuntime) dispatchCurrentPlan(
+	ctx context.Context,
+	plan *ActionPlan,
+	opts dispatchBatchOptions,
+) ([]*TrackedAction, bool) {
+	if plan == nil || len(plan.Actions) == 0 {
+		return nil, false
+	}
+
+	return rt.dispatchBatchActions(ctx, plan, opts)
 }
 
 // periodicPermRecheck runs permission rechecks at most once per 60 seconds.

@@ -182,7 +182,7 @@ func printStatusPerfText(w io.Writer, ss *syncStateInfo) error {
 	snapshot := ss.Perf
 	actionCount := snapshot.ExecuteActionCount
 	if actionCount == 0 {
-		actionCount = snapshot.PlannedActionCount
+		actionCount = snapshot.ActionableActionCount
 	}
 
 	lines := []struct {

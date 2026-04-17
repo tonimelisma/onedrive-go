@@ -73,16 +73,22 @@ observation and execution metadata.
 
 1. bootstrap durable state and startup checks
 2. refresh current remote and local snapshots once
-3. materialize the latest SQLite-backed plan once
-4. execute once
-5. commit outcomes and return a report
+3. compute SQL structural diff and reconciliation once
+4. build the current actionable set in Go
+5. execute once
+6. commit outcomes and return a report
 
 There is no mid-pass mailbox for user intent. New external DB writes during a
 one-shot run are simply durable state for a later run.
 
-The one-shot pass now persists `local_state` from the full local scan and
-replaces `planned_actions` with the latest SQLite plan generation before
-execution begins.
+The one-shot pass now persists `local_state` from the full local scan, derives
+reconciliation rows from snapshots, and builds the current actionable set in
+Go before execution begins.
+
+Dry-run now uses that same snapshot and SQLite reconciliation path inside a
+rollback-bound transaction. It previews the exact current actionable set
+without advancing observation cursors, mutating `baseline`, or persisting the
+refreshed snapshots.
 
 `sync --full` remains the explicit stronger-freshness path when incremental
 delta visibility is not sufficient.
@@ -92,7 +98,8 @@ delta visibility is not sufficient.
 `RunWatch()` is the long-lived runtime. It owns:
 
 - observer startup and shutdown
-- buffered change intake
+- dirty-signal intake and debounce
+- snapshot refresh and SQLite reconciliation after debounce
 - action admission and dispatch
 - worker result drain
 - retry and trial timer scheduling
@@ -101,6 +108,12 @@ delta visibility is not sufficient.
 
 The watch loop is the single owner of mutable runtime state. Other packages may
 signal it, but they do not mutate its runtime data structures directly.
+
+Local watcher events, remote delta batches, websocket wakes, and full
+reconciliation results are scheduler hints only. After 5 seconds without a new
+local or remote observation, watch mode refreshes current truth, runs SQL
+comparison/reconciliation, builds the current actionable set in Go, and then
+admits runnable actions.
 
 ### Recheck And External DB Changes
 

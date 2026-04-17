@@ -7,7 +7,7 @@ Implements: R-2.5.1 [verified], R-2.5.2 [verified], R-2.5.4 [verified], R-2.10.3
 | Behavior | Evidence |
 | --- | --- |
 | The per-drive SQLite schema remains intentionally narrow and excludes deleted manual conflict/delete-approval state. | `internal/sync/schema_test.go`, `internal/sync/store_integrity_test.go`, `internal/sync/baseline_test.go` |
-| Baseline, current local/remote snapshots, latest planned actions, retry state, and scope-block timers remain the durable sync authority surfaces. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestSyncStore_FailureAdminMutations` |
+| Baseline, current local/remote snapshots, retry state, and scope-block timers remain the durable sync authority surfaces. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestSyncStore_FailureAdminMutations` |
 
 ## One Database Per Drive
 
@@ -29,8 +29,7 @@ narrowed back to whole-drive or separately configured shared-root drives.
 | `baseline` | Last known synced truth for paths/items | `item_id` and unique `path` |
 | `local_state` | Latest observed admissible local snapshot truth | `path` |
 | `remote_state` | Latest observed remote mirror truth | `item_id` |
-| `planned_actions` | Latest generated action plan only | `action_id` |
-| `retry_state` | Pending retryable and blocked work for the latest intent | `action_id` |
+| `retry_state` | Pending retryable and blocked work for the latest semantic intent | `work_key` |
 | `sync_failures` | Per-path retryable and actionable failures | `path` |
 | `scope_blocks` | Durable scope-level blocking conditions and trial timing | `scope_key` |
 | `observation_state` | Configured drive owner, primary cursor, and persisted refresh cadence | singleton row |
@@ -77,30 +76,21 @@ state rather than short-lived event envelopes.
 Ignored content does not enter `local_state`. The table stores only current
 local truth that can participate in reconciliation.
 
-## `planned_actions`
-
-`planned_actions` stores the latest generated plan only. Rows carry:
-
-- plan identity: `plan_id`, `action_id`
-- target path facts: `path`, `old_path`, `action_type`
-- source/target identities for execution preconditions
-- dependency ordering via `dependency_key`
-- latest action `status`
-
-The table is intentionally not an action history log. Each new plan generation
-replaces the previous rows.
-
 ## `retry_state`
 
 `retry_state` is the durable ledger for pending retryable and blocked work
-aligned with the latest generated plan:
+aligned with the latest runtime-owned actionable set:
 
-- plan/action identity: `plan_id`, `action_id`
-- work identity: `path`, `action_type`
+- semantic work identity: `work_key`, `path`, `old_path`, `action_type`
 - blocking linkage: `scope_key`, `blocked`
 - retry timing: `attempt_count`, `next_retry_at`
 - operator/debug facts: `last_error`
 - timestamps: `first_seen_at`, `last_seen_at`
+
+`work_key` is the stable serialized identity for one semantic unit of retryable
+work. It is derived from `action_type`, `old_path`, and `path`, so replans can
+prune stale delayed work against the current actionable set without inventing a
+durable executable plan table.
 
 ## `sync_failures`
 

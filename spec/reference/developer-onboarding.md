@@ -121,14 +121,15 @@ For a sync run:
 
 Inside `internal/sync`, the runtime currently has a hybrid sync pipeline:
 
-- remote observer + local observer -> change buffer -> planner -> executor ->
-  baseline/store updates
-- local/remote snapshot persistence -> SQLite comparison/reconciliation ->
-  latest `planned_actions`, `retry_state`, and `scope_blocks`
+- remote observer + local observer -> dirty debounce scheduler -> snapshot
+  refresh -> SQLite comparison/reconciliation -> Go actionable set ->
+  executor -> baseline/store updates
+- `retry_state` and `scope_blocks` persist retry/trial timing and blocking
+  semantics, not a durable executable plan
 
 The key design choice is that planning stays deterministic and execution owns
-side effects, while SQLite owns current durable truth and the latest persisted
-plan/retry state.
+side effects, while SQLite owns current durable truth and the persisted
+retry/scope state.
 
 ### 3.3 Dev workflow path
 
@@ -483,7 +484,8 @@ The biggest data-model idea is that sync uses a separated durable model:
 
 - `remote_state` is the latest observed remote mirror
 - `baseline` is confirmed synced agreement
-- failures and scope blocks capture durable policy decisions and restart state
+- `retry_state`, `sync_failures`, and `scope_blocks` capture durable retry,
+  reporting, and restart-safe blocking state
 
 That separation is what keeps observation, planning, execution, and recovery
 from collapsing into one mutable pile.

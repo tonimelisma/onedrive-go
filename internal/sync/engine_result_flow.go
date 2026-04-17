@@ -454,6 +454,7 @@ func (flow *engineFlow) recordFailure(
 
 	if recErr := flow.engine.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       r.Path,
+		OldPath:    r.OldPath,
 		DriveID:    driveID,
 		Direction:  direction,
 		ActionType: r.ActionType,

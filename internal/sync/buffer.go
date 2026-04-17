@@ -1,14 +1,11 @@
-// Package sync owns the single-drive runtime, including local/remote
-// observation buffering between the observers and planner.
-// It sits between observers and planner in the sync pipeline: observers
-// produce []ChangeEvent, Buffer groups them into []PathChanges,
-// planner consumes the grouped view. Thread-safe for concurrent observer output.
+// Package sync owns the single-drive runtime, including the debounced dirty
+// scheduler that turns local and remote observations into "refresh/replan now"
+// signals. It does not buffer planner semantics or preserve event history.
 package sync
 
 import (
 	"context"
 	"log/slog"
-	"path"
 	"sort"
 	"sync"
 	"time"
@@ -52,100 +49,104 @@ func newRealDebounceTimer(delay time.Duration) debounceTimer {
 	return &realDebounceTimer{timer: time.NewTimer(delay)}
 }
 
-// Buffer collects ChangeEvents from both observers and groups them
-// by path into PathChanges values for the planner. All methods are
-// safe for concurrent use.
-type Buffer struct {
-	mu       sync.Mutex // guards pending and notify
-	pending  map[string]*PathChanges
-	notify   chan struct{} // signaled on Add/AddAll when FlushDebounced is active; nil otherwise
-	logger   *slog.Logger
-	newTimer func(time.Duration) debounceTimer
+// DirtyBatch is a debounced scheduling signal for refresh/replan work. It is
+// intentionally smaller than planner input: observation records only what may
+// need fresh truth, not what the eventual action set should be.
+type DirtyBatch struct {
+	Paths       []string
+	FullRefresh bool
 }
 
-// NewBuffer creates an empty Buffer ready to accept events.
-func NewBuffer(logger *slog.Logger) *Buffer {
-	logger.Debug("buffer created")
+// DirtyBuffer coalesces dirty paths and full-refresh requests into debounced
+// scheduling batches for the snapshot-first runtime.
+type DirtyBuffer struct {
+	mu          sync.Mutex // guards pending, fullRefresh, and notify
+	pending     map[string]struct{}
+	fullRefresh bool
+	notify      chan struct{}
+	logger      *slog.Logger
+	newTimer    func(time.Duration) debounceTimer
+}
 
-	return &Buffer{
-		pending:  make(map[string]*PathChanges),
+func NewDirtyBuffer(logger *slog.Logger) *DirtyBuffer {
+	return &DirtyBuffer{
+		pending:  make(map[string]struct{}),
 		logger:   logger,
 		newTimer: newRealDebounceTimer,
 	}
 }
 
-// Add records a single event in the buffer, routing it to the correct
-// path group and retaining only the planner-relevant per-path history.
-// Thread-safe. Takes a pointer to avoid copying the 192-byte ChangeEvent
-// struct on each call.
-func (b *Buffer) Add(ev *ChangeEvent) {
+func (b *DirtyBuffer) MarkPath(path string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.addLocked(ev)
+	if path != "" {
+		b.pending[path] = struct{}{}
+	}
+	b.signalNewLocked()
 }
 
-// AddAll appends a batch of events under a single lock acquisition.
-// This avoids per-event lock overhead when processing the full output
-// of a one-shot observer (thousands of events from FullDelta or FullScan).
-func (b *Buffer) AddAll(events []ChangeEvent) {
+func (b *DirtyBuffer) MarkPaths(paths []string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	for i := range events {
-		b.addLocked(&events[i])
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		b.pending[path] = struct{}{}
+	}
+	if len(paths) > 0 {
+		b.signalNewLocked()
 	}
 }
 
-// FlushImmediate returns all buffered PathChanges sorted by path
-// (deterministic ordering for the planner) and clears the buffer.
-// Returns nil for an empty buffer.
-func (b *Buffer) FlushImmediate() []PathChanges {
+func (b *DirtyBuffer) MarkFullRefresh() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if len(b.pending) == 0 {
-		b.logger.Debug("buffer flushed (empty)")
-		return nil
-	}
-
-	result := make([]PathChanges, 0, len(b.pending))
-	for _, pc := range b.pending {
-		result = append(result, *pc)
-	}
-
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Path < result[j].Path
-	})
-
-	count := len(b.pending)
-	b.pending = make(map[string]*PathChanges)
-
-	b.logger.Info("buffer flushed", "paths", count)
-
-	return result
+	b.fullRefresh = true
+	b.signalNewLocked()
 }
 
-// Len returns the number of distinct paths currently buffered.
-func (b *Buffer) Len() int {
+func (b *DirtyBuffer) Len() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	return len(b.pending)
 }
 
-// FlushDebounced returns a channel that emits batches of PathChanges after
-// a debounce window elapses with no new events. Each batch is equivalent to
-// calling FlushImmediate(). The debounce timer resets every time Add() or
-// AddAll() is called. The output channel is closed when the context is
-// canceled; any remaining events are drained in a final batch.
-func (b *Buffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-chan []PathChanges {
-	out := make(chan []PathChanges, 1)
+func (b *DirtyBuffer) FlushImmediate() *DirtyBatch {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if len(b.pending) == 0 && !b.fullRefresh {
+		return nil
+	}
+
+	paths := make([]string, 0, len(b.pending))
+	for path := range b.pending {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	batch := &DirtyBatch{
+		Paths:       paths,
+		FullRefresh: b.fullRefresh,
+	}
+	b.pending = make(map[string]struct{})
+	b.fullRefresh = false
+
+	return batch
+}
+
+func (b *DirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-chan DirtyBatch {
+	out := make(chan DirtyBatch, 1)
 
 	b.mu.Lock()
 	if b.notify != nil {
 		b.mu.Unlock()
-		panic("sync: FlushDebounced called twice on the same Buffer")
+		panic("sync: DirtyBuffer FlushDebounced called twice on the same DirtyBuffer")
 	}
 
 	b.notify = make(chan struct{}, 1)
@@ -156,13 +157,11 @@ func (b *Buffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-c
 	return out
 }
 
-// debounceLoop is the goroutine driving FlushDebounced. It waits for new-event
-// signals, resets the debounce timer, and flushes when the timer expires.
-func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- []PathChanges) {
+func (b *DirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- DirtyBatch) {
 	defer close(out)
 
 	timer := b.newTimer(debounce)
-	timer.Stop() // start idle — no events yet
+	timer.Stop()
 	defer timer.Stop()
 
 	timerActive := false
@@ -170,18 +169,16 @@ func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out c
 	for {
 		select {
 		case <-ctx.Done():
-			// Drain remaining events. Use non-blocking send because
-			// the consumer may have stopped reading (B-103).
 			if batch := b.FlushImmediate(); batch != nil {
 				select {
-				case out <- batch:
+				case out <- *batch:
 				default:
-					b.logger.Warn("final drain discarded: output channel full",
-						slog.Int("paths", len(batch)),
+					b.logger.Warn("dirty buffer final drain discarded: output channel full",
+						slog.Int("paths", len(batch.Paths)),
+						slog.Bool("full_refresh", batch.FullRefresh),
 					)
 				}
 			}
-
 			return
 
 		case _, ok := <-b.notify:
@@ -189,7 +186,6 @@ func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out c
 				return
 			}
 
-			// New event arrived — reset the debounce timer.
 			if timerActive && !timer.Stop() {
 				select {
 				case <-timer.Chan():
@@ -204,13 +200,8 @@ func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out c
 			timerActive = false
 
 			if batch := b.FlushImmediate(); batch != nil {
-				// Blocking send is intentional backpressure (B-128). When the
-				// consumer is slow, events accumulate in the buffer rather than
-				// being dropped. This is correct: the debounce timer won't
-				// re-fire until the consumer reads the batch, at which point
-				// the buffer flushes all accumulated events as one batch.
 				select {
-				case out <- batch:
+				case out <- *batch:
 				case <-ctx.Done():
 					return
 				}
@@ -219,11 +210,7 @@ func (b *Buffer) debounceLoop(ctx context.Context, debounce time.Duration, out c
 	}
 }
 
-// signalNew sends a non-blocking notification to the debounce goroutine.
-// Called from addLocked while the mutex is held. The notify channel is nil
-// until FlushDebounced() is called, so one-shot mode (FlushImmediate only)
-// pays no cost.
-func (b *Buffer) signalNew() {
+func (b *DirtyBuffer) signalNewLocked() {
 	if b.notify == nil {
 		return
 	}
@@ -231,90 +218,5 @@ func (b *Buffer) signalNew() {
 	select {
 	case b.notify <- struct{}{}:
 	default:
-		// Already signaled — debounce goroutine hasn't consumed yet.
 	}
-}
-
-// addLocked is the internal add logic called while the mutex is held.
-// It routes the event to the correct PathChanges entry and handles
-// move dual-keying: a ChangeMove with OldPath produces a synthetic
-// ChangeDelete at the old path so the planner sees both paths.
-func (b *Buffer) addLocked(ev *ChangeEvent) {
-	pc := b.getOrCreate(ev.Path)
-	b.routeEvent(pc, ev)
-
-	b.logger.Debug("event added",
-		"path", ev.Path,
-		"source", ev.Source.String(),
-		"type", ev.Type.String(),
-	)
-
-	// Move dual-keying: ensure the old path enters the planner so
-	// stale baseline entries get cleaned up (no orphaned records).
-	//
-	// Currently only RemoteObserver produces ChangeMove events (from
-	// delta's parentReference changes). LocalObserver detects moves via
-	// hash correlation in the planner, not ChangeMove events. This
-	// dual-keying stays correct if watch-mode local observation later emits
-	// rename events directly instead of relying only on planner correlation.
-	if ev.Type == ChangeMove && ev.OldPath != "" {
-		synthetic := ChangeEvent{
-			Source:    ev.Source,
-			Type:      ChangeDelete,
-			Path:      ev.OldPath,
-			ItemID:    ev.ItemID,
-			ParentID:  ev.ParentID,
-			DriveID:   ev.DriveID,
-			ItemType:  ev.ItemType,
-			Name:      path.Base(ev.OldPath),
-			IsDeleted: true,
-		}
-
-		oldPC := b.getOrCreate(ev.OldPath)
-		b.routeEvent(oldPC, &synthetic)
-
-		b.logger.Debug("synthetic delete for move old path",
-			"old_path", ev.OldPath,
-			"source", ev.Source.String(),
-		)
-	}
-
-	b.signalNew()
-}
-
-// getOrCreate returns the PathChanges for the given path, creating it
-// if it does not yet exist in the pending map.
-func (b *Buffer) getOrCreate(p string) *PathChanges {
-	pc, ok := b.pending[p]
-	if !ok {
-		pc = &PathChanges{Path: p}
-		b.pending[p] = pc
-	}
-
-	return pc
-}
-
-// routeEvent records the event in the correct source slice within PathChanges.
-// Local history keeps only the latest event. Remote history keeps the latest
-// event plus one move marker when needed so the planner can still detect
-// remote moves after a follow-up remote modify in the same debounce window.
-func (b *Buffer) routeEvent(pc *PathChanges, ev *ChangeEvent) {
-	switch ev.Source {
-	case SourceRemote:
-		pc.RemoteEvents = retainRemoteEvents(pc.RemoteEvents, ev)
-	case SourceLocal:
-		pc.LocalEvents = []ChangeEvent{*ev}
-	}
-}
-
-func retainRemoteEvents(existing []ChangeEvent, ev *ChangeEvent) []ChangeEvent {
-	if ev.Type == ChangeMove {
-		return []ChangeEvent{*ev}
-	}
-
-	if len(existing) > 0 && existing[0].Type == ChangeMove {
-		return []ChangeEvent{existing[0], *ev}
-	}
-
-	return []ChangeEvent{*ev}
 }

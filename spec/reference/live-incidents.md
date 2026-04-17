@@ -124,8 +124,9 @@ replaced with one-sided deferral coverage
 (`TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges`,
 `TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges`) plus explicit directional
 conflict regressions for edit/edit, edit/delete, and create/create. Planner
-regression coverage now also asserts that those conflict classes remain
-`ActionConflict` in bidirectional, download-only, and upload-only modes.
+regression coverage now also asserts that those conflict classes expand into
+concrete conflict-copy plus resolved upload/download work in bidirectional,
+download-only, and upload-only modes.
 Promoted docs: [sync.md](../requirements/sync.md), [sync-planning.md](../design/sync-planning.md), [sync-execution.md](../design/sync-execution.md)
 
 ## LI-20260413-01: Directional one-shot sync reported deferred remote drift as `No changes detected`
@@ -228,12 +229,12 @@ Evidence:
   same follow-up treatment to avoid unnecessary re-download or conflict
   re-detection when the next delta still showed the winner that was already on
   disk.
-Resolution / mitigation: queued conflict resolutions now return an
-engine-owned follow-up `PathChanges` batch that `RunOnce` merges before normal
-planning. The canonical conflicted path gets a forced ordinary action
-(`upload` for keep-local, `update_synced` for keep-remote / keep-both) plus a
-synthetic remote view for the chosen outcome, so the same sync pass converges
-instead of re-conflicting. Regression coverage lives in
+Resolution / mitigation: historical note: the older event-shaped runtime used
+an engine-owned follow-up `PathChanges` batch that `RunOnce` merged before
+normal planning. The current snapshot-first runtime no longer uses that
+boundary, but this incident remains useful context for why conflict
+follow-through must converge within the same pass instead of re-conflicting on
+stale remote truth. Regression coverage lives in
 [`internal/sync/engine_watch_test.go`](../../internal/sync/engine_watch_test.go).
 Promoted docs: [sync-engine.md](../design/sync-engine.md)
 

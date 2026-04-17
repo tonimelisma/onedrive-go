@@ -23,6 +23,138 @@ func newTestSyncStoreForFailures(t *testing.T) (*SyncStore, time.Time) {
 	return mgr, fixedTime
 }
 
+// Validates: R-2.10.33
+func TestNormalizeFailureHelpers(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, ActionUpload, normalizeFailureActionType(DirectionUpload, ActionUpload))
+	assert.Equal(t, ActionRemoteDelete, normalizeFailureActionType(DirectionDelete, ActionDownload))
+	assert.Equal(t, ActionCleanup, normalizeFailureActionType(DirectionDownload, ActionCleanup))
+
+	direction, actionType := normalizeFailureIdentity(DirectionDelete, ActionDownload)
+	assert.Equal(t, DirectionDelete, direction)
+	assert.Equal(t, ActionRemoteDelete, actionType)
+
+	assert.Equal(t, ActionDownload, actionTypeForDirection(DirectionDownload))
+	assert.Equal(t, ActionUpload, actionTypeForDirection(DirectionUpload))
+	assert.Equal(t, ActionRemoteDelete, actionTypeForDirection(DirectionDelete))
+	require.Panics(t, func() {
+		_ = actionTypeForDirection(Direction(""))
+	})
+}
+
+// Validates: R-2.10.33
+func TestNormalizeFailureParamsValidation(t *testing.T) {
+	t.Parallel()
+
+	delayFn := func(int) time.Duration { return time.Minute }
+
+	category, role, scopeWire, err := normalizeFailureParams(&SyncFailureParams{
+		Path:      "plain.txt",
+		Direction: DirectionUpload,
+	}, delayFn)
+	require.NoError(t, err)
+	assert.Equal(t, CategoryTransient, category)
+	assert.Equal(t, FailureRoleItem, role)
+	assert.Empty(t, scopeWire)
+
+	category, role, scopeWire, err = normalizeFailureParams(&SyncFailureParams{
+		Path:      "boundary.txt",
+		Direction: DirectionDelete,
+		Role:      FailureRoleBoundary,
+		ScopeKey:  SKService(),
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, CategoryActionable, category)
+	assert.Equal(t, FailureRoleBoundary, role)
+	assert.Equal(t, SKService().String(), scopeWire)
+
+	heldCategory, heldRole, heldScopeWire, err := normalizeFailureParams(&SyncFailureParams{
+		Path:      "held-no-scope.txt",
+		Direction: DirectionUpload,
+		Role:      FailureRoleHeld,
+	}, nil)
+	require.Error(t, err)
+	assert.Empty(t, heldCategory)
+	assert.Empty(t, heldRole)
+	assert.Empty(t, heldScopeWire)
+	assert.Contains(t, err.Error(), "held failures require a scope key")
+
+	heldDelayedCategory, heldDelayedRole, heldDelayedScopeWire, err := normalizeFailureParams(&SyncFailureParams{
+		Path:      "held-with-delay.txt",
+		Direction: DirectionUpload,
+		Role:      FailureRoleHeld,
+		ScopeKey:  SKService(),
+	}, delayFn)
+	require.Error(t, err)
+	assert.Empty(t, heldDelayedCategory)
+	assert.Empty(t, heldDelayedRole)
+	assert.Empty(t, heldDelayedScopeWire)
+	assert.Contains(t, err.Error(), "held failures cannot schedule retry")
+
+	boundaryCategory, boundaryRole, boundaryScopeWire, err := normalizeFailureParams(&SyncFailureParams{
+		Path:      "boundary-with-delay.txt",
+		Direction: DirectionDelete,
+		Role:      FailureRoleBoundary,
+		ScopeKey:  SKService(),
+	}, delayFn)
+	require.Error(t, err)
+	assert.Empty(t, boundaryCategory)
+	assert.Empty(t, boundaryRole)
+	assert.Empty(t, boundaryScopeWire)
+	assert.Contains(t, err.Error(), "boundary failures cannot schedule retry")
+
+	scopedCategory, scopedRole, scopedScopeWire, err := normalizeFailureParams(&SyncFailureParams{
+		Path:      "scoped-without-role.txt",
+		Direction: DirectionUpload,
+		ScopeKey:  SKService(),
+	}, nil)
+	require.Error(t, err)
+	assert.Empty(t, scopedCategory)
+	assert.Empty(t, scopedRole)
+	assert.Empty(t, scopedScopeWire)
+	assert.Contains(t, err.Error(), "scoped failure requires explicit role")
+}
+
+// Validates: R-2.10.33
+func TestNormalizeActionableFailureValidation(t *testing.T) {
+	t.Parallel()
+
+	var err error
+	var role FailureRole
+	var scopeWire string
+
+	role, scopeWire, err = normalizeActionableFailure(&ActionableFailure{
+		Path: "actionable.txt",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, FailureRoleItem, role)
+	assert.Empty(t, scopeWire)
+
+	role, scopeWire, err = normalizeActionableFailure(&ActionableFailure{
+		Path:     "boundary.txt",
+		Role:     FailureRoleBoundary,
+		ScopeKey: SKService(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, FailureRoleBoundary, role)
+	assert.Equal(t, SKService().String(), scopeWire)
+
+	_, _, err = normalizeActionableFailure(&ActionableFailure{
+		Path: "boundary-no-scope.txt",
+		Role: FailureRoleBoundary,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "boundary failures require a scope key")
+
+	_, _, err = normalizeActionableFailure(&ActionableFailure{
+		Path: "held.txt",
+		Role: FailureRoleHeld,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "held failures are never actionable upserts")
+}
+
 func TestRecordFailure_RepeatFailure(t *testing.T) {
 	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()

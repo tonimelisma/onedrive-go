@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"testing"
+	"time"
 
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 
@@ -131,6 +132,130 @@ func TestStatusPerf_FilteredJSON_WithPerfUnavailableFromActiveOwner(t *testing.T
 	require.NotNil(t, decoded.Accounts[0].Drives[0].SyncState)
 	assert.Nil(t, decoded.Accounts[0].Drives[0].SyncState.Perf)
 	assert.Equal(t, statusPerfUnavailableGeneric, decoded.Accounts[0].Drives[0].SyncState.PerfUnavailableReason)
+}
+
+// Validates: R-6.6.15
+func TestStatusPerf_PrintStatusPerfText_UsesActionableCountFallback(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	state := &syncStateInfo{
+		Perf: &perf.Snapshot{
+			DurationMS:            (1250 * time.Millisecond).Milliseconds(),
+			HTTPRequestCount:      4,
+			HTTPRetryCount:        1,
+			HTTPTransportErrors:   2,
+			DBTransactionCount:    3,
+			DBTransactionTimeMS:   (240 * time.Millisecond).Milliseconds(),
+			DownloadCount:         5,
+			DownloadBytes:         64,
+			UploadCount:           6,
+			UploadBytes:           128,
+			ObserveTimeMS:         (100 * time.Millisecond).Milliseconds(),
+			PlanTimeMS:            (200 * time.Millisecond).Milliseconds(),
+			ExecuteTimeMS:         (300 * time.Millisecond).Milliseconds(),
+			ReconcileTimeMS:       (400 * time.Millisecond).Milliseconds(),
+			ActionableActionCount: 7,
+			WatchBatchCount:       8,
+			WatchPathCount:        9,
+		},
+	}
+
+	require.NoError(t, printStatusPerfText(&out, state))
+	rendered := out.String()
+	assert.Contains(t, rendered, "PERF")
+	assert.Contains(t, rendered, "HTTP:")
+	assert.Contains(t, rendered, "4 req, 1 retries, 2 transport errors")
+	assert.Contains(t, rendered, "DB:")
+	assert.Contains(t, rendered, "3 tx in 240ms")
+	assert.Contains(t, rendered, "Transfers:")
+	assert.Contains(t, rendered, "down 5 (64 B), up 6 (128 B)")
+	assert.Contains(t, rendered, "Phases:")
+	assert.Contains(t, rendered, "observe 100ms, plan 200ms, execute 300ms, reconcile 400ms")
+	assert.Contains(t, rendered, "Activity:")
+	assert.Contains(t, rendered, "actions 7, watch batches 8, watch paths 9")
+}
+
+// Validates: R-6.6.15
+func TestStatusPerfOverlayLookupAndPersistentFlags(t *testing.T) {
+	t.Parallel()
+
+	overlay := statusPerfOverlay{
+		enabled:       true,
+		ownerPresent:  true,
+		managedDrives: map[string]struct{}{"drive:a": {}},
+		snapshots: map[string]perf.Snapshot{
+			"drive:a": {HTTPRequestCount: 11},
+		},
+	}
+
+	snapshot, reason := overlay.lookup("drive:a")
+	require.NotNil(t, snapshot)
+	assert.Equal(t, 11, snapshot.HTTPRequestCount)
+	assert.Empty(t, reason)
+
+	snapshot, reason = overlay.lookup("drive:b")
+	assert.Nil(t, snapshot)
+	assert.Equal(t, statusPerfUnavailableInactive, reason)
+
+	overlay.managedDrives["drive:b"] = struct{}{}
+	snapshot, reason = overlay.lookup("drive:b")
+	assert.Nil(t, snapshot)
+	assert.Equal(t, statusPerfUnavailableCollecting, reason)
+
+	state := &syncStateInfo{
+		LastSyncTime:           "yesterday",
+		StateStoreStatus:       "healthy",
+		StateStoreRecoveryHint: "none",
+	}
+	assert.True(t, state.hasPersistentSummaryData())
+	assert.True(t, state.hasPersistentStoreData())
+	assert.True(t, state.hasPersistentStatusData())
+}
+
+// Validates: R-6.6.15
+func TestStatusPerfOverlayApplyAndUnavailableBranches(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	require.NoError(t, printStatusPerfText(&out, &syncStateInfo{
+		PerfUnavailableReason: statusPerfUnavailableGeneric,
+	}))
+	assert.Contains(t, out.String(), "Live performance unavailable: "+statusPerfUnavailableGeneric)
+
+	assert.Equal(t, "0s", formatPerfElapsed(0))
+
+	disabledSnapshot, disabledReason := (statusPerfOverlay{}).lookup("drive:a")
+	assert.Nil(t, disabledSnapshot)
+	assert.Empty(t, disabledReason)
+
+	noOwnerSnapshot, noOwnerReason := (statusPerfOverlay{
+		enabled:           true,
+		unavailableReason: statusPerfUnavailableNoOwner,
+	}).lookup("drive:a")
+	assert.Nil(t, noOwnerSnapshot)
+	assert.Equal(t, statusPerfUnavailableNoOwner, noOwnerReason)
+
+	accounts := []statusAccount{{
+		Drives: []statusDrive{{
+			CanonicalID: "drive:a",
+			SyncState:   nil,
+		}},
+	}}
+	applyStatusPerfOverlay(accounts, statusPerfOverlay{
+		enabled:       true,
+		ownerPresent:  true,
+		managedDrives: map[string]struct{}{"drive:a": {}},
+		snapshots: map[string]perf.Snapshot{
+			"drive:a": {DurationMS: 1500},
+		},
+	})
+	require.NotNil(t, accounts[0].Drives[0].SyncState)
+	require.NotNil(t, accounts[0].Drives[0].SyncState.Perf)
+	assert.Equal(t, int64(1500), accounts[0].Drives[0].SyncState.Perf.DurationMS)
+
+	var nilState *syncStateInfo
+	assert.False(t, nilState.hasPersistentStatusData())
 }
 
 func writeStatusPerfConfig(t *testing.T, cid driveid.CanonicalID) string {

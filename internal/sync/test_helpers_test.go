@@ -49,19 +49,6 @@ func newBaselineForTest(entries []*BaselineEntry) *Baseline {
 	return NewBaselineForTest(entries)
 }
 
-// actionsOfType filters a flat action list to a single type.
-func actionsOfType(actions []Action, actionType ActionType) []Action {
-	var result []Action
-
-	for i := range actions {
-		if actions[i].Type == actionType {
-			result = append(result, actions[i])
-		}
-	}
-
-	return result
-}
-
 // testLogger returns a *slog.Logger wired to t.Log for clean test output.
 func testLogger(t *testing.T) *slog.Logger {
 	t.Helper()

@@ -319,9 +319,8 @@ func (e *Engine) repairPersistedAccountAuthRequirement(
 //  1. Load baseline
 //  2. Observe remote truth
 //  3. Observe local truth
-//  4. Buffer and flush changes plus durable retry/replay work
-//  5. Early return if no changes
-//  6. Plan actions (flat list + dependency edges)
-//  7. Return early if dry-run
-//  8. Build DepGraph, start worker pool
-//  9. Wait for completion, commit delta token
+//  4. Derive SQL comparison and reconciliation from current snapshots
+//  5. Build the current actionable set in Go
+//  6. Return early if dry-run
+//  7. Build DepGraph, start worker pool
+//  8. Wait for completion, commit delta token

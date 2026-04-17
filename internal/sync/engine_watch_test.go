@@ -495,8 +495,10 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 		},
 	}
 
-	eng, _ := newTestEngine(t, mock)
+	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
+	content := "hello"
+	contentHash := hashContentQuickXor(t, content)
 
 	// Seed baseline with a synced file.
 	seedOutcomes := []ActionOutcome{{
@@ -506,37 +508,35 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 		DriveID:         driveID,
 		ItemID:          "item-as",
 		ItemType:        ItemTypeFile,
-		RemoteHash:      "samehash",
-		LocalHash:       "samehash",
+		RemoteHash:      contentHash,
+		LocalHash:       contentHash,
 		LocalSize:       5,
 		LocalSizeKnown:  true,
 		RemoteSize:      5,
 		RemoteSizeKnown: true,
 	}}
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
+	writeLocalFile(t, syncRoot, "already-synced.txt", content)
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err, "Load")
 
-	// A "change" that matches baseline exactly → planner produces empty plan.
-	batch := []PathChanges{{
-		Path: "already-synced.txt",
-		RemoteEvents: []ChangeEvent{{
-			Source:  SourceRemote,
-			Type:    ChangeModify,
-			Path:    "already-synced.txt",
-			ItemID:  "item-as",
-			DriveID: driveID,
-			Hash:    "samehash",
-			Size:    5,
-		}},
-	}}
-
 	setupWatchEngine(t, eng)
 	safety := DefaultSafetyConfig()
 
-	// Should return without error or dispatching actions.
-	processBatchForTest(t, eng, ctx, batch, bl, safety)
+	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item-as",
+		Path:     "already-synced.txt",
+		ItemType: ItemTypeFile,
+		Hash:     contentHash,
+		Size:     5,
+	}}, ""))
+
+	dispatch := testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
+		Paths: []string{"already-synced.txt"},
+	}, bl, SyncBidirectional, safety)
+	assert.Nil(t, dispatch)
 }
 
 // TestRunWatch_Deduplication verifies that processBatch cancels in-flight
@@ -563,40 +563,36 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	setupWatchEngine(t, eng)
 	safety := DefaultSafetyConfig()
 
-	// First batch: download a file.
-	batch1 := []PathChanges{{
-		Path: "overlapping.txt",
-		RemoteEvents: []ChangeEvent{{
-			Source:  SourceRemote,
-			Type:    ChangeCreate,
-			Path:    "overlapping.txt",
-			DriveID: driveID,
-			ItemID:  "item-1",
-			Hash:    "hash-v1",
-			Size:    10,
-		}},
-	}}
+	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item-1",
+		Path:     "overlapping.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash-v1",
+		Size:     10,
+	}}, ""))
 
-	processBatchForTest(t, eng, ctx, batch1, bl, safety)
+	dispatch := testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
+		Paths: []string{"overlapping.txt"},
+	}, bl, SyncBidirectional, safety)
+	assert.NotNil(t, dispatch)
 
 	// Verify the action is in-flight.
 	require.True(t, testWatchRuntime(t, eng).depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after first batch")
 
-	// Second batch: same path, different content. Should cancel the first.
-	batch2 := []PathChanges{{
-		Path: "overlapping.txt",
-		RemoteEvents: []ChangeEvent{{
-			Source:  SourceRemote,
-			Type:    ChangeModify,
-			Path:    "overlapping.txt",
-			DriveID: driveID,
-			ItemID:  "item-1",
-			Hash:    "hash-v2",
-			Size:    20,
-		}},
-	}}
+	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item-1",
+		Path:     "overlapping.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash-v2",
+		Size:     20,
+	}}, ""))
 
-	processBatchForTest(t, eng, ctx, batch2, bl, safety)
+	dispatch = testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
+		Paths: []string{"overlapping.txt"},
+	}, bl, SyncBidirectional, safety)
+	assert.NotNil(t, dispatch)
 
 	// The second batch should have replaced the first.
 	// We can't easily verify cancellation directly, but we can verify

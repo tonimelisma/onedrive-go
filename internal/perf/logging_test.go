@@ -104,6 +104,28 @@ func TestRuntimeCapture_FullDetailManifestIncludesDriveSnapshots(t *testing.T) {
 	assert.Equal(t, int64(2), manifest.DriveSnapshots["personal:bob@example.com"].DownloadBytes)
 }
 
+// Validates: R-6.6.14
+func TestSnapshotAttrs_UsesActionableActionField(t *testing.T) {
+	t.Parallel()
+
+	attrs := SnapshotAttrs(&Snapshot{
+		CommandBytes:          512,
+		PlanRunCount:          1,
+		ActionableActionCount: 4,
+		PlanTimeMS:            25,
+	})
+
+	attrMap := make(map[string]any, len(attrs))
+	for i := range attrs {
+		attrMap[attrs[i].Key] = attrs[i].Value.Any()
+	}
+
+	assert.Equal(t, int64(512), attrMap["command_bytes"])
+	assert.Equal(t, int64(1), attrMap["plan_runs"])
+	assert.Equal(t, int64(4), attrMap["actionable_actions"])
+	assert.Equal(t, int64(25), attrMap["plan_time_ms"])
+}
+
 func newTestJSONLogger(buf *lockedBuffer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(buf, nil))
 }

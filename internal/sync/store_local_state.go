@@ -2,8 +2,8 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
-	"sort"
 )
 
 const (
@@ -31,6 +31,27 @@ func (m *SyncStore) ReplaceLocalState(
 		err = finalizeTxRollback(err, tx, "sync: rollback local_state transaction")
 	}()
 
+	if err := replaceLocalStateTx(ctx, tx, rows); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing local_state transaction: %w", err)
+	}
+
+	return nil
+}
+
+// ListLocalState returns the durable local snapshot rows in path order.
+func (m *SyncStore) ListLocalState(ctx context.Context) ([]LocalStateRow, error) {
+	return listLocalStateRows(ctx, m.db)
+}
+
+func replaceLocalStateTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	rows []LocalStateRow,
+) error {
 	if _, err := tx.ExecContext(ctx, sqlDeleteLocalState); err != nil {
 		return fmt.Errorf("sync: deleting local_state rows: %w", err)
 	}
@@ -50,16 +71,11 @@ func (m *SyncStore) ReplaceLocalState(
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing local_state transaction: %w", err)
-	}
-
 	return nil
 }
 
-// ListLocalState returns the durable local snapshot rows in path order.
-func (m *SyncStore) ListLocalState(ctx context.Context) ([]LocalStateRow, error) {
-	rows, err := m.db.QueryContext(ctx, sqlListLocalState)
+func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]LocalStateRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlListLocalState)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying local_state: %w", err)
 	}
@@ -67,18 +83,32 @@ func (m *SyncStore) ListLocalState(ctx context.Context) ([]LocalStateRow, error)
 
 	var result []LocalStateRow
 	for rows.Next() {
-		var row LocalStateRow
+		var (
+			row             LocalStateRow
+			hash            sql.NullString
+			size            sql.NullInt64
+			mtime           sql.NullInt64
+			contentIdentity sql.NullString
+		)
 		if err := rows.Scan(
 			&row.Path,
 			&row.ItemType,
-			&row.Hash,
-			&row.Size,
-			&row.Mtime,
-			&row.ContentIdentity,
+			&hash,
+			&size,
+			&mtime,
+			&contentIdentity,
 			&row.ObservedAt,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning local_state row: %w", err)
 		}
+		row.Hash = hash.String
+		if size.Valid {
+			row.Size = size.Int64
+		}
+		if mtime.Valid {
+			row.Mtime = mtime.Int64
+		}
+		row.ContentIdentity = contentIdentity.String
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -88,81 +118,12 @@ func (m *SyncStore) ListLocalState(ctx context.Context) ([]LocalStateRow, error)
 	return result, nil
 }
 
-func buildLocalStateRows(
-	bl *Baseline,
-	result ScanResult,
-	observedAt int64,
-) []LocalStateRow {
-	current := make(map[string]LocalStateRow)
-	if bl != nil {
-		bl.ForEachPath(func(path string, entry *BaselineEntry) {
-			if entry == nil {
-				return
-			}
-
-			row := LocalStateRow{
-				Path:       path,
-				ItemType:   entry.ItemType,
-				Hash:       entry.LocalHash,
-				Mtime:      entry.LocalMtime,
-				ObservedAt: observedAt,
-			}
-			if entry.LocalSizeKnown {
-				row.Size = entry.LocalSize
-			}
-			if entry.ItemType == ItemTypeFile {
-				row.ContentIdentity = entry.LocalHash
-			}
-
-			current[path] = row
-		})
-	}
-
-	for i := range result.Events {
-		event := &result.Events[i]
-		if event.Source != SourceLocal {
-			continue
-		}
-
-		switch event.Type {
-		case ChangeDelete:
-			delete(current, event.Path)
-		case ChangeMove:
-			if event.OldPath != "" {
-				delete(current, event.OldPath)
-			}
-			current[event.Path] = localStateRowFromEvent(event, observedAt)
-		case ChangeCreate, ChangeModify:
-			current[event.Path] = localStateRowFromEvent(event, observedAt)
-		}
-	}
-
-	paths := make([]string, 0, len(current))
-	for path := range current {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
-	rows := make([]LocalStateRow, 0, len(paths))
-	for _, path := range paths {
-		rows = append(rows, current[path])
+func buildLocalStateRows(result ScanResult, observedAt int64) []LocalStateRow {
+	rows := make([]LocalStateRow, len(result.Rows))
+	copy(rows, result.Rows)
+	for i := range rows {
+		rows[i].ObservedAt = observedAt
 	}
 
 	return rows
-}
-
-func localStateRowFromEvent(event *ChangeEvent, observedAt int64) LocalStateRow {
-	row := LocalStateRow{
-		Path:       event.Path,
-		ItemType:   event.ItemType,
-		Hash:       event.Hash,
-		Size:       event.Size,
-		Mtime:      event.Mtime,
-		ObservedAt: observedAt,
-	}
-	if event.ItemType == ItemTypeFile {
-		row.ContentIdentity = event.Hash
-	}
-
-	return row
 }

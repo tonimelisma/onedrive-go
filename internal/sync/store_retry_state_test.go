@@ -11,18 +11,13 @@ import (
 )
 
 // Validates: R-2.1.3
-func TestUpsertRetryStateAndPruneToLatestPlan(t *testing.T) {
+func TestUpsertRetryStateAndPruneToCurrentActions(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplacePlannedActions(ctx, "plan-1", []PlannedActionRow{
-		{Path: "keep.txt", ActionType: ActionUpload},
-	}))
-
 	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
-		PlanID:       "old-plan",
 		Path:         "keep.txt",
 		ActionType:   ActionUpload,
 		AttemptCount: 2,
@@ -32,7 +27,6 @@ func TestUpsertRetryStateAndPruneToLatestPlan(t *testing.T) {
 		LastSeenAt:   2,
 	}))
 	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
-		PlanID:       "old-plan",
 		Path:         "drop.txt",
 		ActionType:   ActionDownload,
 		AttemptCount: 1,
@@ -42,13 +36,51 @@ func TestUpsertRetryStateAndPruneToLatestPlan(t *testing.T) {
 		LastSeenAt:   4,
 	}))
 
-	require.NoError(t, store.PruneRetryStateToLatestPlan(ctx))
+	require.NoError(t, store.PruneRetryStateToCurrentActions(ctx, []RetryWorkKey{
+		{Path: "keep.txt", ActionType: ActionUpload},
+	}))
 
 	rows, err := store.ListRetryState(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "keep.txt", rows[0].Path)
 	assert.Equal(t, ActionUpload, rows[0].ActionType)
+}
+
+// Validates: R-2.10.33
+func TestRetryStatePruneDistinguishesOldPathSemanticWork(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "dest.txt",
+		OldPath:      "src-a.txt",
+		ActionType:   ActionRemoteMove,
+		AttemptCount: 1,
+		FirstSeenAt:  1,
+		LastSeenAt:   2,
+	}))
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "dest.txt",
+		OldPath:      "src-b.txt",
+		ActionType:   ActionRemoteMove,
+		AttemptCount: 1,
+		FirstSeenAt:  3,
+		LastSeenAt:   4,
+	}))
+
+	require.NoError(t, store.PruneRetryStateToCurrentActions(ctx, []RetryWorkKey{
+		{Path: "dest.txt", OldPath: "src-b.txt", ActionType: ActionRemoteMove},
+	}))
+
+	rows, err := store.ListRetryState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "dest.txt", rows[0].Path)
+	assert.Equal(t, "src-b.txt", rows[0].OldPath)
+	assert.NotEmpty(t, rows[0].WorkKey)
 }
 
 // Validates: R-2.10.33
@@ -98,6 +130,82 @@ func TestRetryStateReadyAndTrialCandidateQueries(t *testing.T) {
 	require.True(t, found)
 	require.NotNil(t, candidate)
 	assert.Equal(t, "blocked.txt", candidate.Path)
+}
+
+// Validates: R-2.10.33
+func TestRetryStateScopeReadyAndDeleteHelpers(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	now := time.Unix(75, 0).UnixNano()
+
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "delete-me.txt",
+		ActionType:   ActionUpload,
+		AttemptCount: 1,
+		FirstSeenAt:  1,
+		LastSeenAt:   2,
+	}))
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "blocked-a.txt",
+		ActionType:   ActionRemoteDelete,
+		ScopeKey:     SKService(),
+		Blocked:      true,
+		AttemptCount: 2,
+		FirstSeenAt:  3,
+		LastSeenAt:   4,
+	}))
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "blocked-b.txt",
+		ActionType:   ActionRemoteDelete,
+		ScopeKey:     SKService(),
+		Blocked:      true,
+		AttemptCount: 3,
+		FirstSeenAt:  5,
+		LastSeenAt:   6,
+	}))
+
+	require.NoError(t, deleteRetryStateByPathTx(ctx, store.db, "delete-me.txt"))
+	require.NoError(t, markRetryStateScopeReadyTx(ctx, store.db, SKService().String(), now))
+
+	rows, err := store.ListRetryState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	for _, row := range rows {
+		assert.Equal(t, SKService(), row.ScopeKey)
+		assert.False(t, row.Blocked)
+		assert.Equal(t, now, row.NextRetryAt)
+	}
+
+	require.NoError(t, deleteRetryStateByScopeTx(ctx, store.db, SKService().String()))
+
+	rows, err = store.ListRetryState(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+}
+
+// Validates: R-2.10.33
+func TestRetryStatePickTrialCandidate_NoRowsAndNilDestination(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	candidate, found, err := store.PickRetryTrialCandidate(ctx, SKService())
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Nil(t, candidate)
+
+	err = scanRetryStateRow(nilRetryStateScanner{}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil destination")
+}
+
+type nilRetryStateScanner struct{}
+
+func (nilRetryStateScanner) Scan(...any) error {
+	return nil
 }
 
 // Validates: R-2.10.33
@@ -152,11 +260,6 @@ func TestRecordFailure_MirrorsTransientAndHeldRowsIntoRetryState(t *testing.T) {
 	now := time.Unix(100, 0)
 	store.SetNowFunc(func() time.Time { return now })
 
-	require.NoError(t, store.ReplacePlannedActions(ctx, "plan-1", []PlannedActionRow{
-		{Path: "retry.txt", ActionType: ActionUpload},
-		{Path: "blocked.txt", ActionType: ActionRemoteDelete},
-	}))
-
 	require.NoError(t, store.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "retry.txt",
 		DriveID:    driveID,
@@ -191,11 +294,39 @@ func TestRecordFailure_MirrorsTransientAndHeldRowsIntoRetryState(t *testing.T) {
 
 	assert.False(t, byPath["retry.txt"].Blocked)
 	assert.Equal(t, now.Add(time.Minute).UnixNano(), byPath["retry.txt"].NextRetryAt)
-	assert.Equal(t, "plan-1", byPath["retry.txt"].PlanID)
+	assert.NotEmpty(t, byPath["retry.txt"].WorkKey)
 
 	assert.True(t, byPath["blocked.txt"].Blocked)
 	assert.Equal(t, int64(0), byPath["blocked.txt"].NextRetryAt)
 	assert.Equal(t, SKService(), byPath["blocked.txt"].ScopeKey)
+}
+
+// Validates: R-2.10.33
+func TestRecordFailure_MirrorsMoveOldPathIntoRetryState(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, store.RecordFailure(ctx, &SyncFailureParams{
+		Path:       "dest.txt",
+		OldPath:    "src.txt",
+		DriveID:    driveID,
+		Direction:  DirectionDownload,
+		ActionType: ActionRemoteMove,
+		Role:       FailureRoleItem,
+		Category:   CategoryTransient,
+		IssueType:  IssueServiceOutage,
+		ErrMsg:     "move later",
+	}, func(int) time.Duration { return time.Minute }))
+
+	rows, err := store.ListRetryState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "dest.txt", rows[0].Path)
+	assert.Equal(t, "src.txt", rows[0].OldPath)
+	assert.NotEmpty(t, rows[0].WorkKey)
 }
 
 // Validates: R-2.10.33

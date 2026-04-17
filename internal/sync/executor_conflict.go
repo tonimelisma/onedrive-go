@@ -5,100 +5,93 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// ExecuteConflict handles conflict resolution. For edit-delete conflicts,
-// the modified local version wins automatically (industry consensus). For
-// all others, keep_both: rename local to a conflict copy, download remote.
-func (e *Executor) ExecuteConflict(ctx context.Context, action *Action) ActionOutcome {
-	// Edit-delete: local was modified, remote was deleted. Upload local file
-	// to re-create remote, record as auto-resolved. No conflict copy needed.
-	if action.ConflictInfo != nil && action.ConflictInfo.ConflictType == ConflictEditDelete {
-		return e.ExecuteEditDeleteConflict(ctx, action)
-	}
-
+// ExecuteConflictCopy preserves the local canonical file by renaming it to a
+// unique conflict-copy path. It performs no baseline or remote mutation; the
+// current-state planner schedules any follow-up download/upload action
+// separately.
+func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) ActionOutcome {
 	absPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
-		return e.failedConflictOutcome(
+		return e.failedOutcomeWithFailure(
 			action,
+			ActionConflictCopy,
 			normalizeSyncTreePathError(err),
 			action.Path,
 			PermissionCapabilityLocalWrite,
 		)
 	}
 
-	// Step 1: Rename local to conflict copy (if it exists).
 	conflictPath, err := e.uniqueConflictCopyPath(absPath)
 	if err != nil {
-		return e.failedConflictOutcome(action, err, action.Path, PermissionCapabilityLocalWrite)
+		return e.failedOutcomeWithFailure(action, ActionConflictCopy, err, action.Path, PermissionCapabilityLocalWrite)
 	}
 	conflictRel, err := e.syncTree.Rel(conflictPath)
 	if err != nil {
-		return e.failedConflictOutcome(
+		return e.failedOutcomeWithFailure(
 			action,
+			ActionConflictCopy,
 			normalizeSyncTreePathError(err),
 			action.Path,
 			PermissionCapabilityLocalWrite,
 		)
 	}
-	localExists := true
 
 	if err := e.syncTree.Rename(action.Path, conflictRel); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			// Local file absent — skip rename, proceed to download.
-			localExists = false
-		} else {
-			return e.failedConflictOutcome(
-				action,
-				fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(conflictPath), normalizeSyncTreePathError(err)),
-				action.Path,
-				PermissionCapabilityLocalWrite,
-			)
-		}
-	}
-
-	if localExists {
-		e.logger.Debug("saved conflict copy",
-			slog.String("path", action.Path),
-			slog.String("conflict_copy", filepath.Base(conflictPath)),
-		)
-	}
-
-	// Step 2: Download remote to original path.
-	downloadOutcome := e.ExecuteDownload(ctx, action)
-	if !downloadOutcome.Success {
-		// Download failed — restore local from conflict copy if we moved it.
-		if localExists {
-			if restoreErr := e.syncTree.Rename(conflictRel, action.Path); restoreErr != nil {
-				e.logger.Error("failed to restore local after download failure",
-					slog.String("path", action.Path),
-					slog.String("error", restoreErr.Error()),
-				)
+			outcome := ActionOutcome{
+				Action:   ActionConflictCopy,
+				Success:  true,
+				Path:     action.Path,
+				DriveID:  e.resolveDriveID(action),
+				ItemID:   action.ItemID,
+				OldPath:  action.Path,
+				ParentID: resolvedUploadParentID(action, nil),
 			}
+			decorateConflictOutcome(action, &outcome)
+			return outcome
 		}
 
-		return e.failedConflictOutcome(
+		return e.failedOutcomeWithFailure(
 			action,
-			fmt.Errorf("downloading remote during conflict resolution for %s: %w", action.Path, downloadOutcome.Error),
-			conflictFailurePath(&downloadOutcome, action.Path),
-			conflictFailureCapability(&downloadOutcome, PermissionCapabilityLocalWrite, PermissionCapabilityRemoteRead),
+			ActionConflictCopy,
+			fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(conflictPath), normalizeSyncTreePathError(err)),
+			action.Path,
+			PermissionCapabilityLocalWrite,
 		)
 	}
 
-	// Build conflict outcome from the download result.
-	o := downloadOutcome
-	o.Action = ActionConflict
+	e.logger.Debug("saved conflict copy",
+		slog.String("path", action.Path),
+		slog.String("conflict_copy", filepath.Base(conflictPath)),
+	)
 
-	if action.ConflictInfo != nil {
-		o.ConflictType = action.ConflictInfo.ConflictType
+	outcome := ActionOutcome{
+		Action:  ActionConflictCopy,
+		Success: true,
+		Path:    action.Path,
+		OldPath: conflictRel,
+		DriveID: e.resolveDriveID(action),
+		ItemID:  action.ItemID,
+	}
+	decorateConflictOutcome(action, &outcome)
+	return outcome
+}
+
+func decorateConflictOutcome(action *Action, outcome *ActionOutcome) {
+	if action == nil || action.ConflictInfo == nil || outcome == nil {
+		return
 	}
 
-	return o
+	outcome.ConflictType = action.ConflictInfo.ConflictType
+	if action.ConflictInfo.ConflictType == ConflictEditDelete && outcome.Action == ActionUpload {
+		outcome.ResolvedBy = ResolvedByAuto
+	}
 }
 
 // uniqueConflictCopyPath returns the first available conflict-copy path for an
@@ -148,38 +141,6 @@ func (e *Executor) conflictCopyPathAvailable(absPath string) (bool, error) {
 	return false, fmt.Errorf("stating conflict copy path %s: %w", filepath.Base(absPath), normalizeSyncTreePathError(err))
 }
 
-// ExecuteEditDeleteConflict auto-resolves edit-delete conflicts by uploading
-// the locally modified file to re-create it on the remote side. The local
-// version wins automatically — industry consensus (rclone, Dropbox, Google
-// Drive, OneDrive official, abraunegg).
-func (e *Executor) ExecuteEditDeleteConflict(ctx context.Context, action *Action) ActionOutcome {
-	e.logger.Info("auto-resolving edit-delete conflict: local edit wins",
-		slog.String("path", action.Path),
-	)
-
-	uploadOutcome := e.ExecuteUpload(ctx, action)
-	if !uploadOutcome.Success {
-		return e.failedConflictOutcome(
-			action,
-			fmt.Errorf("uploading local during edit-delete auto-resolve for %s: %w", action.Path, uploadOutcome.Error),
-			conflictFailurePath(&uploadOutcome, action.Path),
-			conflictFailureCapability(&uploadOutcome, PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite),
-		)
-	}
-
-	// Build conflict outcome from the upload result.
-	o := uploadOutcome
-	o.Action = ActionConflict
-	o.ConflictType = ConflictEditDelete
-	o.ResolvedBy = ResolvedByAuto
-
-	if action.View != nil && action.View.Remote != nil {
-		o.RemoteMtime = action.View.Remote.Mtime
-	}
-
-	return o
-}
-
 // ConflictCopyPath generates a timestamped conflict copy path.
 // "file.txt" -> "file.conflict-20260101-120000.txt"
 // ".bashrc"  -> ".bashrc.conflict-20260101-120000" (dotfile: no separate ext)
@@ -209,54 +170,4 @@ func ConflictStemExt(name string) (string, string) {
 	stem := name[:len(name)-len(ext)]
 
 	return stem, ext
-}
-
-func (e *Executor) failedConflictOutcome(
-	action *Action,
-	err error,
-	failurePath string,
-	failureCapability PermissionCapability,
-) ActionOutcome {
-	outcome := e.failedOutcome(action, ActionConflict, err)
-	if failurePath != "" {
-		outcome.FailurePath = failurePath
-	}
-	outcome.FailureCapability = failureCapability
-
-	return outcome
-}
-
-func conflictFailurePath(outcome *ActionOutcome, fallback string) string {
-	if outcome == nil {
-		return fallback
-	}
-	if outcome.FailurePath != "" {
-		return outcome.FailurePath
-	}
-	if outcome.Path != "" {
-		return outcome.Path
-	}
-
-	return fallback
-}
-
-func conflictFailureCapability(
-	outcome *ActionOutcome,
-	localCapability PermissionCapability,
-	remoteCapability PermissionCapability,
-) PermissionCapability {
-	if outcome == nil {
-		return PermissionCapabilityUnknown
-	}
-	if outcome.FailureCapability != PermissionCapabilityUnknown {
-		return outcome.FailureCapability
-	}
-	if errors.Is(outcome.Error, os.ErrPermission) {
-		return localCapability
-	}
-	if ExtractHTTPStatus(outcome.Error) == http.StatusForbidden {
-		return remoteCapability
-	}
-
-	return PermissionCapabilityUnknown
 }
