@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"fmt"
-	"sort"
 )
 
 const (
@@ -88,81 +87,12 @@ func (m *SyncStore) ListLocalState(ctx context.Context) ([]LocalStateRow, error)
 	return result, nil
 }
 
-func buildLocalStateRows(
-	bl *Baseline,
-	result ScanResult,
-	observedAt int64,
-) []LocalStateRow {
-	current := make(map[string]LocalStateRow)
-	if bl != nil {
-		bl.ForEachPath(func(path string, entry *BaselineEntry) {
-			if entry == nil {
-				return
-			}
-
-			row := LocalStateRow{
-				Path:       path,
-				ItemType:   entry.ItemType,
-				Hash:       entry.LocalHash,
-				Mtime:      entry.LocalMtime,
-				ObservedAt: observedAt,
-			}
-			if entry.LocalSizeKnown {
-				row.Size = entry.LocalSize
-			}
-			if entry.ItemType == ItemTypeFile {
-				row.ContentIdentity = entry.LocalHash
-			}
-
-			current[path] = row
-		})
-	}
-
-	for i := range result.Events {
-		event := &result.Events[i]
-		if event.Source != SourceLocal {
-			continue
-		}
-
-		switch event.Type {
-		case ChangeDelete:
-			delete(current, event.Path)
-		case ChangeMove:
-			if event.OldPath != "" {
-				delete(current, event.OldPath)
-			}
-			current[event.Path] = localStateRowFromEvent(event, observedAt)
-		case ChangeCreate, ChangeModify:
-			current[event.Path] = localStateRowFromEvent(event, observedAt)
-		}
-	}
-
-	paths := make([]string, 0, len(current))
-	for path := range current {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
-	rows := make([]LocalStateRow, 0, len(paths))
-	for _, path := range paths {
-		rows = append(rows, current[path])
+func buildLocalStateRows(result ScanResult, observedAt int64) []LocalStateRow {
+	rows := make([]LocalStateRow, len(result.Rows))
+	copy(rows, result.Rows)
+	for i := range rows {
+		rows[i].ObservedAt = observedAt
 	}
 
 	return rows
-}
-
-func localStateRowFromEvent(event *ChangeEvent, observedAt int64) LocalStateRow {
-	row := LocalStateRow{
-		Path:       event.Path,
-		ItemType:   event.ItemType,
-		Hash:       event.Hash,
-		Size:       event.Size,
-		Mtime:      event.Mtime,
-		ObservedAt: observedAt,
-	}
-	if event.ItemType == ItemTypeFile {
-		row.ContentIdentity = event.Hash
-	}
-
-	return row
 }

@@ -7,9 +7,10 @@ Implements: R-2.1.2 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [
 ## Overview
 
 Observation turns local filesystem changes and Graph delta/enumeration results
-into normalized `ChangeEvent` values. It never writes the sync DB directly.
-The engine owns snapshot persistence and persisted full-refresh cadence in
-`observation_state`; observation only produces live facts and wake signals.
+into live observation facts. It never writes the sync DB directly. The engine
+owns snapshot persistence and persisted full-refresh cadence in
+`observation_state`; observation produces wake signals, change events for the
+legacy event path, and direct local-snapshot rows for `local_state`.
 
 The observation stack has four main pieces:
 
@@ -31,7 +32,7 @@ The observation stack has four main pieces:
 
 | Behavior | Evidence |
 | --- | --- |
-| Whole-drive observation emits normalized change events without writing the sync DB directly. | `TestBuffer_WatchAndSafetyScanConflictingTypes`, `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestNosyncGuard_PreventsAllSync` |
+| Whole-drive observation emits normalized change events for the legacy planner path and direct local snapshot rows for `local_state` without writing the sync DB directly. | `TestBuffer_WatchAndSafetyScanConflictingTypes`, `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestNosyncGuard_PreventsAllSync` |
 | Normal drives ignore embedded shared-folder shortcut items instead of creating nested follow-up sync runtimes. | `internal/sync/observer_remote_test.go`, `internal/sync/remote_state_mirror_test.go` |
 | Shared-root drives still support remote observation rooted at their configured shared root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 
@@ -103,6 +104,11 @@ Ignore invariants:
 
 Observation may emit `SkippedItem`s for invalid or unsupported local content.
 The engine decides how those become durable actionable issues.
+
+`Scanner.FullScan()` now also returns direct `LocalStateRow` values for every
+admissible currently observed local path. `local_state` persistence therefore
+comes from current disk truth, not by replaying local change events against
+baseline.
 
 ## Buffer
 

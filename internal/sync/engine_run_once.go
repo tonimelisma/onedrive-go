@@ -473,7 +473,7 @@ func (flow *engineFlow) observeChanges(
 	if err != nil {
 		return nil, nil, err
 	}
-	if commitLocalErr := flow.commitObservedLocalSnapshot(ctx, dryRun, bl, localResult); commitLocalErr != nil {
+	if commitLocalErr := flow.commitObservedLocalSnapshot(ctx, dryRun, localResult); commitLocalErr != nil {
 		return nil, nil, commitLocalErr
 	}
 
@@ -572,7 +572,6 @@ func (flow *engineFlow) observeLocalChanges(
 func (flow *engineFlow) commitObservedLocalSnapshot(
 	ctx context.Context,
 	dryRun bool,
-	bl *Baseline,
 	localResult ScanResult,
 ) error {
 	if dryRun {
@@ -580,7 +579,7 @@ func (flow *engineFlow) commitObservedLocalSnapshot(
 	}
 
 	observedAt := flow.engine.nowFunc().UnixNano()
-	rows := buildLocalStateRows(bl, localResult, observedAt)
+	rows := buildLocalStateRows(localResult, observedAt)
 	if err := flow.engine.baseline.ReplaceLocalState(ctx, rows); err != nil {
 		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 	}

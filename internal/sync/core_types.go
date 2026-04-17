@@ -19,10 +19,13 @@ type SkippedItem struct {
 }
 
 // ScanResult is the return type of FullScan. Events are valid change
-// observations; Skipped are user-actionable rejections (invalid names,
-// path too long, file too large) that the engine should record.
+// observations for the legacy event-shaped planner path; Rows are the direct
+// current local snapshot that local_state persists. Skipped are user-actionable
+// rejections (invalid names, path too long, file too large) that the engine
+// should record.
 type ScanResult struct {
 	Events  []ChangeEvent
+	Rows    []LocalStateRow
 	Skipped []SkippedItem
 }
 
