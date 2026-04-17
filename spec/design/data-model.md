@@ -104,7 +104,8 @@ problems used for reporting, status, and issue inspection. Important columns:
 - timestamps: `first_seen_at`, `last_seen_at`
 
 The table stores concrete failed work items and actionable path issues. It is
-not a mailbox for user decisions.
+not a mailbox for user decisions and not the runtime authority for retry or
+scope admission.
 
 ## `scope_blocks`
 
@@ -125,8 +126,11 @@ Current persisted scope keys are:
 - `throttle:target:drive:<driveID>`
 - `service`
 - `perm:dir:<localPath>`
-- `perm:remote:<localPath>`
 - `disk:local`
+
+Remote permission scopes are derived from blocked `retry_state` rows carrying
+`perm:remote:<localPath>` scope keys rather than persisted directly in
+`scope_blocks`.
 
 Legacy `throttle:account` rows remain parseable for startup cleanup only.
 

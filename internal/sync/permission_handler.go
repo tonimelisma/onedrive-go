@@ -44,28 +44,26 @@ func (ph *PermissionHandler) HasPermChecker() bool {
 
 // ActiveRemoteBlockedBoundaries returns all persisted remote permission
 // boundaries currently blocking write admission under read-only subtrees.
-// The watch/runtime path uses these boundaries for active-scope checks;
-// the legacy dry-run planner still consumes the same path list until that
-// preview path is moved onto snapshot reconciliation.
+// Runtime blocking derives from blocked retry_state rows, not sync_failures.
 func (ph *PermissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) []string {
-	issues, err := ph.store.ListRemoteBlockedFailures(ctx)
+	rows, err := ph.store.ListBlockedRetryState(ctx)
 	if err != nil {
-		ph.logger.Warn("ActiveRemoteBlockedBoundaries: failed to list remote blocked failures",
+		ph.logger.Warn("ActiveRemoteBlockedBoundaries: failed to list blocked retry_state rows",
 			slog.String("error", err.Error()),
 		)
 
 		return nil
 	}
 
-	seen := make(map[string]bool, len(issues))
+	seen := make(map[string]bool, len(rows))
 	var prefixes []string
 
-	for i := range issues {
-		if !issues[i].ScopeKey.IsPermRemote() {
+	for i := range rows {
+		if !rows[i].ScopeKey.IsPermRemote() {
 			continue
 		}
 
-		boundary := issues[i].ScopeKey.RemotePath()
+		boundary := rows[i].ScopeKey.RemotePath()
 		if seen[boundary] {
 			continue
 		}
@@ -279,9 +277,8 @@ func (ph *PermissionHandler) walkPermissionBoundary(
 	return boundary
 }
 
-// recheckPermissions re-queries all permission_denied sync_failures at the
-// start of each sync pass. If a folder is now writable, the issue is cleared
-// and writes resume. Runs every pass (typically 5 min in watch mode).
+// recheckPermissions rechecks each persisted remote permission scope that
+// still has blocked retry work at the start of each sync pass.
 func (ph *PermissionHandler) recheckPermissions(
 	ctx context.Context,
 	bl *Baseline,
@@ -298,35 +295,35 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 		return nil
 	}
 
-	issues, err := ph.store.ListRemoteBlockedFailures(ctx)
-	if err != nil || len(issues) == 0 {
+	rows, err := ph.store.ListBlockedRetryState(ctx)
+	if err != nil || len(rows) == 0 {
 		return nil
 	}
 
 	var decisions []PermissionRecheckDecision
-	seen := make(map[ScopeKey]bool, len(issues))
+	seen := make(map[ScopeKey]bool, len(rows))
 
-	for i := range issues {
-		issue := &issues[i]
-		if !issue.ScopeKey.IsPermRemote() {
+	for i := range rows {
+		row := &rows[i]
+		if !row.ScopeKey.IsPermRemote() {
 			continue
 		}
-		if seen[issue.ScopeKey] {
+		if seen[row.ScopeKey] {
 			continue
 		}
-		if len(scopeFilter) > 0 && !scopeFilter[issue.ScopeKey] {
+		if len(scopeFilter) > 0 && !scopeFilter[row.ScopeKey] {
 			continue
 		}
-		seen[issue.ScopeKey] = true
+		seen[row.ScopeKey] = true
 
-		boundaryPath := issue.ScopeKey.RemotePath()
+		boundaryPath := row.ScopeKey.RemotePath()
 
 		root := ph.permissionRoot()
 		if root == nil {
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckReleaseScope,
 				Path:     boundaryPath,
-				ScopeKey: issue.ScopeKey,
+				ScopeKey: row.ScopeKey,
 				Reason:   "configured remote root no longer present; releasing remote permission boundary",
 			})
 			continue
@@ -339,7 +336,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckReleaseScope,
 				Path:     boundaryPath,
-				ScopeKey: issue.ScopeKey,
+				ScopeKey: row.ScopeKey,
 				Reason:   "remote permission boundary no longer resolvable; releasing stale scope",
 			})
 			continue
@@ -350,7 +347,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckReleaseScope,
 				Path:     boundaryPath,
-				ScopeKey: issue.ScopeKey,
+				ScopeKey: row.ScopeKey,
 				Reason:   "permission recheck inconclusive; failing open",
 			})
 			continue
@@ -361,7 +358,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckReleaseScope,
 				Path:     boundaryPath,
-				ScopeKey: issue.ScopeKey,
+				ScopeKey: row.ScopeKey,
 				Reason:   "permission granted; releasing remote permission boundary",
 			})
 			continue
@@ -369,7 +366,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckReleaseScope,
 				Path:     boundaryPath,
-				ScopeKey: issue.ScopeKey,
+				ScopeKey: row.ScopeKey,
 				Reason:   "permission recheck inconclusive; failing open",
 			})
 			continue
@@ -379,7 +376,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 		decisions = append(decisions, PermissionRecheckDecision{
 			Kind:     permissionRecheckKeepScope,
 			Path:     boundaryPath,
-			ScopeKey: issue.ScopeKey,
+			ScopeKey: row.ScopeKey,
 			Reason:   "remote permission boundary still denied",
 		})
 	}
@@ -588,32 +585,29 @@ func (ph *PermissionHandler) deepestDeniedBoundary(parentDir string) string {
 	}
 }
 
-// recheckLocalPermissions rechecks directory-level local permission denials
-// at the start of each sync pass. If a directory is now accessible, clears
-// the failure and releases the scope block (R-2.10.13).
+// recheckLocalPermissions rechecks persisted local permission scope blocks at
+// the start of each sync pass. If a directory is now accessible, the scope is
+// released (R-2.10.13).
 func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []PermissionRecheckDecision {
-	issues, err := ph.store.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
-	if err != nil || len(issues) == 0 {
+	blocks, err := ph.store.ListScopeBlocks(ctx)
+	if err != nil || len(blocks) == 0 {
 		return nil
 	}
 
 	var decisions []PermissionRecheckDecision
 
-	for i := range issues {
-		issue := &issues[i]
-
-		// Only recheck directory-level issues (those with a perm:dir: scope key).
-		if !issue.ScopeKey.IsPermDir() {
+	for i := range blocks {
+		block := blocks[i]
+		if block == nil || !block.Key.IsPermDir() {
 			continue
 		}
 
-		dirPath := issue.ScopeKey.DirPath()
+		dirPath := block.Key.DirPath()
 		if !isDirAccessible(ph.syncTree, dirPath) {
-			// Still inaccessible — keep the block.
 			decisions = append(decisions, PermissionRecheckDecision{
 				Kind:     permissionRecheckKeepScope,
-				Path:     issue.Path,
-				ScopeKey: issue.ScopeKey,
+				Path:     dirPath,
+				ScopeKey: block.Key,
 				Reason:   "local permission denial still active",
 			})
 			continue
@@ -621,8 +615,8 @@ func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []Perm
 
 		decisions = append(decisions, PermissionRecheckDecision{
 			Kind:     permissionRecheckReleaseScope,
-			Path:     issue.Path,
-			ScopeKey: issue.ScopeKey,
+			Path:     dirPath,
+			ScopeKey: block.Key,
 			Reason:   "local permission restored, clearing denial",
 		})
 	}
@@ -644,50 +638,56 @@ func (ph *PermissionHandler) clearScannerResolvedPermissions(
 		return nil
 	}
 
-	issues, err := ph.store.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
-	if err != nil || len(issues) == 0 {
-		return nil
-	}
-
 	var decisions []PermissionRecheckDecision
 
-	for i := range issues {
-		issue := &issues[i]
+	blocks, err := ph.store.ListScopeBlocks(ctx)
+	if err == nil {
+		for i := range blocks {
+			block := blocks[i]
+			if block == nil || !block.Key.IsPermDir() {
+				continue
+			}
 
-		resolved := false
-		if issue.ScopeKey.IsPermDir() {
-			// Directory-level: resolved if any observed path falls under the directory.
-			dirPath := issue.ScopeKey.DirPath()
+			resolved := false
+			dirPath := block.Key.DirPath()
 			for p := range observedPaths {
 				if p == dirPath || strings.HasPrefix(p, dirPath+"/") {
 					resolved = true
 					break
 				}
 			}
-		} else {
-			// File-level: resolved if the file itself was observed.
-			resolved = observedPaths[issue.Path]
-		}
 
-		if !resolved {
-			continue
-		}
+			if !resolved {
+				continue
+			}
 
-		if issue.ScopeKey.IsZero() {
 			decisions = append(decisions, PermissionRecheckDecision{
-				Kind:    permissionRecheckClearFileFailure,
-				Path:    issue.Path,
-				DriveID: issue.DriveID,
-				Reason:  "scanner resolved permission denial",
+				Kind:     permissionRecheckReleaseScope,
+				Path:     dirPath,
+				ScopeKey: block.Key,
+				Reason:   "scanner resolved permission denial",
 			})
+		}
+	}
+
+	issues, err := ph.store.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	if err != nil || len(issues) == 0 {
+		return decisions
+	}
+
+	for i := range issues {
+		issue := &issues[i]
+		if !issue.ScopeKey.IsZero() {
 			continue
 		}
-
+		if !observedPaths[issue.Path] {
+			continue
+		}
 		decisions = append(decisions, PermissionRecheckDecision{
-			Kind:     permissionRecheckReleaseScope,
-			Path:     issue.Path,
-			ScopeKey: issue.ScopeKey,
-			Reason:   "scanner resolved permission denial",
+			Kind:    permissionRecheckClearFileFailure,
+			Path:    issue.Path,
+			DriveID: issue.DriveID,
+			Reason:  "scanner resolved permission denial",
 		})
 	}
 

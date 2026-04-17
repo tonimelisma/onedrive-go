@@ -76,7 +76,8 @@ category, scope key, and retry delay; the store persists them transactionally.
 `retry_state` is the durable retry ledger. It persists retryable and blocked
 work keyed to semantic work identity, while the executable action set remains
 runtime-owned in Go. `sync_failures` remains the reporting surface, but it no
-longer decides which retryable rows are due or which blocked row is trialed.
+longer decides which retryable rows are due, which blocked row is trialed, or
+which scope-backed rows keep runtime admission blocked.
 
 Supporting failure mutations include:
 
@@ -94,6 +95,9 @@ runtime-owned decision. `scope_blocks` is timer/trial metadata authority, not a
 second owner of blocked work. When a scope is released or discarded, the store
 updates both `sync_failures` and `retry_state` in the same transaction so the
 retry ledger cannot lag the scope transition.
+
+Remote permission scopes are not persisted as `scope_blocks`. They are rebuilt
+from blocked `retry_state` rows keyed by `perm:remote:*` scope keys.
 
 ### Repair/admin writes
 

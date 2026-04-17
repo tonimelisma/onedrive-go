@@ -25,8 +25,7 @@ const (
 )
 
 type persistedScopeFacts struct {
-	boundaryKeys        map[ScopeKey]bool
-	failureCountByScope map[ScopeKey]int
+	blockedRetryCountByScope map[ScopeKey]int
 }
 
 // loadActiveScopes refreshes watch runtime scope state from the persisted
@@ -52,19 +51,19 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 		activeScopes = append(activeScopes, *blocks[i])
 	}
 
-	remoteHeld, err := flow.engine.baseline.ListRemoteBlockedFailures(ctx)
+	blockedRetries, err := flow.engine.baseline.ListBlockedRetryState(ctx)
 	if err != nil {
-		return fmt.Errorf("sync: listing remote blocked failures: %w", err)
+		return fmt.Errorf("sync: listing blocked retry_state rows: %w", err)
 	}
-	seenRemote := make(map[ScopeKey]bool, len(remoteHeld))
-	for i := range remoteHeld {
-		if !remoteHeld[i].ScopeKey.IsPermRemote() || seenRemote[remoteHeld[i].ScopeKey] {
+	seenRemote := make(map[ScopeKey]bool, len(blockedRetries))
+	for i := range blockedRetries {
+		if !blockedRetries[i].ScopeKey.IsPermRemote() || seenRemote[blockedRetries[i].ScopeKey] {
 			continue
 		}
-		seenRemote[remoteHeld[i].ScopeKey] = true
+		seenRemote[blockedRetries[i].ScopeKey] = true
 		activeScopes = append(activeScopes, ScopeBlock{
-			Key:       remoteHeld[i].ScopeKey,
-			IssueType: remoteHeld[i].ScopeKey.IssueType(),
+			Key:       blockedRetries[i].ScopeKey,
+			IssueType: blockedRetries[i].ScopeKey.IssueType(),
 		})
 	}
 	watch.replaceActiveScopes(activeScopes)
@@ -99,11 +98,11 @@ func (controller *scopeController) repairPersistedScopes(
 		}
 	}
 
-	failures, err := controller.loadRepairedPersistedFailures(ctx)
+	blockedRetries, err := controller.loadRepairedPersistedBlockedRetries(ctx)
 	if err != nil {
 		return err
 	}
-	if err := controller.repairPersistedNonAuthScopes(ctx, blocks, failures); err != nil {
+	if err := controller.repairPersistedNonAuthScopes(ctx, blocks, blockedRetries); err != nil {
 		return err
 	}
 
@@ -149,30 +148,30 @@ func (controller *scopeController) releaseLegacyThrottleAccountScopes(
 	return released, nil
 }
 
-func (controller *scopeController) loadRepairedPersistedFailures(
+func (controller *scopeController) loadRepairedPersistedBlockedRetries(
 	ctx context.Context,
-) ([]SyncFailureRow, error) {
+) ([]RetryStateRow, error) {
 	flow := controller.flow
 
-	failures, err := flow.engine.baseline.ListSyncFailures(ctx)
+	rows, err := flow.engine.baseline.ListBlockedRetryState(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing sync failures: %w", err)
+		return nil, fmt.Errorf("sync: listing blocked retry_state rows: %w", err)
 	}
-	if !controller.clearResolvedPersistedRemoteFailures(ctx, failures) {
-		return failures, nil
+	if !controller.clearResolvedPersistedRemoteBlockedRetries(ctx, rows) {
+		return rows, nil
 	}
 
-	failures, err = flow.engine.baseline.ListSyncFailures(ctx)
+	rows, err = flow.engine.baseline.ListBlockedRetryState(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: relisting sync failures after remote cleanup: %w", err)
+		return nil, fmt.Errorf("sync: relisting blocked retry_state rows after remote cleanup: %w", err)
 	}
 
-	return failures, nil
+	return rows, nil
 }
 
-func (controller *scopeController) clearResolvedPersistedRemoteFailures(
+func (controller *scopeController) clearResolvedPersistedRemoteBlockedRetries(
 	ctx context.Context,
-	failures []SyncFailureRow,
+	rows []RetryStateRow,
 ) bool {
 	flow := controller.flow
 	bl, err := flow.engine.baseline.Load(ctx)
@@ -184,12 +183,12 @@ func (controller *scopeController) clearResolvedPersistedRemoteFailures(
 	}
 
 	remoteResolved := false
-	for i := range failures {
-		if failures[i].Role != FailureRoleHeld || !failures[i].ScopeKey.IsPermRemote() {
+	for i := range rows {
+		if !rows[i].ScopeKey.IsPermRemote() {
 			continue
 		}
-		if flow.buildRetryCandidate(ctx, bl, &failures[i]).resolved {
-			flow.clearFailureCandidate(ctx, &failures[i], "clearResolvedPersistedRemoteFailures")
+		if flow.buildRetryCandidateFromRetryState(ctx, bl, &rows[i]).resolved {
+			controller.clearHeldRetryWork(ctx, &rows[i], "clearResolvedPersistedRemoteBlockedRetries")
 			remoteResolved = true
 		}
 	}
@@ -200,9 +199,9 @@ func (controller *scopeController) clearResolvedPersistedRemoteFailures(
 func (controller *scopeController) repairPersistedNonAuthScopes(
 	ctx context.Context,
 	blocks []*ScopeBlock,
-	failures []SyncFailureRow,
+	blockedRetries []RetryStateRow,
 ) error {
-	facts := summarizePersistedScopeFailures(failures)
+	facts := summarizePersistedBlockedRetries(blockedRetries)
 
 	for i := range blocks {
 		if blocks[i].Key.IsPermRemote() {
@@ -226,12 +225,18 @@ func (controller *scopeController) repairPersistedScope(
 
 	switch scopeStartupPolicyFor(block.Key) {
 	case scopeStartupRequiresBoundary:
-		if facts.boundaryKeys[block.Key] {
+		if block.Key.IsPermDir() {
+			if !isDirAccessible(controller.flow.engine.syncTree, block.Key.DirPath()) {
+				return nil
+			}
+			return controller.releaseStartupScope(ctx, block.Key, "released local permission scope after revalidation")
+		}
+		if facts.blockedRetryCountByScope[block.Key] > 0 {
 			return nil
 		}
-		return controller.releaseStartupScope(ctx, block.Key, "released scope without boundary evidence")
+		return controller.releaseStartupScope(ctx, block.Key, "released scope without blocked retry work")
 	case scopeStartupRequiresScopedFailures:
-		if facts.failureCountByScope[block.Key] > 0 {
+		if facts.blockedRetryCountByScope[block.Key] > 0 {
 			return nil
 		}
 		if hasActivePreserveDeadline(block, now) {
@@ -278,20 +283,16 @@ func (controller *scopeController) discardStartupScope(ctx context.Context, key 
 	return nil
 }
 
-func summarizePersistedScopeFailures(rows []SyncFailureRow) persistedScopeFacts {
+func summarizePersistedBlockedRetries(rows []RetryStateRow) persistedScopeFacts {
 	facts := persistedScopeFacts{
-		boundaryKeys:        make(map[ScopeKey]bool),
-		failureCountByScope: make(map[ScopeKey]int),
+		blockedRetryCountByScope: make(map[ScopeKey]int),
 	}
 
 	for i := range rows {
-		if rows[i].ScopeKey.IsZero() {
+		if rows[i].ScopeKey.IsZero() || !rows[i].Blocked {
 			continue
 		}
-		facts.failureCountByScope[rows[i].ScopeKey]++
-		if rows[i].Role == FailureRoleBoundary {
-			facts.boundaryKeys[rows[i].ScopeKey] = true
-		}
+		facts.blockedRetryCountByScope[rows[i].ScopeKey]++
 	}
 
 	return facts
@@ -692,9 +693,9 @@ func (controller *scopeController) clearResolvedRemoteBlockedFailures(
 	}
 
 	flow := controller.flow
-	rows, err := flow.engine.baseline.ListRemoteBlockedFailures(ctx)
+	rows, err := flow.engine.baseline.ListBlockedRetryState(ctx)
 	if err != nil {
-		flow.engine.logger.Warn("failed to list remote blocked failures for cleanup",
+		flow.engine.logger.Warn("failed to list blocked retry_state rows for remote cleanup",
 			slog.String("error", err.Error()),
 		)
 		return
@@ -709,11 +710,11 @@ func (controller *scopeController) clearResolvedRemoteBlockedFailures(
 		return
 	}
 	for i := range rows {
-		if !remoteBlockedFailureRelevant(&rows[i], changedPaths) {
+		if !remoteBlockedRetryRelevant(&rows[i], changedPaths) {
 			continue
 		}
-		if flow.buildRetryCandidate(ctx, bl, &rows[i]).resolved {
-			flow.clearFailureCandidate(ctx, &rows[i], "cleanupResolvedRemoteBlockedFailures")
+		if flow.buildRetryCandidateFromRetryState(ctx, bl, &rows[i]).resolved {
+			controller.clearHeldRetryWork(ctx, &rows[i], "cleanupResolvedRemoteBlockedFailures")
 			clearedScopes[rows[i].ScopeKey] = true
 		}
 	}
@@ -725,10 +726,14 @@ func (controller *scopeController) clearResolvedRemoteBlockedFailures(
 	controller.releaseResolvedRemoteScopes(ctx, watch, clearedScopes)
 }
 
-func remoteBlockedFailureRelevant(
-	row *SyncFailureRow,
+func remoteBlockedRetryRelevant(
+	row *RetryStateRow,
 	changedPaths map[string]bool,
 ) bool {
+	if row == nil || !row.ScopeKey.IsPermRemote() {
+		return false
+	}
+
 	boundary := row.ScopeKey.RemotePath()
 	for changedPath := range changedPaths {
 		if pathMatchesPrefix(row.Path, changedPath) ||
@@ -740,6 +745,30 @@ func remoteBlockedFailureRelevant(
 	}
 
 	return false
+}
+
+func (controller *scopeController) clearHeldRetryWork(
+	ctx context.Context,
+	row *RetryStateRow,
+	caller string,
+) {
+	if row == nil {
+		return
+	}
+
+	work := RetryWorkKey{
+		Path:       row.Path,
+		OldPath:    row.OldPath,
+		ActionType: row.ActionType,
+	}
+
+	if err := controller.flow.engine.baseline.ClearHeldRetryWork(ctx, work, row.ScopeKey); err != nil {
+		controller.flow.engine.logger.Debug(caller+": failed to clear held retry work",
+			slog.String("path", row.Path),
+			slog.String("scope_key", row.ScopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 func (controller *scopeController) releaseResolvedRemoteScopes(
@@ -771,9 +800,9 @@ func (controller *scopeController) remainingRemoteBlockedScopes(
 ) (map[ScopeKey]bool, bool) {
 	flow := controller.flow
 
-	remainingRows, err := flow.engine.baseline.ListRemoteBlockedFailures(ctx)
+	remainingRows, err := flow.engine.baseline.ListBlockedRetryState(ctx)
 	if err != nil {
-		flow.engine.logger.Warn("failed to relist remote blocked failures after cleanup",
+		flow.engine.logger.Warn("failed to relist blocked retry_state rows after remote cleanup",
 			slog.String("error", err.Error()),
 		)
 		return nil, false
@@ -781,6 +810,9 @@ func (controller *scopeController) remainingRemoteBlockedScopes(
 
 	remainingScopes := make(map[ScopeKey]bool, len(remainingRows))
 	for i := range remainingRows {
+		if !remainingRows[i].ScopeKey.IsPermRemote() {
+			continue
+		}
 		remainingScopes[remainingRows[i].ScopeKey] = true
 	}
 

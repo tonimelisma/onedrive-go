@@ -200,6 +200,15 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 	safety *SafetyConfig,
 	key ScopeKey,
 ) []*TrackedAction {
+	probeRow, hadBlockedWork, err := rt.engine.baseline.PickRetryTrialCandidate(ctx, key)
+	if err != nil {
+		rt.engine.logger.Warn("runTrialDispatch: failed to probe blocked retry work before refresh",
+			slog.String("scope_key", key.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+
 	plan, err := rt.refreshCurrentActionPlan(ctx, bl, mode, safety)
 	if err != nil {
 		rt.engine.logger.Warn("runTrialDispatch: failed to refresh current action plan",
@@ -219,6 +228,25 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 	}
 
 	if !found {
+		if hadBlockedWork {
+			candidate := rt.engineFlow.buildRetryCandidateFromRetryState(ctx, bl, probeRow)
+			if candidate.err != nil {
+				rt.engine.logger.Warn("runTrialDispatch: failed to revalidate disappeared blocked retry work",
+					slog.String("scope_key", key.String()),
+					slog.String("path", probeRow.Path),
+					slog.String("error", candidate.err.Error()),
+				)
+			} else if candidate.resolved {
+				rt.scopeController().clearHeldRetryWork(ctx, probeRow, "runTrialDispatch")
+			}
+
+			rt.scopeController().preserveScopeTrial(ctx, rt, key)
+			rt.engine.logger.Debug("runTrialDispatch: blocked retry work disappeared during refresh; preserving scope",
+				slog.String("scope_key", key.String()),
+			)
+			return nil
+		}
+
 		if err := rt.scopeController().discardScope(ctx, rt, key); err != nil {
 			rt.engine.logger.Warn("runTrialDispatch: failed to discard scope without blocked retry work",
 				slog.String("scope_key", key.String()),
@@ -466,6 +494,29 @@ func failureActionType(row *SyncFailureRow) ActionType {
 		}
 	}
 	return row.ActionType
+}
+
+func (flow *engineFlow) buildRetryCandidateFromRetryState(
+	ctx context.Context,
+	bl *Baseline,
+	row *RetryStateRow,
+) retryCandidate {
+	if row == nil {
+		return retryCandidate{}
+	}
+
+	failureRow := &SyncFailureRow{
+		Path:       row.Path,
+		DriveID:    flow.engine.driveID,
+		Direction:  row.ActionType.Direction(),
+		ActionType: row.ActionType,
+		Role:       FailureRoleHeld,
+		Category:   CategoryTransient,
+		IssueType:  row.ScopeKey.IssueType(),
+		ScopeKey:   row.ScopeKey,
+	}
+
+	return flow.buildRetryCandidate(ctx, bl, failureRow)
 }
 
 func (flow *engineFlow) recordRetryTrialSkippedItem(

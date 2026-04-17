@@ -28,6 +28,11 @@ const (
 		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
 		FROM retry_state
 		ORDER BY path, work_key`
+	sqlListRetryStateBlocked = `SELECT
+		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
+		FROM retry_state
+		WHERE blocked = 1
+		ORDER BY scope_key, path, work_key`
 	sqlListRetryStateReady = `SELECT
 		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
 		FROM retry_state
@@ -150,6 +155,16 @@ func (m *SyncStore) ListRetryState(ctx context.Context) ([]RetryStateRow, error)
 	rows, err := m.db.QueryContext(ctx, sqlListRetryState)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying retry_state: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRetryStateRows(rows)
+}
+
+func (m *SyncStore) ListBlockedRetryState(ctx context.Context) ([]RetryStateRow, error) {
+	rows, err := m.db.QueryContext(ctx, sqlListRetryStateBlocked)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying blocked retry_state rows: %w", err)
 	}
 	defer rows.Close()
 

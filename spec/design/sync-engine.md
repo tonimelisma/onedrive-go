@@ -29,7 +29,7 @@ Retry and trial admission now read from `retry_state`:
 
 - ready per-item retry work comes from unblocked `retry_state` rows whose `next_retry_at` is due
 - scope trials sample one blocked `retry_state` row at random for each due scope
-- `sync_failures` remains available for issue reporting, but it is no longer part of retry scheduling or retry candidate reconstruction
+- `sync_failures` remains available for issue reporting, but it is no longer part of retry scheduling, retry candidate reconstruction, scope admission, or scope lifecycle
 
 The engine does **not** own multi-drive orchestration or control-socket
 lifecycle. Those belong to `internal/multisync`.
@@ -126,7 +126,7 @@ connection committed a write, `handleExternalChanges()` runs.
 
 That reconciliation hook is intentionally narrow. It currently rechecks
 externally cleared permission-scope state and releases any runtime permission
-scope whose backing failure rows disappeared.
+scope whose backing `scope_blocks` or blocked `retry_state` rows disappeared.
 
 It is **not** a generic user-intent ingestion path.
 
@@ -162,15 +162,18 @@ The engine classifies worker results into:
 - actionable failure
 - scope activation / preserve / release decisions
 
-Runtime scope state is an in-memory working set rebuilt from `scope_blocks` at
-startup. Current persisted scope families are:
+Runtime scope state is an in-memory working set rebuilt from persisted
+`scope_blocks` plus blocked `retry_state` rows at startup. Current persisted
+scope families in `scope_blocks` are:
 
 - `quota:own`
 - `throttle:target:drive:*`
 - `service`
 - `perm:dir:*`
-- `perm:remote:*`
 - `disk:local`
+
+Remote permission scopes are derived from blocked `retry_state` rows with
+`perm:remote:*` scope keys rather than persisted scope-block rows.
 
 Account-auth rejection is no longer a persisted sync scope. Durable
 account-auth state lives in the managed catalog, and sync consults that catalog
