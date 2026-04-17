@@ -293,12 +293,12 @@ func TestReadAccountMeta_UsesProfileFieldOrder(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	cid := driveid.MustCanonicalID("personal:alice@example.com")
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName:    "Alice",
-		OrgName:        "Contoso",
-		UserID:         "u1",
-		PrimaryDriveID: "d1",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = authTestDisplayNameAlice
+		account.OrgName = workflowTestOrgContoso
+		account.UserID = authTestUserID1
+		account.PrimaryDriveID = workflowTestDriveID
+	})
 
 	displayName, orgName := readAccountMeta("alice@example.com", []driveid.CanonicalID{cid}, slog.New(slog.DiscardHandler))
 	assert.Equal(t, "Alice", displayName)
@@ -309,12 +309,12 @@ func TestReadAccountMeta_FallsBackToTokenProbe(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	cid := driveid.MustCanonicalID("personal:alice@example.com")
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName:    "Alice",
-		OrgName:        "Contoso",
-		UserID:         "u1",
-		PrimaryDriveID: "d1",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = authTestDisplayNameAlice
+		account.OrgName = workflowTestOrgContoso
+		account.UserID = authTestUserID1
+		account.PrimaryDriveID = workflowTestDriveID
+	})
 
 	tokenPath := config.DriveTokenPath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(tokenPath), 0o700))
@@ -989,7 +989,7 @@ func TestPrintStatusText_WithAuthRequiredReasonAndAction(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "Auth:  authentication_required")
 	assert.Contains(t, output, "The last sync attempt for this account was rejected by OneDrive.")
-	assert.Contains(t, output, "whoami")
+	assert.Contains(t, output, "status")
 }
 
 func TestPrintStatusText_SyncStateNever(t *testing.T) {
@@ -1225,10 +1225,12 @@ func TestStatusCommand_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:damaged@example.com")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "Damaged User",
-	}))
-	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "drive-damaged"}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = "Damaged User"
+	})
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = "drive-damaged"
+	})
 	require.NoError(t, os.MkdirAll(filepath.Dir(config.DriveStatePath(cid)), 0o700))
 	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("not a sqlite database"), 0o600))
 

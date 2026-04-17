@@ -114,7 +114,7 @@ func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir st
 
 // EnsureDriveInConfig is the single entry point for adding a drive to the config
 // file. It loads the config (or defaults if missing), checks whether the drive
-// already exists, computes the default sync_dir from account profile data, and writes
+// already exists, computes the default sync_dir from catalog account data, and writes
 // the drive section. Returns the sync directory, whether a new section was added,
 // and any error. Used by both login and `drive add`.
 func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logger) (string, bool, error) {
@@ -127,7 +127,7 @@ func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logg
 		return d.SyncDir, false, nil
 	}
 
-	// Use account profile for org_name/display_name.
+	// Use the catalog account record for org_name/display_name.
 	orgName, displayName := ResolveAccountNames(cid, logger)
 
 	existingDirs := CollectOtherSyncDirs(cfg, cid, logger)

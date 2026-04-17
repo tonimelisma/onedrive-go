@@ -36,7 +36,7 @@ func degradedReasonText(reason string) string {
 func degradedAction(reason string) string {
 	switch reason {
 	case driveCatalogUnavailableReason:
-		return "No action is needed. Try 'onedrive-go whoami' or " +
+		return "No action is needed. Try 'onedrive-go status' or " +
 			"'onedrive-go drive list' again later. Configured drives and " +
 			"commands against known drives may still work."
 	case sharedDiscoveryUnavailableReason:

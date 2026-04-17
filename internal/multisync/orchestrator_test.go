@@ -31,7 +31,7 @@ import (
 // --- helpers ---
 
 // setupXDGIsolation sets XDG_DATA_HOME to a temp dir and creates catalog drive
-// identity for each CID. This gives buildResolvedDrive (called during
+// records for each CID. This gives buildResolvedDrive (called during
 // control-socket reload → ResolveDrives) a non-zero DriveID, which is required
 // for Session() to succeed.
 func setupXDGIsolation(t *testing.T, cids ...driveid.CanonicalID) {
@@ -41,8 +41,14 @@ func setupXDGIsolation(t *testing.T, cids ...driveid.CanonicalID) {
 	t.Setenv("XDG_DATA_HOME", xdgDir)
 
 	for _, cid := range cids {
-		require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{
-			DriveID: "test-drive-id",
+		require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+			catalog.UpsertDrive(&config.CatalogDrive{
+				CanonicalID:           cid.String(),
+				OwnerAccountCanonical: cid.String(),
+				DriveType:             cid.DriveType(),
+				RemoteDriveID:         "test-drive-id",
+			})
+			return nil
 		}))
 	}
 }

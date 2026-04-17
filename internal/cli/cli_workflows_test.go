@@ -21,12 +21,18 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
+const (
+	workflowTestOrgContoso = "Contoso"
+	workflowTestDriveID    = "d1"
+)
+
 func newCommandContext(output *bytes.Buffer, cfgPath string) *CLIContext {
 	return &CLIContext{
-		Logger:       slog.New(slog.DiscardHandler),
-		OutputWriter: output,
-		StatusWriter: output,
-		CfgPath:      cfgPath,
+		Logger:                  slog.New(slog.DiscardHandler),
+		OutputWriter:            output,
+		StatusWriter:            output,
+		CfgPath:                 cfgPath,
+		statusLiveOverlayLoader: noStatusLiveOverlay,
 	}
 }
 
@@ -104,10 +110,10 @@ func TestDriveSearch_RefreshesIdentityOnceBeforeSharePointSearch(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		UserID:      "user-123",
-		DisplayName: "Alice Smith",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.UserID = snapshotTestUserID123
+		account.DisplayName = snapshotTestDisplayNameAliceSmith
+	})
 	writeAccessTokenFile(t, cid, "token-business-search")
 
 	var meCalls atomic.Int32
@@ -169,19 +175,21 @@ func TestLogoutCommand_AutoSelectsSingleKnownAccountWithoutConfiguredDrives(t *t
 }
 
 // Validates: R-3.1.4
-func TestLogoutCommand_PurgeRemovesAccountProfile(t *testing.T) {
+func TestLogoutCommand_PurgeRemovesCatalogAccountAndDrive(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive - Contoso"))
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "Alice Smith",
-		OrgName:     "Contoso",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = snapshotTestDisplayNameAliceSmith
+		account.OrgName = workflowTestOrgContoso
+	})
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_alice@contoso.com.json")
 	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("fake-db"), 0o600))
-	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "d1"}))
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = workflowTestDriveID
+	})
 
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
@@ -199,15 +207,13 @@ func TestLogoutCommand_PurgeRemovesAccountProfile(t *testing.T) {
 	_, stateErr := os.Stat(config.DriveStatePath(cid))
 	assert.True(t, os.IsNotExist(stateErr), "logout --purge should remove state DB")
 
-	identity, found, identityErr := config.LookupDriveIdentity(cid)
-	require.NoError(t, identityErr)
+	identity, found := loadCatalogDrive(t, cid)
 	assert.False(t, found, "logout --purge should remove drive catalog metadata")
-	assert.Nil(t, identity)
+	assert.Empty(t, identity)
 
-	profile, found, profileErr := config.LookupAccountProfile(cid)
-	require.NoError(t, profileErr)
-	assert.False(t, found, "logout --purge should remove account profile")
-	assert.Nil(t, profile)
+	profile, found := loadCatalogAccount(t, cid)
+	assert.False(t, found, "logout --purge should remove the catalog account")
+	assert.Empty(t, profile)
 
 	_, syncDirErr := os.Stat(syncDir)
 	require.NoError(t, syncDirErr, "logout --purge must leave sync directories untouched")
@@ -215,19 +221,21 @@ func TestLogoutCommand_PurgeRemovesAccountProfile(t *testing.T) {
 }
 
 // Validates: R-3.3.8, R-3.1.5
-func TestDriveRemove_PurgePreservesAccountProfile(t *testing.T) {
+func TestDriveRemove_PurgePreservesCatalogAccount(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive - Contoso"))
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "Alice Smith",
-		OrgName:     "Contoso",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = snapshotTestDisplayNameAliceSmith
+		account.OrgName = workflowTestOrgContoso
+	})
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_alice@contoso.com.json")
 	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("fake-db"), 0o600))
-	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "d1"}))
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = workflowTestDriveID
+	})
 
 	var out bytes.Buffer
 	cc := newCommandContext(&out, cfgPath)
@@ -242,17 +250,15 @@ func TestDriveRemove_PurgePreservesAccountProfile(t *testing.T) {
 	_, stateErr := os.Stat(config.DriveStatePath(cid))
 	assert.True(t, os.IsNotExist(stateErr), "drive remove --purge should remove the drive state DB")
 
-	identity, found, identityErr := config.LookupDriveIdentity(cid)
-	require.NoError(t, identityErr)
+	identity, found := loadCatalogDrive(t, cid)
 	assert.False(t, found, "drive remove --purge should remove drive catalog metadata")
-	assert.Nil(t, identity)
+	assert.Empty(t, identity)
 
 	_, tokenErr := os.Stat(config.DriveTokenPath(cid))
 	require.NoError(t, tokenErr, "drive remove --purge must preserve the account token")
 
-	profile, found, profileErr := config.LookupAccountProfile(cid)
-	require.NoError(t, profileErr)
-	require.True(t, found, "drive remove --purge must preserve the account profile")
+	profile, found := loadCatalogAccount(t, cid)
+	require.True(t, found, "drive remove --purge must preserve the catalog account")
 	assert.Equal(t, "Alice Smith", profile.DisplayName)
 
 	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))

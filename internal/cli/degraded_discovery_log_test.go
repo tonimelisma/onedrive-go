@@ -16,15 +16,15 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-func TestWhoamiDrives_LogsQuirkRetryEvidenceWhenDriveDiscoveryDegrades(t *testing.T) {
+func TestStatusLiveDriveCatalog_LogsQuirkRetryEvidenceWhenDriveDiscoveryDegrades(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	result := whoamiDrives(
+	result := discoverLiveDriveCatalog(
 		t.Context(),
-		fakeWhoamiDriveClient{
+		fakeLiveDriveCatalogClient{
 			drivesErr: &graph.QuirkRetryError{
 				Quirk: "drives-token-propagation",
 				Attempts: []graph.QuirkRetryAttempt{
@@ -45,19 +45,13 @@ func TestWhoamiDrives_LogsQuirkRetryEvidenceWhenDriveDiscoveryDegrades(t *testin
 				DriveType: driveid.DriveTypePersonal,
 			},
 		},
-		accountAuthRequirement{
-			Email:     "user@example.com",
-			DriveType: driveid.DriveTypePersonal,
-		},
-		&graph.User{
-			Email:       "user@example.com",
-			DisplayName: "Test User",
-		},
+		"user@example.com",
+		"Test User",
+		driveid.DriveTypePersonal,
 		logger,
 	)
 
-	require.Nil(t, result.authResult)
-	require.Len(t, result.degraded, 1)
+	require.NotNil(t, result.Degraded)
 	assert.Contains(t, logBuf.String(), "\"graph_quirk\":\"drives-token-propagation\"")
 	assert.Contains(t, logBuf.String(), "\"graph_quirk_attempt_count\":2")
 	assert.Contains(t, logBuf.String(), "\"graphCode\":\"accessDenied\"")
@@ -138,11 +132,11 @@ func TestDriveCatalogDegradationLogging_UsesSameStructuredEvidenceAcrossCallers(
 		},
 	}
 
-	var whoamiLog bytes.Buffer
-	whoamiLogger := slog.New(slog.NewJSONHandler(&whoamiLog, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	_ = whoamiDrives(
+	var statusLog bytes.Buffer
+	statusLogger := slog.New(slog.NewJSONHandler(&statusLog, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	_ = discoverLiveDriveCatalog(
 		t.Context(),
-		fakeWhoamiDriveClient{
+		fakeLiveDriveCatalogClient{
 			drivesErr: quirkErr,
 			primary: &graph.Drive{
 				ID:        driveid.New("drive-primary"),
@@ -150,15 +144,10 @@ func TestDriveCatalogDegradationLogging_UsesSameStructuredEvidenceAcrossCallers(
 				DriveType: driveid.DriveTypePersonal,
 			},
 		},
-		accountAuthRequirement{
-			Email:     "user@example.com",
-			DriveType: driveid.DriveTypePersonal,
-		},
-		&graph.User{
-			Email:       "user@example.com",
-			DisplayName: "Test User",
-		},
-		whoamiLogger,
+		"user@example.com",
+		"Test User",
+		driveid.DriveTypePersonal,
+		statusLogger,
 	)
 
 	var driveListLog bytes.Buffer
@@ -182,25 +171,25 @@ func TestDriveCatalogDegradationLogging_UsesSameStructuredEvidenceAcrossCallers(
 	assert.Empty(t, authRequired)
 	require.Len(t, degraded, 1)
 
-	whoamiRecord := decodeLastCLIJSONLog(t, whoamiLog.Bytes())
+	statusRecord := decodeLastCLIJSONLog(t, statusLog.Bytes())
 	driveListRecord := decodeLastCLIJSONLog(t, driveListLog.Bytes())
 
-	assert.Equal(t, "user@example.com", whoamiRecord["account"])
+	assert.Equal(t, "user@example.com", statusRecord["account"])
 	assert.Equal(t, "user@example.com", driveListRecord["account"])
-	assert.Equal(t, "/me/drives", whoamiRecord["endpoint"])
+	assert.Equal(t, "/me/drives", statusRecord["endpoint"])
 	assert.Equal(t, "/me/drives", driveListRecord["endpoint"])
-	assert.Equal(t, "drives-token-propagation", whoamiRecord["graph_quirk"])
-	assert.Equal(t, whoamiRecord["graph_quirk"], driveListRecord["graph_quirk"])
-	assert.EqualValues(t, 2, whoamiRecord["graph_quirk_attempt_count"])
-	assert.Equal(t, whoamiRecord["graph_quirk_attempt_count"], driveListRecord["graph_quirk_attempt_count"])
+	assert.Equal(t, "drives-token-propagation", statusRecord["graph_quirk"])
+	assert.Equal(t, statusRecord["graph_quirk"], driveListRecord["graph_quirk"])
+	assert.EqualValues(t, 2, statusRecord["graph_quirk_attempt_count"])
+	assert.Equal(t, statusRecord["graph_quirk_attempt_count"], driveListRecord["graph_quirk_attempt_count"])
 
-	whoamiAttempts, ok := whoamiRecord["graph_quirk_attempts"].([]any)
+	statusAttempts, ok := statusRecord["graph_quirk_attempts"].([]any)
 	require.True(t, ok)
 	driveListAttempts, ok := driveListRecord["graph_quirk_attempts"].([]any)
 	require.True(t, ok)
-	require.Len(t, whoamiAttempts, 2)
+	require.Len(t, statusAttempts, 2)
 	require.Len(t, driveListAttempts, 2)
-	assert.Equal(t, whoamiAttempts, driveListAttempts)
+	assert.Equal(t, statusAttempts, driveListAttempts)
 }
 
 func decodeLastCLIJSONLog(t *testing.T, raw []byte) map[string]any {

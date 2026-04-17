@@ -80,7 +80,7 @@ func discoverCIDFilesWithIO(dir string, logger *slog.Logger, io configIO) []driv
 // discoverFilesForEmail scans dir for files matching "{prefix}*{suffix}" that
 // contain the given email at an underscore boundary. Returns full file paths.
 // This is the shared implementation behind DiscoverStateDBsForEmail and
-// drive identity lookups.
+// other email-scoped managed-file discovery.
 func discoverFilesForEmail(dir, prefix, suffix, email string, logger *slog.Logger) []string {
 	return discoverFilesForEmailWithIO(dir, prefix, suffix, email, logger, defaultConfigIO())
 }

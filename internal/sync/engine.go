@@ -299,7 +299,11 @@ func (e *Engine) repairPersistedAccountAuthRequirement(
 	if proofErr != nil {
 		return proofErr
 	}
-	if err := config.ClearAccountAuthRequirementInDataDir(e.dataDir, e.permHandler.accountEmail); err != nil {
+	if err := config.ClearAccountAuthRequirement(
+		e.dataDir,
+		e.permHandler.accountEmail,
+		config.AuthClearSourceSyncStartupProof,
+	); err != nil {
 		return fmt.Errorf("sync: clearing catalog auth requirement: %w", err)
 	}
 

@@ -1170,13 +1170,13 @@ func TestEnsureDriveInConfig_NoFallback(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
-	// Business drive with no account profile — should get plain default name.
+	// Business drive with no catalog account entry — should get plain default name.
 	cid := driveid.MustCanonicalID("business:noprofile@example.com")
 
 	syncDir, added, err := EnsureDriveInConfig(path, cid, testLogger(t))
 	require.NoError(t, err)
 	assert.True(t, added)
-	// Without account profile, falls back to BaseSyncDir ("~/OneDrive - Business").
+	// Without a catalog account entry, falls back to BaseSyncDir ("~/OneDrive - Business").
 	assert.Equal(t, "~/OneDrive - Business", syncDir)
 }
 

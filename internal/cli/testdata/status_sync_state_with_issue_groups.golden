@@ -18,6 +18,6 @@
       Next: Rename the file to remove invalid characters.
 
     AUTHENTICATION REQUIRED (1 item)
-      The last sync attempt for this account was rejected by OneDrive. Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.
+      The last sync attempt for this account was rejected by OneDrive. Run 'onedrive-go status' to re-check access, or 'onedrive-go login' to sign in again.
       Scope: your OneDrive account authorization
-      Next: Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.
+      Next: Run 'onedrive-go status' to re-check access, or 'onedrive-go login' to sign in again.

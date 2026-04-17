@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,8 +97,13 @@ func loadCatalogFromPath(path string) (*Catalog, error) {
 	}
 
 	var catalog Catalog
-	if err := json.Unmarshal(data, &catalog); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&catalog); err != nil {
 		return nil, fmt.Errorf("decoding catalog: %w", err)
+	}
+	if catalog.SchemaVersion != catalogSchemaV1 {
+		return nil, fmt.Errorf("decoding catalog: unsupported schema version %d", catalog.SchemaVersion)
 	}
 
 	catalog.normalize()
@@ -146,46 +152,6 @@ func UpdateCatalogForDataDir(dataDir string, update func(*Catalog) error) error 
 		return err
 	}
 	return SaveCatalogForDataDir(dataDir, catalog)
-}
-
-func SetAccountAuthRequirement(email string, reason authstate.Reason) error {
-	return SetAccountAuthRequirementInDataDir(DefaultDataDir(), email, reason)
-}
-
-func SetAccountAuthRequirementInDataDir(dataDir, email string, reason authstate.Reason) error {
-	if email == "" {
-		return nil
-	}
-
-	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
-		account, found := catalog.AccountByEmail(email)
-		if !found {
-			return nil
-		}
-		account.AuthRequirementReason = reason
-		catalog.UpsertAccount(&account)
-		return nil
-	})
-}
-
-func ClearAccountAuthRequirement(email string) error {
-	return ClearAccountAuthRequirementInDataDir(DefaultDataDir(), email)
-}
-
-func ClearAccountAuthRequirementInDataDir(dataDir, email string) error {
-	if email == "" {
-		return nil
-	}
-
-	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
-		account, found := catalog.AccountByEmail(email)
-		if !found {
-			return nil
-		}
-		account.AuthRequirementReason = ""
-		catalog.UpsertAccount(&account)
-		return nil
-	})
 }
 
 func (c *Catalog) normalize() {

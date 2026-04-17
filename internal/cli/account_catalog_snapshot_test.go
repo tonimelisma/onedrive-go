@@ -21,6 +21,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
+const (
+	snapshotTestDisplayNameAliceSmith = "Alice Smith"
+	snapshotTestUserID123             = "user-123"
+	snapshotTestPrimaryDriveUser      = "drive-user"
+)
+
 func writeAccessTokenFile(t *testing.T, cid driveid.CanonicalID, accessToken string) {
 	t.Helper()
 
@@ -42,15 +48,17 @@ func TestAccountCatalogSnapshot_LoadWithBestEffortIdentityRefresh_ProbesEachToke
 	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
 
 	require.NoError(t, config.AppendDriveSection(configPath, oldCID, "~/OneDrive"))
-	require.NoError(t, config.SaveAccountProfile(oldCID, &config.AccountProfile{
-		UserID:      "user-old",
-		DisplayName: "Old User",
-	}))
-	require.NoError(t, config.SaveDriveIdentity(oldCID, &config.DriveIdentity{DriveID: "drive-old"}))
-	require.NoError(t, config.SaveAccountProfile(businessCID, &config.AccountProfile{
-		UserID:      "user-business",
-		DisplayName: "Alice Smith",
-	}))
+	seedCatalogAccount(t, oldCID, func(account *config.CatalogAccount) {
+		account.UserID = "user-old"
+		account.DisplayName = "Old User"
+	})
+	seedCatalogDrive(t, oldCID, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = "drive-old"
+	})
+	seedCatalogAccount(t, businessCID, func(account *config.CatalogAccount) {
+		account.UserID = "user-business"
+		account.DisplayName = snapshotTestDisplayNameAliceSmith
+	})
 	writeAccessTokenFile(t, oldCID, "token-old")
 	writeAccessTokenFile(t, businessCID, "token-business")
 
@@ -115,10 +123,10 @@ func TestAccountCatalogSnapshot_LoadWithBestEffortIdentityRefresh_ProbeFailureKe
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("personal:offline@example.com")
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		UserID:      "user-offline",
-		DisplayName: "Offline User",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.UserID = "user-offline"
+		account.DisplayName = "Offline User"
+	})
 	writeAccessTokenFile(t, cid, "token-offline")
 
 	var meCalls atomic.Int32
@@ -160,10 +168,10 @@ func TestAccountCatalogSnapshot_Load_RejectsConfiguredDriveMissingCatalogEntry(t
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		UserID:      "user-123",
-		DisplayName: "Test User",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.UserID = snapshotTestUserID123
+		account.DisplayName = "Test User"
+	})
 
 	_, err := loadAccountCatalogSnapshot(t.Context(), &CLIContext{
 		Logger:       testDriveLogger(t),
@@ -183,9 +191,9 @@ func TestAccountCatalogSnapshot_Load_RejectsDriveOwnerMissingCatalogAccount(t *t
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("shared:user@example.com:drv123:item456")
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/Shared"))
-	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{
-		AccountCanonicalID: "business:owner@example.com",
-	}))
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
+		drive.OwnerAccountCanonical = "business:owner@example.com"
+	})
 
 	_, err := loadAccountCatalogSnapshot(t.Context(), &CLIContext{
 		Logger:       testDriveLogger(t),
@@ -204,15 +212,15 @@ func TestAccountCatalogSnapshot_Load_RejectsPrimaryDriveOwnedByDifferentAccount(
 
 	accountCID := driveid.MustCanonicalID("personal:user@example.com")
 	otherCID := driveid.MustCanonicalID("personal:other@example.com")
-	require.NoError(t, config.SaveAccountProfile(accountCID, &config.AccountProfile{
-		UserID:         "user-123",
-		DisplayName:    "User",
-		PrimaryDriveID: "drive-user",
-	}))
-	require.NoError(t, config.SaveAccountProfile(otherCID, &config.AccountProfile{
-		UserID:      "user-other",
-		DisplayName: "Other",
-	}))
+	seedCatalogAccount(t, accountCID, func(account *config.CatalogAccount) {
+		account.UserID = snapshotTestUserID123
+		account.DisplayName = "User"
+		account.PrimaryDriveID = snapshotTestPrimaryDriveUser
+	})
+	seedCatalogAccount(t, otherCID, func(account *config.CatalogAccount) {
+		account.UserID = "user-other"
+		account.DisplayName = "Other"
+	})
 	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
 		account, found := catalog.AccountByCanonicalID(accountCID)
 		require.True(t, found)
@@ -220,10 +228,10 @@ func TestAccountCatalogSnapshot_Load_RejectsPrimaryDriveOwnedByDifferentAccount(
 		catalog.UpsertAccount(&account)
 		return nil
 	}))
-	require.NoError(t, config.SaveDriveIdentity(accountCID, &config.DriveIdentity{
-		AccountCanonicalID: otherCID.String(),
-		DriveID:            "drive-user",
-	}))
+	seedCatalogDrive(t, accountCID, func(drive *config.CatalogDrive) {
+		drive.OwnerAccountCanonical = otherCID.String()
+		drive.RemoteDriveID = snapshotTestPrimaryDriveUser
+	})
 
 	_, err := loadAccountCatalogSnapshot(t.Context(), &CLIContext{
 		Logger:       testDriveLogger(t),

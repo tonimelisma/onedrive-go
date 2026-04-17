@@ -38,7 +38,7 @@ engine.
 
 | Command family | Purpose |
 | --- | --- |
-| `login`, `logout`, `whoami` | auth and account identity |
+| `login`, `logout` | auth and account session lifecycle |
 | `ls`, `get`, `put`, `rm`, `mkdir`, `mv`, `cp`, `stat` | file operations |
 | `drive` | drive management |
 | `shared*` | shared-item discovery and add flows |
@@ -52,10 +52,12 @@ There is no `resolve` command family anymore.
 
 ## Status And Read-Only Sync State
 
-`status` is intentionally read-only.
+`status` is intentionally read-only and account-centric.
 
-- account and drive identity come from config/auth-state helpers
+- account and drive identity come from the validated config+catalog snapshot
 - sync-state snapshots come from store-owned read helpers
+- live authenticated account identity and drive catalog overlays come from
+  bounded Graph proof/discovery owned by the command
 - live perf comes from the active owner over the control socket when requested
 
 There is no separate history-only surface for resolved conflicts, and status no

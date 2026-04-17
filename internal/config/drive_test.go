@@ -588,19 +588,18 @@ func TestCollectOtherSyncDirs_ComputesBaseForEmptySyncDir(t *testing.T) {
 	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{} // no sync_dir
 
 	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
-	// Without account profile, business defaults to "~/OneDrive - Business" via BaseSyncDir.
+	// Without a catalog account entry, business defaults to "~/OneDrive - Business" via BaseSyncDir.
 	assert.Contains(t, dirs, "~/OneDrive - Business")
 }
 
-func TestCollectOtherSyncDirs_WithAccountProfile(t *testing.T) {
+func TestCollectOtherSyncDirs_WithCatalogAccount(t *testing.T) {
 	dataDir := setTestDataDir(t)
 
-	// Create an account profile with org_name.
 	bizCID := driveid.MustCanonicalID("business:alice@contoso.com")
-	require.NoError(t, SaveAccountProfile(bizCID, &AccountProfile{
-		OrgName:     "Contoso Ltd",
-		DisplayName: "Alice",
-	}))
+	seedCatalogAccount(t, bizCID, func(account *CatalogAccount) {
+		account.OrgName = "Contoso Ltd"
+		account.DisplayName = catalogAccountTestAlice
+	})
 
 	// Also create a token file so discovery sees the account.
 	writeTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
@@ -611,7 +610,7 @@ func TestCollectOtherSyncDirs_WithAccountProfile(t *testing.T) {
 	cfg.Drives[bizCID] = Drive{} // no sync_dir
 
 	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
-	// With org_name from account profile, business resolves to "~/OneDrive - Contoso Ltd".
+	// With org_name from the catalog account, business resolves to "~/OneDrive - Contoso Ltd".
 	assert.Contains(t, dirs, "~/OneDrive - Contoso Ltd")
 }
 
@@ -628,12 +627,13 @@ func TestCollectOtherSyncDirs_SkipsEmptyBaseName(t *testing.T) {
 
 // --- cleanup-correctness tests (no token metadata fallback) ---
 
-func TestBuildResolvedDrive_DriveIDFromDriveIdentityOnly(t *testing.T) {
+func TestBuildResolvedDrive_DriveIDFromCatalogDriveOnly(t *testing.T) {
 	dataDir := setTestDataDir(t)
 	cid := driveid.MustCanonicalID("personal:meta@example.com")
 
-	// Write drive identity with a drive_id.
-	require.NoError(t, SaveDriveIdentity(cid, &DriveIdentity{DriveID: "abcdef0123456789"}))
+	seedCatalogDrive(t, cid, func(drive *CatalogDrive) {
+		drive.RemoteDriveID = "abcdef0123456789"
+	})
 
 	// Also need a token file for discovery.
 	writeTokenFile(t, dataDir, "token_personal_meta@example.com.json")
@@ -645,7 +645,7 @@ func TestBuildResolvedDrive_DriveIDFromDriveIdentityOnly(t *testing.T) {
 	assert.Equal(t, "abcdef0123456789", resolved.DriveID.String())
 }
 
-func TestBuildResolvedDrive_NoDriveMetadata_DriveIDStaysZero(t *testing.T) {
+func TestBuildResolvedDrive_NoCatalogDrive_DriveIDStaysZero(t *testing.T) {
 	setTestDataDir(t)
 	cid := driveid.MustCanonicalID("personal:nometa@example.com")
 
@@ -661,8 +661,8 @@ func TestResolveAccountNames_NoFallback(t *testing.T) {
 	cid := driveid.MustCanonicalID("business:noprofile@example.com")
 
 	orgName, displayName := ResolveAccountNames(cid, testLogger(t))
-	assert.Empty(t, orgName, "org_name should be empty without account profile")
-	assert.Empty(t, displayName, "display_name should be empty without account profile")
+	assert.Empty(t, orgName, "org_name should be empty without a catalog account entry")
+	assert.Empty(t, displayName, "display_name should be empty without a catalog account entry")
 }
 
 func TestCollectOtherSyncDirs_NoFallback(t *testing.T) {
@@ -675,10 +675,10 @@ func TestCollectOtherSyncDirs_NoFallback(t *testing.T) {
 	cfg := DefaultConfig()
 	selfID := driveid.MustCanonicalID("personal:self@example.com")
 	cfg.Drives[selfID] = Drive{SyncDir: "~/OneDrive"}
-	cfg.Drives[cid] = Drive{} // no sync_dir, no account profile
+	cfg.Drives[cid] = Drive{} // no sync_dir, no catalog account entry
 
 	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
-	// Without account profile, business defaults to "~/OneDrive - Business" via BaseSyncDir.
+	// Without a catalog account entry, business defaults to "~/OneDrive - Business" via BaseSyncDir.
 	assert.Contains(t, dirs, "~/OneDrive - Business")
 }
 
