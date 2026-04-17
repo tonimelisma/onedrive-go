@@ -68,26 +68,10 @@ func persistLoginMetadata(
 	primaryDriveID driveid.ID,
 	logger *slog.Logger,
 ) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	if profileErr := config.SaveAccountProfile(canonicalID, &config.AccountProfile{
-		UserID:         user.ID,
-		DisplayName:    user.DisplayName,
-		OrgName:        orgName,
-		PrimaryDriveID: primaryDriveID.String(),
-	}); profileErr != nil {
-		logger.Warn("failed to save account profile", "error", profileErr)
-	}
-
-	if driveIdentityErr := config.SaveDriveIdentity(canonicalID, &config.DriveIdentity{
-		DriveID:  primaryDriveID.String(),
-		CachedAt: now,
-	}); driveIdentityErr != nil {
-		logger.Warn("failed to save catalog drive identity", "error", driveIdentityErr)
-	}
-
 	if catalogErr := config.UpdateCatalog(func(catalog *config.Catalog) error {
 		account := buildLoginCatalogAccount(canonicalID, user, orgName, primaryDriveID, catalog)
 		drive := buildLoginCatalogDrive(canonicalID, primaryDriveID, catalog)
+		drive.CachedAt = time.Now().UTC().Format(time.RFC3339)
 		catalog.UpsertAccount(&account)
 		catalog.UpsertDrive(&drive)
 		return nil
@@ -143,12 +127,7 @@ func buildLoginCatalogDrive(
 }
 
 func clearLoginAuthRequirement(ctx context.Context, email string, logger *slog.Logger) {
-	stored, loadCatalogErr := config.LoadCatalog()
-	if loadCatalogErr != nil {
-		logger.Warn("loading catalog for auth cleanup", "account", email, "error", loadCatalogErr)
-		return
-	}
-	if clearErr := clearAccountAuthRequirementWithCatalog(ctx, stored, email, logger); clearErr != nil {
+	if clearErr := clearAccountAuthRequirementForSource(ctx, email, config.AuthClearSourceLogin, logger); clearErr != nil {
 		logger.Warn("clearing stale account auth requirement after login", "account", email, "error", clearErr)
 	}
 }

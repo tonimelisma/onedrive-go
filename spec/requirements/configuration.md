@@ -54,7 +54,7 @@ The system shall resolve settings with a four-layer override chain: defaults →
   and size formats (e.g. min_free_space). [verified]
 - R-4.8.3: The system shall prevent overlapping or duplicate sync directories
   across drives. [verified]
-- R-4.8.4: Informational commands (`drive list`, `status`, `whoami`) shall
+- R-4.8.4: Informational commands (`drive list`, `status`, `shared`) shall
   tolerate config validation errors, parsing what they can and reporting
   warnings instead of failing. [verified]
 - R-4.8.5: File operation commands (`ls`, `get`, `put`, `rm`, `mkdir`, `mv`,

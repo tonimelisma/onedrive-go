@@ -284,10 +284,10 @@ func TestE2E_Status_ConfigTolerance(t *testing.T) {
 }
 
 // Validates: R-4.8.4
-// TestE2E_Whoami_ConfigTolerance verifies that `whoami` succeeds (exit 0)
-// even when the config file contains unknown keys. Whoami uses lenient
-// config loading (LoadOrDefaultLenient + skipConfigAnnotation).
-func TestE2E_Whoami_ConfigTolerance(t *testing.T) {
+// TestE2E_Status_ConfigTolerance verifies that `status` succeeds (exit 0)
+// even when the config file contains unknown keys. Status uses lenient
+// config loading for informational reads.
+func TestE2E_Status_ConfigTolerance(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -311,16 +311,16 @@ func TestE2E_Whoami_ConfigTolerance(t *testing.T) {
 	}
 
 	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-		t, cfgPath, env, "", transientGraphRetryTimeout, "whoami",
+		t, cfgPath, env, "", transientGraphRetryTimeout, "status",
 	)
 
-	// Whoami output should contain user/account information.
+	// Status output should contain account/auth information.
 	assert.NotEmpty(t, stdout,
-		"whoami should produce output despite unknown config key")
+		"status should produce output despite unknown config key")
 }
 
 // Validates: R-6.7.11
-func TestE2E_Whoami_PersonalAccountShowsSinglePersonalDrive(t *testing.T) {
+func TestE2E_Status_PersonalAccountShowsSinglePersonalLiveDrive(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -332,22 +332,25 @@ func TestE2E_Whoami_PersonalAccountShowsSinglePersonalDrive(t *testing.T) {
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-		t, cfgPath, env, "", transientGraphRetryTimeout, "whoami", "--json",
+		t, cfgPath, env, "", transientGraphRetryTimeout, "status", "--json",
 	)
 
 	var result struct {
-		Drives []struct {
-			DriveType string `json:"drive_type"`
-		} `json:"drives"`
+		Accounts []struct {
+			LiveDrives []struct {
+				DriveType string `json:"drive_type"`
+			} `json:"live_drives"`
+		} `json:"accounts"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+	require.Len(t, result.Accounts, 1)
 
 	personalCount := 0
-	for _, driveInfo := range result.Drives {
+	for _, driveInfo := range result.Accounts[0].LiveDrives {
 		if driveInfo.DriveType == "personal" {
 			personalCount++
 		}
 	}
 
-	assert.Equal(t, 1, personalCount, "whoami should show exactly one personal drive for Personal accounts")
+	assert.Equal(t, 1, personalCount, "status should show exactly one personal live drive for Personal accounts")
 }

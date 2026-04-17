@@ -47,15 +47,6 @@ Otherwise, use --account to specify which account to log out.`,
 	return cmd
 }
 
-func newWhoamiCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:         "whoami",
-		Short:       "Display the authenticated user and drive info",
-		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
-		RunE:        runWhoami,
-	}
-}
-
 // runLogin implements the discovery-based login flow per accounts.md section 9:
 // device code auth -> /me -> /me/drive -> /me/organization -> construct canonical ID -> config.
 func runLogin(cmd *cobra.Command, _ []string) error {
@@ -76,8 +67,4 @@ func runLogout(cmd *cobra.Command, _ []string) error {
 	}
 
 	return runLogoutWithContext(mustCLIContext(cmd.Context()), purge)
-}
-
-func runWhoami(cmd *cobra.Command, _ []string) error {
-	return runWhoamiWithContext(cmd.Context(), mustCLIContext(cmd.Context()))
 }

@@ -113,13 +113,13 @@ func driveIDForTest(t *testing.T) driveid.ID {
 
 	cid := driveid.MustCanonicalID(drive)
 
-	identity, found, err := config.LookupDriveIdentity(cid)
-	require.NoError(t, err, "reading catalog drive identity for drive %q", drive)
-	require.True(t, found, "catalog drive identity missing — re-run scripts/bootstrap-test-credentials.sh")
-	require.NotNil(t, identity, "catalog drive identity should be present when found is true")
-	require.NotEmpty(t, identity.DriveID, "catalog drive identity has empty drive_id")
+	catalog, err := config.LoadCatalog()
+	require.NoError(t, err, "reading catalog for drive %q", drive)
+	driveRecord, found := catalog.DriveByCanonicalID(cid)
+	require.True(t, found, "catalog drive record missing — re-run scripts/bootstrap-test-credentials.sh")
+	require.NotEmpty(t, driveRecord.RemoteDriveID, "catalog drive record has empty remote_drive_id")
 
-	return driveid.New(identity.DriveID)
+	return driveid.New(driveRecord.RemoteDriveID)
 }
 
 // TestIntegration_GetItem verifies GetItem returns a properly normalized Item

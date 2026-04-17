@@ -1,6 +1,6 @@
 # Configuration
 
-GOVERNS: internal/config/account.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drivemeta.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validator.go, internal/config/write.go
+GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
 
 Implements: R-3.7 [verified], R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -23,7 +23,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | --- | --- |
 | Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
-| Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithDriveIdentity`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
+| Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
@@ -246,15 +246,27 @@ Existing target paths are treated as collisions rather than being overwritten,
 so a partial or conflicting rename fails loudly instead of silently merging two
 authorities.
 
-## Optional Metadata Lookups
+### Catalog JSON Policy
 
-Catalog-backed account profiles and drive identity are optional state, not exceptional control flow. `LookupAccountProfile(cid)` and `LookupDriveIdentity(cid)` both return `(*T, found bool, error)`:
+`catalog.json` is the single durable inventory authority, so decode is strict:
 
-- `found=false, err=nil`: no cached metadata applies to that canonical ID (missing file, wrong drive type, shared drive, or metadata intentionally absent)
-- `found=true, err=nil`: valid cached metadata loaded
-- `err!=nil`: malformed JSON, I/O failure, or invariant violation
+- unknown JSON fields are rejected
+- `schema_version` is required
+- only the exact supported version is accepted
+- every save is a full atomic rewrite of the file
 
-Callers branch on `found` instead of overloading `(nil, nil)` as both “missing” and “success”.
+Runtime callers do not silently accept future or partially shaped catalog
+files. A malformed or unsupported catalog is treated as an actionable local
+state error that must be repaired explicitly.
+
+## Optional Catalog Fields
+
+Catalog-backed account and drive records may omit cached presentation fields
+such as display name, org name, remote drive ID, or shared-owner identity.
+Missing optional catalog fields are normal input, not exceptional control flow.
+
+Callers branch on the presence of the specific catalog field they need instead
+of treating absent optional state as a load failure.
 
 ## Validation
 
@@ -272,7 +284,7 @@ Two loading paths: strict (`Load`/`LoadOrDefault`) for data commands, lenient (`
 
 **Strict path** (default): unknown keys and validation errors are fatal. Used by `sync`, file operations, `drive add`, `drive remove`.
 
-**Lenient path**: TOML syntax errors remain fatal (can't produce Config). Unknown keys, validation errors, and drive section issues (type mismatches, unknown drive keys) are collected as `ConfigWarning` values. Malformed drive sections are skipped — other drives remain usable. Used by `drive list`, `status`, `whoami`.
+**Lenient path**: TOML syntax errors remain fatal (can't produce Config). Unknown keys, validation errors, and drive section issues (type mismatches, unknown drive keys) are collected as `ConfigWarning` values. Malformed drive sections are skipped — other drives remain usable. Used by `drive list`, `status`, `shared`.
 
 Internal refactoring supports both paths cleanly: `collectUnknownGlobalKeyErrors`, `collectDriveUnknownKeyErrors`, and `collectValidationErrors` return `[]error` slices. The strict wrappers (`checkUnknownKeys`, `Validate`) join them into a single error. The lenient path converts them to warnings.
 
@@ -300,7 +312,7 @@ successful loads with warnings map to `actionable`, and clean loads map to
 
 ## Auto-Creation
 
-`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads catalog-backed account profile data only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`.
+`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads catalog-backed account records only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`.
 
 Removing a drive or logging out an account deletes the relevant drive sections
 through `DeleteDriveSection()`, but it does not delete `config.toml` itself.

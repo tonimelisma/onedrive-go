@@ -22,14 +22,15 @@ type w7LiveAuthRequirement struct {
 	StateDBs  int    `json:"state_dbs"`
 }
 
-type w7LiveWhoamiOutput struct {
-	User *struct {
-		Email string `json:"email"`
-	} `json:"user"`
-	Drives []struct {
-		DriveType string `json:"drive_type"`
-	} `json:"drives"`
-	AccountsRequiringAuth []w7LiveAuthRequirement `json:"accounts_requiring_auth"`
+type w7LiveStatusOutput struct {
+	Accounts []struct {
+		Email      string `json:"email"`
+		DriveType  string `json:"drive_type"`
+		AuthState  string `json:"auth_state"`
+		LiveDrives []struct {
+			DriveType string `json:"drive_type"`
+		} `json:"live_drives"`
+	} `json:"accounts"`
 }
 
 type w7LiveDriveListOutput struct {
@@ -71,14 +72,15 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 	catalogPath := catalogPathForDataHome(dataHome)
 
 	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-		t, cfgPath, env, "", transientGraphRetryTimeout, "whoami", "--json",
+		t, cfgPath, env, "", transientGraphRetryTimeout, "status", "--json",
 	)
 
-	var beforeLogout w7LiveWhoamiOutput
+	var beforeLogout w7LiveStatusOutput
 	require.NoError(t, json.Unmarshal([]byte(stdout), &beforeLogout))
-	require.NotNil(t, beforeLogout.User, "pre-logout whoami should authenticate against Graph")
-	assert.Equal(t, email, beforeLogout.User.Email)
-	assert.NotEmpty(t, beforeLogout.Drives, "pre-logout whoami should list the live drive catalog")
+	require.Len(t, beforeLogout.Accounts, 1, "pre-logout status should show one known account")
+	assert.Equal(t, email, beforeLogout.Accounts[0].Email)
+	assert.Equal(t, "ready", beforeLogout.Accounts[0].AuthState)
+	assert.NotEmpty(t, beforeLogout.Accounts[0].LiveDrives, "pre-logout status should list the live drive catalog")
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "logout")
 	require.NoErrorf(t, err, "logout should succeed\nstdout: %s\nstderr: %s", stdout, stderr)
@@ -97,25 +99,16 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 	require.NoError(t, readErr)
 	assert.NotContains(t, string(cfgBytes), drive, "logout should remove the drive config section")
 
-	stdout, stderr, err = runCLICore(t, cfgPath, env, "", "whoami", "--json")
-	require.NoErrorf(t, err, "offline whoami should still succeed after logout\nstdout: %s\nstderr: %s", stdout, stderr)
+	stdout, stderr, err = runCLICore(t, cfgPath, env, "", "status", "--json")
+	require.NoErrorf(t, err, "offline status should still succeed after logout\nstdout: %s\nstderr: %s", stdout, stderr)
 
-	var whoamiAfterLogout w7LiveWhoamiOutput
-	require.NoError(t, json.Unmarshal([]byte(stdout), &whoamiAfterLogout))
-	assert.Nil(t, whoamiAfterLogout.User)
-	assert.Empty(t, whoamiAfterLogout.Drives)
-	require.NotEmpty(t, whoamiAfterLogout.AccountsRequiringAuth)
-	var foundWhoamiAccount bool
-	for i := range whoamiAfterLogout.AccountsRequiringAuth {
-		if whoamiAfterLogout.AccountsRequiringAuth[i].Email != email {
-			continue
-		}
-
-		foundWhoamiAccount = true
-		assert.Equal(t, strings.SplitN(drive, ":", 2)[0], whoamiAfterLogout.AccountsRequiringAuth[i].DriveType)
-		assert.Equal(t, "missing_login", whoamiAfterLogout.AccountsRequiringAuth[i].Reason)
-	}
-	assert.True(t, foundWhoamiAccount, "offline whoami should retain the logged-out account in accounts_requiring_auth")
+	var statusAfterLogout w7LiveStatusOutput
+	require.NoError(t, json.Unmarshal([]byte(stdout), &statusAfterLogout))
+	require.Len(t, statusAfterLogout.Accounts, 1)
+	assert.Equal(t, email, statusAfterLogout.Accounts[0].Email)
+	assert.Equal(t, strings.SplitN(drive, ":", 2)[0], statusAfterLogout.Accounts[0].DriveType)
+	assert.Equal(t, "authentication_required", statusAfterLogout.Accounts[0].AuthState)
+	assert.Empty(t, statusAfterLogout.Accounts[0].LiveDrives)
 
 	stdout, stderr, err = runCLICore(t, cfgPath, env, "", "drive", "list", "--json")
 	require.NoErrorf(t, err, "drive list should still succeed after logout\nstdout: %s\nstderr: %s", stdout, stderr)

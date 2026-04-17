@@ -135,8 +135,9 @@ type CLIContext struct {
 	syncWatchRunner               syncWatchRunner               // test-only seam for sync --watch command coverage
 	syncRunOnceRunner             syncRunOnceRunner             // test-only seam for one-shot sync command coverage
 	syncDaemonOrchestratorFactory syncDaemonOrchestratorFactory // test-only seam below syncWatchRunner for real daemon-path coverage
-	logCloser                     io.Closer                     // log file closer; nil when no log file is configured
-	statusMu                      sync.Mutex                    // guards statusErr for concurrent progress callbacks
+	statusLiveOverlayLoader       func(context.Context, *CLIContext, []accountCatalogEntry) map[string]statusAccountLiveOverlay
+	logCloser                     io.Closer  // log file closer; nil when no log file is configured
+	statusMu                      sync.Mutex // guards statusErr for concurrent progress callbacks
 	statusErr                     error
 	reconcileMu                   sync.Mutex // guards reconcileNotices and selector mutation
 	reconcileNotices              map[string]struct{}
@@ -410,7 +411,7 @@ func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command 
 
 func addRootSubcommands(cmd *cobra.Command) {
 	cmd.AddCommand(
-		newLoginCmd(), newLogoutCmd(), newWhoamiCmd(), newStatusCmd(),
+		newLoginCmd(), newLogoutCmd(), newStatusCmd(),
 		newPerfCmd(),
 		newSharedCmd(),
 		newDriveCmd(), newLsCmd(), newGetCmd(), newPutCmd(),

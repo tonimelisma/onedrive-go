@@ -94,10 +94,10 @@ func TestSharedList_RefreshesIdentityOnceBeforeSharedDiscovery(t *testing.T) {
 	setTestDriveHome(t)
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		UserID:      "user-123",
-		DisplayName: "User Example",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.UserID = "user-123"
+		account.DisplayName = "User Example"
+	})
 
 	var meCalls atomic.Int32
 	var out bytes.Buffer

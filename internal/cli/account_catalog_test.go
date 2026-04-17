@@ -14,6 +14,12 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
+const (
+	accountCatalogTestReadyUser  = "Ready User"
+	accountCatalogTestDriveReady = "drive-ready"
+	accountCatalogTestOrphanUser = "Orphan User"
+)
+
 func accountCatalogEntryByEmail(t *testing.T, catalog []accountCatalogEntry, email string) accountCatalogEntry {
 	t.Helper()
 
@@ -35,17 +41,19 @@ func TestBuildAccountCatalog_ConfiguredAccountWithUsableSavedLoginIsReady(t *tes
 	cfg := config.DefaultConfig()
 	cfg.Drives[cid] = config.Drive{SyncDir: "~/OneDrive"}
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_ready@example.com.json")
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "Ready User",
-	}))
-	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "drive-ready"}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = accountCatalogTestReadyUser
+	})
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = accountCatalogTestDriveReady
+	})
 
 	catalog := buildAccountCatalog(t.Context(), cfg, testDriveLogger(t))
 	entry := accountCatalogEntryByEmail(t, catalog, "ready@example.com")
 
 	assert.True(t, entry.Configured)
 	assert.Equal(t, driveid.DriveTypePersonal, entry.DriveType)
-	assert.Equal(t, "Ready User", entry.DisplayName)
+	assert.Equal(t, accountCatalogTestReadyUser, entry.DisplayName)
 	assert.Equal(t, savedLoginStateUsable, entry.SavedLoginState)
 	assert.Empty(t, entry.AuthRequirementReason)
 	assert.Equal(t, authstate.StateReady, entry.AuthHealth.State)
@@ -56,16 +64,16 @@ func TestBuildAccountCatalog_OrphanedProfileWithoutTokenRequiresAuthentication(t
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("personal:orphan@example.com")
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "Orphan User",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = accountCatalogTestOrphanUser
+	})
 	require.NoError(t, touchStateDBForAccount(t, cid))
 
 	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
 	entry := accountCatalogEntryByEmail(t, catalog, "orphan@example.com")
 
 	assert.False(t, entry.Configured)
-	assert.Equal(t, "Orphan User", entry.DisplayName)
+	assert.Equal(t, accountCatalogTestOrphanUser, entry.DisplayName)
 	assert.Equal(t, savedLoginStateMissing, entry.SavedLoginState)
 	assert.Equal(t, 1, entry.StateDBCount)
 	assert.Equal(t, authstate.StateAuthenticationRequired, entry.AuthHealth.State)
@@ -107,9 +115,9 @@ func TestBuildAccountCatalog_PersistedAuthScopeWinsOnlyWhenSavedLoginIsOtherwise
 	seedAuthScope(t, usableCID)
 
 	missingCID := driveid.MustCanonicalID("personal:missing@example.com")
-	require.NoError(t, config.SaveAccountProfile(missingCID, &config.AccountProfile{
-		DisplayName: "Missing User",
-	}))
+	seedCatalogAccount(t, missingCID, func(account *config.CatalogAccount) {
+		account.DisplayName = "Missing User"
+	})
 	seedAuthScope(t, missingCID)
 
 	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))

@@ -90,16 +90,48 @@ func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool, his
 		}
 	}
 
+	if err := printAccountHeading(w, acct); err != nil {
+		return err
+	}
+	if err := printAccountAuthDetails(w, acct); err != nil {
+		return err
+	}
+	if err := printAccountDiscoveryDetails(w, acct); err != nil {
+		return err
+	}
+	if len(acct.LiveDrives) > 0 {
+		if err := printStatusLiveDrives(w, acct.LiveDrives); err != nil {
+			return err
+		}
+	}
+
+	for _, drive := range acct.Drives {
+		if err := printDriveStatus(w, drive, history); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func printAccountHeading(w io.Writer, acct *statusAccount) error {
 	if err := writef(w, "Account: %s [%s]\n", statusAccountLabel(acct), acct.DriveType); err != nil {
 		return err
 	}
-
+	if acct.UserID != "" {
+		if err := writef(w, "  User ID: %s\n", acct.UserID); err != nil {
+			return err
+		}
+	}
 	if acct.OrgName != "" {
 		if err := writef(w, "  Org:   %s\n", acct.OrgName); err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
+func printAccountAuthDetails(w io.Writer, acct *statusAccount) error {
 	if err := writef(w, "  Auth:  %s\n", acct.AuthState); err != nil {
 		return err
 	}
@@ -113,13 +145,20 @@ func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool, his
 			return err
 		}
 	}
+	return nil
+}
 
-	for _, drive := range acct.Drives {
-		if err := printDriveStatus(w, drive, history); err != nil {
+func printAccountDiscoveryDetails(w io.Writer, acct *statusAccount) error {
+	if acct.DegradedReason != "" {
+		if err := writef(w, "  Live discovery: %s\n", degradedReasonText(acct.DegradedReason)); err != nil {
 			return err
 		}
 	}
-
+	if acct.DegradedAction != "" {
+		if err := writef(w, "  Live action: %s\n", acct.DegradedAction); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -163,6 +202,24 @@ func statusDriveLabel(drive statusDrive) string {
 	}
 
 	return fmt.Sprintf("%s (%s)", drive.DisplayName, drive.CanonicalID)
+}
+
+func printStatusLiveDrives(w io.Writer, drives []statusLiveDrive) error {
+	if err := writeln(w, "  Live drives:"); err != nil {
+		return err
+	}
+	for _, drive := range drives {
+		if err := writef(w, "    %s (%s)\n", drive.Name, drive.DriveType); err != nil {
+			return err
+		}
+		if err := writef(w, "      ID: %s\n", drive.ID); err != nil {
+			return err
+		}
+		if err := writef(w, "      Quota: %s / %s\n", formatSize(drive.QuotaUsed), formatSize(drive.QuotaTotal)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func printSyncStateText(w io.Writer, ss *syncStateInfo, history bool) error {

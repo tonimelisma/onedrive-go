@@ -157,7 +157,7 @@ that only need those facts can project them through `ExtractQuirkEvidence`
 without depending on the behavior-bearing wrapper directly. CLI callers own
 the next step:
 
-- `whoami` degrades to authenticated profile plus `/me/drive` fallback when possible
+- `status` degrades to the authenticated account card plus `/me/drive` fallback when possible
 - `drive list` degrades to best-known live discovery plus `/me/drive` fallback
 - sync and ordinary file operations are unaffected because they do not depend
   on `/me/drives`

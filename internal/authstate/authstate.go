@@ -62,7 +62,7 @@ func PresentationForReason(reason Reason) Presentation {
 		return Presentation{
 			Title:  "Authentication required",
 			Reason: "The last sync attempt for this account was rejected by OneDrive.",
-			Action: "Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.",
+			Action: "Run 'onedrive-go status' to re-check access, or 'onedrive-go login' to sign in again.",
 		}
 	default:
 		return Presentation{}

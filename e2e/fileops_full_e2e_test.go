@@ -31,19 +31,19 @@ func TestE2E_RoundTrip(t *testing.T) {
 		cleanupRemoteFolder(t, testFolder)
 	})
 
-	t.Run("whoami", func(t *testing.T) {
+	t.Run("status_json", func(t *testing.T) {
 		stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-			t, cfgPath, nil, drive, transientGraphRetryTimeout, "whoami", "--json",
+			t, cfgPath, nil, drive, transientGraphRetryTimeout, "status", "--json",
 		)
 
-		var out map[string]interface{}
+		var out struct {
+			Accounts []struct {
+				LiveDrives []map[string]interface{} `json:"live_drives"`
+			} `json:"accounts"`
+		}
 		require.NoError(t, json.Unmarshal([]byte(stdout), &out))
-		assert.Contains(t, out, "user")
-		assert.Contains(t, out, "drives")
-
-		drives, ok := out["drives"].([]interface{})
-		require.True(t, ok)
-		assert.NotEmpty(t, drives)
+		require.NotEmpty(t, out.Accounts)
+		assert.NotEmpty(t, out.Accounts[0].LiveDrives)
 	})
 
 	t.Run("ls_root", func(t *testing.T) {
@@ -125,13 +125,13 @@ func TestE2E_RoundTrip(t *testing.T) {
 		waitForRemoteDeleteDisappearance(t, cfgPath, nil, drive, "perm-test.txt", "ls", "/"+testFolder)
 	})
 
-	t.Run("whoami_text", func(t *testing.T) {
+	t.Run("status_text", func(t *testing.T) {
 		stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-			t, cfgPath, nil, drive, transientGraphRetryTimeout, "whoami",
+			t, cfgPath, nil, drive, transientGraphRetryTimeout, "status",
 		)
 
 		email := strings.SplitN(drive, ":", 2)[1]
-		assert.Contains(t, stdout, email, "whoami text output should contain the account email")
+		assert.Contains(t, stdout, email, "status text output should contain the account email")
 	})
 
 	t.Run("status", func(t *testing.T) {

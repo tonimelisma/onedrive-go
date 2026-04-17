@@ -60,7 +60,7 @@ func (r *EmailReconcileResult) RemapCanonicalID(cid driveid.CanonicalID) (drivei
 }
 
 // ReconcileAccountEmail detects an account rename by matching the stable Graph
-// user GUID to stored account profiles of the same account type. When the
+// user GUID to stored catalog accounts of the same account type. When the
 // current Graph email differs, it rewrites owned config sections, token/state
 // paths, and catalog ownership from the old email to the current one.
 func ReconcileAccountEmail(
@@ -170,19 +170,26 @@ func matchingAccountRenames(
 	currentEmail string,
 	logger *slog.Logger,
 ) (map[driveid.CanonicalID]driveid.CanonicalID, error) {
-	profiles := DiscoverAccountProfiles(logger)
 	renames := make(map[driveid.CanonicalID]driveid.CanonicalID)
+	catalog, err := LoadCatalog()
+	if err != nil {
+		return nil, fmt.Errorf("loading catalog for email reconciliation: %w", err)
+	}
 
-	for _, cid := range profiles {
+	for _, key := range catalog.SortedAccountKeys() {
+		account := catalog.Accounts[key]
+		cid, err := driveid.NewCanonicalID(account.CanonicalID)
+		if err != nil {
+			logger.Debug("skipping malformed catalog account during email reconciliation",
+				"canonical_id", account.CanonicalID,
+				"error", err,
+			)
+			continue
+		}
 		if cid.DriveType() != currentAccount.DriveType() {
 			continue
 		}
-
-		profile, found, err := LookupAccountProfile(cid)
-		if err != nil {
-			return nil, fmt.Errorf("lookup account profile %s: %w", cid, err)
-		}
-		if !found || profile.UserID != userID || cid.Email() == currentEmail {
+		if account.UserID != userID || cid.Email() == currentEmail {
 			continue
 		}
 

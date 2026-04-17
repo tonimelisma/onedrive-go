@@ -37,7 +37,7 @@
                 "issue_type": "unauthorized",
                 "title": "AUTHENTICATION REQUIRED",
                 "reason": "The last sync attempt for this account was rejected by OneDrive.",
-                "action": "Run 'onedrive-go whoami' to re-check access, or 'onedrive-go login' to sign in again.",
+                "action": "Run 'onedrive-go status' to re-check access, or 'onedrive-go login' to sign in again.",
                 "scope_kind": "account",
                 "scope": "your OneDrive account authorization",
                 "count": 1,

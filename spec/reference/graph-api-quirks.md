@@ -511,8 +511,8 @@ Runtime policy:
   multiplier, ±25% jitter, and 60s cap
 - after that budget is exhausted, CLI discovery surfaces degrade explicitly
   instead of misclassifying the account as auth-required:
-  - `whoami` keeps the authenticated user and falls back to `/me/drive` when
-    possible
+  - `status` keeps the authenticated account visible and falls back to
+    `/me/drive` when possible
   - `drive list` keeps configured/offline state, uses `/me/drive` fallback for
     the primary drive, and continues independent shared-folder and SharePoint
     discovery

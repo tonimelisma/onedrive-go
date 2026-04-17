@@ -160,18 +160,15 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		LoggingConfig:   cfg.LoggingConfig,
 	}
 
-	// Two-source drive ID resolution: prefer the catalog-backed drive identity
+	// Two-source drive ID resolution: prefer the catalog-backed drive record
 	// (per-drive, accurate for SharePoint libraries and shared drives), then
 	// the shared canonical ID (embeds the remote drive ID). Otherwise DriveID
 	// stays zero.
-	driveIdentity, _, driveIdentityErr := LookupDriveIdentity(canonicalID)
-	if driveIdentityErr != nil {
-		logger.Debug("could not load drive identity", "canonical_id", canonicalID.String(), "error", driveIdentityErr)
-	}
-
-	if driveIdentity != nil && driveIdentity.DriveID != "" {
-		resolved.DriveID = driveid.New(driveIdentity.DriveID)
-		logger.Debug("resolved drive ID from catalog drive identity",
+	if catalog, err := LoadCatalog(); err != nil {
+		logger.Debug("could not load catalog drive record", "canonical_id", canonicalID.String(), "error", err)
+	} else if drive, found := catalog.DriveByCanonicalID(canonicalID); found && drive.RemoteDriveID != "" {
+		resolved.DriveID = driveid.New(drive.RemoteDriveID)
+		logger.Debug("resolved drive ID from catalog drive record",
 			"drive_id", resolved.DriveID.String(),
 			"canonical_id", canonicalID.String(),
 		)
@@ -226,19 +223,16 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 		dir := cfg.Drives[id].SyncDir
 		if dir == "" {
 			// Compute base name for this drive (without collision cascade).
-			// Use account profile for org_name.
+			// Use the catalog account record for org_name.
 			var orgName string
 
 			acctCID := accountCIDForDrive(id)
 			if !acctCID.IsZero() {
-				profile, found, profileErr := LookupAccountProfile(acctCID)
-				if profileErr != nil {
-					logger.Debug("could not load account profile for sync dir",
-						"canonical_id", id.String(), "error", profileErr)
-				}
-
-				if found && profile.OrgName != "" {
-					orgName = profile.OrgName
+				if catalog, err := LoadCatalog(); err != nil {
+					logger.Debug("could not load catalog account for sync dir",
+						"canonical_id", id.String(), "error", err)
+				} else if account, found := catalog.AccountByCanonicalID(acctCID); found && account.OrgName != "" {
+					orgName = account.OrgName
 				}
 			}
 
@@ -254,27 +248,28 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 }
 
 // ResolveAccountNames returns org_name and display_name for a drive's parent
-// account using the account profile file. Returns empty strings if the profile
-// is unavailable.
+// account using the catalog account record. Returns empty strings if the
+// account record is unavailable.
 func ResolveAccountNames(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
 	acctCID := accountCIDForDrive(cid)
 	if acctCID.IsZero() {
 		return "", ""
 	}
 
-	profile, found, profileErr := LookupAccountProfile(acctCID)
-	if profileErr != nil {
-		logger.Debug("could not load account profile for names",
-			"canonical_id", cid.String(), "error", profileErr)
+	catalog, err := LoadCatalog()
+	if err != nil {
+		logger.Debug("could not load catalog account for names",
+			"canonical_id", cid.String(), "error", err)
 
 		return "", ""
 	}
 
+	account, found := catalog.AccountByCanonicalID(acctCID)
 	if !found {
 		return "", ""
 	}
 
-	return profile.OrgName, profile.DisplayName
+	return account.OrgName, account.DisplayName
 }
 
 // applyDriveOverrides selectively replaces global config values with per-drive

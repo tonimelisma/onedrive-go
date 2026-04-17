@@ -30,6 +30,8 @@ type countingCloser struct {
 	callCount int
 }
 
+const rootTestDrive123 = "drive-123"
+
 func (c *countingCloser) Close() error {
 	c.callCount++
 	return c.err
@@ -201,14 +203,15 @@ func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 	newCID := driveid.MustCanonicalID("business:renamed@example.com")
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	require.NoError(t, config.AppendDriveSection(configPath, oldCID, "~/Business"))
-	require.NoError(t, config.SaveAccountProfile(oldCID, &config.AccountProfile{
-		UserID:         "user-123",
-		DisplayName:    "Business User",
-		PrimaryDriveID: "drive-123",
-	}))
-	require.NoError(t, config.SaveDriveIdentity(oldCID, &config.DriveIdentity{
-		DriveID: "drive-123",
-	}))
+	seedCatalogAccount(t, oldCID, func(account *config.CatalogAccount) {
+		account.UserID = snapshotTestUserID123
+		account.DisplayName = "Business User"
+		account.PrimaryDriveID = rootTestDrive123
+		account.PrimaryDriveCanonical = oldCID.String()
+	})
+	seedCatalogDrive(t, oldCID, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = rootTestDrive123
+	})
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_user@example.com.json")
 
 	rawCfg, err := config.LoadOrDefault(configPath, slog.New(slog.DiscardHandler))
@@ -248,7 +251,7 @@ func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 		GraphBaseURL: srv.URL,
 		Cfg: &config.ResolvedDrive{
 			CanonicalID: oldCID,
-			DriveID:     driveid.New("drive-123"),
+			DriveID:     driveid.New(rootTestDrive123),
 			SyncDir:     "~/Business",
 		},
 		Runtime: provider,
@@ -388,7 +391,7 @@ func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 
 	// Auth and account management commands should pass through PersistentPreRunE
 	// without error, because they have the skipConfigAnnotation (Phase 2 skipped).
-	skipCmds := []string{"login", "logout", "whoami", "status"}
+	skipCmds := []string{"login", "logout", "status"}
 	for _, name := range skipCmds {
 		t.Run(name, func(t *testing.T) {
 			sub, _, err := cmd.Find([]string{name})

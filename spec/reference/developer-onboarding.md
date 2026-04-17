@@ -74,7 +74,7 @@ state, side effect, or invariant?"
 The product surface is easier to understand if you group it by capability:
 
 - File operations: `ls`, `get`, `put`, `rm`, `mkdir`, `mv`, `cp`, `stat`
-- Authentication and identity: `login`, `logout`, `whoami`
+- Authentication and identity: `login`, `logout`, `status`
 - Drive management: drive catalog/search/add/remove flows and drive selection
 - Bidirectional sync: one-shot and `--watch`, with conflict tracking and
   resolution
@@ -296,7 +296,7 @@ able to scan this table and place every top-level code area.
 
 | Package | Owns | Read when |
 | --- | --- | --- |
-| `internal/authstate` | Shared auth-health vocabulary and user-facing auth copy | You are working on auth status, `whoami`, or unauthorized sync presentation |
+| `internal/authstate` | Shared auth-health vocabulary and user-facing auth copy | You are working on auth status, `status`, or unauthorized sync presentation |
 | `internal/cli` | Cobra command tree, CLI bootstrap, output formatting, command-family workflows, and final user-facing issue rendering | You are changing any user-facing command or command wiring |
 
 | `internal/config` | TOML config loading, validation, path resolution, drive sections, and account reconciliation helpers | You are changing config semantics or lookup rules |
@@ -353,7 +353,7 @@ organized by file families.
 | File family | Role |
 | --- | --- |
 | `root.go`, `doc.go`, `format.go`, `signal.go`, `cleanup.go`, `failure_class.go` | CLI bootstrap, process wiring, shared output boundaries, signal handling, error classification |
-| `auth*.go`, `account_catalog.go`, `account_catalog_snapshot.go`, `email_reconcile.go` | Login/logout/whoami, account catalog projection, auth-health, email reconciliation |
+| `auth*.go`, `account_catalog.go`, `account_catalog_snapshot.go`, `email_reconcile.go` | Login/logout, account catalog projection, auth-health, email reconciliation |
 | `drive.go`, `drive_add.go`, `drive_catalog.go`, `drive_cleanup.go`, `drive_list.go`, `drive_list_render.go`, `drive_remove.go`, `drive_search.go` | Drive add/list/search/remove, catalog projection, and drive selection flows |
 | `get.go`, `get_shared.go`, `put.go`, `put_shared.go`, `ls.go`, `rm.go`, `mkdir.go`, `mv.go`, `cp.go`, `stat.go`, `purge.go` | User-facing file commands including shared-item get/put |
 | `shared.go`, `shared_discovery.go`, `shared_target.go` | Shared item discovery, selection, and shared-target bootstrap |

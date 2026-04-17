@@ -226,7 +226,7 @@ func printDriveSearchAuthSection(
 		return nil
 	}
 
-	if err := printAccountAuthRequirementsText(w, "Authentication required:", authRequired); err != nil {
+	if err := printAccountAuthRequirementsText(w, authRequired); err != nil {
 		return err
 	}
 

@@ -10,14 +10,14 @@ import (
 )
 
 // ConfigWarning represents a non-fatal issue found during lenient config
-// loading. Used by informational commands (drive list, status, whoami) that
+// loading. Used by informational commands (drive list, status, shared) that
 // want to show what they can even when the config has errors.
 type ConfigWarning struct {
 	Message string // human-readable description of the issue
 }
 
 // LogWarnings logs each warning at Warn level. Used by informational commands
-// (drive list, status, whoami) to surface config issues without failing.
+// (drive list, status, shared) to surface config issues without failing.
 func LogWarnings(warnings []ConfigWarning, logger *slog.Logger) {
 	for _, w := range warnings {
 		logger.Warn("config issue", "message", w.Message)
@@ -50,7 +50,7 @@ func loadOrDefaultWithIO(path string, logger *slog.Logger, io configIO) (*Config
 // LoadLenient reads and parses a TOML config file, collecting unknown keys and
 // validation errors as warnings instead of fatal errors. TOML syntax errors and
 // file read errors remain fatal. Used by informational commands (drive list,
-// status, whoami) that need to show what they can even when config has errors.
+// status, shared) that need to show what they can even when config has errors.
 func LoadLenient(path string, logger *slog.Logger) (*Config, []ConfigWarning, error) {
 	return loadLenientWithIO(path, logger, defaultConfigIO())
 }

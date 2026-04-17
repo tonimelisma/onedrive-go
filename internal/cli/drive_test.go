@@ -33,6 +33,7 @@ const (
 	testDriveSearchAllPath      = "/me/drive/root/search(q='*')"
 	testGraphMePath             = "/me"
 	testSharedWithMePath        = "/me/drive/sharedWithMe"
+	driveTestUserExample        = "User Example"
 	testSharedFolderGetItemPath = "/drives/b!drive1234567890/items/source-item-folder"
 	testSharedFileGetItemPath   = "/drives/b!drive1234567891/items/source-item-file"
 	graphDrivesPath             = "/me/drives"
@@ -151,22 +152,22 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_ComputesDefault(t *testing.T) {
 
 	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
 	require.Len(t, entries, 1)
-	// Without account profile, personal defaults to "~/OneDrive".
+	// Without a catalog account entry, personal defaults to "~/OneDrive".
 	assert.Equal(t, "~/OneDrive", entries[0].SyncDir)
 }
 
-func TestBuildConfiguredDriveEntries_NoSyncDir_WithAccountProfile(t *testing.T) {
+func TestBuildConfiguredDriveEntries_NoSyncDir_WithCatalogAccount(t *testing.T) {
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 
-	// Create a token file and an account profile with org_name.
+	// Create a token file and a catalog account with org_name.
 	bizCID := driveid.MustCanonicalID("business:alice@contoso.com")
 	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
-	require.NoError(t, config.SaveAccountProfile(bizCID, &config.AccountProfile{
-		OrgName:     "Contoso",
-		DisplayName: "Alice Smith",
-	}))
+	seedCatalogAccount(t, bizCID, func(account *config.CatalogAccount) {
+		account.OrgName = workflowTestOrgContoso
+		account.DisplayName = snapshotTestDisplayNameAliceSmith
+	})
 
 	cfg := config.DefaultConfig()
 	cfg.Drives[bizCID] = config.Drive{}
@@ -742,7 +743,7 @@ sync_dir = "~/OneDrive"
 // --- purgeSingleDrive ---
 
 // Validates: R-3.3.8
-func TestPurgeSingleDrive_DeletesDriveStateButPreservesAccountProfile(t *testing.T) {
+func TestPurgeSingleDrive_DeletesDriveStateButPreservesCatalogAccount(t *testing.T) {
 	// Isolate HOME so DriveStatePath uses a temp directory.
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
@@ -754,9 +755,9 @@ func TestPurgeSingleDrive_DeletesDriveStateButPreservesAccountProfile(t *testing
 	statePath := config.DriveStatePath(cid)
 	require.NotEmpty(t, statePath)
 	require.NoError(t, os.WriteFile(statePath, []byte("fake-db"), 0o600))
-	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
-		DisplayName: "User Example",
-	}))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = driveTestUserExample
+	})
 
 	// Create a config file with this drive.
 	cfgDir := t.TempDir()
@@ -774,10 +775,9 @@ sync_dir = "~/OneDrive"
 	_, statErr := os.Stat(statePath)
 	assert.True(t, os.IsNotExist(statErr), "state DB should be deleted")
 
-	profile, found, profileErr := config.LookupAccountProfile(cid)
-	require.NoError(t, profileErr)
-	require.True(t, found, "drive purge must preserve account profile state")
-	assert.Equal(t, "User Example", profile.DisplayName)
+	profile, found := loadCatalogAccount(t, cid)
+	require.True(t, found, "drive purge must preserve catalog account state")
+	assert.Equal(t, driveTestUserExample, profile.DisplayName)
 
 	// Config section should be gone.
 	data, readErr := localpath.ReadFile(cfgPath)
@@ -1445,7 +1445,7 @@ func TestDriveAdd_SharedTargetFolderAddsCanonicalSharedDrive(t *testing.T) {
 		case testGraphMePath:
 			writeTestResponse(t, w, `{
 				"id":"user-123",
-				"displayName":"User Example",
+				"displayName":driveTestUserExample,
 				"mail":"user@example.com"
 			}`)
 		case testSharedFolderGetItemPath:
@@ -1498,7 +1498,7 @@ func TestDriveAdd_SharedTargetFileRejectsDirectFileGuidance(t *testing.T) {
 		case testGraphMePath:
 			writeTestResponse(t, w, `{
 				"id":"user-123",
-				"displayName":"User Example",
+				"displayName":driveTestUserExample,
 				"mail":"user@example.com"
 			}`)
 		case testSharedFileGetItemPath:
@@ -1657,7 +1657,7 @@ func TestDriveList_JSONIncludesSharedDiscoveryAuthRequiredAccount(t *testing.T) 
 		case testGraphMePath:
 			writeTestResponse(t, w, `{
 				"id":"user-123",
-				"displayName":"User Example",
+				"displayName":driveTestUserExample,
 				"mail":"user@example.com"
 			}`)
 		case testDriveSearchAllPath:
@@ -1706,7 +1706,7 @@ func TestDriveAdd_SharedNameHonorsAccountFilter(t *testing.T) {
 		case testGraphMePath:
 			writeTestResponse(t, w, `{
 				"id":"user-123",
-				"displayName":"User Example",
+				"displayName":driveTestUserExample,
 				"mail":"user@example.com"
 			}`)
 		case testDriveSearchAllPath:
@@ -1755,9 +1755,9 @@ func TestDriveAdd_SharedNameNoMatchesIncludesBlockedAccounts(t *testing.T) {
 	setTestDriveHome(t)
 
 	profileCID := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, config.SaveAccountProfile(profileCID, &config.AccountProfile{
-		DisplayName: "User Example",
-	}))
+	seedCatalogAccount(t, profileCID, func(account *config.CatalogAccount) {
+		account.DisplayName = driveTestUserExample
+	})
 
 	cc := &CLIContext{
 		Logger:       testDriveLogger(t),
