@@ -43,50 +43,49 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	}
 	opts.FullReconcile = fullReconcile
 
-	// Steps 2-4: Observe remote + local, buffer, and flush.
-	// The pending delta token is returned but NOT committed yet — it is
-	// deferred until after the planner approves the changes (step 6).
+	if opts.DryRun {
+		return e.runOnceDryRun(ctx, runner, bl, mode, opts, start)
+	}
+
+	// Steps 2-4: refresh remote and local snapshots, then derive the current
+	// actionable set from SQLite structural diff and reconciliation.
 	observeStart := e.nowFunc()
-	changes, pendingCursorCommit, err := runner.observeChanges(ctx, nil, bl, opts.DryRun, opts.FullReconcile)
+	pendingCursorCommit, err := runner.observeCurrentTruth(ctx, nil, bl, opts.DryRun, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
-	if materializeErr := runner.materializeSQLitePlan(ctx, opts.DryRun); materializeErr != nil {
-		return nil, materializeErr
-	}
-	changes = mergePathChangeBatches(
-		changes,
-		runner.collectDueRetryChanges(ctx, pathSetFromBatch(changes)),
-	)
-	e.collector().RecordObserve(len(changes), e.since(observeStart))
+	e.collector().RecordObserve(0, e.since(observeStart))
 
-	// Step 5: Early return if no changes.
-	if len(changes) == 0 {
-		if commitErr := runner.commitPendingPrimaryCursor(ctx, pendingCursorCommit); commitErr != nil {
-			return nil, commitErr
-		}
-		return e.completeRunOnceWithoutChanges(ctx, start, mode, opts), nil
-	}
-
-	// Step 6: Plan actions.
+	// Step 5: Plan actions from SQLite snapshots and reconciliation rows.
 	safety := e.resolveSafetyConfig()
-	denied := e.permHandler.DeniedPrefixes(ctx)
 
 	planStart := e.nowFunc()
-	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
+	plan, err := runner.buildSQLiteActionPlan(ctx, bl, mode, safety)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
 	e.collector().RecordPlan(len(plan.Actions), e.since(planStart))
 
-	// Planner approved — commit the deferred delta token now.
+	if materializeErr := runner.materializeSQLitePlan(ctx, plan, opts.DryRun); materializeErr != nil {
+		return nil, materializeErr
+	}
+
+	// SQLite-derived plan approved — commit the deferred delta token now.
 	if err := runner.commitPendingPrimaryCursor(ctx, pendingCursorCommit); err != nil {
 		return nil, err
 	}
 
-	// Step 7: Build report from plan counts.
 	counts := CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
+
+	if len(plan.Actions) == 0 {
+		if report.DeferredByMode.Total() > 0 {
+			report.Duration = e.since(start)
+			e.logRunOnceCompletion(report)
+			return report, nil
+		}
+		return e.completeRunOnceWithoutChanges(ctx, start, mode, opts), nil
+	}
 
 	if opts.DryRun {
 		return e.completeDryRunReport(start, report), nil
@@ -121,9 +120,44 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	return report, nil
 }
 
-func (r *oneShotRunner) materializeSQLitePlan(ctx context.Context, dryRun bool) error {
+func (e *Engine) runOnceDryRun(
+	ctx context.Context,
+	runner *oneShotRunner,
+	bl *Baseline,
+	mode Mode,
+	opts RunOptions,
+	start time.Time,
+) (*Report, error) {
+	observeStart := e.nowFunc()
+	changes, _, err := runner.observeChanges(ctx, nil, bl, true, opts.FullReconcile)
+	if err != nil {
+		return nil, err
+	}
+	e.collector().RecordObserve(len(changes), e.since(observeStart))
+
+	safety := e.resolveSafetyConfig()
+	denied := e.permHandler.DeniedPrefixes(ctx)
+
+	planStart := e.nowFunc()
+	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
+	if err != nil {
+		return nil, fmt.Errorf("sync: planning actions: %w", err)
+	}
+	e.collector().RecordPlan(len(plan.Actions), e.since(planStart))
+
+	counts := CountByType(plan.Actions)
+	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
+
+	return e.completeDryRunReport(start, report), nil
+}
+
+func (r *oneShotRunner) materializeSQLitePlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
 	if dryRun {
 		return nil
+	}
+
+	if err := r.engine.baseline.PruneRetryStateToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
+		return fmt.Errorf("sync: pruning retry_state to current actions: %w", err)
 	}
 
 	if err := r.engine.baseline.PruneScopeBlocksWithoutBlockedRetries(ctx); err != nil {
@@ -447,6 +481,34 @@ func (flow *engineFlow) observeLocal(
 // When fullReconcile is true, runs a fresh delta with empty token (enumerates
 // ALL remote items) and detects orphans — baseline entries not in the full
 // enumeration, representing missed delta deletions.
+func (flow *engineFlow) observeCurrentTruth(
+	ctx context.Context,
+	watch *watchRuntime,
+	bl *Baseline,
+	dryRun, fullReconcile bool,
+) (*pendingPrimaryCursorCommit, error) {
+	plan := flow.buildPrimaryRootObservationPlan(fullReconcile)
+	remoteEvents, pendingCursorCommit, err := flow.observeRemoteChanges(
+		ctx, bl, dryRun, plan,
+	)
+	if err != nil {
+		return nil, err
+	}
+	_ = remoteEvents
+
+	localResult, err := flow.observeLocalChanges(ctx, watch, bl)
+	if err != nil {
+		return nil, err
+	}
+	if commitLocalErr := flow.commitObservedLocalSnapshot(ctx, dryRun, localResult); commitLocalErr != nil {
+		return nil, commitLocalErr
+	}
+
+	return pendingCursorCommit, nil
+}
+
+// observeChanges remains the legacy watch/bootstrap observation path until the
+// long-lived runtime is cut over to snapshot refresh + SQLite reconciliation.
 func (flow *engineFlow) observeChanges(
 	ctx context.Context,
 	watch *watchRuntime,
@@ -487,6 +549,59 @@ func (flow *engineFlow) observeChanges(
 	buf.AddAll(remoteDriftEvents)
 
 	return buf.FlushImmediate(), pendingCursorCommit, nil
+}
+
+func (r *oneShotRunner) buildSQLiteActionPlan(
+	ctx context.Context,
+	bl *Baseline,
+	mode Mode,
+	safety *SafetyConfig,
+) (*ActionPlan, error) {
+	comparisons, err := r.engine.baseline.QueryComparisonState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
+	}
+	reconciliations, err := r.engine.baseline.QueryReconciliationState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
+	}
+	localRows, err := r.engine.baseline.ListLocalState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing local_state rows: %w", err)
+	}
+	remoteRows, err := r.engine.baseline.ListRemoteState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing remote_state rows: %w", err)
+	}
+
+	return r.engine.planner.PlanCurrentState(
+		comparisons,
+		reconciliations,
+		localRows,
+		remoteRows,
+		bl,
+		mode,
+		safety,
+	)
+}
+
+func retryWorkKeysForActions(actions []Action) []RetryWorkKey {
+	keys := make([]RetryWorkKey, 0, len(actions))
+	seen := make(map[RetryWorkKey]struct{}, len(actions))
+
+	for i := range actions {
+		key := RetryWorkKey{
+			Path:       actions[i].Path,
+			ActionType: actions[i].Type,
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+
+	return keys
 }
 
 func (flow *engineFlow) observeRemoteChanges(

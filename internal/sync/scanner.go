@@ -266,6 +266,16 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 			// For modifies: check if hash matches baseline (no real change).
 			if !job.isNew && hash != "" {
 				if existing, found := o.Baseline.GetByPath(job.dbRelPath); found && hash == existing.LocalHash {
+					mu.Lock()
+					rows = append(rows, LocalStateRow{
+						Path:            job.dbRelPath,
+						ItemType:        ItemTypeFile,
+						Hash:            hash,
+						Size:            job.size,
+						Mtime:           job.mtime,
+						ContentIdentity: hash,
+					})
+					mu.Unlock()
 					return nil
 				}
 			}
