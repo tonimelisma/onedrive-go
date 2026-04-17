@@ -87,16 +87,22 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 	}()
 	select {
 	case <-uploadStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(debugEventTimeout):
 		require.Fail(t, "bootstrap upload should start before observers")
 	}
+	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventBootstrapQuiesced
+	}), "bootstrap must not quiesce while the bootstrap upload is blocked")
+	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	}), "local observer must not start before bootstrap quiesces")
 
 	close(allowUpload)
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 
@@ -108,6 +114,15 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not exit after cancellation")
 	}
+
+	recorder.requireOrderedSubsequence(t, []func(engineDebugEvent) bool{
+		func(event engineDebugEvent) bool {
+			return event.Type == engineDebugEventBootstrapQuiesced
+		},
+		func(event engineDebugEvent) bool {
+			return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+		},
+	}, "bootstrap quiescence must precede local observer startup")
 }
 
 // Validates: R-2.1.2
@@ -166,19 +181,25 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 	}()
 	select {
 	case <-downloadStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(debugEventTimeout):
 		require.Fail(t, "bootstrap download should start before remote observer")
 	}
 
 	assert.Equal(t, int32(1), deltaCalls.Load(),
 		"remote observer must not start polling until bootstrap has drained")
+	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventBootstrapQuiesced
+	}), "bootstrap must not quiesce while the bootstrap download is blocked")
+	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
+	}), "remote observer must not start before bootstrap quiesces")
 
 	close(allowDownload)
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
 	}, "remote observer started")
 
@@ -190,6 +211,15 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not exit after cancellation")
 	}
+
+	recorder.requireOrderedSubsequence(t, []func(engineDebugEvent) bool{
+		func(event engineDebugEvent) bool {
+			return event.Type == engineDebugEventBootstrapQuiesced
+		},
+		func(event engineDebugEvent) bool {
+			return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
+		},
+	}, "bootstrap quiescence must precede remote observer startup")
 }
 
 // ---------------------------------------------------------------------------
