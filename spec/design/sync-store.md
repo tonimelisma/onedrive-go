@@ -75,9 +75,8 @@ category, scope key, and retry delay; the store persists them transactionally.
 
 `retry_state` is the durable retry ledger. It persists retryable and blocked
 work keyed to semantic work identity, while the executable action set remains
-runtime-owned in Go. `sync_failures` remains the reporting and
-failure-enrichment surface, but it no longer decides which retryable rows are
-due or which blocked row is trialed.
+runtime-owned in Go. `sync_failures` remains the reporting surface, but it no
+longer decides which retryable rows are due or which blocked row is trialed.
 
 Supporting failure mutations include:
 

@@ -95,7 +95,7 @@ durable executable plan table.
 ## `sync_failures`
 
 `sync_failures` is the durable ledger for retryable and actionable per-path
-problems. Important columns:
+problems used for reporting, status, and issue inspection. Important columns:
 
 - path identity: `path`, `direction`, `action_type`, `item_id`
 - classification: `category`, `issue_type`, `scope_key`

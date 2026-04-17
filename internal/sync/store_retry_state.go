@@ -45,6 +45,9 @@ const (
 			WHERE retry_state.blocked = 1
 				AND retry_state.scope_key = scope_blocks.scope_key
 		)`
+	sqlEarliestRetryStateAt = `SELECT MIN(next_retry_at) FROM retry_state
+		WHERE blocked = 0
+			AND next_retry_at > ?`
 )
 
 func serializeRetryWorkKey(key RetryWorkKey) string {
@@ -161,6 +164,21 @@ func (m *SyncStore) ListRetryStateReady(ctx context.Context, now time.Time) ([]R
 	defer rows.Close()
 
 	return scanRetryStateRows(rows)
+}
+
+func (m *SyncStore) EarliestRetryStateAt(ctx context.Context, now time.Time) (time.Time, error) {
+	nowNano := now.UnixNano()
+
+	var minNano *int64
+	if err := m.db.QueryRowContext(ctx, sqlEarliestRetryStateAt, nowNano).Scan(&minNano); err != nil {
+		return time.Time{}, fmt.Errorf("sync: querying earliest retry_state at: %w", err)
+	}
+
+	if minNano == nil {
+		return time.Time{}, nil
+	}
+
+	return time.Unix(0, *minNano), nil
 }
 
 func (m *SyncStore) PickRetryTrialCandidate(

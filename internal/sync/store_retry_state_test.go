@@ -133,6 +133,46 @@ func TestRetryStateReadyAndTrialCandidateQueries(t *testing.T) {
 }
 
 // Validates: R-2.10.33
+func TestRetryStateEarliestRetryAt_IgnoresBlockedRows(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	now := time.Unix(50, 0)
+
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "blocked.txt",
+		ActionType:   ActionDownload,
+		ScopeKey:     SKService(),
+		Blocked:      true,
+		AttemptCount: 1,
+		NextRetryAt:  now.Add(10 * time.Minute).UnixNano(),
+		FirstSeenAt:  1,
+		LastSeenAt:   2,
+	}))
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "later.txt",
+		ActionType:   ActionUpload,
+		AttemptCount: 1,
+		NextRetryAt:  now.Add(20 * time.Minute).UnixNano(),
+		FirstSeenAt:  3,
+		LastSeenAt:   4,
+	}))
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "earliest.txt",
+		ActionType:   ActionLocalDelete,
+		AttemptCount: 1,
+		NextRetryAt:  now.Add(5 * time.Minute).UnixNano(),
+		FirstSeenAt:  5,
+		LastSeenAt:   6,
+	}))
+
+	earliest, err := store.EarliestRetryStateAt(ctx, now)
+	require.NoError(t, err)
+	assert.Equal(t, now.Add(5*time.Minute), earliest)
+}
+
+// Validates: R-2.10.33
 func TestRetryStateScopeReadyAndDeleteHelpers(t *testing.T) {
 	t.Parallel()
 

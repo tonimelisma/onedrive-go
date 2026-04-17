@@ -29,7 +29,7 @@ Retry and trial admission now read from `retry_state`:
 
 - ready per-item retry work comes from unblocked `retry_state` rows whose `next_retry_at` is due
 - scope trials sample one blocked `retry_state` row at random for each due scope
-- `sync_failures` remains available for issue reporting and candidate enrichment, but it is no longer the retry scheduler
+- `sync_failures` remains available for issue reporting, but it is no longer part of retry scheduling or retry candidate reconstruction
 
 The engine does **not** own multi-drive orchestration or control-socket
 lifecycle. Those belong to `internal/multisync`.
