@@ -87,9 +87,17 @@ no user-configured bidirectional narrowing of the synced tree.
 Built-in local observation policy remains:
 
 - validate OneDrive-invalid names before they become upload work
+- symmetrically ignore junk/temp names before they enter either snapshot surface
 - exclude Personal Vault content
 - support symlink following at the alias path with cycle protection
 - keep scanner/watch behavior aligned for hashing and case-collision detection
+
+Ignore invariants:
+
+- ignore policy is symmetric across local and remote observation
+- ignored items never enter `local_state` or `remote_state`
+- if a path is absent from both snapshots, it is just absent from current truth
+- later reconciliation removes baseline rows that are absent from both snapshots
 
 Observation may emit `SkippedItem`s for invalid or unsupported local content.
 The engine decides how those become durable actionable issues.
