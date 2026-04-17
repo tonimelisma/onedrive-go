@@ -120,31 +120,9 @@ func resolveRawShareAccountEmail(explicit string) (string, error) {
 		return explicit, nil
 	}
 
-	stored, err := config.LoadCatalog()
+	emails, err := config.AuthenticatedAccountEmails(config.DefaultDataDir())
 	if err != nil {
 		return "", fmt.Errorf("loading catalog: %w", err)
-	}
-
-	seen := make(map[string]struct{})
-	var emails []string
-
-	for _, key := range stored.SortedAccountKeys() {
-		account := stored.Accounts[key]
-		if account.Email == "" {
-			continue
-		}
-		if _, ok := seen[account.Email]; ok {
-			continue
-		}
-		if tokenCID, parseErr := driveid.NewCanonicalID(account.CanonicalID); parseErr == nil {
-			tokenPath := config.DriveTokenPath(tokenCID)
-			if tokenPath == "" || !managedPathExists(tokenPath) {
-				continue
-			}
-		}
-
-		seen[account.Email] = struct{}{}
-		emails = append(emails, account.Email)
 	}
 
 	switch len(emails) {
@@ -161,12 +139,10 @@ func (cc *CLIContext) sharedBootstrapMetaClient(
 	ctx context.Context,
 	accountEmail string,
 ) (*graph.Client, string, error) {
-	stored, err := config.LoadCatalog()
+	accountCID, err := config.LoadAccountCanonicalIDByEmail(config.DefaultDataDir(), accountEmail)
 	if err != nil {
 		return nil, "", fmt.Errorf("loading catalog: %w", err)
 	}
-
-	accountCID := catalogAccountTokenCID(stored, accountEmail)
 	result, err := cc.probeAccountIdentity(ctx, accountCID, "shared-account")
 	if err != nil {
 		return nil, "", fmt.Errorf("probe account identity: %w", err)
@@ -195,12 +171,10 @@ func (cc *CLIContext) sharedBootstrapMetaClient(
 }
 
 func (cc *CLIContext) sharedTargetClients(ctx context.Context, ref sharedref.Ref) (*driveops.AccountClients, error) {
-	stored, err := config.LoadCatalog()
+	accountCID, err := config.LoadAccountCanonicalIDByEmail(config.DefaultDataDir(), ref.AccountEmail)
 	if err != nil {
 		return nil, fmt.Errorf("loading catalog: %w", err)
 	}
-
-	accountCID := catalogAccountTokenCID(stored, ref.AccountEmail)
 	result, err := cc.probeAccountIdentity(ctx, accountCID, "shared-account")
 	if err != nil {
 		return nil, fmt.Errorf("probe account identity: %w", err)

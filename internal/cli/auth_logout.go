@@ -99,10 +99,10 @@ func executeLogout(
 	}
 
 	if purge {
-		return executePurgeLogout(cfgPath, w, stored, account, affected, logger)
+		return executePurgeLogout(cfgPath, w, account, affected, logger)
 	}
 
-	return executePlainLogout(cfgPath, w, stored, account, affected, logger)
+	return executePlainLogout(cfgPath, w, account, affected, logger)
 }
 
 func removeLogoutToken(
@@ -115,7 +115,7 @@ func removeLogoutToken(
 ) error {
 	tokenCanonicalID := canonicalIDForToken(account, affected)
 	if tokenCanonicalID.IsZero() {
-		tokenCanonicalID = catalogAccountTokenCID(stored, account)
+		tokenCanonicalID = config.AccountCanonicalIDByEmail(stored, account)
 	}
 
 	tokenPath := config.DriveTokenPath(tokenCanonicalID)
@@ -140,7 +140,6 @@ func removeLogoutToken(
 func executePurgeLogout(
 	cfgPath string,
 	w io.Writer,
-	stored *config.Catalog,
 	account string,
 	affected []driveid.CanonicalID,
 	logger *slog.Logger,
@@ -152,9 +151,8 @@ func executePurgeLogout(
 		return fmt.Errorf("purging orphaned files: %w", err)
 	}
 
-	removeCatalogEntriesForPurgedAccount(stored, account)
-	if err := saveCatalog(stored); err != nil {
-		return err
+	if err := config.ApplyPurgeLogout(config.DefaultDataDir(), account); err != nil {
+		return fmt.Errorf("updating catalog after purge logout: %w", err)
 	}
 
 	return writeln(w, "Sync directories untouched — your files remain on disk.")
@@ -163,15 +161,10 @@ func executePurgeLogout(
 func executePlainLogout(
 	cfgPath string,
 	w io.Writer,
-	stored *config.Catalog,
 	account string,
 	affected []driveid.CanonicalID,
 	logger *slog.Logger,
 ) error {
-	if clearErr := clearAccountAuthRequirementForSource(context.Background(), account, config.AuthClearSourceLogout, logger); clearErr != nil {
-		logger.Warn("clearing stale account auth requirement during logout", "account", account, "error", clearErr)
-	}
-
 	if err := removeAccountDriveConfigs(cfgPath, affected, logger); err != nil {
 		return fmt.Errorf("removing drive configs: %w", err)
 	}
@@ -180,7 +173,7 @@ func executePlainLogout(
 		return err
 	}
 
-	if err := updateCatalogAfterLogout(stored, account); err != nil {
+	if err := config.ApplyPlainLogout(config.DefaultDataDir(), account); err != nil {
 		return fmt.Errorf("updating catalog after logout: %w", err)
 	}
 
@@ -273,70 +266,6 @@ func canonicalIDForToken(account string, driveIDs []driveid.CanonicalID) driveid
 	}
 
 	return driveid.CanonicalID{}
-}
-
-func catalogAccountTokenCID(stored *config.Catalog, email string) driveid.CanonicalID {
-	if stored == nil || email == "" {
-		return driveid.CanonicalID{}
-	}
-
-	account, found := stored.AccountByEmail(email)
-	if !found {
-		return driveid.CanonicalID{}
-	}
-
-	cid, err := driveid.NewCanonicalID(account.CanonicalID)
-	if err != nil {
-		return driveid.CanonicalID{}
-	}
-
-	return cid
-}
-
-func updateCatalogAfterLogout(stored *config.Catalog, email string) error {
-	if stored == nil || email == "" {
-		return nil
-	}
-
-	account, found := stored.AccountByEmail(email)
-	if !found {
-		return nil
-	}
-	account.AuthRequirementReason = ""
-	stored.UpsertAccount(&account)
-	return saveCatalog(stored)
-}
-
-func removeCatalogEntriesForPurgedAccount(stored *config.Catalog, email string) {
-	if stored == nil || email == "" {
-		return
-	}
-
-	account, found := stored.AccountByEmail(email)
-	if !found {
-		return
-	}
-
-	accountCID, err := driveid.NewCanonicalID(account.CanonicalID)
-	if err == nil {
-		drives := stored.DrivesForAccount(accountCID)
-		for i := range drives {
-			drive := &drives[i]
-			driveCID, cidErr := driveid.NewCanonicalID(drive.CanonicalID)
-			if cidErr != nil {
-				continue
-			}
-			stored.DeleteDrive(driveCID)
-		}
-		stored.DeleteAccount(accountCID)
-	}
-}
-
-func saveCatalog(stored *config.Catalog) error {
-	if err := config.SaveCatalog(stored); err != nil {
-		return fmt.Errorf("writing catalog: %w", err)
-	}
-	return nil
 }
 
 // printAffectedDrives lists drives that can no longer sync after logout.

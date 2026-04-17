@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -69,62 +68,16 @@ func persistLoginMetadata(
 	primaryDriveID driveid.ID,
 	logger *slog.Logger,
 ) {
-	if catalogErr := config.UpdateCatalog(func(catalog *config.Catalog) error {
-		account := buildLoginCatalogAccount(canonicalID, user, orgName, primaryDriveID, catalog)
-		drive := buildLoginCatalogDrive(canonicalID, primaryDriveID, catalog)
-		drive.CachedAt = time.Now().UTC().Format(time.RFC3339)
-		catalog.UpsertAccount(&account)
-		catalog.UpsertDrive(&drive)
-		return nil
-	}); catalogErr != nil {
+	if catalogErr := config.RecordLogin(
+		config.DefaultDataDir(),
+		canonicalID,
+		user.ID,
+		user.DisplayName,
+		orgName,
+		primaryDriveID,
+	); catalogErr != nil {
 		logger.Warn("failed to update catalog after login", "error", catalogErr)
 	}
-}
-
-func buildLoginCatalogAccount(
-	canonicalID driveid.CanonicalID,
-	user *graph.User,
-	orgName string,
-	primaryDriveID driveid.ID,
-	catalog *config.Catalog,
-) config.CatalogAccount {
-	account := config.CatalogAccount{
-		CanonicalID:           canonicalID.String(),
-		Email:                 canonicalID.Email(),
-		DriveType:             canonicalID.DriveType(),
-		UserID:                user.ID,
-		DisplayName:           user.DisplayName,
-		OrgName:               orgName,
-		PrimaryDriveID:        primaryDriveID.String(),
-		PrimaryDriveCanonical: canonicalID.String(),
-	}
-	if existing, found := catalog.AccountByCanonicalID(canonicalID); found {
-		account.AuthRequirementReason = existing.AuthRequirementReason
-	}
-	return account
-}
-
-func buildLoginCatalogDrive(
-	canonicalID driveid.CanonicalID,
-	primaryDriveID driveid.ID,
-	catalog *config.Catalog,
-) config.CatalogDrive {
-	drive := config.CatalogDrive{
-		CanonicalID:           canonicalID.String(),
-		OwnerAccountCanonical: canonicalID.String(),
-		DriveType:             canonicalID.DriveType(),
-		DisplayName:           config.DefaultDisplayName(canonicalID),
-		PrimaryForAccount:     true,
-		RemoteDriveID:         primaryDriveID.String(),
-	}
-	if existing, found := catalog.DriveByCanonicalID(canonicalID); found {
-		drive = existing
-		drive.OwnerAccountCanonical = canonicalID.String()
-		drive.DriveType = canonicalID.DriveType()
-		drive.PrimaryForAccount = true
-		drive.RemoteDriveID = primaryDriveID.String()
-	}
-	return drive
 }
 
 func clearLoginAuthRequirement(ctx context.Context, email string, logger *slog.Logger) {

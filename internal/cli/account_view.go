@@ -305,18 +305,3 @@ func evaluateAccountViewAuth(savedLoginReason, authRequirementReason authstate.R
 	}
 	return authstate.ReadyHealth()
 }
-
-func configAccountCIDForDrive(cid driveid.CanonicalID) driveid.CanonicalID {
-	switch {
-	case cid.IsPersonal(), cid.IsBusiness():
-		return cid
-	case cid.IsSharePoint():
-		accountCID, err := driveid.Construct(driveid.DriveTypeBusiness, cid.Email())
-		if err != nil {
-			return driveid.CanonicalID{}
-		}
-		return accountCID
-	default:
-		return driveid.CanonicalID{}
-	}
-}

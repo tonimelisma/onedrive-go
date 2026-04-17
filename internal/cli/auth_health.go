@@ -125,9 +125,9 @@ func inspectSavedLogin(
 ) authstate.Reason {
 	tokenID := canonicalIDForToken(account, driveIDs)
 	if tokenID.IsZero() {
-		stored, err := config.LoadCatalog()
+		accountCID, err := config.LoadAccountCanonicalIDByEmail(config.DefaultDataDir(), account)
 		if err == nil {
-			tokenID = catalogAccountTokenCID(stored, account)
+			tokenID = accountCID
 		}
 		if tokenID.IsZero() {
 			tokenID = findTokenFallback(account, logger)
@@ -153,18 +153,13 @@ func inspectSavedLogin(
 
 func hasPersistedAccountAuthRequirement(ctx context.Context, account string, logger *slog.Logger) bool {
 	_ = ctx
-	stored, err := config.LoadCatalog()
+	required, err := config.LoadHasPersistedAccountAuthRequirement(config.DefaultDataDir(), account)
 	if err != nil {
 		logger.Debug("loading catalog for auth projection", "account", account, "error", err)
 		return false
 	}
 
-	accountEntry, found := stored.AccountByEmail(account)
-	if !found {
-		return false
-	}
-
-	return accountEntry.AuthRequirementReason == authReasonSyncAuthRejected
+	return required
 }
 
 func clearAccountAuthRequirement(ctx context.Context, email string, logger *slog.Logger) error {
@@ -193,13 +188,11 @@ func clearAccountAuthRequirementWithCount(
 	}
 
 	_ = ctx
-	stored, err := config.LoadCatalog()
+	required, err := config.LoadHasPersistedAccountAuthRequirement(config.DefaultDataDir(), email)
 	if err != nil {
 		return 0, fmt.Errorf("loading catalog: %w", err)
 	}
-
-	accountEntry, found := stored.AccountByEmail(email)
-	if !found || accountEntry.AuthRequirementReason == "" {
+	if !required {
 		return 0, nil
 	}
 
