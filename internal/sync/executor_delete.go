@@ -143,10 +143,10 @@ func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ActionOutco
 }
 
 // DeleteLocalFile removes a file after verifying its hash matches baseline.
-// Hash mismatch means the file changed after planning; we keep the local file
-// and re-upload it so the remote delete loses instead of deleting newer local
-// content.
-func (e *Executor) DeleteLocalFile(ctx context.Context, action *Action, absPath string, info os.FileInfo) ActionOutcome {
+// Hash mismatch means the file changed after planning; the executor keeps the
+// local file in place and returns a stale-precondition failure so the engine
+// replans from current truth.
+func (e *Executor) DeleteLocalFile(_ context.Context, action *Action, absPath string, info os.FileInfo) ActionOutcome {
 	baselineHash := ""
 	baselineRemoteHash := ""
 
@@ -164,25 +164,21 @@ func (e *Executor) DeleteLocalFile(ctx context.Context, action *Action, absPath 
 		}
 
 		if currentHash != baselineHash {
-			e.logger.Warn("local delete: hash mismatch, keeping local file and recreating remote",
+			e.logger.Warn("local delete: hash mismatch, keeping local file and requiring replan",
 				slog.String("path", action.Path),
 			)
-			e.logger.Info("auto-resolving edit-delete conflict: local edit wins",
-				slog.String("path", action.Path),
+			return e.failedOutcome(
+				action,
+				ActionLocalDelete,
+				fmt.Errorf("%w: local delete hash mismatch for %s (baseline=%s current=%s remote=%s mtime=%d)",
+					ErrActionPreconditionChanged,
+					action.Path,
+					baselineHash,
+					currentHash,
+					baselineRemoteHash,
+					info.ModTime().UnixNano(),
+				),
 			)
-
-			conflictAction := *action
-			conflictAction.ConflictInfo = &ConflictRecord{
-				Path:         action.Path,
-				DriveID:      e.resolveDriveID(action),
-				ItemID:       action.ItemID,
-				ConflictType: ConflictEditDelete,
-				LocalHash:    currentHash,
-				RemoteHash:   baselineRemoteHash,
-				LocalMtime:   info.ModTime().UnixNano(),
-			}
-
-			return e.ExecuteUpload(ctx, &conflictAction)
 		}
 	}
 

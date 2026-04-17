@@ -772,6 +772,13 @@ func TestClassifyResult_LocalErrors(t *testing.T) {
 			wantSummaryKey:  SummaryFileTooLarge,
 			wantPersistence: persistActionableFailure,
 		},
+		{
+			name:            "stale_delete_precondition",
+			result:          WorkerResult{Err: fmt.Errorf("delete lost race: %w", ErrActionPreconditionChanged)},
+			wantClass:       resultRequeue,
+			wantSummaryKey:  SummarySyncFailure,
+			wantPersistence: persistTransientFailure,
+		},
 	})
 }
 

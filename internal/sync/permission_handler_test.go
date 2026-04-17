@@ -38,6 +38,12 @@ func seedLocalPermissionDeniedIssue(t *testing.T, store *SyncStore, path string,
 	role := FailureRoleItem
 	if scopeKey.IsPermDir() {
 		role = FailureRoleBoundary
+		require.NoError(t, store.UpsertScopeBlock(t.Context(), &ScopeBlock{
+			Key:          scopeKey,
+			IssueType:    IssueLocalPermissionDenied,
+			TimingSource: ScopeTimingNone,
+			BlockedAt:    time.Now(),
+		}))
 	}
 
 	err := store.RecordFailure(t.Context(), &SyncFailureParams{

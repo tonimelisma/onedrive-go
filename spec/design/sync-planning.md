@@ -94,6 +94,11 @@ Execution applies the already-expanded conflict policy immediately:
   conflict copy and downloading remote to the canonical path
 - edit/delete -> local wins automatically by re-uploading local content
 
+If executor-time precondition revalidation later proves a planned local delete
+went stale, execution reports that stale precondition and returns control to
+the engine; the next plan rebuild is still the only place that may emit the
+concrete edit/delete upload.
+
 ## Folder And Move Semantics
 
 Folder decisions are symmetric with file decisions, but folder deletes also

@@ -473,6 +473,48 @@ func (m *SyncStore) ClearSyncFailureByPath(ctx context.Context, path string) err
 	return nil
 }
 
+// ClearHeldRetryWork removes one held scoped failure row and its matching
+// retry_state work entry without disturbing unrelated retry work for the same
+// path.
+func (m *SyncStore) ClearHeldRetryWork(
+	ctx context.Context,
+	work RetryWorkKey,
+	scopeKey ScopeKey,
+) (err error) {
+	tx, err := beginPerfTx(ctx, m.db)
+	if err != nil {
+		return fmt.Errorf("sync: begin clear-held-retry-work tx for %s: %w", work.Path, err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback clear-held-retry-work tx for %s", work.Path))
+	}()
+
+	if _, execErr := tx.ExecContext(ctx,
+		`DELETE FROM sync_failures
+			WHERE path = ? AND scope_key = ? AND failure_role = ?`,
+		work.Path,
+		scopeKey.String(),
+		FailureRoleHeld,
+	); execErr != nil {
+		return fmt.Errorf("sync: deleting held sync failure for %s: %w", work.Path, execErr)
+	}
+
+	if _, execErr := tx.ExecContext(ctx,
+		sqlDeleteRetryStateByPathType,
+		work.Path,
+		work.OldPath,
+		work.ActionType.String(),
+	); execErr != nil {
+		return fmt.Errorf("sync: deleting held retry_state for %s: %w", work.Path, execErr)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: commit clear-held-retry-work for %s: %w", work.Path, err)
+	}
+
+	return nil
+}
+
 // ClearActionableSyncFailures removes all actionable sync_failures rows.
 func (m *SyncStore) ClearActionableSyncFailures(ctx context.Context) error {
 	_, err := m.db.ExecContext(ctx,

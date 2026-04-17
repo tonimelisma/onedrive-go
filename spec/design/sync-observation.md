@@ -111,6 +111,10 @@ admissible currently observed local path. `local_state` persistence therefore
 comes from current disk truth, not by replaying local change events against
 baseline.
 
+Dry-run uses those same direct `LocalStateRow` values, but commits them only to
+an isolated scratch store before SQLite comparison/reconciliation. The durable
+runtime store keeps its prior committed snapshots unchanged during preview.
+
 ## Dirty Buffer
 
 `DirtyBuffer` owns short-lived replan scheduling only:

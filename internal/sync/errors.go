@@ -10,6 +10,10 @@ import "errors"
 // outside the sync root directory (path traversal attack prevention).
 var ErrPathEscapesSyncRoot = errors.New("sync: path escapes sync root")
 
+// ErrActionPreconditionChanged is returned when executor-time revalidation
+// proves the planner's item-level preconditions no longer hold.
+var ErrActionPreconditionChanged = errors.New("sync: action precondition changed")
+
 // ---------------------------------------------------------------------------
 // Observer errors
 // ---------------------------------------------------------------------------

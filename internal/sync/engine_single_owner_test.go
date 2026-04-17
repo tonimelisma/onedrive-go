@@ -1286,9 +1286,9 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 
 	require.NoError(t, eng.baseline.CommitObservation(ctx, obs, "", driveID))
 
-	// Seed one full test-sized retry batch plus a few extra sync_failures with
-	// past next_retry_at so the retrier must re-arm for a second sweep. delayFn
-	// returns -1 minute so next_retry_at = now - 1m (in the past).
+	// Seed one full test-sized retry batch plus a few extra transient failures
+	// with past next_retry_at so the mirrored retry_state queue must re-arm for
+	// a second sweep. delayFn returns -1 minute so next_retry_at = now - 1m.
 	for i := range total {
 		require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 			Path:      fmt.Sprintf("file-%d.txt", i),
@@ -1300,8 +1300,8 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 		}))
 	}
 
-	// Verify seeding — all rows should be retryable.
-	rows, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
+	// Verify seeding — all mirrored retry_state rows should be retryable.
+	rows, err := eng.baseline.ListRetryStateReady(ctx, now)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(rows), total)
 
@@ -1348,7 +1348,7 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 
 	require.NoError(t, eng.baseline.CommitObservation(ctx, obs, "", driveID))
 
-	// Seed 3 sync_failures.
+	// Seed 3 transient failures; RecordFailure mirrors them into retry_state.
 	for _, name := range names {
 		require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 			Path:      name,
@@ -1379,7 +1379,7 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.5
-func TestTrialDispatch_NoCandidates_PreservesScope(t *testing.T) {
+func TestTrialDispatch_NoCandidates_DiscardsScope(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -1400,10 +1400,11 @@ func TestTrialDispatch_NoCandidates_PreservesScope(t *testing.T) {
 	outbox := runTestTrialDispatch(t, eng, ctx)
 	assert.Empty(t, outbox)
 
-	block, ok := getTestScopeBlock(eng, sk)
-	require.True(t, ok)
-	assert.Equal(t, 10*time.Second, block.TrialInterval)
-	assert.Equal(t, now.Add(10*time.Second), block.NextTrialAt)
+	assert.False(t, isTestScopeBlocked(eng, sk))
+
+	blocks, err := eng.baseline.ListScopeBlocks(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
 }
 
 // ---------------------------------------------------------------------------

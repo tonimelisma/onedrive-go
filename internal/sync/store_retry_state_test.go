@@ -130,6 +130,52 @@ func TestRetryStateReadyAndTrialCandidateQueries(t *testing.T) {
 	require.True(t, found)
 	require.NotNil(t, candidate)
 	assert.Equal(t, "blocked.txt", candidate.Path)
+
+	blocked, err := store.ListBlockedRetryState(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocked, 1)
+	assert.Equal(t, "blocked.txt", blocked[0].Path)
+	assert.Equal(t, SKService(), blocked[0].ScopeKey)
+}
+
+// Validates: R-2.10.33
+func TestRetryStateEarliestRetryAt_IgnoresBlockedRows(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	now := time.Unix(50, 0)
+
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "blocked.txt",
+		ActionType:   ActionDownload,
+		ScopeKey:     SKService(),
+		Blocked:      true,
+		AttemptCount: 1,
+		NextRetryAt:  now.Add(10 * time.Minute).UnixNano(),
+		FirstSeenAt:  1,
+		LastSeenAt:   2,
+	}))
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "later.txt",
+		ActionType:   ActionUpload,
+		AttemptCount: 1,
+		NextRetryAt:  now.Add(20 * time.Minute).UnixNano(),
+		FirstSeenAt:  3,
+		LastSeenAt:   4,
+	}))
+	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "earliest.txt",
+		ActionType:   ActionLocalDelete,
+		AttemptCount: 1,
+		NextRetryAt:  now.Add(5 * time.Minute).UnixNano(),
+		FirstSeenAt:  5,
+		LastSeenAt:   6,
+	}))
+
+	earliest, err := store.EarliestRetryStateAt(ctx, now)
+	require.NoError(t, err)
+	assert.Equal(t, now.Add(5*time.Minute), earliest)
 }
 
 // Validates: R-2.10.33
@@ -375,4 +421,38 @@ func TestMarkSyncFailureActionableAndSetScopeRetryAtNow_UpdateRetryState(t *test
 	require.Len(t, rows, 1)
 	assert.False(t, rows[0].Blocked)
 	assert.Equal(t, now.Add(2*time.Minute).UnixNano(), rows[0].NextRetryAt)
+}
+
+// Validates: R-2.10.33
+func TestClearHeldRetryWork_RemovesScopedFailureAndRetryRow(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, store.RecordFailure(ctx, &SyncFailureParams{
+		Path:       "blocked.txt",
+		DriveID:    driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		Role:       FailureRoleHeld,
+		Category:   CategoryTransient,
+		ScopeKey:   SKService(),
+		IssueType:  IssueServiceOutage,
+		ErrMsg:     "blocked",
+	}, nil))
+
+	require.NoError(t, store.ClearHeldRetryWork(ctx, RetryWorkKey{
+		Path:       "blocked.txt",
+		ActionType: ActionUpload,
+	}, SKService()))
+
+	rows, err := store.ListRetryState(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+
+	failures, err := store.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures)
 }
