@@ -8,6 +8,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -167,22 +168,25 @@ func cleanupPendingToken(cc *CLIContext, path string, reason string) {
 func runLogoutWithContext(cc *CLIContext, purge bool) error {
 	logger := cc.Logger
 
-	cfg, loadErr := config.LoadOrDefault(cc.CfgPath, logger)
-	if loadErr != nil {
-		logger.Warn("failed to load config, proceeding with --account only", "error", loadErr)
-		cfg = config.DefaultConfig()
+	validated, warnings, err := config.LoadValidatedState(cc.CfgPath, true, logger)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if outcome := config.ClassifyLoadOutcome(err, warnings); outcome.Class == errclass.ClassActionable {
+		config.LogWarnings(warnings, logger)
 	}
 
-	stored, catalogErr := config.LoadCatalog()
-	if catalogErr != nil {
-		return fmt.Errorf("loading catalog: %w", catalogErr)
-	}
-
-	account, autoErr := resolveLogoutAccountWithCatalog(cfg, stored, cc.Flags.Account, purge, logger)
+	account, autoErr := resolveLogoutAccountWithCatalog(
+		validated.Config,
+		validated.Catalog,
+		cc.Flags.Account,
+		purge,
+		logger,
+	)
 	if autoErr != nil {
 		return autoErr
 	}
 
 	logger.Info("logout started", "account", account, "purge", purge)
-	return executeLogout(cfg, stored, cc.CfgPath, cc.Output(), account, purge, logger)
+	return executeLogout(validated.Config, validated.Catalog, cc.CfgPath, cc.Output(), account, purge, logger)
 }

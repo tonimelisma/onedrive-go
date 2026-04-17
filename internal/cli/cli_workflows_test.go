@@ -261,8 +261,10 @@ func TestDriveRemove_PurgePreservesCatalogAccount(t *testing.T) {
 	require.True(t, found, "drive remove --purge must preserve the catalog account")
 	assert.Equal(t, "Alice Smith", profile.DisplayName)
 
-	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
-	entry := accountCatalogEntryByEmail(t, catalog, "alice@contoso.com")
+	stored, err := config.LoadCatalog()
+	require.NoError(t, err)
+	views := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	entry := requireAccountViewByEmail(t, views, "alice@contoso.com")
 	assert.False(t, entry.Configured)
 	assert.Equal(t, "Alice Smith", entry.DisplayName)
 	assert.Equal(t, authstate.StateReady, entry.AuthHealth.State)

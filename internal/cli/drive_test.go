@@ -634,8 +634,8 @@ func TestPrintDriveSearchJSON_EmptySlice(t *testing.T) {
 
 func TestSearchableBusinessTokenIDs_NoTokens(t *testing.T) {
 	setTestDriveHome(t)
-	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
-	tokens := searchableBusinessTokenIDs(catalog, "")
+	views := loadDefaultAccountViews(t)
+	tokens := searchableBusinessTokenIDs(views, "")
 	assert.Empty(t, tokens)
 }
 
@@ -649,8 +649,8 @@ func TestSearchableBusinessTokenIDs_HasBusinessToken(t *testing.T) {
 	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
-	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
-	tokens := searchableBusinessTokenIDs(catalog, "")
+	views := loadDefaultAccountViews(t)
+	tokens := searchableBusinessTokenIDs(views, "")
 	require.Len(t, tokens, 1)
 	assert.Equal(t, "business:alice@contoso.com", tokens[0].String())
 }
@@ -665,8 +665,8 @@ func TestSearchableBusinessTokenIDs_FilterSelectsOne(t *testing.T) {
 	writeTestTokenFile(t, dataDir, "token_business_alice@contoso.com.json")
 	writeTestTokenFile(t, dataDir, "token_business_bob@fabrikam.com.json")
 
-	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
-	tokens := searchableBusinessTokenIDs(catalog, "alice@contoso.com")
+	views := loadDefaultAccountViews(t)
+	tokens := searchableBusinessTokenIDs(views, "alice@contoso.com")
 	require.Len(t, tokens, 1)
 	assert.Equal(t, "business:alice@contoso.com", tokens[0].String())
 }
@@ -679,9 +679,17 @@ func TestSearchableBusinessTokenIDs_SkipsPersonal(t *testing.T) {
 
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
-	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
-	tokens := searchableBusinessTokenIDs(catalog, "")
+	views := loadDefaultAccountViews(t)
+	tokens := searchableBusinessTokenIDs(views, "")
 	assert.Empty(t, tokens)
+}
+
+func loadDefaultAccountViews(t *testing.T) []accountView {
+	t.Helper()
+
+	stored, err := config.LoadCatalog()
+	require.NoError(t, err)
+	return buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
 }
 
 // --- driveSearchResult ---

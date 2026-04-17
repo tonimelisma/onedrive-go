@@ -46,13 +46,13 @@ type sharedDiscoveryResult struct {
 func discoverSharedTargets(
 	ctx context.Context,
 	cc *CLIContext,
-	catalog []accountCatalogEntry,
+	accounts []accountView,
 ) sharedDiscoveryResult {
 	result := sharedDiscoveryResult{}
 	seen := make(map[string]struct{})
 
-	for i := range catalog {
-		entry := &catalog[i]
+	for i := range accounts {
+		entry := &accounts[i]
 
 		if entry.AuthHealth.State == authStateAuthenticationNeeded {
 			result.AccountsRequiringAuth = append(result.AccountsRequiringAuth, authRequirement(
@@ -105,7 +105,7 @@ func discoverSharedTargets(
 func discoverSharedTargetsForAccount(
 	ctx context.Context,
 	cc *CLIContext,
-	entry *accountCatalogEntry,
+	entry *accountView,
 ) ([]sharedDiscoveryTarget, []accountAuthRequirement, []accountDegradedNotice) {
 	logger := cc.Logger
 	tokenCandidates := sharedDiscoveryTokenCandidates(entry)
@@ -191,7 +191,7 @@ func discoverSharedTargetsForAccount(
 	}
 }
 
-func sharedDiscoveryTokenCandidates(entry *accountCatalogEntry) []driveid.CanonicalID {
+func sharedDiscoveryTokenCandidates(entry *accountView) []driveid.CanonicalID {
 	if entry == nil {
 		return nil
 	}

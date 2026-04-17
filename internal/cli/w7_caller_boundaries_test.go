@@ -128,7 +128,7 @@ func TestRunStatusCommand_AuthRequiredOnlyJSON(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:orphan@example.com")
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
-		account.DisplayName = accountCatalogTestOrphanUser
+		account.DisplayName = accountViewTestOrphanUser
 	})
 	require.NoError(t, touchStateDBForAccount(t, cid))
 

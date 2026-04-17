@@ -31,15 +31,14 @@ const (
 func TestAccountLifecycle(t *testing.T) {
 	tests := []struct {
 		name  string
-		entry accountCatalogEntry
+		entry accountView
 		want  accountLifecycleView
 	}{
 		{
 			name: "configured usable login",
-			entry: accountCatalogEntry{
-				Email:           "ready@example.com",
-				Configured:      true,
-				SavedLoginState: savedLoginStateUsable,
+			entry: accountView{
+				Email:      "ready@example.com",
+				Configured: true,
 			},
 			want: accountLifecycleView{
 				State:               accountLifecycleLoggedInWithConfigured,
@@ -52,9 +51,8 @@ func TestAccountLifecycle(t *testing.T) {
 		},
 		{
 			name: "usable login without configured drives",
-			entry: accountCatalogEntry{
-				Email:           "discovered@example.com",
-				SavedLoginState: savedLoginStateUsable,
+			entry: accountView{
+				Email: "discovered@example.com",
 			},
 			want: accountLifecycleView{
 				State:               accountLifecycleLoggedInWithoutConfigured,
@@ -66,9 +64,9 @@ func TestAccountLifecycle(t *testing.T) {
 		},
 		{
 			name: "missing login",
-			entry: accountCatalogEntry{
-				Email:           "missing@example.com",
-				SavedLoginState: savedLoginStateMissing,
+			entry: accountView{
+				Email:            "missing@example.com",
+				SavedLoginReason: authReasonMissingLogin,
 			},
 			want: accountLifecycleView{
 				State:              accountLifecycleAuthRequiredMissingLogin,
@@ -78,9 +76,9 @@ func TestAccountLifecycle(t *testing.T) {
 		},
 		{
 			name: "invalid login",
-			entry: accountCatalogEntry{
-				Email:           "invalid@example.com",
-				SavedLoginState: savedLoginStateInvalid,
+			entry: accountView{
+				Email:            "invalid@example.com",
+				SavedLoginReason: authReasonInvalidSavedLogin,
 			},
 			want: accountLifecycleView{
 				State:              accountLifecycleAuthRequiredInvalidLogin,
@@ -90,9 +88,8 @@ func TestAccountLifecycle(t *testing.T) {
 		},
 		{
 			name: "persisted auth rejection",
-			entry: accountCatalogEntry{
+			entry: accountView{
 				Email:                 "rejected@example.com",
-				SavedLoginState:       savedLoginStateUsable,
 				AuthRequirementReason: authReasonSyncAuthRejected,
 			},
 			want: accountLifecycleView{
@@ -563,8 +560,10 @@ func TestCatalogAuthRequirements_FindsOfflineAuthRequiredAccounts(t *testing.T) 
 
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
+	stored, err := config.LoadCatalog()
+	require.NoError(t, err)
 
-	authRequired := catalogAuthRequirements(buildAccountCatalog(t.Context(), cfg, logger), func(accountCatalogEntry) bool {
+	authRequired := accountViewAuthRequirements(buildAccountViews(t.Context(), cfg, stored, logger), func(accountView) bool {
 		return true
 	})
 	require.Len(t, authRequired, 1)
