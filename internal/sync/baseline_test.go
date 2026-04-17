@@ -1515,7 +1515,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	// Verify all expected tables exist by querying sqlite_master.
 	expectedTables := []string{
-		"baseline", "local_state", "observation_state", "planned_actions",
+		"baseline", "local_state", "observation_state",
 		"retry_state", "run_status", "remote_state", "sync_failures",
 	}
 

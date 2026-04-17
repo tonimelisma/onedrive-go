@@ -7,31 +7,32 @@ Implements: R-2.1.2 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [
 ## Overview
 
 Observation turns local filesystem changes and Graph delta/enumeration results
-into normalized `ChangeEvent` values. It never writes the sync DB directly.
-The engine owns snapshot persistence and persisted full-refresh cadence in
-`observation_state`; observation only produces live facts and wake signals.
+into live observation facts. It never writes the sync DB directly. The engine
+owns snapshot persistence and persisted full-refresh cadence in
+`observation_state`; observation produces wake signals, dirty path/scope hints,
+observation facts, and direct local-snapshot rows for `local_state`.
 
 The observation stack has four main pieces:
 
 - `RemoteObserver`: Graph delta/enumeration and wake-driven watch polling
 - `LocalObserver`: fsnotify-driven watch observation
 - `Scanner`: full local walk for one-shot bootstrap and rebuild cases
-- `Buffer`: debounce/coalescing before planning
+- `DirtyBuffer`: debounce/coalescing before snapshot refresh and replanning
 
 ## Ownership Contract
 
-- Owns: local and remote change capture, path normalization, sparse-item recovery, skipped-item reporting, and event buffering
+- Owns: local and remote change capture, path normalization, sparse-item recovery, skipped-item reporting, and dirty buffering
 - Does Not Own: planning, retry policy, scope persistence, or user-facing issue interpretation
 - Source of Truth: live filesystem state, Graph responses, and read-only baseline context supplied by the engine
 - Allowed Side Effects: rooted filesystem reads, hashing, Graph observation calls, watch registration, and event emission
-- Mutable Runtime Owner: `RemoteObserver`, `LocalObserver`, `Scanner`, and `Buffer` each own only their own invocation- or run-scoped mutable state, watches, and goroutines. The engine owns lifecycle and composition across those pieces.
+- Mutable Runtime Owner: `RemoteObserver`, `LocalObserver`, `Scanner`, and `DirtyBuffer` each own only their own invocation- or run-scoped mutable state, watches, and goroutines. The engine owns lifecycle and composition across those pieces.
 - Error Boundary: observation surfaces filesystem, watch, and Graph observation failures as observation results and control signals; it does not classify retries, user-facing issues, or durable failure state.
 
 ## Verified By
 
 | Behavior | Evidence |
 | --- | --- |
-| Whole-drive observation emits normalized change events without writing the sync DB directly. | `TestBuffer_WatchAndSafetyScanConflictingTypes`, `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestNosyncGuard_PreventsAllSync` |
+| Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestNosyncGuard_PreventsAllSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
 | Normal drives ignore embedded shared-folder shortcut items instead of creating nested follow-up sync runtimes. | `internal/sync/observer_remote_test.go`, `internal/sync/remote_state_mirror_test.go` |
 | Shared-root drives still support remote observation rooted at their configured shared root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 
@@ -45,7 +46,7 @@ The observation stack has four main pieces:
 
 Important properties:
 
-- observation emits `ChangeEvent`s only
+- observation emits wake/dirty signals plus normalized remote facts
 - zero-event delta responses do **not** advance the saved cursor
 - HTTP 410 delta expiry is surfaced as a restart/re-enumerate condition
 - sparse delta items recover omitted name/parent data from the baseline when possible
@@ -67,7 +68,7 @@ enumeration depending on drive type and Graph support.
 
 ## Item Conversion
 
-`item_converter.go` is the single item-to-event normalization path.
+`item_converter.go` is the single item-to-observation normalization path.
 
 It owns:
 
@@ -79,7 +80,8 @@ It owns:
 - remote-root metadata propagation for configured shared-root drives
 
 `ChangeEvent.TargetRootItemID` carries the configured remote root for shared-root
-drives so later planning and execution can derive the correct target root.
+drives so later snapshot refresh, planning, and execution can derive the
+correct target root.
 
 ## Local Observation
 
@@ -104,13 +106,19 @@ Ignore invariants:
 Observation may emit `SkippedItem`s for invalid or unsupported local content.
 The engine decides how those become durable actionable issues.
 
-## Buffer
+`Scanner.FullScan()` now also returns direct `LocalStateRow` values for every
+admissible currently observed local path. `local_state` persistence therefore
+comes from current disk truth, not by replaying local change events against
+baseline.
 
-`Buffer` owns short-lived event coalescing only:
+## Dirty Buffer
 
-- debounce bursts of path changes
+`DirtyBuffer` owns short-lived replan scheduling only:
+
+- debounce bursts of local or remote dirty signals
 - wait 5 seconds from the last local or remote observation before triggering replanning by default
-- keep one pending entry per path
+- keep one pending entry per path plus a full-refresh bit
 - flush deterministically on shutdown/final drain
 
-It is not a durable queue and not a second source of truth.
+It is not a durable queue, not a semantic event journal, and not a second
+source of truth.

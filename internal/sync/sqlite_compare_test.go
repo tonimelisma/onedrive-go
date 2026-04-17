@@ -92,3 +92,41 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 	assert.Equal(t, "upload", got["new-local.txt"])
 	assert.Equal(t, "download", got["new-remote.txt"])
 }
+
+// Validates: R-2.1.3, R-2.1.4
+func TestQueryReconciliationState_FolderDecisionMatrix(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type)
+		VALUES
+			('item-keep-remote', 'keep-remote', 'folder'),
+			('item-delete-local', 'delete-local', 'folder')`)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO local_state (path, item_type, observed_at)
+		VALUES
+			('delete-local', 'folder', 1),
+			('new-local-folder', 'folder', 1)`)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type)
+		VALUES
+			('item-keep-remote', 'keep-remote', 'folder'),
+			('item-new-remote', 'new-remote-folder', 'folder')`)
+	require.NoError(t, err)
+
+	reconciliationRows, err := store.QueryReconciliationState(ctx)
+	require.NoError(t, err)
+	got := reconciliationKindsByPath(reconciliationRows)
+
+	assert.Equal(t, "folder_create_local", got["keep-remote"])
+	assert.Equal(t, "local_delete", got["delete-local"])
+	assert.Equal(t, "folder_create_remote", got["new-local-folder"])
+	assert.Equal(t, "folder_create_local", got["new-remote-folder"])
+}

@@ -11,8 +11,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// Planner is a pure decision engine that transforms change events and
-// baseline state into an ordered ActionPlan. It performs no I/O.
+// Planner is a pure decision engine that transforms SQLite-owned comparison
+// and reconciliation rows plus baseline state into an ordered ActionPlan. It
+// performs no I/O.
 type Planner struct {
 	logger *slog.Logger
 }
@@ -20,133 +21,6 @@ type Planner struct {
 // NewPlanner creates a Planner with the given logger.
 func NewPlanner(logger *slog.Logger) *Planner {
 	return &Planner{logger: logger}
-}
-
-// Plan takes buffered changes, the current baseline, sync mode, safety
-// config, and denied prefixes, and produces an ActionPlan. Paths under
-// deniedPrefixes are treated as download-only (remote writes suppressed).
-func (p *Planner) Plan(
-	changes []PathChanges, baseline *Baseline, mode Mode, config *SafetyConfig,
-	deniedPrefixes []string,
-) (*ActionPlan, error) {
-	_ = config
-
-	p.logger.Info("planning sync actions",
-		slog.Int("changes", len(changes)),
-		slog.Int("baseline_entries", baseline.Len()),
-		slog.String("mode", mode.String()),
-		slog.Int("denied_prefixes", len(deniedPrefixes)),
-	)
-
-	views := buildPathViews(changes, baseline)
-
-	var allActions []Action
-
-	// Step 1: detect and extract moves before per-path classification.
-	allActions = append(allActions, detectMoves(views, changes, mode, deniedPrefixes, baseline)...)
-
-	// Step 2: classify each remaining path. Sort keys for deterministic
-	// action order across runs with identical input (B-154).
-	sortedPaths := make([]string, 0, len(views))
-	for p := range views {
-		sortedPaths = append(sortedPaths, p)
-	}
-
-	sort.Strings(sortedPaths)
-
-	for _, p := range sortedPaths {
-		allActions = append(allActions, classifyPathView(views[p], mode, deniedPrefixes)...)
-	}
-
-	// Step 2.5: Cascade folder deletions to baseline descendants. When the
-	// delta API reports a parent folder as deleted, it does NOT report
-	// individual child item deletions. This step synthesizes delete/cleanup
-	// actions for all baseline descendants of deleted folders, ensuring the
-	// executor can remove children before the parent directory.
-	allActions = expandFolderDeleteCascades(allActions, baseline, views, mode, p.logger)
-
-	// Step 2.6: Fill target-drive and configured-root metadata once after all
-	// actions exist so executor-time cross-drive convergence does not need to
-	// rediscover target ownership ad hoc.
-	enrichActionTargets(allActions, baseline)
-	deferred := deferredCountsForMode(changes, baseline, mode, deniedPrefixes, p.logger)
-
-	// Step 3: build dependency edges and verify acyclicity.
-	deps := buildDependencies(allActions)
-
-	if err := detectDependencyCycle(deps); err != nil {
-		return nil, err
-	}
-
-	plan := &ActionPlan{
-		Actions:        allActions,
-		Deps:           deps,
-		DeferredByMode: deferred,
-	}
-
-	counts := CountByType(plan.Actions)
-
-	p.logger.Info("plan complete",
-		slog.Int("total_actions", len(plan.Actions)),
-		slog.Int("folder_creates", counts[ActionFolderCreate]),
-		slog.Int("moves", counts[ActionLocalMove]+counts[ActionRemoteMove]),
-		slog.Int("downloads", counts[ActionDownload]),
-		slog.Int("uploads", counts[ActionUpload]),
-		slog.Int("local_deletes", counts[ActionLocalDelete]),
-		slog.Int("remote_deletes", counts[ActionRemoteDelete]),
-		slog.Int("conflicts", counts[ActionConflict]),
-		slog.Int("synced_updates", counts[ActionUpdateSynced]),
-		slog.Int("cleanups", counts[ActionCleanup]),
-		slog.Int("deferred_folder_creates", deferred.FolderCreates),
-		slog.Int("deferred_moves", deferred.Moves),
-		slog.Int("deferred_downloads", deferred.Downloads),
-		slog.Int("deferred_uploads", deferred.Uploads),
-		slog.Int("deferred_local_deletes", deferred.LocalDeletes),
-		slog.Int("deferred_remote_deletes", deferred.RemoteDeletes),
-	)
-
-	return plan, nil
-}
-
-// buildPathViews constructs a three-way PathView for each path appearing
-// in change events. Paths with no local events but with a baseline entry
-// derive their LocalState from the baseline (item is unchanged locally).
-func buildPathViews(changes []PathChanges, baseline *Baseline) map[string]*PathView {
-	views := make(map[string]*PathView, len(changes))
-
-	for i := range changes {
-		pc := &changes[i]
-		view := &PathView{Path: pc.Path}
-
-		// Remote state from the latest remote event.
-		if len(pc.RemoteEvents) > 0 {
-			last := &pc.RemoteEvents[len(pc.RemoteEvents)-1]
-			view.Remote = remoteStateFromEvent(last)
-		}
-		applyForcedActionFromEvents(view, pc.RemoteEvents)
-
-		// Local state from the latest local event. ChangeDelete means absent.
-		if len(pc.LocalEvents) > 0 {
-			last := &pc.LocalEvents[len(pc.LocalEvents)-1]
-			view.Local = localStateFromEvent(last)
-		}
-		applyForcedActionFromEvents(view, pc.LocalEvents)
-
-		// Baseline lookup.
-		if baselineEntry, found := baseline.GetByPath(pc.Path); found {
-			view.Baseline = baselineEntry
-		}
-
-		// If there are no local events but a baseline exists, derive local
-		// state from baseline — the item is unchanged on disk.
-		if len(pc.LocalEvents) == 0 && view.Baseline != nil {
-			view.Local = localStateFromBaseline(view.Baseline)
-		}
-
-		views[pc.Path] = view
-	}
-
-	return views
 }
 
 // ---------------------------------------------------------------------------
@@ -171,425 +45,6 @@ func resolvePathDriveID(p string, bl *Baseline) driveid.ID {
 	}
 
 	return driveid.ID{}
-}
-
-// isCrossDriveLocalMove returns true when a hash-correlated delete+create
-// pair spans different drives. The Graph API MoveItem is a single-drive
-// operation, so cross-drive moves must be decomposed into a delete + upload.
-func isCrossDriveLocalMove(deletePath, createPath string, views map[string]*PathView, bl *Baseline) bool {
-	// Source drive comes from the deleted item's baseline.
-	deleteView := views[deletePath]
-	if deleteView == nil || deleteView.Baseline == nil {
-		return false // no baseline → can't determine source drive; don't decompose
-	}
-
-	sourceDrive := deleteView.Baseline.DriveID
-	destDrive := resolvePathDriveID(createPath, bl)
-
-	// Conservative: if either drive is unknown, don't decompose — let the
-	// normal move path handle it (it'll fail and get retried as separate ops).
-	if sourceDrive.IsZero() || destDrive.IsZero() {
-		return false
-	}
-
-	return !sourceDrive.Equal(destDrive)
-}
-
-// isCrossDriveRemoteMove returns true when a remote ChangeMove event
-// has different drive IDs in the baseline (source) and remote (destination).
-// Cross-drive remote moves from the API shouldn't happen in practice, but
-// guard defensively.
-func isCrossDriveRemoteMove(view *PathView) bool {
-	if view.Baseline == nil || view.Remote == nil {
-		return false
-	}
-
-	sourceDrive := view.Baseline.DriveID
-	destDrive := view.Remote.DriveID
-
-	if sourceDrive.IsZero() || destDrive.IsZero() {
-		return false
-	}
-
-	return !sourceDrive.Equal(destDrive)
-}
-
-// detectMoves finds remote and local moves, produces move actions, and
-// removes matched paths from the views map so they do not enter per-path
-// classification.
-func detectMoves(
-	views map[string]*PathView,
-	changes []PathChanges,
-	mode Mode,
-	deniedPrefixes []string,
-	bl *Baseline,
-) []Action {
-	var actions []Action
-
-	// Remote moves: scan for ChangeMove events in remote events.
-	actions = append(actions, detectRemoteMoves(views, changes, mode)...)
-
-	// Local moves: hash-based correlation of delete+create pairs.
-	actions = append(actions, detectLocalMoves(views, mode, deniedPrefixes, bl)...)
-
-	return actions
-}
-
-func detectPotentialMoves(
-	views map[string]*PathView,
-	changes []PathChanges,
-	deniedPrefixes []string,
-	bl *Baseline,
-) []Action {
-	var actions []Action
-
-	actions = append(actions, detectPotentialRemoteMoves(views, changes)...)
-	actions = append(actions, detectPotentialLocalMovesWithDeniedPrefixes(views, deniedPrefixes, bl)...)
-
-	return actions
-}
-
-// detectRemoteMoves finds ChangeMove events in remote observations and
-// produces ActionLocalMove actions (rename local file to match remote).
-func detectRemoteMoves(
-	views map[string]*PathView,
-	changes []PathChanges,
-	mode Mode,
-) []Action {
-	if mode == SyncUploadOnly {
-		return nil
-	}
-
-	return detectPotentialRemoteMoves(views, changes)
-}
-
-func detectPotentialRemoteMoves(
-	views map[string]*PathView,
-	changes []PathChanges,
-) []Action {
-	var actions []Action
-
-	for i := range changes {
-		pc := &changes[i]
-		for j := range pc.RemoteEvents {
-			ev := &pc.RemoteEvents[j]
-			if ev.Type != ChangeMove {
-				continue
-			}
-
-			// The move event's Path is the new path; OldPath is where it was.
-			view := views[pc.Path]
-			if view == nil {
-				continue
-			}
-
-			// Cross-drive guard: if the server reports a move across drives,
-			// skip the move action and let the paths classify as separate
-			// delete + download. This shouldn't happen in practice but
-			// guards defensively.
-			if isCrossDriveRemoteMove(view) {
-				continue
-			}
-
-			action := MakeAction(ActionLocalMove, view)
-			action.OldPath = ev.OldPath
-			// action.Path is already ev.Path (destination) via MakeAction.
-
-			actions = append(actions, action)
-
-			// Always remove the new path (fully handled by move action).
-			delete(views, ev.Path)
-
-			// Only remove old path if no new item appeared there.
-			// If a new item exists (Remote.IsDeleted=false from a ChangeCreate
-			// after the synthetic delete), keep it in views but clear Baseline
-			// and Local so it classifies as a new item (EF14/ED3), not a
-			// conflict against the moved item's stale baseline.
-			oldView := views[ev.OldPath]
-			if oldView == nil || (oldView.Remote != nil && oldView.Remote.IsDeleted) {
-				delete(views, ev.OldPath)
-			} else {
-				oldView.Baseline = nil
-				oldView.Local = nil
-			}
-		}
-	}
-
-	return actions
-}
-
-// detectLocalMoves correlates local deletes with local creates by hash
-// to detect renames. Only unique matches (exactly one delete and one
-// create with the same hash) produce move actions. Ambiguous cases are
-// skipped and fall through to separate delete+create.
-func detectLocalMoves(
-	views map[string]*PathView,
-	mode Mode,
-	deniedPrefixes []string,
-	bl *Baseline,
-) []Action {
-	if mode == SyncDownloadOnly {
-		return nil
-	}
-
-	return detectPotentialLocalMovesWithDeniedPrefixes(views, deniedPrefixes, bl)
-}
-
-func detectPotentialLocalMovesWithDeniedPrefixes(
-	views map[string]*PathView,
-	deniedPrefixes []string,
-	bl *Baseline,
-) []Action {
-	deletesByHash, createsByHash := buildLocalMoveHashMaps(views)
-
-	// Sort hash keys for deterministic move detection order (B-154).
-	sortedHashes := make([]string, 0, len(deletesByHash))
-	for h := range deletesByHash {
-		sortedHashes = append(sortedHashes, h)
-	}
-
-	sort.Strings(sortedHashes)
-
-	var actions []Action
-
-	for _, hash := range sortedHashes {
-		delPaths := deletesByHash[hash]
-		crePaths, ok := createsByHash[hash]
-		if !ok || len(delPaths) != 1 || len(crePaths) != 1 {
-			continue // no match or ambiguous
-		}
-
-		deletePath := delPaths[0]
-		createPath := crePaths[0]
-
-		if shouldSkipLocalMove(deletePath, createPath, views, deniedPrefixes, bl) {
-			continue
-		}
-
-		view := views[deletePath]
-
-		action := MakeAction(ActionRemoteMove, view)
-		action.OldPath = deletePath
-		action.Path = createPath
-
-		actions = append(actions, action)
-
-		// Remove both paths from classification.
-		delete(views, deletePath)
-		delete(views, createPath)
-	}
-
-	return actions
-}
-
-// buildLocalMoveHashMaps indexes local deletes and creates by content hash
-// for move correlation.
-func buildLocalMoveHashMaps(views map[string]*PathView) (deletesByHash, createsByHash map[string][]string) {
-	deletesByHash = make(map[string][]string)
-	createsByHash = make(map[string][]string)
-
-	for p, view := range views {
-		if view.Local == nil && view.Baseline != nil && view.Baseline.LocalHash != "" {
-			deletesByHash[view.Baseline.LocalHash] = append(deletesByHash[view.Baseline.LocalHash], p)
-		}
-
-		if view.Local != nil && view.Baseline == nil && view.Local.Hash != "" {
-			createsByHash[view.Local.Hash] = append(createsByHash[view.Local.Hash], p)
-		}
-	}
-
-	return deletesByHash, createsByHash
-}
-
-// shouldSkipLocalMove returns true if a hash-matched delete+create pair
-// should NOT be treated as a move (permission denied or cross-drive).
-func shouldSkipLocalMove(
-	deletePath, createPath string, views map[string]*PathView,
-	deniedPrefixes []string,
-	bl *Baseline,
-) bool {
-	// Skip local moves under permission-denied folders — can't write to remote.
-	if IsWriteDenied(deletePath, deniedPrefixes) || IsWriteDenied(createPath, deniedPrefixes) {
-		return true
-	}
-
-	// Cross-drive guard: MoveItem is a single-drive API call. When source
-	// and destination are on different drives, skip the move match — the
-	// paths fall through to normal per-path classification which will
-	// produce a delete + upload instead.
-	return isCrossDriveLocalMove(deletePath, createPath, views, bl)
-}
-
-func deferredCountsForMode(
-	changes []PathChanges,
-	baseline *Baseline,
-	mode Mode,
-	deniedPrefixes []string,
-	logger *slog.Logger,
-) DeferredCounts {
-	if mode == SyncBidirectional {
-		return DeferredCounts{}
-	}
-
-	views := buildPathViews(changes, baseline)
-	fullActions := detectPotentialMoves(views, changes, deniedPrefixes, baseline)
-
-	sortedPaths := make([]string, 0, len(views))
-	for path := range views {
-		sortedPaths = append(sortedPaths, path)
-	}
-	sort.Strings(sortedPaths)
-
-	for _, path := range sortedPaths {
-		fullActions = append(fullActions, classifyPotentialPathView(views[path], deniedPrefixes)...)
-	}
-
-	fullActions = expandFolderDeleteCascades(fullActions, baseline, views, SyncBidirectional, logger)
-	suppressedCascadeModes := suppressedFolderDeleteCascadeModes(fullActions, mode, deniedPrefixes)
-
-	var deferred DeferredCounts
-	for i := range fullActions {
-		reportingMode := deferredReportingModeForAction(&fullActions[i], mode, deniedPrefixes)
-		if overrideMode, ok := deferredCascadedDeleteReportingMode(&fullActions[i], views, suppressedCascadeModes); ok {
-			reportingMode = overrideMode
-		}
-		if !actionAllowedInMode(&fullActions[i], reportingMode) {
-			deferred.AddAction(&fullActions[i])
-		}
-	}
-
-	return deferred
-}
-
-// classifyPathView determines actions for a single path view based on
-// the item type and sync mode. Paths under deniedPrefixes are treated
-// as download-only (remote writes suppressed).
-func classifyPathView(view *PathView, mode Mode, deniedPrefixes []string) []Action {
-	effectiveMode := effectiveModeForPath(view.Path, mode, deniedPrefixes)
-
-	if forced := classifyForcedAction(view, effectiveMode); forced != nil {
-		return forced
-	}
-
-	itemType := resolveItemType(view)
-
-	if itemType == ItemTypeFolder {
-		return filterActionsForMode(classifyFolder(view), effectiveMode)
-	}
-
-	return filterActionsForMode(classifyFile(view), effectiveMode)
-}
-
-func classifyPotentialPathView(view *PathView, deniedPrefixes []string) []Action {
-	potentialMode := capabilityModeForPath(view.Path, deniedPrefixes)
-
-	if forced := classifyForcedAction(view, potentialMode); forced != nil {
-		return forced
-	}
-
-	if resolveItemType(view) == ItemTypeFolder {
-		return filterActionsForMode(classifyFolder(view), potentialMode)
-	}
-
-	return filterActionsForMode(classifyFile(view), potentialMode)
-}
-
-func effectiveModeForPath(filePath string, requestedMode Mode, deniedPrefixes []string) Mode {
-	if IsWriteDenied(filePath, deniedPrefixes) {
-		return SyncDownloadOnly
-	}
-
-	return requestedMode
-}
-
-func capabilityModeForPath(filePath string, deniedPrefixes []string) Mode {
-	if IsWriteDenied(filePath, deniedPrefixes) {
-		return SyncDownloadOnly
-	}
-
-	return SyncBidirectional
-}
-
-func deferredReportingModeForAction(action *Action, requestedMode Mode, deniedPrefixes []string) Mode {
-	if action == nil {
-		return requestedMode
-	}
-
-	if action.Type == ActionLocalMove {
-		// Remote-move detection currently keys only off the requested sync
-		// direction. Deferred reporting must mirror that contract until move
-		// planning itself becomes permission-aware.
-		return requestedMode
-	}
-
-	return effectiveModeForPath(action.Path, requestedMode, deniedPrefixes)
-}
-
-type suppressedFolderDeleteCascadeMode struct {
-	Path string
-	Mode Mode
-}
-
-func suppressedFolderDeleteCascadeModes(
-	actions []Action,
-	requestedMode Mode,
-	deniedPrefixes []string,
-) []suppressedFolderDeleteCascadeMode {
-	suppressed := make([]suppressedFolderDeleteCascadeMode, 0)
-
-	for i := range actions {
-		if !shouldCascadeFolderDelete(&actions[i]) {
-			continue
-		}
-
-		reportingMode := deferredReportingModeForAction(&actions[i], requestedMode, deniedPrefixes)
-		if actionAllowedInMode(&actions[i], reportingMode) {
-			continue
-		}
-
-		suppressed = append(suppressed, suppressedFolderDeleteCascadeMode{
-			Path: actions[i].Path,
-			Mode: reportingMode,
-		})
-	}
-
-	return suppressed
-}
-
-func deferredCascadedDeleteReportingMode(
-	action *Action,
-	observedViews map[string]*PathView,
-	suppressed []suppressedFolderDeleteCascadeMode,
-) (Mode, bool) {
-	if action == nil {
-		return SyncBidirectional, false
-	}
-	if action.Type != ActionLocalDelete && action.Type != ActionRemoteDelete {
-		return SyncBidirectional, false
-	}
-	if _, observed := observedViews[action.Path]; observed {
-		return SyncBidirectional, false
-	}
-
-	bestMatchLength := -1
-	bestMode := SyncBidirectional
-	for _, candidate := range suppressed {
-		if action.Path == candidate.Path || !strings.HasPrefix(action.Path, candidate.Path+"/") {
-			continue
-		}
-		if len(candidate.Path) <= bestMatchLength {
-			continue
-		}
-
-		bestMatchLength = len(candidate.Path)
-		bestMode = candidate.Mode
-	}
-
-	if bestMatchLength < 0 {
-		return SyncBidirectional, false
-	}
-
-	return bestMode, true
 }
 
 func filterActionsForMode(actions []Action, mode Mode) []Action {
@@ -629,71 +84,11 @@ func actionAllowedInMode(action *Action, mode Mode) bool {
 			return mode != SyncDownloadOnly
 		}
 		return true
-	case ActionConflict, ActionUpdateSynced, ActionCleanup:
+	case ActionConflictCopy, ActionUpdateSynced, ActionCleanup:
 		return true
 	default:
 		return true
 	}
-}
-
-func classifyForcedAction(view *PathView, mode Mode) []Action {
-	if !view.HasForcedAction {
-		return nil
-	}
-
-	switch view.ForcedAction {
-	case ActionDownload:
-		if mode == SyncUploadOnly {
-			return nil
-		}
-		return []Action{MakeAction(ActionDownload, view)}
-	case ActionUpload:
-		if mode == SyncDownloadOnly {
-			return nil
-		}
-		return []Action{MakeAction(ActionUpload, view)}
-	case ActionUpdateSynced:
-		return []Action{MakeAction(ActionUpdateSynced, view)}
-	case ActionLocalDelete,
-		ActionRemoteDelete,
-		ActionLocalMove,
-		ActionRemoteMove,
-		ActionFolderCreate,
-		ActionConflict,
-		ActionCleanup:
-		return nil
-	default:
-		return nil
-	}
-}
-
-func applyForcedActionFromEvents(view *PathView, events []ChangeEvent) {
-	if view == nil {
-		return
-	}
-
-	for i := range events {
-		if !events[i].HasForcedAction {
-			continue
-		}
-
-		view.ForcedAction = events[i].ForcedAction
-		view.HasForcedAction = true
-	}
-}
-
-// IsWriteDenied checks if a path falls under a permission-denied folder.
-func IsWriteDenied(filePath string, deniedPrefixes []string) bool {
-	for _, prefix := range deniedPrefixes {
-		if prefix == "" {
-			return true
-		}
-		if filePath == prefix || strings.HasPrefix(filePath, prefix+"/") {
-			return true
-		}
-	}
-
-	return false
 }
 
 // classifyFile dispatches to the appropriate file classification function
@@ -768,11 +163,14 @@ func classifyFileLocalPresent(
 		if view.Local != nil && view.Local.Hash == view.Remote.Hash {
 			return []Action{MakeAction(ActionUpdateSynced, view)} // EF4: convergent edit
 		}
-		return []Action{makeConflictAction(view, ConflictEditEdit)} // EF5
+		return []Action{
+			makeConflictCopyAction(view, ConflictEditEdit),
+			makeConflictResolvedAction(ActionDownload, view, ConflictEditEdit),
+		} // EF5
 	case !localChanged && remoteDeleted:
 		return []Action{MakeAction(ActionLocalDelete, view)} // EF8
 	case localChanged && remoteDeleted:
-		return []Action{makeConflictAction(view, ConflictEditDelete)} // EF9
+		return []Action{makeConflictResolvedAction(ActionUpload, view, ConflictEditDelete)} // EF9
 	}
 
 	return nil
@@ -789,7 +187,10 @@ func classifyFileNoBaseline(view *PathView) []Action {
 		if view.Local.Hash == view.Remote.Hash {
 			return []Action{MakeAction(ActionUpdateSynced, view)} // EF11: convergent create
 		}
-		return []Action{makeConflictAction(view, ConflictCreateCreate)} // EF12
+		return []Action{
+			makeConflictCopyAction(view, ConflictCreateCreate),
+			makeConflictResolvedAction(ActionDownload, view, ConflictCreateCreate),
+		} // EF12
 
 	case hasLocal && !hasRemote:
 		return []Action{MakeAction(ActionUpload, view)} // EF13
@@ -871,40 +272,6 @@ func classifyFolderNoBaseline(view *PathView) []Action {
 // ---------------------------------------------------------------------------
 // Pure helper functions
 // ---------------------------------------------------------------------------
-
-// remoteStateFromEvent constructs a RemoteState from a ChangeEvent.
-func remoteStateFromEvent(ev *ChangeEvent) *RemoteState {
-	return &RemoteState{
-		ItemID:           ev.ItemID,
-		DriveID:          ev.DriveID,
-		ParentID:         ev.ParentID,
-		Name:             ev.Name,
-		ItemType:         ev.ItemType,
-		Size:             ev.Size,
-		Hash:             ev.Hash,
-		Mtime:            ev.Mtime,
-		ETag:             ev.ETag,
-		CTag:             ev.CTag,
-		IsDeleted:        ev.IsDeleted,
-		TargetRootItemID: ev.TargetRootItemID,
-	}
-}
-
-// localStateFromEvent constructs a LocalState from a ChangeEvent.
-// Returns nil if the event is a deletion (item is absent locally).
-func localStateFromEvent(ev *ChangeEvent) *LocalState {
-	if ev.Type == ChangeDelete {
-		return nil
-	}
-
-	return &LocalState{
-		Name:     ev.Name,
-		ItemType: ev.ItemType,
-		Size:     ev.Size,
-		Hash:     ev.Hash,
-		Mtime:    ev.Mtime,
-	}
-}
 
 // localStateFromBaseline derives a LocalState from a baseline entry for
 // paths with no local events (item is unchanged on disk).
@@ -1221,10 +588,7 @@ func findTargetRootEntry(path string, targetDriveID driveid.ID, baseline *Baseli
 	return root
 }
 
-// makeConflictAction constructs an ActionConflict with ConflictInfo populated.
-func makeConflictAction(view *PathView, conflictType string) Action {
-	a := MakeAction(ActionConflict, view)
-
+func makeConflictRecord(view *PathView, driveID driveid.ID, conflictType string) *ConflictRecord {
 	record := &ConflictRecord{
 		Path:         view.Path,
 		ConflictType: conflictType,
@@ -1241,10 +605,23 @@ func makeConflictAction(view *PathView, conflictType string) Action {
 		record.ItemID = view.Remote.ItemID
 	}
 
-	record.DriveID = a.DriveID
-	a.ConflictInfo = record
+	record.DriveID = driveID
 
-	return a
+	return record
+}
+
+func makeConflictCopyAction(view *PathView, conflictType string) Action {
+	action := MakeAction(ActionConflictCopy, view)
+	action.ConflictInfo = makeConflictRecord(view, action.DriveID, conflictType)
+
+	return action
+}
+
+func makeConflictResolvedAction(actionType ActionType, view *PathView, conflictType string) Action {
+	action := MakeAction(actionType, view)
+	action.ConflictInfo = makeConflictRecord(view, action.DriveID, conflictType)
+
+	return action
 }
 
 // makeFolderCreate constructs an ActionFolderCreate action with the
@@ -1343,7 +720,7 @@ func expandFolderDeleteCascades(
 			ActionLocalMove,
 			ActionRemoteMove,
 			ActionFolderCreate,
-			ActionConflict,
+			ActionConflictCopy,
 			ActionUpdateSynced:
 			panic(fmt.Sprintf("unexpected folder cascade action type %s", a.Type.String()))
 		}
@@ -1395,7 +772,7 @@ func cascadeDeleteKindForAction(actionType ActionType) (cascadeDeleteKind, bool)
 		ActionLocalMove,
 		ActionRemoteMove,
 		ActionFolderCreate,
-		ActionConflict,
+		ActionConflictCopy,
 		ActionUpdateSynced:
 		return 0, false
 	}
@@ -1534,12 +911,16 @@ func buildDependencies(actions []Action) [][]int {
 
 	// Index folder creates by path for quick lookup.
 	folderCreateIdx := make(map[string]int)
+	conflictCopyIdx := make(map[string]int)
 	// Index all deletes by path for child→parent edges.
 	deleteIdx := make(map[string]int)
 
 	for i := range actions {
 		if actions[i].Type == ActionFolderCreate {
 			folderCreateIdx[actions[i].Path] = i
+		}
+		if actions[i].Type == ActionConflictCopy {
+			conflictCopyIdx[actions[i].Path] = i
 		}
 
 		isDelete := actions[i].Type == ActionLocalDelete ||
@@ -1552,6 +933,7 @@ func buildDependencies(actions []Action) [][]int {
 
 	for i := range actions {
 		deps[i] = addParentFolderDep(deps[i], i, &actions[i], folderCreateIdx)
+		deps[i] = addConflictCopyDep(deps[i], i, &actions[i], conflictCopyIdx)
 		deps[i] = addChildDeleteDeps(deps[i], i, &actions[i], deleteIdx)
 		// Sort dependency indices for reproducible ordering (B-154).
 		sort.Ints(deps[i])
@@ -1571,6 +953,18 @@ func addParentFolderDep(deps []int, idx int, a *Action, folderCreateIdx map[stri
 
 	if fcIdx, ok := folderCreateIdx[parentDir]; ok && fcIdx != idx {
 		deps = append(deps, fcIdx)
+	}
+
+	return deps
+}
+
+func addConflictCopyDep(deps []int, idx int, a *Action, conflictCopyIdx map[string]int) []int {
+	if a.Type != ActionDownload {
+		return deps
+	}
+
+	if copyIdx, ok := conflictCopyIdx[a.Path]; ok && copyIdx != idx {
+		deps = append(deps, copyIdx)
 	}
 
 	return deps
@@ -1606,6 +1000,28 @@ func CountByType(actions []Action) map[ActionType]int {
 	}
 
 	return counts
+}
+
+func CountConflicts(actions []Action) int {
+	if len(actions) == 0 {
+		return 0
+	}
+
+	seen := make(map[string]struct{})
+	total := 0
+	for i := range actions {
+		if actions[i].ConflictInfo == nil {
+			continue
+		}
+		key := actions[i].Path + "\x00" + actions[i].ConflictInfo.ConflictType
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		total++
+	}
+
+	return total
 }
 
 // detectDependencyCycle performs a DFS to check for cycles in the dependency

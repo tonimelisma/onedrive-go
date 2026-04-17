@@ -160,6 +160,36 @@ func TestRunOnce_DownloadOnly_ObservesLocalScanButSuppressesUploads(t *testing.T
 	assert.Equal(t, 1, report.DeferredByMode.Uploads, "download-only mode should report the deferred upload")
 }
 
+// Validates: R-2.1.3
+func TestRunOnce_DownloadOnly_PersistsStatusForDeferredOnlyPass(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	writeLocalFile(t, syncRoot, "local-only.txt", "should not be uploaded")
+
+	ctx := t.Context()
+
+	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
+	require.NoError(t, err, "RunOnce")
+	assert.Equal(t, 1, report.DeferredByMode.Uploads)
+
+	status, err := eng.baseline.ReadSyncRunStatus(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.NotZero(t, status.LastCompletedAt, "deferred-only passes must still persist completion time")
+	assert.GreaterOrEqual(t, status.LastDurationMs, int64(0))
+	assert.Zero(t, status.LastSucceededCount)
+	assert.Zero(t, status.LastFailedCount)
+}
+
 // Validates: R-2.1.4
 func TestRunOnce_UploadOnly_StillObservesRemoteDelta(t *testing.T) {
 	t.Parallel()
@@ -214,7 +244,7 @@ func TestRunOnce_Bidirectional_FullRun(t *testing.T) {
 }
 
 // Validates: R-2.1.3, R-2.1.4
-func TestRunOnce_PersistsLocalSnapshotAndSQLitePlan(t *testing.T) {
+func TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -233,17 +263,17 @@ func TestRunOnce_PersistsLocalSnapshotAndSQLitePlan(t *testing.T) {
 	assert.NotEmpty(t, localRows[0].Hash)
 	assert.Equal(t, localRows[0].Hash, localRows[0].ContentIdentity)
 
-	plannedRows, err := eng.baseline.ListPlannedActions(t.Context())
+	reconciliationRows, err := eng.baseline.QueryReconciliationState(t.Context())
 	require.NoError(t, err)
-	require.Len(t, plannedRows, 2)
+	require.Len(t, reconciliationRows, 2)
 
-	byPath := make(map[string]PlannedActionRow, len(plannedRows))
-	for _, row := range plannedRows {
+	byPath := make(map[string]SQLiteReconciliationRow, len(reconciliationRows))
+	for _, row := range reconciliationRows {
 		byPath[row.Path] = row
 	}
 
-	assert.Equal(t, ActionUpload, byPath["local.txt"].ActionType)
-	assert.Equal(t, ActionDownload, byPath["remote.txt"].ActionType)
+	assert.Contains(t, byPath, "local.txt")
+	assert.Contains(t, byPath, "remote.txt")
 }
 
 // Validates: R-2.1.5

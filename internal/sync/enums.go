@@ -34,7 +34,7 @@ const (
 	strRemoteMove       = "remote_move"
 	strMove             = "move"
 	strFolderCreate     = "folder_create"
-	strConflict         = "conflict"
+	strConflictCopy     = "conflict_copy"
 	strUpdateSynced     = "update_synced"
 	strCleanup          = "cleanup"
 )
@@ -234,7 +234,7 @@ const (
 	ActionLocalMove
 	ActionRemoteMove
 	ActionFolderCreate
-	ActionConflict
+	ActionConflictCopy
 	ActionUpdateSynced
 	ActionCleanup
 )
@@ -255,8 +255,8 @@ func (a ActionType) String() string {
 		return strRemoteMove
 	case ActionFolderCreate:
 		return strFolderCreate
-	case ActionConflict:
-		return strConflict
+	case ActionConflictCopy:
+		return strConflictCopy
 	case ActionUpdateSynced:
 		return strUpdateSynced
 	case ActionCleanup:
@@ -276,7 +276,7 @@ func (a ActionType) Direction() Direction {
 		return DirectionUpload
 	case ActionLocalDelete, ActionRemoteDelete:
 		return DirectionDelete
-	case ActionDownload, ActionFolderCreate, ActionConflict,
+	case ActionDownload, ActionFolderCreate, ActionConflictCopy,
 		ActionLocalMove, ActionRemoteMove, ActionUpdateSynced, ActionCleanup:
 		return DirectionDownload
 	default:
@@ -301,8 +301,8 @@ func ParseActionType(s string) (ActionType, error) {
 		return ActionRemoteMove, nil
 	case strFolderCreate:
 		return ActionFolderCreate, nil
-	case strConflict:
-		return ActionConflict, nil
+	case strConflictCopy:
+		return ActionConflictCopy, nil
 	case strUpdateSynced:
 		return ActionUpdateSynced, nil
 	case strCleanup:
@@ -333,7 +333,7 @@ func (a *ActionType) Scan(src any) error {
 func (a ActionType) Value() (driver.Value, error) {
 	switch a {
 	case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
-		ActionLocalMove, ActionRemoteMove, ActionFolderCreate, ActionConflict,
+		ActionLocalMove, ActionRemoteMove, ActionFolderCreate, ActionConflictCopy,
 		ActionUpdateSynced, ActionCleanup:
 		return a.String(), nil
 	default:

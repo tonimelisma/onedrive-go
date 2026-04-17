@@ -1466,16 +1466,15 @@ func TestRecordFailure_PopulatesScopeKey_507Quota(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // startDrainLoop creates a real engine with DepGraph, watch-mode scope state,
-// dispatchCh, buf, and retryTimerCh — the full one-shot engine-loop pipeline used
-// by these tests. Tests access the ready channel and buffer via the returned
-// engine.
+// dispatchCh, dirty scheduler, and retryTimerCh — the full one-shot engine-loop
+// pipeline used by these tests.
 func startDrainLoop(t *testing.T) (chan WorkerResult, <-chan struct{}, context.CancelFunc, *testEngine) {
 	t.Helper()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
-	rt.buf = NewBuffer(eng.logger)
+	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
 
 	results := make(chan WorkerResult, 16)
 
@@ -1587,15 +1586,16 @@ func appendDrainOutcome(
 	return append(outbox, outcome.dispatched...), false
 }
 
-// readReadyAction reads one TrackedAction from the ready channel
-// with a 1s timeout.
+// readReadyAction reads one TrackedAction from the ready channel with a race-
+// detector-friendly timeout. Full verifier runs can make SQLite replans take
+// longer than the narrower unit-test-only budget.
 func readReadyAction(t *testing.T, ready <-chan *TrackedAction) *TrackedAction {
 	t.Helper()
 
 	select {
 	case ta := <-ready:
 		return ta
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		require.Fail(t, "timed out waiting for action on ready channel")
 	}
 
@@ -1661,7 +1661,7 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	batches := make(chan []PathChanges, 2)
+	batches := make(chan DirtyBatch, 2)
 	results := make(chan WorkerResult, 2)
 	done := make(chan error, 1)
 
@@ -1676,18 +1676,15 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 		})
 	}()
 
-	batches <- []PathChanges{{
-		Path: "alpha.txt",
-		RemoteEvents: []ChangeEvent{{
-			Source:  SourceRemote,
-			Type:    ChangeCreate,
-			Path:    "alpha.txt",
-			DriveID: driveID,
-			ItemID:  "alpha-item",
-			Hash:    "alpha-hash",
-			Size:    10,
-		}},
-	}}
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "alpha-item",
+		Path:     "alpha.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "alpha-hash",
+		Size:     10,
+	}}, "", driveID))
+	batches <- DirtyBatch{Paths: []string{"alpha.txt"}}
 
 	first := readReadyAction(t, ready)
 	require.Equal(t, "alpha.txt", first.Action.Path)
@@ -1710,21 +1707,33 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	batches <- []PathChanges{{
-		Path: "beta.txt",
-		RemoteEvents: []ChangeEvent{{
-			Source:  SourceRemote,
-			Type:    ChangeCreate,
-			Path:    "beta.txt",
-			DriveID: driveID,
-			ItemID:  "beta-item",
-			Hash:    "beta-hash",
-			Size:    12,
-		}},
-	}}
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "beta-item",
+		Path:     "beta.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "beta-hash",
+		Size:     12,
+	}}, "", driveID))
+	batches <- DirtyBatch{Paths: []string{"beta.txt"}}
 
-	second := readReadyAction(t, ready)
-	require.Equal(t, "beta.txt", second.Action.Path, "steady-state watch loop should keep processing later batches")
+	var second *TrackedAction
+	for i := 0; i < 2; i++ {
+		candidate := readReadyAction(t, ready)
+		if candidate.Action.Path == "beta.txt" {
+			second = candidate
+			break
+		}
+
+		results <- WorkerResult{
+			ActionID:   candidate.ID,
+			Path:       candidate.Action.Path,
+			DriveID:    driveID,
+			ActionType: candidate.Action.Type,
+			Success:    true,
+		}
+	}
+	require.NotNil(t, second, "steady-state watch loop should keep processing later batches")
 
 	cancel()
 	close(results)
@@ -2414,7 +2423,7 @@ func TestLogFailureSummary_NoTransientSummariesNoops(t *testing.T) {
 // Retrier pipeline integration test (single-owner architecture)
 //
 // Exercises the integrated retrier: action → failure → sync_failures
-// → retry timer fires → runRetrierSweep → createEventFromDB → Buffer.
+// → retry timer fires → runRetrierSweep → dirty replan / action rebuild.
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.8.10, R-6.8.11, R-6.8.7

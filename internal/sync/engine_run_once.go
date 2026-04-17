@@ -2,11 +2,10 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
-	"sort"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -43,50 +42,50 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	}
 	opts.FullReconcile = fullReconcile
 
-	// Steps 2-4: Observe remote + local, buffer, and flush.
-	// The pending delta token is returned but NOT committed yet — it is
-	// deferred until after the planner approves the changes (step 6).
+	if opts.DryRun {
+		return e.runOnceDryRun(ctx, runner, bl, mode, opts, start)
+	}
+
+	// Steps 2-4: refresh remote and local snapshots, then derive the current
+	// actionable set from SQLite structural diff and reconciliation.
 	observeStart := e.nowFunc()
-	changes, pendingCursorCommit, err := runner.observeChanges(ctx, nil, bl, opts.DryRun, opts.FullReconcile)
+	pendingCursorCommit, err := runner.observeCurrentTruth(ctx, nil, bl, opts.DryRun, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
-	if materializeErr := runner.materializeSQLitePlan(ctx, opts.DryRun); materializeErr != nil {
-		return nil, materializeErr
-	}
-	changes = mergePathChangeBatches(
-		changes,
-		runner.collectDueRetryChanges(ctx, pathSetFromBatch(changes)),
-	)
-	e.collector().RecordObserve(len(changes), e.since(observeStart))
+	e.collector().RecordObserve(0, e.since(observeStart))
 
-	// Step 5: Early return if no changes.
-	if len(changes) == 0 {
-		if commitErr := runner.commitPendingPrimaryCursor(ctx, pendingCursorCommit); commitErr != nil {
-			return nil, commitErr
-		}
-		return e.completeRunOnceWithoutChanges(ctx, start, mode, opts), nil
-	}
-
-	// Step 6: Plan actions.
+	// Step 5: Plan actions from SQLite snapshots and reconciliation rows.
 	safety := e.resolveSafetyConfig()
-	denied := e.permHandler.DeniedPrefixes(ctx)
 
 	planStart := e.nowFunc()
-	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
+	plan, err := runner.buildSQLiteActionPlan(ctx, bl, mode, safety)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
 	e.collector().RecordPlan(len(plan.Actions), e.since(planStart))
 
-	// Planner approved — commit the deferred delta token now.
+	if materializeErr := runner.materializeSQLitePlan(ctx, plan, opts.DryRun); materializeErr != nil {
+		return nil, materializeErr
+	}
+
+	// SQLite-derived plan approved — commit the deferred delta token now.
 	if err := runner.commitPendingPrimaryCursor(ctx, pendingCursorCommit); err != nil {
 		return nil, err
 	}
 
-	// Step 7: Build report from plan counts.
 	counts := CountByType(plan.Actions)
-	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
+	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
+
+	if len(plan.Actions) == 0 {
+		if report.DeferredByMode.Total() > 0 {
+			report.Duration = e.since(start)
+			e.logRunOnceCompletion(report)
+			e.writeOneShotRunStatusBestEffort(ctx, report)
+			return report, nil
+		}
+		return e.completeRunOnceWithoutChanges(ctx, start, mode, opts), nil
+	}
 
 	if opts.DryRun {
 		return e.completeDryRunReport(start, report), nil
@@ -107,32 +106,67 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 
 	runner.postSyncHousekeeping()
 
-	// Persist one-shot status for status command queries.
-	if metaErr := e.baseline.WriteSyncRunStatus(ctx, &SyncRunReport{
-		CompletedAt: e.nowFunc(),
-		Duration:    report.Duration,
-		Succeeded:   report.Succeeded,
-		Failed:      report.Failed,
-		Errors:      report.Errors,
-	}); metaErr != nil {
-		e.logger.Warn("failed to write one-shot sync status", slog.String("error", metaErr.Error()))
-	}
+	e.writeOneShotRunStatusBestEffort(ctx, report)
 
 	return report, nil
 }
 
-func (r *oneShotRunner) materializeSQLitePlan(ctx context.Context, dryRun bool) error {
+func (e *Engine) runOnceDryRun(
+	ctx context.Context,
+	runner *oneShotRunner,
+	bl *Baseline,
+	mode Mode,
+	opts RunOptions,
+	start time.Time,
+) (*Report, error) {
+	observeStart := e.nowFunc()
+	planResult, err := runner.buildDryRunCurrentActionPlan(ctx, bl, opts.FullReconcile)
+	if err != nil {
+		return nil, err
+	}
+	e.collector().RecordObserve(planResult.observedPaths, e.since(observeStart))
+
+	safety := e.resolveSafetyConfig()
+
+	planStart := e.nowFunc()
+	plan, err := e.planner.PlanCurrentState(
+		planResult.comparisons,
+		planResult.reconciliations,
+		planResult.localRows,
+		planResult.remoteRows,
+		bl,
+		mode,
+		safety,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sync: planning actions: %w", err)
+	}
+	e.collector().RecordPlan(len(plan.Actions), e.since(planStart))
+
+	counts := CountByType(plan.Actions)
+	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
+
+	return e.completeDryRunReport(start, report), nil
+}
+
+type dryRunPlanInput struct {
+	comparisons     []SQLiteComparisonRow
+	reconciliations []SQLiteReconciliationRow
+	localRows       []LocalStateRow
+	remoteRows      []RemoteStateRow
+	observedPaths   int
+}
+
+func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
 	if dryRun {
 		return nil
 	}
 
-	if err := r.engine.baseline.MaterializePlannedActions(ctx, r.runID); err != nil {
-		return fmt.Errorf("sync: materializing sqlite planned actions: %w", err)
+	if err := flow.engine.baseline.PruneRetryStateToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
+		return fmt.Errorf("sync: pruning retry_state to current actions: %w", err)
 	}
-	if err := r.engine.baseline.PruneRetryStateToLatestPlan(ctx); err != nil {
-		return fmt.Errorf("sync: pruning retry_state to latest plan: %w", err)
-	}
-	if err := r.engine.baseline.PruneScopeBlocksWithoutBlockedRetries(ctx); err != nil {
+
+	if err := flow.engine.baseline.PruneScopeBlocksWithoutBlockedRetries(ctx); err != nil {
 		return fmt.Errorf("sync: pruning scope blocks without blocked retries: %w", err)
 	}
 
@@ -169,7 +203,16 @@ func (e *Engine) completeRunOnceWithoutChanges(
 		DryRun:   opts.DryRun,
 		Duration: e.since(start),
 	}
-	// Persist one-shot status even when no changes are detected.
+	e.writeOneShotRunStatusBestEffort(ctx, report)
+
+	return report
+}
+
+func (e *Engine) writeOneShotRunStatusBestEffort(ctx context.Context, report *Report) {
+	if report == nil {
+		return
+	}
+
 	if metaErr := e.baseline.WriteSyncRunStatus(ctx, &SyncRunReport{
 		CompletedAt: e.nowFunc(),
 		Duration:    report.Duration,
@@ -179,8 +222,6 @@ func (e *Engine) completeRunOnceWithoutChanges(
 	}); metaErr != nil {
 		e.logger.Warn("failed to write one-shot sync status", slog.String("error", metaErr.Error()))
 	}
-
-	return report
 }
 
 func (e *Engine) completeDryRunReport(start time.Time, report *Report) *Report {
@@ -287,8 +328,8 @@ func (r *oneShotRunner) executePlan(
 		return nil
 	}
 
-	// Invariant: Planner.Plan() always builds Deps with len(Actions).
-	// Assert here to catch any future regression that breaks this contract.
+	// Invariant: the current actionable-set builder always returns one
+	// dependency slice per action. Assert here to catch regressions early.
 	if len(plan.Actions) != len(plan.Deps) {
 		r.engine.logger.Error("plan invariant violation: Actions/Deps length mismatch",
 			slog.Int("actions", len(plan.Actions)),
@@ -370,6 +411,7 @@ func (r *oneShotRunner) executePlan(
 // deferred work observed by the planner.
 func buildReportFromCounts(
 	counts map[ActionType]int,
+	conflicts int,
 	deferred DeferredCounts,
 	mode Mode,
 	opts RunOptions,
@@ -383,7 +425,7 @@ func buildReportFromCounts(
 		Uploads:        counts[ActionUpload],
 		LocalDeletes:   counts[ActionLocalDelete],
 		RemoteDeletes:  counts[ActionRemoteDelete],
-		Conflicts:      counts[ActionConflict],
+		Conflicts:      conflicts,
 		SyncedUpdates:  counts[ActionUpdateSynced],
 		Cleanups:       counts[ActionCleanup],
 		DeferredByMode: deferred,
@@ -453,46 +495,201 @@ func (flow *engineFlow) observeLocal(
 // When fullReconcile is true, runs a fresh delta with empty token (enumerates
 // ALL remote items) and detects orphans — baseline entries not in the full
 // enumeration, representing missed delta deletions.
-func (flow *engineFlow) observeChanges(
+func (flow *engineFlow) observeCurrentTruth(
 	ctx context.Context,
 	watch *watchRuntime,
 	bl *Baseline,
 	dryRun, fullReconcile bool,
-) ([]PathChanges, *pendingPrimaryCursorCommit, error) {
+) (*pendingPrimaryCursorCommit, error) {
 	plan := flow.buildPrimaryRootObservationPlan(fullReconcile)
 	remoteEvents, pendingCursorCommit, err := flow.observeRemoteChanges(
 		ctx, bl, dryRun, plan,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-
-	finalRemoteEvents := flow.processCommittedPrimaryBatch(
-		ctx,
-		bl,
-		remoteEvents,
-		dryRun,
-		fullReconcile,
-	)
+	_ = remoteEvents
 
 	localResult, err := flow.observeLocalChanges(ctx, watch, bl)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if commitLocalErr := flow.commitObservedLocalSnapshot(ctx, dryRun, bl, localResult); commitLocalErr != nil {
-		return nil, nil, commitLocalErr
+	if commitLocalErr := flow.commitObservedLocalSnapshot(ctx, dryRun, localResult); commitLocalErr != nil {
+		return nil, commitLocalErr
 	}
 
-	buf := NewBuffer(flow.engine.logger)
-	buf.AddAll(finalRemoteEvents)
-	buf.AddAll(localResult.Events)
-	remoteDriftEvents, err := flow.synthesizeRemoteMirrorDrift(ctx, bl)
+	return pendingCursorCommit, nil
+}
+
+func (flow *engineFlow) buildCurrentActionPlan(
+	ctx context.Context,
+	bl *Baseline,
+	mode Mode,
+	safety *SafetyConfig,
+) (*ActionPlan, error) {
+	tx, err := beginPerfTx(ctx, flow.engine.baseline.db)
 	if err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("sync: beginning sqlite planner read transaction: %w", err)
 	}
-	buf.AddAll(remoteDriftEvents)
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			flow.engine.logger.Debug("sqlite planner read transaction rollback failed",
+				slog.String("error", rollbackErr.Error()),
+			)
+		}
+	}()
 
-	return buf.FlushImmediate(), pendingCursorCommit, nil
+	comparisons, err := queryComparisonStateWithRunner(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
+	}
+	reconciliations, err := queryReconciliationStateWithRunner(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
+	}
+	localRows, err := listLocalStateRows(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing local_state rows: %w", err)
+	}
+	observationState, err := flow.engine.baseline.readObservationStateTx(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: reading observation state for remote_state: %w", err)
+	}
+	configuredDriveID := observationState.ConfiguredDriveID
+	if configuredDriveID.IsZero() {
+		configuredDriveID = flow.engine.driveID
+	}
+	remoteRows, err := queryRemoteStateRowsWithRunner(
+		ctx,
+		tx,
+		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
+			previous_path
+		FROM remote_state`,
+		configuredDriveID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing remote_state rows: %w", err)
+	}
+
+	return flow.engine.planner.PlanCurrentState(
+		comparisons,
+		reconciliations,
+		localRows,
+		remoteRows,
+		bl,
+		mode,
+		safety,
+	)
+}
+
+func (flow *engineFlow) buildDryRunCurrentActionPlan(
+	ctx context.Context,
+	bl *Baseline,
+	fullReconcile bool,
+) (result *dryRunPlanInput, err error) {
+	plan := flow.buildPrimaryRootObservationPlan(fullReconcile)
+	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, plan)
+	if err != nil {
+		return nil, err
+	}
+
+	projectedRemote := projectRemoteObservations(flow.engine.logger, fetchResult.events)
+
+	localResult, err := flow.observeLocalChanges(ctx, nil, bl)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := beginPerfTx(ctx, flow.engine.baseline.db)
+	if err != nil {
+		return nil, fmt.Errorf("sync: beginning dry-run planning transaction: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback dry-run planning transaction")
+	}()
+
+	if commitErr := flow.engine.baseline.commitObservationTx(
+		ctx,
+		tx,
+		projectedRemote.observed,
+		"",
+		flow.engine.driveID,
+	); commitErr != nil {
+		err = commitErr
+		return nil, err
+	}
+
+	observedAt := flow.engine.nowFunc().UnixNano()
+	localRows := buildLocalStateRows(localResult, observedAt)
+	if replaceErr := replaceLocalStateTx(ctx, tx, localRows); replaceErr != nil {
+		err = replaceErr
+		return nil, err
+	}
+
+	comparisons, err := queryComparisonStateWithRunner(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying dry-run comparison state: %w", err)
+	}
+	reconciliations, err := queryReconciliationStateWithRunner(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying dry-run reconciliation state: %w", err)
+	}
+	remoteRows, err := queryRemoteStateRowsWithRunner(
+		ctx,
+		tx,
+		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
+			previous_path
+		FROM remote_state`,
+		flow.engine.driveID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing dry-run remote_state rows: %w", err)
+	}
+	localRows, err = listLocalStateRows(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing dry-run local_state rows: %w", err)
+	}
+
+	return &dryRunPlanInput{
+		comparisons:     comparisons,
+		reconciliations: reconciliations,
+		localRows:       localRows,
+		remoteRows:      remoteRows,
+		observedPaths:   len(localRows) + len(remoteRows),
+	}, nil
+}
+
+func (r *oneShotRunner) materializeSQLitePlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
+	return r.materializeCurrentActionPlan(ctx, plan, dryRun)
+}
+
+func (r *oneShotRunner) buildSQLiteActionPlan(
+	ctx context.Context,
+	bl *Baseline,
+	mode Mode,
+	safety *SafetyConfig,
+) (*ActionPlan, error) {
+	return r.buildCurrentActionPlan(ctx, bl, mode, safety)
+}
+
+func retryWorkKeysForActions(actions []Action) []RetryWorkKey {
+	keys := make([]RetryWorkKey, 0, len(actions))
+	seen := make(map[RetryWorkKey]struct{}, len(actions))
+
+	for i := range actions {
+		key := RetryWorkKey{
+			Path:       actions[i].Path,
+			OldPath:    actions[i].OldPath,
+			ActionType: actions[i].Type,
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+
+	return keys
 }
 
 func (flow *engineFlow) observeRemoteChanges(
@@ -564,7 +761,7 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.recordSkippedItems(ctx, localResult.Skipped)
 	flow.clearResolvedSkippedItems(ctx, localResult.Skipped)
 
-	pathSet := pathSetFromEvents(localResult.Events)
+	pathSet := pathSetFromLocalRows(localResult.Rows)
 	flow.scopeController().applyPermissionRecheckDecisions(
 		ctx,
 		watch,
@@ -578,7 +775,6 @@ func (flow *engineFlow) observeLocalChanges(
 func (flow *engineFlow) commitObservedLocalSnapshot(
 	ctx context.Context,
 	dryRun bool,
-	bl *Baseline,
 	localResult ScanResult,
 ) error {
 	if dryRun {
@@ -586,7 +782,7 @@ func (flow *engineFlow) commitObservedLocalSnapshot(
 	}
 
 	observedAt := flow.engine.nowFunc().UnixNano()
-	rows := buildLocalStateRows(bl, localResult, observedAt)
+	rows := buildLocalStateRows(localResult, observedAt)
 	if err := flow.engine.baseline.ReplaceLocalState(ctx, rows); err != nil {
 		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 	}
@@ -605,104 +801,6 @@ func (flow *engineFlow) commitObservedLocalSnapshot(
 	}
 
 	return nil
-}
-
-func (flow *engineFlow) synthesizeRemoteMirrorDrift(
-	ctx context.Context,
-	bl *Baseline,
-) ([]ChangeEvent, error) {
-	rows, err := flow.engine.baseline.ListRemoteState(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("sync: listing remote mirror state: %w", err)
-	}
-
-	seenRemote := make(map[string]struct{}, len(rows))
-	events := make([]ChangeEvent, 0, len(rows))
-
-	for i := range rows {
-		row := &rows[i]
-
-		seenRemote[row.ItemID] = struct{}{}
-
-		entry, found := bl.GetByID(row.ItemID)
-		if found && !remoteMirrorDiffers(entry, row) {
-			continue
-		}
-
-		event := ChangeEvent{
-			Source:   SourceRemote,
-			Type:     ChangeModify,
-			Path:     row.Path,
-			ItemID:   row.ItemID,
-			ParentID: row.ParentID,
-			DriveID:  row.DriveID,
-			ItemType: row.ItemType,
-			Name:     filepath.Base(row.Path),
-			Size:     row.Size,
-			Hash:     row.Hash,
-			Mtime:    row.Mtime,
-			ETag:     row.ETag,
-		}
-		if found && entry.Path != row.Path {
-			event.Type = ChangeMove
-			event.OldPath = entry.Path
-		}
-
-		events = append(events, event)
-	}
-
-	bl.ForEachPath(func(path string, entry *BaselineEntry) {
-		if entry == nil {
-			return
-		}
-
-		if _, ok := seenRemote[entry.ItemID]; ok {
-			return
-		}
-
-		events = append(events, ChangeEvent{
-			Source:    SourceRemote,
-			Type:      ChangeDelete,
-			Path:      path,
-			ItemID:    entry.ItemID,
-			ParentID:  entry.ParentID,
-			DriveID:   entry.DriveID,
-			ItemType:  entry.ItemType,
-			Name:      filepath.Base(path),
-			Size:      entry.RemoteSize,
-			Hash:      entry.RemoteHash,
-			Mtime:     entry.RemoteMtime,
-			IsDeleted: true,
-		})
-	})
-
-	sort.Slice(events, func(i, j int) bool {
-		if events[i].Path != events[j].Path {
-			return events[i].Path < events[j].Path
-		}
-		if events[i].Type != events[j].Type {
-			return events[i].Type < events[j].Type
-		}
-		return events[i].OldPath < events[j].OldPath
-	})
-
-	return events, nil
-}
-
-func remoteMirrorDiffers(entry *BaselineEntry, row *RemoteStateRow) bool {
-	if entry == nil || row == nil {
-		return true
-	}
-	if entry.Path != row.Path || entry.ItemType != row.ItemType {
-		return true
-	}
-	if entry.RemoteHash != row.Hash {
-		return true
-	}
-	if entry.RemoteSizeKnown && entry.RemoteSize != row.Size {
-		return true
-	}
-	return entry.RemoteMtime != row.Mtime
 }
 
 // commitPendingPrimaryCursor advances the primary observation cursor after the

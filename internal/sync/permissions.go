@@ -47,32 +47,19 @@ func isDirAccessible(tree *synctree.Root, dir string) bool {
 	return true
 }
 
-// pathSetFromEvents builds a set of paths from scanner change events.
-func pathSetFromEvents(events []ChangeEvent) map[string]bool {
-	if len(events) == 0 {
+// pathSetFromLocalRows builds a set of observed local snapshot paths from a
+// full scan result. Full-scan permission clearing should use current observed
+// truth, not only the subset of rows that happened to emit legacy change
+// events.
+func pathSetFromLocalRows(rows []LocalStateRow) map[string]bool {
+	if len(rows) == 0 {
 		return nil
 	}
 
-	paths := make(map[string]bool, len(events))
-	for i := range events {
-		if events[i].Path != "" {
-			paths[events[i].Path] = true
-		}
-	}
-
-	return paths
-}
-
-// pathSetFromBatch builds a set of paths from watch-mode batch entries.
-func pathSetFromBatch(batch []PathChanges) map[string]bool {
-	if len(batch) == 0 {
-		return nil
-	}
-
-	paths := make(map[string]bool, len(batch))
-	for i := range batch {
-		if batch[i].Path != "" {
-			paths[batch[i].Path] = true
+	paths := make(map[string]bool, len(rows))
+	for i := range rows {
+		if rows[i].Path != "" {
+			paths[rows[i].Path] = true
 		}
 	}
 

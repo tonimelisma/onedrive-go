@@ -82,7 +82,7 @@ func TestEnumStrings_NonEmpty(t *testing.T) {
 		{"ActionLocalMove", ActionLocalMove.String()},
 		{"ActionRemoteMove", ActionRemoteMove.String()},
 		{"ActionFolderCreate", ActionFolderCreate.String()},
-		{"ActionConflict", ActionConflict.String()},
+		{"ActionConflictCopy", ActionConflictCopy.String()},
 		{"ActionUpdateSynced", ActionUpdateSynced.String()},
 		{"ActionCleanup", ActionCleanup.String()},
 		{"CreateLocal", CreateLocal.String()},
@@ -108,7 +108,7 @@ func TestActionTypeDirection(t *testing.T) {
 		{action: ActionLocalMove, want: DirectionDownload},
 		{action: ActionRemoteMove, want: DirectionDownload},
 		{action: ActionFolderCreate, want: DirectionDownload},
-		{action: ActionConflict, want: DirectionDownload},
+		{action: ActionConflictCopy, want: DirectionDownload},
 		{action: ActionUpdateSynced, want: DirectionDownload},
 		{action: ActionCleanup, want: DirectionDownload},
 	}

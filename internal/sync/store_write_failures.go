@@ -62,7 +62,7 @@ func normalizeFailureActionType(direction Direction, actionType ActionType) Acti
 		ActionLocalMove,
 		ActionRemoteMove,
 		ActionFolderCreate,
-		ActionConflict,
+		ActionConflictCopy,
 		ActionUpdateSynced,
 		ActionCleanup:
 		return actionType
@@ -301,10 +301,7 @@ func (m *SyncStore) RecordFailure(
 		return fmt.Errorf("sync: recording sync failure for %s: %w", p.Path, err)
 	}
 	if category == CategoryTransient && role != FailureRoleBoundary {
-		retryRow, retryErr := plannedActionIdentityForRetryTx(ctx, tx, p.Path, actionType)
-		if retryErr != nil {
-			return retryErr
-		}
+		retryRow := retryStateIdentityForWork(p.Path, p.OldPath, actionType)
 		retryRow.ScopeKey = p.ScopeKey
 		retryRow.Blocked = role == FailureRoleHeld
 		retryRow.AttemptCount = newCount

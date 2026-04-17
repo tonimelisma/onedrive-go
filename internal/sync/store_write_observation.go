@@ -58,6 +58,30 @@ func (m *SyncStore) commitObservation(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation transaction")
 	}()
 
+	if commitErr := m.commitObservationTx(ctx, tx, events, newToken, driveID); commitErr != nil {
+		err = commitErr
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing observation transaction: %w", err)
+	}
+
+	m.logger.Debug("observations committed",
+		slog.Int("items", len(events)),
+		slog.String("drive_id", driveID.String()),
+	)
+
+	return nil
+}
+
+func (m *SyncStore) commitObservationTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	events []ObservedItem,
+	newToken string,
+	driveID driveid.ID,
+) error {
 	state, err := m.readObservationStateTx(ctx, tx)
 	if err != nil {
 		return err
@@ -87,16 +111,6 @@ func (m *SyncStore) commitObservation(
 			return saveErr
 		}
 	}
-
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing observation transaction: %w", err)
-	}
-
-	m.logger.Debug("observations committed",
-		slog.Int("items", len(events)),
-		slog.String("drive_id", driveID.String()),
-	)
-
 	return nil
 }
 

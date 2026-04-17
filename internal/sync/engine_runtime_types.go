@@ -71,8 +71,10 @@ type watchRuntimeState struct {
 }
 
 type watchObservationState struct {
-	// Event buffer — watch-loop retry/trial work injects events via buf.Add().
-	buf *Buffer
+	// Dirty debounce buffer. Local and remote observers mark paths or full
+	// refresh requests here; the watch loop refreshes snapshots and replans
+	// from SQLite current truth after the debounce window closes.
+	dirtyBuf *DirtyBuffer
 
 	// Cross-connection SQLite commit detector for watch recheck ticks.
 	lastDataVersion int64

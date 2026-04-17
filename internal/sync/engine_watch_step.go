@@ -28,7 +28,7 @@ const (
 
 type watchEvent struct {
 	kind            watchEventKind
-	batch           []PathChanges
+	batch           DirtyBatch
 	workerResult    *WorkerResult
 	skipped         []SkippedItem
 	reconcileResult reconcileResult
@@ -148,7 +148,7 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 		return watchTransition{consumeOutboxHead: true}, true, nil
 	case watchEventBatchReady:
 		return watchTransition{
-			appendOutbox: rt.processBatch(ctx, event.batch, p.bl, p.mode, p.safety),
+			appendOutbox: rt.processDirtyBatch(ctx, event.batch, p.bl, p.mode, p.safety),
 		}, true, nil
 	case watchEventBatchClosed:
 		return watchTransition{done: true}, true, nil

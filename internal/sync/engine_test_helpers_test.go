@@ -534,13 +534,6 @@ func loadActiveScopesForTest(t *testing.T, eng *testEngine, ctx context.Context)
 	return testScopeController(t, eng).loadActiveScopes(ctx, testWatchRuntime(t, eng))
 }
 
-func createEventFromDBForTest(t *testing.T, eng *testEngine, ctx context.Context, row *SyncFailureRow) *ChangeEvent {
-	t.Helper()
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-	return testEngineFlow(t, eng).buildRetryCandidate(ctx, bl, row).event
-}
-
 func isFailureResolvedForTest(t *testing.T, eng *testEngine, ctx context.Context, row *SyncFailureRow) bool {
 	t.Helper()
 	bl, err := eng.baseline.Load(ctx)
@@ -702,18 +695,6 @@ func processTrialResultForTest(t *testing.T, eng *testEngine, ctx context.Contex
 	flow, ok := lookupTestEngineFlow(eng)
 	require.True(t, ok, "engine flow must be initialized for this test")
 	flow.processWorkerResult(ctx, nil, r, nil)
-}
-
-func processBatchForTest(
-	t *testing.T,
-	eng *testEngine,
-	ctx context.Context,
-	batch []PathChanges,
-	bl *Baseline,
-	safety *SafetyConfig,
-) {
-	t.Helper()
-	testWatchRuntime(t, eng).processBatch(ctx, batch, bl, SyncBidirectional, safety)
 }
 
 type debugEventRecorder struct {

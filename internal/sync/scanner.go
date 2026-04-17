@@ -27,6 +27,7 @@ import (
 	"os"
 	slashpath "path"
 	"path/filepath"
+	"sort"
 	"strings"
 	stdsync "sync"
 	"sync/atomic"
@@ -123,10 +124,22 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 	var skipped []SkippedItem
 	var skippedEntries atomic.Int64
 	observed := make(map[string]bool)
+	currentRows := make(map[string]LocalStateRow)
 	scanStartNano := time.Now().UnixNano()
 	dirStack := rootObservedDirStack(syncRoot, o.Logger)
 
-	walkFn := o.makeWalkFunc(ctx, tree, observed, &events, &jobs, &skipped, &skippedEntries, scanStartNano, dirStack)
+	walkFn := o.makeWalkFunc(
+		ctx,
+		tree,
+		observed,
+		currentRows,
+		&events,
+		&jobs,
+		&skipped,
+		&skippedEntries,
+		scanStartNano,
+		dirStack,
+	)
 	if err := tree.WalkDir(walkFn); err != nil {
 		if ctx.Err() != nil {
 			return ScanResult{}, fmt.Errorf("sync: local scan canceled: %w", ctx.Err())
@@ -144,12 +157,15 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 	// Phase 2: Hash — parallel file hashing. Panics in hash goroutines are
 	// recovered and converted to SkippedItems (defensive coding).
 	if len(jobs) > 0 {
-		hashEvents, hashSkipped, err := o.hashPhase(ctx, jobs)
+		hashEvents, hashRows, hashSkipped, err := o.hashPhase(ctx, jobs)
 		if err != nil {
 			return ScanResult{}, err
 		}
 
 		events = append(events, hashEvents...)
+		for i := range hashRows {
+			currentRows[hashRows[i].Path] = hashRows[i]
+		}
 		skipped = append(skipped, hashSkipped...)
 	}
 
@@ -182,7 +198,11 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 		o.recordActivity()
 	}
 
-	return ScanResult{Events: events, Skipped: skipped}, nil
+	return ScanResult{
+		Events:  events,
+		Rows:    sortedLocalStateRows(currentRows),
+		Skipped: skipped,
+	}, nil
 }
 
 // hashPhase runs hash jobs in parallel using errgroup with checkWorkers limit.
@@ -190,7 +210,9 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 // any skipped items from panics in hash goroutines. Panics are recovered and
 // converted to SkippedItem entries — a single corrupted file cannot crash the
 // entire scan (defensive coding per eng philosophy).
-func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]ChangeEvent, []SkippedItem, error) {
+//
+//nolint:funlen // The hashing pipeline keeps local-scan concurrency and panic recovery in one explicit owner.
+func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]ChangeEvent, []LocalStateRow, []SkippedItem, error) {
 	workers := o.resolveCheckWorkers()
 
 	o.Logger.Debug("starting parallel hash phase",
@@ -205,6 +227,7 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 
 	var mu stdsync.Mutex
 	var events []ChangeEvent
+	var rows []LocalStateRow
 	var skipped []SkippedItem
 
 	g, gCtx := errgroup.WithContext(ctx)
@@ -245,6 +268,16 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 			// For modifies: check if hash matches baseline (no real change).
 			if !job.isNew && hash != "" {
 				if existing, found := o.Baseline.GetByPath(job.dbRelPath); found && hash == existing.LocalHash {
+					mu.Lock()
+					rows = append(rows, LocalStateRow{
+						Path:            job.dbRelPath,
+						ItemType:        ItemTypeFile,
+						Hash:            hash,
+						Size:            job.size,
+						Mtime:           job.mtime,
+						ContentIdentity: hash,
+					})
+					mu.Unlock()
 					return nil
 				}
 			}
@@ -268,6 +301,14 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 
 			mu.Lock()
 			events = append(events, ev)
+			rows = append(rows, LocalStateRow{
+				Path:            job.dbRelPath,
+				ItemType:        itemType,
+				Hash:            hash,
+				Size:            job.size,
+				Mtime:           job.mtime,
+				ContentIdentity: hash,
+			})
 			mu.Unlock()
 
 			return nil
@@ -275,10 +316,10 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, nil, fmt.Errorf("sync: hash phase: %w", err)
+		return nil, nil, nil, fmt.Errorf("sync: hash phase: %w", err)
 	}
 
-	return events, skipped, nil
+	return events, rows, skipped, nil
 }
 
 // makeWalkFunc returns a WalkDirFunc that classifies filesystem entries
@@ -286,7 +327,7 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 // Files that need hashing are appended to jobs for phase 2. User-actionable
 // rejections are appended to skipped for engine recording.
 func (o *LocalObserver) makeWalkFunc(
-	ctx context.Context, tree *synctree.Root, observed map[string]bool,
+	ctx context.Context, tree *synctree.Root, observed map[string]bool, currentRows map[string]LocalStateRow,
 	events *[]ChangeEvent, jobs *[]hashJob, skipped *[]SkippedItem,
 	skippedEntries *atomic.Int64, scanStartNano int64, dirStack map[string]struct{},
 ) fs.WalkDirFunc {
@@ -331,6 +372,7 @@ func (o *LocalObserver) makeWalkFunc(
 				dbRelPath,
 				name,
 				observed,
+				currentRows,
 				events,
 				jobs,
 				skipped,
@@ -355,7 +397,7 @@ func (o *LocalObserver) makeWalkFunc(
 			return SkipEntry(d)
 		}
 
-		return o.processEntry(fsPath, dbRelPath, name, d, observed, events, jobs, skipped, scanStartNano)
+		return o.processEntry(fsPath, dbRelPath, name, d, observed, currentRows, events, jobs, skipped, scanStartNano)
 	}
 }
 
@@ -365,6 +407,7 @@ func (o *LocalObserver) makeWalkFunc(
 // Stage 2 observation filter: file size > 250GB is checked here (after stat).
 func (o *LocalObserver) processEntry(
 	fsPath, dbRelPath, name string, d fs.DirEntry, observed map[string]bool,
+	currentRows map[string]LocalStateRow,
 	events *[]ChangeEvent, jobs *[]hashJob, skipped *[]SkippedItem, scanStartNano int64,
 ) error {
 	info, err := d.Info()
@@ -382,6 +425,7 @@ func (o *LocalObserver) processEntry(
 		info,
 		dirEntryKind(d),
 		observed,
+		currentRows,
 		events,
 		jobs,
 		skipped,
@@ -394,6 +438,7 @@ func (o *LocalObserver) processObservedInfo(
 	info fs.FileInfo,
 	kind observedKind,
 	observed map[string]bool,
+	currentRows map[string]LocalStateRow,
 	events *[]ChangeEvent,
 	jobs *[]hashJob,
 	skipped *[]SkippedItem,
@@ -413,8 +458,23 @@ func (o *LocalObserver) processObservedInfo(
 	}
 
 	observed[dbRelPath] = true
+	row := LocalStateRow{
+		Path:       dbRelPath,
+		Mtime:      info.ModTime().UnixNano(),
+		ObservedAt: 0,
+	}
+	switch kind {
+	case observedKindDir:
+		row.ItemType = ItemTypeFolder
+		row.Size = info.Size()
+		currentRows[dbRelPath] = row
+	case observedKindFile:
+		row.ItemType = ItemTypeFile
+	case observedKindUnknown:
+		return fmt.Errorf("walk observed entry %s: unknown observed kind", dbRelPath)
+	}
 
-	return o.classifyObservedInfo(fsPath, dbRelPath, name, info, kind, events, jobs, scanStartNano)
+	return o.classifyObservedInfo(fsPath, dbRelPath, name, info, kind, currentRows, events, jobs, scanStartNano)
 }
 
 // classifyObservedInfo determines the change type for a single observed local
@@ -425,6 +485,7 @@ func (o *LocalObserver) classifyObservedInfo(
 	fsPath, dbRelPath, name string,
 	info fs.FileInfo,
 	kind observedKind,
+	currentRows map[string]LocalStateRow,
 	events *[]ChangeEvent,
 	jobs *[]hashJob,
 	scanStartNano int64,
@@ -468,7 +529,7 @@ func (o *LocalObserver) classifyObservedInfo(
 		return nil
 	}
 
-	return o.classifyFileChange(fsPath, dbRelPath, name, info, existing, jobs, scanStartNano)
+	return o.classifyFileChange(fsPath, dbRelPath, name, info, existing, currentRows, jobs, scanStartNano)
 }
 
 // classifyFileChange compares a file against its baseline entry to detect
@@ -480,6 +541,7 @@ func (o *LocalObserver) classifyObservedInfo(
 // tick as the last sync (Git's "racily clean" problem).
 func (o *LocalObserver) classifyFileChange(
 	fsPath, dbRelPath, name string, info fs.FileInfo, base *BaselineEntry,
+	currentRows map[string]LocalStateRow,
 	jobs *[]hashJob, scanStartNano int64,
 ) error {
 	currentMtime := info.ModTime().UnixNano()
@@ -488,6 +550,14 @@ func (o *LocalObserver) classifyFileChange(
 	if CanReuseBaselineHash(info, base, scanStartNano) {
 		o.Logger.Debug("fast path: mtime+size match, skipping hash",
 			slog.String("path", dbRelPath))
+		currentRows[dbRelPath] = LocalStateRow{
+			Path:            dbRelPath,
+			ItemType:        ItemTypeFile,
+			Hash:            base.LocalHash,
+			Size:            currentSize,
+			Mtime:           currentMtime,
+			ContentIdentity: base.LocalHash,
+		}
 
 		return nil
 	}
@@ -508,6 +578,21 @@ func (o *LocalObserver) classifyFileChange(
 	})
 
 	return nil
+}
+
+func sortedLocalStateRows(current map[string]LocalStateRow) []LocalStateRow {
+	paths := make([]string, 0, len(current))
+	for path := range current {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	rows := make([]LocalStateRow, 0, len(paths))
+	for _, path := range paths {
+		rows = append(rows, current[path])
+	}
+
+	return rows
 }
 
 // DetectCaseCollisions finds events where two paths in the same directory

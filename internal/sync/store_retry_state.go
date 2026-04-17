@@ -5,20 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"hash/fnv"
-	"strconv"
 	"time"
 )
 
 const (
-	retryStateActionIDMask = 0x7fffffffffffffff
-
 	sqlUpsertRetryState = `INSERT INTO retry_state
-		(action_id, plan_id, path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at)
+		(work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(action_id) DO UPDATE SET
-			plan_id = excluded.plan_id,
+		ON CONFLICT(work_key) DO UPDATE SET
 			path = excluded.path,
+			old_path = excluded.old_path,
 			action_type = excluded.action_type,
 			scope_key = excluded.scope_key,
 			blocked = excluded.blocked,
@@ -27,69 +23,40 @@ const (
 			last_error = excluded.last_error,
 			first_seen_at = excluded.first_seen_at,
 			last_seen_at = excluded.last_seen_at`
-	sqlDeleteRetryStateByActionID = `DELETE FROM retry_state WHERE action_id = ?`
-	sqlDeleteRetryStateByPathType = `DELETE FROM retry_state WHERE path = ? AND action_type = ?`
+	sqlDeleteRetryStateByPathType = `DELETE FROM retry_state WHERE path = ? AND old_path = ? AND action_type = ?`
 	sqlListRetryState             = `SELECT
-		action_id, plan_id, path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
+		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
 		FROM retry_state
-		ORDER BY path, action_id`
+		ORDER BY path, work_key`
 	sqlListRetryStateReady = `SELECT
-		action_id, plan_id, path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
+		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
 		FROM retry_state
 		WHERE blocked = 0 AND next_retry_at > 0 AND next_retry_at <= ?
-		ORDER BY next_retry_at, path, action_id`
+		ORDER BY next_retry_at, path, work_key`
 	sqlPickRetryTrialCandidate = `SELECT
-		action_id, plan_id, path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
+		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
 		FROM retry_state
 		WHERE blocked = 1 AND scope_key = ?
 		ORDER BY RANDOM()
 		LIMIT 1`
-	sqlPruneRetryStateToLatestPlan = `DELETE FROM retry_state
-		WHERE NOT EXISTS (
-			SELECT 1 FROM planned_actions
-			WHERE planned_actions.path = retry_state.path
-				AND planned_actions.action_type = retry_state.action_type
-		)`
 	sqlPruneScopeBlocksWithoutBlockedRetries = `DELETE FROM scope_blocks
 		WHERE NOT EXISTS (
 			SELECT 1 FROM retry_state
 			WHERE retry_state.blocked = 1
 				AND retry_state.scope_key = scope_blocks.scope_key
 		)`
-	sqlLookupPlannedActionForRetry = `SELECT action_id, plan_id
-		FROM planned_actions
-		WHERE path = ? AND action_type = ?
-		ORDER BY action_id
-		LIMIT 1`
 )
 
-func retryStateSyntheticActionID(path string, actionType ActionType) int64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(path))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(actionType.String()))
-	value := int64(h.Sum64() & retryStateActionIDMask)
-	if value == 0 {
-		return 1
-	}
-
-	return value
+func serializeRetryWorkKey(key RetryWorkKey) string {
+	return fmt.Sprintf("%s\x00%s\x00%s", key.ActionType.String(), key.OldPath, key.Path)
 }
 
-func retryStateActionID(row *RetryStateRow) (int64, error) {
-	if row.ActionID == "" {
-		return retryStateSyntheticActionID(row.Path, row.ActionType), nil
+func retryWorkKey(path string, oldPath string, actionType ActionType) RetryWorkKey {
+	return RetryWorkKey{
+		Path:       path,
+		OldPath:    oldPath,
+		ActionType: actionType,
 	}
-
-	parsed, err := strconv.ParseInt(row.ActionID, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("sync: parsing retry action_id %q: %w", row.ActionID, err)
-	}
-	if parsed == 0 {
-		return retryStateSyntheticActionID(row.Path, row.ActionType), nil
-	}
-
-	return parsed, nil
 }
 
 func (m *SyncStore) UpsertRetryState(ctx context.Context, row *RetryStateRow) error {
@@ -97,15 +64,17 @@ func (m *SyncStore) UpsertRetryState(ctx context.Context, row *RetryStateRow) er
 }
 
 func upsertRetryStateTx(ctx context.Context, runner sqlTxRunner, row *RetryStateRow) error {
-	actionID, err := retryStateActionID(row)
-	if err != nil {
-		return err
+	if row == nil {
+		return fmt.Errorf("sync: upserting retry_state: nil row")
+	}
+	if row.WorkKey == "" {
+		row.WorkKey = serializeRetryWorkKey(retryWorkKey(row.Path, row.OldPath, row.ActionType))
 	}
 
-	_, err = runner.ExecContext(ctx, sqlUpsertRetryState,
-		actionID,
-		row.PlanID,
+	_, err := runner.ExecContext(ctx, sqlUpsertRetryState,
+		row.WorkKey,
 		row.Path,
+		row.OldPath,
 		row.ActionType.String(),
 		row.ScopeKey.String(),
 		row.Blocked,
@@ -156,55 +125,19 @@ func markRetryStateScopeReadyTx(
 	return nil
 }
 
-func plannedActionIdentityForRetryTx(
-	ctx context.Context,
-	runner sqlTxRunner,
-	path string,
-	actionType ActionType,
-) (RetryStateRow, error) {
-	row := RetryStateRow{
+func retryStateIdentityForWork(path string, oldPath string, actionType ActionType) RetryStateRow {
+	work := retryWorkKey(path, oldPath, actionType)
+	return RetryStateRow{
+		WorkKey:    serializeRetryWorkKey(work),
 		Path:       path,
+		OldPath:    oldPath,
 		ActionType: actionType,
 	}
-	var actionID int64
-	err := runner.QueryRowContext(ctx, sqlLookupPlannedActionForRetry, path, actionType.String()).
-		Scan(&actionID, &row.PlanID)
-	if err == nil {
-		row.ActionID = strconv.FormatInt(actionID, 10)
-		return row, nil
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		row.ActionID = strconv.FormatInt(retryStateSyntheticActionID(path, actionType), 10)
-		return row, nil
-	}
-
-	return RetryStateRow{}, fmt.Errorf("sync: looking up planned action for retry %s: %w", path, err)
 }
 
-func (m *SyncStore) DeleteRetryStateByActionID(ctx context.Context, actionID string) error {
-	if actionID == "" {
-		return nil
-	}
-
-	parsed, err := strconv.ParseInt(actionID, 10, 64)
-	if err != nil {
-		return fmt.Errorf("sync: parsing retry_state delete action_id %q: %w", actionID, err)
-	}
-
-	if _, err := m.db.ExecContext(ctx, sqlDeleteRetryStateByActionID, parsed); err != nil {
-		return fmt.Errorf("sync: deleting retry_state action %s: %w", actionID, err)
-	}
-
-	return nil
-}
-
-func (m *SyncStore) DeleteRetryStateByPathAction(
-	ctx context.Context,
-	path string,
-	actionType ActionType,
-) error {
-	if _, err := m.db.ExecContext(ctx, sqlDeleteRetryStateByPathType, path, actionType.String()); err != nil {
-		return fmt.Errorf("sync: deleting retry_state for %s: %w", path, err)
+func (m *SyncStore) DeleteRetryStateByWork(ctx context.Context, work RetryWorkKey) error {
+	if _, err := m.db.ExecContext(ctx, sqlDeleteRetryStateByPathType, work.Path, work.OldPath, work.ActionType.String()); err != nil {
+		return fmt.Errorf("sync: deleting retry_state for %s: %w", work.Path, err)
 	}
 
 	return nil
@@ -247,9 +180,28 @@ func (m *SyncStore) PickRetryTrialCandidate(
 	return &parsed, true, nil
 }
 
-func (m *SyncStore) PruneRetryStateToLatestPlan(ctx context.Context) error {
-	if _, err := m.db.ExecContext(ctx, sqlPruneRetryStateToLatestPlan); err != nil {
-		return fmt.Errorf("sync: pruning retry_state to latest plan: %w", err)
+func (m *SyncStore) PruneRetryStateToCurrentActions(
+	ctx context.Context,
+	work []RetryWorkKey,
+) error {
+	rows, err := m.ListRetryState(ctx)
+	if err != nil {
+		return err
+	}
+
+	keep := make(map[RetryWorkKey]struct{}, len(work))
+	for i := range work {
+		keep[work[i]] = struct{}{}
+	}
+
+	for i := range rows {
+		key := retryWorkKey(rows[i].Path, rows[i].OldPath, rows[i].ActionType)
+		if _, ok := keep[key]; ok {
+			continue
+		}
+		if err := m.DeleteRetryStateByWork(ctx, key); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -272,14 +224,11 @@ func scanRetryStateRow(scanner retryStateScanner, row *RetryStateRow) error {
 		return fmt.Errorf("sync: scanning retry_state row: nil destination")
 	}
 
-	var (
-		actionID int64
-		scopeKey string
-	)
+	var scopeKey string
 	if err := scanner.Scan(
-		&actionID,
-		&row.PlanID,
+		&row.WorkKey,
 		&row.Path,
+		&row.OldPath,
 		&row.ActionType,
 		&scopeKey,
 		&row.Blocked,
@@ -292,7 +241,6 @@ func scanRetryStateRow(scanner retryStateScanner, row *RetryStateRow) error {
 		return fmt.Errorf("sync: scanning retry_state row: %w", err)
 	}
 
-	row.ActionID = strconv.FormatInt(actionID, 10)
 	row.ScopeKey = ParseScopeKey(scopeKey)
 	return nil
 }

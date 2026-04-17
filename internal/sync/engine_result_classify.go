@@ -457,9 +457,9 @@ func effectiveRemotePermissionCapability(r *WorkerResult) PermissionCapability {
 	switch r.ActionType {
 	case ActionDownload:
 		return PermissionCapabilityRemoteRead
-	case ActionUpload, ActionRemoteDelete, ActionRemoteMove, ActionFolderCreate, ActionConflict:
+	case ActionUpload, ActionRemoteDelete, ActionRemoteMove, ActionFolderCreate:
 		return PermissionCapabilityRemoteWrite
-	case ActionLocalDelete, ActionLocalMove, ActionUpdateSynced, ActionCleanup:
+	case ActionConflictCopy, ActionLocalDelete, ActionLocalMove, ActionUpdateSynced, ActionCleanup:
 		return PermissionCapabilityUnknown
 	default:
 		return PermissionCapabilityUnknown
@@ -480,9 +480,7 @@ func effectiveLocalPermissionCapability(r *WorkerResult) PermissionCapability {
 	switch r.ActionType {
 	case ActionUpload:
 		return PermissionCapabilityLocalRead
-	case ActionDownload, ActionLocalDelete, ActionLocalMove, ActionFolderCreate, ActionCleanup:
-		return PermissionCapabilityLocalWrite
-	case ActionConflict:
+	case ActionDownload, ActionLocalDelete, ActionLocalMove, ActionFolderCreate, ActionConflictCopy, ActionCleanup:
 		return PermissionCapabilityLocalWrite
 	case ActionRemoteDelete, ActionRemoteMove, ActionUpdateSynced:
 		return PermissionCapabilityUnknown

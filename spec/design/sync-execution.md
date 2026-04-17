@@ -26,8 +26,8 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Behavior | Evidence |
 | --- | --- |
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
-| Local edit versus remote delete is auto-resolved without a durable conflict mailbox. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ConflictCopy` |
-| Execution keeps ordinary per-item delete safety and routes concrete failures back to the engine instead of persisting manual approval state. | `TestExecutor_LocalDelete_HashMismatch_ConflictCopy`, `TestExecutor_SyncedUpdate`, `TestExecutor_SyncedUpdate_BaselineFallback` |
+| Local edit versus remote delete is auto-resolved without a durable conflict mailbox. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolve` |
+| Execution keeps ordinary per-item delete safety and routes concrete failures back to the engine instead of persisting manual approval state. | `TestExecutor_LocalDelete_HashMismatch_EditDeleteAutoResolve`, `TestExecutor_SyncedUpdate`, `TestExecutor_SyncedUpdate_BaselineFallback` |
 
 ## Worker And Dependency Model
 
@@ -65,18 +65,21 @@ remove directories blocked by non-disposable children.
 
 ## Conflict Execution
 
-`ActionConflict` is immediate execution work. There is no durable
-conflict-request mailbox.
+The snapshot-based runtime does not execute abstract conflict rows. Conflict
+handling is expanded before execution into concrete work such as
+`ActionConflictCopy`, `ActionDownload`, and conflict-tagged `ActionUpload`.
+There is no durable conflict-request mailbox.
 
 ### Edit/edit and create/create
 
 The executor preserves both versions:
 
-1. rename local file to `<stem>.conflict-<timestamp><ext>`
-2. download remote file back to the canonical path
+1. execute `ActionConflictCopy` to rename the local canonical file to `<stem>.conflict-<timestamp><ext>`
+2. execute the dependent `ActionDownload` back to the canonical path
 
-If the download fails, the executor restores the original local file from the
-conflict copy.
+If the download fails, the preserved local conflict copy remains on disk and
+the canonical path stays pending for retry/replan. Execution does not recreate
+an abstract conflict action to roll the pair back.
 
 ### Edit/delete
 

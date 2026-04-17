@@ -410,6 +410,39 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 	assert.Equal(t, hashContent(t, actualContent), ev.Hash)
 }
 
+func TestFullScan_RacilyCleanUnchangedFileStillProducesSnapshotRow(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	content := "stable-content"
+	writeTestFile(t, dir, "stable.txt", content)
+
+	info, err := os.Stat(filepath.Join(dir, "stable.txt"))
+	require.NoError(t, err, "Stat")
+
+	hash := hashContent(t, content)
+	baseline := baselineWith(&BaselineEntry{
+		Path:           "stable.txt",
+		DriveID:        driveid.New("d"),
+		ItemID:         "i1",
+		ItemType:       ItemTypeFile,
+		LocalHash:      hash,
+		LocalSize:      info.Size(),
+		LocalSizeKnown: true,
+		LocalMtime:     info.ModTime().UnixNano(),
+	})
+
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	assert.Empty(t, result.Events, "unchanged racily clean file should not emit ChangeModify")
+	require.Len(t, result.Rows, 1, "unchanged racily clean file must still remain in the local snapshot")
+	assert.Equal(t, "stable.txt", result.Rows[0].Path)
+	assert.Equal(t, hash, result.Rows[0].Hash)
+	assert.Equal(t, hash, result.Rows[0].ContentIdentity)
+}
+
 func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 	t.Parallel()
 

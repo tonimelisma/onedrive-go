@@ -180,7 +180,7 @@ func SnapshotAttrs(snapshot *Snapshot) []slog.Attr {
 	appendIntAttr("observed_paths", snapshot.ObservedPathCount)
 	appendInt64Attr("observe_time_ms", snapshot.ObserveTimeMS)
 	appendIntAttr("plan_runs", snapshot.PlanRunCount)
-	appendIntAttr("planned_actions", snapshot.PlannedActionCount)
+	appendIntAttr("actionable_actions", snapshot.ActionableActionCount)
 	appendInt64Attr("plan_time_ms", snapshot.PlanTimeMS)
 	appendIntAttr("execute_runs", snapshot.ExecuteRunCount)
 	appendIntAttr("execute_actions", snapshot.ExecuteActionCount)

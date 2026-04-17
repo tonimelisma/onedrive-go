@@ -594,10 +594,10 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 
 	ready := setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Full reconciliation always hands observed changes back through the watch
-	// buffer, even when the later planner pass reduces them to a no-op. The
+	// dirty scheduler, even when the later planner pass reduces them to a no-op. The
 	// important boundary here is "no direct dispatch from the goroutine."
 	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
@@ -608,9 +608,10 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	default:
 	}
 
-	batch := testWatchRuntime(t, e).buf.FlushImmediate()
-	require.Len(t, batch, 1, "reconciliation should hand observed state back through the watch buffer")
-	assert.Equal(t, "file1.txt", batch[0].Path)
+	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
+	require.NotNil(t, batch, "reconciliation should mark dirty work for the watch loop")
+	assert.Equal(t, []string{"file1.txt"}, batch.Paths)
+	assert.False(t, batch.FullRefresh)
 }
 
 // Validates: R-2.1.6
@@ -630,15 +631,16 @@ func TestRunFullReconciliationAsync_DeltaError(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Should not panic — error is logged and function returns.
 	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
-	// Buffer should be empty — no events were produced.
-	batch := testWatchRuntime(t, e).buf.FlushImmediate()
-	assert.Empty(t, batch)
+	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
+	require.NotNil(t, batch)
+	assert.True(t, batch.FullRefresh)
+	assert.Empty(t, batch.Paths)
 }
 
 func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
@@ -662,7 +664,7 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Call should return immediately — goroutine is blocked in deltaFn.
 	runFullReconciliationAsyncForTest(t, e, ctx, bl)
@@ -695,7 +697,7 @@ func TestRunFullReconciliationAsync_SkipsIfRunning(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Pre-set reconcileActive — simulates a reconciliation already in progress.
 	testWatchRuntime(t, e).reconcileActive = true
@@ -749,15 +751,16 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
 
-	// Baseline is empty — delta returns a new file → orphan detection
-	// produces a download event that gets fed into the buffer.
+	// Baseline is empty — delta returns a new file and the watch loop gets
+	// a dirty path signal back from reconciliation.
 	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
-	batch := testWatchRuntime(t, e).buf.FlushImmediate()
-	assert.NotEmpty(t, batch, "buffer should contain events from reconciliation")
+	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
+	require.NotNil(t, batch, "dirty scheduler should contain paths from reconciliation")
+	assert.Contains(t, batch.Paths, "newfile.txt")
 }
 
 // Validates: R-2.8.4
@@ -788,7 +791,7 @@ func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHand
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.buf = NewBuffer(eng.logger)
+	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
 
 	reconcileC := make(chan time.Time, 1)
 	done := make(chan error, 1)
@@ -809,10 +812,9 @@ func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHand
 		return event.Type == engineDebugEventReconcileApplied
 	}, "watch loop applied periodic reconciliation result")
 
-	batch := rt.buf.FlushImmediate()
-
-	require.Len(t, batch, 1)
-	assert.Equal(t, "reconcile.txt", batch[0].Path)
+	batch := rt.dirtyBuf.FlushImmediate()
+	require.NotNil(t, batch)
+	assert.Equal(t, []string{"reconcile.txt"}, batch.Paths)
 
 	select {
 	case ta := <-ready:
@@ -877,7 +879,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Hook: cancel context immediately after CommitObservation succeeds.
 	// This guarantees we test the exact shutdown-after-commit code path,
@@ -896,10 +898,10 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	assert.Equal(t, "shutdown-tok", savedToken,
 		"delta token should be saved — CommitObservation must have succeeded")
 
-	// Buffer should be empty — events were committed to SQLite but
-	// not fed to the buffer because shutdown was detected after commit.
-	batch := testWatchRuntime(t, e).buf.FlushImmediate()
-	assert.Empty(t, batch, "buffer should be empty after shutdown-aware early exit")
+	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
+	require.NotNil(t, batch, "shutdown-aware early exit should request a fresh replan")
+	assert.True(t, batch.FullRefresh)
+	assert.Empty(t, batch.Paths)
 }
 
 func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
@@ -926,7 +928,6 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	// Pre-set reconcileActive — simulates a reconciliation already in progress.
 	testWatchRuntime(t, e).reconcileActive = true
@@ -988,7 +989,6 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
@@ -1047,7 +1047,6 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).buf = NewBuffer(e.logger)
 
 	runFullReconciliationAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
