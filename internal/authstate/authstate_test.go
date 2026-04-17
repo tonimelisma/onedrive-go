@@ -4,8 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func TestPresentationForReason(t *testing.T) {
@@ -60,20 +58,4 @@ func TestHealthHelpers(t *testing.T) {
 	}, RequiredHealth(ReasonInvalidSavedLogin))
 	assert.Equal(t, Health{}, RequiredHealth(Reason("unknown")))
 	assert.Equal(t, PresentationForReason(ReasonSyncAuthRejected), UnauthorizedIssuePresentation())
-}
-
-func TestErrorMessage(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(
-		t,
-		"Authentication required: no saved login was found for this account. Run 'onedrive-go login'.",
-		ErrorMessage(graph.ErrNotLoggedIn),
-	)
-	assert.Equal(
-		t,
-		"Authentication required: OneDrive rejected the saved login for this account. Run 'onedrive-go login'.",
-		ErrorMessage(graph.ErrUnauthorized),
-	)
-	assert.Empty(t, ErrorMessage(assert.AnError))
 }

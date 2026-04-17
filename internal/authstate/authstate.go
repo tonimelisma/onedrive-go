@@ -2,12 +2,6 @@
 // CLI auth surfaces and the unauthorized sync issue presentation.
 package authstate
 
-import (
-	"errors"
-
-	"github.com/tonimelisma/onedrive-go/internal/graph"
-)
-
 const (
 	StateReady                  = "ready"
 	StateAuthenticationRequired = "authentication_required"
@@ -77,15 +71,4 @@ func PresentationForReason(reason Reason) Presentation {
 
 func UnauthorizedIssuePresentation() Presentation {
 	return PresentationForReason(ReasonSyncAuthRejected)
-}
-
-func ErrorMessage(err error) string {
-	switch {
-	case errors.Is(err, graph.ErrNotLoggedIn):
-		return "Authentication required: no saved login was found for this account. Run 'onedrive-go login'."
-	case errors.Is(err, graph.ErrUnauthorized):
-		return "Authentication required: OneDrive rejected the saved login for this account. Run 'onedrive-go login'."
-	default:
-		return ""
-	}
 }

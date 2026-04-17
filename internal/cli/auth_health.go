@@ -348,5 +348,12 @@ func printAccountAuthRequirementsText(w io.Writer, header string, items []accoun
 }
 
 func authErrorMessage(err error) string {
-	return authstate.ErrorMessage(err)
+	switch {
+	case errors.Is(err, graph.ErrNotLoggedIn):
+		return "Authentication required: no saved login was found for this account. Run 'onedrive-go login'."
+	case errors.Is(err, graph.ErrUnauthorized):
+		return "Authentication required: OneDrive rejected the saved login for this account. Run 'onedrive-go login'."
+	default:
+		return ""
+	}
 }
