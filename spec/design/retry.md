@@ -155,7 +155,7 @@ When the engine activates a scope block, blocked descendants are recorded in
 - success -> `releaseScope`
 - matching-scope persistence evidence -> `extendScopeTrial`
 - inconclusive trial outcomes -> `preserveScopeTrial`
-- stale blocked work that no longer appears in the current actionable set is cleared from retry scheduling and from durable failure reporting instead of being replayed synthetically
+- stale blocked work that no longer appears in the current actionable set is cleared from retry scheduling and from durable failure reporting directly from current truth instead of being rebuilt as synthetic planner events
 
 `preserveScopeTrial` is intentionally different from backoff extension:
 

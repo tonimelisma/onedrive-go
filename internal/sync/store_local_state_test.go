@@ -58,9 +58,9 @@ func TestBuildLocalStateRows_UsesDirectSnapshotRows(t *testing.T) {
 	rows := buildLocalStateRows(ScanResult{
 		Rows: []LocalStateRow{
 			{
-				Path:            "folder",
-				ItemType:        ItemTypeFolder,
-				Mtime:           606,
+				Path:     "folder",
+				ItemType: ItemTypeFolder,
+				Mtime:    606,
 			},
 			{
 				Path:            "fresh.txt",

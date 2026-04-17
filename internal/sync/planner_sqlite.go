@@ -66,8 +66,18 @@ func (p *Planner) PlanCurrentState(
 		DeferredByMode: deferred,
 	}
 
+	logActionPlanSummary(p.logger, "sqlite actionable-set plan complete", plan)
+
+	return plan, nil
+}
+
+func logActionPlanSummary(logger *slog.Logger, message string, plan *ActionPlan) {
+	if logger == nil || plan == nil {
+		return
+	}
+
 	counts := CountByType(plan.Actions)
-	p.logger.Info("sqlite actionable-set plan complete",
+	logger.Info(message,
 		slog.Int("total_actions", len(plan.Actions)),
 		slog.Int("folder_creates", counts[ActionFolderCreate]),
 		slog.Int("moves", counts[ActionLocalMove]+counts[ActionRemoteMove]),
@@ -78,15 +88,13 @@ func (p *Planner) PlanCurrentState(
 		slog.Int("conflicts", counts[ActionConflict]),
 		slog.Int("synced_updates", counts[ActionUpdateSynced]),
 		slog.Int("cleanups", counts[ActionCleanup]),
-		slog.Int("deferred_folder_creates", deferred.FolderCreates),
-		slog.Int("deferred_moves", deferred.Moves),
-		slog.Int("deferred_downloads", deferred.Downloads),
-		slog.Int("deferred_uploads", deferred.Uploads),
-		slog.Int("deferred_local_deletes", deferred.LocalDeletes),
-		slog.Int("deferred_remote_deletes", deferred.RemoteDeletes),
+		slog.Int("deferred_folder_creates", plan.DeferredByMode.FolderCreates),
+		slog.Int("deferred_moves", plan.DeferredByMode.Moves),
+		slog.Int("deferred_downloads", plan.DeferredByMode.Downloads),
+		slog.Int("deferred_uploads", plan.DeferredByMode.Uploads),
+		slog.Int("deferred_local_deletes", plan.DeferredByMode.LocalDeletes),
+		slog.Int("deferred_remote_deletes", plan.DeferredByMode.RemoteDeletes),
 	)
-
-	return plan, nil
 }
 
 func buildSQLitePathViews(
@@ -141,6 +149,7 @@ func buildSQLitePathViews(
 	return views, comparisonByPath, nil
 }
 
+//nolint:gocyclo // Reconciliation kind dispatch is the planner's explicit decision table.
 func buildActionsForReconciliation(
 	rec *SQLiteReconciliationRow,
 	cmp *SQLiteComparisonRow,
@@ -168,11 +177,11 @@ func buildActionsForReconciliation(
 		return []Action{MakeAction(ActionUpload, view)}, nil
 	case "download":
 		return []Action{MakeAction(ActionDownload, view)}, nil
-	case "local_delete":
+	case strLocalDelete:
 		return []Action{MakeAction(ActionLocalDelete, view)}, nil
-	case "remote_delete":
+	case strRemoteDelete:
 		return []Action{MakeAction(ActionRemoteDelete, view)}, nil
-	case "update_synced":
+	case strUpdateSynced:
 		return []Action{MakeAction(ActionUpdateSynced, view)}, nil
 	case "conflict_edit_edit":
 		return []Action{makeConflictAction(view, ConflictEditEdit)}, nil
@@ -180,7 +189,7 @@ func buildActionsForReconciliation(
 		return []Action{makeConflictAction(view, ConflictEditDelete)}, nil
 	case "conflict_create_create":
 		return []Action{makeConflictAction(view, ConflictCreateCreate)}, nil
-	case "local_move":
+	case strLocalMove:
 		if cmp.ComparisonKind != "local_move_source" {
 			return nil, nil
 		}
@@ -191,7 +200,7 @@ func buildActionsForReconciliation(
 		action.OldPath = rec.Path
 		action.Path = rec.LocalMoveTarget
 		return []Action{action}, nil
-	case "remote_move":
+	case strRemoteMove:
 		if cmp.ComparisonKind != "remote_move_dest" {
 			return nil, nil
 		}

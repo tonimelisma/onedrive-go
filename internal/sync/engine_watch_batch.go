@@ -35,9 +35,10 @@ func (rt *watchRuntime) processDirtyBatch(
 		)
 		return nil
 	}
-	if err := rt.commitObservedLocalSnapshot(ctx, false, localResult); err != nil {
+	commitErr := rt.commitObservedLocalSnapshot(ctx, false, localResult)
+	if commitErr != nil {
 		rt.engine.logger.Error("watch local snapshot commit failed, skipping dirty batch",
-			slog.String("error", err.Error()),
+			slog.String("error", commitErr.Error()),
 		)
 		return nil
 	}
@@ -76,12 +77,9 @@ func (rt *watchRuntime) processDirtyBatch(
 }
 
 type dispatchBatchOptions struct {
-	deduplicateInFlight  bool
-	runPeriodicPermCheck bool
-	clearScannerResolved bool
-	trialScopeKey        ScopeKey
-	trialPath            string
-	trialDriveID         driveid.ID
+	trialScopeKey ScopeKey
+	trialPath     string
+	trialDriveID  driveid.ID
 }
 
 func (rt *watchRuntime) dispatchCurrentPlan(

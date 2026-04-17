@@ -84,26 +84,7 @@ func (p *Planner) Plan(
 		DeferredByMode: deferred,
 	}
 
-	counts := CountByType(plan.Actions)
-
-	p.logger.Info("plan complete",
-		slog.Int("total_actions", len(plan.Actions)),
-		slog.Int("folder_creates", counts[ActionFolderCreate]),
-		slog.Int("moves", counts[ActionLocalMove]+counts[ActionRemoteMove]),
-		slog.Int("downloads", counts[ActionDownload]),
-		slog.Int("uploads", counts[ActionUpload]),
-		slog.Int("local_deletes", counts[ActionLocalDelete]),
-		slog.Int("remote_deletes", counts[ActionRemoteDelete]),
-		slog.Int("conflicts", counts[ActionConflict]),
-		slog.Int("synced_updates", counts[ActionUpdateSynced]),
-		slog.Int("cleanups", counts[ActionCleanup]),
-		slog.Int("deferred_folder_creates", deferred.FolderCreates),
-		slog.Int("deferred_moves", deferred.Moves),
-		slog.Int("deferred_downloads", deferred.Downloads),
-		slog.Int("deferred_uploads", deferred.Uploads),
-		slog.Int("deferred_local_deletes", deferred.LocalDeletes),
-		slog.Int("deferred_remote_deletes", deferred.RemoteDeletes),
-	)
+	logActionPlanSummary(p.logger, "plan complete", plan)
 
 	return plan, nil
 }

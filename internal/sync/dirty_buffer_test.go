@@ -31,6 +31,7 @@ func (t *fakeDirtyDebounceTimer) Stop() bool {
 	t.active = false
 	return wasActive
 }
+
 func (t *fakeDirtyDebounceTimer) Reset(time.Duration) bool {
 	wasActive := t.active
 	t.active = true

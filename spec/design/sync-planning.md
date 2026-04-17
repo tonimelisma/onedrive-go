@@ -121,5 +121,5 @@ rediscovering that ownership ad hoc.
 the forbidden action classes and record those counts in `DeferredByMode`.
 
 Permission scopes are different: they are engine-owned admission policy.
-Planner output is not suppressed by denied-prefix lists; the engine filters
-blocked work during admission and retry/trial handling.
+Planner output is not suppressed by remote blocked-boundary lists; the engine
+filters blocked work during admission and retry/trial handling.

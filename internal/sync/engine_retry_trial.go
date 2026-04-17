@@ -6,20 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-type engineWorkReason int
-
 const (
-	engineWorkObserved engineWorkReason = iota
-	engineWorkRetry
-	engineWorkTrial
-
 	// defaultRetryBatchSize limits how many retry_state rows are processed per
 	// retry sweep so a large durable retry queue cannot monopolize the watch loop.
 	defaultRetryBatchSize = 1024
@@ -31,7 +24,6 @@ const (
 )
 
 type retryCandidate struct {
-	event    *ChangeEvent
 	skipped  *SkippedItem
 	resolved bool
 	err      error
@@ -48,6 +40,7 @@ func actionWorkKey(action *Action) RetryWorkKey {
 	}
 }
 
+//nolint:gocyclo // The subset builder keeps dependency closure and remapping in one place.
 func selectedActionPlanByKeys(plan *ActionPlan, keys []RetryWorkKey) *ActionPlan {
 	if plan == nil || len(plan.Actions) == 0 || len(keys) == 0 {
 		return nil
@@ -136,8 +129,9 @@ func (rt *watchRuntime) refreshCurrentActionPlan(
 	}
 	observedAt := rt.engine.nowFunc().UnixNano()
 	rows := buildLocalStateRows(localResult, observedAt)
-	if err := rt.engine.baseline.ReplaceLocalState(ctx, rows); err != nil {
-		return nil, fmt.Errorf("sync: replacing local snapshot before retry/trial planning: %w", err)
+	replaceErr := rt.engine.baseline.ReplaceLocalState(ctx, rows)
+	if replaceErr != nil {
+		return nil, fmt.Errorf("sync: replacing local snapshot before retry/trial planning: %w", replaceErr)
 	}
 
 	plan, err := rt.buildCurrentActionPlan(ctx, bl, mode, safety)
@@ -461,72 +455,12 @@ func (flow *engineFlow) retryStateRowAsFailure(
 	return enriched, nil
 }
 
-func mergePathChangeBatches(batches ...[]PathChanges) []PathChanges {
-	merged := make(map[string]*PathChanges)
-
-	for _, batch := range batches {
-		for i := range batch {
-			path := batch[i].Path
-			if path == "" {
-				continue
-			}
-
-			entry, ok := merged[path]
-			if !ok {
-				entry = &PathChanges{Path: path}
-				merged[path] = entry
-			}
-
-			entry.RemoteEvents = append(entry.RemoteEvents, batch[i].RemoteEvents...)
-			entry.LocalEvents = append(entry.LocalEvents, batch[i].LocalEvents...)
-		}
-	}
-
-	if len(merged) == 0 {
-		return nil
-	}
-
-	paths := make([]string, 0, len(merged))
-	for path := range merged {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
-	result := make([]PathChanges, 0, len(paths))
-	for _, path := range paths {
-		result = append(result, *merged[path])
-	}
-
-	return result
-}
-
 func (e *Engine) effectiveRetryBatchLimit() int {
 	if e.retryBatchLimit > 0 {
 		return e.retryBatchLimit
 	}
 
 	return defaultRetryBatchSize
-}
-
-// remoteStateToChangeEvent converts current remote mirror truth into a
-// planner-ready remote change event. Remote deletion is represented by mirror
-// absence and handled separately by delete-specific rebuild paths.
-func remoteStateToChangeEvent(rs *RemoteStateRow, path string) *ChangeEvent {
-	return &ChangeEvent{
-		Source:    SourceRemote,
-		Type:      ChangeModify,
-		Path:      path,
-		ItemID:    rs.ItemID,
-		ParentID:  rs.ParentID,
-		DriveID:   rs.DriveID,
-		ItemType:  rs.ItemType,
-		Name:      filepath.Base(path),
-		Size:      rs.Size,
-		Hash:      rs.Hash,
-		Mtime:     rs.Mtime,
-		ETag:      rs.ETag,
-		IsDeleted: false,
-	}
 }
 
 func baselineEntryMatchesRemoteState(entry *BaselineEntry, rs *RemoteStateRow) bool {
@@ -708,14 +642,9 @@ func (flow *engineFlow) buildMirrorRetryCandidate(
 	if baselineEntryMatchesRemoteState(baselineEntryForFailureInBaseline(bl, row), rs) {
 		return retryCandidate{resolved: true}
 	}
+	_ = forceDownload
 
-	event := remoteStateToChangeEvent(rs, row.Path)
-	if forceDownload {
-		event.ForcedAction = ActionDownload
-		event.HasForcedAction = true
-	}
-
-	return retryCandidate{event: event}
+	return retryCandidate{}
 }
 
 func (flow *engineFlow) buildLocalDeleteRetryCandidate(
@@ -738,22 +667,7 @@ func (flow *engineFlow) buildLocalDeleteRetryCandidate(
 		}
 	}
 
-	return retryCandidate{event: &ChangeEvent{
-		Source:          SourceRemote,
-		Type:            ChangeDelete,
-		ForcedAction:    ActionLocalDelete,
-		HasForcedAction: true,
-		Path:            entry.Path,
-		ItemID:          entry.ItemID,
-		ParentID:        entry.ParentID,
-		DriveID:         entry.DriveID,
-		ItemType:        entry.ItemType,
-		Name:            filepath.Base(entry.Path),
-		Size:            entry.RemoteSize,
-		Hash:            entry.RemoteHash,
-		Mtime:           entry.RemoteMtime,
-		IsDeleted:       true,
-	}}
+	return retryCandidate{}
 }
 
 func (flow *engineFlow) buildLocalObservationRetryCandidate(
@@ -775,7 +689,6 @@ func (flow *engineFlow) buildLocalObservationRetryCandidate(
 	}
 
 	return retryCandidate{
-		event:    result.Event,
 		skipped:  result.Skipped,
 		resolved: result.Resolved,
 	}
@@ -786,7 +699,7 @@ func (flow *engineFlow) buildRemoteMoveRetryCandidate(
 	row *SyncFailureRow,
 ) retryCandidate {
 	rebuild := flow.buildLocalObservationRetryCandidate(bl, row)
-	if rebuild.err != nil || rebuild.skipped != nil || rebuild.resolved || rebuild.event == nil || row.ItemID == "" {
+	if rebuild.err != nil || rebuild.skipped != nil || rebuild.resolved || row.ItemID == "" {
 		return rebuild
 	}
 
@@ -795,17 +708,13 @@ func (flow *engineFlow) buildRemoteMoveRetryCandidate(
 		return rebuild
 	}
 
-	moveEvent := *rebuild.event
-	moveEvent.Type = ChangeMove
-	moveEvent.OldPath = oldEntry.Path
-
-	return retryCandidate{event: &moveEvent}
+	return retryCandidate{}
 }
 
 func (flow *engineFlow) buildRemoteDeleteRetryCandidate(bl *Baseline, row *SyncFailureRow) retryCandidate {
-	entry, ok := bl.GetByPath(row.Path)
+	_, ok := bl.GetByPath(row.Path)
 	if !ok && row.ItemID != "" {
-		entry, ok = bl.GetByID(row.ItemID)
+		_, ok = bl.GetByID(row.ItemID)
 	}
 	if !ok {
 		return retryCandidate{resolved: true}
@@ -819,19 +728,7 @@ func (flow *engineFlow) buildRemoteDeleteRetryCandidate(bl *Baseline, row *SyncF
 		return retryCandidate{err: statErr}
 	}
 
-	return retryCandidate{event: &ChangeEvent{
-		Source:          SourceLocal,
-		Type:            ChangeDelete,
-		ForcedAction:    ActionRemoteDelete,
-		HasForcedAction: true,
-		Path:            row.Path,
-		DriveID:         row.DriveID,
-		ItemType:        entry.ItemType,
-		Name:            filepath.Base(row.Path),
-		Size:            entry.LocalSize,
-		Mtime:           entry.LocalMtime,
-		IsDeleted:       true,
-	}}
+	return retryCandidate{}
 }
 
 // clearFailureOnSuccess removes the sync_failures row for a successfully

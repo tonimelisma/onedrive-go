@@ -136,10 +136,10 @@ func (e *Engine) runOnceDryRun(
 	e.collector().RecordObserve(len(changes), e.since(observeStart))
 
 	safety := e.resolveSafetyConfig()
-	denied := e.permHandler.DeniedPrefixes(ctx)
+	blockedBoundaries := e.permHandler.ActiveRemoteBlockedBoundaries(ctx)
 
 	planStart := e.nowFunc()
-	plan, err := e.planner.Plan(changes, bl, mode, safety, denied)
+	plan, err := e.planner.Plan(changes, bl, mode, safety, blockedBoundaries)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}

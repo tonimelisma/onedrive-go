@@ -534,13 +534,6 @@ func loadActiveScopesForTest(t *testing.T, eng *testEngine, ctx context.Context)
 	return testScopeController(t, eng).loadActiveScopes(ctx, testWatchRuntime(t, eng))
 }
 
-func createEventFromDBForTest(t *testing.T, eng *testEngine, ctx context.Context, row *SyncFailureRow) *ChangeEvent {
-	t.Helper()
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-	return testEngineFlow(t, eng).buildRetryCandidate(ctx, bl, row).event
-}
-
 func isFailureResolvedForTest(t *testing.T, eng *testEngine, ctx context.Context, row *SyncFailureRow) bool {
 	t.Helper()
 	bl, err := eng.baseline.Load(ctx)
@@ -765,16 +758,6 @@ func pathsFromBatchForTest(batch []PathChanges) []string {
 	}
 
 	return paths
-}
-
-func containsTrackedActionPath(actions []*TrackedAction, want string) bool {
-	for i := range actions {
-		if actions[i] != nil && actions[i].Action.Path == want {
-			return true
-		}
-	}
-
-	return false
 }
 
 type debugEventRecorder struct {

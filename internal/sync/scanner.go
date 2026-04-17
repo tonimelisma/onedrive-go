@@ -210,6 +210,8 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 // any skipped items from panics in hash goroutines. Panics are recovered and
 // converted to SkippedItem entries — a single corrupted file cannot crash the
 // entire scan (defensive coding per eng philosophy).
+//
+//nolint:funlen // The hashing pipeline keeps local-scan concurrency and panic recovery in one explicit owner.
 func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]ChangeEvent, []LocalStateRow, []SkippedItem, error) {
 	workers := o.resolveCheckWorkers()
 
@@ -466,8 +468,10 @@ func (o *LocalObserver) processObservedInfo(
 		row.ItemType = ItemTypeFolder
 		row.Size = info.Size()
 		currentRows[dbRelPath] = row
-	default:
+	case observedKindFile:
 		row.ItemType = ItemTypeFile
+	case observedKindUnknown:
+		return fmt.Errorf("walk observed entry %s: unknown observed kind", dbRelPath)
 	}
 
 	return o.classifyObservedInfo(fsPath, dbRelPath, name, info, kind, currentRows, events, jobs, scanStartNano)
