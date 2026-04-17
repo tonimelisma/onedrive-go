@@ -519,8 +519,9 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	assert.Equal(t, "Private/doc.txt", rows[0].Path)
 
 	outbox := runTestRetrierSweep(t, eng, ctx)
-	require.Len(t, outbox, 1, "released failure should be dispatchable immediately via the retrier")
-	assert.Equal(t, "Private/doc.txt", outbox[0].Action.Path)
+	require.Len(t, outbox, 1, "released retry work should dispatch its ready dependency first")
+	assert.Equal(t, "Private", outbox[0].Action.Path)
+	assert.Equal(t, ActionFolderCreate, outbox[0].Action.Type)
 }
 
 // Validates: R-2.10.5

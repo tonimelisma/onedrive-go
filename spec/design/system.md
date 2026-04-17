@@ -162,11 +162,11 @@ For detailed module design, see:
 | Runtime failure class | `internal/errclass` + `internal/sync/engine_result_classify.go` |
 | Sync-domain summary key | `internal/sync/summary_keys.go` |
 | Status issue title/reason/action rendering | `internal/cli/status_issue_descriptors.go` |
-| Durable sync issue facts | `internal/sync` SQLite tables (`sync_failures`, `scope_blocks`, conflicts) plus catalog-owned account auth state |
+| Durable sync issue facts | `internal/sync` SQLite tables (`sync_failures`, `retry_state`, `scope_blocks`) plus catalog-owned account auth state |
 | Account/auth presentation | `internal/authstate` vocabulary projected through `internal/cli/account_view_snapshot.go` |
 | Read-only issue/status snapshot | `internal/sync/store_inspect.go` |
 | Production perf counters, live snapshots, and capture bundles | `internal/perf` with session/control-plane ownership split across `internal/cli` and `internal/multisync` |
-| Durable mutation rules | `internal/sync` writable store APIs (`CommitMutation`, scope/failure/conflict helpers) plus engine-owned scope/result flow |
+| Durable mutation rules | `internal/sync` writable store APIs (`CommitMutation`, scope/failure helpers) plus engine-owned scope/result flow |
 
 ## Production Performance Instrumentation
 

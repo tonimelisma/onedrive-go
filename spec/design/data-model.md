@@ -29,7 +29,7 @@ narrowed back to whole-drive or separately configured shared-root drives.
 | `baseline` | Last known synced truth for paths/items | `item_id` and unique `path` |
 | `local_state` | Latest observed admissible local snapshot truth | `path` |
 | `remote_state` | Latest observed remote mirror truth | `item_id` |
-| `retry_state` | Pending retryable and blocked work for the latest intent | `action_id` |
+| `retry_state` | Pending retryable and blocked work for the latest semantic intent | `action_id` |
 | `sync_failures` | Per-path retryable and actionable failures | `path` |
 | `scope_blocks` | Durable scope-level blocking conditions and trial timing | `scope_key` |
 | `observation_state` | Configured drive owner, primary cursor, and persisted refresh cadence | singleton row |
@@ -86,6 +86,10 @@ aligned with the latest runtime-owned actionable set:
 - retry timing: `attempt_count`, `next_retry_at`
 - operator/debug facts: `last_error`
 - timestamps: `first_seen_at`, `last_seen_at`
+
+`action_id` is no longer a foreign key into a durable action-plan table. It is
+just the stable serialized identity for one semantic unit of retryable work.
+`plan_id` remains a non-authoritative provenance field and may be empty.
 
 ## `sync_failures`
 

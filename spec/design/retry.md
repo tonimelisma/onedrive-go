@@ -141,8 +141,8 @@ engine.
 - transient failures are still recorded in `sync_failures` for reporting and issue inspection
 - retryable work is mirrored into `retry_state`, which is the durable authority for retry readiness
 - `next_retry_at` is computed from `ReconcilePolicy()`
-- the engine-owned retry sweep reads ready rows from `retry_state`, enriches them from current durable truth when needed, then rebuilds planner input through the normal planner -> dispatch pipeline
-- upload-side redispatch uses `ObserveSinglePath()` so retry/trial reconstruction follows the same local validation, oversized-file, and empty-hash-on-failure rules as normal observation
+- the engine-owned retry sweep reads ready rows from `retry_state`, refreshes current local snapshot truth, replans from SQLite snapshots plus baseline, prunes stale retry rows, then dispatches only the current matching actions plus any still-required dependencies
+- retry rows are keyed to semantic work, not to a durable SQLite action-plan table
 
 ### Scope retry via trial actions
 
@@ -151,11 +151,11 @@ When the engine activates a scope block, blocked descendants are recorded in
 `retry_state` rows. Recovery happens through trial actions:
 
 - `runTrialDispatch()` picks one blocked retry row at random for each due scope via `PickRetryTrialCandidate`
-- the retry-trial rebuild path reconstructs planner input from current durable state or single-path local observation
+- the trial path refreshes current snapshot truth, replans from SQLite reconciliation, and dispatches the current matching action for that blocked semantic work
 - success -> `releaseScope`
 - matching-scope persistence evidence -> `extendScopeTrial`
 - inconclusive trial outcomes -> `preserveScopeTrial`
-- actionable current-local rejections during retry/trial reconstruction replace or re-home the candidate failure without silently clearing the original scope
+- stale blocked work that no longer appears in the current actionable set is cleared from retry scheduling and from durable failure reporting instead of being replayed synthetically
 
 `preserveScopeTrial` is intentionally different from backoff extension:
 
@@ -203,6 +203,6 @@ The sync engine does not carry a circuit breaker, retry queue inside the graph,
 or transport-level sync retry layer. The durable retry model is:
 
 - `retry_state` for pending retryable or blocked work
-- `sync_failures` for issue reporting and failure enrichment
+- `sync_failures` for issue reporting and failure context
 - `scope_blocks` for trial timing only
 - engine-owned retry/trial loops

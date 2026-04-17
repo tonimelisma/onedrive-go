@@ -50,8 +50,8 @@ invariant that a baseline row absent from both snapshots becomes
 
 1. Run SQL structural diff and reconciliation over snapshots plus baseline.
 2. Load reconciliation rows into Go.
-3. Apply sync-mode, safety, ignore/admission, and scope-blocking rules.
-4. Expand conflicts into concrete runtime actions.
+3. Apply sync-mode and planner-owned safety rules.
+4. Emit the current runtime action set, including conflict actions.
 5. Expand folder delete cascades so descendants get explicit work.
 6. Enrich actions with target-drive and target-root metadata.
 7. Build dependency edges and reject dependency cycles.
@@ -79,13 +79,14 @@ invariant that a baseline row absent from both snapshots becomes
 
 ## Conflict Planning
 
-The actionable-set builder expands conflicts into concrete runtime work.
+The actionable-set builder detects and emits conflict actions as part of the
+current runtime action set.
 
 - `ConflictEditEdit`: both sides changed existing content differently
 - `ConflictCreateCreate`: both sides independently created different content
 - `ConflictEditDelete`: local edit raced with remote delete
 
-Planning decides the concrete conflict action set:
+Execution applies the conflict policy immediately:
 
 - edit/edit and create/create -> preserve both versions by renaming local to a
   conflict copy and downloading remote to the canonical path
@@ -119,6 +120,6 @@ rediscovering that ownership ad hoc.
 `download-only` and `upload-only` do not stop observation. They suppress only
 the forbidden action classes and record those counts in `DeferredByMode`.
 
-`deniedPrefixes` are different: they are engine-owned permission policy.
-Planner suppression caused by denied prefixes is **not** counted as ordinary
-directional deferral.
+Permission scopes are different: they are engine-owned admission policy.
+Planner output is not suppressed by denied-prefix lists; the engine filters
+blocked work during admission and retry/trial handling.
