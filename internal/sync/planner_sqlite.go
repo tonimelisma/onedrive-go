@@ -85,7 +85,7 @@ func logActionPlanSummary(logger *slog.Logger, message string, plan *ActionPlan)
 		slog.Int("uploads", counts[ActionUpload]),
 		slog.Int("local_deletes", counts[ActionLocalDelete]),
 		slog.Int("remote_deletes", counts[ActionRemoteDelete]),
-		slog.Int("conflicts", counts[ActionConflict]),
+		slog.Int("conflicts", conflictCountByType(counts)),
 		slog.Int("synced_updates", counts[ActionUpdateSynced]),
 		slog.Int("cleanups", counts[ActionCleanup]),
 		slog.Int("deferred_folder_creates", plan.DeferredByMode.FolderCreates),
@@ -184,11 +184,19 @@ func buildActionsForReconciliation(
 	case strUpdateSynced:
 		return []Action{MakeAction(ActionUpdateSynced, view)}, nil
 	case "conflict_edit_edit":
-		return []Action{makeConflictAction(view, ConflictEditEdit)}, nil
+		return []Action{
+			makeConflictCopyAction(view, ConflictEditEdit),
+			makeConflictResolvedAction(ActionDownload, view, ConflictEditEdit),
+		}, nil
 	case "conflict_edit_delete":
-		return []Action{makeConflictAction(view, ConflictEditDelete)}, nil
+		return []Action{
+			makeConflictResolvedAction(ActionUpload, view, ConflictEditDelete),
+		}, nil
 	case "conflict_create_create":
-		return []Action{makeConflictAction(view, ConflictCreateCreate)}, nil
+		return []Action{
+			makeConflictCopyAction(view, ConflictCreateCreate),
+			makeConflictResolvedAction(ActionDownload, view, ConflictCreateCreate),
+		}, nil
 	case strLocalMove:
 		if cmp.ComparisonKind != "local_move_source" {
 			return nil, nil

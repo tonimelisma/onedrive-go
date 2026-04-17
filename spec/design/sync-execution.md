@@ -65,15 +65,17 @@ remove directories blocked by non-disposable children.
 
 ## Conflict Execution
 
-`ActionConflict` is immediate execution work. There is no durable
-conflict-request mailbox.
+The snapshot-based runtime does not execute abstract conflict rows. Conflict
+handling is expanded before execution into concrete work such as
+`ActionConflictCopy`, `ActionDownload`, and conflict-tagged `ActionUpload`.
+There is no durable conflict-request mailbox.
 
 ### Edit/edit and create/create
 
 The executor preserves both versions:
 
-1. rename local file to `<stem>.conflict-<timestamp><ext>`
-2. download remote file back to the canonical path
+1. execute `ActionConflictCopy` to rename the local canonical file to `<stem>.conflict-<timestamp><ext>`
+2. execute the dependent `ActionDownload` back to the canonical path
 
 If the download fails, the executor restores the original local file from the
 conflict copy.

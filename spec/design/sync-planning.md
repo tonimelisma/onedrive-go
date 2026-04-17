@@ -51,7 +51,8 @@ invariant that a baseline row absent from both snapshots becomes
 1. Run SQL structural diff and reconciliation over snapshots plus baseline.
 2. Load reconciliation rows into Go.
 3. Apply sync-mode and planner-owned safety rules.
-4. Emit the current runtime action set, including conflict actions.
+4. Emit the current runtime action set, including conflict expansion into
+   concrete actions.
 5. Expand folder delete cascades so descendants get explicit work.
 6. Enrich actions with target-drive and target-root metadata.
 7. Build dependency edges and reject dependency cycles.
@@ -66,27 +67,28 @@ invariant that a baseline row absent from both snapshots becomes
 - local changed + remote unchanged -> `ActionUpload`
 - local unchanged + remote changed -> `ActionDownload`
 - local changed + remote changed with equal hashes -> `ActionUpdateSynced`
-- local changed + remote changed with different hashes -> `ActionConflict(ConflictEditEdit)`
+- local changed + remote changed with different hashes -> `ActionConflictCopy` + dependent `ActionDownload`
 - local unchanged + remote deleted -> `ActionLocalDelete`
-- local changed + remote deleted -> `ActionConflict(ConflictEditDelete)`
+- local changed + remote deleted -> `ActionUpload` with `ConflictEditDelete` metadata
 
 ### No baseline
 
 - local only -> `ActionUpload`
 - remote only -> `ActionDownload`
 - local and remote with equal hashes -> `ActionUpdateSynced`
-- local and remote with different hashes -> `ActionConflict(ConflictCreateCreate)`
+- local and remote with different hashes -> `ActionConflictCopy` + dependent `ActionDownload`
 
 ## Conflict Planning
 
-The actionable-set builder detects and emits conflict actions as part of the
-current runtime action set.
+The actionable-set builder detects conflicts, records their type in
+`ConflictInfo`, and expands them into concrete runtime actions as part of the
+current action set.
 
 - `ConflictEditEdit`: both sides changed existing content differently
 - `ConflictCreateCreate`: both sides independently created different content
 - `ConflictEditDelete`: local edit raced with remote delete
 
-Execution applies the conflict policy immediately:
+Execution applies the already-expanded conflict policy immediately:
 
 - edit/edit and create/create -> preserve both versions by renaming local to a
   conflict copy and downloading remote to the canonical path

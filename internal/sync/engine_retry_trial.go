@@ -616,7 +616,8 @@ func (flow *engineFlow) buildRetryCandidate(
 		return flow.buildMirrorRetryCandidate(ctx, bl, row, true)
 	case ActionLocalDelete:
 		return flow.buildLocalDeleteRetryCandidate(ctx, bl, row)
-	case ActionLocalMove,
+	case ActionConflictCopy,
+		ActionLocalMove,
 		ActionConflict,
 		ActionUpdateSynced,
 		ActionCleanup:

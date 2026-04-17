@@ -101,6 +101,74 @@ func (e *Executor) ExecuteConflict(ctx context.Context, action *Action) ActionOu
 	return o
 }
 
+// ExecuteConflictCopy preserves the local canonical file by renaming it to a
+// unique conflict-copy path. It performs no baseline or remote mutation; the
+// current-state planner schedules any follow-up download/upload action
+// separately.
+func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) ActionOutcome {
+	absPath, err := e.syncTree.Abs(action.Path)
+	if err != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionConflictCopy,
+			normalizeSyncTreePathError(err),
+			action.Path,
+			PermissionCapabilityLocalWrite,
+		)
+	}
+
+	conflictPath, err := e.uniqueConflictCopyPath(absPath)
+	if err != nil {
+		return e.failedOutcomeWithFailure(action, ActionConflictCopy, err, action.Path, PermissionCapabilityLocalWrite)
+	}
+	conflictRel, err := e.syncTree.Rel(conflictPath)
+	if err != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionConflictCopy,
+			normalizeSyncTreePathError(err),
+			action.Path,
+			PermissionCapabilityLocalWrite,
+		)
+	}
+
+	if err := e.syncTree.Rename(action.Path, conflictRel); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ActionOutcome{
+				Action:   ActionConflictCopy,
+				Success:  true,
+				Path:     action.Path,
+				DriveID:  e.resolveDriveID(action),
+				ItemID:   action.ItemID,
+				OldPath:  action.Path,
+				ParentID: resolvedUploadParentID(action, nil),
+			}
+		}
+
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionConflictCopy,
+			fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(conflictPath), normalizeSyncTreePathError(err)),
+			action.Path,
+			PermissionCapabilityLocalWrite,
+		)
+	}
+
+	e.logger.Debug("saved conflict copy",
+		slog.String("path", action.Path),
+		slog.String("conflict_copy", filepath.Base(conflictPath)),
+	)
+
+	return ActionOutcome{
+		Action:  ActionConflictCopy,
+		Success: true,
+		Path:    action.Path,
+		OldPath: conflictRel,
+		DriveID: e.resolveDriveID(action),
+		ItemID:  action.ItemID,
+	}
+}
+
 // uniqueConflictCopyPath returns the first available conflict-copy path for an
 // on-disk file. Executor-owned uniqueness is intentional: readability comes
 // from the timestamped base name, but actual collision prevention depends on

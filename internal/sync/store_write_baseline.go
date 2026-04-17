@@ -70,7 +70,8 @@ type LocalBaselineRefresh struct {
 type baselineMutationKind int
 
 const (
-	baselineMutationUpsert baselineMutationKind = iota
+	baselineMutationNoop baselineMutationKind = iota
+	baselineMutationUpsert
 	baselineMutationDelete
 	baselineMutationMove
 )
@@ -316,6 +317,8 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 
 func classifyBaselineMutation(action ActionType) (baselineMutationKind, error) {
 	switch action {
+	case ActionConflictCopy:
+		return baselineMutationNoop, nil
 	case ActionDownload, ActionUpload, ActionFolderCreate, ActionConflict, ActionUpdateSynced:
 		return baselineMutationUpsert, nil
 	case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
@@ -335,6 +338,8 @@ func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutatio
 	}
 
 	switch mutation {
+	case baselineMutationNoop:
+		err = nil
 	case baselineMutationUpsert:
 		err = commitUpsert(ctx, tx, o)
 	case baselineMutationDelete:
@@ -370,6 +375,8 @@ func (m *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation
 	}
 
 	switch mutation {
+	case baselineMutationNoop:
+		return nil
 	case baselineMutationUpsert:
 		m.baseline.Put(mutationToEntry(o))
 	case baselineMutationDelete:
@@ -415,6 +422,13 @@ func mutationToEntry(o *BaselineMutation) *BaselineEntry {
 }
 
 func mutationFromActionOutcome(o *ActionOutcome) *BaselineMutation {
+	if o == nil {
+		return nil
+	}
+	if o.Action == ActionConflictCopy {
+		return nil
+	}
+
 	return &BaselineMutation{
 		Action:          o.Action,
 		Success:         o.Success,
@@ -523,6 +537,8 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
 		}
+	case ActionConflictCopy:
+		return nil
 	case ActionRemoteDelete:
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM remote_state WHERE item_id = ?`,

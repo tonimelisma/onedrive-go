@@ -610,7 +610,7 @@ func actionAllowedInMode(action *Action, mode Mode) bool {
 			return mode != SyncDownloadOnly
 		}
 		return true
-	case ActionConflict, ActionUpdateSynced, ActionCleanup:
+	case ActionConflictCopy, ActionConflict, ActionUpdateSynced, ActionCleanup:
 		return true
 	default:
 		return true
@@ -640,6 +640,7 @@ func classifyForcedAction(view *PathView, mode Mode) []Action {
 		ActionLocalMove,
 		ActionRemoteMove,
 		ActionFolderCreate,
+		ActionConflictCopy,
 		ActionConflict,
 		ActionCleanup:
 		return nil
@@ -1202,10 +1203,7 @@ func findTargetRootEntry(path string, targetDriveID driveid.ID, baseline *Baseli
 	return root
 }
 
-// makeConflictAction constructs an ActionConflict with ConflictInfo populated.
-func makeConflictAction(view *PathView, conflictType string) Action {
-	a := MakeAction(ActionConflict, view)
-
+func makeConflictRecord(view *PathView, driveID driveid.ID, conflictType string) *ConflictRecord {
 	record := &ConflictRecord{
 		Path:         view.Path,
 		ConflictType: conflictType,
@@ -1222,10 +1220,31 @@ func makeConflictAction(view *PathView, conflictType string) Action {
 		record.ItemID = view.Remote.ItemID
 	}
 
-	record.DriveID = a.DriveID
-	a.ConflictInfo = record
+	record.DriveID = driveID
 
-	return a
+	return record
+}
+
+// makeConflictAction constructs an ActionConflict with ConflictInfo populated.
+func makeConflictAction(view *PathView, conflictType string) Action {
+	action := MakeAction(ActionConflict, view)
+	action.ConflictInfo = makeConflictRecord(view, action.DriveID, conflictType)
+
+	return action
+}
+
+func makeConflictCopyAction(view *PathView, conflictType string) Action {
+	action := MakeAction(ActionConflictCopy, view)
+	action.ConflictInfo = makeConflictRecord(view, action.DriveID, conflictType)
+
+	return action
+}
+
+func makeConflictResolvedAction(actionType ActionType, view *PathView, conflictType string) Action {
+	action := MakeAction(actionType, view)
+	action.ConflictInfo = makeConflictRecord(view, action.DriveID, conflictType)
+
+	return action
 }
 
 // makeFolderCreate constructs an ActionFolderCreate action with the
@@ -1324,6 +1343,7 @@ func expandFolderDeleteCascades(
 			ActionLocalMove,
 			ActionRemoteMove,
 			ActionFolderCreate,
+			ActionConflictCopy,
 			ActionConflict,
 			ActionUpdateSynced:
 			panic(fmt.Sprintf("unexpected folder cascade action type %s", a.Type.String()))
@@ -1376,6 +1396,7 @@ func cascadeDeleteKindForAction(actionType ActionType) (cascadeDeleteKind, bool)
 		ActionLocalMove,
 		ActionRemoteMove,
 		ActionFolderCreate,
+		ActionConflictCopy,
 		ActionConflict,
 		ActionUpdateSynced:
 		return 0, false
@@ -1515,12 +1536,16 @@ func buildDependencies(actions []Action) [][]int {
 
 	// Index folder creates by path for quick lookup.
 	folderCreateIdx := make(map[string]int)
+	conflictCopyIdx := make(map[string]int)
 	// Index all deletes by path for child→parent edges.
 	deleteIdx := make(map[string]int)
 
 	for i := range actions {
 		if actions[i].Type == ActionFolderCreate {
 			folderCreateIdx[actions[i].Path] = i
+		}
+		if actions[i].Type == ActionConflictCopy {
+			conflictCopyIdx[actions[i].Path] = i
 		}
 
 		isDelete := actions[i].Type == ActionLocalDelete ||
@@ -1533,6 +1558,7 @@ func buildDependencies(actions []Action) [][]int {
 
 	for i := range actions {
 		deps[i] = addParentFolderDep(deps[i], i, &actions[i], folderCreateIdx)
+		deps[i] = addConflictCopyDep(deps[i], i, &actions[i], conflictCopyIdx)
 		deps[i] = addChildDeleteDeps(deps[i], i, &actions[i], deleteIdx)
 		// Sort dependency indices for reproducible ordering (B-154).
 		sort.Ints(deps[i])
@@ -1552,6 +1578,18 @@ func addParentFolderDep(deps []int, idx int, a *Action, folderCreateIdx map[stri
 
 	if fcIdx, ok := folderCreateIdx[parentDir]; ok && fcIdx != idx {
 		deps = append(deps, fcIdx)
+	}
+
+	return deps
+}
+
+func addConflictCopyDep(deps []int, idx int, a *Action, conflictCopyIdx map[string]int) []int {
+	if a.Type != ActionDownload {
+		return deps
+	}
+
+	if copyIdx, ok := conflictCopyIdx[a.Path]; ok && copyIdx != idx {
+		deps = append(deps, copyIdx)
 	}
 
 	return deps
@@ -1587,6 +1625,10 @@ func CountByType(actions []Action) map[ActionType]int {
 	}
 
 	return counts
+}
+
+func conflictCountByType(counts map[ActionType]int) int {
+	return counts[ActionConflict] + counts[ActionConflictCopy]
 }
 
 // detectDependencyCycle performs a DFS to check for cycles in the dependency

@@ -188,13 +188,15 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	// should be persisted even if CancelByPath canceled actionCtx.
 	if outcome.Success {
 		mutation := mutationFromActionOutcome(&outcome)
-		if commitErr := wp.baseline.CommitMutation(ctx, mutation); commitErr != nil {
-			wp.logger.Error("worker: commit outcome failed",
-				slog.Int64("id", ta.ID),
-				slog.String("error", commitErr.Error()),
-			)
-			wp.sendResult(ctx, ta, nil, commitErr)
-			return
+		if mutation != nil {
+			if commitErr := wp.baseline.CommitMutation(ctx, mutation); commitErr != nil {
+				wp.logger.Error("worker: commit outcome failed",
+					slog.Int64("id", ta.ID),
+					slog.String("error", commitErr.Error()),
+				)
+				wp.sendResult(ctx, ta, nil, commitErr)
+				return
+			}
 		}
 	}
 
@@ -211,6 +213,8 @@ func (wp *WorkerPool) dispatchAction(
 	switch action.Type {
 	case ActionFolderCreate:
 		return exec.ExecuteFolderCreate(ctx, action)
+	case ActionConflictCopy:
+		return exec.ExecuteConflictCopy(ctx, action)
 	case ActionLocalMove, ActionRemoteMove:
 		return exec.ExecuteMove(ctx, action)
 	case ActionDownload:
