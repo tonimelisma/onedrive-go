@@ -44,23 +44,12 @@ const (
 		WHERE blocked = 1 AND scope_key = ?
 		ORDER BY RANDOM()
 		LIMIT 1`
-	sqlPruneRetryStateToLatestPlan = `DELETE FROM retry_state
-		WHERE NOT EXISTS (
-			SELECT 1 FROM planned_actions
-			WHERE planned_actions.path = retry_state.path
-				AND planned_actions.action_type = retry_state.action_type
-		)`
 	sqlPruneScopeBlocksWithoutBlockedRetries = `DELETE FROM scope_blocks
 		WHERE NOT EXISTS (
 			SELECT 1 FROM retry_state
 			WHERE retry_state.blocked = 1
 				AND retry_state.scope_key = scope_blocks.scope_key
 		)`
-	sqlLookupPlannedActionForRetry = `SELECT action_id, plan_id
-		FROM planned_actions
-		WHERE path = ? AND action_type = ?
-		ORDER BY action_id
-		LIMIT 1`
 )
 
 func retryStateSyntheticActionID(path string, actionType ActionType) int64 {
@@ -156,29 +145,12 @@ func markRetryStateScopeReadyTx(
 	return nil
 }
 
-func plannedActionIdentityForRetryTx(
-	ctx context.Context,
-	runner sqlTxRunner,
-	path string,
-	actionType ActionType,
-) (RetryStateRow, error) {
-	row := RetryStateRow{
+func retryStateIdentityForWork(path string, actionType ActionType) RetryStateRow {
+	return RetryStateRow{
+		ActionID:   strconv.FormatInt(retryStateSyntheticActionID(path, actionType), 10),
 		Path:       path,
 		ActionType: actionType,
 	}
-	var actionID int64
-	err := runner.QueryRowContext(ctx, sqlLookupPlannedActionForRetry, path, actionType.String()).
-		Scan(&actionID, &row.PlanID)
-	if err == nil {
-		row.ActionID = strconv.FormatInt(actionID, 10)
-		return row, nil
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		row.ActionID = strconv.FormatInt(retryStateSyntheticActionID(path, actionType), 10)
-		return row, nil
-	}
-
-	return RetryStateRow{}, fmt.Errorf("sync: looking up planned action for retry %s: %w", path, err)
 }
 
 func (m *SyncStore) DeleteRetryStateByActionID(ctx context.Context, actionID string) error {
@@ -247,11 +219,40 @@ func (m *SyncStore) PickRetryTrialCandidate(
 	return &parsed, true, nil
 }
 
-func (m *SyncStore) PruneRetryStateToLatestPlan(ctx context.Context) error {
-	if _, err := m.db.ExecContext(ctx, sqlPruneRetryStateToLatestPlan); err != nil {
-		return fmt.Errorf("sync: pruning retry_state to latest plan: %w", err)
+func (m *SyncStore) PruneRetryStateToCurrentActions(
+	ctx context.Context,
+	work []RetryWorkKey,
+) error {
+	rows, err := m.ListRetryState(ctx)
+	if err != nil {
+		return err
 	}
 
+	keep := make(map[RetryWorkKey]struct{}, len(work))
+	for i := range work {
+		keep[work[i]] = struct{}{}
+	}
+
+	for i := range rows {
+		key := RetryWorkKey{
+			Path:       rows[i].Path,
+			ActionType: rows[i].ActionType,
+		}
+		if _, ok := keep[key]; ok {
+			continue
+		}
+		if err := m.DeleteRetryStateByPathAction(ctx, rows[i].Path, rows[i].ActionType); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *SyncStore) PruneRetryStateToLatestPlan(ctx context.Context) error {
+	// The benchmark-aligned engine no longer treats any SQLite action table as
+	// durable authority. Until the runtime-owned action set fully replaces the
+	// legacy planner path, pruning happens through PruneRetryStateToCurrentActions.
 	return nil
 }
 

@@ -301,10 +301,7 @@ func (m *SyncStore) RecordFailure(
 		return fmt.Errorf("sync: recording sync failure for %s: %w", p.Path, err)
 	}
 	if category == CategoryTransient && role != FailureRoleBoundary {
-		retryRow, retryErr := plannedActionIdentityForRetryTx(ctx, tx, p.Path, actionType)
-		if retryErr != nil {
-			return retryErr
-		}
+		retryRow := retryStateIdentityForWork(p.Path, actionType)
 		retryRow.ScopeKey = p.ScopeKey
 		retryRow.Blocked = role == FailureRoleHeld
 		retryRow.AttemptCount = newCount

@@ -11,18 +11,13 @@ import (
 )
 
 // Validates: R-2.1.3
-func TestUpsertRetryStateAndPruneToLatestPlan(t *testing.T) {
+func TestUpsertRetryStateAndPruneToCurrentActions(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplacePlannedActions(ctx, "plan-1", []PlannedActionRow{
-		{Path: "keep.txt", ActionType: ActionUpload},
-	}))
-
 	require.NoError(t, store.UpsertRetryState(ctx, &RetryStateRow{
-		PlanID:       "old-plan",
 		Path:         "keep.txt",
 		ActionType:   ActionUpload,
 		AttemptCount: 2,
@@ -42,7 +37,9 @@ func TestUpsertRetryStateAndPruneToLatestPlan(t *testing.T) {
 		LastSeenAt:   4,
 	}))
 
-	require.NoError(t, store.PruneRetryStateToLatestPlan(ctx))
+	require.NoError(t, store.PruneRetryStateToCurrentActions(ctx, []RetryWorkKey{
+		{Path: "keep.txt", ActionType: ActionUpload},
+	}))
 
 	rows, err := store.ListRetryState(ctx)
 	require.NoError(t, err)
@@ -152,11 +149,6 @@ func TestRecordFailure_MirrorsTransientAndHeldRowsIntoRetryState(t *testing.T) {
 	now := time.Unix(100, 0)
 	store.SetNowFunc(func() time.Time { return now })
 
-	require.NoError(t, store.ReplacePlannedActions(ctx, "plan-1", []PlannedActionRow{
-		{Path: "retry.txt", ActionType: ActionUpload},
-		{Path: "blocked.txt", ActionType: ActionRemoteDelete},
-	}))
-
 	require.NoError(t, store.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "retry.txt",
 		DriveID:    driveID,
@@ -191,7 +183,7 @@ func TestRecordFailure_MirrorsTransientAndHeldRowsIntoRetryState(t *testing.T) {
 
 	assert.False(t, byPath["retry.txt"].Blocked)
 	assert.Equal(t, now.Add(time.Minute).UnixNano(), byPath["retry.txt"].NextRetryAt)
-	assert.Equal(t, "plan-1", byPath["retry.txt"].PlanID)
+	assert.Empty(t, byPath["retry.txt"].PlanID)
 
 	assert.True(t, byPath["blocked.txt"].Blocked)
 	assert.Equal(t, int64(0), byPath["blocked.txt"].NextRetryAt)

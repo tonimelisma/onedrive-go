@@ -102,22 +102,6 @@ type LocalStateRow struct {
 	ObservedAt      int64
 }
 
-// PlannedActionRow represents a row from the planned_actions table. The table
-// stores only the latest generated plan for the drive.
-type PlannedActionRow struct {
-	ActionID                   string
-	PlanID                     string
-	Path                       string
-	ActionType                 ActionType
-	OldPath                    string
-	SourceIdentity             string
-	TargetIdentity             string
-	DependencyKey              string
-	PreconditionLocalIdentity  string
-	PreconditionRemoteIdentity string
-	Status                     string
-}
-
 // RetryStateRow represents a row from the retry_state table.
 type RetryStateRow struct {
 	ActionID     string
@@ -149,4 +133,12 @@ type PendingRetryGroup struct {
 	ScopeKey     ScopeKey
 	Count        int
 	EarliestNext time.Time
+}
+
+// RetryWorkKey identifies semantic work that may be retried across replans.
+// It intentionally stays smaller than a runtime action because retry_state
+// persists only delayed obligations, not the executable action set.
+type RetryWorkKey struct {
+	Path       string
+	ActionType ActionType
 }

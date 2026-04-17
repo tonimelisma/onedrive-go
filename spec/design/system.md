@@ -83,32 +83,30 @@ purely snapshot-driven.
 
 ```
 Remote Observer ──┐
-                  ├──→ Change Buffer ──→ Planner ──→ Executor ──→ Baseline
+                  ├──→ Dirty Buffer ──→ Planner ──→ Executor ──→ Baseline
 Local Observer  ──┘         │                │            │           │
-                      debounce/dedup    deterministic   workers    per-action
-                                       ActionPlan      (parallel)   commit
+                      debounce/wake     runtime action workers    per-action
+                                           set         (parallel)   commit
 
 Remote Obs ───────────────→ remote_state ──┐
 Local Scan/Obs ───────────→ local_state  ──┼──→ comparison_state
 Baseline ─────────────────→ baseline     ──┘    → reconciliation_state
-                                                → planned_actions
                                                 → retry_state / scope_blocks
 ```
 
 ### Design Principles
 
 1. **Durable truth lives in SQLite.** `local_state`, `remote_state`,
-   `baseline`, `planned_actions`, `retry_state`, `scope_blocks`, and
+   `baseline`, `retry_state`, `scope_blocks`, and
    `observation_state` are the durable authority surfaces. Observation and
    execution rebuild working state from those tables rather than inventing a
    second durable coordinator.
-2. **Event buffering is still the executable planner boundary.** The runtime
-   still feeds `ChangeEvent` batches through `Buffer` into the deterministic
-   planner boundary for executable `ActionPlan` construction.
-3. **SQLite comparison and reconciliation run in parallel.**
-   `comparison_state`, `reconciliation_state`, and `planned_actions`
-   materialization compute the latest snapshot-vs-baseline truth from SQLite
-   without taking ownership of worker dispatch yet.
+2. **Dirty buffering is runtime scheduling only.** The runtime uses a buffer to
+   coalesce dirty signals and wake replans, not to define sync truth.
+3. **SQLite owns structural diff only.**
+   `comparison_state` and `reconciliation_state` compute the latest
+   snapshot-vs-baseline truth from SQLite, while Go owns the executable
+   action set.
 4. **Watch-primary.** `sync --watch` is the primary runtime mode. All components serve both one-shot and watch modes.
 5. **Interface-driven testability.** All I/O (filesystem, network, database) is behind interfaces.
 6. **Boundary-owned error translation.** Each boundary normalizes the failures it understands once, and downstream layers consume that shared contract. See [error-model.md](error-model.md).
@@ -116,8 +114,8 @@ Baseline ─────────────────→ baseline     ─
 ### Rationale
 
 The current design deliberately keeps durable truth and executable planning
-separate while the SQLite-first refactor lands in slices. Current and synced
-truth are now explicit in SQLite, but the worker-dispatching planner path still
+separate. Current and synced truth are explicit in SQLite, while the
+worker-dispatching planner path remains runtime-owned in Go.
 uses the older event-shaped boundary. This preserves the tested executor and
 dependency-graph runtime while snapshot persistence, retry/state ownership, and
 latest-plan materialization move into durable SQLite surfaces.

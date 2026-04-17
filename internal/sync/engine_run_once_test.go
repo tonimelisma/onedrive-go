@@ -233,17 +233,17 @@ func TestRunOnce_PersistsLocalSnapshotAndSQLitePlan(t *testing.T) {
 	assert.NotEmpty(t, localRows[0].Hash)
 	assert.Equal(t, localRows[0].Hash, localRows[0].ContentIdentity)
 
-	plannedRows, err := eng.baseline.ListPlannedActions(t.Context())
+	reconciliationRows, err := eng.baseline.QueryReconciliationState(t.Context())
 	require.NoError(t, err)
-	require.Len(t, plannedRows, 2)
+	require.Len(t, reconciliationRows, 2)
 
-	byPath := make(map[string]PlannedActionRow, len(plannedRows))
-	for _, row := range plannedRows {
+	byPath := make(map[string]SQLiteReconciliationRow, len(reconciliationRows))
+	for _, row := range reconciliationRows {
 		byPath[row.Path] = row
 	}
 
-	assert.Equal(t, ActionUpload, byPath["local.txt"].ActionType)
-	assert.Equal(t, ActionDownload, byPath["remote.txt"].ActionType)
+	assert.Equal(t, "upload", byPath["local.txt"].ReconciliationKind)
+	assert.Equal(t, "download", byPath["remote.txt"].ReconciliationKind)
 }
 
 // Validates: R-2.1.5

@@ -124,11 +124,11 @@ Inside `internal/sync`, the runtime currently has a hybrid sync pipeline:
 - remote observer + local observer -> change buffer -> planner -> executor ->
   baseline/store updates
 - local/remote snapshot persistence -> SQLite comparison/reconciliation ->
-  latest `planned_actions`, `retry_state`, and `scope_blocks`
+  `retry_state` and `scope_blocks`
 
 The key design choice is that planning stays deterministic and execution owns
-side effects, while SQLite owns current durable truth and the latest persisted
-plan/retry state.
+side effects, while SQLite owns current durable truth and the persisted
+retry/scope state.
 
 ### 3.3 Dev workflow path
 

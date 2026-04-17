@@ -6,28 +6,22 @@ Implements: R-2.1.3 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [v
 
 ## Overview
 
-The executable planner boundary is still the deterministic function:
+Planning is now split between SQLite structural diff and a Go actionable-set
+builder.
 
-`Plan(changes, baseline, mode, safetyConfig, deniedPrefixes) -> ActionPlan`
+- SQLite computes deterministic comparison and reconciliation rows from
+  `baseline`, `local_state`, and `remote_state`
+- Go turns those rows into the current executable action set after blocking,
+  filtering, conflict handling, and dependency detection
 
-It owns only classification and ordering for the worker-dispatch path. It does
-not touch SQLite, Graph, or the local filesystem.
-
-SQLite planning now exists alongside that boundary. `internal/sync/sqlite_compare.go`
-computes durable snapshot-vs-baseline comparison and reconciliation rows from
-`baseline`, `local_state`, and `remote_state`, and `planned_actions` can be
-materialized from those rows as the latest persisted plan generation. The
-runtime is therefore hybrid today:
-
-- the deterministic in-memory planner produces executable `ActionPlan`s
-- SQLite comparison/reconciliation/planned-actions materialization persists the
-  current latest plan truth from snapshots
+The executable plan is runtime-owned and is not a durable SQLite authority.
 
 ## Ownership Contract
 
-- Owns: path classification, move detection, action dependency ordering, and directional deferral reporting for executable worker dispatch
+- Owns: turning reconciliation rows into the current executable action set,
+  including conflict expansion, filtering, deferral, and dependency ordering
 - Does Not Own: observation, execution, retry timing, scope persistence, or remote/local I/O
-- Source of Truth: `PathChanges`, baseline snapshot, sync mode, and denied-prefix policy supplied by the engine for executable planning. SQLite snapshot tables own the durable comparison inputs used by `comparison_state`, `reconciliation_state`, and `planned_actions`.
+- Source of Truth: `baseline`, `local_state`, and `remote_state` through SQLite reconciliation rows, plus engine-owned sync mode and runtime policy.
 - Allowed Side Effects: none
 - Mutable Runtime Owner: None. Planning is deterministic value transformation over one input set and owns no long-lived mutable runtime state.
 - Error Boundary: planner errors stop at invalid or unsupported planning states. Transport, filesystem, store, and execution failures stay outside the planner boundary.
@@ -42,29 +36,22 @@ runtime is therefore hybrid today:
 
 ## Inputs
 
-- `PathChanges`: local and remote observations already normalized into one path-keyed structure
-- `Baseline`: last known synced common ancestor
-- `Mode`: bidirectional, download-only, or upload-only
-- `SafetyConfig`: current planner-facing safety knobs; no delete-approval workflow remains
-- `deniedPrefixes`: engine-owned read-only subtrees, typically from permission policy
-
-SQLite-side planning inputs now exist in parallel:
-
+- `baseline`: last known synced common ancestor
 - `local_state`: latest admissible local snapshot
 - `remote_state`: latest admissible remote snapshot
-- `baseline`: last converged synced truth
+- `Mode`: bidirectional, download-only, or upload-only
+- runtime safety/policy inputs owned by the engine
 
 Those rows feed `comparison_state` and `reconciliation_state`, including the
 invariant that a baseline row absent from both snapshots becomes
-`baseline_remove`, and can then be materialized into latest-generation
-`planned_actions`.
+`baseline_remove`.
 
 ## Pipeline
 
-1. Build `PathView` values from changes plus baseline.
-2. Detect remote moves from `ChangeMove` events.
-3. Detect local moves by correlating delete/create pairs with matching hashes.
-4. Classify each remaining path view into one or more actions.
+1. Run SQL structural diff and reconciliation over snapshots plus baseline.
+2. Load reconciliation rows into Go.
+3. Apply sync-mode, safety, ignore/admission, and scope-blocking rules.
+4. Expand conflicts into concrete runtime actions.
 5. Expand folder delete cascades so descendants get explicit work.
 6. Enrich actions with target-drive and target-root metadata.
 7. Build dependency edges and reject dependency cycles.
@@ -92,14 +79,13 @@ invariant that a baseline row absent from both snapshots becomes
 
 ## Conflict Planning
 
-The planner still detects conflicts, but conflicts are no longer durable
-workflow state. `ActionConflict` is immediate executor work.
+The actionable-set builder expands conflicts into concrete runtime work.
 
 - `ConflictEditEdit`: both sides changed existing content differently
 - `ConflictCreateCreate`: both sides independently created different content
 - `ConflictEditDelete`: local edit raced with remote delete
 
-Execution decides the concrete conflict action:
+Planning decides the concrete conflict action set:
 
 - edit/edit and create/create -> preserve both versions by renaming local to a
   conflict copy and downloading remote to the canonical path

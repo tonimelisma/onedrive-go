@@ -73,16 +73,17 @@ observation and execution metadata.
 
 1. bootstrap durable state and startup checks
 2. refresh current remote and local snapshots once
-3. materialize the latest SQLite-backed plan once
-4. execute once
-5. commit outcomes and return a report
+3. compute SQL structural diff and reconciliation once
+4. build the current actionable set in Go
+5. execute once
+6. commit outcomes and return a report
 
 There is no mid-pass mailbox for user intent. New external DB writes during a
 one-shot run are simply durable state for a later run.
 
-The one-shot pass now persists `local_state` from the full local scan and
-replaces `planned_actions` with the latest SQLite plan generation before
-execution begins.
+The one-shot pass now persists `local_state` from the full local scan, derives
+reconciliation rows from snapshots, and builds the current actionable set in
+Go before execution begins.
 
 `sync --full` remains the explicit stronger-freshness path when incremental
 delta visibility is not sufficient.

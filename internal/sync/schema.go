@@ -74,23 +74,6 @@ CREATE TABLE IF NOT EXISTS local_state (
     observed_at      INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS planned_actions (
-    action_id                    INTEGER NOT NULL PRIMARY KEY,
-    plan_id                      TEXT    NOT NULL,
-    path                         TEXT    NOT NULL,
-    action_type                  TEXT    NOT NULL,
-    old_path                     TEXT    NOT NULL DEFAULT '',
-    source_identity              TEXT    NOT NULL DEFAULT '',
-    target_identity              TEXT    NOT NULL DEFAULT '',
-    dependency_key               TEXT    NOT NULL DEFAULT '',
-    precondition_local_identity  TEXT    NOT NULL DEFAULT '',
-    precondition_remote_identity TEXT    NOT NULL DEFAULT '',
-    status                       TEXT    NOT NULL DEFAULT 'pending'
-);
-
-CREATE INDEX IF NOT EXISTS idx_planned_actions_plan_id ON planned_actions(plan_id);
-CREATE INDEX IF NOT EXISTS idx_planned_actions_status ON planned_actions(status);
-
 CREATE TABLE IF NOT EXISTS retry_state (
     action_id       INTEGER NOT NULL PRIMARY KEY,
     plan_id         TEXT    NOT NULL,
@@ -197,10 +180,6 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"local_state": {
 			"path", "item_type", "hash", "size", "mtime", "content_identity", "observed_at",
-		},
-		"planned_actions": {
-			"action_id", "plan_id", "path", "action_type", "old_path", "source_identity",
-			"target_identity", "dependency_key", "precondition_local_identity", "precondition_remote_identity", "status",
 		},
 		"retry_state": {
 			"action_id", "plan_id", "path", "action_type", "scope_key", "blocked",
