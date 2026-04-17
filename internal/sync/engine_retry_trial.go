@@ -228,35 +228,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 	}
 
 	if !found {
-		if hadBlockedWork {
-			candidate := rt.engineFlow.buildRetryCandidateFromRetryState(ctx, bl, probeRow)
-			if candidate.err != nil {
-				rt.engine.logger.Warn("runTrialDispatch: failed to revalidate disappeared blocked retry work",
-					slog.String("scope_key", key.String()),
-					slog.String("path", probeRow.Path),
-					slog.String("error", candidate.err.Error()),
-				)
-			} else if candidate.resolved {
-				rt.scopeController().clearHeldRetryWork(ctx, probeRow, "runTrialDispatch")
-			}
-
-			rt.scopeController().preserveScopeTrial(ctx, rt, key)
-			rt.engine.logger.Debug("runTrialDispatch: blocked retry work disappeared during refresh; preserving scope",
-				slog.String("scope_key", key.String()),
-			)
-			return nil
-		}
-
-		if err := rt.scopeController().discardScope(ctx, rt, key); err != nil {
-			rt.engine.logger.Warn("runTrialDispatch: failed to discard scope without blocked retry work",
-				slog.String("scope_key", key.String()),
-				slog.String("error", err.Error()),
-			)
-		}
-		rt.engine.logger.Debug("runTrialDispatch: no blocked retry work remains for scope",
-			slog.String("scope_key", key.String()),
-		)
-		return nil
+		return rt.handleMissingTrialCandidate(ctx, bl, key, probeRow, hadBlockedWork)
 	}
 
 	if rt.depGraph.HasInFlight(retryRow.Path) {
@@ -300,6 +272,44 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 	return nil
 }
 
+func (rt *watchRuntime) handleMissingTrialCandidate(
+	ctx context.Context,
+	bl *Baseline,
+	key ScopeKey,
+	probeRow *RetryStateRow,
+	hadBlockedWork bool,
+) []*TrackedAction {
+	if hadBlockedWork {
+		candidate := rt.buildRetryCandidateFromRetryState(ctx, bl, probeRow)
+		if candidate.err != nil {
+			rt.engine.logger.Warn("runTrialDispatch: failed to revalidate disappeared blocked retry work",
+				slog.String("scope_key", key.String()),
+				slog.String("path", probeRow.Path),
+				slog.String("error", candidate.err.Error()),
+			)
+		} else if candidate.resolved {
+			rt.scopeController().clearHeldRetryWork(ctx, probeRow, "runTrialDispatch")
+		}
+
+		rt.scopeController().preserveScopeTrial(ctx, rt, key)
+		rt.engine.logger.Debug("runTrialDispatch: blocked retry work disappeared during refresh; preserving scope",
+			slog.String("scope_key", key.String()),
+		)
+		return nil
+	}
+
+	if err := rt.scopeController().discardScope(ctx, rt, key); err != nil {
+		rt.engine.logger.Warn("runTrialDispatch: failed to discard scope without blocked retry work",
+			slog.String("scope_key", key.String()),
+			slog.String("error", err.Error()),
+		)
+	}
+	rt.engine.logger.Debug("runTrialDispatch: no blocked retry work remains for scope",
+		slog.String("scope_key", key.String()),
+	)
+	return nil
+}
+
 // runRetrierSweep processes a batch of due retry_state rows and routes them
 // back through the current actionable-set builder without going through the
 // observer buffer or debounce path.
@@ -337,38 +347,7 @@ func (rt *watchRuntime) runRetrierSweep(
 		return nil
 	}
 
-	dispatchedRows := 0
-	batchLimit := rt.engine.effectiveRetryBatchLimit()
-	keys := make([]RetryWorkKey, 0, len(retryRows))
-
-	for i := range retryRows {
-		if dispatchedRows >= batchLimit {
-			rt.kickRetrySweepNow()
-			break
-		}
-
-		work := RetryWorkKey{
-			Path:       retryRows[i].Path,
-			OldPath:    retryRows[i].OldPath,
-			ActionType: retryRows[i].ActionType,
-		}
-		if !planContainsWorkKey(plan, work) {
-			if err := rt.engine.baseline.DeleteRetryStateByWork(ctx, work); err != nil {
-				rt.engine.logger.Warn("retrier sweep: failed to delete stale retry_state row",
-					slog.String("path", retryRows[i].Path),
-					slog.String("action", retryRows[i].ActionType.String()),
-					slog.String("error", err.Error()),
-				)
-			}
-			continue
-		}
-
-		if rt.depGraph.HasInFlight(retryRows[i].Path) {
-			continue
-		}
-		keys = append(keys, work)
-		dispatchedRows++
-	}
+	keys, dispatchedRows := rt.collectRetrySweepKeys(ctx, bl, plan, retryRows)
 
 	subset := selectedActionPlanByKeys(plan, keys)
 	if dispatchedRows == 0 || subset == nil || len(subset.Actions) == 0 {
@@ -392,6 +371,94 @@ func (rt *watchRuntime) runRetrierSweep(
 		Count: len(dispatch),
 	})
 	return dispatch
+}
+
+func (rt *watchRuntime) collectRetrySweepKeys(
+	ctx context.Context,
+	bl *Baseline,
+	plan *ActionPlan,
+	retryRows []RetryStateRow,
+) ([]RetryWorkKey, int) {
+	dispatchedRows := 0
+	batchLimit := rt.engine.effectiveRetryBatchLimit()
+	keys := make([]RetryWorkKey, 0, len(retryRows))
+
+	for i := range retryRows {
+		if dispatchedRows >= batchLimit {
+			rt.kickRetrySweepNow()
+			break
+		}
+
+		work := RetryWorkKey{
+			Path:       retryRows[i].Path,
+			OldPath:    retryRows[i].OldPath,
+			ActionType: retryRows[i].ActionType,
+		}
+		if !planContainsWorkKey(plan, work) {
+			rt.clearStaleRetrySweepRow(ctx, bl, &retryRows[i], work)
+			continue
+		}
+
+		if rt.depGraph.HasInFlight(retryRows[i].Path) {
+			continue
+		}
+		keys = append(keys, work)
+		dispatchedRows++
+	}
+
+	return keys, dispatchedRows
+}
+
+func (rt *watchRuntime) clearStaleRetrySweepRow(
+	ctx context.Context,
+	bl *Baseline,
+	row *RetryStateRow,
+	work RetryWorkKey,
+) {
+	if row == nil {
+		return
+	}
+
+	failureRow, failureErr := rt.retryFailureRowForStore(ctx, row)
+	candidate := rt.buildRetryCandidateFromRetryState(ctx, bl, row)
+	if candidate.err != nil {
+		rt.engine.logger.Warn("retrier sweep: failed to revalidate stale retry_state row",
+			slog.String("path", row.Path),
+			slog.String("action", row.ActionType.String()),
+			slog.String("error", candidate.err.Error()),
+		)
+	} else if failureErr != nil {
+		rt.engine.logger.Warn("retrier sweep: failed to build failure row for stale retry_state",
+			slog.String("path", row.Path),
+			slog.String("action", row.ActionType.String()),
+			slog.String("error", failureErr.Error()),
+		)
+	} else if candidate.skipped != nil {
+		rt.recordRetryTrialSkippedItem(ctx, failureRow, candidate.skipped)
+	} else if candidate.resolved {
+		rt.clearFailureCandidate(ctx, failureRow, "runRetrierSweep")
+	}
+
+	if err := rt.engine.baseline.DeleteRetryStateByWork(ctx, work); err != nil {
+		rt.engine.logger.Warn("retrier sweep: failed to delete stale retry_state row",
+			slog.String("path", row.Path),
+			slog.String("action", row.ActionType.String()),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	if candidate.skipped != nil && candidate.skipped.Reason != "" {
+		return
+	}
+
+	if clearErr := rt.engine.baseline.ClearSyncFailureByPath(ctx, row.Path); clearErr != nil {
+		rt.engine.logger.Warn("retrier sweep: failed to clear stale sync failure",
+			slog.String("path", row.Path),
+			slog.String("action", row.ActionType.String()),
+			slog.String("error", clearErr.Error()),
+		)
+	}
 }
 
 func (e *Engine) effectiveRetryBatchLimit() int {
@@ -505,9 +572,34 @@ func (flow *engineFlow) buildRetryCandidateFromRetryState(
 		return retryCandidate{}
 	}
 
-	failureRow := &SyncFailureRow{
+	failureRow, err := flow.retryFailureRowForStore(ctx, row)
+	if err != nil {
+		return retryCandidate{err: err}
+	}
+
+	return flow.buildRetryCandidate(ctx, bl, failureRow)
+}
+
+func (flow *engineFlow) retryFailureRowForStore(
+	ctx context.Context,
+	row *RetryStateRow,
+) (*SyncFailureRow, error) {
+	configuredDriveID, err := flow.engine.baseline.configuredDriveIDForRead(ctx, flow.engine.driveID)
+	if err != nil {
+		return nil, fmt.Errorf("load configured drive for retry_state row: %w", err)
+	}
+
+	return retryFailureRow(row, configuredDriveID), nil
+}
+
+func retryFailureRow(row *RetryStateRow, driveID driveid.ID) *SyncFailureRow {
+	if row == nil {
+		return nil
+	}
+
+	return &SyncFailureRow{
 		Path:       row.Path,
-		DriveID:    flow.engine.driveID,
+		DriveID:    driveID,
 		Direction:  row.ActionType.Direction(),
 		ActionType: row.ActionType,
 		Role:       FailureRoleHeld,
@@ -515,8 +607,6 @@ func (flow *engineFlow) buildRetryCandidateFromRetryState(
 		IssueType:  row.ScopeKey.IssueType(),
 		ScopeKey:   row.ScopeKey,
 	}
-
-	return flow.buildRetryCandidate(ctx, bl, failureRow)
 }
 
 func (flow *engineFlow) recordRetryTrialSkippedItem(

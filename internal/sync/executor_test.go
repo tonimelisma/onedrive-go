@@ -1221,8 +1221,7 @@ func TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition(t *testing.T
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	require.False(t, o.Success)
 	assert.Equal(t, ActionLocalDelete, o.Action)
-	require.Error(t, o.Error)
-	assert.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 
 	contents, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.txt"))
 	require.NoError(t, err)
@@ -1270,8 +1269,7 @@ func TestExecutor_LocalDelete_HashMismatch_DoesNotCreateConflictCopy(t *testing.
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	require.False(t, o.Success)
 	assert.Equal(t, ActionLocalDelete, o.Action)
-	require.Error(t, o.Error)
-	assert.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 
 	currentData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.txt"))
 	require.NoError(t, err)

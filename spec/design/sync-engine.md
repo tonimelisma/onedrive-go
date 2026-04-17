@@ -89,10 +89,12 @@ After the actionable set is built, runtime action-state materialization only
 prunes `retry_state` and `scope_blocks` to match the current action set. It
 does not persist a durable executable plan table.
 
-Dry-run now uses that same snapshot and SQLite reconciliation path inside a
-rollback-bound transaction. It previews the exact current actionable set
-without advancing observation cursors, mutating `baseline`, or persisting the
-refreshed snapshots.
+Dry-run now uses that same snapshot and SQLite reconciliation path against an
+isolated scratch `SyncStore`. The runtime seeds that scratch store from the
+current committed `baseline`, `remote_state`, and `observation_state`, commits
+the freshly observed dry-run `remote_state` and `local_state` snapshots there,
+and then builds the exact current actionable set from those committed scratch
+rows. The durable store keeps its original cursor, snapshots, and baseline.
 
 `sync --full` remains the explicit stronger-freshness path when incremental
 delta visibility is not sufficient.

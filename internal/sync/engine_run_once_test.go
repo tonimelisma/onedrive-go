@@ -267,7 +267,7 @@ func TestLoadCurrentActionPlanInputsTx_ReadsSnapshotWritesFromProvidedTransactio
 		ObservedAt:      123,
 	}}))
 
-	inputs, err := flow.loadCurrentActionPlanInputsTx(ctx, tx, eng.driveID)
+	inputs, err := flow.loadCurrentActionPlanInputsTx(ctx, eng.baseline, tx, eng.driveID)
 	require.NoError(t, err)
 	require.Len(t, inputs.localRows, 1)
 	assert.Equal(t, "tx-only.txt", inputs.localRows[0].Path)
@@ -415,6 +415,80 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	// Verify delta token is not saved (dry-run must not advance the token).
 	savedToken := readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String())
 	assert.Empty(t, savedToken, "dry-run should not save delta token")
+}
+
+// Validates: R-2.1.5
+func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID: "remote-preview", Name: "remote-preview.txt", ParentID: "root",
+					DriveID: driveID, Size: 15, QuickXorHash: "remote-preview-hash",
+				},
+			}, "token-dry-run-preview"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	flow := testEngineFlow(t, eng)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:            "stale-local.txt",
+		ItemType:        ItemTypeFile,
+		Hash:            "stale-local-hash",
+		Size:            5,
+		Mtime:           11,
+		ContentIdentity: "stale-local-hash",
+		ObservedAt:      111,
+	}}))
+	_, err := eng.baseline.DB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
+		VALUES ('stale-remote', 'stale-remote.txt', 'file', 'stale-remote-hash', 6, ?, 'etag-stale')`,
+		time.Now().UnixNano(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-live-before-dry-run"))
+
+	writeLocalFile(t, syncRoot, "fresh-local.txt", "fresh-local")
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	result, err := flow.buildDryRunCurrentActionPlan(ctx, bl, false)
+	require.NoError(t, err)
+
+	localPaths := make([]string, 0, len(result.localRows))
+	for i := range result.localRows {
+		localPaths = append(localPaths, result.localRows[i].Path)
+	}
+	assert.Contains(t, localPaths, "fresh-local.txt")
+	assert.NotContains(t, localPaths, "stale-local.txt")
+
+	remotePaths := make([]string, 0, len(result.remoteRows))
+	for i := range result.remoteRows {
+		remotePaths = append(remotePaths, result.remoteRows[i].Path)
+	}
+	assert.Contains(t, remotePaths, "remote-preview.txt")
+
+	liveLocalRows, err := eng.baseline.ListLocalState(ctx)
+	require.NoError(t, err)
+	require.Len(t, liveLocalRows, 1)
+	assert.Equal(t, "stale-local.txt", liveLocalRows[0].Path)
+
+	liveRemoteRows, err := eng.baseline.ListRemoteState(ctx)
+	require.NoError(t, err)
+	require.Len(t, liveRemoteRows, 1)
+	assert.Equal(t, "stale-remote.txt", liveRemoteRows[0].Path)
+	assert.NotContains(t, []string{liveRemoteRows[0].Path}, "remote-preview.txt")
+
+	savedToken := readObservationCursorForTest(t, eng.baseline, ctx, driveID.String())
+	assert.Equal(t, "token-live-before-dry-run", savedToken)
 }
 
 // Validates: R-2.1.1, R-3.3.12

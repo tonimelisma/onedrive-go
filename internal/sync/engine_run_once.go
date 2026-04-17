@@ -535,10 +535,10 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 
 func (flow *engineFlow) loadCurrentActionPlanInputs(
 	ctx context.Context,
-	db *sql.DB,
+	store *SyncStore,
 	defaultDriveID driveid.ID,
 ) (currentActionPlanInputs, error) {
-	tx, err := beginPerfTx(ctx, db)
+	tx, err := beginPerfTx(ctx, store.db)
 	if err != nil {
 		return currentActionPlanInputs{}, fmt.Errorf("sync: beginning current action planner read transaction: %w", err)
 	}
@@ -550,11 +550,12 @@ func (flow *engineFlow) loadCurrentActionPlanInputs(
 		}
 	}()
 
-	return flow.loadCurrentActionPlanInputsTx(ctx, tx, defaultDriveID)
+	return flow.loadCurrentActionPlanInputsTx(ctx, store, tx, defaultDriveID)
 }
 
 func (flow *engineFlow) loadCurrentActionPlanInputsTx(
 	ctx context.Context,
+	store *SyncStore,
 	tx sqlTxRunner,
 	defaultDriveID driveid.ID,
 ) (currentActionPlanInputs, error) {
@@ -570,7 +571,7 @@ func (flow *engineFlow) loadCurrentActionPlanInputsTx(
 	if err != nil {
 		return currentActionPlanInputs{}, fmt.Errorf("sync: listing local_state rows: %w", err)
 	}
-	observationState, err := flow.engine.baseline.readObservationStateTx(ctx, tx)
+	observationState, err := store.readObservationStateTx(ctx, tx)
 	if err != nil {
 		return currentActionPlanInputs{}, fmt.Errorf("sync: reading observation state for remote_state: %w", err)
 	}
@@ -604,7 +605,7 @@ func (flow *engineFlow) buildCurrentActionPlan(
 	mode Mode,
 	safety *SafetyConfig,
 ) (*ActionPlan, error) {
-	inputs, err := flow.loadCurrentActionPlanInputs(ctx, flow.engine.baseline.db, flow.engine.driveID)
+	inputs, err := flow.loadCurrentActionPlanInputs(ctx, flow.engine.baseline, flow.engine.driveID)
 	if err != nil {
 		return nil, err
 	}
@@ -630,33 +631,29 @@ func (flow *engineFlow) buildDryRunCurrentActionPlan(
 		return nil, err
 	}
 
-	tx, err := beginPerfTx(ctx, flow.engine.baseline.db)
+	scratchStore, cleanup, err := flow.engine.baseline.createScratchPlanningStore(ctx, bl)
 	if err != nil {
-		return nil, fmt.Errorf("sync: beginning dry-run planning transaction: %w", err)
+		return nil, err
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback dry-run planning transaction")
+		if cleanupErr := cleanup(context.WithoutCancel(ctx)); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
 	}()
 
-	if commitErr := flow.engine.baseline.commitObservationTx(
-		ctx,
-		tx,
-		projectedRemote.observed,
-		"",
-		flow.engine.driveID,
-	); commitErr != nil {
-		err = commitErr
-		return nil, err
+	commitErr := scratchStore.CommitObservation(ctx, projectedRemote.observed, "", flow.engine.driveID)
+	if commitErr != nil {
+		return nil, fmt.Errorf("sync: committing dry-run remote snapshot to scratch store: %w", commitErr)
 	}
 
 	observedAt := flow.engine.nowFunc().UnixNano()
 	localRows := buildLocalStateRows(localResult, observedAt)
-	if replaceErr := replaceLocalStateTx(ctx, tx, localRows); replaceErr != nil {
-		err = replaceErr
-		return nil, err
+	replaceErr := scratchStore.ReplaceLocalState(ctx, localRows)
+	if replaceErr != nil {
+		return nil, fmt.Errorf("sync: replacing dry-run local snapshot in scratch store: %w", replaceErr)
 	}
 
-	inputs, err := flow.loadCurrentActionPlanInputs(ctx, flow.engine.baseline.db, flow.engine.driveID)
+	inputs, err := flow.loadCurrentActionPlanInputs(ctx, scratchStore, flow.engine.driveID)
 	if err != nil {
 		return nil, err
 	}

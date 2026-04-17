@@ -57,6 +57,12 @@ One-shot full scans replace the entire `local_state` snapshot in one
 transaction. The stored rows represent the latest admissible local truth for
 that pass, not a journal of local events.
 
+Dry-run planning does not stage those snapshot writes inside the durable store.
+Instead, the store can seed an isolated scratch `SyncStore` with the current
+committed `baseline`, `remote_state`, and `observation_state`; dry-run then
+commits preview-only `remote_state` and `local_state` rows there before
+querying SQLite comparison and reconciliation.
+
 ### Outcome writes
 
 `CommitMutation()` is the successful-execution boundary. It updates `baseline`
