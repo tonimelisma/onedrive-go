@@ -31,7 +31,12 @@ CREATE TABLE IF NOT EXISTS observation_state (
     singleton_id                  INTEGER PRIMARY KEY CHECK(singleton_id = 1),
     configured_drive_id           TEXT    NOT NULL DEFAULT '',
     cursor                        TEXT    NOT NULL DEFAULT '',
-    last_full_remote_reconcile_at INTEGER NOT NULL DEFAULT 0
+    remote_refresh_mode           TEXT    NOT NULL DEFAULT 'delta_healthy',
+    last_full_remote_refresh_at   INTEGER NOT NULL DEFAULT 0,
+    next_full_remote_refresh_at   INTEGER NOT NULL DEFAULT 0,
+    local_refresh_mode            TEXT    NOT NULL DEFAULT 'watch_healthy',
+    last_full_local_refresh_at    INTEGER NOT NULL DEFAULT 0,
+    next_full_local_refresh_at    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS run_status (
@@ -52,11 +57,57 @@ CREATE TABLE IF NOT EXISTS remote_state (
     size          INTEGER,
     mtime         INTEGER,
     etag          TEXT,
+    content_identity TEXT,
     previous_path TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_remote_state_parent ON remote_state(parent_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_state_path ON remote_state(path);
+
+CREATE TABLE IF NOT EXISTS local_state (
+    path             TEXT    NOT NULL PRIMARY KEY,
+    item_type        TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
+    hash             TEXT,
+    size             INTEGER,
+    mtime            INTEGER,
+    content_identity TEXT,
+    observed_at      INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS planned_actions (
+    action_id                    INTEGER NOT NULL PRIMARY KEY,
+    plan_id                      TEXT    NOT NULL,
+    path                         TEXT    NOT NULL,
+    action_type                  TEXT    NOT NULL,
+    old_path                     TEXT    NOT NULL DEFAULT '',
+    source_identity              TEXT    NOT NULL DEFAULT '',
+    target_identity              TEXT    NOT NULL DEFAULT '',
+    dependency_key               TEXT    NOT NULL DEFAULT '',
+    precondition_local_identity  TEXT    NOT NULL DEFAULT '',
+    precondition_remote_identity TEXT    NOT NULL DEFAULT '',
+    status                       TEXT    NOT NULL DEFAULT 'pending'
+);
+
+CREATE INDEX IF NOT EXISTS idx_planned_actions_plan_id ON planned_actions(plan_id);
+CREATE INDEX IF NOT EXISTS idx_planned_actions_status ON planned_actions(status);
+
+CREATE TABLE IF NOT EXISTS retry_state (
+    action_id       INTEGER NOT NULL PRIMARY KEY,
+    plan_id         TEXT    NOT NULL,
+    path            TEXT    NOT NULL,
+    action_type     TEXT    NOT NULL,
+    scope_key       TEXT    NOT NULL DEFAULT '',
+    blocked         INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0, 1)),
+    attempt_count   INTEGER NOT NULL DEFAULT 0,
+    next_retry_at   INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT    NOT NULL DEFAULT '',
+    first_seen_at   INTEGER NOT NULL DEFAULT 0,
+    last_seen_at    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_retry_state_plan_id ON retry_state(plan_id);
+CREATE INDEX IF NOT EXISTS idx_retry_state_scope_key ON retry_state(scope_key);
+CREATE INDEX IF NOT EXISTS idx_retry_state_blocked ON retry_state(blocked);
 
 CREATE TABLE IF NOT EXISTS sync_failures (
     path           TEXT    NOT NULL PRIMARY KEY,
@@ -134,13 +185,26 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"local_size", "remote_size", "local_mtime", "remote_mtime", "etag",
 		},
 		"observation_state": {
-			"singleton_id", "configured_drive_id", "cursor", "last_full_remote_reconcile_at",
+			"singleton_id", "configured_drive_id", "cursor", "remote_refresh_mode",
+			"last_full_remote_refresh_at", "next_full_remote_refresh_at",
+			"local_refresh_mode", "last_full_local_refresh_at", "next_full_local_refresh_at",
 		},
 		"run_status": {
 			"singleton_id", "last_completed_at", "last_duration_ms", "last_succeeded_count", "last_failed_count", "last_error",
 		},
 		"remote_state": {
-			"item_id", "path", "parent_id", "item_type", "hash", "size", "mtime", "etag", "previous_path",
+			"item_id", "path", "parent_id", "item_type", "hash", "size", "mtime", "etag", "content_identity", "previous_path",
+		},
+		"local_state": {
+			"path", "item_type", "hash", "size", "mtime", "content_identity", "observed_at",
+		},
+		"planned_actions": {
+			"action_id", "plan_id", "path", "action_type", "old_path", "source_identity",
+			"target_identity", "dependency_key", "precondition_local_identity", "precondition_remote_identity", "status",
+		},
+		"retry_state": {
+			"action_id", "plan_id", "path", "action_type", "scope_key", "blocked",
+			"attempt_count", "next_retry_at", "last_error", "first_seen_at", "last_seen_at",
 		},
 		"sync_failures": {
 			"path", "direction", "action_type", "category", "failure_role", "issue_type", "item_id",

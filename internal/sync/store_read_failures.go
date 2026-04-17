@@ -193,6 +193,39 @@ func (m *SyncStore) ListSyncFailuresByIssueType(ctx context.Context, issueType s
 	return scanSyncFailureRows(rows, configuredDriveID)
 }
 
+// GetSyncFailureByPath returns a single sync_failures row for the given path.
+// It is a read-only enrichment helper for runtime flows that select retry work
+// from retry_state but still need additional failure context such as ItemID.
+func (m *SyncStore) GetSyncFailureByPath(
+	ctx context.Context,
+	path string,
+	driveID driveid.ID,
+) (*SyncFailureRow, bool, error) {
+	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveID)
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: reading configured drive for sync failure %s: %w", path, err)
+	}
+
+	row := m.db.QueryRowContext(ctx,
+		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
+		WHERE path = ?
+		LIMIT 1`,
+		path,
+	)
+
+	var parsed SyncFailureRow
+	err = scanSyncFailureRow(row, &parsed, configuredDriveID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+
+		return nil, false, fmt.Errorf("sync: reading sync failure for %s: %w", path, err)
+	}
+
+	return &parsed, true, nil
+}
+
 // PickTrialCandidate returns the oldest scope-blocked failure for the given scope key.
 func (m *SyncStore) PickTrialCandidate(
 	ctx context.Context,

@@ -1090,8 +1090,9 @@ func SyncRootExists(syncRoot string) bool {
 	return err == nil && info.IsDir()
 }
 
-// IsAlwaysExcluded returns true for file patterns that must never be synced.
-// These are S7 safety invariants: partial downloads and editor temporaries.
+// IsAlwaysExcluded returns true for file patterns that must never enter local
+// or remote snapshot state. These are symmetric junk/temp exclusions applied
+// before snapshot persistence on either side.
 //
 // Called on every fsnotify event and every file during FullScan, so we use
 // AsciiLower to avoid the heap allocation that strings.ToLower incurs per call.
@@ -1099,6 +1100,11 @@ func SyncRootExists(syncRoot string) bool {
 // package-level state, and the compiler inlines the string constants.
 func IsAlwaysExcluded(name string) bool {
 	lower := AsciiLower(name)
+
+	// OS junk and archive detritus.
+	if lower == ".ds_store" || lower == "thumbs.db" || lower == "__macosx" {
+		return true
+	}
 
 	// Extension-based: partial downloads and editor temps.
 	if strings.HasSuffix(lower, ".partial") ||
@@ -1110,6 +1116,10 @@ func IsAlwaysExcluded(name string) bool {
 
 	// Prefix-based: editor backup files (~file) and LibreOffice locks (.~lock).
 	if strings.HasPrefix(name, ".~") {
+		return true
+	}
+
+	if strings.HasPrefix(name, "._") {
 		return true
 	}
 

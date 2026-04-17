@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	slashpath "path"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -71,6 +72,9 @@ func (m *SyncStore) commitObservation(
 	for i := range events {
 		if !driveID.IsZero() {
 			events[i].DriveID = driveID
+		}
+		if !events[i].IsDeleted && IsAlwaysExcluded(slashpath.Base(events[i].Path)) {
+			continue
 		}
 		if processErr := m.processObservedItem(ctx, tx, &events[i]); processErr != nil {
 			return processErr

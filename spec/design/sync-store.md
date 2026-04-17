@@ -10,7 +10,10 @@ Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [
 
 - canonical schema application and validation
 - baseline persistence
+- local snapshot persistence
 - remote mirror persistence
+- latest planned-action persistence
+- retry-state persistence
 - retry/actionable failure persistence
 - scope-block persistence
 - one-shot run-status persistence
@@ -32,7 +35,7 @@ policy, or live watch-mode coordination. Those belong to the engine.
 
 | Behavior | Evidence |
 | --- | --- |
-| The store remains the sole durable authority for baseline, remote mirror, failure, scope-block, observation-state, and run-status rows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestWriteSyncRunStatus_RoundTrip`, `TestSyncStore_FailureAdminMutations` |
+| The store remains the sole durable authority for baseline, local/remote snapshots, latest planned actions, retry state, scope-block, observation-state, and run-status rows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestWriteSyncRunStatus_RoundTrip`, `TestSyncStore_FailureAdminMutations` |
 | Read-only snapshot helpers back status/recovery without reopening deleted conflict/delete-approval workflows. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestQuerySyncState_UsesReadOnlyProjectionHelper` |
 | Store repair and schema validation stay store-owned and transactional. | `TestRepairStateDB_RepairsReadableStoreInPlace`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema` |
 
@@ -46,6 +49,14 @@ policy, or live watch-mode coordination. Those belong to the engine.
 - advances `observation_state.cursor`
 
 Observation never writes planner state or runtime intent.
+
+Local observation writes belong to `local_state`; the canonical store now owns
+durable current-truth tables for both sides even though planner/executor
+cutovers may still arrive in later increments.
+
+One-shot full scans replace the entire `local_state` snapshot in one
+transaction. The stored rows represent the latest admissible local truth for
+that pass, not a journal of local events.
 
 ### Outcome writes
 
@@ -63,6 +74,14 @@ result, such as conflict-copy preservation and other local layout convergence.
 path failures. The engine/classifier supplies the already-decided issue type,
 category, scope key, and retry delay; the store persists them transactionally.
 
+`retry_state` and `planned_actions` now exist as first-class durable authority
+surfaces. They own the latest planned intent and persisted retryable work.
+`sync_failures` remains the reporting and failure-enrichment surface, but it no
+longer decides which retryable rows are due or which blocked row is trialed.
+
+Each planning pass replaces `planned_actions` wholesale with the latest plan
+generation. The store does not retain historical action generations.
+
 Supporting failure mutations include:
 
 - `ClearSyncFailure*` helpers
@@ -75,7 +94,10 @@ Supporting failure mutations include:
 `UpsertScopeBlock()`, `DeleteScopeBlock()`, and `ListScopeBlocks()` are the
 scope-block boundary. The engine remains the sole owner of when scopes are set,
 preserved, retried, released, or discarded; the store just persists that
-runtime-owned decision.
+runtime-owned decision. `scope_blocks` is timer/trial metadata authority, not a
+second owner of blocked work. When a scope is released or discarded, the store
+updates both `sync_failures` and `retry_state` in the same transaction so the
+retry ledger cannot lag the scope transition.
 
 ### Repair/admin writes
 

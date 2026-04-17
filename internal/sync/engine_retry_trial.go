@@ -149,7 +149,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 	key ScopeKey,
 ) []*TrackedAction {
 	for {
-		row, found, err := rt.engine.baseline.PickTrialCandidate(ctx, key)
+		retryRow, found, err := rt.engine.baseline.PickRetryTrialCandidate(ctx, key)
 		if err != nil {
 			rt.engine.logger.Warn("runTrialDispatch: failed to pick trial candidate",
 				slog.String("scope_key", key.String()),
@@ -166,6 +166,15 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 			return nil
 		}
 
+		row, err := rt.retryStateRowAsFailure(ctx, retryRow)
+		if err != nil {
+			rt.engine.logger.Warn("runTrialDispatch: failed to hydrate retry candidate",
+				slog.String("scope_key", key.String()),
+				slog.String("path", retryRow.Path),
+				slog.String("error", err.Error()),
+			)
+			return nil
+		}
 		if rt.depGraph.HasInFlight(row.Path) {
 			return nil
 		}
@@ -217,7 +226,7 @@ func (rt *watchRuntime) runRetrierSweep(
 
 	now := rt.engine.nowFunc()
 
-	rows, err := rt.engine.baseline.ListSyncFailuresForRetry(ctx, now)
+	retryRows, err := rt.engine.baseline.ListRetryStateReady(ctx, now)
 	if err != nil {
 		rt.engine.logger.Warn("retrier sweep: failed to list retriable items",
 			slog.String("error", err.Error()),
@@ -225,7 +234,7 @@ func (rt *watchRuntime) runRetrierSweep(
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepCompleted})
 		return nil
 	}
-	if len(rows) == 0 {
+	if len(retryRows) == 0 {
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepCompleted})
 		return nil
 	}
@@ -234,13 +243,20 @@ func (rt *watchRuntime) runRetrierSweep(
 	dispatchedRows := 0
 	batchLimit := rt.engine.effectiveRetryBatchLimit()
 
-	for i := range rows {
+	for i := range retryRows {
 		if dispatchedRows >= batchLimit {
 			rt.kickRetrySweepNow()
 			break
 		}
 
-		row := &rows[i]
+		row, rowErr := rt.retryStateRowAsFailure(ctx, &retryRows[i])
+		if rowErr != nil {
+			rt.engine.logger.Warn("retrier sweep: failed to hydrate retry candidate",
+				slog.String("path", retryRows[i].Path),
+				slog.String("error", rowErr.Error()),
+			)
+			continue
+		}
 		if rt.depGraph.HasInFlight(row.Path) {
 			continue
 		}
@@ -301,21 +317,28 @@ func (flow *engineFlow) collectDueRetryChanges(
 		return nil
 	}
 
-	rows, err := flow.engine.baseline.ListSyncFailuresForRetry(ctx, flow.engine.nowFunc())
+	retryRows, err := flow.engine.baseline.ListRetryStateReady(ctx, flow.engine.nowFunc())
 	if err != nil {
 		flow.engine.logger.Warn("one-shot retry rebuild: failed to list retriable items",
 			slog.String("error", err.Error()),
 		)
 		return nil
 	}
-	if len(rows) == 0 {
+	if len(retryRows) == 0 {
 		return nil
 	}
 
 	var changes []PathChanges
 
-	for i := range rows {
-		row := &rows[i]
+	for i := range retryRows {
+		row, rowErr := flow.retryStateRowAsFailure(ctx, &retryRows[i])
+		if rowErr != nil {
+			flow.engine.logger.Warn("one-shot retry rebuild: failed to hydrate retry candidate",
+				slog.String("path", retryRows[i].Path),
+				slog.String("error", rowErr.Error()),
+			)
+			continue
+		}
 		if observedPaths[row.Path] {
 			continue
 		}
@@ -343,6 +366,62 @@ func (flow *engineFlow) collectDueRetryChanges(
 	}
 
 	return changes
+}
+
+func (flow *engineFlow) retryStateRowAsFailure(
+	ctx context.Context,
+	row *RetryStateRow,
+) (*SyncFailureRow, error) {
+	if row == nil {
+		return nil, fmt.Errorf("nil retry_state row")
+	}
+
+	driveID := flow.engine.driveID
+	if configuredDriveID, configErr := flow.engine.baseline.configuredDriveIDForRead(
+		ctx,
+		driveid.ID{},
+	); configErr == nil && !configuredDriveID.IsZero() {
+		driveID = configuredDriveID
+	}
+	parsed := &SyncFailureRow{
+		Path:         row.Path,
+		DriveID:      driveID,
+		ActionType:   row.ActionType,
+		Direction:    row.ActionType.Direction(),
+		Role:         FailureRoleItem,
+		Category:     CategoryTransient,
+		FailureCount: row.AttemptCount,
+		NextRetryAt:  row.NextRetryAt,
+		LastError:    row.LastError,
+		FirstSeenAt:  row.FirstSeenAt,
+		LastSeenAt:   row.LastSeenAt,
+		ScopeKey:     row.ScopeKey,
+	}
+	if row.Blocked {
+		parsed.Role = FailureRoleHeld
+	}
+
+	enriched, found, err := flow.engine.baseline.GetSyncFailureByPath(ctx, row.Path, driveid.ID{})
+	if err != nil {
+		return nil, err
+	}
+	if !found || enriched == nil {
+		return parsed, nil
+	}
+
+	enriched.ActionType = row.ActionType
+	enriched.Direction = row.ActionType.Direction()
+	enriched.ScopeKey = row.ScopeKey
+	enriched.NextRetryAt = row.NextRetryAt
+	enriched.FailureCount = row.AttemptCount
+	enriched.LastError = row.LastError
+	enriched.FirstSeenAt = row.FirstSeenAt
+	enriched.LastSeenAt = row.LastSeenAt
+	if row.Blocked {
+		enriched.Role = FailureRoleHeld
+	}
+
+	return enriched, nil
 }
 
 func mergePathChangeBatches(batches ...[]PathChanges) []PathChanges {

@@ -1,0 +1,94 @@
+package sync
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func comparisonKindsByPath(rows []SQLiteComparisonRow) map[string]string {
+	out := make(map[string]string, len(rows))
+	for i := range rows {
+		out[rows[i].Path] = rows[i].ComparisonKind
+	}
+
+	return out
+}
+
+func reconciliationKindsByPath(rows []SQLiteReconciliationRow) map[string]string {
+	out := make(map[string]string, len(rows))
+	for i := range rows {
+		out[rows[i].Path] = rows[i].ReconciliationKind
+	}
+
+	return out
+}
+
+// Validates: R-2.1.3, R-2.1.4
+func TestQueryReconciliationState_BaselineAbsentFromBothRemovesBaseline(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	_, err := store.DB().ExecContext(t.Context(), `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
+		VALUES ('item-1', 'gone.txt', 'file', 'hash-a', 'hash-a', 10, 10, 100, 100)`)
+	require.NoError(t, err)
+
+	comparisonRows, err := store.QueryComparisonState(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "both_missing", comparisonKindsByPath(comparisonRows)["gone.txt"])
+
+	reconciliationRows, err := store.QueryReconciliationState(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "baseline_remove", reconciliationKindsByPath(reconciliationRows)["gone.txt"])
+}
+
+// Validates: R-2.1.3, R-2.1.4
+func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES
+			('item-upload', 'upload.txt', 'file', 'old', 'old', 1, 1, 1, 1, 'etag-old'),
+			('item-download', 'download.txt', 'file', 'same', 'same', 1, 1, 1, 1, 'etag-old'),
+			('item-conflict', 'conflict.txt', 'file', 'base', 'base', 1, 1, 1, 1, 'etag-base'),
+			('item-delete', 'delete.txt', 'file', 'same', 'same', 1, 1, 1, 1, 'etag-same'),
+			('item-redownload', 'redownload.txt', 'file', 'same', 'same', 1, 1, 1, 1, 'etag-same')`)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO local_state (path, item_type, hash, size, mtime, content_identity, observed_at)
+		VALUES
+			('upload.txt', 'file', 'new-local', 2, 2, 'new-local', 1),
+			('download.txt', 'file', 'same', 1, 1, 'same', 1),
+			('conflict.txt', 'file', 'local-conflict', 2, 2, 'local-conflict', 1),
+			('new-local.txt', 'file', 'local-create', 3, 3, 'local-create', 1)`)
+	require.NoError(t, err)
+
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag, content_identity)
+		VALUES
+			('item-upload', 'upload.txt', 'file', 'old', 1, 1, 'etag-old', 'old'),
+			('item-download', 'download.txt', 'file', 'remote-new', 2, 2, 'etag-new', 'remote-new'),
+			('item-conflict', 'conflict.txt', 'file', 'remote-conflict', 3, 3, 'etag-remote', 'remote-conflict'),
+			('item-redownload', 'redownload.txt', 'file', 'remote-redownload', 5, 5, 'etag-remote', 'remote-redownload'),
+			('item-new-remote', 'new-remote.txt', 'file', 'remote-create', 4, 4, 'etag-create', 'remote-create')`)
+	require.NoError(t, err)
+
+	reconciliationRows, err := store.QueryReconciliationState(ctx)
+	require.NoError(t, err)
+	got := reconciliationKindsByPath(reconciliationRows)
+
+	assert.Equal(t, "upload", got["upload.txt"])
+	assert.Equal(t, "download", got["download.txt"])
+	assert.Equal(t, "conflict_edit_edit", got["conflict.txt"])
+	assert.Equal(t, "baseline_remove", got["delete.txt"])
+	assert.Equal(t, "download", got["redownload.txt"])
+	assert.Equal(t, "upload", got["new-local.txt"])
+	assert.Equal(t, "download", got["new-remote.txt"])
+}
