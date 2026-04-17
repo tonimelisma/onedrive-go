@@ -356,7 +356,14 @@ type SQLiteReconciliationRow struct {
 }
 
 func (m *SyncStore) QueryComparisonState(ctx context.Context) ([]SQLiteComparisonRow, error) {
-	rows, err := m.db.QueryContext(ctx, sqlQueryComparisonState)
+	return queryComparisonStateWithRunner(ctx, m.db)
+}
+
+func queryComparisonStateWithRunner(
+	ctx context.Context,
+	runner sqlTxRunner,
+) ([]SQLiteComparisonRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlQueryComparisonState)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
 	}
@@ -414,7 +421,14 @@ func (m *SyncStore) QueryComparisonState(ctx context.Context) ([]SQLiteCompariso
 }
 
 func (m *SyncStore) QueryReconciliationState(ctx context.Context) ([]SQLiteReconciliationRow, error) {
-	rows, err := m.db.QueryContext(ctx, sqlQueryReconciliationState)
+	return queryReconciliationStateWithRunner(ctx, m.db)
+}
+
+func queryReconciliationStateWithRunner(
+	ctx context.Context,
+	runner sqlTxRunner,
+) ([]SQLiteReconciliationRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlQueryReconciliationState)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
 	}

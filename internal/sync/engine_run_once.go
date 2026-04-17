@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
-	"sort"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -129,17 +127,24 @@ func (e *Engine) runOnceDryRun(
 	start time.Time,
 ) (*Report, error) {
 	observeStart := e.nowFunc()
-	changes, _, err := runner.observeChanges(ctx, nil, bl, true, opts.FullReconcile)
+	planResult, err := runner.buildDryRunCurrentActionPlan(ctx, bl, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
-	e.collector().RecordObserve(len(changes), e.since(observeStart))
+	e.collector().RecordObserve(planResult.observedPaths, e.since(observeStart))
 
 	safety := e.resolveSafetyConfig()
-	blockedBoundaries := e.permHandler.ActiveRemoteBlockedBoundaries(ctx)
 
 	planStart := e.nowFunc()
-	plan, err := e.planner.Plan(changes, bl, mode, safety, blockedBoundaries)
+	plan, err := e.planner.PlanCurrentState(
+		planResult.comparisons,
+		planResult.reconciliations,
+		planResult.localRows,
+		planResult.remoteRows,
+		bl,
+		mode,
+		safety,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
@@ -149,6 +154,14 @@ func (e *Engine) runOnceDryRun(
 	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
 
 	return e.completeDryRunReport(start, report), nil
+}
+
+type dryRunPlanInput struct {
+	comparisons     []SQLiteComparisonRow
+	reconciliations []SQLiteReconciliationRow
+	localRows       []LocalStateRow
+	remoteRows      []RemoteStateRow
+	observedPaths   int
 }
 
 func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
@@ -315,8 +328,8 @@ func (r *oneShotRunner) executePlan(
 		return nil
 	}
 
-	// Invariant: Planner.Plan() always builds Deps with len(Actions).
-	// Assert here to catch any future regression that breaks this contract.
+	// Invariant: the current actionable-set builder always returns one
+	// dependency slice per action. Assert here to catch regressions early.
 	if len(plan.Actions) != len(plan.Deps) {
 		r.engine.logger.Error("plan invariant violation: Actions/Deps length mismatch",
 			slog.Int("actions", len(plan.Actions)),
@@ -507,50 +520,6 @@ func (flow *engineFlow) observeCurrentTruth(
 	return pendingCursorCommit, nil
 }
 
-// observeChanges remains the legacy watch/bootstrap observation path until the
-// long-lived runtime is cut over to snapshot refresh + SQLite reconciliation.
-func (flow *engineFlow) observeChanges(
-	ctx context.Context,
-	watch *watchRuntime,
-	bl *Baseline,
-	dryRun, fullReconcile bool,
-) ([]PathChanges, *pendingPrimaryCursorCommit, error) {
-	plan := flow.buildPrimaryRootObservationPlan(fullReconcile)
-	remoteEvents, pendingCursorCommit, err := flow.observeRemoteChanges(
-		ctx, bl, dryRun, plan,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	finalRemoteEvents := flow.processCommittedPrimaryBatch(
-		ctx,
-		bl,
-		remoteEvents,
-		dryRun,
-		fullReconcile,
-	)
-
-	localResult, err := flow.observeLocalChanges(ctx, watch, bl)
-	if err != nil {
-		return nil, nil, err
-	}
-	if commitLocalErr := flow.commitObservedLocalSnapshot(ctx, dryRun, localResult); commitLocalErr != nil {
-		return nil, nil, commitLocalErr
-	}
-
-	buf := NewBuffer(flow.engine.logger)
-	buf.AddAll(finalRemoteEvents)
-	buf.AddAll(localResult.Events)
-	remoteDriftEvents, err := flow.synthesizeRemoteMirrorDrift(ctx, bl)
-	if err != nil {
-		return nil, nil, err
-	}
-	buf.AddAll(remoteDriftEvents)
-
-	return buf.FlushImmediate(), pendingCursorCommit, nil
-}
-
 func (flow *engineFlow) buildCurrentActionPlan(
 	ctx context.Context,
 	bl *Baseline,
@@ -583,6 +552,83 @@ func (flow *engineFlow) buildCurrentActionPlan(
 		mode,
 		safety,
 	)
+}
+
+func (flow *engineFlow) buildDryRunCurrentActionPlan(
+	ctx context.Context,
+	bl *Baseline,
+	fullReconcile bool,
+) (result *dryRunPlanInput, err error) {
+	plan := flow.buildPrimaryRootObservationPlan(fullReconcile)
+	fetchResult, err := flow.fetchRemoteChanges(ctx, bl, plan)
+	if err != nil {
+		return nil, err
+	}
+
+	projectedRemote := projectRemoteObservations(flow.engine.logger, fetchResult.events)
+
+	localResult, err := flow.observeLocalChanges(ctx, nil, bl)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := beginPerfTx(ctx, flow.engine.baseline.db)
+	if err != nil {
+		return nil, fmt.Errorf("sync: beginning dry-run planning transaction: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback dry-run planning transaction")
+	}()
+
+	if commitErr := flow.engine.baseline.commitObservationTx(
+		ctx,
+		tx,
+		projectedRemote.observed,
+		"",
+		flow.engine.driveID,
+	); commitErr != nil {
+		err = commitErr
+		return nil, err
+	}
+
+	observedAt := flow.engine.nowFunc().UnixNano()
+	localRows := buildLocalStateRows(localResult, observedAt)
+	if replaceErr := replaceLocalStateTx(ctx, tx, localRows); replaceErr != nil {
+		err = replaceErr
+		return nil, err
+	}
+
+	comparisons, err := queryComparisonStateWithRunner(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying dry-run comparison state: %w", err)
+	}
+	reconciliations, err := queryReconciliationStateWithRunner(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying dry-run reconciliation state: %w", err)
+	}
+	remoteRows, err := queryRemoteStateRowsWithRunner(
+		ctx,
+		tx,
+		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
+			previous_path
+		FROM remote_state`,
+		flow.engine.driveID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing dry-run remote_state rows: %w", err)
+	}
+	localRows, err = listLocalStateRows(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing dry-run local_state rows: %w", err)
+	}
+
+	return &dryRunPlanInput{
+		comparisons:     comparisons,
+		reconciliations: reconciliations,
+		localRows:       localRows,
+		remoteRows:      remoteRows,
+		observedPaths:   len(localRows) + len(remoteRows),
+	}, nil
 }
 
 func (r *oneShotRunner) materializeSQLitePlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
@@ -726,104 +772,6 @@ func (flow *engineFlow) commitObservedLocalSnapshot(
 	}
 
 	return nil
-}
-
-func (flow *engineFlow) synthesizeRemoteMirrorDrift(
-	ctx context.Context,
-	bl *Baseline,
-) ([]ChangeEvent, error) {
-	rows, err := flow.engine.baseline.ListRemoteState(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("sync: listing remote mirror state: %w", err)
-	}
-
-	seenRemote := make(map[string]struct{}, len(rows))
-	events := make([]ChangeEvent, 0, len(rows))
-
-	for i := range rows {
-		row := &rows[i]
-
-		seenRemote[row.ItemID] = struct{}{}
-
-		entry, found := bl.GetByID(row.ItemID)
-		if found && !remoteMirrorDiffers(entry, row) {
-			continue
-		}
-
-		event := ChangeEvent{
-			Source:   SourceRemote,
-			Type:     ChangeModify,
-			Path:     row.Path,
-			ItemID:   row.ItemID,
-			ParentID: row.ParentID,
-			DriveID:  row.DriveID,
-			ItemType: row.ItemType,
-			Name:     filepath.Base(row.Path),
-			Size:     row.Size,
-			Hash:     row.Hash,
-			Mtime:    row.Mtime,
-			ETag:     row.ETag,
-		}
-		if found && entry.Path != row.Path {
-			event.Type = ChangeMove
-			event.OldPath = entry.Path
-		}
-
-		events = append(events, event)
-	}
-
-	bl.ForEachPath(func(path string, entry *BaselineEntry) {
-		if entry == nil {
-			return
-		}
-
-		if _, ok := seenRemote[entry.ItemID]; ok {
-			return
-		}
-
-		events = append(events, ChangeEvent{
-			Source:    SourceRemote,
-			Type:      ChangeDelete,
-			Path:      path,
-			ItemID:    entry.ItemID,
-			ParentID:  entry.ParentID,
-			DriveID:   entry.DriveID,
-			ItemType:  entry.ItemType,
-			Name:      filepath.Base(path),
-			Size:      entry.RemoteSize,
-			Hash:      entry.RemoteHash,
-			Mtime:     entry.RemoteMtime,
-			IsDeleted: true,
-		})
-	})
-
-	sort.Slice(events, func(i, j int) bool {
-		if events[i].Path != events[j].Path {
-			return events[i].Path < events[j].Path
-		}
-		if events[i].Type != events[j].Type {
-			return events[i].Type < events[j].Type
-		}
-		return events[i].OldPath < events[j].OldPath
-	})
-
-	return events, nil
-}
-
-func remoteMirrorDiffers(entry *BaselineEntry, row *RemoteStateRow) bool {
-	if entry == nil || row == nil {
-		return true
-	}
-	if entry.Path != row.Path || entry.ItemType != row.ItemType {
-		return true
-	}
-	if entry.RemoteHash != row.Hash {
-		return true
-	}
-	if entry.RemoteSizeKnown && entry.RemoteSize != row.Size {
-		return true
-	}
-	return entry.RemoteMtime != row.Mtime
 }
 
 // commitPendingPrimaryCursor advances the primary observation cursor after the

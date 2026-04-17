@@ -31,6 +31,27 @@ func (m *SyncStore) ReplaceLocalState(
 		err = finalizeTxRollback(err, tx, "sync: rollback local_state transaction")
 	}()
 
+	if err := replaceLocalStateTx(ctx, tx, rows); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing local_state transaction: %w", err)
+	}
+
+	return nil
+}
+
+// ListLocalState returns the durable local snapshot rows in path order.
+func (m *SyncStore) ListLocalState(ctx context.Context) ([]LocalStateRow, error) {
+	return listLocalStateRows(ctx, m.db)
+}
+
+func replaceLocalStateTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	rows []LocalStateRow,
+) error {
 	if _, err := tx.ExecContext(ctx, sqlDeleteLocalState); err != nil {
 		return fmt.Errorf("sync: deleting local_state rows: %w", err)
 	}
@@ -50,16 +71,11 @@ func (m *SyncStore) ReplaceLocalState(
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing local_state transaction: %w", err)
-	}
-
 	return nil
 }
 
-// ListLocalState returns the durable local snapshot rows in path order.
-func (m *SyncStore) ListLocalState(ctx context.Context) ([]LocalStateRow, error) {
-	rows, err := m.db.QueryContext(ctx, sqlListLocalState)
+func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]LocalStateRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlListLocalState)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying local_state: %w", err)
 	}

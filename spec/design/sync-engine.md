@@ -85,6 +85,11 @@ The one-shot pass now persists `local_state` from the full local scan, derives
 reconciliation rows from snapshots, and builds the current actionable set in
 Go before execution begins.
 
+Dry-run now uses that same snapshot and SQLite reconciliation path inside a
+rollback-bound transaction. It previews the exact current actionable set
+without advancing observation cursors, mutating `baseline`, or persisting the
+refreshed snapshots.
+
 `sync --full` remains the explicit stronger-freshness path when incremental
 delta visibility is not sufficient.
 

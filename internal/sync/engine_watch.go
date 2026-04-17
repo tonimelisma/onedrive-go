@@ -177,7 +177,7 @@ type socketIOWakeSourceRunner interface {
 }
 
 // initWatchInfra sets up watch-mode infrastructure: watchRuntime, DepGraph,
-// worker pool, buffer, persisted scope state, and tickers. Does NOT load
+// worker pool, dirty scheduler, persisted scope state, and tickers. Does NOT load
 // baseline or start observers — those happen in bootstrapSync and RunWatch.
 //
 // Key differences from one-shot mode (executePlan):
@@ -185,8 +185,8 @@ type socketIOWakeSourceRunner interface {
 //   - Done channel is never-closing — DepGraph.Done() fires when completed >= total,
 //     which would prematurely close between batches. Workers exit only via ctx.Done().
 //   - Retrier and trials are handled by the watch control flow itself
-//   - Buffer is promoted to e.watch.buf for observed and reconciliation work;
-//     retry/trial work now enters through explicit engine-owned planner requests.
+//   - DirtyBuffer, not buffered planner input, decides when snapshots are refreshed
+//     and the current actionable set is rebuilt.
 func (rt *watchRuntime) initWatchInfra(
 	ctx context.Context,
 	mode Mode,
