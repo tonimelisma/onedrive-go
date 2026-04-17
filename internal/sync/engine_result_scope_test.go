@@ -1466,16 +1466,15 @@ func TestRecordFailure_PopulatesScopeKey_507Quota(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // startDrainLoop creates a real engine with DepGraph, watch-mode scope state,
-// dispatchCh, buf, and retryTimerCh — the full one-shot engine-loop pipeline used
-// by these tests. Tests access the ready channel and buffer via the returned
-// engine.
+// dispatchCh, dirty scheduler, and retryTimerCh — the full one-shot engine-loop
+// pipeline used by these tests.
 func startDrainLoop(t *testing.T) (chan WorkerResult, <-chan struct{}, context.CancelFunc, *testEngine) {
 	t.Helper()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
-	rt.buf = NewBuffer(eng.logger)
+	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
 
 	results := make(chan WorkerResult, 16)
 
@@ -2423,7 +2422,7 @@ func TestLogFailureSummary_NoTransientSummariesNoops(t *testing.T) {
 // Retrier pipeline integration test (single-owner architecture)
 //
 // Exercises the integrated retrier: action → failure → sync_failures
-// → retry timer fires → runRetrierSweep → createEventFromDB → Buffer.
+// → retry timer fires → runRetrierSweep → dirty replan / action rebuild.
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.8.10, R-6.8.11, R-6.8.7

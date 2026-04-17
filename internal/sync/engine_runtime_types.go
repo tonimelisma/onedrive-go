@@ -76,10 +76,6 @@ type watchObservationState struct {
 	// from SQLite current truth after the debounce window closes.
 	dirtyBuf *DirtyBuffer
 
-	// buf remains only as a legacy test fixture hook while older watch tests
-	// are migrated from PathChanges batches to dirty-batch scheduling.
-	buf *Buffer
-
 	// Cross-connection SQLite commit detector for watch recheck ticks.
 	lastDataVersion int64
 

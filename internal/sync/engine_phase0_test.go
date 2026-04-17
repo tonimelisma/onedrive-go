@@ -465,8 +465,6 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 	setupWatchEngine(t, eng)
-	rt := testWatchRuntime(t, eng)
-	rt.buf = NewBuffer(eng.logger)
 
 	scopeKey := SKPermDir("Private")
 	accessibleDir := filepath.Join(syncRoot, "Private")
@@ -616,7 +614,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.buf = NewBuffer(eng.logger)
+	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
 
 	rt.runFullReconciliationAsync(ctx, bl)
 	waitForReconcileDone(t, eng)
@@ -627,7 +625,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 	default:
 	}
 
-	batch := rt.buf.FlushImmediate()
-	require.NotEmpty(t, batch)
-	assert.Equal(t, "reconcile.txt", batch[0].Path)
+	batch := rt.dirtyBuf.FlushImmediate()
+	require.NotNil(t, batch)
+	assert.Equal(t, []string{"reconcile.txt"}, batch.Paths)
 }

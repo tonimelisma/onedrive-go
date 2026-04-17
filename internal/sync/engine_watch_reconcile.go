@@ -484,9 +484,6 @@ func (rt *watchRuntime) applyReconcileResult(result reconcileResult) {
 			}
 		}
 	}
-	if rt.dirtyBuf == nil && rt.buf != nil {
-		rt.buf.AddAll(result.events)
-	}
 
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileApplied})
 }

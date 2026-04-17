@@ -228,12 +228,12 @@ Evidence:
   same follow-up treatment to avoid unnecessary re-download or conflict
   re-detection when the next delta still showed the winner that was already on
   disk.
-Resolution / mitigation: queued conflict resolutions now return an
-engine-owned follow-up `PathChanges` batch that `RunOnce` merges before normal
-planning. The canonical conflicted path gets a forced ordinary action
-(`upload` for keep-local, `update_synced` for keep-remote / keep-both) plus a
-synthetic remote view for the chosen outcome, so the same sync pass converges
-instead of re-conflicting. Regression coverage lives in
+Resolution / mitigation: historical note: the older event-shaped runtime used
+an engine-owned follow-up `PathChanges` batch that `RunOnce` merged before
+normal planning. The current snapshot-first runtime no longer uses that
+boundary, but this incident remains useful context for why conflict
+follow-through must converge within the same pass instead of re-conflicting on
+stale remote truth. Regression coverage lives in
 [`internal/sync/engine_watch_test.go`](../../internal/sync/engine_watch_test.go).
 Promoted docs: [sync-engine.md](../design/sync-engine.md)
 

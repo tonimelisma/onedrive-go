@@ -18,20 +18,21 @@ type SkippedItem struct {
 	FileSize int64  // populated for IssueFileTooLarge (after stat)
 }
 
-// ScanResult is the return type of FullScan. Events are valid change
-// observations for the legacy event-shaped planner path; Rows are the direct
-// current local snapshot that local_state persists. Skipped are user-actionable
-// rejections (invalid names, path too long, file too large) that the engine
-// should record.
+// ScanResult is the return type of FullScan. Rows are the direct current local
+// snapshot that local_state persists. Events remain observation-local signals
+// for watch dirtiness and diagnostics; they are not planner input. Skipped are
+// user-actionable rejections (invalid names, path too long, file too large)
+// that the engine should record.
 type ScanResult struct {
 	Events  []ChangeEvent
 	Rows    []LocalStateRow
 	Skipped []SkippedItem
 }
 
-// ChangeEvent is an immutable observation of a change, produced by observers
-// and consumed by the change buffer and planner. Never stored in the database
-// (except optionally in the change journal for debugging).
+// ChangeEvent is an immutable observation fact produced by observers. The
+// runtime uses these facts to mark dirty paths/scopes and to describe local or
+// remote observation results, but they are not the durable sync truth and are
+// never stored in the database.
 //
 // Per-observer field contract:
 //
@@ -41,13 +42,9 @@ type ScanResult struct {
 //	LocalObserver populates: Path, Name, ItemType, Size, Hash, Mtime,
 //	  IsDeleted. Never sets: ItemID, ParentID, DriveID, ETag, CTag.
 //	  For ChangeDelete: Hash is empty; Size/Mtime from baseline entry.
-//	Buffer synthetic deletes: Source, Type, Path, ItemID, ParentID, DriveID,
-//	  ItemType, Name, IsDeleted. No Size/Hash/Mtime (move context only).
 type ChangeEvent struct {
 	Source           ChangeSource
 	Type             ChangeType
-	ForcedAction     ActionType // retry/crash-recovery hint; valid only when HasForcedAction is true
-	HasForcedAction  bool
 	Path             string     // NFC-normalized, relative to sync root
 	OldPath          string     // for moves only
 	ItemID           string     // server-assigned (remote only; empty for local)
@@ -319,14 +316,6 @@ func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
 	return bl
 }
 
-// PathChanges groups all change events for a single path, separating
-// remote and local observations.
-type PathChanges struct {
-	Path         string
-	RemoteEvents []ChangeEvent
-	LocalEvents  []ChangeEvent
-}
-
 // RemoteState captures the current state of a path as observed from
 // the Graph API delta response.
 type RemoteState struct {
@@ -354,16 +343,15 @@ type LocalState struct {
 	Mtime    int64
 }
 
-// PathView is a unified three-way view of a single path. Constructed by
-// the planner from change events + baseline. Input to the reconciliation
-// decision matrix.
+// PathView is a unified three-way view of a single path built from the
+// authoritative snapshots plus baseline. It is the in-memory planning view the
+// current actionable-set builder reasons over after SQLite computes structural
+// diff and reconciliation outcomes.
 type PathView struct {
-	Path            string
-	Remote          *RemoteState   // nil = no remote change observed
-	Local           *LocalState    // nil = no local change observed / locally absent
-	Baseline        *BaselineEntry // nil = never synced
-	ForcedAction    ActionType     // retry/crash-recovery hint; valid only when HasForcedAction is true
-	HasForcedAction bool
+	Path     string
+	Remote   *RemoteState   // nil = absent from current remote snapshot
+	Local    *LocalState    // nil = absent from current local snapshot
+	Baseline *BaselineEntry // nil = never synced
 }
 
 // ConflictRecord holds metadata about a detected conflict.
