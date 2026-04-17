@@ -16,11 +16,11 @@ type failureSummaryEntry struct {
 const fallbackFailureSummaryIssueType = "transient_failure"
 
 // armRetryTimer arms the retry timer for the next retrier sweep. Queries
-// the earliest next_retry_at from sync_failures and sets the timer. If the
+// the earliest next_retry_at from retry_state and sets the timer. If the
 // retry timer channel is already signaled (non-blocking send to buffered(1)
 // channel), the next owning loop iteration processes it.
 func (rt *watchRuntime) armRetryTimer(ctx context.Context) {
-	earliest, err := rt.engine.baseline.EarliestSyncFailureRetryAt(ctx, rt.engine.nowFunc())
+	earliest, err := rt.engine.baseline.EarliestRetryStateAt(ctx, rt.engine.nowFunc())
 	if err != nil || earliest.IsZero() {
 		return
 	}

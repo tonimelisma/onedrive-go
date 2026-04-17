@@ -28,6 +28,11 @@ const (
 		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
 		FROM retry_state
 		ORDER BY path, work_key`
+	sqlListRetryStateBlocked = `SELECT
+		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
+		FROM retry_state
+		WHERE blocked = 1
+		ORDER BY scope_key, path, work_key`
 	sqlListRetryStateReady = `SELECT
 		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
 		FROM retry_state
@@ -45,6 +50,9 @@ const (
 			WHERE retry_state.blocked = 1
 				AND retry_state.scope_key = scope_blocks.scope_key
 		)`
+	sqlEarliestRetryStateAt = `SELECT MIN(next_retry_at) FROM retry_state
+		WHERE blocked = 0
+			AND next_retry_at > ?`
 )
 
 func serializeRetryWorkKey(key RetryWorkKey) string {
@@ -153,6 +161,16 @@ func (m *SyncStore) ListRetryState(ctx context.Context) ([]RetryStateRow, error)
 	return scanRetryStateRows(rows)
 }
 
+func (m *SyncStore) ListBlockedRetryState(ctx context.Context) ([]RetryStateRow, error) {
+	rows, err := m.db.QueryContext(ctx, sqlListRetryStateBlocked)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying blocked retry_state rows: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRetryStateRows(rows)
+}
+
 func (m *SyncStore) ListRetryStateReady(ctx context.Context, now time.Time) ([]RetryStateRow, error) {
 	rows, err := m.db.QueryContext(ctx, sqlListRetryStateReady, now.UnixNano())
 	if err != nil {
@@ -161,6 +179,21 @@ func (m *SyncStore) ListRetryStateReady(ctx context.Context, now time.Time) ([]R
 	defer rows.Close()
 
 	return scanRetryStateRows(rows)
+}
+
+func (m *SyncStore) EarliestRetryStateAt(ctx context.Context, now time.Time) (time.Time, error) {
+	nowNano := now.UnixNano()
+
+	var minNano *int64
+	if err := m.db.QueryRowContext(ctx, sqlEarliestRetryStateAt, nowNano).Scan(&minNano); err != nil {
+		return time.Time{}, fmt.Errorf("sync: querying earliest retry_state at: %w", err)
+	}
+
+	if minNano == nil {
+		return time.Time{}, nil
+	}
+
+	return time.Unix(0, *minNano), nil
 }
 
 func (m *SyncStore) PickRetryTrialCandidate(

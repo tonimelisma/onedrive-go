@@ -170,6 +170,13 @@ func classifyLocalResult(r *WorkerResult) ResultDecision {
 	permissionDecisionFlow := localPermissionDecisionFlow(r)
 
 	switch {
+	case errors.Is(r.Err, ErrActionPreconditionChanged):
+		return withRuntimeSummary(&ResultDecision{
+			Class:       resultRequeue,
+			Persistence: persistTransientFailure,
+			TrialHint:   trialHintPreserve,
+			IssueType:   "transient_conflict",
+		})
 	case errors.Is(r.Err, driveops.ErrDiskFull):
 		return withRuntimeSummary(&ResultDecision{
 			Class:         resultScopeBlock,

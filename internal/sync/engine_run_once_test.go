@@ -243,6 +243,102 @@ func TestRunOnce_Bidirectional_FullRun(t *testing.T) {
 	assert.True(t, ok, "local.txt not in baseline after sync")
 }
 
+// Validates: R-2.1.3
+func TestLoadCurrentActionPlanInputsTx_ReadsSnapshotWritesFromProvidedTransaction(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	flow := testEngineFlow(t, eng)
+	ctx := t.Context()
+
+	tx, err := beginPerfTx(ctx, eng.baseline.db)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, tx.Rollback())
+	}()
+
+	require.NoError(t, replaceLocalStateTx(ctx, tx, []LocalStateRow{{
+		Path:            "tx-only.txt",
+		ItemType:        ItemTypeFile,
+		Hash:            "hash",
+		Size:            4,
+		Mtime:           5,
+		ContentIdentity: "hash",
+		ObservedAt:      123,
+	}}))
+
+	inputs, err := flow.loadCurrentActionPlanInputsTx(ctx, eng.baseline, tx, eng.driveID)
+	require.NoError(t, err)
+	require.Len(t, inputs.localRows, 1)
+	assert.Equal(t, "tx-only.txt", inputs.localRows[0].Path)
+}
+
+// Validates: R-2.10.33
+func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	flow := testEngineFlow(t, eng)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "keep.txt",
+		ActionType:   ActionUpload,
+		AttemptCount: 1,
+		FirstSeenAt:  1,
+		LastSeenAt:   2,
+	}))
+	require.NoError(t, eng.baseline.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "drop.txt",
+		ActionType:   ActionDownload,
+		AttemptCount: 1,
+		FirstSeenAt:  3,
+		LastSeenAt:   4,
+	}))
+	require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
+		Key:           SKService(),
+		IssueType:     IssueServiceOutage,
+		TimingSource:  ScopeTimingBackoff,
+		BlockedAt:     time.Unix(100, 0),
+		TrialInterval: time.Minute,
+		NextTrialAt:   time.Unix(160, 0),
+	}))
+	require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
+		Key:           SKThrottleAccount(),
+		IssueType:     IssueServiceOutage,
+		TimingSource:  ScopeTimingBackoff,
+		BlockedAt:     time.Unix(200, 0),
+		TrialInterval: time.Minute,
+		NextTrialAt:   time.Unix(260, 0),
+	}))
+	require.NoError(t, eng.baseline.UpsertRetryState(ctx, &RetryStateRow{
+		Path:         "blocked.txt",
+		ActionType:   ActionRemoteDelete,
+		ScopeKey:     SKService(),
+		Blocked:      true,
+		AttemptCount: 1,
+		FirstSeenAt:  5,
+		LastSeenAt:   6,
+	}))
+
+	err := flow.materializeCurrentActionPlan(ctx, &ActionPlan{
+		Actions: []Action{{
+			Type: ActionUpload,
+			Path: "keep.txt",
+		}},
+	}, false)
+	require.NoError(t, err)
+
+	retries, err := eng.baseline.ListRetryState(ctx)
+	require.NoError(t, err)
+	require.Len(t, retries, 1)
+	assert.Equal(t, "keep.txt", retries[0].Path)
+
+	blocks, err := eng.baseline.ListScopeBlocks(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
+}
+
 // Validates: R-2.1.3, R-2.1.4
 func TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation(t *testing.T) {
 	t.Parallel()
@@ -319,6 +415,80 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	// Verify delta token is not saved (dry-run must not advance the token).
 	savedToken := readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String())
 	assert.Empty(t, savedToken, "dry-run should not save delta token")
+}
+
+// Validates: R-2.1.5
+func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID: "remote-preview", Name: "remote-preview.txt", ParentID: "root",
+					DriveID: driveID, Size: 15, QuickXorHash: "remote-preview-hash",
+				},
+			}, "token-dry-run-preview"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	flow := testEngineFlow(t, eng)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:            "stale-local.txt",
+		ItemType:        ItemTypeFile,
+		Hash:            "stale-local-hash",
+		Size:            5,
+		Mtime:           11,
+		ContentIdentity: "stale-local-hash",
+		ObservedAt:      111,
+	}}))
+	_, err := eng.baseline.DB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
+		VALUES ('stale-remote', 'stale-remote.txt', 'file', 'stale-remote-hash', 6, ?, 'etag-stale')`,
+		time.Now().UnixNano(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-live-before-dry-run"))
+
+	writeLocalFile(t, syncRoot, "fresh-local.txt", "fresh-local")
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	result, err := flow.buildDryRunCurrentActionPlan(ctx, bl, false)
+	require.NoError(t, err)
+
+	localPaths := make([]string, 0, len(result.localRows))
+	for i := range result.localRows {
+		localPaths = append(localPaths, result.localRows[i].Path)
+	}
+	assert.Contains(t, localPaths, "fresh-local.txt")
+	assert.NotContains(t, localPaths, "stale-local.txt")
+
+	remotePaths := make([]string, 0, len(result.remoteRows))
+	for i := range result.remoteRows {
+		remotePaths = append(remotePaths, result.remoteRows[i].Path)
+	}
+	assert.Contains(t, remotePaths, "remote-preview.txt")
+
+	liveLocalRows, err := eng.baseline.ListLocalState(ctx)
+	require.NoError(t, err)
+	require.Len(t, liveLocalRows, 1)
+	assert.Equal(t, "stale-local.txt", liveLocalRows[0].Path)
+
+	liveRemoteRows, err := eng.baseline.ListRemoteState(ctx)
+	require.NoError(t, err)
+	require.Len(t, liveRemoteRows, 1)
+	assert.Equal(t, "stale-remote.txt", liveRemoteRows[0].Path)
+	assert.NotContains(t, []string{liveRemoteRows[0].Path}, "remote-preview.txt")
+
+	savedToken := readObservationCursorForTest(t, eng.baseline, ctx, driveID.String())
+	assert.Equal(t, "token-live-before-dry-run", savedToken)
 }
 
 // Validates: R-2.1.1, R-3.3.12

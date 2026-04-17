@@ -177,7 +177,6 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing sync failures: %w", err)
 	}
-	facts := summarizePersistedScopeFailures(rows)
 	boundaryKeys := make(map[ScopeKey]struct{})
 
 	for i := range rows {
@@ -197,12 +196,6 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 		key := blocks[i].Key
 		if key.IsPermRemoteWrite() {
 			return fmt.Errorf("persisted remote-write scope %s should not survive startup repair", key.String())
-		}
-		if !key.IsPermLocalRead() && !key.IsPermLocalWrite() {
-			continue
-		}
-		if !facts.boundaryKeys[key] {
-			return fmt.Errorf("permission scope %s has no actionable boundary row", key.String())
 		}
 	}
 

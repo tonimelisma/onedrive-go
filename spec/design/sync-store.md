@@ -57,6 +57,12 @@ One-shot full scans replace the entire `local_state` snapshot in one
 transaction. The stored rows represent the latest admissible local truth for
 that pass, not a journal of local events.
 
+Dry-run planning does not stage those snapshot writes inside the durable store.
+Instead, the store can seed an isolated scratch `SyncStore` with the current
+committed `baseline`, `remote_state`, and `observation_state`; dry-run then
+commits preview-only `remote_state` and `local_state` rows there before
+querying SQLite comparison and reconciliation.
+
 ### Outcome writes
 
 `CommitMutation()` is the successful-execution boundary. It updates `baseline`
@@ -75,9 +81,9 @@ category, scope key, and retry delay; the store persists them transactionally.
 
 `retry_state` is the durable retry ledger. It persists retryable and blocked
 work keyed to semantic work identity, while the executable action set remains
-runtime-owned in Go. `sync_failures` remains the reporting and
-failure-enrichment surface, but it no longer decides which retryable rows are
-due or which blocked row is trialed.
+runtime-owned in Go. `sync_failures` remains the reporting surface, but it no
+longer decides which retryable rows are due, which blocked row is trialed, or
+which scope-backed rows keep runtime admission blocked.
 
 Supporting failure mutations include:
 
@@ -95,6 +101,9 @@ runtime-owned decision. `scope_blocks` is timer/trial metadata authority, not a
 second owner of blocked work. When a scope is released or discarded, the store
 updates both `sync_failures` and `retry_state` in the same transaction so the
 retry ledger cannot lag the scope transition.
+
+Remote permission scopes are not persisted as `scope_blocks`. They are rebuilt
+from blocked `retry_state` rows keyed by `perm:remote:*` scope keys.
 
 ### Repair/admin writes
 

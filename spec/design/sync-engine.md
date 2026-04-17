@@ -29,7 +29,7 @@ Retry and trial admission now read from `retry_state`:
 
 - ready per-item retry work comes from unblocked `retry_state` rows whose `next_retry_at` is due
 - scope trials sample one blocked `retry_state` row at random for each due scope
-- `sync_failures` remains available for issue reporting and candidate enrichment, but it is no longer the retry scheduler
+- `sync_failures` remains available for issue reporting, but it is no longer part of retry scheduling, retry candidate reconstruction, scope admission, or scope lifecycle
 
 The engine does **not** own multi-drive orchestration or control-socket
 lifecycle. Those belong to `internal/multisync`.
@@ -85,10 +85,16 @@ The one-shot pass now persists `local_state` from the full local scan, derives
 reconciliation rows from snapshots, and builds the current actionable set in
 Go before execution begins.
 
-Dry-run now uses that same snapshot and SQLite reconciliation path inside a
-rollback-bound transaction. It previews the exact current actionable set
-without advancing observation cursors, mutating `baseline`, or persisting the
-refreshed snapshots.
+After the actionable set is built, runtime action-state materialization only
+prunes `retry_state` and `scope_blocks` to match the current action set. It
+does not persist a durable executable plan table.
+
+Dry-run now uses that same snapshot and SQLite reconciliation path against an
+isolated scratch `SyncStore`. The runtime seeds that scratch store from the
+current committed `baseline`, `remote_state`, and `observation_state`, commits
+the freshly observed dry-run `remote_state` and `local_state` snapshots there,
+and then builds the exact current actionable set from those committed scratch
+rows. The durable store keeps its original cursor, snapshots, and baseline.
 
 `sync --full` remains the explicit stronger-freshness path when incremental
 delta visibility is not sufficient.
@@ -122,7 +128,7 @@ connection committed a write, `handleExternalChanges()` runs.
 
 That reconciliation hook is intentionally narrow. It currently rechecks
 externally cleared permission-scope state and releases any runtime permission
-scope whose backing failure rows disappeared.
+scope whose backing `scope_blocks` or blocked `retry_state` rows disappeared.
 
 It is **not** a generic user-intent ingestion path.
 
@@ -143,9 +149,9 @@ Conflicts are engine-owned and immediate:
 
 - edit/edit and create/create preserve both versions by renaming local to a
   conflict copy and downloading remote to the canonical path
-- edit/delete is auto-resolved with local-wins upload
-- executor-time local-delete hash mismatch also routes through that same
-  edit/delete recovery path
+- edit/delete is planner-expanded into a local-wins upload
+- executor-time local-delete hash mismatch now reports a stale precondition so
+  the next replan can emit that upload from current truth
 
 There is no durable conflict-request workflow and no CLI `resolve` command.
 
@@ -158,15 +164,18 @@ The engine classifies worker results into:
 - actionable failure
 - scope activation / preserve / release decisions
 
-Runtime scope state is an in-memory working set rebuilt from `scope_blocks` at
-startup. Current persisted scope families are:
+Runtime scope state is an in-memory working set rebuilt from persisted
+`scope_blocks` plus blocked `retry_state` rows at startup. Current persisted
+scope families in `scope_blocks` are:
 
 - `quota:own`
 - `throttle:target:drive:*`
 - `service`
 - `perm:dir:*`
-- `perm:remote:*`
 - `disk:local`
+
+Remote permission scopes are derived from blocked `retry_state` rows with
+`perm:remote:*` scope keys rather than persisted scope-block rows.
 
 Account-auth rejection is no longer a persisted sync scope. Durable
 account-auth state lives in the managed catalog, and sync consults that catalog

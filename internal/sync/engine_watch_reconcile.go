@@ -50,42 +50,42 @@ func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 	rt.mustAssertInvariants(ctx, rt, "handle external changes")
 }
 
-// clearResolvedPermissionScopes checks if any permission scope blocks have had
-// their sync_failures cleared externally and releases the corresponding scope
-// blocks.
+// clearResolvedPermissionScopes checks whether persisted permission scope
+// authorities still exist and releases any runtime scope whose backing
+// scope_blocks / blocked retry_state rows disappeared externally.
 func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 	scopeKeys := rt.scopeController().scopeBlockKeys(rt)
 	if len(scopeKeys) == 0 {
 		return
 	}
 
-	localIssues, err := rt.engine.baseline.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
+	blocks, err := rt.engine.baseline.ListScopeBlocks(ctx)
 	if err != nil {
-		rt.engine.logger.Warn("failed to check local permission failures",
+		rt.engine.logger.Warn("failed to check persisted scope blocks",
 			slog.String("error", err.Error()),
 		)
 
 		return
 	}
 
-	remoteIssues, err := rt.engine.baseline.ListRemoteBlockedFailures(ctx)
+	blockedRetries, err := rt.engine.baseline.ListBlockedRetryState(ctx)
 	if err != nil {
-		rt.engine.logger.Warn("failed to check remote permission failures",
+		rt.engine.logger.Warn("failed to check blocked retry_state rows",
 			slog.String("error", err.Error()),
 		)
 
 		return
 	}
 
-	activeScopes := make(map[ScopeKey]bool, len(localIssues)+len(remoteIssues))
-	for i := range localIssues {
-		if localIssues[i].ScopeKey.IsPermDir() {
-			activeScopes[localIssues[i].ScopeKey] = true
+	activeScopes := make(map[ScopeKey]bool, len(blocks)+len(blockedRetries))
+	for i := range blocks {
+		if blocks[i] != nil && blocks[i].Key.IsPermDir() {
+			activeScopes[blocks[i].Key] = true
 		}
 	}
-	for i := range remoteIssues {
-		if remoteIssues[i].ScopeKey.IsPermRemote() {
-			activeScopes[remoteIssues[i].ScopeKey] = true
+	for i := range blockedRetries {
+		if blockedRetries[i].ScopeKey.IsPermRemote() {
+			activeScopes[blockedRetries[i].ScopeKey] = true
 		}
 	}
 

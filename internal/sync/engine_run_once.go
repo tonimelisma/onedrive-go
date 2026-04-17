@@ -14,14 +14,13 @@ import (
 
 // RunOnce executes a single sync pass:
 //  1. Load baseline
-//  2. Observe remote
-//  3. Observe local
-//  4. Reconcile buffered changes plus durable remote drift
-//  5. Early return if no changes
-//  6. Plan actions (flat list + dependency edges)
-//  7. Return early if dry-run
-//  8. Build DepGraph, start worker pool
-//  9. Wait for completion, commit delta token
+//  2. Refresh remote truth
+//  3. Refresh local truth
+//  4. Read SQLite comparison and reconciliation from committed snapshots
+//  5. Build the current actionable set in Go
+//  6. Return early if dry-run
+//  7. Build DepGraph, start worker pool
+//  8. Wait for completion, commit delta token
 func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Report, error) {
 	start := e.nowFunc()
 	runner := newOneShotRunner(e)
@@ -59,13 +58,13 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	safety := e.resolveSafetyConfig()
 
 	planStart := e.nowFunc()
-	plan, err := runner.buildSQLiteActionPlan(ctx, bl, mode, safety)
+	plan, err := runner.buildCurrentActionPlan(ctx, bl, mode, safety)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
 	e.collector().RecordPlan(len(plan.Actions), e.since(planStart))
 
-	if materializeErr := runner.materializeSQLitePlan(ctx, plan, opts.DryRun); materializeErr != nil {
+	if materializeErr := runner.materializeCurrentActionPlan(ctx, plan, opts.DryRun); materializeErr != nil {
 		return nil, materializeErr
 	}
 
@@ -129,15 +128,7 @@ func (e *Engine) runOnceDryRun(
 	safety := e.resolveSafetyConfig()
 
 	planStart := e.nowFunc()
-	plan, err := e.planner.PlanCurrentState(
-		planResult.comparisons,
-		planResult.reconciliations,
-		planResult.localRows,
-		planResult.remoteRows,
-		bl,
-		mode,
-		safety,
-	)
+	plan, err := e.buildCurrentActionPlanFromInputs(planResult.currentActionPlanInputs, bl, mode, safety)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
@@ -150,11 +141,15 @@ func (e *Engine) runOnceDryRun(
 }
 
 type dryRunPlanInput struct {
+	currentActionPlanInputs
+	observedPaths int
+}
+
+type currentActionPlanInputs struct {
 	comparisons     []SQLiteComparisonRow
 	reconciliations []SQLiteReconciliationRow
 	localRows       []LocalStateRow
 	remoteRows      []RemoteStateRow
-	observedPaths   int
 }
 
 func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
@@ -521,43 +516,68 @@ func (flow *engineFlow) observeCurrentTruth(
 	return pendingCursorCommit, nil
 }
 
-func (flow *engineFlow) buildCurrentActionPlan(
-	ctx context.Context,
+func (e *Engine) buildCurrentActionPlanFromInputs(
+	inputs currentActionPlanInputs,
 	bl *Baseline,
 	mode Mode,
 	safety *SafetyConfig,
 ) (*ActionPlan, error) {
-	tx, err := beginPerfTx(ctx, flow.engine.baseline.db)
+	return e.planner.PlanCurrentState(
+		inputs.comparisons,
+		inputs.reconciliations,
+		inputs.localRows,
+		inputs.remoteRows,
+		bl,
+		mode,
+		safety,
+	)
+}
+
+func (flow *engineFlow) loadCurrentActionPlanInputs(
+	ctx context.Context,
+	store *SyncStore,
+	defaultDriveID driveid.ID,
+) (currentActionPlanInputs, error) {
+	tx, err := beginPerfTx(ctx, store.db)
 	if err != nil {
-		return nil, fmt.Errorf("sync: beginning sqlite planner read transaction: %w", err)
+		return currentActionPlanInputs{}, fmt.Errorf("sync: beginning current action planner read transaction: %w", err)
 	}
 	defer func() {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			flow.engine.logger.Debug("sqlite planner read transaction rollback failed",
+			flow.engine.logger.Debug("current action planner read transaction rollback failed",
 				slog.String("error", rollbackErr.Error()),
 			)
 		}
 	}()
 
+	return flow.loadCurrentActionPlanInputsTx(ctx, store, tx, defaultDriveID)
+}
+
+func (flow *engineFlow) loadCurrentActionPlanInputsTx(
+	ctx context.Context,
+	store *SyncStore,
+	tx sqlTxRunner,
+	defaultDriveID driveid.ID,
+) (currentActionPlanInputs, error) {
 	comparisons, err := queryComparisonStateWithRunner(ctx, tx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
+		return currentActionPlanInputs{}, fmt.Errorf("sync: querying comparison state: %w", err)
 	}
 	reconciliations, err := queryReconciliationStateWithRunner(ctx, tx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
+		return currentActionPlanInputs{}, fmt.Errorf("sync: querying reconciliation state: %w", err)
 	}
 	localRows, err := listLocalStateRows(ctx, tx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing local_state rows: %w", err)
+		return currentActionPlanInputs{}, fmt.Errorf("sync: listing local_state rows: %w", err)
 	}
-	observationState, err := flow.engine.baseline.readObservationStateTx(ctx, tx)
+	observationState, err := store.readObservationStateTx(ctx, tx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: reading observation state for remote_state: %w", err)
+		return currentActionPlanInputs{}, fmt.Errorf("sync: reading observation state for remote_state: %w", err)
 	}
 	configuredDriveID := observationState.ConfiguredDriveID
 	if configuredDriveID.IsZero() {
-		configuredDriveID = flow.engine.driveID
+		configuredDriveID = defaultDriveID
 	}
 	remoteRows, err := queryRemoteStateRowsWithRunner(
 		ctx,
@@ -568,18 +588,29 @@ func (flow *engineFlow) buildCurrentActionPlan(
 		configuredDriveID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing remote_state rows: %w", err)
+		return currentActionPlanInputs{}, fmt.Errorf("sync: listing remote_state rows: %w", err)
 	}
 
-	return flow.engine.planner.PlanCurrentState(
-		comparisons,
-		reconciliations,
-		localRows,
-		remoteRows,
-		bl,
-		mode,
-		safety,
-	)
+	return currentActionPlanInputs{
+		comparisons:     comparisons,
+		reconciliations: reconciliations,
+		localRows:       localRows,
+		remoteRows:      remoteRows,
+	}, nil
+}
+
+func (flow *engineFlow) buildCurrentActionPlan(
+	ctx context.Context,
+	bl *Baseline,
+	mode Mode,
+	safety *SafetyConfig,
+) (*ActionPlan, error) {
+	inputs, err := flow.loadCurrentActionPlanInputs(ctx, flow.engine.baseline, flow.engine.driveID)
+	if err != nil {
+		return nil, err
+	}
+
+	return flow.engine.buildCurrentActionPlanFromInputs(inputs, bl, mode, safety)
 }
 
 func (flow *engineFlow) buildDryRunCurrentActionPlan(
@@ -600,76 +631,37 @@ func (flow *engineFlow) buildDryRunCurrentActionPlan(
 		return nil, err
 	}
 
-	tx, err := beginPerfTx(ctx, flow.engine.baseline.db)
+	scratchStore, cleanup, err := flow.engine.baseline.createScratchPlanningStore(ctx, bl)
 	if err != nil {
-		return nil, fmt.Errorf("sync: beginning dry-run planning transaction: %w", err)
+		return nil, err
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback dry-run planning transaction")
+		if cleanupErr := cleanup(context.WithoutCancel(ctx)); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
 	}()
 
-	if commitErr := flow.engine.baseline.commitObservationTx(
-		ctx,
-		tx,
-		projectedRemote.observed,
-		"",
-		flow.engine.driveID,
-	); commitErr != nil {
-		err = commitErr
-		return nil, err
+	commitErr := scratchStore.CommitObservation(ctx, projectedRemote.observed, "", flow.engine.driveID)
+	if commitErr != nil {
+		return nil, fmt.Errorf("sync: committing dry-run remote snapshot to scratch store: %w", commitErr)
 	}
 
 	observedAt := flow.engine.nowFunc().UnixNano()
 	localRows := buildLocalStateRows(localResult, observedAt)
-	if replaceErr := replaceLocalStateTx(ctx, tx, localRows); replaceErr != nil {
-		err = replaceErr
+	replaceErr := scratchStore.ReplaceLocalState(ctx, localRows)
+	if replaceErr != nil {
+		return nil, fmt.Errorf("sync: replacing dry-run local snapshot in scratch store: %w", replaceErr)
+	}
+
+	inputs, err := flow.loadCurrentActionPlanInputs(ctx, scratchStore, flow.engine.driveID)
+	if err != nil {
 		return nil, err
 	}
 
-	comparisons, err := queryComparisonStateWithRunner(ctx, tx)
-	if err != nil {
-		return nil, fmt.Errorf("sync: querying dry-run comparison state: %w", err)
-	}
-	reconciliations, err := queryReconciliationStateWithRunner(ctx, tx)
-	if err != nil {
-		return nil, fmt.Errorf("sync: querying dry-run reconciliation state: %w", err)
-	}
-	remoteRows, err := queryRemoteStateRowsWithRunner(
-		ctx,
-		tx,
-		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path
-		FROM remote_state`,
-		flow.engine.driveID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("sync: listing dry-run remote_state rows: %w", err)
-	}
-	localRows, err = listLocalStateRows(ctx, tx)
-	if err != nil {
-		return nil, fmt.Errorf("sync: listing dry-run local_state rows: %w", err)
-	}
-
 	return &dryRunPlanInput{
-		comparisons:     comparisons,
-		reconciliations: reconciliations,
-		localRows:       localRows,
-		remoteRows:      remoteRows,
-		observedPaths:   len(localRows) + len(remoteRows),
+		currentActionPlanInputs: inputs,
+		observedPaths:           len(inputs.localRows) + len(inputs.remoteRows),
 	}, nil
-}
-
-func (r *oneShotRunner) materializeSQLitePlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
-	return r.materializeCurrentActionPlan(ctx, plan, dryRun)
-}
-
-func (r *oneShotRunner) buildSQLiteActionPlan(
-	ctx context.Context,
-	bl *Baseline,
-	mode Mode,
-	safety *SafetyConfig,
-) (*ActionPlan, error) {
-	return r.buildCurrentActionPlan(ctx, bl, mode, safety)
 }
 
 func retryWorkKeysForActions(actions []Action) []RetryWorkKey {
