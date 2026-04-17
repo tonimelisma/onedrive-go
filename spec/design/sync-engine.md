@@ -85,6 +85,10 @@ The one-shot pass now persists `local_state` from the full local scan, derives
 reconciliation rows from snapshots, and builds the current actionable set in
 Go before execution begins.
 
+After the actionable set is built, runtime action-state materialization only
+prunes `retry_state` and `scope_blocks` to match the current action set. It
+does not persist a durable executable plan table.
+
 Dry-run now uses that same snapshot and SQLite reconciliation path inside a
 rollback-bound transaction. It previews the exact current actionable set
 without advancing observation cursors, mutating `baseline`, or persisting the
