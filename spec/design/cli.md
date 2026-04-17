@@ -17,10 +17,15 @@ Implements: R-1 [implemented], R-2.3.3 [verified], R-2.8.3 [verified], R-2.9 [ve
 The CLI is a presentation and composition boundary, not a second sync policy
 engine.
 
+Durable account and drive inventory mutation is not CLI-owned. Commands may
+discover account/drive facts, delete token files, and invoke config entrypoints
+that edit `config.toml`, but `internal/config` owns how `catalog.json` records
+are inserted, updated, pruned, and validated.
+
 ## Ownership Contract
 
 - Owns: command grammar, output shaping, reason/action copy, control-socket client routing, and command-scoped runtime assembly
-- Does Not Own: Graph wire semantics, sync planning/execution policy, or SQLite schema rules
+- Does Not Own: Graph wire semantics, sync planning/execution policy, SQLite schema rules, or durable catalog lifecycle mutation rules
 - Source of Truth: parsed args/flags plus lower-layer domain results
 - Allowed Side Effects: stdout/stderr output, log-file setup, control-socket RPCs, and ordinary command-layer calls into lower packages
 - Mutable Runtime Owner: `CLIContext` owns command-scoped mutable state for one invocation, including logger replacement, status writer error state, and test seams. Long-lived daemon runtime state remains owned by `internal/multisync` and `internal/sync`.
