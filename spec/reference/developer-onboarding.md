@@ -119,13 +119,16 @@ For a sync run:
 `main.go` -> `internal/cli/sync*.go` -> `internal/multisync` ->
 `internal/sync`
 
-Inside `internal/sync`, the runtime follows the repo's event-driven pipeline:
+Inside `internal/sync`, the runtime currently has a hybrid sync pipeline:
 
-remote observer + local observer -> change buffer -> planner -> executor ->
-baseline/store updates
+- remote observer + local observer -> change buffer -> planner -> executor ->
+  baseline/store updates
+- local/remote snapshot persistence -> SQLite comparison/reconciliation ->
+  latest `planned_actions`, `retry_state`, and `scope_blocks`
 
-The key design choice is that the database is durable truth, but it is not the
-pipeline coordinator. Planning stays deterministic. Execution owns side effects.
+The key design choice is that planning stays deterministic and execution owns
+side effects, while SQLite owns current durable truth and the latest persisted
+plan/retry state.
 
 ### 3.3 Dev workflow path
 
