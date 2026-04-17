@@ -13,7 +13,6 @@ func TestScopeKey_StringParseRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	keys := []ScopeKey{
-		SKAuthAccount(),
 		SKThrottleAccount(),
 		SKThrottleDrive(driveid.New("0000000000000001")),
 		SKService(),

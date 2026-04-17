@@ -188,10 +188,10 @@ func addSharedDrive(
 
 	// Register catalog ownership so DriveTokenPath works for this shared drive
 	// in subsequent operations.
-	if saveErr := config.SaveDriveMetadata(cid, &config.DriveMetadata{
+	if saveErr := config.SaveDriveIdentity(cid, &config.DriveIdentity{
 		AccountCanonicalID: parentCID.String(),
 	}); saveErr != nil {
-		return fmt.Errorf("registering shared drive catalog metadata: %w", saveErr)
+		return fmt.Errorf("registering shared drive catalog entry: %w", saveErr)
 	}
 
 	displayName := preResolvedName

@@ -11,10 +11,14 @@ import (
 const (
 	StateReady                  = "ready"
 	StateAuthenticationRequired = "authentication_required"
+)
 
-	ReasonMissingLogin      = "missing_login"
-	ReasonInvalidSavedLogin = "invalid_saved_login"
-	ReasonSyncAuthRejected  = "sync_auth_rejected"
+type Reason string
+
+const (
+	ReasonMissingLogin      Reason = "missing_login"
+	ReasonInvalidSavedLogin Reason = "invalid_saved_login"
+	ReasonSyncAuthRejected  Reason = "sync_auth_rejected"
 )
 
 type Presentation struct {
@@ -25,7 +29,7 @@ type Presentation struct {
 
 type Health struct {
 	State  string
-	Reason string
+	Reason Reason
 	Action string
 }
 
@@ -33,7 +37,7 @@ func ReadyHealth() Health {
 	return Health{State: StateReady}
 }
 
-func RequiredHealth(reason string) Health {
+func RequiredHealth(reason Reason) Health {
 	presentation := PresentationForReason(reason)
 	if presentation.Title == "" {
 		return Health{}
@@ -46,7 +50,7 @@ func RequiredHealth(reason string) Health {
 	}
 }
 
-func PresentationForReason(reason string) Presentation {
+func PresentationForReason(reason Reason) Presentation {
 	switch reason {
 	case ReasonMissingLogin:
 		return Presentation{

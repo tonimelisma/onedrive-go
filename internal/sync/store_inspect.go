@@ -312,11 +312,6 @@ func (i *Inspector) readGroupedIssueProjectionModel(ctx context.Context) (groupe
 		return groupedIssueProjectionModel{}, fmt.Errorf("list remote blocked failures: %w", err)
 	}
 
-	scopeBlocks, err := i.listScopeBlocks(ctx)
-	if err != nil {
-		return groupedIssueProjectionModel{}, fmt.Errorf("list scope blocks: %w", err)
-	}
-
 	pendingRetries, err := i.pendingRetrySummary(ctx)
 	if err != nil {
 		return groupedIssueProjectionModel{}, fmt.Errorf("pending retry summary: %w", err)
@@ -325,7 +320,6 @@ func (i *Inspector) readGroupedIssueProjectionModel(ctx context.Context) (groupe
 	return buildGroupedIssueProjection(
 		actionableFailures,
 		remoteBlocked,
-		scopeBlocks,
 		pendingRetries,
 	), nil
 }
@@ -333,13 +327,11 @@ func (i *Inspector) readGroupedIssueProjectionModel(ctx context.Context) (groupe
 func buildGroupedIssueProjection(
 	actionableFailures []SyncFailureRow,
 	remoteBlocked []SyncFailureRow,
-	scopeBlocks []*ScopeBlock,
 	pendingRetries []PendingRetryGroup,
 ) groupedIssueProjectionModel {
 	builder := newGroupedIssueProjectionBuilder(len(pendingRetries))
 	builder.addActionableFailures(actionableFailures)
 	builder.addRemoteBlocked(remoteBlocked)
-	builder.addAuthScopeBlocks(scopeBlocks)
 	builder.addPendingRetries(pendingRetries)
 	return builder.projection()
 }
@@ -403,32 +395,6 @@ func (b *groupedIssueProjectionBuilder) addGroupedPath(
 	})
 }
 
-func (b *groupedIssueProjectionBuilder) addScopeOnlyGroup(
-	summaryKey SummaryKey,
-	issueType string,
-	scopeKey ScopeKey,
-) bool {
-	if summaryKey == "" {
-		return false
-	}
-
-	key := issueGroupKey{summaryKey: summaryKey, scopeKey: scopeKey.String()}
-	if _, ok := b.groupIndex[key]; ok {
-		return false
-	}
-
-	b.groupIndex[key] = len(b.snapshot.Groups)
-	b.snapshot.Groups = append(b.snapshot.Groups, IssueGroupSnapshot{
-		SummaryKey:       summaryKey,
-		PrimaryIssueType: issueType,
-		ScopeKey:         scopeKey,
-		ScopeLabel:       scopeKey.Humanize(),
-		Paths:            []string{},
-		Count:            1,
-	})
-	return true
-}
-
 func (b *groupedIssueProjectionBuilder) addActionableFailures(rows []SyncFailureRow) {
 	for i := range rows {
 		row := rows[i]
@@ -444,20 +410,6 @@ func (b *groupedIssueProjectionBuilder) addRemoteBlocked(rows []SyncFailureRow) 
 		summaryKey := SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
 		b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path)
 		b.addSummary(summaryKey, row.ScopeKey, row.Role)
-	}
-}
-
-func (b *groupedIssueProjectionBuilder) addAuthScopeBlocks(blocks []*ScopeBlock) {
-	for i := range blocks {
-		block := blocks[i]
-		if block.Key != SKAuthAccount() {
-			continue
-		}
-
-		summaryKey := SummaryKeyForScopeBlock(block.IssueType, block.Key)
-		if b.addScopeOnlyGroup(summaryKey, block.IssueType, block.Key) {
-			b.addSummary(summaryKey, block.Key, FailureRoleBoundary)
-		}
 	}
 }
 
@@ -492,7 +444,7 @@ func statusIssueScope(
 ) (string, string) {
 	if !scopeKey.IsZero() {
 		switch scopeKey.Kind {
-		case ScopeAuthAccount, ScopeThrottleAccount:
+		case ScopeThrottleAccount:
 			return statusScopeAccount, scopeKey.Humanize()
 		case ScopeThrottleTarget:
 			return statusScopeDrive, scopeKey.Humanize()

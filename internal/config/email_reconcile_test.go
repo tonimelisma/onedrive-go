@@ -63,12 +63,12 @@ func seedEmailReconcileFixture(t *testing.T) emailReconcileFixture {
 	writeManagedFixture(t, DriveStatePath(fixture.oldShared), []byte("shared-state"))
 	writeManagedFixture(t, DriveStatePath(fixture.personal), []byte("personal-state"))
 
-	require.NoError(t, SaveDriveMetadata(fixture.oldBusiness, &DriveMetadata{DriveID: "drive-business"}))
-	require.NoError(t, SaveDriveMetadata(fixture.oldSharePoint, &DriveMetadata{
+	require.NoError(t, SaveDriveIdentity(fixture.oldBusiness, &DriveIdentity{DriveID: "drive-business"}))
+	require.NoError(t, SaveDriveIdentity(fixture.oldSharePoint, &DriveIdentity{
 		DriveID: "drive-sharepoint",
 		SiteID:  "site-123",
 	}))
-	require.NoError(t, SaveDriveMetadata(fixture.oldShared, &DriveMetadata{
+	require.NoError(t, SaveDriveIdentity(fixture.oldShared, &DriveIdentity{
 		AccountCanonicalID: fixture.oldBusiness.String(),
 		OwnerName:          "Alice",
 		OwnerEmail:         "alice@example.com",
@@ -124,10 +124,10 @@ func assertEmailReconcileFixtureRenamed(
 	assert.FileExists(t, DriveStatePath(fixture.personal))
 	assert.FileExists(t, DriveTokenPath(fixture.personal))
 
-	sharedMeta, found, err := LookupDriveMetadata(fixture.newShared)
+	sharedIdentity, found, err := LookupDriveIdentity(fixture.newShared)
 	require.NoError(t, err)
 	require.True(t, found)
-	assert.Equal(t, fixture.newBusiness.String(), sharedMeta.AccountCanonicalID)
+	assert.Equal(t, fixture.newBusiness.String(), sharedIdentity.AccountCanonicalID)
 
 	cfg, err := Load(fixture.configPath, logger)
 	require.NoError(t, err)

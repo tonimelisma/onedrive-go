@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
 )
 
 // computeSummary aggregates health information across all status accounts.
@@ -102,7 +104,7 @@ func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool, his
 		return err
 	}
 	if acct.AuthReason != "" {
-		if err := writef(w, "  Reason: %s\n", authReasonText(acct.AuthReason)); err != nil {
+		if err := writef(w, "  Reason: %s\n", authReasonText(authstate.Reason(acct.AuthReason))); err != nil {
 			return err
 		}
 	}

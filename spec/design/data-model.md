@@ -99,8 +99,7 @@ Current persisted scope keys are:
 - `perm:remote:<localPath>`
 - `disk:local`
 
-Legacy `throttle:account` and `auth:account` rows remain parseable for startup
-cleanup only.
+Legacy `throttle:account` rows remain parseable for startup cleanup only.
 
 ## `observation_state`
 

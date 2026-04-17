@@ -46,6 +46,7 @@ func TestAccountCatalogSnapshot_LoadWithBestEffortIdentityRefresh_ProbesEachToke
 		UserID:      "user-old",
 		DisplayName: "Old User",
 	}))
+	require.NoError(t, config.SaveDriveIdentity(oldCID, &config.DriveIdentity{DriveID: "drive-old"}))
 	require.NoError(t, config.SaveAccountProfile(businessCID, &config.AccountProfile{
 		UserID:      "user-business",
 		DisplayName: "Alice Smith",
@@ -150,4 +151,87 @@ func TestAccountCatalogSnapshot_LoadWithBestEffortIdentityRefresh_ProbeFailureKe
 	assert.Equal(t, "Offline User", entry.DisplayName)
 	assert.Equal(t, cid, entry.RepresentativeTokenID)
 	assert.GreaterOrEqual(t, meCalls.Load(), int32(1))
+}
+
+// Validates: R-3.1.5
+func TestAccountCatalogSnapshot_Load_RejectsConfiguredDriveMissingCatalogEntry(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
+		UserID:      "user-123",
+		DisplayName: "Test User",
+	}))
+
+	_, err := loadAccountCatalogSnapshot(t.Context(), &CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      cfgPath,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "configured drive")
+	assert.Contains(t, err.Error(), "has no catalog entry")
+}
+
+// Validates: R-3.1.5
+func TestAccountCatalogSnapshot_Load_RejectsDriveOwnerMissingCatalogAccount(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("shared:user@example.com:drv123:item456")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/Shared"))
+	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{
+		AccountCanonicalID: "business:owner@example.com",
+	}))
+
+	_, err := loadAccountCatalogSnapshot(t.Context(), &CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      cfgPath,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "owner")
+	assert.Contains(t, err.Error(), "missing from the catalog")
+}
+
+// Validates: R-3.1.5
+func TestAccountCatalogSnapshot_Load_RejectsPrimaryDriveOwnedByDifferentAccount(t *testing.T) {
+	setTestDriveHome(t)
+
+	accountCID := driveid.MustCanonicalID("personal:user@example.com")
+	otherCID := driveid.MustCanonicalID("personal:other@example.com")
+	require.NoError(t, config.SaveAccountProfile(accountCID, &config.AccountProfile{
+		UserID:         "user-123",
+		DisplayName:    "User",
+		PrimaryDriveID: "drive-user",
+	}))
+	require.NoError(t, config.SaveAccountProfile(otherCID, &config.AccountProfile{
+		UserID:      "user-other",
+		DisplayName: "Other",
+	}))
+	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+		account, found := catalog.AccountByCanonicalID(accountCID)
+		require.True(t, found)
+		account.PrimaryDriveCanonical = accountCID.String()
+		catalog.UpsertAccount(&account)
+		return nil
+	}))
+	require.NoError(t, config.SaveDriveIdentity(accountCID, &config.DriveIdentity{
+		AccountCanonicalID: otherCID.String(),
+		DriveID:            "drive-user",
+	}))
+
+	_, err := loadAccountCatalogSnapshot(t.Context(), &CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      filepath.Join(t.TempDir(), "missing-config.toml"),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "primary drive")
+	assert.Contains(t, err.Error(), "owned by")
 }

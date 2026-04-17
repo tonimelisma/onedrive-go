@@ -13,12 +13,12 @@ import (
 
 func TestDiscoverCIDFiles_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
-	ids := discoverCIDFiles(dir, "token_", slog.Default())
+	ids := discoverCIDFiles(dir, slog.Default())
 	assert.Nil(t, ids)
 }
 
 func TestDiscoverCIDFiles_EmptyDirString(t *testing.T) {
-	ids := discoverCIDFiles("", "token_", slog.Default())
+	ids := discoverCIDFiles("", slog.Default())
 	assert.Nil(t, ids)
 }
 
@@ -29,7 +29,7 @@ func TestDiscoverCIDFiles_SortedOutput(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "token_personal_z@example.com.json"), []byte(`{}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "token_personal_a@example.com.json"), []byte(`{}`), 0o600))
 
-	ids := discoverCIDFiles(dir, "token_", slog.Default())
+	ids := discoverCIDFiles(dir, slog.Default())
 	require.Len(t, ids, 2)
 	assert.Equal(t, "personal:a@example.com", ids[0].String())
 	assert.Equal(t, "personal:z@example.com", ids[1].String())
@@ -43,7 +43,7 @@ func TestDiscoverFilesForEmail_EmptyInputs(t *testing.T) {
 }
 
 func TestDiscoverCIDFiles_ReadDirError(t *testing.T) {
-	ids := discoverCIDFilesWithIO("/missing", "token_", slog.Default(), configIO{
+	ids := discoverCIDFilesWithIO("/missing", slog.Default(), configIO{
 		readManagedDir: func(path string) ([]os.DirEntry, error) {
 			return nil, errors.New("boom")
 		},

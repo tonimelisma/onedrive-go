@@ -56,7 +56,7 @@ func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
 	}
 
 	switch scopeKey.Kind {
-	case syncengine.ScopeAuthAccount, syncengine.ScopeThrottleAccount:
+	case syncengine.ScopeThrottleAccount:
 		return statusScopeAccount
 	case syncengine.ScopeThrottleTarget:
 		return statusScopeDrive

@@ -13,7 +13,7 @@ func TestPresentationForReason(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		reason     string
+		reason     Reason
 		wantReason string
 		wantAction string
 	}{
@@ -58,7 +58,7 @@ func TestHealthHelpers(t *testing.T) {
 		Reason: ReasonInvalidSavedLogin,
 		Action: "Run 'onedrive-go login' to sign in.",
 	}, RequiredHealth(ReasonInvalidSavedLogin))
-	assert.Equal(t, Health{}, RequiredHealth("unknown"))
+	assert.Equal(t, Health{}, RequiredHealth(Reason("unknown")))
 	assert.Equal(t, PresentationForReason(ReasonSyncAuthRejected), UnauthorizedIssuePresentation())
 }
 

@@ -38,6 +38,7 @@ func TestBuildAccountCatalog_ConfiguredAccountWithUsableSavedLoginIsReady(t *tes
 	require.NoError(t, config.SaveAccountProfile(cid, &config.AccountProfile{
 		DisplayName: "Ready User",
 	}))
+	require.NoError(t, config.SaveDriveIdentity(cid, &config.DriveIdentity{DriveID: "drive-ready"}))
 
 	catalog := buildAccountCatalog(t.Context(), cfg, testDriveLogger(t))
 	entry := accountCatalogEntryByEmail(t, catalog, "ready@example.com")
@@ -46,7 +47,7 @@ func TestBuildAccountCatalog_ConfiguredAccountWithUsableSavedLoginIsReady(t *tes
 	assert.Equal(t, driveid.DriveTypePersonal, entry.DriveType)
 	assert.Equal(t, "Ready User", entry.DisplayName)
 	assert.Equal(t, savedLoginStateUsable, entry.SavedLoginState)
-	assert.False(t, entry.HasPersistedAuthScope)
+	assert.Empty(t, entry.AuthRequirementReason)
 	assert.Equal(t, authstate.StateReady, entry.AuthHealth.State)
 }
 
@@ -72,7 +73,7 @@ func TestBuildAccountCatalog_OrphanedProfileWithoutTokenRequiresAuthentication(t
 }
 
 // Validates: R-3.3.2, R-3.3.9
-func TestBuildAccountCatalog_TokenWithoutConfigIsIncluded(t *testing.T) {
+func TestBuildAccountCatalog_TokenBackedCatalogAccountIsIncluded(t *testing.T) {
 	setTestDriveHome(t)
 
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_discovered@contoso.com.json")
@@ -84,6 +85,17 @@ func TestBuildAccountCatalog_TokenWithoutConfigIsIncluded(t *testing.T) {
 	assert.Equal(t, driveid.DriveTypeBusiness, entry.DriveType)
 	assert.Equal(t, savedLoginStateUsable, entry.SavedLoginState)
 	assert.Equal(t, authstate.StateReady, entry.AuthHealth.State)
+}
+
+// Validates: R-3.1.5
+func TestBuildAccountCatalog_StateDBWithoutCatalogIsExcluded(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("personal:orphan@example.com")
+	require.NoError(t, touchStateDBForAccount(t, cid))
+
+	catalog := buildAccountCatalog(t.Context(), config.DefaultConfig(), testDriveLogger(t))
+	assert.Empty(t, catalog)
 }
 
 // Validates: R-2.10.45, R-2.10.47
@@ -104,12 +116,12 @@ func TestBuildAccountCatalog_PersistedAuthScopeWinsOnlyWhenSavedLoginIsOtherwise
 
 	usable := accountCatalogEntryByEmail(t, catalog, "usable@example.com")
 	assert.Equal(t, savedLoginStateUsable, usable.SavedLoginState)
-	assert.True(t, usable.HasPersistedAuthScope)
+	assert.Equal(t, authstate.ReasonSyncAuthRejected, usable.AuthRequirementReason)
 	assert.Equal(t, authstate.ReasonSyncAuthRejected, usable.AuthHealth.Reason)
 
 	missing := accountCatalogEntryByEmail(t, catalog, "missing@example.com")
 	assert.Equal(t, savedLoginStateMissing, missing.SavedLoginState)
-	assert.True(t, missing.HasPersistedAuthScope)
+	assert.Equal(t, authstate.ReasonSyncAuthRejected, missing.AuthRequirementReason)
 	assert.Equal(t, authstate.ReasonMissingLogin, missing.AuthHealth.Reason)
 }
 

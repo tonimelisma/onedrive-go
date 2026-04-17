@@ -89,7 +89,7 @@ func TestAccountLifecycle(t *testing.T) {
 			entry: accountCatalogEntry{
 				Email:                 "rejected@example.com",
 				SavedLoginState:       savedLoginStateUsable,
-				HasPersistedAuthScope: true,
+				AuthRequirementReason: authReasonSyncAuthRejected,
 			},
 			want: accountLifecycleView{
 				State:               accountLifecycleAuthRequiredSyncRejected,
@@ -830,5 +830,5 @@ func TestRunWhoamiWithContext_ClearsPersistedAuthScopeAfterSuccessfulAuthenticat
 	}
 
 	require.NoError(t, runWhoamiWithContext(t.Context(), cc))
-	assert.False(t, hasPersistedAuthScope(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
 }

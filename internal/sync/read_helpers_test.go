@@ -23,16 +23,16 @@ func TestHasScopeBlockAtPath(t *testing.T) {
 
 	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO scope_blocks
 		(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
-		VALUES ('auth:account', ?, 'none', 1, 0, 0, 0, 0)`, IssueUnauthorized)
+		VALUES (?, ?, 'none', 1, 0, 0, 0, 0)`, SKService().String(), IssueServiceOutage)
 	require.NoError(t, err)
-
-	hasAuthScope, err := HasScopeBlockAtPath(t.Context(), dbPath, SKAuthAccount(), newTestLogger(t))
-	require.NoError(t, err)
-	assert.True(t, hasAuthScope)
 
 	hasServiceScope, err := HasScopeBlockAtPath(t.Context(), dbPath, SKService(), newTestLogger(t))
 	require.NoError(t, err)
-	assert.False(t, hasServiceScope)
+	assert.True(t, hasServiceScope)
+
+	hasQuotaScope, err := HasScopeBlockAtPath(t.Context(), dbPath, SKQuotaOwn(), newTestLogger(t))
+	require.NoError(t, err)
+	assert.False(t, hasQuotaScope)
 }
 
 func TestFinalizeInspectorRead_PreservesSuccessfulReadOnCloseError(t *testing.T) {
