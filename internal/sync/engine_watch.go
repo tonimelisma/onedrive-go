@@ -382,6 +382,20 @@ func (rt *watchRuntime) startObservers(
 	localObs.SetFilterConfig(rt.engine.localFilter)
 	localObs.SetObservationRules(rt.engine.localRules)
 	localObs.SetSkippedChannel(skippedCh)
+	localObs.safetyScanInterval = localRefreshIntervalForMode(localRefreshModeWatchHealthy)
+	localObs.AfterSafetyScan = func() {
+		refreshCtx := context.WithoutCancel(ctx)
+		if err := rt.engine.baseline.MarkFullLocalRefresh(
+			refreshCtx,
+			rt.engine.driveID,
+			rt.engine.nowFunc(),
+			localRefreshModeWatchHealthy,
+		); err != nil {
+			rt.engine.logger.Warn("failed to mark healthy local refresh after safety scan",
+				slog.String("error", err.Error()),
+			)
+		}
+	}
 
 	if rt.engine.localWatcherFactory != nil {
 		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
@@ -399,12 +413,22 @@ func (rt *watchRuntime) startObservers(
 
 		watchErr := localObs.Watch(ctx, rt.engine.syncTree, events)
 		if errors.Is(watchErr, ErrWatchLimitExhausted) {
+			if err := rt.engine.baseline.MarkFullLocalRefresh(
+				context.WithoutCancel(ctx),
+				rt.engine.driveID,
+				rt.engine.nowFunc(),
+				localRefreshModeWatchDegraded,
+			); err != nil {
+				rt.engine.logger.Warn("failed to mark degraded local refresh before fallback",
+					slog.String("error", err.Error()),
+				)
+			}
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
 			rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
-				slog.Duration("scan_interval", localFullScanInterval),
+				slog.Duration("scan_interval", localRefreshIntervalForMode(localRefreshModeWatchDegraded)),
 			)
 
-			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, events, localFullScanInterval)
+			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, events, localRefreshIntervalForMode(localRefreshModeWatchDegraded))
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
 			errs <- nil // clean exit after context cancel
 
@@ -415,6 +439,16 @@ func (rt *watchRuntime) startObservers(
 	}()
 
 	rt.closeWatchEventsWhenObserversExit(&obsWg, events)
+	if err := rt.engine.baseline.MarkFullLocalRefresh(
+		context.WithoutCancel(ctx),
+		rt.engine.driveID,
+		rt.engine.nowFunc(),
+		localRefreshModeWatchHealthy,
+	); err != nil {
+		rt.engine.logger.Warn("failed to mark healthy local refresh at watcher startup",
+			slog.String("error", err.Error()),
+		)
+	}
 
 	return errs, count, skippedCh
 }
@@ -594,6 +628,16 @@ func (rt *watchRuntime) runPeriodicFullScan(
 			if len(result.Skipped) > 0 {
 				rt.engine.logger.Debug("periodic scan: skipped items",
 					slog.Int("count", len(result.Skipped)))
+			}
+			if err := rt.engine.baseline.MarkFullLocalRefresh(
+				context.WithoutCancel(ctx),
+				rt.engine.driveID,
+				rt.engine.nowFunc(),
+				localRefreshModeWatchDegraded,
+			); err != nil {
+				rt.engine.logger.Warn("failed to mark degraded local refresh after periodic scan",
+					slog.String("error", err.Error()),
+				)
 			}
 		case <-ctx.Done():
 			return

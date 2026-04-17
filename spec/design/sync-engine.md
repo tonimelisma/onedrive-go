@@ -16,10 +16,14 @@ The engine is the single-drive runtime owner. It coordinates:
 - scope lifecycle
 - watch-mode reconcile and maintenance work
 
-Watch mode uses two fixed internal cadences:
+Watch mode persists its full-refresh cadence in `observation_state`:
 
-- a restart-safe 24-hour full primary remote reconcile driven by `observation_state.last_full_remote_reconcile_at`
-- a fixed 5-minute recurring local full scan for watch safety and no-watcher fallback
+- primary remote full refresh every 24 hours while delta is healthy
+- primary remote full refresh every 1 hour when delta is degraded
+- local full refresh every 5 minutes while watcher-based observation is healthy
+- local full refresh every 1 hour when watcher-based observation has degraded or fallen back
+
+One-shot still performs a full local scan at startup for every run.
 
 The engine does **not** own multi-drive orchestration or control-socket
 lifecycle. Those belong to `internal/multisync`.
@@ -62,13 +66,17 @@ observation and execution metadata.
 `RunOnce()` keeps one-shot behavior intentionally simple:
 
 1. bootstrap durable state and startup checks
-2. observe once
-3. plan once
+2. refresh current remote and local snapshots once
+3. materialize the latest SQLite-backed plan once
 4. execute once
 5. commit outcomes and return a report
 
 There is no mid-pass mailbox for user intent. New external DB writes during a
 one-shot run are simply durable state for a later run.
+
+The one-shot pass now persists `local_state` from the full local scan and
+replaces `planned_actions` with the latest SQLite plan generation before
+execution begins.
 
 `sync --full` remains the explicit stronger-freshness path when incremental
 delta visibility is not sufficient.

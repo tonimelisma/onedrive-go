@@ -298,11 +298,16 @@ func (e *Engine) fullRemoteReconcileDelay(ctx context.Context) (time.Duration, e
 	if err != nil {
 		return 0, fmt.Errorf("sync: reading observation state for reconcile cadence: %w", err)
 	}
-	if state.LastFullRemoteReconcileAt == 0 {
-		return 0, nil
+	if state.NextFullRemoteRefreshAt == 0 {
+		if state.LastFullRemoteRefreshAt == 0 {
+			return 0, nil
+		}
+		state.NextFullRemoteRefreshAt = time.Unix(0, state.LastFullRemoteRefreshAt).
+			Add(remoteRefreshIntervalForMode(state.RemoteRefreshMode)).
+			UnixNano()
 	}
 
-	dueAt := time.Unix(0, state.LastFullRemoteReconcileAt).Add(fullRemoteReconcileInterval)
+	dueAt := time.Unix(0, state.NextFullRemoteRefreshAt)
 	delay := dueAt.Sub(e.nowFunc())
 	if delay < 0 {
 		return 0, nil
@@ -320,11 +325,11 @@ func (e *Engine) shouldRunFullRemoteReconcile(ctx context.Context, requested boo
 	if err != nil {
 		return false, fmt.Errorf("sync: reading observation state for full reconcile: %w", err)
 	}
-	if state.Cursor == "" || state.LastFullRemoteReconcileAt == 0 {
+	if state.Cursor == "" || state.NextFullRemoteRefreshAt == 0 {
 		return true, nil
 	}
 
-	dueAt := time.Unix(0, state.LastFullRemoteReconcileAt).Add(fullRemoteReconcileInterval)
+	dueAt := time.Unix(0, state.NextFullRemoteRefreshAt)
 	return !e.nowFunc().Before(dueAt), nil
 }
 
@@ -333,6 +338,11 @@ func (rt *watchRuntime) armFullReconcileTimer(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	state, err := rt.engine.baseline.ReadObservationState(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: reading observation state for reconcile timer: %w", err)
+	}
+	interval := remoteRefreshIntervalForMode(state.RemoteRefreshMode)
 
 	rt.resetReconcileTimer(rt.engine.afterFunc(delay, func() {
 		select {
@@ -343,7 +353,7 @@ func (rt *watchRuntime) armFullReconcileTimer(ctx context.Context) error {
 
 	rt.engine.logger.Info("full remote reconciliation armed",
 		slog.Duration("delay", delay),
-		slog.Duration("interval", fullRemoteReconcileInterval),
+		slog.Duration("interval", interval),
 	)
 
 	return nil

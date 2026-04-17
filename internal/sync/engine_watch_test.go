@@ -1031,7 +1031,8 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return watcher, nil
 	}
-	tickerCreated := installTickerCreatedSignal(eng, localFullScanInterval)
+	degradedInterval := localRefreshIntervalForMode(localRefreshModeWatchDegraded)
+	tickerCreated := installTickerCreatedSignal(eng, degradedInterval)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -1046,7 +1047,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 		return event.Type == engineDebugEventObserverFallbackStarted
 	}, "fallback started")
 	waitForSignal(t, tickerCreated, "fallback ticker was not created")
-	clock.Advance(localFullScanInterval)
+	clock.Advance(degradedInterval)
 	waitForSignal(t, sleepStarted, "fallback jitter sleep did not start")
 
 	cancel()

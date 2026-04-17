@@ -8,6 +8,8 @@ Implements: R-2.1.2 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [
 
 Observation turns local filesystem changes and Graph delta/enumeration results
 into normalized `ChangeEvent` values. It never writes the sync DB directly.
+The engine owns snapshot persistence and persisted full-refresh cadence in
+`observation_state`; observation only produces live facts and wake signals.
 
 The observation stack has four main pieces:
 
