@@ -181,6 +181,130 @@ func scanBaselineRow(rows *sql.Rows, configuredDriveID driveid.ID) (*BaselineEnt
 	return &e, nil
 }
 
+func publicationDriveIDForAction(action *Action, defaultDriveID driveid.ID) driveid.ID {
+	if action == nil {
+		return defaultDriveID
+	}
+	if !action.DriveID.IsZero() {
+		return action.DriveID
+	}
+	if action.View != nil {
+		if action.View.Remote != nil && !action.View.Remote.DriveID.IsZero() {
+			return action.View.Remote.DriveID
+		}
+		if action.View.Baseline != nil && !action.View.Baseline.DriveID.IsZero() {
+			return action.View.Baseline.DriveID
+		}
+	}
+
+	return defaultDriveID
+}
+
+func actionItemType(action *Action) ItemType {
+	if action == nil {
+		return ItemTypeFile
+	}
+	if action.View != nil {
+		if action.View.Remote != nil && action.View.Remote.ItemType != ItemTypeFile {
+			return action.View.Remote.ItemType
+		}
+		if action.View.Baseline != nil && action.View.Baseline.ItemType != ItemTypeFile {
+			return action.View.Baseline.ItemType
+		}
+		if action.View.Local != nil && action.View.Local.ItemType != ItemTypeFile {
+			return action.View.Local.ItemType
+		}
+	}
+
+	return ItemTypeFile
+}
+
+func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *BaselineEntry) {
+	if mutation == nil || baseline == nil {
+		return
+	}
+
+	if mutation.ItemID == "" {
+		mutation.ItemID = baseline.ItemID
+	}
+	if mutation.ParentID == "" {
+		mutation.ParentID = baseline.ParentID
+	}
+	if mutation.LocalHash == "" {
+		mutation.LocalHash = baseline.LocalHash
+	}
+	if !mutation.LocalSizeKnown {
+		mutation.LocalSize = baseline.LocalSize
+		mutation.LocalSizeKnown = baseline.LocalSizeKnown
+	}
+	if mutation.LocalMtime == 0 {
+		mutation.LocalMtime = baseline.LocalMtime
+	}
+	if mutation.RemoteHash == "" {
+		mutation.RemoteHash = baseline.RemoteHash
+	}
+	if !mutation.RemoteSizeKnown {
+		mutation.RemoteSize = baseline.RemoteSize
+		mutation.RemoteSizeKnown = baseline.RemoteSizeKnown
+	}
+	if mutation.RemoteMtime == 0 {
+		mutation.RemoteMtime = baseline.RemoteMtime
+	}
+	if mutation.ETag == "" {
+		mutation.ETag = baseline.ETag
+	}
+}
+
+func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*BaselineMutation, error) {
+	if action == nil {
+		return nil, fmt.Errorf("sync: building publication mutation: nil action")
+	}
+	if action.Type != ActionUpdateSynced && action.Type != ActionCleanup {
+		return nil, fmt.Errorf("sync: building publication mutation: %s is not publication-only", action.Type.String())
+	}
+
+	mutation := &BaselineMutation{
+		Action:   action.Type,
+		Success:  true,
+		Path:     action.Path,
+		OldPath:  action.OldPath,
+		DriveID:  publicationDriveIDForAction(action, defaultDriveID),
+		ItemID:   action.ItemID,
+		ItemType: actionItemType(action),
+	}
+
+	if action.View != nil {
+		if action.View.Remote != nil {
+			mutation.ItemID = action.View.Remote.ItemID
+			mutation.ParentID = action.View.Remote.ParentID
+			mutation.RemoteHash = action.View.Remote.Hash
+			mutation.RemoteSize = action.View.Remote.Size
+			mutation.RemoteSizeKnown = true
+			mutation.RemoteMtime = action.View.Remote.Mtime
+			mutation.ETag = action.View.Remote.ETag
+			mutation.ItemType = action.View.Remote.ItemType
+			if !action.View.Remote.DriveID.IsZero() {
+				mutation.DriveID = action.View.Remote.DriveID
+			}
+		}
+
+		if action.View.Local != nil {
+			mutation.LocalHash = action.View.Local.Hash
+			mutation.LocalSize = action.View.Local.Size
+			mutation.LocalSizeKnown = true
+			mutation.LocalMtime = action.View.Local.Mtime
+		}
+
+		fillMutationFromBaselineDefaults(mutation, action.View.Baseline)
+
+		if mutation.ItemType == ItemTypeFile && action.View.Baseline != nil && action.View.Baseline.ItemType != ItemTypeFile {
+			mutation.ItemType = action.View.Baseline.ItemType
+		}
+	}
+
+	return mutation, nil
+}
+
 // CommitMutation atomically applies a single mutation to the baseline in a
 // SQLite transaction. After the DB write, the in-memory baseline cache is
 // updated incrementally (Put or Delete).

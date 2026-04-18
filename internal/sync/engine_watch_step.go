@@ -11,8 +11,8 @@ const (
 	watchEventDispatchReady          watchEventKind = "dispatch_ready"
 	watchEventBatchReady             watchEventKind = "batch_ready"
 	watchEventBatchClosed            watchEventKind = "batch_closed"
-	watchEventWorkerResult           watchEventKind = "worker_result"
-	watchEventResultsClosed          watchEventKind = "results_closed"
+	watchEventActionCompletion       watchEventKind = "action_completion"
+	watchEventCompletionsClosed      watchEventKind = "completions_closed"
 	watchEventSkipped                watchEventKind = "skipped"
 	watchEventSkippedClosed          watchEventKind = "skipped_closed"
 	watchEventRecheckTick            watchEventKind = "recheck_tick"
@@ -29,7 +29,7 @@ const (
 type watchEvent struct {
 	kind            watchEventKind
 	batch           DirtyBatch
-	workerResult    *WorkerResult
+	completion      *ActionCompletion
 	skipped         []SkippedItem
 	reconcileResult reconcileResult
 	observerErr     error
@@ -56,12 +56,12 @@ func (rt *watchRuntime) waitWatchEvent(ctx context.Context, p *watchPipeline) wa
 		}
 
 		return watchEvent{kind: watchEventBatchReady, batch: batch}
-	case workerResult, ok := <-p.results:
+	case completion, ok := <-p.completions:
 		if !ok {
-			return watchEvent{kind: watchEventResultsClosed}
+			return watchEvent{kind: watchEventCompletionsClosed}
 		}
 
-		return watchEvent{kind: watchEventWorkerResult, workerResult: &workerResult}
+		return watchEvent{kind: watchEventActionCompletion, completion: &completion}
 	case skipped, ok := <-p.skippedCh:
 		if !ok {
 			return watchEvent{kind: watchEventSkippedClosed}
@@ -152,20 +152,20 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 		}, true, nil
 	case watchEventBatchClosed:
 		return watchTransition{done: true}, true, nil
-	case watchEventWorkerResult:
-		outcome := rt.processWorkerResult(ctx, rt, event.workerResult, p.bl)
+	case watchEventActionCompletion:
+		outcome := rt.processActionCompletion(ctx, rt, event.completion, p.bl)
 		if outcome.terminate {
 			return watchTransition{}, true, outcome.terminateErr
 		}
 
 		return watchTransition{appendOutbox: outcome.dispatched}, true, nil
-	case watchEventResultsClosed:
+	case watchEventCompletionsClosed:
 		if contextIsCanceled(ctx) {
-			p.results = nil
+			p.completions = nil
 			return watchTransition{beginDrain: true}, true, nil
 		}
 
-		return watchTransition{}, true, fmt.Errorf("sync: worker results channel closed unexpectedly")
+		return watchTransition{}, true, fmt.Errorf("sync: action completions channel closed unexpectedly")
 	case watchEventSkipped,
 		watchEventSkippedClosed,
 		watchEventRecheckTick,
@@ -207,8 +207,8 @@ func (rt *watchRuntime) transitionWatchObservationEvent(
 	case watchEventDispatchReady,
 		watchEventBatchReady,
 		watchEventBatchClosed,
-		watchEventWorkerResult,
-		watchEventResultsClosed,
+		watchEventActionCompletion,
+		watchEventCompletionsClosed,
 		watchEventRecheckTick,
 		watchEventObserverError,
 		watchEventObserverErrorsClosed,
@@ -260,8 +260,8 @@ func (rt *watchRuntime) transitionWatchMaintenanceEvent(
 	case watchEventDispatchReady,
 		watchEventBatchReady,
 		watchEventBatchClosed,
-		watchEventWorkerResult,
-		watchEventResultsClosed,
+		watchEventActionCompletion,
+		watchEventCompletionsClosed,
 		watchEventSkipped,
 		watchEventSkippedClosed,
 		watchEventReconcileTick,

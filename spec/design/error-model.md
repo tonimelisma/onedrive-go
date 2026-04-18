@@ -54,7 +54,7 @@ Each boundary owns exactly one translation step:
 
 - `graph`: normalize wire/auth/API failures into `GraphError` plus sentinels such as `ErrGone`, `ErrUnauthorized`, `ErrNotFound`, and `ErrThrottled`.
 - `config`: normalize parse, validation, and discovery outcomes into fatal load errors or lenient warnings.
-- `sync`: normalize `WorkerResult`, observer sentinels, and permission checks into `ResultDecision`, scope actions, retry scheduling, and success cleanup.
+- `sync`: normalize `ActionCompletion`, observer sentinels, and permission checks into `ResultDecision`, scope actions, retry scheduling, and success cleanup.
 - `sync`: persist the engine's classification using `category`, `failure_role`, `scope_key`, and `next_retry_at`; it never reclassifies raw transport failures.
 - `cli`: map fatal/actionable/transient outcomes into command exit errors and user-facing reason/action text.
 
@@ -71,7 +71,7 @@ entry points:
   tables for rendering `SummaryKey` values on status surfaces.
 - `internal/config/failure_class.go`: classify config load results into
   `success`, `actionable`, or `fatal`.
-- `internal/sync/engine_result_classify.go`: classify each `WorkerResult` into
+- `internal/sync/engine_result_classify.go`: classify each `ActionCompletion` into
   a full `ResultDecision` carrying class, shared summary key, persistence
   mode, trial hint, and scope evidence.
 - `internal/cli/failure_class.go`: classify command-returned errors into exit
@@ -107,8 +107,8 @@ automatic permission rechecks decide when that derived scope clears.
 | Boundary | Evidence |
 |----------|----------|
 | Shared failure classes | `internal/errclass/errclass_test.go`, `internal/config/failure_class_test.go`, `internal/cli/failure_class_test.go` |
-| Shared summary key mapping plus CLI-owned status descriptors | `internal/sync/summary_keys_test.go` (`TestSummaryKeyForPersistedFailure_RepresentativeMappings`, `TestSummaryKeyForScopeBlock_RepresentativeMappings`, `TestSummaryKeyForIssueType_RepresentativeMappings`), `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`, `TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_RemoteRetriesAndSkips`, `TestClassifyResult_StorageScopes`, `TestClassifyResult_LocalErrors`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesIssueGroupScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues`, `TestPrintSyncStateText_WithIssueGroups`), `internal/cli/status_golden_test.go` |
-| Structured sync log schema from classified results | `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage`, `TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied`) |
+| Shared summary key mapping plus CLI-owned status descriptors | `internal/sync/summary_keys_test.go` (`TestSummaryKeyForPersistedFailure_RepresentativeMappings`, `TestSummaryKeyForScopeBlock_RepresentativeMappings`, `TestSummaryKeyForIssueType_RepresentativeMappings`), `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessActionCompletion_EndToEndSummaryKey_ServiceOutage`, `TestProcessActionCompletion_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessActionCompletion_EndToEndSummaryKey_LocalPermissionDenied`, `TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_RemoteRetriesAndSkips`, `TestClassifyResult_StorageScopes`, `TestClassifyResult_LocalErrors`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesIssueGroupScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues`, `TestPrintSyncStateText_WithIssueGroups`), `internal/cli/status_golden_test.go` |
+| Structured sync log schema from classified results | `internal/sync/engine_result_scope_test.go` (`TestRecordFailure_LogsSummaryKey`, `TestProcessActionCompletion_EndToEndSummaryKey_ServiceOutage`, `TestProcessActionCompletion_EndToEndSummaryKey_AuthenticationRequired`, `TestProcessActionCompletion_EndToEndSummaryKey_LocalPermissionDenied`) |
 | Sync result classification and persistence mapping | `internal/sync/engine_result_scope_test.go` (`TestClassifyResult_LifecycleAndAuth`, `TestClassifyResult_StorageScopes`, `TestDiskLocalScopeBlock_FullCycle`, `TestRetryPipeline_TransientFailure_IntegratedRetrier`) |
 | Trial routing from classified decisions | `internal/sync/engine_result_scope_test.go` (`TestProcessTrialResultV2_Success_ClearsScope`, `TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure`, `TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends`) |
 | CLI exit/presentation mapping | `internal/cli/failure_class_test.go`, `internal/cli/resolve_recover_test.go`, `internal/cli/status_test.go` |

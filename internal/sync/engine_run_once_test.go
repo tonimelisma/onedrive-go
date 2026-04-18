@@ -127,8 +127,7 @@ func TestRunOnce_SharePointRootFormsRecordsActionableFailure(t *testing.T) {
 	require.NoError(t, err, "RunOnce")
 	assert.Equal(t, 0, report.Uploads, "reserved SharePoint root names must not produce upload actions")
 
-	failures, err := eng.baseline.ListActionableFailures(t.Context())
-	require.NoError(t, err)
+	failures := actionableSyncFailuresForTest(t, eng.baseline, t.Context())
 	require.Len(t, failures, 1)
 	assert.Equal(t, "forms", failures[0].Path)
 	assert.Equal(t, IssueInvalidFilename, failures[0].IssueType)

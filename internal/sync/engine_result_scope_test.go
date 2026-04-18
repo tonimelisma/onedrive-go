@@ -106,8 +106,7 @@ func TestRecordSkippedItems_AggregatesWarningsAndKeepsPerItemDebugLogs(t *testin
 	assert.Contains(t, output, "bad-00.txt")
 	assert.Contains(t, output, "bad-10.txt")
 
-	rows, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueInvalidFilename)
-	require.NoError(t, err)
+	rows := syncFailuresByIssueTypeForTest(t, eng.baseline, ctx, IssueInvalidFilename)
 	assert.Len(t, rows, 11)
 }
 
@@ -141,8 +140,7 @@ func TestRecordSkippedItems_BelowThresholdLogsPerItemWarningsOnly(t *testing.T) 
 	assert.Equal(t, 0, strings.Count(output, "level=DEBUG msg=\"observation filter: skipped file\""))
 	assert.NotContains(t, output, "level=WARN msg=\"observation filter: skipped files\"")
 
-	rows, err := eng.baseline.ListSyncFailuresByIssueType(ctx, IssueInvalidFilename)
-	require.NoError(t, err)
+	rows := syncFailuresByIssueTypeForTest(t, eng.baseline, ctx, IssueInvalidFilename)
 	assert.Len(t, rows, 2)
 }
 
@@ -165,10 +163,10 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedSideEffects(t *testi
 		runner.depGraph.Add(&Action{Path: fmt.Sprintf("action-%d", id), Type: ActionUpload}, id, nil)
 	}
 
-	results := make(chan WorkerResult, 3)
-	results <- WorkerResult{Path: "a.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail1", HTTPStatus: 500, ActionID: 1}
-	results <- WorkerResult{Path: "b.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail2", HTTPStatus: 500, ActionID: 2}
-	results <- WorkerResult{Path: "c.txt", ActionType: ActionDownload, Success: true, ActionID: 3}
+	results := make(chan ActionCompletion, 3)
+	results <- ActionCompletion{Path: "a.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail1", HTTPStatus: 500, ActionID: 1}
+	results <- ActionCompletion{Path: "b.txt", ActionType: ActionUpload, Success: false, ErrMsg: "fail2", HTTPStatus: 500, ActionID: 2}
+	results <- ActionCompletion{Path: "c.txt", ActionType: ActionDownload, Success: true, ActionID: 3}
 	close(results)
 
 	err := runner.runResultsLoop(ctx, nil, nil, results)
@@ -205,14 +203,14 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 		Path: "auth.txt",
 	}, 3, nil)
 
-	results := make(chan WorkerResult, 2)
-	results <- WorkerResult{
+	results := make(chan ActionCompletion, 2)
+	results <- ActionCompletion{
 		ActionID:   1,
 		Path:       "root.txt",
 		ActionType: ActionUpload,
 		Success:    true,
 	}
-	results <- WorkerResult{
+	results <- ActionCompletion{
 		ActionID:   3,
 		Path:       "auth.txt",
 		ActionType: ActionDownload,
@@ -235,7 +233,7 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 
 func assertUnauthorizedWatchHandlerStopsLoop(
 	t *testing.T,
-	handler func(*watchRuntime, context.Context, *watchPipeline, *WorkerResult) ([]*TrackedAction, bool, error),
+	handler func(*watchRuntime, context.Context, *watchPipeline, *ActionCompletion) ([]*TrackedAction, bool, error),
 ) {
 	t.Helper()
 
@@ -252,7 +250,7 @@ func assertUnauthorizedWatchHandlerStopsLoop(
 		ItemID:  "item-1",
 	}, 21, nil)
 
-	_, done, gotErr := handler(rt, ctx, &watchPipeline{bl: bl}, &WorkerResult{
+	_, done, gotErr := handler(rt, ctx, &watchPipeline{bl: bl}, &ActionCompletion{
 		ActionID:   21,
 		Path:       "auth.txt",
 		DriveID:    eng.driveID,
@@ -267,16 +265,16 @@ func assertUnauthorizedWatchHandlerStopsLoop(
 }
 
 // Validates: R-2.10.5
-func TestHandleBootstrapWorkerResult_UnauthorizedStopsBootstrap(t *testing.T) {
+func TestHandleBootstrapCompletion_UnauthorizedStopsBootstrap(t *testing.T) {
 	t.Parallel()
 
 	assertUnauthorizedWatchHandlerStopsLoop(t, func(
 		rt *watchRuntime,
 		ctx context.Context,
 		p *watchPipeline,
-		workerResult *WorkerResult,
+		workerResult *ActionCompletion,
 	) ([]*TrackedAction, bool, error) {
-		return rt.handleBootstrapWorkerResult(ctx, p, nil, workerResult, true)
+		return rt.handleBootstrapCompletion(ctx, p, nil, workerResult, true)
 	})
 }
 
@@ -288,7 +286,7 @@ func TestRecordFailure_LogsSummaryKey(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
 
-	result := &WorkerResult{
+	result := &ActionCompletion{
 		ActionID:   123,
 		Path:       "service.txt",
 		ActionType: ActionUpload,
@@ -363,7 +361,7 @@ func findIssueGroupSummaryKey(snapshot *DriveStatusSnapshot, key SummaryKey) (Is
 }
 
 // Validates: R-6.8.16, R-6.6.11
-func TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage(t *testing.T) {
+func TestProcessActionCompletion_EndToEndSummaryKey_ServiceOutage(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
@@ -372,7 +370,7 @@ func TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 1)
 
-	processWorkerResultForTest(t, eng, ctx, &WorkerResult{
+	processActionCompletionForTest(t, eng, ctx, &ActionCompletion{
 		ActionID:   1,
 		Path:       "service.txt",
 		ActionType: ActionUpload,
@@ -403,7 +401,7 @@ func TestProcessWorkerResult_EndToEndSummaryKey_ServiceOutage(t *testing.T) {
 
 // Validates: R-6.8.16, R-6.6.11
 // Validates: R-6.8.16, R-6.6.11
-func TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired(t *testing.T) {
+func TestProcessActionCompletion_EndToEndSummaryKey_AuthenticationRequired(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
@@ -412,7 +410,7 @@ func TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired(t *testin
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 1)
 
-	outcome := processWorkerResultDetailedForTest(t, eng, ctx, &WorkerResult{
+	outcome := processActionCompletionDetailedForTest(t, eng, ctx, &ActionCompletion{
 		ActionID:   1,
 		Path:       "auth.txt",
 		ActionType: ActionDownload,
@@ -443,7 +441,7 @@ func TestProcessWorkerResult_EndToEndSummaryKey_AuthenticationRequired(t *testin
 }
 
 // Validates: R-6.8.16, R-6.6.11
-func TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied(t *testing.T) {
+func TestProcessActionCompletion_EndToEndSummaryKey_LocalPermissionDenied(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
@@ -452,7 +450,7 @@ func TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied(t *testing
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 1)
 
-	processWorkerResultForTest(t, eng, ctx, &WorkerResult{
+	processActionCompletionForTest(t, eng, ctx, &ActionCompletion{
 		ActionID:   1,
 		Path:       "file.txt",
 		ActionType: ActionUpload,
@@ -482,25 +480,25 @@ func TestProcessWorkerResult_EndToEndSummaryKey_LocalPermissionDenied(t *testing
 }
 
 // Validates: R-2.10.5
-func TestHandleWatchWorkerResult_UnauthorizedStopsWatchLoop(t *testing.T) {
+func TestHandleWatchCompletion_UnauthorizedStopsWatchLoop(t *testing.T) {
 	t.Parallel()
 
 	assertUnauthorizedWatchHandlerStopsLoop(t, func(
 		rt *watchRuntime,
 		ctx context.Context,
 		p *watchPipeline,
-		workerResult *WorkerResult,
+		workerResult *ActionCompletion,
 	) ([]*TrackedAction, bool, error) {
-		return rt.handleWatchWorkerResult(ctx, p, nil, workerResult, true)
+		return rt.handleWatchCompletion(ctx, p, nil, workerResult, true)
 	})
 }
 
 // ---------------------------------------------------------------------------
-// processWorkerResult — shared helper tests
+// processActionCompletion — shared helper tests
 // ---------------------------------------------------------------------------
 
 // setupEngineDepGraph creates a DepGraph on the engine and adds a dummy action
-// for the given actionID so that processWorkerResult can call Complete without
+// for the given actionID so that processActionCompletion can call Complete without
 // panicking on nil depGraph or unknown ID.
 func setupEngineDepGraph(t *testing.T, eng *testEngine, actionID int64) {
 	t.Helper()
@@ -513,7 +511,7 @@ func setupEngineDepGraph(t *testing.T, eng *testEngine, actionID int64) {
 	eng.flow = &flow
 }
 
-func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
+func TestProcessActionCompletion_UploadFailure_RecordsLocalIssue(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -521,7 +519,7 @@ func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 0)
 
-	processWorkerResultForTest(t, eng, ctx, &WorkerResult{
+	processActionCompletionForTest(t, eng, ctx, &ActionCompletion{
 		Path:       "docs/report.xlsx",
 		ActionType: ActionUpload,
 		Success:    false,
@@ -539,7 +537,7 @@ func TestProcessWorkerResult_UploadFailure_RecordsLocalIssue(t *testing.T) {
 	assert.Equal(t, 503, issues[0].HTTPStatus)
 }
 
-func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
+func TestProcessActionCompletion_Success_NoRecords(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -547,7 +545,7 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 0)
 
-	processWorkerResultForTest(t, eng, ctx, &WorkerResult{
+	processActionCompletionForTest(t, eng, ctx, &ActionCompletion{
 		Path:       "docs/report.xlsx",
 		ActionType: ActionDownload,
 		Success:    true,
@@ -564,7 +562,7 @@ func TestProcessWorkerResult_Success_NoRecords(t *testing.T) {
 }
 
 // Validates: R-2.10.5
-func TestProcessWorkerResult_UnauthorizedTerminatesRouting(t *testing.T) {
+func TestProcessActionCompletion_UnauthorizedTerminatesRouting(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -577,7 +575,7 @@ func TestProcessWorkerResult_UnauthorizedTerminatesRouting(t *testing.T) {
 		ItemID:  "item-1",
 	}, 17, nil)
 
-	outcome := processWorkerResultDetailedForTest(t, eng, ctx, &WorkerResult{
+	outcome := processActionCompletionDetailedForTest(t, eng, ctx, &ActionCompletion{
 		ActionID:   17,
 		Path:       "auth.txt",
 		ActionType: ActionDownload,
@@ -597,13 +595,13 @@ func TestProcessWorkerResult_UnauthorizedTerminatesRouting(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// classifyResult — pure classification of WorkerResult (R-6.8.15)
+// classifyResult — pure classification of ActionCompletion (R-6.8.15)
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.8.15, R-6.7.12
 type classifyResultCase struct {
 	name              string
-	result            WorkerResult
+	result            ActionCompletion
 	wantClass         errclass.Class
 	wantScope         ScopeKey
 	wantSummaryKey    SummaryKey
@@ -637,24 +635,24 @@ func TestClassifyResult_LifecycleAndAuth(t *testing.T) {
 	t.Parallel()
 
 	assertClassifyResultCases(t, []classifyResultCase{
-		{name: "success", result: WorkerResult{Success: true}, wantClass: resultSuccess, wantRecordSuccess: true},
-		{name: "context_canceled", result: WorkerResult{Err: context.Canceled}, wantClass: resultShutdown},
-		{name: "context_deadline_exceeded", result: WorkerResult{Err: context.DeadlineExceeded}, wantClass: resultShutdown},
+		{name: "success", result: ActionCompletion{Success: true}, wantClass: resultSuccess, wantRecordSuccess: true},
+		{name: "context_canceled", result: ActionCompletion{Err: context.Canceled}, wantClass: resultShutdown},
+		{name: "context_deadline_exceeded", result: ActionCompletion{Err: context.DeadlineExceeded}, wantClass: resultShutdown},
 		{
 			name:      "wrapped_context_canceled",
-			result:    WorkerResult{Err: fmt.Errorf("operation failed: %w", context.Canceled)},
+			result:    ActionCompletion{Err: fmt.Errorf("operation failed: %w", context.Canceled)},
 			wantClass: resultShutdown,
 		},
 		{
 			name:            "401_unauthorized",
-			result:          WorkerResult{HTTPStatus: http.StatusUnauthorized, Err: graph.ErrUnauthorized},
+			result:          ActionCompletion{HTTPStatus: http.StatusUnauthorized, Err: graph.ErrUnauthorized},
 			wantClass:       resultFatal,
 			wantSummaryKey:  SummaryAuthenticationRequired,
 			wantPersistence: persistActionableFailure,
 		},
 		{
 			name:            "403_forbidden",
-			result:          WorkerResult{HTTPStatus: http.StatusForbidden, Err: graph.ErrForbidden},
+			result:          ActionCompletion{HTTPStatus: http.StatusForbidden, Err: graph.ErrForbidden},
 			wantClass:       resultSkip,
 			wantSummaryKey:  SummaryRemotePermissionDenied,
 			wantPersistence: persistActionableFailure,
@@ -687,21 +685,21 @@ func TestClassifyResult_RemoteRetriesAndSkips(t *testing.T) {
 	}
 
 	assertClassifyResultCases(t, []classifyResultCase{
-		{name: "404_not_found", result: WorkerResult{HTTPStatus: http.StatusNotFound, Err: graph.ErrNotFound}, wantClass: resultRequeue, wantSummaryKey: SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "408_request_timeout", result: WorkerResult{HTTPStatus: http.StatusRequestTimeout, Err: errors.New("timeout")}, wantClass: resultRequeue, wantSummaryKey: SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "412_precondition_failed", result: WorkerResult{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")}, wantClass: resultRequeue, wantSummaryKey: SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "423_locked", result: WorkerResult{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked}, wantClass: resultRequeue, wantSummaryKey: SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "429_too_many_requests", result: WorkerResult{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: testThrottleScope(), wantSummaryKey: SummaryRateLimited, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "400_invalid_request_is_skip", result: WorkerResult{HTTPStatus: http.StatusBadRequest, Err: genericInvalidRequestErr}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
-		{name: "400_object_handle_message_only_is_skip", result: WorkerResult{HTTPStatus: http.StatusBadRequest, Err: legacyOutageErr}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
-		{name: "400_object_handle_wrong_code_is_skip", result: WorkerResult{HTTPStatus: http.StatusBadRequest, Err: wrongCodeOutageErr}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
-		{name: "500_internal_server_error", result: WorkerResult{HTTPStatus: http.StatusInternalServerError, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "502_bad_gateway", result: WorkerResult{HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "503_service_unavailable", result: WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "504_gateway_timeout", result: WorkerResult{HTTPStatus: http.StatusGatewayTimeout, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "509_storage_limit", result: WorkerResult{HTTPStatus: 509, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "409_conflict", result: WorkerResult{HTTPStatus: http.StatusConflict, Err: graph.ErrConflict}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
-		{name: "other_4xx_falls_to_skip", result: WorkerResult{HTTPStatus: http.StatusMethodNotAllowed, Err: graph.ErrMethodNotAllowed}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
+		{name: "404_not_found", result: ActionCompletion{HTTPStatus: http.StatusNotFound, Err: graph.ErrNotFound}, wantClass: resultRequeue, wantSummaryKey: SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "408_request_timeout", result: ActionCompletion{HTTPStatus: http.StatusRequestTimeout, Err: errors.New("timeout")}, wantClass: resultRequeue, wantSummaryKey: SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "412_precondition_failed", result: ActionCompletion{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")}, wantClass: resultRequeue, wantSummaryKey: SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "423_locked", result: ActionCompletion{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked}, wantClass: resultRequeue, wantSummaryKey: SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "429_too_many_requests", result: ActionCompletion{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: testThrottleScope(), wantSummaryKey: SummaryRateLimited, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "400_invalid_request_is_skip", result: ActionCompletion{HTTPStatus: http.StatusBadRequest, Err: genericInvalidRequestErr}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
+		{name: "400_object_handle_message_only_is_skip", result: ActionCompletion{HTTPStatus: http.StatusBadRequest, Err: legacyOutageErr}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
+		{name: "400_object_handle_wrong_code_is_skip", result: ActionCompletion{HTTPStatus: http.StatusBadRequest, Err: wrongCodeOutageErr}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
+		{name: "500_internal_server_error", result: ActionCompletion{HTTPStatus: http.StatusInternalServerError, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "502_bad_gateway", result: ActionCompletion{HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "503_service_unavailable", result: ActionCompletion{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "504_gateway_timeout", result: ActionCompletion{HTTPStatus: http.StatusGatewayTimeout, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "509_storage_limit", result: ActionCompletion{HTTPStatus: 509, Err: graph.ErrServerError}, wantClass: resultRequeue, wantSummaryKey: SummaryServiceOutage, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "409_conflict", result: ActionCompletion{HTTPStatus: http.StatusConflict, Err: graph.ErrConflict}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
+		{name: "other_4xx_falls_to_skip", result: ActionCompletion{HTTPStatus: http.StatusMethodNotAllowed, Err: graph.ErrMethodNotAllowed}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
 	})
 }
 
@@ -711,7 +709,7 @@ func TestClassifyResult_StorageScopes(t *testing.T) {
 	assertClassifyResultCases(t, []classifyResultCase{
 		{
 			name: "507_own_drive",
-			result: WorkerResult{
+			result: ActionCompletion{
 				HTTPStatus: http.StatusInsufficientStorage,
 				Err:        errors.New("insufficient storage"),
 			},
@@ -723,7 +721,7 @@ func TestClassifyResult_StorageScopes(t *testing.T) {
 		},
 		{
 			name: "507_shared_root_drive",
-			result: WorkerResult{
+			result: ActionCompletion{
 				HTTPStatus:    http.StatusInsufficientStorage,
 				Err:           errors.New("insufficient storage"),
 				TargetDriveID: driveid.New("drive1"),
@@ -741,10 +739,10 @@ func TestClassifyResult_LocalErrors(t *testing.T) {
 	t.Parallel()
 
 	assertClassifyResultCases(t, []classifyResultCase{
-		{name: "os_err_permission", result: WorkerResult{Err: os.ErrPermission}, wantClass: resultSkip, wantSummaryKey: SummaryLocalPermissionDenied, wantPersistence: persistActionableFailure, wantPermission: permissionFlowLocalPermission},
+		{name: "os_err_permission", result: ActionCompletion{Err: os.ErrPermission}, wantClass: resultSkip, wantSummaryKey: SummaryLocalPermissionDenied, wantPersistence: persistActionableFailure, wantPermission: permissionFlowLocalPermission},
 		{
 			name:            "wrapped_os_err_permission",
-			result:          WorkerResult{Err: fmt.Errorf("cannot write: %w", os.ErrPermission)},
+			result:          ActionCompletion{Err: fmt.Errorf("cannot write: %w", os.ErrPermission)},
 			wantClass:       resultSkip,
 			wantSummaryKey:  SummaryLocalPermissionDenied,
 			wantPersistence: persistActionableFailure,
@@ -752,7 +750,7 @@ func TestClassifyResult_LocalErrors(t *testing.T) {
 		},
 		{
 			name:            "disk_full",
-			result:          WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull)},
+			result:          ActionCompletion{Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull)},
 			wantClass:       resultScopeBlock,
 			wantScope:       SKDiskLocal(),
 			wantSummaryKey:  SummaryDiskFull,
@@ -760,21 +758,21 @@ func TestClassifyResult_LocalErrors(t *testing.T) {
 		},
 		{
 			name:            "file_too_large_for_space",
-			result:          WorkerResult{Err: fmt.Errorf("download failed: %w", driveops.ErrFileTooLargeForSpace)},
+			result:          ActionCompletion{Err: fmt.Errorf("download failed: %w", driveops.ErrFileTooLargeForSpace)},
 			wantClass:       resultSkip,
 			wantSummaryKey:  SummaryFileTooLargeForSpace,
 			wantPersistence: persistActionableFailure,
 		},
 		{
 			name:            "file_exceeds_onedrive_limit",
-			result:          WorkerResult{Err: fmt.Errorf("upload failed: %w", driveops.ErrFileExceedsOneDriveLimit)},
+			result:          ActionCompletion{Err: fmt.Errorf("upload failed: %w", driveops.ErrFileExceedsOneDriveLimit)},
 			wantClass:       resultSkip,
 			wantSummaryKey:  SummaryFileTooLarge,
 			wantPersistence: persistActionableFailure,
 		},
 		{
 			name:            "stale_delete_precondition",
-			result:          WorkerResult{Err: fmt.Errorf("delete lost race: %w", ErrActionPreconditionChanged)},
+			result:          ActionCompletion{Err: fmt.Errorf("delete lost race: %w", ErrActionPreconditionChanged)},
 			wantClass:       resultRequeue,
 			wantSummaryKey:  SummarySyncFailure,
 			wantPersistence: persistTransientFailure,
@@ -817,7 +815,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	testWatchRuntime(t, eng).depGraph.Add(&Action{Type: ActionUpload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 1, nil)
 
 	// Simulate successful trial result.
-	processTrialResultForTest(t, eng, ctx, &WorkerResult{
+	processTrialResultForTest(t, eng, ctx, &ActionCompletion{
 		ActionID:      1,
 		IsTrial:       true,
 		TrialScopeKey: testThrottleScope(),
@@ -829,8 +827,7 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 		"scope block should be removed after successful trial")
 
 	// Scope-blocked failures should now be retryable (next_retry_at set to ~now).
-	rows, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
-	require.NoError(t, err)
+	rows := readyRetryStateForTest(t, eng.baseline, ctx, now)
 	assert.Len(t, rows, 1, "scope-blocked failures should be unblocked after trial success")
 }
 
@@ -853,7 +850,7 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	// Add the trial action to the DepGraph.
 	testWatchRuntime(t, eng).depGraph.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
-	processTrialResultForTest(t, eng, ctx, &WorkerResult{
+	processTrialResultForTest(t, eng, ctx, &ActionCompletion{
 		ActionID:      99,
 		IsTrial:       true,
 		TrialScopeKey: SKService(),
@@ -905,7 +902,7 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 
 			testWatchRuntime(t, eng).depGraph.Add(&Action{Type: tt.actionType, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
-			processTrialResultForTest(t, eng, ctx, &WorkerResult{
+			processTrialResultForTest(t, eng, ctx, &ActionCompletion{
 				ActionID:      99,
 				IsTrial:       true,
 				TrialScopeKey: tt.scopeKey,
@@ -945,7 +942,7 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 
 	testWatchRuntime(t, eng).depGraph.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New("d"), ItemID: "i1"}, 99, nil)
 
-	processTrialResultForTest(t, eng, ctx, &WorkerResult{
+	processTrialResultForTest(t, eng, ctx, &ActionCompletion{
 		ActionID:      99,
 		IsTrial:       true,
 		TrialScopeKey: SKService(),
@@ -1008,7 +1005,7 @@ func TestProcessTrialResultV2_Preserve_RetryableHTTPStatusesKeepScopeTimingAndHe
 				ItemID:  "i1",
 			}, 99, nil)
 
-			processTrialResultForTest(t, eng, ctx, &WorkerResult{
+			processTrialResultForTest(t, eng, ctx, &ActionCompletion{
 				ActionID:      99,
 				IsTrial:       true,
 				TrialScopeKey: SKService(),
@@ -1060,7 +1057,7 @@ func TestProcessTrialResultV2_Fatal401DoesNotExtendScope(t *testing.T) {
 		ItemID:  "i1",
 	}, 77, nil)
 
-	outcome := processWorkerResultDetailedForTest(t, eng, ctx, &WorkerResult{
+	outcome := processActionCompletionDetailedForTest(t, eng, ctx, &ActionCompletion{
 		ActionID:      77,
 		IsTrial:       true,
 		TrialScopeKey: testThrottleScope(),
@@ -1122,7 +1119,7 @@ func TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure(t 
 		ItemID:  "i1",
 	}, 88, nil)
 
-	processTrialResultForTest(t, eng, ctx, &WorkerResult{
+	processTrialResultForTest(t, eng, ctx, &ActionCompletion{
 		ActionID:      88,
 		IsTrial:       true,
 		TrialScopeKey: SKService(),
@@ -1159,43 +1156,43 @@ func TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends(t *testing.T) {
 	tests := []struct {
 		name     string
 		scopeKey ScopeKey
-		result   WorkerResult
+		result   ActionCompletion
 		want     trialOutcome
 	}{
 		{
 			name:     "throttle_429_extends",
 			scopeKey: testThrottleScope(),
-			result:   WorkerResult{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled},
+			result:   ActionCompletion{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled},
 			want:     trialOutcomeExtend,
 		},
 		{
 			name:     "service_503_extends",
 			scopeKey: SKService(),
-			result:   WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError},
+			result:   ActionCompletion{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError},
 			want:     trialOutcomeExtend,
 		},
 		{
 			name:     "quota_own_507_extends",
 			scopeKey: SKQuotaOwn(),
-			result:   WorkerResult{HTTPStatus: http.StatusInsufficientStorage},
+			result:   ActionCompletion{HTTPStatus: http.StatusInsufficientStorage},
 			want:     trialOutcomeExtend,
 		},
 		{
 			name:     "disk_full_extends",
 			scopeKey: SKDiskLocal(),
-			result:   WorkerResult{Err: driveops.ErrDiskFull},
+			result:   ActionCompletion{Err: driveops.ErrDiskFull},
 			want:     trialOutcomeExtend,
 		},
 		{
 			name:     "throttle_does_not_extend_service_error",
 			scopeKey: testThrottleScope(),
-			result:   WorkerResult{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError},
+			result:   ActionCompletion{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError},
 			want:     trialOutcomePreserve,
 		},
 		{
 			name:     "service_does_not_extend_throttle_error",
 			scopeKey: SKService(),
-			result:   WorkerResult{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled},
+			result:   ActionCompletion{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled},
 			want:     trialOutcomePreserve,
 		},
 	}
@@ -1268,7 +1265,7 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 
 	// Retry-After of 30 minutes exceeds DefaultMaxTrialInterval (5m) — must be
 	// honored directly with no cap, because the server is ground truth.
-	processTrialResultForTest(t, eng, ctx, &WorkerResult{
+	processTrialResultForTest(t, eng, ctx, &ActionCompletion{
 		ActionID:      99,
 		IsTrial:       true,
 		TrialScopeKey: testThrottleScope(),
@@ -1296,7 +1293,7 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	now := eng.nowFunc()
 
 	// 1. classifyResult maps ErrDiskFull to disk:local scope block.
-	decision := classifyResult(&WorkerResult{
+	decision := classifyResult(&ActionCompletion{
 		Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull),
 	})
 	require.Equal(t, resultScopeBlock, decision.Class)
@@ -1352,7 +1349,7 @@ func TestDeriveScopeKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			r := &WorkerResult{
+			r := &ActionCompletion{
 				HTTPStatus: tt.httpStatus,
 				DriveID:    testThrottleDriveID(),
 			}
@@ -1404,7 +1401,7 @@ func TestRecordFailure_PopulatesScopeKey(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 1)
 
-	processWorkerResultForTest(t, eng, ctx, &WorkerResult{
+	processActionCompletionForTest(t, eng, ctx, &ActionCompletion{
 		Path:       "quota-fail.txt",
 		ActionType: ActionUpload,
 		Success:    false,
@@ -1428,7 +1425,7 @@ func TestRecordFailure_PopulatesScopeKey_429(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 1)
 
-	processWorkerResultForTest(t, eng, ctx, &WorkerResult{
+	processActionCompletionForTest(t, eng, ctx, &ActionCompletion{
 		Path:       "throttled.txt",
 		ActionType: ActionDownload,
 		Success:    false,
@@ -1453,7 +1450,7 @@ func TestRecordFailure_PopulatesScopeKey_507Quota(t *testing.T) {
 	ctx := t.Context()
 	setupEngineDepGraph(t, eng, 1)
 
-	processWorkerResultForTest(t, eng, ctx, &WorkerResult{
+	processActionCompletionForTest(t, eng, ctx, &ActionCompletion{
 		Path:       "shared/file.txt",
 		ActionType: ActionUpload,
 		Success:    false,
@@ -1475,7 +1472,7 @@ func TestRecordFailure_PopulatesScopeKey_507Quota(t *testing.T) {
 // startDrainLoop creates a real engine with DepGraph, watch-mode scope state,
 // dispatchCh, dirty scheduler, and retryTimerCh — the full one-shot engine-loop
 // pipeline used by these tests.
-func startDrainLoop(t *testing.T) (chan WorkerResult, <-chan struct{}, context.CancelFunc, *testEngine) {
+func startDrainLoop(t *testing.T) (chan ActionCompletion, <-chan struct{}, context.CancelFunc, *testEngine) {
 	t.Helper()
 
 	eng := newSingleOwnerEngine(t)
@@ -1483,7 +1480,7 @@ func startDrainLoop(t *testing.T) (chan WorkerResult, <-chan struct{}, context.C
 	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
 
-	results := make(chan WorkerResult, 16)
+	results := make(chan ActionCompletion, 16)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	bl, err := eng.baseline.Load(ctx)
@@ -1509,7 +1506,7 @@ func runResultDrainLoopForTest(
 	rt *watchRuntime,
 	bl *Baseline,
 	safety *SafetyConfig,
-	results <-chan WorkerResult,
+	results <-chan ActionCompletion,
 ) {
 	var outbox []*TrackedAction
 
@@ -1536,7 +1533,7 @@ func runResultDrainLoopIdleForTest(
 	rt *watchRuntime,
 	bl *Baseline,
 	safety *SafetyConfig,
-	results <-chan WorkerResult,
+	results <-chan ActionCompletion,
 ) ([]*TrackedAction, bool) {
 	select {
 	case workerResult, ok := <-results:
@@ -1558,7 +1555,7 @@ func runResultDrainLoopWithOutboxForTest(
 	rt *watchRuntime,
 	bl *Baseline,
 	safety *SafetyConfig,
-	results <-chan WorkerResult,
+	results <-chan ActionCompletion,
 	outbox []*TrackedAction,
 ) ([]*TrackedAction, bool) {
 	select {
@@ -1583,9 +1580,9 @@ func appendDrainOutcome(
 	ctx context.Context,
 	bl *Baseline,
 	outbox []*TrackedAction,
-	workerResult *WorkerResult,
+	workerResult *ActionCompletion,
 ) ([]*TrackedAction, bool) {
-	outcome := rt.processWorkerResult(ctx, rt, workerResult, bl)
+	outcome := rt.processActionCompletion(ctx, rt, workerResult, bl)
 	if outcome.terminate {
 		return outbox, true
 	}
@@ -1631,7 +1628,7 @@ func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 	readReady(t, testWatchRuntime(t, eng).dispatchCh)
 
 	// Send 429 result — scope detection creates block + records failure.
-	results <- WorkerResult{
+	results <- ActionCompletion{
 		ActionID:   0,
 		Path:       "a.txt",
 		ActionType: ActionUpload,
@@ -1669,17 +1666,17 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	batches := make(chan DirtyBatch, 2)
-	results := make(chan WorkerResult, 2)
+	results := make(chan ActionCompletion, 2)
 	done := make(chan error, 1)
 
 	go func() {
 		done <- rt.runWatchLoop(ctx, &watchPipeline{
-			runtime:    rt,
-			bl:         bl,
-			safety:     DefaultSafetyConfig(),
-			batchReady: batches,
-			results:    results,
-			mode:       SyncBidirectional,
+			runtime:     rt,
+			bl:          bl,
+			safety:      DefaultSafetyConfig(),
+			batchReady:  batches,
+			completions: results,
+			mode:        SyncBidirectional,
 		})
 	}()
 
@@ -1696,7 +1693,7 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 	first := readReadyAction(t, ready)
 	require.Equal(t, "alpha.txt", first.Action.Path)
 
-	results <- WorkerResult{
+	results <- ActionCompletion{
 		ActionID:   first.ID,
 		Path:       first.Action.Path,
 		DriveID:    driveID,
@@ -1732,7 +1729,7 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 			break
 		}
 
-		results <- WorkerResult{
+		results <- ActionCompletion{
 			ActionID:   candidate.ID,
 			Path:       candidate.Action.Path,
 			DriveID:    driveID,
@@ -1784,8 +1781,8 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 	ta := testWatchRuntime(t, eng).depGraph.Add(&Action{Type: ActionUpload, Path: "trial.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 1, nil)
 	require.NotNil(t, ta)
 
-	// Send trial success via results channel.
-	results <- WorkerResult{
+	// Send trial success via completions channel.
+	results <- ActionCompletion{
 		ActionID:      1,
 		Path:          "trial.txt",
 		ActionType:    ActionUpload,
@@ -1833,7 +1830,7 @@ func TestE2E_OneShotLoop_TrialResultFailure(t *testing.T) {
 	ta := testWatchRuntime(t, eng).depGraph.Add(&Action{Type: ActionDownload, Path: "trial.txt", DriveID: driveid.New(engineTestDriveID), ItemID: "i1"}, 99, nil)
 	require.NotNil(t, ta)
 
-	results <- WorkerResult{
+	results <- ActionCompletion{
 		ActionID:      99,
 		Path:          "trial.txt",
 		ActionType:    ActionDownload,
@@ -1873,12 +1870,12 @@ func TestE2E_OneShotLoopExit_StopsTimer(t *testing.T) {
 		return testWatchRuntime(t, eng).hasTrialTimer()
 	}, time.Second, time.Millisecond)
 
-	// Close results channel → the one-shot loop returns → defer stopTrialTimer.
+	// Close completions channel → the one-shot loop returns → defer stopTrialTimer.
 	close(results)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		require.Fail(t, "one-shot engine loop did not exit after results channel close")
+		require.Fail(t, "one-shot engine loop did not exit after completions channel close")
 	}
 
 	assert.False(t, testWatchRuntime(t, eng).hasTrialTimer(), "drain exit should stop and clear the trial timer")
@@ -1901,7 +1898,7 @@ func assertScopeWindowBlock(
 	ss := NewScopeState(clock, discardLogger())
 
 	for i := range threshold {
-		sr := ss.UpdateScope(&WorkerResult{
+		sr := ss.UpdateScope(&ActionCompletion{
 			Path:       fmt.Sprintf("/file-%d.txt", i),
 			HTTPStatus: httpStatus,
 		})
@@ -1929,7 +1926,7 @@ func assertImmediateRetryAfterBlock(
 	clock, _ := controllableClock()
 	ss := NewScopeState(clock, discardLogger())
 
-	sr := ss.UpdateScope(&WorkerResult{
+	sr := ss.UpdateScope(&ActionCompletion{
 		Path:          "/file.txt",
 		HTTPStatus:    httpStatus,
 		RetryAfter:    retryAfter,
@@ -2169,7 +2166,7 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 
 	// Feed several local errors (HTTPStatus=0) — should not trigger a scope block.
 	for i := range 10 {
-		feedScopeDetectionForTest(t, eng, t.Context(), &WorkerResult{
+		feedScopeDetectionForTest(t, eng, t.Context(), &ActionCompletion{
 			Path:       fmt.Sprintf("file-%d.txt", i),
 			ActionType: ActionDownload,
 			HTTPStatus: 0, // local error — no HTTP status
@@ -2351,7 +2348,7 @@ func TestLogFailureSummary_AggregatesByIssueTypeAboveThreshold(t *testing.T) {
 	flow := newEngineFlow(eng.Engine)
 
 	for i := range 11 {
-		result := &WorkerResult{
+		result := &ActionCompletion{
 			ActionID:   int64(i + 1),
 			Path:       fmt.Sprintf("bulk-%02d.txt", i),
 			ActionType: ActionUpload,
@@ -2389,7 +2386,7 @@ func TestLogFailureSummary_BelowThresholdWarnsPerItem(t *testing.T) {
 	flow := newEngineFlow(eng.Engine)
 
 	for i := range 2 {
-		result := &WorkerResult{
+		result := &ActionCompletion{
 			ActionID:   int64(i + 1),
 			Path:       fmt.Sprintf("small-%02d.txt", i),
 			ActionType: ActionDownload,
@@ -2471,7 +2468,7 @@ func TestRetryPipeline_TransientFailure_IntegratedRetrier(t *testing.T) {
 	eng.nowFn = func() time.Time { return futureTime }
 
 	// Send a 503 result — classifies as resultRequeue (transient).
-	results <- WorkerResult{
+	results <- ActionCompletion{
 		ActionID:   0,
 		Path:       testPath,
 		ActionType: ActionDownload,
@@ -2528,7 +2525,7 @@ func TestOneShotEngineLoop_Success_ClearsSyncFailure(t *testing.T) {
 	readReady(t, testWatchRuntime(t, eng).dispatchCh)
 
 	// Send a success result — defensive clear removes the row.
-	results <- WorkerResult{
+	results <- ActionCompletion{
 		ActionID: 0, Path: testPath, ActionType: ActionDownload,
 		DriveID: driveID, Success: true,
 	}
@@ -2571,7 +2568,7 @@ func TestClearFailureOnSuccess_RemovesFailureRow(t *testing.T) {
 
 	// clearFailureOnSuccess should remove it.
 	flow := newEngineFlow(eng.Engine)
-	flow.clearFailureOnSuccess(ctx, &WorkerResult{
+	flow.clearFailureOnSuccess(ctx, &ActionCompletion{
 		Path:       "clear-test/file.txt",
 		DriveID:    driveID,
 		ActionType: ActionDownload,
@@ -2586,7 +2583,7 @@ func TestClearFailureOnSuccess_RemovesFailureRow(t *testing.T) {
 
 // Validates: R-2.10.41
 func TestClearFailureOnSuccess_FallbackDriveID(t *testing.T) {
-	// When WorkerResult.DriveID is zero, clearFailureOnSuccess falls back
+	// When ActionCompletion.DriveID is zero, clearFailureOnSuccess falls back
 	// to the engine's own driveID. This covers own-drive actions where the
 	// worker doesn't set an explicit drive ID.
 	ctx := context.Background()
@@ -2609,7 +2606,7 @@ func TestClearFailureOnSuccess_FallbackDriveID(t *testing.T) {
 	// Call clearFailureOnSuccess with a zero DriveID — should fall back
 	// to eng.driveID and still clear the failure.
 	flow := newEngineFlow(eng.Engine)
-	flow.clearFailureOnSuccess(ctx, &WorkerResult{
+	flow.clearFailureOnSuccess(ctx, &ActionCompletion{
 		Path:       "fallback-test/file.txt",
 		DriveID:    driveid.ID{}, // zero value
 		ActionType: ActionUpload,
@@ -2653,7 +2650,7 @@ func TestClearFailureOnSuccess_LogsResolvedTransientFailure(t *testing.T) {
 	}, nil))
 
 	flow := newEngineFlow(eng.Engine)
-	flow.clearFailureOnSuccess(ctx, &WorkerResult{
+	flow.clearFailureOnSuccess(ctx, &ActionCompletion{
 		Path:       "resolved-worker/file.txt",
 		DriveID:    driveID,
 		ActionType: ActionUpload,
@@ -2704,19 +2701,17 @@ func TestIsFailureResolved_LogsRetryResolutionForTransientItemFailure(t *testing
 	flow := newEngineFlow(eng.Engine)
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	candidate := flow.buildRetryCandidate(ctx, bl, &SyncFailureRow{
+	candidate := flow.buildRetryCandidateFromRetryState(ctx, bl, &RetryStateRow{
 		Path:       "resolved-retry/file.txt",
-		DriveID:    driveID,
-		Direction:  DirectionUpload,
 		ActionType: ActionUpload,
-	})
+	}, driveID)
 	assert.True(t, candidate.resolved)
-	flow.clearFailureCandidate(ctx, &SyncFailureRow{
-		Path:       "resolved-retry/file.txt",
-		DriveID:    driveID,
-		Direction:  DirectionUpload,
-		ActionType: ActionUpload,
-	}, "TestProcessWorkerResult_ClearsResolvedFailure")
+	flow.clearRetryWorkCandidate(
+		ctx,
+		retryWorkKey("resolved-retry/file.txt", "", ActionUpload),
+		driveID,
+		"TestProcessActionCompletion_ClearsResolvedFailure",
+	)
 
 	output := logBuf.String()
 	assert.Contains(t, output, "level=INFO msg=\"transient failure resolved\"")
@@ -2749,7 +2744,7 @@ func TestClearFailureOnSuccess_DoesNotLogActionableResolution(t *testing.T) {
 	}, nil))
 
 	flow := newEngineFlow(eng.Engine)
-	flow.clearFailureOnSuccess(ctx, &WorkerResult{
+	flow.clearFailureOnSuccess(ctx, &ActionCompletion{
 		Path:       "actionable/file.txt",
 		DriveID:    driveID,
 		ActionType: ActionUpload,
@@ -2783,13 +2778,12 @@ func TestClearFailureCandidate_DoesNotLogHeldScopeResolution(t *testing.T) {
 	}, nil))
 
 	flow := newEngineFlow(eng.Engine)
-	flow.clearFailureCandidate(ctx, &SyncFailureRow{
-		Path:       "held/file.txt",
-		DriveID:    driveID,
-		Direction:  DirectionUpload,
-		ActionType: ActionUpload,
-		Role:       FailureRoleHeld,
-	}, "TestClearFailureCandidate_DoesNotLogHeldScopeResolution")
+	flow.clearRetryWorkCandidate(
+		ctx,
+		retryWorkKey("held/file.txt", "", ActionUpload),
+		driveID,
+		"TestClearFailureCandidate_DoesNotLogHeldScopeResolution",
+	)
 
 	assert.NotContains(t, logBuf.String(), "msg=\"transient failure resolved\"")
 }

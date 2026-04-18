@@ -212,7 +212,10 @@ func TestRetryStateScopeReadyAndDeleteHelpers(t *testing.T) {
 		LastSeenAt:   6,
 	}))
 
-	require.NoError(t, deleteRetryStateByPathTx(ctx, store.db, "delete-me.txt"))
+	require.NoError(t, deleteRetryStateByWorkTx(ctx, store.db, RetryWorkKey{
+		Path:       "delete-me.txt",
+		ActionType: ActionUpload,
+	}))
 	require.NoError(t, markRetryStateScopeReadyTx(ctx, store.db, SKService().String(), now))
 
 	rows, err := store.ListRetryState(ctx)
@@ -376,7 +379,7 @@ func TestRecordFailure_MirrorsMoveOldPathIntoRetryState(t *testing.T) {
 }
 
 // Validates: R-2.10.33
-func TestMarkSyncFailureActionableAndSetScopeRetryAtNow_UpdateRetryState(t *testing.T) {
+func TestUpsertActionableFailureAndSetScopeRetryAtNow_UpdateRetryState(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -395,7 +398,14 @@ func TestMarkSyncFailureActionableAndSetScopeRetryAtNow_UpdateRetryState(t *test
 		IssueType:  IssueServiceOutage,
 		ErrMsg:     "retry me",
 	}, func(int) time.Duration { return time.Minute }))
-	require.NoError(t, store.MarkSyncFailureActionable(ctx, "actionable.txt", driveID))
+	require.NoError(t, store.UpsertActionableFailures(ctx, []ActionableFailure{{
+		Path:       "actionable.txt",
+		DriveID:    driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		IssueType:  IssueInvalidFilename,
+		Error:      "needs rename",
+	}}))
 
 	rows, err := store.ListRetryState(ctx)
 	require.NoError(t, err)
@@ -455,4 +465,119 @@ func TestClearHeldRetryWork_RemovesScopedFailureAndRetryRow(t *testing.T) {
 	failures, err := store.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, failures)
+}
+
+// Validates: R-2.10.33
+func TestClearHeldRetryWork_PreservesOtherRetryStateOnSamePath(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, store.RecordFailure(ctx, &SyncFailureParams{
+		Path:       "blocked.txt",
+		DriveID:    driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		Role:       FailureRoleHeld,
+		Category:   CategoryTransient,
+		ScopeKey:   SKService(),
+		IssueType:  IssueServiceOutage,
+		ErrMsg:     "blocked upload",
+	}, nil))
+
+	other := retryStateIdentityForWork("blocked.txt", "old.txt", ActionRemoteMove)
+	other.ScopeKey = SKService()
+	other.Blocked = true
+	other.AttemptCount = 2
+	other.FirstSeenAt = time.Now().UnixNano()
+	other.LastSeenAt = other.FirstSeenAt
+	require.NoError(t, store.UpsertRetryState(ctx, &other))
+
+	require.NoError(t, store.ClearHeldRetryWork(ctx, RetryWorkKey{
+		Path:       "blocked.txt",
+		ActionType: ActionUpload,
+	}, SKService()))
+
+	rows, err := store.ListRetryState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "blocked.txt", rows[0].Path)
+	assert.Equal(t, ActionRemoteMove, rows[0].ActionType)
+	assert.Equal(t, "old.txt", rows[0].OldPath)
+}
+
+func TestResolveTransientRetryWork_ReturnsAndDeletesMatchingWork(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, store.RecordFailure(ctx, &SyncFailureParams{
+		Path:       "docs/report.txt",
+		DriveID:    driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		Category:   CategoryTransient,
+		IssueType:  IssueServiceOutage,
+		ErrMsg:     "server error",
+	}, func(int) time.Duration { return time.Minute }))
+
+	row, found, err := store.ResolveTransientRetryWork(ctx, RetryWorkKey{
+		Path:       "docs/report.txt",
+		ActionType: ActionUpload,
+	}, driveID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, row)
+	assert.Equal(t, "docs/report.txt", row.Path)
+	assert.Equal(t, ActionUpload, row.ActionType)
+
+	rows, err := store.ListRetryState(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+
+	failures, err := store.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures)
+}
+
+func TestResolveTransientRetryWork_PreservesUnrelatedRetryStateOnSamePath(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, store.RecordFailure(ctx, &SyncFailureParams{
+		Path:       "docs/report.txt",
+		DriveID:    driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		Category:   CategoryTransient,
+		IssueType:  IssueServiceOutage,
+		ErrMsg:     "server error",
+	}, func(int) time.Duration { return time.Minute }))
+
+	other := retryStateIdentityForWork("docs/report.txt", "old.txt", ActionRemoteMove)
+	other.AttemptCount = 2
+	other.NextRetryAt = time.Now().Add(time.Minute).UnixNano()
+	other.FirstSeenAt = time.Now().UnixNano()
+	other.LastSeenAt = other.FirstSeenAt
+	require.NoError(t, store.UpsertRetryState(ctx, &other))
+
+	_, found, err := store.ResolveTransientRetryWork(ctx, RetryWorkKey{
+		Path:       "docs/report.txt",
+		ActionType: ActionUpload,
+	}, driveID)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	rows, err := store.ListRetryState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, ActionRemoteMove, rows[0].ActionType)
+	assert.Equal(t, "old.txt", rows[0].OldPath)
 }

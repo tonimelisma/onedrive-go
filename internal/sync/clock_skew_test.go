@@ -43,7 +43,6 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 		HTTPStatus: 500,
 	}, nil))
 
-	issues, err := mgr.ListSyncFailuresByIssueType(ctx, "upload_failed")
-	require.NoError(t, err)
+	issues := syncFailuresByIssueTypeForTest(t, mgr, ctx, "upload_failed")
 	assert.Len(t, issues, 2, "both issues recorded despite clock jump")
 }

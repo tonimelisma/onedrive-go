@@ -11,7 +11,7 @@ func (r *oneShotRunner) runResultsLoop(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	results <-chan WorkerResult,
+	completions <-chan ActionCompletion,
 ) error {
 	var outbox []*TrackedAction
 	var fatalErr error
@@ -24,7 +24,7 @@ func (r *oneShotRunner) runResultsLoop(
 		}
 
 		if len(outbox) == 0 {
-			nextOutbox, nextFatal, done := r.runResultsLoopIdle(ctx, cancel, bl, results, fatalErr)
+			nextOutbox, nextFatal, done := r.runResultsLoopIdle(ctx, cancel, bl, completions, fatalErr)
 			outbox = nextOutbox
 			fatalErr = nextFatal
 			if done {
@@ -33,7 +33,7 @@ func (r *oneShotRunner) runResultsLoop(
 			continue
 		}
 
-		nextOutbox, nextFatal, done := r.runResultsLoopWithOutbox(ctx, cancel, bl, results, outbox, fatalErr)
+		nextOutbox, nextFatal, done := r.runResultsLoopWithOutbox(ctx, cancel, bl, completions, outbox, fatalErr)
 		outbox = nextOutbox
 		fatalErr = nextFatal
 		if done {
@@ -46,15 +46,15 @@ func (r *oneShotRunner) runResultsLoopIdle(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	results <-chan WorkerResult,
+	completions <-chan ActionCompletion,
 	fatalErr error,
 ) ([]*TrackedAction, error, bool) {
 	select {
-	case workerResult, ok := <-results:
+	case completion, ok := <-completions:
 		if !ok {
 			return nil, fatalErr, true
 		}
-		nextOutbox, nextFatal := r.handleOneShotWorkerResult(ctx, cancel, bl, nil, fatalErr, &workerResult)
+		nextOutbox, nextFatal := r.handleOneShotCompletion(ctx, cancel, bl, nil, fatalErr, &completion)
 		return nextOutbox, nextFatal, false
 	case <-resultsLoopCtxDone(ctx, fatalErr):
 		return nil, fatalErr, true
@@ -65,39 +65,48 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	results <-chan WorkerResult,
+	completions <-chan ActionCompletion,
 	outbox []*TrackedAction,
 	fatalErr error,
 ) ([]*TrackedAction, error, bool) {
 	select {
 	case r.dispatchCh <- outbox[0]:
 		return outbox[1:], fatalErr, false
-	case workerResult, ok := <-results:
+	case completion, ok := <-completions:
 		if !ok {
 			return outbox, fatalErr, true
 		}
-		nextOutbox, nextFatal := r.handleOneShotWorkerResult(ctx, cancel, bl, outbox, fatalErr, &workerResult)
+		nextOutbox, nextFatal := r.handleOneShotCompletion(ctx, cancel, bl, outbox, fatalErr, &completion)
 		return nextOutbox, nextFatal, false
 	case <-resultsLoopCtxDone(ctx, fatalErr):
 		return outbox, fatalErr, true
 	}
 }
 
-func (r *oneShotRunner) handleOneShotWorkerResult(
+func (r *oneShotRunner) handleOneShotCompletion(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
 	outbox []*TrackedAction,
 	fatalErr error,
-	workerResult *WorkerResult,
+	completion *ActionCompletion,
 ) ([]*TrackedAction, error) {
-	outcome := r.processWorkerResult(ctx, nil, workerResult, bl)
-	outbox = append(outbox, outcome.dispatched...)
-	if !outcome.terminate || fatalErr != nil {
-		return outbox, fatalErr
+	outcome := r.processActionCompletion(ctx, nil, completion, bl)
+	if !outcome.terminate {
+		nextOutbox, err := r.drainPublicationReadyActions(ctx, nil, bl, outbox, outcome.dispatched)
+		if err == nil || fatalErr != nil {
+			return nextOutbox, fatalErr
+		}
+		outbox = nextOutbox
+		fatalErr = err
+	} else {
+		outbox = append(outbox, outcome.dispatched...)
+		if fatalErr != nil {
+			return outbox, fatalErr
+		}
+		fatalErr = outcome.terminateErr
 	}
 
-	fatalErr = outcome.terminateErr
 	if cancel != nil {
 		cancel()
 	}
@@ -185,7 +194,7 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 }
 
 // runWatchLoop owns steady-state watch execution. The same goroutine handles
-// observed batches, worker results, retry/trial timers, reconcile completions,
+// observed batches, action completions, retry/trial timers, reconcile completions,
 // and outbox draining.
 func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) error {
 	rt.replaceOutbox(nil)
@@ -298,15 +307,15 @@ func (rt *watchRuntime) runDrainStep(
 	ctx context.Context,
 	p *watchPipeline,
 ) (bool, error) {
-	// Draining phase: no new work admission remains live. Only worker results,
+	// Draining phase: no new work admission remains live. Only action completions,
 	// reconcile result cleanup, and terminal observer exit/error handling may run.
 	if rt.drainLoopDone(p) {
 		return true, nil
 	}
 
 	select {
-	case workerResult, ok := <-p.results:
-		return rt.handleDrainingWorkerResult(ctx, p, &workerResult, ok)
+	case completion, ok := <-p.completions:
+		return rt.handleDrainingCompletion(ctx, p, &completion, ok)
 	case _, ok := <-p.reconcileResults:
 		return rt.handleDrainingReconcileResult(ctx, p, ok)
 	case obsErr, ok := <-p.errs:
@@ -315,7 +324,7 @@ func (rt *watchRuntime) runDrainStep(
 }
 
 func (rt *watchRuntime) drainLoopDone(p *watchPipeline) bool {
-	return p.results == nil && p.reconcileResults == nil && p.activeObs == 0
+	return p.completions == nil && p.reconcileResults == nil && p.activeObs == 0
 }
 
 func (rt *watchRuntime) logObserverError(obsErr error) {
@@ -336,7 +345,7 @@ func (rt *watchRuntime) runBootstrapStep(
 ) (bool, error) {
 	outbox := rt.currentOutbox()
 
-	// Bootstrap phase: dispatch, buffered bootstrap batches, worker results,
+	// Bootstrap phase: dispatch, buffered bootstrap batches, action completions,
 	// retry/trial wakeups, and quiescence logging are live until the graph empties.
 	dispatchCh, nextAction := rt.dispatchChannelForOutbox()
 
@@ -348,8 +357,8 @@ func (rt *watchRuntime) runBootstrapStep(
 		nextOutbox, done := rt.handleBootstrapBatch(ctx, p, outbox, batch, ok)
 		rt.replaceOutbox(nextOutbox)
 		return done, nil
-	case workerResult, ok := <-p.results:
-		nextOutbox, done, err := rt.handleBootstrapWorkerResult(ctx, p, outbox, &workerResult, ok)
+	case completion, ok := <-p.completions:
+		nextOutbox, done, err := rt.handleBootstrapCompletion(ctx, p, outbox, &completion, ok)
 		rt.replaceOutbox(nextOutbox)
 		return done, err
 	case <-rt.trialTimerChan():
@@ -398,27 +407,32 @@ func (rt *watchRuntime) handleBootstrapBatch(
 	return append(outbox, rt.processDirtyBatch(ctx, batch, p.bl, p.mode, p.safety)...), false
 }
 
-func (rt *watchRuntime) handleBootstrapWorkerResult(
+func (rt *watchRuntime) handleBootstrapCompletion(
 	ctx context.Context,
 	p *watchPipeline,
 	outbox []*TrackedAction,
-	workerResult *WorkerResult,
+	completion *ActionCompletion,
 	ok bool,
 ) ([]*TrackedAction, bool, error) {
 	if !ok {
 		if contextIsCanceled(ctx) {
-			p.results = nil
+			p.completions = nil
 			rt.beginWatchDrain(ctx, p)
 			return nil, rt.drainLoopDone(p), nil
 		}
 		return rt.handleBootstrapResultsClosed(ctx)
 	}
 
-	outcome := rt.processWorkerResult(ctx, rt, workerResult, p.bl)
+	outcome := rt.processActionCompletion(ctx, rt, completion, p.bl)
 	if outcome.terminate {
 		return outbox, false, outcome.terminateErr
 	}
-	return append(outbox, outcome.dispatched...), false, nil
+	nextOutbox, err := rt.drainPublicationReadyActions(ctx, rt, p.bl, outbox, outcome.dispatched)
+	if err != nil {
+		rt.completeOutboxAsShutdown(nextOutbox)
+		return nil, false, err
+	}
+	return nextOutbox, false, nil
 }
 
 func (rt *watchRuntime) handleBootstrapResultsClosed(
@@ -430,7 +444,7 @@ func (rt *watchRuntime) handleBootstrapResultsClosed(
 	default:
 	}
 
-	return nil, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
+	return nil, false, fmt.Errorf("sync: action completions channel closed unexpectedly")
 }
 
 func (rt *watchRuntime) logBootstrapWait() {
@@ -439,51 +453,56 @@ func (rt *watchRuntime) logBootstrapWait() {
 	)
 }
 
-func (rt *watchRuntime) handleWatchWorkerResult(
+func (rt *watchRuntime) handleWatchCompletion(
 	ctx context.Context,
 	p *watchPipeline,
 	outbox []*TrackedAction,
-	workerResult *WorkerResult,
+	completion *ActionCompletion,
 	ok bool,
 ) ([]*TrackedAction, bool, error) {
 	if !ok {
 		if rt.isDraining() {
-			p.results = nil
+			p.completions = nil
 			return outbox, rt.drainLoopDone(p), nil
 		}
 		if contextIsCanceled(ctx) {
-			p.results = nil
+			p.completions = nil
 			rt.beginWatchDrain(ctx, p)
 			return nil, rt.drainLoopDone(p), nil
 		}
-		return outbox, false, fmt.Errorf("sync: worker results channel closed unexpectedly")
+		return outbox, false, fmt.Errorf("sync: action completions channel closed unexpectedly")
 	}
 
-	outcome := rt.processWorkerResult(ctx, rt, workerResult, p.bl)
+	outcome := rt.processActionCompletion(ctx, rt, completion, p.bl)
 	if outcome.terminate {
 		return outbox, false, outcome.terminateErr
 	}
-	return append(outbox, outcome.dispatched...), false, nil
+	nextOutbox, err := rt.drainPublicationReadyActions(ctx, rt, p.bl, outbox, outcome.dispatched)
+	if err != nil {
+		rt.completeOutboxAsShutdown(nextOutbox)
+		return nil, false, err
+	}
+	return nextOutbox, false, nil
 }
 
 func contextIsCanceled(ctx context.Context) bool {
 	return ctx.Err() != nil
 }
 
-func (rt *watchRuntime) handleDrainingWorkerResult(
+func (rt *watchRuntime) handleDrainingCompletion(
 	ctx context.Context,
 	p *watchPipeline,
-	workerResult *WorkerResult,
+	completion *ActionCompletion,
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		p.results = nil
+		p.completions = nil
 		return rt.drainLoopDone(p), nil
 	}
 
-	outcome := rt.processWorkerResult(ctx, rt, workerResult, p.bl)
+	outcome := rt.processActionCompletion(ctx, rt, completion, p.bl)
 	rt.completeOutboxAsShutdown(outcome.dispatched)
-	rt.mustAssertInvariants(ctx, rt, "handle draining worker result")
+	rt.mustAssertInvariants(ctx, rt, "handle draining completion")
 
 	return false, nil
 }

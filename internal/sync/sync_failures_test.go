@@ -290,7 +290,7 @@ func TestListLocalIssues_Multiple(t *testing.T) {
 	assert.Equal(t, "a.txt", issues[2].Path)
 }
 
-func TestTakeSyncFailure_ReturnsAndDeletesRow(t *testing.T) {
+func TestResolveTransientRetryWork_ReturnsAndDeletesRow(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 	driveID := driveid.New("drive-1")
@@ -320,7 +320,10 @@ func TestTakeSyncFailure_ReturnsAndDeletesRow(t *testing.T) {
 		return time.Minute
 	}))
 
-	row, found, err := mgr.TakeSyncFailure(ctx, "docs/report.txt", driveID)
+	row, found, err := mgr.ResolveTransientRetryWork(ctx, RetryWorkKey{
+		Path:       "docs/report.txt",
+		ActionType: ActionUpload,
+	}, driveID)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.NotNil(t, row)
@@ -334,38 +337,20 @@ func TestTakeSyncFailure_ReturnsAndDeletesRow(t *testing.T) {
 
 	rows, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, rows, "taken row should be deleted")
+	assert.Empty(t, rows, "resolved row should be deleted")
 }
 
-func TestTakeSyncFailure_MissingRow(t *testing.T) {
+func TestResolveTransientRetryWork_MissingRow(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
-	row, found, err := mgr.TakeSyncFailure(ctx, "missing.txt", driveid.New("drive-1"))
+	row, found, err := mgr.ResolveTransientRetryWork(ctx, RetryWorkKey{
+		Path:       "missing.txt",
+		ActionType: ActionUpload,
+	}, driveid.New("drive-1"))
 	require.NoError(t, err)
 	assert.False(t, found)
 	assert.Nil(t, row)
-}
-
-func TestClearLocalIssue(t *testing.T) {
-	mgr, _ := newTestSyncStoreForFailures(t)
-	ctx := context.Background()
-
-	err := mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path:      "file.txt",
-		DriveID:   driveid.ID{},
-		Direction: DirectionUpload,
-		IssueType: "upload_failed",
-		ErrMsg:    "err",
-	}, nil)
-	require.NoError(t, err)
-
-	err = mgr.ClearSyncFailure(ctx, "file.txt", driveid.ID{})
-	require.NoError(t, err)
-
-	issues, err := mgr.ListSyncFailures(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, issues)
 }
 
 func TestClearResolvedLocalIssues(t *testing.T) {
@@ -400,6 +385,42 @@ func TestClearResolvedLocalIssues(t *testing.T) {
 	paths := []string{issues[0].Path, issues[1].Path}
 	assert.Contains(t, paths, "a.txt")
 	assert.Contains(t, paths, "c.txt")
+}
+
+// Validates: R-2.10.2
+func TestClearActionableFailuresByPaths_RemovesIssueWithoutTouchingRetryState(t *testing.T) {
+	t.Parallel()
+
+	mgr, now := newTestSyncStoreForFailures(t)
+	ctx := context.Background()
+
+	require.NoError(t, mgr.UpsertActionableFailures(ctx, []ActionableFailure{{
+		Path:       "docs/file.txt",
+		DriveID:    driveid.New(testDriveID),
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		IssueType:  IssueLocalPermissionDenied,
+		Error:      "permission denied",
+	}}))
+
+	retryRow := retryStateIdentityForWork("docs/file.txt", "", ActionUpload)
+	retryRow.AttemptCount = 2
+	retryRow.NextRetryAt = now.Add(time.Minute).UnixNano()
+	retryRow.FirstSeenAt = now.UnixNano()
+	retryRow.LastSeenAt = now.UnixNano()
+	require.NoError(t, mgr.UpsertRetryState(ctx, &retryRow))
+
+	require.NoError(t, mgr.ClearActionableFailuresByPaths(ctx, IssueLocalPermissionDenied, []string{"docs/file.txt"}))
+
+	failures, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures)
+
+	rows, err := mgr.ListRetryState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "docs/file.txt", rows[0].Path)
+	assert.Equal(t, ActionUpload, rows[0].ActionType)
 }
 
 // Store-level characterization: the engine owns failure lifecycle clearing.
@@ -676,7 +697,7 @@ func TestRecordFailure_RepeatIncrementsCount(t *testing.T) {
 	assert.Positive(t, issues[0].NextRetryAt)
 }
 
-func TestListLocalIssuesForRetry_ReturnsResults(t *testing.T) {
+func TestListRetryStateReady_ReturnsResults(t *testing.T) {
 	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
@@ -690,21 +711,20 @@ func TestListLocalIssuesForRetry_ReturnsResults(t *testing.T) {
 	}, retry.ReconcilePolicy().Delay)
 	require.NoError(t, err)
 
-	// ListSyncFailuresForRetry finds rows with next_retry_at <= the given time.
-	// With a delay function, transient issues have next_retry_at set, so
+	// ListRetryStateReady finds rows with next_retry_at <= the given time.
+	// With a delay function, transient issues have retry_state scheduled, so
 	// querying far enough in the future should return the row.
 	futureTime := fixedTime.Add(10 * time.Minute)
-	rows, err := mgr.ListSyncFailuresForRetry(ctx, futureTime)
-	require.NoError(t, err)
+	rows := readyRetryStateForTest(t, mgr, ctx, futureTime)
 	assert.NotEmpty(t, rows, "transient issues with delay function should be returned for retry")
 }
 
-func TestEarliestLocalIssueRetryAt_ReturnsFutureTime(t *testing.T) {
+func TestEarliestRetryStateAt_ReturnsFutureTime(t *testing.T) {
 	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// No issues — zero time.
-	earliest, err := mgr.EarliestSyncFailureRetryAt(ctx, fixedTime)
+	earliest, err := mgr.EarliestRetryStateAt(ctx, fixedTime)
 	require.NoError(t, err)
 	assert.True(t, earliest.IsZero())
 
@@ -718,14 +738,14 @@ func TestEarliestLocalIssueRetryAt_ReturnsFutureTime(t *testing.T) {
 	}, retry.ReconcilePolicy().Delay)
 	require.NoError(t, err)
 
-	// With a delay function, transient issues have next_retry_at set, so
-	// EarliestSyncFailureRetryAt should return a future time.
-	earliest, err = mgr.EarliestSyncFailureRetryAt(ctx, fixedTime)
+	// With a delay function, transient issues have retry_state scheduled, so
+	// EarliestRetryStateAt should return a future time.
+	earliest, err = mgr.EarliestRetryStateAt(ctx, fixedTime)
 	require.NoError(t, err)
 	assert.False(t, earliest.IsZero(), "transient issue with delay function should have a retry time")
 }
 
-func TestMarkLocalIssuePermanent(t *testing.T) {
+func TestUpsertActionableFailureOverwritesTransientIssue(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
@@ -745,8 +765,15 @@ func TestMarkLocalIssuePermanent(t *testing.T) {
 	require.Len(t, issues, 1)
 	assert.Equal(t, CategoryTransient, issues[0].Category)
 
-	// Mark as permanent.
-	err = mgr.MarkSyncFailureActionable(ctx, "file.txt", driveid.ID{})
+	// Replace with an actionable scanner issue.
+	err = mgr.UpsertActionableFailures(ctx, []ActionableFailure{{
+		Path:       "file.txt",
+		DriveID:    driveid.New(testDriveID),
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		IssueType:  IssueInvalidFilename,
+		Error:      "rename required",
+	}})
 	require.NoError(t, err)
 
 	// Verify category changed.
@@ -754,48 +781,12 @@ func TestMarkLocalIssuePermanent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, CategoryActionable, issues[0].Category)
+	assert.Equal(t, IssueInvalidFilename, issues[0].IssueType)
 	assert.Equal(t, int64(0), issues[0].NextRetryAt, "permanent issues should have no retry time")
 
 	// Should not appear in retry list.
-	rows, err := mgr.ListSyncFailuresForRetry(ctx, time.Now().Add(time.Hour))
-	require.NoError(t, err)
+	rows := readyRetryStateForTest(t, mgr, ctx, time.Now().Add(time.Hour))
 	assert.Empty(t, rows)
-}
-
-func TestListLocalIssuesByType(t *testing.T) {
-	mgr, _ := newTestSyncStoreForFailures(t)
-	ctx := context.Background()
-
-	// Record issues of different types.
-	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path: "a.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: "upload_failed", ErrMsg: "err",
-	}, nil))
-	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path: "b.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssueRemoteWriteDenied, ErrMsg: "read-only", HTTPStatus: 403,
-	}, nil))
-	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path: "c.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: IssueRemoteWriteDenied, ErrMsg: "read-only", HTTPStatus: 403,
-	}, nil))
-	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path: "d.txt", DriveID: driveid.ID{}, Direction: DirectionUpload, IssueType: "upload_failed", ErrMsg: "err",
-	}, nil))
-
-	// Query by permission_denied type.
-	issues, err := mgr.ListSyncFailuresByIssueType(ctx, IssueRemoteWriteDenied)
-	require.NoError(t, err)
-	require.Len(t, issues, 2)
-	assert.Equal(t, IssueRemoteWriteDenied, issues[0].IssueType)
-	assert.Equal(t, IssueRemoteWriteDenied, issues[1].IssueType)
-
-	// Query by upload_failed type.
-	issues, err = mgr.ListSyncFailuresByIssueType(ctx, "upload_failed")
-	require.NoError(t, err)
-	require.Len(t, issues, 2)
-
-	// Query by nonexistent type.
-	issues, err = mgr.ListSyncFailuresByIssueType(ctx, "nonexistent")
-	require.NoError(t, err)
-	assert.Empty(t, issues)
 }
 
 func TestClearLocalIssuesByPrefix(t *testing.T) {
@@ -1240,60 +1231,4 @@ func TestDeleteSyncFailuresByScope(t *testing.T) {
 
 	assert.True(t, paths["c.txt"], "c.txt should remain (different scope)")
 	assert.True(t, paths["d.txt"], "d.txt should remain (different scope)")
-}
-
-func TestPendingRetrySummary(t *testing.T) {
-	mgr, fixedTime := newTestSyncStoreForFailures(t)
-	ctx := context.Background()
-
-	// No failures → empty summary.
-	groups, err := mgr.PendingRetrySummary(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, groups)
-
-	// Insert transient failures with different scope keys and retry times.
-	for _, p := range []struct {
-		path     string
-		scopeKey ScopeKey
-	}{
-		{"a.txt", SKThrottleAccount()},
-		{"b.txt", SKThrottleAccount()},
-		{"c.txt", SKThrottleAccount()},
-		{"d.txt", SKQuotaOwn()},
-		{"e.txt", SKQuotaOwn()},
-	} {
-		recErr := mgr.RecordFailure(ctx, &SyncFailureParams{
-			Path:      p.path,
-			DriveID:   driveid.ID{},
-			Direction: DirectionUpload,
-			Role:      FailureRoleItem,
-			IssueType: "upload_failed",
-			ErrMsg:    "timeout",
-			ScopeKey:  p.scopeKey,
-		}, retry.ReconcilePolicy().Delay)
-		require.NoError(t, recErr)
-	}
-
-	// Also insert an actionable failure — should NOT appear in summary.
-	err = mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path:      "actionable.txt",
-		DriveID:   driveid.ID{},
-		Direction: DirectionUpload,
-		IssueType: "invalid_filename",
-		Category:  CategoryActionable,
-		ErrMsg:    "bad name",
-	}, nil)
-	require.NoError(t, err)
-
-	groups, err = mgr.PendingRetrySummary(ctx)
-	require.NoError(t, err)
-	require.Len(t, groups, 2, "should have 2 scope groups")
-
-	// Ordered by count DESC, so throttle:account (3) comes first.
-	assert.Equal(t, SKThrottleAccount(), groups[0].ScopeKey)
-	assert.Equal(t, 3, groups[0].Count)
-	assert.True(t, groups[0].EarliestNext.After(fixedTime), "earliest retry should be after now")
-
-	assert.Equal(t, SKQuotaOwn(), groups[1].ScopeKey)
-	assert.Equal(t, 2, groups[1].Count)
 }

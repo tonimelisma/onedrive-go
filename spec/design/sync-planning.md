@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/sync/actions.go, internal/sync/api_types.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/core_types.go
+GOVERNS: internal/sync/planner.go, internal/sync/planner_sqlite.go, internal/sync/actions.go, internal/sync/api_types.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/core_types.go
 
 Implements: R-2.1.3 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified]
 
@@ -63,10 +63,10 @@ invariant that a baseline row absent from both snapshots becomes
 
 - local deleted + remote unchanged -> `ActionRemoteDelete`
 - local deleted + remote changed -> `ActionDownload` (remote wins canonical path)
-- local deleted + remote deleted -> `ActionCleanup`
+- local deleted + remote deleted -> `ActionCleanup` (publication-only)
 - local changed + remote unchanged -> `ActionUpload`
 - local unchanged + remote changed -> `ActionDownload`
-- local changed + remote changed with equal hashes -> `ActionUpdateSynced`
+- local changed + remote changed with equal hashes -> `ActionUpdateSynced` (publication-only)
 - local changed + remote changed with different hashes -> `ActionConflictCopy` + dependent `ActionDownload`
 - local unchanged + remote deleted -> `ActionLocalDelete`
 - local changed + remote deleted -> `ActionUpload` with `ConflictEditDelete` metadata
@@ -75,8 +75,21 @@ invariant that a baseline row absent from both snapshots becomes
 
 - local only -> `ActionUpload`
 - remote only -> `ActionDownload`
-- local and remote with equal hashes -> `ActionUpdateSynced`
+- local and remote with equal hashes -> `ActionUpdateSynced` (publication-only)
 - local and remote with different hashes -> `ActionConflictCopy` + dependent `ActionDownload`
+
+## Publication-Only Planner Actions
+
+`ActionUpdateSynced` and `ActionCleanup` remain real planner action types.
+They stay in the action set so dependency ordering, counts, and reporting can
+see them.
+
+They are publication-only outcomes, not executor side effects:
+
+- the planner still emits them from reconciliation rows
+- the dependency graph still orders them against dependent actions
+- the engine commits their baseline mutation directly through the store
+- the executor does not own handlers for them
 
 ## Conflict Planning
 

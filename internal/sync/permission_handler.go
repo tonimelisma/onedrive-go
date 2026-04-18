@@ -448,7 +448,7 @@ func remoteBoundaryParent(boundary string, rootPath string) (string, bool) {
 // block for the directory subtree (R-2.10.12).
 func (ph *PermissionHandler) handleLocalPermission(
 	_ context.Context,
-	r *WorkerResult,
+	r *ActionCompletion,
 ) PermissionCheckDecision {
 	// If the sync root itself is inaccessible, WARN loudly — don't silently
 	// block everything behind a scope block. The sync root being inaccessible
@@ -625,9 +625,9 @@ func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []Perm
 }
 
 // clearScannerResolvedPermissions checks whether the scanner observed paths
-// that were previously blocked by local_permission_denied failures. If the
-// scanner successfully accessed a path (it appeared in events), the
-// permission issue is resolved — clear the failure and release any scope block.
+// that were previously blocked by local_permission_denied directory scopes. If
+// the scanner successfully accessed a path under the blocked directory, the
+// scope issue is resolved and the scope can be released.
 //
 // Implements R-2.10.10. Complements recheckLocalPermissions (R-2.10.13).
 func (ph *PermissionHandler) clearScannerResolvedPermissions(
@@ -668,27 +668,6 @@ func (ph *PermissionHandler) clearScannerResolvedPermissions(
 				Reason:   "scanner resolved permission denial",
 			})
 		}
-	}
-
-	issues, err := ph.store.ListSyncFailuresByIssueType(ctx, IssueLocalPermissionDenied)
-	if err != nil || len(issues) == 0 {
-		return decisions
-	}
-
-	for i := range issues {
-		issue := &issues[i]
-		if !issue.ScopeKey.IsZero() {
-			continue
-		}
-		if !observedPaths[issue.Path] {
-			continue
-		}
-		decisions = append(decisions, PermissionRecheckDecision{
-			Kind:    permissionRecheckClearFileFailure,
-			Path:    issue.Path,
-			DriveID: issue.DriveID,
-			Reason:  "scanner resolved permission denial",
-		})
 	}
 
 	return decisions
