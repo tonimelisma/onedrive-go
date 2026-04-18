@@ -11,95 +11,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// ---------------------------------------------------------------------------
-// PickTrialCandidate
-// ---------------------------------------------------------------------------
-
-// Validates: R-2.10.5
-func TestSyncStore_PickTrialCandidate_ReturnsOldestScopeBlockedFailure(t *testing.T) {
-	t.Parallel()
-	mgr := newTestStore(t)
-	ctx := context.Background()
-
-	driveID := driveid.New("drive1")
-	sk := SKQuotaOwn()
-
-	// Insert two scope-blocked failures (next_retry_at = NULL, scope_key matches).
-	mgr.SetNowFunc(func() time.Time { return time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC) })
-	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path:      "b.txt",
-		DriveID:   driveID,
-		Direction: DirectionUpload,
-		Role:      FailureRoleHeld,
-		Category:  CategoryTransient,
-		ErrMsg:    "quota exceeded",
-		ScopeKey:  sk,
-	}, nil)) // nil delayFn → next_retry_at = NULL
-
-	mgr.SetNowFunc(func() time.Time { return time.Date(2025, 1, 1, 9, 0, 0, 0, time.UTC) })
-	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path:      "a.txt",
-		DriveID:   driveID,
-		Direction: DirectionUpload,
-		Role:      FailureRoleHeld,
-		Category:  CategoryTransient,
-		ErrMsg:    "quota exceeded",
-		ScopeKey:  sk,
-	}, nil))
-
-	// PickTrialCandidate should return a.txt (earliest first_seen_at).
-	row, found, err := mgr.PickTrialCandidate(ctx, sk)
-	require.NoError(t, err)
-	require.True(t, found, "should find a scope-blocked failure")
-	require.NotNil(t, row, "should find a scope-blocked failure")
-	assert.Equal(t, "a.txt", row.Path)
-	assert.Equal(t, sk, row.ScopeKey)
-}
-
-// Validates: R-2.10.5
-func TestSyncStore_PickTrialCandidate_SkipsRetriedFailures(t *testing.T) {
-	t.Parallel()
-	mgr := newTestStore(t)
-	ctx := context.Background()
-
-	driveID := driveid.New("drive1")
-	sk := SKQuotaOwn()
-
-	// Insert a failure WITH next_retry_at set (already being retried).
-	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
-		Path:      "retried.txt",
-		DriveID:   driveID,
-		Direction: DirectionUpload,
-		Role:      FailureRoleItem,
-		Category:  CategoryTransient,
-		ErrMsg:    "quota exceeded",
-		ScopeKey:  sk,
-	}, func(int) time.Duration { return time.Minute })) // sets next_retry_at
-
-	// PickTrialCandidate should return nil — no NULL next_retry_at rows.
-	row, found, err := mgr.PickTrialCandidate(ctx, sk)
-	require.NoError(t, err)
-	assert.False(t, found, "should not return failures with next_retry_at set")
-	assert.Nil(t, row, "should not return failures with next_retry_at set")
-}
-
-// Validates: R-2.10.5
-func TestSyncStore_PickTrialCandidate_NoMatches(t *testing.T) {
-	t.Parallel()
-	mgr := newTestStore(t)
-	ctx := context.Background()
-
-	// Empty table → nil, nil.
-	row, found, err := mgr.PickTrialCandidate(ctx, SKQuotaOwn())
-	require.NoError(t, err)
-	assert.False(t, found)
-	assert.Nil(t, row)
-}
-
-// ---------------------------------------------------------------------------
-// SetScopeRetryAtNow
-// ---------------------------------------------------------------------------
-
 // Validates: R-2.10.11
 func TestSyncStore_SetScopeRetryAtNow_UnblocksScopeFailures(t *testing.T) {
 	t.Parallel()
@@ -132,8 +43,7 @@ func TestSyncStore_SetScopeRetryAtNow_UnblocksScopeFailures(t *testing.T) {
 	assert.Equal(t, int64(2), affected, "should update only NULL next_retry_at rows")
 
 	// Verify the 2 rows now have next_retry_at = now.
-	rows, err := mgr.ListSyncFailuresForRetry(ctx, now)
-	require.NoError(t, err)
+	rows := readyRetryStateForTest(t, mgr, ctx, now)
 	assert.Len(t, rows, 2, "both scope-blocked failures should now be retryable")
 }
 
@@ -200,8 +110,7 @@ func TestSyncStore_ReleaseScope(t *testing.T) {
 	assert.Empty(t, blocks, "scope block should be deleted")
 
 	// Verify failures now have next_retry_at = now (retryable).
-	rows, err := mgr.ListSyncFailuresForRetry(ctx, now)
-	require.NoError(t, err)
+	rows := readyRetryStateForTest(t, mgr, ctx, now)
 	assert.Len(t, rows, 2, "scope-blocked failures should now be retryable")
 
 	allRows, err := mgr.ListSyncFailures(ctx)

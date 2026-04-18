@@ -455,7 +455,10 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 		ScopeKey:   retainedScope,
 	}, nil))
 
-	require.NoError(t, eng.baseline.ClearSyncFailure(ctx, "Shared/TeamDocs/file.txt", driveID))
+	require.NoError(t, eng.baseline.ClearHeldRetryWork(ctx, RetryWorkKey{
+		Path:       "Shared/TeamDocs/file.txt",
+		ActionType: ActionUpload,
+	}, clearedScope))
 
 	handleExternalChangesForTest(t, eng, ctx)
 
@@ -464,12 +467,10 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	assert.True(t, isTestScopeBlocked(eng, retainedScope),
 		"unrelated remote permission scopes must remain blocked")
 
-	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFunc())
-	require.NoError(t, err)
+	retryable := readyRetryStateForTest(t, eng.baseline, ctx, eng.nowFunc())
 	assert.Empty(t, retryable, "clearing the last blocked write should forget the remote scope instead of retrying it")
 
-	remainingIssues, err := eng.baseline.ListRemoteBlockedFailures(ctx)
-	require.NoError(t, err)
+	remainingIssues := syncFailuresByIssueTypeForTest(t, eng.baseline, ctx, IssueRemoteWriteDenied)
 	require.Len(t, remainingIssues, 1, "only the uncleared blocked write should remain")
 	assert.Equal(t, "Shared/Other/file.txt", remainingIssues[0].Path)
 

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 const (
@@ -59,14 +61,6 @@ func serializeRetryWorkKey(key RetryWorkKey) string {
 	return fmt.Sprintf("%s\x00%s\x00%s", key.ActionType.String(), key.OldPath, key.Path)
 }
 
-func retryWorkKey(path string, oldPath string, actionType ActionType) RetryWorkKey {
-	return RetryWorkKey{
-		Path:       path,
-		OldPath:    oldPath,
-		ActionType: actionType,
-	}
-}
-
 func (m *SyncStore) UpsertRetryState(ctx context.Context, row *RetryStateRow) error {
 	return upsertRetryStateTx(ctx, m.db, row)
 }
@@ -99,9 +93,15 @@ func upsertRetryStateTx(ctx context.Context, runner sqlTxRunner, row *RetryState
 	return nil
 }
 
-func deleteRetryStateByPathTx(ctx context.Context, runner sqlTxRunner, path string) error {
-	if _, err := runner.ExecContext(ctx, `DELETE FROM retry_state WHERE path = ?`, path); err != nil {
-		return fmt.Errorf("sync: deleting retry_state for %s: %w", path, err)
+func deleteRetryStateByWorkTx(ctx context.Context, runner sqlTxRunner, work RetryWorkKey) error {
+	if _, err := runner.ExecContext(
+		ctx,
+		sqlDeleteRetryStateByPathType,
+		work.Path,
+		work.OldPath,
+		work.ActionType.String(),
+	); err != nil {
+		return fmt.Errorf("sync: deleting retry_state for %s: %w", work.Path, err)
 	}
 
 	return nil
@@ -144,11 +144,78 @@ func retryStateIdentityForWork(path string, oldPath string, actionType ActionTyp
 }
 
 func (m *SyncStore) DeleteRetryStateByWork(ctx context.Context, work RetryWorkKey) error {
-	if _, err := m.db.ExecContext(ctx, sqlDeleteRetryStateByPathType, work.Path, work.OldPath, work.ActionType.String()); err != nil {
-		return fmt.Errorf("sync: deleting retry_state for %s: %w", work.Path, err)
+	return deleteRetryStateByWorkTx(ctx, m.db, work)
+}
+
+// ResolveTransientRetryWork clears one exact retry_state work item and, when a
+// matching transient item failure still exists, removes that reporting row in
+// the same transaction.
+func (m *SyncStore) ResolveTransientRetryWork(
+	ctx context.Context,
+	work RetryWorkKey,
+	driveID driveid.ID,
+) (row *SyncFailureRow, found bool, err error) {
+	tx, err := beginPerfTx(ctx, m.db)
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: beginning resolve transient retry work for %s: %w", work.Path, err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback resolve transient retry work for %s", work.Path))
+	}()
+
+	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveID)
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: reading configured drive for transient retry work %s: %w", work.Path, err)
+	}
+	if matchErr := ensureMatchingConfiguredDriveID(driveID, configuredDriveID); matchErr != nil {
+		return nil, false, matchErr
 	}
 
-	return nil
+	row = &SyncFailureRow{}
+	scanErr := scanSyncFailureRow(tx.QueryRowContext(ctx,
+		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
+			WHERE path = ?
+				AND category = ?
+				AND failure_role = ?
+				AND action_type = ?`,
+		work.Path,
+		CategoryTransient,
+		FailureRoleItem,
+		work.ActionType.String(),
+	), row, configuredDriveID)
+	switch {
+	case scanErr == nil:
+		found = true
+	case errors.Is(scanErr, sql.ErrNoRows):
+		row = nil
+	default:
+		return nil, false, fmt.Errorf("sync: resolving transient retry work for %s: %w", work.Path, scanErr)
+	}
+
+	if retryErr := deleteRetryStateByWorkTx(ctx, tx, work); retryErr != nil {
+		return nil, false, retryErr
+	}
+	if found {
+		if _, execErr := tx.ExecContext(ctx,
+			`DELETE FROM sync_failures
+				WHERE path = ?
+					AND category = ?
+					AND failure_role = ?
+					AND action_type = ?`,
+			work.Path,
+			CategoryTransient,
+			FailureRoleItem,
+			work.ActionType.String(),
+		); execErr != nil {
+			return nil, false, fmt.Errorf("sync: deleting transient sync failure for %s: %w", work.Path, execErr)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, false, fmt.Errorf("sync: committing transient retry work resolution for %s: %w", work.Path, err)
+	}
+
+	return row, found, nil
 }
 
 func (m *SyncStore) ListRetryState(ctx context.Context) ([]RetryStateRow, error) {

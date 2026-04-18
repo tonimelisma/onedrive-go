@@ -45,12 +45,12 @@ func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []
 	return ready
 }
 
-// processWorkerResult replaces processWorkerResult + routeReadyActions with
-// failure-aware dependent dispatch.
-func (flow *engineFlow) processWorkerResult(
+// processActionCompletion owns completion classification plus failure-aware
+// dependent dispatch.
+func (flow *engineFlow) processActionCompletion(
 	ctx context.Context,
 	watch *watchRuntime,
-	r *WorkerResult,
+	r *ActionCompletion,
 	bl *Baseline,
 ) routeOutcome {
 	if r.IsTrial && !r.TrialScopeKey.IsZero() {
@@ -67,7 +67,7 @@ func (flow *engineFlow) processResult(
 	ctx context.Context,
 	watch *watchRuntime,
 	resultCtx resultContext,
-	r *WorkerResult,
+	r *ActionCompletion,
 	bl *Baseline,
 ) routeOutcome {
 	decision := classifyResult(r)
@@ -85,7 +85,7 @@ func (flow *engineFlow) routeReadyForClass(
 	watch *watchRuntime,
 	class errclass.Class,
 	ready []*TrackedAction,
-	r *WorkerResult,
+	r *ActionCompletion,
 ) []*TrackedAction {
 	switch class {
 	case errclass.ClassInvalid:
@@ -103,7 +103,7 @@ func (flow *engineFlow) routeReadyForClass(
 	return nil
 }
 
-func (flow *engineFlow) applySuccessEffects(ctx context.Context, watch *watchRuntime, r *WorkerResult) {
+func (flow *engineFlow) applySuccessEffects(ctx context.Context, watch *watchRuntime, r *ActionCompletion) {
 	flow.succeeded++
 	flow.clearFailureOnSuccess(ctx, r)
 	if watch != nil {
@@ -119,7 +119,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision *ResultDecision,
-	r *WorkerResult,
+	r *ActionCompletion,
 	bl *Baseline,
 ) {
 	if flow.scopeController().applyPermissionDecisionFlow(ctx, watch, decision, r, bl) {
@@ -154,7 +154,7 @@ func (flow *engineFlow) processNormalDecision(
 	watch *watchRuntime,
 	decision *ResultDecision,
 	ready []*TrackedAction,
-	r *WorkerResult,
+	r *ActionCompletion,
 	bl *Baseline,
 ) routeOutcome {
 	scopeCtrl := flow.scopeController()
@@ -195,7 +195,7 @@ func (flow *engineFlow) processNormalDecision(
 	case errclass.ClassInvalid:
 		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r, bl)
 		outcome.terminate = true
-		outcome.terminateErr = fmt.Errorf("classify worker result: invalid failure class")
+		outcome.terminateErr = fmt.Errorf("classify action completion: invalid failure class")
 	case errclass.ClassSuccess:
 		flow.applySuccessEffects(ctx, watch, r)
 	case errclass.ClassShutdown:
@@ -218,7 +218,7 @@ func (flow *engineFlow) processTrialDecision(
 	trialScopeKey ScopeKey,
 	decision *ResultDecision,
 	ready []*TrackedAction,
-	r *WorkerResult,
+	r *ActionCompletion,
 	bl *Baseline,
 ) routeOutcome {
 	scopeCtrl := flow.scopeController()
@@ -291,16 +291,12 @@ func (controller *scopeController) applyTrialPreserveEffects(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision *ResultDecision,
-	r *WorkerResult,
+	r *ActionCompletion,
 	bl *Baseline,
 ) {
 	if decision.PermissionFlow != permissionFlowNone {
 		if permDecision, handled := controller.resolvePermissionDecision(ctx, decision, r, bl); handled {
-			controller.clearHeldFailureForScope(ctx, RetryWorkKey{
-				Path:       r.Path,
-				OldPath:    r.OldPath,
-				ActionType: r.ActionType,
-			}, r.TrialScopeKey)
+			controller.clearHeldFailureForScope(ctx, retryWorkKeyForCompletion(r), r.TrialScopeKey)
 			controller.applyPermissionCheckDecision(ctx, watch, decision.PermissionFlow, permDecision)
 		}
 		return
@@ -335,18 +331,18 @@ func (controller *scopeController) clearHeldFailureForScope(
 	}
 }
 
-func fatalResultError(r *WorkerResult) error {
+func fatalResultError(r *ActionCompletion) error {
 	if r.Err != nil {
-		return fmt.Errorf("sync: unauthorized worker result for %s: %w", r.Path, r.Err)
+		return fmt.Errorf("sync: unauthorized action completion for %s: %w", r.Path, r.Err)
 	}
 
-	return fmt.Errorf("sync: unauthorized worker result for %s", r.Path)
+	return fmt.Errorf("sync: unauthorized action completion for %s", r.Path)
 }
 
 func (controller *scopeController) applyFatalAuthEffects(
 	ctx context.Context,
 	watch *watchRuntime,
-	r *WorkerResult,
+	r *ActionCompletion,
 	summaryKey SummaryKey,
 ) {
 	flow := controller.flow
@@ -384,7 +380,7 @@ func (controller *scopeController) applyPermissionDecisionFlow(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision *ResultDecision,
-	r *WorkerResult,
+	r *ActionCompletion,
 	bl *Baseline,
 ) bool {
 	permDecision, handled := controller.resolvePermissionDecision(ctx, decision, r, bl)
@@ -398,7 +394,7 @@ func (controller *scopeController) applyPermissionDecisionFlow(
 func (controller *scopeController) resolvePermissionDecision(
 	ctx context.Context,
 	decision *ResultDecision,
-	r *WorkerResult,
+	r *ActionCompletion,
 	bl *Baseline,
 ) (*PermissionCheckDecision, bool) {
 	flow := controller.flow
@@ -425,7 +421,7 @@ func (controller *scopeController) resolvePermissionDecision(
 func (flow *engineFlow) recordFailure(
 	ctx context.Context,
 	decision *ResultDecision,
-	r *WorkerResult,
+	r *ActionCompletion,
 	delayFn func(int) time.Duration,
 ) {
 	direction := directionFromAction(r.ActionType)

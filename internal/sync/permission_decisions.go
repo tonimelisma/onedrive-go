@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
@@ -36,7 +35,6 @@ type PermissionRecheckDecisionKind int
 const (
 	permissionRecheckKeepScope PermissionRecheckDecisionKind = iota
 	permissionRecheckReleaseScope
-	permissionRecheckClearFileFailure
 )
 
 // PermissionRecheckDecision is the policy-layer output for startup/per-pass
@@ -45,7 +43,6 @@ const (
 type PermissionRecheckDecision struct {
 	Kind     PermissionRecheckDecisionKind
 	Path     string
-	DriveID  driveid.ID
 	ScopeKey ScopeKey
 	Reason   string
 }
@@ -172,14 +169,6 @@ func (controller *scopeController) applyPermissionRecheckDecisions(
 			if err := controller.releaseScope(ctx, watch, decision.ScopeKey); err != nil {
 				flow.engine.logger.Warn("failed to release permission scope",
 					slog.String("scope_key", decision.ScopeKey.String()),
-					slog.String("error", err.Error()),
-				)
-				continue
-			}
-		case permissionRecheckClearFileFailure:
-			if err := flow.engine.baseline.ClearSyncFailure(ctx, decision.Path, decision.DriveID); err != nil {
-				flow.engine.logger.Warn("failed to clear permission failure",
-					slog.String("path", decision.Path),
 					slog.String("error", err.Error()),
 				)
 				continue

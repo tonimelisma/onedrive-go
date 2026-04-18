@@ -14,13 +14,10 @@
 // Contents:
 //   - IsActionableIssue:               classify issue types requiring user action
 //   - RecordFailure:                   unified failure recording
-//   - ClearSyncFailure:                remove by path
-//   - TakeSyncFailure:                 atomically load + remove by path
-//   - ClearSyncFailureByPath:          remove by path (any drive)
 //   - ClearActionableSyncFailures:     remove all actionable failures
+//   - ClearActionableFailuresByPaths:  remove actionable failures for concrete paths
 //   - ClearSyncFailuresByPrefix:       remove by path prefix + issue type
 //   - ClearResolvedActionableFailures: remove actionable failures no longer reported
-//   - MarkSyncFailureActionable:       promote transient to actionable
 //   - UpsertActionableFailures:        batch-upsert scanner-detected issues
 //   - DeleteSyncFailuresByScope:       remove failures owned by a removed scope
 //   - ResetRetryTimesForScope:         pull future retries forward
@@ -35,13 +32,10 @@ package sync
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // Shared column list for all sync_failures SELECT queries. Must match
@@ -314,7 +308,7 @@ func (m *SyncStore) RecordFailure(
 		if retryErr := upsertRetryStateTx(ctx, tx, &retryRow); retryErr != nil {
 			return retryErr
 		}
-	} else if retryErr := deleteRetryStateByPathTx(ctx, tx, p.Path); retryErr != nil {
+	} else if retryErr := deleteRetryStateByWorkTx(ctx, tx, retryWorkKey(p.Path, p.OldPath, actionType)); retryErr != nil {
 		return retryErr
 	}
 
@@ -384,95 +378,6 @@ func (m *SyncStore) resolveItemID(
 	return resolvedItemID, nil
 }
 
-// ClearSyncFailure removes a specific sync_failures row by path.
-func (m *SyncStore) ClearSyncFailure(ctx context.Context, path string, driveID driveid.ID) error {
-	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE path = ?`,
-		path)
-	if err != nil {
-		return fmt.Errorf("sync: clearing sync failure for %s: %w", path, err)
-	}
-	if _, err := m.db.ExecContext(ctx, `DELETE FROM retry_state WHERE path = ?`, path); err != nil {
-		return fmt.Errorf("sync: clearing retry_state for %s: %w", path, err)
-	}
-
-	return nil
-}
-
-// TakeSyncFailure atomically loads and removes a specific sync_failures row by
-// path. Returns found=false when no matching row exists.
-func (m *SyncStore) TakeSyncFailure(
-	ctx context.Context,
-	path string,
-	driveID driveid.ID,
-) (row *SyncFailureRow, found bool, err error) {
-	tx, err := beginPerfTx(ctx, m.db)
-	if err != nil {
-		return nil, false, fmt.Errorf("sync: beginning take sync failure for %s: %w", path, err)
-	}
-	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback take sync failure transaction for %s", path))
-	}()
-
-	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveID)
-	if err != nil {
-		return nil, false, fmt.Errorf("sync: reading configured drive for taken sync failure %s: %w", path, err)
-	}
-	if matchErr := ensureMatchingConfiguredDriveID(driveID, configuredDriveID); matchErr != nil {
-		return nil, false, matchErr
-	}
-
-	row = &SyncFailureRow{}
-	if scanErr := scanSyncFailureRow(tx.QueryRowContext(ctx,
-		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
-		WHERE path = ?`,
-		path,
-	), row, configuredDriveID); scanErr != nil {
-		if errors.Is(scanErr, sql.ErrNoRows) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("sync: taking sync failure for %s: %w", path, scanErr)
-	}
-
-	result, err := tx.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE path = ?`,
-		path)
-	if err != nil {
-		return nil, false, fmt.Errorf("sync: deleting taken sync failure for %s: %w", path, err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return nil, false, fmt.Errorf("sync: checking taken sync failure delete count for %s: %w", path, err)
-	}
-	if affected != 1 {
-		return nil, false, fmt.Errorf("sync: deleting taken sync failure for %s: expected 1 row, got %d", path, affected)
-	}
-	if retryErr := deleteRetryStateByPathTx(ctx, tx, path); retryErr != nil {
-		return nil, false, retryErr
-	}
-
-	if err = tx.Commit(); err != nil {
-		return nil, false, fmt.Errorf("sync: committing take sync failure for %s: %w", path, err)
-	}
-
-	return row, true, nil
-}
-
-// ClearSyncFailureByPath removes all sync_failures rows for a path regardless
-// of drive. Used by CLI commands where the drive context isn't known.
-func (m *SyncStore) ClearSyncFailureByPath(ctx context.Context, path string) error {
-	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE path = ?`, path)
-	if err != nil {
-		return fmt.Errorf("sync: clearing sync failure for %s: %w", path, err)
-	}
-	if _, err := m.db.ExecContext(ctx, `DELETE FROM retry_state WHERE path = ?`, path); err != nil {
-		return fmt.Errorf("sync: clearing retry_state for %s: %w", path, err)
-	}
-
-	return nil
-}
-
 // ClearHeldRetryWork removes one held scoped failure row and its matching
 // retry_state work entry without disturbing unrelated retry work for the same
 // path.
@@ -526,19 +431,33 @@ func (m *SyncStore) ClearActionableSyncFailures(ctx context.Context) error {
 	return nil
 }
 
-// MarkSyncFailureActionable sets a sync_failures row to category='actionable'
-// and clears its next_retry_at.
-func (m *SyncStore) MarkSyncFailureActionable(ctx context.Context, path string, driveID driveid.ID) error {
-	_, err := m.db.ExecContext(ctx,
-		`UPDATE sync_failures
-		SET category = 'actionable', failure_role = 'item', next_retry_at = NULL
-		WHERE path = ?`,
-		path)
-	if err != nil {
-		return fmt.Errorf("sync: marking sync failure actionable for %s: %w", path, err)
+// ClearActionableFailuresByPaths removes actionable item failures of one issue
+// type for the provided paths. This cleanup is reporting-only: it never
+// mutates retry_state or scope_blocks.
+func (m *SyncStore) ClearActionableFailuresByPaths(
+	ctx context.Context,
+	issueType string,
+	paths []string,
+) error {
+	if issueType == "" || len(paths) == 0 {
+		return nil
 	}
-	if _, err := m.db.ExecContext(ctx, `DELETE FROM retry_state WHERE path = ?`, path); err != nil {
-		return fmt.Errorf("sync: clearing retry_state for actionable %s: %w", path, err)
+
+	placeholders := "?" + strings.Repeat(",?", len(paths)-1)
+	args := make([]any, 0, len(paths)+1)
+	args = append(args, issueType)
+	for i := range paths {
+		args = append(args, paths[i])
+	}
+
+	//nolint:gosec // G202: placeholders is strings.Repeat(",?", n) — literal, not user input
+	query := `DELETE FROM sync_failures
+		WHERE category = 'actionable'
+			AND failure_role = 'item'
+			AND issue_type = ?
+			AND path IN (` + placeholders + `)`
+	if _, err := m.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("sync: clearing actionable failures by paths for %s: %w", issueType, err)
 	}
 
 	return nil
@@ -621,7 +540,7 @@ func (m *SyncStore) UpsertActionableFailures(
 		); execErr != nil {
 			return fmt.Errorf("sync: upsert actionable failure for %s: %w", f.Path, execErr)
 		}
-		if retryErr := deleteRetryStateByPathTx(ctx, tx, f.Path); retryErr != nil {
+		if retryErr := deleteRetryStateByWorkTx(ctx, tx, retryWorkKey(f.Path, "", actionType)); retryErr != nil {
 			return retryErr
 		}
 	}

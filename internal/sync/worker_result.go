@@ -6,11 +6,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// WorkerResult reports the outcome of a single action execution. The engine
-// reads these from the Results channel, classifies them, and calls
-// depGraph.Complete. Failed items are recorded in sync_failures for retry
-// by the engine retry sweep.
-type WorkerResult struct {
+// ActionCompletion reports the terminal outcome of one planned action. The
+// engine reads these from the completions channel, classifies them, and calls
+// depGraph.Complete. Failed items are recorded in sync_failures for retry by
+// the engine retry sweep.
+type ActionCompletion struct {
 	Path              string
 	OldPath           string
 	ItemID            string
@@ -49,8 +49,8 @@ type WorkerResult struct {
 }
 
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked
-// after a 429 for this worker result.
-func (r *WorkerResult) ThrottleTargetKey() string {
+// after a 429 for this action completion.
+func (r *ActionCompletion) ThrottleTargetKey() string {
 	if r == nil {
 		return ""
 	}
@@ -63,4 +63,50 @@ func (r *WorkerResult) ThrottleTargetKey() string {
 		return ""
 	}
 	return throttleDriveParam(targetDriveID)
+}
+
+func completionFromTrackedAction(
+	ta *TrackedAction,
+	outcome *ActionOutcome,
+	actionErr error,
+) ActionCompletion {
+	driveID := ta.Action.DriveID
+	if outcome != nil && !outcome.DriveID.IsZero() {
+		driveID = outcome.DriveID
+	} else if driveID.IsZero() && !ta.Action.TargetDriveID.IsZero() {
+		// Shortcut-targeted actions may defer drive resolution to execution time.
+		// When no concrete action drive was planned, retain the intended target
+		// drive so failure persistence and success cleanup address the same row.
+		driveID = ta.Action.TargetDriveID
+	}
+
+	r := ActionCompletion{
+		Path:          ta.Action.Path,
+		OldPath:       ta.Action.OldPath,
+		ItemID:        ta.Action.ItemID,
+		DriveID:       driveID,
+		ActionType:    ta.Action.Type,
+		Err:           actionErr,
+		ErrMsg:        "",
+		HTTPStatus:    ExtractHTTPStatus(actionErr),
+		RetryAfter:    ExtractRetryAfter(actionErr),
+		TargetDriveID: ta.Action.TargetDriveID,
+		IsTrial:       ta.IsTrial,
+		TrialScopeKey: ta.TrialScopeKey,
+		ActionID:      ta.ID,
+	}
+
+	if outcome != nil {
+		r.Success = outcome.Success
+		if outcome.Error != nil {
+			r.ErrMsg = outcome.Error.Error()
+			r.Err = outcome.Error
+			r.HTTPStatus = ExtractHTTPStatus(outcome.Error)
+			r.RetryAfter = ExtractRetryAfter(outcome.Error)
+		}
+	} else if actionErr != nil {
+		r.ErrMsg = actionErr.Error()
+	}
+
+	return r
 }

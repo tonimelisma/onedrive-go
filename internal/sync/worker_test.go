@@ -121,12 +121,12 @@ func (h *testDepGraphHelper) Dispatch() <-chan *TrackedAction { return h.dispatc
 // CompleteCh returns the DepGraph completion channel.
 func (h *testDepGraphHelper) CompleteCh() <-chan struct{} { return h.dg.Done() }
 
-// drainAndComplete drains the worker result channel, calling dg.Complete
-// for each result and sending newly-ready dependents to dispatchCh. Returns
-// the collected results. This simulates the engine's drain goroutine.
-func (h *testDepGraphHelper) drainAndComplete(results <-chan WorkerResult) []WorkerResult {
-	var collected []WorkerResult
-	for r := range results {
+// drainAndComplete drains the action completion channel, calls dg.Complete
+// for each completion, and sends newly-ready dependents to dispatchCh. Returns
+// the collected completions. This simulates the engine's drain goroutine.
+func (h *testDepGraphHelper) drainAndComplete(completions <-chan ActionCompletion) []ActionCompletion {
+	var collected []ActionCompletion
+	for r := range completions {
 		collected = append(collected, r)
 		ready, _ := h.dg.Complete(r.ActionID)
 		for _, ta := range ready {
@@ -136,16 +136,16 @@ func (h *testDepGraphHelper) drainAndComplete(results <-chan WorkerResult) []Wor
 	return collected
 }
 
-// runPoolWithDrain starts the pool, drains results in a goroutine (calling
+// runPoolWithDrain starts the pool, drains completions in a goroutine (calling
 // Complete on each), waits for all actions to finish, then stops the pool
-// and returns the collected results.
-func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHelper) []WorkerResult {
+// and returns the collected completions.
+func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHelper) []ActionCompletion {
 	pool.Start(ctx, 4)
 
-	var results []WorkerResult
+	var results []ActionCompletion
 	done := make(chan struct{})
 	go func() {
-		results = dgh.drainAndComplete(pool.Results())
+		results = dgh.drainAndComplete(pool.Completions())
 		close(done)
 	}()
 
@@ -155,8 +155,8 @@ func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHe
 	return results
 }
 
-// countResults counts succeeded and failed results.
-func countResults(results []WorkerResult) (succeeded, failed int) {
+// countResults counts succeeded and failed completions.
+func countResults(results []ActionCompletion) (succeeded, failed int) {
 	for i := range results {
 		r := &results[i]
 		if r.Success {
@@ -168,18 +168,18 @@ func countResults(results []WorkerResult) (succeeded, failed int) {
 	return succeeded, failed
 }
 
-func requireResultsChannelClosed(t *testing.T, pool *WorkerPool, reason string) {
+func requireCompletionsChannelClosed(t *testing.T, pool *WorkerPool, reason string) {
 	t.Helper()
 
 	select {
-	case _, ok := <-pool.Results():
+	case _, ok := <-pool.Completions():
 		assert.False(t, ok, reason)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, reason)
 	}
 }
 
-func TestWorkerPool_ClosedDispatchChannelClosesResults(t *testing.T) {
+func TestWorkerPool_ClosedDispatchChannelClosesCompletions(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
@@ -189,12 +189,12 @@ func TestWorkerPool_ClosedDispatchChannelClosesResults(t *testing.T) {
 
 	pool.Start(t.Context(), 1)
 	close(dispatchCh)
-	requireResultsChannelClosed(t, pool, "results channel should close after workers observe a closed dispatch channel")
+	requireCompletionsChannelClosed(t, pool, "completions channel should close after workers observe a closed dispatch channel")
 
 	pool.Stop()
 }
 
-func TestWorkerPool_ClosedCompletionChannelClosesResults(t *testing.T) {
+func TestWorkerPool_ClosedCompletionChannelClosesCompletions(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
@@ -204,12 +204,12 @@ func TestWorkerPool_ClosedCompletionChannelClosesResults(t *testing.T) {
 
 	pool.Start(t.Context(), 1)
 	close(completeCh)
-	requireResultsChannelClosed(t, pool, "results channel should close after workers observe a closed completion channel")
+	requireCompletionsChannelClosed(t, pool, "completions channel should close after workers observe a closed completion channel")
 
 	pool.Stop()
 }
 
-func TestWorkerPool_ContextCancellationClosesResults(t *testing.T) {
+func TestWorkerPool_ContextCancellationClosesCompletions(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
@@ -220,12 +220,12 @@ func TestWorkerPool_ContextCancellationClosesResults(t *testing.T) {
 
 	pool.Start(ctx, 1)
 	cancel()
-	requireResultsChannelClosed(t, pool, "results channel should close after context cancellation")
+	requireCompletionsChannelClosed(t, pool, "completions channel should close after context cancellation")
 
 	pool.Stop()
 }
 
-func TestWorkerPool_StopIsIdempotentAfterResultsClose(t *testing.T) {
+func TestWorkerPool_StopIsIdempotentAfterCompletionsClose(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
@@ -237,10 +237,10 @@ func TestWorkerPool_StopIsIdempotentAfterResultsClose(t *testing.T) {
 	close(dispatchCh)
 
 	select {
-	case _, ok := <-pool.Results():
-		assert.False(t, ok, "results channel should close after dispatch channel close")
+	case _, ok := <-pool.Completions():
+		assert.False(t, ok, "completions channel should close after dispatch channel close")
 	case <-time.After(5 * time.Second):
-		require.Fail(t, "results channel did not close after dispatch channel close")
+		require.Fail(t, "completions channel did not close after dispatch channel close")
 	}
 
 	pool.Stop()
@@ -255,8 +255,8 @@ func TestWorkerPool_SendResultDropsWhenContextCancellationWins(t *testing.T) {
 	completeCh := make(chan struct{})
 	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
 
-	// Saturate the results buffer so sendResult cannot complete before shutdown.
-	pool.results <- WorkerResult{Path: "buffered.txt", ActionID: 1}
+	// Saturate the completions buffer so sendResult cannot complete before shutdown.
+	pool.completions <- ActionCompletion{Path: "buffered.txt", ActionID: 1}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -269,9 +269,9 @@ func TestWorkerPool_SendResultDropsWhenContextCancellationWins(t *testing.T) {
 		},
 	}, nil, fmt.Errorf("shutdown won"))
 
-	require.Len(t, pool.results, 1, "canceled sendResult should not enqueue another item")
+	require.Len(t, pool.completions, 1, "canceled sendResult should not enqueue another item")
 
-	result := <-pool.results
+	result := <-pool.completions
 	assert.Equal(t, "buffered.txt", result.Path)
 	assert.EqualValues(t, 1, result.ActionID)
 }
@@ -692,13 +692,13 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
-	// Read one result from the channel — worker must send a result.
-	var result WorkerResult
+	// Read one completion from the channel — worker must send a completion.
+	var result ActionCompletion
 	select {
-	case r := <-pool.Results():
+	case r := <-pool.Completions():
 		result = r
 	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting for worker result")
+		require.Fail(t, "timeout waiting for action completion")
 	}
 
 	// Worker sent the result but did NOT call Complete — dgh.Done should
@@ -728,11 +728,11 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// WorkerResult populates from TrackedAction (R-2.10.16, R-6.8.12)
+// ActionCompletion populates from TrackedAction (R-2.10.16, R-6.8.12)
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.16, R-6.8.12
-func TestWorkerResult_PopulatesFromAction(t *testing.T) {
+func TestActionCompletion_PopulatesFromAction(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
@@ -755,12 +755,12 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
-	var result WorkerResult
+	var result ActionCompletion
 	select {
-	case r := <-pool.Results():
+	case r := <-pool.Completions():
 		result = r
 	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting for worker result")
+		require.Fail(t, "timeout waiting for action completion")
 	}
 
 	assert.Equal(t, "shared-action.txt", result.Path)
@@ -777,7 +777,7 @@ func TestWorkerResult_PopulatesFromAction(t *testing.T) {
 }
 
 // Validates: R-6.8.12
-func TestWorkerResult_HTTPStatusAndRetryAfter(t *testing.T) {
+func TestActionCompletion_HTTPStatusAndRetryAfter(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
@@ -817,12 +817,12 @@ func TestWorkerResult_HTTPStatusAndRetryAfter(t *testing.T) {
 	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
-	var result WorkerResult
+	var result ActionCompletion
 	select {
-	case r := <-pool.Results():
+	case r := <-pool.Completions():
 		result = r
 	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting for worker result")
+		require.Fail(t, "timeout waiting for action completion")
 	}
 
 	assert.False(t, result.Success)
@@ -931,7 +931,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		for r := range pool.Results() {
+		for r := range pool.Completions() {
 			if r.Success {
 				succeeded.Add(1)
 			} else {

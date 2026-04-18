@@ -13,51 +13,37 @@ import (
 )
 
 // Validates: R-2.10.33
-func TestRetryFailureRow_MapsRetryStateToHeldFailure(t *testing.T) {
+func TestRetryWorkKeyHelpers_PreserveExactIdentity(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	assert.Equal(t, RetryWorkKey{}, retryWorkKeyForAction(nil))
+	assert.Equal(t, RetryWorkKey{}, retryWorkKeyForCompletion(nil))
+	assert.Equal(t, RetryWorkKey{}, retryWorkKeyForRetryState(nil))
 
-	assert.Nil(t, retryFailureRow(nil, driveID))
+	action := &Action{Path: "held.txt", OldPath: "old-held.txt", Type: ActionRemoteDelete}
+	assert.Equal(t, retryWorkKey("held.txt", "old-held.txt", ActionRemoteDelete), retryWorkKeyForAction(action))
 
-	row := retryFailureRow(&RetryStateRow{
-		Path:       "held.txt",
-		OldPath:    "old-held.txt",
-		ActionType: ActionRemoteDelete,
-		ScopeKey:   SKService(),
-	}, driveID)
-	require.NotNil(t, row)
-	assert.Equal(t, "held.txt", row.Path)
-	assert.Equal(t, driveID, row.DriveID)
-	assert.Equal(t, DirectionDelete, row.Direction)
-	assert.Equal(t, ActionRemoteDelete, row.ActionType)
-	assert.Equal(t, FailureRoleHeld, row.Role)
-	assert.Equal(t, CategoryTransient, row.Category)
-	assert.Equal(t, IssueServiceOutage, row.IssueType)
-	assert.Equal(t, SKService(), row.ScopeKey)
+	result := &ActionCompletion{Path: "held.txt", OldPath: "old-held.txt", ActionType: ActionRemoteDelete}
+	assert.Equal(t, retryWorkKey("held.txt", "old-held.txt", ActionRemoteDelete), retryWorkKeyForCompletion(result))
+
+	row := &RetryStateRow{Path: "held.txt", OldPath: "old-held.txt", ActionType: ActionRemoteDelete}
+	assert.Equal(t, retryWorkKey("held.txt", "old-held.txt", ActionRemoteDelete), retryWorkKeyForRetryState(row))
 }
 
 // Validates: R-2.10.33
-func TestRetryFailureRowForStore_UsesEngineDriveFallback(t *testing.T) {
+func TestRetryStateDriveID_UsesEngineDriveFallback(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	flow := testEngineFlow(t, eng)
 
-	row, err := flow.retryFailureRowForStore(t.Context(), &RetryStateRow{
-		Path:       "held.txt",
-		ActionType: ActionUpload,
-		ScopeKey:   SKPermRemote("shared"),
-	})
+	driveID, err := flow.retryStateDriveID(t.Context())
 	require.NoError(t, err)
-	require.NotNil(t, row)
-	assert.Equal(t, eng.driveID, row.DriveID)
-	assert.Equal(t, DirectionUpload, row.Direction)
-	assert.Equal(t, IssueSharedFolderBlocked, row.IssueType)
+	assert.Equal(t, eng.driveID, driveID)
 }
 
 // Validates: R-2.10.33
-func TestRetryFailureRowForStore_PrefersPersistedConfiguredDrive(t *testing.T) {
+func TestRetryStateDriveID_PrefersPersistedConfiguredDrive(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -67,19 +53,13 @@ func TestRetryFailureRowForStore_PrefersPersistedConfiguredDrive(t *testing.T) {
 
 	require.NoError(t, eng.baseline.CommitObservation(ctx, nil, "", configuredDriveID))
 
-	row, err := flow.retryFailureRowForStore(ctx, &RetryStateRow{
-		Path:       "held.txt",
-		ActionType: ActionDownload,
-		ScopeKey:   SKService(),
-	})
+	driveID, err := flow.retryStateDriveID(ctx)
 	require.NoError(t, err)
-	require.NotNil(t, row)
-	assert.Equal(t, configuredDriveID, row.DriveID)
-	assert.Equal(t, DirectionDownload, row.Direction)
+	assert.Equal(t, configuredDriveID, driveID)
 }
 
 // Validates: R-2.10.33
-func TestGetSyncFailureByPath_ReturnsHeldFailureRow(t *testing.T) {
+func TestSyncFailureByPathForTest_ReturnsHeldFailureRow(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -99,8 +79,7 @@ func TestGetSyncFailureByPath_ReturnsHeldFailureRow(t *testing.T) {
 		ScopeKey:   SKPermRemote("shared"),
 	}, nil))
 
-	row, found, err := store.GetSyncFailureByPath(ctx, "held.txt", driveID)
-	require.NoError(t, err)
+	row, found := syncFailureByPathForTest(t, store, ctx, "held.txt")
 	require.True(t, found)
 	require.NotNil(t, row)
 	assert.Equal(t, "held.txt", row.Path)
@@ -113,14 +92,11 @@ func TestGetSyncFailureByPath_ReturnsHeldFailureRow(t *testing.T) {
 }
 
 // Validates: R-2.10.33
-func TestGetSyncFailureByPath_ReturnsNotFoundForMissingPath(t *testing.T) {
+func TestSyncFailureByPathForTest_ReturnsNotFoundForMissingPath(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-	driveID := driveid.New(testDriveID)
-
-	row, found, err := store.GetSyncFailureByPath(t.Context(), "missing.txt", driveID)
-	require.NoError(t, err)
+	row, found := syncFailureByPathForTest(t, store, t.Context(), "missing.txt")
 	assert.False(t, found)
 	assert.Nil(t, row)
 }
@@ -152,7 +128,7 @@ func TestClearStaleRetrySweepRow_ResolvedRetryDeletesRetryAndFailure(t *testing.
 		Path:       row.Path,
 		DriveID:    eng.driveID,
 		Direction:  DirectionDownload,
-		Role:       FailureRoleHeld,
+		Role:       FailureRoleItem,
 		Category:   CategoryTransient,
 		IssueType:  IssueServiceOutage,
 		ErrMsg:     "held for retry",
@@ -169,8 +145,7 @@ func TestClearStaleRetrySweepRow_ResolvedRetryDeletesRetryAndFailure(t *testing.
 	require.NoError(t, err)
 	assert.Empty(t, retryRows)
 
-	failure, found, err := eng.baseline.GetSyncFailureByPath(ctx, row.Path, eng.driveID)
-	require.NoError(t, err)
+	failure, found := syncFailureByPathForTest(t, eng.baseline, ctx, row.Path)
 	assert.False(t, found)
 	assert.Nil(t, failure)
 }
@@ -222,8 +197,7 @@ func TestClearStaleRetrySweepRow_SkippedRetryPreservesActionableFailure(t *testi
 	require.NoError(t, err)
 	assert.Empty(t, retryRows)
 
-	failures, err := eng.baseline.ListActionableFailures(ctx)
-	require.NoError(t, err)
+	failures := actionableSyncFailuresForTest(t, eng.baseline, ctx)
 	require.Len(t, failures, 1)
 	assert.Equal(t, "forms", failures[0].Path)
 	assert.Equal(t, IssueInvalidFilename, failures[0].IssueType)

@@ -538,9 +538,18 @@ func isFailureResolvedForTest(t *testing.T, eng *testEngine, ctx context.Context
 	t.Helper()
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	candidate := testEngineFlow(t, eng).buildRetryCandidate(ctx, bl, row)
+	flow := testEngineFlow(t, eng)
+	driveID := row.DriveID
+	if driveID.IsZero() {
+		driveID = eng.driveID
+	}
+	candidate := flow.buildRetryCandidateFromRetryState(ctx, bl, &RetryStateRow{
+		Path:       row.Path,
+		ActionType: normalizeFailureActionType(row.Direction, row.ActionType),
+		ScopeKey:   row.ScopeKey,
+	}, driveID)
 	if candidate.resolved {
-		testEngineFlow(t, eng).clearFailureCandidate(ctx, row, "test resolution")
+		flow.clearRetryWorkCandidate(ctx, retryWorkKey(row.Path, "", normalizeFailureActionType(row.Direction, row.ActionType)), driveID, "test resolution")
 	}
 	return candidate.resolved
 }
@@ -553,7 +562,16 @@ func clearFailureCandidateForTest(
 	caller string,
 ) {
 	t.Helper()
-	testEngineFlow(t, eng).clearFailureCandidate(ctx, row, caller)
+	driveID := row.DriveID
+	if driveID.IsZero() {
+		driveID = eng.driveID
+	}
+	testEngineFlow(t, eng).clearRetryWorkCandidate(
+		ctx,
+		retryWorkKey(row.Path, "", normalizeFailureActionType(row.Direction, row.ActionType)),
+		driveID,
+		caller,
+	)
 }
 
 func recordRetryTrialSkippedItemForTest(
@@ -564,7 +582,16 @@ func recordRetryTrialSkippedItemForTest(
 	skipped *SkippedItem,
 ) {
 	t.Helper()
-	testEngineFlow(t, eng).recordRetryTrialSkippedItem(ctx, row, skipped)
+	driveID := row.DriveID
+	if driveID.IsZero() {
+		driveID = eng.driveID
+	}
+	testEngineFlow(t, eng).recordRetryTrialSkippedItem(
+		ctx,
+		retryWorkKey(row.Path, "", normalizeFailureActionType(row.Direction, row.ActionType)),
+		driveID,
+		skipped,
+	)
 }
 
 func isObservationSuppressedForTest(t *testing.T, eng *testEngine, watch *watchRuntime) bool {
@@ -657,44 +684,44 @@ func cascadeRecordAndCompleteForTest(t *testing.T, eng *testEngine, ctx context.
 	testScopeController(t, eng).cascadeRecordAndComplete(ctx, ta, scopeKey)
 }
 
-func processWorkerResultForTest(
+func processActionCompletionForTest(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	r *WorkerResult,
+	r *ActionCompletion,
 	bl *Baseline,
 ) []*TrackedAction {
 	t.Helper()
-	return processWorkerResultDetailedForTest(t, eng, ctx, r, bl).dispatched
+	return processActionCompletionDetailedForTest(t, eng, ctx, r, bl).dispatched
 }
 
-func processWorkerResultDetailedForTest(
+func processActionCompletionDetailedForTest(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	r *WorkerResult,
+	r *ActionCompletion,
 	bl *Baseline,
 ) routeOutcome {
 	t.Helper()
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
-		return rt.processWorkerResult(ctx, rt, r, bl)
+		return rt.processActionCompletion(ctx, rt, r, bl)
 	}
 
 	flow, ok := lookupTestEngineFlow(eng)
 	require.True(t, ok, "engine flow must be initialized for this test")
-	return flow.processWorkerResult(ctx, nil, r, bl)
+	return flow.processActionCompletion(ctx, nil, r, bl)
 }
 
-func processTrialResultForTest(t *testing.T, eng *testEngine, ctx context.Context, r *WorkerResult) {
+func processTrialResultForTest(t *testing.T, eng *testEngine, ctx context.Context, r *ActionCompletion) {
 	t.Helper()
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
-		rt.processWorkerResult(ctx, rt, r, nil)
+		rt.processActionCompletion(ctx, rt, r, nil)
 		return
 	}
 
 	flow, ok := lookupTestEngineFlow(eng)
 	require.True(t, ok, "engine flow must be initialized for this test")
-	flow.processWorkerResult(ctx, nil, r, nil)
+	flow.processActionCompletion(ctx, nil, r, nil)
 }
 
 type debugEventRecorder struct {
@@ -1131,7 +1158,7 @@ func applyScopeBlockForTest(t *testing.T, eng *testEngine, ctx context.Context, 
 	testScopeController(t, eng).applyScopeBlock(ctx, rt, sr)
 }
 
-func feedScopeDetectionForTest(t *testing.T, eng *testEngine, ctx context.Context, r *WorkerResult) {
+func feedScopeDetectionForTest(t *testing.T, eng *testEngine, ctx context.Context, r *ActionCompletion) {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
 	testScopeController(t, eng).feedScopeDetection(ctx, rt, r)
