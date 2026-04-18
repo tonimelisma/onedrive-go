@@ -70,7 +70,6 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 		{Key: SummaryRemoteWriteDenied, Count: 2},
 	}, summary.Groups)
 
-	count, err := mgr.CountVisibleIssues(ctx)
-	require.NoError(t, err)
+	count := visibleIssueCountForTest(t, mgr, ctx)
 	assert.Equal(t, 3, count)
 }

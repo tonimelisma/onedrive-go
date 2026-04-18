@@ -6,7 +6,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
-func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *WorkerResult) []any {
+func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *ActionCompletion) []any {
 	if flow == nil || decision == nil || r == nil {
 		return nil
 	}

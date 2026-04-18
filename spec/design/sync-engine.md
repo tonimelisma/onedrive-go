@@ -11,6 +11,7 @@ The engine is the single-drive runtime owner. It coordinates:
 - observation
 - planning
 - execution
+- publication-only action commits
 - durable store commits
 - retry and trial timers
 - scope lifecycle
@@ -29,6 +30,8 @@ Retry and trial admission now read from `retry_state`:
 
 - ready per-item retry work comes from unblocked `retry_state` rows whose `next_retry_at` is due
 - scope trials sample one blocked `retry_state` row at random for each due scope
+- retry/trial revalidation rebuilds candidates directly from `RetryStateRow`
+  and `RetryWorkKey` plus current snapshots and baseline
 - `sync_failures` remains available for issue reporting, but it is no longer part of retry scheduling, retry candidate reconstruction, scope admission, or scope lifecycle
 
 The engine does **not** own multi-drive orchestration or control-socket
@@ -75,8 +78,9 @@ observation and execution metadata.
 2. refresh current remote and local snapshots once
 3. compute SQL structural diff and reconciliation once
 4. build the current actionable set in Go
-5. execute once
-6. commit outcomes and return a report
+5. commit any ready publication-only actions directly through the store
+6. execute remaining concrete work once
+7. commit outcomes and return a report
 
 There is no mid-pass mailbox for user intent. New external DB writes during a
 one-shot run are simply durable state for a later run.
@@ -107,7 +111,7 @@ delta visibility is not sufficient.
 - dirty-signal intake and debounce
 - snapshot refresh and SQLite reconciliation after debounce
 - action admission and dispatch
-- worker result drain
+- action completion drain
 - retry and trial timer scheduling
 - periodic recheck and full reconciliation
 - graceful drain on shutdown
@@ -119,7 +123,9 @@ Local watcher events, remote delta batches, websocket wakes, and full
 reconciliation results are scheduler hints only. After 5 seconds without a new
 local or remote observation, watch mode refreshes current truth, runs SQL
 comparison/reconciliation, builds the current actionable set in Go, and then
-admits runnable actions.
+admits runnable actions. Any ready `ActionUpdateSynced` / `ActionCleanup`
+actions are committed immediately through the store before the remaining
+side-effecting actions go to workers.
 
 ### Recheck And External DB Changes
 
@@ -157,7 +163,7 @@ There is no durable conflict-request workflow and no CLI `resolve` command.
 
 ## Scope And Failure Lifecycle
 
-The engine classifies worker results into:
+The engine classifies action completions into:
 
 - success cleanup
 - retryable failure
@@ -183,6 +189,16 @@ before startup proof and after fatal unauthorized results.
 
 Permission scopes are revalidated automatically; there is no manual retry or
 manual recheck CLI for them.
+
+Scanner-proved recovery for file-level local permission issues now clears only
+the actionable `sync_failures` row for that path. It does not route through
+permission recheck decisions and it does not delete `retry_state`.
+
+Retry/trial reconstruction is retry-owned now. The engine revalidates due or
+blocked retry work directly from `RetryStateRow`, exact `RetryWorkKey`
+identity, and the current snapshot/baseline view. It does not synthesize
+`SyncFailureRow` values to decide whether retry work is resolved, still
+blocked, or newly actionable.
 
 `scope_blocks` remains timer-only metadata. Releasing or discarding a scope
 updates the blocked retry ledger transactionally so no orphaned blocked retry

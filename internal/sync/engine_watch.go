@@ -21,7 +21,7 @@ const (
 	defaultPollInterval = 5 * time.Minute
 	defaultDebounce     = 5 * time.Second
 	watchEventBuf       = 256
-	// watchResultBuf is the buffer size for the worker result channel in watch
+	// watchResultBuf is the buffer size for the action completion channel in watch
 	// mode. Large enough for typical batches without blocking workers.
 	watchResultBuf = 4096
 
@@ -160,7 +160,7 @@ type watchPipeline struct {
 	bl               *Baseline
 	safety           *SafetyConfig
 	batchReady       <-chan DirtyBatch
-	results          <-chan WorkerResult
+	completions      <-chan ActionCompletion
 	errs             <-chan error
 	skippedCh        <-chan []SkippedItem
 	reconcileC       <-chan time.Time
@@ -168,7 +168,7 @@ type watchPipeline struct {
 	recheckC         <-chan time.Time
 	activeObs        int
 	mode             Mode
-	pool             *WorkerPool // for bootstrapSync to access Results()
+	pool             *WorkerPool // for bootstrapSync to access Completions()
 	cleanup          func()
 }
 
@@ -247,7 +247,7 @@ func (rt *watchRuntime) initWatchInfra(
 		runtime:          rt,
 		safety:           rt.engine.resolveSafetyConfig(),
 		batchReady:       batchReady,
-		results:          pool.Results(),
+		completions:      pool.Completions(),
 		reconcileC:       rt.reconcileCh,
 		reconcileResults: rt.reconcileResults,
 		recheckC:         tickerChan(recheckTicker),
@@ -277,7 +277,7 @@ func (rt *watchRuntime) initWatchInfra(
 
 		rt.stopRetryTimer()
 		rt.stopTrialTimer()
-		pool.Stop() // closes results channel after workers exit
+		pool.Stop() // closes completions channel after workers exit
 		rt.remoteObs = nil
 		rt.localObs = nil
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventWatchStopped})
@@ -328,28 +328,35 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 		return fmt.Errorf("sync: bootstrap planning failed: %w", err)
 	}
 	rt.engine.collector().RecordPlan(len(plan.Actions), rt.engine.since(planStart))
-	if err := rt.materializeCurrentActionPlan(ctx, plan, false); err != nil {
-		return fmt.Errorf("sync: bootstrap plan materialization failed: %w", err)
+	materializeErr := rt.materializeCurrentActionPlan(ctx, plan, false)
+	if materializeErr != nil {
+		return fmt.Errorf("sync: bootstrap plan materialization failed: %w", materializeErr)
 	}
 	if len(plan.Actions) == 0 {
-		if err := rt.commitPendingPrimaryCursor(ctx, pendingCursorCommit); err != nil {
-			return err
+		commitErr := rt.commitPendingPrimaryCursor(ctx, pendingCursorCommit)
+		if commitErr != nil {
+			return commitErr
 		}
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
-		if err := rt.armFullReconcileTimer(ctx); err != nil {
-			return fmt.Errorf("sync: arming full reconcile timer: %w", err)
+		timerErr := rt.armFullReconcileTimer(ctx)
+		if timerErr != nil {
+			return fmt.Errorf("sync: arming full reconcile timer: %w", timerErr)
 		}
 		rt.engine.logger.Info("bootstrap sync complete: no changes detected")
 		return nil
 	}
 
 	// Commit the deferred delta token before dispatching bootstrap actions.
-	if err := rt.commitPendingPrimaryCursor(ctx, pendingCursorCommit); err != nil {
-		return err
+	cursorCommitErr := rt.commitPendingPrimaryCursor(ctx, pendingCursorCommit)
+	if cursorCommitErr != nil {
+		return cursorCommitErr
 	}
 
 	// Dispatch through watch pipeline (same path as steady-state batches).
-	initialOutbox, _ := rt.dispatchCurrentPlan(ctx, plan, dispatchBatchOptions{})
+	initialOutbox, _, err := rt.dispatchCurrentPlan(ctx, plan, bl, dispatchBatchOptions{})
+	if err != nil {
+		return fmt.Errorf("sync: bootstrap dispatch failed: %w", err)
+	}
 
 	// Wait for all bootstrap actions to complete.
 	if err := rt.runWatchUntilQuiescent(ctx, pipe, initialOutbox); err != nil {

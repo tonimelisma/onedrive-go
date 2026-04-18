@@ -165,8 +165,7 @@ func TestEngine_ReleaseScope(t *testing.T) {
 
 	// Failures should now be retryable.
 	now := eng.nowFn()
-	rows, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
-	require.NoError(t, err)
+	rows := readyRetryStateForTest(t, eng.baseline, ctx, now)
 	assert.Len(t, rows, 2, "scope-blocked failures should now be retryable")
 }
 
@@ -431,12 +430,10 @@ func TestEngine_RepairPersistedScopes_ReleasesOrphanedRemotePermissionScope(t *t
 
 	assert.False(t, isTestScopeBlocked(eng, scopeKey))
 
-	retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
-	require.NoError(t, err)
+	retryable := readyRetryStateForTest(t, eng.baseline, ctx, now)
 	assert.Empty(t, retryable, "startup repair should forget remote blocked state when the blocked local work is already gone")
 
-	remaining, err := eng.baseline.ListRemoteBlockedFailures(ctx)
-	require.NoError(t, err)
+	remaining := syncFailuresByIssueTypeForTest(t, eng.baseline, ctx, IssueRemoteWriteDenied)
 	assert.Empty(t, remaining)
 }
 
@@ -693,10 +690,11 @@ func throttleAndServiceRepairPersistedScopesCases() []*repairPersistedScopesCase
 			verify: func(t *testing.T, env repairPersistedScopesEnv) {
 				t.Helper()
 				assert.False(t, isTestScopeBlocked(env.eng, SKThrottleAccount()))
-				retryable, err := env.eng.baseline.ListSyncFailuresForRetry(env.ctx(), env.now)
-				require.NoError(t, err)
+				retryable := readyRetryStateForTest(t, env.eng.baseline, env.ctx(), env.now)
 				require.Len(t, retryable, 1)
-				assert.Equal(t, FailureRoleItem, retryable[0].Role)
+				failure, found := syncFailureByPathForTest(t, env.eng.baseline, env.ctx(), "upload.txt")
+				require.True(t, found)
+				assert.Equal(t, FailureRoleItem, failure.Role)
 			},
 		},
 		{
@@ -882,8 +880,7 @@ func TestEngine_RepairPersistedScopes_DiskPolicy(t *testing.T) {
 		require.NoError(t, repairPersistedScopesForTest(t, eng, ctx))
 
 		assert.False(t, isTestScopeBlocked(eng, scopeKey))
-		retryable, err := eng.baseline.ListSyncFailuresForRetry(ctx, now)
-		require.NoError(t, err)
+		retryable := readyRetryStateForTest(t, eng.baseline, ctx, now)
 		require.Len(t, retryable, 1)
 	})
 
@@ -974,8 +971,312 @@ func TestEngine_AdmitReady_ScopeBlocked(t *testing.T) {
 	assert.Len(t, failures, 1)
 }
 
+func TestDispatchCurrentPlan_StaleTrialClearsOnlySelectedHeldRetryWork(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+	scopeKey := SKQuotaOwn()
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:       "trial.txt",
+		DriveID:    eng.driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		Role:       FailureRoleHeld,
+		Category:   CategoryTransient,
+		ScopeKey:   scopeKey,
+		IssueType:  IssueQuotaExceeded,
+		ErrMsg:     "held upload",
+	}, nil))
+
+	other := retryStateIdentityForWork("trial.txt", "old.txt", ActionRemoteMove)
+	other.ScopeKey = scopeKey
+	other.Blocked = true
+	other.AttemptCount = 2
+	other.FirstSeenAt = eng.nowFn().UnixNano()
+	other.LastSeenAt = eng.nowFn().UnixNano()
+	require.NoError(t, eng.baseline.UpsertRetryState(ctx, &other))
+
+	plan := &ActionPlan{
+		Actions: []Action{{
+			Type:    ActionDownload,
+			Path:    "trial.txt",
+			DriveID: eng.driveID,
+		}},
+		Deps: [][]int{{}},
+	}
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	outbox, accepted, err := testWatchRuntime(t, eng).dispatchCurrentPlan(ctx, plan, bl, dispatchBatchOptions{
+		trialScopeKey: scopeKey,
+		trialPath:     "trial.txt",
+		trialWork: RetryWorkKey{
+			Path:       "trial.txt",
+			ActionType: ActionUpload,
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, accepted)
+	assert.Empty(t, outbox)
+
+	rows, err := eng.baseline.ListRetryState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "trial.txt", rows[0].Path)
+	assert.Equal(t, ActionRemoteMove, rows[0].ActionType)
+	assert.Equal(t, "old.txt", rows[0].OldPath)
+}
+
+func TestEngine_AdmitReady_TrialMismatchClearsOnlySelectedHeldRetryWork(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+	scopeKey := SKQuotaOwn()
+
+	setTestScopeBlock(t, eng, &ScopeBlock{
+		Key:       scopeKey,
+		IssueType: IssueQuotaExceeded,
+		BlockedAt: eng.nowFn(),
+	})
+
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:       "trial.txt",
+		DriveID:    eng.driveID,
+		Direction:  DirectionDownload,
+		ActionType: ActionDownload,
+		Role:       FailureRoleHeld,
+		Category:   CategoryTransient,
+		ScopeKey:   scopeKey,
+		IssueType:  IssueQuotaExceeded,
+		ErrMsg:     "held download",
+	}, nil))
+
+	other := retryStateIdentityForWork("trial.txt", "", ActionUpload)
+	other.ScopeKey = scopeKey
+	other.Blocked = true
+	other.AttemptCount = 2
+	other.FirstSeenAt = eng.nowFn().UnixNano()
+	other.LastSeenAt = eng.nowFn().UnixNano()
+	require.NoError(t, eng.baseline.UpsertRetryState(ctx, &other))
+
+	action := Action{
+		Type:    ActionDownload,
+		Path:    "trial.txt",
+		DriveID: eng.driveID,
+	}
+	ta := testWatchRuntime(t, eng).depGraph.Add(&action, 1, nil)
+	require.NotNil(t, ta)
+	ta.IsTrial = true
+	ta.TrialScopeKey = scopeKey
+
+	dispatched := admitReadyForTest(t, eng, ctx, []*TrackedAction{ta})
+	require.Len(t, dispatched, 1)
+	assert.Equal(t, "trial.txt", dispatched[0].Action.Path)
+	assert.Equal(t, ActionDownload, dispatched[0].Action.Type)
+
+	rows, err := eng.baseline.ListRetryState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "trial.txt", rows[0].Path)
+	assert.Equal(t, ActionUpload, rows[0].ActionType)
+	assert.True(t, isTestScopeBlocked(eng, scopeKey))
+}
+
+func TestEngine_DispatchCurrentPlan_PublicationOnlySyncedUpdateCommitsWithoutOutbox(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+
+	plan := &ActionPlan{
+		Actions: []Action{{
+			Type:    ActionUpdateSynced,
+			Path:    "publish-synced.txt",
+			DriveID: eng.driveID,
+			View: &PathView{
+				Remote: &RemoteState{
+					ItemID:   "remote-item",
+					DriveID:  eng.driveID,
+					ParentID: "root",
+					ItemType: ItemTypeFile,
+					Hash:     "remote-hash",
+					Size:     42,
+					Mtime:    99,
+					ETag:     "etag-1",
+				},
+				Local: &LocalState{
+					Hash:  "local-hash",
+					Size:  42,
+					Mtime: 100,
+				},
+			},
+		}},
+		Deps: [][]int{{}},
+	}
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	outbox, accepted, err := testWatchRuntime(t, eng).dispatchCurrentPlan(ctx, plan, bl, dispatchBatchOptions{})
+	require.NoError(t, err)
+	assert.True(t, accepted)
+	assert.Empty(t, outbox)
+	assert.Zero(t, testWatchRuntime(t, eng).depGraph.InFlightCount())
+
+	entry, ok := eng.baseline.Baseline().GetByPath("publish-synced.txt")
+	require.True(t, ok)
+	assert.Equal(t, "remote-item", entry.ItemID)
+	assert.Equal(t, "local-hash", entry.LocalHash)
+	assert.Equal(t, "remote-hash", entry.RemoteHash)
+}
+
+func TestEngine_DispatchCurrentPlan_PublicationOnlyActionReleasesDependentOutbox(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+
+	plan := &ActionPlan{
+		Actions: []Action{
+			{
+				Type:    ActionUpdateSynced,
+				Path:    "publish-parent.txt",
+				DriveID: eng.driveID,
+				View: &PathView{
+					Remote: &RemoteState{
+						ItemID:   "publish-parent-item",
+						DriveID:  eng.driveID,
+						ParentID: "root",
+						ItemType: ItemTypeFile,
+						Hash:     "remote-hash",
+						Size:     42,
+						Mtime:    99,
+						ETag:     "etag-1",
+					},
+					Local: &LocalState{
+						Hash:  "local-hash",
+						Size:  42,
+						Mtime: 100,
+					},
+				},
+			},
+			{
+				Type:    ActionUpload,
+				Path:    "publish-child.txt",
+				DriveID: eng.driveID,
+			},
+		},
+		Deps: [][]int{
+			{},
+			{0},
+		},
+	}
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	outbox, accepted, err := testWatchRuntime(t, eng).dispatchCurrentPlan(ctx, plan, bl, dispatchBatchOptions{})
+	require.NoError(t, err)
+	assert.True(t, accepted)
+	require.Len(t, outbox, 1)
+	assert.Equal(t, "publish-child.txt", outbox[0].Action.Path)
+	assert.Equal(t, ActionUpload, outbox[0].Action.Type)
+
+	entry, ok := eng.baseline.Baseline().GetByPath("publish-parent.txt")
+	require.True(t, ok)
+	assert.Equal(t, "publish-parent-item", entry.ItemID)
+}
+
+func TestEngine_DispatchCurrentPlan_PublicationOnlyCleanupCommitsWithoutOutbox(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
+		Action:          ActionDownload,
+		Success:         true,
+		Path:            "publish-cleanup.txt",
+		DriveID:         eng.driveID,
+		ItemID:          "cleanup-item",
+		ItemType:        ItemTypeFile,
+		LocalHash:       "hash",
+		RemoteHash:      "hash",
+		LocalSize:       9,
+		LocalSizeKnown:  true,
+		RemoteSize:      9,
+		RemoteSizeKnown: true,
+		LocalMtime:      1,
+		RemoteMtime:     1,
+	}))
+
+	plan := &ActionPlan{
+		Actions: []Action{{
+			Type:    ActionCleanup,
+			Path:    "publish-cleanup.txt",
+			DriveID: eng.driveID,
+			View: &PathView{
+				Baseline: &BaselineEntry{
+					Path:     "publish-cleanup.txt",
+					DriveID:  eng.driveID,
+					ItemID:   "cleanup-item",
+					ItemType: ItemTypeFile,
+				},
+			},
+		}},
+		Deps: [][]int{{}},
+	}
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	outbox, accepted, err := testWatchRuntime(t, eng).dispatchCurrentPlan(ctx, plan, bl, dispatchBatchOptions{})
+	require.NoError(t, err)
+	assert.True(t, accepted)
+	assert.Empty(t, outbox)
+	assert.Zero(t, testWatchRuntime(t, eng).depGraph.InFlightCount())
+
+	_, ok := eng.baseline.Baseline().GetByPath("publish-cleanup.txt")
+	assert.False(t, ok)
+}
+
+func TestEngine_DispatchCurrentPlan_PublicationOnlyCommitFailureCountsAsFailure(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := context.Background()
+
+	require.NoError(t, eng.baseline.CommitObservation(ctx, nil, "", eng.driveID))
+
+	plan := &ActionPlan{
+		Actions: []Action{{
+			Type:    ActionCleanup,
+			Path:    "publish-failure.txt",
+			DriveID: driveid.New("other-drive"),
+		}},
+		Deps: [][]int{{}},
+	}
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	outbox, accepted, err := testWatchRuntime(t, eng).dispatchCurrentPlan(ctx, plan, bl, dispatchBatchOptions{})
+	require.NoError(t, err)
+	assert.True(t, accepted)
+	assert.Empty(t, outbox)
+	assert.Zero(t, testWatchRuntime(t, eng).depGraph.InFlightCount())
+	assert.Equal(t, 1, testEngineFlow(t, eng).failed)
+
+	_, ok := eng.baseline.Baseline().GetByPath("publish-failure.txt")
+	assert.False(t, ok)
+}
+
 // ---------------------------------------------------------------------------
-// processWorkerResult — success path
+// processActionCompletion — success path
 // ---------------------------------------------------------------------------
 
 func TestEngine_ProcessAndRoute_Success(t *testing.T) {
@@ -996,7 +1297,7 @@ func TestEngine_ProcessAndRoute_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate successful result for parent.
-	r := &WorkerResult{
+	r := &ActionCompletion{
 		Path:       "parent.txt",
 		DriveID:    driveID,
 		ActionType: ActionUpload,
@@ -1004,7 +1305,7 @@ func TestEngine_ProcessAndRoute_Success(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := processWorkerResultForTest(t, eng, ctx, r, bl)
+	dispatched := processActionCompletionForTest(t, eng, ctx, r, bl)
 
 	// Child should be returned as ready (no scope gate → dispatched).
 	assert.Len(t, dispatched, 1)
@@ -1032,7 +1333,7 @@ func TestEngine_ProcessAndRoute_FailureCascadesChildren(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate failed result for parent.
-	r := &WorkerResult{
+	r := &ActionCompletion{
 		Path:       "dir",
 		DriveID:    driveID,
 		ActionType: ActionFolderCreate,
@@ -1042,7 +1343,7 @@ func TestEngine_ProcessAndRoute_FailureCascadesChildren(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := processWorkerResultForTest(t, eng, ctx, r, bl)
+	dispatched := processActionCompletionForTest(t, eng, ctx, r, bl)
 
 	// Child should NOT be dispatched — it's cascade-recorded.
 	assert.Empty(t, dispatched)
@@ -1083,7 +1384,7 @@ func TestCascadeFailAndComplete_Grandchildren(t *testing.T) {
 	require.NoError(t, err)
 
 	// Fail parent A — B and C should both be cascade-failed and completed.
-	r := &WorkerResult{
+	r := &ActionCompletion{
 		Path:       "a",
 		DriveID:    driveID,
 		ActionType: ActionFolderCreate,
@@ -1093,7 +1394,7 @@ func TestCascadeFailAndComplete_Grandchildren(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := processWorkerResultForTest(t, eng, ctx, r, bl)
+	dispatched := processActionCompletionForTest(t, eng, ctx, r, bl)
 	assert.Empty(t, dispatched, "no actions should be dispatched on failure")
 
 	// All 3 actions should be completed — none stranded.
@@ -1129,7 +1430,7 @@ func TestCompleteSubtree_Grandchildren(t *testing.T) {
 	require.NoError(t, err)
 
 	// Shutdown parent A — B and C should be silently completed.
-	r := &WorkerResult{
+	r := &ActionCompletion{
 		Path:       "a",
 		DriveID:    driveID,
 		ActionType: ActionFolderCreate,
@@ -1138,7 +1439,7 @@ func TestCompleteSubtree_Grandchildren(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := processWorkerResultForTest(t, eng, ctx, r, bl)
+	dispatched := processActionCompletionForTest(t, eng, ctx, r, bl)
 	assert.Empty(t, dispatched)
 
 	// All 3 actions should be completed.
@@ -1176,7 +1477,7 @@ func TestCascadeFailAndComplete_Diamond(t *testing.T) {
 	require.NoError(t, err)
 
 	// Fail parent A — B, C, and D should all be cascade-failed.
-	r := &WorkerResult{
+	r := &ActionCompletion{
 		Path:       "a",
 		DriveID:    driveID,
 		ActionType: ActionFolderCreate,
@@ -1186,7 +1487,7 @@ func TestCascadeFailAndComplete_Diamond(t *testing.T) {
 		ActionID:   1,
 	}
 
-	dispatched := processWorkerResultForTest(t, eng, ctx, r, bl)
+	dispatched := processActionCompletionForTest(t, eng, ctx, r, bl)
 	assert.Empty(t, dispatched)
 
 	// All 4 actions should be completed — D completed exactly once.
@@ -1897,7 +2198,7 @@ func TestTrialDispatch_UsesPlannerWorkRequest(t *testing.T) {
 	}))
 
 	// After successful dispatch, the scope block's TrialInterval should NOT
-	// be extended — interval stays unmutated until the worker result arrives.
+	// be extended — interval stays unmutated until the action completion arrives.
 	blockAfter, ok := getTestScopeBlock(eng, sk)
 	require.True(t, ok)
 	assert.Equal(t, intervalBefore, blockAfter.TrialInterval,
@@ -2100,8 +2401,10 @@ func TestEngine_ClearFailureCandidate_RemovesSyncFailure(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 	row := &SyncFailureRow{
-		Path:    "clear-me.txt",
-		DriveID: eng.driveID,
+		Path:       "clear-me.txt",
+		DriveID:    eng.driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
 	}
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
@@ -2125,8 +2428,10 @@ func TestEngine_RecordRetryTrialSkippedItem_ReasonlessSkipClearsFailure(t *testi
 	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 	row := &SyncFailureRow{
-		Path:    "internal.tmp",
-		DriveID: eng.driveID,
+		Path:       "internal.tmp",
+		DriveID:    eng.driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
 	}
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
@@ -2150,16 +2455,16 @@ func TestEngine_RecordRetryTrialSkippedItem_ReasonlessSkipWithZeroDriveIDClearsE
 	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 	row := &SyncFailureRow{
-		Path: "internal.tmp",
+		Path:       "internal.tmp",
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
 	}
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:      row.Path,
 		DriveID:   eng.driveID,
 		Direction: DirectionUpload,
-		Category:  CategoryActionable,
-		IssueType: IssueInvalidFilename,
-		ErrMsg:    "leading space",
+		Category:  CategoryTransient,
 	}, nil))
 
 	recordRetryTrialSkippedItemForTest(t, eng, ctx, row, &SkippedItem{Path: row.Path})
@@ -2186,8 +2491,7 @@ func TestEngine_RecordRetryTrialSkippedItem_ZeroDriveIDFallsBackToEngineDrive(t 
 		FileSize: MaxOneDriveFileSize + 1,
 	})
 
-	failures, err := eng.baseline.ListActionableFailures(ctx)
-	require.NoError(t, err)
+	failures := actionableSyncFailuresForTest(t, eng.baseline, ctx)
 	require.Len(t, failures, 1)
 	assert.Equal(t, row.Path, failures[0].Path)
 	assert.Equal(t, eng.driveID, failures[0].DriveID)
@@ -2223,8 +2527,7 @@ func TestEngine_RecordRetryTrialSkippedItem_ReplacesExistingActionableIssueType(
 		Detail: "path exceeds 400-character limit",
 	})
 
-	failures, err := eng.baseline.ListActionableFailures(ctx)
-	require.NoError(t, err)
+	failures := actionableSyncFailuresForTest(t, eng.baseline, ctx)
 	require.Len(t, failures, 1)
 	assert.Equal(t, row.Path, failures[0].Path)
 	assert.Equal(t, row.DriveID, failures[0].DriveID)

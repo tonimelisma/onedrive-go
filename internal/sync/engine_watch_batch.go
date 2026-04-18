@@ -4,8 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // processDirtyBatch refreshes current truth and replans from SQLite-owned
@@ -54,9 +52,10 @@ func (rt *watchRuntime) processDirtyBatch(
 	}
 	rt.engine.collector().RecordPlan(len(plan.Actions), rt.engine.since(planStart))
 
-	if err := rt.materializeCurrentActionPlan(ctx, plan, false); err != nil {
+	materializeErr := rt.materializeCurrentActionPlan(ctx, plan, false)
+	if materializeErr != nil {
 		rt.engine.logger.Error("watch action-state materialization failed, skipping dirty batch",
-			slog.String("error", err.Error()),
+			slog.String("error", materializeErr.Error()),
 		)
 		return nil
 	}
@@ -68,7 +67,13 @@ func (rt *watchRuntime) processDirtyBatch(
 
 	rt.deduplicateInFlight(plan)
 
-	dispatch, dispatched := rt.dispatchCurrentPlan(ctx, plan, dispatchBatchOptions{})
+	dispatch, dispatched, err := rt.dispatchCurrentPlan(ctx, plan, bl, dispatchBatchOptions{})
+	if err != nil {
+		rt.engine.logger.Error("watch dispatch failed, skipping dirty batch",
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
 	if !dispatched {
 		return nil
 	}
@@ -79,19 +84,20 @@ func (rt *watchRuntime) processDirtyBatch(
 type dispatchBatchOptions struct {
 	trialScopeKey ScopeKey
 	trialPath     string
-	trialDriveID  driveid.ID
+	trialWork     RetryWorkKey
 }
 
 func (rt *watchRuntime) dispatchCurrentPlan(
 	ctx context.Context,
 	plan *ActionPlan,
+	bl *Baseline,
 	opts dispatchBatchOptions,
-) ([]*TrackedAction, bool) {
+) ([]*TrackedAction, bool, error) {
 	if plan == nil || len(plan.Actions) == 0 {
-		return nil, false
+		return nil, false, nil
 	}
 
-	return rt.dispatchBatchActions(ctx, plan, opts)
+	return rt.dispatchBatchActions(ctx, plan, bl, opts)
 }
 
 // periodicPermRecheck runs permission rechecks at most once per 60 seconds.
@@ -136,8 +142,9 @@ func (rt *watchRuntime) deduplicateInFlight(plan *ActionPlan) {
 func (rt *watchRuntime) dispatchBatchActions(
 	ctx context.Context,
 	plan *ActionPlan,
+	bl *Baseline,
 	opts dispatchBatchOptions,
-) ([]*TrackedAction, bool) {
+) ([]*TrackedAction, bool, error) {
 	// Invariant: Planner always builds Deps with len(Actions).
 	if len(plan.Actions) != len(plan.Deps) {
 		rt.engine.logger.Error("plan invariant violation: Actions/Deps length mismatch",
@@ -145,18 +152,19 @@ func (rt *watchRuntime) dispatchBatchActions(
 			slog.Int("deps", len(plan.Deps)),
 		)
 
-		return nil, false
+		return nil, false, nil
 	}
 
 	trialIndex := rt.findTrialActionIndex(plan, opts)
 	if !opts.trialScopeKey.IsZero() && trialIndex < 0 {
-		if err := rt.engine.baseline.ClearSyncFailure(ctx, opts.trialPath, opts.trialDriveID); err != nil {
+		if err := rt.engine.baseline.ClearHeldRetryWork(ctx, opts.trialWork, opts.trialScopeKey); err != nil {
 			rt.engine.logger.Debug("dispatchBatchActions: failed to clear stale trial failure",
-				slog.String("path", opts.trialPath),
+				slog.String("path", opts.trialWork.Path),
+				slog.String("scope_key", opts.trialScopeKey.String()),
 				slog.String("error", err.Error()),
 			)
 		}
-		return nil, false
+		return nil, false, nil
 	}
 
 	// Allocate monotonic action IDs for this batch. Using a global monotonic
@@ -194,6 +202,12 @@ func (rt *watchRuntime) dispatchBatchActions(
 
 	if len(ready) > 0 {
 		ready = rt.scopeController().admitReady(ctx, rt, ready)
+		drained, err := rt.drainPublicationReadyActions(ctx, rt, bl, nil, ready)
+		if err != nil {
+			rt.completeOutboxAsShutdown(drained)
+			return nil, false, err
+		}
+		ready = drained
 	}
 
 	rt.engine.logger.Info("watch batch dispatched",
@@ -209,7 +223,7 @@ func (rt *watchRuntime) dispatchBatchActions(
 		})
 	}
 
-	return ready, true
+	return ready, true, nil
 }
 
 func (rt *watchRuntime) findTrialActionIndex(plan *ActionPlan, opts dispatchBatchOptions) int {
@@ -219,7 +233,9 @@ func (rt *watchRuntime) findTrialActionIndex(plan *ActionPlan, opts dispatchBatc
 
 	for i := range plan.Actions {
 		action := &plan.Actions[i]
-		if action.Path != opts.trialPath {
+		if action.Path != opts.trialWork.Path ||
+			action.OldPath != opts.trialWork.OldPath ||
+			action.Type != opts.trialWork.ActionType {
 			continue
 		}
 		if !opts.trialScopeKey.BlocksAction(

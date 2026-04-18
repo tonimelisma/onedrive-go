@@ -105,7 +105,9 @@ problems used for reporting, status, and issue inspection. Important columns:
 
 The table stores concrete failed work items and actionable path issues. It is
 not a mailbox for user decisions and not the runtime authority for retry or
-scope admission.
+scope admission. Because it is keyed by path, it is also not the owner of
+generic retry-ledger deletion; `retry_state` cleanup uses exact `work_key`
+identity or scope-owned transitions instead.
 
 ## `scope_blocks`
 

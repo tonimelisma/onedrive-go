@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_repair.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go, internal/cli/recover.go, internal/cli/recover_flow.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_retry_state.go, internal/sync/store_scratch.go, internal/sync/store_integrity.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_repair.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go, internal/cli/recover.go, internal/cli/recover_flow.go
 
 Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [verified], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -69,6 +69,17 @@ querying SQLite comparison and reconciliation.
 and, when needed, keeps `remote_state` aligned with the remote truth implied by
 the successful action.
 
+That same store boundary also owns publication-only planner actions:
+
+- `ActionUpdateSynced` publishes an upsert for converged current truth
+- `ActionCleanup` publishes a delete for baseline rows absent from both current
+  snapshots
+
+The engine may commit those two action types directly without worker/executor
+dispatch, but `CommitMutation()` remains the only durable publication path.
+`publicationMutationFromAction()` lives beside that boundary so planner intent
+becomes a `BaselineMutation` at the same authority boundary that commits it.
+
 `RefreshLocalBaseline()` is the narrower reconciliation path for cases where
 local disk has become authoritative without a new executor-produced transfer
 result, such as conflict-copy preservation and other local layout convergence.
@@ -85,10 +96,18 @@ runtime-owned in Go. `sync_failures` remains the reporting surface, but it no
 longer decides which retryable rows are due, which blocked row is trialed, or
 which scope-backed rows keep runtime admission blocked.
 
+Issue-only cleanup and exact retry cleanup are separate store boundaries now:
+
+- actionable issue cleanup may delete `sync_failures` rows only
+- retry-owned resolution may delete one exact `retry_state` work item and the
+  matching transient reporting row in the same transaction
+- scope-owned release/discard may mutate `scope_blocks`, scoped
+  `sync_failures`, and blocked `retry_state` rows for that scope
+
 Supporting failure mutations include:
 
-- `ClearSyncFailure*` helpers
-- `TakeSyncFailure()`
+- issue-only cleanup helpers for actionable rows
+- `ResolveTransientRetryWork()` for exact retry-work resolution
 - `UpsertActionableFailures()`
 - scope-owned release/discard helpers that move or delete blocked rows
 
@@ -119,7 +138,11 @@ from blocked `retry_state` rows keyed by `perm:remote:*` scope keys.
 Read-only store helpers are intentionally separate from writable paths.
 
 - `store_read_remote_state.go` reads current remote mirror truth
-- `store_read_failures.go` reads retry/actionable failures
+- `store_read_failures.go` reads raw persisted `sync_failures` rows for
+  integrity/recovery use
+- `visible_issues.go` owns the higher-level visible issue projection used by
+  status/watch surfaces
+- `store_retry_state.go` owns retry/trial reads such as ready blocked work
 - `store_read_snapshots.go` and `store_inspect.go` build status/recovery views
 
 CLI `status` and status-like flows should prefer these read-only helpers rather

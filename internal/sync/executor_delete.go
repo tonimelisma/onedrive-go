@@ -226,6 +226,6 @@ func (e *Executor) DeleteOutcome(action *Action, actionType ActionType) ActionOu
 		Path:     action.Path,
 		DriveID:  e.resolveDriveID(action),
 		ItemID:   action.ItemID,
-		ItemType: resolveActionItemType(action),
+		ItemType: actionItemType(action),
 	}
 }

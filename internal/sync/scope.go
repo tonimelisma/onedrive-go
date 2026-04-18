@@ -2,7 +2,7 @@
 // used by execution and recovery flows.
 //
 // ScopeState maintains sliding windows for scope escalation. The engine
-// calls UpdateScope after each worker result; when a threshold is crossed,
+// calls UpdateScope after each action completion; when a threshold is crossed,
 // it returns a ScopeUpdateResult and the engine creates a ScopeBlock.
 //
 // Detection thresholds (failure-redesign.md §7.3.1):
@@ -48,7 +48,7 @@ const (
 
 // ScopeState maintains sliding windows for scope escalation detection and
 // records successes that reset windows. Thread-safety is provided by the
-// engine-owned result loop — all calls come from processWorkerResult on one
+// engine-owned result loop — all calls come from processActionCompletion on one
 // goroutine.
 type ScopeState struct {
 	windows map[ScopeKey]*slidingWindow
@@ -65,7 +65,7 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 	}
 }
 
-// UpdateScope feeds a worker result into scope detection. Returns a
+// UpdateScope feeds an action completion into scope detection. Returns a
 // ScopeUpdateResult indicating whether a new scope block should be created.
 //
 // Per R-2.10.3 and failure-redesign.md §7.3.1:
@@ -73,7 +73,7 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 //   - 503 with Retry-After → immediate service block (server signal)
 //   - 507 → sliding window quota:own (3 unique paths / 10s)
 //   - 5xx (no Retry-After) → sliding window service (5 unique paths / 30s)
-func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
+func (ss *ScopeState) UpdateScope(r *ActionCompletion) ScopeUpdateResult {
 	targetDriveID := r.TargetDriveID
 	if targetDriveID.IsZero() {
 		targetDriveID = r.DriveID
@@ -123,7 +123,7 @@ func (ss *ScopeState) UpdateScope(r *WorkerResult) ScopeUpdateResult {
 // RecordSuccess resets the sliding window for scopes relevant to the
 // successful action. Per §7.3.1: "A success from any path in the scope
 // shall reset the unique-path failure counter."
-func (ss *ScopeState) RecordSuccess(r *WorkerResult) {
+func (ss *ScopeState) RecordSuccess(r *ActionCompletion) {
 	// Success resets all potentially-relevant windows for this action's scope.
 	delete(ss.windows, SKQuotaOwn())
 	// Also reset service window — a successful request proves the service is up.

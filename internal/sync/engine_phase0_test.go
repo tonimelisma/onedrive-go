@@ -37,11 +37,11 @@ func newBootstrapWatchPipelineForTest(
 	t.Cleanup(pool.Stop)
 
 	return &watchPipeline{
-		runtime: rt,
-		safety:  DefaultSafetyConfig(),
-		pool:    pool,
-		results: pool.Results(),
-		mode:    mode,
+		runtime:     rt,
+		safety:      DefaultSafetyConfig(),
+		pool:        pool,
+		completions: pool.Completions(),
+		mode:        mode,
 	}
 }
 
@@ -389,7 +389,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	}, 99, nil)
 	require.NotNil(t, ta)
 
-	results <- WorkerResult{
+	results <- ActionCompletion{
 		ActionID:      99,
 		Path:          "trial.txt",
 		ActionType:    ActionDownload,
@@ -465,7 +465,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	}, 1, nil)
 	require.NotNil(t, ta)
 
-	results <- WorkerResult{
+	results <- ActionCompletion{
 		ActionID:      1,
 		Path:          "trial.txt",
 		ActionType:    ActionUpload,
@@ -541,8 +541,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	assert.False(t, isTestScopeBlocked(eng, scopeKey),
 		"local permission recheck should clear the active scope block")
 
-	rows, err := eng.baseline.ListSyncFailuresForRetry(ctx, eng.nowFunc())
-	require.NoError(t, err)
+	rows := readyRetryStateForTest(t, eng.baseline, ctx, eng.nowFunc())
 	require.Len(t, rows, 1)
 	assert.Equal(t, "Private/doc.txt", rows[0].Path)
 
@@ -550,6 +549,49 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	require.Len(t, outbox, 1, "released retry work should dispatch its ready dependency first")
 	assert.Equal(t, "Private", outbox[0].Action.Path)
 	assert.Equal(t, ActionFolderCreate, outbox[0].Action.Type)
+}
+
+// Validates: R-2.10.2, R-2.10.10
+func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDeletingRetryState(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	ctx := t.Context()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(eng.syncRoot, "docs"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, "docs", "file.txt"), []byte("ok"), 0o600))
+
+	require.NoError(t, eng.baseline.UpsertActionableFailures(ctx, []ActionableFailure{{
+		Path:       "docs/file.txt",
+		DriveID:    eng.driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		IssueType:  IssueLocalPermissionDenied,
+		Error:      "permission denied",
+	}}))
+
+	retryRow := retryStateIdentityForWork("docs/file.txt", "", ActionUpload)
+	retryRow.AttemptCount = 3
+	retryRow.NextRetryAt = eng.nowFn().Add(time.Minute).UnixNano()
+	retryRow.FirstSeenAt = eng.nowFn().UnixNano()
+	retryRow.LastSeenAt = eng.nowFn().UnixNano()
+	require.NoError(t, eng.baseline.UpsertRetryState(ctx, &retryRow))
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	_, err = testEngineFlow(t, eng).observeLocalChanges(ctx, nil, bl)
+	require.NoError(t, err)
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures)
+
+	rows, err := eng.baseline.ListRetryState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "docs/file.txt", rows[0].Path)
+	assert.Equal(t, ActionUpload, rows[0].ActionType)
 }
 
 // Validates: R-2.10.5
@@ -583,7 +625,7 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	rt.dispatchCh <- parent
 	readReady(t, rt.dispatchCh)
 
-	results <- WorkerResult{
+	results <- ActionCompletion{
 		ActionID:   1,
 		Path:       "parent.txt",
 		ActionType: ActionUpload,
@@ -597,7 +639,7 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventScopeActivated && event.ScopeKey == testThrottleScope()
-	}, "scope block activated from worker result")
+	}, "scope block activated from action completion")
 
 	select {
 	case ta := <-rt.dispatchCh:
@@ -605,7 +647,7 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	default:
 	}
 	assert.True(t, isTestScopeBlocked(eng, testThrottleScope()),
-		"scope block should be activated from the worker result")
+		"scope block should be activated from the action completion")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)

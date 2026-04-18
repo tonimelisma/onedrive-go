@@ -308,6 +308,30 @@ func (flow *engineFlow) postSyncHousekeeping() {
 	driveops.CleanTransferArtifacts(flow.engine.syncTree, flow.engine.sessionStore, flow.engine.logger)
 }
 
+func (r *oneShotRunner) dispatchInitialReadyActions(
+	ctx context.Context,
+	bl *Baseline,
+	depGraph *DepGraph,
+	initialReady []*TrackedAction,
+	report *Report,
+) ([]*TrackedAction, bool, error) {
+	initialOutbox, err := r.drainPublicationReadyActions(ctx, nil, bl, nil, initialReady)
+	if err != nil {
+		r.completeOutboxAsShutdown(initialOutbox)
+		report.Succeeded, report.Failed, report.Errors = r.resultStats()
+		report.Errors = append(report.Errors, err)
+		return nil, true, err
+	}
+
+	if depGraph.InFlightCount() == 0 {
+		r.logFailureSummary()
+		report.Succeeded, report.Failed, report.Errors = r.resultStats()
+		return nil, true, nil
+	}
+
+	return initialOutbox, false, nil
+}
+
 // executePlan populates the dependency graph and runs the worker pool.
 // The engine processes results concurrently while workers run, classifying
 // each result and calling depGraph.Complete (R-6.8.9).
@@ -347,6 +371,7 @@ func (r *oneShotRunner) executePlan(
 	depGraph := NewDepGraph(r.engine.logger)
 	r.depGraph = depGraph
 	r.dispatchCh = make(chan *TrackedAction, len(plan.Actions))
+	initialReady := make([]*TrackedAction, 0, len(plan.Actions))
 
 	// Two-phase graph population: Register all actions first, then wire
 	// dependencies. This avoids forward-reference issues where a parent
@@ -364,8 +389,20 @@ func (r *oneShotRunner) executePlan(
 		}
 
 		if ta := depGraph.WireDeps(int64(i), depIDs); ta != nil {
-			r.dispatchCh <- ta
+			initialReady = append(initialReady, ta)
 		}
+	}
+
+	initialOutbox, done, err := r.dispatchInitialReadyActions(ctx, bl, depGraph, initialReady, report)
+	if err != nil {
+		return err
+	}
+	if done {
+		return nil
+	}
+
+	for _, ta := range initialOutbox {
+		r.dispatchCh <- ta
 	}
 
 	pool := NewWorkerPool(r.engine.execCfg, r.dispatchCh, depGraph.Done(), r.engine.baseline, r.engine.logger, len(plan.Actions))
@@ -373,16 +410,16 @@ func (r *oneShotRunner) executePlan(
 	defer cancel()
 	pool.Start(runCtx, r.engine.transferWorkers)
 
-	// Process results concurrently — engine classifies and calls Complete.
-	// The one-shot engine loop reads from the results channel while workers
-	// run. drainDone signals when it has finished processing all results,
+	// Process completions concurrently — engine classifies and calls Complete.
+	// The one-shot engine loop reads from the completions channel while workers
+	// run. drainDone signals when it has finished processing all completions,
 	// including side effects (counter updates, failure recording). Without
 	// this barrier, resultStats() could race with result processing.
 	drainDone := make(chan struct{})
 	var drainErr error
 	go func() {
 		defer close(drainDone)
-		drainErr = r.runResultsLoop(runCtx, cancel, bl, pool.Results())
+		drainErr = r.runResultsLoop(runCtx, cancel, bl, pool.Completions())
 	}()
 
 	pool.Wait() // blocks until depGraph.Done() (all actions at terminal state)
@@ -669,11 +706,7 @@ func retryWorkKeysForActions(actions []Action) []RetryWorkKey {
 	seen := make(map[RetryWorkKey]struct{}, len(actions))
 
 	for i := range actions {
-		key := RetryWorkKey{
-			Path:       actions[i].Path,
-			OldPath:    actions[i].OldPath,
-			ActionType: actions[i].Type,
-		}
+		key := retryWorkKeyForAction(&actions[i])
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -754,6 +787,13 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.clearResolvedSkippedItems(ctx, localResult.Skipped)
 
 	pathSet := pathSetFromLocalRows(localResult.Rows)
+	if err := flow.engine.baseline.ClearActionableFailuresByPaths(
+		ctx,
+		IssueLocalPermissionDenied,
+		pathSetKeys(pathSet),
+	); err != nil {
+		return ScanResult{}, fmt.Errorf("sync: clearing resolved local permission failures: %w", err)
+	}
 	flow.scopeController().applyPermissionRecheckDecisions(
 		ctx,
 		watch,
@@ -762,6 +802,19 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.scopeController().clearResolvedRemoteBlockedFailures(ctx, watch, pathSet)
 
 	return localResult, nil
+}
+
+func pathSetKeys(pathSet map[string]bool) []string {
+	if len(pathSet) == 0 {
+		return nil
+	}
+
+	paths := make([]string, 0, len(pathSet))
+	for path := range pathSet {
+		paths = append(paths, path)
+	}
+
+	return paths
 }
 
 func (flow *engineFlow) commitObservedLocalSnapshot(

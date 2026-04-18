@@ -16,7 +16,7 @@ type TrackedAction struct {
 	IsTrial bool
 
 	// TrialScopeKey identifies which scope this trial is testing. Set by
-	// DispatchTrial, propagated through WorkerResult so the engine knows
+	// DispatchTrial, propagated through ActionCompletion so the engine knows
 	// which scope to release on trial success.
 	TrialScopeKey ScopeKey
 }

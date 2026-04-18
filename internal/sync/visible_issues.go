@@ -47,14 +47,6 @@ func (m *SyncStore) ListVisibleIssueGroups(ctx context.Context) ([]VisibleIssueG
 	return projection.groups, nil
 }
 
-func (m *SyncStore) CountVisibleIssues(ctx context.Context) (int, error) {
-	summary, err := m.ReadVisibleIssueSummary(ctx)
-	if err != nil {
-		return 0, err
-	}
-	return summary.VisibleTotal(), nil
-}
-
 func (m *SyncStore) ReadVisibleIssueSummary(ctx context.Context) (IssueSummary, error) {
 	projection, err := loadVisibleIssueProjection(ctx, m.db, m.logger)
 	if err != nil {

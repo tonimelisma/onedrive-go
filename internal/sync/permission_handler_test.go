@@ -124,7 +124,7 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 	ph, _, syncRoot := newTestPermHandler(t, nil)
 
 	require.NoError(t, os.Chmod(syncRoot, 0o000))
-	r := &WorkerResult{
+	r := &ActionCompletion{
 		Path:       "file.txt",
 		ActionType: ActionDownload,
 		ErrMsg:     "permission denied",
@@ -146,7 +146,7 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 	subDir := filepath.Join(syncRoot, "blocked")
 	require.NoError(t, os.MkdirAll(subDir, 0o750))
 	require.NoError(t, os.Chmod(subDir, 0o000))
-	r := &WorkerResult{
+	r := &ActionCompletion{
 		Path:       "blocked/file.txt",
 		ActionType: ActionDownload,
 		ErrMsg:     "permission denied",
@@ -169,7 +169,7 @@ func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 	subDir := filepath.Join(syncRoot, "accessible")
 	require.NoError(t, os.MkdirAll(subDir, 0o750))
 
-	r := &WorkerResult{
+	r := &ActionCompletion{
 		Path:       "accessible/file.txt",
 		ActionType: ActionDownload,
 		ErrMsg:     "permission denied",
@@ -218,7 +218,7 @@ func TestPermHandler_RecheckLocalPermissions_StillDenied(t *testing.T) {
 	assert.Equal(t, permissionRecheckKeepScope, decisions[0].Kind)
 }
 
-func TestPermHandler_ClearScannerResolved_FileLevel(t *testing.T) {
+func TestPermHandler_ClearScannerResolved_FileLevelIgnored(t *testing.T) {
 	t.Parallel()
 
 	ph, store, _ := newTestPermHandler(t, nil)
@@ -227,9 +227,7 @@ func TestPermHandler_ClearScannerResolved_FileLevel(t *testing.T) {
 	observed := map[string]bool{"docs/file.txt": true}
 	decisions := ph.clearScannerResolvedPermissions(t.Context(), observed)
 
-	require.Len(t, decisions, 1)
-	assert.Equal(t, permissionRecheckClearFileFailure, decisions[0].Kind)
-	assert.Equal(t, "docs/file.txt", decisions[0].Path)
+	assert.Empty(t, decisions)
 }
 
 func TestPermHandler_ClearScannerResolved_DirLevel(t *testing.T) {

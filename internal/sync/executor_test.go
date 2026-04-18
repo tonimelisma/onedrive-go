@@ -1664,14 +1664,11 @@ func TestConflictCopyPath_MultiDot(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Synced update tests
+// Publication-only action tests
 // ---------------------------------------------------------------------------
 
-func TestExecutor_SyncedUpdate(t *testing.T) {
+func TestPublicationMutation_SyncedUpdate(t *testing.T) {
 	t.Parallel()
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionUpdateSynced,
@@ -1694,25 +1691,23 @@ func TestExecutor_SyncedUpdate(t *testing.T) {
 		},
 	}
 
-	o := e.ExecuteSyncedUpdate(action)
-	requireOutcomeSuccess(t, &o)
+	mutation, err := publicationMutationFromAction(action, driveid.New(synctest.TestDriveID))
+	require.NoError(t, err)
+	require.NotNil(t, mutation)
 
-	assert.Equal(t, "hash1", o.RemoteHash)
-	assert.Equal(t, "hash1", o.LocalHash)
-	assert.Equal(t, int64(1024), o.RemoteSize)
-	assert.True(t, o.RemoteSizeKnown)
-	assert.Equal(t, int64(1234567890), o.LocalMtime)
+	assert.Equal(t, "hash1", mutation.RemoteHash)
+	assert.Equal(t, "hash1", mutation.LocalHash)
+	assert.Equal(t, int64(1024), mutation.RemoteSize)
+	assert.True(t, mutation.RemoteSizeKnown)
+	assert.Equal(t, int64(1234567890), mutation.LocalMtime)
 }
 
 // ---------------------------------------------------------------------------
 // Cleanup tests
 // ---------------------------------------------------------------------------
 
-func TestExecutor_Cleanup(t *testing.T) {
+func TestPublicationMutation_Cleanup(t *testing.T) {
 	t.Parallel()
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionCleanup,
@@ -1721,11 +1716,12 @@ func TestExecutor_Cleanup(t *testing.T) {
 		DriveID: driveid.New(synctest.TestDriveID),
 	}
 
-	o := e.ExecuteCleanup(action)
-	requireOutcomeSuccess(t, &o)
+	mutation, err := publicationMutationFromAction(action, driveid.New(synctest.TestDriveID))
+	require.NoError(t, err)
+	require.NotNil(t, mutation)
 
-	assert.Equal(t, ActionCleanup, o.Action)
-	assert.Equal(t, "exec-ghost.txt", o.Path)
+	assert.Equal(t, ActionCleanup, mutation.Action)
+	assert.Equal(t, "exec-ghost.txt", mutation.Path)
 }
 
 // ---------------------------------------------------------------------------
@@ -2065,11 +2061,8 @@ func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 	assert.Equal(t, ItemTypeFolder, o.ItemType)
 }
 
-func TestExecutor_Cleanup_FolderType(t *testing.T) {
+func TestPublicationMutation_Cleanup_FolderType(t *testing.T) {
 	t.Parallel()
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionCleanup,
@@ -2081,17 +2074,15 @@ func TestExecutor_Cleanup_FolderType(t *testing.T) {
 		},
 	}
 
-	o := e.ExecuteCleanup(action)
-	requireOutcomeSuccess(t, &o)
+	mutation, err := publicationMutationFromAction(action, driveid.New(synctest.TestDriveID))
+	require.NoError(t, err)
+	require.NotNil(t, mutation)
 
-	assert.Equal(t, ItemTypeFolder, o.ItemType)
+	assert.Equal(t, ItemTypeFolder, mutation.ItemType)
 }
 
-func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
+func TestPublicationMutation_SyncedUpdate_BaselineFallback(t *testing.T) {
 	t.Parallel()
-
-	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
 
 	// No Remote, only Baseline with folder type.
 	action := &Action{
@@ -2105,10 +2096,11 @@ func TestExecutor_SyncedUpdate_BaselineFallback(t *testing.T) {
 		},
 	}
 
-	o := e.ExecuteSyncedUpdate(action)
-	requireOutcomeSuccess(t, &o)
+	mutation, err := publicationMutationFromAction(action, driveid.New(synctest.TestDriveID))
+	require.NoError(t, err)
+	require.NotNil(t, mutation)
 
-	assert.Equal(t, ItemTypeFolder, o.ItemType)
+	assert.Equal(t, ItemTypeFolder, mutation.ItemType)
 }
 
 // ---------------------------------------------------------------------------

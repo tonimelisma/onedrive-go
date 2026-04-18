@@ -11,14 +11,17 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-var errUnknownActionType = errors.New("sync: unknown action type in worker dispatch")
+var (
+	errUnknownActionType         = errors.New("sync: unknown action type in worker dispatch")
+	errPublicationOnlyActionType = errors.New("sync: publication-only action routed to worker")
+)
 
 // minWorkers is the floor for total worker count.
 const minWorkers = 4
 
 // WorkerPool spawns goroutines that pull TrackedActions from the dispatch
-// channel, execute them, persist success outcomes, and send results back to
-// the engine.
+// channel, execute them, persist success outcomes, and send completions back
+// to the engine.
 // Workers are pure executors — they NEVER call depGraph.Complete(). The engine
 // owns all completion decisions (R-6.8.9).
 //
@@ -31,10 +34,10 @@ type WorkerPool struct {
 	baseline   *SyncStore
 	logger     *slog.Logger
 
-	// results reports per-action outcomes back to the engine. The engine
-	// reads from this channel, classifies results, and calls depGraph.Complete.
+	// completions reports per-action outcomes back to the engine. The engine
+	// reads from this channel, classifies completions, and calls depGraph.Complete.
 	// Failed items are recorded in sync_failures for retry.
-	results chan WorkerResult
+	completions chan ActionCompletion
 
 	cancel    context.CancelFunc
 	wg        stdsync.WaitGroup
@@ -67,9 +70,9 @@ func NewWorkerPool(
 		logger:     logger,
 		// Buffer sizing contract: one-shot mode uses planSize (equal to
 		// the number of actions, so workers never block). Watch mode uses
-		// watchResultBuf (4096) with a drain goroutine reading results
+		// watchResultBuf (4096) with a drain goroutine reading completions
 		// concurrently, so blocking is unlikely under normal load.
-		results: make(chan WorkerResult, planSize),
+		completions: make(chan ActionCompletion, planSize),
 	}
 }
 
@@ -91,7 +94,7 @@ func (wp *WorkerPool) Start(ctx context.Context, total int) {
 
 	go func() {
 		wp.wg.Wait()
-		wp.closeResults()
+		wp.closeCompletions()
 	}()
 
 	wp.logger.Info("worker pool started",
@@ -105,14 +108,14 @@ func (wp *WorkerPool) Wait() {
 }
 
 // Stop cancels all in-flight work, waits for goroutines to exit, and closes
-// the results channel so the engine-owned result loop can terminate.
+// the completions channel so the engine-owned completion loop can terminate.
 func (wp *WorkerPool) Stop() {
 	if wp.cancel != nil {
 		wp.cancel()
 	}
 
 	wp.wg.Wait()
-	wp.closeResults()
+	wp.closeCompletions()
 }
 
 // worker is the main loop for a single goroutine. It reads from dispatchCh
@@ -141,7 +144,7 @@ func (wp *WorkerPool) worker(ctx context.Context) {
 
 // safeExecuteAction wraps executeAction with panic recovery so a single
 // action panic doesn't crash the entire program. The engine receives the
-// panic as a failed WorkerResult and decides how to handle it.
+// panic as a failed ActionCompletion and decides how to handle it.
 func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -225,10 +228,13 @@ func (wp *WorkerPool) dispatchAction(
 		return exec.ExecuteLocalDelete(ctx, action)
 	case ActionRemoteDelete:
 		return exec.ExecuteRemoteDelete(ctx, action)
-	case ActionUpdateSynced:
-		return exec.ExecuteSyncedUpdate(action)
-	case ActionCleanup:
-		return exec.ExecuteCleanup(action)
+	case ActionUpdateSynced, ActionCleanup:
+		return ActionOutcome{
+			Action:  action.Type,
+			Path:    action.Path,
+			Success: false,
+			Error:   errPublicationOnlyActionType,
+		}
 	default:
 		return ActionOutcome{
 			Action:  action.Type,
@@ -239,68 +245,33 @@ func (wp *WorkerPool) dispatchAction(
 	}
 }
 
-// Results returns a read-only channel of per-action results. The engine
-// reads from this channel, classifies each result, and calls
+// Completions returns a read-only channel of per-action completions. The
+// engine reads from this channel, classifies each completion, and calls
 // depGraph.Complete. Failed items go to sync_failures for the engine retry sweep.
-func (wp *WorkerPool) Results() <-chan WorkerResult {
-	return wp.results
+func (wp *WorkerPool) Completions() <-chan ActionCompletion {
+	return wp.completions
 }
 
-// sendResult reports a per-action outcome to the results channel. Populates
-// the WorkerResult from the TrackedAction and any error. When outcome is
+// sendResult reports a per-action outcome to the completions channel. Populates
+// the ActionCompletion from the TrackedAction and any error. When outcome is
 // non-nil, uses its Success/Error fields; otherwise treats as failure with
 // the provided error.
 //
-// If the context is canceled before the result is sent (engine shutdown),
-// the WorkerResult is silently dropped. The engine handles shutdown via
+// If the context is canceled before the completion is sent (engine shutdown),
+// the ActionCompletion is silently dropped. The engine handles shutdown via
 // context cancellation on the result-processing loop (resultShutdown classification).
 func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome *ActionOutcome, actionErr error) {
-	driveID := ta.Action.DriveID
-	if outcome != nil && !outcome.DriveID.IsZero() {
-		driveID = outcome.DriveID
-	} else if driveID.IsZero() && !ta.Action.TargetDriveID.IsZero() {
-		// Shortcut-targeted actions may defer drive resolution to execution time.
-		// When no concrete action drive was planned, retain the intended target
-		// drive so failure persistence and success cleanup address the same row.
-		driveID = ta.Action.TargetDriveID
-	}
-
-	r := WorkerResult{
-		Path:          ta.Action.Path,
-		OldPath:       ta.Action.OldPath,
-		ItemID:        ta.Action.ItemID,
-		DriveID:       driveID,
-		ActionType:    ta.Action.Type,
-		Err:           actionErr,
-		HTTPStatus:    ExtractHTTPStatus(actionErr),
-		RetryAfter:    ExtractRetryAfter(actionErr),
-		TargetDriveID: ta.Action.TargetDriveID,
-		IsTrial:       ta.IsTrial,
-		TrialScopeKey: ta.TrialScopeKey,
-		ActionID:      ta.ID,
-	}
-
-	if outcome != nil {
-		r.Success = outcome.Success
-		if outcome.Error != nil {
-			r.ErrMsg = outcome.Error.Error()
-			r.Err = outcome.Error
-			r.HTTPStatus = ExtractHTTPStatus(outcome.Error)
-			r.RetryAfter = ExtractRetryAfter(outcome.Error)
-		}
-	} else if actionErr != nil {
-		r.ErrMsg = actionErr.Error()
-	}
+	r := completionFromTrackedAction(ta, outcome, actionErr)
 
 	select {
-	case wp.results <- r:
+	case wp.completions <- r:
 	case <-ctx.Done():
 	}
 }
 
-func (wp *WorkerPool) closeResults() {
+func (wp *WorkerPool) closeCompletions() {
 	wp.closeOnce.Do(func() {
-		close(wp.results)
+		close(wp.completions)
 	})
 }
 

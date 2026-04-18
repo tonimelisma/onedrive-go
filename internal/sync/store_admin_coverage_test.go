@@ -101,8 +101,9 @@ func TestSyncStore_FailureAdminMutations(t *testing.T) {
 	insertFailureForCoverageTest(t, store, "retry.txt", driveID, CategoryTransient, FailureRoleItem, IssueInvalidFilename, ScopeKey{}, futureRetry)
 	insertFailureForCoverageTest(t, store, "held.txt", driveID, CategoryTransient, FailureRoleHeld, IssueSharedFolderBlocked, scopeKey, nil)
 
-	count, err := store.SyncFailureCount(t.Context())
-	require.NoError(t, err)
+	count := len(filterSyncFailuresForTest(t, store, t.Context(), func(row SyncFailureRow) bool {
+		return row.Category == CategoryTransient
+	}))
 	assert.Equal(t, 2, count)
 
 	require.NoError(t, store.ResetFailure(t.Context(), "retry.txt"))
@@ -118,7 +119,10 @@ func TestSyncStore_FailureAdminMutations(t *testing.T) {
 	assert.Zero(t, failureRowCountForCoverageTest(t, store, "transient.txt"))
 	assert.Equal(t, 1, failureRowCountForCoverageTest(t, store, "actionable.txt"))
 
-	require.NoError(t, store.ClearSyncFailureByPath(t.Context(), "held.txt"))
+	require.NoError(t, store.ClearHeldRetryWork(t.Context(), RetryWorkKey{
+		Path:       "held.txt",
+		ActionType: ActionUpload,
+	}, scopeKey))
 	assert.Zero(t, failureRowCountForCoverageTest(t, store, "held.txt"))
 }
 

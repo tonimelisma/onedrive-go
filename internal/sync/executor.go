@@ -430,58 +430,6 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 	return o
 }
 
-// ExecuteSyncedUpdate produces an ActionOutcome from a PathView without I/O.
-func (e *Executor) ExecuteSyncedUpdate(action *Action) ActionOutcome {
-	o := ActionOutcome{
-		Action:   ActionUpdateSynced,
-		Success:  true,
-		Path:     action.Path,
-		DriveID:  e.resolveDriveID(action),
-		ItemID:   action.ItemID,
-		ItemType: ItemTypeFile,
-	}
-
-	if action.View != nil {
-		if action.View.Remote != nil {
-			o.RemoteHash = action.View.Remote.Hash
-			o.RemoteSize = action.View.Remote.Size
-			o.RemoteSizeKnown = true
-			o.RemoteMtime = action.View.Remote.Mtime
-			o.ETag = action.View.Remote.ETag
-			o.ParentID = action.View.Remote.ParentID
-			o.ItemType = action.View.Remote.ItemType
-		}
-
-		if action.View.Local != nil {
-			o.LocalHash = action.View.Local.Hash
-			o.LocalSize = action.View.Local.Size
-			o.LocalSizeKnown = true
-			o.LocalMtime = action.View.Local.Mtime
-		}
-
-		fillOutcomeFromBaseline(&o, action.View.Baseline)
-
-		// Fall back to baseline ItemType when Remote is absent or had zero value.
-		if o.ItemType == ItemTypeFile && action.View.Baseline != nil && action.View.Baseline.ItemType != ItemTypeFile {
-			o.ItemType = action.View.Baseline.ItemType
-		}
-	}
-
-	return o
-}
-
-// ExecuteCleanup signals baseline removal without I/O.
-func (e *Executor) ExecuteCleanup(action *Action) ActionOutcome {
-	return ActionOutcome{
-		Action:   ActionCleanup,
-		Success:  true,
-		Path:     action.Path,
-		DriveID:  e.resolveDriveID(action),
-		ItemID:   action.ItemID,
-		ItemType: resolveActionItemType(action),
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -548,27 +496,6 @@ func resolveParentForContainment(parentDir string) (string, bool, error) {
 	}
 
 	return "", false, fmt.Errorf("evaluating parent directory symlinks: %w", err)
-}
-
-// resolveActionItemType extracts ItemType from the action's View, skipping
-// zero values (ItemTypeFile) to find the actual type. Checks Remote → Baseline
-// → Local, defaulting to ItemTypeFile if all are zero or View is nil.
-func resolveActionItemType(action *Action) ItemType {
-	if action.View != nil {
-		if action.View.Remote != nil && action.View.Remote.ItemType != ItemTypeFile {
-			return action.View.Remote.ItemType
-		}
-
-		if action.View.Baseline != nil && action.View.Baseline.ItemType != ItemTypeFile {
-			return action.View.Baseline.ItemType
-		}
-
-		if action.View.Local != nil && action.View.Local.ItemType != ItemTypeFile {
-			return action.View.Local.ItemType
-		}
-	}
-
-	return ItemTypeFile
 }
 
 // ResolveParentID determines the remote parent ID for a given relative path.

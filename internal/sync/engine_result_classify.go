@@ -61,10 +61,10 @@ type ResultDecision struct {
 	IssueType         string
 }
 
-// classifyResult is a pure function that maps a WorkerResult to a
+// classifyResult is a pure function that maps a ActionCompletion to a
 // single ResultDecision. No side effects — classification is separate from
 // routing.
-func classifyResult(r *WorkerResult) ResultDecision {
+func classifyResult(r *ActionCompletion) ResultDecision {
 	if r.Success {
 		return withRuntimeSummary(&ResultDecision{
 			Class:         resultSuccess,
@@ -87,7 +87,7 @@ func classifyResult(r *WorkerResult) ResultDecision {
 	return classifyLocalResult(r)
 }
 
-func classifyHTTPResult(r *WorkerResult) (ResultDecision, bool) {
+func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 	scopeEvidence := deriveScopeKey(r)
 	issueType := issueTypeForResult(r)
 	permissionDecisionFlow := remote403PermissionFlow(r)
@@ -165,7 +165,7 @@ func isRetryableHTTPStatus(status int) bool {
 		status == http.StatusLocked
 }
 
-func classifyLocalResult(r *WorkerResult) ResultDecision {
+func classifyLocalResult(r *ActionCompletion) ResultDecision {
 	issueType := issueTypeForResult(r)
 	permissionDecisionFlow := localPermissionDecisionFlow(r)
 
@@ -218,7 +218,7 @@ func classifyLocalResult(r *WorkerResult) ResultDecision {
 	}
 }
 
-func remote403PermissionFlow(r *WorkerResult) permissionFlow {
+func remote403PermissionFlow(r *ActionCompletion) permissionFlow {
 	if r == nil || r.HTTPStatus != http.StatusForbidden {
 		return permissionFlowNone
 	}
@@ -226,7 +226,7 @@ func remote403PermissionFlow(r *WorkerResult) permissionFlow {
 	return permissionFlowRemote403
 }
 
-func localPermissionDecisionFlow(r *WorkerResult) permissionFlow {
+func localPermissionDecisionFlow(r *ActionCompletion) permissionFlow {
 	if r == nil || !errors.Is(r.Err, os.ErrPermission) {
 		return permissionFlowNone
 	}
@@ -322,10 +322,10 @@ func runtimeSummaryKeyForPermissionIssue(issueType string) (SummaryKey, bool) {
 	}
 }
 
-// deriveScopeKey maps a worker result to its typed scope key. Delegates to
+// deriveScopeKey maps an action completion to its typed scope key. Delegates to
 // ScopeKeyForResult — single source of truth for HTTP status → scope
 // key mapping. Returns the zero-value ScopeKey for non-scope statuses.
-func deriveScopeKey(r *WorkerResult) ScopeKey {
+func deriveScopeKey(r *ActionCompletion) ScopeKey {
 	targetDriveID := r.TargetDriveID
 	if targetDriveID.IsZero() {
 		targetDriveID = r.DriveID
@@ -333,7 +333,7 @@ func deriveScopeKey(r *WorkerResult) ScopeKey {
 	return ScopeKeyForResult(r.HTTPStatus, targetDriveID)
 }
 
-func issueTypeForResult(r *WorkerResult) string {
+func issueTypeForResult(r *ActionCompletion) string {
 	if issueType, ok := issueTypeForHTTPResult(r); ok {
 		return issueType
 	}
@@ -346,9 +346,9 @@ func issueTypeForResult(r *WorkerResult) string {
 
 // issueTypeForHTTPStatus preserves the older direct status/error helper used by
 // some tests and cascade paths while the classifier now carries richer
-// capability-aware WorkerResult state.
+// capability-aware ActionCompletion state.
 func issueTypeForHTTPStatus(httpStatus int, err error) string {
-	result := &WorkerResult{
+	result := &ActionCompletion{
 		HTTPStatus: httpStatus,
 		Err:        err,
 	}
@@ -374,7 +374,7 @@ func issueTypeForHTTPStatus(httpStatus int, err error) string {
 	return ""
 }
 
-func issueTypeForHTTPResult(r *WorkerResult) (string, bool) {
+func issueTypeForHTTPResult(r *ActionCompletion) (string, bool) {
 	if r == nil {
 		return "", false
 	}
@@ -403,7 +403,7 @@ func issueTypeForHTTPResult(r *WorkerResult) (string, bool) {
 	}
 }
 
-func issueTypeForForbiddenResult(r *WorkerResult) string {
+func issueTypeForForbiddenResult(r *ActionCompletion) string {
 	switch effectiveRemotePermissionCapability(r) {
 	case PermissionCapabilityRemoteRead:
 		return IssueRemoteReadDenied
@@ -417,7 +417,7 @@ func issueTypeForForbiddenResult(r *WorkerResult) string {
 	}
 }
 
-func issueTypeForFilesystemResult(r *WorkerResult) (string, bool) {
+func issueTypeForFilesystemResult(r *ActionCompletion) (string, bool) {
 	if r == nil {
 		return "", false
 	}
@@ -436,7 +436,7 @@ func issueTypeForFilesystemResult(r *WorkerResult) (string, bool) {
 	}
 }
 
-func issueTypeForLocalPermissionResult(r *WorkerResult) string {
+func issueTypeForLocalPermissionResult(r *ActionCompletion) string {
 	switch effectiveLocalPermissionCapability(r) {
 	case PermissionCapabilityLocalRead:
 		return IssueLocalReadDenied
@@ -450,7 +450,7 @@ func issueTypeForLocalPermissionResult(r *WorkerResult) string {
 	}
 }
 
-func effectiveRemotePermissionCapability(r *WorkerResult) PermissionCapability {
+func effectiveRemotePermissionCapability(r *ActionCompletion) PermissionCapability {
 	if r == nil {
 		return PermissionCapabilityUnknown
 	}
@@ -473,7 +473,7 @@ func effectiveRemotePermissionCapability(r *WorkerResult) PermissionCapability {
 	}
 }
 
-func effectiveLocalPermissionCapability(r *WorkerResult) PermissionCapability {
+func effectiveLocalPermissionCapability(r *ActionCompletion) PermissionCapability {
 	if r == nil {
 		return PermissionCapabilityUnknown
 	}
@@ -496,7 +496,7 @@ func effectiveLocalPermissionCapability(r *WorkerResult) PermissionCapability {
 	}
 }
 
-func hasPermissionActionContext(r *WorkerResult) bool {
+func hasPermissionActionContext(r *ActionCompletion) bool {
 	if r == nil {
 		return false
 	}

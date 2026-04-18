@@ -1,13 +1,16 @@
 # Sync Execution
 
-GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go
+GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/worker_result.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go
 
 Implements: R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
 
 ## Overview
 
-Execution takes an `ActionPlan`, dispatches ready work through a dependency
-graph, runs workers, and returns one `ActionOutcome` per completed action.
+Execution takes an `ActionPlan`, dispatches concrete side-effecting work
+through a dependency graph, runs workers, and reports one `ActionCompletion`
+per finished action. Publication-only planner actions are not executor work:
+the engine commits them directly through the store and feeds their synthetic
+completions back through the same dependency/completion path.
 
 The executor does **not** own retry policy, durable failure classification, or
 scope lifecycle. It performs one action and reports the concrete outcome.
@@ -27,7 +30,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | --- | --- |
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes requeue for replan instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition` |
-| Execution keeps ordinary per-item delete safety and routes concrete failures back to the engine instead of persisting manual approval state. | `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestExecutor_SyncedUpdate`, `TestExecutor_SyncedUpdate_BaselineFallback` |
+| Publication-only planner actions commit baseline mutations without worker dispatch and still release dependents through the normal engine result path. | `TestEngine_DispatchCurrentPlan_PublicationOnlySyncedUpdateCommitsWithoutOutbox`, `TestEngine_DispatchCurrentPlan_PublicationOnlyCleanupCommitsWithoutOutbox`, `TestEngine_DispatchCurrentPlan_PublicationOnlyActionReleasesDependentOutbox`, `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup` |
 
 ## Worker And Dependency Model
 
@@ -38,7 +41,27 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 - which dependents become ready after completion
 
 Workers run independent actions concurrently up to the configured worker limit.
-The engine owns the worker pool lifecycle and result drain.
+The engine owns the worker pool lifecycle and completion drain.
+
+When the dependency graph releases `ActionUpdateSynced` or `ActionCleanup`,
+the engine does not spend worker capacity on them. It commits the matching
+baseline mutation synchronously, classifies the synthetic success/failure
+completion through the same engine-owned completion path, and then releases any
+dependents that became ready.
+
+## Publication-Only Actions
+
+`ActionUpdateSynced` and `ActionCleanup` remain planner-visible action types so
+they still participate in dependency ordering, accounting, and reporting.
+
+Execution does not own them because they perform no external side effects:
+
+- no filesystem mutation
+- no Graph call
+- no transfer manager work
+
+Their only durable effect is baseline publication, so the engine/store
+boundary commits them directly via `CommitMutation()`.
 
 ## File And Folder Mutation
 
@@ -113,7 +136,7 @@ That metadata is used for:
 helper functions over an engine-owned slice of active scope blocks.
 
 Execution itself does not decide whether an action is blocked. The engine asks
-those helpers before dispatch and after worker results.
+those helpers before dispatch and after action completions.
 
 ## What Execution No Longer Owns
 
@@ -121,6 +144,7 @@ Execution no longer includes:
 
 - delete counters or held-delete approval workflows
 - durable conflict request application
+- baseline-only publication work for converged rows or fully removed rows
 - embedded shared-folder runtime machinery inside another drive
 
 Those concepts were removed from the current architecture.

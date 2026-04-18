@@ -187,7 +187,14 @@ func (controller *scopeController) clearResolvedPersistedRemoteBlockedRetries(
 		if !rows[i].ScopeKey.IsPermRemote() {
 			continue
 		}
-		if flow.buildRetryCandidateFromRetryState(ctx, bl, &rows[i]).resolved {
+		driveID, driveErr := flow.retryStateDriveID(ctx)
+		if driveErr != nil {
+			flow.engine.logger.Warn("load drive for remote failure cleanup",
+				slog.String("error", driveErr.Error()),
+			)
+			return false
+		}
+		if flow.buildRetryCandidateFromRetryState(ctx, bl, &rows[i], driveID).resolved {
 			controller.clearHeldRetryWork(ctx, &rows[i], "clearResolvedPersistedRemoteBlockedRetries")
 			remoteResolved = true
 		}
@@ -558,12 +565,12 @@ func (controller *scopeController) isObservationSuppressed(watch *watchRuntime) 
 		controller.isScopeBlocked(watch, SKService())
 }
 
-// feedScopeDetection feeds a worker result into scope detection sliding
+// feedScopeDetection feeds an action completion into scope detection sliding
 // windows. If a threshold is crossed, creates a scope block. Called directly
-// from the normal processWorkerResult switch — never called for trial results
+// from the normal processActionCompletion switch — never called for trial results
 // (the scope is already blocked, and re-detecting would overwrite the doubled
 // interval).
-func (controller *scopeController) feedScopeDetection(ctx context.Context, watch *watchRuntime, r *WorkerResult) {
+func (controller *scopeController) feedScopeDetection(ctx context.Context, watch *watchRuntime, r *ActionCompletion) {
 	if watch == nil {
 		return
 	}
@@ -713,7 +720,14 @@ func (controller *scopeController) clearResolvedRemoteBlockedFailures(
 		if !remoteBlockedRetryRelevant(&rows[i], changedPaths) {
 			continue
 		}
-		if flow.buildRetryCandidateFromRetryState(ctx, bl, &rows[i]).resolved {
+		driveID, driveErr := flow.retryStateDriveID(ctx)
+		if driveErr != nil {
+			flow.engine.logger.Warn("failed to load drive for remote blocked cleanup",
+				slog.String("error", driveErr.Error()),
+			)
+			return
+		}
+		if flow.buildRetryCandidateFromRetryState(ctx, bl, &rows[i], driveID).resolved {
 			controller.clearHeldRetryWork(ctx, &rows[i], "cleanupResolvedRemoteBlockedFailures")
 			clearedScopes[rows[i].ScopeKey] = true
 		}
@@ -756,11 +770,7 @@ func (controller *scopeController) clearHeldRetryWork(
 		return
 	}
 
-	work := RetryWorkKey{
-		Path:       row.Path,
-		OldPath:    row.OldPath,
-		ActionType: row.ActionType,
-	}
+	work := retryWorkKeyForRetryState(row)
 
 	if err := controller.flow.engine.baseline.ClearHeldRetryWork(ctx, work, row.ScopeKey); err != nil {
 		controller.flow.engine.logger.Debug(caller+": failed to clear held retry work",
@@ -840,12 +850,7 @@ func (controller *scopeController) admitReady(
 			} else {
 				// Trial candidate no longer matches scope — clear stale failure,
 				// run normal admission. Best-effort: log on error, don't abort.
-				if err := flow.engine.baseline.ClearSyncFailure(ctx, ta.Action.Path, ta.Action.DriveID); err != nil {
-					flow.engine.logger.Debug("admitReady: failed to clear stale trial failure",
-						slog.String("path", ta.Action.Path),
-						slog.String("error", err.Error()),
-					)
-				}
+				controller.clearHeldFailureForScope(ctx, retryWorkKeyForAction(&ta.Action), ta.TrialScopeKey)
 
 				if key := controller.activeBlockingScope(watch, ta); key.IsZero() {
 					flow.setDispatch(ctx, &ta.Action)
@@ -915,7 +920,7 @@ func (controller *scopeController) cascadeRecordAndComplete(
 func (controller *scopeController) cascadeFailAndComplete(
 	ctx context.Context,
 	ready []*TrackedAction,
-	r *WorkerResult,
+	r *ActionCompletion,
 ) {
 	flow := controller.flow
 
@@ -994,7 +999,7 @@ func (controller *scopeController) recordScopeBlockedFailure(ctx context.Context
 
 func (controller *scopeController) rehomeHeldFailure(
 	ctx context.Context,
-	r *WorkerResult,
+	r *ActionCompletion,
 	scopeKey ScopeKey,
 ) {
 	flow := controller.flow
@@ -1033,7 +1038,7 @@ func (controller *scopeController) rehomeHeldFailure(
 func (controller *scopeController) recordCascadeFailure(
 	ctx context.Context,
 	action *Action,
-	parentResult *WorkerResult,
+	parentResult *ActionCompletion,
 ) {
 	flow := controller.flow
 

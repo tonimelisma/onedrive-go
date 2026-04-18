@@ -18,7 +18,7 @@ func TestScope_429FallbackInterval(t *testing.T) {
 	ss := NewScopeState(clock, discardLogger())
 
 	// 429 without Retry-After should use the defaultInitialTrialInterval fallback.
-	r := WorkerResult{
+	r := ActionCompletion{
 		Path:          "/file-a.txt",
 		HTTPStatus:    429,
 		TargetDriveID: driveid.New("0000000000000001"),
@@ -65,7 +65,7 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 			clock, _ := controllableClock()
 			ss := NewScopeState(clock, discardLogger())
 
-			result := ss.UpdateScope(&WorkerResult{
+			result := ss.UpdateScope(&ActionCompletion{
 				Path:          tt.path,
 				HTTPStatus:    tt.status,
 				RetryAfter:    tt.retryAfter,
@@ -89,7 +89,7 @@ func TestScope_503WithoutRetryAfter(t *testing.T) {
 
 	// A 503 without Retry-After should feed the service sliding window,
 	// not trigger an immediate block (it falls into the >= 500 case).
-	r := WorkerResult{
+	r := ActionCompletion{
 		Path:       "/doc.docx",
 		HTTPStatus: 503,
 	}
@@ -108,7 +108,7 @@ func TestScope_507OwnDrive(t *testing.T) {
 	// Three unique paths within the quota window should trigger quota:own.
 	paths := []string{"/a.txt", "/b.txt", "/c.txt"}
 	for i, p := range paths {
-		r := WorkerResult{
+		r := ActionCompletion{
 			Path:       p,
 			HTTPStatus: 507,
 		}
@@ -135,7 +135,7 @@ func TestScope_5xxSlidingWindow(t *testing.T) {
 	// Five unique paths with 5xx within 30s must trigger a service block.
 	paths := []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt", "/e.txt"}
 	for i, p := range paths {
-		r := WorkerResult{
+		r := ActionCompletion{
 			Path:       p,
 			HTTPStatus: 500,
 		}
@@ -163,7 +163,7 @@ func TestScope_5xxWindowExpiry(t *testing.T) {
 	// failure after expiry must NOT trigger a block because the earlier
 	// entries have aged out.
 	for _, p := range []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt"} {
-		r := WorkerResult{Path: p, HTTPStatus: 500}
+		r := ActionCompletion{Path: p, HTTPStatus: 500}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
@@ -172,7 +172,7 @@ func TestScope_5xxWindowExpiry(t *testing.T) {
 	// Advance past the 30s window so the first entries expire.
 	advance(30 * time.Second)
 
-	r := WorkerResult{Path: "/e.txt", HTTPStatus: 500}
+	r := ActionCompletion{Path: "/e.txt", HTTPStatus: 500}
 	result := ss.UpdateScope(&r)
 	assert.False(t, result.Block, "entries from before the window should have expired")
 }
@@ -186,27 +186,27 @@ func TestScope_SuccessResetsWindow(t *testing.T) {
 
 	// Accumulate two 507 failures on own drive.
 	for _, p := range []string{"/a.txt", "/b.txt"} {
-		r := WorkerResult{Path: p, HTTPStatus: 507}
+		r := ActionCompletion{Path: p, HTTPStatus: 507}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
 	}
 
 	// Record a success — this must reset the quota:own window.
-	ss.RecordSuccess(&WorkerResult{Path: "/ok.txt"})
+	ss.RecordSuccess(&ActionCompletion{Path: "/ok.txt"})
 
 	// Now three more unique failures are needed to trigger the block.
 	// The next failure (3rd unique path overall but 1st after reset)
 	// must NOT trigger.
 	for i, p := range []string{"/c.txt", "/d.txt"} {
-		r := WorkerResult{Path: p, HTTPStatus: 507}
+		r := ActionCompletion{Path: p, HTTPStatus: 507}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block, "after reset, path %d should not trigger", i)
 		advance(1 * time.Second)
 	}
 
 	// Third unique path after reset should trigger.
-	r := WorkerResult{Path: "/e.txt", HTTPStatus: 507}
+	r := ActionCompletion{Path: "/e.txt", HTTPStatus: 507}
 	result := ss.UpdateScope(&r)
 	require.True(t, result.Block, "third unique path after reset should trigger quota:own")
 	assert.Equal(t, SKQuotaOwn(), result.ScopeKey)
@@ -224,7 +224,7 @@ func TestScope_SameFileDoesNotEscalate(t *testing.T) {
 
 	// Feed 10 failures on the same path — should never trigger.
 	for i := range 10 {
-		r := WorkerResult{
+		r := ActionCompletion{
 			Path:       "/same-file.txt",
 			HTTPStatus: 507,
 		}
@@ -257,7 +257,7 @@ func TestScope_NonScopeStatusReturnsEmpty(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := WorkerResult{Path: "/file.txt", HTTPStatus: tc.status}
+			r := ActionCompletion{Path: "/file.txt", HTTPStatus: tc.status}
 			result := ss.UpdateScope(&r)
 			assert.False(t, result.Block, "status %d should not trigger a scope block", tc.status)
 			assert.Empty(t, result.ScopeKey)
@@ -277,18 +277,18 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 
 	// Four 5xx failures — one short of triggering.
 	for _, p := range []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt"} {
-		r := WorkerResult{Path: p, HTTPStatus: 500}
+		r := ActionCompletion{Path: p, HTTPStatus: 500}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
 	}
 
 	// Success resets the service window.
-	ss.RecordSuccess(&WorkerResult{Path: "/ok.txt"})
+	ss.RecordSuccess(&ActionCompletion{Path: "/ok.txt"})
 
 	// Now we need five fresh unique paths to trigger again.
 	// The next failure (5th overall but 1st after reset) must not trigger.
-	r := WorkerResult{Path: "/e.txt", HTTPStatus: 500}
+	r := ActionCompletion{Path: "/e.txt", HTTPStatus: 500}
 	result := ss.UpdateScope(&r)
 	assert.False(t, result.Block, "first failure after service window reset should not trigger")
 }

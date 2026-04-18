@@ -288,7 +288,7 @@ func scopePathMatches(path, boundary string) bool {
 	return path == boundary || strings.HasPrefix(path, boundary+"/")
 }
 
-// ScopeKeyForResult maps one worker result target and HTTP status code to a
+// ScopeKeyForResult maps one action completion target and HTTP status code to a
 // ScopeKey. Returns the zero-value for non-scope statuses. This is the single
 // source of truth for HTTP status → scope key classification.
 func ScopeKeyForResult(httpStatus int, targetDriveID driveid.ID) ScopeKey {
