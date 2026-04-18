@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 	"time"
 
@@ -770,22 +769,18 @@ func TestNewEngine_InvalidDBPath(t *testing.T) {
 }
 
 // Validates: R-2.5.5, R-2.5.6
-func TestNewEngine_RecreatesNonSQLiteStateDB(t *testing.T) {
+func TestNewEngine_RequiresResetForNonSQLiteStateDB(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o600))
 
-	eng := newEngineForStateDBTest(t, dbPath)
-	defer func() {
-		require.NoError(t, eng.Close(t.Context()))
-	}()
-
-	assertCanonicalStoreOpen(t, eng)
+	resetErr := requireResetRequiredEngineError(t, dbPath)
+	assert.Equal(t, StateDBResetReasonOpenFailed, resetErr.Reason)
 }
 
 // Validates: R-2.5.5, R-2.5.6
-func TestNewEngine_RecreatesIncompatibleSchemaStateDB(t *testing.T) {
+func TestNewEngine_RequiresResetForIncompatibleSchemaStateDB(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -802,16 +797,12 @@ func TestNewEngine_RecreatesIncompatibleSchemaStateDB(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	eng := newEngineForStateDBTest(t, dbPath)
-	defer func() {
-		require.NoError(t, eng.Close(t.Context()))
-	}()
-
-	assertCanonicalStoreOpen(t, eng)
+	resetErr := requireResetRequiredEngineError(t, dbPath)
+	assert.Equal(t, StateDBResetReasonIncompatibleSchema, resetErr.Reason)
 }
 
 // Validates: R-2.5.5, R-2.10.7, R-2.10.34
-func TestNewEngine_RecreatesUnsupportedLegacyPersistedState(t *testing.T) {
+func TestNewEngine_RequiresResetForUnsupportedLegacyPersistedState(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -872,23 +863,27 @@ func TestNewEngine_RecreatesUnsupportedLegacyPersistedState(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.Close(context.WithoutCancel(ctx)))
 
-	eng := newEngineForStateDBTest(t, dbPath)
+	resetErr := requireResetRequiredEngineError(t, dbPath)
+	assert.Equal(t, StateDBResetReasonLegacyThrottleAccount, resetErr.Reason)
+
+	reopened, err := NewSyncStore(ctx, dbPath, testLogger(t))
+	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, eng.Close(t.Context()))
+		require.NoError(t, reopened.Close(context.WithoutCancel(ctx)))
 	}()
 
-	assertCanonicalStoreOpen(t, eng)
-
-	blocks, err := eng.baseline.ListScopeBlocks(ctx)
+	var scopeBlockCount int
+	err = reopened.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM scope_blocks`).Scan(&scopeBlockCount)
 	require.NoError(t, err)
-	assert.Empty(t, blocks)
+	assert.Positive(t, scopeBlockCount)
 
-	failures, err := eng.baseline.ListSyncFailures(ctx)
+	var failureCount int
+	err = reopened.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_failures`).Scan(&failureCount)
 	require.NoError(t, err)
-	assert.Empty(t, failures)
+	assert.Positive(t, failureCount)
 }
 
-func newEngineForStateDBTest(t *testing.T, dbPath string) *Engine {
+func requireResetRequiredEngineError(t *testing.T, dbPath string) *StateDBResetRequiredError {
 	t.Helper()
 
 	eng, err := newEngine(t.Context(), &engineInputs{
@@ -901,26 +896,13 @@ func newEngineForStateDBTest(t *testing.T, dbPath string) *Engine {
 		Uploads:   &engineMockClient{},
 		Logger:    testLogger(t),
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.Nil(t, eng)
 
-	return eng
-}
+	var resetErr *StateDBResetRequiredError
+	require.ErrorAs(t, err, &resetErr)
 
-func assertCanonicalStoreOpen(t *testing.T, eng *Engine) {
-	t.Helper()
-
-	require.NotNil(t, eng)
-	require.NotNil(t, eng.baseline)
-
-	tables, err := listUserTables(t.Context(), eng.baseline.db)
-	require.NoError(t, err)
-
-	expected := make([]string, 0, len(canonicalSyncStoreColumns()))
-	for tableName := range canonicalSyncStoreColumns() {
-		expected = append(expected, tableName)
-	}
-	slices.Sort(expected)
-	assert.Equal(t, expected, tables)
+	return resetErr
 }
 
 func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {

@@ -195,7 +195,7 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	for i := range blocks {
 		key := blocks[i].Key
 		if key.IsPermRemoteWrite() {
-			return fmt.Errorf("persisted remote-write scope %s should not survive startup repair", key.String())
+			return fmt.Errorf("persisted remote-write scope %s should not survive startup diagnosis", key.String())
 		}
 	}
 

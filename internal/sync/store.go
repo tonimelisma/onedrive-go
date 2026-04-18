@@ -6,8 +6,8 @@
 //   - NewSyncStore: open database, apply canonical schema, return ready store
 //   - Close:        WAL checkpoint + close database
 //   - Checkpoint:   WAL checkpoint + optional pruning
-//   - rawDB:            test-only access to underlying *sql.DB
-//   - nullString:       empty string → SQL NULL
+//   - DB:           test-only access to underlying *sql.DB
+//   - nullString:   empty string → SQL NULL
 //   - nullOptionalInt64: zero → SQL NULL for optional fields like mtimes
 //   - nullKnownInt64:   preserve zero for known values like file sizes
 //
@@ -16,7 +16,12 @@
 //   - store_write_observation.go:  remote state observation persistence
 //   - store_read_failures.go:      sync failure query helpers
 //   - store_write_failures.go:     sync failure recording and mutation helpers
-//   - store_admin.go:              state admin operations
+//   - store_read_snapshots.go:     read-only status projections
+//   - store_inspect.go:            package-private read-only inspector
+//   - store_run_status.go:         one-shot run-status persistence
+//   - store_scope_admin.go:        scope release/discard mutation helpers
+//   - store_state_health.go:       startup diagnosis for unsupported existing DBs
+//   - store_reset.go:              explicit delete-and-recreate helper
 package sync
 
 import (

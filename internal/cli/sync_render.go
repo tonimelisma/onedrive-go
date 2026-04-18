@@ -19,7 +19,7 @@ func printDriveReports(reports []*multisync.DriveReport, cc *CLIContext) {
 		}
 
 		if dr.Err != nil {
-			cc.Statusf("Error: %v\n", dr.Err)
+			cc.Statusf("Error: %s\n", formatDriveReportErrorMessage(dr))
 
 			continue
 		}
@@ -42,7 +42,7 @@ func driveReportsError(reports []*multisync.DriveReport) error {
 			failCount++
 
 			if firstErr == nil {
-				firstErr = dr.Err
+				firstErr = formatSyncStateResetRequiredError(dr.CanonicalID, dr.Err)
 			}
 		}
 	}
@@ -56,6 +56,14 @@ func driveReportsError(reports []*multisync.DriveReport) error {
 	}
 
 	return fmt.Errorf("%d of %d drives failed: %w", failCount, len(reports), firstErr)
+}
+
+func formatDriveReportErrorMessage(dr *multisync.DriveReport) string {
+	if dr == nil || dr.Err == nil {
+		return ""
+	}
+
+	return formatSyncStateResetRequiredMessage(dr.CanonicalID, dr.Err)
 }
 
 // printNonZero prints a labeled count line only when n > 0.

@@ -72,9 +72,10 @@ func loadVisibleIssueProjection(
 	remoteBlocked, err := querySyncFailureRowsDB(ctx, db,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE failure_role = ?
-			AND scope_key LIKE 'perm:remote:%'
+			AND scope_key LIKE ?
 		ORDER BY last_seen_at DESC`,
 		FailureRoleHeld,
+		permRemoteScopeKeyLikePattern(),
 	)
 	if err != nil {
 		return visibleIssueProjection{}, fmt.Errorf("sync: listing visible remote blocked failures: %w", err)
@@ -135,26 +136,18 @@ func visibleRemoteBoundaryPath(boundary string) string {
 }
 
 func buildVisibleIssueSummary(groups []VisibleIssueGroup, retrying int) IssueSummary {
-	counts := make(map[SummaryKey]int)
+	counts := make(issueGroupAccumulator)
 	for i := range groups {
 		if groups[i].SummaryKey == "" || groups[i].Count <= 0 {
 			continue
 		}
-		counts[groups[i].SummaryKey] += groups[i].Count
+		counts.Add(groups[i].SummaryKey, groups[i].Count, "", "")
 	}
 
-	summary := IssueSummary{
-		Groups:   make([]IssueGroupCount, 0, len(counts)),
+	return IssueSummary{
+		Groups:   counts.Groups(),
 		Retrying: retrying,
 	}
-	for key, count := range counts {
-		summary.Groups = append(summary.Groups, IssueGroupCount{Key: key, Count: count})
-	}
-	sort.Slice(summary.Groups, func(i, j int) bool {
-		return string(summary.Groups[i].Key) < string(summary.Groups[j].Key)
-	})
-
-	return summary
 }
 
 func querySyncFailureRowsDB(ctx context.Context, db *sql.DB, query string, args ...any) ([]SyncFailureRow, error) {

@@ -64,7 +64,6 @@ func TestNewSyncStore_RejectsNonCanonicalSchema(t *testing.T) {
 	require.Nil(t, store)
 	require.ErrorIs(t, err, ErrIncompatibleSchema)
 	assert.Contains(t, err.Error(), "current schema")
-	assert.Contains(t, err.Error(), "startup recreates a fresh canonical store automatically")
 }
 
 // Validates: R-2.5.6

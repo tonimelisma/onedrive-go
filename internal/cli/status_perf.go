@@ -137,9 +137,7 @@ func (ss *syncStateInfo) hasPersistentStatusData() bool {
 		return false
 	}
 
-	return ss.hasPersistentSummaryData() ||
-		ss.hasPersistentStoreData() ||
-		ss.hasPersistentSyncSectionData()
+	return ss.hasPersistentSummaryData()
 }
 
 func (ss *syncStateInfo) hasPersistentSummaryData() bool {
@@ -151,14 +149,6 @@ func (ss *syncStateInfo) hasPersistentSummaryData() bool {
 		ss.RemoteDrift > 0 ||
 		ss.Retrying > 0 ||
 		ss.LastError != ""
-}
-
-func (ss *syncStateInfo) hasPersistentStoreData() bool {
-	return false
-}
-
-func (ss *syncStateInfo) hasPersistentSyncSectionData() bool {
-	return false
 }
 
 func printStatusPerfText(w io.Writer, ss *syncStateInfo) error {

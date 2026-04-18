@@ -24,15 +24,31 @@ func removeDriveDataFiles(cid driveid.CanonicalID, logger *slog.Logger) (int, er
 	// Remove state database.
 	statePath := config.DriveStatePath(cid)
 	if statePath != "" {
-		removedPath, err := removeManagedPath(statePath)
+		removedPath, err := removeStateDBFamily(statePath)
 		if err != nil {
-			logger.Warn("failed to remove state database", "path", statePath, "error", err)
-			errs = append(errs, fmt.Errorf("removing state database %s: %w", statePath, err))
+			logger.Warn("failed to remove state database family", "path", statePath, "error", err)
+			errs = append(errs, fmt.Errorf("removing state database family %s: %w", statePath, err))
 		} else if removedPath {
-			logger.Info("removed state database", "path", statePath)
+			logger.Info("removed state database family", "path", statePath)
 			removed++
 		}
 	}
 
 	return removed, errors.Join(errs...)
+}
+
+func removeStateDBFamily(statePath string) (bool, error) {
+	removedAny := false
+
+	for _, candidate := range []string{statePath, statePath + "-wal", statePath + "-shm"} {
+		removedPath, err := removeManagedPath(candidate)
+		if err != nil {
+			return removedAny, err
+		}
+		if removedPath {
+			removedAny = true
+		}
+	}
+
+	return removedAny, nil
 }

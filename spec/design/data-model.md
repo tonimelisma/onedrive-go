@@ -7,7 +7,7 @@ Implements: R-2.5.1 [verified], R-2.5.2 [verified], R-2.5.4 [verified], R-2.10.3
 | Behavior | Evidence |
 | --- | --- |
 | The per-drive SQLite schema remains intentionally narrow and excludes deleted manual conflict/delete-approval state. | `internal/sync/schema_test.go`, `internal/sync/baseline_test.go`, `internal/sync/engine_run_once_test.go` |
-| Baseline, current local/remote snapshots, retry state, and scope-block timers remain the durable sync authority surfaces. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestSyncStore_FailureAdminMutations` |
+| Baseline, current local/remote snapshots, retry state, and scope-block timers remain the durable sync authority surfaces. | `TestReadDriveStatusSnapshot`, `TestSyncStore_ListVisibleIssueGroups`, `TestSyncStore_ReleaseScope`, `TestSyncStore_DiscardScope` |
 
 ## One Database Per Drive
 
@@ -169,5 +169,5 @@ bootstrap that schema in one transaction, seed the singleton
 
 Existing DBs are trusted only when they already match the current canonical
 table and column layout. Stores with stale or incompatible user tables are
-rejected loudly so engine startup can recreate them instead of migrating or
-guessing forward.
+rejected loudly so startup can require an explicit per-drive reset instead of
+migrating or guessing forward.

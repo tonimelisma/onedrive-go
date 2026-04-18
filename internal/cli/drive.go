@@ -17,6 +17,7 @@ func newDriveCmd() *cobra.Command {
 	cmd.AddCommand(newDriveListCmd())
 	cmd.AddCommand(newDriveAddCmd())
 	cmd.AddCommand(newDriveRemoveCmd())
+	cmd.AddCommand(newDriveResetSyncStateCmd())
 	cmd.AddCommand(newDriveSearchCmd())
 
 	return cmd

@@ -6,14 +6,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// RecoveryCandidate identifies one remote_state row that DB repair must
-// reconcile while preserving durable truth.
-type RecoveryCandidate struct {
-	DriveID string
-	ItemID  string
-	Path    string
-}
-
 // BaselineMutation is the store-owned persistence input produced from one
 // executed action result.
 type BaselineMutation struct {

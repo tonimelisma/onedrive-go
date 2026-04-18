@@ -207,7 +207,6 @@ func TestStatusPerfOverlayLookupAndPersistentFlags(t *testing.T) {
 		LastSyncTime: "yesterday",
 	}
 	assert.True(t, state.hasPersistentSummaryData())
-	assert.False(t, state.hasPersistentStoreData())
 	assert.True(t, state.hasPersistentStatusData())
 }
 

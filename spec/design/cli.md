@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-6.6.11 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-6.6.11 [verified]
 
 ## Overview
 
@@ -36,6 +36,7 @@ are inserted, updated, pruned, and validated.
 | Behavior | Evidence |
 | --- | --- |
 | `status` stays read-only, renders sync-state snapshots, and surfaces auth/issue state without reviving manual conflict or delete-approval UI. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyProjectionHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
+| `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
 
@@ -45,7 +46,7 @@ are inserted, updated, pruned, and validated.
 | --- | --- |
 | `login`, `logout` | auth and account session lifecycle |
 | `ls`, `get`, `put`, `rm`, `mkdir`, `mv`, `cp`, `stat` | file operations |
-| `drive` | drive management |
+| `drive` | drive management and explicit per-drive sync-state reset |
 | `shared*` | shared-item discovery and add flows |
 | `sync`, `pause`, `resume` | sync control |
 | `status` | read-only account and sync health |
@@ -92,9 +93,24 @@ watch owner is running, the updated config takes effect on the next start.
 
 ## State DB Handling
 
-The CLI no longer exposes a manual sync-state repair command. `status` stays
-read-only; unusable or unsupported state DBs are recreated by sync startup, not
-by a separate operator workflow.
+The CLI owns the only destructive operator surface for per-drive sync state:
+`onedrive-go drive reset-sync-state --drive <drive>`.
+
+- `--drive` is mandatory and must resolve to exactly one configured drive
+- the default flow requires typing `RESET`; `--yes` is the non-interactive bypass
+- the command refuses to run while that drive has a live sync owner
+- the command deletes only the selected drive's state DB family and recreates a
+  fresh canonical DB immediately
+
+`status` remains read-only. Missing or unreadable DBs collapse to an empty sync
+snapshot for that drive; status does not mutate state and does not become a DB
+health control surface.
+
+`sync` and `sync --watch` never auto-delete an existing DB. When startup sees
+an unreadable, incompatible, or unsupported existing DB, the CLI renders exact
+`drive reset-sync-state --drive ...` guidance for that drive instead. One-shot
+exits non-zero after reporting any affected drives, while watch mode skips bad
+drives and continues healthy ones unless none can start.
 
 ## What The CLI No Longer Owns
 

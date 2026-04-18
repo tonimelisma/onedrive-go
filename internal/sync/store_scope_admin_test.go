@@ -11,9 +11,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-const sqliteMainDatabaseName = "main"
+const storeScopeMainDatabaseName = "main"
 
-func insertFailureForCoverageTest(
+func insertFailureForStoreScopeTest(
 	t *testing.T,
 	store *SyncStore,
 	path string,
@@ -54,7 +54,7 @@ func insertFailureForCoverageTest(
 	require.NoError(t, err)
 }
 
-func failureRowCountForCoverageTest(t *testing.T, store *SyncStore, path string) int {
+func failureRowCountForStoreScopeTest(t *testing.T, store *SyncStore, path string) int {
 	t.Helper()
 
 	var count int
@@ -66,7 +66,7 @@ func failureRowCountForCoverageTest(t *testing.T, store *SyncStore, path string)
 	return count
 }
 
-func syncStorePathForCoverageTest(t *testing.T, store *SyncStore) string {
+func syncStorePathForStoreScopeTest(t *testing.T, store *SyncStore) string {
 	t.Helper()
 
 	rows, err := store.DB().QueryContext(t.Context(), "PRAGMA database_list")
@@ -78,7 +78,7 @@ func syncStorePathForCoverageTest(t *testing.T, store *SyncStore) string {
 		var name string
 		var file string
 		require.NoError(t, rows.Scan(&seq, &name, &file))
-		if name == sqliteMainDatabaseName {
+		if name == storeScopeMainDatabaseName {
 			require.NotEmpty(t, file)
 			return file
 		}
@@ -90,40 +90,19 @@ func syncStorePathForCoverageTest(t *testing.T, store *SyncStore) string {
 }
 
 // Validates: R-2.5.2
-func TestSyncStore_FailureAdminMutations(t *testing.T) {
+func TestSyncStore_ClearHeldRetryWork(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
 	driveID := driveid.New(testDriveID)
 	scopeKey := SKPermRemote("Shared/Docs")
-	futureRetry := time.Now().Add(time.Hour).UnixNano()
 
-	insertFailureForCoverageTest(t, store, "retry.txt", driveID, CategoryTransient, FailureRoleItem, IssueInvalidFilename, ScopeKey{}, futureRetry)
-	insertFailureForCoverageTest(t, store, "held.txt", driveID, CategoryTransient, FailureRoleHeld, IssueSharedFolderBlocked, scopeKey, nil)
-
-	count := len(filterSyncFailuresForTest(t, store, t.Context(), func(row SyncFailureRow) bool {
-		return row.Category == CategoryTransient
-	}))
-	assert.Equal(t, 2, count)
-
-	require.NoError(t, store.ResetFailure(t.Context(), "retry.txt"))
-	assert.Zero(t, failureRowCountForCoverageTest(t, store, "retry.txt"))
-
-	require.NoError(t, store.ResetFailure(t.Context(), "held.txt"))
-	assert.Equal(t, 1, failureRowCountForCoverageTest(t, store, "held.txt"))
-
-	insertFailureForCoverageTest(t, store, "transient.txt", driveID, CategoryTransient, FailureRoleItem, IssueInvalidFilename, ScopeKey{}, futureRetry)
-	insertFailureForCoverageTest(t, store, "actionable.txt", driveID, CategoryActionable, FailureRoleItem, IssueInvalidFilename, ScopeKey{}, nil)
-
-	require.NoError(t, store.ResetAllFailures(t.Context()))
-	assert.Zero(t, failureRowCountForCoverageTest(t, store, "transient.txt"))
-	assert.Equal(t, 1, failureRowCountForCoverageTest(t, store, "actionable.txt"))
-
+	insertFailureForStoreScopeTest(t, store, "held.txt", driveID, CategoryTransient, FailureRoleHeld, IssueSharedFolderBlocked, scopeKey, nil)
 	require.NoError(t, store.ClearHeldRetryWork(t.Context(), RetryWorkKey{
 		Path:       "held.txt",
 		ActionType: ActionUpload,
 	}, scopeKey))
-	assert.Zero(t, failureRowCountForCoverageTest(t, store, "held.txt"))
+	assert.Zero(t, failureRowCountForStoreScopeTest(t, store, "held.txt"))
 }
 
 // Validates: R-2.10.11
@@ -137,9 +116,9 @@ func TestSyncStore_ResetRetryTimesForScope(t *testing.T) {
 	pastRetry := now.Add(-time.Minute).UnixNano()
 	futureRetry := now.Add(time.Hour).UnixNano()
 
-	insertFailureForCoverageTest(t, store, "future.txt", driveID, CategoryTransient, FailureRoleItem, IssueServiceOutage, scopeKey, futureRetry)
-	insertFailureForCoverageTest(t, store, "past.txt", driveID, CategoryTransient, FailureRoleItem, IssueServiceOutage, scopeKey, pastRetry)
-	insertFailureForCoverageTest(t, store, "other-scope.txt", driveID, CategoryTransient, FailureRoleItem, IssueServiceOutage, SKPermRemote("Shared/Elsewhere"), futureRetry)
+	insertFailureForStoreScopeTest(t, store, "future.txt", driveID, CategoryTransient, FailureRoleItem, IssueServiceOutage, scopeKey, futureRetry)
+	insertFailureForStoreScopeTest(t, store, "past.txt", driveID, CategoryTransient, FailureRoleItem, IssueServiceOutage, scopeKey, pastRetry)
+	insertFailureForStoreScopeTest(t, store, "other-scope.txt", driveID, CategoryTransient, FailureRoleItem, IssueServiceOutage, SKPermRemote("Shared/Elsewhere"), futureRetry)
 
 	require.NoError(t, store.ResetRetryTimesForScope(t.Context(), scopeKey, now))
 
@@ -166,7 +145,7 @@ func TestSyncStore_ResetRetryTimesForScope(t *testing.T) {
 }
 
 // Validates: R-2.3.10, R-2.10.4
-func TestReadDriveStatusSnapshotAndScopeBlockHelpers(t *testing.T) {
+func TestReadDriveStatusSnapshot(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -195,7 +174,7 @@ func TestReadDriveStatusSnapshotAndScopeBlockHelpers(t *testing.T) {
 		LocalMtime:      1700000000,
 		RemoteMtime:     1700000000,
 	}))
-	insertFailureForCoverageTest(t, store, "bad:name.txt", driveID, CategoryActionable, FailureRoleItem, IssueInvalidFilename, ScopeKey{}, nil)
+	insertFailureForStoreScopeTest(t, store, "bad:name.txt", driveID, CategoryActionable, FailureRoleItem, IssueInvalidFilename, ScopeKey{}, nil)
 	require.NoError(t, store.UpsertScopeBlock(t.Context(), &ScopeBlock{
 		Key:           scopeKey,
 		IssueType:     IssueSharedFolderBlocked,
@@ -205,51 +184,31 @@ func TestReadDriveStatusSnapshotAndScopeBlockHelpers(t *testing.T) {
 		NextTrialAt:   time.Unix(2, 0),
 	}))
 
-	dbPath := syncStorePathForCoverageTest(t, store)
+	dbPath := syncStorePathForStoreScopeTest(t, store)
 	snapshot, err := ReadDriveStatusSnapshot(t.Context(), dbPath, false, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 1, snapshot.BaselineEntryCount)
 	assert.Equal(t, 3, snapshot.RunStatus.LastSucceededCount)
 	require.Len(t, snapshot.IssueGroups, 1)
 	assert.Equal(t, SummaryInvalidFilename, snapshot.IssueGroups[0].SummaryKey)
-
-	hasScope, err := HasScopeBlockAtPath(context.Background(), dbPath, scopeKey, testLogger(t))
-	require.NoError(t, err)
-	assert.True(t, hasScope)
 }
 
-// Validates: R-2.2
-func TestSyncStore_RemoteStateLookupAndDeltaTokenDeletion(t *testing.T) {
+func TestFinalizeInspectorRead_PreservesSuccessfulReadOnCloseError(t *testing.T) {
 	t.Parallel()
 
-	store := newTestStore(t)
-	driveID := driveid.New(testDriveID)
-
-	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{{
-		DriveID:  driveID,
-		ItemID:   "item-lookup",
-		ParentID: "root",
-		Path:     "docs/lookup.txt",
-		ItemType: ItemTypeFile,
-		Hash:     "lookup-hash",
-		Size:     55,
-		Mtime:    77,
-		ETag:     "etag-lookup",
-	}}, "delta-to-delete", driveID))
-
-	row, found, err := store.GetRemoteStateByID(t.Context(), driveID, "item-lookup")
+	result, err := finalizeInspectorRead("state.db", newTestLogger(t), true, nil, assert.AnError)
 	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, "docs/lookup.txt", row.Path)
-	assert.Equal(t, "lookup-hash", row.Hash)
+	assert.True(t, result)
+}
 
-	row, found, err = store.GetRemoteStateByID(t.Context(), driveID, "missing-item")
-	require.NoError(t, err)
-	assert.False(t, found)
-	assert.Nil(t, row)
+func TestFinalizeInspectorRead_JoinsReadAndCloseErrors(t *testing.T) {
+	t.Parallel()
 
-	require.NoError(t, store.ClearObservationCursor(t.Context()))
+	readErr := assert.AnError
+	closeErr := context.Canceled
 
-	token := readObservationCursorForTest(t, store, t.Context(), driveID.String())
-	assert.Empty(t, token)
+	_, err := finalizeInspectorRead("state.db", newTestLogger(t), false, readErr, closeErr)
+	require.Error(t, err)
+	require.ErrorIs(t, err, readErr)
+	require.ErrorIs(t, err, closeErr)
 }

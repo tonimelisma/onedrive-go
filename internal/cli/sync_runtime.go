@@ -113,7 +113,7 @@ func runSyncDaemonWithFactory(
 	})
 
 	if err := orch.RunWatch(ctx, mode, opts); err != nil {
-		return fmt.Errorf("run watch sync: %w", err)
+		return fmt.Errorf("run watch sync: %w", formatWatchStartupError(err))
 	}
 
 	return nil
