@@ -1,5 +1,5 @@
 // Package sync owns the single-drive runtime, including scope-state helpers
-// used by execution and recovery flows.
+// used by execution and scope-lifecycle flows.
 //
 // ScopeState maintains sliding windows for scope escalation. The engine
 // calls UpdateScope after each action completion; when a threshold is crossed,

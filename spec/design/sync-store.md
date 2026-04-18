@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_retry_state.go, internal/sync/store_scratch.go, internal/sync/store_recreate.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_admin.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_retry_state.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_state_health.go, internal/sync/store_reset.go, internal/sync/visible_issues.go, internal/sync/issue_summary.go, internal/sync/scope_key_wire.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
 Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [verified], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -16,6 +16,8 @@ Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [
 - retry/actionable failure persistence
 - scope-block persistence
 - one-shot run-status persistence
+- state-DB diagnosis for startup
+- explicit destructive reset of one drive's DB family
 - read-only inspectors used by CLI status
 
 It does **not** own planning policy, conflict-resolution policy, delete-safety
@@ -34,9 +36,9 @@ policy, or live watch-mode coordination. Those belong to the engine.
 
 | Behavior | Evidence |
 | --- | --- |
-| The store remains the sole durable authority for baseline, local/remote snapshots, retry state, scope-block, observation-state, and run-status rows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestWriteSyncRunStatus_RoundTrip`, `TestSyncStore_FailureAdminMutations` |
-| Read-only snapshot helpers back status without reopening deleted conflict/delete-approval workflows. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestQuerySyncState_UsesReadOnlyProjectionHelper` |
-| Schema validation stays store-owned, while engine startup owns destructive recreate for unusable or unsupported DBs. | `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestNewEngine_RecreatesNonSQLiteStateDB`, `TestNewEngine_RecreatesIncompatibleSchemaStateDB`, `TestNewEngine_RecreatesUnsupportedLegacyPersistedState` |
+| The store remains the sole durable authority for baseline, local/remote snapshots, retry state, scope-block, observation-state, and run-status rows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestWriteSyncRunStatus_RoundTrip`, `TestSyncStore_ReleaseScope`, `TestSyncStore_DiscardScope` |
+| Read-only snapshot helpers back status without reopening deleted conflict/delete-approval workflows. | `TestReadDriveStatusSnapshot`, `TestSyncStore_ListVisibleIssueGroups`, `TestQuerySyncState_UsesReadOnlyProjectionHelper` |
+| Schema validation stays store-owned, while startup receives typed reset-required errors for unreadable, incompatible, or unsupported existing DBs and the explicit reset command owns deletion/recreate. | `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestNewEngine_RequiresResetForNonSQLiteStateDB`, `TestNewEngine_RequiresResetForIncompatibleSchemaStateDB`, `TestNewEngine_RequiresResetForUnsupportedLegacyPersistedState`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 
 ## Write Responsibilities
 
@@ -126,11 +128,13 @@ from blocked `retry_state` rows keyed by `perm:remote:*` scope keys.
 
 ### Admin writes
 
-`store_admin.go` owns administrative store helpers such as:
+Administrative write helpers are split by authority:
 
-- reset/remove retry rows
-- release/discard scope state
-- one-shot run-status writes
+- `store_run_status.go` owns one-shot run-status writes
+- `store_scope_admin.go` owns release/discard scope transitions
+
+Retry-row test seeding and other package-local fixtures live in `_test.go`
+helpers rather than widening the production store API.
 
 ## Read Responsibilities
 
@@ -141,11 +145,26 @@ Read-only store helpers are intentionally separate from writable paths.
   store-owned projections and tests
 - `visible_issues.go` owns the higher-level visible issue projection used by
   status/watch surfaces
+- `issue_summary.go` owns the shared grouped-summary model used by those
+  projections
 - `store_retry_state.go` owns retry/trial reads such as ready blocked work
 - `store_read_snapshots.go` and `store_inspect.go` build status views
 
 CLI `status` and status-like flows should prefer these read-only helpers rather
 than opening a writable store.
+
+## State-DB Diagnosis And Reset
+
+Two store-owned helpers isolate the remaining state-DB lifecycle policy:
+
+- `store_state_health.go` opens an existing DB non-mutating, classifies unreadable
+  or unsupported persisted state, and returns typed reset-required errors
+- `store_reset.go` deletes one drive's DB file family and recreates a fresh
+  canonical DB in place
+
+Engine startup may use the diagnosis helper, but it must not call the
+destructive reset helper automatically. The explicit CLI reset command owns the
+delete-and-recreate action.
 
 ## Baseline Cache
 
@@ -165,9 +184,10 @@ from SQLite instead of creating a second authority.
 
 There is no migration history in the current architecture. New DBs bootstrap
 directly into the simplified schema. Non-canonical stores are rejected loudly
-at the store boundary. Engine startup may then discard an unusable or
-unsupported DB file family and recreate a fresh canonical store once before it
-gives up.
+at the store boundary. Startup may then surface a typed reset-required result
+for an unusable or unsupported existing DB, while the explicit reset command
+owns destructive delete-and-recreate behavior. Read-only inspectors remain
+non-mutating.
 
 ## What The Store No Longer Owns
 

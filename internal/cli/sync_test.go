@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -52,6 +53,18 @@ func TestDriveReportsError(t *testing.T) {
 				{Err: errDelta},
 			},
 			wantMsg: "delta expired",
+		},
+		{
+			name: "reset required includes guidance",
+			reports: []*multisync.DriveReport{
+				{
+					CanonicalID: driveid.MustCanonicalID("personal:reset@example.com"),
+					Err: &syncengine.StateDBResetRequiredError{
+						Reason: syncengine.StateDBResetReasonIncompatibleSchema,
+					},
+				},
+			},
+			wantMsg: "drive reset-sync-state --drive personal:reset@example.com",
 		},
 		{
 			name: "multi-drive mixed",

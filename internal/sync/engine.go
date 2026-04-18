@@ -95,11 +95,11 @@ type Engine struct {
 	nextRunID atomic.Int64
 }
 
-// newEngine creates an Engine and opens the per-drive SyncStore. Engine
-// startup owns one destructive self-heal path: when an existing state DB
-// cannot be opened under the current schema or still contains unsupported
-// legacy persisted state, the engine recreates it once and retries open.
-// Returns an error if DB init still fails or if DriveID is zero.
+// newEngine creates an Engine and opens the per-drive SyncStore. Existing
+// unreadable, incompatible, or unsupported state DBs fail with a typed
+// reset-required error so higher layers can guide the user without mutating
+// durable state during startup. Returns an error if DB init fails or if
+// DriveID is zero.
 func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	if cfg.DriveID.IsZero() {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")

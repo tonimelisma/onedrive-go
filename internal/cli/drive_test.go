@@ -54,6 +54,7 @@ func TestNewDriveCmd_Structure(t *testing.T) {
 
 	assert.Contains(t, subNames, "add")
 	assert.Contains(t, subNames, "remove")
+	assert.Contains(t, subNames, "reset-sync-state")
 	assert.Contains(t, subNames, "list")
 	assert.Contains(t, subNames, "search")
 }

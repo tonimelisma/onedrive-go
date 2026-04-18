@@ -939,7 +939,7 @@ func TestNewSyncStore_RejectsUnversionedExistingStateDB(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, mgr)
 	require.ErrorIs(t, err, ErrIncompatibleSchema)
-	assert.Contains(t, err.Error(), "startup recreates a fresh canonical store automatically")
+	assert.Contains(t, err.Error(), "current schema")
 }
 
 // Validates: R-2.2
@@ -1675,7 +1675,8 @@ func TestBaselineEntryCount_Empty(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	count, err := mgr.BaselineEntryCount(ctx)
+	var count int
+	err := mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 }
@@ -1706,7 +1707,8 @@ func TestBaselineEntryCount_WithEntries(t *testing.T) {
 	}
 	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
-	count, err := mgr.BaselineEntryCount(ctx)
+	var count int
+	err := mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 }

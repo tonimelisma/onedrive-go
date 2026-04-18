@@ -1130,7 +1130,7 @@ func syncStorePathForTest(t *testing.T, ctx context.Context, eng *testEngine) st
 		var name string
 		var file string
 		require.NoError(t, rows.Scan(&seq, &name, &file), "scan PRAGMA database_list")
-		if name == sqliteMainDatabaseName {
+		if name == storeScopeMainDatabaseName {
 			require.NotEmpty(t, file, "main database path should not be empty")
 			return file
 		}

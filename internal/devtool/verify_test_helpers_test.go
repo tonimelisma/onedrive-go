@@ -350,7 +350,7 @@ func repoConsistencyDesignDocFixtures() []struct {
 			"- Error Boundary: CLI error rendering",
 		}, []string{
 			"Run `onedrive-go status`.",
-			"Unreadable state DBs are recreated automatically on sync startup.",
+			"Unreadable existing state DBs require explicit reset guidance on sync startup.",
 		}),
 		{
 			name: "sync-engine.md",

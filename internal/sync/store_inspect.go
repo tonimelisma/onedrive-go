@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"time"
 
 	_ "modernc.org/sqlite"
 )
 
-// Inspector is a read-only sync-state boundary for CLI status and other
-// administrative readers that must not own raw SQLite access themselves.
-type Inspector struct {
+// storeInspector is a read-only sync-state boundary for CLI status and other
+// package-local readers that must not own raw SQLite access themselves.
+type storeInspector struct {
 	db     *sql.DB
 	logger *slog.Logger
 }
@@ -53,13 +52,8 @@ type DriveStatusSnapshot struct {
 	IssueGroups        []IssueGroupSnapshot
 }
 
-// groupedIssueProjection is the internal grouped sync-health projection shared
-// by the per-drive status snapshot builder and store/package tests. It stays
-// unexported so the public store read surface has one product-facing per-drive
-// projection.
 type groupedIssueProjection struct {
-	Groups         []IssueGroupSnapshot
-	PendingRetries []PendingRetrySnapshot
+	Groups []IssueGroupSnapshot
 }
 
 // IssueGroupSnapshot is one visible grouped issue family in the read-only
@@ -73,143 +67,13 @@ type IssueGroupSnapshot struct {
 	Count            int
 }
 
-// PendingRetrySnapshot is one aggregated transient retry group in the
-// store-owned sync-health projection. It remains available for internal
-// observers and tests that assert retry state.
-type PendingRetrySnapshot struct {
-	ScopeKey     ScopeKey
-	ScopeLabel   string
-	Count        int
-	EarliestNext time.Time
-}
-
-// IssueGroupCount is one derived visible issue family with its aggregated
-// count in the read-only status projection.
-type IssueGroupCount struct {
-	Key       SummaryKey
-	Count     int
-	ScopeKind string
-	Scope     string
-}
-
-const (
-	statusScopeFile      = "file"
-	statusScopeDirectory = "directory"
-	statusScopeDrive     = "drive"
-	statusScopeService   = "service"
-	statusScopeDisk      = "disk"
-)
-
-type issueGroupIdentity struct {
-	Key       SummaryKey
-	ScopeKind string
-	Scope     string
-}
-
-type issueGroupAccumulator map[issueGroupIdentity]int
-
-func (a issueGroupAccumulator) Add(key SummaryKey, count int, scopeKind, scope string) {
-	if key == "" || count <= 0 || scopeKind == "" {
-		return
-	}
-
-	a[issueGroupIdentity{
-		Key:       key,
-		ScopeKind: scopeKind,
-		Scope:     scope,
-	}] += count
-}
-
-func (a issueGroupAccumulator) Groups() []IssueGroupCount {
-	groups := make([]IssueGroupCount, 0, len(a))
-	for identity, count := range a {
-		groups = append(groups, IssueGroupCount{
-			Key:       identity.Key,
-			Count:     count,
-			ScopeKind: identity.ScopeKind,
-			Scope:     identity.Scope,
-		})
-	}
-
-	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].Key != groups[j].Key {
-			return string(groups[i].Key) < string(groups[j].Key)
-		}
-		if groups[i].ScopeKind != groups[j].ScopeKind {
-			return groups[i].ScopeKind < groups[j].ScopeKind
-		}
-
-		return groups[i].Scope < groups[j].Scope
-	})
-
-	return groups
-}
-
-// IssueSummary is the store-owned aggregate view of visible issues for the
-// status command. It centralizes how actionable rows and special derived
-// scopes count toward status.
-type IssueSummary struct {
-	Groups   []IssueGroupCount
-	Retrying int
-}
-
-func (s IssueSummary) VisibleTotal() int {
-	total := 0
-	for _, group := range s.Groups {
-		total += group.Count
-	}
-
-	return total
-}
-
-func (s IssueSummary) ConflictCount() int {
-	return 0
-}
-
-func (s IssueSummary) ActionableCount() int {
-	total := 0
-	for _, group := range s.Groups {
-		if group.Key == SummarySharedFolderWritesBlocked ||
-			group.Key == SummaryAuthenticationRequired {
-			continue
-		}
-		total += group.Count
-	}
-
-	return total
-}
-
-func (s IssueSummary) RemoteBlockedCount() int {
-	return s.countForKey(SummarySharedFolderWritesBlocked)
-}
-
-func (s IssueSummary) AuthRequiredCount() int {
-	return s.countForKey(SummaryAuthenticationRequired)
-}
-
-func (s IssueSummary) RetryingCount() int {
-	return s.Retrying
-}
-
-func (s IssueSummary) countForKey(key SummaryKey) int {
-	total := 0
-	for _, group := range s.Groups {
-		if group.Key == key {
-			total += group.Count
-		}
-	}
-
-	return total
-}
-
-// OpenInspector opens a read-only connection to a sync state database.
-func OpenInspector(dbPath string, logger *slog.Logger) (*Inspector, error) {
+func openStoreInspector(dbPath string, logger *slog.Logger) (*storeInspector, error) {
 	db, err := openReadOnlySyncStoreDB(dbPath)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Inspector{
+	return &storeInspector{
 		db:     db,
 		logger: logger,
 	}, nil
@@ -225,7 +89,7 @@ func openReadOnlySyncStoreDB(dbPath string) (*sql.DB, error) {
 	return db, nil
 }
 
-func (i *Inspector) Close() error {
+func (i *storeInspector) Close() error {
 	if err := i.db.Close(); err != nil {
 		return fmt.Errorf("close read-only sync store: %w", err)
 	}
@@ -233,30 +97,10 @@ func (i *Inspector) Close() error {
 	return nil
 }
 
-// HasScopeBlock reports whether the read-only store currently contains the
-// requested scope block. Missing scope-block tables are treated as empty so
-// partially initialized state databases can still be inspected.
-func (i *Inspector) HasScopeBlock(ctx context.Context, key ScopeKey) (bool, error) {
-	var exists int
-	err := i.db.QueryRowContext(
-		ctx,
-		`SELECT 1 FROM scope_blocks WHERE scope_key = ? LIMIT 1`,
-		key.String(),
-	).Scan(&exists)
-	if err == nil {
-		return true, nil
-	}
-	if err == sql.ErrNoRows || isMissingTableErr(err) {
-		return false, nil
-	}
-
-	return false, fmt.Errorf("query scope block %s: %w", key, err)
-}
-
 // ReadDriveStatusSnapshot returns the per-drive status projection used by the
 // product-facing status command. Missing tables are tolerated so older or
 // partially initialized DBs still yield best-effort status information.
-func (i *Inspector) ReadDriveStatusSnapshot(ctx context.Context, history bool) (DriveStatusSnapshot, error) {
+func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context, history bool) (DriveStatusSnapshot, error) {
 	snapshot := DriveStatusSnapshot{}
 
 	if err := i.db.QueryRowContext(ctx, `
@@ -285,53 +129,40 @@ func (i *Inspector) ReadDriveStatusSnapshot(ctx context.Context, history bool) (
 		"SELECT COUNT(*) FROM sync_failures WHERE category = 'transient' AND failure_count >= 3",
 	)
 
-	projection, err := i.readGroupedIssueProjectionModel(ctx)
+	projection, err := i.readGroupedIssueProjection(ctx)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status projection: %w", err)
 	}
-	snapshot.IssueGroups = projection.snapshot.Groups
+	snapshot.IssueGroups = projection.Groups
 	_ = history
 
 	return snapshot, nil
 }
 
-type groupedIssueProjectionModel struct {
-	snapshot groupedIssueProjection
-	summary  IssueSummary
-}
-
-func (i *Inspector) readGroupedIssueProjectionModel(ctx context.Context) (groupedIssueProjectionModel, error) {
+func (i *storeInspector) readGroupedIssueProjection(ctx context.Context) (groupedIssueProjection, error) {
 	actionableFailures, err := i.listActionableFailures(ctx)
 	if err != nil {
-		return groupedIssueProjectionModel{}, fmt.Errorf("list actionable failures: %w", err)
+		return groupedIssueProjection{}, fmt.Errorf("list actionable failures: %w", err)
 	}
 
 	remoteBlocked, err := i.listRemoteBlockedFailures(ctx)
 	if err != nil {
-		return groupedIssueProjectionModel{}, fmt.Errorf("list remote blocked failures: %w", err)
-	}
-
-	pendingRetries, err := i.pendingRetrySummary(ctx)
-	if err != nil {
-		return groupedIssueProjectionModel{}, fmt.Errorf("pending retry summary: %w", err)
+		return groupedIssueProjection{}, fmt.Errorf("list remote blocked failures: %w", err)
 	}
 
 	return buildGroupedIssueProjection(
 		actionableFailures,
 		remoteBlocked,
-		pendingRetries,
 	), nil
 }
 
 func buildGroupedIssueProjection(
 	actionableFailures []SyncFailureRow,
 	remoteBlocked []SyncFailureRow,
-	pendingRetries []PendingRetryGroup,
-) groupedIssueProjectionModel {
-	builder := newGroupedIssueProjectionBuilder(len(pendingRetries))
+) groupedIssueProjection {
+	builder := newGroupedIssueProjectionBuilder()
 	builder.addActionableFailures(actionableFailures)
 	builder.addRemoteBlocked(remoteBlocked)
-	builder.addPendingRetries(pendingRetries)
 	return builder.projection()
 }
 
@@ -341,29 +172,17 @@ type issueGroupKey struct {
 }
 
 type groupedIssueProjectionBuilder struct {
-	groupCounts issueGroupAccumulator
-	groupIndex  map[issueGroupKey]int
-	snapshot    groupedIssueProjection
+	groupIndex map[issueGroupKey]int
+	snapshot   groupedIssueProjection
 }
 
-func newGroupedIssueProjectionBuilder(pendingRetryCap int) *groupedIssueProjectionBuilder {
+func newGroupedIssueProjectionBuilder() *groupedIssueProjectionBuilder {
 	return &groupedIssueProjectionBuilder{
-		groupCounts: make(issueGroupAccumulator),
-		groupIndex:  make(map[issueGroupKey]int),
+		groupIndex: make(map[issueGroupKey]int),
 		snapshot: groupedIssueProjection{
-			Groups:         make([]IssueGroupSnapshot, 0),
-			PendingRetries: make([]PendingRetrySnapshot, 0, pendingRetryCap),
+			Groups: make([]IssueGroupSnapshot, 0),
 		},
 	}
-}
-
-func (b *groupedIssueProjectionBuilder) addSummary(
-	key SummaryKey,
-	scopeKey ScopeKey,
-	role FailureRole,
-) {
-	scopeKind, scope := statusIssueScope(scopeKey, role)
-	b.groupCounts.Add(key, 1, scopeKind, scope)
 }
 
 func (b *groupedIssueProjectionBuilder) addGroupedPath(
@@ -399,7 +218,6 @@ func (b *groupedIssueProjectionBuilder) addActionableFailures(rows []SyncFailure
 		row := rows[i]
 		summaryKey := SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
 		b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path)
-		b.addSummary(summaryKey, row.ScopeKey, row.Role)
 	}
 }
 
@@ -408,61 +226,12 @@ func (b *groupedIssueProjectionBuilder) addRemoteBlocked(rows []SyncFailureRow) 
 		row := rows[i]
 		summaryKey := SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
 		b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path)
-		b.addSummary(summaryKey, row.ScopeKey, row.Role)
 	}
 }
 
-func (b *groupedIssueProjectionBuilder) addPendingRetries(groups []PendingRetryGroup) {
-	for i := range groups {
-		group := groups[i]
-		b.snapshot.PendingRetries = append(b.snapshot.PendingRetries, PendingRetrySnapshot{
-			ScopeKey:     group.ScopeKey,
-			ScopeLabel:   group.ScopeKey.Humanize(),
-			Count:        group.Count,
-			EarliestNext: group.EarliestNext,
-		})
-	}
-}
-
-func (b *groupedIssueProjectionBuilder) projection() groupedIssueProjectionModel {
+func (b *groupedIssueProjectionBuilder) projection() groupedIssueProjection {
 	sortIssueGroups(b.snapshot.Groups)
-
-	summary := IssueSummary{
-		Groups: b.groupCounts.Groups(),
-	}
-
-	return groupedIssueProjectionModel{
-		snapshot: b.snapshot,
-		summary:  summary,
-	}
-}
-
-func statusIssueScope(
-	scopeKey ScopeKey,
-	role FailureRole,
-) (string, string) {
-	if !scopeKey.IsZero() {
-		switch scopeKey.Kind {
-		case ScopeThrottleTarget:
-			return statusScopeDrive, scopeKey.Humanize()
-		case ScopeService:
-			return statusScopeService, scopeKey.Humanize()
-		case ScopeQuotaOwn:
-			return statusScopeDrive, scopeKey.Humanize()
-		case ScopePermRemote:
-			return statusScopeDirectory, scopeKey.Humanize()
-		case ScopePermDir:
-			return statusScopeDirectory, scopeKey.Humanize()
-		case ScopeDiskLocal:
-			return statusScopeDisk, scopeKey.Humanize()
-		}
-	}
-
-	if role == FailureRoleBoundary {
-		return statusScopeDirectory, ""
-	}
-
-	return statusScopeFile, ""
+	return b.snapshot
 }
 
 func sortIssueGroups(groups []IssueGroupSnapshot) {
@@ -482,7 +251,7 @@ func sortIssueGroups(groups []IssueGroupSnapshot) {
 	}
 }
 
-func (i *Inspector) listActionableFailures(ctx context.Context) ([]SyncFailureRow, error) {
+func (i *storeInspector) listActionableFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	configuredDriveID, err := configuredDriveIDForDB(ctx, i.db)
 	if err != nil {
 		return nil, err
@@ -504,7 +273,7 @@ func (i *Inspector) listActionableFailures(ctx context.Context) ([]SyncFailureRo
 	return scanSyncFailureRows(rows, configuredDriveID)
 }
 
-func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailureRow, error) {
+func (i *storeInspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailureRow, error) {
 	configuredDriveID, err := configuredDriveIDForDB(ctx, i.db)
 	if err != nil {
 		return nil, err
@@ -513,9 +282,10 @@ func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailur
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE failure_role = ?
-			AND scope_key LIKE 'perm:remote:%'
+			AND scope_key LIKE ?
 		ORDER BY last_seen_at DESC`,
 		FailureRoleHeld,
+		permRemoteScopeKeyLikePattern(),
 	)
 	if err != nil {
 		if isMissingTableErr(err) {
@@ -528,48 +298,7 @@ func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailur
 	return scanSyncFailureRows(rows, configuredDriveID)
 }
 
-func (i *Inspector) pendingRetrySummary(ctx context.Context) ([]PendingRetryGroup, error) {
-	rows, err := i.db.QueryContext(ctx,
-		`SELECT COALESCE(scope_key, ''), COUNT(*), MIN(next_retry_at)
-		 FROM sync_failures
-		 WHERE category = 'transient' AND next_retry_at > 0
-		 GROUP BY scope_key
-		 ORDER BY COUNT(*) DESC`)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return []PendingRetryGroup{}, nil
-		}
-		return nil, fmt.Errorf("query pending retry summary: %w", err)
-	}
-	defer rows.Close()
-
-	var result []PendingRetryGroup
-	for rows.Next() {
-		var (
-			group        PendingRetryGroup
-			wireScopeKey string
-			minNano      int64
-		)
-
-		if err := rows.Scan(&wireScopeKey, &group.Count, &minNano); err != nil {
-			return nil, fmt.Errorf("scan pending retry group: %w", err)
-		}
-
-		group.ScopeKey = ParseScopeKey(wireScopeKey)
-		if minNano > 0 {
-			group.EarliestNext = time.Unix(0, minNano)
-		}
-		result = append(result, group)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate pending retry groups: %w", err)
-	}
-
-	return result, nil
-}
-
-func (i *Inspector) countOrZero(ctx context.Context, label, query string) int {
+func (i *storeInspector) countOrZero(ctx context.Context, label, query string) int {
 	var count int
 	if err := i.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
 		i.logger.Debug("read sync status count", slog.String("label", label), slog.String("error", err.Error()))

@@ -734,6 +734,74 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_RunWatch_SkipsResetRequiredDriveWhenAnotherDriveStarts(t *testing.T) {
+	rd1 := testResolvedDrive(t, "personal:healthy@example.com", "Healthy")
+	rd2 := testResolvedDrive(t, "personal:reset@example.com", "Reset")
+	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+
+	orch := NewOrchestrator(cfg)
+
+	watchStarted := make(chan struct{})
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		if req.Drive.CanonicalID == rd2.CanonicalID {
+			return nil, &syncengine.StateDBResetRequiredError{Reason: syncengine.StateDBResetReasonIncompatibleSchema}
+		}
+
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+				close(watchStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}, nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	}()
+
+	select {
+	case <-watchStarted:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not start healthy drive in time")
+	}
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not stop in time")
+	}
+}
+
+func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoDriveStarts(t *testing.T) {
+	rd := testResolvedDrive(t, "personal:reset@example.com", "Reset")
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+
+	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		return nil, &syncengine.StateDBResetRequiredError{Reason: syncengine.StateDBResetReasonIncompatibleSchema}
+	}
+
+	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	require.Error(t, err)
+
+	var startupErr *WatchStartupError
+	require.ErrorAs(t, err, &startupErr)
+	require.Len(t, startupErr.Failures, 1)
+	assert.Equal(t, rd.CanonicalID, startupErr.Failures[0].CanonicalID)
+}
+
 // Validates: R-2.9.1, R-2.9.2
 func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:control@example.com", "Control")

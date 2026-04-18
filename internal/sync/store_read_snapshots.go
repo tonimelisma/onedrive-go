@@ -16,30 +16,17 @@ func ReadDriveStatusSnapshot(
 	history bool,
 	logger *slog.Logger,
 ) (DriveStatusSnapshot, error) {
-	return readWithInspector(dbPath, logger, func(inspector *Inspector) (DriveStatusSnapshot, error) {
+	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (DriveStatusSnapshot, error) {
 		return inspector.ReadDriveStatusSnapshot(ctx, history)
-	})
-}
-
-// HasScopeBlockAtPath answers one scope-block existence query without forcing
-// callers to manage inspector open/close.
-func HasScopeBlockAtPath(
-	ctx context.Context,
-	dbPath string,
-	key ScopeKey,
-	logger *slog.Logger,
-) (bool, error) {
-	return readWithInspector(dbPath, logger, func(inspector *Inspector) (bool, error) {
-		return inspector.HasScopeBlock(ctx, key)
 	})
 }
 
 func readWithInspector[T any](
 	dbPath string,
 	logger *slog.Logger,
-	read func(*Inspector) (T, error),
+	read func(*storeInspector) (T, error),
 ) (result T, err error) {
-	inspector, err := OpenInspector(dbPath, logger)
+	inspector, err := openStoreInspector(dbPath, logger)
 	if err != nil {
 		return result, fmt.Errorf("open sync store inspector: %w", err)
 	}

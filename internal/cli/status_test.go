@@ -479,7 +479,7 @@ func TestQuerySyncState_NoDB(t *testing.T) {
 
 	logger := slog.New(slog.DiscardHandler)
 
-	info := querySyncState("personal:missing@example.com", "/nonexistent/path/state.db", logger)
+	info := querySyncState("/nonexistent/path/state.db", logger)
 	require.NotNil(t, info)
 	assert.Empty(t, info.LastSyncTime)
 	assert.Zero(t, info.FileCount)
@@ -495,7 +495,7 @@ func TestQuerySyncState_EmptyDB(t *testing.T) {
 	// Create a minimal DB with the required tables.
 	createTestStateDB(t, dbPath)
 
-	info := querySyncState("personal:alice@example.com", dbPath, logger)
+	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
 	assert.Empty(t, info.LastSyncTime)
 	assert.Equal(t, 0, info.FileCount)
@@ -532,7 +532,7 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 
 	require.NoError(t, db.Close())
 
-	info := querySyncState("personal:alice@example.com", dbPath, logger)
+	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, "2026-03-02T10:30:00Z", info.LastSyncTime)
 	assert.Equal(t, "1500", info.LastSyncDuration)
@@ -576,7 +576,7 @@ func TestQuerySyncState_RemoteDriftAndIssues(t *testing.T) {
 
 	require.NoError(t, db.Close())
 
-	info := querySyncState("personal:alice@example.com", dbPath, logger)
+	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 4, info.RemoteDrift) // three remote-only creates plus one baseline row missing on remote
 	assert.Equal(t, 1, info.IssueCount)  // 1 actionable failure
@@ -607,7 +607,7 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 		('/actionable.txt', 'upload', 'upload', 'item', 'actionable', 'invalid_filename', '', 1, 0, 0)`)
 	require.NoError(t, err)
 
-	info := querySyncState("personal:alice@example.com", dbPath, logger)
+	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 3, info.IssueCount)
 }
@@ -645,7 +645,7 @@ func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
 		assert.NoError(t, store.Close(context.Background()))
 	})
 
-	info := querySyncState("personal:alice@example.com", dbPath, logger)
+	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
 	assert.Zero(t, info.IssueCount)
 }
@@ -678,7 +678,7 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	info := querySyncState("personal:alice@example.com", dbPath, logger)
+	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
 	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
 	sharedDescriptor := describeStatusSummary(syncengine.SummarySharedFolderWritesBlocked)

@@ -271,32 +271,10 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.Mode, opts 
 		}()
 	}
 
-	// Build runners for all active (non-paused) drives.
-	runners := make(map[driveid.CanonicalID]*watchRunner)
+	runners, startFailures := o.startInitialWatchRunners(ctx, drives, mode, opts)
 
-	for _, rd := range drives {
-		// Pause semantics are handled by config.Drive.IsPaused() — the
-		// ResolvedDrive.Paused field is already expiry-aware after
-		// buildResolvedDrive uses IsPaused(time.Now()).
-		if rd.Paused {
-			o.logger.Info("skipping paused drive",
-				slog.String("drive", rd.CanonicalID.String()),
-			)
-
-			continue
-		}
-
-		wr, err := o.startWatchRunner(ctx, rd, mode, opts)
-		if err != nil {
-			o.logger.Error("failed to start watch runner",
-				slog.String("drive", rd.CanonicalID.String()),
-				slog.String("error", err.Error()),
-			)
-
-			continue
-		}
-
-		runners[rd.CanonicalID] = wr
+	if len(runners) == 0 && len(startFailures) > 0 {
+		return &WatchStartupError{Failures: startFailures}
 	}
 
 	defer func() {
@@ -326,6 +304,48 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.Mode, opts 
 			return nil
 		}
 	}
+}
+
+func (o *Orchestrator) startInitialWatchRunners(
+	ctx context.Context,
+	drives []*config.ResolvedDrive,
+	mode syncengine.Mode,
+	opts syncengine.WatchOptions,
+) (map[driveid.CanonicalID]*watchRunner, []DriveReport) {
+	runners := make(map[driveid.CanonicalID]*watchRunner)
+	startFailures := make([]DriveReport, 0)
+
+	for _, rd := range drives {
+		// Pause semantics are handled by config.Drive.IsPaused() — the
+		// ResolvedDrive.Paused field is already expiry-aware after
+		// buildResolvedDrive uses IsPaused(time.Now()).
+		if rd.Paused {
+			o.logger.Info("skipping paused drive",
+				slog.String("drive", rd.CanonicalID.String()),
+			)
+
+			continue
+		}
+
+		wr, err := o.startWatchRunner(ctx, rd, mode, opts)
+		if err != nil {
+			o.logger.Error("failed to start watch runner",
+				slog.String("drive", rd.CanonicalID.String()),
+				slog.String("error", err.Error()),
+			)
+			startFailures = append(startFailures, DriveReport{
+				CanonicalID: rd.CanonicalID,
+				DisplayName: rd.DisplayName,
+				Err:         err,
+			})
+
+			continue
+		}
+
+		runners[rd.CanonicalID] = wr
+	}
+
+	return runners, startFailures
 }
 
 // startWatchRunner creates and starts a watch-mode engine for a single drive.
