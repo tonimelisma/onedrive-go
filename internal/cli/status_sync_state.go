@@ -10,44 +10,28 @@ import (
 )
 
 const (
-	stateStoreStatusHealthy = "healthy"
-	stateStoreStatusMissing = "missing"
-	stateStoreStatusDamaged = "damaged"
-	statusScopeAccount      = "account"
-	statusScopeDrive        = "drive"
-	statusScopeDirectory    = "directory"
-	statusScopeService      = "service"
-	statusScopeDisk         = "disk"
+	statusScopeAccount   = "account"
+	statusScopeDrive     = "drive"
+	statusScopeDirectory = "directory"
+	statusScopeService   = "service"
+	statusScopeDisk      = "disk"
 )
-
-type driveStateStoreInfo struct {
-	Status       string
-	Error        string
-	RecoveryHint string
-}
 
 func readDriveStatusSnapshot(
 	statePath string,
 	logger *slog.Logger,
 	history bool,
-	canonicalID string,
-) (syncengine.DriveStatusSnapshot, driveStateStoreInfo) {
+) syncengine.DriveStatusSnapshot {
 	if !managedPathExists(statePath) {
-		return syncengine.DriveStatusSnapshot{}, driveStateStoreInfo{
-			Status: stateStoreStatusMissing,
-		}
+		return syncengine.DriveStatusSnapshot{}
 	}
 
 	snapshot, err := syncengine.ReadDriveStatusSnapshot(context.Background(), statePath, history, logger)
 	if err != nil {
-		return syncengine.DriveStatusSnapshot{}, driveStateStoreInfo{
-			Status:       stateStoreStatusDamaged,
-			Error:        err.Error(),
-			RecoveryHint: recoverAwareStateStoreHint(canonicalID),
-		}
+		return syncengine.DriveStatusSnapshot{}
 	}
 
-	return snapshot, driveStateStoreInfo{Status: stateStoreStatusHealthy}
+	return snapshot
 }
 
 func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
@@ -56,8 +40,6 @@ func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
 	}
 
 	switch scopeKey.Kind {
-	case syncengine.ScopeThrottleAccount:
-		return statusScopeAccount
 	case syncengine.ScopeThrottleTarget:
 		return statusScopeDrive
 	case syncengine.ScopeService:
@@ -77,7 +59,6 @@ func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
 
 func buildSyncStateInfo(
 	snapshot *syncengine.DriveStatusSnapshot,
-	storeInfo driveStateStoreInfo,
 	verbose bool,
 	examplesLimit int,
 ) syncStateInfo {
@@ -90,18 +71,15 @@ func buildSyncStateInfo(
 	}
 
 	info := syncStateInfo{
-		LastSyncTime:           formatStatusSyncTime(snapshot.RunStatus.LastCompletedAt),
-		LastSyncDuration:       formatStatusDurationMs(snapshot.RunStatus.LastDurationMs),
-		FileCount:              snapshot.BaselineEntryCount,
-		RemoteDrift:            snapshot.RemoteDriftItems,
-		Retrying:               snapshot.RetryingItems,
-		LastError:              snapshot.RunStatus.LastError,
-		IssueGroups:            buildFailureGroupJSON(snapshot.IssueGroups, verbose, examplesLimit),
-		StateStoreStatus:       storeInfo.Status,
-		StateStoreError:        storeInfo.Error,
-		StateStoreRecoveryHint: storeInfo.RecoveryHint,
-		ExamplesLimit:          examplesLimit,
-		Verbose:                verbose,
+		LastSyncTime:     formatStatusSyncTime(snapshot.RunStatus.LastCompletedAt),
+		LastSyncDuration: formatStatusDurationMs(snapshot.RunStatus.LastDurationMs),
+		FileCount:        snapshot.BaselineEntryCount,
+		RemoteDrift:      snapshot.RemoteDriftItems,
+		Retrying:         snapshot.RetryingItems,
+		LastError:        snapshot.RunStatus.LastError,
+		IssueGroups:      buildFailureGroupJSON(snapshot.IssueGroups, verbose, examplesLimit),
+		ExamplesLimit:    examplesLimit,
+		Verbose:          verbose,
 	}
 
 	info.IssueCount = issueGroupTotal(info.IssueGroups)

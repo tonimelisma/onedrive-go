@@ -202,6 +202,36 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	return nil
 }
 
+func validateFailureRowState(row *SyncFailureRow) error {
+	switch row.Role {
+	case FailureRoleHeld:
+		if row.ScopeKey.IsZero() {
+			return fmt.Errorf("held row %s is missing scope key", row.Path)
+		}
+		if row.Category != CategoryTransient {
+			return fmt.Errorf("held row %s must be transient", row.Path)
+		}
+		if row.NextRetryAt != 0 {
+			return fmt.Errorf("held row %s must not be retryable before release", row.Path)
+		}
+	case FailureRoleBoundary:
+		if row.ScopeKey.IsZero() {
+			return fmt.Errorf("boundary row %s is missing scope key", row.Path)
+		}
+		if row.Category != CategoryActionable {
+			return fmt.Errorf("boundary row %s must be actionable", row.Path)
+		}
+		if row.NextRetryAt != 0 {
+			return fmt.Errorf("boundary row %s must not have retry timing", row.Path)
+		}
+	case FailureRoleItem:
+	default:
+		return fmt.Errorf("row %s has invalid failure role %q", row.Path, row.Role)
+	}
+
+	return nil
+}
+
 func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
 	if watch != nil && flow.scopeController().isScopeBlocked(watch, key) {
 		return fmt.Errorf("released scope %s still active in watch state", key.String())

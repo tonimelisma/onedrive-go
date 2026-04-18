@@ -272,8 +272,8 @@ func TestPruneScopeBlocksWithoutBlockedRetries(t *testing.T) {
 		NextTrialAt:   time.Unix(160, 0),
 	}))
 	require.NoError(t, store.UpsertScopeBlock(ctx, &ScopeBlock{
-		Key:           SKThrottleAccount(),
-		IssueType:     IssueServiceOutage,
+		Key:           SKThrottleDrive(driveid.New("0000000000000001")),
+		IssueType:     IssueRateLimited,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Unix(200, 0),
 		TrialInterval: time.Minute,

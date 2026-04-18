@@ -12,7 +12,6 @@ Account: Alice Example (alice@example.com) [personal]
     Remote drift: 2 items
     Issues:    3
     Retrying:  1 items
-    State DB:  healthy
     Last error: sync: network timeout
 
     ISSUES

@@ -21,7 +21,7 @@ import (
 // ---------------------------------------------------------------------------
 // CLI command E2E tests (slow — run only with -tags=e2e,e2e_full)
 //
-// These tests validate the status, pause, resume, resolve, and recover sync
+// These tests validate the status, pause, resume, and resolve sync
 // UX against a live OneDrive account.
 // ---------------------------------------------------------------------------
 
@@ -65,7 +65,6 @@ func TestE2E_Status_JSON(t *testing.T) {
 	require.NotNil(t, driveStatus.SyncState)
 	assert.Equal(t, 5, driveStatus.SyncState.ExamplesLimit)
 	assert.False(t, driveStatus.SyncState.Verbose)
-	assert.NotEmpty(t, driveStatus.SyncState.StateStoreStatus)
 }
 
 // TestE2E_Status_PausedDrive validates that pausing a drive changes its
@@ -189,7 +188,6 @@ func TestE2E_Status_PerDrive_NoVisibleProblems(t *testing.T) {
 	assert.Empty(t, status.DeleteSafety)
 	assert.Empty(t, status.Conflicts)
 	assert.Empty(t, status.NextActions)
-	assert.Equal(t, "healthy", status.StateStoreStatus)
 }
 
 // Validates: R-2.3.4

@@ -16,7 +16,7 @@
 //   - store_write_observation.go:  remote state observation persistence
 //   - store_read_failures.go:      sync failure query helpers
 //   - store_write_failures.go:     sync failure recording and mutation helpers
-//   - store_repair.go:             state repair/admin operations
+//   - store_admin.go:              state admin operations
 package sync
 
 import (

@@ -60,42 +60,6 @@ func (m *SyncStore) ResetAllFailures(ctx context.Context) error {
 	return nil
 }
 
-// DeleteRemotePermissionScopeAuthorities removes invalid persisted
-// `perm:remote:*` scope rows. Remote permission scopes are rebuilt from held
-// failures at startup and should not survive in `scope_blocks` or boundary
-// rows on their own.
-func (m *SyncStore) DeleteRemotePermissionScopeAuthorities(
-	ctx context.Context,
-	scopeKey ScopeKey,
-) (err error) {
-	tx, err := beginPerfTx(ctx, m.db)
-	if err != nil {
-		return fmt.Errorf("sync: begin remote permission scope cleanup tx for %s: %w", scopeKey.String(), err)
-	}
-	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback remote permission scope cleanup tx for %s", scopeKey.String()))
-	}()
-
-	if _, execErr := tx.ExecContext(ctx,
-		`DELETE FROM scope_blocks WHERE scope_key = ?`, scopeKey.String(),
-	); execErr != nil {
-		return fmt.Errorf("sync: deleting remote permission scope block %s: %w", scopeKey.String(), execErr)
-	}
-
-	if _, execErr := tx.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE scope_key = ? AND failure_role = ?`,
-		scopeKey.String(), FailureRoleBoundary,
-	); execErr != nil {
-		return fmt.Errorf("sync: deleting remote permission scope boundary %s: %w", scopeKey.String(), execErr)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing remote permission scope cleanup for %s: %w", scopeKey.String(), err)
-	}
-
-	return nil
-}
-
 const sqlEnsureRunStatusRow = `INSERT INTO run_status
 	(singleton_id, last_completed_at, last_duration_ms, last_succeeded_count, last_failed_count, last_error)
 	VALUES (1, 0, 0, 0, 0, '')

@@ -629,10 +629,10 @@ func assertDiscardedScopeForTest(t *testing.T, eng *testEngine, ctx context.Cont
 	return testEngineFlow(t, eng).assertDiscardedScope(ctx, rt, key)
 }
 
-func repairPersistedScopesForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
+func normalizePersistedScopesForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
 	t.Helper()
 	rt, _ := lookupTestWatchRuntime(eng)
-	return testScopeController(t, eng).repairPersistedScopes(ctx, rt)
+	return testScopeController(t, eng).normalizePersistedScopes(ctx, rt)
 }
 
 func setCatalogAuthRequirementForTest(t *testing.T, eng *testEngine, reason authstate.Reason) {

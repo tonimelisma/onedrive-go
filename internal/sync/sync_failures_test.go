@@ -1195,7 +1195,7 @@ func TestDeleteSyncFailuresByScope(t *testing.T) {
 	}{
 		{"a.txt", SKPermRemote("shared/team-a")},
 		{"b.txt", SKPermRemote("shared/team-a")},
-		{"c.txt", SKThrottleAccount()},
+		{"c.txt", SKService()},
 		{"d.txt", SKPermRemote("shared/team-b")},
 	} {
 		err := mgr.RecordFailure(ctx, &SyncFailureParams{

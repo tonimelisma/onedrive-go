@@ -234,11 +234,8 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo, history bool) error {
 		if err := printSyncStateStoreLines(w, ss); err != nil {
 			return err
 		}
-
-		if ss.StateStoreStatus == "" || ss.StateStoreStatus == stateStoreStatusHealthy {
-			if err := printDriveSyncSections(w, ss, history); err != nil {
-				return err
-			}
+		if err := printDriveSyncSections(w, ss, history); err != nil {
+			return err
 		}
 	}
 
@@ -278,9 +275,6 @@ func printSyncStateStoreLines(w io.Writer, ss *syncStateInfo) error {
 		value  string
 		format string
 	}{
-		{value: ss.StateStoreStatus, format: "    State DB:  %s\n"},
-		{value: ss.StateStoreError, format: "    DB error:  %s\n"},
-		{value: ss.StateStoreRecoveryHint, format: "    Recover:   %s\n"},
 		{value: ss.LastError, format: "    Last error: %s\n"},
 	}
 	for i := range valueLines {

@@ -54,21 +54,18 @@ type statusDrive struct {
 
 // syncStateInfo holds the full per-drive status payload rendered by `status`.
 type syncStateInfo struct {
-	LastSyncTime           string             `json:"last_sync_time,omitempty"`
-	LastSyncDuration       string             `json:"last_sync_duration,omitempty"`
-	FileCount              int                `json:"file_count"`
-	IssueCount             int                `json:"issue_count"`
-	RemoteDrift            int                `json:"remote_drift"`
-	Retrying               int                `json:"retrying"`
-	LastError              string             `json:"last_error,omitempty"`
-	IssueGroups            []failureGroupJSON `json:"issue_groups,omitempty"`
-	ExamplesLimit          int                `json:"examples_limit"`
-	Verbose                bool               `json:"verbose"`
-	StateStoreStatus       string             `json:"state_store_status"`
-	StateStoreError        string             `json:"state_store_error,omitempty"`
-	StateStoreRecoveryHint string             `json:"state_store_recovery_hint,omitempty"`
-	Perf                   *perf.Snapshot     `json:"perf,omitempty"`
-	PerfUnavailableReason  string             `json:"perf_unavailable_reason,omitempty"`
+	LastSyncTime          string             `json:"last_sync_time,omitempty"`
+	LastSyncDuration      string             `json:"last_sync_duration,omitempty"`
+	FileCount             int                `json:"file_count"`
+	IssueCount            int                `json:"issue_count"`
+	RemoteDrift           int                `json:"remote_drift"`
+	Retrying              int                `json:"retrying"`
+	LastError             string             `json:"last_error,omitempty"`
+	IssueGroups           []failureGroupJSON `json:"issue_groups,omitempty"`
+	ExamplesLimit         int                `json:"examples_limit"`
+	Verbose               bool               `json:"verbose"`
+	Perf                  *perf.Snapshot     `json:"perf,omitempty"`
+	PerfUnavailableReason string             `json:"perf_unavailable_reason,omitempty"`
 }
 
 // statusSummary aggregates health info across all drives.
@@ -399,7 +396,8 @@ func querySyncStateWithOptions(
 	verbose bool,
 	examplesLimit int,
 ) *syncStateInfo {
-	snapshot, storeInfo := readDriveStatusSnapshot(statePath, logger, history, canonicalID)
-	info := buildSyncStateInfo(&snapshot, storeInfo, verbose, examplesLimit)
+	_ = canonicalID
+	snapshot := readDriveStatusSnapshot(statePath, logger, history)
+	info := buildSyncStateInfo(&snapshot, verbose, examplesLimit)
 	return &info
 }

@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_retry_state.go, internal/sync/store_scratch.go, internal/sync/store_integrity.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_repair.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go, internal/cli/recover.go, internal/cli/recover_flow.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_retry_state.go, internal/sync/store_scratch.go, internal/sync/store_recreate.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_admin.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
 Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [verified], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -16,7 +16,7 @@ Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [
 - retry/actionable failure persistence
 - scope-block persistence
 - one-shot run-status persistence
-- read-only inspectors used by CLI status and recovery
+- read-only inspectors used by CLI status
 
 It does **not** own planning policy, conflict-resolution policy, delete-safety
 policy, or live watch-mode coordination. Those belong to the engine.
@@ -35,8 +35,8 @@ policy, or live watch-mode coordination. Those belong to the engine.
 | Behavior | Evidence |
 | --- | --- |
 | The store remains the sole durable authority for baseline, local/remote snapshots, retry state, scope-block, observation-state, and run-status rows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestWriteSyncRunStatus_RoundTrip`, `TestSyncStore_FailureAdminMutations` |
-| Read-only snapshot helpers back status/recovery without reopening deleted conflict/delete-approval workflows. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestQuerySyncState_UsesReadOnlyProjectionHelper` |
-| Store repair and schema validation stay store-owned and transactional. | `TestRepairStateDB_RepairsReadableStoreInPlace`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema` |
+| Read-only snapshot helpers back status without reopening deleted conflict/delete-approval workflows. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestQuerySyncState_UsesReadOnlyProjectionHelper` |
+| Schema validation stays store-owned, while engine startup owns destructive recreate for unusable or unsupported DBs. | `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestNewEngine_RecreatesNonSQLiteStateDB`, `TestNewEngine_RecreatesIncompatibleSchemaStateDB`, `TestNewEngine_RecreatesUnsupportedLegacyPersistedState` |
 
 ## Write Responsibilities
 
@@ -124,14 +124,13 @@ retry ledger cannot lag the scope transition.
 Remote permission scopes are not persisted as `scope_blocks`. They are rebuilt
 from blocked `retry_state` rows keyed by `perm:remote:*` scope keys.
 
-### Repair/admin writes
+### Admin writes
 
-`store_repair.go` owns deterministic store repair and recovery helpers such as:
+`store_admin.go` owns administrative store helpers such as:
 
 - reset/remove retry rows
 - release/discard scope state
 - one-shot run-status writes
-- integrity-oriented repair primitives used by `recover`
 
 ## Read Responsibilities
 
@@ -139,11 +138,11 @@ Read-only store helpers are intentionally separate from writable paths.
 
 - `store_read_remote_state.go` reads current remote mirror truth
 - `store_read_failures.go` reads raw persisted `sync_failures` rows for
-  integrity/recovery use
+  store-owned projections and tests
 - `visible_issues.go` owns the higher-level visible issue projection used by
   status/watch surfaces
 - `store_retry_state.go` owns retry/trial reads such as ready blocked work
-- `store_read_snapshots.go` and `store_inspect.go` build status/recovery views
+- `store_read_snapshots.go` and `store_inspect.go` build status views
 
 CLI `status` and status-like flows should prefer these read-only helpers rather
 than opening a writable store.
@@ -165,8 +164,10 @@ from SQLite instead of creating a second authority.
 4. returns a ready store
 
 There is no migration history in the current architecture. New DBs bootstrap
-directly into the simplified schema. Non-canonical stores are rejected loudly,
-and recovery is the supported path when the DB cannot be trusted.
+directly into the simplified schema. Non-canonical stores are rejected loudly
+at the store boundary. Engine startup may then discard an unusable or
+unsupported DB file family and recreate a fresh canonical store once before it
+gives up.
 
 ## What The Store No Longer Owns
 
