@@ -71,10 +71,10 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 	return nil
 }
 
-// repairPersistedScopes normalizes persisted scope rows against current store
-// evidence before any admission begins. The store remains authoritative for
-// restart state; watch mode loads activeScopes only after this repair pass.
-func (controller *scopeController) repairPersistedScopes(
+// normalizePersistedScopes normalizes persisted scope rows against current
+// store evidence before any admission begins. The store remains authoritative
+// for restart state; watch mode loads activeScopes only after this pass.
+func (controller *scopeController) normalizePersistedScopes(
 	ctx context.Context,
 	watch *watchRuntime,
 ) error {
@@ -84,71 +84,21 @@ func (controller *scopeController) repairPersistedScopes(
 	if listScopeErr != nil {
 		return fmt.Errorf("sync: listing scope blocks: %w", listScopeErr)
 	}
-	if err := controller.dropPersistedRemotePermissionScopes(ctx, blocks); err != nil {
-		return err
-	}
-	releasedLegacyThrottle, err := controller.releaseLegacyThrottleAccountScopes(ctx, blocks)
+
+	blockedRetries, err := controller.loadNormalizedPersistedBlockedRetries(ctx)
 	if err != nil {
 		return err
 	}
-	if releasedLegacyThrottle {
-		blocks, listScopeErr = flow.engine.baseline.ListScopeBlocks(ctx)
-		if listScopeErr != nil {
-			return fmt.Errorf("sync: relisting scope blocks after throttle repair: %w", listScopeErr)
-		}
-	}
-
-	blockedRetries, err := controller.loadRepairedPersistedBlockedRetries(ctx)
-	if err != nil {
-		return err
-	}
-	if err := controller.repairPersistedNonAuthScopes(ctx, blocks, blockedRetries); err != nil {
+	if err := controller.normalizePersistedNonAuthScopes(ctx, blocks, blockedRetries); err != nil {
 		return err
 	}
 
-	flow.mustAssertInvariants(ctx, watch, "repair persisted scopes")
+	flow.mustAssertInvariants(ctx, watch, "normalize persisted scopes")
 
 	return nil
 }
 
-func (controller *scopeController) dropPersistedRemotePermissionScopes(
-	ctx context.Context,
-	blocks []*ScopeBlock,
-) error {
-	flow := controller.flow
-
-	for i := range blocks {
-		if !blocks[i].Key.IsPermRemote() {
-			continue
-		}
-		if err := flow.engine.baseline.DeleteRemotePermissionScopeAuthorities(ctx, blocks[i].Key); err != nil {
-			return fmt.Errorf("sync: dropping invalid remote permission scope %s: %w", blocks[i].Key.String(), err)
-		}
-	}
-
-	return nil
-}
-
-func (controller *scopeController) releaseLegacyThrottleAccountScopes(
-	ctx context.Context,
-	blocks []*ScopeBlock,
-) (bool, error) {
-	released := false
-
-	for i := range blocks {
-		if blocks[i].Key != SKThrottleAccount() {
-			continue
-		}
-		if err := controller.releaseStartupScope(ctx, blocks[i].Key, "released legacy account-wide throttle scope"); err != nil {
-			return false, err
-		}
-		released = true
-	}
-
-	return released, nil
-}
-
-func (controller *scopeController) loadRepairedPersistedBlockedRetries(
+func (controller *scopeController) loadNormalizedPersistedBlockedRetries(
 	ctx context.Context,
 ) ([]RetryStateRow, error) {
 	flow := controller.flow
@@ -203,7 +153,7 @@ func (controller *scopeController) clearResolvedPersistedRemoteBlockedRetries(
 	return remoteResolved
 }
 
-func (controller *scopeController) repairPersistedNonAuthScopes(
+func (controller *scopeController) normalizePersistedNonAuthScopes(
 	ctx context.Context,
 	blocks []*ScopeBlock,
 	blockedRetries []RetryStateRow,
@@ -215,7 +165,7 @@ func (controller *scopeController) repairPersistedNonAuthScopes(
 			continue
 		}
 
-		if err := controller.repairPersistedScope(ctx, blocks[i], facts); err != nil {
+		if err := controller.normalizePersistedScope(ctx, blocks[i], facts); err != nil {
 			return err
 		}
 	}
@@ -223,7 +173,7 @@ func (controller *scopeController) repairPersistedNonAuthScopes(
 	return nil
 }
 
-func (controller *scopeController) repairPersistedScope(
+func (controller *scopeController) normalizePersistedScope(
 	ctx context.Context,
 	block *ScopeBlock,
 	facts persistedScopeFacts,
@@ -256,7 +206,7 @@ func (controller *scopeController) repairPersistedScope(
 		}
 		return controller.releaseStartupScope(ctx, block.Key, "released non-server-timed restart scope")
 	case scopeStartupRevalidateDisk:
-		return controller.repairDiskScope(ctx, block)
+		return controller.normalizeDiskScope(ctx, block)
 	default:
 		panic(fmt.Sprintf("unknown startup policy %d", scopeStartupPolicyFor(block.Key)))
 	}
@@ -269,7 +219,7 @@ func (controller *scopeController) releaseStartupScope(ctx context.Context, key 
 		return fmt.Errorf("sync: releasing startup scope %s: %w", key.String(), err)
 	}
 	flow.engine.emitDebugEvent(engineDebugEvent{
-		Type:     engineDebugEventStartupScopeRepaired,
+		Type:     engineDebugEventStartupScopeNormalized,
 		ScopeKey: key,
 		Note:     note,
 	})
@@ -283,7 +233,7 @@ func (controller *scopeController) discardStartupScope(ctx context.Context, key 
 		return fmt.Errorf("sync: discarding startup scope %s: %w", key.String(), err)
 	}
 	flow.engine.emitDebugEvent(engineDebugEvent{
-		Type:     engineDebugEventStartupScopeRepaired,
+		Type:     engineDebugEventStartupScopeNormalized,
 		ScopeKey: key,
 		Note:     note,
 	})
@@ -311,7 +261,7 @@ func scopeStartupPolicyFor(key ScopeKey) scopeStartupPolicy {
 		return scopeStartupRequiresBoundary
 	case key == SKQuotaOwn():
 		return scopeStartupRequiresScopedFailures
-	case key.IsThrottleTarget(), key == SKThrottleAccount(), key == SKService():
+	case key.IsThrottleTarget(), key == SKService():
 		return scopeStartupServerTimedOnly
 	case key == SKDiskLocal():
 		return scopeStartupRevalidateDisk
@@ -328,7 +278,7 @@ func hasActivePreserveDeadline(block *ScopeBlock, now time.Time) bool {
 	return block.PreserveUntil.After(now)
 }
 
-func (controller *scopeController) repairDiskScope(ctx context.Context, block *ScopeBlock) error {
+func (controller *scopeController) normalizeDiskScope(ctx context.Context, block *ScopeBlock) error {
 	flow := controller.flow
 
 	if flow.engine.minFreeSpace <= 0 {
@@ -336,7 +286,7 @@ func (controller *scopeController) repairDiskScope(ctx context.Context, block *S
 			return fmt.Errorf("sync: releasing disk scope %s with disabled min_free_space: %w", block.Key.String(), err)
 		}
 		flow.engine.emitDebugEvent(engineDebugEvent{
-			Type:     engineDebugEventStartupScopeRepaired,
+			Type:     engineDebugEventStartupScopeNormalized,
 			ScopeKey: block.Key,
 			Note:     "released disk scope with disabled min_free_space",
 		})
@@ -345,7 +295,7 @@ func (controller *scopeController) repairDiskScope(ctx context.Context, block *S
 
 	available, err := flow.engine.diskAvailableFn(flow.engine.syncRoot)
 	if err != nil {
-		flow.engine.logger.Warn("repairPersistedScopes: disk revalidation failed, releasing stale disk scope",
+		flow.engine.logger.Warn("normalizePersistedScopes: disk revalidation failed, releasing stale disk scope",
 			slog.String("scope_key", block.Key.String()),
 			slog.String("error", err.Error()),
 		)
@@ -353,7 +303,7 @@ func (controller *scopeController) repairDiskScope(ctx context.Context, block *S
 			return fmt.Errorf("sync: releasing stale disk scope %s: %w", block.Key.String(), releaseErr)
 		}
 		flow.engine.emitDebugEvent(engineDebugEvent{
-			Type:     engineDebugEventStartupScopeRepaired,
+			Type:     engineDebugEventStartupScopeNormalized,
 			ScopeKey: block.Key,
 			Note:     "released disk scope after revalidation error",
 		})
@@ -365,7 +315,7 @@ func (controller *scopeController) repairDiskScope(ctx context.Context, block *S
 			return fmt.Errorf("sync: releasing recovered disk scope %s: %w", block.Key.String(), err)
 		}
 		flow.engine.emitDebugEvent(engineDebugEvent{
-			Type:     engineDebugEventStartupScopeRepaired,
+			Type:     engineDebugEventStartupScopeNormalized,
 			ScopeKey: block.Key,
 			Note:     "released disk scope after healthy revalidation",
 		})
@@ -386,7 +336,7 @@ func (controller *scopeController) repairDiskScope(ctx context.Context, block *S
 		return fmt.Errorf("sync: refreshing disk scope %s: %w", block.Key.String(), err)
 	}
 	flow.engine.emitDebugEvent(engineDebugEvent{
-		Type:     engineDebugEventStartupScopeRepaired,
+		Type:     engineDebugEventStartupScopeNormalized,
 		ScopeKey: block.Key,
 		Note:     "refreshed disk scope from current local truth",
 	})
@@ -561,8 +511,7 @@ func scopeTimingSource(retryAfter time.Duration) ScopeTimingSource {
 // meaning all remote observation polling should be skipped to avoid wasting
 // API calls. Target-scoped 429 blocks are handled separately.
 func (controller *scopeController) isObservationSuppressed(watch *watchRuntime) bool {
-	return controller.isScopeBlocked(watch, SKThrottleAccount()) ||
-		controller.isScopeBlocked(watch, SKService())
+	return controller.isScopeBlocked(watch, SKService())
 }
 
 // feedScopeDetection feeds an action completion into scope detection sliding

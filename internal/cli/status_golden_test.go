@@ -35,7 +35,6 @@ func goldenStatusAccounts() []statusAccount {
 						RemoteDrift:      2,
 						Retrying:         1,
 						LastError:        "sync: network timeout",
-						StateStoreStatus: stateStoreStatusHealthy,
 						ExamplesLimit:    defaultVisiblePaths,
 						IssueGroups: []failureGroupJSON{
 							{

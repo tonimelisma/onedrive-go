@@ -95,15 +95,17 @@ type Engine struct {
 	nextRunID atomic.Int64
 }
 
-// newEngine creates an Engine, initializing the SyncStore (which opens
-// the SQLite database and applies the canonical schema). Returns an error if DB init fails
-// or if DriveID is zero (indicates a config/login issue).
+// newEngine creates an Engine and opens the per-drive SyncStore. Engine
+// startup owns one destructive self-heal path: when an existing state DB
+// cannot be opened under the current schema or still contains unsupported
+// legacy persisted state, the engine recreates it once and retries open.
+// Returns an error if DB init still fails or if DriveID is zero.
 func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	if cfg.DriveID.IsZero() {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
 
-	bm, err := NewSyncStore(ctx, cfg.DBPath, cfg.Logger)
+	bm, err := openEngineSyncStore(ctx, cfg.DBPath, cfg.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}

@@ -463,7 +463,6 @@ func TestAnnotationTreeWalk(t *testing.T) {
 		"onedrive-go stat":                true,
 		"onedrive-go mv":                  true,
 		"onedrive-go cp":                  true,
-		"onedrive-go recover":             true,
 		"onedrive-go recycle-bin list":    true,
 		"onedrive-go recycle-bin restore": true,
 		"onedrive-go recycle-bin empty":   true,
@@ -1222,10 +1221,9 @@ func TestMain_UnknownCommandReturnsFailure(t *testing.T) {
 	assert.Equal(t, 1, Main([]string{"definitely-not-a-real-command"}))
 }
 
-func TestMainWithWriters_StatusRecoverHelpSucceeds(t *testing.T) {
+func TestMainWithWriters_StatusHelpSucceeds(t *testing.T) {
 	for _, args := range [][]string{
 		{"status", "--help"},
-		{"recover", "--help"},
 	} {
 		var stdoutBuf bytes.Buffer
 		var stderrBuf bytes.Buffer

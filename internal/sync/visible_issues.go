@@ -10,7 +10,7 @@ import (
 )
 
 // RemoteBlockedGroup is the first-class derived view for one active
-// shared-folder write block. It is built from held perm:remote-write rows only.
+// shared-folder write block. It is built from held perm:remote rows only.
 type RemoteBlockedGroup struct {
 	BoundaryPath string
 	BlockedPaths []string
@@ -72,7 +72,7 @@ func loadVisibleIssueProjection(
 	remoteBlocked, err := querySyncFailureRowsDB(ctx, db,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE failure_role = ?
-			AND (scope_key LIKE 'perm:remote-write:%' OR scope_key LIKE 'perm:remote:%')
+			AND scope_key LIKE 'perm:remote:%'
 		ORDER BY last_seen_at DESC`,
 		FailureRoleHeld,
 	)

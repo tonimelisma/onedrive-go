@@ -7,7 +7,7 @@ Implements: R-6.10.7 [verified]
 | Behavior | Evidence |
 | --- | --- |
 | Threat-boundary claims are backed by rooted filesystem, Graph redaction, and repo-consistency enforcement tests. | `internal/fsroot/fsroot_test.go`, `internal/localpath/localpath_test.go`, `internal/graph/client_test.go`, `internal/devtool/verify_repo_checks_test.go` |
-| Durable-state and degraded-mode trust assumptions are exercised by sync-store and recovery tests. | `internal/sync/db_repair_test.go`, `internal/sync/schema_test.go`, `internal/cli/status_test.go` |
+| Durable-state and degraded-mode trust assumptions are exercised by sync-store and startup recreate tests. | `internal/sync/engine_run_once_test.go`, `internal/sync/schema_test.go`, `internal/cli/status_test.go` |
 
 ## Assets
 
@@ -79,7 +79,7 @@ Explicit non-goals:
 | Graph normalization, redaction, and pre-auth boundary discipline | `internal/graph/client_test.go` (`TestDo_DebugLogsNeverExposeBearerToken`, `TestDoPreAuth_ErrorBodyCappedAt64KiB`, `TestDoOnce_401_RefreshSucceeds`), `internal/devtool/verify_repo_checks_test.go` (`TestRunRepoConsistencyChecksFailsOnHTTPClientDoOutsideApprovedBoundary`) |
 | Managed token/config file validation and rooted writes | `internal/graph/auth_test.go` (`TestSaveToken_AtomicWrite`, `TestLoadToken_InvalidJSON`), `internal/config/write_test.go` (`TestAtomicWriteFile_WritesFile`) |
 | Observer-side invalid-path and permission containment | `internal/sync/permission_handler_test.go` (`TestPermHandler_HandleLocalPermission_DirectoryLevel`, `TestPermHandler_Handle403_NoPermissionRoot`), `internal/sync/engine_watch_test.go` (`TestRunWatch_AllObserversDead_ReturnsError`) |
-| Durable state authority and crash recovery | `internal/sync/db_repair_test.go` (`TestRepairStateDB_RepairsReadableStoreInPlace`), `internal/sync/engine_run_once_test.go` (`TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta`, `TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`) |
+| Durable state authority and crash recovery | `internal/sync/engine_run_once_test.go` (`TestNewEngine_RecreatesNonSQLiteStateDB`, `TestNewEngine_RecreatesIncompatibleSchemaStateDB`, `TestNewEngine_RecreatesUnsupportedLegacyPersistedState`, `TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta`, `TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`) |
 | Privileged API boundaries kept narrow by repo verification | `internal/devtool/verify_repo_checks_test.go` (`TestRunRepoConsistencyChecksFailsOnExecCommandContextOutsideApprovedBoundary`, `TestRunRepoConsistencyChecksFailsOnSQLOpenOutsideApprovedBoundary`, `TestRunRepoConsistencyChecksFailsOnSignalNotifyOutsideApprovedBoundary`) |
 
 ## Residual Risks And Follow-Ups

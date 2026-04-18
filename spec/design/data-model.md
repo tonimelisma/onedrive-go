@@ -6,7 +6,7 @@ Implements: R-2.5.1 [verified], R-2.5.2 [verified], R-2.5.4 [verified], R-2.10.3
 
 | Behavior | Evidence |
 | --- | --- |
-| The per-drive SQLite schema remains intentionally narrow and excludes deleted manual conflict/delete-approval state. | `internal/sync/schema_test.go`, `internal/sync/store_integrity_test.go`, `internal/sync/baseline_test.go` |
+| The per-drive SQLite schema remains intentionally narrow and excludes deleted manual conflict/delete-approval state. | `internal/sync/schema_test.go`, `internal/sync/baseline_test.go`, `internal/sync/engine_run_once_test.go` |
 | Baseline, current local/remote snapshots, retry state, and scope-block timers remain the durable sync authority surfaces. | `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestSyncStore_ListVisibleIssueGroups`, `TestSyncStore_FailureAdminMutations` |
 
 ## One Database Per Drive
@@ -134,8 +134,6 @@ Remote permission scopes are derived from blocked `retry_state` rows carrying
 `perm:remote:<localPath>` scope keys rather than persisted directly in
 `scope_blocks`.
 
-Legacy `throttle:account` rows remain parseable for startup cleanup only.
-
 ## `observation_state`
 
 `observation_state` is the single durable owner of per-drive observation
@@ -171,5 +169,5 @@ bootstrap that schema in one transaction, seed the singleton
 
 Existing DBs are trusted only when they already match the current canonical
 table and column layout. Stores with stale or incompatible user tables are
-rejected loudly with recover/reset guidance instead of being migrated or
-guessed forward.
+rejected loudly so engine startup can recreate them instead of migrating or
+guessing forward.

@@ -154,9 +154,7 @@ func (ss *syncStateInfo) hasPersistentSummaryData() bool {
 }
 
 func (ss *syncStateInfo) hasPersistentStoreData() bool {
-	return ss.StateStoreStatus != "" ||
-		ss.StateStoreError != "" ||
-		ss.StateStoreRecoveryHint != ""
+	return false
 }
 
 func (ss *syncStateInfo) hasPersistentSyncSectionData() bool {

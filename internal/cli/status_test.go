@@ -481,7 +481,8 @@ func TestQuerySyncState_NoDB(t *testing.T) {
 
 	info := querySyncState("personal:missing@example.com", "/nonexistent/path/state.db", logger)
 	require.NotNil(t, info)
-	assert.Equal(t, stateStoreStatusMissing, info.StateStoreStatus)
+	assert.Empty(t, info.LastSyncTime)
+	assert.Zero(t, info.FileCount)
 }
 
 func TestQuerySyncState_EmptyDB(t *testing.T) {
@@ -499,7 +500,6 @@ func TestQuerySyncState_EmptyDB(t *testing.T) {
 	assert.Empty(t, info.LastSyncTime)
 	assert.Equal(t, 0, info.FileCount)
 	assert.Equal(t, 0, info.IssueCount)
-	assert.Equal(t, stateStoreStatusHealthy, info.StateStoreStatus)
 }
 
 func TestQuerySyncState_WithMetadata(t *testing.T) {
@@ -602,8 +602,8 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures
 		(path, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
 		VALUES
-		('/blocked/a.txt', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote-write:Shared/Docs', 1, 0, 0),
-		('/blocked/b.txt', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote-write:Shared/Docs', 1, 0, 0),
+		('/blocked/a.txt', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote:Shared/Docs', 1, 0, 0),
+		('/blocked/b.txt', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote:Shared/Docs', 1, 0, 0),
 		('/actionable.txt', 'upload', 'upload', 'item', 'actionable', 'invalid_filename', '', 1, 0, 0)`)
 	require.NoError(t, err)
 
@@ -1226,7 +1226,7 @@ func findStatusDriveJSON(
 	return foundDrive, foundDrive.SyncState
 }
 
-func TestStatusCommand_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
+func TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -1252,9 +1252,8 @@ func TestStatusCommand_DamagedStateStoreSurfacesRecoverHint(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
 	_, syncState := requireSingleStatusDriveJSON(t, decoded, cid.String())
 	require.NotNil(t, syncState)
-	assert.Equal(t, stateStoreStatusDamaged, syncState.StateStoreStatus)
-	assert.NotEmpty(t, syncState.StateStoreError)
-	assert.Equal(t, recoverHintForDrive(cid.String()), syncState.StateStoreRecoveryHint)
+	assert.Empty(t, syncState.LastSyncTime)
+	assert.Zero(t, syncState.FileCount)
 }
 
 func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {

@@ -35,7 +35,7 @@ are inserted, updated, pruned, and validated.
 
 | Behavior | Evidence |
 | --- | --- |
-| `status` stays read-only, renders sync-state snapshots, and surfaces auth/issue state without reviving manual conflict or delete-approval UI. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyProjectionHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline` |
+| `status` stays read-only, renders sync-state snapshots, and surfaces auth/issue state without reviving manual conflict or delete-approval UI. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyProjectionHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
 
@@ -50,7 +50,6 @@ are inserted, updated, pruned, and validated.
 | `sync`, `pause`, `resume` | sync control |
 | `status` | read-only account and sync health |
 | `perf` | live owner perf view and capture |
-| `recover` | state-store repair/rebuild/reset flow |
 | `recycle-bin` | recycle-bin operations |
 
 There is no `resolve` command family anymore.
@@ -91,11 +90,11 @@ architecture no longer has manual conflict or delete-approval workflows.
 config, the CLI notifies a running watch owner to reload when possible. If no
 watch owner is running, the updated config takes effect on the next start.
 
-## Recover
+## State DB Handling
 
-`recover` is the supported repair surface for sync state DB problems. It is
-explicit, confirmation-gated, and store-owned. The CLI owns only the user
-interaction and final reporting.
+The CLI no longer exposes a manual sync-state repair command. `status` stays
+read-only; unusable or unsupported state DBs are recreated by sync startup, not
+by a separate operator workflow.
 
 ## What The CLI No Longer Owns
 

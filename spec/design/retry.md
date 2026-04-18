@@ -187,12 +187,11 @@ to catalog-owned account-auth state.
 
 ### Restart semantics
 
-Startup repair applies persisted-scope policy before any admission begins:
+Startup normalization applies persisted-scope policy before any admission begins:
 
 - `throttle:target:*` and `service` survive restart only when `timing_source='server_retry_after'`
 - expired server-timed scopes are trialed immediately, not auto-released
 - non-server-timed throttle/service scopes are cleared on startup
-- legacy persisted `throttle:account` scopes are released on startup instead of being migrated, because they do not encode the throttled remote boundary
 - scoped-failure-backed scopes may survive restart while `preserve_until` is still in the future even if no same-scope held rows remain
 - catalog-owned account-auth state is revalidated from one startup proof call instead of trial timing
 - `disk:local` is revalidated against current free space instead of trusting stale persisted timing

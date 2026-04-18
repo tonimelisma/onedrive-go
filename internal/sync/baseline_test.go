@@ -939,7 +939,7 @@ func TestNewSyncStore_RejectsUnversionedExistingStateDB(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, mgr)
 	require.ErrorIs(t, err, ErrIncompatibleSchema)
-	assert.Contains(t, err.Error(), "onedrive-go --drive <id> recover")
+	assert.Contains(t, err.Error(), "startup recreates a fresh canonical store automatically")
 }
 
 // Validates: R-2.2

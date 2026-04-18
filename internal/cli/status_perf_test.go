@@ -204,12 +204,10 @@ func TestStatusPerfOverlayLookupAndPersistentFlags(t *testing.T) {
 	assert.Equal(t, statusPerfUnavailableCollecting, reason)
 
 	state := &syncStateInfo{
-		LastSyncTime:           "yesterday",
-		StateStoreStatus:       "healthy",
-		StateStoreRecoveryHint: "none",
+		LastSyncTime: "yesterday",
 	}
 	assert.True(t, state.hasPersistentSummaryData())
-	assert.True(t, state.hasPersistentStoreData())
+	assert.False(t, state.hasPersistentStoreData())
 	assert.True(t, state.hasPersistentStatusData())
 }
 

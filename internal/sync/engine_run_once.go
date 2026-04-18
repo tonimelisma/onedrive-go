@@ -269,9 +269,9 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 		}
 	}
 
-	repairErr := flow.scopeController().repairPersistedScopes(ctx, nil)
-	if repairErr != nil {
-		return fmt.Errorf("sync: repairing persisted scopes: %w", repairErr)
+	normalizeErr := flow.scopeController().normalizePersistedScopes(ctx, nil)
+	if normalizeErr != nil {
+		return fmt.Errorf("sync: normalizing persisted scopes: %w", normalizeErr)
 	}
 	authRepairErr := eng.repairPersistedAccountAuthRequirement(ctx, hasAccountAuthRequirement, proof, proofErr)
 	if authRepairErr != nil {

@@ -2,10 +2,12 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -303,8 +305,8 @@ func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
 		NextTrialAt:   time.Unix(160, 0),
 	}))
 	require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
-		Key:           SKThrottleAccount(),
-		IssueType:     IssueServiceOutage,
+		Key:           SKThrottleDrive(driveid.New("drive1")),
+		IssueType:     IssueRateLimited,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Unix(200, 0),
 		TrialInterval: time.Minute,
@@ -765,6 +767,160 @@ func TestNewEngine_InvalidDBPath(t *testing.T) {
 	})
 
 	require.Error(t, err, "expected error for invalid DB path")
+}
+
+// Validates: R-2.5.5, R-2.5.6
+func TestNewEngine_RecreatesNonSQLiteStateDB(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o600))
+
+	eng := newEngineForStateDBTest(t, dbPath)
+	defer func() {
+		require.NoError(t, eng.Close(t.Context()))
+	}()
+
+	assertCanonicalStoreOpen(t, eng)
+}
+
+// Validates: R-2.5.5, R-2.5.6
+func TestNewEngine_RecreatesIncompatibleSchemaStateDB(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), `
+		CREATE TABLE baseline (
+			item_id TEXT NOT NULL PRIMARY KEY,
+			path TEXT NOT NULL UNIQUE
+		);
+		CREATE TABLE legacy_shadow (
+			path TEXT NOT NULL PRIMARY KEY
+		);`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	eng := newEngineForStateDBTest(t, dbPath)
+	defer func() {
+		require.NoError(t, eng.Close(t.Context()))
+	}()
+
+	assertCanonicalStoreOpen(t, eng)
+}
+
+// Validates: R-2.5.5, R-2.10.7, R-2.10.34
+func TestNewEngine_RecreatesUnsupportedLegacyPersistedState(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store, err := NewSyncStore(t.Context(), dbPath, testLogger(t))
+	require.NoError(t, err)
+
+	ctx := t.Context()
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO scope_blocks
+			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"throttle:account",
+		IssueRateLimited,
+		ScopeTimingServerRetryAfter,
+		time.Unix(10, 0).UnixNano(),
+		int64(time.Second),
+		time.Unix(11, 0).UnixNano(),
+		int64(0),
+		0,
+	)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO sync_failures
+			(path, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"Shared/Docs/file.txt",
+		DirectionUpload,
+		ActionUpload,
+		FailureRoleBoundary,
+		CategoryActionable,
+		IssueRemoteWriteDenied,
+		"perm:remote:Shared/Docs",
+		1,
+		int64(0),
+		int64(0),
+	)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO sync_failures
+			(path, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, next_retry_at, first_seen_at, last_seen_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"bad-timing.txt",
+		DirectionUpload,
+		ActionUpload,
+		FailureRoleBoundary,
+		CategoryActionable,
+		IssueInvalidFilename,
+		"perm:dir:bad",
+		1,
+		time.Unix(12, 0).UnixNano(),
+		int64(0),
+		int64(0),
+	)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`)
+	require.NoError(t, err)
+	require.NoError(t, store.Close(context.WithoutCancel(ctx)))
+
+	eng := newEngineForStateDBTest(t, dbPath)
+	defer func() {
+		require.NoError(t, eng.Close(t.Context()))
+	}()
+
+	assertCanonicalStoreOpen(t, eng)
+
+	blocks, err := eng.baseline.ListScopeBlocks(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
+
+	failures, err := eng.baseline.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, failures)
+}
+
+func newEngineForStateDBTest(t *testing.T, dbPath string) *Engine {
+	t.Helper()
+
+	eng, err := newEngine(t.Context(), &engineInputs{
+		DBPath:    dbPath,
+		SyncRoot:  t.TempDir(),
+		DriveID:   driveid.New(engineTestDriveID),
+		Fetcher:   &engineMockClient{},
+		Items:     &engineMockClient{},
+		Downloads: &engineMockClient{},
+		Uploads:   &engineMockClient{},
+		Logger:    testLogger(t),
+	})
+	require.NoError(t, err)
+
+	return eng
+}
+
+func assertCanonicalStoreOpen(t *testing.T, eng *Engine) {
+	t.Helper()
+
+	require.NotNil(t, eng)
+	require.NotNil(t, eng.baseline)
+
+	tables, err := listUserTables(t.Context(), eng.baseline.db)
+	require.NoError(t, err)
+
+	expected := make([]string, 0, len(canonicalSyncStoreColumns()))
+	for tableName := range canonicalSyncStoreColumns() {
+		expected = append(expected, tableName)
+	}
+	slices.Sort(expected)
+	assert.Equal(t, expected, tables)
 }
 
 func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {

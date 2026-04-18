@@ -23,16 +23,16 @@ func makeTrackedAction(actionType ActionType, path string) *TrackedAction {
 }
 
 // Validates: R-2.10.11, R-2.10.15
-func TestFindBlockingScope_GlobalPriorityWins(t *testing.T) {
+func TestFindBlockingScope_TargetThrottlePriorityWins(t *testing.T) {
 	t.Parallel()
 
 	blocks := []ScopeBlock{
 		{Key: SKService(), IssueType: IssueServiceOutage},
-		{Key: SKThrottleAccount(), IssueType: IssueRateLimited},
+		{Key: SKThrottleDrive(driveid.New("d")), IssueType: IssueRateLimited},
 	}
 
 	got := FindBlockingScope(blocks, makeTrackedAction(ActionUpload, "file.txt"))
-	assert.Equal(t, SKThrottleAccount(), got)
+	assert.Equal(t, SKThrottleDrive(driveid.New("d")), got)
 }
 
 // Validates: R-2.10.12
@@ -168,7 +168,7 @@ func TestExtendScopeTrial(t *testing.T) {
 	now := time.Now().UTC()
 	blocks := []ScopeBlock{
 		{
-			Key:           SKThrottleAccount(),
+			Key:           SKThrottleDrive(driveid.New("d")),
 			IssueType:     IssueRateLimited,
 			BlockedAt:     now.Add(-time.Minute),
 			NextTrialAt:   now.Add(10 * time.Second),
@@ -177,10 +177,10 @@ func TestExtendScopeTrial(t *testing.T) {
 	}
 
 	nextAt := now.Add(30 * time.Second)
-	updated, ok := ExtendScopeTrial(blocks, SKThrottleAccount(), nextAt, 20*time.Second)
+	updated, ok := ExtendScopeTrial(blocks, SKThrottleDrive(driveid.New("d")), nextAt, 20*time.Second)
 	require.True(t, ok)
 
-	got, ok := LookupScope(updated, SKThrottleAccount())
+	got, ok := LookupScope(updated, SKThrottleDrive(driveid.New("d")))
 	require.True(t, ok)
 	assert.Equal(t, nextAt, got.NextTrialAt)
 	assert.Equal(t, 20*time.Second, got.TrialInterval)
@@ -193,13 +193,13 @@ func TestDueTrialsAndEarliestTrialAt(t *testing.T) {
 
 	now := time.Now().UTC()
 	blocks := []ScopeBlock{
-		{Key: SKThrottleAccount(), NextTrialAt: now.Add(-time.Second)},
+		{Key: SKThrottleDrive(driveid.New("d")), NextTrialAt: now.Add(-time.Second)},
 		{Key: SKService(), NextTrialAt: now.Add(2 * time.Minute)},
 		{Key: SKQuotaOwn()},
 	}
 
 	due := DueTrials(blocks, now)
-	assert.Equal(t, []ScopeKey{SKThrottleAccount()}, due)
+	assert.Equal(t, []ScopeKey{SKThrottleDrive(driveid.New("d"))}, due)
 
 	earliest, ok := EarliestTrialAt(blocks)
 	require.True(t, ok)
@@ -212,11 +212,11 @@ func TestScopeKeys(t *testing.T) {
 
 	blocks := []ScopeBlock{
 		{Key: SKService()},
-		{Key: SKThrottleAccount()},
+		{Key: SKThrottleDrive(driveid.New("d"))},
 	}
 
 	assert.Equal(t,
-		[]ScopeKey{SKService(), SKThrottleAccount()},
+		[]ScopeKey{SKService(), SKThrottleDrive(driveid.New("d"))},
 		ScopeKeys(blocks),
 	)
 }

@@ -58,8 +58,7 @@
               }
             ],
             "examples_limit": 5,
-            "verbose": false,
-            "state_store_status": "healthy"
+            "verbose": false
           }
         }
       ]

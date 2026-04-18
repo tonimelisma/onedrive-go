@@ -61,7 +61,6 @@ type statusSyncStateJSON struct {
 	NextActions          []string                    `json:"next_actions"`
 	ExamplesLimit        int                         `json:"examples_limit"`
 	Verbose              bool                        `json:"verbose"`
-	StateStoreStatus     string                      `json:"state_store_status"`
 }
 
 type statusIssueGroupJSON struct {

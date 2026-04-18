@@ -203,8 +203,8 @@ func (rt *watchRuntime) initWatchInfra(
 	// Startup must not trust stale scope rows blindly; the durable store is
 	// repaired against current persisted evidence before the watch loop loads
 	// its ephemeral activeScopes working set.
-	if err := rt.scopeController().repairPersistedScopes(ctx, rt); err != nil {
-		return nil, fmt.Errorf("sync: repairing persisted scopes: %w", err)
+	if err := rt.scopeController().normalizePersistedScopes(ctx, rt); err != nil {
+		return nil, fmt.Errorf("sync: normalizing persisted scopes: %w", err)
 	}
 
 	// DepGraph tracks action dependencies. Active scope state is loaded from

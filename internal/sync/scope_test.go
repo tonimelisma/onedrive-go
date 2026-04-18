@@ -306,7 +306,6 @@ func TestScopeKey_StringRoundTrip(t *testing.T) {
 		key  ScopeKey
 		wire string
 	}{
-		{"throttle:account", SKThrottleAccount(), "throttle:account"},
 		{"throttle:target:drive", SKThrottleDrive(driveid.New("0000000000000001")), "throttle:target:drive:0000000000000001"},
 		{"service", SKService(), "service"},
 		{"quota:own", SKQuotaOwn(), "quota:own"},
@@ -342,7 +341,6 @@ func TestScopeKey_IsZero(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, ScopeKey{}.IsZero())
-	assert.False(t, SKThrottleAccount().IsZero())
 	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsZero())
 	assert.False(t, SKPermDir("x").IsZero())
 }
@@ -351,7 +349,6 @@ func TestScopeKey_IsZero(t *testing.T) {
 func TestScopeKey_IsGlobal(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, SKThrottleAccount().IsGlobal())
 	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsGlobal())
 	assert.True(t, SKService().IsGlobal())
 	assert.False(t, SKQuotaOwn().IsGlobal())
@@ -365,7 +362,7 @@ func TestScopeKey_IsPermDir(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, SKPermDir("Documents").IsPermDir())
-	assert.False(t, SKThrottleAccount().IsPermDir())
+	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsPermDir())
 	assert.False(t, SKQuotaOwn().IsPermDir())
 }
 
@@ -375,7 +372,7 @@ func TestScopeKey_IsPermRemote(t *testing.T) {
 
 	assert.True(t, SKPermRemote("Shared/TeamDocs").IsPermRemote())
 	assert.False(t, SKPermDir("Documents").IsPermRemote())
-	assert.False(t, SKThrottleAccount().IsPermRemote())
+	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsPermRemote())
 }
 
 // Validates: R-2.10
@@ -385,7 +382,7 @@ func TestScopeKey_DirPath(t *testing.T) {
 	assert.Equal(t, "Documents/Private", SKPermDir("Documents/Private").DirPath())
 
 	// DirPath on non-PermDir should panic.
-	assert.Panics(t, func() { SKThrottleAccount().DirPath() })
+	assert.Panics(t, func() { SKThrottleDrive(driveid.New("0000000000000001")).DirPath() })
 }
 
 // Validates: R-2.10.34
@@ -393,7 +390,7 @@ func TestScopeKey_RemotePath(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, "Shared/TeamDocs", SKPermRemote("Shared/TeamDocs").RemotePath())
-	assert.Panics(t, func() { SKThrottleAccount().RemotePath() })
+	assert.Panics(t, func() { SKThrottleDrive(driveid.New("0000000000000001")).RemotePath() })
 }
 
 // Validates: R-2.10
@@ -404,7 +401,6 @@ func TestScopeKey_IssueType(t *testing.T) {
 		key  ScopeKey
 		want string
 	}{
-		{SKThrottleAccount(), IssueRateLimited},
 		{SKThrottleDrive(driveid.New("0000000000000001")), IssueRateLimited},
 		{SKService(), IssueServiceOutage},
 		{SKQuotaOwn(), IssueQuotaExceeded},
@@ -423,7 +419,6 @@ func TestScopeKey_IssueType(t *testing.T) {
 func TestScopeKey_Humanize(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "your OneDrive account (rate limited)", SKThrottleAccount().Humanize())
 	assert.Equal(t, "this drive (rate limited)", SKThrottleDrive(driveid.New("0000000000000001")).Humanize())
 	assert.Equal(t, "OneDrive service", SKService().Humanize())
 	assert.Equal(t, "this drive storage", SKQuotaOwn().Humanize())
@@ -445,8 +440,6 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 		want           bool
 	}{
 		// Global scopes block everything.
-		{"legacy throttle blocks upload", SKThrottleAccount(), "/a.txt", "", ActionUpload, true},
-		{"legacy throttle blocks download", SKThrottleAccount(), "/a.txt", "", ActionDownload, true},
 		{"drive throttle blocks matching drive", SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000001", ActionUpload, true},
 		{"drive throttle passes other drive", SKThrottleDrive(driveid.New("0000000000000001")), "/a.txt", "drive:0000000000000002", ActionUpload, false},
 		{"service blocks all", SKService(), "/a.txt", "", ActionUpload, true},

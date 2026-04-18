@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	recoverDriveStateDBHint = "run 'onedrive-go --drive <id> recover' to repair, rebuild, or reset this drive state DB"
-	canonicalSchemaSQL      = `
+	recreateDriveStateDBHint = "delete the existing state DB and rerun sync; startup recreates a fresh canonical store automatically"
+	canonicalSchemaSQL       = `
 CREATE TABLE IF NOT EXISTS baseline (
     item_id         TEXT    NOT NULL PRIMARY KEY,
     path            TEXT    NOT NULL UNIQUE,
@@ -264,7 +264,7 @@ func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []str
 			ErrIncompatibleSchema,
 			actualTables,
 			expectedTables,
-			recoverDriveStateDBHint,
+			recreateDriveStateDBHint,
 		)
 	}
 
@@ -284,7 +284,7 @@ func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []str
 				tableName,
 				actualColumns,
 				expectedColumns,
-				recoverDriveStateDBHint,
+				recreateDriveStateDBHint,
 			)
 		}
 	}
