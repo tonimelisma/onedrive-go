@@ -45,7 +45,6 @@ func TestE2E_Status_JSONShape(t *testing.T) {
 
 	driveStatus := requireStatusDrive(t, status, drive)
 	require.NotNil(t, driveStatus.SyncState)
-	assert.Equal(t, "healthy", driveStatus.SyncState.StateStoreStatus)
 	assert.Equal(t, 5, driveStatus.SyncState.ExamplesLimit)
 	assert.False(t, driveStatus.SyncState.Verbose)
 }

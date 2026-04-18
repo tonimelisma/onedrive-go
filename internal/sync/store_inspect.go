@@ -96,7 +96,6 @@ const (
 	statusScopeFile      = "file"
 	statusScopeDirectory = "directory"
 	statusScopeDrive     = "drive"
-	statusScopeAccount   = "account"
 	statusScopeService   = "service"
 	statusScopeDisk      = "disk"
 )
@@ -444,8 +443,6 @@ func statusIssueScope(
 ) (string, string) {
 	if !scopeKey.IsZero() {
 		switch scopeKey.Kind {
-		case ScopeThrottleAccount:
-			return statusScopeAccount, scopeKey.Humanize()
 		case ScopeThrottleTarget:
 			return statusScopeDrive, scopeKey.Humanize()
 		case ScopeService:
@@ -516,7 +513,7 @@ func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailur
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
 		WHERE failure_role = ?
-			AND (scope_key LIKE 'perm:remote-write:%' OR scope_key LIKE 'perm:remote:%')
+			AND scope_key LIKE 'perm:remote:%'
 		ORDER BY last_seen_at DESC`,
 		FailureRoleHeld,
 	)
@@ -529,72 +526,6 @@ func (i *Inspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailur
 	defer rows.Close()
 
 	return scanSyncFailureRows(rows, configuredDriveID)
-}
-
-func (i *Inspector) listScopeBlocks(ctx context.Context) ([]*ScopeBlock, error) {
-	rows, err := i.db.QueryContext(ctx,
-		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count
-		FROM scope_blocks`)
-	if err != nil {
-		if isMissingTableErr(err) {
-			return []*ScopeBlock{}, nil
-		}
-		return nil, fmt.Errorf("query scope blocks: %w", err)
-	}
-	defer rows.Close()
-
-	var result []*ScopeBlock
-	for rows.Next() {
-		var (
-			wireKey       string
-			issueType     string
-			timingSource  string
-			blockedAtNano int64
-			intervalNano  int64
-			nextTrialNano int64
-			preserveNano  int64
-			trialCount    int
-		)
-
-		if err := rows.Scan(
-			&wireKey,
-			&issueType,
-			&timingSource,
-			&blockedAtNano,
-			&intervalNano,
-			&nextTrialNano,
-			&preserveNano,
-			&trialCount,
-		); err != nil {
-			return nil, fmt.Errorf("scan scope block row: %w", err)
-		}
-
-		block := &ScopeBlock{
-			Key:           ParseScopeKey(wireKey),
-			IssueType:     issueType,
-			TimingSource:  ScopeTimingSource(timingSource),
-			BlockedAt:     time.Unix(0, blockedAtNano).UTC(),
-			TrialInterval: time.Duration(intervalNano),
-			TrialCount:    trialCount,
-		}
-		if block.Key.IsZero() {
-			continue
-		}
-		if nextTrialNano != 0 {
-			block.NextTrialAt = time.Unix(0, nextTrialNano).UTC()
-		}
-		if preserveNano != 0 {
-			block.PreserveUntil = time.Unix(0, preserveNano).UTC()
-		}
-
-		result = append(result, block)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate scope block rows: %w", err)
-	}
-
-	return result, nil
 }
 
 func (i *Inspector) pendingRetrySummary(ctx context.Context) ([]PendingRetryGroup, error) {

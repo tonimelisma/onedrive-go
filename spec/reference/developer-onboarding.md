@@ -78,7 +78,7 @@ The product surface is easier to understand if you group it by capability:
 - Drive management: drive catalog/search/add/remove flows and drive selection
 - Bidirectional sync: one-shot and `--watch`, with conflict tracking and
   resolution
-- Read-only health and repair: `status`, `recover`, `perf`
+- Read-only health and diagnostics: `status`, `perf`
 - Developer tooling: `go run ./cmd/devtool ...`
 
 The product is not just "a CLI wrapper around Graph". The difficult part of
@@ -317,11 +317,11 @@ able to scan this table and place every top-level code area.
 | `internal/perf` | Production-visible perf sessions, counters, live snapshots, and capture bundles | You are changing performance instrumentation or capture behavior |
 | `internal/retry` | Retry policies and stateful backoff | You are changing retry semantics |
 | `internal/sharedref` | Shared item selector parsing/formatting | You are working on shared links or shared item targeting |
-| `internal/sync` | Single-drive sync engine, observation, planning, execution, store, repair, and raw issue/status facts | You are changing sync behavior |
+| `internal/sync` | Single-drive sync engine, observation, planning, execution, store, and raw issue/status facts | You are changing sync behavior |
 | `internal/synccontrol` | JSON-over-HTTP Unix-socket protocol shared by CLI and multisync owner | You are changing daemon/control-socket communication |
 | `internal/synctest` | Shared sync-package test helpers | You are writing sync-adjacent tests |
 | `internal/synctree` | Rooted filesystem capability for sync-runtime operations under one sync root | You are changing sync-local filesystem interaction |
-| `internal/syncverify` | Re-hash local files against the persisted baseline | You are changing baseline verification or recover behavior |
+| `internal/syncverify` | Re-hash local files against the persisted baseline | You are changing baseline verification behavior |
 | `internal/tokenfile` | OAuth token file I/O | You are changing token persistence semantics |
 
 ### 5.3 Test and support code
@@ -362,7 +362,6 @@ organized by file families.
 | `get.go`, `get_shared.go`, `put.go`, `put_shared.go`, `ls.go`, `rm.go`, `mkdir.go`, `mv.go`, `cp.go`, `stat.go`, `purge.go` | User-facing file commands including shared-item get/put |
 | `shared.go`, `shared_discovery.go`, `shared_target.go` | Shared item discovery, selection, and shared-target bootstrap |
 | `sync.go`, `sync_flow.go`, `sync_runtime.go`, `sync_render.go`, `sync_cli_format.go`, `sync_debug_events.go`, `sync_pause_resume.go`, `control_client.go` | Sync command wiring, daemon/control-socket interaction, and sync lifecycle |
-| `recover.go`, `recover_flow.go` | State recovery workflows |
 | `status.go`, `status_snapshot.go`, `status_sync_state.go`, `status_issue_descriptors.go`, `status_render.go`, `status_render_sections.go`, `status_perf.go` | Read-only status snapshot assembly and final issue rendering |
 | `recycle_bin.go`, `recycle_bin_flow.go`, `perf.go`, `pause.go`, `resume.go` | Recycle-bin, perf, and pause/resume surfaces |
 | `degraded_discovery.go` | CLI-owned degraded discovery behavior and presentation |
@@ -431,7 +430,7 @@ when you treat it as several file families sharing one single-drive owner.
 | `permissions.go`, `permission_capability.go`, `permission_decisions.go`, `permission_handler.go` | Capability-based permission boundaries and denied-path policy |
 | `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, scope blocking, and scope key canonicalization |
 | `debug_event_sink.go` | Debug event recording for test and diagnostic observability |
-| `store.go`, `store_inspect.go`, `store_integrity.go`, `store_repair.go`, `store_types.go`, `schema.go`, `tx.go`, `db_repair.go` | Durable SQLite state: schema, transactions, integrity checks, inspection, and repair |
+| `store.go`, `store_inspect.go`, `store_admin.go`, `store_recreate.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, transactions, inspection, admin helpers, and startup recreate support |
 | `store_read_*.go`, `store_write_*.go` | Store I/O: read projections (failures, remote state, snapshots) and write operations (baseline, failures, observation, scope blocks) |
 | `summary_keys.go`, `visible_issues.go`, `issue_types.go` | Shared issue classification, summary keys, and raw read-only issue facts consumed by the CLI |
 | `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |

@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // ---------------------------------------------------------------------------
@@ -20,7 +22,7 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 	ctx := context.Background()
 
 	block := &ScopeBlock{
-		Key:           SKThrottleAccount(),
+		Key:           SKThrottleDrive(driveid.New("0000000000000001")),
 		IssueType:     IssueRateLimited,
 		TimingSource:  ScopeTimingServerRetryAfter,
 		BlockedAt:     time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
@@ -37,7 +39,7 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 	blocks, err := mgr.ListScopeBlocks(ctx)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
-	assert.Equal(t, SKThrottleAccount(), blocks[0].Key)
+	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), blocks[0].Key)
 	assert.Equal(t, IssueRateLimited, blocks[0].IssueType)
 	assert.Equal(t, 0, blocks[0].TrialCount)
 
@@ -105,7 +107,7 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 
 	blocks := []*ScopeBlock{
 		{
-			Key:           SKThrottleAccount(),
+			Key:           SKThrottleDrive(driveid.New("0000000000000001")),
 			IssueType:     IssueRateLimited,
 			TimingSource:  ScopeTimingServerRetryAfter,
 			BlockedAt:     now,
@@ -148,9 +150,9 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 		byKey[b.Key] = b
 	}
 
-	// Verify throttle:account round-trip.
-	ta := byKey[SKThrottleAccount()]
-	require.NotNil(t, ta, "throttle:account block should be listed")
+	// Verify target throttle round-trip.
+	ta := byKey[SKThrottleDrive(driveid.New("0000000000000001"))]
+	require.NotNil(t, ta, "target throttle block should be listed")
 	assert.Equal(t, IssueRateLimited, ta.IssueType)
 	assert.Equal(t, now, ta.BlockedAt)
 	assert.Equal(t, 5*time.Second, ta.TrialInterval)

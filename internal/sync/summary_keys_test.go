@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // Validates: R-2.14.3, R-6.8.16
@@ -25,7 +27,7 @@ func TestSummaryKeyForScopeBlock_RepresentativeMappings(t *testing.T) {
 	assert.Equal(t, SummaryServiceOutage,
 		SummaryKeyForScopeBlock(IssueServiceOutage, SKService()))
 	assert.Equal(t, SummaryRateLimited,
-		SummaryKeyForScopeBlock("", SKThrottleAccount()))
+		SummaryKeyForScopeBlock("", SKThrottleDrive(driveid.New("0000000000000001"))))
 }
 
 // Validates: R-6.8.16

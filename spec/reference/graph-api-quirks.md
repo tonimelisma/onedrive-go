@@ -717,7 +717,7 @@ Runtime policy:
   file, retry once via `createUploadSession`
 - the session route becomes the authoritative result for permission handling,
   so read-only shared folders surface `403` and enter the normal
-  `perm:remote-write` flow instead of being misclassified as missing
+  `perm:remote` flow instead of being misclassified as missing
 
 <a id="fresh-parent-child-create-lag"></a>
 ### Recently Created Parent Folders Can Lag Child Create Routes
