@@ -203,7 +203,7 @@ type liveSyncStateQuerier struct {
 
 func (q *liveSyncStateQuerier) QuerySyncState(cid driveid.CanonicalID) *syncStateInfo {
 	statePath := config.DriveStatePath(cid)
-	return querySyncStateWithOptions(cid.String(), statePath, q.logger, q.history, q.verbose, q.examplesLimit)
+	return querySyncStateWithOptions(statePath, q.logger, q.history, q.verbose, q.examplesLimit)
 }
 
 // buildStatusAccountsWith is the testable core of buildStatusAccounts.
@@ -381,22 +381,19 @@ func driveState(d *config.Drive) string {
 }
 
 func querySyncState(
-	canonicalID string,
 	statePath string,
 	logger *slog.Logger,
 ) *syncStateInfo {
-	return querySyncStateWithOptions(canonicalID, statePath, logger, false, false, defaultVisiblePaths)
+	return querySyncStateWithOptions(statePath, logger, false, false, defaultVisiblePaths)
 }
 
 func querySyncStateWithOptions(
-	canonicalID string,
 	statePath string,
 	logger *slog.Logger,
 	history bool,
 	verbose bool,
 	examplesLimit int,
 ) *syncStateInfo {
-	_ = canonicalID
 	snapshot := readDriveStatusSnapshot(statePath, logger, history)
 	info := buildSyncStateInfo(&snapshot, verbose, examplesLimit)
 	return &info

@@ -430,7 +430,7 @@ when you treat it as several file families sharing one single-drive owner.
 | `permissions.go`, `permission_capability.go`, `permission_decisions.go`, `permission_handler.go` | Capability-based permission boundaries and denied-path policy |
 | `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, scope blocking, and scope key canonicalization |
 | `debug_event_sink.go` | Debug event recording for test and diagnostic observability |
-| `store.go`, `store_inspect.go`, `store_admin.go`, `store_recreate.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, transactions, inspection, admin helpers, and startup recreate support |
+| `store*.go`, `store_inspect.go`, `issue_summary.go`, `scope_key_wire.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, transactions, inspection, grouped issue summaries, persisted scope-key helpers, run-status/scope admin helpers, reset-required diagnosis, and explicit reset support |
 | `store_read_*.go`, `store_write_*.go` | Store I/O: read projections (failures, remote state, snapshots) and write operations (baseline, failures, observation, scope blocks) |
 | `summary_keys.go`, `visible_issues.go`, `issue_types.go` | Shared issue classification, summary keys, and raw read-only issue facts consumed by the CLI |
 | `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |
@@ -475,7 +475,7 @@ A new developer should know where truth lives before changing any behavior.
 | Per-drive sync state | `internal/sync` SQLite DB | One DB per drive |
 | Remote observation mirror | `remote_state` table | Latest observed remote truth |
 | Confirmed synced state | `baseline` table | Shared local/remote agreement |
-| Durable sync issues | `sync_failures`, `scope_blocks`, catalog account-auth state | Sync recovery and restart-safe failure state |
+| Durable sync issues | `sync_failures`, `scope_blocks`, catalog account-auth state | Sync retry, restart, and failure state |
 | Log files | `internal/logfile` | Durable operational history, not authoritative state |
 | Perf live snapshots/captures | `internal/perf` | Live or explicit capture surfaces, not a second persistent DB |
 
@@ -486,7 +486,7 @@ The biggest data-model idea is that sync uses a separated durable model:
 - `retry_state`, `sync_failures`, and `scope_blocks` capture durable retry,
   reporting, and restart-safe blocking state
 
-That separation is what keeps observation, planning, execution, and recovery
+That separation is what keeps observation, planning, execution, and restart
 from collapsing into one mutable pile.
 
 ### FAQ

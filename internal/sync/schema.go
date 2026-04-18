@@ -9,8 +9,7 @@ import (
 )
 
 const (
-	recreateDriveStateDBHint = "delete the existing state DB and rerun sync; startup recreates a fresh canonical store automatically"
-	canonicalSchemaSQL       = `
+	canonicalSchemaSQL = `
 CREATE TABLE IF NOT EXISTS baseline (
     item_id         TEXT    NOT NULL PRIMARY KEY,
     path            TEXT    NOT NULL UNIQUE,
@@ -260,11 +259,10 @@ func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []str
 
 	if !slices.Equal(expectedTables, actualTables) {
 		return fmt.Errorf(
-			"%w: sync store tables do not match the current schema; found %v, expected %v; %s",
+			"%w: sync store tables do not match the current schema; found %v, expected %v",
 			ErrIncompatibleSchema,
 			actualTables,
 			expectedTables,
-			recreateDriveStateDBHint,
 		)
 	}
 
@@ -279,12 +277,11 @@ func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []str
 		slices.Sort(actualColumns)
 		if !slices.Equal(expectedColumns, actualColumns) {
 			return fmt.Errorf(
-				"%w: sync store table %s does not match the current schema; found columns %v, expected %v; %s",
+				"%w: sync store table %s does not match the current schema; found columns %v, expected %v",
 				ErrIncompatibleSchema,
 				tableName,
 				actualColumns,
 				expectedColumns,
-				recreateDriveStateDBHint,
 			)
 		}
 	}

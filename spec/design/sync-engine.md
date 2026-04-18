@@ -52,7 +52,7 @@ lifecycle. Those belong to `internal/multisync`.
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_Success_ClearsSyncFailure` |
 | Watch mode keeps single-owner runtime admission, periodic maintenance, and external-change reconciliation inside the engine boundary. | `TestEngine_ReleaseScope_SignalsImmediateRetrySweep`, `TestEngine_AdmitReady_ScopeBlocked`, `TestEngine_ExternalDBChanged`, `TestEngine_HandleExternalChanges_RemotePermissionClearance`, `TestRunWatch_ShutdownStopsRetryAndTrialTimers` |
-| Runtime-visible issue and scope state are rebuilt from durable store facts instead of separate manual conflict/delete workflows. | `TestSyncStore_ListVisibleIssueGroups`, `TestReadDriveStatusSnapshotAndScopeBlockHelpers`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues` |
+| Runtime-visible issue and scope state are rebuilt from durable store facts instead of separate manual conflict/delete workflows. | `TestSyncStore_ListVisibleIssueGroups`, `TestReadDriveStatusSnapshot`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues` |
 
 ## Construction
 

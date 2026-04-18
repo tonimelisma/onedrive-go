@@ -315,7 +315,7 @@ func readDriveStatusSnapshotForTest(t *testing.T, eng *testEngine, ctx context.C
 
 	require.NoError(t, eng.baseline.Checkpoint(ctx, 0))
 
-	inspector, err := OpenInspector(syncStorePathForTest(t, ctx, eng), testLogger(t))
+	inspector, err := openStoreInspector(syncStorePathForTest(t, ctx, eng), testLogger(t))
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, inspector.Close())
