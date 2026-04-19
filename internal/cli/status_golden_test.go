@@ -31,12 +31,12 @@ func goldenStatusAccounts() []statusAccount {
 						LastSyncTime:     "2026-04-03T10:30:00Z",
 						LastSyncDuration: "1500",
 						FileCount:        42,
-						IssueCount:       3,
+						ConditionCount:   3,
 						RemoteDrift:      2,
 						Retrying:         1,
 						LastError:        "sync: network timeout",
 						ExamplesLimit:    defaultVisiblePaths,
-						IssueGroups: []failureGroupJSON{
+						Conditions: []statusConditionJSON{
 							{
 								SummaryKey: string(syncengine.SummaryInvalidFilename),
 								IssueType:  string(syncengine.IssueInvalidFilename),

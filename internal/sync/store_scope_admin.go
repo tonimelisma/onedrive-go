@@ -16,14 +16,9 @@ const sqlPruneBlockScopesWithoutBlockedWork = `DELETE FROM block_scopes
 // ReleaseScope atomically applies the semantic "this scope condition has
 // resolved; blocked work may run again" transition.
 //
-// In one transaction it:
-//   - deletes the persisted block_scopes row
-//   - deletes boundary issue rows for the scope
-//   - marks held transient descendants retryable immediately
-//
-// The actionable boundary row and the block scope are one semantic unit.
-// Releasing them together prevents the split-brain state where one survives
-// after the other has already been cleared.
+// In one transaction it deletes the persisted block scope, removes any
+// scope-owned observation issues, and marks blocked retry work ready
+// immediately.
 func (m *SyncStore) ReleaseScope(
 	ctx context.Context,
 	scopeKey ScopeKey,
@@ -47,20 +42,10 @@ func (m *SyncStore) ReleaseScope(
 	}
 
 	if _, execErr := tx.ExecContext(ctx,
-		`DELETE FROM sync_failures
-			WHERE scope_key = ? AND failure_role = ?`,
-		wire, FailureRoleBoundary,
+		`DELETE FROM observation_issues WHERE scope_key = ?`,
+		wire,
 	); execErr != nil {
-		return fmt.Errorf("sync: deleting scope issue rows %s: %w", wire, execErr)
-	}
-
-	if _, execErr := tx.ExecContext(ctx,
-		`UPDATE sync_failures
-			SET failure_role = ?, next_retry_at = ?
-			WHERE scope_key = ? AND failure_role = ? AND next_retry_at IS NULL AND category = ?`,
-		FailureRoleItem, nowNano, wire, FailureRoleHeld, CategoryTransient,
-	); execErr != nil {
-		return fmt.Errorf("sync: unblocking failures for scope %s: %w", wire, execErr)
+		return fmt.Errorf("sync: deleting scoped observation issues %s: %w", wire, execErr)
 	}
 	if retryErr := markRetryWorkScopeReadyTx(ctx, tx, wire, nowNano); retryErr != nil {
 		return retryErr
@@ -77,8 +62,8 @@ func (m *SyncStore) ReleaseScope(
 // it are no longer valid" transition.
 //
 // This is used when the blocked subtree itself disappears, for example when a
-// configured root disappears. Discarding differs from release: held descendants are
-// deleted instead of made retryable.
+// configured root disappears. Discarding differs from release: blocked retry
+// work is deleted instead of made retryable.
 func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err error) {
 	if scopeKey.IsZero() {
 		return fmt.Errorf("sync: discard scope: missing scope key")
@@ -101,9 +86,9 @@ func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err er
 	}
 
 	if _, execErr := tx.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE scope_key = ?`, wire,
+		`DELETE FROM observation_issues WHERE scope_key = ?`, wire,
 	); execErr != nil {
-		return fmt.Errorf("sync: deleting scoped failures %s: %w", wire, execErr)
+		return fmt.Errorf("sync: deleting scoped observation issues %s: %w", wire, execErr)
 	}
 	if retryErr := deleteRetryWorkByScopeTx(ctx, tx, wire); retryErr != nil {
 		return retryErr

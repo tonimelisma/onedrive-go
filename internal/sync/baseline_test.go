@@ -102,7 +102,7 @@ func TestNewSyncStore_AppliesSchema(t *testing.T) {
 	var count int
 
 	err := mgr.rawDB().QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('baseline', 'remote_state', 'sync_failures', 'block_scopes')",
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('baseline', 'remote_state', 'observation_issues', 'block_scopes')",
 	).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 4, count, "canonical schema should create all core tables")
@@ -141,7 +141,7 @@ func TestCheckpoint_DoesNotPruneRemoteMirrorRows(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
+func TestCheckpoint_PrunesStaleObservationIssues(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -152,33 +152,37 @@ func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
 	newTime := now.Add(-12 * time.Hour).UnixNano()
 	retention := 24 * time.Hour
 
-	// Insert an actionable failure older than retention (should be pruned).
+	// Insert an observation issue older than retention (should be pruned).
 	_, err := mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"/old-issue.txt", "upload", "upload", "item", "actionable", oldTime, oldTime)
+		`INSERT INTO observation_issues (path, action_type, issue_type, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"/old-issue.txt", "upload", "invalid_name", oldTime, oldTime)
 	require.NoError(t, err)
 
-	// Insert an actionable failure newer than retention (should survive).
+	// Insert an observation issue newer than retention (should survive).
 	_, err = mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"/new-issue.txt", "upload", "upload", "item", "actionable", newTime, newTime)
+		`INSERT INTO observation_issues (path, action_type, issue_type, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"/new-issue.txt", "upload", "invalid_name", newTime, newTime)
 	require.NoError(t, err)
 
-	// Insert a transient failure (should never be pruned regardless of age).
+	// retry_work is not part of retention pruning.
 	_, err = mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"/pending-issue.txt", "upload", "upload", "item", "transient", oldTime, oldTime)
+		`INSERT INTO retry_work (work_key, path, old_path, action_type, issue_type, scope_key, blocked, attempt_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"upload\x00\x00/pending-issue.txt", "/pending-issue.txt", "", "upload", "service_unavailable", "", 0, 1, oldTime, "temporary", 503, oldTime, oldTime)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
 
 	var count int
-	err = mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_failures`).Scan(&count)
+	err = mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_issues`).Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 2, count, "old actionable should be pruned, new actionable + transient should remain")
+	assert.Equal(t, 1, count, "old observation issue should be pruned while fresh issues remain")
+
+	err = mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM retry_work`).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "checkpoint should not prune retry_work rows")
 }
 
 // Validates: R-2.2
@@ -1516,7 +1520,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	// Verify all expected tables exist by querying sqlite_master.
 	expectedTables := []string{
 		"baseline", "local_state", "observation_state",
-		"retry_work", "run_status", "remote_state", "sync_failures",
+		"observation_issues", "retry_work", "run_status", "remote_state", "block_scopes",
 	}
 
 	for _, table := range expectedTables {
@@ -1541,11 +1545,11 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 		"item1", "/test.txt", "file")
 	require.NoError(t, err)
 
-	// Verify sync_failures table structure: insert + query.
+	// Verify observation_issues table structure: insert + query.
 	_, err = mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, issue_type, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"/bad-file.txt", "upload", "upload", "item", "transient", "invalid_filename", 1700000000, 1700000000)
+		`INSERT INTO observation_issues (path, action_type, issue_type, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"/bad-file.txt", "upload", "invalid_filename", 1700000000, 1700000000)
 	require.NoError(t, err)
 
 	// Verify remote_state CHECK constraint rejects invalid item types.

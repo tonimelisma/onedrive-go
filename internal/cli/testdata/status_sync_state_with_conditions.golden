@@ -1,8 +1,8 @@
     Last sync: never
-    Issues:    3
+    Conditions: 3
     Retrying:  2 items
 
-    ISSUES
+    CONDITIONS
     QUOTA EXCEEDED (1 item)
       The OneDrive storage quota for this sync scope is full. Free up space in the owning drive, or ask the shared-folder owner to do so.
       Scope: Shared/Team Docs

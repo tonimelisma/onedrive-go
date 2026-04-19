@@ -23,7 +23,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.2.2: (S2) The system shall never process deletions from an incomplete enumeration (partial delta fetch or unmounted volume). [verified]
 - R-6.2.3: (S3) Downloads shall use atomic file writes (`.partial` + hash verify + rename). [verified]
 - R-6.2.4: (S4) Local deletions shall verify the file hash against baseline before deleting; on mismatch, a conflict copy is preserved. [verified]
-- R-6.2.5: (S5) Delete safety protection shall prevent mass accidental deletions: one-shot and watch mode persist over-threshold unapproved deletes as held durable intent, continue safe non-delete work, and execute approved deletes only from the normal sync engine. [verified]
+- R-6.2.5: (S5) Delete safety protection shall prevent mass accidental deletions: one-shot and watch mode persist over-threshold unapproved deletes as blocked durable retry work, continue safe non-delete work, and execute approved deletes only from the normal sync engine. [verified]
 - R-6.2.6: (S6) Before each download, the system shall verify available disk space. When below `min_free_space`: set a `disk:local` block scope on all downloads. When above `min_free_space` but below file size plus `min_free_space`: record a per-file failure. [verified]
 - R-6.2.7: (S7) The system shall never upload partial or temporary files (filter cascade excludes temp patterns). [verified]
 - R-6.2.8: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [verified]

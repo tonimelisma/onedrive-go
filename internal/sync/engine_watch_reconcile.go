@@ -106,26 +106,26 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 	}
 }
 
-// logWatchSummary logs a periodic one-liner summary of actionable issues
+// logWatchSummary logs a periodic one-liner summary of active sync conditions
 // in watch mode. Only logs when the count changes since the last summary
 // to avoid noisy repeated output.
 func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
-	summary, err := rt.engine.baseline.ReadVisibleIssueSummary(ctx)
+	summary, err := rt.engine.baseline.ReadVisibleConditionSummary(ctx)
 	if err != nil {
 		return
 	}
 
-	groups, err := rt.engine.baseline.ListVisibleIssueGroups(ctx)
+	groups, err := rt.engine.baseline.ListVisibleConditionGroups(ctx)
 	if err != nil {
 		return
 	}
 
 	rt.logRemoteBlockedChanges(groups)
 
-	totalIssues := summary.VisibleTotal()
-	if totalIssues == 0 {
+	totalConditions := summary.VisibleTotal()
+	if totalConditions == 0 {
 		if rt.lastSummaryTotal != 0 || rt.lastSummarySignature != "" {
-			rt.engine.logger.Info("visible issues cleared")
+			rt.engine.logger.Info("visible conditions cleared")
 		}
 		rt.lastSummaryTotal = 0
 		rt.lastSummarySignature = ""
@@ -137,16 +137,16 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 		return
 	}
 
-	rt.lastSummaryTotal = totalIssues
+	rt.lastSummaryTotal = totalConditions
 	rt.lastSummarySignature = signature
 
-	rt.engine.logger.Warn("visible issues",
-		slog.Int("total", totalIssues),
+	rt.engine.logger.Warn("visible conditions",
+		slog.Int("total", totalConditions),
 		slog.String("breakdown", breakdown),
 	)
 }
 
-func (rt *watchRuntime) logRemoteBlockedChanges(groups []VisibleIssueGroup) {
+func (rt *watchRuntime) logRemoteBlockedChanges(groups []VisibleConditionGroup) {
 	current := make(map[ScopeKey]string, len(groups))
 
 	for i := range groups {
@@ -184,7 +184,7 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []VisibleIssueGroup) {
 	rt.lastRemoteBlocked = current
 }
 
-func summarySignature(summary IssueSummary) (string, string) {
+func summarySignature(summary ConditionSummary) (string, string) {
 	parts := make([]string, 0, len(summary.Groups))
 	for i := range summary.Groups {
 		parts = append(parts, fmt.Sprintf("%d %s", summary.Groups[i].Count, summary.Groups[i].Key))
@@ -195,7 +195,7 @@ func summarySignature(summary IssueSummary) (string, string) {
 }
 
 // recordSkippedItems records observation-time rejections (invalid names,
-// path too long, file too large) as actionable failures in sync_failures.
+// path too long, file too large) as durable observation issues.
 func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []SkippedItem) {
 	eng := flow.engine
 
@@ -244,12 +244,11 @@ func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []Skippe
 			}
 		}
 
-		failures := make([]ActionableFailure, len(items))
+		issues := make([]ObservationIssue, len(items))
 		for i := range items {
-			failures[i] = ActionableFailure{
+			issues[i] = ObservationIssue{
 				Path:       items[i].Path,
 				DriveID:    eng.driveID,
-				Direction:  DirectionUpload,
 				ActionType: ActionUpload,
 				IssueType:  reason,
 				Error:      items[i].Detail,
@@ -257,17 +256,17 @@ func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []Skippe
 			}
 		}
 
-		if err := eng.baseline.UpsertActionableFailures(ctx, failures); err != nil {
+		if err := eng.baseline.UpsertObservationIssues(ctx, issues); err != nil {
 			eng.logger.Error("failed to record skipped items",
 				slog.String("issue_type", reason),
-				slog.Int("count", len(failures)),
+				slog.Int("count", len(issues)),
 				slog.String("error", err.Error()),
 			)
 		}
 	}
 }
 
-// clearResolvedSkippedItems removes sync_failures entries for scanner-detectable
+// clearResolvedSkippedItems removes observation_issues entries for scanner-detectable
 // issue types that are no longer present in the current scan.
 func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped []SkippedItem) {
 	eng := flow.engine
@@ -284,8 +283,8 @@ func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped [
 	}
 	for _, issueType := range scannerIssueTypes {
 		paths := currentByType[issueType]
-		if err := eng.baseline.ClearResolvedActionableFailures(ctx, issueType, paths); err != nil {
-			eng.logger.Error("failed to clear resolved failures",
+		if err := eng.baseline.ClearResolvedObservationIssues(ctx, issueType, paths); err != nil {
+			eng.logger.Error("failed to clear resolved observation issues",
 				slog.String("issue_type", issueType),
 				slog.String("error", err.Error()),
 			)

@@ -437,7 +437,7 @@ func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
 		LastSyncTime:     "2026-03-02T10:30:00Z",
 		LastSyncDuration: "1500",
 		FileCount:        45,
-		IssueCount:       2,
+		ConditionCount:   2,
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
@@ -454,7 +454,7 @@ func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
 	assert.Equal(t, "2026-03-02T10:30:00Z", ss.LastSyncTime)
 	assert.Equal(t, "1500", ss.LastSyncDuration)
 	assert.Equal(t, 45, ss.FileCount)
-	assert.Equal(t, 2, ss.IssueCount)
+	assert.Equal(t, 2, ss.ConditionCount)
 }
 
 func TestBuildStatusAccountsWith_NilSyncState(t *testing.T) {
@@ -499,7 +499,7 @@ func TestQuerySyncState_EmptyDB(t *testing.T) {
 	require.NotNil(t, info)
 	assert.Empty(t, info.LastSyncTime)
 	assert.Equal(t, 0, info.FileCount)
-	assert.Equal(t, 0, info.IssueCount)
+	assert.Equal(t, 0, info.ConditionCount)
 }
 
 func TestQuerySyncState_WithMetadata(t *testing.T) {
@@ -538,7 +538,7 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 	assert.Equal(t, "1500", info.LastSyncDuration)
 	assert.Empty(t, info.LastError)
 	assert.Equal(t, 1, info.FileCount)
-	assert.Zero(t, info.IssueCount)
+	assert.Zero(t, info.ConditionCount)
 }
 
 func TestQuerySyncState_RemoteDriftAndIssues(t *testing.T) {
@@ -554,6 +554,7 @@ func TestQuerySyncState_RemoteDriftAndIssues(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := t.Context()
+	testDriveID := driveid.New("test-drive-id")
 
 	// Insert remote_state rows with mixed drift shapes.
 	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, item_id, parent_id, item_type) VALUES
@@ -567,24 +568,80 @@ func TestQuerySyncState_RemoteDriftAndIssues(t *testing.T) {
 		('i4', '/d.txt', 'root', 'file', '', 0)`)
 	require.NoError(t, err)
 
-	// Insert sync_failures rows.
-	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures (path, direction, action_type, failure_role, category, failure_count, first_seen_at, last_seen_at) VALUES
-		('/x.txt', 'upload', 'upload', 'item', 'transient', 3, 0, 0),
-		('/y.txt', 'upload', 'upload', 'item', 'transient', 5, 0, 0),
-		('/z.txt', 'upload', 'upload', 'item', 'actionable', 1, 0, 0)`)
-	require.NoError(t, err)
-
 	require.NoError(t, db.Close())
+
+	store, err := syncengine.NewSyncStore(ctx, dbPath, logger)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store.Close(ctx))
+	}()
+
+	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
+		Path:       "/x.txt",
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueServiceOutage,
+		LastError:  "temporary",
+	}, func(int) time.Duration { return 0 })
+	require.NoError(t, err)
+	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
+		Path:       "/x.txt",
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueServiceOutage,
+		LastError:  "temporary",
+	}, func(int) time.Duration { return 0 })
+	require.NoError(t, err)
+	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
+		Path:       "/x.txt",
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueServiceOutage,
+		LastError:  "temporary",
+	}, func(int) time.Duration { return 0 })
+	require.NoError(t, err)
+	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
+		Path:       "/y.txt",
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueServiceOutage,
+		LastError:  "temporary",
+	}, func(int) time.Duration { return 0 })
+	require.NoError(t, err)
+	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
+		Path:       "/y.txt",
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueServiceOutage,
+		LastError:  "temporary",
+	}, func(int) time.Duration { return 0 })
+	require.NoError(t, err)
+	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
+		Path:       "/y.txt",
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueServiceOutage,
+		LastError:  "temporary",
+	}, func(int) time.Duration { return 0 })
+	require.NoError(t, err)
+	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
+		Path:       "/y.txt",
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueServiceOutage,
+		LastError:  "temporary",
+	}, func(int) time.Duration { return 0 })
+	require.NoError(t, err)
+	require.NoError(t, store.UpsertObservationIssue(ctx, &syncengine.ObservationIssue{
+		Path:       "/z.txt",
+		DriveID:    testDriveID,
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueInvalidFilename,
+		Error:      "invalid filename",
+	}))
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
-	assert.Equal(t, 4, info.RemoteDrift) // three remote-only creates plus one baseline row missing on remote
-	assert.Equal(t, 1, info.IssueCount)  // 1 actionable failure
-	assert.Equal(t, 2, info.Retrying)    // 2 transient with failure_count >= 3
+	assert.Equal(t, 4, info.RemoteDrift)    // three remote-only creates plus one baseline row missing on remote
+	assert.Equal(t, 1, info.ConditionCount) // 1 durable observation condition
+	assert.Equal(t, 2, info.Retrying)       // 2 retry_work rows with attempt_count >= 3
 }
 
 // Validates: R-2.10.47, R-2.14.3
-func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
+func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.DiscardHandler)
@@ -598,18 +655,48 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsIssues(t *testing.T) {
 	defer db.Close()
 
 	ctx := t.Context()
-
-	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures
-		(path, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
-		VALUES
-		('/blocked/a.txt', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote:Shared/Docs', 1, 0, 0),
-		('/blocked/b.txt', 'upload', 'upload', 'held', 'transient', 'remote_write_denied', 'perm:remote:Shared/Docs', 1, 0, 0),
-		('/actionable.txt', 'upload', 'upload', 'item', 'actionable', 'invalid_filename', '', 1, 0, 0)`)
+	store, err := syncengine.NewSyncStore(ctx, dbPath, logger)
 	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store.Close(ctx))
+	}()
+
+	scopeKey := syncengine.SKPermRemote("Shared/Docs")
+	require.NoError(t, store.UpsertBlockScope(ctx, &syncengine.BlockScope{
+		Key:          scopeKey,
+		IssueType:    syncengine.IssueRemoteWriteDenied,
+		TimingSource: syncengine.ScopeTimingNone,
+		BlockedAt:    time.Unix(0, 0).UTC(),
+	}))
+	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
+		Path:       "/blocked/a.txt",
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueRemoteWriteDenied,
+		ScopeKey:   scopeKey,
+		LastError:  "blocked",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
+		Path:       "/blocked/b.txt",
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueRemoteWriteDenied,
+		ScopeKey:   scopeKey,
+		LastError:  "blocked",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.UpsertObservationIssue(ctx, &syncengine.ObservationIssue{
+		Path:       "/actionable.txt",
+		DriveID:    driveid.New("test-drive-id"),
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueInvalidFilename,
+		Error:      "invalid filename",
+	}))
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
-	assert.Equal(t, 3, info.IssueCount)
+	assert.Equal(t, 3, info.ConditionCount)
 }
 
 // Validates: R-6.10.5
@@ -652,11 +739,11 @@ func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
-	assert.Zero(t, info.IssueCount)
+	assert.Zero(t, info.ConditionCount)
 }
 
 // Validates: R-2.10.4, R-2.10.32
-func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
+func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.DiscardHandler)
@@ -670,24 +757,50 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 	defer db.Close()
 
 	ctx := t.Context()
+	store, err := syncengine.NewSyncStore(ctx, dbPath, logger)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store.Close(ctx))
+	}()
 
-	_, err = db.ExecContext(ctx, `INSERT INTO sync_failures
-		(path, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
-		VALUES
-		('/invalid:name.txt', 'upload', 'upload', 'item', 'actionable', ?, '', 1, 0, 0),
-		('/blocked/a.txt', 'upload', 'upload', 'held', 'transient', ?, ?, 1, 0, 0),
-		('/blocked/b.txt', 'upload', 'upload', 'held', 'transient', ?, ?, 1, 0, 0)`,
-		syncengine.IssueInvalidFilename,
-		syncengine.IssueSharedFolderBlocked, syncengine.SKPermRemote("Shared/Team Docs").String(),
-		syncengine.IssueSharedFolderBlocked, syncengine.SKPermRemote("Shared/Team Docs").String(),
-	)
+	scopeKey := syncengine.SKPermRemote("Shared/Team Docs")
+	require.NoError(t, store.UpsertObservationIssue(ctx, &syncengine.ObservationIssue{
+		Path:       "/invalid:name.txt",
+		DriveID:    driveid.New("test-drive-id"),
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueInvalidFilename,
+		Error:      "invalid filename",
+	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, &syncengine.BlockScope{
+		Key:          scopeKey,
+		IssueType:    syncengine.IssueRemoteWriteDenied,
+		TimingSource: syncengine.ScopeTimingNone,
+		BlockedAt:    time.Unix(0, 0).UTC(),
+	}))
+	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
+		Path:       "/blocked/a.txt",
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueRemoteWriteDenied,
+		ScopeKey:   scopeKey,
+		LastError:  "blocked",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
+		Path:       "/blocked/b.txt",
+		ActionType: syncengine.ActionUpload,
+		IssueType:  syncengine.IssueRemoteWriteDenied,
+		ScopeKey:   scopeKey,
+		LastError:  "blocked",
+		Blocked:    true,
+	}, nil)
 	require.NoError(t, err)
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
 	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
-	sharedDescriptor := describeStatusSummary(syncengine.SummarySharedFolderWritesBlocked)
-	assert.ElementsMatch(t, []failureGroupJSON{
+	sharedDescriptor := describeStatusSummary(syncengine.SummaryRemoteWriteDenied)
+	assert.ElementsMatch(t, []statusConditionJSON{
 		{
 			SummaryKey: string(syncengine.SummaryInvalidFilename),
 			IssueType:  string(syncengine.IssueInvalidFilename),
@@ -698,8 +811,8 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 			Paths:      []string{"/invalid:name.txt"},
 		},
 		{
-			SummaryKey: string(syncengine.SummarySharedFolderWritesBlocked),
-			IssueType:  string(syncengine.IssueSharedFolderBlocked),
+			SummaryKey: string(syncengine.SummaryRemoteWriteDenied),
+			IssueType:  string(syncengine.IssueRemoteWriteDenied),
 			Title:      sharedDescriptor.Title,
 			Reason:     sharedDescriptor.Reason,
 			Action:     sharedDescriptor.Action,
@@ -708,7 +821,7 @@ func TestQuerySyncState_PreservesIssueGroupScopeContext(t *testing.T) {
 			Scope:      "Shared/Team Docs",
 			Paths:      []string{"/blocked/a.txt", "/blocked/b.txt"},
 		},
-	}, info.IssueGroups)
+	}, info.Conditions)
 }
 
 // Validates: R-2.10.32
@@ -726,9 +839,9 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 					SyncDir:     "~/Work",
 					State:       driveStateReady,
 					SyncState: &syncStateInfo{
-						FileCount:  10,
-						IssueCount: 2,
-						IssueGroups: []failureGroupJSON{
+						FileCount:      10,
+						ConditionCount: 2,
+						Conditions: []statusConditionJSON{
 							{
 								SummaryKey: string(syncengine.SummaryQuotaExceeded),
 								Title:      "QUOTA EXCEEDED",
@@ -757,9 +870,9 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
 	require.Len(t, result.Accounts, 1)
 	require.Len(t, result.Accounts[0].Drives, 1)
-	require.Len(t, result.Accounts[0].Drives[0].SyncState.IssueGroups, 2)
-	assert.Equal(t, "Shared/Docs", result.Accounts[0].Drives[0].SyncState.IssueGroups[0].Scope)
-	assert.Equal(t, "Shared/Design", result.Accounts[0].Drives[0].SyncState.IssueGroups[1].Scope)
+	require.Len(t, result.Accounts[0].Drives[0].SyncState.Conditions, 2)
+	assert.Equal(t, "Shared/Docs", result.Accounts[0].Drives[0].SyncState.Conditions[0].Scope)
+	assert.Equal(t, "Shared/Design", result.Accounts[0].Drives[0].SyncState.Conditions[1].Scope)
 }
 
 // Validates: R-2.10.32
@@ -768,8 +881,8 @@ func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T)
 
 	quotaDescriptor := describeStatusSummary(syncengine.SummaryQuotaExceeded)
 	ss := &syncStateInfo{
-		IssueCount: 2,
-		IssueGroups: []failureGroupJSON{
+		ConditionCount: 2,
+		Conditions: []statusConditionJSON{
 			{
 				SummaryKey: string(syncengine.SummaryQuotaExceeded),
 				IssueType:  string(syncengine.IssueQuotaExceeded),
@@ -808,7 +921,7 @@ func TestComputeSummary_Mixed(t *testing.T) {
 		{
 			AuthState: authStateReady,
 			Drives: []statusDrive{
-				{State: driveStateReady, SyncState: &syncStateInfo{IssueCount: 3}},
+				{State: driveStateReady, SyncState: &syncStateInfo{ConditionCount: 3}},
 				{State: driveStatePaused},
 			},
 		},
@@ -816,7 +929,7 @@ func TestComputeSummary_Mixed(t *testing.T) {
 			AuthState: authStateAuthenticationNeeded,
 			Drives: []statusDrive{
 				{State: driveStateReady},
-				{State: driveStateReady, SyncState: &syncStateInfo{IssueCount: 1}},
+				{State: driveStateReady, SyncState: &syncStateInfo{ConditionCount: 1}},
 			},
 		},
 	}
@@ -826,7 +939,7 @@ func TestComputeSummary_Mixed(t *testing.T) {
 	assert.Equal(t, 3, s.Ready)
 	assert.Equal(t, 1, s.Paused)
 	assert.Equal(t, 1, s.AccountsRequiringAuth)
-	assert.Equal(t, 4, s.TotalIssues)
+	assert.Equal(t, 4, s.TotalConditions)
 }
 
 func TestComputeSummary_Empty(t *testing.T) {
@@ -834,7 +947,7 @@ func TestComputeSummary_Empty(t *testing.T) {
 
 	s := computeSummary(nil)
 	assert.Equal(t, 0, s.TotalDrives)
-	assert.Equal(t, 0, s.TotalIssues)
+	assert.Equal(t, 0, s.TotalConditions)
 }
 
 // --- printStatusJSON ---
@@ -864,7 +977,7 @@ func TestPrintStatusJSON_WithAccounts(t *testing.T) {
 					CanonicalID: "personal:alice@example.com",
 					SyncDir:     "~/OneDrive",
 					State:       driveStateReady,
-					SyncState:   &syncStateInfo{FileCount: 10, IssueCount: 1},
+					SyncState:   &syncStateInfo{FileCount: 10, ConditionCount: 1},
 				},
 			},
 		},
@@ -882,7 +995,7 @@ func TestPrintStatusJSON_WithAccounts(t *testing.T) {
 }
 
 // Validates: R-2.10.4
-func TestPrintStatusJSON_WithIssueGroups(t *testing.T) {
+func TestPrintStatusJSON_WithConditions(t *testing.T) {
 	t.Parallel()
 
 	accounts := []statusAccount{
@@ -896,9 +1009,9 @@ func TestPrintStatusJSON_WithIssueGroups(t *testing.T) {
 					SyncDir:     "~/OneDrive",
 					State:       driveStateReady,
 					SyncState: &syncStateInfo{
-						FileCount:  10,
-						IssueCount: 3,
-						IssueGroups: []failureGroupJSON{
+						FileCount:      10,
+						ConditionCount: 3,
+						Conditions: []statusConditionJSON{
 							{
 								SummaryKey: string(syncengine.SummaryQuotaExceeded),
 								Title:      "QUOTA EXCEEDED",
@@ -927,9 +1040,9 @@ func TestPrintStatusJSON_WithIssueGroups(t *testing.T) {
 	require.Len(t, result.Accounts, 1)
 	require.Len(t, result.Accounts[0].Drives, 1)
 	require.NotNil(t, result.Accounts[0].Drives[0].SyncState)
-	require.Len(t, result.Accounts[0].Drives[0].SyncState.IssueGroups, 2)
-	assert.Equal(t, "drive", result.Accounts[0].Drives[0].SyncState.IssueGroups[0].ScopeKind)
-	assert.Equal(t, "Shared/Team Docs", result.Accounts[0].Drives[0].SyncState.IssueGroups[0].Scope)
+	require.Len(t, result.Accounts[0].Drives[0].SyncState.Conditions, 2)
+	assert.Equal(t, "drive", result.Accounts[0].Drives[0].SyncState.Conditions[0].ScopeKind)
+	assert.Equal(t, "Shared/Team Docs", result.Accounts[0].Drives[0].SyncState.Conditions[0].Scope)
 }
 
 // --- printStatusText ---
@@ -941,7 +1054,7 @@ func TestPrintStatusText_NoDrives(t *testing.T) {
 	require.NoError(t, printStatusText(&buf, nil, false))
 
 	output := buf.String()
-	assert.Equal(t, "Summary: 0 drives, 0 issues\n", output)
+	assert.Equal(t, "Summary: 0 drives, 0 conditions\n", output)
 }
 
 func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
@@ -968,7 +1081,7 @@ func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
 	require.NoError(t, printStatusText(&buf, accounts, false))
 
 	output := buf.String()
-	assert.True(t, strings.HasPrefix(output, "Summary: 1 drives (1 ready), 0 issues\n\n"))
+	assert.True(t, strings.HasPrefix(output, "Summary: 1 drives (1 ready), 0 conditions\n\n"))
 	assert.Contains(t, output, "Alice Smith (alice@contoso.com)")
 	assert.Contains(t, output, "Org:   Contoso")
 	assert.Contains(t, output, "Auth:  ready")
@@ -1092,7 +1205,7 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 		Ready:                 3,
 		Paused:                1,
 		AccountsRequiringAuth: 1,
-		TotalIssues:           3,
+		TotalConditions:       3,
 	}
 
 	var buf bytes.Buffer
@@ -1103,7 +1216,7 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	assert.Contains(t, output, "3 ready")
 	assert.Contains(t, output, "1 paused")
 	assert.Contains(t, output, "1 accounts requiring auth")
-	assert.Contains(t, output, "3 issues")
+	assert.Contains(t, output, "3 conditions")
 }
 
 func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
@@ -1112,7 +1225,7 @@ func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 	s := statusSummary{
 		TotalDrives:      2,
 		Ready:            2,
-		TotalIssues:      1,
+		TotalConditions:  1,
 		TotalRemoteDrift: 5,
 		TotalRetrying:    3,
 	}
@@ -1126,15 +1239,15 @@ func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 }
 
 // Validates: R-2.10.4
-func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
+func TestPrintSyncStateText_WithPendingAndConditions(t *testing.T) {
 	t.Parallel()
 
 	ss := &syncStateInfo{
-		LastSyncTime: "2026-03-02T10:30:00Z",
-		FileCount:    45,
-		IssueCount:   0,
-		RemoteDrift:  3,
-		Retrying:     2,
+		LastSyncTime:   "2026-03-02T10:30:00Z",
+		FileCount:      45,
+		ConditionCount: 0,
+		RemoteDrift:    3,
+		Retrying:       2,
 	}
 
 	var buf bytes.Buffer
@@ -1146,16 +1259,16 @@ func TestPrintSyncStateText_WithPendingAndIssues(t *testing.T) {
 }
 
 // Validates: R-2.10.4
-func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
+func TestPrintSyncStateText_WithConditions(t *testing.T) {
 	t.Parallel()
 
 	quotaDescriptor := describeStatusSummary(syncengine.SummaryQuotaExceeded)
 	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
 	authDescriptor := describeStatusSummary(syncengine.SummaryAuthenticationRequired)
 	ss := &syncStateInfo{
-		IssueCount: 3,
-		Retrying:   2,
-		IssueGroups: []failureGroupJSON{
+		ConditionCount: 3,
+		Retrying:       2,
+		Conditions: []statusConditionJSON{
 			{
 				SummaryKey: string(syncengine.SummaryQuotaExceeded),
 				IssueType:  string(syncengine.IssueQuotaExceeded),
@@ -1191,7 +1304,7 @@ func TestPrintSyncStateText_WithIssueGroups(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, printSyncStateText(&buf, ss, false))
-	requireGoldenText(t, "status_sync_state_with_issue_groups.golden", buf.String())
+	requireGoldenText(t, "status_sync_state_with_conditions.golden", buf.String())
 }
 
 func requireSingleStatusDriveJSON(

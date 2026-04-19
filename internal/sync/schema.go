@@ -13,9 +13,9 @@ const (
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
 	//
-	// Generation 2 renamed retry_state -> retry_work and
-	// scope_blocks -> block_scopes.
-	// Generation 3 removes preserve_until from block_scopes.
+	// Generation 3 removes the mixed failure ledger and replaces its
+	// actionable/current-truth rows with observation_issues. retry_work and
+	// block_scopes own the remaining retry and blocker state.
 	currentSyncStoreGeneration = 3
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata
 		(singleton_id, schema_generation)
@@ -95,69 +95,42 @@ CREATE TABLE IF NOT EXISTS retry_work (
     path            TEXT    NOT NULL,
     old_path        TEXT    NOT NULL DEFAULT '',
     action_type     TEXT    NOT NULL,
+    issue_type      TEXT    NOT NULL DEFAULT '',
     scope_key       TEXT    NOT NULL DEFAULT '',
     blocked         INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0, 1)),
     attempt_count   INTEGER NOT NULL DEFAULT 0,
     next_retry_at   INTEGER NOT NULL DEFAULT 0,
     last_error      TEXT    NOT NULL DEFAULT '',
+    http_status     INTEGER NOT NULL DEFAULT 0,
     first_seen_at   INTEGER NOT NULL DEFAULT 0,
     last_seen_at    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_retry_work_scope_key ON retry_work(scope_key);
 CREATE INDEX IF NOT EXISTS idx_retry_work_blocked ON retry_work(blocked);
+CREATE INDEX IF NOT EXISTS idx_retry_work_retrying ON retry_work(attempt_count)
+    WHERE blocked = 0 AND attempt_count >= 3;
 
-CREATE TABLE IF NOT EXISTS sync_failures (
+CREATE TABLE IF NOT EXISTS observation_issues (
     path           TEXT    NOT NULL PRIMARY KEY,
-    direction      TEXT    NOT NULL CHECK(direction IN ('download', 'upload', 'delete')),
     action_type    TEXT    NOT NULL CHECK(action_type IN (
                     'download', 'upload', 'local_delete', 'remote_delete',
                     'local_move', 'remote_move', 'folder_create', 'conflict_copy',
                     'update_synced', 'cleanup')),
-    category       TEXT    NOT NULL CHECK(category IN ('transient', 'actionable')),
-    failure_role   TEXT    NOT NULL CHECK(failure_role IN ('item', 'held', 'boundary')),
-    issue_type     TEXT,
-    item_id        TEXT,
-    failure_count  INTEGER NOT NULL DEFAULT 0,
-    next_retry_at  INTEGER,
-    last_error     TEXT,
-    http_status    INTEGER,
-    first_seen_at  INTEGER NOT NULL,
-    last_seen_at   INTEGER NOT NULL,
-    file_size      INTEGER,
-    local_hash     TEXT,
-    scope_key      TEXT    NOT NULL DEFAULT '',
-    CHECK (
-        (action_type = 'upload' AND direction = 'upload')
-        OR (action_type IN ('local_delete', 'remote_delete') AND direction = 'delete')
-        OR (action_type IN (
-            'download', 'folder_create', 'local_move', 'remote_move',
-            'conflict_copy', 'update_synced', 'cleanup'
-        ) AND direction = 'download')
-    ),
-    CHECK (
-        failure_role = 'item'
-        OR (failure_role = 'held'
-            AND category = 'transient'
-            AND scope_key <> ''
-            AND next_retry_at IS NULL)
-        OR (failure_role = 'boundary'
-            AND category = 'actionable'
-            AND scope_key <> ''
-            AND next_retry_at IS NULL)
-    )
+    issue_type     TEXT    NOT NULL DEFAULT '',
+    item_id        TEXT    NOT NULL DEFAULT '',
+    last_error     TEXT    NOT NULL DEFAULT '',
+    first_seen_at  INTEGER NOT NULL DEFAULT 0,
+    last_seen_at   INTEGER NOT NULL DEFAULT 0,
+    file_size      INTEGER NOT NULL DEFAULT 0,
+    local_hash     TEXT    NOT NULL DEFAULT '',
+    scope_key      TEXT    NOT NULL DEFAULT ''
 );
 
-CREATE INDEX IF NOT EXISTS idx_sync_failures_retry ON sync_failures(next_retry_at)
-    WHERE next_retry_at IS NOT NULL AND category = 'transient';
-CREATE INDEX IF NOT EXISTS idx_sync_failures_scope_role
-    ON sync_failures(scope_key, failure_role);
-CREATE INDEX IF NOT EXISTS idx_sync_failures_remote_blocked
-    ON sync_failures(scope_key, last_seen_at DESC)
-    WHERE failure_role = 'held' AND scope_key LIKE 'perm:remote:%';
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_failures_boundary_scope
-    ON sync_failures(scope_key)
-    WHERE failure_role = 'boundary';
+CREATE INDEX IF NOT EXISTS idx_observation_issues_issue_type
+    ON observation_issues(issue_type, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_observation_issues_scope_key
+    ON observation_issues(scope_key);
 
 CREATE TABLE IF NOT EXISTS block_scopes (
     scope_key      TEXT PRIMARY KEY,
@@ -166,6 +139,7 @@ CREATE TABLE IF NOT EXISTS block_scopes (
     blocked_at     INTEGER NOT NULL,
     trial_interval INTEGER NOT NULL,
     next_trial_at  INTEGER NOT NULL,
+    preserve_until INTEGER NOT NULL DEFAULT 0,
     trial_count    INTEGER NOT NULL DEFAULT 0
 	);`
 )
@@ -203,16 +177,15 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"path", "item_type", "hash", "size", "mtime", "content_identity", "observed_at",
 		},
 		"retry_work": {
-			"work_key", "path", "old_path", "action_type", "scope_key", "blocked",
-			"attempt_count", "next_retry_at", "last_error", "first_seen_at", "last_seen_at",
+			"work_key", "path", "old_path", "action_type", "issue_type", "scope_key", "blocked",
+			"attempt_count", "next_retry_at", "last_error", "http_status", "first_seen_at", "last_seen_at",
 		},
-		"sync_failures": {
-			"path", "direction", "action_type", "category", "failure_role", "issue_type", "item_id",
-			"failure_count", "next_retry_at", "last_error", "http_status", "first_seen_at", "last_seen_at",
-			"file_size", "local_hash", "scope_key",
+		"observation_issues": {
+			"path", "action_type", "issue_type", "item_id", "last_error",
+			"first_seen_at", "last_seen_at", "file_size", "local_hash", "scope_key",
 		},
 		"block_scopes": {
-			"scope_key", "issue_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "trial_count",
+			"scope_key", "issue_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "preserve_until", "trial_count",
 		},
 	}
 }

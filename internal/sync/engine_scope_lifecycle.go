@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -145,7 +146,7 @@ func (controller *scopeController) clearResolvedPersistedRemoteBlockedRetries(
 			return false
 		}
 		if flow.buildRetryCandidateFromRetryWork(ctx, bl, &rows[i], driveID).resolved {
-			controller.clearHeldRetryWork(ctx, &rows[i], "clearResolvedPersistedRemoteBlockedRetries")
+			controller.clearBlockedRetryWork(ctx, &rows[i], "clearResolvedPersistedRemoteBlockedRetries")
 			remoteResolved = true
 		}
 	}
@@ -590,7 +591,7 @@ func (controller *scopeController) applyBlockScope(ctx context.Context, watch *w
 		return
 	}
 
-	flow.engine.logger.Warn("block scope active — actions held",
+	flow.engine.logger.Warn("block scope active — actions blocked",
 		slog.String("scope_key", sr.ScopeKey.String()),
 		slog.String("issue_type", sr.IssueType),
 		slog.Duration("trial_interval", interval),
@@ -601,8 +602,8 @@ func (controller *scopeController) applyBlockScope(ctx context.Context, watch *w
 	}
 }
 
-// releaseScope atomically removes the block scope, deletes any actionable
-// boundary row for the scope, and makes held descendants retryable now.
+// releaseScope atomically removes the block scope and makes blocked retry work
+// under that scope eligible to run again.
 func (controller *scopeController) releaseScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
 	flow := controller.flow
 
@@ -625,7 +626,7 @@ func (controller *scopeController) releaseScope(ctx context.Context, watch *watc
 		})
 	}
 
-	flow.engine.logger.Info("block scope cleared — failures unblocked",
+	flow.engine.logger.Info("block scope cleared — blocked work released",
 		slog.String("scope_key", key.String()),
 	)
 
@@ -635,8 +636,8 @@ func (controller *scopeController) releaseScope(ctx context.Context, watch *watc
 	return nil
 }
 
-// discardScope atomically removes the block scope and deletes all failure rows
-// tied to it. Used when the blocked subtree itself disappears.
+// discardScope atomically removes the block scope and deletes blocked retry
+// work tied to it. Used when the blocked subtree itself disappears.
 func (controller *scopeController) discardScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
 	flow := controller.flow
 
@@ -667,7 +668,7 @@ func pathMatchesPrefix(path string, prefix string) bool {
 	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 
-func (controller *scopeController) clearResolvedRemoteBlockedFailures(
+func (controller *scopeController) clearResolvedRemoteBlockedRetryWork(
 	ctx context.Context,
 	watch *watchRuntime,
 	changedPaths map[string]bool,
@@ -705,7 +706,7 @@ func (controller *scopeController) clearResolvedRemoteBlockedFailures(
 			return
 		}
 		if flow.buildRetryCandidateFromRetryWork(ctx, bl, &rows[i], driveID).resolved {
-			controller.clearHeldRetryWork(ctx, &rows[i], "cleanupResolvedRemoteBlockedFailures")
+			controller.clearBlockedRetryWork(ctx, &rows[i], "clearResolvedRemoteBlockedRetryWork")
 			clearedScopes[rows[i].ScopeKey] = true
 		}
 	}
@@ -738,7 +739,7 @@ func remoteBlockedRetryRelevant(
 	return false
 }
 
-func (controller *scopeController) clearHeldRetryWork(
+func (controller *scopeController) clearBlockedRetryWork(
 	ctx context.Context,
 	row *RetryWorkRow,
 	caller string,
@@ -749,8 +750,8 @@ func (controller *scopeController) clearHeldRetryWork(
 
 	work := retryWorkKeyForRetryWork(row)
 
-	if err := controller.flow.engine.baseline.ClearHeldRetryWork(ctx, work, row.ScopeKey); err != nil {
-		controller.flow.engine.logger.Debug(caller+": failed to clear held retry work",
+	if err := controller.flow.engine.baseline.ClearBlockedRetryWork(ctx, work, row.ScopeKey); err != nil {
+		controller.flow.engine.logger.Debug(caller+": failed to clear blocked retry work",
 			slog.String("path", row.Path),
 			slog.String("scope_key", row.ScopeKey.String()),
 			slog.String("error", err.Error()),
@@ -827,7 +828,7 @@ func (controller *scopeController) admitReady(
 			} else {
 				// Trial candidate no longer matches scope — clear stale failure,
 				// run normal admission. Best-effort: log on error, don't abort.
-				controller.clearHeldFailureForScope(ctx, retryWorkKeyForAction(&ta.Action), ta.TrialScopeKey)
+				controller.clearBlockedRetryWorkForScope(ctx, retryWorkKeyForAction(&ta.Action), ta.TrialScopeKey)
 
 				if key := controller.activeBlockingScope(watch, ta); key.IsZero() {
 					flow.setDispatch(ctx, &ta.Action)
@@ -857,7 +858,7 @@ func (controller *scopeController) admitReady(
 }
 
 // cascadeRecordAndComplete records a scope-blocked action and all its
-// transitive dependents as sync_failures, completing each in the graph.
+// transitive dependents as blocked retry_work, completing each in the graph.
 // Uses BFS to traverse the dependency tree. Each dependent inherits the
 // parent's scope_key (section 3.4).
 //
@@ -883,7 +884,7 @@ func (controller *scopeController) cascadeRecordAndComplete(
 		}
 		seen[current.ID] = true
 
-		controller.recordBlockScopeedFailure(ctx, &current.Action, scopeKey)
+		controller.recordBlockedRetryWork(ctx, &current.Action, scopeKey)
 		// No resetDispatchStatus — setDispatch was never called for blocked
 		// actions (active-scope admission runs BEFORE setDispatch, per section 2.2).
 		ready := flow.completeDepGraphAction(current.ID, "cascadeRecordAndComplete")
@@ -913,7 +914,7 @@ func (controller *scopeController) cascadeFailAndComplete(
 		}
 		seen[current.ID] = true
 
-		controller.recordCascadeFailure(ctx, &current.Action, r)
+		controller.recordCascadeRetryWork(ctx, &current.Action, r)
 		next := flow.completeDepGraphAction(current.ID, "cascadeFailAndComplete")
 		queue = append(queue, next...)
 	}
@@ -941,32 +942,22 @@ func (controller *scopeController) completeSubtree(ready []*TrackedAction) {
 	}
 }
 
-// recordBlockScopeedFailure records a sync_failure for an action that was
-// blocked by an active scope. Uses next_retry_at = NULL (nil delayFn) so the
-// retry sweep ignores it until releaseScope sets next_retry_at.
-func (controller *scopeController) recordBlockScopeedFailure(ctx context.Context, action *Action, scopeKey ScopeKey) {
+// recordBlockedRetryWork records retry_work for an action that is currently
+// blocked by an active scope. Blocked rows have no retry timing until the
+// scope is released or trialed.
+func (controller *scopeController) recordBlockedRetryWork(ctx context.Context, action *Action, scopeKey ScopeKey) {
 	flow := controller.flow
 
-	direction := directionFromAction(action.Type)
-
-	driveID := action.DriveID
-	if driveID.String() == "" {
-		driveID = flow.engine.driveID
-	}
-
-	if err := flow.engine.baseline.RecordFailure(ctx, &SyncFailureParams{
+	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:       action.Path,
-		DriveID:    driveID,
-		Direction:  direction,
+		OldPath:    action.OldPath,
 		ActionType: action.Type,
-		ItemID:     action.ItemID,
-		Role:       FailureRoleHeld,
-		Category:   CategoryTransient,
 		IssueType:  scopeKey.IssueType(),
 		ScopeKey:   scopeKey,
-		ErrMsg:     "block scopeed: " + scopeKey.String(),
-	}, nil); err != nil { // nil delayFn → next_retry_at = NULL
-		flow.engine.logger.Warn("failed to record scope-blocked failure",
+		LastError:  "blocked by scope: " + scopeKey.String(),
+		Blocked:    true,
+	}, nil); err != nil {
+		flow.engine.logger.Warn("failed to record blocked retry_work",
 			slog.String("path", action.Path),
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
@@ -974,33 +965,24 @@ func (controller *scopeController) recordBlockScopeedFailure(ctx context.Context
 	}
 }
 
-func (controller *scopeController) rehomeHeldFailure(
+func (controller *scopeController) rehomeBlockedRetryWork(
 	ctx context.Context,
 	r *ActionCompletion,
 	scopeKey ScopeKey,
 ) {
 	flow := controller.flow
 
-	direction := directionFromAction(r.ActionType)
-
-	driveID := r.DriveID
-	if driveID.String() == "" {
-		driveID = flow.engine.driveID
-	}
-
-	if err := flow.engine.baseline.RecordFailure(ctx, &SyncFailureParams{
+	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:       r.Path,
-		DriveID:    driveID,
-		Direction:  direction,
+		OldPath:    r.OldPath,
 		ActionType: r.ActionType,
-		Role:       FailureRoleHeld,
-		Category:   CategoryTransient,
 		IssueType:  scopeKey.IssueType(),
 		ScopeKey:   scopeKey,
-		ErrMsg:     "block scopeed: " + scopeKey.String(),
+		LastError:  "blocked by scope: " + scopeKey.String(),
 		HTTPStatus: r.HTTPStatus,
+		Blocked:    true,
 	}, nil); err != nil {
-		flow.engine.logger.Warn("failed to rehome held failure",
+		flow.engine.logger.Warn("failed to rehome blocked retry_work",
 			slog.String("path", r.Path),
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
@@ -1008,36 +990,33 @@ func (controller *scopeController) rehomeHeldFailure(
 	}
 }
 
-// recordCascadeFailure records a sync_failure for a dependent whose parent
-// failed. The dependent inherits the parent's error context but gets its
-// own direction and a fresh failure_count. Uses retry.ReconcilePolicy().Delay for
-// exponential backoff — the dependent retries independently.
-func (controller *scopeController) recordCascadeFailure(
+// recordCascadeRetryWork records retry_work for a dependent whose parent failed.
+// Dependents inherit the parent's issue classification and scope evidence, but
+// keep their own path and action identity.
+func (controller *scopeController) recordCascadeRetryWork(
 	ctx context.Context,
 	action *Action,
 	parentResult *ActionCompletion,
 ) {
 	flow := controller.flow
 
-	direction := directionFromAction(action.Type)
+	parentDecision := classifyResult(parentResult)
+	scopeKey := parentDecision.ScopeEvidence
+	blocked := !scopeKey.IsZero() &&
+		(parentDecision.Class == errclass.ClassRetryableTransient ||
+			parentDecision.Class == errclass.ClassBlockScopeingTransient)
 
-	driveID := action.DriveID
-	if driveID.String() == "" {
-		driveID = flow.engine.driveID
-	}
-
-	issueType := issueTypeForHTTPStatus(parentResult.HTTPStatus, parentResult.Err)
-
-	if err := flow.engine.baseline.RecordFailure(ctx, &SyncFailureParams{
+	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:       action.Path,
-		DriveID:    driveID,
-		Direction:  direction,
+		OldPath:    action.OldPath,
 		ActionType: action.Type,
-		Category:   CategoryTransient,
-		IssueType:  issueType,
-		ErrMsg:     "parent action failed: " + parentResult.ErrMsg,
+		IssueType:  parentDecision.IssueType,
+		ScopeKey:   scopeKey,
+		LastError:  "parent action failed: " + parentResult.ErrMsg,
+		HTTPStatus: parentResult.HTTPStatus,
+		Blocked:    blocked,
 	}, retry.ReconcilePolicy().Delay); err != nil {
-		flow.engine.logger.Warn("failed to record cascade failure",
+		flow.engine.logger.Warn("failed to record cascade retry_work",
 			slog.String("path", action.Path),
 			slog.String("error", err.Error()),
 		)

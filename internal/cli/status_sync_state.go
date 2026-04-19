@@ -77,12 +77,12 @@ func buildSyncStateInfo(
 		RemoteDrift:      snapshot.RemoteDriftItems,
 		Retrying:         snapshot.RetryingItems,
 		LastError:        snapshot.RunStatus.LastError,
-		IssueGroups:      buildFailureGroupJSON(snapshot.IssueGroups, verbose, examplesLimit),
+		Conditions:       buildStatusConditionJSON(snapshot.Conditions, verbose, examplesLimit),
 		ExamplesLimit:    examplesLimit,
 		Verbose:          verbose,
 	}
 
-	info.IssueCount = issueGroupTotal(info.IssueGroups)
+	info.ConditionCount = conditionTotal(info.Conditions)
 
 	return info
 }
@@ -103,20 +103,20 @@ func formatStatusDurationMs(durationMs int64) string {
 	return strconv.FormatInt(durationMs, 10)
 }
 
-func buildFailureGroupJSON(
-	groups []syncengine.IssueGroupSnapshot,
+func buildStatusConditionJSON(
+	groups []syncengine.ConditionSnapshot,
 	verbose bool,
 	examplesLimit int,
-) []failureGroupJSON {
+) []statusConditionJSON {
 	if len(groups) == 0 {
 		return nil
 	}
 
-	output := make([]failureGroupJSON, 0, len(groups))
+	output := make([]statusConditionJSON, 0, len(groups))
 	for i := range groups {
 		group := groups[i]
 		descriptor := describeStatusSummary(group.SummaryKey)
-		output = append(output, failureGroupJSON{
+		output = append(output, statusConditionJSON{
 			SummaryKey: string(group.SummaryKey),
 			IssueType:  group.PrimaryIssueType,
 			Title:      descriptor.Title,
@@ -129,12 +129,12 @@ func buildFailureGroupJSON(
 		})
 	}
 
-	sortStatusFailureGroups(output)
+	sortStatusConditions(output)
 
 	return output
 }
 
-func issueGroupTotal(groups []failureGroupJSON) int {
+func conditionTotal(groups []statusConditionJSON) int {
 	total := 0
 	for i := range groups {
 		total += groups[i].Count

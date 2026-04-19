@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,7 +12,7 @@ import (
 )
 
 // Validates: R-2.14.3, R-2.10.47
-func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
+func TestSyncStore_ListVisibleConditionGroups(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -19,57 +20,57 @@ func TestSyncStore_ListVisibleIssueGroups(t *testing.T) {
 	driveID := driveid.New(testDriveID)
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
-	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
+	require.NoError(t, mgr.UpsertObservationIssue(ctx, &ObservationIssue{
 		Path:       "bad:name.txt",
 		DriveID:    driveID,
-		Direction:  DirectionUpload,
 		ActionType: ActionUpload,
-		Role:       FailureRoleItem,
-		Category:   CategoryActionable,
 		IssueType:  IssueInvalidFilename,
-		ErrMsg:     "invalid",
-	}, nil))
-	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
+		Error:      "invalid",
+	}))
+	require.NoError(t, mgr.UpsertBlockScope(ctx, &BlockScope{
+		Key:          scopeKey,
+		IssueType:    IssueRemoteWriteDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Now(),
+	}))
+	_, err := mgr.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:       "Shared/Docs/a.txt",
-		DriveID:    driveID,
-		Direction:  DirectionUpload,
 		ActionType: ActionUpload,
-		Role:       FailureRoleHeld,
-		Category:   CategoryTransient,
 		IssueType:  IssueRemoteWriteDenied,
-		ErrMsg:     "blocked",
+		LastError:  "blocked",
 		ScopeKey:   scopeKey,
-	}, nil))
-	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+	_, err = mgr.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:       "Shared/Docs/b.txt",
-		DriveID:    driveID,
-		Direction:  DirectionUpload,
 		ActionType: ActionUpload,
-		Role:       FailureRoleHeld,
-		Category:   CategoryTransient,
 		IssueType:  IssueRemoteWriteDenied,
-		ErrMsg:     "blocked",
+		LastError:  "blocked",
 		ScopeKey:   scopeKey,
-	}, nil))
-	groups, err := mgr.ListVisibleIssueGroups(ctx)
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+
+	groups, err := mgr.ListVisibleConditionGroups(ctx)
 	require.NoError(t, err)
 
 	require.Len(t, groups, 2)
 	assert.Equal(t, SummaryInvalidFilename, groups[0].SummaryKey)
 	assert.Equal(t, SummaryRemoteWriteDenied, groups[1].SummaryKey)
 	assert.Equal(t, 2, groups[1].Count)
-	assert.Equal(t, 1, groups[1].VisibleCount)
+	assert.Equal(t, 2, groups[1].VisibleCount)
 	require.NotNil(t, groups[1].RemoteBlocked)
 	assert.Equal(t, "Shared/Docs", groups[1].RemoteBlocked.BoundaryPath)
 	assert.ElementsMatch(t, []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt"}, groups[1].RemoteBlocked.BlockedPaths)
 
-	summary, err := mgr.ReadVisibleIssueSummary(ctx)
+	summary, err := mgr.ReadVisibleConditionSummary(ctx)
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []IssueGroupCount{
+	assert.ElementsMatch(t, []ConditionGroupCount{
 		{Key: SummaryInvalidFilename, Count: 1},
 		{Key: SummaryRemoteWriteDenied, Count: 2},
 	}, summary.Groups)
 
-	count := visibleIssueCountForTest(t, mgr, ctx)
+	count := visibleConditionCountForTest(t, mgr, ctx)
 	assert.Equal(t, 3, count)
 }

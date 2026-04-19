@@ -1,4 +1,4 @@
-Summary: 2 drives (1 ready, 1 paused, 1 accounts requiring auth), 3 issues, 2 remote drift, 1 retrying
+Summary: 2 drives (1 ready, 1 paused, 1 accounts requiring auth), 3 conditions, 2 remote drift, 1 retrying
 
 Account: Alice Example (alice@example.com) [personal]
   Org:   Contoso
@@ -10,11 +10,11 @@ Account: Alice Example (alice@example.com) [personal]
     Duration:  1500ms
     Files:     42
     Remote drift: 2 items
-    Issues:    3
+    Conditions: 3
     Retrying:  1 items
     Last error: sync: network timeout
 
-    ISSUES
+    CONDITIONS
     INVALID FILENAME (1 item)
       The filename contains characters not allowed by OneDrive. Rename the file to remove invalid characters.
 

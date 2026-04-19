@@ -1,0 +1,438 @@
+package cli
+
+import (
+	"bytes"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+)
+
+func TestDescribeStatusSummary_CoversFamiliesAndFallback(t *testing.T) {
+	t.Parallel()
+
+	authPresentation := authstate.UnauthorizedIssuePresentation()
+	cases := append(descriptorAuthAndRemoteCases(authPresentation), descriptorFilesystemCases()...)
+	cases = append(cases, descriptorLocalRuntimeCases()...)
+	cases = append(cases, descriptorFallbackCase())
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := describeStatusSummary(tc.key)
+			assert.Equal(t, tc.wantTitle, got.Title)
+			assert.Equal(t, tc.wantReason, got.Reason)
+			assert.Equal(t, tc.wantAction, got.Action)
+		})
+	}
+}
+
+func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
+	t.Parallel()
+
+	lastSync := time.Date(2026, time.April, 18, 12, 34, 56, 0, time.UTC)
+	snapshot := &syncengine.DriveStatusSnapshot{
+		RunStatus: syncengine.SyncRunStatus{
+			LastCompletedAt: lastSync.UnixNano(),
+			LastDurationMs:  987,
+			LastError:       "sync: transient timeout",
+		},
+		BaselineEntryCount: 11,
+		RemoteDriftItems:   2,
+		RetryingItems:      3,
+		Conditions: []syncengine.ConditionSnapshot{
+			{
+				SummaryKey:       syncengine.SummaryInvalidFilename,
+				PrimaryIssueType: syncengine.IssueInvalidFilename,
+				ScopeLabel:       "",
+				Paths:            []string{"/z.txt", "/y.txt"},
+				Count:            2,
+			},
+			{
+				SummaryKey:       syncengine.SummaryQuotaExceeded,
+				PrimaryIssueType: syncengine.IssueQuotaExceeded,
+				ScopeKey:         syncengine.SKQuotaOwn(),
+				ScopeLabel:       "Drive A",
+				Paths:            []string{"quota/a", "quota/b"},
+				Count:            4,
+			},
+			{
+				SummaryKey:       syncengine.SummaryQuotaExceeded,
+				PrimaryIssueType: syncengine.IssueQuotaExceeded,
+				ScopeKey:         syncengine.SKQuotaOwn(),
+				ScopeLabel:       "Drive B",
+				Paths:            []string{"quota/c"},
+				Count:            4,
+			},
+		},
+	}
+
+	info := buildSyncStateInfo(snapshot, false, 1)
+	require.Len(t, info.Conditions, 3)
+	assert.Equal(t, lastSync.Format(time.RFC3339), info.LastSyncTime)
+	assert.Equal(t, "987", info.LastSyncDuration)
+	assert.Equal(t, 11, info.FileCount)
+	assert.Equal(t, 2, info.RemoteDrift)
+	assert.Equal(t, 3, info.Retrying)
+	assert.Equal(t, "sync: transient timeout", info.LastError)
+	assert.Equal(t, 10, info.ConditionCount)
+	assert.Equal(t, 1, info.ExamplesLimit)
+	assert.False(t, info.Verbose)
+
+	assert.Equal(t, "QUOTA EXCEEDED", info.Conditions[0].Title)
+	assert.Equal(t, "Drive A", info.Conditions[0].Scope)
+	assert.Equal(t, statusScopeDrive, info.Conditions[0].ScopeKind)
+	assert.Equal(t, []string{"quota/a"}, info.Conditions[0].Paths)
+
+	assert.Equal(t, "QUOTA EXCEEDED", info.Conditions[1].Title)
+	assert.Equal(t, "Drive B", info.Conditions[1].Scope)
+	assert.Equal(t, []string{"quota/c"}, info.Conditions[1].Paths)
+
+	assert.Equal(t, "INVALID FILENAME", info.Conditions[2].Title)
+	assert.Equal(t, []string{"/z.txt"}, info.Conditions[2].Paths)
+}
+
+func TestBuildSyncStateInfo_NilSnapshotUsesDefaults(t *testing.T) {
+	t.Parallel()
+
+	info := buildSyncStateInfo(nil, true, 0)
+	assert.Zero(t, info.FileCount)
+	assert.Zero(t, info.ConditionCount)
+	assert.Equal(t, defaultVisiblePaths, info.ExamplesLimit)
+	assert.True(t, info.Verbose)
+	assert.Nil(t, info.Conditions)
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusLastSyncLine(&buf, &info))
+	assert.Equal(t, "Last sync: never", string(bytes.TrimSpace(buf.Bytes())))
+}
+
+func TestStatusScopeKindFromScopeKey_CoversKinds(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, statusScopeKindFromScopeKey(syncengine.ScopeKey{}))
+	assert.Equal(t, statusScopeDrive, statusScopeKindFromScopeKey(syncengine.SKThrottleDrive(driveid.New("drive-123"))))
+	assert.Equal(t, statusScopeService, statusScopeKindFromScopeKey(syncengine.SKService()))
+	assert.Equal(t, statusScopeDrive, statusScopeKindFromScopeKey(syncengine.SKQuotaOwn()))
+	assert.Equal(t, statusScopeDirectory, statusScopeKindFromScopeKey(syncengine.SKPermRemoteWrite("Shared/Docs")))
+	assert.Equal(t, statusScopeDirectory, statusScopeKindFromScopeKey(syncengine.SKPermDir("/tmp")))
+	assert.Equal(t, statusScopeDisk, statusScopeKindFromScopeKey(syncengine.SKDiskLocal()))
+	assert.Equal(t, "file", statusScopeKindFromScopeKey(syncengine.ScopeKey{Kind: syncengine.ScopeKeyKind(99)}))
+}
+
+func TestSampleStrings_CoversVerboseAndTruncation(t *testing.T) {
+	t.Parallel()
+
+	values := []string{"a", "b", "c"}
+
+	assert.Nil(t, sampleStrings(nil, false, 2))
+	assert.Equal(t, values, sampleStrings(values, true, 1))
+	assert.Equal(t, values[:2], sampleStrings(values, false, 2))
+	assert.Equal(t, values, sampleStrings(values, false, 3))
+}
+
+func TestSortStatusConditions_OrdersByCountThenTitleThenScope(t *testing.T) {
+	t.Parallel()
+
+	groups := []statusConditionJSON{
+		{Title: "B", Count: 1, Scope: "z"},
+		{Title: "A", Count: 2, Scope: "z"},
+		{Title: "A", Count: 2, Scope: "a"},
+	}
+
+	sortStatusConditions(groups)
+	assert.Equal(t, []statusConditionJSON{
+		{Title: "A", Count: 2, Scope: "a"},
+		{Title: "A", Count: 2, Scope: "z"},
+		{Title: "B", Count: 1, Scope: "z"},
+	}, groups)
+}
+
+func TestPrintConditionSection_NoActiveConditions(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printConditionSection(&buf, nil))
+	assert.Equal(t, "    No active conditions.\n", buf.String())
+}
+
+func TestPrintConditionSection_RendersScopePathsAndNext(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printConditionSection(&buf, []statusConditionJSON{
+		{
+			Title:  "RATE LIMITED",
+			Reason: "OneDrive asked this remote location to slow down.",
+			Action: "Wait for the retry window to expire (automatic retry in progress).",
+			Scope:  "Drive A",
+			Count:  3,
+			Paths:  []string{"a", "b"},
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, ""+
+		"    RATE LIMITED (3 items)\n"+
+		"      OneDrive asked this remote location to slow down. Wait for the retry window to expire (automatic retry in progress).\n"+
+		"      Scope: Drive A\n"+
+		"\n"+
+		"      a\n"+
+		"      b\n"+
+		"      ... and 1 more (use --verbose to see all)\n"+
+		"      Next: Wait for the retry window to expire (automatic retry in progress).\n",
+		buf.String(),
+	)
+}
+
+func TestPrintDriveSyncSections_WritesHeadingAndConditions(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printDriveSyncSections(&buf, &syncStateInfo{
+		Conditions: []statusConditionJSON{
+			{
+				Title:  "INVALID FILENAME",
+				Reason: "The filename contains characters not allowed by OneDrive.",
+				Action: "Rename the file to remove invalid characters.",
+				Count:  1,
+				Paths:  []string{"/bad:name.txt"},
+			},
+		},
+	}, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, ""+
+		"\n"+
+		"    CONDITIONS\n"+
+		"    INVALID FILENAME (1 item)\n"+
+		"      The filename contains characters not allowed by OneDrive. Rename the file to remove invalid characters.\n"+
+		"\n"+
+		"      /bad:name.txt\n"+
+		"      Next: Rename the file to remove invalid characters.\n",
+		buf.String(),
+	)
+}
+
+func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printAccountStatus(&buf, &statusAccount{
+		Email:          "alice@example.com",
+		DriveType:      "business",
+		UserID:         "user-123",
+		AuthState:      authStateAuthenticationNeeded,
+		AuthReason:     string(authReasonInvalidSavedLogin),
+		AuthAction:     authAction(authReasonInvalidSavedLogin),
+		DisplayName:    "Alice Example",
+		OrgName:        "Contoso",
+		DegradedReason: driveCatalogUnavailableReason,
+		DegradedAction: degradedAction(driveCatalogUnavailableReason),
+		LiveDrives: []statusLiveDrive{
+			{ID: "drive-1", Name: "Work Files", DriveType: "business", QuotaUsed: 1024, QuotaTotal: 2048},
+		},
+		Drives: []statusDrive{
+			{
+				CanonicalID: "business:alice@example.com",
+				DisplayName: "Documents",
+				SyncDir:     "",
+				State:       driveStateReady,
+				SyncState: &syncStateInfo{
+					LastSyncTime:     "2026-04-18T12:34:56Z",
+					LastSyncDuration: "123",
+					FileCount:        7,
+					ConditionCount:   1,
+					RemoteDrift:      2,
+					Retrying:         1,
+					LastError:        "sync: timeout",
+					Conditions: []statusConditionJSON{
+						{
+							Title:  "INVALID FILENAME",
+							Reason: "The filename contains characters not allowed by OneDrive.",
+							Action: "Rename the file to remove invalid characters.",
+							Count:  1,
+							Paths:  []string{"/bad:name.txt"},
+						},
+					},
+				},
+			},
+		},
+	}, false, false)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "Account: Alice Example (alice@example.com) [business]")
+	assert.Contains(t, output, "  User ID: user-123")
+	assert.Contains(t, output, "  Org:   Contoso")
+	assert.Contains(t, output, "  Auth:  authentication_required")
+	assert.Contains(t, output, "  Reason: The saved login for this account is invalid or unreadable.")
+	assert.Contains(t, output, "  Action: Run 'onedrive-go login' to sign in.")
+	assert.Contains(t, output, "  Live discovery: Couldn't finish loading live drive information for this account.")
+	assert.Contains(t, output, "  Live action: "+degradedAction(driveCatalogUnavailableReason))
+	assert.Contains(t, output, "  Live drives:")
+	assert.Contains(t, output, "    Work Files (business)")
+	assert.Contains(t, output, "      ID: drive-1")
+	assert.Contains(t, output, "      Quota: 1.0 KB / 2.0 KB")
+	assert.Contains(t, output, "  Documents (business:alice@example.com)")
+	assert.Contains(t, output, "    Sync dir:  (not set)")
+	assert.Contains(t, output, "    Last sync: 2026-04-18T12:34:56Z")
+	assert.Contains(t, output, "    Duration:  123ms")
+	assert.Contains(t, output, "    Files:     7")
+	assert.Contains(t, output, "    Remote drift: 2 items")
+	assert.Contains(t, output, "    Conditions: 1")
+	assert.Contains(t, output, "    Retrying:  1 items")
+	assert.Contains(t, output, "    Last error: sync: timeout")
+}
+
+func TestPrintStatusNextLine_EmptyHintProducesNoOutput(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusNextLine(&buf, ""))
+	assert.Empty(t, buf.String())
+}
+
+type descriptorCase struct {
+	name       string
+	key        syncengine.SummaryKey
+	wantTitle  string
+	wantReason string
+	wantAction string
+}
+
+func descriptorAuthAndRemoteCases(authPresentation authstate.Presentation) []descriptorCase {
+	return []descriptorCase{
+		{
+			name:       "authentication required",
+			key:        syncengine.SummaryAuthenticationRequired,
+			wantTitle:  "AUTHENTICATION REQUIRED",
+			wantReason: authPresentation.Reason,
+			wantAction: authPresentation.Action,
+		},
+		{
+			name:       "quota exceeded",
+			key:        syncengine.SummaryQuotaExceeded,
+			wantTitle:  "QUOTA EXCEEDED",
+			wantReason: "The OneDrive storage quota for this sync scope is full.",
+			wantAction: "Free up space in the owning drive, or ask the shared-folder owner to do so.",
+		},
+		{
+			name:       "service outage",
+			key:        syncengine.SummaryServiceOutage,
+			wantTitle:  "SERVICE OUTAGE",
+			wantReason: "OneDrive service is temporarily unavailable.",
+			wantAction: "Wait for the service to recover (automatic retry in progress).",
+		},
+		{
+			name:       "rate limited",
+			key:        syncengine.SummaryRateLimited,
+			wantTitle:  "RATE LIMITED",
+			wantReason: "OneDrive asked this remote location to slow down.",
+			wantAction: "Wait for the retry window to expire (automatic retry in progress).",
+		},
+		{
+			name:       "remote write denied",
+			key:        syncengine.SummaryRemoteWriteDenied,
+			wantTitle:  "SHARED FOLDER WRITES BLOCKED",
+			wantReason: "This shared folder is read-only for your current write attempts. Downloads continue normally.",
+			wantAction: "Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",
+		},
+		{
+			name:       "remote read denied",
+			key:        syncengine.SummaryRemoteReadDenied,
+			wantTitle:  "REMOTE READ BLOCKED",
+			wantReason: "This remote content can no longer be downloaded with your current permissions.",
+			wantAction: "Restore access to the shared item, or remove the blocked content from this sync scope.",
+		},
+	}
+}
+
+func descriptorFilesystemCases() []descriptorCase {
+	return []descriptorCase{
+		{
+			name:       "local read denied",
+			key:        syncengine.SummaryLocalReadDenied,
+			wantTitle:  "LOCAL READ BLOCKED",
+			wantReason: "The local source file or directory can no longer be read.",
+			wantAction: "Restore local read access so uploads and conflict recovery can read the source content.",
+		},
+		{
+			name:       "local write denied",
+			key:        syncengine.SummaryLocalWriteDenied,
+			wantTitle:  "LOCAL WRITE BLOCKED",
+			wantReason: "The local destination path can no longer be created, renamed, or updated.",
+			wantAction: "Restore local write access so downloads and local filesystem updates can complete.",
+		},
+		{
+			name:       "invalid filename",
+			key:        syncengine.SummaryInvalidFilename,
+			wantTitle:  "INVALID FILENAME",
+			wantReason: "The filename contains characters not allowed by OneDrive.",
+			wantAction: "Rename the file to remove invalid characters.",
+		},
+		{
+			name:       "path too long",
+			key:        syncengine.SummaryPathTooLong,
+			wantTitle:  "PATH TOO LONG",
+			wantReason: "The full path exceeds OneDrive's 400-character limit.",
+			wantAction: "Shorten the path by renaming files or folders.",
+		},
+		{
+			name:       "file too large",
+			key:        syncengine.SummaryFileTooLarge,
+			wantTitle:  "FILE TOO LARGE",
+			wantReason: "The file exceeds the maximum upload size.",
+			wantAction: "Reduce the file size or move it out of the sync dir.",
+		},
+		{
+			name:       "case collision",
+			key:        syncengine.SummaryCaseCollision,
+			wantTitle:  "CASE COLLISION",
+			wantReason: "Two files differ only in letter case, which OneDrive cannot distinguish.",
+			wantAction: "Rename one of the conflicting files.",
+		},
+	}
+}
+
+func descriptorLocalRuntimeCases() []descriptorCase {
+	return []descriptorCase{
+		{
+			name:       "disk full",
+			key:        syncengine.SummaryDiskFull,
+			wantTitle:  "DISK FULL",
+			wantReason: "Local disk space is insufficient for downloads.",
+			wantAction: "Free up local disk space.",
+		},
+		{
+			name:       "hash error",
+			key:        syncengine.SummaryHashError,
+			wantTitle:  "HASH ERROR",
+			wantReason: "File hashing failed unexpectedly.",
+			wantAction: "Check file integrity and retry.",
+		},
+		{
+			name:       "file too large for space",
+			key:        syncengine.SummaryFileTooLargeForSpace,
+			wantTitle:  "FILE TOO LARGE FOR SPACE",
+			wantReason: "The file is larger than available local disk space.",
+			wantAction: "Free up local disk space to fit this file.",
+		},
+	}
+}
+
+func descriptorFallbackCase() descriptorCase {
+	return descriptorCase{
+		name:       "unexpected fallback",
+		key:        syncengine.SummaryKey("custom_condition"),
+		wantTitle:  "SYNC CONDITION",
+		wantReason: "An unexpected sync condition needs attention.",
+		wantAction: "Check logs for details or rerun status after the next sync pass.",
+	}
+}

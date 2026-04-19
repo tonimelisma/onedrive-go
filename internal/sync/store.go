@@ -1,5 +1,5 @@
-// Package sync persists sync baseline, observation, failure, scope-block, and
-// run-status state.
+// Package sync persists sync baseline, observation issues, retry work,
+// block-scope, and run-status state.
 //
 // Contents:
 //   - SyncStore:    struct definition (db, baseline, logger, nowFunc)
@@ -13,8 +13,8 @@
 // Related files:
 //   - store_write_baseline.go:     baseline CRUD and outcome commits
 //   - store_write_observation.go:  remote state observation persistence
-//   - store_read_failures.go:      sync failure query helpers
-//   - store_write_failures.go:     sync failure recording and mutation helpers
+//   - store_observation_issues.go: observation issue recording and read helpers
+//   - store_retry_work.go:         exact retry work persistence and mutation helpers
 //   - store_inspect.go:            read-only status projections and inspector lifecycle
 //   - store_run_status.go:         one-shot run-status persistence
 //   - store_scope_admin.go:        scope release/discard mutation helpers
@@ -108,9 +108,9 @@ func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensu
 }
 
 // Close checkpoints the WAL and closes the underlying database connection.
-// The explicit checkpoint ensures cross-process readers (e.g., `issues
-// --history` after `sync`) see all committed data when they open a new
-// connection to the same database file.
+// The explicit checkpoint ensures cross-process readers (for example `status`
+// after `sync`) see all committed data when they open a new connection to the
+// same database file.
 func (m *SyncStore) Close(ctx context.Context) error {
 	// WAL checkpoint only (no pruning) on close.
 	if err := m.Checkpoint(ctx, 0); err != nil {
@@ -124,8 +124,8 @@ func (m *SyncStore) Close(ctx context.Context) error {
 	return nil
 }
 
-// Checkpoint performs WAL checkpoint and optionally prunes old actionable
-// failures. Called after initial sync, every 30 minutes, and on shutdown.
+// Checkpoint performs WAL checkpoint and optionally prunes stale observation
+// issues. Called after initial sync, every 30 minutes, and on shutdown.
 // Pass retention=0 to skip pruning (WAL checkpoint only).
 func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) error {
 	if _, err := m.db.ExecContext(ctx,
@@ -139,12 +139,13 @@ func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) err
 
 	cutoff := m.nowFunc().Add(-retention).UnixNano()
 
-	// Actionable failures are kept for user visibility but pruned after retention
-	// to prevent unbounded growth of stale entries.
+	// Observation issues are user-visible current-truth problems and can be
+	// rebuilt from fresh observation, so stale rows are pruned after retention
+	// to prevent unbounded growth.
 	if _, err := m.db.ExecContext(ctx,
-		`DELETE FROM sync_failures WHERE category = 'actionable' AND last_seen_at < ?`,
+		`DELETE FROM observation_issues WHERE last_seen_at < ?`,
 		cutoff); err != nil {
-		return fmt.Errorf("prune actionable sync_failures: %w", err)
+		return fmt.Errorf("prune stale observation issues: %w", err)
 	}
 
 	return nil

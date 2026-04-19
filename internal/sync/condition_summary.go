@@ -2,24 +2,24 @@ package sync
 
 import "sort"
 
-// IssueGroupCount is one derived visible issue family with its aggregated
+// ConditionGroupCount is one derived visible condition family with its aggregated
 // count in the read-only status/watch summary projection.
-type IssueGroupCount struct {
+type ConditionGroupCount struct {
 	Key       SummaryKey
 	Count     int
 	ScopeKind string
 	Scope     string
 }
 
-// IssueSummary is the store-owned aggregate view of visible issues for status
+// ConditionSummary is the store-owned aggregate view of visible conditions for status
 // and watch summaries. It centralizes how actionable rows and special derived
 // scopes count toward summary output.
-type IssueSummary struct {
-	Groups   []IssueGroupCount
+type ConditionSummary struct {
+	Groups   []ConditionGroupCount
 	Retrying int
 }
 
-func (s IssueSummary) VisibleTotal() int {
+func (s ConditionSummary) VisibleTotal() int {
 	total := 0
 	for _, group := range s.Groups {
 		total += group.Count
@@ -28,14 +28,14 @@ func (s IssueSummary) VisibleTotal() int {
 	return total
 }
 
-func (s IssueSummary) ConflictCount() int {
+func (s ConditionSummary) ConflictCount() int {
 	return 0
 }
 
-func (s IssueSummary) ActionableCount() int {
+func (s ConditionSummary) ActionableCount() int {
 	total := 0
 	for _, group := range s.Groups {
-		if group.Key == SummarySharedFolderWritesBlocked ||
+		if group.Key == SummaryRemoteWriteDenied ||
 			group.Key == SummaryAuthenticationRequired {
 			continue
 		}
@@ -45,19 +45,19 @@ func (s IssueSummary) ActionableCount() int {
 	return total
 }
 
-func (s IssueSummary) RemoteBlockedCount() int {
-	return s.countForKey(SummarySharedFolderWritesBlocked)
+func (s ConditionSummary) RemoteBlockedCount() int {
+	return s.countForKey(SummaryRemoteWriteDenied)
 }
 
-func (s IssueSummary) AuthRequiredCount() int {
+func (s ConditionSummary) AuthRequiredCount() int {
 	return s.countForKey(SummaryAuthenticationRequired)
 }
 
-func (s IssueSummary) RetryingCount() int {
+func (s ConditionSummary) RetryingCount() int {
 	return s.Retrying
 }
 
-func (s IssueSummary) countForKey(key SummaryKey) int {
+func (s ConditionSummary) countForKey(key SummaryKey) int {
 	total := 0
 	for _, group := range s.Groups {
 		if group.Key == key {
@@ -68,30 +68,30 @@ func (s IssueSummary) countForKey(key SummaryKey) int {
 	return total
 }
 
-type issueGroupIdentity struct {
+type conditionGroupIdentity struct {
 	Key       SummaryKey
 	ScopeKind string
 	Scope     string
 }
 
-type issueGroupAccumulator map[issueGroupIdentity]int
+type conditionGroupAccumulator map[conditionGroupIdentity]int
 
-func (a issueGroupAccumulator) Add(key SummaryKey, count int, scopeKind, scope string) {
+func (a conditionGroupAccumulator) Add(key SummaryKey, count int, scopeKind, scope string) {
 	if key == "" || count <= 0 {
 		return
 	}
 
-	a[issueGroupIdentity{
+	a[conditionGroupIdentity{
 		Key:       key,
 		ScopeKind: scopeKind,
 		Scope:     scope,
 	}] += count
 }
 
-func (a issueGroupAccumulator) Groups() []IssueGroupCount {
-	groups := make([]IssueGroupCount, 0, len(a))
+func (a conditionGroupAccumulator) Groups() []ConditionGroupCount {
+	groups := make([]ConditionGroupCount, 0, len(a))
 	for identity, count := range a {
-		groups = append(groups, IssueGroupCount{
+		groups = append(groups, ConditionGroupCount{
 			Key:       identity.Key,
 			Count:     count,
 			ScopeKind: identity.ScopeKind,

@@ -423,39 +423,35 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:       clearedScope,
-		IssueType: IssueSharedFolderBlocked,
+		IssueType: IssueRemoteWriteDenied,
 		BlockedAt: eng.nowFunc(),
 	})
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:       retainedScope,
-		IssueType: IssueSharedFolderBlocked,
+		IssueType: IssueRemoteWriteDenied,
 		BlockedAt: eng.nowFunc(),
 	})
 
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:       "Shared/TeamDocs/file.txt",
-		DriveID:    driveID,
-		Direction:  DirectionUpload,
 		ActionType: ActionUpload,
-		Role:       FailureRoleHeld,
-		Category:   CategoryTransient,
-		IssueType:  IssueSharedFolderBlocked,
-		ErrMsg:     "blocked by remote permission scope",
+		IssueType:  IssueRemoteWriteDenied,
 		ScopeKey:   clearedScope,
-	}, nil))
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		LastError:  "blocked by remote permission scope",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+	_, err = eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:       "Shared/Other/file.txt",
-		DriveID:    driveID,
-		Direction:  DirectionUpload,
 		ActionType: ActionUpload,
-		Role:       FailureRoleHeld,
-		Category:   CategoryTransient,
-		IssueType:  IssueSharedFolderBlocked,
-		ErrMsg:     "blocked by remote permission scope",
+		IssueType:  IssueRemoteWriteDenied,
 		ScopeKey:   retainedScope,
-	}, nil))
+		LastError:  "blocked by remote permission scope",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
 
-	require.NoError(t, eng.baseline.ClearHeldRetryWork(ctx, RetryWorkKey{
+	require.NoError(t, eng.baseline.ClearBlockedRetryWork(ctx, RetryWorkKey{
 		Path:       "Shared/TeamDocs/file.txt",
 		ActionType: ActionUpload,
 	}, clearedScope))
@@ -470,9 +466,11 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	retryable := readyRetryWorkForTest(t, eng.baseline, ctx, eng.nowFunc())
 	assert.Empty(t, retryable, "clearing the last blocked write should forget the remote scope instead of retrying it")
 
-	remainingIssues := syncFailuresByIssueTypeForTest(t, eng.baseline, ctx, IssueRemoteWriteDenied)
-	require.Len(t, remainingIssues, 1, "only the uncleared blocked write should remain")
-	assert.Equal(t, "Shared/Other/file.txt", remainingIssues[0].Path)
+	remainingBlocked := listRetryWorkForTest(t, eng.baseline, ctx)
+	require.Len(t, remainingBlocked, 1, "only the uncleared blocked write should remain")
+	assert.Equal(t, "Shared/Other/file.txt", remainingBlocked[0].Path)
+	assert.True(t, remainingBlocked[0].Blocked)
+	assert.Equal(t, retainedScope, remainingBlocked[0].ScopeKey)
 
 	select {
 	case <-testWatchRuntime(t, eng).retryTimerCh:
@@ -788,17 +786,15 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 		ErrMsg:     "held by service scope",
 	}, nil))
 
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:       "retry.txt",
-		DriveID:    eng.driveID,
-		Direction:  DirectionDownload,
 		ActionType: ActionDownload,
-		Role:       FailureRoleItem,
-		Category:   CategoryTransient,
-		ErrMsg:     "retry later",
+		IssueType:  IssueServiceOutage,
+		LastError:  "retry later",
 	}, func(_ int) time.Duration {
 		return 5 * time.Second
-	}))
+	})
+	require.NoError(t, err)
 	watchCtx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {

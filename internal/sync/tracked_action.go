@@ -12,7 +12,7 @@ type TrackedAction struct {
 	Cancel context.CancelFunc
 
 	// IsTrial marks this action as a scope trial — a real action dispatched
-	// from the held queue to test whether a blocked scope has recovered (R-2.10.5).
+	// from blocked retry work to test whether a blocked scope has recovered (R-2.10.5).
 	IsTrial bool
 
 	// TrialScopeKey identifies which scope this trial is testing. Set by

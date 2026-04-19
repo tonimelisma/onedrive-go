@@ -173,8 +173,8 @@ func WatchLocalPolicy() Policy {
 	}
 }
 
-// ReconcilePolicy is the single retry curve for all sync failures
-// (sync_failures table + engine failure retrier). Infinite attempts until the
+// ReconcilePolicy is the single retry curve for all sync retry work.
+// retry_work rows keep retry attempts infinite until the
 // failure succeeds or becomes actionable. Curve: 1s, 2s, 4s, 8s, 16s, 32s,
 // 64s, 128s, 256s, 512s, 1024s, 2048s, 3600s cap.
 func ReconcilePolicy() Policy {

@@ -6,59 +6,47 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// SyncFailureParams bundles all inputs for RecordFailure into a single struct.
-// Only Path, DriveID, Direction, and ErrMsg are always required. Other fields
-// are optional — zero values are preserved via COALESCE on conflict.
-type SyncFailureParams struct {
-	Path       string
-	OldPath    string
-	DriveID    driveid.ID
-	Direction  Direction
-	Role       FailureRole
-	IssueType  string
-	Category   FailureCategory
-	ErrMsg     string
-	HTTPStatus int
-	ActionType ActionType
-	FileSize   int64
-	LocalHash  string
-	ItemID     string
-	ScopeKey   ScopeKey
-}
-
-// SyncFailureRow represents a row from the sync_failures table.
-type SyncFailureRow struct {
-	Path         string
-	DriveID      driveid.ID
-	Direction    Direction
-	Role         FailureRole
-	Category     FailureCategory
-	IssueType    string
-	ItemID       string
-	ActionType   ActionType
-	FailureCount int
-	NextRetryAt  int64
-	LastError    string
-	HTTPStatus   int
-	FirstSeenAt  int64
-	LastSeenAt   int64
-	FileSize     int64
-	LocalHash    string
-	ScopeKey     ScopeKey
-}
-
-// ActionableFailure represents a scanner-detected issue to batch-upsert into
-// sync_failures.
-type ActionableFailure struct {
+// ObservationIssue is a durable current-truth problem discovered by
+// observation or execution and shown to the user until the underlying path
+// becomes syncable again.
+type ObservationIssue struct {
 	Path       string
 	DriveID    driveid.ID
-	Direction  Direction
 	ActionType ActionType
-	Role       FailureRole
 	IssueType  string
 	Error      string
+	ItemID     string
 	ScopeKey   ScopeKey
 	FileSize   int64
+	LocalHash  string
+}
+
+// ObservationIssueRow represents a row from the observation_issues table.
+type ObservationIssueRow struct {
+	Path        string
+	DriveID     driveid.ID
+	ActionType  ActionType
+	IssueType   string
+	ItemID      string
+	LastError   string
+	FirstSeenAt int64
+	LastSeenAt  int64
+	FileSize    int64
+	LocalHash   string
+	ScopeKey    ScopeKey
+}
+
+// RetryWorkFailure records one exact work item that still needs a retry. The
+// retry_work table owns attempt counting and backoff state.
+type RetryWorkFailure struct {
+	Path       string
+	OldPath    string
+	ActionType ActionType
+	IssueType  string
+	ScopeKey   ScopeKey
+	LastError  string
+	HTTPStatus int
+	Blocked    bool
 }
 
 // ObservedItem represents a single item from a delta API response, ready
@@ -109,11 +97,13 @@ type RetryWorkRow struct {
 	Path         string
 	OldPath      string
 	ActionType   ActionType
+	IssueType    string
 	ScopeKey     ScopeKey
 	Blocked      bool
 	AttemptCount int
 	NextRetryAt  int64
 	LastError    string
+	HTTPStatus   int
 	FirstSeenAt  int64
 	LastSeenAt   int64
 }

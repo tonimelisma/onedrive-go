@@ -131,7 +131,7 @@ drive and continues healthy drives unless none can start.
 The CLI no longer owns:
 
 - durable conflict-resolution requests
-- held-delete approvals
+- blocked-delete approvals
 - fallback direct DB writes for sync decisions
 - `resolve` subcommands
 

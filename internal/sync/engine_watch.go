@@ -647,7 +647,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 			}
 
 			// Forward events only — skipped items are logged at DEBUG.
-			// The primary scan and safety scan handle recording to sync_failures.
+			// The primary scan and safety scan handle persisting observation issues.
 			for i := range result.Events {
 				obs.TrySend(ctx, events, &result.Events[i])
 			}
