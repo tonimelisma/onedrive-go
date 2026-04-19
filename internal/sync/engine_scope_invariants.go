@@ -173,60 +173,38 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 		return fmt.Errorf("listing block scopes: %w", err)
 	}
 
-	rows, err := flow.engine.baseline.ListSyncFailures(ctx)
+	retryWork, err := flow.engine.baseline.ListRetryWork(ctx)
 	if err != nil {
-		return fmt.Errorf("listing sync failures: %w", err)
+		return fmt.Errorf("listing retry_work rows: %w", err)
 	}
-	boundaryKeys := make(map[ScopeKey]struct{})
 
-	for i := range rows {
-		if err := validateFailureRowState(&rows[i]); err != nil {
-			return err
+	seenBlocks := make(map[ScopeKey]struct{}, len(blocks))
+	for i := range blocks {
+		if blocks[i] == nil {
+			return fmt.Errorf("nil persisted block scope")
 		}
-		if rows[i].Role != FailureRoleBoundary {
+		if blocks[i].Key.IsZero() {
+			return fmt.Errorf("persisted block scope missing key")
+		}
+		if _, ok := seenBlocks[blocks[i].Key]; ok {
+			return fmt.Errorf("duplicate persisted block scope %s", blocks[i].Key.String())
+		}
+		seenBlocks[blocks[i].Key] = struct{}{}
+	}
+
+	for i := range retryWork {
+		if !retryWork[i].Blocked {
 			continue
 		}
-		if _, ok := boundaryKeys[rows[i].ScopeKey]; ok {
-			return fmt.Errorf("duplicate boundary row for scope %s", rows[i].ScopeKey.String())
+		if retryWork[i].ScopeKey.IsZero() {
+			return fmt.Errorf("blocked retry_work %s is missing scope key", retryWork[i].Path)
 		}
-		boundaryKeys[rows[i].ScopeKey] = struct{}{}
-	}
-
-	for i := range blocks {
-		key := blocks[i].Key
-		if key.IsPermRemoteWrite() {
-			return fmt.Errorf("persisted remote-write scope %s should not survive startup diagnosis", key.String())
+		if _, ok := seenBlocks[retryWork[i].ScopeKey]; !ok {
+			return fmt.Errorf("blocked retry_work %s references missing block scope %s", retryWork[i].Path, retryWork[i].ScopeKey.String())
 		}
-	}
-
-	return nil
-}
-
-func validateFailureRowState(row *SyncFailureRow) error {
-	switch row.Role {
-	case FailureRoleHeld:
-		if row.ScopeKey.IsZero() {
-			return fmt.Errorf("held row %s is missing scope key", row.Path)
+		if retryWork[i].NextRetryAt != 0 {
+			return fmt.Errorf("blocked retry_work %s must not have retry timing", retryWork[i].Path)
 		}
-		if row.Category != CategoryTransient {
-			return fmt.Errorf("held row %s must be transient", row.Path)
-		}
-		if row.NextRetryAt != 0 {
-			return fmt.Errorf("held row %s must not be retryable before release", row.Path)
-		}
-	case FailureRoleBoundary:
-		if row.ScopeKey.IsZero() {
-			return fmt.Errorf("boundary row %s is missing scope key", row.Path)
-		}
-		if row.Category != CategoryActionable {
-			return fmt.Errorf("boundary row %s must be actionable", row.Path)
-		}
-		if row.NextRetryAt != 0 {
-			return fmt.Errorf("boundary row %s must not have retry timing", row.Path)
-		}
-	case FailureRoleItem:
-	default:
-		return fmt.Errorf("row %s has invalid failure role %q", row.Path, row.Role)
 	}
 
 	return nil
@@ -242,29 +220,28 @@ func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRun
 		return fmt.Errorf("listing block scopes: %w", err)
 	}
 	for i := range blocks {
-		if blocks[i].Key == key {
+		if blocks[i] != nil && blocks[i].Key == key {
 			return fmt.Errorf("released scope %s still persisted", key.String())
 		}
 	}
 
-	rows, err := flow.engine.baseline.ListSyncFailures(ctx)
+	observationIssues, err := flow.engine.baseline.ListObservationIssues(ctx)
 	if err != nil {
-		return fmt.Errorf("listing sync failures: %w", err)
+		return fmt.Errorf("listing observation issues: %w", err)
 	}
-	for i := range rows {
-		if rows[i].ScopeKey != key {
-			continue
+	for i := range observationIssues {
+		if observationIssues[i].ScopeKey == key {
+			return fmt.Errorf("released scope %s still has observation issue %s", key.String(), observationIssues[i].Path)
 		}
-		if rows[i].Role == FailureRoleBoundary {
-			return fmt.Errorf("released scope %s still has actionable boundary row %s", key.String(), rows[i].Path)
-		}
-		if rows[i].Role == FailureRoleHeld {
-			return fmt.Errorf("released scope %s still has held transient row %s", key.String(), rows[i].Path)
-		}
-		if rows[i].Role == FailureRoleItem &&
-			rows[i].Category == CategoryTransient &&
-			rows[i].NextRetryAt <= 0 {
-			return fmt.Errorf("released scope %s still has non-retryable transient row %s", key.String(), rows[i].Path)
+	}
+
+	retryWork, err := flow.engine.baseline.ListRetryWork(ctx)
+	if err != nil {
+		return fmt.Errorf("listing retry_work rows: %w", err)
+	}
+	for i := range retryWork {
+		if retryWork[i].ScopeKey == key && retryWork[i].Blocked {
+			return fmt.Errorf("released scope %s still has blocked retry_work %s", key.String(), retryWork[i].Path)
 		}
 	}
 
@@ -281,18 +258,28 @@ func (flow *engineFlow) assertDiscardedScope(ctx context.Context, watch *watchRu
 		return fmt.Errorf("listing block scopes: %w", err)
 	}
 	for i := range blocks {
-		if blocks[i].Key == key {
+		if blocks[i] != nil && blocks[i].Key == key {
 			return fmt.Errorf("discarded scope %s still persisted", key.String())
 		}
 	}
 
-	rows, err := flow.engine.baseline.ListSyncFailures(ctx)
+	observationIssues, err := flow.engine.baseline.ListObservationIssues(ctx)
 	if err != nil {
-		return fmt.Errorf("listing sync failures: %w", err)
+		return fmt.Errorf("listing observation issues: %w", err)
 	}
-	for i := range rows {
-		if rows[i].ScopeKey == key {
-			return fmt.Errorf("discarded scope %s still has failure row %s", key.String(), rows[i].Path)
+	for i := range observationIssues {
+		if observationIssues[i].ScopeKey == key {
+			return fmt.Errorf("discarded scope %s still has observation issue %s", key.String(), observationIssues[i].Path)
+		}
+	}
+
+	retryWork, err := flow.engine.baseline.ListRetryWork(ctx)
+	if err != nil {
+		return fmt.Errorf("listing retry_work rows: %w", err)
+	}
+	for i := range retryWork {
+		if retryWork[i].ScopeKey == key {
+			return fmt.Errorf("discarded scope %s still has retry_work %s", key.String(), retryWork[i].Path)
 		}
 	}
 

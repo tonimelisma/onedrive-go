@@ -787,9 +787,9 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.clearResolvedSkippedItems(ctx, localResult.Skipped)
 
 	pathSet := pathSetFromLocalRows(localResult.Rows)
-	if err := flow.engine.baseline.ClearActionableFailuresByPaths(
+	if err := flow.engine.baseline.ClearObservationIssuesByPaths(
 		ctx,
-		IssueLocalPermissionDenied,
+		IssueLocalWriteDenied,
 		pathSetKeys(pathSet),
 	); err != nil {
 		return ScanResult{}, fmt.Errorf("sync: clearing resolved local permission failures: %w", err)
@@ -799,7 +799,7 @@ func (flow *engineFlow) observeLocalChanges(
 		watch,
 		flow.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSet),
 	)
-	flow.scopeController().clearResolvedRemoteBlockedFailures(ctx, watch, pathSet)
+	flow.scopeController().clearResolvedRemoteBlockedRetryWork(ctx, watch, pathSet)
 
 	return localResult, nil
 }

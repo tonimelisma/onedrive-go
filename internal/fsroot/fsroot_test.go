@@ -271,7 +271,7 @@ func TestRoot_AtomicWrite_FailureInjection(t *testing.T) {
 			wantRemovedBase: "managed-write.tmp",
 		},
 		{
-			name: "sync failure cleans temp",
+			name: "sync error cleans temp",
 			tempFile: &fakeTempFile{
 				basename: "managed-sync.tmp",
 				syncErr:  errSyncFailed,

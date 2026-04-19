@@ -54,18 +54,18 @@ type statusDrive struct {
 
 // syncStateInfo holds the full per-drive status payload rendered by `status`.
 type syncStateInfo struct {
-	LastSyncTime          string             `json:"last_sync_time,omitempty"`
-	LastSyncDuration      string             `json:"last_sync_duration,omitempty"`
-	FileCount             int                `json:"file_count"`
-	IssueCount            int                `json:"issue_count"`
-	RemoteDrift           int                `json:"remote_drift"`
-	Retrying              int                `json:"retrying"`
-	LastError             string             `json:"last_error,omitempty"`
-	IssueGroups           []failureGroupJSON `json:"issue_groups,omitempty"`
-	ExamplesLimit         int                `json:"examples_limit"`
-	Verbose               bool               `json:"verbose"`
-	Perf                  *perf.Snapshot     `json:"perf,omitempty"`
-	PerfUnavailableReason string             `json:"perf_unavailable_reason,omitempty"`
+	LastSyncTime          string                `json:"last_sync_time,omitempty"`
+	LastSyncDuration      string                `json:"last_sync_duration,omitempty"`
+	FileCount             int                   `json:"file_count"`
+	ConditionCount        int                   `json:"condition_count"`
+	RemoteDrift           int                   `json:"remote_drift"`
+	Retrying              int                   `json:"retrying"`
+	LastError             string                `json:"last_error,omitempty"`
+	Conditions            []statusConditionJSON `json:"conditions,omitempty"`
+	ExamplesLimit         int                   `json:"examples_limit"`
+	Verbose               bool                  `json:"verbose"`
+	Perf                  *perf.Snapshot        `json:"perf,omitempty"`
+	PerfUnavailableReason string                `json:"perf_unavailable_reason,omitempty"`
 }
 
 // statusSummary aggregates health info across all drives.
@@ -74,7 +74,7 @@ type statusSummary struct {
 	Ready                 int `json:"ready"`
 	Paused                int `json:"paused"`
 	AccountsRequiringAuth int `json:"accounts_requiring_auth"`
-	TotalIssues           int `json:"total_issues"`
+	TotalConditions       int `json:"total_conditions"`
 	TotalRemoteDrift      int `json:"total_remote_drift"`
 	TotalRetrying         int `json:"total_retrying"`
 }

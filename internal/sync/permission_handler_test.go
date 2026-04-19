@@ -35,28 +35,23 @@ func newTestPermHandler(t *testing.T, checker PermissionChecker) (*PermissionHan
 func seedLocalPermissionDeniedIssue(t *testing.T, store *SyncStore, path string, scopeKey ScopeKey) {
 	t.Helper()
 
-	role := FailureRoleItem
 	if scopeKey.IsPermDir() {
-		role = FailureRoleBoundary
 		require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
 			Key:          scopeKey,
-			IssueType:    IssueLocalPermissionDenied,
+			IssueType:    IssueLocalWriteDenied,
 			TimingSource: ScopeTimingNone,
 			BlockedAt:    time.Now(),
 		}))
 	}
 
-	err := store.RecordFailure(t.Context(), &SyncFailureParams{
+	err := store.UpsertObservationIssue(t.Context(), &ObservationIssue{
 		Path:       path,
 		DriveID:    driveid.New("test-drive"),
-		Direction:  DirectionDownload,
 		ActionType: ActionDownload,
-		Role:       role,
-		IssueType:  IssueLocalPermissionDenied,
-		Category:   CategoryActionable,
-		ErrMsg:     "permission denied",
+		IssueType:  IssueLocalWriteDenied,
+		Error:      "permission denied",
 		ScopeKey:   scopeKey,
-	}, nil)
+	})
 	require.NoError(t, err)
 }
 
@@ -96,9 +91,11 @@ func TestPermHandler_HandlePermissionCheckError_NotFound(t *testing.T) {
 	)
 	assert.True(t, result.Matched)
 	assert.Equal(t, permissionCheckActivateDerivedScope, result.Kind)
-	assert.Equal(t, "failed/file.txt", result.Failure.Path)
-	assert.Equal(t, driveid.New("remote-drive-1"), result.Failure.DriveID)
-	assert.Equal(t, IssueSharedFolderBlocked, result.Failure.IssueType)
+	require.NotNil(t, result.RetryWorkFailure)
+	assert.Equal(t, "failed/file.txt", result.RetryWorkFailure.Path)
+	assert.Equal(t, IssueRemoteWriteDenied, result.RetryWorkFailure.IssueType)
+	require.NotNil(t, result.BlockScope)
+	assert.Equal(t, IssueRemoteWriteDenied, result.BlockScope.IssueType)
 	assert.Equal(t, SKPermRemote("failed"), result.ScopeKey)
 }
 
@@ -134,8 +131,8 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 
 	require.True(t, decision.Matched)
 	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
-	assert.Equal(t, IssueLocalPermissionDenied, decision.Failure.IssueType)
-	assert.Equal(t, CategoryActionable, decision.Failure.Category)
+	require.NotNil(t, decision.ObservationIssue)
+	assert.Equal(t, IssueLocalWriteDenied, decision.ObservationIssue.IssueType)
 }
 
 func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
@@ -156,8 +153,10 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 
 	require.True(t, decision.Matched)
 	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
-	assert.Equal(t, "blocked", decision.Failure.Path)
-	assert.Equal(t, IssueLocalPermissionDenied, decision.Failure.IssueType)
+	require.NotNil(t, decision.ObservationIssue)
+	assert.Equal(t, "blocked", decision.ObservationIssue.Path)
+	assert.Equal(t, IssueLocalWriteDenied, decision.ObservationIssue.IssueType)
+	require.NotNil(t, decision.BlockScope)
 	assert.Equal(t, SKPermDir("blocked"), decision.BlockScope.Key)
 }
 
@@ -179,7 +178,8 @@ func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 
 	require.True(t, decision.Matched)
 	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
-	assert.Equal(t, "accessible/file.txt", decision.Failure.Path)
+	require.NotNil(t, decision.ObservationIssue)
+	assert.Equal(t, "accessible/file.txt", decision.ObservationIssue.Path)
 }
 
 func TestPermHandler_RecheckLocalPermissions_Restored(t *testing.T) {

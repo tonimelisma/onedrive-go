@@ -10,7 +10,7 @@ import (
 
 // SkippedItem records a local filesystem entry that was rejected at
 // observation time. The scanner collects these alongside events so the
-// engine can record them as actionable failures in sync_failures.
+// engine can persist them as durable observation issues.
 type SkippedItem struct {
 	Path     string // NFC-normalized, relative to sync root
 	Reason   string // issue type constant (IssueInvalidFilename, etc.)

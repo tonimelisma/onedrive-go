@@ -8,8 +8,8 @@ import (
 
 // ActionCompletion reports the terminal outcome of one planned action. The
 // engine reads these from the completions channel, classifies them, and calls
-// depGraph.Complete. Failed items are recorded in sync_failures for retry by
-// the engine retry sweep.
+// depGraph.Complete. Failed items become retry_work or observation_issues
+// through the engine-owned persistence flow.
 type ActionCompletion struct {
 	Path              string
 	OldPath           string

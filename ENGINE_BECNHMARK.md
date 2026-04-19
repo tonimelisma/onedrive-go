@@ -106,8 +106,6 @@ and schedule one shared trial/backoff timeline.
 | `block_scopes` | sync store | shared blocker timing and lifecycle |
 | `run_status` | sync store | one-shot summary metadata for `status` |
 
-The design intentionally has no `sync_failures` table.
-
 ## `observation_issues`
 
 `observation_issues` stores durable problems where current truth itself is
@@ -318,9 +316,7 @@ shims. Old stores that do not match the target architecture should require
 
 The target architecture requires these cleanup rules:
 
-- no `sync_failures`
-- no `retry_work`
-- no `block_scopes`
+- durable sync status is owned only by `observation_issues`, `retry_work`, and `block_scopes`
 - no store-owned competing status projection model
 - no ghost vocabulary such as failure-role `item` / `held` / `boundary`
 - no tests whose purpose is only to prove old names are gone

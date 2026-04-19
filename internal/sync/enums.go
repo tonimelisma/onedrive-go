@@ -20,11 +20,6 @@ const (
 	strDownload         = "download"
 	strUpload           = "upload"
 	strDelete           = "delete"
-	strActionable       = "actionable"
-	strTransient        = "transient"
-	strFailureItem      = "item"
-	strFailureHeld      = "held"
-	strFailureBound     = "boundary"
 	strTimingNone       = "none"
 	strTimingBackoff    = "backoff"
 	strTimingRetryAfter = "server_retry_after"
@@ -48,26 +43,6 @@ const (
 	DirectionDownload Direction = strDownload
 	DirectionUpload   Direction = strUpload
 	DirectionDelete   Direction = strDelete
-)
-
-// FailureCategory classifies sync failures as transient (retryable) or
-// actionable (requires user intervention).
-type FailureCategory string
-
-const (
-	CategoryTransient  FailureCategory = strTransient
-	CategoryActionable FailureCategory = strActionable
-)
-
-// FailureRole identifies what a sync_failures row means in the engine model.
-// item = normal per-path failure, held = scope-blocked descendant, boundary =
-// actionable scope-defining row.
-type FailureRole string
-
-const (
-	FailureRoleItem     FailureRole = strFailureItem
-	FailureRoleHeld     FailureRole = strFailureHeld
-	FailureRoleBoundary FailureRole = strFailureBound
 )
 
 // ScopeTimingSource identifies how a block scope's trial timing was chosen.
@@ -268,8 +243,8 @@ func (a ActionType) String() string {
 
 // Direction returns the coarse sync direction that owns this action type for
 // persistence and display. Retry/trial rebuild logic must branch on ActionType
-// directly, but the durable failure ledger still keeps Direction for coarse
-// summaries and legacy query convenience.
+// directly, but retry_work still keeps Direction for coarse summaries and
+// query filtering.
 func (a ActionType) Direction() Direction {
 	switch a {
 	case ActionUpload:

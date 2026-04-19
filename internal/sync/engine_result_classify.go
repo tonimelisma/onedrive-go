@@ -23,8 +23,8 @@ type resultPersistenceMode int
 
 const (
 	persistNone resultPersistenceMode = iota
-	persistActionableFailure
-	persistTransientFailure
+	persistObservationIssue
+	persistRetryWork
 )
 
 type permissionFlow int
@@ -40,7 +40,7 @@ type trialHint int
 const (
 	trialHintRelease trialHint = iota
 	trialHintExtendOnMatchingScope
-	trialHintRearm
+	trialHintPreserve
 	trialHintShutdown
 	trialHintFatal
 )
@@ -98,16 +98,16 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 	case r.HTTPStatus == http.StatusUnauthorized:
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultFatal,
-			Persistence: persistActionableFailure,
+			Persistence: persistObservationIssue,
 			TrialHint:   trialHintFatal,
 			IssueType:   issueType,
 		}), true
 	case r.HTTPStatus == http.StatusForbidden:
 		return withRuntimeSummary(&ResultDecision{
 			Class:          resultSkip,
-			Persistence:    persistActionableFailure,
+			Persistence:    persistObservationIssue,
 			PermissionFlow: permissionDecisionFlow,
-			TrialHint:      trialHintRearm,
+			TrialHint:      trialHintPreserve,
 			IssueType:      issueType,
 		}), true
 	case r.HTTPStatus == http.StatusTooManyRequests:
@@ -115,7 +115,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			Class:             resultBlockScope,
 			ScopeKey:          scopeEvidence,
 			ScopeEvidence:     scopeEvidence,
-			Persistence:       persistTransientFailure,
+			Persistence:       persistRetryWork,
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
 			IssueType:         issueType,
@@ -125,7 +125,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			Class:             resultBlockScope,
 			ScopeKey:          scopeEvidence,
 			ScopeEvidence:     scopeEvidence,
-			Persistence:       persistTransientFailure,
+			Persistence:       persistRetryWork,
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
 			IssueType:         issueType,
@@ -134,7 +134,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 		return withRuntimeSummary(&ResultDecision{
 			Class:             resultRequeue,
 			ScopeEvidence:     scopeEvidence,
-			Persistence:       persistTransientFailure,
+			Persistence:       persistRetryWork,
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
 			IssueType:         issueType,
@@ -143,7 +143,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 		return withRuntimeSummary(&ResultDecision{
 			Class:             resultRequeue,
 			ScopeEvidence:     scopeEvidence,
-			Persistence:       persistTransientFailure,
+			Persistence:       persistRetryWork,
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
 			IssueType:         issueType,
@@ -151,8 +151,8 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 	default:
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
-			Persistence: persistActionableFailure,
-			TrialHint:   trialHintRearm,
+			Persistence: persistObservationIssue,
+			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
 		}), true
 	}
@@ -173,8 +173,8 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 	case errors.Is(r.Err, ErrActionPreconditionChanged):
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultRequeue,
-			Persistence: persistTransientFailure,
-			TrialHint:   trialHintRearm,
+			Persistence: persistRetryWork,
+			TrialHint:   trialHintPreserve,
 			IssueType:   "transient_conflict",
 		})
 	case errors.Is(r.Err, driveops.ErrDiskFull):
@@ -182,37 +182,37 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 			Class:         resultBlockScope,
 			ScopeKey:      SKDiskLocal(),
 			ScopeEvidence: SKDiskLocal(),
-			Persistence:   persistTransientFailure,
+			Persistence:   persistRetryWork,
 			TrialHint:     trialHintExtendOnMatchingScope,
 			IssueType:     issueType,
 		})
 	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
-			Persistence: persistActionableFailure,
-			TrialHint:   trialHintRearm,
+			Persistence: persistObservationIssue,
+			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
 		})
 	case errors.Is(r.Err, driveops.ErrFileExceedsOneDriveLimit):
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
-			Persistence: persistActionableFailure,
-			TrialHint:   trialHintRearm,
+			Persistence: persistObservationIssue,
+			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
 		})
 	case errors.Is(r.Err, os.ErrPermission):
 		return withRuntimeSummary(&ResultDecision{
 			Class:          resultSkip,
-			Persistence:    persistActionableFailure,
+			Persistence:    persistObservationIssue,
 			PermissionFlow: permissionDecisionFlow,
-			TrialHint:      trialHintRearm,
+			TrialHint:      trialHintPreserve,
 			IssueType:      issueType,
 		})
 	default:
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
-			Persistence: persistActionableFailure,
-			TrialHint:   trialHintRearm,
+			Persistence: persistObservationIssue,
+			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
 		})
 	}
@@ -248,7 +248,7 @@ func runtimeSummaryKey(class errclass.Class, issueType string) SummaryKey {
 		class == errclass.ClassBlockScopeingTransient ||
 		class == errclass.ClassActionable ||
 		class == errclass.ClassFatal {
-		return SummarySyncFailure
+		return SummaryUnexpectedCondition
 	}
 
 	return ""
@@ -339,36 +339,6 @@ func issueTypeForResult(r *ActionCompletion) string {
 	}
 	if issueType, ok := issueTypeForFilesystemResult(r); ok {
 		return issueType
-	}
-
-	return ""
-}
-
-// issueTypeForHTTPStatus preserves the older direct status/error helper used by
-// some tests and cascade paths while the classifier now carries richer
-// capability-aware ActionCompletion state.
-func issueTypeForHTTPStatus(httpStatus int, err error) string {
-	result := &ActionCompletion{
-		HTTPStatus: httpStatus,
-		Err:        err,
-	}
-	if issueType, ok := issueTypeForHTTPResult(result); ok {
-		switch issueType {
-		case IssueRemoteWriteDenied:
-			return IssuePermissionDenied
-		case IssueLocalWriteDenied:
-			return IssueLocalPermissionDenied
-		default:
-			return issueType
-		}
-	}
-	if issueType, ok := issueTypeForFilesystemResult(result); ok {
-		switch issueType {
-		case IssueLocalWriteDenied:
-			return IssueLocalPermissionDenied
-		default:
-			return issueType
-		}
 	}
 
 	return ""
@@ -502,22 +472,4 @@ func hasPermissionActionContext(r *ActionCompletion) bool {
 	}
 
 	return r.ActionID != 0 || r.Path != "" || !r.DriveID.IsZero() || !r.TargetDriveID.IsZero()
-}
-
-func (m resultPersistenceMode) failureCategory() FailureCategory {
-	switch m {
-	case persistNone:
-		return ""
-	case persistActionableFailure:
-		return CategoryActionable
-	case persistTransientFailure:
-		return CategoryTransient
-	}
-
-	return ""
-}
-
-// directionFromAction maps a ActionType to a typed Direction enum.
-func directionFromAction(at ActionType) Direction {
-	return at.Direction()
 }

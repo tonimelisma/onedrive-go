@@ -173,7 +173,7 @@ func TestE2E_Status_PerDrive_NoVisibleProblems(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
-	testFolder := fmt.Sprintf("e2e-cli-noissues-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("e2e-cli-noconditions-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create a file and sync to establish state DB.
@@ -184,7 +184,7 @@ func TestE2E_Status_PerDrive_NoVisibleProblems(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
-	assert.Empty(t, status.IssueGroups)
+	assert.Empty(t, status.Conditions)
 	assert.Empty(t, status.DeleteSafety)
 	assert.Empty(t, status.Conflicts)
 	assert.Empty(t, status.NextActions)
@@ -293,7 +293,7 @@ func TestE2E_Resolve_Both_PreservesConflictCopy(t *testing.T) {
 	require.Len(t, statusBefore.Conflicts, 1)
 	assert.Contains(t, statusBefore.Conflicts[0].Path, "both.txt")
 	assert.Equal(t, "edit_edit", statusBefore.Conflicts[0].ConflictType)
-	assert.Empty(t, statusBefore.IssueGroups, "ordinary issues should stay separate from conflicts")
+	assert.Empty(t, statusBefore.Conditions, "ordinary conditions should stay separate from conflicts")
 
 	// Verify conflict copy exists.
 	matches, err := filepath.Glob(filepath.Join(localDir, "both.conflict-*"))
@@ -911,7 +911,7 @@ func TestE2E_Mv_Folder(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// per-drive status issue lifecycle / held-delete approval
+// per-drive status condition lifecycle / blocked-delete approval
 // ---------------------------------------------------------------------------
 
 // buildDeepPath creates a directory structure under localDir whose relative
@@ -941,17 +941,17 @@ func buildDeepPath(t *testing.T, syncDir, testFolder string) (string, string) {
 }
 
 // Validates: R-2.3.3, R-2.3.11
-// TestE2E_Status_IssueLifecycle triggers a real sync failure (path too long),
+// TestE2E_Status_ConditionLifecycle triggers a real sync condition (path too long),
 // fixes the underlying local state, and validates that per-drive status follows
 // durable store truth without any manual clear/retry command.
-func TestE2E_Status_IssueLifecycle(t *testing.T) {
+func TestE2E_Status_ConditionLifecycle(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
-	testFolder := fmt.Sprintf("e2e-issues-readonly-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("e2e-conditions-readonly-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create a file whose total relative path exceeds 400 chars.
@@ -961,9 +961,9 @@ func TestE2E_Status_IssueLifecycle(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
-	require.Len(t, status.IssueGroups, 1)
-	assert.Equal(t, "PATH TOO LONG", status.IssueGroups[0].Title)
-	assert.Contains(t, strings.Join(status.IssueGroups[0].Paths, "\n"), testFolder)
+	require.Len(t, status.Conditions, 1)
+	assert.Equal(t, "PATH TOO LONG", status.Conditions[0].Title)
+	assert.Contains(t, strings.Join(status.Conditions[0].Paths, "\n"), testFolder)
 
 	// Fix the underlying problem by removing the long path and creating
 	// a valid replacement that can sync normally.
@@ -974,15 +974,15 @@ func TestE2E_Status_IssueLifecycle(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	status = readStatusSyncState(t, cfgPath, env)
-	assert.Empty(t, status.IssueGroups, "status should be clean after the next sync")
+	assert.Empty(t, status.Conditions, "status should be clean after the next sync")
 
 	listing, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder)
-	assert.Contains(t, listing, "fixed.txt", "replacement file should sync after the issue clears")
+	assert.Contains(t, listing, "fixed.txt", "replacement file should sync after the condition clears")
 }
 
 // Validates: R-2.3.3, R-2.3.6, R-2.3.12, R-6.2.5, R-6.4.2
-// TestE2E_Resolve_DeletesWithWatchDaemon validates the watch-mode held-delete
-// lifecycle: hold deletes, surface them via status, approve with
+// TestE2E_Resolve_DeletesWithWatchDaemon validates the watch-mode blocked-delete
+// lifecycle: block deletes, surface them via status, approve with
 // `resolve deletes`, and let watch mode resume delete propagation.
 func TestE2E_Resolve_DeletesWithWatchDaemon(t *testing.T) {
 	registerLogDump(t)
@@ -991,7 +991,7 @@ func TestE2E_Resolve_DeletesWithWatchDaemon(t *testing.T) {
 	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "delete_safety_threshold = 10\n")
 	opsCfgPath := writeMinimalConfig(t)
 
-	testFolder := fmt.Sprintf("e2e-issues-approve-deletes-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("e2e-conditions-approve-deletes-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	localDir := filepath.Join(syncDir, testFolder)
@@ -1039,20 +1039,20 @@ func TestE2E_Resolve_DeletesWithWatchDaemon(t *testing.T) {
 	require.Eventually(t, func() bool {
 		status := readStatusSyncState(t, cfgPath, env, "--verbose")
 		return len(status.DeleteSafety) == fileCount
-	}, 90*time.Second, time.Second, "status should show held deletes while watch protection is active")
+	}, 90*time.Second, time.Second, "status should show blocked deletes while watch protection is active")
 
 	statusBeforeApproval := readStatusSyncState(t, cfgPath, env, "--verbose")
 	require.Len(t, statusBeforeApproval.DeleteSafety, fileCount)
 
 	remoteBeforeApproval, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
-	assert.Contains(t, remoteBeforeApproval, "file-01.txt", "remote deletes should stay held before approval")
+	assert.Contains(t, remoteBeforeApproval, "file-01.txt", "remote deletes should stay blocked before approval")
 
 	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "resolve", "deletes")
-	assert.Contains(t, approvalOutput, "Approved held deletes for this drive.")
+	assert.Contains(t, approvalOutput, "Approved blocked deletes for this drive.")
 
 	require.Eventually(t, func() bool {
 		return len(readStatusSyncState(t, cfgPath, env).DeleteSafety) == 0
-	}, 90*time.Second, time.Second, "status should clear delete safety rows once held deletes are approved and processed")
+	}, 90*time.Second, time.Second, "status should clear delete safety rows once blocked deletes are approved and processed")
 
 	require.Eventually(t, func() bool {
 		remoteListing, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
@@ -1061,7 +1061,7 @@ func TestE2E_Resolve_DeletesWithWatchDaemon(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return getControlSocketStatus(t, env).OwnerMode == synccontrol.OwnerModeWatch
-	}, 90*time.Second, time.Second, "watch daemon should consume approved held-delete rows")
+	}, 90*time.Second, time.Second, "watch daemon should consume approved blocked-delete rows")
 
 	statusAfterApproval := getControlSocketStatus(t, env)
 	assert.Equal(t, synccontrol.OwnerModeWatch, statusAfterApproval.OwnerMode)

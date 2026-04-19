@@ -30,7 +30,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | --- | --- |
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes requeue for replan instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition` |
-| Publication-only planner actions commit baseline mutations without worker dispatch and still release dependents through the normal engine result path. | `TestEngine_DispatchCurrentPlan_PublicationOnlySyncedUpdateCommitsWithoutOutbox`, `TestEngine_DispatchCurrentPlan_PublicationOnlyCleanupCommitsWithoutOutbox`, `TestEngine_DispatchCurrentPlan_PublicationOnlyActionReleasesDependentOutbox`, `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup` |
+| Publication-only planner actions commit baseline mutations without worker dispatch and still release dependents through the normal engine result path. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType` |
 
 ## Worker And Dependency Model
 
@@ -142,7 +142,7 @@ those helpers before dispatch and after action completions.
 
 Execution no longer includes:
 
-- delete counters or held-delete approval workflows
+- delete counters or blocked-delete approval workflows
 - durable conflict request application
 - baseline-only publication work for converged rows or fully removed rows
 - embedded shared-folder runtime machinery inside another drive

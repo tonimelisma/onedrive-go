@@ -18,16 +18,17 @@ const (
 )
 
 // PermissionCheckDecision is the policy-layer output for a single permission
-// check performed during worker-result handling. Matched=false means the engine
-// should fall back to generic failure recording.
+// check performed during worker-result handling. Matched=false means the
+// engine should fall back to generic result persistence.
 type PermissionCheckDecision struct {
-	Matched      bool
-	Kind         PermissionCheckDecisionKind
-	Failure      SyncFailureParams
-	ScopeKey     ScopeKey
-	BlockScope   BlockScope
-	BoundaryPath string
-	TriggerPath  string
+	Matched          bool
+	Kind             PermissionCheckDecisionKind
+	ObservationIssue *ObservationIssue
+	RetryWorkFailure *RetryWorkFailure
+	ScopeKey         ScopeKey
+	BlockScope       *BlockScope
+	BoundaryPath     string
+	TriggerPath      string
 }
 
 type PermissionRecheckDecisionKind int
@@ -39,7 +40,7 @@ const (
 
 // PermissionRecheckDecision is the policy-layer output for startup/per-pass
 // permission maintenance. The engine applies these decisions through its owned
-// failure and scope lifecycle methods.
+// block-scope lifecycle methods.
 type PermissionRecheckDecision struct {
 	Kind     PermissionRecheckDecisionKind
 	Path     string
@@ -73,23 +74,18 @@ func (controller *scopeController) applyPermissionCheckMutation(
 	switch decision.Kind {
 	case permissionCheckNone:
 		return
-	case permissionCheckRecordFileFailure:
-		controller.recordExplicitFailure(ctx, &decision.Failure)
-	case permissionCheckActivateBoundaryScope:
-		controller.recordExplicitFailure(ctx, &decision.Failure)
-		if err := controller.activateScope(ctx, watch, &decision.BlockScope); err != nil {
-			flow.engine.logger.Warn("failed to activate permission scope",
-				slog.String("scope_key", decision.BlockScope.Key.String()),
-				slog.String("error", err.Error()),
-			)
-		}
-	case permissionCheckActivateDerivedScope:
-		controller.recordExplicitFailure(ctx, &decision.Failure)
-		if watch != nil {
-			watch.upsertActiveScope(&BlockScope{
-				Key:       decision.ScopeKey,
-				IssueType: decision.ScopeKey.IssueType(),
-			})
+	case permissionCheckRecordFileFailure,
+		permissionCheckActivateBoundaryScope,
+		permissionCheckActivateDerivedScope:
+		controller.recordObservationIssue(ctx, decision.ObservationIssue)
+		controller.recordRetryWorkFailure(ctx, decision.RetryWorkFailure)
+		if decision.BlockScope != nil {
+			if err := controller.activateScope(ctx, watch, decision.BlockScope); err != nil {
+				flow.engine.logger.Warn("failed to activate permission scope",
+					slog.String("scope_key", decision.BlockScope.Key.String()),
+					slog.String("error", err.Error()),
+				)
+			}
 		}
 	default:
 		panic(fmt.Sprintf("unknown permission check decision kind %d", decision.Kind))
@@ -100,11 +96,7 @@ func (controller *scopeController) logPermissionCheckDecision(
 	flowKind permissionFlow,
 	decision *PermissionCheckDecision,
 ) {
-	summaryKey := SummaryKeyForPersistedFailure(
-		decision.Failure.IssueType,
-		decision.Failure.Category,
-		decision.Failure.Role,
-	)
+	summaryKey := permissionDecisionSummaryKey(decision)
 
 	switch flowKind {
 	case permissionFlowNone:
@@ -113,11 +105,16 @@ func (controller *scopeController) logPermissionCheckDecision(
 		controller.logRemotePermissionDecision(decision, summaryKey)
 	case permissionFlowLocalPermission:
 		if decision.Kind == permissionCheckActivateBoundaryScope {
+			scopeKey := decision.ScopeKey
+			if scopeKey.IsZero() && decision.BlockScope != nil {
+				scopeKey = decision.BlockScope.Key
+			}
+
 			fields := append(controller.flow.summaryLogFields(
 				errclass.ClassActionable,
 				summaryKey,
 				decision.TriggerPath,
-				decision.BlockScope.Key,
+				scopeKey,
 			),
 				slog.String("boundary", decision.BoundaryPath),
 				slog.String("trigger_path", decision.TriggerPath),
@@ -129,6 +126,36 @@ func (controller *scopeController) logPermissionCheckDecision(
 	}
 }
 
+func permissionDecisionSummaryKey(decision *PermissionCheckDecision) SummaryKey {
+	if decision == nil {
+		return ""
+	}
+
+	if decision.ObservationIssue != nil {
+		return SummaryKeyForObservationIssue(
+			decision.ObservationIssue.IssueType,
+			decision.ObservationIssue.ScopeKey,
+		)
+	}
+
+	if decision.BlockScope != nil {
+		return SummaryKeyForBlockScope(decision.BlockScope.IssueType, decision.BlockScope.Key)
+	}
+
+	if decision.RetryWorkFailure != nil {
+		return SummaryKeyForRetryWork(
+			decision.RetryWorkFailure.IssueType,
+			decision.RetryWorkFailure.ScopeKey,
+		)
+	}
+
+	if !decision.ScopeKey.IsZero() {
+		return SummaryKeyForBlockScope("", decision.ScopeKey)
+	}
+
+	return ""
+}
+
 func (controller *scopeController) logRemotePermissionDecision(
 	decision *PermissionCheckDecision,
 	summaryKey SummaryKey,
@@ -138,7 +165,7 @@ func (controller *scopeController) logRemotePermissionDecision(
 	}
 
 	scopeKey := decision.ScopeKey
-	if scopeKey.IsZero() {
+	if scopeKey.IsZero() && decision.BlockScope != nil {
 		scopeKey = decision.BlockScope.Key
 	}
 	fields := append(controller.flow.summaryLogFields(
@@ -184,28 +211,62 @@ func (controller *scopeController) applyPermissionRecheckDecisions(
 	}
 }
 
-func (controller *scopeController) recordExplicitFailure(ctx context.Context, params *SyncFailureParams) {
-	flow := controller.flow
-	summaryKey := SummaryKeyForPersistedFailure(params.IssueType, params.Category, params.Role)
+func (controller *scopeController) recordObservationIssue(ctx context.Context, issue *ObservationIssue) {
+	if issue == nil {
+		return
+	}
 
-	if err := flow.engine.baseline.RecordFailure(ctx, params, nil); err != nil {
+	flow := controller.flow
+	summaryKey := SummaryKeyForObservationIssue(issue.IssueType, issue.ScopeKey)
+
+	if err := flow.engine.baseline.UpsertObservationIssue(ctx, issue); err != nil {
 		fields := append(flow.summaryLogFields(
 			errclass.ClassActionable,
 			summaryKey,
-			params.Path,
-			params.ScopeKey,
+			issue.Path,
+			issue.ScopeKey,
 		), slog.String("error", err.Error()))
-		flow.engine.logger.Warn("failed to record permission failure", fields...)
+		flow.engine.logger.Warn("failed to record observation issue", fields...)
 		return
 	}
 
 	fields := append(flow.summaryLogFields(
 		errclass.ClassActionable,
 		summaryKey,
-		params.Path,
-		params.ScopeKey,
+		issue.Path,
+		issue.ScopeKey,
 	),
-		slog.String("issue_type", params.IssueType),
+		slog.String("issue_type", issue.IssueType),
 	)
-	flow.engine.logger.Debug("permission failure recorded", fields...)
+	flow.engine.logger.Debug("observation issue recorded", fields...)
+}
+
+func (controller *scopeController) recordRetryWorkFailure(ctx context.Context, failure *RetryWorkFailure) {
+	if failure == nil {
+		return
+	}
+
+	flow := controller.flow
+	summaryKey := SummaryKeyForRetryWork(failure.IssueType, failure.ScopeKey)
+
+	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, failure, nil); err != nil {
+		fields := append(flow.summaryLogFields(
+			errclass.ClassBlockScopeingTransient,
+			summaryKey,
+			failure.Path,
+			failure.ScopeKey,
+		), slog.String("error", err.Error()))
+		flow.engine.logger.Warn("failed to record retry_work permission blocker", fields...)
+		return
+	}
+
+	fields := append(flow.summaryLogFields(
+		errclass.ClassBlockScopeingTransient,
+		summaryKey,
+		failure.Path,
+		failure.ScopeKey,
+	),
+		slog.String("issue_type", failure.IssueType),
+	)
+	flow.engine.logger.Debug("retry_work blocker recorded", fields...)
 }

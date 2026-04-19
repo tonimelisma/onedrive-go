@@ -99,7 +99,7 @@ type watchTimerState struct {
 	trialTimer syncTimer
 	trialCh    chan struct{}
 
-	// Retry timer — watch loop retrier sweeps sync_failures on each tick.
+	// Retry timer — watch loop retrier sweeps retry_work on each tick.
 	retryTimer   syncTimer
 	retryTimerCh chan struct{} // persistent, buffered(1)
 
@@ -108,7 +108,7 @@ type watchTimerState struct {
 }
 
 type watchReconcileState struct {
-	// Deduplication: caches the last visible-issue summary signature and
+	// Deduplication: caches the last visible-condition summary signature and
 	// per-scope shared-folder child-set signatures for watch summaries.
 	lastSummaryTotal     int
 	lastSummarySignature string

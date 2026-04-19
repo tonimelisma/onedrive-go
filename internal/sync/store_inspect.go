@@ -50,16 +50,16 @@ type DriveStatusSnapshot struct {
 	BaselineEntryCount int
 	RemoteDriftItems   int
 	RetryingItems      int
-	IssueGroups        []IssueGroupSnapshot
+	Conditions         []ConditionSnapshot
 }
 
-type groupedIssueProjection struct {
-	Groups []IssueGroupSnapshot
+type groupedConditionProjection struct {
+	Conditions []ConditionSnapshot
 }
 
-// IssueGroupSnapshot is one visible grouped issue family in the read-only
+// ConditionSnapshot is one visible grouped condition family in the read-only
 // sync-health projection.
-type IssueGroupSnapshot struct {
+type ConditionSnapshot struct {
 	SummaryKey       SummaryKey
 	PrimaryIssueType string
 	ScopeKey         ScopeKey
@@ -190,118 +190,98 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context, history bo
 	}
 	snapshot.RetryingItems, err = i.readCount(
 		ctx,
-		"SELECT COUNT(*) FROM sync_failures WHERE category = 'transient' AND failure_count >= 3",
+		"SELECT COUNT(*) FROM retry_work WHERE blocked = 0 AND attempt_count >= 3",
 	)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status retrying count: %w", err)
 	}
 
-	projection, err := i.readGroupedIssueProjection(ctx)
+	projection, err := i.readGroupedConditionProjection(ctx)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status projection: %w", err)
 	}
-	snapshot.IssueGroups = projection.Groups
+	snapshot.Conditions = projection.Conditions
 	_ = history
 
 	return snapshot, nil
 }
 
-func (i *storeInspector) readGroupedIssueProjection(ctx context.Context) (groupedIssueProjection, error) {
-	actionableFailures, err := i.listActionableFailures(ctx)
+func (i *storeInspector) readGroupedConditionProjection(ctx context.Context) (groupedConditionProjection, error) {
+	projection, err := loadVisibleConditionProjection(ctx, i.db, i.logger)
 	if err != nil {
-		return groupedIssueProjection{}, fmt.Errorf("list actionable failures: %w", err)
+		return groupedConditionProjection{}, err
 	}
 
-	remoteBlocked, err := i.listRemoteBlockedFailures(ctx)
-	if err != nil {
-		return groupedIssueProjection{}, fmt.Errorf("list remote blocked failures: %w", err)
-	}
-
-	return buildGroupedIssueProjection(
-		actionableFailures,
-		remoteBlocked,
-	), nil
+	return buildGroupedConditionProjection(projection.groups), nil
 }
 
-func buildGroupedIssueProjection(
-	actionableFailures []SyncFailureRow,
-	remoteBlocked []SyncFailureRow,
-) groupedIssueProjection {
-	builder := newGroupedIssueProjectionBuilder()
-	builder.addActionableFailures(actionableFailures)
-	builder.addRemoteBlocked(remoteBlocked)
+func buildGroupedConditionProjection(groups []VisibleConditionGroup) groupedConditionProjection {
+	builder := newGroupedConditionProjectionBuilder()
+	builder.addVisibleGroups(groups)
 	return builder.projection()
 }
 
-type issueGroupKey struct {
+type conditionGroupKey struct {
 	summaryKey SummaryKey
 	scopeKey   string
 }
 
-type groupedIssueProjectionBuilder struct {
-	groupIndex map[issueGroupKey]int
-	snapshot   groupedIssueProjection
+type groupedConditionProjectionBuilder struct {
+	groupIndex map[conditionGroupKey]int
+	snapshot   groupedConditionProjection
 }
 
-func newGroupedIssueProjectionBuilder() *groupedIssueProjectionBuilder {
-	return &groupedIssueProjectionBuilder{
-		groupIndex: make(map[issueGroupKey]int),
-		snapshot: groupedIssueProjection{
-			Groups: make([]IssueGroupSnapshot, 0),
+func newGroupedConditionProjectionBuilder() *groupedConditionProjectionBuilder {
+	return &groupedConditionProjectionBuilder{
+		groupIndex: make(map[conditionGroupKey]int),
+		snapshot: groupedConditionProjection{
+			Conditions: make([]ConditionSnapshot, 0),
 		},
 	}
 }
 
-func (b *groupedIssueProjectionBuilder) addGroupedPath(
+func (b *groupedConditionProjectionBuilder) addGroupedPath(
 	summaryKey SummaryKey,
 	issueType string,
 	scopeKey ScopeKey,
-	path string,
+	paths []string,
+	count int,
 ) {
-	if summaryKey == "" {
+	if summaryKey == "" || count <= 0 {
 		return
 	}
 
-	key := issueGroupKey{summaryKey: summaryKey, scopeKey: scopeKey.String()}
+	key := conditionGroupKey{summaryKey: summaryKey, scopeKey: scopeKey.String()}
 	if idx, ok := b.groupIndex[key]; ok {
-		b.snapshot.Groups[idx].Paths = append(b.snapshot.Groups[idx].Paths, path)
-		b.snapshot.Groups[idx].Count++
+		b.snapshot.Conditions[idx].Paths = append(b.snapshot.Conditions[idx].Paths, paths...)
+		b.snapshot.Conditions[idx].Count += count
 		return
 	}
 
-	b.groupIndex[key] = len(b.snapshot.Groups)
-	b.snapshot.Groups = append(b.snapshot.Groups, IssueGroupSnapshot{
+	b.groupIndex[key] = len(b.snapshot.Conditions)
+	b.snapshot.Conditions = append(b.snapshot.Conditions, ConditionSnapshot{
 		SummaryKey:       summaryKey,
 		PrimaryIssueType: issueType,
 		ScopeKey:         scopeKey,
 		ScopeLabel:       scopeKey.Humanize(),
-		Paths:            []string{path},
-		Count:            1,
+		Paths:            append([]string(nil), paths...),
+		Count:            count,
 	})
 }
 
-func (b *groupedIssueProjectionBuilder) addActionableFailures(rows []SyncFailureRow) {
+func (b *groupedConditionProjectionBuilder) addVisibleGroups(rows []VisibleConditionGroup) {
 	for i := range rows {
 		row := rows[i]
-		summaryKey := SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
-		b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path)
+		b.addGroupedPath(row.SummaryKey, row.IssueType, row.ScopeKey, row.Paths, row.Count)
 	}
 }
 
-func (b *groupedIssueProjectionBuilder) addRemoteBlocked(rows []SyncFailureRow) {
-	for i := range rows {
-		row := rows[i]
-		summaryKey := SummaryKeyForPersistedFailure(row.IssueType, row.Category, row.Role)
-		b.addGroupedPath(summaryKey, row.IssueType, row.ScopeKey, row.Path)
-	}
-}
-
-func (b *groupedIssueProjectionBuilder) projection() groupedIssueProjection {
-	sortIssueGroups(b.snapshot.Groups)
+func (b *groupedConditionProjectionBuilder) projection() groupedConditionProjection {
+	sortConditions(b.snapshot.Conditions)
 	return b.snapshot
 }
 
-func sortIssueGroups(groups []IssueGroupSnapshot) {
+func sortConditions(groups []ConditionSnapshot) {
 	sort.Slice(groups, func(i, j int) bool {
 		if groups[i].Count != groups[j].Count {
 			return groups[i].Count > groups[j].Count
@@ -315,48 +295,8 @@ func sortIssueGroups(groups []IssueGroupSnapshot) {
 
 	for i := range groups {
 		sort.Strings(groups[i].Paths)
+		groups[i].Paths = uniqueSortedStrings(groups[i].Paths)
 	}
-}
-
-func (i *storeInspector) listActionableFailures(ctx context.Context) ([]SyncFailureRow, error) {
-	configuredDriveID, err := configuredDriveIDForDB(ctx, i.db)
-	if err != nil {
-		return nil, err
-	}
-
-	rows, err := i.db.QueryContext(ctx,
-		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
-		WHERE category = 'actionable'
-		ORDER BY last_seen_at DESC`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query actionable failures: %w", err)
-	}
-	defer rows.Close()
-
-	return scanSyncFailureRows(rows, configuredDriveID)
-}
-
-func (i *storeInspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncFailureRow, error) {
-	configuredDriveID, err := configuredDriveIDForDB(ctx, i.db)
-	if err != nil {
-		return nil, err
-	}
-
-	rows, err := i.db.QueryContext(ctx,
-		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
-		WHERE failure_role = ?
-			AND scope_key LIKE ?
-		ORDER BY last_seen_at DESC`,
-		FailureRoleHeld,
-		permRemoteScopeKeyLikePattern(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query remote blocked failures: %w", err)
-	}
-	defer rows.Close()
-
-	return scanSyncFailureRows(rows, configuredDriveID)
 }
 
 func (i *storeInspector) readCount(ctx context.Context, query string) (int, error) {

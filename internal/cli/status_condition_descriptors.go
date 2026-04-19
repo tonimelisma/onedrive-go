@@ -39,17 +39,17 @@ func describeStatusSummary(key syncengine.SummaryKey) statusSummaryDescriptor {
 		syncengine.SummaryHashError,
 		syncengine.SummaryFileTooLargeForSpace:
 		return describeLocalRuntimeStatusSummary(string(key))
-	case syncengine.SummarySyncFailure:
+	case syncengine.SummaryUnexpectedCondition:
 		return newStatusSummaryDescriptor(
-			"SYNC FAILURE",
-			"An unexpected sync error occurred.",
-			"Check logs for details or retry.",
+			"SYNC CONDITION",
+			"An unexpected sync condition needs attention.",
+			"Check logs for details or rerun status after the next sync pass.",
 		)
 	default:
 		return newStatusSummaryDescriptor(
-			"SYNC FAILURE",
-			"An unexpected sync error occurred.",
-			"Check logs for details or retry.",
+			"SYNC CONDITION",
+			"An unexpected sync condition needs attention.",
+			"Check logs for details or rerun status after the next sync pass.",
 		)
 	}
 }
@@ -96,9 +96,9 @@ func describeRemoteStatusSummary(key string) statusSummaryDescriptor {
 		)
 	default:
 		return newStatusSummaryDescriptor(
-			"SYNC FAILURE",
-			"An unexpected sync error occurred.",
-			"Check logs for details or retry.",
+			"SYNC CONDITION",
+			"An unexpected sync condition needs attention.",
+			"Check logs for details or rerun status after the next sync pass.",
 		)
 	}
 }
@@ -179,7 +179,7 @@ func describeLocalRuntimeStatusSummary(key string) statusSummaryDescriptor {
 	}
 }
 
-func sortStatusFailureGroups(groups []failureGroupJSON) {
+func sortStatusConditions(groups []statusConditionJSON) {
 	sort.Slice(groups, func(i, j int) bool {
 		if groups[i].Count != groups[j].Count {
 			return groups[i].Count > groups[j].Count

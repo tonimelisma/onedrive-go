@@ -76,7 +76,7 @@ func (f *engineFlow) recordError(decision *ResultDecision, r *ActionCompletion) 
 		f.syncErrors = append(f.syncErrors, r.Err)
 	}
 
-	if decision == nil || decision.Persistence != persistTransientFailure {
+	if decision == nil || decision.Persistence != persistRetryWork {
 		return
 	}
 
@@ -148,13 +148,13 @@ func (f *engineFlow) logFailureSummary() {
 	for _, key := range keys {
 		g := groups[key]
 		if g.count > aggregateThreshold {
-			f.engine.logger.Warn("sync failures (aggregated)",
+			f.engine.logger.Warn("sync retry work (aggregated)",
 				slog.String("issue_type", key),
 				slog.Int("count", g.count),
 				slog.Any("sample_paths", g.paths),
 			)
 			for _, item := range g.items {
-				f.engine.logger.Debug("sync failure",
+				f.engine.logger.Debug("sync retry work",
 					slog.String("issue_type", key),
 					slog.String("path", item.path),
 					slog.String("error", item.errMsg),
@@ -162,7 +162,7 @@ func (f *engineFlow) logFailureSummary() {
 			}
 		} else {
 			for _, item := range g.items {
-				f.engine.logger.Warn("sync failure",
+				f.engine.logger.Warn("sync retry work",
 					slog.String("issue_type", key),
 					slog.String("path", item.path),
 					slog.String("error", item.errMsg),

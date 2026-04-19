@@ -165,6 +165,65 @@ func TestCommitObservation_MoveUpdatesPreviousPath(t *testing.T) {
 	assert.Equal(t, "old.txt", row.PreviousPath)
 }
 
+// Validates: R-2.2
+func TestCommitObservation_UnchangedItemDoesNotRewriteStateOrCursor(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := context.Background()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item1",
+		ParentID: "root",
+		Path:     "same.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash1",
+		Size:     100,
+		Mtime:    1000000,
+		ETag:     "etag1",
+	}}, "delta-token-1", driveID))
+
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item1",
+		ParentID: "root",
+		Path:     "same.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash1",
+		Size:     100,
+		Mtime:    1000000,
+		ETag:     "etag1",
+	}}, "", driveID))
+
+	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
+	require.NotNil(t, row)
+	assert.Equal(t, "same.txt", row.Path)
+	assert.Empty(t, row.PreviousPath)
+	assert.Equal(t, "delta-token-1", readObservationCursor(t, mgr.rawDB(), testDriveID))
+}
+
+// Validates: R-2.2
+func TestCommitObservation_DeleteMissingItemOnlyAdvancesCursor(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := context.Background()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+		DriveID:   driveID,
+		ItemID:    "missing-item",
+		Path:      "gone.txt",
+		ItemType:  ItemTypeFile,
+		IsDeleted: true,
+	}}, "delta-token-delete", driveID))
+
+	assert.Nil(t, readRemoteStateRow(t, mgr.rawDB(), "missing-item"))
+	assert.Equal(t, "delta-token-delete", readObservationCursor(t, mgr.rawDB(), testDriveID))
+}
+
 // Validates: R-2.11
 func TestCommitObservation_IgnoresSymmetricJunkRows(t *testing.T) {
 	t.Parallel()

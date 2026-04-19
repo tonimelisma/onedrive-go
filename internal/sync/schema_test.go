@@ -21,14 +21,14 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{
 		"baseline",
-		"local_state",
-		"observation_state",
-		"retry_work",
-		"remote_state",
-		"run_status",
 		"block_scopes",
+		"local_state",
+		"observation_issues",
+		"observation_state",
+		"remote_state",
+		"retry_work",
+		"run_status",
 		"store_metadata",
-		"sync_failures",
 	}, tables)
 
 	state, err := store.ReadObservationState(ctx)

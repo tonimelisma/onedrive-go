@@ -36,7 +36,7 @@ type WorkerPool struct {
 
 	// completions reports per-action outcomes back to the engine. The engine
 	// reads from this channel, classifies completions, and calls depGraph.Complete.
-	// Failed items are recorded in sync_failures for retry.
+	// Failed items are persisted through the engine-owned retry/observation authorities.
 	completions chan ActionCompletion
 
 	cancel    context.CancelFunc
@@ -247,7 +247,7 @@ func (wp *WorkerPool) dispatchAction(
 
 // Completions returns a read-only channel of per-action completions. The
 // engine reads from this channel, classifies each completion, and calls
-// depGraph.Complete. Failed items go to sync_failures for the engine retry sweep.
+// depGraph.Complete. Failed items become retry_work or observation_issues for the engine sweeps.
 func (wp *WorkerPool) Completions() <-chan ActionCompletion {
 	return wp.completions
 }

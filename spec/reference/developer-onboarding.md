@@ -303,7 +303,7 @@ able to scan this table and place every top-level code area.
 | Package | Owns | Read when |
 | --- | --- | --- |
 | `internal/authstate` | Shared auth-health vocabulary and user-facing auth copy | You are working on auth status, `status`, or unauthorized sync presentation |
-| `internal/cli` | Cobra command tree, CLI bootstrap, output formatting, command-family workflows, and final user-facing issue rendering | You are changing any user-facing command or command wiring |
+| `internal/cli` | Cobra command tree, CLI bootstrap, output formatting, command-family workflows, and final user-facing condition rendering | You are changing any user-facing command or command wiring |
 
 | `internal/config` | TOML config loading, validation, path resolution, drive sections, and account reconciliation helpers | You are changing config semantics or lookup rules |
 | `internal/devtool` | Repo-owned verifier, benchmarks, worktree tooling, and cleanup audit | You are changing developer workflow or repo consistency policy |
@@ -319,7 +319,7 @@ able to scan this table and place every top-level code area.
 | `internal/perf` | Production-visible perf sessions, counters, live snapshots, and capture bundles | You are changing performance instrumentation or capture behavior |
 | `internal/retry` | Retry policies and stateful backoff | You are changing retry semantics |
 | `internal/sharedref` | Shared item selector parsing/formatting | You are working on shared links or shared item targeting |
-| `internal/sync` | Single-drive sync engine, observation, planning, execution, store, and raw issue/status facts | You are changing sync behavior |
+| `internal/sync` | Single-drive sync engine, observation, planning, execution, store, and raw status facts | You are changing sync behavior |
 | `internal/synccontrol` | JSON-over-HTTP Unix-socket protocol shared by CLI and multisync owner | You are changing daemon/control-socket communication |
 | `internal/synctest` | Shared sync-package test helpers | You are writing sync-adjacent tests |
 | `internal/synctree` | Rooted filesystem capability for sync-runtime operations under one sync root | You are changing sync-local filesystem interaction |
@@ -364,7 +364,7 @@ organized by file families.
 | `get.go`, `get_shared.go`, `put.go`, `put_shared.go`, `ls.go`, `rm.go`, `mkdir.go`, `mv.go`, `cp.go`, `stat.go`, `purge.go` | User-facing file commands including shared-item get/put |
 | `shared.go`, `shared_discovery.go`, `shared_target.go` | Shared item discovery, selection, and shared-target bootstrap |
 | `sync.go`, `sync_flow.go`, `sync_runtime.go`, `sync_render.go`, `sync_cli_format.go`, `sync_debug_events.go`, `sync_pause_resume.go`, `control_client.go` | Sync command wiring, daemon/control-socket interaction, and sync lifecycle |
-| `status.go`, `status_snapshot.go`, `status_sync_state.go`, `status_issue_descriptors.go`, `status_render.go`, `status_render_sections.go`, `status_perf.go` | Read-only status snapshot assembly and final issue rendering |
+| `status.go`, `status_snapshot.go`, `status_sync_state.go`, `status_condition_descriptors.go`, `status_render.go`, `status_render_sections.go`, `status_perf.go` | Read-only status snapshot assembly and final condition rendering |
 | `recycle_bin.go`, `recycle_bin_flow.go`, `perf.go`, `pause.go`, `resume.go` | Recycle-bin, perf, and pause/resume surfaces |
 | `degraded_discovery.go` | CLI-owned degraded discovery behavior and presentation |
 
@@ -432,9 +432,9 @@ when you treat it as several file families sharing one single-drive owner.
 | `permissions.go`, `permission_capability.go`, `permission_decisions.go`, `permission_handler.go` | Capability-based permission boundaries and denied-path policy |
 | `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, block scopeing, and scope key canonicalization |
 | `debug_event_sink.go` | Debug event recording for test and diagnostic observability |
-| `store*.go`, `store_inspect.go`, `issue_summary.go`, `scope_key_wire.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, inspection, grouped issue summaries, persisted scope-key helpers, run-status/scope admin helpers, and explicit reset support |
+| `store*.go`, `store_inspect.go`, `condition_summary.go`, `scope_key.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, inspection, grouped condition summaries, persisted scope-key helpers, run-status/scope admin helpers, and explicit reset support |
 | `store_read_*.go`, `store_write_*.go` | Store I/O: read projections (failures, remote state, snapshots) and write operations (baseline, failures, observation, block scopes) |
-| `summary_keys.go`, `visible_issues.go`, `issue_types.go` | Shared issue classification, summary keys, and raw read-only issue facts consumed by the CLI |
+| `summary_keys.go`, `visible_conditions.go`, `issue_types.go` | Shared condition classification, summary keys, and raw read-only status facts consumed by the CLI |
 | `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |
 | `inotify_*`, `symlink_observation.go`, `engine_shared_root.go` | Platform or feature-specific observation/runtime helpers |
 
@@ -472,7 +472,7 @@ A new developer should know where truth lives before changing any behavior.
 | Remote truth | Microsoft Graph / OneDrive | Observed through `internal/graph` |
 | Graph HTTP policy | `internal/graphtransport` | Shared runtime transport policy, not user config |
 | Graph session/runtime reuse | `internal/driveops.SessionRuntime` | Command-scoped bootstrap, interactive, and sync client reuse |
-| Status title/reason/action rendering | `internal/cli/status_issue_descriptors.go` | Final human-facing status copy belongs to the CLI |
+| Status title/reason/action rendering | `internal/cli/status_condition_descriptors.go` | Final human-facing status copy belongs to the CLI |
 | Read-only sync status snapshot | `internal/sync` store inspection helpers | Raw durable status facts stay in sync-owned read paths |
 | Per-drive sync state | `internal/sync` SQLite DB | One DB per drive |
 | Remote observation mirror | `remote_state` table | Latest observed remote truth |

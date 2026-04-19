@@ -87,7 +87,7 @@ func (o *LocalObserver) resolveCheckWorkers() int {
 // FullScan walks the sync root directory and returns a ScanResult containing
 // change events for all local changes (creates, modifies, deletes) relative
 // to the baseline, plus any skipped items that should be recorded as
-// actionable failures.
+// observation issues.
 //
 // Three-phase design:
 //  1. Walk (sequential): collect observed map, emit folder creates, classify

@@ -1,10 +1,10 @@
 package cli
 
-// defaultVisiblePaths caps sampled per-drive status rows and issue-group paths
+// defaultVisiblePaths caps sampled per-drive status rows and condition paths
 // when --verbose is not set.
 const defaultVisiblePaths = 5
 
-type failureGroupJSON struct {
+type statusConditionJSON struct {
 	SummaryKey string   `json:"summary_key,omitempty"`
 	IssueType  string   `json:"issue_type"`
 	Title      string   `json:"title"`

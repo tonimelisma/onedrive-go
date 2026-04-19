@@ -10,16 +10,16 @@ func printDriveSyncSections(w io.Writer, ss *syncStateInfo, history bool) error 
 	if err := writeln(w); err != nil {
 		return err
 	}
-	if err := writeln(w, "    ISSUES"); err != nil {
+	if err := writeln(w, "    CONDITIONS"); err != nil {
 		return err
 	}
 
-	return printIssueGroupSection(w, ss.IssueGroups)
+	return printConditionSection(w, ss.Conditions)
 }
 
-func printIssueGroupSection(w io.Writer, groups []failureGroupJSON) error {
+func printConditionSection(w io.Writer, groups []statusConditionJSON) error {
 	if len(groups) == 0 {
-		return writeln(w, "    No ordinary issues.")
+		return writeln(w, "    No active conditions.")
 	}
 
 	for i := range groups {
@@ -40,7 +40,7 @@ func printIssueGroupSection(w io.Writer, groups []failureGroupJSON) error {
 				return err
 			}
 		}
-		if err := printIssueGroupPaths(w, group.Paths, group.Count); err != nil {
+		if err := printConditionPaths(w, group.Paths, group.Count); err != nil {
 			return err
 		}
 		if err := printStatusNextLine(w, group.Action); err != nil {
@@ -51,7 +51,7 @@ func printIssueGroupSection(w io.Writer, groups []failureGroupJSON) error {
 	return nil
 }
 
-func printIssueGroupPaths(w io.Writer, paths []string, totalCount int) error {
+func printConditionPaths(w io.Writer, paths []string, totalCount int) error {
 	if len(paths) == 0 {
 		return nil
 	}

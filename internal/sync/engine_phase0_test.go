@@ -367,9 +367,8 @@ func TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T
 func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testing.T) {
 	t.Parallel()
 
-	results, done, cancel, eng := startDrainLoop(t)
+	results, cancel, eng := startDrainLoop(t)
 	defer cancel()
-	_ = done
 	recorder := attachDebugEventRecorder(eng)
 	rt := testWatchRuntime(t, eng)
 
@@ -421,9 +420,8 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 
 	const blockedPath = "blocked.txt"
 
-	results, done, cancel, eng := startDrainLoop(t)
+	results, cancel, eng := startDrainLoop(t)
 	defer cancel()
-	_ = done
 	recorder := attachDebugEventRecorder(eng)
 	rt := testWatchRuntime(t, eng)
 
@@ -446,16 +444,15 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
 	})
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
-		Path:      blockedPath,
-		DriveID:   driveID,
-		Direction: DirectionDownload,
-		Role:      FailureRoleHeld,
-		Category:  CategoryTransient,
-		ErrMsg:    "rate limited",
-		ScopeKey:  testThrottleScope(),
-		ItemID:    "blocked-item",
-	}, nil))
+	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Path:       blockedPath,
+		ActionType: ActionDownload,
+		IssueType:  IssueRateLimited,
+		ScopeKey:   testThrottleScope(),
+		LastError:  "rate limited",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
 
 	ta := rt.depGraph.Add(&Action{
 		Type:    ActionUpload,
@@ -483,12 +480,12 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 
 	retried := readReadyAction(t, rt.dispatchCh)
 	require.Equal(t, blockedPath, retried.Action.Path,
-		"trial success should re-dispatch the held failure without external observation")
+		"trial success should re-dispatch blocked retry work without external observation")
 	assert.Equal(t, ActionDownload, retried.Action.Type)
 }
 
 // Validates: R-2.10.13, R-2.10.11
-func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testing.T) {
+func TestPhase0_RecheckLocalPermissions_ReleasesBlockedRetryWorkImmediately(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{}
@@ -509,29 +506,26 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		Size:     64,
 	}}, "", eng.driveID))
 
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
-		Path:      "Private",
-		DriveID:   eng.driveID,
-		Direction: DirectionDownload,
-		Role:      FailureRoleBoundary,
-		IssueType: IssueLocalPermissionDenied,
-		Category:  CategoryActionable,
-		ErrMsg:    "directory not accessible",
-		ScopeKey:  scopeKey,
-	}, nil))
-	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
-		Path:      "Private/doc.txt",
-		DriveID:   eng.driveID,
-		Direction: DirectionDownload,
-		Role:      FailureRoleHeld,
-		Category:  CategoryTransient,
-		ErrMsg:    "blocked by perm scope",
-		ScopeKey:  scopeKey,
-		ItemID:    "private-item",
-	}, nil))
+	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
+		Path:       "Private",
+		DriveID:    eng.driveID,
+		ActionType: ActionFolderCreate,
+		IssueType:  IssueLocalWriteDenied,
+		Error:      "directory not accessible",
+		ScopeKey:   scopeKey,
+	}))
+	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Path:       "Private/doc.txt",
+		ActionType: ActionDownload,
+		IssueType:  IssueLocalWriteDenied,
+		ScopeKey:   scopeKey,
+		LastError:  "blocked by perm scope",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:       scopeKey,
-		IssueType: IssueLocalPermissionDenied,
+		IssueType: IssueLocalWriteDenied,
 		BlockedAt: eng.nowFunc(),
 	})
 
@@ -561,14 +555,13 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 	require.NoError(t, os.MkdirAll(filepath.Join(eng.syncRoot, "docs"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, "docs", "file.txt"), []byte("ok"), 0o600))
 
-	require.NoError(t, eng.baseline.UpsertActionableFailures(ctx, []ActionableFailure{{
+	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
 		Path:       "docs/file.txt",
 		DriveID:    eng.driveID,
-		Direction:  DirectionUpload,
 		ActionType: ActionUpload,
-		IssueType:  IssueLocalPermissionDenied,
+		IssueType:  IssueLocalWriteDenied,
 		Error:      "permission denied",
-	}}))
+	}))
 
 	retryRow := retryWorkIdentityForWork("docs/file.txt", "", ActionUpload)
 	retryRow.AttemptCount = 3
@@ -583,9 +576,9 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 	_, err = testEngineFlow(t, eng).observeLocalChanges(ctx, nil, bl)
 	require.NoError(t, err)
 
-	failures, err := eng.baseline.ListSyncFailures(ctx)
+	observationIssues, err := eng.baseline.ListObservationIssues(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, failures)
+	assert.Empty(t, observationIssues)
 
 	rows, err := eng.baseline.ListRetryWork(ctx)
 	require.NoError(t, err)
@@ -598,7 +591,7 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	t.Parallel()
 
-	results, _, cancel, eng := startDrainLoop(t)
+	results, cancel, eng := startDrainLoop(t)
 	defer cancel()
 	recorder := attachDebugEventRecorder(eng)
 	rt := testWatchRuntime(t, eng)
@@ -649,9 +642,9 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	assert.True(t, isTestBlockScopeed(eng, testThrottleScope()),
 		"block scope should be activated from the action completion")
 
-	failures, err := eng.baseline.ListSyncFailures(ctx)
+	retryRows, err := eng.baseline.ListRetryWork(ctx)
 	require.NoError(t, err)
-	assert.Len(t, failures, 2, "parent failure and child cascade failure should both be persisted")
+	assert.Len(t, retryRows, 2, "parent failure and child cascade retry_work should both be persisted")
 }
 
 // Validates: R-2.1.6
