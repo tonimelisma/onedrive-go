@@ -21,7 +21,7 @@ type trialOutcome int
 const (
 	trialOutcomeRelease trialOutcome = iota
 	trialOutcomeExtend
-	trialOutcomePreserve
+	trialOutcomeRearm
 	trialOutcomeShutdown
 	trialOutcomeFatal
 )
@@ -241,10 +241,10 @@ func (flow *engineFlow) processTrialDecision(
 		scopeCtrl.rehomeHeldFailure(ctx, r, trialScopeKey)
 		scopeCtrl.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
 		flow.recordError(decision, r)
-	case trialOutcomePreserve:
+	case trialOutcomeRearm:
 		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
-		scopeCtrl.preserveScopeTrial(ctx, watch, trialScopeKey)
-		scopeCtrl.applyTrialPreserveEffects(ctx, watch, decision, r, bl)
+		scopeCtrl.applyTrialRearmEffects(ctx, watch, decision, r, bl)
+		scopeCtrl.rearmOrDiscardScope(ctx, watch, trialScopeKey)
 		flow.recordError(decision, r)
 	case trialOutcomeFatal:
 		flow.routeReadyForClass(ctx, watch, errclass.ClassFatal, ready, r)
@@ -268,9 +268,9 @@ func (flow *engineFlow) evaluateTrialOutcome(
 		if flow.trialScopePersists(trialScopeKey, decision) {
 			return trialOutcomeExtend
 		}
-		return trialOutcomePreserve
-	case trialHintPreserve:
-		return trialOutcomePreserve
+		return trialOutcomeRearm
+	case trialHintRearm:
+		return trialOutcomeRearm
 	case trialHintShutdown:
 		return trialOutcomeShutdown
 	case trialHintFatal:
@@ -287,7 +287,7 @@ func (flow *engineFlow) trialScopePersists(
 	return !decision.ScopeEvidence.IsZero() && decision.ScopeEvidence == trialScopeKey
 }
 
-func (controller *scopeController) applyTrialPreserveEffects(
+func (controller *scopeController) applyTrialRearmEffects(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision *ResultDecision,
@@ -323,7 +323,7 @@ func (controller *scopeController) clearHeldFailureForScope(
 
 	flow := controller.flow
 	if err := flow.engine.baseline.ClearHeldRetryWork(ctx, work, scopeKey); err != nil {
-		flow.engine.logger.Warn("failed to clear preserved trial candidate",
+		flow.engine.logger.Warn("failed to clear rearmed trial candidate",
 			slog.String("path", work.Path),
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),

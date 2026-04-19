@@ -161,8 +161,8 @@ func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *
 		return fmt.Errorf("sync: pruning retry_work to current actions: %w", err)
 	}
 
-	if err := flow.engine.baseline.PruneBlockScopesWithoutBlockedRetries(ctx); err != nil {
-		return fmt.Errorf("sync: pruning block scopes without blocked retries: %w", err)
+	if err := flow.engine.baseline.PruneBlockScopesWithoutBlockedWork(ctx); err != nil {
+		return fmt.Errorf("sync: pruning block scopes without blocked work: %w", err)
 	}
 
 	return nil

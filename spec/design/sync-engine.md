@@ -146,7 +146,7 @@ The engine classifies results into:
 - success cleanup
 - retryable transient work
 - actionable current-truth/content problems
-- shared blocker activation / preserve / release decisions
+- shared blocker activation / re-arm / release-or-discard decisions
 
 ### Durable persistence rules
 
@@ -197,7 +197,8 @@ directly when current truth already proves the shared blocker or its recovery.
 Retry and trial reconstruction is retry-owned. The engine revalidates due or
 blocked work directly from `retry_work`, exact semantic work identity, and the
 current snapshot/baseline view. Scope lifecycle is owned only by
-`block_scopes` plus blocked/unblocked `retry_work`.
+`block_scopes` plus blocked/unblocked `retry_work`. Empty scopes are discarded
+as soon as no blocked `retry_work` remains for their `scope_key`.
 
 ## What The Engine Does Not Own
 

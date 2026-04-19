@@ -464,8 +464,7 @@ func requireTrialDispatchScheduled(t *testing.T, env normalizePersistedScopesEnv
 func quotaNormalizePersistedScopesCases() []*normalizePersistedScopesCase {
 	return []*normalizePersistedScopesCase{
 		quotaNormalizeCaseWithHeldFailure(),
-		quotaNormalizeCaseWithActivePreserve(),
-		quotaNormalizeCaseWithExpiredPreserve(),
+		quotaNormalizeCaseWithoutBlockedWork(),
 		quotaNormalizeCaseWithRehomedCandidate(),
 		quotaNormalizeCaseWithActionableCandidate(),
 	}
@@ -500,34 +499,15 @@ func quotaNormalizeCaseWithHeldFailure() *normalizePersistedScopesCase {
 	}
 }
 
-func quotaNormalizeCaseWithActivePreserve() *normalizePersistedScopesCase {
+func quotaNormalizeCaseWithoutBlockedWork() *normalizePersistedScopesCase {
 	return &normalizePersistedScopesCase{
-		name: "preserves empty scoped quota while preserve deadline is active",
+		name: "discards empty scoped quota without blocked retry work",
 		blockScope: BlockScope{
 			Key:           SKQuotaOwn(),
 			IssueType:     IssueQuotaExceeded,
 			TimingSource:  ScopeTimingBackoff,
 			TrialInterval: 30 * time.Second,
 			NextTrialAt:   time.Date(2025, 6, 15, 12, 0, 30, 0, time.UTC),
-			PreserveUntil: time.Date(2025, 6, 15, 12, 0, 30, 0, time.UTC),
-		},
-		verify: func(t *testing.T, env normalizePersistedScopesEnv) {
-			t.Helper()
-			assert.True(t, isTestBlockScopeed(env.eng, SKQuotaOwn()))
-		},
-	}
-}
-
-func quotaNormalizeCaseWithExpiredPreserve() *normalizePersistedScopesCase {
-	return &normalizePersistedScopesCase{
-		name: "discards empty scoped quota after preserve deadline expires",
-		blockScope: BlockScope{
-			Key:           SKQuotaOwn(),
-			IssueType:     IssueQuotaExceeded,
-			TimingSource:  ScopeTimingBackoff,
-			TrialInterval: 30 * time.Second,
-			NextTrialAt:   time.Date(2025, 6, 15, 11, 59, 59, 0, time.UTC),
-			PreserveUntil: time.Date(2025, 6, 15, 11, 59, 59, 0, time.UTC),
 		},
 		verify: func(t *testing.T, env normalizePersistedScopesEnv) {
 			t.Helper()
@@ -542,14 +522,13 @@ func quotaNormalizeCaseWithExpiredPreserve() *normalizePersistedScopesCase {
 
 func quotaNormalizeCaseWithRehomedCandidate() *normalizePersistedScopesCase {
 	return &normalizePersistedScopesCase{
-		name: "preserved quota survives after candidate rehomes to a more specific scope",
+		name: "discards empty scoped quota when related issue rehomes to another scope",
 		blockScope: BlockScope{
 			Key:           SKQuotaOwn(),
 			IssueType:     IssueQuotaExceeded,
 			TimingSource:  ScopeTimingBackoff,
 			TrialInterval: 45 * time.Second,
 			NextTrialAt:   time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC),
-			PreserveUntil: time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC),
 		},
 		seed: func(t *testing.T, env normalizePersistedScopesEnv) {
 			t.Helper()
@@ -562,26 +541,30 @@ func quotaNormalizeCaseWithRehomedCandidate() *normalizePersistedScopesCase {
 				IssueType:  IssueRemoteWriteDenied,
 				HTTPStatus: http.StatusForbidden,
 				ScopeKey:   SKPermRemoteWrite("Shared/Docs"),
-				ErrMsg:     "boundary rehomed from preserved quota candidate",
+				ErrMsg:     "boundary rehomed from quota candidate",
 			}, nil))
 		},
 		verify: func(t *testing.T, env normalizePersistedScopesEnv) {
 			t.Helper()
-			assert.True(t, isTestBlockScopeed(env.eng, SKQuotaOwn()))
+			assert.False(t, isTestBlockScopeed(env.eng, SKQuotaOwn()))
+
+			failures, err := env.eng.baseline.ListSyncFailures(env.ctx())
+			require.NoError(t, err)
+			require.Len(t, failures, 1)
+			assert.Equal(t, SKPermRemoteWrite("Shared/Docs"), failures[0].ScopeKey)
 		},
 	}
 }
 
 func quotaNormalizeCaseWithActionableCandidate() *normalizePersistedScopesCase {
 	return &normalizePersistedScopesCase{
-		name: "preserved quota survives after candidate becomes actionable item failure",
+		name: "discards empty scoped quota when the candidate becomes actionable",
 		blockScope: BlockScope{
 			Key:           SKQuotaOwn(),
 			IssueType:     IssueQuotaExceeded,
 			TimingSource:  ScopeTimingBackoff,
 			TrialInterval: 45 * time.Second,
 			NextTrialAt:   time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC),
-			PreserveUntil: time.Date(2025, 6, 15, 12, 0, 45, 0, time.UTC),
 		},
 		seed: func(t *testing.T, env normalizePersistedScopesEnv) {
 			t.Helper()
@@ -592,12 +575,17 @@ func quotaNormalizeCaseWithActionableCandidate() *normalizePersistedScopesCase {
 				Role:      FailureRoleItem,
 				Category:  CategoryActionable,
 				IssueType: IssueInvalidFilename,
-				ErrMsg:    "candidate became actionable while original scope stayed preserved",
+				ErrMsg:    "candidate became actionable",
 			}, nil))
 		},
 		verify: func(t *testing.T, env normalizePersistedScopesEnv) {
 			t.Helper()
-			assert.True(t, isTestBlockScopeed(env.eng, SKQuotaOwn()))
+			assert.False(t, isTestBlockScopeed(env.eng, SKQuotaOwn()))
+
+			failures, err := env.eng.baseline.ListSyncFailures(env.ctx())
+			require.NoError(t, err)
+			require.Len(t, failures, 1)
+			assert.Equal(t, "upload.txt", failures[0].Path)
 		},
 	}
 }
@@ -624,20 +612,59 @@ func throttleAndServiceNormalizePersistedScopesCases() []*normalizePersistedScop
 				TrialInterval: 20 * time.Second,
 				NextTrialAt:   time.Date(2025, 6, 15, 11, 59, 59, 0, time.UTC),
 			},
+			seed: func(t *testing.T, env normalizePersistedScopesEnv) {
+				t.Helper()
+				require.NoError(t, env.eng.baseline.RecordFailure(env.ctx(), &SyncFailureParams{
+					Path:       "blocked.txt",
+					DriveID:    testThrottleDriveID(),
+					Direction:  DirectionUpload,
+					ActionType: ActionUpload,
+					Role:       FailureRoleHeld,
+					Category:   CategoryTransient,
+					ScopeKey:   testThrottleScope(),
+					ErrMsg:     "blocked throttle retry",
+				}, nil))
+			},
 			verify: func(t *testing.T, env normalizePersistedScopesEnv) {
 				t.Helper()
 				requireTrialDispatchScheduled(t, env)
 			},
 		},
 		{
-			name: "releases preserved non server timed service scope",
+			name: "discards empty server timed throttle scope without blocked work",
+			blockScope: BlockScope{
+				Key:           testThrottleScope(),
+				IssueType:     IssueRateLimited,
+				TimingSource:  ScopeTimingServerRetryAfter,
+				TrialInterval: 20 * time.Second,
+				NextTrialAt:   time.Date(2025, 6, 15, 12, 0, 20, 0, time.UTC),
+			},
+			verify: func(t *testing.T, env normalizePersistedScopesEnv) {
+				t.Helper()
+				assert.False(t, isTestBlockScopeed(env.eng, testThrottleScope()))
+			},
+		},
+		{
+			name: "releases non server timed service scope even with blocked work",
 			blockScope: BlockScope{
 				Key:           SKService(),
 				IssueType:     IssueServiceOutage,
 				TimingSource:  ScopeTimingBackoff,
 				TrialInterval: 20 * time.Second,
 				NextTrialAt:   time.Date(2025, 6, 15, 12, 0, 20, 0, time.UTC),
-				PreserveUntil: time.Date(2025, 6, 15, 12, 0, 20, 0, time.UTC),
+			},
+			seed: func(t *testing.T, env normalizePersistedScopesEnv) {
+				t.Helper()
+				require.NoError(t, env.eng.baseline.RecordFailure(env.ctx(), &SyncFailureParams{
+					Path:       "blocked.txt",
+					DriveID:    driveid.New("drive1"),
+					Direction:  DirectionUpload,
+					ActionType: ActionUpload,
+					Role:       FailureRoleHeld,
+					Category:   CategoryTransient,
+					ScopeKey:   SKService(),
+					ErrMsg:     "blocked service retry",
+				}, nil))
 			},
 			verify: func(t *testing.T, env normalizePersistedScopesEnv) {
 				t.Helper()
@@ -652,6 +679,19 @@ func throttleAndServiceNormalizePersistedScopesCases() []*normalizePersistedScop
 				TimingSource:  ScopeTimingServerRetryAfter,
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Date(2025, 6, 15, 12, 1, 0, 0, time.UTC),
+			},
+			seed: func(t *testing.T, env normalizePersistedScopesEnv) {
+				t.Helper()
+				require.NoError(t, env.eng.baseline.RecordFailure(env.ctx(), &SyncFailureParams{
+					Path:       "blocked.txt",
+					DriveID:    driveid.New("drive1"),
+					Direction:  DirectionUpload,
+					ActionType: ActionUpload,
+					Role:       FailureRoleHeld,
+					Category:   CategoryTransient,
+					ScopeKey:   SKService(),
+					ErrMsg:     "blocked service retry",
+				}, nil))
 			},
 			verify: func(t *testing.T, env normalizePersistedScopesEnv) {
 				t.Helper()
@@ -682,13 +722,11 @@ func TestEngine_NormalizePersistedScopes_IgnoresUnknownLegacyScopeKeysWithoutDel
 	_, err := env.eng.baseline.db.ExecContext(
 		ctx,
 		`INSERT INTO block_scopes
-			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"auth:account",
 		IssueUnauthorized,
 		ScopeTimingNone,
 		env.now.UnixNano(),
-		int64(0),
 		int64(0),
 		int64(0),
 		0,
@@ -836,6 +874,15 @@ func TestEngine_NormalizePersistedScopes_DiskPolicy(t *testing.T) {
 			NextTrialAt:   now.Add(10 * time.Minute),
 			TrialCount:    7,
 		}))
+		require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+			Path:      "download.bin",
+			DriveID:   driveid.New("drive1"),
+			Direction: DirectionDownload,
+			Role:      FailureRoleHeld,
+			Category:  CategoryTransient,
+			ScopeKey:  scopeKey,
+			ErrMsg:    "disk full",
+		}, nil))
 
 		require.NoError(t, normalizePersistedScopesForTest(t, eng, ctx))
 
@@ -2138,7 +2185,7 @@ func TestTrialDispatch_UsesPlannerWorkRequest(t *testing.T) {
 }
 
 // Validates: R-2.10.5
-func TestTrialDispatch_NoEventWhenCurrentStateMissingPreservesScope(t *testing.T) {
+func TestTrialDispatch_NoEventWhenCurrentStateMissingDiscardsEmptyScope(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -2173,10 +2220,7 @@ func TestTrialDispatch_NoEventWhenCurrentStateMissingPreservesScope(t *testing.T
 	require.NoError(t, err)
 	assert.Empty(t, failures, "resolved held candidate should be cleared from sync_failures")
 
-	block, ok := getTestBlockScope(eng, sk)
-	require.True(t, ok)
-	assert.Equal(t, 10*time.Second, block.TrialInterval)
-	assert.Equal(t, eng.nowFn().Add(10*time.Second), block.NextTrialAt)
+	assert.False(t, isTestBlockScopeed(eng, sk))
 }
 
 func TestRetrierSweep_UploadSkippedCandidateBecomesActionableFailure(t *testing.T) {
@@ -2284,7 +2328,7 @@ func TestTrialDispatch_RandomBlockedRetrySelectionLeavesNonSelectedHeldFailuresU
 }
 
 // Validates: R-2.10.5
-func TestTrialDispatch_OnlySkippedHeldCandidatesPreserveScope(t *testing.T) {
+func TestTrialDispatch_OnlySkippedHeldCandidatesDiscardEmptyScope(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -2321,10 +2365,7 @@ func TestTrialDispatch_OnlySkippedHeldCandidatesPreserveScope(t *testing.T) {
 	require.Len(t, failures, 1)
 	assert.Equal(t, CategoryActionable, failures[0].Category)
 	assert.Equal(t, IssueFileTooLarge, failures[0].IssueType)
-	block, ok := getTestBlockScope(eng, sk)
-	require.True(t, ok)
-	assert.Equal(t, 10*time.Second, block.TrialInterval)
-	assert.Equal(t, eng.nowFn().Add(10*time.Second), block.NextTrialAt)
+	assert.False(t, isTestBlockScopeed(eng, sk))
 }
 
 func TestEngine_ClearFailureCandidate_RemovesSyncFailure(t *testing.T) {

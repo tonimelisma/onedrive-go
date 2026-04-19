@@ -13,9 +13,10 @@ const (
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
 	//
-	// Generation 2 renames retry_state -> retry_work and
+	// Generation 2 renamed retry_state -> retry_work and
 	// scope_blocks -> block_scopes.
-	currentSyncStoreGeneration = 2
+	// Generation 3 removes preserve_until from block_scopes.
+	currentSyncStoreGeneration = 3
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata
 		(singleton_id, schema_generation)
 	VALUES (1, ?)
@@ -165,7 +166,6 @@ CREATE TABLE IF NOT EXISTS block_scopes (
     blocked_at     INTEGER NOT NULL,
     trial_interval INTEGER NOT NULL,
     next_trial_at  INTEGER NOT NULL,
-    preserve_until INTEGER NOT NULL DEFAULT 0,
     trial_count    INTEGER NOT NULL DEFAULT 0
 	);`
 )
@@ -212,7 +212,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"file_size", "local_hash", "scope_key",
 		},
 		"block_scopes": {
-			"scope_key", "issue_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "preserve_until", "trial_count",
+			"scope_key", "issue_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "trial_count",
 		},
 	}
 }

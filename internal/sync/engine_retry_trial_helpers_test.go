@@ -205,7 +205,7 @@ func TestClearStaleRetrySweepRow_SkippedRetryPreservesActionableFailure(t *testi
 }
 
 // Validates: R-2.10.5
-func TestClearStaleTrialRetryWork_PreservesScopeWhenBlockedRetriesRemain(t *testing.T) {
+func TestClearStaleTrialRetryWork_RearmsScopeWhenBlockedRetriesRemain(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})

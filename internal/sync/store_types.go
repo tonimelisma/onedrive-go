@@ -144,3 +144,12 @@ type RetryWorkKey struct {
 	OldPath    string
 	ActionType ActionType
 }
+
+// ResolvedRetryWork reports retry-owned metadata for one exact retry_work
+// work item that was resolved and deleted.
+type ResolvedRetryWork struct {
+	Work         RetryWorkKey
+	AttemptCount int
+	IssueType    string
+	HadIssueRow  bool
+}

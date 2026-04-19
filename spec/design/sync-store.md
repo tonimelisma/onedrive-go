@@ -85,6 +85,9 @@ Supporting outcome mutations should stay separate by owner:
 - exact retry-work upsert/delete helpers
 - scope release/discard/extend helpers that mutate `block_scopes` and linked
   blocked `retry_work` in one transaction
+- retry-resolution helpers that delete exact `retry_work` and any matching
+  transient item issue row, then return retry-owned resolution metadata rather
+  than synthesizing a `sync_failures` row
 
 The store does not own a mixed failure table, failure-role transitions, or a
 store-owned competing status projection.
@@ -109,7 +112,8 @@ Read-only store helpers are intentionally narrow:
 
 `status` should compose its output directly from those authorities. The store
 may offer grouping primitives, but it must not become a second owner of status
-policy.
+policy. Store maintenance must also keep `block_scopes` honest: a scope row may
+exist only while blocked `retry_work` still exists for the same `scope_key`.
 
 ## State-DB Diagnosis And Reset
 

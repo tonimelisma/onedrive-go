@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 const (
@@ -46,12 +44,10 @@ const (
 		WHERE blocked = 1 AND scope_key = ?
 		ORDER BY RANDOM()
 		LIMIT 1`
-	sqlPruneBlockScopesWithoutBlockedRetries = `DELETE FROM block_scopes
-		WHERE NOT EXISTS (
-			SELECT 1 FROM retry_work
-			WHERE retry_work.blocked = 1
-				AND retry_work.scope_key = block_scopes.scope_key
-		)`
+	sqlGetRetryWorkByWork = `SELECT
+		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
+		FROM retry_work
+		WHERE work_key = ?`
 	sqlEarliestRetryWorkAt = `SELECT MIN(next_retry_at) FROM retry_work
 		WHERE blocked = 0
 			AND next_retry_at > ?`
@@ -153,8 +149,7 @@ func (m *SyncStore) DeleteRetryWorkByWork(ctx context.Context, work RetryWorkKey
 func (m *SyncStore) ResolveTransientRetryWork(
 	ctx context.Context,
 	work RetryWorkKey,
-	driveID driveid.ID,
-) (row *SyncFailureRow, found bool, err error) {
+) (resolved *ResolvedRetryWork, found bool, err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: beginning resolve transient retry work for %s: %w", work.Path, err)
@@ -163,17 +158,28 @@ func (m *SyncStore) ResolveTransientRetryWork(
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback resolve transient retry work for %s", work.Path))
 	}()
 
-	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveID)
-	if err != nil {
-		return nil, false, fmt.Errorf("sync: reading configured drive for transient retry work %s: %w", work.Path, err)
-	}
-	if matchErr := ensureMatchingConfiguredDriveID(driveID, configuredDriveID); matchErr != nil {
-		return nil, false, matchErr
+	workKey := serializeRetryWorkKey(work)
+	var retryRow RetryWorkRow
+	scanErr := scanRetryWorkRow(tx.QueryRowContext(ctx, sqlGetRetryWorkByWork, workKey), &retryRow)
+	switch {
+	case scanErr == nil:
+		found = true
+		resolved = &ResolvedRetryWork{
+			Work: RetryWorkKey{
+				Path:       retryRow.Path,
+				OldPath:    retryRow.OldPath,
+				ActionType: retryRow.ActionType,
+			},
+			AttemptCount: retryRow.AttemptCount,
+		}
+	case errors.Is(scanErr, sql.ErrNoRows):
+	default:
+		return nil, false, fmt.Errorf("sync: resolving transient retry work for %s: %w", work.Path, scanErr)
 	}
 
-	row = &SyncFailureRow{}
-	scanErr := scanSyncFailureRow(tx.QueryRowContext(ctx,
-		`SELECT `+sqlSelectSyncFailureCols+` FROM sync_failures
+	var issueType sql.NullString
+	issueScanErr := tx.QueryRowContext(ctx,
+		`SELECT issue_type FROM sync_failures
 			WHERE path = ?
 				AND category = ?
 				AND failure_role = ?
@@ -182,20 +188,25 @@ func (m *SyncStore) ResolveTransientRetryWork(
 		CategoryTransient,
 		FailureRoleItem,
 		work.ActionType.String(),
-	), row, configuredDriveID)
+	).Scan(&issueType)
 	switch {
-	case scanErr == nil:
-		found = true
-	case errors.Is(scanErr, sql.ErrNoRows):
-		row = nil
+	case issueScanErr == nil:
+		if resolved == nil {
+			resolved = &ResolvedRetryWork{Work: work}
+		}
+		if issueType.Valid {
+			resolved.IssueType = issueType.String
+		}
+		resolved.HadIssueRow = true
+	case errors.Is(issueScanErr, sql.ErrNoRows):
 	default:
-		return nil, false, fmt.Errorf("sync: resolving transient retry work for %s: %w", work.Path, scanErr)
+		return nil, false, fmt.Errorf("sync: resolving transient retry work issue row for %s: %w", work.Path, issueScanErr)
 	}
 
 	if retryErr := deleteRetryWorkByWorkTx(ctx, tx, work); retryErr != nil {
 		return nil, false, retryErr
 	}
-	if found {
+	if resolved != nil && resolved.HadIssueRow {
 		if _, execErr := tx.ExecContext(ctx,
 			`DELETE FROM sync_failures
 				WHERE path = ?
@@ -215,7 +226,11 @@ func (m *SyncStore) ResolveTransientRetryWork(
 		return nil, false, fmt.Errorf("sync: committing transient retry work resolution for %s: %w", work.Path, err)
 	}
 
-	return row, found, nil
+	if !found {
+		return nil, false, nil
+	}
+
+	return resolved, true, nil
 }
 
 func (m *SyncStore) ListRetryWork(ctx context.Context) ([]RetryWorkRow, error) {
@@ -302,14 +317,6 @@ func (m *SyncStore) PruneRetryWorkToCurrentActions(
 		if err := m.DeleteRetryWorkByWork(ctx, key); err != nil {
 			return err
 		}
-	}
-
-	return nil
-}
-
-func (m *SyncStore) PruneBlockScopesWithoutBlockedRetries(ctx context.Context) error {
-	if _, err := m.db.ExecContext(ctx, sqlPruneBlockScopesWithoutBlockedRetries); err != nil {
-		return fmt.Errorf("sync: pruning block scopes without blocked retries: %w", err)
 	}
 
 	return nil
