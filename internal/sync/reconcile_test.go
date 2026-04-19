@@ -18,7 +18,7 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	ctx := t.Context()
 
 	seedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.setNowFunc(func() time.Time { return seedTime })
+	setStoreTestNow(mgr, seedTime)
 
 	seed := BaselineMutation{
 		Action:          ActionDownload,
@@ -39,15 +39,14 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	}
 	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
-	_, err := mgr.rawDB().ExecContext(ctx,
+	requireStoreTestExec(t, mgr,
 		`INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"item-1", "file.txt", ItemTypeFile, "remote-old", 120,
 		seedTime.Add(2*time.Second).UnixNano())
-	require.NoError(t, err)
 
 	refreshTime := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	mgr.setNowFunc(func() time.Time { return refreshTime })
+	setStoreTestNow(mgr, refreshTime)
 
 	require.NoError(t, mgr.RefreshLocalBaseline(ctx, LocalBaselineRefresh{
 		Path:           "file.txt",
@@ -76,11 +75,10 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	var hash string
 	var size int64
 	var mtime int64
-	err = mgr.rawDB().QueryRowContext(ctx,
+	require.NoError(t, requireStoreTestRawDB(t, mgr).QueryRowContext(ctx,
 		`SELECT hash, size, mtime FROM remote_state WHERE item_id = ?`,
 		"item-1",
-	).Scan(&hash, &size, &mtime)
-	require.NoError(t, err)
+	).Scan(&hash, &size, &mtime))
 	assert.Equal(t, "remote-old", hash, "remote_state hash should not be overwritten")
 	assert.Equal(t, int64(120), size, "remote_state size should not be overwritten")
 	assert.Equal(t, seedTime.Add(2*time.Second).UnixNano(), mtime, "remote_state mtime should not be overwritten")
@@ -94,7 +92,7 @@ func TestRefreshLocalBaseline_CreatesUnknownRemoteFieldsForLocalOnlyEntry(t *tes
 	ctx := t.Context()
 
 	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	mgr.setNowFunc(func() time.Time { return now })
+	setStoreTestNow(mgr, now)
 
 	require.NoError(t, mgr.RefreshLocalBaseline(ctx, LocalBaselineRefresh{
 		Path:           "copy.conflict-1.txt",

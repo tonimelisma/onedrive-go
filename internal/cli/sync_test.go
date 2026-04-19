@@ -59,8 +59,8 @@ func TestDriveReportsError(t *testing.T) {
 			reports: []*multisync.DriveReport{
 				{
 					CanonicalID: driveid.MustCanonicalID("personal:reset@example.com"),
-					Err: &syncengine.StateDBResetRequiredError{
-						Reason: syncengine.StateDBResetReasonIncompatibleSchema,
+					Err: &syncengine.StateStoreIncompatibleError{
+						Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
 					},
 				},
 			},
@@ -441,7 +441,7 @@ paused = true
 
 	err := runSync(cmd, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "all drives are paused")
+	assert.Contains(t, err.Error(), "all selected drives are paused")
 }
 
 // Validates: R-6.6.4
@@ -497,20 +497,29 @@ sync_dir = %q
 		opts syncengine.RunOptions,
 		_ *slog.Logger,
 		controlSocketPath string,
-	) []*multisync.DriveReport {
+	) multisync.RunOnceResult {
 		called = true
 		assert.Len(t, drives, 1)
 		assert.Equal(t, syncengine.SyncBidirectional, mode)
 		assert.True(t, opts.DryRun)
 		assert.NotEmpty(t, controlSocketPath)
 
-		return []*multisync.DriveReport{
-			{
-				CanonicalID: drives[0].CanonicalID,
-				DisplayName: drives[0].DisplayName,
-				Report: &syncengine.Report{
-					Mode:   mode,
-					DryRun: opts.DryRun,
+		return multisync.RunOnceResult{
+			Startup: multisync.StartupSelectionSummary{
+				Results: []multisync.DriveStartupResult{{
+					CanonicalID: drives[0].CanonicalID,
+					DisplayName: drives[0].DisplayName,
+					Status:      multisync.DriveStartupRunnable,
+				}},
+			},
+			Reports: []*multisync.DriveReport{
+				{
+					CanonicalID: drives[0].CanonicalID,
+					DisplayName: drives[0].DisplayName,
+					Report: &syncengine.Report{
+						Mode:   mode,
+						DryRun: opts.DryRun,
+					},
 				},
 			},
 		}
@@ -549,10 +558,17 @@ sync_dir = %q
 		opts syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,
-	) []*multisync.DriveReport {
+	) multisync.RunOnceResult {
 		assert.False(t, opts.DryRun)
 
-		return []*multisync.DriveReport{{Report: &syncengine.Report{Mode: syncengine.SyncBidirectional}}}
+		return multisync.RunOnceResult{
+			Startup: multisync.StartupSelectionSummary{
+				Results: []multisync.DriveStartupResult{{
+					Status: multisync.DriveStartupRunnable,
+				}},
+			},
+			Reports: []*multisync.DriveReport{{Report: &syncengine.Report{Mode: syncengine.SyncBidirectional}}},
+		}
 	}
 
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
@@ -632,9 +648,9 @@ sync_dir = %q
 		syncengine.RunOptions,
 		*slog.Logger,
 		string,
-	) []*multisync.DriveReport {
+	) multisync.RunOnceResult {
 		called = true
-		return nil
+		return multisync.RunOnceResult{}
 	}
 
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})

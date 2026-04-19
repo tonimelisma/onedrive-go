@@ -97,7 +97,7 @@ type Engine struct {
 
 // newEngine creates an Engine and opens the per-drive SyncStore. Existing
 // unreadable, incompatible, or unsupported state DBs fail with a typed
-// reset-required error so higher layers can guide the user without mutating
+// store-incompatible error so higher layers can guide the user without mutating
 // durable state during startup. Returns an error if DB init fails or if
 // DriveID is zero.
 func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {

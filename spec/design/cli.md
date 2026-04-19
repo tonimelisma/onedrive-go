@@ -110,9 +110,10 @@ health control surface.
 an unreadable, incompatible, or unsupported existing DB, the CLI renders the
 same guidance in one-shot and watch flows: pause that drive first, rerun with
 `--drive` selecting only other drives, or run `drive reset-sync-state --drive
-...`. One-shot exits non-zero after reporting any affected drives. Watch mode
-skips bad drives, warns immediately about each skipped drive, and continues
-healthy drives unless none can start.
+...`. One-shot renders startup-ineligible drives through the shared startup
+message path, reports completed runs separately, and exits non-zero after
+reporting any affected drives. Watch mode warns immediately about each skipped
+drive and continues healthy drives unless none can start.
 
 ## What The CLI No Longer Owns
 

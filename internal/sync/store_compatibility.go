@@ -9,33 +9,33 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
-type StateDBResetReason string
+type StateStoreIncompatibleReason string
 
 const (
-	StateDBResetReasonOpenFailed         StateDBResetReason = "open_failed"
-	StateDBResetReasonIncompatibleSchema StateDBResetReason = "incompatible_schema"
+	StateStoreIncompatibleReasonOpenFailed         StateStoreIncompatibleReason = "open_failed"
+	StateStoreIncompatibleReasonIncompatibleSchema StateStoreIncompatibleReason = "incompatible_schema"
 )
 
-var ErrStateDBResetRequired = errors.New("sync: sync state DB reset required")
+var ErrStateStoreIncompatible = errors.New("sync: incompatible sync state DB")
 
-type StateDBResetRequiredError struct {
-	Reason StateDBResetReason
+type StateStoreIncompatibleError struct {
+	Reason StateStoreIncompatibleReason
 	Cause  error
 }
 
-func (e *StateDBResetRequiredError) Error() string {
+func (e *StateStoreIncompatibleError) Error() string {
 	if e == nil {
 		return ""
 	}
 
 	if e.Cause != nil {
-		return fmt.Sprintf("sync state DB requires reset: %s: %v", e.Reason.Description(), e.Cause)
+		return fmt.Sprintf("sync state DB is incompatible: %s: %v", e.Reason.Description(), e.Cause)
 	}
 
-	return fmt.Sprintf("sync state DB requires reset: %s", e.Reason.Description())
+	return fmt.Sprintf("sync state DB is incompatible: %s", e.Reason.Description())
 }
 
-func (e *StateDBResetRequiredError) Unwrap() error {
+func (e *StateStoreIncompatibleError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
@@ -43,19 +43,19 @@ func (e *StateDBResetRequiredError) Unwrap() error {
 	return e.Cause
 }
 
-func (e *StateDBResetRequiredError) Is(target error) bool {
-	return target == ErrStateDBResetRequired
+func (e *StateStoreIncompatibleError) Is(target error) bool {
+	return target == ErrStateStoreIncompatible
 }
 
-func IsStateDBResetRequired(err error) bool {
-	return errors.Is(err, ErrStateDBResetRequired)
+func IsStateStoreIncompatible(err error) bool {
+	return errors.Is(err, ErrStateStoreIncompatible)
 }
 
-func (r StateDBResetReason) Description() string {
+func (r StateStoreIncompatibleReason) Description() string {
 	switch r {
-	case StateDBResetReasonOpenFailed:
+	case StateStoreIncompatibleReasonOpenFailed:
 		return "existing sync state DB could not be opened"
-	case StateDBResetReasonIncompatibleSchema:
+	case StateStoreIncompatibleReasonIncompatibleSchema:
 		return "existing sync state DB uses an unsupported store generation or schema"
 	default:
 		return "existing sync state DB is unsupported"
@@ -65,7 +65,7 @@ func (r StateDBResetReason) Description() string {
 // openEngineSyncStore is the engine-owned compatibility boundary for existing
 // state DBs. It never mutates or recreates durable state during startup:
 // missing DBs bootstrap normally via NewSyncStore, while unreadable or
-// incompatible existing DBs surface a typed reset-required error.
+// incompatible existing DBs surface a typed store-incompatible error.
 func openEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*SyncStore, error) {
 	store, err := NewSyncStore(ctx, dbPath, logger)
 	if err == nil {
@@ -75,12 +75,12 @@ func openEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger
 		return nil, err
 	}
 
-	reason := StateDBResetReasonOpenFailed
+	reason := StateStoreIncompatibleReasonOpenFailed
 	if errors.Is(err, ErrIncompatibleSchema) {
-		reason = StateDBResetReasonIncompatibleSchema
+		reason = StateStoreIncompatibleReasonIncompatibleSchema
 	}
 
-	return nil, &StateDBResetRequiredError{
+	return nil, &StateStoreIncompatibleError{
 		Reason: reason,
 		Cause:  err,
 	}

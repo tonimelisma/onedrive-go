@@ -242,8 +242,9 @@ func TestRunOnce_ZeroDrives(t *testing.T) {
 	cfg := testOrchestratorConfig(t)
 	orch := NewOrchestrator(cfg)
 
-	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
-	assert.Empty(t, reports)
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	assert.Empty(t, result.Reports)
+	assert.Empty(t, result.Startup.Results)
 }
 
 // Validates: R-2.4
@@ -262,13 +263,15 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 		return &mockEngine{report: expectedReport}, nil
 	}
 
-	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
-	require.Len(t, reports, 1)
-	assert.Equal(t, rd.CanonicalID, reports[0].CanonicalID)
-	assert.Equal(t, "Test", reports[0].DisplayName)
-	require.NoError(t, reports[0].Err)
-	require.NotNil(t, reports[0].Report)
-	assert.Equal(t, 5, reports[0].Report.Downloads)
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	require.Len(t, result.Startup.Results, 1)
+	assert.Equal(t, DriveStartupRunnable, result.Startup.Results[0].Status)
+	require.Len(t, result.Reports, 1)
+	assert.Equal(t, rd.CanonicalID, result.Reports[0].CanonicalID)
+	assert.Equal(t, "Test", result.Reports[0].DisplayName)
+	require.NoError(t, result.Reports[0].Err)
+	require.NotNil(t, result.Reports[0].Report)
+	assert.Equal(t, 5, result.Reports[0].Report.Downloads)
 }
 
 // Validates: R-2.4
@@ -290,16 +293,17 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 		return &mockEngine{report: okReport}, nil
 	}
 
-	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
-	require.Len(t, reports, 2)
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	require.Len(t, result.Startup.Results, 2)
+	require.Len(t, result.Reports, 2)
 
 	// Find each drive's report by canonical ID.
 	var failReport, okDriveReport *DriveReport
-	for i := range reports {
-		if reports[i].CanonicalID == rd1.CanonicalID {
-			failReport = reports[i]
+	for i := range result.Reports {
+		if result.Reports[i].CanonicalID == rd1.CanonicalID {
+			failReport = result.Reports[i]
 		} else {
-			okDriveReport = reports[i]
+			okDriveReport = result.Reports[i]
 		}
 	}
 
@@ -330,15 +334,16 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 		return &mockEngine{report: stableReport}, nil
 	}
 
-	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
-	require.Len(t, reports, 2)
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	require.Len(t, result.Startup.Results, 2)
+	require.Len(t, result.Reports, 2)
 
 	var panicReport, stableDriveReport *DriveReport
-	for i := range reports {
-		if reports[i].CanonicalID == rd1.CanonicalID {
-			panicReport = reports[i]
+	for i := range result.Reports {
+		if result.Reports[i].CanonicalID == rd1.CanonicalID {
+			panicReport = result.Reports[i]
 		} else {
-			stableDriveReport = reports[i]
+			stableDriveReport = result.Reports[i]
 		}
 	}
 
@@ -366,8 +371,9 @@ func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
 		return &mockEngine{report: &syncengine.Report{}}, nil
 	}
 
-	work, reports := orch.prepareRunOnceWork(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	work, summary, reports := orch.prepareRunOnceWork(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, work, 1)
+	require.Len(t, summary.Results, 1)
 	require.Len(t, reports, 1)
 	require.Nil(t, reports[0])
 
@@ -442,9 +448,9 @@ func TestRunOnce_ContextCanceled(t *testing.T) {
 		return &mockEngine{err: context.Canceled}, nil
 	}
 
-	reports := orch.RunOnce(ctx, syncengine.SyncBidirectional, syncengine.RunOptions{})
-	require.Len(t, reports, 1)
-	assert.ErrorIs(t, reports[0].Err, context.Canceled)
+	result := orch.RunOnce(ctx, syncengine.SyncBidirectional, syncengine.RunOptions{})
+	require.Len(t, result.Reports, 1)
+	assert.ErrorIs(t, result.Reports[0].Err, context.Canceled)
 }
 
 // Validates: R-2.4
@@ -458,10 +464,11 @@ func TestRunOnce_EngineFactoryError(t *testing.T) {
 		return nil, errors.New("db init failed")
 	}
 
-	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
-	require.Len(t, reports, 1)
-	require.Error(t, reports[0].Err)
-	assert.Contains(t, reports[0].Err.Error(), "db init failed")
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	require.Len(t, result.Startup.SkippedResults(), 1)
+	require.Empty(t, result.Reports)
+	require.Error(t, result.Startup.SkippedResults()[0].Err)
+	assert.Contains(t, result.Startup.SkippedResults()[0].Err.Error(), "db init failed")
 }
 
 // Validates: R-6.10.7
@@ -482,23 +489,27 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 		return &mockEngine{report: okReport}, nil
 	}
 
-	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
-	require.Len(t, reports, 2)
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	require.Len(t, result.Startup.Results, 2)
+	require.Len(t, result.Reports, 1)
 
-	var failedReport, healthyReport *DriveReport
-	for i := range reports {
-		switch reports[i].CanonicalID {
-		case rd1.CanonicalID:
-			failedReport = reports[i]
-		case rd2.CanonicalID:
-			healthyReport = reports[i]
+	var failedResult *DriveStartupResult
+	var healthyReport *DriveReport
+	for i := range result.Startup.Results {
+		if result.Startup.Results[i].CanonicalID == rd1.CanonicalID {
+			failedResult = &result.Startup.Results[i]
+		}
+	}
+	for i := range result.Reports {
+		if result.Reports[i].CanonicalID == rd2.CanonicalID {
+			healthyReport = result.Reports[i]
 		}
 	}
 
-	require.NotNil(t, failedReport)
-	require.Error(t, failedReport.Err)
-	assert.Contains(t, failedReport.Err.Error(), "open sync store")
-	assert.Nil(t, failedReport.Report)
+	require.NotNil(t, failedResult)
+	require.Error(t, failedResult.Err)
+	assert.Contains(t, failedResult.Err.Error(), "open sync store")
+	assert.Equal(t, DriveStartupFatal, failedResult.Status)
 
 	require.NotNil(t, healthyReport)
 	require.NoError(t, healthyReport.Err)
@@ -516,10 +527,11 @@ func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 
-	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
-	require.Len(t, reports, 1)
-	require.Error(t, reports[0].Err)
-	assert.Contains(t, reports[0].Err.Error(), "token")
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	require.Len(t, result.Startup.SkippedResults(), 1)
+	require.Empty(t, result.Reports)
+	require.Error(t, result.Startup.SkippedResults()[0].Err)
+	assert.Contains(t, result.Startup.SkippedResults()[0].Err.Error(), "token")
 }
 
 // --- zero DriveID ---
@@ -541,11 +553,12 @@ func TestRunOnce_ZeroDriveID_ReportsError(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 
-	reports := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
-	require.Len(t, reports, 1)
-	require.Error(t, reports[0].Err)
-	assert.Contains(t, reports[0].Err.Error(), "drive ID not resolved")
-	assert.Contains(t, reports[0].Err.Error(), "login")
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	require.Len(t, result.Startup.SkippedResults(), 1)
+	require.Empty(t, result.Reports)
+	require.Error(t, result.Startup.SkippedResults()[0].Err)
+	assert.Contains(t, result.Startup.SkippedResults()[0].Err.Error(), "drive ID not resolved")
+	assert.Contains(t, result.Startup.SkippedResults()[0].Err.Error(), "login")
 }
 
 // Validates: R-2.9.1
@@ -576,7 +589,7 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	reportsCh := make(chan []*DriveReport, 1)
+	reportsCh := make(chan RunOnceResult, 1)
 	go func() {
 		reportsCh <- orch.RunOnce(ctx, syncengine.SyncBidirectional, syncengine.RunOptions{})
 	}()
@@ -596,9 +609,9 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 
 	close(release)
 	select {
-	case reports := <-reportsCh:
-		require.Len(t, reports, 1)
-		require.NoError(t, reports[0].Err)
+	case result := <-reportsCh:
+		require.Len(t, result.Reports, 1)
+		require.NoError(t, result.Reports[0].Err)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunOnce did not stop in time")
 	}
@@ -736,15 +749,15 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 	}
 }
 
-func TestOrchestrator_RunWatch_SkipsResetRequiredDriveWhenAnotherDriveStarts(t *testing.T) {
+func TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:healthy@example.com", "Healthy")
 	rd2 := testResolvedDrive(t, "personal:reset@example.com", "Reset")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
-	warnings := make(chan []DriveStartupResult, 1)
-	cfg.StartWarning = func(results []DriveStartupResult) {
-		warnings <- results
+	warnings := make(chan StartupWarning, 1)
+	cfg.StartWarning = func(warning StartupWarning) {
+		warnings <- warning
 	}
 
 	orch := NewOrchestrator(cfg)
@@ -752,7 +765,7 @@ func TestOrchestrator_RunWatch_SkipsResetRequiredDriveWhenAnotherDriveStarts(t *
 	watchStarted := make(chan struct{})
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		if req.Drive.CanonicalID == rd2.CanonicalID {
-			return nil, &syncengine.StateDBResetRequiredError{Reason: syncengine.StateDBResetReasonIncompatibleSchema}
+			return nil, &syncengine.StateStoreIncompatibleError{Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema}
 		}
 
 		return &mockEngine{
@@ -779,10 +792,11 @@ func TestOrchestrator_RunWatch_SkipsResetRequiredDriveWhenAnotherDriveStarts(t *
 	}
 
 	select {
-	case results := <-warnings:
+	case warning := <-warnings:
+		results := warning.Summary.SkippedResults()
 		require.Len(t, results, 1)
 		assert.Equal(t, rd2.CanonicalID, results[0].CanonicalID)
-		assert.Equal(t, DriveStartupResetRequired, results[0].Status)
+		assert.Equal(t, DriveStartupIncompatibleStore, results[0].Status)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not emit startup warning")
 	}
@@ -805,7 +819,7 @@ func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoDriveStarts(t *testing
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
-		return nil, &syncengine.StateDBResetRequiredError{Reason: syncengine.StateDBResetReasonIncompatibleSchema}
+		return nil, &syncengine.StateStoreIncompatibleError{Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema}
 	}
 
 	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
@@ -813,9 +827,9 @@ func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoDriveStarts(t *testing
 
 	var startupErr *WatchStartupError
 	require.ErrorAs(t, err, &startupErr)
-	require.Len(t, startupErr.Results, 1)
-	assert.Equal(t, rd.CanonicalID, startupErr.Results[0].CanonicalID)
-	assert.Equal(t, DriveStartupResetRequired, startupErr.Results[0].Status)
+	require.Len(t, startupErr.Summary.Results, 1)
+	assert.Equal(t, rd.CanonicalID, startupErr.Summary.Results[0].CanonicalID)
+	assert.Equal(t, DriveStartupIncompatibleStore, startupErr.Summary.Results[0].Status)
 }
 
 func TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused(t *testing.T) {
@@ -829,7 +843,9 @@ func TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused(t *testing.T) {
 
 	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "all selected drives are paused")
+	var startupErr *WatchStartupError
+	require.ErrorAs(t, err, &startupErr)
+	assert.True(t, startupErr.Summary.AllPaused())
 }
 
 // Validates: R-2.9.1, R-2.9.2

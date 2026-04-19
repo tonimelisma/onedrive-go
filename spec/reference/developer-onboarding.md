@@ -156,8 +156,9 @@ reuse from collapsing into one owner.
 
 **Why are `multisync` and `sync` separate?**
 
-`multisync` owns multi-drive orchestration, watch lifecycle, and the control
-socket. `sync` owns one drive's runtime, policy, and store mutation rules.
+`multisync` owns multi-drive orchestration, startup eligibility classification,
+watch lifecycle, and the control socket. `sync` owns one drive's runtime,
+policy, and store mutation rules.
 
 ## 4. Step-By-Step In-Depth Onboarding Journey
 

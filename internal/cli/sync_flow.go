@@ -40,7 +40,7 @@ type syncRunOnceRunner func(
 	opts syncengine.RunOptions,
 	logger *slog.Logger,
 	controlSocketPath string,
-) []*multisync.DriveReport
+) multisync.RunOnceResult
 
 func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions) error {
 	logger := cc.Logger
@@ -73,7 +73,7 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 		}, logger, cc.Status(), controlSocketPath)
 	}
 
-	drives, err := config.ResolveDrives(rawCfg, selectors, false, logger)
+	drives, err := config.ResolveDrives(rawCfg, selectors, true, logger)
 	if err != nil {
 		return fmt.Errorf("resolve drives: %w", err)
 	}
@@ -85,22 +85,17 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	}
 
 	if len(drives) == 0 {
-		allDrives, resolveErr := config.ResolveDrives(rawCfg, selectors, true, logger)
-		if resolveErr == nil && len(allDrives) > 0 {
-			return fmt.Errorf("all drives are paused — run 'onedrive-go resume' to unpause")
-		}
-
 		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
 
-	reports := runSyncOnce(ctx, cc, holder, drives, opts.Mode, syncengine.RunOptions{
+	result := runSyncOnce(ctx, cc, holder, drives, opts.Mode, syncengine.RunOptions{
 		DryRun:        effectiveDryRun,
 		FullReconcile: opts.FullReconcile,
 	}, logger, controlSocketPath)
 
-	printDriveReports(reports, cc)
+	printRunOnceResult(result, cc)
 
-	return driveReportsError(reports)
+	return runOnceResultError(result)
 }
 
 func runSyncWatch(
@@ -143,7 +138,7 @@ func runSyncOnce(
 	opts syncengine.RunOptions,
 	logger *slog.Logger,
 	controlSocketPath string,
-) []*multisync.DriveReport {
+) multisync.RunOnceResult {
 	if cc != nil && cc.syncRunOnceRunner != nil {
 		return cc.syncRunOnceRunner(ctx, holder, drives, mode, opts, logger, controlSocketPath)
 	}
