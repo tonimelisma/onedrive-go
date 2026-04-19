@@ -128,15 +128,16 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 	require.NoError(t, err)
 
 	dbPath := syncStorePathForStoreScopeTest(t, store)
-	snapshot, err := ReadDriveStatusSnapshot(t.Context(), dbPath, false, testLogger(t))
+	snapshot, err := ReadDriveStatusSnapshot(t.Context(), dbPath, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 1, snapshot.BaselineEntryCount)
 	assert.Equal(t, 3, snapshot.RunStatus.LastSucceededCount)
-	require.Len(t, snapshot.Conditions, 2)
-	assert.ElementsMatch(t,
-		[]SummaryKey{SummaryRemoteWriteDenied, SummaryInvalidFilename},
-		[]SummaryKey{snapshot.Conditions[0].SummaryKey, snapshot.Conditions[1].SummaryKey},
-	)
+	require.Len(t, snapshot.ObservationIssues, 1)
+	assert.Equal(t, "bad:name.txt", snapshot.ObservationIssues[0].Path)
+	require.Len(t, snapshot.BlockScopes, 1)
+	assert.Equal(t, scopeKey, snapshot.BlockScopes[0].Key)
+	require.Len(t, snapshot.BlockedRetryWork, 1)
+	assert.Equal(t, "Shared/Docs/a.txt", snapshot.BlockedRetryWork[0].Path)
 }
 
 func TestFinalizeInspectorRead_PreservesSuccessfulReadOnCloseError(t *testing.T) {
