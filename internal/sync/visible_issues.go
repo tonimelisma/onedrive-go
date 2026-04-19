@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 )
 
 // RemoteBlockedGroup is the first-class derived view for one active
@@ -97,10 +96,6 @@ func loadVisibleIssueProjection(
 		groups:  groups,
 		summary: buildVisibleIssueSummary(groups, retrying),
 	}, nil
-}
-
-func isMissingTableErr(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "no such table")
 }
 
 func queryRetryingIssueCount(ctx context.Context, db *sql.DB) (int, error) {

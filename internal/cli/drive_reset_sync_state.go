@@ -164,6 +164,10 @@ func syncStateResetCommand(canonicalID driveid.CanonicalID) string {
 	return fmt.Sprintf("onedrive-go drive reset-sync-state --drive %s", canonicalID.String())
 }
 
+func syncPauseDriveCommand(canonicalID driveid.CanonicalID) string {
+	return fmt.Sprintf("onedrive-go pause --drive %s", canonicalID.String())
+}
+
 func formatSyncStateResetRequiredMessage(canonicalID driveid.CanonicalID, err error) string {
 	var resetErr *syncengine.StateDBResetRequiredError
 	if !errors.As(err, &resetErr) {
@@ -171,8 +175,10 @@ func formatSyncStateResetRequiredMessage(canonicalID driveid.CanonicalID, err er
 	}
 
 	return fmt.Sprintf(
-		"%s. Run '%s' to delete and recreate it.",
+		"%s. To continue, either pause or stop this drive first ('%s'), "+
+			"rerun sync with --drive selecting only other drives, or fix the DB with '%s'.",
 		resetErr.Error(),
+		syncPauseDriveCommand(canonicalID),
 		syncStateResetCommand(canonicalID),
 	)
 }
@@ -206,6 +212,20 @@ func formatWatchStartupError(err error) error {
 	}
 
 	return fmt.Errorf("watch startup failed: %s", strings.Join(parts, "; "))
+}
+
+func writeWatchStartWarnings(output io.Writer, failures []multisync.DriveReport) {
+	if len(failures) == 0 {
+		return
+	}
+
+	for i := range failures {
+		failure := failures[i]
+		writeWarningf(output, "warning: drive %s did not start: %s\n",
+			failure.CanonicalID.String(),
+			formatSyncStateResetRequiredMessage(failure.CanonicalID, failure.Err),
+		)
+	}
 }
 
 func stdinAsWriter(r io.Reader) io.Writer {
