@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [verified], R-2.10.47 [verified], R-6.6.11 [verified]
+Implements: R-1 [implemented], R-2.3.3 [designed], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.11 [designed]
 
 ## Overview
 
@@ -35,7 +35,7 @@ are inserted, updated, pruned, and validated.
 
 | Behavior | Evidence |
 | --- | --- |
-| `status` stays read-only, renders sync-state snapshots, and surfaces auth/issue state without reviving manual conflict or delete-approval UI. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyProjectionHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
+| `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyProjectionHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
@@ -57,16 +57,27 @@ There is no `resolve` command family anymore.
 
 ## Status And Read-Only Sync State
 
-`status` is intentionally read-only and account-centric.
+`status` is intentionally read-only and account-centric. It is the only
+sync-health command.
 
 - account and drive identity come from the validated config+catalog snapshot
-- sync-state snapshots come from store-owned read helpers
+- sync-state snapshots come from store-owned raw authority reads
 - live authenticated account identity and drive catalog overlays come from
   bounded Graph proof/discovery owned by the command
 - live perf comes from the active owner over the control socket when requested
 
-There is no separate history-only surface for resolved conflicts, and status no
-longer exposes delete-safety or manual conflict-request sections.
+The target `status` surface projects the full sync model directly from:
+
+- `observation_issues`
+- `retry_work`
+- `block_scopes`
+- `run_status`
+- account/auth/degraded overlays
+- optional live perf
+
+There is no second sync-health command. There is no separate history-only
+surface for resolved conflicts, and `status` no longer exposes delete-safety or
+manual conflict-request sections.
 
 ## Control Socket
 
