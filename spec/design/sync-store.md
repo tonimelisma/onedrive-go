@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_retry_state.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_state_health.go, internal/sync/store_reset.go, internal/sync/visible_issues.go, internal/sync/issue_summary.go, internal/sync/scope_key_wire.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_retry_state.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/visible_issues.go, internal/sync/issue_summary.go, internal/sync/scope_key_wire.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
 Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [verified], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -38,7 +38,7 @@ policy, or live watch-mode coordination. Those belong to the engine.
 | --- | --- |
 | The store remains the sole durable authority for baseline, local/remote snapshots, retry state, scope-block, observation-state, and run-status rows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestWriteSyncRunStatus_RoundTrip`, `TestSyncStore_ReleaseScope`, `TestSyncStore_DiscardScope` |
 | Read-only snapshot helpers back status without reopening deleted conflict/delete-approval workflows. | `TestReadDriveStatusSnapshot`, `TestSyncStore_ListVisibleIssueGroups`, `TestQuerySyncState_UsesReadOnlyProjectionHelper` |
-| Schema validation stays store-owned, while startup receives typed reset-required errors for unreadable, incompatible, or unsupported existing DBs and the explicit reset command owns deletion/recreate. | `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestNewEngine_RequiresResetForNonSQLiteStateDB`, `TestNewEngine_RequiresResetForIncompatibleSchemaStateDB`, `TestNewEngine_RequiresResetForUnsupportedLegacyPersistedState`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
+| Schema validation stays store-owned, while startup receives typed reset-required errors for unreadable, incompatible, or unsupported existing DBs and the explicit reset command owns deletion/recreate. | `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestNewEngine_RequiresResetForNonSQLiteStateDB`, `TestNewEngine_RequiresResetForIncompatibleSchemaStateDB`, `TestNewEngine_RequiresResetForUnsupportedStoreGeneration`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 
 ## Write Responsibilities
 
@@ -157,14 +157,19 @@ than opening a writable store.
 
 Two store-owned helpers isolate the remaining state-DB lifecycle policy:
 
-- `store_state_health.go` opens an existing DB non-mutating, classifies unreadable
-  or unsupported persisted state, and returns typed reset-required errors
+- `store_compatibility.go` opens an existing DB non-mutating, classifies unreadable
+  or unsupported existing stores, and returns typed reset-required errors
 - `store_reset.go` deletes one drive's DB file family and recreates a fresh
   canonical DB in place
 
 Engine startup may use the diagnosis helper, but it must not call the
 destructive reset helper automatically. The explicit CLI reset command owns the
 delete-and-recreate action.
+
+The canonical schema carries a first-class store-generation marker in
+`store_metadata`. The store boundary accepts only the current schema plus the
+current generation marker; it does not keep row-by-row compatibility probes for
+deleted persisted shapes.
 
 ## Baseline Cache
 

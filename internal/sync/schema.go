@@ -9,7 +9,17 @@ import (
 )
 
 const (
+	currentSyncStoreGeneration = 1
+	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata
+		(singleton_id, schema_generation)
+	VALUES (1, ?)
+	ON CONFLICT(singleton_id) DO UPDATE SET schema_generation = excluded.schema_generation`
 	canonicalSchemaSQL = `
+CREATE TABLE IF NOT EXISTS store_metadata (
+    singleton_id       INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+    schema_generation  INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS baseline (
     item_id         TEXT    NOT NULL PRIMARY KEY,
     path            TEXT    NOT NULL UNIQUE,
@@ -161,6 +171,9 @@ var ErrIncompatibleSchema = errors.New("sync: incompatible sync store schema")
 
 func canonicalSyncStoreColumns() map[string][]string {
 	return map[string][]string{
+		"store_metadata": {
+			"singleton_id", "schema_generation",
+		},
 		"baseline": {
 			"item_id", "path", "parent_id", "item_type", "local_hash", "remote_hash",
 			"local_size", "remote_size", "local_mtime", "remote_mtime", "etag",
@@ -241,6 +254,9 @@ func createCanonicalSchema(ctx context.Context, db *sql.DB) (err error) {
 	if _, err = tx.ExecContext(ctx, sqlEnsureRunStatusRow); err != nil {
 		return fmt.Errorf("seed run_status row: %w", err)
 	}
+	if _, err = tx.ExecContext(ctx, sqlEnsureStoreMetadataRow, currentSyncStoreGeneration); err != nil {
+		return fmt.Errorf("seed store_metadata row: %w", err)
+	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema transaction: %w", err)
 	}
@@ -284,6 +300,33 @@ func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []str
 				expectedColumns,
 			)
 		}
+	}
+
+	if err := validateStoreGeneration(ctx, db); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateStoreGeneration(ctx context.Context, db *sql.DB) error {
+	var generation int
+	err := db.QueryRowContext(ctx,
+		`SELECT schema_generation FROM store_metadata WHERE singleton_id = 1`,
+	).Scan(&generation)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: sync store generation marker is missing", ErrIncompatibleSchema)
+		}
+		return fmt.Errorf("sync: inspect store generation: %w", err)
+	}
+	if generation != currentSyncStoreGeneration {
+		return fmt.Errorf(
+			"%w: sync store generation %d is unsupported; expected %d",
+			ErrIncompatibleSchema,
+			generation,
+			currentSyncStoreGeneration,
+		)
 	}
 
 	return nil

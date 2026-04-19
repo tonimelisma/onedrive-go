@@ -46,6 +46,7 @@ type OrchestratorConfig struct {
 	Runtime           *driveops.SessionRuntime // token caching + Session creation
 	Logger            *slog.Logger
 	ControlSocketPath string
+	StartWarning      func([]DriveReport)
 	DebugEventHook    func(syncengine.DebugEvent)
 	PerfParent        *perf.Collector
 }
@@ -272,9 +273,11 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.Mode, opts 
 	}
 
 	runners, startFailures := o.startInitialWatchRunners(ctx, drives, mode, opts)
-
-	if len(runners) == 0 && len(startFailures) > 0 {
-		return &WatchStartupError{Failures: startFailures}
+	if err := validateInitialWatchStart(runners, startFailures); err != nil {
+		return err
+	}
+	if len(startFailures) > 0 {
+		o.emitStartWarning(startFailures)
 	}
 
 	defer func() {
@@ -346,6 +349,28 @@ func (o *Orchestrator) startInitialWatchRunners(
 	}
 
 	return runners, startFailures
+}
+
+func validateInitialWatchStart(
+	runners map[driveid.CanonicalID]*watchRunner,
+	startFailures []DriveReport,
+) error {
+	if len(runners) > 0 {
+		return nil
+	}
+	if len(startFailures) > 0 {
+		return &WatchStartupError{Failures: startFailures}
+	}
+
+	return fmt.Errorf("all selected drives are paused")
+}
+
+func (o *Orchestrator) emitStartWarning(failures []DriveReport) {
+	if len(failures) == 0 || o == nil || o.cfg == nil || o.cfg.StartWarning == nil {
+		return
+	}
+
+	o.cfg.StartWarning(failures)
 }
 
 // startWatchRunner creates and starts a watch-mode engine for a single drive.
@@ -484,6 +509,7 @@ func (o *Orchestrator) reload(
 
 	// Start runners for newly added/resumed drives.
 	var started int
+	startFailures := make([]DriveReport, 0)
 
 	for cid, rd := range newActive {
 		if _, ok := runners[cid]; ok {
@@ -496,6 +522,11 @@ func (o *Orchestrator) reload(
 				slog.String("drive", cid.String()),
 				slog.String("error", startErr.Error()),
 			)
+			startFailures = append(startFailures, DriveReport{
+				CanonicalID: rd.CanonicalID,
+				DisplayName: rd.DisplayName,
+				Err:         startErr,
+			})
 
 			continue
 		}
@@ -512,9 +543,14 @@ func (o *Orchestrator) reload(
 	// token files from disk. Handles logout + re-login between reloads.
 	o.cfg.Runtime.FlushTokenCache()
 
+	if len(startFailures) > 0 {
+		o.emitStartWarning(startFailures)
+	}
+
 	o.logger.Info("config reload complete",
 		slog.Int("started", started),
 		slog.Int("stopped", stopped),
 		slog.Int("active", len(runners)),
+		slog.Int("skipped", len(startFailures)),
 	)
 }

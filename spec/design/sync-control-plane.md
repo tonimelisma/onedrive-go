@@ -32,7 +32,7 @@ runtime package that implements it.
 
 | Behavior | Evidence |
 | --- | --- |
-| `RunWatch` starts the configured drive set and keeps zero-drive watch mode valid without inventing a second startup path. | `TestOrchestrator_RunWatch_SingleDrive`, `TestOrchestrator_RunWatch_MultiDrive`, `TestOrchestrator_RunWatch_ZeroDrives` |
+| `RunWatch` starts the configured runnable drive set, skips reset-required drives with immediate warnings, and rejects all-paused startup without inventing a second startup path. | `TestOrchestrator_RunWatch_SingleDrive`, `TestOrchestrator_RunWatch_MultiDrive`, `TestOrchestrator_RunWatch_SkipsResetRequiredDriveWhenAnotherDriveStarts`, `TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused` |
 | The Unix control socket is the single live-owner lock for one-shot and watch sync, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
@@ -70,7 +70,7 @@ reported per drive.
 
 ### RunWatch
 
-`RunWatch` starts one watch-mode engine per non-paused drive and then owns the
+`RunWatch` starts one watch-mode engine per runnable non-paused drive and then owns the
 long-running control loop. It listens for:
 
 - `ctx.Done()` for shutdown
@@ -79,6 +79,11 @@ long-running control loop. It listens for:
 Pause semantics come from `config.Drive.IsPaused()` and
 `config.ClearExpiredPauses()`. The control plane consumes those rules; it does
 not redefine them.
+
+Existing state DBs that fail store compatibility checks are reported as
+per-drive startup failures. Watch startup warns about those drives immediately,
+keeps healthy drives running, and exits non-zero only when no runnable drive
+starts.
 
 ### Control Socket
 
@@ -129,7 +134,9 @@ Control-socket reload does four things in order:
 4. diff that set against running drives
 
 Removed or newly paused drives are stopped and closed. Newly added or newly
-resumed drives are started. Already-running drives remain running. When a
+resumed drives are started when they are runnable; reset-required drives are
+warned and skipped without bouncing healthy runners. Already-running drives
+remain running. When a
 timed pause has already expired by reload time, the config keys are cleaned up
 but the running drive is not bounced.
 
