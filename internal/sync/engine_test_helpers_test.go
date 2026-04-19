@@ -460,7 +460,7 @@ func handleExternalChangesForTest(t *testing.T, eng *testEngine, ctx context.Con
 	testWatchRuntime(t, eng).handleExternalChanges(ctx)
 }
 
-func setTestScopeBlock(t *testing.T, eng *testEngine, block *ScopeBlock) {
+func setTestBlockScope(t *testing.T, eng *testEngine, block *BlockScope) {
 	t.Helper()
 
 	require.NotNil(t, block)
@@ -479,7 +479,7 @@ func setTestScopeBlock(t *testing.T, eng *testEngine, block *ScopeBlock) {
 		block.NextTrialAt = block.BlockedAt.Add(block.TrialInterval)
 	}
 	if !block.Key.IsPermRemoteWrite() {
-		require.NoError(t, eng.baseline.UpsertScopeBlock(context.Background(), block))
+		require.NoError(t, eng.baseline.UpsertBlockScope(context.Background(), block))
 	}
 	if eng.runtime != nil {
 		eng.runtime.upsertActiveScope(block)
@@ -543,7 +543,7 @@ func isFailureResolvedForTest(t *testing.T, eng *testEngine, ctx context.Context
 	if driveID.IsZero() {
 		driveID = eng.driveID
 	}
-	candidate := flow.buildRetryCandidateFromRetryState(ctx, bl, &RetryStateRow{
+	candidate := flow.buildRetryCandidateFromRetryWork(ctx, bl, &RetryWorkRow{
 		Path:       row.Path,
 		ActionType: normalizeFailureActionType(row.Direction, row.ActionType),
 		ScopeKey:   row.ScopeKey,
@@ -1152,10 +1152,10 @@ func activeBlockingScopeForTest(t *testing.T, eng *testEngine, ta *TrackedAction
 	return testScopeController(t, eng).activeBlockingScope(rt, ta)
 }
 
-func applyScopeBlockForTest(t *testing.T, eng *testEngine, ctx context.Context, sr ScopeUpdateResult) {
+func applyBlockScopeForTest(t *testing.T, eng *testEngine, ctx context.Context, sr ScopeUpdateResult) {
 	t.Helper()
 	rt := testWatchRuntime(t, eng)
-	testScopeController(t, eng).applyScopeBlock(ctx, rt, sr)
+	testScopeController(t, eng).applyBlockScope(ctx, rt, sr)
 }
 
 func feedScopeDetectionForTest(t *testing.T, eng *testEngine, ctx context.Context, r *ActionCompletion) {
@@ -1164,16 +1164,16 @@ func feedScopeDetectionForTest(t *testing.T, eng *testEngine, ctx context.Contex
 	testScopeController(t, eng).feedScopeDetection(ctx, rt, r)
 }
 
-func isTestScopeBlocked(eng *testEngine, key ScopeKey) bool {
+func isTestBlockScopeed(eng *testEngine, key ScopeKey) bool {
 	if eng.runtime != nil {
 		if eng.runtime.hasActiveScope(key) {
 			return true
 		}
 	}
 
-	blocks, err := eng.baseline.ListScopeBlocks(context.Background())
+	blocks, err := eng.baseline.ListBlockScopes(context.Background())
 	if err != nil {
-		panic(fmt.Sprintf("ListScopeBlocks: %v", err))
+		panic(fmt.Sprintf("ListBlockScopes: %v", err))
 	}
 	for i := range blocks {
 		if blocks[i].Key == key {
@@ -1183,23 +1183,23 @@ func isTestScopeBlocked(eng *testEngine, key ScopeKey) bool {
 	return false
 }
 
-func getTestScopeBlock(eng *testEngine, key ScopeKey) (ScopeBlock, bool) {
+func getTestBlockScope(eng *testEngine, key ScopeKey) (BlockScope, bool) {
 	if eng.runtime != nil {
 		if block, ok := eng.runtime.lookupActiveScope(key); ok {
 			return block, true
 		}
 	}
 
-	blocks, err := eng.baseline.ListScopeBlocks(context.Background())
+	blocks, err := eng.baseline.ListBlockScopes(context.Background())
 	if err != nil {
-		panic(fmt.Sprintf("ListScopeBlocks: %v", err))
+		panic(fmt.Sprintf("ListBlockScopes: %v", err))
 	}
 	for i := range blocks {
 		if blocks[i].Key == key {
 			return *blocks[i], true
 		}
 	}
-	return ScopeBlock{}, false
+	return BlockScope{}, false
 }
 
 // deltaPageWithItems returns a DeltaPage with the given items and a delta link.

@@ -57,10 +57,10 @@ type watchRuntimeState struct {
 	// working set while timers are being re-armed.
 	activeScopesMu sync.RWMutex
 
-	// Active scope blocks owned by the watch control flow. The slice is tiny
+	// Active block scopes owned by the watch control flow. The slice is tiny
 	// (usually 0-5 entries), so linear scans keep the logic simple and avoid a
 	// second mirrored subsystem.
-	activeScopes []ScopeBlock
+	activeScopes []BlockScope
 
 	// Scope detection — sliding window failure tracking.
 	scopeState *ScopeState

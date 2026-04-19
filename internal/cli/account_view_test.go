@@ -152,7 +152,7 @@ func touchStateDBForAccount(t *testing.T, cid driveid.CanonicalID) error {
 		require.NoError(t, store.Close(t.Context()))
 	}()
 
-	if err := store.UpsertScopeBlock(t.Context(), &syncengine.ScopeBlock{
+	if err := store.UpsertBlockScope(t.Context(), &syncengine.BlockScope{
 		Key:           syncengine.SKService(),
 		IssueType:     syncengine.IssueServiceOutage,
 		TimingSource:  syncengine.ScopeTimingBackoff,
@@ -160,7 +160,7 @@ func touchStateDBForAccount(t *testing.T, cid driveid.CanonicalID) error {
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   time.Date(2026, 4, 3, 8, 0, 5, 0, time.UTC),
 	}); err != nil {
-		return fmt.Errorf("upsert scope block: %w", err)
+		return fmt.Errorf("upsert block scope: %w", err)
 	}
 
 	return nil

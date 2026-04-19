@@ -44,11 +44,11 @@ func (ph *PermissionHandler) HasPermChecker() bool {
 
 // ActiveRemoteBlockedBoundaries returns all persisted remote permission
 // boundaries currently blocking write admission under read-only subtrees.
-// Runtime blocking derives from blocked retry_state rows, not sync_failures.
+// Runtime blocking derives from blocked retry_work rows, not sync_failures.
 func (ph *PermissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) []string {
-	rows, err := ph.store.ListBlockedRetryState(ctx)
+	rows, err := ph.store.ListBlockedRetryWork(ctx)
 	if err != nil {
-		ph.logger.Warn("ActiveRemoteBlockedBoundaries: failed to list blocked retry_state rows",
+		ph.logger.Warn("ActiveRemoteBlockedBoundaries: failed to list blocked retry_work rows",
 			slog.String("error", err.Error()),
 		)
 
@@ -295,7 +295,7 @@ func (ph *PermissionHandler) recheckPermissionsForScopeKeys(
 		return nil
 	}
 
-	rows, err := ph.store.ListBlockedRetryState(ctx)
+	rows, err := ph.store.ListBlockedRetryWork(ctx)
 	if err != nil || len(rows) == 0 {
 		return nil
 	}
@@ -451,7 +451,7 @@ func (ph *PermissionHandler) handleLocalPermission(
 	r *ActionCompletion,
 ) PermissionCheckDecision {
 	// If the sync root itself is inaccessible, WARN loudly — don't silently
-	// block everything behind a scope block. The sync root being inaccessible
+	// block everything behind a block scope. The sync root being inaccessible
 	// is fundamentally different from a subdirectory denial: ALL operations
 	// will fail, and the user needs a clear, actionable message.
 	if !isDirAccessible(ph.syncTree, ".") {
@@ -560,7 +560,7 @@ func (ph *PermissionHandler) localDirectoryPermissionDecision(
 			ErrMsg:     "directory not accessible (check filesystem permissions)",
 			ScopeKey:   scopeKey,
 		},
-		ScopeBlock: ScopeBlock{
+		BlockScope: BlockScope{
 			Key:          scopeKey,
 			IssueType:    IssueLocalPermissionDenied,
 			TimingSource: ScopeTimingNone,
@@ -585,11 +585,11 @@ func (ph *PermissionHandler) deepestDeniedBoundary(parentDir string) string {
 	}
 }
 
-// recheckLocalPermissions rechecks persisted local permission scope blocks at
+// recheckLocalPermissions rechecks persisted local permission block scopes at
 // the start of each sync pass. If a directory is now accessible, the scope is
 // released (R-2.10.13).
 func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []PermissionRecheckDecision {
-	blocks, err := ph.store.ListScopeBlocks(ctx)
+	blocks, err := ph.store.ListBlockScopes(ctx)
 	if err != nil || len(blocks) == 0 {
 		return nil
 	}
@@ -640,7 +640,7 @@ func (ph *PermissionHandler) clearScannerResolvedPermissions(
 
 	var decisions []PermissionRecheckDecision
 
-	blocks, err := ph.store.ListScopeBlocks(ctx)
+	blocks, err := ph.store.ListBlockScopes(ctx)
 	if err == nil {
 		for i := range blocks {
 			block := blocks[i]

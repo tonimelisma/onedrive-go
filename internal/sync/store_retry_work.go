@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	sqlUpsertRetryState = `INSERT INTO retry_state
+	sqlUpsertRetryWork = `INSERT INTO retry_work
 		(work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(work_key) DO UPDATE SET
@@ -25,34 +25,34 @@ const (
 			last_error = excluded.last_error,
 			first_seen_at = excluded.first_seen_at,
 			last_seen_at = excluded.last_seen_at`
-	sqlDeleteRetryStateByPathType = `DELETE FROM retry_state WHERE path = ? AND old_path = ? AND action_type = ?`
-	sqlListRetryState             = `SELECT
+	sqlDeleteRetryWorkByPathType = `DELETE FROM retry_work WHERE path = ? AND old_path = ? AND action_type = ?`
+	sqlListRetryWork             = `SELECT
 		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
-		FROM retry_state
+		FROM retry_work
 		ORDER BY path, work_key`
-	sqlListRetryStateBlocked = `SELECT
+	sqlListRetryWorkBlocked = `SELECT
 		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
-		FROM retry_state
+		FROM retry_work
 		WHERE blocked = 1
 		ORDER BY scope_key, path, work_key`
-	sqlListRetryStateReady = `SELECT
+	sqlListRetryWorkReady = `SELECT
 		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
-		FROM retry_state
+		FROM retry_work
 		WHERE blocked = 0 AND next_retry_at > 0 AND next_retry_at <= ?
 		ORDER BY next_retry_at, path, work_key`
 	sqlPickRetryTrialCandidate = `SELECT
 		work_key, path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, last_error, first_seen_at, last_seen_at
-		FROM retry_state
+		FROM retry_work
 		WHERE blocked = 1 AND scope_key = ?
 		ORDER BY RANDOM()
 		LIMIT 1`
-	sqlPruneScopeBlocksWithoutBlockedRetries = `DELETE FROM scope_blocks
+	sqlPruneBlockScopesWithoutBlockedRetries = `DELETE FROM block_scopes
 		WHERE NOT EXISTS (
-			SELECT 1 FROM retry_state
-			WHERE retry_state.blocked = 1
-				AND retry_state.scope_key = scope_blocks.scope_key
+			SELECT 1 FROM retry_work
+			WHERE retry_work.blocked = 1
+				AND retry_work.scope_key = block_scopes.scope_key
 		)`
-	sqlEarliestRetryStateAt = `SELECT MIN(next_retry_at) FROM retry_state
+	sqlEarliestRetryWorkAt = `SELECT MIN(next_retry_at) FROM retry_work
 		WHERE blocked = 0
 			AND next_retry_at > ?`
 )
@@ -61,19 +61,19 @@ func serializeRetryWorkKey(key RetryWorkKey) string {
 	return fmt.Sprintf("%s\x00%s\x00%s", key.ActionType.String(), key.OldPath, key.Path)
 }
 
-func (m *SyncStore) UpsertRetryState(ctx context.Context, row *RetryStateRow) error {
-	return upsertRetryStateTx(ctx, m.db, row)
+func (m *SyncStore) UpsertRetryWork(ctx context.Context, row *RetryWorkRow) error {
+	return upsertRetryWorkTx(ctx, m.db, row)
 }
 
-func upsertRetryStateTx(ctx context.Context, runner sqlTxRunner, row *RetryStateRow) error {
+func upsertRetryWorkTx(ctx context.Context, runner sqlTxRunner, row *RetryWorkRow) error {
 	if row == nil {
-		return fmt.Errorf("sync: upserting retry_state: nil row")
+		return fmt.Errorf("sync: upserting retry_work: nil row")
 	}
 	if row.WorkKey == "" {
 		row.WorkKey = serializeRetryWorkKey(retryWorkKey(row.Path, row.OldPath, row.ActionType))
 	}
 
-	_, err := runner.ExecContext(ctx, sqlUpsertRetryState,
+	_, err := runner.ExecContext(ctx, sqlUpsertRetryWork,
 		row.WorkKey,
 		row.Path,
 		row.OldPath,
@@ -87,55 +87,55 @@ func upsertRetryStateTx(ctx context.Context, runner sqlTxRunner, row *RetryState
 		row.LastSeenAt,
 	)
 	if err != nil {
-		return fmt.Errorf("sync: upserting retry_state for %s: %w", row.Path, err)
+		return fmt.Errorf("sync: upserting retry_work for %s: %w", row.Path, err)
 	}
 
 	return nil
 }
 
-func deleteRetryStateByWorkTx(ctx context.Context, runner sqlTxRunner, work RetryWorkKey) error {
+func deleteRetryWorkByWorkTx(ctx context.Context, runner sqlTxRunner, work RetryWorkKey) error {
 	if _, err := runner.ExecContext(
 		ctx,
-		sqlDeleteRetryStateByPathType,
+		sqlDeleteRetryWorkByPathType,
 		work.Path,
 		work.OldPath,
 		work.ActionType.String(),
 	); err != nil {
-		return fmt.Errorf("sync: deleting retry_state for %s: %w", work.Path, err)
+		return fmt.Errorf("sync: deleting retry_work for %s: %w", work.Path, err)
 	}
 
 	return nil
 }
 
-func deleteRetryStateByScopeTx(ctx context.Context, runner sqlTxRunner, scopeKey string) error {
-	if _, err := runner.ExecContext(ctx, `DELETE FROM retry_state WHERE scope_key = ?`, scopeKey); err != nil {
-		return fmt.Errorf("sync: deleting retry_state for scope %s: %w", scopeKey, err)
+func deleteRetryWorkByScopeTx(ctx context.Context, runner sqlTxRunner, scopeKey string) error {
+	if _, err := runner.ExecContext(ctx, `DELETE FROM retry_work WHERE scope_key = ?`, scopeKey); err != nil {
+		return fmt.Errorf("sync: deleting retry_work for scope %s: %w", scopeKey, err)
 	}
 
 	return nil
 }
 
-func markRetryStateScopeReadyTx(
+func markRetryWorkScopeReadyTx(
 	ctx context.Context,
 	runner sqlTxRunner,
 	scopeKey string,
 	nowNano int64,
 ) error {
 	if _, err := runner.ExecContext(ctx,
-		`UPDATE retry_state
+		`UPDATE retry_work
 		SET blocked = 0, next_retry_at = ?
 		WHERE scope_key = ? AND blocked = 1`,
 		nowNano, scopeKey,
 	); err != nil {
-		return fmt.Errorf("sync: setting retry_state scope ready for %s: %w", scopeKey, err)
+		return fmt.Errorf("sync: setting retry_work scope ready for %s: %w", scopeKey, err)
 	}
 
 	return nil
 }
 
-func retryStateIdentityForWork(path string, oldPath string, actionType ActionType) RetryStateRow {
+func retryWorkIdentityForWork(path string, oldPath string, actionType ActionType) RetryWorkRow {
 	work := retryWorkKey(path, oldPath, actionType)
-	return RetryStateRow{
+	return RetryWorkRow{
 		WorkKey:    serializeRetryWorkKey(work),
 		Path:       path,
 		OldPath:    oldPath,
@@ -143,11 +143,11 @@ func retryStateIdentityForWork(path string, oldPath string, actionType ActionTyp
 	}
 }
 
-func (m *SyncStore) DeleteRetryStateByWork(ctx context.Context, work RetryWorkKey) error {
-	return deleteRetryStateByWorkTx(ctx, m.db, work)
+func (m *SyncStore) DeleteRetryWorkByWork(ctx context.Context, work RetryWorkKey) error {
+	return deleteRetryWorkByWorkTx(ctx, m.db, work)
 }
 
-// ResolveTransientRetryWork clears one exact retry_state work item and, when a
+// ResolveTransientRetryWork clears one exact retry_work work item and, when a
 // matching transient item failure still exists, removes that reporting row in
 // the same transaction.
 func (m *SyncStore) ResolveTransientRetryWork(
@@ -192,7 +192,7 @@ func (m *SyncStore) ResolveTransientRetryWork(
 		return nil, false, fmt.Errorf("sync: resolving transient retry work for %s: %w", work.Path, scanErr)
 	}
 
-	if retryErr := deleteRetryStateByWorkTx(ctx, tx, work); retryErr != nil {
+	if retryErr := deleteRetryWorkByWorkTx(ctx, tx, work); retryErr != nil {
 		return nil, false, retryErr
 	}
 	if found {
@@ -218,42 +218,42 @@ func (m *SyncStore) ResolveTransientRetryWork(
 	return row, found, nil
 }
 
-func (m *SyncStore) ListRetryState(ctx context.Context) ([]RetryStateRow, error) {
-	rows, err := m.db.QueryContext(ctx, sqlListRetryState)
+func (m *SyncStore) ListRetryWork(ctx context.Context) ([]RetryWorkRow, error) {
+	rows, err := m.db.QueryContext(ctx, sqlListRetryWork)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying retry_state: %w", err)
+		return nil, fmt.Errorf("sync: querying retry_work: %w", err)
 	}
 	defer rows.Close()
 
-	return scanRetryStateRows(rows)
+	return scanRetryWorkRows(rows)
 }
 
-func (m *SyncStore) ListBlockedRetryState(ctx context.Context) ([]RetryStateRow, error) {
-	rows, err := m.db.QueryContext(ctx, sqlListRetryStateBlocked)
+func (m *SyncStore) ListBlockedRetryWork(ctx context.Context) ([]RetryWorkRow, error) {
+	rows, err := m.db.QueryContext(ctx, sqlListRetryWorkBlocked)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying blocked retry_state rows: %w", err)
+		return nil, fmt.Errorf("sync: querying blocked retry_work rows: %w", err)
 	}
 	defer rows.Close()
 
-	return scanRetryStateRows(rows)
+	return scanRetryWorkRows(rows)
 }
 
-func (m *SyncStore) ListRetryStateReady(ctx context.Context, now time.Time) ([]RetryStateRow, error) {
-	rows, err := m.db.QueryContext(ctx, sqlListRetryStateReady, now.UnixNano())
+func (m *SyncStore) ListRetryWorkReady(ctx context.Context, now time.Time) ([]RetryWorkRow, error) {
+	rows, err := m.db.QueryContext(ctx, sqlListRetryWorkReady, now.UnixNano())
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying ready retry_state rows: %w", err)
+		return nil, fmt.Errorf("sync: querying ready retry_work rows: %w", err)
 	}
 	defer rows.Close()
 
-	return scanRetryStateRows(rows)
+	return scanRetryWorkRows(rows)
 }
 
-func (m *SyncStore) EarliestRetryStateAt(ctx context.Context, now time.Time) (time.Time, error) {
+func (m *SyncStore) EarliestRetryWorkAt(ctx context.Context, now time.Time) (time.Time, error) {
 	nowNano := now.UnixNano()
 
 	var minNano *int64
-	if err := m.db.QueryRowContext(ctx, sqlEarliestRetryStateAt, nowNano).Scan(&minNano); err != nil {
-		return time.Time{}, fmt.Errorf("sync: querying earliest retry_state at: %w", err)
+	if err := m.db.QueryRowContext(ctx, sqlEarliestRetryWorkAt, nowNano).Scan(&minNano); err != nil {
+		return time.Time{}, fmt.Errorf("sync: querying earliest retry_work at: %w", err)
 	}
 
 	if minNano == nil {
@@ -266,25 +266,25 @@ func (m *SyncStore) EarliestRetryStateAt(ctx context.Context, now time.Time) (ti
 func (m *SyncStore) PickRetryTrialCandidate(
 	ctx context.Context,
 	scopeKey ScopeKey,
-) (*RetryStateRow, bool, error) {
+) (*RetryWorkRow, bool, error) {
 	row := m.db.QueryRowContext(ctx, sqlPickRetryTrialCandidate, scopeKey.String())
-	var parsed RetryStateRow
-	if err := scanRetryStateRow(row, &parsed); err != nil {
+	var parsed RetryWorkRow
+	if err := scanRetryWorkRow(row, &parsed); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, false, nil
 		}
 
-		return nil, false, fmt.Errorf("sync: picking retry_state trial candidate for %s: %w", scopeKey.String(), err)
+		return nil, false, fmt.Errorf("sync: picking retry_work trial candidate for %s: %w", scopeKey.String(), err)
 	}
 
 	return &parsed, true, nil
 }
 
-func (m *SyncStore) PruneRetryStateToCurrentActions(
+func (m *SyncStore) PruneRetryWorkToCurrentActions(
 	ctx context.Context,
 	work []RetryWorkKey,
 ) error {
-	rows, err := m.ListRetryState(ctx)
+	rows, err := m.ListRetryWork(ctx)
 	if err != nil {
 		return err
 	}
@@ -299,7 +299,7 @@ func (m *SyncStore) PruneRetryStateToCurrentActions(
 		if _, ok := keep[key]; ok {
 			continue
 		}
-		if err := m.DeleteRetryStateByWork(ctx, key); err != nil {
+		if err := m.DeleteRetryWorkByWork(ctx, key); err != nil {
 			return err
 		}
 	}
@@ -307,21 +307,21 @@ func (m *SyncStore) PruneRetryStateToCurrentActions(
 	return nil
 }
 
-func (m *SyncStore) PruneScopeBlocksWithoutBlockedRetries(ctx context.Context) error {
-	if _, err := m.db.ExecContext(ctx, sqlPruneScopeBlocksWithoutBlockedRetries); err != nil {
-		return fmt.Errorf("sync: pruning scope blocks without blocked retries: %w", err)
+func (m *SyncStore) PruneBlockScopesWithoutBlockedRetries(ctx context.Context) error {
+	if _, err := m.db.ExecContext(ctx, sqlPruneBlockScopesWithoutBlockedRetries); err != nil {
+		return fmt.Errorf("sync: pruning block scopes without blocked retries: %w", err)
 	}
 
 	return nil
 }
 
-type retryStateScanner interface {
+type retryWorkScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanRetryStateRow(scanner retryStateScanner, row *RetryStateRow) error {
+func scanRetryWorkRow(scanner retryWorkScanner, row *RetryWorkRow) error {
 	if row == nil {
-		return fmt.Errorf("sync: scanning retry_state row: nil destination")
+		return fmt.Errorf("sync: scanning retry_work row: nil destination")
 	}
 
 	var scopeKey string
@@ -338,24 +338,24 @@ func scanRetryStateRow(scanner retryStateScanner, row *RetryStateRow) error {
 		&row.FirstSeenAt,
 		&row.LastSeenAt,
 	); err != nil {
-		return fmt.Errorf("sync: scanning retry_state row: %w", err)
+		return fmt.Errorf("sync: scanning retry_work row: %w", err)
 	}
 
 	row.ScopeKey = ParseScopeKey(scopeKey)
 	return nil
 }
 
-func scanRetryStateRows(rows *sql.Rows) ([]RetryStateRow, error) {
-	var result []RetryStateRow
+func scanRetryWorkRows(rows *sql.Rows) ([]RetryWorkRow, error) {
+	var result []RetryWorkRow
 	for rows.Next() {
-		var row RetryStateRow
-		if err := scanRetryStateRow(rows, &row); err != nil {
-			return nil, fmt.Errorf("sync: scanning retry_state row: %w", err)
+		var row RetryWorkRow
+		if err := scanRetryWorkRow(rows, &row); err != nil {
+			return nil, fmt.Errorf("sync: scanning retry_work row: %w", err)
 		}
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating retry_state rows: %w", err)
+		return nil, fmt.Errorf("sync: iterating retry_work rows: %w", err)
 	}
 
 	return result, nil

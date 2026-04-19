@@ -98,7 +98,7 @@ engine.
 
 ### Scope retry via trial actions
 
-When the engine activates a scope block, blocked descendants remain in
+When the engine activates a block scope, blocked descendants remain in
 `retry_work` with `blocked=true` and a matching `scope_key`. Recovery happens
 through trial actions:
 

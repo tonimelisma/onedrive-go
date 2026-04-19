@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	// defaultRetryBatchSize limits how many retry_state rows are processed per
+	// defaultRetryBatchSize limits how many retry_work rows are processed per
 	// retry sweep so a large durable retry queue cannot monopolize the watch loop.
 	defaultRetryBatchSize = 1024
 )
@@ -223,7 +223,7 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 		return nil
 	}
 
-	work := retryWorkKeyForRetryState(retryRow)
+	work := retryWorkKeyForRetryWork(retryRow)
 	subset := selectedActionPlanByKeys(plan, []RetryWorkKey{work})
 	if subset == nil || len(subset.Actions) == 0 {
 		rt.clearStaleTrialRetryWork(ctx, key, retryRow)
@@ -253,11 +253,11 @@ func (rt *watchRuntime) handleMissingTrialCandidate(
 	ctx context.Context,
 	bl *Baseline,
 	key ScopeKey,
-	probeRow *RetryStateRow,
+	probeRow *RetryWorkRow,
 	hadBlockedWork bool,
 ) []*TrackedAction {
 	if hadBlockedWork {
-		driveID, driveErr := rt.retryStateDriveID(ctx)
+		driveID, driveErr := rt.retryWorkDriveID(ctx)
 		if driveErr != nil {
 			rt.engine.logger.Warn("runTrialDispatch: failed to load drive for disappeared blocked retry work",
 				slog.String("scope_key", key.String()),
@@ -265,7 +265,7 @@ func (rt *watchRuntime) handleMissingTrialCandidate(
 				slog.String("error", driveErr.Error()),
 			)
 		} else {
-			candidate := rt.buildRetryCandidateFromRetryState(ctx, bl, probeRow, driveID)
+			candidate := rt.buildRetryCandidateFromRetryWork(ctx, bl, probeRow, driveID)
 			if candidate.err != nil {
 				rt.engine.logger.Warn("runTrialDispatch: failed to revalidate disappeared blocked retry work",
 					slog.String("scope_key", key.String()),
@@ -299,7 +299,7 @@ func (rt *watchRuntime) handleMissingTrialCandidate(
 func (rt *watchRuntime) clearStaleTrialRetryWork(
 	ctx context.Context,
 	key ScopeKey,
-	row *RetryStateRow,
+	row *RetryWorkRow,
 ) {
 	if row == nil {
 		return
@@ -310,7 +310,7 @@ func (rt *watchRuntime) clearStaleTrialRetryWork(
 		scopeKey = key
 	}
 
-	work := retryWorkKeyForRetryState(row)
+	work := retryWorkKeyForRetryWork(row)
 
 	if err := rt.engine.baseline.ClearHeldRetryWork(ctx, work, scopeKey); err != nil {
 		rt.engine.logger.Warn("runTrialDispatch: failed to clear stale blocked retry work",
@@ -347,7 +347,7 @@ func (rt *watchRuntime) clearStaleTrialRetryWork(
 	}
 }
 
-// runRetrierSweep processes a batch of due retry_state rows and routes them
+// runRetrierSweep processes a batch of due retry_work rows and routes them
 // back through the current actionable-set builder without going through the
 // observer buffer or debounce path.
 func (rt *watchRuntime) runRetrierSweep(
@@ -361,7 +361,7 @@ func (rt *watchRuntime) runRetrierSweep(
 
 	now := rt.engine.nowFunc()
 
-	retryRows, err := rt.engine.baseline.ListRetryStateReady(ctx, now)
+	retryRows, err := rt.engine.baseline.ListRetryWorkReady(ctx, now)
 	if err != nil {
 		rt.engine.logger.Warn("retrier sweep: failed to list retriable items",
 			slog.String("error", err.Error()),
@@ -422,7 +422,7 @@ func (rt *watchRuntime) collectRetrySweepKeys(
 	ctx context.Context,
 	bl *Baseline,
 	plan *ActionPlan,
-	retryRows []RetryStateRow,
+	retryRows []RetryWorkRow,
 ) ([]RetryWorkKey, int) {
 	dispatchedRows := 0
 	batchLimit := rt.engine.effectiveRetryBatchLimit()
@@ -434,7 +434,7 @@ func (rt *watchRuntime) collectRetrySweepKeys(
 			break
 		}
 
-		work := retryWorkKeyForRetryState(&retryRows[i])
+		work := retryWorkKeyForRetryWork(&retryRows[i])
 		if !planContainsWorkKey(plan, work) {
 			rt.clearStaleRetrySweepRow(ctx, bl, &retryRows[i], work)
 			continue
@@ -453,16 +453,16 @@ func (rt *watchRuntime) collectRetrySweepKeys(
 func (rt *watchRuntime) clearStaleRetrySweepRow(
 	ctx context.Context,
 	bl *Baseline,
-	row *RetryStateRow,
+	row *RetryWorkRow,
 	work RetryWorkKey,
 ) {
 	if row == nil {
 		return
 	}
 
-	driveID, driveErr := rt.retryStateDriveID(ctx)
+	driveID, driveErr := rt.retryWorkDriveID(ctx)
 	if driveErr != nil {
-		rt.engine.logger.Warn("retrier sweep: failed to load drive for stale retry_state",
+		rt.engine.logger.Warn("retrier sweep: failed to load drive for stale retry_work",
 			slog.String("path", row.Path),
 			slog.String("action", row.ActionType.String()),
 			slog.String("error", driveErr.Error()),
@@ -470,9 +470,9 @@ func (rt *watchRuntime) clearStaleRetrySweepRow(
 		return
 	}
 
-	candidate := rt.buildRetryCandidateFromRetryState(ctx, bl, row, driveID)
+	candidate := rt.buildRetryCandidateFromRetryWork(ctx, bl, row, driveID)
 	if candidate.err != nil {
-		rt.engine.logger.Warn("retrier sweep: failed to revalidate stale retry_state row",
+		rt.engine.logger.Warn("retrier sweep: failed to revalidate stale retry_work row",
 			slog.String("path", row.Path),
 			slog.String("action", row.ActionType.String()),
 			slog.String("error", candidate.err.Error()),
@@ -547,10 +547,10 @@ func (flow *engineFlow) clearRetryWorkCandidate(
 	}
 }
 
-func (flow *engineFlow) retryStateDriveID(ctx context.Context) (driveid.ID, error) {
+func (flow *engineFlow) retryWorkDriveID(ctx context.Context) (driveid.ID, error) {
 	configuredDriveID, err := flow.engine.baseline.configuredDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
-		return driveid.ID{}, fmt.Errorf("load configured drive for retry_state row: %w", err)
+		return driveid.ID{}, fmt.Errorf("load configured drive for retry_work row: %w", err)
 	}
 	if configuredDriveID.IsZero() {
 		configuredDriveID = flow.engine.driveID
@@ -559,10 +559,10 @@ func (flow *engineFlow) retryStateDriveID(ctx context.Context) (driveid.ID, erro
 	return configuredDriveID, nil
 }
 
-func (flow *engineFlow) buildRetryCandidateFromRetryState(
+func (flow *engineFlow) buildRetryCandidateFromRetryWork(
 	ctx context.Context,
 	bl *Baseline,
-	row *RetryStateRow,
+	row *RetryWorkRow,
 	driveID driveid.ID,
 ) retryCandidate {
 	if row == nil {
@@ -635,7 +635,7 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 func (flow *engineFlow) buildMirrorRetryCandidate(
 	ctx context.Context,
 	bl *Baseline,
-	row *RetryStateRow,
+	row *RetryWorkRow,
 	driveID driveid.ID,
 ) retryCandidate {
 	rs, found, err := flow.engine.baseline.GetRemoteStateByPath(ctx, row.Path, driveID)
@@ -655,7 +655,7 @@ func (flow *engineFlow) buildMirrorRetryCandidate(
 func (flow *engineFlow) buildLocalDeleteRetryCandidate(
 	ctx context.Context,
 	bl *Baseline,
-	row *RetryStateRow,
+	row *RetryWorkRow,
 	driveID driveid.ID,
 ) retryCandidate {
 	entry := baselineEntryForPathInBaseline(bl, row.Path, driveID)
@@ -678,7 +678,7 @@ func (flow *engineFlow) buildLocalDeleteRetryCandidate(
 
 func (flow *engineFlow) buildLocalObservationRetryCandidate(
 	bl *Baseline,
-	row *RetryStateRow,
+	row *RetryWorkRow,
 	driveID driveid.ID,
 ) retryCandidate {
 	result, err := ObserveSinglePathWithFilter(
@@ -703,7 +703,7 @@ func (flow *engineFlow) buildLocalObservationRetryCandidate(
 
 func (flow *engineFlow) buildRemoteMoveRetryCandidate(
 	bl *Baseline,
-	row *RetryStateRow,
+	row *RetryWorkRow,
 	driveID driveid.ID,
 ) retryCandidate {
 	rebuild := flow.buildLocalObservationRetryCandidate(bl, row, driveID)
@@ -721,7 +721,7 @@ func (flow *engineFlow) buildRemoteMoveRetryCandidate(
 
 func (flow *engineFlow) buildRemoteDeleteRetryCandidate(
 	bl *Baseline,
-	row *RetryStateRow,
+	row *RetryWorkRow,
 	driveID driveid.ID,
 ) retryCandidate {
 	_, ok := bl.GetByPath(row.Path)

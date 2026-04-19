@@ -69,7 +69,7 @@ Explicit non-goals:
 - Token files are validated on read and write, and managed-state I/O stays rooted; see [graph-client.md](graph-client.md) and [config.md](config.md).
 - Local observation filters invalid uploads before they become actions, while remote observation remains server-trusting to avoid silent data loss; see [sync-observation.md](sync-observation.md).
 - Durable state is transactional and rebuildable; see [sync-store.md](sync-store.md) and [data-model.md](data-model.md).
-- Retry, scope blocking, and graceful degradation are explicit runtime behaviors instead of ad hoc loops; see [retry.md](retry.md), [sync-engine.md](sync-engine.md), and [degraded-mode.md](degraded-mode.md).
+- Retry, block scopeing, and graceful degradation are explicit runtime behaviors instead of ad hoc loops; see [retry.md](retry.md), [sync-engine.md](sync-engine.md), and [degraded-mode.md](degraded-mode.md).
 
 ## Mitigation Evidence
 

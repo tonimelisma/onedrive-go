@@ -53,7 +53,7 @@ func commandFailurePresentationForClass(class errclass.Class) commandFailurePres
 			Action:   "follow the command's remediation hint and rerun it",
 			ExitCode: 1,
 		}
-	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient:
+	case errclass.ClassRetryableTransient, errclass.ClassBlockScopeingTransient:
 		return commandFailurePresentation{
 			Reason:   "the command failed temporarily",
 			Action:   "rerun the command after the underlying transient issue clears",

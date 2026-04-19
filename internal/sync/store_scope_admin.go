@@ -10,11 +10,11 @@ import (
 // resolved; blocked work may run again" transition.
 //
 // In one transaction it:
-//   - deletes the persisted scope_blocks row
+//   - deletes the persisted block_scopes row
 //   - deletes boundary issue rows for the scope
 //   - marks held transient descendants retryable immediately
 //
-// The actionable boundary row and the scope block are one semantic unit.
+// The actionable boundary row and the block scope are one semantic unit.
 // Releasing them together prevents the split-brain state where one survives
 // after the other has already been cleared.
 func (m *SyncStore) ReleaseScope(
@@ -34,9 +34,9 @@ func (m *SyncStore) ReleaseScope(
 	}()
 
 	if _, execErr := tx.ExecContext(ctx,
-		`DELETE FROM scope_blocks WHERE scope_key = ?`, wire,
+		`DELETE FROM block_scopes WHERE scope_key = ?`, wire,
 	); execErr != nil {
-		return fmt.Errorf("sync: deleting scope block %s: %w", wire, execErr)
+		return fmt.Errorf("sync: deleting block scope %s: %w", wire, execErr)
 	}
 
 	if _, execErr := tx.ExecContext(ctx,
@@ -55,7 +55,7 @@ func (m *SyncStore) ReleaseScope(
 	); execErr != nil {
 		return fmt.Errorf("sync: unblocking failures for scope %s: %w", wire, execErr)
 	}
-	if retryErr := markRetryStateScopeReadyTx(ctx, tx, wire, nowNano); retryErr != nil {
+	if retryErr := markRetryWorkScopeReadyTx(ctx, tx, wire, nowNano); retryErr != nil {
 		return retryErr
 	}
 
@@ -88,9 +88,9 @@ func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err er
 	}()
 
 	if _, execErr := tx.ExecContext(ctx,
-		`DELETE FROM scope_blocks WHERE scope_key = ?`, wire,
+		`DELETE FROM block_scopes WHERE scope_key = ?`, wire,
 	); execErr != nil {
-		return fmt.Errorf("sync: deleting scope block %s: %w", wire, execErr)
+		return fmt.Errorf("sync: deleting block scope %s: %w", wire, execErr)
 	}
 
 	if _, execErr := tx.ExecContext(ctx,
@@ -98,7 +98,7 @@ func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err er
 	); execErr != nil {
 		return fmt.Errorf("sync: deleting scoped failures %s: %w", wire, execErr)
 	}
-	if retryErr := deleteRetryStateByScopeTx(ctx, tx, wire); retryErr != nil {
+	if retryErr := deleteRetryWorkByScopeTx(ctx, tx, wire); retryErr != nil {
 		return retryErr
 	}
 

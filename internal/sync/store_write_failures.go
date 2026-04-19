@@ -295,7 +295,7 @@ func (m *SyncStore) RecordFailure(
 		return fmt.Errorf("sync: recording sync failure for %s: %w", p.Path, err)
 	}
 	if category == CategoryTransient && role != FailureRoleBoundary {
-		retryRow := retryStateIdentityForWork(p.Path, p.OldPath, actionType)
+		retryRow := retryWorkIdentityForWork(p.Path, p.OldPath, actionType)
 		retryRow.ScopeKey = p.ScopeKey
 		retryRow.Blocked = role == FailureRoleHeld
 		retryRow.AttemptCount = newCount
@@ -305,10 +305,10 @@ func (m *SyncStore) RecordFailure(
 		if nextRetryNano != nil {
 			retryRow.NextRetryAt = *nextRetryNano
 		}
-		if retryErr := upsertRetryStateTx(ctx, tx, &retryRow); retryErr != nil {
+		if retryErr := upsertRetryWorkTx(ctx, tx, &retryRow); retryErr != nil {
 			return retryErr
 		}
-	} else if retryErr := deleteRetryStateByWorkTx(ctx, tx, retryWorkKey(p.Path, p.OldPath, actionType)); retryErr != nil {
+	} else if retryErr := deleteRetryWorkByWorkTx(ctx, tx, retryWorkKey(p.Path, p.OldPath, actionType)); retryErr != nil {
 		return retryErr
 	}
 
@@ -379,7 +379,7 @@ func (m *SyncStore) resolveItemID(
 }
 
 // ClearHeldRetryWork removes one held scoped failure row and its matching
-// retry_state work entry without disturbing unrelated retry work for the same
+// retry_work work entry without disturbing unrelated retry work for the same
 // path.
 func (m *SyncStore) ClearHeldRetryWork(
 	ctx context.Context,
@@ -405,12 +405,12 @@ func (m *SyncStore) ClearHeldRetryWork(
 	}
 
 	if _, execErr := tx.ExecContext(ctx,
-		sqlDeleteRetryStateByPathType,
+		sqlDeleteRetryWorkByPathType,
 		work.Path,
 		work.OldPath,
 		work.ActionType.String(),
 	); execErr != nil {
-		return fmt.Errorf("sync: deleting held retry_state for %s: %w", work.Path, execErr)
+		return fmt.Errorf("sync: deleting held retry_work for %s: %w", work.Path, execErr)
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -433,7 +433,7 @@ func (m *SyncStore) ClearActionableSyncFailures(ctx context.Context) error {
 
 // ClearActionableFailuresByPaths removes actionable item failures of one issue
 // type for the provided paths. This cleanup is reporting-only: it never
-// mutates retry_state or scope_blocks.
+// mutates retry_work or block_scopes.
 func (m *SyncStore) ClearActionableFailuresByPaths(
 	ctx context.Context,
 	issueType string,
@@ -540,7 +540,7 @@ func (m *SyncStore) UpsertActionableFailures(
 		); execErr != nil {
 			return fmt.Errorf("sync: upsert actionable failure for %s: %w", f.Path, execErr)
 		}
-		if retryErr := deleteRetryStateByWorkTx(ctx, tx, retryWorkKey(f.Path, "", actionType)); retryErr != nil {
+		if retryErr := deleteRetryWorkByWorkTx(ctx, tx, retryWorkKey(f.Path, "", actionType)); retryErr != nil {
 			return retryErr
 		}
 	}
@@ -607,7 +607,7 @@ func (m *SyncStore) DeleteSyncFailuresByScope(ctx context.Context, scopeKey Scop
 	if err != nil {
 		return fmt.Errorf("sync: deleting failures for scope %s: %w", wire, err)
 	}
-	if err := deleteRetryStateByScopeTx(ctx, m.db, wire); err != nil {
+	if err := deleteRetryWorkByScopeTx(ctx, m.db, wire); err != nil {
 		return err
 	}
 
@@ -668,7 +668,7 @@ func (m *SyncStore) SetScopeRetryAtNow(ctx context.Context, scopeKey ScopeKey, n
 	if err != nil {
 		return 0, fmt.Errorf("sync: setting scope retry-at for %s: %w", wire, err)
 	}
-	if retryErr := markRetryStateScopeReadyTx(ctx, m.db, wire, nowNano); retryErr != nil {
+	if retryErr := markRetryWorkScopeReadyTx(ctx, m.db, wire, nowNano); retryErr != nil {
 		return 0, retryErr
 	}
 

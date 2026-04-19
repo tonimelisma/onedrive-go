@@ -18,7 +18,7 @@ func TestRetryWorkKeyHelpers_PreserveExactIdentity(t *testing.T) {
 
 	assert.Equal(t, RetryWorkKey{}, retryWorkKeyForAction(nil))
 	assert.Equal(t, RetryWorkKey{}, retryWorkKeyForCompletion(nil))
-	assert.Equal(t, RetryWorkKey{}, retryWorkKeyForRetryState(nil))
+	assert.Equal(t, RetryWorkKey{}, retryWorkKeyForRetryWork(nil))
 
 	action := &Action{Path: "held.txt", OldPath: "old-held.txt", Type: ActionRemoteDelete}
 	assert.Equal(t, retryWorkKey("held.txt", "old-held.txt", ActionRemoteDelete), retryWorkKeyForAction(action))
@@ -26,24 +26,24 @@ func TestRetryWorkKeyHelpers_PreserveExactIdentity(t *testing.T) {
 	result := &ActionCompletion{Path: "held.txt", OldPath: "old-held.txt", ActionType: ActionRemoteDelete}
 	assert.Equal(t, retryWorkKey("held.txt", "old-held.txt", ActionRemoteDelete), retryWorkKeyForCompletion(result))
 
-	row := &RetryStateRow{Path: "held.txt", OldPath: "old-held.txt", ActionType: ActionRemoteDelete}
-	assert.Equal(t, retryWorkKey("held.txt", "old-held.txt", ActionRemoteDelete), retryWorkKeyForRetryState(row))
+	row := &RetryWorkRow{Path: "held.txt", OldPath: "old-held.txt", ActionType: ActionRemoteDelete}
+	assert.Equal(t, retryWorkKey("held.txt", "old-held.txt", ActionRemoteDelete), retryWorkKeyForRetryWork(row))
 }
 
 // Validates: R-2.10.33
-func TestRetryStateDriveID_UsesEngineDriveFallback(t *testing.T) {
+func TestRetryWorkDriveID_UsesEngineDriveFallback(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	flow := testEngineFlow(t, eng)
 
-	driveID, err := flow.retryStateDriveID(t.Context())
+	driveID, err := flow.retryWorkDriveID(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, eng.driveID, driveID)
 }
 
 // Validates: R-2.10.33
-func TestRetryStateDriveID_PrefersPersistedConfiguredDrive(t *testing.T) {
+func TestRetryWorkDriveID_PrefersPersistedConfiguredDrive(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -53,7 +53,7 @@ func TestRetryStateDriveID_PrefersPersistedConfiguredDrive(t *testing.T) {
 
 	require.NoError(t, eng.baseline.CommitObservation(ctx, nil, "", configuredDriveID))
 
-	driveID, err := flow.retryStateDriveID(ctx)
+	driveID, err := flow.retryWorkDriveID(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, configuredDriveID, driveID)
 }
@@ -110,7 +110,7 @@ func TestClearStaleRetrySweepRow_ResolvedRetryDeletesRetryAndFailure(t *testing.
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	row := &RetryStateRow{
+	row := &RetryWorkRow{
 		Path:         "stale-download.txt",
 		ActionType:   ActionDownload,
 		ScopeKey:     SKService(),
@@ -123,7 +123,7 @@ func TestClearStaleRetrySweepRow_ResolvedRetryDeletesRetryAndFailure(t *testing.
 		ActionType: row.ActionType,
 	}
 
-	require.NoError(t, eng.baseline.UpsertRetryState(ctx, row))
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, row))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       row.Path,
 		DriveID:    eng.driveID,
@@ -141,7 +141,7 @@ func TestClearStaleRetrySweepRow_ResolvedRetryDeletesRetryAndFailure(t *testing.
 
 	rt.clearStaleRetrySweepRow(ctx, bl, row, work)
 
-	retryRows, err := eng.baseline.ListRetryState(ctx)
+	retryRows, err := eng.baseline.ListRetryWork(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, retryRows)
 
@@ -162,7 +162,7 @@ func TestClearStaleRetrySweepRow_SkippedRetryPreservesActionableFailure(t *testi
 
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "forms"), 0o750))
 
-	row := &RetryStateRow{
+	row := &RetryWorkRow{
 		Path:         "forms",
 		ActionType:   ActionUpload,
 		ScopeKey:     SKPermDir("forms"),
@@ -175,7 +175,7 @@ func TestClearStaleRetrySweepRow_SkippedRetryPreservesActionableFailure(t *testi
 		ActionType: row.ActionType,
 	}
 
-	require.NoError(t, eng.baseline.UpsertRetryState(ctx, row))
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, row))
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       row.Path,
 		DriveID:    eng.driveID,
@@ -193,7 +193,7 @@ func TestClearStaleRetrySweepRow_SkippedRetryPreservesActionableFailure(t *testi
 
 	rt.clearStaleRetrySweepRow(ctx, bl, row, work)
 
-	retryRows, err := eng.baseline.ListRetryState(ctx)
+	retryRows, err := eng.baseline.ListRetryWork(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, retryRows)
 
@@ -214,7 +214,7 @@ func TestClearStaleTrialRetryWork_PreservesScopeWhenBlockedRetriesRemain(t *test
 	ctx := t.Context()
 	scopeKey := SKService()
 
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
 		IssueType:     IssueServiceOutage,
 		BlockedAt:     eng.nowFn().Add(-time.Minute),
@@ -245,13 +245,13 @@ func TestClearStaleTrialRetryWork_PreservesScopeWhenBlockedRetriesRemain(t *test
 		ScopeKey:   scopeKey,
 	}, nil))
 
-	rt.clearStaleTrialRetryWork(ctx, scopeKey, &RetryStateRow{
+	rt.clearStaleTrialRetryWork(ctx, scopeKey, &RetryWorkRow{
 		Path:       "stale.txt",
 		ActionType: ActionDownload,
 		ScopeKey:   scopeKey,
 	})
 
-	retryRows, err := eng.baseline.ListRetryState(ctx)
+	retryRows, err := eng.baseline.ListRetryWork(ctx)
 	require.NoError(t, err)
 	require.Len(t, retryRows, 1)
 	assert.Equal(t, "still-blocked.txt", retryRows[0].Path)
@@ -261,7 +261,7 @@ func TestClearStaleTrialRetryWork_PreservesScopeWhenBlockedRetriesRemain(t *test
 	require.Len(t, failures, 1)
 	assert.Equal(t, "still-blocked.txt", failures[0].Path)
 
-	block, ok := getTestScopeBlock(eng, scopeKey)
+	block, ok := getTestBlockScope(eng, scopeKey)
 	require.True(t, ok)
 	assert.Equal(t, 10*time.Second, block.TrialInterval)
 	assert.WithinDuration(t, eng.nowFn().Add(10*time.Second), block.NextTrialAt, 2*time.Second)
@@ -277,7 +277,7 @@ func TestClearStaleTrialRetryWork_DiscardsScopeWhenBlockedRetriesDisappear(t *te
 	ctx := t.Context()
 	scopeKey := SKService()
 
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
 		IssueType:     IssueServiceOutage,
 		BlockedAt:     eng.nowFn().Add(-time.Minute),
@@ -297,18 +297,18 @@ func TestClearStaleTrialRetryWork_DiscardsScopeWhenBlockedRetriesDisappear(t *te
 		ScopeKey:   scopeKey,
 	}, nil))
 
-	rt.clearStaleTrialRetryWork(ctx, scopeKey, &RetryStateRow{
+	rt.clearStaleTrialRetryWork(ctx, scopeKey, &RetryWorkRow{
 		Path:       "stale.txt",
 		ActionType: ActionDownload,
 		ScopeKey:   scopeKey,
 	})
 
-	retryRows, err := eng.baseline.ListRetryState(ctx)
+	retryRows, err := eng.baseline.ListRetryWork(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, retryRows)
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, failures)
-	assert.False(t, isTestScopeBlocked(eng, scopeKey))
+	assert.False(t, isTestBlockScopeed(eng, scopeKey))
 }

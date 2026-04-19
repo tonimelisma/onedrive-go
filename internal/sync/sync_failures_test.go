@@ -388,7 +388,7 @@ func TestClearResolvedLocalIssues(t *testing.T) {
 }
 
 // Validates: R-2.10.2
-func TestClearActionableFailuresByPaths_RemovesIssueWithoutTouchingRetryState(t *testing.T) {
+func TestClearActionableFailuresByPaths_RemovesIssueWithoutTouchingRetryWork(t *testing.T) {
 	t.Parallel()
 
 	mgr, now := newTestSyncStoreForFailures(t)
@@ -403,12 +403,12 @@ func TestClearActionableFailuresByPaths_RemovesIssueWithoutTouchingRetryState(t 
 		Error:      "permission denied",
 	}}))
 
-	retryRow := retryStateIdentityForWork("docs/file.txt", "", ActionUpload)
+	retryRow := retryWorkIdentityForWork("docs/file.txt", "", ActionUpload)
 	retryRow.AttemptCount = 2
 	retryRow.NextRetryAt = now.Add(time.Minute).UnixNano()
 	retryRow.FirstSeenAt = now.UnixNano()
 	retryRow.LastSeenAt = now.UnixNano()
-	require.NoError(t, mgr.UpsertRetryState(ctx, &retryRow))
+	require.NoError(t, mgr.UpsertRetryWork(ctx, &retryRow))
 
 	require.NoError(t, mgr.ClearActionableFailuresByPaths(ctx, IssueLocalPermissionDenied, []string{"docs/file.txt"}))
 
@@ -416,7 +416,7 @@ func TestClearActionableFailuresByPaths_RemovesIssueWithoutTouchingRetryState(t 
 	require.NoError(t, err)
 	assert.Empty(t, failures)
 
-	rows, err := mgr.ListRetryState(ctx)
+	rows, err := mgr.ListRetryWork(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "docs/file.txt", rows[0].Path)
@@ -697,7 +697,7 @@ func TestRecordFailure_RepeatIncrementsCount(t *testing.T) {
 	assert.Positive(t, issues[0].NextRetryAt)
 }
 
-func TestListRetryStateReady_ReturnsResults(t *testing.T) {
+func TestListRetryWorkReady_ReturnsResults(t *testing.T) {
 	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
@@ -711,20 +711,20 @@ func TestListRetryStateReady_ReturnsResults(t *testing.T) {
 	}, retry.ReconcilePolicy().Delay)
 	require.NoError(t, err)
 
-	// ListRetryStateReady finds rows with next_retry_at <= the given time.
-	// With a delay function, transient issues have retry_state scheduled, so
+	// ListRetryWorkReady finds rows with next_retry_at <= the given time.
+	// With a delay function, transient issues have retry_work scheduled, so
 	// querying far enough in the future should return the row.
 	futureTime := fixedTime.Add(10 * time.Minute)
-	rows := readyRetryStateForTest(t, mgr, ctx, futureTime)
+	rows := readyRetryWorkForTest(t, mgr, ctx, futureTime)
 	assert.NotEmpty(t, rows, "transient issues with delay function should be returned for retry")
 }
 
-func TestEarliestRetryStateAt_ReturnsFutureTime(t *testing.T) {
+func TestEarliestRetryWorkAt_ReturnsFutureTime(t *testing.T) {
 	mgr, fixedTime := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
 
 	// No issues — zero time.
-	earliest, err := mgr.EarliestRetryStateAt(ctx, fixedTime)
+	earliest, err := mgr.EarliestRetryWorkAt(ctx, fixedTime)
 	require.NoError(t, err)
 	assert.True(t, earliest.IsZero())
 
@@ -738,9 +738,9 @@ func TestEarliestRetryStateAt_ReturnsFutureTime(t *testing.T) {
 	}, retry.ReconcilePolicy().Delay)
 	require.NoError(t, err)
 
-	// With a delay function, transient issues have retry_state scheduled, so
-	// EarliestRetryStateAt should return a future time.
-	earliest, err = mgr.EarliestRetryStateAt(ctx, fixedTime)
+	// With a delay function, transient issues have retry_work scheduled, so
+	// EarliestRetryWorkAt should return a future time.
+	earliest, err = mgr.EarliestRetryWorkAt(ctx, fixedTime)
 	require.NoError(t, err)
 	assert.False(t, earliest.IsZero(), "transient issue with delay function should have a retry time")
 }
@@ -785,7 +785,7 @@ func TestUpsertActionableFailureOverwritesTransientIssue(t *testing.T) {
 	assert.Equal(t, int64(0), issues[0].NextRetryAt, "permanent issues should have no retry time")
 
 	// Should not appear in retry list.
-	rows := readyRetryStateForTest(t, mgr, ctx, time.Now().Add(time.Hour))
+	rows := readyRetryWorkForTest(t, mgr, ctx, time.Now().Add(time.Hour))
 	assert.Empty(t, rows)
 }
 

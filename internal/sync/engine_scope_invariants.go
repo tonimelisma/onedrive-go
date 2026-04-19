@@ -168,9 +168,9 @@ func (flow *engineFlow) assertObserverExitPhase(
 }
 
 func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
-	blocks, err := flow.engine.baseline.ListScopeBlocks(ctx)
+	blocks, err := flow.engine.baseline.ListBlockScopes(ctx)
 	if err != nil {
-		return fmt.Errorf("listing scope blocks: %w", err)
+		return fmt.Errorf("listing block scopes: %w", err)
 	}
 
 	rows, err := flow.engine.baseline.ListSyncFailures(ctx)
@@ -233,13 +233,13 @@ func validateFailureRowState(row *SyncFailureRow) error {
 }
 
 func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
-	if watch != nil && flow.scopeController().isScopeBlocked(watch, key) {
+	if watch != nil && flow.scopeController().isBlockScopeed(watch, key) {
 		return fmt.Errorf("released scope %s still active in watch state", key.String())
 	}
 
-	blocks, err := flow.engine.baseline.ListScopeBlocks(ctx)
+	blocks, err := flow.engine.baseline.ListBlockScopes(ctx)
 	if err != nil {
-		return fmt.Errorf("listing scope blocks: %w", err)
+		return fmt.Errorf("listing block scopes: %w", err)
 	}
 	for i := range blocks {
 		if blocks[i].Key == key {
@@ -272,13 +272,13 @@ func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRun
 }
 
 func (flow *engineFlow) assertDiscardedScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
-	if watch != nil && flow.scopeController().isScopeBlocked(watch, key) {
+	if watch != nil && flow.scopeController().isBlockScopeed(watch, key) {
 		return fmt.Errorf("discarded scope %s still active in watch state", key.String())
 	}
 
-	blocks, err := flow.engine.baseline.ListScopeBlocks(ctx)
+	blocks, err := flow.engine.baseline.ListBlockScopes(ctx)
 	if err != nil {
-		return fmt.Errorf("listing scope blocks: %w", err)
+		return fmt.Errorf("listing block scopes: %w", err)
 	}
 	for i := range blocks {
 		if blocks[i].Key == key {

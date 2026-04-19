@@ -12,7 +12,10 @@ const (
 	// currentSyncStoreGeneration is the compatibility contract for existing
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
-	currentSyncStoreGeneration = 1
+	//
+	// Generation 2 renames retry_state -> retry_work and
+	// scope_blocks -> block_scopes.
+	currentSyncStoreGeneration = 2
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata
 		(singleton_id, schema_generation)
 	VALUES (1, ?)
@@ -86,7 +89,7 @@ CREATE TABLE IF NOT EXISTS local_state (
     observed_at      INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS retry_state (
+CREATE TABLE IF NOT EXISTS retry_work (
     work_key        TEXT    NOT NULL PRIMARY KEY,
     path            TEXT    NOT NULL,
     old_path        TEXT    NOT NULL DEFAULT '',
@@ -100,8 +103,8 @@ CREATE TABLE IF NOT EXISTS retry_state (
     last_seen_at    INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS idx_retry_state_scope_key ON retry_state(scope_key);
-CREATE INDEX IF NOT EXISTS idx_retry_state_blocked ON retry_state(blocked);
+CREATE INDEX IF NOT EXISTS idx_retry_work_scope_key ON retry_work(scope_key);
+CREATE INDEX IF NOT EXISTS idx_retry_work_blocked ON retry_work(blocked);
 
 CREATE TABLE IF NOT EXISTS sync_failures (
     path           TEXT    NOT NULL PRIMARY KEY,
@@ -155,7 +158,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_failures_boundary_scope
     ON sync_failures(scope_key)
     WHERE failure_role = 'boundary';
 
-CREATE TABLE IF NOT EXISTS scope_blocks (
+CREATE TABLE IF NOT EXISTS block_scopes (
     scope_key      TEXT PRIMARY KEY,
     issue_type     TEXT NOT NULL,
     timing_source  TEXT NOT NULL CHECK(timing_source IN ('none', 'backoff', 'server_retry_after')),
@@ -199,7 +202,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 		"local_state": {
 			"path", "item_type", "hash", "size", "mtime", "content_identity", "observed_at",
 		},
-		"retry_state": {
+		"retry_work": {
 			"work_key", "path", "old_path", "action_type", "scope_key", "blocked",
 			"attempt_count", "next_retry_at", "last_error", "first_seen_at", "last_seen_at",
 		},
@@ -208,7 +211,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"failure_count", "next_retry_at", "last_error", "http_status", "first_seen_at", "last_seen_at",
 			"file_size", "local_hash", "scope_key",
 		},
-		"scope_blocks": {
+		"block_scopes": {
 			"scope_key", "issue_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "preserve_until", "trial_count",
 		},
 	}
