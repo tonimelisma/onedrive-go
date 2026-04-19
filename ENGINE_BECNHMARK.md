@@ -25,12 +25,6 @@ blocking state:
 Those names are deliberate. They describe what each durable surface really is,
 not how the current code happened to evolve.
 
-There is also one important derived user-facing surface:
-
-- `visible_issues`
-
-`visible_issues` is a projection, not a durable authority table.
-
 The current repo still uses the names `retry_state`, `scope_blocks`, and
 `sync_failures`. This document treats those as legacy/current implementation
 names, not the ideal conceptual vocabulary.
@@ -50,9 +44,8 @@ Build the engine around these principles:
 - SQLite owns current committed truth, prior synced agreement, and structural
   comparison
 - Go owns the live actionable set, scheduling, execution, and side effects
-- exact delayed work, shared blockers, observation-discovered issues, and
-  user-facing issue projection must be modeled
-  separately
+- exact delayed work, shared blockers, and observation-discovered issues must
+  be modeled separately
 - short-term transport retry and long-term persisted retry must be distinct
 - retries never invent sync intent
 - reporting state never owns execution state
@@ -218,7 +211,7 @@ Go should own:
 - dependency ordering
 - worker scheduling
 
-### 6. Observation issues, exact delayed work, shared blockers, and visible issue projection must stay separate
+### 6. Observation issues, exact delayed work, and shared blockers must stay separate
 
 The engine must answer four different questions:
 
@@ -233,11 +226,8 @@ Those map to:
 - `observation_issues`
 - `retry_work`
 - `block_scopes`
-- `visible_issues` projection
 
-If one durable surface answers two of the first three questions, the model is
-muddy. If the user-facing surface becomes a fourth durable authority instead of
-a projection, the model is also muddy.
+If one durable surface answers two of those questions, the model is muddy.
 
 ### 7. Short-term retry and long-term retry are different layers
 
@@ -470,39 +460,6 @@ Key invariant:
 - blocked work stays in `retry_work`
 - `block_scopes` never becomes a second source of truth for exact owed work
 
-## `visible_issues`
-
-Conceptual meaning:
-
-- "the user-facing explanation of what is wrong right now"
-
-This is a projection over the durable authorities, not a fourth durable truth
-table.
-
-Derived from:
-
-- `observation_issues`
-- `retry_work`
-- `block_scopes`
-
-It should power:
-
-- the `issues` command
-- status summaries
-- watch-mode visible issue reporting
-
-It must not own:
-
-- retry scheduling
-- blocker timing
-- exact owed work
-- observation truth
-
-Key invariant:
-
-- user-facing issue rendering is derived from authoritative sources instead of
-  being a competing durable authority
-
 ## Full Taxonomy
 
 The full future-state taxonomy has three source categories:
@@ -511,7 +468,9 @@ The full future-state taxonomy has three source categories:
 2. retry-derived issues
 3. blocker-derived issues
 
-The user-facing `visible_issues` surface is the projection over those three.
+The CLI and status commands should present a user-facing view over those three
+source categories at read time. That presentation is not a model-layer concept
+and should not drive schema design.
 
 ## Observation issues
 
@@ -657,7 +616,7 @@ Behavior:
 
 - one shared blocker scope
 - blocked retry work links to it
-- `visible_issues` reports this as a blocker-derived issue
+- CLI/status can report this as a blocker-derived issue
 - respect `Retry-After`
 
 Why:
@@ -697,7 +656,7 @@ Behavior:
   are blocked
 - blocked work lives in `retry_work`
 - shared blocker timing and lifecycle live in `block_scopes`
-- `visible_issues` reports this as `remote_write_denied`
+- CLI/status can report this as `remote_write_denied`
 
 Why:
 
@@ -731,8 +690,8 @@ Behavior:
 
 - subtree-level local permission denial becomes one shared blocker scope
 - blocked descendants remain exact work items in `retry_work`
-- `visible_issues` reports this as local read or local write denial depending
-  on the blocked capability
+- CLI/status can report this as local read or local write denial depending on
+  the blocked capability
 
 Why:
 
@@ -851,7 +810,6 @@ This is where the durable recovery model touches current desired intent:
 - `retry_work` is pruned against the latest actionable set
 - `block_scopes` is consulted for held/trialed work
 - `observation_issues` is not planner intent
-- `visible_issues` is not planner input
 
 ## 4. Runtime admission and scheduling
 
@@ -870,7 +828,6 @@ Durable relationships here:
 - due unblocked work comes from `retry_work`
 - shared blocker timing comes from `block_scopes`
 - observation-backed user-help-needed problems come from `observation_issues`
-- visible status comes from the `visible_issues` projection
 
 ## 5. Execution
 
@@ -914,8 +871,9 @@ After execution returns an outcome:
     current-truth/content problem, or
   - blocker/retry state if it is really execution-owned retry/blocker state
 
-The user-facing explanation is then derived by `visible_issues` rather than
-stored as an independent durable authority table.
+User-facing explanation should be assembled by the CLI/status layer directly
+from `observation_issues`, `retry_work`, and `block_scopes`, not from a fourth
+durable authority table.
 
 This is the critical separation-of-concerns boundary.
 
@@ -988,7 +946,8 @@ Critical rule:
 
 ## The `issues` Command
 
-The `issues` command should be explicitly designed around `visible_issues`.
+The `issues` command should be explicitly designed as a read-time presentation
+over the real durable authorities.
 
 It should answer:
 
@@ -1006,10 +965,9 @@ The right mental model is:
   unsyncable
 - `retry_work` answers what the engine still owes
 - `block_scopes` answers what shared condition is blocking progress
-- `visible_issues` answers what the user should see
 
-The visible issue projection should group and summarize those reporting facts in
-the spirit of Syncthing and Seafile: clear, grouped, user-facing.
+The CLI/status layer should group and summarize those facts in the spirit of
+Syncthing and Seafile: clear, grouped, user-facing.
 
 ## Why This Separation Is Correct
 
@@ -1038,8 +996,6 @@ Ideal future-state concept to current implementation name:
   `sync_failures`; no clean first-class table yet
 - `retry_work` -> current `retry_state`
 - `block_scopes` -> current `scope_blocks`
-- `visible_issues` -> current visible issue projection over `sync_failures`
-  and scope/retry summaries
 
 This mapping is only for orientation. The ideal design should be discussed and
 documented using the future-state names above.
@@ -1098,7 +1054,8 @@ shape, but the future-state rule remains:
 - observation-owned durable actionable issues belong to `observation_issues`
 - exact owed work belongs to `retry_work`
 - shared blocker timing belongs to `block_scopes`
-- user-facing reporting belongs to `visible_issues`
+- user-facing reporting belongs to CLI/status read-time presentation, not to a
+  separate model-layer authority
 
 Any current helper, schema name, or code path that mixes those responsibilities
 should be read as legacy implementation detail to be retired, not as a reason
@@ -1112,8 +1069,6 @@ The future-state document should be read with this translation in mind:
   legacy shape for future-state `observation_issues`
 - current `retry_state` is legacy naming for future-state `retry_work`
 - current `scope_blocks` is legacy naming for future-state `block_scopes`
-- current visible issue/status projection over `sync_failures` and scope/retry
-  summaries is partial legacy shape for future-state `visible_issues`
 
 The future-state names are preferred because they communicate ownership more
 clearly:
@@ -1122,7 +1077,6 @@ clearly:
   unsyncable"
 - `retry_work` says "exact owed work"
 - `block_scopes` says "shared blocker timing/lifecycle"
-- `visible_issues` says "user-facing explanation, derived not owned"
 
 That is the language the design should standardize on, even if the code and
 schema still lag behind for a while.
@@ -1139,13 +1093,14 @@ The engine matches this ideal design when all of these are true:
    `observation_issues`
 5. exact delayed work lives only in `retry_work`
 6. shared blocker timing lives only in `block_scopes`
-7. user-visible issue state is derived from `visible_issues`, not stored as a
-   competing durable authority
+7. user-facing issue presentation is assembled directly by CLI/status from the
+   real durable authorities, not stored as a competing model-layer authority
 8. shared blockers such as `account:throttled` do not degrade into per-file
    retry storms
 9. remote read and remote write permission scopes are modeled explicitly
 10. blocker scopes can be discovered in observation as well as execution
-11. the `issues` command is explicitly user-facing and backed by issue
-   projection
-12. clearing visible issues never accidentally mutates retry ownership
+11. the `issues` command is explicitly user-facing and built from
+   `observation_issues`, `retry_work`, and `block_scopes`
+12. clearing/reporting user-facing issues never accidentally mutates retry
+   ownership
 13. executor-time precondition changes never invent new sync intent
