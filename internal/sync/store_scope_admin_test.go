@@ -28,7 +28,7 @@ func insertFailureForStoreScopeTest(
 
 	now := time.Now().UnixNano()
 	require.NoError(t, store.CommitObservationCursor(t.Context(), driveID, ""))
-	_, err := store.DB().ExecContext(t.Context(),
+	_, err := store.rawDB().ExecContext(t.Context(),
 		`INSERT INTO sync_failures (
 			path, direction, action_type, category, failure_role, issue_type,
 			item_id, failure_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at,
@@ -58,7 +58,7 @@ func failureRowCountForStoreScopeTest(t *testing.T, store *SyncStore, path strin
 	t.Helper()
 
 	var count int
-	err := store.DB().QueryRowContext(t.Context(),
+	err := store.rawDB().QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM sync_failures WHERE path = ?`, path,
 	).Scan(&count)
 	require.NoError(t, err)
@@ -69,7 +69,7 @@ func failureRowCountForStoreScopeTest(t *testing.T, store *SyncStore, path strin
 func syncStorePathForStoreScopeTest(t *testing.T, store *SyncStore) string {
 	t.Helper()
 
-	rows, err := store.DB().QueryContext(t.Context(), "PRAGMA database_list")
+	rows, err := store.rawDB().QueryContext(t.Context(), "PRAGMA database_list")
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -123,21 +123,21 @@ func TestSyncStore_ResetRetryTimesForScope(t *testing.T) {
 	require.NoError(t, store.ResetRetryTimesForScope(t.Context(), scopeKey, now))
 
 	var gotFuture int64
-	err := store.DB().QueryRowContext(t.Context(),
+	err := store.rawDB().QueryRowContext(t.Context(),
 		`SELECT next_retry_at FROM sync_failures WHERE path = ?`, "future.txt",
 	).Scan(&gotFuture)
 	require.NoError(t, err)
 	assert.Equal(t, now.UnixNano(), gotFuture)
 
 	var gotPast int64
-	err = store.DB().QueryRowContext(t.Context(),
+	err = store.rawDB().QueryRowContext(t.Context(),
 		`SELECT next_retry_at FROM sync_failures WHERE path = ?`, "past.txt",
 	).Scan(&gotPast)
 	require.NoError(t, err)
 	assert.Equal(t, pastRetry, gotPast)
 
 	var gotOther int64
-	err = store.DB().QueryRowContext(t.Context(),
+	err = store.rawDB().QueryRowContext(t.Context(),
 		`SELECT next_retry_at FROM sync_failures WHERE path = ?`, "other-scope.txt",
 	).Scan(&gotOther)
 	require.NoError(t, err)

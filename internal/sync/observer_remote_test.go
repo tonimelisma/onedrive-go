@@ -1294,7 +1294,7 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 
 	err := <-done
 	require.NoError(t, err)
-	assert.Empty(t, readObservationCursor(t, store.DB(), driveID.String()), "zero-event wake polls must not commit observations")
+	assert.Empty(t, readObservationCursor(t, store.rawDB(), driveID.String()), "zero-event wake polls must not commit observations")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "zero-event wake polls must not advance the token")
 }
 
@@ -1934,8 +1934,8 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.Equal(t, "token-1", readObservationCursor(t, store.DB(), driveID.String()))
-	row := readRemoteStateRow(t, store.DB(), "f1")
+	assert.Equal(t, "token-1", readObservationCursor(t, store.rawDB(), driveID.String()))
+	row := readRemoteStateRow(t, store.rawDB(), "f1")
 	require.NotNil(t, row, "remote observation should persist mirrored state")
 	assert.Equal(t, driveID, row.DriveID)
 	assert.Equal(t, "a.txt", row.Path)
@@ -2026,7 +2026,7 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.Empty(t, readObservationCursor(t, store.DB(), driveID.String()), "should not commit observations when 0 events returned")
+	assert.Empty(t, readObservationCursor(t, store.rawDB(), driveID.String()), "should not commit observations when 0 events returned")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "token should not advance when 0 events returned")
 }
 

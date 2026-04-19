@@ -47,6 +47,10 @@ func (e *StateDBResetRequiredError) Is(target error) bool {
 	return target == ErrStateDBResetRequired
 }
 
+func IsStateDBResetRequired(err error) bool {
+	return errors.Is(err, ErrStateDBResetRequired)
+}
+
 func (r StateDBResetReason) Description() string {
 	switch r {
 	case StateDBResetReasonOpenFailed:
@@ -58,6 +62,10 @@ func (r StateDBResetReason) Description() string {
 	}
 }
 
+// openEngineSyncStore is the engine-owned compatibility boundary for existing
+// state DBs. It never mutates or recreates durable state during startup:
+// missing DBs bootstrap normally via NewSyncStore, while unreadable or
+// incompatible existing DBs surface a typed reset-required error.
 func openEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*SyncStore, error) {
 	store, err := NewSyncStore(ctx, dbPath, logger)
 	if err == nil {

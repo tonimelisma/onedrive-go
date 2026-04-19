@@ -18,7 +18,7 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	ctx := t.Context()
 
 	seedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return seedTime })
+	mgr.setNowFunc(func() time.Time { return seedTime })
 
 	seed := BaselineMutation{
 		Action:          ActionDownload,
@@ -39,7 +39,7 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	}
 	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
-	_, err := mgr.DB().ExecContext(ctx,
+	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"item-1", "file.txt", ItemTypeFile, "remote-old", 120,
@@ -47,7 +47,7 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	require.NoError(t, err)
 
 	refreshTime := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return refreshTime })
+	mgr.setNowFunc(func() time.Time { return refreshTime })
 
 	require.NoError(t, mgr.RefreshLocalBaseline(ctx, LocalBaselineRefresh{
 		Path:           "file.txt",
@@ -76,7 +76,7 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	var hash string
 	var size int64
 	var mtime int64
-	err = mgr.DB().QueryRowContext(ctx,
+	err = mgr.rawDB().QueryRowContext(ctx,
 		`SELECT hash, size, mtime FROM remote_state WHERE item_id = ?`,
 		"item-1",
 	).Scan(&hash, &size, &mtime)
@@ -94,7 +94,7 @@ func TestRefreshLocalBaseline_CreatesUnknownRemoteFieldsForLocalOnlyEntry(t *tes
 	ctx := t.Context()
 
 	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return now })
+	mgr.setNowFunc(func() time.Time { return now })
 
 	require.NoError(t, mgr.RefreshLocalBaseline(ctx, LocalBaselineRefresh{
 		Path:           "copy.conflict-1.txt",

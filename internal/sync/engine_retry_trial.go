@@ -508,7 +508,7 @@ func (flow *engineFlow) loadRetryBaseline(ctx context.Context, bl *Baseline) (*B
 	if bl != nil {
 		return bl, nil
 	}
-	if cached := flow.engine.baseline.Baseline(); cached != nil {
+	if cached := flow.engine.baseline.cachedBaseline(); cached != nil {
 		return cached, nil
 	}
 	return flow.engine.baseline.Load(ctx)
