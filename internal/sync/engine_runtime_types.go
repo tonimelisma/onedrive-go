@@ -53,8 +53,8 @@ type watchRuntimeState struct {
 	loop watchLoopState
 
 	// activeScopesMu guards activeScopes. The watch loop remains the logical
-	// owner, but tests and repair paths can observe or adjust the working set
-	// while timers are being re-armed.
+	// owner, but tests and startup normalization can observe or adjust the
+	// working set while timers are being re-armed.
 	activeScopesMu sync.RWMutex
 
 	// Active scope blocks owned by the watch control flow. The slice is tiny
