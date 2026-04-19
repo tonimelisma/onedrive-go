@@ -72,9 +72,9 @@ func (r *authProofRecorder) recordSuccess(ctx context.Context, email, proofSourc
 
 	clearedCount, err := clearAccountAuthRequirementWithCount(ctx, email, config.AuthClearSourceCLIProof, r.logger)
 	if err != nil {
-		// Auth-scope repair is best-effort maintenance. Successful direct API
-		// commands must not surface sync-store repair failures to end users just
-		// because stale auth proof cleanup could not run.
+		// Auth-scope normalization is best-effort maintenance. Successful direct
+		// API commands must not surface stale auth proof cleanup failures to end
+		// users.
 		r.logger.Debug("clearing stale auth scopes after successful graph proof",
 			"account", email,
 			"proof_source", proofSource,

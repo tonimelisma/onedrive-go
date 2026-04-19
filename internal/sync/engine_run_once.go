@@ -273,9 +273,9 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 	if normalizeErr != nil {
 		return fmt.Errorf("sync: normalizing persisted scopes: %w", normalizeErr)
 	}
-	authRepairErr := eng.repairPersistedAccountAuthRequirement(ctx, hasAccountAuthRequirement, proof, proofErr)
-	if authRepairErr != nil {
-		return authRepairErr
+	authNormalizeErr := eng.normalizePersistedAccountAuthRequirement(ctx, hasAccountAuthRequirement, proof, proofErr)
+	if authNormalizeErr != nil {
+		return authNormalizeErr
 	}
 	if proofErr != nil {
 		return proofErr
