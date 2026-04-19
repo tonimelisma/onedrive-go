@@ -220,6 +220,100 @@ func TestPrintDriveSyncSections_WritesHeadingAndConditions(t *testing.T) {
 	)
 }
 
+func TestPrintDriveSyncSections_NoConditionsUsesEmptyStateMessage(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printDriveSyncSections(&buf, &syncStateInfo{}, true))
+	assert.Equal(t, "\n    CONDITIONS\n    No active conditions.\n", buf.String())
+}
+
+func TestPrintConditionPaths_NoEllipsisAndNoPaths(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printConditionPaths(&buf, nil, 0))
+	assert.Empty(t, buf.String())
+
+	require.NoError(t, printConditionPaths(&buf, []string{"a", "b"}, 2))
+	assert.Equal(t, "\n      a\n      b\n", buf.String())
+}
+
+func TestPrintAccountStatus_NilAndLeadingBlank(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printAccountStatus(&buf, nil, true, false))
+	assert.Empty(t, buf.String())
+
+	require.NoError(t, printAccountStatus(&buf, &statusAccount{
+		Email:     "blank@example.com",
+		DriveType: "personal",
+		AuthState: authStateReady,
+	}, true, false))
+	assert.Equal(t, "\nAccount: blank@example.com [personal]\n  Auth:  ready\n", buf.String())
+}
+
+func TestPrintDriveStatus_WithoutSyncStateUsesSyncDirFallback(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printDriveStatus(&buf, statusDrive{
+		CanonicalID: "personal:blank@example.com",
+		State:       driveStatePaused,
+	}, false))
+
+	assert.Equal(t, ""+
+		"  personal:blank@example.com\n"+
+		"    Sync dir:  (not set)\n"+
+		"    State:     paused\n",
+		buf.String(),
+	)
+}
+
+func TestPrintStatusLiveDrives_RendersEntries(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusLiveDrives(&buf, []statusLiveDrive{
+		{ID: "drive-1", Name: "Docs", DriveType: "business", QuotaUsed: 1024, QuotaTotal: 2048},
+		{ID: "drive-2", Name: "Photos", DriveType: "personal", QuotaUsed: 0, QuotaTotal: 0},
+	}))
+
+	output := buf.String()
+	assert.Contains(t, output, "  Live drives:")
+	assert.Contains(t, output, "    Docs (business)")
+	assert.Contains(t, output, "      ID: drive-1")
+	assert.Contains(t, output, "      Quota: 1.0 KB / 2.0 KB")
+	assert.Contains(t, output, "    Photos (personal)")
+	assert.Contains(t, output, "      ID: drive-2")
+	assert.Contains(t, output, "      Quota: 0 B / 0 B")
+}
+
+func TestPrintSyncStateText_PerfOnlyOutput(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printSyncStateText(&buf, &syncStateInfo{
+		PerfUnavailableReason: statusPerfUnavailableNoOwner,
+	}, false))
+
+	assert.Equal(t, ""+
+		"\n"+
+		"    PERF\n"+
+		"    Live performance unavailable: "+statusPerfUnavailableNoOwner+"\n",
+		buf.String(),
+	)
+}
+
+func TestPrintSyncStateText_NilIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printSyncStateText(&buf, nil, false))
+	assert.Empty(t, buf.String())
+}
+
 func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 	t.Parallel()
 
@@ -297,6 +391,69 @@ func TestPrintStatusNextLine_EmptyHintProducesNoOutput(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, printStatusNextLine(&buf, ""))
 	assert.Empty(t, buf.String())
+}
+
+func TestPrintStatusText_NoAccountsPrintsSummaryOnly(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusText(&buf, nil, false))
+	assert.Equal(t, "Summary: 0 drives, 0 conditions\n", buf.String())
+}
+
+func TestPrintStatusText_RendersMultiAccountSummary(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusText(&buf, []statusAccount{
+		{
+			Email:     "ready@example.com",
+			DriveType: "personal",
+			AuthState: authStateReady,
+			Drives: []statusDrive{
+				{
+					CanonicalID: "personal:ready@example.com",
+					State:       driveStateReady,
+					SyncDir:     "/sync/ready",
+					SyncState: &syncStateInfo{
+						LastSyncTime:   "2026-04-19T09:00:00Z",
+						FileCount:      5,
+						ConditionCount: 2,
+						RemoteDrift:    1,
+						Retrying:       1,
+					},
+				},
+			},
+		},
+		{
+			Email:      "needs-auth@example.com",
+			DriveType:  "business",
+			AuthState:  authStateAuthenticationNeeded,
+			AuthReason: string(authReasonMissingLogin),
+			AuthAction: authAction(authReasonMissingLogin),
+			Drives: []statusDrive{
+				{
+					CanonicalID: "business:needs-auth@example.com",
+					State:       driveStatePaused,
+					SyncDir:     "/sync/paused",
+				},
+			},
+		},
+	}, false))
+
+	output := buf.String()
+	assert.Contains(t, output, "Summary: 2 drives (1 ready, 1 paused, 1 accounts requiring auth), 2 conditions, 1 remote drift, 1 retrying")
+	assert.Contains(t, output, "Account: ready@example.com [personal]")
+	assert.Contains(t, output, "  personal:ready@example.com")
+	assert.Contains(t, output, "    Sync dir:  /sync/ready")
+	assert.Contains(t, output, "Account: needs-auth@example.com [business]")
+	assert.Contains(t, output, "  Auth:  authentication_required")
+	assert.Contains(t, output, "  Reason: No saved login was found for this account.")
+	assert.Contains(t, output, "  Action: Run 'onedrive-go login' to sign in.")
+	assert.Contains(t, output, "  business:needs-auth@example.com")
+	assert.Contains(t, output, "    State:     paused")
+	parts := bytes.Split([]byte(output), []byte("Account: "))
+	require.GreaterOrEqual(t, len(parts), 3)
 }
 
 type descriptorCase struct {

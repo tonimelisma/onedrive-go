@@ -350,6 +350,65 @@ func TestPruneBlockScopesWithoutBlockedWork(t *testing.T) {
 }
 
 // Validates: R-2.10.33
+func TestRecordRetryWorkFailure_RejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	err := func() error {
+		_, recordErr := store.RecordRetryWorkFailure(ctx, nil, nil)
+		return recordErr
+	}()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil failure")
+
+	err = func() error {
+		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+			ActionType: ActionUpload,
+			IssueType:  IssueServiceOutage,
+		}, func(int) time.Duration { return time.Minute })
+		return recordErr
+	}()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing path")
+
+	err = func() error {
+		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+			Path:       "bad-action.txt",
+			ActionType: ActionType(-1),
+			IssueType:  IssueServiceOutage,
+		}, func(int) time.Duration { return time.Minute })
+		return recordErr
+	}()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid action type")
+
+	err = func() error {
+		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+			Path:       "needs-delay.txt",
+			ActionType: ActionUpload,
+			IssueType:  IssueServiceOutage,
+		}, nil)
+		return recordErr
+	}()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires delay function")
+
+	err = func() error {
+		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+			Path:       "blocked-without-scope.txt",
+			ActionType: ActionUpload,
+			IssueType:  IssueRemoteWriteDenied,
+			Blocked:    true,
+		}, nil)
+		return recordErr
+	}()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires scope key")
+}
+
+// Validates: R-2.10.33
 func TestRecordRetryWorkFailure_PopulatesRetryAndBlockedRows(t *testing.T) {
 	t.Parallel()
 

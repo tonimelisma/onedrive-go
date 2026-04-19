@@ -119,3 +119,21 @@ func TestSyncStore_DeleteObservationIssuesByPrefixAndScope(t *testing.T) {
 	require.NoError(t, store.DeleteObservationIssuesByScope(t.Context(), scopeKey))
 	assert.Empty(t, observationIssuePathsForTest(t, store))
 }
+
+// Validates: R-2.5.2
+func TestSyncStore_ClearAllObservationIssuesAndDeleteByPath(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	seedObservationIssueForTest(t, store, "a.txt", IssueInvalidFilename, ScopeKey{})
+	seedObservationIssueForTest(t, store, "b.txt", IssuePathTooLong, ScopeKey{})
+
+	require.NoError(t, store.DeleteObservationIssueByPath(t.Context(), ""))
+	assert.ElementsMatch(t, []string{"a.txt", "b.txt"}, observationIssuePathsForTest(t, store))
+
+	require.NoError(t, store.DeleteObservationIssueByPath(t.Context(), "a.txt"))
+	assert.Equal(t, []string{"b.txt"}, observationIssuePathsForTest(t, store))
+
+	require.NoError(t, store.ClearAllObservationIssues(t.Context()))
+	assert.Empty(t, observationIssuePathsForTest(t, store))
+}

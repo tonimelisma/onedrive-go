@@ -74,3 +74,73 @@ func TestSyncStore_ListVisibleConditionGroups(t *testing.T) {
 	count := visibleConditionCountForTest(t, mgr, ctx)
 	assert.Equal(t, 3, count)
 }
+
+func TestBuildVisibleConditionGroups_DedupesPathsAndDefaultsUnbackedScopes(t *testing.T) {
+	t.Parallel()
+
+	remoteScope := SKPermRemoteWrite("")
+	serviceScope := SKService()
+
+	groups := buildVisibleConditionGroups(
+		[]ObservationIssueRow{
+			{Path: "/b.txt", IssueType: IssueInvalidFilename},
+			{Path: "/a.txt", IssueType: IssueInvalidFilename},
+			{Path: "/a.txt", IssueType: IssueInvalidFilename},
+		},
+		[]*BlockScope{
+			nil,
+			{Key: remoteScope, IssueType: IssueRemoteWriteDenied},
+			{Key: serviceScope, IssueType: IssueServiceOutage},
+		},
+		[]RetryWorkRow{
+			{Path: "z.txt", ScopeKey: remoteScope, Blocked: true},
+			{Path: "a.txt", ScopeKey: remoteScope, Blocked: true},
+			{Path: "a.txt", ScopeKey: remoteScope, Blocked: true},
+			{Path: "", ScopeKey: ScopeKey{}, Blocked: true},
+		},
+	)
+
+	require.Len(t, groups, 3)
+
+	groupByKey := make(map[SummaryKey]VisibleConditionGroup, len(groups))
+	for i := range groups {
+		groupByKey[groups[i].SummaryKey] = groups[i]
+	}
+
+	invalid := groupByKey[SummaryInvalidFilename]
+	assert.Equal(t, 3, invalid.Count)
+	assert.Equal(t, []string{"/a.txt", "/b.txt"}, invalid.Paths)
+
+	remote := groupByKey[SummaryRemoteWriteDenied]
+	assert.Equal(t, 3, remote.Count)
+	assert.Equal(t, 3, remote.VisibleCount)
+	assert.Equal(t, []string{"a.txt", "z.txt"}, remote.Paths)
+	require.NotNil(t, remote.RemoteBlocked)
+	assert.Equal(t, "/", remote.RemoteBlocked.BoundaryPath)
+	assert.Equal(t, []string{"a.txt", "z.txt"}, remote.RemoteBlocked.BlockedPaths)
+
+	service := groupByKey[SummaryServiceOutage]
+	assert.Equal(t, 1, service.Count)
+	assert.Equal(t, 1, service.VisibleCount)
+	assert.Nil(t, service.RemoteBlocked)
+}
+
+func TestBuildVisibleConditionSummary_TracksRetryingAndCurrentFamilies(t *testing.T) {
+	t.Parallel()
+
+	summary := buildVisibleConditionSummary([]VisibleConditionGroup{
+		{SummaryKey: SummaryInvalidFilename, Count: 2},
+		{SummaryKey: SummaryRemoteWriteDenied, Count: 3},
+		{SummaryKey: "", Count: 100},
+		{SummaryKey: SummaryServiceOutage, Count: 0},
+	}, 4)
+
+	assert.ElementsMatch(t, []ConditionGroupCount{
+		{Key: SummaryInvalidFilename, Count: 2},
+		{Key: SummaryRemoteWriteDenied, Count: 3},
+	}, summary.Groups)
+	assert.Equal(t, 5, summary.VisibleTotal())
+	assert.Equal(t, 2, summary.ActionableCount())
+	assert.Equal(t, 3, summary.RemoteBlockedCount())
+	assert.Equal(t, 4, summary.RetryingCount())
+}

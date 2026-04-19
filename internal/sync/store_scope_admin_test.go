@@ -158,3 +158,108 @@ func TestFinalizeInspectorRead_JoinsReadAndCloseErrors(t *testing.T) {
 	require.ErrorIs(t, err, readErr)
 	require.ErrorIs(t, err, closeErr)
 }
+
+// Validates: R-2.5.2, R-2.10.8
+func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndClearsScopedState(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
+	now := time.Date(2026, 4, 19, 9, 30, 0, 0, time.UTC)
+
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           scopeKey,
+		IssueType:     IssueRemoteWriteDenied,
+		TimingSource:  ScopeTimingBackoff,
+		BlockedAt:     now.Add(-time.Minute),
+		TrialInterval: 5 * time.Second,
+		NextTrialAt:   now,
+	}))
+	seedObservationIssueForTest(t, store, "Shared/Docs/bad.txt", IssueRemoteWriteDenied, scopeKey)
+	seedObservationIssueForTest(t, store, "other/problem.txt", IssueInvalidFilename, ScopeKey{})
+	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Path:       "Shared/Docs/file.txt",
+		ActionType: ActionUpload,
+		IssueType:  IssueRemoteWriteDenied,
+		ScopeKey:   scopeKey,
+		LastError:  "blocked",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, store.ReleaseScope(ctx, scopeKey, now))
+
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
+
+	rows, err := store.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "other/problem.txt", rows[0].Path)
+
+	retryRows, err := store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "Shared/Docs/file.txt", retryRows[0].Path)
+	assert.False(t, retryRows[0].Blocked)
+	assert.Equal(t, now.UnixNano(), retryRows[0].NextRetryAt)
+
+	ready, err := store.ListRetryWorkReady(ctx, now)
+	require.NoError(t, err)
+	require.Len(t, ready, 1)
+	assert.Equal(t, "Shared/Docs/file.txt", ready[0].Path)
+}
+
+// Validates: R-2.5.2, R-2.10.8
+func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndScopedState(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
+
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:          scopeKey,
+		IssueType:    IssueRemoteWriteDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Date(2026, 4, 19, 8, 0, 0, 0, time.UTC),
+	}))
+	seedObservationIssueForTest(t, store, "Shared/Docs/bad.txt", IssueRemoteWriteDenied, scopeKey)
+	seedObservationIssueForTest(t, store, "keep.txt", IssueInvalidFilename, ScopeKey{})
+	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Path:       "Shared/Docs/file.txt",
+		ActionType: ActionUpload,
+		IssueType:  IssueRemoteWriteDenied,
+		ScopeKey:   scopeKey,
+		LastError:  "blocked",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, store.DiscardScope(ctx, scopeKey))
+
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
+
+	rows, err := store.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "keep.txt", rows[0].Path)
+
+	retryRows, err := store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, retryRows)
+}
+
+func TestSyncStore_DiscardScope_RejectsZeroScopeKey(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+
+	err := store.DiscardScope(t.Context(), ScopeKey{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing scope key")
+}

@@ -118,6 +118,115 @@ func TestScopeController_ClearBlockedRetryWorkForScope_RemovesScopedRetryWork(t 
 }
 
 // Validates: R-2.10.5
+func TestScopeController_AdmitReady_BlocksNormalActionUnderActiveScope(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	controller := testEngineFlow(t, eng).scopeController()
+	scopeKey := SKQuotaOwn()
+
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:          scopeKey,
+		IssueType:    IssueQuotaExceeded,
+		TimingSource: ScopeTimingNone,
+	})
+
+	ready := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "blocked.txt",
+		DriveID: eng.driveID,
+	}, 1, nil)
+	require.NotNil(t, ready)
+
+	dispatched := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+
+	assert.Empty(t, dispatched)
+	assert.Zero(t, rt.depGraph.InFlightCount())
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "blocked.txt", retryRows[0].Path)
+	assert.Equal(t, scopeKey, retryRows[0].ScopeKey)
+	assert.True(t, retryRows[0].Blocked)
+}
+
+// Validates: R-2.10.5
+func TestScopeController_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenScopeNoLongerMatches(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	controller := testEngineFlow(t, eng).scopeController()
+	scopeKey := SKQuotaOwn()
+
+	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
+		Path:       "trial.txt",
+		ActionType: ActionDownload,
+		IssueType:  scopeKey.IssueType(),
+		ScopeKey:   scopeKey,
+		LastError:  "stale blocked retry",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+
+	ready := rt.depGraph.Add(&Action{
+		Type:    ActionDownload,
+		Path:    "trial.txt",
+		DriveID: eng.driveID,
+	}, 1, nil)
+	require.NotNil(t, ready)
+	ready.IsTrial = true
+	ready.TrialScopeKey = scopeKey
+
+	dispatched := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+
+	require.Len(t, dispatched, 1)
+	assert.Equal(t, int64(1), dispatched[0].ID)
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+}
+
+// Validates: R-2.10.5
+func TestScopeController_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWithoutClearingRetryWork(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	controller := testEngineFlow(t, eng).scopeController()
+	scopeKey := SKQuotaOwn()
+
+	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
+		Path:       "trial.txt",
+		ActionType: ActionUpload,
+		IssueType:  scopeKey.IssueType(),
+		ScopeKey:   scopeKey,
+		LastError:  "blocked retry",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+
+	ready := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "trial.txt",
+		DriveID: eng.driveID,
+	}, 1, nil)
+	require.NotNil(t, ready)
+	ready.IsTrial = true
+	ready.TrialScopeKey = scopeKey
+
+	dispatched := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+
+	require.Len(t, dispatched, 1)
+	assert.Equal(t, int64(1), dispatched[0].ID)
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "trial.txt", retryRows[0].Path)
+	assert.Equal(t, scopeKey, retryRows[0].ScopeKey)
+	assert.True(t, retryRows[0].Blocked)
+}
+
+// Validates: R-2.10.5
 func TestRemoteBlockedRetryRelevant_MatchesPathAndBoundaryChanges(t *testing.T) {
 	t.Parallel()
 
