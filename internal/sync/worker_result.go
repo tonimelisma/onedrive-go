@@ -27,7 +27,7 @@ type ActionCompletion struct {
 	Err error
 
 	// RetryAfter is the server-mandated wait duration from the Retry-After
-	// header on 429/503 responses. Zero when absent. Used by scope blocks
+	// header on 429/503 responses. Zero when absent. Used by block scopes
 	// for initial trial timing (R-2.10.7, R-2.10.8).
 	RetryAfter time.Duration
 

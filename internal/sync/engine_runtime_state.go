@@ -49,7 +49,7 @@ func (rt *watchRuntime) consumeOutboxHead() {
 	rt.loop.outbox = rt.loop.outbox[1:]
 }
 
-func (rt *watchRuntime) replaceActiveScopes(blocks []ScopeBlock) {
+func (rt *watchRuntime) replaceActiveScopes(blocks []BlockScope) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()
 
@@ -57,7 +57,7 @@ func (rt *watchRuntime) replaceActiveScopes(blocks []ScopeBlock) {
 	rt.activeScopes = append(rt.activeScopes, blocks...)
 }
 
-func (rt *watchRuntime) upsertActiveScope(block *ScopeBlock) {
+func (rt *watchRuntime) upsertActiveScope(block *BlockScope) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()
 
@@ -71,7 +71,7 @@ func (rt *watchRuntime) removeActiveScope(key ScopeKey) {
 	rt.activeScopes = RemoveScope(rt.activeScopes, key)
 }
 
-func (rt *watchRuntime) lookupActiveScope(key ScopeKey) (ScopeBlock, bool) {
+func (rt *watchRuntime) lookupActiveScope(key ScopeKey) (BlockScope, bool) {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
@@ -99,11 +99,11 @@ func (rt *watchRuntime) activeScopeKeys() []ScopeKey {
 	return ScopeKeys(rt.activeScopes)
 }
 
-func (rt *watchRuntime) snapshotActiveScopes() []ScopeBlock {
+func (rt *watchRuntime) snapshotActiveScopes() []BlockScope {
 	rt.activeScopesMu.RLock()
 	defer rt.activeScopesMu.RUnlock()
 
-	blocks := make([]ScopeBlock, len(rt.activeScopes))
+	blocks := make([]BlockScope, len(rt.activeScopes))
 	copy(blocks, rt.activeScopes)
 
 	return blocks

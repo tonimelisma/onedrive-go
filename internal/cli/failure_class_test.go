@@ -37,7 +37,7 @@ func TestCommandFailurePresentationForClass(t *testing.T) {
 		{class: errclass.ClassShutdown, exitCode: 1, reason: "shutdown or cancellation"},
 		{class: errclass.ClassActionable, exitCode: 1, reason: "needs user action"},
 		{class: errclass.ClassRetryableTransient, exitCode: 1, reason: "failed temporarily"},
-		{class: errclass.ClassScopeBlockingTransient, exitCode: 1, reason: "failed temporarily"},
+		{class: errclass.ClassBlockScopeingTransient, exitCode: 1, reason: "failed temporarily"},
 		{class: errclass.ClassFatal, exitCode: 1, reason: "failed fatally"},
 	}
 

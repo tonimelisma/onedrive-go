@@ -281,21 +281,21 @@ func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.UpsertRetryState(ctx, &RetryStateRow{
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &RetryWorkRow{
 		Path:         "keep.txt",
 		ActionType:   ActionUpload,
 		AttemptCount: 1,
 		FirstSeenAt:  1,
 		LastSeenAt:   2,
 	}))
-	require.NoError(t, eng.baseline.UpsertRetryState(ctx, &RetryStateRow{
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &RetryWorkRow{
 		Path:         "drop.txt",
 		ActionType:   ActionDownload,
 		AttemptCount: 1,
 		FirstSeenAt:  3,
 		LastSeenAt:   4,
 	}))
-	require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
+	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
 		IssueType:     IssueServiceOutage,
 		TimingSource:  ScopeTimingBackoff,
@@ -303,7 +303,7 @@ func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(160, 0),
 	}))
-	require.NoError(t, eng.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
+	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKThrottleDrive(driveid.New("drive1")),
 		IssueType:     IssueRateLimited,
 		TimingSource:  ScopeTimingBackoff,
@@ -311,7 +311,7 @@ func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(260, 0),
 	}))
-	require.NoError(t, eng.baseline.UpsertRetryState(ctx, &RetryStateRow{
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &RetryWorkRow{
 		Path:         "blocked.txt",
 		ActionType:   ActionRemoteDelete,
 		ScopeKey:     SKService(),
@@ -329,12 +329,12 @@ func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
 	}, false)
 	require.NoError(t, err)
 
-	retries, err := eng.baseline.ListRetryState(ctx)
+	retries, err := eng.baseline.ListRetryWork(ctx)
 	require.NoError(t, err)
 	require.Len(t, retries, 1)
 	assert.Equal(t, "keep.txt", retries[0].Path)
 
-	blocks, err := eng.baseline.ListScopeBlocks(ctx)
+	blocks, err := eng.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, blocks)
 }

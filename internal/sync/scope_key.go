@@ -7,7 +7,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// ScopeKeyKind discriminates the type of scope block. Value-typed (usable
+// ScopeKeyKind discriminates the type of block scope. Value-typed (usable
 // as map key), exhaustive via switch. Zero value is invalid by construction.
 type ScopeKeyKind int
 
@@ -20,7 +20,7 @@ const (
 	ScopeDiskLocal                              // no Param
 )
 
-// ScopeKey identifies a scope block. The Kind discriminator determines the
+// ScopeKey identifies a block scope. The Kind discriminator determines the
 // semantics; Param carries per-instance data for parameterized scopes
 // (ScopeThrottleTarget, ScopePermDir, ScopePermRemote). Comparable, so usable
 // as a map key.
@@ -123,13 +123,13 @@ func ParseScopeKey(s string) ScopeKey {
 	}
 }
 
-// IsGlobal returns true for scope blocks that affect ALL actions. Target-scoped
+// IsGlobal returns true for block scopes that affect ALL actions. Target-scoped
 // throttles are intentionally not global; only service remains process-wide.
 func (sk ScopeKey) IsGlobal() bool {
 	return sk.Kind == ScopeService
 }
 
-// IsPermDir returns true for local directory permission scope blocks.
+// IsPermDir returns true for local directory permission block scopes.
 func (sk ScopeKey) IsPermDir() bool {
 	return sk.Kind == ScopePermDir
 }

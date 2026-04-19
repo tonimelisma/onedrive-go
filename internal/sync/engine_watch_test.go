@@ -421,12 +421,12 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	clearedScope := SKPermRemote("Shared/TeamDocs")
 	retainedScope := SKPermRemote("Shared/Other")
 
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:       clearedScope,
 		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFunc(),
 	})
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:       retainedScope,
 		IssueType: IssueSharedFolderBlocked,
 		BlockedAt: eng.nowFunc(),
@@ -462,12 +462,12 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 
 	handleExternalChangesForTest(t, eng, ctx)
 
-	assert.False(t, isTestScopeBlocked(eng, clearedScope),
+	assert.False(t, isTestBlockScopeed(eng, clearedScope),
 		"clearing a remote permission issue externally should release that scope")
-	assert.True(t, isTestScopeBlocked(eng, retainedScope),
+	assert.True(t, isTestBlockScopeed(eng, retainedScope),
 		"unrelated remote permission scopes must remain blocked")
 
-	retryable := readyRetryStateForTest(t, eng.baseline, ctx, eng.nowFunc())
+	retryable := readyRetryWorkForTest(t, eng.baseline, ctx, eng.nowFunc())
 	assert.Empty(t, retryable, "clearing the last blocked write should forget the remote scope instead of retrying it")
 
 	remainingIssues := syncFailuresByIssueTypeForTest(t, eng.baseline, ctx, IssueRemoteWriteDenied)
@@ -769,7 +769,7 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	installManualClock(eng.Engine, clock)
 
 	ctx := t.Context()
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
 		IssueType:     IssueServiceOutage,
 		TimingSource:  ScopeTimingServerRetryAfter,

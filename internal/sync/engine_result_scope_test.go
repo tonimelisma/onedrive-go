@@ -689,7 +689,7 @@ func TestClassifyResult_RemoteRetriesAndSkips(t *testing.T) {
 		{name: "408_request_timeout", result: ActionCompletion{HTTPStatus: http.StatusRequestTimeout, Err: errors.New("timeout")}, wantClass: resultRequeue, wantSummaryKey: SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
 		{name: "412_precondition_failed", result: ActionCompletion{HTTPStatus: http.StatusPreconditionFailed, Err: errors.New("etag mismatch")}, wantClass: resultRequeue, wantSummaryKey: SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
 		{name: "423_locked", result: ActionCompletion{HTTPStatus: http.StatusLocked, Err: graph.ErrLocked}, wantClass: resultRequeue, wantSummaryKey: SummarySyncFailure, wantPersistence: persistTransientFailure, wantScopeDetect: true},
-		{name: "429_too_many_requests", result: ActionCompletion{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled}, wantClass: resultScopeBlock, wantScope: testThrottleScope(), wantSummaryKey: SummaryRateLimited, wantPersistence: persistTransientFailure, wantScopeDetect: true},
+		{name: "429_too_many_requests", result: ActionCompletion{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled}, wantClass: resultBlockScope, wantScope: testThrottleScope(), wantSummaryKey: SummaryRateLimited, wantPersistence: persistTransientFailure, wantScopeDetect: true},
 		{name: "400_invalid_request_is_skip", result: ActionCompletion{HTTPStatus: http.StatusBadRequest, Err: genericInvalidRequestErr}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
 		{name: "400_object_handle_message_only_is_skip", result: ActionCompletion{HTTPStatus: http.StatusBadRequest, Err: legacyOutageErr}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
 		{name: "400_object_handle_wrong_code_is_skip", result: ActionCompletion{HTTPStatus: http.StatusBadRequest, Err: wrongCodeOutageErr}, wantClass: resultSkip, wantSummaryKey: SummarySyncFailure, wantPersistence: persistActionableFailure},
@@ -713,7 +713,7 @@ func TestClassifyResult_StorageScopes(t *testing.T) {
 				HTTPStatus: http.StatusInsufficientStorage,
 				Err:        errors.New("insufficient storage"),
 			},
-			wantClass:       resultScopeBlock,
+			wantClass:       resultBlockScope,
 			wantScope:       SKQuotaOwn(),
 			wantSummaryKey:  SummaryQuotaExceeded,
 			wantPersistence: persistTransientFailure,
@@ -726,7 +726,7 @@ func TestClassifyResult_StorageScopes(t *testing.T) {
 				Err:           errors.New("insufficient storage"),
 				TargetDriveID: driveid.New("drive1"),
 			},
-			wantClass:       resultScopeBlock,
+			wantClass:       resultBlockScope,
 			wantScope:       SKQuotaOwn(),
 			wantSummaryKey:  SummaryQuotaExceeded,
 			wantPersistence: persistTransientFailure,
@@ -751,7 +751,7 @@ func TestClassifyResult_LocalErrors(t *testing.T) {
 		{
 			name:            "disk_full",
 			result:          ActionCompletion{Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull)},
-			wantClass:       resultScopeBlock,
+			wantClass:       resultBlockScope,
 			wantScope:       SKDiskLocal(),
 			wantSummaryKey:  SummaryDiskFull,
 			wantPersistence: persistTransientFailure,
@@ -794,9 +794,9 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
 
-	// Set up an active persisted scope block.
+	// Set up an active persisted block scope.
 	now := eng.nowFunc()
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           testThrottleScope(),
 		IssueType:     IssueRateLimited,
 		BlockedAt:     now,
@@ -823,11 +823,11 @@ func TestProcessTrialResultV2_Success_ClearsScope(t *testing.T) {
 	})
 
 	// Scope block should be cleared.
-	assert.False(t, isTestScopeBlocked(eng, testThrottleScope()),
-		"scope block should be removed after successful trial")
+	assert.False(t, isTestBlockScopeed(eng, testThrottleScope()),
+		"block scope should be removed after successful trial")
 
 	// Scope-blocked failures should now be retryable (next_retry_at set to ~now).
-	rows := readyRetryStateForTest(t, eng.baseline, ctx, now)
+	rows := readyRetryWorkForTest(t, eng.baseline, ctx, now)
 	assert.Len(t, rows, 1, "scope-blocked failures should be unblocked after trial success")
 }
 
@@ -839,7 +839,7 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	ctx := t.Context()
 
 	now := eng.nowFunc()
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
 		IssueType:     IssueServiceOutage,
 		BlockedAt:     now,
@@ -860,7 +860,7 @@ func TestProcessTrialResultV2_Failure_DoublesInterval(t *testing.T) {
 	})
 
 	// Verify block's TrialInterval was doubled.
-	got, ok := getTestScopeBlock(eng, SKService())
+	got, ok := getTestBlockScope(eng, SKService())
 	require.True(t, ok)
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled")
 }
@@ -892,7 +892,7 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 			now := eng.nowFunc()
 
 			// Start with an interval that would exceed 5m when doubled.
-			setTestScopeBlock(t, eng, &ScopeBlock{
+			setTestBlockScope(t, eng, &BlockScope{
 				Key:           tt.scopeKey,
 				IssueType:     tt.issueType,
 				BlockedAt:     now,
@@ -912,7 +912,7 @@ func TestProcessTrialResultV2_Failure_CapsAt5m(t *testing.T) {
 				ErrMsg:        "test failure",
 			})
 
-			got, ok := getTestScopeBlock(eng, tt.scopeKey)
+			got, ok := getTestBlockScope(eng, tt.scopeKey)
 			require.True(t, ok)
 			assert.Equal(t, DefaultMaxTrialInterval, got.TrialInterval,
 				"%s interval should cap at %v", tt.name, DefaultMaxTrialInterval)
@@ -932,7 +932,7 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 	testWatchRuntime(t, eng).scopeState = ss
 
 	now := eng.nowFunc()
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
 		IssueType:     IssueServiceOutage,
 		BlockedAt:     now,
@@ -951,8 +951,8 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 		ErrMsg:        "internal server error",
 	})
 
-	got, ok := getTestScopeBlock(eng, SKService())
-	require.True(t, ok, "scope block should still exist")
+	got, ok := getTestBlockScope(eng, SKService())
+	require.True(t, ok, "block scope should still exist")
 	assert.Equal(t, 60*time.Second, got.TrialInterval, "interval should be doubled, not reset")
 }
 
@@ -980,7 +980,7 @@ func TestProcessTrialResultV2_Preserve_RetryableHTTPStatusesKeepScopeTimingAndHe
 			ctx := t.Context()
 			now := eng.nowFunc()
 
-			setTestScopeBlock(t, eng, &ScopeBlock{
+			setTestBlockScope(t, eng, &BlockScope{
 				Key:           SKService(),
 				IssueType:     IssueServiceOutage,
 				BlockedAt:     now,
@@ -1018,8 +1018,8 @@ func TestProcessTrialResultV2_Preserve_RetryableHTTPStatusesKeepScopeTimingAndHe
 				ErrMsg:        tt.errMsg,
 			})
 
-			got, ok := getTestScopeBlock(eng, SKService())
-			require.True(t, ok, "scope block should still exist")
+			got, ok := getTestBlockScope(eng, SKService())
+			require.True(t, ok, "block scope should still exist")
 			assert.Equal(t, 30*time.Second, got.TrialInterval, "inconclusive trial must not back off the original scope")
 			assert.Equal(t, now.Add(30*time.Second), got.NextTrialAt, "preserve should re-arm the original interval")
 			assert.Equal(t, 2, got.TrialCount, "preserve should not increment trial backoff history")
@@ -1042,7 +1042,7 @@ func TestProcessTrialResultV2_Fatal401DoesNotExtendScope(t *testing.T) {
 	ctx := t.Context()
 	now := eng.nowFunc()
 
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           testThrottleScope(),
 		IssueType:     IssueRateLimited,
 		BlockedAt:     now,
@@ -1073,7 +1073,7 @@ func TestProcessTrialResultV2_Fatal401DoesNotExtendScope(t *testing.T) {
 	require.ErrorIs(t, outcome.terminateErr, graph.ErrUnauthorized)
 	assert.True(t, outcome.terminate, "trial unauthorized should terminate result routing")
 
-	got, ok := getTestScopeBlock(eng, testThrottleScope())
+	got, ok := getTestBlockScope(eng, testThrottleScope())
 	require.True(t, ok, "fatal unauthorized should not clear the original scope")
 	assert.Equal(t, 45*time.Second, got.TrialInterval, "fatal unauthorized must not back off the original scope")
 	assert.Equal(t, now.Add(45*time.Second), got.NextTrialAt, "fatal unauthorized must not reschedule the original scope")
@@ -1094,7 +1094,7 @@ func TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure(t 
 	ctx := t.Context()
 	now := eng.nowFunc()
 
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
 		IssueType:     IssueServiceOutage,
 		BlockedAt:     now,
@@ -1131,7 +1131,7 @@ func TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure(t 
 		ErrMsg:        "permission denied",
 	})
 
-	got, ok := getTestScopeBlock(eng, SKService())
+	got, ok := getTestBlockScope(eng, SKService())
 	require.True(t, ok)
 	assert.Equal(t, 45*time.Second, got.TrialInterval)
 	assert.Equal(t, now.Add(45*time.Second), got.NextTrialAt)
@@ -1253,7 +1253,7 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 	ctx := t.Context()
 
 	now := eng.nowFunc()
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           testThrottleScope(),
 		IssueType:     IssueRateLimited,
 		BlockedAt:     now,
@@ -1276,7 +1276,7 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 		ErrMsg:        "too many requests",
 	})
 
-	got, ok := getTestScopeBlock(eng, testThrottleScope())
+	got, ok := getTestBlockScope(eng, testThrottleScope())
 	require.True(t, ok)
 	assert.Equal(t, 30*time.Minute, got.TrialInterval,
 		"Retry-After must be used directly with no cap — server is ground truth")
@@ -1284,25 +1284,25 @@ func TestExtendTrialInterval_WithRetryAfter(t *testing.T) {
 
 // Validates: R-2.10.43
 // Full disk:local scope-block lifecycle:
-// ErrDiskFull -> classifyResult -> active scope blocks downloads -> trial -> release.
-func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
+// ErrDiskFull -> classifyResult -> active block scopes downloads -> trial -> release.
+func TestDiskLocalBlockScope_FullCycle(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
 	now := eng.nowFunc()
 
-	// 1. classifyResult maps ErrDiskFull to disk:local scope block.
+	// 1. classifyResult maps ErrDiskFull to disk:local block scope.
 	decision := classifyResult(&ActionCompletion{
 		Err: fmt.Errorf("download failed: %w", driveops.ErrDiskFull),
 	})
-	require.Equal(t, resultScopeBlock, decision.Class)
+	require.Equal(t, resultBlockScope, decision.Class)
 	require.Equal(t, SKDiskLocal(), decision.ScopeKey)
 	require.Equal(t, persistTransientFailure, decision.Persistence)
 	assert.False(t, decision.RunScopeDetection, "disk:local uses direct scope activation, not HTTP scope detection")
 
-	// 2. Establish the active scope block.
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	// 2. Establish the active block scope.
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKDiskLocal(),
 		IssueType:     IssueDiskFull,
 		BlockedAt:     now,
@@ -1317,7 +1317,7 @@ func TestDiskLocalScopeBlock_FullCycle(t *testing.T) {
 	assert.False(t, activeBlockingScopeForTest(t, eng, dlAction).IsZero(), "download should be blocked by disk:local scope")
 	assert.True(t, activeBlockingScopeForTest(t, eng, ulAction).IsZero(), "upload should NOT be blocked by disk:local scope")
 
-	// 4. Release scope block (simulating trial success / disk space freed).
+	// 4. Release block scope (simulating trial success / disk space freed).
 	require.NoError(t, releaseTestScope(t, eng, ctx, SKDiskLocal()))
 
 	// 5. Download should now be admitted.
@@ -1359,19 +1359,19 @@ func TestDeriveScopeKey(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// applyScopeBlock arms trial timer
+// applyBlockScope arms trial timer
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.5
-func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
+func TestApplyBlockScope_ArmsTrialTimer(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	ctx := t.Context()
 	now := eng.nowFunc()
 
-	// applyScopeBlock persists the scope and arms the trial timer.
-	applyScopeBlockForTest(t, eng, ctx, ScopeUpdateResult{
+	// applyBlockScope persists the scope and arms the trial timer.
+	applyBlockScopeForTest(t, eng, ctx, ScopeUpdateResult{
 		Block:      true,
 		ScopeKey:   testThrottleScope(),
 		IssueType:  IssueRateLimited,
@@ -1380,12 +1380,12 @@ func TestApplyScopeBlock_ArmsTrialTimer(t *testing.T) {
 
 	// Verify the block has the correct NextTrialAt from the injectable clock.
 	earliest, ok := testWatchRuntime(t, eng).earliestTrialAt()
-	require.True(t, ok, "EarliestTrialAt should find the scope block")
+	require.True(t, ok, "EarliestTrialAt should find the block scope")
 	assert.Equal(t, now.Add(30*time.Second), earliest, "NextTrialAt should be now + trial interval")
 
 	// Trial timer should be armed.
 	timerSet := testWatchRuntime(t, eng).hasTrialTimer()
-	assert.True(t, timerSet, "trial timer should be armed after applyScopeBlock")
+	assert.True(t, timerSet, "trial timer should be armed after applyBlockScope")
 }
 
 // ---------------------------------------------------------------------------
@@ -1640,10 +1640,10 @@ func TestE2E_OneShotEngineLoop_ProcessesAndRoutes(t *testing.T) {
 		Err:        fmt.Errorf("rate limited"),
 	}
 
-	// Verify scope block created and failure recorded.
+	// Verify block scope created and failure recorded.
 	require.Eventually(t, func() bool {
-		return isTestScopeBlocked(eng, testThrottleScope())
-	}, time.Second, time.Millisecond, "scope block should be created")
+		return isTestBlockScopeed(eng, testThrottleScope())
+	}, time.Second, time.Millisecond, "block scope should be created")
 
 	issues, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
@@ -1752,7 +1752,7 @@ func TestWatchLoop_SteadyStateContinuesAfterGraphDrains(t *testing.T) {
 
 // Validates: R-2.10.5, R-2.10.11
 // TestE2E_OneShotLoop_TrialResultSuccess verifies that trial success clears the
-// scope block and re-injects held failures without waiting for a new external observation.
+// block scope and re-injects held failures without waiting for a new external observation.
 func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -1762,8 +1762,8 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 
 	ctx := t.Context()
 
-	// Set up scope block and a scope-blocked failure.
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	// Set up block scope and a scope-blocked failure.
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           testThrottleScope(),
 		IssueType:     IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
@@ -1794,8 +1794,8 @@ func TestE2E_OneShotLoop_TrialResultSuccess(t *testing.T) {
 
 	// Scope block should be cleared.
 	require.Eventually(t, func() bool {
-		return !isTestScopeBlocked(eng, testThrottleScope())
-	}, 5*time.Second, 10*time.Millisecond, "scope block should be cleared after trial success")
+		return !isTestBlockScopeed(eng, testThrottleScope())
+	}, 5*time.Second, 10*time.Millisecond, "block scope should be cleared after trial success")
 
 	var released *TrackedAction
 	require.Eventually(t, func() bool {
@@ -1819,7 +1819,7 @@ func TestE2E_OneShotLoop_TrialResultFailure(t *testing.T) {
 	defer cancel()
 	_ = done
 
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
 		IssueType:     IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
@@ -1845,7 +1845,7 @@ func TestE2E_OneShotLoop_TrialResultFailure(t *testing.T) {
 
 	// Interval should be doubled from 10ms to 20ms.
 	require.Eventually(t, func() bool {
-		block, ok := getTestScopeBlock(eng, SKService())
+		block, ok := getTestBlockScope(eng, SKService())
 		return ok && block.TrialInterval == 20*time.Millisecond
 	}, time.Second, time.Millisecond, "trial failure should double interval")
 }
@@ -1857,8 +1857,8 @@ func TestE2E_OneShotLoopExit_StopsTimer(t *testing.T) {
 	defer cancel()
 	ctx := t.Context()
 
-	// Create scope block → arms trial timer.
-	applyScopeBlockForTest(t, eng, ctx, ScopeUpdateResult{
+	// Create block scope → arms trial timer.
+	applyBlockScopeForTest(t, eng, ctx, ScopeUpdateResult{
 		Block:      true,
 		ScopeKey:   SKService(),
 		IssueType:  IssueServiceOutage,
@@ -1934,7 +1934,7 @@ func assertImmediateRetryAfterBlock(
 		TargetDriveID: testThrottleDriveID(),
 	})
 
-	require.True(t, sr.Block, "Retry-After should trigger an immediate scope block")
+	require.True(t, sr.Block, "Retry-After should trigger an immediate block scope")
 	assert.Equal(t, wantScope, sr.ScopeKey)
 	assert.Equal(t, wantIssue, sr.IssueType)
 	assert.Equal(t, retryAfter, sr.RetryAfter, "RetryAfter should pass through")
@@ -2164,7 +2164,7 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	testWatchRuntime(t, eng).scopeState = NewScopeState(time.Now, eng.logger)
 
-	// Feed several local errors (HTTPStatus=0) — should not trigger a scope block.
+	// Feed several local errors (HTTPStatus=0) — should not trigger a block scope.
 	for i := range 10 {
 		feedScopeDetectionForTest(t, eng, t.Context(), &ActionCompletion{
 			Path:       fmt.Sprintf("file-%d.txt", i),
@@ -2175,10 +2175,10 @@ func TestFeedScopeDetection_LocalErrorIgnored(t *testing.T) {
 		})
 	}
 
-	// No scope block should have been created.
-	assert.False(t, isTestScopeBlocked(eng, SKService()),
+	// No block scope should have been created.
+	assert.False(t, isTestBlockScopeed(eng, SKService()),
 		"local errors with HTTPStatus=0 must not trigger service scope")
-	assert.False(t, isTestScopeBlocked(eng, testThrottleScope()),
+	assert.False(t, isTestBlockScopeed(eng, testThrottleScope()),
 		"local errors with HTTPStatus=0 must not trigger throttle scope")
 }
 
@@ -2192,7 +2192,7 @@ func TestIsObservationSuppressed_TargetScopedThrottleDoesNotSuppressAllShortcuts
 	assert.False(t, isObservationSuppressedForTest(t, eng, testWatchRuntime(t, eng)))
 
 	// Target-scoped throttle should not suppress all shared observation.
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           testThrottleScope(),
 		IssueType:     IssueRateLimited,
 		TrialInterval: 30 * time.Second,
@@ -2207,7 +2207,7 @@ func TestIsObservationSuppressed_ServiceOutage(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 
 	// Service outage should also suppress.
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
 		IssueType:     IssueServiceOutage,
 		TrialInterval: 60 * time.Second,
@@ -2233,8 +2233,8 @@ func TestIsObservationSuppressed_QuotaDoesNotSuppress(t *testing.T) {
 
 	eng := newSingleOwnerEngine(t)
 
-	// Quota scope block should NOT suppress observation (R-2.10.31).
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	// Quota block scope should NOT suppress observation (R-2.10.31).
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKQuotaOwn(),
 		IssueType:     IssueQuotaExceeded,
 		TrialInterval: 5 * time.Minute,
@@ -2701,7 +2701,7 @@ func TestIsFailureResolved_LogsRetryResolutionForTransientItemFailure(t *testing
 	flow := newEngineFlow(eng.Engine)
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	candidate := flow.buildRetryCandidateFromRetryState(ctx, bl, &RetryStateRow{
+	candidate := flow.buildRetryCandidateFromRetryWork(ctx, bl, &RetryWorkRow{
 		Path:       "resolved-retry/file.txt",
 		ActionType: ActionUpload,
 	}, driveID)

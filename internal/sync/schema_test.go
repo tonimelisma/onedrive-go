@@ -23,10 +23,10 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"baseline",
 		"local_state",
 		"observation_state",
-		"retry_state",
+		"retry_work",
 		"remote_state",
 		"run_status",
-		"scope_blocks",
+		"block_scopes",
 		"store_metadata",
 		"sync_failures",
 	}, tables)

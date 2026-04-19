@@ -25,7 +25,7 @@ type PermissionCheckDecision struct {
 	Kind         PermissionCheckDecisionKind
 	Failure      SyncFailureParams
 	ScopeKey     ScopeKey
-	ScopeBlock   ScopeBlock
+	BlockScope   BlockScope
 	BoundaryPath string
 	TriggerPath  string
 }
@@ -77,16 +77,16 @@ func (controller *scopeController) applyPermissionCheckMutation(
 		controller.recordExplicitFailure(ctx, &decision.Failure)
 	case permissionCheckActivateBoundaryScope:
 		controller.recordExplicitFailure(ctx, &decision.Failure)
-		if err := controller.activateScope(ctx, watch, &decision.ScopeBlock); err != nil {
+		if err := controller.activateScope(ctx, watch, &decision.BlockScope); err != nil {
 			flow.engine.logger.Warn("failed to activate permission scope",
-				slog.String("scope_key", decision.ScopeBlock.Key.String()),
+				slog.String("scope_key", decision.BlockScope.Key.String()),
 				slog.String("error", err.Error()),
 			)
 		}
 	case permissionCheckActivateDerivedScope:
 		controller.recordExplicitFailure(ctx, &decision.Failure)
 		if watch != nil {
-			watch.upsertActiveScope(&ScopeBlock{
+			watch.upsertActiveScope(&BlockScope{
 				Key:       decision.ScopeKey,
 				IssueType: decision.ScopeKey.IssueType(),
 			})
@@ -117,7 +117,7 @@ func (controller *scopeController) logPermissionCheckDecision(
 				errclass.ClassActionable,
 				summaryKey,
 				decision.TriggerPath,
-				decision.ScopeBlock.Key,
+				decision.BlockScope.Key,
 			),
 				slog.String("boundary", decision.BoundaryPath),
 				slog.String("trigger_path", decision.TriggerPath),
@@ -139,7 +139,7 @@ func (controller *scopeController) logRemotePermissionDecision(
 
 	scopeKey := decision.ScopeKey
 	if scopeKey.IsZero() {
-		scopeKey = decision.ScopeBlock.Key
+		scopeKey = decision.BlockScope.Key
 	}
 	fields := append(controller.flow.summaryLogFields(
 		errclass.ClassActionable,

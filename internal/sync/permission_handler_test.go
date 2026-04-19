@@ -38,7 +38,7 @@ func seedLocalPermissionDeniedIssue(t *testing.T, store *SyncStore, path string,
 	role := FailureRoleItem
 	if scopeKey.IsPermDir() {
 		role = FailureRoleBoundary
-		require.NoError(t, store.UpsertScopeBlock(t.Context(), &ScopeBlock{
+		require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
 			Key:          scopeKey,
 			IssueType:    IssueLocalPermissionDenied,
 			TimingSource: ScopeTimingNone,
@@ -158,7 +158,7 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
 	assert.Equal(t, "blocked", decision.Failure.Path)
 	assert.Equal(t, IssueLocalPermissionDenied, decision.Failure.IssueType)
-	assert.Equal(t, SKPermDir("blocked"), decision.ScopeBlock.Key)
+	assert.Equal(t, SKPermDir("blocked"), decision.BlockScope.Key)
 }
 
 func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {

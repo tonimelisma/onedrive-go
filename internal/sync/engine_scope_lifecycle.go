@@ -29,7 +29,7 @@ type persistedScopeFacts struct {
 }
 
 // loadActiveScopes refreshes watch runtime scope state from the persisted
-// scope_blocks table. The store remains the restart/recovery record; watch
+// block_scopes table. The store remains the restart/recovery record; watch
 // mode keeps only the current working set in memory.
 func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *watchRuntime) error {
 	flow := controller.flow
@@ -38,12 +38,12 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 		return nil
 	}
 
-	blocks, err := flow.engine.baseline.ListScopeBlocks(ctx)
+	blocks, err := flow.engine.baseline.ListBlockScopes(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: listing active scopes: %w", err)
 	}
 
-	activeScopes := make([]ScopeBlock, 0, len(blocks))
+	activeScopes := make([]BlockScope, 0, len(blocks))
 	for i := range blocks {
 		if blocks[i].Key.IsPermRemote() {
 			continue
@@ -51,9 +51,9 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 		activeScopes = append(activeScopes, *blocks[i])
 	}
 
-	blockedRetries, err := flow.engine.baseline.ListBlockedRetryState(ctx)
+	blockedRetries, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
 	if err != nil {
-		return fmt.Errorf("sync: listing blocked retry_state rows: %w", err)
+		return fmt.Errorf("sync: listing blocked retry_work rows: %w", err)
 	}
 	seenRemote := make(map[ScopeKey]bool, len(blockedRetries))
 	for i := range blockedRetries {
@@ -61,7 +61,7 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 			continue
 		}
 		seenRemote[blockedRetries[i].ScopeKey] = true
-		activeScopes = append(activeScopes, ScopeBlock{
+		activeScopes = append(activeScopes, BlockScope{
 			Key:       blockedRetries[i].ScopeKey,
 			IssueType: blockedRetries[i].ScopeKey.IssueType(),
 		})
@@ -80,9 +80,9 @@ func (controller *scopeController) normalizePersistedScopes(
 ) error {
 	flow := controller.flow
 
-	blocks, listScopeErr := flow.engine.baseline.ListScopeBlocks(ctx)
+	blocks, listScopeErr := flow.engine.baseline.ListBlockScopes(ctx)
 	if listScopeErr != nil {
-		return fmt.Errorf("sync: listing scope blocks: %w", listScopeErr)
+		return fmt.Errorf("sync: listing block scopes: %w", listScopeErr)
 	}
 
 	blockedRetries, err := controller.loadNormalizedPersistedBlockedRetries(ctx)
@@ -100,20 +100,20 @@ func (controller *scopeController) normalizePersistedScopes(
 
 func (controller *scopeController) loadNormalizedPersistedBlockedRetries(
 	ctx context.Context,
-) ([]RetryStateRow, error) {
+) ([]RetryWorkRow, error) {
 	flow := controller.flow
 
-	rows, err := flow.engine.baseline.ListBlockedRetryState(ctx)
+	rows, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing blocked retry_state rows: %w", err)
+		return nil, fmt.Errorf("sync: listing blocked retry_work rows: %w", err)
 	}
 	if !controller.clearResolvedPersistedRemoteBlockedRetries(ctx, rows) {
 		return rows, nil
 	}
 
-	rows, err = flow.engine.baseline.ListBlockedRetryState(ctx)
+	rows, err = flow.engine.baseline.ListBlockedRetryWork(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: relisting blocked retry_state rows after remote cleanup: %w", err)
+		return nil, fmt.Errorf("sync: relisting blocked retry_work rows after remote cleanup: %w", err)
 	}
 
 	return rows, nil
@@ -121,7 +121,7 @@ func (controller *scopeController) loadNormalizedPersistedBlockedRetries(
 
 func (controller *scopeController) clearResolvedPersistedRemoteBlockedRetries(
 	ctx context.Context,
-	rows []RetryStateRow,
+	rows []RetryWorkRow,
 ) bool {
 	flow := controller.flow
 	bl, err := flow.engine.baseline.Load(ctx)
@@ -137,14 +137,14 @@ func (controller *scopeController) clearResolvedPersistedRemoteBlockedRetries(
 		if !rows[i].ScopeKey.IsPermRemote() {
 			continue
 		}
-		driveID, driveErr := flow.retryStateDriveID(ctx)
+		driveID, driveErr := flow.retryWorkDriveID(ctx)
 		if driveErr != nil {
 			flow.engine.logger.Warn("load drive for remote failure cleanup",
 				slog.String("error", driveErr.Error()),
 			)
 			return false
 		}
-		if flow.buildRetryCandidateFromRetryState(ctx, bl, &rows[i], driveID).resolved {
+		if flow.buildRetryCandidateFromRetryWork(ctx, bl, &rows[i], driveID).resolved {
 			controller.clearHeldRetryWork(ctx, &rows[i], "clearResolvedPersistedRemoteBlockedRetries")
 			remoteResolved = true
 		}
@@ -155,8 +155,8 @@ func (controller *scopeController) clearResolvedPersistedRemoteBlockedRetries(
 
 func (controller *scopeController) normalizePersistedNonAuthScopes(
 	ctx context.Context,
-	blocks []*ScopeBlock,
-	blockedRetries []RetryStateRow,
+	blocks []*BlockScope,
+	blockedRetries []RetryWorkRow,
 ) error {
 	facts := summarizePersistedBlockedRetries(blockedRetries)
 
@@ -175,7 +175,7 @@ func (controller *scopeController) normalizePersistedNonAuthScopes(
 
 func (controller *scopeController) normalizePersistedScope(
 	ctx context.Context,
-	block *ScopeBlock,
+	block *BlockScope,
 	facts persistedScopeFacts,
 ) error {
 	now := controller.flow.engine.nowFunc()
@@ -240,7 +240,7 @@ func (controller *scopeController) discardStartupScope(ctx context.Context, key 
 	return nil
 }
 
-func summarizePersistedBlockedRetries(rows []RetryStateRow) persistedScopeFacts {
+func summarizePersistedBlockedRetries(rows []RetryWorkRow) persistedScopeFacts {
 	facts := persistedScopeFacts{
 		blockedRetryCountByScope: make(map[ScopeKey]int),
 	}
@@ -270,7 +270,7 @@ func scopeStartupPolicyFor(key ScopeKey) scopeStartupPolicy {
 	}
 }
 
-func hasActivePreserveDeadline(block *ScopeBlock, now time.Time) bool {
+func hasActivePreserveDeadline(block *BlockScope, now time.Time) bool {
 	if block == nil || block.PreserveUntil.IsZero() {
 		return false
 	}
@@ -278,7 +278,7 @@ func hasActivePreserveDeadline(block *ScopeBlock, now time.Time) bool {
 	return block.PreserveUntil.After(now)
 }
 
-func (controller *scopeController) normalizeDiskScope(ctx context.Context, block *ScopeBlock) error {
+func (controller *scopeController) normalizeDiskScope(ctx context.Context, block *BlockScope) error {
 	flow := controller.flow
 
 	if flow.engine.minFreeSpace <= 0 {
@@ -324,7 +324,7 @@ func (controller *scopeController) normalizeDiskScope(ctx context.Context, block
 
 	now := flow.engine.nowFunc()
 	interval := computeTrialInterval(block.Key, 0, 0)
-	if err := flow.engine.baseline.UpsertScopeBlock(ctx, &ScopeBlock{
+	if err := flow.engine.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           block.Key,
 		IssueType:     IssueDiskFull,
 		TimingSource:  ScopeTimingBackoff,
@@ -344,14 +344,14 @@ func (controller *scopeController) normalizeDiskScope(ctx context.Context, block
 	return nil
 }
 
-func (controller *scopeController) getScopeBlock(watch *watchRuntime, key ScopeKey) (ScopeBlock, bool) {
+func (controller *scopeController) getBlockScope(watch *watchRuntime, key ScopeKey) (BlockScope, bool) {
 	if watch == nil {
-		return ScopeBlock{}, false
+		return BlockScope{}, false
 	}
 	return watch.lookupActiveScope(key)
 }
 
-func (controller *scopeController) isScopeBlocked(watch *watchRuntime, key ScopeKey) bool {
+func (controller *scopeController) isBlockScopeed(watch *watchRuntime, key ScopeKey) bool {
 	if watch == nil {
 		return false
 	}
@@ -365,21 +365,21 @@ func (controller *scopeController) activeBlockingScope(watch *watchRuntime, ta *
 	return watch.findBlockingScope(ta)
 }
 
-func (controller *scopeController) scopeBlockKeys(watch *watchRuntime) []ScopeKey {
+func (controller *scopeController) blockScopeKeys(watch *watchRuntime) []ScopeKey {
 	if watch == nil {
 		return nil
 	}
 	return watch.activeScopeKeys()
 }
 
-func (controller *scopeController) activateScope(ctx context.Context, watch *watchRuntime, block *ScopeBlock) error {
+func (controller *scopeController) activateScope(ctx context.Context, watch *watchRuntime, block *BlockScope) error {
 	flow := controller.flow
 
 	if block == nil {
 		return fmt.Errorf("sync: activating scope: missing block")
 	}
 
-	if err := flow.engine.baseline.UpsertScopeBlock(ctx, block); err != nil {
+	if err := flow.engine.baseline.UpsertBlockScope(ctx, block); err != nil {
 		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
 
@@ -408,7 +408,7 @@ func (controller *scopeController) extendScopeTrial(
 		return
 	}
 
-	block, ok := controller.getScopeBlock(watch, scopeKey)
+	block, ok := controller.getBlockScope(watch, scopeKey)
 	if !ok {
 		return
 	}
@@ -445,7 +445,7 @@ func (controller *scopeController) preserveScopeTrial(ctx context.Context, watch
 		return
 	}
 
-	block, ok := controller.getScopeBlock(watch, scopeKey)
+	block, ok := controller.getBlockScope(watch, scopeKey)
 	if !ok {
 		return
 	}
@@ -472,7 +472,7 @@ func (controller *scopeController) preserveScopeTrial(ctx context.Context, watch
 }
 
 // computeTrialInterval is the single source of truth for trial interval
-// computation (R-2.10.14). Both initial scope block creation and subsequent
+// computation (R-2.10.14). Both initial block scope creation and subsequent
 // trial extensions use this function, preventing policy divergence.
 //
 //   - retryAfter > 0: server-provided value used directly, no cap (R-2.10.7)
@@ -507,15 +507,15 @@ func scopeTimingSource(retryAfter time.Duration) ScopeTimingSource {
 	return ScopeTimingBackoff
 }
 
-// isObservationSuppressed returns true if a global scope block is active,
+// isObservationSuppressed returns true if a global block scope is active,
 // meaning all remote observation polling should be skipped to avoid wasting
 // API calls. Target-scoped 429 blocks are handled separately.
 func (controller *scopeController) isObservationSuppressed(watch *watchRuntime) bool {
-	return controller.isScopeBlocked(watch, SKService())
+	return controller.isBlockScopeed(watch, SKService())
 }
 
 // feedScopeDetection feeds an action completion into scope detection sliding
-// windows. If a threshold is crossed, creates a scope block. Called directly
+// windows. If a threshold is crossed, creates a block scope. Called directly
 // from the normal processActionCompletion switch — never called for trial results
 // (the scope is already blocked, and re-detecting would overwrite the doubled
 // interval).
@@ -532,20 +532,20 @@ func (controller *scopeController) feedScopeDetection(ctx context.Context, watch
 
 	sr := watch.scopeState.UpdateScope(r)
 	if sr.Block {
-		controller.applyScopeBlock(ctx, watch, sr)
+		controller.applyBlockScope(ctx, watch, sr)
 	}
 }
 
-// applyScopeBlock persists and activates a new scope block. Uses
+// applyBlockScope persists and activates a new block scope. Uses
 // computeTrialInterval for the initial interval, ensuring the same
 // Retry-After-vs-backoff policy as extendScopeTrial.
-func (controller *scopeController) applyScopeBlock(ctx context.Context, watch *watchRuntime, sr ScopeUpdateResult) {
+func (controller *scopeController) applyBlockScope(ctx context.Context, watch *watchRuntime, sr ScopeUpdateResult) {
 	flow := controller.flow
 
 	now := flow.engine.nowFunc()
 	interval := computeTrialInterval(sr.ScopeKey, sr.RetryAfter, 0)
 
-	block := &ScopeBlock{
+	block := &BlockScope{
 		Key:           sr.ScopeKey,
 		IssueType:     sr.IssueType,
 		TimingSource:  scopeTimingSource(sr.RetryAfter),
@@ -555,14 +555,14 @@ func (controller *scopeController) applyScopeBlock(ctx context.Context, watch *w
 		PreserveUntil: time.Time{},
 	}
 	if err := controller.activateScope(ctx, watch, block); err != nil {
-		flow.engine.logger.Warn("applyScopeBlock: failed to persist scope block",
+		flow.engine.logger.Warn("applyBlockScope: failed to persist block scope",
 			slog.String("scope_key", sr.ScopeKey.String()),
 			slog.String("error", err.Error()),
 		)
 		return
 	}
 
-	flow.engine.logger.Warn("scope block active — actions held",
+	flow.engine.logger.Warn("block scope active — actions held",
 		slog.String("scope_key", sr.ScopeKey.String()),
 		slog.String("issue_type", sr.IssueType),
 		slog.Duration("trial_interval", interval),
@@ -573,7 +573,7 @@ func (controller *scopeController) applyScopeBlock(ctx context.Context, watch *w
 	}
 }
 
-// releaseScope atomically removes the scope block, deletes any actionable
+// releaseScope atomically removes the block scope, deletes any actionable
 // boundary row for the scope, and makes held descendants retryable now.
 func (controller *scopeController) releaseScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
 	flow := controller.flow
@@ -597,7 +597,7 @@ func (controller *scopeController) releaseScope(ctx context.Context, watch *watc
 		})
 	}
 
-	flow.engine.logger.Info("scope block cleared — failures unblocked",
+	flow.engine.logger.Info("block scope cleared — failures unblocked",
 		slog.String("scope_key", key.String()),
 	)
 
@@ -607,7 +607,7 @@ func (controller *scopeController) releaseScope(ctx context.Context, watch *watc
 	return nil
 }
 
-// discardScope atomically removes the scope block and deletes all failure rows
+// discardScope atomically removes the block scope and deletes all failure rows
 // tied to it. Used when the blocked subtree itself disappears.
 func (controller *scopeController) discardScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
 	flow := controller.flow
@@ -649,9 +649,9 @@ func (controller *scopeController) clearResolvedRemoteBlockedFailures(
 	}
 
 	flow := controller.flow
-	rows, err := flow.engine.baseline.ListBlockedRetryState(ctx)
+	rows, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
 	if err != nil {
-		flow.engine.logger.Warn("failed to list blocked retry_state rows for remote cleanup",
+		flow.engine.logger.Warn("failed to list blocked retry_work rows for remote cleanup",
 			slog.String("error", err.Error()),
 		)
 		return
@@ -669,14 +669,14 @@ func (controller *scopeController) clearResolvedRemoteBlockedFailures(
 		if !remoteBlockedRetryRelevant(&rows[i], changedPaths) {
 			continue
 		}
-		driveID, driveErr := flow.retryStateDriveID(ctx)
+		driveID, driveErr := flow.retryWorkDriveID(ctx)
 		if driveErr != nil {
 			flow.engine.logger.Warn("failed to load drive for remote blocked cleanup",
 				slog.String("error", driveErr.Error()),
 			)
 			return
 		}
-		if flow.buildRetryCandidateFromRetryState(ctx, bl, &rows[i], driveID).resolved {
+		if flow.buildRetryCandidateFromRetryWork(ctx, bl, &rows[i], driveID).resolved {
 			controller.clearHeldRetryWork(ctx, &rows[i], "cleanupResolvedRemoteBlockedFailures")
 			clearedScopes[rows[i].ScopeKey] = true
 		}
@@ -690,7 +690,7 @@ func (controller *scopeController) clearResolvedRemoteBlockedFailures(
 }
 
 func remoteBlockedRetryRelevant(
-	row *RetryStateRow,
+	row *RetryWorkRow,
 	changedPaths map[string]bool,
 ) bool {
 	if row == nil || !row.ScopeKey.IsPermRemote() {
@@ -712,14 +712,14 @@ func remoteBlockedRetryRelevant(
 
 func (controller *scopeController) clearHeldRetryWork(
 	ctx context.Context,
-	row *RetryStateRow,
+	row *RetryWorkRow,
 	caller string,
 ) {
 	if row == nil {
 		return
 	}
 
-	work := retryWorkKeyForRetryState(row)
+	work := retryWorkKeyForRetryWork(row)
 
 	if err := controller.flow.engine.baseline.ClearHeldRetryWork(ctx, work, row.ScopeKey); err != nil {
 		controller.flow.engine.logger.Debug(caller+": failed to clear held retry work",
@@ -759,9 +759,9 @@ func (controller *scopeController) remainingRemoteBlockedScopes(
 ) (map[ScopeKey]bool, bool) {
 	flow := controller.flow
 
-	remainingRows, err := flow.engine.baseline.ListBlockedRetryState(ctx)
+	remainingRows, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
 	if err != nil {
-		flow.engine.logger.Warn("failed to relist blocked retry_state rows after remote cleanup",
+		flow.engine.logger.Warn("failed to relist blocked retry_work rows after remote cleanup",
 			slog.String("error", err.Error()),
 		)
 		return nil, false
@@ -855,7 +855,7 @@ func (controller *scopeController) cascadeRecordAndComplete(
 		}
 		seen[current.ID] = true
 
-		controller.recordScopeBlockedFailure(ctx, &current.Action, scopeKey)
+		controller.recordBlockScopeedFailure(ctx, &current.Action, scopeKey)
 		// No resetDispatchStatus — setDispatch was never called for blocked
 		// actions (active-scope admission runs BEFORE setDispatch, per section 2.2).
 		ready := flow.completeDepGraphAction(current.ID, "cascadeRecordAndComplete")
@@ -913,10 +913,10 @@ func (controller *scopeController) completeSubtree(ready []*TrackedAction) {
 	}
 }
 
-// recordScopeBlockedFailure records a sync_failure for an action that was
+// recordBlockScopeedFailure records a sync_failure for an action that was
 // blocked by an active scope. Uses next_retry_at = NULL (nil delayFn) so the
 // retry sweep ignores it until releaseScope sets next_retry_at.
-func (controller *scopeController) recordScopeBlockedFailure(ctx context.Context, action *Action, scopeKey ScopeKey) {
+func (controller *scopeController) recordBlockScopeedFailure(ctx context.Context, action *Action, scopeKey ScopeKey) {
 	flow := controller.flow
 
 	direction := directionFromAction(action.Type)
@@ -936,7 +936,7 @@ func (controller *scopeController) recordScopeBlockedFailure(ctx context.Context
 		Category:   CategoryTransient,
 		IssueType:  scopeKey.IssueType(),
 		ScopeKey:   scopeKey,
-		ErrMsg:     "scope blocked: " + scopeKey.String(),
+		ErrMsg:     "block scopeed: " + scopeKey.String(),
 	}, nil); err != nil { // nil delayFn → next_retry_at = NULL
 		flow.engine.logger.Warn("failed to record scope-blocked failure",
 			slog.String("path", action.Path),
@@ -969,7 +969,7 @@ func (controller *scopeController) rehomeHeldFailure(
 		Category:   CategoryTransient,
 		IssueType:  scopeKey.IssueType(),
 		ScopeKey:   scopeKey,
-		ErrMsg:     "scope blocked: " + scopeKey.String(),
+		ErrMsg:     "block scopeed: " + scopeKey.String(),
 		HTTPStatus: r.HTTPStatus,
 	}, nil); err != nil {
 		flow.engine.logger.Warn("failed to rehome held failure",

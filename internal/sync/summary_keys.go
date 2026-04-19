@@ -44,8 +44,8 @@ func SummaryKeyForPersistedFailure(
 	return SummarySyncFailure
 }
 
-// SummaryKeyForScopeBlock maps a persisted scope block to the shared summary family.
-func SummaryKeyForScopeBlock(issueType string, scopeKey ScopeKey) SummaryKey {
+// SummaryKeyForBlockScope maps a persisted block scope to the shared summary family.
+func SummaryKeyForBlockScope(issueType string, scopeKey ScopeKey) SummaryKey {
 	if key, ok := summaryKeyForIssueType(issueType); ok {
 		return key
 	}

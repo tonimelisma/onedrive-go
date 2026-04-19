@@ -157,12 +157,12 @@ func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *
 		return nil
 	}
 
-	if err := flow.engine.baseline.PruneRetryStateToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
-		return fmt.Errorf("sync: pruning retry_state to current actions: %w", err)
+	if err := flow.engine.baseline.PruneRetryWorkToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
+		return fmt.Errorf("sync: pruning retry_work to current actions: %w", err)
 	}
 
-	if err := flow.engine.baseline.PruneScopeBlocksWithoutBlockedRetries(ctx); err != nil {
-		return fmt.Errorf("sync: pruning scope blocks without blocked retries: %w", err)
+	if err := flow.engine.baseline.PruneBlockScopesWithoutBlockedRetries(ctx); err != nil {
+		return fmt.Errorf("sync: pruning block scopes without blocked retries: %w", err)
 	}
 
 	return nil
@@ -294,7 +294,7 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 		flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, decisions)
 	}
 
-	// Recheck local permission denials — clear scope blocks for
+	// Recheck local permission denials — clear block scopes for
 	// directories that have become accessible since the last pass (R-2.10.13).
 	flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckLocalPermissions(ctx))
 

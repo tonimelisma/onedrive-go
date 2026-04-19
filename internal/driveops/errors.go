@@ -11,7 +11,7 @@ const MaxOneDriveFileSize = 250 * 1024 * 1024 * 1024 // 250 GB
 
 // ErrDiskFull is returned when available disk space is below the configured
 // min_free_space threshold. In the sync engine, this triggers a disk:local
-// scope block (R-2.10.43). In the CLI, it simply fails the download.
+// block scope (R-2.10.43). In the CLI, it simply fails the download.
 var ErrDiskFull = errors.New("local disk full")
 
 // ErrFileExceedsOneDriveLimit is returned when a local upload exceeds

@@ -72,7 +72,7 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 				TargetDriveID: driveid.New("0000000000000001"),
 			})
 
-			require.True(t, result.Block, "Retry-After should force an immediate scope block")
+			require.True(t, result.Block, "Retry-After should force an immediate block scope")
 			assert.Equal(t, tt.wantScope, result.ScopeKey)
 			assert.Equal(t, tt.wantIssue, result.IssueType)
 			assert.Equal(t, tt.retryAfter, result.RetryAfter, "RetryAfter should be passed through")
@@ -214,7 +214,7 @@ func TestScope_SuccessResetsWindow(t *testing.T) {
 
 // Validates: R-2.10.3
 // TestScope_SameFileDoesNotEscalate verifies that repeated failures from
-// the same file path do not trigger a scope block, since the sliding window
+// the same file path do not trigger a block scope, since the sliding window
 // counts unique paths.
 func TestScope_SameFileDoesNotEscalate(t *testing.T) {
 	t.Parallel()
@@ -229,7 +229,7 @@ func TestScope_SameFileDoesNotEscalate(t *testing.T) {
 			HTTPStatus: 507,
 		}
 		result := ss.UpdateScope(&r)
-		assert.False(t, result.Block, "repeated failures on the same path must not trigger scope block (iteration %d)", i)
+		assert.False(t, result.Block, "repeated failures on the same path must not trigger block scope (iteration %d)", i)
 		advance(500 * time.Millisecond)
 	}
 }
@@ -259,7 +259,7 @@ func TestScope_NonScopeStatusReturnsEmpty(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := ActionCompletion{Path: "/file.txt", HTTPStatus: tc.status}
 			result := ss.UpdateScope(&r)
-			assert.False(t, result.Block, "status %d should not trigger a scope block", tc.status)
+			assert.False(t, result.Block, "status %d should not trigger a block scope", tc.status)
 			assert.Empty(t, result.ScopeKey)
 			assert.Empty(t, result.IssueType)
 		})

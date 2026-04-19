@@ -13,7 +13,7 @@ import (
 const (
 	resultSuccess    = errclass.ClassSuccess
 	resultRequeue    = errclass.ClassRetryableTransient
-	resultScopeBlock = errclass.ClassScopeBlockingTransient
+	resultBlockScope = errclass.ClassBlockScopeingTransient
 	resultSkip       = errclass.ClassActionable
 	resultShutdown   = errclass.ClassShutdown
 	resultFatal      = errclass.ClassFatal
@@ -112,7 +112,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 		}), true
 	case r.HTTPStatus == http.StatusTooManyRequests:
 		return withRuntimeSummary(&ResultDecision{
-			Class:             resultScopeBlock,
+			Class:             resultBlockScope,
 			ScopeKey:          scopeEvidence,
 			ScopeEvidence:     scopeEvidence,
 			Persistence:       persistTransientFailure,
@@ -122,7 +122,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 		}), true
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		return withRuntimeSummary(&ResultDecision{
-			Class:             resultScopeBlock,
+			Class:             resultBlockScope,
 			ScopeKey:          scopeEvidence,
 			ScopeEvidence:     scopeEvidence,
 			Persistence:       persistTransientFailure,
@@ -179,7 +179,7 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 		})
 	case errors.Is(r.Err, driveops.ErrDiskFull):
 		return withRuntimeSummary(&ResultDecision{
-			Class:         resultScopeBlock,
+			Class:         resultBlockScope,
 			ScopeKey:      SKDiskLocal(),
 			ScopeEvidence: SKDiskLocal(),
 			Persistence:   persistTransientFailure,
@@ -245,7 +245,7 @@ func runtimeSummaryKey(class errclass.Class, issueType string) SummaryKey {
 	}
 
 	if class == errclass.ClassRetryableTransient ||
-		class == errclass.ClassScopeBlockingTransient ||
+		class == errclass.ClassBlockScopeingTransient ||
 		class == errclass.ClassActionable ||
 		class == errclass.ClassFatal {
 		return SummarySyncFailure

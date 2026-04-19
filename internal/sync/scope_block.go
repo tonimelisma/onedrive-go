@@ -2,10 +2,10 @@ package sync
 
 import "time"
 
-// ScopeBlock represents an active scope-level block (e.g., quota exceeded,
+// BlockScope represents an active scope-level block (e.g., quota exceeded,
 // service outage, rate limited). While a block is active, all actions matching
 // that scope are deferred (recorded as sync_failures with scope_key).
-type ScopeBlock struct {
+type BlockScope struct {
 	Key          ScopeKey          // typed scope key
 	IssueType    string            // "service_outage", "quota_exceeded", "rate_limited"
 	TimingSource ScopeTimingSource // none, backoff, server_retry_after

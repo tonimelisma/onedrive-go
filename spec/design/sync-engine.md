@@ -47,7 +47,7 @@ It does not use a mixed failure table as durable control state.
 | Behavior | Evidence |
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_Success_ClearsSyncFailure` |
-| Watch mode keeps single-owner runtime admission, periodic maintenance, and external-change reconciliation inside the engine boundary. | `TestEngine_ReleaseScope_SignalsImmediateRetrySweep`, `TestEngine_AdmitReady_ScopeBlocked`, `TestEngine_ExternalDBChanged`, `TestRunWatch_ShutdownStopsRetryAndTrialTimers` |
+| Watch mode keeps single-owner runtime admission, periodic maintenance, and external-change reconciliation inside the engine boundary. | `TestEngine_ReleaseScope_SignalsImmediateRetrySweep`, `TestEngine_AdmitReady_BlockScopeed`, `TestEngine_ExternalDBChanged`, `TestRunWatch_ShutdownStopsRetryAndTrialTimers` |
 
 ## Construction
 

@@ -208,7 +208,7 @@ func (rt *watchRuntime) initWatchInfra(
 	}
 
 	// DepGraph tracks action dependencies. Active scope state is loaded from
-	// the persisted scope_blocks table into watch-owned runtime state.
+	// the persisted block_scopes table into watch-owned runtime state.
 	depGraph := NewDepGraph(rt.engine.logger)
 	rt.depGraph = depGraph
 	if err := rt.scopeController().loadActiveScopes(ctx, rt); err != nil {

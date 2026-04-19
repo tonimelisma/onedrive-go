@@ -133,7 +133,7 @@ That metadata is used for:
 ## Scope Helpers
 
 `active_scopes.go` is no longer a separate runtime subsystem. It provides pure
-helper functions over an engine-owned slice of active scope blocks.
+helper functions over an engine-owned slice of active block scopes.
 
 Execution itself does not decide whether an action is blocked. The engine asks
 those helpers before dispatch and after action completions.

@@ -16,11 +16,11 @@ type failureSummaryEntry struct {
 const fallbackFailureSummaryIssueType = "transient_failure"
 
 // armRetryTimer arms the retry timer for the next retrier sweep. Queries
-// the earliest next_retry_at from retry_state and sets the timer. If the
+// the earliest next_retry_at from retry_work and sets the timer. If the
 // retry timer channel is already signaled (non-blocking send to buffered(1)
 // channel), the next owning loop iteration processes it.
 func (rt *watchRuntime) armRetryTimer(ctx context.Context) {
-	earliest, err := rt.engine.baseline.EarliestRetryStateAt(ctx, rt.engine.nowFunc())
+	earliest, err := rt.engine.baseline.EarliestRetryWorkAt(ctx, rt.engine.nowFunc())
 	if err != nil || earliest.IsZero() {
 		return
 	}
@@ -202,9 +202,9 @@ func (f *engineFlow) resetResultStats() {
 }
 
 // armTrialTimer sets (or resets) the trial timer to fire at the earliest
-// NextTrialAt across all scope blocks. Uses time.AfterFunc to send to the
+// NextTrialAt across all block scopes. Uses time.AfterFunc to send to the
 // persistent trialCh channel, avoiding a race where the watch loop's select
-// watches the old timer's channel after replacement. Called after scope blocks
+// watches the old timer's channel after replacement. Called after block scopes
 // are created, trials dispatched, or trial results processed (R-2.10.5).
 func (rt *watchRuntime) armTrialTimer() {
 	earliest, ok := rt.earliestTrialAt()

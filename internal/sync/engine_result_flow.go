@@ -96,7 +96,7 @@ func (flow *engineFlow) routeReadyForClass(
 		flow.scopeController().completeSubtree(ready)
 	case errclass.ClassFatal:
 		flow.scopeController().completeSubtree(ready)
-	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient, errclass.ClassActionable:
+	case errclass.ClassRetryableTransient, errclass.ClassBlockScopeingTransient, errclass.ClassActionable:
 		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
 	}
 
@@ -131,15 +131,15 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 
 	if decision.RunScopeDetection {
 		flow.scopeController().feedScopeDetection(ctx, watch, r)
-	} else if decision.Class == errclass.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero() {
-		flow.scopeController().applyScopeBlock(ctx, watch, ScopeUpdateResult{
+	} else if decision.Class == errclass.ClassBlockScopeingTransient && !decision.ScopeKey.IsZero() {
+		flow.scopeController().applyBlockScope(ctx, watch, ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  decision.ScopeKey,
 			IssueType: decision.ScopeKey.IssueType(),
 		})
 	}
 
-	if decision.Class == errclass.ClassScopeBlockingTransient && watch != nil {
+	if decision.Class == errclass.ClassBlockScopeingTransient && watch != nil {
 		watch.armTrialTimer()
 	}
 	if decision.Persistence == persistTransientFailure && watch != nil {
@@ -205,7 +205,7 @@ func (flow *engineFlow) processNormalDecision(
 		flow.recordError(decision, r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
-	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient, errclass.ClassActionable:
+	case errclass.ClassRetryableTransient, errclass.ClassBlockScopeingTransient, errclass.ClassActionable:
 		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r, bl)
 	}
 
@@ -302,8 +302,8 @@ func (controller *scopeController) applyTrialPreserveEffects(
 		return
 	}
 
-	if decision.Class == errclass.ClassScopeBlockingTransient && decision.ScopeKey == SKDiskLocal() {
-		controller.applyScopeBlock(ctx, watch, ScopeUpdateResult{
+	if decision.Class == errclass.ClassBlockScopeingTransient && decision.ScopeKey == SKDiskLocal() {
+		controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
 			Block:     true,
 			ScopeKey:  decision.ScopeKey,
 			IssueType: decision.ScopeKey.IssueType(),

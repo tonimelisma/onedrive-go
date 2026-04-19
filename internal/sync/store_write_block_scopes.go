@@ -5,7 +5,7 @@
 // loads them into its single-owner runtime working set at startup; there is no
 // separate write-through cache subsystem outside the sync runtime.
 //
-// The scope_blocks table is tiny (typically 0-5 rows). No batch optimization
+// The block_scopes table is tiny (typically 0-5 rows). No batch optimization
 // needed — single-row operations are sufficient.
 //
 // Related files:
@@ -19,49 +19,49 @@ import (
 	"time"
 )
 
-func validateScopeBlock(block *ScopeBlock) error {
+func validateBlockScope(block *BlockScope) error {
 	if block.Key.IsZero() {
-		return fmt.Errorf("sync: upserting scope block: missing scope key")
+		return fmt.Errorf("sync: upserting block scope: missing scope key")
 	}
 
 	if block.BlockedAt.IsZero() {
-		return fmt.Errorf("sync: upserting scope block %s: missing blocked_at", block.Key.String())
+		return fmt.Errorf("sync: upserting block scope %s: missing blocked_at", block.Key.String())
 	}
 
 	switch block.TimingSource {
 	case ScopeTimingNone:
 		if block.TrialInterval != 0 {
-			return fmt.Errorf("sync: upserting scope block %s: timing_source none requires zero trial interval", block.Key.String())
+			return fmt.Errorf("sync: upserting block scope %s: timing_source none requires zero trial interval", block.Key.String())
 		}
 		if !block.NextTrialAt.IsZero() {
-			return fmt.Errorf("sync: upserting scope block %s: timing_source none requires zero next_trial_at", block.Key.String())
+			return fmt.Errorf("sync: upserting block scope %s: timing_source none requires zero next_trial_at", block.Key.String())
 		}
 		if !block.PreserveUntil.IsZero() {
-			return fmt.Errorf("sync: upserting scope block %s: timing_source none requires zero preserve_until", block.Key.String())
+			return fmt.Errorf("sync: upserting block scope %s: timing_source none requires zero preserve_until", block.Key.String())
 		}
 	case ScopeTimingBackoff, ScopeTimingServerRetryAfter:
 		if block.TrialInterval <= 0 {
-			return fmt.Errorf("sync: upserting scope block %s: timed scope requires positive trial interval", block.Key.String())
+			return fmt.Errorf("sync: upserting block scope %s: timed scope requires positive trial interval", block.Key.String())
 		}
 		if block.NextTrialAt.IsZero() {
-			return fmt.Errorf("sync: upserting scope block %s: timed scope requires next_trial_at", block.Key.String())
+			return fmt.Errorf("sync: upserting block scope %s: timed scope requires next_trial_at", block.Key.String())
 		}
 		if !block.PreserveUntil.IsZero() && block.PreserveUntil.Before(block.NextTrialAt) {
-			return fmt.Errorf("sync: upserting scope block %s: preserve_until must not be before next_trial_at", block.Key.String())
+			return fmt.Errorf("sync: upserting block scope %s: preserve_until must not be before next_trial_at", block.Key.String())
 		}
 	default:
-		return fmt.Errorf("sync: upserting scope block %s: invalid timing source %q", block.Key.String(), block.TimingSource)
+		return fmt.Errorf("sync: upserting block scope %s: invalid timing source %q", block.Key.String(), block.TimingSource)
 	}
 
 	return nil
 }
 
-// UpsertScopeBlock persists a scope block to the scope_blocks table.
+// UpsertBlockScope persists a block scope to the block_scopes table.
 // INSERT OR REPLACE — the scope_key is the primary key, so this handles
 // both insert and update. All fields are serialized: ScopeKey.String() for
 // the key, UnixNano for timestamps, nanoseconds for Duration.
-func (m *SyncStore) UpsertScopeBlock(ctx context.Context, block *ScopeBlock) error {
-	if err := validateScopeBlock(block); err != nil {
+func (m *SyncStore) UpsertBlockScope(ctx context.Context, block *BlockScope) error {
+	if err := validateBlockScope(block); err != nil {
 		return err
 	}
 
@@ -75,7 +75,7 @@ func (m *SyncStore) UpsertScopeBlock(ctx context.Context, block *ScopeBlock) err
 	}
 
 	_, err := m.db.ExecContext(ctx,
-		`INSERT OR REPLACE INTO scope_blocks
+		`INSERT OR REPLACE INTO block_scopes
 			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		block.Key.String(),
@@ -88,39 +88,39 @@ func (m *SyncStore) UpsertScopeBlock(ctx context.Context, block *ScopeBlock) err
 		block.TrialCount,
 	)
 	if err != nil {
-		return fmt.Errorf("sync: upserting scope block %s: %w", block.Key.String(), err)
+		return fmt.Errorf("sync: upserting block scope %s: %w", block.Key.String(), err)
 	}
 
 	return nil
 }
 
-// DeleteScopeBlock removes a scope block from the scope_blocks table.
+// DeleteBlockScope removes a block scope from the block_scopes table.
 // No-op if the row doesn't exist (DELETE WHERE is a natural no-op).
-func (m *SyncStore) DeleteScopeBlock(ctx context.Context, key ScopeKey) error {
+func (m *SyncStore) DeleteBlockScope(ctx context.Context, key ScopeKey) error {
 	_, err := m.db.ExecContext(ctx,
-		`DELETE FROM scope_blocks WHERE scope_key = ?`,
+		`DELETE FROM block_scopes WHERE scope_key = ?`,
 		key.String(),
 	)
 	if err != nil {
-		return fmt.Errorf("sync: deleting scope block %s: %w", key.String(), err)
+		return fmt.Errorf("sync: deleting block scope %s: %w", key.String(), err)
 	}
 
 	return nil
 }
 
-// ListScopeBlocks returns all persisted scope blocks. Used at startup to
+// ListBlockScopes returns all persisted block scopes. Used at startup to
 // populate the engine-owned active scope working set. Returns an empty slice
 // (not nil) if no rows exist.
-func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*ScopeBlock, error) {
+func (m *SyncStore) ListBlockScopes(ctx context.Context) ([]*BlockScope, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count
-		FROM scope_blocks`)
+		FROM block_scopes`)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing scope blocks: %w", err)
+		return nil, fmt.Errorf("sync: listing block scopes: %w", err)
 	}
 	defer rows.Close()
 
-	var result []*ScopeBlock
+	var result []*BlockScope
 
 	for rows.Next() {
 		var (
@@ -138,7 +138,7 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*ScopeBlock, error) 
 			&wireKey, &issueType, &timingSource, &blockedAtNano,
 			&intervalNano, &nextTrialNano, &preserveNano, &trialCount,
 		); scanErr != nil {
-			return nil, fmt.Errorf("sync: scanning scope block row: %w", scanErr)
+			return nil, fmt.Errorf("sync: scanning block scope row: %w", scanErr)
 		}
 
 		nextTrialAt := time.Time{}
@@ -150,7 +150,7 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*ScopeBlock, error) 
 			preserveUntil = time.Unix(0, preserveNano).UTC()
 		}
 
-		block := &ScopeBlock{
+		block := &BlockScope{
 			Key:           ParseScopeKey(wireKey),
 			IssueType:     issueType,
 			TimingSource:  ScopeTimingSource(timingSource),
@@ -170,12 +170,12 @@ func (m *SyncStore) ListScopeBlocks(ctx context.Context) ([]*ScopeBlock, error) 
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating scope block rows: %w", err)
+		return nil, fmt.Errorf("sync: iterating block scope rows: %w", err)
 	}
 
 	// Return empty slice, not nil, for consistent caller behavior.
 	if result == nil {
-		result = []*ScopeBlock{}
+		result = []*BlockScope{}
 	}
 
 	return result, nil

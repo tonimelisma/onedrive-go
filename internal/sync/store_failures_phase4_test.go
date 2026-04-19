@@ -43,7 +43,7 @@ func TestSyncStore_SetScopeRetryAtNow_UnblocksScopeFailures(t *testing.T) {
 	assert.Equal(t, int64(2), affected, "should update only NULL next_retry_at rows")
 
 	// Verify the 2 rows now have next_retry_at = now.
-	rows := readyRetryStateForTest(t, mgr, ctx, now)
+	rows := readyRetryWorkForTest(t, mgr, ctx, now)
 	assert.Len(t, rows, 2, "both scope-blocked failures should now be retryable")
 }
 
@@ -74,8 +74,8 @@ func TestSyncStore_ReleaseScope(t *testing.T) {
 	sk := SKQuotaOwn()
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	// Create a scope block.
-	require.NoError(t, mgr.UpsertScopeBlock(ctx, &ScopeBlock{
+	// Create a block scope.
+	require.NoError(t, mgr.UpsertBlockScope(ctx, &BlockScope{
 		Key:           sk,
 		IssueType:     IssueQuotaExceeded,
 		TimingSource:  ScopeTimingBackoff,
@@ -104,13 +104,13 @@ func TestSyncStore_ReleaseScope(t *testing.T) {
 	err := mgr.ReleaseScope(ctx, sk, now)
 	require.NoError(t, err)
 
-	// Verify scope block is gone.
-	blocks, err := mgr.ListScopeBlocks(ctx)
+	// Verify block scope is gone.
+	blocks, err := mgr.ListBlockScopes(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, blocks, "scope block should be deleted")
+	assert.Empty(t, blocks, "block scope should be deleted")
 
 	// Verify failures now have next_retry_at = now (retryable).
-	rows := readyRetryStateForTest(t, mgr, ctx, now)
+	rows := readyRetryWorkForTest(t, mgr, ctx, now)
 	assert.Len(t, rows, 2, "scope-blocked failures should now be retryable")
 
 	allRows, err := mgr.ListSyncFailures(ctx)
@@ -119,14 +119,14 @@ func TestSyncStore_ReleaseScope(t *testing.T) {
 }
 
 // Validates: R-2.10.11
-func TestSyncStore_ReleaseScope_NoScopeBlock(t *testing.T) {
+func TestSyncStore_ReleaseScope_NoBlockScope(t *testing.T) {
 	t.Parallel()
 	mgr := newTestStore(t)
 	ctx := context.Background()
 
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	// Should not error even if scope block doesn't exist.
+	// Should not error even if block scope doesn't exist.
 	err := mgr.ReleaseScope(ctx, SKService(), now)
 	require.NoError(t, err)
 }
@@ -151,7 +151,7 @@ func TestSyncStore_DiscardScope(t *testing.T) {
 	scopeKey := SKQuotaOwn()
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	require.NoError(t, mgr.UpsertScopeBlock(ctx, &ScopeBlock{
+	require.NoError(t, mgr.UpsertBlockScope(ctx, &BlockScope{
 		Key:          scopeKey,
 		IssueType:    IssueQuotaExceeded,
 		TimingSource: ScopeTimingNone,
@@ -171,7 +171,7 @@ func TestSyncStore_DiscardScope(t *testing.T) {
 	err := mgr.DiscardScope(ctx, scopeKey)
 	require.NoError(t, err)
 
-	blocks, err := mgr.ListScopeBlocks(ctx)
+	blocks, err := mgr.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, blocks, "discard should delete the persisted scope row")
 

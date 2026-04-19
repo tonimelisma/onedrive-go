@@ -175,7 +175,7 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 		RemoteMtime:     1700000000,
 	}))
 	insertFailureForStoreScopeTest(t, store, "bad:name.txt", driveID, CategoryActionable, FailureRoleItem, IssueInvalidFilename, ScopeKey{}, nil)
-	require.NoError(t, store.UpsertScopeBlock(t.Context(), &ScopeBlock{
+	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
 		IssueType:     IssueSharedFolderBlocked,
 		TimingSource:  ScopeTimingBackoff,
