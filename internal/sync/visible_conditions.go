@@ -16,9 +16,9 @@ type RemoteBlockedGroup struct {
 	BlockedPaths []string
 }
 
-// VisibleConditionGroup is the store-owned grouping used by status and watch
-// summaries. Count is the item count shown to users. VisibleCount matches the
-// contribution to summary totals.
+// VisibleConditionGroup is the read-side grouping used by engine watch
+// summaries and related assertions. Count is the item count shown to users.
+// VisibleCount matches the contribution to summary totals.
 type VisibleConditionGroup struct {
 	SummaryKey    SummaryKey
 	IssueType     string

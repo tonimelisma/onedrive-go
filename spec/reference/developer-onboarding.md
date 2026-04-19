@@ -225,7 +225,7 @@ You want to come away understanding:
 - what is planned
 - what is executed
 - what is persisted
-- what is read-only projection
+- what is read-only authority data
 - what stays single-drive vs multi-drive
 
 ### Step 4: Learn the live edges and operational reality
@@ -432,9 +432,9 @@ when you treat it as several file families sharing one single-drive owner.
 | `permissions.go`, `permission_capability.go`, `permission_decisions.go`, `permission_handler.go` | Capability-based permission boundaries and denied-path policy |
 | `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, block scopeing, and scope key canonicalization |
 | `debug_event_sink.go` | Debug event recording for test and diagnostic observability |
-| `store*.go`, `store_inspect.go`, `condition_summary.go`, `scope_key.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, inspection, grouped condition summaries, persisted scope-key helpers, run-status/scope admin helpers, and explicit reset support |
-| `store_read_*.go`, `store_write_*.go` | Store I/O: read projections (failures, remote state, snapshots) and write operations (baseline, failures, observation, block scopes) |
-| `summary_keys.go`, `visible_conditions.go`, `issue_types.go` | Shared condition classification, summary keys, and raw read-only status facts consumed by the CLI |
+| `store*.go`, `store_inspect.go`, `condition_summary.go`, `scope_key.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, inspection, engine summary helpers, persisted scope-key helpers, run-status/scope admin helpers, and explicit reset support |
+| `store_read_*.go`, `store_write_*.go` | Store I/O: raw authority reads (remote state, observation state, snapshots) and write operations (baseline, observation, retry work, block scopes) |
+| `summary_keys.go`, `visible_conditions.go`, `issue_types.go` | Shared condition classification, summary keys, and engine/read-side condition grouping primitives |
 | `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |
 | `inotify_*`, `symlink_observation.go`, `engine_shared_root.go` | Platform or feature-specific observation/runtime helpers |
 

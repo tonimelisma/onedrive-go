@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 
 	_ "modernc.org/sqlite"
 )
@@ -42,43 +41,29 @@ SELECT COUNT(*) FROM (
 	WHERE rs.item_id IS NULL
 ) remote_drift`
 
-// DriveStatusSnapshot is the per-drive status snapshot consumed by the
-// product-facing status command. It keeps the full per-drive sync-health view
-// in one store-owned projection.
+// DriveStatusSnapshot is the raw per-drive authority snapshot consumed by the
+// product-facing status command. The store owns the read-only database access,
+// but the CLI owns grouping and presentation policy.
 type DriveStatusSnapshot struct {
 	RunStatus          SyncRunStatus
 	BaselineEntryCount int
 	RemoteDriftItems   int
 	RetryingItems      int
-	Conditions         []ConditionSnapshot
-}
-
-type groupedConditionProjection struct {
-	Conditions []ConditionSnapshot
-}
-
-// ConditionSnapshot is one visible grouped condition family in the read-only
-// sync-health projection.
-type ConditionSnapshot struct {
-	SummaryKey       SummaryKey
-	PrimaryIssueType string
-	ScopeKey         ScopeKey
-	ScopeLabel       string
-	Paths            []string
-	Count            int
+	ObservationIssues  []ObservationIssueRow
+	BlockScopes        []*BlockScope
+	BlockedRetryWork   []RetryWorkRow
 }
 
 // ReadDriveStatusSnapshot opens a read-only inspector for one per-drive status
-// projection and closes it before returning so callers do not own inspector
+// snapshot and closes it before returning so callers do not own inspector
 // lifecycle.
 func ReadDriveStatusSnapshot(
 	ctx context.Context,
 	dbPath string,
-	history bool,
 	logger *slog.Logger,
 ) (DriveStatusSnapshot, error) {
 	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (DriveStatusSnapshot, error) {
-		return inspector.ReadDriveStatusSnapshot(ctx, history)
+		return inspector.ReadDriveStatusSnapshot(ctx)
 	})
 }
 
@@ -157,9 +142,9 @@ func (i *storeInspector) Close() error {
 	return nil
 }
 
-// ReadDriveStatusSnapshot returns the per-drive status projection used by the
-// product-facing status command.
-func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context, history bool) (DriveStatusSnapshot, error) {
+// ReadDriveStatusSnapshot returns the per-drive raw authority snapshot used by
+// the product-facing status command.
+func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSnapshot, error) {
 	snapshot := DriveStatusSnapshot{}
 
 	if err := i.db.QueryRowContext(ctx, `
@@ -196,107 +181,20 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context, history bo
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status retrying count: %w", err)
 	}
 
-	projection, err := i.readGroupedConditionProjection(ctx)
+	snapshot.ObservationIssues, err = queryObservationIssueRowsDB(ctx, i.db)
 	if err != nil {
-		return DriveStatusSnapshot{}, fmt.Errorf("read drive status projection: %w", err)
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status observation issues: %w", err)
 	}
-	snapshot.Conditions = projection.Conditions
-	_ = history
+	snapshot.BlockScopes, err = queryBlockScopesDB(ctx, i.db)
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status block scopes: %w", err)
+	}
+	snapshot.BlockedRetryWork, err = queryBlockedRetryWorkRowsDB(ctx, i.db)
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status blocked retry_work: %w", err)
+	}
 
 	return snapshot, nil
-}
-
-func (i *storeInspector) readGroupedConditionProjection(ctx context.Context) (groupedConditionProjection, error) {
-	projection, err := loadVisibleConditionProjection(ctx, i.db, i.logger)
-	if err != nil {
-		return groupedConditionProjection{}, err
-	}
-
-	return buildGroupedConditionProjection(projection.groups), nil
-}
-
-func buildGroupedConditionProjection(groups []VisibleConditionGroup) groupedConditionProjection {
-	builder := newGroupedConditionProjectionBuilder()
-	builder.addVisibleGroups(groups)
-	return builder.projection()
-}
-
-type conditionGroupKey struct {
-	summaryKey SummaryKey
-	scopeKey   string
-}
-
-type groupedConditionProjectionBuilder struct {
-	groupIndex map[conditionGroupKey]int
-	snapshot   groupedConditionProjection
-}
-
-func newGroupedConditionProjectionBuilder() *groupedConditionProjectionBuilder {
-	return &groupedConditionProjectionBuilder{
-		groupIndex: make(map[conditionGroupKey]int),
-		snapshot: groupedConditionProjection{
-			Conditions: make([]ConditionSnapshot, 0),
-		},
-	}
-}
-
-func (b *groupedConditionProjectionBuilder) addGroupedPath(
-	summaryKey SummaryKey,
-	issueType string,
-	scopeKey ScopeKey,
-	paths []string,
-	count int,
-) {
-	if summaryKey == "" || count <= 0 {
-		return
-	}
-
-	key := conditionGroupKey{summaryKey: summaryKey, scopeKey: scopeKey.String()}
-	if idx, ok := b.groupIndex[key]; ok {
-		b.snapshot.Conditions[idx].Paths = append(b.snapshot.Conditions[idx].Paths, paths...)
-		b.snapshot.Conditions[idx].Count += count
-		return
-	}
-
-	b.groupIndex[key] = len(b.snapshot.Conditions)
-	b.snapshot.Conditions = append(b.snapshot.Conditions, ConditionSnapshot{
-		SummaryKey:       summaryKey,
-		PrimaryIssueType: issueType,
-		ScopeKey:         scopeKey,
-		ScopeLabel:       scopeKey.Humanize(),
-		Paths:            append([]string(nil), paths...),
-		Count:            count,
-	})
-}
-
-func (b *groupedConditionProjectionBuilder) addVisibleGroups(rows []VisibleConditionGroup) {
-	for i := range rows {
-		row := rows[i]
-		b.addGroupedPath(row.SummaryKey, row.IssueType, row.ScopeKey, row.Paths, row.Count)
-	}
-}
-
-func (b *groupedConditionProjectionBuilder) projection() groupedConditionProjection {
-	sortConditions(b.snapshot.Conditions)
-	return b.snapshot
-}
-
-func sortConditions(groups []ConditionSnapshot) {
-	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].Count != groups[j].Count {
-			return groups[i].Count > groups[j].Count
-		}
-		if groups[i].SummaryKey != groups[j].SummaryKey {
-			return string(groups[i].SummaryKey) < string(groups[j].SummaryKey)
-		}
-
-		return groups[i].ScopeLabel < groups[j].ScopeLabel
-	})
-
-	for i := range groups {
-		sort.Strings(groups[i].Paths)
-		groups[i].Paths = uniqueSortedStrings(groups[i].Paths)
-	}
 }
 
 func (i *storeInspector) readCount(ctx context.Context, query string) (int, error) {
