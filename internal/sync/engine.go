@@ -283,7 +283,7 @@ func (e *Engine) hasPersistedAccountAuthRequirement() (bool, error) {
 	return accountEntry.AuthRequirementReason == authstate.ReasonSyncAuthRejected, nil
 }
 
-func (e *Engine) repairPersistedAccountAuthRequirement(
+func (e *Engine) normalizePersistedAccountAuthRequirement(
 	ctx context.Context,
 	required bool,
 	proof driveIdentityProof,

@@ -91,9 +91,9 @@ func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) err
 			return nil
 		}
 
-		// Startup auth repair is the only case that should proceed past a
+		// Startup auth normalization is the only case that should proceed past a
 		// failing proof. Without a persisted catalog auth requirement there is
-		// nothing to repair, so watch mode must abort before it allocates
+		// nothing to normalize, so watch mode must abort before it allocates
 		// workers or timers.
 		if !hasAccountAuthRequirement {
 			return proofErr
@@ -109,7 +109,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) err
 
 		return err
 	}
-	if err := e.repairPersistedAccountAuthRequirement(ctx, hasAccountAuthRequirement, proof, proofErr); err != nil {
+	if err := e.normalizePersistedAccountAuthRequirement(ctx, hasAccountAuthRequirement, proof, proofErr); err != nil {
 		if isWatchShutdownError(ctx, err) {
 			return nil
 		}
