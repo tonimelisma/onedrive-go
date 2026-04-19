@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -30,6 +31,48 @@ func printDriveReports(reports []*multisync.DriveReport, cc *CLIContext) {
 	}
 }
 
+func printRunOnceResult(result multisync.RunOnceResult, cc *CLIContext) {
+	multiDrive := result.Startup.SelectedCount() > 1
+	reportByDrive := make(map[driveid.CanonicalID]*multisync.DriveReport, len(result.Reports))
+	for _, report := range result.Reports {
+		if report == nil {
+			continue
+		}
+		reportByDrive[report.CanonicalID] = report
+	}
+
+	for i := range result.Startup.Results {
+		startup := &result.Startup.Results[i]
+		if multiDrive {
+			cc.Statusf("\n--- %s ---\n", startup.DisplayName)
+		}
+
+		if startup.Status != multisync.DriveStartupRunnable {
+			label := "Skipped"
+			if startup.Status != multisync.DriveStartupPaused {
+				label = "Error"
+			}
+			cc.Statusf("%s: %s\n", label, formatStartupResultMessage(startup))
+			continue
+		}
+
+		report := reportByDrive[startup.CanonicalID]
+		if report == nil {
+			cc.Statusf("Error: missing sync report for drive startup result\n")
+			continue
+		}
+
+		if report.Err != nil {
+			cc.Statusf("Error: %s\n", formatDriveReportErrorMessage(report))
+			continue
+		}
+
+		if report.Report != nil {
+			printSyncReport(report.Report, cc)
+		}
+	}
+}
+
 // driveReportsError returns an error if any drive report has an error.
 // Returns nil when all drives succeeded.
 func driveReportsError(reports []*multisync.DriveReport) error {
@@ -42,7 +85,7 @@ func driveReportsError(reports []*multisync.DriveReport) error {
 			failCount++
 
 			if firstErr == nil {
-				firstErr = formatSyncStateResetRequiredError(dr.CanonicalID, dr.Err)
+				firstErr = formatStateStoreIncompatibleError(dr.CanonicalID, dr.Err)
 			}
 		}
 	}
@@ -58,12 +101,54 @@ func driveReportsError(reports []*multisync.DriveReport) error {
 	return fmt.Errorf("%d of %d drives failed: %w", failCount, len(reports), firstErr)
 }
 
+func runOnceResultError(result multisync.RunOnceResult) error {
+	if result.Startup.AllPaused() {
+		return fmt.Errorf("all selected drives are paused — run 'onedrive-go resume' to unpause")
+	}
+
+	var firstErr error
+	failCount := 0
+
+	skipped := result.Startup.SkippedResults()
+	for i := range skipped {
+		startup := &skipped[i]
+		failCount++
+		if firstErr == nil {
+			firstErr = fmt.Errorf("%s", formatStartupResultMessage(startup))
+		}
+	}
+
+	for _, dr := range result.Reports {
+		if dr == nil || dr.Err == nil {
+			continue
+		}
+		failCount++
+		if firstErr == nil {
+			firstErr = formatStateStoreIncompatibleError(dr.CanonicalID, dr.Err)
+		}
+	}
+
+	if failCount == 0 {
+		return nil
+	}
+
+	if result.Startup.SelectedCount() <= 1 {
+		return firstErr
+	}
+
+	return fmt.Errorf("%d of %d selected drives failed or were skipped: %w",
+		failCount,
+		result.Startup.SelectedCount(),
+		firstErr,
+	)
+}
+
 func formatDriveReportErrorMessage(dr *multisync.DriveReport) string {
 	if dr == nil || dr.Err == nil {
 		return ""
 	}
 
-	return formatSyncStateResetRequiredMessage(dr.CanonicalID, dr.Err)
+	return formatStateStoreIncompatibleMessage(dr.CanonicalID, dr.Err)
 }
 
 // printNonZero prints a labeled count line only when n > 0.

@@ -108,8 +108,8 @@ func runSyncDaemonWithFactory(
 		Runtime:           runtime,
 		Logger:            logger,
 		ControlSocketPath: controlSocketPath,
-		StartWarning: func(results []multisync.DriveStartupResult) {
-			writeWatchStartWarnings(statusWriter, results)
+		StartWarning: func(warning multisync.StartupWarning) {
+			writeWatchStartWarnings(statusWriter, warning)
 		},
 		DebugEventHook: debugEventHook,
 		PerfParent:     perf.FromContext(ctx),

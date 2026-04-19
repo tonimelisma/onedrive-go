@@ -164,8 +164,12 @@ CREATE TABLE IF NOT EXISTS scope_blocks (
     next_trial_at  INTEGER NOT NULL,
     preserve_until INTEGER NOT NULL DEFAULT 0,
     trial_count    INTEGER NOT NULL DEFAULT 0
-);`
+	);`
 )
+
+type storeCompatibilityMetadata struct {
+	SchemaGeneration int
+}
 
 // ErrIncompatibleSchema marks a state DB that cannot be trusted under the
 // current canonical schema. The state is rebuildable, so incompatible stores
@@ -257,8 +261,8 @@ func createCanonicalSchema(ctx context.Context, db *sql.DB) (err error) {
 	if _, err = tx.ExecContext(ctx, sqlEnsureRunStatusRow); err != nil {
 		return fmt.Errorf("seed run_status row: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, sqlEnsureStoreMetadataRow, currentSyncStoreGeneration); err != nil {
-		return fmt.Errorf("seed store_metadata row: %w", err)
+	if metadataErr := ensureStoreCompatibilityMetadata(ctx, tx); metadataErr != nil {
+		return metadataErr
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema transaction: %w", err)
@@ -312,27 +316,47 @@ func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []str
 	return nil
 }
 
-func validateStoreGeneration(ctx context.Context, db *sql.DB) error {
-	var generation int
-	err := db.QueryRowContext(ctx,
-		`SELECT schema_generation FROM store_metadata WHERE singleton_id = 1`,
-	).Scan(&generation)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: sync store generation marker is missing", ErrIncompatibleSchema)
-		}
-		return fmt.Errorf("sync: inspect store generation: %w", err)
+func ensureStoreCompatibilityMetadata(ctx context.Context, exec interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+},
+) error {
+	if _, err := exec.ExecContext(ctx, sqlEnsureStoreMetadataRow, currentSyncStoreGeneration); err != nil {
+		return fmt.Errorf("seed store_metadata row: %w", err)
 	}
-	if generation != currentSyncStoreGeneration {
+
+	return nil
+}
+
+func validateStoreGeneration(ctx context.Context, db *sql.DB) error {
+	metadata, err := readStoreCompatibilityMetadata(ctx, db)
+	if err != nil {
+		return err
+	}
+	if metadata.SchemaGeneration != currentSyncStoreGeneration {
 		return fmt.Errorf(
 			"%w: sync store generation %d is unsupported; expected %d",
 			ErrIncompatibleSchema,
-			generation,
+			metadata.SchemaGeneration,
 			currentSyncStoreGeneration,
 		)
 	}
 
 	return nil
+}
+
+func readStoreCompatibilityMetadata(ctx context.Context, db *sql.DB) (storeCompatibilityMetadata, error) {
+	metadata := storeCompatibilityMetadata{}
+	err := db.QueryRowContext(ctx,
+		`SELECT schema_generation FROM store_metadata WHERE singleton_id = 1`,
+	).Scan(&metadata.SchemaGeneration)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return storeCompatibilityMetadata{}, fmt.Errorf("%w: sync store generation marker is missing", ErrIncompatibleSchema)
+		}
+		return storeCompatibilityMetadata{}, fmt.Errorf("sync: inspect store compatibility metadata: %w", err)
+	}
+
+	return metadata, nil
 }
 
 func listUserTables(ctx context.Context, db *sql.DB) ([]string, error) {
