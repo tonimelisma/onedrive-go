@@ -195,8 +195,8 @@ func TestNewTestStore_TemplateMatchesFreshStore(t *testing.T) {
 
 	templateBacked := newTestStore(t)
 
-	assert.Equal(t, schemaFingerprint(t, fresh.DB()), schemaFingerprint(t, templateBacked.DB()))
-	assert.Equal(t, journalMode(t, fresh.DB()), journalMode(t, templateBacked.DB()))
+	assert.Equal(t, schemaFingerprint(t, fresh.rawDB()), schemaFingerprint(t, templateBacked.rawDB()))
+	assert.Equal(t, journalMode(t, fresh.rawDB()), journalMode(t, templateBacked.rawDB()))
 }
 
 // discardLogger returns a logger that writes to nowhere, suitable for tests.

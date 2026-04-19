@@ -1059,7 +1059,7 @@ func TestEngine_DispatchCurrentPlan_PublicationOnlySyncedUpdateCommitsWithoutOut
 	assert.Empty(t, outbox)
 	assert.Zero(t, testWatchRuntime(t, eng).depGraph.InFlightCount())
 
-	entry, ok := eng.baseline.Baseline().GetByPath("publish-synced.txt")
+	entry, ok := eng.baseline.cachedBaseline().GetByPath("publish-synced.txt")
 	require.True(t, ok)
 	assert.Equal(t, "remote-item", entry.ItemID)
 	assert.Equal(t, "local-hash", entry.LocalHash)
@@ -1118,7 +1118,7 @@ func TestEngine_DispatchCurrentPlan_PublicationOnlyActionReleasesDependentOutbox
 	assert.Equal(t, "publish-child.txt", outbox[0].Action.Path)
 	assert.Equal(t, ActionUpload, outbox[0].Action.Type)
 
-	entry, ok := eng.baseline.Baseline().GetByPath("publish-parent.txt")
+	entry, ok := eng.baseline.cachedBaseline().GetByPath("publish-parent.txt")
 	require.True(t, ok)
 	assert.Equal(t, "publish-parent-item", entry.ItemID)
 }
@@ -1172,7 +1172,7 @@ func TestEngine_DispatchCurrentPlan_PublicationOnlyCleanupCommitsWithoutOutbox(t
 	assert.Empty(t, outbox)
 	assert.Zero(t, testWatchRuntime(t, eng).depGraph.InFlightCount())
 
-	_, ok := eng.baseline.Baseline().GetByPath("publish-cleanup.txt")
+	_, ok := eng.baseline.cachedBaseline().GetByPath("publish-cleanup.txt")
 	assert.False(t, ok)
 }
 
@@ -1203,7 +1203,7 @@ func TestEngine_DispatchCurrentPlan_PublicationOnlyCommitFailureCountsAsFailure(
 	assert.Zero(t, testWatchRuntime(t, eng).depGraph.InFlightCount())
 	assert.Equal(t, 1, testEngineFlow(t, eng).failed)
 
-	_, ok := eng.baseline.Baseline().GetByPath("publish-failure.txt")
+	_, ok := eng.baseline.cachedBaseline().GetByPath("publish-failure.txt")
 	assert.False(t, ok)
 }
 
@@ -1498,7 +1498,7 @@ func TestRetrierSweep_BatchLimit(t *testing.T) {
 
 	// Align store clock with engine clock so next_retry_at is computed
 	// relative to the same fixed time.
-	eng.baseline.SetNowFunc(eng.nowFn)
+	eng.baseline.setNowFunc(eng.nowFn)
 	eng.retryBatchLimit = 64
 
 	total := eng.effectiveRetryBatchLimit() + 5
@@ -1562,7 +1562,7 @@ func TestRetrierSweep_SkipsInFlight(t *testing.T) {
 	driveID := driveid.New("drive1")
 
 	// Align store clock with engine clock.
-	eng.baseline.SetNowFunc(eng.nowFn)
+	eng.baseline.setNowFunc(eng.nowFn)
 
 	names := []string{"a.txt", "b.txt", "c.txt"}
 
@@ -1958,7 +1958,7 @@ func TestRetrierSweep_FullFidelityEvents_D9(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
-	eng.baseline.SetNowFunc(eng.nowFn)
+	eng.baseline.setNowFunc(eng.nowFn)
 
 	// Seed remote_state with full metadata.
 	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
@@ -2005,7 +2005,7 @@ func TestRetrierSweep_SkipsResolvedFailures_D11(t *testing.T) {
 	ctx := context.Background()
 
 	driveID := driveid.New("drive1")
-	eng.baseline.SetNowFunc(eng.nowFn)
+	eng.baseline.setNowFunc(eng.nowFn)
 
 	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{
 		{
@@ -2185,7 +2185,7 @@ func TestRetrierSweep_UploadSkippedCandidateBecomesActionableFailure(t *testing.
 	eng := newSingleOwnerEngine(t)
 	ctx := context.Background()
 
-	eng.baseline.SetNowFunc(eng.nowFn)
+	eng.baseline.setNowFunc(eng.nowFn)
 
 	file, err := os.Create(filepath.Join(eng.syncRoot, "oversized.bin"))
 	require.NoError(t, err)

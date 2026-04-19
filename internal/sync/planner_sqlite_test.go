@@ -17,7 +17,7 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	_, err := store.DB().ExecContext(ctx, `
+	_, err := store.rawDB().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES
 			('item-upload', 'upload.txt', 'file', 'old', 'old', 1, 1, 1, 1, 'etag-old'),
@@ -105,7 +105,7 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	_, err := store.DB().ExecContext(ctx, `
+	_, err := store.rawDB().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-conflict', 'conflict.txt', 'file', 'old-hash', 'old-hash', 1, 1, 1, 1, 'etag-old')`)
 	require.NoError(t, err)

@@ -54,7 +54,7 @@ func TestNewSyncStore_WALMode(t *testing.T) {
 	var journalMode string
 
 	ctx := t.Context()
-	err := mgr.DB().QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode)
+	err := mgr.rawDB().QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode)
 	require.NoError(t, err)
 	assert.Equal(t, "wal", journalMode)
 }
@@ -71,7 +71,7 @@ func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 
 	// Write some data to ensure WAL has content.
 	ctx := t.Context()
-	_, err = mgr.DB().ExecContext(ctx,
+	_, err = mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO baseline (path, item_id, parent_id, item_type,
 		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -101,7 +101,7 @@ func TestNewSyncStore_AppliesSchema(t *testing.T) {
 
 	var count int
 
-	err := mgr.DB().QueryRowContext(ctx,
+	err := mgr.rawDB().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('baseline', 'remote_state', 'sync_failures', 'scope_blocks')",
 	).Scan(&count)
 	require.NoError(t, err)
@@ -119,14 +119,14 @@ func TestCheckpoint_DoesNotPruneRemoteMirrorRows(t *testing.T) {
 
 	// Checkpoint no longer treats remote_state as a lifecycle queue, so mirror
 	// rows are never pruned by age.
-	_, err := mgr.DB().ExecContext(ctx,
+	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"old-item", "/old.txt", "file")
 	require.NoError(t, err)
 
 	// Insert a second row to ensure older/newer mirror entries both survive.
-	_, err = mgr.DB().ExecContext(ctx,
+	_, err = mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"new-item", "/new.txt", "file")
@@ -135,7 +135,7 @@ func TestCheckpoint_DoesNotPruneRemoteMirrorRows(t *testing.T) {
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
 
 	var count int
-	err = mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
+	err = mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count, "checkpoint must preserve remote mirror rows")
 }
@@ -153,21 +153,21 @@ func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
 	retention := 24 * time.Hour
 
 	// Insert an actionable failure older than retention (should be pruned).
-	_, err := mgr.DB().ExecContext(ctx,
+	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"/old-issue.txt", "upload", "upload", "item", "actionable", oldTime, oldTime)
 	require.NoError(t, err)
 
 	// Insert an actionable failure newer than retention (should survive).
-	_, err = mgr.DB().ExecContext(ctx,
+	_, err = mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"/new-issue.txt", "upload", "upload", "item", "actionable", newTime, newTime)
 	require.NoError(t, err)
 
 	// Insert a transient failure (should never be pruned regardless of age).
-	_, err = mgr.DB().ExecContext(ctx,
+	_, err = mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"/pending-issue.txt", "upload", "upload", "item", "transient", oldTime, oldTime)
@@ -176,7 +176,7 @@ func TestCheckpoint_PrunesActionableSyncFailures(t *testing.T) {
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
 
 	var count int
-	err = mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_failures`).Scan(&count)
+	err = mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_failures`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count, "old actionable should be pruned, new actionable + transient should remain")
 }
@@ -189,7 +189,7 @@ func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert an old remote mirror row.
-	_, err := mgr.DB().ExecContext(ctx,
+	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"item1", "/old.txt", "file")
@@ -199,7 +199,7 @@ func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
 	require.NoError(t, mgr.Checkpoint(ctx, 0))
 
 	var count int
-	err = mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
+	err = mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "zero retention should not prune the remote mirror")
 }
@@ -226,7 +226,7 @@ func TestCommit_Download(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.setNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []BaselineMutation{{
 		Action:          ActionDownload,
@@ -249,7 +249,7 @@ func TestCommit_Download(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry, ok := mgr.Baseline().GetByPath("docs/readme.md")
+	entry, ok := mgr.cachedBaseline().GetByPath("docs/readme.md")
 	require.True(t, ok, "baseline entry not found for docs/readme.md")
 	assert.True(t, entry.DriveID.Equal(driveid.New("drive1")), "DriveID mismatch")
 	assert.Equal(t, "item1", entry.ItemID)
@@ -264,7 +264,7 @@ func TestCommit_Upload(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.setNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []BaselineMutation{{
 		Action:          ActionUpload,
@@ -287,7 +287,7 @@ func TestCommit_Upload(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry, ok := mgr.Baseline().GetByPath("photos/cat.jpg")
+	entry, ok := mgr.cachedBaseline().GetByPath("photos/cat.jpg")
 	require.True(t, ok, "baseline entry not found")
 	assert.Equal(t, "hash-local", entry.LocalHash)
 	assert.Equal(t, "hash-remote", entry.RemoteHash)
@@ -300,7 +300,7 @@ func TestCommit_FolderCreate(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time {
+	mgr.setNowFunc(func() time.Time {
 		return time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	})
 
@@ -316,7 +316,7 @@ func TestCommit_FolderCreate(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry, ok := mgr.Baseline().GetByPath("Documents/Reports")
+	entry, ok := mgr.cachedBaseline().GetByPath("Documents/Reports")
 	require.True(t, ok, "folder entry not found")
 	assert.Equal(t, ItemTypeFolder, entry.ItemType)
 	// Folders have no hash or size.
@@ -336,7 +336,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 
 	// First commit: create baseline entry.
 	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return t1 })
+	mgr.setNowFunc(func() time.Time { return t1 })
 
 	outcomes := []BaselineMutation{{
 		Action:          ActionDownload,
@@ -359,7 +359,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 
 	// Second commit: convergent edit updates the stored baseline tuple.
 	t2 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return t2 })
+	mgr.setNowFunc(func() time.Time { return t2 })
 
 	outcomes[0].Action = ActionUpdateSynced
 	outcomes[0].LocalHash = updatedHash
@@ -367,7 +367,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	entry, ok := mgr.Baseline().GetByPath("file.txt")
+	entry, ok := mgr.cachedBaseline().GetByPath("file.txt")
 	require.True(t, ok)
 	assert.Equal(t, updatedHash, entry.LocalHash)
 }
@@ -392,7 +392,7 @@ func TestCommit_DeleteLikeActionsRemoveBaseline(t *testing.T) {
 
 			mgr := newTestStore(t)
 			ctx := t.Context()
-			mgr.SetNowFunc(func() time.Time {
+			mgr.setNowFunc(func() time.Time {
 				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 			})
 
@@ -411,7 +411,7 @@ func TestCommit_DeleteLikeActionsRemoveBaseline(t *testing.T) {
 			}}
 			commitAll(t, mgr, ctx, remove)
 
-			_, ok := mgr.Baseline().GetByPath(tc.path)
+			_, ok := mgr.cachedBaseline().GetByPath(tc.path)
 			assert.False(t, ok, "entry still exists after %s", tc.name)
 		})
 	}
@@ -425,7 +425,7 @@ func TestCommit_Move(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.setNowFunc(func() time.Time { return fixedTime })
 
 	// Create original entry.
 	create := []BaselineMutation{{
@@ -452,10 +452,10 @@ func TestCommit_Move(t *testing.T) {
 
 	commitAll(t, mgr, ctx, move)
 
-	_, ok := mgr.Baseline().GetByPath("old/path.txt")
+	_, ok := mgr.cachedBaseline().GetByPath("old/path.txt")
 	assert.False(t, ok, "old path still exists after move")
 
-	entry, ok := mgr.Baseline().GetByPath("new/path.txt")
+	entry, ok := mgr.cachedBaseline().GetByPath("new/path.txt")
 	require.True(t, ok, "new path not found after move")
 	assert.Equal(t, "i", entry.ItemID)
 }
@@ -467,7 +467,7 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time {
+	mgr.setNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	})
 
@@ -508,7 +508,7 @@ func TestCommit_DeltaTokenRoundTrip(t *testing.T) {
 
 			mgr := newTestStore(t)
 			ctx := t.Context()
-			mgr.SetNowFunc(func() time.Time {
+			mgr.setNowFunc(func() time.Time {
 				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 			})
 
@@ -541,12 +541,12 @@ func TestCommit_RefreshesCache(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time {
+	mgr.setNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	})
 
 	// Verify baseline is nil before first commit.
-	assert.Nil(t, mgr.Baseline(), "baseline should be nil before first Load/Commit")
+	assert.Nil(t, mgr.cachedBaseline(), "baseline should be nil before first Load/Commit")
 
 	outcomes := []BaselineMutation{{
 		Action: ActionDownload, Success: true,
@@ -559,8 +559,8 @@ func TestCommit_RefreshesCache(t *testing.T) {
 
 	commitAll(t, mgr, ctx, outcomes)
 
-	require.NotNil(t, mgr.Baseline(), "baseline should be populated after Commit")
-	assert.Equal(t, 1, mgr.Baseline().Len())
+	require.NotNil(t, mgr.cachedBaseline(), "baseline should be populated after Commit")
+	assert.Equal(t, 1, mgr.cachedBaseline().Len())
 }
 
 // Validates: R-2.2
@@ -617,7 +617,7 @@ func TestLoad_NullableFields(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert a row with NULL parent_id, hashes, size, mtimes, etag directly.
-	_, err := mgr.DB().ExecContext(ctx,
+	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO baseline (path, item_id, parent_id, item_type,
 		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		 VALUES (?, ?, NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
@@ -653,7 +653,7 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	mgr.setNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	// Seed a baseline entry.
 	outcomes := []BaselineMutation{{
@@ -684,7 +684,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	mgr.setNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	// Seed one entry.
 	outcomes := []BaselineMutation{{
@@ -756,7 +756,7 @@ func TestCommitMutation_Download(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.setNowFunc(func() time.Time { return fixedTime })
 
 	outcome := BaselineMutation{
 		Action:          ActionDownload,
@@ -779,7 +779,7 @@ func TestCommitMutation_Download(t *testing.T) {
 
 	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
-	entry, ok := mgr.Baseline().GetByPath("co-download.txt")
+	entry, ok := mgr.cachedBaseline().GetByPath("co-download.txt")
 	require.True(t, ok, "baseline entry not found")
 	assert.Equal(t, "i1", entry.ItemID)
 	assert.Equal(t, "lh", entry.LocalHash)
@@ -792,7 +792,7 @@ func TestCommitMutation_Upload(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	outcome := BaselineMutation{
 		Action:          ActionUpload,
@@ -811,7 +811,7 @@ func TestCommitMutation_Upload(t *testing.T) {
 
 	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
-	entry, ok := mgr.Baseline().GetByPath("co-upload.txt")
+	entry, ok := mgr.cachedBaseline().GetByPath("co-upload.txt")
 	require.True(t, ok, "baseline entry not found")
 	assert.Equal(t, "i2", entry.ItemID)
 }
@@ -823,7 +823,7 @@ func TestCommitMutation_PersistsSideAwareFileMetadata(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC) })
+	mgr.setNowFunc(func() time.Time { return time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC) })
 
 	outcome := BaselineMutation{
 		Action:          ActionUpload,
@@ -845,7 +845,7 @@ func TestCommitMutation_PersistsSideAwareFileMetadata(t *testing.T) {
 
 	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
-	entry, ok := mgr.Baseline().GetByPath("hashless.docx")
+	entry, ok := mgr.cachedBaseline().GetByPath("hashless.docx")
 	require.True(t, ok, "baseline entry not found")
 	assert.Equal(t, int64(512), entry.LocalSize)
 	assert.True(t, entry.LocalSizeKnown)
@@ -889,7 +889,7 @@ func TestCommitMutation_PersistsZeroByteSizeAsKnownZero(t *testing.T) {
 		storedLocalETag sql.NullString
 	)
 
-	err := mgr.DB().QueryRowContext(ctx,
+	err := mgr.rawDB().QueryRowContext(ctx,
 		`SELECT local_size, remote_size, etag FROM baseline WHERE path = ?`,
 		"zero.txt",
 	).Scan(&localSize, &remoteSize, &storedLocalETag)
@@ -949,7 +949,7 @@ func TestCommitMutation_Delete(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	// Seed an entry first.
 	seed := BaselineMutation{
@@ -965,7 +965,7 @@ func TestCommitMutation_Delete(t *testing.T) {
 	del := BaselineMutation{Action: ActionLocalDelete, Success: true, Path: "co-delete.txt"}
 	require.NoError(t, mgr.CommitMutation(ctx, &del))
 
-	_, ok := mgr.Baseline().GetByPath("co-delete.txt")
+	_, ok := mgr.cachedBaseline().GetByPath("co-delete.txt")
 	assert.False(t, ok, "entry still exists after delete")
 }
 
@@ -976,7 +976,7 @@ func TestCommitMutation_Move(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	// Seed original entry.
 	seed := BaselineMutation{
@@ -999,10 +999,10 @@ func TestCommitMutation_Move(t *testing.T) {
 	}
 	require.NoError(t, mgr.CommitMutation(ctx, &move))
 
-	_, ok := mgr.Baseline().GetByPath("old/move.txt")
+	_, ok := mgr.cachedBaseline().GetByPath("old/move.txt")
 	assert.False(t, ok, "old path still exists after move")
 
-	entry, ok := mgr.Baseline().GetByPath("new/move.txt")
+	entry, ok := mgr.cachedBaseline().GetByPath("new/move.txt")
 	require.True(t, ok, "new path not found after move")
 	assert.Equal(t, "p2", entry.ParentID)
 }
@@ -1022,8 +1022,8 @@ func TestCommitMutation_SkipsFailedOutcome(t *testing.T) {
 
 	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
-	if mgr.Baseline() != nil {
-		_, ok := mgr.Baseline().GetByPath("should-not-exist.txt")
+	if mgr.cachedBaseline() != nil {
+		_, ok := mgr.cachedBaseline().GetByPath("should-not-exist.txt")
 		assert.False(t, ok, "failed outcome should not create baseline entry")
 	}
 }
@@ -1047,11 +1047,11 @@ func TestCommitMutation_UnknownAction_ReturnsErrorAndSkipsDBWrite(t *testing.T) 
 	assert.Contains(t, err.Error(), "unknown action type")
 
 	var count int
-	queryErr := mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline WHERE path = ?`, "unknown.txt").Scan(&count)
+	queryErr := mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline WHERE path = ?`, "unknown.txt").Scan(&count)
 	require.NoError(t, queryErr)
 	assert.Zero(t, count, "unknown actions must not write baseline rows")
 
-	_, ok := mgr.Baseline().GetByPath("unknown.txt")
+	_, ok := mgr.cachedBaseline().GetByPath("unknown.txt")
 	assert.False(t, ok, "unknown actions must not mutate the in-memory cache")
 }
 
@@ -1078,8 +1078,8 @@ func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
 	}
 	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
-	mgr.Baseline().Delete("cached.txt")
-	_, ok := mgr.Baseline().GetByPath("cached.txt")
+	mgr.cachedBaseline().Delete("cached.txt")
+	_, ok := mgr.cachedBaseline().GetByPath("cached.txt")
 	require.False(t, ok, "test setup should corrupt the cache before reload")
 
 	err := mgr.updateBaselineCache(ctx, &BaselineMutation{
@@ -1088,7 +1088,7 @@ func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	entry, ok := mgr.Baseline().GetByPath("cached.txt")
+	entry, ok := mgr.cachedBaseline().GetByPath("cached.txt")
 	require.True(t, ok, "unknown cache mutations should trigger a DB reload")
 	assert.Equal(t, "item-cached", entry.ItemID)
 }
@@ -1100,7 +1100,7 @@ func TestCommitMutation_FolderCreate(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	outcome := BaselineMutation{
 		Action:   ActionFolderCreate,
@@ -1114,7 +1114,7 @@ func TestCommitMutation_FolderCreate(t *testing.T) {
 
 	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
-	entry, ok := mgr.Baseline().GetByPath("Documents/Reports")
+	entry, ok := mgr.cachedBaseline().GetByPath("Documents/Reports")
 	require.True(t, ok, "folder entry not found")
 	assert.Equal(t, ItemTypeFolder, entry.ItemType)
 	assert.Equal(t, "folder-id", entry.ItemID)
@@ -1168,17 +1168,17 @@ func TestCommitMutation_Upload_NewItemID_SamePath(t *testing.T) {
 	require.NoError(t, mgr.CommitMutation(ctx, &uploadOutcome))
 
 	// Verify the entry now has the new item_id.
-	entry, ok := mgr.Baseline().GetByPath("file.txt")
+	entry, ok := mgr.cachedBaseline().GetByPath("file.txt")
 	require.True(t, ok, "entry should exist")
 	assert.Equal(t, "new-id", entry.ItemID)
 	assert.Equal(t, "hash2", entry.RemoteHash)
 
 	// Old ID should no longer exist in ByID.
-	_, ok = mgr.Baseline().GetByID("old-id")
+	_, ok = mgr.cachedBaseline().GetByID("old-id")
 	assert.False(t, ok, "old ID should be removed from ByID")
 
 	// New ID should exist in ByID.
-	_, ok = mgr.Baseline().GetByID("new-id")
+	_, ok = mgr.cachedBaseline().GetByID("new-id")
 	assert.True(t, ok, "new ID should exist in ByID")
 }
 
@@ -1193,7 +1193,7 @@ func TestCommitObservationCursor(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-abc"))
 
@@ -1208,7 +1208,7 @@ func TestCommitObservationCursor_Update(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-1"))
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-2"))
@@ -1492,7 +1492,7 @@ func TestCheckCacheConsistency(t *testing.T) {
 	assert.Equal(t, 0, mismatches)
 
 	// Manually corrupt the DB row behind the cache's back.
-	_, err = mgr.DB().ExecContext(ctx,
+	_, err = mgr.rawDB().ExecContext(ctx,
 		`UPDATE baseline SET local_hash = 'tampered' WHERE path = 'consistency-check.txt'`)
 	require.NoError(t, err)
 
@@ -1521,7 +1521,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	for _, table := range expectedTables {
 		var name string
-		err := mgr.DB().QueryRowContext(ctx,
+		err := mgr.rawDB().QueryRowContext(ctx,
 			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table,
 		).Scan(&name)
 		require.NoError(t, err, "table %q should exist", table)
@@ -1535,21 +1535,21 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	assert.Equal(t, "primary-token", state.Cursor)
 
 	// Verify remote_state table structure: insert + query.
-	_, err = mgr.DB().ExecContext(ctx,
+	_, err = mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"item1", "/test.txt", "file")
 	require.NoError(t, err)
 
 	// Verify sync_failures table structure: insert + query.
-	_, err = mgr.DB().ExecContext(ctx,
+	_, err = mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO sync_failures (path, direction, action_type, failure_role, category, issue_type, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		"/bad-file.txt", "upload", "upload", "item", "transient", "invalid_filename", 1700000000, 1700000000)
 	require.NoError(t, err)
 
 	// Verify remote_state CHECK constraint rejects invalid item types.
-	_, err = mgr.DB().ExecContext(ctx,
+	_, err = mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"item2", "/bad.txt", "bogus")
@@ -1564,14 +1564,14 @@ func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert an active item at a path.
-	_, err := mgr.DB().ExecContext(ctx,
+	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"item1", "/test.txt", "file")
 	require.NoError(t, err)
 
 	// Another item at the same path should be rejected by the mirror's unique path index.
-	_, err = mgr.DB().ExecContext(ctx,
+	_, err = mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"item2", "/test.txt", "file")
@@ -1676,7 +1676,7 @@ func TestBaselineEntryCount_Empty(t *testing.T) {
 	ctx := t.Context()
 
 	var count int
-	err := mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count)
+	err := mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 }
@@ -1708,7 +1708,7 @@ func TestBaselineEntryCount_WithEntries(t *testing.T) {
 	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
 	var count int
-	err := mgr.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count)
+	err := mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 }

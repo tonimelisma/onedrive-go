@@ -6,7 +6,6 @@
 //   - NewSyncStore: open database, apply canonical schema, return ready store
 //   - Close:        WAL checkpoint + close database
 //   - Checkpoint:   WAL checkpoint + optional pruning
-//   - DB:           test-only access to underlying *sql.DB
 //   - nullString:   empty string → SQL NULL
 //   - nullOptionalInt64: zero → SQL NULL for optional fields like mtimes
 //   - nullKnownInt64:   preserve zero for known values like file sizes
@@ -16,8 +15,7 @@
 //   - store_write_observation.go:  remote state observation persistence
 //   - store_read_failures.go:      sync failure query helpers
 //   - store_write_failures.go:     sync failure recording and mutation helpers
-//   - store_read_snapshots.go:     read-only status projections
-//   - store_inspect.go:            package-private read-only inspector
+//   - store_inspect.go:            read-only status projections and inspector lifecycle
 //   - store_run_status.go:         one-shot run-status persistence
 //   - store_scope_admin.go:        scope release/discard mutation helpers
 //   - store_compatibility.go:      startup diagnosis for unsupported existing DBs
@@ -164,24 +162,23 @@ func (m *SyncStore) DataVersion(ctx context.Context) (int64, error) {
 	return version, nil
 }
 
-// DB returns the underlying *sql.DB for tests that need to verify schema or
-// run raw queries. Do not use in production code — use the typed methods on
-// SyncStore instead to maintain interface compliance.
-func (m *SyncStore) DB() *sql.DB {
+// rawDB exposes the underlying SQLite handle for same-package tests and store
+// internals that need assertions below the typed API surface.
+func (m *SyncStore) rawDB() *sql.DB {
 	return m.db
 }
 
-// SetNowFunc overrides the time source used for syncedAt timestamps in Commit.
+// setNowFunc overrides the time source used for syncedAt timestamps in Commit.
 // Used in tests to produce deterministic timestamps without mocking the real
 // clock. Must be called before Commit.
-func (m *SyncStore) SetNowFunc(fn func() time.Time) {
+func (m *SyncStore) setNowFunc(fn func() time.Time) {
 	m.nowFunc = fn
 }
 
-// Baseline returns the in-memory baseline cache populated by the most recent
+// cachedBaseline returns the in-memory baseline cache populated by the most recent
 // Load or Commit call. Returns nil before the first Load/Commit. Used by
 // tests to inspect baseline state without a round-trip through Load().
-func (m *SyncStore) Baseline() *Baseline {
+func (m *SyncStore) cachedBaseline() *Baseline {
 	m.baselineMu.Lock()
 	defer m.baselineMu.Unlock()
 

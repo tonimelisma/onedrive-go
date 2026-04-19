@@ -119,7 +119,7 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 	require.NotNil(t, scratch)
 	require.NotNil(t, cleanup)
 
-	scratchPath := scratchMainDBPath(t, scratch.DB())
+	scratchPath := scratchMainDBPath(t, scratch.rawDB())
 
 	state, err := scratch.ReadObservationState(ctx)
 	require.NoError(t, err)
@@ -128,7 +128,7 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 	assert.Equal(t, localRefreshModeWatchDegraded, state.LocalRefreshMode)
 	assert.Equal(t, remoteRefreshModeDeltaHealthy, state.RemoteRefreshMode)
 
-	remoteRows, err := listScratchRemoteStateRows(ctx, scratch.DB())
+	remoteRows, err := listScratchRemoteStateRows(ctx, scratch.rawDB())
 	require.NoError(t, err)
 	require.Len(t, remoteRows, 2)
 	assert.Equal(t, "folder/remote-two.txt", remoteRows[0].Path)

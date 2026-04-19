@@ -30,7 +30,7 @@ func TestQueryReconciliationState_BaselineAbsentFromBothRemovesBaseline(t *testi
 	t.Parallel()
 
 	store := newTestStore(t)
-	_, err := store.DB().ExecContext(t.Context(), `
+	_, err := store.rawDB().ExecContext(t.Context(), `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES ('item-1', 'gone.txt', 'file', 'hash-a', 'hash-a', 10, 10, 100, 100)`)
 	require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.DB().ExecContext(ctx, `
+	_, err := store.rawDB().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES
 			('item-upload', 'upload.txt', 'file', 'old', 'old', 1, 1, 1, 1, 'etag-old'),
@@ -61,7 +61,7 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 			('item-redownload', 'redownload.txt', 'file', 'same', 'same', 1, 1, 1, 1, 'etag-same')`)
 	require.NoError(t, err)
 
-	_, err = store.DB().ExecContext(ctx, `
+	_, err = store.rawDB().ExecContext(ctx, `
 		INSERT INTO local_state (path, item_type, hash, size, mtime, content_identity, observed_at)
 		VALUES
 			('upload.txt', 'file', 'new-local', 2, 2, 'new-local', 1),
@@ -70,7 +70,7 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 			('new-local.txt', 'file', 'local-create', 3, 3, 'local-create', 1)`)
 	require.NoError(t, err)
 
-	_, err = store.DB().ExecContext(ctx, `
+	_, err = store.rawDB().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag, content_identity)
 		VALUES
 			('item-upload', 'upload.txt', 'file', 'old', 1, 1, 'etag-old', 'old'),
@@ -100,21 +100,21 @@ func TestQueryReconciliationState_FolderDecisionMatrix(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.DB().ExecContext(ctx, `
+	_, err := store.rawDB().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type)
 		VALUES
 			('item-keep-remote', 'keep-remote', 'folder'),
 			('item-delete-local', 'delete-local', 'folder')`)
 	require.NoError(t, err)
 
-	_, err = store.DB().ExecContext(ctx, `
+	_, err = store.rawDB().ExecContext(ctx, `
 		INSERT INTO local_state (path, item_type, observed_at)
 		VALUES
 			('delete-local', 'folder', 1),
 			('new-local-folder', 'folder', 1)`)
 	require.NoError(t, err)
 
-	_, err = store.DB().ExecContext(ctx, `
+	_, err = store.rawDB().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type)
 		VALUES
 			('item-keep-remote', 'keep-remote', 'folder'),

@@ -26,7 +26,7 @@ runtime package that implements it.
 - Source of Truth: The current `config.Holder` snapshot plus the `runners` map owned by the watch-mode orchestrator loop.
 - Allowed Side Effects: Session creation, engine construction/closure, Unix control-socket bind/unlink, per-drive goroutine startup, live perf capture, and control-plane logging.
 - Mutable Runtime Owner: `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one drive.
-- Error Boundary: The control plane converts drive startup, panic, and watch-runner failures into isolated `DriveReport` or log outcomes. Engine-internal errors remain inside the single-drive boundary.
+- Error Boundary: The control plane converts drive startup into structured per-drive startup outcomes, converts completed one-shot passes into isolated `DriveReport` values, and keeps watch-runner failures isolated to the affected drive or log path. Engine-internal errors remain inside the single-drive boundary.
 
 ## Verified By
 
@@ -64,9 +64,10 @@ for startup, shutdown, and reload.
 ### RunOnce
 
 `RunOnce` resolves sessions, builds one engine per configured drive, and runs
-all drives concurrently. Each drive produces one `DriveReport`. The control
-plane never aborts the whole pass because one drive failed; partial failure is
-reported per drive.
+all drives concurrently. Startup eligibility is classified per drive first.
+Runnable drives then produce one `DriveReport` each. The control plane never
+aborts the whole pass because one drive failed; partial failure is reported per
+drive.
 
 ### RunWatch
 
@@ -157,7 +158,8 @@ runner set.
 ## `DriveRunner`
 
 `DriveRunner` wraps a single drive's sync function with panic recovery and
-error isolation. One drive panicking must become one `DriveReport` error, not
+error isolation. One drive panicking must become one isolated drive outcome,
+not
 a process-wide crash or a cross-drive failure cascade.
 
 ## CLI Contract

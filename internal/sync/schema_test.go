@@ -17,7 +17,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	tables, err := listUserTables(ctx, store.DB())
+	tables, err := listUserTables(ctx, store.rawDB())
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{
 		"baseline",

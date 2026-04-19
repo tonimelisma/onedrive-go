@@ -622,10 +622,15 @@ func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
 	store, err := syncengine.NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
 
-	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO baseline
-		(path, item_id, parent_id, item_type)
-		VALUES ('/tracked.txt', 'item-1', 'root', 'file')`)
-	require.NoError(t, err)
+	require.NoError(t, store.CommitMutation(t.Context(), &syncengine.BaselineMutation{
+		Action:   syncengine.ActionDownload,
+		Success:  true,
+		Path:     "/tracked.txt",
+		DriveID:  driveid.New("test-drive-id"),
+		ItemID:   "item-1",
+		ParentID: "root",
+		ItemType: syncengine.ItemTypeFile,
+	}))
 
 	walPath := dbPath + "-wal"
 	shmPath := dbPath + "-shm"

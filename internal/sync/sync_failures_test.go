@@ -18,7 +18,7 @@ func newTestSyncStoreForFailures(t *testing.T) (*SyncStore, time.Time) {
 
 	fixedTime := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
 	mgr := newTestStore(t)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.setNowFunc(func() time.Time { return fixedTime })
 
 	return mgr, fixedTime
 }
@@ -170,7 +170,7 @@ func TestRecordFailure_RepeatFailure(t *testing.T) {
 
 	// Advance time and record again.
 	laterTime := fixedTime.Add(5 * time.Minute)
-	mgr.SetNowFunc(func() time.Time { return laterTime })
+	mgr.setNowFunc(func() time.Time { return laterTime })
 
 	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "file.txt",
@@ -270,7 +270,7 @@ func TestListLocalIssues_Multiple(t *testing.T) {
 
 	// Insert 3 issues with different last_seen_at times.
 	for i, p := range []string{"a.txt", "b.txt", "c.txt"} {
-		mgr.SetNowFunc(func() time.Time { return fixedTime.Add(time.Duration(i) * time.Minute) })
+		mgr.setNowFunc(func() time.Time { return fixedTime.Add(time.Duration(i) * time.Minute) })
 		err := mgr.RecordFailure(ctx, &SyncFailureParams{
 			Path:      p,
 			DriveID:   driveid.ID{},
@@ -370,7 +370,7 @@ func TestClearResolvedLocalIssues(t *testing.T) {
 	}
 
 	// Manually set one to actionable (ClearActionableSyncFailures removes actionable rows).
-	_, err := mgr.DB().ExecContext(ctx,
+	_, err := mgr.rawDB().ExecContext(ctx,
 		`UPDATE sync_failures SET category = 'actionable' WHERE path = 'b.txt'`)
 	require.NoError(t, err)
 
@@ -494,7 +494,7 @@ func TestCommitMutation_DownloadSuccess_DoesNotClearSyncFailures(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert a remote_state row so the download outcome has something to update.
-	_, err = mgr.DB().ExecContext(ctx,
+	_, err = mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state
 			(item_id, path, parent_id, item_type)
 		VALUES (?, ?, ?, ?)`,
@@ -560,7 +560,7 @@ func TestCommitMutation_Success_DoesNotClearSyncFailures(t *testing.T) {
 			}, nil)
 			require.NoError(t, err)
 
-			_, err = mgr.DB().ExecContext(ctx,
+			_, err = mgr.rawDB().ExecContext(ctx,
 				`INSERT INTO remote_state
 						(item_id, path, parent_id, item_type)
 					VALUES (?, ?, ?, ?)`,
@@ -675,7 +675,7 @@ func TestRecordFailure_RepeatIncrementsCount(t *testing.T) {
 
 	// Advance time and record second failure.
 	laterTime := fixedTime.Add(5 * time.Minute)
-	mgr.SetNowFunc(func() time.Time { return laterTime })
+	mgr.setNowFunc(func() time.Time { return laterTime })
 
 	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "file.txt",
@@ -1083,11 +1083,11 @@ func TestRecordFailure_DownloadResolvesItemIDFromRemoteMirror(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
-	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
+	mgr.setNowFunc(func() time.Time { return time.Unix(1000, 0) })
 	ctx := context.Background()
 
 	// Insert a remote mirror row so RecordFailure can resolve item_id.
-	_, err := mgr.DB().ExecContext(ctx,
+	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		VALUES (?, ?, 'file')`,
 		"item1", "hello.txt",
@@ -1104,7 +1104,7 @@ func TestRecordFailure_DownloadResolvesItemIDFromRemoteMirror(t *testing.T) {
 	require.NoError(t, err)
 
 	// remote_state remains a pure mirror.
-	row := readRemoteStateRow(t, mgr.DB(), "item1")
+	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, "hello.txt", row.Path)
 
@@ -1119,11 +1119,11 @@ func TestRecordFailure_UploadPreservesRemoteMirrorRow(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
-	mgr.SetNowFunc(func() time.Time { return time.Unix(1000, 0) })
+	mgr.setNowFunc(func() time.Time { return time.Unix(1000, 0) })
 	ctx := context.Background()
 
 	// Insert a mirror row — uploads should not mutate remote truth.
-	_, err := mgr.DB().ExecContext(ctx,
+	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		VALUES (?, ?, 'file')`,
 		"item1", "hello.txt",
@@ -1139,7 +1139,7 @@ func TestRecordFailure_UploadPreservesRemoteMirrorRow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Remote mirror truth should remain unchanged.
-	row := readRemoteStateRow(t, mgr.DB(), "item1")
+	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, "hello.txt", row.Path)
 }
@@ -1164,7 +1164,7 @@ func TestRecordFailure_PreservesExistingValuesOnConflict(t *testing.T) {
 
 	// Second record without file_size and local_hash — should preserve originals.
 	laterTime := fixedTime.Add(5 * time.Minute)
-	mgr.SetNowFunc(func() time.Time { return laterTime })
+	mgr.setNowFunc(func() time.Time { return laterTime })
 
 	err = mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:      "file.txt",

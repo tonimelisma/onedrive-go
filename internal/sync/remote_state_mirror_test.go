@@ -95,13 +95,13 @@ func TestCommitObservation_NewItemCreatesMirrorRowAndToken(t *testing.T) {
 	}}, "delta-token-1", driveID)
 	require.NoError(t, err)
 
-	row := readRemoteStateRow(t, mgr.DB(), "item1")
+	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, "hello.txt", row.Path)
 	assert.Equal(t, "hash1", row.Hash)
 	assert.Equal(t, int64(100), row.Size)
 	assert.Equal(t, "etag1", row.ETag)
-	assert.Equal(t, "delta-token-1", readObservationCursor(t, mgr.DB(), testDriveID))
+	assert.Equal(t, "delta-token-1", readObservationCursor(t, mgr.rawDB(), testDriveID))
 }
 
 // Validates: R-2.2
@@ -129,8 +129,8 @@ func TestCommitObservation_DeleteRemovesMirrorRow(t *testing.T) {
 		IsDeleted: true,
 	}}, "delta-token-2", driveID))
 
-	assert.Nil(t, readRemoteStateRow(t, mgr.DB(), "item1"))
-	assert.Equal(t, "delta-token-2", readObservationCursor(t, mgr.DB(), testDriveID))
+	assert.Nil(t, readRemoteStateRow(t, mgr.rawDB(), "item1"))
+	assert.Equal(t, "delta-token-2", readObservationCursor(t, mgr.rawDB(), testDriveID))
 }
 
 // Validates: R-2.2
@@ -159,7 +159,7 @@ func TestCommitObservation_MoveUpdatesPreviousPath(t *testing.T) {
 		Hash:     "hash1",
 	}}, "delta-token-2", driveID))
 
-	row := readRemoteStateRow(t, mgr.DB(), "item1")
+	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, "new.txt", row.Path)
 	assert.Equal(t, "old.txt", row.PreviousPath)
@@ -182,6 +182,6 @@ func TestCommitObservation_IgnoresSymmetricJunkRows(t *testing.T) {
 		Hash:     "hash-junk",
 	}}, "delta-token-junk", driveID))
 
-	assert.Nil(t, readRemoteStateRow(t, mgr.DB(), "item-junk"))
-	assert.Equal(t, "delta-token-junk", readObservationCursor(t, mgr.DB(), testDriveID))
+	assert.Nil(t, readRemoteStateRow(t, mgr.rawDB(), "item-junk"))
+	assert.Equal(t, "delta-token-junk", readObservationCursor(t, mgr.rawDB(), testDriveID))
 }
