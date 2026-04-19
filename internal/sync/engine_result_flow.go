@@ -89,7 +89,7 @@ func (flow *engineFlow) routeReadyForClass(
 ) []*TrackedAction {
 	switch class {
 	case errclass.ClassInvalid:
-		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
+		flow.scopeController().cascadeFailAndComplete(ctx, watch, ready, r)
 	case errclass.ClassSuccess:
 		return flow.scopeController().admitReady(ctx, watch, ready)
 	case errclass.ClassShutdown:
@@ -97,7 +97,7 @@ func (flow *engineFlow) routeReadyForClass(
 	case errclass.ClassFatal:
 		flow.scopeController().completeSubtree(ready)
 	case errclass.ClassRetryableTransient, errclass.ClassBlockScopeingTransient, errclass.ClassActionable:
-		flow.scopeController().cascadeFailAndComplete(ctx, ready, r)
+		flow.scopeController().cascadeFailAndComplete(ctx, watch, ready, r)
 	}
 
 	return nil
@@ -127,7 +127,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 		return
 	}
 
-	flow.applyResultPersistence(ctx, decision, r)
+	flow.applyResultPersistence(ctx, watch, decision, r)
 
 	if decision.RunScopeDetection {
 		flow.scopeController().feedScopeDetection(ctx, watch, r)
@@ -450,13 +450,13 @@ func (flow *engineFlow) recordObservationIssue(
 
 func (flow *engineFlow) recordRetryWork(
 	ctx context.Context,
+	watch *watchRuntime,
 	decision *ResultDecision,
 	r *ActionCompletion,
 	delayFn func(int) time.Duration,
 ) {
 	scopeKey := decision.ScopeEvidence
-	blocked := !scopeKey.IsZero() &&
-		(decision.Class == errclass.ClassRetryableTransient || decision.Class == errclass.ClassBlockScopeingTransient)
+	blocked := flow.retryWorkShouldBeBlocked(watch, decision.Class, scopeKey)
 
 	row, recErr := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:       r.Path,
@@ -485,4 +485,22 @@ func (flow *engineFlow) recordRetryWork(
 		fields = append(fields, slog.Int("attempt_count", row.AttemptCount))
 	}
 	flow.engine.logger.Debug("retry_work recorded", fields...)
+}
+
+func (flow *engineFlow) retryWorkShouldBeBlocked(
+	watch *watchRuntime,
+	class errclass.Class,
+	scopeKey ScopeKey,
+) bool {
+	if scopeKey.IsZero() {
+		return false
+	}
+	if class == errclass.ClassBlockScopeingTransient {
+		return true
+	}
+	if class != errclass.ClassRetryableTransient {
+		return false
+	}
+
+	return flow.scopeController().isBlockScopeed(watch, scopeKey)
 }

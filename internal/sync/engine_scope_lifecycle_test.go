@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -64,6 +65,33 @@ func TestEngine_CascadeRecordAndComplete_CascadesToDependents(t *testing.T) {
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 2)
 	assert.ElementsMatch(t, []string{"dir", "dir/file.txt"}, []string{retryRows[0].Path, retryRows[1].Path})
+}
+
+// Validates: R-2.10.5
+func TestScopeController_RecordCascadeRetryWork_RetryableTransientScopeEvidenceStaysUnblockedUntilScopeActivates(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	controller := testEngineFlow(t, eng).scopeController()
+
+	controller.recordCascadeRetryWork(t.Context(), rt, &Action{
+		Type:    ActionUpload,
+		Path:    "child.txt",
+		DriveID: eng.driveID,
+	}, &ActionCompletion{
+		Path:       "parent.txt",
+		ActionType: ActionUpload,
+		HTTPStatus: http.StatusBadGateway,
+		ErrMsg:     "temporary outage",
+	})
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "child.txt", retryRows[0].Path)
+	assert.Equal(t, SKService(), retryRows[0].ScopeKey)
+	assert.False(t, retryRows[0].Blocked)
+	assert.NotZero(t, retryRows[0].NextRetryAt)
 }
 
 // Validates: R-2.10.5

@@ -788,6 +788,7 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 
 func (flow *engineFlow) applyResultPersistence(
 	ctx context.Context,
+	watch *watchRuntime,
 	decision *ResultDecision,
 	r *ActionCompletion,
 ) {
@@ -797,7 +798,7 @@ func (flow *engineFlow) applyResultPersistence(
 	case persistObservationIssue:
 		flow.recordObservationIssue(ctx, decision, r)
 	case persistRetryWork:
-		flow.recordRetryWork(ctx, decision, r, retry.ReconcilePolicy().Delay)
+		flow.recordRetryWork(ctx, watch, decision, r, retry.ReconcilePolicy().Delay)
 	default:
 		panic(fmt.Sprintf("unknown failure persistence mode %d", decision.Persistence))
 	}

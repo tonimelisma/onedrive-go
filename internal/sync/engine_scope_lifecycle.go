@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -897,6 +896,7 @@ func (controller *scopeController) cascadeRecordAndComplete(
 // not stranded. Used for worker failures (non-scope-related).
 func (controller *scopeController) cascadeFailAndComplete(
 	ctx context.Context,
+	watch *watchRuntime,
 	ready []*TrackedAction,
 	r *ActionCompletion,
 ) {
@@ -914,7 +914,7 @@ func (controller *scopeController) cascadeFailAndComplete(
 		}
 		seen[current.ID] = true
 
-		controller.recordCascadeRetryWork(ctx, &current.Action, r)
+		controller.recordCascadeRetryWork(ctx, watch, &current.Action, r)
 		next := flow.completeDepGraphAction(current.ID, "cascadeFailAndComplete")
 		queue = append(queue, next...)
 	}
@@ -995,6 +995,7 @@ func (controller *scopeController) rehomeBlockedRetryWork(
 // keep their own path and action identity.
 func (controller *scopeController) recordCascadeRetryWork(
 	ctx context.Context,
+	watch *watchRuntime,
 	action *Action,
 	parentResult *ActionCompletion,
 ) {
@@ -1002,9 +1003,7 @@ func (controller *scopeController) recordCascadeRetryWork(
 
 	parentDecision := classifyResult(parentResult)
 	scopeKey := parentDecision.ScopeEvidence
-	blocked := !scopeKey.IsZero() &&
-		(parentDecision.Class == errclass.ClassRetryableTransient ||
-			parentDecision.Class == errclass.ClassBlockScopeingTransient)
+	blocked := flow.retryWorkShouldBeBlocked(watch, parentDecision.Class, scopeKey)
 
 	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:       action.Path,
