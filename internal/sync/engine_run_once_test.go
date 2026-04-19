@@ -447,7 +447,7 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 		ContentIdentity: "stale-local-hash",
 		ObservedAt:      111,
 	}}))
-	_, err := eng.baseline.DB().ExecContext(ctx, `
+	_, err := eng.baseline.rawDB().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('stale-remote', 'stale-remote.txt', 'file', 'stale-remote-hash', 6, ?, 'etag-stale')`,
 		time.Now().UnixNano(),
@@ -1043,7 +1043,7 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 	ctx := t.Context()
 
 	now := time.Now().UnixNano()
-	_, err := eng.baseline.DB().ExecContext(ctx, `
+	_, err := eng.baseline.rawDB().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-dl', 'retry-download.txt', 'file', NULL, 18, ?)`,
 		now,
@@ -1125,7 +1125,7 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 	}, "")
 
 	now := time.Now().UnixNano()
-	_, err := eng.baseline.DB().ExecContext(ctx, `
+	_, err := eng.baseline.rawDB().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('item-edit', 'remote-edit.txt', 'file', 'remote-hash-new', 19, ?, 'etag-edit-new')`,
 		now,
@@ -1193,7 +1193,7 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 	require.NoError(t, os.Remove(filepath.Join(syncRoot, "retry-download.txt")))
 
 	now := time.Now().UnixNano()
-	_, err := eng.baseline.DB().ExecContext(ctx, `
+	_, err := eng.baseline.rawDB().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('item-dl', 'retry-download.txt', 'file', ?, 18, ?, 'etag-dl')`,
 		downloadHash, now,

@@ -236,8 +236,9 @@ func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoDriveStarts(t *testi
 		func(_ *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			return &testSyncDaemonOrchestrator{
 				err: &multisync.WatchStartupError{
-					Failures: []multisync.DriveReport{{
+					Results: []multisync.DriveStartupResult{{
 						CanonicalID: cid,
+						Status:      multisync.DriveStartupResetRequired,
 						Err: &syncengine.StateDBResetRequiredError{
 							Reason: syncengine.StateDBResetReasonIncompatibleSchema,
 						},
@@ -272,8 +273,9 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 		"/tmp/control.sock",
 		func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			require.NotNil(t, cfg.StartWarning)
-			cfg.StartWarning([]multisync.DriveReport{{
+			cfg.StartWarning([]multisync.DriveStartupResult{{
 				CanonicalID: cid,
+				Status:      multisync.DriveStartupResetRequired,
 				Err: &syncengine.StateDBResetRequiredError{
 					Reason: syncengine.StateDBResetReasonIncompatibleSchema,
 				},

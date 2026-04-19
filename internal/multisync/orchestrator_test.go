@@ -366,10 +366,12 @@ func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
 		return &mockEngine{report: &syncengine.Report{}}, nil
 	}
 
-	work := orch.prepareDriveWork(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	work, reports := orch.prepareRunOnceWork(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, work, 1)
+	require.Len(t, reports, 1)
+	require.Nil(t, reports[0])
 
-	_, err := work[0].fn(t.Context())
+	_, err := work[0].work.fn(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.True(t, captured.Drive.Websocket)
@@ -740,9 +742,9 @@ func TestOrchestrator_RunWatch_SkipsResetRequiredDriveWhenAnotherDriveStarts(t *
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
-	warnings := make(chan []DriveReport, 1)
-	cfg.StartWarning = func(failures []DriveReport) {
-		warnings <- failures
+	warnings := make(chan []DriveStartupResult, 1)
+	cfg.StartWarning = func(results []DriveStartupResult) {
+		warnings <- results
 	}
 
 	orch := NewOrchestrator(cfg)
@@ -777,9 +779,10 @@ func TestOrchestrator_RunWatch_SkipsResetRequiredDriveWhenAnotherDriveStarts(t *
 	}
 
 	select {
-	case failures := <-warnings:
-		require.Len(t, failures, 1)
-		assert.Equal(t, rd2.CanonicalID, failures[0].CanonicalID)
+	case results := <-warnings:
+		require.Len(t, results, 1)
+		assert.Equal(t, rd2.CanonicalID, results[0].CanonicalID)
+		assert.Equal(t, DriveStartupResetRequired, results[0].Status)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not emit startup warning")
 	}
@@ -810,8 +813,9 @@ func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoDriveStarts(t *testing
 
 	var startupErr *WatchStartupError
 	require.ErrorAs(t, err, &startupErr)
-	require.Len(t, startupErr.Failures, 1)
-	assert.Equal(t, rd.CanonicalID, startupErr.Failures[0].CanonicalID)
+	require.Len(t, startupErr.Results, 1)
+	assert.Equal(t, rd.CanonicalID, startupErr.Results[0].CanonicalID)
+	assert.Equal(t, DriveStartupResetRequired, startupErr.Results[0].Status)
 }
 
 func TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused(t *testing.T) {

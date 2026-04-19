@@ -307,7 +307,7 @@ func TestRecordFailure_MirrorsTransientAndHeldRowsIntoRetryState(t *testing.T) {
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 	now := time.Unix(100, 0)
-	store.SetNowFunc(func() time.Time { return now })
+	store.setNowFunc(func() time.Time { return now })
 
 	require.NoError(t, store.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "retry.txt",
@@ -386,7 +386,7 @@ func TestUpsertActionableFailureAndSetScopeRetryAtNow_UpdateRetryState(t *testin
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 	now := time.Unix(200, 0)
-	store.SetNowFunc(func() time.Time { return now })
+	store.setNowFunc(func() time.Time { return now })
 
 	require.NoError(t, store.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "actionable.txt",

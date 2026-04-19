@@ -12,7 +12,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -158,74 +157,6 @@ func confirmDriveStateResetIntent(
 	}
 
 	return nil
-}
-
-func syncStateResetCommand(canonicalID driveid.CanonicalID) string {
-	return fmt.Sprintf("onedrive-go drive reset-sync-state --drive %s", canonicalID.String())
-}
-
-func syncPauseDriveCommand(canonicalID driveid.CanonicalID) string {
-	return fmt.Sprintf("onedrive-go pause --drive %s", canonicalID.String())
-}
-
-func formatSyncStateResetRequiredMessage(canonicalID driveid.CanonicalID, err error) string {
-	var resetErr *syncengine.StateDBResetRequiredError
-	if !errors.As(err, &resetErr) {
-		return err.Error()
-	}
-
-	return fmt.Sprintf(
-		"%s. To continue, either pause or stop this drive first ('%s'), "+
-			"rerun sync with --drive selecting only other drives, or fix the DB with '%s'.",
-		resetErr.Error(),
-		syncPauseDriveCommand(canonicalID),
-		syncStateResetCommand(canonicalID),
-	)
-}
-
-func formatSyncStateResetRequiredError(canonicalID driveid.CanonicalID, err error) error {
-	message := formatSyncStateResetRequiredMessage(canonicalID, err)
-	if message == "" {
-		return err
-	}
-
-	return fmt.Errorf("%s", message)
-}
-
-func formatWatchStartupError(err error) error {
-	var startupErr *multisync.WatchStartupError
-	if !errors.As(err, &startupErr) {
-		return err
-	}
-	if len(startupErr.Failures) == 0 {
-		return err
-	}
-	if len(startupErr.Failures) == 1 {
-		failure := startupErr.Failures[0]
-		return formatSyncStateResetRequiredError(failure.CanonicalID, failure.Err)
-	}
-
-	parts := make([]string, 0, len(startupErr.Failures))
-	for i := range startupErr.Failures {
-		failure := startupErr.Failures[i]
-		parts = append(parts, formatSyncStateResetRequiredMessage(failure.CanonicalID, failure.Err))
-	}
-
-	return fmt.Errorf("watch startup failed: %s", strings.Join(parts, "; "))
-}
-
-func writeWatchStartWarnings(output io.Writer, failures []multisync.DriveReport) {
-	if len(failures) == 0 {
-		return
-	}
-
-	for i := range failures {
-		failure := failures[i]
-		writeWarningf(output, "warning: drive %s did not start: %s\n",
-			failure.CanonicalID.String(),
-			formatSyncStateResetRequiredMessage(failure.CanonicalID, failure.Err),
-		)
-	}
 }
 
 func stdinAsWriter(r io.Reader) io.Writer {

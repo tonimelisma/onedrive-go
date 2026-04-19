@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_snapshots.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_retry_state.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/visible_issues.go, internal/sync/issue_summary.go, internal/sync/scope_key_wire.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_retry_state.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/visible_issues.go, internal/sync/issue_summary.go, internal/sync/scope_key_wire.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
 Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [verified], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -148,17 +148,18 @@ Read-only store helpers are intentionally separate from writable paths.
 - `issue_summary.go` owns the shared grouped-summary model used by those
   projections
 - `store_retry_state.go` owns retry/trial reads such as ready blocked work
-- `store_read_snapshots.go` and `store_inspect.go` build status views
+- `store_inspect.go` owns the read-only status projection boundary
 
 CLI `status` and status-like flows should prefer these read-only helpers rather
 than opening a writable store.
 
 ## State-DB Diagnosis And Reset
 
-Two store-owned helpers isolate the remaining state-DB lifecycle policy:
+Two store-owned helpers isolate the current state-DB lifecycle policy:
 
-- `store_compatibility.go` opens an existing DB non-mutating, classifies unreadable
-  or unsupported existing stores, and returns typed reset-required errors
+- `store_compatibility.go` opens an existing DB non-mutating, classifies
+  unreadable or unsupported existing stores, and returns typed reset-required
+  errors
 - `store_reset.go` deletes one drive's DB file family and recreates a fresh
   canonical DB in place
 
@@ -167,8 +168,9 @@ destructive reset helper automatically. The explicit CLI reset command owns the
 delete-and-recreate action.
 
 The canonical schema carries a first-class store-generation marker in
-`store_metadata`. The store boundary accepts only the current schema plus the
-current generation marker; it does not keep row-by-row compatibility probes for
+`store_metadata`, which is the only owner of store-level compatibility
+metadata. The store boundary accepts only the current schema plus the current
+generation marker; it does not keep row-by-row compatibility probes for
 deleted persisted shapes.
 
 ## Baseline Cache

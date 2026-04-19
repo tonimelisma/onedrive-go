@@ -9,6 +9,9 @@ import (
 )
 
 const (
+	// currentSyncStoreGeneration is the compatibility contract for existing
+	// state DBs. store_metadata owns this store-level marker; startup accepts
+	// only the current generation and requires an explicit reset otherwise.
 	currentSyncStoreGeneration = 1
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata
 		(singleton_id, schema_generation)

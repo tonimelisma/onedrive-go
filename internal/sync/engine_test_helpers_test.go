@@ -1121,7 +1121,7 @@ func (t *manualSyncTicker) Stop() {
 func syncStorePathForTest(t *testing.T, ctx context.Context, eng *testEngine) string {
 	t.Helper()
 
-	rows, err := eng.baseline.DB().QueryContext(ctx, "PRAGMA database_list")
+	rows, err := eng.baseline.rawDB().QueryContext(ctx, "PRAGMA database_list")
 	require.NoError(t, err, "PRAGMA database_list")
 	defer rows.Close()
 
