@@ -367,9 +367,6 @@ func TestScopeController_NormalizeDiskScope_UsesCurrentDiskState(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, blocks, 1)
 		assert.Equal(t, SKDiskLocal(), blocks[0].Key)
-		assert.True(t, hasActivePreserveDeadline(&BlockScope{
-			PreserveUntil: eng.nowFn().Add(time.Minute),
-		}, eng.nowFn()))
 		assert.Equal(t, scopeStartupRevalidateDisk, scopeStartupPolicyFor(SKDiskLocal()))
 	})
 }

@@ -243,8 +243,8 @@ func (flow *engineFlow) processTrialDecision(
 		flow.recordError(decision, r)
 	case trialOutcomePreserve:
 		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
-		scopeCtrl.preserveScopeTrial(ctx, watch, trialScopeKey)
 		scopeCtrl.applyTrialPreserveEffects(ctx, watch, decision, r, bl)
+		scopeCtrl.rearmOrDiscardScope(ctx, watch, trialScopeKey)
 		flow.recordError(decision, r)
 	case trialOutcomeFatal:
 		flow.routeReadyForClass(ctx, watch, errclass.ClassFatal, ready, r)

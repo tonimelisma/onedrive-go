@@ -35,18 +35,12 @@ func validateBlockScope(block *BlockScope) error {
 		if !block.NextTrialAt.IsZero() {
 			return fmt.Errorf("sync: upserting block scope %s: timing_source none requires zero next_trial_at", block.Key.String())
 		}
-		if !block.PreserveUntil.IsZero() {
-			return fmt.Errorf("sync: upserting block scope %s: timing_source none requires zero preserve_until", block.Key.String())
-		}
 	case ScopeTimingBackoff, ScopeTimingServerRetryAfter:
 		if block.TrialInterval <= 0 {
 			return fmt.Errorf("sync: upserting block scope %s: timed scope requires positive trial interval", block.Key.String())
 		}
 		if block.NextTrialAt.IsZero() {
 			return fmt.Errorf("sync: upserting block scope %s: timed scope requires next_trial_at", block.Key.String())
-		}
-		if !block.PreserveUntil.IsZero() && block.PreserveUntil.Before(block.NextTrialAt) {
-			return fmt.Errorf("sync: upserting block scope %s: preserve_until must not be before next_trial_at", block.Key.String())
 		}
 	default:
 		return fmt.Errorf("sync: upserting block scope %s: invalid timing source %q", block.Key.String(), block.TimingSource)
@@ -68,22 +62,17 @@ func (m *SyncStore) UpsertBlockScope(ctx context.Context, block *BlockScope) err
 	if !block.NextTrialAt.IsZero() {
 		nextTrialAtNano = block.NextTrialAt.UnixNano()
 	}
-	preserveUntilNano := int64(0)
-	if !block.PreserveUntil.IsZero() {
-		preserveUntilNano = block.PreserveUntil.UnixNano()
-	}
 
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO block_scopes
-			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		block.Key.String(),
 		block.IssueType,
 		block.TimingSource,
 		block.BlockedAt.UnixNano(),
 		int64(block.TrialInterval),
 		nextTrialAtNano,
-		preserveUntilNano,
 		block.TrialCount,
 	)
 	if err != nil {
@@ -112,7 +101,7 @@ func (m *SyncStore) DeleteBlockScope(ctx context.Context, key ScopeKey) error {
 // (not nil) if no rows exist.
 func (m *SyncStore) ListBlockScopes(ctx context.Context) ([]*BlockScope, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count
+		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
 		FROM block_scopes`)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing block scopes: %w", err)

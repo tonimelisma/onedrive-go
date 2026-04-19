@@ -139,9 +139,8 @@ CREATE TABLE IF NOT EXISTS block_scopes (
     blocked_at     INTEGER NOT NULL,
     trial_interval INTEGER NOT NULL,
     next_trial_at  INTEGER NOT NULL,
-    preserve_until INTEGER NOT NULL DEFAULT 0,
     trial_count    INTEGER NOT NULL DEFAULT 0
-	);`
+		);`
 )
 
 type storeCompatibilityMetadata struct {
@@ -185,7 +184,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"first_seen_at", "last_seen_at", "file_size", "local_hash", "scope_key",
 		},
 		"block_scopes": {
-			"scope_key", "issue_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "preserve_until", "trial_count",
+			"scope_key", "issue_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "trial_count",
 		},
 	}
 }

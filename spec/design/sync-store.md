@@ -85,9 +85,8 @@ Supporting outcome mutations should stay separate by owner:
 - exact retry-work upsert/delete helpers
 - scope release/discard/extend helpers that mutate `block_scopes` and linked
   blocked `retry_work` in one transaction
-- retry-resolution helpers that delete exact `retry_work` and any matching
-  transient item issue row, then return retry-owned resolution metadata rather
-  than synthesizing a `sync_failures` row
+- retry-resolution helpers that delete exact `retry_work` and return the
+  resolved `retry_work` row for engine-owned cleanup decisions
 
 The store does not own a mixed failure table, failure-role transitions, or a
 store-owned competing status projection.

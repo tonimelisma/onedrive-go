@@ -119,8 +119,8 @@ func queryObservationIssueRowsDB(ctx context.Context, db *sql.DB) ([]Observation
 
 func queryBlockScopesDB(ctx context.Context, db *sql.DB) ([]*BlockScope, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count
-		FROM block_scopes`)
+		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
+			FROM block_scopes`)
 	if err != nil {
 		return nil, fmt.Errorf("query block scopes: %w", err)
 	}

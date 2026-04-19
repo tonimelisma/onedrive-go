@@ -539,13 +539,10 @@ func TestResolveRetryWork_ReturnsAndDeletesMatchingWork(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.NotNil(t, row)
-	assert.Equal(t, RetryWorkKey{
-		Path:       "docs/report.txt",
-		ActionType: ActionUpload,
-	}, row.Work)
+	assert.Equal(t, "docs/report.txt", row.Path)
+	assert.Equal(t, ActionUpload, row.ActionType)
 	assert.Equal(t, 1, row.AttemptCount)
 	assert.Equal(t, IssueServiceOutage, row.IssueType)
-	assert.True(t, row.HadIssueRow)
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
@@ -588,7 +585,7 @@ func TestResolveRetryWork_PreservesUnrelatedRetryWorkOnSamePath(t *testing.T) {
 	assert.Equal(t, "old.txt", rows[0].OldPath)
 }
 
-func TestResolveTransientRetryWork_DeletesRetryWorkWithoutIssueRow(t *testing.T) {
+func TestResolveRetryWork_DeletesRetryWorkWithoutIssueRow(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -601,7 +598,7 @@ func TestResolveTransientRetryWork_DeletesRetryWorkWithoutIssueRow(t *testing.T)
 	row.LastSeenAt = row.FirstSeenAt
 	require.NoError(t, store.UpsertRetryWork(ctx, &row))
 
-	resolved, found, err := store.ResolveTransientRetryWork(ctx, RetryWorkKey{
+	resolved, found, err := store.ResolveRetryWork(ctx, RetryWorkKey{
 		Path:       "docs/report.txt",
 		OldPath:    "old.txt",
 		ActionType: ActionRemoteMove,
@@ -609,14 +606,11 @@ func TestResolveTransientRetryWork_DeletesRetryWorkWithoutIssueRow(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.NotNil(t, resolved)
-	assert.Equal(t, RetryWorkKey{
-		Path:       "docs/report.txt",
-		OldPath:    "old.txt",
-		ActionType: ActionRemoteMove,
-	}, resolved.Work)
+	assert.Equal(t, "docs/report.txt", resolved.Path)
+	assert.Equal(t, "old.txt", resolved.OldPath)
+	assert.Equal(t, ActionRemoteMove, resolved.ActionType)
 	assert.Equal(t, 3, resolved.AttemptCount)
 	assert.Empty(t, resolved.IssueType)
-	assert.False(t, resolved.HadIssueRow)
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)

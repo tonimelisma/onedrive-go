@@ -77,16 +77,6 @@ func blockScopeValidationCases() []validateBlockScopeCase {
 			wantErr: "timing_source none requires zero next_trial_at",
 		},
 		{
-			name: "none timing requires zero preserve deadline",
-			block: &BlockScope{
-				Key:           SKService(),
-				BlockedAt:     now,
-				TimingSource:  ScopeTimingNone,
-				PreserveUntil: nextTrialAt,
-			},
-			wantErr: "timing_source none requires zero preserve_until",
-		},
-		{
 			name: "timed scope requires interval",
 			block: &BlockScope{
 				Key:          SKService(),
@@ -104,18 +94,6 @@ func blockScopeValidationCases() []validateBlockScopeCase {
 				TrialInterval: time.Second,
 			},
 			wantErr: "timed scope requires next_trial_at",
-		},
-		{
-			name: "preserve must not be before next trial",
-			block: &BlockScope{
-				Key:           SKService(),
-				BlockedAt:     now,
-				TimingSource:  ScopeTimingBackoff,
-				TrialInterval: time.Second,
-				NextTrialAt:   nextTrialAt,
-				PreserveUntil: now,
-			},
-			wantErr: "preserve_until must not be before next_trial_at",
 		},
 		{
 			name: "invalid timing source",

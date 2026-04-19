@@ -405,7 +405,7 @@ func TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState(t *testing.T
 		assert.False(t, isTestBlockScopeed(eng, scopeKey))
 	})
 
-	t.Run("disappeared_blocked_retry_work_preserves_scope", func(t *testing.T) {
+	t.Run("disappeared_blocked_retry_work_discards_empty_scope", func(t *testing.T) {
 		t.Parallel()
 
 		eng := newSingleOwnerEngine(t)
@@ -436,11 +436,7 @@ func TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState(t *testing.T
 		outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
 		assert.Empty(t, outbox)
 		assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
-		assert.True(t, isTestBlockScopeed(eng, scopeKey))
-
-		block, ok := getTestBlockScope(eng, scopeKey)
-		require.True(t, ok)
-		assert.WithinDuration(t, eng.nowFn().Add(10*time.Second), block.NextTrialAt, time.Second)
+		assert.False(t, isTestBlockScopeed(eng, scopeKey))
 	})
 }
 

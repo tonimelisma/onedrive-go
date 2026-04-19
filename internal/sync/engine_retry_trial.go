@@ -277,8 +277,8 @@ func (rt *watchRuntime) handleMissingTrialCandidate(
 			}
 		}
 
-		rt.scopeController().preserveScopeTrial(ctx, rt, key)
-		rt.engine.logger.Debug("runTrialDispatch: blocked retry work disappeared during refresh; preserving scope",
+		rt.scopeController().rearmOrDiscardScope(ctx, rt, key)
+		rt.engine.logger.Debug("runTrialDispatch: blocked retry work disappeared during refresh; rechecking scope state",
 			slog.String("scope_key", key.String()),
 		)
 		return nil
@@ -335,7 +335,7 @@ func (rt *watchRuntime) clearStaleTrialRetryWork(
 		)
 		return
 	} else if found {
-		rt.scopeController().preserveScopeTrial(ctx, rt, scopeKey)
+		rt.scopeController().rearmOrDiscardScope(ctx, rt, scopeKey)
 		return
 	}
 
