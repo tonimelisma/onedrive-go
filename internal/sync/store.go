@@ -20,7 +20,7 @@
 //   - store_inspect.go:            package-private read-only inspector
 //   - store_run_status.go:         one-shot run-status persistence
 //   - store_scope_admin.go:        scope release/discard mutation helpers
-//   - store_state_health.go:       startup diagnosis for unsupported existing DBs
+//   - store_compatibility.go:      startup diagnosis for unsupported existing DBs
 //   - store_reset.go:              explicit delete-and-recreate helper
 package sync
 

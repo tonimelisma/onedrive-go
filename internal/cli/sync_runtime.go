@@ -57,7 +57,7 @@ func runSyncDaemonWithFactory(
 	mode syncengine.Mode,
 	opts syncengine.WatchOptions,
 	logger *slog.Logger,
-	_ io.Writer,
+	statusWriter io.Writer,
 	controlSocketPath string,
 	orchestratorFactory syncDaemonOrchestratorFactory,
 ) (err error) {
@@ -108,8 +108,11 @@ func runSyncDaemonWithFactory(
 		Runtime:           runtime,
 		Logger:            logger,
 		ControlSocketPath: controlSocketPath,
-		DebugEventHook:    debugEventHook,
-		PerfParent:        perf.FromContext(ctx),
+		StartWarning: func(failures []multisync.DriveReport) {
+			writeWatchStartWarnings(statusWriter, failures)
+		},
+		DebugEventHook: debugEventHook,
+		PerfParent:     perf.FromContext(ctx),
 	})
 
 	if err := orch.RunWatch(ctx, mode, opts); err != nil {

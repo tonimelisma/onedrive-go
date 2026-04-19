@@ -801,86 +801,28 @@ func TestNewEngine_RequiresResetForIncompatibleSchemaStateDB(t *testing.T) {
 	assert.Equal(t, StateDBResetReasonIncompatibleSchema, resetErr.Reason)
 }
 
-// Validates: R-2.5.5, R-2.10.7, R-2.10.34
-func TestNewEngine_RequiresResetForUnsupportedLegacyPersistedState(t *testing.T) {
+// Validates: R-2.5.5, R-2.5.6
+func TestNewEngine_RequiresResetForUnsupportedStoreGeneration(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	store, err := NewSyncStore(t.Context(), dbPath, testLogger(t))
-	require.NoError(t, err)
-
-	ctx := t.Context()
-	_, err = store.db.ExecContext(ctx, `
-		INSERT INTO scope_blocks
-			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"throttle:account",
-		IssueRateLimited,
-		ScopeTimingServerRetryAfter,
-		time.Unix(10, 0).UnixNano(),
-		int64(time.Second),
-		time.Unix(11, 0).UnixNano(),
-		int64(0),
-		0,
-	)
-	require.NoError(t, err)
-	_, err = store.db.ExecContext(ctx, `
-		INSERT INTO sync_failures
-			(path, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, first_seen_at, last_seen_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"Shared/Docs/file.txt",
-		DirectionUpload,
-		ActionUpload,
-		FailureRoleBoundary,
-		CategoryActionable,
-		IssueRemoteWriteDenied,
-		"perm:remote:Shared/Docs",
-		1,
-		int64(0),
-		int64(0),
-	)
-	require.NoError(t, err)
-	_, err = store.db.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`)
-	require.NoError(t, err)
-	_, err = store.db.ExecContext(ctx, `
-		INSERT INTO sync_failures
-			(path, direction, action_type, failure_role, category, issue_type, scope_key, failure_count, next_retry_at, first_seen_at, last_seen_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"bad-timing.txt",
-		DirectionUpload,
-		ActionUpload,
-		FailureRoleBoundary,
-		CategoryActionable,
-		IssueInvalidFilename,
-		"perm:dir:bad",
-		1,
-		time.Unix(12, 0).UnixNano(),
-		int64(0),
-		int64(0),
-	)
-	require.NoError(t, err)
-	_, err = store.db.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`)
-	require.NoError(t, err)
-	require.NoError(t, store.Close(context.WithoutCancel(ctx)))
+	createUnsupportedGenerationStateDB(t, dbPath)
 
 	resetErr := requireResetRequiredEngineError(t, dbPath)
-	assert.Equal(t, StateDBResetReasonLegacyThrottleAccount, resetErr.Reason)
+	assert.Equal(t, StateDBResetReasonIncompatibleSchema, resetErr.Reason)
+}
 
-	reopened, err := NewSyncStore(ctx, dbPath, testLogger(t))
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, reopened.Close(context.WithoutCancel(ctx)))
-	}()
+func createUnsupportedGenerationStateDB(t *testing.T, dbPath string) {
+	t.Helper()
 
-	var scopeBlockCount int
-	err = reopened.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM scope_blocks`).Scan(&scopeBlockCount)
+	db, err := sql.Open("sqlite", "file:"+dbPath)
 	require.NoError(t, err)
-	assert.Positive(t, scopeBlockCount)
 
-	var failureCount int
-	err = reopened.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_failures`).Scan(&failureCount)
+	_, err = db.ExecContext(t.Context(), canonicalSchemaSQL)
 	require.NoError(t, err)
-	assert.Positive(t, failureCount)
+	_, err = db.ExecContext(t.Context(), `DROP TABLE store_metadata`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
 }
 
 func requireResetRequiredEngineError(t *testing.T, dbPath string) *StateDBResetRequiredError {

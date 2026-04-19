@@ -740,6 +740,10 @@ func TestOrchestrator_RunWatch_SkipsResetRequiredDriveWhenAnotherDriveStarts(t *
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	warnings := make(chan []DriveReport, 1)
+	cfg.StartWarning = func(failures []DriveReport) {
+		warnings <- failures
+	}
 
 	orch := NewOrchestrator(cfg)
 
@@ -772,6 +776,14 @@ func TestOrchestrator_RunWatch_SkipsResetRequiredDriveWhenAnotherDriveStarts(t *
 		require.Fail(t, "RunWatch did not start healthy drive in time")
 	}
 
+	select {
+	case failures := <-warnings:
+		require.Len(t, failures, 1)
+		assert.Equal(t, rd2.CanonicalID, failures[0].CanonicalID)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not emit startup warning")
+	}
+
 	cancel()
 
 	select {
@@ -800,6 +812,20 @@ func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoDriveStarts(t *testing
 	require.ErrorAs(t, err, &startupErr)
 	require.Len(t, startupErr.Failures, 1)
 	assert.Equal(t, rd.CanonicalID, startupErr.Failures[0].CanonicalID)
+}
+
+func TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused(t *testing.T) {
+	rd := testResolvedDrive(t, "personal:paused@example.com", "Paused")
+	rd.Paused = true
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+
+	orch := NewOrchestrator(cfg)
+
+	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "all selected drives are paused")
 }
 
 // Validates: R-2.9.1, R-2.9.2

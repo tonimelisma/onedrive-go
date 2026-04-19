@@ -98,8 +98,7 @@ func (i *storeInspector) Close() error {
 }
 
 // ReadDriveStatusSnapshot returns the per-drive status projection used by the
-// product-facing status command. Missing tables are tolerated so older or
-// partially initialized DBs still yield best-effort status information.
+// product-facing status command.
 func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context, history bool) (DriveStatusSnapshot, error) {
 	snapshot := DriveStatusSnapshot{}
 
@@ -113,21 +112,29 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context, history bo
 		&snapshot.RunStatus.LastSucceededCount,
 		&snapshot.RunStatus.LastFailedCount,
 		&snapshot.RunStatus.LastError,
-	); err != nil && !isMissingTableErr(err) && err != sql.ErrNoRows {
-		i.logger.Debug("read drive status run status snapshot", slog.String("error", err.Error()))
+	); err != nil && err != sql.ErrNoRows {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status run status: %w", err)
 	}
 
-	snapshot.BaselineEntryCount = i.countOrZero(ctx, "baseline entries", "SELECT COUNT(*) FROM baseline")
-	snapshot.RemoteDriftItems = i.countOrZero(
+	var err error
+	snapshot.BaselineEntryCount, err = i.readCount(ctx, "SELECT COUNT(*) FROM baseline")
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status baseline count: %w", err)
+	}
+	snapshot.RemoteDriftItems, err = i.readCount(
 		ctx,
-		"remote drift items",
 		sqlCountRemoteDriftItems,
 	)
-	snapshot.RetryingItems = i.countOrZero(
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status remote drift count: %w", err)
+	}
+	snapshot.RetryingItems, err = i.readCount(
 		ctx,
-		"retrying sync failures",
 		"SELECT COUNT(*) FROM sync_failures WHERE category = 'transient' AND failure_count >= 3",
 	)
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status retrying count: %w", err)
+	}
 
 	projection, err := i.readGroupedIssueProjection(ctx)
 	if err != nil {
@@ -263,9 +270,6 @@ func (i *storeInspector) listActionableFailures(ctx context.Context) ([]SyncFail
 		ORDER BY last_seen_at DESC`,
 	)
 	if err != nil {
-		if isMissingTableErr(err) {
-			return []SyncFailureRow{}, nil
-		}
 		return nil, fmt.Errorf("query actionable failures: %w", err)
 	}
 	defer rows.Close()
@@ -288,9 +292,6 @@ func (i *storeInspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncF
 		permRemoteScopeKeyLikePattern(),
 	)
 	if err != nil {
-		if isMissingTableErr(err) {
-			return []SyncFailureRow{}, nil
-		}
 		return nil, fmt.Errorf("query remote blocked failures: %w", err)
 	}
 	defer rows.Close()
@@ -298,12 +299,11 @@ func (i *storeInspector) listRemoteBlockedFailures(ctx context.Context) ([]SyncF
 	return scanSyncFailureRows(rows, configuredDriveID)
 }
 
-func (i *storeInspector) countOrZero(ctx context.Context, label, query string) int {
+func (i *storeInspector) readCount(ctx context.Context, query string) (int, error) {
 	var count int
 	if err := i.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
-		i.logger.Debug("read sync status count", slog.String("label", label), slog.String("error", err.Error()))
-		return 0
+		return 0, fmt.Errorf("scan count query: %w", err)
 	}
 
-	return count
+	return count, nil
 }

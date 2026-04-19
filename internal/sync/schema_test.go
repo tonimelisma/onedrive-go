@@ -27,6 +27,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"remote_state",
 		"run_status",
 		"scope_blocks",
+		"store_metadata",
 		"sync_failures",
 	}, tables)
 
@@ -78,6 +79,8 @@ func TestApplySchema_SeedsObservationStateRowForCurrentSchema(t *testing.T) {
 	})
 
 	_, err = db.ExecContext(t.Context(), canonicalSchemaSQL)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), sqlEnsureStoreMetadataRow, currentSyncStoreGeneration)
 	require.NoError(t, err)
 
 	require.NoError(t, applySchema(context.Background(), db))

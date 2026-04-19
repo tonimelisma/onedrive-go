@@ -107,10 +107,12 @@ snapshot for that drive; status does not mutate state and does not become a DB
 health control surface.
 
 `sync` and `sync --watch` never auto-delete an existing DB. When startup sees
-an unreadable, incompatible, or unsupported existing DB, the CLI renders exact
-`drive reset-sync-state --drive ...` guidance for that drive instead. One-shot
-exits non-zero after reporting any affected drives, while watch mode skips bad
-drives and continues healthy ones unless none can start.
+an unreadable, incompatible, or unsupported existing DB, the CLI renders the
+same guidance in one-shot and watch flows: pause that drive first, rerun with
+`--drive` selecting only other drives, or run `drive reset-sync-state --drive
+...`. One-shot exits non-zero after reporting any affected drives. Watch mode
+skips bad drives, warns immediately about each skipped drive, and continues
+healthy drives unless none can start.
 
 ## What The CLI No Longer Owns
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -247,4 +248,43 @@ func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoDriveStarts(t *testi
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "drive reset-sync-state --drive "+cid.String())
+}
+
+func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:watch@example.com")
+	syncDir := filepath.Join(t.TempDir(), "sync")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+	holder := loadSyncTestHolder(t, cfgPath)
+
+	status := &bytes.Buffer{}
+	err := runSyncDaemonWithFactory(
+		t.Context(),
+		holder,
+		nil,
+		syncengine.SyncBidirectional,
+		syncengine.WatchOptions{},
+		slog.New(slog.DiscardHandler),
+		status,
+		"/tmp/control.sock",
+		func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
+			require.NotNil(t, cfg.StartWarning)
+			cfg.StartWarning([]multisync.DriveReport{{
+				CanonicalID: cid,
+				Err: &syncengine.StateDBResetRequiredError{
+					Reason: syncengine.StateDBResetReasonIncompatibleSchema,
+				},
+			}})
+			return &testSyncDaemonOrchestrator{
+				err: nil,
+			}
+		},
+	)
+	require.NoError(t, err)
+	assert.Contains(t, status.String(), "pause --drive "+cid.String())
+	assert.Contains(t, status.String(), "drive reset-sync-state --drive "+cid.String())
+	assert.Contains(t, status.String(), "--drive selecting only other drives")
 }
