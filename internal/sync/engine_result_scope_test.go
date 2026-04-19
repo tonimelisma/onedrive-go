@@ -957,7 +957,7 @@ func TestProcessTrialResultV2_Failure_NoScopeDetection(t *testing.T) {
 }
 
 // Validates: R-2.10.5
-func TestProcessTrialResultV2_Preserve_RetryableHTTPStatusesKeepScopeTimingAndHeldCandidate(t *testing.T) {
+func TestProcessTrialResultV2_Rearm_RetryableHTTPStatusesKeepScopeTimingAndHeldCandidate(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1021,8 +1021,8 @@ func TestProcessTrialResultV2_Preserve_RetryableHTTPStatusesKeepScopeTimingAndHe
 			got, ok := getTestBlockScope(eng, SKService())
 			require.True(t, ok, "block scope should still exist")
 			assert.Equal(t, 30*time.Second, got.TrialInterval, "inconclusive trial must not back off the original scope")
-			assert.Equal(t, now.Add(30*time.Second), got.NextTrialAt, "preserve should re-arm the original interval")
-			assert.Equal(t, 2, got.TrialCount, "preserve should not increment trial backoff history")
+			assert.Equal(t, now.Add(30*time.Second), got.NextTrialAt, "rearm should keep the original interval")
+			assert.Equal(t, 2, got.TrialCount, "rearm should not increment trial backoff history")
 
 			failures, err := eng.baseline.ListSyncFailures(ctx)
 			require.NoError(t, err)
@@ -1087,7 +1087,7 @@ func TestProcessTrialResultV2_Fatal401DoesNotExtendScope(t *testing.T) {
 }
 
 // Validates: R-2.10.5, R-2.10.14
-func TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure(t *testing.T) {
+func TestProcessTrialResultV2_Rearm_LocalPermissionRecordsCandidateFailureAndDiscardsEmptyScope(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -1131,18 +1131,15 @@ func TestProcessTrialResultV2_Preserve_LocalPermissionRecordsCandidateFailure(t 
 		ErrMsg:        "permission denied",
 	})
 
-	got, ok := getTestBlockScope(eng, SKService())
-	require.True(t, ok)
-	assert.Equal(t, 45*time.Second, got.TrialInterval)
-	assert.Equal(t, now.Add(45*time.Second), got.NextTrialAt)
-	assert.Equal(t, 1, got.TrialCount)
+	_, ok := getTestBlockScope(eng, SKService())
+	assert.False(t, ok, "scope should be discarded once the held retry work is cleared")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	require.Len(t, failures, 1)
 	assert.Equal(t, FailureRoleItem, failures[0].Role)
 	assert.Equal(t, IssueLocalPermissionDenied, failures[0].IssueType)
-	assert.True(t, failures[0].ScopeKey.IsZero(), "file-level local permission preserve should not rewrite the original scope")
+	assert.True(t, failures[0].ScopeKey.IsZero(), "file-level local permission retry reclassification should not rewrite the original scope")
 }
 
 // Validates: R-2.10.5, R-2.10.14, R-2.14.1
@@ -1187,13 +1184,13 @@ func TestEvaluateTrialOutcome_OnlyMatchingScopeEvidenceExtends(t *testing.T) {
 			name:     "throttle_does_not_extend_service_error",
 			scopeKey: testThrottleScope(),
 			result:   ActionCompletion{HTTPStatus: http.StatusServiceUnavailable, Err: graph.ErrServerError},
-			want:     trialOutcomePreserve,
+			want:     trialOutcomeRearm,
 		},
 		{
 			name:     "service_does_not_extend_throttle_error",
 			scopeKey: SKService(),
 			result:   ActionCompletion{HTTPStatus: http.StatusTooManyRequests, DriveID: testThrottleDriveID(), Err: graph.ErrThrottled},
-			want:     trialOutcomePreserve,
+			want:     trialOutcomeRearm,
 		},
 	}
 

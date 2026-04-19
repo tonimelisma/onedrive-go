@@ -120,7 +120,9 @@ table.
 - `blocked_at`, `trial_interval`, `next_trial_at`, `trial_count`
 
 `block_scopes` is timing and lifecycle authority only. Concrete blocked work
-belongs in `retry_work`.
+belongs in `retry_work`. A `block_scopes` row is valid only while blocked
+`retry_work` exists for the same `scope_key`; empty scopes are discarded
+immediately.
 
 The target persisted scope families are:
 

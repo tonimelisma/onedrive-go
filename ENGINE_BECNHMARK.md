@@ -289,7 +289,8 @@ ready work.
 - due unblocked rows in `retry_work` feed ordinary retry dispatch
 - due `block_scopes` feed trial dispatch
 - one shared blocker owns one shared trial timeline
-- trial outcomes may release, preserve, or extend the owning scope
+- trial outcomes may release, re-arm, or extend the owning scope; if no blocked
+  `retry_work` remains after refresh or cleanup, the scope is discarded
 
 The dependency graph is not a retry system. Workers do not sleep for durable
 retry backoff. They return one completion, and the engine persists the outcome.

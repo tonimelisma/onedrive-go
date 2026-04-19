@@ -323,34 +323,55 @@ func TestResolveTransientRetryWork_ReturnsAndDeletesRow(t *testing.T) {
 	row, found, err := mgr.ResolveTransientRetryWork(ctx, RetryWorkKey{
 		Path:       "docs/report.txt",
 		ActionType: ActionUpload,
-	}, driveID)
+	})
 	require.NoError(t, err)
 	require.True(t, found)
 	require.NotNil(t, row)
-	assert.Equal(t, "docs/report.txt", row.Path)
-	assert.Equal(t, driveID, row.DriveID)
-	assert.Equal(t, CategoryTransient, row.Category)
-	assert.Equal(t, FailureRoleItem, row.Role)
+	assert.Equal(t, RetryWorkKey{
+		Path:       "docs/report.txt",
+		ActionType: ActionUpload,
+	}, row.Work)
 	assert.Equal(t, IssueServiceOutage, row.IssueType)
-	assert.Equal(t, ActionUpload, row.ActionType)
-	assert.Equal(t, 2, row.FailureCount)
+	assert.Equal(t, 2, row.AttemptCount)
+	assert.True(t, row.HadIssueRow)
 
 	rows, err := mgr.ListSyncFailures(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, rows, "resolved row should be deleted")
 }
 
-func TestResolveTransientRetryWork_MissingRow(t *testing.T) {
+func TestResolveTransientRetryWork_MissingRetryRowDeletesStaleIssueRow(t *testing.T) {
 	mgr, _ := newTestSyncStoreForFailures(t)
 	ctx := context.Background()
+	driveID := driveid.New("drive-1")
+
+	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
+		Path:       "missing.txt",
+		DriveID:    driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		Category:   CategoryTransient,
+		IssueType:  IssueServiceOutage,
+		ErrMsg:     "server error",
+	}, func(_ int) time.Duration {
+		return time.Minute
+	}))
+	require.NoError(t, mgr.DeleteRetryWorkByWork(ctx, RetryWorkKey{
+		Path:       "missing.txt",
+		ActionType: ActionUpload,
+	}))
 
 	row, found, err := mgr.ResolveTransientRetryWork(ctx, RetryWorkKey{
 		Path:       "missing.txt",
 		ActionType: ActionUpload,
-	}, driveid.New("drive-1"))
+	})
 	require.NoError(t, err)
 	assert.False(t, found)
 	assert.Nil(t, row)
+
+	rows, err := mgr.ListSyncFailures(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
 }
 
 func TestClearResolvedLocalIssues(t *testing.T) {

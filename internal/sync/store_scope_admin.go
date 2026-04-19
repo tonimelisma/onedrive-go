@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+const sqlPruneBlockScopesWithoutBlockedWork = `DELETE FROM block_scopes
+	WHERE NOT EXISTS (
+		SELECT 1 FROM retry_work
+		WHERE retry_work.blocked = 1
+			AND retry_work.scope_key = block_scopes.scope_key
+	)`
+
 // ReleaseScope atomically applies the semantic "this scope condition has
 // resolved; blocked work may run again" transition.
 //
@@ -104,6 +111,14 @@ func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err er
 
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing discard-scope for %s: %w", wire, err)
+	}
+
+	return nil
+}
+
+func (m *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) error {
+	if _, err := m.db.ExecContext(ctx, sqlPruneBlockScopesWithoutBlockedWork); err != nil {
+		return fmt.Errorf("sync: pruning block scopes without blocked work: %w", err)
 	}
 
 	return nil

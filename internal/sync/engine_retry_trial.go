@@ -151,9 +151,9 @@ func planContainsWorkKey(plan *ActionPlan, key RetryWorkKey) bool {
 // runTrialDispatch handles due scope trials without re-observing through a
 // bespoke API path. Trial candidates are reconstructed from current durable
 // state, planned through the normal engine path, and marked explicitly as
-// trials in the dependency graph. Lack of a usable candidate is not proof that
-// the scope recovered; preserve semantics keep the scope active until an
-// actual release signal arrives.
+// trials in the dependency graph. Lack of blocked retry work after refresh is
+// treated as proof that the persisted scope is empty, so the runtime discards
+// the scope instead of keeping dead timing metadata around.
 func (rt *watchRuntime) runTrialDispatch(
 	ctx context.Context,
 	bl *Baseline,
@@ -277,8 +277,13 @@ func (rt *watchRuntime) handleMissingTrialCandidate(
 			}
 		}
 
-		rt.scopeController().preserveScopeTrial(ctx, rt, key)
-		rt.engine.logger.Debug("runTrialDispatch: blocked retry work disappeared during refresh; preserving scope",
+		if err := rt.scopeController().discardScope(ctx, rt, key); err != nil {
+			rt.engine.logger.Warn("runTrialDispatch: failed to discard emptied scope after disappeared blocked retry work",
+				slog.String("scope_key", key.String()),
+				slog.String("error", err.Error()),
+			)
+		}
+		rt.engine.logger.Debug("runTrialDispatch: blocked retry work disappeared during refresh; discarding empty scope",
 			slog.String("scope_key", key.String()),
 		)
 		return nil
@@ -335,7 +340,7 @@ func (rt *watchRuntime) clearStaleTrialRetryWork(
 		)
 		return
 	} else if found {
-		rt.scopeController().preserveScopeTrial(ctx, rt, scopeKey)
+		rt.scopeController().rearmScopeTrial(ctx, rt, scopeKey)
 		return
 	}
 
@@ -743,9 +748,9 @@ func (flow *engineFlow) buildRemoteDeleteRetryCandidate(
 	return retryCandidate{}
 }
 
-// clearFailureOnSuccess removes the sync_failures row for a successfully
-// completed action. The engine owns failure lifecycle — store_baseline's
-// CommitMutation handles only baseline/remote_state updates.
+// clearFailureOnSuccess resolves exact retry_work for a successfully completed
+// action and removes any matching transient item issue row. The engine owns
+// retry/issue lifecycle — CommitMutation handles only baseline publication.
 func (flow *engineFlow) clearFailureOnSuccess(ctx context.Context, r *ActionCompletion) {
 	driveID := r.DriveID
 	if driveID.String() == "" {
@@ -771,20 +776,23 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 	driveID driveid.ID,
 	resolutionSource string,
 ) error {
-	row, found, err := flow.engine.baseline.ResolveTransientRetryWork(ctx, work, driveID)
+	resolved, found, err := flow.engine.baseline.ResolveTransientRetryWork(ctx, work)
 	if err != nil {
 		return fmt.Errorf("resolve retry work %s: %w", work.Path, err)
 	}
-	if !found || row == nil {
+	if !found || resolved == nil {
+		return nil
+	}
+	if !resolved.HadIssueRow {
 		return nil
 	}
 
 	flow.engine.logger.Info("transient failure resolved",
-		slog.String("path", row.Path),
-		slog.String("drive_id", row.DriveID.String()),
-		slog.String("issue_type", row.IssueType),
-		slog.String("action_type", row.ActionType.String()),
-		slog.Int("attempt_count", row.FailureCount),
+		slog.String("path", resolved.Work.Path),
+		slog.String("drive_id", driveID.String()),
+		slog.String("issue_type", resolved.IssueType),
+		slog.String("action_type", resolved.Work.ActionType.String()),
+		slog.Int("attempt_count", resolved.AttemptCount),
 		slog.String("resolution_source", resolutionSource),
 	)
 

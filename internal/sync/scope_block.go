@@ -13,7 +13,6 @@ type BlockScope struct {
 	BlockedAt     time.Time     // when the block was created
 	TrialInterval time.Duration // current interval between trial actions (grows with backoff)
 	NextTrialAt   time.Time     // when to dispatch the next trial
-	PreserveUntil time.Time     // bounded restart-safe preserve deadline; zero when not preserved
 	TrialCount    int           // consecutive failed trials (for backoff)
 }
 

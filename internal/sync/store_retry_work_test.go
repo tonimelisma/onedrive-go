@@ -258,7 +258,7 @@ func (nilRetryWorkScanner) Scan(...any) error {
 }
 
 // Validates: R-2.10.33
-func TestPruneBlockScopesWithoutBlockedRetries(t *testing.T) {
+func TestPruneBlockScopesWithoutBlockedWork(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -291,7 +291,7 @@ func TestPruneBlockScopesWithoutBlockedRetries(t *testing.T) {
 		LastSeenAt:   2,
 	}))
 
-	require.NoError(t, store.PruneBlockScopesWithoutBlockedRetries(ctx))
+	require.NoError(t, store.PruneBlockScopesWithoutBlockedWork(ctx))
 
 	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -528,12 +528,17 @@ func TestResolveTransientRetryWork_ReturnsAndDeletesMatchingWork(t *testing.T) {
 	row, found, err := store.ResolveTransientRetryWork(ctx, RetryWorkKey{
 		Path:       "docs/report.txt",
 		ActionType: ActionUpload,
-	}, driveID)
+	})
 	require.NoError(t, err)
 	require.True(t, found)
 	require.NotNil(t, row)
-	assert.Equal(t, "docs/report.txt", row.Path)
-	assert.Equal(t, ActionUpload, row.ActionType)
+	assert.Equal(t, RetryWorkKey{
+		Path:       "docs/report.txt",
+		ActionType: ActionUpload,
+	}, row.Work)
+	assert.Equal(t, 1, row.AttemptCount)
+	assert.Equal(t, IssueServiceOutage, row.IssueType)
+	assert.True(t, row.HadIssueRow)
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
@@ -571,7 +576,7 @@ func TestResolveTransientRetryWork_PreservesUnrelatedRetryWorkOnSamePath(t *test
 	_, found, err := store.ResolveTransientRetryWork(ctx, RetryWorkKey{
 		Path:       "docs/report.txt",
 		ActionType: ActionUpload,
-	}, driveID)
+	})
 	require.NoError(t, err)
 	require.True(t, found)
 
@@ -580,4 +585,39 @@ func TestResolveTransientRetryWork_PreservesUnrelatedRetryWorkOnSamePath(t *test
 	require.Len(t, rows, 1)
 	assert.Equal(t, ActionRemoteMove, rows[0].ActionType)
 	assert.Equal(t, "old.txt", rows[0].OldPath)
+}
+
+func TestResolveTransientRetryWork_DeletesRetryWorkWithoutIssueRow(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	row := retryWorkIdentityForWork("docs/report.txt", "old.txt", ActionRemoteMove)
+	row.AttemptCount = 3
+	row.NextRetryAt = time.Now().Add(time.Minute).UnixNano()
+	row.FirstSeenAt = time.Now().UnixNano()
+	row.LastSeenAt = row.FirstSeenAt
+	require.NoError(t, store.UpsertRetryWork(ctx, &row))
+
+	resolved, found, err := store.ResolveTransientRetryWork(ctx, RetryWorkKey{
+		Path:       "docs/report.txt",
+		OldPath:    "old.txt",
+		ActionType: ActionRemoteMove,
+	})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, resolved)
+	assert.Equal(t, RetryWorkKey{
+		Path:       "docs/report.txt",
+		OldPath:    "old.txt",
+		ActionType: ActionRemoteMove,
+	}, resolved.Work)
+	assert.Equal(t, 3, resolved.AttemptCount)
+	assert.Empty(t, resolved.IssueType)
+	assert.False(t, resolved.HadIssueRow)
+
+	rows, err := store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
 }
