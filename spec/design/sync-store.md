@@ -38,7 +38,7 @@ policy, or live watch-mode coordination. Those belong to the engine.
 | --- | --- |
 | The store remains the sole durable authority for baseline, local/remote snapshots, retry state, scope-block, observation-state, and run-status rows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestWriteSyncRunStatus_RoundTrip`, `TestSyncStore_ReleaseScope`, `TestSyncStore_DiscardScope` |
 | Read-only snapshot helpers back status without reopening deleted conflict/delete-approval workflows. | `TestReadDriveStatusSnapshot`, `TestSyncStore_ListVisibleIssueGroups`, `TestQuerySyncState_UsesReadOnlyProjectionHelper` |
-| Schema validation stays store-owned, while startup receives typed reset-required errors for unreadable, incompatible, or unsupported existing DBs and the explicit reset command owns deletion/recreate. | `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestNewEngine_RequiresResetForNonSQLiteStateDB`, `TestNewEngine_RequiresResetForIncompatibleSchemaStateDB`, `TestNewEngine_RequiresResetForUnsupportedStoreGeneration`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
+| Schema validation stays store-owned, while startup receives typed incompatible-store errors for unreadable, incompatible, or unsupported existing DBs and the explicit reset command owns deletion/recreate. | `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestNewEngine_RequiresResetForNonSQLiteStateDB`, `TestNewEngine_RequiresResetForIncompatibleSchemaStateDB`, `TestNewEngine_RequiresResetForUnsupportedStoreGeneration`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 
 ## Write Responsibilities
 
@@ -158,7 +158,7 @@ than opening a writable store.
 Two store-owned helpers isolate the current state-DB lifecycle policy:
 
 - `store_compatibility.go` opens an existing DB non-mutating, classifies
-  unreadable or unsupported existing stores, and returns typed reset-required
+  unreadable or unsupported existing stores, and returns typed incompatible-store
   errors
 - `store_reset.go` deletes one drive's DB file family and recreates a fresh
   canonical DB in place
@@ -191,7 +191,7 @@ from SQLite instead of creating a second authority.
 
 There is no migration history in the current architecture. New DBs bootstrap
 directly into the simplified schema. Non-canonical stores are rejected loudly
-at the store boundary. Startup may then surface a typed reset-required result
+at the store boundary. Startup may then surface a typed incompatible-store result
 for an unusable or unsupported existing DB, while the explicit reset command
 owns destructive delete-and-recreate behavior. Read-only inspectors remain
 non-mutating.

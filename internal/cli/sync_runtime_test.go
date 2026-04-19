@@ -93,7 +93,15 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 	cc := &CLIContext{}
 	holder := config.NewHolder(&config.Config{}, "")
 	drive := &config.ResolvedDrive{CanonicalID: driveid.MustCanonicalID("personal:sync-once@example.com")}
-	expectedReports := []*multisync.DriveReport{{CanonicalID: drive.CanonicalID}}
+	expectedResult := multisync.RunOnceResult{
+		Startup: multisync.StartupSelectionSummary{
+			Results: []multisync.DriveStartupResult{{
+				CanonicalID: drive.CanonicalID,
+				Status:      multisync.DriveStartupRunnable,
+			}},
+		},
+		Reports: []*multisync.DriveReport{{CanonicalID: drive.CanonicalID}},
+	}
 	cc.syncRunOnceRunner = func(
 		ctx context.Context,
 		gotHolder *config.Holder,
@@ -102,7 +110,7 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		opts syncengine.RunOptions,
 		logger *slog.Logger,
 		controlSocketPath string,
-	) []*multisync.DriveReport {
+	) multisync.RunOnceResult {
 		assert.Equal(t, t.Context(), ctx)
 		assert.Same(t, holder, gotHolder)
 		assert.Equal(t, []*config.ResolvedDrive{drive}, drives)
@@ -110,10 +118,10 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		assert.Equal(t, syncengine.RunOptions{DryRun: true}, opts)
 		assert.NotNil(t, logger)
 		assert.Equal(t, "/tmp/control.sock", controlSocketPath)
-		return expectedReports
+		return expectedResult
 	}
 
-	reports := runSyncOnce(
+	result := runSyncOnce(
 		t.Context(),
 		cc,
 		holder,
@@ -123,7 +131,7 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		slog.New(slog.DiscardHandler),
 		"/tmp/control.sock",
 	)
-	assert.Equal(t, expectedReports, reports)
+	assert.Equal(t, expectedResult, result)
 }
 
 // Validates: R-2.1, R-2.10.3
@@ -236,13 +244,15 @@ func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoDriveStarts(t *testi
 		func(_ *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			return &testSyncDaemonOrchestrator{
 				err: &multisync.WatchStartupError{
-					Results: []multisync.DriveStartupResult{{
-						CanonicalID: cid,
-						Status:      multisync.DriveStartupResetRequired,
-						Err: &syncengine.StateDBResetRequiredError{
-							Reason: syncengine.StateDBResetReasonIncompatibleSchema,
-						},
-					}},
+					Summary: multisync.StartupSelectionSummary{
+						Results: []multisync.DriveStartupResult{{
+							CanonicalID: cid,
+							Status:      multisync.DriveStartupIncompatibleStore,
+							Err: &syncengine.StateStoreIncompatibleError{
+								Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
+							},
+						}},
+					},
 				},
 			}
 		},
@@ -273,13 +283,17 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 		"/tmp/control.sock",
 		func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			require.NotNil(t, cfg.StartWarning)
-			cfg.StartWarning([]multisync.DriveStartupResult{{
-				CanonicalID: cid,
-				Status:      multisync.DriveStartupResetRequired,
-				Err: &syncengine.StateDBResetRequiredError{
-					Reason: syncengine.StateDBResetReasonIncompatibleSchema,
+			cfg.StartWarning(multisync.StartupWarning{
+				Summary: multisync.StartupSelectionSummary{
+					Results: []multisync.DriveStartupResult{{
+						CanonicalID: cid,
+						Status:      multisync.DriveStartupIncompatibleStore,
+						Err: &syncengine.StateStoreIncompatibleError{
+							Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
+						},
+					}},
 				},
-			}})
+			})
 			return &testSyncDaemonOrchestrator{
 				err: nil,
 			}

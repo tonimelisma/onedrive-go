@@ -21,7 +21,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 	ctx := t.Context()
 
 	// Record at t=5000.
-	mgr.setNowFunc(func() time.Time { return time.Unix(5000, 0) })
+	setStoreTestNow(mgr, time.Unix(5000, 0))
 
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "file1.txt",
@@ -32,7 +32,7 @@ func TestClockSkew_BackwardJump_SyncFailureTimestamp(t *testing.T) {
 	}, nil))
 
 	// Jump backward to t=1000.
-	mgr.setNowFunc(func() time.Time { return time.Unix(1000, 0) })
+	setStoreTestNow(mgr, time.Unix(1000, 0))
 
 	// Should still succeed.
 	require.NoError(t, mgr.RecordFailure(ctx, &SyncFailureParams{

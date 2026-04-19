@@ -775,8 +775,8 @@ func TestNewEngine_RequiresResetForNonSQLiteStateDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o600))
 
-	resetErr := requireResetRequiredEngineError(t, dbPath)
-	assert.Equal(t, StateDBResetReasonOpenFailed, resetErr.Reason)
+	resetErr := requireIncompatibleStoreEngineError(t, dbPath)
+	assert.Equal(t, StateStoreIncompatibleReasonOpenFailed, resetErr.Reason)
 }
 
 // Validates: R-2.5.5, R-2.5.6
@@ -797,8 +797,8 @@ func TestNewEngine_RequiresResetForIncompatibleSchemaStateDB(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	resetErr := requireResetRequiredEngineError(t, dbPath)
-	assert.Equal(t, StateDBResetReasonIncompatibleSchema, resetErr.Reason)
+	resetErr := requireIncompatibleStoreEngineError(t, dbPath)
+	assert.Equal(t, StateStoreIncompatibleReasonIncompatibleSchema, resetErr.Reason)
 }
 
 // Validates: R-2.5.5, R-2.5.6
@@ -808,8 +808,8 @@ func TestNewEngine_RequiresResetForUnsupportedStoreGeneration(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	createUnsupportedGenerationStateDB(t, dbPath)
 
-	resetErr := requireResetRequiredEngineError(t, dbPath)
-	assert.Equal(t, StateDBResetReasonIncompatibleSchema, resetErr.Reason)
+	resetErr := requireIncompatibleStoreEngineError(t, dbPath)
+	assert.Equal(t, StateStoreIncompatibleReasonIncompatibleSchema, resetErr.Reason)
 }
 
 func createUnsupportedGenerationStateDB(t *testing.T, dbPath string) {
@@ -825,7 +825,7 @@ func createUnsupportedGenerationStateDB(t *testing.T, dbPath string) {
 	require.NoError(t, db.Close())
 }
 
-func requireResetRequiredEngineError(t *testing.T, dbPath string) *StateDBResetRequiredError {
+func requireIncompatibleStoreEngineError(t *testing.T, dbPath string) *StateStoreIncompatibleError {
 	t.Helper()
 
 	eng, err := newEngine(t.Context(), &engineInputs{
@@ -841,7 +841,7 @@ func requireResetRequiredEngineError(t *testing.T, dbPath string) *StateDBResetR
 	require.Error(t, err)
 	require.Nil(t, eng)
 
-	var resetErr *StateDBResetRequiredError
+	var resetErr *StateStoreIncompatibleError
 	require.ErrorAs(t, err, &resetErr)
 
 	return resetErr

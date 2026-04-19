@@ -20,12 +20,30 @@ func syncPauseDriveCommand(canonicalID driveid.CanonicalID) string {
 }
 
 func formatStartupResultMessage(result *multisync.DriveStartupResult) string {
-	return formatSyncStateResetRequiredMessage(result.CanonicalID, result.Err)
+	if result == nil {
+		return ""
+	}
+
+	switch result.Status {
+	case multisync.DriveStartupRunnable:
+		return ""
+	case multisync.DriveStartupPaused:
+		return "drive is paused"
+	case multisync.DriveStartupIncompatibleStore:
+		return formatStateStoreIncompatibleMessage(result.CanonicalID, result.Err)
+	case multisync.DriveStartupFatal:
+		if result.Err == nil {
+			return ""
+		}
+		return result.Err.Error()
+	}
+
+	return ""
 }
 
-func formatSyncStateResetRequiredMessage(canonicalID driveid.CanonicalID, err error) string {
-	var resetErr *syncengine.StateDBResetRequiredError
-	if !errors.As(err, &resetErr) {
+func formatStateStoreIncompatibleMessage(canonicalID driveid.CanonicalID, err error) string {
+	var incompatibleErr *syncengine.StateStoreIncompatibleError
+	if !errors.As(err, &incompatibleErr) {
 		if err == nil {
 			return ""
 		}
@@ -35,14 +53,14 @@ func formatSyncStateResetRequiredMessage(canonicalID driveid.CanonicalID, err er
 	return fmt.Sprintf(
 		"%s. To continue, either pause or stop this drive first ('%s'), "+
 			"rerun sync with --drive selecting only other drives, or fix the DB with '%s'.",
-		resetErr.Error(),
+		incompatibleErr.Error(),
 		syncPauseDriveCommand(canonicalID),
 		syncStateResetCommand(canonicalID),
 	)
 }
 
-func formatSyncStateResetRequiredError(canonicalID driveid.CanonicalID, err error) error {
-	message := formatSyncStateResetRequiredMessage(canonicalID, err)
+func formatStateStoreIncompatibleError(canonicalID driveid.CanonicalID, err error) error {
+	message := formatStateStoreIncompatibleMessage(canonicalID, err)
 	if message == "" {
 		return err
 	}
@@ -55,22 +73,28 @@ func formatWatchStartupError(err error) error {
 	if !errors.As(err, &startupErr) {
 		return err
 	}
-	if len(startupErr.Results) == 0 {
+	if startupErr.Summary.SelectedCount() == 0 {
 		return err
 	}
-	if len(startupErr.Results) == 1 {
-		return fmt.Errorf("%s", formatStartupResultMessage(&startupErr.Results[0]))
+	if startupErr.Summary.AllPaused() {
+		return fmt.Errorf("all selected drives are paused — run 'onedrive-go resume' to unpause")
 	}
 
-	parts := make([]string, 0, len(startupErr.Results))
-	for i := range startupErr.Results {
-		parts = append(parts, formatStartupResultMessage(&startupErr.Results[i]))
+	failures := startupErr.Summary.SkippedResults()
+	if len(failures) == 1 {
+		return fmt.Errorf("%s", formatStartupResultMessage(&failures[0]))
+	}
+
+	parts := make([]string, 0, len(failures))
+	for i := range failures {
+		parts = append(parts, formatStartupResultMessage(&failures[i]))
 	}
 
 	return fmt.Errorf("watch startup failed: %s", strings.Join(parts, "; "))
 }
 
-func writeWatchStartWarnings(output io.Writer, results []multisync.DriveStartupResult) {
+func writeWatchStartWarnings(output io.Writer, warning multisync.StartupWarning) {
+	results := warning.Summary.SkippedResults()
 	if len(results) == 0 {
 		return
 	}
