@@ -85,15 +85,15 @@ func visibleIssueCountForTest(t *testing.T, store *SyncStore, ctx context.Contex
 	return summary.VisibleTotal()
 }
 
-func readyRetryStateForTest(
+func readyRetryWorkForTest(
 	t *testing.T,
 	store *SyncStore,
 	ctx context.Context,
 	now time.Time,
-) []RetryStateRow {
+) []RetryWorkRow {
 	t.Helper()
 
-	rows, err := store.ListRetryStateReady(ctx, now)
+	rows, err := store.ListRetryWorkReady(ctx, now)
 	require.NoError(t, err)
 
 	return rows

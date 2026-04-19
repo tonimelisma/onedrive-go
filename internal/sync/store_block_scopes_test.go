@@ -12,16 +12,16 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// UpsertScopeBlock
+// UpsertBlockScope
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.8
-func TestSyncStore_UpsertScopeBlock(t *testing.T) {
+func TestSyncStore_UpsertBlockScope(t *testing.T) {
 	t.Parallel()
 	mgr := newTestStore(t)
 	ctx := context.Background()
 
-	block := &ScopeBlock{
+	block := &BlockScope{
 		Key:           SKThrottleDrive(driveid.New("0000000000000001")),
 		IssueType:     IssueRateLimited,
 		TimingSource:  ScopeTimingServerRetryAfter,
@@ -32,11 +32,11 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 		TrialCount:    0,
 	}
 
-	err := mgr.UpsertScopeBlock(ctx, block)
+	err := mgr.UpsertBlockScope(ctx, block)
 	require.NoError(t, err)
 
 	// Verify by listing.
-	blocks, err := mgr.ListScopeBlocks(ctx)
+	blocks, err := mgr.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), blocks[0].Key)
@@ -46,10 +46,10 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 	// Upsert with updated values — should replace.
 	block.TrialCount = 3
 	block.TrialInterval = 20 * time.Second
-	err = mgr.UpsertScopeBlock(ctx, block)
+	err = mgr.UpsertBlockScope(ctx, block)
 	require.NoError(t, err)
 
-	blocks, err = mgr.ListScopeBlocks(ctx)
+	blocks, err = mgr.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1, "upsert should not create duplicate rows")
 	assert.Equal(t, 3, blocks[0].TrialCount, "upsert should update trial count")
@@ -58,16 +58,16 @@ func TestSyncStore_UpsertScopeBlock(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DeleteScopeBlock
+// DeleteBlockScope
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.8
-func TestSyncStore_DeleteScopeBlock(t *testing.T) {
+func TestSyncStore_DeleteBlockScope(t *testing.T) {
 	t.Parallel()
 	mgr := newTestStore(t)
 	ctx := context.Background()
 
-	block := &ScopeBlock{
+	block := &BlockScope{
 		Key:           SKService(),
 		IssueType:     IssueServiceOutage,
 		TimingSource:  ScopeTimingBackoff,
@@ -77,35 +77,35 @@ func TestSyncStore_DeleteScopeBlock(t *testing.T) {
 		TrialCount:    1,
 	}
 
-	require.NoError(t, mgr.UpsertScopeBlock(ctx, block))
+	require.NoError(t, mgr.UpsertBlockScope(ctx, block))
 
 	// Delete it.
-	err := mgr.DeleteScopeBlock(ctx, SKService())
+	err := mgr.DeleteBlockScope(ctx, SKService())
 	require.NoError(t, err)
 
 	// Verify it's gone.
-	blocks, err := mgr.ListScopeBlocks(ctx)
+	blocks, err := mgr.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, blocks)
 
 	// Delete non-existent — should not error (DELETE WHERE is no-op).
-	err = mgr.DeleteScopeBlock(ctx, SKQuotaOwn())
+	err = mgr.DeleteBlockScope(ctx, SKQuotaOwn())
 	require.NoError(t, err)
 }
 
 // ---------------------------------------------------------------------------
-// ListScopeBlocks
+// ListBlockScopes
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.8
-func TestSyncStore_ListScopeBlocks(t *testing.T) {
+func TestSyncStore_ListBlockScopes(t *testing.T) {
 	t.Parallel()
 	mgr := newTestStore(t)
 	ctx := context.Background()
 
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	blocks := []*ScopeBlock{
+	blocks := []*BlockScope{
 		{
 			Key:           SKThrottleDrive(driveid.New("0000000000000001")),
 			IssueType:     IssueRateLimited,
@@ -137,15 +137,15 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 	}
 
 	for _, b := range blocks {
-		require.NoError(t, mgr.UpsertScopeBlock(ctx, b))
+		require.NoError(t, mgr.UpsertBlockScope(ctx, b))
 	}
 
-	got, err := mgr.ListScopeBlocks(ctx)
+	got, err := mgr.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 3)
 
 	// Build a map for easier assertion (order is not guaranteed).
-	byKey := make(map[ScopeKey]*ScopeBlock)
+	byKey := make(map[ScopeKey]*BlockScope)
 	for _, b := range got {
 		byKey[b.Key] = b
 	}
@@ -168,19 +168,19 @@ func TestSyncStore_ListScopeBlocks(t *testing.T) {
 }
 
 // Validates: R-2.10.8
-func TestSyncStore_ListScopeBlocks_Empty(t *testing.T) {
+func TestSyncStore_ListBlockScopes_Empty(t *testing.T) {
 	t.Parallel()
 	mgr := newTestStore(t)
 	ctx := context.Background()
 
-	got, err := mgr.ListScopeBlocks(ctx)
+	got, err := mgr.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	assert.NotNil(t, got, "empty result should be non-nil slice")
 	assert.Empty(t, got)
 }
 
 // Validates: R-2.10.8
-func TestSyncStore_ListScopeBlocks_SkipsUnknownWireKeys(t *testing.T) {
+func TestSyncStore_ListBlockScopes_SkipsUnknownWireKeys(t *testing.T) {
 	t.Parallel()
 	mgr := newTestStore(t)
 	ctx := context.Background()
@@ -188,7 +188,7 @@ func TestSyncStore_ListScopeBlocks_SkipsUnknownWireKeys(t *testing.T) {
 
 	_, err := mgr.db.ExecContext(
 		ctx,
-		`INSERT INTO scope_blocks
+		`INSERT INTO block_scopes
 			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, preserve_until, trial_count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		"auth:account",
@@ -202,7 +202,7 @@ func TestSyncStore_ListScopeBlocks_SkipsUnknownWireKeys(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.UpsertScopeBlock(ctx, &ScopeBlock{
+	require.NoError(t, mgr.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
 		IssueType:     IssueServiceOutage,
 		TimingSource:  ScopeTimingBackoff,
@@ -211,7 +211,7 @@ func TestSyncStore_ListScopeBlocks_SkipsUnknownWireKeys(t *testing.T) {
 		NextTrialAt:   now.Add(5 * time.Second),
 	}))
 
-	got, err := mgr.ListScopeBlocks(ctx)
+	got, err := mgr.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, SKService(), got[0].Key)
@@ -222,7 +222,7 @@ func TestSyncStore_ListScopeBlocks_SkipsUnknownWireKeys(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.33, R-2.10.34
-func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
+func TestSyncStore_BlockScope_Roundtrip(t *testing.T) {
 	t.Parallel()
 	mgr := newTestStore(t)
 	ctx := context.Background()
@@ -231,7 +231,7 @@ func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
 	// - Timestamps with nanosecond precision
 	// - Duration in nanoseconds
 	// - Parameterized scope key (perm:local-write)
-	original := &ScopeBlock{
+	original := &BlockScope{
 		Key:           SKPermRemote("Shared/TeamDocs"),
 		IssueType:     IssueSharedFolderBlocked,
 		TimingSource:  ScopeTimingBackoff,
@@ -242,9 +242,9 @@ func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
 		TrialCount:    42,
 	}
 
-	require.NoError(t, mgr.UpsertScopeBlock(ctx, original))
+	require.NoError(t, mgr.UpsertBlockScope(ctx, original))
 
-	got, err := mgr.ListScopeBlocks(ctx)
+	got, err := mgr.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 
@@ -259,12 +259,12 @@ func TestSyncStore_ScopeBlock_Roundtrip(t *testing.T) {
 }
 
 // Validates: R-2.10.8
-func TestSyncStore_ScopeBlock_Roundtrip_ZeroNextTrialAt(t *testing.T) {
+func TestSyncStore_BlockScope_Roundtrip_ZeroNextTrialAt(t *testing.T) {
 	t.Parallel()
 	mgr := newTestStore(t)
 	ctx := context.Background()
 
-	original := &ScopeBlock{
+	original := &BlockScope{
 		Key:           SKPermRemoteWrite("Shared/TeamDocs"),
 		IssueType:     IssueRemoteWriteDenied,
 		TimingSource:  ScopeTimingNone,
@@ -274,9 +274,9 @@ func TestSyncStore_ScopeBlock_Roundtrip_ZeroNextTrialAt(t *testing.T) {
 		TrialCount:    0,
 	}
 
-	require.NoError(t, mgr.UpsertScopeBlock(ctx, original))
+	require.NoError(t, mgr.UpsertBlockScope(ctx, original))
 
-	got, err := mgr.ListScopeBlocks(ctx)
+	got, err := mgr.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.True(t, got[0].NextTrialAt.IsZero(), "zero trial timestamps must round-trip as a true zero time")

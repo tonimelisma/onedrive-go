@@ -102,7 +102,7 @@ func TestNewSyncStore_AppliesSchema(t *testing.T) {
 	var count int
 
 	err := mgr.rawDB().QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('baseline', 'remote_state', 'sync_failures', 'scope_blocks')",
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('baseline', 'remote_state', 'sync_failures', 'block_scopes')",
 	).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 4, count, "canonical schema should create all core tables")
@@ -1516,7 +1516,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	// Verify all expected tables exist by querying sqlite_master.
 	expectedTables := []string{
 		"baseline", "local_state", "observation_state",
-		"retry_state", "run_status", "remote_state", "sync_failures",
+		"retry_work", "run_status", "remote_state", "sync_failures",
 	}
 
 	for _, table := range expectedTables {

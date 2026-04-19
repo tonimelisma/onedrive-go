@@ -373,7 +373,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	recorder := attachDebugEventRecorder(eng)
 	rt := testWatchRuntime(t, eng)
 
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
 		IssueType:     IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
@@ -406,12 +406,12 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 		return event.Type == engineDebugEventTrialTimerArmed
 	}, "trial timer re-armed after trial failure")
 
-	block, ok := getTestScopeBlock(eng, SKService())
+	block, ok := getTestBlockScope(eng, SKService())
 	require.True(t, ok, "service scope should remain blocked after trial failure")
 	assert.Equal(t, 60*time.Millisecond, block.TrialInterval,
 		"trial failure should only extend the active scope interval")
 
-	assert.True(t, isTestScopeBlocked(eng, SKService()),
+	assert.True(t, isTestBlockScopeed(eng, SKService()),
 		"trial failure must not clear the blocked scope via the normal result path")
 }
 
@@ -439,7 +439,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		Size:     42,
 	}}, "", driveID))
 
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:           testThrottleScope(),
 		IssueType:     IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
@@ -478,8 +478,8 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventScopeReleased && event.ScopeKey == testThrottleScope()
 	}, "trial success released blocked scope")
-	assert.False(t, isTestScopeBlocked(eng, testThrottleScope()),
-		"trial success should clear the scope block")
+	assert.False(t, isTestBlockScopeed(eng, testThrottleScope()),
+		"trial success should clear the block scope")
 
 	retried := readReadyAction(t, rt.dispatchCh)
 	require.Equal(t, blockedPath, retried.Action.Path,
@@ -529,7 +529,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 		ScopeKey:  scopeKey,
 		ItemID:    "private-item",
 	}, nil))
-	setTestScopeBlock(t, eng, &ScopeBlock{
+	setTestBlockScope(t, eng, &BlockScope{
 		Key:       scopeKey,
 		IssueType: IssueLocalPermissionDenied,
 		BlockedAt: eng.nowFunc(),
@@ -538,10 +538,10 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 	decisions := applyLocalPermissionRecheck(t, eng, ctx)
 	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
 
-	assert.False(t, isTestScopeBlocked(eng, scopeKey),
-		"local permission recheck should clear the active scope block")
+	assert.False(t, isTestBlockScopeed(eng, scopeKey),
+		"local permission recheck should clear the active block scope")
 
-	rows := readyRetryStateForTest(t, eng.baseline, ctx, eng.nowFunc())
+	rows := readyRetryWorkForTest(t, eng.baseline, ctx, eng.nowFunc())
 	require.Len(t, rows, 1)
 	assert.Equal(t, "Private/doc.txt", rows[0].Path)
 
@@ -552,7 +552,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesHeldFailuresImmediately(t *testi
 }
 
 // Validates: R-2.10.2, R-2.10.10
-func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDeletingRetryState(t *testing.T) {
+func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDeletingRetryWork(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -570,12 +570,12 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 		Error:      "permission denied",
 	}}))
 
-	retryRow := retryStateIdentityForWork("docs/file.txt", "", ActionUpload)
+	retryRow := retryWorkIdentityForWork("docs/file.txt", "", ActionUpload)
 	retryRow.AttemptCount = 3
 	retryRow.NextRetryAt = eng.nowFn().Add(time.Minute).UnixNano()
 	retryRow.FirstSeenAt = eng.nowFn().UnixNano()
 	retryRow.LastSeenAt = eng.nowFn().UnixNano()
-	require.NoError(t, eng.baseline.UpsertRetryState(ctx, &retryRow))
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &retryRow))
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -587,7 +587,7 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 	require.NoError(t, err)
 	assert.Empty(t, failures)
 
-	rows, err := eng.baseline.ListRetryState(ctx)
+	rows, err := eng.baseline.ListRetryWork(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "docs/file.txt", rows[0].Path)
@@ -595,7 +595,7 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 }
 
 // Validates: R-2.10.5
-func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
+func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	t.Parallel()
 
 	results, _, cancel, eng := startDrainLoop(t)
@@ -639,15 +639,15 @@ func TestPhase0_ScopeBlockFailureDoesNotReadmitDependentEarly(t *testing.T) {
 
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventScopeActivated && event.ScopeKey == testThrottleScope()
-	}, "scope block activated from action completion")
+	}, "block scope activated from action completion")
 
 	select {
 	case ta := <-rt.dispatchCh:
 		require.Failf(t, "dependent dispatched early", "unexpected path %s", ta.Action.Path)
 	default:
 	}
-	assert.True(t, isTestScopeBlocked(eng, testThrottleScope()),
-		"scope block should be activated from the action completion")
+	assert.True(t, isTestBlockScopeed(eng, testThrottleScope()),
+		"block scope should be activated from the action completion")
 
 	failures, err := eng.baseline.ListSyncFailures(ctx)
 	require.NoError(t, err)

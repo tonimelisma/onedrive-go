@@ -904,7 +904,7 @@ func (tm *TransferManager) sessionUploadToItem(
 // No-op when diskAvailableFunc is nil or minFreeSpace is 0.
 //
 // Two-tier check:
-//   - Available < minFreeSpace → ErrDiskFull (scope block in sync engine)
+//   - Available < minFreeSpace → ErrDiskFull (block scope in sync engine)
 //   - Available ≥ minFreeSpace but < fileSize + minFreeSpace → ErrFileTooLargeForSpace (per-file skip)
 //
 // Fails open on statfs errors: a transient statfs failure should not block

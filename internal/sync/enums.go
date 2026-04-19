@@ -70,7 +70,7 @@ const (
 	FailureRoleBoundary FailureRole = strFailureBound
 )
 
-// ScopeTimingSource identifies how a scope block's trial timing was chosen.
+// ScopeTimingSource identifies how a block scope's trial timing was chosen.
 // none = no trials, backoff = locally computed, server_retry_after = Graph
 // supplied Retry-After and must survive restart until trial time.
 type ScopeTimingSource string

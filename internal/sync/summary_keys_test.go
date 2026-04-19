@@ -21,13 +21,13 @@ func TestSummaryKeyForPersistedFailure_RepresentativeMappings(t *testing.T) {
 }
 
 // Validates: R-2.10.45, R-6.8.16
-func TestSummaryKeyForScopeBlock_RepresentativeMappings(t *testing.T) {
+func TestSummaryKeyForBlockScope_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, SummaryServiceOutage,
-		SummaryKeyForScopeBlock(IssueServiceOutage, SKService()))
+		SummaryKeyForBlockScope(IssueServiceOutage, SKService()))
 	assert.Equal(t, SummaryRateLimited,
-		SummaryKeyForScopeBlock("", SKThrottleDrive(driveid.New("0000000000000001"))))
+		SummaryKeyForBlockScope("", SKThrottleDrive(driveid.New("0000000000000001"))))
 }
 
 // Validates: R-6.8.16

@@ -3,7 +3,7 @@
 //
 // ScopeState maintains sliding windows for scope escalation. The engine
 // calls UpdateScope after each action completion; when a threshold is crossed,
-// it returns a ScopeUpdateResult and the engine creates a ScopeBlock.
+// it returns a ScopeUpdateResult and the engine creates a BlockScope.
 //
 // Detection thresholds (failure-redesign.md §7.3.1):
 //   - throttle:target:* (429) — immediate, single response
@@ -13,8 +13,8 @@
 // Trial interval computation is centralized in computeTrialInterval()
 // (engine.go), not here. See R-2.10.14.
 //
-// Type definitions (ScopeKey, ScopeKeyKind, ScopeBlock, ScopeUpdateResult,
-// ScopeBlockStore) live in the sync package and share the same ownership
+// Type definitions (ScopeKey, ScopeKeyKind, BlockScope, ScopeUpdateResult,
+// BlockScopeStore) live in the sync package and share the same ownership
 // boundary as the engine and store code that use them.
 package sync
 
@@ -27,13 +27,13 @@ import (
 // Scope detection thresholds.
 const (
 	// quotaWindowThreshold is the number of unique paths that must fail with
-	// 507 within quotaWindowDuration to trigger a quota scope block.
+	// 507 within quotaWindowDuration to trigger a quota block scope.
 	quotaWindowThreshold = 3
 	quotaWindowDuration  = 10 * time.Second
 
 	// serviceWindowThreshold is the number of unique paths that must fail
 	// with 5xx within serviceWindowDuration to
-	// trigger a service scope block.
+	// trigger a service block scope.
 	serviceWindowThreshold = 5
 	serviceWindowDuration  = 30 * time.Second
 )
@@ -66,7 +66,7 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 }
 
 // UpdateScope feeds an action completion into scope detection. Returns a
-// ScopeUpdateResult indicating whether a new scope block should be created.
+// ScopeUpdateResult indicating whether a new block scope should be created.
 //
 // Per R-2.10.3 and failure-redesign.md §7.3.1:
 //   - 429 → immediate target-drive throttle block (server signal)

@@ -318,8 +318,8 @@ shims. Old stores that do not match the target architecture should require
 The target architecture requires these cleanup rules:
 
 - no `sync_failures`
-- no `retry_state`
-- no `scope_blocks`
+- no `retry_work`
+- no `block_scopes`
 - no store-owned competing status projection model
 - no ghost vocabulary such as failure-role `item` / `held` / `boundary`
 - no tests whose purpose is only to prove old names are gone

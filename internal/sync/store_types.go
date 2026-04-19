@@ -103,8 +103,8 @@ type LocalStateRow struct {
 	ObservedAt      int64
 }
 
-// RetryStateRow represents a row from the retry_state table.
-type RetryStateRow struct {
+// RetryWorkRow represents a row from the retry_work table.
+type RetryWorkRow struct {
 	WorkKey      string
 	Path         string
 	OldPath      string
@@ -137,7 +137,7 @@ type PendingRetryGroup struct {
 }
 
 // RetryWorkKey identifies semantic work that may be retried across replans.
-// It intentionally stays smaller than a runtime action because retry_state
+// It intentionally stays smaller than a runtime action because retry_work
 // persists only delayed obligations, not the executable action set.
 type RetryWorkKey struct {
 	Path       string

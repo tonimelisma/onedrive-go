@@ -52,25 +52,25 @@ func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 
 // clearResolvedPermissionScopes checks whether persisted permission scope
 // authorities still exist and releases any runtime scope whose backing
-// scope_blocks / blocked retry_state rows disappeared externally.
+// block_scopes / blocked retry_work rows disappeared externally.
 func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
-	scopeKeys := rt.scopeController().scopeBlockKeys(rt)
+	scopeKeys := rt.scopeController().blockScopeKeys(rt)
 	if len(scopeKeys) == 0 {
 		return
 	}
 
-	blocks, err := rt.engine.baseline.ListScopeBlocks(ctx)
+	blocks, err := rt.engine.baseline.ListBlockScopes(ctx)
 	if err != nil {
-		rt.engine.logger.Warn("failed to check persisted scope blocks",
+		rt.engine.logger.Warn("failed to check persisted block scopes",
 			slog.String("error", err.Error()),
 		)
 
 		return
 	}
 
-	blockedRetries, err := rt.engine.baseline.ListBlockedRetryState(ctx)
+	blockedRetries, err := rt.engine.baseline.ListBlockedRetryWork(ctx)
 	if err != nil {
-		rt.engine.logger.Warn("failed to check blocked retry_state rows",
+		rt.engine.logger.Warn("failed to check blocked retry_work rows",
 			slog.String("error", err.Error()),
 		)
 
@@ -99,7 +99,7 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 				continue
 			}
 
-			rt.engine.logger.Info("permission scope block cleared by user",
+			rt.engine.logger.Info("permission block scope cleared by user",
 				slog.String("scope", key.String()),
 			)
 		}
