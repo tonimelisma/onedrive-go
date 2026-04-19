@@ -46,30 +46,35 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 		BaselineEntryCount: 11,
 		RemoteDriftItems:   2,
 		RetryingItems:      3,
-		Conditions: []syncengine.ConditionSnapshot{
+		ObservationIssues: []syncengine.ObservationIssueRow{
 			{
-				SummaryKey:       syncengine.SummaryInvalidFilename,
-				PrimaryIssueType: syncengine.IssueInvalidFilename,
-				ScopeLabel:       "",
-				Paths:            []string{"/z.txt", "/y.txt"},
-				Count:            2,
+				Path:      "/z.txt",
+				IssueType: syncengine.IssueInvalidFilename,
 			},
 			{
-				SummaryKey:       syncengine.SummaryQuotaExceeded,
-				PrimaryIssueType: syncengine.IssueQuotaExceeded,
-				ScopeKey:         syncengine.SKQuotaOwn(),
-				ScopeLabel:       "Drive A",
-				Paths:            []string{"quota/a", "quota/b"},
-				Count:            4,
+				Path:      "/y.txt",
+				IssueType: syncengine.IssueInvalidFilename,
+			},
+		},
+		BlockScopes: []*syncengine.BlockScope{
+			{
+				Key:       syncengine.SKPermRemoteWrite("Shared/A"),
+				IssueType: syncengine.IssueRemoteWriteDenied,
 			},
 			{
-				SummaryKey:       syncengine.SummaryQuotaExceeded,
-				PrimaryIssueType: syncengine.IssueQuotaExceeded,
-				ScopeKey:         syncengine.SKQuotaOwn(),
-				ScopeLabel:       "Drive B",
-				Paths:            []string{"quota/c"},
-				Count:            4,
+				Key:       syncengine.SKPermRemoteWrite("Shared/B"),
+				IssueType: syncengine.IssueRemoteWriteDenied,
 			},
+		},
+		BlockedRetryWork: []syncengine.RetryWorkRow{
+			{Path: "Shared/A/d.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/A"), Blocked: true},
+			{Path: "Shared/A/c.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/A"), Blocked: true},
+			{Path: "Shared/A/b.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/A"), Blocked: true},
+			{Path: "Shared/A/a.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/A"), Blocked: true},
+			{Path: "Shared/B/d.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/B"), Blocked: true},
+			{Path: "Shared/B/c.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/B"), Blocked: true},
+			{Path: "Shared/B/b.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/B"), Blocked: true},
+			{Path: "Shared/B/a.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/B"), Blocked: true},
 		},
 	}
 
@@ -85,17 +90,17 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 	assert.Equal(t, 1, info.ExamplesLimit)
 	assert.False(t, info.Verbose)
 
-	assert.Equal(t, "QUOTA EXCEEDED", info.Conditions[0].Title)
-	assert.Equal(t, "Drive A", info.Conditions[0].Scope)
-	assert.Equal(t, statusScopeDrive, info.Conditions[0].ScopeKind)
-	assert.Equal(t, []string{"quota/a"}, info.Conditions[0].Paths)
+	assert.Equal(t, "SHARED FOLDER WRITES BLOCKED", info.Conditions[0].Title)
+	assert.Equal(t, "Shared/A", info.Conditions[0].Scope)
+	assert.Equal(t, statusScopeDirectory, info.Conditions[0].ScopeKind)
+	assert.Equal(t, []string{"Shared/A/a.txt"}, info.Conditions[0].Paths)
 
-	assert.Equal(t, "QUOTA EXCEEDED", info.Conditions[1].Title)
-	assert.Equal(t, "Drive B", info.Conditions[1].Scope)
-	assert.Equal(t, []string{"quota/c"}, info.Conditions[1].Paths)
+	assert.Equal(t, "SHARED FOLDER WRITES BLOCKED", info.Conditions[1].Title)
+	assert.Equal(t, "Shared/B", info.Conditions[1].Scope)
+	assert.Equal(t, []string{"Shared/B/a.txt"}, info.Conditions[1].Paths)
 
 	assert.Equal(t, "INVALID FILENAME", info.Conditions[2].Title)
-	assert.Equal(t, []string{"/z.txt"}, info.Conditions[2].Paths)
+	assert.Equal(t, []string{"/y.txt"}, info.Conditions[2].Paths)
 }
 
 func TestBuildSyncStateInfo_NilSnapshotUsesDefaults(t *testing.T) {
@@ -152,6 +157,42 @@ func TestSortStatusConditions_OrdersByCountThenTitleThenScope(t *testing.T) {
 		{Title: "A", Count: 2, Scope: "z"},
 		{Title: "B", Count: 1, Scope: "z"},
 	}, groups)
+}
+
+func TestGroupStatusConditions_MergesScopeFamiliesAndDedupesPaths(t *testing.T) {
+	t.Parallel()
+
+	snapshot := &syncengine.DriveStatusSnapshot{
+		ObservationIssues: []syncengine.ObservationIssueRow{
+			{Path: "/bad:name.txt", IssueType: syncengine.IssueInvalidFilename},
+		},
+		BlockScopes: []*syncengine.BlockScope{
+			{
+				Key:       syncengine.SKPermRemoteWrite("Shared/Docs"),
+				IssueType: syncengine.IssueRemoteWriteDenied,
+			},
+		},
+		BlockedRetryWork: []syncengine.RetryWorkRow{
+			{Path: "Shared/Docs/b.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+			{Path: "Shared/Docs/a.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+			{Path: "Shared/Docs/a.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+			{Path: "Shared/Docs/c.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+		},
+	}
+
+	groups := groupStatusConditions(snapshot)
+	require.Len(t, groups, 2)
+
+	assert.Equal(t, syncengine.SummaryInvalidFilename, groups[0].SummaryKey)
+	assert.Equal(t, syncengine.IssueInvalidFilename, groups[0].ConditionType)
+	assert.Equal(t, 1, groups[0].Count)
+	assert.Equal(t, []string{"/bad:name.txt"}, groups[0].Paths)
+
+	assert.Equal(t, syncengine.SummaryRemoteWriteDenied, groups[1].SummaryKey)
+	assert.Equal(t, syncengine.IssueRemoteWriteDenied, groups[1].ConditionType)
+	assert.Equal(t, syncengine.SKPermRemoteWrite("Shared/Docs"), groups[1].ScopeKey)
+	assert.Equal(t, 4, groups[1].Count)
+	assert.Equal(t, []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt", "Shared/Docs/c.txt"}, groups[1].Paths)
 }
 
 func TestPrintConditionSection_NoActiveConditions(t *testing.T) {

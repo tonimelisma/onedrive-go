@@ -394,7 +394,8 @@ func querySyncStateWithOptions(
 	verbose bool,
 	examplesLimit int,
 ) *syncStateInfo {
-	snapshot := readDriveStatusSnapshot(statePath, logger, history)
+	_ = history
+	snapshot := readDriveStatusSnapshot(statePath, logger)
 	info := buildSyncStateInfo(&snapshot, verbose, examplesLimit)
 	return &info
 }

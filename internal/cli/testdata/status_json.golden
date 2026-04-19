@@ -23,7 +23,7 @@
             "conditions": [
               {
                 "summary_key": "invalid_filename",
-                "issue_type": "invalid_filename",
+                "condition_type": "invalid_filename",
                 "title": "INVALID FILENAME",
                 "reason": "The filename contains characters not allowed by OneDrive.",
                 "action": "Rename the file to remove invalid characters.",
@@ -34,7 +34,7 @@
               },
               {
                 "summary_key": "authentication_required",
-                "issue_type": "unauthorized",
+                "condition_type": "unauthorized",
                 "title": "AUTHENTICATION REQUIRED",
                 "reason": "The last sync attempt for this account was rejected by OneDrive.",
                 "action": "Run 'onedrive-go status' to re-check access, or 'onedrive-go login' to sign in again.",
@@ -45,7 +45,7 @@
               },
               {
                 "summary_key": "remote_write_denied",
-                "issue_type": "remote_write_denied",
+                "condition_type": "remote_write_denied",
                 "title": "SHARED FOLDER WRITES BLOCKED",
                 "reason": "This shared folder is read-only for your current write attempts. Downloads continue normally.",
                 "action": "Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",

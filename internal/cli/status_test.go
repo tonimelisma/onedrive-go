@@ -541,7 +541,7 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 	assert.Zero(t, info.ConditionCount)
 }
 
-func TestQuerySyncState_RemoteDriftAndIssues(t *testing.T) {
+func TestQuerySyncState_RemoteDriftAndConditions(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.DiscardHandler)
@@ -700,7 +700,7 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 }
 
 // Validates: R-6.10.5
-func TestQuerySyncState_UsesReadOnlyProjectionHelper(t *testing.T) {
+func TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.DiscardHandler)
@@ -802,24 +802,24 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 	sharedDescriptor := describeStatusSummary(syncengine.SummaryRemoteWriteDenied)
 	assert.ElementsMatch(t, []statusConditionJSON{
 		{
-			SummaryKey: string(syncengine.SummaryInvalidFilename),
-			IssueType:  string(syncengine.IssueInvalidFilename),
-			Title:      invalidDescriptor.Title,
-			Reason:     invalidDescriptor.Reason,
-			Action:     invalidDescriptor.Action,
-			Count:      1,
-			Paths:      []string{"/invalid:name.txt"},
+			SummaryKey:    string(syncengine.SummaryInvalidFilename),
+			ConditionType: string(syncengine.IssueInvalidFilename),
+			Title:         invalidDescriptor.Title,
+			Reason:        invalidDescriptor.Reason,
+			Action:        invalidDescriptor.Action,
+			Count:         1,
+			Paths:         []string{"/invalid:name.txt"},
 		},
 		{
-			SummaryKey: string(syncengine.SummaryRemoteWriteDenied),
-			IssueType:  string(syncengine.IssueRemoteWriteDenied),
-			Title:      sharedDescriptor.Title,
-			Reason:     sharedDescriptor.Reason,
-			Action:     sharedDescriptor.Action,
-			Count:      2,
-			ScopeKind:  "directory",
-			Scope:      "Shared/Team Docs",
-			Paths:      []string{"/blocked/a.txt", "/blocked/b.txt"},
+			SummaryKey:    string(syncengine.SummaryRemoteWriteDenied),
+			ConditionType: string(syncengine.IssueRemoteWriteDenied),
+			Title:         sharedDescriptor.Title,
+			Reason:        sharedDescriptor.Reason,
+			Action:        sharedDescriptor.Action,
+			Count:         2,
+			ScopeKind:     "directory",
+			Scope:         "Shared/Team Docs",
+			Paths:         []string{"/blocked/a.txt", "/blocked/b.txt"},
 		},
 	}, info.Conditions)
 }
@@ -884,24 +884,24 @@ func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T)
 		ConditionCount: 2,
 		Conditions: []statusConditionJSON{
 			{
-				SummaryKey: string(syncengine.SummaryQuotaExceeded),
-				IssueType:  string(syncengine.IssueQuotaExceeded),
-				Title:      quotaDescriptor.Title,
-				Reason:     quotaDescriptor.Reason,
-				Action:     quotaDescriptor.Action,
-				Count:      1,
-				ScopeKind:  "drive",
-				Scope:      "Shared/Docs",
+				SummaryKey:    string(syncengine.SummaryQuotaExceeded),
+				ConditionType: string(syncengine.IssueQuotaExceeded),
+				Title:         quotaDescriptor.Title,
+				Reason:        quotaDescriptor.Reason,
+				Action:        quotaDescriptor.Action,
+				Count:         1,
+				ScopeKind:     "drive",
+				Scope:         "Shared/Docs",
 			},
 			{
-				SummaryKey: string(syncengine.SummaryQuotaExceeded),
-				IssueType:  string(syncengine.IssueQuotaExceeded),
-				Title:      quotaDescriptor.Title,
-				Reason:     quotaDescriptor.Reason,
-				Action:     quotaDescriptor.Action,
-				Count:      1,
-				ScopeKind:  "drive",
-				Scope:      "Shared/Design",
+				SummaryKey:    string(syncengine.SummaryQuotaExceeded),
+				ConditionType: string(syncengine.IssueQuotaExceeded),
+				Title:         quotaDescriptor.Title,
+				Reason:        quotaDescriptor.Reason,
+				Action:        quotaDescriptor.Action,
+				Count:         1,
+				ScopeKind:     "drive",
+				Scope:         "Shared/Design",
 			},
 		},
 	}
@@ -1270,34 +1270,34 @@ func TestPrintSyncStateText_WithConditions(t *testing.T) {
 		Retrying:       2,
 		Conditions: []statusConditionJSON{
 			{
-				SummaryKey: string(syncengine.SummaryQuotaExceeded),
-				IssueType:  string(syncengine.IssueQuotaExceeded),
-				Title:      quotaDescriptor.Title,
-				Reason:     quotaDescriptor.Reason,
-				Action:     quotaDescriptor.Action,
-				Count:      1,
-				ScopeKind:  "drive",
-				Scope:      "Shared/Team Docs",
-				Paths:      []string{"/quota/a.txt"},
+				SummaryKey:    string(syncengine.SummaryQuotaExceeded),
+				ConditionType: string(syncengine.IssueQuotaExceeded),
+				Title:         quotaDescriptor.Title,
+				Reason:        quotaDescriptor.Reason,
+				Action:        quotaDescriptor.Action,
+				Count:         1,
+				ScopeKind:     "drive",
+				Scope:         "Shared/Team Docs",
+				Paths:         []string{"/quota/a.txt"},
 			},
 			{
-				SummaryKey: string(syncengine.SummaryInvalidFilename),
-				IssueType:  string(syncengine.IssueInvalidFilename),
-				Title:      invalidDescriptor.Title,
-				Reason:     invalidDescriptor.Reason,
-				Action:     invalidDescriptor.Action,
-				Count:      2,
-				Paths:      []string{"/bad:name.txt", "/worse:name.txt"},
+				SummaryKey:    string(syncengine.SummaryInvalidFilename),
+				ConditionType: string(syncengine.IssueInvalidFilename),
+				Title:         invalidDescriptor.Title,
+				Reason:        invalidDescriptor.Reason,
+				Action:        invalidDescriptor.Action,
+				Count:         2,
+				Paths:         []string{"/bad:name.txt", "/worse:name.txt"},
 			},
 			{
-				SummaryKey: string(syncengine.SummaryAuthenticationRequired),
-				IssueType:  string(syncengine.IssueUnauthorized),
-				Title:      authDescriptor.Title,
-				Reason:     authDescriptor.Reason,
-				Action:     authDescriptor.Action,
-				Count:      1,
-				ScopeKind:  "account",
-				Scope:      "your OneDrive account authorization",
+				SummaryKey:    string(syncengine.SummaryAuthenticationRequired),
+				ConditionType: string(syncengine.IssueUnauthorized),
+				Title:         authDescriptor.Title,
+				Reason:        authDescriptor.Reason,
+				Action:        authDescriptor.Action,
+				Count:         1,
+				ScopeKind:     "account",
+				Scope:         "your OneDrive account authorization",
 			},
 		},
 	}
