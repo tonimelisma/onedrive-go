@@ -2,43 +2,46 @@
 
 GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_read_failures.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_retry_state.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_failures.go, internal/sync/store_write_scope_blocks.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/visible_issues.go, internal/sync/issue_summary.go, internal/sync/scope_key_wire.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
-Implements: R-2.5 [verified], R-2.7 [verified], R-2.10.33 [verified], R-2.15.1 [verified], R-6.5.1 [verified], R-6.5.2 [verified]
+Implements: R-2.5 [designed], R-2.7 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
 ## Overview
 
-`SyncStore` is the sole durable owner of per-drive sync state. It owns:
+`SyncStore` is the sole durable owner of per-drive sync state. In the target
+architecture it owns:
 
 - canonical schema application and validation
 - baseline persistence
 - local snapshot persistence
 - remote mirror persistence
-- retry-state persistence
-- retry/actionable failure persistence
-- scope-block persistence
+- observation issue persistence
+- retry-work persistence
+- block-scope persistence
+- observation resume/cadence persistence
 - one-shot run-status persistence
-- state-DB diagnosis for startup
-- explicit destructive reset of one drive's DB family
-- read-only inspectors used by CLI status
+- state-DB diagnosis and explicit reset support
+- read-only raw row access used by `status`
 
-It does **not** own planning policy, conflict-resolution policy, delete-safety
-policy, or live watch-mode coordination. Those belong to the engine.
+It does not own planning policy, execution policy, or a competing status model.
 
 ## Ownership Contract
 
-- Owns: SQLite truth, transactions, restart-safe rows, and read-only snapshot helpers.
-- Does Not Own: Graph calls, local filesystem observation, planner decisions, or watch-loop runtime state.
-- Source of Truth: The current canonical SQLite schema plus the rows it defines.
-- Allowed Side Effects: SQLite reads, writes, schema bootstrap/validation, checkpoints, and read-only inspection.
-- Mutable Runtime Owner: `SyncStore` owns its DB handle and rebuildable in-memory baseline cache. No background goroutines.
-- Error Boundary: Store methods add SQLite/store context, but they do not invent new sync policy.
+- Owns: SQLite truth, transactions, restart-safe rows, and narrow read helpers.
+- Does Not Own: Graph calls, local filesystem observation, planner decisions,
+  worker scheduling, or status rendering policy.
+- Source of Truth: the canonical SQLite schema plus the rows it defines.
+- Allowed Side Effects: SQLite reads, writes, schema bootstrap/validation,
+  checkpoints, and explicit reset/recreate.
+- Mutable Runtime Owner: `SyncStore` owns its DB handle and rebuildable
+  in-memory baseline cache. It has no background goroutines.
+- Error Boundary: store methods add SQLite/store context, but they do not
+  invent new sync policy.
 
 ## Verified By
 
 | Behavior | Evidence |
 | --- | --- |
-| The store remains the sole durable authority for baseline, local/remote snapshots, retry state, scope-block, observation-state, and run-status rows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestWriteSyncRunStatus_RoundTrip`, `TestSyncStore_ReleaseScope`, `TestSyncStore_DiscardScope` |
-| Read-only snapshot helpers back status without reopening deleted conflict/delete-approval workflows. | `TestReadDriveStatusSnapshot`, `TestSyncStore_ListVisibleIssueGroups`, `TestQuerySyncState_UsesReadOnlyProjectionHelper` |
-| Schema validation stays store-owned, while startup receives typed incompatible-store errors for unreadable, incompatible, or unsupported existing DBs and the explicit reset command owns deletion/recreate. | `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestNewEngine_RequiresResetForNonSQLiteStateDB`, `TestNewEngine_RequiresResetForIncompatibleSchemaStateDB`, `TestNewEngine_RequiresResetForUnsupportedStoreGeneration`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
+| The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
+| Read-only status queries continue to depend on store-owned read helpers rather than ad hoc writable opens. | `TestReadDriveStatusSnapshot`, `TestQuerySyncState_UsesReadOnlyProjectionHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
 
 ## Write Responsibilities
 
@@ -49,23 +52,14 @@ policy, or live watch-mode coordination. Those belong to the engine.
 - upserts or deletes `remote_state` rows derived from observation
 - advances `observation_state.cursor`
 
-Observation never writes planner state or runtime intent.
+Local observation writes belong to `local_state`. Full scans replace the entire
+`local_state` snapshot in one transaction.
 
-Local observation writes belong to `local_state`; the canonical store now owns
-durable current-truth tables for both sides even though planner/executor
-cutovers may still arrive in later increments.
+Observation-owned durable problems belong to `observation_issues`, not retry
+lanes. Observation may also create `block_scopes` directly when current truth
+already proves a shared blocker.
 
-One-shot full scans replace the entire `local_state` snapshot in one
-transaction. The stored rows represent the latest admissible local truth for
-that pass, not a journal of local events.
-
-Dry-run planning does not stage those snapshot writes inside the durable store.
-Instead, the store can seed an isolated scratch `SyncStore` with the current
-committed `baseline`, `remote_state`, and `observation_state`; dry-run then
-commits preview-only `remote_state` and `local_state` rows there before
-querying SQLite comparison and reconciliation.
-
-### Outcome writes
+### Mutation writes
 
 `CommitMutation()` is the successful-execution boundary. It updates `baseline`
 and, when needed, keeps `remote_state` aligned with the remote truth implied by
@@ -77,89 +71,52 @@ That same store boundary also owns publication-only planner actions:
 - `ActionCleanup` publishes a delete for baseline rows absent from both current
   snapshots
 
-The engine may commit those two action types directly without worker/executor
-dispatch, but `CommitMutation()` remains the only durable publication path.
-`publicationMutationFromAction()` lives beside that boundary so planner intent
-becomes a `BaselineMutation` at the same authority boundary that commits it.
+### Outcome writes
 
-`RefreshLocalBaseline()` is the narrower reconciliation path for cases where
-local disk has become authoritative without a new executor-produced transfer
-result, such as conflict-copy preservation and other local layout convergence.
+The target store API persists three durable control authorities:
 
-### Failure writes
+- `observation_issues` for durable current-truth/content problems
+- `retry_work` for exact delayed work
+- `block_scopes` for shared blockers and trial timing
 
-`RecordFailure()` is the one durable write path for retryable and actionable
-path failures. The engine/classifier supplies the already-decided issue type,
-category, scope key, and retry delay; the store persists them transactionally.
+Supporting outcome mutations should stay separate by owner:
 
-`retry_state` is the durable retry ledger. It persists retryable and blocked
-work keyed to semantic work identity, while the executable action set remains
-runtime-owned in Go. `sync_failures` remains the reporting surface, but it no
-longer decides which retryable rows are due, which blocked row is trialed, or
-which scope-backed rows keep runtime admission blocked.
+- observation-issue upsert/delete helpers
+- exact retry-work upsert/delete helpers
+- scope release/discard/extend helpers that mutate `block_scopes` and linked
+  blocked `retry_work` in one transaction
 
-Issue-only cleanup and exact retry cleanup are separate store boundaries now:
-
-- actionable issue cleanup may delete `sync_failures` rows only
-- retry-owned resolution may delete one exact `retry_state` work item and the
-  matching transient reporting row in the same transaction
-- scope-owned release/discard may mutate `scope_blocks`, scoped
-  `sync_failures`, and blocked `retry_state` rows for that scope
-
-Supporting failure mutations include:
-
-- issue-only cleanup helpers for actionable rows
-- `ResolveTransientRetryWork()` for exact retry-work resolution
-- `UpsertActionableFailures()`
-- scope-owned release/discard helpers that move or delete blocked rows
-
-### Scope writes
-
-`UpsertScopeBlock()`, `DeleteScopeBlock()`, and `ListScopeBlocks()` are the
-scope-block boundary. The engine remains the sole owner of when scopes are set,
-preserved, retried, released, or discarded; the store just persists that
-runtime-owned decision. `scope_blocks` is timer/trial metadata authority, not a
-second owner of blocked work. When a scope is released or discarded, the store
-updates both `sync_failures` and `retry_state` in the same transaction so the
-retry ledger cannot lag the scope transition.
-
-Remote permission scopes are not persisted as `scope_blocks`. They are rebuilt
-from blocked `retry_state` rows keyed by `perm:remote:*` scope keys.
+The store does not own a mixed failure table, failure-role transitions, or a
+store-owned competing status projection.
 
 ### Admin writes
 
 Administrative write helpers are split by authority:
 
 - `store_run_status.go` owns one-shot run-status writes
-- `store_scope_admin.go` owns release/discard scope transitions
-
-Retry-row test seeding and other package-local fixtures live in `_test.go`
-helpers rather than widening the production store API.
+- store compatibility helpers diagnose incompatible DBs
+- `store_reset.go` owns explicit delete-and-recreate reset
 
 ## Read Responsibilities
 
-Read-only store helpers are intentionally separate from writable paths.
+Read-only store helpers are intentionally narrow:
 
-- `store_read_remote_state.go` reads current remote mirror truth
-- `store_read_failures.go` reads raw persisted `sync_failures` rows for
-  store-owned projections and tests
-- `visible_issues.go` owns the higher-level visible issue projection used by
-  status/watch surfaces
-- `issue_summary.go` owns the shared grouped-summary model used by those
-  projections
-- `store_retry_state.go` owns retry/trial reads such as ready blocked work
-- `store_inspect.go` owns the read-only status projection boundary
+- raw/narrow reads for `remote_state`, `local_state`, `baseline`,
+  `observation_state`, `run_status`
+- raw/narrow reads for `observation_issues`
+- raw/narrow reads for `retry_work`
+- raw/narrow reads for `block_scopes`
 
-CLI `status` and status-like flows should prefer these read-only helpers rather
-than opening a writable store.
+`status` should compose its output directly from those authorities. The store
+may offer grouping primitives, but it must not become a second owner of status
+policy.
 
 ## State-DB Diagnosis And Reset
 
-Two store-owned helpers isolate the current state-DB lifecycle policy:
+Two store-owned helpers isolate DB lifecycle policy:
 
 - `store_compatibility.go` opens an existing DB non-mutating, classifies
-  unreadable or unsupported existing stores, and returns typed incompatible-store
-  errors
+  unreadable or unsupported stores, and returns typed incompatible-store errors
 - `store_reset.go` deletes one drive's DB file family and recreates a fresh
   canonical DB in place
 
@@ -167,17 +124,10 @@ Engine startup may use the diagnosis helper, but it must not call the
 destructive reset helper automatically. The explicit CLI reset command owns the
 delete-and-recreate action.
 
-The canonical schema carries a first-class store-generation marker in
-`store_metadata`, which is the only owner of store-level compatibility
-metadata. The store boundary accepts only the current schema plus the current
-generation marker; it does not keep row-by-row compatibility probes for
-deleted persisted shapes.
-
 ## Baseline Cache
 
-`SyncStore` maintains an in-memory baseline cache as a rebuildable optimization.
-The cache is loaded from SQLite on demand and updated after committed baseline
-mutations. If the store detects impossible cache state, it drops and reloads
+`SyncStore` maintains an in-memory baseline cache as a rebuildable
+optimization. If the store detects impossible cache state, it drops and reloads
 from SQLite instead of creating a second authority.
 
 ## Schema And Open Semantics
@@ -189,22 +139,19 @@ from SQLite instead of creating a second authority.
 3. creates or validates the current canonical schema
 4. returns a ready store
 
-There is no migration history in the current architecture. New DBs bootstrap
-directly into the simplified schema. Non-canonical stores are rejected loudly
-at the store boundary. Startup may then surface a typed incompatible-store result
-for an unusable or unsupported existing DB, while the explicit reset command
-owns destructive delete-and-recreate behavior. Read-only inspectors remain
-non-mutating.
+The target architecture prefers a new store generation plus explicit reset over
+compatibility bridges. New DBs bootstrap directly into the current schema.
+Non-canonical stores are rejected loudly at the store boundary.
 
-## What The Store No Longer Owns
+## What The Store Does Not Own
 
-The store no longer persists:
+The store does not own:
 
-- conflict history/request workflows
-- delete-safety approvals or held-delete ledgers
-- sync-scope snapshots or filtered remote-state projections
-- embedded shared-folder registries inside another drive
+- the actionable set
+- dependency ordering
+- retry scheduling policy
+- worker dispatch
+- status rendering policy
+- manual resolution workflows
 
-Those concepts were deleted from the current architecture. Conflicts are now
-resolved immediately inside engine/executor flows, delete safety is ordinary
-per-item safety only, and shared folders are separate configured drives.
+Those concerns belong to the engine or CLI.
