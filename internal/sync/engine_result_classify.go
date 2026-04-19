@@ -40,7 +40,7 @@ type trialHint int
 const (
 	trialHintRelease trialHint = iota
 	trialHintExtendOnMatchingScope
-	trialHintPreserve
+	trialHintRearm
 	trialHintShutdown
 	trialHintFatal
 )
@@ -107,7 +107,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			Class:          resultSkip,
 			Persistence:    persistActionableFailure,
 			PermissionFlow: permissionDecisionFlow,
-			TrialHint:      trialHintPreserve,
+			TrialHint:      trialHintRearm,
 			IssueType:      issueType,
 		}), true
 	case r.HTTPStatus == http.StatusTooManyRequests:
@@ -152,7 +152,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
 			Persistence: persistActionableFailure,
-			TrialHint:   trialHintPreserve,
+			TrialHint:   trialHintRearm,
 			IssueType:   issueType,
 		}), true
 	}
@@ -174,7 +174,7 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultRequeue,
 			Persistence: persistTransientFailure,
-			TrialHint:   trialHintPreserve,
+			TrialHint:   trialHintRearm,
 			IssueType:   "transient_conflict",
 		})
 	case errors.Is(r.Err, driveops.ErrDiskFull):
@@ -190,14 +190,14 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
 			Persistence: persistActionableFailure,
-			TrialHint:   trialHintPreserve,
+			TrialHint:   trialHintRearm,
 			IssueType:   issueType,
 		})
 	case errors.Is(r.Err, driveops.ErrFileExceedsOneDriveLimit):
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
 			Persistence: persistActionableFailure,
-			TrialHint:   trialHintPreserve,
+			TrialHint:   trialHintRearm,
 			IssueType:   issueType,
 		})
 	case errors.Is(r.Err, os.ErrPermission):
@@ -205,14 +205,14 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 			Class:          resultSkip,
 			Persistence:    persistActionableFailure,
 			PermissionFlow: permissionDecisionFlow,
-			TrialHint:      trialHintPreserve,
+			TrialHint:      trialHintRearm,
 			IssueType:      issueType,
 		})
 	default:
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
 			Persistence: persistActionableFailure,
-			TrialHint:   trialHintPreserve,
+			TrialHint:   trialHintRearm,
 			IssueType:   issueType,
 		})
 	}

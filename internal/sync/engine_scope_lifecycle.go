@@ -178,34 +178,37 @@ func (controller *scopeController) normalizePersistedScope(
 	block *BlockScope,
 	facts persistedScopeFacts,
 ) error {
-	now := controller.flow.engine.nowFunc()
+	blockedRetryCount := facts.blockedRetryCountByScope[block.Key]
 
 	switch scopeStartupPolicyFor(block.Key) {
 	case scopeStartupRequiresBoundary:
+		if blockedRetryCount == 0 {
+			return controller.discardStartupScope(ctx, block.Key, "discarded scope without blocked retry work")
+		}
 		if block.Key.IsPermDir() {
 			if !isDirAccessible(controller.flow.engine.syncTree, block.Key.DirPath()) {
 				return nil
 			}
 			return controller.releaseStartupScope(ctx, block.Key, "released local permission scope after revalidation")
 		}
-		if facts.blockedRetryCountByScope[block.Key] > 0 {
-			return nil
-		}
-		return controller.releaseStartupScope(ctx, block.Key, "released scope without blocked retry work")
+		return nil
 	case scopeStartupRequiresScopedFailures:
-		if facts.blockedRetryCountByScope[block.Key] > 0 {
+		if blockedRetryCount > 0 {
 			return nil
 		}
-		if hasActivePreserveDeadline(block, now) {
-			return nil
-		}
-		return controller.discardStartupScope(ctx, block.Key, "discarded scope without scoped failures")
+		return controller.discardStartupScope(ctx, block.Key, "discarded scope without blocked retry work")
 	case scopeStartupServerTimedOnly:
+		if blockedRetryCount == 0 {
+			return controller.discardStartupScope(ctx, block.Key, "discarded scope without blocked retry work")
+		}
 		if block.TimingSource == ScopeTimingServerRetryAfter {
 			return nil
 		}
 		return controller.releaseStartupScope(ctx, block.Key, "released non-server-timed restart scope")
 	case scopeStartupRevalidateDisk:
+		if blockedRetryCount == 0 {
+			return controller.discardStartupScope(ctx, block.Key, "discarded disk scope without blocked retry work")
+		}
 		return controller.normalizeDiskScope(ctx, block)
 	default:
 		panic(fmt.Sprintf("unknown startup policy %d", scopeStartupPolicyFor(block.Key)))
@@ -270,14 +273,6 @@ func scopeStartupPolicyFor(key ScopeKey) scopeStartupPolicy {
 	}
 }
 
-func hasActivePreserveDeadline(block *BlockScope, now time.Time) bool {
-	if block == nil || block.PreserveUntil.IsZero() {
-		return false
-	}
-
-	return block.PreserveUntil.After(now)
-}
-
 func (controller *scopeController) normalizeDiskScope(ctx context.Context, block *BlockScope) error {
 	flow := controller.flow
 
@@ -331,7 +326,6 @@ func (controller *scopeController) normalizeDiskScope(ctx context.Context, block
 		BlockedAt:     now,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
-		PreserveUntil: time.Time{},
 	}); err != nil {
 		return fmt.Errorf("sync: refreshing disk scope %s: %w", block.Key.String(), err)
 	}
@@ -424,7 +418,6 @@ func (controller *scopeController) extendScopeTrial(
 
 	block.NextTrialAt = nextAt
 	block.TrialInterval = newInterval
-	block.PreserveUntil = time.Time{}
 	block.TrialCount++
 	block.TimingSource = scopeTimingSource(retryAfter)
 	if err := controller.activateScope(ctx, watch, &block); err != nil {
@@ -438,7 +431,7 @@ func (controller *scopeController) extendScopeTrial(
 	watch.armTrialTimer()
 }
 
-func (controller *scopeController) preserveScopeTrial(ctx context.Context, watch *watchRuntime, scopeKey ScopeKey) {
+func (controller *scopeController) rearmScopeTrial(ctx context.Context, watch *watchRuntime, scopeKey ScopeKey) {
 	flow := controller.flow
 
 	if watch == nil {
@@ -454,21 +447,57 @@ func (controller *scopeController) preserveScopeTrial(ctx context.Context, watch
 	}
 
 	block.NextTrialAt = flow.engine.nowFunc().Add(block.TrialInterval)
-	block.PreserveUntil = block.NextTrialAt
 	if err := controller.activateScope(ctx, watch, &block); err != nil {
-		flow.engine.logger.Warn("preserveScopeTrial: failed to persist preserved interval",
+		flow.engine.logger.Warn("rearmScopeTrial: failed to persist rearmed interval",
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
 		)
 		return
 	}
 
-	flow.engine.logger.Debug("preserving trial interval",
+	flow.engine.logger.Debug("rearming trial interval",
 		slog.String("scope_key", scopeKey.String()),
 		slog.Duration("interval", block.TrialInterval),
 	)
 
 	watch.armTrialTimer()
+}
+
+func (controller *scopeController) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
+	_, found, err := controller.flow.engine.baseline.PickRetryTrialCandidate(ctx, scopeKey)
+	if err != nil {
+		return false, fmt.Errorf("sync: checking blocked retry work for scope %s: %w", scopeKey.String(), err)
+	}
+
+	return found, nil
+}
+
+func (controller *scopeController) rearmOrDiscardScope(ctx context.Context, watch *watchRuntime, scopeKey ScopeKey) {
+	if scopeKey.IsZero() {
+		return
+	}
+
+	flow := controller.flow
+	hasBlockedWork, err := controller.scopeHasBlockedRetryWork(ctx, scopeKey)
+	if err != nil {
+		flow.engine.logger.Warn("rearmOrDiscardScope: failed to check blocked retry work",
+			slog.String("scope_key", scopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	if hasBlockedWork {
+		controller.rearmScopeTrial(ctx, watch, scopeKey)
+		return
+	}
+
+	if err := controller.discardScope(ctx, watch, scopeKey); err != nil {
+		flow.engine.logger.Warn("rearmOrDiscardScope: failed to discard empty scope",
+			slog.String("scope_key", scopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 // computeTrialInterval is the single source of truth for trial interval
@@ -552,7 +581,6 @@ func (controller *scopeController) applyBlockScope(ctx context.Context, watch *w
 		BlockedAt:     now,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
-		PreserveUntil: time.Time{},
 	}
 	if err := controller.activateScope(ctx, watch, block); err != nil {
 		flow.engine.logger.Warn("applyBlockScope: failed to persist block scope",

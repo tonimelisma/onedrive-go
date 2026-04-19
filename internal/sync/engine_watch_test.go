@@ -777,6 +777,16 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   eng.nowFunc().Add(5 * time.Second),
 	})
+	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
+		Path:       "held.txt",
+		DriveID:    eng.driveID,
+		Direction:  DirectionUpload,
+		ActionType: ActionUpload,
+		Role:       FailureRoleHeld,
+		Category:   CategoryTransient,
+		ScopeKey:   SKService(),
+		ErrMsg:     "held by service scope",
+	}, nil))
 
 	require.NoError(t, eng.baseline.RecordFailure(ctx, &SyncFailureParams{
 		Path:       "retry.txt",

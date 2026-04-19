@@ -108,10 +108,12 @@ through trial actions:
   semantic work
 - success releases the scope
 - matching-scope persistence evidence extends the scope
-- inconclusive outcomes preserve the current interval without inventing a new
-  blocker row
+- inconclusive outcomes re-arm the current interval without inventing a new
+  blocker row, but only while blocked `retry_work` still exists for the scope
 - stale blocked work that no longer appears in the current actionable set is
   cleared directly from `retry_work`
+- once a scope has no blocked `retry_work`, the engine discards the empty
+  `block_scopes` row immediately instead of preserving timing with no work
 
 `block_scopes` remains the only durable owner of shared trial timing.
 
@@ -133,7 +135,8 @@ timed by local backoff or explicit server `Retry-After`.
 Startup normalization applies persisted-scope policy before admission begins:
 
 - due `retry_work` rows are revalidated from current truth before dispatch
-- active `block_scopes` are reloaded and may become immediate trials when due
+- active `block_scopes` are reloaded and may become immediate trials when due,
+  but empty scopes are pruned during startup normalization
 - observation-owned blockers may be released when current truth already proves
   recovery
 - account-auth state remains catalog-owned, not a retry scope
