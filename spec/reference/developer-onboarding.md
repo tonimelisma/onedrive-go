@@ -119,13 +119,14 @@ For a sync run:
 `main.go` -> `internal/cli/sync*.go` -> `internal/multisync` ->
 `internal/sync`
 
-Inside `internal/sync`, the runtime currently has a hybrid sync pipeline:
+Inside `internal/sync`, the runtime has a snapshot-first sync pipeline:
 
 - remote observer + local observer -> dirty debounce scheduler -> snapshot
   refresh -> SQLite comparison/reconciliation -> Go actionable set ->
   executor -> baseline/store updates
-- `retry_state` and `scope_blocks` persist retry/trial timing and blocking
-  semantics, not a durable executable plan
+- `observation_issues`, `retry_work`, and `block_scopes` persist durable
+  status, exact delayed work, and blocker timing without becoming a durable
+  executable plan
 
 The key design choice is that planning stays deterministic and execution owns
 side effects, while SQLite owns current durable truth and the persisted
@@ -471,12 +472,12 @@ A new developer should know where truth lives before changing any behavior.
 | Remote truth | Microsoft Graph / OneDrive | Observed through `internal/graph` |
 | Graph HTTP policy | `internal/graphtransport` | Shared runtime transport policy, not user config |
 | Graph session/runtime reuse | `internal/driveops.SessionRuntime` | Command-scoped bootstrap, interactive, and sync client reuse |
-| Status issue title/reason/action rendering | `internal/cli/status_issue_descriptors.go` | Final human-facing status copy belongs to the CLI |
-| Read-only sync issue/status snapshot | `internal/sync` store inspection helpers | Raw durable issue facts stay in sync-owned read paths |
+| Status title/reason/action rendering | `internal/cli/status_issue_descriptors.go` | Final human-facing status copy belongs to the CLI |
+| Read-only sync status snapshot | `internal/sync` store inspection helpers | Raw durable status facts stay in sync-owned read paths |
 | Per-drive sync state | `internal/sync` SQLite DB | One DB per drive |
 | Remote observation mirror | `remote_state` table | Latest observed remote truth |
 | Confirmed synced state | `baseline` table | Shared local/remote agreement |
-| Durable sync issues | `sync_failures`, `scope_blocks`, catalog account-auth state | Sync retry, restart, and failure state |
+| Durable sync status facts | `observation_issues`, `retry_work`, `block_scopes`, catalog account-auth state | Sync retry, restart, and user-visible status state |
 | Log files | `internal/logfile` | Durable operational history, not authoritative state |
 | Perf live snapshots/captures | `internal/perf` | Live or explicit capture surfaces, not a second persistent DB |
 
@@ -484,8 +485,8 @@ The biggest data-model idea is that sync uses a separated durable model:
 
 - `remote_state` is the latest observed remote mirror
 - `baseline` is confirmed synced agreement
-- `retry_state`, `sync_failures`, and `scope_blocks` capture durable retry,
-  reporting, and restart-safe blocking state
+- `observation_issues`, `retry_work`, and `block_scopes` capture durable
+  current-truth problems, exact delayed work, and restart-safe blocking state
 
 That separation is what keeps observation, planning, execution, and restart
 from collapsing into one mutable pile.

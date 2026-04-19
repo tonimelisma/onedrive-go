@@ -1,1106 +1,329 @@
-# Ideal Sync Engine Design
+# Sync Engine Benchmark
 
-This note defines the ideal future-state sync engine for this repo.
+This document defines the target-state sync architecture for `onedrive-go`.
+It is the benchmark the sync refactor series should converge on.
 
-It keeps the overall benchmark engine shape:
+The architecture is intentionally strict about ownership:
 
-1. observe current local and remote truth
-2. commit comprehensive snapshots
-3. compare local, remote, and baseline truth in SQLite
-4. reconcile structural outcomes
-5. build the actionable set in Go
-6. admit, order, and execute actions in Go
-7. persist success, retry, blocker, and issue outcomes
-8. replan whenever new truth arrives
-
-But it makes the durable ownership model explicit and strict.
-
-The future-state design has three durable concepts for issue, retry, and
-blocking state:
-
-- `observation_issues`
-- `retry_work`
-- `block_scopes`
-
-Those names are deliberate. They describe what each durable surface really is,
-not how the current code happened to evolve.
-
-The current repo still uses the names `retry_state`, `scope_blocks`, and
-`sync_failures`. This document treats those as legacy/current implementation
-names, not the ideal conceptual vocabulary.
-
-Whenever this note mentions current code shape, it does so only in explicitly
-labeled legacy/current-state sections. The intended architecture is the
-future-state model.
+- SQLite owns durable truth and durable sync-control state.
+- Go owns the live actionable set, dependency ordering, admission, scheduling,
+  and side effects.
+- `status` is the only sync-health command. It shows all status; there is no
+  second sync-health command or `resolve` command family.
 
 ## Design Goal
 
-Build the engine around these principles:
+The target engine should be easy to reason about after restart, during watch
+mode, and during failure recovery. The model is:
 
-- the filesystem is authoritative for current local truth
-- Microsoft Graph is authoritative for current remote truth
-- local current truth must be rebuilt at startup by full scan
-- remote current truth may resume from durable mirror plus delta when safe
-- SQLite owns current committed truth, prior synced agreement, and structural
-  comparison
-- Go owns the live actionable set, scheduling, execution, and side effects
-- exact delayed work, shared blockers, and observation-discovered issues must
-  be modeled separately
-- short-term transport retry and long-term persisted retry must be distinct
-- retries never invent sync intent
-- reporting state never owns execution state
+1. observe current local and remote truth
+2. commit comprehensive snapshots plus observation resume metadata
+3. compare current truth and baseline in SQLite
+4. build the current actionable set in Go
+5. reconcile durable retry/blocker authorities to that actionable set
+6. add runnable work to the dependency graph
+7. apply final scope admission on the ready frontier
+8. execute, persist outcomes, and replan when new truth arrives
 
-## What Other Tools Teach
+The critical split is:
 
-This design is informed by the public behavior of other sync tools.
+- SQLite answers structural questions.
+- Go answers live execution questions.
 
-## Dropbox wisdom
-
-Useful lessons:
-
-- rate limits are real shared conditions, not independent per-file failures
-- `429` plus `Retry-After` should be treated as a shared backoff signal
-- quota and permission problems should become visible blocker states, not quiet
-  infinite retries
-
-What to copy:
-
-- account-wide throttling behavior
-- targeted shared backoff instead of retry storms
-- explicit user-facing "sync is blocked" reporting
-
-What to avoid:
-
-- opaque ownership where user-visible state and retry behavior are mixed
-
-## Nextcloud wisdom
-
-Useful lessons:
-
-- some failures should become delayed per-item retries with bounded backoff
-- local low-disk state needs special blocker semantics, not generic retries
-- skipped work can remain owed without blocking the whole sync
-
-What to copy:
-
-- delayed retry for exact work after local short-term retry is exhausted
-- low-disk blocker semantics
-
-What to avoid:
-
-- ad hoc client-specific blacklist behavior without clear ownership boundaries
-
-## Seafile wisdom
-
-Useful lessons:
-
-- read-only or permission-denied remote subtrees are scope blockers
-- file sync problems and permission blockers should be shown clearly to the
-  user
-- shared-folder permission problems are not just many independent item retries
-
-What to copy:
-
-- strong permission blocker modeling
-- read-only subtree thinking
-- issue reporting separate from retry ownership
-
-What to avoid:
-
-- relying on issue UI alone to encode blocker semantics
-
-## rclone wisdom
-
-Useful lessons:
-
-- request-level retries and higher-level retries are different layers
-- transient transport failures should be retried close to the request boundary
-
-What to copy:
-
-- short-term edge retry at the Graph / transfer / executor boundary
-- clear separation between local transient retry and longer-lived engine retry
-
-What to avoid:
-
-- no durable retry ledger in an always-on sync engine
-
-## Syncthing wisdom
-
-Useful lessons:
-
-- visible issue reporting should be straightforward and grouped
-- the error surface should explain what is wrong without pretending to be
-  planner truth
-
-What to copy:
-
-- clear visible issue summaries
-- grouped user-facing error state
-
-What to avoid:
-
-- relying on the steady-state loop alone as the only retry model when restart
-  recovery matters
-
-## Future-State Vision
-
-This section is the target architecture. It is the design the engine should be
-moving toward.
+The durable model must not mix user-visible conditions, exact owed work, and
+shared blocker timing into one table.
 
 ## Core Invariants
 
-### 1. Local startup scan is mandatory
+### Local startup scan is mandatory
 
-When the app was not running, nothing was watching local disk. Therefore:
+When the app was not running, nothing was watching local disk. Startup must
+therefore perform a full local scan before planning. Persisted `local_state`
+rows are not sufficient startup truth on their own.
 
-- startup must do a full local scan before planning
-- persisted local snapshot rows are not fresh startup truth by themselves
-- local current truth after downtime comes from the scan, not from SQLite alone
+### Remote truth may resume from cursor plus durable mirror
 
-### 2. Remote truth may resume from durable mirror plus delta
+Remote observation may resume from `remote_state` plus
+`observation_state.cursor` when the cursor is still valid. When that is not
+safe, the engine falls back to a full remote refresh.
 
-The remote side is different:
+### Planning only reads committed snapshots
 
-- Graph provides a change feed
-- remote current truth may resume from durable mirror plus cursor
-- when delta is not safe or not available, the engine falls back to a full
-  remote refresh
+Planning runs only from committed `local_state`, committed `remote_state`,
+committed `baseline`, and current policy/mode. It never treats raw watcher
+events or half-written snapshot rows as truth.
 
-### 3. Planning only sees committed comprehensive snapshots
+### Baseline is prior synced agreement, not current truth
 
-The planner must never read:
+`baseline` stores the last converged synced agreement. It exists for delete
+inference, move continuity, and conflict continuity. It does not outrank
+current local or remote truth.
 
-- raw watcher events as truth
-- half-written snapshot tables
-- a remote cursor that advanced without the matching mirror rows
-- startup local rows from before the full scan
+### Structural comparison is not the executable plan
 
-Planning always runs from:
+SQLite owns comparison and reconciliation. Go owns actionable-set
+construction, dependency ordering, admission, and worker scheduling.
 
-- committed current local snapshot
-- committed current remote snapshot
-- committed baseline
-- current mode and policy
+### Durable authorities stay separate
 
-### 4. Baseline is prior synced agreement, not current truth
+The engine must answer four different questions without one table trying to
+answer two of them:
 
-`baseline` means the last converged synced agreement.
+- what current-truth problems were discovered
+- what exact work is still owed later
+- what shared condition blocks a scope and when to retry/trial it
+- what should `status` show
 
-It is durable memory for:
-
-- delete inference
-- move continuity
-- conflict continuity
-
-It does not outrank current truth.
-
-If current local and current remote now authoritatively agree, baseline yields.
-
-### 5. Structural diff is not the executable plan
-
-SQLite should own:
-
-- structural comparison
-- reconciliation outputs over current local, current remote, and baseline
-
-Go should own:
-
-- actionable-set construction
-- blocker admission
-- dependency ordering
-- worker scheduling
-
-### 6. Observation issues, exact delayed work, and shared blockers must stay separate
-
-The engine must answer four different questions:
-
-- what current-truth problems were discovered during observation or structural
-  validation
-- what exact work do we still owe later
-- what shared condition blocks a scope and when do we retry or trial it again
-- what should we show and explain to the user
-
-Those map to:
+Those questions map to:
 
 - `observation_issues`
 - `retry_work`
 - `block_scopes`
+- read-time `status` projection
 
-If one durable surface answers two of those questions, the model is muddy.
+### Short-term retry and long-term retry are different layers
 
-### 7. Short-term retry and long-term retry are different layers
+Transport retry belongs near Graph and transfer I/O. Durable retry belongs in
+the engine. Those two layers must stay separate.
 
-Short-term retry belongs near Graph/transport/executor I/O.
+### Shared blockers must not create retry storms
 
-Long-term retry belongs in durable engine state.
-
-Those layers must not be collapsed into one.
-
-### 8. Shared blockers must not create thundering-herd retries
-
-If 10,000 files are blocked by the same condition:
-
-- do not schedule 10,000 independent free-running retries
-- do not let each one rediscover the same blocker forever
-
-Instead:
-
-- persist the exact owed work items
-- persist one shared blocker scope
-- schedule one shared trial/backoff timeline
+If thousands of items are blocked by the same condition, the engine must not
+create thousands of independent free-running retry loops. It should persist the
+exact owed work in `retry_work`, persist the shared blocker in `block_scopes`,
+and schedule one shared trial/backoff timeline.
 
 ## Durable Surfaces
 
-## Current local snapshot
+| Table | Owner | Purpose |
+| --- | --- | --- |
+| `baseline` | sync store | last converged synced agreement |
+| `local_state` | sync store | latest admissible local snapshot |
+| `remote_state` | sync store | latest remote mirror truth |
+| `observation_state` | sync store | observation resume and full-refresh cadence metadata |
+| `observation_issues` | sync store | durable current-truth/content problems |
+| `retry_work` | sync store | exact delayed work the engine still owes |
+| `block_scopes` | sync store | shared blocker timing and lifecycle |
+| `run_status` | sync store | one-shot summary metadata for `status` |
 
-Conceptual role:
-
-- current authoritative local snapshot for planning
-
-Future-state meaning:
-
-- the latest comprehensive local snapshot produced by startup scan or later
-  refresh logic
-
-Stores:
-
-- path
-- item type
-- content identity or hash
-- size
-- mtime
-- comparison facts useful for reconciliation
-
-For:
-
-- SQLite comparison against remote and baseline
-- uniform current-truth schema
-- inspection and debugging
-
-Not for:
-
-- skipping the startup full scan
-
-## Current remote snapshot
-
-Conceptual role:
-
-- current authoritative remote snapshot for planning
-
-Future-state meaning:
-
-- the latest comprehensive durable remote mirror after delta continuation or
-  full remote refresh
-
-Stores:
-
-- item ID
-- parent ID
-- path
-- item type
-- content identity or hash
-- size
-- mtime
-- ETag or equivalent revision identity
-
-For:
-
-- SQLite comparison against local and baseline
-- durable remote mirror and delta continuation
-
-## Baseline
-
-Conceptual role:
-
-- prior synced agreement
-
-Stores:
-
-- path
-- hierarchy facts
-- synced local identity tuple
-- synced remote identity tuple
-
-For:
-
-- delete inference
-- move continuity
-- conflict continuity
-
-## Observation state
-
-Conceptual role:
-
-- restart-safe observation scheduling and remote resume state
-
-Stores:
-
-- configured drive identity
-- remote delta cursor
-- last remote reconcile time
-- next full remote reconcile due
-
-Does not store:
-
-- dirty scopes
-- raw event queues
-- partial coverage flags under this comprehensive-snapshot model
+The design intentionally has no `sync_failures` table.
 
 ## `observation_issues`
 
-Conceptual meaning:
-
-- "current truth reveals this path or content is inherently wrong, unsyncable,
-  or locally unreadable under current policy"
-
-This is the durable observation-owned issue ledger.
-
-Stores:
-
-- `path`
-- issue type
-- first seen / last seen
-- optional file size or path facts needed for rendering
-- optional observation-owned reason text or normalized reason fields
-
-May own:
-
-- observation-discovered actionable problems
-- observation-time validation failures
-- observation-owned local file problems that should be shown, not retried
-
-Must not own:
-
-- retry scheduling
-- shared blocker timing
-- desired intent
-- exact execution obligations
-
-Key invariant:
-
-- `observation_issues` records what current truth itself makes impossible or
-  invalid
-- it is not the retry ledger and not the blocker ledger
-
-## `retry_work`
-
-Conceptual meaning:
-
-- "we still owe this exact semantic work later"
-
-This is the durable long-term execution obligation ledger.
-
-Stores:
-
-- exact semantic work key
-- `path`
-- `old_path` when relevant
-- `action_type`
-- `attempt_count`
-- `next_retry_at`
-- `blocked`
-- `scope_key`
-- last error classification or reason
-
-May own:
-
-- exact delayed work identity
-- ready retry timing
-- blocked/unblocked state
-- linkage to one shared blocker scope
-
-Must not own:
-
-- desired intent by itself
-- current planner truth
-- user-facing issue reporting
-- shared blocker timing
-
-Key invariant:
-
-- `retry_work` rows are subordinate to the latest actionable set
-- if the latest actionable set no longer wants the work, the row is deleted
-
-## `block_scopes`
-
-Conceptual meaning:
-
-- "this scope is blocked, and here is its restart-safe backoff, trial, or
-  preserve timing"
-
-This is the durable shared blocker timing and lifecycle ledger.
-
-Stores:
-
-- `scope_key`
-- scope kind
-- `blocked_at`
-- `next_trial_at`
-- `retry_after_until`
-- trial interval or backoff facts
-- trial count
-- preserve deadline when independently needed
-
-May own:
-
-- shared blocker timing
-- scope release/discard lifecycle
-- restart-safe trial scheduling
-
-Must not own:
-
-- the blocked item list
-- executable action payloads
-- planner truth
-- visible issue reporting
-
-Key invariant:
-
-- blocked work stays in `retry_work`
-- `block_scopes` never becomes a second source of truth for exact owed work
-
-## Full Taxonomy
-
-The full future-state taxonomy has three source categories:
-
-1. observation issues
-2. retry-derived issues
-3. blocker-derived issues
-
-The CLI and status commands should present a user-facing view over those three
-source categories at read time. That presentation is not a model-layer concept
-and should not drive schema design.
-
-## Observation issues
-
-These are discovered from current truth during:
-
-- observation
-- hashing
-- local validation
-- structural validation during or immediately after snapshot assembly
-
-They are not retries and not shared blocker scopes.
-
-Exhaustive future-state observation issue families:
-
-- `invalid_filename`
-  Meaning: the filename is invalid for OneDrive or the target namespace.
-  Specific current subcases already proven in code include:
-  - empty filename
-  - trailing period
-  - trailing space
-  - leading space
-  - component too long
-  - reserved Windows device name
-  - reserved OneDrive pattern
-  - forbidden OneDrive characters
-  - reserved root-library names
-- `path_too_long`
-  Meaning: the full path exceeds the remote path limit.
-- `file_too_large`
-  Meaning: the file exceeds the remote upload size limit.
-- `case_collision`
-  Meaning: the local tree contains names that differ only by case and cannot be
-  represented safely on OneDrive.
-- `hash_error`
-  Meaning: hashing or file inspection failed unexpectedly during observation.
-- `local_file_read_denied`
-  Meaning: one specific file cannot be read during observation, but this is not
-  a subtree/shared blocker situation.
-- `policy_disallowed`
-  Meaning: product or sync policy says this path/content must never sync, and
-  waiting longer will never change that.
-
-Notes:
-
-- the first five map directly onto current repo issue families
-- `local_file_read_denied` and `policy_disallowed` are the right future-state
-  conceptual names even if current code still folds them into older families or
-  does not yet model them separately
-
-## Retry-derived issues
-
-These come from exact work that the engine still owes after short-term retry
-was exhausted. They are derived from `retry_work`.
-
-They should stay a small user-facing set even if the internal transient reason
-space is richer.
-
-User-facing retry-derived families:
-
-- `retrying_automatically: transient_timeout_or_visibility`
-  Covers request timeout, transient not-found, transient precondition conflict,
-  and transient locked-resource style failures.
-- `retrying_automatically: transient_service_issue`
-  Covers item-scoped transient service failures that have not widened into a
-  shared blocker.
-- `retrying_automatically: transient_rate_limit`
-  Covers item-scoped transient rate limiting before or unless it is promoted to
-  a shared throttling blocker.
-
-Internal transient subreasons may include:
-
-- request timeout
-- transient not found
-- transient conflict / precondition mismatch
-- resource locked
-- item-scoped service outage
-- item-scoped rate limiting
-
-Those subreasons matter for retry policy, but the user-facing retry taxonomy
-should stay smaller and easier to understand.
-
-## Blocker-derived issues
-
-These come from `block_scopes`.
-
-A blocker scope is not "an issue type discovered only after an action fails."
-A blocker scope is a shared-condition fact, and it may be discovered from:
-
-- observation
-- execution
-
-That distinction matters.
-
-Observation-born scopes:
-
-- local subtree permission denial
-- remote subtree read denial discovered during refresh
-- remote subtree write denial when observation/probe can prove read-only
-  semantics before dispatch
-- other shared subtree blockers that current truth proves before execution
-
-Execution-born scopes:
-
-- account throttling
-- target-drive throttling
-- remote quota exceeded
-- remote write denial first proven by a failed write
-- local disk full first proven by a failed local write/download
-- broader service outage widened from action failures
-
-User-facing blocker-derived families are:
-
-- `authentication_required`
-- `rate_limited`
-- `service_outage`
-- `quota_exceeded`
-- `remote_write_denied`
-- `remote_read_denied`
-- `local_read_denied`
-- `local_write_denied`
-- `disk_full`
-- `file_too_large_for_space`
-
-The scope taxonomy below defines the concrete scope families that back those
-blocker-derived issues.
-
-## Scope Taxonomy
-
-The ideal future-state scope taxonomy should be explicit and directional.
-
-## `account:throttled`
-
-Meaning:
-
-- the remote service is rate limiting at the account level
-
-Use for:
-
-- broad `429` or equivalent rate-limiting conditions that should suppress
-  account-wide hammering
-
-Behavior:
-
-- one shared blocker scope
-- blocked retry work links to it
-- CLI/status can report this as a blocker-derived issue
-- respect `Retry-After`
-
-Why:
-
-- this copies the right lesson from Dropbox-style rate limits
-
-## `throttle:target:drive:<driveID>`
-
-Meaning:
-
-- one target drive or one remote target is rate limited
-
-Behavior:
-
-- block only work aimed at that drive
-- keep unrelated work flowing
-- respect `Retry-After`
-
-Why:
-
-- this is narrower than account throttling and avoids unnecessary global stall
-
-## `perm:remote:write:<boundary>`
-
-Meaning:
-
-- the remote subtree can be read but not written
-
-Examples:
-
-- read-only shared folder
-- remote subtree write denied
-
-Behavior:
-
-- uploads, remote creates, remote moves, and remote deletes under that boundary
-  are blocked
-- blocked work lives in `retry_work`
-- shared blocker timing and lifecycle live in `block_scopes`
-- CLI/status can report this as `remote_write_denied`
-
-Why:
-
-- this copies the best lesson from Seafile-style read-only subtree behavior
-
-## `perm:remote:read:<boundary>`
-
-Meaning:
-
-- the engine cannot even read the remote subtree or parent needed for planning
-  or mutation under that boundary
-
-Behavior:
-
-- any work requiring remote reads under that boundary is blocked
-- surfaced distinctly from remote write denial
-- unrelated work outside the boundary continues
-
-Why:
-
-- remote read denial is a stronger blocker than remote write denial and must be
-  modeled separately
-
-## `perm:dir:<path>`
-
-Meaning:
-
-- the local directory subtree cannot be read and/or written safely
-
-Behavior:
-
-- subtree-level local permission denial becomes one shared blocker scope
-- blocked descendants remain exact work items in `retry_work`
-- CLI/status can report this as local read or local write denial depending on
-  the blocked capability
-
-Why:
-
-- this prevents local subtree permission problems from degenerating into
-  disconnected file-level retry spam
-
-## `quota:own`
-
-Meaning:
-
-- the remote drive is out of quota for writes
-
-Behavior:
-
-- block uploads and other remote-creating writes
-- keep unrelated safe work flowing when possible
-
-Why:
-
-- quota is a shared blocker, not a plain per-file transient retry
-
-## `disk:local`
-
-Meaning:
-
-- local disk space is insufficient for local writes/downloads
-
-Behavior:
-
-- block downloads and local writes requiring disk
-- keep unrelated remote-only work flowing when safe
-
-Why:
-
-- this copies the right Nextcloud lesson from low-disk behavior
-
-## `service`
-
-Meaning:
-
-- broader Graph or service outage outside a narrower throttle scope
-
-Behavior:
-
-- only use when the failure is genuinely broad
-- do not upgrade every transient request hiccup into a durable global blocker
-
-## Engine Pipeline And Where These Concepts Fit
-
-## 1. Observation
-
-Observation owns:
-
-- startup full local scan
-- remote delta continuation or full remote refresh
-
-Observation writes:
-
-- current local snapshot
-- current remote snapshot
-- observation state
-
-Observation may detect:
-
-- observation issues, which persist in `observation_issues`
-- observation-born shared blocker scopes, which persist in `block_scopes`
-
-Observation-born scopes are important. Shared blocker scopes are not only
-execution-time discoveries.
-
-Observation must not:
-
-- build executable actions
-- own retry work
-
-## 2. Structural comparison in SQLite
-
-SQLite owns structural comparison and reconciliation over:
-
-- current local snapshot
-- current remote snapshot
-- baseline
-
-SQLite should determine structural outcomes such as:
-
-- upload candidate
-- download candidate
-- local delete candidate
-- remote delete candidate
-- equal-again
-- conflict class
-- baseline removal
-
-SQLite does not own:
-
-- runtime scheduling
-- blocker admission
-- dependency ordering
-
-## 3. Actionable-set construction in Go
-
-Go converts structural outcomes into the actionable set.
-
-This stage applies:
-
-- sync mode
-- ignore and policy filtering
-- conflict expansion
-- delete safety rules
-- folder delete expansion
-- dependency detection
-- blocker admission
-
-This is where the durable recovery model touches current desired intent:
-
-- `retry_work` is pruned against the latest actionable set
-- `block_scopes` is consulted for held/trialed work
-- `observation_issues` is not planner intent
-
-## 4. Runtime admission and scheduling
-
-Go runtime owns:
-
-- ready queue
-- blocked queue
-- dep graph
-- in-flight work
-- retry timers
-- trial timers
-- debounce and dirty scheduling
-
-Durable relationships here:
-
-- due unblocked work comes from `retry_work`
-- shared blocker timing comes from `block_scopes`
-- observation-backed user-help-needed problems come from `observation_issues`
-
-## 5. Execution
-
-Execution owns:
-
-- side effects
-- item-level revalidation
-- short-term edge retry
-
-Short-term retry belongs here and in Graph/transport.
-
-Use it for:
-
-- connection reset
-- brief timeout
-- short transient `403`, `404`, `408`, `423`, `429`, `5xx`
-- chunk-level retry
-- request-level exponential backoff with jitter
-
-Characteristics:
-
-- in-memory only
-- local to the request or transfer
-- small budget
-- not persisted unless exhausted
-
-Execution must not:
-
-- invent new sync intent
-- use observation/reporting rows as retry/control truth
-
-## 6. Failure classification and persistence
-
-After execution returns an outcome:
-
-- transient item failure persists exact `retry_work`
-- shared blocker failure persists or extends `block_scopes` and blocks exact
-  `retry_work`
-- actionable execution-discovered issue should become either:
-  - an `observation_issues`-style durable actionable issue if it is really a
-    current-truth/content problem, or
-  - blocker/retry state if it is really execution-owned retry/blocker state
-
-User-facing explanation should be assembled by the CLI/status layer directly
-from `observation_issues`, `retry_work`, and `block_scopes`, not from a fourth
-durable authority table.
-
-This is the critical separation-of-concerns boundary.
-
-## Lifecycle Rules
-
-## Normal transient failure
-
-1. Short-term edge retry budget is exhausted.
-2. Classification says item-transient.
-3. Persist:
-   - exact `retry_work`
-4. Later retry when due.
-5. On success or stale revalidation:
-   - delete exact `retry_work`
-
-## Shared blocker failure
-
-1. Classification detects a shared blocker.
-2. Persist:
-   - one `block_scopes` row
-   - exact blocked `retry_work`
-3. Schedule one shared trial timeline.
-4. On release:
-   - delete or resolve the scope
-   - unblock exact retry work
-5. On discard:
-   - delete the scope
-   - delete blocked retry work for that scope
-
-## Actionable user-help-needed issue
-
-1. Classification or observation proves this is not "retry later" but "show the
-   user a durable issue".
-2. Persist:
-   - actionable `observation_issues`
-3. Remove:
-   - any exact matching `retry_work`
+`observation_issues` stores durable problems where current truth itself is
+invalid, unsyncable, or requires user action.
 
 Examples:
 
 - invalid filename
+- path too long
 - file too large
-- permanent policy rejection
-- local file permission denial that should be shown, not retried
+- case collision
+- local file read denied
+- hash/inspection failure
+- policy-disallowed content
 
-## Revalidation And Execute
+These rows are not retry scheduling. They are the durable ledger for
+"something about current truth is wrong and the user needs to know."
 
-Every action must carry enough identity to detect staleness.
+Execution-discovered problems also belong here when they are really current
+truth/content problems rather than transient execution failures. For example, a
+write that proves a file is permanently unsupported should normalize into
+`observation_issues`, not stay in a retry lane.
 
-Examples:
+## `retry_work`
 
-- overwrite upload: expected local content identity plus expected remote ETag
-- local delete: expected local hash before delete
-- remote delete: expected remote identity
-- download overwrite: expected remote identity plus local overwrite
-  preconditions when needed
+`retry_work` stores only exact delayed work:
 
-Executor result kinds should include:
+- semantic work identity: `work_key`, `path`, `old_path`, `action_type`
+- block linkage: `scope_key`, `blocked`
+- retry timing: `attempt_count`, `next_retry_at`
+- operator/debug facts: `last_error`
+- timestamps: `first_seen_at`, `last_seen_at`
 
-- success
-- stale-precondition / changed
-- retryable transient
-- scope-blocking transient
-- actionable issue
+`retry_work` answers exactly one question: what concrete work does the engine
+still owe later?
 
-Critical rule:
+It is not a reporting table and not a durable executable plan. Replans prune it
+against the newly built actionable set.
 
-- executor-time revalidation may refuse or reclassify work
-- executor-time revalidation may not invent a new action type
+## `block_scopes`
 
-## The `issues` Command
+`block_scopes` stores only shared blocking conditions and their timing:
 
-The `issues` command should be explicitly designed as a read-time presentation
-over the real durable authorities.
+- `scope_key`
+- blocker kind / visible condition type
+- `blocked_at`
+- timing source
+- trial interval / next trial time / trial count
 
-It should answer:
+`block_scopes` is the durable owner of shared blocker lifecycle. It is not a
+secondary owner of exact work.
 
-- what is wrong
-- where is it wrong
-- is the engine retrying automatically
-- is the work blocked behind a shared condition
-- does the user need to fix something
+Blocked work remains in `retry_work` with `blocked=true` and `scope_key`
+pointing at the owning scope row.
 
-It should not expose planner internals as if they were the user model.
+### Scope taxonomy
 
-The right mental model is:
+The target scope families are:
 
-- `observation_issues` answers what current truth itself says is wrong or
-  unsyncable
-- `retry_work` answers what the engine still owes
-- `block_scopes` answers what shared condition is blocking progress
-
-The CLI/status layer should group and summarize those facts in the spirit of
-Syncthing and Seafile: clear, grouped, user-facing.
-
-## Why This Separation Is Correct
-
-If a reporting surface also owns retries:
-
-- clearing a visible issue could accidentally erase owed work
-- retry timers would depend on reporting rows
-
-If `block_scopes` also owns blocked item payloads:
-
-- shared blocker timing and exact owed work get mixed together
-- one scope becomes a second source of truth for the blocked work set
-
-If `retry_work` also owns current desired intent:
-
-- stale failed work could outvote the latest actionable set
-- retries would start inventing sync intent
-
-This design avoids all three mistakes.
-
-## Mapping To Current Repo Names
-
-Ideal future-state concept to current implementation name:
-
-- `observation_issues` -> partly current observation-time actionable rows in
-  `sync_failures`; no clean first-class table yet
-- `retry_work` -> current `retry_state`
-- `block_scopes` -> current `scope_blocks`
-
-This mapping is only for orientation. The ideal design should be discussed and
-documented using the future-state names above.
-
-## Legacy / Current-State Notes
-
-This section is descriptive, not normative. It exists only to help map the
-future-state design onto the current repo.
-
-## Current durable names
-
-The current repo names are:
-
-- `retry_state`
-- `scope_blocks`
-- `sync_failures`
-
-Those names are acceptable as implementation details today, but they are not
-the clearest conceptual names for the future architecture.
-
-## Current scope vocabulary is narrower than the target vocabulary
-
-Today the repo already has useful scope families and prior lineage for broader
-scope handling, including:
-
-- target-drive throttling
-- account throttling in recent history
-- local directory permission scopes
-- remote permission scopes
-- quota
-- local disk
-- service-wide blockers
-
-But the future-state vocabulary should be cleaner and more directional than the
-current mixed legacy surface.
-
-In particular, the target model should clearly distinguish:
-
-- `account:throttled`
+- `service`
 - `throttle:target:drive:<driveID>`
-- `perm:remote:write:<boundary>`
-- `perm:remote:read:<boundary>`
-- `perm:dir:<path>`
 - `quota:own`
 - `disk:local`
-- `service`
+- `perm:dir:<path>`
+- `perm:remote:read:<boundary>`
+- `perm:remote:write:<boundary>`
+- `account:throttled`
 
-If current code still collapses some of those distinctions, that is legacy
-shape, not the desired end state.
+`account:throttled` is reserved for explicit classifier evidence. Ordinary
+target throttles do not imply it automatically.
 
-## Current implementation may still encode issue, retry, and blocker behavior with older boundaries
+### Observation-born blockers
 
-The current codebase has already moved substantially toward the benchmark
-shape, but the future-state rule remains:
+The engine should create `block_scopes` directly when current truth already
+proves a shared blocker, for example:
 
-- observation-owned durable actionable issues belong to `observation_issues`
-- exact owed work belongs to `retry_work`
-- shared blocker timing belongs to `block_scopes`
-- user-facing reporting belongs to CLI/status read-time presentation, not to a
-  separate model-layer authority
+- local subtree permission denial
+- remote subtree read denial during refresh or probe
+- remote subtree write denial when observation can prove read-only before
+  dispatch
 
-Any current helper, schema name, or code path that mixes those responsibilities
-should be read as legacy implementation detail to be retired, not as a reason
-to weaken the future-state ownership model.
+Not every scope is observation-born. Some will still be activated by execution.
+The rule is simply that blocker lifecycle belongs in `block_scopes` whichever
+path discovered it.
 
-## Current names vs future-state names
+## `observation_state`
 
-The future-state document should be read with this translation in mind:
+`observation_state` is not current truth. It is restart-safe observation
+metadata:
 
-- current observation-time actionable rows inside `sync_failures` are partial
-  legacy shape for future-state `observation_issues`
-- current `retry_state` is legacy naming for future-state `retry_work`
-- current `scope_blocks` is legacy naming for future-state `block_scopes`
+- configured drive ID
+- primary remote cursor
+- local and remote refresh mode
+- last full refresh time
+- next full refresh time
 
-The future-state names are preferred because they communicate ownership more
-clearly:
+`local_state` and `remote_state` answer "what do we currently believe exists?"
+`observation_state` answers "where do we resume observing from, and when do we
+force a full refresh again?"
 
-- `observation_issues` says "current truth itself says this is wrong or
-  unsyncable"
-- `retry_work` says "exact owed work"
-- `block_scopes` says "shared blocker timing/lifecycle"
+## Status Surface
 
-That is the language the design should standardize on, even if the code and
-schema still lag behind for a while.
+`status` is the only sync-health command.
 
-## Completion Criteria
+`status` must project directly from the durable authorities and other current
+runtime/account overlays:
 
-The engine matches this ideal design when all of these are true:
+- `observation_issues`
+- `retry_work`
+- `block_scopes`
+- `run_status`
+- drift/baseline counts derived from snapshot state
+- auth/account/degraded discovery state
+- optional live perf overlay
 
-1. planning reads only committed comprehensive snapshots plus baseline
-2. SQLite structural comparison is not confused with executable actions
-3. short-term Graph/transport retry stays separate from long-term persisted
-   retry
-4. observation-discovered durable actionable problems live only in
-   `observation_issues`
-5. exact delayed work lives only in `retry_work`
-6. shared blocker timing lives only in `block_scopes`
-7. user-facing issue presentation is assembled directly by CLI/status from the
-   real durable authorities, not stored as a competing model-layer authority
-8. shared blockers such as `account:throttled` do not degrade into per-file
-   retry storms
-9. remote read and remote write permission scopes are modeled explicitly
-10. blocker scopes can be discovered in observation as well as execution
-11. the `issues` command is explicitly user-facing and built from
-   `observation_issues`, `retry_work`, and `block_scopes`
-12. clearing/reporting user-facing issues never accidentally mutates retry
-   ownership
-13. executor-time precondition changes never invent new sync intent
+There is no second sync-health command. There is no manual `resolve` command.
+User action happens by fixing the world, rerunning ordinary commands, or
+letting the engine retry and reobserve.
+
+## Persistence Rules
+
+### Observation-time persistence
+
+Observation writes:
+
+- `local_state`
+- `remote_state`
+- `observation_state`
+- `observation_issues` when current truth is invalid or unsyncable
+- `block_scopes` when observation already proves a shared blocker
+
+Observation does not write retry scheduling.
+
+### Execution-time persistence
+
+Execution writes:
+
+- success publication to `baseline` and any needed mirror cleanup
+- `retry_work` for exact transient work that remains owed
+- `block_scopes` plus blocked `retry_work` for shared blockers
+- `observation_issues` when execution proves a durable current-truth/content
+  problem rather than a transient failure
+
+The engine must never use a mixed failure table as durable control state.
+
+## Admission And Execution
+
+### Durable reconciliation happens before dispatch
+
+After the current actionable set is rebuilt, the engine reconciles durable
+state before dispatch:
+
+- prune stale `retry_work` rows not present in the current actionable set
+- ensure blocked rows are linked to active `block_scopes`
+- release empty `block_scopes`
+- normalize durable current-truth problems into `observation_issues`
+
+This keeps durable state aligned with the current plan without creating a
+durable executable-plan table.
+
+### Final scope admission happens after dependency readiness
+
+`DepGraph` remains scope-agnostic. It owns dependency ordering only.
+
+Final scope admission still happens on the ready frontier after dependency
+resolution:
+
+- ready actions are checked against active `block_scopes`
+- dispatchable actions go to workers
+- blocked actions stay represented as blocked `retry_work`
+- trial candidates also flow through the same runtime admission boundary
+
+The benchmark does not require moving all blocker checks before the dependency
+graph. It requires earlier durable reconciliation plus a final runtime gate on
+ready work.
+
+## Retry And Trial Model
+
+- due unblocked rows in `retry_work` feed ordinary retry dispatch
+- due `block_scopes` feed trial dispatch
+- one shared blocker owns one shared trial timeline
+- trial outcomes may release, preserve, or extend the owning scope
+
+The dependency graph is not a retry system. Workers do not sleep for durable
+retry backoff. They return one completion, and the engine persists the outcome.
+
+## Restart Semantics
+
+On startup the engine reloads:
+
+- snapshots (`local_state`, `remote_state`)
+- `baseline`
+- `observation_state`
+- `observation_issues`
+- `retry_work`
+- `block_scopes`
+- catalog-owned account auth state
+
+Then it reobserves current truth and replans. The engine does not require a
+persisted in-flight action queue or a mixed failure ledger to recover.
+
+The refactor series should prefer explicit state-store reset over compatibility
+shims. Old stores that do not match the target architecture should require
+`drive reset-sync-state` instead of migration glue.
+
+## Refactor Guardrails
+
+The target architecture requires these cleanup rules:
+
+- no `sync_failures`
+- no `retry_state`
+- no `scope_blocks`
+- no store-owned competing status projection model
+- no ghost vocabulary such as failure-role `item` / `held` / `boundary`
+- no tests whose purpose is only to prove old names are gone
+- no second sync-health command
+
+The end state should make the old architecture invisible in docs, code, tests,
+comments, error strings, and public status payloads.

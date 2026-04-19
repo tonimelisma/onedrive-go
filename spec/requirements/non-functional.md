@@ -50,7 +50,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 
 - R-6.5.1: The sync state store shall provide durable, transactional writes that survive process kill. [verified]
 - R-6.5.2: Every sync operation shall be atomic — incomplete operations shall not corrupt state. [verified]
-- R-6.5.3: On startup, the system shall detect items stuck in `syncing` state and reset them. [verified]
+- R-6.5.3: On startup, the system shall rebuild runnable state from durable snapshots, `retry_work`, `block_scopes`, and `observation_state` rather than relying on persisted in-flight action flags. [designed]
 
 ## R-6.6 Observability [verified]
 
@@ -113,15 +113,15 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.8.4: The system shall treat HTTP 429 as target-scoped by default: it shall block only the narrowest remote boundary provable from the failed request. Owned-drive traffic blocks that drive, and shared-folder or direct shared-item traffic block that exact shared root/item boundary. Broader account-wide or tenant-wide throttling shall not be inferred without explicit evidence. [verified]
 - R-6.8.5: ~~The system shall parse `RateLimit-Remaining` headers and proactively slow when less than 20% remains.~~ [cancelled — headers only cover per-app 1-minute resource units; not reliable for proactive throttling. Reactive 429 scope handling is sufficient.]
 - R-6.8.6: The system shall honor `Retry-After` from both 429 and 503 responses, populating `GraphError.RetryAfter`. [verified]
-- R-6.8.7: During sync, workers shall never block on retry backoff. Failed actions are completed and recorded in `sync_failures` with `next_retry_at`. Workers block only for HTTP round-trip time. [verified]
+- R-6.8.7: During sync, workers shall never block on retry backoff. Failed actions are completed once and recorded durably in `retry_work` or `block_scopes`; workers block only for HTTP round-trip time. [designed]
 - R-6.8.8: For sync operations, the graph client shall use raw `http.DefaultTransport` (no retry transport). Each dispatch equals one HTTP request. CLI commands shall retain `Transport` policy (`MaxAttempts: 5`). [verified]
 - R-6.8.9: The executor shall not contain a retry loop. It shall dispatch actions and return results; the engine shall classify and schedule retries. [verified]
-- R-6.8.10: Each sync action failure shall be recorded in `sync_failures` with `next_retry_at` computed by the `retry.Reconcile` backoff policy. The `FailureRetrier` re-injects due items via buffer → planner → tracker. One retry mechanism, one backoff curve. No in-memory retry budget — the tracker is a pure dependency graph and scope-aware dispatch gate. [verified]
-- R-6.8.11: The system shall use `retry.Reconcile` backoff for all sync failures: 1s base, 2× multiplier, ±25% jitter, 1h max. Curve: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 512s, 1024s, 2048s, 3600s cap. Single persistent mechanism via `sync_failures` + `FailureRetrier`. [verified]
+- R-6.8.10: Each retryable sync action failure shall be recorded in `retry_work` with `next_retry_at` computed by the `retry.Reconcile` backoff policy. Due rows are revalidated from current truth and reintroduced through the normal planner/dependency pipeline. One durable retry mechanism, one backoff curve. [designed]
+- R-6.8.11: The system shall use `retry.Reconcile` backoff for all durable retry work: 1s base, 2× multiplier, ±25% jitter, 1h max. Curve: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 512s, 1024s, 2048s, 3600s cap. The persistent mechanism is `retry_work` plus engine-owned retry/trial loops. [designed]
 - R-6.8.12: Target drive identity shall flow through the pipeline without lookup: planner to Action to TrackedAction to WorkerResult to engine. No component shall query drive identity from DB or API during failure handling. [verified]
 - R-6.8.13: `Action` shall expose `TargetsOwnDrive() bool` and `ShortcutKey() string` as the only drive-identity accessors for scope matching and routing. [verified]
 - R-6.8.14: Sync callers use raw `http.DefaultTransport`. The graph client's `doOnce()` still performs transparent 401 token refresh. Auth refresh is lifecycle, not transient retry. When refresh fails, the system shall return `ErrUnauthorized` (fatal). [verified]
-- R-6.8.15: The engine shall classify the following HTTP status codes as transient: 5xx (issue_type: server_error), 408 (request_timeout), 412 (transient_conflict), 404 (transient_not_found), 423 (resource_locked). Transient errors are recorded in `sync_failures` with `next_retry_at` (backoff via `retry.Reconcile`: 1s-1h). The `FailureRetrier` re-injects due items through the full pipeline (buffer → planner → tracker). In one-shot mode, failed items remain in sync_failures for the next `onedrive sync` invocation to replan. HTTP 423 (SharePoint co-authoring lock) was previously classified as skip — the persistent retry architecture handles multi-hour locks naturally via escalating backoff in sync_failures. [verified]
+- R-6.8.15: The engine shall classify the following HTTP status codes as transient: 5xx (`server_error`), 408 (`request_timeout`), 412 (`transient_conflict`), 404 (`transient_not_found`), 423 (`resource_locked`). Transient exact work is recorded in `retry_work` with `next_retry_at` (backoff via `retry.Reconcile`: 1s-1h). Shared transient conditions activate `block_scopes`. In one-shot mode, failed work remains durable for the next `onedrive sync` invocation to replan. [designed]
 - R-6.8.16: External and runtime failures shall be translated into the documented domain error model before retry, durable persistence, or user presentation. [verified]
 
 ## R-6.9 Packaging [future]
