@@ -44,7 +44,7 @@ func (ph *PermissionHandler) HasPermChecker() bool {
 
 // ActiveRemoteBlockedBoundaries returns all persisted remote permission
 // boundaries currently blocking write admission under read-only subtrees.
-// Runtime blocking derives from blocked retry_work rows, not sync_failures.
+// Runtime blocking derives from blocked retry_work rows plus block_scopes.
 func (ph *PermissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) []string {
 	rows, err := ph.store.ListBlockedRetryWork(ctx)
 	if err != nil {
@@ -220,22 +220,27 @@ func (ph *PermissionHandler) remoteBoundaryDecision(
 	actionType ActionType,
 	failureDriveID driveid.ID,
 ) PermissionCheckDecision {
+	_ = failureDriveID
+
 	scopeKey := SKPermRemote(boundary)
 
 	return PermissionCheckDecision{
 		Matched: true,
 		Kind:    permissionCheckActivateDerivedScope,
-		Failure: SyncFailureParams{
+		RetryWorkFailure: &RetryWorkFailure{
 			Path:       failedPath,
-			DriveID:    failureDriveID,
-			Direction:  directionFromAction(actionType),
 			ActionType: actionType,
-			Role:       FailureRoleHeld,
-			Category:   CategoryTransient,
-			IssueType:  IssueSharedFolderBlocked,
-			ErrMsg:     errMsg,
-			HTTPStatus: httpStatus,
+			IssueType:  IssueRemoteWriteDenied,
 			ScopeKey:   scopeKey,
+			LastError:  errMsg,
+			HTTPStatus: httpStatus,
+			Blocked:    true,
+		},
+		BlockScope: &BlockScope{
+			Key:          scopeKey,
+			IssueType:    IssueRemoteWriteDenied,
+			TimingSource: ScopeTimingNone,
+			BlockedAt:    ph.nowFn(),
 		},
 		ScopeKey:     scopeKey,
 		BoundaryPath: boundary,
@@ -525,15 +530,12 @@ func (ph *PermissionHandler) localFilePermissionDecision(
 	return PermissionCheckDecision{
 		Matched: true,
 		Kind:    permissionCheckRecordFileFailure,
-		Failure: SyncFailureParams{
+		ObservationIssue: &ObservationIssue{
 			Path:       path,
 			DriveID:    ph.driveID,
-			Direction:  directionFromAction(actionType),
 			ActionType: actionType,
-			Role:       FailureRoleItem,
-			IssueType:  IssueLocalPermissionDenied,
-			Category:   CategoryActionable,
-			ErrMsg:     errMsg,
+			IssueType:  IssueLocalWriteDenied,
+			Error:      errMsg,
 		},
 	}
 }
@@ -549,22 +551,27 @@ func (ph *PermissionHandler) localDirectoryPermissionDecision(
 		Matched:  true,
 		Kind:     permissionCheckActivateBoundaryScope,
 		ScopeKey: scopeKey,
-		Failure: SyncFailureParams{
-			Path:       boundaryPath,
-			DriveID:    ph.driveID,
-			Direction:  directionFromAction(actionType),
+		RetryWorkFailure: &RetryWorkFailure{
+			Path:       triggerPath,
 			ActionType: actionType,
-			Role:       FailureRoleBoundary,
-			IssueType:  IssueLocalPermissionDenied,
-			Category:   CategoryActionable,
-			ErrMsg:     "directory not accessible (check filesystem permissions)",
+			IssueType:  IssueLocalWriteDenied,
 			ScopeKey:   scopeKey,
+			LastError:  "directory not accessible (check filesystem permissions)",
+			Blocked:    true,
 		},
-		BlockScope: BlockScope{
+		BlockScope: &BlockScope{
 			Key:          scopeKey,
-			IssueType:    IssueLocalPermissionDenied,
+			IssueType:    IssueLocalWriteDenied,
 			TimingSource: ScopeTimingNone,
 			BlockedAt:    ph.nowFn(),
+		},
+		ObservationIssue: &ObservationIssue{
+			Path:       boundaryPath,
+			DriveID:    ph.driveID,
+			ActionType: actionType,
+			IssueType:  IssueLocalWriteDenied,
+			Error:      "directory not accessible (check filesystem permissions)",
+			ScopeKey:   scopeKey,
 		},
 		BoundaryPath: boundaryPath,
 		TriggerPath:  triggerPath,

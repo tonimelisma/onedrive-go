@@ -157,7 +157,7 @@ func (rt *watchRuntime) dispatchBatchActions(
 
 	trialIndex := rt.findTrialActionIndex(plan, opts)
 	if !opts.trialScopeKey.IsZero() && trialIndex < 0 {
-		if err := rt.engine.baseline.ClearHeldRetryWork(ctx, opts.trialWork, opts.trialScopeKey); err != nil {
+		if err := rt.engine.baseline.ClearBlockedRetryWork(ctx, opts.trialWork, opts.trialScopeKey); err != nil {
 			rt.engine.logger.Debug("dispatchBatchActions: failed to clear stale trial failure",
 				slog.String("path", opts.trialWork.Path),
 				slog.String("scope_key", opts.trialScopeKey.String()),

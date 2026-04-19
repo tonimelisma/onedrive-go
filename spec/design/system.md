@@ -167,7 +167,7 @@ For detailed module design, see:
 |---------|-------|
 | Runtime failure class | `internal/errclass` + `internal/sync/engine_result_classify.go` |
 | Sync-domain summary key | `internal/sync/summary_keys.go` |
-| Status title/reason/action rendering | `internal/cli/status_issue_descriptors.go` |
+| Status title/reason/action rendering | `internal/cli/status_condition_descriptors.go` |
 | Durable sync status facts | `internal/sync` SQLite tables (`observation_issues`, `retry_work`, `block_scopes`) plus catalog-owned account auth state |
 | Account/auth presentation | `internal/authstate` vocabulary projected through `internal/cli/account_view_snapshot.go` |
 | Read-only status snapshot | `internal/sync/store_inspect.go` |

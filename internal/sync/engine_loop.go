@@ -453,38 +453,6 @@ func (rt *watchRuntime) logBootstrapWait() {
 	)
 }
 
-func (rt *watchRuntime) handleWatchCompletion(
-	ctx context.Context,
-	p *watchPipeline,
-	outbox []*TrackedAction,
-	completion *ActionCompletion,
-	ok bool,
-) ([]*TrackedAction, bool, error) {
-	if !ok {
-		if rt.isDraining() {
-			p.completions = nil
-			return outbox, rt.drainLoopDone(p), nil
-		}
-		if contextIsCanceled(ctx) {
-			p.completions = nil
-			rt.beginWatchDrain(ctx, p)
-			return nil, rt.drainLoopDone(p), nil
-		}
-		return outbox, false, fmt.Errorf("sync: action completions channel closed unexpectedly")
-	}
-
-	outcome := rt.processActionCompletion(ctx, rt, completion, p.bl)
-	if outcome.terminate {
-		return outbox, false, outcome.terminateErr
-	}
-	nextOutbox, err := rt.drainPublicationReadyActions(ctx, rt, p.bl, outbox, outcome.dispatched)
-	if err != nil {
-		rt.completeOutboxAsShutdown(nextOutbox)
-		return nil, false, err
-	}
-	return nextOutbox, false, nil
-}
-
 func contextIsCanceled(ctx context.Context) bool {
 	return ctx.Err() != nil
 }

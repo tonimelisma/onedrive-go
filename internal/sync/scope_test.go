@@ -404,8 +404,8 @@ func TestScopeKey_IssueType(t *testing.T) {
 		{SKThrottleDrive(driveid.New("0000000000000001")), IssueRateLimited},
 		{SKService(), IssueServiceOutage},
 		{SKQuotaOwn(), IssueQuotaExceeded},
-		{SKPermDir("x"), IssueLocalPermissionDenied},
-		{SKPermRemote("Shared/TeamDocs"), IssueSharedFolderBlocked},
+		{SKPermDir("x"), IssueLocalWriteDenied},
+		{SKPermRemote("Shared/TeamDocs"), IssueRemoteWriteDenied},
 		{SKDiskLocal(), IssueDiskFull},
 		{ScopeKey{}, ""}, // zero value
 	}

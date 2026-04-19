@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -113,4 +114,110 @@ func TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner(t *testing.T) {
 	err := runDriveResetSyncStateWithInput(t.Context(), cc, bytes.NewBufferString(""), true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot reset sync state while a sync owner is active")
+}
+
+func TestRunDriveResetSyncStateWithInput_RejectsInvalidCanonicalID(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cc := &CLIContext{
+		Flags:        CLIFlags{Drive: []string{"not-a-canonical-id"}},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      cfgPath,
+	}
+
+	err := runDriveResetSyncStateWithInput(t.Context(), cc, bytes.NewBufferString(""), true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid drive ID")
+}
+
+func TestRunDriveResetSyncStateWithInput_RejectsUnknownConfiguredDrive(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:reset@example.com")
+
+	cc := &CLIContext{
+		Flags:        CLIFlags{Drive: []string{cid.String()}},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      cfgPath,
+	}
+
+	err := runDriveResetSyncStateWithInput(t.Context(), cc, bytes.NewBufferString(""), true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in config")
+}
+
+func TestEnsureNoLiveStateResetOwner_AllowsUnmanagedActiveOwner(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	startCLIControlSocket(t, synccontrol.StatusResponse{
+		OwnerMode: synccontrol.OwnerModeWatch,
+		Drives:    []string{"personal:someone-else@example.com"},
+	}, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unexpected mutation", http.StatusInternalServerError)
+	})
+
+	err := ensureNoLiveStateResetOwner(t.Context(), driveid.MustCanonicalID("personal:reset@example.com"))
+	require.NoError(t, err)
+}
+
+func TestEnsureNoLiveStateResetOwner_ProbeFailureReturnsError(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	startCLIControlSocketWithStatusHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "status unavailable", http.StatusInternalServerError)
+	}, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unexpected mutation", http.StatusInternalServerError)
+	})
+
+	err := ensureNoLiveStateResetOwner(t.Context(), driveid.MustCanonicalID("personal:reset@example.com"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "probe control owner")
+}
+
+func TestConfirmDriveStateResetIntent_YesSkipsPrompt(t *testing.T) {
+	var output bytes.Buffer
+
+	err := confirmDriveStateResetIntent(bytes.NewBufferString("wrong\n"), &output, driveid.MustCanonicalID("personal:reset@example.com"), true)
+	require.NoError(t, err)
+	assert.Empty(t, output.String())
+}
+
+func TestStdinAsWriter_NonWriterReturnsNil(t *testing.T) {
+	assert.Nil(t, stdinAsWriter(bytes.NewReader(nil)))
+	var buf bytes.Buffer
+	assert.Same(t, &buf, stdinAsWriter(&buf))
+}
+
+func TestNewDriveResetSyncStateCmd_RunE_UsesYesFlag(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:reset@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+
+	var output bytes.Buffer
+	cc := &CLIContext{
+		Flags:        CLIFlags{Drive: []string{cid.String()}},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &output,
+		StatusWriter: &output,
+		CfgPath:      cfgPath,
+	}
+
+	cmd := newDriveResetSyncStateCmd()
+	cmd.SetContext(context.WithValue(t.Context(), cliContextKey{}, cc))
+	cmd.SetIn(bytes.NewBufferString(""))
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+	require.NoError(t, cmd.Flags().Set("yes", "true"))
+
+	err := cmd.RunE(cmd, nil)
+	require.NoError(t, err)
+	assert.Contains(t, output.String(), "Reset sync state DB for "+cid.String()+".")
 }

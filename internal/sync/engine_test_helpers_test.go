@@ -15,13 +15,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
+
+func newSingleOwnerEngine(t *testing.T) *testEngine {
+	t.Helper()
+
+	mock := &engineMockClient{}
+	eng, _ := newTestEngine(t, mock)
+	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
+	setupWatchEngine(t, eng)
+
+	return eng
+}
 
 // ---------------------------------------------------------------------------
 // Composite mock implementing DeltaFetcher + ItemClient + Downloader + Uploader
@@ -441,13 +451,6 @@ func runTestRetrierSweep(t *testing.T, eng *testEngine, ctx context.Context) []*
 	return testWatchRuntime(t, eng).runRetrierSweep(ctx, bl, SyncBidirectional, safety)
 }
 
-func runTestTrialDispatch(t *testing.T, eng *testEngine, ctx context.Context) []*TrackedAction {
-	t.Helper()
-
-	bl, safety := testWorkDispatchState(t, eng, ctx)
-	return testWatchRuntime(t, eng).runTrialDispatch(ctx, bl, SyncBidirectional, safety)
-}
-
 func externalDBChangedForTest(t *testing.T, eng *testEngine, ctx context.Context) bool {
 	t.Helper()
 
@@ -478,9 +481,7 @@ func setTestBlockScope(t *testing.T, eng *testEngine, block *BlockScope) {
 	if block.TimingSource != ScopeTimingNone && block.NextTrialAt.IsZero() {
 		block.NextTrialAt = block.BlockedAt.Add(block.TrialInterval)
 	}
-	if !block.Key.IsPermRemoteWrite() {
-		require.NoError(t, eng.baseline.UpsertBlockScope(context.Background(), block))
-	}
+	require.NoError(t, eng.baseline.UpsertBlockScope(context.Background(), block))
 	if eng.runtime != nil {
 		eng.runtime.upsertActiveScope(block)
 	}
@@ -501,10 +502,6 @@ func lookupTestEngineFlow(eng *testEngine) (*engineFlow, bool) {
 	return nil, false
 }
 
-func clearTestWatchRuntime(eng *testEngine) {
-	eng.runtime = nil
-}
-
 func testWatchRuntime(t *testing.T, eng *testEngine) *watchRuntime {
 	t.Helper()
 
@@ -521,207 +518,6 @@ func testEngineFlow(t *testing.T, eng *testEngine) *engineFlow {
 	require.True(t, ok, "engine flow must be initialized for this test")
 
 	return flow
-}
-
-func testScopeController(t *testing.T, eng *testEngine) *scopeController {
-	t.Helper()
-
-	return testEngineFlow(t, eng).scopeController()
-}
-
-func loadActiveScopesForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
-	t.Helper()
-	return testScopeController(t, eng).loadActiveScopes(ctx, testWatchRuntime(t, eng))
-}
-
-func isFailureResolvedForTest(t *testing.T, eng *testEngine, ctx context.Context, row *SyncFailureRow) bool {
-	t.Helper()
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-	flow := testEngineFlow(t, eng)
-	driveID := row.DriveID
-	if driveID.IsZero() {
-		driveID = eng.driveID
-	}
-	candidate := flow.buildRetryCandidateFromRetryWork(ctx, bl, &RetryWorkRow{
-		Path:       row.Path,
-		ActionType: normalizeFailureActionType(row.Direction, row.ActionType),
-		ScopeKey:   row.ScopeKey,
-	}, driveID)
-	if candidate.resolved {
-		flow.clearRetryWorkCandidate(ctx, retryWorkKey(row.Path, "", normalizeFailureActionType(row.Direction, row.ActionType)), driveID, "test resolution")
-	}
-	return candidate.resolved
-}
-
-func clearFailureCandidateForTest(
-	t *testing.T,
-	eng *testEngine,
-	ctx context.Context,
-	row *SyncFailureRow,
-	caller string,
-) {
-	t.Helper()
-	driveID := row.DriveID
-	if driveID.IsZero() {
-		driveID = eng.driveID
-	}
-	testEngineFlow(t, eng).clearRetryWorkCandidate(
-		ctx,
-		retryWorkKey(row.Path, "", normalizeFailureActionType(row.Direction, row.ActionType)),
-		driveID,
-		caller,
-	)
-}
-
-func recordRetryTrialSkippedItemForTest(
-	t *testing.T,
-	eng *testEngine,
-	ctx context.Context,
-	row *SyncFailureRow,
-	skipped *SkippedItem,
-) {
-	t.Helper()
-	driveID := row.DriveID
-	if driveID.IsZero() {
-		driveID = eng.driveID
-	}
-	testEngineFlow(t, eng).recordRetryTrialSkippedItem(
-		ctx,
-		retryWorkKey(row.Path, "", normalizeFailureActionType(row.Direction, row.ActionType)),
-		driveID,
-		skipped,
-	)
-}
-
-func isObservationSuppressedForTest(t *testing.T, eng *testEngine, watch *watchRuntime) bool {
-	t.Helper()
-	return testScopeController(t, eng).isObservationSuppressed(watch)
-}
-
-func releaseTestScope(t *testing.T, eng *testEngine, ctx context.Context, key ScopeKey) error {
-	t.Helper()
-	rt, _ := lookupTestWatchRuntime(eng)
-	return testScopeController(t, eng).releaseScope(ctx, rt, key)
-}
-
-func discardTestScope(t *testing.T, eng *testEngine, ctx context.Context, key ScopeKey) error {
-	t.Helper()
-	rt, _ := lookupTestWatchRuntime(eng)
-	return testScopeController(t, eng).discardScope(ctx, rt, key)
-}
-
-func assertTestCurrentScopeInvariants(t *testing.T, eng *testEngine, ctx context.Context) error {
-	t.Helper()
-	rt, _ := lookupTestWatchRuntime(eng)
-	return testEngineFlow(t, eng).assertCurrentInvariants(ctx, rt)
-}
-
-func assertReleasedScopeForTest(t *testing.T, eng *testEngine, ctx context.Context, key ScopeKey) error {
-	t.Helper()
-	rt, _ := lookupTestWatchRuntime(eng)
-	return testEngineFlow(t, eng).assertReleasedScope(ctx, rt, key)
-}
-
-func assertDiscardedScopeForTest(t *testing.T, eng *testEngine, ctx context.Context, key ScopeKey) error {
-	t.Helper()
-	rt, _ := lookupTestWatchRuntime(eng)
-	return testEngineFlow(t, eng).assertDiscardedScope(ctx, rt, key)
-}
-
-func normalizePersistedScopesForTest(t *testing.T, eng *testEngine, ctx context.Context) error {
-	t.Helper()
-	rt, _ := lookupTestWatchRuntime(eng)
-	return testScopeController(t, eng).normalizePersistedScopes(ctx, rt)
-}
-
-func setCatalogAuthRequirementForTest(t *testing.T, eng *testEngine, reason authstate.Reason) {
-	t.Helper()
-
-	email := eng.permHandler.accountEmail
-	require.NotEmpty(t, email)
-
-	require.NoError(t, config.UpdateCatalogForDataDir(eng.dataDir, func(catalog *config.Catalog) error {
-		account := config.CatalogAccount{
-			CanonicalID: email,
-			Email:       email,
-			DriveType:   "test",
-		}
-		if existing, found := catalog.AccountByEmail(email); found {
-			account = existing
-		}
-		account.AuthRequirementReason = reason
-		catalog.UpsertAccount(&account)
-		return nil
-	}))
-}
-
-func loadCatalogAuthRequirementForTest(t *testing.T, eng *testEngine) authstate.Reason {
-	t.Helper()
-
-	stored, err := config.LoadCatalogForDataDir(eng.dataDir)
-	require.NoError(t, err)
-
-	account, found := stored.AccountByEmail(eng.permHandler.accountEmail)
-	if !found {
-		return ""
-	}
-
-	return account.AuthRequirementReason
-}
-
-func admitReadyForTest(t *testing.T, eng *testEngine, ctx context.Context, ready []*TrackedAction) []*TrackedAction {
-	t.Helper()
-	if rt, ok := lookupTestWatchRuntime(eng); ok {
-		return testScopeController(t, eng).admitReady(ctx, rt, ready)
-	}
-
-	return testScopeController(t, eng).admitReady(ctx, nil, ready)
-}
-
-func cascadeRecordAndCompleteForTest(t *testing.T, eng *testEngine, ctx context.Context, ta *TrackedAction, scopeKey ScopeKey) {
-	t.Helper()
-	testScopeController(t, eng).cascadeRecordAndComplete(ctx, ta, scopeKey)
-}
-
-func processActionCompletionForTest(
-	t *testing.T,
-	eng *testEngine,
-	ctx context.Context,
-	r *ActionCompletion,
-	bl *Baseline,
-) []*TrackedAction {
-	t.Helper()
-	return processActionCompletionDetailedForTest(t, eng, ctx, r, bl).dispatched
-}
-
-func processActionCompletionDetailedForTest(
-	t *testing.T,
-	eng *testEngine,
-	ctx context.Context,
-	r *ActionCompletion,
-	bl *Baseline,
-) routeOutcome {
-	t.Helper()
-	if rt, ok := lookupTestWatchRuntime(eng); ok {
-		return rt.processActionCompletion(ctx, rt, r, bl)
-	}
-
-	flow, ok := lookupTestEngineFlow(eng)
-	require.True(t, ok, "engine flow must be initialized for this test")
-	return flow.processActionCompletion(ctx, nil, r, bl)
-}
-
-func processTrialResultForTest(t *testing.T, eng *testEngine, ctx context.Context, r *ActionCompletion) {
-	t.Helper()
-	if rt, ok := lookupTestWatchRuntime(eng); ok {
-		rt.processActionCompletion(ctx, rt, r, nil)
-		return
-	}
-
-	flow, ok := lookupTestEngineFlow(eng)
-	require.True(t, ok, "engine flow must be initialized for this test")
-	flow.processActionCompletion(ctx, nil, r, nil)
 }
 
 type debugEventRecorder struct {
@@ -814,16 +610,6 @@ func (r *debugEventRecorder) findEventIndex(match func(engineDebugEvent) bool) i
 	}
 
 	return -1
-}
-
-func (r *debugEventRecorder) eventTypesSnapshot() []engineDebugEventType {
-	events := r.eventsSnapshot()
-	types := make([]engineDebugEventType, 0, len(events))
-	for i := range events {
-		types = append(types, events[i].Type)
-	}
-
-	return types
 }
 
 func (r *debugEventRecorder) eventsSnapshot() []engineDebugEvent {
@@ -1118,50 +904,9 @@ func (t *manualSyncTicker) Stop() {
 	t.stopped = true
 }
 
-func syncStorePathForTest(t *testing.T, ctx context.Context, eng *testEngine) string {
-	t.Helper()
-
-	rows, err := eng.baseline.rawDB().QueryContext(ctx, "PRAGMA database_list")
-	require.NoError(t, err, "PRAGMA database_list")
-	defer rows.Close()
-
-	for rows.Next() {
-		var seq int
-		var name string
-		var file string
-		require.NoError(t, rows.Scan(&seq, &name, &file), "scan PRAGMA database_list")
-		if name == storeScopeMainDatabaseName {
-			require.NotEmpty(t, file, "main database path should not be empty")
-			return file
-		}
-	}
-
-	require.NoError(t, rows.Err(), "iterate PRAGMA database_list")
-	require.FailNow(t, "main database path not found")
-	return ""
-}
-
 func runFullReconciliationAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *Baseline) {
 	t.Helper()
 	testWatchRuntime(t, eng).runFullReconciliationAsync(ctx, bl)
-}
-
-func activeBlockingScopeForTest(t *testing.T, eng *testEngine, ta *TrackedAction) ScopeKey {
-	t.Helper()
-	rt, _ := lookupTestWatchRuntime(eng)
-	return testScopeController(t, eng).activeBlockingScope(rt, ta)
-}
-
-func applyBlockScopeForTest(t *testing.T, eng *testEngine, ctx context.Context, sr ScopeUpdateResult) {
-	t.Helper()
-	rt := testWatchRuntime(t, eng)
-	testScopeController(t, eng).applyBlockScope(ctx, rt, sr)
-}
-
-func feedScopeDetectionForTest(t *testing.T, eng *testEngine, ctx context.Context, r *ActionCompletion) {
-	t.Helper()
-	rt, _ := lookupTestWatchRuntime(eng)
-	testScopeController(t, eng).feedScopeDetection(ctx, rt, r)
 }
 
 func isTestBlockScopeed(eng *testEngine, key ScopeKey) bool {

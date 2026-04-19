@@ -16,7 +16,7 @@ rely on transport-level retry loops for action execution.
 
 - Owns: backoff policy definitions, retry timing, the optional CLI-oriented
   HTTP retry transport, and the narrow `ThrottleGate` coordination primitive
-- Does Not Own: Graph wire normalization, sync failure classification,
+- Does Not Own: Graph wire normalization, sync result classification,
   scope activation, durable retry persistence, or user-facing status messaging
 - Source of Truth: `retry.Policy` values plus the HTTP/request outcomes
   presented to `RetryTransport`
@@ -145,7 +145,7 @@ Startup normalization applies persisted-scope policy before admission begins:
 
 The target sync engine does not carry:
 
-- a mixed `sync_failures` retry ledger
+- a mixed failure/reporting ledger
 - failure-role transitions such as `item`, `held`, or `boundary`
 - a retry queue inside the dependency graph
 - transport-level retry for sync workers

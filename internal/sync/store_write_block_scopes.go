@@ -16,7 +16,6 @@ package sync
 import (
 	"context"
 	"fmt"
-	"time"
 )
 
 func validateBlockScope(block *BlockScope) error {
@@ -112,36 +111,9 @@ func (m *SyncStore) ListBlockScopes(ctx context.Context) ([]*BlockScope, error) 
 	var result []*BlockScope
 
 	for rows.Next() {
-		var (
-			wireKey       string
-			issueType     string
-			timingSource  string
-			blockedAtNano int64
-			intervalNano  int64
-			nextTrialNano int64
-			trialCount    int
-		)
-
-		if scanErr := rows.Scan(
-			&wireKey, &issueType, &timingSource, &blockedAtNano,
-			&intervalNano, &nextTrialNano, &trialCount,
-		); scanErr != nil {
+		block, scanErr := scanBlockScopeRow(rows)
+		if scanErr != nil {
 			return nil, fmt.Errorf("sync: scanning block scope row: %w", scanErr)
-		}
-
-		nextTrialAt := time.Time{}
-		if nextTrialNano != 0 {
-			nextTrialAt = time.Unix(0, nextTrialNano).UTC()
-		}
-
-		block := &BlockScope{
-			Key:           ParseScopeKey(wireKey),
-			IssueType:     issueType,
-			TimingSource:  ScopeTimingSource(timingSource),
-			BlockedAt:     time.Unix(0, blockedAtNano).UTC(),
-			TrialInterval: time.Duration(intervalNano),
-			NextTrialAt:   nextTrialAt,
-			TrialCount:    trialCount,
 		}
 		if block.Key.IsZero() {
 			// Old or unknown persisted scope keys are no longer part of the

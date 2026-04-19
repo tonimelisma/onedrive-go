@@ -71,7 +71,7 @@ type Engine struct {
 
 	// retryBatchLimit lets tests lower the retrier sweep batch size so stress
 	// runs can exercise the batching contract without seeding thousands of
-	// durable failures per iteration. Production leaves this zero and uses the
+	// retry_work rows per iteration. Production leaves this zero and uses the
 	// compiled default in engine_retry_trial.go.
 	retryBatchLimit int
 

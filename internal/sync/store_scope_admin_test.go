@@ -13,53 +13,12 @@ import (
 
 const storeScopeMainDatabaseName = "main"
 
-func insertFailureForStoreScopeTest(
-	t *testing.T,
-	store *SyncStore,
-	path string,
-	driveID driveid.ID,
-	category FailureCategory,
-	role FailureRole,
-	issueType string,
-	scopeKey ScopeKey,
-	nextRetryAt any,
-) {
-	t.Helper()
-
-	now := time.Now().UnixNano()
-	require.NoError(t, store.CommitObservationCursor(t.Context(), driveID, ""))
-	_, err := store.rawDB().ExecContext(t.Context(),
-		`INSERT INTO sync_failures (
-			path, direction, action_type, category, failure_role, issue_type,
-			item_id, failure_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at,
-			file_size, local_hash, scope_key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		path,
-		DirectionUpload,
-		ActionUpload,
-		category,
-		role,
-		issueType,
-		nil,
-		1,
-		nextRetryAt,
-		"boom",
-		nil,
-		now,
-		now,
-		nil,
-		nil,
-		scopeKey.String(),
-	)
-	require.NoError(t, err)
-}
-
-func failureRowCountForStoreScopeTest(t *testing.T, store *SyncStore, path string) int {
+func retryWorkRowCountForStoreScopeTest(t *testing.T, store *SyncStore, path string) int {
 	t.Helper()
 
 	var count int
 	err := store.rawDB().QueryRowContext(t.Context(),
-		`SELECT COUNT(*) FROM sync_failures WHERE path = ?`, path,
+		`SELECT COUNT(*) FROM retry_work WHERE path = ?`, path,
 	).Scan(&count)
 	require.NoError(t, err)
 
@@ -90,58 +49,27 @@ func syncStorePathForStoreScopeTest(t *testing.T, store *SyncStore) string {
 }
 
 // Validates: R-2.5.2
-func TestSyncStore_ClearHeldRetryWork(t *testing.T) {
+func TestSyncStore_ClearBlockedRetryWork(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-	driveID := driveid.New(testDriveID)
 	scopeKey := SKPermRemote("Shared/Docs")
 
-	insertFailureForStoreScopeTest(t, store, "held.txt", driveID, CategoryTransient, FailureRoleHeld, IssueSharedFolderBlocked, scopeKey, nil)
-	require.NoError(t, store.ClearHeldRetryWork(t.Context(), RetryWorkKey{
-		Path:       "held.txt",
+	_, err := store.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
+		Path:       "blocked.txt",
+		ActionType: ActionUpload,
+		IssueType:  IssueRemoteWriteDenied,
+		ScopeKey:   scopeKey,
+		LastError:  "blocked",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, store.ClearBlockedRetryWork(t.Context(), RetryWorkKey{
+		Path:       "blocked.txt",
 		ActionType: ActionUpload,
 	}, scopeKey))
-	assert.Zero(t, failureRowCountForStoreScopeTest(t, store, "held.txt"))
-}
-
-// Validates: R-2.10.11
-func TestSyncStore_ResetRetryTimesForScope(t *testing.T) {
-	t.Parallel()
-
-	store := newTestStore(t)
-	driveID := driveid.New(testDriveID)
-	scopeKey := SKService()
-	now := time.Now()
-	pastRetry := now.Add(-time.Minute).UnixNano()
-	futureRetry := now.Add(time.Hour).UnixNano()
-
-	insertFailureForStoreScopeTest(t, store, "future.txt", driveID, CategoryTransient, FailureRoleItem, IssueServiceOutage, scopeKey, futureRetry)
-	insertFailureForStoreScopeTest(t, store, "past.txt", driveID, CategoryTransient, FailureRoleItem, IssueServiceOutage, scopeKey, pastRetry)
-	insertFailureForStoreScopeTest(t, store, "other-scope.txt", driveID, CategoryTransient, FailureRoleItem, IssueServiceOutage, SKPermRemote("Shared/Elsewhere"), futureRetry)
-
-	require.NoError(t, store.ResetRetryTimesForScope(t.Context(), scopeKey, now))
-
-	var gotFuture int64
-	err := store.rawDB().QueryRowContext(t.Context(),
-		`SELECT next_retry_at FROM sync_failures WHERE path = ?`, "future.txt",
-	).Scan(&gotFuture)
-	require.NoError(t, err)
-	assert.Equal(t, now.UnixNano(), gotFuture)
-
-	var gotPast int64
-	err = store.rawDB().QueryRowContext(t.Context(),
-		`SELECT next_retry_at FROM sync_failures WHERE path = ?`, "past.txt",
-	).Scan(&gotPast)
-	require.NoError(t, err)
-	assert.Equal(t, pastRetry, gotPast)
-
-	var gotOther int64
-	err = store.rawDB().QueryRowContext(t.Context(),
-		`SELECT next_retry_at FROM sync_failures WHERE path = ?`, "other-scope.txt",
-	).Scan(&gotOther)
-	require.NoError(t, err)
-	assert.Equal(t, futureRetry, gotOther)
+	assert.Zero(t, retryWorkRowCountForStoreScopeTest(t, store, "blocked.txt"))
 }
 
 // Validates: R-2.3.10, R-2.10.4
@@ -174,23 +102,41 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 		LocalMtime:      1700000000,
 		RemoteMtime:     1700000000,
 	}))
-	insertFailureForStoreScopeTest(t, store, "bad:name.txt", driveID, CategoryActionable, FailureRoleItem, IssueInvalidFilename, ScopeKey{}, nil)
+	require.NoError(t, store.UpsertObservationIssue(t.Context(), &ObservationIssue{
+		Path:       "bad:name.txt",
+		DriveID:    driveID,
+		ActionType: ActionUpload,
+		IssueType:  IssueInvalidFilename,
+		Error:      "invalid filename",
+	}))
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
-		IssueType:     IssueSharedFolderBlocked,
+		IssueType:     IssueRemoteWriteDenied,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Unix(1, 0),
 		TrialInterval: time.Second,
 		NextTrialAt:   time.Unix(2, 0),
 	}))
+	_, err := store.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
+		Path:       "Shared/Docs/a.txt",
+		ActionType: ActionUpload,
+		IssueType:  IssueRemoteWriteDenied,
+		ScopeKey:   scopeKey,
+		LastError:  "blocked",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
 
 	dbPath := syncStorePathForStoreScopeTest(t, store)
 	snapshot, err := ReadDriveStatusSnapshot(t.Context(), dbPath, false, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 1, snapshot.BaselineEntryCount)
 	assert.Equal(t, 3, snapshot.RunStatus.LastSucceededCount)
-	require.Len(t, snapshot.IssueGroups, 1)
-	assert.Equal(t, SummaryInvalidFilename, snapshot.IssueGroups[0].SummaryKey)
+	require.Len(t, snapshot.Conditions, 2)
+	assert.ElementsMatch(t,
+		[]SummaryKey{SummaryRemoteWriteDenied, SummaryInvalidFilename},
+		[]SummaryKey{snapshot.Conditions[0].SummaryKey, snapshot.Conditions[1].SummaryKey},
+	)
 }
 
 func TestFinalizeInspectorRead_PreservesSuccessfulReadOnCloseError(t *testing.T) {
@@ -211,4 +157,109 @@ func TestFinalizeInspectorRead_JoinsReadAndCloseErrors(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, readErr)
 	require.ErrorIs(t, err, closeErr)
+}
+
+// Validates: R-2.5.2, R-2.10.8
+func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndClearsScopedState(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
+	now := time.Date(2026, 4, 19, 9, 30, 0, 0, time.UTC)
+
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           scopeKey,
+		IssueType:     IssueRemoteWriteDenied,
+		TimingSource:  ScopeTimingBackoff,
+		BlockedAt:     now.Add(-time.Minute),
+		TrialInterval: 5 * time.Second,
+		NextTrialAt:   now,
+	}))
+	seedObservationIssueForTest(t, store, "Shared/Docs/bad.txt", IssueRemoteWriteDenied, scopeKey)
+	seedObservationIssueForTest(t, store, "other/problem.txt", IssueInvalidFilename, ScopeKey{})
+	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Path:       "Shared/Docs/file.txt",
+		ActionType: ActionUpload,
+		IssueType:  IssueRemoteWriteDenied,
+		ScopeKey:   scopeKey,
+		LastError:  "blocked",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, store.ReleaseScope(ctx, scopeKey, now))
+
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
+
+	rows, err := store.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "other/problem.txt", rows[0].Path)
+
+	retryRows, err := store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "Shared/Docs/file.txt", retryRows[0].Path)
+	assert.False(t, retryRows[0].Blocked)
+	assert.Equal(t, now.UnixNano(), retryRows[0].NextRetryAt)
+
+	ready, err := store.ListRetryWorkReady(ctx, now)
+	require.NoError(t, err)
+	require.Len(t, ready, 1)
+	assert.Equal(t, "Shared/Docs/file.txt", ready[0].Path)
+}
+
+// Validates: R-2.5.2, R-2.10.8
+func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndScopedState(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
+
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:          scopeKey,
+		IssueType:    IssueRemoteWriteDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Date(2026, 4, 19, 8, 0, 0, 0, time.UTC),
+	}))
+	seedObservationIssueForTest(t, store, "Shared/Docs/bad.txt", IssueRemoteWriteDenied, scopeKey)
+	seedObservationIssueForTest(t, store, "keep.txt", IssueInvalidFilename, ScopeKey{})
+	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Path:       "Shared/Docs/file.txt",
+		ActionType: ActionUpload,
+		IssueType:  IssueRemoteWriteDenied,
+		ScopeKey:   scopeKey,
+		LastError:  "blocked",
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, store.DiscardScope(ctx, scopeKey))
+
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
+
+	rows, err := store.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "keep.txt", rows[0].Path)
+
+	retryRows, err := store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, retryRows)
+}
+
+func TestSyncStore_DiscardScope_RejectsZeroScopeKey(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+
+	err := store.DiscardScope(t.Context(), ScopeKey{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing scope key")
 }

@@ -19,8 +19,8 @@ const (
 )
 
 const (
-	failureResolutionSourceWorkerSuccess = "worker_success"
-	failureResolutionSourceRetryResolved = "retry_resolution"
+	retryResolutionSourceWorkerSuccess = "worker_success"
+	retryResolutionSourceRevalidated   = "retry_resolution"
 )
 
 type retryCandidate struct {
@@ -151,9 +151,9 @@ func planContainsWorkKey(plan *ActionPlan, key RetryWorkKey) bool {
 // runTrialDispatch handles due scope trials without re-observing through a
 // bespoke API path. Trial candidates are reconstructed from current durable
 // state, planned through the normal engine path, and marked explicitly as
-// trials in the dependency graph. Lack of blocked retry work after refresh is
-// treated as proof that the persisted scope is empty, so the runtime discards
-// the scope instead of keeping dead timing metadata around.
+// trials in the dependency graph. Lack of a usable candidate is not proof that
+// the scope recovered; preserve semantics keep the scope active until an
+// actual release signal arrives.
 func (rt *watchRuntime) runTrialDispatch(
 	ctx context.Context,
 	bl *Baseline,
@@ -273,17 +273,12 @@ func (rt *watchRuntime) handleMissingTrialCandidate(
 					slog.String("error", candidate.err.Error()),
 				)
 			} else if candidate.resolved {
-				rt.scopeController().clearHeldRetryWork(ctx, probeRow, "runTrialDispatch")
+				rt.scopeController().clearBlockedRetryWork(ctx, probeRow, "runTrialDispatch")
 			}
 		}
 
-		if err := rt.scopeController().discardScope(ctx, rt, key); err != nil {
-			rt.engine.logger.Warn("runTrialDispatch: failed to discard emptied scope after disappeared blocked retry work",
-				slog.String("scope_key", key.String()),
-				slog.String("error", err.Error()),
-			)
-		}
-		rt.engine.logger.Debug("runTrialDispatch: blocked retry work disappeared during refresh; discarding empty scope",
+		rt.scopeController().rearmOrDiscardScope(ctx, rt, key)
+		rt.engine.logger.Debug("runTrialDispatch: blocked retry work disappeared during refresh; rechecking scope state",
 			slog.String("scope_key", key.String()),
 		)
 		return nil
@@ -317,7 +312,7 @@ func (rt *watchRuntime) clearStaleTrialRetryWork(
 
 	work := retryWorkKeyForRetryWork(row)
 
-	if err := rt.engine.baseline.ClearHeldRetryWork(ctx, work, scopeKey); err != nil {
+	if err := rt.engine.baseline.ClearBlockedRetryWork(ctx, work, scopeKey); err != nil {
 		rt.engine.logger.Warn("runTrialDispatch: failed to clear stale blocked retry work",
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("path", row.Path),
@@ -340,7 +335,7 @@ func (rt *watchRuntime) clearStaleTrialRetryWork(
 		)
 		return
 	} else if found {
-		rt.scopeController().rearmScopeTrial(ctx, rt, scopeKey)
+		rt.scopeController().rearmOrDiscardScope(ctx, rt, scopeKey)
 		return
 	}
 
@@ -538,13 +533,14 @@ func (flow *engineFlow) clearRetryWorkCandidate(
 	driveID driveid.ID,
 	caller string,
 ) {
+	_ = driveID
+
 	if err := flow.resolveRetryWorkAndLogResolution(
 		ctx,
 		work,
-		driveID,
-		failureResolutionSourceRetryResolved,
+		retryResolutionSourceRevalidated,
 	); err != nil {
-		flow.engine.logger.Debug(caller+": failed to clear resolved failure",
+		flow.engine.logger.Debug(caller+": failed to clear resolved retry work",
 			slog.String("path", work.Path),
 			slog.String("action", work.ActionType.String()),
 			slog.String("error", err.Error()),
@@ -620,21 +616,23 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 		slog.String("detail", skipped.Detail),
 	)
 
-	if err := flow.engine.baseline.UpsertActionableFailures(ctx, []ActionableFailure{{
+	if err := flow.engine.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
 		Path:       skipped.Path,
 		DriveID:    driveID,
-		Direction:  work.ActionType.Direction(),
 		ActionType: work.ActionType,
 		IssueType:  skipped.Reason,
 		Error:      skipped.Detail,
 		FileSize:   skipped.FileSize,
-	}}); err != nil {
+	}); err != nil {
 		flow.engine.logger.Error("failed to record retry/trial skipped item",
 			slog.String("path", skipped.Path),
 			slog.String("issue_type", skipped.Reason),
 			slog.String("error", err.Error()),
 		)
+		return
 	}
+
+	flow.clearRetryWorkCandidate(ctx, work, driveID, "recordRetryTrialSkippedItem")
 }
 
 func (flow *engineFlow) buildMirrorRetryCandidate(
@@ -748,22 +746,16 @@ func (flow *engineFlow) buildRemoteDeleteRetryCandidate(
 	return retryCandidate{}
 }
 
-// clearFailureOnSuccess resolves exact retry_work for a successfully completed
-// action and removes any matching transient item issue row. The engine owns
-// retry/issue lifecycle — CommitMutation handles only baseline publication.
-func (flow *engineFlow) clearFailureOnSuccess(ctx context.Context, r *ActionCompletion) {
-	driveID := r.DriveID
-	if driveID.String() == "" {
-		driveID = flow.engine.driveID
-	}
-
+// clearRetryWorkOnSuccess removes the retry_work row for a successfully
+// completed action. The engine owns retry_work and observation-issue lifecycle;
+// CommitMutation handles only baseline and remote_state updates.
+func (flow *engineFlow) clearRetryWorkOnSuccess(ctx context.Context, r *ActionCompletion) {
 	if clearErr := flow.resolveRetryWorkAndLogResolution(
 		ctx,
 		retryWorkKeyForCompletion(r),
-		driveID,
-		failureResolutionSourceWorkerSuccess,
+		retryResolutionSourceWorkerSuccess,
 	); clearErr != nil {
-		flow.engine.logger.Warn("failed to clear sync failure on success",
+		flow.engine.logger.Warn("failed to clear retry_work on success",
 			slog.String("path", r.Path),
 			slog.String("error", clearErr.Error()),
 		)
@@ -773,44 +765,40 @@ func (flow *engineFlow) clearFailureOnSuccess(ctx context.Context, r *ActionComp
 func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 	ctx context.Context,
 	work RetryWorkKey,
-	driveID driveid.ID,
 	resolutionSource string,
 ) error {
-	resolved, found, err := flow.engine.baseline.ResolveTransientRetryWork(ctx, work)
+	row, found, err := flow.engine.baseline.ResolveRetryWork(ctx, work)
 	if err != nil {
 		return fmt.Errorf("resolve retry work %s: %w", work.Path, err)
 	}
-	if !found || resolved == nil {
-		return nil
-	}
-	if !resolved.HadIssueRow {
+	if !found || row == nil {
 		return nil
 	}
 
-	flow.engine.logger.Info("transient failure resolved",
-		slog.String("path", resolved.Work.Path),
-		slog.String("drive_id", driveID.String()),
-		slog.String("issue_type", resolved.IssueType),
-		slog.String("action_type", resolved.Work.ActionType.String()),
-		slog.Int("attempt_count", resolved.AttemptCount),
+	flow.engine.logger.Info("retry_work resolved",
+		slog.String("path", row.Path),
+		slog.String("issue_type", row.IssueType),
+		slog.String("action_type", row.ActionType.String()),
+		slog.Int("attempt_count", row.AttemptCount),
 		slog.String("resolution_source", resolutionSource),
 	)
 
 	return nil
 }
 
-func (flow *engineFlow) applyFailurePersistence(
+func (flow *engineFlow) applyResultPersistence(
 	ctx context.Context,
+	watch *watchRuntime,
 	decision *ResultDecision,
 	r *ActionCompletion,
 ) {
 	switch decision.Persistence {
 	case persistNone:
 		return
-	case persistActionableFailure:
-		flow.recordFailure(ctx, decision, r, nil)
-	case persistTransientFailure:
-		flow.recordFailure(ctx, decision, r, retry.ReconcilePolicy().Delay)
+	case persistObservationIssue:
+		flow.recordObservationIssue(ctx, decision, r)
+	case persistRetryWork:
+		flow.recordRetryWork(ctx, watch, decision, r, retry.ReconcilePolicy().Delay)
 	default:
 		panic(fmt.Sprintf("unknown failure persistence mode %d", decision.Persistence))
 	}

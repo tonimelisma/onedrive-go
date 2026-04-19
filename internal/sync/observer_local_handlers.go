@@ -137,7 +137,7 @@ func (o *LocalObserver) HandleFsEvent(
 
 	// Unified observation filter (Stage 1: name + path length).
 	// Watch handlers don't collect SkippedItems — the safety scan (FullScan
-	// every 5 min) catches them for recording to sync_failures.
+	// every 5 min) catches them for observation-issue persistence.
 	if skip := shouldObserveWithFilter(name, dbRelPath, observedKindUnknown, o.filterConfig, o.observationRules); skip != nil {
 		if skip.Reason != "" {
 			o.Logger.Debug("watch: skipping file",
@@ -675,7 +675,7 @@ func (o *LocalObserver) HandleDelete(
 // runSafetyScan performs a full filesystem scan as a safety net, sending any
 // detected changes to the events channel. This catches events that fsnotify
 // may have missed. Skipped items are logged at DEBUG — the engine's primary
-// scan handles recording to sync_failures.
+// scan handles observation-issue persistence.
 func (o *LocalObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, events chan<- ChangeEvent) {
 	o.Logger.Debug("running safety scan")
 
@@ -697,7 +697,7 @@ func (o *LocalObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 
 	if len(result.Skipped) > 0 {
 		if o.skippedCh != nil {
-			// Forward SkippedItems to the engine for recording in sync_failures.
+			// Forward SkippedItems to the engine for observation-issue persistence.
 			select {
 			case o.skippedCh <- result.Skipped:
 			default:

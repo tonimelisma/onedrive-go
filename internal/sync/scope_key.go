@@ -192,7 +192,7 @@ func (sk ScopeKey) ThrottleTargetKey() string {
 }
 
 // IssueType returns the issue_type constant for this scope key's kind.
-// Used to populate sync_failures.issue_type consistently.
+// Used to derive a stable default issue type from a scope key.
 func (sk ScopeKey) IssueType() string {
 	switch sk.Kind {
 	case ScopeThrottleTarget:
@@ -202,9 +202,9 @@ func (sk ScopeKey) IssueType() string {
 	case ScopeQuotaOwn:
 		return IssueQuotaExceeded
 	case ScopePermDir:
-		return IssueLocalPermissionDenied
+		return IssueLocalWriteDenied
 	case ScopePermRemote:
-		return IssueSharedFolderBlocked
+		return IssueRemoteWriteDenied
 	case ScopeDiskLocal:
 		return IssueDiskFull
 	default:

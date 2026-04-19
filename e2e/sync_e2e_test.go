@@ -51,7 +51,7 @@ type statusDriveJSON struct {
 }
 
 type statusSyncStateJSON struct {
-	IssueGroups          []statusIssueGroupJSON      `json:"issue_groups"`
+	Conditions           []statusConditionJSON       `json:"conditions"`
 	DeleteSafety         []statusDeleteSafetyJSON    `json:"delete_safety"`
 	DeleteSafetyTotal    int                         `json:"delete_safety_total"`
 	Conflicts            []statusConflictJSON        `json:"conflicts"`
@@ -63,7 +63,7 @@ type statusSyncStateJSON struct {
 	Verbose              bool                        `json:"verbose"`
 }
 
-type statusIssueGroupJSON struct {
+type statusConditionJSON struct {
 	Title string   `json:"title"`
 	Paths []string `json:"paths"`
 }

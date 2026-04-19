@@ -1,0 +1,146 @@
+package sync
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+)
+
+// Validates: R-2.14.3, R-2.10.47
+func TestSyncStore_ListVisibleConditionGroups(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := context.Background()
+	driveID := driveid.New(testDriveID)
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
+
+	require.NoError(t, mgr.UpsertObservationIssue(ctx, &ObservationIssue{
+		Path:       "bad:name.txt",
+		DriveID:    driveID,
+		ActionType: ActionUpload,
+		IssueType:  IssueInvalidFilename,
+		Error:      "invalid",
+	}))
+	require.NoError(t, mgr.UpsertBlockScope(ctx, &BlockScope{
+		Key:          scopeKey,
+		IssueType:    IssueRemoteWriteDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Now(),
+	}))
+	_, err := mgr.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Path:       "Shared/Docs/a.txt",
+		ActionType: ActionUpload,
+		IssueType:  IssueRemoteWriteDenied,
+		LastError:  "blocked",
+		ScopeKey:   scopeKey,
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+	_, err = mgr.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Path:       "Shared/Docs/b.txt",
+		ActionType: ActionUpload,
+		IssueType:  IssueRemoteWriteDenied,
+		LastError:  "blocked",
+		ScopeKey:   scopeKey,
+		Blocked:    true,
+	}, nil)
+	require.NoError(t, err)
+
+	groups, err := mgr.ListVisibleConditionGroups(ctx)
+	require.NoError(t, err)
+
+	require.Len(t, groups, 2)
+	assert.Equal(t, SummaryInvalidFilename, groups[0].SummaryKey)
+	assert.Equal(t, SummaryRemoteWriteDenied, groups[1].SummaryKey)
+	assert.Equal(t, 2, groups[1].Count)
+	assert.Equal(t, 2, groups[1].VisibleCount)
+	require.NotNil(t, groups[1].RemoteBlocked)
+	assert.Equal(t, "Shared/Docs", groups[1].RemoteBlocked.BoundaryPath)
+	assert.ElementsMatch(t, []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt"}, groups[1].RemoteBlocked.BlockedPaths)
+
+	summary, err := mgr.ReadVisibleConditionSummary(ctx)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []ConditionGroupCount{
+		{Key: SummaryInvalidFilename, Count: 1},
+		{Key: SummaryRemoteWriteDenied, Count: 2},
+	}, summary.Groups)
+
+	count := visibleConditionCountForTest(t, mgr, ctx)
+	assert.Equal(t, 3, count)
+}
+
+func TestBuildVisibleConditionGroups_DedupesPathsAndDefaultsUnbackedScopes(t *testing.T) {
+	t.Parallel()
+
+	remoteScope := SKPermRemoteWrite("")
+	serviceScope := SKService()
+
+	groups := buildVisibleConditionGroups(
+		[]ObservationIssueRow{
+			{Path: "/b.txt", IssueType: IssueInvalidFilename},
+			{Path: "/a.txt", IssueType: IssueInvalidFilename},
+			{Path: "/a.txt", IssueType: IssueInvalidFilename},
+		},
+		[]*BlockScope{
+			nil,
+			{Key: remoteScope, IssueType: IssueRemoteWriteDenied},
+			{Key: serviceScope, IssueType: IssueServiceOutage},
+		},
+		[]RetryWorkRow{
+			{Path: "z.txt", ScopeKey: remoteScope, Blocked: true},
+			{Path: "a.txt", ScopeKey: remoteScope, Blocked: true},
+			{Path: "a.txt", ScopeKey: remoteScope, Blocked: true},
+			{Path: "", ScopeKey: ScopeKey{}, Blocked: true},
+		},
+	)
+
+	require.Len(t, groups, 3)
+
+	groupByKey := make(map[SummaryKey]VisibleConditionGroup, len(groups))
+	for i := range groups {
+		groupByKey[groups[i].SummaryKey] = groups[i]
+	}
+
+	invalid := groupByKey[SummaryInvalidFilename]
+	assert.Equal(t, 3, invalid.Count)
+	assert.Equal(t, []string{"/a.txt", "/b.txt"}, invalid.Paths)
+
+	remote := groupByKey[SummaryRemoteWriteDenied]
+	assert.Equal(t, 3, remote.Count)
+	assert.Equal(t, 3, remote.VisibleCount)
+	assert.Equal(t, []string{"a.txt", "z.txt"}, remote.Paths)
+	require.NotNil(t, remote.RemoteBlocked)
+	assert.Equal(t, "/", remote.RemoteBlocked.BoundaryPath)
+	assert.Equal(t, []string{"a.txt", "z.txt"}, remote.RemoteBlocked.BlockedPaths)
+
+	service := groupByKey[SummaryServiceOutage]
+	assert.Equal(t, 1, service.Count)
+	assert.Equal(t, 1, service.VisibleCount)
+	assert.Nil(t, service.RemoteBlocked)
+}
+
+func TestBuildVisibleConditionSummary_TracksRetryingAndCurrentFamilies(t *testing.T) {
+	t.Parallel()
+
+	summary := buildVisibleConditionSummary([]VisibleConditionGroup{
+		{SummaryKey: SummaryInvalidFilename, Count: 2},
+		{SummaryKey: SummaryRemoteWriteDenied, Count: 3},
+		{SummaryKey: "", Count: 100},
+		{SummaryKey: SummaryServiceOutage, Count: 0},
+	}, 4)
+
+	assert.ElementsMatch(t, []ConditionGroupCount{
+		{Key: SummaryInvalidFilename, Count: 2},
+		{Key: SummaryRemoteWriteDenied, Count: 3},
+	}, summary.Groups)
+	assert.Equal(t, 5, summary.VisibleTotal())
+	assert.Equal(t, 2, summary.ActionableCount())
+	assert.Equal(t, 3, summary.RemoteBlockedCount())
+	assert.Equal(t, 4, summary.RetryingCount())
+}

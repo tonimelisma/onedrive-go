@@ -177,7 +177,7 @@ type LocalObserver struct {
 	WriteCoalesceCooldown time.Duration // 0 → defaultWriteCoalesceCooldown; injectable for tests
 
 	// skippedCh forwards SkippedItems from safety scans to the engine for
-	// recording in sync_failures. Nil disables forwarding (pre-existing behavior).
+	// observation-issue persistence. Nil disables forwarding (pre-existing behavior).
 	// Set via SetSkippedChannel before Watch.
 	skippedCh chan<- []SkippedItem
 

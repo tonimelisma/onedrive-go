@@ -111,7 +111,7 @@ func fullE2EParallelMiscTestNames() []string {
 		"TestE2E_Mv_ForceOverwrite",
 		"TestE2E_Cp_ForceOverwrite",
 		"TestE2E_Mv_Folder",
-		"TestE2E_Status_IssueLifecycle",
+		"TestE2E_Status_ConditionLifecycle",
 		"TestE2E_Status_JSONShape",
 		"TestE2E_Status_FilteredDriveIsSubsetOfAllDrives",
 		"TestE2E_Status_NoDrives",

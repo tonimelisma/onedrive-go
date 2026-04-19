@@ -144,8 +144,8 @@ func (ss *syncStateInfo) hasPersistentSummaryData() bool {
 	return ss.LastSyncTime != "" ||
 		ss.LastSyncDuration != "" ||
 		ss.FileCount > 0 ||
-		ss.IssueCount > 0 ||
-		len(ss.IssueGroups) > 0 ||
+		ss.ConditionCount > 0 ||
+		len(ss.Conditions) > 0 ||
 		ss.RemoteDrift > 0 ||
 		ss.Retrying > 0 ||
 		ss.LastError != ""

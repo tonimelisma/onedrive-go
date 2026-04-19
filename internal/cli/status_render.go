@@ -31,7 +31,7 @@ func computeSummary(accounts []statusAccount) statusSummary {
 			}
 
 			if d.SyncState != nil {
-				s.TotalIssues += d.SyncState.IssueCount
+				s.TotalConditions += d.SyncState.ConditionCount
 				s.TotalRemoteDrift += d.SyncState.RemoteDrift
 				s.TotalRetrying += d.SyncState.Retrying
 			}
@@ -258,7 +258,7 @@ func printSyncStateSummaryLines(w io.Writer, ss *syncStateInfo) error {
 	}{
 		{count: ss.FileCount, format: "    Files:     %d\n"},
 		{count: ss.RemoteDrift, format: "    Remote drift: %d items\n"},
-		{count: ss.IssueCount, format: "    Issues:    %d\n"},
+		{count: ss.ConditionCount, format: "    Conditions: %d\n"},
 		{count: ss.Retrying, format: "    Retrying:  %d items\n"},
 	}
 	for i := range countLines {
@@ -327,7 +327,7 @@ func printSummaryText(w io.Writer, s statusSummary) error {
 
 	stateStr := strings.Join(parts, ", ")
 
-	extra := fmt.Sprintf("%d issues", s.TotalIssues)
+	extra := fmt.Sprintf("%d conditions", s.TotalConditions)
 
 	if s.TotalRemoteDrift > 0 {
 		extra += fmt.Sprintf(", %d remote drift", s.TotalRemoteDrift)

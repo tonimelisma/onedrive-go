@@ -2,7 +2,7 @@
 // observer, engine, store, and CLI layers.
 package sync
 
-// Issue type constants for sync failures. Scanner-detectable issues
+// Issue type constants for sync conditions. Scanner-detectable issues
 // (invalid_filename, path_too_long, file_too_large) are caught at
 // observation time by shouldObserve / processEntry. Runtime issues
 // are detected during execution by the engine.
@@ -27,10 +27,4 @@ const (
 	IssueDiskFull             = "disk_full"
 	IssueServiceOutage        = "service_outage"
 	IssueFileTooLargeForSpace = "file_too_large_for_space"
-
-	// Legacy aliases retained so older tests and persisted rows still map onto
-	// the current permission families after the rebase.
-	IssuePermissionDenied      = IssueRemoteWriteDenied
-	IssueSharedFolderBlocked   = IssueRemoteWriteDenied
-	IssueLocalPermissionDenied = IssueLocalWriteDenied
 )

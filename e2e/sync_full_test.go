@@ -718,7 +718,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 // Validates: R-6.2.5, R-6.4.1
 // TestE2E_Sync_DeleteSafetyThreshold exercises S5 delete safety threshold.
 // Creates 12 files, configures a low threshold (10) so that 12 deletions exceed
-// it, verifies protection triggers, then approves the held deletes durably.
+// it, verifies protection triggers, then approves the blocked deletes durably.
 func TestE2E_Sync_DeleteSafetyThreshold(t *testing.T) {
 	registerLogDump(t)
 
@@ -761,7 +761,7 @@ func TestE2E_Sync_DeleteSafetyThreshold(t *testing.T) {
 	// Wait for remote deletes to propagate via REST before sync sees them via delta.
 	pollCLIWithConfigNotContains(t, opsCfgPath, nil, "file-01.txt", pollTimeout, "ls", "/"+testFolder)
 
-	// Step 4: Normal sync should trigger delete safety and record held rows.
+	// Step 4: Normal sync should trigger delete safety and record blocked retry work.
 	// Retry until delta catches up with all remote deletions (OneDrive
 	// eventual consistency — delta may lag behind REST).
 	requireSyncEventuallyConverges(
@@ -769,7 +769,7 @@ func TestE2E_Sync_DeleteSafetyThreshold(t *testing.T) {
 		cfgPath,
 		env,
 		120*time.Second,
-		"delete safety threshold should record held deletes",
+		"delete safety threshold should record blocked deletes",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {
 				return false
@@ -787,7 +787,7 @@ func TestE2E_Sync_DeleteSafetyThreshold(t *testing.T) {
 	}
 
 	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "resolve", "deletes")
-	assert.Contains(t, approvalOutput, "Approved held deletes for this drive.")
+	assert.Contains(t, approvalOutput, "Approved blocked deletes for this drive.")
 
 	// Step 6: A normal sync should consume the durable approval and apply the deletes.
 	runCLIWithConfig(t, cfgPath, env, "sync")
