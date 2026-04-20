@@ -5,13 +5,13 @@
 // calls UpdateScope after each action completion; when a threshold is crossed,
 // it returns a ScopeUpdateResult and the engine creates a BlockScope.
 //
-// Detection thresholds (failure-redesign.md §7.3.1):
+// Detection thresholds for shared blocker activation:
 //   - throttle:target:* (429) — immediate, single response
 //   - service (5xx, 503+Retry-After) — 5 unique paths in 30s
 //   - quota:own (507) — 3 unique paths in 10s
 //
-// Trial interval computation is centralized in computeTrialInterval()
-// (engine.go), not here. See R-2.10.14.
+// Trial interval computation is centralized in scope lifecycle policy helpers,
+// not in detection code.
 //
 // Type definitions (ScopeKey, ScopeKeyKind, BlockScope, ScopeUpdateResult,
 // BlockScopeStore) live in the sync package and share the same ownership
@@ -38,14 +38,6 @@ const (
 	serviceWindowDuration  = 30 * time.Second
 )
 
-// Unified trial timing constants (R-2.10.6, R-2.10.7, R-2.10.8, R-2.10.14).
-// All scope types share the same initial interval and cap. Server-provided
-// Retry-After values bypass the cap entirely (server is ground truth).
-const (
-	DefaultInitialTrialInterval = 5 * time.Second
-	DefaultMaxTrialInterval     = 5 * time.Minute
-)
-
 // ScopeState maintains sliding windows for scope escalation detection and
 // records successes that reset windows. Thread-safety is provided by the
 // engine-owned result loop — all calls come from processActionCompletion on one
@@ -68,7 +60,7 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 // UpdateScope feeds an action completion into scope detection. Returns a
 // ScopeUpdateResult indicating whether a new block scope should be created.
 //
-// Per R-2.10.3 and failure-redesign.md §7.3.1:
+// Per the sync-engine scope taxonomy and activation rules:
 //   - 429 → immediate target-drive throttle block (server signal)
 //   - 503 with Retry-After → immediate service block (server signal)
 //   - 507 → sliding window quota:own (3 unique paths / 10s)

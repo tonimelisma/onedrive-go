@@ -6,8 +6,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // Validates: R-2.1.3
@@ -305,44 +303,6 @@ type nilRetryWorkScanner struct{}
 
 func (nilRetryWorkScanner) Scan(...any) error {
 	return nil
-}
-
-// Validates: R-2.10.33
-func TestPruneBlockScopesWithoutBlockedWork(t *testing.T) {
-	t.Parallel()
-
-	store := newTestStore(t)
-	ctx := t.Context()
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKService(),
-		BlockedAt:     time.Unix(100, 0),
-		TrialInterval: time.Minute,
-		NextTrialAt:   time.Unix(160, 0),
-	}))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKThrottleDrive(driveid.New("0000000000000001")),
-		BlockedAt:     time.Unix(300, 0),
-		TrialInterval: time.Minute,
-		NextTrialAt:   time.Unix(360, 0),
-	}))
-
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "blocked.txt",
-		ActionType:   ActionUpload,
-		ScopeKey:     SKService(),
-		Blocked:      true,
-		AttemptCount: 1,
-		LastError:    "blocked",
-		FirstSeenAt:  1,
-		LastSeenAt:   2,
-	}))
-
-	require.NoError(t, store.PruneBlockScopesWithoutBlockedWork(ctx))
-
-	blocks, err := store.ListBlockScopes(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-	assert.Equal(t, SKService(), blocks[0].Key)
 }
 
 // Validates: R-2.10.33

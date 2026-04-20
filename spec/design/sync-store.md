@@ -155,6 +155,11 @@ Store maintenance must also keep `block_scopes` honest:
   work no longer references the `scope_key`, the row is durable garbage and
   invariant checks must fail loudly
 
+That liveness rule is shared with engine startup normalization and runtime
+scope rearm-or-discard handling. The store does not invent a separate notion
+of when an empty timed scope may survive; it applies the same "blocked work or
+discard" policy the engine uses.
+
 Pruning an empty scope removes only the scope row. Ready `retry_work` that no
 longer depends on that scope must survive pruning; only explicit discard of a
 still-blocked scope may delete the blocked work under it.

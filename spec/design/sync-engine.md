@@ -97,6 +97,13 @@ work with active scopes. It does not persist a durable executable plan table.
 Every persisted scope must still have blocked `retry_work`; empty scopes are
 discarded immediately.
 
+Scope startup cleanup follows the same policy with a deliberate
+decision-then-apply split: the engine first derives which persisted scopes are
+still justified by blocked `retry_work`, then applies only the required delete
+mutations. The same timed-scope liveness rule also drives runtime
+rearm-or-discard handling and store-side prune helpers so empty timed scopes
+do not survive by accident in one path but not another.
+
 Within that one-shot flow, the engine now treats "prepare current plan" as an
 explicit stage: observe current truth, derive the current action plan,
 materialize durable retry/scope reconciliation, and only then hand the

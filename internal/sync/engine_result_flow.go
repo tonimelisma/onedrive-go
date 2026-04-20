@@ -16,16 +16,6 @@ type resultContext struct {
 	trialScopeKey ScopeKey
 }
 
-type trialOutcome int
-
-const (
-	trialOutcomeRelease trialOutcome = iota
-	trialOutcomeExtend
-	trialOutcomeRearmOrDiscard
-	trialOutcomeShutdown
-	trialOutcomeFatal
-)
-
 type routeOutcome struct {
 	dispatched   []*TrackedAction
 	terminate    bool
@@ -224,8 +214,8 @@ func (flow *engineFlow) processTrialDecision(
 	scopeCtrl := flow.scopeController()
 	outcome := routeOutcome{}
 
-	switch flow.evaluateTrialOutcome(trialScopeKey, decision) {
-	case trialOutcomeRelease:
+	switch evaluateScopeTrialOutcome(trialScopeKey, decision) {
+	case scopeTrialOutcomeRelease:
 		flow.applySuccessEffects(ctx, watch, r)
 		if err := scopeCtrl.releaseScope(ctx, watch, trialScopeKey); err != nil {
 			flow.engine.logger.Warn("trial result: failed to release scope",
@@ -234,19 +224,19 @@ func (flow *engineFlow) processTrialDecision(
 			)
 		}
 		outcome.dispatched = flow.routeReadyForClass(ctx, watch, resultSuccess, ready, r)
-	case trialOutcomeShutdown:
+	case scopeTrialOutcomeShutdown:
 		flow.routeReadyForClass(ctx, watch, errclass.ClassShutdown, ready, r)
-	case trialOutcomeExtend:
+	case scopeTrialOutcomeExtend:
 		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
 		scopeCtrl.rehomeBlockedRetryWork(ctx, r, trialScopeKey)
 		scopeCtrl.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
 		flow.recordError(decision, r)
-	case trialOutcomeRearmOrDiscard:
+	case scopeTrialOutcomeRearmOrDiscard:
 		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
 		scopeCtrl.applyTrialReclassification(ctx, watch, decision, r, bl)
 		scopeCtrl.rearmOrDiscardScope(ctx, watch, trialScopeKey)
 		flow.recordError(decision, r)
-	case trialOutcomeFatal:
+	case scopeTrialOutcomeFatal:
 		flow.routeReadyForClass(ctx, watch, errclass.ClassFatal, ready, r)
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
 		flow.recordError(decision, r)
@@ -255,62 +245,6 @@ func (flow *engineFlow) processTrialDecision(
 	}
 
 	return outcome
-}
-
-func (flow *engineFlow) evaluateTrialOutcome(
-	trialScopeKey ScopeKey,
-	decision *ResultDecision,
-) trialOutcome {
-	switch decision.TrialHint {
-	case trialHintRelease:
-		return trialOutcomeRelease
-	case trialHintExtendOnMatchingScope:
-		if flow.trialScopePersists(trialScopeKey, decision) {
-			return trialOutcomeExtend
-		}
-		return trialOutcomeRearmOrDiscard
-	case trialHintReclassify:
-		return trialOutcomeRearmOrDiscard
-	case trialHintShutdown:
-		return trialOutcomeShutdown
-	case trialHintFatal:
-		return trialOutcomeFatal
-	}
-
-	panic(fmt.Sprintf("unknown trial hint %d", decision.TrialHint))
-}
-
-func (flow *engineFlow) trialScopePersists(
-	trialScopeKey ScopeKey,
-	decision *ResultDecision,
-) bool {
-	return !decision.ScopeEvidence.IsZero() && decision.ScopeEvidence == trialScopeKey
-}
-
-func (controller *scopeController) applyTrialReclassification(
-	ctx context.Context,
-	watch *watchRuntime,
-	decision *ResultDecision,
-	r *ActionCompletion,
-	bl *Baseline,
-) {
-	if decision.PermissionFlow != permissionFlowNone {
-		if permDecision, handled := controller.resolvePermissionDecision(ctx, decision, r, bl); handled {
-			controller.clearBlockedRetryWorkForScope(ctx, retryWorkKeyForCompletion(r), r.TrialScopeKey)
-			controller.applyPermissionCheckDecision(ctx, watch, decision.PermissionFlow, permDecision)
-		}
-		return
-	}
-
-	if decision.Class == errclass.ClassBlockScopeingTransient && decision.ScopeKey == SKDiskLocal() {
-		if controller.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey) {
-			controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
-				Block:         true,
-				ScopeKey:      decision.ScopeKey,
-				ConditionType: decision.ScopeKey.ConditionType(),
-			})
-		}
-	}
 }
 
 func (controller *scopeController) clearBlockedRetryWorkForScope(
