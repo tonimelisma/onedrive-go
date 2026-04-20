@@ -326,7 +326,7 @@ func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
 			Type: ActionUpload,
 			Path: "keep.txt",
 		}},
-	}, false)
+	})
 	require.NoError(t, err)
 
 	retries, err := eng.baseline.ListRetryWork(ctx)

@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_reads.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_reads.go, internal/sync/condition_projection.go, internal/sync/blocked_retry_projection.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/scope_block.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
 Implements: R-2.5 [designed], R-2.7 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -41,7 +41,7 @@ It does not own planning policy, execution policy, or a competing status model.
 | Behavior | Evidence |
 | --- | --- |
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
-| Read-only status queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens. | `TestReadDriveStatusSnapshot`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
+| Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
 
 ## Write Responsibilities
 
@@ -127,11 +127,15 @@ Read-only store helpers are intentionally narrow:
 - raw/narrow reads for `observation_issues`
 - raw/narrow reads for `retry_work`
 - raw/narrow reads for `block_scopes`
+- derived read helpers that compose only those durable authorities into
+  query-scoped debug views such as per-path truth availability
 
 `status` should compose its output directly from those authorities. The store
 must not own grouping or rendering policy for `status` or watch summaries.
 Shared condition-family grouping and ordering belong to
-`internal/sync/condition_keys.go`, not to store query helpers.
+`internal/sync/condition_keys.go`, while raw grouped projection over durable
+authorities belongs to `internal/sync/condition_projection.go`; neither
+responsibility belongs to store query helpers.
 Store maintenance must also keep `block_scopes` honest:
 
 - timed transient scopes may exist only while blocked `retry_work` still exists
@@ -157,6 +161,13 @@ validation helper instead of maintaining duplicate SQL/scan behavior.
 Read-side consumers should use the validated persisted metadata already on each
 `BlockScope` row instead of reparsing `scope_key` when the row itself is
 already in hand.
+
+`store_inspect.go` now owns two read-side shapes:
+
+- `DriveStatusSnapshot` for raw durable authorities used by `status` and watch
+- `ReadPathTruthStatus` for derived truth availability over requested paths,
+  built from `observation_issues` plus active read scopes without materializing
+  fake durable descendant rows
 
 ## State-DB Diagnosis And Reset
 

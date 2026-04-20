@@ -51,7 +51,7 @@ func (rt *watchRuntime) processDirtyBatch(
 	}
 	rt.engine.collector().RecordPlan(len(plan.Actions), rt.engine.since(planStart))
 
-	materializeErr := rt.materializeCurrentActionPlan(ctx, plan, false)
+	materializeErr := rt.materializeCurrentActionPlan(ctx, plan)
 	if materializeErr != nil {
 		rt.engine.logger.Error("watch action-state materialization failed, skipping dirty batch",
 			slog.String("error", materializeErr.Error()),

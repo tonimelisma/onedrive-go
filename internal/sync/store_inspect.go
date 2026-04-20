@@ -67,6 +67,20 @@ func ReadDriveStatusSnapshot(
 	})
 }
 
+// ReadPathTruthStatus opens a read-only inspector, derives current truth
+// availability for the requested paths from durable observation issues and
+// read scopes, and closes the inspector before returning.
+func ReadPathTruthStatus(
+	ctx context.Context,
+	dbPath string,
+	logger *slog.Logger,
+	paths []string,
+) (map[string]PathTruthStatus, error) {
+	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (map[string]PathTruthStatus, error) {
+		return inspector.ReadPathTruthStatus(ctx, paths)
+	})
+}
+
 // ReadDriveStatusSnapshot reads the raw per-drive authority snapshot from an
 // already-open sync store.
 func (m *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSnapshot, error) {
@@ -80,6 +94,24 @@ func (m *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSna
 	}
 
 	return inspector.ReadDriveStatusSnapshot(ctx)
+}
+
+// ReadPathTruthStatus derives current truth availability for the requested
+// paths from an already-open sync store.
+func (m *SyncStore) ReadPathTruthStatus(
+	ctx context.Context,
+	paths []string,
+) (map[string]PathTruthStatus, error) {
+	if m == nil {
+		return nil, fmt.Errorf("read path truth status: nil store")
+	}
+
+	inspector := &storeInspector{
+		db:     m.db,
+		logger: m.logger,
+	}
+
+	return inspector.ReadPathTruthStatus(ctx, paths)
 }
 
 func readWithInspector[T any](
@@ -210,6 +242,28 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	}
 
 	return snapshot, nil
+}
+
+// ReadPathTruthStatus returns the derived current-truth availability for the
+// requested paths without materializing any additional durable rows.
+func (i *storeInspector) ReadPathTruthStatus(
+	ctx context.Context,
+	paths []string,
+) (map[string]PathTruthStatus, error) {
+	if len(paths) == 0 {
+		return map[string]PathTruthStatus{}, nil
+	}
+
+	observationIssues, err := queryObservationIssueRowsDB(ctx, i.db)
+	if err != nil {
+		return nil, fmt.Errorf("read path truth status observation issues: %w", err)
+	}
+	blockScopes, err := queryBlockScopeRowsWithRunner(ctx, i.db)
+	if err != nil {
+		return nil, fmt.Errorf("read path truth status block scopes: %w", err)
+	}
+
+	return NewTruthAvailabilityIndex(observationIssues, blockScopes).StatusByPath(paths), nil
 }
 
 func (i *storeInspector) readCount(ctx context.Context, query string) (int, error) {

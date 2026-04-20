@@ -1,13 +1,10 @@
 package sync
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 )
-
-type watchBlockedRetryProjection struct {
-	count int
-	paths []string
-}
 
 type watchRemoteBlockedGroup struct {
 	ConditionKey ConditionKey
@@ -29,19 +26,53 @@ type watchConditionSummary struct {
 	Retrying       int
 }
 
-type watchConditionCountAccumulator map[ConditionKey]int
-
-func (a watchConditionCountAccumulator) Add(key ConditionKey, count int) {
-	if key == "" || count <= 0 {
-		return
+func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSummary, []watchRemoteBlockedGroup) {
+	if snapshot == nil {
+		return watchConditionSummary{}, nil
 	}
 
-	a[key] += count
+	groups := ProjectStoredConditionGroups(snapshot)
+	var remoteGroups []watchRemoteBlockedGroup
+	for i := range groups {
+		group := groups[i]
+		if group.ScopeKey.IsPermRemoteWrite() {
+			remoteGroups = append(remoteGroups, watchRemoteBlockedGroup{
+				ConditionKey: group.ConditionKey,
+				ScopeKey:     group.ScopeKey,
+				BlockedPaths: append([]string(nil), group.Paths...),
+			})
+		}
+	}
+
+	sort.Slice(remoteGroups, func(i, j int) bool {
+		return remoteGroups[i].ScopeKey.String() < remoteGroups[j].ScopeKey.String()
+	})
+
+	summaryCounts := watchConditionCounts(groups)
+
+	return watchConditionSummary{
+		Counts:         summaryCounts,
+		ConditionTotal: watchConditionCountTotal(summaryCounts),
+		Retrying:       snapshot.RetryingItems,
+	}, remoteGroups
 }
 
-func (a watchConditionCountAccumulator) Counts() []watchConditionCount {
-	counts := make([]watchConditionCount, 0, len(a))
-	for key, count := range a {
+func watchConditionCounts(groups []StoredConditionGroup) []watchConditionCount {
+	if len(groups) == 0 {
+		return nil
+	}
+
+	accumulator := make(map[ConditionKey]int)
+	for i := range groups {
+		group := groups[i]
+		if group.ConditionKey == "" || group.Count <= 0 {
+			continue
+		}
+		accumulator[group.ConditionKey] += group.Count
+	}
+
+	counts := make([]watchConditionCount, 0, len(accumulator))
+	for key, count := range accumulator {
 		counts = append(counts, watchConditionCount{
 			Key:   key,
 			Count: count,
@@ -55,80 +86,6 @@ func (a watchConditionCountAccumulator) Counts() []watchConditionCount {
 	return counts
 }
 
-func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSummary, []watchRemoteBlockedGroup) {
-	if snapshot == nil {
-		return watchConditionSummary{}, nil
-	}
-
-	blockedByScope := groupWatchBlockedRetryWork(snapshot.BlockedRetryWork)
-	counts := make(watchConditionCountAccumulator)
-
-	for i := range snapshot.ObservationIssues {
-		key := ConditionKeyForObservationIssue(
-			snapshot.ObservationIssues[i].IssueType,
-			snapshot.ObservationIssues[i].ScopeKey,
-		)
-		counts.Add(key, 1)
-	}
-
-	var remoteGroups []watchRemoteBlockedGroup
-	for i := range snapshot.BlockScopes {
-		block := snapshot.BlockScopes[i]
-		if block == nil {
-			continue
-		}
-
-		projection := blockedByScope[block.Key]
-		count := projection.count
-		if count == 0 {
-			count = 1
-		}
-		conditionKey := ConditionKeyForBlockScope(block.ConditionType, block.Key)
-		counts.Add(conditionKey, count)
-
-		if block.Key.IsPermRemoteWrite() {
-			paths := append([]string(nil), projection.paths...)
-			sort.Strings(paths)
-			remoteGroups = append(remoteGroups, watchRemoteBlockedGroup{
-				ConditionKey: conditionKey,
-				ScopeKey:     block.Key,
-				BlockedPaths: paths,
-			})
-		}
-	}
-
-	sort.Slice(remoteGroups, func(i, j int) bool {
-		return remoteGroups[i].ScopeKey.String() < remoteGroups[j].ScopeKey.String()
-	})
-
-	summaryCounts := counts.Counts()
-
-	return watchConditionSummary{
-		Counts:         summaryCounts,
-		ConditionTotal: watchConditionCountTotal(summaryCounts),
-		Retrying:       snapshot.RetryingItems,
-	}, remoteGroups
-}
-
-func groupWatchBlockedRetryWork(rows []RetryWorkRow) map[ScopeKey]watchBlockedRetryProjection {
-	grouped := make(map[ScopeKey]watchBlockedRetryProjection)
-	for i := range rows {
-		scopeKey := rows[i].ScopeKey
-		if scopeKey.IsZero() {
-			continue
-		}
-
-		projection := grouped[scopeKey]
-		projection.count++
-		if rows[i].Path != "" {
-			projection.paths = append(projection.paths, rows[i].Path)
-		}
-		grouped[scopeKey] = projection
-	}
-
-	return grouped
-}
-
 func watchConditionCountTotal(counts []watchConditionCount) int {
 	total := 0
 	for i := range counts {
@@ -136,4 +93,14 @@ func watchConditionCountTotal(counts []watchConditionCount) int {
 	}
 
 	return total
+}
+
+func watchConditionSummarySignature(summary watchConditionSummary) (string, string) {
+	parts := make([]string, 0, len(summary.Counts))
+	for i := range summary.Counts {
+		parts = append(parts, fmt.Sprintf("%d %s", summary.Counts[i].Count, summary.Counts[i].Key))
+	}
+
+	breakdown := strings.Join(parts, ", ")
+	return fmt.Sprintf("%d|%s", summary.ConditionTotal, breakdown), breakdown
 }

@@ -1,26 +1,51 @@
 package sync
 
-// derivePathTruthStatusByPath computes current local/remote truth availability
-// for each requested path from durable observation issues and active read
-// scopes. This is a pure derived view over durable authorities; planner
-// suppression and any future read-side consumers apply their own policy on top.
-func derivePathTruthStatusByPath(
-	paths []string,
+// TruthAvailabilityIndex is the raw derived view over observation issues and
+// read scopes used to answer current-truth availability questions for one
+// observation snapshot.
+type TruthAvailabilityIndex struct {
+	observationByPath map[string]ObservationIssueRow
+	blockScopes       []*BlockScope
+}
+
+func NewTruthAvailabilityIndex(
 	observationIssues []ObservationIssueRow,
 	blockScopes []*BlockScope,
-) map[string]PathTruthStatus {
+) TruthAvailabilityIndex {
+	return TruthAvailabilityIndex{
+		observationByPath: truthBlockingObservationByPath(observationIssues),
+		blockScopes:       blockScopes,
+	}
+}
+
+// StatusForPath returns the raw local/remote truth availability for one path.
+func (index TruthAvailabilityIndex) StatusForPath(path string) PathTruthStatus {
+	return pathTruthStatusForPath(path, index.observationByPath, index.blockScopes)
+}
+
+// StatusByPath returns the raw local/remote truth availability for a path set.
+func (index TruthAvailabilityIndex) StatusByPath(paths []string) map[string]PathTruthStatus {
 	if len(paths) == 0 {
 		return nil
 	}
 
 	statusByPath := make(map[string]PathTruthStatus, len(paths))
-	observationByPath := truthBlockingObservationByPath(observationIssues)
 	for i := range paths {
-		path := paths[i]
-		statusByPath[path] = pathTruthStatusForPath(path, observationByPath, blockScopes)
+		statusByPath[paths[i]] = index.StatusForPath(paths[i])
 	}
 
 	return statusByPath
+}
+
+// derivePathTruthStatusByPath computes current local/remote truth availability
+// for each requested path from durable observation issues and active read
+// scopes. This remains as a small compatibility helper over the shared index.
+func derivePathTruthStatusByPath(
+	paths []string,
+	observationIssues []ObservationIssueRow,
+	blockScopes []*BlockScope,
+) map[string]PathTruthStatus {
+	return NewTruthAvailabilityIndex(observationIssues, blockScopes).StatusByPath(paths)
 }
 
 func truthBlockingObservationByPath(observationIssues []ObservationIssueRow) map[string]ObservationIssueRow {
@@ -129,7 +154,7 @@ func mostSpecificTruthReadScope(
 		if block == nil || !matches(block.Key) {
 			continue
 		}
-		scopePath := blockScopePath(block)
+		scopePath := block.CoveredPath()
 		if !scopePathMatches(path, scopePath) {
 			continue
 		}

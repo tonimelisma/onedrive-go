@@ -25,20 +25,10 @@ const (
 	ConditionUnexpectedCondition    ConditionKey = "unexpected_condition"
 )
 
-// ConditionKeyForObservationIssue maps a persisted observation issue to the
-// shared condition family.
-func ConditionKeyForObservationIssue(issueType string, scopeKey ScopeKey) ConditionKey {
-	return conditionKeyForIssueTypeOrScope(issueType, scopeKey, scopeKey.ConditionType())
-}
-
-// ConditionKeyForRetryWork maps persisted exact retry work to the shared condition
-// family.
-func ConditionKeyForRetryWork(conditionType string, scopeKey ScopeKey) ConditionKey {
-	return conditionKeyForIssueTypeOrScope(conditionType, scopeKey, scopeKey.ConditionType())
-}
-
-// ConditionKeyForBlockScope maps a persisted block scope to the shared condition family.
-func ConditionKeyForBlockScope(conditionType string, scopeKey ScopeKey) ConditionKey {
+// ConditionKeyForStoredCondition maps one durable sync-condition record
+// (observation issue, retry_work row, or block scope) into the shared
+// condition family consumed by logs, watch summaries, and CLI status.
+func ConditionKeyForStoredCondition(conditionType string, scopeKey ScopeKey) ConditionKey {
 	return conditionKeyForIssueTypeOrScope(
 		conditionType,
 		scopeKey,

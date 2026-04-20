@@ -33,11 +33,8 @@ func (p *Planner) PlanCurrentState(
 	)
 
 	truthPaths := comparisonPaths(comparisons)
-	truthStatusByPath := derivePathTruthStatusByPath(
-		truthPaths,
-		observationIssues,
-		blockScopes,
-	)
+	truthIndex := NewTruthAvailabilityIndex(observationIssues, blockScopes)
+	truthStatusByPath := truthIndex.StatusByPath(truthPaths)
 
 	views, comparisonByPath, err := buildSQLitePathViews(comparisons, localRows, remoteRows, baseline, truthStatusByPath)
 	if err != nil {
