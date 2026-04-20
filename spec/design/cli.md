@@ -35,10 +35,10 @@ are inserted, updated, pruned, and validated.
 
 | Behavior | Evidence |
 | --- | --- |
-| `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
+| `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors` |
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
-| Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
+| Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_SkipsPausedInvalidDrivesDuringValidation`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestPrintRunOnceResult_MatchesReportsBySelectionIndex` |
 
 ## Command Surface
 
@@ -67,6 +67,11 @@ sync-health command.
 - live authenticated account identity and drive catalog overlays come from
   bounded Graph proof/discovery owned by the command
 - live perf comes from the active owner over the control socket when requested
+
+When both `--account` and `--drive` selectors are present, `status` applies
+them as an intersection. A row must satisfy both selectors to appear; the CLI
+does not widen the result to the union of independently matched accounts and
+drives.
 
 The target `status` surface projects the full sync model directly from:
 
@@ -104,6 +109,14 @@ architecture no longer has manual conflict or delete-approval workflows.
 config, the CLI notifies a running watch owner to reload when possible. If no
 watch owner is running, the updated config takes effect on the next start.
 
+## Logout Recovery
+
+`logout --purge` is also the recovery path when local config/catalog state is
+damaged. The CLI first tries validated state, but if that fails it falls back
+to best-effort config and catalog loads, logs warnings, resolves the selected
+account from the recoverable durable facts, and continues the purge instead of
+refusing all cleanup.
+
 ## State DB Handling
 
 The CLI owns the only destructive operator surface for per-drive sync state:
@@ -127,6 +140,15 @@ same guidance in one-shot and watch flows: pause that drive first, rerun with
 message path, reports completed runs separately, and exits non-zero after
 reporting any affected drives. Watch mode warns immediately about each skipped
 drive and continues healthy drives unless none can start.
+
+One-shot sync resolves the full selected drive set, but it validates only
+runnable non-paused drives before startup. Paused drives remain in the startup
+summary as skipped drives; an invalid paused drive must not block unrelated
+runnable drives from executing.
+
+Generated follow-up commands in startup messages are shell-safe. Canonical IDs
+and other user-controlled values are single-quoted before they are rendered
+into suggested `pause` or `drive reset-sync-state` commands.
 
 ## What The CLI No Longer Owns
 

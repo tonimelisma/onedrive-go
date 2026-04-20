@@ -153,8 +153,8 @@ func planContainsWorkKey(plan *ActionPlan, key RetryWorkKey) bool {
 // bespoke API path. Trial candidates are reconstructed from current durable
 // state, planned through the normal engine path, and marked explicitly as
 // trials in the dependency graph. Lack of a usable candidate is not proof that
-// the scope recovered; preserve semantics keep the scope active until an
-// actual release signal arrives.
+// the scope recovered; the controller rearms the scope only while blocked work
+// still remains, otherwise it discards the empty scope immediately.
 func (rt *watchRuntime) runTrialDispatch(
 	ctx context.Context,
 	bl *Baseline,
@@ -623,7 +623,7 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 		slog.String("issue_type", skipped.Reason),
 		slog.String("detail", skipped.Detail),
 	)
-	flow.reconcileRetryTrialObservationResult(ctx, watch, work, driveID, skipped.Path, &SinglePathObservation{Skipped: skipped})
+	flow.reconcileRetryTrialObservationResult(ctx, watch, work, driveID, work.Path, &SinglePathObservation{Skipped: skipped})
 
 	flow.clearRetryWorkCandidate(ctx, work, driveID, "recordRetryTrialSkippedItem")
 }
@@ -818,12 +818,12 @@ func (flow *engineFlow) applyResultPersistence(
 	watch *watchRuntime,
 	decision *ResultDecision,
 	r *ActionCompletion,
-) {
+) bool {
 	switch decision.Persistence {
 	case persistNone:
-		return
+		return true
 	case persistRetryWork:
-		flow.recordRetryWork(ctx, watch, decision, r, retry.ReconcilePolicy().Delay)
+		return flow.recordRetryWork(ctx, watch, decision, r, retry.ReconcilePolicy().Delay)
 	default:
 		panic(fmt.Sprintf("unknown failure persistence mode %d", decision.Persistence))
 	}

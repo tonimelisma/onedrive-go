@@ -191,11 +191,6 @@ func (ph *PermissionHandler) remoteBoundaryDecision(
 			HTTPStatus:    httpStatus,
 			Blocked:       true,
 		},
-		BlockScope: &ActiveScope{
-			Key:          scopeKey,
-			TimingSource: ScopeTimingNone,
-			BlockedAt:    ph.nowFn(),
-		},
 		ScopeKey:     scopeKey,
 		BoundaryPath: boundary,
 		TriggerPath:  failedPath,

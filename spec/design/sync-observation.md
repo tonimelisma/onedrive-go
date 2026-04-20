@@ -56,10 +56,10 @@ Important properties:
 - explicit remote read denial discovered during observation is emitted as an
   observation-owned finding (`remote_read_denied`) plus
   `perm:remote:read:<boundary>`
-- observation-owned read-denial scopes are subtree boundaries: descendants
-  become unavailable for planning and status through the read scope rather than
-  through synthetic per-descendant issue rows or execution-time permission
-  retries
+- observation-owned read-denial boundary facts are subtree boundaries:
+  descendants become unavailable for planning and status through the tagged
+  boundary issue rather than through synthetic per-descendant issue rows or
+  execution-time permission retries
 
 ### Whole drives and shared-root drives
 
@@ -75,12 +75,12 @@ observation ignores it.
 For shared-root drives, observation may use shared-root delta or recursive
 enumeration depending on drive type and Graph support.
 
-Remote read-denied scopes are observation-owned facts. When root or shared-root
+Remote read-denied boundaries are observation-owned facts. When root or shared-root
 observation proves that remote truth is unreadable, the engine persists one
 managed observation batch containing:
 
 - `observation_issues` rows for `remote_read_denied`
-- `block_scopes` rows for `perm:remote:read:<boundary>`
+- `ScopeKey` tags of `perm:remote:read:<boundary>` on those issue rows
 
 Healthy observation batches reconcile that managed set away again. Worker `403`
 results do not create these read-denied findings.
@@ -127,26 +127,26 @@ The engine reconciles those findings through one `ObservationFindingsBatch`
 boundary, and `observation_findings.go` is the single constructor path for
 those batches. Whole-drive scans replace the managed family set for those
 findings; single-path observation uses the same batch shape but manages only
-the exact observed path and exact read-scope key it proved.
+the exact observed path set it proved.
 
 Observation-owned read-denied subtree boundaries stay boundary-scoped. The
-durable batch records one boundary issue plus one read scope; descendants are
-made unavailable by that scope during planning instead of receiving synthetic
-per-descendant issue rows.
+durable batch records one boundary issue tagged with the matching read
+`ScopeKey`; descendants are made unavailable from that boundary fact during
+planning instead of receiving synthetic per-descendant issue rows.
 
 Observation-owned local read findings use these rules:
 
 - unreadable file -> `observation_issue(path, local_read_denied)` only
 - unreadable directory boundary ->
-  `observation_issue(boundary, local_read_denied)` plus
+  `observation_issue(boundary, local_read_denied)` with boundary `ScopeKey`
   `perm:dir:read:<boundary>`
 - invalid or unsyncable local content -> observation issue only
 
 Single-path observation used by retry/trial flows follows the same ownership
-rule. It may update `observation_issues` and observation-owned read scopes
+rule. It may update `observation_issues` and their boundary `ScopeKey` tags
 because it is still observation, not worker-result persistence. It must never
 reconcile a one-path observation result as if it were a whole-drive managed
-set; path-scoped reconciliation clears only the exact observed path/key.
+set; path-scoped reconciliation clears only the exact observed path set.
 
 `Scanner.FullScan()` now also returns direct `LocalStateRow` values for every
 admissible currently observed local path. `local_state` persistence therefore

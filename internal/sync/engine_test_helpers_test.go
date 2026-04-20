@@ -436,21 +436,6 @@ func newTestWatchState(t *testing.T, eng *testEngine) {
 	_ = setupWatchEngine(t, eng)
 }
 
-func testWorkDispatchState(t *testing.T, eng *testEngine, ctx context.Context) (*Baseline, *SafetyConfig) {
-	t.Helper()
-
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-	return bl, DefaultSafetyConfig()
-}
-
-func runTestRetrierSweep(t *testing.T, eng *testEngine, ctx context.Context) []*TrackedAction {
-	t.Helper()
-
-	bl, safety := testWorkDispatchState(t, eng, ctx)
-	return testWatchRuntime(t, eng).runRetrierSweep(ctx, bl, SyncBidirectional, safety)
-}
-
 func externalDBChangedForTest(t *testing.T, eng *testEngine, ctx context.Context) bool {
 	t.Helper()
 
@@ -471,14 +456,10 @@ func setTestBlockScope(t *testing.T, eng *testEngine, block *BlockScope) {
 	if block.BlockedAt.IsZero() {
 		block.BlockedAt = eng.nowFunc()
 	}
-	if block.TimingSource == "" {
-		if block.NextTrialAt.IsZero() && block.TrialInterval == 0 {
-			block.TimingSource = ScopeTimingNone
-		} else {
-			block.TimingSource = ScopeTimingBackoff
-		}
+	if block.TrialInterval <= 0 {
+		block.TrialInterval = time.Minute
 	}
-	if block.TimingSource != ScopeTimingNone && block.NextTrialAt.IsZero() {
+	if block.NextTrialAt.IsZero() {
 		block.NextTrialAt = block.BlockedAt.Add(block.TrialInterval)
 	}
 	require.NoError(t, eng.baseline.UpsertBlockScope(context.Background(), block))

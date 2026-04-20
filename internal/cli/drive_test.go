@@ -1094,6 +1094,44 @@ func TestAddSharedDrive_NoToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "no token file")
 }
 
+func TestAddSharedDrive_ConfigWriteFailureRollsBackCatalogRegistration(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgDir := filepath.Join(t.TempDir(), "readonly-config")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o700))
+	cfgPath := filepath.Join(cfgDir, "config.toml")
+
+	ownerCID := driveid.MustCanonicalID("personal:owner@example.com")
+	sharedCID := driveid.MustCanonicalID("shared:owner@example.com:driveX:itemY")
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_owner@example.com.json")
+
+	//nolint:gosec // Test fixture directory must be non-writable to force config write rollback.
+	require.NoError(t, os.Chmod(cfgDir, 0o500))
+	t.Cleanup(func() {
+		//nolint:gosec // Restores the temporary fixture directory so cleanup can proceed.
+		require.NoError(t, os.Chmod(cfgDir, 0o700))
+	})
+
+	err := addSharedDrive(
+		t.Context(),
+		cfgPath,
+		io.Discard,
+		sharedCID,
+		"Shared Folder",
+		testDriveLogger(t),
+		driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t)),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "writing drive config")
+
+	_, found := loadCatalogDrive(t, sharedCID)
+	assert.False(t, found, "shared drive catalog entry should roll back when config write fails")
+
+	account, found := loadCatalogAccount(t, ownerCID)
+	require.True(t, found)
+	assert.Equal(t, ownerCID.String(), account.CanonicalID)
+}
+
 // --- collectExistingDisplayNames ---
 
 func TestCollectExistingDisplayNames(t *testing.T) {
@@ -1323,6 +1361,45 @@ func TestEnrichSharedTarget_GetItemReturnsNameOnly(t *testing.T) {
 
 	assert.Equal(t, "Bob Jones", item.SharedByName)
 	assert.Empty(t, item.SharedByEmail) // only name, no email
+	assert.Equal(t, sharedOwnerIdentityStatusAvailable, item.OwnerIdentityStatus)
+}
+
+func TestEnrichSharedTarget_AvailableNameOnlyStillFetchesMissingEmail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponse(t, w, `{
+			"id": "01DEFGH",
+			"name": "Shared Folder",
+			"createdDateTime": "2024-01-15T10:00:00Z",
+			"lastModifiedDateTime": "2024-01-15T10:00:00Z",
+			"parentReference": {"driveId": "b!abc123"},
+			"folder": {},
+			"shared": {
+				"owner": {
+					"user": {
+						"displayName": "Bob Jones",
+						"email": "bob@contoso.com"
+					}
+				}
+			}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+
+	item := &sharedDiscoveryTarget{
+		Name:                "Shared Folder",
+		SharedByName:        "Bob Jones",
+		OwnerIdentityStatus: sharedOwnerIdentityStatusAvailable,
+		RemoteDriveID:       "b!abc123",
+		RemoteItemID:        "01DEFGH",
+	}
+
+	enrichSharedTarget(t.Context(), client, item, slog.Default())
+
+	assert.Equal(t, "Bob Jones", item.SharedByName)
+	assert.Equal(t, "bob@contoso.com", item.SharedByEmail)
 	assert.Equal(t, sharedOwnerIdentityStatusAvailable, item.OwnerIdentityStatus)
 }
 

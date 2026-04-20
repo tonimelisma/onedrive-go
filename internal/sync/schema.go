@@ -13,11 +13,9 @@ const (
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
 	//
-	// Generation 6 renames cross-authority durable condition columns from
-	// issue_type to condition_type and keeps parsed scope semantics alongside
-	// scope_key so runtime, store, planner, and read-side code share one
-	// validated scope descriptor shape.
-	currentSyncStoreGeneration = 6
+	// Generation 8 removes untimed block scopes and persists only timed blocker
+	// facts. Older stores require explicit reset rather than migration.
+	currentSyncStoreGeneration = 8
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata
 		(singleton_id, schema_generation)
 	VALUES (1, ?)
@@ -66,6 +64,7 @@ CREATE TABLE IF NOT EXISTS run_status (
 );
 
 CREATE TABLE IF NOT EXISTS remote_state (
+    drive_id      TEXT    NOT NULL DEFAULT '',
     item_id       TEXT    NOT NULL PRIMARY KEY,
     path          TEXT    NOT NULL UNIQUE,
     parent_id     TEXT,
@@ -135,16 +134,9 @@ CREATE INDEX IF NOT EXISTS idx_observation_issues_scope_key
 
 CREATE TABLE IF NOT EXISTS block_scopes (
     scope_key      TEXT PRIMARY KEY,
-    scope_family   TEXT NOT NULL,
-    scope_access   TEXT NOT NULL,
-    subject_kind   TEXT NOT NULL,
-    subject_value  TEXT NOT NULL DEFAULT '',
-    condition_type TEXT NOT NULL,
-    timing_source  TEXT NOT NULL CHECK(timing_source IN ('none', 'backoff', 'server_retry_after')),
     blocked_at     INTEGER NOT NULL,
     trial_interval INTEGER NOT NULL,
-    next_trial_at  INTEGER NOT NULL,
-    trial_count    INTEGER NOT NULL DEFAULT 0
+    next_trial_at  INTEGER NOT NULL
 		);`
 )
 
@@ -175,7 +167,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"singleton_id", "last_completed_at", "last_duration_ms", "last_succeeded_count", "last_failed_count", "last_error",
 		},
 		"remote_state": {
-			"item_id", "path", "parent_id", "item_type", "hash", "size", "mtime", "etag", "content_identity", "previous_path",
+			"drive_id", "item_id", "path", "parent_id", "item_type", "hash", "size", "mtime", "etag", "content_identity", "previous_path",
 		},
 		"local_state": {
 			"path", "item_type", "hash", "size", "mtime", "content_identity", "observed_at",
@@ -189,8 +181,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"first_seen_at", "last_seen_at", "file_size", "local_hash", "scope_key",
 		},
 		"block_scopes": {
-			"scope_key", "scope_family", "scope_access", "subject_kind", "subject_value",
-			"condition_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "trial_count",
+			"scope_key", "blocked_at", "trial_interval", "next_trial_at",
 		},
 	}
 }
@@ -374,6 +365,10 @@ func listTableColumns(ctx context.Context, db *sql.DB, tableName string) ([]stri
 	}
 	defer rows.Close()
 
+	return scanTableColumns(rows, tableName)
+}
+
+func scanTableColumns(rows *sql.Rows, tableName string) ([]string, error) {
 	var columns []string
 	for rows.Next() {
 		var (

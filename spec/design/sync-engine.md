@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/watch_summary.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_recheck.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
+GOVERNS: internal/sync/engine*.go, internal/sync/watch_summary.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
 Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
@@ -52,7 +52,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Behavior | Evidence |
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
-| Watch mode keeps single-owner runtime admission, periodic maintenance, and external-change reconciliation inside the engine boundary. | `TestEngine_CascadeRecordAndComplete_RecordsBlockedRetryWork`, `TestEngine_ExternalDBChanged`, `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestRunWatch_ShutdownStopsRetryAndTrialTimers` |
+| Watch mode keeps single-owner runtime admission, retry/trial scheduling, and external-change reconciliation inside the engine boundary. | `TestEngine_CascadeRecordAndComplete_RecordsBlockedRetryWork`, `TestEngine_ExternalDBChanged`, `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestRunWatch_ShutdownStopsRetryAndTrialTimers` |
 
 ## Construction
 
@@ -75,21 +75,17 @@ observation and execution metadata.
 `RunOnce()` keeps one-shot behavior intentionally simple:
 
 1. bootstrap durable state and startup checks
-2. normalize non-permission scopes against persisted retry evidence
-3. load baseline and run permission maintenance
-   permission maintenance owns which persisted permission scopes are due for
-   startup or steady-state recheck, including cadence and remote-probe
-   suppression policy, and which remote-write blocked retry rows are already
-   resolved; the engine only loads the current maintenance evidence and applies
-   the resulting scope and retry-work mutations through its scope lifecycle
-   boundary
+2. normalize persisted scopes against persisted blocked-work evidence
+3. load baseline
 4. refresh current remote and local snapshots once
 5. compute SQL structural diff and reconciliation once
 6. build the current actionable set in Go from structural reconciliation plus
    explicit truth-availability overlays
 7. reconcile durable retry/blocker state to that actionable set
-8. commit any ready publication-only actions directly through the store
-9. execute remaining concrete work once
+8. commit any ready publication-only actions directly through the store and
+   drain publication-only dependents before worker dispatch
+9. execute remaining concrete work once using the same blocker/trial admission
+   model watch mode uses
 10. persist outcomes and return a report
 
 There is no mid-pass mailbox for user intent. New external DB writes during a
@@ -98,8 +94,8 @@ one-shot run are durable state for a later run.
 `materializeCurrentActionPlan()` is the durable reconciliation boundary. It
 should prune stale `retry_work`, prune empty `block_scopes`, and align blocked
 work with active scopes. It does not persist a durable executable plan table.
-Permission scopes remain probe-owned facts and are not discarded just because
-their blocked retry rows happened to clear.
+Every persisted scope must still have blocked `retry_work`; empty scopes are
+discarded immediately.
 
 Within that one-shot flow, the engine now treats "prepare current plan" as an
 explicit stage: observe current truth, derive the current action plan,
@@ -109,6 +105,11 @@ that stage level rather than inlining every sub-step. Live and dry-run now
 share the same observed-state -> current-plan stage shape; they differ only in
 whether the prepared plan is materialized durably and whether a deferred
 cursor commit is returned.
+
+Full-remote-refresh cadence is restart-safe even when a full reconcile returns
+no delta cursor. The engine still advances the persisted cadence in
+`observation_state` so enumerate-only and shared-root sessions do not fall into
+back-to-back expensive full refreshes.
 
 ## Watch Mode
 
@@ -132,6 +133,11 @@ mode refreshes current truth, runs SQL comparison/reconciliation, rebuilds the
 current actionable set in Go, reconciles durable retry/blocker state, and then
 admits runnable actions.
 
+Action completion drain stays inside the engine boundary. When a completion
+unlocks publication-only dependents, watch mode commits those mutations
+synchronously and keeps draining them on the engine/store side until concrete
+worker actions are the only dispatchable work left.
+
 ### Recheck And External DB Changes
 
 Watch mode periodically checks SQLite `PRAGMA data_version`. If another
@@ -144,10 +150,11 @@ and aligns runtime admission with the persisted `block_scopes` and blocked
 Watch summary grouping is engine-owned. `watch_summary.go` builds only raw
 watch-condition aggregates: condition-key counts, total condition count,
 retrying count, and raw remote-write-block groups keyed by `ConditionKey` and
-`ScopeKey` directly from the shared stored-condition projection over durable
-authorities. The watch runtime owns log phrasing and churn suppression
-separately. The store does not own grouped watch-condition projections or
-watch-specific presentation.
+`ScopeKey`. Those remote-write groups come only from active remote-write
+`block_scopes`, not from every projected condition group that happens to share
+the same condition key. The watch runtime owns log phrasing and churn
+suppression separately. The store does not own grouped watch-condition
+projections or watch-specific presentation.
 
 ## Shared-Root Drives
 
@@ -213,49 +220,37 @@ The target scope families are:
 - `throttle:target:drive:<driveID>`
 - `quota:own`
 - `disk:local`
-- `perm:dir:read:<path>`
 - `perm:dir:write:<path>`
-- `perm:remote:read:<boundary>`
 - `perm:remote:write:<boundary>`
 - `account:throttled`
 
-Remote permission blockers are first-class persisted `block_scopes`, not
-derived-only runtime state.
+Write-side shared permission blockers are first-class persisted
+`block_scopes`. Read-side subtree blockers are observation-owned boundary facts
+carried on `observation_issues` via `ScopeKey`, not a second persisted scope
+table.
 
 ### Permission recovery
 
-Permission scopes are revalidated automatically; there is no manual retry or
-manual recheck CLI for them. Observation/probe may create or clear permission
-scopes directly when current truth already proves the shared blocker or its
-recovery. A raw `403` or `os.ErrPermission` is only a trigger to probe; the
-probe result is what may activate or release the scope.
-
-Permission maintenance owns the startup and periodic recheck policy surface.
-Generic scope startup normalization repairs only non-permission scopes; after
-baseline load, the engine enters permission maintenance through one request-
-shaped boundary that covers startup rechecks, steady-state cadence, and local-
-observation-triggered remote-write cleanup. The same permission-maintenance
-boundary loads the current permission evidence (persisted permission scopes,
-blocked retry rows, and watch cadence snapshot), returns one declarative
-maintenance plan, and owns cleanup of resolved remote write-blocked
-`retry_work` rows both at startup and after local observation changes relevant
-subtrees. That cleanup must not release the persisted permission scope on its
-own.
+Permission blockers are revalidated automatically; there is no manual retry or
+manual recheck CLI for them. Observation may create or clear read-boundary
+facts directly when current truth proves the blocker or its recovery. Probe and
+execution may create or clear persisted write scopes when write access is
+affirmatively denied or restored. A raw `403` or `os.ErrPermission` is only a
+trigger to probe; the probe result is what may activate or release a
+write-side scope.
 
 Ownership splits by access kind:
 
-- read scopes (`perm:dir:read`, `perm:remote:read`) are observation-owned
-- write scopes (`perm:dir:write`, `perm:remote:write`) are probe/execution-owned
+- read boundaries (`perm:dir:read`, `perm:remote:read`) are observation-owned
+  boundary tags on `observation_issues`
+- write scopes (`perm:dir:write`, `perm:remote:write`) are
+  probe/execution-owned persisted `block_scopes`
 
-Read scopes clear only when a later observation batch no longer proves them.
-Write scopes clear only on affirmative permission recheck. Generic empty-retry
-cleanup, unrelated successful work, and path-change drift handling must not
-release permission scopes on their own.
-
-Steady-state permission maintenance is throttled by the permission boundary
-rather than by the watch loop. When broader remote observation is suppressed,
-remote write-scope probes are skipped for that pass, but local read/write
-rechecks still run because they are direct local observation of current truth.
+Read boundaries clear only when a later observation batch no longer proves the
+corresponding issue-boundary fact.
+Write scopes clear through normal timed trials, successful write work, or
+cleanup that leaves no blocked work. They do not have a separate global
+maintenance cadence.
 
 Remote `403` handling is intentionally narrow:
 
@@ -271,8 +266,13 @@ Retry and trial reconstruction is retry-owned. The engine revalidates due or
 blocked work directly from `retry_work`, exact semantic work identity, and the
 current snapshot/baseline view. Scope lifecycle is owned only by
 `block_scopes` plus blocked/unblocked `retry_work`. Timed transient scopes are
-discarded when no blocked `retry_work` remains for their `scope_key`. Permission
-scopes are instead retained until affirmative revalidation proves recovery.
+discarded when no blocked `retry_work` remains for their `scope_key`. Write
+permission scopes follow that same rule; recovery happens through normal timed
+trials or successful writes, not through a separate maintenance loop. This
+runtime ownership rule is narrower than the store's structural linkage
+invariant: a scope row may still share a `scope_key` with observation or ready
+retry rows for reporting/history, but the engine keeps a blocker active only
+while blocked `retry_work` still exists.
 
 ## What The Engine Does Not Own
 

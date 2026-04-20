@@ -102,10 +102,6 @@ type watchTimerState struct {
 	// Retry timer — watch loop retrier sweeps retry_work on each tick.
 	retryTimer   syncTimer
 	retryTimerCh chan struct{} // persistent, buffered(1)
-
-	// Permission maintenance cadence: tracks the last time the permission
-	// boundary ran a due steady-state recheck pass (R-2.10.9).
-	lastPermRecheck time.Time
 }
 
 type watchReconcileState struct {

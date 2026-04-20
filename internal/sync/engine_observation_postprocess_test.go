@@ -149,8 +149,7 @@ func TestProcessCommittedSharedRootWatchBatch_ReconcilesRemoteReadDeniedFindings
 
 	scopes, err := eng.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
-	require.Len(t, scopes, 1)
-	assert.Equal(t, SKPermRemoteRead(""), scopes[0].Key)
+	assert.Empty(t, scopes, "shared-root remote read-denied findings should not create block scope rows")
 }
 
 // Validates: R-2.10.4

@@ -87,7 +87,7 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 	assert.Equal(t, "upload", got["upload.txt"])
 	assert.Equal(t, "download", got["download.txt"])
 	assert.Equal(t, "conflict_edit_edit", got["conflict.txt"])
-	assert.Equal(t, "baseline_remove", got["delete.txt"])
+	assert.Equal(t, "local_move", got["delete.txt"])
 	assert.Equal(t, "download", got["redownload.txt"])
 	assert.Equal(t, "upload", got["new-local.txt"])
 	assert.Equal(t, "download", got["new-remote.txt"])

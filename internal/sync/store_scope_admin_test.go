@@ -111,8 +111,6 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 	})
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
-		ConditionType: IssueRemoteWriteDenied,
-		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Unix(1, 0),
 		TrialInterval: time.Second,
 		NextTrialAt:   time.Unix(2, 0),
@@ -156,10 +154,10 @@ func TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities(t *te
 		Error:      "invalid filename",
 	})
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermLocalRead("Private"),
-		ConditionType: IssueLocalReadDenied,
-		TimingSource:  ScopeTimingNone,
+		Key:           SKPermRemoteWrite("Private"),
 		BlockedAt:     time.Unix(1, 0),
+		TrialInterval: time.Minute,
+		NextTrialAt:   time.Unix(61, 0),
 	}))
 
 	dbPath := syncStorePathForStoreScopeTest(t, store)
@@ -172,8 +170,8 @@ func TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities(t *te
 
 	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, statuses["bad:name.txt"].Local.Availability)
 	assert.Equal(t, IssueInvalidFilename, statuses["bad:name.txt"].Local.IssueType)
-	assert.Equal(t, TruthAvailabilityBlockedLocalReadScope, statuses["Private/sub/file.txt"].Local.Availability)
-	assert.Equal(t, SKPermLocalRead("Private"), statuses["Private/sub/file.txt"].Local.ScopeKey)
+	assert.Equal(t, TruthAvailabilityAvailable, statuses["Private/sub/file.txt"].Local.Availability)
+	assert.True(t, statuses["Private/sub/file.txt"].Local.ScopeKey.IsZero())
 }
 
 func TestFinalizeInspectorRead_PreservesSuccessfulReadOnCloseError(t *testing.T) {
@@ -207,8 +205,6 @@ func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndPreservesObservatio
 
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
 		Key:           scopeKey,
-		ConditionType: IssueRemoteWriteDenied,
-		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     now.Add(-time.Minute),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   now,
@@ -259,9 +255,9 @@ func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndPreservesObservationIs
 
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
 		Key:           scopeKey,
-		ConditionType: IssueRemoteWriteDenied,
-		TimingSource:  ScopeTimingNone,
 		BlockedAt:     time.Date(2026, 4, 19, 8, 0, 0, 0, time.UTC),
+		TrialInterval: time.Minute,
+		NextTrialAt:   time.Date(2026, 4, 19, 8, 1, 0, 0, time.UTC),
 	}))
 	seedObservationIssueForTest(t, store, "Shared/Docs/bad.txt", IssueRemoteWriteDenied, scopeKey)
 	seedObservationIssueForTest(t, store, "keep.txt", IssueInvalidFilename, ScopeKey{})

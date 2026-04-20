@@ -16,51 +16,27 @@ package sync
 import (
 	"context"
 	"fmt"
-	"time"
 )
-
-func describeBlockScopeForWrite(block *BlockScope) (persistedScopeMetadata, error) {
-	if block == nil {
-		return persistedScopeMetadata{}, fmt.Errorf("sync: upserting block scope: missing block")
-	}
-
-	metadata, err := hydrateBlockScopeMetadata(block)
-	if err != nil {
-		return persistedScopeMetadata{}, fmt.Errorf("sync: upserting block scope: %w", err)
-	}
-
-	return metadata, nil
-}
 
 func validateBlockScope(block *BlockScope) error {
 	if block.Key.IsZero() {
 		return fmt.Errorf("sync: upserting block scope: missing scope key")
 	}
-	if _, err := describeBlockScopeForWrite(block); err != nil {
-		return err
+	if DescribeScopeKey(block.Key).IsZero() {
+		return fmt.Errorf("sync: upserting block scope %s: unknown scope key", block.Key.String())
+	}
+	if !isTimedBlockScopeKey(block.Key) {
+		return fmt.Errorf("sync: upserting block scope %s: read boundaries belong in observation_issues, not block_scopes", block.Key.String())
 	}
 
 	if block.BlockedAt.IsZero() {
 		return fmt.Errorf("sync: upserting block scope %s: missing blocked_at", block.Key.String())
 	}
-
-	switch block.TimingSource {
-	case ScopeTimingNone:
-		if block.TrialInterval != 0 {
-			return fmt.Errorf("sync: upserting block scope %s: timing_source none requires zero trial interval", block.Key.String())
-		}
-		if !block.NextTrialAt.IsZero() {
-			return fmt.Errorf("sync: upserting block scope %s: timing_source none requires zero next_trial_at", block.Key.String())
-		}
-	case ScopeTimingBackoff, ScopeTimingServerRetryAfter:
-		if block.TrialInterval <= 0 {
-			return fmt.Errorf("sync: upserting block scope %s: timed scope requires positive trial interval", block.Key.String())
-		}
-		if block.NextTrialAt.IsZero() {
-			return fmt.Errorf("sync: upserting block scope %s: timed scope requires next_trial_at", block.Key.String())
-		}
-	default:
-		return fmt.Errorf("sync: upserting block scope %s: invalid timing source %q", block.Key.String(), block.TimingSource)
+	if block.TrialInterval <= 0 {
+		return fmt.Errorf("sync: upserting block scope %s: timed scope requires positive trial interval", block.Key.String())
+	}
+	if block.NextTrialAt.IsZero() {
+		return fmt.Errorf("sync: upserting block scope %s: timed scope requires next_trial_at", block.Key.String())
 	}
 
 	return nil
@@ -86,20 +62,12 @@ func upsertBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, block *
 
 	_, err := runner.ExecContext(ctx,
 		`INSERT OR REPLACE INTO block_scopes
-			(scope_key, scope_family, scope_access, subject_kind, subject_value,
-			 condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(scope_key, blocked_at, trial_interval, next_trial_at)
+		VALUES (?, ?, ?, ?)`,
 		block.Key.String(),
-		block.Family,
-		block.Access,
-		block.SubjectKind,
-		block.SubjectValue,
-		block.ConditionType,
-		block.TimingSource,
 		block.BlockedAt.UnixNano(),
 		int64(block.TrialInterval),
 		nextTrialAtNano,
-		block.TrialCount,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: upserting block scope %s: %w", block.Key.String(), err)
@@ -124,15 +92,6 @@ func deleteBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, key Sco
 	}
 
 	return nil
-}
-
-func observationReadScopeBlock(key ScopeKey, nowNano int64) *BlockScope {
-	return &BlockScope{
-		Key:           key,
-		ConditionType: key.ConditionType(),
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Unix(0, nowNano).UTC(),
-	}
 }
 
 // ListBlockScopes returns all persisted block scopes. Used at startup to

@@ -315,25 +315,15 @@ func TestPruneBlockScopesWithoutBlockedWork(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
-		ConditionType: IssueServiceOutage,
-		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Unix(100, 0),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(160, 0),
 	}))
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKThrottleDrive(driveid.New("0000000000000001")),
-		ConditionType: IssueRateLimited,
-		TimingSource:  ScopeTimingBackoff,
-		BlockedAt:     time.Unix(200, 0),
-		TrialInterval: time.Minute,
-		NextTrialAt:   time.Unix(260, 0),
-	}))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermRemoteRead("Shared/Docs"),
-		ConditionType: IssueRemoteReadDenied,
-		TimingSource:  ScopeTimingNone,
 		BlockedAt:     time.Unix(300, 0),
+		TrialInterval: time.Minute,
+		NextTrialAt:   time.Unix(360, 0),
 	}))
 
 	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
@@ -351,8 +341,8 @@ func TestPruneBlockScopesWithoutBlockedWork(t *testing.T) {
 
 	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
-	require.Len(t, blocks, 2)
-	assert.ElementsMatch(t, []ScopeKey{SKService(), SKPermRemoteRead("Shared/Docs")}, []ScopeKey{blocks[0].Key, blocks[1].Key})
+	require.Len(t, blocks, 1)
+	assert.Equal(t, SKService(), blocks[0].Key)
 }
 
 // Validates: R-2.10.33

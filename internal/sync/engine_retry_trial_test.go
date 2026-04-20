@@ -206,6 +206,44 @@ func TestRecordRetryTrialSkippedItem_PersistsObservationIssueThroughObservationB
 }
 
 // Validates: R-2.10.33
+func TestRecordRetryTrialSkippedItem_ReconcilesOriginalRetryWorkPathForBoundarySkip(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	flow := testEngineFlow(t, eng)
+	ctx := t.Context()
+
+	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
+		Path:       "Private/file.txt",
+		DriveID:    eng.driveID,
+		ActionType: ActionUpload,
+		IssueType:  IssueLocalReadDenied,
+		Error:      "file not accessible",
+	})
+
+	flow.recordRetryTrialSkippedItem(ctx, nil, RetryWorkKey{
+		Path:       "Private/file.txt",
+		ActionType: ActionUpload,
+	}, eng.driveID, &SkippedItem{
+		Path:               "Private",
+		Reason:             IssueLocalReadDenied,
+		Detail:             "directory not accessible (check filesystem permissions)",
+		BlocksReadBoundary: true,
+	})
+
+	rows, err := eng.baseline.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "Private", rows[0].Path)
+	assert.Equal(t, IssueLocalReadDenied, rows[0].IssueType)
+	assert.Equal(t, SKPermLocalRead("Private"), rows[0].ScopeKey)
+
+	blocks, err := eng.baseline.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks, "retry-trial boundary skips now reconcile durable issues without creating block scope rows")
+}
+
+// Validates: R-2.10.33
 func TestReconcileRetryTrialObservationResult_ClearsOnlyManagedPath(t *testing.T) {
 	t.Parallel()
 
@@ -269,10 +307,10 @@ func TestReconcileRetryTrialObservationResult_ReplacesManagedFileIssueWithBounda
 		ActionType: ActionUpload,
 	}, eng.driveID, "Private/file.txt", &SinglePathObservation{
 		Skipped: &SkippedItem{
-			Path:            "Private",
-			Reason:          IssueLocalReadDenied,
-			Detail:          "directory not accessible (check filesystem permissions)",
-			BlocksReadScope: true,
+			Path:               "Private",
+			Reason:             IssueLocalReadDenied,
+			Detail:             "directory not accessible (check filesystem permissions)",
+			BlocksReadBoundary: true,
 		},
 	})
 
@@ -285,8 +323,7 @@ func TestReconcileRetryTrialObservationResult_ReplacesManagedFileIssueWithBounda
 
 	blocks, err := eng.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-	assert.Equal(t, SKPermLocalRead("Private"), blocks[0].Key)
+	assert.Empty(t, blocks, "retry-trial observation reconciliation should not materialize block scope rows")
 }
 
 // Validates: R-2.10.33
@@ -408,7 +445,6 @@ func TestClearStaleTrialRetryWork_PreservesScopeWhenBlockedRetryWorkRemains(t *t
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		ConditionType: IssueServiceOutage,
 		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		NextTrialAt:   eng.nowFn().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
@@ -459,7 +495,6 @@ func TestClearStaleTrialRetryWork_DiscardsScopeWhenBlockedRetryWorkDisappears(t 
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		ConditionType: IssueServiceOutage,
 		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		NextTrialAt:   eng.nowFn().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
@@ -498,7 +533,6 @@ func TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState(t *testing.T
 
 		setTestBlockScope(t, eng, &BlockScope{
 			Key:           scopeKey,
-			ConditionType: IssueServiceOutage,
 			BlockedAt:     eng.nowFn().Add(-time.Minute),
 			NextTrialAt:   eng.nowFn().Add(-time.Second),
 			TrialInterval: 10 * time.Second,
@@ -521,7 +555,6 @@ func TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState(t *testing.T
 
 		setTestBlockScope(t, eng, &BlockScope{
 			Key:           scopeKey,
-			ConditionType: IssueServiceOutage,
 			BlockedAt:     eng.nowFn().Add(-time.Minute),
 			NextTrialAt:   eng.nowFn().Add(-time.Second),
 			TrialInterval: 10 * time.Second,

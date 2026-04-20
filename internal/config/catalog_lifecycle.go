@@ -274,8 +274,12 @@ func AuthenticatedAccountEmails(dataDir string) ([]string, error) {
 			continue
 		}
 
-		accountCID := AccountCanonicalIDByEmail(catalog, account.Email)
-		if accountCID.IsZero() {
+		rawCanonicalID := account.CanonicalID
+		if rawCanonicalID == "" {
+			rawCanonicalID = key
+		}
+		accountCID, parseErr := driveid.NewCanonicalID(rawCanonicalID)
+		if parseErr != nil {
 			continue
 		}
 

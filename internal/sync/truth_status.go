@@ -1,26 +1,24 @@
 package sync
 
-// TruthAvailabilityIndex is the raw derived view over observation issues and
-// read scopes used to answer current-truth availability questions for one
-// observation snapshot.
+// TruthAvailabilityIndex is the raw derived view over observation issues used
+// to answer current-truth availability questions for one observation snapshot.
 type TruthAvailabilityIndex struct {
-	observationByPath map[string]ObservationIssueRow
-	blockScopes       []*BlockScope
+	observationByPath    map[string]ObservationIssueRow
+	localReadBoundaries  []ObservationIssueRow
+	remoteReadBoundaries []ObservationIssueRow
 }
 
-func NewTruthAvailabilityIndex(
-	observationIssues []ObservationIssueRow,
-	blockScopes []*BlockScope,
-) TruthAvailabilityIndex {
+func NewTruthAvailabilityIndex(observationIssues []ObservationIssueRow) TruthAvailabilityIndex {
 	return TruthAvailabilityIndex{
-		observationByPath: truthBlockingObservationByPath(observationIssues),
-		blockScopes:       blockScopes,
+		observationByPath:    truthBlockingObservationByPath(observationIssues),
+		localReadBoundaries:  truthReadBoundaryIssues(observationIssues, true),
+		remoteReadBoundaries: truthReadBoundaryIssues(observationIssues, false),
 	}
 }
 
 // StatusForPath returns the raw local/remote truth availability for one path.
 func (index TruthAvailabilityIndex) StatusForPath(path string) PathTruthStatus {
-	return pathTruthStatusForPath(path, index.observationByPath, index.blockScopes)
+	return pathTruthStatusForPath(path, index.observationByPath, index.localReadBoundaries, index.remoteReadBoundaries)
 }
 
 // StatusByPath returns the raw local/remote truth availability for a path set.
@@ -52,15 +50,12 @@ func truthBlockingObservationByPath(observationIssues []ObservationIssueRow) map
 func pathTruthStatusForPath(
 	path string,
 	observationByPath map[string]ObservationIssueRow,
-	blockScopes []*BlockScope,
+	localReadBoundaries []ObservationIssueRow,
+	remoteReadBoundaries []ObservationIssueRow,
 ) PathTruthStatus {
 	observationIssue, hasObservationIssue := observationByPath[path]
-	localScope := mostSpecificTruthReadScope(path, blockScopes, func(key ScopeKey) bool {
-		return key.IsPermLocalRead()
-	})
-	remoteScope := mostSpecificTruthReadScope(path, blockScopes, func(key ScopeKey) bool {
-		return key.IsPermRemoteRead()
-	})
+	localBoundary, hasLocalBoundary := mostSpecificObservationReadBoundary(path, localReadBoundaries)
+	remoteBoundary, hasRemoteBoundary := mostSpecificObservationReadBoundary(path, remoteReadBoundaries)
 
 	status := PathTruthStatus{
 		Local:  availablePathTruthSideStatus(),
@@ -68,11 +63,12 @@ func pathTruthStatusForPath(
 	}
 
 	switch {
-	case localScope.IsPermLocalRead():
+	case hasLocalBoundary:
 		status.Local = PathTruthSideStatus{
-			Availability: TruthAvailabilityBlockedLocalReadScope,
-			Source:       PathTruthSourceReadScope,
-			ScopeKey:     localScope,
+			Availability: TruthAvailabilityBlockedObservationIssue,
+			Source:       PathTruthSourceObservationIssue,
+			IssueType:    localBoundary.IssueType,
+			ScopeKey:     localBoundary.ScopeKey,
 		}
 	case hasObservationIssue && observationIssueBlocksLocalTruth(observationIssue.IssueType):
 		status.Local = PathTruthSideStatus{
@@ -84,11 +80,12 @@ func pathTruthStatusForPath(
 	}
 
 	switch {
-	case remoteScope.IsPermRemoteRead():
+	case hasRemoteBoundary:
 		status.Remote = PathTruthSideStatus{
-			Availability: TruthAvailabilityBlockedRemoteReadScope,
-			Source:       PathTruthSourceReadScope,
-			ScopeKey:     remoteScope,
+			Availability: TruthAvailabilityBlockedObservationIssue,
+			Source:       PathTruthSourceObservationIssue,
+			IssueType:    remoteBoundary.IssueType,
+			ScopeKey:     remoteBoundary.ScopeKey,
 		}
 	case hasObservationIssue && observationIssueBlocksRemoteTruth(observationIssue.IssueType):
 		status.Remote = PathTruthSideStatus{
@@ -130,28 +127,46 @@ func observationIssueBlocksRemoteTruth(issueType string) bool {
 	return issueType == IssueRemoteReadDenied
 }
 
-func mostSpecificTruthReadScope(
+func truthReadBoundaryIssues(observationIssues []ObservationIssueRow, local bool) []ObservationIssueRow {
+	if len(observationIssues) == 0 {
+		return nil
+	}
+
+	var boundaries []ObservationIssueRow
+	for i := range observationIssues {
+		switch {
+		case local && observationIssues[i].ScopeKey.IsPermLocalRead():
+			boundaries = append(boundaries, observationIssues[i])
+		case !local && observationIssues[i].ScopeKey.IsPermRemoteRead():
+			boundaries = append(boundaries, observationIssues[i])
+		}
+	}
+
+	return boundaries
+}
+
+func mostSpecificObservationReadBoundary(
 	path string,
-	blockScopes []*BlockScope,
-	matches func(ScopeKey) bool,
-) ScopeKey {
-	best := ScopeKey{}
+	boundaries []ObservationIssueRow,
+) (ObservationIssueRow, bool) {
+	best := ObservationIssueRow{}
 	bestLen := -1
 
-	for i := range blockScopes {
-		block := blockScopes[i]
-		if block == nil || !matches(block.Key) {
-			continue
+	for i := range boundaries {
+		scopePath := ""
+		if boundaries[i].ScopeKey.IsPermLocalRead() {
+			scopePath = boundaries[i].ScopeKey.DirPath()
+		} else {
+			scopePath = boundaries[i].ScopeKey.RemotePath()
 		}
-		scopePath := block.CoveredPath()
 		if !scopePathMatches(path, scopePath) {
 			continue
 		}
 		if len(scopePath) > bestLen {
-			best = block.Key
+			best = boundaries[i]
 			bestLen = len(scopePath)
 		}
 	}
 
-	return best
+	return best, bestLen >= 0
 }

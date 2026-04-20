@@ -122,16 +122,30 @@ func runLogoutWithContext(cc *CLIContext, purge bool) error {
 	logger := cc.Logger
 
 	validated, warnings, err := config.LoadValidatedState(cc.CfgPath, true, logger)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-	if outcome := config.ClassifyLoadOutcome(err, warnings); outcome.Class == errclass.ClassActionable {
-		config.LogWarnings(warnings, logger)
+	if err == nil {
+		if outcome := config.ClassifyLoadOutcome(err, warnings); outcome.Class == errclass.ClassActionable {
+			config.LogWarnings(warnings, logger)
+		}
+
+		account, autoErr := resolveLogoutAccountWithCatalog(
+			validated.Config,
+			validated.Catalog,
+			cc.Flags.Account,
+			purge,
+			logger,
+		)
+		if autoErr != nil {
+			return autoErr
+		}
+
+		logger.Info("logout started", "account", account, "purge", purge)
+		return executeLogout(validated.Config, validated.Catalog, cc.CfgPath, cc.Output(), account, purge, logger)
 	}
 
+	cfg, catalog := loadLogoutRecoveryState(cc.CfgPath, logger, warnings, err)
 	account, autoErr := resolveLogoutAccountWithCatalog(
-		validated.Config,
-		validated.Catalog,
+		cfg,
+		catalog,
 		cc.Flags.Account,
 		purge,
 		logger,
@@ -140,6 +154,43 @@ func runLogoutWithContext(cc *CLIContext, purge bool) error {
 		return autoErr
 	}
 
-	logger.Info("logout started", "account", account, "purge", purge)
-	return executeLogout(validated.Config, validated.Catalog, cc.CfgPath, cc.Output(), account, purge, logger)
+	logger.Info("logout started with degraded state recovery", "account", account, "purge", purge)
+	return executeLogout(cfg, catalog, cc.CfgPath, cc.Output(), account, purge, logger)
+}
+
+func loadLogoutRecoveryState(
+	cfgPath string,
+	logger *slog.Logger,
+	validatedWarnings []config.ConfigWarning,
+	validatedErr error,
+) (*config.Config, *config.Catalog) {
+	if len(validatedWarnings) > 0 {
+		config.LogWarnings(validatedWarnings, logger)
+	}
+	if validatedErr != nil {
+		logger.Warn("validated logout state unavailable, falling back to best-effort recovery",
+			"error", validatedErr,
+		)
+	}
+
+	cfg, fallbackWarnings, cfgErr := config.LoadOrDefaultLenient(cfgPath, logger)
+	if len(fallbackWarnings) > 0 {
+		config.LogWarnings(fallbackWarnings, logger)
+	}
+	if cfgErr != nil {
+		logger.Warn("logout recovery could not load config, using defaults",
+			"error", cfgErr,
+		)
+		cfg = config.DefaultConfig()
+	}
+
+	catalog, catalogErr := config.LoadCatalog()
+	if catalogErr != nil {
+		logger.Warn("logout recovery could not load catalog, using empty catalog",
+			"error", catalogErr,
+		)
+		catalog = config.DefaultCatalog()
+	}
+
+	return cfg, catalog
 }

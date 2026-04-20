@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -101,6 +102,12 @@ func loadCatalogFromPath(path string) (*Catalog, error) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&catalog); err != nil {
 		return nil, fmt.Errorf("decoding catalog: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, fmt.Errorf("decoding catalog: trailing data after top-level object")
+		}
+		return nil, fmt.Errorf("decoding catalog trailing data: %w", err)
 	}
 	if catalog.SchemaVersion != catalogSchemaV1 {
 		return nil, fmt.Errorf("decoding catalog: unsupported schema version %d", catalog.SchemaVersion)

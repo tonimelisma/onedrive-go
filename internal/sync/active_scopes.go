@@ -27,7 +27,7 @@ func FindBlockingScope(blocks []ActiveScope, ta *TrackedAction) ScopeKey {
 
 	for i := range blocks {
 		key := blocks[i].Key
-		if !key.BlocksAction(ta.Action.Path, throttleTargetKey, ta.Action.Type) {
+		if !scopeBlocksTrackedAction(key, ta, throttleTargetKey) {
 			continue
 		}
 
@@ -41,6 +41,25 @@ func FindBlockingScope(blocks []ActiveScope, ta *TrackedAction) ScopeKey {
 	}
 
 	return best
+}
+
+func scopeBlocksTrackedAction(key ScopeKey, ta *TrackedAction, throttleTargetKey string) bool {
+	if ta == nil {
+		return false
+	}
+
+	paths := []string{ta.Action.Path}
+	if ta.Action.OldPath != "" && ta.Action.OldPath != ta.Action.Path {
+		paths = append(paths, ta.Action.OldPath)
+	}
+
+	for _, candidate := range paths {
+		if key.BlocksAction(candidate, throttleTargetKey, ta.Action.Type) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // UpsertScope returns a copy of blocks with the provided scope inserted or
@@ -111,7 +130,6 @@ func ExtendScopeTrial(
 		next := append([]ActiveScope(nil), blocks...)
 		next[i].NextTrialAt = nextAt
 		next[i].TrialInterval = newInterval
-		next[i].TrialCount++
 		return next, true
 	}
 

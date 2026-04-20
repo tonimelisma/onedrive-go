@@ -123,12 +123,8 @@ Trial timing is scope-aware:
 
 - `throttle:target:*` and `service` honor server `Retry-After` exactly when
   present
-- quota and service scopes without server timing use 5s initial, 2x backoff,
-  5m max
-- `disk:local` uses 5m initial, 2x backoff, 1h max
-
-The persisted `timing_source` on `block_scopes` records whether a scope was
-timed by local backoff or explicit server `Retry-After`.
+- all locally timed scopes use a fixed 60-second interval when server timing
+  is absent
 
 ### Restart semantics
 
@@ -137,8 +133,8 @@ Startup normalization applies persisted-scope policy before admission begins:
 - due `retry_work` rows are revalidated from current truth before dispatch
 - active `block_scopes` are reloaded and may become immediate trials when due,
   but empty scopes are pruned during startup normalization
-- observation-owned blockers may be released when current truth already proves
-  recovery
+- observation-owned read boundaries are re-derived only from current
+  observation, not from persisted `block_scopes`
 - account-auth state remains catalog-owned, not a retry scope
 
 ## Deleted Mechanisms

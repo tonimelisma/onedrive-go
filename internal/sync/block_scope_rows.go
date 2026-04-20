@@ -10,53 +10,35 @@ type blockScopeRowScanner interface {
 	Scan(dest ...any) error
 }
 
-const sqlSelectBlockScopeRows = `SELECT scope_key, scope_family, scope_access, subject_kind, subject_value,
-	        condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
+const sqlSelectBlockScopeRows = `SELECT scope_key, blocked_at, trial_interval, next_trial_at
 	FROM block_scopes`
 
 func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 	var (
 		wireKey       string
-		scopeFamily   string
-		scopeAccess   string
-		subjectKind   string
-		subjectValue  string
-		conditionType string
-		timingSource  string
 		blockedAtNano int64
 		intervalNano  int64
 		nextTrialNano int64
-		trialCount    int
 	)
 
 	if err := scanner.Scan(
 		&wireKey,
-		&scopeFamily,
-		&scopeAccess,
-		&subjectKind,
-		&subjectValue,
-		&conditionType,
-		&timingSource,
 		&blockedAtNano,
 		&intervalNano,
 		&nextTrialNano,
-		&trialCount,
 	); err != nil {
 		return nil, fmt.Errorf("scan block scope row: %w", err)
 	}
 
-	metadata, err := decodePersistedScopeMetadata(
-		wireKey,
-		scopeFamily,
-		scopeAccess,
-		subjectKind,
-		subjectValue,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("scan block scope row: %w", err)
-	}
-	if metadata.Key.IsZero() {
+	key := ParseScopeKey(wireKey)
+	if key.IsZero() {
 		return &BlockScope{Key: ScopeKey{}}, nil
+	}
+	if DescribeScopeKey(key).IsZero() {
+		return nil, fmt.Errorf("scan block scope row: unknown scope key %q", wireKey)
+	}
+	if !isTimedBlockScopeKey(key) {
+		return nil, fmt.Errorf("scan block scope row: read boundary scope %q belongs in observation_issues, not block_scopes", wireKey)
 	}
 
 	nextTrialAt := time.Time{}
@@ -64,15 +46,12 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 		nextTrialAt = time.Unix(0, nextTrialNano).UTC()
 	}
 
-	return newBlockScopeFromPersistedMetadata(
-		&metadata,
-		conditionType,
-		ScopeTimingSource(timingSource),
-		time.Unix(0, blockedAtNano).UTC(),
-		time.Duration(intervalNano),
-		nextTrialAt,
-		trialCount,
-	), nil
+	return &BlockScope{
+		Key:           key,
+		BlockedAt:     time.Unix(0, blockedAtNano).UTC(),
+		TrialInterval: time.Duration(intervalNano),
+		NextTrialAt:   nextTrialAt,
+	}, nil
 }
 
 func queryBlockScopeRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]*BlockScope, error) {

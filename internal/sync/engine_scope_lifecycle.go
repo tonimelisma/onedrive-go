@@ -10,16 +10,7 @@ import (
 )
 
 const (
-	diskScopeInitialTrialInterval = 5 * time.Minute
-	diskScopeMaxTrialInterval     = 1 * time.Hour
-)
-
-type scopeStartupPolicy int
-
-const (
-	scopeStartupRequiresScopedFailures scopeStartupPolicy = iota + 1
-	scopeStartupServerTimedOnly
-	scopeStartupRevalidateDisk
+	localScopeTrialInterval = 60 * time.Second
 )
 
 type persistedScopeFacts struct {
@@ -50,10 +41,10 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 	return nil
 }
 
-// normalizePersistedScopes normalizes non-permission scope rows against
-// persisted retry evidence before any admission begins. Permission scopes keep
-// their persisted state until the permission-maintenance boundary revalidates
-// them after baseline load.
+// normalizePersistedScopes removes stale persisted scopes before any admission
+// begins. block_scopes now owns only timed shared blockers for blocked work,
+// so a persisted scope with no blocked retry_work is dead state and must be
+// discarded immediately on startup.
 func (controller *scopeController) normalizePersistedScopes(
 	ctx context.Context,
 	watch *watchRuntime,
@@ -99,7 +90,7 @@ func (controller *scopeController) normalizePersistedNonAuthScopes(
 	facts := summarizePersistedBlockedRetries(blockedRetries)
 
 	for i := range blocks {
-		if blocks[i] == nil || blocks[i].Key.IsPermDir() || blocks[i].Key.IsPermRemote() {
+		if blocks[i] == nil {
 			continue
 		}
 		if err := controller.normalizePersistedScope(ctx, blocks[i], facts); err != nil {
@@ -115,51 +106,18 @@ func (controller *scopeController) normalizePersistedScope(
 	block *BlockScope,
 	facts persistedScopeFacts,
 ) error {
-	blockedRetryCount := facts.blockedRetryCountByScope[block.Key]
-
-	switch scopeStartupPolicyFor(block.Key) {
-	case scopeStartupRequiresScopedFailures:
-		if blockedRetryCount > 0 {
-			return nil
-		}
-		return controller.discardStartupScope(ctx, block.Key, "discarded scope without blocked retry work")
-	case scopeStartupServerTimedOnly:
-		if blockedRetryCount == 0 {
-			return controller.discardStartupScope(ctx, block.Key, "discarded scope without blocked retry work")
-		}
-		if block.TimingSource == ScopeTimingServerRetryAfter {
-			return nil
-		}
-		return controller.releaseStartupScope(ctx, block.Key, "released non-server-timed restart scope")
-	case scopeStartupRevalidateDisk:
-		if blockedRetryCount == 0 {
-			return controller.discardStartupScope(ctx, block.Key, "discarded disk scope without blocked retry work")
-		}
-		return controller.normalizeDiskScope(ctx, block)
-	default:
-		panic(fmt.Sprintf("unknown startup policy %d", scopeStartupPolicyFor(block.Key)))
+	if facts.blockedRetryCountByScope[block.Key] > 0 {
+		return nil
 	}
+
+	return controller.dropStartupScopeRow(ctx, block.Key, "discarded scope without blocked retry work")
 }
 
-func (controller *scopeController) releaseStartupScope(ctx context.Context, key ScopeKey, note string) error {
+func (controller *scopeController) dropStartupScopeRow(ctx context.Context, key ScopeKey, note string) error {
 	flow := controller.flow
 
-	if err := flow.engine.baseline.ReleaseScope(ctx, key, flow.engine.nowFunc()); err != nil {
-		return fmt.Errorf("sync: releasing startup scope %s: %w", key.String(), err)
-	}
-	flow.engine.emitDebugEvent(engineDebugEvent{
-		Type:     engineDebugEventStartupScopeNormalized,
-		ScopeKey: key,
-		Note:     note,
-	})
-	return nil
-}
-
-func (controller *scopeController) discardStartupScope(ctx context.Context, key ScopeKey, note string) error {
-	flow := controller.flow
-
-	if err := flow.engine.baseline.DiscardScope(ctx, key); err != nil {
-		return fmt.Errorf("sync: discarding startup scope %s: %w", key.String(), err)
+	if err := flow.engine.baseline.DeleteBlockScope(ctx, key); err != nil {
+		return fmt.Errorf("sync: deleting startup scope %s: %w", key.String(), err)
 	}
 	flow.engine.emitDebugEvent(engineDebugEvent{
 		Type:     engineDebugEventStartupScopeNormalized,
@@ -182,84 +140,6 @@ func summarizePersistedBlockedRetries(rows []RetryWorkRow) persistedScopeFacts {
 	}
 
 	return facts
-}
-
-func scopeStartupPolicyFor(key ScopeKey) scopeStartupPolicy {
-	switch {
-	case key == SKQuotaOwn():
-		return scopeStartupRequiresScopedFailures
-	case key.IsThrottleTarget(), key == SKService():
-		return scopeStartupServerTimedOnly
-	case key == SKDiskLocal():
-		return scopeStartupRevalidateDisk
-	default:
-		return scopeStartupRequiresScopedFailures
-	}
-}
-
-func (controller *scopeController) normalizeDiskScope(ctx context.Context, block *BlockScope) error {
-	flow := controller.flow
-
-	if flow.engine.minFreeSpace <= 0 {
-		if err := flow.engine.baseline.ReleaseScope(ctx, block.Key, flow.engine.nowFunc()); err != nil {
-			return fmt.Errorf("sync: releasing disk scope %s with disabled min_free_space: %w", block.Key.String(), err)
-		}
-		flow.engine.emitDebugEvent(engineDebugEvent{
-			Type:     engineDebugEventStartupScopeNormalized,
-			ScopeKey: block.Key,
-			Note:     "released disk scope with disabled min_free_space",
-		})
-		return nil
-	}
-
-	available, err := flow.engine.diskAvailableFn(flow.engine.syncRoot)
-	if err != nil {
-		flow.engine.logger.Warn("normalizePersistedScopes: disk revalidation failed, releasing stale disk scope",
-			slog.String("scope_key", block.Key.String()),
-			slog.String("error", err.Error()),
-		)
-		if releaseErr := flow.engine.baseline.ReleaseScope(ctx, block.Key, flow.engine.nowFunc()); releaseErr != nil {
-			return fmt.Errorf("sync: releasing stale disk scope %s: %w", block.Key.String(), releaseErr)
-		}
-		flow.engine.emitDebugEvent(engineDebugEvent{
-			Type:     engineDebugEventStartupScopeNormalized,
-			ScopeKey: block.Key,
-			Note:     "released disk scope after revalidation error",
-		})
-		return nil
-	}
-
-	if int64(available) >= flow.engine.minFreeSpace {
-		if err := flow.engine.baseline.ReleaseScope(ctx, block.Key, flow.engine.nowFunc()); err != nil {
-			return fmt.Errorf("sync: releasing recovered disk scope %s: %w", block.Key.String(), err)
-		}
-		flow.engine.emitDebugEvent(engineDebugEvent{
-			Type:     engineDebugEventStartupScopeNormalized,
-			ScopeKey: block.Key,
-			Note:     "released disk scope after healthy revalidation",
-		})
-		return nil
-	}
-
-	now := flow.engine.nowFunc()
-	interval := computeTrialInterval(block.Key, 0, 0)
-	if err := flow.engine.baseline.UpsertBlockScope(ctx, &BlockScope{
-		Key:           block.Key,
-		ConditionType: IssueDiskFull,
-		TimingSource:  ScopeTimingBackoff,
-		BlockedAt:     now,
-		TrialInterval: interval,
-		NextTrialAt:   now.Add(interval),
-	}); err != nil {
-		return fmt.Errorf("sync: refreshing disk scope %s: %w", block.Key.String(), err)
-	}
-	flow.engine.emitDebugEvent(engineDebugEvent{
-		Type:     engineDebugEventStartupScopeNormalized,
-		ScopeKey: block.Key,
-		Note:     "refreshed disk scope from current local truth",
-	})
-
-	return nil
 }
 
 func (controller *scopeController) activateScope(ctx context.Context, watch *watchRuntime, block *ActiveScope) error {
@@ -319,8 +199,6 @@ func (controller *scopeController) extendScopeTrial(
 
 	block.NextTrialAt = nextAt
 	block.TrialInterval = newInterval
-	block.TrialCount++
-	block.TimingSource = scopeTimingSource(retryAfter)
 	if err := controller.activateScope(ctx, watch, &block); err != nil {
 		flow.engine.logger.Warn("extendScopeTrial: failed to persist interval extension",
 			slog.String("scope_key", scopeKey.String()),
@@ -377,9 +255,6 @@ func (controller *scopeController) rearmOrDiscardScope(ctx context.Context, watc
 	if scopeKey.IsZero() {
 		return
 	}
-	if scopeKey.IsPermDir() || scopeKey.IsPermRemote() {
-		return
-	}
 
 	flow := controller.flow
 	hasBlockedWork, err := controller.scopeHasBlockedRetryWork(ctx, scopeKey)
@@ -404,47 +279,14 @@ func (controller *scopeController) rearmOrDiscardScope(ctx context.Context, watc
 	}
 }
 
-// computeTrialInterval is the single source of truth for trial interval
-// computation (R-2.10.14). Both initial block scope creation and subsequent
-// trial extensions use this function, preventing policy divergence.
-//
-//   - retryAfter > 0: server-provided value used directly, no cap (R-2.10.7)
-//   - retryAfter == 0, currentInterval > 0: double current, cap at defaultMaxTrialInterval
-//   - retryAfter == 0, currentInterval == 0: use defaultInitialTrialInterval
-func computeTrialInterval(scopeKey ScopeKey, retryAfter, currentInterval time.Duration) time.Duration {
-	initialInterval := DefaultInitialTrialInterval
-	maxInterval := DefaultMaxTrialInterval
-	if scopeKey == SKDiskLocal() {
-		initialInterval = diskScopeInitialTrialInterval
-		maxInterval = diskScopeMaxTrialInterval
-	}
-
+// computeTrialInterval is the single source of truth for timed blocker
+// scheduling. Locally timed scopes use a fixed cadence; server Retry-After
+// remains authoritative when present.
+func computeTrialInterval(_ ScopeKey, retryAfter, _ time.Duration) time.Duration {
 	if retryAfter > 0 {
 		return retryAfter
 	}
-	if currentInterval > 0 {
-		doubled := currentInterval * 2
-		if doubled > maxInterval {
-			return maxInterval
-		}
-		return doubled
-	}
-	return initialInterval
-}
-
-func scopeTimingSource(retryAfter time.Duration) ScopeTimingSource {
-	if retryAfter > 0 {
-		return ScopeTimingServerRetryAfter
-	}
-
-	return ScopeTimingBackoff
-}
-
-// isObservationSuppressed returns true if a global block scope is active,
-// meaning all remote observation polling should be skipped to avoid wasting
-// API calls. Target-scoped 429 blocks are handled separately.
-func (controller *scopeController) isObservationSuppressed(watch *watchRuntime) bool {
-	return watch != nil && watch.hasActiveScope(SKService())
+	return localScopeTrialInterval
 }
 
 // feedScopeDetection feeds an action completion into scope detection sliding
@@ -480,7 +322,6 @@ func (controller *scopeController) applyBlockScope(ctx context.Context, watch *w
 
 	block := &ActiveScope{
 		Key:           sr.ScopeKey,
-		TimingSource:  scopeTimingSource(sr.RetryAfter),
 		BlockedAt:     now,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
@@ -745,7 +586,7 @@ func (controller *scopeController) rehomeBlockedRetryWork(
 	ctx context.Context,
 	r *ActionCompletion,
 	scopeKey ScopeKey,
-) {
+) bool {
 	flow := controller.flow
 
 	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
@@ -763,7 +604,10 @@ func (controller *scopeController) rehomeBlockedRetryWork(
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
 		)
+		return false
 	}
+
+	return true
 }
 
 // recordCascadeRetryWork records retry_work for a dependent whose parent failed.

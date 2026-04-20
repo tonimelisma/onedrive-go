@@ -111,11 +111,11 @@ account currently has a usable saved login.
 | Operation | Durable mutation |
 | --- | --- |
 | `login` | write saved login, upsert account/primary-drive catalog records, append primary drive section |
-| `drive add` | append one drive section and upsert one catalog drive record |
+| `drive add` | register the drive in the catalog and append one drive section |
 | `drive remove` | delete one drive section only |
 | `drive remove --purge` | delete one drive section plus drive-owned retained state; prune the catalog drive record when no longer needed |
 | `logout` | delete saved login and all configured drive sections for the selected account |
-| `logout --purge` | `logout` durable mutations plus delete retained state DBs and purge the selected account/drives from the catalog |
+| `logout --purge` | `logout` durable mutations plus delete retained state DBs and purge the selected account/drives from the catalog, using best-effort recovery when validated state cannot load |
 | external token deletion | removes saved login only; catalog/state may still keep the account known |
 | invalid/unreadable token file | keeps the saved-login file path but moves the derived account state to `auth_required_invalid_saved_login` |
 | persisted catalog auth requirement creation | keeps other durable facts intact but moves the derived account state to `auth_required_sync_rejected` |
@@ -123,6 +123,16 @@ account currently has a usable saved login.
 
 Degraded discovery is intentionally outside this lifecycle model. It is a
 command-local discovery overlay, not a persisted account or drive state.
+
+Shared-drive add is inventory-first. The catalog admits the drive before the
+config section is appended, and later config-write failures must roll that
+catalog admission back so config/catalog ownership never diverges across a
+partial write.
+
+`logout --purge` is intentionally recovery-oriented. When validated config and
+catalog state cannot be loaded together, callers may still fall back to the
+best recoverable config, token, and catalog inputs and perform durable cleanup
+against those facts instead of hard-failing before any purge happens.
 
 ## Internal Organization
 
@@ -258,6 +268,8 @@ authorities.
 - unknown JSON fields are rejected
 - `schema_version` is required
 - only the exact supported version is accepted
+- the decoder must reach EOF after the first top-level object, so trailing JSON
+  or garbage is rejected
 - every save is a full atomic rewrite of the file
 
 Runtime callers do not silently accept future or partially shaped catalog

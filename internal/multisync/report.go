@@ -20,10 +20,11 @@ const (
 // pass or watch runner actually runs. It keeps expected startup policy separate
 // from completed sync reports.
 type DriveStartupResult struct {
-	CanonicalID driveid.CanonicalID
-	DisplayName string
-	Status      DriveStartupStatus
-	Err         error
+	SelectionIndex int
+	CanonicalID    driveid.CanonicalID
+	DisplayName    string
+	Status         DriveStartupStatus
+	Err            error
 }
 
 func classifyDriveStartupError(err error) DriveStartupStatus {
@@ -105,10 +106,11 @@ type RunOnceResult struct {
 // DriveReport summarizes the result of a single drive's sync run.
 // Err and Report are mutually exclusive: when Err is set, Report is nil.
 type DriveReport struct {
-	CanonicalID driveid.CanonicalID
-	DisplayName string
-	Report      *syncengine.Report
-	Err         error
+	SelectionIndex int
+	CanonicalID    driveid.CanonicalID
+	DisplayName    string
+	Report         *syncengine.Report
+	Err            error
 }
 
 type WatchStartupError struct {

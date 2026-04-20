@@ -154,8 +154,6 @@ func touchStateDBForAccount(t *testing.T, cid driveid.CanonicalID) error {
 
 	if err := store.UpsertBlockScope(t.Context(), &syncengine.BlockScope{
 		Key:           syncengine.SKService(),
-		ConditionType: syncengine.IssueServiceOutage,
-		TimingSource:  syncengine.ScopeTimingBackoff,
 		BlockedAt:     time.Date(2026, 4, 3, 8, 0, 0, 0, time.UTC),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   time.Date(2026, 4, 3, 8, 0, 5, 0, time.UTC),

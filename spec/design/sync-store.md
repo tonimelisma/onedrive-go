@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_reads.go, internal/sync/condition_projection.go, internal/sync/blocked_retry_projection.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/scope_block.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/block_scope_rows.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_reads.go, internal/sync/condition_projection.go, internal/sync/blocked_retry_projection.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/scope_block.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
 Implements: R-2.5 [designed], R-2.7 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -52,18 +52,26 @@ It does not own planning policy, execution policy, or a competing status model.
 - upserts or deletes `remote_state` rows derived from observation
 - advances `observation_state.cursor`
 
+Each `remote_state` row persists the true owning remote `drive_id` seen during
+observation. `observation_state.configured_drive_id` identifies the configured
+session that owns the DB and cursor; it is not the durable owner of every
+remote row.
+
 Local observation writes belong to `local_state`. Full scans replace the entire
 `local_state` snapshot in one transaction.
 
 Observation-owned durable problems belong to `observation_issues`, not retry
-lanes. Observation may also create `block_scopes` directly when current truth
-already proves a shared blocker. Observation-owned reconciliation supports two
-scopes of authority:
+lanes or `block_scopes`. Read-denied subtree boundaries are represented as
+observation issue rows tagged with the corresponding `ScopeKey`; later truth
+reads derive blocked descendants from those tagged boundary issues instead of a
+second durable scope table.
 
-- whole-observation batches replace the managed issue families and managed
-  read-scope kinds they own
-- single-path observation batches manage only the exact observed path and exact
-  read-scope keys they prove
+Observation-owned reconciliation supports two scopes of authority:
+
+- whole-observation batches replace the managed observation issue types they
+  own
+- single-path observation batches manage only the exact observed path set they
+  proved
 
 ### Mutation writes
 
@@ -88,9 +96,8 @@ The target store API persists three durable control authorities:
 Supporting outcome mutations should stay separate by owner:
 
 - observation-findings reconciliation that replaces the current
-  observation-owned issue set and observation-owned read scopes in one
-  transaction, either as a full managed family set or as an exact-path/exact-
-  key reconciliation for single-path observation
+  observation-owned issue set in one transaction, either as a full managed
+  issue-type set or as an exact-path reconciliation for single-path observation
 - exact retry-work upsert/delete helpers
 - scope release/discard/extend helpers that mutate `block_scopes` and linked
   blocked `retry_work` in one transaction
@@ -101,17 +108,11 @@ The store does not own a mixed failure table, failure-role transitions, or a
 store-owned grouped condition projection.
 
 Within that observation-findings boundary, pure reconciliation policy stays
-separate from SQLite mutation. The store computes the managed issue/read-scope
-sets to reconcile in a deterministic helper, then applies the resulting exact
-plan inside one transaction. That pure policy now works from the current
-observation-owned durable rows and produces exact issue upserts, exact
-issue-path deletions, exact read-scope upserts, and exact read-scope releases.
-SQLite helpers do not own the policy for what a batch manages, and they do not
-re-infer managed families from `ObservationFindingsBatch` during apply.
-
-Observation-owned read scopes still persist through the same canonical
-`block_scopes` validation/metadata path as other scope rows. The observation
-store boundary does not hand-roll separate scope metadata or INSERT shapes.
+separate from SQLite mutation. The store computes the exact observation issue
+upserts and deletes to reconcile in a deterministic helper, then applies that
+plan inside one transaction. SQLite helpers do not own the policy for what a
+batch manages, and they do not re-infer managed issue types from
+`ObservationFindingsBatch` during apply.
 
 ### Admin writes
 
@@ -133,6 +134,10 @@ Read-only store helpers are intentionally narrow:
 - derived read helpers that compose only those durable authorities into
   query-scoped debug views such as per-path truth availability
 
+`remote_state` reads return the durable per-row `drive_id` from the table
+itself. Fallback configured drive IDs exist only for legacy or absent durable
+state and must not overwrite a stored row owner on read.
+
 `status` should compose its output directly from those authorities. The store
 must not own grouping or rendering policy for `status` or watch summaries.
 Shared condition-family grouping and ordering belong to
@@ -141,36 +146,39 @@ authorities belongs to `internal/sync/condition_projection.go`; neither
 responsibility belongs to store query helpers.
 Store maintenance must also keep `block_scopes` honest:
 
-- timed transient scopes may exist only while blocked `retry_work` still exists
-  for the same `scope_key`
-- permission scopes are exempt from that pruning rule because they are
-  revalidated by observation/probe, not by blocked-retry emptiness
+- timed scopes may exist only while blocked `retry_work` still exists for the
+  same `scope_key`
+- no persisted scope row may be completely orphaned from both `retry_work` and
+  `observation_issues`; if neither authority still references the `scope_key`,
+  the row is durable garbage and invariant checks must fail loudly
 
-`block_scopes` persists parsed scope semantics alongside `scope_key`:
+Pruning an empty scope removes only the scope row. Ready `retry_work` that no
+longer depends on that scope must survive pruning; only explicit discard of a
+still-blocked scope may delete the blocked work under it.
 
-- `scope_family`
-- `scope_access`
-- `subject_kind`
-- `subject_value`
+`block_scopes` persists only:
 
-`scope_key` remains the durable identity used by `retry_work`, but store reads
-and writes validate these metadata columns against `DescribeScopeKey` so the
-store, planner, watch summary, and status paths share one explicit semantic
-shape instead of reparsing free-form strings everywhere.
+- `scope_key`
+- `blocked_at`
+- `trial_interval`
+- `next_trial_at`
 
-The raw block-scope read path is shared: status/read-side queries and the
-store-owned `ListBlockScopes` entrypoint both scan through the same metadata
-validation helper instead of maintaining duplicate SQL/scan behavior.
-Read-side consumers should use the validated persisted metadata already on each
-`BlockScope` row instead of reparsing `scope_key` when the row itself is
-already in hand.
+`scope_key` remains the durable identity used by `retry_work`, while in-memory
+scope semantics are reconstructed from `DescribeScopeKey` during read/write
+validation. The shared raw block-scope read path therefore validates the
+durable key once and returns a canonical `BlockScope` shape without storing a
+second copy of parsed metadata in SQLite.
+
+Read-denied subtree boundaries do not persist as `block_scopes`. They remain
+tagged on `observation_issues` via `ScopeKey`, and truth-status reads derive
+blocked descendants from those boundary facts.
 
 `store_inspect.go` now owns two read-side shapes:
 
 - `DriveStatusSnapshot` for raw durable authorities used by `status` and watch
 - `ReadPathTruthStatus` for derived truth availability over requested paths,
-  built from `observation_issues` plus active read scopes without materializing
-  fake durable descendant rows
+  built from `observation_issues` plus boundary-tagged `ScopeKey` facts without
+  materializing fake durable descendant rows
 
 ## State-DB Diagnosis And Reset
 
