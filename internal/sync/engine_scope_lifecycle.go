@@ -709,6 +709,9 @@ func remoteBlockedRetryRelevant(
 	if row == nil || !row.ScopeKey.IsPermRemote() {
 		return false
 	}
+	if !row.ScopeKey.IsPermRemoteWrite() {
+		return false
+	}
 
 	boundary := row.ScopeKey.RemotePath()
 	for changedPath := range changedPaths {

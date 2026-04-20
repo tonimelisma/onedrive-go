@@ -206,12 +206,11 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 				DriveID:    driveID,
 			},
 			want: ResultDecision{
-				Class:          resultSkip,
-				SummaryKey:     SummaryRemoteReadDenied,
-				Persistence:    persistRetryWork,
-				PermissionFlow: permissionFlowRemote403,
-				TrialHint:      trialHintPreserve,
-				IssueType:      IssueRemoteReadDenied,
+				Class:       resultSkip,
+				SummaryKey:  SummaryRemoteReadDenied,
+				Persistence: persistRetryWork,
+				TrialHint:   trialHintPreserve,
+				IssueType:   IssueRemoteReadDenied,
 			},
 		},
 		{

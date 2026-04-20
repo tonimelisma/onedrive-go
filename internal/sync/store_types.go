@@ -25,8 +25,10 @@ type ObservationIssue struct {
 // The batch replaces the current observation-owned issue set for its managed
 // issue families and read scopes.
 type ObservationFindingsBatch struct {
-	Issues     []ObservationIssue
-	ReadScopes []ScopeKey
+	Issues                []ObservationIssue
+	ReadScopes            []ScopeKey
+	ManagedIssueTypes     []string
+	ManagedReadScopeKinds []ScopeKeyKind
 }
 
 // ObservationIssueRow represents a row from the observation_issues table.

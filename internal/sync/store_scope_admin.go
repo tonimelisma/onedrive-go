@@ -6,14 +6,6 @@ import (
 	"time"
 )
 
-const sqlPruneBlockScopesWithoutBlockedWork = `DELETE FROM block_scopes
-	WHERE timing_source <> 'none'
-		AND NOT EXISTS (
-		SELECT 1 FROM retry_work
-		WHERE retry_work.blocked = 1
-			AND retry_work.scope_key = block_scopes.scope_key
-	)`
-
 // ReleaseScope atomically applies the semantic "this scope condition has
 // resolved; blocked work may run again" transition.
 //
@@ -91,9 +83,47 @@ func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err er
 }
 
 func (m *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) error {
-	if _, err := m.db.ExecContext(ctx, sqlPruneBlockScopesWithoutBlockedWork); err != nil {
-		return fmt.Errorf("sync: pruning block scopes without blocked work: %w", err)
+	blocks, err := m.ListBlockScopes(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: listing block scopes for pruning: %w", err)
+	}
+
+	for i := range blocks {
+		block := blocks[i]
+		if block == nil {
+			continue
+		}
+		if block.Key.IsPermDir() || block.Key.IsPermRemote() || block.TimingSource == ScopeTimingNone {
+			continue
+		}
+
+		keep, keepErr := m.scopeHasBlockedRetryWork(ctx, block.Key)
+		if keepErr != nil {
+			return keepErr
+		}
+		if keep {
+			continue
+		}
+
+		if err := m.DiscardScope(ctx, block.Key); err != nil {
+			return fmt.Errorf("sync: pruning block scope %s without blocked work: %w", block.Key.String(), err)
+		}
 	}
 
 	return nil
+}
+
+func (m *SyncStore) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
+	rows, err := m.ListBlockedRetryWork(ctx)
+	if err != nil {
+		return false, fmt.Errorf("sync: listing blocked retry work for scope pruning: %w", err)
+	}
+
+	for i := range rows {
+		if rows[i].ScopeKey == scopeKey {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
