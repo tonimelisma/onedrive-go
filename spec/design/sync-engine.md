@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/watch_summary.go, internal/sync/condition_summary.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_recheck.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
+GOVERNS: internal/sync/engine*.go, internal/sync/watch_summary.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_recheck.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
 Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
@@ -118,6 +118,10 @@ connection committed a write, `handleExternalChanges()` runs.
 That hook is intentionally narrow. It rechecks externally cleared scope state
 and aligns runtime admission with the persisted `block_scopes` and blocked
 `retry_work` rows. It is not a generic user-intent ingestion path.
+
+Watch summary grouping is engine-owned. `watch_summary.go` builds the
+watch-only condition aggregate directly from raw authority snapshots; the
+store does not own grouped watch-condition projections.
 
 ## Shared-Root Drives
 
