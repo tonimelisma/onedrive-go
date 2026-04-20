@@ -16,6 +16,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 func describeBlockScopeForWrite(block *BlockScope) (persistedScopeMetadata, error) {
@@ -78,6 +79,10 @@ func validateBlockScope(block *BlockScope) error {
 // both insert and update. All fields are serialized: ScopeKey.String() for
 // the key, UnixNano for timestamps, nanoseconds for Duration.
 func (m *SyncStore) UpsertBlockScope(ctx context.Context, block *BlockScope) error {
+	return upsertBlockScopeWithRunner(ctx, m.db, block)
+}
+
+func upsertBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, block *BlockScope) error {
 	if err := validateBlockScope(block); err != nil {
 		return err
 	}
@@ -87,7 +92,7 @@ func (m *SyncStore) UpsertBlockScope(ctx context.Context, block *BlockScope) err
 		nextTrialAtNano = block.NextTrialAt.UnixNano()
 	}
 
-	_, err := m.db.ExecContext(ctx,
+	_, err := runner.ExecContext(ctx,
 		`INSERT OR REPLACE INTO block_scopes
 			(scope_key, scope_family, scope_access, subject_kind, subject_value,
 			 condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
@@ -114,7 +119,11 @@ func (m *SyncStore) UpsertBlockScope(ctx context.Context, block *BlockScope) err
 // DeleteBlockScope removes a block scope from the block_scopes table.
 // No-op if the row doesn't exist (DELETE WHERE is a natural no-op).
 func (m *SyncStore) DeleteBlockScope(ctx context.Context, key ScopeKey) error {
-	_, err := m.db.ExecContext(ctx,
+	return deleteBlockScopeWithRunner(ctx, m.db, key)
+}
+
+func deleteBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, key ScopeKey) error {
+	_, err := runner.ExecContext(ctx,
 		`DELETE FROM block_scopes WHERE scope_key = ?`,
 		key.String(),
 	)
@@ -123,6 +132,15 @@ func (m *SyncStore) DeleteBlockScope(ctx context.Context, key ScopeKey) error {
 	}
 
 	return nil
+}
+
+func observationReadScopeBlock(key ScopeKey, nowNano int64) *BlockScope {
+	return &BlockScope{
+		Key:           key,
+		ConditionType: key.ConditionType(),
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(0, nowNano).UTC(),
+	}
 }
 
 // ListBlockScopes returns all persisted block scopes. Used at startup to

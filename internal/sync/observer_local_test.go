@@ -1097,6 +1097,10 @@ func TestFullScan_PermissionDenied(t *testing.T) {
 	paths := eventPaths(result.Events)
 	assert.True(t, containsPath(paths, "readable/file.txt"), "expected event for readable/file.txt")
 	assert.False(t, containsPath(paths, "unreadable/hidden.txt"), "should not have event for unreadable/hidden.txt")
+	require.Len(t, result.Skipped, 1)
+	assert.Equal(t, "unreadable", result.Skipped[0].Path)
+	assert.Equal(t, IssueLocalReadDenied, result.Skipped[0].Reason)
+	assert.True(t, result.Skipped[0].BlocksReadScope)
 }
 
 // eventPaths extracts paths from a slice of ChangeEvents.

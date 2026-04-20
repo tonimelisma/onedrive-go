@@ -101,13 +101,11 @@ func (rt *watchRuntime) processCommittedPrimaryWatchBatch(
 
 		return nil, newFatalObserverError(fmt.Errorf("commit primary watch observations: %w", err))
 	}
+	batch := remoteObservationManagedBatch()
 	rt.reconcileObservationFindingsBatch(
 		ctx,
 		rt,
-		&ObservationFindingsBatch{
-			ManagedIssueTypes:     []string{IssueRemoteReadDenied},
-			ManagedReadScopeKinds: []ScopeKeyKind{ScopePermRemoteRead},
-		},
+		&batch,
 		"failed to reconcile primary remote observation findings",
 	)
 
