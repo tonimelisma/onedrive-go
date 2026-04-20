@@ -102,7 +102,9 @@ func (rt *watchRuntime) dispatchCurrentPlan(
 // periodicPermRecheck delegates steady-state permission maintenance to the
 // permission boundary, which owns cadence and remote-probe suppression policy.
 func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *Baseline) {
-	rt.scopeController().runPeriodicPermissionMaintenance(ctx, rt, rt.engine.permHandler, bl)
+	rt.scopeController().runPermissionMaintenance(ctx, rt, bl, permissionMaintenanceRequest{
+		Reason: permissionMaintenancePeriodic,
+	})
 }
 
 // deduplicateInFlight cancels in-flight actions for paths that appear in the

@@ -306,7 +306,9 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 	pipe.bl = bl
 
-	rt.scopeController().runStartupPermissionMaintenance(ctx, rt, rt.engine.permHandler, bl)
+	rt.scopeController().runPermissionMaintenance(ctx, rt, bl, permissionMaintenanceRequest{
+		Reason: permissionMaintenanceStartup,
+	})
 
 	fullReconcile, err := rt.engine.shouldRunFullRemoteReconcile(ctx, false)
 	if err != nil {

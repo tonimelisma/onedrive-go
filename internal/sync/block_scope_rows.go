@@ -64,19 +64,15 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 		nextTrialAt = time.Unix(0, nextTrialNano).UTC()
 	}
 
-	return &BlockScope{
-		Key:           metadata.Key,
-		Family:        metadata.Family,
-		Access:        metadata.Access,
-		SubjectKind:   metadata.SubjectKind,
-		SubjectValue:  metadata.SubjectValue,
-		ConditionType: conditionType,
-		TimingSource:  ScopeTimingSource(timingSource),
-		BlockedAt:     time.Unix(0, blockedAtNano).UTC(),
-		TrialInterval: time.Duration(intervalNano),
-		NextTrialAt:   nextTrialAt,
-		TrialCount:    trialCount,
-	}, nil
+	return newBlockScopeFromPersistedMetadata(
+		&metadata,
+		conditionType,
+		ScopeTimingSource(timingSource),
+		time.Unix(0, blockedAtNano).UTC(),
+		time.Duration(intervalNano),
+		nextTrialAt,
+		trialCount,
+	), nil
 }
 
 func queryBlockScopeRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]*BlockScope, error) {

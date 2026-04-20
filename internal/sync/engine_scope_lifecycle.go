@@ -262,34 +262,6 @@ func (controller *scopeController) normalizeDiskScope(ctx context.Context, block
 	return nil
 }
 
-func (controller *scopeController) getBlockScope(watch *watchRuntime, key ScopeKey) (ActiveScope, bool) {
-	if watch == nil {
-		return ActiveScope{}, false
-	}
-	return watch.lookupActiveScope(key)
-}
-
-func (controller *scopeController) isBlockScopeed(watch *watchRuntime, key ScopeKey) bool {
-	if watch == nil {
-		return false
-	}
-	return watch.hasActiveScope(key)
-}
-
-func (controller *scopeController) activeBlockingScope(watch *watchRuntime, ta *TrackedAction) ScopeKey {
-	if watch == nil {
-		return ScopeKey{}
-	}
-	return watch.findBlockingScope(ta)
-}
-
-func (controller *scopeController) blockScopeKeys(watch *watchRuntime) []ScopeKey {
-	if watch == nil {
-		return nil
-	}
-	return watch.activeScopeKeys()
-}
-
 func (controller *scopeController) activateScope(ctx context.Context, watch *watchRuntime, block *ActiveScope) error {
 	flow := controller.flow
 
@@ -331,7 +303,7 @@ func (controller *scopeController) extendScopeTrial(
 		return
 	}
 
-	block, ok := controller.getBlockScope(watch, scopeKey)
+	block, ok := watch.lookupActiveScope(scopeKey)
 	if !ok {
 		return
 	}
@@ -367,7 +339,7 @@ func (controller *scopeController) rearmScopeTrial(ctx context.Context, watch *w
 		return
 	}
 
-	block, ok := controller.getBlockScope(watch, scopeKey)
+	block, ok := watch.lookupActiveScope(scopeKey)
 	if !ok {
 		return
 	}
@@ -472,7 +444,7 @@ func scopeTimingSource(retryAfter time.Duration) ScopeTimingSource {
 // meaning all remote observation polling should be skipped to avoid wasting
 // API calls. Target-scoped 429 blocks are handled separately.
 func (controller *scopeController) isObservationSuppressed(watch *watchRuntime) bool {
-	return controller.isBlockScopeed(watch, SKService())
+	return watch != nil && watch.hasActiveScope(SKService())
 }
 
 // feedScopeDetection feeds an action completion into scope detection sliding
@@ -633,7 +605,7 @@ func (controller *scopeController) admitReady(
 				// run normal admission. Best-effort: log on error, don't abort.
 				controller.clearBlockedRetryWorkForScope(ctx, retryWorkKeyForAction(&ta.Action), ta.TrialScopeKey)
 
-				if key := controller.activeBlockingScope(watch, ta); key.IsZero() {
+				if key := watch.findBlockingScope(ta); key.IsZero() {
 					flow.setDispatch(ctx, &ta.Action)
 					dispatch = append(dispatch, ta)
 				}
@@ -647,7 +619,7 @@ func (controller *scopeController) admitReady(
 
 		// Normal scope admission.
 		if watch != nil {
-			if key := controller.activeBlockingScope(watch, ta); !key.IsZero() {
+			if key := watch.findBlockingScope(ta); !key.IsZero() {
 				controller.cascadeRecordAndComplete(ctx, ta, key)
 				continue
 			}

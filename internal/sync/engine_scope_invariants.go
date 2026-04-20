@@ -211,7 +211,7 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 }
 
 func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
-	if watch != nil && flow.scopeController().isBlockScopeed(watch, key) {
+	if watch != nil && watch.hasActiveScope(key) {
 		return fmt.Errorf("released scope %s still active in watch state", key.String())
 	}
 
@@ -239,7 +239,7 @@ func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRun
 }
 
 func (flow *engineFlow) assertDiscardedScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
-	if watch != nil && flow.scopeController().isBlockScopeed(watch, key) {
+	if watch != nil && watch.hasActiveScope(key) {
 		return fmt.Errorf("discarded scope %s still active in watch state", key.String())
 	}
 

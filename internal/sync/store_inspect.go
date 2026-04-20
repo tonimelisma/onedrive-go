@@ -200,7 +200,7 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status observation issues: %w", err)
 	}
-	snapshot.BlockScopes, err = queryBlockScopesDB(ctx, i.db)
+	snapshot.BlockScopes, err = queryBlockScopeRowsWithRunner(ctx, i.db)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status block scopes: %w", err)
 	}

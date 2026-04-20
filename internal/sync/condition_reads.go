@@ -22,15 +22,6 @@ func queryObservationIssueRowsDB(ctx context.Context, runner sqlTxRunner) ([]Obs
 	return scanObservationIssueRows(rows, configuredDriveID)
 }
 
-func queryBlockScopesDB(ctx context.Context, runner sqlTxRunner) ([]*BlockScope, error) {
-	result, err := queryBlockScopeRowsWithRunner(ctx, runner)
-	if err != nil {
-		return nil, fmt.Errorf("query block scopes: %w", err)
-	}
-
-	return result, nil
-}
-
 func queryBlockedRetryWorkRowsDB(ctx context.Context, runner sqlTxRunner) ([]RetryWorkRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlListRetryWorkBlocked)
 	if err != nil {

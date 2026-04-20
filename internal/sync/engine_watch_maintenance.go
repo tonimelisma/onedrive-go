@@ -52,7 +52,7 @@ func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
 // authorities still exist and releases any runtime scope whose backing
 // block_scopes / blocked retry_work rows disappeared externally.
 func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
-	scopeKeys := rt.scopeController().blockScopeKeys(rt)
+	scopeKeys := rt.activeScopeKeys()
 	if len(scopeKeys) == 0 {
 		return
 	}

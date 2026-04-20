@@ -481,5 +481,5 @@ func (flow *engineFlow) retryWorkShouldBeBlocked(
 		return false
 	}
 
-	return flow.scopeController().isBlockScopeed(watch, scopeKey)
+	return watch != nil && watch.hasActiveScope(scopeKey)
 }
