@@ -21,60 +21,12 @@ type watchConditionCount struct {
 	Count int
 }
 
-// watchConditionSummary is the engine-owned aggregate view of sync conditions
-// for watch summaries and related assertions.
+// watchConditionSummary is the raw engine-owned aggregate view consumed by
+// watch logging and related assertions.
 type watchConditionSummary struct {
-	Counts   []watchConditionCount
-	Retrying int
-}
-
-func (s watchConditionSummary) VisibleTotal() int {
-	total := 0
-	for _, count := range s.Counts {
-		total += count.Count
-	}
-
-	return total
-}
-
-func (s watchConditionSummary) ConflictCount() int {
-	return 0
-}
-
-func (s watchConditionSummary) ActionableCount() int {
-	total := 0
-	for _, count := range s.Counts {
-		if count.Key == ConditionRemoteWriteDenied ||
-			count.Key == ConditionAuthenticationRequired {
-			continue
-		}
-		total += count.Count
-	}
-
-	return total
-}
-
-func (s watchConditionSummary) RemoteBlockedCount() int {
-	return s.countForKey(ConditionRemoteWriteDenied)
-}
-
-func (s watchConditionSummary) AuthRequiredCount() int {
-	return s.countForKey(ConditionAuthenticationRequired)
-}
-
-func (s watchConditionSummary) RetryingCount() int {
-	return s.Retrying
-}
-
-func (s watchConditionSummary) countForKey(key ConditionKey) int {
-	total := 0
-	for _, count := range s.Counts {
-		if count.Key == key {
-			total += count.Count
-		}
-	}
-
-	return total
+	Counts         []watchConditionCount
+	ConditionTotal int
+	Retrying       int
 }
 
 type watchConditionCountAccumulator map[ConditionKey]int
@@ -97,7 +49,7 @@ func (a watchConditionCountAccumulator) Counts() []watchConditionCount {
 	}
 
 	sort.Slice(counts, func(i, j int) bool {
-		return string(counts[i].Key) < string(counts[j].Key)
+		return ConditionKeyLess(counts[i].Key, counts[j].Key)
 	})
 
 	return counts
@@ -149,9 +101,12 @@ func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSu
 		return remoteGroups[i].ScopeKey.String() < remoteGroups[j].ScopeKey.String()
 	})
 
+	summaryCounts := counts.Counts()
+
 	return watchConditionSummary{
-		Counts:   counts.Counts(),
-		Retrying: snapshot.RetryingItems,
+		Counts:         summaryCounts,
+		ConditionTotal: watchConditionCountTotal(summaryCounts),
+		Retrying:       snapshot.RetryingItems,
 	}, remoteGroups
 }
 
@@ -172,4 +127,13 @@ func groupWatchBlockedRetryWork(rows []RetryWorkRow) map[ScopeKey]watchBlockedRe
 	}
 
 	return grouped
+}
+
+func watchConditionCountTotal(counts []watchConditionCount) int {
+	total := 0
+	for i := range counts {
+		total += counts[i].Count
+	}
+
+	return total
 }

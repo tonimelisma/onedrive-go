@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 )
 
@@ -19,7 +18,7 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 	summary, groups := buildWatchConditionSummary(&snapshot)
 	rt.logRemoteBlockedChanges(groups)
 
-	totalConditions := summary.VisibleTotal()
+	totalConditions := summary.ConditionTotal
 	if totalConditions == 0 {
 		if rt.lastSummaryTotal != 0 || rt.lastSummarySignature != "" {
 			rt.engine.logger.Info("sync conditions cleared")
@@ -87,7 +86,6 @@ func watchSummarySignature(summary watchConditionSummary) (string, string) {
 	for i := range summary.Counts {
 		parts = append(parts, fmt.Sprintf("%d %s", summary.Counts[i].Count, summary.Counts[i].Key))
 	}
-	sort.Strings(parts)
 	breakdown := strings.Join(parts, ", ")
-	return fmt.Sprintf("%d|%s", summary.VisibleTotal(), breakdown), breakdown
+	return fmt.Sprintf("%d|%s", summary.ConditionTotal, breakdown), breakdown
 }
