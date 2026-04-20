@@ -108,7 +108,11 @@ structural absence:
 
 - local read-denied, invalid, or otherwise unsyncable paths are unavailable
   local truth, not local deletes
+- a local unreadable subtree boundary suppresses all descendant structural
+  actions; descendants are unavailable current truth, not "missing local"
 - remote read-denied subtrees are unavailable remote truth, not remote deletes
+- a remote unreadable subtree boundary suppresses all descendant structural
+  actions; descendants are unavailable current truth, not "missing remote"
 - active read permission scopes suppress destructive and mutating work under
   the blocked subtree until revalidation succeeds
 
