@@ -18,9 +18,7 @@ const (
 type scopeStartupPolicy int
 
 const (
-	scopeStartupRevalidateLocalPermission scopeStartupPolicy = iota + 1
-	scopeStartupKeepRemotePermission
-	scopeStartupRequiresScopedFailures
+	scopeStartupRequiresScopedFailures scopeStartupPolicy = iota + 1
 	scopeStartupServerTimedOnly
 	scopeStartupRevalidateDisk
 )
@@ -53,9 +51,10 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 	return nil
 }
 
-// normalizePersistedScopes normalizes persisted scope rows against current
-// store evidence before any admission begins. The store remains authoritative
-// for restart state; watch mode loads activeScopes only after this pass.
+// normalizePersistedScopes normalizes non-permission scope rows against
+// persisted retry evidence before any admission begins. Permission scopes keep
+// their persisted state until the permission-maintenance boundary revalidates
+// them after baseline load.
 func (controller *scopeController) normalizePersistedScopes(
 	ctx context.Context,
 	watch *watchRuntime,
@@ -143,6 +142,9 @@ func (controller *scopeController) normalizePersistedNonAuthScopes(
 	facts := summarizePersistedBlockedRetries(blockedRetries)
 
 	for i := range blocks {
+		if blocks[i] == nil || blocks[i].Key.IsPermDir() || blocks[i].Key.IsPermRemote() {
+			continue
+		}
 		if err := controller.normalizePersistedScope(ctx, blocks[i], facts); err != nil {
 			return err
 		}
@@ -159,22 +161,6 @@ func (controller *scopeController) normalizePersistedScope(
 	blockedRetryCount := facts.blockedRetryCountByScope[block.Key]
 
 	switch scopeStartupPolicyFor(block.Key) {
-	case scopeStartupRevalidateLocalPermission:
-		if block.Key.IsPermLocalRead() {
-			if !isDirAccessible(controller.flow.engine.syncTree, block.ScopePath()) {
-				return nil
-			}
-			return controller.releaseStartupScope(ctx, block.Key, "released local read scope after revalidation")
-		}
-		if block.Key.IsPermLocalWrite() {
-			if !isDirWritable(controller.flow.engine.syncTree, block.ScopePath()) {
-				return nil
-			}
-			return controller.releaseStartupScope(ctx, block.Key, "released local write scope after revalidation")
-		}
-		panic(fmt.Sprintf("unexpected local permission scope %s", block.Key.String()))
-	case scopeStartupKeepRemotePermission:
-		return nil
 	case scopeStartupRequiresScopedFailures:
 		if blockedRetryCount > 0 {
 			return nil
@@ -243,10 +229,6 @@ func summarizePersistedBlockedRetries(rows []RetryWorkRow) persistedScopeFacts {
 
 func scopeStartupPolicyFor(key ScopeKey) scopeStartupPolicy {
 	switch {
-	case key.IsPermDir():
-		return scopeStartupRevalidateLocalPermission
-	case key.IsPermRemote():
-		return scopeStartupKeepRemotePermission
 	case key == SKQuotaOwn():
 		return scopeStartupRequiresScopedFailures
 	case key.IsThrottleTarget(), key == SKService():

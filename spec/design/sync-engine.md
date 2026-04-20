@@ -70,14 +70,16 @@ observation and execution metadata.
 `RunOnce()` keeps one-shot behavior intentionally simple:
 
 1. bootstrap durable state and startup checks
-2. refresh current remote and local snapshots once
-3. compute SQL structural diff and reconciliation once
-4. build the current actionable set in Go from structural reconciliation plus
+2. normalize non-permission scopes against persisted retry evidence
+3. load baseline and run permission maintenance
+4. refresh current remote and local snapshots once
+5. compute SQL structural diff and reconciliation once
+6. build the current actionable set in Go from structural reconciliation plus
    explicit truth-availability overlays
-5. reconcile durable retry/blocker state to that actionable set
-6. commit any ready publication-only actions directly through the store
-7. execute remaining concrete work once
-8. persist outcomes and return a report
+7. reconcile durable retry/blocker state to that actionable set
+8. commit any ready publication-only actions directly through the store
+9. execute remaining concrete work once
+10. persist outcomes and return a report
 
 There is no mid-pass mailbox for user intent. New external DB writes during a
 one-shot run are durable state for a later run.
@@ -203,6 +205,12 @@ manual recheck CLI for them. Observation/probe may create or clear permission
 scopes directly when current truth already proves the shared blocker or its
 recovery. A raw `403` or `os.ErrPermission` is only a trigger to probe; the
 probe result is what may activate or release the scope.
+
+Permission maintenance owns the startup and periodic recheck policy surface.
+Generic scope startup normalization repairs only non-permission scopes; after
+baseline load, the engine asks the permission boundary for startup/per-pass
+recheck decisions and applies those decisions through the usual scope-release
+path.
 
 Ownership splits by access kind:
 

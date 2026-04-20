@@ -112,15 +112,15 @@ func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *Baseline) {
 
 	rt.lastPermRecheck = now
 
-	// recheckPermissions calls the Graph API — skip during outage or
-	// throttle to avoid wasting API calls (R-2.10.30). Local permission
-	// rechecks (filesystem-only) proceed regardless.
-	if rt.engine.permHandler.HasPermChecker() && !rt.scopeController().isObservationSuppressed(rt) {
-		decisions := rt.engine.permHandler.recheckPermissions(ctx, bl)
-		rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
-	}
-
-	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
+	// Remote permission probes can be suppressed during broader observation
+	// suppression. Local permission rechecks remain enabled because they are
+	// direct filesystem observation of current truth.
+	includeRemote := rt.engine.permHandler.HasPermChecker() && !rt.scopeController().isObservationSuppressed(rt)
+	rt.scopeController().applyPermissionRecheckDecisions(
+		ctx,
+		rt,
+		rt.engine.permHandler.periodicRecheckDecisions(ctx, bl, includeRemote),
+	)
 }
 
 // deduplicateInFlight cancels in-flight actions for paths that appear in the
