@@ -577,52 +577,52 @@ func TestQuerySyncState_RemoteDriftAndConditions(t *testing.T) {
 	}()
 
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:       "/x.txt",
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueServiceOutage,
-		LastError:  "temporary",
+		Path:          "/x.txt",
+		ActionType:    syncengine.ActionUpload,
+		ConditionType: syncengine.IssueServiceOutage,
+		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:       "/x.txt",
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueServiceOutage,
-		LastError:  "temporary",
+		Path:          "/x.txt",
+		ActionType:    syncengine.ActionUpload,
+		ConditionType: syncengine.IssueServiceOutage,
+		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:       "/x.txt",
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueServiceOutage,
-		LastError:  "temporary",
+		Path:          "/x.txt",
+		ActionType:    syncengine.ActionUpload,
+		ConditionType: syncengine.IssueServiceOutage,
+		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:       "/y.txt",
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueServiceOutage,
-		LastError:  "temporary",
+		Path:          "/y.txt",
+		ActionType:    syncengine.ActionUpload,
+		ConditionType: syncengine.IssueServiceOutage,
+		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:       "/y.txt",
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueServiceOutage,
-		LastError:  "temporary",
+		Path:          "/y.txt",
+		ActionType:    syncengine.ActionUpload,
+		ConditionType: syncengine.IssueServiceOutage,
+		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:       "/y.txt",
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueServiceOutage,
-		LastError:  "temporary",
+		Path:          "/y.txt",
+		ActionType:    syncengine.ActionUpload,
+		ConditionType: syncengine.IssueServiceOutage,
+		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:       "/y.txt",
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueServiceOutage,
-		LastError:  "temporary",
+		Path:          "/y.txt",
+		ActionType:    syncengine.ActionUpload,
+		ConditionType: syncengine.IssueServiceOutage,
+		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	require.NoError(t, store.UpsertObservationIssue(ctx, &syncengine.ObservationIssue{
@@ -663,27 +663,27 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 
 	scopeKey := syncengine.SKPermRemoteWrite("Shared/Docs")
 	require.NoError(t, store.UpsertBlockScope(ctx, &syncengine.BlockScope{
-		Key:          scopeKey,
-		IssueType:    syncengine.IssueRemoteWriteDenied,
-		TimingSource: syncengine.ScopeTimingNone,
-		BlockedAt:    time.Unix(0, 0).UTC(),
+		Key:           scopeKey,
+		ConditionType: syncengine.IssueRemoteWriteDenied,
+		TimingSource:  syncengine.ScopeTimingNone,
+		BlockedAt:     time.Unix(0, 0).UTC(),
 	}))
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:       "/blocked/a.txt",
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueRemoteWriteDenied,
-		ScopeKey:   scopeKey,
-		LastError:  "blocked",
-		Blocked:    true,
+		Path:          "/blocked/a.txt",
+		ActionType:    syncengine.ActionUpload,
+		ConditionType: syncengine.IssueRemoteWriteDenied,
+		ScopeKey:      scopeKey,
+		LastError:     "blocked",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:       "/blocked/b.txt",
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueRemoteWriteDenied,
-		ScopeKey:   scopeKey,
-		LastError:  "blocked",
-		Blocked:    true,
+		Path:          "/blocked/b.txt",
+		ActionType:    syncengine.ActionUpload,
+		ConditionType: syncengine.IssueRemoteWriteDenied,
+		ScopeKey:      scopeKey,
+		LastError:     "blocked",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 	require.NoError(t, store.UpsertObservationIssue(ctx, &syncengine.ObservationIssue{
@@ -772,37 +772,37 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 		Error:      "invalid filename",
 	}))
 	require.NoError(t, store.UpsertBlockScope(ctx, &syncengine.BlockScope{
-		Key:          scopeKey,
-		IssueType:    syncengine.IssueRemoteWriteDenied,
-		TimingSource: syncengine.ScopeTimingNone,
-		BlockedAt:    time.Unix(0, 0).UTC(),
+		Key:           scopeKey,
+		ConditionType: syncengine.IssueRemoteWriteDenied,
+		TimingSource:  syncengine.ScopeTimingNone,
+		BlockedAt:     time.Unix(0, 0).UTC(),
 	}))
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:       "/blocked/a.txt",
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueRemoteWriteDenied,
-		ScopeKey:   scopeKey,
-		LastError:  "blocked",
-		Blocked:    true,
+		Path:          "/blocked/a.txt",
+		ActionType:    syncengine.ActionUpload,
+		ConditionType: syncengine.IssueRemoteWriteDenied,
+		ScopeKey:      scopeKey,
+		LastError:     "blocked",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:       "/blocked/b.txt",
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueRemoteWriteDenied,
-		ScopeKey:   scopeKey,
-		LastError:  "blocked",
-		Blocked:    true,
+		Path:          "/blocked/b.txt",
+		ActionType:    syncengine.ActionUpload,
+		ConditionType: syncengine.IssueRemoteWriteDenied,
+		ScopeKey:      scopeKey,
+		LastError:     "blocked",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
-	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
-	sharedDescriptor := describeStatusSummary(syncengine.SummaryRemoteWriteDenied)
+	invalidDescriptor := describeStatusCondition(syncengine.ConditionInvalidFilename)
+	sharedDescriptor := describeStatusCondition(syncengine.ConditionRemoteWriteDenied)
 	assert.ElementsMatch(t, []statusConditionJSON{
 		{
-			SummaryKey:    string(syncengine.SummaryInvalidFilename),
+			ConditionKey:  string(syncengine.ConditionInvalidFilename),
 			ConditionType: string(syncengine.IssueInvalidFilename),
 			Title:         invalidDescriptor.Title,
 			Reason:        invalidDescriptor.Reason,
@@ -811,7 +811,7 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 			Paths:         []string{"/invalid:name.txt"},
 		},
 		{
-			SummaryKey:    string(syncengine.SummaryRemoteWriteDenied),
+			ConditionKey:  string(syncengine.ConditionRemoteWriteDenied),
 			ConditionType: string(syncengine.IssueRemoteWriteDenied),
 			Title:         sharedDescriptor.Title,
 			Reason:        sharedDescriptor.Reason,
@@ -843,18 +843,18 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 						ConditionCount: 2,
 						Conditions: []statusConditionJSON{
 							{
-								SummaryKey: string(syncengine.SummaryQuotaExceeded),
-								Title:      "QUOTA EXCEEDED",
-								Count:      1,
-								ScopeKind:  "drive",
-								Scope:      "Shared/Docs",
+								ConditionKey: string(syncengine.ConditionQuotaExceeded),
+								Title:        "QUOTA EXCEEDED",
+								Count:        1,
+								ScopeKind:    "drive",
+								Scope:        "Shared/Docs",
 							},
 							{
-								SummaryKey: string(syncengine.SummaryQuotaExceeded),
-								Title:      "QUOTA EXCEEDED",
-								Count:      1,
-								ScopeKind:  "drive",
-								Scope:      "Shared/Design",
+								ConditionKey: string(syncengine.ConditionQuotaExceeded),
+								Title:        "QUOTA EXCEEDED",
+								Count:        1,
+								ScopeKind:    "drive",
+								Scope:        "Shared/Design",
 							},
 						},
 					},
@@ -879,12 +879,12 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 	t.Parallel()
 
-	quotaDescriptor := describeStatusSummary(syncengine.SummaryQuotaExceeded)
+	quotaDescriptor := describeStatusCondition(syncengine.ConditionQuotaExceeded)
 	ss := &syncStateInfo{
 		ConditionCount: 2,
 		Conditions: []statusConditionJSON{
 			{
-				SummaryKey:    string(syncengine.SummaryQuotaExceeded),
+				ConditionKey:  string(syncengine.ConditionQuotaExceeded),
 				ConditionType: string(syncengine.IssueQuotaExceeded),
 				Title:         quotaDescriptor.Title,
 				Reason:        quotaDescriptor.Reason,
@@ -894,7 +894,7 @@ func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T)
 				Scope:         "Shared/Docs",
 			},
 			{
-				SummaryKey:    string(syncengine.SummaryQuotaExceeded),
+				ConditionKey:  string(syncengine.ConditionQuotaExceeded),
 				ConditionType: string(syncengine.IssueQuotaExceeded),
 				Title:         quotaDescriptor.Title,
 				Reason:        quotaDescriptor.Reason,
@@ -1013,17 +1013,17 @@ func TestPrintStatusJSON_WithConditions(t *testing.T) {
 						ConditionCount: 3,
 						Conditions: []statusConditionJSON{
 							{
-								SummaryKey: string(syncengine.SummaryQuotaExceeded),
-								Title:      "QUOTA EXCEEDED",
-								Count:      1,
-								ScopeKind:  "drive",
-								Scope:      "Shared/Team Docs",
+								ConditionKey: string(syncengine.ConditionQuotaExceeded),
+								Title:        "QUOTA EXCEEDED",
+								Count:        1,
+								ScopeKind:    "drive",
+								Scope:        "Shared/Team Docs",
 							},
 							{
-								SummaryKey: string(syncengine.SummaryInvalidFilename),
-								Title:      "INVALID FILENAME",
-								Count:      2,
-								ScopeKind:  "file",
+								ConditionKey: string(syncengine.ConditionInvalidFilename),
+								Title:        "INVALID FILENAME",
+								Count:        2,
+								ScopeKind:    "file",
 							},
 						},
 					},
@@ -1262,15 +1262,15 @@ func TestPrintSyncStateText_WithPendingAndConditions(t *testing.T) {
 func TestPrintSyncStateText_WithConditions(t *testing.T) {
 	t.Parallel()
 
-	quotaDescriptor := describeStatusSummary(syncengine.SummaryQuotaExceeded)
-	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
-	authDescriptor := describeStatusSummary(syncengine.SummaryAuthenticationRequired)
+	quotaDescriptor := describeStatusCondition(syncengine.ConditionQuotaExceeded)
+	invalidDescriptor := describeStatusCondition(syncengine.ConditionInvalidFilename)
+	authDescriptor := describeStatusCondition(syncengine.ConditionAuthenticationRequired)
 	ss := &syncStateInfo{
 		ConditionCount: 3,
 		Retrying:       2,
 		Conditions: []statusConditionJSON{
 			{
-				SummaryKey:    string(syncengine.SummaryQuotaExceeded),
+				ConditionKey:  string(syncengine.ConditionQuotaExceeded),
 				ConditionType: string(syncengine.IssueQuotaExceeded),
 				Title:         quotaDescriptor.Title,
 				Reason:        quotaDescriptor.Reason,
@@ -1281,7 +1281,7 @@ func TestPrintSyncStateText_WithConditions(t *testing.T) {
 				Paths:         []string{"/quota/a.txt"},
 			},
 			{
-				SummaryKey:    string(syncengine.SummaryInvalidFilename),
+				ConditionKey:  string(syncengine.ConditionInvalidFilename),
 				ConditionType: string(syncengine.IssueInvalidFilename),
 				Title:         invalidDescriptor.Title,
 				Reason:        invalidDescriptor.Reason,
@@ -1290,7 +1290,7 @@ func TestPrintSyncStateText_WithConditions(t *testing.T) {
 				Paths:         []string{"/bad:name.txt", "/worse:name.txt"},
 			},
 			{
-				SummaryKey:    string(syncengine.SummaryAuthenticationRequired),
+				ConditionKey:  string(syncengine.ConditionAuthenticationRequired),
 				ConditionType: string(syncengine.IssueUnauthorized),
 				Title:         authDescriptor.Title,
 				Reason:        authDescriptor.Reason,

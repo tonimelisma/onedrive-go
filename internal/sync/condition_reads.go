@@ -25,7 +25,7 @@ func queryObservationIssueRowsDB(ctx context.Context, runner sqlTxRunner) ([]Obs
 func queryBlockScopesDB(ctx context.Context, runner sqlTxRunner) ([]*BlockScope, error) {
 	rows, err := runner.QueryContext(ctx,
 		`SELECT scope_key, scope_family, scope_access, subject_kind, subject_value,
-		        issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
+		        condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
 			FROM block_scopes`)
 	if err != nil {
 		return nil, fmt.Errorf("query block scopes: %w", err)

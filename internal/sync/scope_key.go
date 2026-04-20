@@ -205,10 +205,10 @@ func (sk ScopeKey) ThrottleTargetKey() string {
 	return sk.Param
 }
 
-// IssueType returns the issue_type constant for this scope key's kind.
-// Used to derive a stable default issue type from a scope key.
-func (sk ScopeKey) IssueType() string {
-	return DescribeScopeKey(sk).DefaultIssueType
+// ConditionType returns the condition_type constant for this scope key's kind.
+// Used to derive a stable default condition type from a scope key.
+func (sk ScopeKey) ConditionType() string {
+	return DescribeScopeKey(sk).DefaultConditionType
 }
 
 // Humanize translates a scope key to a user-friendly description (R-2.10.22).

@@ -88,20 +88,20 @@ func (f *engineFlow) recordError(decision *ResultDecision, r *ActionCompletion) 
 		return
 	}
 
-	issueType := decision.IssueType
-	if issueType == "" {
-		issueType = fallbackFailureSummaryIssueType
+	conditionType := decision.ConditionType
+	if conditionType == "" {
+		conditionType = fallbackFailureSummaryIssueType
 	}
 
 	f.summaries = append(f.summaries, failureSummaryEntry{
-		issueType: issueType,
+		issueType: conditionType,
 		path:      r.Path,
 		errMsg:    errMsg,
 	})
 }
 
 // logFailureSummary logs an aggregated summary of transient execution failures
-// from the current pass. Groups failures by issue_type and mirrors the
+// from the current pass. Groups failures by condition_type and mirrors the
 // scanner-time aggregation rule: >10 items produce one WARN summary plus
 // per-item DEBUG detail, otherwise each item gets its own WARN.
 func (f *engineFlow) logFailureSummary() {
@@ -149,13 +149,13 @@ func (f *engineFlow) logFailureSummary() {
 		g := groups[key]
 		if g.count > aggregateThreshold {
 			f.engine.logger.Warn("sync retry work (aggregated)",
-				slog.String("issue_type", key),
+				slog.String("condition_type", key),
 				slog.Int("count", g.count),
 				slog.Any("sample_paths", g.paths),
 			)
 			for _, item := range g.items {
 				f.engine.logger.Debug("sync retry work",
-					slog.String("issue_type", key),
+					slog.String("condition_type", key),
 					slog.String("path", item.path),
 					slog.String("error", item.errMsg),
 				)
@@ -163,7 +163,7 @@ func (f *engineFlow) logFailureSummary() {
 		} else {
 			for _, item := range g.items {
 				f.engine.logger.Warn("sync retry work",
-					slog.String("issue_type", key),
+					slog.String("condition_type", key),
 					slog.String("path", item.path),
 					slog.String("error", item.errMsg),
 				)

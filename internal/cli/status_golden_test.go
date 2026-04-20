@@ -10,9 +10,9 @@ import (
 )
 
 func goldenStatusAccounts() []statusAccount {
-	invalidDescriptor := describeStatusSummary(syncengine.SummaryInvalidFilename)
-	authDescriptor := describeStatusSummary(syncengine.SummaryAuthenticationRequired)
-	sharedDescriptor := describeStatusSummary(syncengine.SummaryRemoteWriteDenied)
+	invalidDescriptor := describeStatusCondition(syncengine.ConditionInvalidFilename)
+	authDescriptor := describeStatusCondition(syncengine.ConditionAuthenticationRequired)
+	sharedDescriptor := describeStatusCondition(syncengine.ConditionRemoteWriteDenied)
 
 	return []statusAccount{
 		{
@@ -38,7 +38,7 @@ func goldenStatusAccounts() []statusAccount {
 						ExamplesLimit:    defaultVisiblePaths,
 						Conditions: []statusConditionJSON{
 							{
-								SummaryKey:    string(syncengine.SummaryInvalidFilename),
+								ConditionKey:  string(syncengine.ConditionInvalidFilename),
 								ConditionType: string(syncengine.IssueInvalidFilename),
 								Title:         invalidDescriptor.Title,
 								Reason:        invalidDescriptor.Reason,
@@ -47,7 +47,7 @@ func goldenStatusAccounts() []statusAccount {
 								Paths:         []string{"/invalid:name.txt"},
 							},
 							{
-								SummaryKey:    string(syncengine.SummaryAuthenticationRequired),
+								ConditionKey:  string(syncengine.ConditionAuthenticationRequired),
 								ConditionType: string(syncengine.IssueUnauthorized),
 								Title:         authDescriptor.Title,
 								Reason:        authDescriptor.Reason,
@@ -58,7 +58,7 @@ func goldenStatusAccounts() []statusAccount {
 								Paths:         nil,
 							},
 							{
-								SummaryKey:    string(syncengine.SummaryRemoteWriteDenied),
+								ConditionKey:  string(syncengine.ConditionRemoteWriteDenied),
 								ConditionType: string(syncengine.IssueRemoteWriteDenied),
 								Title:         sharedDescriptor.Title,
 								Reason:        sharedDescriptor.Reason,

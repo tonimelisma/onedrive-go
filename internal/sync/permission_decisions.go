@@ -25,7 +25,7 @@ type PermissionCheckDecision struct {
 	Kind             PermissionCheckDecisionKind
 	RetryWorkFailure *RetryWorkFailure
 	ScopeKey         ScopeKey
-	BlockScope       *BlockScope
+	BlockScope       *ActiveScope
 	BoundaryPath     string
 	TriggerPath      string
 }
@@ -94,13 +94,13 @@ func (controller *scopeController) logPermissionCheckDecision(
 	flowKind permissionFlow,
 	decision *PermissionCheckDecision,
 ) {
-	summaryKey := permissionDecisionSummaryKey(decision)
+	conditionKey := permissionDecisionConditionKey(decision)
 
 	switch flowKind {
 	case permissionFlowNone:
 		return
 	case permissionFlowRemote403:
-		controller.logRemotePermissionDecision(decision, summaryKey)
+		controller.logRemotePermissionDecision(decision, conditionKey)
 	case permissionFlowLocalPermission:
 		if decision.Kind == permissionCheckActivateBoundaryScope {
 			scopeKey := decision.ScopeKey
@@ -110,7 +110,7 @@ func (controller *scopeController) logPermissionCheckDecision(
 
 			fields := append(controller.flow.summaryLogFields(
 				errclass.ClassActionable,
-				summaryKey,
+				conditionKey,
 				decision.TriggerPath,
 				scopeKey,
 			),
@@ -124,24 +124,24 @@ func (controller *scopeController) logPermissionCheckDecision(
 	}
 }
 
-func permissionDecisionSummaryKey(decision *PermissionCheckDecision) SummaryKey {
+func permissionDecisionConditionKey(decision *PermissionCheckDecision) ConditionKey {
 	if decision == nil {
 		return ""
 	}
 
 	if decision.BlockScope != nil {
-		return SummaryKeyForBlockScope(decision.BlockScope.IssueType, decision.BlockScope.Key)
+		return ConditionKeyForBlockScope(decision.BlockScope.Key.ConditionType(), decision.BlockScope.Key)
 	}
 
 	if decision.RetryWorkFailure != nil {
-		return SummaryKeyForRetryWork(
-			decision.RetryWorkFailure.IssueType,
+		return ConditionKeyForRetryWork(
+			decision.RetryWorkFailure.ConditionType,
 			decision.RetryWorkFailure.ScopeKey,
 		)
 	}
 
 	if !decision.ScopeKey.IsZero() {
-		return SummaryKeyForBlockScope("", decision.ScopeKey)
+		return ConditionKeyForBlockScope("", decision.ScopeKey)
 	}
 
 	return ""
@@ -149,7 +149,7 @@ func permissionDecisionSummaryKey(decision *PermissionCheckDecision) SummaryKey 
 
 func (controller *scopeController) logRemotePermissionDecision(
 	decision *PermissionCheckDecision,
-	summaryKey SummaryKey,
+	conditionKey ConditionKey,
 ) {
 	if decision.Kind != permissionCheckActivateBoundaryScope && decision.Kind != permissionCheckActivateDerivedScope {
 		return
@@ -161,7 +161,7 @@ func (controller *scopeController) logRemotePermissionDecision(
 	}
 	fields := append(controller.flow.summaryLogFields(
 		errclass.ClassActionable,
-		summaryKey,
+		conditionKey,
 		decision.TriggerPath,
 		scopeKey,
 	),
@@ -208,12 +208,12 @@ func (controller *scopeController) recordRetryWorkFailure(ctx context.Context, f
 	}
 
 	flow := controller.flow
-	summaryKey := SummaryKeyForRetryWork(failure.IssueType, failure.ScopeKey)
+	conditionKey := ConditionKeyForRetryWork(failure.ConditionType, failure.ScopeKey)
 
 	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, failure, nil); err != nil {
 		fields := append(flow.summaryLogFields(
 			errclass.ClassBlockScopeingTransient,
-			summaryKey,
+			conditionKey,
 			failure.Path,
 			failure.ScopeKey,
 		), slog.String("error", err.Error()))
@@ -223,11 +223,11 @@ func (controller *scopeController) recordRetryWorkFailure(ctx context.Context, f
 
 	fields := append(flow.summaryLogFields(
 		errclass.ClassBlockScopeingTransient,
-		summaryKey,
+		conditionKey,
 		failure.Path,
 		failure.ScopeKey,
 	),
-		slog.String("issue_type", failure.IssueType),
+		slog.String("condition_type", failure.ConditionType),
 	)
 	flow.engine.logger.Debug("retry_work blocker recorded", fields...)
 }

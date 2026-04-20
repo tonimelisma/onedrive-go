@@ -28,10 +28,10 @@ func TestResetStateDB_RecreatesFreshCanonicalStore(t *testing.T) {
 		Error:      "invalid filename",
 	}))
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:          SKService(),
-		IssueType:    IssueServiceOutage,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    store.nowFunc(),
+		Key:           SKService(),
+		ConditionType: IssueServiceOutage,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     store.nowFunc(),
 	}))
 	require.NoError(t, store.Close(context.Background()))
 

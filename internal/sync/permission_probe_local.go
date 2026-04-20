@@ -94,10 +94,10 @@ func (ph *PermissionHandler) localFilePermissionDecision(
 		Matched: true,
 		Kind:    permissionCheckRecordFileFailure,
 		RetryWorkFailure: &RetryWorkFailure{
-			Path:       path,
-			ActionType: actionType,
-			IssueType:  issueType,
-			LastError:  errMsg,
+			Path:          path,
+			ActionType:    actionType,
+			ConditionType: issueType,
+			LastError:     errMsg,
 		},
 	}
 }
@@ -114,16 +114,15 @@ func (ph *PermissionHandler) localDirectoryPermissionDecision(
 		Kind:     permissionCheckActivateBoundaryScope,
 		ScopeKey: scopeKey,
 		RetryWorkFailure: &RetryWorkFailure{
-			Path:       triggerPath,
-			ActionType: actionType,
-			IssueType:  issueType,
-			ScopeKey:   scopeKey,
-			LastError:  "directory not accessible (check filesystem permissions)",
-			Blocked:    true,
+			Path:          triggerPath,
+			ActionType:    actionType,
+			ConditionType: issueType,
+			ScopeKey:      scopeKey,
+			LastError:     "directory not accessible (check filesystem permissions)",
+			Blocked:       true,
 		},
-		BlockScope: &BlockScope{
+		BlockScope: &ActiveScope{
 			Key:          scopeKey,
-			IssueType:    issueType,
 			TimingSource: ScopeTimingNone,
 			BlockedAt:    ph.nowFn(),
 		},

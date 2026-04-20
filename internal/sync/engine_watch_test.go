@@ -422,32 +422,32 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	retainedScope := SKPermRemoteWrite("Shared/Other")
 
 	setTestBlockScope(t, eng, &BlockScope{
-		Key:       clearedScope,
-		IssueType: IssueRemoteWriteDenied,
-		BlockedAt: eng.nowFunc(),
+		Key:           clearedScope,
+		ConditionType: IssueRemoteWriteDenied,
+		BlockedAt:     eng.nowFunc(),
 	})
 	setTestBlockScope(t, eng, &BlockScope{
-		Key:       retainedScope,
-		IssueType: IssueRemoteWriteDenied,
-		BlockedAt: eng.nowFunc(),
+		Key:           retainedScope,
+		ConditionType: IssueRemoteWriteDenied,
+		BlockedAt:     eng.nowFunc(),
 	})
 
 	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       "Shared/TeamDocs/file.txt",
-		ActionType: ActionUpload,
-		IssueType:  IssueRemoteWriteDenied,
-		ScopeKey:   clearedScope,
-		LastError:  "blocked by remote permission scope",
-		Blocked:    true,
+		Path:          "Shared/TeamDocs/file.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueRemoteWriteDenied,
+		ScopeKey:      clearedScope,
+		LastError:     "blocked by remote permission scope",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 	_, err = eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       "Shared/Other/file.txt",
-		ActionType: ActionUpload,
-		IssueType:  IssueRemoteWriteDenied,
-		ScopeKey:   retainedScope,
-		LastError:  "blocked by remote permission scope",
-		Blocked:    true,
+		Path:          "Shared/Other/file.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueRemoteWriteDenied,
+		ScopeKey:      retainedScope,
+		LastError:     "blocked by remote permission scope",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
@@ -766,27 +766,27 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	ctx := t.Context()
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
-		IssueType:     IssueServiceOutage,
+		ConditionType: IssueServiceOutage,
 		TimingSource:  ScopeTimingServerRetryAfter,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   eng.nowFunc().Add(5 * time.Second),
 	})
 	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       "held.txt",
-		ActionType: ActionUpload,
-		IssueType:  IssueServiceOutage,
-		ScopeKey:   SKService(),
-		LastError:  "held by service scope",
-		Blocked:    true,
+		Path:          "held.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      SKService(),
+		LastError:     "held by service scope",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
 	_, err = eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       "retry.txt",
-		ActionType: ActionDownload,
-		IssueType:  IssueServiceOutage,
-		LastError:  "retry later",
+		Path:          "retry.txt",
+		ActionType:    ActionDownload,
+		ConditionType: IssueServiceOutage,
+		LastError:     "retry later",
 	}, func(_ int) time.Duration {
 		return 5 * time.Second
 	})
