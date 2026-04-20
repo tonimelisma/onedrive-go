@@ -18,7 +18,8 @@ const (
 type scopeStartupPolicy int
 
 const (
-	scopeStartupRequiresBoundary scopeStartupPolicy = iota + 1
+	scopeStartupRevalidateLocalPermission scopeStartupPolicy = iota + 1
+	scopeStartupKeepRemotePermission
 	scopeStartupRequiresScopedFailures
 	scopeStartupServerTimedOnly
 	scopeStartupRevalidateDisk
@@ -45,26 +46,7 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 
 	activeScopes := make([]BlockScope, 0, len(blocks))
 	for i := range blocks {
-		if blocks[i].Key.IsPermRemote() {
-			continue
-		}
 		activeScopes = append(activeScopes, *blocks[i])
-	}
-
-	blockedRetries, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
-	if err != nil {
-		return fmt.Errorf("sync: listing blocked retry_work rows: %w", err)
-	}
-	seenRemote := make(map[ScopeKey]bool, len(blockedRetries))
-	for i := range blockedRetries {
-		if !blockedRetries[i].ScopeKey.IsPermRemote() || seenRemote[blockedRetries[i].ScopeKey] {
-			continue
-		}
-		seenRemote[blockedRetries[i].ScopeKey] = true
-		activeScopes = append(activeScopes, BlockScope{
-			Key:       blockedRetries[i].ScopeKey,
-			IssueType: blockedRetries[i].ScopeKey.IssueType(),
-		})
 	}
 	watch.replaceActiveScopes(activeScopes)
 
@@ -161,10 +143,6 @@ func (controller *scopeController) normalizePersistedNonAuthScopes(
 	facts := summarizePersistedBlockedRetries(blockedRetries)
 
 	for i := range blocks {
-		if blocks[i].Key.IsPermRemote() {
-			continue
-		}
-
 		if err := controller.normalizePersistedScope(ctx, blocks[i], facts); err != nil {
 			return err
 		}
@@ -181,16 +159,21 @@ func (controller *scopeController) normalizePersistedScope(
 	blockedRetryCount := facts.blockedRetryCountByScope[block.Key]
 
 	switch scopeStartupPolicyFor(block.Key) {
-	case scopeStartupRequiresBoundary:
-		if blockedRetryCount == 0 {
-			return controller.discardStartupScope(ctx, block.Key, "discarded scope without blocked retry work")
-		}
-		if block.Key.IsPermDir() {
+	case scopeStartupRevalidateLocalPermission:
+		if block.Key.IsPermLocalRead() {
 			if !isDirAccessible(controller.flow.engine.syncTree, block.Key.DirPath()) {
 				return nil
 			}
-			return controller.releaseStartupScope(ctx, block.Key, "released local permission scope after revalidation")
+			return controller.releaseStartupScope(ctx, block.Key, "released local read scope after revalidation")
 		}
+		if block.Key.IsPermLocalWrite() {
+			if !isDirWritable(controller.flow.engine.syncTree, block.Key.DirPath()) {
+				return nil
+			}
+			return controller.releaseStartupScope(ctx, block.Key, "released local write scope after revalidation")
+		}
+		panic(fmt.Sprintf("unexpected local permission scope %s", block.Key.String()))
+	case scopeStartupKeepRemotePermission:
 		return nil
 	case scopeStartupRequiresScopedFailures:
 		if blockedRetryCount > 0 {
@@ -260,8 +243,10 @@ func summarizePersistedBlockedRetries(rows []RetryWorkRow) persistedScopeFacts {
 
 func scopeStartupPolicyFor(key ScopeKey) scopeStartupPolicy {
 	switch {
-	case key.IsPermDir(), key.IsPermRemote():
-		return scopeStartupRequiresBoundary
+	case key.IsPermDir():
+		return scopeStartupRevalidateLocalPermission
+	case key.IsPermRemote():
+		return scopeStartupKeepRemotePermission
 	case key == SKQuotaOwn():
 		return scopeStartupRequiresScopedFailures
 	case key.IsThrottleTarget(), key == SKService():
@@ -474,6 +459,9 @@ func (controller *scopeController) scopeHasBlockedRetryWork(ctx context.Context,
 
 func (controller *scopeController) rearmOrDiscardScope(ctx context.Context, watch *watchRuntime, scopeKey ScopeKey) {
 	if scopeKey.IsZero() {
+		return
+	}
+	if scopeKey.IsPermDir() || scopeKey.IsPermRemote() {
 		return
 	}
 
@@ -710,11 +698,8 @@ func (controller *scopeController) clearResolvedRemoteBlockedRetryWork(
 		}
 	}
 
-	if watch == nil || len(clearedScopes) == 0 {
-		return
-	}
-
-	controller.releaseResolvedRemoteScopes(ctx, watch, clearedScopes)
+	_ = watch
+	_ = clearedScopes
 }
 
 func remoteBlockedRetryRelevant(
@@ -756,54 +741,6 @@ func (controller *scopeController) clearBlockedRetryWork(
 			slog.String("error", err.Error()),
 		)
 	}
-}
-
-func (controller *scopeController) releaseResolvedRemoteScopes(
-	ctx context.Context,
-	watch *watchRuntime,
-	clearedScopes map[ScopeKey]bool,
-) {
-	flow := controller.flow
-	remainingScopes, ok := controller.remainingRemoteBlockedScopes(ctx)
-	if !ok {
-		return
-	}
-
-	for key := range clearedScopes {
-		if remainingScopes[key] {
-			continue
-		}
-		if err := controller.releaseScope(ctx, watch, key); err != nil {
-			flow.engine.logger.Warn("failed to clear resolved remote blocked scope",
-				slog.String("scope_key", key.String()),
-				slog.String("error", err.Error()),
-			)
-		}
-	}
-}
-
-func (controller *scopeController) remainingRemoteBlockedScopes(
-	ctx context.Context,
-) (map[ScopeKey]bool, bool) {
-	flow := controller.flow
-
-	remainingRows, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
-	if err != nil {
-		flow.engine.logger.Warn("failed to relist blocked retry_work rows after remote cleanup",
-			slog.String("error", err.Error()),
-		)
-		return nil, false
-	}
-
-	remainingScopes := make(map[ScopeKey]bool, len(remainingRows))
-	for i := range remainingRows {
-		if !remainingRows[i].ScopeKey.IsPermRemote() {
-			continue
-		}
-		remainingScopes[remainingRows[i].ScopeKey] = true
-	}
-
-	return remainingScopes, true
 }
 
 // admitReady applies watch-mode trial interception and scope admission to a

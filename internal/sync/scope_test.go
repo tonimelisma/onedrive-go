@@ -310,8 +310,8 @@ func TestScopeKey_StringRoundTrip(t *testing.T) {
 		{"service", SKService(), "service"},
 		{"quota:own", SKQuotaOwn(), "quota:own"},
 		{"disk:local", SKDiskLocal(), "disk:local"},
-		{"perm:dir", SKPermDir("Documents/Private"), "perm:dir:Documents/Private"},
-		{"perm:remote", SKPermRemote("Shared/TeamDocs"), "perm:remote:Shared/TeamDocs"},
+		{"perm:dir:write", SKPermLocalWrite("Documents/Private"), "perm:dir:write:Documents/Private"},
+		{"perm:remote:write", SKPermRemoteWrite("Shared/TeamDocs"), "perm:remote:write:Shared/TeamDocs"},
 	}
 
 	for _, tt := range tests {
@@ -342,7 +342,7 @@ func TestScopeKey_IsZero(t *testing.T) {
 
 	assert.True(t, ScopeKey{}.IsZero())
 	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsZero())
-	assert.False(t, SKPermDir("x").IsZero())
+	assert.False(t, SKPermLocalWrite("x").IsZero())
 }
 
 // Validates: R-2.10
@@ -352,8 +352,8 @@ func TestScopeKey_IsGlobal(t *testing.T) {
 	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsGlobal())
 	assert.True(t, SKService().IsGlobal())
 	assert.False(t, SKQuotaOwn().IsGlobal())
-	assert.False(t, SKPermDir("x").IsGlobal())
-	assert.False(t, SKPermRemote("x").IsGlobal())
+	assert.False(t, SKPermLocalWrite("x").IsGlobal())
+	assert.False(t, SKPermRemoteWrite("x").IsGlobal())
 	assert.False(t, SKDiskLocal().IsGlobal())
 }
 
@@ -361,7 +361,8 @@ func TestScopeKey_IsGlobal(t *testing.T) {
 func TestScopeKey_IsPermDir(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, SKPermDir("Documents").IsPermDir())
+	assert.True(t, SKPermLocalWrite("Documents").IsPermDir())
+	assert.True(t, SKPermLocalRead("Documents").IsPermDir())
 	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsPermDir())
 	assert.False(t, SKQuotaOwn().IsPermDir())
 }
@@ -370,8 +371,9 @@ func TestScopeKey_IsPermDir(t *testing.T) {
 func TestScopeKey_IsPermRemote(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, SKPermRemote("Shared/TeamDocs").IsPermRemote())
-	assert.False(t, SKPermDir("Documents").IsPermRemote())
+	assert.True(t, SKPermRemoteWrite("Shared/TeamDocs").IsPermRemote())
+	assert.True(t, SKPermRemoteRead("Shared/TeamDocs").IsPermRemote())
+	assert.False(t, SKPermLocalWrite("Documents").IsPermRemote())
 	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsPermRemote())
 }
 
@@ -379,7 +381,8 @@ func TestScopeKey_IsPermRemote(t *testing.T) {
 func TestScopeKey_DirPath(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "Documents/Private", SKPermDir("Documents/Private").DirPath())
+	assert.Equal(t, "Documents/Private", SKPermLocalWrite("Documents/Private").DirPath())
+	assert.Equal(t, "Documents/Private", SKPermLocalRead("Documents/Private").DirPath())
 
 	// DirPath on non-PermDir should panic.
 	assert.Panics(t, func() { SKThrottleDrive(driveid.New("0000000000000001")).DirPath() })
@@ -389,7 +392,8 @@ func TestScopeKey_DirPath(t *testing.T) {
 func TestScopeKey_RemotePath(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "Shared/TeamDocs", SKPermRemote("Shared/TeamDocs").RemotePath())
+	assert.Equal(t, "Shared/TeamDocs", SKPermRemoteWrite("Shared/TeamDocs").RemotePath())
+	assert.Equal(t, "Shared/TeamDocs", SKPermRemoteRead("Shared/TeamDocs").RemotePath())
 	assert.Panics(t, func() { SKThrottleDrive(driveid.New("0000000000000001")).RemotePath() })
 }
 
@@ -404,8 +408,10 @@ func TestScopeKey_IssueType(t *testing.T) {
 		{SKThrottleDrive(driveid.New("0000000000000001")), IssueRateLimited},
 		{SKService(), IssueServiceOutage},
 		{SKQuotaOwn(), IssueQuotaExceeded},
-		{SKPermDir("x"), IssueLocalWriteDenied},
-		{SKPermRemote("Shared/TeamDocs"), IssueRemoteWriteDenied},
+		{SKPermLocalRead("x"), IssueLocalReadDenied},
+		{SKPermLocalWrite("x"), IssueLocalWriteDenied},
+		{SKPermRemoteRead("Shared/TeamDocs"), IssueRemoteReadDenied},
+		{SKPermRemoteWrite("Shared/TeamDocs"), IssueRemoteWriteDenied},
 		{SKDiskLocal(), IssueDiskFull},
 		{ScopeKey{}, ""}, // zero value
 	}
@@ -423,8 +429,10 @@ func TestScopeKey_Humanize(t *testing.T) {
 	assert.Equal(t, "OneDrive service", SKService().Humanize())
 	assert.Equal(t, "this drive storage", SKQuotaOwn().Humanize())
 	assert.Equal(t, "local disk", SKDiskLocal().Humanize())
-	assert.Equal(t, "Documents/Private", SKPermDir("Documents/Private").Humanize())
-	assert.Equal(t, "Shared/TeamDocs", SKPermRemote("Shared/TeamDocs").Humanize())
+	assert.Equal(t, "Documents/Private", SKPermLocalWrite("Documents/Private").Humanize())
+	assert.Equal(t, "Documents/Private", SKPermLocalRead("Documents/Private").Humanize())
+	assert.Equal(t, "Shared/TeamDocs", SKPermRemoteWrite("Shared/TeamDocs").Humanize())
+	assert.Equal(t, "Shared/TeamDocs", SKPermRemoteRead("Shared/TeamDocs").Humanize())
 }
 
 // Validates: R-2.10
@@ -452,18 +460,29 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 		{"quota blocks upload", SKQuotaOwn(), "/a.txt", "", ActionUpload, true},
 		{"quota passes download", SKQuotaOwn(), "/a.txt", "", ActionDownload, false},
 
-		// Perm:dir blocks paths under the directory.
-		{"perm blocks exact dir", SKPermDir("Private"), "Private", "", ActionUpload, true},
-		{"perm blocks subpath", SKPermDir("Private"), "Private/secret.txt", "", ActionUpload, true},
-		{"perm passes outside", SKPermDir("Private"), "Public/readme.txt", "", ActionUpload, false},
+		// Local read blocks all actions under the unreadable directory.
+		{"perm local read blocks exact dir", SKPermLocalRead("Private"), "Private", "", ActionUpload, true},
+		{"perm local read blocks subpath", SKPermLocalRead("Private"), "Private/secret.txt", "", ActionDownload, true},
+		{"perm local read passes outside", SKPermLocalRead("Private"), "Public/readme.txt", "", ActionUpload, false},
+
+		// Local write blocks local mutations only.
+		{"perm local write blocks download", SKPermLocalWrite("Private"), "Private", "", ActionDownload, true},
+		{"perm local write blocks local delete", SKPermLocalWrite("Private"), "Private/secret.txt", "", ActionLocalDelete, true},
+		{"perm local write passes upload", SKPermLocalWrite("Private"), "Private/secret.txt", "", ActionUpload, false},
+		{"perm local write passes outside", SKPermLocalWrite("Private"), "Public/readme.txt", "", ActionUpload, false},
 
 		// Perm:remote blocks remote mutations recursively, but still allows downloads/local-only work.
-		{"perm remote blocks upload", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionUpload, true},
-		{"perm remote blocks nested remote delete", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/nested/file.txt", "", ActionRemoteDelete, true},
-		{"perm remote blocks folder create", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/newdir", "", ActionFolderCreate, true},
-		{"perm remote passes download", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionDownload, false},
-		{"perm remote passes local delete", SKPermRemote("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionLocalDelete, false},
-		{"perm remote passes outside", SKPermRemote("Shared/TeamDocs"), "Shared/Other/file.txt", "", ActionUpload, false},
+		{"perm remote write blocks upload", SKPermRemoteWrite("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionUpload, true},
+		{"perm remote write blocks nested remote delete", SKPermRemoteWrite("Shared/TeamDocs"), "Shared/TeamDocs/nested/file.txt", "", ActionRemoteDelete, true},
+		{"perm remote write blocks folder create", SKPermRemoteWrite("Shared/TeamDocs"), "Shared/TeamDocs/newdir", "", ActionFolderCreate, true},
+		{"perm remote write passes download", SKPermRemoteWrite("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionDownload, false},
+		{"perm remote write passes local delete", SKPermRemoteWrite("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionLocalDelete, false},
+		{"perm remote write passes outside", SKPermRemoteWrite("Shared/TeamDocs"), "Shared/Other/file.txt", "", ActionUpload, false},
+
+		// Remote read blocks all actions under the unreadable subtree.
+		{"perm remote read blocks upload", SKPermRemoteRead("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionUpload, true},
+		{"perm remote read blocks download", SKPermRemoteRead("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionDownload, true},
+		{"perm remote read passes outside", SKPermRemoteRead("Shared/TeamDocs"), "Shared/Other/file.txt", "", ActionUpload, false},
 	}
 
 	for _, tt := range tests {

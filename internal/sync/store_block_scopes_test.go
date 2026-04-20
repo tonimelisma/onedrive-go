@@ -223,7 +223,7 @@ func TestSyncStore_ListBlockScopes(t *testing.T) {
 			TrialCount:    2,
 		},
 		{
-			Key:           SKPermRemote("Shared/TeamDocs"),
+			Key:           SKPermRemoteWrite("Shared/TeamDocs"),
 			IssueType:     IssueRemoteWriteDenied,
 			TimingSource:  ScopeTimingBackoff,
 			BlockedAt:     now.Add(-5 * time.Minute),
@@ -257,7 +257,7 @@ func TestSyncStore_ListBlockScopes(t *testing.T) {
 	assert.Equal(t, 0, ta.TrialCount)
 
 	// Verify perm:remote round-trip (parameterized key).
-	remotePerm := byKey[SKPermRemote("Shared/TeamDocs")]
+	remotePerm := byKey[SKPermRemoteWrite("Shared/TeamDocs")]
 	require.NotNil(t, remotePerm, "perm:remote block should be listed")
 	assert.Equal(t, IssueRemoteWriteDenied, remotePerm.IssueType)
 	assert.Equal(t, 5, remotePerm.TrialCount)
@@ -327,7 +327,7 @@ func TestSyncStore_BlockScope_Roundtrip(t *testing.T) {
 	// - Duration in nanoseconds
 	// - Parameterized scope key (perm:local-write)
 	original := &BlockScope{
-		Key:           SKPermRemote("Shared/TeamDocs"),
+		Key:           SKPermRemoteWrite("Shared/TeamDocs"),
 		IssueType:     IssueRemoteWriteDenied,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Date(2025, 3, 14, 9, 26, 53, 123456789, time.UTC),

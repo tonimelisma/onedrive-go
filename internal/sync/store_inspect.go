@@ -67,6 +67,21 @@ func ReadDriveStatusSnapshot(
 	})
 }
 
+// ReadDriveStatusSnapshot reads the raw per-drive authority snapshot from an
+// already-open sync store.
+func (m *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSnapshot, error) {
+	if m == nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status snapshot: nil store")
+	}
+
+	inspector := &storeInspector{
+		db:     m.db,
+		logger: m.logger,
+	}
+
+	return inspector.ReadDriveStatusSnapshot(ctx)
+}
+
 func readWithInspector[T any](
 	dbPath string,
 	logger *slog.Logger,

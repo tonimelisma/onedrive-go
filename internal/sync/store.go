@@ -15,7 +15,7 @@
 //   - store_write_observation.go:  remote state observation persistence
 //   - store_observation_issues.go: observation issue recording and read helpers
 //   - store_retry_work.go:         exact retry work persistence and mutation helpers
-//   - store_inspect.go:            read-only status projections and inspector lifecycle
+//   - store_inspect.go:            read-only raw status snapshot helpers and inspector lifecycle
 //   - store_run_status.go:         one-shot run-status persistence
 //   - store_scope_admin.go:        scope release/discard mutation helpers
 //   - store_compatibility.go:      startup diagnosis for unsupported existing DBs

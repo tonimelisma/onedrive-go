@@ -12,18 +12,20 @@ import (
 type ScopeKeyKind int
 
 const (
-	ScopeThrottleTarget ScopeKeyKind = iota + 1 // Param = "drive:<targetDriveID>"
-	ScopeService                                // no Param
-	ScopeQuotaOwn                               // no Param
-	ScopePermDir                                // Param = relative directory path
-	ScopePermRemote                             // Param = local boundary path
-	ScopeDiskLocal                              // no Param
+	ScopeThrottleTarget  ScopeKeyKind = iota + 1 // Param = "drive:<targetDriveID>"
+	ScopeService                                 // no Param
+	ScopeQuotaOwn                                // no Param
+	ScopePermDirRead                             // Param = relative directory path
+	ScopePermDirWrite                            // Param = relative directory path
+	ScopePermRemoteRead                          // Param = local boundary path
+	ScopePermRemoteWrite                         // Param = local boundary path
+	ScopeDiskLocal                               // no Param
 )
 
 // ScopeKey identifies a block scope. The Kind discriminator determines the
 // semantics; Param carries per-instance data for parameterized scopes
-// (ScopeThrottleTarget, ScopePermDir, ScopePermRemote). Comparable, so usable
-// as a map key.
+// (ScopeThrottleTarget, local permission scopes, remote permission scopes).
+// Comparable, so usable as a map key.
 type ScopeKey struct {
 	Kind  ScopeKeyKind
 	Param string
@@ -40,29 +42,24 @@ func SKThrottleDrive(targetDriveID driveid.ID) ScopeKey {
 	return ScopeKey{Kind: ScopeThrottleTarget, Param: throttleDriveParam(targetDriveID)}
 }
 
-// SKPermDir returns the scope key for a local directory permission block.
-func SKPermDir(dirPath string) ScopeKey {
-	return ScopeKey{Kind: ScopePermDir, Param: dirPath}
-}
-
 // SKPermLocalRead returns the scope key for a local read-denied directory.
 func SKPermLocalRead(dirPath string) ScopeKey {
-	return SKPermDir(dirPath)
+	return ScopeKey{Kind: ScopePermDirRead, Param: dirPath}
 }
 
 // SKPermLocalWrite returns the scope key for a local write-denied directory.
 func SKPermLocalWrite(dirPath string) ScopeKey {
-	return SKPermDir(dirPath)
+	return ScopeKey{Kind: ScopePermDirWrite, Param: dirPath}
 }
 
-// SKPermRemote returns the scope key for a remote read-only boundary.
-func SKPermRemote(boundaryPath string) ScopeKey {
-	return ScopeKey{Kind: ScopePermRemote, Param: boundaryPath}
+// SKPermRemoteRead returns the scope key for a remote read-denied boundary.
+func SKPermRemoteRead(boundaryPath string) ScopeKey {
+	return ScopeKey{Kind: ScopePermRemoteRead, Param: boundaryPath}
 }
 
 // SKPermRemoteWrite returns the scope key for a remote write-denied boundary.
 func SKPermRemoteWrite(boundaryPath string) ScopeKey {
-	return SKPermRemote(boundaryPath)
+	return ScopeKey{Kind: ScopePermRemoteWrite, Param: boundaryPath}
 }
 
 // IsZero returns true for the zero-value ScopeKey (Kind == 0).
@@ -73,12 +70,14 @@ func (sk ScopeKey) IsZero() bool {
 // Wire-format strings for scope keys stored in SQLite scope_key columns.
 // Used by String() and ParseScopeKey() — the only serialization boundary.
 const (
-	WireThrottleTarget = "throttle:target:"
-	WireService        = "service"
-	WireQuotaOwn       = "quota:own"
-	WirePermDir        = "perm:dir:"    // prefix for parameterized key
-	WirePermRemote     = "perm:remote:" // prefix for parameterized key
-	WireDiskLocal      = "disk:local"
+	WireThrottleTarget  = "throttle:target:"
+	WireService         = "service"
+	WireQuotaOwn        = "quota:own"
+	WirePermDirRead     = "perm:dir:read:"
+	WirePermDirWrite    = "perm:dir:write:"
+	WirePermRemoteRead  = "perm:remote:read:"
+	WirePermRemoteWrite = "perm:remote:write:"
+	WireDiskLocal       = "disk:local"
 )
 
 // String serializes to the wire format stored in SQLite scope_key columns.
@@ -91,10 +90,14 @@ func (sk ScopeKey) String() string {
 		return WireService
 	case ScopeQuotaOwn:
 		return WireQuotaOwn
-	case ScopePermDir:
-		return WirePermDir + sk.Param
-	case ScopePermRemote:
-		return WirePermRemote + sk.Param
+	case ScopePermDirRead:
+		return WirePermDirRead + sk.Param
+	case ScopePermDirWrite:
+		return WirePermDirWrite + sk.Param
+	case ScopePermRemoteRead:
+		return WirePermRemoteRead + sk.Param
+	case ScopePermRemoteWrite:
+		return WirePermRemoteWrite + sk.Param
 	case ScopeDiskLocal:
 		return WireDiskLocal
 	default:
@@ -114,10 +117,14 @@ func ParseScopeKey(s string) ScopeKey {
 		return SKQuotaOwn()
 	case s == WireDiskLocal:
 		return SKDiskLocal()
-	case strings.HasPrefix(s, WirePermDir):
-		return SKPermDir(strings.TrimPrefix(s, WirePermDir))
-	case strings.HasPrefix(s, WirePermRemote):
-		return SKPermRemote(strings.TrimPrefix(s, WirePermRemote))
+	case strings.HasPrefix(s, WirePermDirRead):
+		return SKPermLocalRead(strings.TrimPrefix(s, WirePermDirRead))
+	case strings.HasPrefix(s, WirePermDirWrite):
+		return SKPermLocalWrite(strings.TrimPrefix(s, WirePermDirWrite))
+	case strings.HasPrefix(s, WirePermRemoteRead):
+		return SKPermRemoteRead(strings.TrimPrefix(s, WirePermRemoteRead))
+	case strings.HasPrefix(s, WirePermRemoteWrite):
+		return SKPermRemoteWrite(strings.TrimPrefix(s, WirePermRemoteWrite))
 	default:
 		return ScopeKey{}
 	}
@@ -131,43 +138,48 @@ func (sk ScopeKey) IsGlobal() bool {
 
 // IsPermDir returns true for local directory permission block scopes.
 func (sk ScopeKey) IsPermDir() bool {
-	return sk.Kind == ScopePermDir
+	return sk.IsPermLocalRead() || sk.IsPermLocalWrite()
 }
 
 // IsPermLocalRead returns true for local read-denied directory scopes.
 func (sk ScopeKey) IsPermLocalRead() bool {
-	return sk.IsPermDir()
+	return sk.Kind == ScopePermDirRead
 }
 
 // IsPermLocalWrite returns true for local write-denied directory scopes.
 func (sk ScopeKey) IsPermLocalWrite() bool {
-	return sk.IsPermDir()
+	return sk.Kind == ScopePermDirWrite
 }
 
-// IsPermRemote returns true for remote read-only subtree scopes.
+// IsPermRemote returns true for remote read- or write-denied subtree scopes.
 func (sk ScopeKey) IsPermRemote() bool {
-	return sk.Kind == ScopePermRemote
+	return sk.IsPermRemoteRead() || sk.IsPermRemoteWrite()
+}
+
+// IsPermRemoteRead returns true for remote read-denied subtree scopes.
+func (sk ScopeKey) IsPermRemoteRead() bool {
+	return sk.Kind == ScopePermRemoteRead
 }
 
 // IsPermRemoteWrite returns true for remote write-denied subtree scopes.
 func (sk ScopeKey) IsPermRemoteWrite() bool {
-	return sk.IsPermRemote()
+	return sk.Kind == ScopePermRemoteWrite
 }
 
-// DirPath returns the directory path for a ScopePermDir key.
-// Panics if called on a non-PermDir key (defensive — caller bug).
+// DirPath returns the directory path for a local permission scope key.
+// Panics if called on a non-local-permission key (defensive — caller bug).
 func (sk ScopeKey) DirPath() string {
-	if sk.Kind != ScopePermDir {
-		panic("ScopeKey.DirPath() called on non-PermDir key")
+	if !sk.IsPermDir() {
+		panic("ScopeKey.DirPath() called on non-local-permission key")
 	}
 	return sk.Param
 }
 
-// RemotePath returns the local boundary path for a ScopePermRemote key.
-// Panics if called on a non-PermRemote key (defensive — caller bug).
+// RemotePath returns the local boundary path for a remote permission scope key.
+// Panics if called on a non-remote-permission key (defensive — caller bug).
 func (sk ScopeKey) RemotePath() string {
-	if sk.Kind != ScopePermRemote {
-		panic("ScopeKey.RemotePath() called on non-PermRemote key")
+	if !sk.IsPermRemote() {
+		panic("ScopeKey.RemotePath() called on non-remote-permission key")
 	}
 	return sk.Param
 }
@@ -201,9 +213,13 @@ func (sk ScopeKey) IssueType() string {
 		return IssueServiceOutage
 	case ScopeQuotaOwn:
 		return IssueQuotaExceeded
-	case ScopePermDir:
+	case ScopePermDirRead:
+		return IssueLocalReadDenied
+	case ScopePermDirWrite:
 		return IssueLocalWriteDenied
-	case ScopePermRemote:
+	case ScopePermRemoteRead:
+		return IssueRemoteReadDenied
+	case ScopePermRemoteWrite:
 		return IssueRemoteWriteDenied
 	case ScopeDiskLocal:
 		return IssueDiskFull
@@ -223,7 +239,7 @@ func (sk ScopeKey) Humanize() string {
 		return "OneDrive service"
 	case ScopeQuotaOwn:
 		return "this drive storage"
-	case ScopePermDir, ScopePermRemote:
+	case ScopePermDirRead, ScopePermDirWrite, ScopePermRemoteRead, ScopePermRemoteWrite:
 		if sk.Param == "" {
 			return "/"
 		}
@@ -251,23 +267,53 @@ func (sk ScopeKey) BlocksAction(
 		return actionType == ActionDownload
 	case ScopeQuotaOwn:
 		return actionType == ActionUpload
-	case ScopePermDir:
+	case ScopePermDirRead:
 		return path == sk.Param || strings.HasPrefix(path, sk.Param+"/")
-	case ScopePermRemote:
-		if !scopePathMatches(path, sk.Param) {
-			return false
-		}
-		switch actionType {
-		case ActionUpload, ActionRemoteDelete, ActionRemoteMove, ActionFolderCreate:
-			return true
-		case ActionDownload, ActionLocalDelete, ActionLocalMove, ActionConflictCopy, ActionUpdateSynced, ActionCleanup:
-			return false
-		default:
-			return false
-		}
+	case ScopePermDirWrite:
+		return scopePathMatches(path, sk.Param) && localWriteScopeBlocksAction(actionType)
+	case ScopePermRemoteRead:
+		return scopePathMatches(path, sk.Param)
+	case ScopePermRemoteWrite:
+		return scopePathMatches(path, sk.Param) && remoteWriteScopeBlocksAction(actionType)
 	default:
 		return false
 	}
+}
+
+func localWriteScopeBlocksAction(actionType ActionType) bool {
+	switch actionType {
+	case ActionDownload,
+		ActionLocalDelete,
+		ActionLocalMove,
+		ActionConflictCopy,
+		ActionUpdateSynced,
+		ActionCleanup,
+		ActionFolderCreate:
+		return true
+	case ActionUpload,
+		ActionRemoteDelete,
+		ActionRemoteMove:
+		return false
+	}
+	return false
+}
+
+func remoteWriteScopeBlocksAction(actionType ActionType) bool {
+	switch actionType {
+	case ActionUpload,
+		ActionRemoteDelete,
+		ActionRemoteMove,
+		ActionFolderCreate:
+		return true
+	case ActionDownload,
+		ActionLocalDelete,
+		ActionLocalMove,
+		ActionConflictCopy,
+		ActionUpdateSynced,
+		ActionCleanup:
+		return false
+	}
+	return false
 }
 
 func scopePathMatches(path, boundary string) bool {

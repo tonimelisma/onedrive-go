@@ -44,15 +44,6 @@ func listRetryWorkForTest(
 	return rows
 }
 
-func visibleConditionCountForTest(t *testing.T, store *SyncStore, ctx context.Context) int {
-	t.Helper()
-
-	summary, err := store.ReadVisibleConditionSummary(ctx)
-	require.NoError(t, err)
-
-	return summary.VisibleTotal()
-}
-
 func readyRetryWorkForTest(
 	t *testing.T,
 	store *SyncStore,

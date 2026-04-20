@@ -11,7 +11,7 @@ import (
 )
 
 // Validates: R-2.10.5
-func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsObservationIssue(t *testing.T) {
+func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsRetryWork(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -20,7 +20,7 @@ func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsObservation
 	outcome := flow.processNormalDecision(t.Context(), nil, &ResultDecision{
 		Class:       errclass.ClassInvalid,
 		SummaryKey:  SummaryInvalidFilename,
-		Persistence: persistObservationIssue,
+		Persistence: persistRetryWork,
 		IssueType:   IssueInvalidFilename,
 		TrialHint:   trialHintPreserve,
 	}, nil, &ActionCompletion{
@@ -32,12 +32,12 @@ func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsObservation
 	require.True(t, outcome.terminate)
 	require.ErrorContains(t, outcome.terminateErr, "invalid failure class")
 	assert.Empty(t, outcome.dispatched)
+	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
 
-	issues := actionableObservationIssuesForTest(t, eng.baseline, t.Context())
-	require.Len(t, issues, 1)
-	assert.Equal(t, "invalid.txt", issues[0].Path)
-	assert.Equal(t, eng.driveID, issues[0].DriveID)
-	assert.Equal(t, IssueInvalidFilename, issues[0].IssueType)
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "invalid.txt", retryRows[0].Path)
+	assert.Equal(t, IssueInvalidFilename, retryRows[0].IssueType)
 }
 
 // Validates: R-2.10.5

@@ -122,11 +122,14 @@ For a sync run:
 Inside `internal/sync`, the runtime has a snapshot-first sync pipeline:
 
 - remote observer + local observer -> dirty debounce scheduler -> snapshot
-  refresh -> SQLite comparison/reconciliation -> Go actionable set ->
+  refresh -> SQLite comparison/reconciliation -> blocked-truth overlay ->
+  Go actionable set ->
   executor -> baseline/store updates
 - `observation_issues`, `retry_work`, and `block_scopes` persist durable
   status, exact delayed work, and blocker timing without becoming a durable
   executable plan
+- unreadable or unobservable paths stay blocked truth until observation or
+  permission revalidation proves recovery; they are not interpreted as deletes
 
 The key design choice is that planning stays deterministic and execution owns
 side effects, while SQLite owns current durable truth and the persisted
@@ -427,14 +430,14 @@ when you treat it as several file families sharing one single-drive owner.
 | `engine.go`, `engine_config.go`, `engine_loop.go`, `engine_run_once.go`, `engine_watch*.go` | Runtime orchestration: main loop, one-shot run, watch lifecycle and batch reconciliation |
 | `engine_primary_root*.go`, `engine_observation_postprocess.go`, `observed_items.go` | Engine-owned primary-root observation: root selection, shared-root fallback, postprocessing, and remote observation projection |
 | `engine_result_*.go`, `engine_results.go`, `engine_retry_trial.go` | Result classification, retry-trial decisions, and scope-level result flow |
-| `engine_scope_invariants.go`, `engine_scope_lifecycle.go` | Failure-scope lifecycle: mount/unmount and invariant enforcement for retry/permission scopes |
+| `engine_scope_invariants.go`, `engine_scope_lifecycle.go` | Scope lifecycle: mount/unmount and invariant enforcement for retry/permission scopes |
 | `engine_runtime_state.go`, `engine_runtime_types.go`, `engine_time.go`, `engine_log_fields.go`, `engine_policy_controllers.go` | Engine runtime state, time helpers, structured logging, and policy controllers |
-| `permissions.go`, `permission_capability.go`, `permission_decisions.go`, `permission_handler.go` | Capability-based permission boundaries and denied-path policy |
+| `permissions.go`, `permission_capability.go`, `permission_decisions.go`, `permission_handler.go` | Capability-based permission probing, denied-path policy, and permission-scope revalidation |
 | `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, block scopeing, and scope key canonicalization |
 | `debug_event_sink.go` | Debug event recording for test and diagnostic observability |
-| `store*.go`, `store_inspect.go`, `condition_summary.go`, `scope_key.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, inspection, engine summary helpers, persisted scope-key helpers, run-status/scope admin helpers, and explicit reset support |
+| `store*.go`, `store_inspect.go`, `condition_reads.go`, `scope_key.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, raw authority reads, persisted scope-key helpers, run-status/scope admin helpers, and explicit reset support |
 | `store_read_*.go`, `store_write_*.go` | Store I/O: raw authority reads (remote state, observation state, snapshots) and write operations (baseline, observation, retry work, block scopes) |
-| `summary_keys.go`, `visible_conditions.go`, `issue_types.go` | Shared condition classification, summary keys, and engine/read-side condition grouping primitives |
+| `summary_keys.go`, `condition_summary.go`, `watch_summary.go`, `issue_types.go` | Shared condition classification plus engine-owned watch-summary grouping primitives |
 | `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |
 | `inotify_*`, `symlink_observation.go`, `engine_shared_root.go` | Platform or feature-specific observation/runtime helpers |
 

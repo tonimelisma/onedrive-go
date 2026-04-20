@@ -7,7 +7,8 @@ import (
 )
 
 const sqlPruneBlockScopesWithoutBlockedWork = `DELETE FROM block_scopes
-	WHERE NOT EXISTS (
+	WHERE timing_source <> 'none'
+		AND NOT EXISTS (
 		SELECT 1 FROM retry_work
 		WHERE retry_work.blocked = 1
 			AND retry_work.scope_key = block_scopes.scope_key
@@ -16,9 +17,8 @@ const sqlPruneBlockScopesWithoutBlockedWork = `DELETE FROM block_scopes
 // ReleaseScope atomically applies the semantic "this scope condition has
 // resolved; blocked work may run again" transition.
 //
-// In one transaction it deletes the persisted block scope, removes any
-// scope-owned observation issues, and marks blocked retry work ready
-// immediately.
+// In one transaction it deletes the persisted block scope and marks blocked
+// retry work ready immediately. observation_issues remain observation-owned.
 func (m *SyncStore) ReleaseScope(
 	ctx context.Context,
 	scopeKey ScopeKey,
@@ -41,12 +41,6 @@ func (m *SyncStore) ReleaseScope(
 		return fmt.Errorf("sync: deleting block scope %s: %w", wire, execErr)
 	}
 
-	if _, execErr := tx.ExecContext(ctx,
-		`DELETE FROM observation_issues WHERE scope_key = ?`,
-		wire,
-	); execErr != nil {
-		return fmt.Errorf("sync: deleting scoped observation issues %s: %w", wire, execErr)
-	}
 	if retryErr := markRetryWorkScopeReadyTx(ctx, tx, wire, nowNano); retryErr != nil {
 		return retryErr
 	}
@@ -85,11 +79,6 @@ func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err er
 		return fmt.Errorf("sync: deleting block scope %s: %w", wire, execErr)
 	}
 
-	if _, execErr := tx.ExecContext(ctx,
-		`DELETE FROM observation_issues WHERE scope_key = ?`, wire,
-	); execErr != nil {
-		return fmt.Errorf("sync: deleting scoped observation issues %s: %w", wire, execErr)
-	}
 	if retryErr := deleteRetryWorkByScopeTx(ctx, tx, wire); retryErr != nil {
 		return retryErr
 	}

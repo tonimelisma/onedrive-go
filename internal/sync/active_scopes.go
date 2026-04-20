@@ -184,9 +184,9 @@ func scopePriority(key ScopeKey) int {
 		return scopePriorityDiskLocal
 	case ScopeQuotaOwn:
 		return scopePriorityQuotaOwn
-	case ScopePermDir:
+	case ScopePermDirRead, ScopePermDirWrite:
 		return scopePriorityPermDir
-	case ScopePermRemote:
+	case ScopePermRemoteRead, ScopePermRemoteWrite:
 		return scopePriorityPermRemote
 	default:
 		return scopePriorityMax

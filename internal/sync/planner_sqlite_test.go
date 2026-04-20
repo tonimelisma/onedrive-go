@@ -2,6 +2,7 @@ package sync
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -78,6 +79,8 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 		reconciliations,
 		localRows,
 		remoteRows,
+		nil,
+		nil,
 		bl,
 		SyncBidirectional,
 		&SafetyConfig{},
@@ -149,6 +152,8 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 		reconciliations,
 		localRows,
 		remoteRows,
+		nil,
+		nil,
 		bl,
 		SyncBidirectional,
 		&SafetyConfig{},
@@ -168,4 +173,229 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 
 	require.Len(t, plan.Deps, 2)
 	assert.Equal(t, []int{0}, plan.Deps[1], "download should wait for the conflict copy")
+}
+
+func planCurrentStateForStore(t *testing.T, store *SyncStore) *ActionPlan {
+	t.Helper()
+
+	ctx := t.Context()
+	bl, err := store.Load(ctx)
+	require.NoError(t, err)
+
+	comparisons, err := store.QueryComparisonState(ctx)
+	require.NoError(t, err)
+	reconciliations, err := store.QueryReconciliationState(ctx)
+	require.NoError(t, err)
+	localRows, err := store.ListLocalState(ctx)
+	require.NoError(t, err)
+	remoteRows, err := store.ListRemoteState(ctx)
+	require.NoError(t, err)
+	observationIssues, err := store.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	blockScopes, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+
+	planner := NewPlanner(testLogger(t))
+	plan, err := planner.PlanCurrentState(
+		comparisons,
+		reconciliations,
+		localRows,
+		remoteRows,
+		observationIssues,
+		blockScopes,
+		bl,
+		SyncBidirectional,
+		&SafetyConfig{},
+	)
+	require.NoError(t, err)
+
+	return plan
+}
+
+func assertNoActionForPath(t *testing.T, plan *ActionPlan, path string, actionType ActionType) {
+	t.Helper()
+
+	for i := range plan.Actions {
+		assert.Falsef(
+			t,
+			plan.Actions[i].Path == path && plan.Actions[i].Type == actionType,
+			"unexpected %s for %s",
+			actionType,
+			path,
+		)
+	}
+}
+
+// Validates: R-2.1.3, R-2.10.4
+func TestPlannerPlanCurrentState_LocalReadDeniedDoesNotDeleteRemoteData(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES ('item-danger', 'danger.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-danger')`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item-danger",
+		Path:     "danger.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash",
+		Size:     10,
+		Mtime:    1,
+		ETag:     "etag-danger",
+	}}, "", driveID))
+	require.NoError(t, store.UpsertObservationIssue(ctx, &ObservationIssue{
+		Path:       "danger.txt",
+		DriveID:    driveID,
+		ActionType: ActionUpload,
+		IssueType:  IssueLocalReadDenied,
+		Error:      "file not accessible",
+	}))
+
+	plan := planCurrentStateForStore(t, store)
+	assertNoActionForPath(t, plan, "danger.txt", ActionRemoteDelete)
+	assert.Empty(t, plan.Actions)
+}
+
+// Validates: R-2.1.3, R-2.10.4
+func TestPlannerPlanCurrentState_RemoteReadScopeDoesNotDeleteLocalData(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES ('item-shared', 'Shared/a.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-shared')`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:            "Shared/a.txt",
+		ItemType:        ItemTypeFile,
+		Hash:            "hash",
+		Size:            10,
+		Mtime:           1,
+		ContentIdentity: "hash",
+		ObservedAt:      1,
+	}}))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:          SKPermRemoteRead("Shared"),
+		IssueType:    IssueRemoteReadDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Unix(100, 0),
+	}))
+
+	plan := planCurrentStateForStore(t, store)
+	assertNoActionForPath(t, plan, "Shared/a.txt", ActionLocalDelete)
+	assert.Empty(t, plan.Actions)
+}
+
+// Validates: R-2.1.3, R-2.10.4
+func TestPlannerPlanCurrentState_LocalReadScopeBlocksRemoteDeletesForDescendants(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES ('item-private', 'Private/a.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
+	require.NoError(t, err)
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item-private",
+		Path:     "Private/a.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash",
+		Size:     10,
+		Mtime:    1,
+		ETag:     "etag-private",
+	}}, "", driveID))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:          SKPermLocalRead("Private"),
+		IssueType:    IssueLocalReadDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Unix(100, 0),
+	}))
+
+	plan := planCurrentStateForStore(t, store)
+	assertNoActionForPath(t, plan, "Private/a.txt", ActionRemoteDelete)
+	assert.Empty(t, plan.Actions)
+}
+
+// Validates: R-2.1.3, R-2.10.4
+func TestPlannerPlanCurrentState_RemoteReadScopeBlocksLocalDeletesForDescendants(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES
+			('item-team-a', 'Team/a.txt', 'file', 'hash-a', 'hash-a', 10, 10, 1, 1, 'etag-team-a'),
+			('item-team-b', 'Team/sub/b.txt', 'file', 'hash-b', 'hash-b', 11, 11, 2, 2, 'etag-team-b')`)
+	require.NoError(t, err)
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+		{
+			Path:            "Team/a.txt",
+			ItemType:        ItemTypeFile,
+			Hash:            "hash-a",
+			Size:            10,
+			Mtime:           1,
+			ContentIdentity: "hash-a",
+			ObservedAt:      1,
+		},
+		{
+			Path:            "Team/sub/b.txt",
+			ItemType:        ItemTypeFile,
+			Hash:            "hash-b",
+			Size:            11,
+			Mtime:           2,
+			ContentIdentity: "hash-b",
+			ObservedAt:      2,
+		},
+	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:          SKPermRemoteRead("Team"),
+		IssueType:    IssueRemoteReadDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Unix(100, 0),
+	}))
+
+	plan := planCurrentStateForStore(t, store)
+	assertNoActionForPath(t, plan, "Team/a.txt", ActionLocalDelete)
+	assertNoActionForPath(t, plan, "Team/sub/b.txt", ActionLocalDelete)
+	assert.Empty(t, plan.Actions)
+}
+
+// Validates: R-2.1.3, R-2.10.4
+func TestPlannerPlanCurrentState_NewUnreadableLocalPathProducesNoActions(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+
+	require.NoError(t, store.UpsertObservationIssue(ctx, &ObservationIssue{
+		Path:       "blocked/new.txt",
+		DriveID:    driveID,
+		ActionType: ActionUpload,
+		IssueType:  IssueLocalReadDenied,
+		Error:      "file not accessible",
+	}))
+
+	plan := planCurrentStateForStore(t, store)
+	assert.Empty(t, plan.Actions)
+
+	observationIssues, err := store.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, observationIssues, 1)
+	assert.Equal(t, "blocked/new.txt", observationIssues[0].Path)
 }

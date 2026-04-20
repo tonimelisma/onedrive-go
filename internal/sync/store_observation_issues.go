@@ -117,14 +117,6 @@ func (m *SyncStore) ListObservationIssues(ctx context.Context) ([]ObservationIss
 	return scanObservationIssueRows(rows, configuredDriveID)
 }
 
-func (m *SyncStore) ClearAllObservationIssues(ctx context.Context) error {
-	if _, err := m.db.ExecContext(ctx, `DELETE FROM observation_issues`); err != nil {
-		return fmt.Errorf("sync: clearing observation issues: %w", err)
-	}
-
-	return nil
-}
-
 func (m *SyncStore) ClearObservationIssuesByPaths(
 	ctx context.Context,
 	issueType string,
@@ -185,45 +177,6 @@ func (m *SyncStore) ClearResolvedObservationIssues(
 		string(encodedPaths),
 	); err != nil {
 		return fmt.Errorf("sync: clearing resolved observation issues for %s: %w", issueType, err)
-	}
-
-	return nil
-}
-
-func (m *SyncStore) ClearObservationIssuesByPrefix(ctx context.Context, pathPrefix string, issueType string) error {
-	if _, err := m.db.ExecContext(ctx,
-		`DELETE FROM observation_issues WHERE issue_type = ? AND (path = ? OR path LIKE ?)`,
-		issueType,
-		pathPrefix,
-		pathPrefix+"/%",
-	); err != nil {
-		return fmt.Errorf("sync: clearing observation issues by prefix %s: %w", pathPrefix, err)
-	}
-
-	return nil
-}
-
-func (m *SyncStore) DeleteObservationIssuesByScope(ctx context.Context, scopeKey ScopeKey) error {
-	if _, err := m.db.ExecContext(ctx,
-		`DELETE FROM observation_issues WHERE scope_key = ?`,
-		scopeKey.String(),
-	); err != nil {
-		return fmt.Errorf("sync: deleting observation issues for scope %s: %w", scopeKey.String(), err)
-	}
-
-	return nil
-}
-
-func (m *SyncStore) DeleteObservationIssueByPath(ctx context.Context, path string) error {
-	if path == "" {
-		return nil
-	}
-
-	if _, err := m.db.ExecContext(ctx,
-		`DELETE FROM observation_issues WHERE path = ?`,
-		path,
-	); err != nil {
-		return fmt.Errorf("sync: deleting observation issue for %s: %w", path, err)
 	}
 
 	return nil
