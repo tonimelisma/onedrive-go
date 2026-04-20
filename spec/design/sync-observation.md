@@ -119,8 +119,10 @@ Ignore invariants:
 - later reconciliation removes baseline rows that are absent from both snapshots
 
 Observation may emit `SkippedItem`s for invalid or unsupported local content.
-The engine reconciles those findings as one coherent observation-owned durable
-set, including any observation-owned read scopes proved by the scan.
+The engine reconciles those findings through one `ObservationFindingsBatch`
+boundary. Whole-drive scans replace the managed family set for those findings;
+single-path observation uses the same batch shape but manages only the exact
+observed path and exact read-scope key it proved.
 
 Observation-owned local read findings use these rules:
 
@@ -132,7 +134,9 @@ Observation-owned local read findings use these rules:
 
 Single-path observation used by retry/trial flows follows the same ownership
 rule. It may update `observation_issues` and observation-owned read scopes
-because it is still observation, not worker-result persistence.
+because it is still observation, not worker-result persistence. It must never
+reconcile a one-path observation result as if it were a whole-drive managed
+set; path-scoped reconciliation clears only the exact observed path/key.
 
 `Scanner.FullScan()` now also returns direct `LocalStateRow` values for every
 admissible currently observed local path. `local_state` persistence therefore

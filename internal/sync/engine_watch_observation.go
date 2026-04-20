@@ -3,8 +3,6 @@ package sync
 import (
 	"context"
 	"log/slog"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 func (flow *engineFlow) reconcileSkippedObservationFindings(
@@ -57,58 +55,19 @@ func (flow *engineFlow) reconcileSkippedObservationFindings(
 	}
 
 	batch := observationFindingsBatchFromSkippedItems(eng.driveID, skipped)
-	flow.reconcileObservationFindingsBatch(ctx, watch, batch, "failed to reconcile local observation findings")
-}
-
-func observationFindingsBatchFromSkippedItems(
-	driveID driveid.ID,
-	skipped []SkippedItem,
-) ObservationFindingsBatch {
-	batch := ObservationFindingsBatch{
-		Issues: make([]ObservationIssue, 0, len(skipped)),
-		ManagedIssueTypes: []string{
-			IssueInvalidFilename,
-			IssuePathTooLong,
-			IssueFileTooLarge,
-			IssueCaseCollision,
-			IssueLocalReadDenied,
-			IssueHashPanic,
-		},
-		ManagedReadScopeKinds: []ScopeKeyKind{ScopePermDirRead},
-	}
-
-	for i := range skipped {
-		item := skipped[i]
-		if item.Reason == "" || item.Path == "" {
-			continue
-		}
-
-		issue := ObservationIssue{
-			Path:       item.Path,
-			DriveID:    driveID,
-			ActionType: ActionUpload,
-			IssueType:  item.Reason,
-			Error:      item.Detail,
-			FileSize:   item.FileSize,
-		}
-		if item.Reason == IssueLocalReadDenied && item.BlocksReadScope {
-			issue.ScopeKey = SKPermLocalRead(item.Path)
-			batch.ReadScopes = append(batch.ReadScopes, issue.ScopeKey)
-		}
-
-		batch.Issues = append(batch.Issues, issue)
-	}
-
-	return batch
+	flow.reconcileObservationFindingsBatch(ctx, watch, &batch, "failed to reconcile local observation findings")
 }
 
 func (flow *engineFlow) reconcileObservationFindingsBatch(
 	ctx context.Context,
 	watch *watchRuntime,
-	batch ObservationFindingsBatch,
+	batch *ObservationFindingsBatch,
 	failureMessage string,
 ) {
 	eng := flow.engine
+	if batch == nil {
+		return
+	}
 
 	if err := eng.baseline.ReconcileObservationFindings(ctx, batch, eng.nowFunc()); err != nil {
 		eng.logger.Error(failureMessage,

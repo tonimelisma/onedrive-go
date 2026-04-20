@@ -57,9 +57,13 @@ Local observation writes belong to `local_state`. Full scans replace the entire
 
 Observation-owned durable problems belong to `observation_issues`, not retry
 lanes. Observation may also create `block_scopes` directly when current truth
-already proves a shared blocker. Observation-owned read scopes are reconciled
-set-wise from the current observation batch, not opportunistically patched one
-path at a time.
+already proves a shared blocker. Observation-owned reconciliation supports two
+scopes of authority:
+
+- whole-observation batches replace the managed issue families and managed
+  read-scope kinds they own
+- single-path observation batches manage only the exact observed path and exact
+  read-scope keys they prove
 
 ### Mutation writes
 
@@ -85,7 +89,8 @@ Supporting outcome mutations should stay separate by owner:
 
 - observation-findings reconciliation that replaces the current
   observation-owned issue set and observation-owned read scopes in one
-  transaction
+  transaction, either as a full managed family set or as an exact-path/exact-
+  key reconciliation for single-path observation
 - exact retry-work upsert/delete helpers
 - scope release/discard/extend helpers that mutate `block_scopes` and linked
   blocked `retry_work` in one transaction

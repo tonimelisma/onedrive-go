@@ -96,9 +96,12 @@ handling may discover a condition that should later appear there, but execution
 does not upsert observation rows directly. The next observation pass is
 responsible for proving and persisting that current-truth problem.
 
-Observation-owned issue rows and observation-owned read scopes are reconciled as
-one current set. If an old observation-owned issue or read scope is missing
-from the new batch, the store removes it during that same reconciliation.
+Observation-owned issue rows and observation-owned read scopes are reconciled
+through one observation-batch mutation shape. Full observation passes replace
+their managed current set by issue family/read-scope kind. Single-path
+observation uses the same mutation input but scopes reconciliation to the exact
+observed path and exact read-scope keys so one retry/trial probe cannot clear
+unrelated durable observation rows.
 
 ## `retry_work`
 

@@ -69,11 +69,9 @@ func ObserveSinglePathWithFilter(
 	absPath, info, isSymlink, err := statSingleObservedPath(syncTree, path)
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) {
-			return SinglePathObservation{Skipped: &SkippedItem{
-				Path:   path,
-				Reason: IssueLocalReadDenied,
-				Detail: "file not accessible (check filesystem permissions)",
-			}}, nil
+			return SinglePathObservation{
+				Skipped: singlePathPermissionDeniedSkippedItem(syncTree, path, absPath),
+			}, nil
 		}
 		return SinglePathObservation{}, err
 	}
@@ -127,6 +125,47 @@ func statSingleObservedPath(syncTree *synctree.Root, path string) (string, os.Fi
 	}
 
 	return absPath, info, isSymlink, nil
+}
+
+func singlePathPermissionDeniedSkippedItem(
+	syncTree *synctree.Root,
+	path string,
+	absPath string,
+) *SkippedItem {
+	if syncTree != nil && absPath != "" {
+		parentDir := filepath.Dir(absPath)
+		if !isDirAccessible(syncTree, parentDir) {
+			boundary := deepestDeniedObservedBoundary(syncTree, parentDir)
+			if relBoundary, err := syncTree.Rel(boundary); err == nil {
+				return &SkippedItem{
+					Path:            nfcNormalize(filepath.ToSlash(relBoundary)),
+					Reason:          IssueLocalReadDenied,
+					Detail:          "directory not accessible (check filesystem permissions)",
+					BlocksReadScope: true,
+				}
+			}
+		}
+	}
+
+	return &SkippedItem{
+		Path:   path,
+		Reason: IssueLocalReadDenied,
+		Detail: "file not accessible (check filesystem permissions)",
+	}
+}
+
+func deepestDeniedObservedBoundary(syncTree *synctree.Root, parentDir string) string {
+	boundary := parentDir
+	for {
+		parent := filepath.Dir(boundary)
+		if parent == boundary {
+			return boundary
+		}
+		if isDirAccessible(syncTree, parent) {
+			return boundary
+		}
+		boundary = parent
+	}
 }
 
 func resolveSinglePathWithInfo(

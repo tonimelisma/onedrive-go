@@ -162,7 +162,8 @@ func TestProcessCommittedPrimaryWatchBatch_ClearsRemoteReadDeniedFindingsOnHealt
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, rootRemoteReadDeniedObservationBatch(eng.driveID, graph.ErrForbidden), eng.nowFunc()))
+	batch := rootRemoteReadDeniedObservationBatch(eng.driveID, graph.ErrForbidden)
+	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &batch, eng.nowFunc()))
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
