@@ -90,3 +90,27 @@ func TestScopeKey_RemotePathPanicsForNonPermRemote(t *testing.T) {
 		_ = SKQuotaOwn().RemotePath()
 	})
 }
+
+func TestDescribeScopeKey_PermRemoteWrite(t *testing.T) {
+	t.Parallel()
+
+	descriptor := DescribeScopeKey(SKPermRemoteWrite("/readonly"))
+	assert.Equal(t, ScopeFamilyPermRemote, descriptor.Family)
+	assert.Equal(t, ScopeAccessWrite, descriptor.Access)
+	assert.Equal(t, ScopeSubjectKindPath, descriptor.SubjectKind)
+	assert.Equal(t, "/readonly", descriptor.SubjectValue)
+	assert.Equal(t, IssueRemoteWriteDenied, descriptor.DefaultIssueType)
+	assert.Equal(t, "/readonly", descriptor.Humanize())
+}
+
+func TestDescribeScopeKey_Service(t *testing.T) {
+	t.Parallel()
+
+	descriptor := DescribeScopeKey(SKService())
+	assert.Equal(t, ScopeFamilyService, descriptor.Family)
+	assert.Equal(t, ScopeAccessNone, descriptor.Access)
+	assert.Equal(t, ScopeSubjectKindNone, descriptor.SubjectKind)
+	assert.Empty(t, descriptor.SubjectValue)
+	assert.Equal(t, IssueServiceOutage, descriptor.DefaultIssueType)
+	assert.Equal(t, "OneDrive service", descriptor.Humanize())
+}

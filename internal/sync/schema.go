@@ -13,10 +13,10 @@ const (
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
 	//
-	// Generation 4 splits permission scope keys into explicit read/write
-	// families and keeps permission scopes as first-class persisted blockers
-	// even when blocked retry_work has drained.
-	currentSyncStoreGeneration = 4
+	// Generation 5 persists parsed scope semantics alongside scope_key so
+	// runtime, store, planner, and read-side code share one validated scope
+	// descriptor shape.
+	currentSyncStoreGeneration = 5
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata
 		(singleton_id, schema_generation)
 	VALUES (1, ?)
@@ -134,6 +134,10 @@ CREATE INDEX IF NOT EXISTS idx_observation_issues_scope_key
 
 CREATE TABLE IF NOT EXISTS block_scopes (
     scope_key      TEXT PRIMARY KEY,
+    scope_family   TEXT NOT NULL,
+    scope_access   TEXT NOT NULL,
+    subject_kind   TEXT NOT NULL,
+    subject_value  TEXT NOT NULL DEFAULT '',
     issue_type     TEXT NOT NULL,
     timing_source  TEXT NOT NULL CHECK(timing_source IN ('none', 'backoff', 'server_retry_after')),
     blocked_at     INTEGER NOT NULL,
@@ -184,7 +188,8 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"first_seen_at", "last_seen_at", "file_size", "local_hash", "scope_key",
 		},
 		"block_scopes": {
-			"scope_key", "issue_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "trial_count",
+			"scope_key", "scope_family", "scope_access", "subject_kind", "subject_value",
+			"issue_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "trial_count",
 		},
 	}
 }

@@ -161,13 +161,13 @@ func (controller *scopeController) normalizePersistedScope(
 	switch scopeStartupPolicyFor(block.Key) {
 	case scopeStartupRevalidateLocalPermission:
 		if block.Key.IsPermLocalRead() {
-			if !isDirAccessible(controller.flow.engine.syncTree, block.Key.DirPath()) {
+			if !isDirAccessible(controller.flow.engine.syncTree, block.ScopePath()) {
 				return nil
 			}
 			return controller.releaseStartupScope(ctx, block.Key, "released local read scope after revalidation")
 		}
 		if block.Key.IsPermLocalWrite() {
-			if !isDirWritable(controller.flow.engine.syncTree, block.Key.DirPath()) {
+			if !isDirWritable(controller.flow.engine.syncTree, block.ScopePath()) {
 				return nil
 			}
 			return controller.releaseStartupScope(ctx, block.Key, "released local write scope after revalidation")

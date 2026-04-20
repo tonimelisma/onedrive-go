@@ -65,7 +65,7 @@ func SummaryKeyForBlockScope(issueType string, scopeKey ScopeKey) SummaryKey {
 		return key
 	}
 
-	if key, ok := summaryKeyForIssueType(scopeKey.IssueType()); ok {
+	if key, ok := summaryKeyForIssueType(DescribeScopeKey(scopeKey).DefaultIssueType); ok {
 		return key
 	}
 

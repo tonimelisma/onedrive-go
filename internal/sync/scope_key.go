@@ -169,19 +169,21 @@ func (sk ScopeKey) IsPermRemoteWrite() bool {
 // DirPath returns the directory path for a local permission scope key.
 // Panics if called on a non-local-permission key (defensive — caller bug).
 func (sk ScopeKey) DirPath() string {
-	if !sk.IsPermDir() {
+	descriptor := DescribeScopeKey(sk)
+	if descriptor.Family != ScopeFamilyPermDir {
 		panic("ScopeKey.DirPath() called on non-local-permission key")
 	}
-	return sk.Param
+	return descriptor.ScopePath()
 }
 
 // RemotePath returns the local boundary path for a remote permission scope key.
 // Panics if called on a non-remote-permission key (defensive — caller bug).
 func (sk ScopeKey) RemotePath() string {
-	if !sk.IsPermRemote() {
+	descriptor := DescribeScopeKey(sk)
+	if descriptor.Family != ScopeFamilyPermRemote {
 		panic("ScopeKey.RemotePath() called on non-remote-permission key")
 	}
-	return sk.Param
+	return descriptor.ScopePath()
 }
 
 // IsThrottleTarget returns true for target-scoped throttle keys.
@@ -206,49 +208,14 @@ func (sk ScopeKey) ThrottleTargetKey() string {
 // IssueType returns the issue_type constant for this scope key's kind.
 // Used to derive a stable default issue type from a scope key.
 func (sk ScopeKey) IssueType() string {
-	switch sk.Kind {
-	case ScopeThrottleTarget:
-		return IssueRateLimited
-	case ScopeService:
-		return IssueServiceOutage
-	case ScopeQuotaOwn:
-		return IssueQuotaExceeded
-	case ScopePermDirRead:
-		return IssueLocalReadDenied
-	case ScopePermDirWrite:
-		return IssueLocalWriteDenied
-	case ScopePermRemoteRead:
-		return IssueRemoteReadDenied
-	case ScopePermRemoteWrite:
-		return IssueRemoteWriteDenied
-	case ScopeDiskLocal:
-		return IssueDiskFull
-	default:
-		return ""
-	}
+	return DescribeScopeKey(sk).DefaultIssueType
 }
 
 // Humanize translates a scope key to a user-friendly description (R-2.10.22).
 // For directory- and subtree-scoped blocks, returns the stored local path. For
 // global scopes, returns a plain English description.
 func (sk ScopeKey) Humanize() string {
-	switch sk.Kind {
-	case ScopeThrottleTarget:
-		return "this drive (rate limited)"
-	case ScopeService:
-		return "OneDrive service"
-	case ScopeQuotaOwn:
-		return "this drive storage"
-	case ScopePermDirRead, ScopePermDirWrite, ScopePermRemoteRead, ScopePermRemoteWrite:
-		if sk.Param == "" {
-			return "/"
-		}
-		return sk.Param
-	case ScopeDiskLocal:
-		return "local disk"
-	default:
-		return sk.String()
-	}
+	return DescribeScopeKey(sk).Humanize()
 }
 
 // BlocksAction returns true if this scope key blocks the given action.
@@ -258,62 +225,7 @@ func (sk ScopeKey) BlocksAction(
 	throttleTargetKey string,
 	actionType ActionType,
 ) bool {
-	switch sk.Kind {
-	case ScopeService:
-		return true // global blocks
-	case ScopeThrottleTarget:
-		return throttleTargetKey != "" && throttleTargetKey == sk.Param
-	case ScopeDiskLocal:
-		return actionType == ActionDownload
-	case ScopeQuotaOwn:
-		return actionType == ActionUpload
-	case ScopePermDirRead:
-		return path == sk.Param || strings.HasPrefix(path, sk.Param+"/")
-	case ScopePermDirWrite:
-		return scopePathMatches(path, sk.Param) && localWriteScopeBlocksAction(actionType)
-	case ScopePermRemoteRead:
-		return scopePathMatches(path, sk.Param)
-	case ScopePermRemoteWrite:
-		return scopePathMatches(path, sk.Param) && remoteWriteScopeBlocksAction(actionType)
-	default:
-		return false
-	}
-}
-
-func localWriteScopeBlocksAction(actionType ActionType) bool {
-	switch actionType {
-	case ActionDownload,
-		ActionLocalDelete,
-		ActionLocalMove,
-		ActionConflictCopy,
-		ActionUpdateSynced,
-		ActionCleanup,
-		ActionFolderCreate:
-		return true
-	case ActionUpload,
-		ActionRemoteDelete,
-		ActionRemoteMove:
-		return false
-	}
-	return false
-}
-
-func remoteWriteScopeBlocksAction(actionType ActionType) bool {
-	switch actionType {
-	case ActionUpload,
-		ActionRemoteDelete,
-		ActionRemoteMove,
-		ActionFolderCreate:
-		return true
-	case ActionDownload,
-		ActionLocalDelete,
-		ActionLocalMove,
-		ActionConflictCopy,
-		ActionUpdateSynced,
-		ActionCleanup:
-		return false
-	}
-	return false
+	return DescribeScopeKey(sk).BlocksAction(path, throttleTargetKey, actionType)
 }
 
 func scopePathMatches(path, boundary string) bool {

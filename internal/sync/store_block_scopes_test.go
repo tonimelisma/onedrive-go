@@ -140,6 +140,10 @@ func TestSyncStore_UpsertBlockScope(t *testing.T) {
 	require.Len(t, blocks, 1)
 	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), blocks[0].Key)
 	assert.Equal(t, IssueRateLimited, blocks[0].IssueType)
+	assert.Equal(t, ScopeFamilyThrottleTarget, blocks[0].Family)
+	assert.Equal(t, ScopeAccessNone, blocks[0].Access)
+	assert.Equal(t, ScopeSubjectKindDrive, blocks[0].SubjectKind)
+	assert.Equal(t, throttleDriveParam(driveid.New("0000000000000001")), blocks[0].SubjectValue)
 	assert.Equal(t, 0, blocks[0].TrialCount)
 
 	// Upsert with updated values — should replace.
@@ -260,6 +264,10 @@ func TestSyncStore_ListBlockScopes(t *testing.T) {
 	remotePerm := byKey[SKPermRemoteWrite("Shared/TeamDocs")]
 	require.NotNil(t, remotePerm, "perm:remote block should be listed")
 	assert.Equal(t, IssueRemoteWriteDenied, remotePerm.IssueType)
+	assert.Equal(t, ScopeFamilyPermRemote, remotePerm.Family)
+	assert.Equal(t, ScopeAccessWrite, remotePerm.Access)
+	assert.Equal(t, ScopeSubjectKindPath, remotePerm.SubjectKind)
+	assert.Equal(t, "Shared/TeamDocs", remotePerm.SubjectValue)
 	assert.Equal(t, 5, remotePerm.TrialCount)
 }
 
@@ -285,9 +293,14 @@ func TestSyncStore_ListBlockScopes_SkipsUnknownWireKeys(t *testing.T) {
 	_, err := mgr.db.ExecContext(
 		ctx,
 		`INSERT INTO block_scopes
-			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(scope_key, scope_family, scope_access, subject_kind, subject_value,
+			 issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"auth:account",
+		"unknown",
+		"unknown",
+		"unknown",
+		"",
 		IssueUnauthorized,
 		ScopeTimingNone,
 		now.UnixNano(),
@@ -310,6 +323,38 @@ func TestSyncStore_ListBlockScopes_SkipsUnknownWireKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, SKService(), got[0].Key)
+}
+
+// Validates: R-2.10.8
+func TestSyncStore_ListBlockScopes_RejectsMismatchedMetadata(t *testing.T) {
+	t.Parallel()
+	mgr := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	_, err := mgr.db.ExecContext(
+		ctx,
+		`INSERT INTO block_scopes
+			(scope_key, scope_family, scope_access, subject_kind, subject_value,
+			 issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		SKPermRemoteWrite("Shared/TeamDocs").String(),
+		ScopeFamilyPermDir,
+		ScopeAccessWrite,
+		ScopeSubjectKindPath,
+		"Shared/TeamDocs",
+		IssueRemoteWriteDenied,
+		ScopeTimingNone,
+		now.UnixNano(),
+		int64(0),
+		int64(0),
+		0,
+	)
+	require.NoError(t, err)
+
+	_, err = mgr.ListBlockScopes(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata mismatch")
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +390,10 @@ func TestSyncStore_BlockScope_Roundtrip(t *testing.T) {
 	// Verify every field round-trips correctly.
 	assert.Equal(t, original.Key, got[0].Key, "scope key should round-trip")
 	assert.Equal(t, original.IssueType, got[0].IssueType, "issue type should round-trip")
+	assert.Equal(t, ScopeFamilyPermRemote, got[0].Family, "family should round-trip")
+	assert.Equal(t, ScopeAccessWrite, got[0].Access, "access should round-trip")
+	assert.Equal(t, ScopeSubjectKindPath, got[0].SubjectKind, "subject kind should round-trip")
+	assert.Equal(t, "Shared/TeamDocs", got[0].SubjectValue, "subject value should round-trip")
 	assert.Equal(t, original.BlockedAt, got[0].BlockedAt, "blocked_at should round-trip with nanosecond precision")
 	assert.Equal(t, original.TrialInterval, got[0].TrialInterval, "trial_interval should round-trip")
 	assert.Equal(t, original.NextTrialAt, got[0].NextTrialAt, "next_trial_at should round-trip with nanosecond precision")

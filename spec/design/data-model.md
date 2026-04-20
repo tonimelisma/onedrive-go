@@ -121,6 +121,8 @@ table.
 `block_scopes` stores active shared blocking conditions that outlive a process:
 
 - identity: `scope_key`
+- parsed scope semantics: `scope_family`, `scope_access`, `subject_kind`,
+  `subject_value`
 - condition type
 - timing source
 - `blocked_at`, `trial_interval`, `next_trial_at`, `trial_count`
@@ -145,6 +147,11 @@ The target persisted scope families are:
 - `perm:remote:read:<boundary>`
 - `perm:remote:write:<boundary>`
 - `account:throttled`
+
+`scope_key` remains the durable identity referenced by `retry_work`, but
+`block_scopes` also stores the parsed descriptor metadata for that key so
+runtime and read-side code can validate and consume one explicit scope shape
+without reparsing the wire string at every boundary.
 
 ## `observation_state`
 
