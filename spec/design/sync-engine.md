@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/watch_summary.go, internal/sync/condition_summary.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
+GOVERNS: internal/sync/engine*.go, internal/sync/watch_summary.go, internal/sync/condition_summary.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_recheck.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
 Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
@@ -199,6 +199,24 @@ manual recheck CLI for them. Observation/probe may create or clear permission
 scopes directly when current truth already proves the shared blocker or its
 recovery. A raw `403` or `os.ErrPermission` is only a trigger to probe; the
 probe result is what may activate or release the scope.
+
+Ownership splits by access kind:
+
+- read scopes (`perm:dir:read`, `perm:remote:read`) are observation-owned
+- write scopes (`perm:dir:write`, `perm:remote:write`) are probe/execution-owned
+
+Read scopes clear only when a later observation batch no longer proves them.
+Write scopes clear only on affirmative permission recheck. Generic empty-retry
+cleanup, unrelated successful work, and path-change drift handling must not
+release permission scopes on their own.
+
+Remote `403` handling is intentionally narrow:
+
+- raw `403` never creates a permission scope by itself
+- only remote-write actions may invoke remote write-denial probing
+- probe-confirmed write denial may activate `perm:remote:write`
+- observation-owned `remote_read_denied` findings come only from remote
+  observation/probe at the observation orchestration seam
 
 ### Retry and trial reconstruction
 

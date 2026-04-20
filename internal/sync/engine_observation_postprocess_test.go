@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func testRemoteCreateEvent(path string, itemID string, driveID string) ChangeEvent {
@@ -74,7 +75,7 @@ func TestProcessCommittedSharedRootWatchBatch_CommitsObservedRowsAndPendingCurso
 	require.NoError(t, err)
 	pendingCursor := "cursor-shared"
 
-	finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, remoteFetchResult{
+	finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, &remoteFetchResult{
 		events: []ChangeEvent{
 			testRemoteCreateEvent("shared-watch.txt", "item-shared", eng.driveID.String()),
 		},
@@ -109,7 +110,7 @@ func TestProcessCommittedSharedRootWatchBatch_CursorCommitFailureReturnsNotCommi
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, remoteFetchResult{
+	finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, &remoteFetchResult{
 		pending: &pendingPrimaryCursorCommit{
 			driveID: mustParseDriveID("2").String(),
 			rootID:  "shared-root",
@@ -119,6 +120,66 @@ func TestProcessCommittedSharedRootWatchBatch_CursorCommitFailureReturnsNotCommi
 	assert.False(t, committed)
 	assert.Nil(t, finalEvents)
 	assert.Equal(t, "existing-cursor", readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
+}
+
+// Validates: R-2.10.4
+func TestProcessCommittedSharedRootWatchBatch_ReconcilesRemoteReadDeniedFindings(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, &remoteFetchResult{
+		findings: rootRemoteReadDeniedObservationBatch(eng.driveID, graph.ErrForbidden),
+	})
+	require.True(t, committed)
+	assert.Empty(t, finalEvents)
+
+	issues, err := eng.baseline.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "/", issues[0].Path)
+	assert.Equal(t, IssueRemoteReadDenied, issues[0].IssueType)
+	assert.Equal(t, SKPermRemoteRead(""), issues[0].ScopeKey)
+
+	scopes, err := eng.baseline.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	assert.Equal(t, SKPermRemoteRead(""), scopes[0].Key)
+}
+
+// Validates: R-2.10.4
+func TestProcessCommittedPrimaryWatchBatch_ClearsRemoteReadDeniedFindingsOnHealthyPoll(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, rootRemoteReadDeniedObservationBatch(eng.driveID, graph.ErrForbidden), eng.nowFunc()))
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	finalEvents, err := rt.processCommittedPrimaryWatchBatch(ctx, bl, []ChangeEvent{
+		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
+	}, "cursor-primary")
+	require.NoError(t, err)
+	require.Len(t, finalEvents, 1)
+
+	issues, err := eng.baseline.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+
+	scopes, err := eng.baseline.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, scopes)
 }
 
 // Validates: R-2.1.2

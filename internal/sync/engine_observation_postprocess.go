@@ -50,8 +50,11 @@ func (flow *engineFlow) processCommittedPrimaryBatch(
 func (rt *watchRuntime) processCommittedSharedRootWatchBatch(
 	ctx context.Context,
 	bl *Baseline,
-	result remoteFetchResult,
+	result *remoteFetchResult,
 ) ([]ChangeEvent, bool) {
+	if result == nil {
+		return nil, false
+	}
 	projected := projectRemoteObservations(rt.engine.logger, result.events)
 
 	if len(projected.observed) > 0 {
@@ -65,6 +68,12 @@ func (rt *watchRuntime) processCommittedSharedRootWatchBatch(
 		rt.logCommittedSharedRootBatchFailure("commit primary cursor", err, 0)
 		return nil, false
 	}
+	rt.reconcileObservationFindingsBatch(
+		ctx,
+		rt,
+		result.findings,
+		"failed to reconcile shared-root remote observation findings",
+	)
 
 	finalEvents := rt.processCommittedPrimaryBatch(
 		ctx,
@@ -92,6 +101,12 @@ func (rt *watchRuntime) processCommittedPrimaryWatchBatch(
 
 		return nil, newFatalObserverError(fmt.Errorf("commit primary watch observations: %w", err))
 	}
+	rt.reconcileObservationFindingsBatch(
+		ctx,
+		rt,
+		remoteObservationManagedBatch(),
+		"failed to reconcile primary remote observation findings",
+	)
 
 	finalEvents := rt.processCommittedPrimaryBatch(
 		ctx,

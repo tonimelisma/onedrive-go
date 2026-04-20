@@ -227,22 +227,7 @@ func (flow *engineFlow) reconcileSkippedObservationFindings(
 	}
 
 	batch := observationFindingsBatchFromSkippedItems(eng.driveID, skipped)
-	if err := eng.baseline.ReconcileObservationFindings(ctx, batch, eng.nowFunc()); err != nil {
-		eng.logger.Error("failed to reconcile observation findings",
-			slog.Int("issues", len(batch.Issues)),
-			slog.Int("read_scopes", len(batch.ReadScopes)),
-			slog.String("error", err.Error()),
-		)
-		return
-	}
-
-	if watch != nil {
-		if err := flow.scopeController().loadActiveScopes(ctx, watch); err != nil {
-			eng.logger.Warn("failed to refresh watch scopes after observation reconcile",
-				slog.String("error", err.Error()),
-			)
-		}
-	}
+	flow.reconcileObservationFindingsBatch(ctx, watch, batch, "failed to reconcile local observation findings")
 }
 
 func observationFindingsBatchFromSkippedItems(
@@ -250,8 +235,16 @@ func observationFindingsBatchFromSkippedItems(
 	skipped []SkippedItem,
 ) ObservationFindingsBatch {
 	batch := ObservationFindingsBatch{
-		Issues:     make([]ObservationIssue, 0, len(skipped)),
-		ReadScopes: make([]ScopeKey, 0),
+		Issues: make([]ObservationIssue, 0, len(skipped)),
+		ManagedIssueTypes: []string{
+			IssueInvalidFilename,
+			IssuePathTooLong,
+			IssueFileTooLarge,
+			IssueCaseCollision,
+			IssueLocalReadDenied,
+			IssueHashPanic,
+		},
+		ManagedReadScopeKinds: []ScopeKeyKind{ScopePermDirRead},
 	}
 
 	for i := range skipped {
@@ -277,6 +270,32 @@ func observationFindingsBatchFromSkippedItems(
 	}
 
 	return batch
+}
+
+func (flow *engineFlow) reconcileObservationFindingsBatch(
+	ctx context.Context,
+	watch *watchRuntime,
+	batch ObservationFindingsBatch,
+	failureMessage string,
+) {
+	eng := flow.engine
+
+	if err := eng.baseline.ReconcileObservationFindings(ctx, batch, eng.nowFunc()); err != nil {
+		eng.logger.Error(failureMessage,
+			slog.Int("issues", len(batch.Issues)),
+			slog.Int("read_scopes", len(batch.ReadScopes)),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	if watch != nil {
+		if err := flow.scopeController().loadActiveScopes(ctx, watch); err != nil {
+			eng.logger.Warn("failed to refresh watch scopes after observation reconcile",
+				slog.String("error", err.Error()),
+			)
+		}
+	}
 }
 
 func (e *Engine) fullRemoteReconcileDelay(ctx context.Context) (time.Duration, error) {

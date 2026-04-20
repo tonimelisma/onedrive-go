@@ -87,6 +87,14 @@ The target durable projection is intentionally small:
 This keeps durable state as a record of decisions the engine must recover from,
 not a catch-all copy of every raw error string or a mixed reporting table.
 
+For permission-derived conditions, the durable mapping is access-specific:
+
+- observation-owned read denial -> `observation_issues` plus read-denial
+  `block_scopes`
+- execution-owned write denial -> `block_scopes` plus blocked `retry_work`
+- raw `403` / `os.ErrPermission` without probe evidence -> no permission scope;
+  fall back to ordinary retry or fatal handling
+
 ## Boundary Rules
 
 - Errors cross one classification boundary before being wrapped with local

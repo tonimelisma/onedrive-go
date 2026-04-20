@@ -221,6 +221,9 @@ func remote403PermissionFlow(r *ActionCompletion) permissionFlow {
 	if r == nil || r.HTTPStatus != http.StatusForbidden {
 		return permissionFlowNone
 	}
+	if !remoteWriteScopeBlocksAction(r.ActionType) {
+		return permissionFlowNone
+	}
 
 	return permissionFlowRemote403
 }

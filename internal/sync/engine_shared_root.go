@@ -144,7 +144,7 @@ func (rt *watchRuntime) watchSharedRootRemote(
 			continue
 		}
 
-		if len(result.events) == 0 {
+		if len(result.events) == 0 && !(&result).hasObservationFindings() && result.pending == nil {
 			bo.Reset()
 			stop, sleepErr := rt.sleepSharedRootWatch(ctx, interval, "zero-event")
 			if sleepErr != nil || stop {
@@ -153,7 +153,7 @@ func (rt *watchRuntime) watchSharedRootRemote(
 			continue
 		}
 
-		finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, result)
+		finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, &result)
 		if !committed {
 			continue
 		}
