@@ -55,7 +55,10 @@ It does not own planning policy, execution policy, or a competing status model.
 Each `remote_state` row persists the true owning remote `drive_id` seen during
 observation. `observation_state.configured_drive_id` identifies the configured
 session that owns the DB and cursor; it is not the durable owner of every
-remote row.
+remote row. If a later observation corrects a row's owning `drive_id` without
+changing path/hash/mtime metadata, `CommitObservation()` still updates the
+stored row owner so downstream planning and execution read the repaired durable
+truth.
 
 Local observation writes belong to `local_state`. Full scans replace the entire
 `local_state` snapshot in one transaction.
@@ -148,9 +151,9 @@ Store maintenance must also keep `block_scopes` honest:
 
 - timed scopes may exist only while blocked `retry_work` still exists for the
   same `scope_key`
-- no persisted scope row may be completely orphaned from both `retry_work` and
-  `observation_issues`; if neither authority still references the `scope_key`,
-  the row is durable garbage and invariant checks must fail loudly
+- no persisted scope row may be orphaned from blocked `retry_work`; if blocked
+  work no longer references the `scope_key`, the row is durable garbage and
+  invariant checks must fail loudly
 
 Pruning an empty scope removes only the scope row. Ready `retry_work` that no
 longer depends on that scope must survive pruning; only explicit discard of a
