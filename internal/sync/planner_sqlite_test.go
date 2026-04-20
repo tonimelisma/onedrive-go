@@ -212,6 +212,35 @@ func planCurrentStateForStore(t *testing.T, store *SyncStore) *ActionPlan {
 	return plan
 }
 
+func planCurrentStateForInputs(
+	t *testing.T,
+	comparisons []SQLiteComparisonRow,
+	reconciliations []SQLiteReconciliationRow,
+	localRows []LocalStateRow,
+	remoteRows []RemoteStateRow,
+	observationIssues []ObservationIssueRow,
+	blockScopes []*BlockScope,
+	baseline *Baseline,
+) *ActionPlan {
+	t.Helper()
+
+	planner := NewPlanner(testLogger(t))
+	plan, err := planner.PlanCurrentState(
+		comparisons,
+		reconciliations,
+		localRows,
+		remoteRows,
+		observationIssues,
+		blockScopes,
+		baseline,
+		SyncBidirectional,
+		&SafetyConfig{},
+	)
+	require.NoError(t, err)
+
+	return plan
+}
+
 func assertNoActionForPath(t *testing.T, plan *ActionPlan, path string, actionType ActionType) {
 	t.Helper()
 
@@ -398,4 +427,102 @@ func TestPlannerPlanCurrentState_NewUnreadableLocalPathProducesNoActions(t *test
 	require.NoError(t, err)
 	require.Len(t, observationIssues, 1)
 	assert.Equal(t, "blocked/new.txt", observationIssues[0].Path)
+}
+
+// Validates: R-2.1.3, R-2.10.4
+func TestPlannerPlanCurrentState_LocalMoveSourceWithUnavailableTruthProducesNoActions(t *testing.T) {
+	t.Parallel()
+
+	plan := planCurrentStateForInputs(
+		t,
+		[]SQLiteComparisonRow{{
+			Path:            "docs/source.txt",
+			BaselinePresent: true,
+			LocalPresent:    true,
+			RemotePresent:   true,
+			LocalChanged:    true,
+			RemoteChanged:   false,
+			ComparisonKind:  "local_move_source",
+		}},
+		[]SQLiteReconciliationRow{{
+			Path:               "docs/source.txt",
+			ComparisonKind:     "local_move_source",
+			ReconciliationKind: strLocalMove,
+			LocalMoveTarget:    "docs/dest.txt",
+		}},
+		[]LocalStateRow{{
+			Path:       "docs/source.txt",
+			ItemType:   ItemTypeFile,
+			Hash:       "local",
+			ObservedAt: 1,
+		}},
+		[]RemoteStateRow{{
+			Path:    "docs/source.txt",
+			ItemID:  "remote-source",
+			DriveID: driveid.New(engineTestDriveID),
+		}},
+		[]ObservationIssueRow{{
+			Path:      "docs/source.txt",
+			IssueType: IssueLocalReadDenied,
+		}},
+		nil,
+		NewBaselineForTest([]*BaselineEntry{{
+			Path:     "docs/source.txt",
+			DriveID:  driveid.New(engineTestDriveID),
+			ItemID:   "baseline-source",
+			ItemType: ItemTypeFile,
+		}}),
+	)
+
+	assert.Empty(t, plan.Actions)
+}
+
+// Validates: R-2.1.3, R-2.10.4
+func TestPlannerPlanCurrentState_RemoteMoveDestinationWithUnavailableTruthProducesNoActions(t *testing.T) {
+	t.Parallel()
+
+	plan := planCurrentStateForInputs(
+		t,
+		[]SQLiteComparisonRow{{
+			Path:            "Shared/dest.txt",
+			BaselinePresent: true,
+			LocalPresent:    true,
+			RemotePresent:   true,
+			LocalChanged:    false,
+			RemoteChanged:   true,
+			ComparisonKind:  "remote_move_dest",
+		}},
+		[]SQLiteReconciliationRow{{
+			Path:               "Shared/dest.txt",
+			ComparisonKind:     "remote_move_dest",
+			ReconciliationKind: strRemoteMove,
+			RemoteMoveSource:   "Shared/source.txt",
+		}},
+		[]LocalStateRow{{
+			Path:       "Shared/dest.txt",
+			ItemType:   ItemTypeFile,
+			Hash:       "local",
+			ObservedAt: 1,
+		}},
+		[]RemoteStateRow{{
+			Path:    "Shared/dest.txt",
+			ItemID:  "remote-dest",
+			DriveID: driveid.New(engineTestDriveID),
+		}},
+		nil,
+		[]*BlockScope{{
+			Key:          SKPermRemoteRead("Shared"),
+			IssueType:    IssueRemoteReadDenied,
+			TimingSource: ScopeTimingNone,
+			BlockedAt:    time.Unix(100, 0),
+		}},
+		NewBaselineForTest([]*BaselineEntry{{
+			Path:     "Shared/dest.txt",
+			DriveID:  driveid.New(engineTestDriveID),
+			ItemID:   "baseline-dest",
+			ItemType: ItemTypeFile,
+		}}),
+	)
+
+	assert.Empty(t, plan.Actions)
 }
