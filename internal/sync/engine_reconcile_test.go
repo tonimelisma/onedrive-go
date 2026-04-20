@@ -527,6 +527,62 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	assert.Empty(t, savedToken, "cursor should NOT be committed to DB by observeRemoteChanges — it is deferred")
 }
 
+// Validates: R-2.10.4
+func TestObserveRemoteChanges_RemoteReadDeniedPersistsObservationFindings(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return nil, graph.ErrForbidden
+		},
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncDir := t.TempDir()
+	logger := testLogger(t)
+
+	rawEngine, err := newEngine(t.Context(), &engineInputs{
+		DBPath:    dbPath,
+		SyncRoot:  syncDir,
+		DriveID:   driveID,
+		Fetcher:   mock,
+		Items:     mock,
+		Downloads: mock,
+		Uploads:   mock,
+		Logger:    logger,
+	})
+	require.NoError(t, err)
+	e := newFlowBackedTestEngine(rawEngine)
+	defer e.Close(t.Context())
+
+	ctx := t.Context()
+	bl, err := e.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	events, pendingCursor, err := testEngineFlow(t, e).observeRemoteChanges(
+		ctx,
+		bl,
+		false,
+		testEngineFlow(t, e).buildPrimaryRootObservationPlan(false),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, events)
+	assert.Nil(t, pendingCursor)
+
+	issues, err := e.baseline.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "/", issues[0].Path)
+	assert.Equal(t, IssueRemoteReadDenied, issues[0].IssueType)
+	assert.Equal(t, SKPermRemoteRead(""), issues[0].ScopeKey)
+
+	scopes, err := e.baseline.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	assert.Equal(t, SKPermRemoteRead(""), scopes[0].Key)
+}
+
 // ---------------------------------------------------------------------------
 // runFullReconciliationAsync tests
 // ---------------------------------------------------------------------------

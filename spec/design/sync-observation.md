@@ -1,16 +1,18 @@
 # Sync Observation
 
-GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_local_collisions.go, internal/sync/observer_remote.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/item_converter.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/symlink_observation.go
+GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_local_collisions.go, internal/sync/observer_remote.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/item_converter.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/symlink_observation.go, internal/sync/single_path.go
 
 Implements: R-2.1.2 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified]
 
 ## Overview
 
 Observation turns local filesystem changes and Graph delta/enumeration results
-into live observation facts. It never writes the sync DB directly. The engine
-owns snapshot persistence and persisted full-refresh cadence in
-`observation_state`; observation produces wake signals, dirty path/scope hints,
-observation facts, and direct local-snapshot rows for `local_state`.
+into live observation facts. The low-level observers do not write the sync DB
+directly. The engine-owned observation orchestration persists the resulting
+observation batch as one coherent durable set. `observation_state` still owns
+snapshot cadence and cursors; observation produces wake signals, dirty
+path/scope hints, observation findings, and direct local-snapshot rows for
+`local_state`.
 
 The observation stack has four main pieces:
 
@@ -21,12 +23,12 @@ The observation stack has four main pieces:
 
 ## Ownership Contract
 
-- Owns: local and remote change capture, path normalization, sparse-item recovery, skipped-item reporting, and dirty buffering
+- Owns: local and remote change capture, path normalization, sparse-item recovery, skipped-item reporting, single-path observation, and dirty buffering
 - Does Not Own: planning, retry policy, scope persistence, or user-facing issue interpretation
 - Source of Truth: live filesystem state, Graph responses, and read-only baseline context supplied by the engine
 - Allowed Side Effects: rooted filesystem reads, hashing, Graph observation calls, watch registration, and event emission
 - Mutable Runtime Owner: `RemoteObserver`, `LocalObserver`, `Scanner`, and `DirtyBuffer` each own only their own invocation- or run-scoped mutable state, watches, and goroutines. The engine owns lifecycle and composition across those pieces.
-- Error Boundary: observation surfaces filesystem, watch, and Graph observation failures as observation results and control signals; it does not classify retries, user-facing issues, or durable failure state.
+- Error Boundary: observation surfaces filesystem, watch, and Graph observation failures as observation results and control signals; the engine may persist those observation findings durably, but execution paths do not invent observation-owned durable rows.
 
 ## Verified By
 
@@ -51,6 +53,9 @@ Important properties:
 - HTTP 410 delta expiry is surfaced as a restart/re-enumerate condition
 - sparse delta items recover omitted name/parent data from the baseline when possible
 - deleted-item names may also be recovered from baseline context
+- explicit remote read denial discovered during observation is emitted as an
+  observation-owned finding (`remote_read_denied`) plus
+  `perm:remote:read:<boundary>`
 
 ### Whole drives and shared-root drives
 
@@ -65,6 +70,16 @@ observation ignores it.
 
 For shared-root drives, observation may use shared-root delta or recursive
 enumeration depending on drive type and Graph support.
+
+Remote read-denied scopes are observation-owned facts. When root or shared-root
+observation proves that remote truth is unreadable, the engine persists one
+managed observation batch containing:
+
+- `observation_issues` rows for `remote_read_denied`
+- `block_scopes` rows for `perm:remote:read:<boundary>`
+
+Healthy observation batches reconcile that managed set away again. Worker `403`
+results do not create these read-denied findings.
 
 ## Item Conversion
 
@@ -106,6 +121,18 @@ Ignore invariants:
 Observation may emit `SkippedItem`s for invalid or unsupported local content.
 The engine reconciles those findings as one coherent observation-owned durable
 set, including any observation-owned read scopes proved by the scan.
+
+Observation-owned local read findings use these rules:
+
+- unreadable file -> `observation_issue(path, local_read_denied)` only
+- unreadable directory boundary ->
+  `observation_issue(boundary, local_read_denied)` plus
+  `perm:dir:read:<boundary>`
+- invalid or unsyncable local content -> observation issue only
+
+Single-path observation used by retry/trial flows follows the same ownership
+rule. It may update `observation_issues` and observation-owned read scopes
+because it is still observation, not worker-result persistence.
 
 `Scanner.FullScan()` now also returns direct `LocalStateRow` values for every
 admissible currently observed local path. `local_state` persistence therefore

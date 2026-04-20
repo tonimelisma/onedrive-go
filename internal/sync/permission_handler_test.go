@@ -14,6 +14,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
+const testRemoteRootItemID = "root-item"
+
 func newTestPermHandler(t *testing.T, checker PermissionChecker) (*PermissionHandler, *SyncStore, string) {
 	t.Helper()
 
@@ -77,12 +79,10 @@ func TestPermHandler_HandlePermissionCheckError_NotFound(t *testing.T) {
 	ph, _, _ := newTestPermHandler(t, nil)
 
 	result := ph.handlePermissionCheckError(
-		t.Context(),
 		graph.ErrNotFound,
 		"failed/file.txt",
 		"failed",
 		ActionUpload,
-		driveid.New("remote-drive-1"),
 	)
 	assert.True(t, result.Matched)
 	assert.Equal(t, permissionCheckActivateDerivedScope, result.Kind)
@@ -100,12 +100,10 @@ func TestPermHandler_HandlePermissionCheckError_OtherError(t *testing.T) {
 	ph, _, _ := newTestPermHandler(t, nil)
 
 	result := ph.handlePermissionCheckError(
-		t.Context(),
 		errors.New("timeout"),
 		"failed/file.txt",
 		"failed",
 		ActionUpload,
-		driveid.New("remote-drive-1"),
 	)
 	assert.False(t, result.Matched)
 }
@@ -212,46 +210,69 @@ func TestPermHandler_RecheckLocalPermissions_StillDenied(t *testing.T) {
 	assert.Equal(t, permissionRecheckKeepScope, decisions[0].Kind)
 }
 
-func TestPermHandler_ClearScannerResolved_FileLevelIgnored(t *testing.T) {
+func TestPermHandler_RecheckPermissions_IgnoresObservationOwnedRemoteReadScopes(t *testing.T) {
 	t.Parallel()
 
-	ph, store, _ := newTestPermHandler(t, nil)
-	seedLocalPermissionDeniedIssue(t, store, ScopeKey{})
+	checker := &mockPermChecker{}
+	ph, store, _ := newTestPermHandler(t, checker)
+	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:          SKPermRemoteRead("Shared/Docs"),
+		IssueType:    IssueRemoteReadDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Now(),
+	}))
 
-	observed := map[string]bool{"docs/file.txt": true}
-	decisions := ph.clearScannerResolvedPermissions(t.Context(), observed)
+	decisions := ph.recheckPermissions(t.Context(), &Baseline{})
 
 	assert.Empty(t, decisions)
 }
 
-func TestPermHandler_ClearScannerResolved_DirLevel(t *testing.T) {
+func TestPermHandler_RecheckPermissions_ReleaseRemoteWriteScopeWhenWritable(t *testing.T) {
 	t.Parallel()
 
-	ph, store, _ := newTestPermHandler(t, nil)
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New("test-drive").String() + ":" + testRemoteRootItemID: {{
+				Roles: []string{"write"},
+			}},
+		},
+	}
+	ph, store, _ := newTestPermHandler(t, checker)
+	ph.rootItemID = testRemoteRootItemID
+	scopeKey := SKPermRemoteWrite("")
+	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:          scopeKey,
+		IssueType:    IssueRemoteWriteDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Now(),
+	}))
 
-	scopeKey := SKPermLocalRead("blocked")
-	seedLocalPermissionDeniedIssue(t, store, scopeKey)
-
-	observed := map[string]bool{"blocked/child.txt": true}
-	decisions := ph.clearScannerResolvedPermissions(t.Context(), observed)
-
+	decisions := ph.recheckPermissions(t.Context(), &Baseline{})
 	require.Len(t, decisions, 1)
 	assert.Equal(t, permissionRecheckReleaseScope, decisions[0].Kind)
 	assert.Equal(t, scopeKey, decisions[0].ScopeKey)
 }
 
-func TestPermHandler_ClearScannerResolved_ReleasesScopedIssueInOneShotMode(t *testing.T) {
+func TestPermHandler_RecheckPermissions_KeepsRemoteWriteScopeWhenInconclusive(t *testing.T) {
 	t.Parallel()
 
-	ph, store, _ := newTestPermHandler(t, nil)
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New("test-drive").String() + ":" + testRemoteRootItemID: {},
+		},
+	}
+	ph, store, _ := newTestPermHandler(t, checker)
+	ph.rootItemID = testRemoteRootItemID
+	scopeKey := SKPermRemoteWrite("")
+	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:          scopeKey,
+		IssueType:    IssueRemoteWriteDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Now(),
+	}))
 
-	scopeKey := SKPermLocalRead("blocked")
-	seedLocalPermissionDeniedIssue(t, store, scopeKey)
-
-	observed := map[string]bool{"blocked/child.txt": true}
-	decisions := ph.clearScannerResolvedPermissions(t.Context(), observed)
-
+	decisions := ph.recheckPermissions(t.Context(), &Baseline{})
 	require.Len(t, decisions, 1)
-	assert.Equal(t, permissionRecheckReleaseScope, decisions[0].Kind)
-	assert.Equal(t, scopeKey, decisions[0].ScopeKey, "scoped permission recovery should release the scope in one-shot mode too")
+	assert.Equal(t, permissionRecheckKeepScope, decisions[0].Kind)
+	assert.Equal(t, scopeKey, decisions[0].ScopeKey)
 }

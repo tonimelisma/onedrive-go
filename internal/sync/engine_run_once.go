@@ -696,6 +696,12 @@ func (flow *engineFlow) buildDryRunCurrentActionPlan(
 	if commitErr != nil {
 		return nil, fmt.Errorf("sync: committing dry-run remote snapshot to scratch store: %w", commitErr)
 	}
+	flow.reconcileObservationFindingsBatch(
+		ctx,
+		nil,
+		fetchResult.findings,
+		"failed to reconcile remote observation findings during dry-run planning",
+	)
 
 	observedAt := flow.engine.nowFunc().UnixNano()
 	localRows := buildLocalStateRows(localResult, observedAt)
@@ -754,6 +760,14 @@ func (flow *engineFlow) observeRemoteChanges(
 		projectedRemote.observed,
 	); err != nil {
 		return nil, nil, err
+	}
+	if !dryRun {
+		flow.reconcileObservationFindingsBatch(
+			ctx,
+			nil,
+			fetchResult.findings,
+			"failed to reconcile remote observation findings",
+		)
 	}
 
 	return projectedRemote.emitted, fetchResult.pending, nil

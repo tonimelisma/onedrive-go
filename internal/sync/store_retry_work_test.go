@@ -329,6 +329,12 @@ func TestPruneBlockScopesWithoutBlockedWork(t *testing.T) {
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(260, 0),
 	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:          SKPermRemoteRead("Shared/Docs"),
+		IssueType:    IssueRemoteReadDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Unix(300, 0),
+	}))
 
 	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
 		Path:         "blocked.txt",
@@ -345,8 +351,8 @@ func TestPruneBlockScopesWithoutBlockedWork(t *testing.T) {
 
 	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-	assert.Equal(t, SKService(), blocks[0].Key)
+	require.Len(t, blocks, 2)
+	assert.ElementsMatch(t, []ScopeKey{SKService(), SKPermRemoteRead("Shared/Docs")}, []ScopeKey{blocks[0].Key, blocks[1].Key})
 }
 
 // Validates: R-2.10.33

@@ -69,11 +69,11 @@ func (m *SyncStore) ReconcileObservationFindings(
 	if err != nil {
 		return err
 	}
-	err = clearResolvedObservationIssuesTx(ctx, tx, batch.Issues)
+	err = clearResolvedObservationIssuesTx(ctx, tx, batch)
 	if err != nil {
 		return err
 	}
-	err = reconcileObservationReadScopesTx(ctx, tx, batch.ReadScopes, nowNano)
+	err = reconcileObservationReadScopesTx(ctx, tx, batch, nowNano)
 	if err != nil {
 		return err
 	}
@@ -243,14 +243,14 @@ func (m *SyncStore) upsertObservationIssuesTx(
 func clearResolvedObservationIssuesTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	issues []ObservationIssue,
+	batch ObservationFindingsBatch,
 ) error {
 	currentByType := make(map[string][]string)
-	for i := range issues {
-		currentByType[issues[i].IssueType] = append(currentByType[issues[i].IssueType], issues[i].Path)
+	for i := range batch.Issues {
+		currentByType[batch.Issues[i].IssueType] = append(currentByType[batch.Issues[i].IssueType], batch.Issues[i].Path)
 	}
 
-	for _, issueType := range observationOwnedIssueTypes() {
+	for _, issueType := range batch.ManagedIssueTypes {
 		paths := currentByType[issueType]
 		if issueType == "" {
 			continue
@@ -284,27 +284,24 @@ func clearResolvedObservationIssuesTx(
 	return nil
 }
 
-func observationOwnedIssueTypes() []string {
-	return []string{
-		IssueInvalidFilename,
-		IssuePathTooLong,
-		IssueFileTooLarge,
-		IssueCaseCollision,
-		IssueLocalReadDenied,
-		IssueHashPanic,
-	}
-}
-
 func reconcileObservationReadScopesTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	readScopes []ScopeKey,
+	batch ObservationFindingsBatch,
 	nowNano int64,
 ) error {
+	managedKinds := make(map[ScopeKeyKind]struct{}, len(batch.ManagedReadScopeKinds))
+	for i := range batch.ManagedReadScopeKinds {
+		managedKinds[batch.ManagedReadScopeKinds[i]] = struct{}{}
+	}
+	if len(managedKinds) == 0 {
+		return nil
+	}
+
 	desired := make(map[ScopeKey]struct{})
-	for i := range readScopes {
-		key := readScopes[i]
-		if key.IsPermLocalRead() || key.IsPermRemoteRead() {
+	for i := range batch.ReadScopes {
+		key := batch.ReadScopes[i]
+		if _, ok := managedKinds[key.Kind]; ok {
 			desired[key] = struct{}{}
 		}
 	}
@@ -320,7 +317,7 @@ func reconcileObservationReadScopesTx(
 		if block == nil {
 			continue
 		}
-		if !block.Key.IsPermLocalRead() && !block.Key.IsPermRemoteRead() {
+		if _, ok := managedKinds[block.Key.Kind]; !ok {
 			continue
 		}
 		current[block.Key] = struct{}{}

@@ -20,8 +20,19 @@ type pendingPrimaryCursorCommit struct {
 }
 
 type remoteFetchResult struct {
-	events  []ChangeEvent
-	pending *pendingPrimaryCursorCommit
+	events   []ChangeEvent
+	pending  *pendingPrimaryCursorCommit
+	findings ObservationFindingsBatch
+}
+
+func (r *remoteFetchResult) hasObservationFindings() bool {
+	if r == nil {
+		return false
+	}
+	return len(r.findings.Issues) > 0 ||
+		len(r.findings.ReadScopes) > 0 ||
+		len(r.findings.ManagedIssueTypes) > 0 ||
+		len(r.findings.ManagedReadScopeKinds) > 0
 }
 
 type primaryRootObservationKind string
@@ -78,16 +89,28 @@ func (flow *engineFlow) executeDriveRootObservation(
 ) (remoteFetchResult, error) {
 	if fullReconcile {
 		events, token, err := flow.observeRemoteFull(ctx, bl)
+		if err != nil && isObservationRemoteReadDenied(err) {
+			return remoteFetchResult{
+				findings: rootRemoteReadDeniedObservationBatch(flow.engine.driveID, err),
+			}, nil
+		}
 		return remoteFetchResult{
-			events:  events,
-			pending: primaryCursorCommit(token, flow.engine, true, len(events)),
+			events:   events,
+			pending:  primaryCursorCommit(token, flow.engine, true, len(events)),
+			findings: remoteObservationManagedBatch(),
 		}, err
 	}
 
 	events, token, err := flow.observeRemote(ctx, bl)
+	if err != nil && isObservationRemoteReadDenied(err) {
+		return remoteFetchResult{
+			findings: rootRemoteReadDeniedObservationBatch(flow.engine.driveID, err),
+		}, nil
+	}
 	return remoteFetchResult{
-		events:  events,
-		pending: primaryCursorCommit(token, flow.engine, false, len(events)),
+		events:   events,
+		pending:  primaryCursorCommit(token, flow.engine, false, len(events)),
+		findings: remoteObservationManagedBatch(),
 	}, err
 }
 
@@ -97,9 +120,15 @@ func (flow *engineFlow) executeSharedRootObservation(
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
 	events, token, err := flow.observeSharedRootRemote(ctx, bl, fullReconcile)
+	if err != nil && isObservationRemoteReadDenied(err) {
+		return remoteFetchResult{
+			findings: rootRemoteReadDeniedObservationBatch(flow.engine.driveID, err),
+		}, nil
+	}
 	return remoteFetchResult{
-		events:  events,
-		pending: primaryCursorCommit(token, flow.engine, fullReconcile, len(events)),
+		events:   events,
+		pending:  primaryCursorCommit(token, flow.engine, fullReconcile, len(events)),
+		findings: remoteObservationManagedBatch(),
 	}, err
 }
 

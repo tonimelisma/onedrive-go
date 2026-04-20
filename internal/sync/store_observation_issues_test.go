@@ -130,7 +130,9 @@ func TestSyncStore_ReconcileObservationFindings_ReplacesManagedIssueSet(t *testi
 				ScopeKey:   SKPermLocalRead("Private"),
 			},
 		},
-		ReadScopes: []ScopeKey{SKPermLocalRead("Private")},
+		ReadScopes:            []ScopeKey{SKPermLocalRead("Private")},
+		ManagedIssueTypes:     []string{IssueInvalidFilename, IssueLocalReadDenied},
+		ManagedReadScopeKinds: []ScopeKeyKind{ScopePermDirRead},
 	}, now))
 
 	rows, err := store.ListObservationIssues(ctx)
@@ -159,7 +161,9 @@ func TestSyncStore_ReconcileObservationFindings_ReleasesMissingReadScopesWithout
 		BlockedAt:    now.Add(-time.Minute),
 	}))
 
-	require.NoError(t, store.ReconcileObservationFindings(ctx, ObservationFindingsBatch{}, now))
+	require.NoError(t, store.ReconcileObservationFindings(ctx, ObservationFindingsBatch{
+		ManagedReadScopeKinds: []ScopeKeyKind{ScopePermDirRead},
+	}, now))
 
 	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -182,6 +186,7 @@ func TestSyncStore_ReconcileObservationFindings_FileReadDeniedDoesNotCreateReadS
 			IssueType:  IssueLocalReadDenied,
 			Error:      "file not accessible",
 		}},
+		ManagedIssueTypes: []string{IssueLocalReadDenied},
 	}, now))
 
 	blocks, err := store.ListBlockScopes(ctx)
@@ -192,4 +197,51 @@ func TestSyncStore_ReconcileObservationFindings_FileReadDeniedDoesNotCreateReadS
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.True(t, rows[0].ScopeKey.IsZero())
+}
+
+// Validates: R-2.5.2, R-2.10.4
+func TestSyncStore_ReconcileObservationFindings_OnlyClearsManagedFamilies(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	now := time.Date(2026, 4, 19, 10, 15, 0, 0, time.UTC)
+
+	seedObservationIssueForTest(t, store, "Private", IssueLocalReadDenied, SKPermLocalRead("Private"))
+	seedObservationIssueForTest(t, store, "/", IssueRemoteReadDenied, SKPermRemoteRead(""))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:          SKPermLocalRead("Private"),
+		IssueType:    IssueLocalReadDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    now.Add(-time.Minute),
+	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:          SKPermRemoteRead(""),
+		IssueType:    IssueRemoteReadDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    now.Add(-time.Minute),
+	}))
+
+	require.NoError(t, store.ReconcileObservationFindings(ctx, ObservationFindingsBatch{
+		Issues: []ObservationIssue{{
+			Path:       "/",
+			DriveID:    driveid.New(testDriveID),
+			ActionType: ActionDownload,
+			IssueType:  IssueRemoteReadDenied,
+			Error:      "remote root unreadable",
+			ScopeKey:   SKPermRemoteRead(""),
+		}},
+		ReadScopes:            []ScopeKey{SKPermRemoteRead("")},
+		ManagedIssueTypes:     []string{IssueRemoteReadDenied},
+		ManagedReadScopeKinds: []ScopeKeyKind{ScopePermRemoteRead},
+	}, now))
+
+	rows, err := store.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.ElementsMatch(t, []string{"/", "Private"}, []string{rows[0].Path, rows[1].Path})
+
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 2)
 }
