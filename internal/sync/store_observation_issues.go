@@ -239,88 +239,127 @@ func reconcileKindObservationReadScopesTx(
 		}
 	}
 
+	return reconcileObservationReadScopeSetTx(
+		ctx,
+		tx,
+		observationManagedReadScopesByKind(batch.ManagedReadScopeKinds),
+		desired,
+		nowNano,
+	)
+}
+
+func observationManagedReadScopesByKind(kinds []ScopeKeyKind) map[ScopeKey]struct{} {
+	if len(kinds) == 0 {
+		return nil
+	}
+
+	managedKinds := make(map[ScopeKeyKind]struct{}, len(kinds))
+	for i := range kinds {
+		managedKinds[kinds[i]] = struct{}{}
+	}
+
+	return managedObservationReadScopesForKinds(managedKinds)
+}
+
+func managedObservationReadScopesForKinds(managedKinds map[ScopeKeyKind]struct{}) map[ScopeKey]struct{} {
+	if len(managedKinds) == 0 {
+		return nil
+	}
+
+	managed := make(map[ScopeKey]struct{})
+	for kind := range managedKinds {
+		switch kind {
+		case ScopePermDirRead:
+			managed[SKPermLocalRead("")] = struct{}{}
+		case ScopePermRemoteRead:
+			managed[SKPermRemoteRead("")] = struct{}{}
+		case ScopeThrottleTarget,
+			ScopeService,
+			ScopeQuotaOwn,
+			ScopePermDirWrite,
+			ScopePermRemoteWrite,
+			ScopeDiskLocal:
+			continue
+		}
+	}
+
+	return managed
+}
+
+func reconcileObservationReadScopeSetTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	managed map[ScopeKey]struct{},
+	desired map[ScopeKey]struct{},
+	nowNano int64,
+) error {
+	if len(managed) == 0 {
+		return nil
+	}
+
 	blocks, err := queryBlockScopesDB(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("sync: listing observation-owned read scopes: %w", err)
 	}
 
-	current, err := deleteMissingManagedObservationReadScopesTx(ctx, tx, blocks, managedKinds, desired, nowNano)
-	if err != nil {
-		return err
-	}
-
-	return insertMissingObservationReadScopesTx(ctx, tx, desired, current, nowNano)
-}
-
-func deleteMissingManagedObservationReadScopesTx(
-	ctx context.Context,
-	tx sqlTxRunner,
-	blocks []*BlockScope,
-	managedKinds map[ScopeKeyKind]struct{},
-	desired map[ScopeKey]struct{},
-	nowNano int64,
-) (map[ScopeKey]struct{}, error) {
-	current := make(map[ScopeKey]struct{})
+	current := make(map[ScopeKey]struct{}, len(managed))
 	for i := range blocks {
 		block := blocks[i]
 		if block == nil {
 			continue
 		}
-		if _, ok := managedKinds[block.Key.Kind]; !ok {
+		if !managedObservationReadScopeContains(managed, block.Key) {
 			continue
 		}
 		current[block.Key] = struct{}{}
 		if _, ok := desired[block.Key]; ok {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM block_scopes WHERE scope_key = ?`,
-			block.Key.String(),
-		); err != nil {
-			return nil, fmt.Errorf("sync: deleting observation-owned read scope %s: %w", block.Key.String(), err)
+		if err := deleteBlockScopeWithRunner(ctx, tx, block.Key); err != nil {
+			return fmt.Errorf("sync: deleting observation-owned read scope %s: %w", block.Key.String(), err)
 		}
 		if err := markRetryWorkScopeReadyTx(ctx, tx, block.Key.String(), nowNano); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	return current, nil
-}
-
-func insertMissingObservationReadScopesTx(
-	ctx context.Context,
-	tx sqlTxRunner,
-	desired map[ScopeKey]struct{},
-	current map[ScopeKey]struct{},
-	nowNano int64,
-) error {
 	for key := range desired {
 		if _, ok := current[key]; ok {
 			continue
 		}
-		descriptor := DescribeScopeKey(key)
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO block_scopes
-				(scope_key, scope_family, scope_access, subject_kind, subject_value,
-				 condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			key.String(),
-			descriptor.Family,
-			descriptor.Access,
-			descriptor.SubjectKind,
-			descriptor.SubjectValue,
-			key.ConditionType(),
-			ScopeTimingNone,
-			nowNano,
-			int64(0),
-			int64(0),
-			0,
-		); err != nil {
+		if err := upsertBlockScopeWithRunner(ctx, tx, observationReadScopeBlock(key, nowNano)); err != nil {
 			return fmt.Errorf("sync: inserting observation-owned read scope %s: %w", key.String(), err)
 		}
 	}
 
 	return nil
+}
+
+func managedObservationReadScopeContains(managed map[ScopeKey]struct{}, key ScopeKey) bool {
+	if _, ok := managed[key]; ok {
+		return true
+	}
+	if key.IsZero() {
+		return false
+	}
+
+	switch key.Kind {
+	case ScopePermDirRead:
+		_, ok := managed[SKPermLocalRead("")]
+		return ok
+	case ScopePermRemoteRead:
+		_, ok := managed[SKPermRemoteRead("")]
+		return ok
+	case ScopeThrottleTarget,
+		ScopeService,
+		ScopeQuotaOwn,
+		ScopePermDirWrite,
+		ScopePermRemoteWrite,
+		ScopeDiskLocal:
+		return false
+	default:
+		return false
+	}
 }
 
 func normalizedObservationManagedPaths(paths []string) []string {
@@ -426,62 +465,7 @@ func reconcileExactObservationReadScopesTx(
 	desired map[ScopeKey]struct{},
 	nowNano int64,
 ) error {
-	blocks, err := queryBlockScopesDB(ctx, tx)
-	if err != nil {
-		return fmt.Errorf("sync: listing observation-owned exact read scopes: %w", err)
-	}
-
-	current := make(map[ScopeKey]struct{}, len(managed))
-	for i := range blocks {
-		block := blocks[i]
-		if block == nil {
-			continue
-		}
-		if _, ok := managed[block.Key]; !ok {
-			continue
-		}
-		current[block.Key] = struct{}{}
-		if _, ok := desired[block.Key]; ok {
-			continue
-		}
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM block_scopes WHERE scope_key = ?`,
-			block.Key.String(),
-		); err != nil {
-			return fmt.Errorf("sync: deleting observation-owned read scope %s: %w", block.Key.String(), err)
-		}
-		if err := markRetryWorkScopeReadyTx(ctx, tx, block.Key.String(), nowNano); err != nil {
-			return err
-		}
-	}
-
-	for key := range desired {
-		if _, ok := current[key]; ok {
-			continue
-		}
-		descriptor := DescribeScopeKey(key)
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO block_scopes
-				(scope_key, scope_family, scope_access, subject_kind, subject_value,
-				 condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			key.String(),
-			descriptor.Family,
-			descriptor.Access,
-			descriptor.SubjectKind,
-			descriptor.SubjectValue,
-			key.ConditionType(),
-			ScopeTimingNone,
-			nowNano,
-			int64(0),
-			int64(0),
-			0,
-		); err != nil {
-			return fmt.Errorf("sync: inserting observation-owned read scope %s: %w", key.String(), err)
-		}
-	}
-
-	return nil
+	return reconcileObservationReadScopeSetTx(ctx, tx, managed, desired, nowNano)
 }
 
 func scanObservationIssueRow(
