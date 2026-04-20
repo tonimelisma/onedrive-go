@@ -135,7 +135,7 @@ func TestProcessCommittedSharedRootWatchBatch_ReconcilesRemoteReadDeniedFindings
 	require.NoError(t, err)
 
 	finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, &remoteFetchResult{
-		findings: rootRemoteReadDeniedObservationBatch(eng.driveID, graph.ErrForbidden),
+		findings: rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden),
 	})
 	require.True(t, committed)
 	assert.Empty(t, finalEvents)
@@ -162,7 +162,7 @@ func TestProcessCommittedPrimaryWatchBatch_ClearsRemoteReadDeniedFindingsOnHealt
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	batch := rootRemoteReadDeniedObservationBatch(eng.driveID, graph.ErrForbidden)
+	batch := rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden)
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &batch, eng.nowFunc()))
 
 	bl, err := eng.baseline.Load(ctx)

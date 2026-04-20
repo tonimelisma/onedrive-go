@@ -124,9 +124,10 @@ Ignore invariants:
 
 Observation may emit `SkippedItem`s for invalid or unsupported local content.
 The engine reconciles those findings through one `ObservationFindingsBatch`
-boundary. Whole-drive scans replace the managed family set for those findings;
-single-path observation uses the same batch shape but manages only the exact
-observed path and exact read-scope key it proved.
+boundary, and `observation_findings.go` is the single constructor path for
+those batches. Whole-drive scans replace the managed family set for those
+findings; single-path observation uses the same batch shape but manages only
+the exact observed path and exact read-scope key it proved.
 
 Observation-owned read-denied subtree boundaries stay boundary-scoped. The
 durable batch records one boundary issue plus one read scope; descendants are

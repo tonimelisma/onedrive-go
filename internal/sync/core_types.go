@@ -365,9 +365,9 @@ const (
 	PathTruthSourceReadScope        PathTruthSource = "read_scope"
 )
 
-// PathTruthSideStatus is the planner-facing status for one side of current
-// truth. The zero value is intentionally healthy so PathView literals outside
-// the SQLite planner path remain valid without manual initialization.
+// PathTruthSideStatus is the raw current-truth availability status for one
+// side of a path. The zero value is intentionally healthy so callers can use
+// it as a derived read-side value without manual initialization.
 type PathTruthSideStatus struct {
 	Availability TruthAvailability
 	Source       PathTruthSource
@@ -379,9 +379,10 @@ func (s PathTruthSideStatus) IsAvailable() bool {
 	return s.Availability == "" || s.Availability == TruthAvailabilityAvailable
 }
 
-// PathTruthStatus carries the planner-facing truth status for both the local
-// and remote side of one path. It is attached after SQLite computes structural
-// diff so the planner can keep "missing" and "unavailable" distinct.
+// PathTruthStatus carries the raw current-truth availability status for both
+// the local and remote side of one path. Planner attaches it after SQLite
+// computes structural diff so structural absence stays distinct from
+// unavailable truth, but the type itself is not planner-owned policy.
 type PathTruthStatus struct {
 	Local  PathTruthSideStatus
 	Remote PathTruthSideStatus
