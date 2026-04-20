@@ -696,7 +696,7 @@ func (flow *engineFlow) buildDryRunCurrentActionPlan(
 	if commitErr != nil {
 		return nil, fmt.Errorf("sync: committing dry-run remote snapshot to scratch store: %w", commitErr)
 	}
-	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, fetchResult.findings, flow.engine.nowFunc()); reconcileErr != nil {
+	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &fetchResult.findings, flow.engine.nowFunc()); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run remote observation findings in scratch store: %w", reconcileErr)
 	}
 
@@ -762,7 +762,7 @@ func (flow *engineFlow) observeRemoteChanges(
 		flow.reconcileObservationFindingsBatch(
 			ctx,
 			nil,
-			fetchResult.findings,
+			&fetchResult.findings,
 			"failed to reconcile remote observation findings",
 		)
 	}

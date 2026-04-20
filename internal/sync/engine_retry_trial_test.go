@@ -206,6 +206,90 @@ func TestRecordRetryTrialSkippedItem_PersistsObservationIssueThroughObservationB
 }
 
 // Validates: R-2.10.33
+func TestReconcileRetryTrialObservationResult_ClearsOnlyManagedPath(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	flow := testEngineFlow(t, eng)
+	ctx := t.Context()
+
+	writeLocalFile(t, syncRoot, "Private/file.txt", "content")
+	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
+		Path:       "Private/file.txt",
+		DriveID:    eng.driveID,
+		ActionType: ActionUpload,
+		IssueType:  IssueLocalReadDenied,
+		Error:      "file not accessible",
+	}))
+	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
+		Path:       "Other/file.txt",
+		DriveID:    eng.driveID,
+		ActionType: ActionUpload,
+		IssueType:  IssueLocalReadDenied,
+		Error:      "file not accessible",
+	}))
+
+	flow.reconcileRetryTrialObservationResult(ctx, nil, RetryWorkKey{
+		Path:       "Private/file.txt",
+		ActionType: ActionUpload,
+	}, eng.driveID, "Private/file.txt", &SinglePathObservation{
+		Event: &ChangeEvent{
+			Source:   SourceLocal,
+			Type:     ChangeModify,
+			Path:     "Private/file.txt",
+			ItemType: ItemTypeFile,
+		},
+	})
+
+	rows, err := eng.baseline.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "Other/file.txt", rows[0].Path)
+	assert.Equal(t, IssueLocalReadDenied, rows[0].IssueType)
+}
+
+// Validates: R-2.10.33
+func TestReconcileRetryTrialObservationResult_ReplacesManagedFileIssueWithBoundaryIssue(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	flow := testEngineFlow(t, eng)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
+		Path:       "Private/file.txt",
+		DriveID:    eng.driveID,
+		ActionType: ActionUpload,
+		IssueType:  IssueLocalReadDenied,
+		Error:      "file not accessible",
+	}))
+
+	flow.reconcileRetryTrialObservationResult(ctx, nil, RetryWorkKey{
+		Path:       "Private/file.txt",
+		ActionType: ActionUpload,
+	}, eng.driveID, "Private/file.txt", &SinglePathObservation{
+		Skipped: &SkippedItem{
+			Path:            "Private",
+			Reason:          IssueLocalReadDenied,
+			Detail:          "directory not accessible (check filesystem permissions)",
+			BlocksReadScope: true,
+		},
+	})
+
+	rows, err := eng.baseline.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "Private", rows[0].Path)
+	assert.Equal(t, IssueLocalReadDenied, rows[0].IssueType)
+	assert.Equal(t, SKPermLocalRead("Private"), rows[0].ScopeKey)
+
+	blocks, err := eng.baseline.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, SKPermLocalRead("Private"), blocks[0].Key)
+}
+
+// Validates: R-2.10.33
 func TestBuildRetryCandidateFromRetryWork_LeavesDistinctRemoteMoveUnresolved(t *testing.T) {
 	t.Parallel()
 

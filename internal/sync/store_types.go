@@ -23,12 +23,16 @@ type ObservationIssue struct {
 
 // ObservationFindingsBatch is one coherent observation-owned durable batch.
 // The batch replaces the current observation-owned issue set for its managed
-// issue families and read scopes.
+// issue families and read scopes. Full observation passes manage whole issue
+// families/scope kinds; single-path observation may instead manage exact paths
+// and exact read-scope keys without touching unrelated durable findings.
 type ObservationFindingsBatch struct {
 	Issues                []ObservationIssue
 	ReadScopes            []ScopeKey
 	ManagedIssueTypes     []string
 	ManagedReadScopeKinds []ScopeKeyKind
+	ManagedPaths          []string
+	ManagedReadScopes     []ScopeKey
 }
 
 // ObservationIssueRow represents a row from the observation_issues table.
