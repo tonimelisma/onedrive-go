@@ -72,7 +72,8 @@ observation and execution metadata.
 1. bootstrap durable state and startup checks
 2. refresh current remote and local snapshots once
 3. compute SQL structural diff and reconciliation once
-4. build the current actionable set in Go
+4. build the current actionable set in Go from structural reconciliation plus
+   explicit truth-availability overlays
 5. reconcile durable retry/blocker state to that actionable set
 6. commit any ready publication-only actions directly through the store
 7. execute remaining concrete work once

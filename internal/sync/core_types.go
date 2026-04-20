@@ -343,21 +343,32 @@ type LocalState struct {
 	Mtime    int64
 }
 
+// TruthAvailability records whether one side of current path truth is safe for
+// the planner to interpret structurally.
+type TruthAvailability string
+
+const (
+	TruthAvailabilityAvailable               TruthAvailability = "available"
+	TruthAvailabilityBlockedObservationIssue TruthAvailability = "blocked_observation_issue"
+	TruthAvailabilityBlockedLocalReadScope   TruthAvailability = "blocked_local_read_scope"
+	TruthAvailabilityBlockedRemoteReadScope  TruthAvailability = "blocked_remote_read_scope"
+)
+
 // PathView is a unified three-way view of a single path built from the
 // authoritative snapshots plus baseline. It is the in-memory planning view the
 // current actionable-set builder reasons over after SQLite computes structural
 // diff and reconciliation outcomes.
 type PathView struct {
-	Path                      string
-	Remote                    *RemoteState   // nil = absent from current remote snapshot
-	Local                     *LocalState    // nil = absent from current local snapshot
-	Baseline                  *BaselineEntry // nil = never synced
-	ObservationIssueType      string
-	ObservationIssueScopeKey  ScopeKey
-	LocalReadScope            ScopeKey
-	RemoteReadScope           ScopeKey
-	LocalAvailabilityBlocked  bool
-	RemoteAvailabilityBlocked bool
+	Path                    string
+	Remote                  *RemoteState   // nil = absent from current remote snapshot
+	Local                   *LocalState    // nil = absent from current local snapshot
+	Baseline                *BaselineEntry // nil = never synced
+	LocalTruthAvailability  TruthAvailability
+	RemoteTruthAvailability TruthAvailability
+	LocalTruthIssueType     string
+	RemoteTruthIssueType    string
+	LocalTruthScopeKey      ScopeKey
+	RemoteTruthScopeKey     ScopeKey
 }
 
 // ConflictRecord holds metadata about a detected conflict.

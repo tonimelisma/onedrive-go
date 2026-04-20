@@ -6,8 +6,6 @@ import (
 	"path"
 )
 
-const reconciliationKindNoop = "noop"
-
 // PlanCurrentState builds the current actionable set from SQLite-owned
 // comparison and reconciliation rows plus the current durable snapshots.
 // Unlike the legacy event-shaped planner, this path treats SQLite as the
@@ -34,9 +32,8 @@ func (p *Planner) PlanCurrentState(
 		slog.String("mode", mode.String()),
 	)
 
-	comparisons, reconciliations, blockFacts := normalizePlannerTruthBlocks(
+	blockFacts := normalizePlannerTruthAvailability(
 		comparisons,
-		reconciliations,
 		observationIssues,
 		blockScopes,
 	)
@@ -115,7 +112,7 @@ func buildSQLitePathViews(
 	localRows []LocalStateRow,
 	remoteRows []RemoteStateRow,
 	baseline *Baseline,
-	blockFacts map[string]plannerTruthBlockFacts,
+	availabilityByPath map[string]plannerTruthAvailability,
 ) (map[string]*PathView, map[string]*SQLiteComparisonRow, error) {
 	localByPath := make(map[string]LocalStateRow, len(localRows))
 	for i := range localRows {
@@ -134,7 +131,11 @@ func buildSQLitePathViews(
 		row := comparisons[i]
 		comparisonByPath[row.Path] = &comparisons[i]
 
-		view := &PathView{Path: row.Path}
+		view := &PathView{
+			Path:                    row.Path,
+			LocalTruthAvailability:  TruthAvailabilityAvailable,
+			RemoteTruthAvailability: TruthAvailabilityAvailable,
+		}
 		if row.BaselinePresent {
 			entry, ok := baseline.GetByPath(row.Path)
 			if !ok {
@@ -156,140 +157,19 @@ func buildSQLitePathViews(
 			}
 			view.Remote = remoteStateFromSnapshotRow(&remoteRow)
 		}
-		if facts, ok := blockFacts[row.Path]; ok {
-			view.ObservationIssueType = facts.observationIssueType
-			view.ObservationIssueScopeKey = facts.observationIssueScopeKey
-			view.LocalReadScope = facts.localReadScope
-			view.RemoteReadScope = facts.remoteReadScope
-			view.LocalAvailabilityBlocked = facts.localBlocked
-			view.RemoteAvailabilityBlocked = facts.remoteBlocked
+		if availability, ok := availabilityByPath[row.Path]; ok {
+			view.LocalTruthAvailability = availability.LocalTruthAvailability
+			view.RemoteTruthAvailability = availability.RemoteTruthAvailability
+			view.LocalTruthIssueType = availability.LocalTruthIssueType
+			view.RemoteTruthIssueType = availability.RemoteTruthIssueType
+			view.LocalTruthScopeKey = availability.LocalTruthScopeKey
+			view.RemoteTruthScopeKey = availability.RemoteTruthScopeKey
 		}
 
 		views[row.Path] = view
 	}
 
 	return views, comparisonByPath, nil
-}
-
-type plannerTruthBlockFacts struct {
-	observationIssueType     string
-	observationIssueScopeKey ScopeKey
-	localReadScope           ScopeKey
-	remoteReadScope          ScopeKey
-	localBlocked             bool
-	remoteBlocked            bool
-}
-
-func normalizePlannerTruthBlocks(
-	comparisons []SQLiteComparisonRow,
-	reconciliations []SQLiteReconciliationRow,
-	observationIssues []ObservationIssueRow,
-	blockScopes []*BlockScope,
-) ([]SQLiteComparisonRow, []SQLiteReconciliationRow, map[string]plannerTruthBlockFacts) {
-	if len(comparisons) == 0 || len(reconciliations) == 0 {
-		return comparisons, reconciliations, nil
-	}
-
-	observationByPath := make(map[string]ObservationIssueRow, len(observationIssues))
-	for i := range observationIssues {
-		if !observationIssueBlocksTruth(observationIssues[i].IssueType) {
-			continue
-		}
-		observationByPath[observationIssues[i].Path] = observationIssues[i]
-	}
-
-	comparisonCopy := append([]SQLiteComparisonRow(nil), comparisons...)
-	reconciliationCopy := append([]SQLiteReconciliationRow(nil), reconciliations...)
-	blockFacts := make(map[string]plannerTruthBlockFacts, len(comparisonCopy))
-
-	for i := range comparisonCopy {
-		path := comparisonCopy[i].Path
-		observationIssue, hasObservationIssue := observationByPath[path]
-		localScope := mostSpecificPlannerReadScope(path, blockScopes, func(key ScopeKey) bool {
-			return key.IsPermLocalRead()
-		})
-		remoteScope := mostSpecificPlannerReadScope(path, blockScopes, func(key ScopeKey) bool {
-			return key.IsPermRemoteRead()
-		})
-
-		localBlocked := localScope.IsPermLocalRead() || (hasObservationIssue && observationIssueBlocksLocalTruth(observationIssue.IssueType))
-		remoteBlocked := remoteScope.IsPermRemoteRead() || (hasObservationIssue && observationIssueBlocksRemoteTruth(observationIssue.IssueType))
-		if !localBlocked && !remoteBlocked {
-			continue
-		}
-
-		blockFacts[path] = plannerTruthBlockFacts{
-			observationIssueType:     observationIssue.IssueType,
-			observationIssueScopeKey: observationIssue.ScopeKey,
-			localReadScope:           localScope,
-			remoteReadScope:          remoteScope,
-			localBlocked:             localBlocked,
-			remoteBlocked:            remoteBlocked,
-		}
-
-		reconciliationCopy[i].ReconciliationKind = reconciliationKindNoop
-	}
-
-	return comparisonCopy, reconciliationCopy, blockFacts
-}
-
-func observationIssueBlocksTruth(issueType string) bool {
-	return observationIssueBlocksLocalTruth(issueType) || observationIssueBlocksRemoteTruth(issueType)
-}
-
-func observationIssueBlocksLocalTruth(issueType string) bool {
-	switch issueType {
-	case IssueInvalidFilename,
-		IssuePathTooLong,
-		IssueFileTooLarge,
-		IssueCaseCollision,
-		IssueHashPanic,
-		IssueLocalReadDenied:
-		return true
-	default:
-		return false
-	}
-}
-
-func observationIssueBlocksRemoteTruth(issueType string) bool {
-	return issueType == IssueRemoteReadDenied
-}
-
-func mostSpecificPlannerReadScope(
-	path string,
-	blockScopes []*BlockScope,
-	matches func(ScopeKey) bool,
-) ScopeKey {
-	best := ScopeKey{}
-	bestLen := -1
-
-	for i := range blockScopes {
-		block := blockScopes[i]
-		if block == nil || !matches(block.Key) {
-			continue
-		}
-		scopePath := plannerScopePath(block.Key)
-		if !scopePathMatches(path, scopePath) {
-			continue
-		}
-		if len(scopePath) > bestLen {
-			best = block.Key
-			bestLen = len(scopePath)
-		}
-	}
-
-	return best
-}
-
-func plannerScopePath(key ScopeKey) string {
-	switch {
-	case key.IsPermDir():
-		return key.DirPath()
-	case key.IsPermRemote():
-		return key.RemotePath()
-	default:
-		return ""
-	}
 }
 
 //nolint:gocyclo // Reconciliation kind dispatch is the planner's explicit decision table.
@@ -305,6 +185,9 @@ func buildActionsForReconciliation(
 	view := views[rec.Path]
 	if view == nil {
 		return nil, fmt.Errorf("sync: missing path view for reconciliation path %q", rec.Path)
+	}
+	if plannerSuppressesUnavailableTruth(view) {
+		return nil, nil
 	}
 
 	switch rec.ReconciliationKind {
@@ -341,29 +224,58 @@ func buildActionsForReconciliation(
 			makeConflictResolvedAction(ActionDownload, view, ConflictCreateCreate),
 		}, nil
 	case strLocalMove:
-		if cmp.ComparisonKind != "local_move_source" {
-			return nil, nil
-		}
-		if rec.LocalMoveTarget == "" {
-			return nil, fmt.Errorf("sync: local_move source %q missing target path", rec.Path)
-		}
-		action := MakeAction(ActionRemoteMove, view)
-		action.OldPath = rec.Path
-		action.Path = rec.LocalMoveTarget
-		return []Action{action}, nil
+		return buildLocalMoveReconciliationActions(rec, cmp, view)
 	case strRemoteMove:
-		if cmp.ComparisonKind != "remote_move_dest" {
-			return nil, nil
-		}
-		if rec.RemoteMoveSource == "" {
-			return nil, fmt.Errorf("sync: remote_move destination %q missing source path", rec.Path)
-		}
-		action := MakeAction(ActionLocalMove, view)
-		action.OldPath = rec.RemoteMoveSource
-		return []Action{action}, nil
+		return buildRemoteMoveReconciliationActions(rec, cmp, view)
 	default:
 		return nil, fmt.Errorf("sync: unsupported reconciliation kind %q for %s", rec.ReconciliationKind, rec.Path)
 	}
+}
+
+func plannerSuppressesUnavailableTruth(view *PathView) bool {
+	if view == nil {
+		return false
+	}
+
+	return view.LocalTruthAvailability != TruthAvailabilityAvailable ||
+		view.RemoteTruthAvailability != TruthAvailabilityAvailable
+}
+
+func buildLocalMoveReconciliationActions(
+	rec *SQLiteReconciliationRow,
+	cmp *SQLiteComparisonRow,
+	view *PathView,
+) ([]Action, error) {
+	if cmp.ComparisonKind != "local_move_source" {
+		return nil, nil
+	}
+	if rec.LocalMoveTarget == "" {
+		return nil, fmt.Errorf("sync: local_move source %q missing target path", rec.Path)
+	}
+
+	action := MakeAction(ActionRemoteMove, view)
+	action.OldPath = rec.Path
+	action.Path = rec.LocalMoveTarget
+
+	return []Action{action}, nil
+}
+
+func buildRemoteMoveReconciliationActions(
+	rec *SQLiteReconciliationRow,
+	cmp *SQLiteComparisonRow,
+	view *PathView,
+) ([]Action, error) {
+	if cmp.ComparisonKind != "remote_move_dest" {
+		return nil, nil
+	}
+	if rec.RemoteMoveSource == "" {
+		return nil, fmt.Errorf("sync: remote_move destination %q missing source path", rec.Path)
+	}
+
+	action := MakeAction(ActionLocalMove, view)
+	action.OldPath = rec.RemoteMoveSource
+
+	return []Action{action}, nil
 }
 
 func deferredCountsForCurrentActions(actions []Action, mode Mode) DeferredCounts {
