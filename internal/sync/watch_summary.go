@@ -50,7 +50,7 @@ func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (ConditionSummary
 			sort.Strings(paths)
 			remoteGroups = append(remoteGroups, watchRemoteBlockedGroup{
 				ScopeKey:     block.Key,
-				BoundaryPath: visibleRemoteBoundaryPath(block.Key.RemotePath()),
+				BoundaryPath: visibleRemoteBoundaryPath(block.ScopePath()),
 				BlockedPaths: paths,
 			})
 		}

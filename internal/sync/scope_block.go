@@ -9,11 +9,36 @@ type BlockScope struct {
 	Key          ScopeKey          // typed scope key
 	IssueType    string            // "service_outage", "quota_exceeded", "rate_limited"
 	TimingSource ScopeTimingSource // none, backoff, server_retry_after
+	Family       ScopeFamily
+	Access       ScopeAccess
+	SubjectKind  ScopeSubjectKind
+	SubjectValue string
 
 	BlockedAt     time.Time     // when the block was created
 	TrialInterval time.Duration // current interval between trial actions (grows with backoff)
 	NextTrialAt   time.Time     // when to dispatch the next trial
 	TrialCount    int           // consecutive failed trials (for backoff)
+}
+
+func (b *BlockScope) Descriptor() ScopeDescriptor {
+	if b == nil {
+		return ScopeDescriptor{}
+	}
+
+	if b.Family != ScopeFamilyUnknown {
+		descriptor := DescribeScopeKey(b.Key)
+		descriptor.Family = b.Family
+		descriptor.Access = b.Access
+		descriptor.SubjectKind = b.SubjectKind
+		descriptor.SubjectValue = b.SubjectValue
+		return descriptor
+	}
+
+	return DescribeScopeKey(b.Key)
+}
+
+func (b *BlockScope) ScopePath() string {
+	return b.Descriptor().ScopePath()
 }
 
 // ScopeUpdateResult describes the outcome of UpdateScope: whether a new scope

@@ -45,12 +45,6 @@ const (
 		WHERE blocked = 1 AND scope_key = ?
 		ORDER BY RANDOM()
 		LIMIT 1`
-	sqlPruneBlockScopesWithoutBlockedRetries = `DELETE FROM block_scopes
-		WHERE NOT EXISTS (
-			SELECT 1 FROM retry_work
-			WHERE retry_work.blocked = 1
-				AND retry_work.scope_key = block_scopes.scope_key
-		)`
 	sqlEarliestRetryWorkAt = `SELECT MIN(next_retry_at) FROM retry_work
 		WHERE blocked = 0
 			AND next_retry_at > ?`
@@ -392,14 +386,6 @@ func (m *SyncStore) PruneRetryWorkToCurrentActions(
 		if err := m.DeleteRetryWorkByWork(ctx, key); err != nil {
 			return err
 		}
-	}
-
-	return nil
-}
-
-func (m *SyncStore) PruneBlockScopesWithoutBlockedRetries(ctx context.Context) error {
-	if _, err := m.db.ExecContext(ctx, sqlPruneBlockScopesWithoutBlockedRetries); err != nil {
-		return fmt.Errorf("sync: pruning block scopes without blocked retries: %w", err)
 	}
 
 	return nil
