@@ -11,57 +11,68 @@ import (
 
 const permissionMaintenanceInterval = 60 * time.Second
 
+type permissionMaintenanceReason int
+
+const (
+	permissionMaintenanceStartup permissionMaintenanceReason = iota + 1
+	permissionMaintenancePeriodic
+	permissionMaintenanceLocalObservation
+)
+
+type permissionMaintenanceRequest struct {
+	Reason       permissionMaintenanceReason
+	ChangedPaths map[string]bool
+}
+
 type permissionMaintenancePlan struct {
 	Due       bool
 	CheckedAt time.Time
 	Decisions []PermissionRecheckDecision
 }
 
-// runStartupPermissionMaintenance is the engine-owned application entrypoint
-// for persisted permission scopes during startup. Permission code owns deciding
-// what to recheck; the scope controller still owns all durable mutations.
-func (controller *scopeController) runStartupPermissionMaintenance(
+// runPermissionMaintenance is the engine-facing entrypoint for permission-
+// specific maintenance. Permission code owns deciding what to recheck and
+// when remote-write blocked retry rows are stale; the scope controller still
+// owns all durable mutations.
+func (controller *scopeController) runPermissionMaintenance(
 	ctx context.Context,
 	watch *watchRuntime,
-	ph *PermissionHandler,
 	bl *Baseline,
+	request permissionMaintenanceRequest,
 ) {
-	if ph == nil {
-		return
-	}
+	ph := controller.flow.engine.permHandler
 
-	controller.clearResolvedStartupRemoteWriteBlockedRetryWork(ctx, bl)
-	controller.applyPermissionRecheckDecisions(ctx, watch, ph.startupRecheckDecisions(ctx, bl))
-	if watch != nil {
-		watch.lastPermRecheck = ph.nowFn()
-	}
-}
+	switch request.Reason {
+	case permissionMaintenanceStartup:
+		controller.clearResolvedStartupRemoteWriteBlockedRetryWork(ctx, bl)
+		if ph == nil {
+			return
+		}
+		controller.applyPermissionRecheckDecisions(ctx, watch, ph.startupRecheckDecisions(ctx, bl))
+		if watch != nil {
+			watch.lastPermRecheck = ph.nowFn()
+		}
+	case permissionMaintenancePeriodic:
+		if ph == nil || watch == nil {
+			return
+		}
+		plan := ph.periodicMaintenancePlan(
+			ctx,
+			bl,
+			watch.lastPermRecheck,
+			controller.isObservationSuppressed(watch),
+		)
+		if !plan.Due {
+			return
+		}
 
-// runPeriodicPermissionMaintenance is the steady-state permission-maintenance
-// entrypoint for watch mode. The permission boundary owns the cadence and
-// remote-inclusion policy; the engine only applies resulting decisions.
-func (controller *scopeController) runPeriodicPermissionMaintenance(
-	ctx context.Context,
-	watch *watchRuntime,
-	ph *PermissionHandler,
-	bl *Baseline,
-) {
-	if ph == nil || watch == nil {
-		return
+		watch.lastPermRecheck = plan.CheckedAt
+		controller.applyPermissionRecheckDecisions(ctx, watch, plan.Decisions)
+	case permissionMaintenanceLocalObservation:
+		controller.clearResolvedRemoteWriteBlockedRetryWork(ctx, bl, request.ChangedPaths)
+	default:
+		panic("unknown permission maintenance reason")
 	}
-
-	plan := ph.periodicMaintenancePlan(
-		ctx,
-		bl,
-		watch.lastPermRecheck,
-		controller.isObservationSuppressed(watch),
-	)
-	if !plan.Due {
-		return
-	}
-
-	watch.lastPermRecheck = plan.CheckedAt
-	controller.applyPermissionRecheckDecisions(ctx, watch, plan.Decisions)
 }
 
 // startupRecheckDecisions is the single startup entrypoint for persisted
@@ -176,7 +187,7 @@ func (ph *PermissionHandler) recheckRemotePermissionBlock(
 	bl *Baseline,
 	block *BlockScope,
 ) PermissionRecheckDecision {
-	boundaryPath := block.ScopePath()
+	boundaryPath := blockScopePath(block)
 
 	root := ph.permissionRoot()
 	if root == nil {
@@ -259,7 +270,7 @@ func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []Perm
 			continue
 		}
 
-		dirPath := block.ScopePath()
+		dirPath := blockScopePath(block)
 		clearable := false
 		switch {
 		case block.Key.IsPermLocalRead():

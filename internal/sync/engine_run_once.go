@@ -289,7 +289,9 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 		return fmt.Errorf("sync: loading baseline: %w", err)
 	}
 
-	flow.scopeController().runStartupPermissionMaintenance(ctx, nil, eng.permHandler, bl)
+	flow.scopeController().runPermissionMaintenance(ctx, nil, bl, permissionMaintenanceRequest{
+		Reason: permissionMaintenanceStartup,
+	})
 
 	return nil
 }
@@ -626,7 +628,7 @@ func (flow *engineFlow) loadCurrentActionPlanInputsTx(
 	if err != nil {
 		return currentActionPlanInputs{}, fmt.Errorf("sync: listing observation issues: %w", err)
 	}
-	blockScopes, err := queryBlockScopesDB(ctx, tx)
+	blockScopes, err := queryBlockScopeRowsWithRunner(ctx, tx)
 	if err != nil {
 		return currentActionPlanInputs{}, fmt.Errorf("sync: listing block scopes: %w", err)
 	}
@@ -802,7 +804,10 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.reconcileSkippedObservationFindings(ctx, watch, localResult.Skipped)
 
 	pathSet := pathSetFromLocalRows(localResult.Rows)
-	flow.scopeController().clearResolvedRemoteWriteBlockedRetryWork(ctx, bl, pathSet)
+	flow.scopeController().runPermissionMaintenance(ctx, watch, bl, permissionMaintenanceRequest{
+		Reason:       permissionMaintenanceLocalObservation,
+		ChangedPaths: pathSet,
+	})
 
 	return localResult, nil
 }

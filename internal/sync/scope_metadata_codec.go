@@ -1,6 +1,9 @@
 package sync
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 type persistedScopeMetadata struct {
 	Key          ScopeKey
@@ -9,6 +12,59 @@ type persistedScopeMetadata struct {
 	Access       ScopeAccess
 	SubjectKind  ScopeSubjectKind
 	SubjectValue string
+}
+
+func applyPersistedScopeMetadata(block *BlockScope, metadata *persistedScopeMetadata) {
+	if block == nil {
+		return
+	}
+	if metadata == nil {
+		return
+	}
+
+	block.Key = metadata.Key
+	block.Family = metadata.Family
+	block.Access = metadata.Access
+	block.SubjectKind = metadata.SubjectKind
+	block.SubjectValue = metadata.SubjectValue
+}
+
+func hydrateBlockScopeMetadata(block *BlockScope) (persistedScopeMetadata, error) {
+	if block == nil {
+		return persistedScopeMetadata{}, fmt.Errorf("sync: missing block scope")
+	}
+
+	metadata, err := encodePersistedScopeMetadata(block.Key)
+	if err != nil {
+		return persistedScopeMetadata{}, err
+	}
+	applyPersistedScopeMetadata(block, &metadata)
+	if block.ConditionType == "" {
+		block.ConditionType = metadata.Descriptor.DefaultConditionType
+	}
+
+	return metadata, nil
+}
+
+func newBlockScopeFromPersistedMetadata(
+	metadata *persistedScopeMetadata,
+	conditionType string,
+	timingSource ScopeTimingSource,
+	blockedAt time.Time,
+	trialInterval time.Duration,
+	nextTrialAt time.Time,
+	trialCount int,
+) *BlockScope {
+	block := &BlockScope{
+		ConditionType: conditionType,
+		TimingSource:  timingSource,
+		BlockedAt:     blockedAt,
+		TrialInterval: trialInterval,
+		NextTrialAt:   nextTrialAt,
+		TrialCount:    trialCount,
+	}
+	applyPersistedScopeMetadata(block, metadata)
+	return block
 }
 
 func encodePersistedScopeMetadata(key ScopeKey) (persistedScopeMetadata, error) {

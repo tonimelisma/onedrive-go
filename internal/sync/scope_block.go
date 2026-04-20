@@ -20,12 +20,15 @@ type BlockScope struct {
 	TrialCount    int           // consecutive failed trials (for backoff)
 }
 
-func (b *BlockScope) ScopePath() string {
-	if b == nil {
+func blockScopePath(block *BlockScope) string {
+	if block == nil {
 		return ""
 	}
+	if block.SubjectKind != "" || block.SubjectValue != "" || block.Family != "" || block.Access != "" {
+		return block.SubjectValue
+	}
 
-	return DescribeScopeKey(b.Key).ScopePath()
+	return DescribeScopeKey(block.Key).ScopePath()
 }
 
 // ActiveScope is the watch-runtime working-set shape. It keeps only the
@@ -38,10 +41,6 @@ type ActiveScope struct {
 	TrialInterval time.Duration
 	NextTrialAt   time.Time
 	TrialCount    int
-}
-
-func (s ActiveScope) ScopePath() string {
-	return DescribeScopeKey(s.Key).ScopePath()
 }
 
 func activeScopeFromBlockScopeRow(row *BlockScope) ActiveScope {
@@ -65,19 +64,15 @@ func blockScopeRowFromActiveScope(scope ActiveScope) (*BlockScope, error) {
 		return nil, err
 	}
 
-	return &BlockScope{
-		Key:           scope.Key,
-		ConditionType: metadata.Descriptor.DefaultConditionType,
-		TimingSource:  scope.TimingSource,
-		Family:        metadata.Family,
-		Access:        metadata.Access,
-		SubjectKind:   metadata.SubjectKind,
-		SubjectValue:  metadata.SubjectValue,
-		BlockedAt:     scope.BlockedAt,
-		TrialInterval: scope.TrialInterval,
-		NextTrialAt:   scope.NextTrialAt,
-		TrialCount:    scope.TrialCount,
-	}, nil
+	return newBlockScopeFromPersistedMetadata(
+		&metadata,
+		metadata.Descriptor.DefaultConditionType,
+		scope.TimingSource,
+		scope.BlockedAt,
+		scope.TrialInterval,
+		scope.NextTrialAt,
+		scope.TrialCount,
+	), nil
 }
 
 // ScopeUpdateResult describes the outcome of UpdateScope: whether a new scope

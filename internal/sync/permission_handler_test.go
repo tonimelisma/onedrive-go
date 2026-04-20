@@ -359,12 +359,16 @@ func TestScopeController_RunPeriodicPermissionMaintenance_AppliesDuePlanAndUpdat
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	rt.scopeController().runPeriodicPermissionMaintenance(t.Context(), rt, eng.permHandler, bl)
+	rt.scopeController().runPermissionMaintenance(t.Context(), rt, bl, permissionMaintenanceRequest{
+		Reason: permissionMaintenancePeriodic,
+	})
 
 	assert.False(t, isTestBlockScopeed(eng, scopeKey))
 	assert.Equal(t, now, rt.lastPermRecheck)
 
-	rt.scopeController().runPeriodicPermissionMaintenance(t.Context(), rt, eng.permHandler, bl)
+	rt.scopeController().runPermissionMaintenance(t.Context(), rt, bl, permissionMaintenanceRequest{
+		Reason: permissionMaintenancePeriodic,
+	})
 	assert.Equal(t, now, rt.lastPermRecheck, "throttled recheck should not advance timestamp")
 }
 

@@ -24,17 +24,9 @@ func describeBlockScopeForWrite(block *BlockScope) (persistedScopeMetadata, erro
 		return persistedScopeMetadata{}, fmt.Errorf("sync: upserting block scope: missing block")
 	}
 
-	metadata, err := encodePersistedScopeMetadata(block.Key)
+	metadata, err := hydrateBlockScopeMetadata(block)
 	if err != nil {
 		return persistedScopeMetadata{}, fmt.Errorf("sync: upserting block scope: %w", err)
-	}
-
-	block.Family = metadata.Family
-	block.Access = metadata.Access
-	block.SubjectKind = metadata.SubjectKind
-	block.SubjectValue = metadata.SubjectValue
-	if block.ConditionType == "" {
-		block.ConditionType = metadata.Descriptor.DefaultConditionType
 	}
 
 	return metadata, nil

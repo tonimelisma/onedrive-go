@@ -281,7 +281,7 @@ func TestRemoteWriteBlockedRetryRelevant_MatchesPathAndBoundaryChanges(t *testin
 }
 
 // Validates: R-2.10.5
-func TestScopeController_ClearResolvedRemoteWriteBlockedRetryWork_KeepsRemotePermissionScopeUntilProbeRelease(t *testing.T) {
+func TestScopeController_RunPermissionMaintenance_LocalObservationKeepsRemotePermissionScopeUntilProbeRelease(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -343,7 +343,10 @@ func TestScopeController_ClearResolvedRemoteWriteBlockedRetryWork_KeepsRemotePer
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	controller.clearResolvedRemoteWriteBlockedRetryWork(t.Context(), bl, map[string]bool{"Shared": true})
+	controller.runPermissionMaintenance(t.Context(), nil, bl, permissionMaintenanceRequest{
+		Reason:       permissionMaintenanceLocalObservation,
+		ChangedPaths: map[string]bool{"Shared": true},
+	})
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -353,7 +356,7 @@ func TestScopeController_ClearResolvedRemoteWriteBlockedRetryWork_KeepsRemotePer
 }
 
 // Validates: R-2.10.5
-func TestScopeController_RunStartupPermissionMaintenance_ClearsResolvedRemoteWriteBlockedRetryWork(t *testing.T) {
+func TestScopeController_RunPermissionMaintenance_StartupClearsResolvedRemoteWriteBlockedRetryWork(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -383,11 +386,14 @@ func TestScopeController_RunStartupPermissionMaintenance_ClearsResolvedRemoteWri
 		nowFn:  eng.nowFn,
 		logger: newTestLogger(t),
 	}
+	eng.permHandler = ph
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	controller.runStartupPermissionMaintenance(t.Context(), nil, ph, bl)
+	controller.runPermissionMaintenance(t.Context(), nil, bl, permissionMaintenanceRequest{
+		Reason: permissionMaintenanceStartup,
+	})
 
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 	assert.True(t, isTestBlockScopeed(eng, scopeKey))
