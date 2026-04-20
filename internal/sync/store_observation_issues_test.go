@@ -2,6 +2,7 @@ package sync
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -98,4 +99,97 @@ func TestSyncStore_ClearResolvedObservationIssues(t *testing.T) {
 
 	require.NoError(t, store.ClearResolvedObservationIssues(t.Context(), IssueInvalidFilename, nil))
 	assert.ElementsMatch(t, []string{"other.txt"}, observationIssuePathsForTest(t, store))
+}
+
+// Validates: R-2.5.2, R-2.10.4
+func TestSyncStore_ReconcileObservationFindings_ReplacesManagedIssueSet(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	now := time.Date(2026, 4, 19, 10, 0, 0, 0, time.UTC)
+
+	seedObservationIssueForTest(t, store, "old-invalid.txt", IssueInvalidFilename, ScopeKey{})
+	seedObservationIssueForTest(t, store, "old-private", IssueLocalReadDenied, SKPermLocalRead("old-private"))
+
+	require.NoError(t, store.ReconcileObservationFindings(ctx, ObservationFindingsBatch{
+		Issues: []ObservationIssue{
+			{
+				Path:       "keep-invalid.txt",
+				DriveID:    driveid.New(testDriveID),
+				ActionType: ActionUpload,
+				IssueType:  IssueInvalidFilename,
+				Error:      "invalid",
+			},
+			{
+				Path:       "Private",
+				DriveID:    driveid.New(testDriveID),
+				ActionType: ActionUpload,
+				IssueType:  IssueLocalReadDenied,
+				Error:      "directory not accessible",
+				ScopeKey:   SKPermLocalRead("Private"),
+			},
+		},
+		ReadScopes: []ScopeKey{SKPermLocalRead("Private")},
+	}, now))
+
+	rows, err := store.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.ElementsMatch(t, []string{"Private", "keep-invalid.txt"}, observationIssuePathsForTest(t, store))
+
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, SKPermLocalRead("Private"), blocks[0].Key)
+}
+
+// Validates: R-2.5.2, R-2.10.4
+func TestSyncStore_ReconcileObservationFindings_ReleasesMissingReadScopesWithoutBlockedRetryWork(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	now := time.Date(2026, 4, 19, 10, 5, 0, 0, time.UTC)
+
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:          SKPermLocalRead("Private"),
+		IssueType:    IssueLocalReadDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    now.Add(-time.Minute),
+	}))
+
+	require.NoError(t, store.ReconcileObservationFindings(ctx, ObservationFindingsBatch{}, now))
+
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
+}
+
+// Validates: R-2.5.2, R-2.10.4
+func TestSyncStore_ReconcileObservationFindings_FileReadDeniedDoesNotCreateReadScope(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	now := time.Date(2026, 4, 19, 10, 10, 0, 0, time.UTC)
+
+	require.NoError(t, store.ReconcileObservationFindings(ctx, ObservationFindingsBatch{
+		Issues: []ObservationIssue{{
+			Path:       "Private/file.txt",
+			DriveID:    driveid.New(testDriveID),
+			ActionType: ActionUpload,
+			IssueType:  IssueLocalReadDenied,
+			Error:      "file not accessible",
+		}},
+	}, now))
+
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
+
+	rows, err := store.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.True(t, rows[0].ScopeKey.IsZero())
 }

@@ -478,7 +478,7 @@ func (rt *watchRuntime) clearStaleRetrySweepRow(
 			slog.String("error", candidate.err.Error()),
 		)
 	} else if candidate.skipped != nil {
-		rt.recordRetryTrialSkippedItem(ctx, work, driveID, candidate.skipped)
+		rt.recordRetryTrialSkippedItem(ctx, rt, work, driveID, candidate.skipped)
 	} else if candidate.resolved {
 		rt.clearRetryWorkCandidate(ctx, work, driveID, "runRetrierSweep")
 	}
@@ -598,6 +598,7 @@ func (flow *engineFlow) buildRetryCandidateFromRetryWork(
 
 func (flow *engineFlow) recordRetryTrialSkippedItem(
 	ctx context.Context,
+	watch *watchRuntime,
 	work RetryWorkKey,
 	driveID driveid.ID,
 	skipped *SkippedItem,
@@ -615,12 +616,22 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 		slog.String("issue_type", skipped.Reason),
 		slog.String("detail", skipped.Detail),
 	)
-	flow.engine.logger.Error(
-		"retry/trial discovered an observation-owned condition; waiting for the next observation pass to persist observation_issues",
-		slog.String("path", skipped.Path),
-		slog.String("issue_type", skipped.Reason),
-		slog.String("action_type", work.ActionType.String()),
-	)
+	batch := observationFindingsBatchFromSkippedItems(driveID, []SkippedItem{*skipped})
+	if err := flow.engine.baseline.ReconcileObservationFindings(ctx, batch, flow.engine.nowFunc()); err != nil {
+		flow.engine.logger.Warn("retry/trial failed to reconcile observation findings",
+			slog.String("path", skipped.Path),
+			slog.String("issue_type", skipped.Reason),
+			slog.String("action_type", work.ActionType.String()),
+			slog.String("error", err.Error()),
+		)
+	} else if watch != nil {
+		if err := flow.scopeController().loadActiveScopes(ctx, watch); err != nil {
+			flow.engine.logger.Warn("retry/trial failed to refresh watch scopes",
+				slog.String("path", skipped.Path),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
 
 	flow.clearRetryWorkCandidate(ctx, work, driveID, "recordRetryTrialSkippedItem")
 }

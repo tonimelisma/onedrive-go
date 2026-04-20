@@ -797,16 +797,9 @@ func (flow *engineFlow) observeLocalChanges(
 		return ScanResult{}, err
 	}
 
-	flow.recordSkippedItems(ctx, localResult.Skipped)
-	flow.clearResolvedSkippedItems(ctx, localResult.Skipped)
-	flow.syncObservationReadScopes(ctx, watch, localResult.Skipped)
+	flow.reconcileSkippedObservationFindings(ctx, watch, localResult.Skipped)
 
 	pathSet := pathSetFromLocalRows(localResult.Rows)
-	flow.scopeController().applyPermissionRecheckDecisions(
-		ctx,
-		watch,
-		flow.engine.permHandler.clearScannerResolvedPermissions(ctx, pathSet),
-	)
 	flow.scopeController().clearResolvedRemoteBlockedRetryWork(ctx, watch, pathSet)
 
 	return localResult, nil
