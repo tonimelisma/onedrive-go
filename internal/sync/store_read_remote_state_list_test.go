@@ -115,3 +115,42 @@ func TestSyncStore_GetRemoteStateByPath_RejectsMismatchedDriveWhenStateAlreadyCo
 	assert.False(t, found)
 	assert.Contains(t, err.Error(), "state DB drive mismatch")
 }
+
+// Validates: R-2.2
+func TestSyncStore_CommitObservation_UpdatesPerRowDriveOwnershipWithoutOtherMetadataChanges(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	configuredDriveID := driveid.New("configured-drive")
+	sharedDriveID := driveid.New("shared-drive")
+
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		ItemID:   "item-shared",
+		ParentID: "shared-root",
+		Path:     "Shared/shared.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash-shared",
+		Size:     42,
+		Mtime:    1234,
+		ETag:     "etag-shared",
+	}}, "delta-1", configuredDriveID))
+
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  sharedDriveID,
+		ItemID:   "item-shared",
+		ParentID: "shared-root",
+		Path:     "Shared/shared.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash-shared",
+		Size:     42,
+		Mtime:    1234,
+		ETag:     "etag-shared",
+	}}, "delta-2", configuredDriveID))
+
+	row, found, err := store.GetRemoteStateByPath(ctx, "Shared/shared.txt", configuredDriveID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, row)
+	assert.Equal(t, sharedDriveID, row.DriveID)
+}
