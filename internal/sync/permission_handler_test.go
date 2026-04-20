@@ -277,6 +277,97 @@ func TestPermHandler_RecheckPermissions_KeepsRemoteWriteScopeWhenInconclusive(t 
 	assert.Equal(t, scopeKey, decisions[0].ScopeKey)
 }
 
+// Validates: R-2.10.9
+func TestPermHandler_PeriodicMaintenancePlan_SkipsBeforeInterval(t *testing.T) {
+	t.Parallel()
+
+	ph, _, _ := newTestPermHandler(t, nil)
+	now := time.Unix(1700000000, 0)
+	ph.nowFn = func() time.Time { return now }
+
+	plan := ph.periodicMaintenancePlan(
+		t.Context(),
+		&Baseline{},
+		now.Add(-(permissionMaintenanceInterval - time.Second)),
+		false,
+	)
+
+	assert.False(t, plan.Due)
+	assert.True(t, plan.CheckedAt.IsZero())
+	assert.Empty(t, plan.Decisions)
+}
+
+// Validates: R-2.10.5, R-2.10.9
+func TestPermHandler_PeriodicMaintenancePlan_ObservationSuppressedSkipsRemoteButKeepsLocal(t *testing.T) {
+	t.Parallel()
+
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New("test-drive").String() + ":" + testRemoteRootItemID: {{
+				Roles: []string{"write"},
+			}},
+		},
+	}
+	ph, store, syncRoot := newTestPermHandler(t, checker)
+	now := time.Unix(1700000000, 0)
+	ph.nowFn = func() time.Time { return now }
+	ph.rootItemID = testRemoteRootItemID
+
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "restored"), 0o750))
+
+	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:           SKPermRemoteWrite(""),
+		ConditionType: IssueRemoteWriteDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     now,
+	}))
+	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:           SKPermLocalWrite("restored"),
+		ConditionType: IssueLocalWriteDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     now,
+	}))
+
+	plan := ph.periodicMaintenancePlan(t.Context(), &Baseline{}, time.Time{}, true)
+
+	require.True(t, plan.Due)
+	assert.Equal(t, now, plan.CheckedAt)
+	require.Len(t, plan.Decisions, 1)
+	assert.Equal(t, permissionRecheckReleaseScope, plan.Decisions[0].Kind)
+	assert.Equal(t, SKPermLocalWrite("restored"), plan.Decisions[0].ScopeKey)
+}
+
+// Validates: R-2.10.5, R-2.10.9
+func TestScopeController_RunPeriodicPermissionMaintenance_AppliesDuePlanAndUpdatesTimestamp(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	now := time.Unix(1700000000, 0)
+	eng.nowFn = func() time.Time { return now }
+	eng.permHandler.nowFn = eng.nowFn
+
+	require.NoError(t, os.MkdirAll(filepath.Join(eng.syncRoot, "restored"), 0o750))
+
+	scopeKey := SKPermLocalWrite("restored")
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:           scopeKey,
+		ConditionType: IssueLocalWriteDenied,
+		BlockedAt:     now.Add(-time.Minute),
+	})
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	rt.scopeController().runPeriodicPermissionMaintenance(t.Context(), rt, eng.permHandler, bl)
+
+	assert.False(t, isTestBlockScopeed(eng, scopeKey))
+	assert.Equal(t, now, rt.lastPermRecheck)
+
+	rt.scopeController().runPeriodicPermissionMaintenance(t.Context(), rt, eng.permHandler, bl)
+	assert.Equal(t, now, rt.lastPermRecheck, "throttled recheck should not advance timestamp")
+}
+
 func TestPermHandler_StartupRecheckDecisions_CombineRemoteAndLocalMaintenance(t *testing.T) {
 	t.Parallel()
 

@@ -289,11 +289,7 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 		return fmt.Errorf("sync: loading baseline: %w", err)
 	}
 
-	flow.scopeController().applyPermissionRecheckDecisions(
-		ctx,
-		nil,
-		eng.permHandler.startupRecheckDecisions(ctx, bl),
-	)
+	flow.scopeController().runStartupPermissionMaintenance(ctx, nil, eng.permHandler, bl)
 
 	return nil
 }

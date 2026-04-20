@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"log/slog"
-	"time"
 )
 
 // processDirtyBatch refreshes current truth and replans from SQLite-owned
@@ -100,27 +99,10 @@ func (rt *watchRuntime) dispatchCurrentPlan(
 	return rt.dispatchBatchActions(ctx, plan, bl, opts)
 }
 
-// periodicPermRecheck runs permission rechecks at most once per 60 seconds.
-// Throttled to avoid API hammering (R-2.10.9).
+// periodicPermRecheck delegates steady-state permission maintenance to the
+// permission boundary, which owns cadence and remote-probe suppression policy.
 func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *Baseline) {
-	const permRecheckInterval = 60 * time.Second
-
-	now := rt.engine.nowFunc()
-	if now.Sub(rt.lastPermRecheck) < permRecheckInterval {
-		return
-	}
-
-	rt.lastPermRecheck = now
-
-	// Remote permission probes can be suppressed during broader observation
-	// suppression. Local permission rechecks remain enabled because they are
-	// direct filesystem observation of current truth.
-	includeRemote := rt.engine.permHandler.HasPermChecker() && !rt.scopeController().isObservationSuppressed(rt)
-	rt.scopeController().applyPermissionRecheckDecisions(
-		ctx,
-		rt,
-		rt.engine.permHandler.periodicRecheckDecisions(ctx, bl, includeRemote),
-	)
+	rt.scopeController().runPeriodicPermissionMaintenance(ctx, rt, rt.engine.permHandler, bl)
 }
 
 // deduplicateInFlight cancels in-flight actions for paths that appear in the

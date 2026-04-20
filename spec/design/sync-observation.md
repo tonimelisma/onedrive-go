@@ -56,6 +56,10 @@ Important properties:
 - explicit remote read denial discovered during observation is emitted as an
   observation-owned finding (`remote_read_denied`) plus
   `perm:remote:read:<boundary>`
+- observation-owned read-denial scopes are subtree boundaries: descendants
+  become unavailable for planning and status through the read scope rather than
+  through synthetic per-descendant issue rows or execution-time permission
+  retries
 
 ### Whole drives and shared-root drives
 
