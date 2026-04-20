@@ -129,7 +129,7 @@ func mostSpecificTruthReadScope(
 		if block == nil || !matches(block.Key) {
 			continue
 		}
-		scopePath := DescribeScopeKey(block.Key).ScopePath()
+		scopePath := blockScopePath(block)
 		if !scopePathMatches(path, scopePath) {
 			continue
 		}
