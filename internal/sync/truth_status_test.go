@@ -9,13 +9,11 @@ import (
 )
 
 // Validates: R-2.1.3, R-2.10.4
-func TestDerivePlannerTruthStatus_ReturnsAvailableStatusForUnblockedPaths(t *testing.T) {
+func TestDerivePathTruthStatusByPath_ReturnsAvailableStatusForUnblockedPaths(t *testing.T) {
 	t.Parallel()
 
-	statuses := derivePlannerTruthStatus(
-		[]SQLiteComparisonRow{{
-			Path: "docs/readme.txt",
-		}},
+	statuses := derivePathTruthStatusByPath(
+		[]string{"docs/readme.txt"},
 		nil,
 		nil,
 	)
@@ -28,14 +26,11 @@ func TestDerivePlannerTruthStatus_ReturnsAvailableStatusForUnblockedPaths(t *tes
 }
 
 // Validates: R-2.1.3, R-2.10.4
-func TestDerivePlannerTruthStatus_ReadScopesApplyToDescendants(t *testing.T) {
+func TestDerivePathTruthStatusByPath_ReadScopesApplyToDescendants(t *testing.T) {
 	t.Parallel()
 
-	statuses := derivePlannerTruthStatus(
-		[]SQLiteComparisonRow{
-			{Path: "Private/sub/file.txt"},
-			{Path: "Shared/Docs/file.txt"},
-		},
+	statuses := derivePathTruthStatusByPath(
+		[]string{"Private/sub/file.txt", "Shared/Docs/file.txt"},
 		nil,
 		[]*BlockScope{
 			{

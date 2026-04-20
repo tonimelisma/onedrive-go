@@ -91,26 +91,26 @@ func (flow *engineFlow) executeDriveRootObservation(
 		events, token, err := flow.observeRemoteFull(ctx, bl)
 		if err != nil && isObservationRemoteReadDenied(err) {
 			return remoteFetchResult{
-				findings: rootRemoteReadDeniedObservationBatch(flow.engine.driveID, err),
+				findings: rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID, err),
 			}, nil
 		}
 		return remoteFetchResult{
 			events:   events,
 			pending:  primaryCursorCommit(token, flow.engine, true, len(events)),
-			findings: remoteObservationManagedBatch(),
+			findings: newRemoteObservationFindingsBatch(),
 		}, err
 	}
 
 	events, token, err := flow.observeRemote(ctx, bl)
 	if err != nil && isObservationRemoteReadDenied(err) {
 		return remoteFetchResult{
-			findings: rootRemoteReadDeniedObservationBatch(flow.engine.driveID, err),
+			findings: rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID, err),
 		}, nil
 	}
 	return remoteFetchResult{
 		events:   events,
 		pending:  primaryCursorCommit(token, flow.engine, false, len(events)),
-		findings: remoteObservationManagedBatch(),
+		findings: newRemoteObservationFindingsBatch(),
 	}, err
 }
 
@@ -122,13 +122,13 @@ func (flow *engineFlow) executeSharedRootObservation(
 	events, token, err := flow.observeSharedRootRemote(ctx, bl, fullReconcile)
 	if err != nil && isObservationRemoteReadDenied(err) {
 		return remoteFetchResult{
-			findings: rootRemoteReadDeniedObservationBatch(flow.engine.driveID, err),
+			findings: rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID, err),
 		}, nil
 	}
 	return remoteFetchResult{
 		events:   events,
 		pending:  primaryCursorCommit(token, flow.engine, fullReconcile, len(events)),
-		findings: remoteObservationManagedBatch(),
+		findings: newRemoteObservationFindingsBatch(),
 	}, err
 }
 

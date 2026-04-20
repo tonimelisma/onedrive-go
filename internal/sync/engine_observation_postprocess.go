@@ -101,7 +101,7 @@ func (rt *watchRuntime) processCommittedPrimaryWatchBatch(
 
 		return nil, newFatalObserverError(fmt.Errorf("commit primary watch observations: %w", err))
 	}
-	batch := remoteObservationManagedBatch()
+	batch := newRemoteObservationFindingsBatch()
 	rt.reconcileObservationFindingsBatch(
 		ctx,
 		rt,

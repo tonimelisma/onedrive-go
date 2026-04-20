@@ -54,7 +54,7 @@ func (flow *engineFlow) reconcileSkippedObservationFindings(
 		}
 	}
 
-	batch := observationFindingsBatchFromSkippedItems(eng.driveID, skipped)
+	batch := localObservationFindingsBatchFromSkippedItems(eng.driveID, skipped)
 	flow.reconcileObservationFindingsBatch(ctx, watch, &batch, "failed to reconcile local observation findings")
 }
 

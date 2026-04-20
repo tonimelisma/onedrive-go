@@ -25,6 +25,11 @@ The target engine persists durable status through three authorities:
 
 It does not use a mixed failure table as durable control state.
 
+`observation_findings.go` is the engine-owned constructor boundary for
+observation batches. Engine orchestration chooses when to reconcile those
+batches durably or into a scratch planning store, but callers should not
+assemble overlapping observation-managed batch shapes ad hoc.
+
 ## Ownership Contract
 
 - Owns: single-drive runtime orchestration, watch-mode mutable state,

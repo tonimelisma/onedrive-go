@@ -32,8 +32,9 @@ func (p *Planner) PlanCurrentState(
 		slog.String("mode", mode.String()),
 	)
 
-	truthStatusByPath := derivePlannerTruthStatus(
-		comparisons,
+	truthPaths := comparisonPaths(comparisons)
+	truthStatusByPath := derivePathTruthStatusByPath(
+		truthPaths,
 		observationIssues,
 		blockScopes,
 	)
@@ -79,6 +80,19 @@ func (p *Planner) PlanCurrentState(
 	logActionPlanSummary(p.logger, "sqlite actionable-set plan complete", plan)
 
 	return plan, nil
+}
+
+func comparisonPaths(rows []SQLiteComparisonRow) []string {
+	if len(rows) == 0 {
+		return nil
+	}
+
+	paths := make([]string, 0, len(rows))
+	for i := range rows {
+		paths = append(paths, rows[i].Path)
+	}
+
+	return paths
 }
 
 func logActionPlanSummary(logger *slog.Logger, message string, plan *ActionPlan) {
@@ -225,10 +239,6 @@ func buildActionsForReconciliation(
 	default:
 		return nil, fmt.Errorf("sync: unsupported reconciliation kind %q for %s", rec.ReconciliationKind, rec.Path)
 	}
-}
-
-func plannerSuppressesUnavailableTruth(status *PathTruthStatus) bool {
-	return status.SuppressesStructuralActions()
 }
 
 func buildLocalMoveReconciliationActions(
