@@ -14,31 +14,28 @@ type watchBlockedRetryProjection struct {
 }
 
 type watchRemoteBlockedGroup struct {
+	ConditionKey ConditionKey
 	ScopeKey     ScopeKey
-	BoundaryPath string
 	BlockedPaths []string
 }
 
-// watchConditionGroupCount is one derived visible condition family with its
-// aggregated count in the watch-summary projection.
-type watchConditionGroupCount struct {
-	Key       ConditionKey
-	Count     int
-	ScopeKind string
-	Scope     string
+// watchConditionCount is one raw condition-key count in the watch summary.
+type watchConditionCount struct {
+	Key   ConditionKey
+	Count int
 }
 
 // watchConditionSummary is the engine-owned aggregate view of sync conditions
 // for watch summaries and related assertions.
 type watchConditionSummary struct {
-	Groups   []watchConditionGroupCount
+	Counts   []watchConditionCount
 	Retrying int
 }
 
 func (s watchConditionSummary) VisibleTotal() int {
 	total := 0
-	for _, group := range s.Groups {
-		total += group.Count
+	for _, count := range s.Counts {
+		total += count.Count
 	}
 
 	return total
@@ -50,12 +47,12 @@ func (s watchConditionSummary) ConflictCount() int {
 
 func (s watchConditionSummary) ActionableCount() int {
 	total := 0
-	for _, group := range s.Groups {
-		if group.Key == ConditionRemoteWriteDenied ||
-			group.Key == ConditionAuthenticationRequired {
+	for _, count := range s.Counts {
+		if count.Key == ConditionRemoteWriteDenied ||
+			count.Key == ConditionAuthenticationRequired {
 			continue
 		}
-		total += group.Count
+		total += count.Count
 	}
 
 	return total
@@ -75,58 +72,39 @@ func (s watchConditionSummary) RetryingCount() int {
 
 func (s watchConditionSummary) countForKey(key ConditionKey) int {
 	total := 0
-	for _, group := range s.Groups {
-		if group.Key == key {
-			total += group.Count
+	for _, count := range s.Counts {
+		if count.Key == key {
+			total += count.Count
 		}
 	}
 
 	return total
 }
 
-type watchConditionGroupIdentity struct {
-	Key       ConditionKey
-	ScopeKind string
-	Scope     string
-}
+type watchConditionCountAccumulator map[ConditionKey]int
 
-type watchConditionGroupAccumulator map[watchConditionGroupIdentity]int
-
-func (a watchConditionGroupAccumulator) Add(key ConditionKey, count int, scopeKind, scope string) {
+func (a watchConditionCountAccumulator) Add(key ConditionKey, count int) {
 	if key == "" || count <= 0 {
 		return
 	}
 
-	a[watchConditionGroupIdentity{
-		Key:       key,
-		ScopeKind: scopeKind,
-		Scope:     scope,
-	}] += count
+	a[key] += count
 }
 
-func (a watchConditionGroupAccumulator) Groups() []watchConditionGroupCount {
-	groups := make([]watchConditionGroupCount, 0, len(a))
-	for identity, count := range a {
-		groups = append(groups, watchConditionGroupCount{
-			Key:       identity.Key,
-			Count:     count,
-			ScopeKind: identity.ScopeKind,
-			Scope:     identity.Scope,
+func (a watchConditionCountAccumulator) Counts() []watchConditionCount {
+	counts := make([]watchConditionCount, 0, len(a))
+	for key, count := range a {
+		counts = append(counts, watchConditionCount{
+			Key:   key,
+			Count: count,
 		})
 	}
 
-	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].Key != groups[j].Key {
-			return string(groups[i].Key) < string(groups[j].Key)
-		}
-		if groups[i].ScopeKind != groups[j].ScopeKind {
-			return groups[i].ScopeKind < groups[j].ScopeKind
-		}
-
-		return groups[i].Scope < groups[j].Scope
+	sort.Slice(counts, func(i, j int) bool {
+		return string(counts[i].Key) < string(counts[j].Key)
 	})
 
-	return groups
+	return counts
 }
 
 func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSummary, []watchRemoteBlockedGroup) {
@@ -135,14 +113,14 @@ func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSu
 	}
 
 	blockedByScope := groupWatchBlockedRetryWork(snapshot.BlockedRetryWork)
-	counts := make(watchConditionGroupAccumulator)
+	counts := make(watchConditionCountAccumulator)
 
 	for i := range snapshot.ObservationIssues {
 		key := ConditionKeyForObservationIssue(
 			snapshot.ObservationIssues[i].IssueType,
 			snapshot.ObservationIssues[i].ScopeKey,
 		)
-		counts.Add(key, 1, "", "")
+		counts.Add(key, 1)
 	}
 
 	var remoteGroups []watchRemoteBlockedGroup
@@ -157,25 +135,26 @@ func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSu
 		if count == 0 {
 			count = 1
 		}
-		counts.Add(ConditionKeyForBlockScope(block.ConditionType, block.Key), count, "", "")
+		conditionKey := ConditionKeyForBlockScope(block.ConditionType, block.Key)
+		counts.Add(conditionKey, count)
 
 		if block.Key.IsPermRemoteWrite() {
 			paths := append([]string(nil), projection.paths...)
 			sort.Strings(paths)
 			remoteGroups = append(remoteGroups, watchRemoteBlockedGroup{
+				ConditionKey: conditionKey,
 				ScopeKey:     block.Key,
-				BoundaryPath: visibleRemoteBoundaryPath(block.ScopePath()),
 				BlockedPaths: paths,
 			})
 		}
 	}
 
 	sort.Slice(remoteGroups, func(i, j int) bool {
-		return remoteGroups[i].BoundaryPath < remoteGroups[j].BoundaryPath
+		return remoteGroups[i].ScopeKey.String() < remoteGroups[j].ScopeKey.String()
 	})
 
 	return watchConditionSummary{
-		Groups:   counts.Groups(),
+		Counts:   counts.Counts(),
 		Retrying: snapshot.RetryingItems,
 	}, remoteGroups
 }
@@ -197,14 +176,6 @@ func groupWatchBlockedRetryWork(rows []RetryWorkRow) map[ScopeKey]watchBlockedRe
 	}
 
 	return grouped
-}
-
-func visibleRemoteBoundaryPath(boundary string) string {
-	if boundary == "" {
-		return "/"
-	}
-
-	return boundary
 }
 
 // logWatchSummary logs a periodic one-liner summary of active sync conditions
@@ -250,6 +221,7 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup
 		if !group.ScopeKey.IsPermRemoteWrite() {
 			continue
 		}
+		boundary := group.ScopeKey.Humanize()
 
 		signature := strings.Join(group.BlockedPaths, "\x00")
 		current[group.ScopeKey] = signature
@@ -257,12 +229,12 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup
 		switch previous, ok := rt.lastRemoteBlocked[group.ScopeKey]; {
 		case !ok:
 			rt.engine.logger.Warn("shared-folder writes blocked",
-				slog.String("boundary", group.BoundaryPath),
+				slog.String("boundary", boundary),
 				slog.Int("blocked_writes", len(group.BlockedPaths)),
 			)
 		case previous != signature:
 			rt.engine.logger.Warn("shared-folder writes still blocked",
-				slog.String("boundary", group.BoundaryPath),
+				slog.String("boundary", boundary),
 				slog.Int("blocked_writes", len(group.BlockedPaths)),
 			)
 		}
@@ -273,7 +245,7 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup
 			continue
 		}
 		rt.engine.logger.Info("shared-folder write block cleared",
-			slog.String("boundary", visibleRemoteBoundaryPath(DescribeScopeKey(scopeKey).ScopePath())),
+			slog.String("boundary", scopeKey.Humanize()),
 		)
 	}
 
@@ -281,9 +253,9 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup
 }
 
 func watchSummarySignature(summary watchConditionSummary) (string, string) {
-	parts := make([]string, 0, len(summary.Groups))
-	for i := range summary.Groups {
-		parts = append(parts, fmt.Sprintf("%d %s", summary.Groups[i].Count, summary.Groups[i].Key))
+	parts := make([]string, 0, len(summary.Counts))
+	for i := range summary.Counts {
+		parts = append(parts, fmt.Sprintf("%d %s", summary.Counts[i].Count, summary.Counts[i].Key))
 	}
 	sort.Strings(parts)
 	breakdown := strings.Join(parts, ", ")

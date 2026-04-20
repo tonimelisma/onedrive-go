@@ -432,8 +432,8 @@ when you treat it as several file families sharing one single-drive owner.
 | `engine_result_*.go`, `engine_results.go`, `engine_retry_trial.go` | Result classification, retry-trial decisions, and scope-level result flow |
 | `engine_scope_invariants.go`, `engine_scope_lifecycle.go` | Scope lifecycle: mount/unmount and invariant enforcement for retry/permission scopes |
 | `engine_runtime_state.go`, `engine_runtime_types.go`, `engine_time.go`, `engine_log_fields.go`, `engine_policy_controllers.go` | Engine runtime state, time helpers, structured logging, and policy controllers |
-| `permissions.go`, `permission_capability.go`, `permission_decisions.go`, `permission_handler.go` | Capability-based permission probing, denied-path policy, and permission-scope revalidation |
-| `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, block scopeing, and scope key canonicalization |
+| `permissions.go`, `permission_capability.go`, `permission_decisions.go`, `permission_probe_*.go`, `permission_recheck.go` | Capability-based permission probing, denied-path policy, and permission-scope revalidation |
+| `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, block scoping, and scope key canonicalization |
 | `debug_event_sink.go` | Debug event recording for test and diagnostic observability |
 | `store*.go`, `store_inspect.go`, `condition_reads.go`, `scope_key.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, raw authority reads, persisted scope-key helpers, run-status/scope admin helpers, and explicit reset support |
 | `store_read_*.go`, `store_write_*.go` | Store I/O: raw authority reads (remote state, observation state, snapshots) and write operations (baseline, observation, retry work, block scopes) |

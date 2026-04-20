@@ -514,14 +514,14 @@ func TestBuildDryRunCurrentActionPlan_ObservationFindingsStayScratchOnly(t *test
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
+	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
 		Path:       "/",
 		DriveID:    driveID,
 		ActionType: ActionDownload,
 		IssueType:  IssueRemoteReadDenied,
 		Error:      "remote unreadable before dry-run",
 		ScopeKey:   SKPermRemoteRead(""),
-	}))
+	})
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKPermRemoteRead(""),
 		ConditionType: IssueRemoteReadDenied,

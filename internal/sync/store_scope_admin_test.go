@@ -102,13 +102,13 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 		LocalMtime:      1700000000,
 		RemoteMtime:     1700000000,
 	}))
-	require.NoError(t, store.UpsertObservationIssue(t.Context(), &ObservationIssue{
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:       "bad:name.txt",
 		DriveID:    driveID,
 		ActionType: ActionUpload,
 		IssueType:  IssueInvalidFilename,
 		Error:      "invalid filename",
-	}))
+	})
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
 		ConditionType: IssueRemoteWriteDenied,

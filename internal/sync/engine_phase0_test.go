@@ -506,14 +506,14 @@ func TestPhase0_RecheckLocalPermissions_ReleasesBlockedRetryWorkImmediately(t *t
 		Size:     64,
 	}}, "", eng.driveID))
 
-	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
+	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
 		Path:       "Private",
 		DriveID:    eng.driveID,
 		ActionType: ActionFolderCreate,
 		IssueType:  IssueLocalWriteDenied,
 		Error:      "directory not accessible",
 		ScopeKey:   scopeKey,
-	}))
+	})
 	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:          "Private/doc.txt",
 		ActionType:    ActionDownload,
@@ -555,13 +555,13 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 	require.NoError(t, os.MkdirAll(filepath.Join(eng.syncRoot, "docs"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, "docs", "file.txt"), []byte("ok"), 0o600))
 
-	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
+	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
 		Path:       "docs/file.txt",
 		DriveID:    eng.driveID,
 		ActionType: ActionUpload,
 		IssueType:  IssueLocalReadDenied,
 		Error:      "permission denied",
-	}))
+	})
 
 	retryRow := retryWorkIdentityForWork("docs/file.txt", "", ActionUpload)
 	retryRow.AttemptCount = 3

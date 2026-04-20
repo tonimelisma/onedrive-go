@@ -214,20 +214,20 @@ func TestReconcileRetryTrialObservationResult_ClearsOnlyManagedPath(t *testing.T
 	ctx := t.Context()
 
 	writeLocalFile(t, syncRoot, "Private/file.txt", "content")
-	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
+	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
 		Path:       "Private/file.txt",
 		DriveID:    eng.driveID,
 		ActionType: ActionUpload,
 		IssueType:  IssueLocalReadDenied,
 		Error:      "file not accessible",
-	}))
-	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
+	})
+	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
 		Path:       "Other/file.txt",
 		DriveID:    eng.driveID,
 		ActionType: ActionUpload,
 		IssueType:  IssueLocalReadDenied,
 		Error:      "file not accessible",
-	}))
+	})
 
 	flow.reconcileRetryTrialObservationResult(ctx, nil, RetryWorkKey{
 		Path:       "Private/file.txt",
@@ -256,13 +256,13 @@ func TestReconcileRetryTrialObservationResult_ReplacesManagedFileIssueWithBounda
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
+	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
 		Path:       "Private/file.txt",
 		DriveID:    eng.driveID,
 		ActionType: ActionUpload,
 		IssueType:  IssueLocalReadDenied,
 		Error:      "file not accessible",
-	}))
+	})
 
 	flow.reconcileRetryTrialObservationResult(ctx, nil, RetryWorkKey{
 		Path:       "Private/file.txt",
