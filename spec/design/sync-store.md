@@ -102,9 +102,12 @@ store-owned grouped condition projection.
 
 Within that observation-findings boundary, pure reconciliation policy stays
 separate from SQLite mutation. The store computes the managed issue/read-scope
-sets to reconcile in a deterministic helper, then applies the resulting plan
-inside one transaction. SQLite helpers do not own the policy for what a batch
-manages.
+sets to reconcile in a deterministic helper, then applies the resulting exact
+plan inside one transaction. That pure policy now works from the current
+observation-owned durable rows and produces exact issue upserts, exact
+issue-path deletions, exact read-scope upserts, and exact read-scope releases.
+SQLite helpers do not own the policy for what a batch manages, and they do not
+re-infer managed families from `ObservationFindingsBatch` during apply.
 
 Observation-owned read scopes still persist through the same canonical
 `block_scopes` validation/metadata path as other scope rows. The observation

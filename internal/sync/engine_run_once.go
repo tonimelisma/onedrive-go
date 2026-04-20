@@ -110,34 +110,12 @@ func (r *oneShotRunner) prepareLiveCurrentPlan(
 	mode Mode,
 	opts RunOptions,
 ) (*preparedCurrentActionPlan, error) {
-	observeStart := r.engine.nowFunc()
-	pendingCursorCommit, err := r.observeCurrentTruth(ctx, nil, bl, false, opts.FullReconcile)
+	observed, err := r.observeLiveCurrentState(ctx, bl, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
-	r.engine.collector().RecordObserve(0, r.engine.since(observeStart))
 
-	safety := r.engine.resolveSafetyConfig()
-
-	planStart := r.engine.nowFunc()
-	plan, err := r.buildCurrentActionPlan(ctx, bl, mode, safety)
-	if err != nil {
-		return nil, fmt.Errorf("sync: planning actions: %w", err)
-	}
-	r.engine.collector().RecordPlan(len(plan.Actions), r.engine.since(planStart))
-
-	if materializeErr := r.materializeCurrentActionPlan(ctx, plan); materializeErr != nil {
-		return nil, materializeErr
-	}
-
-	counts := CountByType(plan.Actions)
-	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
-
-	return &preparedCurrentActionPlan{
-		plan:                plan,
-		report:              report,
-		pendingCursorCommit: pendingCursorCommit,
-	}, nil
+	return r.prepareCurrentPlanFromObservedState(ctx, bl, mode, opts, observed, true)
 }
 
 func (r *oneShotRunner) prepareDryRunCurrentPlan(
@@ -146,34 +124,103 @@ func (r *oneShotRunner) prepareDryRunCurrentPlan(
 	mode Mode,
 	opts RunOptions,
 ) (*preparedCurrentActionPlan, error) {
-	observeStart := r.engine.nowFunc()
-	planResult, err := r.buildDryRunCurrentActionPlan(ctx, bl, opts.FullReconcile)
+	observed, err := r.observeDryRunCurrentState(ctx, bl, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
-	r.engine.collector().RecordObserve(planResult.observedPaths, r.engine.since(observeStart))
+
+	return r.prepareCurrentPlanFromObservedState(ctx, bl, mode, opts, observed, false)
+}
+
+func (r *oneShotRunner) observeLiveCurrentState(
+	ctx context.Context,
+	bl *Baseline,
+	fullReconcile bool,
+) (*observedCurrentState, error) {
+	observeStart := r.engine.nowFunc()
+	pendingCursorCommit, err := r.observeCurrentTruth(ctx, nil, bl, false, fullReconcile)
+	if err != nil {
+		return nil, err
+	}
+	inputs, err := r.loadCurrentActionPlanInputs(ctx, r.engine.baseline, r.engine.driveID)
+	if err != nil {
+		return nil, err
+	}
+	observed := observedCurrentState{
+		inputs:              inputs,
+		observedPaths:       len(inputs.localRows) + len(inputs.remoteRows),
+		pendingCursorCommit: pendingCursorCommit,
+	}
+	r.engine.collector().RecordObserve(observed.observedPaths, r.engine.since(observeStart))
+
+	return &observed, nil
+}
+
+func (r *oneShotRunner) observeDryRunCurrentState(
+	ctx context.Context,
+	bl *Baseline,
+	fullReconcile bool,
+) (*observedCurrentState, error) {
+	observeStart := r.engine.nowFunc()
+	planResult, err := r.buildDryRunCurrentActionPlan(ctx, bl, fullReconcile)
+	if err != nil {
+		return nil, err
+	}
+	observed := observedCurrentState{
+		inputs:        planResult.currentActionPlanInputs,
+		observedPaths: planResult.observedPaths,
+	}
+	r.engine.collector().RecordObserve(observed.observedPaths, r.engine.since(observeStart))
+
+	return &observed, nil
+}
+
+func (r *oneShotRunner) prepareCurrentPlanFromObservedState(
+	ctx context.Context,
+	bl *Baseline,
+	mode Mode,
+	opts RunOptions,
+	observed *observedCurrentState,
+	materialize bool,
+) (*preparedCurrentActionPlan, error) {
+	if observed == nil {
+		return nil, fmt.Errorf("sync: preparing current plan: missing observed state")
+	}
 
 	safety := r.engine.resolveSafetyConfig()
 
 	planStart := r.engine.nowFunc()
-	plan, err := r.engine.buildCurrentActionPlanFromInputs(&planResult.currentActionPlanInputs, bl, mode, safety)
+	plan, err := r.engine.buildCurrentActionPlanFromInputs(&observed.inputs, bl, mode, safety)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
 	r.engine.collector().RecordPlan(len(plan.Actions), r.engine.since(planStart))
 
+	if materialize {
+		if materializeErr := r.materializeCurrentActionPlan(ctx, plan); materializeErr != nil {
+			return nil, materializeErr
+		}
+	}
+
 	counts := CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
 
 	return &preparedCurrentActionPlan{
-		plan:   plan,
-		report: report,
+		plan:                plan,
+		report:              report,
+		pendingCursorCommit: observed.pendingCursorCommit,
 	}, nil
 }
 
 type dryRunPlanInput struct {
 	currentActionPlanInputs
 	observedPaths int
+}
+
+type observedCurrentState struct {
+	inputs              currentActionPlanInputs
+	observedPaths       int
+	pendingCursorCommit *pendingPrimaryCursorCommit
 }
 
 type preparedCurrentActionPlan struct {
