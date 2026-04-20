@@ -120,6 +120,10 @@ func TestSyncStore_ReconcileObservationFindings_ReplacesManagedIssueSet(t *testi
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 	assert.Equal(t, SKPermLocalRead("Private"), blocks[0].Key)
+	assert.Equal(t, ScopeFamilyPermDir, blocks[0].Family)
+	assert.Equal(t, ScopeAccessRead, blocks[0].Access)
+	assert.Equal(t, ScopeSubjectKindPath, blocks[0].SubjectKind)
+	assert.Equal(t, "Private", blocks[0].SubjectValue)
 }
 
 // Validates: R-2.5.2, R-2.10.4
@@ -274,4 +278,27 @@ func TestSyncStore_ReconcileObservationFindings_ManagedReadScopesOnlyTouchTarget
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 	assert.Equal(t, SKPermLocalRead("Other"), blocks[0].Key)
+}
+
+// Validates: R-2.5.2, R-2.10.4
+func TestSyncStore_ReconcileObservationFindings_ExactManagedReadScopeUsesCanonicalScopeMetadata(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	now := time.Date(2026, 4, 19, 10, 30, 0, 0, time.UTC)
+
+	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
+		ReadScopes:        []ScopeKey{SKPermLocalRead("Private")},
+		ManagedReadScopes: []ScopeKey{SKPermLocalRead("Private")},
+	}, now))
+
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, SKPermLocalRead("Private"), blocks[0].Key)
+	assert.Equal(t, ScopeFamilyPermDir, blocks[0].Family)
+	assert.Equal(t, ScopeAccessRead, blocks[0].Access)
+	assert.Equal(t, ScopeSubjectKindPath, blocks[0].SubjectKind)
+	assert.Equal(t, "Private", blocks[0].SubjectValue)
 }

@@ -60,19 +60,43 @@ func observationFindingsBatchFromSinglePathObservation(
 	}
 
 	batch := localObservationManagedBatch()
-	batch.ManagedPaths = []string{managedPath}
-	batch.ManagedReadScopes = []ScopeKey{SKPermLocalRead(managedPath)}
+	appendObservationManagedPath(&batch, managedPath)
+	appendObservationManagedReadScope(&batch, SKPermLocalRead(managedPath))
 
 	if observation == nil || observation.Skipped == nil {
 		return batch, true
 	}
 	if observation.Skipped.Path != "" && observation.Skipped.Path != managedPath {
-		batch.ManagedPaths = append(batch.ManagedPaths, observation.Skipped.Path)
-		batch.ManagedReadScopes = append(batch.ManagedReadScopes, SKPermLocalRead(observation.Skipped.Path))
+		appendObservationManagedPath(&batch, observation.Skipped.Path)
+		appendObservationManagedReadScope(&batch, SKPermLocalRead(observation.Skipped.Path))
 	}
 
 	appendSkippedObservationFinding(&batch, driveID, observation.Skipped)
 	return batch, true
+}
+
+func appendObservationManagedPath(batch *ObservationFindingsBatch, path string) {
+	if batch == nil || path == "" {
+		return
+	}
+	for i := range batch.ManagedPaths {
+		if batch.ManagedPaths[i] == path {
+			return
+		}
+	}
+	batch.ManagedPaths = append(batch.ManagedPaths, path)
+}
+
+func appendObservationManagedReadScope(batch *ObservationFindingsBatch, key ScopeKey) {
+	if batch == nil || key.IsZero() {
+		return
+	}
+	for i := range batch.ManagedReadScopes {
+		if batch.ManagedReadScopes[i] == key {
+			return
+		}
+	}
+	batch.ManagedReadScopes = append(batch.ManagedReadScopes, key)
 }
 
 func appendSkippedObservationFinding(
@@ -104,10 +128,18 @@ func rootRemoteReadDeniedObservationBatch(
 	driveID driveid.ID,
 	err error,
 ) ObservationFindingsBatch {
+	return remoteReadDeniedObservationBatch(driveID, "/", SKPermRemoteRead(""), err)
+}
+
+func remoteReadDeniedObservationBatch(
+	driveID driveid.ID,
+	path string,
+	scopeKey ScopeKey,
+	err error,
+) ObservationFindingsBatch {
 	batch := remoteObservationManagedBatch()
-	scopeKey := SKPermRemoteRead("")
 	batch.Issues = []ObservationIssue{{
-		Path:       "/",
+		Path:       path,
 		DriveID:    driveID,
 		ActionType: ActionDownload,
 		IssueType:  IssueRemoteReadDenied,

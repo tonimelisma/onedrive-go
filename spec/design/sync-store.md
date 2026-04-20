@@ -100,6 +100,10 @@ Supporting outcome mutations should stay separate by owner:
 The store does not own a mixed failure table, failure-role transitions, or a
 store-owned grouped condition projection.
 
+Observation-owned read scopes still persist through the same canonical
+`block_scopes` validation/metadata path as other scope rows. The observation
+store boundary does not hand-roll separate scope metadata or INSERT shapes.
+
 ### Admin writes
 
 Administrative write helpers are split by authority:

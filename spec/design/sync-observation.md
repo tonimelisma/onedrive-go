@@ -124,6 +124,11 @@ boundary. Whole-drive scans replace the managed family set for those findings;
 single-path observation uses the same batch shape but manages only the exact
 observed path and exact read-scope key it proved.
 
+Observation-owned read-denied subtree boundaries stay boundary-scoped. The
+durable batch records one boundary issue plus one read scope; descendants are
+made unavailable by that scope during planning instead of receiving synthetic
+per-descendant issue rows.
+
 Observation-owned local read findings use these rules:
 
 - unreadable file -> `observation_issue(path, local_read_denied)` only
