@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/visible_conditions.go, internal/sync/condition_summary.go, internal/sync/scope_key.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_reads.go, internal/sync/scope_key.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
 Implements: R-2.5 [designed], R-2.7 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -89,7 +89,7 @@ Supporting outcome mutations should stay separate by owner:
   resolved `retry_work` row for engine-owned cleanup decisions
 
 The store does not own a mixed failure table, failure-role transitions, or a
-store-owned competing status projection.
+store-owned grouped condition projection.
 
 ### Admin writes
 
@@ -110,10 +110,13 @@ Read-only store helpers are intentionally narrow:
 - raw/narrow reads for `block_scopes`
 
 `status` should compose its output directly from those authorities. The store
-may offer read-side grouping primitives for engine summaries, but it must not
-become a second owner of status rendering policy. Store maintenance must also
-keep `block_scopes` honest: a scope row may exist only while blocked
-`retry_work` still exists for the same `scope_key`.
+must not own grouping or rendering policy for `status` or watch summaries.
+Store maintenance must also keep `block_scopes` honest:
+
+- timed transient scopes may exist only while blocked `retry_work` still exists
+  for the same `scope_key`
+- permission scopes are exempt from that pruning rule because they are
+  revalidated by observation/probe, not by blocked-retry emptiness
 
 ## State-DB Diagnosis And Reset
 

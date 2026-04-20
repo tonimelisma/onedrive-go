@@ -126,7 +126,7 @@ func TestStatusScopeKindFromScopeKey_CoversKinds(t *testing.T) {
 	assert.Equal(t, statusScopeService, statusScopeKindFromScopeKey(syncengine.SKService()))
 	assert.Equal(t, statusScopeDrive, statusScopeKindFromScopeKey(syncengine.SKQuotaOwn()))
 	assert.Equal(t, statusScopeDirectory, statusScopeKindFromScopeKey(syncengine.SKPermRemoteWrite("Shared/Docs")))
-	assert.Equal(t, statusScopeDirectory, statusScopeKindFromScopeKey(syncengine.SKPermDir("/tmp")))
+	assert.Equal(t, statusScopeDirectory, statusScopeKindFromScopeKey(syncengine.SKPermLocalWrite("/tmp")))
 	assert.Equal(t, statusScopeDisk, statusScopeKindFromScopeKey(syncengine.SKDiskLocal()))
 	assert.Equal(t, "file", statusScopeKindFromScopeKey(syncengine.ScopeKey{Kind: syncengine.ScopeKeyKind(99)}))
 }

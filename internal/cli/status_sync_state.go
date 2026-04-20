@@ -46,9 +46,9 @@ func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
 		return statusScopeService
 	case syncengine.ScopeQuotaOwn:
 		return statusScopeDrive
-	case syncengine.ScopePermRemote:
+	case syncengine.ScopePermRemoteRead, syncengine.ScopePermRemoteWrite:
 		return statusScopeDirectory
-	case syncengine.ScopePermDir:
+	case syncengine.ScopePermDirRead, syncengine.ScopePermDirWrite:
 		return statusScopeDirectory
 	case syncengine.ScopeDiskLocal:
 		return statusScopeDisk

@@ -6,6 +6,8 @@ import (
 	"path"
 )
 
+const reconciliationKindNoop = "noop"
+
 // PlanCurrentState builds the current actionable set from SQLite-owned
 // comparison and reconciliation rows plus the current durable snapshots.
 // Unlike the legacy event-shaped planner, this path treats SQLite as the
@@ -15,6 +17,8 @@ func (p *Planner) PlanCurrentState(
 	reconciliations []SQLiteReconciliationRow,
 	localRows []LocalStateRow,
 	remoteRows []RemoteStateRow,
+	observationIssues []ObservationIssueRow,
+	blockScopes []*BlockScope,
 	baseline *Baseline,
 	mode Mode,
 	config *SafetyConfig,
@@ -25,10 +29,19 @@ func (p *Planner) PlanCurrentState(
 		slog.Int("comparison_rows", len(comparisons)),
 		slog.Int("reconciliation_rows", len(reconciliations)),
 		slog.Int("baseline_entries", baseline.Len()),
+		slog.Int("observation_issues", len(observationIssues)),
+		slog.Int("block_scopes", len(blockScopes)),
 		slog.String("mode", mode.String()),
 	)
 
-	views, comparisonByPath, err := buildSQLitePathViews(comparisons, localRows, remoteRows, baseline)
+	comparisons, reconciliations, blockFacts := normalizePlannerTruthBlocks(
+		comparisons,
+		reconciliations,
+		observationIssues,
+		blockScopes,
+	)
+
+	views, comparisonByPath, err := buildSQLitePathViews(comparisons, localRows, remoteRows, baseline, blockFacts)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +115,7 @@ func buildSQLitePathViews(
 	localRows []LocalStateRow,
 	remoteRows []RemoteStateRow,
 	baseline *Baseline,
+	blockFacts map[string]plannerTruthBlockFacts,
 ) (map[string]*PathView, map[string]*SQLiteComparisonRow, error) {
 	localByPath := make(map[string]LocalStateRow, len(localRows))
 	for i := range localRows {
@@ -142,11 +156,140 @@ func buildSQLitePathViews(
 			}
 			view.Remote = remoteStateFromSnapshotRow(&remoteRow)
 		}
+		if facts, ok := blockFacts[row.Path]; ok {
+			view.ObservationIssueType = facts.observationIssueType
+			view.ObservationIssueScopeKey = facts.observationIssueScopeKey
+			view.LocalReadScope = facts.localReadScope
+			view.RemoteReadScope = facts.remoteReadScope
+			view.LocalAvailabilityBlocked = facts.localBlocked
+			view.RemoteAvailabilityBlocked = facts.remoteBlocked
+		}
 
 		views[row.Path] = view
 	}
 
 	return views, comparisonByPath, nil
+}
+
+type plannerTruthBlockFacts struct {
+	observationIssueType     string
+	observationIssueScopeKey ScopeKey
+	localReadScope           ScopeKey
+	remoteReadScope          ScopeKey
+	localBlocked             bool
+	remoteBlocked            bool
+}
+
+func normalizePlannerTruthBlocks(
+	comparisons []SQLiteComparisonRow,
+	reconciliations []SQLiteReconciliationRow,
+	observationIssues []ObservationIssueRow,
+	blockScopes []*BlockScope,
+) ([]SQLiteComparisonRow, []SQLiteReconciliationRow, map[string]plannerTruthBlockFacts) {
+	if len(comparisons) == 0 || len(reconciliations) == 0 {
+		return comparisons, reconciliations, nil
+	}
+
+	observationByPath := make(map[string]ObservationIssueRow, len(observationIssues))
+	for i := range observationIssues {
+		if !observationIssueBlocksTruth(observationIssues[i].IssueType) {
+			continue
+		}
+		observationByPath[observationIssues[i].Path] = observationIssues[i]
+	}
+
+	comparisonCopy := append([]SQLiteComparisonRow(nil), comparisons...)
+	reconciliationCopy := append([]SQLiteReconciliationRow(nil), reconciliations...)
+	blockFacts := make(map[string]plannerTruthBlockFacts, len(comparisonCopy))
+
+	for i := range comparisonCopy {
+		path := comparisonCopy[i].Path
+		observationIssue, hasObservationIssue := observationByPath[path]
+		localScope := mostSpecificPlannerReadScope(path, blockScopes, func(key ScopeKey) bool {
+			return key.IsPermLocalRead()
+		})
+		remoteScope := mostSpecificPlannerReadScope(path, blockScopes, func(key ScopeKey) bool {
+			return key.IsPermRemoteRead()
+		})
+
+		localBlocked := localScope.IsPermLocalRead() || (hasObservationIssue && observationIssueBlocksLocalTruth(observationIssue.IssueType))
+		remoteBlocked := remoteScope.IsPermRemoteRead() || (hasObservationIssue && observationIssueBlocksRemoteTruth(observationIssue.IssueType))
+		if !localBlocked && !remoteBlocked {
+			continue
+		}
+
+		blockFacts[path] = plannerTruthBlockFacts{
+			observationIssueType:     observationIssue.IssueType,
+			observationIssueScopeKey: observationIssue.ScopeKey,
+			localReadScope:           localScope,
+			remoteReadScope:          remoteScope,
+			localBlocked:             localBlocked,
+			remoteBlocked:            remoteBlocked,
+		}
+
+		reconciliationCopy[i].ReconciliationKind = reconciliationKindNoop
+	}
+
+	return comparisonCopy, reconciliationCopy, blockFacts
+}
+
+func observationIssueBlocksTruth(issueType string) bool {
+	return observationIssueBlocksLocalTruth(issueType) || observationIssueBlocksRemoteTruth(issueType)
+}
+
+func observationIssueBlocksLocalTruth(issueType string) bool {
+	switch issueType {
+	case IssueInvalidFilename,
+		IssuePathTooLong,
+		IssueFileTooLarge,
+		IssueCaseCollision,
+		IssueHashPanic,
+		IssueLocalReadDenied:
+		return true
+	default:
+		return false
+	}
+}
+
+func observationIssueBlocksRemoteTruth(issueType string) bool {
+	return issueType == IssueRemoteReadDenied
+}
+
+func mostSpecificPlannerReadScope(
+	path string,
+	blockScopes []*BlockScope,
+	matches func(ScopeKey) bool,
+) ScopeKey {
+	best := ScopeKey{}
+	bestLen := -1
+
+	for i := range blockScopes {
+		block := blockScopes[i]
+		if block == nil || !matches(block.Key) {
+			continue
+		}
+		scopePath := plannerScopePath(block.Key)
+		if !scopePathMatches(path, scopePath) {
+			continue
+		}
+		if len(scopePath) > bestLen {
+			best = block.Key
+			bestLen = len(scopePath)
+		}
+	}
+
+	return best
+}
+
+func plannerScopePath(key ScopeKey) string {
+	switch {
+	case key.IsPermDir():
+		return key.DirPath()
+	case key.IsPermRemote():
+		return key.RemotePath()
+	default:
+		return ""
+	}
 }
 
 //nolint:gocyclo // Reconciliation kind dispatch is the planner's explicit decision table.

@@ -416,38 +416,6 @@ func (controller *scopeController) resolvePermissionDecision(
 	}
 }
 
-func (flow *engineFlow) recordObservationIssue(
-	ctx context.Context,
-	decision *ResultDecision,
-	r *ActionCompletion,
-) {
-	driveID := r.DriveID
-	if driveID.IsZero() {
-		driveID = flow.engine.driveID
-	}
-
-	issue := &ObservationIssue{
-		Path:       r.Path,
-		DriveID:    driveID,
-		ActionType: r.ActionType,
-		IssueType:  decision.IssueType,
-		Error:      r.ErrMsg,
-		ScopeKey:   decision.ScopeEvidence,
-	}
-
-	if recErr := flow.engine.baseline.UpsertObservationIssue(ctx, issue); recErr != nil {
-		fields := append(flow.resultLogFields(decision, r), slog.String("error", recErr.Error()))
-		flow.engine.logger.Warn("failed to record observation issue", fields...)
-		return
-	}
-
-	fields := append(flow.resultLogFields(decision, r),
-		slog.String("issue_type", decision.IssueType),
-		slog.String("scope_evidence", decision.ScopeEvidence.String()),
-	)
-	flow.engine.logger.Debug("observation issue recorded", fields...)
-}
-
 func (flow *engineFlow) recordRetryWork(
 	ctx context.Context,
 	watch *watchRuntime,
@@ -457,6 +425,17 @@ func (flow *engineFlow) recordRetryWork(
 ) {
 	scopeKey := decision.ScopeEvidence
 	blocked := flow.retryWorkShouldBeBlocked(watch, decision.Class, scopeKey)
+
+	if decision.Class == errclass.ClassActionable {
+		fields := append(flow.resultLogFields(decision, r),
+			slog.String("issue_type", decision.IssueType),
+			slog.String("scope_evidence", decision.ScopeEvidence.String()),
+		)
+		flow.engine.logger.Error(
+			"execution discovered a durable current-truth condition; observation should own the observation_issue",
+			fields...,
+		)
+	}
 
 	row, recErr := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:       r.Path,

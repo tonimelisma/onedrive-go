@@ -225,16 +225,6 @@ func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRun
 		}
 	}
 
-	observationIssues, err := flow.engine.baseline.ListObservationIssues(ctx)
-	if err != nil {
-		return fmt.Errorf("listing observation issues: %w", err)
-	}
-	for i := range observationIssues {
-		if observationIssues[i].ScopeKey == key {
-			return fmt.Errorf("released scope %s still has observation issue %s", key.String(), observationIssues[i].Path)
-		}
-	}
-
 	retryWork, err := flow.engine.baseline.ListRetryWork(ctx)
 	if err != nil {
 		return fmt.Errorf("listing retry_work rows: %w", err)
@@ -260,16 +250,6 @@ func (flow *engineFlow) assertDiscardedScope(ctx context.Context, watch *watchRu
 	for i := range blocks {
 		if blocks[i] != nil && blocks[i].Key == key {
 			return fmt.Errorf("discarded scope %s still persisted", key.String())
-		}
-	}
-
-	observationIssues, err := flow.engine.baseline.ListObservationIssues(ctx)
-	if err != nil {
-		return fmt.Errorf("listing observation issues: %w", err)
-	}
-	for i := range observationIssues {
-		if observationIssues[i].ScopeKey == key {
-			return fmt.Errorf("discarded scope %s still has observation issue %s", key.String(), observationIssues[i].Path)
 		}
 	}
 

@@ -91,8 +91,10 @@ that are not automatic retry scheduling. Representative rows include:
 - hash/inspection failure
 - policy-disallowed content
 
-Execution-discovered problems should normalize into `observation_issues` when
-they are really durable current-truth problems rather than transient item work.
+Observation is the sole durable owner of `observation_issues`. Worker-result
+handling may discover a condition that should later appear there, but execution
+does not upsert observation rows directly. The next observation pass is
+responsible for proving and persisting that current-truth problem.
 
 ## `retry_work`
 
@@ -115,14 +117,18 @@ table.
 `block_scopes` stores active shared blocking conditions that outlive a process:
 
 - identity: `scope_key`
-- visible condition type
+- condition type
 - timing source
 - `blocked_at`, `trial_interval`, `next_trial_at`, `trial_count`
 
 `block_scopes` is timing and lifecycle authority only. Concrete blocked work
-belongs in `retry_work`. A `block_scopes` row is valid only while blocked
-`retry_work` exists for the same `scope_key`; empty scopes are discarded
-immediately.
+belongs in `retry_work`.
+
+- timed transient scopes (`service`, drive throttles, `quota:own`, `disk:local`)
+  require blocked `retry_work` and are discarded when that blocked work
+  disappears
+- permission scopes are probe-owned facts and may persist without blocked
+  `retry_work` until revalidation proves recovery
 
 The target persisted scope families are:
 
@@ -130,7 +136,8 @@ The target persisted scope families are:
 - `throttle:target:drive:<driveID>`
 - `quota:own`
 - `disk:local`
-- `perm:dir:<path>`
+- `perm:dir:read:<path>`
+- `perm:dir:write:<path>`
 - `perm:remote:read:<boundary>`
 - `perm:remote:write:<boundary>`
 - `account:throttled`

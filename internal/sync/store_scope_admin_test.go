@@ -53,7 +53,7 @@ func TestSyncStore_ClearBlockedRetryWork(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-	scopeKey := SKPermRemote("Shared/Docs")
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
 	_, err := store.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
 		Path:       "blocked.txt",
@@ -78,7 +78,7 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 
 	store := newTestStore(t)
 	driveID := driveid.New(testDriveID)
-	scopeKey := SKPermRemote("Shared/Docs")
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
 	require.NoError(t, store.WriteSyncRunStatus(t.Context(), &SyncRunReport{
 		CompletedAt: time.Date(2026, 4, 3, 10, 30, 0, 0, time.UTC),
@@ -161,7 +161,7 @@ func TestFinalizeInspectorRead_JoinsReadAndCloseErrors(t *testing.T) {
 }
 
 // Validates: R-2.5.2, R-2.10.8
-func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndClearsScopedState(t *testing.T) {
+func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndPreservesObservationIssues(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -197,8 +197,8 @@ func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndClearsScopedState(t
 
 	rows, err := store.ListObservationIssues(ctx)
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "other/problem.txt", rows[0].Path)
+	require.Len(t, rows, 2)
+	assert.ElementsMatch(t, []string{"Shared/Docs/bad.txt", "other/problem.txt"}, []string{rows[0].Path, rows[1].Path})
 
 	retryRows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
@@ -214,7 +214,7 @@ func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndClearsScopedState(t
 }
 
 // Validates: R-2.5.2, R-2.10.8
-func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndScopedState(t *testing.T) {
+func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndPreservesObservationIssues(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -247,8 +247,8 @@ func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndScopedState(t *testing
 
 	rows, err := store.ListObservationIssues(ctx)
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "keep.txt", rows[0].Path)
+	require.Len(t, rows, 2)
+	assert.ElementsMatch(t, []string{"Shared/Docs/bad.txt", "keep.txt"}, []string{rows[0].Path, rows[1].Path})
 
 	retryRows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)

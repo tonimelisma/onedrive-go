@@ -336,6 +336,15 @@ func (o *LocalObserver) makeWalkFunc(
 	return func(fsPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			o.Logger.Warn("walk error", slog.String("path", fsPath), slog.String("error", walkErr.Error()))
+			if errors.Is(walkErr, os.ErrPermission) {
+				if relPath, err := tree.Rel(fsPath); err == nil {
+					*skipped = append(*skipped, SkippedItem{
+						Path:   nfcNormalize(filepath.ToSlash(relPath)),
+						Reason: IssueLocalReadDenied,
+						Detail: "directory not accessible (check filesystem permissions)",
+					})
+				}
+			}
 			skippedEntries.Add(1)
 			return SkipEntry(d)
 		}
@@ -412,6 +421,13 @@ func (o *LocalObserver) processEntry(
 ) error {
 	info, err := d.Info()
 	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			*skipped = append(*skipped, SkippedItem{
+				Path:   dbRelPath,
+				Reason: IssueLocalReadDenied,
+				Detail: "file not accessible (check filesystem permissions)",
+			})
+		}
 		// File disappeared between readdir and stat — skip and continue.
 		o.Logger.Warn("stat failed (file may have disappeared)",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))

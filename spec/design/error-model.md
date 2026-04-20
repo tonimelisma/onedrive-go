@@ -40,7 +40,7 @@ These projections intentionally answer different questions:
 | `shutdown` | Work stopped because the caller canceled or the process is shutting down. | Stop cleanly; do not invent durable retry or actionable rows just because the process is exiting. |
 | `retryable transient` | A specific item failed for a condition expected to clear without human action. | Persist `retry_work` with the next retry time. |
 | `scope-blocking transient` | A wider transient condition makes a whole scope unsafe to keep dispatching. | Persist `block_scopes` plus blocked `retry_work`. |
-| `actionable` | Automatic retry is not appropriate; the user must fix content, permissions, or configuration. | Persist a durable `observation_issues` row or other user-facing status fact, depending on what current truth the failure revealed. |
+| `actionable` | Automatic retry is not appropriate; the user must fix content, permissions, or configuration. | Persist the appropriate durable authority for the owning boundary: observation may write `observation_issues`; execution persists `retry_work`, `block_scopes`, or account-auth state and waits for observation to prove durable current-truth issues. |
 | `fatal` | The current command or drive runtime cannot continue safely. | Abort the current flow and return an error immediately. |
 
 ## Translation Ownership
@@ -76,8 +76,9 @@ The target durable projection is intentionally small:
 
 - `retryable transient` -> `retry_work`
 - `scope-blocking transient` -> `block_scopes` plus blocked `retry_work`
-- `actionable` -> `observation_issues` when the result reveals a durable
-  current-truth/content problem
+- `actionable` -> `observation_issues` only when observation or probe proves a
+  durable current-truth/content problem; execution-owned actionable results do
+  not upsert observation rows directly
 - `success` -> baseline/remote-state commit plus explicit durable cleanup where
   required
 - `shutdown` and `fatal` -> returned to the caller unless a higher boundary
@@ -103,4 +104,4 @@ not a catch-all copy of every raw error string or a mixed reporting table.
 | --- | --- |
 | Shared failure classes | `internal/errclass/errclass_test.go` (`TestClassStringAndValidity`), `internal/config/failure_class_test.go` (`TestClassifyLoadOutcome`), `internal/cli/failure_class_test.go` (`TestClassifyCommandError`, `TestCommandFailurePresentationForClass`) |
 | Shared summary-key normalization and CLI rendering tables | `internal/sync/summary_keys_test.go` (`TestSummaryKeyForObservationIssue_RepresentativeMappings`, `TestSummaryKeyForRetryWork_RepresentativeMappings`, `TestSummaryKeyForBlockScope_RepresentativeMappings`, `TestSummaryKeyForIssueType_RepresentativeMappings`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesConditionScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions`, `TestPrintSyncStateText_WithConditions`), `internal/cli/status_golden_test.go` (`TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`) |
-| Sync result classification foundations | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_SuccessAndShutdown`, `TestClassifyResult_HTTPPersistenceAndScopeRouting`, `TestClassifyResult_LocalPersistenceAndScopeRouting`), `internal/sync/engine_retry_trial_test.go` (`TestClearStaleRetrySweepRow_ResolvedRetryClearsRetryWork`, `TestClearStaleRetrySweepRow_SkippedRetryCreatesObservationIssue`, `TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState`, `TestRunRetrierSweep_ClearsStaleRetryWorkWithoutDispatch`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`), `internal/sync/engine_scope_lifecycle_test.go` (`TestScopeController_ApplyTrialPreserveEffects_RehomesDiskScopeRetryWork`, `TestScopeController_NormalizeDiskScope_UsesCurrentDiskState`) |
+| Sync result classification foundations | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_SuccessAndShutdown`, `TestClassifyResult_HTTPPersistenceAndScopeRouting`, `TestClassifyResult_LocalPersistenceAndScopeRouting`), `internal/sync/engine_retry_trial_test.go` (`TestClearStaleRetrySweepRow_ResolvedRetryClearsRetryWork`, `TestClearStaleRetrySweepRow_SkippedRetryWaitsForObservationPass`, `TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState`, `TestRunRetrierSweep_ClearsStaleRetryWorkWithoutDispatch`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`), `internal/sync/engine_scope_lifecycle_test.go` (`TestScopeController_ApplyTrialPreserveEffects_RehomesDiskScopeRetryWork`, `TestScopeController_NormalizeDiskScope_UsesCurrentDiskState`) |

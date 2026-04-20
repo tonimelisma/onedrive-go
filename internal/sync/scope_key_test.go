@@ -16,8 +16,8 @@ func TestScopeKey_StringParseRoundTrip(t *testing.T) {
 		SKThrottleDrive(driveid.New("0000000000000001")),
 		SKService(),
 		SKQuotaOwn(),
-		SKPermDir("/docs"),
-		SKPermRemote(""),
+		SKPermLocalWrite("/docs"),
+		SKPermRemoteWrite(""),
 		SKDiskLocal(),
 	}
 
@@ -62,7 +62,7 @@ func TestScopeKey_ThrottleTargetKeyPanicsForNonTarget(t *testing.T) {
 func TestScopeKey_IsPermDirAndDirPath(t *testing.T) {
 	t.Parallel()
 
-	key := SKPermDir("/docs")
+	key := SKPermLocalWrite("/docs")
 	assert.True(t, key.IsPermDir())
 	assert.Equal(t, "/docs", key.DirPath())
 }
@@ -70,7 +70,7 @@ func TestScopeKey_IsPermDirAndDirPath(t *testing.T) {
 func TestScopeKey_IsPermRemoteAndRemotePath(t *testing.T) {
 	t.Parallel()
 
-	key := SKPermRemote("/readonly")
+	key := SKPermRemoteWrite("/readonly")
 	assert.True(t, key.IsPermRemote())
 	assert.Equal(t, "/readonly", key.RemotePath())
 }

@@ -13,10 +13,10 @@ const (
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
 	//
-	// Generation 3 removes the mixed failure ledger and replaces its
-	// actionable/current-truth rows with observation_issues. retry_work and
-	// block_scopes own the remaining retry and blocker state.
-	currentSyncStoreGeneration = 3
+	// Generation 4 splits permission scope keys into explicit read/write
+	// families and keeps permission scopes as first-class persisted blockers
+	// even when blocked retry_work has drained.
+	currentSyncStoreGeneration = 4
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata
 		(singleton_id, schema_generation)
 	VALUES (1, ?)

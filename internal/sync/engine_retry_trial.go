@@ -615,22 +615,12 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 		slog.String("issue_type", skipped.Reason),
 		slog.String("detail", skipped.Detail),
 	)
-
-	if err := flow.engine.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
-		Path:       skipped.Path,
-		DriveID:    driveID,
-		ActionType: work.ActionType,
-		IssueType:  skipped.Reason,
-		Error:      skipped.Detail,
-		FileSize:   skipped.FileSize,
-	}); err != nil {
-		flow.engine.logger.Error("failed to record retry/trial skipped item",
-			slog.String("path", skipped.Path),
-			slog.String("issue_type", skipped.Reason),
-			slog.String("error", err.Error()),
-		)
-		return
-	}
+	flow.engine.logger.Error(
+		"retry/trial discovered an observation-owned condition; waiting for the next observation pass to persist observation_issues",
+		slog.String("path", skipped.Path),
+		slog.String("issue_type", skipped.Reason),
+		slog.String("action_type", work.ActionType.String()),
+	)
 
 	flow.clearRetryWorkCandidate(ctx, work, driveID, "recordRetryTrialSkippedItem")
 }
@@ -795,8 +785,6 @@ func (flow *engineFlow) applyResultPersistence(
 	switch decision.Persistence {
 	case persistNone:
 		return
-	case persistObservationIssue:
-		flow.recordObservationIssue(ctx, decision, r)
 	case persistRetryWork:
 		flow.recordRetryWork(ctx, watch, decision, r, retry.ReconcilePolicy().Delay)
 	default:

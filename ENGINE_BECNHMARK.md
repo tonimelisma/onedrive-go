@@ -124,10 +124,10 @@ Examples:
 These rows are not retry scheduling. They are the durable ledger for
 "something about current truth is wrong and the user needs to know."
 
-Execution-discovered problems also belong here when they are really current
-truth/content problems rather than transient execution failures. For example, a
-write that proves a file is permanently unsupported should normalize into
-`observation_issues`, not stay in a retry lane.
+Observation is the only durable writer of `observation_issues`. Execution may
+discover a condition that should later appear there, but worker/result handling
+does not write observation rows directly. The next observation or permission
+probe pass must prove and persist that current-truth problem.
 
 ## `retry_work`
 
@@ -169,7 +169,8 @@ The target scope families are:
 - `throttle:target:drive:<driveID>`
 - `quota:own`
 - `disk:local`
-- `perm:dir:<path>`
+- `perm:dir:read:<path>`
+- `perm:dir:write:<path>`
 - `perm:remote:read:<boundary>`
 - `perm:remote:write:<boundary>`
 - `account:throttled`
@@ -246,8 +247,11 @@ Execution writes:
 - success publication to `baseline` and any needed mirror cleanup
 - `retry_work` for exact transient work that remains owed
 - `block_scopes` plus blocked `retry_work` for shared blockers
-- `observation_issues` when execution proves a durable current-truth/content
-  problem rather than a transient failure
+
+Execution does not write `observation_issues`. If execution discovers a
+condition that observation should own, it persists only execution-owned control
+state and relies on the next observation/probe pass to record the durable
+current-truth issue.
 
 The engine must never use a mixed failure table as durable control state.
 
@@ -260,8 +264,8 @@ state before dispatch:
 
 - prune stale `retry_work` rows not present in the current actionable set
 - ensure blocked rows are linked to active `block_scopes`
-- release empty `block_scopes`
-- normalize durable current-truth problems into `observation_issues`
+- release empty timed transient `block_scopes`
+- keep permission scopes until affirmative revalidation proves recovery
 
 This keeps durable state aligned with the current plan without creating a
 durable executable-plan table.

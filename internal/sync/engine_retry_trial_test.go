@@ -259,7 +259,7 @@ func TestClearStaleRetrySweepRow_ResolvedRetryClearsRetryWork(t *testing.T) {
 }
 
 // Validates: R-2.10.33
-func TestClearStaleRetrySweepRow_SkippedRetryCreatesObservationIssue(t *testing.T) {
+func TestClearStaleRetrySweepRow_SkippedRetryWaitsForObservationPass(t *testing.T) {
 	t.Parallel()
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
@@ -284,11 +284,7 @@ func TestClearStaleRetrySweepRow_SkippedRetryCreatesObservationIssue(t *testing.
 	rt.clearStaleRetrySweepRow(t.Context(), bl, row, retryWorkKeyForRetryWork(row))
 
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
-
-	issues := actionableObservationIssuesForTest(t, eng.baseline, t.Context())
-	require.Len(t, issues, 1)
-	assert.Equal(t, "forms", issues[0].Path)
-	assert.Equal(t, IssueInvalidFilename, issues[0].IssueType)
+	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
 }
 
 // Validates: R-2.10.5

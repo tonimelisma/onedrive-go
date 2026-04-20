@@ -23,7 +23,6 @@ type resultPersistenceMode int
 
 const (
 	persistNone resultPersistenceMode = iota
-	persistObservationIssue
 	persistRetryWork
 )
 
@@ -98,14 +97,14 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 	case r.HTTPStatus == http.StatusUnauthorized:
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultFatal,
-			Persistence: persistObservationIssue,
+			Persistence: persistNone,
 			TrialHint:   trialHintFatal,
 			IssueType:   issueType,
 		}), true
 	case r.HTTPStatus == http.StatusForbidden:
 		return withRuntimeSummary(&ResultDecision{
 			Class:          resultSkip,
-			Persistence:    persistObservationIssue,
+			Persistence:    persistRetryWork,
 			PermissionFlow: permissionDecisionFlow,
 			TrialHint:      trialHintPreserve,
 			IssueType:      issueType,
@@ -151,7 +150,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 	default:
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
-			Persistence: persistObservationIssue,
+			Persistence: persistRetryWork,
 			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
 		}), true
@@ -189,21 +188,21 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
-			Persistence: persistObservationIssue,
+			Persistence: persistRetryWork,
 			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
 		})
 	case errors.Is(r.Err, driveops.ErrFileExceedsOneDriveLimit):
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
-			Persistence: persistObservationIssue,
+			Persistence: persistRetryWork,
 			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
 		})
 	case errors.Is(r.Err, os.ErrPermission):
 		return withRuntimeSummary(&ResultDecision{
 			Class:          resultSkip,
-			Persistence:    persistObservationIssue,
+			Persistence:    persistRetryWork,
 			PermissionFlow: permissionDecisionFlow,
 			TrialHint:      trialHintPreserve,
 			IssueType:      issueType,
@@ -211,7 +210,7 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 	default:
 		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSkip,
-			Persistence: persistObservationIssue,
+			Persistence: persistRetryWork,
 			TrialHint:   trialHintPreserve,
 			IssueType:   issueType,
 		})

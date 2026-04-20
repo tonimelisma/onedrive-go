@@ -128,7 +128,7 @@ func (e *Engine) runOnceDryRun(
 	safety := e.resolveSafetyConfig()
 
 	planStart := e.nowFunc()
-	plan, err := e.buildCurrentActionPlanFromInputs(planResult.currentActionPlanInputs, bl, mode, safety)
+	plan, err := e.buildCurrentActionPlanFromInputs(&planResult.currentActionPlanInputs, bl, mode, safety)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
@@ -146,10 +146,12 @@ type dryRunPlanInput struct {
 }
 
 type currentActionPlanInputs struct {
-	comparisons     []SQLiteComparisonRow
-	reconciliations []SQLiteReconciliationRow
-	localRows       []LocalStateRow
-	remoteRows      []RemoteStateRow
+	comparisons       []SQLiteComparisonRow
+	reconciliations   []SQLiteReconciliationRow
+	localRows         []LocalStateRow
+	remoteRows        []RemoteStateRow
+	observationIssues []ObservationIssueRow
+	blockScopes       []*BlockScope
 }
 
 func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
@@ -554,7 +556,7 @@ func (flow *engineFlow) observeCurrentTruth(
 }
 
 func (e *Engine) buildCurrentActionPlanFromInputs(
-	inputs currentActionPlanInputs,
+	inputs *currentActionPlanInputs,
 	bl *Baseline,
 	mode Mode,
 	safety *SafetyConfig,
@@ -564,6 +566,8 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 		inputs.reconciliations,
 		inputs.localRows,
 		inputs.remoteRows,
+		inputs.observationIssues,
+		inputs.blockScopes,
 		bl,
 		mode,
 		safety,
@@ -627,12 +631,22 @@ func (flow *engineFlow) loadCurrentActionPlanInputsTx(
 	if err != nil {
 		return currentActionPlanInputs{}, fmt.Errorf("sync: listing remote_state rows: %w", err)
 	}
+	observationIssues, err := queryObservationIssueRowsDB(ctx, tx)
+	if err != nil {
+		return currentActionPlanInputs{}, fmt.Errorf("sync: listing observation issues: %w", err)
+	}
+	blockScopes, err := queryBlockScopesDB(ctx, tx)
+	if err != nil {
+		return currentActionPlanInputs{}, fmt.Errorf("sync: listing block scopes: %w", err)
+	}
 
 	return currentActionPlanInputs{
-		comparisons:     comparisons,
-		reconciliations: reconciliations,
-		localRows:       localRows,
-		remoteRows:      remoteRows,
+		comparisons:       comparisons,
+		reconciliations:   reconciliations,
+		localRows:         localRows,
+		remoteRows:        remoteRows,
+		observationIssues: observationIssues,
+		blockScopes:       blockScopes,
 	}, nil
 }
 
@@ -647,7 +661,7 @@ func (flow *engineFlow) buildCurrentActionPlan(
 		return nil, err
 	}
 
-	return flow.engine.buildCurrentActionPlanFromInputs(inputs, bl, mode, safety)
+	return flow.engine.buildCurrentActionPlanFromInputs(&inputs, bl, mode, safety)
 }
 
 func (flow *engineFlow) buildDryRunCurrentActionPlan(
@@ -785,15 +799,9 @@ func (flow *engineFlow) observeLocalChanges(
 
 	flow.recordSkippedItems(ctx, localResult.Skipped)
 	flow.clearResolvedSkippedItems(ctx, localResult.Skipped)
+	flow.syncObservationReadScopes(ctx, watch, localResult.Skipped)
 
 	pathSet := pathSetFromLocalRows(localResult.Rows)
-	if err := flow.engine.baseline.ClearObservationIssuesByPaths(
-		ctx,
-		IssueLocalWriteDenied,
-		pathSetKeys(pathSet),
-	); err != nil {
-		return ScanResult{}, fmt.Errorf("sync: clearing resolved local permission failures: %w", err)
-	}
 	flow.scopeController().applyPermissionRecheckDecisions(
 		ctx,
 		watch,
@@ -802,19 +810,6 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.scopeController().clearResolvedRemoteBlockedRetryWork(ctx, watch, pathSet)
 
 	return localResult, nil
-}
-
-func pathSetKeys(pathSet map[string]bool) []string {
-	if len(pathSet) == 0 {
-		return nil
-	}
-
-	paths := make([]string, 0, len(pathSet))
-	for path := range pathSet {
-		paths = append(paths, path)
-	}
-
-	return paths
 }
 
 func (flow *engineFlow) commitObservedLocalSnapshot(

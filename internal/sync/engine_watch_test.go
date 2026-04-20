@@ -418,8 +418,8 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	ctx := t.Context()
 	newTestWatchState(t, eng)
 
-	clearedScope := SKPermRemote("Shared/TeamDocs")
-	retainedScope := SKPermRemote("Shared/Other")
+	clearedScope := SKPermRemoteWrite("Shared/TeamDocs")
+	retainedScope := SKPermRemoteWrite("Shared/Other")
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:       clearedScope,
@@ -451,15 +451,12 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	require.NoError(t, eng.baseline.ClearBlockedRetryWork(ctx, RetryWorkKey{
-		Path:       "Shared/TeamDocs/file.txt",
-		ActionType: ActionUpload,
-	}, clearedScope))
+	require.NoError(t, eng.baseline.DiscardScope(ctx, clearedScope))
 
 	handleExternalChangesForTest(t, eng, ctx)
 
 	assert.False(t, isTestBlockScopeed(eng, clearedScope),
-		"clearing a remote permission issue externally should release that scope")
+		"removing a remote permission scope externally should release that scope")
 	assert.True(t, isTestBlockScopeed(eng, retainedScope),
 		"unrelated remote permission scopes must remain blocked")
 

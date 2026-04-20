@@ -348,10 +348,16 @@ type LocalState struct {
 // current actionable-set builder reasons over after SQLite computes structural
 // diff and reconciliation outcomes.
 type PathView struct {
-	Path     string
-	Remote   *RemoteState   // nil = absent from current remote snapshot
-	Local    *LocalState    // nil = absent from current local snapshot
-	Baseline *BaselineEntry // nil = never synced
+	Path                      string
+	Remote                    *RemoteState   // nil = absent from current remote snapshot
+	Local                     *LocalState    // nil = absent from current local snapshot
+	Baseline                  *BaselineEntry // nil = never synced
+	ObservationIssueType      string
+	ObservationIssueScopeKey  ScopeKey
+	LocalReadScope            ScopeKey
+	RemoteReadScope           ScopeKey
+	LocalAvailabilityBlocked  bool
+	RemoteAvailabilityBlocked bool
 }
 
 // ConflictRecord holds metadata about a detected conflict.

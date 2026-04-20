@@ -11,9 +11,9 @@ type ConditionGroupCount struct {
 	Scope     string
 }
 
-// ConditionSummary is the read-side aggregate view of visible conditions for
-// engine watch summaries and related assertions. It centralizes how raw
-// authority rows and special derived scopes count toward summary output.
+// ConditionSummary is the engine-owned aggregate view of sync conditions for
+// watch summaries and related assertions. It centralizes how raw authority rows
+// and special derived scopes count toward summary output.
 type ConditionSummary struct {
 	Groups   []ConditionGroupCount
 	Retrying int
