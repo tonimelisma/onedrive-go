@@ -179,3 +179,8 @@ Permission scopes are different: planner is blocked-truth-aware for active read
 scopes and observation-owned unreadable paths so unavailable truth is never
 treated as a delete. Final runtime admission still happens later in the engine
 against the ready frontier.
+
+That invariant is subtree-wide: if a read-denied boundary blocks truth for a
+folder, descendants and move endpoints below that boundary stay unavailable and
+must not produce delete, move, cleanup, or repair actions until observation
+restores trustworthy truth.

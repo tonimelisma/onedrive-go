@@ -143,6 +143,10 @@ and writes validate these metadata columns against `DescribeScopeKey` so the
 store, planner, watch summary, and status paths share one explicit semantic
 shape instead of reparsing free-form strings everywhere.
 
+The raw block-scope read path is shared: status/read-side queries and the
+store-owned `ListBlockScopes` entrypoint both scan through the same metadata
+validation helper instead of maintaining duplicate SQL/scan behavior.
+
 ## State-DB Diagnosis And Reset
 
 Two store-owned helpers isolate DB lifecycle policy:
