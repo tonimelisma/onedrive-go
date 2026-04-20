@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
@@ -88,50 +87,8 @@ func (controller *scopeController) loadNormalizedPersistedBlockedRetries(
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing blocked retry_work rows: %w", err)
 	}
-	if !controller.clearResolvedPersistedRemoteBlockedRetries(ctx, rows) {
-		return rows, nil
-	}
-
-	rows, err = flow.engine.baseline.ListBlockedRetryWork(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("sync: relisting blocked retry_work rows after remote cleanup: %w", err)
-	}
 
 	return rows, nil
-}
-
-func (controller *scopeController) clearResolvedPersistedRemoteBlockedRetries(
-	ctx context.Context,
-	rows []RetryWorkRow,
-) bool {
-	flow := controller.flow
-	bl, err := flow.engine.baseline.Load(ctx)
-	if err != nil {
-		flow.engine.logger.Warn("load baseline for remote failure cleanup",
-			slog.String("error", err.Error()),
-		)
-		return false
-	}
-
-	remoteResolved := false
-	for i := range rows {
-		if !rows[i].ScopeKey.IsPermRemote() {
-			continue
-		}
-		driveID, driveErr := flow.retryWorkDriveID(ctx)
-		if driveErr != nil {
-			flow.engine.logger.Warn("load drive for remote failure cleanup",
-				slog.String("error", driveErr.Error()),
-			)
-			return false
-		}
-		if flow.buildRetryCandidateFromRetryWork(ctx, bl, &rows[i], driveID).resolved {
-			controller.clearBlockedRetryWork(ctx, &rows[i], "clearResolvedPersistedRemoteBlockedRetries")
-			remoteResolved = true
-		}
-	}
-
-	return remoteResolved
 }
 
 func (controller *scopeController) normalizePersistedNonAuthScopes(
@@ -631,85 +588,6 @@ func (controller *scopeController) discardScope(ctx context.Context, watch *watc
 	flow.mustAssertInvariants(ctx, watch, "discard scope")
 
 	return nil
-}
-
-func pathMatchesPrefix(path string, prefix string) bool {
-	if prefix == "" {
-		return true
-	}
-
-	return path == prefix || strings.HasPrefix(path, prefix+"/")
-}
-
-func (controller *scopeController) clearResolvedRemoteBlockedRetryWork(
-	ctx context.Context,
-	watch *watchRuntime,
-	changedPaths map[string]bool,
-) {
-	if len(changedPaths) == 0 {
-		return
-	}
-
-	flow := controller.flow
-	rows, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
-	if err != nil {
-		flow.engine.logger.Warn("failed to list blocked retry_work rows for remote cleanup",
-			slog.String("error", err.Error()),
-		)
-		return
-	}
-
-	clearedScopes := make(map[ScopeKey]bool)
-	bl, err := flow.engine.baseline.Load(ctx)
-	if err != nil {
-		flow.engine.logger.Warn("failed to load baseline for remote blocked cleanup",
-			slog.String("error", err.Error()),
-		)
-		return
-	}
-	for i := range rows {
-		if !remoteBlockedRetryRelevant(&rows[i], changedPaths) {
-			continue
-		}
-		driveID, driveErr := flow.retryWorkDriveID(ctx)
-		if driveErr != nil {
-			flow.engine.logger.Warn("failed to load drive for remote blocked cleanup",
-				slog.String("error", driveErr.Error()),
-			)
-			return
-		}
-		if flow.buildRetryCandidateFromRetryWork(ctx, bl, &rows[i], driveID).resolved {
-			controller.clearBlockedRetryWork(ctx, &rows[i], "clearResolvedRemoteBlockedRetryWork")
-			clearedScopes[rows[i].ScopeKey] = true
-		}
-	}
-
-	_ = watch
-	_ = clearedScopes
-}
-
-func remoteBlockedRetryRelevant(
-	row *RetryWorkRow,
-	changedPaths map[string]bool,
-) bool {
-	if row == nil || !row.ScopeKey.IsPermRemote() {
-		return false
-	}
-	if !row.ScopeKey.IsPermRemoteWrite() {
-		return false
-	}
-
-	boundary := row.ScopeKey.RemotePath()
-	for changedPath := range changedPaths {
-		if pathMatchesPrefix(row.Path, changedPath) ||
-			pathMatchesPrefix(changedPath, row.Path) ||
-			pathMatchesPrefix(boundary, changedPath) ||
-			pathMatchesPrefix(changedPath, boundary) {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (controller *scopeController) clearBlockedRetryWork(

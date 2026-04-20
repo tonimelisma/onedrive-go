@@ -23,32 +23,9 @@ func queryObservationIssueRowsDB(ctx context.Context, runner sqlTxRunner) ([]Obs
 }
 
 func queryBlockScopesDB(ctx context.Context, runner sqlTxRunner) ([]*BlockScope, error) {
-	rows, err := runner.QueryContext(ctx,
-		`SELECT scope_key, scope_family, scope_access, subject_kind, subject_value,
-		        condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
-			FROM block_scopes`)
+	result, err := queryBlockScopeRowsWithRunner(ctx, runner)
 	if err != nil {
 		return nil, fmt.Errorf("query block scopes: %w", err)
-	}
-	defer rows.Close()
-
-	var result []*BlockScope
-	for rows.Next() {
-		block, err := scanBlockScopeRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan block scope row: %w", err)
-		}
-		if block.Key.IsZero() {
-			continue
-		}
-		result = append(result, block)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate block scope rows: %w", err)
-	}
-
-	if result == nil {
-		result = []*BlockScope{}
 	}
 
 	return result, nil

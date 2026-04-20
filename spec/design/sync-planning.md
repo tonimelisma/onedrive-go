@@ -113,6 +113,9 @@ structural absence:
 - remote read-denied subtrees are unavailable remote truth, not remote deletes
 - a remote unreadable subtree boundary suppresses all descendant structural
   actions; descendants are unavailable current truth, not "missing remote"
+- subtree unavailability also suppresses publication-only cleanup for those
+  descendants; baseline rows under an unreadable subtree must not be cleaned
+  up just because current observation could not safely prove their absence
 - active read permission scopes suppress destructive and mutating work under
   the blocked subtree until revalidation succeeds
 
@@ -179,3 +182,8 @@ Permission scopes are different: planner is blocked-truth-aware for active read
 scopes and observation-owned unreadable paths so unavailable truth is never
 treated as a delete. Final runtime admission still happens later in the engine
 against the ready frontier.
+
+That invariant is subtree-wide: if a read-denied boundary blocks truth for a
+folder, descendants and move endpoints below that boundary stay unavailable and
+must not produce delete, move, cleanup, or repair actions until observation
+restores trustworthy truth.

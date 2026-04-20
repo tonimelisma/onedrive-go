@@ -306,6 +306,216 @@ func planCurrentStateForInputs(
 	return plan
 }
 
+func planForUnavailableLocalReadScopeDescendant(t *testing.T) *ActionPlan {
+	t.Helper()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES ('item-private', 'Private/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
+	require.NoError(t, err)
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item-private",
+		Path:     "Private/sub/file.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash",
+		Size:     10,
+		Mtime:    1,
+		ETag:     "etag-private",
+	}}, "", driveID))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKPermLocalRead("Private"),
+		ConditionType: IssueLocalReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
+	}))
+
+	return planCurrentStateForStore(t, store)
+}
+
+func planForUnavailableRemoteReadScopeDescendant(t *testing.T) *ActionPlan {
+	t.Helper()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES ('item-shared', 'Shared/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-shared')`)
+	require.NoError(t, err)
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:            "Shared/sub/file.txt",
+		ItemType:        ItemTypeFile,
+		Hash:            "hash",
+		Size:            10,
+		Mtime:           1,
+		ContentIdentity: "hash",
+		ObservedAt:      1,
+	}}))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKPermRemoteRead("Shared"),
+		ConditionType: IssueRemoteReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
+	}))
+
+	return planCurrentStateForStore(t, store)
+}
+
+func planForUnavailableLocalReadScopeCleanupCandidate(t *testing.T) *ActionPlan {
+	t.Helper()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES ('item-private-dir', 'Private/sub', 'folder', '', '', 0, 0, 1, 1, ''),
+		       ('item-private-file', 'Private/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
+	require.NoError(t, err)
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKPermLocalRead("Private"),
+		ConditionType: IssueLocalReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
+	}))
+
+	return planCurrentStateForStore(t, store)
+}
+
+func planForUnavailableRemoteReadScopeCleanupCandidate(t *testing.T) *ActionPlan {
+	t.Helper()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES ('item-shared-dir', 'Shared/sub', 'folder', '', '', 0, 0, 1, 1, ''),
+		       ('item-shared-file', 'Shared/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-shared')`)
+	require.NoError(t, err)
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+		{
+			Path:       "Shared/sub",
+			ItemType:   ItemTypeFolder,
+			ObservedAt: 1,
+		},
+		{
+			Path:            "Shared/sub/file.txt",
+			ItemType:        ItemTypeFile,
+			Hash:            "hash",
+			Size:            10,
+			Mtime:           1,
+			ContentIdentity: "hash",
+			ObservedAt:      1,
+		},
+	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKPermRemoteRead("Shared"),
+		ConditionType: IssueRemoteReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
+	}))
+
+	return planCurrentStateForStore(t, store)
+}
+
+func planForUnavailableLocalMoveSource(t *testing.T) *ActionPlan {
+	t.Helper()
+
+	return planCurrentStateForInputs(
+		t,
+		[]SQLiteComparisonRow{{
+			Path:            "docs/source.txt",
+			BaselinePresent: true,
+			LocalPresent:    true,
+			RemotePresent:   true,
+			LocalChanged:    true,
+			RemoteChanged:   false,
+			ComparisonKind:  "local_move_source",
+		}},
+		[]SQLiteReconciliationRow{{
+			Path:               "docs/source.txt",
+			ComparisonKind:     "local_move_source",
+			ReconciliationKind: strLocalMove,
+			LocalMoveTarget:    "docs/dest.txt",
+		}},
+		[]LocalStateRow{{
+			Path:       "docs/source.txt",
+			ItemType:   ItemTypeFile,
+			Hash:       "local",
+			ObservedAt: 1,
+		}},
+		[]RemoteStateRow{{
+			Path:    "docs/source.txt",
+			ItemID:  "remote-source",
+			DriveID: driveid.New(engineTestDriveID),
+		}},
+		[]ObservationIssueRow{{
+			Path:      "docs/source.txt",
+			IssueType: IssueLocalReadDenied,
+		}},
+		nil,
+		NewBaselineForTest([]*BaselineEntry{{
+			Path:     "docs/source.txt",
+			DriveID:  driveid.New(engineTestDriveID),
+			ItemID:   "baseline-source",
+			ItemType: ItemTypeFile,
+		}}),
+	)
+}
+
+func planForUnavailableRemoteMoveDestination(t *testing.T) *ActionPlan {
+	t.Helper()
+
+	return planCurrentStateForInputs(
+		t,
+		[]SQLiteComparisonRow{{
+			Path:            "Shared/dest.txt",
+			BaselinePresent: true,
+			LocalPresent:    true,
+			RemotePresent:   true,
+			LocalChanged:    false,
+			RemoteChanged:   true,
+			ComparisonKind:  "remote_move_dest",
+		}},
+		[]SQLiteReconciliationRow{{
+			Path:               "Shared/dest.txt",
+			ComparisonKind:     "remote_move_dest",
+			ReconciliationKind: strRemoteMove,
+			RemoteMoveSource:   "Shared/source.txt",
+		}},
+		[]LocalStateRow{{
+			Path:       "Shared/dest.txt",
+			ItemType:   ItemTypeFile,
+			Hash:       "local",
+			ObservedAt: 1,
+		}},
+		[]RemoteStateRow{{
+			Path:    "Shared/dest.txt",
+			ItemID:  "remote-dest",
+			DriveID: driveid.New(engineTestDriveID),
+		}},
+		nil,
+		[]*BlockScope{{
+			Key:           SKPermRemoteRead("Shared"),
+			ConditionType: IssueRemoteReadDenied,
+			TimingSource:  ScopeTimingNone,
+			BlockedAt:     time.Unix(100, 0),
+		}},
+		NewBaselineForTest([]*BaselineEntry{{
+			Path:     "Shared/dest.txt",
+			DriveID:  driveid.New(engineTestDriveID),
+			ItemID:   "baseline-dest",
+			ItemType: ItemTypeFile,
+		}}),
+	)
+}
+
 func assertNoActionForPath(t *testing.T, plan *ActionPlan, path string, actionType ActionType) {
 	t.Helper()
 
@@ -586,46 +796,7 @@ func TestPlannerPlanCurrentState_NewUnreadableLocalPathProducesNoActions(t *test
 func TestPlannerPlanCurrentState_LocalMoveSourceWithUnavailableTruthProducesNoActions(t *testing.T) {
 	t.Parallel()
 
-	plan := planCurrentStateForInputs(
-		t,
-		[]SQLiteComparisonRow{{
-			Path:            "docs/source.txt",
-			BaselinePresent: true,
-			LocalPresent:    true,
-			RemotePresent:   true,
-			LocalChanged:    true,
-			RemoteChanged:   false,
-			ComparisonKind:  "local_move_source",
-		}},
-		[]SQLiteReconciliationRow{{
-			Path:               "docs/source.txt",
-			ComparisonKind:     "local_move_source",
-			ReconciliationKind: strLocalMove,
-			LocalMoveTarget:    "docs/dest.txt",
-		}},
-		[]LocalStateRow{{
-			Path:       "docs/source.txt",
-			ItemType:   ItemTypeFile,
-			Hash:       "local",
-			ObservedAt: 1,
-		}},
-		[]RemoteStateRow{{
-			Path:    "docs/source.txt",
-			ItemID:  "remote-source",
-			DriveID: driveid.New(engineTestDriveID),
-		}},
-		[]ObservationIssueRow{{
-			Path:      "docs/source.txt",
-			IssueType: IssueLocalReadDenied,
-		}},
-		nil,
-		NewBaselineForTest([]*BaselineEntry{{
-			Path:     "docs/source.txt",
-			DriveID:  driveid.New(engineTestDriveID),
-			ItemID:   "baseline-source",
-			ItemType: ItemTypeFile,
-		}}),
-	)
+	plan := planForUnavailableLocalMoveSource(t)
 
 	assert.Empty(t, plan.Actions)
 }
@@ -634,48 +805,66 @@ func TestPlannerPlanCurrentState_LocalMoveSourceWithUnavailableTruthProducesNoAc
 func TestPlannerPlanCurrentState_RemoteMoveDestinationWithUnavailableTruthProducesNoActions(t *testing.T) {
 	t.Parallel()
 
-	plan := planCurrentStateForInputs(
-		t,
-		[]SQLiteComparisonRow{{
-			Path:            "Shared/dest.txt",
-			BaselinePresent: true,
-			LocalPresent:    true,
-			RemotePresent:   true,
-			LocalChanged:    false,
-			RemoteChanged:   true,
-			ComparisonKind:  "remote_move_dest",
-		}},
-		[]SQLiteReconciliationRow{{
-			Path:               "Shared/dest.txt",
-			ComparisonKind:     "remote_move_dest",
-			ReconciliationKind: strRemoteMove,
-			RemoteMoveSource:   "Shared/source.txt",
-		}},
-		[]LocalStateRow{{
-			Path:       "Shared/dest.txt",
-			ItemType:   ItemTypeFile,
-			Hash:       "local",
-			ObservedAt: 1,
-		}},
-		[]RemoteStateRow{{
-			Path:    "Shared/dest.txt",
-			ItemID:  "remote-dest",
-			DriveID: driveid.New(engineTestDriveID),
-		}},
-		nil,
-		[]*BlockScope{{
-			Key:           SKPermRemoteRead("Shared"),
-			ConditionType: IssueRemoteReadDenied,
-			TimingSource:  ScopeTimingNone,
-			BlockedAt:     time.Unix(100, 0),
-		}},
-		NewBaselineForTest([]*BaselineEntry{{
-			Path:     "Shared/dest.txt",
-			DriveID:  driveid.New(engineTestDriveID),
-			ItemID:   "baseline-dest",
-			ItemType: ItemTypeFile,
-		}}),
-	)
+	plan := planForUnavailableRemoteMoveDestination(t)
 
 	assert.Empty(t, plan.Actions)
+}
+
+// Validates: R-2.1.3, R-2.10.4
+func TestPlannerPlanCurrentState_UnavailableTruthNeverDeletesData(t *testing.T) {
+	t.Parallel()
+
+	t.Run("local read scope keeps remote descendants from looking deleted", func(t *testing.T) {
+		t.Parallel()
+
+		plan := planForUnavailableLocalReadScopeDescendant(t)
+		assertNoActionForPath(t, plan, "Private/sub/file.txt", ActionRemoteDelete)
+		assertNoActionForPath(t, plan, "Private/sub/file.txt", ActionDownload)
+		assert.Empty(t, plan.Actions)
+	})
+
+	t.Run("remote read scope keeps local descendants from looking deleted", func(t *testing.T) {
+		t.Parallel()
+
+		plan := planForUnavailableRemoteReadScopeDescendant(t)
+		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionLocalDelete)
+		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionUpload)
+		assert.Empty(t, plan.Actions)
+	})
+
+	t.Run("local unreadable subtree suppresses cleanup for descendants", func(t *testing.T) {
+		t.Parallel()
+
+		plan := planForUnavailableLocalReadScopeCleanupCandidate(t)
+		assertNoActionForPath(t, plan, "Private/sub", ActionCleanup)
+		assertNoActionForPath(t, plan, "Private/sub/file.txt", ActionCleanup)
+		assertNoActionForPath(t, plan, "Private/sub/file.txt", ActionRemoteDelete)
+		assert.Empty(t, plan.Actions)
+	})
+
+	t.Run("remote unreadable subtree suppresses cleanup for descendants", func(t *testing.T) {
+		t.Parallel()
+
+		plan := planForUnavailableRemoteReadScopeCleanupCandidate(t)
+		assertNoActionForPath(t, plan, "Shared/sub", ActionCleanup)
+		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionCleanup)
+		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionLocalDelete)
+		assert.Empty(t, plan.Actions)
+	})
+
+	t.Run("unavailable move source produces no remote move", func(t *testing.T) {
+		t.Parallel()
+
+		plan := planForUnavailableLocalMoveSource(t)
+
+		assert.Empty(t, plan.Actions)
+	})
+
+	t.Run("unavailable remote move destination produces no local move", func(t *testing.T) {
+		t.Parallel()
+
+		plan := planForUnavailableRemoteMoveDestination(t)
+
+		assert.Empty(t, plan.Actions)
+	})
 }
