@@ -222,6 +222,28 @@ func TestObserveSinglePath_OversizedFileReturnsSkipped(t *testing.T) {
 	assert.Equal(t, int64(MaxOneDriveFileSize+1), result.Skipped.FileSize)
 }
 
+func TestObserveSinglePath_UnreadableSubtreeReturnsBoundaryScopedSkip(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "Private"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "Private", "file.txt"), []byte("secret"), 0o600))
+	require.NoError(t, os.Chmod(filepath.Join(syncRoot, "Private"), 0o000))
+	t.Cleanup(func() {
+		//nolint:gosec // test cleanup restores directory traversal so TempDir removal can succeed
+		assert.NoError(t, os.Chmod(filepath.Join(syncRoot, "Private"), 0o700))
+	})
+
+	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), "Private/file.txt", nil, time.Now().UnixNano(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, result.Skipped)
+	assert.Nil(t, result.Event)
+	assert.False(t, result.Resolved)
+	assert.Equal(t, "Private", result.Skipped.Path)
+	assert.Equal(t, IssueLocalReadDenied, result.Skipped.Reason)
+	assert.True(t, result.Skipped.BlocksReadScope)
+}
+
 func TestObserveSinglePath_InternalExclusionResolves(t *testing.T) {
 	t.Parallel()
 

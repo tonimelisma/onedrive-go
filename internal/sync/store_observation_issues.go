@@ -52,9 +52,13 @@ func (m *SyncStore) UpsertObservationIssues(
 
 func (m *SyncStore) ReconcileObservationFindings(
 	ctx context.Context,
-	batch ObservationFindingsBatch,
+	batch *ObservationFindingsBatch,
 	now time.Time,
 ) (err error) {
+	if batch == nil {
+		return nil
+	}
+
 	nowNano := now.UnixNano()
 
 	tx, err := beginPerfTx(ctx, m.db)
@@ -243,16 +247,27 @@ func (m *SyncStore) upsertObservationIssuesTx(
 func clearResolvedObservationIssuesTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	batch ObservationFindingsBatch,
+	batch *ObservationFindingsBatch,
 ) error {
+	if batch == nil {
+		return nil
+	}
+
 	currentByType := make(map[string][]string)
 	for i := range batch.Issues {
 		currentByType[batch.Issues[i].IssueType] = append(currentByType[batch.Issues[i].IssueType], batch.Issues[i].Path)
 	}
+	managedPaths := normalizedObservationManagedPaths(batch.ManagedPaths)
 
 	for _, issueType := range batch.ManagedIssueTypes {
 		paths := currentByType[issueType]
 		if issueType == "" {
+			continue
+		}
+		if len(managedPaths) > 0 {
+			if err := clearManagedObservationIssuePathsTx(ctx, tx, issueType, managedPaths, paths); err != nil {
+				return err
+			}
 			continue
 		}
 		if len(paths) == 0 {
@@ -287,9 +302,29 @@ func clearResolvedObservationIssuesTx(
 func reconcileObservationReadScopesTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	batch ObservationFindingsBatch,
+	batch *ObservationFindingsBatch,
 	nowNano int64,
 ) error {
+	if batch == nil {
+		return nil
+	}
+	if managedExactScopes, desiredExactScopes := exactObservationReadScopes(batch); len(managedExactScopes) > 0 {
+		return reconcileExactObservationReadScopesTx(ctx, tx, managedExactScopes, desiredExactScopes, nowNano)
+	}
+
+	return reconcileKindObservationReadScopesTx(ctx, tx, batch, nowNano)
+}
+
+func reconcileKindObservationReadScopesTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	batch *ObservationFindingsBatch,
+	nowNano int64,
+) error {
+	if batch == nil {
+		return nil
+	}
+
 	managedKinds := make(map[ScopeKeyKind]struct{}, len(batch.ManagedReadScopeKinds))
 	for i := range batch.ManagedReadScopeKinds {
 		managedKinds[batch.ManagedReadScopeKinds[i]] = struct{}{}
@@ -311,6 +346,22 @@ func reconcileObservationReadScopesTx(
 		return fmt.Errorf("sync: listing observation-owned read scopes: %w", err)
 	}
 
+	current, err := deleteMissingManagedObservationReadScopesTx(ctx, tx, blocks, managedKinds, desired, nowNano)
+	if err != nil {
+		return err
+	}
+
+	return insertMissingObservationReadScopesTx(ctx, tx, desired, current, nowNano)
+}
+
+func deleteMissingManagedObservationReadScopesTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	blocks []*BlockScope,
+	managedKinds map[ScopeKeyKind]struct{},
+	desired map[ScopeKey]struct{},
+	nowNano int64,
+) (map[ScopeKey]struct{}, error) {
 	current := make(map[ScopeKey]struct{})
 	for i := range blocks {
 		block := blocks[i]
@@ -318,6 +369,177 @@ func reconcileObservationReadScopesTx(
 			continue
 		}
 		if _, ok := managedKinds[block.Key.Kind]; !ok {
+			continue
+		}
+		current[block.Key] = struct{}{}
+		if _, ok := desired[block.Key]; ok {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM block_scopes WHERE scope_key = ?`,
+			block.Key.String(),
+		); err != nil {
+			return nil, fmt.Errorf("sync: deleting observation-owned read scope %s: %w", block.Key.String(), err)
+		}
+		if err := markRetryWorkScopeReadyTx(ctx, tx, block.Key.String(), nowNano); err != nil {
+			return nil, err
+		}
+	}
+
+	return current, nil
+}
+
+func insertMissingObservationReadScopesTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	desired map[ScopeKey]struct{},
+	current map[ScopeKey]struct{},
+	nowNano int64,
+) error {
+	for key := range desired {
+		if _, ok := current[key]; ok {
+			continue
+		}
+		descriptor := DescribeScopeKey(key)
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO block_scopes
+				(scope_key, scope_family, scope_access, subject_kind, subject_value,
+				 issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			key.String(),
+			descriptor.Family,
+			descriptor.Access,
+			descriptor.SubjectKind,
+			descriptor.SubjectValue,
+			key.IssueType(),
+			ScopeTimingNone,
+			nowNano,
+			int64(0),
+			int64(0),
+			0,
+		); err != nil {
+			return fmt.Errorf("sync: inserting observation-owned read scope %s: %w", key.String(), err)
+		}
+	}
+
+	return nil
+}
+
+func normalizedObservationManagedPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(paths))
+	normalized := make([]string, 0, len(paths))
+	for i := range paths {
+		if paths[i] == "" {
+			continue
+		}
+		if _, ok := seen[paths[i]]; ok {
+			continue
+		}
+		seen[paths[i]] = struct{}{}
+		normalized = append(normalized, paths[i])
+	}
+
+	return normalized
+}
+
+func clearManagedObservationIssuePathsTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	issueType string,
+	managedPaths []string,
+	currentPaths []string,
+) error {
+	encodedManagedPaths, err := json.Marshal(managedPaths)
+	if err != nil {
+		return fmt.Errorf("sync: marshal managed observation issue paths for %s: %w", issueType, err)
+	}
+
+	if len(currentPaths) == 0 {
+		if _, execErr := tx.ExecContext(ctx,
+			`DELETE FROM observation_issues
+				WHERE issue_type = ?
+					AND path IN (SELECT value FROM json_each(?))`,
+			issueType,
+			string(encodedManagedPaths),
+		); execErr != nil {
+			return fmt.Errorf("sync: clearing managed observation issues for %s: %w", issueType, execErr)
+		}
+		return nil
+	}
+
+	encodedCurrentPaths, err := json.Marshal(currentPaths)
+	if err != nil {
+		return fmt.Errorf("sync: marshal current observation issue paths for %s: %w", issueType, err)
+	}
+
+	if _, execErr := tx.ExecContext(ctx,
+		`DELETE FROM observation_issues
+			WHERE issue_type = ?
+				AND path IN (SELECT value FROM json_each(?))
+				AND path NOT IN (SELECT value FROM json_each(?))`,
+		issueType,
+		string(encodedManagedPaths),
+		string(encodedCurrentPaths),
+	); execErr != nil {
+		return fmt.Errorf("sync: clearing managed observation issues for %s: %w", issueType, execErr)
+	}
+
+	return nil
+}
+
+func exactObservationReadScopes(batch *ObservationFindingsBatch) (map[ScopeKey]struct{}, map[ScopeKey]struct{}) {
+	if batch == nil {
+		return nil, nil
+	}
+	if len(batch.ManagedReadScopes) == 0 {
+		return nil, nil
+	}
+
+	managed := make(map[ScopeKey]struct{}, len(batch.ManagedReadScopes))
+	for i := range batch.ManagedReadScopes {
+		if batch.ManagedReadScopes[i].IsZero() {
+			continue
+		}
+		managed[batch.ManagedReadScopes[i]] = struct{}{}
+	}
+
+	if len(managed) == 0 {
+		return nil, nil
+	}
+
+	desired := make(map[ScopeKey]struct{})
+	for i := range batch.ReadScopes {
+		if _, ok := managed[batch.ReadScopes[i]]; ok {
+			desired[batch.ReadScopes[i]] = struct{}{}
+		}
+	}
+
+	return managed, desired
+}
+
+func reconcileExactObservationReadScopesTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	managed map[ScopeKey]struct{},
+	desired map[ScopeKey]struct{},
+	nowNano int64,
+) error {
+	blocks, err := queryBlockScopesDB(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("sync: listing observation-owned exact read scopes: %w", err)
+	}
+
+	current := make(map[ScopeKey]struct{}, len(managed))
+	for i := range blocks {
+		block := blocks[i]
+		if block == nil {
+			continue
+		}
+		if _, ok := managed[block.Key]; !ok {
 			continue
 		}
 		current[block.Key] = struct{}{}

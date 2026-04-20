@@ -24,9 +24,10 @@ const (
 )
 
 type retryCandidate struct {
-	skipped  *SkippedItem
-	resolved bool
-	err      error
+	observation *SinglePathObservation
+	skipped     *SkippedItem
+	resolved    bool
+	err         error
 }
 
 //nolint:gocyclo // The subset builder keeps dependency closure and remapping in one place.
@@ -477,10 +478,16 @@ func (rt *watchRuntime) clearStaleRetrySweepRow(
 			slog.String("action", row.ActionType.String()),
 			slog.String("error", candidate.err.Error()),
 		)
-	} else if candidate.skipped != nil {
+		return
+	}
+
+	if candidate.skipped != nil {
 		rt.recordRetryTrialSkippedItem(ctx, rt, work, driveID, candidate.skipped)
 	} else if candidate.resolved {
+		rt.reconcileRetryTrialObservationResult(ctx, rt, work, driveID, row.Path, candidate.observation)
 		rt.clearRetryWorkCandidate(ctx, work, driveID, "runRetrierSweep")
+	} else if candidate.observation != nil {
+		rt.reconcileRetryTrialObservationResult(ctx, rt, work, driveID, row.Path, candidate.observation)
 	}
 }
 
@@ -616,24 +623,42 @@ func (flow *engineFlow) recordRetryTrialSkippedItem(
 		slog.String("issue_type", skipped.Reason),
 		slog.String("detail", skipped.Detail),
 	)
-	batch := observationFindingsBatchFromSkippedItems(driveID, []SkippedItem{*skipped})
-	if err := flow.engine.baseline.ReconcileObservationFindings(ctx, batch, flow.engine.nowFunc()); err != nil {
+	flow.reconcileRetryTrialObservationResult(ctx, watch, work, driveID, skipped.Path, &SinglePathObservation{Skipped: skipped})
+
+	flow.clearRetryWorkCandidate(ctx, work, driveID, "recordRetryTrialSkippedItem")
+}
+
+func (flow *engineFlow) reconcileRetryTrialObservationResult(
+	ctx context.Context,
+	watch *watchRuntime,
+	work RetryWorkKey,
+	driveID driveid.ID,
+	managedPath string,
+	observation *SinglePathObservation,
+) {
+	batch, ok := observationFindingsBatchFromSinglePathObservation(driveID, managedPath, observation)
+	if !ok {
+		return
+	}
+
+	if err := flow.engine.baseline.ReconcileObservationFindings(ctx, &batch, flow.engine.nowFunc()); err != nil {
 		flow.engine.logger.Warn("retry/trial failed to reconcile observation findings",
-			slog.String("path", skipped.Path),
-			slog.String("issue_type", skipped.Reason),
+			slog.String("path", managedPath),
 			slog.String("action_type", work.ActionType.String()),
 			slog.String("error", err.Error()),
 		)
-	} else if watch != nil {
-		if err := flow.scopeController().loadActiveScopes(ctx, watch); err != nil {
-			flow.engine.logger.Warn("retry/trial failed to refresh watch scopes",
-				slog.String("path", skipped.Path),
-				slog.String("error", err.Error()),
-			)
-		}
+		return
 	}
 
-	flow.clearRetryWorkCandidate(ctx, work, driveID, "recordRetryTrialSkippedItem")
+	if watch == nil {
+		return
+	}
+	if err := flow.scopeController().loadActiveScopes(ctx, watch); err != nil {
+		flow.engine.logger.Warn("retry/trial failed to refresh watch scopes",
+			slog.String("path", managedPath),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 func (flow *engineFlow) buildMirrorRetryCandidate(
@@ -700,8 +725,9 @@ func (flow *engineFlow) buildLocalObservationRetryCandidate(
 	}
 
 	return retryCandidate{
-		skipped:  result.Skipped,
-		resolved: result.Resolved,
+		observation: &result,
+		skipped:     result.Skipped,
+		resolved:    result.Resolved,
 	}
 }
 

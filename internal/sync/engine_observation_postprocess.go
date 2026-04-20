@@ -71,7 +71,7 @@ func (rt *watchRuntime) processCommittedSharedRootWatchBatch(
 	rt.reconcileObservationFindingsBatch(
 		ctx,
 		rt,
-		result.findings,
+		&result.findings,
 		"failed to reconcile shared-root remote observation findings",
 	)
 
@@ -104,7 +104,10 @@ func (rt *watchRuntime) processCommittedPrimaryWatchBatch(
 	rt.reconcileObservationFindingsBatch(
 		ctx,
 		rt,
-		remoteObservationManagedBatch(),
+		&ObservationFindingsBatch{
+			ManagedIssueTypes:     []string{IssueRemoteReadDenied},
+			ManagedReadScopeKinds: []ScopeKeyKind{ScopePermRemoteRead},
+		},
 		"failed to reconcile primary remote observation findings",
 	)
 
