@@ -190,8 +190,7 @@ func (rt *watchRuntime) transitionWatchObservationEvent(
 ) (watchTransition, bool) {
 	switch event.kind {
 	case watchEventSkipped:
-		rt.recordSkippedItems(ctx, event.skipped)
-		rt.clearResolvedSkippedItems(ctx, event.skipped)
+		rt.reconcileSkippedObservationFindings(ctx, rt, event.skipped)
 		return watchTransition{}, true
 	case watchEventSkippedClosed:
 		p.skippedCh = nil

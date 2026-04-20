@@ -104,7 +104,8 @@ Ignore invariants:
 - later reconciliation removes baseline rows that are absent from both snapshots
 
 Observation may emit `SkippedItem`s for invalid or unsupported local content.
-The engine decides how those become durable actionable issues.
+The engine reconciles those findings as one coherent observation-owned durable
+set, including any observation-owned read scopes proved by the scan.
 
 `Scanner.FullScan()` now also returns direct `LocalStateRow` values for every
 admissible currently observed local path. `local_state` persistence therefore

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // externalDBChanged checks whether another process (e.g., the CLI) wrote to
@@ -175,14 +177,12 @@ func summarySignature(summary ConditionSummary) (string, string) {
 	return fmt.Sprintf("%d|%s", summary.VisibleTotal(), breakdown), breakdown
 }
 
-// recordSkippedItems records observation-time rejections (invalid names,
-// path too long, file too large) as durable observation issues.
-func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []SkippedItem) {
+func (flow *engineFlow) reconcileSkippedObservationFindings(
+	ctx context.Context,
+	watch *watchRuntime,
+	skipped []SkippedItem,
+) {
 	eng := flow.engine
-
-	if len(skipped) == 0 {
-		return
-	}
 
 	byReason := make(map[string][]SkippedItem)
 	for i := range skipped {
@@ -224,82 +224,59 @@ func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []Skippe
 				)
 			}
 		}
+	}
 
-		issues := make([]ObservationIssue, len(items))
-		for i := range items {
-			issues[i] = ObservationIssue{
-				Path:       items[i].Path,
-				DriveID:    eng.driveID,
-				ActionType: ActionUpload,
-				IssueType:  reason,
-				Error:      items[i].Detail,
-				FileSize:   items[i].FileSize,
-			}
-			if reason == IssueLocalReadDenied {
-				issues[i].ScopeKey = SKPermLocalRead(items[i].Path)
-			}
-		}
+	batch := observationFindingsBatchFromSkippedItems(eng.driveID, skipped)
+	if err := eng.baseline.ReconcileObservationFindings(ctx, batch, eng.nowFunc()); err != nil {
+		eng.logger.Error("failed to reconcile observation findings",
+			slog.Int("issues", len(batch.Issues)),
+			slog.Int("read_scopes", len(batch.ReadScopes)),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
 
-		if err := eng.baseline.UpsertObservationIssues(ctx, issues); err != nil {
-			eng.logger.Error("failed to record skipped items",
-				slog.String("issue_type", reason),
-				slog.Int("count", len(issues)),
+	if watch != nil {
+		if err := flow.scopeController().loadActiveScopes(ctx, watch); err != nil {
+			eng.logger.Warn("failed to refresh watch scopes after observation reconcile",
 				slog.String("error", err.Error()),
 			)
 		}
 	}
 }
 
-// clearResolvedSkippedItems removes observation_issues entries for scanner-detectable
-// issue types that are no longer present in the current scan.
-func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped []SkippedItem) {
-	eng := flow.engine
-
-	currentByType := make(map[string][]string)
-	for i := range skipped {
-		currentByType[skipped[i].Reason] = append(currentByType[skipped[i].Reason], skipped[i].Path)
-	}
-
-	scannerIssueTypes := []string{
-		IssueInvalidFilename, IssuePathTooLong,
-		IssueFileTooLarge, IssueCaseCollision,
-		IssueLocalReadDenied,
-		IssueHashPanic,
-	}
-	for _, issueType := range scannerIssueTypes {
-		paths := currentByType[issueType]
-		if err := eng.baseline.ClearResolvedObservationIssues(ctx, issueType, paths); err != nil {
-			eng.logger.Error("failed to clear resolved observation issues",
-				slog.String("issue_type", issueType),
-				slog.String("error", err.Error()),
-			)
-		}
-	}
-}
-
-func (flow *engineFlow) syncObservationReadScopes(
-	ctx context.Context,
-	watch *watchRuntime,
+func observationFindingsBatchFromSkippedItems(
+	driveID driveid.ID,
 	skipped []SkippedItem,
-) {
+) ObservationFindingsBatch {
+	batch := ObservationFindingsBatch{
+		Issues:     make([]ObservationIssue, 0, len(skipped)),
+		ReadScopes: make([]ScopeKey, 0),
+	}
+
 	for i := range skipped {
-		if skipped[i].Reason != IssueLocalReadDenied || skipped[i].Path == "" {
+		item := skipped[i]
+		if item.Reason == "" || item.Path == "" {
 			continue
 		}
 
-		block := &BlockScope{
-			Key:          SKPermLocalRead(skipped[i].Path),
-			IssueType:    IssueLocalReadDenied,
-			TimingSource: ScopeTimingNone,
-			BlockedAt:    flow.engine.nowFunc(),
+		issue := ObservationIssue{
+			Path:       item.Path,
+			DriveID:    driveID,
+			ActionType: ActionUpload,
+			IssueType:  item.Reason,
+			Error:      item.Detail,
+			FileSize:   item.FileSize,
 		}
-		if err := flow.scopeController().activateScope(ctx, watch, block); err != nil {
-			flow.engine.logger.Warn("failed to persist observation-owned local read scope",
-				slog.String("scope_key", block.Key.String()),
-				slog.String("error", err.Error()),
-			)
+		if item.Reason == IssueLocalReadDenied && item.BlocksReadScope {
+			issue.ScopeKey = SKPermLocalRead(item.Path)
+			batch.ReadScopes = append(batch.ReadScopes, issue.ScopeKey)
 		}
+
+		batch.Issues = append(batch.Issues, issue)
 	}
+
+	return batch
 }
 
 func (e *Engine) fullRemoteReconcileDelay(ctx context.Context) (time.Duration, error) {

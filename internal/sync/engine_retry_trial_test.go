@@ -182,6 +182,30 @@ func TestBuildRetryCandidateFromRetryWork_MapsFilteredLocalPathToSkippedItem(t *
 }
 
 // Validates: R-2.10.33
+func TestRecordRetryTrialSkippedItem_PersistsObservationIssueThroughObservationBatch(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	flow := testEngineFlow(t, eng)
+
+	flow.recordRetryTrialSkippedItem(t.Context(), nil, RetryWorkKey{
+		Path:       "Private/file.txt",
+		ActionType: ActionUpload,
+	}, eng.driveID, &SkippedItem{
+		Path:   "Private/file.txt",
+		Reason: IssueLocalReadDenied,
+		Detail: "file not accessible (check filesystem permissions)",
+	})
+
+	rows, err := eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "Private/file.txt", rows[0].Path)
+	assert.Equal(t, IssueLocalReadDenied, rows[0].IssueType)
+	assert.True(t, rows[0].ScopeKey.IsZero())
+}
+
+// Validates: R-2.10.33
 func TestBuildRetryCandidateFromRetryWork_LeavesDistinctRemoteMoveUnresolved(t *testing.T) {
 	t.Parallel()
 
@@ -259,7 +283,7 @@ func TestClearStaleRetrySweepRow_ResolvedRetryClearsRetryWork(t *testing.T) {
 }
 
 // Validates: R-2.10.33
-func TestClearStaleRetrySweepRow_SkippedRetryWaitsForObservationPass(t *testing.T) {
+func TestClearStaleRetrySweepRow_SkippedRetryPersistsObservationFindings(t *testing.T) {
 	t.Parallel()
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
@@ -284,7 +308,10 @@ func TestClearStaleRetrySweepRow_SkippedRetryWaitsForObservationPass(t *testing.
 	rt.clearStaleRetrySweepRow(t.Context(), bl, row, retryWorkKeyForRetryWork(row))
 
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
-	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
+	issues := actionableObservationIssuesForTest(t, eng.baseline, t.Context())
+	require.Len(t, issues, 1)
+	assert.Equal(t, "forms", issues[0].Path)
+	assert.Equal(t, IssueInvalidFilename, issues[0].IssueType)
 }
 
 // Validates: R-2.10.5

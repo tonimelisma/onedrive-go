@@ -96,6 +96,10 @@ handling may discover a condition that should later appear there, but execution
 does not upsert observation rows directly. The next observation pass is
 responsible for proving and persisting that current-truth problem.
 
+Observation-owned issue rows and observation-owned read scopes are reconciled as
+one current set. If an old observation-owned issue or read scope is missing
+from the new batch, the store removes it during that same reconciliation.
+
 ## `retry_work`
 
 `retry_work` is the durable ledger for exact delayed work aligned with the

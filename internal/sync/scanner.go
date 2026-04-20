@@ -339,9 +339,10 @@ func (o *LocalObserver) makeWalkFunc(
 			if errors.Is(walkErr, os.ErrPermission) {
 				if relPath, err := tree.Rel(fsPath); err == nil {
 					*skipped = append(*skipped, SkippedItem{
-						Path:   nfcNormalize(filepath.ToSlash(relPath)),
-						Reason: IssueLocalReadDenied,
-						Detail: "directory not accessible (check filesystem permissions)",
+						Path:            nfcNormalize(filepath.ToSlash(relPath)),
+						Reason:          IssueLocalReadDenied,
+						Detail:          "directory not accessible (check filesystem permissions)",
+						BlocksReadScope: true,
 					})
 				}
 			}
