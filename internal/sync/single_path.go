@@ -68,6 +68,13 @@ func ObserveSinglePathWithFilter(
 
 	absPath, info, isSymlink, err := statSingleObservedPath(syncTree, path)
 	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return SinglePathObservation{Skipped: &SkippedItem{
+				Path:   path,
+				Reason: IssueLocalReadDenied,
+				Detail: "file not accessible (check filesystem permissions)",
+			}}, nil
+		}
 		return SinglePathObservation{}, err
 	}
 
@@ -111,6 +118,9 @@ func statSingleObservedPath(syncTree *synctree.Root, path string) (string, os.Fi
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
 			return "", nil, false, nil
+		}
+		if errors.Is(err, os.ErrPermission) {
+			return absPath, nil, false, os.ErrPermission
 		}
 
 		return "", nil, false, fmt.Errorf("observe single path %s: stat: %w", path, err)

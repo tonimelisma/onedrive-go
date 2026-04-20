@@ -39,6 +39,9 @@ The executable plan is runtime-owned and is not a durable SQLite authority.
 - `baseline`: last known synced common ancestor
 - `local_state`: latest admissible local snapshot
 - `remote_state`: latest admissible remote snapshot
+- `observation_issues`: durable blocked-truth facts for unreadable or
+  unsyncable current state
+- active read permission scopes from `block_scopes`
 - `Mode`: bidirectional, download-only, or upload-only
 - runtime safety/policy inputs owned by the engine
 
@@ -46,16 +49,22 @@ Those rows feed `comparison_state` and `reconciliation_state`, including the
 invariant that a baseline row absent from both snapshots becomes
 `baseline_remove`.
 
+Before Go emits actions, it overlays blocked-truth facts from
+`observation_issues` and active read scopes onto the structural diff so
+unreadable or unobservable paths stay unavailable instead of being misread as
+deletions.
+
 ## Pipeline
 
 1. Run SQL structural diff and reconciliation over snapshots plus baseline.
 2. Load reconciliation rows into Go.
-3. Apply sync-mode and planner-owned safety rules.
-4. Emit the current runtime action set, including conflict expansion into
+3. Normalize blocked truth from `observation_issues` and active read scopes.
+4. Apply sync-mode and planner-owned safety rules.
+5. Emit the current runtime action set, including conflict expansion into
    concrete actions.
-5. Expand folder delete cascades so descendants get explicit work.
-6. Enrich actions with target-drive and target-root metadata.
-7. Build dependency edges and reject dependency cycles.
+6. Expand folder delete cascades so descendants get explicit work.
+7. Enrich actions with target-drive and target-root metadata.
+8. Build dependency edges and reject dependency cycles.
 
 ## File Decisions
 
@@ -90,6 +99,21 @@ They are publication-only outcomes, not executor side effects:
 - the dependency graph still orders them against dependent actions
 - the engine commits their baseline mutation directly through the store
 - the executor does not own handlers for them
+
+## Blocked Truth Overlay
+
+Observation-owned unreadable or unsyncable truth must not be interpreted as
+structural absence:
+
+- local read-denied, invalid, or otherwise unsyncable paths are unavailable
+  local truth, not local deletes
+- remote read-denied subtrees are unavailable remote truth, not remote deletes
+- active read permission scopes suppress destructive and mutating work under
+  the blocked subtree until revalidation succeeds
+
+The planner therefore rewrites structural "missing local" or "missing remote"
+cases into no-op blocked truth when observation issues or active read scopes
+prove the path is currently unavailable.
 
 ## Conflict Planning
 
@@ -140,6 +164,7 @@ rediscovering that ownership ad hoc.
 `download-only` and `upload-only` do not stop observation. They suppress only
 the forbidden action classes and record those counts in `DeferredByMode`.
 
-Permission scopes are different: they are engine-owned admission policy.
-Planner output is not suppressed by remote blocked-boundary lists; the engine
-filters blocked work during admission and retry/trial handling.
+Permission scopes are different: planner is blocked-truth-aware for active read
+scopes and observation-owned unreadable paths so unavailable truth is never
+treated as a delete. Final runtime admission still happens later in the engine
+against the ready frontier.

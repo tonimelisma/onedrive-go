@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
+GOVERNS: internal/sync/engine*.go, internal/sync/watch_summary.go, internal/sync/condition_summary.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_decisions.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
 Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
@@ -84,6 +84,8 @@ one-shot run are durable state for a later run.
 `materializeCurrentActionPlan()` is the durable reconciliation boundary. It
 should prune stale `retry_work`, prune empty `block_scopes`, and align blocked
 work with active scopes. It does not persist a durable executable plan table.
+Permission scopes remain probe-owned facts and are not discarded just because
+their blocked retry rows happened to clear.
 
 ## Watch Mode
 
@@ -153,8 +155,10 @@ The engine classifies results into:
 - observation-time invalid or unsyncable truth -> `observation_issues`
 - exhausted transient exact work -> `retry_work`
 - shared blockers -> `block_scopes` plus blocked `retry_work`
-- execution-discovered durable content/current-truth problems ->
-  `observation_issues`
+- execution-discovered conditions that should be observation-owned do not write
+  `observation_issues`; execution logs the invariant violation, persists only
+  execution-owned state, and waits for the next observation pass to record the
+  durable issue
 
 ### Runtime admission model
 
@@ -178,7 +182,8 @@ The target scope families are:
 - `throttle:target:drive:<driveID>`
 - `quota:own`
 - `disk:local`
-- `perm:dir:<path>`
+- `perm:dir:read:<path>`
+- `perm:dir:write:<path>`
 - `perm:remote:read:<boundary>`
 - `perm:remote:write:<boundary>`
 - `account:throttled`
@@ -189,16 +194,19 @@ derived-only runtime state.
 ### Permission recovery
 
 Permission scopes are revalidated automatically; there is no manual retry or
-manual recheck CLI for them. Observation may create or clear permission scopes
-directly when current truth already proves the shared blocker or its recovery.
+manual recheck CLI for them. Observation/probe may create or clear permission
+scopes directly when current truth already proves the shared blocker or its
+recovery. A raw `403` or `os.ErrPermission` is only a trigger to probe; the
+probe result is what may activate or release the scope.
 
 ### Retry and trial reconstruction
 
 Retry and trial reconstruction is retry-owned. The engine revalidates due or
 blocked work directly from `retry_work`, exact semantic work identity, and the
 current snapshot/baseline view. Scope lifecycle is owned only by
-`block_scopes` plus blocked/unblocked `retry_work`. Empty scopes are discarded
-as soon as no blocked `retry_work` remains for their `scope_key`.
+`block_scopes` plus blocked/unblocked `retry_work`. Timed transient scopes are
+discarded when no blocked `retry_work` remains for their `scope_key`. Permission
+scopes are instead retained until affirmative revalidation proves recovery.
 
 ## What The Engine Does Not Own
 

@@ -493,7 +493,7 @@ func TestPhase0_RecheckLocalPermissions_ReleasesBlockedRetryWorkImmediately(t *t
 	ctx := t.Context()
 	setupWatchEngine(t, eng)
 
-	scopeKey := SKPermDir("Private")
+	scopeKey := SKPermLocalWrite("Private")
 	accessibleDir := filepath.Join(syncRoot, "Private")
 	require.NoError(t, os.MkdirAll(accessibleDir, 0o750))
 
@@ -559,7 +559,7 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 		Path:       "docs/file.txt",
 		DriveID:    eng.driveID,
 		ActionType: ActionUpload,
-		IssueType:  IssueLocalWriteDenied,
+		IssueType:  IssueLocalReadDenied,
 		Error:      "permission denied",
 	}))
 

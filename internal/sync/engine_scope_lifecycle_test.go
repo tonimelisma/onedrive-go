@@ -261,7 +261,7 @@ func TestRemoteBlockedRetryRelevant_MatchesPathAndBoundaryChanges(t *testing.T) 
 	row := &RetryWorkRow{
 		Path:       "Shared/Docs/report.txt",
 		ActionType: ActionUpload,
-		ScopeKey:   SKPermRemote("Shared/Docs"),
+		ScopeKey:   SKPermRemoteWrite("Shared/Docs"),
 		Blocked:    true,
 	}
 
@@ -281,14 +281,14 @@ func TestRemoteBlockedRetryRelevant_MatchesPathAndBoundaryChanges(t *testing.T) 
 }
 
 // Validates: R-2.10.5
-func TestScopeController_ClearResolvedRemoteBlockedRetryWork_ReleasesResolvedRemoteScope(t *testing.T) {
+func TestScopeController_ClearResolvedRemoteBlockedRetryWork_KeepsRemotePermissionScopeUntilProbeRelease(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	controller := testEngineFlow(t, eng).scopeController()
-	resolvedScope := SKPermRemote("Shared/Resolved")
-	retainedScope := SKPermRemote("Shared/Retained")
+	resolvedScope := SKPermRemoteWrite("Shared/Resolved")
+	retainedScope := SKPermRemoteWrite("Shared/Retained")
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           resolvedScope,
@@ -346,7 +346,7 @@ func TestScopeController_ClearResolvedRemoteBlockedRetryWork_ReleasesResolvedRem
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
 	assert.Equal(t, "Shared/Retained/file.txt", retryRows[0].Path)
-	assert.False(t, isTestBlockScopeed(eng, resolvedScope))
+	assert.True(t, isTestBlockScopeed(eng, resolvedScope))
 	assert.True(t, isTestBlockScopeed(eng, retainedScope))
 }
 

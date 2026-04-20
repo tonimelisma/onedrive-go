@@ -68,24 +68,10 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 		return
 	}
 
-	blockedRetries, err := rt.engine.baseline.ListBlockedRetryWork(ctx)
-	if err != nil {
-		rt.engine.logger.Warn("failed to check blocked retry_work rows",
-			slog.String("error", err.Error()),
-		)
-
-		return
-	}
-
-	activeScopes := make(map[ScopeKey]bool, len(blocks)+len(blockedRetries))
+	activeScopes := make(map[ScopeKey]bool, len(blocks))
 	for i := range blocks {
-		if blocks[i] != nil && blocks[i].Key.IsPermDir() {
+		if blocks[i] != nil && (blocks[i].Key.IsPermDir() || blocks[i].Key.IsPermRemote()) {
 			activeScopes[blocks[i].Key] = true
-		}
-	}
-	for i := range blockedRetries {
-		if blockedRetries[i].ScopeKey.IsPermRemote() {
-			activeScopes[blockedRetries[i].ScopeKey] = true
 		}
 	}
 
@@ -110,22 +96,17 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 // in watch mode. Only logs when the count changes since the last summary
 // to avoid noisy repeated output.
 func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
-	summary, err := rt.engine.baseline.ReadVisibleConditionSummary(ctx)
+	snapshot, err := rt.engine.baseline.ReadDriveStatusSnapshot(ctx)
 	if err != nil {
 		return
 	}
-
-	groups, err := rt.engine.baseline.ListVisibleConditionGroups(ctx)
-	if err != nil {
-		return
-	}
-
+	summary, groups := buildWatchConditionSummary(&snapshot)
 	rt.logRemoteBlockedChanges(groups)
 
 	totalConditions := summary.VisibleTotal()
 	if totalConditions == 0 {
 		if rt.lastSummaryTotal != 0 || rt.lastSummarySignature != "" {
-			rt.engine.logger.Info("visible conditions cleared")
+			rt.engine.logger.Info("sync conditions cleared")
 		}
 		rt.lastSummaryTotal = 0
 		rt.lastSummarySignature = ""
@@ -140,34 +121,34 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 	rt.lastSummaryTotal = totalConditions
 	rt.lastSummarySignature = signature
 
-	rt.engine.logger.Warn("visible conditions",
+	rt.engine.logger.Warn("sync conditions",
 		slog.Int("total", totalConditions),
 		slog.String("breakdown", breakdown),
 	)
 }
 
-func (rt *watchRuntime) logRemoteBlockedChanges(groups []VisibleConditionGroup) {
+func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup) {
 	current := make(map[ScopeKey]string, len(groups))
 
 	for i := range groups {
 		group := groups[i]
-		if group.RemoteBlocked == nil || !group.ScopeKey.IsPermRemote() {
+		if !group.ScopeKey.IsPermRemoteWrite() {
 			continue
 		}
 
-		signature := strings.Join(group.RemoteBlocked.BlockedPaths, "\x00")
+		signature := strings.Join(group.BlockedPaths, "\x00")
 		current[group.ScopeKey] = signature
 
 		switch previous, ok := rt.lastRemoteBlocked[group.ScopeKey]; {
 		case !ok:
 			rt.engine.logger.Warn("shared-folder writes blocked",
-				slog.String("boundary", group.RemoteBlocked.BoundaryPath),
-				slog.Int("blocked_writes", len(group.RemoteBlocked.BlockedPaths)),
+				slog.String("boundary", group.BoundaryPath),
+				slog.Int("blocked_writes", len(group.BlockedPaths)),
 			)
 		case previous != signature:
 			rt.engine.logger.Warn("shared-folder writes still blocked",
-				slog.String("boundary", group.RemoteBlocked.BoundaryPath),
-				slog.Int("blocked_writes", len(group.RemoteBlocked.BlockedPaths)),
+				slog.String("boundary", group.BoundaryPath),
+				slog.Int("blocked_writes", len(group.BlockedPaths)),
 			)
 		}
 	}
@@ -254,6 +235,9 @@ func (flow *engineFlow) recordSkippedItems(ctx context.Context, skipped []Skippe
 				Error:      items[i].Detail,
 				FileSize:   items[i].FileSize,
 			}
+			if reason == IssueLocalReadDenied {
+				issues[i].ScopeKey = SKPermLocalRead(items[i].Path)
+			}
 		}
 
 		if err := eng.baseline.UpsertObservationIssues(ctx, issues); err != nil {
@@ -279,6 +263,7 @@ func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped [
 	scannerIssueTypes := []string{
 		IssueInvalidFilename, IssuePathTooLong,
 		IssueFileTooLarge, IssueCaseCollision,
+		IssueLocalReadDenied,
 		IssueHashPanic,
 	}
 	for _, issueType := range scannerIssueTypes {
@@ -286,6 +271,31 @@ func (flow *engineFlow) clearResolvedSkippedItems(ctx context.Context, skipped [
 		if err := eng.baseline.ClearResolvedObservationIssues(ctx, issueType, paths); err != nil {
 			eng.logger.Error("failed to clear resolved observation issues",
 				slog.String("issue_type", issueType),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+}
+
+func (flow *engineFlow) syncObservationReadScopes(
+	ctx context.Context,
+	watch *watchRuntime,
+	skipped []SkippedItem,
+) {
+	for i := range skipped {
+		if skipped[i].Reason != IssueLocalReadDenied || skipped[i].Path == "" {
+			continue
+		}
+
+		block := &BlockScope{
+			Key:          SKPermLocalRead(skipped[i].Path),
+			IssueType:    IssueLocalReadDenied,
+			TimingSource: ScopeTimingNone,
+			BlockedAt:    flow.engine.nowFunc(),
+		}
+		if err := flow.scopeController().activateScope(ctx, watch, block); err != nil {
+			flow.engine.logger.Warn("failed to persist observation-owned local read scope",
+				slog.String("scope_key", block.Key.String()),
 				slog.String("error", err.Error()),
 			)
 		}

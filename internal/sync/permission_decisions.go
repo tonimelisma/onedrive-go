@@ -23,7 +23,6 @@ const (
 type PermissionCheckDecision struct {
 	Matched          bool
 	Kind             PermissionCheckDecisionKind
-	ObservationIssue *ObservationIssue
 	RetryWorkFailure *RetryWorkFailure
 	ScopeKey         ScopeKey
 	BlockScope       *BlockScope
@@ -77,7 +76,6 @@ func (controller *scopeController) applyPermissionCheckMutation(
 	case permissionCheckRecordFileFailure,
 		permissionCheckActivateBoundaryScope,
 		permissionCheckActivateDerivedScope:
-		controller.recordObservationIssue(ctx, decision.ObservationIssue)
 		controller.recordRetryWorkFailure(ctx, decision.RetryWorkFailure)
 		if decision.BlockScope != nil {
 			if err := controller.activateScope(ctx, watch, decision.BlockScope); err != nil {
@@ -129,13 +127,6 @@ func (controller *scopeController) logPermissionCheckDecision(
 func permissionDecisionSummaryKey(decision *PermissionCheckDecision) SummaryKey {
 	if decision == nil {
 		return ""
-	}
-
-	if decision.ObservationIssue != nil {
-		return SummaryKeyForObservationIssue(
-			decision.ObservationIssue.IssueType,
-			decision.ObservationIssue.ScopeKey,
-		)
 	}
 
 	if decision.BlockScope != nil {
@@ -209,36 +200,6 @@ func (controller *scopeController) applyPermissionRecheckDecisions(
 			slog.String("scope_key", decision.ScopeKey.String()),
 		)
 	}
-}
-
-func (controller *scopeController) recordObservationIssue(ctx context.Context, issue *ObservationIssue) {
-	if issue == nil {
-		return
-	}
-
-	flow := controller.flow
-	summaryKey := SummaryKeyForObservationIssue(issue.IssueType, issue.ScopeKey)
-
-	if err := flow.engine.baseline.UpsertObservationIssue(ctx, issue); err != nil {
-		fields := append(flow.summaryLogFields(
-			errclass.ClassActionable,
-			summaryKey,
-			issue.Path,
-			issue.ScopeKey,
-		), slog.String("error", err.Error()))
-		flow.engine.logger.Warn("failed to record observation issue", fields...)
-		return
-	}
-
-	fields := append(flow.summaryLogFields(
-		errclass.ClassActionable,
-		summaryKey,
-		issue.Path,
-		issue.ScopeKey,
-	),
-		slog.String("issue_type", issue.IssueType),
-	)
-	flow.engine.logger.Debug("observation issue recorded", fields...)
 }
 
 func (controller *scopeController) recordRetryWorkFailure(ctx context.Context, failure *RetryWorkFailure) {

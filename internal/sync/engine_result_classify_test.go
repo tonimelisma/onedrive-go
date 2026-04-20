@@ -192,7 +192,7 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 			want: ResultDecision{
 				Class:       resultFatal,
 				SummaryKey:  SummaryAuthenticationRequired,
-				Persistence: persistObservationIssue,
+				Persistence: persistNone,
 				TrialHint:   trialHintFatal,
 				IssueType:   IssueUnauthorized,
 			},
@@ -208,7 +208,7 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 			want: ResultDecision{
 				Class:          resultSkip,
 				SummaryKey:     SummaryRemoteReadDenied,
-				Persistence:    persistObservationIssue,
+				Persistence:    persistRetryWork,
 				PermissionFlow: permissionFlowRemote403,
 				TrialHint:      trialHintPreserve,
 				IssueType:      IssueRemoteReadDenied,
@@ -319,7 +319,7 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 			want: ResultDecision{
 				Class:          resultSkip,
 				SummaryKey:     SummaryLocalReadDenied,
-				Persistence:    persistObservationIssue,
+				Persistence:    persistRetryWork,
 				PermissionFlow: permissionFlowLocalPermission,
 				TrialHint:      trialHintPreserve,
 				IssueType:      IssueLocalReadDenied,
