@@ -1132,6 +1132,54 @@ func TestAddSharedDrive_ConfigWriteFailureRollsBackCatalogRegistration(t *testin
 	assert.Equal(t, ownerCID.String(), account.CanonicalID)
 }
 
+func TestAddSharedDrive_ConfigWriteFailurePreservesPreExistingCatalogDrive(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgDir := filepath.Join(t.TempDir(), "readonly-config")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o700))
+	cfgPath := filepath.Join(cfgDir, "config.toml")
+
+	ownerCID := driveid.MustCanonicalID("personal:owner@example.com")
+	sharedCID := driveid.MustCanonicalID("shared:owner@example.com:driveX:itemY")
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_owner@example.com.json")
+
+	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+		catalog.UpsertDrive(&config.CatalogDrive{
+			CanonicalID:           sharedCID.String(),
+			OwnerAccountCanonical: ownerCID.String(),
+			DriveType:             sharedCID.DriveType(),
+			DisplayName:           "Existing Shared Folder",
+			RemoteDriveID:         "shared-remote-id",
+		})
+		return nil
+	}))
+
+	//nolint:gosec // Test fixture directory must be non-writable to force config write rollback.
+	require.NoError(t, os.Chmod(cfgDir, 0o500))
+	t.Cleanup(func() {
+		//nolint:gosec // Restores the temporary fixture directory so cleanup can proceed.
+		require.NoError(t, os.Chmod(cfgDir, 0o700))
+	})
+
+	err := addSharedDrive(
+		t.Context(),
+		cfgPath,
+		io.Discard,
+		sharedCID,
+		"New Shared Folder",
+		testDriveLogger(t),
+		driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t)),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "writing drive config")
+
+	drive, found := loadCatalogDrive(t, sharedCID)
+	require.True(t, found, "pre-existing shared drive catalog entry should survive rollback")
+	assert.Equal(t, "Existing Shared Folder", drive.DisplayName)
+	assert.Equal(t, ownerCID.String(), drive.OwnerAccountCanonical)
+	assert.Equal(t, "shared-remote-id", drive.RemoteDriveID)
+}
+
 // --- collectExistingDisplayNames ---
 
 func TestCollectExistingDisplayNames(t *testing.T) {

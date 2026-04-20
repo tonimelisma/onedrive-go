@@ -143,6 +143,11 @@ shared:<recipient>:<driveId>:<itemId>` resolves display naming from the
 authoritative `GET /drives/{driveId}/items/{itemId}` response so shared-target
 bootstrap stays independent of live discovery quality.
 
+Shared-drive add updates the catalog before writing config so the owning
+account and display metadata stay config-owned, but rollback is attempt-scoped:
+if config writes fail, the command restores any pre-existing catalog drive
+record instead of deleting retained inventory from an earlier session.
+
 ## Design Constraints
 
 - `driveid` stays pure value logic. Runtime drive-ID resolution is config-owned:

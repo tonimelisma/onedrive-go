@@ -156,7 +156,9 @@ func observedRemoteStateUpdate(
 	item *ObservedItem,
 ) (changed bool, previousPath string) {
 	pathChanged := item.Path != "" && item.Path != existing.Path
+	driveChanged := !item.DriveID.IsZero() && item.DriveID != existing.DriveID
 	changed = pathChanged ||
+		driveChanged ||
 		item.ParentID != existing.ParentID ||
 		item.ItemType != existing.ItemType ||
 		item.Hash != existing.Hash ||

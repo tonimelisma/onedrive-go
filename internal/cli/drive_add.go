@@ -179,27 +179,50 @@ func addSharedDrive(
 	}
 
 	syncDir := config.BaseSyncDir(cid, "", displayName)
+	priorCatalogDrive, hadPriorCatalogDrive, err := loadExistingCatalogDrive(config.DefaultDataDir(), cid)
+	if err != nil {
+		return fmt.Errorf("loading existing catalog drive: %w", err)
+	}
 
 	if err := config.RegisterSharedDrive(config.DefaultDataDir(), cid, parentCID, displayName); err != nil {
 		return fmt.Errorf("updating catalog: %w", err)
 	}
 
 	if err := config.AppendDriveSection(cfgPath, cid, syncDir); err != nil {
-		rollbackSharedDriveAdd(cfgPath, cid, false, logger)
+		rollbackSharedDriveAdd(cfgPath, cid, priorCatalogDrive, hadPriorCatalogDrive, false, logger)
 		return fmt.Errorf("writing drive config: %w", err)
 	}
 
 	if err := config.SetDriveKey(cfgPath, cid, "display_name", displayName); err != nil {
-		rollbackSharedDriveAdd(cfgPath, cid, true, logger)
+		rollbackSharedDriveAdd(cfgPath, cid, priorCatalogDrive, hadPriorCatalogDrive, true, logger)
 		return fmt.Errorf("writing display_name to config: %w", err)
 	}
 
 	return writef(w, "Added drive %s (%s) -> %s\n", displayName, cid.String(), syncDir)
 }
 
+func loadExistingCatalogDrive(
+	dataDir string,
+	cid driveid.CanonicalID,
+) (*config.CatalogDrive, bool, error) {
+	catalog, err := config.LoadCatalogForDataDir(dataDir)
+	if err != nil {
+		return nil, false, fmt.Errorf("loading catalog: %w", err)
+	}
+
+	drive, found := catalog.DriveByCanonicalID(cid)
+	if !found {
+		return nil, false, nil
+	}
+
+	return &drive, true, nil
+}
+
 func rollbackSharedDriveAdd(
 	cfgPath string,
 	cid driveid.CanonicalID,
+	priorCatalogDrive *config.CatalogDrive,
+	hadPriorCatalogDrive bool,
 	configWritten bool,
 	logger *slog.Logger,
 ) {
@@ -213,10 +236,14 @@ func rollbackSharedDriveAdd(
 	}
 
 	if err := config.UpdateCatalog(func(catalog *config.Catalog) error {
+		if hadPriorCatalogDrive {
+			catalog.UpsertDrive(priorCatalogDrive)
+			return nil
+		}
 		catalog.DeleteDrive(cid)
 		return nil
 	}); err != nil {
-		logger.Warn("shared drive add rollback failed to remove catalog entry",
+		logger.Warn("shared drive add rollback failed to restore catalog state",
 			"drive", cid.String(),
 			"error", err,
 		)
