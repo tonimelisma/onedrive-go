@@ -405,6 +405,94 @@ func TestPlannerPlanCurrentState_RemoteReadScopeBlocksLocalDeletesForDescendants
 }
 
 // Validates: R-2.1.3, R-2.10.4
+func TestPlannerPlanCurrentState_LocalReadScopeSuppressesRemoteOnlySubtreeActions(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
+		{
+			DriveID:  driveID,
+			ItemID:   "item-private-dir",
+			Path:     "Private",
+			ItemType: ItemTypeFolder,
+		},
+		{
+			DriveID:  driveID,
+			ItemID:   "item-private-subdir",
+			Path:     "Private/sub",
+			ItemType: ItemTypeFolder,
+		},
+		{
+			DriveID:  driveID,
+			ItemID:   "item-private-file",
+			Path:     "Private/sub/file.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "hash-private",
+			Size:     10,
+			Mtime:    1,
+			ETag:     "etag-private",
+		},
+	}, "", driveID))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKPermLocalRead("Private"),
+		ConditionType: IssueLocalReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
+	}))
+
+	plan := planCurrentStateForStore(t, store)
+	assertNoActionForPath(t, plan, "Private", ActionFolderCreate)
+	assertNoActionForPath(t, plan, "Private/sub", ActionFolderCreate)
+	assertNoActionForPath(t, plan, "Private/sub/file.txt", ActionDownload)
+	assert.Empty(t, plan.Actions)
+}
+
+// Validates: R-2.1.3, R-2.10.4
+func TestPlannerPlanCurrentState_RemoteReadScopeSuppressesLocalOnlySubtreeActions(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+		{
+			Path:       "Shared",
+			ItemType:   ItemTypeFolder,
+			ObservedAt: 1,
+		},
+		{
+			Path:       "Shared/sub",
+			ItemType:   ItemTypeFolder,
+			ObservedAt: 1,
+		},
+		{
+			Path:            "Shared/sub/file.txt",
+			ItemType:        ItemTypeFile,
+			Hash:            "hash-shared",
+			Size:            10,
+			Mtime:           1,
+			ContentIdentity: "hash-shared",
+			ObservedAt:      1,
+		},
+	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKPermRemoteRead("Shared"),
+		ConditionType: IssueRemoteReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
+	}))
+
+	plan := planCurrentStateForStore(t, store)
+	assertNoActionForPath(t, plan, "Shared", ActionFolderCreate)
+	assertNoActionForPath(t, plan, "Shared/sub", ActionFolderCreate)
+	assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionUpload)
+	assert.Empty(t, plan.Actions)
+}
+
+// Validates: R-2.1.3, R-2.10.4
 func TestPlannerPlanCurrentState_NewUnreadableLocalPathProducesNoActions(t *testing.T) {
 	t.Parallel()
 
