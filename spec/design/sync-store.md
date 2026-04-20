@@ -130,6 +130,8 @@ Read-only store helpers are intentionally narrow:
 
 `status` should compose its output directly from those authorities. The store
 must not own grouping or rendering policy for `status` or watch summaries.
+Shared condition-family grouping and ordering belong to
+`internal/sync/condition_keys.go`, not to store query helpers.
 Store maintenance must also keep `block_scopes` honest:
 
 - timed transient scopes may exist only while blocked `retry_work` still exists

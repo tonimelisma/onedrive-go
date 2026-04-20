@@ -142,20 +142,23 @@ func TestSampleStrings_CoversVerboseAndTruncation(t *testing.T) {
 	assert.Equal(t, values, sampleStrings(values, false, 3))
 }
 
-func TestSortStatusConditions_OrdersByCountThenTitleThenScope(t *testing.T) {
+// Validates: R-2.10.47
+func TestSortStatusConditions_OrdersByCountThenConditionKeyThenScope(t *testing.T) {
 	t.Parallel()
 
 	groups := []statusConditionJSON{
-		{Title: "B", Count: 1, Scope: "z"},
-		{Title: "A", Count: 2, Scope: "z"},
-		{Title: "A", Count: 2, Scope: "a"},
+		{ConditionKey: string(syncengine.ConditionInvalidFilename), Title: "INVALID FILENAME", Count: 1, Scope: "z"},
+		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "SHARED FOLDER WRITES BLOCKED", Count: 2, Scope: "z"},
+		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "SHARED FOLDER WRITES BLOCKED", Count: 2, Scope: "a"},
+		{ConditionKey: string(syncengine.ConditionAuthenticationRequired), Title: "AUTHENTICATION REQUIRED", Count: 2, Scope: ""},
 	}
 
 	sortStatusConditions(groups)
 	assert.Equal(t, []statusConditionJSON{
-		{Title: "A", Count: 2, Scope: "a"},
-		{Title: "A", Count: 2, Scope: "z"},
-		{Title: "B", Count: 1, Scope: "z"},
+		{ConditionKey: string(syncengine.ConditionAuthenticationRequired), Title: "AUTHENTICATION REQUIRED", Count: 2, Scope: ""},
+		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "SHARED FOLDER WRITES BLOCKED", Count: 2, Scope: "a"},
+		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "SHARED FOLDER WRITES BLOCKED", Count: 2, Scope: "z"},
+		{ConditionKey: string(syncengine.ConditionInvalidFilename), Title: "INVALID FILENAME", Count: 1, Scope: "z"},
 	}, groups)
 }
 
