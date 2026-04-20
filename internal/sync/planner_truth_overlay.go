@@ -120,12 +120,5 @@ func mostSpecificPlannerReadScope(
 }
 
 func plannerScopePath(key ScopeKey) string {
-	switch {
-	case key.IsPermDir():
-		return key.DirPath()
-	case key.IsPermRemote():
-		return key.RemotePath()
-	default:
-		return ""
-	}
+	return DescribeScopeKey(key).ScopePath()
 }

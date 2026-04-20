@@ -163,32 +163,6 @@ func ScopeKeys(blocks []BlockScope) []ScopeKey {
 	return keys
 }
 
-const (
-	scopePriorityThrottleTarget = iota
-	scopePriorityService
-	scopePriorityDiskLocal
-	scopePriorityQuotaOwn
-	scopePriorityPermDir
-	scopePriorityPermRemote
-)
-
-const scopePriorityMax = 99
-
 func scopePriority(key ScopeKey) int {
-	switch key.Kind {
-	case ScopeThrottleTarget:
-		return scopePriorityThrottleTarget
-	case ScopeService:
-		return scopePriorityService
-	case ScopeDiskLocal:
-		return scopePriorityDiskLocal
-	case ScopeQuotaOwn:
-		return scopePriorityQuotaOwn
-	case ScopePermDirRead, ScopePermDirWrite:
-		return scopePriorityPermDir
-	case ScopePermRemoteRead, ScopePermRemoteWrite:
-		return scopePriorityPermRemote
-	default:
-		return scopePriorityMax
-	}
+	return DescribeScopeKey(key).Priority
 }

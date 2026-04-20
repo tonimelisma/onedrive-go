@@ -57,7 +57,7 @@ func (ph *PermissionHandler) recheckRemotePermissionBlock(
 	bl *Baseline,
 	block *BlockScope,
 ) PermissionRecheckDecision {
-	boundaryPath := block.Key.RemotePath()
+	boundaryPath := block.ScopePath()
 
 	root := ph.permissionRoot()
 	if root == nil {
@@ -140,7 +140,7 @@ func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []Perm
 			continue
 		}
 
-		dirPath := block.Key.DirPath()
+		dirPath := block.ScopePath()
 		clearable := false
 		switch {
 		case block.Key.IsPermLocalRead():

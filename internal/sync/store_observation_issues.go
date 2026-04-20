@@ -339,11 +339,17 @@ func reconcileObservationReadScopesTx(
 		if _, ok := current[key]; ok {
 			continue
 		}
+		descriptor := DescribeScopeKey(key)
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO block_scopes
-				(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				(scope_key, scope_family, scope_access, subject_kind, subject_value,
+				 issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			key.String(),
+			descriptor.Family,
+			descriptor.Access,
+			descriptor.SubjectKind,
+			descriptor.SubjectValue,
 			key.IssueType(),
 			ScopeTimingNone,
 			nowNano,

@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_reads.go, internal/sync/scope_key.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_reads.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
 Implements: R-2.5 [designed], R-2.7 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -121,6 +121,18 @@ Store maintenance must also keep `block_scopes` honest:
   for the same `scope_key`
 - permission scopes are exempt from that pruning rule because they are
   revalidated by observation/probe, not by blocked-retry emptiness
+
+`block_scopes` persists parsed scope semantics alongside `scope_key`:
+
+- `scope_family`
+- `scope_access`
+- `subject_kind`
+- `subject_value`
+
+`scope_key` remains the durable identity used by `retry_work`, but store reads
+and writes validate these metadata columns against `DescribeScopeKey` so the
+store, planner, watch summary, and status paths share one explicit semantic
+shape instead of reparsing free-form strings everywhere.
 
 ## State-DB Diagnosis And Reset
 

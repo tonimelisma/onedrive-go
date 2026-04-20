@@ -18,9 +18,30 @@ import (
 	"fmt"
 )
 
+func describeBlockScopeForWrite(block *BlockScope) (ScopeDescriptor, error) {
+	if block == nil {
+		return ScopeDescriptor{}, fmt.Errorf("sync: upserting block scope: missing block")
+	}
+
+	descriptor := DescribeScopeKey(block.Key)
+	if descriptor.IsZero() {
+		return ScopeDescriptor{}, fmt.Errorf("sync: upserting block scope: unknown scope key %q", block.Key.String())
+	}
+
+	block.Family = descriptor.Family
+	block.Access = descriptor.Access
+	block.SubjectKind = descriptor.SubjectKind
+	block.SubjectValue = descriptor.SubjectValue
+
+	return descriptor, nil
+}
+
 func validateBlockScope(block *BlockScope) error {
 	if block.Key.IsZero() {
 		return fmt.Errorf("sync: upserting block scope: missing scope key")
+	}
+	if _, err := describeBlockScopeForWrite(block); err != nil {
+		return err
 	}
 
 	if block.BlockedAt.IsZero() {
@@ -65,9 +86,14 @@ func (m *SyncStore) UpsertBlockScope(ctx context.Context, block *BlockScope) err
 
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO block_scopes
-			(scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(scope_key, scope_family, scope_access, subject_kind, subject_value,
+			 issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		block.Key.String(),
+		block.Family,
+		block.Access,
+		block.SubjectKind,
+		block.SubjectValue,
 		block.IssueType,
 		block.TimingSource,
 		block.BlockedAt.UnixNano(),
@@ -101,7 +127,8 @@ func (m *SyncStore) DeleteBlockScope(ctx context.Context, key ScopeKey) error {
 // (not nil) if no rows exist.
 func (m *SyncStore) ListBlockScopes(ctx context.Context) ([]*BlockScope, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT scope_key, issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
+		`SELECT scope_key, scope_family, scope_access, subject_kind, subject_value,
+		        issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
 		FROM block_scopes`)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing block scopes: %w", err)
