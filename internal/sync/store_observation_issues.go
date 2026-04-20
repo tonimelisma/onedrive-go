@@ -207,7 +207,7 @@ func reconcileObservationReadScopesTx(
 		return nil
 	}
 	if managedExactScopes, desiredExactScopes := exactObservationReadScopes(batch); len(managedExactScopes) > 0 {
-		return reconcileExactObservationReadScopesTx(ctx, tx, managedExactScopes, desiredExactScopes, nowNano)
+		return reconcileObservationReadScopeSetTx(ctx, tx, managedExactScopes, desiredExactScopes, nowNano)
 	}
 
 	return reconcileKindObservationReadScopesTx(ctx, tx, batch, nowNano)
@@ -242,33 +242,20 @@ func reconcileKindObservationReadScopesTx(
 	return reconcileObservationReadScopeSetTx(
 		ctx,
 		tx,
-		observationManagedReadScopesByKind(batch.ManagedReadScopeKinds),
+		managedObservationReadScopeKeysForKinds(batch.ManagedReadScopeKinds),
 		desired,
 		nowNano,
 	)
 }
 
-func observationManagedReadScopesByKind(kinds []ScopeKeyKind) map[ScopeKey]struct{} {
+func managedObservationReadScopeKeysForKinds(kinds []ScopeKeyKind) map[ScopeKey]struct{} {
 	if len(kinds) == 0 {
 		return nil
 	}
 
-	managedKinds := make(map[ScopeKeyKind]struct{}, len(kinds))
-	for i := range kinds {
-		managedKinds[kinds[i]] = struct{}{}
-	}
-
-	return managedObservationReadScopesForKinds(managedKinds)
-}
-
-func managedObservationReadScopesForKinds(managedKinds map[ScopeKeyKind]struct{}) map[ScopeKey]struct{} {
-	if len(managedKinds) == 0 {
-		return nil
-	}
-
 	managed := make(map[ScopeKey]struct{})
-	for kind := range managedKinds {
-		switch kind {
+	for i := range kinds {
+		switch kinds[i] {
 		case ScopePermDirRead:
 			managed[SKPermLocalRead("")] = struct{}{}
 		case ScopePermRemoteRead:
@@ -297,7 +284,7 @@ func reconcileObservationReadScopeSetTx(
 		return nil
 	}
 
-	blocks, err := queryBlockScopesDB(ctx, tx)
+	blocks, err := queryBlockScopeRowsWithRunner(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("sync: listing observation-owned read scopes: %w", err)
 	}
@@ -456,16 +443,6 @@ func exactObservationReadScopes(batch *ObservationFindingsBatch) (map[ScopeKey]s
 	}
 
 	return managed, desired
-}
-
-func reconcileExactObservationReadScopesTx(
-	ctx context.Context,
-	tx sqlTxRunner,
-	managed map[ScopeKey]struct{},
-	desired map[ScopeKey]struct{},
-	nowNano int64,
-) error {
-	return reconcileObservationReadScopeSetTx(ctx, tx, managed, desired, nowNano)
 }
 
 func scanObservationIssueRow(

@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -8,6 +9,10 @@ import (
 type blockScopeRowScanner interface {
 	Scan(dest ...any) error
 }
+
+const sqlSelectBlockScopeRows = `SELECT scope_key, scope_family, scope_access, subject_kind, subject_value,
+	        condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
+	FROM block_scopes`
 
 func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 	var (
@@ -72,4 +77,33 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 		NextTrialAt:   nextTrialAt,
 		TrialCount:    trialCount,
 	}, nil
+}
+
+func queryBlockScopeRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]*BlockScope, error) {
+	rows, err := runner.QueryContext(ctx, sqlSelectBlockScopeRows)
+	if err != nil {
+		return nil, fmt.Errorf("query block scope rows: %w", err)
+	}
+	defer rows.Close()
+
+	var result []*BlockScope
+	for rows.Next() {
+		block, err := scanBlockScopeRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan block scope row: %w", err)
+		}
+		if block.Key.IsZero() {
+			continue
+		}
+		result = append(result, block)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate block scope rows: %w", err)
+	}
+
+	if result == nil {
+		result = []*BlockScope{}
+	}
+
+	return result, nil
 }

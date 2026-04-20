@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -29,6 +30,7 @@ func (controller *scopeController) runStartupPermissionMaintenance(
 		return
 	}
 
+	controller.clearResolvedStartupRemoteWriteBlockedRetryWork(ctx, bl)
 	controller.applyPermissionRecheckDecisions(ctx, watch, ph.startupRecheckDecisions(ctx, bl))
 	if watch != nil {
 		watch.lastPermRecheck = ph.nowFn()
@@ -284,4 +286,118 @@ func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []Perm
 	}
 
 	return decisions
+}
+
+// clearResolvedStartupRemoteWriteBlockedRetryWork removes persisted blocked
+// retry rows whose remote-write-denied exact work is already resolved by the
+// current baseline at startup. Permission-maintenance owns this cleanup
+// because it is specific to remote write-denial retry rows, but scope release
+// still waits for affirmative permission recheck.
+func (controller *scopeController) clearResolvedStartupRemoteWriteBlockedRetryWork(
+	ctx context.Context,
+	bl *Baseline,
+) {
+	if bl == nil {
+		return
+	}
+
+	flow := controller.flow
+	rows, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
+	if err != nil {
+		flow.engine.logger.Warn("failed to list blocked retry_work rows for startup remote write cleanup",
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	controller.clearResolvedRemoteWriteBlockedRetryRows(
+		ctx,
+		bl,
+		rows,
+		func(row *RetryWorkRow) bool {
+			return row != nil && row.ScopeKey.IsPermRemoteWrite()
+		},
+		"clearResolvedStartupRemoteWriteBlockedRetryWork",
+	)
+}
+
+// clearResolvedRemoteWriteBlockedRetryWork removes remote-write blocked retry
+// rows whose exact work is already resolved after local observation changed a
+// relevant subtree. This cleanup is permission-owned because it only applies
+// to remote write-denial retry rows; it must not release the persisted
+// permission scope on its own.
+func (controller *scopeController) clearResolvedRemoteWriteBlockedRetryWork(
+	ctx context.Context,
+	bl *Baseline,
+	changedPaths map[string]bool,
+) {
+	if bl == nil || len(changedPaths) == 0 {
+		return
+	}
+
+	flow := controller.flow
+	rows, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
+	if err != nil {
+		flow.engine.logger.Warn("failed to list blocked retry_work rows for remote write cleanup",
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	controller.clearResolvedRemoteWriteBlockedRetryRows(
+		ctx,
+		bl,
+		rows,
+		func(row *RetryWorkRow) bool {
+			return remoteWriteBlockedRetryRelevant(row, changedPaths)
+		},
+		"clearResolvedRemoteWriteBlockedRetryWork",
+	)
+}
+
+func (controller *scopeController) clearResolvedRemoteWriteBlockedRetryRows(
+	ctx context.Context,
+	bl *Baseline,
+	rows []RetryWorkRow,
+	relevant func(*RetryWorkRow) bool,
+	caller string,
+) {
+	flow := controller.flow
+	driveID, driveErr := flow.retryWorkDriveID(ctx)
+	if driveErr != nil {
+		flow.engine.logger.Warn(caller+": failed to load drive for remote write cleanup",
+			slog.String("error", driveErr.Error()),
+		)
+		return
+	}
+
+	for i := range rows {
+		if relevant != nil && !relevant(&rows[i]) {
+			continue
+		}
+		if flow.buildRetryCandidateFromRetryWork(ctx, bl, &rows[i], driveID).resolved {
+			controller.clearBlockedRetryWork(ctx, &rows[i], caller)
+		}
+	}
+}
+
+func remoteWriteBlockedRetryRelevant(
+	row *RetryWorkRow,
+	changedPaths map[string]bool,
+) bool {
+	if row == nil || !row.ScopeKey.IsPermRemoteWrite() {
+		return false
+	}
+
+	boundary := row.ScopeKey.RemotePath()
+	for changedPath := range changedPaths {
+		if scopePathMatches(row.Path, changedPath) ||
+			scopePathMatches(changedPath, row.Path) ||
+			scopePathMatches(boundary, changedPath) ||
+			scopePathMatches(changedPath, boundary) {
+			return true
+		}
+	}
+
+	return false
 }

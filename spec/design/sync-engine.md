@@ -127,9 +127,9 @@ and aligns runtime admission with the persisted `block_scopes` and blocked
 
 Watch summary grouping is engine-owned. `watch_summary.go` builds raw
 watch-condition counts plus raw remote-write-block groups keyed by
-`ConditionKey` and `ScopeKey` directly from authority snapshots; the store
-does not own grouped watch-condition projections or watch-specific
-presentation.
+`ConditionKey` and `ScopeKey` directly from authority snapshots, while the
+watch runtime owns log phrasing/churn suppression separately. The store does
+not own grouped watch-condition projections or watch-specific presentation.
 
 ## Shared-Root Drives
 
@@ -216,7 +216,10 @@ Permission maintenance owns the startup and periodic recheck policy surface.
 Generic scope startup normalization repairs only non-permission scopes; after
 baseline load, the engine asks the permission boundary for startup/per-pass
 recheck decisions and applies those decisions through the usual scope-release
-path.
+path. The same permission-maintenance boundary also owns cleanup of resolved
+remote write-blocked `retry_work` rows both at startup and after local
+observation changes relevant subtrees; that cleanup must not release the
+persisted permission scope on its own.
 
 Ownership splits by access kind:
 

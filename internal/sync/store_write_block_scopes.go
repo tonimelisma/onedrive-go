@@ -147,38 +147,9 @@ func observationReadScopeBlock(key ScopeKey, nowNano int64) *BlockScope {
 // populate the engine-owned active scope working set. Returns an empty slice
 // (not nil) if no rows exist.
 func (m *SyncStore) ListBlockScopes(ctx context.Context) ([]*BlockScope, error) {
-	rows, err := m.db.QueryContext(ctx,
-		`SELECT scope_key, scope_family, scope_access, subject_kind, subject_value,
-		        condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
-		FROM block_scopes`)
+	result, err := queryBlockScopeRowsWithRunner(ctx, m.db)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing block scopes: %w", err)
-	}
-	defer rows.Close()
-
-	var result []*BlockScope
-
-	for rows.Next() {
-		block, scanErr := scanBlockScopeRow(rows)
-		if scanErr != nil {
-			return nil, fmt.Errorf("sync: scanning block scope row: %w", scanErr)
-		}
-		if block.Key.IsZero() {
-			// Old or unknown persisted scope keys are no longer part of the
-			// steady-state runtime model. Skip them here so startup diagnosis never
-			// treats an unrecognized wire key as an empty scope.
-			continue
-		}
-		result = append(result, block)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating block scope rows: %w", err)
-	}
-
-	// Return empty slice, not nil, for consistent caller behavior.
-	if result == nil {
-		result = []*BlockScope{}
 	}
 
 	return result, nil
