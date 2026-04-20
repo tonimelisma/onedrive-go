@@ -63,8 +63,8 @@ The docs and code stay aligned through a small number of explicit classifier
 entry points:
 
 - `internal/errclass`: the `Class` type
-- `internal/sync/condition_keys.go`: shared `ConditionKey` normalization
-  helpers
+- `internal/sync/condition_keys.go`: shared `ConditionKey` normalization and
+  canonical condition-family ordering helpers
 - `internal/cli/status_condition_descriptors.go`: CLI-owned rendering tables for
   `ConditionKey` values until the status-surface naming sweep lands
 - `internal/config/failure_class.go`: classify config load results
@@ -121,5 +121,5 @@ Permission maintenance follows the same ownership split:
 | Boundary | Evidence |
 | --- | --- |
 | Shared failure classes | `internal/errclass/errclass_test.go` (`TestClassStringAndValidity`), `internal/config/failure_class_test.go` (`TestClassifyLoadOutcome`), `internal/cli/failure_class_test.go` (`TestClassifyCommandError`, `TestCommandFailurePresentationForClass`) |
-| Shared condition-key normalization and CLI rendering tables | `internal/sync/condition_keys_test.go` (`TestConditionKeyForObservationIssue_RepresentativeMappings`, `TestConditionKeyForRetryWork_RepresentativeMappings`, `TestConditionKeyForBlockScope_RepresentativeMappings`, `TestConditionKeyForIssueType_RepresentativeMappings`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesConditionScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions`, `TestPrintSyncStateText_WithConditions`), `internal/cli/status_golden_test.go` (`TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`) |
+| Shared condition-key normalization, ordering, and CLI rendering tables | `internal/sync/condition_keys_test.go` (`TestConditionKeyForObservationIssue_RepresentativeMappings`, `TestConditionKeyForRetryWork_RepresentativeMappings`, `TestConditionKeyForBlockScope_RepresentativeMappings`, `TestConditionKeyLess_UsesCanonicalDisplayOrder`, `TestConditionKeyForIssueType_RepresentativeMappings`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesConditionScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions`, `TestPrintSyncStateText_WithConditions`), `internal/cli/status_golden_test.go` (`TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`) |
 | Sync result classification foundations | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_SuccessAndShutdown`, `TestClassifyResult_HTTPPersistenceAndScopeRouting`, `TestClassifyResult_LocalPersistenceAndScopeRouting`), `internal/sync/engine_retry_trial_test.go` (`TestClearStaleRetrySweepRow_ResolvedRetryClearsRetryWork`, `TestClearStaleRetrySweepRow_SkippedRetryPersistsObservationFindings`, `TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState`, `TestRunRetrierSweep_ClearsStaleRetryWorkWithoutDispatch`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`), `internal/sync/engine_scope_lifecycle_test.go` (`TestScopeController_ApplyTrialPreserveEffects_RehomesDiskScopeRetryWork`, `TestScopeController_NormalizeDiskScope_UsesCurrentDiskState`) |

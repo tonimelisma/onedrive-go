@@ -184,9 +184,13 @@ func sortStatusConditions(groups []statusConditionJSON) {
 		if groups[i].Count != groups[j].Count {
 			return groups[i].Count > groups[j].Count
 		}
-		if groups[i].Title != groups[j].Title {
-			return groups[i].Title < groups[j].Title
+
+		leftKey := syncengine.ConditionKey(groups[i].ConditionKey)
+		rightKey := syncengine.ConditionKey(groups[j].ConditionKey)
+		if leftKey != rightKey {
+			return syncengine.ConditionKeyLess(leftKey, rightKey)
 		}
+
 		return groups[i].Scope < groups[j].Scope
 	})
 }

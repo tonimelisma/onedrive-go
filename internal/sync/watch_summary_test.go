@@ -6,26 +6,18 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestWatchConditionSummary_CountHelpers(t *testing.T) {
+// Validates: R-2.10.47
+func TestWatchConditionCountTotal_SumsRawCounts(t *testing.T) {
 	t.Parallel()
 
-	summary := watchConditionSummary{
-		Counts: []watchConditionCount{
-			{Key: ConditionInvalidFilename, Count: 2},
-			{Key: ConditionRemoteWriteDenied, Count: 3},
-			{Key: ConditionAuthenticationRequired, Count: 1},
-		},
-		Retrying: 4,
-	}
-
-	assert.Equal(t, 6, summary.VisibleTotal())
-	assert.Equal(t, 0, summary.ConflictCount())
-	assert.Equal(t, 2, summary.ActionableCount())
-	assert.Equal(t, 3, summary.RemoteBlockedCount())
-	assert.Equal(t, 1, summary.AuthRequiredCount())
-	assert.Equal(t, 4, summary.RetryingCount())
+	assert.Equal(t, 6, watchConditionCountTotal([]watchConditionCount{
+		{Key: ConditionInvalidFilename, Count: 2},
+		{Key: ConditionRemoteWriteDenied, Count: 3},
+		{Key: ConditionAuthenticationRequired, Count: 1},
+	}))
 }
 
+// Validates: R-2.10.47
 func TestWatchConditionCountAccumulator_AddAndCounts_SortsAndAggregates(t *testing.T) {
 	t.Parallel()
 
@@ -37,11 +29,12 @@ func TestWatchConditionCountAccumulator_AddAndCounts_SortsAndAggregates(t *testi
 	accumulator.Add(ConditionDiskFull, 4)
 
 	assert.Equal(t, []watchConditionCount{
-		{Key: ConditionDiskFull, Count: 4},
 		{Key: ConditionServiceOutage, Count: 3},
+		{Key: ConditionDiskFull, Count: 4},
 	}, accumulator.Counts())
 }
 
+// Validates: R-2.10.47
 func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 	t.Parallel()
 
@@ -61,7 +54,8 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 		},
 	})
 
-	assert.Equal(t, 4, summary.RetryingCount())
+	assert.Equal(t, 4, summary.Retrying)
+	assert.Equal(t, 5, summary.ConditionTotal)
 	assert.ElementsMatch(t, []watchConditionCount{
 		{Key: ConditionInvalidFilename, Count: 1},
 		{Key: ConditionRemoteReadDenied, Count: 1},

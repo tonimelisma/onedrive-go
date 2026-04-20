@@ -55,6 +55,17 @@ func TestConditionKeyForBlockScope_RepresentativeMappings(t *testing.T) {
 	assert.Empty(t, ConditionKeyForBlockScope("", ScopeKey{}))
 }
 
+// Validates: R-2.10.47, R-6.8.16
+func TestConditionKeyLess_UsesCanonicalDisplayOrder(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, ConditionKeyLess(ConditionAuthenticationRequired, ConditionRemoteWriteDenied))
+	assert.True(t, ConditionKeyLess(ConditionRemoteWriteDenied, ConditionInvalidFilename))
+	assert.True(t, ConditionKeyLess(ConditionUnexpectedCondition, ConditionKey("zzz_custom")))
+	assert.True(t, ConditionKeyLess(ConditionKey("aaa_custom"), ConditionKey("zzz_custom")))
+	assert.False(t, ConditionKeyLess(ConditionKey("zzz_custom"), ConditionUnexpectedCondition))
+}
+
 // Validates: R-6.8.16
 func TestConditionKeyForIssueType_RepresentativeMappings(t *testing.T) {
 	t.Parallel()

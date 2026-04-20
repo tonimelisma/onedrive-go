@@ -28,54 +28,22 @@ const (
 // ConditionKeyForObservationIssue maps a persisted observation issue to the
 // shared condition family.
 func ConditionKeyForObservationIssue(issueType string, scopeKey ScopeKey) ConditionKey {
-	if key, ok := conditionKeyForIssueType(issueType); ok {
-		return key
-	}
-
-	if key, ok := conditionKeyForIssueType(scopeKey.ConditionType()); ok {
-		return key
-	}
-
-	if !scopeKey.IsZero() {
-		return ConditionUnexpectedCondition
-	}
-
-	return ""
+	return conditionKeyForIssueTypeOrScope(issueType, scopeKey, scopeKey.ConditionType())
 }
 
 // ConditionKeyForRetryWork maps persisted exact retry work to the shared condition
 // family.
 func ConditionKeyForRetryWork(conditionType string, scopeKey ScopeKey) ConditionKey {
-	if key, ok := conditionKeyForIssueType(conditionType); ok {
-		return key
-	}
-
-	if key, ok := conditionKeyForIssueType(scopeKey.ConditionType()); ok {
-		return key
-	}
-
-	if !scopeKey.IsZero() || conditionType != "" {
-		return ConditionUnexpectedCondition
-	}
-
-	return ""
+	return conditionKeyForIssueTypeOrScope(conditionType, scopeKey, scopeKey.ConditionType())
 }
 
 // ConditionKeyForBlockScope maps a persisted block scope to the shared condition family.
 func ConditionKeyForBlockScope(conditionType string, scopeKey ScopeKey) ConditionKey {
-	if key, ok := conditionKeyForIssueType(conditionType); ok {
-		return key
-	}
-
-	if key, ok := conditionKeyForIssueType(DescribeScopeKey(scopeKey).DefaultConditionType); ok {
-		return key
-	}
-
-	if !scopeKey.IsZero() {
-		return ConditionUnexpectedCondition
-	}
-
-	return ""
+	return conditionKeyForIssueTypeOrScope(
+		conditionType,
+		scopeKey,
+		DescribeScopeKey(scopeKey).DefaultConditionType,
+	)
 }
 
 // ConditionKeyForRuntimeResult maps one execution-time classified result into
@@ -93,6 +61,71 @@ func ConditionKeyForRuntimeResult(class errclass.Class, conditionType string) Co
 	}
 
 	return ""
+}
+
+// ConditionKeyLess reports whether left should sort before right in stable
+// user-facing condition output. Known condition families use a fixed sync-owned
+// display order; unknown keys fall back to lexical order after the known set.
+func ConditionKeyLess(left, right ConditionKey) bool {
+	leftRank := conditionKeyRank(left)
+	rightRank := conditionKeyRank(right)
+	if leftRank != rightRank {
+		return leftRank < rightRank
+	}
+
+	return string(left) < string(right)
+}
+
+func conditionKeyForIssueTypeOrScope(
+	issueType string,
+	scopeKey ScopeKey,
+	scopeFallbackIssueType string,
+) ConditionKey {
+	if key, ok := conditionKeyForIssueType(issueType); ok {
+		return key
+	}
+
+	if key, ok := conditionKeyForIssueType(scopeFallbackIssueType); ok {
+		return key
+	}
+
+	if !scopeKey.IsZero() || issueType != "" {
+		return ConditionUnexpectedCondition
+	}
+
+	return ""
+}
+
+func conditionKeyRank(key ConditionKey) int {
+	ordered := [...]ConditionKey{
+		ConditionAuthenticationRequired,
+		ConditionQuotaExceeded,
+		ConditionServiceOutage,
+		ConditionRateLimited,
+		ConditionRemoteWriteDenied,
+		ConditionRemoteReadDenied,
+		ConditionLocalReadDenied,
+		ConditionLocalWriteDenied,
+		ConditionInvalidFilename,
+		ConditionPathTooLong,
+		ConditionFileTooLarge,
+		ConditionCaseCollision,
+		ConditionDiskFull,
+		ConditionHashError,
+		ConditionFileTooLargeForSpace,
+		ConditionUnexpectedCondition,
+	}
+
+	for i := range ordered {
+		if ordered[i] == key {
+			return i
+		}
+	}
+	if key == "" {
+		return len(ordered) + 1
+	}
+
+	return len(ordered)
 }
 
 func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
