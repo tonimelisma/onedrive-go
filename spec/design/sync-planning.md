@@ -113,6 +113,9 @@ structural absence:
 - remote read-denied subtrees are unavailable remote truth, not remote deletes
 - a remote unreadable subtree boundary suppresses all descendant structural
   actions; descendants are unavailable current truth, not "missing remote"
+- subtree unavailability also suppresses publication-only cleanup for those
+  descendants; baseline rows under an unreadable subtree must not be cleaned
+  up just because current observation could not safely prove their absence
 - active read permission scopes suppress destructive and mutating work under
   the blocked subtree until revalidation succeeds
 

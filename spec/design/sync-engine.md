@@ -216,7 +216,10 @@ Permission maintenance owns the startup and periodic recheck policy surface.
 Generic scope startup normalization repairs only non-permission scopes; after
 baseline load, the engine asks the permission boundary for startup/per-pass
 recheck decisions and applies those decisions through the usual scope-release
-path.
+path. The same permission-maintenance boundary also owns cleanup of resolved
+remote write-blocked `retry_work` rows both at startup and after local
+observation changes relevant subtrees; that cleanup must not release the
+persisted permission scope on its own.
 
 Ownership splits by access kind:
 

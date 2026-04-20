@@ -802,7 +802,7 @@ func (flow *engineFlow) observeLocalChanges(
 	flow.reconcileSkippedObservationFindings(ctx, watch, localResult.Skipped)
 
 	pathSet := pathSetFromLocalRows(localResult.Rows)
-	flow.scopeController().clearResolvedRemoteBlockedRetryWork(ctx, watch, pathSet)
+	flow.scopeController().clearResolvedRemoteWriteBlockedRetryWork(ctx, bl, pathSet)
 
 	return localResult, nil
 }

@@ -366,6 +366,64 @@ func planForUnavailableRemoteReadScopeDescendant(t *testing.T) *ActionPlan {
 	return planCurrentStateForStore(t, store)
 }
 
+func planForUnavailableLocalReadScopeCleanupCandidate(t *testing.T) *ActionPlan {
+	t.Helper()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES ('item-private-dir', 'Private/sub', 'folder', '', '', 0, 0, 1, 1, ''),
+		       ('item-private-file', 'Private/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
+	require.NoError(t, err)
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKPermLocalRead("Private"),
+		ConditionType: IssueLocalReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
+	}))
+
+	return planCurrentStateForStore(t, store)
+}
+
+func planForUnavailableRemoteReadScopeCleanupCandidate(t *testing.T) *ActionPlan {
+	t.Helper()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES ('item-shared-dir', 'Shared/sub', 'folder', '', '', 0, 0, 1, 1, ''),
+		       ('item-shared-file', 'Shared/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-shared')`)
+	require.NoError(t, err)
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+		{
+			Path:       "Shared/sub",
+			ItemType:   ItemTypeFolder,
+			ObservedAt: 1,
+		},
+		{
+			Path:            "Shared/sub/file.txt",
+			ItemType:        ItemTypeFile,
+			Hash:            "hash",
+			Size:            10,
+			Mtime:           1,
+			ContentIdentity: "hash",
+			ObservedAt:      1,
+		},
+	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKPermRemoteRead("Shared"),
+		ConditionType: IssueRemoteReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
+	}))
+
+	return planCurrentStateForStore(t, store)
+}
+
 func planForUnavailableLocalMoveSource(t *testing.T) *ActionPlan {
 	t.Helper()
 
@@ -771,6 +829,26 @@ func TestPlannerPlanCurrentState_UnavailableTruthNeverDeletesData(t *testing.T) 
 		plan := planForUnavailableRemoteReadScopeDescendant(t)
 		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionLocalDelete)
 		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionUpload)
+		assert.Empty(t, plan.Actions)
+	})
+
+	t.Run("local unreadable subtree suppresses cleanup for descendants", func(t *testing.T) {
+		t.Parallel()
+
+		plan := planForUnavailableLocalReadScopeCleanupCandidate(t)
+		assertNoActionForPath(t, plan, "Private/sub", ActionCleanup)
+		assertNoActionForPath(t, plan, "Private/sub/file.txt", ActionCleanup)
+		assertNoActionForPath(t, plan, "Private/sub/file.txt", ActionRemoteDelete)
+		assert.Empty(t, plan.Actions)
+	})
+
+	t.Run("remote unreadable subtree suppresses cleanup for descendants", func(t *testing.T) {
+		t.Parallel()
+
+		plan := planForUnavailableRemoteReadScopeCleanupCandidate(t)
+		assertNoActionForPath(t, plan, "Shared/sub", ActionCleanup)
+		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionCleanup)
+		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionLocalDelete)
 		assert.Empty(t, plan.Actions)
 	})
 

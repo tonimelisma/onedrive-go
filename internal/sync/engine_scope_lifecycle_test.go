@@ -255,7 +255,7 @@ func TestScopeController_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWi
 }
 
 // Validates: R-2.10.5
-func TestRemoteBlockedRetryRelevant_MatchesPathAndBoundaryChanges(t *testing.T) {
+func TestRemoteWriteBlockedRetryRelevant_MatchesPathAndBoundaryChanges(t *testing.T) {
 	t.Parallel()
 
 	row := &RetryWorkRow{
@@ -265,27 +265,26 @@ func TestRemoteBlockedRetryRelevant_MatchesPathAndBoundaryChanges(t *testing.T) 
 		Blocked:    true,
 	}
 
-	assert.True(t, remoteBlockedRetryRelevant(row, map[string]bool{"Shared/Docs": true}))
-	assert.True(t, remoteBlockedRetryRelevant(row, map[string]bool{"Shared/Docs/subdir": true}))
-	assert.True(t, remoteBlockedRetryRelevant(row, map[string]bool{"Shared/Docs/report.txt": true}))
-	assert.False(t, remoteBlockedRetryRelevant(row, map[string]bool{"Elsewhere": true}))
-	assert.False(t, remoteBlockedRetryRelevant(&RetryWorkRow{
+	assert.True(t, remoteWriteBlockedRetryRelevant(row, map[string]bool{"Shared/Docs": true}))
+	assert.True(t, remoteWriteBlockedRetryRelevant(row, map[string]bool{"Shared/Docs/subdir": true}))
+	assert.True(t, remoteWriteBlockedRetryRelevant(row, map[string]bool{"Shared/Docs/report.txt": true}))
+	assert.False(t, remoteWriteBlockedRetryRelevant(row, map[string]bool{"Elsewhere": true}))
+	assert.False(t, remoteWriteBlockedRetryRelevant(&RetryWorkRow{
 		Path:       row.Path,
 		ActionType: row.ActionType,
 		ScopeKey:   SKService(),
 		Blocked:    true,
 	}, map[string]bool{"Shared/Docs": true}))
 
-	assert.True(t, pathMatchesPrefix("Shared/Docs/report.txt", "Shared/Docs"))
-	assert.False(t, pathMatchesPrefix("Shared/Other", "Shared/Docs"))
+	assert.True(t, scopePathMatches("Shared/Docs/report.txt", "Shared/Docs"))
+	assert.False(t, scopePathMatches("Shared/Other", "Shared/Docs"))
 }
 
 // Validates: R-2.10.5
-func TestScopeController_ClearResolvedRemoteBlockedRetryWork_KeepsRemotePermissionScopeUntilProbeRelease(t *testing.T) {
+func TestScopeController_ClearResolvedRemoteWriteBlockedRetryWork_KeepsRemotePermissionScopeUntilProbeRelease(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	rt := testWatchRuntime(t, eng)
 	controller := testEngineFlow(t, eng).scopeController()
 	resolvedScope := SKPermRemoteWrite("Shared/Resolved")
 	retainedScope := SKPermRemoteWrite("Shared/Retained")
@@ -341,13 +340,57 @@ func TestScopeController_ClearResolvedRemoteBlockedRetryWork_KeepsRemotePermissi
 		RemoteMtime:     1700000000,
 	}))
 
-	controller.clearResolvedRemoteBlockedRetryWork(t.Context(), rt, map[string]bool{"Shared": true})
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	controller.clearResolvedRemoteWriteBlockedRetryWork(t.Context(), bl, map[string]bool{"Shared": true})
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
 	assert.Equal(t, "Shared/Retained/file.txt", retryRows[0].Path)
 	assert.True(t, isTestBlockScopeed(eng, resolvedScope))
 	assert.True(t, isTestBlockScopeed(eng, retainedScope))
+}
+
+// Validates: R-2.10.5
+func TestScopeController_RunStartupPermissionMaintenance_ClearsResolvedRemoteWriteBlockedRetryWork(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	controller := testEngineFlow(t, eng).scopeController()
+	scopeKey := SKPermRemoteWrite("Shared/Resolved")
+
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:           scopeKey,
+		ConditionType: IssueRemoteWriteDenied,
+		BlockedAt:     eng.nowFn().Add(-time.Minute),
+		NextTrialAt:   eng.nowFn().Add(time.Minute),
+		TrialInterval: time.Minute,
+	})
+
+	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
+		Path:          "Shared/Resolved/file.txt",
+		ActionType:    ActionRemoteDelete,
+		ConditionType: IssueRemoteWriteDenied,
+		ScopeKey:      scopeKey,
+		LastError:     "blocked resolved retry",
+		Blocked:       true,
+	}, nil)
+	require.NoError(t, err)
+
+	ph := &PermissionHandler{
+		store:  eng.baseline,
+		nowFn:  eng.nowFn,
+		logger: newTestLogger(t),
+	}
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	controller.runStartupPermissionMaintenance(t.Context(), nil, ph, bl)
+
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+	assert.True(t, isTestBlockScopeed(eng, scopeKey))
 }
 
 // Validates: R-2.10.5
