@@ -74,7 +74,7 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 
 			require.True(t, result.Block, "Retry-After should force an immediate block scope")
 			assert.Equal(t, tt.wantScope, result.ScopeKey)
-			assert.Equal(t, tt.wantIssue, result.IssueType)
+			assert.Equal(t, tt.wantIssue, result.ConditionType)
 			assert.Equal(t, tt.retryAfter, result.RetryAfter, "RetryAfter should be passed through")
 		})
 	}
@@ -118,7 +118,7 @@ func TestScope_507OwnDrive(t *testing.T) {
 		} else {
 			require.True(t, result.Block, "third unique path must trigger quota:own block")
 			assert.Equal(t, SKQuotaOwn(), result.ScopeKey)
-			assert.Equal(t, "quota_exceeded", result.IssueType)
+			assert.Equal(t, "quota_exceeded", result.ConditionType)
 			assert.Zero(t, result.RetryAfter)
 		}
 		advance(1 * time.Second) // stay well within the 10s window
@@ -145,7 +145,7 @@ func TestScope_5xxSlidingWindow(t *testing.T) {
 		} else {
 			require.True(t, result.Block, "fifth unique path must trigger service block")
 			assert.Equal(t, SKService(), result.ScopeKey)
-			assert.Equal(t, "service_outage", result.IssueType)
+			assert.Equal(t, "service_outage", result.ConditionType)
 			assert.Zero(t, result.RetryAfter)
 		}
 		advance(2 * time.Second) // total 8s, well within 30s window
@@ -261,7 +261,7 @@ func TestScope_NonScopeStatusReturnsEmpty(t *testing.T) {
 			result := ss.UpdateScope(&r)
 			assert.False(t, result.Block, "status %d should not trigger a block scope", tc.status)
 			assert.Empty(t, result.ScopeKey)
-			assert.Empty(t, result.IssueType)
+			assert.Empty(t, result.ConditionType)
 		})
 	}
 }
@@ -417,7 +417,7 @@ func TestScopeKey_IssueType(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		assert.Equal(t, tt.want, tt.key.IssueType(), "IssueType for %s", tt.key)
+		assert.Equal(t, tt.want, tt.key.ConditionType(), "IssueType for %s", tt.key)
 	}
 }
 

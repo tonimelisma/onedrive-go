@@ -49,7 +49,7 @@ const (
 // re-derive policy from raw HTTP/local error facts.
 type ResultDecision struct {
 	Class             errclass.Class
-	SummaryKey        SummaryKey
+	ConditionKey      ConditionKey
 	ScopeKey          ScopeKey
 	ScopeEvidence     ScopeKey
 	Persistence       resultPersistenceMode
@@ -57,7 +57,7 @@ type ResultDecision struct {
 	RunScopeDetection bool
 	RecordSuccess     bool
 	TrialHint         trialHint
-	IssueType         string
+	ConditionType     string
 }
 
 // classifyResult is a pure function that maps a ActionCompletion to a
@@ -88,7 +88,7 @@ func classifyResult(r *ActionCompletion) ResultDecision {
 
 func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 	scopeEvidence := deriveScopeKey(r)
-	issueType := issueTypeForResult(r)
+	conditionType := issueTypeForResult(r)
 	permissionDecisionFlow := remote403PermissionFlow(r)
 
 	switch {
@@ -96,10 +96,10 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 		return ResultDecision{}, false
 	case r.HTTPStatus == http.StatusUnauthorized:
 		return withRuntimeSummary(&ResultDecision{
-			Class:       resultFatal,
-			Persistence: persistNone,
-			TrialHint:   trialHintFatal,
-			IssueType:   issueType,
+			Class:         resultFatal,
+			Persistence:   persistNone,
+			TrialHint:     trialHintFatal,
+			ConditionType: conditionType,
 		}), true
 	case r.HTTPStatus == http.StatusForbidden:
 		return withRuntimeSummary(&ResultDecision{
@@ -107,7 +107,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			Persistence:    persistRetryWork,
 			PermissionFlow: permissionDecisionFlow,
 			TrialHint:      trialHintPreserve,
-			IssueType:      issueType,
+			ConditionType:  conditionType,
 		}), true
 	case r.HTTPStatus == http.StatusTooManyRequests:
 		return withRuntimeSummary(&ResultDecision{
@@ -117,7 +117,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			Persistence:       persistRetryWork,
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
-			IssueType:         issueType,
+			ConditionType:     conditionType,
 		}), true
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		return withRuntimeSummary(&ResultDecision{
@@ -127,7 +127,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			Persistence:       persistRetryWork,
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
-			IssueType:         issueType,
+			ConditionType:     conditionType,
 		}), true
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		return withRuntimeSummary(&ResultDecision{
@@ -136,7 +136,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			Persistence:       persistRetryWork,
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
-			IssueType:         issueType,
+			ConditionType:     conditionType,
 		}), true
 	case isRetryableHTTPStatus(r.HTTPStatus):
 		return withRuntimeSummary(&ResultDecision{
@@ -145,14 +145,14 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			Persistence:       persistRetryWork,
 			RunScopeDetection: true,
 			TrialHint:         trialHintExtendOnMatchingScope,
-			IssueType:         issueType,
+			ConditionType:     conditionType,
 		}), true
 	default:
 		return withRuntimeSummary(&ResultDecision{
-			Class:       resultSkip,
-			Persistence: persistRetryWork,
-			TrialHint:   trialHintPreserve,
-			IssueType:   issueType,
+			Class:         resultSkip,
+			Persistence:   persistRetryWork,
+			TrialHint:     trialHintPreserve,
+			ConditionType: conditionType,
 		}), true
 	}
 }
@@ -165,16 +165,16 @@ func isRetryableHTTPStatus(status int) bool {
 }
 
 func classifyLocalResult(r *ActionCompletion) ResultDecision {
-	issueType := issueTypeForResult(r)
+	conditionType := issueTypeForResult(r)
 	permissionDecisionFlow := localPermissionDecisionFlow(r)
 
 	switch {
 	case errors.Is(r.Err, ErrActionPreconditionChanged):
 		return withRuntimeSummary(&ResultDecision{
-			Class:       resultRequeue,
-			Persistence: persistRetryWork,
-			TrialHint:   trialHintPreserve,
-			IssueType:   "transient_conflict",
+			Class:         resultRequeue,
+			Persistence:   persistRetryWork,
+			TrialHint:     trialHintPreserve,
+			ConditionType: "transient_conflict",
 		})
 	case errors.Is(r.Err, driveops.ErrDiskFull):
 		return withRuntimeSummary(&ResultDecision{
@@ -183,21 +183,21 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 			ScopeEvidence: SKDiskLocal(),
 			Persistence:   persistRetryWork,
 			TrialHint:     trialHintExtendOnMatchingScope,
-			IssueType:     issueType,
+			ConditionType: conditionType,
 		})
 	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
 		return withRuntimeSummary(&ResultDecision{
-			Class:       resultSkip,
-			Persistence: persistRetryWork,
-			TrialHint:   trialHintPreserve,
-			IssueType:   issueType,
+			Class:         resultSkip,
+			Persistence:   persistRetryWork,
+			TrialHint:     trialHintPreserve,
+			ConditionType: conditionType,
 		})
 	case errors.Is(r.Err, driveops.ErrFileExceedsOneDriveLimit):
 		return withRuntimeSummary(&ResultDecision{
-			Class:       resultSkip,
-			Persistence: persistRetryWork,
-			TrialHint:   trialHintPreserve,
-			IssueType:   issueType,
+			Class:         resultSkip,
+			Persistence:   persistRetryWork,
+			TrialHint:     trialHintPreserve,
+			ConditionType: conditionType,
 		})
 	case errors.Is(r.Err, os.ErrPermission):
 		return withRuntimeSummary(&ResultDecision{
@@ -205,14 +205,14 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 			Persistence:    persistRetryWork,
 			PermissionFlow: permissionDecisionFlow,
 			TrialHint:      trialHintPreserve,
-			IssueType:      issueType,
+			ConditionType:  conditionType,
 		})
 	default:
 		return withRuntimeSummary(&ResultDecision{
-			Class:       resultSkip,
-			Persistence: persistRetryWork,
-			TrialHint:   trialHintPreserve,
-			IssueType:   issueType,
+			Class:         resultSkip,
+			Persistence:   persistRetryWork,
+			TrialHint:     trialHintPreserve,
+			ConditionType: conditionType,
 		})
 	}
 }
@@ -237,91 +237,8 @@ func localPermissionDecisionFlow(r *ActionCompletion) permissionFlow {
 }
 
 func withRuntimeSummary(decision *ResultDecision) ResultDecision {
-	decision.SummaryKey = runtimeSummaryKey(decision.Class, decision.IssueType)
+	decision.ConditionKey = ConditionKeyForRuntimeResult(decision.Class, decision.ConditionType)
 	return *decision
-}
-
-func runtimeSummaryKey(class errclass.Class, issueType string) SummaryKey {
-	if key, ok := runtimeSummaryKeyForIssueType(issueType); ok {
-		return key
-	}
-
-	if class == errclass.ClassRetryableTransient ||
-		class == errclass.ClassBlockScopeingTransient ||
-		class == errclass.ClassActionable ||
-		class == errclass.ClassFatal {
-		return SummaryUnexpectedCondition
-	}
-
-	return ""
-}
-
-func runtimeSummaryKeyForIssueType(issueType string) (SummaryKey, bool) {
-	if key, ok := runtimeSummaryKeyForPathIssue(issueType); ok {
-		return key, true
-	}
-	if key, ok := runtimeSummaryKeyForServiceIssue(issueType); ok {
-		return key, true
-	}
-	if key, ok := runtimeSummaryKeyForPermissionIssue(issueType); ok {
-		return key, true
-	}
-
-	switch issueType {
-	case IssueCaseCollision:
-		return SummaryCaseCollision, true
-	default:
-		return "", false
-	}
-}
-
-func runtimeSummaryKeyForPathIssue(issueType string) (SummaryKey, bool) {
-	switch issueType {
-	case IssueInvalidFilename:
-		return SummaryInvalidFilename, true
-	case IssuePathTooLong:
-		return SummaryPathTooLong, true
-	case IssueFileTooLarge:
-		return SummaryFileTooLarge, true
-	case IssueFileTooLargeForSpace:
-		return SummaryFileTooLargeForSpace, true
-	case IssueDiskFull:
-		return SummaryDiskFull, true
-	case IssueHashPanic:
-		return SummaryHashError, true
-	default:
-		return "", false
-	}
-}
-
-func runtimeSummaryKeyForServiceIssue(issueType string) (SummaryKey, bool) {
-	switch issueType {
-	case IssueUnauthorized:
-		return SummaryAuthenticationRequired, true
-	case IssueQuotaExceeded:
-		return SummaryQuotaExceeded, true
-	case IssueServiceOutage:
-		return SummaryServiceOutage, true
-	case IssueRateLimited:
-		return SummaryRateLimited, true
-	default:
-		return "", false
-	}
-}
-
-func runtimeSummaryKeyForPermissionIssue(issueType string) (SummaryKey, bool) {
-	switch issueType {
-	case IssueRemoteWriteDenied:
-		return SummaryRemoteWriteDenied, true
-	case IssueRemoteReadDenied:
-		return SummaryRemoteReadDenied, true
-	case IssueLocalReadDenied:
-		return SummaryLocalReadDenied, true
-	case IssueLocalWriteDenied:
-		return SummaryLocalWriteDenied, true
-	default:
-		return "", false
-	}
 }
 
 // deriveScopeKey maps an action completion to its typed scope key. Delegates to

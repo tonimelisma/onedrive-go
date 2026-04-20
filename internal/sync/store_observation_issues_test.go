@@ -155,10 +155,10 @@ func TestSyncStore_ReconcileObservationFindings_ReleasesMissingReadScopesWithout
 	now := time.Date(2026, 4, 19, 10, 5, 0, 0, time.UTC)
 
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:          SKPermLocalRead("Private"),
-		IssueType:    IssueLocalReadDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    now.Add(-time.Minute),
+		Key:           SKPermLocalRead("Private"),
+		ConditionType: IssueLocalReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     now.Add(-time.Minute),
 	}))
 
 	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
@@ -210,16 +210,16 @@ func TestSyncStore_ReconcileObservationFindings_OnlyClearsManagedFamilies(t *tes
 	seedObservationIssueForTest(t, store, "Private", IssueLocalReadDenied, SKPermLocalRead("Private"))
 	seedObservationIssueForTest(t, store, "/", IssueRemoteReadDenied, SKPermRemoteRead(""))
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:          SKPermLocalRead("Private"),
-		IssueType:    IssueLocalReadDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    now.Add(-time.Minute),
+		Key:           SKPermLocalRead("Private"),
+		ConditionType: IssueLocalReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     now.Add(-time.Minute),
 	}))
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:          SKPermRemoteRead(""),
-		IssueType:    IssueRemoteReadDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    now.Add(-time.Minute),
+		Key:           SKPermRemoteRead(""),
+		ConditionType: IssueRemoteReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     now.Add(-time.Minute),
 	}))
 
 	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
@@ -278,16 +278,16 @@ func TestSyncStore_ReconcileObservationFindings_ManagedReadScopesOnlyTouchTarget
 	now := time.Date(2026, 4, 19, 10, 25, 0, 0, time.UTC)
 
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:          SKPermLocalRead("Private"),
-		IssueType:    IssueLocalReadDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    now.Add(-2 * time.Minute),
+		Key:           SKPermLocalRead("Private"),
+		ConditionType: IssueLocalReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     now.Add(-2 * time.Minute),
 	}))
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:          SKPermLocalRead("Other"),
-		IssueType:    IssueLocalReadDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    now.Add(-time.Minute),
+		Key:           SKPermLocalRead("Other"),
+		ConditionType: IssueLocalReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     now.Add(-time.Minute),
 	}))
 
 	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{

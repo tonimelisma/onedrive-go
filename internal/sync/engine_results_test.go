@@ -24,8 +24,8 @@ func TestEngineFlow_LogFailureSummary_AggregatesRetryWorkWarnings(t *testing.T) 
 
 	for i := range 11 {
 		flow.recordError(&ResultDecision{
-			Persistence: persistRetryWork,
-			IssueType:   IssueServiceOutage,
+			Persistence:   persistRetryWork,
+			ConditionType: IssueServiceOutage,
 		}, &ActionCompletion{
 			Path:   fmt.Sprintf("retry-%02d.txt", i),
 			Err:    errors.New("boom"),
@@ -43,7 +43,7 @@ func TestEngineFlow_LogFailureSummary_AggregatesRetryWorkWarnings(t *testing.T) 
 	output := logBuf.String()
 	assert.Contains(t, output, "msg=\"sync retry work (aggregated)\"")
 	assert.Equal(t, 11, strings.Count(output, "msg=\"sync retry work\""))
-	assert.Contains(t, output, "issue_type=service_outage")
+	assert.Contains(t, output, "condition_type=service_outage")
 	assert.Contains(t, output, "retry-00.txt")
 	assert.Contains(t, output, "retry-10.txt")
 

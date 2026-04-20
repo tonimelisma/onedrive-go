@@ -313,10 +313,10 @@ func TestPlannerPlanCurrentState_RemoteReadScopeDoesNotDeleteLocalData(t *testin
 		ObservedAt:      1,
 	}}))
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:          SKPermRemoteRead("Shared"),
-		IssueType:    IssueRemoteReadDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    time.Unix(100, 0),
+		Key:           SKPermRemoteRead("Shared"),
+		ConditionType: IssueRemoteReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
 	}))
 
 	plan := planCurrentStateForStore(t, store)
@@ -347,10 +347,10 @@ func TestPlannerPlanCurrentState_LocalReadScopeBlocksRemoteDeletesForDescendants
 		ETag:     "etag-private",
 	}}, "", driveID))
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:          SKPermLocalRead("Private"),
-		IssueType:    IssueLocalReadDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    time.Unix(100, 0),
+		Key:           SKPermLocalRead("Private"),
+		ConditionType: IssueLocalReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
 	}))
 
 	plan := planCurrentStateForStore(t, store)
@@ -392,10 +392,10 @@ func TestPlannerPlanCurrentState_RemoteReadScopeBlocksLocalDeletesForDescendants
 		},
 	}))
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:          SKPermRemoteRead("Team"),
-		IssueType:    IssueRemoteReadDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    time.Unix(100, 0),
+		Key:           SKPermRemoteRead("Team"),
+		ConditionType: IssueRemoteReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
 	}))
 
 	plan := planCurrentStateForStore(t, store)
@@ -511,10 +511,10 @@ func TestPlannerPlanCurrentState_RemoteMoveDestinationWithUnavailableTruthProduc
 		}},
 		nil,
 		[]*BlockScope{{
-			Key:          SKPermRemoteRead("Shared"),
-			IssueType:    IssueRemoteReadDenied,
-			TimingSource: ScopeTimingNone,
-			BlockedAt:    time.Unix(100, 0),
+			Key:           SKPermRemoteRead("Shared"),
+			ConditionType: IssueRemoteReadDenied,
+			TimingSource:  ScopeTimingNone,
+			BlockedAt:     time.Unix(100, 0),
 		}},
 		NewBaselineForTest([]*BaselineEntry{{
 			Path:     "Shared/dest.txt",

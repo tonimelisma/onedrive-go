@@ -10,14 +10,14 @@ import (
 
 const (
 	sqlUpsertRetryWork = `INSERT INTO retry_work
-		(work_key, path, old_path, action_type, issue_type, scope_key, blocked,
+		(work_key, path, old_path, action_type, condition_type, scope_key, blocked,
 		 attempt_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(work_key) DO UPDATE SET
 			path = excluded.path,
 			old_path = excluded.old_path,
 			action_type = excluded.action_type,
-			issue_type = excluded.issue_type,
+			condition_type = excluded.condition_type,
 			scope_key = excluded.scope_key,
 			blocked = excluded.blocked,
 			attempt_count = excluded.attempt_count,
@@ -27,7 +27,7 @@ const (
 			first_seen_at = excluded.first_seen_at,
 			last_seen_at = excluded.last_seen_at`
 	sqlDeleteRetryWorkByPathType = `DELETE FROM retry_work WHERE path = ? AND old_path = ? AND action_type = ?`
-	sqlSelectRetryWorkCols       = `work_key, path, old_path, action_type, issue_type, scope_key, blocked, ` +
+	sqlSelectRetryWorkCols       = `work_key, path, old_path, action_type, condition_type, scope_key, blocked, ` +
 		`attempt_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at`
 	sqlListRetryWork = `SELECT ` + sqlSelectRetryWorkCols + `
 		FROM retry_work
@@ -71,7 +71,7 @@ func upsertRetryWorkTx(ctx context.Context, runner sqlTxRunner, row *RetryWorkRo
 		row.Path,
 		row.OldPath,
 		row.ActionType.String(),
-		row.IssueType,
+		row.ConditionType,
 		row.ScopeKey.String(),
 		row.Blocked,
 		row.AttemptCount,
@@ -179,18 +179,18 @@ func (m *SyncStore) RecordRetryWorkFailure(
 
 	nowNano := m.nowFunc().UnixNano()
 	row = &RetryWorkRow{
-		WorkKey:      serializeRetryWorkKey(workKey),
-		Path:         failure.Path,
-		OldPath:      failure.OldPath,
-		ActionType:   failure.ActionType,
-		IssueType:    failure.IssueType,
-		ScopeKey:     failure.ScopeKey,
-		Blocked:      failure.Blocked,
-		AttemptCount: 1,
-		LastError:    failure.LastError,
-		HTTPStatus:   failure.HTTPStatus,
-		FirstSeenAt:  nowNano,
-		LastSeenAt:   nowNano,
+		WorkKey:       serializeRetryWorkKey(workKey),
+		Path:          failure.Path,
+		OldPath:       failure.OldPath,
+		ActionType:    failure.ActionType,
+		ConditionType: failure.ConditionType,
+		ScopeKey:      failure.ScopeKey,
+		Blocked:       failure.Blocked,
+		AttemptCount:  1,
+		LastError:     failure.LastError,
+		HTTPStatus:    failure.HTTPStatus,
+		FirstSeenAt:   nowNano,
+		LastSeenAt:    nowNano,
 	}
 	if found && existing != nil {
 		row.AttemptCount = existing.AttemptCount + 1
@@ -406,7 +406,7 @@ func scanRetryWorkRow(scanner retryWorkScanner, row *RetryWorkRow) error {
 		&row.Path,
 		&row.OldPath,
 		&row.ActionType,
-		&row.IssueType,
+		&row.ConditionType,
 		&scopeKey,
 		&row.Blocked,
 		&row.AttemptCount,

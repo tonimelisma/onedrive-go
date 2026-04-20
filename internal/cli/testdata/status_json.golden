@@ -22,7 +22,7 @@
             "last_error": "sync: network timeout",
             "conditions": [
               {
-                "summary_key": "invalid_filename",
+                "condition_key": "invalid_filename",
                 "condition_type": "invalid_filename",
                 "title": "INVALID FILENAME",
                 "reason": "The filename contains characters not allowed by OneDrive.",
@@ -33,7 +33,7 @@
                 ]
               },
               {
-                "summary_key": "authentication_required",
+                "condition_key": "authentication_required",
                 "condition_type": "unauthorized",
                 "title": "AUTHENTICATION REQUIRED",
                 "reason": "The last sync attempt for this account was rejected by OneDrive.",
@@ -44,7 +44,7 @@
                 "paths": null
               },
               {
-                "summary_key": "remote_write_denied",
+                "condition_key": "remote_write_denied",
                 "condition_type": "remote_write_denied",
                 "title": "SHARED FOLDER WRITES BLOCKED",
                 "reason": "This shared folder is read-only for your current write attempts. Downloads continue normally.",

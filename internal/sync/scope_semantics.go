@@ -42,93 +42,93 @@ const (
 )
 
 type ScopeDescriptor struct {
-	Key              ScopeKey
-	Family           ScopeFamily
-	Access           ScopeAccess
-	SubjectKind      ScopeSubjectKind
-	SubjectValue     string
-	DefaultIssueType string
-	Priority         int
+	Key                  ScopeKey
+	Family               ScopeFamily
+	Access               ScopeAccess
+	SubjectKind          ScopeSubjectKind
+	SubjectValue         string
+	DefaultConditionType string
+	Priority             int
 }
 
 func DescribeScopeKey(key ScopeKey) ScopeDescriptor {
 	switch key.Kind {
 	case ScopeThrottleTarget:
 		return ScopeDescriptor{
-			Key:              key,
-			Family:           ScopeFamilyThrottleTarget,
-			Access:           ScopeAccessNone,
-			SubjectKind:      ScopeSubjectKindDrive,
-			SubjectValue:     key.Param,
-			DefaultIssueType: IssueRateLimited,
-			Priority:         scopePriorityThrottleTarget,
+			Key:                  key,
+			Family:               ScopeFamilyThrottleTarget,
+			Access:               ScopeAccessNone,
+			SubjectKind:          ScopeSubjectKindDrive,
+			SubjectValue:         key.Param,
+			DefaultConditionType: IssueRateLimited,
+			Priority:             scopePriorityThrottleTarget,
 		}
 	case ScopeService:
 		return ScopeDescriptor{
-			Key:              key,
-			Family:           ScopeFamilyService,
-			Access:           ScopeAccessNone,
-			SubjectKind:      ScopeSubjectKindNone,
-			DefaultIssueType: IssueServiceOutage,
-			Priority:         scopePriorityService,
+			Key:                  key,
+			Family:               ScopeFamilyService,
+			Access:               ScopeAccessNone,
+			SubjectKind:          ScopeSubjectKindNone,
+			DefaultConditionType: IssueServiceOutage,
+			Priority:             scopePriorityService,
 		}
 	case ScopeDiskLocal:
 		return ScopeDescriptor{
-			Key:              key,
-			Family:           ScopeFamilyDiskLocal,
-			Access:           ScopeAccessNone,
-			SubjectKind:      ScopeSubjectKindNone,
-			DefaultIssueType: IssueDiskFull,
-			Priority:         scopePriorityDiskLocal,
+			Key:                  key,
+			Family:               ScopeFamilyDiskLocal,
+			Access:               ScopeAccessNone,
+			SubjectKind:          ScopeSubjectKindNone,
+			DefaultConditionType: IssueDiskFull,
+			Priority:             scopePriorityDiskLocal,
 		}
 	case ScopeQuotaOwn:
 		return ScopeDescriptor{
-			Key:              key,
-			Family:           ScopeFamilyQuotaOwn,
-			Access:           ScopeAccessNone,
-			SubjectKind:      ScopeSubjectKindNone,
-			DefaultIssueType: IssueQuotaExceeded,
-			Priority:         scopePriorityQuotaOwn,
+			Key:                  key,
+			Family:               ScopeFamilyQuotaOwn,
+			Access:               ScopeAccessNone,
+			SubjectKind:          ScopeSubjectKindNone,
+			DefaultConditionType: IssueQuotaExceeded,
+			Priority:             scopePriorityQuotaOwn,
 		}
 	case ScopePermDirRead:
 		return ScopeDescriptor{
-			Key:              key,
-			Family:           ScopeFamilyPermDir,
-			Access:           ScopeAccessRead,
-			SubjectKind:      ScopeSubjectKindPath,
-			SubjectValue:     key.Param,
-			DefaultIssueType: IssueLocalReadDenied,
-			Priority:         scopePriorityPermDir,
+			Key:                  key,
+			Family:               ScopeFamilyPermDir,
+			Access:               ScopeAccessRead,
+			SubjectKind:          ScopeSubjectKindPath,
+			SubjectValue:         key.Param,
+			DefaultConditionType: IssueLocalReadDenied,
+			Priority:             scopePriorityPermDir,
 		}
 	case ScopePermDirWrite:
 		return ScopeDescriptor{
-			Key:              key,
-			Family:           ScopeFamilyPermDir,
-			Access:           ScopeAccessWrite,
-			SubjectKind:      ScopeSubjectKindPath,
-			SubjectValue:     key.Param,
-			DefaultIssueType: IssueLocalWriteDenied,
-			Priority:         scopePriorityPermDir,
+			Key:                  key,
+			Family:               ScopeFamilyPermDir,
+			Access:               ScopeAccessWrite,
+			SubjectKind:          ScopeSubjectKindPath,
+			SubjectValue:         key.Param,
+			DefaultConditionType: IssueLocalWriteDenied,
+			Priority:             scopePriorityPermDir,
 		}
 	case ScopePermRemoteRead:
 		return ScopeDescriptor{
-			Key:              key,
-			Family:           ScopeFamilyPermRemote,
-			Access:           ScopeAccessRead,
-			SubjectKind:      ScopeSubjectKindPath,
-			SubjectValue:     key.Param,
-			DefaultIssueType: IssueRemoteReadDenied,
-			Priority:         scopePriorityPermRemote,
+			Key:                  key,
+			Family:               ScopeFamilyPermRemote,
+			Access:               ScopeAccessRead,
+			SubjectKind:          ScopeSubjectKindPath,
+			SubjectValue:         key.Param,
+			DefaultConditionType: IssueRemoteReadDenied,
+			Priority:             scopePriorityPermRemote,
 		}
 	case ScopePermRemoteWrite:
 		return ScopeDescriptor{
-			Key:              key,
-			Family:           ScopeFamilyPermRemote,
-			Access:           ScopeAccessWrite,
-			SubjectKind:      ScopeSubjectKindPath,
-			SubjectValue:     key.Param,
-			DefaultIssueType: IssueRemoteWriteDenied,
-			Priority:         scopePriorityPermRemote,
+			Key:                  key,
+			Family:               ScopeFamilyPermRemote,
+			Access:               ScopeAccessWrite,
+			SubjectKind:          ScopeSubjectKindPath,
+			SubjectValue:         key.Param,
+			DefaultConditionType: IssueRemoteWriteDenied,
+			Priority:             scopePriorityPermRemote,
 		}
 	default:
 		return ScopeDescriptor{

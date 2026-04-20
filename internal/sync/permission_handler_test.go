@@ -43,10 +43,10 @@ func seedLocalPermissionDeniedIssue(t *testing.T, store *SyncStore, scopeKey Sco
 			issueType = IssueLocalReadDenied
 		}
 		require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-			Key:          scopeKey,
-			IssueType:    issueType,
-			TimingSource: ScopeTimingNone,
-			BlockedAt:    time.Now(),
+			Key:           scopeKey,
+			ConditionType: issueType,
+			TimingSource:  ScopeTimingNone,
+			BlockedAt:     time.Now(),
 		}))
 		return
 	}
@@ -88,9 +88,9 @@ func TestPermHandler_HandlePermissionCheckError_NotFound(t *testing.T) {
 	assert.Equal(t, permissionCheckActivateDerivedScope, result.Kind)
 	require.NotNil(t, result.RetryWorkFailure)
 	assert.Equal(t, "failed/file.txt", result.RetryWorkFailure.Path)
-	assert.Equal(t, IssueRemoteWriteDenied, result.RetryWorkFailure.IssueType)
+	assert.Equal(t, IssueRemoteWriteDenied, result.RetryWorkFailure.ConditionType)
 	require.NotNil(t, result.BlockScope)
-	assert.Equal(t, IssueRemoteWriteDenied, result.BlockScope.IssueType)
+	assert.Equal(t, IssueRemoteWriteDenied, result.BlockScope.Key.ConditionType())
 	assert.Equal(t, SKPermRemoteWrite("failed"), result.ScopeKey)
 }
 
@@ -125,7 +125,7 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 	require.True(t, decision.Matched)
 	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
 	require.NotNil(t, decision.RetryWorkFailure)
-	assert.Equal(t, IssueLocalReadDenied, decision.RetryWorkFailure.IssueType)
+	assert.Equal(t, IssueLocalReadDenied, decision.RetryWorkFailure.ConditionType)
 }
 
 func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
@@ -147,7 +147,7 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 	require.True(t, decision.Matched)
 	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
 	require.NotNil(t, decision.RetryWorkFailure)
-	assert.Equal(t, IssueLocalReadDenied, decision.RetryWorkFailure.IssueType)
+	assert.Equal(t, IssueLocalReadDenied, decision.RetryWorkFailure.ConditionType)
 	require.NotNil(t, decision.BlockScope)
 	assert.Equal(t, SKPermLocalRead("blocked"), decision.BlockScope.Key)
 }
@@ -216,10 +216,10 @@ func TestPermHandler_RecheckPermissions_IgnoresObservationOwnedRemoteReadScopes(
 	checker := &mockPermChecker{}
 	ph, store, _ := newTestPermHandler(t, checker)
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:          SKPermRemoteRead("Shared/Docs"),
-		IssueType:    IssueRemoteReadDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    time.Now(),
+		Key:           SKPermRemoteRead("Shared/Docs"),
+		ConditionType: IssueRemoteReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Now(),
 	}))
 
 	decisions := ph.recheckPermissions(t.Context(), &Baseline{})
@@ -241,10 +241,10 @@ func TestPermHandler_RecheckPermissions_ReleaseRemoteWriteScopeWhenWritable(t *t
 	ph.rootItemID = testRemoteRootItemID
 	scopeKey := SKPermRemoteWrite("")
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:          scopeKey,
-		IssueType:    IssueRemoteWriteDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    time.Now(),
+		Key:           scopeKey,
+		ConditionType: IssueRemoteWriteDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Now(),
 	}))
 
 	decisions := ph.recheckPermissions(t.Context(), &Baseline{})
@@ -265,10 +265,10 @@ func TestPermHandler_RecheckPermissions_KeepsRemoteWriteScopeWhenInconclusive(t 
 	ph.rootItemID = testRemoteRootItemID
 	scopeKey := SKPermRemoteWrite("")
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:          scopeKey,
-		IssueType:    IssueRemoteWriteDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    time.Now(),
+		Key:           scopeKey,
+		ConditionType: IssueRemoteWriteDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Now(),
 	}))
 
 	decisions := ph.recheckPermissions(t.Context(), &Baseline{})
@@ -292,16 +292,16 @@ func TestPermHandler_StartupRecheckDecisions_CombineRemoteAndLocalMaintenance(t 
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "restored"), 0o750))
 
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:          SKPermRemoteWrite(""),
-		IssueType:    IssueRemoteWriteDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    time.Now(),
+		Key:           SKPermRemoteWrite(""),
+		ConditionType: IssueRemoteWriteDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Now(),
 	}))
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:          SKPermLocalWrite("restored"),
-		IssueType:    IssueLocalWriteDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    time.Now(),
+		Key:           SKPermLocalWrite("restored"),
+		ConditionType: IssueLocalWriteDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Now(),
 	}))
 
 	decisions := ph.startupRecheckDecisions(t.Context(), &Baseline{})

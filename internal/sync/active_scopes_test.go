@@ -26,9 +26,9 @@ func makeTrackedAction(actionType ActionType, path string) *TrackedAction {
 func TestFindBlockingScope_TargetThrottlePriorityWins(t *testing.T) {
 	t.Parallel()
 
-	blocks := []BlockScope{
-		{Key: SKService(), IssueType: IssueServiceOutage},
-		{Key: SKThrottleDrive(driveid.New("d")), IssueType: IssueRateLimited},
+	blocks := []ActiveScope{
+		{Key: SKService()},
+		{Key: SKThrottleDrive(driveid.New("d"))},
 	}
 
 	got := FindBlockingScope(blocks, makeTrackedAction(ActionUpload, "file.txt"))
@@ -39,8 +39,8 @@ func TestFindBlockingScope_TargetThrottlePriorityWins(t *testing.T) {
 func TestFindBlockingScope_PermDirPrefixMatch(t *testing.T) {
 	t.Parallel()
 
-	blocks := []BlockScope{
-		{Key: SKPermLocalWrite("Private"), IssueType: IssueLocalWriteDenied},
+	blocks := []ActiveScope{
+		{Key: SKPermLocalWrite("Private")},
 	}
 
 	tests := []struct {
@@ -66,8 +66,8 @@ func TestFindBlockingScope_PermRemote_IsRecursiveDownloadOnly(t *testing.T) {
 	t.Parallel()
 
 	scopeKey := SKPermRemoteWrite("Shared/TeamDocs")
-	blocks := []BlockScope{
-		{Key: scopeKey, IssueType: IssueRemoteWriteDenied},
+	blocks := []ActiveScope{
+		{Key: scopeKey},
 	}
 
 	tests := []struct {
@@ -108,8 +108,8 @@ func TestFindBlockingScope_PermRemote_IsRecursiveDownloadOnly(t *testing.T) {
 func TestFindBlockingScope_QuotaRouting(t *testing.T) {
 	t.Parallel()
 
-	blocks := []BlockScope{
-		{Key: SKQuotaOwn(), IssueType: IssueQuotaExceeded},
+	blocks := []ActiveScope{
+		{Key: SKQuotaOwn()},
 	}
 
 	assert.Equal(t,
@@ -127,9 +127,9 @@ func TestFindBlockingScope_PrefersMoreSpecificPermissionBoundary(t *testing.T) {
 
 	parent := SKPermRemoteWrite("Shared")
 	child := SKPermRemoteWrite("Shared/TeamDocs")
-	blocks := []BlockScope{
-		{Key: parent, IssueType: IssueRemoteWriteDenied},
-		{Key: child, IssueType: IssueRemoteWriteDenied},
+	blocks := []ActiveScope{
+		{Key: parent},
+		{Key: child},
 	}
 
 	got := FindBlockingScope(blocks, makeTrackedAction(ActionUpload, "Shared/TeamDocs/file.txt"))
@@ -140,13 +140,12 @@ func TestFindBlockingScope_PrefersMoreSpecificPermissionBoundary(t *testing.T) {
 func TestUpsertScope_ReplaceAndRemove(t *testing.T) {
 	t.Parallel()
 
-	blocks := []BlockScope{
-		{Key: SKService(), IssueType: IssueServiceOutage},
+	blocks := []ActiveScope{
+		{Key: SKService()},
 	}
 
-	updated := UpsertScope(blocks, &BlockScope{
+	updated := UpsertScope(blocks, &ActiveScope{
 		Key:           SKService(),
-		IssueType:     IssueServiceOutage,
 		TrialInterval: 30 * time.Second,
 		TrialCount:    2,
 	})
@@ -166,10 +165,9 @@ func TestExtendScopeTrial(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now().UTC()
-	blocks := []BlockScope{
+	blocks := []ActiveScope{
 		{
 			Key:           SKThrottleDrive(driveid.New("d")),
-			IssueType:     IssueRateLimited,
 			BlockedAt:     now.Add(-time.Minute),
 			NextTrialAt:   now.Add(10 * time.Second),
 			TrialInterval: 10 * time.Second,
@@ -192,7 +190,7 @@ func TestDueTrialsAndEarliestTrialAt(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now().UTC()
-	blocks := []BlockScope{
+	blocks := []ActiveScope{
 		{Key: SKThrottleDrive(driveid.New("d")), NextTrialAt: now.Add(-time.Second)},
 		{Key: SKService(), NextTrialAt: now.Add(2 * time.Minute)},
 		{Key: SKQuotaOwn()},
@@ -210,7 +208,7 @@ func TestDueTrialsAndEarliestTrialAt(t *testing.T) {
 func TestScopeKeys(t *testing.T) {
 	t.Parallel()
 
-	blocks := []BlockScope{
+	blocks := []ActiveScope{
 		{Key: SKService()},
 		{Key: SKThrottleDrive(driveid.New("d"))},
 	}
@@ -225,8 +223,8 @@ func TestScopeKeys(t *testing.T) {
 func TestFindBlockingScope_DiskLocal_DownloadsOnly(t *testing.T) {
 	t.Parallel()
 
-	blocks := []BlockScope{
-		{Key: SKDiskLocal(), IssueType: IssueDiskFull},
+	blocks := []ActiveScope{
+		{Key: SKDiskLocal()},
 	}
 
 	tests := []struct {

@@ -123,7 +123,7 @@ func TestSyncStore_UpsertBlockScope(t *testing.T) {
 
 	block := &BlockScope{
 		Key:           SKThrottleDrive(driveid.New("0000000000000001")),
-		IssueType:     IssueRateLimited,
+		ConditionType: IssueRateLimited,
 		TimingSource:  ScopeTimingServerRetryAfter,
 		BlockedAt:     time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 		TrialInterval: 5 * time.Second,
@@ -139,7 +139,7 @@ func TestSyncStore_UpsertBlockScope(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), blocks[0].Key)
-	assert.Equal(t, IssueRateLimited, blocks[0].IssueType)
+	assert.Equal(t, IssueRateLimited, blocks[0].ConditionType)
 	assert.Equal(t, ScopeFamilyThrottleTarget, blocks[0].Family)
 	assert.Equal(t, ScopeAccessNone, blocks[0].Access)
 	assert.Equal(t, ScopeSubjectKindDrive, blocks[0].SubjectKind)
@@ -171,7 +171,7 @@ func TestSyncStore_DeleteBlockScope(t *testing.T) {
 
 	block := &BlockScope{
 		Key:           SKService(),
-		IssueType:     IssueServiceOutage,
+		ConditionType: IssueServiceOutage,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Now().UTC(),
 		TrialInterval: 10 * time.Second,
@@ -210,7 +210,7 @@ func TestSyncStore_ListBlockScopes(t *testing.T) {
 	blocks := []*BlockScope{
 		{
 			Key:           SKThrottleDrive(driveid.New("0000000000000001")),
-			IssueType:     IssueRateLimited,
+			ConditionType: IssueRateLimited,
 			TimingSource:  ScopeTimingServerRetryAfter,
 			BlockedAt:     now,
 			TrialInterval: 5 * time.Second,
@@ -219,7 +219,7 @@ func TestSyncStore_ListBlockScopes(t *testing.T) {
 		},
 		{
 			Key:           SKService(),
-			IssueType:     IssueServiceOutage,
+			ConditionType: IssueServiceOutage,
 			TimingSource:  ScopeTimingBackoff,
 			BlockedAt:     now.Add(-time.Minute),
 			TrialInterval: 30 * time.Second,
@@ -228,7 +228,7 @@ func TestSyncStore_ListBlockScopes(t *testing.T) {
 		},
 		{
 			Key:           SKPermRemoteWrite("Shared/TeamDocs"),
-			IssueType:     IssueRemoteWriteDenied,
+			ConditionType: IssueRemoteWriteDenied,
 			TimingSource:  ScopeTimingBackoff,
 			BlockedAt:     now.Add(-5 * time.Minute),
 			TrialInterval: time.Minute,
@@ -254,7 +254,7 @@ func TestSyncStore_ListBlockScopes(t *testing.T) {
 	// Verify target throttle round-trip.
 	ta := byKey[SKThrottleDrive(driveid.New("0000000000000001"))]
 	require.NotNil(t, ta, "target throttle block should be listed")
-	assert.Equal(t, IssueRateLimited, ta.IssueType)
+	assert.Equal(t, IssueRateLimited, ta.ConditionType)
 	assert.Equal(t, now, ta.BlockedAt)
 	assert.Equal(t, 5*time.Second, ta.TrialInterval)
 	assert.Equal(t, now.Add(5*time.Second), ta.NextTrialAt)
@@ -263,7 +263,7 @@ func TestSyncStore_ListBlockScopes(t *testing.T) {
 	// Verify perm:remote round-trip (parameterized key).
 	remotePerm := byKey[SKPermRemoteWrite("Shared/TeamDocs")]
 	require.NotNil(t, remotePerm, "perm:remote block should be listed")
-	assert.Equal(t, IssueRemoteWriteDenied, remotePerm.IssueType)
+	assert.Equal(t, IssueRemoteWriteDenied, remotePerm.ConditionType)
 	assert.Equal(t, ScopeFamilyPermRemote, remotePerm.Family)
 	assert.Equal(t, ScopeAccessWrite, remotePerm.Access)
 	assert.Equal(t, ScopeSubjectKindPath, remotePerm.SubjectKind)
@@ -294,7 +294,7 @@ func TestSyncStore_ListBlockScopes_SkipsUnknownWireKeys(t *testing.T) {
 		ctx,
 		`INSERT INTO block_scopes
 			(scope_key, scope_family, scope_access, subject_kind, subject_value,
-			 issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
+			 condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"auth:account",
 		"unknown",
@@ -312,7 +312,7 @@ func TestSyncStore_ListBlockScopes_SkipsUnknownWireKeys(t *testing.T) {
 
 	require.NoError(t, mgr.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
-		IssueType:     IssueServiceOutage,
+		ConditionType: IssueServiceOutage,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     now,
 		TrialInterval: 5 * time.Second,
@@ -336,7 +336,7 @@ func TestSyncStore_ListBlockScopes_RejectsMismatchedMetadata(t *testing.T) {
 		ctx,
 		`INSERT INTO block_scopes
 			(scope_key, scope_family, scope_access, subject_kind, subject_value,
-			 issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
+			 condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		SKPermRemoteWrite("Shared/TeamDocs").String(),
 		ScopeFamilyPermDir,
@@ -373,7 +373,7 @@ func TestSyncStore_BlockScope_Roundtrip(t *testing.T) {
 	// - Parameterized scope key (perm:local-write)
 	original := &BlockScope{
 		Key:           SKPermRemoteWrite("Shared/TeamDocs"),
-		IssueType:     IssueRemoteWriteDenied,
+		ConditionType: IssueRemoteWriteDenied,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Date(2025, 3, 14, 9, 26, 53, 123456789, time.UTC),
 		TrialInterval: 2*time.Minute + 500*time.Millisecond,
@@ -389,7 +389,7 @@ func TestSyncStore_BlockScope_Roundtrip(t *testing.T) {
 
 	// Verify every field round-trips correctly.
 	assert.Equal(t, original.Key, got[0].Key, "scope key should round-trip")
-	assert.Equal(t, original.IssueType, got[0].IssueType, "issue type should round-trip")
+	assert.Equal(t, original.ConditionType, got[0].ConditionType, "issue type should round-trip")
 	assert.Equal(t, ScopeFamilyPermRemote, got[0].Family, "family should round-trip")
 	assert.Equal(t, ScopeAccessWrite, got[0].Access, "access should round-trip")
 	assert.Equal(t, ScopeSubjectKindPath, got[0].SubjectKind, "subject kind should round-trip")
@@ -408,7 +408,7 @@ func TestSyncStore_BlockScope_Roundtrip_ZeroNextTrialAt(t *testing.T) {
 
 	original := &BlockScope{
 		Key:           SKPermRemoteWrite("Shared/TeamDocs"),
-		IssueType:     IssueRemoteWriteDenied,
+		ConditionType: IssueRemoteWriteDenied,
 		TimingSource:  ScopeTimingNone,
 		BlockedAt:     time.Date(2025, 3, 14, 9, 26, 53, 123456789, time.UTC),
 		TrialInterval: 0,

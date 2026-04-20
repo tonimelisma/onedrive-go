@@ -157,7 +157,7 @@ func TestClassifyResult_SuccessAndShutdown(t *testing.T) {
 			in:   &ActionCompletion{Success: true},
 			want: ResultDecision{
 				Class:         resultSuccess,
-				SummaryKey:    "",
+				ConditionKey:  "",
 				Persistence:   persistNone,
 				RecordSuccess: true,
 				TrialHint:     trialHintRelease,
@@ -167,9 +167,9 @@ func TestClassifyResult_SuccessAndShutdown(t *testing.T) {
 			name: "shutdown",
 			in:   &ActionCompletion{Err: context.Canceled},
 			want: ResultDecision{
-				Class:      resultShutdown,
-				SummaryKey: "",
-				TrialHint:  trialHintShutdown,
+				Class:        resultShutdown,
+				ConditionKey: "",
+				TrialHint:    trialHintShutdown,
 			},
 		},
 	})
@@ -190,11 +190,11 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 			name: "unauthorized",
 			in:   &ActionCompletion{HTTPStatus: http.StatusUnauthorized},
 			want: ResultDecision{
-				Class:       resultFatal,
-				SummaryKey:  SummaryAuthenticationRequired,
-				Persistence: persistNone,
-				TrialHint:   trialHintFatal,
-				IssueType:   IssueUnauthorized,
+				Class:         resultFatal,
+				ConditionKey:  ConditionAuthenticationRequired,
+				Persistence:   persistNone,
+				TrialHint:     trialHintFatal,
+				ConditionType: IssueUnauthorized,
 			},
 		},
 		{
@@ -206,11 +206,11 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 				DriveID:    driveID,
 			},
 			want: ResultDecision{
-				Class:       resultSkip,
-				SummaryKey:  SummaryRemoteReadDenied,
-				Persistence: persistRetryWork,
-				TrialHint:   trialHintPreserve,
-				IssueType:   IssueRemoteReadDenied,
+				Class:         resultSkip,
+				ConditionKey:  ConditionRemoteReadDenied,
+				Persistence:   persistRetryWork,
+				TrialHint:     trialHintPreserve,
+				ConditionType: IssueRemoteReadDenied,
 			},
 		},
 		{
@@ -223,13 +223,13 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 			},
 			want: ResultDecision{
 				Class:             resultBlockScope,
-				SummaryKey:        SummaryRateLimited,
+				ConditionKey:      ConditionRateLimited,
 				ScopeKey:          SKThrottleDrive(driveID),
 				ScopeEvidence:     SKThrottleDrive(driveID),
 				Persistence:       persistRetryWork,
 				RunScopeDetection: true,
 				TrialHint:         trialHintExtendOnMatchingScope,
-				IssueType:         IssueRateLimited,
+				ConditionType:     IssueRateLimited,
 			},
 		},
 		{
@@ -242,13 +242,13 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 			},
 			want: ResultDecision{
 				Class:             resultBlockScope,
-				SummaryKey:        SummaryQuotaExceeded,
+				ConditionKey:      ConditionQuotaExceeded,
 				ScopeKey:          SKQuotaOwn(),
 				ScopeEvidence:     SKQuotaOwn(),
 				Persistence:       persistRetryWork,
 				RunScopeDetection: true,
 				TrialHint:         trialHintExtendOnMatchingScope,
-				IssueType:         IssueQuotaExceeded,
+				ConditionType:     IssueQuotaExceeded,
 			},
 		},
 		{
@@ -261,12 +261,12 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 			},
 			want: ResultDecision{
 				Class:             resultRequeue,
-				SummaryKey:        SummaryServiceOutage,
+				ConditionKey:      ConditionServiceOutage,
 				ScopeEvidence:     SKService(),
 				Persistence:       persistRetryWork,
 				RunScopeDetection: true,
 				TrialHint:         trialHintExtendOnMatchingScope,
-				IssueType:         IssueServiceOutage,
+				ConditionType:     IssueServiceOutage,
 			},
 		},
 	})
@@ -287,11 +287,11 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 			name: "precondition changed",
 			in:   &ActionCompletion{Err: ErrActionPreconditionChanged},
 			want: ResultDecision{
-				Class:       resultRequeue,
-				SummaryKey:  SummaryUnexpectedCondition,
-				Persistence: persistRetryWork,
-				TrialHint:   trialHintPreserve,
-				IssueType:   "transient_conflict",
+				Class:         resultRequeue,
+				ConditionKey:  ConditionUnexpectedCondition,
+				Persistence:   persistRetryWork,
+				TrialHint:     trialHintPreserve,
+				ConditionType: "transient_conflict",
 			},
 		},
 		{
@@ -299,12 +299,12 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 			in:   &ActionCompletion{Err: driveops.ErrDiskFull},
 			want: ResultDecision{
 				Class:         resultBlockScope,
-				SummaryKey:    SummaryDiskFull,
+				ConditionKey:  ConditionDiskFull,
 				ScopeKey:      SKDiskLocal(),
 				ScopeEvidence: SKDiskLocal(),
 				Persistence:   persistRetryWork,
 				TrialHint:     trialHintExtendOnMatchingScope,
-				IssueType:     IssueDiskFull,
+				ConditionType: IssueDiskFull,
 			},
 		},
 		{
@@ -317,26 +317,26 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 			},
 			want: ResultDecision{
 				Class:          resultSkip,
-				SummaryKey:     SummaryLocalReadDenied,
+				ConditionKey:   ConditionLocalReadDenied,
 				Persistence:    persistRetryWork,
 				PermissionFlow: permissionFlowLocalPermission,
 				TrialHint:      trialHintPreserve,
-				IssueType:      IssueLocalReadDenied,
+				ConditionType:  IssueLocalReadDenied,
 			},
 		},
 	})
 }
 
 // Validates: R-2.10.4
-func TestRuntimeSummaryKey_RepresentativeMappings(t *testing.T) {
+func TestRuntimeConditionKey_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, SummaryInvalidFilename, runtimeSummaryKey(resultSkip, IssueInvalidFilename))
-	assert.Equal(t, SummaryRateLimited, runtimeSummaryKey(resultBlockScope, IssueRateLimited))
-	assert.Equal(t, SummaryRemoteWriteDenied, runtimeSummaryKey(resultSkip, IssueRemoteWriteDenied))
-	assert.Equal(t, SummaryUnexpectedCondition, runtimeSummaryKey(errclass.ClassFatal, "mystery"))
-	assert.Equal(t, SummaryUnexpectedCondition, runtimeSummaryKey(errclass.ClassActionable, ""))
-	assert.Equal(t, SummaryKey(""), runtimeSummaryKey(errclass.ClassSuccess, ""))
+	assert.Equal(t, ConditionInvalidFilename, ConditionKeyForRuntimeResult(resultSkip, IssueInvalidFilename))
+	assert.Equal(t, ConditionRateLimited, ConditionKeyForRuntimeResult(resultBlockScope, IssueRateLimited))
+	assert.Equal(t, ConditionRemoteWriteDenied, ConditionKeyForRuntimeResult(resultSkip, IssueRemoteWriteDenied))
+	assert.Equal(t, ConditionUnexpectedCondition, ConditionKeyForRuntimeResult(errclass.ClassFatal, "mystery"))
+	assert.Equal(t, ConditionUnexpectedCondition, ConditionKeyForRuntimeResult(errclass.ClassActionable, ""))
+	assert.Equal(t, ConditionKey(""), ConditionKeyForRuntimeResult(errclass.ClassSuccess, ""))
 }
 
 // Validates: R-2.10.4

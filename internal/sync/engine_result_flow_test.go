@@ -18,11 +18,11 @@ func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsRetryWork(t
 	flow := testEngineFlow(t, eng)
 
 	outcome := flow.processNormalDecision(t.Context(), nil, &ResultDecision{
-		Class:       errclass.ClassInvalid,
-		SummaryKey:  SummaryInvalidFilename,
-		Persistence: persistRetryWork,
-		IssueType:   IssueInvalidFilename,
-		TrialHint:   trialHintPreserve,
+		Class:         errclass.ClassInvalid,
+		ConditionKey:  ConditionInvalidFilename,
+		Persistence:   persistRetryWork,
+		ConditionType: IssueInvalidFilename,
+		TrialHint:     trialHintPreserve,
 	}, nil, &ActionCompletion{
 		Path:       "invalid.txt",
 		ActionType: ActionUpload,
@@ -37,7 +37,7 @@ func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsRetryWork(t
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
 	assert.Equal(t, "invalid.txt", retryRows[0].Path)
-	assert.Equal(t, IssueInvalidFilename, retryRows[0].IssueType)
+	assert.Equal(t, IssueInvalidFilename, retryRows[0].ConditionType)
 }
 
 // Validates: R-2.10.5
@@ -70,9 +70,9 @@ func TestEngineFlow_ProcessNormalDecision_FatalTerminatesWithFatalResultError(t 
 	flow := testEngineFlow(t, eng)
 
 	outcome := flow.processNormalDecision(t.Context(), nil, &ResultDecision{
-		Class:      errclass.ClassFatal,
-		SummaryKey: SummaryAuthenticationRequired,
-		TrialHint:  trialHintFatal,
+		Class:        errclass.ClassFatal,
+		ConditionKey: ConditionAuthenticationRequired,
+		TrialHint:    trialHintFatal,
 	}, nil, &ActionCompletion{
 		Path:       "auth.txt",
 		ActionType: ActionUpload,
@@ -93,12 +93,12 @@ func TestEngineFlow_ProcessNormalDecision_RetryableTransientScopeEvidenceStaysUn
 
 	outcome := flow.processNormalDecision(t.Context(), rt, &ResultDecision{
 		Class:             errclass.ClassRetryableTransient,
-		SummaryKey:        SummaryServiceOutage,
+		ConditionKey:      ConditionServiceOutage,
 		ScopeEvidence:     SKService(),
 		Persistence:       persistRetryWork,
 		RunScopeDetection: true,
 		TrialHint:         trialHintExtendOnMatchingScope,
-		IssueType:         IssueServiceOutage,
+		ConditionType:     IssueServiceOutage,
 	}, nil, &ActionCompletion{
 		Path:       "retry.txt",
 		ActionType: ActionUpload,
@@ -128,10 +128,10 @@ func TestEngineFlow_ProcessTrialDecision_PreserveRecordsFailureWithoutTerminatin
 	scopeKey := SKService()
 
 	outcome := flow.processTrialDecision(t.Context(), nil, scopeKey, &ResultDecision{
-		Class:      errclass.ClassActionable,
-		SummaryKey: SummaryInvalidFilename,
-		IssueType:  IssueInvalidFilename,
-		TrialHint:  trialHintPreserve,
+		Class:         errclass.ClassActionable,
+		ConditionKey:  ConditionInvalidFilename,
+		ConditionType: IssueInvalidFilename,
+		TrialHint:     trialHintPreserve,
 	}, nil, &ActionCompletion{
 		Path:          "trial.txt",
 		ActionType:    ActionUpload,
@@ -176,9 +176,9 @@ func TestEngineFlow_ProcessTrialDecision_FatalTerminatesWithFatalResultError(t *
 	flow := testEngineFlow(t, eng)
 
 	outcome := flow.processTrialDecision(t.Context(), nil, SKService(), &ResultDecision{
-		Class:      errclass.ClassFatal,
-		SummaryKey: SummaryAuthenticationRequired,
-		TrialHint:  trialHintFatal,
+		Class:        errclass.ClassFatal,
+		ConditionKey: ConditionAuthenticationRequired,
+		TrialHint:    trialHintFatal,
 	}, nil, &ActionCompletion{
 		Path:       "trial-auth.txt",
 		ActionType: ActionUpload,

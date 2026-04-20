@@ -99,7 +99,7 @@ func TestDescribeScopeKey_PermRemoteWrite(t *testing.T) {
 	assert.Equal(t, ScopeAccessWrite, descriptor.Access)
 	assert.Equal(t, ScopeSubjectKindPath, descriptor.SubjectKind)
 	assert.Equal(t, "/readonly", descriptor.SubjectValue)
-	assert.Equal(t, IssueRemoteWriteDenied, descriptor.DefaultIssueType)
+	assert.Equal(t, IssueRemoteWriteDenied, descriptor.DefaultConditionType)
 	assert.Equal(t, "/readonly", descriptor.Humanize())
 }
 
@@ -111,6 +111,6 @@ func TestDescribeScopeKey_Service(t *testing.T) {
 	assert.Equal(t, ScopeAccessNone, descriptor.Access)
 	assert.Equal(t, ScopeSubjectKindNone, descriptor.SubjectKind)
 	assert.Empty(t, descriptor.SubjectValue)
-	assert.Equal(t, IssueServiceOutage, descriptor.DefaultIssueType)
+	assert.Equal(t, IssueServiceOutage, descriptor.DefaultConditionType)
 	assert.Equal(t, "OneDrive service", descriptor.Humanize())
 }

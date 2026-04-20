@@ -18,22 +18,25 @@ import (
 	"fmt"
 )
 
-func describeBlockScopeForWrite(block *BlockScope) (ScopeDescriptor, error) {
+func describeBlockScopeForWrite(block *BlockScope) (persistedScopeMetadata, error) {
 	if block == nil {
-		return ScopeDescriptor{}, fmt.Errorf("sync: upserting block scope: missing block")
+		return persistedScopeMetadata{}, fmt.Errorf("sync: upserting block scope: missing block")
 	}
 
-	descriptor := DescribeScopeKey(block.Key)
-	if descriptor.IsZero() {
-		return ScopeDescriptor{}, fmt.Errorf("sync: upserting block scope: unknown scope key %q", block.Key.String())
+	metadata, err := encodePersistedScopeMetadata(block.Key)
+	if err != nil {
+		return persistedScopeMetadata{}, fmt.Errorf("sync: upserting block scope: %w", err)
 	}
 
-	block.Family = descriptor.Family
-	block.Access = descriptor.Access
-	block.SubjectKind = descriptor.SubjectKind
-	block.SubjectValue = descriptor.SubjectValue
+	block.Family = metadata.Family
+	block.Access = metadata.Access
+	block.SubjectKind = metadata.SubjectKind
+	block.SubjectValue = metadata.SubjectValue
+	if block.ConditionType == "" {
+		block.ConditionType = metadata.Descriptor.DefaultConditionType
+	}
 
-	return descriptor, nil
+	return metadata, nil
 }
 
 func validateBlockScope(block *BlockScope) error {
@@ -87,14 +90,14 @@ func (m *SyncStore) UpsertBlockScope(ctx context.Context, block *BlockScope) err
 	_, err := m.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO block_scopes
 			(scope_key, scope_family, scope_access, subject_kind, subject_value,
-			 issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
+			 condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		block.Key.String(),
 		block.Family,
 		block.Access,
 		block.SubjectKind,
 		block.SubjectValue,
-		block.IssueType,
+		block.ConditionType,
 		block.TimingSource,
 		block.BlockedAt.UnixNano(),
 		int64(block.TrialInterval),
@@ -128,7 +131,7 @@ func (m *SyncStore) DeleteBlockScope(ctx context.Context, key ScopeKey) error {
 func (m *SyncStore) ListBlockScopes(ctx context.Context) ([]*BlockScope, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT scope_key, scope_family, scope_access, subject_kind, subject_value,
-		        issue_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
+		        condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count
 		FROM block_scopes`)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing block scopes: %w", err)

@@ -5,7 +5,7 @@ package cli
 const defaultVisiblePaths = 5
 
 type statusConditionJSON struct {
-	SummaryKey    string   `json:"summary_key,omitempty"`
+	ConditionKey  string   `json:"condition_key,omitempty"`
 	ConditionType string   `json:"condition_type"`
 	Title         string   `json:"title"`
 	Reason        string   `json:"reason"`

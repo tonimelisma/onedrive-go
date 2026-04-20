@@ -87,19 +87,19 @@ func (ss *ScopeState) UpdateScope(r *ActionCompletion) ScopeUpdateResult {
 			return ScopeUpdateResult{}
 		}
 		return ScopeUpdateResult{
-			Block:      true,
-			ScopeKey:   scopeKey,
-			IssueType:  IssueRateLimited,
-			RetryAfter: r.RetryAfter,
+			Block:         true,
+			ScopeKey:      scopeKey,
+			ConditionType: IssueRateLimited,
+			RetryAfter:    r.RetryAfter,
 		}
 
 	case r.HTTPStatus == http.StatusServiceUnavailable && r.RetryAfter > 0:
 		// Immediate block — 503 with Retry-After is a server signal (R-2.10.3).
 		return ScopeUpdateResult{
-			Block:      true,
-			ScopeKey:   SKService(),
-			IssueType:  IssueServiceOutage,
-			RetryAfter: r.RetryAfter,
+			Block:         true,
+			ScopeKey:      SKService(),
+			ConditionType: IssueServiceOutage,
+			RetryAfter:    r.RetryAfter,
 		}
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
@@ -134,7 +134,7 @@ func (ss *ScopeState) RecordSuccess(r *ActionCompletion) {
 // ScopeUpdateResult indicating whether the threshold was crossed.
 func (ss *ScopeState) checkWindow(
 	sk ScopeKey, path string, threshold int, window time.Duration,
-	issueType string,
+	conditionType string,
 ) ScopeUpdateResult {
 	now := ss.nowFunc()
 
@@ -156,9 +156,9 @@ func (ss *ScopeState) checkWindow(
 		// Reset window after triggering to avoid re-triggering on next failure.
 		delete(ss.windows, sk)
 		return ScopeUpdateResult{
-			Block:     true,
-			ScopeKey:  sk,
-			IssueType: issueType,
+			Block:         true,
+			ScopeKey:      sk,
+			ConditionType: conditionType,
 		}
 	}
 

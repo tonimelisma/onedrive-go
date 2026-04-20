@@ -11,9 +11,9 @@ func TestWatchConditionSummary_CountHelpers(t *testing.T) {
 
 	summary := watchConditionSummary{
 		Groups: []watchConditionGroupCount{
-			{Key: SummaryInvalidFilename, Count: 2},
-			{Key: SummaryRemoteWriteDenied, Count: 3},
-			{Key: SummaryAuthenticationRequired, Count: 1},
+			{Key: ConditionInvalidFilename, Count: 2},
+			{Key: ConditionRemoteWriteDenied, Count: 3},
+			{Key: ConditionAuthenticationRequired, Count: 1},
 		},
 		Retrying: 4,
 	}
@@ -31,16 +31,16 @@ func TestWatchConditionGroupAccumulator_AddAndGroups_SortsAndAggregates(t *testi
 
 	accumulator := make(watchConditionGroupAccumulator)
 	accumulator.Add("", 5, "", "")
-	accumulator.Add(SummaryServiceOutage, 0, "drive", "ignored")
-	accumulator.Add(SummaryServiceOutage, 1, "drive", "Drive B")
-	accumulator.Add(SummaryServiceOutage, 2, "drive", "Drive A")
-	accumulator.Add(SummaryServiceOutage, 3, "drive", "Drive A")
-	accumulator.Add(SummaryDiskFull, 4, "disk", "Mac SSD")
+	accumulator.Add(ConditionServiceOutage, 0, "drive", "ignored")
+	accumulator.Add(ConditionServiceOutage, 1, "drive", "Drive B")
+	accumulator.Add(ConditionServiceOutage, 2, "drive", "Drive A")
+	accumulator.Add(ConditionServiceOutage, 3, "drive", "Drive A")
+	accumulator.Add(ConditionDiskFull, 4, "disk", "Mac SSD")
 
 	assert.Equal(t, []watchConditionGroupCount{
-		{Key: SummaryDiskFull, Count: 4, ScopeKind: "disk", Scope: "Mac SSD"},
-		{Key: SummaryServiceOutage, Count: 5, ScopeKind: "drive", Scope: "Drive A"},
-		{Key: SummaryServiceOutage, Count: 1, ScopeKind: "drive", Scope: "Drive B"},
+		{Key: ConditionDiskFull, Count: 4, ScopeKind: "disk", Scope: "Mac SSD"},
+		{Key: ConditionServiceOutage, Count: 5, ScopeKind: "drive", Scope: "Drive A"},
+		{Key: ConditionServiceOutage, Count: 1, ScopeKind: "drive", Scope: "Drive B"},
 	}, accumulator.Groups())
 }
 
@@ -54,8 +54,8 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 			{IssueType: IssueRemoteReadDenied, ScopeKey: SKPermRemoteRead("Shared/Docs")},
 		},
 		BlockScopes: []*BlockScope{
-			{Key: SKPermRemoteWrite("Shared/Docs"), IssueType: IssueRemoteWriteDenied},
-			{Key: SKService(), IssueType: IssueServiceOutage},
+			{Key: SKPermRemoteWrite("Shared/Docs"), ConditionType: IssueRemoteWriteDenied},
+			{Key: SKService(), ConditionType: IssueServiceOutage},
 		},
 		BlockedRetryWork: []RetryWorkRow{
 			{ScopeKey: SKPermRemoteWrite("Shared/Docs"), Path: "Shared/Docs/a.txt"},
@@ -65,10 +65,10 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 
 	assert.Equal(t, 4, summary.RetryingCount())
 	assert.ElementsMatch(t, []watchConditionGroupCount{
-		{Key: SummaryInvalidFilename, Count: 1},
-		{Key: SummaryRemoteReadDenied, Count: 1},
-		{Key: SummaryRemoteWriteDenied, Count: 2},
-		{Key: SummaryServiceOutage, Count: 1},
+		{Key: ConditionInvalidFilename, Count: 1},
+		{Key: ConditionRemoteReadDenied, Count: 1},
+		{Key: ConditionRemoteWriteDenied, Count: 2},
+		{Key: ConditionServiceOutage, Count: 1},
 	}, summary.Groups)
 	assert.Equal(t, []watchRemoteBlockedGroup{
 		{

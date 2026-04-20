@@ -133,9 +133,9 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 		flow.scopeController().feedScopeDetection(ctx, watch, r)
 	} else if decision.Class == errclass.ClassBlockScopeingTransient && !decision.ScopeKey.IsZero() {
 		flow.scopeController().applyBlockScope(ctx, watch, ScopeUpdateResult{
-			Block:     true,
-			ScopeKey:  decision.ScopeKey,
-			IssueType: decision.ScopeKey.IssueType(),
+			Block:         true,
+			ScopeKey:      decision.ScopeKey,
+			ConditionType: decision.ScopeKey.ConditionType(),
 		})
 	}
 
@@ -201,7 +201,7 @@ func (flow *engineFlow) processNormalDecision(
 	case errclass.ClassShutdown:
 		return outcome
 	case errclass.ClassFatal:
-		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.SummaryKey)
+		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
@@ -248,7 +248,7 @@ func (flow *engineFlow) processTrialDecision(
 		flow.recordError(decision, r)
 	case trialOutcomeFatal:
 		flow.routeReadyForClass(ctx, watch, errclass.ClassFatal, ready, r)
-		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.SummaryKey)
+		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
@@ -304,9 +304,9 @@ func (controller *scopeController) applyTrialPreserveEffects(
 
 	if decision.Class == errclass.ClassBlockScopeingTransient && decision.ScopeKey == SKDiskLocal() {
 		controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
-			Block:     true,
-			ScopeKey:  decision.ScopeKey,
-			IssueType: decision.ScopeKey.IssueType(),
+			Block:         true,
+			ScopeKey:      decision.ScopeKey,
+			ConditionType: decision.ScopeKey.ConditionType(),
 		})
 		controller.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey)
 	}
@@ -343,12 +343,12 @@ func (controller *scopeController) applyFatalAuthEffects(
 	ctx context.Context,
 	watch *watchRuntime,
 	r *ActionCompletion,
-	summaryKey SummaryKey,
+	conditionKey ConditionKey,
 ) {
 	flow := controller.flow
 	logFields := flow.summaryLogFields(
 		errclass.ClassFatal,
-		summaryKey,
+		conditionKey,
 		r.Path,
 		ScopeKey{},
 	)
@@ -428,7 +428,7 @@ func (flow *engineFlow) recordRetryWork(
 
 	if decision.Class == errclass.ClassActionable {
 		fields := append(flow.resultLogFields(decision, r),
-			slog.String("issue_type", decision.IssueType),
+			slog.String("condition_type", decision.ConditionType),
 			slog.String("scope_evidence", decision.ScopeEvidence.String()),
 		)
 		flow.engine.logger.Error(
@@ -438,14 +438,14 @@ func (flow *engineFlow) recordRetryWork(
 	}
 
 	row, recErr := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       r.Path,
-		OldPath:    r.OldPath,
-		ActionType: r.ActionType,
-		IssueType:  decision.IssueType,
-		ScopeKey:   scopeKey,
-		LastError:  r.ErrMsg,
-		HTTPStatus: r.HTTPStatus,
-		Blocked:    blocked,
+		Path:          r.Path,
+		OldPath:       r.OldPath,
+		ActionType:    r.ActionType,
+		ConditionType: decision.ConditionType,
+		ScopeKey:      scopeKey,
+		LastError:     r.ErrMsg,
+		HTTPStatus:    r.HTTPStatus,
+		Blocked:       blocked,
 	}, delayFn)
 	if recErr != nil {
 		fields := append(flow.resultLogFields(decision, r), slog.String("error", recErr.Error()))
@@ -455,7 +455,7 @@ func (flow *engineFlow) recordRetryWork(
 	}
 
 	fields := append(flow.resultLogFields(decision, r),
-		slog.String("issue_type", decision.IssueType),
+		slog.String("condition_type", decision.ConditionType),
 		slog.String("error", r.ErrMsg),
 		slog.String("scope_evidence", scopeKey.String()),
 		slog.Bool("blocked", blocked),

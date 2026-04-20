@@ -60,7 +60,7 @@ type watchRuntimeState struct {
 	// Active block scopes owned by the watch control flow. The slice is tiny
 	// (usually 0-5 entries), so linear scans keep the logic simple and avoid a
 	// second mirrored subsystem.
-	activeScopes []BlockScope
+	activeScopes []ActiveScope
 
 	// Scope detection — sliding window failure tracking.
 	scopeState *ScopeState

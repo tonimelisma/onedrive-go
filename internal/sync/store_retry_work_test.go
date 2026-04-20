@@ -315,7 +315,7 @@ func TestPruneBlockScopesWithoutBlockedWork(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
-		IssueType:     IssueServiceOutage,
+		ConditionType: IssueServiceOutage,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Unix(100, 0),
 		TrialInterval: time.Minute,
@@ -323,17 +323,17 @@ func TestPruneBlockScopesWithoutBlockedWork(t *testing.T) {
 	}))
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKThrottleDrive(driveid.New("0000000000000001")),
-		IssueType:     IssueRateLimited,
+		ConditionType: IssueRateLimited,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Unix(200, 0),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(260, 0),
 	}))
 	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:          SKPermRemoteRead("Shared/Docs"),
-		IssueType:    IssueRemoteReadDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    time.Unix(300, 0),
+		Key:           SKPermRemoteRead("Shared/Docs"),
+		ConditionType: IssueRemoteReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(300, 0),
 	}))
 
 	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
@@ -371,8 +371,8 @@ func TestRecordRetryWorkFailure_RejectsInvalidInput(t *testing.T) {
 
 	err = func() error {
 		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-			ActionType: ActionUpload,
-			IssueType:  IssueServiceOutage,
+			ActionType:    ActionUpload,
+			ConditionType: IssueServiceOutage,
 		}, func(int) time.Duration { return time.Minute })
 		return recordErr
 	}()
@@ -381,9 +381,9 @@ func TestRecordRetryWorkFailure_RejectsInvalidInput(t *testing.T) {
 
 	err = func() error {
 		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-			Path:       "bad-action.txt",
-			ActionType: ActionType(-1),
-			IssueType:  IssueServiceOutage,
+			Path:          "bad-action.txt",
+			ActionType:    ActionType(-1),
+			ConditionType: IssueServiceOutage,
 		}, func(int) time.Duration { return time.Minute })
 		return recordErr
 	}()
@@ -392,9 +392,9 @@ func TestRecordRetryWorkFailure_RejectsInvalidInput(t *testing.T) {
 
 	err = func() error {
 		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-			Path:       "needs-delay.txt",
-			ActionType: ActionUpload,
-			IssueType:  IssueServiceOutage,
+			Path:          "needs-delay.txt",
+			ActionType:    ActionUpload,
+			ConditionType: IssueServiceOutage,
 		}, nil)
 		return recordErr
 	}()
@@ -403,10 +403,10 @@ func TestRecordRetryWorkFailure_RejectsInvalidInput(t *testing.T) {
 
 	err = func() error {
 		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-			Path:       "blocked-without-scope.txt",
-			ActionType: ActionUpload,
-			IssueType:  IssueRemoteWriteDenied,
-			Blocked:    true,
+			Path:          "blocked-without-scope.txt",
+			ActionType:    ActionUpload,
+			ConditionType: IssueRemoteWriteDenied,
+			Blocked:       true,
 		}, nil)
 		return recordErr
 	}()
@@ -424,20 +424,20 @@ func TestRecordRetryWorkFailure_PopulatesRetryAndBlockedRows(t *testing.T) {
 	setStoreTestNow(store, now)
 
 	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       "retry.txt",
-		ActionType: ActionUpload,
-		IssueType:  IssueServiceOutage,
-		LastError:  "retry me",
+		Path:          "retry.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		LastError:     "retry me",
 	}, func(int) time.Duration { return time.Minute })
 	require.NoError(t, err)
 
 	_, err = store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       "blocked.txt",
-		ActionType: ActionRemoteDelete,
-		IssueType:  IssueServiceOutage,
-		ScopeKey:   SKService(),
-		LastError:  "blocked",
-		Blocked:    true,
+		Path:          "blocked.txt",
+		ActionType:    ActionRemoteDelete,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      SKService(),
+		LastError:     "blocked",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
@@ -453,12 +453,12 @@ func TestRecordRetryWorkFailure_PopulatesRetryAndBlockedRows(t *testing.T) {
 	assert.False(t, byPath["retry.txt"].Blocked)
 	assert.Equal(t, now.Add(time.Minute).UnixNano(), byPath["retry.txt"].NextRetryAt)
 	assert.NotEmpty(t, byPath["retry.txt"].WorkKey)
-	assert.Equal(t, IssueServiceOutage, byPath["retry.txt"].IssueType)
+	assert.Equal(t, IssueServiceOutage, byPath["retry.txt"].ConditionType)
 
 	assert.True(t, byPath["blocked.txt"].Blocked)
 	assert.Equal(t, int64(0), byPath["blocked.txt"].NextRetryAt)
 	assert.Equal(t, SKService(), byPath["blocked.txt"].ScopeKey)
-	assert.Equal(t, IssueServiceOutage, byPath["blocked.txt"].IssueType)
+	assert.Equal(t, IssueServiceOutage, byPath["blocked.txt"].ConditionType)
 }
 
 // Validates: R-2.10.33
@@ -469,11 +469,11 @@ func TestRecordRetryWorkFailure_PreservesMoveOldPath(t *testing.T) {
 	ctx := t.Context()
 
 	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       "dest.txt",
-		OldPath:    "src.txt",
-		ActionType: ActionRemoteMove,
-		IssueType:  IssueServiceOutage,
-		LastError:  "move later",
+		Path:          "dest.txt",
+		OldPath:       "src.txt",
+		ActionType:    ActionRemoteMove,
+		ConditionType: IssueServiceOutage,
+		LastError:     "move later",
 	}, func(int) time.Duration { return time.Minute })
 	require.NoError(t, err)
 
@@ -493,12 +493,12 @@ func TestClearBlockedRetryWork_RemovesOnlyMatchingScopedWork(t *testing.T) {
 	ctx := t.Context()
 
 	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       "blocked.txt",
-		ActionType: ActionUpload,
-		IssueType:  IssueServiceOutage,
-		ScopeKey:   SKService(),
-		LastError:  "blocked upload",
-		Blocked:    true,
+		Path:          "blocked.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      SKService(),
+		LastError:     "blocked upload",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
@@ -531,10 +531,10 @@ func TestResolveRetryWork_ReturnsAndDeletesMatchingWork(t *testing.T) {
 	ctx := t.Context()
 
 	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       "docs/report.txt",
-		ActionType: ActionUpload,
-		IssueType:  IssueServiceOutage,
-		LastError:  "server error",
+		Path:          "docs/report.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		LastError:     "server error",
 	}, func(int) time.Duration { return time.Minute })
 	require.NoError(t, err)
 
@@ -548,7 +548,7 @@ func TestResolveRetryWork_ReturnsAndDeletesMatchingWork(t *testing.T) {
 	assert.Equal(t, "docs/report.txt", row.Path)
 	assert.Equal(t, ActionUpload, row.ActionType)
 	assert.Equal(t, 1, row.AttemptCount)
-	assert.Equal(t, IssueServiceOutage, row.IssueType)
+	assert.Equal(t, IssueServiceOutage, row.ConditionType)
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
@@ -563,10 +563,10 @@ func TestResolveRetryWork_PreservesUnrelatedRetryWorkOnSamePath(t *testing.T) {
 	ctx := t.Context()
 
 	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       "docs/report.txt",
-		ActionType: ActionUpload,
-		IssueType:  IssueServiceOutage,
-		LastError:  "server error",
+		Path:          "docs/report.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		LastError:     "server error",
 	}, func(int) time.Duration { return time.Minute })
 	require.NoError(t, err)
 
@@ -616,7 +616,7 @@ func TestResolveRetryWork_DeletesRetryWorkWithoutIssueRow(t *testing.T) {
 	assert.Equal(t, "old.txt", resolved.OldPath)
 	assert.Equal(t, ActionRemoteMove, resolved.ActionType)
 	assert.Equal(t, 3, resolved.AttemptCount)
-	assert.Empty(t, resolved.IssueType)
+	assert.Empty(t, resolved.ConditionType)
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)

@@ -483,7 +483,8 @@ func setTestBlockScope(t *testing.T, eng *testEngine, block *BlockScope) {
 	}
 	require.NoError(t, eng.baseline.UpsertBlockScope(context.Background(), block))
 	if eng.runtime != nil {
-		eng.runtime.upsertActiveScope(block)
+		active := activeScopeFromBlockScopeRow(block)
+		eng.runtime.upsertActiveScope(&active)
 	}
 }
 
@@ -931,7 +932,11 @@ func isTestBlockScopeed(eng *testEngine, key ScopeKey) bool {
 func getTestBlockScope(eng *testEngine, key ScopeKey) (BlockScope, bool) {
 	if eng.runtime != nil {
 		if block, ok := eng.runtime.lookupActiveScope(key); ok {
-			return block, true
+			row, err := blockScopeRowFromActiveScope(block)
+			if err != nil {
+				panic(fmt.Sprintf("blockScopeRowFromActiveScope: %v", err))
+			}
+			return *row, true
 		}
 	}
 

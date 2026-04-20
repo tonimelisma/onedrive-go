@@ -408,28 +408,28 @@ func TestClearStaleTrialRetryWork_PreservesScopeWhenBlockedRetryWorkRemains(t *t
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		IssueType:     IssueServiceOutage,
+		ConditionType: IssueServiceOutage,
 		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		NextTrialAt:   eng.nowFn().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	})
 
 	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:       "stale.txt",
-		ActionType: ActionDownload,
-		IssueType:  IssueServiceOutage,
-		ScopeKey:   scopeKey,
-		LastError:  "blocked stale retry",
-		Blocked:    true,
+		Path:          "stale.txt",
+		ActionType:    ActionDownload,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      scopeKey,
+		LastError:     "blocked stale retry",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 	_, err = eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:       "still-blocked.txt",
-		ActionType: ActionUpload,
-		IssueType:  IssueServiceOutage,
-		ScopeKey:   scopeKey,
-		LastError:  "blocked remaining retry",
-		Blocked:    true,
+		Path:          "still-blocked.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      scopeKey,
+		LastError:     "blocked remaining retry",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
@@ -459,19 +459,19 @@ func TestClearStaleTrialRetryWork_DiscardsScopeWhenBlockedRetryWorkDisappears(t 
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		IssueType:     IssueServiceOutage,
+		ConditionType: IssueServiceOutage,
 		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		NextTrialAt:   eng.nowFn().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	})
 
 	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:       "stale.txt",
-		ActionType: ActionDownload,
-		IssueType:  IssueServiceOutage,
-		ScopeKey:   scopeKey,
-		LastError:  "blocked stale retry",
-		Blocked:    true,
+		Path:          "stale.txt",
+		ActionType:    ActionDownload,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      scopeKey,
+		LastError:     "blocked stale retry",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
@@ -498,7 +498,7 @@ func TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState(t *testing.T
 
 		setTestBlockScope(t, eng, &BlockScope{
 			Key:           scopeKey,
-			IssueType:     IssueServiceOutage,
+			ConditionType: IssueServiceOutage,
 			BlockedAt:     eng.nowFn().Add(-time.Minute),
 			NextTrialAt:   eng.nowFn().Add(-time.Second),
 			TrialInterval: 10 * time.Second,
@@ -521,19 +521,19 @@ func TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState(t *testing.T
 
 		setTestBlockScope(t, eng, &BlockScope{
 			Key:           scopeKey,
-			IssueType:     IssueServiceOutage,
+			ConditionType: IssueServiceOutage,
 			BlockedAt:     eng.nowFn().Add(-time.Minute),
 			NextTrialAt:   eng.nowFn().Add(-time.Second),
 			TrialInterval: 10 * time.Second,
 		})
 
 		_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-			Path:       "stale-download.txt",
-			ActionType: ActionDownload,
-			IssueType:  IssueServiceOutage,
-			ScopeKey:   scopeKey,
-			LastError:  "blocked stale retry",
-			Blocked:    true,
+			Path:          "stale-download.txt",
+			ActionType:    ActionDownload,
+			ConditionType: IssueServiceOutage,
+			ScopeKey:      scopeKey,
+			LastError:     "blocked stale retry",
+			Blocked:       true,
 		}, nil)
 		require.NoError(t, err)
 
