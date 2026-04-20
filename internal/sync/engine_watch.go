@@ -306,11 +306,11 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 	pipe.bl = bl
 
-	// Permission rechecks.
-	if rt.engine.permHandler.HasPermChecker() {
-		rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckPermissions(ctx, bl))
-	}
-	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, rt.engine.permHandler.recheckLocalPermissions(ctx))
+	rt.scopeController().applyPermissionRecheckDecisions(
+		ctx,
+		rt,
+		rt.engine.permHandler.startupRecheckDecisions(ctx, bl),
+	)
 
 	fullReconcile, err := rt.engine.shouldRunFullRemoteReconcile(ctx, false)
 	if err != nil {

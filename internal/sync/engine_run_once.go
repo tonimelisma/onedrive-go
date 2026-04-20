@@ -289,16 +289,11 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 		return fmt.Errorf("sync: loading baseline: %w", err)
 	}
 
-	// Recheck permissions — clear any permission_denied issues
-	// for folders that have become writable since the last pass.
-	if eng.permHandler.HasPermChecker() {
-		decisions := eng.permHandler.recheckPermissions(ctx, bl)
-		flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, decisions)
-	}
-
-	// Recheck local permission denials — clear block scopes for
-	// directories that have become accessible since the last pass (R-2.10.13).
-	flow.scopeController().applyPermissionRecheckDecisions(ctx, nil, eng.permHandler.recheckLocalPermissions(ctx))
+	flow.scopeController().applyPermissionRecheckDecisions(
+		ctx,
+		nil,
+		eng.permHandler.startupRecheckDecisions(ctx, bl),
+	)
 
 	return nil
 }

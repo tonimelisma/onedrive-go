@@ -351,6 +351,25 @@ func TestScopeController_ClearResolvedRemoteBlockedRetryWork_KeepsRemotePermissi
 }
 
 // Validates: R-2.10.5
+func TestScopeController_NormalizePersistedScopes_LeavesPermissionScopesForPermissionMaintenance(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	controller := testEngineFlow(t, eng).scopeController()
+	scopeKey := SKPermLocalWrite("restored")
+
+	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:          scopeKey,
+		IssueType:    IssueLocalWriteDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    eng.nowFn().Add(-time.Minute),
+	}))
+
+	require.NoError(t, controller.normalizePersistedScopes(t.Context(), nil))
+	assert.True(t, isTestBlockScopeed(eng, scopeKey))
+}
+
+// Validates: R-2.10.5
 func TestScopeController_NormalizeDiskScope_UsesCurrentDiskState(t *testing.T) {
 	t.Parallel()
 
