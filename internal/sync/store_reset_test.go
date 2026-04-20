@@ -20,13 +20,13 @@ func TestResetStateDB_RecreatesFreshCanonicalStore(t *testing.T) {
 	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
 	require.NoError(t, err)
 
-	require.NoError(t, store.UpsertObservationIssue(t.Context(), &ObservationIssue{
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:       "bad:name.txt",
 		DriveID:    driveid.New(testDriveID),
 		ActionType: ActionUpload,
 		IssueType:  IssueInvalidFilename,
 		Error:      "invalid filename",
-	}))
+	})
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           SKService(),
 		ConditionType: IssueServiceOutage,

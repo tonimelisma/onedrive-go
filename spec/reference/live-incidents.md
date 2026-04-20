@@ -29,7 +29,7 @@ Promotion contract:
 | LI-20260408-03 | Serialized `e2e_full` package exceeded the old 30-minute harness timeout | fixed | test harness | 2026-04-08 | no |
 | LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
 | LI-20260408-01 | Immediate post-simple-upload mtime PATCH returned `404 itemNotFound` | mitigated | graph quirk | 2026-04-08 | no |
-| LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-10 | yes |
+| LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-19 | yes |
 | LI-20260405-09 | Recently created parent folder lagged child create routes | mitigated | graph quirk | 2026-04-12 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
 | LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-10 | yes |
@@ -285,7 +285,7 @@ Promoted docs: [system.md](../design/system.md)
 ## LI-20260410-01: Server-side copy rejected a freshly visible destination folder
 
 First seen: 2026-04-10
-Last seen: 2026-04-10
+Last seen: 2026-04-19
 Area: `e2e_full`, CLI `cp`, Graph copy start
 Suite / test: local `go run ./cmd/devtool verify e2e-full`, `TestE2E_Cp_IntoFolder`
 Classification: graph quirk
@@ -470,6 +470,11 @@ Evidence:
   `635af068-cb2c-4854-b2a9-5419966d6a69`,
   `003f4e1e-0183-4168-8d9d-6c392e6406d0`, and
   `79db09a2-6d40-4a44-ba9a-73d1119690ac`.
+- Local `go run ./cmd/devtool verify default` on April 19, 2026 failed
+  `TestE2E_AuthPreflight_Fast/personal_testitesti18@outlook.com` when
+  `GET /me` again returned HTTP 504 `GatewayTimeout` with message
+  `ProfileException` and request ID `fff6e081-d5f3-4caf-b745-24583b661130`
+  before the rest of the repo gates had already passed.
 - An immediate isolated rerun of the same preflight later passed for that
   account, confirming both the `/me/drives` and `/me` failures were transient.
 Resolution / mitigation: `graph.Client.Drives()` now owns a narrow 5-attempt

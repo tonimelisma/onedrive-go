@@ -108,8 +108,8 @@ type watchTimerState struct {
 }
 
 type watchReconcileState struct {
-	// Deduplication: caches the last visible-condition summary signature and
-	// per-scope shared-folder child-set signatures for watch summaries.
+	// Deduplication: caches the last watch-condition signature and per-scope
+	// shared-folder child-set signatures for watch summaries.
 	lastSummaryTotal     int
 	lastSummarySignature string
 	lastRemoteBlocked    map[ScopeKey]string
