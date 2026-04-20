@@ -326,7 +326,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 		return fmt.Errorf("sync: bootstrap planning failed: %w", err)
 	}
 	rt.engine.collector().RecordPlan(len(plan.Actions), rt.engine.since(planStart))
-	materializeErr := rt.materializeCurrentActionPlan(ctx, plan, false)
+	materializeErr := rt.materializeCurrentActionPlan(ctx, plan)
 	if materializeErr != nil {
 		return fmt.Errorf("sync: bootstrap plan materialization failed: %w", materializeErr)
 	}

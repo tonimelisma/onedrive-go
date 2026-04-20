@@ -162,7 +162,7 @@ func TestSortStatusConditions_OrdersByCountThenConditionKeyThenScope(t *testing.
 	}, groups)
 }
 
-func TestGroupStatusConditions_MergesScopeFamiliesAndDedupesPaths(t *testing.T) {
+func TestProjectStoredConditionGroups_MergesScopeFamiliesAndDedupesPaths(t *testing.T) {
 	t.Parallel()
 
 	snapshot := &syncengine.DriveStatusSnapshot{
@@ -183,19 +183,19 @@ func TestGroupStatusConditions_MergesScopeFamiliesAndDedupesPaths(t *testing.T) 
 		},
 	}
 
-	groups := groupStatusConditions(snapshot)
+	groups := syncengine.ProjectStoredConditionGroups(snapshot)
 	require.Len(t, groups, 2)
 
-	assert.Equal(t, syncengine.ConditionInvalidFilename, groups[0].ConditionKey)
-	assert.Equal(t, syncengine.IssueInvalidFilename, groups[0].ConditionType)
-	assert.Equal(t, 1, groups[0].Count)
-	assert.Equal(t, []string{"/bad:name.txt"}, groups[0].Paths)
+	assert.Equal(t, syncengine.ConditionRemoteWriteDenied, groups[0].ConditionKey)
+	assert.Equal(t, syncengine.IssueRemoteWriteDenied, groups[0].ConditionType)
+	assert.Equal(t, syncengine.SKPermRemoteWrite("Shared/Docs"), groups[0].ScopeKey)
+	assert.Equal(t, 4, groups[0].Count)
+	assert.Equal(t, []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt", "Shared/Docs/c.txt"}, groups[0].Paths)
 
-	assert.Equal(t, syncengine.ConditionRemoteWriteDenied, groups[1].ConditionKey)
-	assert.Equal(t, syncengine.IssueRemoteWriteDenied, groups[1].ConditionType)
-	assert.Equal(t, syncengine.SKPermRemoteWrite("Shared/Docs"), groups[1].ScopeKey)
-	assert.Equal(t, 4, groups[1].Count)
-	assert.Equal(t, []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt", "Shared/Docs/c.txt"}, groups[1].Paths)
+	assert.Equal(t, syncengine.ConditionInvalidFilename, groups[1].ConditionKey)
+	assert.Equal(t, syncengine.IssueInvalidFilename, groups[1].ConditionType)
+	assert.Equal(t, 1, groups[1].Count)
+	assert.Equal(t, []string{"/bad:name.txt"}, groups[1].Paths)
 }
 
 func TestPrintConditionSection_NoActiveConditions(t *testing.T) {

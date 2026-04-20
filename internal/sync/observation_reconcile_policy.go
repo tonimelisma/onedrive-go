@@ -1,31 +1,138 @@
 package sync
 
-type observationFindingsReconcilePolicy struct {
-	issues     observationIssueReconcilePolicy
-	readScopes observationReadScopeReconcilePolicy
+import "sort"
+
+type observationFindingsReconcilePlan struct {
+	issueUpserts      []ObservationIssue
+	issueClears       []observationIssueClearPlan
+	readScopeUpserts  []ScopeKey
+	readScopeReleases []ScopeKey
 }
 
-type observationIssueReconcilePolicy struct {
-	managedPaths       []string
-	currentPathsByType map[string][]string
+type observationIssueClearPlan struct {
+	issueType    string
+	managedPaths []string
+	currentPaths []string
 }
 
-type observationReadScopeReconcilePolicy struct {
-	managed map[ScopeKey]struct{}
-	desired map[ScopeKey]struct{}
-}
-
-func buildObservationFindingsReconcilePolicy(batch *ObservationFindingsBatch) observationFindingsReconcilePolicy {
-	return observationFindingsReconcilePolicy{
-		issues: observationIssueReconcilePolicy{
-			managedPaths:       normalizedObservationManagedPaths(batch),
-			currentPathsByType: observationIssuePathsByType(batch),
-		},
-		readScopes: observationReadScopeReconcilePolicy{
-			managed: managedObservationReadScopes(batch),
-			desired: desiredObservationReadScopes(batch),
-		},
+func buildObservationFindingsReconcilePlan(
+	batch *ObservationFindingsBatch,
+	currentBlocks []*BlockScope,
+) observationFindingsReconcilePlan {
+	return observationFindingsReconcilePlan{
+		issueUpserts:      observationIssueUpserts(batch),
+		issueClears:       buildObservationIssueClearPlan(batch),
+		readScopeUpserts:  buildObservationReadScopeUpserts(batch, currentBlocks),
+		readScopeReleases: buildObservationReadScopeReleases(batch, currentBlocks),
 	}
+}
+
+func observationIssueUpserts(batch *ObservationFindingsBatch) []ObservationIssue {
+	if batch == nil || len(batch.Issues) == 0 {
+		return nil
+	}
+
+	return batch.Issues
+}
+
+func buildObservationIssueClearPlan(batch *ObservationFindingsBatch) []observationIssueClearPlan {
+	if batch == nil || len(batch.ManagedIssueTypes) == 0 {
+		return nil
+	}
+
+	managedPaths := normalizedObservationManagedPaths(batch)
+	currentPathsByType := observationIssuePathsByType(batch)
+
+	plans := make([]observationIssueClearPlan, 0, len(batch.ManagedIssueTypes))
+	for i := range batch.ManagedIssueTypes {
+		issueType := batch.ManagedIssueTypes[i]
+		if issueType == "" {
+			continue
+		}
+		plans = append(plans, observationIssueClearPlan{
+			issueType:    issueType,
+			managedPaths: managedPaths,
+			currentPaths: currentPathsByType[issueType],
+		})
+	}
+
+	return plans
+}
+
+func buildObservationReadScopeUpserts(
+	batch *ObservationFindingsBatch,
+	currentBlocks []*BlockScope,
+) []ScopeKey {
+	managed := managedObservationReadScopes(batch)
+	if len(managed) == 0 {
+		return nil
+	}
+
+	desired := desiredObservationReadScopes(batch)
+	if len(desired) == 0 {
+		return nil
+	}
+
+	current := currentObservationReadScopes(currentBlocks, managed)
+	return missingObservationReadScopes(current, desired)
+}
+
+func buildObservationReadScopeReleases(
+	batch *ObservationFindingsBatch,
+	currentBlocks []*BlockScope,
+) []ScopeKey {
+	managed := managedObservationReadScopes(batch)
+	if len(managed) == 0 {
+		return nil
+	}
+
+	desired := desiredObservationReadScopes(batch)
+	current := currentObservationReadScopes(currentBlocks, managed)
+
+	return missingObservationReadScopes(desired, current)
+}
+
+func currentObservationReadScopes(
+	currentBlocks []*BlockScope,
+	managed map[ScopeKey]struct{},
+) map[ScopeKey]struct{} {
+	if len(managed) == 0 || len(currentBlocks) == 0 {
+		return nil
+	}
+
+	current := make(map[ScopeKey]struct{}, len(currentBlocks))
+	for i := range currentBlocks {
+		block := currentBlocks[i]
+		if block == nil || !managedObservationReadScopeContains(managed, block.Key) {
+			continue
+		}
+		current[block.Key] = struct{}{}
+	}
+
+	return current
+}
+
+func missingObservationReadScopes(
+	present map[ScopeKey]struct{},
+	required map[ScopeKey]struct{},
+) []ScopeKey {
+	if len(required) == 0 {
+		return nil
+	}
+
+	missing := make([]ScopeKey, 0, len(required))
+	for key := range required {
+		if _, ok := present[key]; ok {
+			continue
+		}
+		missing = append(missing, key)
+	}
+
+	sort.Slice(missing, func(i, j int) bool {
+		return missing[i].String() < missing[j].String()
+	})
+
+	return missing
 }
 
 func observationIssuePathsByType(batch *ObservationFindingsBatch) map[string][]string {

@@ -140,6 +140,42 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 	assert.Equal(t, "Shared/Docs/a.txt", snapshot.BlockedRetryWork[0].Path)
 }
 
+// Validates: R-2.1.3, R-2.10.4
+func TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
+		Path:       "bad:name.txt",
+		DriveID:    driveID,
+		ActionType: ActionUpload,
+		IssueType:  IssueInvalidFilename,
+		Error:      "invalid filename",
+	})
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKPermLocalRead("Private"),
+		ConditionType: IssueLocalReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(1, 0),
+	}))
+
+	dbPath := syncStorePathForStoreScopeTest(t, store)
+	statuses, err := ReadPathTruthStatus(ctx, dbPath, testLogger(t), []string{
+		"bad:name.txt",
+		"Private/sub/file.txt",
+	})
+	require.NoError(t, err)
+	require.Len(t, statuses, 2)
+
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, statuses["bad:name.txt"].Local.Availability)
+	assert.Equal(t, IssueInvalidFilename, statuses["bad:name.txt"].Local.IssueType)
+	assert.Equal(t, TruthAvailabilityBlockedLocalReadScope, statuses["Private/sub/file.txt"].Local.Availability)
+	assert.Equal(t, SKPermLocalRead("Private"), statuses["Private/sub/file.txt"].Local.ScopeKey)
+}
+
 func TestFinalizeInspectorRead_PreservesSuccessfulReadOnCloseError(t *testing.T) {
 	t.Parallel()
 

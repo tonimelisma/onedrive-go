@@ -292,7 +292,7 @@ func TestPermHandler_PeriodicMaintenancePlan_SkipsBeforeInterval(t *testing.T) {
 		false,
 	)
 
-	assert.False(t, plan.Due)
+	assert.False(t, plan.UpdateLastCheckedAt)
 	assert.True(t, plan.CheckedAt.IsZero())
 	assert.Empty(t, plan.Decisions)
 }
@@ -330,7 +330,7 @@ func TestPermHandler_PeriodicMaintenancePlan_ObservationSuppressedSkipsRemoteBut
 
 	plan := ph.periodicMaintenancePlan(t.Context(), &Baseline{}, time.Time{}, true)
 
-	require.True(t, plan.Due)
+	require.True(t, plan.UpdateLastCheckedAt)
 	assert.Equal(t, now, plan.CheckedAt)
 	require.Len(t, plan.Decisions, 1)
 	assert.Equal(t, permissionRecheckReleaseScope, plan.Decisions[0].Kind)

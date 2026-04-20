@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"log/slog"
-	"sort"
 	"strconv"
 	"time"
 
@@ -112,7 +111,7 @@ func buildStatusConditionJSON(
 		return nil
 	}
 
-	groups := groupStatusConditions(snapshot)
+	groups := syncengine.ProjectStoredConditionGroups(snapshot)
 	if len(groups) == 0 {
 		return nil
 	}
@@ -137,157 +136,6 @@ func buildStatusConditionJSON(
 	sortStatusConditions(output)
 
 	return output
-}
-
-type statusConditionGroup struct {
-	ConditionKey  syncengine.ConditionKey
-	ConditionType string
-	ScopeKey      syncengine.ScopeKey
-	Count         int
-	Paths         []string
-}
-
-type statusConditionGroupKey struct {
-	conditionKey syncengine.ConditionKey
-	scopeKey     string
-}
-
-type blockedRetryProjection struct {
-	count int
-	paths []string
-}
-
-func groupStatusConditions(snapshot *syncengine.DriveStatusSnapshot) []statusConditionGroup {
-	if snapshot == nil {
-		return nil
-	}
-
-	groupIndex := make(map[statusConditionGroupKey]int)
-	groups := make([]statusConditionGroup, 0, len(snapshot.ObservationIssues)+len(snapshot.BlockScopes))
-
-	addStatusObservationConditionGroups(&groups, groupIndex, snapshot.ObservationIssues)
-	addStatusBlockScopeGroups(&groups, groupIndex, snapshot.BlockScopes, groupStatusBlockedRetryWork(snapshot.BlockedRetryWork))
-
-	finalizeStatusConditionGroups(groups)
-
-	return groups
-}
-
-func addStatusObservationConditionGroups(
-	groups *[]statusConditionGroup,
-	groupIndex map[statusConditionGroupKey]int,
-	observationIssues []syncengine.ObservationIssueRow,
-) {
-	for i := range observationIssues {
-		conditionKey := syncengine.ConditionKeyForObservationIssue(observationIssues[i].IssueType, observationIssues[i].ScopeKey)
-		group := ensureStatusConditionGroup(groups, groupIndex, conditionKey, observationIssues[i].IssueType, observationIssues[i].ScopeKey)
-		if group == nil {
-			continue
-		}
-		group.Count++
-		if observationIssues[i].Path != "" {
-			group.Paths = append(group.Paths, observationIssues[i].Path)
-		}
-	}
-}
-
-func addStatusBlockScopeGroups(
-	groups *[]statusConditionGroup,
-	groupIndex map[statusConditionGroupKey]int,
-	blockScopes []*syncengine.BlockScope,
-	blockedByScope map[syncengine.ScopeKey]blockedRetryProjection,
-) {
-	for i := range blockScopes {
-		block := blockScopes[i]
-		if block == nil {
-			continue
-		}
-
-		count := blockedByScope[block.Key].count
-		if count == 0 {
-			count = 1
-		}
-		conditionKey := syncengine.ConditionKeyForBlockScope(block.ConditionType, block.Key)
-		group := ensureStatusConditionGroup(groups, groupIndex, conditionKey, block.ConditionType, block.Key)
-		if group == nil {
-			continue
-		}
-		group.Count += count
-		if len(blockedByScope[block.Key].paths) > 0 {
-			group.Paths = append(group.Paths, blockedByScope[block.Key].paths...)
-		}
-	}
-}
-
-func ensureStatusConditionGroup(
-	groups *[]statusConditionGroup,
-	groupIndex map[statusConditionGroupKey]int,
-	conditionKey syncengine.ConditionKey,
-	conditionType string,
-	scopeKey syncengine.ScopeKey,
-) *statusConditionGroup {
-	if conditionKey == "" {
-		return nil
-	}
-
-	key := statusConditionGroupKey{
-		conditionKey: conditionKey,
-		scopeKey:     scopeKey.String(),
-	}
-	if idx, ok := groupIndex[key]; ok {
-		return &(*groups)[idx]
-	}
-
-	*groups = append(*groups, statusConditionGroup{
-		ConditionKey:  conditionKey,
-		ConditionType: conditionType,
-		ScopeKey:      scopeKey,
-	})
-	groupIndex[key] = len(*groups) - 1
-
-	return &(*groups)[len(*groups)-1]
-}
-
-func groupStatusBlockedRetryWork(rows []syncengine.RetryWorkRow) map[syncengine.ScopeKey]blockedRetryProjection {
-	grouped := make(map[syncengine.ScopeKey]blockedRetryProjection)
-	for i := range rows {
-		scopeKey := rows[i].ScopeKey
-		if scopeKey.IsZero() {
-			continue
-		}
-
-		projection := grouped[scopeKey]
-		projection.count++
-		if rows[i].Path != "" {
-			projection.paths = append(projection.paths, rows[i].Path)
-		}
-		grouped[scopeKey] = projection
-	}
-
-	return grouped
-}
-
-func finalizeStatusConditionGroups(groups []statusConditionGroup) {
-	for i := range groups {
-		sort.Strings(groups[i].Paths)
-		groups[i].Paths = uniqueSortedStrings(groups[i].Paths)
-	}
-}
-
-func uniqueSortedStrings(values []string) []string {
-	if len(values) < 2 {
-		return values
-	}
-
-	result := values[:1]
-	for i := 1; i < len(values); i++ {
-		if values[i] == values[i-1] {
-			continue
-		}
-		result = append(result, values[i])
-	}
-
-	return result
 }
 
 func conditionTotal(groups []statusConditionJSON) int {

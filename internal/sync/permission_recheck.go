@@ -24,10 +24,17 @@ type permissionMaintenanceRequest struct {
 	ChangedPaths map[string]bool
 }
 
+type permissionRetryWorkReadyPlan struct {
+	Work     RetryWorkKey
+	ScopeKey ScopeKey
+	Path     string
+}
+
 type permissionMaintenancePlan struct {
-	Due       bool
-	CheckedAt time.Time
-	Decisions []PermissionRecheckDecision
+	UpdateLastCheckedAt bool
+	CheckedAt           time.Time
+	Decisions           []PermissionRecheckDecision
+	RetryWorkReadies    []permissionRetryWorkReadyPlan
 }
 
 // runPermissionMaintenance is the engine-facing entrypoint for permission-
@@ -40,38 +47,72 @@ func (controller *scopeController) runPermissionMaintenance(
 	bl *Baseline,
 	request permissionMaintenanceRequest,
 ) {
+	plan := controller.buildPermissionMaintenancePlan(ctx, watch, bl, request)
+	controller.applyPermissionMaintenancePlan(ctx, watch, plan)
+}
+
+func (controller *scopeController) buildPermissionMaintenancePlan(
+	ctx context.Context,
+	watch *watchRuntime,
+	bl *Baseline,
+	request permissionMaintenanceRequest,
+) permissionMaintenancePlan {
 	ph := controller.flow.engine.permHandler
 
 	switch request.Reason {
 	case permissionMaintenanceStartup:
-		controller.clearResolvedStartupRemoteWriteBlockedRetryWork(ctx, bl)
+		plan := permissionMaintenancePlan{
+			RetryWorkReadies: controller.startupRemoteWriteRetryWorkReadyPlans(ctx, bl),
+		}
 		if ph == nil {
-			return
+			return plan
 		}
-		controller.applyPermissionRecheckDecisions(ctx, watch, ph.startupRecheckDecisions(ctx, bl))
+		plan.Decisions = ph.startupRecheckDecisions(ctx, bl)
 		if watch != nil {
-			watch.lastPermRecheck = ph.nowFn()
+			plan.UpdateLastCheckedAt = true
+			plan.CheckedAt = ph.nowFn()
 		}
+		return plan
 	case permissionMaintenancePeriodic:
 		if ph == nil || watch == nil {
-			return
+			return permissionMaintenancePlan{}
 		}
-		plan := ph.periodicMaintenancePlan(
+		return ph.periodicMaintenancePlan(
 			ctx,
 			bl,
 			watch.lastPermRecheck,
 			controller.isObservationSuppressed(watch),
 		)
-		if !plan.Due {
-			return
-		}
-
-		watch.lastPermRecheck = plan.CheckedAt
-		controller.applyPermissionRecheckDecisions(ctx, watch, plan.Decisions)
 	case permissionMaintenanceLocalObservation:
-		controller.clearResolvedRemoteWriteBlockedRetryWork(ctx, bl, request.ChangedPaths)
+		return permissionMaintenancePlan{
+			RetryWorkReadies: controller.remoteWriteRetryWorkReadyPlansForChangedPaths(ctx, bl, request.ChangedPaths),
+		}
 	default:
 		panic("unknown permission maintenance reason")
+	}
+}
+
+func (controller *scopeController) applyPermissionMaintenancePlan(
+	ctx context.Context,
+	watch *watchRuntime,
+	plan permissionMaintenancePlan,
+) {
+	for i := range plan.RetryWorkReadies {
+		ready := plan.RetryWorkReadies[i]
+		if err := controller.flow.engine.baseline.ClearBlockedRetryWork(ctx, ready.Work, ready.ScopeKey); err != nil {
+			controller.flow.engine.logger.Debug("permission maintenance: failed to clear blocked retry work",
+				slog.String("path", ready.Path),
+				slog.String("scope_key", ready.ScopeKey.String()),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+
+	if len(plan.Decisions) > 0 {
+		controller.applyPermissionRecheckDecisions(ctx, watch, plan.Decisions)
+	}
+	if watch != nil && plan.UpdateLastCheckedAt {
+		watch.lastPermRecheck = plan.CheckedAt
 	}
 }
 
@@ -111,9 +152,9 @@ func (ph *PermissionHandler) periodicMaintenancePlan(
 
 	includeRemote := ph.includeRemotePeriodicRechecks(observationSuppressed)
 	return permissionMaintenancePlan{
-		Due:       true,
-		CheckedAt: now,
-		Decisions: ph.periodicRecheckDecisions(ctx, bl, includeRemote),
+		UpdateLastCheckedAt: true,
+		CheckedAt:           now,
+		Decisions:           ph.periodicRecheckDecisions(ctx, bl, includeRemote),
 	}
 }
 
@@ -187,7 +228,7 @@ func (ph *PermissionHandler) recheckRemotePermissionBlock(
 	bl *Baseline,
 	block *BlockScope,
 ) PermissionRecheckDecision {
-	boundaryPath := blockScopePath(block)
+	boundaryPath := block.CoveredPath()
 
 	root := ph.permissionRoot()
 	if root == nil {
@@ -270,7 +311,7 @@ func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []Perm
 			continue
 		}
 
-		dirPath := blockScopePath(block)
+		dirPath := block.CoveredPath()
 		clearable := false
 		switch {
 		case block.Key.IsPermLocalRead():
@@ -299,17 +340,16 @@ func (ph *PermissionHandler) recheckLocalPermissions(ctx context.Context) []Perm
 	return decisions
 }
 
-// clearResolvedStartupRemoteWriteBlockedRetryWork removes persisted blocked
-// retry rows whose remote-write-denied exact work is already resolved by the
-// current baseline at startup. Permission-maintenance owns this cleanup
-// because it is specific to remote write-denial retry rows, but scope release
-// still waits for affirmative permission recheck.
-func (controller *scopeController) clearResolvedStartupRemoteWriteBlockedRetryWork(
+// startupRemoteWriteRetryWorkReadyPlans returns persisted blocked retry rows
+// whose remote-write-denied exact work is already resolved by the current
+// baseline at startup. Permission maintenance owns selecting these rows, while
+// the generic apply step owns the durable mutation.
+func (controller *scopeController) startupRemoteWriteRetryWorkReadyPlans(
 	ctx context.Context,
 	bl *Baseline,
-) {
+) []permissionRetryWorkReadyPlan {
 	if bl == nil {
-		return
+		return nil
 	}
 
 	flow := controller.flow
@@ -318,32 +358,30 @@ func (controller *scopeController) clearResolvedStartupRemoteWriteBlockedRetryWo
 		flow.engine.logger.Warn("failed to list blocked retry_work rows for startup remote write cleanup",
 			slog.String("error", err.Error()),
 		)
-		return
+		return nil
 	}
 
-	controller.clearResolvedRemoteWriteBlockedRetryRows(
+	return controller.resolvedRemoteWriteRetryWorkReadyPlans(
 		ctx,
 		bl,
 		rows,
 		func(row *RetryWorkRow) bool {
 			return row != nil && row.ScopeKey.IsPermRemoteWrite()
 		},
-		"clearResolvedStartupRemoteWriteBlockedRetryWork",
 	)
 }
 
-// clearResolvedRemoteWriteBlockedRetryWork removes remote-write blocked retry
-// rows whose exact work is already resolved after local observation changed a
-// relevant subtree. This cleanup is permission-owned because it only applies
-// to remote write-denial retry rows; it must not release the persisted
-// permission scope on its own.
-func (controller *scopeController) clearResolvedRemoteWriteBlockedRetryWork(
+// remoteWriteRetryWorkReadyPlansForChangedPaths returns remote-write blocked
+// retry rows whose exact work is already resolved after local observation
+// changed a relevant subtree. Permission maintenance owns selecting these
+// rows; it must not release the persisted permission scope on its own.
+func (controller *scopeController) remoteWriteRetryWorkReadyPlansForChangedPaths(
 	ctx context.Context,
 	bl *Baseline,
 	changedPaths map[string]bool,
-) {
+) []permissionRetryWorkReadyPlan {
 	if bl == nil || len(changedPaths) == 0 {
-		return
+		return nil
 	}
 
 	flow := controller.flow
@@ -352,44 +390,49 @@ func (controller *scopeController) clearResolvedRemoteWriteBlockedRetryWork(
 		flow.engine.logger.Warn("failed to list blocked retry_work rows for remote write cleanup",
 			slog.String("error", err.Error()),
 		)
-		return
+		return nil
 	}
 
-	controller.clearResolvedRemoteWriteBlockedRetryRows(
+	return controller.resolvedRemoteWriteRetryWorkReadyPlans(
 		ctx,
 		bl,
 		rows,
 		func(row *RetryWorkRow) bool {
 			return remoteWriteBlockedRetryRelevant(row, changedPaths)
 		},
-		"clearResolvedRemoteWriteBlockedRetryWork",
 	)
 }
 
-func (controller *scopeController) clearResolvedRemoteWriteBlockedRetryRows(
+func (controller *scopeController) resolvedRemoteWriteRetryWorkReadyPlans(
 	ctx context.Context,
 	bl *Baseline,
 	rows []RetryWorkRow,
 	relevant func(*RetryWorkRow) bool,
-	caller string,
-) {
+) []permissionRetryWorkReadyPlan {
 	flow := controller.flow
 	driveID, driveErr := flow.retryWorkDriveID(ctx)
 	if driveErr != nil {
-		flow.engine.logger.Warn(caller+": failed to load drive for remote write cleanup",
+		flow.engine.logger.Warn("permission maintenance: failed to load drive for remote write cleanup",
 			slog.String("error", driveErr.Error()),
 		)
-		return
+		return nil
 	}
 
+	var readyPlans []permissionRetryWorkReadyPlan
 	for i := range rows {
 		if relevant != nil && !relevant(&rows[i]) {
 			continue
 		}
 		if flow.buildRetryCandidateFromRetryWork(ctx, bl, &rows[i], driveID).resolved {
-			controller.clearBlockedRetryWork(ctx, &rows[i], caller)
+			readyPlans = append(readyPlans, permissionRetryWorkReadyPlan{
+				Work:     retryWorkKeyForRetryWork(&rows[i]),
+				ScopeKey: rows[i].ScopeKey,
+				Path:     rows[i].Path,
+			})
 		}
 	}
+
+	return readyPlans
 }
 
 func remoteWriteBlockedRetryRelevant(

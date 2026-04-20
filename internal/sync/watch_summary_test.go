@@ -18,20 +18,19 @@ func TestWatchConditionCountTotal_SumsRawCounts(t *testing.T) {
 }
 
 // Validates: R-2.10.47
-func TestWatchConditionCountAccumulator_AddAndCounts_SortsAndAggregates(t *testing.T) {
+func TestWatchConditionCounts_SortsAndAggregatesProjectedGroups(t *testing.T) {
 	t.Parallel()
-
-	accumulator := make(watchConditionCountAccumulator)
-	accumulator.Add("", 5)
-	accumulator.Add(ConditionServiceOutage, 0)
-	accumulator.Add(ConditionServiceOutage, 1)
-	accumulator.Add(ConditionServiceOutage, 2)
-	accumulator.Add(ConditionDiskFull, 4)
 
 	assert.Equal(t, []watchConditionCount{
 		{Key: ConditionServiceOutage, Count: 3},
 		{Key: ConditionDiskFull, Count: 4},
-	}, accumulator.Counts())
+	}, watchConditionCounts([]StoredConditionGroup{
+		{ConditionKey: "", Count: 5},
+		{ConditionKey: ConditionServiceOutage, Count: 0},
+		{ConditionKey: ConditionServiceOutage, Count: 1},
+		{ConditionKey: ConditionServiceOutage, Count: 2},
+		{ConditionKey: ConditionDiskFull, Count: 4},
+	}))
 }
 
 // Validates: R-2.10.47

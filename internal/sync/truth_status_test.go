@@ -62,3 +62,34 @@ func TestDerivePathTruthStatusByPath_ReadScopesApplyToDescendants(t *testing.T) 
 	assert.Equal(t, SKPermRemoteRead("Shared"), remoteStatus.Remote.ScopeKey)
 	assert.True(t, remoteStatus.Local.IsAvailable())
 }
+
+// Validates: R-2.1.3, R-2.10.4
+func TestTruthAvailabilityIndex_StatusForPath_UsesObservationAndReadScopeEvidence(t *testing.T) {
+	t.Parallel()
+
+	index := NewTruthAvailabilityIndex(
+		[]ObservationIssueRow{
+			{Path: "blocked-local.txt", IssueType: IssueInvalidFilename},
+		},
+		[]*BlockScope{
+			{
+				Key:           SKPermRemoteRead("Shared"),
+				ConditionType: IssueRemoteReadDenied,
+				TimingSource:  ScopeTimingNone,
+				BlockedAt:     time.Unix(100, 0),
+			},
+		},
+	)
+
+	localStatus := index.StatusForPath("blocked-local.txt")
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, localStatus.Local.Availability)
+	assert.Equal(t, PathTruthSourceObservationIssue, localStatus.Local.Source)
+	assert.Equal(t, IssueInvalidFilename, localStatus.Local.IssueType)
+	assert.True(t, localStatus.Remote.IsAvailable())
+
+	remoteStatus := index.StatusForPath("Shared/Docs/file.txt")
+	assert.Equal(t, TruthAvailabilityBlockedRemoteReadScope, remoteStatus.Remote.Availability)
+	assert.Equal(t, PathTruthSourceReadScope, remoteStatus.Remote.Source)
+	assert.Equal(t, SKPermRemoteRead("Shared"), remoteStatus.Remote.ScopeKey)
+	assert.True(t, remoteStatus.Local.IsAvailable())
+}
