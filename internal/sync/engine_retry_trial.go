@@ -128,7 +128,7 @@ func (rt *watchRuntime) refreshCurrentActionPlan(
 	if err != nil {
 		return nil, fmt.Errorf("sync: building current action plan for retry/trial: %w", err)
 	}
-	if err := rt.materializeCurrentActionPlan(ctx, plan, false); err != nil {
+	if err := rt.materializeCurrentActionPlan(ctx, plan); err != nil {
 		return nil, fmt.Errorf("sync: materializing current action plan for retry/trial: %w", err)
 	}
 

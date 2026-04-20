@@ -9,50 +9,24 @@ import (
 )
 
 // Validates: R-2.14.3, R-6.8.16
-func TestConditionKeyForObservationIssue_RepresentativeMappings(t *testing.T) {
+func TestConditionKeyForStoredCondition_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, ConditionInvalidFilename,
-		ConditionKeyForObservationIssue(IssueInvalidFilename, ScopeKey{}))
+		ConditionKeyForStoredCondition(IssueInvalidFilename, ScopeKey{}))
 	assert.Equal(t, ConditionRemoteWriteDenied,
-		ConditionKeyForObservationIssue(IssueRemoteWriteDenied, ScopeKey{}))
+		ConditionKeyForStoredCondition(IssueRemoteWriteDenied, ScopeKey{}))
 	assert.Equal(t, ConditionServiceOutage,
-		ConditionKeyForObservationIssue("", SKService()))
+		ConditionKeyForStoredCondition("", SKService()))
 	assert.Equal(t, ConditionQuotaExceeded,
-		ConditionKeyForObservationIssue("custom_issue", SKQuotaOwn()))
+		ConditionKeyForStoredCondition("custom_issue", SKQuotaOwn()))
 	assert.Equal(t, ConditionUnexpectedCondition,
-		ConditionKeyForObservationIssue("custom_issue", ScopeKey{Kind: ScopeKeyKind(99)}))
-	assert.Empty(t, ConditionKeyForObservationIssue("", ScopeKey{}))
-}
-
-// Validates: R-2.14.3, R-6.8.16
-func TestConditionKeyForRetryWork_RepresentativeMappings(t *testing.T) {
-	t.Parallel()
-
+		ConditionKeyForStoredCondition("custom_issue", ScopeKey{Kind: ScopeKeyKind(99)}))
 	assert.Equal(t, ConditionRateLimited,
-		ConditionKeyForRetryWork(IssueRateLimited, ScopeKey{}))
+		ConditionKeyForStoredCondition("", SKThrottleDrive(driveid.New("0000000000000001"))))
 	assert.Equal(t, ConditionQuotaExceeded,
-		ConditionKeyForRetryWork("", SKQuotaOwn()))
-	assert.Equal(t, ConditionServiceOutage,
-		ConditionKeyForRetryWork("custom_issue", SKService()))
-	assert.Equal(t, ConditionUnexpectedCondition,
-		ConditionKeyForRetryWork("custom_issue", ScopeKey{Kind: ScopeKeyKind(99)}))
-	assert.Empty(t, ConditionKeyForRetryWork("", ScopeKey{}))
-}
-
-// Validates: R-2.10.45, R-6.8.16
-func TestConditionKeyForBlockScope_RepresentativeMappings(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, ConditionServiceOutage,
-		ConditionKeyForBlockScope(IssueServiceOutage, SKService()))
-	assert.Equal(t, ConditionRateLimited,
-		ConditionKeyForBlockScope("", SKThrottleDrive(driveid.New("0000000000000001"))))
-	assert.Equal(t, ConditionQuotaExceeded,
-		ConditionKeyForBlockScope("custom_issue", SKQuotaOwn()))
-	assert.Equal(t, ConditionUnexpectedCondition,
-		ConditionKeyForBlockScope("custom_issue", ScopeKey{Kind: ScopeKeyKind(99)}))
-	assert.Empty(t, ConditionKeyForBlockScope("", ScopeKey{}))
+		ConditionKeyForStoredCondition("custom_issue", SKQuotaOwn()))
+	assert.Empty(t, ConditionKeyForStoredCondition("", ScopeKey{}))
 }
 
 // Validates: R-2.10.47, R-6.8.16

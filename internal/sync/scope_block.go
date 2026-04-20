@@ -20,7 +20,10 @@ type BlockScope struct {
 	TrialCount    int           // consecutive failed trials (for backoff)
 }
 
-func blockScopePath(block *BlockScope) string {
+// CoveredPath returns the validated scope path persisted on the block-scope row
+// when available. Falling back to the key-derived descriptor keeps test-built
+// or in-memory rows safe without making reparsing the normal persisted path.
+func (block *BlockScope) CoveredPath() string {
 	if block == nil {
 		return ""
 	}

@@ -79,8 +79,9 @@ observation and execution metadata.
 3. load baseline and run permission maintenance
    permission maintenance owns which persisted permission scopes are due for
    startup or steady-state recheck, including cadence and remote-probe
-   suppression policy; the engine only applies the resulting release/keep
-   decisions through its scope lifecycle boundary
+   suppression policy, and which remote-write blocked retry rows are already
+   resolved; the engine only applies the resulting scope and retry-work
+   mutations through its scope lifecycle boundary
 4. refresh current remote and local snapshots once
 5. compute SQL structural diff and reconciliation once
 6. build the current actionable set in Go from structural reconciliation plus
@@ -98,6 +99,12 @@ should prune stale `retry_work`, prune empty `block_scopes`, and align blocked
 work with active scopes. It does not persist a durable executable plan table.
 Permission scopes remain probe-owned facts and are not discarded just because
 their blocked retry rows happened to clear.
+
+Within that one-shot flow, the engine now treats "prepare current plan" as an
+explicit stage: observe current truth, derive the current action plan,
+materialize durable retry/scope reconciliation, and only then hand the
+prepared plan to execution/reporting. The outer orchestration should stay at
+that stage level rather than inlining every sub-step.
 
 ## Watch Mode
 
@@ -133,9 +140,10 @@ and aligns runtime admission with the persisted `block_scopes` and blocked
 Watch summary grouping is engine-owned. `watch_summary.go` builds only raw
 watch-condition aggregates: condition-key counts, total condition count,
 retrying count, and raw remote-write-block groups keyed by `ConditionKey` and
-`ScopeKey` directly from authority snapshots. The watch runtime owns log
-phrasing and churn suppression separately. The store does not own grouped
-watch-condition projections or watch-specific presentation.
+`ScopeKey` directly from the shared stored-condition projection over durable
+authorities. The watch runtime owns log phrasing and churn suppression
+separately. The store does not own grouped watch-condition projections or
+watch-specific presentation.
 
 ## Shared-Root Drives
 

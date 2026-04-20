@@ -23,7 +23,6 @@ func (m *SyncStore) ReconcileObservationFindings(
 	}
 
 	nowNano := now.UnixNano()
-	policy := buildObservationFindingsReconcilePolicy(batch)
 
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
@@ -33,21 +32,37 @@ func (m *SyncStore) ReconcileObservationFindings(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation findings reconcile")
 	}()
 
-	err = m.upsertObservationIssuesTx(ctx, tx, batch.Issues, nowNano)
+	currentBlocks, err := queryBlockScopeRowsWithRunner(ctx, tx)
 	if err != nil {
-		return err
+		return fmt.Errorf("sync: listing block scopes for observation reconcile: %w", err)
 	}
-	err = clearResolvedObservationIssuesTx(ctx, tx, batch, policy.issues)
-	if err != nil {
-		return err
-	}
-	err = reconcileObservationReadScopesTx(ctx, tx, policy.readScopes, nowNano)
-	if err != nil {
-		return err
+	plan := buildObservationFindingsReconcilePlan(batch, currentBlocks)
+
+	if applyErr := m.applyObservationFindingsReconcilePlanTx(ctx, tx, plan, nowNano); applyErr != nil {
+		return applyErr
 	}
 
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: commit observation findings reconcile: %w", err)
+	}
+
+	return nil
+}
+
+func (m *SyncStore) applyObservationFindingsReconcilePlanTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	plan observationFindingsReconcilePlan,
+	nowNano int64,
+) error {
+	if err := m.upsertObservationIssuesTx(ctx, tx, plan.issueUpserts, nowNano); err != nil {
+		return err
+	}
+	if err := clearResolvedObservationIssuesTx(ctx, tx, plan.issueClears); err != nil {
+		return err
+	}
+	if err := applyObservationReadScopePlanTx(ctx, tx, plan, nowNano); err != nil {
+		return err
 	}
 
 	return nil
@@ -146,107 +161,67 @@ func (m *SyncStore) upsertObservationIssuesTx(
 func clearResolvedObservationIssuesTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	batch *ObservationFindingsBatch,
-	policy observationIssueReconcilePolicy,
+	plans []observationIssueClearPlan,
 ) error {
-	if batch == nil {
+	if len(plans) == 0 {
 		return nil
 	}
 
-	for _, issueType := range batch.ManagedIssueTypes {
-		paths := policy.currentPathsByType[issueType]
-		if issueType == "" {
-			continue
-		}
-		if len(policy.managedPaths) > 0 {
-			if err := clearManagedObservationIssuePathsTx(ctx, tx, issueType, policy.managedPaths, paths); err != nil {
+	for i := range plans {
+		plan := plans[i]
+		if len(plan.managedPaths) > 0 {
+			if err := clearManagedObservationIssuePathsTx(ctx, tx, plan); err != nil {
 				return err
 			}
 			continue
 		}
-		if len(paths) == 0 {
+		if len(plan.currentPaths) == 0 {
 			if _, err := tx.ExecContext(ctx,
 				`DELETE FROM observation_issues WHERE issue_type = ?`,
-				issueType,
+				plan.issueType,
 			); err != nil {
-				return fmt.Errorf("sync: clearing resolved observation issues for %s: %w", issueType, err)
+				return fmt.Errorf("sync: clearing resolved observation issues for %s: %w", plan.issueType, err)
 			}
 			continue
 		}
 
-		encodedPaths, err := json.Marshal(paths)
+		encodedPaths, err := json.Marshal(plan.currentPaths)
 		if err != nil {
-			return fmt.Errorf("sync: marshal resolved observation issue paths for %s: %w", issueType, err)
+			return fmt.Errorf("sync: marshal resolved observation issue paths for %s: %w", plan.issueType, err)
 		}
 
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM observation_issues
 				WHERE issue_type = ?
 					AND path NOT IN (SELECT value FROM json_each(?))`,
-			issueType,
+			plan.issueType,
 			string(encodedPaths),
 		); err != nil {
-			return fmt.Errorf("sync: clearing resolved observation issues for %s: %w", issueType, err)
+			return fmt.Errorf("sync: clearing resolved observation issues for %s: %w", plan.issueType, err)
 		}
 	}
 
 	return nil
 }
 
-func reconcileObservationReadScopesTx(
+func applyObservationReadScopePlanTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	policy observationReadScopeReconcilePolicy,
+	plan observationFindingsReconcilePlan,
 	nowNano int64,
 ) error {
-	if len(policy.managed) == 0 {
-		return nil
-	}
-
-	return reconcileObservationReadScopeSetTx(ctx, tx, policy.managed, policy.desired, nowNano)
-}
-
-func reconcileObservationReadScopeSetTx(
-	ctx context.Context,
-	tx sqlTxRunner,
-	managed map[ScopeKey]struct{},
-	desired map[ScopeKey]struct{},
-	nowNano int64,
-) error {
-	if len(managed) == 0 {
-		return nil
-	}
-
-	blocks, err := queryBlockScopeRowsWithRunner(ctx, tx)
-	if err != nil {
-		return fmt.Errorf("sync: listing observation-owned read scopes: %w", err)
-	}
-
-	current := make(map[ScopeKey]struct{}, len(managed))
-	for i := range blocks {
-		block := blocks[i]
-		if block == nil {
-			continue
+	for i := range plan.readScopeReleases {
+		key := plan.readScopeReleases[i]
+		if err := deleteBlockScopeWithRunner(ctx, tx, key); err != nil {
+			return fmt.Errorf("sync: deleting observation-owned read scope %s: %w", key.String(), err)
 		}
-		if !managedObservationReadScopeContains(managed, block.Key) {
-			continue
-		}
-		current[block.Key] = struct{}{}
-		if _, ok := desired[block.Key]; ok {
-			continue
-		}
-		if err := deleteBlockScopeWithRunner(ctx, tx, block.Key); err != nil {
-			return fmt.Errorf("sync: deleting observation-owned read scope %s: %w", block.Key.String(), err)
-		}
-		if err := markRetryWorkScopeReadyTx(ctx, tx, block.Key.String(), nowNano); err != nil {
+		if err := markRetryWorkScopeReadyTx(ctx, tx, key.String(), nowNano); err != nil {
 			return err
 		}
 	}
 
-	for key := range desired {
-		if _, ok := current[key]; ok {
-			continue
-		}
+	for i := range plan.readScopeUpserts {
+		key := plan.readScopeUpserts[i]
 		if err := upsertBlockScopeWithRunner(ctx, tx, observationReadScopeBlock(key, nowNano)); err != nil {
 			return fmt.Errorf("sync: inserting observation-owned read scope %s: %w", key.String(), err)
 		}
@@ -258,31 +233,29 @@ func reconcileObservationReadScopeSetTx(
 func clearManagedObservationIssuePathsTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	issueType string,
-	managedPaths []string,
-	currentPaths []string,
+	plan observationIssueClearPlan,
 ) error {
-	encodedManagedPaths, err := json.Marshal(managedPaths)
+	encodedManagedPaths, err := json.Marshal(plan.managedPaths)
 	if err != nil {
-		return fmt.Errorf("sync: marshal managed observation issue paths for %s: %w", issueType, err)
+		return fmt.Errorf("sync: marshal managed observation issue paths for %s: %w", plan.issueType, err)
 	}
 
-	if len(currentPaths) == 0 {
+	if len(plan.currentPaths) == 0 {
 		if _, execErr := tx.ExecContext(ctx,
 			`DELETE FROM observation_issues
 				WHERE issue_type = ?
 					AND path IN (SELECT value FROM json_each(?))`,
-			issueType,
+			plan.issueType,
 			string(encodedManagedPaths),
 		); execErr != nil {
-			return fmt.Errorf("sync: clearing managed observation issues for %s: %w", issueType, execErr)
+			return fmt.Errorf("sync: clearing managed observation issues for %s: %w", plan.issueType, execErr)
 		}
 		return nil
 	}
 
-	encodedCurrentPaths, err := json.Marshal(currentPaths)
+	encodedCurrentPaths, err := json.Marshal(plan.currentPaths)
 	if err != nil {
-		return fmt.Errorf("sync: marshal current observation issue paths for %s: %w", issueType, err)
+		return fmt.Errorf("sync: marshal current observation issue paths for %s: %w", plan.issueType, err)
 	}
 
 	if _, execErr := tx.ExecContext(ctx,
@@ -290,11 +263,11 @@ func clearManagedObservationIssuePathsTx(
 			WHERE issue_type = ?
 				AND path IN (SELECT value FROM json_each(?))
 				AND path NOT IN (SELECT value FROM json_each(?))`,
-		issueType,
+		plan.issueType,
 		string(encodedManagedPaths),
 		string(encodedCurrentPaths),
 	); execErr != nil {
-		return fmt.Errorf("sync: clearing managed observation issues for %s: %w", issueType, execErr)
+		return fmt.Errorf("sync: clearing managed observation issues for %s: %w", plan.issueType, execErr)
 	}
 
 	return nil

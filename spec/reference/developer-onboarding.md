@@ -435,9 +435,9 @@ when you treat it as several file families sharing one single-drive owner.
 | `permissions.go`, `permission_capability.go`, `permission_decisions.go`, `permission_probe_*.go`, `permission_recheck.go` | Capability-based permission probing, denied-path policy, and permission-scope revalidation |
 | `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, block scoping, and scope key canonicalization |
 | `debug_event_sink.go` | Debug event recording for test and diagnostic observability |
-| `store*.go`, `store_inspect.go`, `condition_reads.go`, `scope_key.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, raw authority reads, persisted scope-key helpers, run-status/scope admin helpers, and explicit reset support |
+| `store*.go`, `store_inspect.go`, `condition_reads.go`, `condition_projection.go`, `blocked_retry_projection.go`, `scope_key.go`, `scope_block.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, raw authority reads, shared stored-condition projection, persisted scope metadata helpers, run-status/scope admin helpers, and explicit reset support |
 | `store_read_*.go`, `store_write_*.go` | Store I/O: raw authority reads (remote state, observation state, snapshots) and write operations (baseline, observation, retry work, block scopes) |
-| `condition_keys.go`, `watch_summary.go`, `issue_types.go` | Shared condition taxonomy and ordering plus raw engine-owned watch-summary aggregation |
+| `condition_keys.go`, `watch_summary.go`, `truth_status.go`, `issue_types.go` | Shared condition taxonomy and ordering, derived truth-availability reads, and raw engine-owned watch-summary aggregation |
 | `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |
 | `inotify_*`, `symlink_observation.go`, `engine_shared_root.go` | Platform or feature-specific observation/runtime helpers |
 

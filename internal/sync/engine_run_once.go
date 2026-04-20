@@ -45,36 +45,18 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		return e.runOnceDryRun(ctx, runner, bl, mode, opts, start)
 	}
 
-	// Steps 2-4: refresh remote and local snapshots, then derive the current
-	// actionable set from SQLite structural diff and reconciliation.
-	observeStart := e.nowFunc()
-	pendingCursorCommit, err := runner.observeCurrentTruth(ctx, nil, bl, opts.DryRun, opts.FullReconcile)
+	prepared, err := runner.prepareLiveCurrentPlan(ctx, bl, mode, opts)
 	if err != nil {
 		return nil, err
-	}
-	e.collector().RecordObserve(0, e.since(observeStart))
-
-	// Step 5: Plan actions from SQLite snapshots and reconciliation rows.
-	safety := e.resolveSafetyConfig()
-
-	planStart := e.nowFunc()
-	plan, err := runner.buildCurrentActionPlan(ctx, bl, mode, safety)
-	if err != nil {
-		return nil, fmt.Errorf("sync: planning actions: %w", err)
-	}
-	e.collector().RecordPlan(len(plan.Actions), e.since(planStart))
-
-	if materializeErr := runner.materializeCurrentActionPlan(ctx, plan, opts.DryRun); materializeErr != nil {
-		return nil, materializeErr
 	}
 
 	// SQLite-derived plan approved — commit the deferred delta token now.
-	if err := runner.commitPendingPrimaryCursor(ctx, pendingCursorCommit); err != nil {
+	if err := runner.commitPendingPrimaryCursor(ctx, prepared.pendingCursorCommit); err != nil {
 		return nil, err
 	}
 
-	counts := CountByType(plan.Actions)
-	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
+	plan := prepared.plan
+	report := prepared.report
 
 	if len(plan.Actions) == 0 {
 		if report.DeferredByMode.Total() > 0 {
@@ -84,10 +66,6 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 			return report, nil
 		}
 		return e.completeRunOnceWithoutChanges(ctx, start, mode, opts), nil
-	}
-
-	if opts.DryRun {
-		return e.completeDryRunReport(start, report), nil
 	}
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
@@ -118,31 +96,90 @@ func (e *Engine) runOnceDryRun(
 	opts RunOptions,
 	start time.Time,
 ) (*Report, error) {
-	observeStart := e.nowFunc()
-	planResult, err := runner.buildDryRunCurrentActionPlan(ctx, bl, opts.FullReconcile)
+	prepared, err := runner.prepareDryRunCurrentPlan(ctx, bl, mode, opts)
 	if err != nil {
 		return nil, err
 	}
-	e.collector().RecordObserve(planResult.observedPaths, e.since(observeStart))
 
-	safety := e.resolveSafetyConfig()
+	return e.completeDryRunReport(start, prepared.report), nil
+}
 
-	planStart := e.nowFunc()
-	plan, err := e.buildCurrentActionPlanFromInputs(&planResult.currentActionPlanInputs, bl, mode, safety)
+func (r *oneShotRunner) prepareLiveCurrentPlan(
+	ctx context.Context,
+	bl *Baseline,
+	mode Mode,
+	opts RunOptions,
+) (*preparedCurrentActionPlan, error) {
+	observeStart := r.engine.nowFunc()
+	pendingCursorCommit, err := r.observeCurrentTruth(ctx, nil, bl, false, opts.FullReconcile)
+	if err != nil {
+		return nil, err
+	}
+	r.engine.collector().RecordObserve(0, r.engine.since(observeStart))
+
+	safety := r.engine.resolveSafetyConfig()
+
+	planStart := r.engine.nowFunc()
+	plan, err := r.buildCurrentActionPlan(ctx, bl, mode, safety)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
-	e.collector().RecordPlan(len(plan.Actions), e.since(planStart))
+	r.engine.collector().RecordPlan(len(plan.Actions), r.engine.since(planStart))
+
+	if materializeErr := r.materializeCurrentActionPlan(ctx, plan); materializeErr != nil {
+		return nil, materializeErr
+	}
 
 	counts := CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
 
-	return e.completeDryRunReport(start, report), nil
+	return &preparedCurrentActionPlan{
+		plan:                plan,
+		report:              report,
+		pendingCursorCommit: pendingCursorCommit,
+	}, nil
+}
+
+func (r *oneShotRunner) prepareDryRunCurrentPlan(
+	ctx context.Context,
+	bl *Baseline,
+	mode Mode,
+	opts RunOptions,
+) (*preparedCurrentActionPlan, error) {
+	observeStart := r.engine.nowFunc()
+	planResult, err := r.buildDryRunCurrentActionPlan(ctx, bl, opts.FullReconcile)
+	if err != nil {
+		return nil, err
+	}
+	r.engine.collector().RecordObserve(planResult.observedPaths, r.engine.since(observeStart))
+
+	safety := r.engine.resolveSafetyConfig()
+
+	planStart := r.engine.nowFunc()
+	plan, err := r.engine.buildCurrentActionPlanFromInputs(&planResult.currentActionPlanInputs, bl, mode, safety)
+	if err != nil {
+		return nil, fmt.Errorf("sync: planning actions: %w", err)
+	}
+	r.engine.collector().RecordPlan(len(plan.Actions), r.engine.since(planStart))
+
+	counts := CountByType(plan.Actions)
+	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
+
+	return &preparedCurrentActionPlan{
+		plan:   plan,
+		report: report,
+	}, nil
 }
 
 type dryRunPlanInput struct {
 	currentActionPlanInputs
 	observedPaths int
+}
+
+type preparedCurrentActionPlan struct {
+	plan                *ActionPlan
+	report              *Report
+	pendingCursorCommit *pendingPrimaryCursorCommit
 }
 
 type currentActionPlanInputs struct {
@@ -154,11 +191,7 @@ type currentActionPlanInputs struct {
 	blockScopes       []*BlockScope
 }
 
-func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *ActionPlan, dryRun bool) error {
-	if dryRun {
-		return nil
-	}
-
+func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *ActionPlan) error {
 	if err := flow.engine.baseline.PruneRetryWorkToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
 		return fmt.Errorf("sync: pruning retry_work to current actions: %w", err)
 	}

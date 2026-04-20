@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 )
@@ -28,7 +27,7 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 		return
 	}
 
-	signature, breakdown := watchSummarySignature(summary)
+	signature, breakdown := watchConditionSummarySignature(summary)
 	if signature == rt.lastSummarySignature {
 		return
 	}
@@ -79,13 +78,4 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup
 	}
 
 	rt.lastRemoteBlocked = current
-}
-
-func watchSummarySignature(summary watchConditionSummary) (string, string) {
-	parts := make([]string, 0, len(summary.Counts))
-	for i := range summary.Counts {
-		parts = append(parts, fmt.Sprintf("%d %s", summary.Counts[i].Count, summary.Counts[i].Key))
-	}
-	breakdown := strings.Join(parts, ", ")
-	return fmt.Sprintf("%d|%s", summary.ConditionTotal, breakdown), breakdown
 }

@@ -130,18 +130,18 @@ func permissionDecisionConditionKey(decision *PermissionCheckDecision) Condition
 	}
 
 	if decision.BlockScope != nil {
-		return ConditionKeyForBlockScope(decision.BlockScope.Key.ConditionType(), decision.BlockScope.Key)
+		return ConditionKeyForStoredCondition(decision.BlockScope.Key.ConditionType(), decision.BlockScope.Key)
 	}
 
 	if decision.RetryWorkFailure != nil {
-		return ConditionKeyForRetryWork(
+		return ConditionKeyForStoredCondition(
 			decision.RetryWorkFailure.ConditionType,
 			decision.RetryWorkFailure.ScopeKey,
 		)
 	}
 
 	if !decision.ScopeKey.IsZero() {
-		return ConditionKeyForBlockScope("", decision.ScopeKey)
+		return ConditionKeyForStoredCondition("", decision.ScopeKey)
 	}
 
 	return ""
@@ -208,7 +208,7 @@ func (controller *scopeController) recordRetryWorkFailure(ctx context.Context, f
 	}
 
 	flow := controller.flow
-	conditionKey := ConditionKeyForRetryWork(failure.ConditionType, failure.ScopeKey)
+	conditionKey := ConditionKeyForStoredCondition(failure.ConditionType, failure.ScopeKey)
 
 	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, failure, nil); err != nil {
 		fields := append(flow.summaryLogFields(
