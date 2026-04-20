@@ -1,10 +1,6 @@
 package sync
 
-import (
-	"fmt"
-	"sort"
-	"strings"
-)
+import "sort"
 
 type watchRemoteBlockedGroup struct {
 	ConditionKey ConditionKey
@@ -93,14 +89,4 @@ func watchConditionCountTotal(counts []watchConditionCount) int {
 	}
 
 	return total
-}
-
-func watchConditionSummarySignature(summary watchConditionSummary) (string, string) {
-	parts := make([]string, 0, len(summary.Counts))
-	for i := range summary.Counts {
-		parts = append(parts, fmt.Sprintf("%d %s", summary.Counts[i].Count, summary.Counts[i].Key))
-	}
-
-	breakdown := strings.Join(parts, ", ")
-	return fmt.Sprintf("%d|%s", summary.ConditionTotal, breakdown), breakdown
 }

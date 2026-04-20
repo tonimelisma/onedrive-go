@@ -37,17 +37,6 @@ func (index TruthAvailabilityIndex) StatusByPath(paths []string) map[string]Path
 	return statusByPath
 }
 
-// derivePathTruthStatusByPath computes current local/remote truth availability
-// for each requested path from durable observation issues and active read
-// scopes. This remains as a small compatibility helper over the shared index.
-func derivePathTruthStatusByPath(
-	paths []string,
-	observationIssues []ObservationIssueRow,
-	blockScopes []*BlockScope,
-) map[string]PathTruthStatus {
-	return NewTruthAvailabilityIndex(observationIssues, blockScopes).StatusByPath(paths)
-}
-
 func truthBlockingObservationByPath(observationIssues []ObservationIssueRow) map[string]ObservationIssueRow {
 	observationByPath := make(map[string]ObservationIssueRow, len(observationIssues))
 	for i := range observationIssues {

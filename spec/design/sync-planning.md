@@ -54,6 +54,10 @@ truth-status value from `observation_issues` and active read scopes. Planner
 then applies its own suppression policy so unreadable or unobservable paths
 stay unavailable instead of being misread as deletions.
 
+`TruthAvailabilityIndex` is the one raw derived read model for that question.
+Planner uses it directly, and read-only inspection of specific paths uses the
+same derivation rather than a second planner-shaped helper.
+
 ## Pipeline
 
 1. Run SQL structural diff and reconciliation over snapshots plus baseline.

@@ -80,8 +80,9 @@ observation and execution metadata.
    permission maintenance owns which persisted permission scopes are due for
    startup or steady-state recheck, including cadence and remote-probe
    suppression policy, and which remote-write blocked retry rows are already
-   resolved; the engine only applies the resulting scope and retry-work
-   mutations through its scope lifecycle boundary
+   resolved; the engine only loads the current maintenance evidence and applies
+   the resulting scope and retry-work mutations through its scope lifecycle
+   boundary
 4. refresh current remote and local snapshots once
 5. compute SQL structural diff and reconciliation once
 6. build the current actionable set in Go from structural reconciliation plus
@@ -104,7 +105,10 @@ Within that one-shot flow, the engine now treats "prepare current plan" as an
 explicit stage: observe current truth, derive the current action plan,
 materialize durable retry/scope reconciliation, and only then hand the
 prepared plan to execution/reporting. The outer orchestration should stay at
-that stage level rather than inlining every sub-step.
+that stage level rather than inlining every sub-step. Live and dry-run now
+share the same observed-state -> current-plan stage shape; they differ only in
+whether the prepared plan is materialized durably and whether a deferred
+cursor commit is returned.
 
 ## Watch Mode
 
@@ -231,9 +235,12 @@ Generic scope startup normalization repairs only non-permission scopes; after
 baseline load, the engine enters permission maintenance through one request-
 shaped boundary that covers startup rechecks, steady-state cadence, and local-
 observation-triggered remote-write cleanup. The same permission-maintenance
-boundary owns cleanup of resolved remote write-blocked `retry_work` rows both
-at startup and after local observation changes relevant subtrees; that cleanup
-must not release the persisted permission scope on its own.
+boundary loads the current permission evidence (persisted permission scopes,
+blocked retry rows, and watch cadence snapshot), returns one declarative
+maintenance plan, and owns cleanup of resolved remote write-blocked
+`retry_work` rows both at startup and after local observation changes relevant
+subtrees. That cleanup must not release the persisted permission scope on its
+own.
 
 Ownership splits by access kind:
 

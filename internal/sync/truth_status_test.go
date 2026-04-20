@@ -9,14 +9,10 @@ import (
 )
 
 // Validates: R-2.1.3, R-2.10.4
-func TestDerivePathTruthStatusByPath_ReturnsAvailableStatusForUnblockedPaths(t *testing.T) {
+func TestTruthAvailabilityIndex_StatusByPath_ReturnsAvailableStatusForUnblockedPaths(t *testing.T) {
 	t.Parallel()
 
-	statuses := derivePathTruthStatusByPath(
-		[]string{"docs/readme.txt"},
-		nil,
-		nil,
-	)
+	statuses := NewTruthAvailabilityIndex(nil, nil).StatusByPath([]string{"docs/readme.txt"})
 	require.Len(t, statuses, 1)
 
 	status, ok := statuses["docs/readme.txt"]
@@ -26,11 +22,10 @@ func TestDerivePathTruthStatusByPath_ReturnsAvailableStatusForUnblockedPaths(t *
 }
 
 // Validates: R-2.1.3, R-2.10.4
-func TestDerivePathTruthStatusByPath_ReadScopesApplyToDescendants(t *testing.T) {
+func TestTruthAvailabilityIndex_StatusByPath_ReadScopesApplyToDescendants(t *testing.T) {
 	t.Parallel()
 
-	statuses := derivePathTruthStatusByPath(
-		[]string{"Private/sub/file.txt", "Shared/Docs/file.txt"},
+	statuses := NewTruthAvailabilityIndex(
 		nil,
 		[]*BlockScope{
 			{
@@ -46,6 +41,8 @@ func TestDerivePathTruthStatusByPath_ReadScopesApplyToDescendants(t *testing.T) 
 				BlockedAt:     time.Unix(100, 0),
 			},
 		},
+	).StatusByPath(
+		[]string{"Private/sub/file.txt", "Shared/Docs/file.txt"},
 	)
 
 	localStatus, ok := statuses["Private/sub/file.txt"]
