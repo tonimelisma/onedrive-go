@@ -31,7 +31,7 @@ func FindBlockingScope(blocks []ActiveScope, ta *TrackedAction) ScopeKey {
 			continue
 		}
 
-		rank := scopePriority(key)
+		rank := DescribeScopeKey(key).Priority
 		specificity := len(key.Param)
 		if rank < bestRank || (rank == bestRank && specificity > bestSpecificity) {
 			bestRank = rank
@@ -161,8 +161,4 @@ func ScopeKeys(blocks []ActiveScope) []ScopeKey {
 		keys[i] = blocks[i].Key
 	}
 	return keys
-}
-
-func scopePriority(key ScopeKey) int {
-	return DescribeScopeKey(key).Priority
 }

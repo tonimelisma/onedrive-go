@@ -10,7 +10,7 @@ func TestWatchConditionSummary_CountHelpers(t *testing.T) {
 	t.Parallel()
 
 	summary := watchConditionSummary{
-		Groups: []watchConditionGroupCount{
+		Counts: []watchConditionCount{
 			{Key: ConditionInvalidFilename, Count: 2},
 			{Key: ConditionRemoteWriteDenied, Count: 3},
 			{Key: ConditionAuthenticationRequired, Count: 1},
@@ -26,22 +26,20 @@ func TestWatchConditionSummary_CountHelpers(t *testing.T) {
 	assert.Equal(t, 4, summary.RetryingCount())
 }
 
-func TestWatchConditionGroupAccumulator_AddAndGroups_SortsAndAggregates(t *testing.T) {
+func TestWatchConditionCountAccumulator_AddAndCounts_SortsAndAggregates(t *testing.T) {
 	t.Parallel()
 
-	accumulator := make(watchConditionGroupAccumulator)
-	accumulator.Add("", 5, "", "")
-	accumulator.Add(ConditionServiceOutage, 0, "drive", "ignored")
-	accumulator.Add(ConditionServiceOutage, 1, "drive", "Drive B")
-	accumulator.Add(ConditionServiceOutage, 2, "drive", "Drive A")
-	accumulator.Add(ConditionServiceOutage, 3, "drive", "Drive A")
-	accumulator.Add(ConditionDiskFull, 4, "disk", "Mac SSD")
+	accumulator := make(watchConditionCountAccumulator)
+	accumulator.Add("", 5)
+	accumulator.Add(ConditionServiceOutage, 0)
+	accumulator.Add(ConditionServiceOutage, 1)
+	accumulator.Add(ConditionServiceOutage, 2)
+	accumulator.Add(ConditionDiskFull, 4)
 
-	assert.Equal(t, []watchConditionGroupCount{
-		{Key: ConditionDiskFull, Count: 4, ScopeKind: "disk", Scope: "Mac SSD"},
-		{Key: ConditionServiceOutage, Count: 5, ScopeKind: "drive", Scope: "Drive A"},
-		{Key: ConditionServiceOutage, Count: 1, ScopeKind: "drive", Scope: "Drive B"},
-	}, accumulator.Groups())
+	assert.Equal(t, []watchConditionCount{
+		{Key: ConditionDiskFull, Count: 4},
+		{Key: ConditionServiceOutage, Count: 3},
+	}, accumulator.Counts())
 }
 
 func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
@@ -64,16 +62,16 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 	})
 
 	assert.Equal(t, 4, summary.RetryingCount())
-	assert.ElementsMatch(t, []watchConditionGroupCount{
+	assert.ElementsMatch(t, []watchConditionCount{
 		{Key: ConditionInvalidFilename, Count: 1},
 		{Key: ConditionRemoteReadDenied, Count: 1},
 		{Key: ConditionRemoteWriteDenied, Count: 2},
 		{Key: ConditionServiceOutage, Count: 1},
-	}, summary.Groups)
+	}, summary.Counts)
 	assert.Equal(t, []watchRemoteBlockedGroup{
 		{
+			ConditionKey: ConditionRemoteWriteDenied,
 			ScopeKey:     SKPermRemoteWrite("Shared/Docs"),
-			BoundaryPath: "Shared/Docs",
 			BlockedPaths: []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt"},
 		},
 	}, groups)

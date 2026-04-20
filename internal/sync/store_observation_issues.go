@@ -13,43 +13,6 @@ import (
 const sqlSelectObservationIssueCols = `path, action_type, issue_type, item_id, last_error, first_seen_at, ` +
 	`last_seen_at, file_size, local_hash, scope_key`
 
-func (m *SyncStore) UpsertObservationIssue(ctx context.Context, issue *ObservationIssue) error {
-	if issue == nil {
-		return fmt.Errorf("sync: upsert observation issue: nil issue")
-	}
-
-	return m.UpsertObservationIssues(ctx, []ObservationIssue{*issue})
-}
-
-func (m *SyncStore) UpsertObservationIssues(
-	ctx context.Context,
-	issues []ObservationIssue,
-) (err error) {
-	if len(issues) == 0 {
-		return nil
-	}
-
-	nowNano := m.nowFunc().UnixNano()
-	tx, err := beginPerfTx(ctx, m.db)
-	if err != nil {
-		return fmt.Errorf("sync: begin observation issue upsert: %w", err)
-	}
-	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback observation issue upsert")
-	}()
-
-	err = m.upsertObservationIssuesTx(ctx, tx, issues, nowNano)
-	if err != nil {
-		return err
-	}
-
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: commit observation issue upsert: %w", err)
-	}
-
-	return nil
-}
-
 func (m *SyncStore) ReconcileObservationFindings(
 	ctx context.Context,
 	batch *ObservationFindingsBatch,
@@ -103,71 +66,6 @@ func (m *SyncStore) ListObservationIssues(ctx context.Context) ([]ObservationIss
 	defer rows.Close()
 
 	return scanObservationIssueRows(rows, configuredDriveID)
-}
-
-func (m *SyncStore) ClearObservationIssuesByPaths(
-	ctx context.Context,
-	issueType string,
-	paths []string,
-) error {
-	if issueType == "" || len(paths) == 0 {
-		return nil
-	}
-
-	encodedPaths, err := json.Marshal(paths)
-	if err != nil {
-		return fmt.Errorf("sync: marshal observation issue paths for %s: %w", issueType, err)
-	}
-
-	if _, err := m.db.ExecContext(ctx,
-		`DELETE FROM observation_issues
-			WHERE issue_type = ?
-				AND path IN (SELECT value FROM json_each(?))`,
-		issueType,
-		string(encodedPaths),
-	); err != nil {
-		return fmt.Errorf("sync: clearing observation issues by paths for %s: %w", issueType, err)
-	}
-
-	return nil
-}
-
-func (m *SyncStore) ClearResolvedObservationIssues(
-	ctx context.Context,
-	issueType string,
-	currentPaths []string,
-) error {
-	if issueType == "" {
-		return nil
-	}
-
-	if len(currentPaths) == 0 {
-		if _, err := m.db.ExecContext(ctx,
-			`DELETE FROM observation_issues WHERE issue_type = ?`,
-			issueType,
-		); err != nil {
-			return fmt.Errorf("sync: clearing resolved observation issues for %s: %w", issueType, err)
-		}
-
-		return nil
-	}
-
-	encodedPaths, err := json.Marshal(currentPaths)
-	if err != nil {
-		return fmt.Errorf("sync: marshal resolved observation issue paths for %s: %w", issueType, err)
-	}
-
-	if _, err := m.db.ExecContext(ctx,
-		`DELETE FROM observation_issues
-			WHERE issue_type = ?
-				AND path NOT IN (SELECT value FROM json_each(?))`,
-		issueType,
-		string(encodedPaths),
-	); err != nil {
-		return fmt.Errorf("sync: clearing resolved observation issues for %s: %w", issueType, err)
-	}
-
-	return nil
 }
 
 type observationIssueScanner interface {

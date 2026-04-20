@@ -278,13 +278,13 @@ func TestPlannerPlanCurrentState_LocalReadDeniedDoesNotDeleteRemoteData(t *testi
 		Mtime:    1,
 		ETag:     "etag-danger",
 	}}, "", driveID))
-	require.NoError(t, store.UpsertObservationIssue(ctx, &ObservationIssue{
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:       "danger.txt",
 		DriveID:    driveID,
 		ActionType: ActionUpload,
 		IssueType:  IssueLocalReadDenied,
 		Error:      "file not accessible",
-	}))
+	})
 
 	plan := planCurrentStateForStore(t, store)
 	assertNoActionForPath(t, plan, "danger.txt", ActionRemoteDelete)
@@ -412,13 +412,13 @@ func TestPlannerPlanCurrentState_NewUnreadableLocalPathProducesNoActions(t *test
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	require.NoError(t, store.UpsertObservationIssue(ctx, &ObservationIssue{
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:       "blocked/new.txt",
 		DriveID:    driveID,
 		ActionType: ActionUpload,
 		IssueType:  IssueLocalReadDenied,
 		Error:      "file not accessible",
-	}))
+	})
 
 	plan := planCurrentStateForStore(t, store)
 	assert.Empty(t, plan.Actions)

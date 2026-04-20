@@ -121,9 +121,11 @@ That hook is intentionally narrow. It rechecks externally cleared scope state
 and aligns runtime admission with the persisted `block_scopes` and blocked
 `retry_work` rows. It is not a generic user-intent ingestion path.
 
-Watch summary grouping is engine-owned. `watch_summary.go` builds the
-watch-only condition aggregate directly from raw authority snapshots; the
-store does not own grouped watch-condition projections.
+Watch summary grouping is engine-owned. `watch_summary.go` builds raw
+watch-condition counts plus raw remote-write-block groups keyed by
+`ConditionKey` and `ScopeKey` directly from authority snapshots; the store
+does not own grouped watch-condition projections or watch-specific
+presentation.
 
 ## Shared-Root Drives
 

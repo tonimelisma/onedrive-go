@@ -73,6 +73,24 @@ func (m *mockSyncStateQuerier) QuerySyncState(_ driveid.CanonicalID) *syncStateI
 	return m.state
 }
 
+func seedObservationIssueForStatusTest(
+	t *testing.T,
+	store *syncengine.SyncStore,
+	issue *syncengine.ObservationIssue,
+) {
+	t.Helper()
+
+	require.NoError(t, store.ReconcileObservationFindings(
+		t.Context(),
+		&syncengine.ObservationFindingsBatch{
+			Issues:            []syncengine.ObservationIssue{*issue},
+			ManagedIssueTypes: []string{issue.IssueType},
+			ManagedPaths:      []string{issue.Path},
+		},
+		time.Now().UTC(),
+	))
+}
+
 func TestDriveState_Ready(t *testing.T) {
 	d := &config.Drive{}
 	assert.Equal(t, "ready", driveState(d))
@@ -625,13 +643,13 @@ func TestQuerySyncState_RemoteDriftAndConditions(t *testing.T) {
 		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
-	require.NoError(t, store.UpsertObservationIssue(ctx, &syncengine.ObservationIssue{
+	seedObservationIssueForStatusTest(t, store, &syncengine.ObservationIssue{
 		Path:       "/z.txt",
 		DriveID:    testDriveID,
 		ActionType: syncengine.ActionUpload,
 		IssueType:  syncengine.IssueInvalidFilename,
 		Error:      "invalid filename",
-	}))
+	})
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
@@ -686,13 +704,13 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
-	require.NoError(t, store.UpsertObservationIssue(ctx, &syncengine.ObservationIssue{
+	seedObservationIssueForStatusTest(t, store, &syncengine.ObservationIssue{
 		Path:       "/actionable.txt",
 		DriveID:    driveid.New("test-drive-id"),
 		ActionType: syncengine.ActionUpload,
 		IssueType:  syncengine.IssueInvalidFilename,
 		Error:      "invalid filename",
-	}))
+	})
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
@@ -764,13 +782,13 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 	}()
 
 	scopeKey := syncengine.SKPermRemoteWrite("Shared/Team Docs")
-	require.NoError(t, store.UpsertObservationIssue(ctx, &syncengine.ObservationIssue{
+	seedObservationIssueForStatusTest(t, store, &syncengine.ObservationIssue{
 		Path:       "/invalid:name.txt",
 		DriveID:    driveid.New("test-drive-id"),
 		ActionType: syncengine.ActionUpload,
 		IssueType:  syncengine.IssueInvalidFilename,
 		Error:      "invalid filename",
-	}))
+	})
 	require.NoError(t, store.UpsertBlockScope(ctx, &syncengine.BlockScope{
 		Key:           scopeKey,
 		ConditionType: syncengine.IssueRemoteWriteDenied,
