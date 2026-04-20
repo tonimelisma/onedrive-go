@@ -121,11 +121,6 @@ func (ph *PermissionHandler) localDirectoryPermissionDecision(
 			LastError:     "directory not accessible (check filesystem permissions)",
 			Blocked:       true,
 		},
-		BlockScope: &ActiveScope{
-			Key:          scopeKey,
-			TimingSource: ScopeTimingNone,
-			BlockedAt:    ph.nowFn(),
-		},
 		BoundaryPath: boundaryPath,
 		TriggerPath:  triggerPath,
 	}

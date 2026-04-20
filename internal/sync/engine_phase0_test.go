@@ -374,7 +374,6 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
-		ConditionType: IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 30 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(30 * time.Millisecond),
@@ -407,7 +406,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 
 	block, ok := getTestBlockScope(eng, SKService())
 	require.True(t, ok, "service scope should remain blocked after trial failure")
-	assert.Equal(t, 60*time.Millisecond, block.TrialInterval,
+	assert.Equal(t, time.Minute, block.TrialInterval,
 		"trial failure should only extend the active scope interval")
 
 	assert.True(t, isTestBlockScopeed(eng, SKService()),
@@ -439,7 +438,6 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           testThrottleScope(),
-		ConditionType: IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
@@ -482,67 +480,6 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	require.Equal(t, blockedPath, retried.Action.Path,
 		"trial success should re-dispatch blocked retry work without external observation")
 	assert.Equal(t, ActionDownload, retried.Action.Type)
-}
-
-// Validates: R-2.10.13, R-2.10.11
-func TestPhase0_RecheckLocalPermissions_ReleasesBlockedRetryWorkImmediately(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{}
-	eng, syncRoot := newTestEngine(t, mock)
-	ctx := t.Context()
-	setupWatchEngine(t, eng)
-
-	scopeKey := SKPermLocalWrite("Private")
-	accessibleDir := filepath.Join(syncRoot, "Private")
-	require.NoError(t, os.MkdirAll(accessibleDir, 0o750))
-
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
-		DriveID:  eng.driveID,
-		ItemID:   "private-item",
-		Path:     "Private/doc.txt",
-		ItemType: ItemTypeFile,
-		Hash:     "private-hash",
-		Size:     64,
-	}}, "", eng.driveID))
-
-	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
-		Path:       "Private",
-		DriveID:    eng.driveID,
-		ActionType: ActionFolderCreate,
-		IssueType:  IssueLocalWriteDenied,
-		Error:      "directory not accessible",
-		ScopeKey:   scopeKey,
-	})
-	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "Private/doc.txt",
-		ActionType:    ActionDownload,
-		ConditionType: IssueLocalWriteDenied,
-		ScopeKey:      scopeKey,
-		LastError:     "blocked by perm scope",
-		Blocked:       true,
-	}, nil)
-	require.NoError(t, err)
-	setTestBlockScope(t, eng, &BlockScope{
-		Key:           scopeKey,
-		ConditionType: IssueLocalWriteDenied,
-		BlockedAt:     eng.nowFunc(),
-	})
-
-	decisions := applyLocalPermissionRecheck(t, eng, ctx)
-	requireSinglePermissionDecision(t, decisions, permissionRecheckReleaseScope)
-
-	assert.False(t, isTestBlockScopeed(eng, scopeKey),
-		"local permission recheck should clear the active block scope")
-
-	rows := readyRetryWorkForTest(t, eng.baseline, ctx, eng.nowFunc())
-	require.Len(t, rows, 1)
-	assert.Equal(t, "Private/doc.txt", rows[0].Path)
-
-	outbox := runTestRetrierSweep(t, eng, ctx)
-	require.Len(t, outbox, 1, "released retry work should dispatch its ready dependency first")
-	assert.Equal(t, "Private", outbox[0].Action.Path)
-	assert.Equal(t, ActionFolderCreate, outbox[0].Action.Type)
 }
 
 // Validates: R-2.10.2, R-2.10.10

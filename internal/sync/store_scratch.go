@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -16,14 +17,13 @@ const (
 		(item_id, path, parent_id, item_type, local_hash, remote_hash,
 		 local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	sqlListScratchRemoteState = `SELECT item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, content_identity, previous_path
+	sqlListScratchRemoteState = `SELECT ` + sqlSelectRemoteStateCols + `
 		FROM remote_state
 		ORDER BY path`
 	sqlInsertScratchRemoteState = `INSERT INTO remote_state
-		(item_id, path, parent_id, item_type, hash, size, mtime, etag,
+		(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
 		 content_identity, previous_path)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 )
 
 type scratchPlanningSeed struct {
@@ -205,6 +205,7 @@ func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]Remo
 	var result []RemoteStateRow
 	for rows.Next() {
 		var (
+			rawDriveID      string
 			row             RemoteStateRow
 			parentID        sql.NullString
 			hash            sql.NullString
@@ -216,6 +217,7 @@ func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]Remo
 		)
 
 		if err := rows.Scan(
+			&rawDriveID,
 			&row.ItemID,
 			&row.Path,
 			&parentID,
@@ -230,6 +232,7 @@ func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]Remo
 			return nil, fmt.Errorf("sync: scanning scratch remote_state seed row: %w", err)
 		}
 
+		row.DriveID = remoteStateDriveID(rawDriveID, driveid.ID{})
 		row.ParentID = parentID.String
 		row.Hash = hash.String
 		row.ETag = etag.String
@@ -260,6 +263,7 @@ func insertScratchRemoteStateRows(
 	for i := range rows {
 		row := rows[i]
 		if _, err := tx.ExecContext(ctx, sqlInsertScratchRemoteState,
+			row.DriveID.String(),
 			row.ItemID,
 			row.Path,
 			nullString(row.ParentID),

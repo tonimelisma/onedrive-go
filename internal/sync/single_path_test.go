@@ -241,7 +241,7 @@ func TestObserveSinglePath_UnreadableSubtreeReturnsBoundaryScopedSkip(t *testing
 	assert.False(t, result.Resolved)
 	assert.Equal(t, "Private", result.Skipped.Path)
 	assert.Equal(t, IssueLocalReadDenied, result.Skipped.Reason)
-	assert.True(t, result.Skipped.BlocksReadScope)
+	assert.True(t, result.Skipped.BlocksReadBoundary)
 }
 
 func TestObserveSinglePath_InternalExclusionResolves(t *testing.T) {

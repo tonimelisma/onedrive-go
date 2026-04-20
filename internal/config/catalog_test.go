@@ -53,3 +53,15 @@ func TestSaveCatalog_WritesSchemaVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, catalogSchemaV1, loaded.SchemaVersion)
 }
+
+func TestLoadCatalog_RejectsTrailingJSON(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	path := CatalogPath()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte("{\"schema_version\":1,\"accounts\":{},\"drives\":{}}\n{}"), 0o600))
+
+	_, err := LoadCatalog()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trailing data after top-level object")
+}

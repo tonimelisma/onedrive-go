@@ -190,12 +190,12 @@ func (d ScopeDescriptor) BlocksAction(
 		return actionType == ActionUpload
 	case ScopeFamilyPermDir:
 		if d.Access == ScopeAccessRead {
-			return scopePathMatches(path, d.SubjectValue)
+			return false
 		}
 		return scopePathMatches(path, d.SubjectValue) && localWriteScopeBlocksAction(actionType)
 	case ScopeFamilyPermRemote:
 		if d.Access == ScopeAccessRead {
-			return scopePathMatches(path, d.SubjectValue)
+			return false
 		}
 		return scopePathMatches(path, d.SubjectValue) && remoteWriteScopeBlocksAction(actionType)
 	default:

@@ -69,6 +69,10 @@ including paused drives. Runnable drives then produce one completed
 `DriveReport` each, while startup-ineligible drives remain startup outcomes
 instead of synthetic completed reports. The control plane never aborts the
 whole pass because one drive failed; partial failure is isolated per drive.
+Both startup results and completed reports carry a stable `SelectionIndex`
+matching the original selection order so repeated selectors for the same
+canonical drive remain distinct through orchestration, rendering, and
+bookkeeping.
 
 ### RunWatch
 

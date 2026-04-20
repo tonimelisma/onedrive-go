@@ -34,24 +34,31 @@ func TestBuildObservationReconcilePlan_DeletesOnlyManagedCurrentIssues(t *testin
 	}, plan.issueDeletes[0])
 }
 
-func TestBuildObservationReconcilePlan_ReleasesOnlyManagedObservationReadScopes(t *testing.T) {
+func TestBuildObservationReconcilePlan_UpsertsCurrentIssuesOnly(t *testing.T) {
 	t.Parallel()
 
-	plan := buildObservationReconcilePlan(
-		&ObservationFindingsBatch{
-			ManagedReadScopes: []ScopeKey{SKPermLocalRead("Private")},
-		},
-		observationReconcileState{
-			blockScopes: []*BlockScope{
-				{Key: SKPermLocalRead("Private")},
-				{Key: SKPermLocalRead("Other")},
-			},
-		},
-	)
+	batch := &ObservationFindingsBatch{
+		Issues: []ObservationIssue{{
+			Path:       "same.txt",
+			DriveID:    driveid.New(testDriveID),
+			ActionType: ActionUpload,
+			IssueType:  IssuePathTooLong,
+			Error:      "new",
+		}},
+		ManagedIssueTypes: []string{IssuePathTooLong},
+		ManagedPaths:      []string{"same.txt"},
+	}
 
-	require.Len(t, plan.readScopeReleases, 1)
-	assert.Equal(t, SKPermLocalRead("Private"), plan.readScopeReleases[0])
-	assert.Empty(t, plan.readScopeUpserts)
+	plan := buildObservationReconcilePlan(batch, observationReconcileState{
+		issues: []ObservationIssueRow{{
+			Path:      "same.txt",
+			IssueType: IssueInvalidFilename,
+		}},
+	})
+
+	require.Len(t, plan.issueUpserts, 1)
+	assert.Equal(t, batch.Issues[0], plan.issueUpserts[0])
+	assert.Empty(t, plan.issueDeletes)
 }
 
 func TestSyncStore_ApplyObservationReconcilePlan_DeletesByPreviousIssueType(t *testing.T) {

@@ -93,9 +93,6 @@ func (m *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) erro
 		if block == nil {
 			continue
 		}
-		if block.Key.IsPermDir() || block.Key.IsPermRemote() || block.TimingSource == ScopeTimingNone {
-			continue
-		}
 
 		keep, keepErr := m.scopeHasBlockedRetryWork(ctx, block.Key)
 		if keepErr != nil {
@@ -105,9 +102,33 @@ func (m *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) erro
 			continue
 		}
 
-		if err := m.DiscardScope(ctx, block.Key); err != nil {
+		if err := m.deleteBlockScopeOnly(ctx, block.Key); err != nil {
 			return fmt.Errorf("sync: pruning block scope %s without blocked work: %w", block.Key.String(), err)
 		}
+	}
+
+	return nil
+}
+
+func (m *SyncStore) deleteBlockScopeOnly(ctx context.Context, scopeKey ScopeKey) (err error) {
+	wire := scopeKey.String()
+
+	tx, err := beginPerfTx(ctx, m.db)
+	if err != nil {
+		return fmt.Errorf("sync: begin delete-scope tx for %s: %w", wire, err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback delete-scope tx for %s", wire))
+	}()
+
+	if _, execErr := tx.ExecContext(ctx,
+		`DELETE FROM block_scopes WHERE scope_key = ?`, wire,
+	); execErr != nil {
+		return fmt.Errorf("sync: deleting block scope %s: %w", wire, execErr)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing delete-scope for %s: %w", wire, err)
 	}
 
 	return nil

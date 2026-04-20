@@ -22,7 +22,7 @@ func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsRetryWork(t
 		ConditionKey:  ConditionInvalidFilename,
 		Persistence:   persistRetryWork,
 		ConditionType: IssueInvalidFilename,
-		TrialHint:     trialHintPreserve,
+		TrialHint:     trialHintReclassify,
 	}, nil, &ActionCompletion{
 		Path:       "invalid.txt",
 		ActionType: ActionUpload,
@@ -120,7 +120,7 @@ func TestEngineFlow_ProcessNormalDecision_RetryableTransientScopeEvidenceStaysUn
 }
 
 // Validates: R-2.10.5
-func TestEngineFlow_ProcessTrialDecision_PreserveRecordsFailureWithoutTerminating(t *testing.T) {
+func TestEngineFlow_ProcessTrialDecision_RearmOrDiscardRecordsFailureWithoutTerminating(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -131,7 +131,7 @@ func TestEngineFlow_ProcessTrialDecision_PreserveRecordsFailureWithoutTerminatin
 		Class:         errclass.ClassActionable,
 		ConditionKey:  ConditionInvalidFilename,
 		ConditionType: IssueInvalidFilename,
-		TrialHint:     trialHintPreserve,
+		TrialHint:     trialHintReclassify,
 	}, nil, &ActionCompletion{
 		Path:          "trial.txt",
 		ActionType:    ActionUpload,

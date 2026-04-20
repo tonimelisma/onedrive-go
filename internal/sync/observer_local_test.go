@@ -1100,7 +1100,7 @@ func TestFullScan_PermissionDenied(t *testing.T) {
 	require.Len(t, result.Skipped, 1)
 	assert.Equal(t, "unreadable", result.Skipped[0].Path)
 	assert.Equal(t, IssueLocalReadDenied, result.Skipped[0].Reason)
-	assert.True(t, result.Skipped[0].BlocksReadScope)
+	assert.True(t, result.Skipped[0].BlocksReadBoundary)
 }
 
 // eventPaths extracts paths from a slice of ChangeEvents.

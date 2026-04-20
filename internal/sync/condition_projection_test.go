@@ -17,8 +17,7 @@ func TestProjectStoredConditionGroups_MergesDurableAuthorities(t *testing.T) {
 		},
 		BlockScopes: []*BlockScope{
 			{
-				Key:           SKPermRemoteWrite("Shared/Docs"),
-				ConditionType: IssueRemoteWriteDenied,
+				Key: SKPermRemoteWrite("Shared/Docs"),
 			},
 		},
 		BlockedRetryWork: []RetryWorkRow{
@@ -50,4 +49,30 @@ func TestProjectStoredConditionGroups_NilSnapshotReturnsNil(t *testing.T) {
 	t.Parallel()
 
 	assert.Nil(t, ProjectStoredConditionGroups(nil))
+}
+
+// Validates: R-2.10.45, R-2.10.47
+func TestProjectStoredConditionGroups_DoesNotDoubleCountObservationBackedScope(t *testing.T) {
+	t.Parallel()
+
+	groups := ProjectStoredConditionGroups(&DriveStatusSnapshot{
+		ObservationIssues: []ObservationIssueRow{{
+			Path:       "Shared/Docs/file.txt",
+			IssueType:  IssueRemoteWriteDenied,
+			ScopeKey:   SKPermRemoteWrite("Shared/Docs"),
+			ActionType: ActionUpload,
+		}},
+		BlockScopes: []*BlockScope{{
+			Key: SKPermRemoteWrite("Shared/Docs"),
+		}},
+	})
+
+	require.Len(t, groups, 1)
+	assert.Equal(t, StoredConditionGroup{
+		ConditionKey:  ConditionRemoteWriteDenied,
+		ConditionType: IssueRemoteWriteDenied,
+		ScopeKey:      SKPermRemoteWrite("Shared/Docs"),
+		Count:         1,
+		Paths:         []string{"Shared/Docs/file.txt"},
+	}, groups[0])
 }

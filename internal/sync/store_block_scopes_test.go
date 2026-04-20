@@ -11,39 +11,18 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// ---------------------------------------------------------------------------
-// UpsertBlockScope
-// ---------------------------------------------------------------------------
-
 // Validates: R-2.10.8
 func TestValidateBlockScope(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range blockScopeValidationCases() {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validateBlockScope(tc.block)
-			if tc.wantErr == "" {
-				require.NoError(t, err)
-				return
-			}
-
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.wantErr)
-		})
-	}
-}
-
-type validateBlockScopeCase struct {
-	name    string
-	block   *BlockScope
-	wantErr string
-}
-
-func blockScopeValidationCases() []validateBlockScopeCase {
 	now := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
 	nextTrialAt := now.Add(time.Minute)
 
-	return []validateBlockScopeCase{
+	tests := []struct {
+		name    string
+		block   *BlockScope
+		wantErr string
+	}{
 		{
 			name:    "missing key",
 			block:   &BlockScope{},
@@ -57,370 +36,191 @@ func blockScopeValidationCases() []validateBlockScopeCase {
 			wantErr: "missing blocked_at",
 		},
 		{
-			name: "none timing requires zero interval",
+			name: "missing interval",
+			block: &BlockScope{
+				Key:       SKService(),
+				BlockedAt: now,
+			},
+			wantErr: "positive trial interval",
+		},
+		{
+			name: "missing next trial",
 			block: &BlockScope{
 				Key:           SKService(),
 				BlockedAt:     now,
-				TimingSource:  ScopeTimingNone,
-				TrialInterval: time.Second,
-			},
-			wantErr: "timing_source none requires zero trial interval",
-		},
-		{
-			name: "none timing requires zero next trial",
-			block: &BlockScope{
-				Key:          SKService(),
-				BlockedAt:    now,
-				TimingSource: ScopeTimingNone,
-				NextTrialAt:  nextTrialAt,
-			},
-			wantErr: "timing_source none requires zero next_trial_at",
-		},
-		{
-			name: "timed scope requires interval",
-			block: &BlockScope{
-				Key:          SKService(),
-				BlockedAt:    now,
-				TimingSource: ScopeTimingBackoff,
-			},
-			wantErr: "timed scope requires positive trial interval",
-		},
-		{
-			name: "timed scope requires next trial",
-			block: &BlockScope{
-				Key:           SKService(),
-				BlockedAt:     now,
-				TimingSource:  ScopeTimingBackoff,
 				TrialInterval: time.Second,
 			},
 			wantErr: "timed scope requires next_trial_at",
 		},
 		{
-			name: "invalid timing source",
-			block: &BlockScope{
-				Key:          SKService(),
-				BlockedAt:    now,
-				TimingSource: ScopeTimingSource("bogus"),
-			},
-			wantErr: "invalid timing source",
-		},
-		{
 			name: "valid scope",
 			block: &BlockScope{
-				Key:          SKService(),
-				BlockedAt:    now,
-				TimingSource: ScopeTimingNone,
+				Key:           SKService(),
+				BlockedAt:     now,
+				TrialInterval: time.Second,
+				NextTrialAt:   nextTrialAt,
 			},
 		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateBlockScope(tc.block)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
 	}
 }
 
 // Validates: R-2.10.8
 func TestSyncStore_UpsertBlockScope(t *testing.T) {
 	t.Parallel()
-	mgr := newTestStore(t)
+
+	store := newTestStore(t)
 	ctx := context.Background()
 
 	block := &BlockScope{
 		Key:           SKThrottleDrive(driveid.New("0000000000000001")),
-		ConditionType: IssueRateLimited,
-		TimingSource:  ScopeTimingServerRetryAfter,
 		BlockedAt:     time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   time.Date(2025, 6, 15, 10, 0, 5, 0, time.UTC),
-		TrialCount:    0,
 	}
 
-	err := mgr.UpsertBlockScope(ctx, block)
-	require.NoError(t, err)
+	require.NoError(t, store.UpsertBlockScope(ctx, block))
 
-	// Verify by listing.
-	blocks, err := mgr.ListBlockScopes(ctx)
+	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
-	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), blocks[0].Key)
-	assert.Equal(t, IssueRateLimited, blocks[0].ConditionType)
-	assert.Equal(t, ScopeFamilyThrottleTarget, blocks[0].Family)
-	assert.Equal(t, ScopeAccessNone, blocks[0].Access)
-	assert.Equal(t, ScopeSubjectKindDrive, blocks[0].SubjectKind)
-	assert.Equal(t, throttleDriveParam(driveid.New("0000000000000001")), blocks[0].SubjectValue)
-	assert.Equal(t, 0, blocks[0].TrialCount)
+	assert.Equal(t, block.Key, blocks[0].Key)
+	assert.Equal(t, block.BlockedAt, blocks[0].BlockedAt)
+	assert.Equal(t, block.TrialInterval, blocks[0].TrialInterval)
+	assert.Equal(t, block.NextTrialAt, blocks[0].NextTrialAt)
 
-	// Upsert with updated values — should replace.
-	block.TrialCount = 3
 	block.TrialInterval = 20 * time.Second
-	err = mgr.UpsertBlockScope(ctx, block)
-	require.NoError(t, err)
+	block.NextTrialAt = block.BlockedAt.Add(block.TrialInterval)
+	require.NoError(t, store.UpsertBlockScope(ctx, block))
 
-	blocks, err = mgr.ListBlockScopes(ctx)
+	blocks, err = store.ListBlockScopes(ctx)
 	require.NoError(t, err)
-	require.Len(t, blocks, 1, "upsert should not create duplicate rows")
-	assert.Equal(t, 3, blocks[0].TrialCount, "upsert should update trial count")
-	assert.Equal(t, 20*time.Second, blocks[0].TrialInterval, "upsert should update interval")
+	require.Len(t, blocks, 1)
+	assert.Equal(t, 20*time.Second, blocks[0].TrialInterval)
 }
-
-// ---------------------------------------------------------------------------
-// DeleteBlockScope
-// ---------------------------------------------------------------------------
 
 // Validates: R-2.10.8
 func TestSyncStore_DeleteBlockScope(t *testing.T) {
 	t.Parallel()
-	mgr := newTestStore(t)
+
+	store := newTestStore(t)
 	ctx := context.Background()
 
 	block := &BlockScope{
 		Key:           SKService(),
-		ConditionType: IssueServiceOutage,
-		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Now().UTC(),
 		TrialInterval: 10 * time.Second,
 		NextTrialAt:   time.Now().Add(10 * time.Second).UTC(),
-		TrialCount:    1,
 	}
 
-	require.NoError(t, mgr.UpsertBlockScope(ctx, block))
+	require.NoError(t, store.UpsertBlockScope(ctx, block))
+	require.NoError(t, store.DeleteBlockScope(ctx, SKService()))
 
-	// Delete it.
-	err := mgr.DeleteBlockScope(ctx, SKService())
-	require.NoError(t, err)
-
-	// Verify it's gone.
-	blocks, err := mgr.ListBlockScopes(ctx)
+	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, blocks)
-
-	// Delete non-existent — should not error (DELETE WHERE is no-op).
-	err = mgr.DeleteBlockScope(ctx, SKQuotaOwn())
-	require.NoError(t, err)
-}
-
-// ---------------------------------------------------------------------------
-// ListBlockScopes
-// ---------------------------------------------------------------------------
-
-// Validates: R-2.10.8
-func TestSyncStore_ListBlockScopes(t *testing.T) {
-	t.Parallel()
-	mgr := newTestStore(t)
-	ctx := context.Background()
-
-	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
-
-	blocks := []*BlockScope{
-		{
-			Key:           SKThrottleDrive(driveid.New("0000000000000001")),
-			ConditionType: IssueRateLimited,
-			TimingSource:  ScopeTimingServerRetryAfter,
-			BlockedAt:     now,
-			TrialInterval: 5 * time.Second,
-			NextTrialAt:   now.Add(5 * time.Second),
-			TrialCount:    0,
-		},
-		{
-			Key:           SKService(),
-			ConditionType: IssueServiceOutage,
-			TimingSource:  ScopeTimingBackoff,
-			BlockedAt:     now.Add(-time.Minute),
-			TrialInterval: 30 * time.Second,
-			NextTrialAt:   now.Add(29 * time.Second),
-			TrialCount:    2,
-		},
-		{
-			Key:           SKPermRemoteWrite("Shared/TeamDocs"),
-			ConditionType: IssueRemoteWriteDenied,
-			TimingSource:  ScopeTimingBackoff,
-			BlockedAt:     now.Add(-5 * time.Minute),
-			TrialInterval: time.Minute,
-			NextTrialAt:   now.Add(55 * time.Second),
-			TrialCount:    5,
-		},
-	}
-
-	for _, b := range blocks {
-		require.NoError(t, mgr.UpsertBlockScope(ctx, b))
-	}
-
-	got, err := mgr.ListBlockScopes(ctx)
-	require.NoError(t, err)
-	require.Len(t, got, 3)
-
-	// Build a map for easier assertion (order is not guaranteed).
-	byKey := make(map[ScopeKey]*BlockScope)
-	for _, b := range got {
-		byKey[b.Key] = b
-	}
-
-	// Verify target throttle round-trip.
-	ta := byKey[SKThrottleDrive(driveid.New("0000000000000001"))]
-	require.NotNil(t, ta, "target throttle block should be listed")
-	assert.Equal(t, IssueRateLimited, ta.ConditionType)
-	assert.Equal(t, now, ta.BlockedAt)
-	assert.Equal(t, 5*time.Second, ta.TrialInterval)
-	assert.Equal(t, now.Add(5*time.Second), ta.NextTrialAt)
-	assert.Equal(t, 0, ta.TrialCount)
-
-	// Verify perm:remote round-trip (parameterized key).
-	remotePerm := byKey[SKPermRemoteWrite("Shared/TeamDocs")]
-	require.NotNil(t, remotePerm, "perm:remote block should be listed")
-	assert.Equal(t, IssueRemoteWriteDenied, remotePerm.ConditionType)
-	assert.Equal(t, ScopeFamilyPermRemote, remotePerm.Family)
-	assert.Equal(t, ScopeAccessWrite, remotePerm.Access)
-	assert.Equal(t, ScopeSubjectKindPath, remotePerm.SubjectKind)
-	assert.Equal(t, "Shared/TeamDocs", remotePerm.SubjectValue)
-	assert.Equal(t, 5, remotePerm.TrialCount)
 }
 
 // Validates: R-2.10.8
 func TestSyncStore_ListBlockScopes_Empty(t *testing.T) {
 	t.Parallel()
-	mgr := newTestStore(t)
-	ctx := context.Background()
 
-	got, err := mgr.ListBlockScopes(ctx)
+	store := newTestStore(t)
+	blocks, err := store.ListBlockScopes(context.Background())
 	require.NoError(t, err)
-	assert.NotNil(t, got, "empty result should be non-nil slice")
-	assert.Empty(t, got)
+	assert.NotNil(t, blocks)
+	assert.Empty(t, blocks)
 }
 
 // Validates: R-2.10.8
-func TestSyncStore_ListBlockScopes_SkipsUnknownWireKeys(t *testing.T) {
+func TestSyncStore_ListBlockScopes_SkipsZeroScopeKeys(t *testing.T) {
 	t.Parallel()
-	mgr := newTestStore(t)
+
+	store := newTestStore(t)
 	ctx := context.Background()
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	_, err := mgr.db.ExecContext(
+	_, err := store.db.ExecContext(
 		ctx,
-		`INSERT INTO block_scopes
-			(scope_key, scope_family, scope_access, subject_kind, subject_value,
-			 condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"auth:account",
-		"unknown",
-		"unknown",
-		"unknown",
+		`INSERT INTO block_scopes (scope_key, blocked_at, trial_interval, next_trial_at)
+		VALUES (?, ?, ?, ?)`,
 		"",
-		IssueUnauthorized,
-		ScopeTimingNone,
 		now.UnixNano(),
-		int64(0),
-		int64(0),
-		0,
+		int64(time.Second),
+		now.Add(time.Second).UnixNano(),
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.UpsertBlockScope(ctx, &BlockScope{
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
-		ConditionType: IssueServiceOutage,
-		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     now,
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   now.Add(5 * time.Second),
 	}))
 
-	got, err := mgr.ListBlockScopes(ctx)
+	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, SKService(), got[0].Key)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, SKService(), blocks[0].Key)
 }
 
 // Validates: R-2.10.8
-func TestSyncStore_ListBlockScopes_RejectsMismatchedMetadata(t *testing.T) {
+func TestSyncStore_ListBlockScopes_SkipsUnknownScopeKeys(t *testing.T) {
 	t.Parallel()
-	mgr := newTestStore(t)
+
+	store := newTestStore(t)
 	ctx := context.Background()
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	_, err := mgr.db.ExecContext(
+	_, err := store.db.ExecContext(
 		ctx,
-		`INSERT INTO block_scopes
-			(scope_key, scope_family, scope_access, subject_kind, subject_value,
-			 condition_type, timing_source, blocked_at, trial_interval, next_trial_at, trial_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		SKPermRemoteWrite("Shared/TeamDocs").String(),
-		ScopeFamilyPermDir,
-		ScopeAccessWrite,
-		ScopeSubjectKindPath,
-		"Shared/TeamDocs",
-		IssueRemoteWriteDenied,
-		ScopeTimingNone,
+		`INSERT INTO block_scopes (scope_key, blocked_at, trial_interval, next_trial_at)
+		VALUES (?, ?, ?, ?)`,
+		"auth:account",
 		now.UnixNano(),
-		int64(0),
-		int64(0),
-		0,
+		int64(time.Second),
+		now.Add(time.Second).UnixNano(),
 	)
 	require.NoError(t, err)
 
-	_, err = mgr.ListBlockScopes(ctx)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "metadata mismatch")
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
 }
-
-// ---------------------------------------------------------------------------
-// Round-trip: all field types survive serialization
-// ---------------------------------------------------------------------------
 
 // Validates: R-2.10.33, R-2.10.34
 func TestSyncStore_BlockScope_Roundtrip(t *testing.T) {
 	t.Parallel()
-	mgr := newTestStore(t)
+
+	store := newTestStore(t)
 	ctx := context.Background()
 
-	// Use specific values that exercise edge cases in serialization:
-	// - Timestamps with nanosecond precision
-	// - Duration in nanoseconds
-	// - Parameterized scope key (perm:local-write)
 	original := &BlockScope{
 		Key:           SKPermRemoteWrite("Shared/TeamDocs"),
-		ConditionType: IssueRemoteWriteDenied,
-		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Date(2025, 3, 14, 9, 26, 53, 123456789, time.UTC),
 		TrialInterval: 2*time.Minute + 500*time.Millisecond,
 		NextTrialAt:   time.Date(2025, 3, 14, 9, 28, 53, 987654321, time.UTC),
-		TrialCount:    42,
 	}
 
-	require.NoError(t, mgr.UpsertBlockScope(ctx, original))
+	require.NoError(t, store.UpsertBlockScope(ctx, original))
 
-	got, err := mgr.ListBlockScopes(ctx)
+	got, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-
-	// Verify every field round-trips correctly.
-	assert.Equal(t, original.Key, got[0].Key, "scope key should round-trip")
-	assert.Equal(t, original.ConditionType, got[0].ConditionType, "issue type should round-trip")
-	assert.Equal(t, ScopeFamilyPermRemote, got[0].Family, "family should round-trip")
-	assert.Equal(t, ScopeAccessWrite, got[0].Access, "access should round-trip")
-	assert.Equal(t, ScopeSubjectKindPath, got[0].SubjectKind, "subject kind should round-trip")
-	assert.Equal(t, "Shared/TeamDocs", got[0].SubjectValue, "subject value should round-trip")
-	assert.Equal(t, original.BlockedAt, got[0].BlockedAt, "blocked_at should round-trip with nanosecond precision")
-	assert.Equal(t, original.TrialInterval, got[0].TrialInterval, "trial_interval should round-trip")
-	assert.Equal(t, original.NextTrialAt, got[0].NextTrialAt, "next_trial_at should round-trip with nanosecond precision")
-	assert.Equal(t, original.TrialCount, got[0].TrialCount, "trial_count should round-trip")
-}
-
-// Validates: R-2.10.8
-func TestSyncStore_BlockScope_Roundtrip_ZeroNextTrialAt(t *testing.T) {
-	t.Parallel()
-	mgr := newTestStore(t)
-	ctx := context.Background()
-
-	original := &BlockScope{
-		Key:           SKPermRemoteWrite("Shared/TeamDocs"),
-		ConditionType: IssueRemoteWriteDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Date(2025, 3, 14, 9, 26, 53, 123456789, time.UTC),
-		TrialInterval: 0,
-		NextTrialAt:   time.Time{},
-		TrialCount:    0,
-	}
-
-	require.NoError(t, mgr.UpsertBlockScope(ctx, original))
-
-	got, err := mgr.ListBlockScopes(ctx)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.True(t, got[0].NextTrialAt.IsZero(), "zero trial timestamps must round-trip as a true zero time")
+	assert.Equal(t, original.Key, got[0].Key)
+	assert.Equal(t, original.BlockedAt, got[0].BlockedAt)
 	assert.Equal(t, original.TrialInterval, got[0].TrialInterval)
+	assert.Equal(t, original.NextTrialAt, got[0].NextTrialAt)
 }

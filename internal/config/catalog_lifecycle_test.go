@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -184,4 +186,21 @@ func TestPruneDriveAfterPurge_KeepsPrimaryDriveButDeletesNonPrimaryDrive(t *test
 
 	_, found = loadCatalogDrive(t, secondaryCID)
 	assert.False(t, found)
+}
+
+func TestAuthenticatedAccountEmails_UsesEachCatalogAccountCanonicalID(t *testing.T) {
+	setConfigTestHome(t)
+
+	firstCID := driveid.MustCanonicalID("business:duplicate@example.com")
+	secondCID := driveid.MustCanonicalID("personal:duplicate@example.com")
+	seedCatalogAccount(t, firstCID, nil)
+	seedCatalogAccount(t, secondCID, nil)
+
+	tokenPath := DriveTokenPath(secondCID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(tokenPath), 0o700))
+	require.NoError(t, os.WriteFile(tokenPath, []byte("{}"), 0o600))
+
+	emails, err := AuthenticatedAccountEmails(DefaultDataDir())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"duplicate@example.com"}, emails)
 }

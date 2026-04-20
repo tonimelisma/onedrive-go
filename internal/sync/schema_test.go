@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -89,4 +90,34 @@ func TestApplySchema_SeedsObservationStateRowForCurrentSchema(t *testing.T) {
 	err = db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM observation_state`).Scan(&rows)
 	require.NoError(t, err)
 	assert.Equal(t, 1, rows)
+}
+
+// Validates: R-2.5.6
+func TestApplySchema_RejectsGeneration6RemoteStateDriveOwnership(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+
+	legacySchema := strings.Replace(canonicalSchemaSQL, "    drive_id      TEXT    NOT NULL DEFAULT '',\n", "", 1)
+	_, err = db.ExecContext(t.Context(), legacySchema)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), sqlEnsureStoreMetadataRow, 6)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), sqlEnsureObservationStateRow)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), `
+		UPDATE observation_state
+		SET configured_drive_id = 'drive-configured'
+		WHERE singleton_id = 1`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), `
+		INSERT INTO remote_state (item_id, path, item_type, hash)
+		VALUES ('legacy-item', 'legacy.txt', 'file', 'legacy-hash')`)
+	require.NoError(t, err)
+
+	err = applySchema(t.Context(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "incompatible sync store schema")
 }

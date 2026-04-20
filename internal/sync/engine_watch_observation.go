@@ -72,7 +72,6 @@ func (flow *engineFlow) reconcileObservationFindingsBatch(
 	if err := eng.baseline.ReconcileObservationFindings(ctx, batch, eng.nowFunc()); err != nil {
 		eng.logger.Error(failureMessage,
 			slog.Int("issues", len(batch.Issues)),
-			slog.Int("read_scopes", len(batch.ReadScopes)),
 			slog.String("error", err.Error()),
 		)
 		return

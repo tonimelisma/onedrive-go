@@ -25,26 +25,8 @@ type PermissionCheckDecision struct {
 	Kind             PermissionCheckDecisionKind
 	RetryWorkFailure *RetryWorkFailure
 	ScopeKey         ScopeKey
-	BlockScope       *ActiveScope
 	BoundaryPath     string
 	TriggerPath      string
-}
-
-type PermissionRecheckDecisionKind int
-
-const (
-	permissionRecheckKeepScope PermissionRecheckDecisionKind = iota
-	permissionRecheckReleaseScope
-)
-
-// PermissionRecheckDecision is the policy-layer output for startup/per-pass
-// permission maintenance. The engine applies these decisions through its owned
-// block-scope lifecycle methods.
-type PermissionRecheckDecision struct {
-	Kind     PermissionRecheckDecisionKind
-	Path     string
-	ScopeKey ScopeKey
-	Reason   string
 }
 
 func (controller *scopeController) applyPermissionCheckDecision(
@@ -68,22 +50,21 @@ func (controller *scopeController) applyPermissionCheckMutation(
 	watch *watchRuntime,
 	decision *PermissionCheckDecision,
 ) {
-	flow := controller.flow
-
 	switch decision.Kind {
 	case permissionCheckNone:
 		return
 	case permissionCheckRecordFileFailure,
 		permissionCheckActivateBoundaryScope,
 		permissionCheckActivateDerivedScope:
-		controller.recordRetryWorkFailure(ctx, decision.RetryWorkFailure)
-		if decision.BlockScope != nil {
-			if err := controller.activateScope(ctx, watch, decision.BlockScope); err != nil {
-				flow.engine.logger.Warn("failed to activate permission scope",
-					slog.String("scope_key", decision.BlockScope.Key.String()),
-					slog.String("error", err.Error()),
-				)
-			}
+		if !controller.recordRetryWorkFailure(ctx, decision.RetryWorkFailure) {
+			return
+		}
+		if !decision.ScopeKey.IsZero() {
+			controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
+				Block:         true,
+				ScopeKey:      decision.ScopeKey,
+				ConditionType: decision.ScopeKey.ConditionType(),
+			})
 		}
 	default:
 		panic(fmt.Sprintf("unknown permission check decision kind %d", decision.Kind))
@@ -103,16 +84,11 @@ func (controller *scopeController) logPermissionCheckDecision(
 		controller.logRemotePermissionDecision(decision, conditionKey)
 	case permissionFlowLocalPermission:
 		if decision.Kind == permissionCheckActivateBoundaryScope {
-			scopeKey := decision.ScopeKey
-			if scopeKey.IsZero() && decision.BlockScope != nil {
-				scopeKey = decision.BlockScope.Key
-			}
-
 			fields := append(controller.flow.summaryLogFields(
 				errclass.ClassActionable,
 				conditionKey,
 				decision.TriggerPath,
-				scopeKey,
+				decision.ScopeKey,
 			),
 				slog.String("boundary", decision.BoundaryPath),
 				slog.String("trigger_path", decision.TriggerPath),
@@ -129,8 +105,8 @@ func permissionDecisionConditionKey(decision *PermissionCheckDecision) Condition
 		return ""
 	}
 
-	if decision.BlockScope != nil {
-		return ConditionKeyForStoredCondition(decision.BlockScope.Key.ConditionType(), decision.BlockScope.Key)
+	if !decision.ScopeKey.IsZero() {
+		return ConditionKeyForStoredCondition(decision.ScopeKey.ConditionType(), decision.ScopeKey)
 	}
 
 	if decision.RetryWorkFailure != nil {
@@ -141,7 +117,7 @@ func permissionDecisionConditionKey(decision *PermissionCheckDecision) Condition
 	}
 
 	if !decision.ScopeKey.IsZero() {
-		return ConditionKeyForStoredCondition("", decision.ScopeKey)
+		return ConditionKeyForStoredCondition(decision.ScopeKey.ConditionType(), decision.ScopeKey)
 	}
 
 	return ""
@@ -156,9 +132,6 @@ func (controller *scopeController) logRemotePermissionDecision(
 	}
 
 	scopeKey := decision.ScopeKey
-	if scopeKey.IsZero() && decision.BlockScope != nil {
-		scopeKey = decision.BlockScope.Key
-	}
 	fields := append(controller.flow.summaryLogFields(
 		errclass.ClassActionable,
 		conditionKey,
@@ -171,40 +144,12 @@ func (controller *scopeController) logRemotePermissionDecision(
 	controller.flow.engine.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively", fields...)
 }
 
-func (controller *scopeController) applyPermissionRecheckDecisions(
+func (controller *scopeController) recordRetryWorkFailure(
 	ctx context.Context,
-	watch *watchRuntime,
-	decisions []PermissionRecheckDecision,
-) {
-	flow := controller.flow
-
-	for i := range decisions {
-		decision := decisions[i]
-		switch decision.Kind {
-		case permissionRecheckKeepScope:
-			continue
-		case permissionRecheckReleaseScope:
-			if err := controller.releaseScope(ctx, watch, decision.ScopeKey); err != nil {
-				flow.engine.logger.Warn("failed to release permission scope",
-					slog.String("scope_key", decision.ScopeKey.String()),
-					slog.String("error", err.Error()),
-				)
-				continue
-			}
-		default:
-			panic(fmt.Sprintf("unknown permission recheck decision kind %d", decision.Kind))
-		}
-
-		flow.engine.logger.Info(decision.Reason,
-			slog.String("path", decision.Path),
-			slog.String("scope_key", decision.ScopeKey.String()),
-		)
-	}
-}
-
-func (controller *scopeController) recordRetryWorkFailure(ctx context.Context, failure *RetryWorkFailure) {
+	failure *RetryWorkFailure,
+) bool {
 	if failure == nil {
-		return
+		return false
 	}
 
 	flow := controller.flow
@@ -218,7 +163,7 @@ func (controller *scopeController) recordRetryWorkFailure(ctx context.Context, f
 			failure.ScopeKey,
 		), slog.String("error", err.Error()))
 		flow.engine.logger.Warn("failed to record retry_work permission blocker", fields...)
-		return
+		return false
 	}
 
 	fields := append(flow.summaryLogFields(
@@ -230,4 +175,6 @@ func (controller *scopeController) recordRetryWorkFailure(ctx context.Context, f
 		slog.String("condition_type", failure.ConditionType),
 	)
 	flow.engine.logger.Debug("retry_work blocker recorded", fields...)
+
+	return true
 }

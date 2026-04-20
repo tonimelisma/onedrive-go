@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -33,12 +32,12 @@ func printDriveReports(reports []*multisync.DriveReport, cc *CLIContext) {
 
 func printRunOnceResult(result multisync.RunOnceResult, cc *CLIContext) {
 	multiDrive := result.Startup.SelectedCount() > 1
-	reportByDrive := make(map[driveid.CanonicalID]*multisync.DriveReport, len(result.Reports))
+	reportBySelection := make(map[int]*multisync.DriveReport, len(result.Reports))
 	for _, report := range result.Reports {
 		if report == nil {
 			continue
 		}
-		reportByDrive[report.CanonicalID] = report
+		reportBySelection[report.SelectionIndex] = report
 	}
 
 	for i := range result.Startup.Results {
@@ -56,7 +55,7 @@ func printRunOnceResult(result multisync.RunOnceResult, cc *CLIContext) {
 			continue
 		}
 
-		report := reportByDrive[startup.CanonicalID]
+		report := reportBySelection[startup.SelectionIndex]
 		if report == nil {
 			cc.Statusf("Error: missing sync report for drive startup result\n")
 			continue

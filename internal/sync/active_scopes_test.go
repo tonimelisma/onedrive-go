@@ -136,6 +136,18 @@ func TestFindBlockingScope_PrefersMoreSpecificPermissionBoundary(t *testing.T) {
 	assert.Equal(t, child, got, "nested permission scopes should pick the most specific matching boundary")
 }
 
+// Validates: R-2.10.9
+func TestFindBlockingScope_MoveSourceInsideBlockedSubtreeBlocksMove(t *testing.T) {
+	t.Parallel()
+
+	scopeKey := SKPermRemoteWrite("Shared/Blocked")
+	action := makeTrackedAction(ActionRemoteMove, "Shared/Allowed/destination.txt")
+	action.Action.OldPath = "Shared/Blocked/source.txt"
+
+	got := FindBlockingScope([]ActiveScope{{Key: scopeKey}}, action)
+	assert.Equal(t, scopeKey, got)
+}
+
 // Validates: R-2.10
 func TestUpsertScope_ReplaceAndRemove(t *testing.T) {
 	t.Parallel()
@@ -147,14 +159,12 @@ func TestUpsertScope_ReplaceAndRemove(t *testing.T) {
 	updated := UpsertScope(blocks, &ActiveScope{
 		Key:           SKService(),
 		TrialInterval: 30 * time.Second,
-		TrialCount:    2,
 	})
 
 	require.Len(t, updated, 1)
 	got, ok := LookupScope(updated, SKService())
 	require.True(t, ok)
 	assert.Equal(t, 30*time.Second, got.TrialInterval)
-	assert.Equal(t, 2, got.TrialCount)
 
 	removed := RemoveScope(updated, SKService())
 	assert.False(t, HasScope(removed, SKService()))
@@ -182,7 +192,6 @@ func TestExtendScopeTrial(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, nextAt, got.NextTrialAt)
 	assert.Equal(t, 20*time.Second, got.TrialInterval)
-	assert.Equal(t, 1, got.TrialCount)
 }
 
 // Validates: R-2.10.5

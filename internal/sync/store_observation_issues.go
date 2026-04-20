@@ -60,9 +60,6 @@ func (m *SyncStore) applyObservationFindingsReconcilePlanTx(
 	if err := deleteObservationIssuesTx(ctx, tx, plan.issueDeletes); err != nil {
 		return err
 	}
-	if err := applyObservationReadScopePlanTx(ctx, tx, plan, nowNano); err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -75,14 +72,9 @@ func loadObservationReconcileStateTx(
 	if err != nil {
 		return observationReconcileState{}, fmt.Errorf("sync: listing observation issues for observation reconcile: %w", err)
 	}
-	blockScopes, err := queryBlockScopeRowsWithRunner(ctx, tx)
-	if err != nil {
-		return observationReconcileState{}, fmt.Errorf("sync: listing block scopes for observation reconcile: %w", err)
-	}
 
 	return observationReconcileState{
-		issues:      issues,
-		blockScopes: blockScopes,
+		issues: issues,
 	}, nil
 }
 
@@ -196,32 +188,6 @@ func deleteObservationIssuesTx(
 		deletePlan := deletes[i]
 		if _, execErr := stmt.ExecContext(ctx, deletePlan.path, deletePlan.issueType); execErr != nil {
 			return fmt.Errorf("sync: deleting observation issue %s (%s): %w", deletePlan.path, deletePlan.issueType, execErr)
-		}
-	}
-
-	return nil
-}
-
-func applyObservationReadScopePlanTx(
-	ctx context.Context,
-	tx sqlTxRunner,
-	plan observationReconcilePlan,
-	nowNano int64,
-) error {
-	for i := range plan.readScopeReleases {
-		key := plan.readScopeReleases[i]
-		if err := deleteBlockScopeWithRunner(ctx, tx, key); err != nil {
-			return fmt.Errorf("sync: deleting observation-owned read scope %s: %w", key.String(), err)
-		}
-		if err := markRetryWorkScopeReadyTx(ctx, tx, key.String(), nowNano); err != nil {
-			return err
-		}
-	}
-
-	for i := range plan.readScopeUpserts {
-		key := plan.readScopeUpserts[i]
-		if err := upsertBlockScopeWithRunner(ctx, tx, observationReadScopeBlock(key, nowNano)); err != nil {
-			return fmt.Errorf("sync: inserting observation-owned read scope %s: %w", key.String(), err)
 		}
 	}
 

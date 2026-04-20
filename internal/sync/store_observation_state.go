@@ -117,11 +117,6 @@ func (m *SyncStore) configuredDriveIDForRead(
 	ctx context.Context,
 	fallback driveid.ID,
 ) (driveid.ID, error) {
-	if !fallback.IsZero() {
-		m.rememberConfiguredDriveID(fallback)
-		return fallback, nil
-	}
-
 	if cached := m.configuredDriveID(); !cached.IsZero() {
 		return cached, nil
 	}
@@ -133,6 +128,11 @@ func (m *SyncStore) configuredDriveIDForRead(
 	if !configuredDriveID.IsZero() {
 		m.rememberConfiguredDriveID(configuredDriveID)
 		return configuredDriveID, nil
+	}
+
+	if !fallback.IsZero() {
+		m.rememberConfiguredDriveID(fallback)
+		return fallback, nil
 	}
 
 	return driveid.ID{}, nil

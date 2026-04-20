@@ -91,19 +91,20 @@ not a catch-all copy of every raw error string or a mixed reporting table.
 
 For permission-derived conditions, the durable mapping is access-specific:
 
-- observation-owned read denial -> `observation_issues` plus read-denial
-  `block_scopes`
+- observation-owned read denial -> `observation_issues` tagged with the
+  unreadable boundary `ScopeKey`
 - execution-owned write denial -> `block_scopes` plus blocked `retry_work`
 - raw `403` / `os.ErrPermission` without probe evidence -> no permission scope;
   fall back to ordinary retry or fatal handling
 
-Permission maintenance follows the same ownership split:
+Permission recovery follows the same ownership split:
 
-- observation-owned read scopes clear only when a later observation pass stops
-  proving the boundary
-- execution-owned write scopes clear only on affirmative permission recheck
-- startup and periodic recheck cadence live in the permission-maintenance
-  boundary, not in the engine/watch loop
+- observation-owned read boundaries clear only when a later observation pass
+  stops proving the boundary
+- execution-owned write scopes clear through normal timed trials, successful
+  writes, or cleanup that leaves no blocked work
+- block-scope timing lives in the engine/watch retry-trial loop, not in a
+  separate permission-maintenance boundary
 
 ## Boundary Rules
 
@@ -122,4 +123,4 @@ Permission maintenance follows the same ownership split:
 | --- | --- |
 | Shared failure classes | `internal/errclass/errclass_test.go` (`TestClassStringAndValidity`), `internal/config/failure_class_test.go` (`TestClassifyLoadOutcome`), `internal/cli/failure_class_test.go` (`TestClassifyCommandError`, `TestCommandFailurePresentationForClass`) |
 | Shared condition-key normalization, ordering, shared stored-condition projection, and CLI rendering tables | `internal/sync/condition_keys_test.go` (`TestConditionKeyForStoredCondition_RepresentativeMappings`, `TestConditionKeyLess_UsesCanonicalDisplayOrder`, `TestConditionKeyForIssueType_RepresentativeMappings`), `internal/sync/condition_projection_test.go` (`TestProjectStoredConditionGroups_MergesDurableAuthorities`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesConditionScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions`, `TestPrintSyncStateText_WithConditions`), `internal/cli/status_golden_test.go` (`TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`) |
-| Sync result classification foundations | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_SuccessAndShutdown`, `TestClassifyResult_HTTPPersistenceAndScopeRouting`, `TestClassifyResult_LocalPersistenceAndScopeRouting`), `internal/sync/engine_retry_trial_test.go` (`TestClearStaleRetrySweepRow_ResolvedRetryClearsRetryWork`, `TestClearStaleRetrySweepRow_SkippedRetryPersistsObservationFindings`, `TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState`, `TestRunRetrierSweep_ClearsStaleRetryWorkWithoutDispatch`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`), `internal/sync/engine_scope_lifecycle_test.go` (`TestScopeController_ApplyTrialPreserveEffects_RehomesDiskScopeRetryWork`, `TestScopeController_NormalizeDiskScope_UsesCurrentDiskState`) |
+| Sync result classification foundations | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_SuccessAndShutdown`, `TestClassifyResult_HTTPPersistenceAndScopeRouting`, `TestClassifyResult_LocalPersistenceAndScopeRouting`), `internal/sync/engine_retry_trial_test.go` (`TestClearStaleRetrySweepRow_ResolvedRetryClearsRetryWork`, `TestClearStaleRetrySweepRow_SkippedRetryPersistsObservationFindings`, `TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState`, `TestRunRetrierSweep_ClearsStaleRetryWorkWithoutDispatch`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`), `internal/sync/engine_scope_lifecycle_test.go` (`TestScopeController_ApplyTrialReclassification_RehomesDiskScopeRetryWork`), `internal/sync/store_retry_work_test.go` (`TestPruneBlockScopesWithoutBlockedWork`) |

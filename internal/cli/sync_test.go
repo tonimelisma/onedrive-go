@@ -64,7 +64,7 @@ func TestDriveReportsError(t *testing.T) {
 					},
 				},
 			},
-			wantMsg: "drive reset-sync-state --drive personal:reset@example.com",
+			wantMsg: "drive reset-sync-state --drive 'personal:reset@example.com'",
 		},
 		{
 			name: "multi-drive mixed",
@@ -701,4 +701,80 @@ sync_dir = %q
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve control socket path")
 	assert.False(t, called, "watch sync owner must stop before daemon startup when the socket path is impossible")
+}
+
+func TestRunSyncCommand_SkipsPausedInvalidDrivesDuringValidation(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	runnableSyncDir := t.TempDir()
+	configBody := fmt.Sprintf(`
+["personal:runnable@example.com"]
+sync_dir = %q
+
+["personal:paused@example.com"]
+sync_dir = "./relative-path"
+paused = true
+`, runnableSyncDir)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	var status bytes.Buffer
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: &status,
+		CfgPath:      cfgPath,
+	}
+	called := false
+	cc.syncRunOnceRunner = func(
+		_ context.Context,
+		_ *config.Holder,
+		drives []*config.ResolvedDrive,
+		mode syncengine.Mode,
+		_ syncengine.RunOptions,
+		_ *slog.Logger,
+		_ string,
+	) multisync.RunOnceResult {
+		called = true
+
+		results := make([]multisync.DriveStartupResult, 0, len(drives))
+		reports := make([]*multisync.DriveReport, 0, len(drives))
+		for i := range drives {
+			rd := drives[i]
+			if rd.Paused {
+				results = append(results, multisync.DriveStartupResult{
+					SelectionIndex: i,
+					CanonicalID:    rd.CanonicalID,
+					DisplayName:    rd.DisplayName,
+					Status:         multisync.DriveStartupPaused,
+				})
+				continue
+			}
+
+			results = append(results, multisync.DriveStartupResult{
+				SelectionIndex: i,
+				CanonicalID:    rd.CanonicalID,
+				DisplayName:    rd.DisplayName,
+				Status:         multisync.DriveStartupRunnable,
+			})
+			reports = append(reports, &multisync.DriveReport{
+				SelectionIndex: i,
+				CanonicalID:    rd.CanonicalID,
+				DisplayName:    rd.DisplayName,
+				Report: &syncengine.Report{
+					Mode: mode,
+				},
+			})
+		}
+
+		return multisync.RunOnceResult{
+			Startup: multisync.StartupSelectionSummary{Results: results},
+			Reports: reports,
+		}
+	}
+
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Contains(t, status.String(), "Skipped: drive is paused")
 }

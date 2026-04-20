@@ -38,6 +38,8 @@ type watchEvent struct {
 type watchTransition struct {
 	consumeOutboxHead bool
 	appendOutbox      []*TrackedAction
+	replaceOutbox     []*TrackedAction
+	replaceOutboxSet  bool
 	startReconcile    bool
 	beginDrain        bool
 	done              bool
@@ -126,7 +128,9 @@ func (rt *watchRuntime) applyWatchTransition(
 	if transition.consumeOutboxHead {
 		rt.consumeOutboxHead()
 	}
-	if len(transition.appendOutbox) > 0 {
+	if transition.replaceOutboxSet {
+		rt.replaceOutbox(transition.replaceOutbox)
+	} else if len(transition.appendOutbox) > 0 {
 		rt.appendOutbox(transition.appendOutbox)
 	}
 	if transition.startReconcile {
@@ -158,7 +162,15 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 			return watchTransition{}, true, outcome.terminateErr
 		}
 
-		return watchTransition{appendOutbox: outcome.dispatched}, true, nil
+		nextOutbox, err := rt.drainPublicationReadyActions(ctx, rt, p.bl, rt.currentOutbox(), outcome.dispatched)
+		if err != nil {
+			rt.completeOutboxAsShutdown(nextOutbox)
+			return watchTransition{}, true, err
+		}
+		return watchTransition{
+			replaceOutbox:    nextOutbox,
+			replaceOutboxSet: true,
+		}, true, nil
 	case watchEventCompletionsClosed:
 		if contextIsCanceled(ctx) {
 			p.completions = nil

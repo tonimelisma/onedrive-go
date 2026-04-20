@@ -682,9 +682,9 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 	scopeKey := syncengine.SKPermRemoteWrite("Shared/Docs")
 	require.NoError(t, store.UpsertBlockScope(ctx, &syncengine.BlockScope{
 		Key:           scopeKey,
-		ConditionType: syncengine.IssueRemoteWriteDenied,
-		TimingSource:  syncengine.ScopeTimingNone,
 		BlockedAt:     time.Unix(0, 0).UTC(),
+		TrialInterval: time.Minute,
+		NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 	}))
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
 		Path:          "/blocked/a.txt",
@@ -791,9 +791,9 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 	})
 	require.NoError(t, store.UpsertBlockScope(ctx, &syncengine.BlockScope{
 		Key:           scopeKey,
-		ConditionType: syncengine.IssueRemoteWriteDenied,
-		TimingSource:  syncengine.ScopeTimingNone,
 		BlockedAt:     time.Unix(0, 0).UTC(),
+		TrialInterval: time.Minute,
+		NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 	}))
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
 		Path:          "/blocked/a.txt",

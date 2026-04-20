@@ -14,9 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-const testRemoteRootItemID = "root-item"
-
-func newTestPermHandler(t *testing.T, checker PermissionChecker) (*PermissionHandler, *SyncStore, string) {
+func newTestPermHandler(t *testing.T, checker PermissionChecker) (*PermissionHandler, string) {
 	t.Helper()
 
 	syncRoot := filepath.Join(t.TempDir(), "sync")
@@ -31,32 +29,14 @@ func newTestPermHandler(t *testing.T, checker PermissionChecker) (*PermissionHan
 		driveID:     driveid.New("test-drive"),
 		logger:      newTestLogger(t),
 		nowFn:       time.Now,
-	}, store, syncRoot
-}
-
-func seedLocalPermissionDeniedIssue(t *testing.T, store *SyncStore, scopeKey ScopeKey) {
-	t.Helper()
-
-	if scopeKey.IsPermDir() {
-		issueType := IssueLocalWriteDenied
-		if scopeKey.IsPermLocalRead() {
-			issueType = IssueLocalReadDenied
-		}
-		require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-			Key:           scopeKey,
-			ConditionType: issueType,
-			TimingSource:  ScopeTimingNone,
-			BlockedAt:     time.Now(),
-		}))
-		return
-	}
+	}, syncRoot
 }
 
 // Validates: R-2.14.1
 func TestPermHandler_Handle403_NilChecker(t *testing.T) {
 	t.Parallel()
 
-	ph, _, _ := newTestPermHandler(t, nil)
+	ph, _ := newTestPermHandler(t, nil)
 
 	result := ph.handle403(t.Context(), &Baseline{}, "some/path.txt", ActionUpload)
 	assert.False(t, result.Matched)
@@ -67,7 +47,7 @@ func TestPermHandler_Handle403_NoPermissionRoot(t *testing.T) {
 	t.Parallel()
 
 	checker := &mockPermChecker{perms: map[string][]graph.Permission{}}
-	ph, _, _ := newTestPermHandler(t, checker)
+	ph, _ := newTestPermHandler(t, checker)
 
 	result := ph.handle403(t.Context(), &Baseline{}, "unmatched/path.txt", ActionUpload)
 	assert.False(t, result.Matched)
@@ -76,7 +56,7 @@ func TestPermHandler_Handle403_NoPermissionRoot(t *testing.T) {
 func TestPermHandler_HandlePermissionCheckError_NotFound(t *testing.T) {
 	t.Parallel()
 
-	ph, _, _ := newTestPermHandler(t, nil)
+	ph, _ := newTestPermHandler(t, nil)
 
 	result := ph.handlePermissionCheckError(
 		graph.ErrNotFound,
@@ -89,15 +69,13 @@ func TestPermHandler_HandlePermissionCheckError_NotFound(t *testing.T) {
 	require.NotNil(t, result.RetryWorkFailure)
 	assert.Equal(t, "failed/file.txt", result.RetryWorkFailure.Path)
 	assert.Equal(t, IssueRemoteWriteDenied, result.RetryWorkFailure.ConditionType)
-	require.NotNil(t, result.BlockScope)
-	assert.Equal(t, IssueRemoteWriteDenied, result.BlockScope.Key.ConditionType())
 	assert.Equal(t, SKPermRemoteWrite("failed"), result.ScopeKey)
 }
 
 func TestPermHandler_HandlePermissionCheckError_OtherError(t *testing.T) {
 	t.Parallel()
 
-	ph, _, _ := newTestPermHandler(t, nil)
+	ph, _ := newTestPermHandler(t, nil)
 
 	result := ph.handlePermissionCheckError(
 		errors.New("timeout"),
@@ -111,7 +89,7 @@ func TestPermHandler_HandlePermissionCheckError_OtherError(t *testing.T) {
 func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 	t.Parallel()
 
-	ph, _, syncRoot := newTestPermHandler(t, nil)
+	ph, syncRoot := newTestPermHandler(t, nil)
 
 	require.NoError(t, os.Chmod(syncRoot, 0o000))
 	r := &ActionCompletion{
@@ -131,7 +109,7 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 	t.Parallel()
 
-	ph, _, syncRoot := newTestPermHandler(t, nil)
+	ph, syncRoot := newTestPermHandler(t, nil)
 
 	subDir := filepath.Join(syncRoot, "blocked")
 	require.NoError(t, os.MkdirAll(subDir, 0o750))
@@ -148,14 +126,13 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
 	require.NotNil(t, decision.RetryWorkFailure)
 	assert.Equal(t, IssueLocalReadDenied, decision.RetryWorkFailure.ConditionType)
-	require.NotNil(t, decision.BlockScope)
-	assert.Equal(t, SKPermLocalRead("blocked"), decision.BlockScope.Key)
+	assert.Equal(t, SKPermLocalRead("blocked"), decision.ScopeKey)
 }
 
 func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 	t.Parallel()
 
-	ph, _, syncRoot := newTestPermHandler(t, nil)
+	ph, syncRoot := newTestPermHandler(t, nil)
 
 	subDir := filepath.Join(syncRoot, "accessible")
 	require.NoError(t, os.MkdirAll(subDir, 0o750))
@@ -172,237 +149,4 @@ func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
 	require.NotNil(t, decision.RetryWorkFailure)
 	assert.Equal(t, "accessible/file.txt", decision.RetryWorkFailure.Path)
-}
-
-func TestPermHandler_RecheckLocalPermissions_Restored(t *testing.T) {
-	t.Parallel()
-
-	ph, store, syncRoot := newTestPermHandler(t, nil)
-
-	subDir := filepath.Join(syncRoot, "restored")
-	require.NoError(t, os.MkdirAll(subDir, 0o750))
-
-	scopeKey := SKPermLocalWrite("restored")
-	seedLocalPermissionDeniedIssue(t, store, scopeKey)
-
-	decisions := ph.recheckLocalPermissions(t.Context())
-
-	require.Len(t, decisions, 1)
-	assert.Equal(t, permissionRecheckReleaseScope, decisions[0].Kind)
-	assert.Equal(t, scopeKey, decisions[0].ScopeKey)
-}
-
-func TestPermHandler_RecheckLocalPermissions_StillDenied(t *testing.T) {
-	t.Parallel()
-
-	ph, store, syncRoot := newTestPermHandler(t, nil)
-
-	subDir := filepath.Join(syncRoot, "blocked")
-	require.NoError(t, os.MkdirAll(subDir, 0o750))
-	require.NoError(t, os.Chmod(subDir, 0o000))
-
-	scopeKey := SKPermLocalWrite("blocked")
-	seedLocalPermissionDeniedIssue(t, store, scopeKey)
-
-	decisions := ph.recheckLocalPermissions(t.Context())
-
-	require.Len(t, decisions, 1)
-	assert.Equal(t, permissionRecheckKeepScope, decisions[0].Kind)
-}
-
-func TestPermHandler_RecheckPermissions_IgnoresObservationOwnedRemoteReadScopes(t *testing.T) {
-	t.Parallel()
-
-	checker := &mockPermChecker{}
-	ph, store, _ := newTestPermHandler(t, checker)
-	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:           SKPermRemoteRead("Shared/Docs"),
-		ConditionType: IssueRemoteReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Now(),
-	}))
-
-	decisions := ph.recheckPermissions(t.Context(), &Baseline{})
-
-	assert.Empty(t, decisions)
-}
-
-func TestPermHandler_RecheckPermissions_ReleaseRemoteWriteScopeWhenWritable(t *testing.T) {
-	t.Parallel()
-
-	checker := &mockPermChecker{
-		perms: map[string][]graph.Permission{
-			driveid.New("test-drive").String() + ":" + testRemoteRootItemID: {{
-				Roles: []string{"write"},
-			}},
-		},
-	}
-	ph, store, _ := newTestPermHandler(t, checker)
-	ph.rootItemID = testRemoteRootItemID
-	scopeKey := SKPermRemoteWrite("")
-	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:           scopeKey,
-		ConditionType: IssueRemoteWriteDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Now(),
-	}))
-
-	decisions := ph.recheckPermissions(t.Context(), &Baseline{})
-	require.Len(t, decisions, 1)
-	assert.Equal(t, permissionRecheckReleaseScope, decisions[0].Kind)
-	assert.Equal(t, scopeKey, decisions[0].ScopeKey)
-}
-
-func TestPermHandler_RecheckPermissions_KeepsRemoteWriteScopeWhenInconclusive(t *testing.T) {
-	t.Parallel()
-
-	checker := &mockPermChecker{
-		perms: map[string][]graph.Permission{
-			driveid.New("test-drive").String() + ":" + testRemoteRootItemID: {},
-		},
-	}
-	ph, store, _ := newTestPermHandler(t, checker)
-	ph.rootItemID = testRemoteRootItemID
-	scopeKey := SKPermRemoteWrite("")
-	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:           scopeKey,
-		ConditionType: IssueRemoteWriteDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Now(),
-	}))
-
-	decisions := ph.recheckPermissions(t.Context(), &Baseline{})
-	require.Len(t, decisions, 1)
-	assert.Equal(t, permissionRecheckKeepScope, decisions[0].Kind)
-	assert.Equal(t, scopeKey, decisions[0].ScopeKey)
-}
-
-// Validates: R-2.10.9
-func TestPermHandler_PeriodicMaintenancePlan_SkipsBeforeInterval(t *testing.T) {
-	t.Parallel()
-
-	ph, _, _ := newTestPermHandler(t, nil)
-	now := time.Unix(1700000000, 0)
-	ph.nowFn = func() time.Time { return now }
-
-	plan := ph.periodicMaintenancePlan(
-		t.Context(),
-		&Baseline{},
-		now.Add(-(permissionMaintenanceInterval - time.Second)),
-		false,
-	)
-
-	assert.False(t, plan.UpdateLastCheckedAt)
-	assert.True(t, plan.CheckedAt.IsZero())
-	assert.Empty(t, plan.Decisions)
-}
-
-// Validates: R-2.10.5, R-2.10.9
-func TestPermHandler_PeriodicMaintenancePlan_ObservationSuppressedSkipsRemoteButKeepsLocal(t *testing.T) {
-	t.Parallel()
-
-	checker := &mockPermChecker{
-		perms: map[string][]graph.Permission{
-			driveid.New("test-drive").String() + ":" + testRemoteRootItemID: {{
-				Roles: []string{"write"},
-			}},
-		},
-	}
-	ph, store, syncRoot := newTestPermHandler(t, checker)
-	now := time.Unix(1700000000, 0)
-	ph.nowFn = func() time.Time { return now }
-	ph.rootItemID = testRemoteRootItemID
-
-	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "restored"), 0o750))
-
-	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:           SKPermRemoteWrite(""),
-		ConditionType: IssueRemoteWriteDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     now,
-	}))
-	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:           SKPermLocalWrite("restored"),
-		ConditionType: IssueLocalWriteDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     now,
-	}))
-
-	plan := ph.periodicMaintenancePlan(t.Context(), &Baseline{}, time.Time{}, true)
-
-	require.True(t, plan.UpdateLastCheckedAt)
-	assert.Equal(t, now, plan.CheckedAt)
-	require.Len(t, plan.Decisions, 1)
-	assert.Equal(t, permissionRecheckReleaseScope, plan.Decisions[0].Kind)
-	assert.Equal(t, SKPermLocalWrite("restored"), plan.Decisions[0].ScopeKey)
-}
-
-// Validates: R-2.10.5, R-2.10.9
-func TestScopeController_RunPeriodicPermissionMaintenance_AppliesDuePlanAndUpdatesTimestamp(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	rt := testWatchRuntime(t, eng)
-	now := time.Unix(1700000000, 0)
-	eng.nowFn = func() time.Time { return now }
-	eng.permHandler.nowFn = eng.nowFn
-
-	require.NoError(t, os.MkdirAll(filepath.Join(eng.syncRoot, "restored"), 0o750))
-
-	scopeKey := SKPermLocalWrite("restored")
-	setTestBlockScope(t, eng, &BlockScope{
-		Key:           scopeKey,
-		ConditionType: IssueLocalWriteDenied,
-		BlockedAt:     now.Add(-time.Minute),
-	})
-
-	bl, err := eng.baseline.Load(t.Context())
-	require.NoError(t, err)
-
-	rt.scopeController().runPermissionMaintenance(t.Context(), rt, bl, permissionMaintenanceRequest{
-		Reason: permissionMaintenancePeriodic,
-	})
-
-	assert.False(t, isTestBlockScopeed(eng, scopeKey))
-	assert.Equal(t, now, rt.lastPermRecheck)
-
-	rt.scopeController().runPermissionMaintenance(t.Context(), rt, bl, permissionMaintenanceRequest{
-		Reason: permissionMaintenancePeriodic,
-	})
-	assert.Equal(t, now, rt.lastPermRecheck, "throttled recheck should not advance timestamp")
-}
-
-func TestPermHandler_StartupRecheckDecisions_CombineRemoteAndLocalMaintenance(t *testing.T) {
-	t.Parallel()
-
-	checker := &mockPermChecker{
-		perms: map[string][]graph.Permission{
-			driveid.New("test-drive").String() + ":" + testRemoteRootItemID: {{
-				Roles: []string{"write"},
-			}},
-		},
-	}
-	ph, store, syncRoot := newTestPermHandler(t, checker)
-	ph.rootItemID = testRemoteRootItemID
-	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "restored"), 0o750))
-
-	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:           SKPermRemoteWrite(""),
-		ConditionType: IssueRemoteWriteDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Now(),
-	}))
-	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:           SKPermLocalWrite("restored"),
-		ConditionType: IssueLocalWriteDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Now(),
-	}))
-
-	decisions := ph.startupRecheckDecisions(t.Context(), &Baseline{})
-	require.Len(t, decisions, 2)
-	assert.ElementsMatch(t,
-		[]ScopeKey{SKPermRemoteWrite(""), SKPermLocalWrite("restored")},
-		[]ScopeKey{decisions[0].ScopeKey, decisions[1].ScopeKey},
-	)
 }

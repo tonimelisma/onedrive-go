@@ -364,14 +364,9 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 	}
 	eng.logVerifiedDrive(proof)
 
-	bl, err := eng.baseline.Load(ctx)
-	if err != nil {
+	if _, err := eng.baseline.Load(ctx); err != nil {
 		return fmt.Errorf("sync: loading baseline: %w", err)
 	}
-
-	flow.scopeController().runPermissionMaintenance(ctx, nil, bl, permissionMaintenanceRequest{
-		Reason: permissionMaintenanceStartup,
-	})
 
 	return nil
 }
@@ -696,9 +691,7 @@ func (flow *engineFlow) loadCurrentActionPlanInputsTx(
 	remoteRows, err := queryRemoteStateRowsWithRunner(
 		ctx,
 		tx,
-		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path
-		FROM remote_state`,
+		`SELECT `+sqlSelectRemoteStateCols+` FROM remote_state`,
 		configuredDriveID,
 	)
 	if err != nil {
@@ -883,12 +876,6 @@ func (flow *engineFlow) observeLocalChanges(
 
 	flow.reconcileSkippedObservationFindings(ctx, watch, localResult.Skipped)
 
-	pathSet := pathSetFromLocalRows(localResult.Rows)
-	flow.scopeController().runPermissionMaintenance(ctx, watch, bl, permissionMaintenanceRequest{
-		Reason:       permissionMaintenanceLocalObservation,
-		ChangedPaths: pathSet,
-	})
-
 	return localResult, nil
 }
 
@@ -930,16 +917,18 @@ func (flow *engineFlow) commitPendingPrimaryCursor(
 	ctx context.Context,
 	pending *pendingPrimaryCursorCommit,
 ) error {
-	if pending == nil || pending.token == "" {
+	if pending == nil {
 		return nil
 	}
 
-	if err := flow.engine.baseline.CommitObservationCursor(
-		ctx,
-		driveid.New(pending.driveID),
-		pending.token,
-	); err != nil {
-		return fmt.Errorf("sync: committing primary observation cursor for root %q: %w", pending.rootID, err)
+	if pending.token != "" {
+		if err := flow.engine.baseline.CommitObservationCursor(
+			ctx,
+			driveid.New(pending.driveID),
+			pending.token,
+		); err != nil {
+			return fmt.Errorf("sync: committing primary observation cursor for root %q: %w", pending.rootID, err)
+		}
 	}
 	if pending.markFullRemoteReconcile {
 		if err := flow.engine.baseline.MarkFullRemoteReconcile(

@@ -55,22 +55,33 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []StoredConditi
 		}
 
 		projection := blockedByScope[block.Key]
-		count := projection.Count
-		if count == 0 {
-			count = 1
+		groupKey := storedConditionGroupKey{
+			conditionKey: ConditionKeyForStoredCondition(block.Key.ConditionType(), block.Key),
+			scopeKey:     block.Key.String(),
+		}
+		existingCount := 0
+		if idx, ok := groupIndex[groupKey]; ok {
+			existingCount = groups[idx].Count
 		}
 
 		group := ensureStoredConditionGroup(
 			&groups,
 			groupIndex,
-			ConditionKeyForStoredCondition(block.ConditionType, block.Key),
-			block.ConditionType,
+			groupKey.conditionKey,
+			block.Key.ConditionType(),
 			block.Key,
 		)
 		if group == nil {
 			continue
 		}
-		group.Count += count
+		if projection.Count > 0 {
+			group.Count += projection.Count
+		} else if existingCount == 0 {
+			// A scope with no linked blocked rows still contributes one active
+			// condition, but do not double count when observation rows already
+			// carry the same scope key.
+			group.Count++
+		}
 		if len(projection.Paths) > 0 {
 			group.Paths = append(group.Paths, projection.Paths...)
 		}

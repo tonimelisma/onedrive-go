@@ -312,7 +312,10 @@ func enrichSharedTarget(
 	target *sharedDiscoveryTarget,
 	logger *slog.Logger,
 ) {
-	if target == nil || target.OwnerIdentityStatus == sharedOwnerIdentityStatusAvailable {
+	if target == nil {
+		return
+	}
+	if target.SharedByName != "" && target.SharedByEmail != "" {
 		return
 	}
 

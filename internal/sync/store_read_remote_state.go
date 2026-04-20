@@ -18,13 +18,13 @@ import (
 )
 
 const (
-	sqlGetRemoteStateByPath = `SELECT item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path
+	sqlSelectRemoteStateCols = `drive_id, item_id, path, parent_id, item_type,
+		hash, size, mtime, etag, content_identity, previous_path`
+	sqlGetRemoteStateByPath = `SELECT ` + sqlSelectRemoteStateCols + `
 		FROM remote_state
 		WHERE path = ?`
 
-	sqlGetRemoteStateByID = `SELECT item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path
+	sqlGetRemoteStateByID = `SELECT ` + sqlSelectRemoteStateCols + `
 		FROM remote_state
 		WHERE item_id = ?`
 )
@@ -37,9 +37,7 @@ func (m *SyncStore) ListRemoteState(ctx context.Context) ([]RemoteStateRow, erro
 	}
 
 	return queryRemoteStateRowsWithRunner(ctx, m.db,
-		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path
-		FROM remote_state`,
+		`SELECT `+sqlSelectRemoteStateCols+` FROM remote_state`,
 		configuredDriveID,
 	)
 }
@@ -61,27 +59,31 @@ func queryRemoteStateRowsWithRunner(
 
 	for rows.Next() {
 		var (
-			row      RemoteStateRow
-			parentID sql.NullString
-			hash     sql.NullString
-			size     sql.NullInt64
-			mtime    sql.NullInt64
-			etag     sql.NullString
-			prevPath sql.NullString
+			rawDriveID      string
+			row             RemoteStateRow
+			parentID        sql.NullString
+			hash            sql.NullString
+			size            sql.NullInt64
+			mtime           sql.NullInt64
+			etag            sql.NullString
+			contentIdentity sql.NullString
+			prevPath        sql.NullString
 		)
 
 		if err := rows.Scan(
-			&row.ItemID, &row.Path, &parentID, &row.ItemType,
+			&rawDriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
 			&hash, &size, &mtime, &etag,
+			&contentIdentity,
 			&prevPath,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
 		}
 
-		row.DriveID = configuredDriveID
+		row.DriveID = remoteStateDriveID(rawDriveID, configuredDriveID)
 		row.ParentID = parentID.String
 		row.Hash = hash.String
 		row.ETag = etag.String
+		row.ContentIdentity = contentIdentity.String
 		row.PreviousPath = prevPath.String
 
 		if size.Valid {
@@ -151,31 +153,35 @@ func (m *SyncStore) GetRemoteStateByID(
 }
 
 func scanRemoteStateRowWithQuerier(
-	configuredDriveID driveid.ID,
+	fallbackDriveID driveid.ID,
 	scan func(dest ...any) error,
 ) (*RemoteStateRow, error) {
 	var (
-		row      RemoteStateRow
-		parentID sql.NullString
-		hash     sql.NullString
-		size     sql.NullInt64
-		mtime    sql.NullInt64
-		etag     sql.NullString
-		prevPath sql.NullString
+		rawDriveID      string
+		row             RemoteStateRow
+		parentID        sql.NullString
+		hash            sql.NullString
+		size            sql.NullInt64
+		mtime           sql.NullInt64
+		etag            sql.NullString
+		contentIdentity sql.NullString
+		prevPath        sql.NullString
 	)
 
 	if err := scan(
-		&row.ItemID, &row.Path, &parentID, &row.ItemType,
+		&rawDriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
+		&contentIdentity,
 		&prevPath,
 	); err != nil {
 		return nil, err
 	}
 
-	row.DriveID = configuredDriveID
+	row.DriveID = remoteStateDriveID(rawDriveID, fallbackDriveID)
 	row.ParentID = parentID.String
 	row.Hash = hash.String
 	row.ETag = etag.String
+	row.ContentIdentity = contentIdentity.String
 	row.PreviousPath = prevPath.String
 
 	if size.Valid {
@@ -186,4 +192,12 @@ func scanRemoteStateRowWithQuerier(
 	}
 
 	return &row, nil
+}
+
+func remoteStateDriveID(rawDriveID string, fallback driveid.ID) driveid.ID {
+	if rawDriveID != "" {
+		return driveid.New(rawDriveID)
+	}
+
+	return fallback
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,9 +30,9 @@ func TestResetStateDB_RecreatesFreshCanonicalStore(t *testing.T) {
 	})
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           SKService(),
-		ConditionType: IssueServiceOutage,
-		TimingSource:  ScopeTimingNone,
 		BlockedAt:     store.nowFunc(),
+		TrialInterval: time.Minute,
+		NextTrialAt:   store.nowFunc().Add(time.Minute),
 	}))
 	require.NoError(t, store.Close(context.Background()))
 

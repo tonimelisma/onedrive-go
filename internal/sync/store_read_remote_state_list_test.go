@@ -49,3 +49,69 @@ func TestSyncStore_ListRemoteStateAndRejectMismatchedDriveLookup(t *testing.T) {
 	require.NotNil(t, row)
 	assert.Equal(t, "item-a", row.ItemID)
 }
+
+// Validates: R-2.2
+func TestSyncStore_ListRemoteState_PreservesPerRowDriveOwnership(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	configuredDriveID := driveid.New("configured-drive")
+	sharedDriveID := driveid.New("shared-drive")
+
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
+		{
+			DriveID:  configuredDriveID,
+			ItemID:   "item-configured",
+			ParentID: "root",
+			Path:     "docs/configured.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "hash-configured",
+		},
+		{
+			DriveID:  sharedDriveID,
+			ItemID:   "item-shared",
+			ParentID: "shared-root",
+			Path:     "Shared/shared.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "hash-shared",
+		},
+	}, "delta-token", configuredDriveID))
+
+	rows, err := store.ListRemoteState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+
+	byPath := make(map[string]RemoteStateRow, len(rows))
+	for i := range rows {
+		byPath[rows[i].Path] = rows[i]
+	}
+
+	assert.Equal(t, configuredDriveID, byPath["docs/configured.txt"].DriveID)
+	assert.Equal(t, sharedDriveID, byPath["Shared/shared.txt"].DriveID)
+}
+
+// Validates: R-2.2
+func TestSyncStore_GetRemoteStateByPath_RejectsMismatchedDriveWhenStateAlreadyConfigured(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	configuredDriveID := driveid.New("configured-drive")
+	attemptedDriveID := driveid.New("attempted-drive")
+
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  configuredDriveID,
+		ItemID:   "item-a",
+		ParentID: "root",
+		Path:     "docs/a.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash-a",
+	}}, "delta-token", configuredDriveID))
+
+	row, found, err := store.GetRemoteStateByPath(ctx, "docs/a.txt", attemptedDriveID)
+	require.Error(t, err)
+	assert.Nil(t, row)
+	assert.False(t, found)
+	assert.Contains(t, err.Error(), "state DB drive mismatch")
+}

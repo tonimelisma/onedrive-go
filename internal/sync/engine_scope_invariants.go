@@ -177,6 +177,11 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing retry_work rows: %w", err)
 	}
+	observationIssues, err := flow.engine.baseline.ListObservationIssues(ctx)
+	if err != nil {
+		return fmt.Errorf("listing observation_issues rows: %w", err)
+	}
+	links := summarizePersistedScopeLinks(retryWork, observationIssues)
 
 	seenBlocks := make(map[ScopeKey]struct{}, len(blocks))
 	for i := range blocks {
@@ -190,6 +195,9 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 			return fmt.Errorf("duplicate persisted block scope %s", blocks[i].Key.String())
 		}
 		seenBlocks[blocks[i].Key] = struct{}{}
+		if !links.hasRelatedRows(blocks[i].Key) {
+			return fmt.Errorf("persisted block scope %s has no related observation_issues or retry_work rows", blocks[i].Key.String())
+		}
 	}
 
 	for i := range retryWork {
@@ -208,6 +216,41 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+type persistedScopeLinks struct {
+	observationCountByScope map[ScopeKey]int
+	retryCountByScope       map[ScopeKey]int
+}
+
+func summarizePersistedScopeLinks(
+	retryWork []RetryWorkRow,
+	observationIssues []ObservationIssueRow,
+) persistedScopeLinks {
+	links := persistedScopeLinks{
+		observationCountByScope: make(map[ScopeKey]int),
+		retryCountByScope:       make(map[ScopeKey]int),
+	}
+
+	for i := range retryWork {
+		if retryWork[i].ScopeKey.IsZero() {
+			continue
+		}
+		links.retryCountByScope[retryWork[i].ScopeKey]++
+	}
+
+	for i := range observationIssues {
+		if observationIssues[i].ScopeKey.IsZero() {
+			continue
+		}
+		links.observationCountByScope[observationIssues[i].ScopeKey]++
+	}
+
+	return links
+}
+
+func (links persistedScopeLinks) hasRelatedRows(key ScopeKey) bool {
+	return links.retryCountByScope[key] > 0 || links.observationCountByScope[key] > 0
 }
 
 func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {

@@ -220,6 +220,43 @@ func TestLogoutCommand_PurgeRemovesCatalogAccountAndDrive(t *testing.T) {
 	assert.Contains(t, out.String(), "Sync directories untouched")
 }
 
+func TestLogoutCommand_PurgeFallsBackWhenValidatedStateIsBroken(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("business:alice@contoso.com")
+	syncDir := filepath.Join(t.TempDir(), "sync")
+	require.NoError(t, os.MkdirAll(syncDir, 0o700))
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_alice@contoso.com.json")
+	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("fake-db"), 0o600))
+
+	var out bytes.Buffer
+	var logs bytes.Buffer
+	cc := newCommandContext(&out, cfgPath)
+	cc.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cc.Flags.Account = cid.Email()
+
+	require.NoError(t, runLogoutWithContext(cc, true))
+
+	_, tokenErr := os.Stat(config.DriveTokenPath(cid))
+	assert.True(t, os.IsNotExist(tokenErr), "purge fallback should remove token file")
+
+	_, stateErr := os.Stat(config.DriveStatePath(cid))
+	assert.True(t, os.IsNotExist(stateErr), "purge fallback should remove state DB")
+
+	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Drives, "purge fallback should remove broken config drive section")
+
+	_, found := loadCatalogAccount(t, cid)
+	assert.False(t, found, "purge fallback should remove recoverable catalog account state")
+
+	assert.Contains(t, logs.String(), "validated logout state unavailable")
+	assert.Contains(t, out.String(), "Sync directories untouched")
+}
+
 // Validates: R-3.3.8, R-3.1.5
 func TestDriveRemove_PurgePreservesCatalogAccount(t *testing.T) {
 	setTestDriveHome(t)

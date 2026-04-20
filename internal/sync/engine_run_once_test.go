@@ -297,16 +297,12 @@ func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
 	}))
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
-		ConditionType: IssueServiceOutage,
-		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Unix(100, 0),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(160, 0),
 	}))
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKThrottleDrive(driveid.New("drive1")),
-		ConditionType: IssueRateLimited,
-		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Unix(200, 0),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(260, 0),
@@ -493,7 +489,7 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 
 	liveBlockScopes, err := eng.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, liveBlockScopes, "dry-run read scopes must stay out of the durable store")
+	assert.Empty(t, liveBlockScopes, "dry-run read boundaries must stay out of block_scopes")
 
 	savedToken := readObservationCursorForTest(t, eng.baseline, ctx, driveID.String())
 	assert.Equal(t, "token-live-before-dry-run", savedToken)
@@ -523,10 +519,10 @@ func TestBuildDryRunCurrentActionPlan_ObservationFindingsStayScratchOnly(t *test
 		ScopeKey:   SKPermRemoteRead(""),
 	})
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermRemoteRead(""),
-		ConditionType: IssueRemoteReadDenied,
-		TimingSource:  ScopeTimingNone,
+		Key:           SKPermRemoteWrite(""),
 		BlockedAt:     time.Unix(100, 0),
+		TrialInterval: time.Minute,
+		NextTrialAt:   time.Unix(160, 0),
 	}))
 
 	bl, err := eng.baseline.Load(ctx)
@@ -544,7 +540,7 @@ func TestBuildDryRunCurrentActionPlan_ObservationFindingsStayScratchOnly(t *test
 	liveBlockScopes, err := eng.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	require.Len(t, liveBlockScopes, 1)
-	assert.Equal(t, SKPermRemoteRead(""), liveBlockScopes[0].Key)
+	assert.Equal(t, SKPermRemoteWrite(""), liveBlockScopes[0].Key)
 }
 
 // Validates: R-2.1.1, R-3.3.12
@@ -679,6 +675,55 @@ func TestRunOnce_DryRun_SharedConfiguredRootDoesNotSaveScopedDeltaToken(t *testi
 
 	token := readObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
 	assert.Empty(t, token)
+}
+
+// Validates: R-2.1.2
+func TestRunOnce_SharedConfiguredRootEnumerateStillPersistsFullReconcileCadenceWithoutToken(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	listCalls := 0
+	mock := &engineMockClient{
+		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
+			listCalls++
+			assert.Equal(t, driveID, gotDriveID)
+			assert.Equal(t, "shared-root", folderID)
+			return nil, nil
+		},
+	}
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	syncRoot := filepath.Join(tmpDir, "sync")
+	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
+
+	eng, err := newEngine(t.Context(), &engineInputs{
+		DBPath:          dbPath,
+		SyncRoot:        syncRoot,
+		DriveID:         driveID,
+		RootItemID:      "shared-root",
+		Fetcher:         mock,
+		Items:           mock,
+		Downloads:       mock,
+		Uploads:         mock,
+		RecursiveLister: mock,
+		PermChecker:     mock,
+		Logger:          testLogger(t),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, eng.Close(t.Context()))
+	})
+
+	_, err = eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, listCalls)
+
+	state, err := eng.baseline.ReadObservationState(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, state.Cursor)
+	assert.NotZero(t, state.LastFullRemoteRefreshAt)
+	assert.NotZero(t, state.NextFullRemoteRefreshAt)
 }
 
 func TestRunOnce_ExecutorPartialFailure(t *testing.T) {

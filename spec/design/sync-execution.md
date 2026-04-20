@@ -46,8 +46,9 @@ The engine owns the worker pool lifecycle and completion drain.
 When the dependency graph releases `ActionUpdateSynced` or `ActionCleanup`,
 the engine does not spend worker capacity on them. It commits the matching
 baseline mutation synchronously, classifies the synthetic success/failure
-completion through the same engine-owned completion path, and then releases any
-dependents that became ready.
+completion through the same engine-owned completion path, drains any further
+publication-only dependents on the engine/store side, and only then releases
+concrete dependents for worker dispatch.
 
 ## Publication-Only Actions
 
@@ -137,6 +138,10 @@ helper functions over an engine-owned slice of active block scopes.
 
 Execution itself does not decide whether an action is blocked. The engine asks
 those helpers before dispatch and after action completions.
+
+Scope admission evaluates both the action's current path and, for moves, the
+source `OldPath`. A move whose source subtree is blocked stays blocked even if
+its destination path is outside the blocked subtree.
 
 ## What Execution No Longer Owns
 

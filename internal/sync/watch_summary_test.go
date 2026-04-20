@@ -2,6 +2,7 @@ package sync
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -44,8 +45,18 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 			{IssueType: IssueRemoteReadDenied, ScopeKey: SKPermRemoteRead("Shared/Docs")},
 		},
 		BlockScopes: []*BlockScope{
-			{Key: SKPermRemoteWrite("Shared/Docs"), ConditionType: IssueRemoteWriteDenied},
-			{Key: SKService(), ConditionType: IssueServiceOutage},
+			{
+				Key:           SKPermRemoteWrite("Shared/Docs"),
+				BlockedAt:     time.Unix(0, 0).UTC(),
+				TrialInterval: time.Minute,
+				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
+			},
+			{
+				Key:           SKService(),
+				BlockedAt:     time.Unix(0, 0).UTC(),
+				TrialInterval: time.Minute,
+				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
+			},
 		},
 		BlockedRetryWork: []RetryWorkRow{
 			{ScopeKey: SKPermRemoteWrite("Shared/Docs"), Path: "Shared/Docs/a.txt"},
@@ -68,4 +79,24 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 			BlockedPaths: []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt"},
 		},
 	}, groups)
+}
+
+// Validates: R-2.10.47
+func TestBuildWatchConditionSummary_RemoteBlockedGroupsOnlyTrackActiveScopes(t *testing.T) {
+	t.Parallel()
+
+	summary, groups := buildWatchConditionSummary(&DriveStatusSnapshot{
+		ObservationIssues: []ObservationIssueRow{{
+			Path:      "Shared/Docs/file.txt",
+			IssueType: IssueRemoteWriteDenied,
+			ScopeKey:  SKPermRemoteWrite("Shared/Docs"),
+		}},
+	})
+
+	assert.Equal(t, 1, summary.ConditionTotal)
+	assert.Equal(t, []watchConditionCount{{
+		Key:   ConditionRemoteWriteDenied,
+		Count: 1,
+	}}, summary.Counts)
+	assert.Empty(t, groups)
 }

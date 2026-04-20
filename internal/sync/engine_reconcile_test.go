@@ -579,8 +579,7 @@ func TestObserveRemoteChanges_RemoteReadDeniedPersistsObservationFindings(t *tes
 
 	scopes, err := e.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
-	require.Len(t, scopes, 1)
-	assert.Equal(t, SKPermRemoteRead(""), scopes[0].Key)
+	assert.Empty(t, scopes, "remote read-denied observation is tracked as an issue row, not a block scope")
 }
 
 // ---------------------------------------------------------------------------

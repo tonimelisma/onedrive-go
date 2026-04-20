@@ -258,7 +258,7 @@ func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoDriveStarts(t *testi
 		},
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "drive reset-sync-state --drive "+cid.String())
+	assert.Contains(t, err.Error(), "drive reset-sync-state --drive '"+cid.String()+"'")
 }
 
 func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
@@ -300,7 +300,7 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	assert.Contains(t, status.String(), "pause --drive "+cid.String())
-	assert.Contains(t, status.String(), "drive reset-sync-state --drive "+cid.String())
+	assert.Contains(t, status.String(), "pause --drive '"+cid.String()+"'")
+	assert.Contains(t, status.String(), "drive reset-sync-state --drive '"+cid.String()+"'")
 	assert.Contains(t, status.String(), "--drive selecting only other drives")
 }

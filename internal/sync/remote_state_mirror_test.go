@@ -15,26 +15,25 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 	t.Helper()
 
 	var (
-		row      RemoteStateRow
-		parentID sql.NullString
-		hash     sql.NullString
-		size     sql.NullInt64
-		mtime    sql.NullInt64
-		etag     sql.NullString
-		prevPath sql.NullString
+		rawDriveID      string
+		row             RemoteStateRow
+		parentID        sql.NullString
+		hash            sql.NullString
+		size            sql.NullInt64
+		mtime           sql.NullInt64
+		etag            sql.NullString
+		contentIdentity sql.NullString
+		prevPath        sql.NullString
 	)
 
-	configuredDriveID, driveErr := configuredDriveIDForDB(t.Context(), db)
-	require.NoError(t, driveErr)
-
 	err := db.QueryRowContext(t.Context(),
-		`SELECT item_id, path, parent_id, item_type, hash, size, mtime, etag,
-			previous_path
+		`SELECT `+sqlSelectRemoteStateCols+`
 		FROM remote_state WHERE item_id = ?`,
 		itemID,
 	).Scan(
-		&row.ItemID, &row.Path, &parentID, &row.ItemType,
+		&rawDriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
 		&hash, &size, &mtime, &etag,
+		&contentIdentity,
 		&prevPath,
 	)
 	if err == sql.ErrNoRows {
@@ -43,10 +42,11 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 
 	require.NoError(t, err)
 
-	row.DriveID = configuredDriveID
+	row.DriveID = remoteStateDriveID(rawDriveID, driveid.ID{})
 	row.ParentID = parentID.String
 	row.Hash = hash.String
 	row.ETag = etag.String
+	row.ContentIdentity = contentIdentity.String
 	row.PreviousPath = prevPath.String
 	if size.Valid {
 		row.Size = size.Int64
@@ -163,6 +163,42 @@ func TestCommitObservation_MoveUpdatesPreviousPath(t *testing.T) {
 	require.NotNil(t, row)
 	assert.Equal(t, "new.txt", row.Path)
 	assert.Equal(t, "old.txt", row.PreviousPath)
+}
+
+// Validates: R-2.2
+func TestCommitObservation_PreservesObservedDriveIDPerRemoteStateRow(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := context.Background()
+	configuredDriveID := driveid.New(testDriveID)
+	sharedDriveID := driveid.New("shared-drive-id")
+
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  sharedDriveID,
+		ItemID:   "shared-item",
+		ParentID: "shared-root",
+		Path:     "Shared/inside.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "shared-hash",
+		Size:     64,
+		Mtime:    1234,
+		ETag:     "shared-etag",
+	}}, "delta-token-shared", configuredDriveID))
+
+	state, err := mgr.ReadObservationState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, configuredDriveID, state.ConfiguredDriveID)
+
+	row := readRemoteStateRow(t, mgr.rawDB(), "shared-item")
+	require.NotNil(t, row)
+	assert.Equal(t, sharedDriveID, row.DriveID)
+	assert.Equal(t, "Shared/inside.txt", row.Path)
+
+	rows, err := mgr.ListRemoteState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, sharedDriveID, rows[0].DriveID)
 }
 
 // Validates: R-2.2

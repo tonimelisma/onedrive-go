@@ -39,7 +39,7 @@ type trialHint int
 const (
 	trialHintRelease trialHint = iota
 	trialHintExtendOnMatchingScope
-	trialHintPreserve
+	trialHintReclassify
 	trialHintShutdown
 	trialHintFatal
 )
@@ -106,7 +106,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			Class:          resultSkip,
 			Persistence:    persistRetryWork,
 			PermissionFlow: permissionDecisionFlow,
-			TrialHint:      trialHintPreserve,
+			TrialHint:      trialHintReclassify,
 			ConditionType:  conditionType,
 		}), true
 	case r.HTTPStatus == http.StatusTooManyRequests:
@@ -151,7 +151,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 		return withRuntimeSummary(&ResultDecision{
 			Class:         resultSkip,
 			Persistence:   persistRetryWork,
-			TrialHint:     trialHintPreserve,
+			TrialHint:     trialHintReclassify,
 			ConditionType: conditionType,
 		}), true
 	}
@@ -173,7 +173,7 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 		return withRuntimeSummary(&ResultDecision{
 			Class:         resultRequeue,
 			Persistence:   persistRetryWork,
-			TrialHint:     trialHintPreserve,
+			TrialHint:     trialHintReclassify,
 			ConditionType: "transient_conflict",
 		})
 	case errors.Is(r.Err, driveops.ErrDiskFull):
@@ -189,14 +189,14 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 		return withRuntimeSummary(&ResultDecision{
 			Class:         resultSkip,
 			Persistence:   persistRetryWork,
-			TrialHint:     trialHintPreserve,
+			TrialHint:     trialHintReclassify,
 			ConditionType: conditionType,
 		})
 	case errors.Is(r.Err, driveops.ErrFileExceedsOneDriveLimit):
 		return withRuntimeSummary(&ResultDecision{
 			Class:         resultSkip,
 			Persistence:   persistRetryWork,
-			TrialHint:     trialHintPreserve,
+			TrialHint:     trialHintReclassify,
 			ConditionType: conditionType,
 		})
 	case errors.Is(r.Err, os.ErrPermission):
@@ -204,14 +204,14 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 			Class:          resultSkip,
 			Persistence:    persistRetryWork,
 			PermissionFlow: permissionDecisionFlow,
-			TrialHint:      trialHintPreserve,
+			TrialHint:      trialHintReclassify,
 			ConditionType:  conditionType,
 		})
 	default:
 		return withRuntimeSummary(&ResultDecision{
 			Class:         resultSkip,
 			Persistence:   persistRetryWork,
-			TrialHint:     trialHintPreserve,
+			TrialHint:     trialHintReclassify,
 			ConditionType: conditionType,
 		})
 	}

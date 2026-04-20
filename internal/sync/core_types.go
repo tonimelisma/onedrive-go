@@ -12,11 +12,11 @@ import (
 // observation time. The scanner collects these alongside events so the
 // engine can persist them as durable observation issues.
 type SkippedItem struct {
-	Path            string // NFC-normalized, relative to sync root
-	Reason          string // issue type constant (IssueInvalidFilename, etc.)
-	Detail          string // human-readable explanation
-	FileSize        int64  // populated for IssueFileTooLarge (after stat)
-	BlocksReadScope bool   // true when observation proved an unreadable subtree boundary
+	Path               string // NFC-normalized, relative to sync root
+	Reason             string // issue type constant (IssueInvalidFilename, etc.)
+	Detail             string // human-readable explanation
+	FileSize           int64  // populated for IssueFileTooLarge (after stat)
+	BlocksReadBoundary bool   // true when observation proved an unreadable subtree boundary
 }
 
 // ScanResult is the return type of FullScan. Rows are the direct current local
@@ -351,8 +351,6 @@ type TruthAvailability string
 const (
 	TruthAvailabilityAvailable               TruthAvailability = "available"
 	TruthAvailabilityBlockedObservationIssue TruthAvailability = "blocked_observation_issue"
-	TruthAvailabilityBlockedLocalReadScope   TruthAvailability = "blocked_local_read_scope"
-	TruthAvailabilityBlockedRemoteReadScope  TruthAvailability = "blocked_remote_read_scope"
 )
 
 // PathTruthSource captures which durable authority proved that one side of
@@ -362,7 +360,6 @@ type PathTruthSource string
 const (
 	PathTruthSourceNone             PathTruthSource = ""
 	PathTruthSourceObservationIssue PathTruthSource = "observation_issue"
-	PathTruthSourceReadScope        PathTruthSource = "read_scope"
 )
 
 // PathTruthSideStatus is the raw current-truth availability status for one

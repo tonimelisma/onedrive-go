@@ -10,21 +10,20 @@ import (
 )
 
 // Validates: R-2.1.2, R-2.10.4
-func TestLocalObservationFindingsBatchFromSkippedItems_UnreadableDirectoryCreatesBoundaryIssueAndReadScope(t *testing.T) {
+func TestLocalObservationFindingsBatchFromSkippedItems_UnreadableDirectoryCreatesBoundaryIssue(t *testing.T) {
 	t.Parallel()
 
 	batch := localObservationFindingsBatchFromSkippedItems(driveid.New(testDriveID), []SkippedItem{{
-		Path:            "Private",
-		Reason:          IssueLocalReadDenied,
-		Detail:          "directory not accessible",
-		BlocksReadScope: true,
+		Path:               "Private",
+		Reason:             IssueLocalReadDenied,
+		Detail:             "directory not accessible",
+		BlocksReadBoundary: true,
 	}})
 
 	require.Len(t, batch.Issues, 1)
 	assert.Equal(t, "Private", batch.Issues[0].Path)
 	assert.Equal(t, IssueLocalReadDenied, batch.Issues[0].IssueType)
 	assert.Equal(t, SKPermLocalRead("Private"), batch.Issues[0].ScopeKey)
-	assert.Equal(t, []ScopeKey{SKPermLocalRead("Private")}, batch.ReadScopes)
 	assert.ElementsMatch(t, []string{
 		IssueInvalidFilename,
 		IssuePathTooLong,
@@ -33,7 +32,6 @@ func TestLocalObservationFindingsBatchFromSkippedItems_UnreadableDirectoryCreate
 		IssueLocalReadDenied,
 		IssueHashPanic,
 	}, batch.ManagedIssueTypes)
-	assert.Equal(t, []ScopeKeyKind{ScopePermDirRead}, batch.ManagedReadScopeKinds)
 }
 
 // Validates: R-2.1.2, R-2.10.4
@@ -45,10 +43,10 @@ func TestSinglePathObservationFindingsBatch_UnreadableDescendantKeepsBoundaryIss
 		"Private/sub/file.txt",
 		&SinglePathObservation{
 			Skipped: &SkippedItem{
-				Path:            "Private",
-				Reason:          IssueLocalReadDenied,
-				Detail:          "directory not accessible",
-				BlocksReadScope: true,
+				Path:               "Private",
+				Reason:             IssueLocalReadDenied,
+				Detail:             "directory not accessible",
+				BlocksReadBoundary: true,
 			},
 		},
 	)
@@ -57,16 +55,11 @@ func TestSinglePathObservationFindingsBatch_UnreadableDescendantKeepsBoundaryIss
 	require.Len(t, batch.Issues, 1)
 	assert.Equal(t, "Private", batch.Issues[0].Path, "single-path observation should persist the denied boundary, not the descendant")
 	assert.Equal(t, SKPermLocalRead("Private"), batch.Issues[0].ScopeKey)
-	assert.Equal(t, []ScopeKey{SKPermLocalRead("Private")}, batch.ReadScopes)
 	assert.ElementsMatch(t, []string{"Private/sub/file.txt", "Private"}, batch.ManagedPaths)
-	assert.ElementsMatch(t, []ScopeKey{
-		SKPermLocalRead("Private/sub/file.txt"),
-		SKPermLocalRead("Private"),
-	}, batch.ManagedReadScopes)
 }
 
 // Validates: R-2.1.2, R-2.10.4
-func TestRootRemoteReadDeniedObservationFindingsBatch_CreatesBoundaryIssueAndReadScope(t *testing.T) {
+func TestRootRemoteReadDeniedObservationFindingsBatch_CreatesBoundaryIssue(t *testing.T) {
 	t.Parallel()
 
 	batch := rootRemoteReadDeniedObservationFindingsBatch(driveid.New(testDriveID), assert.AnError)
@@ -75,7 +68,5 @@ func TestRootRemoteReadDeniedObservationFindingsBatch_CreatesBoundaryIssueAndRea
 	assert.Equal(t, "/", batch.Issues[0].Path)
 	assert.Equal(t, IssueRemoteReadDenied, batch.Issues[0].IssueType)
 	assert.Equal(t, SKPermRemoteRead(""), batch.Issues[0].ScopeKey)
-	assert.Equal(t, []ScopeKey{SKPermRemoteRead("")}, batch.ReadScopes)
 	assert.Equal(t, []string{IssueRemoteReadDenied}, batch.ManagedIssueTypes)
-	assert.Equal(t, []ScopeKeyKind{ScopePermRemoteRead}, batch.ManagedReadScopeKinds)
 }

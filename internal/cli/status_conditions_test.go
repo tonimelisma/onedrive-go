@@ -59,11 +59,15 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 		BlockScopes: []*syncengine.BlockScope{
 			{
 				Key:           syncengine.SKPermRemoteWrite("Shared/A"),
-				ConditionType: syncengine.IssueRemoteWriteDenied,
+				BlockedAt:     time.Unix(0, 0).UTC(),
+				TrialInterval: time.Minute,
+				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
 			{
 				Key:           syncengine.SKPermRemoteWrite("Shared/B"),
-				ConditionType: syncengine.IssueRemoteWriteDenied,
+				BlockedAt:     time.Unix(0, 0).UTC(),
+				TrialInterval: time.Minute,
+				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
 		},
 		BlockedRetryWork: []syncengine.RetryWorkRow{
@@ -172,7 +176,9 @@ func TestProjectStoredConditionGroups_MergesScopeFamiliesAndDedupesPaths(t *test
 		BlockScopes: []*syncengine.BlockScope{
 			{
 				Key:           syncengine.SKPermRemoteWrite("Shared/Docs"),
-				ConditionType: syncengine.IssueRemoteWriteDenied,
+				BlockedAt:     time.Unix(0, 0).UTC(),
+				TrialInterval: time.Minute,
+				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
 		},
 		BlockedRetryWork: []syncengine.RetryWorkRow{

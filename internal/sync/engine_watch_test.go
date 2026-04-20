@@ -422,14 +422,12 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	retainedScope := SKPermRemoteWrite("Shared/Other")
 
 	setTestBlockScope(t, eng, &BlockScope{
-		Key:           clearedScope,
-		ConditionType: IssueRemoteWriteDenied,
-		BlockedAt:     eng.nowFunc(),
+		Key:       clearedScope,
+		BlockedAt: eng.nowFunc(),
 	})
 	setTestBlockScope(t, eng, &BlockScope{
-		Key:           retainedScope,
-		ConditionType: IssueRemoteWriteDenied,
-		BlockedAt:     eng.nowFunc(),
+		Key:       retainedScope,
+		BlockedAt: eng.nowFunc(),
 	})
 
 	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
@@ -766,8 +764,6 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	ctx := t.Context()
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
-		ConditionType: IssueServiceOutage,
-		TimingSource:  ScopeTimingServerRetryAfter,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   eng.nowFunc().Add(5 * time.Second),

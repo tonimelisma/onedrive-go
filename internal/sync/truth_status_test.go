@@ -2,7 +2,6 @@ package sync
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,7 +11,7 @@ import (
 func TestTruthAvailabilityIndex_StatusByPath_ReturnsAvailableStatusForUnblockedPaths(t *testing.T) {
 	t.Parallel()
 
-	statuses := NewTruthAvailabilityIndex(nil, nil).StatusByPath([]string{"docs/readme.txt"})
+	statuses := NewTruthAvailabilityIndex(nil).StatusByPath([]string{"docs/readme.txt"})
 	require.Len(t, statuses, 1)
 
 	status, ok := statuses["docs/readme.txt"]
@@ -22,24 +21,13 @@ func TestTruthAvailabilityIndex_StatusByPath_ReturnsAvailableStatusForUnblockedP
 }
 
 // Validates: R-2.1.3, R-2.10.4
-func TestTruthAvailabilityIndex_StatusByPath_ReadScopesApplyToDescendants(t *testing.T) {
+func TestTruthAvailabilityIndex_StatusByPath_ReadBoundariesApplyToDescendants(t *testing.T) {
 	t.Parallel()
 
 	statuses := NewTruthAvailabilityIndex(
-		nil,
-		[]*BlockScope{
-			{
-				Key:           SKPermLocalRead("Private"),
-				ConditionType: IssueLocalReadDenied,
-				TimingSource:  ScopeTimingNone,
-				BlockedAt:     time.Unix(100, 0),
-			},
-			{
-				Key:           SKPermRemoteRead("Shared"),
-				ConditionType: IssueRemoteReadDenied,
-				TimingSource:  ScopeTimingNone,
-				BlockedAt:     time.Unix(100, 0),
-			},
+		[]ObservationIssueRow{
+			{Path: "Private", IssueType: IssueLocalReadDenied, ScopeKey: SKPermLocalRead("Private")},
+			{Path: "Shared", IssueType: IssueRemoteReadDenied, ScopeKey: SKPermRemoteRead("Shared")},
 		},
 	).StatusByPath(
 		[]string{"Private/sub/file.txt", "Shared/Docs/file.txt"},
@@ -47,34 +35,27 @@ func TestTruthAvailabilityIndex_StatusByPath_ReadScopesApplyToDescendants(t *tes
 
 	localStatus, ok := statuses["Private/sub/file.txt"]
 	require.True(t, ok)
-	assert.Equal(t, TruthAvailabilityBlockedLocalReadScope, localStatus.Local.Availability)
-	assert.Equal(t, PathTruthSourceReadScope, localStatus.Local.Source)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, localStatus.Local.Availability)
+	assert.Equal(t, PathTruthSourceObservationIssue, localStatus.Local.Source)
 	assert.Equal(t, SKPermLocalRead("Private"), localStatus.Local.ScopeKey)
 	assert.True(t, localStatus.Remote.IsAvailable())
 
 	remoteStatus, ok := statuses["Shared/Docs/file.txt"]
 	require.True(t, ok)
-	assert.Equal(t, TruthAvailabilityBlockedRemoteReadScope, remoteStatus.Remote.Availability)
-	assert.Equal(t, PathTruthSourceReadScope, remoteStatus.Remote.Source)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, remoteStatus.Remote.Availability)
+	assert.Equal(t, PathTruthSourceObservationIssue, remoteStatus.Remote.Source)
 	assert.Equal(t, SKPermRemoteRead("Shared"), remoteStatus.Remote.ScopeKey)
 	assert.True(t, remoteStatus.Local.IsAvailable())
 }
 
 // Validates: R-2.1.3, R-2.10.4
-func TestTruthAvailabilityIndex_StatusForPath_UsesObservationAndReadScopeEvidence(t *testing.T) {
+func TestTruthAvailabilityIndex_StatusForPath_UsesObservationEvidence(t *testing.T) {
 	t.Parallel()
 
 	index := NewTruthAvailabilityIndex(
 		[]ObservationIssueRow{
 			{Path: "blocked-local.txt", IssueType: IssueInvalidFilename},
-		},
-		[]*BlockScope{
-			{
-				Key:           SKPermRemoteRead("Shared"),
-				ConditionType: IssueRemoteReadDenied,
-				TimingSource:  ScopeTimingNone,
-				BlockedAt:     time.Unix(100, 0),
-			},
+			{Path: "Shared", IssueType: IssueRemoteReadDenied, ScopeKey: SKPermRemoteRead("Shared")},
 		},
 	)
 
@@ -85,8 +66,8 @@ func TestTruthAvailabilityIndex_StatusForPath_UsesObservationAndReadScopeEvidenc
 	assert.True(t, localStatus.Remote.IsAvailable())
 
 	remoteStatus := index.StatusForPath("Shared/Docs/file.txt")
-	assert.Equal(t, TruthAvailabilityBlockedRemoteReadScope, remoteStatus.Remote.Availability)
-	assert.Equal(t, PathTruthSourceReadScope, remoteStatus.Remote.Source)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, remoteStatus.Remote.Availability)
+	assert.Equal(t, PathTruthSourceObservationIssue, remoteStatus.Remote.Source)
 	assert.Equal(t, SKPermRemoteRead("Shared"), remoteStatus.Remote.ScopeKey)
 	assert.True(t, remoteStatus.Local.IsAvailable())
 }

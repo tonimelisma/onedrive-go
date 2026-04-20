@@ -12,8 +12,9 @@ import (
 // and error isolation. Each DriveRunner runs independently, so one drive can
 // fail without destabilizing the rest of the multi-drive control plane.
 type DriveRunner struct {
-	canonID     driveid.CanonicalID
-	displayName string
+	selectionIndex int
+	canonID        driveid.CanonicalID
+	displayName    string
 }
 
 // run executes the provided sync function with panic recovery. The control
@@ -22,8 +23,9 @@ type DriveRunner struct {
 // engine stack.
 func (dr *DriveRunner) run(ctx context.Context, fn func(context.Context) (*syncengine.Report, error)) (result *DriveReport) {
 	result = &DriveReport{
-		CanonicalID: dr.canonID,
-		DisplayName: dr.displayName,
+		SelectionIndex: dr.selectionIndex,
+		CanonicalID:    dr.canonID,
+		DisplayName:    dr.displayName,
 	}
 
 	defer func() {
