@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/sync/planner_sqlite.go, internal/sync/actions.go, internal/sync/api_types.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/core_types.go
+GOVERNS: internal/sync/planner.go, internal/sync/planner_sqlite.go, internal/sync/planner_truth_overlay.go, internal/sync/truth_status.go, internal/sync/actions.go, internal/sync/api_types.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/core_types.go
 
 Implements: R-2.1.3 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified]
 
@@ -49,18 +49,19 @@ Those rows feed `comparison_state` and `reconciliation_state`, including the
 invariant that a baseline row absent from both snapshots becomes
 `baseline_remove`.
 
-Before Go emits actions, it derives one per-path truth-status value from
-`observation_issues` and active read scopes, then applies planner-owned
-suppression policy so unreadable or unobservable paths stay unavailable instead
-of being misread as deletions.
+Before Go emits actions, a shared pure derivation step computes one per-path
+truth-status value from `observation_issues` and active read scopes. Planner
+then applies its own suppression policy so unreadable or unobservable paths
+stay unavailable instead of being misread as deletions.
 
 ## Pipeline
 
 1. Run SQL structural diff and reconciliation over snapshots plus baseline.
 2. Load reconciliation rows into Go.
 3. Derive per-path local/remote truth status from `observation_issues` and
-   active read scopes.
-4. Apply planner-owned suppression and sync-mode safety rules.
+   active read scopes through the shared truth-status helper.
+4. Apply planner-owned suppression and sync-mode safety rules on top of that
+   derived status.
 5. Emit the current runtime action set, including conflict expansion into
    concrete actions.
 6. Expand folder delete cascades so descendants get explicit work.
@@ -121,9 +122,10 @@ structural absence:
 
 The planner therefore keeps structural reconciliation raw, then attaches an
 explicit local/remote truth-status value to each path view before action
-emission. When observation issues or active read scopes prove the path is
-currently unavailable, planner suppression blocks action emission for that path
-instead of pretending the row is structurally equal or absent.
+emission. Truth-status derivation is a reusable raw read-side view over
+durable authorities; planner suppression is the separate policy layer that
+blocks action emission when observation issues or active read scopes prove the
+path is currently unavailable.
 
 ## Conflict Planning
 

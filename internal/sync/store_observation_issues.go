@@ -23,6 +23,7 @@ func (m *SyncStore) ReconcileObservationFindings(
 	}
 
 	nowNano := now.UnixNano()
+	policy := buildObservationFindingsReconcilePolicy(batch)
 
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
@@ -36,11 +37,11 @@ func (m *SyncStore) ReconcileObservationFindings(
 	if err != nil {
 		return err
 	}
-	err = clearResolvedObservationIssuesTx(ctx, tx, batch)
+	err = clearResolvedObservationIssuesTx(ctx, tx, batch, policy.issues)
 	if err != nil {
 		return err
 	}
-	err = reconcileObservationReadScopesTx(ctx, tx, batch, nowNano)
+	err = reconcileObservationReadScopesTx(ctx, tx, policy.readScopes, nowNano)
 	if err != nil {
 		return err
 	}
@@ -146,24 +147,19 @@ func clearResolvedObservationIssuesTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 	batch *ObservationFindingsBatch,
+	policy observationIssueReconcilePolicy,
 ) error {
 	if batch == nil {
 		return nil
 	}
 
-	currentByType := make(map[string][]string)
-	for i := range batch.Issues {
-		currentByType[batch.Issues[i].IssueType] = append(currentByType[batch.Issues[i].IssueType], batch.Issues[i].Path)
-	}
-	managedPaths := normalizedObservationManagedPaths(batch.ManagedPaths)
-
 	for _, issueType := range batch.ManagedIssueTypes {
-		paths := currentByType[issueType]
+		paths := policy.currentPathsByType[issueType]
 		if issueType == "" {
 			continue
 		}
-		if len(managedPaths) > 0 {
-			if err := clearManagedObservationIssuePathsTx(ctx, tx, issueType, managedPaths, paths); err != nil {
+		if len(policy.managedPaths) > 0 {
+			if err := clearManagedObservationIssuePathsTx(ctx, tx, issueType, policy.managedPaths, paths); err != nil {
 				return err
 			}
 			continue
@@ -200,77 +196,14 @@ func clearResolvedObservationIssuesTx(
 func reconcileObservationReadScopesTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	batch *ObservationFindingsBatch,
+	policy observationReadScopeReconcilePolicy,
 	nowNano int64,
 ) error {
-	if batch == nil {
-		return nil
-	}
-	if managedExactScopes, desiredExactScopes := exactObservationReadScopes(batch); len(managedExactScopes) > 0 {
-		return reconcileObservationReadScopeSetTx(ctx, tx, managedExactScopes, desiredExactScopes, nowNano)
-	}
-
-	return reconcileKindObservationReadScopesTx(ctx, tx, batch, nowNano)
-}
-
-func reconcileKindObservationReadScopesTx(
-	ctx context.Context,
-	tx sqlTxRunner,
-	batch *ObservationFindingsBatch,
-	nowNano int64,
-) error {
-	if batch == nil {
+	if len(policy.managed) == 0 {
 		return nil
 	}
 
-	managedKinds := make(map[ScopeKeyKind]struct{}, len(batch.ManagedReadScopeKinds))
-	for i := range batch.ManagedReadScopeKinds {
-		managedKinds[batch.ManagedReadScopeKinds[i]] = struct{}{}
-	}
-	if len(managedKinds) == 0 {
-		return nil
-	}
-
-	desired := make(map[ScopeKey]struct{})
-	for i := range batch.ReadScopes {
-		key := batch.ReadScopes[i]
-		if _, ok := managedKinds[key.Kind]; ok {
-			desired[key] = struct{}{}
-		}
-	}
-
-	return reconcileObservationReadScopeSetTx(
-		ctx,
-		tx,
-		managedObservationReadScopeKeysForKinds(batch.ManagedReadScopeKinds),
-		desired,
-		nowNano,
-	)
-}
-
-func managedObservationReadScopeKeysForKinds(kinds []ScopeKeyKind) map[ScopeKey]struct{} {
-	if len(kinds) == 0 {
-		return nil
-	}
-
-	managed := make(map[ScopeKey]struct{})
-	for i := range kinds {
-		switch kinds[i] {
-		case ScopePermDirRead:
-			managed[SKPermLocalRead("")] = struct{}{}
-		case ScopePermRemoteRead:
-			managed[SKPermRemoteRead("")] = struct{}{}
-		case ScopeThrottleTarget,
-			ScopeService,
-			ScopeQuotaOwn,
-			ScopePermDirWrite,
-			ScopePermRemoteWrite,
-			ScopeDiskLocal:
-			continue
-		}
-	}
-
-	return managed
+	return reconcileObservationReadScopeSetTx(ctx, tx, policy.managed, policy.desired, nowNano)
 }
 
 func reconcileObservationReadScopeSetTx(
@@ -322,54 +255,6 @@ func reconcileObservationReadScopeSetTx(
 	return nil
 }
 
-func managedObservationReadScopeContains(managed map[ScopeKey]struct{}, key ScopeKey) bool {
-	if _, ok := managed[key]; ok {
-		return true
-	}
-	if key.IsZero() {
-		return false
-	}
-
-	switch key.Kind {
-	case ScopePermDirRead:
-		_, ok := managed[SKPermLocalRead("")]
-		return ok
-	case ScopePermRemoteRead:
-		_, ok := managed[SKPermRemoteRead("")]
-		return ok
-	case ScopeThrottleTarget,
-		ScopeService,
-		ScopeQuotaOwn,
-		ScopePermDirWrite,
-		ScopePermRemoteWrite,
-		ScopeDiskLocal:
-		return false
-	default:
-		return false
-	}
-}
-
-func normalizedObservationManagedPaths(paths []string) []string {
-	if len(paths) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{}, len(paths))
-	normalized := make([]string, 0, len(paths))
-	for i := range paths {
-		if paths[i] == "" {
-			continue
-		}
-		if _, ok := seen[paths[i]]; ok {
-			continue
-		}
-		seen[paths[i]] = struct{}{}
-		normalized = append(normalized, paths[i])
-	}
-
-	return normalized
-}
-
 func clearManagedObservationIssuePathsTx(
 	ctx context.Context,
 	tx sqlTxRunner,
@@ -413,36 +298,6 @@ func clearManagedObservationIssuePathsTx(
 	}
 
 	return nil
-}
-
-func exactObservationReadScopes(batch *ObservationFindingsBatch) (map[ScopeKey]struct{}, map[ScopeKey]struct{}) {
-	if batch == nil {
-		return nil, nil
-	}
-	if len(batch.ManagedReadScopes) == 0 {
-		return nil, nil
-	}
-
-	managed := make(map[ScopeKey]struct{}, len(batch.ManagedReadScopes))
-	for i := range batch.ManagedReadScopes {
-		if batch.ManagedReadScopes[i].IsZero() {
-			continue
-		}
-		managed[batch.ManagedReadScopes[i]] = struct{}{}
-	}
-
-	if len(managed) == 0 {
-		return nil, nil
-	}
-
-	desired := make(map[ScopeKey]struct{})
-	for i := range batch.ReadScopes {
-		if _, ok := managed[batch.ReadScopes[i]]; ok {
-			desired[batch.ReadScopes[i]] = struct{}{}
-		}
-	}
-
-	return managed, desired
 }
 
 func scanObservationIssueRow(

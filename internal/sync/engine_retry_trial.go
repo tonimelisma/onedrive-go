@@ -636,7 +636,7 @@ func (flow *engineFlow) reconcileRetryTrialObservationResult(
 	managedPath string,
 	observation *SinglePathObservation,
 ) {
-	batch, ok := observationFindingsBatchFromSinglePathObservation(driveID, managedPath, observation)
+	batch, ok := singlePathObservationFindingsBatch(driveID, managedPath, observation)
 	if !ok {
 		return
 	}

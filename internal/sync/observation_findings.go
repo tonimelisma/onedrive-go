@@ -22,25 +22,25 @@ func localObservationManagedReadScopeKinds() []ScopeKeyKind {
 	return []ScopeKeyKind{ScopePermDirRead}
 }
 
-func localObservationManagedBatch() ObservationFindingsBatch {
+func newLocalObservationFindingsBatch() ObservationFindingsBatch {
 	return ObservationFindingsBatch{
 		ManagedIssueTypes:     localObservationManagedIssueTypes(),
 		ManagedReadScopeKinds: localObservationManagedReadScopeKinds(),
 	}
 }
 
-func remoteObservationManagedBatch() ObservationFindingsBatch {
+func newRemoteObservationFindingsBatch() ObservationFindingsBatch {
 	return ObservationFindingsBatch{
 		ManagedIssueTypes:     []string{IssueRemoteReadDenied},
 		ManagedReadScopeKinds: []ScopeKeyKind{ScopePermRemoteRead},
 	}
 }
 
-func observationFindingsBatchFromSkippedItems(
+func localObservationFindingsBatchFromSkippedItems(
 	driveID driveid.ID,
 	skipped []SkippedItem,
 ) ObservationFindingsBatch {
-	batch := localObservationManagedBatch()
+	batch := newLocalObservationFindingsBatch()
 	batch.Issues = make([]ObservationIssue, 0, len(skipped))
 
 	for i := range skipped {
@@ -50,7 +50,7 @@ func observationFindingsBatchFromSkippedItems(
 	return batch
 }
 
-func observationFindingsBatchFromSinglePathObservation(
+func singlePathObservationFindingsBatch(
 	driveID driveid.ID,
 	managedPath string,
 	observation *SinglePathObservation,
@@ -59,23 +59,23 @@ func observationFindingsBatchFromSinglePathObservation(
 		return ObservationFindingsBatch{}, false
 	}
 
-	batch := localObservationManagedBatch()
-	appendObservationManagedPath(&batch, managedPath)
-	appendObservationManagedReadScope(&batch, SKPermLocalRead(managedPath))
+	batch := newLocalObservationFindingsBatch()
+	appendManagedObservationPath(&batch, managedPath)
+	appendManagedObservationReadScope(&batch, SKPermLocalRead(managedPath))
 
 	if observation == nil || observation.Skipped == nil {
 		return batch, true
 	}
 	if observation.Skipped.Path != "" && observation.Skipped.Path != managedPath {
-		appendObservationManagedPath(&batch, observation.Skipped.Path)
-		appendObservationManagedReadScope(&batch, SKPermLocalRead(observation.Skipped.Path))
+		appendManagedObservationPath(&batch, observation.Skipped.Path)
+		appendManagedObservationReadScope(&batch, SKPermLocalRead(observation.Skipped.Path))
 	}
 
 	appendSkippedObservationFinding(&batch, driveID, observation.Skipped)
 	return batch, true
 }
 
-func appendObservationManagedPath(batch *ObservationFindingsBatch, path string) {
+func appendManagedObservationPath(batch *ObservationFindingsBatch, path string) {
 	if batch == nil || path == "" {
 		return
 	}
@@ -87,7 +87,7 @@ func appendObservationManagedPath(batch *ObservationFindingsBatch, path string) 
 	batch.ManagedPaths = append(batch.ManagedPaths, path)
 }
 
-func appendObservationManagedReadScope(batch *ObservationFindingsBatch, key ScopeKey) {
+func appendManagedObservationReadScope(batch *ObservationFindingsBatch, key ScopeKey) {
 	if batch == nil || key.IsZero() {
 		return
 	}
@@ -124,7 +124,7 @@ func appendSkippedObservationFinding(
 	batch.Issues = append(batch.Issues, issue)
 }
 
-func rootRemoteReadDeniedObservationBatch(
+func rootRemoteReadDeniedObservationFindingsBatch(
 	driveID driveid.ID,
 	err error,
 ) ObservationFindingsBatch {
@@ -137,7 +137,7 @@ func remoteReadDeniedObservationBatch(
 	scopeKey ScopeKey,
 	err error,
 ) ObservationFindingsBatch {
-	batch := remoteObservationManagedBatch()
+	batch := newRemoteObservationFindingsBatch()
 	batch.Issues = []ObservationIssue{{
 		Path:       path,
 		DriveID:    driveID,
