@@ -131,9 +131,14 @@ func buildSQLitePathViews(
 		row := comparisons[i]
 		comparisonByPath[row.Path] = &comparisons[i]
 
+		truthStatus, ok := truthStatusByPath[row.Path]
+		if !ok {
+			return nil, nil, fmt.Errorf("sync: missing truth status for comparison path %q", row.Path)
+		}
+
 		view := &PathView{
 			Path:        row.Path,
-			TruthStatus: PathTruthStatus{Local: availablePathTruthSideStatus(), Remote: availablePathTruthSideStatus()},
+			TruthStatus: truthStatus,
 		}
 		if row.BaselinePresent {
 			entry, ok := baseline.GetByPath(row.Path)
@@ -156,10 +161,6 @@ func buildSQLitePathViews(
 			}
 			view.Remote = remoteStateFromSnapshotRow(&remoteRow)
 		}
-		if truthStatus, ok := truthStatusByPath[row.Path]; ok {
-			view.TruthStatus = truthStatus
-		}
-
 		views[row.Path] = view
 	}
 

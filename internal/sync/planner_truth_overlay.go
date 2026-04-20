@@ -9,6 +9,17 @@ func derivePlannerTruthStatus(
 		return nil
 	}
 
+	statusByPath := make(map[string]PathTruthStatus, len(comparisons))
+	observationByPath := plannerTruthObservationByPath(observationIssues)
+	for i := range comparisons {
+		path := comparisons[i].Path
+		statusByPath[path] = plannerTruthStatusForPath(path, observationByPath, blockScopes)
+	}
+
+	return statusByPath
+}
+
+func plannerTruthObservationByPath(observationIssues []ObservationIssueRow) map[string]ObservationIssueRow {
 	observationByPath := make(map[string]ObservationIssueRow, len(observationIssues))
 	for i := range observationIssues {
 		if !observationIssueBlocksTruth(observationIssues[i].IssueType) {
@@ -17,60 +28,60 @@ func derivePlannerTruthStatus(
 		observationByPath[observationIssues[i].Path] = observationIssues[i]
 	}
 
-	statusByPath := make(map[string]PathTruthStatus, len(comparisons))
-	for i := range comparisons {
-		path := comparisons[i].Path
-		observationIssue, hasObservationIssue := observationByPath[path]
-		localScope := mostSpecificPlannerReadScope(path, blockScopes, func(key ScopeKey) bool {
-			return key.IsPermLocalRead()
-		})
-		remoteScope := mostSpecificPlannerReadScope(path, blockScopes, func(key ScopeKey) bool {
-			return key.IsPermRemoteRead()
-		})
+	return observationByPath
+}
 
-		status := PathTruthStatus{
-			Local:  availablePathTruthSideStatus(),
-			Remote: availablePathTruthSideStatus(),
+func plannerTruthStatusForPath(
+	path string,
+	observationByPath map[string]ObservationIssueRow,
+	blockScopes []*BlockScope,
+) PathTruthStatus {
+	observationIssue, hasObservationIssue := observationByPath[path]
+	localScope := mostSpecificPlannerReadScope(path, blockScopes, func(key ScopeKey) bool {
+		return key.IsPermLocalRead()
+	})
+	remoteScope := mostSpecificPlannerReadScope(path, blockScopes, func(key ScopeKey) bool {
+		return key.IsPermRemoteRead()
+	})
+
+	status := PathTruthStatus{
+		Local:  availablePathTruthSideStatus(),
+		Remote: availablePathTruthSideStatus(),
+	}
+
+	switch {
+	case localScope.IsPermLocalRead():
+		status.Local = PathTruthSideStatus{
+			Availability: TruthAvailabilityBlockedLocalReadScope,
+			Source:       PathTruthSourceReadScope,
+			ScopeKey:     localScope,
 		}
-
-		switch {
-		case localScope.IsPermLocalRead():
-			status.Local = PathTruthSideStatus{
-				Availability: TruthAvailabilityBlockedLocalReadScope,
-				Source:       PathTruthSourceReadScope,
-				ScopeKey:     localScope,
-			}
-		case hasObservationIssue && observationIssueBlocksLocalTruth(observationIssue.IssueType):
-			status.Local = PathTruthSideStatus{
-				Availability: TruthAvailabilityBlockedObservationIssue,
-				Source:       PathTruthSourceObservationIssue,
-				IssueType:    observationIssue.IssueType,
-				ScopeKey:     observationIssue.ScopeKey,
-			}
-		}
-
-		switch {
-		case remoteScope.IsPermRemoteRead():
-			status.Remote = PathTruthSideStatus{
-				Availability: TruthAvailabilityBlockedRemoteReadScope,
-				Source:       PathTruthSourceReadScope,
-				ScopeKey:     remoteScope,
-			}
-		case hasObservationIssue && observationIssueBlocksRemoteTruth(observationIssue.IssueType):
-			status.Remote = PathTruthSideStatus{
-				Availability: TruthAvailabilityBlockedObservationIssue,
-				Source:       PathTruthSourceObservationIssue,
-				IssueType:    observationIssue.IssueType,
-				ScopeKey:     observationIssue.ScopeKey,
-			}
-		}
-
-		if status.SuppressesStructuralActions() {
-			statusByPath[path] = status
+	case hasObservationIssue && observationIssueBlocksLocalTruth(observationIssue.IssueType):
+		status.Local = PathTruthSideStatus{
+			Availability: TruthAvailabilityBlockedObservationIssue,
+			Source:       PathTruthSourceObservationIssue,
+			IssueType:    observationIssue.IssueType,
+			ScopeKey:     observationIssue.ScopeKey,
 		}
 	}
 
-	return statusByPath
+	switch {
+	case remoteScope.IsPermRemoteRead():
+		status.Remote = PathTruthSideStatus{
+			Availability: TruthAvailabilityBlockedRemoteReadScope,
+			Source:       PathTruthSourceReadScope,
+			ScopeKey:     remoteScope,
+		}
+	case hasObservationIssue && observationIssueBlocksRemoteTruth(observationIssue.IssueType):
+		status.Remote = PathTruthSideStatus{
+			Availability: TruthAvailabilityBlockedObservationIssue,
+			Source:       PathTruthSourceObservationIssue,
+			IssueType:    observationIssue.IssueType,
+			ScopeKey:     observationIssue.ScopeKey,
+		}
+	}
+
+	return status
 }
 
 func availablePathTruthSideStatus() PathTruthSideStatus {
