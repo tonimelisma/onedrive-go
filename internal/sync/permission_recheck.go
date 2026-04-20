@@ -7,6 +7,41 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
+// startupRecheckDecisions is the single startup entrypoint for persisted
+// permission-scope maintenance. The engine owns applying the decisions, but
+// permission policy owns deciding which persisted permission scopes should be
+// released or retained after current truth is re-probed.
+func (ph *PermissionHandler) startupRecheckDecisions(
+	ctx context.Context,
+	bl *Baseline,
+) []PermissionRecheckDecision {
+	return ph.permissionRecheckDecisions(ctx, bl, true)
+}
+
+// periodicRecheckDecisions is the steady-state permission-maintenance entrypoint.
+// The engine may suppress remote Graph probing during broader observation
+// suppression, but local filesystem rechecks still run because they are direct
+// local observation of current truth.
+func (ph *PermissionHandler) periodicRecheckDecisions(
+	ctx context.Context,
+	bl *Baseline,
+	includeRemote bool,
+) []PermissionRecheckDecision {
+	return ph.permissionRecheckDecisions(ctx, bl, includeRemote)
+}
+
+func (ph *PermissionHandler) permissionRecheckDecisions(
+	ctx context.Context,
+	bl *Baseline,
+	includeRemote bool,
+) []PermissionRecheckDecision {
+	var decisions []PermissionRecheckDecision
+	if includeRemote && ph.HasPermChecker() {
+		decisions = append(decisions, ph.recheckPermissions(ctx, bl)...)
+	}
+	return append(decisions, ph.recheckLocalPermissions(ctx)...)
+}
+
 // recheckPermissions rechecks persisted remote write-denial scopes at the
 // start of each sync pass. Read-denial scopes are observation-owned and clear
 // only through observation reconciliation.

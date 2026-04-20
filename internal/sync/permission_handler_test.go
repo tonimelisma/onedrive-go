@@ -276,3 +276,38 @@ func TestPermHandler_RecheckPermissions_KeepsRemoteWriteScopeWhenInconclusive(t 
 	assert.Equal(t, permissionRecheckKeepScope, decisions[0].Kind)
 	assert.Equal(t, scopeKey, decisions[0].ScopeKey)
 }
+
+func TestPermHandler_StartupRecheckDecisions_CombineRemoteAndLocalMaintenance(t *testing.T) {
+	t.Parallel()
+
+	checker := &mockPermChecker{
+		perms: map[string][]graph.Permission{
+			driveid.New("test-drive").String() + ":" + testRemoteRootItemID: {{
+				Roles: []string{"write"},
+			}},
+		},
+	}
+	ph, store, syncRoot := newTestPermHandler(t, checker)
+	ph.rootItemID = testRemoteRootItemID
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "restored"), 0o750))
+
+	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:          SKPermRemoteWrite(""),
+		IssueType:    IssueRemoteWriteDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Now(),
+	}))
+	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:          SKPermLocalWrite("restored"),
+		IssueType:    IssueLocalWriteDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Now(),
+	}))
+
+	decisions := ph.startupRecheckDecisions(t.Context(), &Baseline{})
+	require.Len(t, decisions, 2)
+	assert.ElementsMatch(t,
+		[]ScopeKey{SKPermRemoteWrite(""), SKPermLocalWrite("restored")},
+		[]ScopeKey{decisions[0].ScopeKey, decisions[1].ScopeKey},
+	)
+}
