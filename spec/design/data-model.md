@@ -58,10 +58,14 @@ instead of delete/reinsert churn.
 `remote_state` is the durable mirror of what remote observation most recently
 saw. It stores:
 
-- identity: `item_id`, `parent_id`
+- identity: persisted owning `drive_id`, `item_id`, `parent_id`
 - materialized path: `path`, `previous_path`
 - remote facts: `item_type`, `hash`, `size`, `mtime`, `etag`,
   `content_identity`
+
+The row-level `drive_id` is durable authority. Shared-root and cross-drive
+remote rows keep the drive that actually owns the item, even though the state
+DB itself belongs to one configured drive session.
 
 Remote deletion is represented by row absence. If a baseline row exists and the
 corresponding `remote_state` row is missing, later runs rediscover remote delete
@@ -96,12 +100,15 @@ handling may discover a condition that should later appear there, but execution
 does not upsert observation rows directly. The next observation pass is
 responsible for proving and persisting that current-truth problem.
 
-Observation-owned issue rows and observation-owned read scopes are reconciled
-through one observation-batch mutation shape. Full observation passes replace
-their managed current set by issue family/read-scope kind. Single-path
-observation uses the same mutation input but scopes reconciliation to the exact
-observed path and exact read-scope keys so one retry/trial probe cannot clear
+Observation-owned issue rows are reconciled through one observation-batch
+mutation shape. Full observation passes replace their managed current set by
+issue type. Single-path observation uses the same mutation input but scopes
+reconciliation to the exact managed paths so one retry/trial probe cannot clear
 unrelated durable observation rows.
+
+Read-denied subtree boundaries are carried by `ScopeKey` on the corresponding
+issue row instead of a second durable scope table. Derived truth reads use that
+tagged boundary fact to block descendants.
 
 ## `retry_work`
 
@@ -121,23 +128,17 @@ table.
 
 ## `block_scopes`
 
-`block_scopes` stores active shared blocking conditions that outlive a process:
+`block_scopes` stores active timed shared blocking conditions that outlive a
+process:
 
 - identity: `scope_key`
-- parsed scope semantics: `scope_family`, `scope_access`, `subject_kind`,
-  `subject_value`
-- condition type
-- timing source
-- `blocked_at`, `trial_interval`, `next_trial_at`, `trial_count`
+- timing: `blocked_at`, `trial_interval`, `next_trial_at`
 
 `block_scopes` is timing and lifecycle authority only. Concrete blocked work
 belongs in `retry_work`.
 
-- timed transient scopes (`service`, drive throttles, `quota:own`, `disk:local`)
-  require blocked `retry_work` and are discarded when that blocked work
-  disappears
-- permission scopes are probe-owned facts and may persist without blocked
-  `retry_work` until revalidation proves recovery
+- all persisted scopes require blocked `retry_work` and are discarded when
+  that blocked work disappears
 
 The target persisted scope families are:
 
@@ -145,16 +146,18 @@ The target persisted scope families are:
 - `throttle:target:drive:<driveID>`
 - `quota:own`
 - `disk:local`
-- `perm:dir:read:<path>`
 - `perm:dir:write:<path>`
-- `perm:remote:read:<boundary>`
 - `perm:remote:write:<boundary>`
 - `account:throttled`
 
-`scope_key` remains the durable identity referenced by `retry_work`, but
-`block_scopes` also stores the parsed descriptor metadata for that key so
-runtime and read-side code can validate and consume one explicit scope shape
-without reparsing the wire string at every boundary.
+`scope_key` remains the durable identity referenced by `retry_work`. Runtime
+and read-side code recover scope semantics from that key via
+`DescribeScopeKey`; SQLite does not persist a second copy of parsed scope
+metadata.
+
+Read-denied subtree boundaries continue to use `perm:*:read:*` keys, but only
+as boundary tags on `observation_issues`. They are not persisted as
+`block_scopes`.
 
 ## `observation_state`
 
@@ -171,6 +174,9 @@ identity and cadence:
 The cursor is committed atomically with the corresponding remote observation
 writes. The stored refresh timestamps and modes make periodic full-refresh
 cadence restart-safe in one-shot and watch mode.
+
+`configured_drive_id` identifies the configured drive session that owns the DB
+and cursor. It does not replace the per-row `remote_state.drive_id` authority.
 
 ## `run_status`
 

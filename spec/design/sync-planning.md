@@ -50,9 +50,9 @@ invariant that a baseline row absent from both snapshots becomes
 `baseline_remove`.
 
 Before Go emits actions, a shared derivation step computes one per-path
-truth-status value from `observation_issues` and active read scopes. Planner
-then applies its own suppression policy so unreadable or unobservable paths
-stay unavailable instead of being misread as deletions.
+truth-status value from `observation_issues`, including any read-boundary
+`ScopeKey` tags. Planner then applies its own suppression policy so unreadable
+or unobservable paths stay unavailable instead of being misread as deletions.
 
 `TruthAvailabilityIndex` is the one raw derived read model for that question.
 Planner uses it directly, and read-only inspection of specific paths uses the
@@ -62,8 +62,8 @@ same derivation rather than a second planner-shaped helper.
 
 1. Run SQL structural diff and reconciliation over snapshots plus baseline.
 2. Load reconciliation rows into Go.
-3. Derive per-path local/remote truth status from `observation_issues` and
-   active read scopes through `TruthAvailabilityIndex`.
+3. Derive per-path local/remote truth status from `observation_issues`
+   through `TruthAvailabilityIndex`.
 4. Apply planner-owned suppression and sync-mode safety rules on top of that
    derived status.
 5. Emit the current runtime action set, including conflict expansion into
@@ -121,15 +121,15 @@ structural absence:
 - subtree unavailability also suppresses publication-only cleanup for those
   descendants; baseline rows under an unreadable subtree must not be cleaned
   up just because current observation could not safely prove their absence
-- active read permission scopes suppress destructive and mutating work under
-  the blocked subtree until revalidation succeeds
+- tagged read-boundary issues suppress destructive and mutating work under the
+  blocked subtree until later observation restores trustworthy truth
 
 The planner therefore keeps structural reconciliation raw, then attaches an
 explicit local/remote truth-status value to each path view before action
 emission. `TruthAvailabilityIndex` is the reusable derived view over durable
 authorities; planner suppression is the separate policy layer that blocks
-action emission when observation issues or active read scopes prove the path is
-currently unavailable.
+action emission when observation issues prove the path is currently
+unavailable.
 
 That same truth-status derivation may also power debug/read-only inspection for
 specific paths. Those debug reads must stay derived-only: descendants under a

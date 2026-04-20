@@ -21,7 +21,7 @@ type trialOutcome int
 const (
 	trialOutcomeRelease trialOutcome = iota
 	trialOutcomeExtend
-	trialOutcomePreserve
+	trialOutcomeRearmOrDiscard
 	trialOutcomeShutdown
 	trialOutcomeFatal
 )
@@ -127,11 +127,11 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 		return
 	}
 
-	flow.applyResultPersistence(ctx, watch, decision, r)
+	persisted := flow.applyResultPersistence(ctx, watch, decision, r)
 
-	if decision.RunScopeDetection {
+	if persisted && decision.RunScopeDetection {
 		flow.scopeController().feedScopeDetection(ctx, watch, r)
-	} else if decision.Class == errclass.ClassBlockScopeingTransient && !decision.ScopeKey.IsZero() {
+	} else if persisted && decision.Class == errclass.ClassBlockScopeingTransient && !decision.ScopeKey.IsZero() {
 		flow.scopeController().applyBlockScope(ctx, watch, ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      decision.ScopeKey,
@@ -142,7 +142,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	if decision.Class == errclass.ClassBlockScopeingTransient && watch != nil {
 		watch.armTrialTimer()
 	}
-	if decision.Persistence == persistRetryWork && watch != nil {
+	if persisted && decision.Persistence == persistRetryWork && watch != nil {
 		watch.armRetryTimer(ctx)
 	}
 
@@ -241,9 +241,9 @@ func (flow *engineFlow) processTrialDecision(
 		scopeCtrl.rehomeBlockedRetryWork(ctx, r, trialScopeKey)
 		scopeCtrl.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
 		flow.recordError(decision, r)
-	case trialOutcomePreserve:
+	case trialOutcomeRearmOrDiscard:
 		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
-		scopeCtrl.applyTrialPreserveEffects(ctx, watch, decision, r, bl)
+		scopeCtrl.applyTrialReclassification(ctx, watch, decision, r, bl)
 		scopeCtrl.rearmOrDiscardScope(ctx, watch, trialScopeKey)
 		flow.recordError(decision, r)
 	case trialOutcomeFatal:
@@ -268,9 +268,9 @@ func (flow *engineFlow) evaluateTrialOutcome(
 		if flow.trialScopePersists(trialScopeKey, decision) {
 			return trialOutcomeExtend
 		}
-		return trialOutcomePreserve
-	case trialHintPreserve:
-		return trialOutcomePreserve
+		return trialOutcomeRearmOrDiscard
+	case trialHintReclassify:
+		return trialOutcomeRearmOrDiscard
 	case trialHintShutdown:
 		return trialOutcomeShutdown
 	case trialHintFatal:
@@ -287,7 +287,7 @@ func (flow *engineFlow) trialScopePersists(
 	return !decision.ScopeEvidence.IsZero() && decision.ScopeEvidence == trialScopeKey
 }
 
-func (controller *scopeController) applyTrialPreserveEffects(
+func (controller *scopeController) applyTrialReclassification(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision *ResultDecision,
@@ -303,12 +303,13 @@ func (controller *scopeController) applyTrialPreserveEffects(
 	}
 
 	if decision.Class == errclass.ClassBlockScopeingTransient && decision.ScopeKey == SKDiskLocal() {
-		controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
-			Block:         true,
-			ScopeKey:      decision.ScopeKey,
-			ConditionType: decision.ScopeKey.ConditionType(),
-		})
-		controller.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey)
+		if controller.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey) {
+			controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
+				Block:         true,
+				ScopeKey:      decision.ScopeKey,
+				ConditionType: decision.ScopeKey.ConditionType(),
+			})
+		}
 	}
 }
 
@@ -323,7 +324,7 @@ func (controller *scopeController) clearBlockedRetryWorkForScope(
 
 	flow := controller.flow
 	if err := flow.engine.baseline.ClearBlockedRetryWork(ctx, work, scopeKey); err != nil {
-		flow.engine.logger.Warn("failed to clear preserved trial candidate",
+		flow.engine.logger.Warn("failed to clear stale trial candidate",
 			slog.String("path", work.Path),
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
@@ -422,7 +423,7 @@ func (flow *engineFlow) recordRetryWork(
 	decision *ResultDecision,
 	r *ActionCompletion,
 	delayFn func(int) time.Duration,
-) {
+) bool {
 	scopeKey := decision.ScopeEvidence
 	blocked := flow.retryWorkShouldBeBlocked(watch, decision.Class, scopeKey)
 
@@ -451,7 +452,7 @@ func (flow *engineFlow) recordRetryWork(
 		fields := append(flow.resultLogFields(decision, r), slog.String("error", recErr.Error()))
 		flow.engine.logger.Warn("failed to record retry_work", fields...)
 
-		return
+		return false
 	}
 
 	fields := append(flow.resultLogFields(decision, r),
@@ -464,6 +465,8 @@ func (flow *engineFlow) recordRetryWork(
 		fields = append(fields, slog.Int("attempt_count", row.AttemptCount))
 	}
 	flow.engine.logger.Debug("retry_work recorded", fields...)
+
+	return true
 }
 
 func (flow *engineFlow) retryWorkShouldBeBlocked(

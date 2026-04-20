@@ -138,47 +138,97 @@ func filterStatusSnapshot(
 	filtered := *snapshot.Config
 	filtered.Drives = make(map[driveid.CanonicalID]config.Drive)
 
+	selectedAccounts, err := filterStatusDrives(
+		&filtered,
+		snapshot.Config,
+		account,
+		selectors,
+		logger,
+	)
+	if err != nil {
+		return accountViewSnapshot{}, err
+	}
+
+	return accountViewSnapshot{
+		Config:   &filtered,
+		Stored:   snapshot.Stored,
+		Accounts: filterSnapshotAccounts(snapshot.Accounts, selectedAccounts),
+	}, nil
+}
+
+func filterStatusDrives(
+	filtered *config.Config,
+	full *config.Config,
+	account string,
+	selectors []string,
+	logger *slog.Logger,
+) (map[string]struct{}, error) {
 	selectedAccounts := make(map[string]struct{})
 	if account != "" {
 		selectedAccounts[account] = struct{}{}
 	}
 
 	if len(selectors) > 0 {
-		selectedDrives, err := config.ResolveDrives(snapshot.Config, selectors, true, logger)
+		selectedDrives, err := config.ResolveDrives(full, selectors, true, logger)
 		if err != nil {
-			return accountViewSnapshot{}, fmt.Errorf("resolving status drive selectors: %w", err)
+			return nil, fmt.Errorf("resolving status drive selectors: %w", err)
 		}
 
-		for i := range selectedDrives {
-			rd := selectedDrives[i]
-			filtered.Drives[rd.CanonicalID] = snapshot.Config.Drives[rd.CanonicalID]
+		addResolvedStatusDrives(filtered, full, selectedAccounts, selectedDrives, account)
+		return selectedAccounts, nil
+	}
+
+	addAccountStatusDrives(filtered, selectedAccounts, full, account)
+	return selectedAccounts, nil
+}
+
+func addResolvedStatusDrives(
+	filtered *config.Config,
+	full *config.Config,
+	selectedAccounts map[string]struct{},
+	selectedDrives []*config.ResolvedDrive,
+	account string,
+) {
+	for i := range selectedDrives {
+		rd := selectedDrives[i]
+		if account != "" && rd.CanonicalID.Email() != account {
+			continue
+		}
+		filtered.Drives[rd.CanonicalID] = full.Drives[rd.CanonicalID]
+		if account == "" {
 			selectedAccounts[rd.CanonicalID.Email()] = struct{}{}
 		}
-	} else {
-		for cid, drive := range snapshot.Config.Drives {
-			if account != "" && cid.Email() != account {
-				continue
-			}
-			filtered.Drives[cid] = drive
-			selectedAccounts[cid.Email()] = struct{}{}
+	}
+}
+
+func addAccountStatusDrives(
+	filtered *config.Config,
+	selectedAccounts map[string]struct{},
+	full *config.Config,
+	account string,
+) {
+	for cid, drive := range full.Drives {
+		if account != "" && cid.Email() != account {
+			continue
+		}
+		filtered.Drives[cid] = drive
+		selectedAccounts[cid.Email()] = struct{}{}
+	}
+}
+
+func filterSnapshotAccounts(accounts []accountView, selectedAccounts map[string]struct{}) []accountView {
+	if len(selectedAccounts) == 0 {
+		return accounts
+	}
+
+	filteredAccounts := make([]accountView, 0, len(accounts))
+	for i := range accounts {
+		if _, keep := selectedAccounts[accounts[i].Email]; keep {
+			filteredAccounts = append(filteredAccounts, accounts[i])
 		}
 	}
 
-	filteredAccounts := snapshot.Accounts
-	if len(selectedAccounts) > 0 {
-		filteredAccounts = make([]accountView, 0, len(snapshot.Accounts))
-		for i := range snapshot.Accounts {
-			if _, keep := selectedAccounts[snapshot.Accounts[i].Email]; keep {
-				filteredAccounts = append(filteredAccounts, snapshot.Accounts[i])
-			}
-		}
-	}
-
-	return accountViewSnapshot{
-		Config:   &filtered,
-		Stored:   snapshot.Stored,
-		Accounts: filteredAccounts,
-	}, nil
+	return filteredAccounts
 }
 
 // accountNameReader abstracts reading display name and org name from account

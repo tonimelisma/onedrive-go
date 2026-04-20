@@ -69,7 +69,7 @@ func ReadDriveStatusSnapshot(
 
 // ReadPathTruthStatus opens a read-only inspector, derives current truth
 // availability for the requested paths from durable observation issues and
-// read scopes, and closes the inspector before returning.
+// read-boundary issue scope keys, and closes the inspector before returning.
 func ReadPathTruthStatus(
 	ctx context.Context,
 	dbPath string,
@@ -258,12 +258,7 @@ func (i *storeInspector) ReadPathTruthStatus(
 	if err != nil {
 		return nil, fmt.Errorf("read path truth status observation issues: %w", err)
 	}
-	blockScopes, err := queryBlockScopeRowsWithRunner(ctx, i.db)
-	if err != nil {
-		return nil, fmt.Errorf("read path truth status block scopes: %w", err)
-	}
-
-	return NewTruthAvailabilityIndex(observationIssues, blockScopes).StatusByPath(paths), nil
+	return NewTruthAvailabilityIndex(observationIssues).StatusByPath(paths), nil
 }
 
 func (i *storeInspector) readCount(ctx context.Context, query string) (int, error) {

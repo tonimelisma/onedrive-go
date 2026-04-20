@@ -2,7 +2,6 @@ package sync
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -175,6 +174,44 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 	assert.Equal(t, []int{0}, plan.Deps[1], "download should wait for the conflict copy")
 }
 
+// Validates: R-2.1.1, R-2.1.3
+func TestPlannerPlanCurrentState_UsesRemoteRowDriveOwnershipForDownloadActions(t *testing.T) {
+	t.Parallel()
+
+	sharedDriveID := driveid.New("shared-drive-id")
+
+	plan := planCurrentStateForInputs(
+		t,
+		[]SQLiteComparisonRow{{
+			Path:           "Shared/report.txt",
+			RemotePresent:  true,
+			ComparisonKind: "remote_only_create",
+		}},
+		[]SQLiteReconciliationRow{{
+			Path:               "Shared/report.txt",
+			ComparisonKind:     "remote_only_create",
+			ReconciliationKind: strDownload,
+		}},
+		nil,
+		[]RemoteStateRow{{
+			Path:     "Shared/report.txt",
+			ItemID:   "remote-report",
+			DriveID:  sharedDriveID,
+			ItemType: ItemTypeFile,
+			Hash:     "remote-hash",
+			Size:     12,
+			Mtime:    123,
+		}},
+		nil,
+		nil,
+		NewBaselineForTest(nil),
+	)
+
+	require.Len(t, plan.Actions, 1)
+	assert.Equal(t, ActionDownload, plan.Actions[0].Type)
+	assert.Equal(t, sharedDriveID, plan.Actions[0].DriveID)
+}
+
 // Validates: R-2.1.3, R-2.10.4
 func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteConflictResolutionWithoutConflictCopy(t *testing.T) {
 	t.Parallel()
@@ -306,7 +343,7 @@ func planCurrentStateForInputs(
 	return plan
 }
 
-func planForUnavailableLocalReadScopeDescendant(t *testing.T) *ActionPlan {
+func planForUnavailableLocalReadBoundaryDescendant(t *testing.T) *ActionPlan {
 	t.Helper()
 
 	store := newTestStore(t)
@@ -327,21 +364,24 @@ func planForUnavailableLocalReadScopeDescendant(t *testing.T) *ActionPlan {
 		Mtime:    1,
 		ETag:     "etag-private",
 	}}, "", driveID))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermLocalRead("Private"),
-		ConditionType: IssueLocalReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Unix(100, 0),
-	}))
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
+		Path:       "Private",
+		DriveID:    driveID,
+		ActionType: ActionFolderCreate,
+		IssueType:  IssueLocalReadDenied,
+		Error:      "directory not accessible",
+		ScopeKey:   SKPermLocalRead("Private"),
+	})
 
 	return planCurrentStateForStore(t, store)
 }
 
-func planForUnavailableRemoteReadScopeDescendant(t *testing.T) *ActionPlan {
+func planForUnavailableRemoteReadBoundaryDescendant(t *testing.T) *ActionPlan {
 	t.Helper()
 
 	store := newTestStore(t)
 	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
 
 	_, err := store.rawDB().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
@@ -356,17 +396,19 @@ func planForUnavailableRemoteReadScopeDescendant(t *testing.T) *ActionPlan {
 		ContentIdentity: "hash",
 		ObservedAt:      1,
 	}}))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermRemoteRead("Shared"),
-		ConditionType: IssueRemoteReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Unix(100, 0),
-	}))
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
+		Path:       "Shared",
+		DriveID:    driveID,
+		ActionType: ActionDownload,
+		IssueType:  IssueRemoteReadDenied,
+		Error:      "remote subtree unreadable",
+		ScopeKey:   SKPermRemoteRead("Shared"),
+	})
 
 	return planCurrentStateForStore(t, store)
 }
 
-func planForUnavailableLocalReadScopeCleanupCandidate(t *testing.T) *ActionPlan {
+func planForUnavailableLocalReadBoundaryCleanupCandidate(t *testing.T) *ActionPlan {
 	t.Helper()
 
 	store := newTestStore(t)
@@ -377,21 +419,24 @@ func planForUnavailableLocalReadScopeCleanupCandidate(t *testing.T) *ActionPlan 
 		VALUES ('item-private-dir', 'Private/sub', 'folder', '', '', 0, 0, 1, 1, ''),
 		       ('item-private-file', 'Private/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
 	require.NoError(t, err)
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermLocalRead("Private"),
-		ConditionType: IssueLocalReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Unix(100, 0),
-	}))
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
+		Path:       "Private",
+		DriveID:    driveid.New(engineTestDriveID),
+		ActionType: ActionFolderCreate,
+		IssueType:  IssueLocalReadDenied,
+		Error:      "directory not accessible",
+		ScopeKey:   SKPermLocalRead("Private"),
+	})
 
 	return planCurrentStateForStore(t, store)
 }
 
-func planForUnavailableRemoteReadScopeCleanupCandidate(t *testing.T) *ActionPlan {
+func planForUnavailableRemoteReadBoundaryCleanupCandidate(t *testing.T) *ActionPlan {
 	t.Helper()
 
 	store := newTestStore(t)
 	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
 
 	_, err := store.rawDB().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
@@ -414,12 +459,14 @@ func planForUnavailableRemoteReadScopeCleanupCandidate(t *testing.T) *ActionPlan
 			ObservedAt:      1,
 		},
 	}))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermRemoteRead("Shared"),
-		ConditionType: IssueRemoteReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Unix(100, 0),
-	}))
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
+		Path:       "Shared",
+		DriveID:    driveID,
+		ActionType: ActionDownload,
+		IssueType:  IssueRemoteReadDenied,
+		Error:      "remote subtree unreadable",
+		ScopeKey:   SKPermRemoteRead("Shared"),
+	})
 
 	return planCurrentStateForStore(t, store)
 }
@@ -500,13 +547,12 @@ func planForUnavailableRemoteMoveDestination(t *testing.T) *ActionPlan {
 			ItemID:  "remote-dest",
 			DriveID: driveid.New(engineTestDriveID),
 		}},
-		nil,
-		[]*BlockScope{{
-			Key:           SKPermRemoteRead("Shared"),
-			ConditionType: IssueRemoteReadDenied,
-			TimingSource:  ScopeTimingNone,
-			BlockedAt:     time.Unix(100, 0),
+		[]ObservationIssueRow{{
+			Path:      "Shared",
+			IssueType: IssueRemoteReadDenied,
+			ScopeKey:  SKPermRemoteRead("Shared"),
 		}},
+		nil,
 		NewBaselineForTest([]*BaselineEntry{{
 			Path:     "Shared/dest.txt",
 			DriveID:  driveid.New(engineTestDriveID),
@@ -567,7 +613,7 @@ func TestPlannerPlanCurrentState_LocalReadDeniedDoesNotDeleteRemoteData(t *testi
 }
 
 // Validates: R-2.1.3, R-2.10.4
-func TestPlannerPlanCurrentState_RemoteReadScopeDoesNotDeleteLocalData(t *testing.T) {
+func TestPlannerPlanCurrentState_RemoteReadBoundaryDoesNotDeleteLocalData(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -587,12 +633,14 @@ func TestPlannerPlanCurrentState_RemoteReadScopeDoesNotDeleteLocalData(t *testin
 		ContentIdentity: "hash",
 		ObservedAt:      1,
 	}}))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermRemoteRead("Shared"),
-		ConditionType: IssueRemoteReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Unix(100, 0),
-	}))
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
+		Path:       "Shared",
+		DriveID:    driveid.New(engineTestDriveID),
+		ActionType: ActionDownload,
+		IssueType:  IssueRemoteReadDenied,
+		Error:      "remote subtree unreadable",
+		ScopeKey:   SKPermRemoteRead("Shared"),
+	})
 
 	plan := planCurrentStateForStore(t, store)
 	assertNoActionForPath(t, plan, "Shared/a.txt", ActionLocalDelete)
@@ -600,7 +648,7 @@ func TestPlannerPlanCurrentState_RemoteReadScopeDoesNotDeleteLocalData(t *testin
 }
 
 // Validates: R-2.1.3, R-2.10.4
-func TestPlannerPlanCurrentState_LocalReadScopeBlocksRemoteDeletesForDescendants(t *testing.T) {
+func TestPlannerPlanCurrentState_LocalReadBoundaryBlocksRemoteDeletesForDescendants(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -621,12 +669,14 @@ func TestPlannerPlanCurrentState_LocalReadScopeBlocksRemoteDeletesForDescendants
 		Mtime:    1,
 		ETag:     "etag-private",
 	}}, "", driveID))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermLocalRead("Private"),
-		ConditionType: IssueLocalReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Unix(100, 0),
-	}))
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
+		Path:       "Private",
+		DriveID:    driveID,
+		ActionType: ActionFolderCreate,
+		IssueType:  IssueLocalReadDenied,
+		Error:      "directory not accessible",
+		ScopeKey:   SKPermLocalRead("Private"),
+	})
 
 	plan := planCurrentStateForStore(t, store)
 	assertNoActionForPath(t, plan, "Private/a.txt", ActionRemoteDelete)
@@ -634,7 +684,7 @@ func TestPlannerPlanCurrentState_LocalReadScopeBlocksRemoteDeletesForDescendants
 }
 
 // Validates: R-2.1.3, R-2.10.4
-func TestPlannerPlanCurrentState_RemoteReadScopeBlocksLocalDeletesForDescendants(t *testing.T) {
+func TestPlannerPlanCurrentState_RemoteReadBoundaryBlocksLocalDeletesForDescendants(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -666,12 +716,14 @@ func TestPlannerPlanCurrentState_RemoteReadScopeBlocksLocalDeletesForDescendants
 			ObservedAt:      2,
 		},
 	}))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermRemoteRead("Team"),
-		ConditionType: IssueRemoteReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Unix(100, 0),
-	}))
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
+		Path:       "Team",
+		DriveID:    driveid.New(engineTestDriveID),
+		ActionType: ActionDownload,
+		IssueType:  IssueRemoteReadDenied,
+		Error:      "remote subtree unreadable",
+		ScopeKey:   SKPermRemoteRead("Team"),
+	})
 
 	plan := planCurrentStateForStore(t, store)
 	assertNoActionForPath(t, plan, "Team/a.txt", ActionLocalDelete)
@@ -680,7 +732,7 @@ func TestPlannerPlanCurrentState_RemoteReadScopeBlocksLocalDeletesForDescendants
 }
 
 // Validates: R-2.1.3, R-2.10.4
-func TestPlannerPlanCurrentState_LocalReadScopeSuppressesRemoteOnlySubtreeActions(t *testing.T) {
+func TestPlannerPlanCurrentState_LocalReadBoundarySuppressesRemoteOnlySubtreeActions(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -711,12 +763,14 @@ func TestPlannerPlanCurrentState_LocalReadScopeSuppressesRemoteOnlySubtreeAction
 			ETag:     "etag-private",
 		},
 	}, "", driveID))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermLocalRead("Private"),
-		ConditionType: IssueLocalReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Unix(100, 0),
-	}))
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
+		Path:       "Private",
+		DriveID:    driveID,
+		ActionType: ActionFolderCreate,
+		IssueType:  IssueLocalReadDenied,
+		Error:      "directory not accessible",
+		ScopeKey:   SKPermLocalRead("Private"),
+	})
 
 	plan := planCurrentStateForStore(t, store)
 	assertNoActionForPath(t, plan, "Private", ActionFolderCreate)
@@ -726,7 +780,7 @@ func TestPlannerPlanCurrentState_LocalReadScopeSuppressesRemoteOnlySubtreeAction
 }
 
 // Validates: R-2.1.3, R-2.10.4
-func TestPlannerPlanCurrentState_RemoteReadScopeSuppressesLocalOnlySubtreeActions(t *testing.T) {
+func TestPlannerPlanCurrentState_RemoteReadBoundarySuppressesLocalOnlySubtreeActions(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -753,12 +807,14 @@ func TestPlannerPlanCurrentState_RemoteReadScopeSuppressesLocalOnlySubtreeAction
 			ObservedAt:      1,
 		},
 	}))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermRemoteRead("Shared"),
-		ConditionType: IssueRemoteReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     time.Unix(100, 0),
-	}))
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
+		Path:       "Shared",
+		DriveID:    driveid.New(engineTestDriveID),
+		ActionType: ActionDownload,
+		IssueType:  IssueRemoteReadDenied,
+		Error:      "remote subtree unreadable",
+		ScopeKey:   SKPermRemoteRead("Shared"),
+	})
 
 	plan := planCurrentStateForStore(t, store)
 	assertNoActionForPath(t, plan, "Shared", ActionFolderCreate)
@@ -814,19 +870,19 @@ func TestPlannerPlanCurrentState_RemoteMoveDestinationWithUnavailableTruthProduc
 func TestPlannerPlanCurrentState_UnavailableTruthNeverDeletesData(t *testing.T) {
 	t.Parallel()
 
-	t.Run("local read scope keeps remote descendants from looking deleted", func(t *testing.T) {
+	t.Run("local read boundary keeps remote descendants from looking deleted", func(t *testing.T) {
 		t.Parallel()
 
-		plan := planForUnavailableLocalReadScopeDescendant(t)
+		plan := planForUnavailableLocalReadBoundaryDescendant(t)
 		assertNoActionForPath(t, plan, "Private/sub/file.txt", ActionRemoteDelete)
 		assertNoActionForPath(t, plan, "Private/sub/file.txt", ActionDownload)
 		assert.Empty(t, plan.Actions)
 	})
 
-	t.Run("remote read scope keeps local descendants from looking deleted", func(t *testing.T) {
+	t.Run("remote read boundary keeps local descendants from looking deleted", func(t *testing.T) {
 		t.Parallel()
 
-		plan := planForUnavailableRemoteReadScopeDescendant(t)
+		plan := planForUnavailableRemoteReadBoundaryDescendant(t)
 		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionLocalDelete)
 		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionUpload)
 		assert.Empty(t, plan.Actions)
@@ -835,7 +891,7 @@ func TestPlannerPlanCurrentState_UnavailableTruthNeverDeletesData(t *testing.T) 
 	t.Run("local unreadable subtree suppresses cleanup for descendants", func(t *testing.T) {
 		t.Parallel()
 
-		plan := planForUnavailableLocalReadScopeCleanupCandidate(t)
+		plan := planForUnavailableLocalReadBoundaryCleanupCandidate(t)
 		assertNoActionForPath(t, plan, "Private/sub", ActionCleanup)
 		assertNoActionForPath(t, plan, "Private/sub/file.txt", ActionCleanup)
 		assertNoActionForPath(t, plan, "Private/sub/file.txt", ActionRemoteDelete)
@@ -845,7 +901,7 @@ func TestPlannerPlanCurrentState_UnavailableTruthNeverDeletesData(t *testing.T) 
 	t.Run("remote unreadable subtree suppresses cleanup for descendants", func(t *testing.T) {
 		t.Parallel()
 
-		plan := planForUnavailableRemoteReadScopeCleanupCandidate(t)
+		plan := planForUnavailableRemoteReadBoundaryCleanupCandidate(t)
 		assertNoActionForPath(t, plan, "Shared/sub", ActionCleanup)
 		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionCleanup)
 		assertNoActionForPath(t, plan, "Shared/sub/file.txt", ActionLocalDelete)

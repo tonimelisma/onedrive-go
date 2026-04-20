@@ -460,10 +460,10 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 		{"quota blocks upload", SKQuotaOwn(), "/a.txt", "", ActionUpload, true},
 		{"quota passes download", SKQuotaOwn(), "/a.txt", "", ActionDownload, false},
 
-		// Local read blocks all actions under the unreadable directory.
-		{"perm local read blocks exact dir", SKPermLocalRead("Private"), "Private", "", ActionUpload, true},
-		{"perm local read blocks subpath", SKPermLocalRead("Private"), "Private/secret.txt", "", ActionDownload, true},
-		{"perm local read passes outside", SKPermLocalRead("Private"), "Public/readme.txt", "", ActionUpload, false},
+		// Observation-owned read boundaries do not participate in runtime scope admission.
+		{"perm local read boundary does not block exact dir", SKPermLocalRead("Private"), "Private", "", ActionUpload, false},
+		{"perm local read boundary does not block subpath", SKPermLocalRead("Private"), "Private/secret.txt", "", ActionDownload, false},
+		{"perm local read boundary passes outside", SKPermLocalRead("Private"), "Public/readme.txt", "", ActionUpload, false},
 
 		// Local write blocks local mutations only.
 		{"perm local write blocks download", SKPermLocalWrite("Private"), "Private", "", ActionDownload, true},
@@ -479,10 +479,10 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 		{"perm remote write passes local delete", SKPermRemoteWrite("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionLocalDelete, false},
 		{"perm remote write passes outside", SKPermRemoteWrite("Shared/TeamDocs"), "Shared/Other/file.txt", "", ActionUpload, false},
 
-		// Remote read blocks all actions under the unreadable subtree.
-		{"perm remote read blocks upload", SKPermRemoteRead("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionUpload, true},
-		{"perm remote read blocks download", SKPermRemoteRead("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionDownload, true},
-		{"perm remote read passes outside", SKPermRemoteRead("Shared/TeamDocs"), "Shared/Other/file.txt", "", ActionUpload, false},
+		// Observation-owned remote read boundaries do not participate in runtime scope admission.
+		{"perm remote read boundary does not block upload", SKPermRemoteRead("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionUpload, false},
+		{"perm remote read boundary does not block download", SKPermRemoteRead("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionDownload, false},
+		{"perm remote read boundary passes outside", SKPermRemoteRead("Shared/TeamDocs"), "Shared/Other/file.txt", "", ActionUpload, false},
 	}
 
 	for _, tt := range tests {

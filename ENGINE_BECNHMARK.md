@@ -150,10 +150,9 @@ against the newly built actionable set.
 `block_scopes` stores only shared blocking conditions and their timing:
 
 - `scope_key`
-- blocker kind / visible condition type
 - `blocked_at`
-- timing source
-- trial interval / next trial time / trial count
+- `trial_interval`
+- `next_trial_at`
 
 `block_scopes` is the durable owner of shared blocker lifecycle. It is not a
 secondary owner of exact work.
@@ -169,28 +168,16 @@ The target scope families are:
 - `throttle:target:drive:<driveID>`
 - `quota:own`
 - `disk:local`
-- `perm:dir:read:<path>`
 - `perm:dir:write:<path>`
-- `perm:remote:read:<boundary>`
 - `perm:remote:write:<boundary>`
 - `account:throttled`
 
 `account:throttled` is reserved for explicit classifier evidence. Ordinary
 target throttles do not imply it automatically.
 
-### Observation-born blockers
-
-The engine should create `block_scopes` directly when current truth already
-proves a shared blocker, for example:
-
-- local subtree permission denial
-- remote subtree read denial during refresh or probe
-- remote subtree write denial when observation can prove read-only before
-  dispatch
-
-Not every scope is observation-born. Some will still be activated by execution.
-The rule is simply that blocker lifecycle belongs in `block_scopes` whichever
-path discovered it.
+Read-denied subtree boundaries still use `perm:*:read:*` keys, but only as
+boundary tags on `observation_issues`. They are not persisted as
+`block_scopes`.
 
 ## `observation_state`
 

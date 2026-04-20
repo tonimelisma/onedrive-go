@@ -15,11 +15,9 @@ func seedObservationIssueRowForTest(t *testing.T, store *SyncStore, issue *Obser
 	t.Helper()
 
 	batch := ObservationFindingsBatch{
-		Issues:                []ObservationIssue{*issue},
-		ManagedIssueTypes:     []string{issue.IssueType},
-		ManagedPaths:          []string{issue.Path},
-		ManagedReadScopes:     nil,
-		ManagedReadScopeKinds: nil,
+		Issues:            []ObservationIssue{*issue},
+		ManagedIssueTypes: []string{issue.IssueType},
+		ManagedPaths:      []string{issue.Path},
 	}
 	slices.Sort(batch.ManagedIssueTypes)
 	slices.Sort(batch.ManagedPaths)
@@ -106,52 +104,17 @@ func TestSyncStore_ReconcileObservationFindings_ReplacesManagedIssueSet(t *testi
 				ScopeKey:   SKPermLocalRead("Private"),
 			},
 		},
-		ReadScopes:            []ScopeKey{SKPermLocalRead("Private")},
-		ManagedIssueTypes:     []string{IssueInvalidFilename, IssueLocalReadDenied},
-		ManagedReadScopeKinds: []ScopeKeyKind{ScopePermDirRead},
+		ManagedIssueTypes: []string{IssueInvalidFilename, IssueLocalReadDenied},
 	}, now))
 
 	rows, err := store.ListObservationIssues(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	assert.ElementsMatch(t, []string{"Private", "keep-invalid.txt"}, observationIssuePathsForTest(t, store))
-
-	blocks, err := store.ListBlockScopes(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-	assert.Equal(t, SKPermLocalRead("Private"), blocks[0].Key)
-	assert.Equal(t, ScopeFamilyPermDir, blocks[0].Family)
-	assert.Equal(t, ScopeAccessRead, blocks[0].Access)
-	assert.Equal(t, ScopeSubjectKindPath, blocks[0].SubjectKind)
-	assert.Equal(t, "Private", blocks[0].SubjectValue)
 }
 
 // Validates: R-2.5.2, R-2.10.4
-func TestSyncStore_ReconcileObservationFindings_ReleasesMissingReadScopesWithoutBlockedRetryWork(t *testing.T) {
-	t.Parallel()
-
-	store := newTestStore(t)
-	ctx := t.Context()
-	now := time.Date(2026, 4, 19, 10, 5, 0, 0, time.UTC)
-
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermLocalRead("Private"),
-		ConditionType: IssueLocalReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     now.Add(-time.Minute),
-	}))
-
-	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
-		ManagedReadScopeKinds: []ScopeKeyKind{ScopePermDirRead},
-	}, now))
-
-	blocks, err := store.ListBlockScopes(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, blocks)
-}
-
-// Validates: R-2.5.2, R-2.10.4
-func TestSyncStore_ReconcileObservationFindings_FileReadDeniedDoesNotCreateReadScope(t *testing.T) {
+func TestSyncStore_ReconcileObservationFindings_FileReadDeniedDoesNotCreateReadBoundaryScopeRow(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -189,18 +152,6 @@ func TestSyncStore_ReconcileObservationFindings_OnlyClearsManagedFamilies(t *tes
 
 	seedObservationIssueForTest(t, store, "Private", IssueLocalReadDenied, SKPermLocalRead("Private"))
 	seedObservationIssueForTest(t, store, "/", IssueRemoteReadDenied, SKPermRemoteRead(""))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermLocalRead("Private"),
-		ConditionType: IssueLocalReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     now.Add(-time.Minute),
-	}))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermRemoteRead(""),
-		ConditionType: IssueRemoteReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     now.Add(-time.Minute),
-	}))
 
 	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
 		Issues: []ObservationIssue{{
@@ -211,19 +162,13 @@ func TestSyncStore_ReconcileObservationFindings_OnlyClearsManagedFamilies(t *tes
 			Error:      "remote root unreadable",
 			ScopeKey:   SKPermRemoteRead(""),
 		}},
-		ReadScopes:            []ScopeKey{SKPermRemoteRead("")},
-		ManagedIssueTypes:     []string{IssueRemoteReadDenied},
-		ManagedReadScopeKinds: []ScopeKeyKind{ScopePermRemoteRead},
+		ManagedIssueTypes: []string{IssueRemoteReadDenied},
 	}, now))
 
 	rows, err := store.ListObservationIssues(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	assert.ElementsMatch(t, []string{"/", "Private"}, []string{rows[0].Path, rows[1].Path})
-
-	blocks, err := store.ListBlockScopes(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 2)
 }
 
 // Validates: R-2.5.2, R-2.10.4
@@ -247,58 +192,4 @@ func TestSyncStore_ReconcileObservationFindings_ManagedPathsOnlyTouchTargetedPat
 	require.Len(t, rows, 1)
 	assert.Equal(t, "Other/file.txt", rows[0].Path)
 	assert.Equal(t, IssueLocalReadDenied, rows[0].IssueType)
-}
-
-// Validates: R-2.5.2, R-2.10.4
-func TestSyncStore_ReconcileObservationFindings_ManagedReadScopesOnlyTouchTargetedKey(t *testing.T) {
-	t.Parallel()
-
-	store := newTestStore(t)
-	ctx := t.Context()
-	now := time.Date(2026, 4, 19, 10, 25, 0, 0, time.UTC)
-
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermLocalRead("Private"),
-		ConditionType: IssueLocalReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     now.Add(-2 * time.Minute),
-	}))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermLocalRead("Other"),
-		ConditionType: IssueLocalReadDenied,
-		TimingSource:  ScopeTimingNone,
-		BlockedAt:     now.Add(-time.Minute),
-	}))
-
-	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
-		ManagedReadScopes: []ScopeKey{SKPermLocalRead("Private")},
-	}, now))
-
-	blocks, err := store.ListBlockScopes(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-	assert.Equal(t, SKPermLocalRead("Other"), blocks[0].Key)
-}
-
-// Validates: R-2.5.2, R-2.10.4
-func TestSyncStore_ReconcileObservationFindings_ExactManagedReadScopeUsesCanonicalScopeMetadata(t *testing.T) {
-	t.Parallel()
-
-	store := newTestStore(t)
-	ctx := t.Context()
-	now := time.Date(2026, 4, 19, 10, 30, 0, 0, time.UTC)
-
-	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
-		ReadScopes:        []ScopeKey{SKPermLocalRead("Private")},
-		ManagedReadScopes: []ScopeKey{SKPermLocalRead("Private")},
-	}, now))
-
-	blocks, err := store.ListBlockScopes(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-	assert.Equal(t, SKPermLocalRead("Private"), blocks[0].Key)
-	assert.Equal(t, ScopeFamilyPermDir, blocks[0].Family)
-	assert.Equal(t, ScopeAccessRead, blocks[0].Access)
-	assert.Equal(t, ScopeSubjectKindPath, blocks[0].SubjectKind)
-	assert.Equal(t, "Private", blocks[0].SubjectValue)
 }

@@ -30,9 +30,7 @@ func (r *remoteFetchResult) hasObservationFindings() bool {
 		return false
 	}
 	return len(r.findings.Issues) > 0 ||
-		len(r.findings.ReadScopes) > 0 ||
-		len(r.findings.ManagedIssueTypes) > 0 ||
-		len(r.findings.ManagedReadScopeKinds) > 0
+		len(r.findings.ManagedIssueTypes) > 0
 }
 
 type primaryRootObservationKind string
@@ -138,7 +136,7 @@ func primaryCursorCommit(
 	fullReconcile bool,
 	eventCount int,
 ) *pendingPrimaryCursorCommit {
-	if token == "" {
+	if token == "" && !fullReconcile {
 		return nil
 	}
 	if !fullReconcile && eventCount == 0 {

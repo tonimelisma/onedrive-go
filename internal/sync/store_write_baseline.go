@@ -642,10 +642,11 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 	case ActionUpload, ActionFolderCreate:
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO remote_state (
-				item_id, path, parent_id, item_type, hash, size, mtime, etag,
+				drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
 				previous_path
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(item_id) DO UPDATE SET
+				drive_id = excluded.drive_id,
 				path = excluded.path,
 				parent_id = excluded.parent_id,
 				item_type = excluded.item_type,
@@ -654,7 +655,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 				mtime = excluded.mtime,
 				etag = excluded.etag,
 				previous_path = excluded.previous_path`,
-			o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
+			o.DriveID.String(), o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
 			nullString(o.RemoteHash), nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown), nullOptionalInt64(o.RemoteMtime),
 			nullString(o.ETag), sql.NullString{},
 		)
@@ -673,9 +674,9 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 	case ActionRemoteMove:
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE remote_state
-			 SET path = ?, previous_path = ?
+			 SET drive_id = ?, path = ?, previous_path = ?
 			 WHERE item_id = ?`,
-			o.Path, nullString(o.OldPath), o.ItemID,
+			o.DriveID.String(), o.Path, nullString(o.OldPath), o.ItemID,
 		); err != nil {
 			return fmt.Errorf("sync: updating remote_state for remote move %s: %w", o.Path, err)
 		}

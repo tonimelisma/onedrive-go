@@ -18,21 +18,15 @@ func localObservationManagedIssueTypes() []string {
 	}
 }
 
-func localObservationManagedReadScopeKinds() []ScopeKeyKind {
-	return []ScopeKeyKind{ScopePermDirRead}
-}
-
 func newLocalObservationFindingsBatch() ObservationFindingsBatch {
 	return ObservationFindingsBatch{
-		ManagedIssueTypes:     localObservationManagedIssueTypes(),
-		ManagedReadScopeKinds: localObservationManagedReadScopeKinds(),
+		ManagedIssueTypes: localObservationManagedIssueTypes(),
 	}
 }
 
 func newRemoteObservationFindingsBatch() ObservationFindingsBatch {
 	return ObservationFindingsBatch{
-		ManagedIssueTypes:     []string{IssueRemoteReadDenied},
-		ManagedReadScopeKinds: []ScopeKeyKind{ScopePermRemoteRead},
+		ManagedIssueTypes: []string{IssueRemoteReadDenied},
 	}
 }
 
@@ -61,14 +55,12 @@ func singlePathObservationFindingsBatch(
 
 	batch := newLocalObservationFindingsBatch()
 	appendManagedObservationPath(&batch, managedPath)
-	appendManagedObservationReadScope(&batch, SKPermLocalRead(managedPath))
 
 	if observation == nil || observation.Skipped == nil {
 		return batch, true
 	}
 	if observation.Skipped.Path != "" && observation.Skipped.Path != managedPath {
 		appendManagedObservationPath(&batch, observation.Skipped.Path)
-		appendManagedObservationReadScope(&batch, SKPermLocalRead(observation.Skipped.Path))
 	}
 
 	appendSkippedObservationFinding(&batch, driveID, observation.Skipped)
@@ -85,18 +77,6 @@ func appendManagedObservationPath(batch *ObservationFindingsBatch, path string) 
 		}
 	}
 	batch.ManagedPaths = append(batch.ManagedPaths, path)
-}
-
-func appendManagedObservationReadScope(batch *ObservationFindingsBatch, key ScopeKey) {
-	if batch == nil || key.IsZero() {
-		return
-	}
-	for i := range batch.ManagedReadScopes {
-		if batch.ManagedReadScopes[i] == key {
-			return
-		}
-	}
-	batch.ManagedReadScopes = append(batch.ManagedReadScopes, key)
 }
 
 func appendSkippedObservationFinding(
@@ -116,9 +96,8 @@ func appendSkippedObservationFinding(
 		Error:      item.Detail,
 		FileSize:   item.FileSize,
 	}
-	if item.Reason == IssueLocalReadDenied && item.BlocksReadScope {
+	if item.Reason == IssueLocalReadDenied && item.BlocksReadBoundary {
 		issue.ScopeKey = SKPermLocalRead(item.Path)
-		batch.ReadScopes = append(batch.ReadScopes, issue.ScopeKey)
 	}
 
 	batch.Issues = append(batch.Issues, issue)
@@ -146,7 +125,6 @@ func remoteReadDeniedObservationBatch(
 		Error:      err.Error(),
 		ScopeKey:   scopeKey,
 	}}
-	batch.ReadScopes = []ScopeKey{scopeKey}
 	return batch
 }
 

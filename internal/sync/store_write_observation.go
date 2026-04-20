@@ -23,17 +23,16 @@ import (
 )
 
 const (
-	sqlGetRemoteStateRow = `SELECT item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, previous_path
+	sqlGetRemoteStateRow = `SELECT ` + sqlSelectRemoteStateCols + `
 		FROM remote_state WHERE item_id = ?`
 
 	sqlInsertRemoteState = `INSERT INTO remote_state
-		(item_id, path, parent_id, item_type, hash, size, mtime, etag,
+		(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
 		 previous_path)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	sqlUpdateRemoteState = `UPDATE remote_state SET
-		path = ?, parent_id = ?, item_type = ?, hash = ?, size = ?, mtime = ?, etag = ?,
+		drive_id = ?, path = ?, parent_id = ?, item_type = ?, hash = ?, size = ?, mtime = ?, etag = ?,
 		previous_path = ?
 		WHERE item_id = ?`
 )
@@ -89,12 +88,12 @@ func (m *SyncStore) commitObservationTx(
 	if ensureErr := m.ensureConfiguredDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
 		return ensureErr
 	}
-	if !state.ConfiguredDriveID.IsZero() {
+	if driveID.IsZero() {
 		driveID = state.ConfiguredDriveID
 	}
 
 	for i := range events {
-		if !driveID.IsZero() {
+		if events[i].DriveID.IsZero() && !driveID.IsZero() {
 			events[i].DriveID = driveID
 		}
 		if !events[i].IsDeleted && IsAlwaysExcluded(slashpath.Base(events[i].Path)) {
@@ -189,6 +188,7 @@ func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driv
 
 func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *ObservedItem) error {
 	_, err := tx.ExecContext(ctx, sqlInsertRemoteState,
+		item.DriveID.String(),
 		item.ItemID, item.Path,
 		nullString(item.ParentID), item.ItemType,
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
@@ -209,6 +209,7 @@ func (m *SyncStore) updateRemoteStateFromObs(
 	previousPath string,
 ) error {
 	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
+		item.DriveID.String(),
 		item.Path, nullString(item.ParentID), item.ItemType,
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),

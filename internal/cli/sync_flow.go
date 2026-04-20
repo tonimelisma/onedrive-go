@@ -79,6 +79,9 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	}
 
 	for _, rd := range drives {
+		if rd.Paused {
+			continue
+		}
 		if syncErr := config.ValidateResolvedForSync(rd); syncErr != nil {
 			return fmt.Errorf("validate drive %s: %w", rd.CanonicalID, syncErr)
 		}

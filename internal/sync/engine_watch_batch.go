@@ -22,8 +22,6 @@ func (rt *watchRuntime) processDirtyBatch(
 	)
 	rt.engine.collector().RecordWatchBatch(len(batch.Paths))
 
-	rt.periodicPermRecheck(ctx, bl)
-
 	observeStart := rt.engine.nowFunc()
 	localResult, err := rt.observeLocalChanges(ctx, rt, bl)
 	if err != nil {
@@ -97,14 +95,6 @@ func (rt *watchRuntime) dispatchCurrentPlan(
 	}
 
 	return rt.dispatchBatchActions(ctx, plan, bl, opts)
-}
-
-// periodicPermRecheck delegates steady-state permission maintenance to the
-// permission boundary, which owns cadence and remote-probe suppression policy.
-func (rt *watchRuntime) periodicPermRecheck(ctx context.Context, bl *Baseline) {
-	rt.scopeController().runPermissionMaintenance(ctx, rt, bl, permissionMaintenanceRequest{
-		Reason: permissionMaintenancePeriodic,
-	})
 }
 
 // deduplicateInFlight cancels in-flight actions for paths that appear in the

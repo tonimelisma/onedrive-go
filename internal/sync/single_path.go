@@ -138,10 +138,10 @@ func singlePathPermissionDeniedSkippedItem(
 			boundary := deepestDeniedObservedBoundary(syncTree, parentDir)
 			if relBoundary, err := syncTree.Rel(boundary); err == nil {
 				return &SkippedItem{
-					Path:            nfcNormalize(filepath.ToSlash(relBoundary)),
-					Reason:          IssueLocalReadDenied,
-					Detail:          "directory not accessible (check filesystem permissions)",
-					BlocksReadScope: true,
+					Path:               nfcNormalize(filepath.ToSlash(relBoundary)),
+					Reason:             IssueLocalReadDenied,
+					Detail:             "directory not accessible (check filesystem permissions)",
+					BlocksReadBoundary: true,
 				}
 			}
 		}

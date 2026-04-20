@@ -33,7 +33,7 @@ func (p *Planner) PlanCurrentState(
 	)
 
 	truthPaths := comparisonPaths(comparisons)
-	truthIndex := NewTruthAvailabilityIndex(observationIssues, blockScopes)
+	truthIndex := NewTruthAvailabilityIndex(observationIssues)
 	truthStatusByPath := truthIndex.StatusByPath(truthPaths)
 
 	views, comparisonByPath, err := buildSQLitePathViews(comparisons, localRows, remoteRows, baseline, truthStatusByPath)

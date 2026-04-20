@@ -258,8 +258,8 @@ comparison_state AS (
 		remote_move_target,
 		remote_move_source,
 		CASE
-			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 0 THEN 'both_missing'
 			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 0 AND local_move_candidate_count = 1 THEN 'local_move_source'
+			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 0 THEN 'both_missing'
 			WHEN local_present = 1 AND baseline_present = 0 AND local_move_source <> '' AND local_move_candidate_count = 1 THEN 'local_move_dest'
 			WHEN baseline_present = 1 AND remote_move_target <> '' THEN 'remote_move_source'
 			WHEN remote_present = 1 AND baseline_present = 0 AND remote_move_source <> '' THEN 'remote_move_dest'

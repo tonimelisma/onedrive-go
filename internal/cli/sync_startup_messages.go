@@ -12,11 +12,11 @@ import (
 )
 
 func syncStateResetCommand(canonicalID driveid.CanonicalID) string {
-	return fmt.Sprintf("onedrive-go drive reset-sync-state --drive %s", canonicalID.String())
+	return fmt.Sprintf("onedrive-go drive reset-sync-state --drive %s", shellQuoteArg(canonicalID.String()))
 }
 
 func syncPauseDriveCommand(canonicalID driveid.CanonicalID) string {
-	return fmt.Sprintf("onedrive-go pause --drive %s", canonicalID.String())
+	return fmt.Sprintf("onedrive-go pause --drive %s", shellQuoteArg(canonicalID.String()))
 }
 
 func formatStartupResultMessage(result *multisync.DriveStartupResult) string {
@@ -106,4 +106,12 @@ func writeWatchStartWarnings(output io.Writer, warning multisync.StartupWarning)
 			formatStartupResultMessage(&result),
 		)
 	}
+}
+
+func shellQuoteArg(value string) string {
+	if value == "" {
+		return "''"
+	}
+
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }

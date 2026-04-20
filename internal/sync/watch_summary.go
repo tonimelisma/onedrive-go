@@ -28,21 +28,7 @@ func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSu
 	}
 
 	groups := ProjectStoredConditionGroups(snapshot)
-	var remoteGroups []watchRemoteBlockedGroup
-	for i := range groups {
-		group := groups[i]
-		if group.ScopeKey.IsPermRemoteWrite() {
-			remoteGroups = append(remoteGroups, watchRemoteBlockedGroup{
-				ConditionKey: group.ConditionKey,
-				ScopeKey:     group.ScopeKey,
-				BlockedPaths: append([]string(nil), group.Paths...),
-			})
-		}
-	}
-
-	sort.Slice(remoteGroups, func(i, j int) bool {
-		return remoteGroups[i].ScopeKey.String() < remoteGroups[j].ScopeKey.String()
-	})
+	remoteGroups := buildWatchRemoteBlockedGroups(snapshot)
 
 	summaryCounts := watchConditionCounts(groups)
 
@@ -51,6 +37,34 @@ func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSu
 		ConditionTotal: watchConditionCountTotal(summaryCounts),
 		Retrying:       snapshot.RetryingItems,
 	}, remoteGroups
+}
+
+func buildWatchRemoteBlockedGroups(snapshot *DriveStatusSnapshot) []watchRemoteBlockedGroup {
+	if snapshot == nil {
+		return nil
+	}
+
+	blockedByScope := GroupBlockedRetryWork(snapshot.BlockedRetryWork)
+	var remoteGroups []watchRemoteBlockedGroup
+
+	for i := range snapshot.BlockScopes {
+		block := snapshot.BlockScopes[i]
+		if block == nil || !block.Key.IsPermRemoteWrite() {
+			continue
+		}
+
+		remoteGroups = append(remoteGroups, watchRemoteBlockedGroup{
+			ConditionKey: ConditionKeyForStoredCondition(block.Key.ConditionType(), block.Key),
+			ScopeKey:     block.Key,
+			BlockedPaths: append([]string(nil), blockedByScope[block.Key].Paths...),
+		})
+	}
+
+	sort.Slice(remoteGroups, func(i, j int) bool {
+		return remoteGroups[i].ScopeKey.String() < remoteGroups[j].ScopeKey.String()
+	})
+
+	return remoteGroups
 }
 
 func watchConditionCounts(groups []StoredConditionGroup) []watchConditionCount {

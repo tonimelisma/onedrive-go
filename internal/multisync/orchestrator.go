@@ -153,8 +153,8 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.Mode, opts s
 
 func controlFailureRunOnceResult(drives []*config.ResolvedDrive, err error) RunOnceResult {
 	results := make([]DriveStartupResult, 0, len(drives))
-	for _, rd := range drives {
-		results = append(results, driveStartupResultForDrive(rd, err))
+	for selectionIndex, rd := range drives {
+		results = append(results, driveStartupResultForRunOnce(rd, selectionIndex, err))
 	}
 
 	return RunOnceResult{
@@ -175,34 +175,37 @@ func (o *Orchestrator) prepareRunOnceWork(
 	reports := make([]*DriveReport, 0, len(drives))
 	startResults := make([]DriveStartupResult, 0, len(drives))
 
-	for _, rd := range drives {
+	for selectionIndex, rd := range drives {
 		if rd.Paused {
 			startResults = append(startResults, DriveStartupResult{
-				CanonicalID: rd.CanonicalID,
-				DisplayName: rd.DisplayName,
-				Status:      DriveStartupPaused,
+				SelectionIndex: selectionIndex,
+				CanonicalID:    rd.CanonicalID,
+				DisplayName:    rd.DisplayName,
+				Status:         DriveStartupPaused,
 			})
 			continue
 		}
 
 		session, err := o.cfg.Runtime.SyncSession(ctx, rd)
 		if err != nil {
-			startResults = append(startResults, driveStartupResultForDrive(
+			startResults = append(startResults, driveStartupResultForRunOnce(
 				rd,
+				selectionIndex,
 				fmt.Errorf("session error for drive %s: %w", rd.CanonicalID, err),
 			))
 			continue
 		}
 
-		w, engineErr := o.buildEngineWork(ctx, rd, session, mode, opts)
+		w, engineErr := o.buildEngineWork(ctx, rd, selectionIndex, session, mode, opts)
 		if engineErr != nil {
-			startResults = append(startResults, driveStartupResultForDrive(rd, engineErr))
+			startResults = append(startResults, driveStartupResultForRunOnce(rd, selectionIndex, engineErr))
 			continue
 		}
 		startResults = append(startResults, DriveStartupResult{
-			CanonicalID: rd.CanonicalID,
-			DisplayName: rd.DisplayName,
-			Status:      DriveStartupRunnable,
+			SelectionIndex: selectionIndex,
+			CanonicalID:    rd.CanonicalID,
+			DisplayName:    rd.DisplayName,
+			Status:         DriveStartupRunnable,
 		})
 		work = append(work, indexedDriveWork{index: len(reports), work: w})
 		reports = append(reports, nil)
@@ -220,10 +223,21 @@ func driveStartupResultForDrive(rd *config.ResolvedDrive, err error) DriveStartu
 	}
 }
 
+func driveStartupResultForRunOnce(rd *config.ResolvedDrive, selectionIndex int, err error) DriveStartupResult {
+	result := driveStartupResultForDrive(rd, err)
+	result.SelectionIndex = selectionIndex
+	return result
+}
+
 // buildEngineWork creates a driveWork item for a successfully-resolved drive.
 // If engine creation fails, the error is captured and reported at run time.
 func (o *Orchestrator) buildEngineWork(
-	ctx context.Context, rd *config.ResolvedDrive, session *driveops.Session, mode syncengine.Mode, opts syncengine.RunOptions,
+	ctx context.Context,
+	rd *config.ResolvedDrive,
+	selectionIndex int,
+	session *driveops.Session,
+	mode syncengine.Mode,
+	opts syncengine.RunOptions,
 ) (driveWork, error) {
 	driveCollector := o.registerDrivePerfCollector(rd.CanonicalID.String())
 	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
@@ -239,7 +253,11 @@ func (o *Orchestrator) buildEngineWork(
 	}
 
 	return driveWork{
-		runner: &DriveRunner{canonID: rd.CanonicalID, displayName: rd.DisplayName},
+		runner: &DriveRunner{
+			selectionIndex: selectionIndex,
+			canonID:        rd.CanonicalID,
+			displayName:    rd.DisplayName,
+		},
 		fn: func(c context.Context) (*syncengine.Report, error) {
 			defer func() {
 				o.removeDrivePerfCollector(rd.CanonicalID.String())

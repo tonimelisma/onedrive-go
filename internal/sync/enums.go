@@ -10,28 +10,25 @@ import (
 // Unexported: only used within this file for typed constant definitions
 // and String()/Parse* methods.
 const (
-	strRemote           = "remote"
-	strLocal            = "local"
-	strCreate           = "create"
-	strModify           = "modify"
-	strFile             = "file"
-	strFolder           = "folder"
-	strRoot             = "root"
-	strDownload         = "download"
-	strUpload           = "upload"
-	strDelete           = "delete"
-	strTimingNone       = "none"
-	strTimingBackoff    = "backoff"
-	strTimingRetryAfter = "server_retry_after"
-	strLocalDelete      = "local_delete"
-	strRemoteDelete     = "remote_delete"
-	strLocalMove        = "local_move"
-	strRemoteMove       = "remote_move"
-	strMove             = "move"
-	strFolderCreate     = "folder_create"
-	strConflictCopy     = "conflict_copy"
-	strUpdateSynced     = "update_synced"
-	strCleanup          = "cleanup"
+	strRemote       = "remote"
+	strLocal        = "local"
+	strCreate       = "create"
+	strModify       = "modify"
+	strFile         = "file"
+	strFolder       = "folder"
+	strRoot         = "root"
+	strDownload     = "download"
+	strUpload       = "upload"
+	strDelete       = "delete"
+	strLocalDelete  = "local_delete"
+	strRemoteDelete = "remote_delete"
+	strLocalMove    = "local_move"
+	strRemoteMove   = "remote_move"
+	strMove         = "move"
+	strFolderCreate = "folder_create"
+	strConflictCopy = "conflict_copy"
+	strUpdateSynced = "update_synced"
+	strCleanup      = "cleanup"
 )
 
 // Direction represents the direction of a sync action (upload, download, delete).
@@ -43,17 +40,6 @@ const (
 	DirectionDownload Direction = strDownload
 	DirectionUpload   Direction = strUpload
 	DirectionDelete   Direction = strDelete
-)
-
-// ScopeTimingSource identifies how a block scope's trial timing was chosen.
-// none = no trials, backoff = locally computed, server_retry_after = Graph
-// supplied Retry-After and must survive restart until trial time.
-type ScopeTimingSource string
-
-const (
-	ScopeTimingNone             ScopeTimingSource = strTimingNone
-	ScopeTimingBackoff          ScopeTimingSource = strTimingBackoff
-	ScopeTimingServerRetryAfter ScopeTimingSource = strTimingRetryAfter
 )
 
 // Conflict type constants.

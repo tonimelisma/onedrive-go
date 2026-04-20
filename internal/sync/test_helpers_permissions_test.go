@@ -2,9 +2,6 @@ package sync
 
 import (
 	"context"
-	"testing"
-
-	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -32,28 +29,4 @@ func (m *mockPermChecker) ListItemPermissions(
 	}
 
 	return m.perms[key], nil
-}
-
-func applyLocalPermissionRecheck(t *testing.T, eng *testEngine, ctx context.Context) []PermissionRecheckDecision {
-	t.Helper()
-
-	decisions := eng.permHandler.recheckLocalPermissions(ctx)
-	rt, ok := lookupTestWatchRuntime(eng)
-	if !ok {
-		rt = newWatchRuntime(eng.Engine)
-		rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
-	}
-	rt.scopeController().applyPermissionRecheckDecisions(ctx, rt, decisions)
-	return decisions
-}
-
-func requireSinglePermissionDecision(
-	t *testing.T,
-	decisions []PermissionRecheckDecision,
-	wantKind PermissionRecheckDecisionKind,
-) {
-	t.Helper()
-
-	require.Len(t, decisions, 1)
-	require.Equal(t, wantKind, decisions[0].Kind)
 }

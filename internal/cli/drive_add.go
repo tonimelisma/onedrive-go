@@ -180,19 +180,47 @@ func addSharedDrive(
 
 	syncDir := config.BaseSyncDir(cid, "", displayName)
 
-	if err := config.AppendDriveSection(cfgPath, cid, syncDir); err != nil {
-		return fmt.Errorf("writing drive config: %w", err)
-	}
-
-	if err := config.SetDriveKey(cfgPath, cid, "display_name", displayName); err != nil {
-		return fmt.Errorf("writing display_name to config: %w", err)
-	}
-
 	if err := config.RegisterSharedDrive(config.DefaultDataDir(), cid, parentCID, displayName); err != nil {
 		return fmt.Errorf("updating catalog: %w", err)
 	}
 
+	if err := config.AppendDriveSection(cfgPath, cid, syncDir); err != nil {
+		rollbackSharedDriveAdd(cfgPath, cid, false, logger)
+		return fmt.Errorf("writing drive config: %w", err)
+	}
+
+	if err := config.SetDriveKey(cfgPath, cid, "display_name", displayName); err != nil {
+		rollbackSharedDriveAdd(cfgPath, cid, true, logger)
+		return fmt.Errorf("writing display_name to config: %w", err)
+	}
+
 	return writef(w, "Added drive %s (%s) -> %s\n", displayName, cid.String(), syncDir)
+}
+
+func rollbackSharedDriveAdd(
+	cfgPath string,
+	cid driveid.CanonicalID,
+	configWritten bool,
+	logger *slog.Logger,
+) {
+	if configWritten {
+		if err := config.DeleteDriveSection(cfgPath, cid); err != nil {
+			logger.Warn("shared drive add rollback failed to remove config section",
+				"drive", cid.String(),
+				"error", err,
+			)
+		}
+	}
+
+	if err := config.UpdateCatalog(func(catalog *config.Catalog) error {
+		catalog.DeleteDrive(cid)
+		return nil
+	}); err != nil {
+		logger.Warn("shared drive add rollback failed to remove catalog entry",
+			"drive", cid.String(),
+			"error", err,
+		)
+	}
 }
 
 // resolveSharedDisplayName fetches the exact shared item and derives a
