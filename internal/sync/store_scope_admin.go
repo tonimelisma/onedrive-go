@@ -94,11 +94,11 @@ func (m *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) erro
 			continue
 		}
 
-		keep, keepErr := m.scopeHasBlockedRetryWork(ctx, block.Key)
+		hasBlockedRetryWork, keepErr := m.scopeHasBlockedRetryWork(ctx, block.Key)
 		if keepErr != nil {
 			return keepErr
 		}
-		if keep {
+		if shouldKeepTimedBlockScope(hasBlockedRetryWork) {
 			continue
 		}
 

@@ -245,6 +245,44 @@ func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndPreservesObservatio
 	assert.Equal(t, "Shared/Docs/file.txt", ready[0].Path)
 }
 
+// Validates: R-2.10.33
+func TestPruneBlockScopesWithoutBlockedWork(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKService(),
+		BlockedAt:     time.Unix(100, 0),
+		TrialInterval: time.Minute,
+		NextTrialAt:   time.Unix(160, 0),
+	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKThrottleDrive(driveid.New("0000000000000001")),
+		BlockedAt:     time.Unix(300, 0),
+		TrialInterval: time.Minute,
+		NextTrialAt:   time.Unix(360, 0),
+	}))
+
+	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
+		Path:         "blocked.txt",
+		ActionType:   ActionUpload,
+		ScopeKey:     SKService(),
+		Blocked:      true,
+		AttemptCount: 1,
+		LastError:    "blocked",
+		FirstSeenAt:  1,
+		LastSeenAt:   2,
+	}))
+
+	require.NoError(t, store.PruneBlockScopesWithoutBlockedWork(ctx))
+
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, SKService(), blocks[0].Key)
+}
+
 // Validates: R-2.5.2, R-2.10.8
 func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndPreservesObservationIssues(t *testing.T) {
 	t.Parallel()

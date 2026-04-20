@@ -73,8 +73,9 @@ func blockScopeRowFromActiveScope(scope ActiveScope) (*BlockScope, error) {
 
 // ScopeUpdateResult describes the outcome of UpdateScope: whether a new scope
 // block should be created. Does NOT contain the computed trial interval —
-// interval computation is centralized in computeTrialInterval() to prevent
-// divergence between initial block creation and subsequent trial extensions.
+// interval computation is centralized in scope lifecycle policy helpers to
+// prevent divergence between initial block creation and subsequent trial
+// extensions.
 type ScopeUpdateResult struct {
 	Block         bool          // true if threshold crossed → create block
 	ScopeKey      ScopeKey      // scope key for the block

@@ -430,7 +430,7 @@ when you treat it as several file families sharing one single-drive owner.
 | `engine.go`, `engine_config.go`, `engine_loop.go`, `engine_run_once.go`, `engine_watch*.go` | Runtime orchestration: main loop, one-shot run, watch lifecycle and batch reconciliation |
 | `engine_primary_root*.go`, `engine_observation_postprocess.go`, `observed_items.go` | Engine-owned primary-root observation: root selection, shared-root fallback, postprocessing, and remote observation projection |
 | `engine_result_*.go`, `engine_results.go`, `engine_retry_trial.go` | Result classification, retry-trial decisions, and scope-level result flow |
-| `engine_scope_invariants.go`, `engine_scope_lifecycle.go` | Scope lifecycle: timed blocker activation, release/discard, and invariant enforcement for retry/write scopes |
+| `engine_scope_invariants.go`, `engine_scope_startup.go`, `engine_scope_runtime.go`, `engine_scope_admission.go`, `scope_lifecycle_policy.go` | Scope lifecycle: startup cleanup, timed blocker activation, release/discard, admission, and shared lifecycle policy for retry/write scopes |
 | `engine_runtime_state.go`, `engine_runtime_types.go`, `engine_time.go`, `engine_log_fields.go`, `engine_policy_controllers.go` | Engine runtime state, time helpers, structured logging, and policy controllers |
 | `permissions.go`, `permission_handler.go`, `permission_capability.go`, `permission_decisions.go`, `permission_probe_*.go` | Capability-based permission probing, denied-path policy, and write-scope activation/release decisions |
 | `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, block scoping, and scope key canonicalization |
