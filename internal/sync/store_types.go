@@ -7,8 +7,8 @@ import (
 )
 
 // ObservationIssue is a durable current-truth problem discovered by
-// observation or execution and shown to the user until the underlying path
-// becomes syncable again.
+// observation and shown to the user until the underlying path becomes
+// syncable again.
 type ObservationIssue struct {
 	Path       string
 	DriveID    driveid.ID
@@ -19,6 +19,14 @@ type ObservationIssue struct {
 	ScopeKey   ScopeKey
 	FileSize   int64
 	LocalHash  string
+}
+
+// ObservationFindingsBatch is one coherent observation-owned durable batch.
+// The batch replaces the current observation-owned issue set for its managed
+// issue families and read scopes.
+type ObservationFindingsBatch struct {
+	Issues     []ObservationIssue
+	ReadScopes []ScopeKey
 }
 
 // ObservationIssueRow represents a row from the observation_issues table.
