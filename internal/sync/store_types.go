@@ -53,14 +53,14 @@ type ObservationIssueRow struct {
 // RetryWorkFailure records one exact work item that still needs a retry. The
 // retry_work table owns attempt counting and backoff state.
 type RetryWorkFailure struct {
-	Path       string
-	OldPath    string
-	ActionType ActionType
-	IssueType  string
-	ScopeKey   ScopeKey
-	LastError  string
-	HTTPStatus int
-	Blocked    bool
+	Path          string
+	OldPath       string
+	ActionType    ActionType
+	ConditionType string
+	ScopeKey      ScopeKey
+	LastError     string
+	HTTPStatus    int
+	Blocked       bool
 }
 
 // ObservedItem represents a single item from a delta API response, ready
@@ -107,19 +107,19 @@ type LocalStateRow struct {
 
 // RetryWorkRow represents a row from the retry_work table.
 type RetryWorkRow struct {
-	WorkKey      string
-	Path         string
-	OldPath      string
-	ActionType   ActionType
-	IssueType    string
-	ScopeKey     ScopeKey
-	Blocked      bool
-	AttemptCount int
-	NextRetryAt  int64
-	LastError    string
-	HTTPStatus   int
-	FirstSeenAt  int64
-	LastSeenAt   int64
+	WorkKey       string
+	Path          string
+	OldPath       string
+	ActionType    ActionType
+	ConditionType string
+	ScopeKey      ScopeKey
+	Blocked       bool
+	AttemptCount  int
+	NextRetryAt   int64
+	LastError     string
+	HTTPStatus    int
+	FirstSeenAt   int64
+	LastSeenAt    int64
 }
 
 // SyncRunStatus is the typed one-shot status row persisted for product-facing

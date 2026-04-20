@@ -297,7 +297,7 @@ func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
 	}))
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
-		IssueType:     IssueServiceOutage,
+		ConditionType: IssueServiceOutage,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Unix(100, 0),
 		TrialInterval: time.Minute,
@@ -305,7 +305,7 @@ func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
 	}))
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKThrottleDrive(driveid.New("drive1")),
-		IssueType:     IssueRateLimited,
+		ConditionType: IssueRateLimited,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     time.Unix(200, 0),
 		TrialInterval: time.Minute,
@@ -523,10 +523,10 @@ func TestBuildDryRunCurrentActionPlan_ObservationFindingsStayScratchOnly(t *test
 		ScopeKey:   SKPermRemoteRead(""),
 	}))
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
-		Key:          SKPermRemoteRead(""),
-		IssueType:    IssueRemoteReadDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    time.Unix(100, 0),
+		Key:           SKPermRemoteRead(""),
+		ConditionType: IssueRemoteReadDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     time.Unix(100, 0),
 	}))
 
 	bl, err := eng.baseline.Load(ctx)

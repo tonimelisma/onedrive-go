@@ -128,12 +128,12 @@ func TestScopeController_ClearBlockedRetryWorkForScope_RemovesScopedRetryWork(t 
 	scopeKey := SKService()
 
 	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:       "blocked.txt",
-		ActionType: ActionUpload,
-		IssueType:  IssueServiceOutage,
-		ScopeKey:   scopeKey,
-		LastError:  "blocked retry",
-		Blocked:    true,
+		Path:          "blocked.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      scopeKey,
+		LastError:     "blocked retry",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
@@ -155,9 +155,9 @@ func TestScopeController_AdmitReady_BlocksNormalActionUnderActiveScope(t *testin
 	scopeKey := SKQuotaOwn()
 
 	setTestBlockScope(t, eng, &BlockScope{
-		Key:          scopeKey,
-		IssueType:    IssueQuotaExceeded,
-		TimingSource: ScopeTimingNone,
+		Key:           scopeKey,
+		ConditionType: IssueQuotaExceeded,
+		TimingSource:  ScopeTimingNone,
 	})
 
 	ready := rt.depGraph.Add(&Action{
@@ -189,12 +189,12 @@ func TestScopeController_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenSco
 	scopeKey := SKQuotaOwn()
 
 	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:       "trial.txt",
-		ActionType: ActionDownload,
-		IssueType:  scopeKey.IssueType(),
-		ScopeKey:   scopeKey,
-		LastError:  "stale blocked retry",
-		Blocked:    true,
+		Path:          "trial.txt",
+		ActionType:    ActionDownload,
+		ConditionType: scopeKey.ConditionType(),
+		ScopeKey:      scopeKey,
+		LastError:     "stale blocked retry",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
@@ -224,12 +224,12 @@ func TestScopeController_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWi
 	scopeKey := SKQuotaOwn()
 
 	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:       "trial.txt",
-		ActionType: ActionUpload,
-		IssueType:  scopeKey.IssueType(),
-		ScopeKey:   scopeKey,
-		LastError:  "blocked retry",
-		Blocked:    true,
+		Path:          "trial.txt",
+		ActionType:    ActionUpload,
+		ConditionType: scopeKey.ConditionType(),
+		ScopeKey:      scopeKey,
+		LastError:     "blocked retry",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
@@ -292,35 +292,35 @@ func TestScopeController_ClearResolvedRemoteBlockedRetryWork_KeepsRemotePermissi
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           resolvedScope,
-		IssueType:     IssueRemoteWriteDenied,
+		ConditionType: IssueRemoteWriteDenied,
 		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		NextTrialAt:   eng.nowFn().Add(time.Minute),
 		TrialInterval: time.Minute,
 	})
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           retainedScope,
-		IssueType:     IssueRemoteWriteDenied,
+		ConditionType: IssueRemoteWriteDenied,
 		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		NextTrialAt:   eng.nowFn().Add(time.Minute),
 		TrialInterval: time.Minute,
 	})
 
 	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:       "Shared/Resolved/file.txt",
-		ActionType: ActionRemoteDelete,
-		IssueType:  IssueRemoteWriteDenied,
-		ScopeKey:   resolvedScope,
-		LastError:  "blocked resolved retry",
-		Blocked:    true,
+		Path:          "Shared/Resolved/file.txt",
+		ActionType:    ActionRemoteDelete,
+		ConditionType: IssueRemoteWriteDenied,
+		ScopeKey:      resolvedScope,
+		LastError:     "blocked resolved retry",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 	_, err = eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:       "Shared/Retained/file.txt",
-		ActionType: ActionRemoteDelete,
-		IssueType:  IssueRemoteWriteDenied,
-		ScopeKey:   retainedScope,
-		LastError:  "blocked retained retry",
-		Blocked:    true,
+		Path:          "Shared/Retained/file.txt",
+		ActionType:    ActionRemoteDelete,
+		ConditionType: IssueRemoteWriteDenied,
+		ScopeKey:      retainedScope,
+		LastError:     "blocked retained retry",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
@@ -359,10 +359,10 @@ func TestScopeController_NormalizePersistedScopes_LeavesPermissionScopesForPermi
 	scopeKey := SKPermLocalWrite("restored")
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:          scopeKey,
-		IssueType:    IssueLocalWriteDenied,
-		TimingSource: ScopeTimingNone,
-		BlockedAt:    eng.nowFn().Add(-time.Minute),
+		Key:           scopeKey,
+		ConditionType: IssueLocalWriteDenied,
+		TimingSource:  ScopeTimingNone,
+		BlockedAt:     eng.nowFn().Add(-time.Minute),
 	}))
 
 	require.NoError(t, controller.normalizePersistedScopes(t.Context(), nil))
@@ -381,7 +381,7 @@ func TestScopeController_NormalizeDiskScope_UsesCurrentDiskState(t *testing.T) {
 		eng.minFreeSpace = 0
 		block := &BlockScope{
 			Key:           SKDiskLocal(),
-			IssueType:     IssueDiskFull,
+			ConditionType: IssueDiskFull,
 			TimingSource:  ScopeTimingBackoff,
 			BlockedAt:     eng.nowFn().Add(-time.Minute),
 			TrialInterval: time.Minute,
@@ -402,10 +402,10 @@ func TestScopeController_NormalizeDiskScope_UsesCurrentDiskState(t *testing.T) {
 		eng.minFreeSpace = 100
 		eng.diskAvailableFn = func(string) (uint64, error) { return 10, nil }
 		block := &BlockScope{
-			Key:          SKDiskLocal(),
-			IssueType:    IssueDiskFull,
-			TimingSource: ScopeTimingBackoff,
-			BlockedAt:    eng.nowFn().Add(-time.Minute),
+			Key:           SKDiskLocal(),
+			ConditionType: IssueDiskFull,
+			TimingSource:  ScopeTimingBackoff,
+			BlockedAt:     eng.nowFn().Add(-time.Minute),
 		}
 
 		require.NoError(t, controller.normalizeDiskScope(t.Context(), block))

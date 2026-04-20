@@ -22,7 +22,7 @@ type watchRemoteBlockedGroup struct {
 // watchConditionGroupCount is one derived visible condition family with its
 // aggregated count in the watch-summary projection.
 type watchConditionGroupCount struct {
-	Key       SummaryKey
+	Key       ConditionKey
 	Count     int
 	ScopeKind string
 	Scope     string
@@ -51,8 +51,8 @@ func (s watchConditionSummary) ConflictCount() int {
 func (s watchConditionSummary) ActionableCount() int {
 	total := 0
 	for _, group := range s.Groups {
-		if group.Key == SummaryRemoteWriteDenied ||
-			group.Key == SummaryAuthenticationRequired {
+		if group.Key == ConditionRemoteWriteDenied ||
+			group.Key == ConditionAuthenticationRequired {
 			continue
 		}
 		total += group.Count
@@ -62,18 +62,18 @@ func (s watchConditionSummary) ActionableCount() int {
 }
 
 func (s watchConditionSummary) RemoteBlockedCount() int {
-	return s.countForKey(SummaryRemoteWriteDenied)
+	return s.countForKey(ConditionRemoteWriteDenied)
 }
 
 func (s watchConditionSummary) AuthRequiredCount() int {
-	return s.countForKey(SummaryAuthenticationRequired)
+	return s.countForKey(ConditionAuthenticationRequired)
 }
 
 func (s watchConditionSummary) RetryingCount() int {
 	return s.Retrying
 }
 
-func (s watchConditionSummary) countForKey(key SummaryKey) int {
+func (s watchConditionSummary) countForKey(key ConditionKey) int {
 	total := 0
 	for _, group := range s.Groups {
 		if group.Key == key {
@@ -85,14 +85,14 @@ func (s watchConditionSummary) countForKey(key SummaryKey) int {
 }
 
 type watchConditionGroupIdentity struct {
-	Key       SummaryKey
+	Key       ConditionKey
 	ScopeKind string
 	Scope     string
 }
 
 type watchConditionGroupAccumulator map[watchConditionGroupIdentity]int
 
-func (a watchConditionGroupAccumulator) Add(key SummaryKey, count int, scopeKind, scope string) {
+func (a watchConditionGroupAccumulator) Add(key ConditionKey, count int, scopeKind, scope string) {
 	if key == "" || count <= 0 {
 		return
 	}
@@ -138,7 +138,7 @@ func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSu
 	counts := make(watchConditionGroupAccumulator)
 
 	for i := range snapshot.ObservationIssues {
-		key := SummaryKeyForObservationIssue(
+		key := ConditionKeyForObservationIssue(
 			snapshot.ObservationIssues[i].IssueType,
 			snapshot.ObservationIssues[i].ScopeKey,
 		)
@@ -157,7 +157,7 @@ func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSu
 		if count == 0 {
 			count = 1
 		}
-		counts.Add(SummaryKeyForBlockScope(block.IssueType, block.Key), count, "", "")
+		counts.Add(ConditionKeyForBlockScope(block.ConditionType, block.Key), count, "", "")
 
 		if block.Key.IsPermRemoteWrite() {
 			paths := append([]string(nil), projection.paths...)

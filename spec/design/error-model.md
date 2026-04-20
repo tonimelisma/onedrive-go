@@ -20,7 +20,7 @@ state:
 
 - `errclass.Class`: the runtime execution contract used by sync routing,
   retry/trial policy, and CLI exit behavior
-- `sync.SummaryKey`: the shared sync-domain grouping key used for structured
+- `sync.ConditionKey`: the shared sync-domain grouping key used for structured
   logs and status rendering
 - durable sync authorities: `observation_issues`, `retry_work`, and
   `block_scopes`
@@ -28,7 +28,8 @@ state:
 These projections intentionally answer different questions:
 
 - runtime class answers "what should the process do next?"
-- summary key answers "how should sync-domain state be grouped and explained?"
+- condition key answers "how should sync-domain state be grouped and
+  explained?"
 - durable authorities answer "what restart-safe fact or policy decision do we
   need to persist?"
 
@@ -62,9 +63,10 @@ The docs and code stay aligned through a small number of explicit classifier
 entry points:
 
 - `internal/errclass`: the `Class` type
-- `internal/sync/summary_keys.go`: shared `SummaryKey` normalization helpers
+- `internal/sync/condition_keys.go`: shared `ConditionKey` normalization
+  helpers
 - `internal/cli/status_condition_descriptors.go`: CLI-owned rendering tables for
-  `SummaryKey` values until the status-surface naming sweep lands
+  `ConditionKey` values until the status-surface naming sweep lands
 - `internal/config/failure_class.go`: classify config load results
 - `internal/sync/engine_result_classify.go`: classify each action completion
 - `internal/cli/failure_class.go`: classify command-returned errors into exit
@@ -111,5 +113,5 @@ For permission-derived conditions, the durable mapping is access-specific:
 | Boundary | Evidence |
 | --- | --- |
 | Shared failure classes | `internal/errclass/errclass_test.go` (`TestClassStringAndValidity`), `internal/config/failure_class_test.go` (`TestClassifyLoadOutcome`), `internal/cli/failure_class_test.go` (`TestClassifyCommandError`, `TestCommandFailurePresentationForClass`) |
-| Shared summary-key normalization and CLI rendering tables | `internal/sync/summary_keys_test.go` (`TestSummaryKeyForObservationIssue_RepresentativeMappings`, `TestSummaryKeyForRetryWork_RepresentativeMappings`, `TestSummaryKeyForBlockScope_RepresentativeMappings`, `TestSummaryKeyForIssueType_RepresentativeMappings`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesConditionScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions`, `TestPrintSyncStateText_WithConditions`), `internal/cli/status_golden_test.go` (`TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`) |
+| Shared condition-key normalization and CLI rendering tables | `internal/sync/condition_keys_test.go` (`TestConditionKeyForObservationIssue_RepresentativeMappings`, `TestConditionKeyForRetryWork_RepresentativeMappings`, `TestConditionKeyForBlockScope_RepresentativeMappings`, `TestConditionKeyForIssueType_RepresentativeMappings`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesConditionScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions`, `TestPrintSyncStateText_WithConditions`), `internal/cli/status_golden_test.go` (`TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`) |
 | Sync result classification foundations | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_SuccessAndShutdown`, `TestClassifyResult_HTTPPersistenceAndScopeRouting`, `TestClassifyResult_LocalPersistenceAndScopeRouting`), `internal/sync/engine_retry_trial_test.go` (`TestClearStaleRetrySweepRow_ResolvedRetryClearsRetryWork`, `TestClearStaleRetrySweepRow_SkippedRetryPersistsObservationFindings`, `TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState`, `TestRunRetrierSweep_ClearsStaleRetryWorkWithoutDispatch`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`), `internal/sync/engine_scope_lifecycle_test.go` (`TestScopeController_ApplyTrialPreserveEffects_RehomesDiskScopeRetryWork`, `TestScopeController_NormalizeDiskScope_UsesCurrentDiskState`) |

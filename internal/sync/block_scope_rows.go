@@ -16,7 +16,7 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 		scopeAccess   string
 		subjectKind   string
 		subjectValue  string
-		issueType     string
+		conditionType string
 		timingSource  string
 		blockedAtNano int64
 		intervalNano  int64
@@ -30,7 +30,7 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 		&scopeAccess,
 		&subjectKind,
 		&subjectValue,
-		&issueType,
+		&conditionType,
 		&timingSource,
 		&blockedAtNano,
 		&intervalNano,
@@ -40,27 +40,18 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 		return nil, fmt.Errorf("scan block scope row: %w", err)
 	}
 
-	key := ParseScopeKey(wireKey)
-	if key.IsZero() {
+	metadata, err := decodePersistedScopeMetadata(
+		wireKey,
+		scopeFamily,
+		scopeAccess,
+		subjectKind,
+		subjectValue,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("scan block scope row: %w", err)
+	}
+	if metadata.Key.IsZero() {
 		return &BlockScope{Key: ScopeKey{}}, nil
-	}
-
-	descriptor := DescribeScopeKey(key)
-	if descriptor.Family == ScopeFamilyUnknown {
-		return nil, fmt.Errorf("scan block scope row: unknown scope descriptor for %q", wireKey)
-	}
-	if descriptor.Family != ScopeFamily(scopeFamily) ||
-		descriptor.Access != ScopeAccess(scopeAccess) ||
-		descriptor.SubjectKind != ScopeSubjectKind(subjectKind) ||
-		descriptor.SubjectValue != subjectValue {
-		return nil, fmt.Errorf(
-			"scan block scope row: metadata mismatch for %q (family=%q access=%q subject_kind=%q subject_value=%q)",
-			wireKey,
-			scopeFamily,
-			scopeAccess,
-			subjectKind,
-			subjectValue,
-		)
 	}
 
 	nextTrialAt := time.Time{}
@@ -69,12 +60,12 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 	}
 
 	return &BlockScope{
-		Key:           key,
-		Family:        descriptor.Family,
-		Access:        descriptor.Access,
-		SubjectKind:   descriptor.SubjectKind,
-		SubjectValue:  descriptor.SubjectValue,
-		IssueType:     issueType,
+		Key:           metadata.Key,
+		Family:        metadata.Family,
+		Access:        metadata.Access,
+		SubjectKind:   metadata.SubjectKind,
+		SubjectValue:  metadata.SubjectValue,
+		ConditionType: conditionType,
 		TimingSource:  ScopeTimingSource(timingSource),
 		BlockedAt:     time.Unix(0, blockedAtNano).UTC(),
 		TrialInterval: time.Duration(intervalNano),

@@ -22,7 +22,7 @@ func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *ActionCompl
 	fields := []any{
 		slog.String("run_id", flow.runID),
 		slog.Int64("action_id", r.ActionID),
-		slog.String("summary_key", string(decision.SummaryKey)),
+		slog.String("condition_key", string(decision.ConditionKey)),
 		slog.String("failure_class", decision.Class.String()),
 		slog.String("log_owner", "sync"),
 		slog.String("drive_id", driveID.String()),
@@ -45,7 +45,7 @@ func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *ActionCompl
 
 func (flow *engineFlow) summaryLogFields(
 	class errclass.Class,
-	summaryKey SummaryKey,
+	conditionKey ConditionKey,
 	path string,
 	scopeKey ScopeKey,
 ) []any {
@@ -55,7 +55,7 @@ func (flow *engineFlow) summaryLogFields(
 
 	fields := []any{
 		slog.String("run_id", flow.runID),
-		slog.String("summary_key", string(summaryKey)),
+		slog.String("condition_key", string(conditionKey)),
 		slog.String("failure_class", class.String()),
 		slog.String("log_owner", "sync"),
 		slog.String("path", path),

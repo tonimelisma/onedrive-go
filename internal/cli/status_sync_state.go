@@ -120,9 +120,9 @@ func buildStatusConditionJSON(
 	output := make([]statusConditionJSON, 0, len(groups))
 	for i := range groups {
 		group := groups[i]
-		descriptor := describeStatusSummary(group.SummaryKey)
+		descriptor := describeStatusCondition(group.ConditionKey)
 		output = append(output, statusConditionJSON{
-			SummaryKey:    string(group.SummaryKey),
+			ConditionKey:  string(group.ConditionKey),
 			ConditionType: group.ConditionType,
 			Title:         descriptor.Title,
 			Reason:        descriptor.Reason,
@@ -140,7 +140,7 @@ func buildStatusConditionJSON(
 }
 
 type statusConditionGroup struct {
-	SummaryKey    syncengine.SummaryKey
+	ConditionKey  syncengine.ConditionKey
 	ConditionType string
 	ScopeKey      syncengine.ScopeKey
 	Count         int
@@ -148,8 +148,8 @@ type statusConditionGroup struct {
 }
 
 type statusConditionGroupKey struct {
-	summaryKey syncengine.SummaryKey
-	scopeKey   string
+	conditionKey syncengine.ConditionKey
+	scopeKey     string
 }
 
 type blockedRetryProjection struct {
@@ -179,8 +179,8 @@ func addStatusObservationConditionGroups(
 	observationIssues []syncengine.ObservationIssueRow,
 ) {
 	for i := range observationIssues {
-		summaryKey := syncengine.SummaryKeyForObservationIssue(observationIssues[i].IssueType, observationIssues[i].ScopeKey)
-		group := ensureStatusConditionGroup(groups, groupIndex, summaryKey, observationIssues[i].IssueType, observationIssues[i].ScopeKey)
+		conditionKey := syncengine.ConditionKeyForObservationIssue(observationIssues[i].IssueType, observationIssues[i].ScopeKey)
+		group := ensureStatusConditionGroup(groups, groupIndex, conditionKey, observationIssues[i].IssueType, observationIssues[i].ScopeKey)
 		if group == nil {
 			continue
 		}
@@ -207,8 +207,8 @@ func addStatusBlockScopeGroups(
 		if count == 0 {
 			count = 1
 		}
-		summaryKey := syncengine.SummaryKeyForBlockScope(block.IssueType, block.Key)
-		group := ensureStatusConditionGroup(groups, groupIndex, summaryKey, block.IssueType, block.Key)
+		conditionKey := syncengine.ConditionKeyForBlockScope(block.ConditionType, block.Key)
+		group := ensureStatusConditionGroup(groups, groupIndex, conditionKey, block.ConditionType, block.Key)
 		if group == nil {
 			continue
 		}
@@ -222,24 +222,24 @@ func addStatusBlockScopeGroups(
 func ensureStatusConditionGroup(
 	groups *[]statusConditionGroup,
 	groupIndex map[statusConditionGroupKey]int,
-	summaryKey syncengine.SummaryKey,
+	conditionKey syncengine.ConditionKey,
 	conditionType string,
 	scopeKey syncengine.ScopeKey,
 ) *statusConditionGroup {
-	if summaryKey == "" {
+	if conditionKey == "" {
 		return nil
 	}
 
 	key := statusConditionGroupKey{
-		summaryKey: summaryKey,
-		scopeKey:   scopeKey.String(),
+		conditionKey: conditionKey,
+		scopeKey:     scopeKey.String(),
 	}
 	if idx, ok := groupIndex[key]; ok {
 		return &(*groups)[idx]
 	}
 
 	*groups = append(*groups, statusConditionGroup{
-		SummaryKey:    summaryKey,
+		ConditionKey:  conditionKey,
 		ConditionType: conditionType,
 		ScopeKey:      scopeKey,
 	})

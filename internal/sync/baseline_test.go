@@ -168,7 +168,7 @@ func TestCheckpoint_PrunesStaleObservationIssues(t *testing.T) {
 
 	// retry_work is not part of retention pruning.
 	_, err = mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO retry_work (work_key, path, old_path, action_type, issue_type, scope_key, blocked, attempt_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
+		`INSERT INTO retry_work (work_key, path, old_path, action_type, condition_type, scope_key, blocked, attempt_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"upload\x00\x00/pending-issue.txt", "/pending-issue.txt", "", "upload", "service_unavailable", "", 0, 1, oldTime, "temporary", 503, oldTime, oldTime)
 	require.NoError(t, err)

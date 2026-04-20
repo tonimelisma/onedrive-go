@@ -13,7 +13,7 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-func TestDescribeStatusSummary_CoversFamiliesAndFallback(t *testing.T) {
+func TestDescribeStatusCondition_CoversFamiliesAndFallback(t *testing.T) {
 	t.Parallel()
 
 	authPresentation := authstate.UnauthorizedIssuePresentation()
@@ -25,7 +25,7 @@ func TestDescribeStatusSummary_CoversFamiliesAndFallback(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := describeStatusSummary(tc.key)
+			got := describeStatusCondition(tc.key)
 			assert.Equal(t, tc.wantTitle, got.Title)
 			assert.Equal(t, tc.wantReason, got.Reason)
 			assert.Equal(t, tc.wantAction, got.Action)
@@ -58,12 +58,12 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 		},
 		BlockScopes: []*syncengine.BlockScope{
 			{
-				Key:       syncengine.SKPermRemoteWrite("Shared/A"),
-				IssueType: syncengine.IssueRemoteWriteDenied,
+				Key:           syncengine.SKPermRemoteWrite("Shared/A"),
+				ConditionType: syncengine.IssueRemoteWriteDenied,
 			},
 			{
-				Key:       syncengine.SKPermRemoteWrite("Shared/B"),
-				IssueType: syncengine.IssueRemoteWriteDenied,
+				Key:           syncengine.SKPermRemoteWrite("Shared/B"),
+				ConditionType: syncengine.IssueRemoteWriteDenied,
 			},
 		},
 		BlockedRetryWork: []syncengine.RetryWorkRow{
@@ -168,8 +168,8 @@ func TestGroupStatusConditions_MergesScopeFamiliesAndDedupesPaths(t *testing.T) 
 		},
 		BlockScopes: []*syncengine.BlockScope{
 			{
-				Key:       syncengine.SKPermRemoteWrite("Shared/Docs"),
-				IssueType: syncengine.IssueRemoteWriteDenied,
+				Key:           syncengine.SKPermRemoteWrite("Shared/Docs"),
+				ConditionType: syncengine.IssueRemoteWriteDenied,
 			},
 		},
 		BlockedRetryWork: []syncengine.RetryWorkRow{
@@ -183,12 +183,12 @@ func TestGroupStatusConditions_MergesScopeFamiliesAndDedupesPaths(t *testing.T) 
 	groups := groupStatusConditions(snapshot)
 	require.Len(t, groups, 2)
 
-	assert.Equal(t, syncengine.SummaryInvalidFilename, groups[0].SummaryKey)
+	assert.Equal(t, syncengine.ConditionInvalidFilename, groups[0].ConditionKey)
 	assert.Equal(t, syncengine.IssueInvalidFilename, groups[0].ConditionType)
 	assert.Equal(t, 1, groups[0].Count)
 	assert.Equal(t, []string{"/bad:name.txt"}, groups[0].Paths)
 
-	assert.Equal(t, syncengine.SummaryRemoteWriteDenied, groups[1].SummaryKey)
+	assert.Equal(t, syncengine.ConditionRemoteWriteDenied, groups[1].ConditionKey)
 	assert.Equal(t, syncengine.IssueRemoteWriteDenied, groups[1].ConditionType)
 	assert.Equal(t, syncengine.SKPermRemoteWrite("Shared/Docs"), groups[1].ScopeKey)
 	assert.Equal(t, 4, groups[1].Count)
@@ -499,7 +499,7 @@ func TestPrintStatusText_RendersMultiAccountSummary(t *testing.T) {
 
 type descriptorCase struct {
 	name       string
-	key        syncengine.SummaryKey
+	key        syncengine.ConditionKey
 	wantTitle  string
 	wantReason string
 	wantAction string
@@ -509,42 +509,42 @@ func descriptorAuthAndRemoteCases(authPresentation authstate.Presentation) []des
 	return []descriptorCase{
 		{
 			name:       "authentication required",
-			key:        syncengine.SummaryAuthenticationRequired,
+			key:        syncengine.ConditionAuthenticationRequired,
 			wantTitle:  "AUTHENTICATION REQUIRED",
 			wantReason: authPresentation.Reason,
 			wantAction: authPresentation.Action,
 		},
 		{
 			name:       "quota exceeded",
-			key:        syncengine.SummaryQuotaExceeded,
+			key:        syncengine.ConditionQuotaExceeded,
 			wantTitle:  "QUOTA EXCEEDED",
 			wantReason: "The OneDrive storage quota for this sync scope is full.",
 			wantAction: "Free up space in the owning drive, or ask the shared-folder owner to do so.",
 		},
 		{
 			name:       "service outage",
-			key:        syncengine.SummaryServiceOutage,
+			key:        syncengine.ConditionServiceOutage,
 			wantTitle:  "SERVICE OUTAGE",
 			wantReason: "OneDrive service is temporarily unavailable.",
 			wantAction: "Wait for the service to recover (automatic retry in progress).",
 		},
 		{
 			name:       "rate limited",
-			key:        syncengine.SummaryRateLimited,
+			key:        syncengine.ConditionRateLimited,
 			wantTitle:  "RATE LIMITED",
 			wantReason: "OneDrive asked this remote location to slow down.",
 			wantAction: "Wait for the retry window to expire (automatic retry in progress).",
 		},
 		{
 			name:       "remote write denied",
-			key:        syncengine.SummaryRemoteWriteDenied,
+			key:        syncengine.ConditionRemoteWriteDenied,
 			wantTitle:  "SHARED FOLDER WRITES BLOCKED",
 			wantReason: "This shared folder is read-only for your current write attempts. Downloads continue normally.",
 			wantAction: "Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",
 		},
 		{
 			name:       "remote read denied",
-			key:        syncengine.SummaryRemoteReadDenied,
+			key:        syncengine.ConditionRemoteReadDenied,
 			wantTitle:  "REMOTE READ BLOCKED",
 			wantReason: "This remote content can no longer be downloaded with your current permissions.",
 			wantAction: "Restore access to the shared item, or remove the blocked content from this sync scope.",
@@ -556,42 +556,42 @@ func descriptorFilesystemCases() []descriptorCase {
 	return []descriptorCase{
 		{
 			name:       "local read denied",
-			key:        syncengine.SummaryLocalReadDenied,
+			key:        syncengine.ConditionLocalReadDenied,
 			wantTitle:  "LOCAL READ BLOCKED",
 			wantReason: "The local source file or directory can no longer be read.",
 			wantAction: "Restore local read access so uploads and conflict recovery can read the source content.",
 		},
 		{
 			name:       "local write denied",
-			key:        syncengine.SummaryLocalWriteDenied,
+			key:        syncengine.ConditionLocalWriteDenied,
 			wantTitle:  "LOCAL WRITE BLOCKED",
 			wantReason: "The local destination path can no longer be created, renamed, or updated.",
 			wantAction: "Restore local write access so downloads and local filesystem updates can complete.",
 		},
 		{
 			name:       "invalid filename",
-			key:        syncengine.SummaryInvalidFilename,
+			key:        syncengine.ConditionInvalidFilename,
 			wantTitle:  "INVALID FILENAME",
 			wantReason: "The filename contains characters not allowed by OneDrive.",
 			wantAction: "Rename the file to remove invalid characters.",
 		},
 		{
 			name:       "path too long",
-			key:        syncengine.SummaryPathTooLong,
+			key:        syncengine.ConditionPathTooLong,
 			wantTitle:  "PATH TOO LONG",
 			wantReason: "The full path exceeds OneDrive's 400-character limit.",
 			wantAction: "Shorten the path by renaming files or folders.",
 		},
 		{
 			name:       "file too large",
-			key:        syncengine.SummaryFileTooLarge,
+			key:        syncengine.ConditionFileTooLarge,
 			wantTitle:  "FILE TOO LARGE",
 			wantReason: "The file exceeds the maximum upload size.",
 			wantAction: "Reduce the file size or move it out of the sync dir.",
 		},
 		{
 			name:       "case collision",
-			key:        syncengine.SummaryCaseCollision,
+			key:        syncengine.ConditionCaseCollision,
 			wantTitle:  "CASE COLLISION",
 			wantReason: "Two files differ only in letter case, which OneDrive cannot distinguish.",
 			wantAction: "Rename one of the conflicting files.",
@@ -603,21 +603,21 @@ func descriptorLocalRuntimeCases() []descriptorCase {
 	return []descriptorCase{
 		{
 			name:       "disk full",
-			key:        syncengine.SummaryDiskFull,
+			key:        syncengine.ConditionDiskFull,
 			wantTitle:  "DISK FULL",
 			wantReason: "Local disk space is insufficient for downloads.",
 			wantAction: "Free up local disk space.",
 		},
 		{
 			name:       "hash error",
-			key:        syncengine.SummaryHashError,
+			key:        syncengine.ConditionHashError,
 			wantTitle:  "HASH ERROR",
 			wantReason: "File hashing failed unexpectedly.",
 			wantAction: "Check file integrity and retry.",
 		},
 		{
 			name:       "file too large for space",
-			key:        syncengine.SummaryFileTooLargeForSpace,
+			key:        syncengine.ConditionFileTooLargeForSpace,
 			wantTitle:  "FILE TOO LARGE FOR SPACE",
 			wantReason: "The file is larger than available local disk space.",
 			wantAction: "Free up local disk space to fit this file.",
@@ -628,7 +628,7 @@ func descriptorLocalRuntimeCases() []descriptorCase {
 func descriptorFallbackCase() descriptorCase {
 	return descriptorCase{
 		name:       "unexpected fallback",
-		key:        syncengine.SummaryKey("custom_condition"),
+		key:        syncengine.ConditionKey("custom_condition"),
 		wantTitle:  "SYNC CONDITION",
 		wantReason: "An unexpected sync condition needs attention.",
 		wantAction: "Check logs for details or rerun status after the next sync pass.",

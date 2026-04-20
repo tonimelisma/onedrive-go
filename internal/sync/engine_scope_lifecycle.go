@@ -42,9 +42,9 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 		return fmt.Errorf("sync: listing active scopes: %w", err)
 	}
 
-	activeScopes := make([]BlockScope, 0, len(blocks))
+	activeScopes := make([]ActiveScope, 0, len(blocks))
 	for i := range blocks {
-		activeScopes = append(activeScopes, *blocks[i])
+		activeScopes = append(activeScopes, activeScopeFromBlockScopeRow(blocks[i]))
 	}
 	watch.replaceActiveScopes(activeScopes)
 
@@ -288,7 +288,7 @@ func (controller *scopeController) normalizeDiskScope(ctx context.Context, block
 	interval := computeTrialInterval(block.Key, 0, 0)
 	if err := flow.engine.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           block.Key,
-		IssueType:     IssueDiskFull,
+		ConditionType: IssueDiskFull,
 		TimingSource:  ScopeTimingBackoff,
 		BlockedAt:     now,
 		TrialInterval: interval,
@@ -305,9 +305,9 @@ func (controller *scopeController) normalizeDiskScope(ctx context.Context, block
 	return nil
 }
 
-func (controller *scopeController) getBlockScope(watch *watchRuntime, key ScopeKey) (BlockScope, bool) {
+func (controller *scopeController) getBlockScope(watch *watchRuntime, key ScopeKey) (ActiveScope, bool) {
 	if watch == nil {
-		return BlockScope{}, false
+		return ActiveScope{}, false
 	}
 	return watch.lookupActiveScope(key)
 }
@@ -333,14 +333,19 @@ func (controller *scopeController) blockScopeKeys(watch *watchRuntime) []ScopeKe
 	return watch.activeScopeKeys()
 }
 
-func (controller *scopeController) activateScope(ctx context.Context, watch *watchRuntime, block *BlockScope) error {
+func (controller *scopeController) activateScope(ctx context.Context, watch *watchRuntime, block *ActiveScope) error {
 	flow := controller.flow
 
 	if block == nil {
 		return fmt.Errorf("sync: activating scope: missing block")
 	}
 
-	if err := flow.engine.baseline.UpsertBlockScope(ctx, block); err != nil {
+	persisted, err := blockScopeRowFromActiveScope(*block)
+	if err != nil {
+		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
+	}
+
+	if err := flow.engine.baseline.UpsertBlockScope(ctx, persisted); err != nil {
 		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
 
@@ -544,9 +549,8 @@ func (controller *scopeController) applyBlockScope(ctx context.Context, watch *w
 	now := flow.engine.nowFunc()
 	interval := computeTrialInterval(sr.ScopeKey, sr.RetryAfter, 0)
 
-	block := &BlockScope{
+	block := &ActiveScope{
 		Key:           sr.ScopeKey,
-		IssueType:     sr.IssueType,
 		TimingSource:  scopeTimingSource(sr.RetryAfter),
 		BlockedAt:     now,
 		TrialInterval: interval,
@@ -562,7 +566,7 @@ func (controller *scopeController) applyBlockScope(ctx context.Context, watch *w
 
 	flow.engine.logger.Warn("block scope active — actions blocked",
 		slog.String("scope_key", sr.ScopeKey.String()),
-		slog.String("issue_type", sr.IssueType),
+		slog.String("condition_type", sr.ConditionType),
 		slog.Duration("trial_interval", interval),
 	)
 
@@ -871,13 +875,13 @@ func (controller *scopeController) recordBlockedRetryWork(ctx context.Context, a
 	flow := controller.flow
 
 	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       action.Path,
-		OldPath:    action.OldPath,
-		ActionType: action.Type,
-		IssueType:  scopeKey.IssueType(),
-		ScopeKey:   scopeKey,
-		LastError:  "blocked by scope: " + scopeKey.String(),
-		Blocked:    true,
+		Path:          action.Path,
+		OldPath:       action.OldPath,
+		ActionType:    action.Type,
+		ConditionType: scopeKey.ConditionType(),
+		ScopeKey:      scopeKey,
+		LastError:     "blocked by scope: " + scopeKey.String(),
+		Blocked:       true,
 	}, nil); err != nil {
 		flow.engine.logger.Warn("failed to record blocked retry_work",
 			slog.String("path", action.Path),
@@ -895,14 +899,14 @@ func (controller *scopeController) rehomeBlockedRetryWork(
 	flow := controller.flow
 
 	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       r.Path,
-		OldPath:    r.OldPath,
-		ActionType: r.ActionType,
-		IssueType:  scopeKey.IssueType(),
-		ScopeKey:   scopeKey,
-		LastError:  "blocked by scope: " + scopeKey.String(),
-		HTTPStatus: r.HTTPStatus,
-		Blocked:    true,
+		Path:          r.Path,
+		OldPath:       r.OldPath,
+		ActionType:    r.ActionType,
+		ConditionType: scopeKey.ConditionType(),
+		ScopeKey:      scopeKey,
+		LastError:     "blocked by scope: " + scopeKey.String(),
+		HTTPStatus:    r.HTTPStatus,
+		Blocked:       true,
 	}, nil); err != nil {
 		flow.engine.logger.Warn("failed to rehome blocked retry_work",
 			slog.String("path", r.Path),
@@ -928,14 +932,14 @@ func (controller *scopeController) recordCascadeRetryWork(
 	blocked := flow.retryWorkShouldBeBlocked(watch, parentDecision.Class, scopeKey)
 
 	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       action.Path,
-		OldPath:    action.OldPath,
-		ActionType: action.Type,
-		IssueType:  parentDecision.IssueType,
-		ScopeKey:   scopeKey,
-		LastError:  "parent action failed: " + parentResult.ErrMsg,
-		HTTPStatus: parentResult.HTTPStatus,
-		Blocked:    blocked,
+		Path:          action.Path,
+		OldPath:       action.OldPath,
+		ActionType:    action.Type,
+		ConditionType: parentDecision.ConditionType,
+		ScopeKey:      scopeKey,
+		LastError:     "parent action failed: " + parentResult.ErrMsg,
+		HTTPStatus:    parentResult.HTTPStatus,
+		Blocked:       blocked,
 	}, retry.ReconcilePolicy().Delay); err != nil {
 		flow.engine.logger.Warn("failed to record cascade retry_work",
 			slog.String("path", action.Path),

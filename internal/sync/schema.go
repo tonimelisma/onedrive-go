@@ -13,10 +13,11 @@ const (
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
 	//
-	// Generation 5 persists parsed scope semantics alongside scope_key so
-	// runtime, store, planner, and read-side code share one validated scope
-	// descriptor shape.
-	currentSyncStoreGeneration = 5
+	// Generation 6 renames cross-authority durable condition columns from
+	// issue_type to condition_type and keeps parsed scope semantics alongside
+	// scope_key so runtime, store, planner, and read-side code share one
+	// validated scope descriptor shape.
+	currentSyncStoreGeneration = 6
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata
 		(singleton_id, schema_generation)
 	VALUES (1, ?)
@@ -95,7 +96,7 @@ CREATE TABLE IF NOT EXISTS retry_work (
     path            TEXT    NOT NULL,
     old_path        TEXT    NOT NULL DEFAULT '',
     action_type     TEXT    NOT NULL,
-    issue_type      TEXT    NOT NULL DEFAULT '',
+    condition_type  TEXT    NOT NULL DEFAULT '',
     scope_key       TEXT    NOT NULL DEFAULT '',
     blocked         INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0, 1)),
     attempt_count   INTEGER NOT NULL DEFAULT 0,
@@ -138,7 +139,7 @@ CREATE TABLE IF NOT EXISTS block_scopes (
     scope_access   TEXT NOT NULL,
     subject_kind   TEXT NOT NULL,
     subject_value  TEXT NOT NULL DEFAULT '',
-    issue_type     TEXT NOT NULL,
+    condition_type TEXT NOT NULL,
     timing_source  TEXT NOT NULL CHECK(timing_source IN ('none', 'backoff', 'server_retry_after')),
     blocked_at     INTEGER NOT NULL,
     trial_interval INTEGER NOT NULL,
@@ -180,7 +181,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"path", "item_type", "hash", "size", "mtime", "content_identity", "observed_at",
 		},
 		"retry_work": {
-			"work_key", "path", "old_path", "action_type", "issue_type", "scope_key", "blocked",
+			"work_key", "path", "old_path", "action_type", "condition_type", "scope_key", "blocked",
 			"attempt_count", "next_retry_at", "last_error", "http_status", "first_seen_at", "last_seen_at",
 		},
 		"observation_issues": {
@@ -189,7 +190,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"block_scopes": {
 			"scope_key", "scope_family", "scope_access", "subject_kind", "subject_value",
-			"issue_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "trial_count",
+			"condition_type", "timing_source", "blocked_at", "trial_interval", "next_trial_at", "trial_count",
 		},
 	}
 }

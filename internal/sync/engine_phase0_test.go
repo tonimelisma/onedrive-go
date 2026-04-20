@@ -374,7 +374,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
-		IssueType:     IssueServiceOutage,
+		ConditionType: IssueServiceOutage,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 30 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(30 * time.Millisecond),
@@ -439,18 +439,18 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           testThrottleScope(),
-		IssueType:     IssueRateLimited,
+		ConditionType: IssueRateLimited,
 		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
 	})
 	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       blockedPath,
-		ActionType: ActionDownload,
-		IssueType:  IssueRateLimited,
-		ScopeKey:   testThrottleScope(),
-		LastError:  "rate limited",
-		Blocked:    true,
+		Path:          blockedPath,
+		ActionType:    ActionDownload,
+		ConditionType: IssueRateLimited,
+		ScopeKey:      testThrottleScope(),
+		LastError:     "rate limited",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 
@@ -515,18 +515,18 @@ func TestPhase0_RecheckLocalPermissions_ReleasesBlockedRetryWorkImmediately(t *t
 		ScopeKey:   scopeKey,
 	}))
 	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:       "Private/doc.txt",
-		ActionType: ActionDownload,
-		IssueType:  IssueLocalWriteDenied,
-		ScopeKey:   scopeKey,
-		LastError:  "blocked by perm scope",
-		Blocked:    true,
+		Path:          "Private/doc.txt",
+		ActionType:    ActionDownload,
+		ConditionType: IssueLocalWriteDenied,
+		ScopeKey:      scopeKey,
+		LastError:     "blocked by perm scope",
+		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 	setTestBlockScope(t, eng, &BlockScope{
-		Key:       scopeKey,
-		IssueType: IssueLocalWriteDenied,
-		BlockedAt: eng.nowFunc(),
+		Key:           scopeKey,
+		ConditionType: IssueLocalWriteDenied,
+		BlockedAt:     eng.nowFunc(),
 	})
 
 	decisions := applyLocalPermissionRecheck(t, eng, ctx)
