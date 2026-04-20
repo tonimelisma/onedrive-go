@@ -97,6 +97,14 @@ For permission-derived conditions, the durable mapping is access-specific:
 - raw `403` / `os.ErrPermission` without probe evidence -> no permission scope;
   fall back to ordinary retry or fatal handling
 
+Permission maintenance follows the same ownership split:
+
+- observation-owned read scopes clear only when a later observation pass stops
+  proving the boundary
+- execution-owned write scopes clear only on affirmative permission recheck
+- startup and periodic recheck cadence live in the permission-maintenance
+  boundary, not in the engine/watch loop
+
 ## Boundary Rules
 
 - Errors cross one classification boundary before being wrapped with local

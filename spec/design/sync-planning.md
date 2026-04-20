@@ -170,6 +170,10 @@ rediscovering that ownership ad hoc.
 
 `download-only` and `upload-only` do not stop observation. They suppress only
 the forbidden action classes and record those counts in `DeferredByMode`.
+Conflict-copy is suppressed together with its paired remote-resolution download
+in `upload-only`; the planner must not rename local truth into a fake
+delete/create sequence when the corresponding remote-resolution action is
+deferred by mode.
 
 Permission scopes are different: planner is blocked-truth-aware for active read
 scopes and observation-owned unreadable paths so unavailable truth is never
