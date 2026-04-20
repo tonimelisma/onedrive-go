@@ -487,8 +487,64 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 	assert.Equal(t, "stale-remote.txt", liveRemoteRows[0].Path)
 	assert.NotContains(t, []string{liveRemoteRows[0].Path}, "remote-preview.txt")
 
+	liveObservationIssues, err := eng.baseline.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, liveObservationIssues, "dry-run observation findings must stay out of the durable store")
+
+	liveBlockScopes, err := eng.baseline.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, liveBlockScopes, "dry-run read scopes must stay out of the durable store")
+
 	savedToken := readObservationCursorForTest(t, eng.baseline, ctx, driveID.String())
 	assert.Equal(t, "token-live-before-dry-run", savedToken)
+}
+
+// Validates: R-2.1.5
+func TestBuildDryRunCurrentActionPlan_ObservationFindingsStayScratchOnly(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems(nil, "token-dry-run-clear"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	flow := testEngineFlow(t, eng)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.UpsertObservationIssue(ctx, &ObservationIssue{
+		Path:       "/",
+		DriveID:    driveID,
+		ActionType: ActionDownload,
+		IssueType:  IssueRemoteReadDenied,
+		Error:      "remote unreadable before dry-run",
+		ScopeKey:   SKPermRemoteRead(""),
+	}))
+	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
+		Key:          SKPermRemoteRead(""),
+		IssueType:    IssueRemoteReadDenied,
+		TimingSource: ScopeTimingNone,
+		BlockedAt:    time.Unix(100, 0),
+	}))
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	_, err = flow.buildDryRunCurrentActionPlan(ctx, bl, false)
+	require.NoError(t, err)
+
+	liveObservationIssues, err := eng.baseline.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, liveObservationIssues, 1)
+	assert.Equal(t, IssueRemoteReadDenied, liveObservationIssues[0].IssueType)
+	assert.Equal(t, "/", liveObservationIssues[0].Path)
+
+	liveBlockScopes, err := eng.baseline.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	require.Len(t, liveBlockScopes, 1)
+	assert.Equal(t, SKPermRemoteRead(""), liveBlockScopes[0].Key)
 }
 
 // Validates: R-2.1.1, R-3.3.12

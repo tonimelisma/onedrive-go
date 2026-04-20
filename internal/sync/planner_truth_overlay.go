@@ -1,19 +1,10 @@
 package sync
 
-type plannerTruthAvailability struct {
-	LocalTruthAvailability  TruthAvailability
-	RemoteTruthAvailability TruthAvailability
-	LocalTruthIssueType     string
-	RemoteTruthIssueType    string
-	LocalTruthScopeKey      ScopeKey
-	RemoteTruthScopeKey     ScopeKey
-}
-
-func normalizePlannerTruthAvailability(
+func derivePlannerTruthStatus(
 	comparisons []SQLiteComparisonRow,
 	observationIssues []ObservationIssueRow,
 	blockScopes []*BlockScope,
-) map[string]plannerTruthAvailability {
+) map[string]PathTruthStatus {
 	if len(comparisons) == 0 {
 		return nil
 	}
@@ -26,7 +17,7 @@ func normalizePlannerTruthAvailability(
 		observationByPath[observationIssues[i].Path] = observationIssues[i]
 	}
 
-	availabilityByPath := make(map[string]plannerTruthAvailability, len(comparisons))
+	statusByPath := make(map[string]PathTruthStatus, len(comparisons))
 	for i := range comparisons {
 		path := comparisons[i].Path
 		observationIssue, hasObservationIssue := observationByPath[path]
@@ -37,38 +28,55 @@ func normalizePlannerTruthAvailability(
 			return key.IsPermRemoteRead()
 		})
 
-		availability := plannerTruthAvailability{
-			LocalTruthAvailability:  TruthAvailabilityAvailable,
-			RemoteTruthAvailability: TruthAvailabilityAvailable,
+		status := PathTruthStatus{
+			Local:  availablePathTruthSideStatus(),
+			Remote: availablePathTruthSideStatus(),
 		}
 
 		switch {
 		case localScope.IsPermLocalRead():
-			availability.LocalTruthAvailability = TruthAvailabilityBlockedLocalReadScope
-			availability.LocalTruthScopeKey = localScope
+			status.Local = PathTruthSideStatus{
+				Availability: TruthAvailabilityBlockedLocalReadScope,
+				Source:       PathTruthSourceReadScope,
+				ScopeKey:     localScope,
+			}
 		case hasObservationIssue && observationIssueBlocksLocalTruth(observationIssue.IssueType):
-			availability.LocalTruthAvailability = TruthAvailabilityBlockedObservationIssue
-			availability.LocalTruthIssueType = observationIssue.IssueType
-			availability.LocalTruthScopeKey = observationIssue.ScopeKey
+			status.Local = PathTruthSideStatus{
+				Availability: TruthAvailabilityBlockedObservationIssue,
+				Source:       PathTruthSourceObservationIssue,
+				IssueType:    observationIssue.IssueType,
+				ScopeKey:     observationIssue.ScopeKey,
+			}
 		}
 
 		switch {
 		case remoteScope.IsPermRemoteRead():
-			availability.RemoteTruthAvailability = TruthAvailabilityBlockedRemoteReadScope
-			availability.RemoteTruthScopeKey = remoteScope
+			status.Remote = PathTruthSideStatus{
+				Availability: TruthAvailabilityBlockedRemoteReadScope,
+				Source:       PathTruthSourceReadScope,
+				ScopeKey:     remoteScope,
+			}
 		case hasObservationIssue && observationIssueBlocksRemoteTruth(observationIssue.IssueType):
-			availability.RemoteTruthAvailability = TruthAvailabilityBlockedObservationIssue
-			availability.RemoteTruthIssueType = observationIssue.IssueType
-			availability.RemoteTruthScopeKey = observationIssue.ScopeKey
+			status.Remote = PathTruthSideStatus{
+				Availability: TruthAvailabilityBlockedObservationIssue,
+				Source:       PathTruthSourceObservationIssue,
+				IssueType:    observationIssue.IssueType,
+				ScopeKey:     observationIssue.ScopeKey,
+			}
 		}
 
-		if availability.LocalTruthAvailability != TruthAvailabilityAvailable ||
-			availability.RemoteTruthAvailability != TruthAvailabilityAvailable {
-			availabilityByPath[path] = availability
+		if status.SuppressesStructuralActions() {
+			statusByPath[path] = status
 		}
 	}
 
-	return availabilityByPath
+	return statusByPath
+}
+
+func availablePathTruthSideStatus() PathTruthSideStatus {
+	return PathTruthSideStatus{
+		Availability: TruthAvailabilityAvailable,
+	}
 }
 
 func observationIssueBlocksTruth(issueType string) bool {
@@ -106,7 +114,7 @@ func mostSpecificPlannerReadScope(
 		if block == nil || !matches(block.Key) {
 			continue
 		}
-		scopePath := plannerScopePath(block.Key)
+		scopePath := DescribeScopeKey(block.Key).ScopePath()
 		if !scopePathMatches(path, scopePath) {
 			continue
 		}
@@ -117,8 +125,4 @@ func mostSpecificPlannerReadScope(
 	}
 
 	return best
-}
-
-func plannerScopePath(key ScopeKey) string {
-	return DescribeScopeKey(key).ScopePath()
 }

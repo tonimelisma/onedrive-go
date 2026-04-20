@@ -32,13 +32,13 @@ func (p *Planner) PlanCurrentState(
 		slog.String("mode", mode.String()),
 	)
 
-	blockFacts := normalizePlannerTruthAvailability(
+	truthStatusByPath := derivePlannerTruthStatus(
 		comparisons,
 		observationIssues,
 		blockScopes,
 	)
 
-	views, comparisonByPath, err := buildSQLitePathViews(comparisons, localRows, remoteRows, baseline, blockFacts)
+	views, comparisonByPath, err := buildSQLitePathViews(comparisons, localRows, remoteRows, baseline, truthStatusByPath)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +112,7 @@ func buildSQLitePathViews(
 	localRows []LocalStateRow,
 	remoteRows []RemoteStateRow,
 	baseline *Baseline,
-	availabilityByPath map[string]plannerTruthAvailability,
+	truthStatusByPath map[string]PathTruthStatus,
 ) (map[string]*PathView, map[string]*SQLiteComparisonRow, error) {
 	localByPath := make(map[string]LocalStateRow, len(localRows))
 	for i := range localRows {
@@ -132,9 +132,8 @@ func buildSQLitePathViews(
 		comparisonByPath[row.Path] = &comparisons[i]
 
 		view := &PathView{
-			Path:                    row.Path,
-			LocalTruthAvailability:  TruthAvailabilityAvailable,
-			RemoteTruthAvailability: TruthAvailabilityAvailable,
+			Path:        row.Path,
+			TruthStatus: PathTruthStatus{Local: availablePathTruthSideStatus(), Remote: availablePathTruthSideStatus()},
 		}
 		if row.BaselinePresent {
 			entry, ok := baseline.GetByPath(row.Path)
@@ -157,13 +156,8 @@ func buildSQLitePathViews(
 			}
 			view.Remote = remoteStateFromSnapshotRow(&remoteRow)
 		}
-		if availability, ok := availabilityByPath[row.Path]; ok {
-			view.LocalTruthAvailability = availability.LocalTruthAvailability
-			view.RemoteTruthAvailability = availability.RemoteTruthAvailability
-			view.LocalTruthIssueType = availability.LocalTruthIssueType
-			view.RemoteTruthIssueType = availability.RemoteTruthIssueType
-			view.LocalTruthScopeKey = availability.LocalTruthScopeKey
-			view.RemoteTruthScopeKey = availability.RemoteTruthScopeKey
+		if truthStatus, ok := truthStatusByPath[row.Path]; ok {
+			view.TruthStatus = truthStatus
 		}
 
 		views[row.Path] = view
@@ -186,7 +180,7 @@ func buildActionsForReconciliation(
 	if view == nil {
 		return nil, fmt.Errorf("sync: missing path view for reconciliation path %q", rec.Path)
 	}
-	if plannerSuppressesUnavailableTruth(view) {
+	if plannerSuppressesUnavailableTruth(&view.TruthStatus) {
 		return nil, nil
 	}
 
@@ -232,13 +226,8 @@ func buildActionsForReconciliation(
 	}
 }
 
-func plannerSuppressesUnavailableTruth(view *PathView) bool {
-	if view == nil {
-		return false
-	}
-
-	return view.LocalTruthAvailability != TruthAvailabilityAvailable ||
-		view.RemoteTruthAvailability != TruthAvailabilityAvailable
+func plannerSuppressesUnavailableTruth(status *PathTruthStatus) bool {
+	return status.SuppressesStructuralActions()
 }
 
 func buildLocalMoveReconciliationActions(

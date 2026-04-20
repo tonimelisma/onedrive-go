@@ -355,21 +355,56 @@ const (
 	TruthAvailabilityBlockedRemoteReadScope  TruthAvailability = "blocked_remote_read_scope"
 )
 
+// PathTruthSource captures which durable authority proved that one side of
+// truth is currently unavailable to the planner.
+type PathTruthSource string
+
+const (
+	PathTruthSourceNone             PathTruthSource = ""
+	PathTruthSourceObservationIssue PathTruthSource = "observation_issue"
+	PathTruthSourceReadScope        PathTruthSource = "read_scope"
+)
+
+// PathTruthSideStatus is the planner-facing status for one side of current
+// truth. The zero value is intentionally healthy so PathView literals outside
+// the SQLite planner path remain valid without manual initialization.
+type PathTruthSideStatus struct {
+	Availability TruthAvailability
+	Source       PathTruthSource
+	IssueType    string
+	ScopeKey     ScopeKey
+}
+
+func (s PathTruthSideStatus) IsAvailable() bool {
+	return s.Availability == "" || s.Availability == TruthAvailabilityAvailable
+}
+
+// PathTruthStatus carries the planner-facing truth status for both the local
+// and remote side of one path. It is attached after SQLite computes structural
+// diff so the planner can keep "missing" and "unavailable" distinct.
+type PathTruthStatus struct {
+	Local  PathTruthSideStatus
+	Remote PathTruthSideStatus
+}
+
+func (s *PathTruthStatus) SuppressesStructuralActions() bool {
+	if s == nil {
+		return false
+	}
+
+	return !s.Local.IsAvailable() || !s.Remote.IsAvailable()
+}
+
 // PathView is a unified three-way view of a single path built from the
 // authoritative snapshots plus baseline. It is the in-memory planning view the
 // current actionable-set builder reasons over after SQLite computes structural
 // diff and reconciliation outcomes.
 type PathView struct {
-	Path                    string
-	Remote                  *RemoteState   // nil = absent from current remote snapshot
-	Local                   *LocalState    // nil = absent from current local snapshot
-	Baseline                *BaselineEntry // nil = never synced
-	LocalTruthAvailability  TruthAvailability
-	RemoteTruthAvailability TruthAvailability
-	LocalTruthIssueType     string
-	RemoteTruthIssueType    string
-	LocalTruthScopeKey      ScopeKey
-	RemoteTruthScopeKey     ScopeKey
+	Path        string
+	Remote      *RemoteState   // nil = absent from current remote snapshot
+	Local       *LocalState    // nil = absent from current local snapshot
+	Baseline    *BaselineEntry // nil = never synced
+	TruthStatus PathTruthStatus
 }
 
 // ConflictRecord holds metadata about a detected conflict.

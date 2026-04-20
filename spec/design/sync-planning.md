@@ -49,17 +49,18 @@ Those rows feed `comparison_state` and `reconciliation_state`, including the
 invariant that a baseline row absent from both snapshots becomes
 `baseline_remove`.
 
-Before Go emits actions, it overlays truth-availability facts from
-`observation_issues` and active read scopes onto the structural diff so
-unreadable or unobservable paths stay unavailable instead of being misread as
-deletions.
+Before Go emits actions, it derives one per-path truth-status value from
+`observation_issues` and active read scopes, then applies planner-owned
+suppression policy so unreadable or unobservable paths stay unavailable instead
+of being misread as deletions.
 
 ## Pipeline
 
 1. Run SQL structural diff and reconciliation over snapshots plus baseline.
 2. Load reconciliation rows into Go.
-3. Normalize truth availability from `observation_issues` and active read scopes.
-4. Apply sync-mode and planner-owned safety rules.
+3. Derive per-path local/remote truth status from `observation_issues` and
+   active read scopes.
+4. Apply planner-owned suppression and sync-mode safety rules.
 5. Emit the current runtime action set, including conflict expansion into
    concrete actions.
 6. Expand folder delete cascades so descendants get explicit work.
@@ -111,11 +112,11 @@ structural absence:
 - active read permission scopes suppress destructive and mutating work under
   the blocked subtree until revalidation succeeds
 
-The planner therefore keeps structural reconciliation raw, then overlays
-explicit truth-availability state before action emission. When observation
-issues or active read scopes prove the path is currently unavailable, the
-planner suppresses action emission for that path instead of pretending the row
-is structurally equal or absent.
+The planner therefore keeps structural reconciliation raw, then attaches an
+explicit local/remote truth-status value to each path view before action
+emission. When observation issues or active read scopes prove the path is
+currently unavailable, planner suppression blocks action emission for that path
+instead of pretending the row is structurally equal or absent.
 
 ## Conflict Planning
 

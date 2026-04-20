@@ -140,8 +140,10 @@ comes from current disk truth, not by replaying local change events against
 baseline.
 
 Dry-run uses those same direct `LocalStateRow` values, but commits them only to
-an isolated scratch store before SQLite comparison/reconciliation. The durable
-runtime store keeps its prior committed snapshots unchanged during preview.
+an isolated scratch store before SQLite comparison/reconciliation. Observation
+findings discovered during preview also reconcile only into that scratch store.
+The durable runtime store keeps its prior committed snapshots, observation
+issues, and block scopes unchanged during preview.
 
 ## Dirty Buffer
 
