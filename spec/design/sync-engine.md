@@ -72,6 +72,10 @@ observation and execution metadata.
 1. bootstrap durable state and startup checks
 2. normalize non-permission scopes against persisted retry evidence
 3. load baseline and run permission maintenance
+   permission maintenance owns which persisted permission scopes are due for
+   startup or steady-state recheck, including cadence and remote-probe
+   suppression policy; the engine only applies the resulting release/keep
+   decisions through its scope lifecycle boundary
 4. refresh current remote and local snapshots once
 5. compute SQL structural diff and reconciliation once
 6. build the current actionable set in Go from structural reconciliation plus
@@ -223,6 +227,11 @@ Read scopes clear only when a later observation batch no longer proves them.
 Write scopes clear only on affirmative permission recheck. Generic empty-retry
 cleanup, unrelated successful work, and path-change drift handling must not
 release permission scopes on their own.
+
+Steady-state permission maintenance is throttled by the permission boundary
+rather than by the watch loop. When broader remote observation is suppressed,
+remote write-scope probes are skipped for that pass, but local read/write
+rechecks still run because they are direct local observation of current truth.
 
 Remote `403` handling is intentionally narrow:
 

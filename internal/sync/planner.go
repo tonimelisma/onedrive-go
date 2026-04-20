@@ -84,7 +84,12 @@ func actionAllowedInMode(action *Action, mode Mode) bool {
 			return mode != SyncDownloadOnly
 		}
 		return true
-	case ActionConflictCopy, ActionUpdateSynced, ActionCleanup:
+	case ActionConflictCopy:
+		// Conflict-copy is only safe when the paired remote-resolution download
+		// can also run. In upload-only mode that download is deferred, so keeping
+		// the rename would mutate local truth into a fake delete/create sequence.
+		return mode != SyncUploadOnly
+	case ActionUpdateSynced, ActionCleanup:
 		return true
 	default:
 		return true

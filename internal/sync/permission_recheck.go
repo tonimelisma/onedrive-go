@@ -2,10 +2,65 @@ package sync
 
 import (
 	"context"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
+
+const permissionMaintenanceInterval = 60 * time.Second
+
+type permissionMaintenancePlan struct {
+	Due       bool
+	CheckedAt time.Time
+	Decisions []PermissionRecheckDecision
+}
+
+// runStartupPermissionMaintenance is the engine-owned application entrypoint
+// for persisted permission scopes during startup. Permission code owns deciding
+// what to recheck; the scope controller still owns all durable mutations.
+func (controller *scopeController) runStartupPermissionMaintenance(
+	ctx context.Context,
+	watch *watchRuntime,
+	ph *PermissionHandler,
+	bl *Baseline,
+) {
+	if ph == nil {
+		return
+	}
+
+	controller.applyPermissionRecheckDecisions(ctx, watch, ph.startupRecheckDecisions(ctx, bl))
+	if watch != nil {
+		watch.lastPermRecheck = ph.nowFn()
+	}
+}
+
+// runPeriodicPermissionMaintenance is the steady-state permission-maintenance
+// entrypoint for watch mode. The permission boundary owns the cadence and
+// remote-inclusion policy; the engine only applies resulting decisions.
+func (controller *scopeController) runPeriodicPermissionMaintenance(
+	ctx context.Context,
+	watch *watchRuntime,
+	ph *PermissionHandler,
+	bl *Baseline,
+) {
+	if ph == nil || watch == nil {
+		return
+	}
+
+	plan := ph.periodicMaintenancePlan(
+		ctx,
+		bl,
+		watch.lastPermRecheck,
+		controller.isObservationSuppressed(watch),
+	)
+	if !plan.Due {
+		return
+	}
+
+	watch.lastPermRecheck = plan.CheckedAt
+	controller.applyPermissionRecheckDecisions(ctx, watch, plan.Decisions)
+}
 
 // startupRecheckDecisions is the single startup entrypoint for persisted
 // permission-scope maintenance. The engine owns applying the decisions, but
@@ -28,6 +83,33 @@ func (ph *PermissionHandler) periodicRecheckDecisions(
 	includeRemote bool,
 ) []PermissionRecheckDecision {
 	return ph.permissionRecheckDecisions(ctx, bl, includeRemote)
+}
+
+func (ph *PermissionHandler) periodicMaintenancePlan(
+	ctx context.Context,
+	bl *Baseline,
+	lastRecheck time.Time,
+	observationSuppressed bool,
+) permissionMaintenancePlan {
+	now := ph.nowFn()
+	if now.Sub(lastRecheck) < permissionMaintenanceInterval {
+		return permissionMaintenancePlan{}
+	}
+
+	includeRemote := ph.includeRemotePeriodicRechecks(observationSuppressed)
+	return permissionMaintenancePlan{
+		Due:       true,
+		CheckedAt: now,
+		Decisions: ph.periodicRecheckDecisions(ctx, bl, includeRemote),
+	}
+}
+
+// includeRemotePeriodicRechecks returns whether periodic maintenance should
+// probe remote write scopes on this pass. Remote permission probes can be
+// suppressed when broader remote observation is intentionally skipped, while
+// local read/write rechecks still run as direct filesystem observation.
+func (ph *PermissionHandler) includeRemotePeriodicRechecks(observationSuppressed bool) bool {
+	return ph.HasPermChecker() && !observationSuppressed
 }
 
 func (ph *PermissionHandler) permissionRecheckDecisions(
