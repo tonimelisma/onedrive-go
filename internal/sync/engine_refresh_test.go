@@ -588,7 +588,7 @@ func TestObserveRemoteChanges_RemoteReadDeniedPersistsObservationFindings(t *tes
 
 // waitForRefreshDone applies the next refresh result the same way the
 // watch loop would and waits for refreshActive to clear.
-func waitForRefreshDone(t *testing.T, eng *testEngine) {
+func waitForRefreshDone(t *testing.T, ctx context.Context, eng *testEngine) {
 	t.Helper()
 
 	rt := testWatchRuntime(t, eng)
@@ -596,7 +596,7 @@ func waitForRefreshDone(t *testing.T, eng *testEngine) {
 
 	select {
 	case result := <-rt.refreshResults:
-		rt.applyRemoteRefreshResult(result)
+		require.NoError(t, rt.applyRemoteRefreshResult(ctx, &result))
 	case <-time.After(10 * time.Second):
 		require.Fail(t, "refresh result was not delivered within 10s")
 	}
@@ -655,7 +655,7 @@ func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 	// dirty scheduler, even when the later planner pass reduces them to a no-op. The
 	// important boundary here is "no direct dispatch from the goroutine."
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForRefreshDone(t, e)
+	waitForRefreshDone(t, t.Context(), e)
 
 	select {
 	case ta := <-ready:
@@ -690,7 +690,7 @@ func TestRunFullRemoteRefreshAsync_DeltaError(t *testing.T) {
 
 	// Should not panic — error is logged and function returns.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForRefreshDone(t, e)
+	waitForRefreshDone(t, t.Context(), e)
 
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
@@ -729,7 +729,7 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 
 	// Unblock delta and wait for completion.
 	close(unblock)
-	waitForRefreshDone(t, e)
+	waitForRefreshDone(t, t.Context(), e)
 }
 
 func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
@@ -811,7 +811,7 @@ func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 	// Baseline is empty — delta returns a new file and the watch loop gets
 	// a dirty path signal back from the remote refresh.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForRefreshDone(t, e)
+	waitForRefreshDone(t, t.Context(), e)
 
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch, "dirty scheduler should contain paths from reconciliation")
@@ -854,7 +854,6 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 		done <- rt.runWatchLoop(ctx, &watchPipeline{
 			runtime:        rt,
 			bl:             bl,
-			safety:         DefaultSafetyConfig(),
 			mode:           SyncBidirectional,
 			refreshC:       refreshC,
 			refreshResults: rt.refreshResults,
@@ -944,7 +943,7 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	}
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForRefreshDone(t, e)
+	waitForRefreshDone(t, ctx, e)
 
 	// Verify observations WERE committed to SQLite — proving we took
 	// the post-commit shutdown path, not the commit-failed path.
@@ -1046,7 +1045,7 @@ func TestRunFullRemoteRefreshAsync_DurationInCompletionLog(t *testing.T) {
 	setupWatchEngine(t, e)
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForRefreshDone(t, e)
+	waitForRefreshDone(t, t.Context(), e)
 
 	logOutput := logBuf.String()
 	assert.Contains(t, logOutput, "periodic full remote refresh complete",
@@ -1104,7 +1103,7 @@ func TestRunFullRemoteRefreshAsync_DurationInNoChangesLog(t *testing.T) {
 	setupWatchEngine(t, e)
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForRefreshDone(t, e)
+	waitForRefreshDone(t, t.Context(), e)
 
 	logOutput := logBuf.String()
 	assert.Contains(t, logOutput, "no changes",

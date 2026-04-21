@@ -16,11 +16,9 @@ func (rt *watchRuntime) runTrialDispatch(
 	ctx context.Context,
 	bl *Baseline,
 	mode Mode,
-	safety *SafetyConfig,
 ) []*TrackedAction {
 	_ = bl
 	_ = mode
-	_ = safety
 
 	rt.mustAssertPlannerSweepAllowed(rt, "runTrialDispatch", "run trial dispatch")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialSweepStarted})
@@ -40,11 +38,9 @@ func (rt *watchRuntime) runRetrierSweep(
 	ctx context.Context,
 	bl *Baseline,
 	mode Mode,
-	safety *SafetyConfig,
 ) []*TrackedAction {
 	_ = bl
 	_ = mode
-	_ = safety
 
 	rt.mustAssertPlannerSweepAllowed(rt, "runRetrierSweep", "run retrier sweep")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepStarted})

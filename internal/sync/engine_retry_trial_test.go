@@ -25,7 +25,7 @@ func TestRunRetrierSweep_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	outbox := rt.runRetrierSweep(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
+	outbox := rt.runRetrierSweep(t.Context(), bl, SyncBidirectional)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, "retry.txt", outbox[0].Action.Path)
 	assert.False(t, outbox[0].IsTrial)
@@ -52,7 +52,7 @@ func TestRunRetrierSweep_DoesNotConsultDurableRetryRowsWithoutHeldRuntimeEntry(t
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	outbox := rt.runRetrierSweep(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
+	outbox := rt.runRetrierSweep(t.Context(), bl, SyncBidirectional)
 	assert.Empty(t, outbox)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -92,7 +92,7 @@ func TestRunTrialDispatch_ReleasesFirstHeldScopeCandidateAsTrial(t *testing.T) {
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
+	outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, "first.txt", outbox[0].Action.Path)
 	assert.True(t, outbox[0].IsTrial)
@@ -120,7 +120,7 @@ func TestRunTrialDispatch_SkipsScopesWithoutHeldDependencyReadyCandidates(t *tes
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
+	outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional)
 	assert.Empty(t, outbox)
 	assert.True(t, isTestBlockScopeed(eng, scopeKey))
 }
@@ -152,7 +152,7 @@ func TestRunTrialDispatch_DoesNotConsultDurableBlockedRetryRowsWithoutHeldRuntim
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
+	outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional)
 	assert.Empty(t, outbox)
 	assert.True(t, isTestBlockScopeed(eng, scopeKey))
 

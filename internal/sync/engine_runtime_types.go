@@ -78,8 +78,11 @@ func newOneShotRunner(engine *Engine) *oneShotRunner {
 }
 
 type watchLoopState struct {
-	phase  watchRuntimePhase
-	outbox []*TrackedAction
+	phase           watchRuntimePhase
+	outbox          []*TrackedAction
+	replanPending   bool
+	pendingDirty    DirtyBatch
+	hasPendingDirty bool
 }
 
 type watchRuntimeState struct {
@@ -141,18 +144,17 @@ type watchSummaryState struct {
 }
 
 type watchRefreshState struct {
-	// Full remote refresh is started by the watch loop and hands its result
-	// back over refreshResults. The loop owns refreshActive and applies the
-	// returned events on receipt.
+	// Full remote refresh is started by the watch loop and hands one
+	// loop-applied remote observation batch back over refreshResults. The loop
+	// owns refreshActive, durable apply, and dirty marking on receipt.
 	refreshActive  bool
 	refreshTimer   syncTimer
 	refreshCh      chan time.Time
 	refreshResults chan remoteRefreshResult
 
-	// afterRefreshCommit is a test-only hook called after CommitObservation
-	// succeeds in runFullRemoteRefreshAsync. Nil in production. Allows tests
-	// to inject actions (e.g. context cancellation) at an otherwise unreachable
-	// point between commit and buffer feeding.
+	// afterRefreshCommit is a test-only hook called after the watch loop has
+	// durably applied a full-refresh batch but before it marks the resulting
+	// dirty work. Nil in production.
 	afterRefreshCommit func()
 }
 

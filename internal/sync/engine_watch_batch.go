@@ -14,7 +14,6 @@ func (rt *watchRuntime) processDirtyBatch(
 	batch DirtyBatch,
 	bl *Baseline,
 	mode Mode,
-	safety *SafetyConfig,
 ) []*TrackedAction {
 	rt.beginSyncStatusBatch(rt.engine.nowFunc())
 	rt.engine.logger.Info("processing watch dirty batch",
@@ -43,7 +42,7 @@ func (rt *watchRuntime) processDirtyBatch(
 	rt.engine.collector().RecordObserve(len(batch.Paths), rt.engine.since(observeStart))
 
 	planStart := rt.engine.nowFunc()
-	plan, err := rt.buildCurrentActionPlan(ctx, bl, mode, safety)
+	plan, err := rt.buildCurrentActionPlan(ctx, bl, mode)
 	if err != nil {
 		rt.clearSyncStatusBatch()
 		rt.engine.logger.Error("watch sqlite planning failed, skipping dirty batch",
@@ -62,15 +61,20 @@ func (rt *watchRuntime) processDirtyBatch(
 		return nil
 	}
 
-	if len(plan.Actions) == 0 {
-		rt.engine.logger.Debug("empty sqlite action plan for dirty batch")
-		rt.finishSyncStatusBatch(ctx, mode)
+	retryRows, blockScopes, err := rt.loadPreparedRuntimeState(ctx)
+	if err != nil {
+		rt.clearSyncStatusBatch()
+		rt.engine.logger.Error("watch runtime state load failed, skipping dirty batch",
+			slog.String("error", err.Error()),
+		)
 		return nil
 	}
 
-	rt.deduplicateInFlight(plan)
-
-	dispatch, dispatched, err := rt.dispatchCurrentPlan(ctx, plan, bl)
+	dispatch, dispatched, err := rt.startPreparedRuntime(ctx, &PreparedCurrentPlan{
+		Plan:        plan,
+		RetryRows:   retryRows,
+		BlockScopes: blockScopes,
+	}, bl, rt)
 	if err != nil {
 		rt.clearSyncStatusBatch()
 		rt.engine.logger.Error("watch dispatch failed, skipping dirty batch",
@@ -82,92 +86,7 @@ func (rt *watchRuntime) processDirtyBatch(
 		rt.finishSyncStatusBatch(ctx, mode)
 		return nil
 	}
+	rt.maybeFinishSyncStatusBatch(ctx, mode, dispatch)
 
 	return dispatch
-}
-
-func (rt *watchRuntime) dispatchCurrentPlan(
-	ctx context.Context,
-	plan *ActionPlan,
-	bl *Baseline,
-) ([]*TrackedAction, bool, error) {
-	if plan == nil || len(plan.Actions) == 0 {
-		return nil, false, nil
-	}
-
-	return rt.dispatchBatchActions(ctx, plan, bl)
-}
-
-// deduplicateInFlight cancels in-flight actions for paths that appear in the
-// plan. B-122: newer observation supersedes in-progress action.
-func (rt *watchRuntime) deduplicateInFlight(plan *ActionPlan) {
-	for i := range plan.Actions {
-		if rt.depGraph.HasInFlight(plan.Actions[i].Path) {
-			rt.engine.logger.Info("canceling in-flight action for updated path",
-				slog.String("path", plan.Actions[i].Path),
-			)
-
-			rt.depGraph.CancelByPath(plan.Actions[i].Path)
-		}
-	}
-}
-
-// dispatchBatchActions adds plan actions to the DepGraph with monotonic IDs,
-// then admits ready actions through active-scope checks.
-func (rt *watchRuntime) dispatchBatchActions(
-	ctx context.Context,
-	plan *ActionPlan,
-	bl *Baseline,
-) ([]*TrackedAction, bool, error) {
-	// Invariant: Planner always builds Deps with len(Actions).
-	if len(plan.Actions) != len(plan.Deps) {
-		rt.engine.logger.Error("plan invariant violation: Actions/Deps length mismatch",
-			slog.Int("actions", len(plan.Actions)),
-			slog.Int("deps", len(plan.Deps)),
-		)
-
-		return nil, false, nil
-	}
-
-	// Allocate monotonic action IDs for this batch. Using a global monotonic
-	// counter prevents ID collisions across batches without cross-goroutine sync.
-	batchBaseID := rt.nextActionID
-	rt.nextActionID += int64(len(plan.Actions))
-
-	actionIDs := make([]int64, len(plan.Actions))
-	for i := range plan.Actions {
-		actionIDs[i] = batchBaseID + int64(i)
-	}
-
-	var ready []*TrackedAction
-
-	for i := range plan.Actions {
-		id := actionIDs[i]
-
-		var depIDs []int64
-		for _, depIdx := range plan.Deps[i] {
-			depIDs = append(depIDs, actionIDs[depIdx])
-		}
-
-		if ta := rt.depGraph.Add(&plan.Actions[i], id, depIDs); ta != nil {
-			ready = append(ready, ta)
-		}
-	}
-
-	if len(ready) > 0 {
-		ready = rt.scopeController().admitReady(ctx, rt, ready)
-		drained, err := rt.drainPublicationReadyActions(ctx, rt, bl, nil, ready)
-		if err != nil {
-			rt.completeOutboxAsShutdown(drained)
-			return nil, false, err
-		}
-		ready = drained
-	}
-
-	rt.engine.logger.Info("watch batch dispatched",
-		slog.Int("actions", len(plan.Actions)),
-	)
-	rt.engine.collector().RecordExecute(len(plan.Actions), 0, 0, 0)
-
-	return ready, true, nil
 }

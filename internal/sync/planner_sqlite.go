@@ -18,10 +18,7 @@ func (p *Planner) PlanCurrentState(
 	observationIssues []ObservationIssueRow,
 	baseline *Baseline,
 	mode Mode,
-	config *SafetyConfig,
 ) (*ActionPlan, error) {
-	_ = config
-
 	p.logger.Info("planning current actionable set from sqlite reconciliation",
 		slog.Int("comparison_rows", len(comparisons)),
 		slog.Int("reconciliation_rows", len(reconciliations)),

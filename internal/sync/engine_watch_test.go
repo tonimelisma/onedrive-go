@@ -439,8 +439,6 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	require.NoError(t, err, "Load")
 
 	setupWatchEngine(t, eng)
-	safety := DefaultSafetyConfig()
-
 	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-as",
@@ -452,13 +450,15 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 
 	dispatch := testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
 		Paths: []string{"already-synced.txt"},
-	}, bl, SyncBidirectional, safety)
+	}, bl, SyncBidirectional)
 	assert.Nil(t, dispatch)
 }
 
-// TestRunWatch_Deduplication verifies that processBatch cancels in-flight
-// actions for paths that appear in a new batch (B-122).
-func TestRunWatch_Deduplication(t *testing.T) {
+// TestRunWatch_BusyRuntimeQueuesDirtyReplanInsteadOfOverlappingPrepare
+// verifies that a dirty batch observed while work is still running is queued
+// for the next linear prepare cycle instead of mutating the current runtime in
+// place.
+func TestRunWatch_BusyRuntimeQueuesDirtyReplanInsteadOfOverlappingPrepare(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -478,43 +478,26 @@ func TestRunWatch_Deduplication(t *testing.T) {
 	require.NoError(t, err, "Load")
 
 	setupWatchEngine(t, eng)
-	safety := DefaultSafetyConfig()
+	rt := testWatchRuntime(t, eng)
+	rt.runningCount = 1
 
-	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []ObservedItem{{
-		DriveID:  driveID,
-		ItemID:   "item-1",
-		Path:     "overlapping.txt",
-		ItemType: ItemTypeFile,
-		Hash:     "hash-v1",
-		Size:     10,
-	}}, ""))
+	transition, handled, err := rt.transitionWatchDispatchEvent(ctx, &watchPipeline{
+		bl:   bl,
+		mode: SyncBidirectional,
+	}, &watchEvent{
+		kind: watchEventBatchReady,
+		batch: DirtyBatch{
+			Paths: []string{"overlapping.txt"},
+		},
+	})
+	require.True(t, handled)
+	require.NoError(t, err)
+	assert.Empty(t, transition.appendOutbox)
+	assert.True(t, rt.hasPendingDirtyReplan())
 
-	dispatch := testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
-		Paths: []string{"overlapping.txt"},
-	}, bl, SyncBidirectional, safety)
-	assert.NotNil(t, dispatch)
-
-	// Verify the action is in-flight.
-	require.True(t, testWatchRuntime(t, eng).depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after first batch")
-
-	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []ObservedItem{{
-		DriveID:  driveID,
-		ItemID:   "item-1",
-		Path:     "overlapping.txt",
-		ItemType: ItemTypeFile,
-		Hash:     "hash-v2",
-		Size:     20,
-	}}, ""))
-
-	dispatch = testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
-		Paths: []string{"overlapping.txt"},
-	}, bl, SyncBidirectional, safety)
-	assert.NotNil(t, dispatch)
-
-	// The second batch should have replaced the first.
-	// We can't easily verify cancellation directly, but we can verify
-	// the path is still tracked (new action replaced old one).
-	assert.True(t, testWatchRuntime(t, eng).depGraph.HasInFlight("overlapping.txt"), "expected in-flight action for overlapping.txt after second batch")
+	queued, ok := rt.takePendingDirtyReplan()
+	require.True(t, ok)
+	assert.Equal(t, []string{"overlapping.txt"}, queued.Paths)
 }
 
 // TestRunWatch_DownloadOnly_StartsLocalObserver verifies that download-only
@@ -805,7 +788,7 @@ func waitForSignal(t *testing.T, ch <-chan struct{}, description string) {
 }
 
 // Validates: R-2.8.3, R-6.10.10
-func TestRunWatch_ShutdownDropsRefreshResult(t *testing.T) {
+func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testing.T) {
 	t.Parallel()
 
 	refreshStarted := make(chan struct{})
@@ -883,7 +866,7 @@ func TestRunWatch_ShutdownDropsRefreshResult(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		require.Fail(t, "watch loop did not exit after dropping refresh result")
+		require.Fail(t, "watch loop did not exit after shutdown during committed refresh application")
 	}
 
 	recorder.requireOrderedSubsequence(t, []func(engineDebugEvent) bool{
@@ -891,21 +874,18 @@ func TestRunWatch_ShutdownDropsRefreshResult(t *testing.T) {
 			return event.Type == engineDebugEventRemoteRefreshStarted
 		},
 		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventShutdownStarted
+			return event.Type == engineDebugEventRemoteRefreshApplied
 		},
 		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventRemoteRefreshDroppedOnShutdown
+			return event.Type == engineDebugEventShutdownStarted
 		},
 		func(event engineDebugEvent) bool {
 			return event.Type == engineDebugEventWatchStopped
 		},
-	}, "full remote refresh should be dropped after shutdown starts")
+	}, "loop-owned refresh application should complete before shutdown drains the watch loop")
 	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventRemoteRefreshDroppedOnShutdown
-	}, 1, "expected exactly one remote_refresh_dropped_on_shutdown event")
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventRemoteRefreshApplied
-	}), "full remote refresh result should not be applied after shutdown starts")
+	}, 0, "applied full remote refresh batches should not later be dropped as pending shutdown work")
 }
 
 // Validates: R-2.8.3, R-6.10.10

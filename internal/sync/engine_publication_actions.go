@@ -41,11 +41,11 @@ func (flow *engineFlow) commitPublicationAction(ctx context.Context, ta *Tracked
 	}, nil)
 }
 
-// drainPublicationReadyActions keeps publication-only actions on the engine
-// side of the boundary. It commits those actions synchronously, feeds their
-// synthetic results back through the normal engine result classifier, and
-// returns only executable work for worker dispatch.
-func (flow *engineFlow) drainPublicationReadyActions(
+// reducePublicationFrontier keeps publication-only actions on the engine side
+// of the boundary. It commits those actions synchronously, feeds their
+// completions back through the normal engine result classifier, and returns
+// only executable work for worker dispatch.
+func (flow *engineFlow) reducePublicationFrontier(
 	ctx context.Context,
 	watch *watchRuntime,
 	bl *Baseline,

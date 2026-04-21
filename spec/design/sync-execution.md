@@ -53,8 +53,9 @@ running work, and due held entries.
 When the dependency graph releases `ActionUpdateSynced` or `ActionCleanup`,
 the engine does not spend worker capacity on them. It commits the matching
 baseline mutation synchronously, marks that graph node successful, drains any
-further publication-only dependents, and only then releases concrete
-dependents for worker dispatch.
+further publication-only dependents through the engine-owned publication
+reduction stage, and only then releases concrete dependents for worker
+dispatch.
 
 ## Publication-Only Actions
 
