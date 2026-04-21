@@ -69,6 +69,10 @@ observation issue rows tagged with the corresponding `ScopeKey`; later truth
 reads derive blocked descendants from those tagged boundary issues instead of a
 second durable scope table.
 
+Only observation-owned reconciliation mutates `observation_issues`.
+Worker-result handling, retry sweeps, and scope trials may read observation
+facts, but they must not create, clear, or rewrite `observation_issues`.
+
 Observation-owned reconciliation supports two scopes of authority:
 
 - whole-observation batches replace the managed observation issue types they
@@ -102,6 +106,8 @@ Supporting outcome mutations should stay separate by owner:
   observation-owned issue set in one transaction, either as a full managed
   issue-type set or as an exact-path reconciliation for single-path observation
 - exact retry-work upsert/delete helpers
+- retry-work rearm helpers that reschedule an exact due row without inventing
+  new planning or observation authority
 - scope release/discard/extend helpers that mutate `block_scopes` and linked
   blocked `retry_work` in one transaction
 - retry-resolution helpers that delete exact `retry_work` and return the

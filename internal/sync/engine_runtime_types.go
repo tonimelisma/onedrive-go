@@ -52,6 +52,11 @@ type watchLoopState struct {
 type watchRuntimeState struct {
 	loop watchLoopState
 
+	// currentPlan is the last successfully materialized watch action plan.
+	// Normal watch observation/planning owns this cache; retry/trial only reads
+	// it so timer-driven follow-up never becomes an alternate planner.
+	currentPlan *ActionPlan
+
 	// activeScopesMu guards activeScopes. The watch loop remains the logical
 	// owner, but tests and startup normalization can observe or adjust the
 	// working set while timers are being re-armed.
