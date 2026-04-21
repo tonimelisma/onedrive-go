@@ -628,7 +628,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
 
 	rt.runFullRemoteRefreshAsync(ctx, bl)
-	waitForReconcileDone(t, eng)
+	waitForRefreshDone(t, eng)
 
 	select {
 	case ta := <-ready:

@@ -44,14 +44,14 @@ func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
 // handleExternalChanges reacts to external DB modifications detected via
 // PRAGMA data_version.
 func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
-	rt.clearResolvedPermissionWriteBlocks(ctx)
+	rt.clearResolvedPersistedWriteBlocks(ctx)
 	rt.mustAssertInvariants(ctx, rt, "handle external changes")
 }
 
-// clearResolvedPermissionWriteBlocks checks whether persisted permission block
-// scopes still exist and releases any runtime scope whose backing
+// clearResolvedPersistedWriteBlocks checks whether persisted write block scopes
+// still exist and releases any runtime scope whose backing
 // block_scopes / blocked retry_work rows disappeared externally.
-func (rt *watchRuntime) clearResolvedPermissionWriteBlocks(ctx context.Context) {
+func (rt *watchRuntime) clearResolvedPersistedWriteBlocks(ctx context.Context) {
 	scopeKeys := rt.activeScopeKeys()
 	if len(scopeKeys) == 0 {
 		return
@@ -66,15 +66,15 @@ func (rt *watchRuntime) clearResolvedPermissionWriteBlocks(ctx context.Context) 
 		return
 	}
 
-	activeScopes := make(map[ScopeKey]bool, len(blocks))
+	persistedBlockScopes := make(map[ScopeKey]bool, len(blocks))
 	for i := range blocks {
-		if blocks[i] != nil && (blocks[i].Key.IsPermDir() || blocks[i].Key.IsPermRemote()) {
-			activeScopes[blocks[i].Key] = true
+		if blocks[i] != nil && blocks[i].Key.PersistsInBlockScopes() {
+			persistedBlockScopes[blocks[i].Key] = true
 		}
 	}
 
 	for _, key := range scopeKeys {
-		if (key.IsPermDir() || key.IsPermRemote()) && !activeScopes[key] {
+		if key.PersistsInBlockScopes() && !persistedBlockScopes[key] {
 			if err := rt.scopeController().releaseScope(ctx, rt, key); err != nil {
 				rt.engine.logger.Warn("failed to release externally-cleared permission block scope",
 					slog.String("scope", key.String()),
@@ -141,9 +141,9 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 	}
 	interval := remoteRefreshIntervalForMode(state.RemoteRefreshMode)
 
-	rt.resetReconcileTimer(rt.engine.afterFunc(delay, func() {
+	rt.resetRefreshTimer(rt.engine.afterFunc(delay, func() {
 		select {
-		case rt.reconcileCh <- rt.engine.nowFunc():
+		case rt.refreshCh <- rt.engine.nowFunc():
 		default:
 		}
 	}))
@@ -158,16 +158,16 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 
 // runFullRemoteRefreshAsync spawns a goroutine for full delta enumeration +
 // orphan detection. Non-blocking — the watch loop continues processing events
-// while refresh work runs. The goroutine sends a reconcileResult back to the
+// while refresh work runs. The goroutine sends a remoteRefreshResult back to the
 // watch loop, and the loop feeds the returned events into its buffer from its
 // own goroutine.
 func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *Baseline) {
-	if rt.reconcileActive {
+	if rt.refreshActive {
 		rt.engine.logger.Info("full remote refresh skipped — previous still running")
 		return
 	}
-	rt.reconcileActive = true
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileStarted})
+	rt.refreshActive = true
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRemoteRefreshStarted})
 
 	go func() {
 		rt.finishFullRemoteRefresh(ctx, rt.performFullRemoteRefresh(ctx, bl))
@@ -177,8 +177,8 @@ func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *Basel
 func (rt *watchRuntime) performFullRemoteRefresh(
 	ctx context.Context,
 	bl *Baseline,
-) reconcileResult {
-	result := reconcileResult{}
+) remoteRefreshResult {
+	result := remoteRefreshResult{}
 	start := rt.engine.nowFunc()
 	defer func() {
 		rt.engine.collector().RecordReconcile(len(result.events), rt.engine.since(start))
@@ -247,26 +247,26 @@ func (rt *watchRuntime) observeCommittedFullRemoteRefreshBatch(
 		return remoteObservationResult{}, fmt.Errorf("arm full remote refresh timer: %w", armErr)
 	}
 
-	if rt.afterReconcileCommit != nil {
-		rt.afterReconcileCommit()
+	if rt.afterRefreshCommit != nil {
+		rt.afterRefreshCommit()
 	}
 
 	return projectedPrimary, nil
 }
 
-func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result reconcileResult) {
+func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result remoteRefreshResult) {
 	select {
-	case rt.reconcileResults <- result:
+	case rt.refreshResults <- result:
 	case <-ctx.Done():
 		select {
-		case rt.reconcileResults <- result:
+		case rt.refreshResults <- result:
 		default:
 		}
 	}
 }
 
-func (rt *watchRuntime) applyRemoteRefreshResult(result reconcileResult) {
-	rt.reconcileActive = false
+func (rt *watchRuntime) applyRemoteRefreshResult(result remoteRefreshResult) {
+	rt.refreshActive = false
 
 	if rt.dirtyBuf != nil {
 		if len(result.events) == 0 {
@@ -282,10 +282,10 @@ func (rt *watchRuntime) applyRemoteRefreshResult(result reconcileResult) {
 		}
 	}
 
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileApplied})
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
 }
 
 func (rt *watchRuntime) dropRemoteRefreshResultOnShutdown() {
-	rt.reconcileActive = false
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileDroppedOnShutdown})
+	rt.refreshActive = false
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRemoteRefreshDroppedOnShutdown})
 }

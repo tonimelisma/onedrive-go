@@ -292,12 +292,12 @@ func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.batchReady = nil
 	p.skippedCh = nil
 	p.recheckC = nil
-	p.reconcileC = nil
+	p.refreshC = nil
 }
 
 func (rt *watchRuntime) refreshDrainCompletionSources(p *watchPipeline) {
-	if !rt.reconcileActive {
-		p.reconcileResults = nil
+	if !rt.refreshActive {
+		p.refreshResults = nil
 	}
 	if p.activeObs == 0 {
 		p.errs = nil
@@ -309,7 +309,7 @@ func (rt *watchRuntime) runDrainStep(
 	p *watchPipeline,
 ) (bool, error) {
 	// Draining phase: no new work admission remains live. Only action completions,
-	// reconcile result cleanup, and terminal observer exit/error handling may run.
+	// refresh result cleanup, and terminal observer exit/error handling may run.
 	if rt.drainLoopDone(p) {
 		return true, nil
 	}
@@ -317,15 +317,15 @@ func (rt *watchRuntime) runDrainStep(
 	select {
 	case completion, ok := <-p.completions:
 		return rt.handleDrainingCompletion(ctx, p, &completion, ok)
-	case _, ok := <-p.reconcileResults:
-		return rt.handleDrainingReconcileResult(ctx, p, ok)
+	case _, ok := <-p.refreshResults:
+		return rt.handleDrainingRefreshResult(ctx, p, ok)
 	case obsErr, ok := <-p.errs:
 		return rt.handleDrainingObserverError(p, obsErr, ok)
 	}
 }
 
 func (rt *watchRuntime) drainLoopDone(p *watchPipeline) bool {
-	return p.completions == nil && p.reconcileResults == nil && p.activeObs == 0
+	return p.completions == nil && p.refreshResults == nil && p.activeObs == 0
 }
 
 func (rt *watchRuntime) logObserverError(obsErr error) {
@@ -477,20 +477,20 @@ func (rt *watchRuntime) handleDrainingCompletion(
 	return false, nil
 }
 
-func (rt *watchRuntime) handleDrainingReconcileResult(
+func (rt *watchRuntime) handleDrainingRefreshResult(
 	ctx context.Context,
 	p *watchPipeline,
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		p.reconcileResults = nil
+		p.refreshResults = nil
 		return rt.drainLoopDone(p), nil
 	}
 
 	rt.dropRemoteRefreshResultOnShutdown()
-	rt.mustAssertReconcileBookkeepingCleared(rt, "handle draining reconcile result")
-	p.reconcileResults = nil
-	rt.mustAssertInvariants(ctx, rt, "handle draining reconcile result")
+	rt.mustAssertRefreshBookkeepingCleared(rt, "handle draining refresh result")
+	p.refreshResults = nil
+	rt.mustAssertInvariants(ctx, rt, "handle draining refresh result")
 
 	return rt.drainLoopDone(p), nil
 }
