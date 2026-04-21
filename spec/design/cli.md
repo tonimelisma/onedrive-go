@@ -64,6 +64,8 @@ sync-health command.
 - sync-state snapshots come from store-owned raw authority reads
 - the CLI renders status conditions from the sync-owned stored-condition
   projection, using the sync-owned `ConditionKey` taxonomy and ordering helpers
+- one CLI-owned presentation boundary shapes status-condition titles, reasons,
+  actions, scope-kind labels, ordering, truncation, and JSON output
 - live authenticated account identity and drive catalog overlays come from
   bounded Graph proof/discovery owned by the command
 - live perf comes from the active owner over the control socket when requested

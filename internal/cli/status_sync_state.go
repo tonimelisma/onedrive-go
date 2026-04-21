@@ -9,14 +9,6 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-const (
-	statusScopeAccount   = "account"
-	statusScopeDrive     = "drive"
-	statusScopeDirectory = "directory"
-	statusScopeService   = "service"
-	statusScopeDisk      = "disk"
-)
-
 func readDriveStatusSnapshot(
 	statePath string,
 	logger *slog.Logger,
@@ -31,29 +23,6 @@ func readDriveStatusSnapshot(
 	}
 
 	return snapshot
-}
-
-func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
-	if scopeKey.IsZero() {
-		return ""
-	}
-
-	switch scopeKey.Kind {
-	case syncengine.ScopeThrottleTarget:
-		return statusScopeDrive
-	case syncengine.ScopeService:
-		return statusScopeService
-	case syncengine.ScopeQuotaOwn:
-		return statusScopeDrive
-	case syncengine.ScopePermRemoteRead, syncengine.ScopePermRemoteWrite:
-		return statusScopeDirectory
-	case syncengine.ScopePermDirRead, syncengine.ScopePermDirWrite:
-		return statusScopeDirectory
-	case syncengine.ScopeDiskLocal:
-		return statusScopeDisk
-	default:
-		return "file"
-	}
 }
 
 func buildSyncStateInfo(
@@ -100,64 +69,4 @@ func formatStatusDurationMs(durationMs int64) string {
 	}
 
 	return strconv.FormatInt(durationMs, 10)
-}
-
-func buildStatusConditionJSON(
-	snapshot *syncengine.DriveStatusSnapshot,
-	verbose bool,
-	examplesLimit int,
-) []statusConditionJSON {
-	if snapshot == nil {
-		return nil
-	}
-
-	groups := syncengine.ProjectStoredConditionGroups(snapshot)
-	if len(groups) == 0 {
-		return nil
-	}
-
-	output := make([]statusConditionJSON, 0, len(groups))
-	for i := range groups {
-		group := groups[i]
-		descriptor := describeStatusCondition(group.ConditionKey)
-		output = append(output, statusConditionJSON{
-			ConditionKey:  string(group.ConditionKey),
-			ConditionType: group.ConditionType,
-			Title:         descriptor.Title,
-			Reason:        descriptor.Reason,
-			Action:        descriptor.Action,
-			ScopeKind:     statusScopeKindFromScopeKey(group.ScopeKey),
-			Scope:         group.ScopeKey.Humanize(),
-			Count:         group.Count,
-			Paths:         sampleStrings(group.Paths, verbose, examplesLimit),
-		})
-	}
-
-	sortStatusConditions(output)
-
-	return output
-}
-
-func conditionTotal(groups []statusConditionJSON) int {
-	total := 0
-	for i := range groups {
-		total += groups[i].Count
-	}
-
-	return total
-}
-
-func sampleStrings(values []string, verbose bool, examplesLimit int) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	if verbose || len(values) <= examplesLimit {
-		out := make([]string, len(values))
-		copy(out, values)
-		return out
-	}
-
-	out := make([]string, examplesLimit)
-	copy(out, values[:examplesLimit])
-	return out
 }

@@ -119,53 +119,33 @@ func conditionKeyRank(key ConditionKey) int {
 }
 
 func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
-	if key, ok := conditionKeyForCoreIssueType(issueType); ok {
-		return key, true
+	// Keep the condition-family classifier exhaustive in one local table so
+	// callers do not have to think in separate "core" and "filesystem"
+	// taxonomies.
+	for _, mapping := range [...]struct {
+		issueType string
+		key       ConditionKey
+	}{
+		{issueType: IssueUnauthorized, key: ConditionAuthenticationRequired},
+		{issueType: IssueQuotaExceeded, key: ConditionQuotaExceeded},
+		{issueType: IssueServiceOutage, key: ConditionServiceOutage},
+		{issueType: IssueRateLimited, key: ConditionRateLimited},
+		{issueType: IssueRemoteWriteDenied, key: ConditionRemoteWriteDenied},
+		{issueType: IssueRemoteReadDenied, key: ConditionRemoteReadDenied},
+		{issueType: IssueLocalReadDenied, key: ConditionLocalReadDenied},
+		{issueType: IssueLocalWriteDenied, key: ConditionLocalWriteDenied},
+		{issueType: IssueInvalidFilename, key: ConditionInvalidFilename},
+		{issueType: IssuePathTooLong, key: ConditionPathTooLong},
+		{issueType: IssueFileTooLarge, key: ConditionFileTooLarge},
+		{issueType: IssueCaseCollision, key: ConditionCaseCollision},
+		{issueType: IssueDiskFull, key: ConditionDiskFull},
+		{issueType: IssueHashPanic, key: ConditionHashError},
+		{issueType: IssueFileTooLargeForSpace, key: ConditionFileTooLargeForSpace},
+	} {
+		if mapping.issueType == issueType {
+			return mapping.key, true
+		}
 	}
 
-	return conditionKeyForFilesystemIssueType(issueType)
-}
-
-func conditionKeyForCoreIssueType(issueType string) (ConditionKey, bool) {
-	switch issueType {
-	case IssueUnauthorized:
-		return ConditionAuthenticationRequired, true
-	case IssueQuotaExceeded:
-		return ConditionQuotaExceeded, true
-	case IssueServiceOutage:
-		return ConditionServiceOutage, true
-	case IssueRateLimited:
-		return ConditionRateLimited, true
-	case IssueRemoteWriteDenied:
-		return ConditionRemoteWriteDenied, true
-	case IssueRemoteReadDenied:
-		return ConditionRemoteReadDenied, true
-	default:
-		return "", false
-	}
-}
-
-func conditionKeyForFilesystemIssueType(issueType string) (ConditionKey, bool) {
-	switch issueType {
-	case IssueLocalReadDenied:
-		return ConditionLocalReadDenied, true
-	case IssueLocalWriteDenied:
-		return ConditionLocalWriteDenied, true
-	case IssueInvalidFilename:
-		return ConditionInvalidFilename, true
-	case IssuePathTooLong:
-		return ConditionPathTooLong, true
-	case IssueFileTooLarge:
-		return ConditionFileTooLarge, true
-	case IssueCaseCollision:
-		return ConditionCaseCollision, true
-	case IssueDiskFull:
-		return ConditionDiskFull, true
-	case IssueHashPanic:
-		return ConditionHashError, true
-	case IssueFileTooLargeForSpace:
-		return ConditionFileTooLargeForSpace, true
-	default:
-		return "", false
-	}
+	return "", false
 }
