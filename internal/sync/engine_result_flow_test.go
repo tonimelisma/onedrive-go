@@ -2,6 +2,8 @@ package sync
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -117,6 +119,66 @@ func TestEngineFlow_ProcessNormalDecision_RetryableTransientScopeEvidenceStaysUn
 	assert.Equal(t, SKService(), retryRows[0].ScopeKey)
 	assert.False(t, retryRows[0].Blocked)
 	assert.NotZero(t, retryRows[0].NextRetryAt)
+}
+
+// Validates: R-2.10.5
+func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelayedRetryWork(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name              string
+		actionType        ActionType
+		failureCapability PermissionCapability
+		wantIssueType     string
+	}{
+		{
+			name:          "local read denied",
+			actionType:    ActionDownload,
+			wantIssueType: IssueLocalReadDenied,
+		},
+		{
+			name:              "local write denied",
+			actionType:        ActionUpload,
+			failureCapability: PermissionCapabilityLocalWrite,
+			wantIssueType:     IssueLocalWriteDenied,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			eng, syncRoot := newTestEngine(t, &engineMockClient{})
+			flow := testEngineFlow(t, eng)
+			now := eng.nowFunc()
+
+			require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
+
+			r := &ActionCompletion{
+				Path:              "accessible/file.txt",
+				ActionType:        tc.actionType,
+				FailureCapability: tc.failureCapability,
+				Err:               os.ErrPermission,
+				ErrMsg:            "permission denied",
+			}
+			decision := classifyResult(r)
+
+			outcome := flow.processNormalDecision(t.Context(), nil, &decision, nil, r, nil)
+
+			assert.False(t, outcome.terminate)
+			require.NoError(t, outcome.terminateErr)
+			assert.Empty(t, outcome.dispatched)
+			assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
+
+			retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+			require.Len(t, retryRows, 1)
+			assert.Equal(t, "accessible/file.txt", retryRows[0].Path)
+			assert.Equal(t, tc.wantIssueType, retryRows[0].ConditionType)
+			assert.False(t, retryRows[0].Blocked)
+			assert.Equal(t, 1, retryRows[0].AttemptCount)
+			assert.Greater(t, retryRows[0].NextRetryAt, now.UnixNano())
+		})
+	}
 }
 
 // Validates: R-2.10.5

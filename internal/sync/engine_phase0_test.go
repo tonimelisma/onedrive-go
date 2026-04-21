@@ -451,6 +451,15 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
+	rt.replaceCurrentPlan(&ActionPlan{
+		Actions: []Action{{
+			Type:    ActionDownload,
+			Path:    blockedPath,
+			DriveID: driveID,
+			ItemID:  "blocked-item",
+		}},
+		Deps: [][]int{nil},
+	})
 
 	ta := rt.depGraph.Add(&Action{
 		Type:    ActionUpload,

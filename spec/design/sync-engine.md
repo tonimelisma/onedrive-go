@@ -140,6 +140,13 @@ mode refreshes current truth, runs SQL comparison/reconciliation, rebuilds the
 current actionable set in Go, reconciles durable retry/blocker state, and then
 admits runnable actions.
 
+Retry/trial is not an alternate planner. Timer-driven follow-up consumes the
+last successfully materialized current action plan produced by the normal watch
+observation/planning path. If a due retry or due scope trial is absent from
+that cached plan, retry/trial may run targeted revalidation for the exact
+retry row or blocked scope, but it must not refresh snapshots, rebuild the
+plan, mark the runtime dirty, or reconcile observation-owned issues.
+
 Action completion drain stays inside the engine boundary. When a completion
 unlocks publication-only dependents, watch mode commits those mutations
 synchronously and keeps draining them on the engine/store side until concrete
@@ -200,10 +207,12 @@ The engine classifies results into:
 - observation-time invalid or unsyncable truth -> `observation_issues`
 - exhausted transient exact work -> `retry_work`
 - shared blockers -> `block_scopes` plus blocked `retry_work`
-- execution-discovered conditions that should be observation-owned do not write
-  `observation_issues`; execution logs the invariant violation, persists only
-  execution-owned state, and waits for the next observation pass to record the
-  durable issue
+- normal worker-result handling and retry/trial never write
+  `observation_issues`; only observation-owned reconciliation does
+- execution may still persist `retry_work` for a failed exact action even when
+  a later observation pass may record the corresponding durable current-truth
+  issue; planning suppression plus retry pruning collapses that overlap on the
+  next normal plan materialization
 
 ### Runtime admission model
 
@@ -252,6 +261,9 @@ Ownership splits by access kind:
   boundary tags on `observation_issues`
 - write scopes (`perm:dir:write`, `perm:remote:write`) are
   probe/execution-owned persisted `block_scopes`
+- file-level local permission failures remain exact `retry_work` rows with the
+  normal reconcile backoff; they are not promoted into `block_scopes` unless a
+  later probe proves a subtree-wide boundary
 
 Read boundaries clear only when a later observation batch no longer proves the
 corresponding issue-boundary fact.
