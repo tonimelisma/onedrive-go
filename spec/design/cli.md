@@ -68,7 +68,8 @@ sync-health command.
   actions, scope-kind labels, ordering, truncation, and JSON output
 - `status_sync_state.go` only assembles the high-level sync-state payload;
   `status_condition_descriptors.go` owns the condition presentation and JSON
-  shaping surface itself
+  shaping surface itself, including typed scope-kind labels and descriptor
+  tables keyed directly by sync-owned `ConditionKey`
 - live authenticated account identity and drive catalog overlays come from
   bounded Graph proof/discovery owned by the command
 - live perf comes from the active owner over the control socket when requested

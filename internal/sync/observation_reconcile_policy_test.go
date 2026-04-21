@@ -28,7 +28,7 @@ func TestBuildObservationReconcilePlan_DeletesOnlyManagedCurrentIssues(t *testin
 	)
 
 	require.Len(t, plan.issueDeletes, 1)
-	assert.Equal(t, observationIssueDelete{
+	assert.Equal(t, managedObservationIssueKey{
 		path:      "Private/file.txt",
 		issueType: IssueLocalReadDenied,
 	}, plan.issueDeletes[0])
@@ -96,7 +96,7 @@ func TestBuildObservationReconcilePlan_ReconcilesExactManagedIssueSet(t *testing
 
 	require.Len(t, plan.issueUpserts, 2)
 	assert.ElementsMatch(t, batch.Issues, plan.issueUpserts)
-	assert.Equal(t, []observationIssueDelete{{
+	assert.Equal(t, []managedObservationIssueKey{{
 		path:      "removed.txt",
 		issueType: IssueInvalidFilename,
 	}}, plan.issueDeletes)
@@ -128,7 +128,7 @@ func TestSyncStore_ApplyObservationReconcilePlan_DeletesByPreviousIssueType(t *t
 			IssueType:  IssuePathTooLong,
 			Error:      "new",
 		}},
-		issueDeletes: []observationIssueDelete{{
+		issueDeletes: []managedObservationIssueKey{{
 			path:      "same.txt",
 			issueType: IssueInvalidFilename,
 		}},

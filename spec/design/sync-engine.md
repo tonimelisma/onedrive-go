@@ -197,10 +197,10 @@ retrying count, and raw remote-write-block groups keyed by `ScopeKey`. Those
 remote-write groups come only from active remote-write
 `block_scopes`, not from every projected condition group that happens to share
 the same condition key. The watch runtime owns log phrasing and churn
-suppression separately. Signature/fingerprint helpers and human-readable
-breakdown formatting belong in that watch-log boundary, not in the raw summary
-builder. The store does not own grouped watch-condition projections or
-watch-specific presentation.
+suppression separately. Signature/fingerprint helpers belong in that watch-log
+boundary too, but the fingerprint itself must stay raw-only and must not
+depend on the current human-readable breakdown wording. The store does not own
+grouped watch-condition projections or watch-specific presentation.
 
 ## Shared-Root Drives
 

@@ -36,5 +36,5 @@ func TestWatchConditionSummaryFingerprint_IncludesTotalAndBreakdown(t *testing.T
 		ConditionTotal: 4,
 	}
 
-	assert.Equal(t, "4|4 invalid_filename", watchConditionSummaryFingerprint(summary))
+	assert.Equal(t, "4|invalid_filename=4", watchConditionSummaryFingerprint(summary))
 }

@@ -8,15 +8,10 @@ type observationReconcileStoreState struct {
 
 type observationReconcilePlan struct {
 	issueUpserts []ObservationIssue
-	issueDeletes []observationIssueDelete
+	issueDeletes []managedObservationIssueKey
 }
 
-type observationIssueIdentity struct {
-	path      string
-	issueType string
-}
-
-type observationIssueDelete struct {
+type managedObservationIssueKey struct {
 	path      string
 	issueType string
 }
@@ -45,20 +40,20 @@ func observationIssueUpserts(batch *ObservationFindingsBatch) []ObservationIssue
 }
 
 func observationIssueDeletesNotInDesired(
-	currentManagedIssues map[observationIssueIdentity]ObservationIssueRow,
-	desiredManagedIssues map[observationIssueIdentity]ObservationIssue,
-) []observationIssueDelete {
+	currentManagedIssues map[managedObservationIssueKey]ObservationIssueRow,
+	desiredManagedIssues map[managedObservationIssueKey]ObservationIssue,
+) []managedObservationIssueKey {
 	if len(currentManagedIssues) == 0 {
 		return nil
 	}
 
-	deletes := make([]observationIssueDelete, 0, len(currentManagedIssues))
-	for identity := range currentManagedIssues {
-		if _, ok := desiredManagedIssues[identity]; ok {
+	deletes := make([]managedObservationIssueKey, 0, len(currentManagedIssues))
+	for key := range currentManagedIssues {
+		if _, ok := desiredManagedIssues[key]; ok {
 			continue
 		}
 
-		deletes = append(deletes, observationIssueDelete(identity))
+		deletes = append(deletes, key)
 	}
 
 	sort.Slice(deletes, func(i, j int) bool {
@@ -76,7 +71,7 @@ func observationIssueDeletesNotInDesired(
 func currentManagedObservationIssues(
 	batch *ObservationFindingsBatch,
 	currentIssues []ObservationIssueRow,
-) map[observationIssueIdentity]ObservationIssueRow {
+) map[managedObservationIssueKey]ObservationIssueRow {
 	if batch == nil || len(batch.ManagedIssueTypes) == 0 || len(currentIssues) == 0 {
 		return nil
 	}
@@ -84,7 +79,7 @@ func currentManagedObservationIssues(
 	managedPathSet := managedObservationPathSet(batch)
 	managedIssueTypes := managedObservationTypeSet(batch)
 
-	currentManagedIssues := make(map[observationIssueIdentity]ObservationIssueRow)
+	currentManagedIssues := make(map[managedObservationIssueKey]ObservationIssueRow)
 	for i := range currentIssues {
 		current := currentIssues[i]
 		if current.IssueType == "" {
@@ -98,7 +93,7 @@ func currentManagedObservationIssues(
 				continue
 			}
 		}
-		currentManagedIssues[observationIssueIdentity{
+		currentManagedIssues[managedObservationIssueKey{
 			path:      current.Path,
 			issueType: current.IssueType,
 		}] = current
@@ -111,18 +106,18 @@ func currentManagedObservationIssues(
 // should still exist after reconciliation.
 func desiredManagedObservationIssues(
 	batch *ObservationFindingsBatch,
-) map[observationIssueIdentity]ObservationIssue {
+) map[managedObservationIssueKey]ObservationIssue {
 	if batch == nil || len(batch.Issues) == 0 {
 		return nil
 	}
 
-	desired := make(map[observationIssueIdentity]ObservationIssue, len(batch.Issues))
+	desired := make(map[managedObservationIssueKey]ObservationIssue, len(batch.Issues))
 	for i := range batch.Issues {
 		issue := batch.Issues[i]
 		if issue.Path == "" || issue.IssueType == "" {
 			continue
 		}
-		desired[observationIssueIdentity{
+		desired[managedObservationIssueKey{
 			path:      issue.Path,
 			issueType: issue.IssueType,
 		}] = issue

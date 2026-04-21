@@ -59,7 +59,7 @@ func (controller *scopeController) logPermissionOutcome(
 	flowKind permissionFlow,
 	outcome *PermissionOutcome,
 ) {
-	conditionKey := permissionOutcomeConditionKey(outcome)
+	conditionKey := outcome.ConditionKey()
 
 	switch flowKind {
 	case permissionFlowNone:
@@ -82,14 +82,6 @@ func (controller *scopeController) logPermissionOutcome(
 	default:
 		panic(fmt.Sprintf("unknown permission flow %d", flowKind))
 	}
-}
-
-func permissionOutcomeConditionKey(outcome *PermissionOutcome) ConditionKey {
-	if outcome == nil {
-		return ""
-	}
-
-	return outcome.ConditionKey()
 }
 
 func (controller *scopeController) logRemotePermissionOutcome(

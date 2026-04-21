@@ -123,7 +123,10 @@ plan inside one transaction. SQLite helpers do not own the policy for what a
 batch manages, and they do not re-infer managed issue types from
 `ObservationFindingsBatch` during apply. That policy should read as explicit
 set reconciliation: current managed observation issues, desired managed
-observation issues, exact deletes, exact upserts.
+observation issues, exact deletes, exact upserts. The key used for those exact
+deletes is the same managed issue identity used on both the current and
+desired sides; the store does not need a second delete-only shape to express
+it.
 
 Derived truth inspection stays read-only and authority-based. Observation-owned
 boundary issues tagged with read-scope keys suppress descendant truth through
