@@ -264,9 +264,9 @@ func (controller *scopeController) applyTrialReclassification(
 	bl *Baseline,
 ) {
 	if decision.PermissionFlow != permissionFlowNone {
-		if permOutcome, handled := controller.resolvePermissionOutcome(ctx, decision, r, bl); handled {
+		if permOutcome, handled := controller.decidePermissionOutcome(ctx, decision, r, bl); handled {
 			controller.clearBlockedRetryWorkForScope(ctx, retryWorkKeyForCompletion(r), r.TrialScopeKey)
-			controller.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, permOutcome)
+			controller.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
 		}
 		return
 	}

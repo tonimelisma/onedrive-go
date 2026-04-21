@@ -110,13 +110,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	watch *watchRuntime,
 	decision *ResultDecision,
 	r *ActionCompletion,
-	bl *Baseline,
 ) {
-	if flow.scopeController().applyPermissionOutcomeFlow(ctx, watch, decision, r, bl) {
-		flow.recordError(decision, r)
-		return
-	}
-
 	persisted := flow.applyResultPersistence(ctx, watch, decision, r)
 
 	if persisted && decision.RunScopeDetection {
@@ -150,20 +144,20 @@ func (flow *engineFlow) processNormalDecision(
 	scopeCtrl := flow.scopeController()
 
 	if decision.PermissionFlow != permissionFlowNone {
-		if permOutcome, handled := scopeCtrl.resolvePermissionOutcome(ctx, decision, r, bl); handled {
+		if permOutcome, handled := scopeCtrl.decidePermissionOutcome(ctx, decision, r, bl); handled {
 			if permOutcome.Matched {
 				outcome := routeOutcome{}
-				switch permOutcome.Kind {
-				case permissionOutcomeNone,
-					permissionOutcomeRecordFileFailure,
-					permissionOutcomeActivateBoundaryScope:
-					outcome.dispatched = flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
-					scopeCtrl.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, permOutcome)
-				case permissionOutcomeActivateDerivedScope:
-					scopeCtrl.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, permOutcome)
+				switch {
+				case permOutcome.ActivatesDerivedScope():
+					scopeCtrl.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
 					for _, ta := range ready {
 						scopeCtrl.cascadeRecordAndComplete(ctx, ta, permOutcome.ScopeKey)
 					}
+				case permOutcome.IsFileFailure(),
+					permOutcome.Kind == permissionOutcomeNone,
+					permOutcome.Kind == permissionOutcomeActivateBoundaryScope:
+					outcome.dispatched = flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
+					scopeCtrl.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
 				default:
 					panic(fmt.Sprintf("unknown permission outcome kind %d", permOutcome.Kind))
 				}
@@ -183,7 +177,7 @@ func (flow *engineFlow) processNormalDecision(
 
 	switch decision.Class {
 	case errclass.ClassInvalid:
-		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r, bl)
+		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r)
 		outcome.terminate = true
 		outcome.terminateErr = fmt.Errorf("classify action completion: invalid failure class")
 	case errclass.ClassSuccess:
@@ -196,7 +190,7 @@ func (flow *engineFlow) processNormalDecision(
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
 	case errclass.ClassRetryableTransient, errclass.ClassBlockScopeingTransient, errclass.ClassActionable:
-		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r, bl)
+		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r)
 	}
 
 	return outcome
@@ -311,43 +305,30 @@ func (controller *scopeController) applyFatalAuthEffects(
 	_ = watch
 }
 
-func (controller *scopeController) applyPermissionOutcomeFlow(
-	ctx context.Context,
-	watch *watchRuntime,
-	decision *ResultDecision,
-	r *ActionCompletion,
-	bl *Baseline,
-) bool {
-	permOutcome, handled := controller.resolvePermissionOutcome(ctx, decision, r, bl)
-	if !handled {
-		return false
-	}
-
-	return controller.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, permOutcome)
-}
-
-func (controller *scopeController) resolvePermissionOutcome(
+// decidePermissionOutcome is the shared engine-owned bridge between
+// permission evidence gathering and pure policy. Normal completions and trial
+// reclassification both call this helper so the engine makes one consistent
+// evidence -> outcome decision before any persistence occurs.
+func (controller *scopeController) decidePermissionOutcome(
 	ctx context.Context,
 	decision *ResultDecision,
 	r *ActionCompletion,
 	bl *Baseline,
-) (*PermissionOutcome, bool) {
+) (PermissionOutcome, bool) {
 	flow := controller.flow
 
 	switch decision.PermissionFlow {
 	case permissionFlowNone:
-		return nil, false
+		return PermissionOutcome{}, false
 	case permissionFlowRemote403:
 		if bl == nil || !flow.engine.permHandler.HasPermChecker() {
-			return nil, false
+			return PermissionOutcome{}, false
 		}
 		permEvidence := flow.engine.permHandler.handle403(ctx, bl, r.Path, r.ActionType)
-		permOutcome := DecidePermissionOutcome(r, permEvidence)
-		return &permOutcome, true
+		return DecidePermissionOutcome(r, permEvidence), true
 	case permissionFlowLocalPermission:
 		permEvidence := flow.engine.permHandler.handleLocalPermission(ctx, r)
-		permOutcome := DecidePermissionOutcome(r, permEvidence)
-		return &permOutcome, true
+		return DecidePermissionOutcome(r, permEvidence), true
 	default:
 		panic(fmt.Sprintf("unknown permission flow %d", decision.PermissionFlow))
 	}

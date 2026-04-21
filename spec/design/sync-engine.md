@@ -79,6 +79,10 @@ Permission handling is intentionally split three ways:
 - apply/logging (`permission_decisions.go`) persists blocked `retry_work`,
   activates or releases timed write scopes, and emits engine-owned logs
 
+Normal completion handling and trial reclassification both reuse the same
+engine helper to gather permission evidence and call `DecidePermissionOutcome`.
+That shared helper decides once; it does not persist anything itself.
+
 ## One-Shot Sync
 
 `RunOnce()` keeps one-shot behavior intentionally simple:

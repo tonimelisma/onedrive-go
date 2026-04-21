@@ -89,29 +89,14 @@ func permissionOutcomeConditionKey(outcome *PermissionOutcome) ConditionKey {
 		return ""
 	}
 
-	if !outcome.ScopeKey.IsZero() {
-		return ConditionKeyForStoredCondition(outcome.ScopeKey.ConditionType(), outcome.ScopeKey)
-	}
-
-	if outcome.RetryWorkFailure != nil {
-		return ConditionKeyForStoredCondition(
-			outcome.RetryWorkFailure.ConditionType,
-			outcome.RetryWorkFailure.ScopeKey,
-		)
-	}
-
-	if !outcome.ScopeKey.IsZero() {
-		return ConditionKeyForStoredCondition(outcome.ScopeKey.ConditionType(), outcome.ScopeKey)
-	}
-
-	return ""
+	return outcome.ConditionKey()
 }
 
 func (controller *scopeController) logRemotePermissionOutcome(
 	outcome *PermissionOutcome,
 	conditionKey ConditionKey,
 ) {
-	if outcome.Kind != permissionOutcomeActivateBoundaryScope && outcome.Kind != permissionOutcomeActivateDerivedScope {
+	if outcome == nil || !outcome.IsBoundaryFailure() {
 		return
 	}
 
@@ -181,7 +166,7 @@ func permissionOutcomeRetryDelay(
 }
 
 func shouldArmPermissionRetryTimer(outcome *PermissionOutcome) bool {
-	if outcome == nil || outcome.Kind != permissionOutcomeRecordFileFailure {
+	if outcome == nil || !outcome.IsFileFailure() {
 		return false
 	}
 
