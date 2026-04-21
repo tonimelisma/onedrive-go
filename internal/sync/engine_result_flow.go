@@ -366,8 +366,8 @@ func (flow *engineFlow) recordRetryWork(
 			slog.String("condition_type", decision.ConditionType),
 			slog.String("scope_evidence", decision.ScopeEvidence.String()),
 		)
-		flow.engine.logger.Error(
-			"execution discovered a durable current-truth condition; observation should own the observation_issue",
+		flow.engine.logger.Debug(
+			"execution recorded retry_work for a current-truth condition; observation may suppress the next plan and prune it",
 			fields...,
 		)
 	}

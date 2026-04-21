@@ -247,6 +247,10 @@ func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *
 		return fmt.Errorf("sync: pruning block scopes without blocked work: %w", err)
 	}
 
+	if flow.watch != nil {
+		flow.watch.replaceCurrentPlan(plan)
+	}
+
 	return nil
 }
 

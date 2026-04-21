@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 type PermissionCheckDecisionKind int
@@ -56,7 +58,7 @@ func (controller *scopeController) applyPermissionCheckMutation(
 	case permissionCheckRecordFileFailure,
 		permissionCheckActivateBoundaryScope,
 		permissionCheckActivateDerivedScope:
-		if !controller.recordRetryWorkFailure(ctx, decision.RetryWorkFailure) {
+		if !controller.recordRetryWorkFailure(ctx, decision.Kind, decision.RetryWorkFailure) {
 			return
 		}
 		if !decision.ScopeKey.IsZero() {
@@ -146,6 +148,7 @@ func (controller *scopeController) logRemotePermissionDecision(
 
 func (controller *scopeController) recordRetryWorkFailure(
 	ctx context.Context,
+	kind PermissionCheckDecisionKind,
 	failure *RetryWorkFailure,
 ) bool {
 	if failure == nil {
@@ -154,27 +157,43 @@ func (controller *scopeController) recordRetryWorkFailure(
 
 	flow := controller.flow
 	conditionKey := ConditionKeyForStoredCondition(failure.ConditionType, failure.ScopeKey)
+	logClass := errclass.ClassActionable
+	if failure.Blocked {
+		logClass = errclass.ClassBlockScopeingTransient
+	}
 
-	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, failure, nil); err != nil {
+	delayFn := permissionDecisionRetryDelay(kind, failure)
+	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, failure, delayFn); err != nil {
 		fields := append(flow.summaryLogFields(
-			errclass.ClassBlockScopeingTransient,
+			logClass,
 			conditionKey,
 			failure.Path,
 			failure.ScopeKey,
 		), slog.String("error", err.Error()))
-		flow.engine.logger.Warn("failed to record retry_work permission blocker", fields...)
+		flow.engine.logger.Warn("failed to record retry_work permission failure", fields...)
 		return false
 	}
 
 	fields := append(flow.summaryLogFields(
-		errclass.ClassBlockScopeingTransient,
+		logClass,
 		conditionKey,
 		failure.Path,
 		failure.ScopeKey,
 	),
 		slog.String("condition_type", failure.ConditionType),
 	)
-	flow.engine.logger.Debug("retry_work blocker recorded", fields...)
+	flow.engine.logger.Debug("retry_work permission failure recorded", fields...)
 
 	return true
+}
+
+func permissionDecisionRetryDelay(
+	kind PermissionCheckDecisionKind,
+	failure *RetryWorkFailure,
+) func(int) time.Duration {
+	if kind != permissionCheckRecordFileFailure || failure == nil || failure.Blocked {
+		return nil
+	}
+
+	return retry.ReconcilePolicy().Delay
 }

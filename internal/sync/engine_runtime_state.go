@@ -49,6 +49,14 @@ func (rt *watchRuntime) consumeOutboxHead() {
 	rt.loop.outbox = rt.loop.outbox[1:]
 }
 
+func (rt *watchRuntime) cachedCurrentPlan() *ActionPlan {
+	return rt.currentPlan
+}
+
+func (rt *watchRuntime) replaceCurrentPlan(plan *ActionPlan) {
+	rt.currentPlan = plan
+}
+
 func (rt *watchRuntime) replaceActiveScopes(blocks []ActiveScope) {
 	rt.activeScopesMu.Lock()
 	defer rt.activeScopesMu.Unlock()
