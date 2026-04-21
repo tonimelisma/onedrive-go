@@ -278,6 +278,11 @@ Ownership splits by access kind:
   normal reconcile backoff; they are not promoted into `block_scopes` unless a
   later probe proves a subtree-wide boundary
 
+Permission outcomes may still tag blocked `retry_work` with a read-boundary
+`ScopeKey` for derived truth and reporting, but only
+`ScopeKey.PersistsInBlockScopes()` outcomes may materialize `block_scopes`
+rows.
+
 Read boundaries clear only when a later observation batch no longer proves the
 corresponding issue-boundary fact.
 Write scopes clear through normal timed trials, successful write work, or
