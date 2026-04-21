@@ -25,7 +25,7 @@ func validateBlockScope(block *BlockScope) error {
 	if DescribeScopeKey(block.Key).IsZero() {
 		return fmt.Errorf("sync: upserting block scope %s: unknown scope key", block.Key.String())
 	}
-	if !isTimedBlockScopeKey(block.Key) {
+	if !block.Key.PersistsInBlockScopes() {
 		return fmt.Errorf("sync: upserting block scope %s: read boundaries belong in observation_issues, not block_scopes", block.Key.String())
 	}
 

@@ -37,7 +37,7 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 	if DescribeScopeKey(key).IsZero() {
 		return nil, fmt.Errorf("scan block scope row: unknown scope key %q", wireKey)
 	}
-	if !isTimedBlockScopeKey(key) {
+	if !key.PersistsInBlockScopes() {
 		return nil, fmt.Errorf("scan block scope row: read boundary scope %q belongs in observation_issues, not block_scopes", wireKey)
 	}
 

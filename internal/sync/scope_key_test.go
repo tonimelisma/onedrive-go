@@ -75,6 +75,26 @@ func TestScopeKey_IsPermRemoteAndRemotePath(t *testing.T) {
 	assert.Equal(t, "/readonly", key.RemotePath())
 }
 
+func TestScopeKey_CoveredPath(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "/docs", SKPermLocalWrite("/docs").CoveredPath())
+	assert.Equal(t, "/readonly", SKPermRemoteRead("/readonly").CoveredPath())
+	assert.Empty(t, SKService().CoveredPath())
+}
+
+func TestScopeKey_PersistsInBlockScopes(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, SKService().PersistsInBlockScopes())
+	assert.True(t, SKQuotaOwn().PersistsInBlockScopes())
+	assert.True(t, SKPermLocalWrite("/docs").PersistsInBlockScopes())
+	assert.True(t, SKPermRemoteWrite("/readonly").PersistsInBlockScopes())
+	assert.False(t, SKPermLocalRead("/docs").PersistsInBlockScopes())
+	assert.False(t, SKPermRemoteRead("/readonly").PersistsInBlockScopes())
+	assert.False(t, ScopeKey{}.PersistsInBlockScopes())
+}
+
 func TestScopeKey_DirPathPanicsForNonPermDir(t *testing.T) {
 	t.Parallel()
 

@@ -301,6 +301,19 @@ func (m *SyncStore) ListRetryWork(ctx context.Context) ([]RetryWorkRow, error) {
 	return scanRetryWorkRows(rows)
 }
 
+func queryBlockedRetryWorkRowsWithRunner(
+	ctx context.Context,
+	runner sqlTxRunner,
+) ([]RetryWorkRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlListRetryWorkBlocked)
+	if err != nil {
+		return nil, fmt.Errorf("query blocked retry_work rows: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRetryWorkRows(rows)
+}
+
 func (m *SyncStore) ListBlockedRetryWork(ctx context.Context) ([]RetryWorkRow, error) {
 	rows, err := m.db.QueryContext(ctx, sqlListRetryWorkBlocked)
 	if err != nil {

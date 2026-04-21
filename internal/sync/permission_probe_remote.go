@@ -34,7 +34,7 @@ func (ph *PermissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) 
 			continue
 		}
 
-		boundary := blocks[i].Key.RemotePath()
+		boundary := blocks[i].Key.CoveredPath()
 		if seen[boundary] {
 			continue
 		}

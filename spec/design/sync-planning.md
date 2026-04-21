@@ -41,7 +41,6 @@ The executable plan is runtime-owned and is not a durable SQLite authority.
 - `remote_state`: latest admissible remote snapshot
 - `observation_issues`: durable blocked-truth facts for unreadable or
   unsyncable current state
-- active read permission scopes from `block_scopes`
 - `Mode`: bidirectional, download-only, or upload-only
 - runtime safety/policy inputs owned by the engine
 

@@ -166,6 +166,12 @@ func (sk ScopeKey) IsPermRemoteWrite() bool {
 	return sk.Kind == ScopePermRemoteWrite
 }
 
+// CoveredPath returns the subtree or path covered by this scope key when it is
+// path-scoped. Non-path scopes return the empty string.
+func (sk ScopeKey) CoveredPath() string {
+	return DescribeScopeKey(sk).ScopePath()
+}
+
 // DirPath returns the directory path for a local permission scope key.
 // Panics if called on a non-local-permission key (defensive — caller bug).
 func (sk ScopeKey) DirPath() string {
@@ -173,7 +179,7 @@ func (sk ScopeKey) DirPath() string {
 	if descriptor.Family != ScopeFamilyPermDir {
 		panic("ScopeKey.DirPath() called on non-local-permission key")
 	}
-	return descriptor.ScopePath()
+	return sk.CoveredPath()
 }
 
 // RemotePath returns the local boundary path for a remote permission scope key.
@@ -183,7 +189,13 @@ func (sk ScopeKey) RemotePath() string {
 	if descriptor.Family != ScopeFamilyPermRemote {
 		panic("ScopeKey.RemotePath() called on non-remote-permission key")
 	}
-	return descriptor.ScopePath()
+	return sk.CoveredPath()
+}
+
+// PersistsInBlockScopes reports whether this scope is a timed blocked-work
+// scope that belongs in block_scopes.
+func (sk ScopeKey) PersistsInBlockScopes() bool {
+	return DescribeScopeKey(sk).PersistsInBlockScopes()
 }
 
 // IsThrottleTarget returns true for target-scoped throttle keys.

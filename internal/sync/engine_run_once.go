@@ -701,7 +701,7 @@ func (flow *engineFlow) loadCurrentActionPlanInputsTx(
 	if err != nil {
 		return currentActionPlanInputs{}, fmt.Errorf("sync: listing remote_state rows: %w", err)
 	}
-	observationIssues, err := queryObservationIssueRowsDB(ctx, tx)
+	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, tx)
 	if err != nil {
 		return currentActionPlanInputs{}, fmt.Errorf("sync: listing observation issues: %w", err)
 	}
