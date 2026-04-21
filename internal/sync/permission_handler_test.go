@@ -39,7 +39,7 @@ func TestPermHandler_Handle403_NilChecker(t *testing.T) {
 	ph, _ := newTestPermHandler(t, nil)
 
 	result := ph.handle403(t.Context(), &Baseline{}, "some/path.txt", ActionUpload)
-	assert.False(t, result.Matched)
+	assert.False(t, result.Matched())
 }
 
 // Validates: R-2.14.1
@@ -50,7 +50,7 @@ func TestPermHandler_Handle403_NoPermissionRoot(t *testing.T) {
 	ph, _ := newTestPermHandler(t, checker)
 
 	result := ph.handle403(t.Context(), &Baseline{}, "unmatched/path.txt", ActionUpload)
-	assert.False(t, result.Matched)
+	assert.False(t, result.Matched())
 }
 
 func TestPermHandler_HandlePermissionCheckError_NotFound(t *testing.T) {
@@ -64,12 +64,11 @@ func TestPermHandler_HandlePermissionCheckError_NotFound(t *testing.T) {
 		"failed",
 		ActionUpload,
 	)
-	assert.True(t, result.Matched)
-	assert.Equal(t, permissionCheckActivateDerivedScope, result.Kind)
-	require.NotNil(t, result.RetryWorkFailure)
-	assert.Equal(t, "failed/file.txt", result.RetryWorkFailure.Path)
-	assert.Equal(t, IssueRemoteWriteDenied, result.RetryWorkFailure.ConditionType)
-	assert.Equal(t, SKPermRemoteWrite("failed"), result.ScopeKey)
+	assert.True(t, result.Matched())
+	assert.Equal(t, permissionEvidenceBoundaryDenied, result.Kind)
+	assert.Equal(t, "failed/file.txt", result.TriggerPath)
+	assert.Equal(t, "failed", result.BoundaryPath)
+	assert.Equal(t, IssueRemoteWriteDenied, result.IssueType)
 }
 
 func TestPermHandler_HandlePermissionCheckError_OtherError(t *testing.T) {
@@ -83,7 +82,7 @@ func TestPermHandler_HandlePermissionCheckError_OtherError(t *testing.T) {
 		"failed",
 		ActionUpload,
 	)
-	assert.False(t, result.Matched)
+	assert.False(t, result.Matched())
 }
 
 func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
@@ -100,10 +99,9 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 
 	decision := ph.handleLocalPermission(t.Context(), r)
 
-	require.True(t, decision.Matched)
-	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
-	require.NotNil(t, decision.RetryWorkFailure)
-	assert.Equal(t, IssueLocalReadDenied, decision.RetryWorkFailure.ConditionType)
+	require.True(t, decision.Matched())
+	assert.Equal(t, permissionEvidenceFileDenied, decision.Kind)
+	assert.Equal(t, IssueLocalReadDenied, decision.IssueType)
 }
 
 func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
@@ -122,11 +120,10 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 
 	decision := ph.handleLocalPermission(t.Context(), r)
 
-	require.True(t, decision.Matched)
-	assert.Equal(t, permissionCheckActivateBoundaryScope, decision.Kind)
-	require.NotNil(t, decision.RetryWorkFailure)
-	assert.Equal(t, IssueLocalReadDenied, decision.RetryWorkFailure.ConditionType)
-	assert.Equal(t, SKPermLocalRead("blocked"), decision.ScopeKey)
+	require.True(t, decision.Matched())
+	assert.Equal(t, permissionEvidenceBoundaryDenied, decision.Kind)
+	assert.Equal(t, IssueLocalReadDenied, decision.IssueType)
+	assert.Equal(t, "blocked", decision.BoundaryPath)
 }
 
 func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
@@ -145,8 +142,7 @@ func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 
 	decision := ph.handleLocalPermission(t.Context(), r)
 
-	require.True(t, decision.Matched)
-	assert.Equal(t, permissionCheckRecordFileFailure, decision.Kind)
-	require.NotNil(t, decision.RetryWorkFailure)
-	assert.Equal(t, "accessible/file.txt", decision.RetryWorkFailure.Path)
+	require.True(t, decision.Matched())
+	assert.Equal(t, permissionEvidenceFileDenied, decision.Kind)
+	assert.Equal(t, "accessible/file.txt", decision.TriggerPath)
 }

@@ -8,8 +8,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// PermissionHandler owns permission probing and revalidation. It does not
-// persist durable state itself; the engine applies the returned decisions.
+// PermissionHandler owns permission probing and revalidation. It gathers
+// evidence only; the engine-owned policy/apply path turns that evidence into
+// durable retry/scope mutations.
 type PermissionHandler struct {
 	store        *SyncStore
 	permChecker  PermissionChecker

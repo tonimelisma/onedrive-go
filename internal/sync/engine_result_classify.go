@@ -89,7 +89,7 @@ func classifyResult(r *ActionCompletion) ResultDecision {
 func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 	scopeEvidence := deriveScopeKey(r)
 	conditionType := issueTypeForResult(r)
-	permissionDecisionFlow := remote403PermissionFlow(r)
+	permissionFlowKind := remote403PermissionFlow(r)
 
 	switch {
 	case r.HTTPStatus == 0:
@@ -105,7 +105,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 		return withRuntimeSummary(&ResultDecision{
 			Class:          resultSkip,
 			Persistence:    persistRetryWork,
-			PermissionFlow: permissionDecisionFlow,
+			PermissionFlow: permissionFlowKind,
 			TrialHint:      trialHintReclassify,
 			ConditionType:  conditionType,
 		}), true
@@ -166,7 +166,7 @@ func isRetryableHTTPStatus(status int) bool {
 
 func classifyLocalResult(r *ActionCompletion) ResultDecision {
 	conditionType := issueTypeForResult(r)
-	permissionDecisionFlow := localPermissionDecisionFlow(r)
+	permissionFlowKind := localPermissionFlow(r)
 
 	switch {
 	case errors.Is(r.Err, ErrActionPreconditionChanged):
@@ -203,7 +203,7 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 		return withRuntimeSummary(&ResultDecision{
 			Class:          resultSkip,
 			Persistence:    persistRetryWork,
-			PermissionFlow: permissionDecisionFlow,
+			PermissionFlow: permissionFlowKind,
 			TrialHint:      trialHintReclassify,
 			ConditionType:  conditionType,
 		})
@@ -228,7 +228,7 @@ func remote403PermissionFlow(r *ActionCompletion) permissionFlow {
 	return permissionFlowRemote403
 }
 
-func localPermissionDecisionFlow(r *ActionCompletion) permissionFlow {
+func localPermissionFlow(r *ActionCompletion) permissionFlow {
 	if r == nil || !errors.Is(r.Err, os.ErrPermission) {
 		return permissionFlowNone
 	}
