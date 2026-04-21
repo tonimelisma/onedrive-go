@@ -369,8 +369,8 @@ func TestRunWatch_UploadOnly_StartsRemoteObserver(t *testing.T) {
 	}), "upload-only watch must start a remote observer")
 }
 
-// TestEngine_ExternalDBChanged verifies the PRAGMA data_version detection.
-func TestEngine_ExternalDBChanged(t *testing.T) {
+// Validates: R-2.14.3
+func TestWatchRuntime_InitRecheckState_SeedsLastDataVersion(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -392,86 +392,9 @@ func TestEngine_ExternalDBChanged(t *testing.T) {
 	require.NoError(t, err)
 	testWatchRuntime(t, eng).lastDataVersion = dv
 
-	// No external changes yet — should return false.
-	assert.False(t, externalDBChangedForTest(t, eng, ctx), "no external changes")
-
-	// Engine's own writes don't change data_version, so repeated checks
-	// should still return false.
-	assert.False(t, externalDBChangedForTest(t, eng, ctx), "still no external changes")
-}
-
-// Validates: R-2.10.9, R-2.14.3
-func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-1"), nil
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
-	ctx := t.Context()
-	newTestWatchState(t, eng)
-
-	clearedScope := SKPermRemoteWrite("Shared/TeamDocs")
-	retainedScope := SKPermRemoteWrite("Shared/Other")
-
-	setTestBlockScope(t, eng, &BlockScope{
-		Key:       clearedScope,
-		BlockedAt: eng.nowFunc(),
-	})
-	setTestBlockScope(t, eng, &BlockScope{
-		Key:       retainedScope,
-		BlockedAt: eng.nowFunc(),
-	})
-
-	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "Shared/TeamDocs/file.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueRemoteWriteDenied,
-		ScopeKey:      clearedScope,
-		LastError:     "blocked by remote write block scope",
-		Blocked:       true,
-	}, nil)
-	require.NoError(t, err)
-	_, err = eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "Shared/Other/file.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueRemoteWriteDenied,
-		ScopeKey:      retainedScope,
-		LastError:     "blocked by remote write block scope",
-		Blocked:       true,
-	}, nil)
-	require.NoError(t, err)
-
-	require.NoError(t, eng.baseline.DiscardScope(ctx, clearedScope))
-
-	handleExternalChangesForTest(t, eng, ctx)
-
-	assert.False(t, isTestBlockScopeed(eng, clearedScope),
-		"removing a remote write block scope externally should release that scope")
-	assert.True(t, isTestBlockScopeed(eng, retainedScope),
-		"unrelated remote write block scopes must remain blocked")
-
-	retryable := readyRetryWorkForTest(t, eng.baseline, ctx, eng.nowFunc())
-	assert.Empty(t, retryable, "clearing the last blocked write should forget the remote scope instead of retrying it")
-
-	remainingBlocked := listRetryWorkForTest(t, eng.baseline, ctx)
-	require.Len(t, remainingBlocked, 1, "only the uncleared blocked write should remain")
-	assert.Equal(t, "Shared/Other/file.txt", remainingBlocked[0].Path)
-	assert.True(t, remainingBlocked[0].Blocked)
-	assert.Equal(t, retainedScope, remainingBlocked[0].ScopeKey)
-
-	select {
-	case <-testWatchRuntime(t, eng).retryTimerCh:
-	default:
-		require.Fail(t, "expected immediate retry wakeup after remote permission clearance")
-	}
+	// The maintenance tick no longer reacts to external DB mutations. The
+	// stored data_version is still initialized for watch startup bookkeeping.
+	assert.Equal(t, dv, testWatchRuntime(t, eng).lastDataVersion)
 }
 
 // TestRunWatch_ProcessBatch_EmptyPlan verifies that an empty plan (all
@@ -799,12 +722,6 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventTrialTimerArmed
-	}, "trial timer armed")
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventRetrySweepCompleted
-	}, "initial retry sweep completed")
 
 	cancel()
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {

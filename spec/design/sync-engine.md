@@ -15,7 +15,7 @@ The engine is the single-drive runtime owner. It coordinates:
 - durable outcome writes
 - retry and trial scheduling
 - scope lifecycle
-- watch-mode refresh, external-change reconciliation, and maintenance work
+- watch-mode refresh and maintenance work
 
 The target engine persists durable status through three authorities:
 
@@ -40,9 +40,9 @@ assemble overlapping observation-managed batch shapes ad hoc.
   in-memory runtime state for the currently running session.
 - Allowed Side Effects: coordinating observers, planner, executor, and store
   writes through injected boundaries.
-- Mutable Runtime Owner: `Engine` owns all single-drive mutable runtime state.
-  In watch mode that includes the event loop, outbox, in-flight actions,
-  retry/trial timers, scope state, and admission flags.
+- Mutable Runtime Owner: `engineFlow` is the single per-run mutable owner.
+  One-shot and watch both execute through that same runtime state; watch keeps
+  it alive across timer ticks and observation batches.
 - Error Boundary: the engine translates observer, planner, executor,
   permission, and store outcomes into engine-owned reports, retries, scope
   transitions, and durable authority writes.
@@ -52,7 +52,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Behavior | Evidence |
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
-| Watch mode keeps single-owner runtime admission, retry/trial scheduling, and external-change reconciliation inside the engine boundary. | `TestEngine_CascadeRecordAndComplete_RecordsBlockedRetryWork`, `TestEngine_ExternalDBChanged`, `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestRunWatch_ShutdownStopsRetryAndTrialTimers` |
+| One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestRunRetrierSweep_ReleasesHeldRetryEntriesOnly`, `TestRunTrialDispatch_ReleasesFirstHeldScopeCandidateAsTrial`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 
 ## Construction
 
@@ -113,11 +113,12 @@ Permission timing follows the policy result, not the probe:
 There is no mid-pass mailbox for user intent. New external DB writes during a
 one-shot run are durable state for a later run.
 
-`materializeCurrentActionPlan()` is the durable reconciliation boundary. It
-should prune stale `retry_work`, prune empty `block_scopes`, and align blocked
-work with active scopes. It does not persist a durable executable plan table.
-Every persisted scope must still have blocked `retry_work`; empty scopes are
-discarded immediately.
+The current-plan preparation stage is the handoff boundary between planning
+and runtime startup. It observes current truth, builds the current action
+plan, reconciles durable retry/scope state, loads surviving `retry_work` /
+`block_scopes`, and only then hands that prepared runtime state to execution.
+Stale `retry_work` and empty `block_scopes` are pruned there, not from timer
+sweeps.
 
 Scope startup cleanup follows the same policy with a deliberate
 decision-then-apply split: the engine first derives which persisted scopes are
@@ -158,8 +159,12 @@ back-to-back expensive full refreshes.
 - periodic recheck and full remote refresh
 - graceful drain on shutdown
 
-The watch loop is the single owner of mutable runtime state. Other packages may
-signal it, but they do not mutate its runtime data structures directly.
+The watch loop is the single owner of mutable scheduling/runtime state:
+outbox, dispatch admission, held-work timing, refresh coordination, and drain
+behavior. Remote observation commit ownership is still partially split today:
+watch callbacks and full-refresh helpers commit projected remote observations
+before handing emitted change events back to the loop, while local snapshot
+refresh remains loop-owned.
 
 Local watcher events, remote delta batches, websocket wakes, and full remote
 refresh results are scheduler hints only. After debounce or wake, watch
@@ -167,29 +172,26 @@ mode refreshes current truth, runs SQL comparison/reconciliation, rebuilds the
 current actionable set in Go, reconciles durable retry/blocker state, and then
 admits runnable actions.
 
-Retry/trial is not an alternate planner. Timer-driven follow-up consumes the
-last successfully materialized current action plan produced by the normal watch
-observation/planning path. Watch runtime caches that materialized plan as an
-indexed snapshot keyed by exact `RetryWorkKey` so retry/trial can extract just
-the needed dependency-closed subset without rescanning the whole plan. If a
-due retry or due scope trial is absent from that cached snapshot, retry/trial
-may run targeted revalidation for the exact retry row or blocked scope, but it
-must not refresh snapshots, rebuild the plan, mark the runtime dirty, or
-reconcile observation-owned issues.
+Retry/trial is not an alternate planner. Timer-driven follow-up only
+re-releases exact held actions that are already part of the current runtime.
+The engine holds dependency-ready exact work in memory, keyed by exact
+`RetryWorkKey` and grouped by `ScopeKey` for blocked scopes. Timer ticks do
+not rebuild subset plans, do not compute dependency closure, and do not
+revalidate stale rows. Stale-row cleanup belongs only to normal
+prepare/reconcile.
 
 Action completion drain stays inside the engine boundary. When a completion
 unlocks publication-only dependents, watch mode commits those mutations
 synchronously and keeps draining them on the engine/store side until concrete
 worker actions are the only dispatchable work left.
 
-### Recheck And External DB Changes
+### Recheck And Maintenance
 
-Watch mode periodically checks SQLite `PRAGMA data_version`. If another
-connection committed a write, `handleExternalChanges()` runs.
-
-That hook is intentionally narrow. It rechecks externally cleared scope state
-and aligns runtime admission with the persisted `block_scopes` and blocked
-`retry_work` rows. It is not a generic user-intent ingestion path.
+Watch mode still owns periodic maintenance ticks for summary logging and full
+remote refresh cadence, but it no longer polls SQLite for mysterious external
+runtime-state changes. Live scope/runtime state changes must arrive through the
+engine's own control paths; there is no generic external DB reconciliation
+loop.
 
 Watch summary grouping is engine-owned. `watch_summary.go` builds only raw
 watch-condition aggregates: condition-key counts, total condition count,
@@ -255,7 +257,12 @@ admission after dependency readiness:
 - ask the graph for ready work
 - gate that ready work against active scopes
 - dispatch allowed work
-- keep blocked work represented durably in `retry_work`
+- keep exact failed/blocked roots represented durably in `retry_work`
+
+Held work stays unresolved in the dependency graph. Dependents are not
+persisted as cascade retry rows; they remain blocked naturally until the exact
+parent action succeeds, is released for retry, or the whole runtime is
+replaced by a fresh prepare cycle.
 
 The benchmark target is earlier durable reconciliation, not removal of the
 post-graph admission gate.

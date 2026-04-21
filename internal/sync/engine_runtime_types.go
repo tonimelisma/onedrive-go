@@ -15,6 +15,19 @@ type engineFlow struct {
 	depGraph   *DepGraph
 	dispatchCh chan *TrackedAction
 
+	activeScopesMu sync.RWMutex
+	activeScopes   []ActiveScope
+	scopeState     *ScopeState
+	nextActionID   int64
+
+	retryRowsByKey map[RetryWorkKey]RetryWorkRow
+	heldByKey      map[RetryWorkKey]*heldAction
+	heldScopeOrder map[ScopeKey][]RetryWorkKey
+	queuedByID     map[int64]struct{}
+	runningByID    map[int64]struct{}
+	runningCount   int
+	nextHeldOrder  uint64
+
 	succeeded  int
 	failed     int
 	syncErrors []error
@@ -24,10 +37,30 @@ type engineFlow struct {
 	runID     string
 }
 
-func newEngineFlow(engine *Engine) engineFlow {
-	flow := engineFlow{
-		engine: engine,
-		runID:  engine.nextRuntimeRunID(),
+type heldReason string
+
+const (
+	heldReasonRetry heldReason = "retry"
+	heldReasonScope heldReason = "scope"
+)
+
+type heldAction struct {
+	Tracked   *TrackedAction
+	Reason    heldReason
+	ScopeKey  ScopeKey
+	NextRetry time.Time
+	HeldOrder uint64
+}
+
+func newEngineFlow(engine *Engine) *engineFlow {
+	flow := &engineFlow{
+		engine:         engine,
+		runID:          engine.nextRuntimeRunID(),
+		retryRowsByKey: make(map[RetryWorkKey]RetryWorkRow),
+		heldByKey:      make(map[RetryWorkKey]*heldAction),
+		heldScopeOrder: make(map[ScopeKey][]RetryWorkKey),
+		queuedByID:     make(map[int64]struct{}),
+		runningByID:    make(map[int64]struct{}),
 	}
 	flow.initPolicyControllers()
 
@@ -35,7 +68,7 @@ func newEngineFlow(engine *Engine) engineFlow {
 }
 
 type oneShotRunner struct {
-	engineFlow
+	*engineFlow
 }
 
 func newOneShotRunner(engine *Engine) *oneShotRunner {
@@ -56,29 +89,6 @@ type watchRuntimeState struct {
 	// are written only after the loop has exhausted all currently admissible
 	// work and returned to quiescence.
 	syncBatch watchSyncBatchState
-
-	// currentPlan is the last successfully materialized watch action plan plus
-	// retry-work indexes derived from it. Normal watch observation/planning owns
-	// this cache; retry/trial only reads it so timer-driven follow-up never
-	// becomes an alternate planner.
-	currentPlan *materializedPlanSnapshot
-
-	// activeScopesMu guards activeScopes. The watch loop remains the logical
-	// owner, but tests and startup normalization can observe or adjust the
-	// working set while timers are being re-armed.
-	activeScopesMu sync.RWMutex
-
-	// Active block scopes owned by the watch control flow. The slice is tiny
-	// (usually 0-5 entries), so linear scans keep the logic simple and avoid a
-	// second mirrored subsystem.
-	activeScopes []ActiveScope
-
-	// Scope detection — sliding window failure tracking.
-	scopeState *ScopeState
-
-	// Monotonic action ID counter owned by the watch control flow. Prevents
-	// ID collisions across batches without introducing cross-goroutine sync.
-	nextActionID int64
 }
 
 type watchSyncBatchState struct {
@@ -87,17 +97,6 @@ type watchSyncBatchState struct {
 	succeededBase int
 	failedBase    int
 	errorBase     int
-}
-
-// materializedPlanSnapshot is the watch-owned cached current plan used by
-// retry/trial dispatch. It indexes exact retry-work identities so timer-driven
-// follow-up can consume the last materialized plan without rescanning every
-// action or rebuilding planner state.
-type materializedPlanSnapshot struct {
-	Plan                  *ActionPlan
-	Generation            uint64
-	RetryKeyPresent       map[RetryWorkKey]struct{}
-	RetryKeyActionIndexes map[RetryWorkKey][]int
 }
 
 type watchObservationState struct {
@@ -160,7 +159,7 @@ type watchRefreshState struct {
 // watchRuntime owns all mutable watch-mode state. It is created by RunWatch
 // and discarded when the watch session ends.
 type watchRuntime struct {
-	engineFlow
+	*engineFlow
 	watchRuntimeState
 	watchObservationState
 	watchTimerState

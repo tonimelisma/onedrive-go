@@ -9,6 +9,7 @@ func (r *oneShotRunner) dispatchInitialReadyActions(
 	initialReady []*TrackedAction,
 	report *Report,
 ) ([]*TrackedAction, bool, error) {
+	initialReady = r.scopeController().admitReady(ctx, nil, initialReady)
 	initialOutbox, err := r.drainPublicationReadyActions(ctx, nil, bl, nil, initialReady)
 	if err != nil {
 		r.completeOutboxAsShutdown(initialOutbox)

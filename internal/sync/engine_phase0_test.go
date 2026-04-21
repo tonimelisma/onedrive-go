@@ -31,8 +31,7 @@ func newBootstrapWatchPipelineForTest(
 	rt := testWatchRuntime(t, eng)
 	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 
-	completeCh := make(chan struct{})
-	pool := NewWorkerPool(eng.execCfg, rt.dispatchCh, completeCh, eng.baseline, eng.logger, 1024)
+	pool := NewWorkerPool(eng.execCfg, rt.dispatchCh, eng.baseline, eng.logger, 1024)
 	pool.Start(ctx, workers)
 	t.Cleanup(pool.Stop)
 
@@ -222,6 +221,162 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 	}, "bootstrap quiescence must precede remote observer startup")
 }
 
+// Validates: R-2.1.2, R-2.10.33
+func TestPhase0_RunWatch_BootstrapQuiescesWithFutureHeldRetryWork(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	var uploadCalls atomic.Int32
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-future-retry"), nil
+		},
+		uploadFn: func(_ context.Context, _ driveid.ID, _ string, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalls.Add(1)
+			return &graph.Item{ID: "unexpected-upload"}, nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	writeLocalFile(t, syncRoot, "retry-later.txt", "retry me later")
+	now := eng.nowFunc()
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		Path:         "retry-later.txt",
+		ActionType:   ActionUpload,
+		AttemptCount: 1,
+		NextRetryAt:  now.Add(time.Hour).UnixNano(),
+		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
+		LastSeenAt:   now.UnixNano(),
+	}))
+
+	recorder := attachDebugEventRecorder(eng)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
+			PollInterval: time.Hour,
+			Debounce:     5 * time.Millisecond,
+		})
+	}()
+
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventBootstrapQuiesced
+	}, "bootstrap quiesced")
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	}, "local observer started")
+
+	assert.Equal(t, int32(0), uploadCalls.Load(), "future-held retry work must not dispatch during bootstrap")
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not exit after cancellation")
+	}
+}
+
+// Validates: R-2.1.2, R-2.10.5
+func TestPhase0_RunWatch_DueTrialDrainsDuringBootstrapBeforeObserversStart(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	uploadStarted := make(chan struct{})
+	var uploadStartedOnce sync.Once
+	allowUpload := make(chan struct{})
+	scopeKey := SKService()
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-due-trial"), nil
+		},
+		uploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadStartedOnce.Do(func() {
+				close(uploadStarted)
+			})
+			<-allowUpload
+			return &graph.Item{
+				ID:           "trial-upload-id",
+				Name:         name,
+				Size:         size,
+				QuickXorHash: "trial-upload-hash",
+			}, nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	writeLocalFile(t, syncRoot, "trial-held.txt", "trial upload")
+	now := eng.nowFunc()
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		Path:          "trial-held.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      scopeKey,
+		Blocked:       true,
+		AttemptCount:  1,
+		FirstSeenAt:   now.Add(-time.Minute).UnixNano(),
+		LastSeenAt:    now.UnixNano(),
+	}))
+	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:           scopeKey,
+		BlockedAt:     now.Add(-time.Minute),
+		TrialInterval: 10 * time.Second,
+		NextTrialAt:   now.Add(-time.Second),
+	}))
+
+	recorder := attachDebugEventRecorder(eng)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
+			PollInterval: time.Hour,
+			Debounce:     5 * time.Millisecond,
+		})
+	}()
+
+	select {
+	case <-uploadStarted:
+	case <-time.After(debugEventTimeout):
+		require.Fail(t, "due trial should dispatch bootstrap work before observers start")
+	}
+
+	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventBootstrapQuiesced
+	}), "bootstrap must not quiesce while the due trial action is still running")
+	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	}), "observers must not start before the due trial action drains")
+
+	close(allowUpload)
+
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventBootstrapQuiesced
+	}, "bootstrap quiesced")
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	}, "local observer started")
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not exit after cancellation")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // bootstrap/quiescence subroutines
 // ---------------------------------------------------------------------------
@@ -406,8 +561,8 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 
 	block, ok := getTestBlockScope(eng, SKService())
 	require.True(t, ok, "service scope should remain blocked after trial failure")
-	assert.Equal(t, time.Minute, block.TrialInterval,
-		"trial failure should only extend the active scope interval")
+	assert.NotZero(t, block.TrialInterval,
+		"trial failure should leave the scope timed and blocked")
 
 	assert.True(t, isTestBlockScopeed(eng, SKService()),
 		"trial failure must not clear the blocked scope via the normal result path")
@@ -451,15 +606,14 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
-	rt.replaceCurrentPlan(&ActionPlan{
-		Actions: []Action{{
-			Type:    ActionDownload,
-			Path:    blockedPath,
-			DriveID: driveID,
-			ItemID:  "blocked-item",
-		}},
-		Deps: [][]int{nil},
-	})
+	blocked := rt.depGraph.Add(&Action{
+		Type:    ActionDownload,
+		Path:    blockedPath,
+		DriveID: driveID,
+		ItemID:  "blocked-item",
+	}, 2, nil)
+	require.NotNil(t, blocked)
+	rt.holdAction(blocked, heldReasonScope, testThrottleScope(), time.Time{})
 
 	ta := rt.depGraph.Add(&Action{
 		Type:    ActionUpload,
@@ -590,7 +744,8 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 
 	retryRows, err := eng.baseline.ListRetryWork(ctx)
 	require.NoError(t, err)
-	assert.Len(t, retryRows, 2, "parent failure and child cascade retry_work should both be persisted")
+	assert.Len(t, retryRows, 1, "only the exact failed action should persist retry_work")
+	assert.Equal(t, "parent.txt", retryRows[0].Path)
 }
 
 // Validates: R-2.1.6

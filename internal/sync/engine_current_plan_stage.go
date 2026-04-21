@@ -104,8 +104,17 @@ func (r *oneShotRunner) prepareCurrentPlanFromObservedState(
 	r.engine.collector().RecordPlan(len(plan.Actions), r.engine.since(planStart))
 
 	if materialize {
-		if materializeErr := r.materializeCurrentActionPlan(ctx, plan); materializeErr != nil {
+		if materializeErr := r.reconcileDurablePlanState(ctx, plan); materializeErr != nil {
 			return nil, materializeErr
+		}
+	}
+
+	var retryRows []RetryWorkRow
+	var blockScopes []*BlockScope
+	if materialize {
+		retryRows, blockScopes, err = r.loadPreparedRuntimeState(ctx)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -116,6 +125,8 @@ func (r *oneShotRunner) prepareCurrentPlanFromObservedState(
 		plan:                plan,
 		report:              report,
 		pendingCursorCommit: observed.pendingCursorCommit,
+		retryRows:           retryRows,
+		blockScopes:         blockScopes,
 	}, nil
 }
 
@@ -134,6 +145,8 @@ type preparedCurrentActionPlan struct {
 	plan                *ActionPlan
 	report              *Report
 	pendingCursorCommit *pendingPrimaryCursorCommit
+	retryRows           []RetryWorkRow
+	blockScopes         []*BlockScope
 }
 
 type currentActionPlanInputs struct {
@@ -142,10 +155,9 @@ type currentActionPlanInputs struct {
 	localRows         []LocalStateRow
 	remoteRows        []RemoteStateRow
 	observationIssues []ObservationIssueRow
-	blockScopes       []*BlockScope
 }
 
-func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *ActionPlan) error {
+func (flow *engineFlow) reconcileDurablePlanState(ctx context.Context, plan *ActionPlan) error {
 	if err := flow.engine.baseline.PruneRetryWorkToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
 		return fmt.Errorf("sync: pruning retry_work to current actions: %w", err)
 	}
@@ -154,11 +166,21 @@ func (flow *engineFlow) materializeCurrentActionPlan(ctx context.Context, plan *
 		return fmt.Errorf("sync: pruning block scopes without blocked work: %w", err)
 	}
 
-	if flow.watch != nil {
-		flow.watch.replaceCurrentPlan(plan)
+	return nil
+}
+
+func (flow *engineFlow) loadPreparedRuntimeState(ctx context.Context) ([]RetryWorkRow, []*BlockScope, error) {
+	retryRows, err := flow.engine.baseline.ListRetryWork(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sync: listing retry_work for prepared runtime state: %w", err)
 	}
 
-	return nil
+	blockScopes, err := flow.engine.baseline.ListBlockScopes(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sync: listing block_scopes for prepared runtime state: %w", err)
+	}
+
+	return retryRows, blockScopes, nil
 }
 
 // observeRemote fetches delta changes from the Graph API. Automatically
@@ -262,7 +284,6 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 		inputs.localRows,
 		inputs.remoteRows,
 		inputs.observationIssues,
-		inputs.blockScopes,
 		bl,
 		mode,
 		safety,
@@ -328,18 +349,12 @@ func (flow *engineFlow) loadCurrentActionPlanInputsTx(
 	if err != nil {
 		return currentActionPlanInputs{}, fmt.Errorf("sync: listing observation issues: %w", err)
 	}
-	blockScopes, err := queryBlockScopeRowsWithRunner(ctx, tx)
-	if err != nil {
-		return currentActionPlanInputs{}, fmt.Errorf("sync: listing block scopes: %w", err)
-	}
-
 	return currentActionPlanInputs{
 		comparisons:       comparisons,
 		reconciliations:   reconciliations,
 		localRows:         localRows,
 		remoteRows:        remoteRows,
 		observationIssues: observationIssues,
-		blockScopes:       blockScopes,
 	}, nil
 }
 

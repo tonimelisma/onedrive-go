@@ -13,7 +13,17 @@ func (r *oneShotRunner) runResultsLoop(
 	bl *Baseline,
 	completions <-chan ActionCompletion,
 ) error {
-	var outbox []*TrackedAction
+	return r.runResultsLoopWithInitialOutbox(ctx, cancel, bl, completions, nil)
+}
+
+func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	bl *Baseline,
+	completions <-chan ActionCompletion,
+	initialOutbox []*TrackedAction,
+) error {
+	outbox := append([]*TrackedAction(nil), initialOutbox...)
 	var fatalErr error
 
 	for {
@@ -21,6 +31,14 @@ func (r *oneShotRunner) runResultsLoop(
 			r.completeOutboxAsShutdown(outbox)
 			outbox = nil
 			continue
+		}
+		if nextOutbox, nextFatal, handled := r.pollImmediateCompletion(ctx, cancel, bl, completions, outbox, fatalErr); handled {
+			outbox = nextOutbox
+			fatalErr = nextFatal
+			continue
+		}
+		if done, err := r.finishResultsLoopIfSettled(outbox, fatalErr); done {
+			return err
 		}
 
 		if len(outbox) == 0 {
@@ -42,6 +60,41 @@ func (r *oneShotRunner) runResultsLoop(
 	}
 }
 
+func (r *oneShotRunner) pollImmediateCompletion(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	bl *Baseline,
+	completions <-chan ActionCompletion,
+	outbox []*TrackedAction,
+	fatalErr error,
+) ([]*TrackedAction, error, bool) {
+	if len(outbox) != 0 || r.runningCount != 0 {
+		return nil, fatalErr, false
+	}
+
+	select {
+	case completion, ok := <-completions:
+		if !ok {
+			return nil, fatalErr, false
+		}
+		nextOutbox, nextFatal := r.handleOneShotCompletion(ctx, cancel, bl, nil, fatalErr, &completion)
+		return nextOutbox, nextFatal, true
+	default:
+		return nil, fatalErr, false
+	}
+}
+
+func (r *oneShotRunner) finishResultsLoopIfSettled(outbox []*TrackedAction, fatalErr error) (bool, error) {
+	switch {
+	case fatalErr == nil && r.isOneShotQuiescent(outbox):
+		return true, nil
+	case fatalErr != nil && len(outbox) == 0 && r.runningCount == 0:
+		return true, fatalErr
+	default:
+		return false, nil
+	}
+}
+
 func (r *oneShotRunner) runResultsLoopIdle(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -57,7 +110,7 @@ func (r *oneShotRunner) runResultsLoopIdle(
 		nextOutbox, nextFatal := r.handleOneShotCompletion(ctx, cancel, bl, nil, fatalErr, &completion)
 		return nextOutbox, nextFatal, false
 	case <-resultsLoopCtxDone(ctx, fatalErr):
-		return nil, fatalErr, true
+		return nil, fatalErr, r.runningCount == 0
 	}
 }
 
@@ -71,6 +124,7 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 ) ([]*TrackedAction, error, bool) {
 	select {
 	case r.dispatchCh <- outbox[0]:
+		r.markRunning(outbox[0])
 		return outbox[1:], fatalErr, false
 	case completion, ok := <-completions:
 		if !ok {
@@ -79,7 +133,7 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 		nextOutbox, nextFatal := r.handleOneShotCompletion(ctx, cancel, bl, outbox, fatalErr, &completion)
 		return nextOutbox, nextFatal, false
 	case <-resultsLoopCtxDone(ctx, fatalErr):
-		return outbox, fatalErr, true
+		return outbox, fatalErr, false
 	}
 }
 
@@ -149,13 +203,19 @@ func (f *engineFlow) completeTrackedActionAsShutdown(ta *TrackedAction) {
 		return
 	}
 
+	f.markFinished(ta)
 	ready := f.completeDepGraphAction(ta.ID, "completeTrackedActionAsShutdown")
 	f.scopeController().completeSubtree(ready)
 }
 
-// runWatchUntilQuiescent drives the bootstrap watch loop until the dependency
-// graph empties. Bootstrap uses the same watch-owned result/admission logic as
-// steady-state watch mode but stops once there is no remaining in-flight work.
+func (r *oneShotRunner) isOneShotQuiescent(outbox []*TrackedAction) bool {
+	return len(outbox) == 0 && r.runningCount == 0 && !r.hasDueHeldWork(r.engine.nowFunc())
+}
+
+// runWatchUntilQuiescent drives the bootstrap watch loop until all work due
+// now has drained through the shared runtime. Future-held retry/scope work may
+// remain unresolved in the graph, so bootstrap quiescence is engine-owned
+// rather than defined by graph emptiness.
 func (rt *watchRuntime) runWatchUntilQuiescent(
 	ctx context.Context,
 	p *watchPipeline,
@@ -165,7 +225,6 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 	defer stopTicker(ticker)
 
 	rt.replaceOutbox(initialOutbox)
-	emptyCh := rt.depGraph.WaitForEmpty()
 	logC := tickerChan(ticker)
 
 	for {
@@ -183,7 +242,11 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 			continue
 		}
 
-		done, err := rt.runBootstrapStep(ctx, p, logC, emptyCh)
+		if rt.isBootstrapQuiescent() {
+			return nil
+		}
+
+		done, err := rt.runBootstrapStep(ctx, p, logC)
 		if err != nil {
 			return err
 		}
@@ -342,16 +405,17 @@ func (rt *watchRuntime) runBootstrapStep(
 	ctx context.Context,
 	p *watchPipeline,
 	logC <-chan time.Time,
-	emptyCh <-chan struct{},
 ) (bool, error) {
 	outbox := rt.currentOutbox()
 
 	// Bootstrap phase: dispatch, buffered bootstrap batches, action completions,
-	// retry/trial wakeups, and quiescence logging are live until the graph empties.
+	// retry/trial wakeups, and quiescence logging are live until all work due
+	// now has drained from the shared runtime.
 	dispatchCh, nextAction := rt.dispatchChannelForOutbox()
 
 	select {
 	case dispatchCh <- nextAction:
+		rt.markRunning(nextAction)
 		rt.consumeOutboxHead()
 		return false, nil
 	case batch, ok := <-p.batchReady:
@@ -371,8 +435,6 @@ func (rt *watchRuntime) runBootstrapStep(
 	case <-logC:
 		rt.logBootstrapWait()
 		return false, nil
-	case <-emptyCh:
-		return true, nil
 	case <-ctx.Done():
 		rt.beginWatchDrain(ctx, p)
 		return false, nil
@@ -452,7 +514,15 @@ func (rt *watchRuntime) handleBootstrapResultsClosed(
 func (rt *watchRuntime) logBootstrapWait() {
 	rt.engine.logger.Info("bootstrap: waiting for in-flight actions",
 		slog.Int("in_flight", rt.depGraph.InFlightCount()),
+		slog.Int("running", rt.runningCount),
+		slog.Int("held", len(rt.heldByKey)),
 	)
+}
+
+func (rt *watchRuntime) isBootstrapQuiescent() bool {
+	return len(rt.currentOutbox()) == 0 &&
+		rt.runningCount == 0 &&
+		!rt.hasDueHeldWork(rt.engine.nowFunc())
 }
 
 func contextIsCanceled(ctx context.Context) bool {

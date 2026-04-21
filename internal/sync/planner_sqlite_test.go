@@ -77,7 +77,6 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 		localRows,
 		remoteRows,
 		nil,
-		nil,
 		bl,
 		SyncBidirectional,
 		&SafetyConfig{},
@@ -149,7 +148,6 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 		localRows,
 		remoteRows,
 		nil,
-		nil,
 		bl,
 		SyncBidirectional,
 		&SafetyConfig{},
@@ -199,7 +197,6 @@ func TestPlannerPlanCurrentState_UsesRemoteRowDriveOwnershipForDownloadActions(t
 			Size:     12,
 			Mtime:    123,
 		}},
-		nil,
 		nil,
 		NewBaselineForTest(nil),
 	)
@@ -261,7 +258,6 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteConflictResolutionWithout
 		localRows,
 		remoteRows,
 		nil,
-		nil,
 		bl,
 		SyncUploadOnly,
 		&SafetyConfig{},
@@ -290,9 +286,6 @@ func planCurrentStateForStore(t *testing.T, store *SyncStore) *ActionPlan {
 	require.NoError(t, err)
 	observationIssues, err := store.ListObservationIssues(ctx)
 	require.NoError(t, err)
-	blockScopes, err := store.ListBlockScopes(ctx)
-	require.NoError(t, err)
-
 	planner := NewPlanner(testLogger(t))
 	plan, err := planner.PlanCurrentState(
 		comparisons,
@@ -300,7 +293,6 @@ func planCurrentStateForStore(t *testing.T, store *SyncStore) *ActionPlan {
 		localRows,
 		remoteRows,
 		observationIssues,
-		blockScopes,
 		bl,
 		SyncBidirectional,
 		&SafetyConfig{},
@@ -317,7 +309,6 @@ func planCurrentStateForInputs(
 	localRows []LocalStateRow,
 	remoteRows []RemoteStateRow,
 	observationIssues []ObservationIssueRow,
-	blockScopes []*BlockScope,
 	baseline *Baseline,
 ) *ActionPlan {
 	t.Helper()
@@ -329,7 +320,6 @@ func planCurrentStateForInputs(
 		localRows,
 		remoteRows,
 		observationIssues,
-		blockScopes,
 		baseline,
 		SyncBidirectional,
 		&SafetyConfig{},
@@ -498,7 +488,6 @@ func planForUnavailableLocalMoveSource(t *testing.T) *ActionPlan {
 			Path:      "docs/source.txt",
 			IssueType: IssueLocalReadDenied,
 		}},
-		nil,
 		NewBaselineForTest([]*BaselineEntry{{
 			Path:     "docs/source.txt",
 			DriveID:  driveid.New(engineTestDriveID),
@@ -543,7 +532,6 @@ func planForUnavailableRemoteMoveDestination(t *testing.T) *ActionPlan {
 			IssueType: IssueRemoteReadDenied,
 			ScopeKey:  SKPermRemoteRead("Shared"),
 		}},
-		nil,
 		NewBaselineForTest([]*BaselineEntry{{
 			Path:     "Shared/dest.txt",
 			DriveID:  driveid.New(engineTestDriveID),

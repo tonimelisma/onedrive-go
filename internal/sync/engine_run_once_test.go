@@ -316,7 +316,7 @@ func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
 		LastSeenAt:   6,
 	}))
 
-	err := flow.materializeCurrentActionPlan(ctx, &ActionPlan{
+	err := flow.reconcileDurablePlanState(ctx, &ActionPlan{
 		Actions: []Action{{
 			Type: ActionUpload,
 			Path: "keep.txt",
@@ -994,8 +994,8 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 
 // TestRunOnce_EmptyPlan_NoPanic verifies that when changes exist but all
 // classify to no-op actions (producing an empty plan), the engine does not
-// deadlock. Regression test for: empty plan caused NewDepGraph with total=0,
-// Done() channel never closed, pool.Wait() blocked forever.
+// deadlock. Regression test for: empty plan left the runtime without any
+// dispatchable work but the execution loop failed to recognize quiescence.
 func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	t.Parallel()
 

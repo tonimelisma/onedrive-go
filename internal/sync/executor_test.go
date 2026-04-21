@@ -2327,10 +2327,10 @@ func TestContainedPath_MissingSyncRootReturnsError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Watch-mode upload freshness check tests
+// Upload freshness check tests
 // ---------------------------------------------------------------------------
 
-func TestExecutor_Upload_WatchMode_ETagMismatch(t *testing.T) {
+func TestExecutor_Upload_ETagMismatch(t *testing.T) {
 	t.Parallel()
 
 	items := &executorMockItemClient{
@@ -2348,7 +2348,6 @@ func TestExecutor_Upload_WatchMode_ETagMismatch(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
-	cfg.SetWatchMode(true)
 
 	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "conflict.txt", "local content")
@@ -2371,52 +2370,14 @@ func TestExecutor_Upload_WatchMode_ETagMismatch(t *testing.T) {
 	assert.Contains(t, o.Error.Error(), "remote eTag changed since last sync")
 }
 
-func TestExecutor_Upload_WatchMode_ETagMatch(t *testing.T) {
+func TestExecutor_Upload_AlwaysChecksFreshnessWhenBaselineETagKnown(t *testing.T) {
 	t.Parallel()
 
+	getItemCalls := 0
 	items := &executorMockItemClient{
 		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-			// Remote eTag matches baseline — safe to upload.
-			return &graph.Item{ID: "item1", ETag: "etag-same"}, nil
-		},
-	}
-
-	ul := &executorMockUploader{
-		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{ID: "item1", ETag: "etag-new", QuickXorHash: "qxh"}, nil
-		},
-	}
-
-	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
-	cfg.SetWatchMode(true)
-
-	e := NewExecution(cfg, emptyBaseline())
-	writeExecTestFile(t, syncRoot, "safe.txt", "content")
-
-	action := &Action{
-		Type:    ActionUpload,
-		Path:    "safe.txt",
-		ItemID:  "item1",
-		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
-			Path: "safe.txt",
-			Baseline: &BaselineEntry{
-				ETag: "etag-same",
-			},
-		},
-	}
-
-	o := e.ExecuteUpload(t.Context(), action)
-	requireOutcomeSuccess(t, &o)
-}
-
-func TestExecutor_Upload_NonWatchMode_NoFreshnessCheck(t *testing.T) {
-	t.Parallel()
-
-	items := &executorMockItemClient{
-		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-			require.FailNow(t, "GetItem should not be called in non-watch mode")
-			return nil, fmt.Errorf("unexpected GetItem call")
+			getItemCalls++
+			return &graph.Item{ID: "item1", ETag: "etag-baseline"}, nil
 		},
 	}
 
@@ -2427,7 +2388,6 @@ func TestExecutor_Upload_NonWatchMode_NoFreshnessCheck(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
-	// cfg.watchMode is false by default — no freshness check.
 
 	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "normal.txt", "content")
@@ -2447,4 +2407,5 @@ func TestExecutor_Upload_NonWatchMode_NoFreshnessCheck(t *testing.T) {
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
+	assert.Equal(t, 1, getItemCalls, "expected one freshness probe before upload")
 }

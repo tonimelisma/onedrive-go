@@ -25,9 +25,7 @@ func (controller *scopeController) activateScope(ctx context.Context, watch *wat
 		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
 
-	if watch != nil {
-		watch.upsertActiveScope(block)
-	}
+	flow.upsertActiveScope(block)
 	flow.engine.emitDebugEvent(engineDebugEvent{
 		Type:     engineDebugEventScopeActivated,
 		ScopeKey: block.Key,
@@ -46,11 +44,7 @@ func (controller *scopeController) extendScopeTrial(
 ) {
 	flow := controller.flow
 
-	if watch == nil {
-		return
-	}
-
-	block, ok := watch.lookupActiveScope(scopeKey)
+	block, ok := flow.lookupActiveScope(scopeKey)
 	if !ok {
 		return
 	}
@@ -74,17 +68,15 @@ func (controller *scopeController) extendScopeTrial(
 		return
 	}
 
-	watch.armTrialTimer()
+	if watch != nil {
+		watch.armTrialTimer()
+	}
 }
 
 func (controller *scopeController) rearmScopeTrial(ctx context.Context, watch *watchRuntime, scopeKey ScopeKey) {
 	flow := controller.flow
 
-	if watch == nil {
-		return
-	}
-
-	block, ok := watch.lookupActiveScope(scopeKey)
+	block, ok := flow.lookupActiveScope(scopeKey)
 	if !ok {
 		return
 	}
@@ -106,16 +98,24 @@ func (controller *scopeController) rearmScopeTrial(ctx context.Context, watch *w
 		slog.Duration("interval", block.TrialInterval),
 	)
 
-	watch.armTrialTimer()
+	if watch != nil {
+		watch.armTrialTimer()
+	}
 }
 
 func (controller *scopeController) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
-	_, found, err := controller.flow.engine.baseline.PickRetryTrialCandidate(ctx, scopeKey)
+	rows, err := controller.flow.engine.baseline.ListBlockedRetryWork(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: checking blocked retry work for scope %s: %w", scopeKey.String(), err)
 	}
 
-	return found, nil
+	for i := range rows {
+		if rows[i].ScopeKey == scopeKey {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func (controller *scopeController) rearmOrDiscardScope(ctx context.Context, watch *watchRuntime, scopeKey ScopeKey) {
@@ -151,7 +151,7 @@ func (controller *scopeController) rearmOrDiscardScope(ctx context.Context, watc
 // from the normal processActionCompletion switch — never called for trial
 // results because a live scope already owns the blocker lifecycle.
 func (controller *scopeController) feedScopeDetection(ctx context.Context, watch *watchRuntime, r *ActionCompletion) {
-	if watch == nil {
+	if controller.flow.scopeState == nil {
 		return
 	}
 
@@ -159,7 +159,7 @@ func (controller *scopeController) feedScopeDetection(ctx context.Context, watch
 		return
 	}
 
-	sr := watch.scopeState.UpdateScope(r)
+	sr := controller.flow.scopeState.UpdateScope(r)
 	if sr.Block {
 		controller.applyBlockScope(ctx, watch, sr)
 	}
@@ -207,8 +207,8 @@ func (controller *scopeController) releaseScope(ctx context.Context, watch *watc
 		return fmt.Errorf("sync: releasing scope %s: %w", key.String(), err)
 	}
 
+	flow.removeActiveScope(key)
 	if watch != nil {
-		watch.removeActiveScope(key)
 		flow.engine.emitDebugEvent(engineDebugEvent{
 			Type:     engineDebugEventScopeReleased,
 			ScopeKey: key,
@@ -241,8 +241,8 @@ func (controller *scopeController) discardScope(ctx context.Context, watch *watc
 		return fmt.Errorf("sync: discarding scope %s: %w", key.String(), err)
 	}
 
+	flow.removeActiveScope(key)
 	if watch != nil {
-		watch.removeActiveScope(key)
 		watch.armTrialTimer()
 	}
 	flow.engine.emitDebugEvent(engineDebugEvent{
@@ -279,25 +279,5 @@ func (controller *scopeController) applyTrialReclassification(
 				ConditionType: decision.ScopeKey.ConditionType(),
 			})
 		}
-	}
-}
-
-func (controller *scopeController) clearBlockedRetryWork(
-	ctx context.Context,
-	row *RetryWorkRow,
-	caller string,
-) {
-	if row == nil {
-		return
-	}
-
-	work := retryWorkKeyForRetryWork(row)
-
-	if err := controller.flow.engine.baseline.ClearBlockedRetryWork(ctx, work, row.ScopeKey); err != nil {
-		controller.flow.engine.logger.Debug(caller+": failed to clear blocked retry work",
-			slog.String("path", row.Path),
-			slog.String("scope_key", row.ScopeKey.String()),
-			slog.String("error", err.Error()),
-		)
 	}
 }

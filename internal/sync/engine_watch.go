@@ -192,11 +192,6 @@ func (rt *watchRuntime) initWatchInfra(
 	mode Mode,
 	opts WatchOptions,
 ) (*watchPipeline, error) {
-	// Enable watch-mode-specific executor behavior (pre-upload eTag
-	// freshness checks to prevent silently overwriting concurrent remote
-	// changes — see executor_transfer.go).
-	rt.engine.execCfg.SetWatchMode(true)
-
 	rt.initRecheckState(ctx)
 
 	// Normalize persisted scope rows before loading runtime scope state.
@@ -222,11 +217,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// backpressure when a batch produces many immediately-ready actions.
 	rt.dispatchCh = make(chan *TrackedAction, watchResultBuf)
 
-	// Never-closing done channel — DepGraph.Done() would fire prematurely
-	// between batches when completed == total. Workers exit only via ctx.Done().
-	neverDone := make(chan struct{})
-
-	pool := NewWorkerPool(rt.engine.execCfg, rt.dispatchCh, neverDone, rt.engine.baseline, rt.engine.logger, watchResultBuf)
+	pool := NewWorkerPool(rt.engine.execCfg, rt.dispatchCh, rt.engine.baseline, rt.engine.logger, watchResultBuf)
 	pool.Start(ctx, rt.engine.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks dirty
@@ -323,10 +314,19 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 		return fmt.Errorf("sync: bootstrap planning failed: %w", err)
 	}
 	rt.engine.collector().RecordPlan(len(plan.Actions), rt.engine.since(planStart))
-	materializeErr := rt.materializeCurrentActionPlan(ctx, plan)
-	if materializeErr != nil {
-		return fmt.Errorf("sync: bootstrap plan materialization failed: %w", materializeErr)
+	reconcileErr := rt.reconcileDurablePlanState(ctx, plan)
+	if reconcileErr != nil {
+		return fmt.Errorf("sync: bootstrap durable plan-state reconcile failed: %w", reconcileErr)
 	}
+	retryRows, blockScopes, err := rt.loadPreparedRuntimeState(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: bootstrap runtime state load failed: %w", err)
+	}
+	rt.initializePreparedRuntime(&preparedCurrentActionPlan{
+		plan:        plan,
+		retryRows:   retryRows,
+		blockScopes: blockScopes,
+	})
 	if len(plan.Actions) == 0 {
 		return rt.finishBootstrapWithoutActions(ctx, mode, bootstrapStart, pendingCursorCommit)
 	}
@@ -339,7 +339,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	rt.beginSyncStatusBatch(bootstrapStart)
 
 	// Dispatch through watch pipeline (same path as steady-state batches).
-	initialOutbox, _, err := rt.dispatchCurrentPlan(ctx, plan, bl, dispatchBatchOptions{})
+	initialOutbox, _, err := rt.dispatchCurrentPlan(ctx, plan, bl)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap dispatch failed: %w", err)
 	}

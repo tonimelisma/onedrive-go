@@ -73,7 +73,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
 	executeStart := e.nowFunc()
-	if err := runner.executePlan(ctx, plan, report, bl); err != nil {
+	if err := runner.executePreparedPlan(ctx, prepared, bl); err != nil {
 		report.Duration = e.since(start)
 		e.collector().RecordExecute(len(plan.Actions), report.Succeeded, report.Failed, e.since(executeStart))
 		return report, err
@@ -124,6 +124,23 @@ func (r *oneShotRunner) executePlan(
 	ctx context.Context, plan *ActionPlan, report *Report,
 	bl *Baseline,
 ) error {
+	return r.executePreparedPlan(ctx, &preparedCurrentActionPlan{
+		plan:   plan,
+		report: report,
+	}, bl)
+}
+
+func (r *oneShotRunner) executePreparedPlan(
+	ctx context.Context,
+	prepared *preparedCurrentActionPlan,
+	bl *Baseline,
+) error {
+	if prepared == nil {
+		return nil
+	}
+
+	plan := prepared.plan
+	report := prepared.report
 	if len(plan.Actions) == 0 {
 		return nil
 	}
@@ -145,10 +162,10 @@ func (r *oneShotRunner) executePlan(
 
 	// Reset engine counters for this pass.
 	r.resetResultStats()
+	r.initializePreparedRuntime(prepared)
 
-	// One-shot mode: DepGraph + dispatchCh, no watch-mode active-scope admission
-	// loop (e.watch == nil). Actions that pass dependency resolution go
-	// straight to workers. Scope blocking is watch-mode only (§2.3).
+	// One-shot mode uses the same exact admission and held-work machinery as
+	// watch mode, but it runs that runtime only until all work due now settles.
 	depGraph := NewDepGraph(r.engine.logger)
 	r.depGraph = depGraph
 	r.dispatchCh = make(chan *TrackedAction, len(plan.Actions))
@@ -159,7 +176,6 @@ func (r *oneShotRunner) executePlan(
 	// folder delete at index 0 depends on a child file delete at index 5 —
 	// single-pass Add would silently drop the unregistered depID.
 	for i := range plan.Actions {
-		r.setDispatch(ctx, &plan.Actions[i])
 		depGraph.Register(&plan.Actions[i], int64(i))
 	}
 
@@ -182,30 +198,16 @@ func (r *oneShotRunner) executePlan(
 		return nil
 	}
 
-	for _, ta := range initialOutbox {
-		r.dispatchCh <- ta
-	}
-
-	pool := NewWorkerPool(r.engine.execCfg, r.dispatchCh, depGraph.Done(), r.engine.baseline, r.engine.logger, len(plan.Actions))
+	pool := NewWorkerPool(r.engine.execCfg, r.dispatchCh, r.engine.baseline, r.engine.logger, len(plan.Actions))
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	pool.Start(runCtx, r.engine.transferWorkers)
 
-	// Process completions concurrently — engine classifies and calls Complete.
-	// The one-shot engine loop reads from the completions channel while workers
-	// run. drainDone signals when it has finished processing all completions,
-	// including side effects (counter updates, failure recording). Without
-	// this barrier, resultStats() could race with result processing.
-	drainDone := make(chan struct{})
-	var drainErr error
-	go func() {
-		defer close(drainDone)
-		drainErr = r.runResultsLoop(runCtx, cancel, bl, pool.Completions())
-	}()
-
-	pool.Wait() // blocks until depGraph.Done() (all actions at terminal state)
-	pool.Stop() // cancels workers and closes results once workers exit
-	<-drainDone // wait for the one-shot engine loop to finish all side effects
+	// Process completions until the engine-owned runtime settles. Held retry/scope
+	// actions intentionally keep graph nodes unresolved, so one-shot quiescence is
+	// no longer defined by depGraph.Done().
+	drainErr := r.runResultsLoopWithInitialOutbox(runCtx, cancel, bl, pool.Completions(), initialOutbox)
+	pool.Stop()
 	if drainErr != nil {
 		report.Succeeded, report.Failed, report.Errors = r.resultStats()
 		report.Errors = append(report.Errors, drainErr)

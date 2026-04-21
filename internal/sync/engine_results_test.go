@@ -61,25 +61,15 @@ func TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue(t *testing.T)
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	now := eng.nowFn()
-	calls := 0
-	eng.nowFn = func() time.Time {
-		calls++
-		if calls == 1 {
-			return now
-		}
-		return now.Add(time.Second)
-	}
+	rt.holdAction(&TrackedAction{
+		Action: Action{
+			Path: "due.txt",
+			Type: ActionUpload,
+		},
+		ID: 1,
+	}, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
 
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
-		Path:         "due.txt",
-		ActionType:   ActionUpload,
-		AttemptCount: 1,
-		NextRetryAt:  now.Add(500 * time.Millisecond).UnixNano(),
-		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:   now.UnixNano(),
-	}))
-
-	rt.armRetryTimer(t.Context())
+	rt.armRetryTimer()
 
 	select {
 	case <-rt.retryTimerCh:
@@ -98,16 +88,15 @@ func TestWatchRuntime_ArmRetryTimer_FiresAfterDelay(t *testing.T) {
 	rt := testWatchRuntime(t, eng)
 	now := clock.Now()
 
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
-		Path:         "later.txt",
-		ActionType:   ActionUpload,
-		AttemptCount: 1,
-		NextRetryAt:  now.Add(30 * time.Second).UnixNano(),
-		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:   now.UnixNano(),
-	}))
+	rt.holdAction(&TrackedAction{
+		Action: Action{
+			Path: "later.txt",
+			Type: ActionUpload,
+		},
+		ID: 1,
+	}, heldReasonRetry, ScopeKey{}, now.Add(30*time.Second))
 
-	rt.armRetryTimer(t.Context())
+	rt.armRetryTimer()
 
 	select {
 	case <-rt.retryTimerCh:
