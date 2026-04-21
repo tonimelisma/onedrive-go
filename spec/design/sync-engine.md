@@ -114,11 +114,12 @@ There is no mid-pass mailbox for user intent. New external DB writes during a
 one-shot run are durable state for a later run.
 
 The current-plan preparation stage is the handoff boundary between planning
-and runtime startup. It observes current truth, builds the current action
-plan, reconciles durable retry/scope state, loads surviving `retry_work` /
-`block_scopes`, and only then hands that prepared runtime state to execution.
-Stale `retry_work` and empty `block_scopes` are pruned there, not from timer
-sweeps.
+and runtime startup. Observation remains entrypoint-specific, but once an
+entrypoint has produced observed current truth the engine runs one shared
+prepare helper: load planner inputs, build the current action plan, reconcile
+durable retry/scope state, load surviving `retry_work` / `block_scopes`, and
+only then hand that prepared runtime state to execution. Stale `retry_work`
+and empty `block_scopes` are pruned there, not from timer sweeps.
 
 Scope startup cleanup follows the same policy with a deliberate
 decision-then-apply split: the engine first derives which persisted scopes are
@@ -128,18 +129,16 @@ rearm-or-discard handling and store-side prune helpers so empty timed scopes
 do not survive by accident in one path but not another.
 
 Within that one-shot flow, the engine now treats "prepare current plan" as an
-explicit stage: observe current truth, derive the current action plan,
-materialize durable retry/scope reconciliation, and only then hand the
-prepared plan to execution/reporting. The outer orchestration should stay at
-that stage level rather than inlining every sub-step. Live and dry-run now
-share the same observed-state -> current-plan stage shape; they differ only in
-whether the prepared plan is materialized durably and whether a deferred
-cursor commit is returned. The stage helpers that observe, load planner
-inputs, build the current plan, and materialize durable retry/scope state
-belong in the current-plan stage boundary, not in the top-level `RunOnce()`
-coordinator. The same rule applies to bootstrap, execution-only publication
-drain helpers, and post-sync housekeeping: keep them next to their stage so a
-reader can see the one-shot flow at a glance.
+explicit stage: observe current truth, then hand the observed state to the
+shared prepare helper. Live, dry-run, watch bootstrap, and watch dirty
+replans all use that same observed-state -> prepared-current-plan stage; they
+differ only in how they collected the observed state and whether durable
+materialization and deferred cursor commit are in play. The top-level
+coordinators should stay at that stage level rather than inlining planner
+input loads, durable prune/load logic, or runtime-start bookkeeping. The same
+rule applies to execution-only publication drain helpers and post-sync
+housekeeping: keep them next to their stage so a reader can see the flow at a
+glance.
 
 Full-remote-refresh cadence is restart-safe even when a full remote refresh returns
 no delta cursor. The engine still advances the persisted cadence in

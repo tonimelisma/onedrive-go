@@ -280,10 +280,11 @@ func (rt *watchRuntime) initWatchInfra(
 	return pipe, nil
 }
 
-// bootstrapSync performs the initial sync using the watch pipeline. Unlike
-// the old approach (calling RunOnce with throwaway infrastructure), this
-// dispatches through the same DepGraph, active scope working set, and WorkerPool that
-// the watch loop uses. Blocks until all bootstrap actions complete.
+// bootstrapSync performs the initial sync using the watch pipeline. It
+// observes current truth, prepares the current runtime through the shared
+// current-plan stage, then dispatches through the same DepGraph, active scope
+// working set, and WorkerPool that the steady-state watch loop uses. Blocks
+// until all bootstrap actions due now complete.
 //
 // Must be called after initWatchInfra and before startObservers.
 func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watchPipeline) error {
@@ -300,41 +301,16 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 	pipe.bl = bl
 
-	fullRefresh, err := rt.engine.shouldRunFullRemoteRefresh(ctx, false)
+	prepared, err := rt.prepareBootstrapCurrentPlan(ctx, bl, mode)
 	if err != nil {
-		return fmt.Errorf("sync: deciding bootstrap full remote refresh: %w", err)
+		return err
 	}
-
-	// Observe changes.
-	pendingCursorCommit, err := rt.observeCurrentTruth(ctx, rt, bl, false, fullRefresh)
-	if err != nil {
-		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
-	}
-	planStart := rt.engine.nowFunc()
-	plan, err := rt.buildCurrentActionPlan(ctx, bl, mode)
-	if err != nil {
-		return fmt.Errorf("sync: bootstrap planning failed: %w", err)
-	}
-	rt.engine.collector().RecordPlan(len(plan.Actions), rt.engine.since(planStart))
-	reconcileErr := rt.reconcileDurablePlanState(ctx, plan)
-	if reconcileErr != nil {
-		return fmt.Errorf("sync: bootstrap durable plan-state reconcile failed: %w", reconcileErr)
-	}
-	retryRows, blockScopes, err := rt.loadPreparedRuntimeState(ctx)
-	if err != nil {
-		return fmt.Errorf("sync: bootstrap runtime state load failed: %w", err)
-	}
-	prepared := &PreparedCurrentPlan{
-		Plan:        plan,
-		RetryRows:   retryRows,
-		BlockScopes: blockScopes,
-	}
-	if len(plan.Actions) == 0 {
-		return rt.finishBootstrapWithoutActions(ctx, mode, bootstrapStart, pendingCursorCommit)
+	if len(prepared.Plan.Actions) == 0 {
+		return rt.finishBootstrapWithoutActions(ctx, mode, bootstrapStart, prepared.PendingCursorCommit)
 	}
 
 	// Commit the deferred delta token before dispatching bootstrap actions.
-	cursorCommitErr := rt.commitPendingPrimaryCursor(ctx, pendingCursorCommit)
+	cursorCommitErr := rt.commitPendingPrimaryCursor(ctx, prepared.PendingCursorCommit)
 	if cursorCommitErr != nil {
 		return cursorCommitErr
 	}

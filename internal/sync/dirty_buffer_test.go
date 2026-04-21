@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 )
 
 type fakeDirtyDebounceTimer struct {
+	mu         sync.Mutex
 	ch         chan time.Time
 	resetCh    chan struct{}
 	active     bool
@@ -27,25 +29,40 @@ func newFakeDirtyDebounceTimer() *fakeDirtyDebounceTimer {
 
 func (t *fakeDirtyDebounceTimer) Chan() <-chan time.Time { return t.ch }
 func (t *fakeDirtyDebounceTimer) Stop() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	wasActive := t.active
 	t.active = false
 	return wasActive
 }
 
 func (t *fakeDirtyDebounceTimer) Reset(time.Duration) bool {
+	t.mu.Lock()
 	wasActive := t.active
 	t.active = true
 	t.resetCount++
+	t.mu.Unlock()
 	t.resetCh <- struct{}{}
 	return wasActive
 }
 
 func (t *fakeDirtyDebounceTimer) Fire() {
+	t.mu.Lock()
 	if !t.active {
+		t.mu.Unlock()
 		return
 	}
 	t.active = false
+	t.mu.Unlock()
 	t.ch <- time.Now()
+}
+
+func (t *fakeDirtyDebounceTimer) snapshot() (bool, int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return t.active, t.resetCount
 }
 
 // Validates: R-2.1.2
@@ -82,9 +99,10 @@ func TestDirtyBuffer_FlushDebounced_UsesLastObservationWindow(t *testing.T) {
 	select {
 	case <-timer.resetCh:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for debounce reset")
+		require.Fail(t, "timed out waiting for debounce reset")
 	}
-	assert.GreaterOrEqual(t, timer.resetCount, 1)
+	_, resetCount := timer.snapshot()
+	assert.GreaterOrEqual(t, resetCount, 1)
 	timer.Fire()
 
 	select {
@@ -92,6 +110,6 @@ func TestDirtyBuffer_FlushDebounced_UsesLastObservationWindow(t *testing.T) {
 		assert.Equal(t, []string{"alpha.txt", "beta.txt"}, batch.Paths)
 		assert.False(t, batch.FullRefresh)
 	case <-time.After(250 * time.Millisecond):
-		t.Fatal("timed out waiting for dirty batch")
+		require.Fail(t, "timed out waiting for dirty batch")
 	}
 }
