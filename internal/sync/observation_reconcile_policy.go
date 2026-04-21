@@ -2,13 +2,18 @@ package sync
 
 import "sort"
 
-type observationReconcileState struct {
+type observationReconcileStoreState struct {
 	issues []ObservationIssueRow
 }
 
 type observationReconcilePlan struct {
 	issueUpserts []ObservationIssue
 	issueDeletes []observationIssueDelete
+}
+
+type observationIssueIdentity struct {
+	path      string
+	issueType string
 }
 
 type observationIssueDelete struct {
@@ -18,11 +23,14 @@ type observationIssueDelete struct {
 
 func buildObservationReconcilePlan(
 	batch *ObservationFindingsBatch,
-	state observationReconcileState,
+	state observationReconcileStoreState,
 ) observationReconcilePlan {
+	desiredManagedIssues := desiredManagedObservationIssues(batch)
+	currentManagedIssues := currentManagedObservationIssues(batch, state.issues)
+
 	return observationReconcilePlan{
 		issueUpserts: observationIssueUpserts(batch),
-		issueDeletes: buildObservationIssueDeletes(batch, state.issues),
+		issueDeletes: observationIssueDeletesNotInDesired(currentManagedIssues, desiredManagedIssues),
 	}
 }
 
@@ -31,23 +39,52 @@ func observationIssueUpserts(batch *ObservationFindingsBatch) []ObservationIssue
 		return nil
 	}
 
-	return batch.Issues
+	upserts := make([]ObservationIssue, len(batch.Issues))
+	copy(upserts, batch.Issues)
+	return upserts
 }
 
-func buildObservationIssueDeletes(
+func observationIssueDeletesNotInDesired(
+	currentManagedIssues map[observationIssueIdentity]ObservationIssueRow,
+	desiredManagedIssues map[observationIssueIdentity]ObservationIssue,
+) []observationIssueDelete {
+	if len(currentManagedIssues) == 0 {
+		return nil
+	}
+
+	deletes := make([]observationIssueDelete, 0, len(currentManagedIssues))
+	for identity := range currentManagedIssues {
+		if _, ok := desiredManagedIssues[identity]; ok {
+			continue
+		}
+
+		deletes = append(deletes, observationIssueDelete(identity))
+	}
+
+	sort.Slice(deletes, func(i, j int) bool {
+		if deletes[i].issueType != deletes[j].issueType {
+			return deletes[i].issueType < deletes[j].issueType
+		}
+		return deletes[i].path < deletes[j].path
+	})
+
+	return deletes
+}
+
+// currentManagedObservationIssues filters raw durable rows down to the exact
+// managed issue set this batch is allowed to replace.
+func currentManagedObservationIssues(
 	batch *ObservationFindingsBatch,
 	currentIssues []ObservationIssueRow,
-) []observationIssueDelete {
+) map[observationIssueIdentity]ObservationIssueRow {
 	if batch == nil || len(batch.ManagedIssueTypes) == 0 || len(currentIssues) == 0 {
 		return nil
 	}
 
-	managedPaths := normalizedObservationManagedPaths(batch)
-	managedPathSet := stringSet(managedPaths)
-	managedIssueTypes := stringSet(batch.ManagedIssueTypes)
-	currentPathsByType := observationIssuePathsByType(batch)
+	managedPathSet := managedObservationPathSet(batch)
+	managedIssueTypes := managedObservationTypeSet(batch)
 
-	deletes := make([]observationIssueDelete, 0, len(currentIssues))
+	currentManagedIssues := make(map[observationIssueIdentity]ObservationIssueRow)
 	for i := range currentIssues {
 		current := currentIssues[i]
 		if current.IssueType == "" {
@@ -61,23 +98,67 @@ func buildObservationIssueDeletes(
 				continue
 			}
 		}
-		if _, ok := currentPathsByType[current.IssueType][current.Path]; ok {
-			continue
-		}
-		deletes = append(deletes, observationIssueDelete{
+		currentManagedIssues[observationIssueIdentity{
 			path:      current.Path,
 			issueType: current.IssueType,
-		})
+		}] = current
 	}
 
-	sort.Slice(deletes, func(i, j int) bool {
-		if deletes[i].issueType != deletes[j].issueType {
-			return deletes[i].issueType < deletes[j].issueType
-		}
-		return deletes[i].path < deletes[j].path
-	})
+	return currentManagedIssues
+}
 
-	return deletes
+// desiredManagedObservationIssues is the exact managed set the batch proved
+// should still exist after reconciliation.
+func desiredManagedObservationIssues(
+	batch *ObservationFindingsBatch,
+) map[observationIssueIdentity]ObservationIssue {
+	if batch == nil || len(batch.Issues) == 0 {
+		return nil
+	}
+
+	desired := make(map[observationIssueIdentity]ObservationIssue, len(batch.Issues))
+	for i := range batch.Issues {
+		issue := batch.Issues[i]
+		if issue.Path == "" || issue.IssueType == "" {
+			continue
+		}
+		desired[observationIssueIdentity{
+			path:      issue.Path,
+			issueType: issue.IssueType,
+		}] = issue
+	}
+
+	return desired
+}
+
+func managedObservationTypeSet(batch *ObservationFindingsBatch) map[string]struct{} {
+	if batch == nil {
+		return nil
+	}
+
+	return stringSet(batch.ManagedIssueTypes)
+}
+
+func managedObservationPathSet(batch *ObservationFindingsBatch) map[string]struct{} {
+	if batch == nil || len(batch.ManagedPaths) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(batch.ManagedPaths))
+	paths := make(map[string]struct{}, len(batch.ManagedPaths))
+	for i := range batch.ManagedPaths {
+		path := batch.ManagedPaths[i]
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths[path] = struct{}{}
+	}
+
+	return paths
 }
 
 func stringSet(values []string) map[string]struct{} {
@@ -91,49 +172,6 @@ func stringSet(values []string) map[string]struct{} {
 			continue
 		}
 		normalized[values[i]] = struct{}{}
-	}
-
-	return normalized
-}
-
-func observationIssuePathsByType(batch *ObservationFindingsBatch) map[string]map[string]struct{} {
-	if batch == nil || len(batch.Issues) == 0 {
-		return nil
-	}
-
-	currentByType := make(map[string]map[string]struct{})
-	for i := range batch.Issues {
-		issueType := batch.Issues[i].IssueType
-		path := batch.Issues[i].Path
-		if issueType == "" || path == "" {
-			continue
-		}
-		if currentByType[issueType] == nil {
-			currentByType[issueType] = make(map[string]struct{})
-		}
-		currentByType[issueType][path] = struct{}{}
-	}
-
-	return currentByType
-}
-
-func normalizedObservationManagedPaths(batch *ObservationFindingsBatch) []string {
-	if batch == nil || len(batch.ManagedPaths) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{}, len(batch.ManagedPaths))
-	normalized := make([]string, 0, len(batch.ManagedPaths))
-	for i := range batch.ManagedPaths {
-		path := batch.ManagedPaths[i]
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		normalized = append(normalized, path)
 	}
 
 	return normalized

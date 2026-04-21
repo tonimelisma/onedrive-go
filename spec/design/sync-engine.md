@@ -127,7 +127,9 @@ whether the prepared plan is materialized durably and whether a deferred
 cursor commit is returned. The stage helpers that observe, load planner
 inputs, build the current plan, and materialize durable retry/scope state
 belong in the current-plan stage boundary, not in the top-level `RunOnce()`
-coordinator.
+coordinator. The same rule applies to bootstrap, execution-only publication
+drain helpers, and post-sync housekeeping: keep them next to their stage so a
+reader can see the one-shot flow at a glance.
 
 Full-remote-refresh cadence is restart-safe even when a full reconcile returns
 no delta cursor. The engine still advances the persisted cadence in
