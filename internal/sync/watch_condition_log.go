@@ -15,8 +15,8 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	summary, groups := buildWatchConditionSummary(&snapshot)
-	rt.logRemoteBlockedChanges(groups)
+	summary := buildWatchConditionSummary(&snapshot)
+	rt.logRemoteBlockedChanges(summary.RemoteBlocked)
 
 	totalConditions := summary.ConditionTotal
 	if totalConditions == 0 {
