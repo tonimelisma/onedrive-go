@@ -70,8 +70,9 @@ reads derive blocked descendants from those tagged boundary issues instead of a
 second durable scope table.
 
 Only observation-owned reconciliation mutates `observation_issues`.
-Worker-result handling, retry sweeps, and scope trials may read observation
-facts, but they must not create, clear, or rewrite `observation_issues`.
+Worker-result handling, held retry release, and held trial release may read
+observation facts, but they must not create, clear, or rewrite
+`observation_issues`.
 
 Observation-owned reconciliation supports two scopes of authority:
 

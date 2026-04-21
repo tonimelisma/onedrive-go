@@ -201,7 +201,7 @@ func (controller *scopeController) releaseScope(ctx context.Context, watch *watc
 			Type:     engineDebugEventScopeReleased,
 			ScopeKey: key,
 		})
-		watch.kickRetrySweepNow()
+		watch.kickRetryHeldReleaseNow()
 		watch.armTrialTimer()
 	} else {
 		flow.engine.emitDebugEvent(engineDebugEvent{

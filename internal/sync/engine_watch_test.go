@@ -469,7 +469,7 @@ func TestRunWatch_BusyRuntimeQueuesDirtyReplanInsteadOfOverlappingPrepare(t *tes
 	rt := testWatchRuntime(t, eng)
 	rt.runningCount = 1
 
-	done, handled, err := rt.handleDispatchEvent(ctx, &watchPipeline{
+	done, err := rt.handleWatchEvent(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
 	}, &watchEvent{
@@ -478,7 +478,6 @@ func TestRunWatch_BusyRuntimeQueuesDirtyReplanInsteadOfOverlappingPrepare(t *tes
 			Paths: []string{"overlapping.txt"},
 		},
 	})
-	require.True(t, handled)
 	require.NoError(t, err)
 	assert.False(t, done)
 	assert.Empty(t, rt.currentOutbox())
@@ -722,9 +721,9 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	}, "local observer start, shutdown, and watch stop should occur in order")
 	for _, forbidden := range []engineDebugEventType{
 		engineDebugEventRetryTimerFired,
-		engineDebugEventRetrySweepStarted,
+		engineDebugEventRetryHeldReleaseStarted,
 		engineDebugEventTrialTimerFired,
-		engineDebugEventTrialSweepStarted,
+		engineDebugEventTrialHeldReleaseStarted,
 	} {
 		recorder.requireNoEventAfter(t, func(event engineDebugEvent) bool {
 			return event.Type == engineDebugEventShutdownStarted

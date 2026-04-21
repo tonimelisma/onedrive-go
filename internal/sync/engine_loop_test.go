@@ -203,7 +203,7 @@ func TestWatchRuntime_RunBootstrapStep_RetryTickReducesReleasedPublicationRetryO
 	}, 1, nil)
 	require.NotNil(t, publication)
 	rt.holdAction(publication, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
-	rt.kickRetrySweepNow()
+	rt.kickRetryHeldReleaseNow()
 
 	done, err := rt.runBootstrapStep(ctx, &watchPipeline{bl: bl}, nil)
 	require.NoError(t, err)

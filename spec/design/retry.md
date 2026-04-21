@@ -94,9 +94,9 @@ engine.
 - when an exact action becomes dependency-ready, admission consults its
   persisted retry row and either dispatches it now or holds it in runtime
   until `next_retry_at`
-- the engine-owned retry sweep releases only those already-held exact actions
-  whose retry time is now due; it does not refresh truth, rebuild plans, or
-  reconstruct dependencies
+- the engine-owned held retry release releases only those already-held exact
+  actions whose retry time is now due; it does not refresh truth, rebuild
+  plans, or reconstruct dependencies
 - durable current-truth/content problems belong in `observation_issues`, not in
   retry scheduling
 
@@ -109,9 +109,9 @@ through trial actions:
 - only dependency-ready exact actions enter held blocked runtime state, so a
   due trial always chooses from actions that are runnable if the scope is
   released
-- the engine-owned trial sweep picks one deterministic held blocked candidate
-  for each due scope and dispatches it as a trial without rebuilding plan
-  structure
+- the engine-owned held trial release picks one deterministic held blocked
+  candidate for each due scope and dispatches it as a trial without rebuilding
+  plan structure
 - success releases the scope
 - matching-scope persistence evidence extends the scope
 - inconclusive outcomes re-arm the current interval without inventing a new
