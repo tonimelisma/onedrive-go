@@ -18,7 +18,7 @@ func TestBuildObservationReconcilePlan_DeletesOnlyManagedCurrentIssues(t *testin
 			ManagedIssueTypes: []string{IssueLocalReadDenied},
 			ManagedPaths:      []string{"Private/file.txt"},
 		},
-		observationReconcileState{
+		observationReconcileStoreState{
 			issues: []ObservationIssueRow{
 				{Path: "Private/file.txt", IssueType: IssueLocalReadDenied},
 				{Path: "Other/file.txt", IssueType: IssueLocalReadDenied},
@@ -49,7 +49,7 @@ func TestBuildObservationReconcilePlan_UpsertsCurrentIssuesOnly(t *testing.T) {
 		ManagedPaths:      []string{"same.txt"},
 	}
 
-	plan := buildObservationReconcilePlan(batch, observationReconcileState{
+	plan := buildObservationReconcilePlan(batch, observationReconcileStoreState{
 		issues: []ObservationIssueRow{{
 			Path:      "same.txt",
 			IssueType: IssueInvalidFilename,

@@ -121,7 +121,9 @@ separate from SQLite mutation. The store computes the exact observation issue
 upserts and deletes to reconcile in a deterministic helper, then applies that
 plan inside one transaction. SQLite helpers do not own the policy for what a
 batch manages, and they do not re-infer managed issue types from
-`ObservationFindingsBatch` during apply.
+`ObservationFindingsBatch` during apply. That policy should read as explicit
+set reconciliation: current managed observation issues, desired managed
+observation issues, exact deletes, exact upserts.
 
 ### Admin writes
 

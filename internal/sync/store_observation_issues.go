@@ -31,7 +31,7 @@ func (m *SyncStore) ReconcileObservationFindings(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation findings reconcile")
 	}()
 
-	state, err := loadObservationReconcileStateTx(ctx, tx)
+	state, err := loadObservationReconcileStoreStateTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -64,16 +64,16 @@ func (m *SyncStore) applyObservationFindingsReconcilePlanTx(
 	return nil
 }
 
-func loadObservationReconcileStateTx(
+func loadObservationReconcileStoreStateTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-) (observationReconcileState, error) {
+) (observationReconcileStoreState, error) {
 	issues, err := queryObservationIssueRowsWithRunner(ctx, tx)
 	if err != nil {
-		return observationReconcileState{}, fmt.Errorf("sync: listing observation issues for observation reconcile: %w", err)
+		return observationReconcileStoreState{}, fmt.Errorf("sync: listing observation issues for observation reconcile: %w", err)
 	}
 
-	return observationReconcileState{
+	return observationReconcileStoreState{
 		issues: issues,
 	}, nil
 }
