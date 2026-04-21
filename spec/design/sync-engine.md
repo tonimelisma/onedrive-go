@@ -120,7 +120,10 @@ prepared plan to execution/reporting. The outer orchestration should stay at
 that stage level rather than inlining every sub-step. Live and dry-run now
 share the same observed-state -> current-plan stage shape; they differ only in
 whether the prepared plan is materialized durably and whether a deferred
-cursor commit is returned.
+cursor commit is returned. The stage helpers that observe, load planner
+inputs, build the current plan, and materialize durable retry/scope state
+belong in the current-plan stage boundary, not in the top-level `RunOnce()`
+coordinator.
 
 Full-remote-refresh cadence is restart-safe even when a full reconcile returns
 no delta cursor. The engine still advances the persisted cadence in
@@ -172,8 +175,8 @@ and aligns runtime admission with the persisted `block_scopes` and blocked
 
 Watch summary grouping is engine-owned. `watch_summary.go` builds only raw
 watch-condition aggregates: condition-key counts, total condition count,
-retrying count, and raw remote-write-block groups keyed by `ConditionKey` and
-`ScopeKey`. Those remote-write groups come only from active remote-write
+retrying count, and raw remote-write-block groups keyed by `ScopeKey`. Those
+remote-write groups come only from active remote-write
 `block_scopes`, not from every projected condition group that happens to share
 the same condition key. The watch runtime owns log phrasing and churn
 suppression separately. The store does not own grouped watch-condition

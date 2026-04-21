@@ -38,7 +38,7 @@ func TestWatchConditionCounts_SortsAndAggregatesProjectedGroups(t *testing.T) {
 func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 	t.Parallel()
 
-	summary, groups := buildWatchConditionSummary(&DriveStatusSnapshot{
+	summary := buildWatchConditionSummary(&DriveStatusSnapshot{
 		RetryingItems: 4,
 		ObservationIssues: []ObservationIssueRow{
 			{IssueType: IssueInvalidFilename},
@@ -74,18 +74,17 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 	}, summary.Counts)
 	assert.Equal(t, []watchRemoteBlockedGroup{
 		{
-			ConditionKey: ConditionRemoteWriteDenied,
 			ScopeKey:     SKPermRemoteWrite("Shared/Docs"),
 			BlockedPaths: []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt"},
 		},
-	}, groups)
+	}, summary.RemoteBlocked)
 }
 
 // Validates: R-2.10.47
 func TestBuildWatchConditionSummary_RemoteBlockedGroupsOnlyTrackActiveScopes(t *testing.T) {
 	t.Parallel()
 
-	summary, groups := buildWatchConditionSummary(&DriveStatusSnapshot{
+	summary := buildWatchConditionSummary(&DriveStatusSnapshot{
 		ObservationIssues: []ObservationIssueRow{{
 			Path:      "Shared/Docs/file.txt",
 			IssueType: IssueRemoteWriteDenied,
@@ -98,5 +97,5 @@ func TestBuildWatchConditionSummary_RemoteBlockedGroupsOnlyTrackActiveScopes(t *
 		Key:   ConditionRemoteWriteDenied,
 		Count: 1,
 	}}, summary.Counts)
-	assert.Empty(t, groups)
+	assert.Empty(t, summary.RemoteBlocked)
 }

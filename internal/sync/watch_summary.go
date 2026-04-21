@@ -3,7 +3,6 @@ package sync
 import "sort"
 
 type watchRemoteBlockedGroup struct {
-	ConditionKey ConditionKey
 	ScopeKey     ScopeKey
 	BlockedPaths []string
 }
@@ -20,11 +19,12 @@ type watchConditionSummary struct {
 	Counts         []watchConditionCount
 	ConditionTotal int
 	Retrying       int
+	RemoteBlocked  []watchRemoteBlockedGroup
 }
 
-func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSummary, []watchRemoteBlockedGroup) {
+func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) watchConditionSummary {
 	if snapshot == nil {
-		return watchConditionSummary{}, nil
+		return watchConditionSummary{}
 	}
 
 	groups := ProjectStoredConditionGroups(snapshot)
@@ -36,7 +36,8 @@ func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) (watchConditionSu
 		Counts:         summaryCounts,
 		ConditionTotal: watchConditionCountTotal(summaryCounts),
 		Retrying:       snapshot.RetryingItems,
-	}, remoteGroups
+		RemoteBlocked:  remoteGroups,
+	}
 }
 
 func buildWatchRemoteBlockedGroups(snapshot *DriveStatusSnapshot) []watchRemoteBlockedGroup {
@@ -54,7 +55,6 @@ func buildWatchRemoteBlockedGroups(snapshot *DriveStatusSnapshot) []watchRemoteB
 		}
 
 		remoteGroups = append(remoteGroups, watchRemoteBlockedGroup{
-			ConditionKey: ConditionKeyForStoredCondition(block.Key.ConditionType(), block.Key),
 			ScopeKey:     block.Key,
 			BlockedPaths: append([]string(nil), blockedByScope[block.Key].Paths...),
 		})
