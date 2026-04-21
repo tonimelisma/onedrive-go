@@ -2,7 +2,7 @@ package sync
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
 	"time"
 )
 
@@ -30,7 +30,7 @@ func (controller *scopeController) admitReady(
 	ctx context.Context,
 	watch *watchRuntime,
 	ready []*TrackedAction,
-) []*TrackedAction {
+) ([]*TrackedAction, error) {
 	decisions := controller.decideAdmission(controller.flow.engine.nowFunc(), ready)
 	return controller.applyAdmissionDecisions(ctx, watch, decisions)
 }
@@ -122,7 +122,7 @@ func (controller *scopeController) applyAdmissionDecisions(
 	ctx context.Context,
 	watch *watchRuntime,
 	decisions []AdmissionDecision,
-) []*TrackedAction {
+) ([]*TrackedAction, error) {
 	flow := controller.flow
 	var dispatch []*TrackedAction
 
@@ -133,7 +133,9 @@ func (controller *scopeController) applyAdmissionDecisions(
 			continue
 		}
 
-		controller.applyAdmissionScopeClear(ctx, decision)
+		if err := controller.applyAdmissionScopeClear(ctx, decision); err != nil {
+			return dispatch, err
+		}
 
 		switch decision.Kind {
 		case admissionDispatchNow:
@@ -142,7 +144,9 @@ func (controller *scopeController) applyAdmissionDecisions(
 		case admissionHoldRetry:
 			flow.holdAction(ta, heldReasonRetry, ScopeKey{}, decision.NextRetryAt)
 		case admissionHoldScope:
-			controller.persistHeldScopeDecision(ctx, ta, decision)
+			if err := controller.persistHeldScopeDecision(ctx, ta, decision); err != nil {
+				return dispatch, err
+			}
 			flow.holdAction(ta, heldReasonScope, decision.ScopeKey, time.Time{})
 		}
 	}
@@ -151,37 +155,41 @@ func (controller *scopeController) applyAdmissionDecisions(
 		watch.armHeldTimers()
 	}
 
-	return dispatch
+	return dispatch, nil
 }
 
 func (controller *scopeController) applyAdmissionScopeClear(
 	ctx context.Context,
 	decision *AdmissionDecision,
-) {
+) error {
 	if decision == nil || decision.ClearScopeKey.IsZero() {
-		return
+		return nil
 	}
 
 	flow := controller.flow
-	controller.clearBlockedRetryWorkForScope(ctx, decision.RetryWorkKey, decision.ClearScopeKey)
+	if err := controller.clearBlockedRetryWorkForScope(ctx, decision.RetryWorkKey, decision.ClearScopeKey); err != nil {
+		return err
+	}
 	if row, ok := flow.retryRowsByKey[decision.RetryWorkKey]; ok && row.Blocked && row.ScopeKey == decision.ClearScopeKey {
 		delete(flow.retryRowsByKey, decision.RetryWorkKey)
 	}
+
+	return nil
 }
 
 func (controller *scopeController) persistHeldScopeDecision(
 	ctx context.Context,
 	ta *TrackedAction,
 	decision *AdmissionDecision,
-) {
+) error {
 	if ta == nil || decision == nil || decision.ScopeKey.IsZero() {
-		return
+		return nil
 	}
 
 	flow := controller.flow
 	row, ok := flow.retryRowsByKey[decision.RetryWorkKey]
 	if ok && row.Blocked && row.ScopeKey == decision.ScopeKey {
-		return
+		return nil
 	}
 
 	persisted, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
@@ -194,16 +202,14 @@ func (controller *scopeController) persistHeldScopeDecision(
 		Blocked:       true,
 	}, nil)
 	if err != nil {
-		flow.engine.logger.Warn("failed to record blocked retry_work",
-			slog.String("path", ta.Action.Path),
-			slog.String("scope_key", decision.ScopeKey.String()),
-			slog.String("error", err.Error()),
-		)
-		return
+		return fmt.Errorf("persist blocked retry_work for %s under %s: %w", ta.Action.Path, decision.ScopeKey.String(), err)
 	}
-	if persisted != nil {
-		flow.retryRowsByKey[decision.RetryWorkKey] = *persisted
+	if persisted == nil {
+		return fmt.Errorf("persist blocked retry_work for %s under %s: missing persisted row", ta.Action.Path, decision.ScopeKey.String())
 	}
+	flow.retryRowsByKey[decision.RetryWorkKey] = *persisted
+
+	return nil
 }
 
 // completeSubtree silently completes all transitive dependents without
@@ -231,7 +237,7 @@ func (controller *scopeController) completeSubtree(ready []*TrackedAction) {
 // recordBlockedRetryWork records retry_work for an action that is currently
 // blocked by an active scope. Blocked rows have no retry timing until the
 // scope is released or trialed.
-func (controller *scopeController) recordBlockedRetryWork(ctx context.Context, action *Action, scopeKey ScopeKey) {
+func (controller *scopeController) recordBlockedRetryWork(ctx context.Context, action *Action, scopeKey ScopeKey) error {
 	flow := controller.flow
 
 	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
@@ -244,23 +250,21 @@ func (controller *scopeController) recordBlockedRetryWork(ctx context.Context, a
 		Blocked:       true,
 	}, nil)
 	if err != nil {
-		flow.engine.logger.Warn("failed to record blocked retry_work",
-			slog.String("path", action.Path),
-			slog.String("scope_key", scopeKey.String()),
-			slog.String("error", err.Error()),
-		)
-		return
+		return fmt.Errorf("record blocked retry_work for %s under %s: %w", action.Path, scopeKey.String(), err)
 	}
-	if row != nil {
-		flow.retryRowsByKey[retryWorkKeyForAction(action)] = *row
+	if row == nil {
+		return fmt.Errorf("record blocked retry_work for %s under %s: missing persisted row", action.Path, scopeKey.String())
 	}
+	flow.retryRowsByKey[retryWorkKeyForAction(action)] = *row
+
+	return nil
 }
 
 func (controller *scopeController) rehomeBlockedRetryWork(
 	ctx context.Context,
 	r *ActionCompletion,
 	scopeKey ScopeKey,
-) bool {
+) error {
 	flow := controller.flow
 
 	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
@@ -274,16 +278,12 @@ func (controller *scopeController) rehomeBlockedRetryWork(
 		Blocked:       true,
 	}, nil)
 	if err != nil {
-		flow.engine.logger.Warn("failed to rehome blocked retry_work",
-			slog.String("path", r.Path),
-			slog.String("scope_key", scopeKey.String()),
-			slog.String("error", err.Error()),
-		)
-		return false
+		return fmt.Errorf("rehome blocked retry_work for %s under %s: %w", r.Path, scopeKey.String(), err)
 	}
-	if row != nil {
-		flow.retryRowsByKey[retryWorkKeyForCompletion(r)] = *row
+	if row == nil {
+		return fmt.Errorf("rehome blocked retry_work for %s under %s: missing persisted row", r.Path, scopeKey.String())
 	}
+	flow.retryRowsByKey[retryWorkKeyForCompletion(r)] = *row
 
-	return true
+	return nil
 }

@@ -147,7 +147,7 @@ func (r *oneShotRunner) handleOneShotCompletion(
 ) ([]*TrackedAction, error) {
 	outcome := r.processActionCompletion(ctx, nil, completion, bl)
 	if !outcome.terminate {
-		nextOutbox, err := r.reducePublicationFrontier(ctx, nil, bl, outbox, outcome.dispatched)
+		nextOutbox, err := r.appendReadyThroughPublicationFrontier(ctx, nil, bl, outbox, outcome.dispatched)
 		if err == nil || fatalErr != nil {
 			return nextOutbox, fatalErr
 		}
@@ -444,11 +444,21 @@ func (rt *watchRuntime) runBootstrapStep(
 		rt.replaceOutbox(nextOutbox)
 		return done, err
 	case <-rt.trialTimerChan():
-		rt.appendOutbox(rt.runTrialDispatch(ctx))
-		return false, nil
+		released, err := rt.runTrialDispatch(ctx)
+		if err != nil {
+			return false, err
+		}
+		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), released)
+		rt.replaceOutbox(nextOutbox)
+		return false, err
 	case <-rt.retryTimerChan():
-		rt.appendOutbox(rt.runRetrierSweep(ctx))
-		return false, nil
+		released, err := rt.runRetrierSweep(ctx)
+		if err != nil {
+			return false, err
+		}
+		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), released)
+		rt.replaceOutbox(nextOutbox)
+		return false, err
 	case <-logC:
 		rt.logBootstrapWait()
 		return false, nil
@@ -507,7 +517,7 @@ func (rt *watchRuntime) handleBootstrapCompletion(
 	if outcome.terminate {
 		return outbox, false, outcome.terminateErr
 	}
-	nextOutbox, err := rt.reducePublicationFrontier(ctx, rt, p.bl, outbox, outcome.dispatched)
+	nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, outbox, outcome.dispatched)
 	if err != nil {
 		rt.completeOutboxAsShutdown(nextOutbox)
 		return nil, false, err

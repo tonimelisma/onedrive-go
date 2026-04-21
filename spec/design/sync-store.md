@@ -113,6 +113,11 @@ Supporting outcome mutations should stay separate by owner:
 - retry-resolution helpers that delete exact `retry_work` and return the
   resolved `retry_work` row for engine-owned cleanup decisions
 
+`retry_work` is the single durable lane for exact pending roots regardless of
+whether their next execution boundary is worker-side I/O or engine-side
+publication reduction. The store does not split publication retries into a
+second durable table.
+
 The store does not own a mixed failure table, failure-role transitions,
 timer-time stale-row cleanup, or a store-owned grouped condition projection.
 
@@ -200,6 +205,11 @@ observation-owned read boundaries do not.
 `retry_work` stores only exact held roots. Dependents blocked behind those
 roots remain dependency state in the current runtime; they are not persisted as
 cascade retry rows.
+
+That exact-root rule includes publication-only actions such as
+`ActionUpdateSynced` and `ActionCleanup`. They may persist in `retry_work`, but
+their retry still re-enters the engine-owned publication reduction path rather
+than worker dispatch.
 
 Read-denied subtree boundaries do not persist as `block_scopes`. They remain
 tagged on `observation_issues` via `ScopeKey`, and truth-status reads derive

@@ -438,3 +438,35 @@ func TestEngineFlow_ProcessTrialDecision_FatalTerminatesWithFatalResultError(t *
 	require.EqualError(t, outcome.terminateErr, "sync: unauthorized action completion for trial-auth.txt")
 	assert.Empty(t, outcome.dispatched)
 }
+
+// Validates: R-6.8
+func TestEngineFlow_ProcessActionCompletion_RetryPersistenceFailureTerminatesAndMarksFinished(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	flow := testEngineFlow(t, eng)
+
+	current := flow.depGraph.Add(&Action{
+		Type: ActionUpload,
+		Path: "retry.txt",
+	}, 1, nil)
+	require.NotNil(t, current)
+	flow.markRunning(current)
+
+	require.NoError(t, eng.baseline.Close(t.Context()))
+
+	outcome := flow.processActionCompletion(t.Context(), nil, &ActionCompletion{
+		ActionID:   1,
+		Path:       "retry.txt",
+		ActionType: ActionUpload,
+		HTTPStatus: http.StatusBadGateway,
+		ErrMsg:     "temporary outage",
+	}, nil)
+
+	require.True(t, outcome.terminate)
+	require.ErrorContains(t, outcome.terminateErr, "record retry_work")
+	assert.Empty(t, outcome.dispatched)
+	assert.Zero(t, flow.runningCount, "control-state persistence failure must still finish the completed action bookkeeping")
+	assert.Empty(t, flow.runningByID)
+	assert.Equal(t, 1, flow.depGraph.InFlightCount(), "the unresolved action must remain in the graph when the runtime fails closed")
+}
