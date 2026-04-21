@@ -921,7 +921,7 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return watcher, nil
 	}
-	reconcileTimerCreated := installAfterFuncCreatedSignal(eng, 15*time.Minute)
+	refreshTimerCreated := installAfterFuncCreatedSignal(eng, 15*time.Minute)
 	saveObservationCursorForTest(t, eng.baseline, t.Context(), engineTestDriveID, "seed-token")
 	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(
 		t.Context(),
@@ -931,7 +931,7 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 
 	watchCtx, cancel := context.WithCancel(t.Context())
 	eng.watchRuntimeHook = func(rt *watchRuntime) {
-		rt.afterReconcileCommit = func() {
+		rt.afterRefreshCommit = func() {
 			cancel()
 		}
 	}
@@ -948,12 +948,12 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 	waitForSignal(t, watcher.Added(), "local watch setup did not add any watcher")
-	waitForSignal(t, reconcileTimerCreated, "reconcile timer was not created")
+	waitForSignal(t, refreshTimerCreated, "refresh timer was not created")
 
 	clock.Advance(15 * time.Minute)
 	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventReconcileStarted
-	}, "reconcile started")
+		return event.Type == engineDebugEventRemoteRefreshStarted
+	}, "full remote refresh started")
 	waitForSignal(t, reconcileStarted, "reconcile delta fetch did not start")
 
 	close(reconcileReleased)
@@ -971,24 +971,24 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 
 	recorder.requireOrderedSubsequence(t, []func(engineDebugEvent) bool{
 		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventReconcileStarted
+			return event.Type == engineDebugEventRemoteRefreshStarted
 		},
 		func(event engineDebugEvent) bool {
 			return event.Type == engineDebugEventShutdownStarted
 		},
 		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventReconcileDroppedOnShutdown
+			return event.Type == engineDebugEventRemoteRefreshDroppedOnShutdown
 		},
 		func(event engineDebugEvent) bool {
 			return event.Type == engineDebugEventWatchStopped
 		},
-	}, "reconcile should be dropped after shutdown starts")
+	}, "full remote refresh should be dropped after shutdown starts")
 	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventReconcileDroppedOnShutdown
-	}, 1, "expected exactly one reconcile_dropped_on_shutdown event")
+		return event.Type == engineDebugEventRemoteRefreshDroppedOnShutdown
+	}, 1, "expected exactly one remote_refresh_dropped_on_shutdown event")
 	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventReconcileApplied
-	}), "reconcile result should not be applied after shutdown starts")
+		return event.Type == engineDebugEventRemoteRefreshApplied
+	}), "full remote refresh result should not be applied after shutdown starts")
 }
 
 // Validates: R-2.8.3, R-6.10.10

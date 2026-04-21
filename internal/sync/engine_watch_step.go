@@ -8,31 +8,31 @@ import (
 type watchEventKind string
 
 const (
-	watchEventDispatchReady          watchEventKind = "dispatch_ready"
-	watchEventBatchReady             watchEventKind = "batch_ready"
-	watchEventBatchClosed            watchEventKind = "batch_closed"
-	watchEventActionCompletion       watchEventKind = "action_completion"
-	watchEventCompletionsClosed      watchEventKind = "completions_closed"
-	watchEventSkipped                watchEventKind = "skipped"
-	watchEventSkippedClosed          watchEventKind = "skipped_closed"
-	watchEventRecheckTick            watchEventKind = "recheck_tick"
-	watchEventReconcileTick          watchEventKind = "reconcile_tick"
-	watchEventReconcileResult        watchEventKind = "reconcile_result"
-	watchEventReconcileResultsClosed watchEventKind = "reconcile_results_closed"
-	watchEventObserverError          watchEventKind = "observer_error"
-	watchEventObserverErrorsClosed   watchEventKind = "observer_errors_closed"
-	watchEventTrialTick              watchEventKind = "trial_tick"
-	watchEventRetryTick              watchEventKind = "retry_tick"
-	watchEventContextCanceled        watchEventKind = "context_canceled"
+	watchEventDispatchReady        watchEventKind = "dispatch_ready"
+	watchEventBatchReady           watchEventKind = "batch_ready"
+	watchEventBatchClosed          watchEventKind = "batch_closed"
+	watchEventActionCompletion     watchEventKind = "action_completion"
+	watchEventCompletionsClosed    watchEventKind = "completions_closed"
+	watchEventSkipped              watchEventKind = "skipped"
+	watchEventSkippedClosed        watchEventKind = "skipped_closed"
+	watchEventRecheckTick          watchEventKind = "recheck_tick"
+	watchEventRefreshTick          watchEventKind = "refresh_tick"
+	watchEventRefreshResult        watchEventKind = "refresh_result"
+	watchEventRefreshResultsClosed watchEventKind = "refresh_results_closed"
+	watchEventObserverError        watchEventKind = "observer_error"
+	watchEventObserverErrorsClosed watchEventKind = "observer_errors_closed"
+	watchEventTrialTick            watchEventKind = "trial_tick"
+	watchEventRetryTick            watchEventKind = "retry_tick"
+	watchEventContextCanceled      watchEventKind = "context_canceled"
 )
 
 type watchEvent struct {
-	kind            watchEventKind
-	batch           DirtyBatch
-	completion      *ActionCompletion
-	skipped         []SkippedItem
-	reconcileResult reconcileResult
-	observerErr     error
+	kind          watchEventKind
+	batch         DirtyBatch
+	completion    *ActionCompletion
+	skipped       []SkippedItem
+	refreshResult remoteRefreshResult
+	observerErr   error
 }
 
 type watchTransition struct {
@@ -40,7 +40,7 @@ type watchTransition struct {
 	appendOutbox      []*TrackedAction
 	replaceOutbox     []*TrackedAction
 	replaceOutboxSet  bool
-	startReconcile    bool
+	startRefresh      bool
 	beginDrain        bool
 	done              bool
 }
@@ -72,14 +72,14 @@ func (rt *watchRuntime) waitWatchEvent(ctx context.Context, p *watchPipeline) wa
 		return watchEvent{kind: watchEventSkipped, skipped: skipped}
 	case <-p.recheckC:
 		return watchEvent{kind: watchEventRecheckTick}
-	case <-p.reconcileC:
-		return watchEvent{kind: watchEventReconcileTick}
-	case result, ok := <-p.reconcileResults:
+	case <-p.refreshC:
+		return watchEvent{kind: watchEventRefreshTick}
+	case result, ok := <-p.refreshResults:
 		if !ok {
-			return watchEvent{kind: watchEventReconcileResultsClosed}
+			return watchEvent{kind: watchEventRefreshResultsClosed}
 		}
 
-		return watchEvent{kind: watchEventReconcileResult, reconcileResult: result}
+		return watchEvent{kind: watchEventRefreshResult, refreshResult: result}
 	case obsErr, ok := <-p.errs:
 		if !ok {
 			return watchEvent{kind: watchEventObserverErrorsClosed}
@@ -133,7 +133,7 @@ func (rt *watchRuntime) applyWatchTransition(
 	} else if len(transition.appendOutbox) > 0 {
 		rt.appendOutbox(transition.appendOutbox)
 	}
-	if transition.startReconcile {
+	if transition.startRefresh {
 		rt.runFullRemoteRefreshAsync(ctx, p.bl)
 	}
 	if transition.done {
@@ -184,9 +184,9 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 	case watchEventSkipped,
 		watchEventSkippedClosed,
 		watchEventRecheckTick,
-		watchEventReconcileTick,
-		watchEventReconcileResult,
-		watchEventReconcileResultsClosed,
+		watchEventRefreshTick,
+		watchEventRefreshResult,
+		watchEventRefreshResultsClosed,
 		watchEventObserverError,
 		watchEventObserverErrorsClosed,
 		watchEventTrialTick,
@@ -210,13 +210,13 @@ func (rt *watchRuntime) transitionWatchObservationEvent(
 	case watchEventSkippedClosed:
 		p.skippedCh = nil
 		return watchTransition{}, true
-	case watchEventReconcileTick:
-		return watchTransition{startReconcile: true}, true
-	case watchEventReconcileResult:
-		rt.applyRemoteRefreshResult(event.reconcileResult)
+	case watchEventRefreshTick:
+		return watchTransition{startRefresh: true}, true
+	case watchEventRefreshResult:
+		rt.applyRemoteRefreshResult(event.refreshResult)
 		return watchTransition{}, true
-	case watchEventReconcileResultsClosed:
-		p.reconcileResults = nil
+	case watchEventRefreshResultsClosed:
+		p.refreshResults = nil
 		return watchTransition{}, true
 	case watchEventDispatchReady,
 		watchEventBatchReady,
@@ -278,9 +278,9 @@ func (rt *watchRuntime) transitionWatchMaintenanceEvent(
 		watchEventCompletionsClosed,
 		watchEventSkipped,
 		watchEventSkippedClosed,
-		watchEventReconcileTick,
-		watchEventReconcileResult,
-		watchEventReconcileResultsClosed:
+		watchEventRefreshTick,
+		watchEventRefreshResult,
+		watchEventRefreshResultsClosed:
 		return watchTransition{}, false, nil
 	}
 

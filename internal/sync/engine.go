@@ -16,7 +16,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-type reconcileResult struct {
+type remoteRefreshResult struct {
 	events []ChangeEvent
 }
 

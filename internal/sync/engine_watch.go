@@ -156,20 +156,20 @@ func isWatchShutdownError(ctx context.Context, err error) bool {
 // watchPipeline holds all handles needed by the watch select loop.
 // Created by initWatchInfra; cleaned up by its cleanup method.
 type watchPipeline struct {
-	runtime          *watchRuntime
-	bl               *Baseline
-	safety           *SafetyConfig
-	batchReady       <-chan DirtyBatch
-	completions      <-chan ActionCompletion
-	errs             <-chan error
-	skippedCh        <-chan []SkippedItem
-	reconcileC       <-chan time.Time
-	reconcileResults <-chan reconcileResult
-	recheckC         <-chan time.Time
-	activeObs        int
-	mode             Mode
-	pool             *WorkerPool // for bootstrapSync to access Completions()
-	cleanup          func()
+	runtime        *watchRuntime
+	bl             *Baseline
+	safety         *SafetyConfig
+	batchReady     <-chan DirtyBatch
+	completions    <-chan ActionCompletion
+	errs           <-chan error
+	skippedCh      <-chan []SkippedItem
+	refreshC       <-chan time.Time
+	refreshResults <-chan remoteRefreshResult
+	recheckC       <-chan time.Time
+	activeObs      int
+	mode           Mode
+	pool           *WorkerPool // for bootstrapSync to access Completions()
+	cleanup        func()
 }
 
 type socketIOWakeSourceRunner interface {
@@ -236,7 +236,7 @@ func (rt *watchRuntime) initWatchInfra(
 	batchReady := dirtyBuf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
 	// Tickers/timers.
-	rt.resetReconcileTimer(nil)
+	rt.resetRefreshTimer(nil)
 	recheckTicker := rt.engine.newTicker(recheckInterval)
 
 	// Arm retrier timer from DB — picks up items from prior crash or prior pass.
@@ -244,15 +244,15 @@ func (rt *watchRuntime) initWatchInfra(
 	rt.armTrialTimer()
 
 	pipe := &watchPipeline{
-		runtime:          rt,
-		safety:           rt.engine.resolveSafetyConfig(),
-		batchReady:       batchReady,
-		completions:      pool.Completions(),
-		reconcileC:       rt.reconcileCh,
-		reconcileResults: rt.reconcileResults,
-		recheckC:         tickerChan(recheckTicker),
-		mode:             mode,
-		pool:             pool,
+		runtime:        rt,
+		safety:         rt.engine.resolveSafetyConfig(),
+		batchReady:     batchReady,
+		completions:    pool.Completions(),
+		refreshC:       rt.refreshCh,
+		refreshResults: rt.refreshResults,
+		recheckC:       tickerChan(recheckTicker),
+		mode:           mode,
+		pool:           pool,
 	}
 
 	pipe.cleanup = func() {
@@ -266,7 +266,7 @@ func (rt *watchRuntime) initWatchInfra(
 		}
 
 		stopTicker(recheckTicker)
-		rt.resetReconcileTimer(nil)
+		rt.resetRefreshTimer(nil)
 
 		inFlight := depGraph.InFlightCount()
 		if inFlight > 0 {
@@ -307,13 +307,13 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 	pipe.bl = bl
 
-	fullReconcile, err := rt.engine.shouldRunFullRemoteRefresh(ctx, false)
+	fullRefresh, err := rt.engine.shouldRunFullRemoteRefresh(ctx, false)
 	if err != nil {
-		return fmt.Errorf("sync: deciding bootstrap full reconcile: %w", err)
+		return fmt.Errorf("sync: deciding bootstrap full remote refresh: %w", err)
 	}
 
 	// Observe changes.
-	pendingCursorCommit, err := rt.observeCurrentTruth(ctx, rt, bl, false, fullReconcile)
+	pendingCursorCommit, err := rt.observeCurrentTruth(ctx, rt, bl, false, fullRefresh)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}

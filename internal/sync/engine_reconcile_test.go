@@ -583,29 +583,29 @@ func TestObserveRemoteChanges_RemoteReadDeniedPersistsObservationFindings(t *tes
 }
 
 // ---------------------------------------------------------------------------
-// runFullReconciliationAsync tests
+// runFullRemoteRefreshAsync tests
 // ---------------------------------------------------------------------------
 
-// waitForReconcileDone applies the next reconcile result the same way the
-// watch loop would and waits for reconcileActive to clear.
-func waitForReconcileDone(t *testing.T, eng *testEngine) {
+// waitForRefreshDone applies the next refresh result the same way the
+// watch loop would and waits for refreshActive to clear.
+func waitForRefreshDone(t *testing.T, eng *testEngine) {
 	t.Helper()
 
 	rt := testWatchRuntime(t, eng)
-	require.NotNil(t, rt.reconcileResults)
+	require.NotNil(t, rt.refreshResults)
 
 	select {
-	case result := <-rt.reconcileResults:
+	case result := <-rt.refreshResults:
 		rt.applyRemoteRefreshResult(result)
 	case <-time.After(10 * time.Second):
-		require.Fail(t, "reconcile result was not delivered within 10s")
+		require.Fail(t, "refresh result was not delivered within 10s")
 	}
 
-	assert.False(t, rt.reconcileActive, "reconcileActive should be false after applying reconcile result")
+	assert.False(t, rt.refreshActive, "refreshActive should be false after applying refresh result")
 }
 
 // Validates: R-2.1.6
-func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
+func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
@@ -655,22 +655,22 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	// dirty scheduler, even when the later planner pass reduces them to a no-op. The
 	// important boundary here is "no direct dispatch from the goroutine."
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForReconcileDone(t, e)
+	waitForRefreshDone(t, e)
 
 	select {
 	case ta := <-ready:
-		require.Failf(t, "no-change reconciliation dispatched work", "unexpected path %s", ta.Action.Path)
+		require.Failf(t, "no-change remote refresh dispatched work", "unexpected path %s", ta.Action.Path)
 	default:
 	}
 
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
-	require.NotNil(t, batch, "reconciliation should mark dirty work for the watch loop")
+	require.NotNil(t, batch, "remote refresh should mark dirty work for the watch loop")
 	assert.Equal(t, []string{"file1.txt"}, batch.Paths)
 	assert.False(t, batch.FullRefresh)
 }
 
 // Validates: R-2.1.6
-func TestRunFullReconciliationAsync_DeltaError(t *testing.T) {
+func TestRunFullRemoteRefreshAsync_DeltaError(t *testing.T) {
 	t.Parallel()
 
 	mock := &engineMockClient{
@@ -690,7 +690,7 @@ func TestRunFullReconciliationAsync_DeltaError(t *testing.T) {
 
 	// Should not panic — error is logged and function returns.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForReconcileDone(t, e)
+	waitForRefreshDone(t, e)
 
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
@@ -724,12 +724,12 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	// Call should return immediately — goroutine is blocked in deltaFn.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 
-	// reconcileActive should be true while delta is blocked.
-	assert.True(t, testWatchRuntime(t, e).reconcileActive, "reconcileActive should be true while goroutine runs")
+	// refreshActive should be true while delta is blocked.
+	assert.True(t, testWatchRuntime(t, e).refreshActive, "refreshActive should be true while goroutine runs")
 
 	// Unblock delta and wait for completion.
 	close(unblock)
-	waitForReconcileDone(t, e)
+	waitForRefreshDone(t, e)
 }
 
 func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
@@ -740,7 +740,7 @@ func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			deltaCalled = true
-			require.Fail(t, "deltaFn should not be called when reconciliation is already running")
+			require.Fail(t, "deltaFn should not be called when full remote refresh is already running")
 			return nil, assert.AnError
 		},
 	}
@@ -754,15 +754,15 @@ func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
 	setupWatchEngine(t, e)
 	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
 
-	// Pre-set reconcileActive — simulates a reconciliation already in progress.
-	testWatchRuntime(t, e).reconcileActive = true
+	// Pre-set refreshActive — simulates a full remote refresh already in progress.
+	testWatchRuntime(t, e).refreshActive = true
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 
 	// deltaFn should not have been invoked.
-	assert.False(t, deltaCalled, "deltaFn should not be called when reconciliation is already running")
+	assert.False(t, deltaCalled, "deltaFn should not be called when full remote refresh is already running")
 
-	testWatchRuntime(t, e).reconcileActive = false
+	testWatchRuntime(t, e).refreshActive = false
 }
 
 func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
@@ -809,9 +809,9 @@ func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Baseline is empty — delta returns a new file and the watch loop gets
-	// a dirty path signal back from reconciliation.
+	// a dirty path signal back from the remote refresh.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForReconcileDone(t, e)
+	waitForRefreshDone(t, e)
 
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch, "dirty scheduler should contain paths from reconciliation")
@@ -819,7 +819,7 @@ func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 }
 
 // Validates: R-2.8.4
-func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHandoff(t *testing.T) {
+func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
@@ -848,24 +848,24 @@ func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHand
 	rt := testWatchRuntime(t, eng)
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
 
-	reconcileC := make(chan time.Time, 1)
+	refreshC := make(chan time.Time, 1)
 	done := make(chan error, 1)
 	go func() {
 		done <- rt.runWatchLoop(ctx, &watchPipeline{
-			runtime:          rt,
-			bl:               bl,
-			safety:           DefaultSafetyConfig(),
-			mode:             SyncBidirectional,
-			reconcileC:       reconcileC,
-			reconcileResults: rt.reconcileResults,
+			runtime:        rt,
+			bl:             bl,
+			safety:         DefaultSafetyConfig(),
+			mode:           SyncBidirectional,
+			refreshC:       refreshC,
+			refreshResults: rt.refreshResults,
 		})
 	}()
 
-	reconcileC <- time.Now()
+	refreshC <- time.Now()
 
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventReconcileApplied
-	}, "watch loop applied periodic reconciliation result")
+		return event.Type == engineDebugEventRemoteRefreshApplied
+	}, "watch loop applied periodic full remote refresh result")
 
 	batch := rt.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
@@ -873,7 +873,7 @@ func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHand
 
 	select {
 	case ta := <-ready:
-		require.Failf(t, "periodic reconciliation dispatched directly", "unexpected action %s", ta.Action.Path)
+		require.Failf(t, "periodic full remote refresh dispatched directly", "unexpected action %s", ta.Action.Path)
 	default:
 	}
 
@@ -890,7 +890,7 @@ func TestWatchLoop_ReconcileTick_RunsPeriodicFullReconciliationThroughResultHand
 	}
 }
 
-func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
+func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
@@ -926,7 +926,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	defer e.Close(t.Context())
 
 	// Context with manual cancel — cancel is triggered by the
-	// afterReconcileCommit hook at the exact point between
+	// afterRefreshCommit hook at the exact point between
 	// CommitObservation succeeding and the ctx.Err() check.
 	ctx, cancel := context.WithCancel(t.Context())
 
@@ -939,12 +939,12 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 	// Hook: cancel context immediately after CommitObservation succeeds.
 	// This guarantees we test the exact shutdown-after-commit code path,
 	// not the commit-failed path or the normal completion path.
-	testWatchRuntime(t, e).afterReconcileCommit = func() {
+	testWatchRuntime(t, e).afterRefreshCommit = func() {
 		cancel()
 	}
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForReconcileDone(t, e)
+	waitForRefreshDone(t, e)
 
 	// Verify observations WERE committed to SQLite — proving we took
 	// the post-commit shutdown path, not the commit-failed path.
@@ -971,7 +971,7 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			require.Fail(t, "deltaFn should not be called when reconciliation is already running")
+			require.Fail(t, "deltaFn should not be called when full remote refresh is already running")
 			return nil, assert.AnError
 		},
 	}
@@ -984,8 +984,8 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 
 	setupWatchEngine(t, e)
 
-	// Pre-set reconcileActive — simulates a reconciliation already in progress.
-	testWatchRuntime(t, e).reconcileActive = true
+	// Pre-set refreshActive — simulates a full remote refresh already in progress.
+	testWatchRuntime(t, e).refreshActive = true
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 
@@ -995,7 +995,7 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	assert.Contains(t, logOutput, "full remote refresh skipped",
 		"skip message should be logged at Info level (not Debug)")
 
-	testWatchRuntime(t, e).reconcileActive = false
+	testWatchRuntime(t, e).refreshActive = false
 }
 
 func TestRunFullRemoteRefreshAsync_DurationInCompletionLog(t *testing.T) {
@@ -1046,7 +1046,7 @@ func TestRunFullRemoteRefreshAsync_DurationInCompletionLog(t *testing.T) {
 	setupWatchEngine(t, e)
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForReconcileDone(t, e)
+	waitForRefreshDone(t, e)
 
 	logOutput := logBuf.String()
 	assert.Contains(t, logOutput, "periodic full remote refresh complete",
@@ -1104,7 +1104,7 @@ func TestRunFullRemoteRefreshAsync_DurationInNoChangesLog(t *testing.T) {
 	setupWatchEngine(t, e)
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
-	waitForReconcileDone(t, e)
+	waitForRefreshDone(t, e)
 
 	logOutput := logBuf.String()
 	assert.Contains(t, logOutput, "no changes",

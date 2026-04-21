@@ -134,26 +134,28 @@ type watchTimerState struct {
 	retryTimerCh chan struct{} // persistent, buffered(1)
 }
 
-type watchReconcileState struct {
+type watchSummaryState struct {
 	// Deduplication: caches the last watch-condition signature and per-scope
 	// shared-folder child-set signatures for watch summaries.
 	lastSummaryTotal     int
 	lastSummarySignature string
 	lastRemoteBlocked    map[ScopeKey]string
+}
 
-	// Full reconciliation is started by the watch loop and hands its result
-	// back over reconcileResults. The loop owns reconcileActive and applies the
+type watchRefreshState struct {
+	// Full remote refresh is started by the watch loop and hands its result
+	// back over refreshResults. The loop owns refreshActive and applies the
 	// returned events on receipt.
-	reconcileActive  bool
-	reconcileTimer   syncTimer
-	reconcileCh      chan time.Time
-	reconcileResults chan reconcileResult
+	refreshActive  bool
+	refreshTimer   syncTimer
+	refreshCh      chan time.Time
+	refreshResults chan remoteRefreshResult
 
-	// afterReconcileCommit is a test-only hook called after CommitObservation
-	// succeeds in runFullReconciliationAsync. Nil in production. Allows tests
+	// afterRefreshCommit is a test-only hook called after CommitObservation
+	// succeeds in runFullRemoteRefreshAsync. Nil in production. Allows tests
 	// to inject actions (e.g. context cancellation) at an otherwise unreachable
 	// point between commit and buffer feeding.
-	afterReconcileCommit func()
+	afterRefreshCommit func()
 }
 
 // watchRuntime owns all mutable watch-mode state. It is created by RunWatch
@@ -163,7 +165,8 @@ type watchRuntime struct {
 	watchRuntimeState
 	watchObservationState
 	watchTimerState
-	watchReconcileState
+	watchSummaryState
+	watchRefreshState
 }
 
 type watchRuntimePhase string
@@ -185,10 +188,12 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 			trialCh:      make(chan struct{}, 1),
 			retryTimerCh: make(chan struct{}, 1),
 		},
-		watchReconcileState: watchReconcileState{
+		watchSummaryState: watchSummaryState{
 			lastRemoteBlocked: make(map[ScopeKey]string),
-			reconcileCh:       make(chan time.Time, 1),
-			reconcileResults:  make(chan reconcileResult, 1),
+		},
+		watchRefreshState: watchRefreshState{
+			refreshCh:      make(chan time.Time, 1),
+			refreshResults: make(chan remoteRefreshResult, 1),
 		},
 	}
 	rt.watch = rt

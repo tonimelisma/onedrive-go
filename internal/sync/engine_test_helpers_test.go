@@ -428,7 +428,7 @@ func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *TrackedAction {
 }
 
 // newTestWatchState initializes watch state on an engine for testing.
-// Creates retryTimerCh, reconcileResults, and scope detection state — the
+// Creates retryTimerCh, refreshResults, and scope detection state — the
 // minimum set needed for watch-mode tests.
 func newTestWatchState(t *testing.T, eng *testEngine) {
 	t.Helper()

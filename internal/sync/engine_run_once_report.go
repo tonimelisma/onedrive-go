@@ -43,13 +43,12 @@ func syncStatusFromUpdate(update *SyncStatusUpdate) *SyncStatus {
 		lastError = update.Errors[0].Error()
 	}
 
-	syncedAt := update.SyncedAt
-	if syncedAt.IsZero() {
-		syncedAt = time.Now()
+	if update.SyncedAt.IsZero() {
+		return nil
 	}
 
 	return &SyncStatus{
-		LastSyncedAt:       syncedAt.UnixNano(),
+		LastSyncedAt:       update.SyncedAt.UnixNano(),
 		LastSyncDurationMs: update.Duration.Milliseconds(),
 		LastSucceededCount: update.Succeeded,
 		LastFailedCount:    update.Failed,

@@ -140,7 +140,7 @@ coordinator. The same rule applies to bootstrap, execution-only publication
 drain helpers, and post-sync housekeeping: keep them next to their stage so a
 reader can see the one-shot flow at a glance.
 
-Full-remote-refresh cadence is restart-safe even when a full reconcile returns
+Full-remote-refresh cadence is restart-safe even when a full remote refresh returns
 no delta cursor. The engine still advances the persisted cadence in
 `observation_state` so enumerate-only and shared-root sessions do not fall into
 back-to-back expensive full refreshes.
@@ -161,8 +161,8 @@ back-to-back expensive full refreshes.
 The watch loop is the single owner of mutable runtime state. Other packages may
 signal it, but they do not mutate its runtime data structures directly.
 
-Local watcher events, remote delta batches, websocket wakes, and full
-reconciliation results are scheduler hints only. After debounce or wake, watch
+Local watcher events, remote delta batches, websocket wakes, and full remote
+refresh results are scheduler hints only. After debounce or wake, watch
 mode refreshes current truth, runs SQL comparison/reconciliation, rebuilds the
 current actionable set in Go, reconciles durable retry/blocker state, and then
 admits runnable actions.
