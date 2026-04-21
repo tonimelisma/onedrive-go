@@ -223,7 +223,7 @@ func (rt *watchRuntime) initWatchInfra(
 	maintenanceTicker := rt.engine.newTicker(maintenanceInterval)
 
 	// Arm retrier timer from DB — picks up items from prior crash or prior pass.
-	rt.kickRetrySweepNow()
+	rt.kickRetryHeldReleaseNow()
 	rt.armTrialTimer()
 
 	pipe := &watchPipeline{

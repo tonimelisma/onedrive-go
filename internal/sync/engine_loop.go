@@ -444,7 +444,7 @@ func (rt *watchRuntime) runBootstrapStep(
 		rt.replaceOutbox(nextOutbox)
 		return done, err
 	case <-rt.trialTimerChan():
-		released, err := rt.runTrialDispatch(ctx)
+		released, err := rt.releaseDueHeldTrialsNow(ctx)
 		if err != nil {
 			return false, err
 		}
@@ -452,7 +452,7 @@ func (rt *watchRuntime) runBootstrapStep(
 		rt.replaceOutbox(nextOutbox)
 		return false, err
 	case <-rt.retryTimerChan():
-		released, err := rt.runRetrierSweep(ctx)
+		released, err := rt.releaseDueHeldRetriesNow(ctx)
 		if err != nil {
 			return false, err
 		}

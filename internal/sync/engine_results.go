@@ -14,10 +14,10 @@ type failureSummaryEntry struct {
 
 const fallbackFailureSummaryIssueType = "transient_failure"
 
-// armRetryTimer arms the retry timer for the next retrier sweep. Queries
-// the earliest held retry deadline from the current runtime and sets the timer. If the
-// retry timer channel is already signaled (non-blocking send to buffered(1)
-// channel), the next owning loop iteration processes it.
+// armRetryTimer arms the retry timer for the next held-retry release. It
+// queries the earliest held retry deadline from the current runtime and sets
+// the timer. If the retry timer channel is already signaled (non-blocking send
+// to buffered(1) channel), the next owning loop iteration processes it.
 func (rt *watchRuntime) armRetryTimer() {
 	earliest, ok := rt.earliestHeldRetryAt()
 	if !ok {
@@ -27,7 +27,7 @@ func (rt *watchRuntime) armRetryTimer() {
 
 	delay := earliest.Sub(rt.engine.nowFunc())
 	if delay <= 0 {
-		rt.kickRetrySweepNow()
+		rt.kickRetryHeldReleaseNow()
 		return
 	}
 
@@ -37,7 +37,7 @@ func (rt *watchRuntime) armRetryTimer() {
 	})
 	rt.resetRetryTimer(rt.engine.afterFunc(delay, func() {
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryTimerFired})
-		rt.kickRetrySweepNow()
+		rt.kickRetryHeldReleaseNow()
 	}))
 }
 
@@ -71,10 +71,11 @@ func (rt *watchRuntime) stopRetryTimer() {
 	rt.resetRetryTimer(nil)
 }
 
-// kickRetrySweepNow is the single immediate wakeup path for the watch-mode
-// retrier. Centralizing the non-blocking send keeps retry timer ownership
-// explicit and avoids scattering direct channel writes across the engine.
-func (rt *watchRuntime) kickRetrySweepNow() {
+// kickRetryHeldReleaseNow is the single immediate wakeup path for the
+// watch-mode held-retry release loop. Centralizing the non-blocking send keeps
+// retry timer ownership explicit and avoids scattering direct channel writes
+// across the engine.
+func (rt *watchRuntime) kickRetryHeldReleaseNow() {
 	select {
 	case rt.retryTimerCh <- struct{}{}:
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryKicked})

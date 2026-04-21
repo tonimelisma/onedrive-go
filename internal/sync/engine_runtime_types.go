@@ -128,7 +128,7 @@ type watchTimerState struct {
 	trialTimer syncTimer
 	trialCh    chan struct{}
 
-	// Retry timer — watch loop retrier sweeps retry_work on each tick.
+	// Retry timer — the watch loop releases due held retries on each tick.
 	retryTimer   syncTimer
 	retryTimerCh chan struct{} // persistent, buffered(1)
 }
