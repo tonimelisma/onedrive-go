@@ -150,7 +150,7 @@ func (rt *watchRuntime) handleDispatchEvent(
 			return false, true, outcome.terminateErr
 		}
 
-		nextOutbox, err := rt.reducePublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), outcome.dispatched)
+		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), outcome.dispatched)
 		if err != nil {
 			rt.clearSyncStatusBatch()
 			rt.completeOutboxAsShutdown(nextOutbox)
@@ -320,14 +320,24 @@ func (rt *watchRuntime) handleMaintenanceEvent(
 		if rt.hasPendingDirtyReplan() {
 			return true, nil
 		}
-		rt.appendOutbox(rt.runTrialDispatch(ctx))
-		return true, nil
+		released, err := rt.runTrialDispatch(ctx)
+		if err != nil {
+			return true, err
+		}
+		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), released)
+		rt.replaceOutbox(nextOutbox)
+		return true, err
 	case watchEventRetryTick:
 		if rt.hasPendingDirtyReplan() {
 			return true, nil
 		}
-		rt.appendOutbox(rt.runRetrierSweep(ctx))
-		return true, nil
+		released, err := rt.runRetrierSweep(ctx)
+		if err != nil {
+			return true, err
+		}
+		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), released)
+		rt.replaceOutbox(nextOutbox)
+		return true, err
 	case watchEventContextCanceled:
 		rt.beginWatchDrain(ctx, p)
 		return true, nil

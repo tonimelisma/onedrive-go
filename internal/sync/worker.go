@@ -250,7 +250,7 @@ func (wp *WorkerPool) Completions() <-chan ActionCompletion {
 // the ActionCompletion is silently dropped. The engine handles shutdown via
 // context cancellation on the result-processing loop (resultShutdown classification).
 func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome *ActionOutcome, actionErr error) {
-	r := completionFromTrackedAction(ta, outcome, actionErr)
+	r := actionCompletionFromTrackedAction(ta, outcome, actionErr)
 
 	select {
 	case wp.completions <- r:

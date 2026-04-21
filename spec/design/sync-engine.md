@@ -25,6 +25,12 @@ The target engine persists durable status through three authorities:
 
 It does not use a mixed failure table as durable control state.
 
+`retry_work` and `block_scopes` are engine-owned control state, not
+best-effort diagnostics. If the runtime cannot durably record or transition
+required retry/scope state after an exact action result or admission decision,
+it fails closed and terminates the current runtime. Product-facing
+`sync_status` writes remain best-effort.
+
 `observation_findings.go` is the engine-owned constructor boundary for
 observation batches. Engine orchestration chooses when to reconcile those
 batches durably or into a scratch planning store, but callers should not
@@ -52,7 +58,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Behavior | Evidence |
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
-| One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestRunRetrierSweep_ReleasesHeldRetryEntriesOnly`, `TestRunTrialDispatch_ReleasesFirstHeldScopeCandidateAsTrial`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
+| One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestRunRetrierSweep_ReleasesHeldRetryEntriesOnly`, `TestRunTrialDispatch_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchMaintenanceEvent_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunBootstrapStep_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 
 ## Construction
 
@@ -186,6 +192,11 @@ not rebuild subset plans, do not compute dependency closure, and do not
 revalidate stale rows. Stale-row cleanup belongs only to normal
 prepare/reconcile.
 
+Released held work always re-enters publication reduction before any worker
+dispatch. Timer-released `ActionUpdateSynced` and `ActionCleanup` actions stay
+engine-side, commit through the store, and unlock dependents without ever
+crossing into the worker pool.
+
 Action completion drain stays inside the engine boundary. When a completion
 unlocks publication-only dependents, watch mode commits those mutations
 synchronously and keeps draining them on the engine/store side until concrete
@@ -253,6 +264,9 @@ The engine classifies results into:
   a later observation pass may record the corresponding durable current-truth
   issue; planning suppression plus retry pruning collapses that overlap on the
   next normal plan materialization
+- durable `retry_work` / `block_scopes` mutations are fail-closed runtime
+  control writes; if the engine cannot persist or transition them, it stops
+  the current runtime instead of logging and continuing
 
 ### Runtime admission model
 

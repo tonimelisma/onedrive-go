@@ -77,9 +77,17 @@ func runResultDrainLoopIdleForTest(
 		}
 		return appendDrainOutcome(rt, ctx, bl, nil, &workerResult)
 	case <-rt.trialTimerChan():
-		return rt.runTrialDispatch(ctx), false
+		released, err := rt.runTrialDispatch(ctx)
+		mustNoDrainLoopError(err)
+		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, bl, nil, released)
+		mustNoDrainLoopError(err)
+		return nextOutbox, false
 	case <-rt.retryTimerChan():
-		return rt.runRetrierSweep(ctx), false
+		released, err := rt.runRetrierSweep(ctx)
+		mustNoDrainLoopError(err)
+		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, bl, nil, released)
+		mustNoDrainLoopError(err)
+		return nextOutbox, false
 	case <-ctx.Done():
 		return nil, true
 	}
@@ -101,9 +109,17 @@ func runResultDrainLoopWithOutboxForTest(
 		}
 		return appendDrainOutcome(rt, ctx, bl, outbox, &workerResult)
 	case <-rt.trialTimerChan():
-		return append(outbox, rt.runTrialDispatch(ctx)...), false
+		released, err := rt.runTrialDispatch(ctx)
+		mustNoDrainLoopError(err)
+		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, bl, outbox, released)
+		mustNoDrainLoopError(err)
+		return nextOutbox, false
 	case <-rt.retryTimerChan():
-		return append(outbox, rt.runRetrierSweep(ctx)...), false
+		released, err := rt.runRetrierSweep(ctx)
+		mustNoDrainLoopError(err)
+		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, bl, outbox, released)
+		mustNoDrainLoopError(err)
+		return nextOutbox, false
 	case <-ctx.Done():
 		return outbox, true
 	}
@@ -121,7 +137,15 @@ func appendDrainOutcome(
 		return outbox, true
 	}
 
-	return append(outbox, outcome.dispatched...), false
+	nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, bl, outbox, outcome.dispatched)
+	mustNoDrainLoopError(err)
+	return nextOutbox, false
+}
+
+func mustNoDrainLoopError(err error) {
+	if err != nil {
+		panic(err)
+	}
 }
 
 // readReadyAction reads one TrackedAction from the ready channel with a
