@@ -107,6 +107,41 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 	assert.Equal(t, []string{"/y.txt"}, info.Conditions[2].Paths)
 }
 
+// Validates: R-2.10.47
+func TestBuildStatusConditionJSON_UsesCliOwnedPresentationBoundary(t *testing.T) {
+	t.Parallel()
+
+	groups := buildStatusConditionJSON(&syncengine.DriveStatusSnapshot{
+		ObservationIssues: []syncengine.ObservationIssueRow{
+			{Path: "/bad:name.txt", IssueType: syncengine.IssueInvalidFilename},
+		},
+		BlockScopes: []*syncengine.BlockScope{
+			{
+				Key:           syncengine.SKPermRemoteWrite("Shared/Docs"),
+				BlockedAt:     time.Unix(0, 0).UTC(),
+				TrialInterval: time.Minute,
+				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
+			},
+		},
+		BlockedRetryWork: []syncengine.RetryWorkRow{
+			{Path: "Shared/Docs/a.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+			{Path: "Shared/Docs/b.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+			{Path: "Shared/Docs/c.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+		},
+	}, false, 2)
+
+	require.Len(t, groups, 2)
+	assert.Equal(t, "SHARED FOLDER WRITES BLOCKED", groups[0].Title)
+	assert.Equal(t, "Shared/Docs", groups[0].Scope)
+	assert.Equal(t, statusScopeDirectory, groups[0].ScopeKind)
+	assert.Equal(t, []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt"}, groups[0].Paths)
+
+	assert.Equal(t, "INVALID FILENAME", groups[1].Title)
+	assert.Empty(t, groups[1].Scope)
+	assert.Empty(t, groups[1].ScopeKind)
+	assert.Equal(t, []string{"/bad:name.txt"}, groups[1].Paths)
+}
+
 func TestBuildSyncStateInfo_NilSnapshotUsesDefaults(t *testing.T) {
 	t.Parallel()
 

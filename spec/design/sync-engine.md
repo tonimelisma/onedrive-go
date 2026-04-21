@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/watch_summary.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_policy.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
+GOVERNS: internal/sync/engine*.go, internal/sync/watch_*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_policy.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
 Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
@@ -82,6 +82,15 @@ Permission handling is intentionally split three ways:
 Normal completion handling and trial reclassification both reuse the same
 engine helper to gather permission evidence and call `DecidePermissionOutcome`.
 That shared helper decides once; it does not persist anything itself.
+
+Permission timing follows the policy result, not the probe:
+
+- file-scoped permission failures persist delayed `retry_work` and arm the
+  ordinary retry timer in watch mode
+- boundary-scoped permission failures persist blocked `retry_work` and any
+  timed write scope they own, but they do not arm the ordinary retry timer
+- known-active-boundary outcomes are a true no-op for durable state and timer
+  arming because the boundary is already active
 
 ## One-Shot Sync
 

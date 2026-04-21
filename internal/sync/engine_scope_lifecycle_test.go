@@ -2,6 +2,8 @@ package sync
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -117,6 +119,56 @@ func TestScopeController_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t 
 	assert.Equal(t, "disk.txt", retryRows[0].Path)
 	assert.Equal(t, SKDiskLocal(), retryRows[0].ScopeKey)
 	assert.True(t, retryRows[0].Blocked)
+}
+
+// Validates: R-2.10.5, R-2.10.33, R-2.14.1
+func TestScopeController_ApplyTrialReclassification_LocalFilePermissionReusesPermissionOutcomePath(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	controller := testEngineFlow(t, eng).scopeController()
+	scopeKey := SKService()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
+	seedObservationIssueForTest(t, eng.baseline, "keep.txt", IssueInvalidFilename, ScopeKey{})
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		Path:          "accessible/file.txt",
+		ActionType:    ActionDownload,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      scopeKey,
+		Blocked:       true,
+		AttemptCount:  1,
+		LastError:     "blocked",
+		FirstSeenAt:   1,
+		LastSeenAt:    2,
+	}))
+
+	controller.applyTrialReclassification(t.Context(), rt, &ResultDecision{
+		PermissionFlow: permissionFlowLocalPermission,
+	}, &ActionCompletion{
+		Path:          "accessible/file.txt",
+		ActionType:    ActionDownload,
+		Err:           os.ErrPermission,
+		ErrMsg:        "permission denied",
+		TrialScopeKey: scopeKey,
+	}, nil)
+
+	assert.True(t, rt.hasRetryTimer(), "trial reclassification should reuse the file-failure permission outcome path")
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "accessible/file.txt", retryRows[0].Path)
+	assert.True(t, retryRows[0].ScopeKey.IsZero())
+	assert.False(t, retryRows[0].Blocked)
+	assert.NotZero(t, retryRows[0].NextRetryAt)
+
+	observationIssues, err := eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	require.Len(t, observationIssues, 1)
+	assert.Equal(t, "keep.txt", observationIssues[0].Path)
+	assert.Equal(t, IssueInvalidFilename, observationIssues[0].IssueType)
 }
 
 // Validates: R-2.10.5

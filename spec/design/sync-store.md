@@ -125,6 +125,11 @@ batch manages, and they do not re-infer managed issue types from
 set reconciliation: current managed observation issues, desired managed
 observation issues, exact deletes, exact upserts.
 
+Derived truth inspection stays read-only and authority-based. Observation-owned
+boundary issues tagged with read-scope keys suppress descendant truth through
+`ReadPathTruthStatus`; timed `block_scopes` for write blockers do not change
+truth availability on their own.
+
 ### Admin writes
 
 Administrative write helpers are split by authority:

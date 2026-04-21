@@ -83,6 +83,14 @@ func TestScopeKey_CoveredPath(t *testing.T) {
 	assert.Empty(t, SKService().CoveredPath())
 }
 
+// Validates: R-2.10.33
+func TestScopeKey_CoveredPathMatchesFamilyAccessors(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, SKPermLocalWrite("/docs").CoveredPath(), SKPermLocalWrite("/docs").DirPath())
+	assert.Equal(t, SKPermRemoteWrite("/readonly").CoveredPath(), SKPermRemoteWrite("/readonly").RemotePath())
+}
+
 func TestScopeKey_PersistsInBlockScopes(t *testing.T) {
 	t.Parallel()
 
