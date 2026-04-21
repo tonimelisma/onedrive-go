@@ -5,16 +5,6 @@ import (
 	"time"
 )
 
-func isTimedBlockScopeKey(key ScopeKey) bool {
-	if key.IsZero() {
-		return false
-	}
-	if key.IsPermLocalRead() || key.IsPermRemoteRead() {
-		return false
-	}
-	return !DescribeScopeKey(key).IsZero()
-}
-
 // BlockScope represents one active timed shared blocker as persisted in
 // block_scopes for restart, admission, and read-side projections.
 type BlockScope struct {
@@ -22,14 +12,6 @@ type BlockScope struct {
 	BlockedAt     time.Time     // when the block was created
 	TrialInterval time.Duration // current interval between trial actions
 	NextTrialAt   time.Time     // when to dispatch the next trial
-}
-
-// CoveredPath returns the scope path encoded in the scope key when available.
-func (block *BlockScope) CoveredPath() string {
-	if block == nil {
-		return ""
-	}
-	return DescribeScopeKey(block.Key).ScopePath()
 }
 
 // ActiveScope is the watch-runtime working-set shape. It keeps only the
@@ -59,7 +41,7 @@ func blockScopeRowFromActiveScope(scope ActiveScope) (*BlockScope, error) {
 	if DescribeScopeKey(scope.Key).IsZero() {
 		return nil, fmt.Errorf("sync: unknown scope key %q", scope.Key.String())
 	}
-	if !isTimedBlockScopeKey(scope.Key) {
+	if !scope.Key.PersistsInBlockScopes() {
 		return nil, fmt.Errorf("sync: scope key %q is not a timed block scope", scope.Key.String())
 	}
 

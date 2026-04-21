@@ -228,7 +228,7 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status retrying count: %w", err)
 	}
 
-	snapshot.ObservationIssues, err = queryObservationIssueRowsDB(ctx, i.db)
+	snapshot.ObservationIssues, err = queryObservationIssueRowsWithRunner(ctx, i.db)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status observation issues: %w", err)
 	}
@@ -236,7 +236,7 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status block scopes: %w", err)
 	}
-	snapshot.BlockedRetryWork, err = queryBlockedRetryWorkRowsDB(ctx, i.db)
+	snapshot.BlockedRetryWork, err = queryBlockedRetryWorkRowsWithRunner(ctx, i.db)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status blocked retry_work: %w", err)
 	}
@@ -254,7 +254,7 @@ func (i *storeInspector) ReadPathTruthStatus(
 		return map[string]PathTruthStatus{}, nil
 	}
 
-	observationIssues, err := queryObservationIssueRowsDB(ctx, i.db)
+	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, i.db)
 	if err != nil {
 		return nil, fmt.Errorf("read path truth status observation issues: %w", err)
 	}
