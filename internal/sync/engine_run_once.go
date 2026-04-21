@@ -101,6 +101,7 @@ func (e *Engine) runOnceDryRun(
 
 	return e.completeDryRunReport(start, prepared.report), nil
 }
+
 func (e *Engine) prepareRunOnceBaseline(
 	ctx context.Context,
 	runner *oneShotRunner,
