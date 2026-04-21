@@ -28,7 +28,7 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 		return
 	}
 
-	signature, breakdown := watchConditionSummarySignature(summary)
+	signature := watchConditionSummaryFingerprint(summary)
 	if signature == rt.lastSummarySignature {
 		return
 	}
@@ -38,18 +38,24 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 
 	rt.engine.logger.Warn("sync conditions",
 		slog.Int("total", totalConditions),
-		slog.String("breakdown", breakdown),
+		slog.String("breakdown", formatWatchConditionBreakdown(summary)),
 	)
 }
 
-func watchConditionSummarySignature(summary watchConditionSummary) (string, string) {
+// watchConditionSummaryFingerprint is the churn-suppression key for one raw
+// summary. Human phrasing stays separate so log copy can evolve without
+// redefining the raw summary boundary.
+func watchConditionSummaryFingerprint(summary watchConditionSummary) string {
+	return fmt.Sprintf("%d|%s", summary.ConditionTotal, formatWatchConditionBreakdown(summary))
+}
+
+func formatWatchConditionBreakdown(summary watchConditionSummary) string {
 	parts := make([]string, 0, len(summary.Counts))
 	for i := range summary.Counts {
 		parts = append(parts, fmt.Sprintf("%d %s", summary.Counts[i].Count, summary.Counts[i].Key))
 	}
 
-	breakdown := strings.Join(parts, ", ")
-	return fmt.Sprintf("%d|%s", summary.ConditionTotal, breakdown), breakdown
+	return strings.Join(parts, ", ")
 }
 
 func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup) {

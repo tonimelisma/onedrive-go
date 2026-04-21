@@ -7,10 +7,104 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
+const (
+	statusScopeAccount   = "account"
+	statusScopeDrive     = "drive"
+	statusScopeDirectory = "directory"
+	statusScopeService   = "service"
+	statusScopeDisk      = "disk"
+)
+
 type statusConditionDescriptor struct {
 	Title  string
 	Reason string
 	Action string
+}
+
+// buildStatusConditionJSON is the CLI-owned presentation boundary for durable
+// sync conditions. Sync owns raw snapshot reads and grouping; CLI owns user
+// phrasing, scope-kind labels, ordering, truncation, and JSON shaping.
+func buildStatusConditionJSON(
+	snapshot *syncengine.DriveStatusSnapshot,
+	verbose bool,
+	examplesLimit int,
+) []statusConditionJSON {
+	if snapshot == nil {
+		return nil
+	}
+
+	groups := syncengine.ProjectStoredConditionGroups(snapshot)
+	if len(groups) == 0 {
+		return nil
+	}
+
+	output := make([]statusConditionJSON, 0, len(groups))
+	for i := range groups {
+		group := groups[i]
+		descriptor := describeStatusCondition(group.ConditionKey)
+		output = append(output, statusConditionJSON{
+			ConditionKey:  string(group.ConditionKey),
+			ConditionType: group.ConditionType,
+			Title:         descriptor.Title,
+			Reason:        descriptor.Reason,
+			Action:        descriptor.Action,
+			ScopeKind:     statusScopeKindFromScopeKey(group.ScopeKey),
+			Scope:         group.ScopeKey.Humanize(),
+			Count:         group.Count,
+			Paths:         sampleStrings(group.Paths, verbose, examplesLimit),
+		})
+	}
+
+	sortStatusConditions(output)
+
+	return output
+}
+
+func conditionTotal(groups []statusConditionJSON) int {
+	total := 0
+	for i := range groups {
+		total += groups[i].Count
+	}
+
+	return total
+}
+
+func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
+	if scopeKey.IsZero() {
+		return ""
+	}
+
+	switch scopeKey.Kind {
+	case syncengine.ScopeThrottleTarget:
+		return statusScopeDrive
+	case syncengine.ScopeService:
+		return statusScopeService
+	case syncengine.ScopeQuotaOwn:
+		return statusScopeDrive
+	case syncengine.ScopePermRemoteRead, syncengine.ScopePermRemoteWrite:
+		return statusScopeDirectory
+	case syncengine.ScopePermDirRead, syncengine.ScopePermDirWrite:
+		return statusScopeDirectory
+	case syncengine.ScopeDiskLocal:
+		return statusScopeDisk
+	default:
+		return "file"
+	}
+}
+
+func sampleStrings(values []string, verbose bool, examplesLimit int) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	if verbose || len(values) <= examplesLimit {
+		out := make([]string, len(values))
+		copy(out, values)
+		return out
+	}
+
+	out := make([]string, examplesLimit)
+	copy(out, values[:examplesLimit])
+	return out
 }
 
 func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescriptor {
