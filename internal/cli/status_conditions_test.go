@@ -167,7 +167,7 @@ func TestStatusScopeKindFromScopeKey_CoversKinds(t *testing.T) {
 	assert.Equal(t, statusScopeDirectory, statusScopeKindFromScopeKey(syncengine.SKPermRemoteWrite("Shared/Docs")))
 	assert.Equal(t, statusScopeDirectory, statusScopeKindFromScopeKey(syncengine.SKPermLocalWrite("/tmp")))
 	assert.Equal(t, statusScopeDisk, statusScopeKindFromScopeKey(syncengine.SKDiskLocal()))
-	assert.Equal(t, "file", statusScopeKindFromScopeKey(syncengine.ScopeKey{Kind: syncengine.ScopeKeyKind(99)}))
+	assert.Equal(t, statusScopeFile, statusScopeKindFromScopeKey(syncengine.ScopeKey{Kind: syncengine.ScopeKeyKind(99)}))
 }
 
 func TestSampleStrings_CoversVerboseAndTruncation(t *testing.T) {

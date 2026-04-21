@@ -191,7 +191,7 @@ func (m *SyncStore) upsertObservationIssuesTx(
 func deleteObservationIssuesTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	deletes []observationIssueDelete,
+	deletes []managedObservationIssueKey,
 ) error {
 	if len(deletes) == 0 {
 		return nil

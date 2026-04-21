@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 )
 
@@ -43,10 +44,20 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 }
 
 // watchConditionSummaryFingerprint is the churn-suppression key for one raw
-// summary. Human phrasing stays separate so log copy can evolve without
-// redefining the raw summary boundary.
+// summary. It stays raw-only so log copy can evolve without redefining churn
+// suppression.
 func watchConditionSummaryFingerprint(summary watchConditionSummary) string {
-	return fmt.Sprintf("%d|%s", summary.ConditionTotal, formatWatchConditionBreakdown(summary))
+	var builder strings.Builder
+	builder.WriteString(strconv.Itoa(summary.ConditionTotal))
+
+	for i := range summary.Counts {
+		builder.WriteByte('|')
+		builder.WriteString(string(summary.Counts[i].Key))
+		builder.WriteByte('=')
+		builder.WriteString(strconv.Itoa(summary.Counts[i].Count))
+	}
+
+	return builder.String()
 }
 
 func formatWatchConditionBreakdown(summary watchConditionSummary) string {
