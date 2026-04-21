@@ -174,6 +174,37 @@ func TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities(t *te
 	assert.True(t, statuses["Private/sub/file.txt"].Local.ScopeKey.IsZero())
 }
 
+// Validates: R-2.1.3, R-2.10.4
+func TestReadPathTruthStatus_DerivesReadBoundaryDescendantsFromObservationIssues(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+	scopeKey := SKPermLocalRead("Private")
+
+	seedObservationIssueRowForTest(t, store, &ObservationIssue{
+		Path:       "Private",
+		DriveID:    driveID,
+		ActionType: ActionDownload,
+		IssueType:  IssueLocalReadDenied,
+		Error:      "directory not accessible",
+		ScopeKey:   scopeKey,
+	})
+
+	dbPath := syncStorePathForStoreScopeTest(t, store)
+	statuses, err := ReadPathTruthStatus(ctx, dbPath, testLogger(t), []string{
+		"Private/sub/file.txt",
+	})
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, statuses["Private/sub/file.txt"].Local.Availability)
+	assert.Equal(t, PathTruthSourceObservationIssue, statuses["Private/sub/file.txt"].Local.Source)
+	assert.Equal(t, IssueLocalReadDenied, statuses["Private/sub/file.txt"].Local.IssueType)
+	assert.Equal(t, scopeKey, statuses["Private/sub/file.txt"].Local.ScopeKey)
+}
+
 func TestFinalizeInspectorRead_PreservesSuccessfulReadOnCloseError(t *testing.T) {
 	t.Parallel()
 

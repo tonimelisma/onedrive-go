@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -139,4 +140,42 @@ func TestPermissionApply_ReadBoundaryScope_DoesNotPersistBlockScopeRow(t *testin
 	blockScopes, err := eng.baseline.ListBlockScopes(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, blockScopes, "read-boundary outcomes must not materialize block_scopes rows")
+}
+
+// Validates: R-2.10.33, R-2.14.1
+func TestPermissionApply_KnownActiveBoundary_DoesNotPersistOrArmRetryTimer(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	controller := testEngineFlow(t, eng).scopeController()
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
+
+	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:           scopeKey,
+		BlockedAt:     time.Unix(1, 0),
+		TrialInterval: time.Minute,
+		NextTrialAt:   time.Unix(61, 0),
+	}))
+
+	matched := controller.applyPermissionOutcome(t.Context(), rt, permissionFlowRemote403, &PermissionOutcome{
+		Matched:      true,
+		Kind:         permissionOutcomeNone,
+		BoundaryPath: "Shared/Docs",
+		TriggerPath:  "Shared/Docs/file.txt",
+	})
+
+	require.True(t, matched)
+	assert.False(t, rt.hasRetryTimer())
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+
+	blockScopes, err := eng.baseline.ListBlockScopes(t.Context())
+	require.NoError(t, err)
+	require.Len(t, blockScopes, 1)
+	assert.Equal(t, scopeKey, blockScopes[0].Key)
+
+	observationIssues, err := eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, observationIssues)
 }

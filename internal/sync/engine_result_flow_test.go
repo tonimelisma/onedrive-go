@@ -1,15 +1,19 @@
 package sync
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // Validates: R-2.10.5
@@ -210,6 +214,103 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionArmsRetryTimer
 	require.Len(t, retryRows, 1)
 	assert.False(t, retryRows[0].Blocked)
 	assert.True(t, rt.hasRetryTimer(), "file-level permission retry_work should arm the watch retry timer")
+}
+
+// Validates: R-2.10.5, R-2.10.33, R-2.14.1
+func TestEngineFlow_ProcessNormalDecision_RemoteBoundaryPermissionDoesNotArmRetryTimerInWatchMode(t *testing.T) {
+	t.Parallel()
+
+	const sharedRootItemID = "shared-root-id"
+
+	eng, _ := newTestEngine(t, &engineMockClient{
+		listItemPermissionsFn: func(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error) {
+			assert.Equal(t, sharedRootItemID, itemID)
+			return []graph.Permission{{
+				Roles: []string{"read"},
+			}}, nil
+		},
+	})
+	eng.rootItemID = sharedRootItemID
+	eng.permHandler.rootItemID = sharedRootItemID
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+
+	r := &ActionCompletion{
+		Path:       "Shared/file.txt",
+		ActionType: ActionUpload,
+		HTTPStatus: http.StatusForbidden,
+		ErrMsg:     "folder is read-only",
+	}
+
+	outcome := flow.processNormalDecision(t.Context(), rt, &ResultDecision{
+		Class:          errclass.ClassActionable,
+		ConditionKey:   ConditionRemoteWriteDenied,
+		ConditionType:  IssueRemoteWriteDenied,
+		PermissionFlow: permissionFlowRemote403,
+	}, nil, r, &Baseline{})
+
+	assert.False(t, outcome.terminate)
+	require.NoError(t, outcome.terminateErr)
+	assert.Empty(t, outcome.dispatched)
+	assert.False(t, rt.hasRetryTimer(), "boundary-blocked permission failures should not arm the ordinary retry timer")
+	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "Shared/file.txt", retryRows[0].Path)
+	assert.Equal(t, SKPermRemoteWrite(""), retryRows[0].ScopeKey)
+	assert.True(t, retryRows[0].Blocked)
+	assert.Zero(t, retryRows[0].NextRetryAt)
+
+	blockScopes, err := eng.baseline.ListBlockScopes(t.Context())
+	require.NoError(t, err)
+	require.Len(t, blockScopes, 1)
+	assert.Equal(t, SKPermRemoteWrite(""), blockScopes[0].Key)
+}
+
+// Validates: R-2.10.33, R-2.14.1
+func TestEngineFlow_ProcessNormalDecision_KnownRemoteBoundaryNoOpDoesNotPersistOrArmRetryTimer(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+	scopeKey := SKPermRemoteWrite("Shared")
+
+	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:           scopeKey,
+		BlockedAt:     eng.nowFunc().Add(-time.Minute),
+		TrialInterval: time.Minute,
+		NextTrialAt:   eng.nowFunc(),
+	}))
+
+	r := &ActionCompletion{
+		Path:       "Shared/file.txt",
+		ActionType: ActionUpload,
+		HTTPStatus: http.StatusForbidden,
+		ErrMsg:     "still read-only",
+	}
+
+	outcome := flow.processNormalDecision(t.Context(), rt, &ResultDecision{
+		Class:          errclass.ClassActionable,
+		ConditionKey:   ConditionRemoteWriteDenied,
+		ConditionType:  IssueRemoteWriteDenied,
+		PermissionFlow: permissionFlowRemote403,
+	}, nil, r, &Baseline{})
+
+	assert.False(t, outcome.terminate)
+	require.NoError(t, outcome.terminateErr)
+	assert.Empty(t, outcome.dispatched)
+	assert.False(t, rt.hasRetryTimer())
+	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+
+	blockScopes, err := eng.baseline.ListBlockScopes(t.Context())
+	require.NoError(t, err)
+	require.Len(t, blockScopes, 1)
+	assert.Equal(t, scopeKey, blockScopes[0].Key)
 }
 
 // Validates: R-2.10.5
