@@ -229,11 +229,11 @@ func formatDetailedPerfTransfers(snapshot *perf.Snapshot) string {
 
 func formatDetailedPerfPhases(snapshot *perf.Snapshot) string {
 	return fmt.Sprintf(
-		"observe %s, plan %s, execute %s, reconcile %s",
+		"observe %s, plan %s, execute %s, refresh %s",
 		formatPerfElapsed(snapshot.ObserveTimeMS),
 		formatPerfElapsed(snapshot.PlanTimeMS),
 		formatPerfElapsed(snapshot.ExecuteTimeMS),
-		formatPerfElapsed(snapshot.ReconcileTimeMS),
+		formatPerfElapsed(snapshot.RefreshTimeMS),
 	)
 }
 

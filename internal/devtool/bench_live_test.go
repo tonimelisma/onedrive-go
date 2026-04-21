@@ -333,11 +333,11 @@ func TestPrepareAndMeasureCatchupSampleRestoresFixtureAndReadsPerfSummary(t *tes
 
 			require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.Files))
 			require.NoError(t, writeBenchLivePerfLog(logPath, &benchPerfSummary{
-				DurationMS:        42,
-				Result:            "success",
-				DownloadCount:     2,
-				DownloadBytes:     128,
-				ReconcileRunCount: 1,
+				DurationMS:      42,
+				Result:          "success",
+				DownloadCount:   2,
+				DownloadBytes:   128,
+				RefreshRunCount: 1,
 			}))
 			return benchMeasuredProcess{
 				ElapsedMicros: 1500,
@@ -423,11 +423,11 @@ func TestRunSampleReturnsFixtureFailureWhenRuntimeCleanupFails(t *testing.T) {
 
 			require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.Files))
 			require.NoError(t, writeBenchLivePerfLog(logPath, &benchPerfSummary{
-				DurationMS:        42,
-				Result:            "success",
-				DownloadCount:     1,
-				DownloadBytes:     64,
-				ReconcileRunCount: 1,
+				DurationMS:      42,
+				Result:          "success",
+				DownloadCount:   1,
+				DownloadBytes:   64,
+				RefreshRunCount: 1,
 			}))
 			//nolint:gosec // directories need execute bits; this test intentionally makes the directory read-only.
 			require.NoError(t, os.Chmod(spec.CWD, 0o500))
