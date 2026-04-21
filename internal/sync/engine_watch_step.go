@@ -29,6 +29,7 @@ const (
 type watchEvent struct {
 	kind          watchEventKind
 	batch         DirtyBatch
+	dispatched    *TrackedAction
 	completion    *ActionCompletion
 	skipped       []SkippedItem
 	refreshResult remoteRefreshResult
@@ -37,6 +38,7 @@ type watchEvent struct {
 
 type watchTransition struct {
 	consumeOutboxHead bool
+	markRunning       *TrackedAction
 	appendOutbox      []*TrackedAction
 	replaceOutbox     []*TrackedAction
 	replaceOutboxSet  bool
@@ -51,7 +53,7 @@ func (rt *watchRuntime) waitWatchEvent(ctx context.Context, p *watchPipeline) wa
 
 	select {
 	case dispatchCh <- nextAction:
-		return watchEvent{kind: watchEventDispatchReady}
+		return watchEvent{kind: watchEventDispatchReady, dispatched: nextAction}
 	case batch, ok := <-p.batchReady:
 		if !ok {
 			return watchEvent{kind: watchEventBatchClosed}
@@ -126,6 +128,7 @@ func (rt *watchRuntime) applyWatchTransition(
 	}
 
 	if transition.consumeOutboxHead {
+		rt.markRunning(transition.markRunning)
 		rt.consumeOutboxHead()
 	}
 	if transition.replaceOutboxSet {
@@ -149,7 +152,10 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 ) (watchTransition, bool, error) {
 	switch event.kind {
 	case watchEventDispatchReady:
-		return watchTransition{consumeOutboxHead: true}, true, nil
+		return watchTransition{
+			consumeOutboxHead: true,
+			markRunning:       event.dispatched,
+		}, true, nil
 	case watchEventBatchReady:
 		return watchTransition{
 			appendOutbox: rt.processDirtyBatch(ctx, event.batch, p.bl, p.mode, p.safety),

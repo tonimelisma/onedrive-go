@@ -43,13 +43,6 @@ type ExecutorConfig struct {
 	// driveops.WithDiskCheck when constructing the TransferManager.
 	transferMgr *driveops.TransferManager
 
-	// watchMode enables pre-upload eTag freshness checks. In watch mode,
-	// a local fsnotify event can trigger an upload before the remote
-	// observer has polled the collaborator's edit — the freshness check
-	// catches this race by comparing the remote eTag against the baseline
-	// before uploading.
-	watchMode bool
-
 	// Injectable for testing.
 	nowFunc                func() time.Time
 	hashFunc               func(filePath string) (string, error)
@@ -83,18 +76,6 @@ func NewExecutorConfig(
 	}
 
 	return cfg
-}
-
-// SetWatchMode enables or disables watch-mode-specific behavior. When enabled,
-// uploads perform a pre-flight eTag freshness check to prevent silently
-// overwriting concurrent remote changes (see executor_transfer.go).
-func (cfg *ExecutorConfig) SetWatchMode(enabled bool) {
-	cfg.watchMode = enabled
-}
-
-// IsWatchMode returns true if the executor is operating in watch mode.
-func (cfg *ExecutorConfig) IsWatchMode() bool {
-	return cfg.watchMode
 }
 
 // SetTransferMgr sets the transfer manager for unified download/upload with

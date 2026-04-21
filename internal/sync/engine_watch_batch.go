@@ -53,11 +53,11 @@ func (rt *watchRuntime) processDirtyBatch(
 	}
 	rt.engine.collector().RecordPlan(len(plan.Actions), rt.engine.since(planStart))
 
-	materializeErr := rt.materializeCurrentActionPlan(ctx, plan)
-	if materializeErr != nil {
+	reconcileErr := rt.reconcileDurablePlanState(ctx, plan)
+	if reconcileErr != nil {
 		rt.clearSyncStatusBatch()
-		rt.engine.logger.Error("watch action-state materialization failed, skipping dirty batch",
-			slog.String("error", materializeErr.Error()),
+		rt.engine.logger.Error("watch durable plan-state reconcile failed, skipping dirty batch",
+			slog.String("error", reconcileErr.Error()),
 		)
 		return nil
 	}
@@ -70,7 +70,7 @@ func (rt *watchRuntime) processDirtyBatch(
 
 	rt.deduplicateInFlight(plan)
 
-	dispatch, dispatched, err := rt.dispatchCurrentPlan(ctx, plan, bl, dispatchBatchOptions{})
+	dispatch, dispatched, err := rt.dispatchCurrentPlan(ctx, plan, bl)
 	if err != nil {
 		rt.clearSyncStatusBatch()
 		rt.engine.logger.Error("watch dispatch failed, skipping dirty batch",
@@ -86,23 +86,16 @@ func (rt *watchRuntime) processDirtyBatch(
 	return dispatch
 }
 
-type dispatchBatchOptions struct {
-	trialScopeKey ScopeKey
-	trialPath     string
-	trialWork     RetryWorkKey
-}
-
 func (rt *watchRuntime) dispatchCurrentPlan(
 	ctx context.Context,
 	plan *ActionPlan,
 	bl *Baseline,
-	opts dispatchBatchOptions,
 ) ([]*TrackedAction, bool, error) {
 	if plan == nil || len(plan.Actions) == 0 {
 		return nil, false, nil
 	}
 
-	return rt.dispatchBatchActions(ctx, plan, bl, opts)
+	return rt.dispatchBatchActions(ctx, plan, bl)
 }
 
 // deduplicateInFlight cancels in-flight actions for paths that appear in the
@@ -125,7 +118,6 @@ func (rt *watchRuntime) dispatchBatchActions(
 	ctx context.Context,
 	plan *ActionPlan,
 	bl *Baseline,
-	opts dispatchBatchOptions,
 ) ([]*TrackedAction, bool, error) {
 	// Invariant: Planner always builds Deps with len(Actions).
 	if len(plan.Actions) != len(plan.Deps) {
@@ -134,18 +126,6 @@ func (rt *watchRuntime) dispatchBatchActions(
 			slog.Int("deps", len(plan.Deps)),
 		)
 
-		return nil, false, nil
-	}
-
-	trialIndex := rt.findTrialActionIndex(plan, opts)
-	if !opts.trialScopeKey.IsZero() && trialIndex < 0 {
-		if err := rt.engine.baseline.ClearBlockedRetryWork(ctx, opts.trialWork, opts.trialScopeKey); err != nil {
-			rt.engine.logger.Debug("dispatchBatchActions: failed to clear stale trial failure",
-				slog.String("path", opts.trialWork.Path),
-				slog.String("scope_key", opts.trialScopeKey.String()),
-				slog.String("error", err.Error()),
-			)
-		}
 		return nil, false, nil
 	}
 
@@ -170,15 +150,7 @@ func (rt *watchRuntime) dispatchBatchActions(
 		}
 
 		if ta := rt.depGraph.Add(&plan.Actions[i], id, depIDs); ta != nil {
-			if trialIndex == i {
-				ta.IsTrial = true
-				ta.TrialScopeKey = opts.trialScopeKey
-			}
 			ready = append(ready, ta)
-		}
-
-		if trialIndex == i {
-			rt.depGraph.MarkTrial(id, opts.trialScopeKey)
 		}
 	}
 
@@ -197,56 +169,5 @@ func (rt *watchRuntime) dispatchBatchActions(
 	)
 	rt.engine.collector().RecordExecute(len(plan.Actions), 0, 0, 0)
 
-	if trialIndex >= 0 {
-		rt.engine.emitDebugEvent(engineDebugEvent{
-			Type:     engineDebugEventTrialDispatched,
-			ScopeKey: opts.trialScopeKey,
-			Path:     opts.trialPath,
-		})
-	}
-
 	return ready, true, nil
-}
-
-func (rt *watchRuntime) findTrialActionIndex(plan *ActionPlan, opts dispatchBatchOptions) int {
-	if opts.trialScopeKey.IsZero() {
-		return -1
-	}
-
-	for i := range plan.Actions {
-		action := &plan.Actions[i]
-		if action.Path != opts.trialWork.Path ||
-			action.OldPath != opts.trialWork.OldPath ||
-			action.Type != opts.trialWork.ActionType {
-			continue
-		}
-		if !opts.trialScopeKey.BlocksAction(
-			action.Path,
-			action.ThrottleTargetKey(),
-			action.Type,
-		) {
-			continue
-		}
-		return i
-	}
-
-	for i := range plan.Actions {
-		action := &plan.Actions[i]
-		if opts.trialScopeKey.BlocksAction(
-			action.Path,
-			action.ThrottleTargetKey(),
-			action.Type,
-		) {
-			return i
-		}
-	}
-
-	return -1
-}
-
-// setDispatch is retained as a coordination hook for tracker admission, but
-// dispatch no longer mutates durable remote_state lifecycle.
-func (flow *engineFlow) setDispatch(ctx context.Context, action *Action) {
-	_ = ctx
-	_ = action
 }

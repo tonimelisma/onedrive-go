@@ -106,15 +106,15 @@ Supporting outcome mutations should stay separate by owner:
   observation-owned issue set in one transaction, either as a full managed
   issue-type set or as an exact-path reconciliation for single-path observation
 - exact retry-work upsert/delete helpers
-- retry-work rearm helpers that reschedule an exact due row without inventing
+- retry-work rearm helpers that reschedule exact held work without inventing
   new planning or observation authority
 - scope release/discard/extend helpers that mutate `block_scopes` and linked
   blocked `retry_work` in one transaction
 - retry-resolution helpers that delete exact `retry_work` and return the
   resolved `retry_work` row for engine-owned cleanup decisions
 
-The store does not own a mixed failure table, failure-role transitions, or a
-store-owned grouped condition projection.
+The store does not own a mixed failure table, failure-role transitions,
+timer-time stale-row cleanup, or a store-owned grouped condition projection.
 
 Within that observation-findings boundary, pure reconciliation policy stays
 separate from SQLite mutation. The store computes the exact observation issue
@@ -172,9 +172,9 @@ Store maintenance must also keep `block_scopes` honest:
   invariant checks must fail loudly
 
 That liveness rule is shared with engine startup normalization and runtime
-scope rearm-or-discard handling. The store does not invent a separate notion
-of when an empty timed scope may survive; it applies the same "blocked work or
-discard" policy the engine uses.
+scope release/rearm handling. The store does not invent a separate notion of
+when an empty timed scope may survive; it applies the same "blocked work or
+discard" policy the engine uses during normal prepare/reconcile.
 
 Pruning an empty scope removes only the scope row. Ready `retry_work` that no
 longer depends on that scope must survive pruning; only explicit discard of a
@@ -196,6 +196,10 @@ second copy of parsed metadata in SQLite.
 `ScopeKey.PersistsInBlockScopes()` is the single sync-domain rule for whether a
 scope belongs in `block_scopes`. Timed blocked-work scopes persist there;
 observation-owned read boundaries do not.
+
+`retry_work` stores only exact held roots. Dependents blocked behind those
+roots remain dependency state in the current runtime; they are not persisted as
+cascade retry rows.
 
 Read-denied subtree boundaries do not persist as `block_scopes`. They remain
 tagged on `observation_issues` via `ScopeKey`, and truth-status reads derive

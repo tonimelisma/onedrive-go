@@ -12,10 +12,5 @@ func (flow *engineFlow) initPolicyControllers() {
 }
 
 func (flow *engineFlow) scopeController() *scopeController {
-	// engineFlow is copied by value into one-shot/watch runtimes and some
-	// same-package tests. Rebinding on access keeps the controller attached to
-	// the live run owner instead of a stale copy.
-	flow.initPolicyControllers()
-
 	return &flow.scopeCtrl
 }

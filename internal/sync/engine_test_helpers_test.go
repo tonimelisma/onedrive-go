@@ -261,7 +261,7 @@ func newFlowBackedTestEngine(engine *Engine) *testEngine {
 
 	return &testEngine{
 		Engine: engine,
-		flow:   &flow,
+		flow:   flow,
 	}
 }
 
@@ -312,7 +312,7 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 	flow := newEngineFlow(eng)
 	testEng := &testEngine{
 		Engine: eng,
-		flow:   &flow,
+		flow:   flow,
 	}
 	require.NoError(t, config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
 		account := config.CatalogAccount{
@@ -377,7 +377,7 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 	flow := newEngineFlow(eng)
 	testEng := &testEngine{
 		Engine: eng,
-		flow:   &flow,
+		flow:   flow,
 	}
 	require.NoError(t, config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
 		account := config.CatalogAccount{
@@ -422,7 +422,7 @@ func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *TrackedAction {
 	rt.dispatchCh = make(chan *TrackedAction, 1024)
 	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
 	eng.runtime = rt
-	eng.flow = &rt.engineFlow
+	eng.flow = rt.engineFlow
 
 	return rt.dispatchCh
 }
@@ -434,18 +434,6 @@ func newTestWatchState(t *testing.T, eng *testEngine) {
 	t.Helper()
 
 	_ = setupWatchEngine(t, eng)
-}
-
-func externalDBChangedForTest(t *testing.T, eng *testEngine, ctx context.Context) bool {
-	t.Helper()
-
-	return testWatchRuntime(t, eng).externalDBChanged(ctx)
-}
-
-func handleExternalChangesForTest(t *testing.T, eng *testEngine, ctx context.Context) {
-	t.Helper()
-
-	testWatchRuntime(t, eng).handleExternalChanges(ctx)
 }
 
 func setTestBlockScope(t *testing.T, eng *testEngine, block *BlockScope) {
@@ -475,7 +463,7 @@ func lookupTestWatchRuntime(eng *testEngine) (*watchRuntime, bool) {
 
 func lookupTestEngineFlow(eng *testEngine) (*engineFlow, bool) {
 	if eng.runtime != nil {
-		return &eng.runtime.engineFlow, true
+		return eng.runtime.engineFlow, true
 	}
 	if eng.flow != nil {
 		return eng.flow, true

@@ -6,11 +6,11 @@ Implements: R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4
 
 ## Overview
 
-Execution takes an `ActionPlan`, dispatches concrete side-effecting work
-through a dependency graph, runs workers, and reports one `ActionCompletion`
-per finished action. Publication-only planner actions are not executor work:
-the engine commits them directly through the store and feeds their synthetic
-completions back through the same dependency/completion path.
+Execution takes a prepared current runtime, dispatches concrete side-effecting
+work through a dependency graph, runs workers, and reports one
+`ActionCompletion` per finished action. Publication-only planner actions are
+not executor work: the engine reduces them directly through the store before
+workers see any concrete frontier.
 
 The executor does **not** own retry policy, durable failure classification, or
 scope lifecycle. It performs one action and reports the concrete outcome.
@@ -21,7 +21,9 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 - Does Not Own: planning, retry scheduling, scope activation policy, or store schema
 - Source of Truth: planner-produced `ActionPlan` plus the rooted capabilities injected into the executor
 - Allowed Side Effects: sync-root filesystem mutation, Graph transfer calls, and store success commits through the engine
-- Mutable Runtime Owner: Each executor instance owns only one action plan, one dependency graph, and one bounded worker pool for the lifetime of that execution pass. The engine owns higher-level admission, retries, and scope state.
+- Mutable Runtime Owner: workers own only action execution. The engine owns
+  runtime quiescence, held-work timing, admission, and dependency completion
+  decisions above the worker pool.
 - Error Boundary: Workers and executor helpers return concrete action outcomes and execution errors; the engine classifies those outcomes into retries, failures, scope transitions, and durable state changes.
 
 ## Verified By
@@ -43,12 +45,16 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 Workers run independent actions concurrently up to the configured worker limit.
 The engine owns the worker pool lifecycle and completion drain.
 
+The dependency graph is dependency-only. It no longer defines runtime
+quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,
+so the engine decides when the current runtime is quiescent based on outbox,
+running work, and due held entries.
+
 When the dependency graph releases `ActionUpdateSynced` or `ActionCleanup`,
 the engine does not spend worker capacity on them. It commits the matching
-baseline mutation synchronously, classifies the synthetic success/failure
-completion through the same engine-owned completion path, drains any further
-publication-only dependents on the engine/store side, and only then releases
-concrete dependents for worker dispatch.
+baseline mutation synchronously, marks that graph node successful, drains any
+further publication-only dependents, and only then releases concrete
+dependents for worker dispatch.
 
 ## Publication-Only Actions
 
@@ -75,6 +81,11 @@ Execution delegates transfer mechanics to `driveops.TransferManager`.
   authoritative remote item
 - true creates still use parent-path upload because no remote item identity
   exists yet
+
+Execution-time validation is always-on where it matters. Upload overwrite
+preflight and similar validation-before-mutate checks are executor-owned and
+apply in both one-shot and watch mode; they are not gated on a watch-only
+policy flag.
 
 ### Local deletes
 

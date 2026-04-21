@@ -90,8 +90,7 @@ func newWorkerTestSetup(t *testing.T) (
 	return cfg, mgr, syncRoot
 }
 
-// testDepGraphHelper wraps a DepGraph for worker tests, providing
-// the dispatch and completion channels that WorkerPool expects. Add sends
+// testDepGraphHelper wraps a DepGraph for worker tests. Add sends
 // dispatchable actions to dispatchCh; drainAndComplete calls dg.Complete and
 // sends newly-dispatchable dependents to dispatchCh.
 type testDepGraphHelper struct {
@@ -118,7 +117,8 @@ func (h *testDepGraphHelper) Add(action *Action, id int64, deps []int64) {
 // Dispatch returns the dispatch channel for WorkerPool.
 func (h *testDepGraphHelper) Dispatch() <-chan *TrackedAction { return h.dispatchCh }
 
-// CompleteCh returns the DepGraph completion channel.
+// CompleteCh returns the DepGraph completion channel used by tests to know
+// when the engine-owned graph has fully settled.
 func (h *testDepGraphHelper) CompleteCh() <-chan struct{} { return h.dg.Done() }
 
 // drainAndComplete drains the action completion channel, calls dg.Complete
@@ -140,6 +140,9 @@ func (h *testDepGraphHelper) drainAndComplete(completions <-chan ActionCompletio
 // Complete on each), waits for all actions to finish, then stops the pool
 // and returns the collected completions.
 func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHelper) []ActionCompletion {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	pool.Start(ctx, 4)
 
 	var results []ActionCompletion
@@ -149,7 +152,8 @@ func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHe
 		close(done)
 	}()
 
-	pool.Wait()
+	<-dgh.CompleteCh()
+	cancel()
 	pool.Stop()
 	<-done
 	return results
@@ -184,27 +188,11 @@ func TestWorkerPool_ClosedDispatchChannelClosesCompletions(t *testing.T) {
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	dispatchCh := make(chan *TrackedAction)
-	neverDone := make(chan struct{})
-	pool := NewWorkerPool(cfg, dispatchCh, neverDone, mgr, synctest.TestLogger(t), 1)
+	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
 
 	pool.Start(t.Context(), 1)
 	close(dispatchCh)
 	requireCompletionsChannelClosed(t, pool, "completions channel should close after workers observe a closed dispatch channel")
-
-	pool.Stop()
-}
-
-func TestWorkerPool_ClosedCompletionChannelClosesCompletions(t *testing.T) {
-	t.Parallel()
-
-	cfg, mgr, _ := newWorkerTestSetup(t)
-	dispatchCh := make(chan *TrackedAction)
-	completeCh := make(chan struct{})
-	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
-
-	pool.Start(t.Context(), 1)
-	close(completeCh)
-	requireCompletionsChannelClosed(t, pool, "completions channel should close after workers observe a closed completion channel")
 
 	pool.Stop()
 }
@@ -214,9 +202,8 @@ func TestWorkerPool_ContextCancellationClosesCompletions(t *testing.T) {
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	dispatchCh := make(chan *TrackedAction)
-	completeCh := make(chan struct{})
 	ctx, cancel := context.WithCancel(t.Context())
-	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
+	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
 
 	pool.Start(ctx, 1)
 	cancel()
@@ -230,8 +217,7 @@ func TestWorkerPool_StopIsIdempotentAfterCompletionsClose(t *testing.T) {
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	dispatchCh := make(chan *TrackedAction)
-	completeCh := make(chan struct{})
-	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
+	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
 
 	pool.Start(t.Context(), 1)
 	close(dispatchCh)
@@ -252,8 +238,7 @@ func TestWorkerPool_SendResultDropsWhenContextCancellationWins(t *testing.T) {
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	dispatchCh := make(chan *TrackedAction)
-	completeCh := make(chan struct{})
-	pool := NewWorkerPool(cfg, dispatchCh, completeCh, mgr, synctest.TestLogger(t), 1)
+	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
 
 	// Saturate the completions buffer so sendResult cannot complete before shutdown.
 	pool.completions <- ActionCompletion{Path: "buffered.txt", ActionID: 1}
@@ -307,7 +292,7 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -371,7 +356,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -423,7 +408,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	})
 	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	select {
@@ -467,7 +452,7 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 42, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	// Verify result for the action.
@@ -518,7 +503,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -596,7 +581,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -646,7 +631,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	// If we got here, the panic was recovered — the process didn't crash.
@@ -689,7 +674,7 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	// Read one completion from the channel — worker must send a completion.
@@ -752,7 +737,7 @@ func TestActionCompletion_PopulatesFromAction(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 77, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	var result ActionCompletion
@@ -814,7 +799,7 @@ func TestActionCompletion_HTTPStatusAndRetryAfter(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	var result ActionCompletion
@@ -923,7 +908,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), dgh.CompleteCh(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 
 	// Simulate engine-owned counters.
 	var succeeded, failed atomic.Int32
@@ -942,7 +927,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 		close(done)
 	}()
 
-	pool.Wait()
+	<-dgh.CompleteCh()
 	pool.Stop()
 	<-done
 

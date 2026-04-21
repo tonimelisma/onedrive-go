@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"log/slog"
 	"sort"
 	"time"
@@ -16,12 +15,13 @@ type failureSummaryEntry struct {
 const fallbackFailureSummaryIssueType = "transient_failure"
 
 // armRetryTimer arms the retry timer for the next retrier sweep. Queries
-// the earliest next_retry_at from retry_work and sets the timer. If the
+// the earliest held retry deadline from the current runtime and sets the timer. If the
 // retry timer channel is already signaled (non-blocking send to buffered(1)
 // channel), the next owning loop iteration processes it.
-func (rt *watchRuntime) armRetryTimer(ctx context.Context) {
-	earliest, err := rt.engine.baseline.EarliestRetryWorkAt(ctx, rt.engine.nowFunc())
-	if err != nil || earliest.IsZero() {
+func (rt *watchRuntime) armRetryTimer() {
+	earliest, ok := rt.earliestHeldRetryAt()
+	if !ok {
+		rt.resetRetryTimer(nil)
 		return
 	}
 
@@ -39,6 +39,32 @@ func (rt *watchRuntime) armRetryTimer(ctx context.Context) {
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryTimerFired})
 		rt.kickRetrySweepNow()
 	}))
+}
+
+func (rt *watchRuntime) armHeldTimers() {
+	rt.armRetryTimer()
+	rt.armTrialTimer()
+}
+
+func (flow *engineFlow) earliestHeldRetryAt() (time.Time, bool) {
+	var earliest time.Time
+	found := false
+
+	for _, held := range flow.heldByKey {
+		if held == nil || held.Reason != heldReasonRetry || held.NextRetry.IsZero() {
+			continue
+		}
+		if !found || held.NextRetry.Before(earliest) {
+			earliest = held.NextRetry
+			found = true
+		}
+	}
+
+	return earliest, found
+}
+
+func (rt *watchRuntime) earliestHeldRetryAt() (time.Time, bool) {
+	return rt.engineFlow.earliestHeldRetryAt()
 }
 
 func (rt *watchRuntime) stopRetryTimer() {

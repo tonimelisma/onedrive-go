@@ -22,7 +22,7 @@ func (e *Engine) prepareRunOnceBaseline(
 
 func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 	eng := r.engine
-	flow := &r.engineFlow
+	flow := r.engineFlow
 
 	hasAccountAuthRequirement, err := eng.hasPersistedAccountAuthRequirement()
 	if err != nil {

@@ -35,7 +35,7 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 	dg := NewDepGraph(testLogger(t))
 	dispatchCh := make(chan *TrackedAction, 4)
 	mgr := newTestManager(t)
-	pool := NewWorkerPool(cfg, dispatchCh, dg.Done(), mgr, testLogger(t), 10)
+	pool := NewWorkerPool(cfg, dispatchCh, mgr, testLogger(t), 10)
 
 	ctx, cancel := context.WithCancel(t.Context())
 
@@ -52,11 +52,8 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 		dispatchCh <- ta
 	}
 
-	// Cancel immediately — should not panic or hang.
-	// pool.Wait() is not called here because it blocks on dg.Done(),
-	// which never closes when the worker exits via ctx.Done() before
-	// picking up the action. pool.Stop() calls wp.wg.Wait() internally,
-	// which is sufficient for clean shutdown.
+	// Cancel immediately — should not panic or hang. pool.Stop() waits for all
+	// workers to exit after context cancellation.
 	cancel()
 	pool.Stop()
 }

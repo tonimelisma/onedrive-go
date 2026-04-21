@@ -270,10 +270,12 @@ func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndPreservesObservatio
 	assert.False(t, retryRows[0].Blocked)
 	assert.Equal(t, now.UnixNano(), retryRows[0].NextRetryAt)
 
-	ready, err := store.ListRetryWorkReady(ctx, now)
+	allRetryRows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
-	require.Len(t, ready, 1)
-	assert.Equal(t, "Shared/Docs/file.txt", ready[0].Path)
+	require.Len(t, allRetryRows, 1)
+	assert.Equal(t, "Shared/Docs/file.txt", allRetryRows[0].Path)
+	assert.False(t, allRetryRows[0].Blocked)
+	assert.Equal(t, now.UnixNano(), allRetryRows[0].NextRetryAt)
 }
 
 // Validates: R-2.10.33

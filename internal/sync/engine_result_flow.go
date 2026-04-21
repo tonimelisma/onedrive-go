@@ -43,14 +43,26 @@ func (flow *engineFlow) processActionCompletion(
 	r *ActionCompletion,
 	bl *Baseline,
 ) routeOutcome {
+	if r == nil {
+		return routeOutcome{}
+	}
+
+	var outcome routeOutcome
 	if r.IsTrial && !r.TrialScopeKey.IsZero() {
-		return flow.processResult(ctx, watch, resultContext{
+		outcome = flow.processResult(ctx, watch, resultContext{
 			isTrial:       true,
 			trialScopeKey: r.TrialScopeKey,
 		}, r, bl)
+	} else {
+		outcome = flow.processResult(ctx, watch, resultContext{}, r, bl)
 	}
 
-	return flow.processResult(ctx, watch, resultContext{}, r, bl)
+	if outcome.terminate {
+		return outcome
+	}
+
+	outcome.dispatched = append(outcome.dispatched, flow.drainDueHeldWorkNow(ctx, watch)...)
+	return outcome
 }
 
 func (flow *engineFlow) processResult(
@@ -61,43 +73,20 @@ func (flow *engineFlow) processResult(
 	bl *Baseline,
 ) routeOutcome {
 	decision := classifyResult(r)
-	ready := flow.completeDepGraphAction(r.ActionID, "processResult")
+	ta := flow.trackedActionForCompletion(r)
 
 	if resultCtx.isTrial {
-		return flow.processTrialDecision(ctx, watch, resultCtx.trialScopeKey, &decision, ready, r, bl)
+		return flow.processTrialDecision(ctx, watch, resultCtx.trialScopeKey, &decision, ta, r, bl)
 	}
 
-	return flow.processNormalDecision(ctx, watch, &decision, ready, r, bl)
+	return flow.processNormalDecision(ctx, watch, &decision, ta, r, bl)
 }
 
-func (flow *engineFlow) routeReadyForClass(
-	ctx context.Context,
-	watch *watchRuntime,
-	class errclass.Class,
-	ready []*TrackedAction,
-	r *ActionCompletion,
-) []*TrackedAction {
-	switch class {
-	case errclass.ClassInvalid:
-		flow.scopeController().cascadeFailAndComplete(ctx, watch, ready, r)
-	case errclass.ClassSuccess:
-		return flow.scopeController().admitReady(ctx, watch, ready)
-	case errclass.ClassShutdown:
-		flow.scopeController().completeSubtree(ready)
-	case errclass.ClassFatal:
-		flow.scopeController().completeSubtree(ready)
-	case errclass.ClassRetryableTransient, errclass.ClassBlockScopeingTransient, errclass.ClassActionable:
-		flow.scopeController().cascadeFailAndComplete(ctx, watch, ready, r)
-	}
-
-	return nil
-}
-
-func (flow *engineFlow) applySuccessEffects(ctx context.Context, watch *watchRuntime, r *ActionCompletion) {
+func (flow *engineFlow) applySuccessEffects(ctx context.Context, r *ActionCompletion) {
 	flow.succeeded++
 	flow.clearRetryWorkOnSuccess(ctx, r)
-	if watch != nil {
-		watch.scopeState.RecordSuccess(r)
+	if flow.scopeState != nil {
+		flow.scopeState.RecordSuccess(r)
 	}
 }
 
@@ -108,10 +97,14 @@ func (flow *engineFlow) applySuccessEffects(ctx context.Context, watch *watchRun
 func (flow *engineFlow) applyOrdinaryFailureEffects(
 	ctx context.Context,
 	watch *watchRuntime,
+	current *TrackedAction,
 	decision *ResultDecision,
 	r *ActionCompletion,
 ) {
-	persisted := flow.applyResultPersistence(ctx, watch, decision, r)
+	persisted := flow.applyResultPersistence(ctx, decision, r)
+	if persisted {
+		flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r))
+	}
 
 	if persisted && decision.RunScopeDetection {
 		flow.scopeController().feedScopeDetection(ctx, watch, r)
@@ -127,7 +120,7 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 		watch.armTrialTimer()
 	}
 	if persisted && decision.Persistence == persistRetryWork && watch != nil {
-		watch.armRetryTimer(ctx)
+		watch.armRetryTimer()
 	}
 
 	flow.recordError(decision, r)
@@ -137,7 +130,7 @@ func (flow *engineFlow) processNormalDecision(
 	ctx context.Context,
 	watch *watchRuntime,
 	decision *ResultDecision,
-	ready []*TrackedAction,
+	current *TrackedAction,
 	r *ActionCompletion,
 	bl *Baseline,
 ) routeOutcome {
@@ -146,51 +139,57 @@ func (flow *engineFlow) processNormalDecision(
 	if decision.PermissionFlow != permissionFlowNone {
 		if permOutcome, handled := scopeCtrl.decidePermissionOutcome(ctx, decision, r, bl); handled {
 			if permOutcome.Matched {
-				outcome := routeOutcome{}
+				scopeCtrl.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
 				switch {
-				case permOutcome.ActivatesDerivedScope():
-					scopeCtrl.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
-					for _, ta := range ready {
-						scopeCtrl.cascadeRecordAndComplete(ctx, ta, permOutcome.ScopeKey)
+				case permOutcome.Kind == permissionOutcomeNone:
+					if blocking := flow.findBlockingScope(current); !blocking.IsZero() {
+						flow.holdActionUnderScope(ctx, watch, current, r, blocking)
 					}
-				case permOutcome.IsFileFailure(),
-					permOutcome.Kind == permissionOutcomeNone,
-					permOutcome.Kind == permissionOutcomeActivateBoundaryScope:
-					outcome.dispatched = flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
-					scopeCtrl.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
+				case !permOutcome.ScopeKey.IsZero():
+					flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r))
 				default:
-					panic(fmt.Sprintf("unknown permission outcome kind %d", permOutcome.Kind))
+					flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r))
 				}
-
+				if watch != nil {
+					watch.armHeldTimers()
+				}
 				flow.recordError(decision, r)
-
-				return outcome
+				return routeOutcome{}
 			}
-
-			decision.PermissionFlow = permissionFlowNone
 		}
 	}
 
-	outcome := routeOutcome{
-		dispatched: flow.routeReadyForClass(ctx, watch, decision.Class, ready, r),
-	}
+	outcome := routeOutcome{}
 
 	switch decision.Class {
 	case errclass.ClassInvalid:
-		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r)
+		flow.applyResultPersistence(ctx, decision, r)
+		flow.markFinished(current)
 		outcome.terminate = true
 		outcome.terminateErr = fmt.Errorf("classify action completion: invalid failure class")
 	case errclass.ClassSuccess:
-		flow.applySuccessEffects(ctx, watch, r)
+		flow.markFinished(current)
+		flow.applySuccessEffects(ctx, r)
+		outcome.dispatched = flow.readyAfterSuccess(ctx, watch, r.ActionID)
 	case errclass.ClassShutdown:
+		flow.markFinished(current)
+		if current != nil {
+			ready := flow.completeDepGraphAction(r.ActionID, "shutdown action completion")
+			scopeCtrl.completeSubtree(ready)
+		}
 		return outcome
 	case errclass.ClassFatal:
+		flow.markFinished(current)
+		if current != nil {
+			ready := flow.completeDepGraphAction(r.ActionID, "fatal action completion")
+			scopeCtrl.completeSubtree(ready)
+		}
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		outcome.terminate = true
 		outcome.terminateErr = fatalResultError(r)
 	case errclass.ClassRetryableTransient, errclass.ClassBlockScopeingTransient, errclass.ClassActionable:
-		flow.applyOrdinaryFailureEffects(ctx, watch, decision, r)
+		flow.applyOrdinaryFailureEffects(ctx, watch, current, decision, r)
 	}
 
 	return outcome
@@ -201,7 +200,7 @@ func (flow *engineFlow) processTrialDecision(
 	watch *watchRuntime,
 	trialScopeKey ScopeKey,
 	decision *ResultDecision,
-	ready []*TrackedAction,
+	current *TrackedAction,
 	r *ActionCompletion,
 	bl *Baseline,
 ) routeOutcome {
@@ -210,28 +209,40 @@ func (flow *engineFlow) processTrialDecision(
 
 	switch evaluateScopeTrialOutcome(trialScopeKey, decision) {
 	case scopeTrialOutcomeRelease:
-		flow.applySuccessEffects(ctx, watch, r)
+		flow.markFinished(current)
+		flow.applySuccessEffects(ctx, r)
 		if err := scopeCtrl.releaseScope(ctx, watch, trialScopeKey); err != nil {
 			flow.engine.logger.Warn("trial result: failed to release scope",
 				slog.String("scope_key", trialScopeKey.String()),
 				slog.String("error", err.Error()),
 			)
 		}
-		outcome.dispatched = flow.routeReadyForClass(ctx, watch, resultSuccess, ready, r)
+		flow.releaseHeldScope(trialScopeKey)
+		outcome.dispatched = flow.readyAfterSuccess(ctx, watch, r.ActionID)
 	case scopeTrialOutcomeShutdown:
-		flow.routeReadyForClass(ctx, watch, errclass.ClassShutdown, ready, r)
+		flow.markFinished(current)
+		if current != nil {
+			ready := flow.completeDepGraphAction(r.ActionID, "trial shutdown action completion")
+			scopeCtrl.completeSubtree(ready)
+		}
 	case scopeTrialOutcomeExtend:
-		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
+		flow.markFinished(current)
 		scopeCtrl.rehomeBlockedRetryWork(ctx, r, trialScopeKey)
+		flow.holdActionUnderScope(ctx, watch, current, r, trialScopeKey)
 		scopeCtrl.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
 		flow.recordError(decision, r)
 	case scopeTrialOutcomeRearmOrDiscard:
-		flow.routeReadyForClass(ctx, watch, decision.Class, ready, r)
+		flow.markFinished(current)
 		scopeCtrl.applyTrialReclassification(ctx, watch, decision, r, bl)
+		flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r))
 		scopeCtrl.rearmOrDiscardScope(ctx, watch, trialScopeKey)
 		flow.recordError(decision, r)
 	case scopeTrialOutcomeFatal:
-		flow.routeReadyForClass(ctx, watch, errclass.ClassFatal, ready, r)
+		flow.markFinished(current)
+		if current != nil {
+			ready := flow.completeDepGraphAction(r.ActionID, "trial fatal action completion")
+			scopeCtrl.completeSubtree(ready)
+		}
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		outcome.terminate = true
@@ -239,6 +250,126 @@ func (flow *engineFlow) processTrialDecision(
 	}
 
 	return outcome
+}
+
+func (flow *engineFlow) trackedActionForCompletion(r *ActionCompletion) *TrackedAction {
+	if r == nil || flow.depGraph == nil {
+		return nil
+	}
+
+	ta, ok := flow.depGraph.Get(r.ActionID)
+	if !ok {
+		return nil
+	}
+
+	return ta
+}
+
+func (flow *engineFlow) readyAfterSuccess(
+	ctx context.Context,
+	watch *watchRuntime,
+	actionID int64,
+) []*TrackedAction {
+	ready := flow.completeDepGraphAction(actionID, "successful action completion")
+	return flow.scopeController().admitReady(ctx, watch, ready)
+}
+
+func (flow *engineFlow) holdActionFromPersistedRetryState(
+	current *TrackedAction,
+	work RetryWorkKey,
+) {
+	if current == nil {
+		return
+	}
+
+	row, ok := flow.retryRowsByKey[work]
+	if !ok {
+		return
+	}
+	if row.Blocked {
+		flow.holdAction(current, heldReasonScope, row.ScopeKey, time.Time{})
+		return
+	}
+
+	nextRetry := time.Time{}
+	if row.NextRetryAt > 0 {
+		nextRetry = time.Unix(0, row.NextRetryAt)
+	}
+	flow.holdAction(current, heldReasonRetry, ScopeKey{}, nextRetry)
+}
+
+func (flow *engineFlow) holdActionUnderScope(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	r *ActionCompletion,
+	scopeKey ScopeKey,
+) {
+	if current == nil {
+		return
+	}
+
+	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Path:          r.Path,
+		OldPath:       r.OldPath,
+		ActionType:    r.ActionType,
+		ConditionType: scopeKey.ConditionType(),
+		ScopeKey:      scopeKey,
+		LastError:     "blocked by scope: " + scopeKey.String(),
+		HTTPStatus:    r.HTTPStatus,
+		Blocked:       true,
+	}, nil)
+	if err != nil {
+		flow.engine.logger.Warn("failed to record blocked retry_work",
+			slog.String("path", r.Path),
+			slog.String("scope_key", scopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	if row != nil {
+		flow.retryRowsByKey[retryWorkKeyForCompletion(r)] = *row
+	}
+	flow.holdAction(current, heldReasonScope, scopeKey, time.Time{})
+	if watch != nil {
+		watch.armHeldTimers()
+	}
+}
+
+func (flow *engineFlow) drainDueHeldWorkNow(
+	ctx context.Context,
+	watch *watchRuntime,
+) []*TrackedAction {
+	now := flow.engine.nowFunc()
+	var ready []*TrackedAction
+
+	for _, key := range flow.dueRetryKeys(now) {
+		if ta := flow.releaseHeldAction(key); ta != nil {
+			ta.IsTrial = false
+			ta.TrialScopeKey = ScopeKey{}
+			ready = append(ready, ta)
+		}
+	}
+
+	for _, key := range flow.dueTrialKeys(now) {
+		held := flow.heldByKey[key]
+		if held == nil {
+			continue
+		}
+		ta := flow.releaseHeldAction(key)
+		if ta == nil {
+			continue
+		}
+		ta.IsTrial = true
+		ta.TrialScopeKey = held.ScopeKey
+		ready = append(ready, ta)
+	}
+
+	if len(ready) == 0 {
+		return nil
+	}
+
+	return flow.scopeController().admitReady(ctx, watch, ready)
 }
 
 func (controller *scopeController) clearBlockedRetryWorkForScope(
@@ -336,13 +467,12 @@ func (controller *scopeController) decidePermissionOutcome(
 
 func (flow *engineFlow) recordRetryWork(
 	ctx context.Context,
-	watch *watchRuntime,
 	decision *ResultDecision,
 	r *ActionCompletion,
 	delayFn func(int) time.Duration,
 ) bool {
 	scopeKey := decision.ScopeEvidence
-	blocked := flow.retryWorkShouldBeBlocked(watch, decision.Class, scopeKey)
+	blocked := flow.retryWorkShouldBeBlocked(decision.Class, scopeKey)
 
 	if decision.Class == errclass.ClassActionable {
 		fields := append(flow.resultLogFields(decision, r),
@@ -379,6 +509,7 @@ func (flow *engineFlow) recordRetryWork(
 		slog.Bool("blocked", blocked),
 	)
 	if row != nil {
+		flow.retryRowsByKey[retryWorkKeyForCompletion(r)] = *row
 		fields = append(fields, slog.Int("attempt_count", row.AttemptCount))
 	}
 	flow.engine.logger.Debug("retry_work recorded", fields...)
@@ -387,7 +518,6 @@ func (flow *engineFlow) recordRetryWork(
 }
 
 func (flow *engineFlow) retryWorkShouldBeBlocked(
-	watch *watchRuntime,
 	class errclass.Class,
 	scopeKey ScopeKey,
 ) bool {
@@ -401,5 +531,5 @@ func (flow *engineFlow) retryWorkShouldBeBlocked(
 		return false
 	}
 
-	return watch != nil && watch.hasActiveScope(scopeKey)
+	return flow.hasActiveScope(scopeKey)
 }

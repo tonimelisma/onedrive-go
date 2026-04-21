@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,37 +14,13 @@ import (
 )
 
 // Validates: R-2.10.5
-func TestEngine_CascadeRecordAndComplete_RecordsBlockedRetryWork(t *testing.T) {
+func TestScopeController_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	scopeKey := SKQuotaOwn()
-
-	root := rt.depGraph.Add(&Action{
-		Type:    ActionUpload,
-		Path:    "blocked.txt",
-		DriveID: driveid.New("drive1"),
-	}, 1, nil)
-	require.NotNil(t, root)
-
-	testEngineFlow(t, eng).scopeController().cascadeRecordAndComplete(t.Context(), root, scopeKey)
-
-	assert.Equal(t, 0, rt.depGraph.InFlightCount())
-	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
-	require.Len(t, retryRows, 1)
-	assert.Equal(t, "blocked.txt", retryRows[0].Path)
-	assert.Equal(t, scopeKey, retryRows[0].ScopeKey)
-	assert.True(t, retryRows[0].Blocked)
-}
-
-// Validates: R-2.10.5
-func TestEngine_CascadeRecordAndComplete_CascadesToDependents(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	rt := testWatchRuntime(t, eng)
-	scopeKey := SKQuotaOwn()
+	controller := testEngineFlow(t, eng).scopeController()
 
 	root := rt.depGraph.Add(&Action{
 		Type:    ActionFolderCreate,
@@ -61,39 +36,14 @@ func TestEngine_CascadeRecordAndComplete_CascadesToDependents(t *testing.T) {
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
-	testEngineFlow(t, eng).scopeController().cascadeRecordAndComplete(t.Context(), root, scopeKey)
-
-	assert.Equal(t, 0, rt.depGraph.InFlightCount())
-	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
-	require.Len(t, retryRows, 2)
-	assert.ElementsMatch(t, []string{"dir", "dir/file.txt"}, []string{retryRows[0].Path, retryRows[1].Path})
-}
-
-// Validates: R-2.10.5
-func TestScopeController_RecordCascadeRetryWork_RetryableTransientScopeEvidenceStaysUnblockedUntilScopeActivates(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	rt := testWatchRuntime(t, eng)
-	controller := testEngineFlow(t, eng).scopeController()
-
-	controller.recordCascadeRetryWork(t.Context(), rt, &Action{
-		Type:    ActionUpload,
-		Path:    "child.txt",
-		DriveID: eng.driveID,
-	}, &ActionCompletion{
-		Path:       "parent.txt",
-		ActionType: ActionUpload,
-		HTTPStatus: http.StatusBadGateway,
-		ErrMsg:     "temporary outage",
-	})
+	controller.recordBlockedRetryWork(t.Context(), &root.Action, scopeKey)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
-	assert.Equal(t, "child.txt", retryRows[0].Path)
-	assert.Equal(t, SKService(), retryRows[0].ScopeKey)
-	assert.False(t, retryRows[0].Blocked)
-	assert.NotZero(t, retryRows[0].NextRetryAt)
+	assert.Equal(t, "dir", retryRows[0].Path)
+	assert.Equal(t, scopeKey, retryRows[0].ScopeKey)
+	assert.True(t, retryRows[0].Blocked)
+	assert.Equal(t, 2, rt.depGraph.InFlightCount(), "root and dependent both remain in the graph until the exact blocked root is released")
 }
 
 // Validates: R-2.10.5
@@ -154,8 +104,6 @@ func TestScopeController_ApplyTrialReclassification_LocalFilePermissionReusesPer
 		ErrMsg:        "permission denied",
 		TrialScopeKey: scopeKey,
 	}, nil)
-
-	assert.True(t, rt.hasRetryTimer(), "trial reclassification should reuse the file-failure permission outcome path")
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -282,7 +230,7 @@ func TestScopeController_AdmitReady_BlocksNormalActionUnderActiveScope(t *testin
 	dispatched := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
 
 	assert.Empty(t, dispatched)
-	assert.Zero(t, rt.depGraph.InFlightCount())
+	assert.Equal(t, 1, rt.depGraph.InFlightCount())
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)

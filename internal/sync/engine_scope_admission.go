@@ -3,109 +3,206 @@ package sync
 import (
 	"context"
 	"log/slog"
-
-	"github.com/tonimelisma/onedrive-go/internal/retry"
+	"time"
 )
 
-// admitReady applies watch-mode trial interception and scope admission to a
-// ready action set, returning the actions that should enter the watch loop's
-// outbox. It is the single admission path used by both newly-planned actions
-// and newly-ready dependents from result processing.
+type admissionDecisionKind int
+
+const (
+	admissionDispatchNow admissionDecisionKind = iota
+	admissionHoldRetry
+	admissionHoldScope
+)
+
+type AdmissionDecision struct {
+	Action        *TrackedAction
+	Kind          admissionDecisionKind
+	ScopeKey      ScopeKey
+	NextRetryAt   time.Time
+	ClearScopeKey ScopeKey
+	RetryWorkKey  RetryWorkKey
+}
+
+// admitReady applies exact retry/block-scope admission to a ready action set.
+// Dependency readiness is already satisfied; admission decides whether the
+// action dispatches now or is held as exact work for later release.
 func (controller *scopeController) admitReady(
 	ctx context.Context,
 	watch *watchRuntime,
 	ready []*TrackedAction,
 ) []*TrackedAction {
-	flow := controller.flow
+	decisions := controller.decideAdmission(controller.flow.engine.nowFunc(), ready)
+	return controller.applyAdmissionDecisions(ctx, watch, decisions)
+}
 
-	var dispatch []*TrackedAction
+func (controller *scopeController) decideAdmission(
+	now time.Time,
+	ready []*TrackedAction,
+) []AdmissionDecision {
+	decisions := make([]AdmissionDecision, 0, len(ready))
 
 	for _, ta := range ready {
-		if ta.IsTrial {
-			if ta.TrialScopeKey.BlocksAction(ta.Action.Path,
-				ta.Action.ThrottleTargetKey(), ta.Action.Type) {
-				dispatch = append(dispatch, ta)
-			} else {
-				controller.clearBlockedRetryWorkForScope(ctx, retryWorkKeyForAction(&ta.Action), ta.TrialScopeKey)
-
-				if key := watch.findBlockingScope(ta); key.IsZero() {
-					flow.setDispatch(ctx, &ta.Action)
-					dispatch = append(dispatch, ta)
-				}
-				if watch != nil {
-					watch.armTrialTimer()
-				}
-			}
-
+		if ta == nil {
 			continue
 		}
 
-		if watch != nil {
-			if key := watch.findBlockingScope(ta); !key.IsZero() {
-				controller.cascadeRecordAndComplete(ctx, ta, key)
-				continue
-			}
+		decision := controller.newAdmissionDecision(ta)
+		controller.applyPersistedRetryAdmission(now, ta, &decision)
+		controller.applyActiveScopeAdmission(ta, &decision)
+		decisions = append(decisions, decision)
+	}
+
+	return decisions
+}
+
+func (controller *scopeController) newAdmissionDecision(ta *TrackedAction) AdmissionDecision {
+	decision := AdmissionDecision{
+		Action:       ta,
+		Kind:         admissionDispatchNow,
+		RetryWorkKey: retryWorkKeyForAction(&ta.Action),
+	}
+
+	if ta.IsTrial && !ta.TrialScopeKey.IsZero() &&
+		!ta.TrialScopeKey.BlocksAction(ta.Action.Path, ta.Action.ThrottleTargetKey(), ta.Action.Type) {
+		decision.ClearScopeKey = ta.TrialScopeKey
+	}
+
+	return decision
+}
+
+func (controller *scopeController) applyPersistedRetryAdmission(
+	now time.Time,
+	ta *TrackedAction,
+	decision *AdmissionDecision,
+) {
+	if ta == nil || decision == nil {
+		return
+	}
+
+	row, ok := controller.flow.retryRowsByKey[decision.RetryWorkKey]
+	if !ok || (!decision.ClearScopeKey.IsZero() && row.ScopeKey == decision.ClearScopeKey) {
+		return
+	}
+
+	switch {
+	case row.Blocked && !row.ScopeKey.IsZero() &&
+		(!ta.IsTrial || ta.TrialScopeKey.IsZero() || row.ScopeKey != ta.TrialScopeKey):
+		decision.Kind = admissionHoldScope
+		decision.ScopeKey = row.ScopeKey
+	case row.NextRetryAt > 0:
+		nextRetryAt := time.Unix(0, row.NextRetryAt)
+		if nextRetryAt.After(now) {
+			decision.Kind = admissionHoldRetry
+			decision.NextRetryAt = nextRetryAt
+		}
+	}
+}
+
+func (controller *scopeController) applyActiveScopeAdmission(
+	ta *TrackedAction,
+	decision *AdmissionDecision,
+) {
+	if ta == nil || decision == nil || decision.Kind != admissionDispatchNow {
+		return
+	}
+
+	scopeKey := controller.flow.findBlockingScope(ta)
+	if scopeKey.IsZero() {
+		return
+	}
+	if ta.IsTrial && !ta.TrialScopeKey.IsZero() && scopeKey == ta.TrialScopeKey {
+		return
+	}
+
+	decision.Kind = admissionHoldScope
+	decision.ScopeKey = scopeKey
+}
+
+func (controller *scopeController) applyAdmissionDecisions(
+	ctx context.Context,
+	watch *watchRuntime,
+	decisions []AdmissionDecision,
+) []*TrackedAction {
+	flow := controller.flow
+	var dispatch []*TrackedAction
+
+	for i := range decisions {
+		decision := &decisions[i]
+		ta := decision.Action
+		if ta == nil {
+			continue
 		}
 
-		flow.setDispatch(ctx, &ta.Action)
-		dispatch = append(dispatch, ta)
+		controller.applyAdmissionScopeClear(ctx, decision)
+
+		switch decision.Kind {
+		case admissionDispatchNow:
+			flow.markQueued(ta)
+			dispatch = append(dispatch, ta)
+		case admissionHoldRetry:
+			flow.holdAction(ta, heldReasonRetry, ScopeKey{}, decision.NextRetryAt)
+		case admissionHoldScope:
+			controller.persistHeldScopeDecision(ctx, ta, decision)
+			flow.holdAction(ta, heldReasonScope, decision.ScopeKey, time.Time{})
+		}
+	}
+
+	if watch != nil {
+		watch.armHeldTimers()
 	}
 
 	return dispatch
 }
 
-// cascadeRecordAndComplete records a scope-blocked action and all its
-// transitive dependents as blocked retry_work, completing each in the graph.
-func (controller *scopeController) cascadeRecordAndComplete(
+func (controller *scopeController) applyAdmissionScopeClear(
 	ctx context.Context,
-	ta *TrackedAction,
-	scopeKey ScopeKey,
+	decision *AdmissionDecision,
 ) {
+	if decision == nil || decision.ClearScopeKey.IsZero() {
+		return
+	}
+
 	flow := controller.flow
-
-	seen := make(map[int64]bool)
-	queue := []*TrackedAction{ta}
-
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-
-		if seen[current.ID] {
-			continue
-		}
-		seen[current.ID] = true
-
-		controller.recordBlockedRetryWork(ctx, &current.Action, scopeKey)
-		ready := flow.completeDepGraphAction(current.ID, "cascadeRecordAndComplete")
-		queue = append(queue, ready...)
+	controller.clearBlockedRetryWorkForScope(ctx, decision.RetryWorkKey, decision.ClearScopeKey)
+	if row, ok := flow.retryRowsByKey[decision.RetryWorkKey]; ok && row.Blocked && row.ScopeKey == decision.ClearScopeKey {
+		delete(flow.retryRowsByKey, decision.RetryWorkKey)
 	}
 }
 
-// cascadeFailAndComplete records each transitive dependent as a cascade
-// failure and completes it in the DepGraph.
-func (controller *scopeController) cascadeFailAndComplete(
+func (controller *scopeController) persistHeldScopeDecision(
 	ctx context.Context,
-	watch *watchRuntime,
-	ready []*TrackedAction,
-	r *ActionCompletion,
+	ta *TrackedAction,
+	decision *AdmissionDecision,
 ) {
+	if ta == nil || decision == nil || decision.ScopeKey.IsZero() {
+		return
+	}
+
 	flow := controller.flow
+	row, ok := flow.retryRowsByKey[decision.RetryWorkKey]
+	if ok && row.Blocked && row.ScopeKey == decision.ScopeKey {
+		return
+	}
 
-	seen := make(map[int64]bool)
-	queue := ready
-
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-
-		if seen[current.ID] {
-			continue
-		}
-		seen[current.ID] = true
-
-		controller.recordCascadeRetryWork(ctx, watch, &current.Action, r)
-		next := flow.completeDepGraphAction(current.ID, "cascadeFailAndComplete")
-		queue = append(queue, next...)
+	persisted, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Path:          ta.Action.Path,
+		OldPath:       ta.Action.OldPath,
+		ActionType:    ta.Action.Type,
+		ConditionType: decision.ScopeKey.ConditionType(),
+		ScopeKey:      decision.ScopeKey,
+		LastError:     "blocked by scope: " + decision.ScopeKey.String(),
+		Blocked:       true,
+	}, nil)
+	if err != nil {
+		flow.engine.logger.Warn("failed to record blocked retry_work",
+			slog.String("path", ta.Action.Path),
+			slog.String("scope_key", decision.ScopeKey.String()),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	if persisted != nil {
+		flow.retryRowsByKey[decision.RetryWorkKey] = *persisted
 	}
 }
 
@@ -137,7 +234,7 @@ func (controller *scopeController) completeSubtree(ready []*TrackedAction) {
 func (controller *scopeController) recordBlockedRetryWork(ctx context.Context, action *Action, scopeKey ScopeKey) {
 	flow := controller.flow
 
-	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:          action.Path,
 		OldPath:       action.OldPath,
 		ActionType:    action.Type,
@@ -145,12 +242,17 @@ func (controller *scopeController) recordBlockedRetryWork(ctx context.Context, a
 		ScopeKey:      scopeKey,
 		LastError:     "blocked by scope: " + scopeKey.String(),
 		Blocked:       true,
-	}, nil); err != nil {
+	}, nil)
+	if err != nil {
 		flow.engine.logger.Warn("failed to record blocked retry_work",
 			slog.String("path", action.Path),
 			slog.String("scope_key", scopeKey.String()),
 			slog.String("error", err.Error()),
 		)
+		return
+	}
+	if row != nil {
+		flow.retryRowsByKey[retryWorkKeyForAction(action)] = *row
 	}
 }
 
@@ -161,7 +263,7 @@ func (controller *scopeController) rehomeBlockedRetryWork(
 ) bool {
 	flow := controller.flow
 
-	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:          r.Path,
 		OldPath:       r.OldPath,
 		ActionType:    r.ActionType,
@@ -170,7 +272,8 @@ func (controller *scopeController) rehomeBlockedRetryWork(
 		LastError:     "blocked by scope: " + scopeKey.String(),
 		HTTPStatus:    r.HTTPStatus,
 		Blocked:       true,
-	}, nil); err != nil {
+	}, nil)
+	if err != nil {
 		flow.engine.logger.Warn("failed to rehome blocked retry_work",
 			slog.String("path", r.Path),
 			slog.String("scope_key", scopeKey.String()),
@@ -178,36 +281,9 @@ func (controller *scopeController) rehomeBlockedRetryWork(
 		)
 		return false
 	}
+	if row != nil {
+		flow.retryRowsByKey[retryWorkKeyForCompletion(r)] = *row
+	}
 
 	return true
-}
-
-// recordCascadeRetryWork records retry_work for a dependent whose parent failed.
-func (controller *scopeController) recordCascadeRetryWork(
-	ctx context.Context,
-	watch *watchRuntime,
-	action *Action,
-	parentResult *ActionCompletion,
-) {
-	flow := controller.flow
-
-	parentDecision := classifyResult(parentResult)
-	scopeKey := parentDecision.ScopeEvidence
-	blocked := flow.retryWorkShouldBeBlocked(watch, parentDecision.Class, scopeKey)
-
-	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          action.Path,
-		OldPath:       action.OldPath,
-		ActionType:    action.Type,
-		ConditionType: parentDecision.ConditionType,
-		ScopeKey:      scopeKey,
-		LastError:     "parent action failed: " + parentResult.ErrMsg,
-		HTTPStatus:    parentResult.HTTPStatus,
-		Blocked:       blocked,
-	}, retry.ReconcilePolicy().Delay); err != nil {
-		flow.engine.logger.Warn("failed to record cascade retry_work",
-			slog.String("path", action.Path),
-			slog.String("error", err.Error()),
-		)
-	}
 }

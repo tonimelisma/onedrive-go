@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -39,20 +38,6 @@ func listRetryWorkForTest(
 	t.Helper()
 
 	rows, err := store.ListRetryWork(ctx)
-	require.NoError(t, err)
-
-	return rows
-}
-
-func readyRetryWorkForTest(
-	t *testing.T,
-	store *SyncStore,
-	ctx context.Context,
-	now time.Time,
-) []RetryWorkRow {
-	t.Helper()
-
-	rows, err := store.ListRetryWorkReady(ctx, now)
 	require.NoError(t, err)
 
 	return rows
