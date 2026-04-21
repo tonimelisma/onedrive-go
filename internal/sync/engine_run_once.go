@@ -48,12 +48,12 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	}
 
 	// SQLite-derived plan approved — commit the deferred delta token now.
-	if err := runner.commitPendingPrimaryCursor(ctx, prepared.pendingCursorCommit); err != nil {
+	if err := runner.commitPendingPrimaryCursor(ctx, prepared.PendingCursorCommit); err != nil {
 		return nil, err
 	}
 
-	plan := prepared.plan
-	report := prepared.report
+	plan := prepared.Plan
+	report := prepared.Report
 
 	if len(plan.Actions) == 0 {
 		if report.DeferredByMode.Total() > 0 {
@@ -110,37 +110,33 @@ func (e *Engine) runOnceDryRun(
 		return nil, err
 	}
 
-	return e.completeDryRunReport(start, prepared.report), nil
+	return e.completeDryRunReport(start, prepared.Report), nil
 }
 
 // executePlan populates the dependency graph and runs the worker pool.
 // The engine processes results concurrently while workers run, classifying
 // each result and calling depGraph.Complete (R-6.8.9).
-//
-// One-shot mode has NO watch-mode active-scope admission loop — all actions
-// with satisfied deps go directly to dispatchCh. Scope detection (ScopeState) is
-// absent in one-shot; watch-only lifecycle paths are nil-guarded → no-op.
 func (r *oneShotRunner) executePlan(
 	ctx context.Context, plan *ActionPlan, report *Report,
 	bl *Baseline,
 ) error {
-	return r.executePreparedPlan(ctx, &preparedCurrentActionPlan{
-		plan:   plan,
-		report: report,
+	return r.executePreparedPlan(ctx, &PreparedCurrentPlan{
+		Plan:   plan,
+		Report: report,
 	}, bl)
 }
 
 func (r *oneShotRunner) executePreparedPlan(
 	ctx context.Context,
-	prepared *preparedCurrentActionPlan,
+	prepared *PreparedCurrentPlan,
 	bl *Baseline,
 ) error {
 	if prepared == nil {
 		return nil
 	}
 
-	plan := prepared.plan
-	report := prepared.report
+	plan := prepared.Plan
+	report := prepared.Report
 	if len(plan.Actions) == 0 {
 		return nil
 	}
@@ -162,35 +158,8 @@ func (r *oneShotRunner) executePreparedPlan(
 
 	// Reset engine counters for this pass.
 	r.resetResultStats()
-	r.initializePreparedRuntime(prepared)
-
-	// One-shot mode uses the same exact admission and held-work machinery as
-	// watch mode, but it runs that runtime only until all work due now settles.
-	depGraph := NewDepGraph(r.engine.logger)
-	r.depGraph = depGraph
 	r.dispatchCh = make(chan *TrackedAction, len(plan.Actions))
-	initialReady := make([]*TrackedAction, 0, len(plan.Actions))
-
-	// Two-phase graph population: Register all actions first, then wire
-	// dependencies. This avoids forward-reference issues where a parent
-	// folder delete at index 0 depends on a child file delete at index 5 —
-	// single-pass Add would silently drop the unregistered depID.
-	for i := range plan.Actions {
-		depGraph.Register(&plan.Actions[i], int64(i))
-	}
-
-	for i := range plan.Actions {
-		var depIDs []int64
-		for _, depIdx := range plan.Deps[i] {
-			depIDs = append(depIDs, int64(depIdx))
-		}
-
-		if ta := depGraph.WireDeps(int64(i), depIDs); ta != nil {
-			initialReady = append(initialReady, ta)
-		}
-	}
-
-	initialOutbox, done, err := r.dispatchInitialReadyActions(ctx, bl, depGraph, initialReady, report)
+	initialOutbox, done, err := r.dispatchInitialReadyActions(ctx, bl, prepared, report)
 	if err != nil {
 		return err
 	}
@@ -322,11 +291,4 @@ func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]
 	)
 
 	return events, token, nil
-}
-
-// resolveSafetyConfig returns the planner safety settings for a run-once pass.
-// Batch delete protection is disabled; only per-item executor-time safety
-// checks remain.
-func (e *Engine) resolveSafetyConfig() *SafetyConfig {
-	return &SafetyConfig{}
 }

@@ -5,20 +5,17 @@ import "context"
 func (r *oneShotRunner) dispatchInitialReadyActions(
 	ctx context.Context,
 	bl *Baseline,
-	depGraph *DepGraph,
-	initialReady []*TrackedAction,
+	prepared *PreparedCurrentPlan,
 	report *Report,
 ) ([]*TrackedAction, bool, error) {
-	initialReady = r.scopeController().admitReady(ctx, nil, initialReady)
-	initialOutbox, err := r.drainPublicationReadyActions(ctx, nil, bl, nil, initialReady)
+	initialOutbox, dispatched, err := r.startPreparedRuntime(ctx, prepared, bl, nil)
 	if err != nil {
-		r.completeOutboxAsShutdown(initialOutbox)
 		report.Succeeded, report.Failed, report.Errors = r.resultStats()
 		report.Errors = append(report.Errors, err)
 		return nil, true, err
 	}
 
-	if depGraph.InFlightCount() == 0 {
+	if !dispatched {
 		r.logFailureSummary()
 		report.Succeeded, report.Failed, report.Errors = r.resultStats()
 		return nil, true, nil

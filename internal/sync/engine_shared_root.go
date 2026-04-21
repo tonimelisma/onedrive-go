@@ -124,7 +124,7 @@ func (flow *engineFlow) commitObservedItems(
 func (rt *watchRuntime) watchSharedRootRemote(
 	ctx context.Context,
 	bl *Baseline,
-	events chan<- ChangeEvent,
+	batches chan<- remoteObservationBatch,
 	interval time.Duration,
 ) error {
 	if interval < MinPollInterval {
@@ -153,13 +153,17 @@ func (rt *watchRuntime) watchSharedRootRemote(
 			continue
 		}
 
-		finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, &result)
-		if !committed {
+		batch := buildSharedRootWatchBatch(rt.engine, &result)
+		if dispatchErr := rt.dispatchSharedRootBatch(ctx, batches, &batch); dispatchErr != nil {
+			if sharedRootWatchStopped(ctx, dispatchErr) {
+				return nil
+			}
+			rt.engine.logger.Warn("shared-root watch batch apply failed, retrying after poll loop",
+				slog.String("error", dispatchErr.Error()),
+				slog.String("drive_id", rt.engine.driveID.String()),
+				slog.String("root_item_id", rt.engine.rootItemID),
+			)
 			continue
-		}
-
-		if stop := rt.dispatchSharedRootEvents(ctx, events, finalEvents); stop {
-			return nil
 		}
 		bo.Reset()
 		if stop, sleepErr := rt.sleepSharedRootWatch(ctx, interval, "interval"); sleepErr != nil || stop {
@@ -188,20 +192,22 @@ func (rt *watchRuntime) handleSharedRootPollError(
 	return rt.sleepSharedRootWatch(ctx, delay, "backoff")
 }
 
-func (rt *watchRuntime) dispatchSharedRootEvents(
+func (rt *watchRuntime) dispatchSharedRootBatch(
 	ctx context.Context,
-	events chan<- ChangeEvent,
-	polledEvents []ChangeEvent,
-) bool {
-	for i := range polledEvents {
-		select {
-		case events <- polledEvents[i]:
-		case <-ctx.Done():
-			return true
-		}
+	batches chan<- remoteObservationBatch,
+	batch *remoteObservationBatch,
+) error {
+	if batch == nil {
+		return nil
 	}
 
-	return false
+	select {
+	case batches <- *batch:
+	case <-ctx.Done():
+		return fmt.Errorf("dispatch shared-root watch batch: %w", ctx.Err())
+	}
+
+	return batch.waitApplied(ctx)
 }
 
 func (rt *watchRuntime) sleepSharedRootWatch(

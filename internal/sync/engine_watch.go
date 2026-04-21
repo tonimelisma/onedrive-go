@@ -136,10 +136,12 @@ func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) err
 	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
-	errs, activeObs, skippedCh := rt.startObservers(ctx, pipe.bl, rt.dirtyBuf, opts)
+	errs, activeObs, skippedCh, localEvents, remoteBatches := rt.startObservers(ctx, pipe.bl, opts)
 	pipe.errs = errs
 	pipe.activeObs = activeObs
 	pipe.skippedCh = skippedCh
+	pipe.localEvents = localEvents
+	pipe.remoteBatches = remoteBatches
 
 	// Step 4: Run the watch loop.
 	return rt.runWatchLoop(ctx, pipe)
@@ -158,10 +160,11 @@ func isWatchShutdownError(ctx context.Context, err error) bool {
 type watchPipeline struct {
 	runtime        *watchRuntime
 	bl             *Baseline
-	safety         *SafetyConfig
 	batchReady     <-chan DirtyBatch
 	completions    <-chan ActionCompletion
 	errs           <-chan error
+	localEvents    <-chan ChangeEvent
+	remoteBatches  <-chan remoteObservationBatch
 	skippedCh      <-chan []SkippedItem
 	refreshC       <-chan time.Time
 	refreshResults <-chan remoteRefreshResult
@@ -236,7 +239,6 @@ func (rt *watchRuntime) initWatchInfra(
 
 	pipe := &watchPipeline{
 		runtime:        rt,
-		safety:         rt.engine.resolveSafetyConfig(),
 		batchReady:     batchReady,
 		completions:    pool.Completions(),
 		refreshC:       rt.refreshCh,
@@ -309,7 +311,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 		return fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
 	planStart := rt.engine.nowFunc()
-	plan, err := rt.buildCurrentActionPlan(ctx, bl, mode, pipe.safety)
+	plan, err := rt.buildCurrentActionPlan(ctx, bl, mode)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap planning failed: %w", err)
 	}
@@ -322,11 +324,11 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap runtime state load failed: %w", err)
 	}
-	rt.initializePreparedRuntime(&preparedCurrentActionPlan{
-		plan:        plan,
-		retryRows:   retryRows,
-		blockScopes: blockScopes,
-	})
+	prepared := &PreparedCurrentPlan{
+		Plan:        plan,
+		RetryRows:   retryRows,
+		BlockScopes: blockScopes,
+	}
 	if len(plan.Actions) == 0 {
 		return rt.finishBootstrapWithoutActions(ctx, mode, bootstrapStart, pendingCursorCommit)
 	}
@@ -339,7 +341,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	rt.beginSyncStatusBatch(bootstrapStart)
 
 	// Dispatch through watch pipeline (same path as steady-state batches).
-	initialOutbox, _, err := rt.dispatchCurrentPlan(ctx, plan, bl)
+	initialOutbox, _, err := rt.startPreparedRuntime(ctx, prepared, bl, rt)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap dispatch failed: %w", err)
 	}
@@ -389,26 +391,24 @@ func (rt *watchRuntime) finishBootstrapAfterActions(
 	return nil
 }
 
-// startObservers launches remote and local observer goroutines that feed
-// events into the buffer. Returns an error channel for observer failures and
-// the number of observers started. The events channel is closed automatically
-// when all observers exit, allowing the bridge goroutine to drain cleanly.
+// startObservers launches remote and local observer goroutines. The watch loop
+// owns remote batch application and dirty marking; observers emit only local
+// change hints or loop-applied remote batches.
 func (rt *watchRuntime) startObservers(
-	ctx context.Context, bl *Baseline, dirtyBuf *DirtyBuffer, opts WatchOptions,
-) (<-chan error, int, <-chan []SkippedItem) {
-	events := make(chan ChangeEvent, watchEventBuf)
+	ctx context.Context, bl *Baseline, opts WatchOptions,
+) (<-chan error, int, <-chan []SkippedItem, <-chan ChangeEvent, <-chan remoteObservationBatch) {
+	localEvents := make(chan ChangeEvent, watchEventBuf)
+	remoteBatches := make(chan remoteObservationBatch, watchEventBuf)
 	errs := make(chan error, 2)
 
 	var obsWg stdsync.WaitGroup
-
-	rt.startWatchEventBridge(ctx, dirtyBuf, events)
 
 	count := 0
 
 	obsWg.Add(1)
 	count++
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverRemote})
-	rt.startRemoteObserver(ctx, &obsWg, bl, events, errs, opts)
+	rt.startRemoteObserver(ctx, &obsWg, bl, remoteBatches, errs, opts)
 
 	// Channel for forwarding SkippedItems from safety scans to the engine.
 	// Buffered(2) — at most 2 safety scans could overlap before draining.
@@ -446,8 +446,9 @@ func (rt *watchRuntime) startObservers(
 	go func() {
 		defer obsWg.Done()
 		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
+		defer close(localEvents)
 
-		watchErr := localObs.Watch(ctx, rt.engine.syncTree, events)
+		watchErr := localObs.Watch(ctx, rt.engine.syncTree, localEvents)
 		if errors.Is(watchErr, ErrWatchLimitExhausted) {
 			if err := rt.engine.baseline.MarkFullLocalRefresh(
 				context.WithoutCancel(ctx),
@@ -464,7 +465,7 @@ func (rt *watchRuntime) startObservers(
 				slog.Duration("scan_interval", localRefreshIntervalForMode(localRefreshModeWatchDegraded)),
 			)
 
-			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, events, localRefreshIntervalForMode(localRefreshModeWatchDegraded))
+			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, localEvents, localRefreshIntervalForMode(localRefreshModeWatchDegraded))
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
 			errs <- nil // clean exit after context cancel
 
@@ -474,7 +475,6 @@ func (rt *watchRuntime) startObservers(
 		errs <- watchErr
 	}()
 
-	rt.closeWatchEventsWhenObserversExit(&obsWg, events)
 	if err := rt.engine.baseline.MarkFullLocalRefresh(
 		context.WithoutCancel(ctx),
 		rt.engine.driveID,
@@ -486,20 +486,20 @@ func (rt *watchRuntime) startObservers(
 		)
 	}
 
-	return errs, count, skippedCh
+	return errs, count, skippedCh, localEvents, remoteBatches
 }
 
 func (rt *watchRuntime) startRemoteObserver(
 	ctx context.Context,
 	obsWg *stdsync.WaitGroup,
 	bl *Baseline,
-	events chan<- ChangeEvent,
+	remoteBatches chan<- remoteObservationBatch,
 	errs chan<- error,
 	opts WatchOptions,
 ) {
 	pollInterval := rt.engine.resolvePollInterval(opts)
 	plan := rt.buildPrimaryRootObservationPlan(false)
-	rt.startPrimaryRootWatch(ctx, obsWg, bl, events, errs, pollInterval, plan)
+	rt.startPrimaryRootWatch(ctx, obsWg, bl, remoteBatches, errs, pollInterval, plan)
 }
 
 func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan struct{} {
@@ -584,45 +584,6 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event SocketIOLifecycleEvent)
 	}
 
 	rt.engine.emitDebugEvent(debugEvent)
-}
-
-func (rt *watchRuntime) startWatchEventBridge(
-	ctx context.Context,
-	dirtyBuf *DirtyBuffer,
-	events <-chan ChangeEvent,
-) {
-	go func() {
-		for {
-			select {
-			case ev, ok := <-events:
-				if !ok {
-					return
-				}
-
-				if dirtyBuf == nil {
-					continue
-				}
-				if ev.Path != "" {
-					dirtyBuf.MarkPath(ev.Path)
-				}
-				if ev.OldPath != "" {
-					dirtyBuf.MarkPath(ev.OldPath)
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-}
-
-func (rt *watchRuntime) closeWatchEventsWhenObserversExit(
-	obsWg *stdsync.WaitGroup,
-	events chan ChangeEvent,
-) {
-	go func() {
-		obsWg.Wait()
-		close(events)
-	}()
 }
 
 // runPeriodicFullScan runs periodic full filesystem scans as a fallback when

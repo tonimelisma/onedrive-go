@@ -19,6 +19,25 @@ type pendingPrimaryCursorCommit struct {
 	markFullRemoteRefresh bool
 }
 
+type remoteObservationBatchSource string
+
+const (
+	remoteObservationBatchPrimaryWatch remoteObservationBatchSource = "primary_watch"
+	remoteObservationBatchSharedRoot   remoteObservationBatchSource = "shared_root_watch"
+	remoteObservationBatchFullRefresh  remoteObservationBatchSource = "full_refresh"
+)
+
+type remoteObservationBatch struct {
+	source                remoteObservationBatchSource
+	observed              []ObservedItem
+	emitted               []ChangeEvent
+	pending               *pendingPrimaryCursorCommit
+	findings              ObservationFindingsBatch
+	armFullRefreshTimer   bool
+	markFullRefreshIfIdle bool
+	applyAck              chan error
+}
+
 type remoteFetchResult struct {
 	events   []ChangeEvent
 	pending  *pendingPrimaryCursorCommit

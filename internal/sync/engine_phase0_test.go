@@ -37,7 +37,6 @@ func newBootstrapWatchPipelineForTest(
 
 	return &watchPipeline{
 		runtime:     rt,
-		safety:      DefaultSafetyConfig(),
 		pool:        pool,
 		completions: pool.Completions(),
 		mode:        mode,
@@ -783,7 +782,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
 
 	rt.runFullRemoteRefreshAsync(ctx, bl)
-	waitForRefreshDone(t, eng)
+	waitForRefreshDone(t, t.Context(), eng)
 
 	select {
 	case ta := <-ready:

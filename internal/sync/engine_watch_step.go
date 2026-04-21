@@ -13,6 +13,10 @@ const (
 	watchEventBatchClosed          watchEventKind = "batch_closed"
 	watchEventActionCompletion     watchEventKind = "action_completion"
 	watchEventCompletionsClosed    watchEventKind = "completions_closed"
+	watchEventLocalChange          watchEventKind = "local_change"
+	watchEventLocalEventsClosed    watchEventKind = "local_events_closed"
+	watchEventRemoteBatch          watchEventKind = "remote_batch"
+	watchEventRemoteBatchesClosed  watchEventKind = "remote_batches_closed"
 	watchEventSkipped              watchEventKind = "skipped"
 	watchEventSkippedClosed        watchEventKind = "skipped_closed"
 	watchEventRecheckTick          watchEventKind = "recheck_tick"
@@ -29,6 +33,8 @@ const (
 type watchEvent struct {
 	kind          watchEventKind
 	batch         DirtyBatch
+	change        *ChangeEvent
+	remoteBatch   *remoteObservationBatch
 	dispatched    *TrackedAction
 	completion    *ActionCompletion
 	skipped       []SkippedItem
@@ -60,6 +66,18 @@ func (rt *watchRuntime) waitWatchEvent(ctx context.Context, p *watchPipeline) wa
 		}
 
 		return watchEvent{kind: watchEventBatchReady, batch: batch}
+	case change, ok := <-p.localEvents:
+		if !ok {
+			return watchEvent{kind: watchEventLocalEventsClosed}
+		}
+
+		return watchEvent{kind: watchEventLocalChange, change: &change}
+	case batch, ok := <-p.remoteBatches:
+		if !ok {
+			return watchEvent{kind: watchEventRemoteBatchesClosed}
+		}
+
+		return watchEvent{kind: watchEventRemoteBatch, remoteBatch: &batch}
 	case completion, ok := <-p.completions:
 		if !ok {
 			return watchEvent{kind: watchEventCompletionsClosed}
@@ -106,8 +124,8 @@ func (rt *watchRuntime) transitionWatchEvent(
 		return transition, err
 	}
 
-	if transition, handled := rt.transitionWatchObservationEvent(ctx, p, event); handled {
-		return transition, nil
+	if transition, handled, err := rt.transitionWatchObservationEvent(ctx, p, event); handled {
+		return transition, err
 	}
 
 	if transition, handled, err := rt.transitionWatchMaintenanceEvent(ctx, p, event); handled {
@@ -157,8 +175,12 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 			markRunning:       event.dispatched,
 		}, true, nil
 	case watchEventBatchReady:
+		if !rt.canPrepareNow() {
+			rt.queueDirtyReplan(event.batch)
+			return watchTransition{}, true, nil
+		}
 		return watchTransition{
-			appendOutbox: rt.processDirtyBatch(ctx, event.batch, p.bl, p.mode, p.safety),
+			appendOutbox: rt.processDirtyBatch(ctx, event.batch, p.bl, p.mode),
 		}, true, nil
 	case watchEventBatchClosed:
 		return watchTransition{done: true}, true, nil
@@ -169,7 +191,7 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 			return watchTransition{}, true, outcome.terminateErr
 		}
 
-		nextOutbox, err := rt.drainPublicationReadyActions(ctx, rt, p.bl, rt.currentOutbox(), outcome.dispatched)
+		nextOutbox, err := rt.reducePublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), outcome.dispatched)
 		if err != nil {
 			rt.clearSyncStatusBatch()
 			rt.completeOutboxAsShutdown(nextOutbox)
@@ -187,7 +209,11 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 		}
 
 		return watchTransition{}, true, fmt.Errorf("sync: action completions channel closed unexpectedly")
-	case watchEventSkipped,
+	case watchEventLocalChange,
+		watchEventLocalEventsClosed,
+		watchEventRemoteBatch,
+		watchEventRemoteBatchesClosed,
+		watchEventSkipped,
 		watchEventSkippedClosed,
 		watchEventRecheckTick,
 		watchEventRefreshTick,
@@ -208,37 +234,101 @@ func (rt *watchRuntime) transitionWatchObservationEvent(
 	ctx context.Context,
 	p *watchPipeline,
 	event *watchEvent,
-) (watchTransition, bool) {
+) (watchTransition, bool, error) {
+	if handled, err := rt.transitionWatchObservationBatchEvent(ctx, p, event); handled {
+		return watchTransition{}, handled, err
+	}
+
+	return rt.transitionWatchObservationMaintenanceEvent(ctx, p, event)
+}
+
+func (rt *watchRuntime) transitionWatchObservationBatchEvent(
+	ctx context.Context,
+	p *watchPipeline,
+	event *watchEvent,
+) (bool, error) {
 	switch event.kind {
-	case watchEventSkipped:
-		rt.reconcileSkippedObservationFindings(ctx, rt, event.skipped)
-		return watchTransition{}, true
-	case watchEventSkippedClosed:
-		p.skippedCh = nil
-		return watchTransition{}, true
-	case watchEventRefreshTick:
-		return watchTransition{startRefresh: true}, true
-	case watchEventRefreshResult:
-		rt.applyRemoteRefreshResult(event.refreshResult)
-		return watchTransition{}, true
-	case watchEventRefreshResultsClosed:
-		p.refreshResults = nil
-		return watchTransition{}, true
+	case watchEventLocalChange:
+		if event.change != nil && rt.dirtyBuf != nil {
+			if event.change.Path != "" {
+				rt.dirtyBuf.MarkPath(event.change.Path)
+			}
+			if event.change.OldPath != "" {
+				rt.dirtyBuf.MarkPath(event.change.OldPath)
+			}
+		}
+		return true, nil
+	case watchEventLocalEventsClosed:
+		p.localEvents = nil
+		return true, nil
+	case watchEventRemoteBatch:
+		if event.remoteBatch == nil {
+			return true, nil
+		}
+		return true, rt.handleRemoteObservationBatch(ctx, event.remoteBatch)
+	case watchEventRemoteBatchesClosed:
+		p.remoteBatches = nil
+		return true, nil
 	case watchEventDispatchReady,
 		watchEventBatchReady,
 		watchEventBatchClosed,
 		watchEventActionCompletion,
 		watchEventCompletionsClosed,
+		watchEventSkipped,
+		watchEventSkippedClosed,
+		watchEventRecheckTick,
+		watchEventRefreshTick,
+		watchEventRefreshResult,
+		watchEventRefreshResultsClosed,
+		watchEventObserverError,
+		watchEventObserverErrorsClosed,
+		watchEventTrialTick,
+		watchEventRetryTick,
+		watchEventContextCanceled:
+		return false, nil
+	}
+
+	return false, nil
+}
+
+func (rt *watchRuntime) transitionWatchObservationMaintenanceEvent(
+	ctx context.Context,
+	p *watchPipeline,
+	event *watchEvent,
+) (watchTransition, bool, error) {
+	switch event.kind {
+	case watchEventSkipped:
+		rt.reconcileSkippedObservationFindings(ctx, rt, event.skipped)
+		return watchTransition{}, true, nil
+	case watchEventSkippedClosed:
+		p.skippedCh = nil
+		return watchTransition{}, true, nil
+	case watchEventRefreshTick:
+		return watchTransition{startRefresh: true}, true, nil
+	case watchEventRefreshResult:
+		return watchTransition{}, true, rt.applyRemoteRefreshResult(ctx, &event.refreshResult)
+	case watchEventRefreshResultsClosed:
+		p.refreshResults = nil
+		return watchTransition{}, true, nil
+	case watchEventDispatchReady,
+		watchEventBatchReady,
+		watchEventBatchClosed,
+		watchEventActionCompletion,
+		watchEventCompletionsClosed,
+		watchEventLocalChange,
+		watchEventLocalEventsClosed,
+		watchEventRemoteBatch,
+		watchEventRemoteBatchesClosed,
 		watchEventRecheckTick,
 		watchEventObserverError,
 		watchEventObserverErrorsClosed,
 		watchEventTrialTick,
 		watchEventRetryTick,
 		watchEventContextCanceled:
-		return watchTransition{}, false
+		return watchTransition{}, false, nil
 	}
 
-	return watchTransition{}, false
+	return watchTransition{}, false, nil
 }
 
 func (rt *watchRuntime) transitionWatchMaintenanceEvent(
@@ -268,12 +358,18 @@ func (rt *watchRuntime) transitionWatchMaintenanceEvent(
 		p.errs = nil
 		return watchTransition{}, true, nil
 	case watchEventTrialTick:
+		if rt.hasPendingDirtyReplan() {
+			return watchTransition{}, true, nil
+		}
 		return watchTransition{
-			appendOutbox: rt.runTrialDispatch(ctx, p.bl, p.mode, p.safety),
+			appendOutbox: rt.runTrialDispatch(ctx, p.bl, p.mode),
 		}, true, nil
 	case watchEventRetryTick:
+		if rt.hasPendingDirtyReplan() {
+			return watchTransition{}, true, nil
+		}
 		return watchTransition{
-			appendOutbox: rt.runRetrierSweep(ctx, p.bl, p.mode, p.safety),
+			appendOutbox: rt.runRetrierSweep(ctx, p.bl, p.mode),
 		}, true, nil
 	case watchEventContextCanceled:
 		return watchTransition{beginDrain: true}, true, nil
@@ -282,6 +378,10 @@ func (rt *watchRuntime) transitionWatchMaintenanceEvent(
 		watchEventBatchClosed,
 		watchEventActionCompletion,
 		watchEventCompletionsClosed,
+		watchEventLocalChange,
+		watchEventLocalEventsClosed,
+		watchEventRemoteBatch,
+		watchEventRemoteBatchesClosed,
 		watchEventSkipped,
 		watchEventSkippedClosed,
 		watchEventRefreshTick,

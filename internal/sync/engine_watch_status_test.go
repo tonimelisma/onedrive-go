@@ -91,8 +91,6 @@ func TestProcessDirtyBatch_BidirectionalWritesSyncStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, eng)
-	safety := DefaultSafetyConfig()
-
 	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-as",
@@ -104,8 +102,51 @@ func TestProcessDirtyBatch_BidirectionalWritesSyncStatus(t *testing.T) {
 
 	dispatch := testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
 		Paths: []string{"already-synced.txt"},
-	}, bl, SyncBidirectional, safety)
+	}, bl, SyncBidirectional)
 	assert.Nil(t, dispatch)
+
+	status, err := eng.baseline.ReadSyncStatus(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, clock.Now().UnixNano(), status.LastSyncedAt)
+}
+
+func TestProcessDirtyBatch_BidirectionalWritesSyncStatusWhenOnlyFutureHeldWorkRemains(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	clock := newManualClock(time.Date(2026, 4, 21, 16, 30, 0, 0, time.UTC))
+	installManualClock(eng.Engine, clock)
+	ctx := t.Context()
+
+	writeLocalFile(t, syncRoot, "held.txt", "future held upload")
+
+	retryRow := retryWorkIdentityForWork("held.txt", "", ActionUpload)
+	retryRow.AttemptCount = 1
+	retryRow.NextRetryAt = clock.Now().Add(time.Hour).UnixNano()
+	retryRow.FirstSeenAt = clock.Now().Add(-time.Minute).UnixNano()
+	retryRow.LastSeenAt = clock.Now().UnixNano()
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &retryRow))
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	dispatch := rt.processDirtyBatch(ctx, DirtyBatch{
+		Paths: []string{"held.txt"},
+	}, bl, SyncBidirectional)
+	assert.Nil(t, dispatch)
+	assert.False(t, rt.syncBatch.active, "future-held work should not leave the sync-status batch open")
 
 	status, err := eng.baseline.ReadSyncStatus(ctx)
 	require.NoError(t, err)
@@ -150,8 +191,6 @@ func TestProcessDirtyBatch_DirectionalDoesNotWriteSyncStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, eng)
-	safety := DefaultSafetyConfig()
-
 	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-upload-only",
@@ -163,7 +202,7 @@ func TestProcessDirtyBatch_DirectionalDoesNotWriteSyncStatus(t *testing.T) {
 
 	dispatch := testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
 		Paths: []string{"already-synced.txt"},
-	}, bl, SyncUploadOnly, safety)
+	}, bl, SyncUploadOnly)
 	assert.Nil(t, dispatch)
 
 	status, err := eng.baseline.ReadSyncStatus(ctx)

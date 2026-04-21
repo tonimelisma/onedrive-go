@@ -16,7 +16,7 @@ func (r *oneShotRunner) prepareLiveCurrentPlan(
 	bl *Baseline,
 	mode Mode,
 	opts RunOptions,
-) (*preparedCurrentActionPlan, error) {
+) (*PreparedCurrentPlan, error) {
 	observed, err := r.observeLiveCurrentState(ctx, bl, opts.FullReconcile)
 	if err != nil {
 		return nil, err
@@ -30,7 +30,7 @@ func (r *oneShotRunner) prepareDryRunCurrentPlan(
 	bl *Baseline,
 	mode Mode,
 	opts RunOptions,
-) (*preparedCurrentActionPlan, error) {
+) (*PreparedCurrentPlan, error) {
 	observed, err := r.observeDryRunCurrentState(ctx, bl, opts.FullReconcile)
 	if err != nil {
 		return nil, err
@@ -89,15 +89,13 @@ func (r *oneShotRunner) prepareCurrentPlanFromObservedState(
 	opts RunOptions,
 	observed *observedCurrentState,
 	materialize bool,
-) (*preparedCurrentActionPlan, error) {
+) (*PreparedCurrentPlan, error) {
 	if observed == nil {
 		return nil, fmt.Errorf("sync: preparing current plan: missing observed state")
 	}
 
-	safety := r.engine.resolveSafetyConfig()
-
 	planStart := r.engine.nowFunc()
-	plan, err := r.engine.buildCurrentActionPlanFromInputs(&observed.inputs, bl, mode, safety)
+	plan, err := r.engine.buildCurrentActionPlanFromInputs(&observed.inputs, bl, mode)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
@@ -121,12 +119,12 @@ func (r *oneShotRunner) prepareCurrentPlanFromObservedState(
 	counts := CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
 
-	return &preparedCurrentActionPlan{
-		plan:                plan,
-		report:              report,
-		pendingCursorCommit: observed.pendingCursorCommit,
-		retryRows:           retryRows,
-		blockScopes:         blockScopes,
+	return &PreparedCurrentPlan{
+		Plan:                plan,
+		Report:              report,
+		PendingCursorCommit: observed.pendingCursorCommit,
+		RetryRows:           retryRows,
+		BlockScopes:         blockScopes,
 	}, nil
 }
 
@@ -141,12 +139,12 @@ type observedCurrentState struct {
 	pendingCursorCommit *pendingPrimaryCursorCommit
 }
 
-type preparedCurrentActionPlan struct {
-	plan                *ActionPlan
-	report              *Report
-	pendingCursorCommit *pendingPrimaryCursorCommit
-	retryRows           []RetryWorkRow
-	blockScopes         []*BlockScope
+type PreparedCurrentPlan struct {
+	Plan                *ActionPlan
+	Report              *Report
+	PendingCursorCommit *pendingPrimaryCursorCommit
+	RetryRows           []RetryWorkRow
+	BlockScopes         []*BlockScope
 }
 
 type currentActionPlanInputs struct {
@@ -276,7 +274,6 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 	inputs *currentActionPlanInputs,
 	bl *Baseline,
 	mode Mode,
-	safety *SafetyConfig,
 ) (*ActionPlan, error) {
 	return e.planner.PlanCurrentState(
 		inputs.comparisons,
@@ -286,7 +283,6 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 		inputs.observationIssues,
 		bl,
 		mode,
-		safety,
 	)
 }
 
@@ -362,14 +358,13 @@ func (flow *engineFlow) buildCurrentActionPlan(
 	ctx context.Context,
 	bl *Baseline,
 	mode Mode,
-	safety *SafetyConfig,
 ) (*ActionPlan, error) {
 	inputs, err := flow.loadCurrentActionPlanInputs(ctx, flow.engine.baseline, flow.engine.driveID)
 	if err != nil {
 		return nil, err
 	}
 
-	return flow.engine.buildCurrentActionPlanFromInputs(&inputs, bl, mode, safety)
+	return flow.engine.buildCurrentActionPlanFromInputs(&inputs, bl, mode)
 }
 
 func (flow *engineFlow) buildDryRunCurrentActionPlan(
