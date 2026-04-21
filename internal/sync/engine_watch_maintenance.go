@@ -7,11 +7,10 @@ import (
 	"time"
 )
 
-// handleRecheckTick processes a maintenance tick for watch-mode summary
-// logging and debug-event bookkeeping.
-func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
+// handleMaintenanceTick processes a periodic watch summary/maintenance tick.
+func (rt *watchRuntime) handleMaintenanceTick(ctx context.Context) {
 	rt.logWatchSummary(ctx)
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRecheckTickHandled})
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventMaintenanceTickHandled})
 }
 
 func (e *Engine) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, error) {

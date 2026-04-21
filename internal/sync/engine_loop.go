@@ -312,12 +312,7 @@ func (rt *watchRuntime) runWatchStep(
 	p *watchPipeline,
 ) (bool, error) {
 	event := rt.waitWatchEvent(ctx, p)
-	transition, err := rt.transitionWatchEvent(ctx, p, &event)
-	if err != nil {
-		return false, err
-	}
-
-	return rt.applyWatchTransition(ctx, p, transition)
+	return rt.handleWatchEvent(ctx, p, &event)
 }
 
 func (rt *watchRuntime) handleObserverExit(p *watchPipeline, shuttingDown bool) error {
@@ -376,7 +371,7 @@ func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.localEvents = nil
 	p.remoteBatches = nil
 	p.skippedCh = nil
-	p.recheckC = nil
+	p.maintenanceC = nil
 	p.refreshC = nil
 }
 

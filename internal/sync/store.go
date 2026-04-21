@@ -151,18 +151,6 @@ func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) err
 	return nil
 }
 
-// DataVersion returns SQLite's PRAGMA data_version, which changes every time
-// another connection commits a write. The engine's own writes don't change it.
-// Used to detect external store mutations without polling the full table.
-func (m *SyncStore) DataVersion(ctx context.Context) (int64, error) {
-	var version int64
-	if err := m.db.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version); err != nil {
-		return 0, fmt.Errorf("sync: PRAGMA data_version: %w", err)
-	}
-
-	return version, nil
-}
-
 // rawDB exposes the underlying SQLite handle for same-package tests and store
 // internals that need assertions below the typed API surface.
 func (m *SyncStore) rawDB() *sql.DB {

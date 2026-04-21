@@ -370,31 +370,19 @@ func TestRunWatch_UploadOnly_StartsRemoteObserver(t *testing.T) {
 }
 
 // Validates: R-2.14.3
-func TestWatchRuntime_InitRecheckState_SeedsLastDataVersion(t *testing.T) {
+func TestWatchRuntime_HandleMaintenanceTick_EmitsDebugEventWithoutSQLiteProbe(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-1"), nil
-		},
-	}
-
-	eng, _ := newTestEngine(t, mock)
+	eng := newSingleOwnerEngine(t)
+	recorder := attachDebugEventRecorder(eng)
 	ctx := t.Context()
 	newTestWatchState(t, eng)
 
-	// Seed the initial data_version.
-	dv, err := eng.baseline.DataVersion(ctx)
-	require.NoError(t, err)
-	testWatchRuntime(t, eng).lastDataVersion = dv
+	testWatchRuntime(t, eng).handleMaintenanceTick(ctx)
 
-	// The maintenance tick no longer reacts to external DB mutations. The
-	// stored data_version is still initialized for watch startup bookkeeping.
-	assert.Equal(t, dv, testWatchRuntime(t, eng).lastDataVersion)
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventMaintenanceTickHandled
+	}, "maintenance tick handled")
 }
 
 // TestRunWatch_ProcessBatch_EmptyPlan verifies that an empty plan (all
@@ -481,7 +469,7 @@ func TestRunWatch_BusyRuntimeQueuesDirtyReplanInsteadOfOverlappingPrepare(t *tes
 	rt := testWatchRuntime(t, eng)
 	rt.runningCount = 1
 
-	transition, handled, err := rt.transitionWatchDispatchEvent(ctx, &watchPipeline{
+	done, handled, err := rt.handleDispatchEvent(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
 	}, &watchEvent{
@@ -492,7 +480,8 @@ func TestRunWatch_BusyRuntimeQueuesDirtyReplanInsteadOfOverlappingPrepare(t *tes
 	})
 	require.True(t, handled)
 	require.NoError(t, err)
-	assert.Empty(t, transition.appendOutbox)
+	assert.False(t, done)
+	assert.Empty(t, rt.currentOutbox())
 	assert.True(t, rt.hasPendingDirtyReplan())
 
 	queued, ok := rt.takePendingDirtyReplan()

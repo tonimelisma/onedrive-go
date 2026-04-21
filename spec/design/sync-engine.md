@@ -155,7 +155,7 @@ back-to-back expensive full refreshes.
 - action admission and dispatch
 - action completion drain
 - retry and trial timer scheduling
-- periodic recheck and full remote refresh
+- periodic maintenance ticks and full remote refresh
 - graceful drain on shutdown
 
 The watch loop is the single owner of mutable scheduling/runtime state:
@@ -191,7 +191,7 @@ unlocks publication-only dependents, watch mode commits those mutations
 synchronously and keeps draining them on the engine/store side until concrete
 worker actions are the only dispatchable work left.
 
-### Recheck And Maintenance
+### Maintenance And Refresh
 
 Watch mode still owns periodic maintenance ticks for summary logging and full
 remote refresh cadence, but it no longer polls SQLite for mysterious external
@@ -293,7 +293,7 @@ table.
 ### Permission recovery
 
 Permission blockers are revalidated automatically; there is no manual retry or
-manual recheck CLI for them. Observation may create or clear read-boundary
+manual maintenance CLI for them. Observation may create or clear read-boundary
 facts directly when current truth proves the blocker or its recovery. Probe and
 execution may create or clear persisted write scopes when write access is
 affirmatively denied or restored. A raw `403` or `os.ErrPermission` is only a
