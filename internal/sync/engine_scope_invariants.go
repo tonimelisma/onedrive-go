@@ -64,11 +64,11 @@ func (flow *engineFlow) mustAssertPlannerSweepAllowed(
 	}
 }
 
-func (flow *engineFlow) mustAssertReconcileBookkeepingCleared(watch *watchRuntime, stage string) {
+func (flow *engineFlow) mustAssertRefreshBookkeepingCleared(watch *watchRuntime, stage string) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertReconcileBookkeepingCleared(watch); err != nil {
+	if err := flow.assertRefreshBookkeepingCleared(watch); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
@@ -148,12 +148,12 @@ func (flow *engineFlow) assertPlannerSweepAllowed(watch *watchRuntime, sweep str
 	return fmt.Errorf("%s must not start after drain begins", sweep)
 }
 
-func (flow *engineFlow) assertReconcileBookkeepingCleared(watch *watchRuntime) error {
-	if watch == nil || !watch.reconcileActive {
+func (flow *engineFlow) assertRefreshBookkeepingCleared(watch *watchRuntime) error {
+	if watch == nil || !watch.refreshActive {
 		return nil
 	}
 
-	return fmt.Errorf("draining reconcile bookkeeping must be cleared before continuing")
+	return fmt.Errorf("draining refresh bookkeeping must be cleared before continuing")
 }
 
 func (flow *engineFlow) assertObserverExitPhase(

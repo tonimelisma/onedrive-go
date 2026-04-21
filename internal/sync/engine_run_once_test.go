@@ -1363,3 +1363,23 @@ func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 	_, found := bl.GetByPath("retry-delete.txt")
 	assert.False(t, found)
 }
+
+func TestSyncStatusFromUpdate_RequiresEngineOwnedTimestamp(t *testing.T) {
+	t.Parallel()
+
+	status := syncStatusFromUpdate(&SyncStatusUpdate{
+		Duration:  2 * time.Second,
+		Succeeded: 3,
+		Failed:    1,
+	})
+	assert.Nil(t, status)
+
+	status = syncStatusFromUpdate(&SyncStatusUpdate{
+		SyncedAt:  time.Unix(123, 456).UTC(),
+		Duration:  2 * time.Second,
+		Succeeded: 3,
+		Failed:    1,
+	})
+	require.NotNil(t, status)
+	assert.Equal(t, time.Unix(123, 456).UTC().UnixNano(), status.LastSyncedAt)
+}
