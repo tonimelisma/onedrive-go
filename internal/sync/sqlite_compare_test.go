@@ -62,12 +62,12 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = store.rawDB().ExecContext(ctx, `
-		INSERT INTO local_state (path, item_type, hash, size, mtime, content_identity, observed_at)
+		INSERT INTO local_state (path, item_type, hash, size, mtime, content_identity)
 		VALUES
-			('upload.txt', 'file', 'new-local', 2, 2, 'new-local', 1),
-			('download.txt', 'file', 'same', 1, 1, 'same', 1),
-			('conflict.txt', 'file', 'local-conflict', 2, 2, 'local-conflict', 1),
-			('new-local.txt', 'file', 'local-create', 3, 3, 'local-create', 1)`)
+			('upload.txt', 'file', 'new-local', 2, 2, 'new-local'),
+			('download.txt', 'file', 'same', 1, 1, 'same'),
+			('conflict.txt', 'file', 'local-conflict', 2, 2, 'local-conflict'),
+			('new-local.txt', 'file', 'local-create', 3, 3, 'local-create')`)
 	require.NoError(t, err)
 
 	_, err = store.rawDB().ExecContext(ctx, `
@@ -108,10 +108,10 @@ func TestQueryReconciliationState_FolderDecisionMatrix(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = store.rawDB().ExecContext(ctx, `
-		INSERT INTO local_state (path, item_type, observed_at)
+		INSERT INTO local_state (path, item_type)
 		VALUES
-			('delete-local', 'folder', 1),
-			('new-local-folder', 'folder', 1)`)
+			('delete-local', 'folder'),
+			('new-local-folder', 'folder')`)
 	require.NoError(t, err)
 
 	_, err = store.rawDB().ExecContext(ctx, `

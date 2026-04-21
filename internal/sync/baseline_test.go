@@ -604,7 +604,7 @@ func TestMarkFullRemoteRefresh_PersistsNextRefreshAt(t *testing.T) {
 	ctx := t.Context()
 	at := time.Unix(20_000, 0)
 
-	require.NoError(t, mgr.MarkFullRemoteRefresh(ctx, driveid.New("drive-1"), at, remoteRefreshModeDeltaHealthy))
+	require.NoError(t, mgr.MarkFullRemoteRefresh(ctx, driveid.New("drive-1"), at))
 
 	state, err := mgr.ReadObservationState(ctx)
 	require.NoError(t, err)
@@ -1520,7 +1520,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	// Verify all expected tables exist by querying sqlite_master.
 	expectedTables := []string{
 		"baseline", "local_state", "observation_state",
-		"observation_issues", "retry_work", "run_status", "remote_state", "block_scopes",
+		"observation_issues", "retry_work", "sync_status", "remote_state", "block_scopes",
 	}
 
 	for _, table := range expectedTables {
@@ -1582,93 +1582,93 @@ func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
 	require.Error(t, err, "duplicate active path should be rejected")
 }
 
-// --- One-shot status tests (6.2b) ---
+// --- Sync status tests (6.2b) ---
 
 // Validates: R-2.2
-func TestWriteSyncRunStatus_RoundTrip(t *testing.T) {
+func TestWriteSyncStatus_RoundTrip(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
-	completedAt := time.Date(2026, 4, 3, 10, 30, 0, 0, time.UTC)
+	syncedAt := time.Date(2026, 4, 3, 10, 30, 0, 0, time.UTC)
 
-	report := &SyncRunReport{
-		CompletedAt: completedAt,
-		Duration:    1500 * time.Millisecond,
-		Succeeded:   42,
-		Failed:      3,
-		Errors:      []error{fmt.Errorf("some sync error")},
+	status := &SyncStatus{
+		LastSyncedAt:       syncedAt.UnixNano(),
+		LastSyncDurationMs: 1500,
+		LastSucceededCount: 42,
+		LastFailedCount:    3,
+		LastError:          "some sync error",
 	}
 
-	require.NoError(t, mgr.WriteSyncRunStatus(ctx, report))
+	require.NoError(t, mgr.WriteSyncStatus(ctx, status))
 
-	status, err := mgr.ReadSyncRunStatus(ctx)
+	got, err := mgr.ReadSyncStatus(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, completedAt.UnixNano(), status.LastCompletedAt)
-	assert.Equal(t, int64(1500), status.LastDurationMs)
-	assert.Equal(t, 42, status.LastSucceededCount)
-	assert.Equal(t, 3, status.LastFailedCount)
-	assert.Equal(t, "some sync error", status.LastError)
+	assert.Equal(t, syncedAt.UnixNano(), got.LastSyncedAt)
+	assert.Equal(t, int64(1500), got.LastSyncDurationMs)
+	assert.Equal(t, 42, got.LastSucceededCount)
+	assert.Equal(t, 3, got.LastFailedCount)
+	assert.Equal(t, "some sync error", got.LastError)
 }
 
 // Validates: R-2.2
-func TestWriteSyncRunStatus_Upsert(t *testing.T) {
+func TestWriteSyncStatus_Upsert(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	report1 := &SyncRunReport{CompletedAt: time.Unix(10, 0), Duration: 1 * time.Second, Succeeded: 10}
-	require.NoError(t, mgr.WriteSyncRunStatus(ctx, report1))
+	status1 := &SyncStatus{LastSyncedAt: time.Unix(10, 0).UnixNano(), LastSyncDurationMs: 1000, LastSucceededCount: 10}
+	require.NoError(t, mgr.WriteSyncStatus(ctx, status1))
 
-	report2 := &SyncRunReport{CompletedAt: time.Unix(20, 0), Duration: 2 * time.Second, Succeeded: 20}
-	require.NoError(t, mgr.WriteSyncRunStatus(ctx, report2))
+	status2 := &SyncStatus{LastSyncedAt: time.Unix(20, 0).UnixNano(), LastSyncDurationMs: 2000, LastSucceededCount: 20}
+	require.NoError(t, mgr.WriteSyncStatus(ctx, status2))
 
-	status, err := mgr.ReadSyncRunStatus(ctx)
+	status, err := mgr.ReadSyncStatus(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, time.Unix(20, 0).UnixNano(), status.LastCompletedAt)
+	assert.Equal(t, time.Unix(20, 0).UnixNano(), status.LastSyncedAt)
 	assert.Equal(t, 20, status.LastSucceededCount, "should be from second write")
-	assert.Equal(t, int64(2000), status.LastDurationMs)
+	assert.Equal(t, int64(2000), status.LastSyncDurationMs)
 }
 
 // Validates: R-2.2
-func TestWriteSyncRunStatus_NoErrors(t *testing.T) {
+func TestWriteSyncStatus_NoErrors(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	report := &SyncRunReport{CompletedAt: time.Unix(30, 0), Duration: 500 * time.Millisecond, Succeeded: 5}
-	require.NoError(t, mgr.WriteSyncRunStatus(ctx, report))
+	status := &SyncStatus{LastSyncedAt: time.Unix(30, 0).UnixNano(), LastSyncDurationMs: 500, LastSucceededCount: 5}
+	require.NoError(t, mgr.WriteSyncStatus(ctx, status))
 
-	status, err := mgr.ReadSyncRunStatus(ctx)
+	status, err := mgr.ReadSyncStatus(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, status.LastError)
 }
 
 // Validates: R-2.2
-func TestReadSyncRunStatus_EmptyDB(t *testing.T) {
+func TestReadSyncStatus_EmptyDB(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	status, err := mgr.ReadSyncRunStatus(ctx)
+	status, err := mgr.ReadSyncStatus(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, &SyncRunStatus{}, status)
+	assert.Equal(t, &SyncStatus{}, status)
 }
 
 // Validates: R-2.2
-func TestReadSyncRunStatus_MissingTableFails(t *testing.T) {
+func TestReadSyncStatus_MissingTableFails(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := mgr.db.ExecContext(ctx, `DROP TABLE run_status`)
+	_, err := mgr.db.ExecContext(ctx, `DROP TABLE sync_status`)
 	require.NoError(t, err)
 
-	_, err = mgr.ReadSyncRunStatus(ctx)
+	_, err = mgr.ReadSyncStatus(ctx)
 	require.Error(t, err)
 }
 

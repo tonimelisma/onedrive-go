@@ -17,6 +17,11 @@ import (
 const metadataDirPerms = 0o755
 
 const sharedFixtureEnvPath = ".testdata/fixtures.env"
+const (
+	testBundleConfigFile  = "config.toml"
+	testBundleCatalogFile = "catalog.json"
+	testConfigFilePerms   = 0o644
+)
 
 // LiveFixtures captures durable live Graph fixtures loaded from the test
 // environment. The values stay as strings so testutil's exported API does not
@@ -242,8 +247,9 @@ func FindModuleRoot(fallback string) string {
 	}
 }
 
-// FindTestCredentialDir locates .testdata/ relative to the module root.
-// Crashes if the directory does not exist.
+// FindTestCredentialDir locates the root .testdata/ test bundle relative
+// to the module root. The durable bundle contract is config.toml,
+// catalog.json, token_*.json, and optional fixtures.env.
 func FindTestCredentialDir(moduleRoot string) string {
 	dir := filepath.Join(moduleRoot, ".testdata")
 
@@ -274,12 +280,52 @@ const metadataFilePerms = 0o600
 // CopyCatalogFile copies the managed catalog from srcDir to dstDir when present.
 // Missing catalogs are silently skipped; copy failures are fatal.
 func CopyCatalogFile(srcDir, dstDir string) {
-	src := filepath.Join(srcDir, "catalog.json")
+	src := filepath.Join(srcDir, testBundleCatalogFile)
 	if _, err := localpath.Stat(src); err != nil {
 		return
 	}
 
-	CopyFile(src, filepath.Join(dstDir, "catalog.json"), metadataFilePerms)
+	CopyFile(src, filepath.Join(dstDir, testBundleCatalogFile), metadataFilePerms)
+}
+
+// EnsureTestCredentialBundle verifies that the durable root bundle contains
+// config.toml, catalog.json, and token files for the requested drive IDs.
+// Crashes on failure because live tests cannot proceed without the bundle.
+func EnsureTestCredentialBundle(dir string, driveIDs []string) {
+	required := []string{
+		filepath.Join(dir, testBundleConfigFile),
+		filepath.Join(dir, testBundleCatalogFile),
+	}
+	for _, path := range required {
+		if _, err := localpath.Stat(path); err != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: required test credential file not found: %s\n", path)
+			fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
+			os.Exit(1)
+		}
+	}
+
+	for _, driveID := range driveIDs {
+		tokenPath := filepath.Join(dir, TokenFileName(driveID))
+		if _, err := localpath.Stat(tokenPath); err != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: required token file not found: %s\n", tokenPath)
+			fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
+			os.Exit(1)
+		}
+	}
+}
+
+// CopyTestCredentialBundle copies the durable root credential bundle into an
+// isolated config/data layout for tests.
+func CopyTestCredentialBundle(srcDir, dstConfigDir, dstDataDir string, driveIDs []string) {
+	EnsureTestCredentialBundle(srcDir, driveIDs)
+
+	for _, driveID := range driveIDs {
+		tokenName := TokenFileName(driveID)
+		CopyFile(filepath.Join(srcDir, tokenName), filepath.Join(dstDataDir, tokenName), metadataFilePerms)
+	}
+
+	CopyCatalogFile(srcDir, dstDataDir)
+	CopyFile(filepath.Join(srcDir, testBundleConfigFile), filepath.Join(dstConfigDir, testBundleConfigFile), testConfigFilePerms)
 }
 
 // CopyFile copies a file from src to dst with the given permissions.

@@ -9,10 +9,10 @@ import (
 const (
 	sqlDeleteLocalState = `DELETE FROM local_state`
 	sqlInsertLocalState = `INSERT INTO local_state
-		(path, item_type, hash, size, mtime, content_identity, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`
+		(path, item_type, hash, size, mtime, content_identity)
+		VALUES (?, ?, ?, ?, ?, ?)`
 	sqlListLocalState = `SELECT
-		path, item_type, hash, size, mtime, content_identity, observed_at
+		path, item_type, hash, size, mtime, content_identity
 		FROM local_state
 		ORDER BY path`
 )
@@ -65,7 +65,6 @@ func replaceLocalStateTx(
 			nullKnownInt64(row.Size, true),
 			nullOptionalInt64(row.Mtime),
 			nullString(row.ContentIdentity),
-			row.ObservedAt,
 		); err != nil {
 			return fmt.Errorf("sync: inserting local_state row for %s: %w", row.Path, err)
 		}
@@ -97,7 +96,6 @@ func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]LocalStateRo
 			&size,
 			&mtime,
 			&contentIdentity,
-			&row.ObservedAt,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning local_state row: %w", err)
 		}
@@ -118,12 +116,8 @@ func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]LocalStateRo
 	return result, nil
 }
 
-func buildLocalStateRows(result ScanResult, observedAt int64) []LocalStateRow {
+func buildLocalStateRows(result ScanResult) []LocalStateRow {
 	rows := make([]LocalStateRow, len(result.Rows))
 	copy(rows, result.Rows)
-	for i := range rows {
-		rows[i].ObservedAt = observedAt
-	}
-
 	return rows
 }

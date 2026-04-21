@@ -181,11 +181,11 @@ func TestRunOnce_DownloadOnly_PersistsStatusForDeferredOnlyPass(t *testing.T) {
 	require.NoError(t, err, "RunOnce")
 	assert.Equal(t, 1, report.DeferredByMode.Uploads)
 
-	status, err := eng.baseline.ReadSyncRunStatus(ctx)
+	status, err := eng.baseline.ReadSyncStatus(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, status)
-	assert.NotZero(t, status.LastCompletedAt, "deferred-only passes must still persist completion time")
-	assert.GreaterOrEqual(t, status.LastDurationMs, int64(0))
+	assert.Zero(t, status.LastSyncedAt, "directional passes must not persist sync status")
+	assert.Zero(t, status.LastSyncDurationMs)
 	assert.Zero(t, status.LastSucceededCount)
 	assert.Zero(t, status.LastFailedCount)
 }
@@ -264,7 +264,6 @@ func TestLoadCurrentActionPlanInputsTx_ReadsSnapshotWritesFromProvidedTransactio
 		Size:            4,
 		Mtime:           5,
 		ContentIdentity: "hash",
-		ObservedAt:      123,
 	}}))
 
 	inputs, err := flow.loadCurrentActionPlanInputsTx(ctx, eng.baseline, tx, eng.driveID)
@@ -441,7 +440,6 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 		Size:            5,
 		Mtime:           11,
 		ContentIdentity: "stale-local-hash",
-		ObservedAt:      111,
 	}}))
 	_, err := eng.baseline.rawDB().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
@@ -981,7 +979,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 		ItemID:  "seed-1",
 	}}
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "stale-token")
-	require.NoError(t, eng.baseline.MarkFullRemoteReconcile(ctx, driveID, time.Now()))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now()))
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
@@ -1233,7 +1231,7 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 	)
 	require.NoError(t, err, "seed remote mirror edit row")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteReconcile(ctx, driveID, time.Now()))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now()))
 
 	report, runErr := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
@@ -1301,7 +1299,7 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 	)
 	require.NoError(t, err, "seed remote mirror row")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteReconcile(ctx, driveID, time.Now()))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now()))
 
 	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")

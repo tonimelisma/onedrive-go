@@ -94,7 +94,7 @@ For permission-derived conditions, the durable mapping is access-specific:
 - observation-owned read denial -> `observation_issues` tagged with the
   unreadable boundary `ScopeKey`
 - execution-owned write denial -> `block_scopes` plus blocked `retry_work`
-- raw `403` / `os.ErrPermission` without probe evidence -> no permission scope;
+- raw `403` / `os.ErrPermission` without probe evidence -> no permission block scope;
   fall back to ordinary retry or fatal handling
 
 Permission recovery follows the same ownership split:

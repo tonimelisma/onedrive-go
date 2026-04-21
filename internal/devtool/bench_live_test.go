@@ -177,8 +177,6 @@ func TestCreateBenchLiveRuntimeCopiesCredentialsAndWritesConfig(t *testing.T) {
 		filepath.Join(credentialDir, "token_personal_user@example.com.json"),
 		[]byte(`{"token":"x"}`),
 	))
-	require.NoError(t, writeFile(filepath.Join(credentialDir, "account_user@example.com.json"), []byte(`{}`)))
-	require.NoError(t, writeFile(filepath.Join(credentialDir, "drive_user@example.com.json"), []byte(`{}`)))
 
 	runtime, err := createBenchLiveRuntime(
 		workRoot,
@@ -191,11 +189,6 @@ func TestCreateBenchLiveRuntimeCopiesCredentialsAndWritesConfig(t *testing.T) {
 	dataRoot := filepath.Join(benchRuntimeEnvValue(runtime.env, "XDG_DATA_HOME"), "onedrive-go")
 	_, err = stat(filepath.Join(dataRoot, "token_personal_user@example.com.json"))
 	require.NoError(t, err)
-	_, err = stat(filepath.Join(dataRoot, "account_user@example.com.json"))
-	require.NoError(t, err)
-	_, err = stat(filepath.Join(dataRoot, "drive_user@example.com.json"))
-	require.NoError(t, err)
-
 	configBody, err := readFile(runtime.configPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(configBody), `["personal:user@example.com"]`)
@@ -380,9 +373,6 @@ func TestRunSampleReturnsFixtureFailureWhenRuntimeCleanupFails(t *testing.T) {
 		filepath.Join(credentialDir, "token_personal_user@example.com.json"),
 		[]byte(`{"token":"x"}`),
 	))
-	require.NoError(t, writeFile(filepath.Join(credentialDir, "account_user@example.com.json"), []byte(`{}`)))
-	require.NoError(t, writeFile(filepath.Join(credentialDir, "drive_user@example.com.json"), []byte(`{}`)))
-
 	t.Setenv("ONEDRIVE_TEST_DRIVE", "personal:user@example.com")
 	t.Setenv("ONEDRIVE_ALLOWED_TEST_ACCOUNTS", "personal:user@example.com")
 	t.Setenv("ONEDRIVE_TEST_DRIVE_2", "")

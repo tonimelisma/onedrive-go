@@ -22,12 +22,10 @@ func TestReplaceLocalState_ReplacesWholeSnapshot(t *testing.T) {
 			Size:            1,
 			Mtime:           11,
 			ContentIdentity: "hash-a",
-			ObservedAt:      100,
 		},
 		{
-			Path:       "folder",
-			ItemType:   ItemTypeFolder,
-			ObservedAt: 100,
+			Path:     "folder",
+			ItemType: ItemTypeFolder,
 		},
 	}))
 
@@ -39,7 +37,6 @@ func TestReplaceLocalState_ReplacesWholeSnapshot(t *testing.T) {
 			Size:            2,
 			Mtime:           22,
 			ContentIdentity: "hash-b",
-			ObservedAt:      200,
 		},
 	}))
 
@@ -48,7 +45,6 @@ func TestReplaceLocalState_ReplacesWholeSnapshot(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "beta.txt", rows[0].Path)
 	assert.Equal(t, "hash-b", rows[0].Hash)
-	assert.Equal(t, int64(200), rows[0].ObservedAt)
 }
 
 // Validates: R-2.1.3
@@ -87,7 +83,7 @@ func TestBuildLocalStateRows_UsesDirectSnapshotRows(t *testing.T) {
 				ContentIdentity: "hash-moved",
 			},
 		},
-	}, 999)
+	})
 
 	require.Len(t, rows, 4)
 	assert.Equal(t, expectedLocalStateRows(), rows)
@@ -96,10 +92,9 @@ func TestBuildLocalStateRows_UsesDirectSnapshotRows(t *testing.T) {
 func expectedLocalStateRows() []LocalStateRow {
 	return []LocalStateRow{
 		{
-			Path:       "folder",
-			ItemType:   ItemTypeFolder,
-			ObservedAt: 999,
-			Mtime:      606,
+			Path:     "folder",
+			ItemType: ItemTypeFolder,
+			Mtime:    606,
 		},
 		{
 			Path:            "fresh.txt",
@@ -108,7 +103,6 @@ func expectedLocalStateRows() []LocalStateRow {
 			Size:            40,
 			Mtime:           505,
 			ContentIdentity: "hash-fresh",
-			ObservedAt:      999,
 		},
 		{
 			Path:            "kept.txt",
@@ -117,7 +111,6 @@ func expectedLocalStateRows() []LocalStateRow {
 			Size:            10,
 			Mtime:           101,
 			ContentIdentity: "hash-kept",
-			ObservedAt:      999,
 		},
 		{
 			Path:            "new-name.txt",
@@ -126,7 +119,6 @@ func expectedLocalStateRows() []LocalStateRow {
 			Size:            30,
 			Mtime:           404,
 			ContentIdentity: "hash-moved",
-			ObservedAt:      999,
 		},
 	}
 }

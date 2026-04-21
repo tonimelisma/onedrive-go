@@ -52,6 +52,11 @@ type watchLoopState struct {
 type watchRuntimeState struct {
 	loop watchLoopState
 
+	// syncBatch tracks the current best-effort watch batch so status updates
+	// are written only after the loop has exhausted all currently admissible
+	// work and returned to quiescence.
+	syncBatch watchSyncBatchState
+
 	// currentPlan is the last successfully materialized watch action plan plus
 	// retry-work indexes derived from it. Normal watch observation/planning owns
 	// this cache; retry/trial only reads it so timer-driven follow-up never
@@ -74,6 +79,14 @@ type watchRuntimeState struct {
 	// Monotonic action ID counter owned by the watch control flow. Prevents
 	// ID collisions across batches without introducing cross-goroutine sync.
 	nextActionID int64
+}
+
+type watchSyncBatchState struct {
+	active        bool
+	startedAt     time.Time
+	succeededBase int
+	failedBase    int
+	errorBase     int
 }
 
 // materializedPlanSnapshot is the watch-owned cached current plan used by

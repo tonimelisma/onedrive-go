@@ -16,6 +16,7 @@ func (rt *watchRuntime) processDirtyBatch(
 	mode Mode,
 	safety *SafetyConfig,
 ) []*TrackedAction {
+	rt.beginSyncStatusBatch(rt.engine.nowFunc())
 	rt.engine.logger.Info("processing watch dirty batch",
 		slog.Int("paths", len(batch.Paths)),
 		slog.Bool("full_refresh", batch.FullRefresh),
@@ -25,6 +26,7 @@ func (rt *watchRuntime) processDirtyBatch(
 	observeStart := rt.engine.nowFunc()
 	localResult, err := rt.observeLocalChanges(ctx, rt, bl)
 	if err != nil {
+		rt.clearSyncStatusBatch()
 		rt.engine.logger.Error("watch local refresh failed, skipping dirty batch",
 			slog.String("error", err.Error()),
 		)
@@ -32,6 +34,7 @@ func (rt *watchRuntime) processDirtyBatch(
 	}
 	commitErr := rt.commitObservedLocalSnapshot(ctx, false, localResult)
 	if commitErr != nil {
+		rt.clearSyncStatusBatch()
 		rt.engine.logger.Error("watch local snapshot commit failed, skipping dirty batch",
 			slog.String("error", commitErr.Error()),
 		)
@@ -42,6 +45,7 @@ func (rt *watchRuntime) processDirtyBatch(
 	planStart := rt.engine.nowFunc()
 	plan, err := rt.buildCurrentActionPlan(ctx, bl, mode, safety)
 	if err != nil {
+		rt.clearSyncStatusBatch()
 		rt.engine.logger.Error("watch sqlite planning failed, skipping dirty batch",
 			slog.String("error", err.Error()),
 		)
@@ -51,6 +55,7 @@ func (rt *watchRuntime) processDirtyBatch(
 
 	materializeErr := rt.materializeCurrentActionPlan(ctx, plan)
 	if materializeErr != nil {
+		rt.clearSyncStatusBatch()
 		rt.engine.logger.Error("watch action-state materialization failed, skipping dirty batch",
 			slog.String("error", materializeErr.Error()),
 		)
@@ -59,6 +64,7 @@ func (rt *watchRuntime) processDirtyBatch(
 
 	if len(plan.Actions) == 0 {
 		rt.engine.logger.Debug("empty sqlite action plan for dirty batch")
+		rt.finishSyncStatusBatch(ctx, mode)
 		return nil
 	}
 
@@ -66,12 +72,14 @@ func (rt *watchRuntime) processDirtyBatch(
 
 	dispatch, dispatched, err := rt.dispatchCurrentPlan(ctx, plan, bl, dispatchBatchOptions{})
 	if err != nil {
+		rt.clearSyncStatusBatch()
 		rt.engine.logger.Error("watch dispatch failed, skipping dirty batch",
 			slog.String("error", err.Error()),
 		)
 		return nil
 	}
 	if !dispatched {
+		rt.finishSyncStatusBatch(ctx, mode)
 		return nil
 	}
 

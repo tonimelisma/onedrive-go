@@ -1,5 +1,5 @@
 // Package sync persists sync baseline, observation, failure, scope-block, and
-// run-status state.
+// sync-status state.
 //
 // The engine persists active scope rows here for restart/recovery. Watch mode
 // loads them into its single-owner runtime working set at startup; there is no

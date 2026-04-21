@@ -13,9 +13,11 @@ const (
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
 	//
-	// Generation 8 removes untimed block scopes and persists only timed blocker
-	// facts. Older stores require explicit reset rather than migration.
-	currentSyncStoreGeneration = 8
+	// Generation 9 renames run_status to sync_status, removes
+	// local_state.observed_at, and standardizes status timing semantics around
+	// the last successful bidirectional sync batch. Older stores require an
+	// explicit reset rather than migration.
+	currentSyncStoreGeneration = 9
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata
 		(singleton_id, schema_generation)
 	VALUES (1, ?)
@@ -54,10 +56,10 @@ CREATE TABLE IF NOT EXISTS observation_state (
     next_full_local_refresh_at    INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS run_status (
+CREATE TABLE IF NOT EXISTS sync_status (
     singleton_id           INTEGER PRIMARY KEY CHECK(singleton_id = 1),
-    last_completed_at      INTEGER NOT NULL DEFAULT 0,
-    last_duration_ms       INTEGER NOT NULL DEFAULT 0,
+    last_synced_at         INTEGER NOT NULL DEFAULT 0,
+    last_sync_duration_ms  INTEGER NOT NULL DEFAULT 0,
     last_succeeded_count   INTEGER NOT NULL DEFAULT 0,
     last_failed_count      INTEGER NOT NULL DEFAULT 0,
     last_error             TEXT    NOT NULL DEFAULT ''
@@ -86,8 +88,7 @@ CREATE TABLE IF NOT EXISTS local_state (
     hash             TEXT,
     size             INTEGER,
     mtime            INTEGER,
-    content_identity TEXT,
-    observed_at      INTEGER NOT NULL DEFAULT 0
+    content_identity TEXT
 );
 
 CREATE TABLE IF NOT EXISTS retry_work (
@@ -163,15 +164,13 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"last_full_remote_refresh_at", "next_full_remote_refresh_at",
 			"local_refresh_mode", "last_full_local_refresh_at", "next_full_local_refresh_at",
 		},
-		"run_status": {
-			"singleton_id", "last_completed_at", "last_duration_ms", "last_succeeded_count", "last_failed_count", "last_error",
+		"sync_status": {
+			"singleton_id", "last_synced_at", "last_sync_duration_ms", "last_succeeded_count", "last_failed_count", "last_error",
 		},
 		"remote_state": {
 			"drive_id", "item_id", "path", "parent_id", "item_type", "hash", "size", "mtime", "etag", "content_identity", "previous_path",
 		},
-		"local_state": {
-			"path", "item_type", "hash", "size", "mtime", "content_identity", "observed_at",
-		},
+		"local_state": {"path", "item_type", "hash", "size", "mtime", "content_identity"},
 		"retry_work": {
 			"work_key", "path", "old_path", "action_type", "condition_type", "scope_key", "blocked",
 			"attempt_count", "next_retry_at", "last_error", "http_status", "first_seen_at", "last_seen_at",
@@ -206,8 +205,8 @@ func applySchema(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
 		return fmt.Errorf("sync: ensuring observation_state row: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, sqlEnsureRunStatusRow); err != nil {
-		return fmt.Errorf("sync: ensuring run_status row: %w", err)
+	if _, err := db.ExecContext(ctx, sqlEnsureSyncStatusRow); err != nil {
+		return fmt.Errorf("sync: ensuring sync_status row: %w", err)
 	}
 
 	return nil
@@ -230,8 +229,8 @@ func createCanonicalSchema(ctx context.Context, db *sql.DB) (err error) {
 	if _, err = tx.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
 		return fmt.Errorf("seed observation_state row: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, sqlEnsureRunStatusRow); err != nil {
-		return fmt.Errorf("seed run_status row: %w", err)
+	if _, err = tx.ExecContext(ctx, sqlEnsureSyncStatusRow); err != nil {
+		return fmt.Errorf("seed sync_status row: %w", err)
 	}
 	if metadataErr := ensureStoreCompatibilityMetadata(ctx, tx); metadataErr != nil {
 		return metadataErr

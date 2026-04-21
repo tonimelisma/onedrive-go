@@ -536,8 +536,8 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 
 	ctx := t.Context()
 
-	_, err = db.ExecContext(ctx, `UPDATE run_status
-		SET last_completed_at = ?, last_duration_ms = 1500, last_succeeded_count = 0, last_failed_count = 0, last_error = ''
+	_, err = db.ExecContext(ctx, `UPDATE sync_status
+		SET last_synced_at = ?, last_sync_duration_ms = 1500, last_succeeded_count = 0, last_failed_count = 0, last_error = ''
 		WHERE singleton_id = 1`,
 		time.Date(2026, 3, 2, 10, 30, 0, 0, time.UTC).UnixNano(),
 	)

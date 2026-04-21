@@ -36,14 +36,17 @@ var (
 	realGoCache    string
 )
 
-// testCredentialDir holds the path to .testdata/ (repo-root-relative).
-// Token files and config are read from here, never from production dirs.
+// testCredentialDir holds the path to the root .testdata/ credential bundle
+// (repo-root-relative). Tokens, catalog, and config are read from here, never
+// from production dirs.
 var testCredentialDir string
 
 // validateTestData checks that .testdata/ has the expected structure before
 // tests start. Catches bootstrap failures with actionable error messages.
 // E2E tests can't import internal packages, so validation uses stdlib JSON.
 func validateTestData(credDir, driveID string) {
+	testutil.EnsureTestCredentialBundle(credDir, []string{driveID})
+
 	tokenName := testutil.TokenFileName(driveID)
 	tokenPath := filepath.Join(credDir, tokenName)
 
@@ -67,9 +70,9 @@ func validateTestData(credDir, driveID string) {
 		os.Exit(1)
 	}
 
-	configPath := filepath.Join(credDir, "config.toml")
-	if _, statErr := os.Stat(configPath); statErr != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: config.toml not found at %s\n", configPath)
+	catalogPath := filepath.Join(credDir, "catalog.json")
+	if _, statErr := os.Stat(catalogPath); statErr != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: catalog.json not found at %s\n", catalogPath)
 		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
 		os.Exit(1)
 	}
@@ -142,7 +145,7 @@ func setupIsolation() func() {
 		os.Setenv("GOCACHE", realGoCache)
 	}
 
-	// Copy token file from .testdata/ to isolated data dir.
+	// Copy the root .testdata credential bundle into isolated config/data dirs.
 	appDataDir := filepath.Join(tempData, "onedrive-go")
 	if mkErr := os.MkdirAll(appDataDir, 0o700); mkErr != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: creating app data dir: %v\n", mkErr)
@@ -155,32 +158,14 @@ func setupIsolation() func() {
 		driveIDs = append(driveIDs, drive2)
 	}
 
-	for _, did := range driveIDs {
-		tok := testutil.TokenFileName(did)
-		testutil.CopyFile(
-			filepath.Join(testCredentialDir, tok),
-			filepath.Join(appDataDir, tok),
-			0o600,
-		)
-	}
-
-	// Copy the managed inventory catalog from .testdata/.
-	testutil.CopyCatalogFile(testCredentialDir, appDataDir)
-
 	testDataDir = appDataDir
 
-	// Copy config.toml from .testdata/ to isolated config dir.
 	appConfigDir := filepath.Join(tempConfig, "onedrive-go")
 	if mkErr := os.MkdirAll(appConfigDir, 0o700); mkErr != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: creating app config dir: %v\n", mkErr)
 		os.Exit(1)
 	}
-
-	testutil.CopyFile(
-		filepath.Join(testCredentialDir, "config.toml"),
-		filepath.Join(appConfigDir, "config.toml"),
-		0o644,
-	)
+	testutil.CopyTestCredentialBundle(testCredentialDir, appConfigDir, appDataDir, driveIDs)
 
 	// Hard crash guards: verify isolation BEFORE any tests run.
 	verifyIsolation(tempRoot)

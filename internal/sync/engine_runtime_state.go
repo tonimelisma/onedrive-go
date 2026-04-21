@@ -1,6 +1,9 @@
 package sync
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 func (rt *watchRuntime) phase() watchRuntimePhase {
 	return rt.loop.phase
@@ -31,6 +34,55 @@ func (rt *watchRuntime) replaceOutbox(outbox []*TrackedAction) {
 	}
 
 	rt.loop.outbox = append(rt.loop.outbox[:0], outbox...)
+}
+
+func (rt *watchRuntime) beginSyncStatusBatch(startedAt time.Time) {
+	if rt.syncBatch.active {
+		return
+	}
+
+	rt.syncBatch = watchSyncBatchState{
+		active:        true,
+		startedAt:     startedAt,
+		succeededBase: rt.succeeded,
+		failedBase:    rt.failed,
+		errorBase:     len(rt.syncErrors),
+	}
+}
+
+func (rt *watchRuntime) clearSyncStatusBatch() {
+	rt.syncBatch = watchSyncBatchState{}
+}
+
+func (rt *watchRuntime) finishSyncStatusBatch(ctx context.Context, mode Mode) {
+	if !rt.syncBatch.active {
+		return
+	}
+
+	update := &SyncStatusUpdate{
+		SyncedAt:  rt.engine.nowFunc(),
+		Duration:  rt.engine.since(rt.syncBatch.startedAt),
+		Succeeded: rt.succeeded - rt.syncBatch.succeededBase,
+		Failed:    rt.failed - rt.syncBatch.failedBase,
+	}
+	if rt.syncBatch.errorBase < len(rt.syncErrors) {
+		update.Errors = append(update.Errors, rt.syncErrors[rt.syncBatch.errorBase:]...)
+	}
+
+	rt.clearSyncStatusBatch()
+	rt.engine.writeSyncStatusBestEffort(ctx, mode, false, update)
+}
+
+func (rt *watchRuntime) maybeFinishSyncStatusBatch(
+	ctx context.Context,
+	mode Mode,
+	outbox []*TrackedAction,
+) {
+	if len(outbox) > 0 || rt.depGraph == nil || rt.depGraph.InFlightCount() > 0 {
+		return
+	}
+
+	rt.finishSyncStatusBatch(ctx, mode)
 }
 
 func (rt *watchRuntime) appendOutbox(actions []*TrackedAction) {

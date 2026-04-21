@@ -393,8 +393,7 @@ func (flow *engineFlow) buildDryRunCurrentActionPlan(
 		return nil, fmt.Errorf("sync: reconciling dry-run remote observation findings in scratch store: %w", reconcileErr)
 	}
 
-	observedAt := flow.engine.nowFunc().UnixNano()
-	localRows := buildLocalStateRows(localResult, observedAt)
+	localRows := buildLocalStateRows(localResult)
 	replaceErr := scratchStore.ReplaceLocalState(ctx, localRows)
 	if replaceErr != nil {
 		return nil, fmt.Errorf("sync: replacing dry-run local snapshot in scratch store: %w", replaceErr)
@@ -516,7 +515,7 @@ func (flow *engineFlow) commitObservedLocalSnapshot(
 	}
 
 	observedAt := flow.engine.nowFunc().UnixNano()
-	rows := buildLocalStateRows(localResult, observedAt)
+	rows := buildLocalStateRows(localResult)
 	if err := flow.engine.baseline.ReplaceLocalState(ctx, rows); err != nil {
 		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 	}

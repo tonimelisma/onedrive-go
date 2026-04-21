@@ -32,7 +32,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		return nil, err
 	}
 
-	fullReconcile, err := e.shouldRunFullRemoteReconcile(ctx, opts.FullReconcile)
+	fullReconcile, err := e.shouldRunFullRemoteRefresh(ctx, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,13 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		if report.DeferredByMode.Total() > 0 {
 			report.Duration = e.since(start)
 			e.logRunOnceCompletion(report)
-			e.writeOneShotRunStatusBestEffort(ctx, report)
+			e.writeSyncStatusBestEffort(ctx, mode, opts.DryRun, &SyncStatusUpdate{
+				SyncedAt:  e.nowFunc(),
+				Duration:  report.Duration,
+				Succeeded: report.Succeeded,
+				Failed:    report.Failed,
+				Errors:    report.Errors,
+			})
 			return report, nil
 		}
 		return e.completeRunOnceWithoutChanges(ctx, start, mode, opts), nil
@@ -80,7 +86,13 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 
 	runner.postSyncHousekeeping()
 
-	e.writeOneShotRunStatusBestEffort(ctx, report)
+	e.writeSyncStatusBestEffort(ctx, mode, opts.DryRun, &SyncStatusUpdate{
+		SyncedAt:  e.nowFunc(),
+		Duration:  report.Duration,
+		Succeeded: report.Succeeded,
+		Failed:    report.Failed,
+		Errors:    report.Errors,
+	})
 
 	return report, nil
 }
@@ -234,8 +246,8 @@ func buildReportFromCounts(
 }
 
 // commitPendingPrimaryCursor advances the primary observation cursor after the
-// planner approves the changes. Full reconciliations also persist the restart-
-// safe full-remote cadence timestamp here.
+// planner approves the changes. Full remote refreshes also persist the
+// restart-safe full-remote cadence timestamp here.
 func (flow *engineFlow) commitPendingPrimaryCursor(
 	ctx context.Context,
 	pending *pendingPrimaryCursorCommit,
@@ -253,13 +265,13 @@ func (flow *engineFlow) commitPendingPrimaryCursor(
 			return fmt.Errorf("sync: committing primary observation cursor for root %q: %w", pending.rootID, err)
 		}
 	}
-	if pending.markFullRemoteReconcile {
-		if err := flow.engine.baseline.MarkFullRemoteReconcile(
+	if pending.markFullRemoteRefresh {
+		if err := flow.engine.baseline.MarkFullRemoteRefresh(
 			ctx,
 			driveid.New(pending.driveID),
 			flow.engine.nowFunc(),
 		); err != nil {
-			return fmt.Errorf("sync: marking full remote reconcile for root %q: %w", pending.rootID, err)
+			return fmt.Errorf("sync: marking full remote refresh for root %q: %w", pending.rootID, err)
 		}
 	}
 
@@ -278,7 +290,7 @@ func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]
 	// Full enumeration: empty token returns ALL items as create/modify events.
 	events, token, err := obs.FullDelta(ctx, "")
 	if err != nil {
-		return nil, "", fmt.Errorf("sync: full reconciliation delta: %w", err)
+		return nil, "", fmt.Errorf("sync: full remote refresh delta: %w", err)
 	}
 
 	// Build seen set from all non-deleted events in the full enumeration.
@@ -295,14 +307,14 @@ func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]
 	orphans := findBaselineOrphans(bl, seen, eng.driveID, "")
 
 	if len(orphans) > 0 {
-		eng.logger.Info("full reconciliation: detected orphaned items",
+		eng.logger.Info("full remote refresh: detected orphaned items",
 			slog.Int("orphans", len(orphans)),
 		)
 
 		events = append(events, orphans...)
 	}
 
-	eng.logger.Info("full reconciliation complete",
+	eng.logger.Info("full remote refresh complete",
 		slog.Int("total_events", len(events)),
 		slog.Int("orphans", len(orphans)),
 	)

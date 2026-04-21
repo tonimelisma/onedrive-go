@@ -38,10 +38,10 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 
 	lastSync := time.Date(2026, time.April, 18, 12, 34, 56, 0, time.UTC)
 	snapshot := &syncengine.DriveStatusSnapshot{
-		RunStatus: syncengine.SyncRunStatus{
-			LastCompletedAt: lastSync.UnixNano(),
-			LastDurationMs:  987,
-			LastError:       "sync: transient timeout",
+		SyncStatus: syncengine.SyncStatus{
+			LastSyncedAt:       lastSync.UnixNano(),
+			LastSyncDurationMs: 987,
+			LastError:          "sync: transient timeout",
 		},
 		BaselineEntryCount: 11,
 		RemoteDriftItems:   2,

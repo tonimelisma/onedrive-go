@@ -627,7 +627,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 	rt := testWatchRuntime(t, eng)
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
 
-	rt.runFullReconciliationAsync(ctx, bl)
+	rt.runFullRemoteRefreshAsync(ctx, bl)
 	waitForReconcileDone(t, eng)
 
 	select {
