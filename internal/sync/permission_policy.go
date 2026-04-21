@@ -23,6 +23,37 @@ type PermissionOutcome struct {
 	TriggerPath      string
 }
 
+// ConditionKey returns the stable cross-authority condition family for this
+// policy result. The outcome owns this mapping so apply/logging code does not
+// need to reconstruct outcome semantics from partially overlapping fields.
+func (o PermissionOutcome) ConditionKey() ConditionKey {
+	if !o.ScopeKey.IsZero() {
+		return ConditionKeyForStoredCondition(o.ScopeKey.ConditionType(), o.ScopeKey)
+	}
+
+	if o.RetryWorkFailure != nil {
+		return ConditionKeyForStoredCondition(
+			o.RetryWorkFailure.ConditionType,
+			o.RetryWorkFailure.ScopeKey,
+		)
+	}
+
+	return ""
+}
+
+func (o PermissionOutcome) IsFileFailure() bool {
+	return o.Kind == permissionOutcomeRecordFileFailure
+}
+
+func (o PermissionOutcome) IsBoundaryFailure() bool {
+	return o.Kind == permissionOutcomeActivateBoundaryScope ||
+		o.Kind == permissionOutcomeActivateDerivedScope
+}
+
+func (o PermissionOutcome) ActivatesDerivedScope() bool {
+	return o.Kind == permissionOutcomeActivateDerivedScope
+}
+
 func DecidePermissionOutcome(
 	r *ActionCompletion,
 	evidence PermissionEvidence,
