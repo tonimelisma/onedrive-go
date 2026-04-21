@@ -19,7 +19,7 @@ const (
 	watchEventRemoteBatchesClosed  watchEventKind = "remote_batches_closed"
 	watchEventSkipped              watchEventKind = "skipped"
 	watchEventSkippedClosed        watchEventKind = "skipped_closed"
-	watchEventRecheckTick          watchEventKind = "recheck_tick"
+	watchEventMaintenanceTick      watchEventKind = "maintenance_tick"
 	watchEventRefreshTick          watchEventKind = "refresh_tick"
 	watchEventRefreshResult        watchEventKind = "refresh_result"
 	watchEventRefreshResultsClosed watchEventKind = "refresh_results_closed"
@@ -40,17 +40,6 @@ type watchEvent struct {
 	skipped       []SkippedItem
 	refreshResult remoteRefreshResult
 	observerErr   error
-}
-
-type watchTransition struct {
-	consumeOutboxHead bool
-	markRunning       *TrackedAction
-	appendOutbox      []*TrackedAction
-	replaceOutbox     []*TrackedAction
-	replaceOutboxSet  bool
-	startRefresh      bool
-	beginDrain        bool
-	done              bool
 }
 
 //nolint:gocyclo // The watch loop deliberately centralizes all event decoding in one owner boundary.
@@ -90,8 +79,8 @@ func (rt *watchRuntime) waitWatchEvent(ctx context.Context, p *watchPipeline) wa
 		}
 
 		return watchEvent{kind: watchEventSkipped, skipped: skipped}
-	case <-p.recheckC:
-		return watchEvent{kind: watchEventRecheckTick}
+	case <-p.maintenanceC:
+		return watchEvent{kind: watchEventMaintenanceTick}
 	case <-p.refreshC:
 		return watchEvent{kind: watchEventRefreshTick}
 	case result, ok := <-p.refreshResults:
@@ -115,107 +104,76 @@ func (rt *watchRuntime) waitWatchEvent(ctx context.Context, p *watchPipeline) wa
 	}
 }
 
-func (rt *watchRuntime) transitionWatchEvent(
+func (rt *watchRuntime) handleWatchEvent(
 	ctx context.Context,
 	p *watchPipeline,
 	event *watchEvent,
-) (watchTransition, error) {
-	if transition, handled, err := rt.transitionWatchDispatchEvent(ctx, p, event); handled {
-		return transition, err
-	}
-
-	if transition, handled, err := rt.transitionWatchObservationEvent(ctx, p, event); handled {
-		return transition, err
-	}
-
-	if transition, handled, err := rt.transitionWatchMaintenanceEvent(ctx, p, event); handled {
-		return transition, err
-	}
-
-	return watchTransition{}, nil
-}
-
-func (rt *watchRuntime) applyWatchTransition(
-	ctx context.Context,
-	p *watchPipeline,
-	transition watchTransition,
 ) (bool, error) {
-	if transition.beginDrain {
-		rt.beginWatchDrain(ctx, p)
-		return false, nil
+	if done, handled, err := rt.handleDispatchEvent(ctx, p, event); handled {
+		return done, err
 	}
 
-	if transition.consumeOutboxHead {
-		rt.markRunning(transition.markRunning)
-		rt.consumeOutboxHead()
+	if handled, err := rt.handleObservationEvent(ctx, p, event); handled {
+		return false, err
 	}
-	if transition.replaceOutboxSet {
-		rt.replaceOutbox(transition.replaceOutbox)
-	} else if len(transition.appendOutbox) > 0 {
-		rt.appendOutbox(transition.appendOutbox)
+
+	if handled, err := rt.handleMaintenanceEvent(ctx, p, event); handled {
+		return false, err
 	}
-	if transition.startRefresh {
-		rt.runFullRemoteRefreshAsync(ctx, p.bl)
-	}
-	if transition.done {
-		return true, nil
-	}
+
 	return false, nil
 }
 
-func (rt *watchRuntime) transitionWatchDispatchEvent(
+func (rt *watchRuntime) handleDispatchEvent(
 	ctx context.Context,
 	p *watchPipeline,
 	event *watchEvent,
-) (watchTransition, bool, error) {
+) (bool, bool, error) {
 	switch event.kind {
 	case watchEventDispatchReady:
-		return watchTransition{
-			consumeOutboxHead: true,
-			markRunning:       event.dispatched,
-		}, true, nil
+		rt.markRunning(event.dispatched)
+		rt.consumeOutboxHead()
+		return false, true, nil
 	case watchEventBatchReady:
 		if !rt.canPrepareNow() {
 			rt.queueDirtyReplan(event.batch)
-			return watchTransition{}, true, nil
+			return false, true, nil
 		}
-		return watchTransition{
-			appendOutbox: rt.processDirtyBatch(ctx, event.batch, p.bl, p.mode),
-		}, true, nil
+		rt.appendOutbox(rt.processDirtyBatch(ctx, event.batch, p.bl, p.mode))
+		return false, true, nil
 	case watchEventBatchClosed:
-		return watchTransition{done: true}, true, nil
+		return true, true, nil
 	case watchEventActionCompletion:
 		outcome := rt.processActionCompletion(ctx, rt, event.completion, p.bl)
 		if outcome.terminate {
 			rt.clearSyncStatusBatch()
-			return watchTransition{}, true, outcome.terminateErr
+			return false, true, outcome.terminateErr
 		}
 
 		nextOutbox, err := rt.reducePublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), outcome.dispatched)
 		if err != nil {
 			rt.clearSyncStatusBatch()
 			rt.completeOutboxAsShutdown(nextOutbox)
-			return watchTransition{}, true, err
+			return false, true, err
 		}
 		rt.maybeFinishSyncStatusBatch(ctx, p.mode, nextOutbox)
-		return watchTransition{
-			replaceOutbox:    nextOutbox,
-			replaceOutboxSet: true,
-		}, true, nil
+		rt.replaceOutbox(nextOutbox)
+		return false, true, nil
 	case watchEventCompletionsClosed:
 		if contextIsCanceled(ctx) {
 			p.completions = nil
-			return watchTransition{beginDrain: true}, true, nil
+			rt.beginWatchDrain(ctx, p)
+			return false, true, nil
 		}
 
-		return watchTransition{}, true, fmt.Errorf("sync: action completions channel closed unexpectedly")
+		return false, true, fmt.Errorf("sync: action completions channel closed unexpectedly")
 	case watchEventLocalChange,
 		watchEventLocalEventsClosed,
 		watchEventRemoteBatch,
 		watchEventRemoteBatchesClosed,
 		watchEventSkipped,
 		watchEventSkippedClosed,
-		watchEventRecheckTick,
+		watchEventMaintenanceTick,
 		watchEventRefreshTick,
 		watchEventRefreshResult,
 		watchEventRefreshResultsClosed,
@@ -224,25 +182,25 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 		watchEventTrialTick,
 		watchEventRetryTick,
 		watchEventContextCanceled:
-		return watchTransition{}, false, nil
+		return false, false, nil
 	}
 
-	return watchTransition{}, false, nil
+	return false, false, nil
 }
 
-func (rt *watchRuntime) transitionWatchObservationEvent(
+func (rt *watchRuntime) handleObservationEvent(
 	ctx context.Context,
 	p *watchPipeline,
 	event *watchEvent,
-) (watchTransition, bool, error) {
-	if handled, err := rt.transitionWatchObservationBatchEvent(ctx, p, event); handled {
-		return watchTransition{}, handled, err
+) (bool, error) {
+	if handled, err := rt.handleObservationBatchEvent(ctx, p, event); handled {
+		return handled, err
 	}
 
-	return rt.transitionWatchObservationMaintenanceEvent(ctx, p, event)
+	return rt.handleObservationMaintenanceEvent(ctx, p, event)
 }
 
-func (rt *watchRuntime) transitionWatchObservationBatchEvent(
+func (rt *watchRuntime) handleObservationBatchEvent(
 	ctx context.Context,
 	p *watchPipeline,
 	event *watchEvent,
@@ -276,7 +234,7 @@ func (rt *watchRuntime) transitionWatchObservationBatchEvent(
 		watchEventCompletionsClosed,
 		watchEventSkipped,
 		watchEventSkippedClosed,
-		watchEventRecheckTick,
+		watchEventMaintenanceTick,
 		watchEventRefreshTick,
 		watchEventRefreshResult,
 		watchEventRefreshResultsClosed,
@@ -291,25 +249,26 @@ func (rt *watchRuntime) transitionWatchObservationBatchEvent(
 	return false, nil
 }
 
-func (rt *watchRuntime) transitionWatchObservationMaintenanceEvent(
+func (rt *watchRuntime) handleObservationMaintenanceEvent(
 	ctx context.Context,
 	p *watchPipeline,
 	event *watchEvent,
-) (watchTransition, bool, error) {
+) (bool, error) {
 	switch event.kind {
 	case watchEventSkipped:
 		rt.reconcileSkippedObservationFindings(ctx, rt, event.skipped)
-		return watchTransition{}, true, nil
+		return true, nil
 	case watchEventSkippedClosed:
 		p.skippedCh = nil
-		return watchTransition{}, true, nil
+		return true, nil
 	case watchEventRefreshTick:
-		return watchTransition{startRefresh: true}, true, nil
+		rt.runFullRemoteRefreshAsync(ctx, p.bl)
+		return true, nil
 	case watchEventRefreshResult:
-		return watchTransition{}, true, rt.applyRemoteRefreshResult(ctx, &event.refreshResult)
+		return true, rt.applyRemoteRefreshResult(ctx, &event.refreshResult)
 	case watchEventRefreshResultsClosed:
 		p.refreshResults = nil
-		return watchTransition{}, true, nil
+		return true, nil
 	case watchEventDispatchReady,
 		watchEventBatchReady,
 		watchEventBatchClosed,
@@ -319,60 +278,59 @@ func (rt *watchRuntime) transitionWatchObservationMaintenanceEvent(
 		watchEventLocalEventsClosed,
 		watchEventRemoteBatch,
 		watchEventRemoteBatchesClosed,
-		watchEventRecheckTick,
+		watchEventMaintenanceTick,
 		watchEventObserverError,
 		watchEventObserverErrorsClosed,
 		watchEventTrialTick,
 		watchEventRetryTick,
 		watchEventContextCanceled:
-		return watchTransition{}, false, nil
+		return false, nil
 	}
 
-	return watchTransition{}, false, nil
+	return false, nil
 }
 
-func (rt *watchRuntime) transitionWatchMaintenanceEvent(
+func (rt *watchRuntime) handleMaintenanceEvent(
 	ctx context.Context,
 	p *watchPipeline,
 	event *watchEvent,
-) (watchTransition, bool, error) {
+) (bool, error) {
 	switch event.kind {
-	case watchEventRecheckTick:
-		rt.handleRecheckTick(ctx)
-		return watchTransition{}, true, nil
+	case watchEventMaintenanceTick:
+		rt.handleMaintenanceTick(ctx)
+		return true, nil
 	case watchEventObserverError:
 		if isFatalObserverError(event.observerErr) {
-			return watchTransition{}, true, event.observerErr
+			return true, event.observerErr
 		}
 
 		rt.logObserverError(event.observerErr)
 		if err := rt.handleObserverExit(p, ctx.Err() != nil); err != nil {
-			return watchTransition{}, true, err
+			return true, err
 		}
 		if p.activeObs == 0 {
 			p.errs = nil
 		}
 
-		return watchTransition{}, true, nil
+		return true, nil
 	case watchEventObserverErrorsClosed:
 		p.errs = nil
-		return watchTransition{}, true, nil
+		return true, nil
 	case watchEventTrialTick:
 		if rt.hasPendingDirtyReplan() {
-			return watchTransition{}, true, nil
+			return true, nil
 		}
-		return watchTransition{
-			appendOutbox: rt.runTrialDispatch(ctx, p.bl, p.mode),
-		}, true, nil
+		rt.appendOutbox(rt.runTrialDispatch(ctx, p.bl, p.mode))
+		return true, nil
 	case watchEventRetryTick:
 		if rt.hasPendingDirtyReplan() {
-			return watchTransition{}, true, nil
+			return true, nil
 		}
-		return watchTransition{
-			appendOutbox: rt.runRetrierSweep(ctx, p.bl, p.mode),
-		}, true, nil
+		rt.appendOutbox(rt.runRetrierSweep(ctx, p.bl, p.mode))
+		return true, nil
 	case watchEventContextCanceled:
-		return watchTransition{beginDrain: true}, true, nil
+		rt.beginWatchDrain(ctx, p)
+		return true, nil
 	case watchEventDispatchReady,
 		watchEventBatchReady,
 		watchEventBatchClosed,
@@ -387,8 +345,8 @@ func (rt *watchRuntime) transitionWatchMaintenanceEvent(
 		watchEventRefreshTick,
 		watchEventRefreshResult,
 		watchEventRefreshResultsClosed:
-		return watchTransition{}, false, nil
+		return false, nil
 	}
 
-	return watchTransition{}, false, nil
+	return false, nil
 }

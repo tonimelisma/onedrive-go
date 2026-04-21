@@ -25,10 +25,9 @@ const (
 	// mode. Large enough for typical batches without blocking workers.
 	watchResultBuf = 4096
 
-	// recheckInterval is how often the engine checks for external DB
-	// changes from other SQLite connections. Uses PRAGMA data_version
-	// — one integer comparison per tick, essentially free.
-	recheckInterval = 10 * time.Second
+	// maintenanceInterval is how often the watch loop runs summary logging and
+	// maintenance bookkeeping that is independent of action dispatch.
+	maintenanceInterval = 10 * time.Second
 )
 
 const (
@@ -39,14 +38,6 @@ const (
 // quiescenceLogInterval is how often bootstrapSync logs while waiting
 // for in-flight actions to complete.
 const quiescenceLogInterval = 30 * time.Second
-
-// initRecheckState seeds the cross-connection change detector used by watch
-// recheck ticks.
-func (rt *watchRuntime) initRecheckState(ctx context.Context) {
-	if dv, dvErr := rt.engine.baseline.DataVersion(ctx); dvErr == nil {
-		rt.lastDataVersion = dv
-	}
-}
 
 // loadWatchState loads the baseline for the watch session.
 func (rt *watchRuntime) loadWatchState(ctx context.Context) error {
@@ -168,7 +159,7 @@ type watchPipeline struct {
 	skippedCh      <-chan []SkippedItem
 	refreshC       <-chan time.Time
 	refreshResults <-chan remoteRefreshResult
-	recheckC       <-chan time.Time
+	maintenanceC   <-chan time.Time
 	activeObs      int
 	mode           Mode
 	pool           *WorkerPool // for bootstrapSync to access Completions()
@@ -195,8 +186,6 @@ func (rt *watchRuntime) initWatchInfra(
 	mode Mode,
 	opts WatchOptions,
 ) (*watchPipeline, error) {
-	rt.initRecheckState(ctx)
-
 	// Normalize persisted scope rows before loading runtime scope state.
 	// Startup must not trust stale scope rows blindly; the durable store is
 	// repaired against current persisted evidence before the watch loop loads
@@ -231,7 +220,7 @@ func (rt *watchRuntime) initWatchInfra(
 
 	// Tickers/timers.
 	rt.resetRefreshTimer(nil)
-	recheckTicker := rt.engine.newTicker(recheckInterval)
+	maintenanceTicker := rt.engine.newTicker(maintenanceInterval)
 
 	// Arm retrier timer from DB — picks up items from prior crash or prior pass.
 	rt.kickRetrySweepNow()
@@ -243,7 +232,7 @@ func (rt *watchRuntime) initWatchInfra(
 		completions:    pool.Completions(),
 		refreshC:       rt.refreshCh,
 		refreshResults: rt.refreshResults,
-		recheckC:       tickerChan(recheckTicker),
+		maintenanceC:   tickerChan(maintenanceTicker),
 		mode:           mode,
 		pool:           pool,
 	}
@@ -258,7 +247,7 @@ func (rt *watchRuntime) initWatchInfra(
 			rt.socketIOWakeDone = nil
 		}
 
-		stopTicker(recheckTicker)
+		stopTicker(maintenanceTicker)
 		rt.resetRefreshTimer(nil)
 
 		inFlight := depGraph.InFlightCount()

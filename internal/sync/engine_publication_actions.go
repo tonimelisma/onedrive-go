@@ -23,28 +23,18 @@ func isPublicationOnlyActionType(actionType ActionType) bool {
 	panic(fmt.Sprintf("unknown action type %d", actionType))
 }
 
-func (flow *engineFlow) commitPublicationAction(ctx context.Context, ta *TrackedAction) ActionCompletion {
+func (flow *engineFlow) commitPublicationAction(ctx context.Context, ta *TrackedAction) error {
 	mutation, err := publicationMutationFromAction(&ta.Action, flow.engine.driveID)
 	if err == nil {
 		err = flow.engine.baseline.CommitMutation(ctx, mutation)
 	}
-	if err != nil {
-		return completionFromTrackedAction(ta, nil, err)
-	}
-
-	return completionFromTrackedAction(ta, &ActionOutcome{
-		Action:   ta.Action.Type,
-		Success:  true,
-		DriveID:  mutation.DriveID,
-		ItemID:   mutation.ItemID,
-		ItemType: mutation.ItemType,
-	}, nil)
+	return err
 }
 
 // reducePublicationFrontier keeps publication-only actions on the engine side
-// of the boundary. It commits those actions synchronously, feeds their
-// completions back through the normal engine result classifier, and returns
-// only executable work for worker dispatch.
+// of the boundary. It commits those actions synchronously, unlocks their
+// dependents directly through the engine-owned publication success path, and
+// returns only executable work for worker dispatch.
 func (flow *engineFlow) reducePublicationFrontier(
 	ctx context.Context,
 	watch *watchRuntime,
@@ -66,15 +56,13 @@ func (flow *engineFlow) reducePublicationFrontier(
 			continue
 		}
 
-		result := flow.commitPublicationAction(ctx, ta)
-		outcome := flow.processActionCompletion(ctx, watch, &result, bl)
-		if outcome.terminate {
+		if err := flow.commitPublicationAction(ctx, ta); err != nil {
 			nextOutbox = append(nextOutbox, queue...)
-			nextOutbox = append(nextOutbox, outcome.dispatched...)
-			return nextOutbox, outcome.terminateErr
+			return nextOutbox, err
 		}
-		queue = append(queue, outcome.dispatched...)
+		queue = append(queue, flow.applyPublicationSuccess(ctx, watch, ta)...)
 	}
 
+	_ = bl
 	return nextOutbox, nil
 }

@@ -30,7 +30,7 @@ const (
 	engineDebugEventTrialTimerFired                engineDebugEventType = "trial_timer_fired"
 	engineDebugEventTrialSweepStarted              engineDebugEventType = "trial_sweep_started"
 	engineDebugEventTrialSweepCompleted            engineDebugEventType = "trial_sweep_completed"
-	engineDebugEventRecheckTickHandled             engineDebugEventType = "recheck_tick_handled"
+	engineDebugEventMaintenanceTickHandled         engineDebugEventType = "maintenance_tick_handled"
 	engineDebugEventRemoteRefreshStarted           engineDebugEventType = "remote_refresh_started"
 	engineDebugEventRemoteRefreshApplied           engineDebugEventType = "remote_refresh_applied"
 	engineDebugEventRemoteRefreshDroppedOnShutdown engineDebugEventType = "remote_refresh_dropped_on_shutdown"
