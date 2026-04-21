@@ -36,18 +36,6 @@ const (
 		FROM retry_work
 		WHERE blocked = 1
 		ORDER BY scope_key, path, work_key`
-	sqlListRetryWorkReady = `SELECT ` + sqlSelectRetryWorkCols + `
-		FROM retry_work
-		WHERE blocked = 0 AND next_retry_at > 0 AND next_retry_at <= ?
-		ORDER BY next_retry_at, path, work_key`
-	sqlPickRetryTrialCandidate = `SELECT ` + sqlSelectRetryWorkCols + `
-		FROM retry_work
-		WHERE blocked = 1 AND scope_key = ?
-		ORDER BY RANDOM()
-		LIMIT 1`
-	sqlEarliestRetryWorkAt = `SELECT MIN(next_retry_at) FROM retry_work
-		WHERE blocked = 0
-			AND next_retry_at > ?`
 )
 
 func serializeRetryWorkKey(key RetryWorkKey) string {
@@ -324,31 +312,6 @@ func (m *SyncStore) ListBlockedRetryWork(ctx context.Context) ([]RetryWorkRow, e
 	return scanRetryWorkRows(rows)
 }
 
-func (m *SyncStore) ListRetryWorkReady(ctx context.Context, now time.Time) ([]RetryWorkRow, error) {
-	rows, err := m.db.QueryContext(ctx, sqlListRetryWorkReady, now.UnixNano())
-	if err != nil {
-		return nil, fmt.Errorf("sync: querying ready retry_work rows: %w", err)
-	}
-	defer rows.Close()
-
-	return scanRetryWorkRows(rows)
-}
-
-func (m *SyncStore) EarliestRetryWorkAt(ctx context.Context, now time.Time) (time.Time, error) {
-	nowNano := now.UnixNano()
-
-	var minNano *int64
-	if err := m.db.QueryRowContext(ctx, sqlEarliestRetryWorkAt, nowNano).Scan(&minNano); err != nil {
-		return time.Time{}, fmt.Errorf("sync: querying earliest retry_work at: %w", err)
-	}
-
-	if minNano == nil {
-		return time.Time{}, nil
-	}
-
-	return time.Unix(0, *minNano), nil
-}
-
 func (m *SyncStore) CountRetryingWork(ctx context.Context) (int, error) {
 	var count int
 	if err := m.db.QueryRowContext(ctx,
@@ -358,23 +321,6 @@ func (m *SyncStore) CountRetryingWork(ctx context.Context) (int, error) {
 	}
 
 	return count, nil
-}
-
-func (m *SyncStore) PickRetryTrialCandidate(
-	ctx context.Context,
-	scopeKey ScopeKey,
-) (*RetryWorkRow, bool, error) {
-	row := m.db.QueryRowContext(ctx, sqlPickRetryTrialCandidate, scopeKey.String())
-	var parsed RetryWorkRow
-	if err := scanRetryWorkRow(row, &parsed); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, false, nil
-		}
-
-		return nil, false, fmt.Errorf("sync: picking retry_work trial candidate for %s: %w", scopeKey.String(), err)
-	}
-
-	return &parsed, true, nil
 }
 
 func (m *SyncStore) PruneRetryWorkToCurrentActions(

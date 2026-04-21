@@ -69,12 +69,6 @@ type Engine struct {
 	// inotify watch limit exhaustion (ENOSPC).
 	localWatcherFactory func() (FsWatcher, error)
 
-	// retryBatchLimit lets tests lower the retrier sweep batch size so stress
-	// runs can exercise the batching contract without seeding thousands of
-	// retry_work rows per iteration. Production leaves this zero and uses the
-	// compiled default in engine_retry_trial.go.
-	retryBatchLimit int
-
 	// socketIOWakeSourceFactory is a test seam for watch-mode websocket
 	// wakeups. Production uses NewSocketIOWakeSourceWithOptions.
 	socketIOWakeSourceFactory func(

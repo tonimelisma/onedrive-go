@@ -118,62 +118,23 @@ func TestRetryWorkReadyAndTrialCandidateQueries(t *testing.T) {
 		LastSeenAt:   6,
 	}))
 
-	ready, err := store.ListRetryWorkReady(ctx, now)
-	require.NoError(t, err)
-	require.Len(t, ready, 1)
-	assert.Equal(t, "retry-now.txt", ready[0].Path)
-
-	candidate, found, err := store.PickRetryTrialCandidate(ctx, SKService())
-	require.NoError(t, err)
-	require.True(t, found)
-	require.NotNil(t, candidate)
-	assert.Equal(t, "blocked.txt", candidate.Path)
-
 	blocked, err := store.ListBlockedRetryWork(ctx)
 	require.NoError(t, err)
 	require.Len(t, blocked, 1)
 	assert.Equal(t, "blocked.txt", blocked[0].Path)
 	assert.Equal(t, SKService(), blocked[0].ScopeKey)
-}
 
-// Validates: R-2.10.33
-func TestRetryWorkEarliestRetryAt_IgnoresBlockedRows(t *testing.T) {
-	t.Parallel()
-
-	store := newTestStore(t)
-	ctx := t.Context()
-	now := time.Unix(50, 0)
-
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "blocked.txt",
-		ActionType:   ActionDownload,
-		ScopeKey:     SKService(),
-		Blocked:      true,
-		AttemptCount: 1,
-		NextRetryAt:  now.Add(10 * time.Minute).UnixNano(),
-		FirstSeenAt:  1,
-		LastSeenAt:   2,
-	}))
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "later.txt",
-		ActionType:   ActionUpload,
-		AttemptCount: 1,
-		NextRetryAt:  now.Add(20 * time.Minute).UnixNano(),
-		FirstSeenAt:  3,
-		LastSeenAt:   4,
-	}))
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "earliest.txt",
-		ActionType:   ActionLocalDelete,
-		AttemptCount: 1,
-		NextRetryAt:  now.Add(5 * time.Minute).UnixNano(),
-		FirstSeenAt:  5,
-		LastSeenAt:   6,
-	}))
-
-	earliest, err := store.EarliestRetryWorkAt(ctx, now)
+	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, now.Add(5*time.Minute), earliest)
+	require.Len(t, rows, 3)
+	readyCount := 0
+	for i := range rows {
+		if !rows[i].Blocked && rows[i].NextRetryAt > 0 && rows[i].NextRetryAt <= now.UnixNano() {
+			readyCount++
+			assert.Equal(t, "retry-now.txt", rows[i].Path)
+		}
+	}
+	assert.Equal(t, 1, readyCount)
 }
 
 // Validates: R-2.10.33
@@ -283,18 +244,10 @@ func TestRetryWorkScopeReadyAndDeleteHelpers(t *testing.T) {
 }
 
 // Validates: R-2.10.33
-func TestRetryWorkPickTrialCandidate_NoRowsAndNilDestination(t *testing.T) {
+func TestScanRetryWorkRow_NilDestination(t *testing.T) {
 	t.Parallel()
 
-	store := newTestStore(t)
-	ctx := t.Context()
-
-	candidate, found, err := store.PickRetryTrialCandidate(ctx, SKService())
-	require.NoError(t, err)
-	assert.False(t, found)
-	assert.Nil(t, candidate)
-
-	err = scanRetryWorkRow(nilRetryWorkScanner{}, nil)
+	err := scanRetryWorkRow(nilRetryWorkScanner{}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil destination")
 }

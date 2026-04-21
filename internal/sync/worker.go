@@ -24,13 +24,9 @@ const minWorkers = 4
 // to the engine.
 // Workers are pure executors — they NEVER call depGraph.Complete(). The engine
 // owns all completion decisions (R-6.8.9).
-//
-// Workers read from dispatchCh and wait on completeCh, which may be backed by
-// DepGraph or any other dispatch source.
 type WorkerPool struct {
 	cfg        *ExecutorConfig
 	dispatchCh <-chan *TrackedAction
-	completeCh <-chan struct{}
 	baseline   *SyncStore
 	logger     *slog.Logger
 
@@ -49,12 +45,11 @@ type WorkerPool struct {
 // determines the result channel buffer (use the number of actions in the
 // plan for one-shot mode, or a generous buffer for watch mode).
 //
-// dispatchCh provides actions ready for execution. completeCh signals when all
-// work is complete (workers exit when completeCh closes or ctx is canceled).
+// dispatchCh provides actions ready for execution. Workers exit only when the
+// owning context is canceled or the dispatch channel is closed.
 func NewWorkerPool(
 	cfg *ExecutorConfig,
 	dispatchCh <-chan *TrackedAction,
-	completeCh <-chan struct{},
 	baseline *SyncStore,
 	logger *slog.Logger,
 	planSize int,
@@ -66,7 +61,6 @@ func NewWorkerPool(
 	return &WorkerPool{
 		cfg:        cfg,
 		dispatchCh: dispatchCh,
-		completeCh: completeCh,
 		baseline:   baseline,
 		logger:     logger,
 		// Buffer sizing contract: one-shot mode uses planSize (equal to
@@ -103,11 +97,6 @@ func (wp *WorkerPool) Start(ctx context.Context, total int) {
 	)
 }
 
-// Wait blocks until the completion signal fires (all actions complete).
-func (wp *WorkerPool) Wait() {
-	<-wp.completeCh
-}
-
 // Stop cancels all in-flight work, waits for goroutines to exit, and closes
 // the completions channel so the engine-owned completion loop can terminate.
 func (wp *WorkerPool) Stop() {
@@ -127,8 +116,6 @@ func (wp *WorkerPool) worker(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-wp.completeCh:
 			return
 		case ta, ok := <-wp.dispatchCh:
 			if !ok {

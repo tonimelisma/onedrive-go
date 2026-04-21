@@ -204,7 +204,13 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionArmsRetryTimer
 	}
 	decision := classifyResult(r)
 
-	outcome := flow.processNormalDecision(t.Context(), rt, &decision, nil, r, nil)
+	current := rt.depGraph.Add(&Action{
+		Path: "accessible/file.txt",
+		Type: ActionDownload,
+	}, 1, nil)
+	require.NotNil(t, current)
+
+	outcome := flow.processNormalDecision(t.Context(), rt, &decision, current, r, nil)
 
 	assert.False(t, outcome.terminate)
 	require.NoError(t, outcome.terminateErr)

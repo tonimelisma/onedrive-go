@@ -32,26 +32,13 @@ func isFatalObserverError(err error) bool {
 	return errors.As(err, &fatal)
 }
 
-func (flow *engineFlow) processCommittedPrimaryBatch(
-	ctx context.Context,
-	bl *Baseline,
-	primaryEvents []ChangeEvent,
-	dryRun bool,
-	fullReconcile bool,
-) []ChangeEvent {
-	_ = ctx
-	_ = bl
-	_ = dryRun
-	_ = fullReconcile
-
-	return append([]ChangeEvent(nil), primaryEvents...)
-}
-
 func (rt *watchRuntime) processCommittedSharedRootWatchBatch(
 	ctx context.Context,
 	bl *Baseline,
 	result *remoteFetchResult,
 ) ([]ChangeEvent, bool) {
+	_ = bl
+
 	if result == nil {
 		return nil, false
 	}
@@ -75,15 +62,7 @@ func (rt *watchRuntime) processCommittedSharedRootWatchBatch(
 		"failed to reconcile shared-root remote observation findings",
 	)
 
-	finalEvents := rt.processCommittedPrimaryBatch(
-		ctx,
-		bl,
-		projected.emitted,
-		false,
-		false,
-	)
-
-	return finalEvents, true
+	return append([]ChangeEvent(nil), projected.emitted...), true
 }
 
 func (rt *watchRuntime) processCommittedPrimaryWatchBatch(
@@ -92,6 +71,8 @@ func (rt *watchRuntime) processCommittedPrimaryWatchBatch(
 	primaryEvents []ChangeEvent,
 	newToken string,
 ) ([]ChangeEvent, error) {
+	_ = bl
+
 	projected := projectRemoteObservations(rt.engine.logger, primaryEvents)
 
 	if err := rt.commitObservedItems(ctx, projected.observed, newToken); err != nil {
@@ -109,15 +90,7 @@ func (rt *watchRuntime) processCommittedPrimaryWatchBatch(
 		"failed to reconcile primary remote observation findings",
 	)
 
-	finalEvents := rt.processCommittedPrimaryBatch(
-		ctx,
-		bl,
-		projected.emitted,
-		false,
-		false,
-	)
-
-	return finalEvents, nil
+	return append([]ChangeEvent(nil), projected.emitted...), nil
 }
 
 func (rt *watchRuntime) logCommittedSharedRootBatchFailure(step string, err error, eventCount int) {

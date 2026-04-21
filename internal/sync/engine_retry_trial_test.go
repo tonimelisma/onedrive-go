@@ -1,776 +1,44 @@
 package sync
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func seedObservedRemoteItemForRetryTest(
-	t *testing.T,
-	store *SyncStore,
-	driveID driveid.ID,
-	itemID string,
-	path string,
-	hash string,
-) {
-	t.Helper()
-
-	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{{
-		DriveID:  driveID,
-		ItemID:   itemID,
-		ParentID: "root",
-		Path:     path,
-		ItemType: ItemTypeFile,
-		Hash:     hash,
-	}}, "", driveID))
-}
-
 // Validates: R-2.10.33
-func TestRetryWorkDriveID_UsesEngineDriveFallback(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	flow := testEngineFlow(t, eng)
-
-	driveID, err := flow.retryWorkDriveID(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, eng.driveID, driveID)
-}
-
-// Validates: R-2.10.33
-func TestRetryWorkDriveID_PrefersPersistedConfiguredDrive(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	flow := testEngineFlow(t, eng)
-	configuredDriveID := driveid.New("00000000000000ab")
-
-	require.NoError(t, eng.baseline.CommitObservation(t.Context(), nil, "", configuredDriveID))
-
-	driveID, err := flow.retryWorkDriveID(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, configuredDriveID, driveID)
-}
-
-// Validates: R-2.10.33
-func TestBaselineRetryHelpers_MatchRemoteStateAndLookupPath(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New("00000000000000cd")
-	entry := &BaselineEntry{
-		Path:       "mirror.txt",
-		DriveID:    driveID,
-		ItemID:     "item-1",
-		ItemType:   ItemTypeFile,
-		RemoteHash: "same-hash",
-	}
-	remote := &RemoteStateRow{
-		DriveID:  driveID,
-		ItemID:   "item-1",
-		Path:     "mirror.txt",
-		ItemType: ItemTypeFile,
-		Hash:     "same-hash",
-	}
-
-	assert.True(t, baselineEntryMatchesRemoteState(entry, remote))
-	assert.False(t, baselineEntryMatchesRemoteState(entry, &RemoteStateRow{
-		DriveID:  driveID,
-		ItemID:   "item-1",
-		Path:     "mirror.txt",
-		ItemType: ItemTypeFile,
-		Hash:     "different-hash",
-	}))
-	assert.False(t, baselineEntryMatchesRemoteState(nil, remote))
-	assert.False(t, baselineEntryMatchesRemoteState(entry, nil))
-
-	bl := newBaselineForTest([]*BaselineEntry{entry})
-	assert.Same(t, entry, baselineEntryForPathInBaseline(bl, "mirror.txt", driveID))
-	assert.Nil(t, baselineEntryForPathInBaseline(bl, "missing.txt", driveID))
-	assert.Nil(t, baselineEntryForPathInBaseline(bl, "mirror.txt", driveid.New("00000000000000ef")))
-	assert.Nil(t, baselineEntryForPathInBaseline(nil, "mirror.txt", driveID))
-}
-
-// Validates: R-2.10.33
-func TestBuildRetryCandidateFromRetryWork_ResolvesDownloadsAgainstCurrentRemoteState(t *testing.T) {
-	t.Parallel()
-
-	t.Run("missing remote state resolves", func(t *testing.T) {
-		t.Parallel()
-
-		eng, _ := newTestEngine(t, &engineMockClient{})
-		flow := testEngineFlow(t, eng)
-
-		candidate := flow.buildRetryCandidateFromRetryWork(t.Context(), nil, &RetryWorkRow{
-			Path:       "missing.txt",
-			ActionType: ActionDownload,
-		}, eng.driveID)
-
-		assert.True(t, candidate.resolved)
-		assert.Nil(t, candidate.skipped)
-		assert.NoError(t, candidate.err)
-	})
-
-	t.Run("matching remote state resolves", func(t *testing.T) {
-		t.Parallel()
-
-		eng, _ := newTestEngine(t, &engineMockClient{})
-		flow := testEngineFlow(t, eng)
-
-		seedObservedRemoteItemForRetryTest(t, eng.baseline, eng.driveID, "item-1", "mirror.txt", "same-hash")
-		bl := newBaselineForTest([]*BaselineEntry{{
-			Path:       "mirror.txt",
-			DriveID:    eng.driveID,
-			ItemID:     "item-1",
-			ItemType:   ItemTypeFile,
-			RemoteHash: "same-hash",
-		}})
-
-		candidate := flow.buildRetryCandidateFromRetryWork(t.Context(), bl, &RetryWorkRow{
-			Path:       "mirror.txt",
-			ActionType: ActionDownload,
-		}, eng.driveID)
-
-		assert.True(t, candidate.resolved)
-		assert.Nil(t, candidate.skipped)
-		assert.NoError(t, candidate.err)
-	})
-}
-
-// Validates: R-2.10.33
-func TestBuildRetryCandidateFromRetryWork_ResolvesMissingLocalDelete(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	flow := testEngineFlow(t, eng)
-
-	candidate := flow.buildRetryCandidateFromRetryWork(t.Context(), nil, &RetryWorkRow{
-		Path:       "gone.txt",
-		ActionType: ActionLocalDelete,
-	}, eng.driveID)
-
-	assert.True(t, candidate.resolved)
-	assert.Nil(t, candidate.skipped)
-	assert.NoError(t, candidate.err)
-}
-
-// Validates: R-2.10.33
-func TestBuildRetryCandidateFromRetryWork_MapsFilteredLocalPathToSkippedItem(t *testing.T) {
-	t.Parallel()
-
-	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	eng.localRules = LocalObservationRules{RejectSharePointRootForms: true}
-	flow := testEngineFlow(t, eng)
-
-	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "forms"), 0o750))
-
-	candidate := flow.buildRetryCandidateFromRetryWork(t.Context(), nil, &RetryWorkRow{
-		Path:       "forms",
-		ActionType: ActionUpload,
-	}, eng.driveID)
-
-	require.NotNil(t, candidate.skipped)
-	assert.Equal(t, IssueInvalidFilename, candidate.skipped.Reason)
-	assert.False(t, candidate.resolved)
-	assert.NoError(t, candidate.err)
-}
-
-// Validates: R-2.10.33
-func TestMaterializedPlanSnapshot_SelectsDependencyClosureFromIndexedRetryKeys(t *testing.T) {
-	t.Parallel()
-
-	plan := &ActionPlan{
-		Actions: []Action{
-			{
-				Type: ActionFolderCreate,
-				Path: "dir",
-			},
-			{
-				Type: ActionUpload,
-				Path: "dir/file.txt",
-			},
-		},
-		Deps: [][]int{
-			nil,
-			{0},
-		},
-	}
-
-	snapshot := newMaterializedPlanSnapshot(plan, 7)
-	require.NotNil(t, snapshot)
-	assert.Equal(t, uint64(7), snapshot.Generation)
-	assert.True(t, snapshot.containsRetryWorkKey(RetryWorkKey{
-		Path:       "dir/file.txt",
-		ActionType: ActionUpload,
-	}))
-
-	subset := snapshot.selectedActionPlanByKeys([]RetryWorkKey{{
-		Path:       "dir/file.txt",
-		ActionType: ActionUpload,
-	}})
-	require.NotNil(t, subset)
-	require.Len(t, subset.Actions, 2)
-	assert.Equal(t, ActionFolderCreate, subset.Actions[0].Type)
-	assert.Equal(t, ActionUpload, subset.Actions[1].Type)
-	require.Len(t, subset.Deps, 2)
-	assert.Equal(t, []int{0}, subset.Deps[1])
-	assert.Nil(t, snapshot.selectedActionPlanByKeys([]RetryWorkKey{{
-		Path:       "missing.txt",
-		ActionType: ActionUpload,
-	}}))
-}
-
-// Validates: R-2.10.33
-func TestMaterializeCurrentActionPlan_WatchReplacesIndexedCurrentPlanSnapshot(t *testing.T) {
+func TestRunRetrierSweep_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	flow := testEngineFlow(t, eng)
-
-	require.NoError(t, flow.materializeCurrentActionPlan(t.Context(), &ActionPlan{
-		Actions: []Action{{
-			Type: ActionUpload,
-			Path: "first.txt",
-		}},
-		Deps: [][]int{nil},
-	}))
-
-	snapshot := rt.cachedCurrentPlan()
-	require.NotNil(t, snapshot)
-	assert.Equal(t, uint64(1), snapshot.Generation)
-	assert.True(t, snapshot.containsRetryWorkKey(RetryWorkKey{
-		Path:       "first.txt",
-		ActionType: ActionUpload,
-	}))
-
-	require.NoError(t, flow.materializeCurrentActionPlan(t.Context(), &ActionPlan{
-		Actions: []Action{{
-			Type: ActionDownload,
-			Path: "second.txt",
-		}},
-		Deps: [][]int{nil},
-	}))
-
-	snapshot = rt.cachedCurrentPlan()
-	require.NotNil(t, snapshot)
-	assert.Equal(t, uint64(2), snapshot.Generation)
-	assert.False(t, snapshot.containsRetryWorkKey(RetryWorkKey{
-		Path:       "first.txt",
-		ActionType: ActionUpload,
-	}))
-	assert.True(t, snapshot.containsRetryWorkKey(RetryWorkKey{
-		Path:       "second.txt",
-		ActionType: ActionDownload,
-	}))
-}
-
-// Validates: R-2.10.33
-func TestRecordRetryTrialSkippedItem_ClearsRetryWorkWithoutWritingObservationIssues(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	flow := testEngineFlow(t, eng)
-	ctx := t.Context()
-
-	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "Private/file.txt",
-		ActionType:   ActionUpload,
-		AttemptCount: 1,
-		NextRetryAt:  eng.nowFunc().Add(-time.Second).UnixNano(),
-		FirstSeenAt:  eng.nowFunc().Add(-time.Minute).UnixNano(),
-		LastSeenAt:   eng.nowFunc().UnixNano(),
-	}))
-	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
-		Path:       "Other/file.txt",
-		DriveID:    eng.driveID,
-		ActionType: ActionUpload,
-		IssueType:  IssueLocalReadDenied,
-		Error:      "file not accessible",
-	})
-
-	flow.recordRetryTrialSkippedItem(ctx, RetryWorkKey{
-		Path:       "Private/file.txt",
-		ActionType: ActionUpload,
-	}, eng.driveID, &SkippedItem{
-		Path:   "Private/file.txt",
-		Reason: IssueLocalReadDenied,
-		Detail: "file not accessible (check filesystem permissions)",
-	})
-
-	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
-	rows, err := eng.baseline.ListObservationIssues(ctx)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "Other/file.txt", rows[0].Path)
-	assert.Equal(t, IssueLocalReadDenied, rows[0].IssueType)
-}
-
-// Validates: R-2.10.33
-func TestRearmRetryWorkCandidate_AdvancesRetryWithoutObservationWrites(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	flow := testEngineFlow(t, eng)
-	ctx := t.Context()
-	now := eng.nowFunc()
-
-	row := &RetryWorkRow{
-		Path:          "retry.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-		AttemptCount:  2,
-		NextRetryAt:   now.Add(-time.Second).UnixNano(),
-		LastError:     "temporary outage",
-		FirstSeenAt:   now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:    now.UnixNano(),
-	}
-	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, row))
-	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
-		Path:       "Other/file.txt",
-		DriveID:    eng.driveID,
-		ActionType: ActionUpload,
-		IssueType:  IssueLocalReadDenied,
-		Error:      "file not accessible",
-	})
-
-	flow.rearmRetryWorkCandidate(ctx, row, "test")
-
-	retryRows := listRetryWorkForTest(t, eng.baseline, ctx)
-	require.Len(t, retryRows, 1)
-	assert.Equal(t, "retry.txt", retryRows[0].Path)
-	assert.Equal(t, 3, retryRows[0].AttemptCount)
-	assert.Greater(t, retryRows[0].NextRetryAt, now.UnixNano())
-
-	rows, err := eng.baseline.ListObservationIssues(ctx)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "Other/file.txt", rows[0].Path)
-}
-
-// Validates: R-2.10.33
-func TestBuildRetryCandidateFromRetryWork_LeavesDistinctRemoteMoveUnresolved(t *testing.T) {
-	t.Parallel()
-
-	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	flow := testEngineFlow(t, eng)
-	writeLocalFile(t, syncRoot, "new-name.txt", "content")
-
-	bl := newBaselineForTest([]*BaselineEntry{{
-		Path:     "old-name.txt",
-		DriveID:  eng.driveID,
-		ItemID:   "item-old",
-		ItemType: ItemTypeFile,
-	}})
-
-	candidate := flow.buildRetryCandidateFromRetryWork(t.Context(), bl, &RetryWorkRow{
-		Path:       "new-name.txt",
-		OldPath:    "old-name.txt",
-		ActionType: ActionRemoteMove,
-	}, eng.driveID)
-
-	assert.False(t, candidate.resolved)
-	assert.Nil(t, candidate.skipped)
-	assert.NoError(t, candidate.err)
-}
-
-// Validates: R-2.10.33
-func TestBuildRetryCandidateFromRetryWork_ResolvesRemoteDeleteWhenLocalFileExists(t *testing.T) {
-	t.Parallel()
-
-	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	flow := testEngineFlow(t, eng)
-	writeLocalFile(t, syncRoot, "present.txt", "content")
-
-	bl := newBaselineForTest([]*BaselineEntry{{
-		Path:     "present.txt",
-		DriveID:  eng.driveID,
-		ItemID:   "item-present",
-		ItemType: ItemTypeFile,
-	}})
-
-	candidate := flow.buildRetryCandidateFromRetryWork(t.Context(), bl, &RetryWorkRow{
-		Path:       "present.txt",
-		ActionType: ActionRemoteDelete,
-	}, eng.driveID)
-
-	assert.True(t, candidate.resolved)
-	assert.Nil(t, candidate.skipped)
-	assert.NoError(t, candidate.err)
-}
-
-// Validates: R-2.10.33
-func TestClearStaleRetrySweepRow_ResolvedRetryClearsRetryWork(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	rt := testWatchRuntime(t, eng)
-	row := &RetryWorkRow{
-		Path:         "stale-download.txt",
-		ActionType:   ActionDownload,
-		AttemptCount: 1,
-		FirstSeenAt:  10,
-		LastSeenAt:   20,
-	}
-	work := retryWorkKeyForRetryWork(row)
-
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), row))
-
-	bl, err := eng.baseline.Load(t.Context())
-	require.NoError(t, err)
-
-	rt.clearStaleRetrySweepRow(t.Context(), bl, row, work)
-
-	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
-	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
-}
-
-// Validates: R-2.10.33
-func TestClearStaleRetrySweepRow_SkippedRetryClearsRetryWorkWithoutObservationWrites(t *testing.T) {
-	t.Parallel()
-
-	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	setupWatchEngine(t, eng)
-	eng.localRules = LocalObservationRules{RejectSharePointRootForms: true}
-	rt := testWatchRuntime(t, eng)
-	row := &RetryWorkRow{
-		Path:         "forms",
-		ActionType:   ActionUpload,
-		AttemptCount: 1,
-		FirstSeenAt:  30,
-		LastSeenAt:   40,
-	}
-
-	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "forms"), 0o750))
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), row))
-	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
-		Path:       "Other/file.txt",
-		DriveID:    eng.driveID,
-		ActionType: ActionUpload,
-		IssueType:  IssueLocalReadDenied,
-		Error:      "file not accessible",
-	})
-
-	bl, err := eng.baseline.Load(t.Context())
-	require.NoError(t, err)
-
-	rt.clearStaleRetrySweepRow(t.Context(), bl, row, retryWorkKeyForRetryWork(row))
-
-	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
-	rows, err := eng.baseline.ListObservationIssues(t.Context())
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "Other/file.txt", rows[0].Path)
-	assert.Equal(t, IssueLocalReadDenied, rows[0].IssueType)
-}
-
-// Validates: R-2.10.33
-func TestClearStaleRetrySweepRow_UnresolvedRetryRearmsWithoutPlanning(t *testing.T) {
-	t.Parallel()
-
-	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	setupWatchEngine(t, eng)
-	rt := testWatchRuntime(t, eng)
-	row := &RetryWorkRow{
-		Path:          "retry.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-		AttemptCount:  1,
-		NextRetryAt:   eng.nowFn().Add(-time.Second).UnixNano(),
-		LastError:     "temporary outage",
-		FirstSeenAt:   eng.nowFn().Add(-time.Minute).UnixNano(),
-		LastSeenAt:    eng.nowFn().UnixNano(),
-	}
-
-	writeLocalFile(t, syncRoot, "retry.txt", "content")
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), row))
-
-	bl, err := eng.baseline.Load(t.Context())
-	require.NoError(t, err)
-
-	rt.clearStaleRetrySweepRow(t.Context(), bl, row, retryWorkKeyForRetryWork(row))
-
-	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
-	require.Len(t, retryRows, 1)
-	assert.Equal(t, "retry.txt", retryRows[0].Path)
-	assert.Equal(t, 2, retryRows[0].AttemptCount)
-	assert.Greater(t, retryRows[0].NextRetryAt, eng.nowFn().UnixNano())
-	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
-}
-
-// Validates: R-2.10.5
-func TestClearStaleTrialRetryWork_PreservesScopeWhenBlockedRetryWorkRemains(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	rt := testWatchRuntime(t, eng)
-	scopeKey := SKService()
-
-	setTestBlockScope(t, eng, &BlockScope{
-		Key:           scopeKey,
-		BlockedAt:     eng.nowFn().Add(-time.Minute),
-		NextTrialAt:   eng.nowFn().Add(-time.Second),
-		TrialInterval: 10 * time.Second,
-	})
-
-	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:          "stale.txt",
-		ActionType:    ActionDownload,
-		ConditionType: IssueServiceOutage,
-		ScopeKey:      scopeKey,
-		LastError:     "blocked stale retry",
-		Blocked:       true,
-	}, nil)
-	require.NoError(t, err)
-	_, err = eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:          "still-blocked.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-		ScopeKey:      scopeKey,
-		LastError:     "blocked remaining retry",
-		Blocked:       true,
-	}, nil)
-	require.NoError(t, err)
-
-	rt.clearStaleTrialRetryWork(t.Context(), scopeKey, &RetryWorkRow{
-		Path:       "stale.txt",
-		ActionType: ActionDownload,
-		ScopeKey:   scopeKey,
-	})
-
-	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
-	require.Len(t, retryRows, 1)
-	assert.Equal(t, "still-blocked.txt", retryRows[0].Path)
-	assert.True(t, isTestBlockScopeed(eng, scopeKey))
-
-	block, ok := getTestBlockScope(eng, scopeKey)
-	require.True(t, ok)
-	assert.WithinDuration(t, eng.nowFn().Add(10*time.Second), block.NextTrialAt, time.Second)
-}
-
-// Validates: R-2.10.5
-func TestClearStaleTrialRetryWork_DiscardsScopeWhenBlockedRetryWorkDisappears(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	rt := testWatchRuntime(t, eng)
-	scopeKey := SKService()
-
-	setTestBlockScope(t, eng, &BlockScope{
-		Key:           scopeKey,
-		BlockedAt:     eng.nowFn().Add(-time.Minute),
-		NextTrialAt:   eng.nowFn().Add(-time.Second),
-		TrialInterval: 10 * time.Second,
-	})
-
-	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:          "stale.txt",
-		ActionType:    ActionDownload,
-		ConditionType: IssueServiceOutage,
-		ScopeKey:      scopeKey,
-		LastError:     "blocked stale retry",
-		Blocked:       true,
-	}, nil)
-	require.NoError(t, err)
-
-	rt.clearStaleTrialRetryWork(t.Context(), scopeKey, &RetryWorkRow{
-		Path:       "stale.txt",
-		ActionType: ActionDownload,
-		ScopeKey:   scopeKey,
-	})
-
-	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
-	assert.False(t, isTestBlockScopeed(eng, scopeKey))
-}
-
-// Validates: R-2.10.5
-func TestRunTrialDispatch_CleansDueScopesUsingCurrentRetryWorkState(t *testing.T) {
-	t.Parallel()
-
-	t.Run("no_blocked_retry_work_discards_scope", func(t *testing.T) {
-		t.Parallel()
-
-		eng := newSingleOwnerEngine(t)
-		rt := testWatchRuntime(t, eng)
-		scopeKey := SKService()
-
-		setTestBlockScope(t, eng, &BlockScope{
-			Key:           scopeKey,
-			BlockedAt:     eng.nowFn().Add(-time.Minute),
-			NextTrialAt:   eng.nowFn().Add(-time.Second),
-			TrialInterval: 10 * time.Second,
-		})
-
-		bl, err := eng.baseline.Load(t.Context())
-		require.NoError(t, err)
-
-		outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
-		assert.Empty(t, outbox)
-		assert.False(t, isTestBlockScopeed(eng, scopeKey))
-	})
-
-	t.Run("disappeared_blocked_retry_work_discards_empty_scope", func(t *testing.T) {
-		t.Parallel()
-
-		eng := newSingleOwnerEngine(t)
-		rt := testWatchRuntime(t, eng)
-		scopeKey := SKService()
-
-		setTestBlockScope(t, eng, &BlockScope{
-			Key:           scopeKey,
-			BlockedAt:     eng.nowFn().Add(-time.Minute),
-			NextTrialAt:   eng.nowFn().Add(-time.Second),
-			TrialInterval: 10 * time.Second,
-		})
-
-		_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-			Path:          "stale-download.txt",
-			ActionType:    ActionDownload,
-			ConditionType: IssueServiceOutage,
-			ScopeKey:      scopeKey,
-			LastError:     "blocked stale retry",
-			Blocked:       true,
-		}, nil)
-		require.NoError(t, err)
-
-		bl, err := eng.baseline.Load(t.Context())
-		require.NoError(t, err)
-
-		outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
-		assert.Empty(t, outbox)
-		assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
-		assert.False(t, isTestBlockScopeed(eng, scopeKey))
-	})
-
-	t.Run("blocked_retry_work_missing_from_cached_plan_rearms_scope", func(t *testing.T) {
-		t.Parallel()
-
-		eng, syncRoot := newTestEngine(t, &engineMockClient{})
-		eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-		setupWatchEngine(t, eng)
-		rt := testWatchRuntime(t, eng)
-		scopeKey := SKService()
-
-		setTestBlockScope(t, eng, &BlockScope{
-			Key:           scopeKey,
-			BlockedAt:     eng.nowFn().Add(-time.Minute),
-			NextTrialAt:   eng.nowFn().Add(-time.Second),
-			TrialInterval: 10 * time.Second,
-		})
-
-		writeLocalFile(t, syncRoot, "retry.txt", "content")
-		_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-			Path:          "retry.txt",
-			ActionType:    ActionUpload,
-			ConditionType: IssueServiceOutage,
-			ScopeKey:      scopeKey,
-			LastError:     "blocked retry",
-			Blocked:       true,
-		}, nil)
-		require.NoError(t, err)
-
-		bl, err := eng.baseline.Load(t.Context())
-		require.NoError(t, err)
-
-		outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
-		assert.Empty(t, outbox)
-
-		retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
-		require.Len(t, retryRows, 1)
-		assert.True(t, retryRows[0].Blocked)
-		assert.Equal(t, "retry.txt", retryRows[0].Path)
-		assert.True(t, isTestBlockScopeed(eng, scopeKey))
-
-		block, ok := getTestBlockScope(eng, scopeKey)
-		require.True(t, ok)
-		assert.WithinDuration(t, eng.nowFn().Add(10*time.Second), block.NextTrialAt, time.Second)
-	})
-}
-
-// Validates: R-2.10.33
-func TestRunRetrierSweep_ClearsStaleRetryWorkWithoutDispatch(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	rt := testWatchRuntime(t, eng)
-	now := eng.nowFn()
-
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
-		Path:         "stale-download.txt",
-		ActionType:   ActionDownload,
-		AttemptCount: 1,
-		NextRetryAt:  now.Add(-time.Second).UnixNano(),
-		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:   now.UnixNano(),
-	}))
+	ta := rt.depGraph.Add(&Action{
+		Type: ActionUpload,
+		Path: "retry.txt",
+	}, 1, nil)
+	require.NotNil(t, ta)
+
+	rt.holdAction(ta, heldReasonRetry, ScopeKey{}, eng.nowFn().Add(-time.Second))
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
 	outbox := rt.runRetrierSweep(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
-	assert.Empty(t, outbox)
-	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+	require.Len(t, outbox, 1)
+	assert.Equal(t, "retry.txt", outbox[0].Action.Path)
+	assert.False(t, outbox[0].IsTrial)
+	assert.Empty(t, rt.heldByKey)
 }
 
 // Validates: R-2.10.33
-func TestRunRetrierSweep_UnresolvedRetryOutsideCachedPlanRearmsRetryWork(t *testing.T) {
-	t.Parallel()
-
-	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
-	setupWatchEngine(t, eng)
-	rt := testWatchRuntime(t, eng)
-	now := eng.nowFn()
-
-	writeLocalFile(t, syncRoot, "retry.txt", "content")
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
-		Path:          "retry.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-		AttemptCount:  1,
-		NextRetryAt:   now.Add(-time.Second).UnixNano(),
-		LastError:     "temporary outage",
-		FirstSeenAt:   now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:    now.UnixNano(),
-	}))
-
-	bl, err := eng.baseline.Load(t.Context())
-	require.NoError(t, err)
-
-	outbox := rt.runRetrierSweep(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
-	assert.Empty(t, outbox)
-
-	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
-	require.Len(t, retryRows, 1)
-	assert.Equal(t, "retry.txt", retryRows[0].Path)
-	assert.Equal(t, 2, retryRows[0].AttemptCount)
-	assert.Greater(t, retryRows[0].NextRetryAt, now.UnixNano())
-	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
-}
-
-// Validates: R-2.10.33
-func TestRunRetrierSweep_DispatchesWorkFromCachedCurrentPlan(t *testing.T) {
+func TestRunRetrierSweep_DoesNotConsultDurableRetryRowsWithoutHeldRuntimeEntry(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	now := eng.nowFn()
-
-	rt.replaceCurrentPlan(&ActionPlan{
-		Actions: []Action{{
-			Type: ActionUpload,
-			Path: "retry.txt",
-		}},
-		Deps: [][]int{nil},
-	})
 
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
 		Path:         "retry.txt",
@@ -785,9 +53,7 @@ func TestRunRetrierSweep_DispatchesWorkFromCachedCurrentPlan(t *testing.T) {
 	require.NoError(t, err)
 
 	outbox := rt.runRetrierSweep(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
-	require.Len(t, outbox, 1)
-	assert.Equal(t, "retry.txt", outbox[0].Action.Path)
-	assert.False(t, outbox[0].IsTrial)
+	assert.Empty(t, outbox)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -795,7 +61,72 @@ func TestRunRetrierSweep_DispatchesWorkFromCachedCurrentPlan(t *testing.T) {
 }
 
 // Validates: R-2.10.5
-func TestRunTrialDispatch_DispatchesTrialFromCachedCurrentPlan(t *testing.T) {
+func TestRunTrialDispatch_ReleasesFirstHeldScopeCandidateAsTrial(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	scopeKey := SKService()
+
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:           scopeKey,
+		BlockedAt:     eng.nowFn().Add(-time.Minute),
+		NextTrialAt:   eng.nowFn().Add(-time.Second),
+		TrialInterval: 10 * time.Second,
+	})
+
+	first := rt.depGraph.Add(&Action{
+		Type: ActionUpload,
+		Path: "first.txt",
+	}, 1, nil)
+	second := rt.depGraph.Add(&Action{
+		Type: ActionDownload,
+		Path: "second.txt",
+	}, 2, nil)
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+
+	rt.holdAction(first, heldReasonScope, scopeKey, time.Time{})
+	rt.holdAction(second, heldReasonScope, scopeKey, time.Time{})
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
+	require.Len(t, outbox, 1)
+	assert.Equal(t, "first.txt", outbox[0].Action.Path)
+	assert.True(t, outbox[0].IsTrial)
+	assert.Equal(t, scopeKey, outbox[0].TrialScopeKey)
+
+	require.Len(t, rt.heldByKey, 1)
+	assert.Contains(t, rt.heldByKey, retryWorkKeyForAction(&second.Action))
+}
+
+// Validates: R-2.10.5
+func TestRunTrialDispatch_SkipsScopesWithoutHeldDependencyReadyCandidates(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	scopeKey := SKService()
+
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:           scopeKey,
+		BlockedAt:     eng.nowFn().Add(-time.Minute),
+		NextTrialAt:   eng.nowFn().Add(-time.Second),
+		TrialInterval: 10 * time.Second,
+	})
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
+	assert.Empty(t, outbox)
+	assert.True(t, isTestBlockScopeed(eng, scopeKey))
+}
+
+// Validates: R-2.10.5
+func TestRunTrialDispatch_DoesNotConsultDurableBlockedRetryRowsWithoutHeldRuntimeEntry(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -809,36 +140,25 @@ func TestRunTrialDispatch_DispatchesTrialFromCachedCurrentPlan(t *testing.T) {
 		TrialInterval: 10 * time.Second,
 	})
 	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:          "retry.txt",
+		Path:          "blocked.txt",
 		ActionType:    ActionUpload,
 		ConditionType: IssueServiceOutage,
 		ScopeKey:      scopeKey,
-		LastError:     "blocked retry",
+		LastError:     "blocked",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
-
-	rt.replaceCurrentPlan(&ActionPlan{
-		Actions: []Action{{
-			Type: ActionUpload,
-			Path: "retry.txt",
-		}},
-		Deps: [][]int{nil},
-	})
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
 	outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
-	require.Len(t, outbox, 1)
-	assert.Equal(t, "retry.txt", outbox[0].Action.Path)
-	assert.True(t, outbox[0].IsTrial)
-	assert.Equal(t, scopeKey, outbox[0].TrialScopeKey)
+	assert.Empty(t, outbox)
+	assert.True(t, isTestBlockScopeed(eng, scopeKey))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
 	assert.True(t, retryRows[0].Blocked)
-	assert.Equal(t, "retry.txt", retryRows[0].Path)
 }
 
 // Validates: R-2.10.33

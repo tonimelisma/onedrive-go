@@ -41,7 +41,7 @@ func (controller *scopeController) applyPermissionOutcomeMutation(
 			return
 		}
 		if watch != nil && shouldArmPermissionRetryTimer(outcome) {
-			watch.armRetryTimer(ctx)
+			watch.armRetryTimer()
 		}
 		if !outcome.ScopeKey.IsZero() && outcome.ScopeKey.PersistsInBlockScopes() {
 			controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
@@ -122,7 +122,8 @@ func (controller *scopeController) recordRetryWorkFailure(
 	}
 
 	delayFn := permissionOutcomeRetryDelay(kind, failure)
-	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, failure, delayFn); err != nil {
+	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, failure, delayFn)
+	if err != nil {
 		fields := append(flow.summaryLogFields(
 			logClass,
 			conditionKey,
@@ -141,6 +142,9 @@ func (controller *scopeController) recordRetryWorkFailure(
 	),
 		slog.String("condition_type", failure.ConditionType),
 	)
+	if row != nil {
+		flow.retryRowsByKey[retryWorkKeyForRetryWork(row)] = *row
+	}
 	flow.engine.logger.Debug("retry_work permission failure recorded", fields...)
 
 	return true

@@ -7,87 +7,11 @@ import (
 	"time"
 )
 
-// externalDBChanged checks whether another process (e.g., the CLI) wrote to
-// the database since the last check. Uses PRAGMA data_version — changes every
-// time another connection commits a write. The engine's own writes don't
-// change it. Returns true if the version advanced.
-func (rt *watchRuntime) externalDBChanged(ctx context.Context) bool {
-	dv, err := rt.engine.baseline.DataVersion(ctx)
-	if err != nil {
-		rt.engine.logger.Warn("failed to check data_version",
-			slog.String("error", err.Error()),
-		)
-
-		return false
-	}
-
-	if dv == rt.lastDataVersion {
-		return false
-	}
-
-	rt.lastDataVersion = dv
-
-	return true
-}
-
-// handleRecheckTick processes a recheck timer tick: detects external DB
-// changes and logs a watch summary.
+// handleRecheckTick processes a maintenance tick for watch-mode summary
+// logging and debug-event bookkeeping.
 func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
-	if rt.externalDBChanged(ctx) {
-		rt.handleExternalChanges(ctx)
-	}
-
 	rt.logWatchSummary(ctx)
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRecheckTickHandled})
-}
-
-// handleExternalChanges reacts to external DB modifications detected via
-// PRAGMA data_version.
-func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
-	rt.clearExternallyClearedPersistedBlockScopes(ctx)
-	rt.mustAssertInvariants(ctx, rt, "handle external changes")
-}
-
-// clearExternallyClearedPersistedBlockScopes checks whether persisted block
-// scopes still exist and releases any runtime scope whose backing
-// block_scopes / blocked retry_work rows disappeared externally.
-func (rt *watchRuntime) clearExternallyClearedPersistedBlockScopes(ctx context.Context) {
-	scopeKeys := rt.activeScopeKeys()
-	if len(scopeKeys) == 0 {
-		return
-	}
-
-	blocks, err := rt.engine.baseline.ListBlockScopes(ctx)
-	if err != nil {
-		rt.engine.logger.Warn("failed to check persisted block scopes",
-			slog.String("error", err.Error()),
-		)
-
-		return
-	}
-
-	persistedBlockScopes := make(map[ScopeKey]bool, len(blocks))
-	for i := range blocks {
-		if blocks[i] != nil && blocks[i].Key.PersistsInBlockScopes() {
-			persistedBlockScopes[blocks[i].Key] = true
-		}
-	}
-
-	for _, key := range scopeKeys {
-		if key.PersistsInBlockScopes() && !persistedBlockScopes[key] {
-			if err := rt.scopeController().releaseScope(ctx, rt, key); err != nil {
-				rt.engine.logger.Warn("failed to release externally-cleared persisted block scope",
-					slog.String("scope", key.String()),
-					slog.String("error", err.Error()),
-				)
-				continue
-			}
-
-			rt.engine.logger.Info("persisted block scope cleared by user",
-				slog.String("scope", key.String()),
-			)
-		}
-	}
 }
 
 func (e *Engine) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, error) {
@@ -202,13 +126,7 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 		return result
 	}
 
-	events := rt.processCommittedPrimaryBatch(
-		ctx,
-		bl,
-		projectedPrimary.emitted,
-		false,
-		true,
-	)
+	events := append([]ChangeEvent(nil), projectedPrimary.emitted...)
 	if len(events) == 0 {
 		rt.engine.logger.Info("periodic full remote refresh complete: no changes",
 			slog.Duration("duration", rt.engine.since(start)),

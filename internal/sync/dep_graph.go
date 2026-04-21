@@ -213,6 +213,21 @@ func (g *DepGraph) MarkTrial(id int64, scopeKey ScopeKey) bool {
 	return true
 }
 
+// Get returns the tracked action for the given ID if it is still registered in
+// the graph. Callers must treat the returned action as graph-owned runtime
+// state and must not mutate dependency bookkeeping fields directly.
+func (g *DepGraph) Get(id int64) (*TrackedAction, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	node, ok := g.actions[id]
+	if !ok {
+		return nil, false
+	}
+
+	return node.TrackedAction, true
+}
+
 // Complete marks an action as done, deletes it from both the actions and
 // byPath maps (D-10 fix), and decrements the depsLeft counter on all
 // dependents. Returns (newly-ready dependents as TrackedAction pointers, true)

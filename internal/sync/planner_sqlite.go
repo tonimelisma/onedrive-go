@@ -16,7 +16,6 @@ func (p *Planner) PlanCurrentState(
 	localRows []LocalStateRow,
 	remoteRows []RemoteStateRow,
 	observationIssues []ObservationIssueRow,
-	blockScopes []*BlockScope,
 	baseline *Baseline,
 	mode Mode,
 	config *SafetyConfig,
@@ -28,7 +27,6 @@ func (p *Planner) PlanCurrentState(
 		slog.Int("reconciliation_rows", len(reconciliations)),
 		slog.Int("baseline_entries", baseline.Len()),
 		slog.Int("observation_issues", len(observationIssues)),
-		slog.Int("block_scopes", len(blockScopes)),
 		slog.String("mode", mode.String()),
 	)
 
