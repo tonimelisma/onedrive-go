@@ -11,11 +11,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
-type resultContext struct {
-	isTrial       bool
-	trialScopeKey ScopeKey
-}
-
 type routeOutcome struct {
 	dispatched   []*TrackedAction
 	terminate    bool
@@ -47,14 +42,14 @@ func (flow *engineFlow) processActionCompletion(
 		return routeOutcome{}
 	}
 
+	decision := classifyResult(r)
+	current := flow.trackedActionForCompletion(r)
+
 	var outcome routeOutcome
 	if r.IsTrial && !r.TrialScopeKey.IsZero() {
-		outcome = flow.processResult(ctx, watch, resultContext{
-			isTrial:       true,
-			trialScopeKey: r.TrialScopeKey,
-		}, r, bl)
+		outcome = flow.processTrialDecision(ctx, watch, r.TrialScopeKey, &decision, current, r, bl)
 	} else {
-		outcome = flow.processResult(ctx, watch, resultContext{}, r, bl)
+		outcome = flow.processNormalDecision(ctx, watch, &decision, current, r, bl)
 	}
 
 	if outcome.terminate {
@@ -65,29 +60,52 @@ func (flow *engineFlow) processActionCompletion(
 	return outcome
 }
 
-func (flow *engineFlow) processResult(
-	ctx context.Context,
-	watch *watchRuntime,
-	resultCtx resultContext,
-	r *ActionCompletion,
-	bl *Baseline,
-) routeOutcome {
-	decision := classifyResult(r)
-	ta := flow.trackedActionForCompletion(r)
-
-	if resultCtx.isTrial {
-		return flow.processTrialDecision(ctx, watch, resultCtx.trialScopeKey, &decision, ta, r, bl)
-	}
-
-	return flow.processNormalDecision(ctx, watch, &decision, ta, r, bl)
-}
-
 func (flow *engineFlow) applySuccessEffects(ctx context.Context, r *ActionCompletion) {
 	flow.succeeded++
 	flow.clearRetryWorkOnSuccess(ctx, r)
 	if flow.scopeState != nil {
 		flow.scopeState.RecordSuccess(r)
 	}
+}
+
+func (flow *engineFlow) applyCompletionSuccess(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	r *ActionCompletion,
+) []*TrackedAction {
+	flow.markFinished(current)
+	flow.applySuccessEffects(ctx, r)
+	return flow.admitReadyAfterSuccessfulAction(ctx, watch, r.ActionID, "successful action completion")
+}
+
+func (flow *engineFlow) applyPublicationSuccess(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+) []*TrackedAction {
+	if current == nil {
+		return nil
+	}
+
+	flow.markFinished(current)
+	flow.succeeded++
+	flow.clearRetryWorkOnActionSuccess(ctx, &current.Action)
+	return flow.admitReadyAfterSuccessfulAction(ctx, watch, current.ID, "publication action completion")
+}
+
+func (flow *engineFlow) applyCompletedSubtree(
+	current *TrackedAction,
+	actionID int64,
+	reason string,
+) {
+	flow.markFinished(current)
+	if current == nil {
+		return
+	}
+
+	ready := flow.completeDepGraphAction(actionID, reason)
+	flow.scopeController().completeSubtree(ready)
 }
 
 // applyOrdinaryFailureEffects handles post-routing side effects for normal
@@ -168,22 +186,12 @@ func (flow *engineFlow) processNormalDecision(
 		outcome.terminate = true
 		outcome.terminateErr = fmt.Errorf("classify action completion: invalid failure class")
 	case errclass.ClassSuccess:
-		flow.markFinished(current)
-		flow.applySuccessEffects(ctx, r)
-		outcome.dispatched = flow.readyAfterSuccess(ctx, watch, r.ActionID)
+		outcome.dispatched = flow.applyCompletionSuccess(ctx, watch, current, r)
 	case errclass.ClassShutdown:
-		flow.markFinished(current)
-		if current != nil {
-			ready := flow.completeDepGraphAction(r.ActionID, "shutdown action completion")
-			scopeCtrl.completeSubtree(ready)
-		}
+		flow.applyCompletedSubtree(current, r.ActionID, "shutdown action completion")
 		return outcome
 	case errclass.ClassFatal:
-		flow.markFinished(current)
-		if current != nil {
-			ready := flow.completeDepGraphAction(r.ActionID, "fatal action completion")
-			scopeCtrl.completeSubtree(ready)
-		}
+		flow.applyCompletedSubtree(current, r.ActionID, "fatal action completion")
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		outcome.terminate = true
@@ -209,8 +217,7 @@ func (flow *engineFlow) processTrialDecision(
 
 	switch evaluateScopeTrialOutcome(trialScopeKey, decision) {
 	case scopeTrialOutcomeRelease:
-		flow.markFinished(current)
-		flow.applySuccessEffects(ctx, r)
+		outcome.dispatched = flow.applyCompletionSuccess(ctx, watch, current, r)
 		if err := scopeCtrl.releaseScope(ctx, watch, trialScopeKey); err != nil {
 			flow.engine.logger.Warn("trial result: failed to release scope",
 				slog.String("scope_key", trialScopeKey.String()),
@@ -218,13 +225,8 @@ func (flow *engineFlow) processTrialDecision(
 			)
 		}
 		flow.releaseHeldScope(trialScopeKey)
-		outcome.dispatched = flow.readyAfterSuccess(ctx, watch, r.ActionID)
 	case scopeTrialOutcomeShutdown:
-		flow.markFinished(current)
-		if current != nil {
-			ready := flow.completeDepGraphAction(r.ActionID, "trial shutdown action completion")
-			scopeCtrl.completeSubtree(ready)
-		}
+		flow.applyCompletedSubtree(current, r.ActionID, "trial shutdown action completion")
 	case scopeTrialOutcomeExtend:
 		flow.markFinished(current)
 		scopeCtrl.rehomeBlockedRetryWork(ctx, r, trialScopeKey)
@@ -238,11 +240,7 @@ func (flow *engineFlow) processTrialDecision(
 		scopeCtrl.rearmOrDiscardScope(ctx, watch, trialScopeKey)
 		flow.recordError(decision, r)
 	case scopeTrialOutcomeFatal:
-		flow.markFinished(current)
-		if current != nil {
-			ready := flow.completeDepGraphAction(r.ActionID, "trial fatal action completion")
-			scopeCtrl.completeSubtree(ready)
-		}
+		flow.applyCompletedSubtree(current, r.ActionID, "trial fatal action completion")
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		outcome.terminate = true
@@ -265,12 +263,13 @@ func (flow *engineFlow) trackedActionForCompletion(r *ActionCompletion) *Tracked
 	return ta
 }
 
-func (flow *engineFlow) readyAfterSuccess(
+func (flow *engineFlow) admitReadyAfterSuccessfulAction(
 	ctx context.Context,
 	watch *watchRuntime,
 	actionID int64,
+	reason string,
 ) []*TrackedAction {
-	ready := flow.completeDepGraphAction(actionID, "successful action completion")
+	ready := flow.completeDepGraphAction(actionID, reason)
 	return flow.scopeController().admitReady(ctx, watch, ready)
 }
 

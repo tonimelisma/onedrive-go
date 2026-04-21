@@ -58,13 +58,28 @@ func (rt *watchRuntime) runRetrierSweep(
 // completed action. The engine owns retry_work and observation-issue lifecycle;
 // CommitMutation handles only baseline and remote_state updates.
 func (flow *engineFlow) clearRetryWorkOnSuccess(ctx context.Context, r *ActionCompletion) {
+	if r == nil {
+		return
+	}
+	flow.clearRetryWorkOnActionSuccess(ctx, &Action{
+		Path:    r.Path,
+		OldPath: r.OldPath,
+		Type:    r.ActionType,
+	})
+}
+
+func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, action *Action) {
 	if clearErr := flow.resolveRetryWorkAndLogResolution(
 		ctx,
-		retryWorkKeyForCompletion(r),
+		retryWorkKeyForAction(action),
 		retryResolutionSourceWorkerSuccess,
 	); clearErr != nil {
+		path := ""
+		if action != nil {
+			path = action.Path
+		}
 		flow.engine.logger.Warn("failed to clear retry_work on success",
-			slog.String("path", r.Path),
+			slog.String("path", path),
 			slog.String("error", clearErr.Error()),
 		)
 	}

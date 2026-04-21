@@ -108,9 +108,6 @@ type watchObservationState struct {
 	// from SQLite current truth after the debounce window closes.
 	dirtyBuf *DirtyBuffer
 
-	// Cross-connection SQLite commit detector for watch recheck ticks.
-	lastDataVersion int64
-
 	// Observer references — set in startObservers, nil'd on shutdown.
 	remoteObs *RemoteObserver
 	localObs  *LocalObserver
