@@ -154,7 +154,7 @@ func TestStatusPerf_PrintStatusPerfText_UsesActionableCountFallback(t *testing.T
 			ObserveTimeMS:         (100 * time.Millisecond).Milliseconds(),
 			PlanTimeMS:            (200 * time.Millisecond).Milliseconds(),
 			ExecuteTimeMS:         (300 * time.Millisecond).Milliseconds(),
-			ReconcileTimeMS:       (400 * time.Millisecond).Milliseconds(),
+			RefreshTimeMS:         (400 * time.Millisecond).Milliseconds(),
 			ActionableActionCount: 7,
 			WatchBatchCount:       8,
 			WatchPathCount:        9,
@@ -171,7 +171,7 @@ func TestStatusPerf_PrintStatusPerfText_UsesActionableCountFallback(t *testing.T
 	assert.Contains(t, rendered, "Transfers:")
 	assert.Contains(t, rendered, "down 5 (64 B), up 6 (128 B)")
 	assert.Contains(t, rendered, "Phases:")
-	assert.Contains(t, rendered, "observe 100ms, plan 200ms, execute 300ms, reconcile 400ms")
+	assert.Contains(t, rendered, "observe 100ms, plan 200ms, execute 300ms, refresh 400ms")
 	assert.Contains(t, rendered, "Activity:")
 	assert.Contains(t, rendered, "actions 7, watch batches 8, watch paths 9")
 }

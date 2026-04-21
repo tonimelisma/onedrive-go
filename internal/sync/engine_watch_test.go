@@ -223,7 +223,7 @@ func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 }
 
 // Validates: R-2.8.5
-func TestRunWatch_ScopedRootKeepsPollingOnly(t *testing.T) {
+func TestRunWatch_SharedRootKeepsPollingOnly(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -888,12 +888,12 @@ func waitForSignal(t *testing.T, ch <-chan struct{}, description string) {
 }
 
 // Validates: R-2.8.3, R-6.10.10
-func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
+func TestRunWatch_ShutdownDropsRefreshResult(t *testing.T) {
 	t.Parallel()
 
-	reconcileStarted := make(chan struct{})
-	reconcileReleased := make(chan struct{})
-	var reconcileStartedOnce atomic.Bool
+	refreshStarted := make(chan struct{})
+	refreshReleased := make(chan struct{})
+	var refreshStartedOnce atomic.Bool
 	var deltaCalls atomic.Int32
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
@@ -903,14 +903,14 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 					{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
 				}, "bootstrap-token"), nil
 			}
-			if reconcileStartedOnce.CompareAndSwap(false, true) {
-				close(reconcileStarted)
+			if refreshStartedOnce.CompareAndSwap(false, true) {
+				close(refreshStarted)
 			}
-			<-reconcileReleased
+			<-refreshReleased
 			return deltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
 				{ID: "late-item", Name: "late.txt", ParentID: "root", DriveID: driveid.New(engineTestDriveID), Size: 10, QuickXorHash: "late-hash"},
-			}, "reconcile-token"), nil
+			}, "refresh-token"), nil
 		},
 	}
 	eng, _ := newTestEngine(t, mock)
@@ -954,9 +954,9 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventRemoteRefreshStarted
 	}, "full remote refresh started")
-	waitForSignal(t, reconcileStarted, "reconcile delta fetch did not start")
+	waitForSignal(t, refreshStarted, "full remote refresh delta fetch did not start")
 
-	close(reconcileReleased)
+	close(refreshReleased)
 
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventShutdownStarted
@@ -966,7 +966,7 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		require.Fail(t, "watch loop did not exit after dropping reconcile result")
+		require.Fail(t, "watch loop did not exit after dropping refresh result")
 	}
 
 	recorder.requireOrderedSubsequence(t, []func(engineDebugEvent) bool{

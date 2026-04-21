@@ -21,7 +21,7 @@ func TestCollector_RollsUpChildMetricsIntoParent(t *testing.T) {
 	child.RecordObserve(3, 12*time.Millisecond)
 	child.RecordPlan(4, 13*time.Millisecond)
 	child.RecordExecute(4, 3, 1, 14*time.Millisecond)
-	child.RecordReconcile(5, 15*time.Millisecond)
+	child.RecordRefresh(5, 15*time.Millisecond)
 	child.RecordWatchBatch(6)
 	child.SetResult("success")
 

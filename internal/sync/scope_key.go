@@ -137,7 +137,7 @@ func (sk ScopeKey) IsGlobal() bool {
 	return sk.Kind == ScopeService
 }
 
-// IsPermDir returns true for local directory permission block scopes.
+// IsPermDir returns true for local directory permission scopes.
 func (sk ScopeKey) IsPermDir() bool {
 	return sk.IsPermLocalRead() || sk.IsPermLocalWrite()
 }

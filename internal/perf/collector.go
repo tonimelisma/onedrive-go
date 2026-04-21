@@ -49,9 +49,9 @@ type Snapshot struct {
 	ExecuteSucceededCount int   `json:"execute_succeeded_count,omitempty"`
 	ExecuteFailedCount    int   `json:"execute_failed_count,omitempty"`
 	ExecuteTimeMS         int64 `json:"execute_time_ms,omitempty"`
-	ReconcileRunCount     int   `json:"reconcile_run_count,omitempty"`
-	ReconcileEventCount   int   `json:"reconcile_event_count,omitempty"`
-	ReconcileTimeMS       int64 `json:"reconcile_time_ms,omitempty"`
+	RefreshRunCount       int   `json:"refresh_run_count,omitempty"`
+	RefreshEventCount     int   `json:"refresh_event_count,omitempty"`
+	RefreshTimeMS         int64 `json:"refresh_time_ms,omitempty"`
 	WatchBatchCount       int   `json:"watch_batch_count,omitempty"`
 	WatchPathCount        int   `json:"watch_path_count,omitempty"`
 }
@@ -193,11 +193,11 @@ func (c *Collector) RecordExecute(actions, succeeded, failed int, duration time.
 	})
 }
 
-func (c *Collector) RecordReconcile(events int, duration time.Duration) {
+func (c *Collector) RecordRefresh(events int, duration time.Duration) {
 	c.apply(func(snapshot *Snapshot) {
-		snapshot.ReconcileRunCount++
-		snapshot.ReconcileEventCount += events
-		snapshot.ReconcileTimeMS += durationMS(duration)
+		snapshot.RefreshRunCount++
+		snapshot.RefreshEventCount += events
+		snapshot.RefreshTimeMS += durationMS(duration)
 	})
 }
 

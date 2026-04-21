@@ -21,10 +21,9 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 
 	totalConditions := summary.ConditionTotal
 	if totalConditions == 0 {
-		if rt.lastSummaryTotal != 0 || rt.lastSummarySignature != "" {
+		if rt.lastSummarySignature != "" {
 			rt.engine.logger.Info("sync conditions cleared")
 		}
-		rt.lastSummaryTotal = 0
 		rt.lastSummarySignature = ""
 		return
 	}
@@ -34,7 +33,6 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 		return
 	}
 
-	rt.lastSummaryTotal = totalConditions
 	rt.lastSummarySignature = signature
 
 	rt.engine.logger.Warn("sync conditions",

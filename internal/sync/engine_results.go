@@ -176,7 +176,7 @@ func (f *engineFlow) logFailureSummary() {
 // Always set by NewEngine; tests overwrite with a controllable clock.
 func (e *Engine) nowFunc() time.Time {
 	if e == nil || e.nowFn == nil {
-		return time.Now()
+		panic("sync: engine clock is not initialized")
 	}
 
 	return e.nowFn()
