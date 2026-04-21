@@ -11,14 +11,8 @@ import (
 func (ph *PermissionHandler) handleLocalPermission(
 	_ context.Context,
 	r *ActionCompletion,
-) PermissionCheckDecision {
+) PermissionEvidence {
 	issueType := localPermissionIssueType(r)
-	scopeKeyForBoundary := func(boundaryPath string) ScopeKey {
-		if issueType == IssueLocalReadDenied {
-			return SKPermLocalRead(boundaryPath)
-		}
-		return SKPermLocalWrite(boundaryPath)
-	}
 
 	if !isDirAccessible(ph.syncTree, ".") {
 		ph.logger.Warn("sync root directory is inaccessible",
@@ -26,7 +20,7 @@ func (ph *PermissionHandler) handleLocalPermission(
 			slog.String("error", r.ErrMsg),
 		)
 
-		return ph.localFilePermissionDecision(
+		return ph.localFilePermissionEvidence(
 			r.Path,
 			r.ActionType,
 			issueType,
@@ -41,7 +35,7 @@ func (ph *PermissionHandler) handleLocalPermission(
 			slog.String("error", absErr.Error()),
 		)
 
-		return ph.localFilePermissionDecision(
+		return ph.localFilePermissionEvidence(
 			r.Path,
 			r.ActionType,
 			issueType,
@@ -51,7 +45,7 @@ func (ph *PermissionHandler) handleLocalPermission(
 	parentDir := filepath.Dir(absPath)
 
 	if isDirAccessible(ph.syncTree, parentDir) {
-		return ph.localFilePermissionDecision(
+		return ph.localFilePermissionEvidence(
 			r.Path,
 			r.ActionType,
 			issueType,
@@ -67,7 +61,7 @@ func (ph *PermissionHandler) handleLocalPermission(
 			slog.String("error", relErr.Error()),
 		)
 
-		return ph.localFilePermissionDecision(
+		return ph.localFilePermissionEvidence(
 			r.Path,
 			r.ActionType,
 			issueType,
@@ -75,54 +69,44 @@ func (ph *PermissionHandler) handleLocalPermission(
 		)
 	}
 
-	return ph.localDirectoryPermissionDecision(
+	return ph.localDirectoryPermissionEvidence(
 		relBoundary,
 		r.Path,
 		r.ActionType,
 		issueType,
-		scopeKeyForBoundary(relBoundary),
 	)
 }
 
-func (ph *PermissionHandler) localFilePermissionDecision(
+func (ph *PermissionHandler) localFilePermissionEvidence(
 	path string,
 	actionType ActionType,
 	issueType string,
 	errMsg string,
-) PermissionCheckDecision {
-	return PermissionCheckDecision{
-		Matched: true,
-		Kind:    permissionCheckRecordFileFailure,
-		RetryWorkFailure: &RetryWorkFailure{
-			Path:          path,
-			ActionType:    actionType,
-			ConditionType: issueType,
-			LastError:     errMsg,
-		},
+) PermissionEvidence {
+	_ = actionType
+
+	return PermissionEvidence{
+		Kind:        permissionEvidenceFileDenied,
+		TriggerPath: path,
+		IssueType:   issueType,
+		LastError:   errMsg,
 	}
 }
 
-func (ph *PermissionHandler) localDirectoryPermissionDecision(
+func (ph *PermissionHandler) localDirectoryPermissionEvidence(
 	boundaryPath string,
 	triggerPath string,
 	actionType ActionType,
 	issueType string,
-	scopeKey ScopeKey,
-) PermissionCheckDecision {
-	return PermissionCheckDecision{
-		Matched:  true,
-		Kind:     permissionCheckActivateBoundaryScope,
-		ScopeKey: scopeKey,
-		RetryWorkFailure: &RetryWorkFailure{
-			Path:          triggerPath,
-			ActionType:    actionType,
-			ConditionType: issueType,
-			ScopeKey:      scopeKey,
-			LastError:     "directory not accessible (check filesystem permissions)",
-			Blocked:       true,
-		},
+) PermissionEvidence {
+	_ = actionType
+
+	return PermissionEvidence{
+		Kind:         permissionEvidenceBoundaryDenied,
 		BoundaryPath: boundaryPath,
 		TriggerPath:  triggerPath,
+		IssueType:    issueType,
+		LastError:    "directory not accessible (check filesystem permissions)",
 	}
 }
 
