@@ -444,10 +444,10 @@ func (rt *watchRuntime) runBootstrapStep(
 		rt.replaceOutbox(nextOutbox)
 		return done, err
 	case <-rt.trialTimerChan():
-		rt.appendOutbox(rt.runTrialDispatch(ctx, p.bl, p.mode))
+		rt.appendOutbox(rt.runTrialDispatch(ctx))
 		return false, nil
 	case <-rt.retryTimerChan():
-		rt.appendOutbox(rt.runRetrierSweep(ctx, p.bl, p.mode))
+		rt.appendOutbox(rt.runRetrierSweep(ctx))
 		return false, nil
 	case <-logC:
 		rt.logBootstrapWait()

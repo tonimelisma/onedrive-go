@@ -14,13 +14,8 @@ const retryResolutionSourceWorkerSuccess = "worker_success"
 // the runtime. It never rebuilds plan structure or revalidates durable rows.
 func (rt *watchRuntime) runTrialDispatch(
 	ctx context.Context,
-	bl *Baseline,
-	mode Mode,
 ) []*TrackedAction {
-	_ = bl
-	_ = mode
-
-	rt.mustAssertPlannerSweepAllowed(rt, "runTrialDispatch", "run trial dispatch")
+	rt.mustAssertHeldReleaseAllowed(rt, "runTrialDispatch", "run trial dispatch")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialSweepStarted})
 
 	dispatch := rt.drainDueHeldWorkNow(ctx, rt)
@@ -36,13 +31,8 @@ func (rt *watchRuntime) runTrialDispatch(
 // the runtime. It never rebuilds plan structure or revalidates durable rows.
 func (rt *watchRuntime) runRetrierSweep(
 	ctx context.Context,
-	bl *Baseline,
-	mode Mode,
 ) []*TrackedAction {
-	_ = bl
-	_ = mode
-
-	rt.mustAssertPlannerSweepAllowed(rt, "runRetrierSweep", "run retrier sweep")
+	rt.mustAssertHeldReleaseAllowed(rt, "runRetrierSweep", "run retrier sweep")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepStarted})
 
 	dispatch := rt.drainDueHeldWorkNow(ctx, rt)

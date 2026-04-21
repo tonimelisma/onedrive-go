@@ -217,14 +217,15 @@ func (flow *engineFlow) processTrialDecision(
 
 	switch evaluateScopeTrialOutcome(trialScopeKey, decision) {
 	case scopeTrialOutcomeRelease:
-		outcome.dispatched = flow.applyCompletionSuccess(ctx, watch, current, r)
 		if err := scopeCtrl.releaseScope(ctx, watch, trialScopeKey); err != nil {
 			flow.engine.logger.Warn("trial result: failed to release scope",
 				slog.String("scope_key", trialScopeKey.String()),
 				slog.String("error", err.Error()),
 			)
+		} else {
+			flow.releaseHeldScope(trialScopeKey)
 		}
-		flow.releaseHeldScope(trialScopeKey)
+		outcome.dispatched = flow.applyCompletionSuccess(ctx, watch, current, r)
 	case scopeTrialOutcomeShutdown:
 		flow.applyCompletedSubtree(current, r.ActionID, "trial shutdown action completion")
 	case scopeTrialOutcomeExtend:
