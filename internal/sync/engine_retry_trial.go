@@ -31,27 +31,41 @@ type retryCandidate struct {
 	err         error
 }
 
+type retryRowDecision int
+
+const (
+	retryRowDecisionClearResolved retryRowDecision = iota
+	retryRowDecisionClearSkipped
+	retryRowDecisionRearm
+	retryRowDecisionKeepHeld
+	retryRowDecisionFail
+)
+
+type retryRowRevalidation struct {
+	decision retryRowDecision
+	driveID  driveid.ID
+	skipped  *SkippedItem
+	err      error
+}
+
 //nolint:gocyclo // The subset builder keeps dependency closure and remapping in one place.
-func selectedActionPlanByKeys(plan *ActionPlan, keys []RetryWorkKey) *ActionPlan {
-	if plan == nil || len(plan.Actions) == 0 || len(keys) == 0 {
+func selectedActionPlanByIndexes(plan *ActionPlan, indexes []int) *ActionPlan {
+	if plan == nil || len(plan.Actions) == 0 || len(indexes) == 0 {
 		return nil
 	}
 
-	selected := make(map[int]struct{}, len(keys))
-	queue := make([]int, 0, len(keys))
+	selected := make(map[int]struct{}, len(indexes))
+	queue := make([]int, 0, len(indexes))
 
-	for _, key := range keys {
-		for i := range plan.Actions {
-			if retryWorkKeyForAction(&plan.Actions[i]) != key {
-				continue
-			}
-			if _, ok := selected[i]; ok {
-				break
-			}
-			selected[i] = struct{}{}
-			queue = append(queue, i)
-			break
+	for _, idx := range indexes {
+		if idx < 0 || idx >= len(plan.Actions) {
+			continue
 		}
+		if _, ok := selected[idx]; ok {
+			continue
+		}
+		selected[idx] = struct{}{}
+		queue = append(queue, idx)
 	}
 
 	for len(queue) > 0 {
@@ -108,18 +122,54 @@ func selectedActionPlanByKeys(plan *ActionPlan, keys []RetryWorkKey) *ActionPlan
 	}
 }
 
-func planContainsWorkKey(plan *ActionPlan, key RetryWorkKey) bool {
-	if plan == nil {
-		return false
+func (snapshot *materializedPlanSnapshot) selectedActionPlanByKeys(keys []RetryWorkKey) *ActionPlan {
+	if snapshot == nil || snapshot.Plan == nil || len(keys) == 0 {
+		return nil
 	}
 
-	for i := range plan.Actions {
-		if retryWorkKeyForAction(&plan.Actions[i]) == key {
-			return true
+	indexes := make([]int, 0, len(keys))
+	for _, key := range keys {
+		indexes = append(indexes, snapshot.RetryKeyActionIndexes[key]...)
+	}
+
+	return selectedActionPlanByIndexes(snapshot.Plan, indexes)
+}
+
+func formatRetryWorkKeysForLog(keys []RetryWorkKey) []string {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	formatted := make([]string, 0, len(keys))
+	for _, key := range keys {
+		switch {
+		case key.OldPath != "":
+			formatted = append(formatted, fmt.Sprintf("%s:%s->%s", key.ActionType.String(), key.OldPath, key.Path))
+		case key.Path != "":
+			formatted = append(formatted, fmt.Sprintf("%s:%s", key.ActionType.String(), key.Path))
+		default:
+			formatted = append(formatted, key.ActionType.String())
 		}
 	}
 
-	return false
+	return formatted
+}
+
+func (decision retryRowDecision) String() string {
+	switch decision {
+	case retryRowDecisionClearResolved:
+		return "clear_resolved"
+	case retryRowDecisionClearSkipped:
+		return "clear_skipped"
+	case retryRowDecisionRearm:
+		return "rearm"
+	case retryRowDecisionKeepHeld:
+		return "keep_held"
+	case retryRowDecisionFail:
+		return "fail"
+	default:
+		return fmt.Sprintf("retry_row_decision(%d)", decision)
+	}
 }
 
 // runTrialDispatch handles due scope trials from already-materialized watch
@@ -192,7 +242,14 @@ func (rt *watchRuntime) dispatchDueTrialScope(
 
 	plan := rt.cachedCurrentPlan()
 	work := retryWorkKeyForRetryWork(retryRow)
-	subset := selectedActionPlanByKeys(plan, []RetryWorkKey{work})
+	if plan != nil {
+		rt.engine.logger.Debug("runTrialDispatch: using cached current plan for due scope trial",
+			slog.String("scope_key", key.String()),
+			slog.Uint64("plan_generation", plan.Generation),
+			slog.Any("retry_keys", formatRetryWorkKeysForLog([]RetryWorkKey{work})),
+		)
+	}
+	subset := plan.selectedActionPlanByKeys([]RetryWorkKey{work})
 	if subset == nil || len(subset.Actions) == 0 {
 		rt.handleUndispatchableTrialCandidate(ctx, bl, key, retryRow)
 		rt.scopeController().rearmOrDiscardScope(ctx, rt, key)
@@ -256,32 +313,38 @@ func (rt *watchRuntime) handleUndispatchableTrialCandidate(
 		return
 	}
 
-	driveID, driveErr := rt.retryWorkDriveID(ctx)
-	if driveErr != nil {
-		rt.engine.logger.Warn("runTrialDispatch: failed to load drive for blocked retry revalidation",
-			slog.String("scope_key", key.String()),
-			slog.String("path", row.Path),
-			slog.String("error", driveErr.Error()),
-		)
-		return
-	}
-
-	candidate := rt.buildRetryCandidateFromRetryWork(ctx, bl, row, driveID)
-	if candidate.err != nil {
+	revalidation := rt.revalidateRetryRow(ctx, bl, row)
+	if revalidation.decision == retryRowDecisionFail {
 		rt.engine.logger.Warn("runTrialDispatch: failed to revalidate blocked retry work",
 			slog.String("scope_key", key.String()),
 			slog.String("path", row.Path),
-			slog.String("error", candidate.err.Error()),
+			slog.String("error", revalidation.err.Error()),
 		)
 		return
 	}
 
-	if candidate.skipped != nil {
-		rt.recordBlockedRetryTrialSkippedItem(ctx, key, row, candidate.skipped)
+	switch revalidation.decision {
+	case retryRowDecisionClearSkipped:
+		rt.recordBlockedRetryTrialSkippedItem(ctx, key, row, revalidation.skipped)
 		return
-	}
-	if candidate.resolved {
+	case retryRowDecisionClearResolved:
 		rt.scopeController().clearBlockedRetryWork(ctx, row, "runTrialDispatch")
+	case retryRowDecisionKeepHeld:
+		return
+	case retryRowDecisionRearm:
+		rt.engine.logger.Warn("runTrialDispatch: blocked retry revalidation produced unblocked rearm decision",
+			slog.String("scope_key", key.String()),
+			slog.String("path", row.Path),
+		)
+		return
+	case retryRowDecisionFail:
+		return
+	default:
+		rt.engine.logger.Warn("runTrialDispatch: blocked retry revalidation produced unexpected decision",
+			slog.String("scope_key", key.String()),
+			slog.String("path", row.Path),
+			slog.String("decision", revalidation.decision.String()),
+		)
 	}
 }
 
@@ -369,8 +432,14 @@ func (rt *watchRuntime) runRetrierSweep(
 
 	plan := rt.cachedCurrentPlan()
 	keys, dispatchedRows := rt.collectRetrySweepKeys(ctx, bl, plan, retryRows)
+	if plan != nil {
+		rt.engine.logger.Debug("retrier sweep: using cached current plan",
+			slog.Uint64("plan_generation", plan.Generation),
+			slog.Any("retry_keys", formatRetryWorkKeysForLog(keys)),
+		)
+	}
 
-	subset := selectedActionPlanByKeys(plan, keys)
+	subset := plan.selectedActionPlanByKeys(keys)
 	if dispatchedRows == 0 || subset == nil || len(subset.Actions) == 0 {
 		rt.armRetryTimer(ctx)
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepCompleted})
@@ -405,7 +474,7 @@ func (rt *watchRuntime) runRetrierSweep(
 func (rt *watchRuntime) collectRetrySweepKeys(
 	ctx context.Context,
 	bl *Baseline,
-	plan *ActionPlan,
+	plan *materializedPlanSnapshot,
 	retryRows []RetryWorkRow,
 ) ([]RetryWorkKey, int) {
 	dispatchedRows := 0
@@ -419,7 +488,7 @@ func (rt *watchRuntime) collectRetrySweepKeys(
 		}
 
 		work := retryWorkKeyForRetryWork(&retryRows[i])
-		if !planContainsWorkKey(plan, work) {
+		if !plan.containsRetryWorkKey(work) {
 			rt.clearStaleRetrySweepRow(ctx, bl, &retryRows[i], work)
 			continue
 		}
@@ -444,37 +513,44 @@ func (rt *watchRuntime) clearStaleRetrySweepRow(
 		return
 	}
 
-	driveID, driveErr := rt.retryWorkDriveID(ctx)
-	if driveErr != nil {
-		rt.engine.logger.Warn("retrier sweep: failed to load drive for stale retry_work",
-			slog.String("path", row.Path),
-			slog.String("action", row.ActionType.String()),
-			slog.String("error", driveErr.Error()),
-		)
-		return
-	}
-
-	candidate := rt.buildRetryCandidateFromRetryWork(ctx, bl, row, driveID)
-	if candidate.err != nil {
+	revalidation := rt.revalidateRetryRow(ctx, bl, row)
+	if revalidation.decision == retryRowDecisionFail {
 		rt.engine.logger.Warn("retrier sweep: failed to revalidate stale retry_work row",
 			slog.String("path", row.Path),
 			slog.String("action", row.ActionType.String()),
-			slog.String("error", candidate.err.Error()),
+			slog.String("error", revalidation.err.Error()),
 		)
 		rt.rearmRetryWorkCandidate(ctx, row, "retrier sweep")
 		return
 	}
 
-	if candidate.skipped != nil {
-		rt.recordRetryTrialSkippedItem(ctx, work, driveID, candidate.skipped)
+	switch revalidation.decision {
+	case retryRowDecisionClearSkipped:
+		rt.recordRetryTrialSkippedItem(ctx, work, revalidation.driveID, revalidation.skipped)
+		return
+	case retryRowDecisionClearResolved:
+		rt.clearRetryWorkCandidate(ctx, work, revalidation.driveID, "runRetrierSweep")
+		return
+	case retryRowDecisionRearm:
+		rt.rearmRetryWorkCandidate(ctx, row, "retrier sweep")
+		return
+	case retryRowDecisionKeepHeld:
+		rt.engine.logger.Warn("retrier sweep: ready retry row revalidation produced held decision",
+			slog.String("path", row.Path),
+			slog.String("action", row.ActionType.String()),
+		)
+		return
+	case retryRowDecisionFail:
+		rt.rearmRetryWorkCandidate(ctx, row, "retrier sweep")
+		return
+	default:
+		rt.engine.logger.Warn("retrier sweep: ready retry row revalidation produced unexpected decision",
+			slog.String("path", row.Path),
+			slog.String("action", row.ActionType.String()),
+			slog.String("decision", revalidation.decision.String()),
+		)
 		return
 	}
-	if candidate.resolved {
-		rt.clearRetryWorkCandidate(ctx, work, driveID, "runRetrierSweep")
-		return
-	}
-
-	rt.rearmRetryWorkCandidate(ctx, row, "retrier sweep")
 }
 
 func (e *Engine) effectiveRetryBatchLimit() int {
@@ -551,6 +627,60 @@ func (flow *engineFlow) retryWorkDriveID(ctx context.Context) (driveid.ID, error
 	}
 
 	return configuredDriveID, nil
+}
+
+func (flow *engineFlow) revalidateRetryRow(
+	ctx context.Context,
+	bl *Baseline,
+	row *RetryWorkRow,
+) retryRowRevalidation {
+	if row == nil {
+		return retryRowRevalidation{
+			decision: retryRowDecisionFail,
+			err:      fmt.Errorf("missing retry_work row"),
+		}
+	}
+
+	driveID, err := flow.retryWorkDriveID(ctx)
+	if err != nil {
+		return retryRowRevalidation{
+			decision: retryRowDecisionFail,
+			err:      err,
+		}
+	}
+
+	candidate := flow.buildRetryCandidateFromRetryWork(ctx, bl, row, driveID)
+	if candidate.err != nil {
+		return retryRowRevalidation{
+			decision: retryRowDecisionFail,
+			driveID:  driveID,
+			err:      candidate.err,
+		}
+	}
+	if candidate.skipped != nil {
+		return retryRowRevalidation{
+			decision: retryRowDecisionClearSkipped,
+			driveID:  driveID,
+			skipped:  candidate.skipped,
+		}
+	}
+	if candidate.resolved {
+		return retryRowRevalidation{
+			decision: retryRowDecisionClearResolved,
+			driveID:  driveID,
+		}
+	}
+	if row.Blocked {
+		return retryRowRevalidation{
+			decision: retryRowDecisionKeepHeld,
+			driveID:  driveID,
+		}
+	}
+
+	return retryRowRevalidation{
+		decision: retryRowDecisionRearm,
+		driveID:  driveID,
+	}
 }
 
 func (flow *engineFlow) buildRetryCandidateFromRetryWork(

@@ -49,12 +49,55 @@ func (rt *watchRuntime) consumeOutboxHead() {
 	rt.loop.outbox = rt.loop.outbox[1:]
 }
 
-func (rt *watchRuntime) cachedCurrentPlan() *ActionPlan {
+func newMaterializedPlanSnapshot(
+	plan *ActionPlan,
+	generation uint64,
+) *materializedPlanSnapshot {
+	if plan == nil {
+		return nil
+	}
+
+	snapshot := &materializedPlanSnapshot{
+		Plan:                  plan,
+		Generation:            generation,
+		RetryKeyPresent:       make(map[RetryWorkKey]struct{}, len(plan.Actions)),
+		RetryKeyActionIndexes: make(map[RetryWorkKey][]int, len(plan.Actions)),
+	}
+
+	for i := range plan.Actions {
+		key := retryWorkKeyForAction(&plan.Actions[i])
+		snapshot.RetryKeyPresent[key] = struct{}{}
+		snapshot.RetryKeyActionIndexes[key] = append(snapshot.RetryKeyActionIndexes[key], i)
+	}
+
+	return snapshot
+}
+
+func (snapshot *materializedPlanSnapshot) containsRetryWorkKey(key RetryWorkKey) bool {
+	if snapshot == nil {
+		return false
+	}
+
+	_, ok := snapshot.RetryKeyPresent[key]
+	return ok
+}
+
+func (rt *watchRuntime) cachedCurrentPlan() *materializedPlanSnapshot {
 	return rt.currentPlan
 }
 
 func (rt *watchRuntime) replaceCurrentPlan(plan *ActionPlan) {
-	rt.currentPlan = plan
+	if plan == nil {
+		rt.currentPlan = nil
+		return
+	}
+
+	nextGeneration := uint64(1)
+	if rt.currentPlan != nil {
+		nextGeneration = rt.currentPlan.Generation + 1
+	}
+
+	rt.currentPlan = newMaterializedPlanSnapshot(plan, nextGeneration)
 }
 
 func (rt *watchRuntime) replaceActiveScopes(blocks []ActiveScope) {

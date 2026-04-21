@@ -52,10 +52,11 @@ type watchLoopState struct {
 type watchRuntimeState struct {
 	loop watchLoopState
 
-	// currentPlan is the last successfully materialized watch action plan.
-	// Normal watch observation/planning owns this cache; retry/trial only reads
-	// it so timer-driven follow-up never becomes an alternate planner.
-	currentPlan *ActionPlan
+	// currentPlan is the last successfully materialized watch action plan plus
+	// retry-work indexes derived from it. Normal watch observation/planning owns
+	// this cache; retry/trial only reads it so timer-driven follow-up never
+	// becomes an alternate planner.
+	currentPlan *materializedPlanSnapshot
 
 	// activeScopesMu guards activeScopes. The watch loop remains the logical
 	// owner, but tests and startup normalization can observe or adjust the
@@ -73,6 +74,17 @@ type watchRuntimeState struct {
 	// Monotonic action ID counter owned by the watch control flow. Prevents
 	// ID collisions across batches without introducing cross-goroutine sync.
 	nextActionID int64
+}
+
+// materializedPlanSnapshot is the watch-owned cached current plan used by
+// retry/trial dispatch. It indexes exact retry-work identities so timer-driven
+// follow-up can consume the last materialized plan without rescanning every
+// action or rebuilding planner state.
+type materializedPlanSnapshot struct {
+	Plan                  *ActionPlan
+	Generation            uint64
+	RetryKeyPresent       map[RetryWorkKey]struct{}
+	RetryKeyActionIndexes map[RetryWorkKey][]int
 }
 
 type watchObservationState struct {
