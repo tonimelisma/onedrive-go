@@ -136,12 +136,17 @@ Trial timing is scope-aware:
 
 Startup normalization applies persisted-scope policy before admission begins:
 
-- due `retry_work` rows are revalidated from current truth before dispatch
+- current-plan preparation prunes stale `retry_work` against the latest
+  actionable set before runtime startup
 - active `block_scopes` are reloaded and may become immediate trials when due,
   but empty scopes are pruned during startup normalization
 - observation-owned read boundaries are re-derived only from current
   observation, not from persisted `block_scopes`
 - account-auth state remains catalog-owned, not a retry scope
+
+Timer release never revalidates current truth. Once startup preparation has
+loaded surviving `retry_work` / `block_scopes`, held exact work is released
+only from runtime-owned held state.
 
 ## Deleted Mechanisms
 

@@ -65,7 +65,11 @@ func (r *ActionCompletion) ThrottleTargetKey() string {
 	return throttleDriveParam(targetDriveID)
 }
 
-func completionFromTrackedAction(
+// actionCompletionFromTrackedAction builds the shared runtime result shape for
+// one exact tracked action. Workers and engine-owned publication reduction both
+// use this helper so classification/persistence sees one consistent exact
+// action identity.
+func actionCompletionFromTrackedAction(
 	ta *TrackedAction,
 	outcome *ActionOutcome,
 	actionErr error,

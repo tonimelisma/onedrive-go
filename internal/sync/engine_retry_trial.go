@@ -14,34 +14,40 @@ const retryResolutionSourceWorkerSuccess = "worker_success"
 // the runtime. It never rebuilds plan structure or revalidates durable rows.
 func (rt *watchRuntime) runTrialDispatch(
 	ctx context.Context,
-) []*TrackedAction {
+) ([]*TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed(rt, "runTrialDispatch", "run trial dispatch")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialSweepStarted})
 
-	dispatch := rt.drainDueHeldWorkNow(ctx, rt)
+	dispatch, err := rt.drainDueHeldWorkNow(ctx, rt)
+	if err != nil {
+		return nil, err
+	}
 	rt.armHeldTimers()
 	rt.engine.emitDebugEvent(engineDebugEvent{
 		Type:  engineDebugEventTrialSweepCompleted,
 		Count: len(dispatch),
 	})
-	return dispatch
+	return dispatch, nil
 }
 
 // runRetrierSweep releases due held retry entries that are already present in
 // the runtime. It never rebuilds plan structure or revalidates durable rows.
 func (rt *watchRuntime) runRetrierSweep(
 	ctx context.Context,
-) []*TrackedAction {
+) ([]*TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed(rt, "runRetrierSweep", "run retrier sweep")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepStarted})
 
-	dispatch := rt.drainDueHeldWorkNow(ctx, rt)
+	dispatch, err := rt.drainDueHeldWorkNow(ctx, rt)
+	if err != nil {
+		return nil, err
+	}
 	rt.armHeldTimers()
 	rt.engine.emitDebugEvent(engineDebugEvent{
 		Type:  engineDebugEventRetrySweepCompleted,
 		Count: len(dispatch),
 	})
-	return dispatch
+	return dispatch, nil
 }
 
 // clearRetryWorkOnSuccess removes the retry_work row for a successfully
@@ -106,10 +112,10 @@ func (flow *engineFlow) applyResultPersistence(
 	ctx context.Context,
 	decision *ResultDecision,
 	r *ActionCompletion,
-) bool {
+) error {
 	switch decision.Persistence {
 	case persistNone:
-		return true
+		return nil
 	case persistRetryWork:
 		return flow.recordRetryWork(ctx, decision, r, retry.ReconcilePolicy().Delay)
 	default:

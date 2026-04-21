@@ -15,41 +15,46 @@ func (controller *scopeController) applyPermissionOutcome(
 	watch *watchRuntime,
 	flowKind permissionFlow,
 	outcome *PermissionOutcome,
-) bool {
+) (bool, error) {
 	if outcome == nil || !outcome.Matched {
-		return false
+		return false, nil
 	}
 
-	controller.applyPermissionOutcomeMutation(ctx, watch, outcome)
+	if err := controller.applyPermissionOutcomeMutation(ctx, watch, outcome); err != nil {
+		return true, err
+	}
 	controller.logPermissionOutcome(flowKind, outcome)
 
-	return true
+	return true, nil
 }
 
 func (controller *scopeController) applyPermissionOutcomeMutation(
 	ctx context.Context,
 	watch *watchRuntime,
 	outcome *PermissionOutcome,
-) {
+) error {
 	switch outcome.Kind {
 	case permissionOutcomeNone:
-		return
+		return nil
 	case permissionOutcomeRecordFileFailure,
 		permissionOutcomeActivateBoundaryScope,
 		permissionOutcomeActivateDerivedScope:
-		if !controller.recordRetryWorkFailure(ctx, outcome.Kind, outcome.RetryWorkFailure) {
-			return
+		if err := controller.recordRetryWorkFailure(ctx, outcome.Kind, outcome.RetryWorkFailure); err != nil {
+			return err
 		}
 		if watch != nil && shouldArmPermissionRetryTimer(outcome) {
 			watch.armRetryTimer()
 		}
 		if !outcome.ScopeKey.IsZero() && outcome.ScopeKey.PersistsInBlockScopes() {
-			controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
+			if err := controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
 				Block:         true,
 				ScopeKey:      outcome.ScopeKey,
 				ConditionType: outcome.ScopeKey.ConditionType(),
-			})
+			}); err != nil {
+				return err
+			}
 		}
+		return nil
 	default:
 		panic(fmt.Sprintf("unknown permission outcome kind %d", outcome.Kind))
 	}
@@ -109,9 +114,9 @@ func (controller *scopeController) recordRetryWorkFailure(
 	ctx context.Context,
 	kind PermissionOutcomeKind,
 	failure *RetryWorkFailure,
-) bool {
+) error {
 	if failure == nil {
-		return false
+		return nil
 	}
 
 	flow := controller.flow
@@ -124,14 +129,7 @@ func (controller *scopeController) recordRetryWorkFailure(
 	delayFn := permissionOutcomeRetryDelay(kind, failure)
 	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, failure, delayFn)
 	if err != nil {
-		fields := append(flow.summaryLogFields(
-			logClass,
-			conditionKey,
-			failure.Path,
-			failure.ScopeKey,
-		), slog.String("error", err.Error()))
-		flow.engine.logger.Warn("failed to record retry_work permission failure", fields...)
-		return false
+		return fmt.Errorf("record permission retry_work for %s: %w", failure.Path, err)
 	}
 
 	fields := append(flow.summaryLogFields(
@@ -142,12 +140,13 @@ func (controller *scopeController) recordRetryWorkFailure(
 	),
 		slog.String("condition_type", failure.ConditionType),
 	)
-	if row != nil {
-		flow.retryRowsByKey[retryWorkKeyForRetryWork(row)] = *row
+	if row == nil {
+		return fmt.Errorf("record permission retry_work for %s: missing persisted row", failure.Path)
 	}
+	flow.retryRowsByKey[retryWorkKeyForRetryWork(row)] = *row
 	flow.engine.logger.Debug("retry_work permission failure recorded", fields...)
 
-	return true
+	return nil
 }
 
 func permissionOutcomeRetryDelay(

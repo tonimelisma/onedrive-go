@@ -29,15 +29,22 @@ func (flow *engineFlow) startPreparedRuntime(
 	}
 
 	ready := flow.registerPlanActions(plan)
-	ready = flow.scopeController().admitReady(ctx, watch, ready)
-	outbox, err := flow.reducePublicationFrontier(ctx, watch, bl, nil, ready)
+	ready, err := flow.scopeController().admitReady(ctx, watch, ready)
+	if err != nil {
+		return nil, false, err
+	}
+	outbox, err := flow.appendReadyThroughPublicationFrontier(ctx, watch, bl, nil, ready)
 	if err != nil {
 		flow.completeOutboxAsShutdown(outbox)
 		return nil, false, err
 	}
-	dueHeld := flow.drainDueHeldWorkNow(ctx, watch)
+	dueHeld, err := flow.drainDueHeldWorkNow(ctx, watch)
+	if err != nil {
+		flow.completeOutboxAsShutdown(outbox)
+		return nil, false, err
+	}
 	if len(dueHeld) > 0 {
-		outbox, err = flow.reducePublicationFrontier(ctx, watch, bl, outbox, dueHeld)
+		outbox, err = flow.appendReadyThroughPublicationFrontier(ctx, watch, bl, outbox, dueHeld)
 		if err != nil {
 			flow.completeOutboxAsShutdown(outbox)
 			return nil, false, err

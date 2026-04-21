@@ -22,7 +22,8 @@ func TestRunRetrierSweep_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 
 	rt.holdAction(ta, heldReasonRetry, ScopeKey{}, eng.nowFn().Add(-time.Second))
 
-	outbox := rt.runRetrierSweep(t.Context())
+	outbox, err := rt.runRetrierSweep(t.Context())
+	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, "retry.txt", outbox[0].Action.Path)
 	assert.False(t, outbox[0].IsTrial)
@@ -46,7 +47,8 @@ func TestRunRetrierSweep_DoesNotConsultDurableRetryRowsWithoutHeldRuntimeEntry(t
 		LastSeenAt:   now.UnixNano(),
 	}))
 
-	outbox := rt.runRetrierSweep(t.Context())
+	outbox, err := rt.runRetrierSweep(t.Context())
+	require.NoError(t, err)
 	assert.Empty(t, outbox)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -83,7 +85,8 @@ func TestRunTrialDispatch_ReleasesFirstHeldScopeCandidateAsTrial(t *testing.T) {
 	rt.holdAction(first, heldReasonScope, scopeKey, time.Time{})
 	rt.holdAction(second, heldReasonScope, scopeKey, time.Time{})
 
-	outbox := rt.runTrialDispatch(t.Context())
+	outbox, err := rt.runTrialDispatch(t.Context())
+	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, "first.txt", outbox[0].Action.Path)
 	assert.True(t, outbox[0].IsTrial)
@@ -108,7 +111,8 @@ func TestRunTrialDispatch_SkipsScopesWithoutHeldDependencyReadyCandidates(t *tes
 		TrialInterval: 10 * time.Second,
 	})
 
-	outbox := rt.runTrialDispatch(t.Context())
+	outbox, err := rt.runTrialDispatch(t.Context())
+	require.NoError(t, err)
 	assert.Empty(t, outbox)
 	assert.True(t, isTestBlockScopeed(eng, scopeKey))
 }
@@ -137,7 +141,8 @@ func TestRunTrialDispatch_DoesNotConsultDurableBlockedRetryRowsWithoutHeldRuntim
 	}, nil)
 	require.NoError(t, err)
 
-	outbox := rt.runTrialDispatch(t.Context())
+	outbox, err := rt.runTrialDispatch(t.Context())
+	require.NoError(t, err)
 	assert.Empty(t, outbox)
 	assert.True(t, isTestBlockScopeed(eng, scopeKey))
 

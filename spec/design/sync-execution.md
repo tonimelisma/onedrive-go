@@ -76,6 +76,10 @@ graph node successful and releases any dependents without synthesizing a worker
 completion. Publication failure still uses the shared result classifier so the
 exact publication action can persist `retry_work` and remain held in the
 current runtime instead of terminating the loop on a transient store error.
+When held publication work becomes due again, the engine routes it back through
+publication reduction before any worker dispatch. Workers reject
+publication-only action types only as an invariant guard; normal runtime flow
+must never send those actions to the worker pool.
 
 ## File And Folder Mutation
 

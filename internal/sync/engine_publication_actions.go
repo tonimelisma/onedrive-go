@@ -31,30 +31,6 @@ func (flow *engineFlow) commitPublicationAction(ctx context.Context, ta *Tracked
 	return err
 }
 
-func publicationFailureCompletion(ta *TrackedAction, err error) *ActionCompletion {
-	if ta == nil {
-		return nil
-	}
-
-	errMsg := ""
-	if err != nil {
-		errMsg = err.Error()
-	}
-
-	return &ActionCompletion{
-		ActionID:      ta.ID,
-		Path:          ta.Action.Path,
-		OldPath:       ta.Action.OldPath,
-		DriveID:       ta.Action.DriveID,
-		TargetDriveID: ta.Action.TargetDriveID,
-		ActionType:    ta.Action.Type,
-		Err:           err,
-		ErrMsg:        errMsg,
-		IsTrial:       ta.IsTrial,
-		TrialScopeKey: ta.TrialScopeKey,
-	}
-}
-
 // reducePublicationFrontier keeps publication-only actions on the engine side
 // of the boundary. It commits those actions synchronously, unlocks their
 // dependents directly through the engine-owned publication success path, and
@@ -84,7 +60,8 @@ func (flow *engineFlow) reducePublicationFrontier(
 		}
 
 		if err := flow.commitPublicationAction(ctx, ta); err != nil {
-			outcome := flow.processActionCompletion(ctx, watch, publicationFailureCompletion(ta, err), bl)
+			completion := actionCompletionFromTrackedAction(ta, nil, err)
+			outcome := flow.processActionCompletion(ctx, watch, &completion, bl)
 			if outcome.terminate {
 				nextOutbox = append(nextOutbox, queue...)
 				return nextOutbox, outcome.terminateErr
@@ -92,9 +69,29 @@ func (flow *engineFlow) reducePublicationFrontier(
 			queue = append(queue, outcome.dispatched...)
 			continue
 		}
-		queue = append(queue, flow.applyPublicationSuccess(ctx, watch, ta)...)
+		unlocked, err := flow.applyPublicationSuccess(ctx, watch, ta)
+		if err != nil {
+			nextOutbox = append(nextOutbox, queue...)
+			return nextOutbox, err
+		}
+		queue = append(queue, unlocked...)
 	}
 
 	_ = bl
 	return nextOutbox, nil
+}
+
+// appendReadyThroughPublicationFrontier is the shared engine-owned re-entry
+// point for exact ready actions. Timer-released held work, startup admission,
+// and completion-unlocked dependents must pass through publication reduction
+// before any executable outbox append so publication-only actions never reach
+// workers.
+func (flow *engineFlow) appendReadyThroughPublicationFrontier(
+	ctx context.Context,
+	watch *watchRuntime,
+	bl *Baseline,
+	outbox []*TrackedAction,
+	ready []*TrackedAction,
+) ([]*TrackedAction, error) {
+	return flow.reducePublicationFrontier(ctx, watch, bl, outbox, ready)
 }

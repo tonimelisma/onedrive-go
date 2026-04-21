@@ -74,7 +74,7 @@ func TestPermissionApply_ActivateTimedRemoteWriteScope_PersistsRetryWorkAndScope
 	controller := testEngineFlow(t, eng).scopeController()
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
-	matched := controller.applyPermissionOutcome(t.Context(), nil, permissionFlowRemote403, &PermissionOutcome{
+	matched, err := controller.applyPermissionOutcome(t.Context(), nil, permissionFlowRemote403, &PermissionOutcome{
 		Matched:      true,
 		Kind:         permissionOutcomeActivateDerivedScope,
 		ScopeKey:     scopeKey,
@@ -91,6 +91,7 @@ func TestPermissionApply_ActivateTimedRemoteWriteScope_PersistsRetryWorkAndScope
 		},
 	})
 
+	require.NoError(t, err)
 	require.True(t, matched)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -113,7 +114,7 @@ func TestPermissionApply_ReadBoundaryScope_DoesNotPersistBlockScopeRow(t *testin
 	controller := testEngineFlow(t, eng).scopeController()
 	scopeKey := SKPermLocalRead("Private")
 
-	matched := controller.applyPermissionOutcome(t.Context(), nil, permissionFlowLocalPermission, &PermissionOutcome{
+	matched, err := controller.applyPermissionOutcome(t.Context(), nil, permissionFlowLocalPermission, &PermissionOutcome{
 		Matched:      true,
 		Kind:         permissionOutcomeActivateBoundaryScope,
 		ScopeKey:     scopeKey,
@@ -129,6 +130,7 @@ func TestPermissionApply_ReadBoundaryScope_DoesNotPersistBlockScopeRow(t *testin
 		},
 	})
 
+	require.NoError(t, err)
 	require.True(t, matched)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -159,13 +161,14 @@ func TestPermissionApply_KnownActiveBoundary_DoesNotPersistOrArmRetryTimer(t *te
 		NextTrialAt:   time.Unix(61, 0),
 	}))
 
-	matched := controller.applyPermissionOutcome(t.Context(), rt, permissionFlowRemote403, &PermissionOutcome{
+	matched, err := controller.applyPermissionOutcome(t.Context(), rt, permissionFlowRemote403, &PermissionOutcome{
 		Matched:      true,
 		Kind:         permissionOutcomeNone,
 		BoundaryPath: "Shared/Docs",
 		TriggerPath:  "Shared/Docs/file.txt",
 	})
 
+	require.NoError(t, err)
 	require.True(t, matched)
 	assert.False(t, rt.hasRetryTimer())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))

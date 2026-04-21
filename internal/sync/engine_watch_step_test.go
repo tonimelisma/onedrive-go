@@ -164,3 +164,86 @@ func TestReducePublicationFrontier_PersistsRetryWorkOnPublicationCommitFailure(t
 	assert.Equal(t, "cleanup.txt", retryRows[0].Path)
 	assert.Equal(t, ActionCleanup, retryRows[0].ActionType)
 }
+
+// Validates: R-2.10.33
+func TestWatchMaintenanceEvent_RetryTickReducesReleasedPublicationRetryOnEngineSide(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+	now := eng.nowFunc()
+
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
+		Action:   ActionDownload,
+		Success:  true,
+		Path:     "cleanup.txt",
+		DriveID:  eng.driveID,
+		ItemID:   "cleanup-item",
+		ParentID: "root",
+		ItemType: ItemTypeFile,
+	}))
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	row := RetryWorkRow{
+		Path:         "cleanup.txt",
+		ActionType:   ActionCleanup,
+		AttemptCount: 1,
+		NextRetryAt:  now.Add(-time.Second).UnixNano(),
+		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
+		LastSeenAt:   now.UnixNano(),
+	}
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
+	rt.initializePreparedRuntime(&PreparedCurrentPlan{RetryRows: []RetryWorkRow{row}})
+
+	publication := rt.depGraph.Add(&Action{
+		Type:    ActionCleanup,
+		Path:    "cleanup.txt",
+		DriveID: eng.driveID,
+		ItemID:  "cleanup-item",
+	}, 1, nil)
+	require.NotNil(t, publication)
+	rt.holdAction(publication, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+
+	handled, err := rt.handleMaintenanceEvent(ctx, &watchPipeline{bl: bl}, &watchEvent{
+		kind: watchEventRetryTick,
+	})
+	require.True(t, handled)
+	require.NoError(t, err)
+	assert.Empty(t, rt.currentOutbox(), "released publication retries must reduce on the engine side before any worker dispatch")
+	assert.Empty(t, rt.heldByKey)
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
+
+	_, found := bl.GetByPath("cleanup.txt")
+	assert.False(t, found, "cleanup publication should commit during retry release instead of reaching workers")
+}
+
+// Validates: R-6.8
+func TestReducePublicationFrontier_TerminatesWhenPublicationRetryPersistenceFails(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+
+	rt.initializePreparedRuntime(&PreparedCurrentPlan{})
+
+	publication := rt.depGraph.Add(&Action{
+		Type:    ActionCleanup,
+		Path:    "cleanup.txt",
+		DriveID: eng.driveID,
+		ItemID:  "cleanup-item",
+	}, 1, nil)
+	require.NotNil(t, publication)
+
+	require.NoError(t, eng.baseline.Close(ctx))
+
+	outbox, err := rt.reducePublicationFrontier(ctx, rt, &Baseline{}, nil, []*TrackedAction{publication})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "record retry_work")
+	assert.Empty(t, outbox)
+	assert.Empty(t, rt.heldByKey)
+	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "publication failure must terminate instead of pretending the unresolved node was handled")
+}

@@ -36,7 +36,7 @@ func TestScopeController_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
-	controller.recordBlockedRetryWork(t.Context(), &root.Action, scopeKey)
+	require.NoError(t, controller.recordBlockedRetryWork(t.Context(), &root.Action, scopeKey))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -54,14 +54,14 @@ func TestScopeController_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t 
 	rt := testWatchRuntime(t, eng)
 	controller := testEngineFlow(t, eng).scopeController()
 
-	controller.applyTrialReclassification(t.Context(), rt, &ResultDecision{
+	require.NoError(t, controller.applyTrialReclassification(t.Context(), rt, &ResultDecision{
 		Class:    errclass.ClassBlockScopeingTransient,
 		ScopeKey: SKDiskLocal(),
 	}, &ActionCompletion{
 		Path:       "disk.txt",
 		ActionType: ActionUpload,
 		ErrMsg:     "disk full",
-	}, nil)
+	}, nil))
 
 	assert.True(t, isTestBlockScopeed(eng, SKDiskLocal()))
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -95,7 +95,7 @@ func TestScopeController_ApplyTrialReclassification_LocalFilePermissionReusesPer
 		LastSeenAt:    2,
 	}))
 
-	controller.applyTrialReclassification(t.Context(), rt, &ResultDecision{
+	require.NoError(t, controller.applyTrialReclassification(t.Context(), rt, &ResultDecision{
 		PermissionFlow: permissionFlowLocalPermission,
 	}, &ActionCompletion{
 		Path:          "accessible/file.txt",
@@ -103,7 +103,7 @@ func TestScopeController_ApplyTrialReclassification_LocalFilePermissionReusesPer
 		Err:           os.ErrPermission,
 		ErrMsg:        "permission denied",
 		TrialScopeKey: scopeKey,
-	}, nil)
+	}, nil))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -196,10 +196,10 @@ func TestScopeController_ClearBlockedRetryWorkForScope_RemovesScopedRetryWork(t 
 	}, nil)
 	require.NoError(t, err)
 
-	controller.clearBlockedRetryWorkForScope(t.Context(), RetryWorkKey{
+	require.NoError(t, controller.clearBlockedRetryWorkForScope(t.Context(), RetryWorkKey{
 		Path:       "blocked.txt",
 		ActionType: ActionUpload,
-	}, scopeKey)
+	}, scopeKey))
 
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 }
@@ -227,7 +227,8 @@ func TestScopeController_AdmitReady_BlocksNormalActionUnderActiveScope(t *testin
 	}, 1, nil)
 	require.NotNil(t, ready)
 
-	dispatched := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+	dispatched, err := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+	require.NoError(t, err)
 
 	assert.Empty(t, dispatched)
 	assert.Equal(t, 1, rt.depGraph.InFlightCount())
@@ -267,7 +268,8 @@ func TestScopeController_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenSco
 	ready.IsTrial = true
 	ready.TrialScopeKey = scopeKey
 
-	dispatched := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+	dispatched, err := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+	require.NoError(t, err)
 
 	require.Len(t, dispatched, 1)
 	assert.Equal(t, int64(1), dispatched[0].ID)
@@ -302,7 +304,8 @@ func TestScopeController_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWi
 	ready.IsTrial = true
 	ready.TrialScopeKey = scopeKey
 
-	dispatched := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+	dispatched, err := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+	require.NoError(t, err)
 
 	require.Len(t, dispatched, 1)
 	assert.Equal(t, int64(1), dispatched[0].ID)
@@ -312,4 +315,37 @@ func TestScopeController_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWi
 	assert.Equal(t, "trial.txt", retryRows[0].Path)
 	assert.Equal(t, scopeKey, retryRows[0].ScopeKey)
 	assert.True(t, retryRows[0].Blocked)
+}
+
+// Validates: R-6.8
+func TestScopeController_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFails(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	controller := testEngineFlow(t, eng).scopeController()
+	scopeKey := SKQuotaOwn()
+
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:           scopeKey,
+		BlockedAt:     eng.nowFn().Add(-time.Minute),
+		TrialInterval: time.Minute,
+		NextTrialAt:   eng.nowFn().Add(time.Minute),
+	})
+
+	ready := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "blocked.txt",
+		DriveID: eng.driveID,
+	}, 1, nil)
+	require.NotNil(t, ready)
+
+	require.NoError(t, eng.baseline.Close(t.Context()))
+
+	dispatched, err := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "blocked retry_work")
+	assert.Empty(t, dispatched)
+	assert.Empty(t, rt.heldByKey, "admission must not create in-memory held work when the blocked retry row was not durably recorded")
+	assert.Equal(t, 1, rt.depGraph.InFlightCount())
 }

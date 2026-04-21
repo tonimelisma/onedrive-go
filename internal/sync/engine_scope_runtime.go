@@ -41,12 +41,12 @@ func (controller *scopeController) extendScopeTrial(
 	watch *watchRuntime,
 	scopeKey ScopeKey,
 	retryAfter time.Duration,
-) {
+) error {
 	flow := controller.flow
 
 	block, ok := flow.lookupActiveScope(scopeKey)
 	if !ok {
-		return
+		return nil
 	}
 
 	newInterval := computeTrialInterval(retryAfter)
@@ -61,36 +61,30 @@ func (controller *scopeController) extendScopeTrial(
 	block.NextTrialAt = nextAt
 	block.TrialInterval = newInterval
 	if err := controller.activateScope(ctx, watch, &block); err != nil {
-		flow.engine.logger.Warn("extendScopeTrial: failed to persist interval extension",
-			slog.String("scope_key", scopeKey.String()),
-			slog.String("error", err.Error()),
-		)
-		return
+		return fmt.Errorf("extend trial interval for %s: %w", scopeKey.String(), err)
 	}
 
 	if watch != nil {
 		watch.armTrialTimer()
 	}
+
+	return nil
 }
 
-func (controller *scopeController) rearmScopeTrial(ctx context.Context, watch *watchRuntime, scopeKey ScopeKey) {
+func (controller *scopeController) rearmScopeTrial(ctx context.Context, watch *watchRuntime, scopeKey ScopeKey) error {
 	flow := controller.flow
 
 	block, ok := flow.lookupActiveScope(scopeKey)
 	if !ok {
-		return
+		return nil
 	}
 	if block.TrialInterval <= 0 {
-		return
+		return nil
 	}
 
 	block.NextTrialAt = flow.engine.nowFunc().Add(block.TrialInterval)
 	if err := controller.activateScope(ctx, watch, &block); err != nil {
-		flow.engine.logger.Warn("rearmScopeTrial: failed to persist rearmed interval",
-			slog.String("scope_key", scopeKey.String()),
-			slog.String("error", err.Error()),
-		)
-		return
+		return fmt.Errorf("rearm trial interval for %s: %w", scopeKey.String(), err)
 	}
 
 	flow.engine.logger.Debug("rearming trial interval",
@@ -101,6 +95,8 @@ func (controller *scopeController) rearmScopeTrial(ctx context.Context, watch *w
 	if watch != nil {
 		watch.armTrialTimer()
 	}
+
+	return nil
 }
 
 func (controller *scopeController) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
@@ -118,56 +114,50 @@ func (controller *scopeController) scopeHasBlockedRetryWork(ctx context.Context,
 	return false, nil
 }
 
-func (controller *scopeController) rearmOrDiscardScope(ctx context.Context, watch *watchRuntime, scopeKey ScopeKey) {
+func (controller *scopeController) rearmOrDiscardScope(ctx context.Context, watch *watchRuntime, scopeKey ScopeKey) error {
 	if scopeKey.IsZero() {
-		return
+		return nil
 	}
 
-	flow := controller.flow
 	hasBlockedWork, err := controller.scopeHasBlockedRetryWork(ctx, scopeKey)
 	if err != nil {
-		flow.engine.logger.Warn("rearmOrDiscardScope: failed to check blocked retry work",
-			slog.String("scope_key", scopeKey.String()),
-			slog.String("error", err.Error()),
-		)
-		return
+		return fmt.Errorf("rearm or discard scope %s: %w", scopeKey.String(), err)
 	}
 
 	switch decideTimedBlockScopeAction(hasBlockedWork) {
 	case timedBlockScopeKeep:
-		controller.rearmScopeTrial(ctx, watch, scopeKey)
+		return controller.rearmScopeTrial(ctx, watch, scopeKey)
 	case timedBlockScopeDiscard:
-		if err := controller.discardScope(ctx, watch, scopeKey); err != nil {
-			flow.engine.logger.Warn("rearmOrDiscardScope: failed to discard empty scope",
-				slog.String("scope_key", scopeKey.String()),
-				slog.String("error", err.Error()),
-			)
-		}
+		return controller.discardScope(ctx, watch, scopeKey)
 	}
+
+	return nil
 }
 
 // feedScopeDetection feeds an action completion into scope detection sliding
 // windows. If a threshold is crossed, creates a block scope. Called directly
 // from the normal processActionCompletion switch — never called for trial
 // results because a live scope already owns the blocker lifecycle.
-func (controller *scopeController) feedScopeDetection(ctx context.Context, watch *watchRuntime, r *ActionCompletion) {
+func (controller *scopeController) feedScopeDetection(ctx context.Context, watch *watchRuntime, r *ActionCompletion) error {
 	if controller.flow.scopeState == nil {
-		return
+		return nil
 	}
 
 	if r.HTTPStatus == 0 {
-		return
+		return nil
 	}
 
 	sr := controller.flow.scopeState.UpdateScope(r)
 	if sr.Block {
-		controller.applyBlockScope(ctx, watch, sr)
+		return controller.applyBlockScope(ctx, watch, sr)
 	}
+
+	return nil
 }
 
 // applyBlockScope persists and activates a new block scope using the same
 // timing policy as trial extension and rearm.
-func (controller *scopeController) applyBlockScope(ctx context.Context, watch *watchRuntime, sr ScopeUpdateResult) {
+func (controller *scopeController) applyBlockScope(ctx context.Context, watch *watchRuntime, sr ScopeUpdateResult) error {
 	flow := controller.flow
 
 	now := flow.engine.nowFunc()
@@ -180,11 +170,7 @@ func (controller *scopeController) applyBlockScope(ctx context.Context, watch *w
 		NextTrialAt:   now.Add(interval),
 	}
 	if err := controller.activateScope(ctx, watch, block); err != nil {
-		flow.engine.logger.Warn("applyBlockScope: failed to persist block scope",
-			slog.String("scope_key", sr.ScopeKey.String()),
-			slog.String("error", err.Error()),
-		)
-		return
+		return fmt.Errorf("apply block scope %s: %w", sr.ScopeKey.String(), err)
 	}
 
 	flow.engine.logger.Warn("block scope active — actions blocked",
@@ -196,6 +182,8 @@ func (controller *scopeController) applyBlockScope(ctx context.Context, watch *w
 	if watch != nil {
 		watch.armTrialTimer()
 	}
+
+	return nil
 }
 
 // releaseScope atomically removes the block scope and makes blocked retry work
@@ -262,22 +250,28 @@ func (controller *scopeController) applyTrialReclassification(
 	decision *ResultDecision,
 	r *ActionCompletion,
 	bl *Baseline,
-) {
+) error {
 	if decision.PermissionFlow != permissionFlowNone {
 		if permOutcome, handled := controller.decidePermissionOutcome(ctx, decision, r, bl); handled {
-			controller.clearBlockedRetryWorkForScope(ctx, retryWorkKeyForCompletion(r), r.TrialScopeKey)
-			controller.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
+			if err := controller.clearBlockedRetryWorkForScope(ctx, retryWorkKeyForCompletion(r), r.TrialScopeKey); err != nil {
+				return err
+			}
+			_, err := controller.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
+			return err
 		}
-		return
+		return nil
 	}
 
 	if decision.Class == errclass.ClassBlockScopeingTransient && decision.ScopeKey == SKDiskLocal() {
-		if controller.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey) {
-			controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
-				Block:         true,
-				ScopeKey:      decision.ScopeKey,
-				ConditionType: decision.ScopeKey.ConditionType(),
-			})
+		if err := controller.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey); err != nil {
+			return err
 		}
+		return controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
+			Block:         true,
+			ScopeKey:      decision.ScopeKey,
+			ConditionType: decision.ScopeKey.ConditionType(),
+		})
 	}
+
+	return nil
 }
