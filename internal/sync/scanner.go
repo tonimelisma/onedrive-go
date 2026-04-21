@@ -476,9 +476,8 @@ func (o *LocalObserver) processObservedInfo(
 
 	observed[dbRelPath] = true
 	row := LocalStateRow{
-		Path:       dbRelPath,
-		Mtime:      info.ModTime().UnixNano(),
-		ObservedAt: 0,
+		Path:  dbRelPath,
+		Mtime: info.ModTime().UnixNano(),
 	}
 	switch kind {
 	case observedKindDir:

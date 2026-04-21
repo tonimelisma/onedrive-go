@@ -53,15 +53,14 @@ const (
 )
 
 type ObservationState struct {
-	ConfiguredDriveID         driveid.ID
-	Cursor                    string
-	RemoteRefreshMode         string
-	LastFullRemoteRefreshAt   int64
-	NextFullRemoteRefreshAt   int64
-	LocalRefreshMode          string
-	LastFullLocalRefreshAt    int64
-	NextFullLocalRefreshAt    int64
-	LastFullRemoteReconcileAt int64
+	ConfiguredDriveID       driveid.ID
+	Cursor                  string
+	RemoteRefreshMode       string
+	LastFullRemoteRefreshAt int64
+	NextFullRemoteRefreshAt int64
+	LocalRefreshMode        string
+	LastFullLocalRefreshAt  int64
+	NextFullLocalRefreshAt  int64
 }
 
 func normalizeRemoteRefreshMode(mode string) string {
@@ -87,7 +86,7 @@ func remoteRefreshIntervalForMode(mode string) time.Duration {
 	case remoteRefreshModeDeltaDegraded:
 		return remoteRefreshDegradedInterval
 	default:
-		return fullRemoteReconcileInterval
+		return fullRemoteRefreshInterval
 	}
 }
 
@@ -104,7 +103,6 @@ func applyRemoteRefreshSchedule(state *ObservationState, at time.Time, mode stri
 	state.RemoteRefreshMode = normalizeRemoteRefreshMode(mode)
 	state.LastFullRemoteRefreshAt = at.UnixNano()
 	state.NextFullRemoteRefreshAt = at.Add(remoteRefreshIntervalForMode(state.RemoteRefreshMode)).UnixNano()
-	state.LastFullRemoteReconcileAt = state.LastFullRemoteRefreshAt
 }
 
 func applyLocalRefreshSchedule(state *ObservationState, at time.Time, mode string) {
@@ -190,7 +188,6 @@ func (m *SyncStore) ReadObservationState(ctx context.Context) (*ObservationState
 	}
 	state.RemoteRefreshMode = normalizeRemoteRefreshMode(state.RemoteRefreshMode)
 	state.LocalRefreshMode = normalizeLocalRefreshMode(state.LocalRefreshMode)
-	state.LastFullRemoteReconcileAt = state.LastFullRemoteRefreshAt
 
 	if configuredDriveID != "" {
 		state.ConfiguredDriveID = driveid.New(configuredDriveID)
@@ -256,33 +253,25 @@ func (m *SyncStore) ClearObservationCursor(ctx context.Context) error {
 	return nil
 }
 
-func (m *SyncStore) MarkFullRemoteReconcile(
-	ctx context.Context,
-	driveID driveid.ID,
-	at time.Time,
-) error {
-	state, err := m.ReadObservationState(ctx)
-	if err != nil {
-		return err
-	}
-
-	return m.MarkFullRemoteRefresh(ctx, driveID, at, state.RemoteRefreshMode)
-}
-
 func (m *SyncStore) MarkFullRemoteRefresh(
 	ctx context.Context,
 	driveID driveid.ID,
 	at time.Time,
-	mode string,
 ) error {
+	currentState, err := m.ReadObservationState(ctx)
+	if err != nil {
+		return err
+	}
+	currentMode := currentState.RemoteRefreshMode
+
 	return m.markObservationRefresh(
 		ctx,
 		driveID,
-		"sync: beginning full reconcile state transaction",
-		"sync: rollback full reconcile state transaction",
-		"sync: committing full reconcile state transaction",
+		"sync: beginning full remote refresh transaction",
+		"sync: rollback full remote refresh transaction",
+		"sync: committing full remote refresh transaction",
 		func(state *ObservationState) {
-			applyRemoteRefreshSchedule(state, at, mode)
+			applyRemoteRefreshSchedule(state, at, currentMode)
 		},
 	)
 }
@@ -386,7 +375,6 @@ func (m *SyncStore) readObservationStateTx(
 	}
 	state.RemoteRefreshMode = normalizeRemoteRefreshMode(state.RemoteRefreshMode)
 	state.LocalRefreshMode = normalizeLocalRefreshMode(state.LocalRefreshMode)
-	state.LastFullRemoteReconcileAt = state.LastFullRemoteRefreshAt
 
 	if configuredDriveID != "" {
 		state.ConfiguredDriveID = driveid.New(configuredDriveID)

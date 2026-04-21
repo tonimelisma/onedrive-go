@@ -435,7 +435,7 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 		ActionType:    ActionUpload,
 		ConditionType: IssueRemoteWriteDenied,
 		ScopeKey:      clearedScope,
-		LastError:     "blocked by remote permission scope",
+		LastError:     "blocked by remote write block scope",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
@@ -444,7 +444,7 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 		ActionType:    ActionUpload,
 		ConditionType: IssueRemoteWriteDenied,
 		ScopeKey:      retainedScope,
-		LastError:     "blocked by remote permission scope",
+		LastError:     "blocked by remote write block scope",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
@@ -454,9 +454,9 @@ func TestEngine_HandleExternalChanges_RemotePermissionClearance(t *testing.T) {
 	handleExternalChangesForTest(t, eng, ctx)
 
 	assert.False(t, isTestBlockScopeed(eng, clearedScope),
-		"removing a remote permission scope externally should release that scope")
+		"removing a remote write block scope externally should release that scope")
 	assert.True(t, isTestBlockScopeed(eng, retainedScope),
-		"unrelated remote permission scopes must remain blocked")
+		"unrelated remote write block scopes must remain blocked")
 
 	retryable := readyRetryWorkForTest(t, eng.baseline, ctx, eng.nowFunc())
 	assert.Empty(t, retryable, "clearing the last blocked write should forget the remote scope instead of retrying it")
@@ -923,10 +923,10 @@ func TestRunWatch_ShutdownDropsReconcileResult(t *testing.T) {
 	}
 	reconcileTimerCreated := installAfterFuncCreatedSignal(eng, 15*time.Minute)
 	saveObservationCursorForTest(t, eng.baseline, t.Context(), engineTestDriveID, "seed-token")
-	require.NoError(t, eng.baseline.MarkFullRemoteReconcile(
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(
 		t.Context(),
 		driveid.New(engineTestDriveID),
-		clock.Now().Add(-fullRemoteReconcileInterval+15*time.Minute),
+		clock.Now().Add(-fullRemoteRefreshInterval+15*time.Minute),
 	))
 
 	watchCtx, cancel := context.WithCancel(t.Context())

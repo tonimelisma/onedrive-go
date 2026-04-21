@@ -75,7 +75,7 @@ called scopes.
 
 The per-drive SQLite database containing `baseline`, `local_state`,
 `remote_state`, `observation_issues`, `retry_work`, `block_scopes`,
-`observation_state`, and `run_status`.
+`observation_state`, and `sync_status`.
 
 ### Observation Issues
 
@@ -91,10 +91,11 @@ The durable ledger of exact delayed work the engine still owes later.
 The durable ledger of shared blocker timing and lifecycle. Concrete blocked
 work still lives in `retry_work`.
 
-### Run Status
+### Sync Status
 
-The typed singleton status row used by one-shot `status` output. It stores last
-completed one-shot time, duration, success/failure counts, and last error.
+The typed singleton status row used by `status` output. It stores the last
+successful bidirectional sync batch time, duration, success/failure counts,
+and last error.
 
 ### Session Store
 

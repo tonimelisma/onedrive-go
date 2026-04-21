@@ -9,7 +9,7 @@ Bidirectional file synchronization between a local directory and OneDrive.
 - R-2.1.3: When `--download-only` is passed, the system shall still observe both local and remote truth, but it shall only execute remote-to-local reconciliation work. Local-to-remote mutations shall remain deferred until a mode that permits them. Real two-sided conflicts shall still be surfaced as conflicts; `--download-only` shall not authorize remote changes to silently overwrite divergent local content. [verified]
 - R-2.1.4: When `--upload-only` is passed, the system shall still observe both local and remote truth, but it shall only execute local-to-remote reconciliation work. Remote-to-local mutations shall remain deferred until a mode that permits them. Real two-sided conflicts shall still be surfaced as conflicts; `--upload-only` shall not authorize local changes to silently overwrite divergent remote content. [verified]
 - R-2.1.5: When `--dry-run` is passed, the system shall preview operations without executing. [verified]
-- R-2.1.6: When `--full` is passed, the system shall perform full reconciliation (fresh delta enumeration + orphan detection). [verified]
+- R-2.1.6: When `--full` is passed, the system shall perform a full remote refresh (fresh delta enumeration + orphan detection). [verified]
 
 ## R-2.2 Conflict Detection [verified]
 
@@ -75,7 +75,7 @@ is not part of the normal product CLI.
 - R-2.8.1: The system shall reload `config.toml` on control-socket reload request. [verified]
 - R-2.8.2: The system shall use the Unix control socket as the single live sync-owner lock. [verified]
 - R-2.8.3: The system shall support two-signal shutdown. First SIGINT/SIGTERM cancels watch mode, seals new work admission, and lets already-admitted work follow the normal shutdown path; second signal forces immediate exit. [verified]
-- R-2.8.4: The system shall run periodic full reconciliation (default every 24 hours) to detect missed delta deletions. The cadence shall survive process restarts by persisting the last successful full primary remote observation. [verified]
+- R-2.8.4: The system shall run periodic full remote refresh (default every 24 hours) to detect missed delta deletions. The cadence shall survive process restarts by persisting the last successful full primary remote observation. [verified]
 - R-2.8.5: The system shall support WebSocket subscription for near-instant remote change notification. [verified]
 
 ## R-2.9 RPC / Control Socket [verified]

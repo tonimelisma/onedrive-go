@@ -186,7 +186,7 @@ Delta deletion events are delivered **exactly once**. If the client's token wind
 
 The combination of consistency lag (above) and ephemeral deletions creates a window where: (1) a deletion is performed, (2) the client calls delta before the deletion propagates to the change log, (3) delta returns zero events + new token, (4) the client saves the new token, permanently skipping the deletion.
 
-Mitigation requires both a zero-event token guard (don't advance token on empty responses) and periodic full reconciliation (enumerate all items, detect orphans in baseline).
+Mitigation requires both a zero-event token guard (don't advance token on empty responses) and periodic full remote refresh (enumerate all items, detect orphans in baseline).
 
 ### Personal Phantom System Drives
 

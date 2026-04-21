@@ -427,7 +427,7 @@ when you treat it as several file families sharing one single-drive owner.
 | `observer_local*.go`, `observer_remote.go`, `scanner.go`, `item_converter.go`, `socketio*.go`, `buffer.go`, `local_hash_reuse.go`, `observed_items.go` | Observation: remote and local change capture plus dedupe/buffering |
 | `planner*.go`, `single_path.go`, `actions.go` | Pure planning: turn observed change plus baseline into deterministic actions |
 | `executor*.go`, `worker*.go`, `worker_result.go`, `dep_graph.go`, `active_scopes.go` | Execution: worker dispatch, dependency ordering, scope admission, and conflict-safe file application |
-| `engine.go`, `engine_config.go`, `engine_loop.go`, `engine_run_once.go`, `engine_watch*.go` | Runtime orchestration: main loop, one-shot run, watch lifecycle and batch reconciliation |
+| `engine.go`, `engine_config.go`, `engine_loop.go`, `engine_run_once.go`, `engine_watch*.go` | Runtime orchestration: main loop, one-shot run, watch lifecycle and batch refresh |
 | `engine_primary_root*.go`, `engine_observation_postprocess.go`, `observed_items.go` | Engine-owned primary-root observation: root selection, shared-root fallback, postprocessing, and remote observation projection |
 | `engine_result_*.go`, `engine_results.go`, `engine_retry_trial.go` | Result classification, retry-trial decisions, and scope-level result flow |
 | `engine_scope_invariants.go`, `engine_scope_startup.go`, `engine_scope_runtime.go`, `engine_scope_admission.go`, `scope_lifecycle_policy.go` | Scope lifecycle: startup cleanup, timed blocker activation, release/discard, admission, and shared lifecycle policy for retry/write scopes |
@@ -435,7 +435,7 @@ when you treat it as several file families sharing one single-drive owner.
 | `permissions.go`, `permission_handler.go`, `permission_capability.go`, `permission_decisions.go`, `permission_probe_*.go` | Capability-based permission probing, denied-path policy, and write-scope activation/release decisions |
 | `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, block scoping, and scope key canonicalization |
 | `debug_event_sink.go` | Debug event recording for test and diagnostic observability |
-| `store*.go`, `store_inspect.go`, `condition_projection.go`, `blocked_retry_projection.go`, `scope_key.go`, `scope_block.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, raw authority reads, shared stored-condition projection, scope-key validation helpers, run-status/scope admin helpers, and explicit reset support |
+| `store*.go`, `store_inspect.go`, `condition_projection.go`, `blocked_retry_projection.go`, `scope_key.go`, `scope_block.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, raw authority reads, shared stored-condition projection, scope-key validation helpers, sync-status/scope admin helpers, and explicit reset support |
 | `store_read_*.go`, `store_write_*.go` | Store I/O: raw authority reads (remote state, observation state, snapshots) and write operations (baseline, observation, retry work, block scopes) |
 | `condition_keys.go`, `watch_summary.go`, `truth_status.go`, `issue_types.go` | Shared condition taxonomy and ordering, derived truth-availability reads, and raw engine-owned watch-summary aggregation |
 | `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |

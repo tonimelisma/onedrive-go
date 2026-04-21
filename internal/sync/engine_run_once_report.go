@@ -21,24 +21,59 @@ func (e *Engine) completeRunOnceWithoutChanges(
 		DryRun:   opts.DryRun,
 		Duration: e.since(start),
 	}
-	e.writeOneShotRunStatusBestEffort(ctx, report)
+	e.writeSyncStatusBestEffort(ctx, mode, opts.DryRun, &SyncStatusUpdate{
+		SyncedAt: e.nowFunc(),
+		Duration: report.Duration,
+	})
 
 	return report
 }
 
-func (e *Engine) writeOneShotRunStatusBestEffort(ctx context.Context, report *Report) {
-	if report == nil {
+func shouldWriteSyncStatus(mode Mode, dryRun bool) bool {
+	return mode == SyncBidirectional && !dryRun
+}
+
+func syncStatusFromUpdate(update *SyncStatusUpdate) *SyncStatus {
+	if update == nil {
+		return nil
+	}
+
+	lastError := ""
+	if len(update.Errors) > 0 {
+		lastError = update.Errors[0].Error()
+	}
+
+	syncedAt := update.SyncedAt
+	if syncedAt.IsZero() {
+		syncedAt = time.Now()
+	}
+
+	return &SyncStatus{
+		LastSyncedAt:       syncedAt.UnixNano(),
+		LastSyncDurationMs: update.Duration.Milliseconds(),
+		LastSucceededCount: update.Succeeded,
+		LastFailedCount:    update.Failed,
+		LastError:          lastError,
+	}
+}
+
+func (e *Engine) writeSyncStatusBestEffort(
+	ctx context.Context,
+	mode Mode,
+	dryRun bool,
+	update *SyncStatusUpdate,
+) {
+	if !shouldWriteSyncStatus(mode, dryRun) {
 		return
 	}
 
-	if metaErr := e.baseline.WriteSyncRunStatus(ctx, &SyncRunReport{
-		CompletedAt: e.nowFunc(),
-		Duration:    report.Duration,
-		Succeeded:   report.Succeeded,
-		Failed:      report.Failed,
-		Errors:      report.Errors,
-	}); metaErr != nil {
-		e.logger.Warn("failed to write one-shot sync status", slog.String("error", metaErr.Error()))
+	status := syncStatusFromUpdate(update)
+	if status == nil {
+		return
+	}
+
+	if metaErr := e.baseline.WriteSyncStatus(ctx, status); metaErr != nil {
+		e.logger.Warn("failed to write sync status", slog.String("error", metaErr.Error()))
 	}
 }
 

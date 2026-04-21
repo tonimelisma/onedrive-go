@@ -39,12 +39,12 @@ func buildSyncStateInfo(
 	}
 
 	info := syncStateInfo{
-		LastSyncTime:     formatStatusSyncTime(snapshot.RunStatus.LastCompletedAt),
-		LastSyncDuration: formatStatusDurationMs(snapshot.RunStatus.LastDurationMs),
+		LastSyncTime:     formatStatusSyncTime(snapshot.SyncStatus.LastSyncedAt),
+		LastSyncDuration: formatStatusDurationMs(snapshot.SyncStatus.LastSyncDurationMs),
 		FileCount:        snapshot.BaselineEntryCount,
 		RemoteDrift:      snapshot.RemoteDriftItems,
 		Retrying:         snapshot.RetryingItems,
-		LastError:        snapshot.RunStatus.LastError,
+		LastError:        snapshot.SyncStatus.LastError,
 		Conditions:       buildStatusConditionJSON(snapshot, verbose, examplesLimit),
 		ExamplesLimit:    examplesLimit,
 		Verbose:          verbose,

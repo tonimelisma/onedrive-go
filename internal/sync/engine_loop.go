@@ -259,6 +259,7 @@ func (rt *watchRuntime) beginWatchDrain(
 	p *watchPipeline,
 ) {
 	if rt.enterDraining() {
+		rt.clearSyncStatusBatch()
 		rt.stopDrainTimers()
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventShutdownStarted})
 		rt.engine.logger.Info("graceful shutdown: sealing new work admission",
@@ -432,6 +433,7 @@ func (rt *watchRuntime) handleBootstrapCompletion(
 		rt.completeOutboxAsShutdown(nextOutbox)
 		return nil, false, err
 	}
+	rt.maybeFinishSyncStatusBatch(ctx, p.mode, nextOutbox)
 	return nextOutbox, false, nil
 }
 
@@ -485,7 +487,7 @@ func (rt *watchRuntime) handleDrainingReconcileResult(
 		return rt.drainLoopDone(p), nil
 	}
 
-	rt.dropReconcileResultOnShutdown()
+	rt.dropRemoteRefreshResultOnShutdown()
 	rt.mustAssertReconcileBookkeepingCleared(rt, "handle draining reconcile result")
 	p.reconcileResults = nil
 	rt.mustAssertInvariants(ctx, rt, "handle draining reconcile result")

@@ -99,7 +99,6 @@ type LocalStateRow struct {
 	Size            int64
 	Mtime           int64
 	ContentIdentity string
-	ObservedAt      int64
 }
 
 // RetryWorkRow represents a row from the retry_work table.
@@ -119,11 +118,11 @@ type RetryWorkRow struct {
 	LastSeenAt    int64
 }
 
-// SyncRunStatus is the typed one-shot status row persisted for product-facing
-// status output.
-type SyncRunStatus struct {
-	LastCompletedAt    int64
-	LastDurationMs     int64
+// SyncStatus is the typed product-facing status row persisted for the most
+// recent successful bidirectional sync batch.
+type SyncStatus struct {
+	LastSyncedAt       int64
+	LastSyncDurationMs int64
 	LastSucceededCount int
 	LastFailedCount    int
 	LastError          string

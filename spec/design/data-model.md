@@ -23,7 +23,7 @@ The target schema is intentionally narrow. It stores only:
 - durable current-truth problems
 - exact delayed work
 - shared blocker timing
-- one-shot run-status metadata
+- product-facing sync status metadata
 
 It does not store a durable executable plan or a mixed failure ledger.
 
@@ -38,7 +38,7 @@ It does not store a durable executable plan or a mixed failure ledger.
 | `retry_work` | Exact delayed retry or blocked work for the current semantic intent | `work_key` |
 | `block_scopes` | Shared blocker timing and lifecycle | `scope_key` |
 | `observation_state` | Configured drive owner, primary cursor, and refresh cadence | singleton row |
-| `run_status` | Typed one-shot status metadata for `status` | singleton row |
+| `sync_status` | Typed product-facing sync status metadata for `status` | singleton row |
 
 ## `baseline`
 
@@ -77,7 +77,6 @@ drift from durable state alone.
 
 - identity/materialization: `path`, `item_type`
 - local facts: `hash`, `size`, `mtime`, `content_identity`
-- observation timestamp: `observed_at`
 
 Ignored content does not enter `local_state`. The table stores only current
 local truth that can participate in reconciliation.
@@ -178,18 +177,22 @@ cadence restart-safe in one-shot and watch mode.
 `configured_drive_id` identifies the configured drive session that owns the DB
 and cursor. It does not replace the per-row `remote_state.drive_id` authority.
 
-## `run_status`
+## `sync_status`
 
-`run_status` stores typed one-shot status metadata used by `status`:
+`sync_status` stores typed product-facing sync status metadata used by
+`status`:
 
-- `last_completed_at`
-- `last_duration_ms`
+- `last_synced_at`
+- `last_sync_duration_ms`
 - `last_succeeded_count`
 - `last_failed_count`
 - `last_error`
 
-It is explicitly non-authoritative for planning and observation. Watch mode
-does not invent a one-shot run timestamp.
+It is explicitly non-authoritative for planning and observation.
+`last_synced_at` means the most recent successful best-effort bidirectional
+sync batch. It updates in one-shot or watch mode only after the engine
+finishes a bidirectional, non-dry-run batch and exhausts all currently
+admissible work for that cycle.
 
 ## Schema Discipline
 

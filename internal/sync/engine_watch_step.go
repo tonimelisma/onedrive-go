@@ -134,7 +134,7 @@ func (rt *watchRuntime) applyWatchTransition(
 		rt.appendOutbox(transition.appendOutbox)
 	}
 	if transition.startReconcile {
-		rt.runFullReconciliationAsync(ctx, p.bl)
+		rt.runFullRemoteRefreshAsync(ctx, p.bl)
 	}
 	if transition.done {
 		return true, nil
@@ -159,14 +159,17 @@ func (rt *watchRuntime) transitionWatchDispatchEvent(
 	case watchEventActionCompletion:
 		outcome := rt.processActionCompletion(ctx, rt, event.completion, p.bl)
 		if outcome.terminate {
+			rt.clearSyncStatusBatch()
 			return watchTransition{}, true, outcome.terminateErr
 		}
 
 		nextOutbox, err := rt.drainPublicationReadyActions(ctx, rt, p.bl, rt.currentOutbox(), outcome.dispatched)
 		if err != nil {
+			rt.clearSyncStatusBatch()
 			rt.completeOutboxAsShutdown(nextOutbox)
 			return watchTransition{}, true, err
 		}
+		rt.maybeFinishSyncStatusBatch(ctx, p.mode, nextOutbox)
 		return watchTransition{
 			replaceOutbox:    nextOutbox,
 			replaceOutboxSet: true,
@@ -210,7 +213,7 @@ func (rt *watchRuntime) transitionWatchObservationEvent(
 	case watchEventReconcileTick:
 		return watchTransition{startReconcile: true}, true
 	case watchEventReconcileResult:
-		rt.applyReconcileResult(event.reconcileResult)
+		rt.applyRemoteRefreshResult(event.reconcileResult)
 		return watchTransition{}, true
 	case watchEventReconcileResultsClosed:
 		p.reconcileResults = nil
