@@ -41,40 +41,16 @@ func (rt *watchRuntime) processDirtyBatch(
 	}
 	rt.engine.collector().RecordObserve(len(batch.Paths), rt.engine.since(observeStart))
 
-	planStart := rt.engine.nowFunc()
-	plan, err := rt.buildCurrentActionPlan(ctx, bl, mode)
+	prepared, err := rt.prepareDirtyCurrentPlan(ctx, bl, mode)
 	if err != nil {
 		rt.clearSyncStatusBatch()
-		rt.engine.logger.Error("watch sqlite planning failed, skipping dirty batch",
-			slog.String("error", err.Error()),
-		)
-		return nil
-	}
-	rt.engine.collector().RecordPlan(len(plan.Actions), rt.engine.since(planStart))
-
-	reconcileErr := rt.reconcileDurablePlanState(ctx, plan)
-	if reconcileErr != nil {
-		rt.clearSyncStatusBatch()
-		rt.engine.logger.Error("watch durable plan-state reconcile failed, skipping dirty batch",
-			slog.String("error", reconcileErr.Error()),
-		)
-		return nil
-	}
-
-	retryRows, blockScopes, err := rt.loadPreparedRuntimeState(ctx)
-	if err != nil {
-		rt.clearSyncStatusBatch()
-		rt.engine.logger.Error("watch runtime state load failed, skipping dirty batch",
+		rt.engine.logger.Error("watch current-plan prepare failed, skipping dirty batch",
 			slog.String("error", err.Error()),
 		)
 		return nil
 	}
 
-	dispatch, dispatched, err := rt.startPreparedRuntime(ctx, &PreparedCurrentPlan{
-		Plan:        plan,
-		RetryRows:   retryRows,
-		BlockScopes: blockScopes,
-	}, bl, rt)
+	dispatch, dispatched, err := rt.startPreparedRuntime(ctx, prepared, bl, rt)
 	if err != nil {
 		rt.clearSyncStatusBatch()
 		rt.engine.logger.Error("watch dispatch failed, skipping dirty batch",

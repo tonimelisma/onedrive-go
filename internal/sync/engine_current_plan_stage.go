@@ -49,18 +49,13 @@ func (r *oneShotRunner) observeLiveCurrentState(
 	if err != nil {
 		return nil, err
 	}
-	inputs, err := r.loadCurrentActionPlanInputs(ctx, r.engine.baseline, r.engine.driveID)
+	observed, err := r.loadObservedCurrentState(ctx, pendingCursorCommit)
 	if err != nil {
 		return nil, err
 	}
-	observed := observedCurrentState{
-		inputs:              inputs,
-		observedPaths:       len(inputs.localRows) + len(inputs.remoteRows),
-		pendingCursorCommit: pendingCursorCommit,
-	}
 	r.engine.collector().RecordObserve(observed.observedPaths, r.engine.since(observeStart))
 
-	return &observed, nil
+	return observed, nil
 }
 
 func (r *oneShotRunner) observeDryRunCurrentState(
@@ -82,7 +77,28 @@ func (r *oneShotRunner) observeDryRunCurrentState(
 	return &observed, nil
 }
 
-func (r *oneShotRunner) prepareCurrentPlanFromObservedState(
+func (flow *engineFlow) loadObservedCurrentState(
+	ctx context.Context,
+	pendingCursorCommit *pendingPrimaryCursorCommit,
+) (*observedCurrentState, error) {
+	inputs, err := flow.loadCurrentActionPlanInputs(ctx, flow.engine.baseline, flow.engine.driveID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &observedCurrentState{
+		inputs:              inputs,
+		observedPaths:       len(inputs.localRows) + len(inputs.remoteRows),
+		pendingCursorCommit: pendingCursorCommit,
+	}, nil
+}
+
+// prepareCurrentPlanFromObservedState is the shared current-plan preparation
+// stage. Observation stays entrypoint-specific, but once current truth has
+// been loaded into observed-state inputs, one-shot and watch both use this
+// stage to build the current action plan, reconcile durable held-work state,
+// and load the runtime-start rows that execution owns.
+func (flow *engineFlow) prepareCurrentPlanFromObservedState(
 	ctx context.Context,
 	bl *Baseline,
 	mode Mode,
@@ -94,15 +110,15 @@ func (r *oneShotRunner) prepareCurrentPlanFromObservedState(
 		return nil, fmt.Errorf("sync: preparing current plan: missing observed state")
 	}
 
-	planStart := r.engine.nowFunc()
-	plan, err := r.engine.buildCurrentActionPlanFromInputs(&observed.inputs, bl, mode)
+	planStart := flow.engine.nowFunc()
+	plan, err := flow.engine.buildCurrentActionPlanFromInputs(&observed.inputs, bl, mode)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
-	r.engine.collector().RecordPlan(len(plan.Actions), r.engine.since(planStart))
+	flow.engine.collector().RecordPlan(len(plan.Actions), flow.engine.since(planStart))
 
 	if materialize {
-		if materializeErr := r.reconcileDurablePlanState(ctx, plan); materializeErr != nil {
+		if materializeErr := flow.reconcileDurablePlanState(ctx, plan); materializeErr != nil {
 			return nil, materializeErr
 		}
 	}
@@ -110,7 +126,7 @@ func (r *oneShotRunner) prepareCurrentPlanFromObservedState(
 	var retryRows []RetryWorkRow
 	var blockScopes []*BlockScope
 	if materialize {
-		retryRows, blockScopes, err = r.loadPreparedRuntimeState(ctx)
+		retryRows, blockScopes, err = flow.loadPreparedRuntimeState(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -354,17 +370,56 @@ func (flow *engineFlow) loadCurrentActionPlanInputsTx(
 	}, nil
 }
 
-func (flow *engineFlow) buildCurrentActionPlan(
+// prepareBootstrapCurrentPlan runs the shared current-plan preparation stage
+// after watch bootstrap refreshes both remote and local truth once.
+func (rt *watchRuntime) prepareBootstrapCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
 	mode Mode,
-) (*ActionPlan, error) {
-	inputs, err := flow.loadCurrentActionPlanInputs(ctx, flow.engine.baseline, flow.engine.driveID)
+) (*PreparedCurrentPlan, error) {
+	fullRefresh, err := rt.engine.shouldRunFullRemoteRefresh(ctx, false)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sync: deciding bootstrap full remote refresh: %w", err)
 	}
 
-	return flow.engine.buildCurrentActionPlanFromInputs(&inputs, bl, mode)
+	observeStart := rt.engine.nowFunc()
+	pendingCursorCommit, err := rt.observeCurrentTruth(ctx, rt, bl, false, fullRefresh)
+	if err != nil {
+		return nil, fmt.Errorf("sync: bootstrap observation failed: %w", err)
+	}
+	observed, err := rt.loadObservedCurrentState(ctx, pendingCursorCommit)
+	if err != nil {
+		return nil, fmt.Errorf("sync: bootstrap observed-state load failed: %w", err)
+	}
+	rt.engine.collector().RecordObserve(observed.observedPaths, rt.engine.since(observeStart))
+
+	prepared, err := rt.prepareCurrentPlanFromObservedState(ctx, bl, mode, RunOptions{}, observed, true)
+	if err != nil {
+		return nil, fmt.Errorf("sync: bootstrap planning failed: %w", err)
+	}
+
+	return prepared, nil
+}
+
+// prepareDirtyCurrentPlan runs the shared current-plan preparation stage from
+// already-committed watch truth after the dirty-batch path has refreshed the
+// current local snapshot.
+func (rt *watchRuntime) prepareDirtyCurrentPlan(
+	ctx context.Context,
+	bl *Baseline,
+	mode Mode,
+) (*PreparedCurrentPlan, error) {
+	observed, err := rt.loadObservedCurrentState(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("sync: watch observed-state load failed: %w", err)
+	}
+
+	prepared, err := rt.prepareCurrentPlanFromObservedState(ctx, bl, mode, RunOptions{}, observed, true)
+	if err != nil {
+		return nil, fmt.Errorf("sync: watch planning failed: %w", err)
+	}
+
+	return prepared, nil
 }
 
 func (flow *engineFlow) buildDryRunCurrentActionPlan(
