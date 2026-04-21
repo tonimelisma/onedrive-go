@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -96,6 +97,8 @@ func newWorkerTestSetup(t *testing.T) (
 type testDepGraphHelper struct {
 	dg         *DepGraph
 	dispatchCh chan *TrackedAction
+	settledCh  chan struct{}
+	settleOnce sync.Once
 }
 
 func newTestDepGraphHelper(t *testing.T) *testDepGraphHelper {
@@ -103,6 +106,7 @@ func newTestDepGraphHelper(t *testing.T) *testDepGraphHelper {
 	return &testDepGraphHelper{
 		dg:         NewDepGraph(synctest.TestLogger(t)),
 		dispatchCh: make(chan *TrackedAction, 64),
+		settledCh:  make(chan struct{}),
 	}
 }
 
@@ -117,9 +121,19 @@ func (h *testDepGraphHelper) Add(action *Action, id int64, deps []int64) {
 // Dispatch returns the dispatch channel for WorkerPool.
 func (h *testDepGraphHelper) Dispatch() <-chan *TrackedAction { return h.dispatchCh }
 
-// CompleteCh returns the DepGraph completion channel used by tests to know
-// when the engine-owned graph has fully settled.
-func (h *testDepGraphHelper) CompleteCh() <-chan struct{} { return h.dg.Done() }
+// CompleteCh returns a helper-owned channel that closes once the synthetic
+// test graph has no in-flight nodes left. Production runtime quiescence is
+// engine-owned; worker tests only need a narrow settle signal.
+func (h *testDepGraphHelper) CompleteCh() <-chan struct{} { return h.settledCh }
+
+func (h *testDepGraphHelper) Complete(id int64) ([]*TrackedAction, bool) {
+	ready, ok := h.dg.Complete(id)
+	if ok && h.dg.InFlightCount() == 0 {
+		h.settleOnce.Do(func() { close(h.settledCh) })
+	}
+
+	return ready, ok
+}
 
 // drainAndComplete drains the action completion channel, calls dg.Complete
 // for each completion, and sends newly-ready dependents to dispatchCh. Returns
@@ -128,7 +142,7 @@ func (h *testDepGraphHelper) drainAndComplete(completions <-chan ActionCompletio
 	var collected []ActionCompletion
 	for r := range completions {
 		collected = append(collected, r)
-		ready, _ := h.dg.Complete(r.ActionID)
+		ready, _ := h.Complete(r.ActionID)
 		for _, ta := range ready {
 			h.dispatchCh <- ta
 		}
@@ -686,27 +700,28 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 		require.Fail(t, "timeout waiting for action completion")
 	}
 
-	// Worker sent the result but did NOT call Complete — dgh.Done should
-	// NOT have fired (the action is still in-flight from DepGraph's perspective).
+	// Worker sent the result but did NOT call Complete, so the helper settle
+	// signal must still be open while the graph action remains in flight.
 	select {
 	case <-dgh.CompleteCh():
-		require.Fail(t, "dgh.Done fired — worker must not call Complete")
+		require.Fail(t, "helper settle signal fired — worker must not call Complete")
 	default:
-		// Expected: Done not fired because Complete was not called.
+		// Expected: settle signal stays open because Complete was not called.
 	}
 
 	assert.True(t, result.Success)
 	assert.Equal(t, "test-no-complete.txt", result.Path)
 	assert.Equal(t, int64(0), result.ActionID, "ActionID should match TrackedAction.ID")
 
-	// Now WE call Complete (simulating the engine), which should fire Done.
-	_, _ = dgh.dg.Complete(result.ActionID)
+	// Now WE call Complete (simulating the engine), which should settle the
+	// helper graph.
+	_, _ = dgh.Complete(result.ActionID)
 
 	select {
 	case <-dgh.CompleteCh():
-		// Expected: Done fires after engine calls Complete.
+		// Expected: settle signal fires after engine calls Complete.
 	case <-time.After(5 * time.Second):
-		require.Fail(t, "dgh.Done did not fire after Complete")
+		require.Fail(t, "helper settle signal did not fire after Complete")
 	}
 
 	pool.Stop()
@@ -922,7 +937,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 			} else {
 				failed.Add(1)
 			}
-			_, _ = dgh.dg.Complete(r.ActionID)
+			_, _ = dgh.Complete(r.ActionID)
 		}
 		close(done)
 	}()
