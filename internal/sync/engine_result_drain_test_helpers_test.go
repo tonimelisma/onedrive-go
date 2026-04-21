@@ -23,12 +23,11 @@ func startDrainLoop(t *testing.T) (chan ActionCompletion, context.CancelFunc, *t
 	ctx, cancel := context.WithCancel(t.Context())
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	safety := DefaultSafetyConfig()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		defer rt.stopTrialTimer()
-		runResultDrainLoopForTest(ctx, rt, bl, safety, results)
+		runResultDrainLoopForTest(ctx, rt, bl, results)
 	}()
 
 	t.Cleanup(func() {
@@ -43,14 +42,13 @@ func runResultDrainLoopForTest(
 	ctx context.Context,
 	rt *watchRuntime,
 	bl *Baseline,
-	safety *SafetyConfig,
 	results <-chan ActionCompletion,
 ) {
 	var outbox []*TrackedAction
 
 	for {
 		if len(outbox) == 0 {
-			nextOutbox, done := runResultDrainLoopIdleForTest(ctx, rt, bl, safety, results)
+			nextOutbox, done := runResultDrainLoopIdleForTest(ctx, rt, bl, results)
 			outbox = nextOutbox
 			if done {
 				return
@@ -58,7 +56,7 @@ func runResultDrainLoopForTest(
 			continue
 		}
 
-		nextOutbox, done := runResultDrainLoopWithOutboxForTest(ctx, rt, bl, safety, results, outbox)
+		nextOutbox, done := runResultDrainLoopWithOutboxForTest(ctx, rt, bl, results, outbox)
 		outbox = nextOutbox
 		if done {
 			return
@@ -70,7 +68,6 @@ func runResultDrainLoopIdleForTest(
 	ctx context.Context,
 	rt *watchRuntime,
 	bl *Baseline,
-	safety *SafetyConfig,
 	results <-chan ActionCompletion,
 ) ([]*TrackedAction, bool) {
 	select {
@@ -80,9 +77,9 @@ func runResultDrainLoopIdleForTest(
 		}
 		return appendDrainOutcome(rt, ctx, bl, nil, &workerResult)
 	case <-rt.trialTimerChan():
-		return rt.runTrialDispatch(ctx, bl, SyncBidirectional, safety), false
+		return rt.runTrialDispatch(ctx, bl, SyncBidirectional), false
 	case <-rt.retryTimerChan():
-		return rt.runRetrierSweep(ctx, bl, SyncBidirectional, safety), false
+		return rt.runRetrierSweep(ctx, bl, SyncBidirectional), false
 	case <-ctx.Done():
 		return nil, true
 	}
@@ -92,7 +89,6 @@ func runResultDrainLoopWithOutboxForTest(
 	ctx context.Context,
 	rt *watchRuntime,
 	bl *Baseline,
-	safety *SafetyConfig,
 	results <-chan ActionCompletion,
 	outbox []*TrackedAction,
 ) ([]*TrackedAction, bool) {
@@ -105,9 +101,9 @@ func runResultDrainLoopWithOutboxForTest(
 		}
 		return appendDrainOutcome(rt, ctx, bl, outbox, &workerResult)
 	case <-rt.trialTimerChan():
-		return append(outbox, rt.runTrialDispatch(ctx, bl, SyncBidirectional, safety)...), false
+		return append(outbox, rt.runTrialDispatch(ctx, bl, SyncBidirectional)...), false
 	case <-rt.retryTimerChan():
-		return append(outbox, rt.runRetrierSweep(ctx, bl, SyncBidirectional, safety)...), false
+		return append(outbox, rt.runRetrierSweep(ctx, bl, SyncBidirectional)...), false
 	case <-ctx.Done():
 		return outbox, true
 	}

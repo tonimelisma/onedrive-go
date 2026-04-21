@@ -1005,6 +1005,61 @@ func noopSleep(_ context.Context, _ time.Duration) error {
 	return nil
 }
 
+func startTestRemoteBatchDrain(
+	ctx context.Context,
+	batches <-chan remoteObservationBatch,
+	apply func(remoteObservationBatch) error,
+) <-chan ChangeEvent {
+	events := make(chan ChangeEvent, 32)
+
+	go func() {
+		defer close(events)
+
+		for {
+			select {
+			case batch, ok := <-batches:
+				if !ok {
+					return
+				}
+
+				for i := range batch.emitted {
+					select {
+					case events <- batch.emitted[i]:
+					case <-ctx.Done():
+						return
+					}
+				}
+
+				var err error
+				if apply != nil {
+					err = apply(batch)
+				}
+				batch.finishApplied(err)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return events
+}
+
+func testPrimaryWatchBatchHandler(driveID driveid.ID) RemoteWatchBatchHandler {
+	return func(_ context.Context, events []ChangeEvent, newToken string) (remoteObservationBatch, error) {
+		projected := projectRemoteObservations(nil, events)
+		return remoteObservationBatch{
+			source:   remoteObservationBatchPrimaryWatch,
+			observed: projected.observed,
+			emitted:  append([]ChangeEvent(nil), projected.emitted...),
+			pending: &pendingPrimaryCursorCommit{
+				driveID: driveID.String(),
+				token:   newToken,
+			},
+			applyAck: make(chan error, 1),
+		}, nil
+	}
+}
+
 // sequentialFetcher returns a different DeltaPage for each call, allowing
 // tests to script multi-poll watch scenarios.
 type sequentialFetcher struct {
@@ -1085,8 +1140,9 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	obs.SleepFunc = noopSleep
 
-	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
+	batches := make(chan remoteObservationBatch, 10)
+	events := startTestRemoteBatchDrain(ctx, batches, nil)
 
 	go func() {
 		// Wait for at least 2 events then cancel.
@@ -1100,7 +1156,7 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 		}
 	}()
 
-	err := obs.Watch(ctx, "", events, time.Millisecond, nil, nil)
+	err := obs.Watch(ctx, "", batches, time.Millisecond, nil, nil)
 	require.NoError(t, err, "Watch returned error")
 
 	assert.GreaterOrEqual(t, fetcher.calls, 2)
@@ -1132,9 +1188,10 @@ func TestWatch_WakeSignalTriggersImmediatePoll(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	wakeCh := make(chan struct{}, 1)
 
-	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
+	batches := make(chan remoteObservationBatch, 10)
+	events := startTestRemoteBatchDrain(ctx, batches, nil)
 
 	go func() {
 		received := 0
@@ -1150,7 +1207,7 @@ func TestWatch_WakeSignalTriggersImmediatePoll(t *testing.T) {
 		}
 	}()
 
-	err := obs.Watch(ctx, "", events, time.Hour, wakeCh, nil)
+	err := obs.Watch(ctx, "", batches, time.Hour, wakeCh, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, fetcher.CallCount(), "wake should trigger a second delta cycle before fallback polling")
 }
@@ -1180,9 +1237,10 @@ func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	wakeCh := make(chan struct{}, 1)
 
-	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
+	batches := make(chan remoteObservationBatch, 10)
+	events := startTestRemoteBatchDrain(ctx, batches, nil)
 
 	go func() {
 		received := 0
@@ -1199,7 +1257,7 @@ func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 		}
 	}()
 
-	err := obs.Watch(ctx, "", events, time.Hour, wakeCh, nil)
+	err := obs.Watch(ctx, "", batches, time.Hour, wakeCh, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, fetcher.CallCount(), "burst wakes should collapse into one pending delta cycle")
 }
@@ -1229,15 +1287,16 @@ func TestWatch_BackoffOnError(t *testing.T) {
 		return nil
 	}
 
-	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
+	batches := make(chan remoteObservationBatch, 10)
+	events := startTestRemoteBatchDrain(ctx, batches, nil)
 
 	go func() {
 		<-events // wait for the successful event
 		cancel()
 	}()
 
-	err := obs.Watch(ctx, "", events, time.Minute, nil, nil)
+	err := obs.Watch(ctx, "", batches, time.Minute, nil, nil)
 	require.NoError(t, err, "Watch returned error")
 
 	// First sleep should be 5s (initial backoff), second should be 10s (doubled).
@@ -1270,18 +1329,20 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 1)
+	batches := make(chan remoteObservationBatch, 1)
 	go func() {
 		done <- obs.Watch(
 			ctx,
 			"old-token",
-			make(chan ChangeEvent, 1),
+			batches,
 			time.Hour,
 			wakeCh,
-			func(ctx context.Context, events []ChangeEvent, newToken string) ([]ChangeEvent, error) {
-				return events, store.CommitObservation(ctx, projectObservedItems(obs.logger, events), newToken, driveID)
-			},
+			testPrimaryWatchBatchHandler(driveID),
 		)
 	}()
+	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
+		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.pending.token, driveID)
+	})
 
 	require.Eventually(t, func() bool {
 		return fetcher.CallCount() >= 1
@@ -1319,15 +1380,16 @@ func TestWatch_DeltaExpiredResets(t *testing.T) {
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	obs.SleepFunc = noopSleep
 
-	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
+	batches := make(chan remoteObservationBatch, 10)
+	events := startTestRemoteBatchDrain(ctx, batches, nil)
 
 	go func() {
 		<-events // wait for the resync event
 		cancel()
 	}()
 
-	err := obs.Watch(ctx, "old-expired-token", events, time.Millisecond, nil, nil)
+	err := obs.Watch(ctx, "old-expired-token", batches, time.Millisecond, nil, nil)
 	require.NoError(t, err, "Watch returned error")
 
 	// After delta expired, token should have been reset to "" for resync,
@@ -1358,12 +1420,13 @@ func TestWatch_ContextCancellation(t *testing.T) {
 		return ctx.Err()
 	}
 
-	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
+	batches := make(chan remoteObservationBatch, 10)
+	_ = startTestRemoteBatchDrain(ctx, batches, nil)
 
 	done := make(chan error, 1)
 	go func() {
-		done <- obs.Watch(ctx, "", events, time.Hour, nil, nil)
+		done <- obs.Watch(ctx, "", batches, time.Hour, nil, nil)
 	}()
 
 	select {
@@ -1413,8 +1476,9 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 	// Before Watch starts, token is empty.
 	assert.Empty(t, obs.CurrentDeltaToken(), "initial token")
 
-	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
+	batches := make(chan remoteObservationBatch, 10)
+	_ = startTestRemoteBatchDrain(ctx, batches, nil)
 
 	pollCount := 0
 	origSleep := obs.SleepFunc
@@ -1427,7 +1491,7 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 		return origSleep(ctx, d)
 	}
 
-	err := obs.Watch(ctx, "initial-token", events, time.Millisecond, nil, nil)
+	err := obs.Watch(ctx, "initial-token", batches, time.Millisecond, nil, nil)
 	require.NoError(t, err, "Watch returned error")
 
 	// Token should have been updated by successful polls.
@@ -1456,9 +1520,9 @@ func TestWatch_IntervalClamping(t *testing.T) {
 		return errors.New("stop after first sleep")
 	}
 
-	events := make(chan ChangeEvent, 10)
+	batches := make(chan remoteObservationBatch, 10)
 	// Pass zero interval — should be clamped to MinPollInterval (30s).
-	err := obs.Watch(t.Context(), "", events, 0, nil, nil)
+	err := obs.Watch(t.Context(), "", batches, 0, nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stop after first sleep")
 
@@ -1907,8 +1971,11 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	store := newTestStore(t)
 	obs.SleepFunc = noopSleep
 
-	events := make(chan ChangeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
+	batches := make(chan remoteObservationBatch, 10)
+	events := startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
+		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.pending.token, driveID)
+	})
 
 	go func() {
 		// Receive events then cancel.
@@ -1925,12 +1992,10 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	err := obs.Watch(
 		ctx,
 		"",
-		events,
+		batches,
 		time.Millisecond,
 		nil,
-		func(ctx context.Context, events []ChangeEvent, newToken string) ([]ChangeEvent, error) {
-			return events, store.CommitObservation(ctx, projectObservedItems(obs.logger, events), newToken, driveID)
-		},
+		testPrimaryWatchBatchHandler(driveID),
 	)
 	require.NoError(t, err)
 
@@ -1974,9 +2039,10 @@ func TestWatch_BatchHandlerError_ReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	events := make(chan ChangeEvent, 10)
-	err := obs.Watch(ctx, "", events, time.Millisecond, nil, func(context.Context, []ChangeEvent, string) ([]ChangeEvent, error) {
-		return nil, filepath.ErrBadPattern
+	batches := make(chan remoteObservationBatch, 10)
+	_ = startTestRemoteBatchDrain(ctx, batches, nil)
+	err := obs.Watch(ctx, "", batches, time.Millisecond, nil, func(context.Context, []ChangeEvent, string) (remoteObservationBatch, error) {
+		return remoteObservationBatch{}, filepath.ErrBadPattern
 	})
 	require.Error(t, err)
 	require.ErrorIs(t, err, filepath.ErrBadPattern)
@@ -2013,17 +2079,18 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		return nil
 	}
 
-	events := make(chan ChangeEvent, 10)
+	batches := make(chan remoteObservationBatch, 10)
 	err := obs.Watch(
 		ctx,
 		"old-token",
-		events,
+		batches,
 		time.Millisecond,
 		nil,
-		func(ctx context.Context, events []ChangeEvent, newToken string) ([]ChangeEvent, error) {
-			return events, store.CommitObservation(ctx, projectObservedItems(obs.logger, events), newToken, driveID)
-		},
+		testPrimaryWatchBatchHandler(driveID),
 	)
+	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
+		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.pending.token, driveID)
+	})
 	require.NoError(t, err)
 
 	assert.Empty(t, readObservationCursor(t, store.rawDB(), driveID.String()), "should not commit observations when 0 events returned")

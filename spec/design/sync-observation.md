@@ -14,6 +14,11 @@ snapshot cadence and cursors; observation produces wake signals, dirty
 path/scope hints, observation findings, and direct local-snapshot rows for
 `local_state`.
 
+In watch mode, that ownership is explicit: local observers emit only local
+change hints, while remote observers and full-refresh workers emit one
+`remoteObservationBatch` value that the watch loop applies durably. No remote
+observer goroutine commits remote rows or observation cursors directly.
+
 The observation stack has four main pieces:
 
 - `RemoteObserver`: Graph delta/enumeration and wake-driven watch polling

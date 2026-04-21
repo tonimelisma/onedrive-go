@@ -12,7 +12,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	ctx context.Context,
 	obsWg *stdsync.WaitGroup,
 	bl *Baseline,
-	events chan<- ChangeEvent,
+	batches chan<- remoteObservationBatch,
 	errs chan<- error,
 	pollInterval time.Duration,
 	plan primaryRootObservationPlan,
@@ -23,7 +23,8 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		go func() {
 			defer obsWg.Done()
 			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
-			errs <- rt.watchSharedRootRemote(ctx, bl, events, pollInterval)
+			defer close(batches)
+			errs <- rt.watchSharedRootRemote(ctx, bl, batches, pollInterval)
 		}()
 	case primaryRootObservationDriveRoot:
 		remoteObs := NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
@@ -44,14 +45,17 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		go func() {
 			defer obsWg.Done()
 			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+			defer close(batches)
 			errs <- remoteObs.Watch(
 				ctx,
 				savedToken,
-				events,
+				batches,
 				pollInterval,
 				wakeCh,
-				func(ctx context.Context, polledEvents []ChangeEvent, newToken string) ([]ChangeEvent, error) {
-					return rt.processCommittedPrimaryWatchBatch(ctx, bl, polledEvents, newToken)
+				func(ctx context.Context, polledEvents []ChangeEvent, newToken string) (remoteObservationBatch, error) {
+					_ = ctx
+					_ = bl
+					return buildPrimaryWatchBatch(rt.engine, polledEvents, newToken), nil
 				},
 			)
 		}()

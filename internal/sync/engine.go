@@ -16,9 +16,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-type remoteRefreshResult struct {
-	events []ChangeEvent
-}
+type remoteRefreshResult = remoteObservationBatch
 
 type driveIdentityProof struct {
 	attempted bool

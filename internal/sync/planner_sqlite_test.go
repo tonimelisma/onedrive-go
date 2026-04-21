@@ -79,7 +79,6 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 		nil,
 		bl,
 		SyncBidirectional,
-		&SafetyConfig{},
 	)
 	require.NoError(t, err)
 
@@ -150,7 +149,6 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 		nil,
 		bl,
 		SyncBidirectional,
-		&SafetyConfig{},
 	)
 	require.NoError(t, err)
 	require.Len(t, plan.Actions, 2)
@@ -260,7 +258,6 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteConflictResolutionWithout
 		nil,
 		bl,
 		SyncUploadOnly,
-		&SafetyConfig{},
 	)
 	require.NoError(t, err)
 
@@ -295,7 +292,6 @@ func planCurrentStateForStore(t *testing.T, store *SyncStore) *ActionPlan {
 		observationIssues,
 		bl,
 		SyncBidirectional,
-		&SafetyConfig{},
 	)
 	require.NoError(t, err)
 
@@ -322,7 +318,6 @@ func planCurrentStateForInputs(
 		observationIssues,
 		baseline,
 		SyncBidirectional,
-		&SafetyConfig{},
 	)
 	require.NoError(t, err)
 

@@ -94,6 +94,60 @@ func (rt *watchRuntime) appendOutbox(actions []*TrackedAction) {
 	rt.loop.outbox = append(rt.loop.outbox, actions...)
 }
 
+func (rt *watchRuntime) canPrepareNow() bool {
+	return len(rt.loop.outbox) == 0 && rt.runningCount == 0
+}
+
+func (rt *watchRuntime) queueDirtyReplan(batch DirtyBatch) {
+	rt.loop.replanPending = true
+	if batch.FullRefresh {
+		rt.loop.pendingDirty.FullRefresh = true
+	}
+	if len(batch.Paths) == 0 {
+		return
+	}
+
+	pathSet := make(map[string]struct{}, len(rt.loop.pendingDirty.Paths)+len(batch.Paths))
+	for _, path := range rt.loop.pendingDirty.Paths {
+		if path == "" {
+			continue
+		}
+		pathSet[path] = struct{}{}
+	}
+	for _, path := range batch.Paths {
+		if path == "" {
+			continue
+		}
+		pathSet[path] = struct{}{}
+	}
+
+	paths := rt.loop.pendingDirty.Paths[:0]
+	for path := range pathSet {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	rt.loop.pendingDirty.Paths = paths
+	rt.loop.hasPendingDirty = rt.loop.pendingDirty.FullRefresh || len(paths) > 0
+}
+
+func (rt *watchRuntime) hasPendingDirtyReplan() bool {
+	return rt.loop.replanPending && rt.loop.hasPendingDirty
+}
+
+func (rt *watchRuntime) takePendingDirtyReplan() (DirtyBatch, bool) {
+	if !rt.hasPendingDirtyReplan() {
+		return DirtyBatch{}, false
+	}
+
+	batch := rt.loop.pendingDirty
+	rt.loop.pendingDirty = DirtyBatch{}
+	rt.loop.hasPendingDirty = false
+	rt.loop.replanPending = false
+
+	return batch, true
+}
+
 func (rt *watchRuntime) consumeOutboxHead() {
 	if len(rt.loop.outbox) == 0 {
 		return
@@ -102,10 +156,10 @@ func (rt *watchRuntime) consumeOutboxHead() {
 	rt.loop.outbox = rt.loop.outbox[1:]
 }
 
-func (flow *engineFlow) initializePreparedRuntime(prepared *preparedCurrentActionPlan) {
-	flow.retryRowsByKey = make(map[RetryWorkKey]RetryWorkRow, len(prepared.retryRows))
-	for i := range prepared.retryRows {
-		row := prepared.retryRows[i]
+func (flow *engineFlow) initializePreparedRuntime(prepared *PreparedCurrentPlan) {
+	flow.retryRowsByKey = make(map[RetryWorkKey]RetryWorkRow, len(prepared.RetryRows))
+	for i := range prepared.RetryRows {
+		row := prepared.RetryRows[i]
 		flow.retryRowsByKey[retryWorkKeyForRetryWork(&row)] = row
 	}
 
@@ -116,12 +170,12 @@ func (flow *engineFlow) initializePreparedRuntime(prepared *preparedCurrentActio
 	flow.runningCount = 0
 	flow.nextHeldOrder = 0
 
-	activeScopes := make([]ActiveScope, 0, len(prepared.blockScopes))
-	for i := range prepared.blockScopes {
-		if prepared.blockScopes[i] == nil {
+	activeScopes := make([]ActiveScope, 0, len(prepared.BlockScopes))
+	for i := range prepared.BlockScopes {
+		if prepared.BlockScopes[i] == nil {
 			continue
 		}
-		activeScopes = append(activeScopes, activeScopeFromBlockScopeRow(prepared.blockScopes[i]))
+		activeScopes = append(activeScopes, activeScopeFromBlockScopeRow(prepared.BlockScopes[i]))
 	}
 	flow.replaceActiveScopes(activeScopes)
 	if flow.scopeState == nil {

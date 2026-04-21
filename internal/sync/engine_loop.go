@@ -147,7 +147,7 @@ func (r *oneShotRunner) handleOneShotCompletion(
 ) ([]*TrackedAction, error) {
 	outcome := r.processActionCompletion(ctx, nil, completion, bl)
 	if !outcome.terminate {
-		nextOutbox, err := r.drainPublicationReadyActions(ctx, nil, bl, outbox, outcome.dispatched)
+		nextOutbox, err := r.reducePublicationFrontier(ctx, nil, bl, outbox, outcome.dispatched)
 		if err == nil || fatalErr != nil {
 			return nextOutbox, fatalErr
 		}
@@ -276,6 +276,9 @@ func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) erro
 			}
 			continue
 		}
+		if rt.runPendingDirtyReplan(ctx, p) {
+			continue
+		}
 
 		done, err := rt.runWatchStep(ctx, p)
 		if err != nil {
@@ -285,6 +288,23 @@ func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) erro
 			return nil
 		}
 	}
+}
+
+func (rt *watchRuntime) runPendingDirtyReplan(
+	ctx context.Context,
+	p *watchPipeline,
+) bool {
+	if !rt.canPrepareNow() {
+		return false
+	}
+
+	batch, ok := rt.takePendingDirtyReplan()
+	if !ok {
+		return false
+	}
+
+	rt.appendOutbox(rt.processDirtyBatch(ctx, batch, p.bl, p.mode))
+	return true
 }
 
 func (rt *watchRuntime) runWatchStep(
@@ -353,6 +373,8 @@ func (rt *watchRuntime) completeDrainOutbox() {
 
 func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.batchReady = nil
+	p.localEvents = nil
+	p.remoteBatches = nil
 	p.skippedCh = nil
 	p.recheckC = nil
 	p.refreshC = nil
@@ -427,10 +449,10 @@ func (rt *watchRuntime) runBootstrapStep(
 		rt.replaceOutbox(nextOutbox)
 		return done, err
 	case <-rt.trialTimerChan():
-		rt.appendOutbox(rt.runTrialDispatch(ctx, p.bl, p.mode, p.safety))
+		rt.appendOutbox(rt.runTrialDispatch(ctx, p.bl, p.mode))
 		return false, nil
 	case <-rt.retryTimerChan():
-		rt.appendOutbox(rt.runRetrierSweep(ctx, p.bl, p.mode, p.safety))
+		rt.appendOutbox(rt.runRetrierSweep(ctx, p.bl, p.mode))
 		return false, nil
 	case <-logC:
 		rt.logBootstrapWait()
@@ -467,7 +489,7 @@ func (rt *watchRuntime) handleBootstrapBatch(
 		return outbox, true
 	}
 
-	return append(outbox, rt.processDirtyBatch(ctx, batch, p.bl, p.mode, p.safety)...), false
+	return append(outbox, rt.processDirtyBatch(ctx, batch, p.bl, p.mode)...), false
 }
 
 func (rt *watchRuntime) handleBootstrapCompletion(
@@ -490,7 +512,7 @@ func (rt *watchRuntime) handleBootstrapCompletion(
 	if outcome.terminate {
 		return outbox, false, outcome.terminateErr
 	}
-	nextOutbox, err := rt.drainPublicationReadyActions(ctx, rt, p.bl, outbox, outcome.dispatched)
+	nextOutbox, err := rt.reducePublicationFrontier(ctx, rt, p.bl, outbox, outcome.dispatched)
 	if err != nil {
 		rt.completeOutboxAsShutdown(nextOutbox)
 		return nil, false, err

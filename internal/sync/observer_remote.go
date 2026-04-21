@@ -30,14 +30,14 @@ type watchStepResult struct {
 	woke bool
 }
 
-// RemoteWatchBatchHandler lets the engine translate a raw remote poll into the
-// final planner-visible batch after any watch-owned commit or follow-up
-// reconciliation policy.
+// RemoteWatchBatchHandler lets the engine translate a raw remote poll into one
+// loop-owned remote observation batch. The observer does not commit durable
+// state itself; it blocks until the watch loop applies the batch.
 type RemoteWatchBatchHandler func(
 	ctx context.Context,
 	events []ChangeEvent,
 	newToken string,
-) ([]ChangeEvent, error)
+) (remoteObservationBatch, error)
 
 // RemoteObserver transforms Graph API delta responses into []ChangeEvent.
 // It handles pagination, path materialization, change classification, and
@@ -161,7 +161,7 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 func (o *RemoteObserver) Watch(
 	ctx context.Context,
 	savedToken string,
-	events chan<- ChangeEvent,
+	batches chan<- remoteObservationBatch,
 	interval time.Duration,
 	wakeCh <-chan struct{},
 	handleBatch RemoteWatchBatchHandler,
@@ -204,7 +204,7 @@ func (o *RemoteObserver) Watch(
 			continue
 		}
 
-		result := o.handleWatchBatch(ctx, events, polledEvents, newToken, interval, bo, wakeCh, handleBatch)
+		result := o.handleWatchBatch(ctx, batches, polledEvents, newToken, interval, bo, wakeCh, handleBatch)
 		if result.err != nil {
 			return result.err
 		}
@@ -216,7 +216,7 @@ func (o *RemoteObserver) Watch(
 
 func (o *RemoteObserver) handleWatchBatch(
 	ctx context.Context,
-	events chan<- ChangeEvent,
+	batches chan<- remoteObservationBatch,
 	polledEvents []ChangeEvent,
 	newToken string,
 	interval time.Duration,
@@ -228,10 +228,12 @@ func (o *RemoteObserver) handleWatchBatch(
 		return o.handleZeroEventPoll(ctx, interval, bo, wakeCh)
 	}
 
-	emitted := polledEvents
+	batch := remoteObservationBatch{
+		emitted: append([]ChangeEvent(nil), polledEvents...),
+	}
 	if handleBatch != nil {
 		var handleErr error
-		emitted, handleErr = handleBatch(ctx, polledEvents, newToken)
+		batch, handleErr = handleBatch(ctx, polledEvents, newToken)
 		if handleErr != nil {
 			if watchShouldStop(ctx, handleErr) {
 				return watchStepResult{stop: true}
@@ -240,7 +242,12 @@ func (o *RemoteObserver) handleWatchBatch(
 		}
 	}
 
-	o.emitWatchEvents(ctx, events, emitted)
+	if emitErr := o.emitWatchBatch(ctx, batches, &batch); emitErr != nil {
+		if watchShouldStop(ctx, emitErr) {
+			return watchStepResult{stop: true}
+		}
+		return watchStepResult{err: emitErr}
+	}
 
 	o.setDeltaToken(newToken)
 	bo.Reset()
@@ -300,18 +307,22 @@ func (o *RemoteObserver) handleZeroEventPoll(
 	return o.sleepWatch(ctx, interval, "zero-event", wakeCh)
 }
 
-func (o *RemoteObserver) emitWatchEvents(ctx context.Context, events chan<- ChangeEvent, polledEvents []ChangeEvent) {
-	// Blocking send: remote delta events must not be dropped. Unlike local
-	// events (which the safety scan recovers), dropped remote events would
-	// advance the delta token past unprocessed changes — silent data loss
-	// with no recovery mechanism. Backpressure here correctly slows polling.
-	for i := range polledEvents {
-		select {
-		case events <- polledEvents[i]:
-		case <-ctx.Done():
-			return
-		}
+func (o *RemoteObserver) emitWatchBatch(
+	ctx context.Context,
+	batches chan<- remoteObservationBatch,
+	batch *remoteObservationBatch,
+) error {
+	if batch == nil {
+		return nil
 	}
+
+	select {
+	case batches <- *batch:
+	case <-ctx.Done():
+		return fmt.Errorf("emit remote watch batch: %w", ctx.Err())
+	}
+
+	return batch.waitApplied(ctx)
 }
 
 func (o *RemoteObserver) sleepWatch(

@@ -161,16 +161,23 @@ back-to-back expensive full refreshes.
 
 The watch loop is the single owner of mutable scheduling/runtime state:
 outbox, dispatch admission, held-work timing, refresh coordination, and drain
-behavior. Remote observation commit ownership is still partially split today:
-watch callbacks and full-refresh helpers commit projected remote observations
-before handing emitted change events back to the loop, while local snapshot
-refresh remains loop-owned.
+behavior. Remote observation commits now follow the same single-owner rule:
+watch observers and full-refresh goroutines emit one loop-applied
+`remoteObservationBatch` value, and the loop itself owns projected remote
+observation commits, cursor commits, observation-finding reconciliation, dirty
+marking, and refresh-timer re-arm.
 
 Local watcher events, remote delta batches, websocket wakes, and full remote
 refresh results are scheduler hints only. After debounce or wake, watch
 mode refreshes current truth, runs SQL comparison/reconciliation, rebuilds the
 current actionable set in Go, reconciles durable retry/blocker state, and then
 admits runnable actions.
+
+Watch runtime replacement is linear: one current runtime graph at a time.
+Dirty observation while work is still queued or running sets a pending replan
+flag instead of appending a second graph into the current runtime. Once the
+runtime reaches the idle boundary, the loop rebuilds from current committed
+truth plus durable `retry_work` / `block_scopes`.
 
 Retry/trial is not an alternate planner. Timer-driven follow-up only
 re-releases exact held actions that are already part of the current runtime.

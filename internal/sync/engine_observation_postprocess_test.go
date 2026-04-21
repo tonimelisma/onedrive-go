@@ -37,7 +37,7 @@ func mustParseDriveID(raw string) driveid.ID {
 }
 
 // Validates: R-2.1.2
-func TestProcessCommittedPrimaryWatchBatch_CommitsObservedRowsAndCursor(t *testing.T) {
+func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -45,15 +45,11 @@ func TestProcessCommittedPrimaryWatchBatch_CommitsObservedRowsAndCursor(t *testi
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-
-	finalEvents, err := rt.processCommittedPrimaryWatchBatch(ctx, bl, []ChangeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, []ChangeEvent{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
+	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
-	require.Len(t, finalEvents, 1)
-	assert.Equal(t, "primary-watch.txt", finalEvents[0].Path)
 
 	remoteRow, found, err := eng.baseline.GetRemoteStateByPath(ctx, "primary-watch.txt", eng.driveID)
 	require.NoError(t, err)
@@ -63,7 +59,7 @@ func TestProcessCommittedPrimaryWatchBatch_CommitsObservedRowsAndCursor(t *testi
 }
 
 // Validates: R-2.1.2
-func TestProcessCommittedSharedRootWatchBatch_CommitsObservedRowsAndPendingCursor(t *testing.T) {
+func TestHandleRemoteObservationBatch_SharedRootWatchCommitsObservedRowsAndPendingCursor(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -71,11 +67,8 @@ func TestProcessCommittedSharedRootWatchBatch_CommitsObservedRowsAndPendingCurso
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
 	pendingCursor := "cursor-shared"
-
-	finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, &remoteFetchResult{
+	batch := buildSharedRootWatchBatch(eng.Engine, &remoteFetchResult{
 		events: []ChangeEvent{
 			testRemoteCreateEvent("shared-watch.txt", "item-shared", eng.driveID.String()),
 		},
@@ -85,9 +78,8 @@ func TestProcessCommittedSharedRootWatchBatch_CommitsObservedRowsAndPendingCurso
 			token:   pendingCursor,
 		},
 	})
-	require.True(t, committed)
-	require.Len(t, finalEvents, 1)
-	assert.Equal(t, "shared-watch.txt", finalEvents[0].Path)
+	err := rt.handleRemoteObservationBatch(ctx, &batch)
+	require.NoError(t, err)
 
 	remoteRow, found, err := eng.baseline.GetRemoteStateByPath(ctx, "shared-watch.txt", eng.driveID)
 	require.NoError(t, err)
@@ -97,7 +89,7 @@ func TestProcessCommittedSharedRootWatchBatch_CommitsObservedRowsAndPendingCurso
 }
 
 // Validates: R-2.1.2
-func TestProcessCommittedSharedRootWatchBatch_CursorCommitFailureReturnsNotCommitted(t *testing.T) {
+func TestHandleRemoteObservationBatch_SharedRootCursorCommitFailureLeavesStateUntouched(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -107,23 +99,20 @@ func TestProcessCommittedSharedRootWatchBatch_CursorCommitFailureReturnsNotCommi
 
 	saveObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String(), "existing-cursor")
 
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-
-	finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, &remoteFetchResult{
+	batch := buildSharedRootWatchBatch(eng.Engine, &remoteFetchResult{
 		pending: &pendingPrimaryCursorCommit{
 			driveID: mustParseDriveID("2").String(),
 			rootID:  "shared-root",
 			token:   "mismatched-cursor",
 		},
 	})
-	assert.False(t, committed)
-	assert.Nil(t, finalEvents)
+	err := rt.handleRemoteObservationBatch(ctx, &batch)
+	require.NoError(t, err)
 	assert.Equal(t, "existing-cursor", readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
 }
 
 // Validates: R-2.10.4
-func TestProcessCommittedSharedRootWatchBatch_ReconcilesRemoteReadDeniedFindings(t *testing.T) {
+func TestHandleRemoteObservationBatch_SharedRootReconcilesRemoteReadDeniedFindings(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -131,14 +120,11 @@ func TestProcessCommittedSharedRootWatchBatch_ReconcilesRemoteReadDeniedFindings
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-
-	finalEvents, committed := rt.processCommittedSharedRootWatchBatch(ctx, bl, &remoteFetchResult{
+	batch := buildSharedRootWatchBatch(eng.Engine, &remoteFetchResult{
 		findings: rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden),
 	})
-	require.True(t, committed)
-	assert.Empty(t, finalEvents)
+	err := rt.handleRemoteObservationBatch(ctx, &batch)
+	require.NoError(t, err)
 
 	issues, err := eng.baseline.ListObservationIssues(ctx)
 	require.NoError(t, err)
@@ -153,7 +139,7 @@ func TestProcessCommittedSharedRootWatchBatch_ReconcilesRemoteReadDeniedFindings
 }
 
 // Validates: R-2.10.4
-func TestProcessCommittedPrimaryWatchBatch_ClearsRemoteReadDeniedFindingsOnHealthyPoll(t *testing.T) {
+func TestHandleRemoteObservationBatch_PrimaryWatchClearsRemoteReadDeniedFindingsOnHealthyPoll(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -161,17 +147,14 @@ func TestProcessCommittedPrimaryWatchBatch_ClearsRemoteReadDeniedFindingsOnHealt
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	batch := rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden)
-	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &batch, eng.nowFunc()))
+	findings := rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden)
+	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &findings, eng.nowFunc()))
 
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-
-	finalEvents, err := rt.processCommittedPrimaryWatchBatch(ctx, bl, []ChangeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, []ChangeEvent{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
+	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
-	require.Len(t, finalEvents, 1)
 
 	issues, err := eng.baseline.ListObservationIssues(ctx)
 	require.NoError(t, err)
@@ -183,24 +166,21 @@ func TestProcessCommittedPrimaryWatchBatch_ClearsRemoteReadDeniedFindingsOnHealt
 }
 
 // Validates: R-2.1.2
-func TestProcessCommittedPrimaryWatchBatch_CanceledContextReturnsCommitError(t *testing.T) {
+func TestHandleRemoteObservationBatch_PrimaryWatchCanceledContextReturnsCommitError(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	bl, err := eng.baseline.Load(t.Context())
-	require.NoError(t, err)
-
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	finalEvents, err := rt.processCommittedPrimaryWatchBatch(ctx, bl, []ChangeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, []ChangeEvent{
 		testRemoteCreateEvent("primary-canceled.txt", "item-canceled", eng.driveID.String()),
 	}, "cursor-canceled")
+	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.Error(t, err)
-	assert.Nil(t, finalEvents)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
