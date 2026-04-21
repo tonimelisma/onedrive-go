@@ -173,8 +173,8 @@ func (r *oneShotRunner) executePreparedPlan(
 	pool.Start(runCtx, r.engine.transferWorkers)
 
 	// Process completions until the engine-owned runtime settles. Held retry/scope
-	// actions intentionally keep graph nodes unresolved, so one-shot quiescence is
-	// no longer defined by depGraph.Done().
+	// actions intentionally keep graph nodes unresolved, so the dependency graph
+	// tracks only dependency satisfaction, not runtime completion.
 	drainErr := r.runResultsLoopWithInitialOutbox(runCtx, cancel, bl, pool.Completions(), initialOutbox)
 	pool.Stop()
 	if drainErr != nil {

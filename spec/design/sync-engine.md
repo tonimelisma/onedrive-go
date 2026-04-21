@@ -195,7 +195,9 @@ The engine holds dependency-ready exact work in memory, keyed by exact
 `RetryWorkKey` and grouped by `ScopeKey` for blocked scopes. Timer ticks do
 not rebuild subset plans, do not compute dependency closure, and do not
 revalidate stale rows. Stale-row cleanup belongs only to normal
-prepare/reconcile.
+prepare/reconcile. Dependency tracking stays inside `DepGraph`, but runtime
+completion does not: the engine owns quiescence and no longer waits on a
+graph-owned completion signal.
 
 Released held work always re-enters publication reduction before any worker
 dispatch. Timer-released `ActionUpdateSynced` and `ActionCleanup` actions stay

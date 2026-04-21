@@ -48,7 +48,9 @@ The engine owns the worker pool lifecycle and completion drain.
 The dependency graph is dependency-only. It no longer defines runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,
 so the engine decides when the current runtime is quiescent based on outbox,
-running work, and due held entries.
+running work, and due held entries. `DepGraph` therefore does not expose a
+runtime-completion channel; callers use dependency release plus engine-owned
+settle checks instead.
 
 When the dependency graph releases `ActionUpdateSynced` or `ActionCleanup`,
 the engine does not spend worker capacity on them. It commits the matching
