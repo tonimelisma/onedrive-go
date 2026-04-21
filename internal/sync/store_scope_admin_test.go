@@ -80,11 +80,11 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 	driveID := driveid.New(testDriveID)
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
-	require.NoError(t, store.WriteSyncRunStatus(t.Context(), &SyncRunReport{
-		CompletedAt: time.Date(2026, 4, 3, 10, 30, 0, 0, time.UTC),
-		Duration:    2 * time.Second,
-		Succeeded:   3,
-		Failed:      1,
+	require.NoError(t, store.WriteSyncStatus(t.Context(), &SyncStatus{
+		LastSyncedAt:       time.Date(2026, 4, 3, 10, 30, 0, 0, time.UTC).UnixNano(),
+		LastSyncDurationMs: 2000,
+		LastSucceededCount: 3,
+		LastFailedCount:    1,
 	}))
 	require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
 		Action:          ActionDownload,
@@ -129,7 +129,7 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 	snapshot, err := ReadDriveStatusSnapshot(t.Context(), dbPath, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 1, snapshot.BaselineEntryCount)
-	assert.Equal(t, 3, snapshot.RunStatus.LastSucceededCount)
+	assert.Equal(t, 3, snapshot.SyncStatus.LastSucceededCount)
 	require.Len(t, snapshot.ObservationIssues, 1)
 	assert.Equal(t, "bad:name.txt", snapshot.ObservationIssues[0].Path)
 	require.Len(t, snapshot.BlockScopes, 1)

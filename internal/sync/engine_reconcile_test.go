@@ -17,7 +17,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// changeEventsToObservedItems converter tests
+// projectObservedItems projection tests
 // ---------------------------------------------------------------------------
 
 func TestChangeEventsToObservedItems_RemoteOnly(t *testing.T) {
@@ -29,7 +29,7 @@ func TestChangeEventsToObservedItems_RemoteOnly(t *testing.T) {
 		{Source: SourceRemote, ItemID: "r2", Path: "remote2.txt", DriveID: driveid.New(testDriveID)},
 	}
 
-	items := changeEventsToObservedItems(slog.Default(), events)
+	items := projectObservedItems(slog.Default(), events)
 	assert.Len(t, items, 2, "should only include remote events")
 	assert.Equal(t, "r1", items[0].ItemID)
 	assert.Equal(t, "r2", items[1].ItemID)
@@ -63,7 +63,7 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 		},
 	}
 
-	items := changeEventsToObservedItems(slog.Default(), events)
+	items := projectObservedItems(slog.Default(), events)
 	require.Len(t, items, 2)
 
 	assert.Equal(t, driveID, items[0].DriveID)
@@ -364,7 +364,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// changeEventsToObservedItems — empty ItemID guard (Item 4)
+// projectObservedItems — empty ItemID guard (Item 4)
 // ---------------------------------------------------------------------------
 
 func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
@@ -377,71 +377,71 @@ func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 		{Source: SourceRemote, ItemID: "valid-2", Path: "b.txt", DriveID: driveID},
 	}
 
-	items := changeEventsToObservedItems(slog.Default(), events)
+	items := projectObservedItems(slog.Default(), events)
 	require.Len(t, items, 2, "empty ItemID event should be skipped")
 	assert.Equal(t, "valid-1", items[0].ItemID)
 	assert.Equal(t, "valid-2", items[1].ItemID)
 }
 
-func TestShouldRunFullRemoteReconcile_NoCursor(t *testing.T) {
+func TestShouldRunFullRemoteRefresh_NoCursor(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
 
-	shouldRun, err := e.shouldRunFullRemoteReconcile(t.Context(), false)
+	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
 	require.NoError(t, err)
 	assert.True(t, shouldRun)
 }
 
-func TestShouldRunFullRemoteReconcile_Overdue(t *testing.T) {
+func TestShouldRunFullRemoteRefresh_Overdue(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
 	clock := newManualClock(time.Unix(1_000, 0))
 	installManualClock(e.Engine, clock)
 	require.NoError(t, e.baseline.CommitObservationCursor(t.Context(), e.driveID, "token-1"))
-	require.NoError(t, e.baseline.MarkFullRemoteReconcile(
+	require.NoError(t, e.baseline.MarkFullRemoteRefresh(
 		t.Context(),
 		e.driveID,
-		clock.Now().Add(-fullRemoteReconcileInterval-time.Minute),
+		clock.Now().Add(-fullRemoteRefreshInterval-time.Minute),
 	))
 
-	shouldRun, err := e.shouldRunFullRemoteReconcile(t.Context(), false)
+	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
 	require.NoError(t, err)
 	assert.True(t, shouldRun)
 }
 
-func TestShouldRunFullRemoteReconcile_WithinCadence(t *testing.T) {
+func TestShouldRunFullRemoteRefresh_WithinCadence(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
 	clock := newManualClock(time.Unix(2_000, 0))
 	installManualClock(e.Engine, clock)
 	require.NoError(t, e.baseline.CommitObservationCursor(t.Context(), e.driveID, "token-1"))
-	require.NoError(t, e.baseline.MarkFullRemoteReconcile(
+	require.NoError(t, e.baseline.MarkFullRemoteRefresh(
 		t.Context(),
 		e.driveID,
 		clock.Now().Add(-23*time.Hour),
 	))
 
-	shouldRun, err := e.shouldRunFullRemoteReconcile(t.Context(), false)
+	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
 	require.NoError(t, err)
 	assert.False(t, shouldRun)
 }
 
-func TestFullRemoteReconcileDelay_UsesPersistedTimestamp(t *testing.T) {
+func TestFullRemoteRefreshDelay_UsesPersistedTimestamp(t *testing.T) {
 	t.Parallel()
 
 	e, _ := newTestEngine(t, &engineMockClient{})
 	clock := newManualClock(time.Unix(3_000, 0))
 	installManualClock(e.Engine, clock)
-	require.NoError(t, e.baseline.MarkFullRemoteReconcile(
+	require.NoError(t, e.baseline.MarkFullRemoteRefresh(
 		t.Context(),
 		e.driveID,
 		clock.Now().Add(-23*time.Hour),
 	))
 
-	delay, err := e.fullRemoteReconcileDelay(t.Context())
+	delay, err := e.fullRemoteRefreshDelay(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, time.Hour, delay)
 }
@@ -596,7 +596,7 @@ func waitForReconcileDone(t *testing.T, eng *testEngine) {
 
 	select {
 	case result := <-rt.reconcileResults:
-		rt.applyReconcileResult(result)
+		rt.applyRemoteRefreshResult(result)
 	case <-time.After(10 * time.Second):
 		require.Fail(t, "reconcile result was not delivered within 10s")
 	}
@@ -654,7 +654,7 @@ func TestRunFullReconciliationAsync_NoChanges(t *testing.T) {
 	// Full reconciliation always hands observed changes back through the watch
 	// dirty scheduler, even when the later planner pass reduces them to a no-op. The
 	// important boundary here is "no direct dispatch from the goroutine."
-	runFullReconciliationAsyncForTest(t, e, ctx, bl)
+	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
 	select {
@@ -689,7 +689,7 @@ func TestRunFullReconciliationAsync_DeltaError(t *testing.T) {
 	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Should not panic — error is logged and function returns.
-	runFullReconciliationAsyncForTest(t, e, ctx, bl)
+	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
@@ -722,7 +722,7 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Call should return immediately — goroutine is blocked in deltaFn.
-	runFullReconciliationAsyncForTest(t, e, ctx, bl)
+	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 
 	// reconcileActive should be true while delta is blocked.
 	assert.True(t, testWatchRuntime(t, e).reconcileActive, "reconcileActive should be true while goroutine runs")
@@ -732,7 +732,7 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	waitForReconcileDone(t, e)
 }
 
-func TestRunFullReconciliationAsync_SkipsIfRunning(t *testing.T) {
+func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
 	t.Parallel()
 
 	deltaCalled := false
@@ -757,7 +757,7 @@ func TestRunFullReconciliationAsync_SkipsIfRunning(t *testing.T) {
 	// Pre-set reconcileActive — simulates a reconciliation already in progress.
 	testWatchRuntime(t, e).reconcileActive = true
 
-	runFullReconciliationAsyncForTest(t, e, ctx, bl)
+	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 
 	// deltaFn should not have been invoked.
 	assert.False(t, deltaCalled, "deltaFn should not be called when reconciliation is already running")
@@ -765,7 +765,7 @@ func TestRunFullReconciliationAsync_SkipsIfRunning(t *testing.T) {
 	testWatchRuntime(t, e).reconcileActive = false
 }
 
-func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
+func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
@@ -810,7 +810,7 @@ func TestRunFullReconciliationAsync_FeedsBuffer(t *testing.T) {
 
 	// Baseline is empty — delta returns a new file and the watch loop gets
 	// a dirty path signal back from reconciliation.
-	runFullReconciliationAsyncForTest(t, e, ctx, bl)
+	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
@@ -943,7 +943,7 @@ func TestRunFullReconciliationAsync_ShutdownAfterCommit(t *testing.T) {
 		cancel()
 	}
 
-	runFullReconciliationAsyncForTest(t, e, ctx, bl)
+	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
 	// Verify observations WERE committed to SQLite — proving we took
@@ -987,18 +987,18 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	// Pre-set reconcileActive — simulates a reconciliation already in progress.
 	testWatchRuntime(t, e).reconcileActive = true
 
-	runFullReconciliationAsyncForTest(t, e, ctx, bl)
+	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 
 	// The skip message should appear in the Info-level log buffer.
 	// If it were still at Debug level, the Info-level handler would exclude it.
 	logOutput := logBuf.String()
-	assert.Contains(t, logOutput, "full reconciliation skipped",
+	assert.Contains(t, logOutput, "full remote refresh skipped",
 		"skip message should be logged at Info level (not Debug)")
 
 	testWatchRuntime(t, e).reconcileActive = false
 }
 
-func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
+func TestRunFullRemoteRefreshAsync_DurationInCompletionLog(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
@@ -1045,17 +1045,17 @@ func TestRunFullReconciliationAsync_DurationInCompletionLog(t *testing.T) {
 
 	setupWatchEngine(t, e)
 
-	runFullReconciliationAsyncForTest(t, e, ctx, bl)
+	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
 	logOutput := logBuf.String()
-	assert.Contains(t, logOutput, "periodic full reconciliation complete",
+	assert.Contains(t, logOutput, "periodic full remote refresh complete",
 		"should have completion message")
 	assert.Contains(t, logOutput, "duration=",
 		"completion log must include duration field")
 }
 
-func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
+func TestRunFullRemoteRefreshAsync_DurationInNoChangesLog(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
@@ -1103,7 +1103,7 @@ func TestRunFullReconciliationAsync_DurationInNoChangesLog(t *testing.T) {
 
 	setupWatchEngine(t, e)
 
-	runFullReconciliationAsyncForTest(t, e, ctx, bl)
+	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForReconcileDone(t, e)
 
 	logOutput := logBuf.String()

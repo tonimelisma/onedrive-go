@@ -13,10 +13,10 @@ const (
 )
 
 type pendingPrimaryCursorCommit struct {
-	driveID                 string
-	rootID                  string
-	token                   string
-	markFullRemoteReconcile bool
+	driveID               string
+	rootID                string
+	token                 string
+	markFullRemoteRefresh bool
 }
 
 type remoteFetchResult struct {
@@ -149,9 +149,9 @@ func primaryCursorCommit(
 	}
 
 	return &pendingPrimaryCursorCommit{
-		driveID:                 eng.driveID.String(),
-		rootID:                  rootID,
-		token:                   token,
-		markFullRemoteReconcile: fullReconcile,
+		driveID:               eng.driveID.String(),
+		rootID:                rootID,
+		token:                 token,
+		markFullRemoteRefresh: fullReconcile,
 	}
 }

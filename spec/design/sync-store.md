@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/block_scope_rows.go, internal/sync/store_run_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_projection.go, internal/sync/blocked_retry_projection.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/scope_block.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/block_scope_rows.go, internal/sync/store_sync_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_projection.go, internal/sync/blocked_retry_projection.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/scope_block.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
 Implements: R-2.5 [designed], R-2.7 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -17,7 +17,7 @@ architecture it owns:
 - retry-work persistence
 - block-scope persistence
 - observation resume/cadence persistence
-- one-shot run-status persistence
+- product-facing sync-status persistence
 - state-DB diagnosis and explicit reset support
 - read-only raw row access used by `status`
 
@@ -137,7 +137,7 @@ truth availability on their own.
 
 Administrative write helpers are split by authority:
 
-- `store_run_status.go` owns one-shot run-status writes
+- `store_sync_status.go` owns product-facing sync-status writes
 - store compatibility helpers diagnose incompatible DBs
 - `store_reset.go` owns explicit delete-and-recreate reset
 
@@ -146,7 +146,7 @@ Administrative write helpers are split by authority:
 Read-only store helpers are intentionally narrow:
 
 - raw/narrow reads for `remote_state`, `local_state`, `baseline`,
-  `observation_state`, `run_status`
+  `observation_state`, `sync_status`
 - raw/narrow reads for `observation_issues`
 - raw/narrow reads for `retry_work`
 - raw/narrow reads for `block_scopes`

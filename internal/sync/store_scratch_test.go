@@ -72,7 +72,7 @@ func seedScratchPlanningSource(t *testing.T, store *SyncStore, driveID driveid.I
 			ContentIdentity: "cid-2",
 		},
 	}, "cursor-seeded", driveID))
-	require.NoError(t, store.MarkFullRemoteReconcile(ctx, driveID, time.Unix(1700000000, 0).UTC()))
+	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, time.Unix(1700000000, 0).UTC()))
 	require.NoError(t, store.MarkFullLocalRefresh(ctx, driveID, time.Unix(1700003600, 0).UTC(), localRefreshModeWatchDegraded))
 }
 

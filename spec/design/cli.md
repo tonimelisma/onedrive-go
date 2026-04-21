@@ -84,7 +84,7 @@ The target `status` surface projects the full sync model directly from:
 - `observation_issues`
 - `retry_work`
 - `block_scopes`
-- `run_status`
+- `sync_status`
 - account/auth/degraded overlays
 - optional live perf
 

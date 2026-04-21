@@ -32,12 +32,10 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 			Size:            2,
 			Mtime:           2,
 			ContentIdentity: "new-local",
-			ObservedAt:      1,
 		},
 		{
-			Path:       "new-folder",
-			ItemType:   ItemTypeFolder,
-			ObservedAt: 1,
+			Path:     "new-folder",
+			ItemType: ItemTypeFolder,
 		},
 	}))
 
@@ -119,7 +117,6 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 		Size:            2,
 		Mtime:           2,
 		ContentIdentity: "local-new",
-		ObservedAt:      1,
 	}}))
 
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
@@ -232,7 +229,6 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteConflictResolutionWithout
 		Size:            2,
 		Mtime:           2,
 		ContentIdentity: "local-new",
-		ObservedAt:      1,
 	}}))
 
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
@@ -394,7 +390,6 @@ func planForUnavailableRemoteReadBoundaryDescendant(t *testing.T) *ActionPlan {
 		Size:            10,
 		Mtime:           1,
 		ContentIdentity: "hash",
-		ObservedAt:      1,
 	}}))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:       "Shared",
@@ -445,9 +440,8 @@ func planForUnavailableRemoteReadBoundaryCleanupCandidate(t *testing.T) *ActionP
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{
-			Path:       "Shared/sub",
-			ItemType:   ItemTypeFolder,
-			ObservedAt: 1,
+			Path:     "Shared/sub",
+			ItemType: ItemTypeFolder,
 		},
 		{
 			Path:            "Shared/sub/file.txt",
@@ -456,7 +450,6 @@ func planForUnavailableRemoteReadBoundaryCleanupCandidate(t *testing.T) *ActionP
 			Size:            10,
 			Mtime:           1,
 			ContentIdentity: "hash",
-			ObservedAt:      1,
 		},
 	}))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
@@ -492,10 +485,9 @@ func planForUnavailableLocalMoveSource(t *testing.T) *ActionPlan {
 			LocalMoveTarget:    "docs/dest.txt",
 		}},
 		[]LocalStateRow{{
-			Path:       "docs/source.txt",
-			ItemType:   ItemTypeFile,
-			Hash:       "local",
-			ObservedAt: 1,
+			Path:     "docs/source.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "local",
 		}},
 		[]RemoteStateRow{{
 			Path:    "docs/source.txt",
@@ -537,10 +529,9 @@ func planForUnavailableRemoteMoveDestination(t *testing.T) *ActionPlan {
 			RemoteMoveSource:   "Shared/source.txt",
 		}},
 		[]LocalStateRow{{
-			Path:       "Shared/dest.txt",
-			ItemType:   ItemTypeFile,
-			Hash:       "local",
-			ObservedAt: 1,
+			Path:     "Shared/dest.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "local",
 		}},
 		[]RemoteStateRow{{
 			Path:    "Shared/dest.txt",
@@ -631,7 +622,6 @@ func TestPlannerPlanCurrentState_RemoteReadBoundaryDoesNotDeleteLocalData(t *tes
 		Size:            10,
 		Mtime:           1,
 		ContentIdentity: "hash",
-		ObservedAt:      1,
 	}}))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:       "Shared",
@@ -704,7 +694,6 @@ func TestPlannerPlanCurrentState_RemoteReadBoundaryBlocksLocalDeletesForDescenda
 			Size:            10,
 			Mtime:           1,
 			ContentIdentity: "hash-a",
-			ObservedAt:      1,
 		},
 		{
 			Path:            "Team/sub/b.txt",
@@ -713,7 +702,6 @@ func TestPlannerPlanCurrentState_RemoteReadBoundaryBlocksLocalDeletesForDescenda
 			Size:            11,
 			Mtime:           2,
 			ContentIdentity: "hash-b",
-			ObservedAt:      2,
 		},
 	}))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
@@ -788,14 +776,12 @@ func TestPlannerPlanCurrentState_RemoteReadBoundarySuppressesLocalOnlySubtreeAct
 
 	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{
-			Path:       "Shared",
-			ItemType:   ItemTypeFolder,
-			ObservedAt: 1,
+			Path:     "Shared",
+			ItemType: ItemTypeFolder,
 		},
 		{
-			Path:       "Shared/sub",
-			ItemType:   ItemTypeFolder,
-			ObservedAt: 1,
+			Path:     "Shared/sub",
+			ItemType: ItemTypeFolder,
 		},
 		{
 			Path:            "Shared/sub/file.txt",
@@ -804,7 +790,6 @@ func TestPlannerPlanCurrentState_RemoteReadBoundarySuppressesLocalOnlySubtreeAct
 			Size:            10,
 			Mtime:           1,
 			ContentIdentity: "hash-shared",
-			ObservedAt:      1,
 		},
 	}))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{

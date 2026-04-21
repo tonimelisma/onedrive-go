@@ -45,7 +45,7 @@ SELECT COUNT(*) FROM (
 // product-facing status command. The store owns the read-only database access,
 // but the CLI owns grouping and presentation policy.
 type DriveStatusSnapshot struct {
-	RunStatus          SyncRunStatus
+	SyncStatus         SyncStatus
 	BaselineEntryCount int
 	RemoteDriftItems   int
 	RetryingItems      int
@@ -195,17 +195,17 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	snapshot := DriveStatusSnapshot{}
 
 	if err := i.db.QueryRowContext(ctx, `
-		SELECT last_completed_at, last_duration_ms, last_succeeded_count, last_failed_count, last_error
-		FROM run_status
+		SELECT last_synced_at, last_sync_duration_ms, last_succeeded_count, last_failed_count, last_error
+		FROM sync_status
 		WHERE singleton_id = 1`,
 	).Scan(
-		&snapshot.RunStatus.LastCompletedAt,
-		&snapshot.RunStatus.LastDurationMs,
-		&snapshot.RunStatus.LastSucceededCount,
-		&snapshot.RunStatus.LastFailedCount,
-		&snapshot.RunStatus.LastError,
+		&snapshot.SyncStatus.LastSyncedAt,
+		&snapshot.SyncStatus.LastSyncDurationMs,
+		&snapshot.SyncStatus.LastSucceededCount,
+		&snapshot.SyncStatus.LastFailedCount,
+		&snapshot.SyncStatus.LastError,
 	); err != nil && err != sql.ErrNoRows {
-		return DriveStatusSnapshot{}, fmt.Errorf("read drive status run status: %w", err)
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status sync status: %w", err)
 	}
 
 	var err error

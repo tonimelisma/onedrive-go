@@ -1278,7 +1278,7 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 			time.Hour,
 			wakeCh,
 			func(ctx context.Context, events []ChangeEvent, newToken string) ([]ChangeEvent, error) {
-				return events, store.CommitObservation(ctx, changeEventsToObservedItems(obs.logger, events), newToken, driveID)
+				return events, store.CommitObservation(ctx, projectObservedItems(obs.logger, events), newToken, driveID)
 			},
 		)
 	}()
@@ -1929,7 +1929,7 @@ func TestWatch_CommitsObservations(t *testing.T) {
 		time.Millisecond,
 		nil,
 		func(ctx context.Context, events []ChangeEvent, newToken string) ([]ChangeEvent, error) {
-			return events, store.CommitObservation(ctx, changeEventsToObservedItems(obs.logger, events), newToken, driveID)
+			return events, store.CommitObservation(ctx, projectObservedItems(obs.logger, events), newToken, driveID)
 		},
 	)
 	require.NoError(t, err)
@@ -2021,7 +2021,7 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		time.Millisecond,
 		nil,
 		func(ctx context.Context, events []ChangeEvent, newToken string) ([]ChangeEvent, error) {
-			return events, store.CommitObservation(ctx, changeEventsToObservedItems(obs.logger, events), newToken, driveID)
+			return events, store.CommitObservation(ctx, projectObservedItems(obs.logger, events), newToken, driveID)
 		},
 	)
 	require.NoError(t, err)

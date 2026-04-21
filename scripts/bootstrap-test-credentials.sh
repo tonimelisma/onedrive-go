@@ -3,7 +3,12 @@
 # Usage: ./scripts/bootstrap-test-credentials.sh
 #
 # Runs the interactive login flow with XDG overrides pointing to .testdata/.
-# The login command creates the token file (pure OAuth), catalog.json, and
+# The durable root bundle after flattening is:
+#   - config.toml
+#   - catalog.json
+#   - token_*.json
+#   - optional fixtures.env
+# The login command creates token files (pure OAuth), catalog.json, and
 # updates config.toml (adds a drive section with sync_dir).
 #
 # Run once per test account. Config accumulates drive sections across runs.

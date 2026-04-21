@@ -32,11 +32,10 @@ func projectRemoteObservations(
 	return result
 }
 
-// changeEventsToObservedItems converts remote ChangeEvents into ObservedItems
-// for CommitObservation. It keeps malformed payload filtering at the engine
-// boundary even though remote observation and one-shot reconciliation now live
-// in the same package.
-func changeEventsToObservedItems(logger *slog.Logger, events []ChangeEvent) []ObservedItem {
+// projectObservedItems converts remote ChangeEvents into ObservedItems for
+// CommitObservation. It keeps malformed payload filtering at the observation
+// projection boundary.
+func projectObservedItems(logger *slog.Logger, events []ChangeEvent) []ObservedItem {
 	return projectRemoteObservations(logger, events).observed
 }
 
@@ -47,7 +46,7 @@ func appendObservedEvent(
 ) []ObservedItem {
 	if ev.ItemID == "" {
 		if logger != nil {
-			logger.Warn("changeEventsToObservedItems: skipping event with empty ItemID",
+			logger.Warn("projectObservedItems: skipping event with empty ItemID",
 				slog.String("path", ev.Path),
 			)
 		}

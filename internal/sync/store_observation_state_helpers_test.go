@@ -15,8 +15,8 @@ func TestRemoteRefreshIntervalForMode_CoversDegradedAndDefault(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, remoteRefreshDegradedInterval, remoteRefreshIntervalForMode(remoteRefreshModeDeltaDegraded))
-	assert.Equal(t, fullRemoteReconcileInterval, remoteRefreshIntervalForMode(remoteRefreshModeDeltaHealthy))
-	assert.Equal(t, fullRemoteReconcileInterval, remoteRefreshIntervalForMode("unexpected"))
+	assert.Equal(t, fullRemoteRefreshInterval, remoteRefreshIntervalForMode(remoteRefreshModeDeltaHealthy))
+	assert.Equal(t, fullRemoteRefreshInterval, remoteRefreshIntervalForMode("unexpected"))
 }
 
 func TestConfiguredDriveIDForRead_UsesFallbackAndCache(t *testing.T) {
@@ -81,7 +81,7 @@ func TestCommitObservationCursor_RejectsMismatchedDriveID(t *testing.T) {
 	assert.Contains(t, err.Error(), "state DB drive mismatch")
 }
 
-func TestMarkFullRemoteReconcile_PreservesCurrentRemoteMode(t *testing.T) {
+func TestMarkFullRemoteRefresh_PreservesCurrentRemoteMode(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -90,15 +90,14 @@ func TestMarkFullRemoteReconcile_PreservesCurrentRemoteMode(t *testing.T) {
 	first := time.Date(2026, 4, 19, 8, 0, 0, 0, time.UTC)
 	second := first.Add(10 * time.Minute)
 
-	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, first, remoteRefreshModeDeltaDegraded))
-	require.NoError(t, store.MarkFullRemoteReconcile(ctx, driveID, second))
+	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, first))
+	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, second))
 
 	state, err := store.ReadObservationState(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, remoteRefreshModeDeltaDegraded, state.RemoteRefreshMode)
+	assert.Equal(t, remoteRefreshModeDeltaHealthy, state.RemoteRefreshMode)
 	assert.Equal(t, second.UnixNano(), state.LastFullRemoteRefreshAt)
-	assert.Equal(t, second.Add(remoteRefreshDegradedInterval).UnixNano(), state.NextFullRemoteRefreshAt)
-	assert.Equal(t, second.UnixNano(), state.LastFullRemoteReconcileAt)
+	assert.Equal(t, second.Add(fullRemoteRefreshInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 }
 
 func TestClearObservationCursor_PreservesRefreshSchedules(t *testing.T) {
@@ -111,7 +110,7 @@ func TestClearObservationCursor_PreservesRefreshSchedules(t *testing.T) {
 	localAt := remoteAt.Add(15 * time.Minute)
 
 	require.NoError(t, store.CommitObservationCursor(ctx, driveID, "token-before-clear"))
-	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, remoteAt, "unexpected-remote-mode"))
+	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, remoteAt))
 	require.NoError(t, store.MarkFullLocalRefresh(ctx, driveID, localAt, "unexpected-local-mode"))
 	require.NoError(t, store.ClearObservationCursor(ctx))
 
@@ -120,7 +119,7 @@ func TestClearObservationCursor_PreservesRefreshSchedules(t *testing.T) {
 	assert.Empty(t, state.Cursor)
 	assert.Equal(t, remoteRefreshModeDeltaHealthy, state.RemoteRefreshMode)
 	assert.Equal(t, remoteAt.UnixNano(), state.LastFullRemoteRefreshAt)
-	assert.Equal(t, remoteAt.Add(fullRemoteReconcileInterval).UnixNano(), state.NextFullRemoteRefreshAt)
+	assert.Equal(t, remoteAt.Add(fullRemoteRefreshInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 	assert.Equal(t, localRefreshModeWatchHealthy, state.LocalRefreshMode)
 	assert.Equal(t, localAt.UnixNano(), state.LastFullLocalRefreshAt)
 	assert.Equal(t, localAt.Add(localFullScanInterval).UnixNano(), state.NextFullLocalRefreshAt)

@@ -155,7 +155,7 @@ back-to-back expensive full refreshes.
 - action admission and dispatch
 - action completion drain
 - retry and trial timer scheduling
-- periodic recheck and full reconciliation
+- periodic recheck and full remote refresh
 - graceful drain on shutdown
 
 The watch loop is the single owner of mutable runtime state. Other packages may
@@ -305,13 +305,13 @@ rows.
 
 Read boundaries clear only when a later observation batch no longer proves the
 corresponding issue-boundary fact.
-Write scopes clear through normal timed trials, successful write work, or
+Remote write block scopes clear through normal timed trials, successful write work, or
 cleanup that leaves no blocked work. They do not have a separate global
 maintenance cadence.
 
 Remote `403` handling is intentionally narrow:
 
-- raw `403` never creates a permission scope by itself
+- raw `403` never creates a permission block scope by itself
 - only remote-write actions may invoke remote write-denial probing
 - probe-confirmed write denial may activate `perm:remote:write`
 - observation-owned `remote_read_denied` findings come only from remote
@@ -323,8 +323,8 @@ Retry and trial reconstruction is retry-owned. The engine revalidates due or
 blocked work directly from `retry_work`, exact semantic work identity, and the
 current snapshot/baseline view. Scope lifecycle is owned only by
 `block_scopes` plus blocked/unblocked `retry_work`. Timed transient scopes are
-discarded when no blocked `retry_work` remains for their `scope_key`. Write
-permission scopes follow that same rule; recovery happens through normal timed
+discarded when no blocked `retry_work` remains for their `scope_key`. Remote
+write block scopes follow that same rule; recovery happens through normal timed
 trials or successful writes, not through a separate maintenance loop. This
 runtime ownership rule is narrower than the store's structural linkage
 invariant: a scope row may still share a `scope_key` with observation or ready

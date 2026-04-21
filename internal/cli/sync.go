@@ -25,7 +25,7 @@ one-way sync. Use --dry-run to preview what would happen without making changes.
 	cmd.Flags().Bool("upload-only", false, "only upload local changes")
 	cmd.Flags().Bool("dry-run", false, "preview sync actions without executing")
 	cmd.Flags().Bool("watch", false, "continuously sync changes (watch mode)")
-	cmd.Flags().Bool("full", false, "run full reconciliation (enumerate all remote items, detect orphans)")
+	cmd.Flags().Bool("full", false, "run full remote refresh (enumerate all remote items, detect orphans)")
 
 	cmd.MarkFlagsMutuallyExclusive("download-only", "upload-only")
 	cmd.MarkFlagsMutuallyExclusive("full", "watch")

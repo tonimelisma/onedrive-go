@@ -24,7 +24,8 @@ const (
 
 // ScopeKey identifies a block scope. The Kind discriminator determines the
 // semantics; Param carries per-instance data for parameterized scopes
-// (ScopeThrottleTarget, local permission scopes, remote permission scopes).
+// (ScopeThrottleTarget, local directory permission scopes, remote read
+// boundaries, and remote write block scopes).
 // Comparable, so usable as a map key.
 type ScopeKey struct {
 	Kind  ScopeKeyKind
@@ -174,7 +175,7 @@ func (sk ScopeKey) CoveredPath() string {
 	return DescribeScopeKey(sk).ScopePath()
 }
 
-// DirPath returns the directory path for a local permission scope key.
+// DirPath returns the directory path for a local directory permission scope key.
 // Panics if called on a non-local-permission key (defensive — caller bug).
 func (sk ScopeKey) DirPath() string {
 	descriptor := DescribeScopeKey(sk)
@@ -184,7 +185,8 @@ func (sk ScopeKey) DirPath() string {
 	return sk.CoveredPath()
 }
 
-// RemotePath returns the local boundary path for a remote permission scope key.
+// RemotePath returns the local boundary path for a remote read boundary or
+// remote write block scope key.
 // Panics if called on a non-remote-permission key (defensive — caller bug).
 func (sk ScopeKey) RemotePath() string {
 	descriptor := DescribeScopeKey(sk)

@@ -44,14 +44,14 @@ func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
 // handleExternalChanges reacts to external DB modifications detected via
 // PRAGMA data_version.
 func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
-	rt.clearResolvedPermissionScopes(ctx)
+	rt.clearResolvedPermissionWriteBlocks(ctx)
 	rt.mustAssertInvariants(ctx, rt, "handle external changes")
 }
 
-// clearResolvedPermissionScopes checks whether persisted permission scope
-// authorities still exist and releases any runtime scope whose backing
+// clearResolvedPermissionWriteBlocks checks whether persisted permission block
+// scopes still exist and releases any runtime scope whose backing
 // block_scopes / blocked retry_work rows disappeared externally.
-func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
+func (rt *watchRuntime) clearResolvedPermissionWriteBlocks(ctx context.Context) {
 	scopeKeys := rt.activeScopeKeys()
 	if len(scopeKeys) == 0 {
 		return
@@ -76,7 +76,7 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 	for _, key := range scopeKeys {
 		if (key.IsPermDir() || key.IsPermRemote()) && !activeScopes[key] {
 			if err := rt.scopeController().releaseScope(ctx, rt, key); err != nil {
-				rt.engine.logger.Warn("failed to release externally-cleared permission scope",
+				rt.engine.logger.Warn("failed to release externally-cleared permission block scope",
 					slog.String("scope", key.String()),
 					slog.String("error", err.Error()),
 				)
@@ -90,10 +90,10 @@ func (rt *watchRuntime) clearResolvedPermissionScopes(ctx context.Context) {
 	}
 }
 
-func (e *Engine) fullRemoteReconcileDelay(ctx context.Context) (time.Duration, error) {
+func (e *Engine) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, error) {
 	state, err := e.baseline.ReadObservationState(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("sync: reading observation state for reconcile cadence: %w", err)
+		return 0, fmt.Errorf("sync: reading observation state for remote refresh cadence: %w", err)
 	}
 	if state.NextFullRemoteRefreshAt == 0 {
 		if state.LastFullRemoteRefreshAt == 0 {
@@ -113,14 +113,14 @@ func (e *Engine) fullRemoteReconcileDelay(ctx context.Context) (time.Duration, e
 	return delay, nil
 }
 
-func (e *Engine) shouldRunFullRemoteReconcile(ctx context.Context, requested bool) (bool, error) {
+func (e *Engine) shouldRunFullRemoteRefresh(ctx context.Context, requested bool) (bool, error) {
 	if requested {
 		return true, nil
 	}
 
 	state, err := e.baseline.ReadObservationState(ctx)
 	if err != nil {
-		return false, fmt.Errorf("sync: reading observation state for full reconcile: %w", err)
+		return false, fmt.Errorf("sync: reading observation state for full remote refresh: %w", err)
 	}
 	if state.Cursor == "" || state.NextFullRemoteRefreshAt == 0 {
 		return true, nil
@@ -130,14 +130,14 @@ func (e *Engine) shouldRunFullRemoteReconcile(ctx context.Context, requested boo
 	return !e.nowFunc().Before(dueAt), nil
 }
 
-func (rt *watchRuntime) armFullReconcileTimer(ctx context.Context) error {
-	delay, err := rt.engine.fullRemoteReconcileDelay(ctx)
+func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
+	delay, err := rt.engine.fullRemoteRefreshDelay(ctx)
 	if err != nil {
 		return err
 	}
 	state, err := rt.engine.baseline.ReadObservationState(ctx)
 	if err != nil {
-		return fmt.Errorf("sync: reading observation state for reconcile timer: %w", err)
+		return fmt.Errorf("sync: reading observation state for remote refresh timer: %w", err)
 	}
 	interval := remoteRefreshIntervalForMode(state.RemoteRefreshMode)
 
@@ -148,7 +148,7 @@ func (rt *watchRuntime) armFullReconcileTimer(ctx context.Context) error {
 		}
 	}))
 
-	rt.engine.logger.Info("full remote reconciliation armed",
+	rt.engine.logger.Info("full remote refresh armed",
 		slog.Duration("delay", delay),
 		slog.Duration("interval", interval),
 	)
@@ -156,25 +156,25 @@ func (rt *watchRuntime) armFullReconcileTimer(ctx context.Context) error {
 	return nil
 }
 
-// runFullReconciliationAsync spawns a goroutine for full delta enumeration +
+// runFullRemoteRefreshAsync spawns a goroutine for full delta enumeration +
 // orphan detection. Non-blocking — the watch loop continues processing events
-// while reconciliation runs. The goroutine sends a reconcileResult back to the
+// while refresh work runs. The goroutine sends a reconcileResult back to the
 // watch loop, and the loop feeds the returned events into its buffer from its
 // own goroutine.
-func (rt *watchRuntime) runFullReconciliationAsync(ctx context.Context, bl *Baseline) {
+func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *Baseline) {
 	if rt.reconcileActive {
-		rt.engine.logger.Info("full reconciliation skipped — previous still running")
+		rt.engine.logger.Info("full remote refresh skipped — previous still running")
 		return
 	}
 	rt.reconcileActive = true
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileStarted})
 
 	go func() {
-		rt.finishFullReconciliation(ctx, rt.performFullReconciliation(ctx, bl))
+		rt.finishFullRemoteRefresh(ctx, rt.performFullRemoteRefresh(ctx, bl))
 	}()
 }
 
-func (rt *watchRuntime) performFullReconciliation(
+func (rt *watchRuntime) performFullRemoteRefresh(
 	ctx context.Context,
 	bl *Baseline,
 ) reconcileResult {
@@ -184,13 +184,13 @@ func (rt *watchRuntime) performFullReconciliation(
 		rt.engine.collector().RecordReconcile(len(result.events), rt.engine.since(start))
 	}()
 
-	rt.engine.logger.Info("periodic full reconciliation starting")
+	rt.engine.logger.Info("periodic full remote refresh starting")
 
 	plan := rt.buildPrimaryRootObservationPlan(true)
-	projectedPrimary, err := rt.observeCommittedFullReconciliationBatch(ctx, bl, plan)
+	projectedPrimary, err := rt.observeCommittedFullRemoteRefreshBatch(ctx, bl, plan)
 	if err != nil {
 		if ctx.Err() == nil {
-			rt.engine.logger.Error("full reconciliation failed",
+			rt.engine.logger.Error("full remote refresh failed",
 				slog.String("error", err.Error()),
 			)
 		}
@@ -198,7 +198,7 @@ func (rt *watchRuntime) performFullReconciliation(
 	}
 
 	if ctx.Err() != nil {
-		rt.engine.logger.Info("full reconciliation: observations committed, stopping for shutdown")
+		rt.engine.logger.Info("full remote refresh: observations committed, stopping for shutdown")
 		return result
 	}
 
@@ -210,7 +210,7 @@ func (rt *watchRuntime) performFullReconciliation(
 		true,
 	)
 	if len(events) == 0 {
-		rt.engine.logger.Info("periodic full reconciliation complete: no changes",
+		rt.engine.logger.Info("periodic full remote refresh complete: no changes",
 			slog.Duration("duration", rt.engine.since(start)),
 		)
 		return result
@@ -218,7 +218,7 @@ func (rt *watchRuntime) performFullReconciliation(
 
 	result.events = events
 
-	rt.engine.logger.Info("periodic full reconciliation complete",
+	rt.engine.logger.Info("periodic full remote refresh complete",
 		slog.Int("events", len(events)),
 		slog.Duration("duration", rt.engine.since(start)),
 	)
@@ -226,7 +226,7 @@ func (rt *watchRuntime) performFullReconciliation(
 	return result
 }
 
-func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
+func (rt *watchRuntime) observeCommittedFullRemoteRefreshBatch(
 	ctx context.Context,
 	bl *Baseline,
 	plan primaryRootObservationPlan,
@@ -238,13 +238,13 @@ func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
 
 	projectedPrimary := projectRemoteObservations(rt.engine.logger, fetchResult.events)
 	if commitErr := rt.commitObservedItems(ctx, projectedPrimary.observed, ""); commitErr != nil {
-		return remoteObservationResult{}, fmt.Errorf("commit full reconciliation observations: %w", commitErr)
+		return remoteObservationResult{}, fmt.Errorf("commit full remote refresh observations: %w", commitErr)
 	}
 	if tokenErr := rt.commitPendingPrimaryCursor(ctx, fetchResult.pending); tokenErr != nil {
-		return remoteObservationResult{}, fmt.Errorf("commit full reconciliation primary cursor: %w", tokenErr)
+		return remoteObservationResult{}, fmt.Errorf("commit full remote refresh primary cursor: %w", tokenErr)
 	}
-	if armErr := rt.armFullReconcileTimer(ctx); armErr != nil {
-		return remoteObservationResult{}, fmt.Errorf("arm full reconciliation timer: %w", armErr)
+	if armErr := rt.armFullRefreshTimer(ctx); armErr != nil {
+		return remoteObservationResult{}, fmt.Errorf("arm full remote refresh timer: %w", armErr)
 	}
 
 	if rt.afterReconcileCommit != nil {
@@ -254,7 +254,7 @@ func (rt *watchRuntime) observeCommittedFullReconciliationBatch(
 	return projectedPrimary, nil
 }
 
-func (rt *watchRuntime) finishFullReconciliation(ctx context.Context, result reconcileResult) {
+func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result reconcileResult) {
 	select {
 	case rt.reconcileResults <- result:
 	case <-ctx.Done():
@@ -265,7 +265,7 @@ func (rt *watchRuntime) finishFullReconciliation(ctx context.Context, result rec
 	}
 }
 
-func (rt *watchRuntime) applyReconcileResult(result reconcileResult) {
+func (rt *watchRuntime) applyRemoteRefreshResult(result reconcileResult) {
 	rt.reconcileActive = false
 
 	if rt.dirtyBuf != nil {
@@ -285,7 +285,7 @@ func (rt *watchRuntime) applyReconcileResult(result reconcileResult) {
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileApplied})
 }
 
-func (rt *watchRuntime) dropReconcileResultOnShutdown() {
+func (rt *watchRuntime) dropRemoteRefreshResultOnShutdown() {
 	rt.reconcileActive = false
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReconcileDroppedOnShutdown})
 }

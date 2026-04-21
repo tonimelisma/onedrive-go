@@ -886,9 +886,9 @@ func (t *manualSyncTicker) Stop() {
 	t.stopped = true
 }
 
-func runFullReconciliationAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *Baseline) {
+func runFullRemoteRefreshAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *Baseline) {
 	t.Helper()
-	testWatchRuntime(t, eng).runFullReconciliationAsync(ctx, bl)
+	testWatchRuntime(t, eng).runFullRemoteRefreshAsync(ctx, bl)
 }
 
 func isTestBlockScopeed(eng *testEngine, key ScopeKey) bool {

@@ -33,12 +33,12 @@ type BaselineMutation struct {
 	ResolvedBy      string
 }
 
-// SyncRunReport is the durable one-shot status projection persisted after a
-// completed run.
-type SyncRunReport struct {
-	CompletedAt time.Time
-	Duration    time.Duration
-	Succeeded   int
-	Failed      int
-	Errors      []error
+// SyncStatusUpdate is the product-facing sync status projection persisted
+// after a successful best-effort bidirectional batch.
+type SyncStatusUpdate struct {
+	SyncedAt  time.Time
+	Duration  time.Duration
+	Succeeded int
+	Failed    int
+	Errors    []error
 }

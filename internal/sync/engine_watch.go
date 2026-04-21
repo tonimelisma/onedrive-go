@@ -32,8 +32,8 @@ const (
 )
 
 const (
-	fullRemoteReconcileInterval = 24 * time.Hour
-	localFullScanInterval       = 5 * time.Minute
+	fullRemoteRefreshInterval = 24 * time.Hour
+	localFullScanInterval     = 5 * time.Minute
 )
 
 // quiescenceLogInterval is how often bootstrapSync logs while waiting
@@ -295,6 +295,7 @@ func (rt *watchRuntime) initWatchInfra(
 // Must be called after initWatchInfra and before startObservers.
 func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watchPipeline) error {
 	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
+	bootstrapStart := rt.engine.nowFunc()
 
 	// Load baseline for watch startup.
 	if err := rt.loadWatchState(ctx); err != nil {
@@ -306,7 +307,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 	pipe.bl = bl
 
-	fullReconcile, err := rt.engine.shouldRunFullRemoteReconcile(ctx, false)
+	fullReconcile, err := rt.engine.shouldRunFullRemoteRefresh(ctx, false)
 	if err != nil {
 		return fmt.Errorf("sync: deciding bootstrap full reconcile: %w", err)
 	}
@@ -327,17 +328,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 		return fmt.Errorf("sync: bootstrap plan materialization failed: %w", materializeErr)
 	}
 	if len(plan.Actions) == 0 {
-		commitErr := rt.commitPendingPrimaryCursor(ctx, pendingCursorCommit)
-		if commitErr != nil {
-			return commitErr
-		}
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
-		timerErr := rt.armFullReconcileTimer(ctx)
-		if timerErr != nil {
-			return fmt.Errorf("sync: arming full reconcile timer: %w", timerErr)
-		}
-		rt.engine.logger.Info("bootstrap sync complete: no changes detected")
-		return nil
+		return rt.finishBootstrapWithoutActions(ctx, mode, bootstrapStart, pendingCursorCommit)
 	}
 
 	// Commit the deferred delta token before dispatching bootstrap actions.
@@ -345,6 +336,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	if cursorCommitErr != nil {
 		return cursorCommitErr
 	}
+	rt.beginSyncStatusBatch(bootstrapStart)
 
 	// Dispatch through watch pipeline (same path as steady-state batches).
 	initialOutbox, _, err := rt.dispatchCurrentPlan(ctx, plan, bl, dispatchBatchOptions{})
@@ -354,14 +346,45 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 
 	// Wait for all bootstrap actions to complete.
 	if err := rt.runWatchUntilQuiescent(ctx, pipe, initialOutbox); err != nil {
+		rt.clearSyncStatusBatch()
 		return fmt.Errorf("sync: bootstrap quiescence failed: %w", err)
 	}
 
+	return rt.finishBootstrapAfterActions(ctx, mode)
+}
+
+func (rt *watchRuntime) finishBootstrapWithoutActions(
+	ctx context.Context,
+	mode Mode,
+	startedAt time.Time,
+	pendingCursorCommit *pendingPrimaryCursorCommit,
+) error {
+	rt.beginSyncStatusBatch(startedAt)
+	if err := rt.commitPendingPrimaryCursor(ctx, pendingCursorCommit); err != nil {
+		rt.clearSyncStatusBatch()
+		return err
+	}
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
+	if err := rt.armFullRefreshTimer(ctx); err != nil {
+		rt.clearSyncStatusBatch()
+		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
+	}
+	rt.finishSyncStatusBatch(ctx, mode)
+	rt.engine.logger.Info("bootstrap sync complete: no changes detected")
+	return nil
+}
+
+func (rt *watchRuntime) finishBootstrapAfterActions(
+	ctx context.Context,
+	mode Mode,
+) error {
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 	rt.postSyncHousekeeping()
-	if err := rt.armFullReconcileTimer(ctx); err != nil {
-		return fmt.Errorf("sync: arming full reconcile timer: %w", err)
+	if err := rt.armFullRefreshTimer(ctx); err != nil {
+		rt.clearSyncStatusBatch()
+		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
 	}
+	rt.finishSyncStatusBatch(ctx, mode)
 	rt.engine.logger.Info("bootstrap sync complete")
 	return nil
 }
