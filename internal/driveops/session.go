@@ -376,15 +376,15 @@ func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.It
 			return nil, fmt.Errorf("resolve root item: %w", err)
 		}
 
-		if s.hasScopedRoot() {
+		if s.hasSharedRoot() {
 			item.IsRoot = true
 		}
 
 		return item, nil
 	}
 
-	if s.hasScopedRoot() {
-		item, err := s.resolveItemFromScopedRoot(ctx, clean)
+	if s.hasSharedRoot() {
+		item, err := s.resolveItemFromSharedRoot(ctx, clean)
 		if err != nil {
 			return nil, fmt.Errorf("resolve item path %q: %w", clean, err)
 		}
@@ -484,8 +484,8 @@ func (s *Session) ListChildren(ctx context.Context, remotePath string) ([]graph.
 		return items, nil
 	}
 
-	if s.hasScopedRoot() {
-		parent, err := s.resolveItemFromScopedRoot(ctx, clean)
+	if s.hasSharedRoot() {
+		parent, err := s.resolveItemFromSharedRoot(ctx, clean)
 		if err != nil {
 			return nil, fmt.Errorf("list children for %q: %w", clean, err)
 		}
@@ -682,19 +682,19 @@ func (s *Session) RestoreItem(ctx context.Context, itemID string) (*graph.Item, 
 
 const driveRootItemID = "root"
 
-func (s *Session) hasScopedRoot() bool {
+func (s *Session) hasSharedRoot() bool {
 	return s != nil && s.RootItem != "" && s.RootItem != driveRootItemID
 }
 
 func (s *Session) rootItemID() string {
-	if s.hasScopedRoot() {
+	if s.hasSharedRoot() {
 		return s.RootItem
 	}
 
 	return driveRootItemID
 }
 
-func (s *Session) resolveItemFromScopedRoot(ctx context.Context, remotePath string) (*graph.Item, error) {
+func (s *Session) resolveItemFromSharedRoot(ctx context.Context, remotePath string) (*graph.Item, error) {
 	currentID := s.rootItemID()
 	segments := strings.Split(remotePath, "/")
 	var current *graph.Item
@@ -719,7 +719,7 @@ func (s *Session) resolveItemFromScopedRoot(ctx context.Context, remotePath stri
 	}
 
 	if current == nil {
-		return nil, fmt.Errorf("resolve scoped item %q: %w", remotePath, graph.ErrNotFound)
+		return nil, fmt.Errorf("resolve shared-root item %q: %w", remotePath, graph.ErrNotFound)
 	}
 
 	return current, nil

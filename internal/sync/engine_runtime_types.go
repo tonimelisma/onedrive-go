@@ -137,7 +137,6 @@ type watchTimerState struct {
 type watchSummaryState struct {
 	// Deduplication: caches the last watch-condition signature and per-scope
 	// shared-folder child-set signatures for watch summaries.
-	lastSummaryTotal     int
 	lastSummarySignature string
 	lastRemoteBlocked    map[ScopeKey]string
 }

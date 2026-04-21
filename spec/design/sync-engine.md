@@ -15,7 +15,7 @@ The engine is the single-drive runtime owner. It coordinates:
 - durable outcome writes
 - retry and trial scheduling
 - scope lifecycle
-- watch-mode reconcile and maintenance work
+- watch-mode refresh, external-change reconciliation, and maintenance work
 
 The target engine persists durable status through three authorities:
 

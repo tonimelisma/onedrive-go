@@ -187,9 +187,9 @@ func SnapshotAttrs(snapshot *Snapshot) []slog.Attr {
 	appendIntAttr("execute_succeeded", snapshot.ExecuteSucceededCount)
 	appendIntAttr("execute_failed", snapshot.ExecuteFailedCount)
 	appendInt64Attr("execute_time_ms", snapshot.ExecuteTimeMS)
-	appendIntAttr("reconcile_runs", snapshot.ReconcileRunCount)
-	appendIntAttr("reconcile_events", snapshot.ReconcileEventCount)
-	appendInt64Attr("reconcile_time_ms", snapshot.ReconcileTimeMS)
+	appendIntAttr("refresh_runs", snapshot.RefreshRunCount)
+	appendIntAttr("refresh_events", snapshot.RefreshEventCount)
+	appendInt64Attr("refresh_time_ms", snapshot.RefreshTimeMS)
 	appendIntAttr("watch_batches", snapshot.WatchBatchCount)
 	appendIntAttr("watch_paths", snapshot.WatchPathCount)
 

@@ -1767,7 +1767,7 @@ func TestExecutor_ResolveParentID_Baseline(t *testing.T) {
 	}
 }
 
-func TestExecutor_ResolveParentID_SharedScopedRoot(t *testing.T) {
+func TestExecutor_ResolveParentID_SharedRoot(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})

@@ -630,7 +630,7 @@ func TestSession_ResolveDeleteTarget_RecoversWhenParentPathListingLags(t *testin
 	}, *gotPaths)
 }
 
-func TestSession_ListChildren_SharedRootUsesScopedRootItem(t *testing.T) {
+func TestSession_ListChildren_SharedRootUsesSharedRootItem(t *testing.T) {
 	t.Parallel()
 
 	const sharedRootItemID = "shared-root"

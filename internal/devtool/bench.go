@@ -249,9 +249,9 @@ type benchPerfSummary struct {
 	ExecuteSucceededCount int   `json:"execute_succeeded_count,omitempty"`
 	ExecuteFailedCount    int   `json:"execute_failed_count,omitempty"`
 	ExecuteTimeMS         int64 `json:"execute_time_ms,omitempty"`
-	ReconcileRunCount     int   `json:"reconcile_run_count,omitempty"`
-	ReconcileEventCount   int   `json:"reconcile_event_count,omitempty"`
-	ReconcileTimeMS       int64 `json:"reconcile_time_ms,omitempty"`
+	RefreshRunCount       int   `json:"refresh_run_count,omitempty"`
+	RefreshEventCount     int   `json:"refresh_event_count,omitempty"`
+	RefreshTimeMS         int64 `json:"refresh_time_ms,omitempty"`
 	WatchBatchCount       int   `json:"watch_batch_count,omitempty"`
 	WatchPathCount        int   `json:"watch_path_count,omitempty"`
 }
@@ -819,9 +819,9 @@ func readPerformanceSummaryFromTextLog(data []byte) (*benchPerfSummary, error) {
 		populateSnapshotInt(line, "execute_succeeded", func(v int64) { snapshot.ExecuteSucceededCount = int(v) })
 		populateSnapshotInt(line, "execute_failed", func(v int64) { snapshot.ExecuteFailedCount = int(v) })
 		populateSnapshotInt64(line, "execute_time_ms", func(v int64) { snapshot.ExecuteTimeMS = v })
-		populateSnapshotInt(line, "reconcile_runs", func(v int64) { snapshot.ReconcileRunCount = int(v) })
-		populateSnapshotInt(line, "reconcile_events", func(v int64) { snapshot.ReconcileEventCount = int(v) })
-		populateSnapshotInt64(line, "reconcile_time_ms", func(v int64) { snapshot.ReconcileTimeMS = v })
+		populateSnapshotInt(line, "refresh_runs", func(v int64) { snapshot.RefreshRunCount = int(v) })
+		populateSnapshotInt(line, "refresh_events", func(v int64) { snapshot.RefreshEventCount = int(v) })
+		populateSnapshotInt64(line, "refresh_time_ms", func(v int64) { snapshot.RefreshTimeMS = v })
 		populateSnapshotInt(line, "watch_batches", func(v int64) { snapshot.WatchBatchCount = int(v) })
 		populateSnapshotInt(line, "watch_paths", func(v int64) { snapshot.WatchPathCount = int(v) })
 

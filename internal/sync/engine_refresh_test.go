@@ -829,9 +829,9 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 			return &graph.DeltaPage{
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveID},
-					{ID: "f1", Name: "reconcile.txt", ParentID: "root", DriveID: driveID, Size: 42, QuickXorHash: "qxh"},
+					{ID: "f1", Name: "refresh.txt", ParentID: "root", DriveID: driveID, Size: 42, QuickXorHash: "qxh"},
 				},
-				DeltaLink: "watch-reconcile-token",
+				DeltaLink: "watch-refresh-token",
 			}, nil
 		},
 	}
@@ -869,7 +869,7 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 
 	batch := rt.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
-	assert.Equal(t, []string{"reconcile.txt"}, batch.Paths)
+	assert.Equal(t, []string{"refresh.txt"}, batch.Paths)
 
 	select {
 	case ta := <-ready:
@@ -878,7 +878,7 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 	}
 
 	savedToken := readObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
-	assert.Equal(t, "watch-reconcile-token", savedToken)
+	assert.Equal(t, "watch-refresh-token", savedToken)
 
 	cancel()
 

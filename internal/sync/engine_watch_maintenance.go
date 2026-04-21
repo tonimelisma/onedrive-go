@@ -44,14 +44,14 @@ func (rt *watchRuntime) handleRecheckTick(ctx context.Context) {
 // handleExternalChanges reacts to external DB modifications detected via
 // PRAGMA data_version.
 func (rt *watchRuntime) handleExternalChanges(ctx context.Context) {
-	rt.clearResolvedPersistedWriteBlocks(ctx)
+	rt.clearExternallyClearedPersistedBlockScopes(ctx)
 	rt.mustAssertInvariants(ctx, rt, "handle external changes")
 }
 
-// clearResolvedPersistedWriteBlocks checks whether persisted write block scopes
-// still exist and releases any runtime scope whose backing
+// clearExternallyClearedPersistedBlockScopes checks whether persisted block
+// scopes still exist and releases any runtime scope whose backing
 // block_scopes / blocked retry_work rows disappeared externally.
-func (rt *watchRuntime) clearResolvedPersistedWriteBlocks(ctx context.Context) {
+func (rt *watchRuntime) clearExternallyClearedPersistedBlockScopes(ctx context.Context) {
 	scopeKeys := rt.activeScopeKeys()
 	if len(scopeKeys) == 0 {
 		return
@@ -76,14 +76,14 @@ func (rt *watchRuntime) clearResolvedPersistedWriteBlocks(ctx context.Context) {
 	for _, key := range scopeKeys {
 		if key.PersistsInBlockScopes() && !persistedBlockScopes[key] {
 			if err := rt.scopeController().releaseScope(ctx, rt, key); err != nil {
-				rt.engine.logger.Warn("failed to release externally-cleared permission block scope",
+				rt.engine.logger.Warn("failed to release externally-cleared persisted block scope",
 					slog.String("scope", key.String()),
 					slog.String("error", err.Error()),
 				)
 				continue
 			}
 
-			rt.engine.logger.Info("permission block scope cleared by user",
+			rt.engine.logger.Info("persisted block scope cleared by user",
 				slog.String("scope", key.String()),
 			)
 		}
@@ -181,7 +181,7 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 	result := remoteRefreshResult{}
 	start := rt.engine.nowFunc()
 	defer func() {
-		rt.engine.collector().RecordReconcile(len(result.events), rt.engine.since(start))
+		rt.engine.collector().RecordRefresh(len(result.events), rt.engine.since(start))
 	}()
 
 	rt.engine.logger.Info("periodic full remote refresh starting")
