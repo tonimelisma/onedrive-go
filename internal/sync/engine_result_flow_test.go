@@ -350,6 +350,56 @@ func TestEngineFlow_ProcessTrialDecision_RearmOrDiscardRecordsFailureWithoutTerm
 }
 
 // Validates: R-2.10.5
+func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmittingDependents(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	scopeKey := SKService()
+
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:           scopeKey,
+		BlockedAt:     eng.nowFunc().Add(-time.Minute),
+		NextTrialAt:   eng.nowFunc().Add(-time.Second),
+		TrialInterval: time.Minute,
+	})
+
+	current := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "trial.txt",
+		DriveID: eng.driveID,
+		ItemID:  "trial-item",
+	}, 1, nil)
+	require.NotNil(t, current)
+
+	dependent := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "dependent.txt",
+		DriveID: eng.driveID,
+		ItemID:  "dependent-item",
+	}, 2, []int64{1})
+	assert.Nil(t, dependent)
+
+	outcome := rt.processActionCompletion(t.Context(), rt, &ActionCompletion{
+		ActionID:      1,
+		Path:          "trial.txt",
+		ActionType:    ActionUpload,
+		DriveID:       eng.driveID,
+		Success:       true,
+		IsTrial:       true,
+		TrialScopeKey: scopeKey,
+	}, &Baseline{})
+
+	assert.False(t, outcome.terminate)
+	require.NoError(t, outcome.terminateErr)
+	require.Len(t, outcome.dispatched, 1)
+	assert.Equal(t, int64(2), outcome.dispatched[0].ID)
+	assert.Equal(t, "dependent.txt", outcome.dispatched[0].Action.Path)
+	assert.False(t, rt.hasActiveScope(scopeKey))
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+}
+
+// Validates: R-2.10.5
 func TestEngineFlow_ProcessTrialDecision_ShutdownCompletesWithoutTerminating(t *testing.T) {
 	t.Parallel()
 
