@@ -150,6 +150,21 @@ func (d ScopeDescriptor) ScopePath() string {
 	return d.SubjectValue
 }
 
+// PersistsInBlockScopes reports whether this scope is a timed blocked-work
+// scope that belongs in block_scopes. Read-denied subtree boundaries remain
+// observation-owned facts carried on observation_issues via ScopeKey.
+func (d ScopeDescriptor) PersistsInBlockScopes() bool {
+	if d.IsZero() {
+		return false
+	}
+
+	if d.Family == ScopeFamilyPermDir || d.Family == ScopeFamilyPermRemote {
+		return d.Access != ScopeAccessRead
+	}
+
+	return true
+}
+
 func (d ScopeDescriptor) Humanize() string {
 	switch d.Family {
 	case ScopeFamilyUnknown:

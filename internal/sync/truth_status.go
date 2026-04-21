@@ -153,12 +153,7 @@ func mostSpecificObservationReadBoundary(
 	bestLen := -1
 
 	for i := range boundaries {
-		scopePath := ""
-		if boundaries[i].ScopeKey.IsPermLocalRead() {
-			scopePath = boundaries[i].ScopeKey.DirPath()
-		} else {
-			scopePath = boundaries[i].ScopeKey.RemotePath()
-		}
+		scopePath := boundaries[i].ScopeKey.CoveredPath()
 		if !scopePathMatches(path, scopePath) {
 			continue
 		}

@@ -112,6 +112,24 @@ func TestSyncStore_UpsertBlockScope(t *testing.T) {
 }
 
 // Validates: R-2.10.8
+func TestSyncStore_UpsertBlockScope_RejectsReadBoundaryScopes(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
+
+	err := store.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKPermRemoteRead("Shared/TeamDocs"),
+		BlockedAt:     now,
+		TrialInterval: time.Second,
+		NextTrialAt:   now.Add(time.Second),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read boundaries belong in observation_issues")
+}
+
+// Validates: R-2.10.8
 func TestSyncStore_DeleteBlockScope(t *testing.T) {
 	t.Parallel()
 
@@ -198,6 +216,30 @@ func TestSyncStore_ListBlockScopes_SkipsUnknownScopeKeys(t *testing.T) {
 	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, blocks)
+}
+
+// Validates: R-2.10.8
+func TestSyncStore_ListBlockScopes_RejectsReadBoundaryScopes(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	_, err := store.db.ExecContext(
+		ctx,
+		`INSERT INTO block_scopes (scope_key, blocked_at, trial_interval, next_trial_at)
+		VALUES (?, ?, ?, ?)`,
+		SKPermRemoteRead("Shared/Readonly").String(),
+		now.UnixNano(),
+		int64(time.Second),
+		now.Add(time.Second).UnixNano(),
+	)
+	require.NoError(t, err)
+
+	_, err = store.ListBlockScopes(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "belongs in observation_issues")
 }
 
 // Validates: R-2.10.33, R-2.10.34
