@@ -66,6 +66,9 @@ sync-health command.
   projection, using the sync-owned `ConditionKey` taxonomy and ordering helpers
 - one CLI-owned presentation boundary shapes status-condition titles, reasons,
   actions, scope-kind labels, ordering, truncation, and JSON output
+- `status_sync_state.go` only assembles the high-level sync-state payload;
+  `status_condition_descriptors.go` owns the condition presentation and JSON
+  shaping surface itself
 - live authenticated account identity and drive catalog overlays come from
   bounded Graph proof/discovery owned by the command
 - live perf comes from the active owner over the control socket when requested
