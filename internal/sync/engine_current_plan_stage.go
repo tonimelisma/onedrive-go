@@ -22,7 +22,12 @@ func (r *oneShotRunner) prepareLiveCurrentPlan(
 		return nil, err
 	}
 
-	return r.prepareCurrentPlanFromObservedState(ctx, bl, mode, opts, observed, true)
+	build, err := r.buildCurrentPlanFromObservedState(ctx, bl, mode, opts, observed)
+	if err != nil {
+		return nil, err
+	}
+
+	return r.prepareRuntimeCurrentPlan(ctx, build)
 }
 
 func (r *oneShotRunner) prepareDryRunCurrentPlan(
@@ -36,7 +41,12 @@ func (r *oneShotRunner) prepareDryRunCurrentPlan(
 		return nil, err
 	}
 
-	return r.prepareCurrentPlanFromObservedState(ctx, bl, mode, opts, observed, false)
+	build, err := r.buildCurrentPlanFromObservedState(ctx, bl, mode, opts, observed)
+	if err != nil {
+		return nil, err
+	}
+
+	return r.engineFlow.prepareDryRunCurrentPlan(build), nil
 }
 
 func (r *oneShotRunner) observeLiveCurrentState(
@@ -93,21 +103,21 @@ func (flow *engineFlow) loadObservedCurrentState(
 	}, nil
 }
 
-// prepareCurrentPlanFromObservedState is the shared current-plan preparation
-// stage. Observation stays entrypoint-specific, but once current truth has
-// been loaded into observed-state inputs, one-shot and watch both use this
-// stage to build the current action plan, reconcile durable held-work state,
-// and load the runtime-start rows that execution owns.
-func (flow *engineFlow) prepareCurrentPlanFromObservedState(
+// buildCurrentPlanFromObservedState is the shared planning stage after an
+// entrypoint has already observed current truth. It builds the current plan
+// and report but does not touch durable retry/scope state.
+func (flow *engineFlow) buildCurrentPlanFromObservedState(
 	ctx context.Context,
 	bl *Baseline,
 	mode Mode,
 	opts RunOptions,
 	observed *observedCurrentState,
-	materialize bool,
-) (*PreparedCurrentPlan, error) {
+) (*currentPlanBuild, error) {
 	if observed == nil {
 		return nil, fmt.Errorf("sync: preparing current plan: missing observed state")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("sync: building current plan from observed state: %w", err)
 	}
 
 	planStart := flow.engine.nowFunc()
@@ -117,31 +127,62 @@ func (flow *engineFlow) prepareCurrentPlanFromObservedState(
 	}
 	flow.engine.collector().RecordPlan(len(plan.Actions), flow.engine.since(planStart))
 
-	if materialize {
-		if materializeErr := flow.reconcileDurablePlanState(ctx, plan); materializeErr != nil {
-			return nil, materializeErr
-		}
-	}
-
-	var retryRows []RetryWorkRow
-	var blockScopes []*BlockScope
-	if materialize {
-		retryRows, blockScopes, err = flow.loadPreparedRuntimeState(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	counts := CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
 
-	return &PreparedCurrentPlan{
+	return &currentPlanBuild{
 		Plan:                plan,
 		Report:              report,
 		PendingCursorCommit: observed.pendingCursorCommit,
+	}, nil
+}
+
+// prepareRuntimeCurrentPlan turns a built current plan into the runtime-start
+// handoff by reconciling durable held-work state and loading the surviving
+// retry/block-scope rows execution owns.
+func (flow *engineFlow) prepareRuntimeCurrentPlan(
+	ctx context.Context,
+	build *currentPlanBuild,
+) (*PreparedCurrentPlan, error) {
+	if build == nil {
+		return nil, fmt.Errorf("sync: preparing runtime current plan: missing build")
+	}
+	if err := flow.reconcileDurablePlanState(ctx, build.Plan); err != nil {
+		return nil, err
+	}
+
+	retryRows, blockScopes, err := flow.loadPreparedRuntimeState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &PreparedCurrentPlan{
+		Plan:                build.Plan,
+		Report:              build.Report,
+		PendingCursorCommit: build.PendingCursorCommit,
 		RetryRows:           retryRows,
 		BlockScopes:         blockScopes,
 	}, nil
+}
+
+// prepareDryRunCurrentPlan preserves the build-stage plan/report handoff
+// without reconciling or loading durable runtime state.
+func (flow *engineFlow) prepareDryRunCurrentPlan(build *currentPlanBuild) *PreparedCurrentPlan {
+	if build == nil {
+		return nil
+	}
+
+	return &PreparedCurrentPlan{
+		Plan:                build.Plan,
+		Report:              build.Report,
+		PendingCursorCommit: build.PendingCursorCommit,
+	}
+}
+
+type currentPlanBuild struct {
+	Plan                *ActionPlan
+	Report              *Report
+	PendingCursorCommit *pendingPrimaryCursorCommit
 }
 
 type dryRunPlanInput struct {
@@ -370,8 +411,9 @@ func (flow *engineFlow) loadCurrentActionPlanInputsTx(
 	}, nil
 }
 
-// prepareBootstrapCurrentPlan runs the shared current-plan preparation stage
-// after watch bootstrap refreshes both remote and local truth once.
+// prepareBootstrapCurrentPlan observes bootstrap truth once, builds the
+// current plan from that observed state, then prepares the runtime-start
+// durable handoff.
 func (rt *watchRuntime) prepareBootstrapCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
@@ -393,17 +435,22 @@ func (rt *watchRuntime) prepareBootstrapCurrentPlan(
 	}
 	rt.engine.collector().RecordObserve(observed.observedPaths, rt.engine.since(observeStart))
 
-	prepared, err := rt.prepareCurrentPlanFromObservedState(ctx, bl, mode, RunOptions{}, observed, true)
+	build, err := rt.buildCurrentPlanFromObservedState(ctx, bl, mode, RunOptions{}, observed)
 	if err != nil {
 		return nil, fmt.Errorf("sync: bootstrap planning failed: %w", err)
+	}
+
+	prepared, err := rt.prepareRuntimeCurrentPlan(ctx, build)
+	if err != nil {
+		return nil, fmt.Errorf("sync: bootstrap runtime prepare failed: %w", err)
 	}
 
 	return prepared, nil
 }
 
-// prepareDirtyCurrentPlan runs the shared current-plan preparation stage from
-// already-committed watch truth after the dirty-batch path has refreshed the
-// current local snapshot.
+// prepareDirtyCurrentPlan loads already-committed watch truth after the
+// dirty-batch path has refreshed the local snapshot, then runs the same
+// build-and-runtime-prepare stages bootstrap uses.
 func (rt *watchRuntime) prepareDirtyCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
@@ -414,9 +461,14 @@ func (rt *watchRuntime) prepareDirtyCurrentPlan(
 		return nil, fmt.Errorf("sync: watch observed-state load failed: %w", err)
 	}
 
-	prepared, err := rt.prepareCurrentPlanFromObservedState(ctx, bl, mode, RunOptions{}, observed, true)
+	build, err := rt.buildCurrentPlanFromObservedState(ctx, bl, mode, RunOptions{}, observed)
 	if err != nil {
 		return nil, fmt.Errorf("sync: watch planning failed: %w", err)
+	}
+
+	prepared, err := rt.prepareRuntimeCurrentPlan(ctx, build)
+	if err != nil {
+		return nil, fmt.Errorf("sync: watch runtime prepare failed: %w", err)
 	}
 
 	return prepared, nil

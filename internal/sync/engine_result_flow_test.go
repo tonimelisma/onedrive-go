@@ -331,6 +331,7 @@ func TestEngineFlow_ProcessTrialDecision_RearmOrDiscardRecordsFailureWithoutTerm
 		Class:         errclass.ClassActionable,
 		ConditionKey:  ConditionInvalidFilename,
 		ConditionType: IssueInvalidFilename,
+		Persistence:   persistRetryWork,
 		TrialHint:     trialHintReclassify,
 	}, nil, &ActionCompletion{
 		Path:          "trial.txt",
@@ -347,6 +348,90 @@ func TestEngineFlow_ProcessTrialDecision_RearmOrDiscardRecordsFailureWithoutTerm
 	assert.Equal(t, 0, succeeded)
 	assert.Equal(t, 1, failed)
 	assert.Empty(t, errs)
+}
+
+// Validates: R-2.10.5, R-2.10.33, R-2.14.1
+func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionOutcomeFallsBackToRetryPersistence(t *testing.T) {
+	t.Parallel()
+
+	const sharedRootItemID = "shared-root-id"
+
+	eng, _ := newTestEngine(t, &engineMockClient{
+		listItemPermissionsFn: func(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error) {
+			assert.Equal(t, sharedRootItemID, itemID)
+			return []graph.Permission{{
+				Roles: []string{"write"},
+			}}, nil
+		},
+	})
+	eng.rootItemID = sharedRootItemID
+	eng.permHandler.rootItemID = sharedRootItemID
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+	scopeKey := SKService()
+
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:           scopeKey,
+		BlockedAt:     eng.nowFunc().Add(-time.Minute),
+		TrialInterval: time.Minute,
+		NextTrialAt:   eng.nowFunc(),
+	})
+
+	blockedRow := &RetryWorkRow{
+		Path:          "file.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      scopeKey,
+		Blocked:       true,
+		AttemptCount:  1,
+		LastError:     "blocked",
+		FirstSeenAt:   1,
+		LastSeenAt:    2,
+	}
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blockedRow))
+	flow.retryRowsByKey[retryWorkKeyForRetryWork(blockedRow)] = *blockedRow
+
+	current := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "file.txt",
+		DriveID: driveid.New(engineTestDriveID),
+	}, 1, nil)
+	require.NotNil(t, current)
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	outcome := flow.processTrialDecision(t.Context(), rt, scopeKey, &ResultDecision{
+		Class:          errclass.ClassActionable,
+		ConditionKey:   ConditionRemoteWriteDenied,
+		ConditionType:  IssueRemoteWriteDenied,
+		Persistence:    persistRetryWork,
+		PermissionFlow: permissionFlowRemote403,
+		TrialHint:      trialHintReclassify,
+	}, current, &ActionCompletion{
+		ActionID:      current.ID,
+		Path:          "file.txt",
+		ActionType:    ActionUpload,
+		HTTPStatus:    http.StatusForbidden,
+		ErrMsg:        "permission evidence inconclusive",
+		IsTrial:       true,
+		TrialScopeKey: scopeKey,
+	}, bl)
+
+	assert.False(t, outcome.terminate)
+	require.NoError(t, outcome.terminateErr)
+	assert.Empty(t, outcome.dispatched)
+	assert.True(t, rt.hasRetryTimer(), "generic retry fallback should arm the ordinary retry timer")
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "file.txt", retryRows[0].Path)
+	assert.False(t, retryRows[0].Blocked)
+	assert.True(t, retryRows[0].ScopeKey.IsZero())
+	assert.NotZero(t, retryRows[0].NextRetryAt)
+
+	assert.False(t, isTestBlockScopeed(eng, scopeKey))
 }
 
 // Validates: R-2.10.5

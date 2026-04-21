@@ -329,38 +329,20 @@ func (flow *engineFlow) processTrialDecision(
 
 	switch evaluateScopeTrialOutcome(trialScopeKey, decision) {
 	case scopeTrialOutcomeRelease:
-		if err := scopeCtrl.releaseScope(ctx, watch, trialScopeKey); err != nil {
-			return flow.terminateAfterControlStateError(current, err)
-		}
-		flow.releaseHeldScope(trialScopeKey)
-		dispatched, err := flow.applyCompletionSuccess(ctx, watch, current, r)
+		dispatched, err := flow.applyTrialReleaseDecision(ctx, watch, current, r, trialScopeKey)
 		if err != nil {
-			return flow.terminateAfterControlStateError(nil, err)
+			return flow.terminateAfterControlStateError(current, err)
 		}
 		outcome.dispatched = dispatched
 	case scopeTrialOutcomeShutdown:
 		flow.applyCompletedSubtree(current, r.ActionID, "trial shutdown action completion")
 	case scopeTrialOutcomeExtend:
-		flow.markFinished(current)
-		if err := scopeCtrl.rehomeBlockedRetryWork(ctx, r, trialScopeKey); err != nil {
-			return flow.terminateAfterControlStateError(nil, err)
-		}
-		if err := flow.holdActionUnderScope(ctx, watch, current, r, trialScopeKey); err != nil {
-			return flow.terminateAfterControlStateError(nil, err)
-		}
-		if err := scopeCtrl.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter); err != nil {
+		if err := flow.applyTrialExtendDecision(ctx, watch, current, r, trialScopeKey); err != nil {
 			return flow.terminateAfterControlStateError(nil, err)
 		}
 		flow.recordError(decision, r)
 	case scopeTrialOutcomeRearmOrDiscard:
-		flow.markFinished(current)
-		if err := scopeCtrl.applyTrialReclassification(ctx, watch, decision, r, bl); err != nil {
-			return flow.terminateAfterControlStateError(nil, err)
-		}
-		if err := flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r)); err != nil {
-			return flow.terminateAfterControlStateError(nil, err)
-		}
-		if err := scopeCtrl.rearmOrDiscardScope(ctx, watch, trialScopeKey); err != nil {
+		if err := flow.applyTrialRearmOrDiscardDecision(ctx, watch, current, decision, r, bl, trialScopeKey); err != nil {
 			return flow.terminateAfterControlStateError(nil, err)
 		}
 		flow.recordError(decision, r)
@@ -373,6 +355,71 @@ func (flow *engineFlow) processTrialDecision(
 	}
 
 	return outcome
+}
+
+func (flow *engineFlow) applyTrialReleaseDecision(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	r *ActionCompletion,
+	trialScopeKey ScopeKey,
+) ([]*TrackedAction, error) {
+	scopeCtrl := flow.scopeController()
+	if err := scopeCtrl.releaseScope(ctx, watch, trialScopeKey); err != nil {
+		return nil, err
+	}
+	flow.releaseHeldScope(trialScopeKey)
+
+	return flow.applyCompletionSuccess(ctx, watch, current, r)
+}
+
+func (flow *engineFlow) applyTrialExtendDecision(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	r *ActionCompletion,
+	trialScopeKey ScopeKey,
+) error {
+	scopeCtrl := flow.scopeController()
+
+	flow.markFinished(current)
+	if err := scopeCtrl.rehomeBlockedRetryWork(ctx, r, trialScopeKey); err != nil {
+		return err
+	}
+	if err := flow.holdActionUnderScope(ctx, watch, current, r, trialScopeKey); err != nil {
+		return err
+	}
+
+	return scopeCtrl.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
+}
+
+func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	decision *ResultDecision,
+	r *ActionCompletion,
+	bl *Baseline,
+	trialScopeKey ScopeKey,
+) error {
+	scopeCtrl := flow.scopeController()
+
+	flow.markFinished(current)
+	reclassified, err := scopeCtrl.applyTrialReclassification(ctx, watch, decision, r, bl)
+	if err != nil {
+		return err
+	}
+	if reclassified {
+		if err := flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r)); err != nil {
+			return err
+		}
+	} else {
+		if err := flow.applyTrialRetryFallback(ctx, watch, current, decision, r); err != nil {
+			return err
+		}
+	}
+
+	return scopeCtrl.rearmOrDiscardScope(ctx, watch, trialScopeKey)
 }
 
 func (flow *engineFlow) trackedActionForCompletion(r *ActionCompletion) *TrackedAction {
@@ -420,6 +467,29 @@ func (flow *engineFlow) holdActionFromPersistedRetryState(
 		nextRetry = time.Unix(0, row.NextRetryAt)
 	}
 	flow.holdAction(current, heldReasonRetry, ScopeKey{}, nextRetry)
+	return nil
+}
+
+func (flow *engineFlow) applyTrialRetryFallback(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	decision *ResultDecision,
+	r *ActionCompletion,
+) error {
+	if decision.Persistence != persistRetryWork {
+		return fmt.Errorf("trial retry fallback for %s: missing retry_work persistence", r.Path)
+	}
+	if err := flow.applyResultPersistence(ctx, decision, r); err != nil {
+		return err
+	}
+	if err := flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r)); err != nil {
+		return err
+	}
+	if watch != nil {
+		watch.armRetryTimer()
+	}
+
 	return nil
 }
 
@@ -506,6 +576,9 @@ func (controller *scopeController) clearBlockedRetryWorkForScope(
 	flow := controller.flow
 	if err := flow.engine.baseline.ClearBlockedRetryWork(ctx, work, scopeKey); err != nil {
 		return fmt.Errorf("clear blocked retry_work for %s under %s: %w", work.Path, scopeKey.String(), err)
+	}
+	if row, ok := flow.retryRowsByKey[work]; ok && row.Blocked && row.ScopeKey == scopeKey {
+		delete(flow.retryRowsByKey, work)
 	}
 
 	return nil

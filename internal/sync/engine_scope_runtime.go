@@ -250,28 +250,31 @@ func (controller *scopeController) applyTrialReclassification(
 	decision *ResultDecision,
 	r *ActionCompletion,
 	bl *Baseline,
-) error {
+) (bool, error) {
 	if decision.PermissionFlow != permissionFlowNone {
 		if permOutcome, handled := controller.decidePermissionOutcome(ctx, decision, r, bl); handled {
+			if !permOutcome.Matched {
+				return false, nil
+			}
 			if err := controller.clearBlockedRetryWorkForScope(ctx, retryWorkKeyForCompletion(r), r.TrialScopeKey); err != nil {
-				return err
+				return false, err
 			}
 			_, err := controller.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
-			return err
+			return true, err
 		}
-		return nil
+		return false, nil
 	}
 
 	if decision.Class == errclass.ClassBlockScopeingTransient && decision.ScopeKey == SKDiskLocal() {
 		if err := controller.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey); err != nil {
-			return err
+			return false, err
 		}
-		return controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
+		return true, controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      decision.ScopeKey,
 			ConditionType: decision.ScopeKey.ConditionType(),
 		})
 	}
 
-	return nil
+	return false, nil
 }

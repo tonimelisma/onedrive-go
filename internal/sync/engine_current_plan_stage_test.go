@@ -24,6 +24,24 @@ func assertPreparedCurrentPlanEqual(t *testing.T, expected *PreparedCurrentPlan,
 	assert.Equal(t, expected.BlockScopes, actual.BlockScopes)
 }
 
+func seedStaleRetryAndBlockScopeForPrepareTest(t *testing.T, ctx context.Context, eng *testEngine) {
+	t.Helper()
+
+	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Path:          "stale.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		LastError:     "stale retry row",
+	}, func(int) time.Duration { return time.Minute })
+	require.NoError(t, err)
+	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKService(),
+		BlockedAt:     eng.nowFunc(),
+		TrialInterval: time.Minute,
+		NextTrialAt:   eng.nowFunc().Add(time.Minute),
+	}))
+}
+
 // Validates: R-2.10.5
 func TestPrepareBootstrapCurrentPlan_MatchesOneShotLivePrepare(t *testing.T) {
 	t.Parallel()
@@ -84,26 +102,8 @@ func TestProcessDirtyBatch_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare(t 
 	dirtyEng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	seedStaleRetryAndBlockScope := func(t *testing.T, eng *testEngine) {
-		t.Helper()
-
-		_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-			Path:          "stale.txt",
-			ActionType:    ActionUpload,
-			ConditionType: IssueServiceOutage,
-			LastError:     "stale retry row",
-		}, func(int) time.Duration { return time.Minute })
-		require.NoError(t, err)
-		require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
-			Key:           SKService(),
-			BlockedAt:     eng.nowFunc(),
-			TrialInterval: time.Minute,
-			NextTrialAt:   eng.nowFunc().Add(time.Minute),
-		}))
-	}
-
-	seedStaleRetryAndBlockScope(t, bootstrapEng)
-	seedStaleRetryAndBlockScope(t, dirtyEng)
+	seedStaleRetryAndBlockScopeForPrepareTest(t, ctx, bootstrapEng)
+	seedStaleRetryAndBlockScopeForPrepareTest(t, ctx, dirtyEng)
 
 	setupWatchEngine(t, bootstrapEng)
 	bootstrapBaseline, err := bootstrapEng.baseline.Load(ctx)
@@ -128,4 +128,82 @@ func TestProcessDirtyBatch_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare(t 
 	dirtyBlockScopes, err := dirtyEng.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, dirtyBlockScopes)
+}
+
+// Validates: R-2.10.5
+func TestPrepareRuntimeCurrentPlan_PrunesAndLoadsDurableRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-runtime-prepare"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+	seedStaleRetryAndBlockScopeForPrepareTest(t, ctx, eng)
+
+	setupWatchEngine(t, eng)
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	rt := testWatchRuntime(t, eng)
+	observed, err := rt.loadObservedCurrentState(ctx, nil)
+	require.NoError(t, err)
+
+	build, err := rt.buildCurrentPlanFromObservedState(ctx, bl, SyncBidirectional, RunOptions{}, observed)
+	require.NoError(t, err)
+
+	prepared, err := rt.prepareRuntimeCurrentPlan(ctx, build)
+	require.NoError(t, err)
+
+	assert.Empty(t, prepared.RetryRows)
+	assert.Empty(t, prepared.BlockScopes)
+}
+
+// Validates: R-2.10.5
+func TestPrepareDryRunCurrentPlan_LeavesDurableRuntimeStateUntouched(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-dry-runtime-prepare"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+	seedStaleRetryAndBlockScopeForPrepareTest(t, ctx, eng)
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	runner := newOneShotRunner(eng.Engine)
+	observed, err := runner.observeDryRunCurrentState(ctx, bl, false)
+	require.NoError(t, err)
+
+	build, err := runner.buildCurrentPlanFromObservedState(ctx, bl, SyncBidirectional, RunOptions{DryRun: true}, observed)
+	require.NoError(t, err)
+
+	prepared := runner.engineFlow.prepareDryRunCurrentPlan(build)
+	require.NotNil(t, prepared)
+	assert.Empty(t, prepared.RetryRows)
+	assert.Empty(t, prepared.BlockScopes)
+
+	retryRows, err := eng.baseline.ListRetryWork(ctx)
+	require.NoError(t, err)
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "stale.txt", retryRows[0].Path)
+
+	blockScopes, err := eng.baseline.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	require.Len(t, blockScopes, 1)
+	assert.Equal(t, SKService(), blockScopes[0].Key)
 }

@@ -54,14 +54,16 @@ func TestScopeController_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t 
 	rt := testWatchRuntime(t, eng)
 	controller := testEngineFlow(t, eng).scopeController()
 
-	require.NoError(t, controller.applyTrialReclassification(t.Context(), rt, &ResultDecision{
+	handled, err := controller.applyTrialReclassification(t.Context(), rt, &ResultDecision{
 		Class:    errclass.ClassBlockScopeingTransient,
 		ScopeKey: SKDiskLocal(),
 	}, &ActionCompletion{
 		Path:       "disk.txt",
 		ActionType: ActionUpload,
 		ErrMsg:     "disk full",
-	}, nil))
+	}, nil)
+	require.NoError(t, err)
+	assert.True(t, handled)
 
 	assert.True(t, isTestBlockScopeed(eng, SKDiskLocal()))
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -95,7 +97,7 @@ func TestScopeController_ApplyTrialReclassification_LocalFilePermissionReusesPer
 		LastSeenAt:    2,
 	}))
 
-	require.NoError(t, controller.applyTrialReclassification(t.Context(), rt, &ResultDecision{
+	handled, err := controller.applyTrialReclassification(t.Context(), rt, &ResultDecision{
 		PermissionFlow: permissionFlowLocalPermission,
 	}, &ActionCompletion{
 		Path:          "accessible/file.txt",
@@ -103,7 +105,9 @@ func TestScopeController_ApplyTrialReclassification_LocalFilePermissionReusesPer
 		Err:           os.ErrPermission,
 		ErrMsg:        "permission denied",
 		TrialScopeKey: scopeKey,
-	}, nil))
+	}, nil)
+	require.NoError(t, err)
+	assert.True(t, handled)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)

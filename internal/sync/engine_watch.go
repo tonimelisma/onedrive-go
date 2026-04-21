@@ -270,10 +270,10 @@ func (rt *watchRuntime) initWatchInfra(
 }
 
 // bootstrapSync performs the initial sync using the watch pipeline. It
-// observes current truth, prepares the current runtime through the shared
-// current-plan stage, then dispatches through the same DepGraph, active scope
-// working set, and WorkerPool that the steady-state watch loop uses. Blocks
-// until all bootstrap actions due now complete.
+// observes current truth, builds and prepares the current runtime through the
+// shared current-plan stage sequence, then dispatches through the same
+// DepGraph, active scope working set, and WorkerPool that the steady-state
+// watch loop uses. Blocks until all bootstrap actions due now complete.
 //
 // Must be called after initWatchInfra and before startObservers.
 func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watchPipeline) error {
