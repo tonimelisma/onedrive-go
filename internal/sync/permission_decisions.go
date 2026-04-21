@@ -61,6 +61,9 @@ func (controller *scopeController) applyPermissionCheckMutation(
 		if !controller.recordRetryWorkFailure(ctx, decision.Kind, decision.RetryWorkFailure) {
 			return
 		}
+		if watch != nil && shouldArmPermissionRetryTimer(decision) {
+			watch.armRetryTimer(ctx)
+		}
 		if !decision.ScopeKey.IsZero() {
 			controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
 				Block:         true,
@@ -196,4 +199,12 @@ func permissionDecisionRetryDelay(
 	}
 
 	return retry.ReconcilePolicy().Delay
+}
+
+func shouldArmPermissionRetryTimer(decision *PermissionCheckDecision) bool {
+	if decision == nil || decision.Kind != permissionCheckRecordFileFailure {
+		return false
+	}
+
+	return decision.RetryWorkFailure != nil && !decision.RetryWorkFailure.Blocked
 }

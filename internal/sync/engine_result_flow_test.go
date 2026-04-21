@@ -181,6 +181,37 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelaye
 	}
 }
 
+// Validates: R-2.10.5, R-2.10.33
+func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionArmsRetryTimerInWatchMode(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
+
+	r := &ActionCompletion{
+		Path:       "accessible/file.txt",
+		ActionType: ActionDownload,
+		Err:        os.ErrPermission,
+		ErrMsg:     "permission denied",
+	}
+	decision := classifyResult(r)
+
+	outcome := flow.processNormalDecision(t.Context(), rt, &decision, nil, r, nil)
+
+	assert.False(t, outcome.terminate)
+	require.NoError(t, outcome.terminateErr)
+	assert.Empty(t, outcome.dispatched)
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.False(t, retryRows[0].Blocked)
+	assert.True(t, rt.hasRetryTimer(), "file-level permission retry_work should arm the watch retry timer")
+}
+
 // Validates: R-2.10.5
 func TestEngineFlow_ProcessTrialDecision_RearmOrDiscardRecordsFailureWithoutTerminating(t *testing.T) {
 	t.Parallel()
