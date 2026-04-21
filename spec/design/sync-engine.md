@@ -158,10 +158,13 @@ admits runnable actions.
 
 Retry/trial is not an alternate planner. Timer-driven follow-up consumes the
 last successfully materialized current action plan produced by the normal watch
-observation/planning path. If a due retry or due scope trial is absent from
-that cached plan, retry/trial may run targeted revalidation for the exact
-retry row or blocked scope, but it must not refresh snapshots, rebuild the
-plan, mark the runtime dirty, or reconcile observation-owned issues.
+observation/planning path. Watch runtime caches that materialized plan as an
+indexed snapshot keyed by exact `RetryWorkKey` so retry/trial can extract just
+the needed dependency-closed subset without rescanning the whole plan. If a
+due retry or due scope trial is absent from that cached snapshot, retry/trial
+may run targeted revalidation for the exact retry row or blocked scope, but it
+must not refresh snapshots, rebuild the plan, mark the runtime dirty, or
+reconcile observation-owned issues.
 
 Action completion drain stays inside the engine boundary. When a completion
 unlocks publication-only dependents, watch mode commits those mutations
@@ -313,7 +316,17 @@ trials or successful writes, not through a separate maintenance loop. This
 runtime ownership rule is narrower than the store's structural linkage
 invariant: a scope row may still share a `scope_key` with observation or ready
 retry rows for reporting/history, but the engine keeps a blocker active only
-while blocked `retry_work` still exists.
+while blocked `retry_work` still exists. Missing-row follow-up uses one
+row-level revalidation contract:
+
+- clear the exact retry row when current truth resolved it
+- clear the exact retry row when targeted observation/probing now skips it
+- rearm unblocked retry work when the exact action still needs later follow-up
+- keep held retry work blocked behind its scope when the blocker still applies
+
+Retry sweeps and scope trials may apply those outcomes differently, but they
+must derive them from the same row-level revalidation policy rather than
+duplicating action-type-specific cleanup logic at each caller.
 
 ## What The Engine Does Not Own
 

@@ -182,6 +182,96 @@ func TestBuildRetryCandidateFromRetryWork_MapsFilteredLocalPathToSkippedItem(t *
 }
 
 // Validates: R-2.10.33
+func TestMaterializedPlanSnapshot_SelectsDependencyClosureFromIndexedRetryKeys(t *testing.T) {
+	t.Parallel()
+
+	plan := &ActionPlan{
+		Actions: []Action{
+			{
+				Type: ActionFolderCreate,
+				Path: "dir",
+			},
+			{
+				Type: ActionUpload,
+				Path: "dir/file.txt",
+			},
+		},
+		Deps: [][]int{
+			nil,
+			{0},
+		},
+	}
+
+	snapshot := newMaterializedPlanSnapshot(plan, 7)
+	require.NotNil(t, snapshot)
+	assert.Equal(t, uint64(7), snapshot.Generation)
+	assert.True(t, snapshot.containsRetryWorkKey(RetryWorkKey{
+		Path:       "dir/file.txt",
+		ActionType: ActionUpload,
+	}))
+
+	subset := snapshot.selectedActionPlanByKeys([]RetryWorkKey{{
+		Path:       "dir/file.txt",
+		ActionType: ActionUpload,
+	}})
+	require.NotNil(t, subset)
+	require.Len(t, subset.Actions, 2)
+	assert.Equal(t, ActionFolderCreate, subset.Actions[0].Type)
+	assert.Equal(t, ActionUpload, subset.Actions[1].Type)
+	require.Len(t, subset.Deps, 2)
+	assert.Equal(t, []int{0}, subset.Deps[1])
+	assert.Nil(t, snapshot.selectedActionPlanByKeys([]RetryWorkKey{{
+		Path:       "missing.txt",
+		ActionType: ActionUpload,
+	}}))
+}
+
+// Validates: R-2.10.33
+func TestMaterializeCurrentActionPlan_WatchReplacesIndexedCurrentPlanSnapshot(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+
+	require.NoError(t, flow.materializeCurrentActionPlan(t.Context(), &ActionPlan{
+		Actions: []Action{{
+			Type: ActionUpload,
+			Path: "first.txt",
+		}},
+		Deps: [][]int{nil},
+	}))
+
+	snapshot := rt.cachedCurrentPlan()
+	require.NotNil(t, snapshot)
+	assert.Equal(t, uint64(1), snapshot.Generation)
+	assert.True(t, snapshot.containsRetryWorkKey(RetryWorkKey{
+		Path:       "first.txt",
+		ActionType: ActionUpload,
+	}))
+
+	require.NoError(t, flow.materializeCurrentActionPlan(t.Context(), &ActionPlan{
+		Actions: []Action{{
+			Type: ActionDownload,
+			Path: "second.txt",
+		}},
+		Deps: [][]int{nil},
+	}))
+
+	snapshot = rt.cachedCurrentPlan()
+	require.NotNil(t, snapshot)
+	assert.Equal(t, uint64(2), snapshot.Generation)
+	assert.False(t, snapshot.containsRetryWorkKey(RetryWorkKey{
+		Path:       "first.txt",
+		ActionType: ActionUpload,
+	}))
+	assert.True(t, snapshot.containsRetryWorkKey(RetryWorkKey{
+		Path:       "second.txt",
+		ActionType: ActionDownload,
+	}))
+}
+
+// Validates: R-2.10.33
 func TestRecordRetryTrialSkippedItem_ClearsRetryWorkWithoutWritingObservationIssues(t *testing.T) {
 	t.Parallel()
 
@@ -664,6 +754,91 @@ func TestRunRetrierSweep_UnresolvedRetryOutsideCachedPlanRearmsRetryWork(t *test
 	assert.Equal(t, 2, retryRows[0].AttemptCount)
 	assert.Greater(t, retryRows[0].NextRetryAt, now.UnixNano())
 	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
+}
+
+// Validates: R-2.10.33
+func TestRunRetrierSweep_DispatchesWorkFromCachedCurrentPlan(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	now := eng.nowFn()
+
+	rt.replaceCurrentPlan(&ActionPlan{
+		Actions: []Action{{
+			Type: ActionUpload,
+			Path: "retry.txt",
+		}},
+		Deps: [][]int{nil},
+	})
+
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		Path:         "retry.txt",
+		ActionType:   ActionUpload,
+		AttemptCount: 1,
+		NextRetryAt:  now.Add(-time.Second).UnixNano(),
+		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
+		LastSeenAt:   now.UnixNano(),
+	}))
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	outbox := rt.runRetrierSweep(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
+	require.Len(t, outbox, 1)
+	assert.Equal(t, "retry.txt", outbox[0].Action.Path)
+	assert.False(t, outbox[0].IsTrial)
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "retry.txt", retryRows[0].Path)
+}
+
+// Validates: R-2.10.5
+func TestRunTrialDispatch_DispatchesTrialFromCachedCurrentPlan(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	scopeKey := SKService()
+
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:           scopeKey,
+		BlockedAt:     eng.nowFn().Add(-time.Minute),
+		NextTrialAt:   eng.nowFn().Add(-time.Second),
+		TrialInterval: 10 * time.Second,
+	})
+	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
+		Path:          "retry.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      scopeKey,
+		LastError:     "blocked retry",
+		Blocked:       true,
+	}, nil)
+	require.NoError(t, err)
+
+	rt.replaceCurrentPlan(&ActionPlan{
+		Actions: []Action{{
+			Type: ActionUpload,
+			Path: "retry.txt",
+		}},
+		Deps: [][]int{nil},
+	})
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	outbox := rt.runTrialDispatch(t.Context(), bl, SyncBidirectional, DefaultSafetyConfig())
+	require.Len(t, outbox, 1)
+	assert.Equal(t, "retry.txt", outbox[0].Action.Path)
+	assert.True(t, outbox[0].IsTrial)
+	assert.Equal(t, scopeKey, outbox[0].TrialScopeKey)
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.True(t, retryRows[0].Blocked)
+	assert.Equal(t, "retry.txt", retryRows[0].Path)
 }
 
 // Validates: R-2.10.33
