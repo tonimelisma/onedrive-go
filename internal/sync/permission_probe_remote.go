@@ -56,9 +56,9 @@ func (ph *PermissionHandler) handle403(
 	bl *Baseline,
 	failedPath string,
 	actionType ActionType,
-) PermissionCheckDecision {
+) PermissionEvidence {
 	if ph.permChecker == nil {
-		return PermissionCheckDecision{}
+		return PermissionEvidence{}
 	}
 
 	if boundary, ok := ph.activeRemoteBoundary(ctx, failedPath); ok {
@@ -67,17 +67,17 @@ func (ph *PermissionHandler) handle403(
 			slog.String("boundary", boundary),
 		)
 
-		return PermissionCheckDecision{
-			Matched:      true,
-			Kind:         permissionCheckNone,
+		return PermissionEvidence{
+			Kind:         permissionEvidenceKnownActiveBoundary,
 			BoundaryPath: boundary,
 			TriggerPath:  failedPath,
+			IssueType:    IssueRemoteWriteDenied,
 		}
 	}
 
 	root := ph.permissionRoot()
 	if root == nil {
-		return PermissionCheckDecision{}
+		return PermissionEvidence{}
 	}
 
 	remoteDriveID := driveid.New(root.remoteDrive)
@@ -107,19 +107,19 @@ func (ph *PermissionHandler) handle403(
 			slog.String("path", failedPath),
 		)
 
-		return PermissionCheckDecision{}
+		return PermissionEvidence{}
 	case graph.PermissionWriteAccessInconclusive:
 		ph.logger.Warn("handle403: permission evidence inconclusive, not suppressing",
 			slog.String("path", failedPath),
 		)
 
-		return PermissionCheckDecision{}
+		return PermissionEvidence{}
 	case graph.PermissionWriteAccessReadOnly:
 	}
 
 	boundary := ph.walkPermissionBoundary(ctx, bl, parentFolder, root, remoteDriveID)
 
-	return ph.remoteBoundaryDecision(
+	return ph.remoteBoundaryEvidence(
 		boundary,
 		"folder is read-only (no write access)",
 		http.StatusForbidden,
@@ -137,13 +137,13 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 	failedPath string,
 	parentFolder string,
 	actionType ActionType,
-) PermissionCheckDecision {
+) PermissionEvidence {
 	if errors.Is(err, graph.ErrNotFound) {
 		ph.logger.Warn("handle403: folder not found, recording as permission denied",
 			slog.String("path", parentFolder),
 		)
 
-		return ph.remoteBoundaryDecision(
+		return ph.remoteBoundaryEvidence(
 			parentFolder,
 			"folder not found on remote (deleted or inaccessible)",
 			http.StatusNotFound,
@@ -157,7 +157,7 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 		slog.String("error", err.Error()),
 	)
 
-	return PermissionCheckDecision{}
+	return PermissionEvidence{}
 }
 
 func (ph *PermissionHandler) activeRemoteBoundary(ctx context.Context, failedPath string) (string, bool) {
@@ -170,30 +170,22 @@ func (ph *PermissionHandler) activeRemoteBoundary(ctx context.Context, failedPat
 	return "", false
 }
 
-func (ph *PermissionHandler) remoteBoundaryDecision(
+func (ph *PermissionHandler) remoteBoundaryEvidence(
 	boundary string,
 	errMsg string,
 	httpStatus int,
 	failedPath string,
 	actionType ActionType,
-) PermissionCheckDecision {
-	scopeKey := SKPermRemoteWrite(boundary)
+) PermissionEvidence {
+	_ = actionType
 
-	return PermissionCheckDecision{
-		Matched: true,
-		Kind:    permissionCheckActivateDerivedScope,
-		RetryWorkFailure: &RetryWorkFailure{
-			Path:          failedPath,
-			ActionType:    actionType,
-			ConditionType: IssueRemoteWriteDenied,
-			ScopeKey:      scopeKey,
-			LastError:     errMsg,
-			HTTPStatus:    httpStatus,
-			Blocked:       true,
-		},
-		ScopeKey:     scopeKey,
+	return PermissionEvidence{
+		Kind:         permissionEvidenceBoundaryDenied,
 		BoundaryPath: boundary,
 		TriggerPath:  failedPath,
+		IssueType:    IssueRemoteWriteDenied,
+		LastError:    errMsg,
+		HTTPStatus:   httpStatus,
 	}
 }
 

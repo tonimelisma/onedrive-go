@@ -10,93 +10,72 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-type PermissionCheckDecisionKind int
-
-const (
-	permissionCheckNone PermissionCheckDecisionKind = iota
-	permissionCheckRecordFileFailure
-	permissionCheckActivateBoundaryScope
-	permissionCheckActivateDerivedScope
-)
-
-// PermissionCheckDecision is the policy-layer output for a single permission
-// check performed during worker-result handling. Matched=false means the
-// engine should fall back to generic result persistence.
-type PermissionCheckDecision struct {
-	Matched          bool
-	Kind             PermissionCheckDecisionKind
-	RetryWorkFailure *RetryWorkFailure
-	ScopeKey         ScopeKey
-	BoundaryPath     string
-	TriggerPath      string
-}
-
-func (controller *scopeController) applyPermissionCheckDecision(
+func (controller *scopeController) applyPermissionOutcome(
 	ctx context.Context,
 	watch *watchRuntime,
 	flowKind permissionFlow,
-	decision *PermissionCheckDecision,
+	outcome *PermissionOutcome,
 ) bool {
-	if decision == nil || !decision.Matched {
+	if outcome == nil || !outcome.Matched {
 		return false
 	}
 
-	controller.applyPermissionCheckMutation(ctx, watch, decision)
-	controller.logPermissionCheckDecision(flowKind, decision)
+	controller.applyPermissionOutcomeMutation(ctx, watch, outcome)
+	controller.logPermissionOutcome(flowKind, outcome)
 
 	return true
 }
 
-func (controller *scopeController) applyPermissionCheckMutation(
+func (controller *scopeController) applyPermissionOutcomeMutation(
 	ctx context.Context,
 	watch *watchRuntime,
-	decision *PermissionCheckDecision,
+	outcome *PermissionOutcome,
 ) {
-	switch decision.Kind {
-	case permissionCheckNone:
+	switch outcome.Kind {
+	case permissionOutcomeNone:
 		return
-	case permissionCheckRecordFileFailure,
-		permissionCheckActivateBoundaryScope,
-		permissionCheckActivateDerivedScope:
-		if !controller.recordRetryWorkFailure(ctx, decision.Kind, decision.RetryWorkFailure) {
+	case permissionOutcomeRecordFileFailure,
+		permissionOutcomeActivateBoundaryScope,
+		permissionOutcomeActivateDerivedScope:
+		if !controller.recordRetryWorkFailure(ctx, outcome.Kind, outcome.RetryWorkFailure) {
 			return
 		}
-		if watch != nil && shouldArmPermissionRetryTimer(decision) {
+		if watch != nil && shouldArmPermissionRetryTimer(outcome) {
 			watch.armRetryTimer(ctx)
 		}
-		if !decision.ScopeKey.IsZero() {
+		if !outcome.ScopeKey.IsZero() && outcome.ScopeKey.PersistsInBlockScopes() {
 			controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
 				Block:         true,
-				ScopeKey:      decision.ScopeKey,
-				ConditionType: decision.ScopeKey.ConditionType(),
+				ScopeKey:      outcome.ScopeKey,
+				ConditionType: outcome.ScopeKey.ConditionType(),
 			})
 		}
 	default:
-		panic(fmt.Sprintf("unknown permission check decision kind %d", decision.Kind))
+		panic(fmt.Sprintf("unknown permission outcome kind %d", outcome.Kind))
 	}
 }
 
-func (controller *scopeController) logPermissionCheckDecision(
+func (controller *scopeController) logPermissionOutcome(
 	flowKind permissionFlow,
-	decision *PermissionCheckDecision,
+	outcome *PermissionOutcome,
 ) {
-	conditionKey := permissionDecisionConditionKey(decision)
+	conditionKey := permissionOutcomeConditionKey(outcome)
 
 	switch flowKind {
 	case permissionFlowNone:
 		return
 	case permissionFlowRemote403:
-		controller.logRemotePermissionDecision(decision, conditionKey)
+		controller.logRemotePermissionOutcome(outcome, conditionKey)
 	case permissionFlowLocalPermission:
-		if decision.Kind == permissionCheckActivateBoundaryScope {
+		if outcome.Kind == permissionOutcomeActivateBoundaryScope {
 			fields := append(controller.flow.summaryLogFields(
 				errclass.ClassActionable,
 				conditionKey,
-				decision.TriggerPath,
-				decision.ScopeKey,
+				outcome.TriggerPath,
+				outcome.ScopeKey,
 			),
-				slog.String("boundary", decision.BoundaryPath),
-				slog.String("trigger_path", decision.TriggerPath),
+				slog.String("boundary", outcome.BoundaryPath),
+				slog.String("trigger_path", outcome.TriggerPath),
 			)
 			controller.flow.engine.logger.Info("local permission denied: directory blocked", fields...)
 		}
@@ -105,53 +84,53 @@ func (controller *scopeController) logPermissionCheckDecision(
 	}
 }
 
-func permissionDecisionConditionKey(decision *PermissionCheckDecision) ConditionKey {
-	if decision == nil {
+func permissionOutcomeConditionKey(outcome *PermissionOutcome) ConditionKey {
+	if outcome == nil {
 		return ""
 	}
 
-	if !decision.ScopeKey.IsZero() {
-		return ConditionKeyForStoredCondition(decision.ScopeKey.ConditionType(), decision.ScopeKey)
+	if !outcome.ScopeKey.IsZero() {
+		return ConditionKeyForStoredCondition(outcome.ScopeKey.ConditionType(), outcome.ScopeKey)
 	}
 
-	if decision.RetryWorkFailure != nil {
+	if outcome.RetryWorkFailure != nil {
 		return ConditionKeyForStoredCondition(
-			decision.RetryWorkFailure.ConditionType,
-			decision.RetryWorkFailure.ScopeKey,
+			outcome.RetryWorkFailure.ConditionType,
+			outcome.RetryWorkFailure.ScopeKey,
 		)
 	}
 
-	if !decision.ScopeKey.IsZero() {
-		return ConditionKeyForStoredCondition(decision.ScopeKey.ConditionType(), decision.ScopeKey)
+	if !outcome.ScopeKey.IsZero() {
+		return ConditionKeyForStoredCondition(outcome.ScopeKey.ConditionType(), outcome.ScopeKey)
 	}
 
 	return ""
 }
 
-func (controller *scopeController) logRemotePermissionDecision(
-	decision *PermissionCheckDecision,
+func (controller *scopeController) logRemotePermissionOutcome(
+	outcome *PermissionOutcome,
 	conditionKey ConditionKey,
 ) {
-	if decision.Kind != permissionCheckActivateBoundaryScope && decision.Kind != permissionCheckActivateDerivedScope {
+	if outcome.Kind != permissionOutcomeActivateBoundaryScope && outcome.Kind != permissionOutcomeActivateDerivedScope {
 		return
 	}
 
-	scopeKey := decision.ScopeKey
+	scopeKey := outcome.ScopeKey
 	fields := append(controller.flow.summaryLogFields(
 		errclass.ClassActionable,
 		conditionKey,
-		decision.TriggerPath,
+		outcome.TriggerPath,
 		scopeKey,
 	),
-		slog.String("boundary", decision.BoundaryPath),
-		slog.String("trigger_path", decision.TriggerPath),
+		slog.String("boundary", outcome.BoundaryPath),
+		slog.String("trigger_path", outcome.TriggerPath),
 	)
 	controller.flow.engine.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively", fields...)
 }
 
 func (controller *scopeController) recordRetryWorkFailure(
 	ctx context.Context,
-	kind PermissionCheckDecisionKind,
+	kind PermissionOutcomeKind,
 	failure *RetryWorkFailure,
 ) bool {
 	if failure == nil {
@@ -165,7 +144,7 @@ func (controller *scopeController) recordRetryWorkFailure(
 		logClass = errclass.ClassBlockScopeingTransient
 	}
 
-	delayFn := permissionDecisionRetryDelay(kind, failure)
+	delayFn := permissionOutcomeRetryDelay(kind, failure)
 	if _, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, failure, delayFn); err != nil {
 		fields := append(flow.summaryLogFields(
 			logClass,
@@ -190,21 +169,21 @@ func (controller *scopeController) recordRetryWorkFailure(
 	return true
 }
 
-func permissionDecisionRetryDelay(
-	kind PermissionCheckDecisionKind,
+func permissionOutcomeRetryDelay(
+	kind PermissionOutcomeKind,
 	failure *RetryWorkFailure,
 ) func(int) time.Duration {
-	if kind != permissionCheckRecordFileFailure || failure == nil || failure.Blocked {
+	if kind != permissionOutcomeRecordFileFailure || failure == nil || failure.Blocked {
 		return nil
 	}
 
 	return retry.ReconcilePolicy().Delay
 }
 
-func shouldArmPermissionRetryTimer(decision *PermissionCheckDecision) bool {
-	if decision == nil || decision.Kind != permissionCheckRecordFileFailure {
+func shouldArmPermissionRetryTimer(outcome *PermissionOutcome) bool {
+	if outcome == nil || outcome.Kind != permissionOutcomeRecordFileFailure {
 		return false
 	}
 
-	return decision.RetryWorkFailure != nil && !decision.RetryWorkFailure.Blocked
+	return outcome.RetryWorkFailure != nil && !outcome.RetryWorkFailure.Blocked
 }

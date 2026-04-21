@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/watch_summary.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
+GOVERNS: internal/sync/engine*.go, internal/sync/watch_summary.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_policy.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
 Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
@@ -69,6 +69,15 @@ assemble overlapping observation-managed batch shapes ad hoc.
 For separately configured shared-root drives, the engine also carries the
 configured `rootItemID`. That root item defines the remote boundary for scoped
 observation and execution metadata.
+
+Permission handling is intentionally split three ways:
+
+- probe/evidence (`permission_probe_*.go`, `permission_evidence.go`) gathers
+  filesystem or Graph facts only
+- pure policy (`permission_policy.go`) turns one action completion plus
+  permission evidence into an engine-facing `PermissionOutcome`
+- apply/logging (`permission_decisions.go`) persists blocked `retry_work`,
+  activates or releases timed write scopes, and emits engine-owned logs
 
 ## One-Shot Sync
 
@@ -252,8 +261,9 @@ manual recheck CLI for them. Observation may create or clear read-boundary
 facts directly when current truth proves the blocker or its recovery. Probe and
 execution may create or clear persisted write scopes when write access is
 affirmatively denied or restored. A raw `403` or `os.ErrPermission` is only a
-trigger to probe; the probe result is what may activate or release a
-write-side scope.
+trigger to probe; the probe returns evidence only, the pure permission policy
+maps that evidence to an engine-facing outcome, and only the engine apply path
+may activate or release a write-side scope.
 
 Ownership splits by access kind:
 
