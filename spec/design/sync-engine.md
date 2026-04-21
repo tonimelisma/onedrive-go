@@ -58,7 +58,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Behavior | Evidence |
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
-| One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestRunRetrierSweep_ReleasesHeldRetryEntriesOnly`, `TestRunTrialDispatch_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchMaintenanceEvent_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunBootstrapStep_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
+| One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestHandleWatchEvent_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunBootstrapStep_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 
 ## Construction
 
@@ -129,7 +129,7 @@ stage sequence: load planner inputs, build the current action plan from those
 observed inputs, then prepare the runtime handoff by reconciling durable
 retry/scope state and loading surviving `retry_work` / `block_scopes`.
 Stale `retry_work` and empty `block_scopes` are pruned there, not from timer
-sweeps.
+held-release paths.
 
 Scope startup cleanup follows the same policy with a deliberate
 decision-then-apply split: the engine first derives which persisted scopes are
@@ -358,13 +358,14 @@ initializes the current runtime's held-work indexes. Admission then decides,
 for each dependency-ready exact action, whether it dispatches now, stays held
 behind `next_retry_at`, or stays held behind an active `scope_key`.
 
-Retry sweeps and trial sweeps operate only on that current runtime state:
+Held retry release and held trial release operate only on that current
+runtime state:
 
-- retry sweeps release held exact actions whose `next_retry_at` is due
-- trial sweeps release one deterministic held blocked candidate for each due
-  scope
-- neither sweep rebuilds an `ActionPlan`, refreshes current truth, or walks a
-  second dependency closure
+- held retry release emits exact held actions whose `next_retry_at` is due
+- held trial release emits one deterministic held blocked candidate for each
+  due scope
+- neither held-release path rebuilds an `ActionPlan`, refreshes current
+  truth, or walks a second dependency closure
 
 Scope lifecycle is owned only by `block_scopes` plus blocked/unblocked
 `retry_work`. Timed transient scopes are discarded when no blocked

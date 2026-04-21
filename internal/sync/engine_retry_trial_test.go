@@ -9,7 +9,7 @@ import (
 )
 
 // Validates: R-2.10.33
-func TestRunRetrierSweep_ReleasesHeldRetryEntriesOnly(t *testing.T) {
+func TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -22,7 +22,7 @@ func TestRunRetrierSweep_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 
 	rt.holdAction(ta, heldReasonRetry, ScopeKey{}, eng.nowFn().Add(-time.Second))
 
-	outbox, err := rt.runRetrierSweep(t.Context())
+	outbox, err := rt.releaseDueHeldRetriesNow(t.Context())
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, "retry.txt", outbox[0].Action.Path)
@@ -31,7 +31,7 @@ func TestRunRetrierSweep_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 }
 
 // Validates: R-2.10.33
-func TestRunRetrierSweep_DoesNotConsultDurableRetryRowsWithoutHeldRuntimeEntry(t *testing.T) {
+func TestReleaseDueHeldRetriesNow_DoesNotConsultDurableRetryRowsWithoutHeldRuntimeEntry(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -47,7 +47,7 @@ func TestRunRetrierSweep_DoesNotConsultDurableRetryRowsWithoutHeldRuntimeEntry(t
 		LastSeenAt:   now.UnixNano(),
 	}))
 
-	outbox, err := rt.runRetrierSweep(t.Context())
+	outbox, err := rt.releaseDueHeldRetriesNow(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 
@@ -57,7 +57,7 @@ func TestRunRetrierSweep_DoesNotConsultDurableRetryRowsWithoutHeldRuntimeEntry(t
 }
 
 // Validates: R-2.10.5
-func TestRunTrialDispatch_ReleasesFirstHeldScopeCandidateAsTrial(t *testing.T) {
+func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -85,7 +85,7 @@ func TestRunTrialDispatch_ReleasesFirstHeldScopeCandidateAsTrial(t *testing.T) {
 	rt.holdAction(first, heldReasonScope, scopeKey, time.Time{})
 	rt.holdAction(second, heldReasonScope, scopeKey, time.Time{})
 
-	outbox, err := rt.runTrialDispatch(t.Context())
+	outbox, err := rt.releaseDueHeldTrialsNow(t.Context())
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, "first.txt", outbox[0].Action.Path)
@@ -97,7 +97,7 @@ func TestRunTrialDispatch_ReleasesFirstHeldScopeCandidateAsTrial(t *testing.T) {
 }
 
 // Validates: R-2.10.5
-func TestRunTrialDispatch_SkipsScopesWithoutHeldDependencyReadyCandidates(t *testing.T) {
+func TestReleaseDueHeldTrialsNow_SkipsScopesWithoutHeldDependencyReadyCandidates(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -111,14 +111,14 @@ func TestRunTrialDispatch_SkipsScopesWithoutHeldDependencyReadyCandidates(t *tes
 		TrialInterval: 10 * time.Second,
 	})
 
-	outbox, err := rt.runTrialDispatch(t.Context())
+	outbox, err := rt.releaseDueHeldTrialsNow(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 	assert.True(t, isTestBlockScopeed(eng, scopeKey))
 }
 
 // Validates: R-2.10.5
-func TestRunTrialDispatch_DoesNotConsultDurableBlockedRetryRowsWithoutHeldRuntimeEntry(t *testing.T) {
+func TestReleaseDueHeldTrialsNow_DoesNotConsultDurableBlockedRetryRowsWithoutHeldRuntimeEntry(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -141,7 +141,7 @@ func TestRunTrialDispatch_DoesNotConsultDurableBlockedRetryRowsWithoutHeldRuntim
 	}, nil)
 	require.NoError(t, err)
 
-	outbox, err := rt.runTrialDispatch(t.Context())
+	outbox, err := rt.releaseDueHeldTrialsNow(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 	assert.True(t, isTestBlockScopeed(eng, scopeKey))

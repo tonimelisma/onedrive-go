@@ -10,7 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func TestWatchDispatchEvent_ActionCompletionDrainsPublicationOnlyDependents(t *testing.T) {
+func TestHandleWatchEvent_ActionCompletionDrainsPublicationOnlyDependents(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -48,7 +48,7 @@ func TestWatchDispatchEvent_ActionCompletionDrainsPublicationOnlyDependents(t *t
 	assert.Nil(t, dependent, "cleanup dependent should wait on its parent before completion")
 
 	p := &watchPipeline{bl: bl}
-	done, handled, err := rt.handleDispatchEvent(ctx, p, &watchEvent{
+	done, err := rt.handleWatchEvent(ctx, p, &watchEvent{
 		kind: watchEventActionCompletion,
 		completion: &ActionCompletion{
 			Path:       "sync.txt",
@@ -59,7 +59,6 @@ func TestWatchDispatchEvent_ActionCompletionDrainsPublicationOnlyDependents(t *t
 			ActionID:   1,
 		},
 	})
-	require.True(t, handled)
 	require.NoError(t, err)
 	assert.False(t, done)
 	assert.Empty(t, rt.currentOutbox(), "publication-only dependents should drain on the engine side")
@@ -166,7 +165,7 @@ func TestReducePublicationFrontier_PersistsRetryWorkOnPublicationCommitFailure(t
 }
 
 // Validates: R-2.10.33
-func TestWatchMaintenanceEvent_RetryTickReducesReleasedPublicationRetryOnEngineSide(t *testing.T) {
+func TestHandleWatchEvent_RetryTickReducesReleasedPublicationRetryOnEngineSide(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -207,11 +206,11 @@ func TestWatchMaintenanceEvent_RetryTickReducesReleasedPublicationRetryOnEngineS
 	require.NotNil(t, publication)
 	rt.holdAction(publication, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
 
-	handled, err := rt.handleMaintenanceEvent(ctx, &watchPipeline{bl: bl}, &watchEvent{
+	done, err := rt.handleWatchEvent(ctx, &watchPipeline{bl: bl}, &watchEvent{
 		kind: watchEventRetryTick,
 	})
-	require.True(t, handled)
 	require.NoError(t, err)
+	assert.False(t, done)
 	assert.Empty(t, rt.currentOutbox(), "released publication retries must reduce on the engine side before any worker dispatch")
 	assert.Empty(t, rt.heldByKey)
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))

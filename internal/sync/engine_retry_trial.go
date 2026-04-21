@@ -10,13 +10,14 @@ import (
 
 const retryResolutionSourceWorkerSuccess = "worker_success"
 
-// runTrialDispatch releases due held scope trials that are already present in
-// the runtime. It never rebuilds plan structure or revalidates durable rows.
-func (rt *watchRuntime) runTrialDispatch(
+// releaseDueHeldTrialsNow releases due held scope trials that are already
+// present in the runtime. It never rebuilds plan structure or revalidates
+// durable rows.
+func (rt *watchRuntime) releaseDueHeldTrialsNow(
 	ctx context.Context,
 ) ([]*TrackedAction, error) {
-	rt.mustAssertHeldReleaseAllowed(rt, "runTrialDispatch", "run trial dispatch")
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialSweepStarted})
+	rt.mustAssertHeldReleaseAllowed(rt, "releaseDueHeldTrialsNow", "release due held trials")
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialHeldReleaseStarted})
 
 	dispatch, err := rt.drainDueHeldWorkNow(ctx, rt)
 	if err != nil {
@@ -24,19 +25,20 @@ func (rt *watchRuntime) runTrialDispatch(
 	}
 	rt.armHeldTimers()
 	rt.engine.emitDebugEvent(engineDebugEvent{
-		Type:  engineDebugEventTrialSweepCompleted,
+		Type:  engineDebugEventTrialHeldReleaseCompleted,
 		Count: len(dispatch),
 	})
 	return dispatch, nil
 }
 
-// runRetrierSweep releases due held retry entries that are already present in
-// the runtime. It never rebuilds plan structure or revalidates durable rows.
-func (rt *watchRuntime) runRetrierSweep(
+// releaseDueHeldRetriesNow releases due held retry entries that are already
+// present in the runtime. It never rebuilds plan structure or revalidates
+// durable rows.
+func (rt *watchRuntime) releaseDueHeldRetriesNow(
 	ctx context.Context,
 ) ([]*TrackedAction, error) {
-	rt.mustAssertHeldReleaseAllowed(rt, "runRetrierSweep", "run retrier sweep")
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetrySweepStarted})
+	rt.mustAssertHeldReleaseAllowed(rt, "releaseDueHeldRetriesNow", "release due held retries")
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryHeldReleaseStarted})
 
 	dispatch, err := rt.drainDueHeldWorkNow(ctx, rt)
 	if err != nil {
@@ -44,7 +46,7 @@ func (rt *watchRuntime) runRetrierSweep(
 	}
 	rt.armHeldTimers()
 	rt.engine.emitDebugEvent(engineDebugEvent{
-		Type:  engineDebugEventRetrySweepCompleted,
+		Type:  engineDebugEventRetryHeldReleaseCompleted,
 		Count: len(dispatch),
 	})
 	return dispatch, nil

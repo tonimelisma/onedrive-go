@@ -236,7 +236,7 @@ func (wp *WorkerPool) dispatchAction(
 // Completions returns a read-only channel of per-action completions. The
 // engine reads from this channel, classifies each completion, and calls
 // depGraph.Complete. Failed items become retry_work, block scopes, or other
-// engine-owned durable control state for the engine sweeps.
+// engine-owned durable control state for held release and scope lifecycle.
 func (wp *WorkerPool) Completions() <-chan ActionCompletion {
 	return wp.completions
 }
