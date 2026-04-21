@@ -97,6 +97,9 @@ Permission timing follows the policy result, not the probe:
   timed write scope they own, but they do not arm the ordinary retry timer
 - known-active-boundary outcomes are a true no-op for durable state and timer
   arming because the boundary is already active
+- unmatched permission evidence falls back to the generic classified result
+  path; trial reclassification reuses that same fallback instead of treating
+  inconclusive permission probes as fatal runtime errors
 
 ## One-Shot Sync
 
@@ -121,11 +124,12 @@ one-shot run are durable state for a later run.
 
 The current-plan preparation stage is the handoff boundary between planning
 and runtime startup. Observation remains entrypoint-specific, but once an
-entrypoint has produced observed current truth the engine runs one shared
-prepare helper: load planner inputs, build the current action plan, reconcile
-durable retry/scope state, load surviving `retry_work` / `block_scopes`, and
-only then hand that prepared runtime state to execution. Stale `retry_work`
-and empty `block_scopes` are pruned there, not from timer sweeps.
+entrypoint has produced observed current truth the engine runs the same named
+stage sequence: load planner inputs, build the current action plan from those
+observed inputs, then prepare the runtime handoff by reconciling durable
+retry/scope state and loading surviving `retry_work` / `block_scopes`.
+Stale `retry_work` and empty `block_scopes` are pruned there, not from timer
+sweeps.
 
 Scope startup cleanup follows the same policy with a deliberate
 decision-then-apply split: the engine first derives which persisted scopes are
@@ -135,16 +139,17 @@ rearm-or-discard handling and store-side prune helpers so empty timed scopes
 do not survive by accident in one path but not another.
 
 Within that one-shot flow, the engine now treats "prepare current plan" as an
-explicit stage: observe current truth, then hand the observed state to the
-shared prepare helper. Live, dry-run, watch bootstrap, and watch dirty
-replans all use that same observed-state -> prepared-current-plan stage; they
-differ only in how they collected the observed state and whether durable
-materialization and deferred cursor commit are in play. The top-level
-coordinators should stay at that stage level rather than inlining planner
-input loads, durable prune/load logic, or runtime-start bookkeeping. The same
-rule applies to execution-only publication drain helpers and post-sync
-housekeeping: keep them next to their stage so a reader can see the flow at a
-glance.
+explicit stage sequence: observe current truth, build the current plan from
+that observed state, then either prepare a runtime handoff or keep the
+dry-run build in memory without touching durable held-work state. Live,
+dry-run, watch bootstrap, and watch dirty replans all use that same
+observed-state -> build -> prepare boundary; they differ only in how they
+collected the observed state and whether a deferred cursor commit is present.
+The top-level coordinators should stay at that stage level rather than
+inlining planner input loads, durable prune/load logic, or runtime-start
+bookkeeping. The same rule applies to execution-only publication drain
+helpers and post-sync housekeeping: keep them next to their stage so a reader
+can see the flow at a glance.
 
 Full-remote-refresh cadence is restart-safe even when a full remote refresh returns
 no delta cursor. The engine still advances the persisted cadence in
@@ -263,7 +268,7 @@ The engine classifies results into:
 - execution may still persist `retry_work` for a failed exact action even when
   a later observation pass may record the corresponding durable current-truth
   issue; planning suppression plus retry pruning collapses that overlap on the
-  next normal plan materialization
+  next normal prepare cycle
 - durable `retry_work` / `block_scopes` mutations are fail-closed runtime
   control writes; if the engine cannot persist or transition them, it stops
   the current runtime instead of logging and continuing
