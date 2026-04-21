@@ -123,3 +123,44 @@ func TestReducePublicationFrontier_DoesNotReleaseUnrelatedHeldWork(t *testing.T)
 	assert.Equal(t, int64(2), outbox[0].ID, "publication reduction should only enqueue dependents unlocked by publication success")
 	assert.Contains(t, rt.heldByKey, retryWorkKeyForAction(&held.Action), "unrelated held retry work should not be released by publication reduction")
 }
+
+// Validates: R-2.10.5, R-2.10.33
+func TestReducePublicationFrontier_PersistsRetryWorkOnPublicationCommitFailure(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
+		Action:   ActionDownload,
+		Success:  true,
+		Path:     "seed.txt",
+		DriveID:  eng.driveID,
+		ItemID:   "seed-item",
+		ParentID: "root",
+		ItemType: ItemTypeFile,
+	}))
+
+	rt.initializePreparedRuntime(&PreparedCurrentPlan{})
+
+	publication := rt.depGraph.Add(&Action{
+		Type:    ActionCleanup,
+		Path:    "cleanup.txt",
+		DriveID: driveid.New("0000000000000002"),
+		ItemID:  "cleanup-item",
+	}, 1, nil)
+	require.NotNil(t, publication)
+
+	outbox, err := rt.reducePublicationFrontier(ctx, rt, &Baseline{}, nil, []*TrackedAction{publication})
+	require.NoError(t, err)
+	assert.Empty(t, outbox)
+
+	work := retryWorkKeyForAction(&publication.Action)
+	require.Contains(t, rt.heldByKey, work)
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, ctx)
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, "cleanup.txt", retryRows[0].Path)
+	assert.Equal(t, ActionCleanup, retryRows[0].ActionType)
+}

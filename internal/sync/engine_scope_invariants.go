@@ -51,15 +51,15 @@ func (flow *engineFlow) mustAssertDispatchAdmissionSealed(
 	}
 }
 
-func (flow *engineFlow) mustAssertPlannerSweepAllowed(
+func (flow *engineFlow) mustAssertHeldReleaseAllowed(
 	watch *watchRuntime,
-	sweep string,
+	release string,
 	stage string,
 ) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertPlannerSweepAllowed(watch, sweep); err != nil {
+	if err := flow.assertHeldReleaseAllowed(watch, release); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
@@ -140,12 +140,12 @@ func (flow *engineFlow) assertDispatchAdmissionSealed(
 	return fmt.Errorf("draining runtime must not attempt to admit %d queued actions", len(outbox))
 }
 
-func (flow *engineFlow) assertPlannerSweepAllowed(watch *watchRuntime, sweep string) error {
+func (flow *engineFlow) assertHeldReleaseAllowed(watch *watchRuntime, release string) error {
 	if watch == nil || !watch.isDraining() {
 		return nil
 	}
 
-	return fmt.Errorf("%s must not start after drain begins", sweep)
+	return fmt.Errorf("%s must not start after drain begins", release)
 }
 
 func (flow *engineFlow) assertRefreshBookkeepingCleared(watch *watchRuntime) error {

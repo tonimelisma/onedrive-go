@@ -89,10 +89,14 @@ engine.
 
 - transient exact work is persisted in `retry_work`
 - `next_retry_at` is computed from `ReconcilePolicy()`
-- the engine-owned retry sweep reads ready rows from `retry_work`, refreshes
-  current snapshot truth, replans from SQLite snapshots plus baseline, prunes
-  stale retry rows, and dispatches only the current matching actions plus any
-  still-required dependencies
+- current-plan preparation prunes stale retry rows against the latest
+  actionable set and loads the surviving rows into runtime state
+- when an exact action becomes dependency-ready, admission consults its
+  persisted retry row and either dispatches it now or holds it in runtime
+  until `next_retry_at`
+- the engine-owned retry sweep releases only those already-held exact actions
+  whose retry time is now due; it does not refresh truth, rebuild plans, or
+  reconstruct dependencies
 - durable current-truth/content problems belong in `observation_issues`, not in
   retry scheduling
 
@@ -102,16 +106,18 @@ When the engine activates a block scope, blocked descendants remain in
 `retry_work` with `blocked=true` and a matching `scope_key`. Recovery happens
 through trial actions:
 
-- `runTrialDispatch()` picks one blocked retry row for each due scope
-- the trial path refreshes current snapshot truth, replans from SQLite
-  reconciliation, and dispatches the current matching action for that blocked
-  semantic work
+- only dependency-ready exact actions enter held blocked runtime state, so a
+  due trial always chooses from actions that are runnable if the scope is
+  released
+- the engine-owned trial sweep picks one deterministic held blocked candidate
+  for each due scope and dispatches it as a trial without rebuilding plan
+  structure
 - success releases the scope
 - matching-scope persistence evidence extends the scope
 - inconclusive outcomes re-arm the current interval without inventing a new
   blocker row, but only while blocked `retry_work` still exists for the scope
-- stale blocked work that no longer appears in the current actionable set is
-  cleared directly from `retry_work`
+- scope release makes blocked retry rows ready in store and immediately flips
+  the corresponding held runtime entries into due exact retry work
 - once a scope has no blocked `retry_work`, the engine discards the empty
   `block_scopes` row immediately instead of preserving timing with no work
 

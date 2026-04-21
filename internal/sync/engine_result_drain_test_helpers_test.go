@@ -77,9 +77,9 @@ func runResultDrainLoopIdleForTest(
 		}
 		return appendDrainOutcome(rt, ctx, bl, nil, &workerResult)
 	case <-rt.trialTimerChan():
-		return rt.runTrialDispatch(ctx, bl, SyncBidirectional), false
+		return rt.runTrialDispatch(ctx), false
 	case <-rt.retryTimerChan():
-		return rt.runRetrierSweep(ctx, bl, SyncBidirectional), false
+		return rt.runRetrierSweep(ctx), false
 	case <-ctx.Done():
 		return nil, true
 	}
@@ -101,9 +101,9 @@ func runResultDrainLoopWithOutboxForTest(
 		}
 		return appendDrainOutcome(rt, ctx, bl, outbox, &workerResult)
 	case <-rt.trialTimerChan():
-		return append(outbox, rt.runTrialDispatch(ctx, bl, SyncBidirectional)...), false
+		return append(outbox, rt.runTrialDispatch(ctx)...), false
 	case <-rt.retryTimerChan():
-		return append(outbox, rt.runRetrierSweep(ctx, bl, SyncBidirectional)...), false
+		return append(outbox, rt.runRetrierSweep(ctx)...), false
 	case <-ctx.Done():
 		return outbox, true
 	}

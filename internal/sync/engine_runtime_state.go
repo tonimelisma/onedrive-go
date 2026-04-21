@@ -332,14 +332,20 @@ func (flow *engineFlow) dueTrialKeys(now time.Time) []RetryWorkKey {
 
 func (flow *engineFlow) releaseHeldScope(scopeKey ScopeKey) {
 	keys := append([]RetryWorkKey(nil), flow.heldScopeOrder[scopeKey]...)
+	now := flow.engine.nowFunc()
 	for _, key := range keys {
 		held := flow.heldByKey[key]
 		if held == nil || held.Reason != heldReasonScope {
 			continue
 		}
+		if row, ok := flow.retryRowsByKey[key]; ok && row.Blocked && row.ScopeKey == scopeKey {
+			row.Blocked = false
+			row.NextRetryAt = now.UnixNano()
+			flow.retryRowsByKey[key] = row
+		}
 		held.Reason = heldReasonRetry
 		held.ScopeKey = ScopeKey{}
-		held.NextRetry = flow.engine.nowFunc()
+		held.NextRetry = now
 	}
 	delete(flow.heldScopeOrder, scopeKey)
 }

@@ -330,29 +330,34 @@ Remote `403` handling is intentionally narrow:
 - observation-owned `remote_read_denied` findings come only from remote
   observation/probe at the observation orchestration seam
 
-### Retry and trial reconstruction
+### Retry and trial release
 
-Retry and trial reconstruction is retry-owned. The engine revalidates due or
-blocked work directly from `retry_work`, exact semantic work identity, and the
-current snapshot/baseline view. Scope lifecycle is owned only by
-`block_scopes` plus blocked/unblocked `retry_work`. Timed transient scopes are
-discarded when no blocked `retry_work` remains for their `scope_key`. Remote
-write block scopes follow that same rule; recovery happens through normal timed
-trials or successful writes, not through a separate maintenance loop. This
-runtime ownership rule is narrower than the store's structural linkage
-invariant: a scope row may still share a `scope_key` with observation or ready
-retry rows for reporting/history, but the engine keeps a blocker active only
-while blocked `retry_work` still exists. Missing-row follow-up uses one
-row-level revalidation contract:
+Retry and trial release is retry-owned, but it is no longer timer-time
+replanning. Current-plan preparation prunes stale `retry_work` against the
+latest actionable set, loads the surviving `retry_work` / `block_scopes`, and
+initializes the current runtime's held-work indexes. Admission then decides,
+for each dependency-ready exact action, whether it dispatches now, stays held
+behind `next_retry_at`, or stays held behind an active `scope_key`.
 
-- clear the exact retry row when current truth resolved it
-- clear the exact retry row when targeted observation/probing now skips it
-- rearm unblocked retry work when the exact action still needs later follow-up
-- keep held retry work blocked behind its scope when the blocker still applies
+Retry sweeps and trial sweeps operate only on that current runtime state:
 
-Retry sweeps and scope trials may apply those outcomes differently, but they
-must derive them from the same row-level revalidation policy rather than
-duplicating action-type-specific cleanup logic at each caller.
+- retry sweeps release held exact actions whose `next_retry_at` is due
+- trial sweeps release one deterministic held blocked candidate for each due
+  scope
+- neither sweep rebuilds an `ActionPlan`, refreshes current truth, or walks a
+  second dependency closure
+
+Scope lifecycle is owned only by `block_scopes` plus blocked/unblocked
+`retry_work`. Timed transient scopes are discarded when no blocked
+`retry_work` remains for their `scope_key`. Remote write block scopes follow
+that same rule; recovery happens through normal timed trials or successful
+writes, not through a separate maintenance loop. A scope row may still share a
+`scope_key` with observation or ready retry rows for reporting/history, but
+the engine keeps a blocker active only while blocked `retry_work` still
+exists. Scope release updates both authorities in one logical step: store-side
+blocked rows become ready immediately, and the current runtime flips the
+matching held entries into due retry-held work so one-shot and watch can
+continue without waiting for a replan.
 
 ## What The Engine Does Not Own
 

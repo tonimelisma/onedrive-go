@@ -320,13 +320,13 @@ func (rt *watchRuntime) handleMaintenanceEvent(
 		if rt.hasPendingDirtyReplan() {
 			return true, nil
 		}
-		rt.appendOutbox(rt.runTrialDispatch(ctx, p.bl, p.mode))
+		rt.appendOutbox(rt.runTrialDispatch(ctx))
 		return true, nil
 	case watchEventRetryTick:
 		if rt.hasPendingDirtyReplan() {
 			return true, nil
 		}
-		rt.appendOutbox(rt.runRetrierSweep(ctx, p.bl, p.mode))
+		rt.appendOutbox(rt.runRetrierSweep(ctx))
 		return true, nil
 	case watchEventContextCanceled:
 		rt.beginWatchDrain(ctx, p)

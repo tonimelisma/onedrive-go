@@ -26,18 +26,11 @@ type trackedNode struct {
 type DepGraph struct {
 	mu        stdsync.Mutex
 	actions   map[int64]*trackedNode
-	byPath    map[string]*trackedNode
 	total     atomic.Int32  // total actions added
 	completed atomic.Int32  // total actions completed
 	done      chan struct{} // closed when completed == total && total > 0
 	closeOnce stdsync.Once  // ensures done is closed exactly once
 	logger    *slog.Logger
-
-	// emptyCh is closed when actions map hits 0 after a WaitForEmpty call.
-	// Nil until WaitForEmpty is called. One-shot per call — callers must
-	// call WaitForEmpty again for subsequent emptiness checks.
-	emptyCh   chan struct{}
-	emptyOnce *stdsync.Once
 }
 
 // NewDepGraph creates a new dependency graph. The done channel is closed
@@ -45,7 +38,6 @@ type DepGraph struct {
 func NewDepGraph(logger *slog.Logger) *DepGraph {
 	return &DepGraph{
 		actions: make(map[int64]*trackedNode),
-		byPath:  make(map[string]*trackedNode),
 		done:    make(chan struct{}),
 		logger:  logger,
 	}
@@ -56,24 +48,6 @@ func NewDepGraph(logger *slog.Logger) *DepGraph {
 // if total is 0 (no actions added).
 func (g *DepGraph) Done() <-chan struct{} {
 	return g.done
-}
-
-// WaitForEmpty returns a channel that is closed when InFlightCount drops
-// to zero. If the graph is already empty, returns a pre-closed channel.
-// One-shot: call again for subsequent emptiness checks.
-func (g *DepGraph) WaitForEmpty() <-chan struct{} {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if len(g.actions) == 0 {
-		ch := make(chan struct{})
-		close(ch)
-		return ch
-	}
-
-	g.emptyCh = make(chan struct{})
-	g.emptyOnce = &stdsync.Once{}
-	return g.emptyCh
 }
 
 // Add inserts an action into the graph. If all dependencies are already
@@ -101,7 +75,6 @@ func (g *DepGraph) Add(action *Action, id int64, depIDs []int64) *TrackedAction 
 	defer g.mu.Unlock()
 
 	g.actions[id] = node
-	g.byPath[action.Path] = node
 
 	var depsRemaining int32
 
@@ -144,7 +117,6 @@ func (g *DepGraph) Register(action *Action, id int64) {
 	defer g.mu.Unlock()
 
 	g.actions[id] = node
-	g.byPath[action.Path] = node
 
 	// Set depsLeft to 1 to prevent premature readiness. WireDeps will
 	// set the correct value. This sentinel ensures that if WireDeps is
@@ -228,10 +200,9 @@ func (g *DepGraph) Get(id int64) (*TrackedAction, bool) {
 	return node.TrackedAction, true
 }
 
-// Complete marks an action as done, deletes it from both the actions and
-// byPath maps (D-10 fix), and decrements the depsLeft counter on all
-// dependents. Returns (newly-ready dependents as TrackedAction pointers, true)
-// on success.
+// Complete marks an action as done, deletes it from the graph (D-10 fix), and
+// decrements the depsLeft counter on all dependents. Returns (newly-ready
+// dependents as TrackedAction pointers, true) on success.
 //
 // If id is unknown (not in the graph), a warning is logged and (nil, false)
 // is returned. The bool distinguishes "unknown ID" from "known ID with no
@@ -248,28 +219,15 @@ func (g *DepGraph) Complete(id int64) ([]*TrackedAction, bool) {
 		return nil, false
 	}
 
-	// Copy dependents under the lock to prevent races with Add() appending
-	// to the same slice in watch mode (overlapping passes).
+	// Copy dependents under the lock so concurrent Add/Register callers cannot
+	// append to the same slice while completion walks it.
 	dependents := make([]*trackedNode, len(node.dependents))
 	copy(dependents, node.dependents)
 
-	// D-10 fix: delete from both maps so the completed action doesn't
-	// linger. Without this, a subsequent Add could find the completed
-	// action, wire a dependency edge to it, and the dependent waits forever.
+	// D-10 fix: delete the completed action so future Add/Register callers
+	// treat the ID as already satisfied instead of wiring new dependents to a
+	// stale node.
 	delete(g.actions, id)
-	// Only delete byPath if it still points to this action. When CancelByPath
-	// removes the old entry and Add inserts a new one for the same path,
-	// unconditionally deleting would strand the replacement action.
-	if g.byPath[node.Action.Path] == node {
-		delete(g.byPath, node.Action.Path)
-	}
-
-	// Snapshot emptiness while holding lock — the len check is consistent
-	// with the delete above. emptyOnce/emptyCh are only set by WaitForEmpty
-	// (also under mu), so capturing them here is race-free.
-	empty := len(g.actions) == 0
-	emptyOnce := g.emptyOnce
-	emptyCh := g.emptyCh
 
 	g.mu.Unlock()
 
@@ -288,38 +246,7 @@ func (g *DepGraph) Complete(id int64) ([]*TrackedAction, bool) {
 		g.closeOnce.Do(func() { close(g.done) })
 	}
 
-	// Signal WaitForEmpty watchers when the actions map is drained.
-	if empty && emptyOnce != nil {
-		emptyOnce.Do(func() { close(emptyCh) })
-	}
-
 	return ready, true
-}
-
-// HasInFlight returns true if the given path has an in-flight action
-// tracked by the graph. Thread-safe.
-func (g *DepGraph) HasInFlight(path string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	_, ok := g.byPath[path]
-	return ok
-}
-
-// CancelByPath cancels the in-flight action for the given path, if any.
-// Removes the byPath entry so long-lived graphs don't cancel the wrong
-// action if the same path is re-added in a subsequent pass.
-func (g *DepGraph) CancelByPath(path string) {
-	g.mu.Lock()
-	node, ok := g.byPath[path]
-	if ok {
-		delete(g.byPath, path)
-	}
-	g.mu.Unlock()
-
-	if ok && node.Cancel != nil {
-		node.Cancel()
-	}
 }
 
 // InFlightCount returns the number of actions currently in the graph that

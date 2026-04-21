@@ -71,6 +71,12 @@ Execution does not own them because they perform no external side effects:
 Their only durable effect is baseline publication, so the engine/store
 boundary commits them directly via `CommitMutation()`.
 
+Publication success stays entirely on the engine side: the engine marks the
+graph node successful and releases any dependents without synthesizing a worker
+completion. Publication failure still uses the shared result classifier so the
+exact publication action can persist `retry_work` and remain held in the
+current runtime instead of terminating the loop on a transient store error.
+
 ## File And Folder Mutation
 
 ### Uploads and downloads

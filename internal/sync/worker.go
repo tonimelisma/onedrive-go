@@ -176,7 +176,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 
 	// Persist success outcomes immediately via the store-owned mutation input.
 	// Uses pool-level ctx because the action already completed — its outcome
-	// should be persisted even if CancelByPath canceled actionCtx.
+	// should be persisted even if the owning runtime canceled actionCtx.
 	if outcome.Success {
 		mutation := mutationFromActionOutcome(&outcome)
 		if mutation != nil {
