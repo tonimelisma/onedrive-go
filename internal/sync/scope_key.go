@@ -167,7 +167,9 @@ func (sk ScopeKey) IsPermRemoteWrite() bool {
 }
 
 // CoveredPath returns the subtree or path covered by this scope key when it is
-// path-scoped. Non-path scopes return the empty string.
+// path-scoped. Generic callers should use this accessor; DirPath and RemotePath
+// remain family-asserting helpers for callers that need to prove the scope
+// family before proceeding. Non-path scopes return the empty string.
 func (sk ScopeKey) CoveredPath() string {
 	return DescribeScopeKey(sk).ScopePath()
 }
