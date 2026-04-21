@@ -24,30 +24,17 @@ type trackedNode struct {
 // to channels, run active-scope admission, etc.). This separation keeps
 // dependency tracking independent from scope admission.
 type DepGraph struct {
-	mu        stdsync.Mutex
-	actions   map[int64]*trackedNode
-	total     atomic.Int32  // total actions added
-	completed atomic.Int32  // total actions completed
-	done      chan struct{} // closed when completed == total && total > 0
-	closeOnce stdsync.Once  // ensures done is closed exactly once
-	logger    *slog.Logger
+	mu      stdsync.Mutex
+	actions map[int64]*trackedNode
+	logger  *slog.Logger
 }
 
-// NewDepGraph creates a new dependency graph. The done channel is closed
-// when all added actions have been completed (completed == total && total > 0).
+// NewDepGraph creates a new dependency graph.
 func NewDepGraph(logger *slog.Logger) *DepGraph {
 	return &DepGraph{
 		actions: make(map[int64]*trackedNode),
-		done:    make(chan struct{}),
 		logger:  logger,
 	}
-}
-
-// Done returns a channel that is closed when all actions have been completed.
-// Closing happens exactly once via sync.Once. Returns a never-closed channel
-// if total is 0 (no actions added).
-func (g *DepGraph) Done() <-chan struct{} {
-	return g.done
 }
 
 // Add inserts an action into the graph. If all dependencies are already
@@ -68,8 +55,6 @@ func (g *DepGraph) Add(action *Action, id int64, depIDs []int64) *TrackedAction 
 			ID:     id,
 		},
 	}
-
-	g.total.Add(1)
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -110,8 +95,6 @@ func (g *DepGraph) Register(action *Action, id int64) {
 			ID:     id,
 		},
 	}
-
-	g.total.Add(1)
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -239,11 +222,6 @@ func (g *DepGraph) Complete(id int64) ([]*TrackedAction, bool) {
 		if dep.depsLeft.Add(-1) == 0 {
 			ready = append(ready, dep.TrackedAction)
 		}
-	}
-
-	// Check if all actions are done. Close the done channel exactly once.
-	if g.completed.Add(1) >= g.total.Load() && g.total.Load() > 0 {
-		g.closeOnce.Do(func() { close(g.done) })
 	}
 
 	return ready, true

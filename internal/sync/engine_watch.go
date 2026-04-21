@@ -176,8 +176,8 @@ type socketIOWakeSourceRunner interface {
 //
 // Key differences from one-shot mode (executePlan):
 //   - Active scopes are loaded from DB into engine-owned runtime state
-//   - Done channel is never-closing — DepGraph.Done() fires when completed >= total,
-//     which would prematurely close between batches. Workers exit only via ctx.Done().
+//   - Workers exit only via ctx.Done(); the watch runtime owns settle/draintime
+//     instead of relying on dependency-graph completion
 //   - Retrier and trials are handled by the watch control flow itself
 //   - DirtyBuffer, not buffered planner input, decides when snapshots are refreshed
 //     and the current actionable set is rebuilt.
