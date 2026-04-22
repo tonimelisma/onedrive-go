@@ -121,6 +121,10 @@ through trial actions:
 - once a scope has no blocked `retry_work`, the engine discards the empty
   `block_scopes` row immediately instead of preserving timing with no work
 
+Blocked retry rows use one engine-owned durable shape no matter which runtime
+path persisted them: `blocked=true`, the scope-derived `condition_type`, the
+exact `scope_key`, and the canonical `"blocked by scope: <scope>"` message.
+
 `block_scopes` remains the only durable owner of shared trial timing.
 
 ### Trial timing
