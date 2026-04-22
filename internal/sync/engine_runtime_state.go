@@ -86,14 +86,6 @@ func (rt *watchRuntime) maybeFinishSyncStatusBatch(
 	rt.finishSyncStatusBatch(ctx, mode)
 }
 
-func (rt *watchRuntime) appendOutbox(actions []*TrackedAction) {
-	if len(actions) == 0 {
-		return
-	}
-
-	rt.loop.outbox = append(rt.loop.outbox, actions...)
-}
-
 func (rt *watchRuntime) canPrepareNow() bool {
 	return len(rt.loop.outbox) == 0 && rt.runningCount == 0
 }
