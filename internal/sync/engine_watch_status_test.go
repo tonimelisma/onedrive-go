@@ -318,7 +318,11 @@ func TestRunSteadyStateReplan_ContextCancellationAfterObservationIsCleanShutdown
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.afterSteadyStateObserve = cancel
+	attachDebugEventRecorderWithHook(eng, func(event engineDebugEvent) {
+		if event.Type == engineDebugEventSteadyStateObservationCompleted {
+			cancel()
+		}
+	})
 
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
@@ -329,4 +333,7 @@ func TestRunSteadyStateReplan_ContextCancellationAfterObservationIsCleanShutdown
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.syncBatch.active)
+	localRows, err := eng.baseline.ListLocalState(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, localRows, "cancellation before local snapshot commit must not write local_state")
 }

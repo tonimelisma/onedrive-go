@@ -13,7 +13,7 @@ func (r *oneShotRunner) observeLiveCurrentState(
 	fullReconcile bool,
 ) (*observedCurrentState, error) {
 	observeStart := r.engine.nowFunc()
-	pendingCursorCommit, err := r.observeCurrentTruth(ctx, nil, bl, false, fullReconcile)
+	pendingCursorCommit, err := r.observeAndCommitCurrentTruth(ctx, bl, false, fullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -79,26 +79,23 @@ func (flow *engineFlow) observeLocal(
 	return result, nil
 }
 
-// observeCurrentTruth runs the entrypoint-owned remote/local observation flow
+// observeAndCommitCurrentTruth runs the entrypoint-owned current-truth stages
 // and returns the deferred remote cursor commit the runtime will publish after
 // the current plan is accepted.
-func (flow *engineFlow) observeCurrentTruth(
+func (flow *engineFlow) observeAndCommitCurrentTruth(
 	ctx context.Context,
-	watch *watchRuntime,
 	bl *Baseline,
 	dryRun, fullReconcile bool,
 ) (*pendingPrimaryCursorCommit, error) {
 	plan := flow.buildPrimaryRootObservationPlan(fullReconcile)
-	remoteEvents, pendingCursorCommit, err := flow.observeRemoteChanges(
+	_, pendingCursorCommit, err := flow.observeAndCommitRemoteTruth(
 		ctx, bl, dryRun, plan,
 	)
 	if err != nil {
 		return nil, err
 	}
-	_ = remoteEvents
 
-	_ = watch
-	localResult, err := flow.observeLocalChanges(ctx, bl)
+	localResult, err := flow.observeAndReconcileLocalTruth(ctx, bl)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +106,7 @@ func (flow *engineFlow) observeCurrentTruth(
 	return pendingCursorCommit, nil
 }
 
-func (flow *engineFlow) observeRemoteChanges(
+func (flow *engineFlow) observeAndCommitRemoteTruth(
 	ctx context.Context,
 	bl *Baseline,
 	dryRun bool,
@@ -133,14 +130,12 @@ func (flow *engineFlow) observeRemoteChanges(
 	); err != nil {
 		return nil, nil, err
 	}
-	if !dryRun && flow.engine.beforeRemoteObservationFindingsReconcile != nil {
-		flow.engine.beforeRemoteObservationFindingsReconcile()
-	}
 	if !dryRun {
 		if err := flow.applyObservationFindingsBatch(
 			ctx,
 			&fetchResult.findings,
 			"failed to reconcile remote observation findings",
+			engineDebugNoteRemoteCurrent,
 		); err != nil {
 			return nil, nil, err
 		}
@@ -177,7 +172,7 @@ func (flow *engineFlow) commitObservedRemoteChanges(
 	return nil
 }
 
-func (flow *engineFlow) observeLocalChanges(
+func (flow *engineFlow) observeAndReconcileLocalTruth(
 	ctx context.Context,
 	bl *Baseline,
 ) (ScanResult, error) {

@@ -108,19 +108,18 @@ Permission timing follows the policy result, not the probe:
 
 `RunOnce()` keeps one-shot behavior intentionally simple:
 
-1. bootstrap durable state and startup checks
-2. normalize persisted scopes against persisted blocked-work evidence
-3. load baseline
-4. refresh current remote and local snapshots once
-5. compute SQL structural diff and reconciliation once
-6. build the current actionable set in Go from structural reconciliation plus
+1. shared startup prep and durable startup checks
+2. observe and commit current remote/local truth once
+3. load planner inputs once from that committed truth
+4. compute SQL structural diff and reconciliation once
+5. build the current actionable set in Go from structural reconciliation plus
    explicit truth-availability overlays
-7. reconcile durable retry/blocker state to that actionable set
-8. commit any ready publication-only actions directly through the store and
+6. reconcile durable retry/blocker state to that actionable set
+7. commit any ready publication-only actions directly through the store and
    drain publication-only dependents before worker dispatch
-9. execute remaining concrete work once using the same blocker/trial admission
+8. execute remaining concrete work once using the same blocker/trial admission
    model watch mode uses
-10. persist outcomes and return a report
+9. persist outcomes and return a report
 
 There is no mid-pass mailbox for user intent. New external DB writes during a
 one-shot run are durable state for a later run.
@@ -185,6 +184,12 @@ back-to-back expensive full refreshes.
 - periodic maintenance ticks and full remote refresh
 - graceful drain on shutdown
 
+`RunWatch` starts with the same shared startup-prep boundary one-shot uses.
+That startup boundary owns persisted-scope normalization, account-auth
+normalization, and the single startup baseline load. `bootstrapSync`
+consumes that prepared baseline; it is not allowed to lazily reload or
+recreate startup state.
+
 The watch loop is the single owner of mutable scheduling/runtime state:
 bootstrap/running/drain phase, outbox, dispatch admission, held-work timing,
 refresh coordination, and drain behavior. Remote observation commits now
@@ -198,6 +203,8 @@ outer owner for bootstrap, steady-state, and drain, while `runWatchStepIdle`
 and `runWatchStepWithOutbox` keep the steady-state `select` direct and
 concrete instead of routing through an intermediate event-envelope type or
 phase callback layer.
+Engine debug events expose those lifecycle points for tests and diagnostics
+only; they do not own or redirect control flow.
 
 Local watcher events, remote delta batches, websocket wakes, and full remote
 refresh results are scheduler hints only. After debounce or wake, watch

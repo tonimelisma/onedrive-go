@@ -23,7 +23,7 @@ func isPublicationOnlyActionType(actionType ActionType) bool {
 	panic(fmt.Sprintf("unknown action type %d", actionType))
 }
 
-func (flow *engineFlow) commitPublicationMutation(ctx context.Context, ta *TrackedAction) error {
+func (flow *engineFlow) applyPublicationMutation(ctx context.Context, ta *TrackedAction) error {
 	mutation, err := publicationMutationFromAction(&ta.Action, flow.engine.driveID)
 	if err == nil {
 		err = flow.engine.baseline.CommitMutation(ctx, mutation)
@@ -66,7 +66,7 @@ func (flow *engineFlow) drainPublicationAction(
 	bl *Baseline,
 	current *TrackedAction,
 ) ([]*TrackedAction, error) {
-	if err := flow.commitPublicationMutation(ctx, current); err != nil {
+	if err := flow.applyPublicationMutation(ctx, current); err != nil {
 		return flow.drainPublicationFailure(ctx, watch, bl, current, err)
 	}
 

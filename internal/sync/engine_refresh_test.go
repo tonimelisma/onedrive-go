@@ -125,8 +125,8 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	// observeRemoteChanges with 0 events (only root, which is skipped).
-	events, pendingCursor, err := testEngineFlow(t, e).observeRemoteChanges(
+	// observeAndCommitRemoteTruth with 0 events (only root, which is skipped).
+	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteTruth(
 		ctx,
 		bl,
 		false,
@@ -184,8 +184,8 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	// observeRemoteChanges with actual events.
-	events, pendingCursor, err := testEngineFlow(t, e).observeRemoteChanges(
+	// observeAndCommitRemoteTruth with actual events.
+	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteTruth(
 		ctx,
 		bl,
 		false,
@@ -199,7 +199,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 
 	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Equal(t, "old-token", savedToken,
-		"cursor should NOT be committed to DB by observeRemoteChanges — it is deferred")
+		"cursor should NOT be committed to DB by observeAndCommitRemoteTruth — it is deferred")
 }
 
 // ---------------------------------------------------------------------------
@@ -493,7 +493,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
 
-	events, pendingCursor, err := testEngineFlow(t, e).observeRemoteChanges(
+	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteTruth(
 		ctx,
 		bl,
 		false,
@@ -524,11 +524,11 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	assert.Equal(t, "full-token", pendingCursor.token, "pending cursor should be returned")
 
 	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
-	assert.Empty(t, savedToken, "cursor should NOT be committed to DB by observeRemoteChanges — it is deferred")
+	assert.Empty(t, savedToken, "cursor should NOT be committed to DB by observeAndCommitRemoteTruth — it is deferred")
 }
 
 // Validates: R-2.10.4
-func TestObserveRemoteChanges_RemoteReadDeniedPersistsObservationFindings(t *testing.T) {
+func TestObserveAndCommitRemoteTruth_RemoteReadDeniedPersistsObservationFindings(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
@@ -560,7 +560,7 @@ func TestObserveRemoteChanges_RemoteReadDeniedPersistsObservationFindings(t *tes
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	events, pendingCursor, err := testEngineFlow(t, e).observeRemoteChanges(
+	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteTruth(
 		ctx,
 		bl,
 		false,
@@ -925,22 +925,20 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	defer e.Close(t.Context())
 
 	// Context with manual cancel — cancel is triggered by the
-	// afterRefreshCommit hook at the exact point between
-	// CommitObservation succeeding and the ctx.Err() check.
+	// remote_refresh_committed event at the exact point between durable
+	// refresh apply and the ctx.Err() check.
 	ctx, cancel := context.WithCancel(t.Context())
+	attachDebugEventRecorderWithHook(e, func(event engineDebugEvent) {
+		if event.Type == engineDebugEventRemoteRefreshCommitted {
+			cancel()
+		}
+	})
 
 	bl, err := e.baseline.Load(t.Context())
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
 	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
-
-	// Hook: cancel context immediately after CommitObservation succeeds.
-	// This guarantees we test the exact shutdown-after-commit code path,
-	// not the commit-failed path or the normal completion path.
-	testWatchRuntime(t, e).afterRefreshCommit = func() {
-		cancel()
-	}
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForRefreshDone(t, ctx, e)

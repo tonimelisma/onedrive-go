@@ -208,7 +208,7 @@ func (rt *watchRuntime) prepareBootstrapCurrentPlan(
 	}
 
 	observeStart := rt.engine.nowFunc()
-	pendingCursorCommit, err := rt.observeCurrentTruth(ctx, rt, bl, false, fullRefresh)
+	pendingCursorCommit, err := rt.observeAndCommitCurrentTruth(ctx, bl, false, fullRefresh)
 	if err != nil {
 		return nil, fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}

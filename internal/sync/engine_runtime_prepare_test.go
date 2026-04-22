@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -149,10 +150,15 @@ func TestPrepareLiveCurrentPlan_FailsClosedWhenRemoteObservationReconcileFails(t
 	ctx := t.Context()
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-
-	eng.beforeRemoteObservationFindingsReconcile = func() {
-		require.NoError(t, eng.baseline.Close(context.Background()))
-	}
+	var closeStore sync.Once
+	attachDebugEventRecorderWithHook(eng, func(event engineDebugEvent) {
+		if event.Type != engineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
+			return
+		}
+		closeStore.Do(func() {
+			require.NoError(t, eng.baseline.Close(context.Background()))
+		})
+	})
 
 	fullReconcile, err := eng.shouldRunFullRemoteRefresh(ctx, false)
 	require.NoError(t, err)
@@ -190,10 +196,15 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 	ctx := t.Context()
 	bl, err := rt.prepareStartupBaseline(ctx, rt)
 	require.NoError(t, err)
-
-	eng.beforeRemoteObservationFindingsReconcile = func() {
-		require.NoError(t, eng.baseline.Close(context.Background()))
-	}
+	var closeStore sync.Once
+	attachDebugEventRecorderWithHook(eng, func(event engineDebugEvent) {
+		if event.Type != engineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
+			return
+		}
+		closeStore.Do(func() {
+			require.NoError(t, eng.baseline.Close(context.Background()))
+		})
+	})
 
 	err = rt.bootstrapSync(ctx, SyncDownloadOnly, &watchPipeline{
 		bl:          bl,
@@ -201,6 +212,20 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 	})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "failed to reconcile remote observation findings")
+}
+
+// Validates: R-2.10.5
+func TestBootstrapSync_RequiresStartupPreparedBaseline(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+
+	err := testWatchRuntime(t, eng).bootstrapSync(t.Context(), SyncDownloadOnly, &watchPipeline{
+		completions: make(chan ActionCompletion),
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "bootstrap requires startup-prepared baseline")
 }
 
 // Validates: R-2.10.5

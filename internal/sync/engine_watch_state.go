@@ -22,16 +22,6 @@ type watchRuntimeState struct {
 	// written only after the loop has exhausted all currently admissible work and
 	// returned to quiescence.
 	syncBatch watchSyncBatchState
-
-	// afterSteadyStateObserve is a test-only hook called after steady-state
-	// local observation succeeds but before the watch loop commits the local
-	// snapshot. Nil in production.
-	afterSteadyStateObserve func()
-
-	// afterAppendReadyFrontier is a test-only hook called immediately before the
-	// watch runtime appends the reduced concrete frontier to its outbox. Nil in
-	// production.
-	afterAppendReadyFrontier func()
 }
 
 type watchSyncBatchState struct {
@@ -88,11 +78,6 @@ type watchRefreshState struct {
 	refreshTimer   syncTimer
 	refreshCh      chan time.Time
 	refreshResults chan remoteRefreshResult
-
-	// afterRefreshCommit is a test-only hook called after the watch loop has
-	// durably applied a full-refresh batch but before it marks the resulting
-	// dirty work. Nil in production.
-	afterRefreshCommit func()
 }
 
 // watchRuntime owns all mutable watch-mode state. It is created by RunWatch
