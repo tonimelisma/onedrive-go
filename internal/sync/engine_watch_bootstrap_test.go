@@ -9,7 +9,7 @@ import (
 )
 
 // Validates: R-2.10.33
-func TestWatchRuntime_RunBootstrapStep_RetryTickReducesReleasedPublicationRetryOnEngineSide(t *testing.T) {
+func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedPublicationRetryOnEngineSide(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -50,8 +50,9 @@ func TestWatchRuntime_RunBootstrapStep_RetryTickReducesReleasedPublicationRetryO
 	require.NotNil(t, publication)
 	rt.holdAction(publication, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
 	rt.kickRetryHeldReleaseNow()
+	rt.enterBootstrap()
 
-	done, err := rt.runBootstrapStep(ctx, &watchPipeline{bl: bl}, nil)
+	done, err := rt.runNonDrainingWatchStep(ctx, &watchPipeline{bl: bl}, nil)
 	require.NoError(t, err)
 	assert.False(t, done)
 	assert.Empty(t, rt.currentOutbox(), "bootstrap retry release must re-enter publication drain before worker dispatch")
@@ -63,7 +64,7 @@ func TestWatchRuntime_RunBootstrapStep_RetryTickReducesReleasedPublicationRetryO
 }
 
 // Validates: R-2.10.33
-func TestWatchRuntime_HandleBootstrapCompletion_DrainsPublicationOnlyDependents(t *testing.T) {
+func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependentsDuringBootstrap(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -98,8 +99,9 @@ func TestWatchRuntime_HandleBootstrapCompletion_DrainsPublicationOnlyDependents(
 		ItemID:  "cleanup-item",
 	}, 2, []int64{1})
 	assert.Nil(t, dependent, "cleanup dependent should wait on its parent before bootstrap completion")
+	rt.enterBootstrap()
 
-	done, err := rt.handleBootstrapCompletion(ctx, &watchPipeline{
+	err = rt.handleWatchActionCompletion(ctx, &watchPipeline{
 		bl: bl,
 	}, &ActionCompletion{
 		Path:       "sync.txt",
@@ -108,9 +110,8 @@ func TestWatchRuntime_HandleBootstrapCompletion_DrainsPublicationOnlyDependents(
 		ActionType: ActionDownload,
 		Success:    true,
 		ActionID:   1,
-	}, true)
+	})
 	require.NoError(t, err)
-	assert.False(t, done)
 	assert.Empty(t, rt.currentOutbox(), "bootstrap completion should drain publication-only dependents on the engine side")
 	assert.Equal(t, 0, rt.depGraph.InFlightCount())
 

@@ -206,7 +206,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchReconcileFailureIsFatal(t *tes
 }
 
 // Validates: R-2.1.2, R-2.10.4
-func TestHandleWatchSkippedChannel_ReconcileFailureReturnsError(t *testing.T) {
+func TestReconcileSkippedObservationFindings_ReturnsErrorOnFailure(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -216,13 +216,12 @@ func TestHandleWatchSkippedChannel_ReconcileFailureReturnsError(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	done, err := rt.handleWatchSkippedChannel(ctx, &watchPipeline{}, []SkippedItem{{
+	err := rt.reconcileSkippedObservationFindings(ctx, []SkippedItem{{
 		Path:   "blocked.txt",
 		Reason: IssueInvalidFilename,
 		Detail: "invalid",
-	}}, true)
+	}})
 	require.Error(t, err)
-	assert.False(t, done)
 }
 
 // Validates: R-2.1.2
@@ -285,7 +284,7 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	prepared, err := rt.prepareSteadyStateCurrentPlan(ctx, bl, SyncBidirectional)
+	prepared, err := rt.runSteadyStateCurrentPlan(ctx, bl, SyncBidirectional)
 	require.NoError(t, err)
 	assert.Empty(t, prepared.Plan.Actions, "read-denied observation findings should suppress planning without reloading active scopes")
 }

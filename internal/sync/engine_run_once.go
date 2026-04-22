@@ -42,7 +42,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		return e.runOnceDryRun(ctx, runner, bl, mode, opts, start)
 	}
 
-	prepared, err := runner.prepareLiveCurrentPlan(ctx, bl, mode, opts)
+	prepared, err := runner.runLiveCurrentPlan(ctx, bl, mode, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -105,12 +105,19 @@ func (e *Engine) runOnceDryRun(
 	opts RunOptions,
 	start time.Time,
 ) (*Report, error) {
-	prepared, err := runner.prepareDryRunCurrentPlan(ctx, bl, mode, opts)
+	prepared, err := runner.runDryRunCurrentPlan(ctx, bl, mode, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	return e.completeDryRunReport(start, prepared.Report), nil
+}
+
+func (e *Engine) prepareRunOnceBaseline(
+	ctx context.Context,
+	runner *oneShotRunner,
+) (*Baseline, error) {
+	return runner.runStartupStage(ctx, nil)
 }
 
 // executePlan populates the dependency graph and runs the worker pool.
@@ -189,6 +196,28 @@ func (r *oneShotRunner) executePreparedPlan(
 
 	report.Succeeded, report.Failed, report.Errors = r.resultStats()
 	return nil
+}
+
+func (r *oneShotRunner) dispatchInitialReadyActions(
+	ctx context.Context,
+	bl *Baseline,
+	prepared *PreparedCurrentPlan,
+	report *Report,
+) ([]*TrackedAction, bool, error) {
+	initialOutbox, dispatched, err := r.startRuntimeStage(ctx, prepared, bl, nil)
+	if err != nil {
+		report.Succeeded, report.Failed, report.Errors = r.resultStats()
+		report.Errors = append(report.Errors, err)
+		return nil, true, err
+	}
+
+	if !dispatched {
+		r.logFailureSummary()
+		report.Succeeded, report.Failed, report.Errors = r.resultStats()
+		return nil, true, nil
+	}
+
+	return initialOutbox, false, nil
 }
 
 // buildReportFromCounts populates a Report with plan counts and directionally

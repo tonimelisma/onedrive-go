@@ -5,9 +5,9 @@ import (
 	"fmt"
 )
 
-// prepareStartupBaseline runs the shared startup proof/normalization sequence
-// used by one-shot and watch before they diverge into their own runtime shells.
-func (flow *engineFlow) prepareStartupBaseline(
+// runStartupStage runs the shared startup proof/normalization sequence used by
+// one-shot and watch before they diverge into their own runtime shells.
+func (flow *engineFlow) runStartupStage(
 	ctx context.Context,
 	watch *watchRuntime,
 ) (*Baseline, error) {

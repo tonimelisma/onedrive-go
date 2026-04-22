@@ -105,9 +105,7 @@ func TestRunSteadyStateReplan_BidirectionalWritesSyncStatus(t *testing.T) {
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{
-		Paths: []string{"already-synced.txt"},
-	})
+	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 
@@ -151,9 +149,7 @@ func TestRunSteadyStateReplan_BidirectionalWritesSyncStatusWhenOnlyFutureHeldWor
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{
-		Paths: []string{"held.txt"},
-	})
+	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.syncBatch.active, "future-held work should not leave the sync-status batch open")
@@ -214,9 +210,7 @@ func TestRunSteadyStateReplan_DirectionalDoesNotWriteSyncStatus(t *testing.T) {
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncUploadOnly,
-	}, DirtyBatch{
-		Paths: []string{"already-synced.txt"},
-	})
+	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 
@@ -251,9 +245,7 @@ func TestRunSteadyStateReplan_LocalObserveFailureDropsBatch(t *testing.T) {
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{
-		Paths: []string{"missing.txt"},
-	})
+	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.syncBatch.active)
@@ -289,9 +281,7 @@ func TestRunSteadyStateReplan_LocalSnapshotCommitFailureStopsWatch(t *testing.T)
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{
-		Paths: []string{"fatal.txt"},
-	})
+	}, DirtyBatch{})
 	require.ErrorContains(t, err, "watch replan local observation findings reconcile")
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.syncBatch.active)
@@ -327,9 +317,7 @@ func TestRunSteadyStateReplan_ContextCancellationAfterObservationIsCleanShutdown
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{
-		Paths: []string{"cancel.txt"},
-	})
+	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.syncBatch.active)

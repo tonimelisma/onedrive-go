@@ -43,9 +43,7 @@ func (rt *watchRuntime) runWatchLoop(
 	}
 
 	for {
-		rt.beginWatchDrainIfCanceled(ctx, p)
-
-		done, err := rt.runWatchPhaseStep(ctx, p, logC)
+		done, err := rt.runWatchLoopStep(ctx, p, logC)
 		if err != nil {
 			return err
 		}
@@ -55,30 +53,32 @@ func (rt *watchRuntime) runWatchLoop(
 	}
 }
 
+func (rt *watchRuntime) runWatchLoopStep(
+	ctx context.Context,
+	p *watchPipeline,
+	logC <-chan time.Time,
+) (bool, error) {
+	rt.beginWatchDrainIfCanceled(ctx, p)
+
+	switch rt.phase() {
+	case watchRuntimePhaseDraining:
+		return rt.runDrainStep(ctx, p)
+	case watchRuntimePhaseBootstrap:
+		return rt.runBootstrapLoopStep(ctx, p, logC)
+	case watchRuntimePhaseRunning:
+		return rt.runRunningLoopStep(ctx, p)
+	default:
+		return false, fmt.Errorf("sync: unknown watch runtime phase %q", rt.phase())
+	}
+}
+
 func (rt *watchRuntime) beginWatchDrainIfCanceled(ctx context.Context, p *watchPipeline) {
 	if ctx.Err() != nil && !rt.isDraining() {
 		rt.beginWatchDrain(ctx, p)
 	}
 }
 
-func (rt *watchRuntime) runWatchPhaseStep(
-	ctx context.Context,
-	p *watchPipeline,
-	logC <-chan time.Time,
-) (bool, error) {
-	switch rt.phase() {
-	case watchRuntimePhaseBootstrap:
-		return rt.runBootstrapPhaseStep(ctx, p, logC)
-	case watchRuntimePhaseDraining:
-		return rt.runDrainStep(ctx, p)
-	case watchRuntimePhaseRunning:
-		return rt.runRunningPhaseStep(ctx, p)
-	default:
-		return false, fmt.Errorf("sync: unknown watch runtime phase %q", rt.phase())
-	}
-}
-
-func (rt *watchRuntime) runBootstrapPhaseStep(
+func (rt *watchRuntime) runBootstrapLoopStep(
 	ctx context.Context,
 	p *watchPipeline,
 	logC <-chan time.Time,
@@ -88,14 +88,14 @@ func (rt *watchRuntime) runBootstrapPhaseStep(
 		return true, nil
 	}
 
-	return rt.runBootstrapStep(ctx, p, logC)
+	return rt.runNonDrainingWatchStep(ctx, p, logC)
 }
 
-func (rt *watchRuntime) runRunningPhaseStep(
+func (rt *watchRuntime) runRunningLoopStep(
 	ctx context.Context,
 	p *watchPipeline,
 ) (bool, error) {
-	replanned, err := rt.runPendingReplan(ctx, p)
+	replanned, err := rt.runPendingWatchReplan(ctx, p)
 	if err != nil {
 		return false, err
 	}
@@ -103,10 +103,10 @@ func (rt *watchRuntime) runRunningPhaseStep(
 		return false, nil
 	}
 
-	return rt.runWatchStep(ctx, p)
+	return rt.runNonDrainingWatchStep(ctx, p, nil)
 }
 
-func (rt *watchRuntime) runPendingReplan(
+func (rt *watchRuntime) runPendingWatchReplan(
 	ctx context.Context,
 	p *watchPipeline,
 ) (bool, error) {
@@ -122,90 +122,161 @@ func (rt *watchRuntime) runPendingReplan(
 	return true, rt.runSteadyStateReplan(ctx, p, batch)
 }
 
-func (rt *watchRuntime) runWatchStep(
+func (rt *watchRuntime) runNonDrainingWatchStep(
 	ctx context.Context,
 	p *watchPipeline,
-) (bool, error) {
-	if len(rt.currentOutbox()) == 0 {
-		return rt.runWatchStepIdle(ctx, p)
-	}
-
-	return rt.runWatchStepWithOutbox(ctx, p)
-}
-
-func (rt *watchRuntime) runWatchStepWithOutbox(
-	ctx context.Context,
-	p *watchPipeline,
+	logC <-chan time.Time,
 ) (bool, error) {
 	dispatchCh, nextAction := rt.dispatchChannelForOutbox()
 
 	select {
 	case dispatchCh <- nextAction:
-		rt.handleWatchDispatchReady(nextAction)
+		rt.handleWatchDispatch(nextAction)
 		return false, nil
 	case batch, ok := <-p.replanReady:
-		return rt.handleWatchReplanChannel(ctx, p, batch, ok)
+		return rt.handleWatchReplanSignal(ctx, p, batch, ok)
 	case completion, ok := <-p.completions:
-		return rt.handleWatchCompletionChannel(ctx, p, &completion, ok)
+		return rt.handleWatchCompletionSignal(ctx, p, &completion, ok)
 	case change, ok := <-p.localEvents:
-		return rt.handleWatchLocalChangeChannel(p, &change, ok)
+		return rt.handleWatchLocalChangeSignal(p, &change, ok)
 	case batch, ok := <-p.remoteBatches:
-		return rt.handleWatchRemoteBatchChannel(ctx, p, &batch, ok)
+		return rt.handleWatchRemoteBatchSignal(ctx, p, &batch, ok)
 	case skipped, ok := <-p.skippedCh:
-		return rt.handleWatchSkippedChannel(ctx, p, skipped, ok)
+		return rt.handleWatchSkippedSignal(ctx, p, skipped, ok)
 	case <-p.refreshC:
 		rt.runFullRemoteRefreshAsync(ctx, p.bl)
 		return false, nil
 	case result, ok := <-p.refreshResults:
-		return rt.handleWatchRefreshResultChannel(ctx, p, &result, ok)
+		return rt.handleWatchRefreshResultSignal(ctx, p, &result, ok)
 	case <-p.maintenanceC:
 		rt.handleMaintenanceTick(ctx)
 		return false, nil
 	case observerErr, ok := <-p.errs:
-		return rt.handleWatchObserverErrorChannel(ctx, p, observerErr, ok)
+		return rt.handleWatchObserverErrorSignal(ctx, p, observerErr, ok)
 	case <-rt.trialTimerChan():
-		return false, rt.handleWatchHeldRelease(ctx, p, true)
+		return false, rt.handleWatchHeldReleaseSignal(ctx, p, true)
 	case <-rt.retryTimerChan():
-		return false, rt.handleWatchHeldRelease(ctx, p, false)
+		return false, rt.handleWatchHeldReleaseSignal(ctx, p, false)
+	case <-logC:
+		rt.logBootstrapWait()
+		return false, nil
 	case <-ctx.Done():
 		rt.beginWatchDrain(ctx, p)
 		return false, nil
 	}
 }
 
-func (rt *watchRuntime) runWatchStepIdle(
+func (rt *watchRuntime) handleWatchDispatch(nextAction *TrackedAction) {
+	rt.markRunning(nextAction)
+	rt.consumeOutboxHead()
+}
+
+func (rt *watchRuntime) handleWatchReplanSignal(
 	ctx context.Context,
 	p *watchPipeline,
+	batch DirtyBatch,
+	ok bool,
 ) (bool, error) {
-	select {
-	case batch, ok := <-p.replanReady:
-		return rt.handleWatchReplanChannel(ctx, p, batch, ok)
-	case completion, ok := <-p.completions:
-		return rt.handleWatchCompletionChannel(ctx, p, &completion, ok)
-	case change, ok := <-p.localEvents:
-		return rt.handleWatchLocalChangeChannel(p, &change, ok)
-	case batch, ok := <-p.remoteBatches:
-		return rt.handleWatchRemoteBatchChannel(ctx, p, &batch, ok)
-	case skipped, ok := <-p.skippedCh:
-		return rt.handleWatchSkippedChannel(ctx, p, skipped, ok)
-	case <-p.refreshC:
-		rt.runFullRemoteRefreshAsync(ctx, p.bl)
-		return false, nil
-	case result, ok := <-p.refreshResults:
-		return rt.handleWatchRefreshResultChannel(ctx, p, &result, ok)
-	case <-p.maintenanceC:
-		rt.handleMaintenanceTick(ctx)
-		return false, nil
-	case observerErr, ok := <-p.errs:
-		return rt.handleWatchObserverErrorChannel(ctx, p, observerErr, ok)
-	case <-rt.trialTimerChan():
-		return false, rt.handleWatchHeldRelease(ctx, p, true)
-	case <-rt.retryTimerChan():
-		return false, rt.handleWatchHeldRelease(ctx, p, false)
-	case <-ctx.Done():
-		rt.beginWatchDrain(ctx, p)
+	if !ok {
+		return true, nil
+	}
+
+	return false, rt.handleWatchReplanReady(ctx, p, batch)
+}
+
+func (rt *watchRuntime) handleWatchCompletionSignal(
+	ctx context.Context,
+	p *watchPipeline,
+	completion *ActionCompletion,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		return false, rt.handleWatchCompletionsClosed(ctx, p)
+	}
+
+	return false, rt.handleWatchActionCompletion(ctx, p, completion)
+}
+
+func (rt *watchRuntime) handleWatchLocalChangeSignal(
+	p *watchPipeline,
+	change *ChangeEvent,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		p.localEvents = nil
 		return false, nil
 	}
+
+	rt.handleWatchLocalChange(change)
+	return false, nil
+}
+
+func (rt *watchRuntime) handleWatchRemoteBatchSignal(
+	ctx context.Context,
+	p *watchPipeline,
+	batch *remoteObservationBatch,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		p.remoteBatches = nil
+		return false, nil
+	}
+
+	return false, rt.handleRemoteObservationBatch(ctx, batch)
+}
+
+func (rt *watchRuntime) handleWatchSkippedSignal(
+	ctx context.Context,
+	p *watchPipeline,
+	skipped []SkippedItem,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		p.skippedCh = nil
+		return false, nil
+	}
+
+	return false, rt.reconcileSkippedObservationFindings(ctx, skipped)
+}
+
+func (rt *watchRuntime) handleWatchRefreshResultSignal(
+	ctx context.Context,
+	p *watchPipeline,
+	result *remoteRefreshResult,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		p.refreshResults = nil
+		return false, nil
+	}
+
+	return false, rt.applyRemoteRefreshResult(ctx, result)
+}
+
+func (rt *watchRuntime) handleWatchObserverErrorSignal(
+	ctx context.Context,
+	p *watchPipeline,
+	observerErr error,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		p.errs = nil
+		return false, nil
+	}
+
+	return false, rt.handleWatchObserverError(ctx, p, observerErr)
+}
+
+func (rt *watchRuntime) handleWatchHeldReleaseSignal(
+	ctx context.Context,
+	p *watchPipeline,
+	trial bool,
+) error {
+	if rt.phase() == watchRuntimePhaseBootstrap {
+		return rt.releaseHeldFrontier(ctx, p, trial)
+	}
+
+	return rt.handleWatchHeldRelease(ctx, p, trial)
 }
 
 func (rt *watchRuntime) appendReadyFrontier(
@@ -213,7 +284,7 @@ func (rt *watchRuntime) appendReadyFrontier(
 	p *watchPipeline,
 	ready []*TrackedAction,
 ) error {
-	reduced, err := rt.drainPublicationFrontier(ctx, rt, p.bl, ready)
+	reduced, err := rt.runPublicationDrainStage(ctx, rt, p.bl, ready)
 	nextOutbox := append(rt.currentOutbox(), reduced...)
 	if err != nil {
 		rt.clearSyncStatusBatch()
@@ -246,21 +317,6 @@ func (rt *watchRuntime) releaseHeldFrontier(
 	}
 
 	return rt.appendReadyFrontier(ctx, p, released)
-}
-
-func (rt *watchRuntime) applyRuntimeCompletion(
-	ctx context.Context,
-	p *watchPipeline,
-	completion *ActionCompletion,
-) error {
-	ready, err := rt.processActionCompletion(ctx, rt, completion, p.bl)
-	if err != nil {
-		rt.clearSyncStatusBatch()
-		rt.completeOutboxAsShutdown(ready)
-		return err
-	}
-
-	return rt.appendReadyFrontier(ctx, p, ready)
 }
 
 func (rt *watchRuntime) handleObserverExit(p *watchPipeline, shuttingDown bool) error {
@@ -311,4 +367,105 @@ func firstOutbox(outbox []*TrackedAction) *TrackedAction {
 	}
 
 	return outbox[0]
+}
+
+func (rt *watchRuntime) handleWatchReplanReady(
+	ctx context.Context,
+	p *watchPipeline,
+	batch DirtyBatch,
+) error {
+	if !rt.canPrepareNow() {
+		rt.queuePendingReplan(batch)
+		return nil
+	}
+
+	return rt.runSteadyStateReplan(ctx, p, batch)
+}
+
+func (rt *watchRuntime) handleWatchActionCompletion(
+	ctx context.Context,
+	p *watchPipeline,
+	completion *ActionCompletion,
+) error {
+	ready, err := rt.applyRuntimeCompletionStage(ctx, rt, completion, p.bl)
+	if err != nil {
+		rt.clearSyncStatusBatch()
+		rt.completeOutboxAsShutdown(ready)
+		return err
+	}
+
+	return rt.appendReadyFrontier(ctx, p, ready)
+}
+
+func (rt *watchRuntime) handleWatchCompletionsClosed(
+	ctx context.Context,
+	p *watchPipeline,
+) error {
+	select {
+	case <-ctx.Done():
+		p.completions = nil
+		rt.beginWatchDrain(ctx, p)
+		return nil
+	default:
+	}
+
+	return fmt.Errorf("sync: action completions channel closed unexpectedly")
+}
+
+func (rt *watchRuntime) handleWatchLocalChange(change *ChangeEvent) {
+	if change == nil || rt.dirtyBuf == nil {
+		return
+	}
+	if change.Path != "" {
+		rt.dirtyBuf.MarkPath(change.Path)
+	}
+	if change.OldPath != "" {
+		rt.dirtyBuf.MarkPath(change.OldPath)
+	}
+}
+
+func (rt *watchRuntime) handleWatchObserverError(
+	ctx context.Context,
+	p *watchPipeline,
+	observerErr error,
+) error {
+	if isFatalObserverError(observerErr) {
+		return observerErr
+	}
+
+	rt.logObserverError(observerErr)
+	if err := rt.handleObserverExit(p, ctx.Err() != nil); err != nil {
+		return err
+	}
+	if p.activeObs == 0 {
+		p.errs = nil
+	}
+
+	return nil
+}
+
+func (rt *watchRuntime) handleWatchHeldRelease(
+	ctx context.Context,
+	p *watchPipeline,
+	trial bool,
+) error {
+	if rt.hasPendingReplan() {
+		return nil
+	}
+
+	return rt.releaseHeldFrontier(ctx, p, trial)
+}
+
+func (rt *watchRuntime) logBootstrapWait() {
+	rt.engine.logger.Info("bootstrap: waiting for in-flight actions",
+		slog.Int("in_flight", rt.depGraph.InFlightCount()),
+		slog.Int("running", rt.runningCount),
+		slog.Int("held", len(rt.heldByKey)),
+	)
+}
+
+func (rt *watchRuntime) isBootstrapQuiescent() bool {
+	return len(rt.currentOutbox()) == 0 &&
+		rt.runningCount == 0 &&
+		!rt.hasDueHeldWork(rt.engine.nowFunc())
 }

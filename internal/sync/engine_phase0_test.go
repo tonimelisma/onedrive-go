@@ -30,7 +30,7 @@ func newBootstrapWatchPipelineForTest(
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
-	bl, err := rt.prepareStartupBaseline(ctx, rt)
+	bl, err := rt.runStartupStage(ctx, rt)
 	require.NoError(t, err)
 
 	pool := NewWorkerPool(eng.execCfg, rt.dispatchCh, eng.baseline, eng.logger, 1024)
@@ -675,7 +675,7 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	_, err = testEngineFlow(t, eng).observeAndReconcileLocalTruth(ctx, bl)
+	_, err = testEngineFlow(t, eng).observeLocalCurrentState(ctx, bl)
 	require.NoError(t, err)
 
 	observationIssues, err := eng.baseline.ListObservationIssues(ctx)
@@ -795,5 +795,5 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 
 	batch := rt.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
-	assert.Equal(t, []string{"reconcile.txt"}, batch.Paths)
+	assert.False(t, batch.FullRefresh)
 }
