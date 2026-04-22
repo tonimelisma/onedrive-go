@@ -8,11 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
-
-	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,8 +18,8 @@ import (
 // ---------------------------------------------------------------------------
 // CLI command E2E tests (slow — run only with -tags=e2e,e2e_full)
 //
-// These tests validate the status, pause, resume, and resolve sync
-// UX against a live OneDrive account.
+// These tests validate the status, pause, resume, and sync CLI UX against a
+// live OneDrive account.
 // ---------------------------------------------------------------------------
 
 // TestE2E_Status_AfterSync validates that status shows token state and last
@@ -166,7 +163,7 @@ func TestE2E_Resume_AllDrives(t *testing.T) {
 }
 
 // Validates: R-2.3.3
-func TestE2E_Status_PerDrive_NoVisibleProblems(t *testing.T) {
+func TestE2E_Status_PerDrive_NoConditionsOrRetries(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -185,15 +182,14 @@ func TestE2E_Status_PerDrive_NoVisibleProblems(t *testing.T) {
 
 	status := readStatusSyncState(t, cfgPath, env)
 	assert.Empty(t, status.Conditions)
-	assert.Empty(t, status.DeleteSafety)
-	assert.Empty(t, status.Conflicts)
-	assert.Empty(t, status.NextActions)
+	assert.Zero(t, status.ConditionCount)
+	assert.Zero(t, status.Retrying)
 }
 
 // Validates: R-2.3.4
-// TestE2E_Status_History_NoConflicts validates that per-drive status and
-// status --history show empty conflict sections when no conflicts exist.
-func TestE2E_Status_History_NoConflicts(t *testing.T) {
+// TestE2E_Status_NoLegacyHistorySurface validates that `status` stays the only
+// sync-health surface and rejects the removed `--history` flag.
+func TestE2E_Status_NoLegacyHistorySurface(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -203,7 +199,6 @@ func TestE2E_Status_History_NoConflicts(t *testing.T) {
 	testFolder := fmt.Sprintf("e2e-cli-noconfl-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Create a file and sync to establish state DB.
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "clean.txt"), []byte("clean file"), 0o600))
@@ -211,180 +206,50 @@ func TestE2E_Status_History_NoConflicts(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	current := readStatusSyncState(t, cfgPath, env)
-	assert.Empty(t, current.Conflicts)
+	assert.Zero(t, current.ConditionCount, "clean status should show no durable conditions")
+	assert.Empty(t, current.Conditions)
 
-	history := readStatusSyncState(t, cfgPath, env, "--history")
-	assert.Empty(t, history.Conflicts)
-	assert.Empty(t, history.ConflictHistory)
+	output := runCLIWithConfigExpectError(t, cfgPath, env, "status", "--history")
+	assert.Contains(t, output, "unknown flag: --history", "legacy history-only status surface should stay removed")
 }
 
 // Validates: R-2.3.4, R-2.3.10
-// TestE2E_Status_JSON_ConflictDetails validates that per-drive status JSON
-// exposes unresolved conflicts with the expected fields.
-func TestE2E_Status_JSON_ConflictDetails(t *testing.T) {
+// TestE2E_Status_JSON_ConditionDetails validates that per-drive status JSON
+// exposes the current structured condition payload rather than legacy
+// conflict-request rows.
+func TestE2E_Status_JSON_ConditionDetails(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
-	opsCfgPath := writeMinimalConfig(t)
 
-	testFolder := fmt.Sprintf("e2e-cli-confjson-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("e2e-cli-condjson-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Create file and upload baseline.
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "jsonconflict.txt"), []byte("original"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "desktop.ini"), []byte("reserved"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/jsonconflict.txt")
-
-	// Create edit-edit conflict.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "jsonconflict.txt"), []byte("local edit"), 0o600))
-	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/jsonconflict.txt", "remote edit")
-
-	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	status := readStatusSyncState(t, cfgPath, env)
-	require.NotEmpty(t, status.Conflicts, "status should report the unresolved conflict")
-	conflict := status.Conflicts[0]
-	assert.NotEmpty(t, conflict.ID)
-	assert.Contains(t, conflict.Path, "jsonconflict.txt")
-	assert.Equal(t, "edit_edit", conflict.ConflictType)
-	assert.Equal(t, "unresolved", conflict.State)
-	assert.Contains(t, conflict.ActionHint, "resolve local")
-	assert.NotEmpty(t, status.NextActions)
+	require.Len(t, status.Conditions, 1, "status should surface one invalid-filename condition for the reserved name")
+	assert.Equal(t, 1, status.ConditionCount)
 
-	// Resolve to clean up.
-	queueConflictResolutionAndSync(t, cfgPath, env, "remote", "--all")
+	condition := status.Conditions[0]
+	assert.Equal(t, "invalid_filename", condition.ConditionKey)
+	assert.Equal(t, "invalid_filename", condition.ConditionType)
+	assert.Equal(t, 1, condition.Count)
+	assert.NotEmpty(t, condition.Reason)
+	assert.NotEmpty(t, condition.Action)
+	assert.Contains(t, strings.Join(condition.Paths, "\n"), filepath.ToSlash(filepath.Join(testFolder, "desktop.ini")))
 }
 
-// Validates: R-2.3.3, R-2.3.4, R-2.3.5
-// TestE2E_Resolve_Both_PreservesConflictCopy validates that `resolve both`
-// clears the unresolved conflict while preserving both chosen files.
-func TestE2E_Resolve_Both_PreservesConflictCopy(t *testing.T) {
-	// No t.Parallel() — bidirectional sync sees drive-level delta feed,
-	// so parallel tests inject cross-test events causing spurious failures.
-	registerLogDump(t)
-
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
-	opsCfgPath := writeMinimalConfig(t)
-
-	testFolder := fmt.Sprintf("e2e-cli-keepboth-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	// Create file and upload baseline.
-	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "both.txt"), []byte("original"), 0o600))
-
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/both.txt")
-
-	// Create edit-edit conflict.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "both.txt"), []byte("local both"), 0o600))
-	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/both.txt", "remote both")
-
-	runCLIWithConfig(t, cfgPath, env, "sync")
-
-	statusBefore := readStatusSyncState(t, cfgPath, env)
-	require.Len(t, statusBefore.Conflicts, 1)
-	assert.Contains(t, statusBefore.Conflicts[0].Path, "both.txt")
-	assert.Equal(t, "edit_edit", statusBefore.Conflicts[0].ConflictType)
-	assert.Empty(t, statusBefore.Conditions, "ordinary conditions should stay separate from conflicts")
-
-	// Verify conflict copy exists.
-	matches, err := filepath.Glob(filepath.Join(localDir, "both.conflict-*"))
-	require.NoError(t, err)
-	require.NotEmpty(t, matches, "conflict copy should exist before resolve")
-
-	// Queue resolve both; the next sync pass owns execution.
-	queueConflictResolution(t, cfgPath, env, "both", testFolder+"/both.txt")
-
-	// Verify both files still exist.
-	_, err = os.Stat(filepath.Join(localDir, "both.txt"))
-	assert.NoError(t, err, "original file should still exist")
-
-	matchesAfter, err := filepath.Glob(filepath.Join(localDir, "both.conflict-*"))
-	require.NoError(t, err)
-	assert.NotEmpty(t, matchesAfter, "conflict copy should still exist after keep-both")
-
-	// Follow-up sync should leave the owned subtree stable even if unrelated
-	// full-suite activity produces delta traffic elsewhere on the shared drive.
-	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
-
-	statusAfter := readStatusSyncState(t, cfgPath, env)
-	assert.Empty(t, statusAfter.Conflicts, "keep-both should clear unresolved conflicts")
-}
-
-// Validates: R-2.3.4, R-2.3.5, R-2.3.12
-// TestE2E_Status_History_ShowsResolvedStrategies creates 3 conflicts,
-// resolves each with a different strategy, and verifies status --history.
-func TestE2E_Status_History_ShowsResolvedStrategies(t *testing.T) {
-	t.Parallel()
-	registerLogDump(t)
-
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
-	opsCfgPath := writeMinimalConfig(t)
-
-	testFolder := fmt.Sprintf("e2e-cli-multires-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	// Create 3 files and upload baseline.
-	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-original"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "b.txt"), []byte("b-original"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "c.txt"), []byte("c-original"), 0o600))
-
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/a.txt")
-	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/b.txt")
-	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/c.txt")
-
-	// Create 3 edit-edit conflicts.
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("a-local"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "b.txt"), []byte("b-local"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "c.txt"), []byte("c-local"), 0o600))
-
-	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/a.txt", "a-remote")
-	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/b.txt", "b-remote")
-	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/c.txt", "c-remote")
-
-	runCLIWithConfig(t, cfgPath, env, "sync")
-
-	// Resolve each with a different strategy.
-	queueConflictResolution(t, cfgPath, env, "local", testFolder+"/a.txt")
-	queueConflictResolution(t, cfgPath, env, "remote", testFolder+"/b.txt")
-	queueConflictResolution(t, cfgPath, env, "both", testFolder+"/c.txt")
-	runCLIWithConfig(t, cfgPath, env, "sync")
-
-	history := readStatusSyncState(t, cfgPath, env, "--history")
-	require.Len(t, history.ConflictHistory, 3)
-	assert.Contains(t, []string{
-		history.ConflictHistory[0].Resolution,
-		history.ConflictHistory[1].Resolution,
-		history.ConflictHistory[2].Resolution,
-	}, "keep_local")
-	assert.Contains(t, []string{
-		history.ConflictHistory[0].Resolution,
-		history.ConflictHistory[1].Resolution,
-		history.ConflictHistory[2].Resolution,
-	}, "keep_remote")
-	assert.Contains(t, []string{
-		history.ConflictHistory[0].Resolution,
-		history.ConflictHistory[1].Resolution,
-		history.ConflictHistory[2].Resolution,
-	}, "keep_both")
-}
-
-// Validates: R-2.3.5
-// TestE2E_Resolve_TargetNotFound validates that resolving a non-existent
-// conflict target produces an appropriate error.
-func TestE2E_Resolve_TargetNotFound(t *testing.T) {
+// Validates: R-2.3.12
+// TestE2E_CLI_NoResolveCommand validates that the removed manual conflict
+// workflow is not exposed as a CLI command anymore.
+func TestE2E_CLI_NoResolveCommand(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -401,84 +266,8 @@ func TestE2E_Resolve_TargetNotFound(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	// Try to resolve a non-existent conflict.
 	output := runCLIWithConfigExpectError(t, cfgPath, env, "resolve", "local", "nonexistent-id")
-	assert.Contains(t, output, "not found", "should report conflict not found")
-}
-
-// Validates: R-2.3.5, R-2.9.3
-func TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent(t *testing.T) {
-	registerLogDump(t)
-
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
-	opsCfgPath := writeMinimalConfig(t)
-
-	testFolder := fmt.Sprintf("e2e-conflicts-watch-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "watch-conflict.txt"), []byte("original"), 0o600))
-
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	waitForRemoteFixtureSeedVisible(t, opsCfgPath, nil, drive, "/"+testFolder+"/watch-conflict.txt")
-
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "watch-conflict.txt"), []byte("local-watch"), 0o600))
-	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/watch-conflict.txt", "remote-watch")
-
-	runCLIWithConfig(t, cfgPath, env, "sync")
-
-	statusBefore := readStatusSyncState(t, cfgPath, env)
-	require.Len(t, statusBefore.Conflicts, 1)
-	assert.Contains(t, statusBefore.Conflicts[0].Path, "watch-conflict.txt")
-
-	daemonArgs := []string{
-		"--config", cfgPath,
-		"--drive", drive,
-		"--debug",
-		"sync", "--watch",
-	}
-	cmd := makeCmd(daemonArgs, env)
-
-	var daemonStdout, daemonStderr syncBuffer
-	cmd.Stdout = &daemonStdout
-	cmd.Stderr = &daemonStderr
-
-	require.NoError(t, cmd.Start(), "failed to start watch daemon")
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
-
-		logCLIExecution(t, daemonArgs, daemonStdout.String(), daemonStderr.String())
-	})
-
-	waitForDaemonReady(t, &daemonStderr, 30*time.Second)
-
-	controlStatusBefore := getControlSocketStatus(t, env)
-	assert.Equal(t, synccontrol.OwnerModeWatch, controlStatusBefore.OwnerMode)
-
-	queueOutput := queueConflictResolution(t, cfgPath, env, "remote", testFolder+"/watch-conflict.txt")
-	assert.Contains(t, queueOutput, "Queued", "watch daemon should accept the queued resolution request")
-
-	require.Eventually(t, func() bool {
-		return len(readStatusSyncState(t, cfgPath, env).Conflicts) == 0
-	}, 90*time.Second, time.Second, "watch daemon should execute queued conflict resolution")
-
-	require.Eventually(t, func() bool {
-		content, err := os.ReadFile(filepath.Join(localDir, "watch-conflict.txt"))
-		return err == nil && string(content) == "remote-watch"
-	}, 90*time.Second, time.Second, "keep-remote should restore remote content locally")
-
-	require.Eventually(t, func() bool {
-		matches, err := filepath.Glob(filepath.Join(localDir, "watch-conflict.conflict-*"))
-		return err == nil && len(matches) == 0
-	}, 90*time.Second, time.Second, "keep-remote should remove the local conflict copy")
-
-	controlStatusAfter := getControlSocketStatus(t, env)
-	assert.Equal(t, synccontrol.OwnerModeWatch, controlStatusAfter.OwnerMode)
+	assert.Contains(t, output, "unknown command \"resolve\"", "legacy manual conflict command should stay removed")
 }
 
 // TestE2E_InternalBaselineVerification_AfterSync validates that the internal
@@ -978,91 +767,4 @@ func TestE2E_Status_ConditionLifecycle(t *testing.T) {
 
 	listing, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder)
 	assert.Contains(t, listing, "fixed.txt", "replacement file should sync after the condition clears")
-}
-
-// Validates: R-2.3.3, R-2.3.6, R-2.3.12, R-6.2.5, R-6.4.2
-// TestE2E_Resolve_DeletesWithWatchDaemon validates the watch-mode blocked-delete
-// lifecycle: block deletes, surface them via status, approve with
-// `resolve deletes`, and let watch mode resume delete propagation.
-func TestE2E_Resolve_DeletesWithWatchDaemon(t *testing.T) {
-	registerLogDump(t)
-
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "delete_safety_threshold = 10\n")
-	opsCfgPath := writeMinimalConfig(t)
-
-	testFolder := fmt.Sprintf("e2e-conditions-approve-deletes-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o700))
-
-	const fileCount = 12
-
-	for i := 1; i <= fileCount; i++ {
-		name := fmt.Sprintf("file-%02d.txt", i)
-		require.NoError(t, os.WriteFile(filepath.Join(localDir, name), []byte(fmt.Sprintf("content %d", i)), 0o600))
-	}
-
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "file-12.txt", pollTimeout, "ls", "/"+testFolder)
-
-	daemonArgs := []string{
-		"--config", cfgPath,
-		"--drive", drive,
-		"--debug",
-		"sync", "--watch", "--upload-only",
-	}
-	cmd := makeCmd(daemonArgs, env)
-
-	var stdout, stderr syncBuffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	require.NoError(t, cmd.Start(), "failed to start watch daemon")
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
-
-		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
-	})
-
-	waitForDaemonReady(t, &stderr, 30*time.Second)
-
-	for i := 1; i <= fileCount; i++ {
-		name := fmt.Sprintf("file-%02d.txt", i)
-		require.NoError(t, os.Remove(filepath.Join(localDir, name)))
-	}
-
-	require.Eventually(t, func() bool {
-		status := readStatusSyncState(t, cfgPath, env, "--verbose")
-		return len(status.DeleteSafety) == fileCount
-	}, 90*time.Second, time.Second, "status should show blocked deletes while watch protection is active")
-
-	statusBeforeApproval := readStatusSyncState(t, cfgPath, env, "--verbose")
-	require.Len(t, statusBeforeApproval.DeleteSafety, fileCount)
-
-	remoteBeforeApproval, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
-	assert.Contains(t, remoteBeforeApproval, "file-01.txt", "remote deletes should stay blocked before approval")
-
-	approvalOutput, _ := runCLIWithConfig(t, cfgPath, env, "resolve", "deletes")
-	assert.Contains(t, approvalOutput, "Approved blocked deletes for this drive.")
-
-	require.Eventually(t, func() bool {
-		return len(readStatusSyncState(t, cfgPath, env).DeleteSafety) == 0
-	}, 90*time.Second, time.Second, "status should clear delete safety rows once blocked deletes are approved and processed")
-
-	require.Eventually(t, func() bool {
-		remoteListing, _ := runCLIWithConfig(t, opsCfgPath, nil, "ls", "/"+testFolder)
-		return !strings.Contains(remoteListing, "file-01.txt")
-	}, 90*time.Second, time.Second, "watch daemon should execute approved deletes without an extra manual sync")
-
-	require.Eventually(t, func() bool {
-		return getControlSocketStatus(t, env).OwnerMode == synccontrol.OwnerModeWatch
-	}, 90*time.Second, time.Second, "watch daemon should consume approved blocked-delete rows")
-
-	statusAfterApproval := getControlSocketStatus(t, env)
-	assert.Equal(t, synccontrol.OwnerModeWatch, statusAfterApproval.OwnerMode)
 }

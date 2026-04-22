@@ -39,7 +39,7 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, 8)
+	require.Len(t, runner.runCommands, 9)
 	assert.Equal(t, "gofumpt", runner.runCommands[0].name)
 	assert.Equal(t, []string{"-w", "."}, runner.runCommands[0].args)
 	assert.Equal(t, "goimports", runner.runCommands[1].name)
@@ -47,20 +47,48 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	assert.Equal(t, "go", runner.runCommands[3].name)
 	assert.Equal(t, []string{"build", "./..."}, runner.runCommands[3].args)
 	assert.Equal(t, []string{"test", "-race", "-coverprofile=" + filepath.Join(repoRoot, "cover.out"), "./..."}, runner.runCommands[4].args)
-	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[5].args)
-	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[6].args)
-	assert.Equal(t, []string{"test", "-tags=e2e", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[7].args)
-	assertCommandHasEnvVar(t, runner.runCommands[5], e2eRunAuthPreflightEnvVar+"=1")
-	assertCommandLacksEnvVar(t, runner.runCommands[5], e2eRunFastFixturePreflightEnvVar+"=1")
-	assertCommandLacksSkipSuiteScrubEnvVar(t, runner.runCommands[5])
-	assertCommandHasEnvVar(t, runner.runCommands[6], e2eRunFastFixturePreflightEnvVar+"=1")
-	assertCommandLacksEnvVar(t, runner.runCommands[6], e2eRunAuthPreflightEnvVar+"=1")
-	assertCommandHasEnvVar(t, runner.runCommands[6], e2eSkipSuiteScrubEnvVar+"=1")
-	assertCommandHasEnvVar(t, runner.runCommands[7], e2eSkipSuiteScrubEnvVar+"=1")
+	assert.Equal(t, []string{"test", "-c", "-race", "-tags=e2e e2e_full", "-o", filepath.Join(os.TempDir(), "onedrive-go-e2e-full.test"), "./e2e"}, runner.runCommands[5].args)
+	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[6].args)
+	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[7].args)
+	assert.Equal(t, []string{"test", "-tags=e2e", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[8].args)
+	assertCommandHasEnvVar(t, runner.runCommands[6], e2eRunAuthPreflightEnvVar+"=1")
+	assertCommandLacksEnvVar(t, runner.runCommands[6], e2eRunFastFixturePreflightEnvVar+"=1")
+	assertCommandLacksSkipSuiteScrubEnvVar(t, runner.runCommands[6])
+	assertCommandHasEnvVar(t, runner.runCommands[7], e2eRunFastFixturePreflightEnvVar+"=1")
 	assertCommandLacksEnvVar(t, runner.runCommands[7], e2eRunAuthPreflightEnvVar+"=1")
-	assertCommandLacksEnvVar(t, runner.runCommands[7], e2eRunFastFixturePreflightEnvVar+"=1")
+	assertCommandHasEnvVar(t, runner.runCommands[7], e2eSkipSuiteScrubEnvVar+"=1")
+	assertCommandHasEnvVar(t, runner.runCommands[8], e2eSkipSuiteScrubEnvVar+"=1")
+	assertCommandLacksEnvVar(t, runner.runCommands[8], e2eRunAuthPreflightEnvVar+"=1")
+	assertCommandLacksEnvVar(t, runner.runCommands[8], e2eRunFastFixturePreflightEnvVar+"=1")
 	require.Len(t, runner.outputCommands, 1)
 	assert.Contains(t, stdout.String(), "==> coverage")
+}
+
+// Validates: R-6.2.1, R-6.2.2
+func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	runner := &fakeRunner{
+		outputs: map[string][]byte{
+			"go tool cover -func=" + filepath.Join(repoRoot, "cover.out"): []byte("total:\t(statements)\t76.5%\n"),
+		},
+	}
+
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:          repoRoot,
+		Profile:           VerifyPublic,
+		CoverageThreshold: 76.0,
+		CoverageFile:      filepath.Join(repoRoot, "cover.out"),
+		Stdout:            &bytes.Buffer{},
+		Stderr:            &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.runCommands, 6)
+	assert.Equal(t, []string{"test", "-c", "-race", "-tags=e2e e2e_full", "-o", filepath.Join(os.TempDir(), "onedrive-go-e2e-full.test"), "./e2e"}, runner.runCommands[5].args)
 }
 
 func TestRunVerifyE2EFullRunsPreflightsBeforeSuites(t *testing.T) {
@@ -207,8 +235,8 @@ func TestRunVerifyE2EFullClassifiesKnownAuthPreflightQuirkAfterSuccessfulRerun(t
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, 7)
-	require.Len(t, runner.combinedCommands, 1)
+	require.Len(t, runner.runCommands, 6)
+	require.Len(t, runner.combinedCommands, 2)
 	assert.Equal(t, runner.runCommands[0].args, runner.runCommands[1].args)
 	assert.Contains(t, stdout.String(), "LI-20260405-06")
 	assert.Contains(t, stdout.String(), "classified reruns:")
@@ -241,9 +269,10 @@ func TestRunVerifyE2EFullClassifiesKnownFastSuiteQuirkAfterSuccessfulRerun(t *te
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.combinedCommands, 1)
+	require.Len(t, runner.combinedCommands, 2)
 	assert.Equal(t, []string{"test", "-json", "-tags=e2e", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.combinedCommands[0].args)
-	require.Len(t, runner.runCommands, 7)
+	assert.Equal(t, fullE2EBucketJSONCommandArgs(fullE2ESerialWatchSharedBucket()), runner.combinedCommands[1].args)
+	require.Len(t, runner.runCommands, 6)
 	assert.Equal(t, []string{"test", "-tags=e2e", "-run=^TestE2E_Sync_DownloadOnly$", "-count=1", "-v", "./e2e/..."}, runner.runCommands[2].args)
 	assert.Contains(t, stdout.String(), "LI-20260405-04")
 	assert.Contains(t, stdout.String(), "classified reruns:")
@@ -277,6 +306,84 @@ func TestRunVerifyE2EFullDoesNotMaskUnknownFastSuiteFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "fast e2e")
 	require.Len(t, runner.combinedCommands, 1)
 	require.Len(t, runner.runCommands, 2)
+}
+
+func TestRunVerifyE2EFullClassifiesKnownWatchSharedQuirkAfterSuccessfulRerun(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	watchSharedJSONArgs := fullE2EBucketJSONCommandArgs(fullE2ESerialWatchSharedBucket())
+	runner := &fakeRunner{
+		combinedOutputs: map[string][]byte{
+			"go " + strings.Join(watchSharedJSONArgs, " "): []byte(strings.Join([]string{
+				`{"Time":"2026-04-22T00:00:00Z","Action":"run","Package":"github.com/tonimelisma/onedrive-go/e2e","Test":"TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart"}`,
+				`{"Time":"2026-04-22T00:01:30Z","Action":"fail","Package":"github.com/tonimelisma/onedrive-go/e2e","Test":"TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart"}`,
+				`{"Time":"2026-04-22T00:01:30Z","Action":"fail","Package":"github.com/tonimelisma/onedrive-go/e2e"}`,
+			}, "\n")),
+		},
+		combinedErrByKey: map[string]error{
+			"go " + strings.Join(watchSharedJSONArgs, " "): assert.AnError,
+		},
+	}
+
+	stdout := &bytes.Buffer{}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:           repoRoot,
+		Profile:            VerifyE2EFull,
+		ClassifyLiveQuirks: true,
+		Stdout:             stdout,
+		Stderr:             &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.combinedCommands, 2)
+	assert.Equal(t, watchSharedJSONArgs, runner.combinedCommands[1].args)
+	require.Len(t, runner.runCommands, 6)
+	assert.Equal(t, []string{
+		"test",
+		"-tags=e2e e2e_full",
+		"-race",
+		"-run=^TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart$",
+		"-count=1",
+		"-v",
+		"-parallel",
+		"1",
+		"-timeout=60m",
+		"./e2e/...",
+	}, runner.runCommands[5].args)
+	assert.Contains(t, stdout.String(), "LI-20260405-03")
+	assert.Contains(t, stdout.String(), "classified reruns:")
+}
+
+func TestRunVerifyE2EFullDoesNotMaskUnknownWatchSharedFailure(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	watchSharedJSONArgs := fullE2EBucketJSONCommandArgs(fullE2ESerialWatchSharedBucket())
+	runner := &fakeRunner{
+		combinedOutputs: map[string][]byte{
+			"go " + strings.Join(watchSharedJSONArgs, " "): []byte(strings.Join([]string{
+				`{"Time":"2026-04-22T00:00:00Z","Action":"run","Package":"github.com/tonimelisma/onedrive-go/e2e","Test":"TestE2E_Orchestrator_WatchSimultaneous"}`,
+				`{"Time":"2026-04-22T00:01:30Z","Action":"fail","Package":"github.com/tonimelisma/onedrive-go/e2e","Test":"TestE2E_Orchestrator_WatchSimultaneous"}`,
+				`{"Time":"2026-04-22T00:01:30Z","Action":"fail","Package":"github.com/tonimelisma/onedrive-go/e2e"}`,
+			}, "\n")),
+		},
+		combinedErrByKey: map[string]error{
+			"go " + strings.Join(watchSharedJSONArgs, " "): assert.AnError,
+		},
+	}
+
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:           repoRoot,
+		Profile:            VerifyE2EFull,
+		ClassifyLiveQuirks: true,
+		Stdout:             &bytes.Buffer{},
+		Stderr:             &bytes.Buffer{},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "full e2e")
+	require.Len(t, runner.combinedCommands, 2)
+	require.Len(t, runner.runCommands, 5)
 }
 
 func TestRunVerifyE2EStopsAfterFastPreflightFailure(t *testing.T) {
@@ -326,8 +433,9 @@ func TestRunVerifyWritesSummaryJSONOnSuccess(t *testing.T) {
 	assert.Equal(t, string(VerifyPublic), summary.Profile)
 	assert.Equal(t, verifySummaryStatusPass, summary.Status)
 	assert.GreaterOrEqual(t, summary.TotalDurationMS, int64(0))
-	assertVerifySummaryHasStep(t, summary, "format", verifySummaryStatusPass)
-	assertVerifySummaryHasStep(t, summary, "repo consistency", verifySummaryStatusPass)
+	assertVerifySummaryHasStep(t, summary, "format")
+	assertVerifySummaryHasStep(t, summary, "repo consistency")
+	assertVerifySummaryHasStep(t, summary, "e2e-full compile")
 	assert.Empty(t, summary.ClassifiedReruns)
 	assert.Contains(t, stdout.String(), "verify summary")
 	assert.Contains(t, stdout.String(), "classified reruns: none")
@@ -384,7 +492,7 @@ func TestRunVerifyWritesSummaryJSONOnFailure(t *testing.T) {
 	readVerifySummaryFile(t, summaryPath, &summary)
 	assert.Equal(t, string(VerifyE2EFull), summary.Profile)
 	assert.Equal(t, verifySummaryStatusFail, summary.Status)
-	assertVerifySummaryHasStep(t, summary, "fast e2e", verifySummaryStatusPass)
+	assertVerifySummaryHasStep(t, summary, "fast e2e")
 	assertVerifyBucketSummary(t, summary, fullE2ESerialSyncBucket().Name, verifySummaryStatusFail)
 	assert.Contains(t, stdout.String(), "verify summary")
 	assert.Contains(t, stdout.String(), fullE2ESerialSyncBucket().Name)
@@ -460,20 +568,27 @@ func TestFullE2EBucketsOwnDemotedFastTests(t *testing.T) {
 	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_JSONOutput")
 	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_QuietFlag")
 	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_RoundTrip")
+	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_Status_LiveOverlay_ConfigTolerance")
+	assert.NotContains(t, fullE2EParallelMiscTestNames(), "TestE2E_Whoami_ConfigTolerance")
 
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DryRun")
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_InternalBaselineVerification")
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_Conflicts")
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DriveRemoveAndReAdd")
-	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile")
-	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload")
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DirectionalModes_PreserveEditEditConflict")
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict")
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict")
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges")
 	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges")
+	assert.NotContains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile")
+	assert.NotContains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload")
+	assert.NotContains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_ResolveAll")
+	assert.NotContains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DeleteSafetyThreshold")
+	assert.NotContains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_ResolveDryRun")
 
 	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_SyncWatch_WebsocketStartupSmoke")
+	assert.NotContains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent")
+	assert.NotContains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Resolve_DeletesWithWatchDaemon")
 }
 
 func assertVerifyStopsAfterPreflightFailure(

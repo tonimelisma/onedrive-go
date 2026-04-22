@@ -51,50 +51,55 @@ type statusDriveJSON struct {
 }
 
 type statusSyncStateJSON struct {
-	Conditions           []statusConditionJSON       `json:"conditions"`
-	DeleteSafety         []statusDeleteSafetyJSON    `json:"delete_safety"`
-	DeleteSafetyTotal    int                         `json:"delete_safety_total"`
-	Conflicts            []statusConflictJSON        `json:"conflicts"`
-	ConflictsTotal       int                         `json:"conflicts_total"`
-	ConflictHistory      []statusConflictHistoryJSON `json:"conflict_history"`
-	ConflictHistoryTotal int                         `json:"conflict_history_total"`
-	NextActions          []string                    `json:"next_actions"`
-	ExamplesLimit        int                         `json:"examples_limit"`
-	Verbose              bool                        `json:"verbose"`
+	LastSyncTime     string                `json:"last_sync_time"`
+	LastSyncDuration string                `json:"last_sync_duration"`
+	FileCount        int                   `json:"file_count"`
+	ConditionCount   int                   `json:"condition_count"`
+	RemoteDrift      int                   `json:"remote_drift"`
+	Retrying         int                   `json:"retrying"`
+	LastError        string                `json:"last_error"`
+	Conditions       []statusConditionJSON `json:"conditions"`
+	ExamplesLimit    int                   `json:"examples_limit"`
+	Verbose          bool                  `json:"verbose"`
 }
 
 type statusConditionJSON struct {
-	Title string   `json:"title"`
-	Paths []string `json:"paths"`
+	ConditionKey  string   `json:"condition_key"`
+	ConditionType string   `json:"condition_type"`
+	Title         string   `json:"title"`
+	Reason        string   `json:"reason"`
+	Action        string   `json:"action"`
+	ScopeKind     string   `json:"scope_kind"`
+	Scope         string   `json:"scope"`
+	Count         int      `json:"count"`
+	Paths         []string `json:"paths"`
 }
 
-type statusDeleteSafetyJSON struct {
-	Path       string `json:"path"`
-	State      string `json:"state"`
-	ActionHint string `json:"action_hint"`
-}
-
-type statusConflictJSON struct {
-	ID                  string `json:"id"`
-	Path                string `json:"path"`
-	ConflictType        string `json:"conflict_type"`
-	State               string `json:"state"`
-	RequestedResolution string `json:"requested_resolution"`
-	LastRequestError    string `json:"last_request_error"`
-	ActionHint          string `json:"action_hint"`
-}
-
-type statusConflictHistoryJSON struct {
-	ID           string `json:"id"`
-	Path         string `json:"path"`
-	ConflictType string `json:"conflict_type"`
-	Resolution   string `json:"resolution"`
-	ResolvedBy   string `json:"resolved_by"`
+type statIDJSON struct {
+	ID string `json:"id"`
 }
 
 // ---------------------------------------------------------------------------
 // Sync test helpers (available under the base e2e tag for both fast and full)
 // ---------------------------------------------------------------------------
+
+func selectedDriveForEnv(env map[string]string) string {
+	if env != nil {
+		if driveID := env["ONEDRIVE_GO_DRIVE"]; driveID != "" {
+			return driveID
+		}
+	}
+
+	return drive
+}
+
+func effectiveDriveID(env map[string]string, driveID string) string {
+	if driveID == "" || driveID == drive {
+		return selectedDriveForEnv(env)
+	}
+
+	return driveID
+}
 
 // writeSyncConfig creates a minimal TOML config file pointing to the given
 // syncDir for the test drive. Each test gets per-test state DB isolation via
@@ -127,6 +132,109 @@ sync_dir = %q
 	}
 
 	return cfgPath, env
+}
+
+// writeIsolatedSharedRootSyncConfig creates a per-test sync config that targets
+// a freshly created remote folder via a shared-root canonical ID. Nightly
+// bidirectional sync/watch coverage uses this to keep provider-owned drive-root
+// churn outside the test's authority boundary while still exercising the real
+// shared-root sync path.
+func writeIsolatedSharedRootSyncConfig(t *testing.T, syncDir string) (string, map[string]string) {
+	t.Helper()
+
+	return writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir, "")
+}
+
+func writeIsolatedSharedRootSyncConfigWithOptions(
+	t *testing.T,
+	syncDir string,
+	extraTOML string,
+) (string, map[string]string) {
+	t.Helper()
+
+	perTestData := t.TempDir()
+	perTestHome := t.TempDir()
+
+	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
+	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
+	copyTokenFile(t, testDataDir, perTestDataDir)
+
+	rootFolder := fmt.Sprintf("e2e-sync-root-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, rootFolder) })
+
+	opsCfgPath := writeMinimalConfig(t)
+	mkdirRemoteFolderForDrive(t, opsCfgPath, nil, drive, "/"+rootFolder)
+	stdout, _ := runCLIWithConfig(t, opsCfgPath, nil, "stat", "--json", "/"+rootFolder)
+
+	var stat statIDJSON
+	require.NoError(t, json.Unmarshal([]byte(stdout), &stat))
+	require.NotEmpty(t, stat.ID, "isolated shared-root setup should resolve the remote folder item ID")
+
+	ownerCID, err := driveid.NewCanonicalID(drive)
+	require.NoError(t, err)
+
+	catalog, err := config.LoadCatalogForDataDir(perTestDataDir)
+	require.NoError(t, err)
+
+	ownerDrive, found := catalog.DriveByCanonicalID(ownerCID)
+	require.Truef(t, found, "missing catalog drive record for %s", drive)
+	require.NotEmpty(t, ownerDrive.RemoteDriveID, "catalog drive record for %s should include remote drive ID", drive)
+
+	sharedCID, err := driveid.ConstructShared(ownerCID.Email(), ownerDrive.RemoteDriveID, stat.ID)
+	require.NoError(t, err)
+
+	require.NoError(t, config.UpdateCatalogForDataDir(perTestDataDir, func(catalog *config.Catalog) error {
+		catalog.UpsertDrive(&config.CatalogDrive{
+			CanonicalID:           sharedCID.String(),
+			OwnerAccountCanonical: drive,
+			DriveType:             driveid.DriveTypeShared,
+			DisplayName:           rootFolder,
+			SharedOwnerEmail:      ownerCID.Email(),
+			RemoteDriveID:         ownerDrive.RemoteDriveID,
+		})
+		return nil
+	}))
+
+	content := fmt.Sprintf(`%s["%s"]
+sync_dir = %q
+`, extraTOML, sharedCID.String(), syncDir)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
+
+	env := map[string]string{
+		"XDG_DATA_HOME":     perTestData,
+		"HOME":              perTestHome,
+		"ONEDRIVE_GO_DRIVE": sharedCID.String(),
+	}
+
+	waitForSharedRootListingVisible(t, cfgPath, env, sharedCID.String())
+
+	return cfgPath, env
+}
+
+func waitForSharedRootListingVisible(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+) {
+	t.Helper()
+
+	pollRemoteEventually(
+		t,
+		cfgPath,
+		env,
+		driveID,
+		remoteWritePropagationTimeout,
+		timingKindRemoteWriteVisibility,
+		fmt.Sprintf("shared-root listing visibility for %q", driveID),
+		func(_ string, _ string, err error) bool {
+			return err == nil
+		},
+		"ls",
+		"/",
+	)
 }
 
 // runCLICore is the shared implementation for all config-aware CLI runner
@@ -168,27 +276,11 @@ func runCLICore(t *testing.T, cfgPath string, env map[string]string, driveID str
 func runCLIWithConfig(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
 	t.Helper()
 
-	stdout, stderr, err := runCLICore(t, cfgPath, env, drive, args...)
+	stdout, stderr, err := runCLICore(t, cfgPath, env, selectedDriveForEnv(env), args...)
 	require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s",
 		args, stdout, stderr)
 
 	return stdout, stderr
-}
-
-func queueConflictResolution(t *testing.T, cfgPath string, env map[string]string, args ...string) string {
-	t.Helper()
-
-	resolveArgs := append([]string{"resolve"}, toResolveArgs(t, args...)...)
-	_, stderr := runCLIWithConfig(t, cfgPath, env, resolveArgs...)
-	assert.Contains(t, stderr, "Queued", "conflict resolution should queue durable engine-owned intent")
-	return stderr
-}
-
-func queueConflictResolutionAndSync(t *testing.T, cfgPath string, env map[string]string, args ...string) {
-	t.Helper()
-
-	queueConflictResolution(t, cfgPath, env, args...)
-	runCLIWithConfig(t, cfgPath, env, "sync")
 }
 
 func runStatusAllowError(
@@ -277,7 +369,7 @@ func requireStatusDrive(
 
 func readStatusSyncState(t *testing.T, cfgPath string, env map[string]string, args ...string) statusSyncStateJSON {
 	t.Helper()
-	return readStatusSyncStateForDrive(t, cfgPath, env, drive, args...)
+	return readStatusSyncStateForDrive(t, cfgPath, env, selectedDriveForEnv(env), args...)
 }
 
 func readStatusSyncStateForDrive(
@@ -303,7 +395,7 @@ func pollStatusSyncState(
 	ready func(statusSyncStateJSON) bool,
 	args ...string,
 ) statusSyncStateJSON {
-	return pollStatusSyncStateForDrive(t, cfgPath, env, drive, timeout, ready, args...)
+	return pollStatusSyncStateForDrive(t, cfgPath, env, selectedDriveForEnv(env), timeout, ready, args...)
 }
 
 func pollStatusSyncStateForDrive(
@@ -356,47 +448,6 @@ func pollStatusSyncStateForDrive(
 	}
 }
 
-func toResolveArgs(t *testing.T, args ...string) []string {
-	t.Helper()
-
-	var (
-		strategy string
-		target   string
-		all      bool
-		dryRun   bool
-	)
-
-	for _, arg := range args {
-		switch arg {
-		case "local", "remote", "both":
-			require.Empty(t, strategy, "only one resolve strategy is supported")
-			strategy = arg
-		case "--all":
-			all = true
-		case "--dry-run":
-			dryRun = true
-		default:
-			require.Empty(t, target, "only one conflict target is supported")
-			target = arg
-		}
-	}
-
-	require.NotEmpty(t, strategy, "resolve helper requires local, remote, or both strategy")
-
-	resolveArgs := []string{strategy}
-	if dryRun {
-		resolveArgs = append(resolveArgs, "--dry-run")
-	}
-	if all {
-		resolveArgs = append(resolveArgs, "--all")
-	}
-	if target != "" {
-		resolveArgs = append(resolveArgs, target)
-	}
-
-	return resolveArgs
-}
-
 func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (*syncverify.Report, error) {
 	t.Helper()
 
@@ -404,7 +455,7 @@ func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (
 	cfg, err := config.Load(cfgPath, logger)
 	require.NoError(t, err)
 
-	canonicalID, driveCfg, err := config.MatchDrive(cfg, drive, logger)
+	canonicalID, driveCfg, err := config.MatchDrive(cfg, selectedDriveForEnv(env), logger)
 	require.NoError(t, err)
 
 	dbPath := stateDBPathForEnv(canonicalID, env)
@@ -461,7 +512,19 @@ func stateDBPathForEnv(canonicalID driveid.CanonicalID, env map[string]string) s
 func runCLIWithConfigAllowError(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string, error) {
 	t.Helper()
 
-	return runCLICore(t, cfgPath, env, drive, args...)
+	return runCLICore(t, cfgPath, env, selectedDriveForEnv(env), args...)
+}
+
+func runCLIWithConfigAllowErrorForDrive(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	args ...string,
+) (string, string, error) {
+	t.Helper()
+
+	return runCLICore(t, cfgPath, env, effectiveDriveID(env, driveID), args...)
 }
 
 // snapshotLocalTree captures a deterministic view of a test-owned local
@@ -523,6 +586,23 @@ func snapshotLocalTree(t *testing.T, root string) map[string]string {
 	return snapshot
 }
 
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return data
+}
+
+func assertConflictCopyContains(t *testing.T, localDir string, stem string, expected string) {
+	t.Helper()
+
+	matches, err := filepath.Glob(filepath.Join(localDir, stem+".conflict-*"))
+	require.NoError(t, err)
+	require.NotEmpty(t, matches, "conflict copy should exist for %s", stem)
+	assert.Equal(t, expected, string(mustReadFile(t, matches[0])))
+}
+
 // assertSyncLeavesLocalTreeStable proves that a follow-up sync did not mutate
 // the caller-owned subtree, even if unrelated live-drive activity caused other
 // delta events elsewhere in the shared test account.
@@ -543,7 +623,57 @@ func assertSyncLeavesLocalTreeStable(
 	return stderr
 }
 
-const remoteFixturePutMaxAttempts = 3
+const (
+	remoteFixtureMkdirMaxAttempts = 3
+	remoteFixturePutMaxAttempts   = 3
+)
+
+func mkdirRemoteFolder(t *testing.T, cfgPath string, env map[string]string, remotePath string) {
+	t.Helper()
+
+	mkdirRemoteFolderForDrive(t, cfgPath, env, selectedDriveForEnv(env), remotePath)
+}
+
+func mkdirRemoteFolderForDrive(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	remotePath string,
+) {
+	t.Helper()
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, mkdirErr := runCLIWithConfigAllowErrorForDrive(
+			t,
+			cfgPath,
+			env,
+			driveID,
+			"mkdir",
+			remotePath,
+		)
+		if mkdirErr == nil {
+			break
+		}
+
+		decision := classifyFixtureMkdirCommandFailure(stderr)
+		if attempt >= remoteFixtureMkdirMaxAttempts-1 || !decision.Retry {
+			require.NoErrorf(t, mkdirErr, "CLI command %v failed\nstdout: %s\nstderr: %s",
+				[]string{"mkdir", remotePath}, stdout, stderr)
+		}
+		recordLiveProviderRecurrenceEvent(
+			t,
+			fmt.Sprintf("mkdir %s", remotePath),
+			decision,
+			quirkOutcomeRetried,
+			mkdirErr.Error(),
+		)
+
+		sleepForLiveTestPropagation(pollBackoff(attempt))
+	}
+
+	waitForRemoteExactStatVisible(t, cfgPath, env, driveID, remotePath)
+}
 
 // putRemoteFile uploads string content to a remote path via a temp file.
 // cfgPath must point to a valid config with the drive section; env overrides
@@ -555,6 +685,19 @@ const remoteFixturePutMaxAttempts = 3
 func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePath, content string) {
 	t.Helper()
 
+	putRemoteFileForDrive(t, cfgPath, env, selectedDriveForEnv(env), remotePath, content)
+}
+
+func putRemoteFileForDrive(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	remotePath string,
+	content string,
+) {
+	t.Helper()
+
 	tmpFile, err := os.CreateTemp("", "e2e-put-*")
 	require.NoError(t, err)
 	defer os.Remove(tmpFile.Name())
@@ -564,7 +707,15 @@ func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 	require.NoError(t, tmpFile.Close())
 
 	for attempt := 0; ; attempt++ {
-		stdout, stderr, putErr := runCLIWithConfigAllowError(t, cfgPath, env, "put", tmpFile.Name(), remotePath)
+		stdout, stderr, putErr := runCLIWithConfigAllowErrorForDrive(
+			t,
+			cfgPath,
+			env,
+			driveID,
+			"put",
+			tmpFile.Name(),
+			remotePath,
+		)
 		if putErr == nil {
 			break
 		}
@@ -585,7 +736,7 @@ func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 
-	waitForRemoteFixtureSeedVisible(t, cfgPath, env, drive, remotePath)
+	waitForRemoteFixtureSeedVisible(t, cfgPath, env, driveID, remotePath)
 }
 
 func classifyFixturePutCommandFailure(stderr string) liveProviderRecurrenceDecision {
@@ -598,6 +749,21 @@ func classifyFixturePutCommandFailure(stderr string) liveProviderRecurrenceDecis
 		}
 	case strings.Contains(stderr, "resolving parent") &&
 		strings.Contains(stderr, "remote path not yet visible"):
+		return liveProviderRecurrenceDecision{
+			Reason: liveProviderRecurrenceFreshParentParentPathLag,
+			Retry:  true,
+		}
+	default:
+		return liveProviderRecurrenceDecision{
+			Reason: liveProviderRecurrenceUnknown,
+			Retry:  false,
+		}
+	}
+}
+
+func classifyFixtureMkdirCommandFailure(stderr string) liveProviderRecurrenceDecision {
+	switch {
+	case strings.Contains(stderr, "remote path not yet visible"):
 		return liveProviderRecurrenceDecision{
 			Reason: liveProviderRecurrenceFreshParentParentPathLag,
 			Retry:  true,
@@ -662,13 +828,47 @@ func TestClassifyFixturePutCommandFailure_RejectsUnrelatedFailures(t *testing.T)
 	))
 }
 
+func TestClassifyFixtureMkdirCommandFailure_KnownConvergenceFamilies(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrenceFreshParentParentPathLag,
+		Retry:  true,
+	}, classifyFixtureMkdirCommandFailure(
+		`Error: confirming folder "e2e-sync-bidi-123/data" visibility: remote path not yet visible: "e2e-sync-bidi-123/data"`,
+	))
+}
+
+func TestClassifyFixtureMkdirCommandFailure_RejectsUnrelatedFailures(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrenceUnknown,
+		Retry:  false,
+	}, classifyFixtureMkdirCommandFailure(
+		`Error: creating folder "data": graph: HTTP 403: Access denied`,
+	))
+}
+
 // getRemoteFile downloads a remote file and returns its content as a string.
 // cfgPath must point to a valid config with the drive section; env overrides
 // (if non-nil) are forwarded to the CLI child process.
 func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePath string) string {
 	t.Helper()
 
-	waitForRemoteFixtureSeedVisible(t, cfgPath, env, drive, remotePath)
+	return getRemoteFileForDrive(t, cfgPath, env, selectedDriveForEnv(env), remotePath)
+}
+
+func getRemoteFileForDrive(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	remotePath string,
+) string {
+	t.Helper()
+
+	waitForRemoteFixtureSeedVisible(t, cfgPath, env, driveID, remotePath)
 
 	tmpDir := t.TempDir()
 	localPath := filepath.Join(tmpDir, "downloaded")
@@ -681,7 +881,15 @@ func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePa
 	)
 
 	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, "get", remotePath, localPath)
+		stdout, stderr, err := runCLIWithConfigAllowErrorForDrive(
+			t,
+			cfgPath,
+			env,
+			driveID,
+			"get",
+			remotePath,
+			localPath,
+		)
 		lastStdout = stdout
 		lastStderr = stderr
 		lastErr = err
@@ -758,7 +966,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 	content := []byte("sync download test\n")
 
 	// Create remote folder + file.
-	runCLIWithConfig(t, opsCfgPath, nil, "mkdir", "/"+testFolder)
+	mkdirRemoteFolderForDrive(t, opsCfgPath, nil, drive, "/"+testFolder)
 
 	tmpFile, err := os.CreateTemp("", "e2e-sync-dl-*")
 	require.NoError(t, err)
@@ -1064,7 +1272,7 @@ func openDriveStateDBForSyncTest(t *testing.T, env map[string]string) *sql.DB {
 	dataHome := env["XDG_DATA_HOME"]
 	require.NotEmpty(t, dataHome)
 
-	sanitizedDrive := strings.ReplaceAll(drive, ":", "_")
+	sanitizedDrive := strings.ReplaceAll(selectedDriveForEnv(env), ":", "_")
 	dbPath := filepath.Join(dataHome, "onedrive-go", "state_"+sanitizedDrive+".db")
 	require.FileExists(t, dbPath)
 

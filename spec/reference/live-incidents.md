@@ -19,8 +19,15 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260422-01 | Nightly `e2e_full` buckets still carried removed manual-resolution and path-narrowing workflows | fixed | test bug | 2026-04-22 | yes |
+| LI-20260422-02 | Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair | fixed | product bug | 2026-04-22 | no |
+| LI-20260422-03 | Shared-drive sync startup still aborted when `sync_dir` did not exist yet | fixed | product bug | 2026-04-22 | no |
+| LI-20260422-04 | Shared-folder `drive list` exact-selector check assumed one-pass search visibility | fixed | test harness | 2026-04-22 | yes |
+| LI-20260422-05 | Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work | fixed | test harness | 2026-04-22 | yes |
+| LI-20260417-01 | Nightly `e2e_full` preflight duplicated `TestE2E_Status_ConfigTolerance` and stopped before live full-suite coverage | fixed | test bug | 2026-04-22 | yes |
 | LI-20260420-01 | Fast E2E smoke `get` exhausted the documented download-metadata `404` quirk budget | mitigated | graph quirk | 2026-04-20 | yes |
 | LI-20260416-01 | Fast E2E suite preflight assumed local `.testdata` always carried `drive_*.json` | fixed | test harness | 2026-04-16 | no |
+| LI-20260415-01 | Nightly `e2e_full` preflight still referenced deleted sync-control status counters | fixed | test bug | 2026-04-16 | yes |
 | LI-20260413-01 | Directional one-shot sync reported deferred remote drift as `No changes detected` | fixed | product bug | 2026-04-13 | no |
 | LI-20260412-04 | `internal/sync` stress verification outgrew the old 20-minute race budget | fixed | test harness | 2026-04-13 | yes |
 | LI-20260412-03 | Directional conflict E2Es still expected one-way overwrite semantics | fixed | test bug | 2026-04-12 | no |
@@ -29,9 +36,9 @@ Promotion contract:
 | LI-20260410-01 | Server-side copy rejected a freshly visible destination folder | fixed | graph quirk | 2026-04-10 | no |
 | LI-20260408-03 | Serialized `e2e_full` package exceeded the old 30-minute harness timeout | fixed | test harness | 2026-04-08 | no |
 | LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
-| LI-20260408-01 | Immediate post-simple-upload mtime PATCH returned `404 itemNotFound` | mitigated | graph quirk | 2026-04-08 | no |
+| LI-20260408-01 | Immediate post-simple-upload mtime PATCH returned `404 itemNotFound` | mitigated | graph quirk | 2026-04-22 | yes |
 | LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-19 | yes |
-| LI-20260405-09 | Recently created parent folder lagged child create routes | mitigated | graph quirk | 2026-04-12 | yes |
+| LI-20260405-09 | Recently created parent folder lagged child create and child-list routes | mitigated | graph quirk | 2026-04-22 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
 | LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-22 | yes |
 | LI-20260407-04 | Shared-file preflight assumed only one configured recipient could open the raw link | fixed | test bug | 2026-04-07 | no |
@@ -41,9 +48,317 @@ Promotion contract:
 | LI-20260406-01 | Personal scoped delta not ready after path resolution | fixed | graph quirk | 2026-04-06 | no |
 | LI-20260405-05 | One-shot crash recovery left durable work unreplayed | fixed | product bug | 2026-04-05 | no |
 | LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-10 | yes |
-| LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | fixed | test bug | 2026-04-08 | yes |
+| LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-22 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260417-01: Nightly `e2e_full` preflight duplicated `TestE2E_Status_ConfigTolerance` and stopped before live full-suite coverage
+
+First seen: 2026-04-17
+Last seen: 2026-04-22
+Area: scheduled `e2e_full`, drive-list/status tolerance coverage
+Suite / test: scheduled CI runs `24560684468`, `24602596763`,
+`24662080702`, `24717800559`, and `24773770364`; `e2e` job,
+`full fixture preflight`
+Classification: test bug
+Status: fixed
+Recurring: yes
+Summary: Beginning with the April 17 nightly, the scheduled `e2e` job stopped
+failing for live-provider reasons and started failing deterministically while
+compiling the nightly-only `e2e_full` package. The fast verifier-owned auth
+preflight, fast fixture preflight, and fast live smoke tests all passed, but
+the single full-suite preflight never started because the drive-list/status
+refactor created two functions named `TestE2E_Status_ConfigTolerance` in the
+same `e2e && e2e_full` file.
+Evidence:
+- Scheduled CI runs `24560684468` (April 17), `24602596763` (April 18),
+  `24662080702` (April 20), `24717800559` (April 21), and `24773770364`
+  (April 22) all failed the `e2e` job in under two minutes with the same
+  compile error from `e2e/drive_list_e2e_test.go:253` and `:290`, while the
+  same logs reported `auth preflight: pass`, `fast fixture preflight: pass`,
+  and `fast e2e: pass`.
+- The workspace at nightly `HEAD`
+  `d24793735682a1c86cef42e9eb682ea3a685ce74` reproduced the same failure
+  locally with
+  `go test -tags='e2e e2e_full' -run '^TestE2E_FixturePreflight_Full$' -count=1 -v ./e2e/...`,
+  which proved the break was repo-local and independent of live credentials.
+- Commit `24fed9f` (`refactor: unify status and remove catalog wrappers (#508)`)
+  rewrote the former `whoami` tolerance test block into a second
+  `TestE2E_Status_ConfigTolerance`, but the original status tolerance test was
+  still present earlier in the file. That left the package with two identical
+  test function names instead of one text-mode status tolerance test plus one
+  live-overlay status tolerance test.
+- Scheduled/manual CI intentionally switches from fast `e2e` to `e2e-full` in
+  [ci.yml](../../.github/workflows/ci.yml), and the verifier's
+  [system design](../design/system.md) documents that these files build only
+  under `//go:build e2e && e2e_full`. That is why the required PR lanes kept
+  passing while nightly/manual CI turned red.
+Resolution / mitigation: fixed by restoring distinct full-suite test ownership
+(`TestE2E_Status_ConfigTolerance` for basic status tolerance and
+`TestE2E_Status_LiveOverlay_ConfigTolerance` for the absorbed live
+identity/catalog path) and by adding a required compile-only
+`go test -c -race -tags='e2e e2e_full' ./e2e` guard to verifier `public` and
+`default` so future nightly-only tagged build breaks fail before merge.
+Promoted docs: [system.md](../design/system.md)
+
+## LI-20260422-01: Nightly `e2e_full` buckets still carried removed manual-resolution and path-narrowing workflows
+
+First seen: 2026-04-22
+Last seen: 2026-04-22
+Area: scheduled/manual `e2e_full`, verifier bucket curation, stale live-only contract drift
+Suite / test: local `go run ./cmd/devtool verify e2e-full`; verifier buckets `full-parallel-misc`, `full-serial-sync`, and `full-serial-watch-shared`
+Classification: test bug
+Status: fixed
+Recurring: yes
+Summary: After the April 17 compile break was fixed, the nightly lane finally
+reached the live `e2e_full` buckets again and exposed a second repo-local
+problem: large parts of the full-suite inventory still described deleted
+product workflows. The verifier buckets still named tests for manual
+`resolve` commands, `status --history`, blocked-delete approval, and removed
+path-narrowing config (`sync_paths`, `ignore_marker`) even though the current
+product contract is engine-owned immediate conflict handling plus one
+condition-based status surface. Once that stale coverage was removed, the same
+nightly investigation could finally reach deeper shared-root product bugs,
+which are tracked separately in [LI-20260422-02](#li-20260422-02-shared-root-full-sync-commands-widened-or-destabilized-the-configured-subtree-after-nightly-harness-repair).
+Evidence:
+- Local `go run ./cmd/devtool verify e2e-full` on April 22, 2026 progressed
+  past the repaired compile-only gate and immediately surfaced failures in
+  nightly-only tests that still expected manual post-conflict or
+  path-filtering behavior.
+- Repository inspection showed the full-suite bucket lists in
+  [`internal/devtool/verify_e2e.go`](../../internal/devtool/verify_e2e.go)
+  still naming removed-workflow tests such as
+  `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`,
+  `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload`,
+  `TestE2E_Sync_ResolveAll`,
+  `TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent`, and
+  `TestE2E_Resolve_DeletesWithWatchDaemon`.
+- The affected E2E files still encoded removed semantics directly:
+  [`e2e/sync_full_test.go`](../../e2e/sync_full_test.go) and
+  [`e2e/sync_edge_cases_full_test.go`](../../e2e/sync_edge_cases_full_test.go)
+  queued manual resolution requests, and the historical
+  `e2e/sync_scope_e2e_test.go` coverage that was later merged into
+  [`e2e/sync_e2e_test.go`](../../e2e/sync_e2e_test.go) still configured
+  deleted `sync_paths` / `ignore_marker` keys. Meanwhile,
+  [`e2e/cli_commands_e2e_test.go`](../../e2e/cli_commands_e2e_test.go) still
+  carried watch/delete-approval assertions for a removed `resolve deletes`
+  flow.
+- After those stale workflows were removed, the same bucket still carried a
+  shared-drive assumption that `status.sync_state.remote_drift` must be zero
+  after an `--upload-only` run. Live status snapshots correctly surfaced
+  unrelated deferred remote work on the shared test drive with
+  `condition_count: 0`, `retrying: 0`, and non-zero `remote_drift`, so the
+  failing assertion was test drift rather than a product regression.
+- The current product docs already described the opposite contract:
+  [`spec/requirements/sync.md`](../requirements/sync.md) requires immediate
+  engine-owned conflict preservation with no replayable manual conflict or
+  delete-approval mutations, and [`spec/design/cli.md`](../design/cli.md)
+  states that `status` no longer exposes separate conflict-history or
+  delete-safety sections.
+Resolution / mitigation: the stale full-suite tests were removed or rewritten
+to match the current product contract. Nightly coverage now keeps the
+condition-based `status` assertions, rejects removed `resolve` / `--history`
+surfaces explicitly, preserves current one-shot and watch conflict behavior by
+checking conflict copies plus canonical-path winners, and deletes the old
+path-narrowing-only test file entirely. The verifier bucket lists were trimmed
+to the surviving coverage. The remaining per-drive status smoke now asserts
+the stable “no durable conditions / no retrying work” contract instead of
+assuming zero shared-drive remote drift, and the stale non-functional
+delete-safety requirement wording was aligned with the existing
+no-manual-approval design. The shared-root product bugs that this cleanup
+unmasked are tracked in [LI-20260422-02](#li-20260422-02-shared-root-full-sync-commands-widened-or-destabilized-the-configured-subtree-after-nightly-harness-repair).
+Promoted docs: [system.md](../design/system.md), [non-functional.md](../requirements/non-functional.md)
+
+## LI-20260422-02: Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair
+
+First seen: 2026-04-22
+Last seen: 2026-04-22
+Area: shared-root sync/config/path operations after nightly full-suite harness cleanup
+Suite / test: focused reruns of `TestE2E_Sync_IdempotentReSync` and `TestE2E_Sync_BidirectionalMerge`; local `go test ./internal/sync`; shared-root config resolution
+Classification: product bug
+Status: fixed
+Recurring: no
+Summary: Once the nightly-only stale tests were removed, the repaired full
+suite still exposed three repo-local shared-root bugs. Catalog-backed shared
+drives could drop their canonical `RootItemID` during config resolution and
+widen sync back to the sharer's whole drive, CLI `mkdir` still walked from the
+backing drive root instead of the configured shared root, and SQLite
+reconciliation still treated folder size/mtime/ETag churn as edit/edit drift
+and scheduled folder conflict/download actions on clean re-syncs.
+Evidence:
+- Focused reruns of `TestE2E_Sync_IdempotentReSync` on April 22 initially
+  showed the sync engine observing and downloading unrelated top-level siblings
+  such as `benchmarks` and `Read-only Shared Folder` into the local test tree.
+  The selected drive was already
+  `shared:testitesti18@outlook.com:<driveID>:<itemID>`, which isolated the
+  problem to config/session resolution rather than test selection.
+- Config inspection showed `buildResolvedDrive` only preserving shared
+  `RootItemID` on the fallback branch that also derived `DriveID` from the
+  canonical ID. When a catalog drive record already supplied `DriveID`, the
+  resolved shared root was silently dropped, which widened sync back to
+  whole-drive observation.
+- After preserving `RootItemID`, the same focused re-sync still failed with
+  two conflict copies plus two download actions targeted at folders. A new
+  regression test,
+  [`TestQueryReconciliationState_FolderMetadataChurnIsNoop`](../../internal/sync/sqlite_compare_test.go),
+  reproduced that `baseline + local_state + remote_state` folder rows with only
+  size/mtime/ETag churn were classified as `diverged` / `conflict_edit_edit`
+  instead of `unchanged` / `noop`.
+- Focused reruns of `TestE2E_Sync_BidirectionalMerge` then showed shared-root
+  `mkdir` creating the first missing segment under `parent_id:"root"` instead
+  of the configured shared root item. The command then waited for
+  `/shared-subtree/.../data` to become visible even though it had created the
+  folder outside that subtree, exhausting the bounded visibility budget with
+  `remote path not yet visible`.
+Resolution / mitigation: fixed in three product boundaries. Shared-root config
+resolution now always preserves the canonical `RootItemID` even when the
+backing drive ID comes from the catalog. CLI `mkdir` now anchors its recursive
+path walk at the session's configured root item, so shared-root commands
+create descendants inside the configured subtree instead of the backing drive
+root. SQLite current-state comparison now treats folders as existence/type-only
+truth, ignoring folder size/mtime/ETag churn so clean re-syncs stay `noop`
+instead of expanding into conflict/download work. Focused reruns of
+`TestE2E_Sync_IdempotentReSync` and `TestE2E_Sync_BidirectionalMerge` both
+passed after those repairs.
+Promoted docs: [config.md](../design/config.md), [cli.md](../design/cli.md), [drive-transfers.md](../design/drive-transfers.md), [sync-planning.md](../design/sync-planning.md)
+
+## LI-20260422-03: Shared-drive sync startup still aborted when `sync_dir` did not exist yet
+
+First seen: 2026-04-22
+Last seen: 2026-04-22
+Area: sync startup, shared-drive `drive add`, local sync-root materialization
+Suite / test: `go run ./cmd/devtool verify e2e-full`; `full-serial-watch-shared`;
+focused reruns of `TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX`,
+`TestE2E_SharedFolder_RemoteMutationSyncsToRecipient`, and
+`TestE2E_SharedFolder_RecipientSyncTwice_Idempotent`
+Classification: product bug
+Status: fixed
+Recurring: no
+Summary: After the shared-root path fixes landed, the same repaired nightly
+bucket still exposed a startup bug in ordinary sync command wiring. A fresh
+`drive add` for a shared drive correctly wrote config and catalog state, but
+the first `sync --download-only` run still handed the selected drive to the
+scanner before the local `sync_dir` existed. The runtime then aborted with
+`sync root directory does not exist`, even though the config contract already
+allowed missing sync roots because sync is supposed to create them on first
+run.
+Evidence:
+- April 22, 2026 local `go run ./cmd/devtool verify e2e-full` failed the
+  `full-serial-watch-shared` bucket in three shared-drive tests with the same
+  command error: `sync: local scan: sync: sync root directory does not exist`.
+- The failing cases all created or selected a fresh shared-drive config via
+  `drive add`, then invoked sync immediately. The live failure happened before
+  any shared-folder write or watch assertion, which isolated the bug to sync
+  startup rather than the shared fixture logic.
+- [`internal/sync/scanner.go`](../../internal/sync/scanner.go) intentionally
+  treats a missing root directory as `ErrSyncRootMissing`, so once startup
+  reached the scanner without creating the directory first the failure was
+  deterministic.
+- [`spec/design/config.md`](../design/config.md) already documented the
+  opposite contract: `ValidateResolvedForSync` accepts non-existent sync roots
+  because sync creates them on first run.
+- New focused CLI regressions now cover both startup paths:
+  [`TestRunSyncCommand_CreatesMissingSyncDirBeforeRunOnce`](../../internal/cli/sync_test.go)
+  and
+  [`TestRunSyncDaemonWithFactory_CreatesMissingSyncDirBeforeOrchestrator`](../../internal/cli/sync_runtime_test.go).
+Resolution / mitigation: one-shot and watch startup now call a shared helper
+that materializes the validated `sync_dir` with `localpath.MkdirAll` before
+handing the drive to run-once or orchestrator setup. The three failing shared
+E2E tests all passed after that fix, and the config/CLI docs now state the
+same ownership explicitly.
+Promoted docs: [config.md](../design/config.md), [cli.md](../design/cli.md)
+
+## LI-20260422-04: Shared-folder `drive list` exact-selector check assumed one-pass search visibility
+
+First seen: 2026-04-22
+Last seen: 2026-04-22
+Area: nightly/manual `e2e_full`, shared discovery, live harness selector visibility
+Suite / test: `go run ./cmd/devtool verify e2e-full`; `full-serial-watch-shared`;
+`TestE2E_SharedFolder_DriveList_ShowsExplicitSharedFixtures`
+Classification: test harness
+Status: fixed
+Recurring: yes
+Summary: After the shared-drive startup fix landed, the same repaired nightly
+bucket still failed one shared discovery assertion. The product command was not
+broken: `drive list --json` depends on best-effort `search(q='*')`, and one
+live invocation returned zero actionable shared identities before a second call
+seconds later exposed the known writable and read-only shared-folder fixtures
+unchanged. The harness bug was assuming that one successful search pass must
+already expose the exact shared selectors deterministically.
+Evidence:
+- Local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on April
+  22, 2026 failed only the `full-serial-watch-shared` bucket in
+  `TestE2E_SharedFolder_DriveList_ShowsExplicitSharedFixtures` after the fast
+  suite, full preflight, `full-parallel-misc`, and `full-serial-sync` buckets
+  all passed.
+- The debug log
+  `/var/folders/l2/wj7kybc14wxbb7bv5l86glkh0000gn/T/e2e-debug-logs/TestE2E_SharedFolder_DriveList_ShowsExplicitSharedFixtures.log`
+  showed that the failing `drive list --json` at `2026-04-22T14:42:37-07:00`
+  completed successfully but logged `shared discovery ignored search results
+  without actionable remote identity` with `ignored_count=7`,
+  `actionable_count=0`, and `search_count=7`. The JSON output had
+  `"available": []`.
+- A second `drive list --json` in the same test at
+  `2026-04-22T14:42:40-07:00` on the same recipient account logged
+  `search_count=11`, `ignored_count=8`, and `actionable_count=3`, and its JSON
+  output included both configured shared-folder fixture selectors exactly:
+  `shared:kikkelimies123@outlook.com:bd50cf43646e28e6:BD50CF43646E28E6!s2c217defed3e4551a5a24a3b5d13e577`
+  and
+  `shared:kikkelimies123@outlook.com:bd50cf43646e28e6:BD50CF43646E28E6!sc28fe6110ea0419394f1ce27d20a3790`.
+- The fixture selectors in `.testdata/fixtures.env` already matched those
+  exact IDs, which ruled out stale fixture configuration and isolated the
+  failure to one provider search-visibility window.
+Resolution / mitigation: the full-suite shared-folder drive-list assertion now
+polls `drive list --json` for the exact selector across one ordinary read-only
+propagation window. If Graph still never exposes the known fixture on that run,
+the test skips with the last live command output instead of failing the nightly
+lane as though the product regressed. The promoted system and Graph quirk docs
+now say explicitly that repo-owned live fixture validation must treat one empty
+search pass as a provider limitation window, not a deterministic product fact.
+Promoted docs: [system.md](../design/system.md), [graph-api-quirks.md](graph-api-quirks.md)
+
+## LI-20260422-05: Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work
+
+First seen: 2026-04-22
+Last seen: 2026-04-22
+Area: nightly/manual `e2e_full`, concurrent upload coverage, retry-work contract
+Suite / test: `go run ./cmd/devtool verify e2e-full --classify-live-quirks`;
+`full-parallel-misc`; `TestE2E_Sync_TransferWorkersConfig`
+Classification: test harness
+Status: fixed
+Recurring: yes
+Summary: After the shared-folder selector wait fix landed, the next full-suite
+rerun exposed a different harness assumption. `TestE2E_Sync_TransferWorkersConfig`
+claimed to validate non-default `transfer_workers`, but it also assumed that a
+single `sync --upload-only` pass must publish all five files immediately. Live
+Graph returned one raw `504 UnknownError` on one of the concurrent uploads, the
+engine correctly persisted retryable transient work, and the test failed even
+though a later pass is the documented recovery path.
+Evidence:
+- Local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on April
+  22, 2026 progressed through fast E2E and full fixture preflight, then failed
+  `full-parallel-misc` only in `TestE2E_Sync_TransferWorkersConfig`.
+- The failing sync pass reported `Mode: upload-only`, `Succeeded: 5`,
+  `Failed: 1`, and the exact failed action was
+  `worker-file-3.txt` with `graph: HTTP 504` / `UnknownError`, request ID
+  `076b816d-bb9e-46ce-b150-e80692f4d7e5`.
+- The same stderr log recorded the engine-owned durable path:
+  `retry_work recorded`, `failure_class:"retryable transient"`,
+  `condition_key:"service_outage"`, and `condition_type:"service_outage"`,
+  which matches the existing sync failure-management contract for 5xx service
+  outages rather than a transfer-worker-specific product regression.
+- The old test body in
+  [`e2e/sync_edge_cases_full_test.go`](../../e2e/sync_edge_cases_full_test.go)
+  used one hard `runCLIWithConfig(..., "sync", "--upload-only")` call and then
+  asserted the remote listing already contained all five files, so one valid
+  retryable transient action made the whole test red.
+Resolution / mitigation: the transfer-worker coverage now uses the shared
+`requireSyncEventuallyConverges` helper and asserts eventual remote visibility
+of all five files across bounded later `--upload-only` passes. That keeps the
+test focused on non-default worker-count behavior while honoring the engine's
+existing retry-work contract for live 5xx outages instead of demanding
+single-pass perfection from the provider.
+Promoted docs: [system.md](../design/system.md)
 
 ## LI-20260416-01: Fast E2E suite preflight assumed local `.testdata` always carried `drive_*.json`
 
@@ -85,6 +400,46 @@ loudly if their required metadata is missing because that identity cannot be
 reconstructed from `/me/drive` alone. Unit coverage lives in
 [`e2e/drive_metadata_bootstrap_test.go`](../../e2e/drive_metadata_bootstrap_test.go).
 Promoted docs: [developer-onboarding.md](developer-onboarding.md), [config.md](../design/config.md)
+
+## LI-20260415-01: Nightly `e2e_full` preflight still referenced deleted sync-control status counters
+
+First seen: 2026-04-15
+Last seen: 2026-04-16
+Area: scheduled `e2e_full`, daemon control-socket status assertions
+Suite / test: scheduled CI runs `24449782292` and `24505667136`; `e2e` job,
+`full fixture preflight`
+Classification: test bug
+Status: fixed
+Recurring: yes
+Summary: The April 15 and April 16 nightlies failed before any full live tests
+ran because `e2e/cli_commands_e2e_test.go` still compiled against
+`synccontrol.StatusResponse` fields that had been deleted by the sync-control
+protocol refactor. The runtime API change landed in production code on April
+14, but the nightly-only `e2e_full` assertions were not updated until April
+16, so scheduled CI spent two nights red on a deterministic test compile
+break instead of exercising live provider behavior.
+Evidence:
+- Scheduled run `24449782292` (April 15) failed `full fixture preflight` with
+  compile errors at `e2e/cli_commands_e2e_test.go:483`, `:484`, `:1066`, and
+  `:1071`: `PendingConflictRequests`, `ApplyingConflictRequests`, and
+  `PendingHeldDeleteApprovals` were undefined on `synccontrol.StatusResponse`.
+- Scheduled run `24505667136` (April 16) failed with the same compile errors
+  after the fast auth preflight, fast fixture preflight, and fast E2E slice
+  all passed, which showed the failure was stable and repo-local rather than a
+  live-provider flake.
+- Commit `83d303d` (`refactor: simplify sync scope and control model (#496)`)
+  removed those counters from
+  [`internal/synccontrol/protocol.go`](../../internal/synccontrol/protocol.go)
+  and narrowed `StatusResponse` to `OwnerMode` plus `Drives`.
+- Commit `9aa8644` (`refactor: centralize account and drive inventory in catalog (#506)`)
+  updated the affected E2E assertions to stop reading the deleted counters and
+  instead assert the still-supported `OwnerMode`, which matches the new
+  protocol contract.
+Resolution / mitigation: fixed by `9aa8644`. The lasting lesson matches the
+later April 17+ regression: nightly-only `e2e_full` files need at least a
+tagged compile check in required verification, otherwise API-shape drift in
+test-only code can sit on `main` until the next scheduled run.
+Promoted docs: [system.md](../design/system.md)
 
 ## LI-20260420-01: Fast E2E smoke `get` exhausted the documented download-metadata `404` quirk budget
 
@@ -317,7 +672,7 @@ Evidence:
 Resolution / mitigation: The fast-tagged file no longer owns those demoted live
 tests; [`e2e/fileops_full_e2e_test.go`](../../e2e/fileops_full_e2e_test.go)
 remains the sole owner of the extended direct file-op coverage, and
-[`internal/devtool/verify_test.go`](../../internal/devtool/verify_test.go)
+[`internal/devtool/verify_runner_test.go`](../../internal/devtool/verify_runner_test.go)
 now uses tagged-test discovery to regression-test that the `//go:build e2e`
 set contains only the intended smoke live tests plus helper tests.
 Promoted docs: [system.md](../design/system.md)
@@ -423,7 +778,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 
 First seen: 2026-04-08
 Last seen: 2026-04-22
-Area: fast E2E, CLI `put`, simple-upload finalization
+Area: fast E2E, full E2E, CLI `put`, simple-upload finalization
 Suite / test: local `go run ./cmd/devtool verify default`, `TestE2E_RoundTrip/rm_permanent` setup `put`
 Classification: graph quirk
 Status: mitigated
@@ -446,13 +801,24 @@ Evidence:
 - The later `rm_permanent` failure in that same fast-suite run was secondary:
   the fixture path had never been created cleanly because the preceding `put`
   had already surfaced this false negative.
-Resolution / mitigation: simple-upload finalization now owns a narrow bounded
-retry for the exact follow-on `UpdateFileSystemInfo` `404 itemNotFound` case.
+- Local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on
+  April 22, 2026 hit the same family again in
+  `TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges` while a shared-root
+  helper used CLI `put` to create `remote-owned.txt`.
+- The simple upload itself succeeded and returned item ID
+  `BD50CF43646E28E6!s092611d0ad674c02b5d0f2b7c48d00b1`, but the immediate
+  follow-on `PATCH /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s092611d0ad674c02b5d0f2b7c48d00b1`
+  still returned HTTP 404 `itemNotFound` on six straight attempts between
+  14:12:48 and 14:12:59 PDT before the old budget exhausted.
+Resolution / mitigation: simple-upload finalization now owns a bounded retry
+for the exact follow-on `UpdateFileSystemInfo` `404 itemNotFound` case.
 Direct `UpdateFileSystemInfo()` calls remain strict; only the immediate
-post-simple-upload patch gets this normalization. A later April 10, 2026 fast
-E2E verifier run hit the same family again during `TestE2E_Sync_Conflicts`
-while overwriting a remote file via CLI `put`, so the retry budget was widened
-to 6 total attempts with a 250ms base, 2x multiplier, no jitter, and 4s max.
+post-simple-upload patch gets this normalization. The April 10, 2026
+recurrence widened the budget to 6 total attempts with a 250ms base, 2x
+multiplier, no jitter, and 4s max. The April 22, 2026 shared-root recurrence
+showed that budget still under-ran live item-ID visibility, so the production
+policy is now 7 total attempts with the same 250ms / 2x / no-jitter curve and
+an 8s max delay.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [transfers.md](../requirements/transfers.md)
 
 ## LI-20260405-06: Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure
@@ -531,20 +897,20 @@ summary records that classified rerun explicitly so nightly/manual CI can
 distinguish a clean pass from a green-after-rerun pass.
 Promoted docs: [graph-api-quirks.md#strict-auth-preflight-quirks](graph-api-quirks.md#strict-auth-preflight-quirks), [graph-client.md](../design/graph-client.md), [degraded-mode.md](../design/degraded-mode.md), [cli.md](../design/cli.md)
 
-## LI-20260405-09: Recently created parent folder lagged child create routes
+## LI-20260405-09: Recently created parent folder lagged child create and child-list routes
 
 First seen: 2026-04-05
-Last seen: 2026-04-12
-Area: `e2e_full` and fast `e2e`, child create after recently created parent visibility
+Last seen: 2026-04-22
+Area: `e2e_full` and fast `e2e`, child create or child-list after recently created parent visibility
 Suite / test: `verify e2e-full`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`; later `TestE2E_Sync_DriveRemoveAndReAdd`; later PR `e2e` CI `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload` fixture setup
 Classification: graph quirk
 Status: mitigated
 Recurring: yes
 Summary: A recently created folder can become readable by path lookup before
-Graph accepts follow-on child creates against that same parent. The live
-failures first showed up on the upload-session route and later recurred even
-after the session-route permission oracle had exhausted and the final simple
-create still returned `404 itemNotFound`.
+Graph accepts follow-on child routes against that same parent. The live
+failures first showed up on upload/create routes and later recurred on the
+shared-root children-list route itself, even though the parent folder had
+already become path-visible.
 Evidence:
 - Local `go run ./cmd/devtool verify e2e-full` on April 5, 2026 created
   `/e2e-watch-websocket-1775447250013596000`, then confirmed the folder was
@@ -624,6 +990,18 @@ Evidence:
   follow-on `ls /e2e-sync-bidi-1776045531019802000/local-only` still returned
   `404`, showing the already-documented fresh-parent create lag rather than a
   new Graph behavior.
+- The same family recurred again on April 22, 2026 during local
+  `go run ./cmd/devtool verify e2e-full --classify-live-quirks` in
+  `TestE2E_SyncWatch_FileModification` and `TestE2E_SyncWatch_FileDeletion`.
+  The isolated shared-root helper had already created `/e2e-sync-root-...`
+  and resolved its item ID, but repeated `onedrive-go ls /` and follow-on
+  `onedrive-go stat /e2e-watch-mod-.../modifiable.txt` calls under the derived
+  shared-root canonical drive still hit
+  `GET /drives/{driveID}/items/{rootID}/children` `404 itemNotFound`
+  responses for request IDs such as
+  `ed1d7224-518c-45db-ba3d-ec2187e371b9`,
+  `89564bf8-ccbd-441c-a666-f17a127c9e30`, and
+  `4d344132-5657-489b-a0c6-1e895f1ff486` until the shared-root route caught up.
 Resolution / mitigation: `graph.Client.CreateUploadSession()` now owns a
 bounded retry for the exact fresh-parent `404 itemNotFound` case, and flows
 that already know the authoritative remote `itemID` avoid parent-route create
@@ -640,7 +1018,11 @@ Graph finally converges. Sync execution now also waits for the already-known
 parent path to become readable before it spends dependent remote folder-create
 or new-file upload routes under that parent, so one sync pass does not race a
 freshly created parent item ID into the same documented Graph lag family.
-Promoted docs: [graph-api-quirks.md#fresh-parent-child-create-lag](graph-api-quirks.md#fresh-parent-child-create-lag), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [sync-execution.md](../design/sync-execution.md)
+Isolated shared-root fixture setup now also waits for `ls /` under the derived
+shared-root drive before handing that root to upload-only or watch tests, so
+those tests no longer assume owner-drive path visibility proves the shared-root
+children route is ready.
+Promoted docs: [graph-api-quirks.md#fresh-parent-child-create-lag](graph-api-quirks.md#fresh-parent-child-create-lag), [system.md](../design/system.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [sync-execution.md](../design/sync-execution.md)
 
 ## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup
 
@@ -1097,7 +1479,10 @@ Recurring: yes
 Summary: The tests treated direct remote visibility or newly-unblocked remote state as proof that the next incremental download-only sync pass would converge immediately. In live CI that assumption was false: first-pass sync could still lag delta visibility or hit a documented transient download-metadata `404`, even though a later pass converged correctly.
 Evidence:
 - [sync_e2e_test.go](../../e2e/sync_e2e_test.go#L340) now explicitly waits for the local synced file after delta catches up.
-- [sync_scope_e2e_test.go](../../e2e/sync_scope_e2e_test.go#L35) now uses the same eventual-convergence helper for the legacy exact-file path-narrowing download coverage.
+- Historical `e2e/sync_scope_e2e_test.go` coverage, now merged into
+  [sync_e2e_test.go](../../e2e/sync_e2e_test.go), used the same
+  eventual-convergence helper for the legacy exact-file path-narrowing
+  download coverage.
 - [graph-api-quirks.md](graph-api-quirks.md) already documents delta endpoint consistency lag as a live behavior.
 - Merged fix chain is included in `74da628` after the earlier test hardening commit on the same PR line.
 - April 7, 2026 local `go run ./cmd/devtool verify default` reproduced the same symptom once in the fast E2E lane, while an immediate targeted rerun of `go test -tags=e2e ./e2e -run '^TestE2E_Sync_DownloadOnly$' -count=1` passed, consistent with intermittent delta visibility lag rather than a deterministic product regression.
@@ -1132,11 +1517,11 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
 ## LI-20260405-03: Websocket watch tests timed websocket assertions before the steady-state subtree was ready
 
 First seen: 2026-04-05
-Last seen: 2026-04-08
+Last seen: 2026-04-22
 Area: websocket watch E2E harness
 Suite / test: `e2e`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `e2e_full`, `TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart`
 Classification: test bug
-Status: fixed
+Status: mitigated
 Recurring: yes
 Summary: The websocket harness originally treated an open socket connection as the readiness boundary, even though the product only starts honoring websocket-specific timing after bootstrap sync drains and the steady-state remote observer comes online. The original smoke failure and the later restart failure were both harness timing bugs, not websocket transport regressions.
 Evidence:
@@ -1145,7 +1530,8 @@ Evidence:
 - Merged fix: `52cef0f` (`fix: close W8 validation audit gaps (#415)`).
 - On April 8, 2026 local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` reproduced the same harness gap in `TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart`: after daemon restart, the test waited only for `websocket_connected`, so the first post-restart wake could still be consumed by bootstrap catch-up before the steady-state remote observer was ready.
 - On April 8, 2026 a later local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` run still failed the same test even after the remote-observer fix, because the timed assertion also depended on creating the parent folder after daemon startup. The first post-mutation wake could legitimately reflect unrelated live-drive traffic or an incremental delta read that still had not observed the fresh parent subtree.
-Resolution / mitigation: Websocket watch tests now wait for `observer_started(remote)` before starting websocket-specific timing on both initial startup and daemon restart paths, and the long full-suite wake/restart test seeds its remote subtree before daemon startup so the timed websocket assertion only covers steady-state remote file creation inside an already materialized subtree.
+- On April 22, 2026 local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` still hit the same single-test family once in `full-serial-watch-shared`, timing out after a post-restart `websocket_notification_wake` without local convergence, while an immediate isolated rerun of `go test -tags='e2e e2e_full' -run '^TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart$' -count=1 -v ./e2e/...` passed in about 90 seconds.
+Resolution / mitigation: Websocket watch tests now wait for `observer_started(remote)` before starting websocket-specific timing on both initial startup and daemon restart paths, and the long full-suite wake/restart test seeds its remote subtree before daemon startup so the timed websocket assertion only covers steady-state remote file creation inside an already materialized subtree. Because the same isolated recurrence can still appear intermittently in scheduled/manual full-suite runs, `devtool verify e2e-full --classify-live-quirks` now reruns exactly `TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart` once when it is the sole failure in `full-serial-watch-shared`; repeated or different failures remain red.
 Promoted docs: [system.md](../design/system.md)
 
 ## LI-20260405-02: Stale root-level E2E artifacts inflated bootstrap and polluted live drives

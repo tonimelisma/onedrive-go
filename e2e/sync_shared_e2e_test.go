@@ -48,18 +48,9 @@ func TestE2E_SharedFolder_DriveList_ShowsExplicitSharedFixtures(t *testing.T) {
 		resolveSharedFolderFixture(t, liveConfig.Fixtures.ReadOnlySharedFolderSelector),
 	} {
 		cfgPath, env := writeSyncConfigForDriveID(t, fixture.RecipientDriveID, t.TempDir())
-
-		stdout, _ := runCLIWithoutDrive(t, cfgPath, env, "drive", "list", "--json")
-		var parsed driveListE2EOutput
-		require.NoError(t, json.Unmarshal([]byte(stdout), &parsed))
-
-		available := map[string]struct{}{}
-		for i := range parsed.Available {
-			available[parsed.Available[i].CanonicalID] = struct{}{}
-		}
-
-		_, found := available[fixture.FolderItem.Selector]
-		assert.True(t, found, "drive list should expose the shared-folder fixture by exact selector")
+		parsed := waitForDriveListSharedSelectorVisible(t, cfgPath, env, fixture.FolderItem.Selector)
+		assert.True(t, driveListAvailableContainsCanonicalID(parsed, fixture.FolderItem.Selector),
+			"drive list should expose the shared-folder fixture by exact selector")
 	}
 }
 

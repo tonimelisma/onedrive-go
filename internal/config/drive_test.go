@@ -223,6 +223,29 @@ func TestBuildResolvedDrive_SharedCanonicalSetsRootItem(t *testing.T) {
 	assert.Equal(t, "item456", resolved.RootItemID)
 }
 
+func TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem(t *testing.T) {
+	dataDir := setTestDataDir(t)
+	sharedCID := driveid.MustCanonicalID("shared:user@example.com:b!drive123:item456")
+	require.NoError(t, UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
+		catalog.UpsertDrive(&CatalogDrive{
+			CanonicalID:           sharedCID.String(),
+			OwnerAccountCanonical: "personal:user@example.com",
+			DriveType:             driveid.DriveTypeShared,
+			DisplayName:           "Shared Folder",
+			RemoteDriveID:         "b!drive123",
+		})
+		return nil
+	}))
+
+	cfg := DefaultConfig()
+	drive := &Drive{SyncDir: "~/OneDrive-Shared"}
+
+	resolved := buildResolvedDrive(cfg, sharedCID, drive, testLogger(t))
+
+	assert.Equal(t, driveid.New("b!drive123"), resolved.DriveID)
+	assert.Equal(t, "item456", resolved.RootItemID)
+}
+
 func TestBuildResolvedDrive_TildeExpanded(t *testing.T) {
 	cfg := DefaultConfig()
 	drive := &Drive{SyncDir: "~/OneDrive"}

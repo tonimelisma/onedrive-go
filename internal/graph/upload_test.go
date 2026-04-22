@@ -1428,6 +1428,76 @@ func TestUpload_SimpleMtimePatchTransientNotFoundRetries(t *testing.T) {
 	assert.Equal(t, time.July, item.ModifiedAt.Month())
 }
 
+// Validates: R-5.6.5
+func TestUpload_SimpleMtimePatchTransientNotFoundRetriesAcrossLongerLag(t *testing.T) {
+	content := []byte("patch-retry-longer")
+	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	var patchCalls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusCreated)
+			writeTestResponsef(t, w, `{
+				"id": "patch-retry-longer-item",
+				"name": "retry-longer.txt",
+				"size": %d,
+				"createdDateTime": "2024-06-01T12:00:00Z",
+				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "d"},
+				"file": {"mimeType": "text/plain"}
+			}`, len(content))
+
+			return
+		}
+
+		if r.Method == http.MethodPatch {
+			call := patchCalls.Add(1)
+			if call < 7 {
+				w.Header().Set("request-id", fmt.Sprintf("req-patch-404-%d", call))
+				w.WriteHeader(http.StatusNotFound)
+				writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not ready"}}`)
+
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
+			writeTestResponsef(t, w, `{
+				"id": "patch-retry-longer-item",
+				"name": "retry-longer.txt",
+				"size": %d,
+				"createdDateTime": "2024-06-01T12:00:00Z",
+				"lastModifiedDateTime": "2024-07-10T09:00:00Z",
+				"parentReference": {"id": "parent", "driveId": "d"},
+				"file": {"mimeType": "text/plain"}
+			}`, len(content))
+
+			return
+		}
+
+		assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	client.simpleUploadMtimePolicy = retry.SimpleUploadMtimePatchPolicy()
+	client.simpleUploadMtimePolicy.Base = 1 * time.Millisecond
+	client.simpleUploadMtimePolicy.Max = 8 * time.Millisecond
+
+	item, err := client.Upload(
+		t.Context(), driveid.New("d"), "parent", "retry-longer.txt",
+		bytes.NewReader(content), int64(len(content)), mtime, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	assert.Equal(t, int32(7), patchCalls.Load())
+	assert.Equal(t, "patch-retry-longer-item", item.ID)
+	assert.Equal(t, 2024, item.ModifiedAt.Year())
+	assert.Equal(t, time.July, item.ModifiedAt.Month())
+}
+
 // Validates: R-5.2.1
 func TestUpload_ChunkedForLargeFile(t *testing.T) {
 	// Files > 4 MiB should create a session and upload in chunks.

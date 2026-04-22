@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -88,19 +87,17 @@ func TestE2E_SyncWatch_RemoteToLocal(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
-	opsCfgPath := writeMinimalConfig(t)
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 
 	testFolder := fmt.Sprintf("e2e-watch-r2l-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Start download-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--download-only", "--watch")
+		"--drive", selectedDriveForEnv(env), "sync", "--download-only", "--watch")
 
 	// Create remote folder and file.
-	runCLIWithConfig(t, opsCfgPath, nil, "mkdir", "/"+testFolder)
-	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/remote-created.txt", "from remote")
+	mkdirRemoteFolder(t, cfgPath, env, "/"+testFolder)
+	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/remote-created.txt", "from remote")
 
 	// Poll until file appears locally.
 	localPath := filepath.Join(syncDir, testFolder, "remote-created.txt")
@@ -122,15 +119,13 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
-	opsCfgPath := writeMinimalConfig(t)
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 
 	testFolder := fmt.Sprintf("e2e-watch-bidi-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Start bidirectional daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--watch")
+		"--drive", selectedDriveForEnv(env), "sync", "--watch")
 
 	// Phase 1: local → remote.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -143,10 +138,10 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 
 	// Poll until file appears remotely.
 	remotePath := "/" + testFolder + "/local-to-remote.txt"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "local-to-remote.txt", daemonPollTimeout, "stat", remotePath)
+	pollCLIWithConfigContains(t, cfgPath, env, "local-to-remote.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Phase 2: remote → local.
-	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/remote-to-local.txt", "from remote")
+	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/remote-to-local.txt", "from remote")
 
 	localPath := filepath.Join(syncDir, testFolder, "remote-to-local.txt")
 	pollLocalFileContent(t, localPath, "from remote", daemonPollTimeout)
@@ -166,16 +161,14 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir,
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir,
 		"poll_interval = \"30s\"\n")
-	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-conf-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Start bidirectional daemon with stderr access to wait for watch setup.
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", drive, "sync", "--watch")
+		"--drive", selectedDriveForEnv(env), "sync", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
 	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
@@ -188,12 +181,12 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 
 	// Wait for upload.
 	remotePath := "/" + testFolder + "/conflict-watch.txt"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "conflict-watch.txt", daemonPollTimeout, "stat", remotePath)
+	pollCLIWithConfigContains(t, cfgPath, env, "conflict-watch.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Modify remote FIRST: put a new version and confirm it propagated via
 	// stat. This ensures the delta feed has the remote change before we
 	// trigger local fsnotify.
-	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/conflict-watch.txt", "remote conflict version")
+	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/conflict-watch.txt", "remote conflict version")
 
 	// Give delta time to pick up the remote change before triggering local.
 	sleepForLiveTestPropagation(5 * time.Second)
@@ -202,16 +195,24 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	// both the local change and the remote change from the delta feed.
 	require.NoError(t, os.WriteFile(filePath, []byte("local conflict version"), 0o600))
 
-	// Wait for the daemon to detect the conflict in per-drive status.
-	status := pollStatusSyncState(t, cfgPath, env, daemonPollTimeout, func(status statusSyncStateJSON) bool {
-		for _, conflict := range status.Conflicts {
-			if strings.HasSuffix(conflict.Path, "/conflict-watch.txt") && conflict.ConflictType == "edit_edit" {
-				return true
-			}
+	require.Eventually(t, func() bool {
+		matches := conflictCopiesForPath(t, filePath)
+		if len(matches) != 1 {
+			return false
 		}
-		return false
-	})
-	require.Len(t, status.Conflicts, 1)
+
+		conflictCopyData, err := os.ReadFile(matches[0])
+		if err != nil || string(conflictCopyData) != "local conflict version" {
+			return false
+		}
+
+		localData, err := os.ReadFile(filePath)
+		if err != nil || string(localData) != "remote conflict version" {
+			return false
+		}
+
+		return getRemoteFile(t, cfgPath, env, remotePath) == "remote conflict version"
+	}, daemonPollTimeout, time.Second, "watch mode should preserve both versions for edit-edit conflicts")
 
 	// Graceful shutdown.
 	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
@@ -229,16 +230,14 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir,
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir,
 		"poll_interval = \"30s\"\n")
-	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-mod-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Start upload-only daemon with stderr access to wait for watch setup.
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch")
+		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
 	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
@@ -251,7 +250,7 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 
 	// Wait for initial upload.
 	remotePath := "/" + testFolder + "/modifiable.txt"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "modifiable.txt", daemonPollTimeout, "stat", remotePath)
+	pollCLIWithConfigContains(t, cfgPath, env, "modifiable.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Modify the file.
 	require.NoError(t, os.WriteFile(filePath, []byte("version 2 modified"), 0o600))
@@ -259,7 +258,7 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 	// Poll remote until it has the new content.
 	deadline := time.Now().Add(daemonPollTimeout)
 	for attempt := 0; ; attempt++ {
-		content := getRemoteFile(t, opsCfgPath, nil, remotePath)
+		content := getRemoteFile(t, cfgPath, env, remotePath)
 		if content == "version 2 modified" {
 			break
 		}
@@ -287,16 +286,14 @@ func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir,
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir,
 		"poll_interval = \"30s\"\n")
-	opsCfgPath := writeMinimalConfig(t)
 
 	testFolder := fmt.Sprintf("e2e-watch-del-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Start upload-only daemon with stderr access to wait for watch setup.
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch")
+		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
 	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
@@ -309,13 +306,13 @@ func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 
 	// Wait for upload.
 	remotePath := "/" + testFolder + "/deleteme.txt"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "deleteme.txt", daemonPollTimeout, "stat", remotePath)
+	pollCLIWithConfigContains(t, cfgPath, env, "deleteme.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Delete local file.
 	require.NoError(t, os.Remove(filePath))
 
 	// Poll until file disappears from remote.
-	pollCLIWithConfigNotContains(t, opsCfgPath, nil, "deleteme.txt", daemonPollTimeout, "ls", "/"+testFolder)
+	pollCLIWithConfigNotContains(t, cfgPath, env, "deleteme.txt", daemonPollTimeout, "ls", "/"+testFolder)
 
 	// Graceful shutdown.
 	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
@@ -328,15 +325,13 @@ func TestE2E_SyncWatch_FolderCreation(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
-	opsCfgPath := writeMinimalConfig(t)
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 
 	testFolder := fmt.Sprintf("e2e-watch-dir-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch")
+		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
 
 	// Create deeply nested structure.
 	localDir := filepath.Join(syncDir, testFolder, "a", "b", "c")
@@ -348,7 +343,7 @@ func TestE2E_SyncWatch_FolderCreation(t *testing.T) {
 	))
 
 	// Poll until the deep file appears remotely.
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "deep.txt", daemonPollTimeout, "ls", "/"+testFolder+"/a/b/c")
+	pollCLIWithConfigContains(t, cfgPath, env, "deep.txt", daemonPollTimeout, "ls", "/"+testFolder+"/a/b/c")
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -361,15 +356,13 @@ func TestE2E_SyncWatch_MultipleFiles(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
-	opsCfgPath := writeMinimalConfig(t)
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 
 	testFolder := fmt.Sprintf("e2e-watch-multi-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch")
+		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
 
 	// Create 5 files.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -387,7 +380,7 @@ func TestE2E_SyncWatch_MultipleFiles(t *testing.T) {
 	// Poll until all 5 files appear remotely.
 	for i := 1; i <= 5; i++ {
 		name := fmt.Sprintf("multi-%d.txt", i)
-		pollCLIWithConfigContains(t, opsCfgPath, nil, name, daemonPollTimeout, "ls", "/"+testFolder)
+		pollCLIWithConfigContains(t, cfgPath, env, name, daemonPollTimeout, "ls", "/"+testFolder)
 	}
 
 	// Graceful shutdown.
@@ -401,15 +394,13 @@ func TestE2E_SyncWatch_LargeFile(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
-	opsCfgPath := writeMinimalConfig(t)
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 
 	testFolder := fmt.Sprintf("e2e-watch-large-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch")
+		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
 
 	// Create 5 MiB file with deterministic content.
 	const fileSize = 5 * 1024 * 1024
@@ -425,12 +416,12 @@ func TestE2E_SyncWatch_LargeFile(t *testing.T) {
 
 	// Poll until the file appears remotely with correct size.
 	remotePath := "/" + testFolder + "/large-watch.bin"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, fmt.Sprintf("%d bytes", fileSize), daemonPollTimeout, "stat", remotePath)
+	pollCLIWithConfigContains(t, cfgPath, env, fmt.Sprintf("%d bytes", fileSize), daemonPollTimeout, "stat", remotePath)
 
 	// Download and verify byte-for-byte integrity.
 	downloadDir := t.TempDir()
 	downloadPath := filepath.Join(downloadDir, "large-watch.bin")
-	runCLIWithConfig(t, opsCfgPath, nil, "get", remotePath, downloadPath)
+	runCLIWithConfig(t, cfgPath, env, "get", remotePath, downloadPath)
 
 	downloaded, err := os.ReadFile(downloadPath)
 	require.NoError(t, err)
@@ -447,15 +438,13 @@ func TestE2E_SyncWatch_RapidChurn(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
-	opsCfgPath := writeMinimalConfig(t)
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 
 	testFolder := fmt.Sprintf("e2e-watch-churn-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch")
+		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
 
 	// Create file and rapidly modify it.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -468,12 +457,12 @@ func TestE2E_SyncWatch_RapidChurn(t *testing.T) {
 
 	// Wait for file to appear remotely.
 	remotePath := "/" + testFolder + "/churn-watch.txt"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "churn-watch.txt", daemonPollTimeout, "stat", remotePath)
+	pollCLIWithConfigContains(t, cfgPath, env, "churn-watch.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Poll remote until content matches final version.
 	deadline := time.Now().Add(daemonPollTimeout)
 	for attempt := 0; ; attempt++ {
-		content := getRemoteFile(t, opsCfgPath, nil, remotePath)
+		content := getRemoteFile(t, cfgPath, env, remotePath)
 		if content == "final version" {
 			break
 		}
@@ -498,15 +487,13 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
-	opsCfgPath := writeMinimalConfig(t)
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 
 	testFolder := fmt.Sprintf("e2e-watch-shut-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch")
+		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
 
 	// Create first file and wait for daemon to sync it.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -518,7 +505,7 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	))
 
 	remotePath := "/" + testFolder + "/before-shutdown.txt"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "before-shutdown.txt", daemonPollTimeout, "stat", remotePath)
+	pollCLIWithConfigContains(t, cfgPath, env, "before-shutdown.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -541,8 +528,8 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	assert.Contains(t, stderr, "Uploads:", "one-shot should report uploads")
 
 	// Verify both files exist remotely.
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "after-shutdown.txt", pollTimeout, "stat", "/"+testFolder+"/after-shutdown.txt")
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "before-shutdown.txt", pollTimeout, "stat", remotePath)
+	pollCLIWithConfigContains(t, cfgPath, env, "after-shutdown.txt", pollTimeout, "stat", "/"+testFolder+"/after-shutdown.txt")
+	pollCLIWithConfigContains(t, cfgPath, env, "before-shutdown.txt", pollTimeout, "stat", remotePath)
 }
 
 // TestE2E_SyncWatch_TimedPauseExpiry starts a daemon, pauses the drive with
@@ -552,15 +539,13 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
-	opsCfgPath := writeMinimalConfig(t)
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
 
 	testFolder := fmt.Sprintf("e2e-watch-expire-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Start upload-only daemon (with stderr access for polling).
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", drive, "sync", "--upload-only", "--watch")
+		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
 	cmd := h.Cmd
 
 	// Pause for 5 seconds.
@@ -582,7 +567,7 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	remotePath := "/" + testFolder + "/paused-file.txt"
 	negDeadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(negDeadline) {
-		_, _, statErr := runCLIWithConfigAllowError(t, opsCfgPath, nil, "stat", remotePath)
+		_, _, statErr := runCLIWithConfigAllowError(t, cfgPath, env, "stat", remotePath)
 		if statErr == nil {
 			t.Log("warning: file appeared remotely while paused (test environment may not support pause)")
 			break
@@ -596,7 +581,7 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	postControlSocket(t, env, "/v1/reload")
 
 	// Poll until file appears remotely (daemon should now be unpaused).
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "paused-file.txt", daemonPollTimeout, "stat", remotePath)
+	pollCLIWithConfigContains(t, cfgPath, env, "paused-file.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))

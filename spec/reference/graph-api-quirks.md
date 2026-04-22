@@ -227,8 +227,8 @@ Runtime policy:
 - retry remains narrow: only item-by-ID metadata fetches used to obtain the
   pre-authenticated download URL, only HTTP 404, only Graph code
   `itemNotFound`
-- the current production retry budget is 4 total attempts with 250ms base, 2x
-  multiplier, no jitter, and 2s max
+- the current production retry budget is 7 total attempts with 250ms base, 2x
+  multiplier, no jitter, and 8s max
 - transfer-manager callers and sync workers do not add their own second retry
   loop for this quirk; the graph boundary is the single owner
 
@@ -328,7 +328,8 @@ Observed evidence on April 5, 2026 during `go run ./cmd/devtool verify
 e2e-full`:
 
 - `put /e2e-sync-ee-1775448127403708000/conflict-file.txt` completed after the
-  remote edit step of `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`
+  remote edit step of the historical nightly E2E
+  `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`
 - the immediate follow-on `stat /e2e-sync-ee-1775448127403708000/conflict-file.txt`
   kept returning HTTP 404 `itemNotFound` with request ID
   `0d76a7d9-c2b4-4eec-acd2-de29e5aec5c7` until the test's 30s poll window
@@ -408,7 +409,7 @@ Observed evidence on April 5, 2026 during `go test -tags='e2e e2e_full' ./e2e
   still returned HTTP 404 `itemNotFound`
 - Graph request ID for the failed delete: `335ea56d-e3a9-4d2f-8b4c-742da9088eec`
 
-Observed extension on April 7, 2026 during the isolated repro for
+Observed extension on April 7, 2026 during the historical isolated repro for
 `TestE2E_Sync_DeleteSafetyThreshold`:
 
 - repeated sibling deletes in `/e2e-sync-bigdel-1775633571947871000` reached a
@@ -720,7 +721,7 @@ Runtime policy:
   `perm:remote` flow instead of being misclassified as missing
 
 <a id="fresh-parent-child-create-lag"></a>
-### Recently Created Parent Folders Can Lag Child Create Routes
+### Recently Created Parent Folders Can Lag Child Routes
 
 Live `e2e_full` coverage on April 5, 2026 captured a second create-path
 consistency gap after folder creation. The parent folder
@@ -729,6 +730,13 @@ consistency gap after folder creation. The parent folder
 upload-session creation for `first.txt`
 (`POST ...:/createUploadSession`, `request-id: d02b9317-d3d5-44ad-a30c-327df8c859d3`)
 still returned HTTP 404 `itemNotFound`.
+
+The same family can also hit shared-root children routes after a freshly
+created folder is converted into a shared-root canonical drive. On April 22,
+2026 the isolated shared-root watch helper could resolve `/e2e-sync-root-...`
+by path and derive its item ID, but the immediate `ls /` against that new
+shared-root drive still returned `404 itemNotFound` on the root item's
+`/children` route until Graph caught up.
 
 Runtime policy:
 - `CreateUploadSession()` retries that exact fresh-parent `404 itemNotFound`
@@ -749,6 +757,10 @@ Runtime policy:
   whole fixture `put` operation when Graph either exhausts the documented
   child-create retries or still reports `remote path not yet visible` while
   resolving the freshly created parent for that later command
+- isolated shared-root fixture setup must also wait for the derived shared-root
+  `ls /` boundary before returning, because owner-drive path visibility alone
+  does not prove the shared-root children route is ready for later upload/watch
+  coverage
 - that fixture policy remains narrow: it does not absorb unrelated failures,
   and it does not replace tests that are explicitly asserting exact-route
   behavior after the create succeeds
@@ -776,6 +788,15 @@ success with ordinary drive items but no usable shared-item identities. Runtime
 policy: keep search as a best-effort surface, never fabricate selectors for
 hits without `remoteDriveID` + `remoteItemID`, and degrade the account only
 when the live search request itself fails.
+
+Observed nightly recurrence on April 22, 2026: the same recipient account's
+`drive list --json` call returned zero actionable shared identities on one
+invocation and then exposed the known shared-folder fixtures a few seconds
+later with no auth or config change in between. Runtime policy stays the same:
+exact selector workflows still bootstrap from raw selector/link identity, not
+from discovery, and repo-owned live E2E that validates known shared fixtures
+waits through one ordinary read-only propagation window before treating the
+omission as a provider limitation for that run.
 
 ### Search + GetItem Can Still Miss Shared Owner Identity
 

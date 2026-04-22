@@ -378,7 +378,7 @@ func runCLIProcess(cfgPath string, env map[string]string, driveID string, args .
 func runCLIWithConfigExpectError(t *testing.T, cfgPath string, env map[string]string, args ...string) string {
 	t.Helper()
 
-	stdout, stderr, err := runCLICore(t, cfgPath, env, drive, args...)
+	stdout, stderr, err := runCLICore(t, cfgPath, env, selectedDriveForEnv(env), args...)
 
 	require.Error(t, err, "expected CLI to fail for args %v, but it succeeded\nstdout: %s\nstderr: %s",
 		args, stdout, stderr)
@@ -509,8 +509,9 @@ func pollCLIWithConfigRetryingTransientGraphFailures(
 }
 
 // pollCLIWithConfigNotContains retries a CLI command until stdout does NOT
-// contain the unexpected string (or the command errors). Used to wait for
-// Graph API eventual consistency after deletions.
+// contain the unexpected string. For delete propagation, parent listings can
+// transiently collapse to not-found while Graph converges, so those cleanup
+// responses also satisfy disappearance.
 func pollCLIWithConfigNotContains(
 	t *testing.T, cfgPath string, env map[string]string, unexpected string, timeout time.Duration, args ...string,
 ) (string, string) {
@@ -520,7 +521,7 @@ func pollCLIWithConfigNotContains(
 
 	for attempt := 0; ; attempt++ {
 		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, args...)
-		if err == nil && !strings.Contains(stdout, unexpected) {
+		if deleteDisappearanceReady(stdout, stderr, err, unexpected) {
 			return stdout, stderr
 		}
 
@@ -549,15 +550,16 @@ func pollRemoteEventually(
 
 	startedAt := time.Now()
 	deadline := time.Now().Add(timeout)
+	resolvedDriveID := effectiveDriveID(env, driveID)
 
 	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLICore(t, cfgPath, env, driveID, args...)
+		stdout, stderr, err := runCLICore(t, cfgPath, env, resolvedDriveID, args...)
 		if ready(stdout, stderr, err) {
 			recordTimingEvent(
 				t,
 				eventKind,
 				description,
-				driveID,
+				resolvedDriveID,
 				args,
 				timeout,
 				time.Since(startedAt),
@@ -572,7 +574,7 @@ func pollRemoteEventually(
 				t,
 				eventKind,
 				description,
-				driveID,
+				resolvedDriveID,
 				args,
 				timeout,
 				time.Since(startedAt),
@@ -680,6 +682,8 @@ func waitForRemoteFixtureSeedVisible(
 	remotePath string,
 ) {
 	t.Helper()
+
+	driveID = effectiveDriveID(env, driveID)
 
 	cleanPath := path.Clean(remotePath)
 	if cleanPath == "." || cleanPath == "/" || cleanPath == "" {
@@ -896,6 +900,7 @@ func requireSyncEventuallyConverges(
 	syncArgs := append([]string{"sync"}, args...)
 	startedAt := time.Now()
 	deadline := time.Now().Add(timeout)
+	driveID := selectedDriveForEnv(env)
 
 	for attempt := 0; ; attempt++ {
 		last.Stdout, last.Stderr, last.Err = runCLIWithConfigAllowError(t, cfgPath, env, syncArgs...)
@@ -904,7 +909,7 @@ func requireSyncEventuallyConverges(
 				t,
 				timingKindSyncConvergence,
 				description,
-				"",
+				driveID,
 				syncArgs,
 				timeout,
 				time.Since(startedAt),
@@ -919,7 +924,7 @@ func requireSyncEventuallyConverges(
 				t,
 				timingKindSyncConvergence,
 				description,
-				"",
+				driveID,
 				syncArgs,
 				timeout,
 				time.Since(startedAt),

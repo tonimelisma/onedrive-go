@@ -9,10 +9,25 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
+
+const syncRootDirPerms = 0o700
+
+func ensureResolvedSyncDir(rd *config.ResolvedDrive) error {
+	if rd == nil || rd.SyncDir == "" {
+		return nil
+	}
+
+	if err := localpath.MkdirAll(rd.SyncDir, syncRootDirPerms); err != nil {
+		return fmt.Errorf("create sync_dir for %s: %w", rd.CanonicalID, err)
+	}
+
+	return nil
+}
 
 type syncDaemonOrchestrator interface {
 	RunWatch(context.Context, syncengine.Mode, syncengine.WatchOptions) error
@@ -74,6 +89,9 @@ func runSyncDaemonWithFactory(
 	for _, rd := range drives {
 		if syncErr := config.ValidateResolvedForSync(rd); syncErr != nil {
 			return fmt.Errorf("validate drive %s: %w", rd.CanonicalID, syncErr)
+		}
+		if syncErr := ensureResolvedSyncDir(rd); syncErr != nil {
+			return syncErr
 		}
 	}
 

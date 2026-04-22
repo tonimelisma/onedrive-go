@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
 // Validates: R-1.5.1
@@ -21,4 +23,14 @@ func TestPrintMkdirJSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
 	assert.Equal(t, "projects/new-folder", decoded.Created)
 	assert.Equal(t, "folder-abc123", decoded.ID)
+}
+
+// Validates: R-1.5.1
+func TestMkdirStartParentID(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "root", mkdirStartParentID(nil))
+	assert.Equal(t, "root", mkdirStartParentID(&driveops.Session{}))
+	assert.Equal(t, "root", mkdirStartParentID(&driveops.Session{RootItem: "root"}))
+	assert.Equal(t, "shared-root-id", mkdirStartParentID(&driveops.Session{RootItem: "shared-root-id"}))
 }
