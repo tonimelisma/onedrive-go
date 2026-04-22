@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,4 +58,36 @@ func TestWatchRuntime_RunWatchStepIdle_ContextCancelStartsDrain(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, done)
 	assert.True(t, rt.isDraining())
+}
+
+func TestWatchRuntime_RunWatchStepIdle_ConsumesReplanReady(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	replanReady := make(chan DirtyBatch, 1)
+	replanReady <- DirtyBatch{Paths: []string{"idle.txt"}}
+
+	type idleResult struct {
+		done bool
+		err  error
+	}
+	doneCh := make(chan idleResult, 1)
+	go func() {
+		done, err := rt.runWatchStepIdle(t.Context(), &watchPipeline{
+			runtime:     rt,
+			replanReady: replanReady,
+		})
+		doneCh <- idleResult{done: done, err: err}
+	}()
+
+	select {
+	case result := <-doneCh:
+		assert.False(t, result.done)
+		require.ErrorContains(t, result.err, "steady-state replan requires loaded baseline")
+	case <-time.After(time.Second):
+		t.Fatalf("runWatchStepIdle did not consume replanReady while idle")
+	}
 }
