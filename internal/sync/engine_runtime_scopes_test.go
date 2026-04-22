@@ -88,8 +88,6 @@ func TestEngineFlow_PersistBlockedRetryWork_CanonicalizesRowsAcrossRuntimePaths(
 	var want RetryWorkRow
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
 			eng := newSingleOwnerEngine(t)
 			rt := testWatchRuntime(t, eng)
 			flow := testEngineFlow(t, eng)
