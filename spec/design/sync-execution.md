@@ -10,7 +10,7 @@ Execution takes a prepared current runtime, dispatches concrete side-effecting
 work through a dependency graph, runs workers, and reports one
 `ActionCompletion` per finished action. That prepared runtime handoff is
 assembled on the engine side by `engine_current_observe.go`,
-`engine_current_inputs.go`, and `engine_runtime_prepare.go` before execution
+`engine_current_projection.go`, `engine_current_dry_run.go`, and `engine_runtime_prepare.go` before execution
 begins. Publication-only planner actions are not executor work: the engine
 reduces them directly through the store before workers see any concrete
 frontier.
