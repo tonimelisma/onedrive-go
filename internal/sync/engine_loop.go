@@ -585,11 +585,28 @@ func (rt *watchRuntime) handleDrainingCompletion(
 	ready, err := rt.processActionCompletion(ctx, rt, completion, p.bl)
 	rt.completeOutboxAsShutdown(ready)
 	if err != nil {
-		return false, err
+		rt.logSuppressedDrainCompletionError(completion, err)
+		rt.mustAssertInvariants(ctx, rt, "handle draining completion")
+		return false, nil
 	}
 	rt.mustAssertInvariants(ctx, rt, "handle draining completion")
 
 	return false, nil
+}
+
+func (rt *watchRuntime) logSuppressedDrainCompletionError(
+	completion *ActionCompletion,
+	err error,
+) {
+	if completion == nil || err == nil {
+		return
+	}
+
+	rt.engine.logger.Warn("suppressed action completion error during shutdown drain",
+		slog.String("path", completion.Path),
+		slog.String("action_type", completion.ActionType.String()),
+		slog.String("error", err.Error()),
+	)
 }
 
 func (rt *watchRuntime) handleDrainingRefreshResult(
