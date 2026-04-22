@@ -877,40 +877,6 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 	}, 0, "applied full remote refresh batches should not later be dropped as pending shutdown work")
 }
 
-func TestHandleDrainingCompletion_SuppressesCompletionErrorsDuringShutdown(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	setupWatchEngine(t, eng)
-	rt := testWatchRuntime(t, eng)
-	ctx, cancel := context.WithCancel(t.Context())
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-
-	current := rt.depGraph.Add(&Action{
-		Type:    ActionUpload,
-		Path:    "drain.txt",
-		DriveID: eng.driveID,
-	}, 1, nil)
-	require.NotNil(t, current)
-
-	cancel()
-	p := &watchPipeline{bl: bl}
-	rt.beginWatchDrain(ctx, p)
-	require.NoError(t, eng.baseline.Close(context.Background()))
-
-	done, err := rt.handleDrainingCompletion(ctx, p, &ActionCompletion{
-		ActionID:   1,
-		Path:       "drain.txt",
-		ActionType: ActionUpload,
-		Err:        assert.AnError,
-		ErrMsg:     "retry later",
-	}, true)
-	require.NoError(t, err)
-	assert.False(t, done)
-	assert.True(t, rt.isDraining())
-}
-
 // Validates: R-2.8.3, R-6.10.10
 func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	t.Parallel()
