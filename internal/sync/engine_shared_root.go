@@ -158,12 +158,7 @@ func (rt *watchRuntime) watchSharedRootRemote(
 			if sharedRootWatchStopped(ctx, dispatchErr) {
 				return nil
 			}
-			rt.engine.logger.Warn("shared-root watch batch apply failed, retrying after poll loop",
-				slog.String("error", dispatchErr.Error()),
-				slog.String("drive_id", rt.engine.driveID.String()),
-				slog.String("root_item_id", rt.engine.rootItemID),
-			)
-			continue
+			return dispatchErr
 		}
 		bo.Reset()
 		if stop, sleepErr := rt.sleepSharedRootWatch(ctx, interval, "interval"); sleepErr != nil || stop {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -107,7 +108,8 @@ func TestHandleRemoteObservationBatch_SharedRootCursorCommitFailureLeavesStateUn
 		},
 	})
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.True(t, isFatalObserverError(err))
 	assert.Equal(t, "existing-cursor", readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
 }
 
@@ -182,6 +184,110 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCanceledContextReturnsCommitEr
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+// Validates: R-2.1.2, R-2.10.4
+func TestHandleRemoteObservationBatch_PrimaryWatchReconcileFailureIsFatal(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	ctx := t.Context()
+	require.NoError(t, eng.baseline.Close(ctx))
+
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, "")
+	batch.findings = rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden)
+
+	err := rt.handleRemoteObservationBatch(ctx, &batch)
+	require.Error(t, err)
+	assert.True(t, isFatalObserverError(err))
+}
+
+// Validates: R-2.1.2, R-2.10.4
+func TestHandleWatchSkippedChannel_ReconcileFailureReturnsError(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	ctx := t.Context()
+	require.NoError(t, eng.baseline.Close(ctx))
+
+	done, err := rt.handleWatchSkippedChannel(ctx, &watchPipeline{}, []SkippedItem{{
+		Path:   "blocked.txt",
+		Reason: IssueInvalidFilename,
+		Detail: "invalid",
+	}}, true)
+	require.Error(t, err)
+	assert.False(t, done)
+}
+
+// Validates: R-2.1.2
+func TestHandleRemoteObservationBatch_FullRefreshApplyFailureMarksDirtyForRetry(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+
+	ctx := t.Context()
+	require.NoError(t, eng.baseline.Close(ctx))
+
+	batch := buildFullRemoteRefreshBatch(eng.Engine, remoteFetchResult{
+		findings: rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden),
+	})
+	err := rt.handleRemoteObservationBatch(ctx, &batch)
+	require.NoError(t, err)
+
+	dirty := rt.dirtyBuf.FlushImmediate()
+	require.NotNil(t, dirty)
+	assert.True(t, dirty.FullRefresh)
+}
+
+// Validates: R-2.10.4
+func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationReconcile(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
+		Action:   ActionDownload,
+		Success:  true,
+		Path:     "blocked.txt",
+		DriveID:  eng.driveID,
+		ItemID:   "blocked-item",
+		ParentID: "root",
+		ItemType: ItemTypeFile,
+	}))
+
+	serviceScope := &ActiveScope{
+		Key:           SKService(),
+		BlockedAt:     eng.nowFunc(),
+		TrialInterval: time.Minute,
+		NextTrialAt:   eng.nowFunc().Add(time.Minute),
+	}
+	rt.upsertActiveScope(serviceScope)
+
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, "")
+	batch.findings = rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden)
+	require.NoError(t, rt.handleRemoteObservationBatch(ctx, &batch))
+
+	activeScopes := rt.snapshotActiveScopes()
+	require.Len(t, activeScopes, 1)
+	assert.Equal(t, SKService(), activeScopes[0].Key)
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	prepared, err := rt.prepareSteadyStateCurrentPlan(ctx, bl, SyncBidirectional)
+	require.NoError(t, err)
+	assert.Empty(t, prepared.Plan.Actions, "read-denied observation findings should suppress planning without reloading active scopes")
 }
 
 // Validates: R-2.1.2

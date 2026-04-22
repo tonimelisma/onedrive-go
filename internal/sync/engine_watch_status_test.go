@@ -292,7 +292,7 @@ func TestRunSteadyStateReplan_LocalSnapshotCommitFailureStopsWatch(t *testing.T)
 	}, DirtyBatch{
 		Paths: []string{"fatal.txt"},
 	})
-	require.ErrorContains(t, err, "watch replan local snapshot commit")
+	require.ErrorContains(t, err, "watch replan local observation findings reconcile")
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.syncBatch.active)
 }

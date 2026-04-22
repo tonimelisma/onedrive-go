@@ -39,16 +39,6 @@ const (
 // for in-flight actions to complete.
 const quiescenceLogInterval = 30 * time.Second
 
-// loadWatchState loads the baseline for the watch session.
-func (rt *watchRuntime) loadWatchState(ctx context.Context) error {
-	_, err := rt.engine.baseline.Load(ctx)
-	if err != nil {
-		return fmt.Errorf("sync: loading baseline for watch: %w", err)
-	}
-
-	return nil
-}
-
 // RunWatch runs a continuous sync loop: bootstrap sync through the watch
 // pipeline, then watches for remote and local changes that feed the shared
 // steady-state replan path.
@@ -69,27 +59,13 @@ func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) err
 	if e.watchRuntimeHook != nil {
 		e.watchRuntimeHook(rt)
 	}
-	hasAccountAuthRequirement, err := e.hasPersistedAccountAuthRequirement()
+	bl, err := rt.prepareStartupBaseline(ctx, rt)
 	if err != nil {
 		if isWatchShutdownError(ctx, err) {
 			return nil
 		}
 
 		return err
-	}
-	proof, proofErr := e.proveDriveIdentity(ctx)
-	if proofErr != nil {
-		if isWatchShutdownError(ctx, proofErr) {
-			return nil
-		}
-
-		// Startup auth normalization is the only case that should proceed past a
-		// failing proof. Without a persisted catalog auth requirement there is
-		// nothing to normalize, so watch mode must abort before it allocates
-		// workers or timers.
-		if !hasAccountAuthRequirement {
-			return proofErr
-		}
 	}
 
 	// Step 1: Set up watch infrastructure (no observers yet).
@@ -101,21 +77,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) err
 
 		return err
 	}
-	if err := e.normalizePersistedAccountAuthRequirement(ctx, hasAccountAuthRequirement, proof, proofErr); err != nil {
-		if isWatchShutdownError(ctx, err) {
-			return nil
-		}
-
-		return err
-	}
-	if proofErr != nil {
-		if isWatchShutdownError(ctx, proofErr) {
-			return nil
-		}
-
-		return proofErr
-	}
-	e.logVerifiedDrive(proof)
+	pipe.bl = bl
 	defer pipe.cleanup()
 
 	// Step 2: Bootstrap — observe, plan, execute through watch pipeline.
@@ -187,14 +149,6 @@ func (rt *watchRuntime) initWatchInfra(
 	mode Mode,
 	opts WatchOptions,
 ) (*watchPipeline, error) {
-	// Normalize persisted scope rows before loading runtime scope state.
-	// Startup must not trust stale scope rows blindly; the durable store is
-	// repaired against current persisted evidence before the watch loop loads
-	// its ephemeral activeScopes working set.
-	if err := rt.normalizePersistedScopes(ctx, rt); err != nil {
-		return nil, fmt.Errorf("sync: normalizing persisted scopes: %w", err)
-	}
-
 	// DepGraph tracks action dependencies. Active scope state is loaded from
 	// the persisted block_scopes table into watch-owned runtime state.
 	depGraph := NewDepGraph(rt.engine.logger)
@@ -281,17 +235,18 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 	bootstrapStart := rt.engine.nowFunc()
 
-	// Load baseline for watch startup.
-	if err := rt.loadWatchState(ctx); err != nil {
-		return err
+	if pipe == nil || pipe.bl == nil {
+		bl, err := rt.engine.baseline.Load(ctx)
+		if err != nil {
+			return fmt.Errorf("sync: loading baseline for bootstrap sync: %w", err)
+		}
+		if pipe == nil {
+			pipe = &watchPipeline{}
+		}
+		pipe.bl = bl
 	}
-	bl, err := rt.engine.baseline.Load(ctx)
-	if err != nil {
-		return fmt.Errorf("sync: reloading baseline after watch startup: %w", err)
-	}
-	pipe.bl = bl
 
-	prepared, err := rt.prepareBootstrapCurrentPlan(ctx, bl, mode)
+	prepared, err := rt.prepareBootstrapCurrentPlan(ctx, pipe.bl, mode)
 	if err != nil {
 		return err
 	}
@@ -307,7 +262,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	rt.beginSyncStatusBatch(bootstrapStart)
 
 	// Dispatch through the watch runtime (same frontier path steady-state uses).
-	initialOutbox, _, err := rt.startPreparedRuntime(ctx, prepared, bl, rt)
+	initialOutbox, _, err := rt.startPreparedRuntime(ctx, prepared, pipe.bl, rt)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap dispatch failed: %w", err)
 	}

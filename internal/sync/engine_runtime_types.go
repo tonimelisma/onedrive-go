@@ -10,7 +10,6 @@ import (
 // container; run-scoped state lives here instead.
 type engineFlow struct {
 	engine *Engine
-	watch  *watchRuntime
 
 	depGraph   *DepGraph
 	dispatchCh chan *TrackedAction

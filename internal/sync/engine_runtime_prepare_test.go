@@ -86,6 +86,124 @@ func TestPrepareBootstrapCurrentPlan_MatchesOneShotLivePrepare(t *testing.T) {
 }
 
 // Validates: R-2.10.5
+func TestPrepareStartupBaseline_OneShotAndWatchShareStartupNormalization(t *testing.T) {
+	t.Parallel()
+
+	oneShotEng, _ := newTestEngine(t, &engineMockClient{})
+	watchEng, _ := newTestEngine(t, &engineMockClient{})
+	ctx := t.Context()
+
+	require.NoError(t, oneShotEng.baseline.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKService(),
+		BlockedAt:     oneShotEng.nowFunc(),
+		TrialInterval: time.Minute,
+		NextTrialAt:   oneShotEng.nowFunc().Add(time.Minute),
+	}))
+	require.NoError(t, watchEng.baseline.UpsertBlockScope(ctx, &BlockScope{
+		Key:           SKService(),
+		BlockedAt:     watchEng.nowFunc(),
+		TrialInterval: time.Minute,
+		NextTrialAt:   watchEng.nowFunc().Add(time.Minute),
+	}))
+
+	oneShotBaseline, err := newOneShotRunner(oneShotEng.Engine).prepareStartupBaseline(ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, oneShotBaseline)
+
+	setupWatchEngine(t, watchEng)
+	watchBaseline, err := testWatchRuntime(t, watchEng).prepareStartupBaseline(ctx, testWatchRuntime(t, watchEng))
+	require.NoError(t, err)
+	require.NotNil(t, watchBaseline)
+
+	oneShotScopes, err := oneShotEng.baseline.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, oneShotScopes)
+
+	watchScopes, err := watchEng.baseline.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, watchScopes)
+}
+
+// Validates: R-2.10.5
+func TestPrepareLiveCurrentPlan_FailsClosedWhenRemoteObservationReconcileFails(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID:           "item-1",
+					Name:         "newfile.txt",
+					DriveID:      driveID,
+					ParentID:     "root",
+					Size:         10,
+					QuickXorHash: "hash-1",
+				},
+			}, "token-prepare"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	eng.beforeRemoteObservationFindingsReconcile = func() {
+		require.NoError(t, eng.baseline.Close(context.Background()))
+	}
+
+	fullReconcile, err := eng.shouldRunFullRemoteRefresh(ctx, false)
+	require.NoError(t, err)
+	_, err = newOneShotRunner(eng.Engine).prepareLiveCurrentPlan(ctx, bl, SyncDownloadOnly, RunOptions{
+		FullReconcile: fullReconcile,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "failed to reconcile remote observation findings")
+}
+
+// Validates: R-2.10.5
+func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{
+					ID:           "item-1",
+					Name:         "newfile.txt",
+					DriveID:      driveID,
+					ParentID:     "root",
+					Size:         10,
+					QuickXorHash: "hash-1",
+				},
+			}, "token-bootstrap"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+	bl, err := rt.prepareStartupBaseline(ctx, rt)
+	require.NoError(t, err)
+
+	eng.beforeRemoteObservationFindingsReconcile = func() {
+		require.NoError(t, eng.baseline.Close(context.Background()))
+	}
+
+	err = rt.bootstrapSync(ctx, SyncDownloadOnly, &watchPipeline{
+		bl:          bl,
+		completions: make(chan ActionCompletion),
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "failed to reconcile remote observation findings")
+}
+
+// Validates: R-2.10.5
 func TestRunSteadyStateReplan_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare(t *testing.T) {
 	t.Parallel()
 

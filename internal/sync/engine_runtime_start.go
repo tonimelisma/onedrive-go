@@ -33,7 +33,7 @@ func (flow *engineFlow) startPreparedRuntime(
 	if err != nil {
 		return nil, false, err
 	}
-	outbox, err := flow.reduceReadyFrontier(ctx, watch, bl, ready)
+	outbox, err := flow.drainPublicationFrontier(ctx, watch, bl, ready)
 	if err != nil {
 		flow.completeOutboxAsShutdown(outbox)
 		return nil, false, err
@@ -44,7 +44,7 @@ func (flow *engineFlow) startPreparedRuntime(
 		return nil, false, err
 	}
 	if len(dueHeld) > 0 {
-		reduced, err := flow.reduceReadyFrontier(ctx, watch, bl, dueHeld)
+		reduced, err := flow.drainPublicationFrontier(ctx, watch, bl, dueHeld)
 		if err != nil {
 			outbox = append(outbox, reduced...)
 			flow.completeOutboxAsShutdown(outbox)

@@ -17,7 +17,10 @@ path/scope hints, observation findings, and direct local-snapshot rows for
 In watch mode, that ownership is explicit: local observers emit only local
 change hints, while remote observers and full-refresh workers emit one
 `remoteObservationBatch` value that the watch loop applies durably. No remote
-observer goroutine commits remote rows or observation cursors directly.
+observer goroutine commits remote rows or observation cursors directly. Once the
+engine starts applying that batch as durable current truth, failures in remote
+row commits, cursor commits, or observation-findings reconciliation are
+fail-closed for that run/session rather than best-effort warnings.
 
 The observation stack has four main pieces:
 
@@ -33,7 +36,7 @@ The observation stack has four main pieces:
 - Source of Truth: live filesystem state, Graph responses, and read-only baseline context supplied by the engine
 - Allowed Side Effects: rooted filesystem reads, hashing, Graph observation calls, watch registration, and event emission
 - Mutable Runtime Owner: `RemoteObserver`, `LocalObserver`, `Scanner`, and `DirtyBuffer` each own only their own invocation- or run-scoped mutable state, watches, and goroutines. The engine owns lifecycle and composition across those pieces.
-- Error Boundary: observation surfaces filesystem, watch, and Graph observation failures as observation results and control signals; the engine may persist those observation findings durably, but execution paths do not invent observation-owned durable rows.
+- Error Boundary: observation surfaces filesystem, watch, and Graph observation failures as observation results and control signals; once the engine starts durably applying an observation batch, observation-finding reconciliation is fail-closed and execution paths do not invent observation-owned durable rows.
 
 ## Verified By
 

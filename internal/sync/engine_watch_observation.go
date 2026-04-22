@@ -2,14 +2,14 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 )
 
 func (flow *engineFlow) reconcileSkippedObservationFindings(
 	ctx context.Context,
-	watch *watchRuntime,
 	skipped []SkippedItem,
-) {
+) error {
 	eng := flow.engine
 
 	byReason := make(map[string][]SkippedItem)
@@ -55,33 +55,22 @@ func (flow *engineFlow) reconcileSkippedObservationFindings(
 	}
 
 	batch := localObservationFindingsBatchFromSkippedItems(eng.driveID, skipped)
-	flow.reconcileObservationFindingsBatch(ctx, watch, &batch, "failed to reconcile local observation findings")
+	return flow.applyObservationFindingsBatch(ctx, &batch, "failed to reconcile local observation findings")
 }
 
-func (flow *engineFlow) reconcileObservationFindingsBatch(
+func (flow *engineFlow) applyObservationFindingsBatch(
 	ctx context.Context,
-	watch *watchRuntime,
 	batch *ObservationFindingsBatch,
 	failureMessage string,
-) {
+) error {
 	eng := flow.engine
 	if batch == nil {
-		return
+		return nil
 	}
 
 	if err := eng.baseline.ReconcileObservationFindings(ctx, batch, eng.nowFunc()); err != nil {
-		eng.logger.Error(failureMessage,
-			slog.Int("issues", len(batch.Issues)),
-			slog.String("error", err.Error()),
-		)
-		return
+		return fmt.Errorf("%s: %w", failureMessage, err)
 	}
 
-	if watch != nil {
-		if err := flow.loadActiveScopes(ctx, watch); err != nil {
-			eng.logger.Warn("failed to refresh watch scopes after observation reconcile",
-				slog.String("error", err.Error()),
-			)
-		}
-	}
+	return nil
 }

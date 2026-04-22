@@ -134,7 +134,6 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 			refreshResults: make(chan remoteRefreshResult, 1),
 		},
 	}
-	rt.watch = rt
 
 	return rt
 }
