@@ -149,7 +149,7 @@ func (r *oneShotRunner) handleOneShotCompletion(
 
 	ready, completionErr := r.processActionCompletion(ctx, nil, completion, bl)
 	if completionErr == nil {
-		reduced, err := r.reduceReadyFrontier(ctx, nil, bl, ready)
+		reduced, err := r.drainPublicationFrontier(ctx, nil, bl, ready)
 		if err == nil {
 			return append(outbox, reduced...), nil
 		}

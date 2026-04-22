@@ -32,7 +32,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	rt.engine.collector().RecordWatchBatch(len(batch.Paths))
 
 	observeStart := rt.engine.nowFunc()
-	localResult, err := rt.observeLocalChanges(ctx, rt, p.bl)
+	localResult, err := rt.observeLocal(ctx, p.bl)
 	if err != nil {
 		rt.clearSyncStatusBatch()
 		if isWatchShutdownError(ctx, err) {
@@ -42,6 +42,10 @@ func (rt *watchRuntime) runSteadyStateReplan(
 			slog.String("error", err.Error()),
 		)
 		return nil
+	}
+	findingsErr := rt.reconcileSkippedObservationFindings(ctx, localResult.Skipped)
+	if findingsErr != nil {
+		return rt.finishSteadyStateReplanStep(ctx, "local observation findings reconcile", findingsErr)
 	}
 	if rt.afterSteadyStateObserve != nil {
 		rt.afterSteadyStateObserve()

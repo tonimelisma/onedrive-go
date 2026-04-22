@@ -121,8 +121,7 @@ func (rt *watchRuntime) handleWatchSkippedChannel(
 		return false, nil
 	}
 
-	rt.reconcileSkippedObservationFindings(ctx, rt, skipped)
-	return false, nil
+	return false, rt.reconcileSkippedObservationFindings(ctx, skipped)
 }
 
 func (rt *watchRuntime) handleWatchRefreshResultChannel(

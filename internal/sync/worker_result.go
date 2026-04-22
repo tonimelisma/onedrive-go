@@ -66,7 +66,7 @@ func (r *ActionCompletion) ThrottleTargetKey() string {
 }
 
 // actionCompletionFromTrackedAction builds the shared runtime result shape for
-// one exact tracked action. Workers and engine-owned publication reduction both
+// one exact tracked action. Workers and the engine-owned publication-drain stage both
 // use this helper so classification/persistence sees one consistent exact
 // action identity.
 func actionCompletionFromTrackedAction(

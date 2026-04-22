@@ -79,13 +79,13 @@ func runResultDrainLoopIdleForTest(
 	case <-rt.trialTimerChan():
 		released, err := rt.releaseDueHeldTrialsNow(ctx)
 		mustNoDrainLoopError(err)
-		reduced, err := rt.reduceReadyFrontier(ctx, rt, bl, released)
+		reduced, err := rt.drainPublicationFrontier(ctx, rt, bl, released)
 		mustNoDrainLoopError(err)
 		return reduced, false
 	case <-rt.retryTimerChan():
 		released, err := rt.releaseDueHeldRetriesNow(ctx)
 		mustNoDrainLoopError(err)
-		reduced, err := rt.reduceReadyFrontier(ctx, rt, bl, released)
+		reduced, err := rt.drainPublicationFrontier(ctx, rt, bl, released)
 		mustNoDrainLoopError(err)
 		return reduced, false
 	case <-ctx.Done():
@@ -111,13 +111,13 @@ func runResultDrainLoopWithOutboxForTest(
 	case <-rt.trialTimerChan():
 		released, err := rt.releaseDueHeldTrialsNow(ctx)
 		mustNoDrainLoopError(err)
-		reduced, err := rt.reduceReadyFrontier(ctx, rt, bl, released)
+		reduced, err := rt.drainPublicationFrontier(ctx, rt, bl, released)
 		mustNoDrainLoopError(err)
 		return append(outbox, reduced...), false
 	case <-rt.retryTimerChan():
 		released, err := rt.releaseDueHeldRetriesNow(ctx)
 		mustNoDrainLoopError(err)
-		reduced, err := rt.reduceReadyFrontier(ctx, rt, bl, released)
+		reduced, err := rt.drainPublicationFrontier(ctx, rt, bl, released)
 		mustNoDrainLoopError(err)
 		return append(outbox, reduced...), false
 	case <-ctx.Done():
@@ -137,7 +137,7 @@ func appendDrainOutcome(
 		return outbox, true
 	}
 
-	reduced, err := rt.reduceReadyFrontier(ctx, rt, bl, ready)
+	reduced, err := rt.drainPublicationFrontier(ctx, rt, bl, ready)
 	mustNoDrainLoopError(err)
 	return append(outbox, reduced...), false
 }

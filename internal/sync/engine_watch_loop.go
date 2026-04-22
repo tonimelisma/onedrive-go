@@ -213,7 +213,7 @@ func (rt *watchRuntime) appendReadyFrontier(
 	p *watchPipeline,
 	ready []*TrackedAction,
 ) error {
-	reduced, err := rt.reduceReadyFrontier(ctx, rt, p.bl, ready)
+	reduced, err := rt.drainPublicationFrontier(ctx, rt, p.bl, ready)
 	nextOutbox := append(rt.currentOutbox(), reduced...)
 	if err != nil {
 		rt.clearSyncStatusBatch()

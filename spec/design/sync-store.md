@@ -115,8 +115,8 @@ Supporting outcome mutations should stay separate by owner:
   resolved `retry_work` row for engine-owned cleanup decisions
 
 `retry_work` is the single durable lane for exact pending roots regardless of
-whether their next execution boundary is worker-side I/O or engine-side
-publication reduction. The store does not split publication retries into a
+whether their next execution boundary is worker-side I/O or the engine-owned
+publication-drain stage. The store does not split publication retries into a
 second durable table. Admission, completion, held-release, and
 permission-driven runtime mutation all act on that same durable lane; the
 store owns the rows, while the engine owns the policy around them. Blocked
@@ -218,7 +218,7 @@ cascade retry rows.
 
 That exact-root rule includes publication-only actions such as
 `ActionUpdateSynced` and `ActionCleanup`. They may persist in `retry_work`, but
-their retry still re-enters the engine-owned publication reduction path rather
+their retry still re-enters the engine-owned publication-drain stage rather
 than worker dispatch.
 
 Read-denied subtree boundaries do not persist as `block_scopes`. They remain

@@ -97,7 +97,8 @@ func (flow *engineFlow) observeCurrentTruth(
 	}
 	_ = remoteEvents
 
-	localResult, err := flow.observeLocalChanges(ctx, watch, bl)
+	_ = watch
+	localResult, err := flow.observeLocalChanges(ctx, bl)
 	if err != nil {
 		return nil, err
 	}
@@ -132,13 +133,17 @@ func (flow *engineFlow) observeRemoteChanges(
 	); err != nil {
 		return nil, nil, err
 	}
+	if !dryRun && flow.engine.beforeRemoteObservationFindingsReconcile != nil {
+		flow.engine.beforeRemoteObservationFindingsReconcile()
+	}
 	if !dryRun {
-		flow.reconcileObservationFindingsBatch(
+		if err := flow.applyObservationFindingsBatch(
 			ctx,
-			nil,
 			&fetchResult.findings,
 			"failed to reconcile remote observation findings",
-		)
+		); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return projectedRemote.emitted, fetchResult.pending, nil
@@ -174,7 +179,6 @@ func (flow *engineFlow) commitObservedRemoteChanges(
 
 func (flow *engineFlow) observeLocalChanges(
 	ctx context.Context,
-	watch *watchRuntime,
 	bl *Baseline,
 ) (ScanResult, error) {
 	localResult, err := flow.observeLocal(ctx, bl)
@@ -182,7 +186,9 @@ func (flow *engineFlow) observeLocalChanges(
 		return ScanResult{}, err
 	}
 
-	flow.reconcileSkippedObservationFindings(ctx, watch, localResult.Skipped)
+	if err := flow.reconcileSkippedObservationFindings(ctx, localResult.Skipped); err != nil {
+		return ScanResult{}, err
+	}
 
 	return localResult, nil
 }

@@ -54,7 +54,7 @@ func TestWatchRuntime_RunBootstrapStep_RetryTickReducesReleasedPublicationRetryO
 	done, err := rt.runBootstrapStep(ctx, &watchPipeline{bl: bl}, nil)
 	require.NoError(t, err)
 	assert.False(t, done)
-	assert.Empty(t, rt.currentOutbox(), "bootstrap retry release must re-enter publication reduction before worker dispatch")
+	assert.Empty(t, rt.currentOutbox(), "bootstrap retry release must re-enter publication drain before worker dispatch")
 	assert.Empty(t, rt.heldByKey)
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
 
