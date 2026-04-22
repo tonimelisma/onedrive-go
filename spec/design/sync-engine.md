@@ -82,8 +82,9 @@ Permission handling is intentionally split three ways:
   filesystem or Graph facts only
 - pure policy (`permission_policy.go`) turns one action completion plus
   permission evidence into an engine-facing `PermissionOutcome`
-- apply/logging (`permission_decisions.go`) persists blocked `retry_work`,
-  activates or releases timed write scopes, and emits engine-owned logs
+- direct engine runtime application (`permission_decisions.go`) persists
+  blocked `retry_work`, activates or releases timed write scopes, and emits
+  engine-owned logs without a separate controller shell
 
 Normal completion handling and trial reclassification both reuse the same
 engine helper to gather permission evidence and call `DecidePermissionOutcome`.

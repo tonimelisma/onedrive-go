@@ -205,7 +205,7 @@ func (f *engineFlow) completeTrackedActionAsShutdown(ta *TrackedAction) {
 
 	f.markFinished(ta)
 	ready := f.completeDepGraphAction(ta.ID, "completeTrackedActionAsShutdown")
-	f.scopeController().completeSubtree(ready)
+	f.completeSubtree(ready)
 }
 
 func (r *oneShotRunner) isOneShotQuiescent(outbox []*TrackedAction) bool {
