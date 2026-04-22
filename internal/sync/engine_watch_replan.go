@@ -52,7 +52,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	}
 	rt.engine.collector().RecordObserve(len(batch.Paths), rt.engine.since(observeStart))
 
-	prepared, err := rt.prepareDirtyCurrentPlan(ctx, p.bl, p.mode)
+	prepared, err := rt.prepareSteadyStateCurrentPlan(ctx, p.bl, p.mode)
 	if err != nil {
 		return rt.finishSteadyStateReplanStep(ctx, "prepare", err)
 	}
