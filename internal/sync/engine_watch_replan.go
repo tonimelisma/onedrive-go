@@ -26,10 +26,10 @@ func (rt *watchRuntime) runSteadyStateReplan(
 
 	rt.beginSyncStatusBatch(rt.engine.nowFunc())
 	rt.engine.logger.Info("processing watch steady-state replan",
-		slog.Int("paths", len(batch.Paths)),
+		slog.Bool("dirty_signal", true),
 		slog.Bool("full_refresh", batch.FullRefresh),
 	)
-	rt.engine.collector().RecordWatchBatch(len(batch.Paths))
+	rt.engine.collector().RecordWatchBatch(1)
 
 	observeStart := rt.engine.nowFunc()
 	localResult, err := rt.observeLocal(ctx, p.bl)
@@ -52,14 +52,14 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	if commitErr != nil {
 		return rt.finishSteadyStateReplanStep(ctx, "local snapshot commit", commitErr)
 	}
-	rt.engine.collector().RecordObserve(len(batch.Paths), rt.engine.since(observeStart))
+	rt.engine.collector().RecordObserve(len(localResult.Rows), rt.engine.since(observeStart))
 
-	prepared, err := rt.prepareSteadyStateCurrentPlan(ctx, p.bl, p.mode)
+	prepared, err := rt.runSteadyStateCurrentPlan(ctx, p.bl, p.mode)
 	if err != nil {
 		return rt.finishSteadyStateReplanStep(ctx, "prepare", err)
 	}
 
-	dispatch, dispatched, err := rt.startPreparedRuntime(ctx, prepared, p.bl, rt)
+	dispatch, dispatched, err := rt.startRuntimeStage(ctx, prepared, p.bl, rt)
 	if err != nil {
 		return rt.finishSteadyStateReplanStep(ctx, "start runtime", err)
 	}

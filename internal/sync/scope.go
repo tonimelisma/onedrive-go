@@ -40,7 +40,7 @@ const (
 
 // ScopeState maintains sliding windows for scope escalation detection and
 // records successes that reset windows. Thread-safety is provided by the
-// engine-owned result loop — all calls come from processActionCompletion on one
+// engine-owned result loop — all calls come from applyRuntimeCompletionStage on one
 // goroutine.
 type ScopeState struct {
 	windows map[ScopeKey]*slidingWindow

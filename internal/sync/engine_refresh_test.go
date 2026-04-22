@@ -125,8 +125,8 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	// observeAndCommitRemoteTruth with 0 events (only root, which is skipped).
-	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteTruth(
+	// observeAndCommitRemoteCurrentState with 0 events (only root, which is skipped).
+	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
 		ctx,
 		bl,
 		false,
@@ -184,8 +184,8 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	// observeAndCommitRemoteTruth with actual events.
-	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteTruth(
+	// observeAndCommitRemoteCurrentState with actual events.
+	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
 		ctx,
 		bl,
 		false,
@@ -199,7 +199,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 
 	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Equal(t, "old-token", savedToken,
-		"cursor should NOT be committed to DB by observeAndCommitRemoteTruth — it is deferred")
+		"cursor should NOT be committed to DB by observeAndCommitRemoteCurrentState — it is deferred")
 }
 
 // ---------------------------------------------------------------------------
@@ -493,7 +493,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
 
-	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteTruth(
+	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
 		ctx,
 		bl,
 		false,
@@ -524,7 +524,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	assert.Equal(t, "full-token", pendingCursor.token, "pending cursor should be returned")
 
 	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
-	assert.Empty(t, savedToken, "cursor should NOT be committed to DB by observeAndCommitRemoteTruth — it is deferred")
+	assert.Empty(t, savedToken, "cursor should NOT be committed to DB by observeAndCommitRemoteCurrentState — it is deferred")
 }
 
 // Validates: R-2.10.4
@@ -560,7 +560,7 @@ func TestObserveAndCommitRemoteTruth_RemoteReadDeniedPersistsObservationFindings
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteTruth(
+	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
 		ctx,
 		bl,
 		false,
@@ -665,7 +665,6 @@ func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch, "remote refresh should mark dirty work for the watch loop")
-	assert.Equal(t, []string{"file1.txt"}, batch.Paths)
 	assert.False(t, batch.FullRefresh)
 }
 
@@ -695,7 +694,6 @@ func TestRunFullRemoteRefreshAsync_DeltaError(t *testing.T) {
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
 	assert.True(t, batch.FullRefresh)
-	assert.Empty(t, batch.Paths)
 }
 
 func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
@@ -815,7 +813,7 @@ func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch, "dirty scheduler should contain paths from reconciliation")
-	assert.Contains(t, batch.Paths, "newfile.txt")
+	assert.False(t, batch.FullRefresh)
 }
 
 // Validates: R-2.8.4
@@ -868,7 +866,7 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 
 	batch := rt.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
-	assert.Equal(t, []string{"refresh.txt"}, batch.Paths)
+	assert.False(t, batch.FullRefresh)
 
 	select {
 	case ta := <-ready:
@@ -953,7 +951,6 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch, "shutdown-aware early exit should request a fresh replan")
 	assert.True(t, batch.FullRefresh)
-	assert.Empty(t, batch.Paths)
 }
 
 func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {

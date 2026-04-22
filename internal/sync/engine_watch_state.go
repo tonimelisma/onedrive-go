@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"sort"
 	"sync"
 	"time"
 )
@@ -33,9 +32,9 @@ type watchSyncBatchState struct {
 }
 
 type watchObservationState struct {
-	// Dirty debounce buffer. Local and remote observers mark paths or full
-	// refresh requests here; the watch loop refreshes snapshots and replans from
-	// SQLite current truth after the debounce window closes.
+	// Dirty debounce buffer. Local and remote observers mark coarse replan or
+	// full-refresh requests here; the watch loop refreshes snapshots and replans
+	// from SQLite current truth after the debounce window closes.
 	dirtyBuf *DirtyBuffer
 
 	// Observer references — set in startObservers, nil'd on shutdown.
@@ -217,35 +216,10 @@ func (rt *watchRuntime) canPrepareNow() bool {
 
 func (rt *watchRuntime) queuePendingReplan(batch DirtyBatch) {
 	rt.loop.replanQueued = true
+	rt.loop.hasPendingReplan = true
 	if batch.FullRefresh {
 		rt.loop.pendingReplan.FullRefresh = true
 	}
-	if len(batch.Paths) == 0 {
-		return
-	}
-
-	pathSet := make(map[string]struct{}, len(rt.loop.pendingReplan.Paths)+len(batch.Paths))
-	for _, path := range rt.loop.pendingReplan.Paths {
-		if path == "" {
-			continue
-		}
-		pathSet[path] = struct{}{}
-	}
-	for _, path := range batch.Paths {
-		if path == "" {
-			continue
-		}
-		pathSet[path] = struct{}{}
-	}
-
-	paths := rt.loop.pendingReplan.Paths[:0]
-	for path := range pathSet {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
-	rt.loop.pendingReplan.Paths = paths
-	rt.loop.hasPendingReplan = rt.loop.pendingReplan.FullRefresh || len(paths) > 0
 }
 
 func (rt *watchRuntime) hasPendingReplan() bool {

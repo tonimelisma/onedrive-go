@@ -147,9 +147,9 @@ func (r *oneShotRunner) handleOneShotCompletion(
 		return outbox, fatalErr
 	}
 
-	ready, completionErr := r.processActionCompletion(ctx, nil, completion, bl)
+	ready, completionErr := r.applyRuntimeCompletionStage(ctx, nil, completion, bl)
 	if completionErr == nil {
-		reduced, err := r.drainPublicationFrontier(ctx, nil, bl, ready)
+		reduced, err := r.runPublicationDrainStage(ctx, nil, bl, ready)
 		if err == nil {
 			return append(outbox, reduced...), nil
 		}

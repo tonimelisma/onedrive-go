@@ -9,7 +9,7 @@ import (
 )
 
 // Validates: R-2.10.5, R-6.8.9
-func TestStartPreparedRuntime_ReleasesDueHeldTrialImmediately(t *testing.T) {
+func TestStartRuntimeStage_ReleasesDueHeldTrialImmediately(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -47,7 +47,7 @@ func TestStartPreparedRuntime_ReleasesDueHeldTrialImmediately(t *testing.T) {
 		}},
 	}
 
-	outbox, dispatched, err := flow.startPreparedRuntime(ctx, prepared, bl, nil)
+	outbox, dispatched, err := flow.startRuntimeStage(ctx, prepared, bl, nil)
 	require.NoError(t, err)
 	require.True(t, dispatched)
 	require.Len(t, outbox, 1)

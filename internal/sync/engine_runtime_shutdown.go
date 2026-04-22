@@ -13,7 +13,7 @@ func (flow *engineFlow) processShutdownCompletion(
 	completion *ActionCompletion,
 	bl *Baseline,
 ) error {
-	ready, err := flow.processActionCompletion(ctx, nil, completion, bl)
+	ready, err := flow.applyRuntimeCompletionStage(ctx, nil, completion, bl)
 	flow.completeOutboxAsShutdown(ready)
 	return err
 }

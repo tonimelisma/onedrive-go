@@ -2,14 +2,6 @@ package sync
 
 import "context"
 
-func (flow *engineFlow) applySuccessEffects(ctx context.Context, r *ActionCompletion) {
-	flow.succeeded++
-	flow.clearRetryWorkOnSuccess(ctx, r)
-	if flow.scopeState != nil {
-		flow.scopeState.RecordSuccess(r)
-	}
-}
-
 func (flow *engineFlow) applyCompletionSuccess(
 	ctx context.Context,
 	watch *watchRuntime,
@@ -17,11 +9,15 @@ func (flow *engineFlow) applyCompletionSuccess(
 	r *ActionCompletion,
 ) ([]*TrackedAction, error) {
 	flow.markFinished(current)
-	flow.applySuccessEffects(ctx, r)
+	flow.succeeded++
+	flow.clearRetryWorkOnSuccess(ctx, r)
+	if flow.scopeState != nil {
+		flow.scopeState.RecordSuccess(r)
+	}
 	return flow.admitReadyAfterSuccessfulAction(ctx, watch, r.ActionID, "successful action completion")
 }
 
-func (flow *engineFlow) drainPublicationSuccess(
+func (flow *engineFlow) completePublicationDrainAction(
 	ctx context.Context,
 	watch *watchRuntime,
 	current *TrackedAction,

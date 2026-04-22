@@ -58,7 +58,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Behavior | Evidence |
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
-| One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunBootstrapStep_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
+| One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 
 ## Construction
 
@@ -124,18 +124,14 @@ Permission timing follows the policy result, not the probe:
 There is no mid-pass mailbox for user intent. New external DB writes during a
 one-shot run are durable state for a later run.
 
-The current-plan preparation stage is the handoff boundary between planning
-and runtime startup. Observation remains entrypoint-specific, but once an
-entrypoint has produced observed current truth the engine runs the same named
-stage sequence: load planner inputs, build the current action plan from those
-observed inputs, then prepare the runtime handoff by reconciling durable
-retry/scope state and loading surviving `retry_work` / `block_scopes`. In
-code, `engine_current_observe.go` owns live observation plus durable snapshot
-commits, `engine_current_projection.go` owns planner-input loads,
-`engine_current_dry_run.go` owns scratch-store dry-run planning, and
-`engine_runtime_prepare.go` owns the observed-state -> build -> prepare
-handoff. Stale `retry_work` and empty `block_scopes` are pruned there, not
-from timer held-release paths.
+The current-plan pipeline is the handoff boundary between planning and runtime
+startup. Observation remains entrypoint-specific, but once an entrypoint has
+produced observed current truth the engine runs the same named stage sequence:
+observe current truth, load current inputs, build the current plan, then
+reconcile runtime state by pruning/loading surviving `retry_work` /
+`block_scopes`. In code, `engine_current_plan.go` owns that shared
+observe/load/build/reconcile pipeline. Stale `retry_work` and empty
+`block_scopes` are pruned there, not from timer held-release paths.
 
 Scope startup cleanup follows the same policy with a deliberate
 decision-then-apply split: the engine first derives which persisted scopes are
@@ -144,22 +140,21 @@ mutations. The same timed-scope liveness rule also drives runtime
 rearm-or-discard handling and store-side prune helpers so empty timed scopes
 do not survive by accident in one path but not another.
 
-Within that one-shot flow, the engine now treats "prepare current plan" as an
-explicit stage sequence: observe current truth, build the current plan from
-that observed state, then either prepare a runtime handoff or keep the
-dry-run build in memory without touching durable held-work state. Live,
-dry-run, watch bootstrap, and steady-state watch replans all use that same
-observed-state -> build -> prepare boundary; they differ only in how they
-collected the observed state and whether a deferred cursor commit is present.
+Within that one-shot flow, the engine now treats current-plan construction as
+an explicit stage sequence: observe current truth, load current inputs, build
+the current plan from that observed state, then either reconcile runtime state
+or keep the dry-run build in memory without touching durable held-work state.
+Live, dry-run, watch bootstrap, and steady-state watch replans all use that
+same current-plan pipeline; they differ only in how they collected the
+observed state and whether a deferred cursor commit is present.
 The top-level coordinators should stay at that stage level rather than
 inlining planner input loads, durable prune/load logic, or runtime-start
-bookkeeping. The same rule applies to execution-only publication drain
-helpers and post-sync housekeeping: keep them next to their stage so a reader
-can see the flow at a glance. The prepare half should read from
-`engine_runtime_prepare.go`; live observation and durable snapshot helpers
-should read from `engine_current_observe.go`; planner-input helpers should
-read from `engine_current_projection.go`; dry-run scratch planning should read
-from `engine_current_dry_run.go`.
+bookkeeping. The same rule applies to the explicit runtime-start,
+publication-drain, and post-sync housekeeping stages: keep them next to their
+stage so a reader can see the flow at a glance. Current-plan construction
+should read from `engine_current_plan.go`; runtime-start/admission should read
+from `engine_runtime_start.go`; and completion plus publication drain should
+read from the `engine_runtime_completion*.go` family.
 
 Once one-shot shutdown has started, late worker completions no longer re-enter
 the normal outbox path. The engine runs them through the same shutdown
@@ -199,10 +194,10 @@ watch observers and full-refresh goroutines emit one loop-applied
 observation commits, cursor commits, observation-finding reconciliation, dirty
 marking, and refresh-timer re-arm.
 That owner boundary stays concrete in code too: `runWatchLoop` is the shared
-outer owner for bootstrap, steady-state, and drain, while `runWatchStepIdle`
-and `runWatchStepWithOutbox` keep the steady-state `select` direct and
-concrete instead of routing through an intermediate event-envelope type or
-phase callback layer.
+outer owner for bootstrap, steady-state, and drain; `runNonDrainingWatchStep`
+is the one gated non-draining `select`; and `runDrainStep` remains the only
+distinct shutdown shell instead of routing bootstrap, idle, and outbox cases
+through overlapping wrappers.
 Engine debug events expose those lifecycle points for tests and diagnostics
 only; they do not own or redirect control flow.
 
@@ -212,10 +207,10 @@ mode refreshes current truth, runs SQL comparison/reconciliation, rebuilds the
 current actionable set in Go, reconciles durable retry/blocker state, and then
 admits runnable actions. There is one steady-state replan entry for that work:
 refresh local truth, load the already-committed remote/current state, build the
-current plan, prepare the runtime handoff, then append the resulting concrete
-worker frontier through the watch-owned frontier helpers. DirtyBuffer still
-emits `DirtyBatch` scheduler hints, but those hints feed only this steady-state
-replan path; they do not define a second planning model.
+current plan, reconcile runtime state, then append the resulting concrete
+worker frontier through the watch-owned frontier helpers. DirtyBuffer emits
+only a coarse dirty/full-refresh scheduler signal, and that signal feeds only
+this steady-state replan path; it does not define a second planning model.
 
 Bootstrap uses that same outer owner after the initial
 observe/prepare/start-runtime handoff. The only bootstrap-specific semantics
@@ -258,11 +253,9 @@ One-shot and watch coordinators still own their outbox state explicitly.
 Runtime completion handling follows the same boundary shape everywhere:
 classify the finished exact action, apply the resulting durable/runtime
 mutation, then release any due held work back into the ready frontier. It does
-not mix that decision step with worker-queue ownership. In code, that runtime
-mutation now lives in the `engine_runtime_completion*.go`,
-`engine_runtime_graph.go`, `engine_runtime_permissions.go`,
-`engine_runtime_held.go`, and `engine_runtime_scopes.go` families instead of
-one mixed result-flow file plus separate controller-shaped helpers.
+not mix that decision step with worker-queue ownership. In code, the top-level
+effectful boundary is `applyRuntimeCompletionStage`, while the explicit
+publication stage is `runPublicationDrainStage`.
 
 Watch replan failure policy is also explicit. Pre-authority local observation
 failure is recoverable and drops that replan trigger. Once the engine starts
