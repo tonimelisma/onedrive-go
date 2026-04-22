@@ -53,7 +53,10 @@ quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,
 so the engine decides when the current runtime is quiescent based on outbox,
 running work, and due held entries. `DepGraph` therefore does not expose a
 runtime-completion channel; callers use dependency release plus engine-owned
-settle checks instead.
+settle checks instead. When shutdown has already started, the engine still
+processes late worker completions for bookkeeping, but it immediately converts
+any newly-ready frontier back into shutdown completion instead of reopening the
+dispatch path.
 
 When the dependency graph releases `ActionUpdateSynced` or `ActionCleanup`,
 the engine does not spend worker capacity on them. It commits the matching

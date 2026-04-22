@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -159,4 +160,87 @@ func TestEngineFlow_CompleteOutboxAsShutdown_CompletesTrackedActions(t *testing.
 	flow.completeOutboxAsShutdown([]*TrackedAction{root})
 
 	assert.Equal(t, 0, flow.depGraph.InFlightCount())
+}
+
+// Validates: R-2.10.5, R-6.8
+func TestOneShotRunner_HandleOneShotCompletion_AfterFatalCompletesReleasedReadyAsShutdown(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	runner := newOneShotRunner(eng.Engine)
+	runner.depGraph = NewDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *TrackedAction, 1)
+
+	root := runner.depGraph.Add(&Action{
+		Type: ActionUpload,
+		Path: "root.txt",
+	}, 1, nil)
+	require.NotNil(t, root)
+
+	child := runner.depGraph.Add(&Action{
+		Type: ActionUpload,
+		Path: "child.txt",
+	}, 2, []int64{1})
+	assert.Nil(t, child)
+
+	outbox, err := runner.handleOneShotCompletion(
+		t.Context(),
+		nil,
+		nil,
+		nil,
+		assert.AnError,
+		&ActionCompletion{
+			ActionID:   1,
+			Path:       "root.txt",
+			ActionType: ActionUpload,
+			Success:    true,
+		},
+	)
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Empty(t, outbox, "shutdown completion should consume newly-ready dependents immediately")
+	assert.Equal(t, 0, runner.depGraph.InFlightCount(), "released dependents should complete as shutdown work, not remain dispatchable")
+}
+
+// Validates: R-2.10.5, R-6.8
+func TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReadyAsShutdown(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	runner := newOneShotRunner(eng.Engine)
+	runner.depGraph = NewDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *TrackedAction, 1)
+
+	root := runner.depGraph.Add(&Action{
+		Type: ActionUpload,
+		Path: "root.txt",
+	}, 1, nil)
+	require.NotNil(t, root)
+
+	child := runner.depGraph.Add(&Action{
+		Type: ActionUpload,
+		Path: "child.txt",
+	}, 2, []int64{1})
+	assert.Nil(t, child)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	outbox, err := runner.handleOneShotCompletion(
+		ctx,
+		nil,
+		nil,
+		nil,
+		nil,
+		&ActionCompletion{
+			ActionID:   1,
+			Path:       "root.txt",
+			ActionType: ActionUpload,
+			Success:    true,
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, outbox, "canceled shutdown completion should consume newly-ready dependents immediately")
+	assert.Equal(t, 0, runner.depGraph.InFlightCount(), "released dependents should complete as shutdown work after cancellation too")
 }

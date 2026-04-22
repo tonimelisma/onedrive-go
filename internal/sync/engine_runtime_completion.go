@@ -3,10 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
-	"github.com/tonimelisma/onedrive-go/internal/authstate"
-	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
@@ -49,40 +46,6 @@ func (flow *engineFlow) processActionCompletion(
 		return dispatched, err
 	}
 	return append(dispatched, dueHeld...), nil
-}
-
-func (flow *engineFlow) applySuccessEffects(ctx context.Context, r *ActionCompletion) {
-	flow.succeeded++
-	flow.clearRetryWorkOnSuccess(ctx, r)
-	if flow.scopeState != nil {
-		flow.scopeState.RecordSuccess(r)
-	}
-}
-
-func (flow *engineFlow) applyCompletionSuccess(
-	ctx context.Context,
-	watch *watchRuntime,
-	current *TrackedAction,
-	r *ActionCompletion,
-) ([]*TrackedAction, error) {
-	flow.markFinished(current)
-	flow.applySuccessEffects(ctx, r)
-	return flow.admitReadyAfterSuccessfulAction(ctx, watch, r.ActionID, "successful action completion")
-}
-
-func (flow *engineFlow) applyPublicationSuccess(
-	ctx context.Context,
-	watch *watchRuntime,
-	current *TrackedAction,
-) ([]*TrackedAction, error) {
-	if current == nil {
-		return nil, nil
-	}
-
-	flow.markFinished(current)
-	flow.succeeded++
-	flow.clearRetryWorkOnActionSuccess(ctx, &current.Action)
-	return flow.admitReadyAfterSuccessfulAction(ctx, watch, current.ID, "publication action completion")
 }
 
 func (flow *engineFlow) processNormalDecision(
@@ -166,48 +129,4 @@ func (flow *engineFlow) processTrialDecision(
 	}
 
 	return nil, nil
-}
-
-func fatalResultError(r *ActionCompletion) error {
-	if r.Err != nil {
-		return fmt.Errorf("sync: unauthorized action completion for %s: %w", r.Path, r.Err)
-	}
-
-	return fmt.Errorf("sync: unauthorized action completion for %s", r.Path)
-}
-
-func (flow *engineFlow) applyFatalAuthEffects(
-	ctx context.Context,
-	watch *watchRuntime,
-	r *ActionCompletion,
-	conditionKey ConditionKey,
-) {
-	logFields := flow.summaryLogFields(
-		errclass.ClassFatal,
-		conditionKey,
-		r.Path,
-		ScopeKey{},
-	)
-
-	if flow.engine.permHandler != nil && flow.engine.permHandler.accountEmail != "" {
-		if err := config.MarkAccountAuthRequired(
-			flow.engine.dataDir,
-			flow.engine.permHandler.accountEmail,
-			authstate.ReasonSyncAuthRejected,
-		); err != nil {
-			fields := append([]any{}, logFields...)
-			fields = append(fields,
-				slog.String("account", flow.engine.permHandler.accountEmail),
-				slog.String("error", err.Error()),
-			)
-			flow.engine.logger.Warn("fatal unauthorized: failed to persist catalog auth requirement", fields...)
-		}
-	}
-
-	flow.engine.logger.Error("authentication required: sync stopping",
-		logFields...,
-	)
-
-	_ = ctx
-	_ = watch
 }

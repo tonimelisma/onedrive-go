@@ -140,19 +140,23 @@ func (r *oneShotRunner) handleOneShotCompletion(
 	fatalErr error,
 	completion *ActionCompletion,
 ) ([]*TrackedAction, error) {
+	if fatalErr != nil || ctx.Err() != nil {
+		if err := r.processShutdownCompletion(ctx, completion, bl); err != nil {
+			r.logSuppressedShutdownCompletionError(completion, err)
+		}
+		return outbox, fatalErr
+	}
+
 	ready, completionErr := r.processActionCompletion(ctx, nil, completion, bl)
 	if completionErr == nil {
 		reduced, err := r.reduceReadyFrontier(ctx, nil, bl, ready)
-		if err == nil || fatalErr != nil {
-			return append(outbox, reduced...), fatalErr
+		if err == nil {
+			return append(outbox, reduced...), nil
 		}
 		outbox = append(outbox, reduced...)
 		fatalErr = err
 	} else {
 		outbox = append(outbox, ready...)
-		if fatalErr != nil {
-			return outbox, fatalErr
-		}
 		fatalErr = completionErr
 	}
 
@@ -185,22 +189,6 @@ func (r *oneShotRunner) completeQueuedDispatchAsShutdown() {
 			return
 		}
 	}
-}
-
-func (f *engineFlow) completeOutboxAsShutdown(outbox []*TrackedAction) {
-	for _, ta := range outbox {
-		f.completeTrackedActionAsShutdown(ta)
-	}
-}
-
-func (f *engineFlow) completeTrackedActionAsShutdown(ta *TrackedAction) {
-	if ta == nil {
-		return
-	}
-
-	f.markFinished(ta)
-	ready := f.completeDepGraphAction(ta.ID, "completeTrackedActionAsShutdown")
-	f.completeSubtree(ready)
 }
 
 func (r *oneShotRunner) isOneShotQuiescent(outbox []*TrackedAction) bool {
