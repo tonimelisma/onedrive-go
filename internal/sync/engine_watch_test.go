@@ -436,10 +436,15 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 		Size:     5,
 	}}, ""))
 
-	dispatch := testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
+	rt := testWatchRuntime(t, eng)
+	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
+		bl:   bl,
+		mode: SyncBidirectional,
+	}, DirtyBatch{
 		Paths: []string{"already-synced.txt"},
-	}, bl, SyncBidirectional)
-	assert.Nil(t, dispatch)
+	})
+	require.NoError(t, err)
+	assert.Empty(t, rt.currentOutbox())
 }
 
 // TestRunWatch_BusyRuntimeQueuesDirtyReplanInsteadOfOverlappingPrepare

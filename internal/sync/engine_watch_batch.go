@@ -2,19 +2,28 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 )
 
-// processDirtyBatch refreshes current truth and replans from SQLite-owned
-// comparison/reconciliation state. Dirty batches are scheduler hints only;
-// the actionable set comes from snapshots plus baseline, never from the batch
+// runSteadyStateReplan is the single steady-state watch replan entry. Dirty
+// batches are scheduler hints only; the actionable set always comes from
+// committed current truth plus durable held-work state, never from the batch
 // payload itself.
-func (rt *watchRuntime) processDirtyBatch(
+//
+// Failure policy is explicit:
+//   - local observation failure is recoverable and drops the batch
+//   - once the engine depends on authoritative local snapshot or runtime state,
+//     failures are fatal to watch
+func (rt *watchRuntime) runSteadyStateReplan(
 	ctx context.Context,
+	p *watchPipeline,
 	batch DirtyBatch,
-	bl *Baseline,
-	mode Mode,
-) []*TrackedAction {
+) error {
+	if p == nil || p.bl == nil {
+		return fmt.Errorf("sync: steady-state replan requires loaded baseline")
+	}
+
 	rt.beginSyncStatusBatch(rt.engine.nowFunc())
 	rt.engine.logger.Info("processing watch dirty batch",
 		slog.Int("paths", len(batch.Paths)),
@@ -23,10 +32,10 @@ func (rt *watchRuntime) processDirtyBatch(
 	rt.engine.collector().RecordWatchBatch(len(batch.Paths))
 
 	observeStart := rt.engine.nowFunc()
-	localResult, err := rt.observeLocalChanges(ctx, rt, bl)
+	localResult, err := rt.observeLocalChanges(ctx, rt, p.bl)
 	if err != nil {
 		rt.clearSyncStatusBatch()
-		rt.engine.logger.Error("watch local refresh failed, skipping dirty batch",
+		rt.engine.logger.Error("watch local refresh failed, dropping dirty batch",
 			slog.String("error", err.Error()),
 		)
 		return nil
@@ -34,38 +43,27 @@ func (rt *watchRuntime) processDirtyBatch(
 	commitErr := rt.commitObservedLocalSnapshot(ctx, false, localResult)
 	if commitErr != nil {
 		rt.clearSyncStatusBatch()
-		rt.engine.logger.Error("watch local snapshot commit failed, skipping dirty batch",
-			slog.String("error", commitErr.Error()),
-		)
-		return nil
+		return fmt.Errorf("sync: watch local snapshot commit: %w", commitErr)
 	}
 	rt.engine.collector().RecordObserve(len(batch.Paths), rt.engine.since(observeStart))
 
-	prepared, err := rt.prepareDirtyCurrentPlan(ctx, bl, mode)
+	prepared, err := rt.prepareDirtyCurrentPlan(ctx, p.bl, p.mode)
 	if err != nil {
 		rt.clearSyncStatusBatch()
-		rt.engine.logger.Error("watch current-plan prepare failed, skipping dirty batch",
-			slog.String("error", err.Error()),
-		)
-		return nil
+		return fmt.Errorf("sync: watch replan prepare: %w", err)
 	}
 
-	dispatch, dispatched, err := rt.startPreparedRuntime(ctx, prepared, bl, rt)
+	dispatch, dispatched, err := rt.startPreparedRuntime(ctx, prepared, p.bl, rt)
 	if err != nil {
 		rt.clearSyncStatusBatch()
-		rt.engine.logger.Error("watch dispatch failed, skipping dirty batch",
-			slog.String("error", err.Error()),
-		)
-		return nil
+		return fmt.Errorf("sync: watch replan start runtime: %w", err)
 	}
+	rt.replaceOutbox(dispatch)
 	if !dispatched {
-		rt.finishSyncStatusBatch(ctx, mode)
+		rt.finishSyncStatusBatch(ctx, p.mode)
 		return nil
 	}
-	rt.maybeFinishSyncStatusBatch(ctx, mode, dispatch)
-	if len(dispatch) == 0 {
-		return nil
-	}
+	rt.maybeFinishSyncStatusBatch(ctx, p.mode, rt.currentOutbox())
 
-	return dispatch
+	return nil
 }

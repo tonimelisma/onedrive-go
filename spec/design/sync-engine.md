@@ -181,7 +181,10 @@ Local watcher events, remote delta batches, websocket wakes, and full remote
 refresh results are scheduler hints only. After debounce or wake, watch
 mode refreshes current truth, runs SQL comparison/reconciliation, rebuilds the
 current actionable set in Go, reconciles durable retry/blocker state, and then
-admits runnable actions.
+admits runnable actions. There is one steady-state replan entry for that work:
+refresh local truth, load the already-committed remote/current state, build the
+current plan, prepare the runtime handoff, then append the resulting concrete
+worker frontier.
 
 Watch runtime replacement is linear: one current runtime graph at a time.
 Dirty observation while work is still queued or running sets a pending replan
@@ -216,6 +219,12 @@ Runtime completion handling follows the same boundary shape everywhere:
 classify the finished exact action, apply the resulting durable/runtime
 mutation, then release any due held work back into the ready frontier. It does
 not mix that decision step with worker-queue ownership.
+
+Watch replan failure policy is also explicit. Pre-authority local observation
+failure is recoverable and drops that dirty batch. Once the engine starts
+depending on authoritative local snapshot or runtime state, failure is fatal to
+the current watch session: local snapshot commit, prepare-from-committed-truth,
+and runtime startup/admission all fail closed.
 
 ### Maintenance And Refresh
 

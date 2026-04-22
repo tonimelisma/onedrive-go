@@ -276,7 +276,11 @@ func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) erro
 			}
 			continue
 		}
-		if rt.runPendingDirtyReplan(ctx, p) {
+		replanned, err := rt.runPendingDirtyReplan(ctx, p)
+		if err != nil {
+			return err
+		}
+		if replanned {
 			continue
 		}
 
@@ -293,18 +297,17 @@ func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) erro
 func (rt *watchRuntime) runPendingDirtyReplan(
 	ctx context.Context,
 	p *watchPipeline,
-) bool {
+) (bool, error) {
 	if !rt.canPrepareNow() {
-		return false
+		return false, nil
 	}
 
 	batch, ok := rt.takePendingDirtyReplan()
 	if !ok {
-		return false
+		return false, nil
 	}
 
-	rt.appendOutbox(rt.processDirtyBatch(ctx, batch, p.bl, p.mode))
-	return true
+	return true, rt.runSteadyStateReplan(ctx, p, batch)
 }
 
 func (rt *watchRuntime) runWatchStep(
@@ -436,9 +439,9 @@ func (rt *watchRuntime) runBootstrapStep(
 		rt.consumeOutboxHead()
 		return false, nil
 	case batch, ok := <-p.batchReady:
-		nextOutbox, done := rt.handleBootstrapBatch(ctx, p, outbox, batch, ok)
+		nextOutbox, done, err := rt.handleBootstrapBatch(ctx, p, outbox, batch, ok)
 		rt.replaceOutbox(nextOutbox)
-		return done, nil
+		return done, err
 	case completion, ok := <-p.completions:
 		nextOutbox, done, err := rt.handleBootstrapCompletion(ctx, p, outbox, &completion, ok)
 		rt.replaceOutbox(nextOutbox)
@@ -491,12 +494,21 @@ func (rt *watchRuntime) handleBootstrapBatch(
 	outbox []*TrackedAction,
 	batch DirtyBatch,
 	ok bool,
-) ([]*TrackedAction, bool) {
+) ([]*TrackedAction, bool, error) {
 	if !ok {
-		return outbox, true
+		return outbox, true, nil
 	}
 
-	return append(outbox, rt.processDirtyBatch(ctx, batch, p.bl, p.mode)...), false
+	if !rt.canPrepareNow() {
+		rt.queueDirtyReplan(batch)
+		return outbox, false, nil
+	}
+
+	if err := rt.runSteadyStateReplan(ctx, p, batch); err != nil {
+		return nil, false, err
+	}
+
+	return rt.currentOutbox(), false, nil
 }
 
 func (rt *watchRuntime) handleBootstrapCompletion(

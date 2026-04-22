@@ -116,10 +116,15 @@ func TestProcessDirtyBatch_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare(t 
 	setupWatchEngine(t, dirtyEng)
 	dirtyBaseline, err := dirtyEng.baseline.Load(ctx)
 	require.NoError(t, err)
-	dispatch := testWatchRuntime(t, dirtyEng).processDirtyBatch(ctx, DirtyBatch{
+	rt := testWatchRuntime(t, dirtyEng)
+	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
+		bl:   dirtyBaseline,
+		mode: SyncBidirectional,
+	}, DirtyBatch{
 		Paths: []string{"stale.txt"},
-	}, dirtyBaseline, SyncBidirectional)
-	assert.Nil(t, dispatch)
+	})
+	require.NoError(t, err)
+	assert.Empty(t, rt.currentOutbox())
 
 	dirtyRetryRows, err := dirtyEng.baseline.ListRetryWork(ctx)
 	require.NoError(t, err)
