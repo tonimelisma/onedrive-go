@@ -21,7 +21,7 @@ func (flow *engineFlow) applyCompletionSuccess(
 	return flow.admitReadyAfterSuccessfulAction(ctx, watch, r.ActionID, "successful action completion")
 }
 
-func (flow *engineFlow) applyPublicationSuccess(
+func (flow *engineFlow) drainPublicationSuccess(
 	ctx context.Context,
 	watch *watchRuntime,
 	current *TrackedAction,

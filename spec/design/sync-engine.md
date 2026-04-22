@@ -234,18 +234,19 @@ prepare/reconcile. Dependency tracking stays inside `DepGraph`, but runtime
 completion does not: the engine owns quiescence and no longer waits on a
 graph-owned completion signal.
 
-Released held work always re-enters publication reduction before any worker
-dispatch. Timer-released `ActionUpdateSynced` and `ActionCleanup` actions stay
-engine-side, commit through the store, and unlock dependents without ever
-crossing into the worker pool.
+Released held work always re-enters the engine-owned publication-drain stage
+before any worker dispatch. Timer-released `ActionUpdateSynced` and
+`ActionCleanup` actions stay engine-side, commit through the store, and unlock
+dependents without ever crossing into the worker pool.
 
 Action completion drain stays inside the engine boundary. When a completion
 unlocks publication-only dependents, watch mode commits those mutations
 synchronously and keeps draining them on the engine/store side until concrete
-worker actions are the only dispatchable work left. That frontier reduction is
-transform-only: it takes exact ready actions and returns only the concrete
-worker frontier. One-shot and watch coordinators still own their outbox state
-explicitly.
+worker actions are the only dispatchable work left. That publication drain is
+an effectful engine/store stage, not a pure transform: it durably applies
+publication mutations, routes publication failures through normal completion
+classification, and returns only the remaining concrete worker frontier.
+One-shot and watch coordinators still own their outbox state explicitly.
 
 Runtime completion handling follows the same boundary shape everywhere:
 classify the finished exact action, apply the resulting durable/runtime
@@ -258,8 +259,9 @@ one mixed result-flow file plus separate controller-shaped helpers.
 
 Watch replan failure policy is also explicit. Pre-authority local observation
 failure is recoverable and drops that replan trigger. Once the engine starts
-depending on authoritative local snapshot or runtime state, failure is fatal to
-the current watch session: local snapshot commit, prepare-from-committed-truth,
+depending on authoritative current-truth writes or runtime state, failure is
+fatal to the current watch session: remote observation apply, observation
+findings reconciliation, local snapshot commit, prepare-from-committed-truth,
 and runtime startup/admission all fail closed. Shutdown cancellation is the
 one exception: if context cancellation lands during that steady-state replan
 handoff, the loop clears the best-effort sync-status batch and exits cleanly

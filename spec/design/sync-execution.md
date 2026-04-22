@@ -35,7 +35,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | --- | --- |
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes requeue for replan instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition` |
-| Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication reduction path. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestReduceReadyFrontier_DoesNotReleaseUnrelatedHeldWork` |
+| Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestDrainPublicationFrontier_DoesNotReleaseUnrelatedHeldWork` |
 
 ## Worker And Dependency Model
 
@@ -62,7 +62,7 @@ When the dependency graph releases `ActionUpdateSynced` or `ActionCleanup`,
 the engine does not spend worker capacity on them. It commits the matching
 baseline mutation synchronously, marks that graph node successful, drains any
 further publication-only dependents through the engine-owned publication
-reduction stage, and only then releases concrete dependents for worker
+drain stage, and only then releases concrete dependents for worker
 dispatch.
 
 ## Publication-Only Actions
@@ -85,16 +85,17 @@ completion. Publication failure still uses the shared result classifier so the
 exact publication action can persist `retry_work` and remain held in the
 current runtime instead of terminating the loop on a transient store error.
 When held publication work becomes due again, the engine routes it back through
-publication reduction before any worker dispatch. Workers reject
+the publication-drain stage before any worker dispatch. Workers reject
 publication-only action types only as an invariant guard; normal runtime flow
 must never send those actions to the worker pool.
 
-Publication reduction itself is not an outbox helper. It is a frontier
-transform owned by the engine: callers hand it exact ready actions and receive
-back only concrete worker work to append to their own dispatch queue. Watch
-bootstrap, steady-state completions, and held-release ticks all re-enter that
-same transform through watch-owned frontier helpers before anything reaches the
-worker outbox.
+Publication drain itself is not an outbox helper. It is an effectful
+engine/store stage: callers hand it exact ready actions, the engine durably
+applies publication mutations and routes publication failures through normal
+completion handling, and only the surviving concrete worker work is returned to
+the caller's dispatch queue. Watch bootstrap, steady-state completions, and
+held-release ticks all re-enter that same stage through watch-owned frontier
+helpers before anything reaches the worker outbox.
 
 ## File And Folder Mutation
 

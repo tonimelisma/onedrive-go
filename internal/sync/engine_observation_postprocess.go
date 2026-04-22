@@ -151,12 +151,13 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 	}
 
 	findings := batch.findings
-	rt.reconcileObservationFindingsBatch(
+	if err := rt.applyObservationFindingsBatch(
 		ctx,
-		rt,
 		&findings,
 		batchObservationFailureMessage(batch.source),
-	)
+	); err != nil {
+		return err
+	}
 
 	if batch.armFullRefreshTimer {
 		if err := rt.armFullRefreshTimer(ctx); err != nil {
@@ -231,17 +232,13 @@ func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 	}
 
 	switch batch.source {
-	case remoteObservationBatchPrimaryWatch:
+	case remoteObservationBatchPrimaryWatch, remoteObservationBatchSharedRoot:
 		batch.finishApplied(err)
 		if ctx.Err() != nil {
 			return err
 		}
 
-		return newFatalObserverError(fmt.Errorf("apply primary watch batch: %w", err))
-	case remoteObservationBatchSharedRoot:
-		rt.logCommittedSharedRootBatchFailure("apply watch batch", err, len(batch.emitted))
-		batch.finishApplied(nil)
-		return nil
+		return newFatalObserverError(fmt.Errorf("apply %s batch: %w", batch.source, err))
 	case remoteObservationBatchFullRefresh:
 		rt.engine.logger.Error("failed to apply full remote refresh batch",
 			slog.String("error", err.Error()),
