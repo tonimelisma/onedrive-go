@@ -45,16 +45,16 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *Baseline) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
-				done, err := rt.handleBootstrapCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
+				rt.enterBootstrap()
+				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
 					DriveID:    rt.engine.driveID,
 					ActionType: ActionDownload,
 					Success:    true,
 					ActionID:   1,
-				}, true)
+				})
 				require.NoError(t, err)
-				assert.False(t, done)
 				assert.Equal(t, 0, rt.depGraph.InFlightCount())
 			},
 		},
@@ -154,7 +154,7 @@ func TestRuntimeArchitecture_SteadyStatePrepareUsesCommittedTruthOnly(t *testing
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	prepared, err := rt.prepareSteadyStateCurrentPlan(ctx, bl, SyncDownloadOnly)
+	prepared, err := rt.runSteadyStateCurrentPlan(ctx, bl, SyncDownloadOnly)
 	require.NoError(t, err)
 	require.NotNil(t, prepared)
 	require.Len(t, prepared.Plan.Actions, 1)
@@ -239,16 +239,16 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *Baseline) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
-				done, err := rt.handleBootstrapCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
+				rt.enterBootstrap()
+				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
 					DriveID:    rt.engine.driveID,
 					ActionType: ActionDownload,
 					Success:    true,
 					ActionID:   1,
-				}, true)
+				})
 				require.NoError(t, err)
-				assert.False(t, done)
 			},
 		},
 		{

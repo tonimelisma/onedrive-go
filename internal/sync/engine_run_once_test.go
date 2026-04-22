@@ -244,7 +244,7 @@ func TestRunOnce_Bidirectional_FullRun(t *testing.T) {
 }
 
 // Validates: R-2.1.3
-func TestLoadCurrentActionPlanInputsTx_ReadsSnapshotWritesFromProvidedTransaction(t *testing.T) {
+func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -266,14 +266,14 @@ func TestLoadCurrentActionPlanInputsTx_ReadsSnapshotWritesFromProvidedTransactio
 		ContentIdentity: "hash",
 	}}))
 
-	inputs, err := flow.loadCurrentActionPlanInputsTx(ctx, eng.baseline, tx, eng.driveID)
+	inputs, err := flow.loadCurrentInputsStageTx(ctx, eng.baseline, tx, eng.driveID)
 	require.NoError(t, err)
 	require.Len(t, inputs.localRows, 1)
 	assert.Equal(t, "tx-only.txt", inputs.localRows[0].Path)
 }
 
 // Validates: R-2.10.33
-func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
+func TestReconcileRuntimeState_PrunesRetryAndScopeState(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -316,7 +316,7 @@ func TestMaterializeCurrentActionPlan_PrunesRetryAndScopeState(t *testing.T) {
 		LastSeenAt:   6,
 	}))
 
-	err := flow.reconcileDurablePlanState(ctx, &ActionPlan{
+	err := flow.reconcileRuntimeState(ctx, &ActionPlan{
 		Actions: []Action{{
 			Type: ActionUpload,
 			Path: "keep.txt",
@@ -454,7 +454,7 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	result, err := flow.buildDryRunCurrentActionPlan(ctx, bl, false)
+	result, err := flow.loadDryRunCurrentInputs(ctx, bl, false)
 	require.NoError(t, err)
 
 	localPaths := make([]string, 0, len(result.localRows))
@@ -494,7 +494,7 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 }
 
 // Validates: R-2.1.5
-func TestBuildDryRunCurrentActionPlan_ObservationFindingsStayScratchOnly(t *testing.T) {
+func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -526,7 +526,7 @@ func TestBuildDryRunCurrentActionPlan_ObservationFindingsStayScratchOnly(t *test
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	_, err = flow.buildDryRunCurrentActionPlan(ctx, bl, false)
+	_, err = flow.loadDryRunCurrentInputs(ctx, bl, false)
 	require.NoError(t, err)
 
 	liveObservationIssues, err := eng.baseline.ListObservationIssues(ctx)

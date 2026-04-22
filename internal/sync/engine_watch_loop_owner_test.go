@@ -22,7 +22,7 @@ func TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesAndReturnsToRunning(t *
 	assert.Equal(t, watchRuntimePhaseRunning, rt.phase())
 }
 
-func TestWatchRuntime_RunBootstrapStep_DispatchUsesSharedWatchHandler(t *testing.T) {
+func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapDispatchUsesSharedHandler(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -37,15 +37,16 @@ func TestWatchRuntime_RunBootstrapStep_DispatchUsesSharedWatchHandler(t *testing
 	}, 1, nil)
 	require.NotNil(t, action)
 	rt.replaceOutbox([]*TrackedAction{action})
+	rt.enterBootstrap()
 
-	done, err := rt.runBootstrapStep(t.Context(), &watchPipeline{runtime: rt}, nil)
+	done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{runtime: rt}, nil)
 	require.NoError(t, err)
 	assert.False(t, done)
 	assert.Equal(t, 1, rt.runningCount)
 	assert.Empty(t, rt.currentOutbox())
 }
 
-func TestWatchRuntime_RunWatchStepIdle_ContextCancelStartsDrain(t *testing.T) {
+func TestWatchRuntime_RunNonDrainingWatchStep_ContextCancelStartsDrain(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -54,13 +55,13 @@ func TestWatchRuntime_RunWatchStepIdle_ContextCancelStartsDrain(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	done, err := rt.runWatchStepIdle(ctx, &watchPipeline{runtime: rt})
+	done, err := rt.runNonDrainingWatchStep(ctx, &watchPipeline{runtime: rt}, nil)
 	require.NoError(t, err)
 	assert.False(t, done)
 	assert.True(t, rt.isDraining())
 }
 
-func TestWatchRuntime_RunWatchStepIdle_ConsumesReplanReady(t *testing.T) {
+func TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -68,7 +69,7 @@ func TestWatchRuntime_RunWatchStepIdle_ConsumesReplanReady(t *testing.T) {
 	rt := testWatchRuntime(t, eng)
 
 	replanReady := make(chan DirtyBatch, 1)
-	replanReady <- DirtyBatch{Paths: []string{"idle.txt"}}
+	replanReady <- DirtyBatch{}
 
 	type idleResult struct {
 		done bool
@@ -76,10 +77,10 @@ func TestWatchRuntime_RunWatchStepIdle_ConsumesReplanReady(t *testing.T) {
 	}
 	doneCh := make(chan idleResult, 1)
 	go func() {
-		done, err := rt.runWatchStepIdle(t.Context(), &watchPipeline{
+		done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{
 			runtime:     rt,
 			replanReady: replanReady,
-		})
+		}, nil)
 		doneCh <- idleResult{done: done, err: err}
 	}()
 
@@ -88,6 +89,6 @@ func TestWatchRuntime_RunWatchStepIdle_ConsumesReplanReady(t *testing.T) {
 		assert.False(t, result.done)
 		require.ErrorContains(t, result.err, "steady-state replan requires loaded baseline")
 	case <-time.After(time.Second):
-		t.Fatalf("runWatchStepIdle did not consume replanReady while idle")
+		t.Fatalf("runNonDrainingWatchStep did not consume replanReady while idle")
 	}
 }

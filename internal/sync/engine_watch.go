@@ -44,7 +44,7 @@ const quiescenceLogInterval = 30 * time.Second
 // steady-state replan path.
 // Blocks until the context is canceled, returning nil on clean shutdown.
 //
-// Flow: prepareStartupBaseline → initWatchInfra → bootstrapSync →
+// Flow: runStartupStage → initWatchInfra → bootstrapSync →
 // startObservers → runWatchLoop.
 // Unlike the old approach (calling RunOnce with throwaway infrastructure),
 // bootstrapSync dispatches through the same DepGraph, active scope working
@@ -57,7 +57,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) err
 	)
 
 	rt := newWatchRuntime(e)
-	bl, err := rt.prepareStartupBaseline(ctx, rt)
+	bl, err := rt.runStartupStage(ctx, rt)
 	if err != nil {
 		if isWatchShutdownError(ctx, err) {
 			return nil
@@ -237,7 +237,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 		return fmt.Errorf("sync: bootstrap requires startup-prepared baseline")
 	}
 
-	prepared, err := rt.prepareBootstrapCurrentPlan(ctx, pipe.bl, mode)
+	prepared, err := rt.runBootstrapCurrentPlan(ctx, pipe.bl, mode)
 	if err != nil {
 		return err
 	}
@@ -253,7 +253,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	rt.beginSyncStatusBatch(bootstrapStart)
 
 	// Dispatch through the watch runtime (same frontier path steady-state uses).
-	initialOutbox, _, err := rt.startPreparedRuntime(ctx, prepared, pipe.bl, rt)
+	initialOutbox, _, err := rt.startRuntimeStage(ctx, prepared, pipe.bl, rt)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap dispatch failed: %w", err)
 	}

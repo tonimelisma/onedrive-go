@@ -123,10 +123,10 @@ store owns the rows, while the engine owns the policy around them. Blocked
 rows are also canonicalized engine-side: all runtime paths persist
 `blocked=true`, the scope-derived `condition_type`, the exact `scope_key`, and
 the canonical `"blocked by scope: <scope>"` durable message.
-Current-truth loading for that policy lives in `engine_current_observe.go`,
-planner-input loading and dry-run scratch preparation live in
-`engine_current_projection.go` / `engine_current_dry_run.go`, and durable prune/load for runtime startup lives
-in `engine_runtime_prepare.go`.
+Current-truth loading, planner-input loading, and dry-run scratch preparation
+for that policy live in `engine_current_plan.go`, while startup/runtime
+reconcile and admission live in `engine_startup.go` and
+`engine_runtime_start.go`.
 
 The store does not own a mixed failure table, failure-role transitions,
 timer-time stale-row cleanup, or a store-owned grouped condition projection.

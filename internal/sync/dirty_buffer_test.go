@@ -66,7 +66,7 @@ func (t *fakeDirtyDebounceTimer) snapshot() (bool, int) {
 }
 
 // Validates: R-2.1.2
-func TestDirtyBuffer_FlushImmediate_DedupesPathsAndPreservesFullRefresh(t *testing.T) {
+func TestDirtyBuffer_FlushImmediate_CoalescesDirtySignalAndPreservesFullRefresh(t *testing.T) {
 	t.Parallel()
 
 	buf := NewDirtyBuffer(synctest.TestLogger(t))
@@ -77,7 +77,6 @@ func TestDirtyBuffer_FlushImmediate_DedupesPathsAndPreservesFullRefresh(t *testi
 
 	batch := buf.FlushImmediate()
 	require.NotNil(t, batch)
-	assert.Equal(t, []string{"a.txt", "b.txt"}, batch.Paths)
 	assert.True(t, batch.FullRefresh)
 	assert.Nil(t, buf.FlushImmediate())
 }
@@ -107,7 +106,6 @@ func TestDirtyBuffer_FlushDebounced_UsesLastObservationWindow(t *testing.T) {
 
 	select {
 	case batch := <-out:
-		assert.Equal(t, []string{"alpha.txt", "beta.txt"}, batch.Paths)
 		assert.False(t, batch.FullRefresh)
 	case <-time.After(250 * time.Millisecond):
 		require.Fail(t, "timed out waiting for dirty batch")

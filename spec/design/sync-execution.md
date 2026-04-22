@@ -9,9 +9,10 @@ Implements: R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4
 Execution takes a prepared current runtime, dispatches concrete side-effecting
 work through a dependency graph, runs workers, and reports one
 `ActionCompletion` per finished action. That prepared runtime handoff is
-assembled on the engine side by `engine_current_observe.go`,
-`engine_current_projection.go`, `engine_current_dry_run.go`, and `engine_runtime_prepare.go` before execution
-begins. Publication-only planner actions are not executor work: the engine
+assembled on the engine side by the shared pipeline in
+`engine_current_plan.go`, then admitted through `engine_runtime_start.go`
+before execution begins. Publication-only planner actions are not executor
+work: the engine
 reduces them directly through the store before workers see any concrete
 frontier.
 
@@ -35,7 +36,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | --- | --- |
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes requeue for replan instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition` |
-| Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestDrainPublicationFrontier_DoesNotReleaseUnrelatedHeldWork` |
+| Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
 
 ## Worker And Dependency Model
 

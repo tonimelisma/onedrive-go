@@ -440,9 +440,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{
-		Paths: []string{"already-synced.txt"},
-	})
+	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 }
@@ -477,16 +475,14 @@ func TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare(t *t
 	err = rt.handleWatchReplanReady(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{
-		Paths: []string{"overlapping.txt"},
-	})
+	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.True(t, rt.hasPendingReplan())
 
 	queued, ok := rt.takePendingReplan()
 	require.True(t, ok)
-	assert.Equal(t, []string{"overlapping.txt"}, queued.Paths)
+	assert.False(t, queued.FullRefresh)
 }
 
 // TestRunWatch_DownloadOnly_StartsLocalObserver verifies that download-only

@@ -44,7 +44,7 @@ func seedStaleRetryAndBlockScopeForPrepareTest(t *testing.T, ctx context.Context
 }
 
 // Validates: R-2.10.5
-func TestPrepareBootstrapCurrentPlan_MatchesOneShotLivePrepare(t *testing.T) {
+func TestRunBootstrapCurrentPlan_MatchesOneShotLiveCurrentPlan(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -72,7 +72,7 @@ func TestPrepareBootstrapCurrentPlan_MatchesOneShotLivePrepare(t *testing.T) {
 	require.NoError(t, err)
 	fullReconcile, err := oneShotEng.shouldRunFullRemoteRefresh(ctx, false)
 	require.NoError(t, err)
-	oneShotPrepared, err := newOneShotRunner(oneShotEng.Engine).prepareLiveCurrentPlan(ctx, oneShotBaseline, SyncDownloadOnly, RunOptions{
+	oneShotPrepared, err := newOneShotRunner(oneShotEng.Engine).runLiveCurrentPlan(ctx, oneShotBaseline, SyncDownloadOnly, RunOptions{
 		FullReconcile: fullReconcile,
 	})
 	require.NoError(t, err)
@@ -80,14 +80,14 @@ func TestPrepareBootstrapCurrentPlan_MatchesOneShotLivePrepare(t *testing.T) {
 	setupWatchEngine(t, watchEng)
 	watchBaseline, err := watchEng.baseline.Load(ctx)
 	require.NoError(t, err)
-	watchPrepared, err := testWatchRuntime(t, watchEng).prepareBootstrapCurrentPlan(ctx, watchBaseline, SyncDownloadOnly)
+	watchPrepared, err := testWatchRuntime(t, watchEng).runBootstrapCurrentPlan(ctx, watchBaseline, SyncDownloadOnly)
 	require.NoError(t, err)
 
 	assertPreparedCurrentPlanEqual(t, oneShotPrepared, watchPrepared)
 }
 
 // Validates: R-2.10.5
-func TestPrepareStartupBaseline_OneShotAndWatchShareStartupNormalization(t *testing.T) {
+func TestRunStartupStage_OneShotAndWatchShareStartupNormalization(t *testing.T) {
 	t.Parallel()
 
 	oneShotEng, _ := newTestEngine(t, &engineMockClient{})
@@ -107,12 +107,12 @@ func TestPrepareStartupBaseline_OneShotAndWatchShareStartupNormalization(t *test
 		NextTrialAt:   watchEng.nowFunc().Add(time.Minute),
 	}))
 
-	oneShotBaseline, err := newOneShotRunner(oneShotEng.Engine).prepareStartupBaseline(ctx, nil)
+	oneShotBaseline, err := newOneShotRunner(oneShotEng.Engine).runStartupStage(ctx, nil)
 	require.NoError(t, err)
 	require.NotNil(t, oneShotBaseline)
 
 	setupWatchEngine(t, watchEng)
-	watchBaseline, err := testWatchRuntime(t, watchEng).prepareStartupBaseline(ctx, testWatchRuntime(t, watchEng))
+	watchBaseline, err := testWatchRuntime(t, watchEng).runStartupStage(ctx, testWatchRuntime(t, watchEng))
 	require.NoError(t, err)
 	require.NotNil(t, watchBaseline)
 
@@ -126,7 +126,7 @@ func TestPrepareStartupBaseline_OneShotAndWatchShareStartupNormalization(t *test
 }
 
 // Validates: R-2.10.5
-func TestPrepareLiveCurrentPlan_FailsClosedWhenRemoteObservationReconcileFails(t *testing.T) {
+func TestRunLiveCurrentPlan_FailsClosedWhenRemoteObservationReconcileFails(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -162,7 +162,7 @@ func TestPrepareLiveCurrentPlan_FailsClosedWhenRemoteObservationReconcileFails(t
 
 	fullReconcile, err := eng.shouldRunFullRemoteRefresh(ctx, false)
 	require.NoError(t, err)
-	_, err = newOneShotRunner(eng.Engine).prepareLiveCurrentPlan(ctx, bl, SyncDownloadOnly, RunOptions{
+	_, err = newOneShotRunner(eng.Engine).runLiveCurrentPlan(ctx, bl, SyncDownloadOnly, RunOptions{
 		FullReconcile: fullReconcile,
 	})
 	require.Error(t, err)
@@ -194,7 +194,7 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
-	bl, err := rt.prepareStartupBaseline(ctx, rt)
+	bl, err := rt.runStartupStage(ctx, rt)
 	require.NoError(t, err)
 	var closeStore sync.Once
 	attachDebugEventRecorderWithHook(eng, func(event engineDebugEvent) {
@@ -251,7 +251,7 @@ func TestRunSteadyStateReplan_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare
 	setupWatchEngine(t, bootstrapEng)
 	bootstrapBaseline, err := bootstrapEng.baseline.Load(ctx)
 	require.NoError(t, err)
-	bootstrapPrepared, err := testWatchRuntime(t, bootstrapEng).prepareBootstrapCurrentPlan(ctx, bootstrapBaseline, SyncBidirectional)
+	bootstrapPrepared, err := testWatchRuntime(t, bootstrapEng).runBootstrapCurrentPlan(ctx, bootstrapBaseline, SyncBidirectional)
 	require.NoError(t, err)
 	assert.Empty(t, bootstrapPrepared.RetryRows)
 	assert.Empty(t, bootstrapPrepared.BlockScopes)
@@ -263,9 +263,7 @@ func TestRunSteadyStateReplan_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   dirtyBaseline,
 		mode: SyncBidirectional,
-	}, DirtyBatch{
-		Paths: []string{"stale.txt"},
-	})
+	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 
@@ -279,7 +277,7 @@ func TestRunSteadyStateReplan_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare
 }
 
 // Validates: R-2.10.5
-func TestPrepareRuntimeCurrentPlan_PrunesAndLoadsDurableRuntimeState(t *testing.T) {
+func TestReconcileRuntimeStateStage_PrunesAndLoadsDurableRuntimeState(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -300,13 +298,13 @@ func TestPrepareRuntimeCurrentPlan_PrunesAndLoadsDurableRuntimeState(t *testing.
 	require.NoError(t, err)
 
 	rt := testWatchRuntime(t, eng)
-	observed, err := rt.loadObservedCurrentState(ctx, nil)
+	observed, err := rt.loadObservedCurrentInputs(ctx, nil)
 	require.NoError(t, err)
 
-	build, err := rt.buildCurrentPlanFromObservedState(ctx, bl, SyncBidirectional, RunOptions{}, observed)
+	build, err := rt.buildCurrentPlanStage(ctx, bl, SyncBidirectional, RunOptions{}, observed)
 	require.NoError(t, err)
 
-	prepared, err := rt.prepareRuntimeCurrentPlan(ctx, build)
+	prepared, err := rt.reconcileRuntimeStateStage(ctx, build)
 	require.NoError(t, err)
 
 	assert.Empty(t, prepared.RetryRows)
@@ -314,7 +312,7 @@ func TestPrepareRuntimeCurrentPlan_PrunesAndLoadsDurableRuntimeState(t *testing.
 }
 
 // Validates: R-2.10.5
-func TestPrepareDryRunCurrentPlan_LeavesDurableRuntimeStateUntouched(t *testing.T) {
+func TestKeepCurrentPlanBuild_LeavesDurableRuntimeStateUntouched(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -337,10 +335,10 @@ func TestPrepareDryRunCurrentPlan_LeavesDurableRuntimeStateUntouched(t *testing.
 	observed, err := runner.observeDryRunCurrentState(ctx, bl, false)
 	require.NoError(t, err)
 
-	build, err := runner.buildCurrentPlanFromObservedState(ctx, bl, SyncBidirectional, RunOptions{DryRun: true}, observed)
+	build, err := runner.buildCurrentPlanStage(ctx, bl, SyncBidirectional, RunOptions{DryRun: true}, observed)
 	require.NoError(t, err)
 
-	prepared := runner.engineFlow.prepareDryRunCurrentPlan(build)
+	prepared := runner.keepCurrentPlanBuild(build)
 	require.NotNil(t, prepared)
 	assert.Empty(t, prepared.RetryRows)
 	assert.Empty(t, prepared.BlockScopes)

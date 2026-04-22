@@ -6,7 +6,6 @@ package sync
 import (
 	"context"
 	"log/slog"
-	"sort"
 	"sync"
 	"time"
 )
@@ -49,19 +48,19 @@ func newRealDebounceTimer(delay time.Duration) debounceTimer {
 	return &realDebounceTimer{timer: time.NewTimer(delay)}
 }
 
-// DirtyBatch is a debounced scheduling signal for refresh/replan work. It is
-// intentionally smaller than planner input: observation records only what may
-// need fresh truth, not what the eventual action set should be.
+// DirtyBatch is a debounced scheduling signal for refresh/replan work. The
+// signal itself means "replan from current truth now"; FullRefresh is the only
+// additional scheduler hint the runtime preserves.
 type DirtyBatch struct {
-	Paths       []string
 	FullRefresh bool
 }
 
-// DirtyBuffer coalesces dirty paths and full-refresh requests into debounced
-// scheduling batches for the snapshot-first runtime.
+// DirtyBuffer coalesces dirty observations into debounced replan signals for
+// the snapshot-first runtime. It deliberately does not preserve path subsets or
+// event history because the runtime always replans from committed current truth.
 type DirtyBuffer struct {
-	mu          sync.Mutex // guards pending, fullRefresh, and notify
-	pending     map[string]struct{}
+	mu          sync.Mutex // guards dirty, fullRefresh, and notify
+	dirty       bool
 	fullRefresh bool
 	notify      chan struct{}
 	logger      *slog.Logger
@@ -70,7 +69,6 @@ type DirtyBuffer struct {
 
 func NewDirtyBuffer(logger *slog.Logger) *DirtyBuffer {
 	return &DirtyBuffer{
-		pending:  make(map[string]struct{}),
 		logger:   logger,
 		newTimer: newRealDebounceTimer,
 	}
@@ -81,24 +79,9 @@ func (b *DirtyBuffer) MarkPath(path string) {
 	defer b.mu.Unlock()
 
 	if path != "" {
-		b.pending[path] = struct{}{}
+		b.dirty = true
 	}
 	b.signalNewLocked()
-}
-
-func (b *DirtyBuffer) MarkPaths(paths []string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	for _, path := range paths {
-		if path == "" {
-			continue
-		}
-		b.pending[path] = struct{}{}
-	}
-	if len(paths) > 0 {
-		b.signalNewLocked()
-	}
 }
 
 func (b *DirtyBuffer) MarkFullRefresh() {
@@ -109,32 +92,18 @@ func (b *DirtyBuffer) MarkFullRefresh() {
 	b.signalNewLocked()
 }
 
-func (b *DirtyBuffer) Len() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return len(b.pending)
-}
-
 func (b *DirtyBuffer) FlushImmediate() *DirtyBatch {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if len(b.pending) == 0 && !b.fullRefresh {
+	if !b.dirty && !b.fullRefresh {
 		return nil
 	}
 
-	paths := make([]string, 0, len(b.pending))
-	for path := range b.pending {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
 	batch := &DirtyBatch{
-		Paths:       paths,
 		FullRefresh: b.fullRefresh,
 	}
-	b.pending = make(map[string]struct{})
+	b.dirty = false
 	b.fullRefresh = false
 
 	return batch
@@ -174,7 +143,6 @@ func (b *DirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, 
 				case out <- *batch:
 				default:
 					b.logger.Warn("dirty buffer final drain discarded: output channel full",
-						slog.Int("paths", len(batch.Paths)),
 						slog.Bool("full_refresh", batch.FullRefresh),
 					)
 				}
