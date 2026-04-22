@@ -86,7 +86,7 @@ Permission handling is intentionally split three ways:
   `engine_runtime_permission_bridge.go`, and `engine_runtime_held.go`)
   persists blocked `retry_work`, applies permission outcomes, activates or
   releases timed write scopes, and emits engine-owned logs without a separate
-  controller shell
+  wrapper layer
 
 Normal completion handling and trial reclassification both reuse the same
 engine helper to gather permission evidence and call `DecidePermissionOutcome`.
@@ -130,9 +130,11 @@ and runtime startup. Observation remains entrypoint-specific, but once an
 entrypoint has produced observed current truth the engine runs the same named
 stage sequence: load planner inputs, build the current action plan from those
 observed inputs, then prepare the runtime handoff by reconciling durable
-retry/scope state and loading surviving `retry_work` / `block_scopes`.
-Stale `retry_work` and empty `block_scopes` are pruned there, not from timer
-held-release paths.
+retry/scope state and loading surviving `retry_work` / `block_scopes`. In
+code, `engine_current_observe.go` owns the current-truth load/commit boundary
+while `engine_runtime_prepare.go` owns the observed-state -> build ->
+prepare handoff. Stale `retry_work` and empty `block_scopes` are pruned
+there, not from timer held-release paths.
 
 Scope startup cleanup follows the same policy with a deliberate
 decision-then-apply split: the engine first derives which persisted scopes are
@@ -152,7 +154,9 @@ The top-level coordinators should stay at that stage level rather than
 inlining planner input loads, durable prune/load logic, or runtime-start
 bookkeeping. The same rule applies to execution-only publication drain
 helpers and post-sync housekeeping: keep them next to their stage so a reader
-can see the flow at a glance.
+can see the flow at a glance. The prepare half should read from
+`engine_runtime_prepare.go`; observation/load helpers should read from
+`engine_current_observe.go`.
 
 Full-remote-refresh cadence is restart-safe even when a full remote refresh returns
 no delta cursor. The engine still advances the persisted cadence in

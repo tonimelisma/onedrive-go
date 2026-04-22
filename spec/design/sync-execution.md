@@ -8,9 +8,11 @@ Implements: R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4
 
 Execution takes a prepared current runtime, dispatches concrete side-effecting
 work through a dependency graph, runs workers, and reports one
-`ActionCompletion` per finished action. Publication-only planner actions are
-not executor work: the engine reduces them directly through the store before
-workers see any concrete frontier.
+`ActionCompletion` per finished action. That prepared runtime handoff is
+assembled on the engine side by `engine_current_observe.go` and
+`engine_runtime_prepare.go` before execution begins. Publication-only planner
+actions are not executor work: the engine reduces them directly through the
+store before workers see any concrete frontier.
 
 The executor does **not** own retry policy, durable failure classification, or
 scope lifecycle. It performs one action and reports the concrete outcome.
