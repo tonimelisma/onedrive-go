@@ -120,6 +120,8 @@ publication reduction. The store does not split publication retries into a
 second durable table. Admission, completion, held-release, and
 permission-driven runtime mutation all act on that same durable lane; the
 store owns the rows, while the engine owns the policy around them.
+Current-truth loading for that policy lives in `engine_current_observe.go`,
+while durable prune/load for runtime startup lives in `engine_runtime_prepare.go`.
 
 The store does not own a mixed failure table, failure-role transitions,
 timer-time stale-row cleanup, or a store-owned grouped condition projection.
