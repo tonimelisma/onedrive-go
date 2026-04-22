@@ -20,7 +20,7 @@ const periodicScanJitterDivisor = 10
 const (
 	defaultPollInterval = 5 * time.Minute
 	defaultDebounce     = 5 * time.Second
-	watchEventBuf       = 256
+	watchObservationBuf = 256
 	// watchResultBuf is the buffer size for the action completion channel in watch
 	// mode. Large enough for typical batches without blocking workers.
 	watchResultBuf = 4096
@@ -363,8 +363,8 @@ func (rt *watchRuntime) finishBootstrapAfterActions(
 func (rt *watchRuntime) startObservers(
 	ctx context.Context, bl *Baseline, opts WatchOptions,
 ) (<-chan error, int, <-chan []SkippedItem, <-chan ChangeEvent, <-chan remoteObservationBatch) {
-	localEvents := make(chan ChangeEvent, watchEventBuf)
-	remoteBatches := make(chan remoteObservationBatch, watchEventBuf)
+	localEvents := make(chan ChangeEvent, watchObservationBuf)
+	remoteBatches := make(chan remoteObservationBatch, watchObservationBuf)
 	errs := make(chan error, 2)
 
 	var obsWg stdsync.WaitGroup

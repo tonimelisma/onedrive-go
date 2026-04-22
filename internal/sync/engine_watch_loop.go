@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 )
 
 // runWatchUntilQuiescent drives the bootstrap watch loop until all work due
@@ -18,29 +19,33 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 	ticker := rt.engine.newTicker(quiescenceLogInterval)
 	defer stopTicker(ticker)
 
+	rt.enterBootstrap()
 	rt.replaceOutbox(initialOutbox)
-	logC := tickerChan(ticker)
+
+	return rt.runWatchLoop(ctx, p, tickerChan(ticker))
+}
+
+// runWatchLoop owns steady-state watch execution. The same goroutine handles
+// observed replans, action completions, retry/trial timers, reconcile
+// completions, and outbox draining.
+func (rt *watchRuntime) runWatchLoop(
+	ctx context.Context,
+	p *watchPipeline,
+	bootstrapLogC ...<-chan time.Time,
+) error {
+	if len(bootstrapLogC) == 0 {
+		rt.replaceOutbox(nil)
+	}
+
+	var logC <-chan time.Time
+	if len(bootstrapLogC) > 0 {
+		logC = bootstrapLogC[0]
+	}
 
 	for {
-		if ctx.Err() != nil && !rt.isDraining() {
-			rt.beginWatchDrain(ctx, p)
-		}
-		if rt.isDraining() {
-			done, err := rt.runDrainStep(ctx, p)
-			if err != nil {
-				return err
-			}
-			if done {
-				return nil
-			}
-			continue
-		}
+		rt.beginWatchDrainIfCanceled(ctx, p)
 
-		if rt.isBootstrapQuiescent() {
-			return nil
-		}
-
-		done, err := rt.runBootstrapStep(ctx, p, logC)
+		done, err := rt.runWatchPhaseStep(ctx, p, logC)
 		if err != nil {
 			return err
 		}
@@ -50,42 +55,55 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 	}
 }
 
-// runWatchLoop owns steady-state watch execution. The same goroutine handles
-// observed replans, action completions, retry/trial timers, reconcile
-// completions, and outbox draining.
-func (rt *watchRuntime) runWatchLoop(ctx context.Context, p *watchPipeline) error {
-	rt.replaceOutbox(nil)
-
-	for {
-		if ctx.Err() != nil && !rt.isDraining() {
-			rt.beginWatchDrain(ctx, p)
-		}
-		if rt.isDraining() {
-			done, err := rt.runDrainStep(ctx, p)
-			if err != nil {
-				return err
-			}
-			if done {
-				return nil
-			}
-			continue
-		}
-		replanned, err := rt.runPendingReplan(ctx, p)
-		if err != nil {
-			return err
-		}
-		if replanned {
-			continue
-		}
-
-		done, err := rt.runWatchStep(ctx, p)
-		if err != nil {
-			return err
-		}
-		if done {
-			return nil
-		}
+func (rt *watchRuntime) beginWatchDrainIfCanceled(ctx context.Context, p *watchPipeline) {
+	if ctx.Err() != nil && !rt.isDraining() {
+		rt.beginWatchDrain(ctx, p)
 	}
+}
+
+func (rt *watchRuntime) runWatchPhaseStep(
+	ctx context.Context,
+	p *watchPipeline,
+	logC <-chan time.Time,
+) (bool, error) {
+	switch rt.phase() {
+	case watchRuntimePhaseBootstrap:
+		return rt.runBootstrapPhaseStep(ctx, p, logC)
+	case watchRuntimePhaseDraining:
+		return rt.runDrainStep(ctx, p)
+	case watchRuntimePhaseRunning:
+		return rt.runRunningPhaseStep(ctx, p)
+	default:
+		return false, fmt.Errorf("sync: unknown watch runtime phase %q", rt.phase())
+	}
+}
+
+func (rt *watchRuntime) runBootstrapPhaseStep(
+	ctx context.Context,
+	p *watchPipeline,
+	logC <-chan time.Time,
+) (bool, error) {
+	if rt.isBootstrapQuiescent() {
+		rt.enterRunning()
+		return true, nil
+	}
+
+	return rt.runBootstrapStep(ctx, p, logC)
+}
+
+func (rt *watchRuntime) runRunningPhaseStep(
+	ctx context.Context,
+	p *watchPipeline,
+) (bool, error) {
+	replanned, err := rt.runPendingReplan(ctx, p)
+	if err != nil {
+		return false, err
+	}
+	if replanned {
+		return false, nil
+	}
+
+	return rt.runWatchStep(ctx, p)
 }
 
 func (rt *watchRuntime) runPendingReplan(
@@ -104,8 +122,18 @@ func (rt *watchRuntime) runPendingReplan(
 	return true, rt.runSteadyStateReplan(ctx, p, batch)
 }
 
-//nolint:gocyclo // The watch loop keeps one direct owner select over all watch control flow.
 func (rt *watchRuntime) runWatchStep(
+	ctx context.Context,
+	p *watchPipeline,
+) (bool, error) {
+	if len(rt.currentOutbox()) == 0 {
+		return rt.runWatchStepIdle(ctx, p)
+	}
+
+	return rt.runWatchStepWithOutbox(ctx, p)
+}
+
+func (rt *watchRuntime) runWatchStepWithOutbox(
 	ctx context.Context,
 	p *watchPipeline,
 ) (bool, error) {
@@ -116,53 +144,58 @@ func (rt *watchRuntime) runWatchStep(
 		rt.handleWatchDispatchReady(nextAction)
 		return false, nil
 	case batch, ok := <-p.replanReady:
-		if !ok {
-			return true, nil
-		}
-		return false, rt.handleWatchReplanReady(ctx, p, batch)
+		return rt.handleWatchReplanChannel(ctx, p, batch, ok)
 	case completion, ok := <-p.completions:
-		if !ok {
-			return false, rt.handleWatchCompletionsClosed(ctx, p)
-		}
-		return false, rt.handleWatchActionCompletion(ctx, p, &completion)
+		return rt.handleWatchCompletionChannel(ctx, p, &completion, ok)
 	case change, ok := <-p.localEvents:
-		if !ok {
-			p.localEvents = nil
-			return false, nil
-		}
-		rt.handleWatchLocalChange(&change)
-		return false, nil
+		return rt.handleWatchLocalChangeChannel(p, &change, ok)
 	case batch, ok := <-p.remoteBatches:
-		if !ok {
-			p.remoteBatches = nil
-			return false, nil
-		}
-		return false, rt.handleRemoteObservationBatch(ctx, &batch)
+		return rt.handleWatchRemoteBatchChannel(ctx, p, &batch, ok)
 	case skipped, ok := <-p.skippedCh:
-		if !ok {
-			p.skippedCh = nil
-			return false, nil
-		}
-		rt.reconcileSkippedObservationFindings(ctx, rt, skipped)
-		return false, nil
+		return rt.handleWatchSkippedChannel(ctx, p, skipped, ok)
 	case <-p.refreshC:
 		rt.runFullRemoteRefreshAsync(ctx, p.bl)
 		return false, nil
 	case result, ok := <-p.refreshResults:
-		if !ok {
-			p.refreshResults = nil
-			return false, nil
-		}
-		return false, rt.applyRemoteRefreshResult(ctx, &result)
+		return rt.handleWatchRefreshResultChannel(ctx, p, &result, ok)
 	case <-p.maintenanceC:
 		rt.handleMaintenanceTick(ctx)
 		return false, nil
 	case observerErr, ok := <-p.errs:
-		if !ok {
-			p.errs = nil
-			return false, nil
-		}
-		return false, rt.handleWatchObserverError(ctx, p, observerErr)
+		return rt.handleWatchObserverErrorChannel(ctx, p, observerErr, ok)
+	case <-rt.trialTimerChan():
+		return false, rt.handleWatchHeldRelease(ctx, p, true)
+	case <-rt.retryTimerChan():
+		return false, rt.handleWatchHeldRelease(ctx, p, false)
+	case <-ctx.Done():
+		rt.beginWatchDrain(ctx, p)
+		return false, nil
+	}
+}
+
+func (rt *watchRuntime) runWatchStepIdle(
+	ctx context.Context,
+	p *watchPipeline,
+) (bool, error) {
+	select {
+	case completion, ok := <-p.completions:
+		return rt.handleWatchCompletionChannel(ctx, p, &completion, ok)
+	case change, ok := <-p.localEvents:
+		return rt.handleWatchLocalChangeChannel(p, &change, ok)
+	case batch, ok := <-p.remoteBatches:
+		return rt.handleWatchRemoteBatchChannel(ctx, p, &batch, ok)
+	case skipped, ok := <-p.skippedCh:
+		return rt.handleWatchSkippedChannel(ctx, p, skipped, ok)
+	case <-p.refreshC:
+		rt.runFullRemoteRefreshAsync(ctx, p.bl)
+		return false, nil
+	case result, ok := <-p.refreshResults:
+		return rt.handleWatchRefreshResultChannel(ctx, p, &result, ok)
+	case <-p.maintenanceC:
+		rt.handleMaintenanceTick(ctx)
+		return false, nil
+	case observerErr, ok := <-p.errs:
+		return rt.handleWatchObserverErrorChannel(ctx, p, observerErr, ok)
 	case <-rt.trialTimerChan():
 		return false, rt.handleWatchHeldRelease(ctx, p, true)
 	case <-rt.retryTimerChan():
