@@ -33,8 +33,7 @@ type engineFlow struct {
 	syncErrors []error
 	summaries  []failureSummaryEntry
 
-	scopeCtrl scopeController
-	runID     string
+	runID string
 }
 
 type heldReason string
@@ -62,8 +61,6 @@ func newEngineFlow(engine *Engine) *engineFlow {
 		queuedByID:     make(map[int64]struct{}),
 		runningByID:    make(map[int64]struct{}),
 	}
-	flow.initPolicyControllers()
-
 	return flow
 }
 

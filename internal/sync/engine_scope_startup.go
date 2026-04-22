@@ -8,9 +8,7 @@ import (
 // loadActiveScopes refreshes watch runtime scope state from the persisted
 // block_scopes table. The store remains the restart/recovery record; watch
 // mode keeps only the current working set in memory.
-func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *watchRuntime) error {
-	flow := controller.flow
-
+func (flow *engineFlow) loadActiveScopes(ctx context.Context, watch *watchRuntime) error {
 	if watch == nil {
 		return nil
 	}
@@ -33,22 +31,20 @@ func (controller *scopeController) loadActiveScopes(ctx context.Context, watch *
 // begins. block_scopes now owns only timed shared blockers for blocked work,
 // so a persisted scope with no blocked retry_work is dead state and must be
 // discarded immediately on startup.
-func (controller *scopeController) normalizePersistedScopes(
+func (flow *engineFlow) normalizePersistedScopes(
 	ctx context.Context,
 	watch *watchRuntime,
 ) error {
-	flow := controller.flow
-
 	blocks, listScopeErr := flow.engine.baseline.ListBlockScopes(ctx)
 	if listScopeErr != nil {
 		return fmt.Errorf("sync: listing block scopes: %w", listScopeErr)
 	}
 
-	blockedRetries, err := controller.loadNormalizedPersistedBlockedRetries(ctx)
+	blockedRetries, err := flow.loadNormalizedPersistedBlockedRetries(ctx)
 	if err != nil {
 		return err
 	}
-	if err := controller.applyPersistedScopeNormalization(
+	if err := flow.applyPersistedScopeNormalization(
 		ctx,
 		planPersistedScopeNormalization(blocks, blockedRetries),
 	); err != nil {
@@ -60,11 +56,9 @@ func (controller *scopeController) normalizePersistedScopes(
 	return nil
 }
 
-func (controller *scopeController) loadNormalizedPersistedBlockedRetries(
+func (flow *engineFlow) loadNormalizedPersistedBlockedRetries(
 	ctx context.Context,
 ) ([]RetryWorkRow, error) {
-	flow := controller.flow
-
 	rows, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing blocked retry_work rows: %w", err)
@@ -73,12 +67,12 @@ func (controller *scopeController) loadNormalizedPersistedBlockedRetries(
 	return rows, nil
 }
 
-func (controller *scopeController) applyPersistedScopeNormalization(
+func (flow *engineFlow) applyPersistedScopeNormalization(
 	ctx context.Context,
 	plan []persistedScopeNormalizationStep,
 ) error {
 	for i := range plan {
-		if err := controller.dropStartupScopeRow(ctx, plan[i].Key, plan[i].Note); err != nil {
+		if err := flow.dropStartupScopeRow(ctx, plan[i].Key, plan[i].Note); err != nil {
 			return err
 		}
 	}
@@ -86,9 +80,7 @@ func (controller *scopeController) applyPersistedScopeNormalization(
 	return nil
 }
 
-func (controller *scopeController) dropStartupScopeRow(ctx context.Context, key ScopeKey, note string) error {
-	flow := controller.flow
-
+func (flow *engineFlow) dropStartupScopeRow(ctx context.Context, key ScopeKey, note string) error {
 	if err := flow.engine.baseline.DeleteBlockScope(ctx, key); err != nil {
 		return fmt.Errorf("sync: deleting startup scope %s: %w", key.String(), err)
 	}

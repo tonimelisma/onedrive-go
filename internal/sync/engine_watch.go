@@ -190,7 +190,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// Startup must not trust stale scope rows blindly; the durable store is
 	// repaired against current persisted evidence before the watch loop loads
 	// its ephemeral activeScopes working set.
-	if err := rt.scopeController().normalizePersistedScopes(ctx, rt); err != nil {
+	if err := rt.normalizePersistedScopes(ctx, rt); err != nil {
 		return nil, fmt.Errorf("sync: normalizing persisted scopes: %w", err)
 	}
 
@@ -198,7 +198,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// the persisted block_scopes table into watch-owned runtime state.
 	depGraph := NewDepGraph(rt.engine.logger)
 	rt.depGraph = depGraph
-	if err := rt.scopeController().loadActiveScopes(ctx, rt); err != nil {
+	if err := rt.loadActiveScopes(ctx, rt); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 

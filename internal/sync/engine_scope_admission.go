@@ -26,16 +26,16 @@ type AdmissionDecision struct {
 // admitReady applies exact retry/block-scope admission to a ready action set.
 // Dependency readiness is already satisfied; admission decides whether the
 // action dispatches now or is held as exact work for later release.
-func (controller *scopeController) admitReady(
+func (flow *engineFlow) admitReady(
 	ctx context.Context,
 	watch *watchRuntime,
 	ready []*TrackedAction,
 ) ([]*TrackedAction, error) {
-	decisions := controller.decideAdmission(controller.flow.engine.nowFunc(), ready)
-	return controller.applyAdmissionDecisions(ctx, watch, decisions)
+	decisions := flow.decideAdmission(flow.engine.nowFunc(), ready)
+	return flow.applyAdmissionDecisions(ctx, watch, decisions)
 }
 
-func (controller *scopeController) decideAdmission(
+func (flow *engineFlow) decideAdmission(
 	now time.Time,
 	ready []*TrackedAction,
 ) []AdmissionDecision {
@@ -46,16 +46,16 @@ func (controller *scopeController) decideAdmission(
 			continue
 		}
 
-		decision := controller.newAdmissionDecision(ta)
-		controller.applyPersistedRetryAdmission(now, ta, &decision)
-		controller.applyActiveScopeAdmission(ta, &decision)
+		decision := flow.newAdmissionDecision(ta)
+		flow.applyPersistedRetryAdmission(now, ta, &decision)
+		flow.applyActiveScopeAdmission(ta, &decision)
 		decisions = append(decisions, decision)
 	}
 
 	return decisions
 }
 
-func (controller *scopeController) newAdmissionDecision(ta *TrackedAction) AdmissionDecision {
+func (flow *engineFlow) newAdmissionDecision(ta *TrackedAction) AdmissionDecision {
 	decision := AdmissionDecision{
 		Action:       ta,
 		Kind:         admissionDispatchNow,
@@ -70,7 +70,7 @@ func (controller *scopeController) newAdmissionDecision(ta *TrackedAction) Admis
 	return decision
 }
 
-func (controller *scopeController) applyPersistedRetryAdmission(
+func (flow *engineFlow) applyPersistedRetryAdmission(
 	now time.Time,
 	ta *TrackedAction,
 	decision *AdmissionDecision,
@@ -79,7 +79,7 @@ func (controller *scopeController) applyPersistedRetryAdmission(
 		return
 	}
 
-	row, ok := controller.flow.retryRowsByKey[decision.RetryWorkKey]
+	row, ok := flow.retryRowsByKey[decision.RetryWorkKey]
 	if !ok || (!decision.ClearScopeKey.IsZero() && row.ScopeKey == decision.ClearScopeKey) {
 		return
 	}
@@ -98,7 +98,7 @@ func (controller *scopeController) applyPersistedRetryAdmission(
 	}
 }
 
-func (controller *scopeController) applyActiveScopeAdmission(
+func (flow *engineFlow) applyActiveScopeAdmission(
 	ta *TrackedAction,
 	decision *AdmissionDecision,
 ) {
@@ -106,7 +106,7 @@ func (controller *scopeController) applyActiveScopeAdmission(
 		return
 	}
 
-	scopeKey := controller.flow.findBlockingScope(ta)
+	scopeKey := flow.findBlockingScope(ta)
 	if scopeKey.IsZero() {
 		return
 	}
@@ -118,12 +118,11 @@ func (controller *scopeController) applyActiveScopeAdmission(
 	decision.ScopeKey = scopeKey
 }
 
-func (controller *scopeController) applyAdmissionDecisions(
+func (flow *engineFlow) applyAdmissionDecisions(
 	ctx context.Context,
 	watch *watchRuntime,
 	decisions []AdmissionDecision,
 ) ([]*TrackedAction, error) {
-	flow := controller.flow
 	var dispatch []*TrackedAction
 
 	for i := range decisions {
@@ -133,7 +132,7 @@ func (controller *scopeController) applyAdmissionDecisions(
 			continue
 		}
 
-		if err := controller.applyAdmissionScopeClear(ctx, decision); err != nil {
+		if err := flow.applyAdmissionScopeClear(ctx, decision); err != nil {
 			return dispatch, err
 		}
 
@@ -144,7 +143,7 @@ func (controller *scopeController) applyAdmissionDecisions(
 		case admissionHoldRetry:
 			flow.holdAction(ta, heldReasonRetry, ScopeKey{}, decision.NextRetryAt)
 		case admissionHoldScope:
-			if err := controller.persistHeldScopeDecision(ctx, ta, decision); err != nil {
+			if err := flow.persistHeldScopeDecision(ctx, ta, decision); err != nil {
 				return dispatch, err
 			}
 			flow.holdAction(ta, heldReasonScope, decision.ScopeKey, time.Time{})
@@ -158,7 +157,7 @@ func (controller *scopeController) applyAdmissionDecisions(
 	return dispatch, nil
 }
 
-func (controller *scopeController) applyAdmissionScopeClear(
+func (flow *engineFlow) applyAdmissionScopeClear(
 	ctx context.Context,
 	decision *AdmissionDecision,
 ) error {
@@ -166,8 +165,7 @@ func (controller *scopeController) applyAdmissionScopeClear(
 		return nil
 	}
 
-	flow := controller.flow
-	if err := controller.clearBlockedRetryWorkForScope(ctx, decision.RetryWorkKey, decision.ClearScopeKey); err != nil {
+	if err := flow.clearBlockedRetryWorkForScope(ctx, decision.RetryWorkKey, decision.ClearScopeKey); err != nil {
 		return err
 	}
 	if row, ok := flow.retryRowsByKey[decision.RetryWorkKey]; ok && row.Blocked && row.ScopeKey == decision.ClearScopeKey {
@@ -177,7 +175,7 @@ func (controller *scopeController) applyAdmissionScopeClear(
 	return nil
 }
 
-func (controller *scopeController) persistHeldScopeDecision(
+func (flow *engineFlow) persistHeldScopeDecision(
 	ctx context.Context,
 	ta *TrackedAction,
 	decision *AdmissionDecision,
@@ -186,7 +184,6 @@ func (controller *scopeController) persistHeldScopeDecision(
 		return nil
 	}
 
-	flow := controller.flow
 	row, ok := flow.retryRowsByKey[decision.RetryWorkKey]
 	if ok && row.Blocked && row.ScopeKey == decision.ScopeKey {
 		return nil
@@ -214,9 +211,7 @@ func (controller *scopeController) persistHeldScopeDecision(
 
 // completeSubtree silently completes all transitive dependents without
 // recording failures. Used for shutdown.
-func (controller *scopeController) completeSubtree(ready []*TrackedAction) {
-	flow := controller.flow
-
+func (flow *engineFlow) completeSubtree(ready []*TrackedAction) {
 	seen := make(map[int64]bool)
 	queue := ready
 
@@ -237,9 +232,7 @@ func (controller *scopeController) completeSubtree(ready []*TrackedAction) {
 // recordBlockedRetryWork records retry_work for an action that is currently
 // blocked by an active scope. Blocked rows have no retry timing until the
 // scope is released or trialed.
-func (controller *scopeController) recordBlockedRetryWork(ctx context.Context, action *Action, scopeKey ScopeKey) error {
-	flow := controller.flow
-
+func (flow *engineFlow) recordBlockedRetryWork(ctx context.Context, action *Action, scopeKey ScopeKey) error {
 	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:          action.Path,
 		OldPath:       action.OldPath,
@@ -260,13 +253,11 @@ func (controller *scopeController) recordBlockedRetryWork(ctx context.Context, a
 	return nil
 }
 
-func (controller *scopeController) rehomeBlockedRetryWork(
+func (flow *engineFlow) rehomeBlockedRetryWork(
 	ctx context.Context,
 	r *ActionCompletion,
 	scopeKey ScopeKey,
 ) error {
-	flow := controller.flow
-
 	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Path:          r.Path,
 		OldPath:       r.OldPath,

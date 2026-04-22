@@ -14,13 +14,13 @@ import (
 )
 
 // Validates: R-2.10.5
-func TestScopeController_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *testing.T) {
+func TestEngineFlow_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	scopeKey := SKQuotaOwn()
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 
 	root := rt.depGraph.Add(&Action{
 		Type:    ActionFolderCreate,
@@ -36,7 +36,7 @@ func TestScopeController_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
-	require.NoError(t, controller.recordBlockedRetryWork(t.Context(), &root.Action, scopeKey))
+	require.NoError(t, flow.recordBlockedRetryWork(t.Context(), &root.Action, scopeKey))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -47,14 +47,14 @@ func TestScopeController_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *
 }
 
 // Validates: R-2.10.5
-func TestScopeController_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t *testing.T) {
+func TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 
-	handled, err := controller.applyTrialReclassification(t.Context(), rt, &ResultDecision{
+	handled, err := flow.applyTrialReclassification(t.Context(), rt, &ResultDecision{
 		Class:    errclass.ClassBlockScopeingTransient,
 		ScopeKey: SKDiskLocal(),
 	}, &ActionCompletion{
@@ -74,13 +74,13 @@ func TestScopeController_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t 
 }
 
 // Validates: R-2.10.5, R-2.10.33, R-2.14.1
-func TestScopeController_ApplyTrialReclassification_LocalFilePermissionReusesPermissionOutcomePath(t *testing.T) {
+func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissionOutcomePath(t *testing.T) {
 	t.Parallel()
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 	scopeKey := SKService()
 
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
@@ -97,7 +97,7 @@ func TestScopeController_ApplyTrialReclassification_LocalFilePermissionReusesPer
 		LastSeenAt:    2,
 	}))
 
-	handled, err := controller.applyTrialReclassification(t.Context(), rt, &ResultDecision{
+	handled, err := flow.applyTrialReclassification(t.Context(), rt, &ResultDecision{
 		PermissionFlow: permissionFlowLocalPermission,
 	}, &ActionCompletion{
 		Path:          "accessible/file.txt",
@@ -124,11 +124,11 @@ func TestScopeController_ApplyTrialReclassification_LocalFilePermissionReusesPer
 }
 
 // Validates: R-2.10.5
-func TestScopeController_NormalizePersistedScopes_DiscardsEmptyScopeWithoutBlockedWork(t *testing.T) {
+func TestEngineFlow_NormalizePersistedScopes_DiscardsEmptyScopeWithoutBlockedWork(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           SKDiskLocal(),
@@ -137,18 +137,18 @@ func TestScopeController_NormalizePersistedScopes_DiscardsEmptyScopeWithoutBlock
 		NextTrialAt:   eng.nowFn().Add(time.Minute),
 	}))
 
-	require.NoError(t, controller.normalizePersistedScopes(t.Context(), nil))
+	require.NoError(t, flow.normalizePersistedScopes(t.Context(), nil))
 
 	assert.False(t, isTestBlockScopeed(eng, SKDiskLocal()))
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 }
 
 // Validates: R-2.10.33
-func TestScopeController_NormalizePersistedScopes_RemovesStaleScopeAndPreservesReadyRetryWork(t *testing.T) {
+func TestEngineFlow_NormalizePersistedScopes_RemovesStaleScopeAndPreservesReadyRetryWork(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 	scopeKey := SKDiskLocal()
 	now := eng.nowFn()
 
@@ -171,7 +171,7 @@ func TestScopeController_NormalizePersistedScopes_RemovesStaleScopeAndPreservesR
 		LastSeenAt:    now.UnixNano(),
 	}))
 
-	require.NoError(t, controller.normalizePersistedScopes(t.Context(), nil))
+	require.NoError(t, flow.normalizePersistedScopes(t.Context(), nil))
 
 	assert.False(t, isTestBlockScopeed(eng, scopeKey))
 
@@ -183,11 +183,11 @@ func TestScopeController_NormalizePersistedScopes_RemovesStaleScopeAndPreservesR
 }
 
 // Validates: R-2.10.5
-func TestScopeController_ClearBlockedRetryWorkForScope_RemovesScopedRetryWork(t *testing.T) {
+func TestEngineFlow_ClearBlockedRetryWorkForScope_RemovesScopedRetryWork(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 	scopeKey := SKService()
 
 	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
@@ -200,7 +200,7 @@ func TestScopeController_ClearBlockedRetryWorkForScope_RemovesScopedRetryWork(t 
 	}, nil)
 	require.NoError(t, err)
 
-	require.NoError(t, controller.clearBlockedRetryWorkForScope(t.Context(), RetryWorkKey{
+	require.NoError(t, flow.clearBlockedRetryWorkForScope(t.Context(), RetryWorkKey{
 		Path:       "blocked.txt",
 		ActionType: ActionUpload,
 	}, scopeKey))
@@ -209,12 +209,12 @@ func TestScopeController_ClearBlockedRetryWorkForScope_RemovesScopedRetryWork(t 
 }
 
 // Validates: R-2.10.5
-func TestScopeController_AdmitReady_BlocksNormalActionUnderActiveScope(t *testing.T) {
+func TestEngineFlow_AdmitReady_BlocksNormalActionUnderActiveScope(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 	scopeKey := SKQuotaOwn()
 
 	setTestBlockScope(t, eng, &BlockScope{
@@ -231,7 +231,7 @@ func TestScopeController_AdmitReady_BlocksNormalActionUnderActiveScope(t *testin
 	}, 1, nil)
 	require.NotNil(t, ready)
 
-	dispatched, err := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+	dispatched, err := flow.admitReady(t.Context(), rt, []*TrackedAction{ready})
 	require.NoError(t, err)
 
 	assert.Empty(t, dispatched)
@@ -245,12 +245,12 @@ func TestScopeController_AdmitReady_BlocksNormalActionUnderActiveScope(t *testin
 }
 
 // Validates: R-2.10.5
-func TestScopeController_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenScopeNoLongerMatches(t *testing.T) {
+func TestEngineFlow_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenScopeNoLongerMatches(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 	scopeKey := SKQuotaOwn()
 
 	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
@@ -272,7 +272,7 @@ func TestScopeController_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenSco
 	ready.IsTrial = true
 	ready.TrialScopeKey = scopeKey
 
-	dispatched, err := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+	dispatched, err := flow.admitReady(t.Context(), rt, []*TrackedAction{ready})
 	require.NoError(t, err)
 
 	require.Len(t, dispatched, 1)
@@ -281,12 +281,12 @@ func TestScopeController_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenSco
 }
 
 // Validates: R-2.10.5
-func TestScopeController_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWithoutClearingRetryWork(t *testing.T) {
+func TestEngineFlow_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWithoutClearingRetryWork(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 	scopeKey := SKQuotaOwn()
 
 	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
@@ -308,7 +308,7 @@ func TestScopeController_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWi
 	ready.IsTrial = true
 	ready.TrialScopeKey = scopeKey
 
-	dispatched, err := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+	dispatched, err := flow.admitReady(t.Context(), rt, []*TrackedAction{ready})
 	require.NoError(t, err)
 
 	require.Len(t, dispatched, 1)
@@ -322,12 +322,12 @@ func TestScopeController_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWi
 }
 
 // Validates: R-6.8
-func TestScopeController_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFails(t *testing.T) {
+func TestEngineFlow_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFails(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 	scopeKey := SKQuotaOwn()
 
 	setTestBlockScope(t, eng, &BlockScope{
@@ -346,7 +346,7 @@ func TestScopeController_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFa
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	dispatched, err := controller.admitReady(t.Context(), rt, []*TrackedAction{ready})
+	dispatched, err := flow.admitReady(t.Context(), rt, []*TrackedAction{ready})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "blocked retry_work")
 	assert.Empty(t, dispatched)

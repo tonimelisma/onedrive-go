@@ -36,7 +36,7 @@ func (r *oneShotRunner) prepareRunOnceState(ctx context.Context) error {
 		}
 	}
 
-	normalizeErr := flow.scopeController().normalizePersistedScopes(ctx, nil)
+	normalizeErr := flow.normalizePersistedScopes(ctx, nil)
 	if normalizeErr != nil {
 		return fmt.Errorf("sync: normalizing persisted scopes: %w", normalizeErr)
 	}
