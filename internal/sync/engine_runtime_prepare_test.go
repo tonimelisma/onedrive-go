@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -86,7 +87,46 @@ func TestPrepareBootstrapCurrentPlan_MatchesOneShotLivePrepare(t *testing.T) {
 }
 
 // Validates: R-2.10.5
-func TestProcessDirtyBatch_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare(t *testing.T) {
+func TestPrepareSteadyStateCurrentPlan_LoadsCommittedTruthWithoutRemoteObservation(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remoteCalls := 0
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			remoteCalls++
+			return nil, errors.New("unexpected remote observation")
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	require.NoError(t, rt.commitObservedItems(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item-1",
+		Path:     "remote.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash-1",
+		Size:     10,
+	}}, ""))
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	prepared, err := rt.prepareSteadyStateCurrentPlan(ctx, bl, SyncDownloadOnly)
+	require.NoError(t, err)
+	require.NotNil(t, prepared)
+	require.Len(t, prepared.Plan.Actions, 1)
+	assert.Zero(t, remoteCalls, "steady-state prepare must load committed truth instead of observing remote again")
+	assert.Equal(t, ActionDownload, prepared.Plan.Actions[0].Type)
+	assert.Equal(t, "remote.txt", prepared.Plan.Actions[0].Path)
+}
+
+// Validates: R-2.10.5
+func TestRunSteadyStateReplan_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
