@@ -1,0 +1,126 @@
+package sync
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
+)
+
+func (flow *engineFlow) applyTrialReleaseDecision(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	r *ActionCompletion,
+	trialScopeKey ScopeKey,
+) ([]*TrackedAction, error) {
+	if err := flow.releaseScope(ctx, watch, trialScopeKey); err != nil {
+		return nil, err
+	}
+	flow.releaseHeldScope(trialScopeKey)
+
+	return flow.applyCompletionSuccess(ctx, watch, current, r)
+}
+
+func (flow *engineFlow) applyTrialExtendDecision(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	r *ActionCompletion,
+	trialScopeKey ScopeKey,
+) error {
+	flow.markFinished(current)
+	if err := flow.rehomeBlockedRetryWork(ctx, r, trialScopeKey); err != nil {
+		return err
+	}
+	if err := flow.holdActionUnderScope(ctx, watch, current, r, trialScopeKey); err != nil {
+		return err
+	}
+
+	return flow.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
+}
+
+func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	decision *ResultDecision,
+	r *ActionCompletion,
+	bl *Baseline,
+	trialScopeKey ScopeKey,
+) error {
+	flow.markFinished(current)
+	reclassified, err := flow.applyTrialReclassification(ctx, watch, decision, r, bl)
+	if err != nil {
+		return err
+	}
+	if reclassified {
+		if err := flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r)); err != nil {
+			return err
+		}
+	} else {
+		if err := flow.applyTrialRetryFallback(ctx, watch, current, decision, r); err != nil {
+			return err
+		}
+	}
+
+	return flow.rearmOrDiscardScope(ctx, watch, trialScopeKey)
+}
+
+func (flow *engineFlow) applyTrialRetryFallback(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	decision *ResultDecision,
+	r *ActionCompletion,
+) error {
+	if decision.Persistence != persistRetryWork {
+		return fmt.Errorf("trial retry fallback for %s: missing retry_work persistence", r.Path)
+	}
+	if err := flow.applyResultPersistence(ctx, decision, r); err != nil {
+		return err
+	}
+	if err := flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r)); err != nil {
+		return err
+	}
+	if watch != nil {
+		watch.armRetryTimer()
+	}
+
+	return nil
+}
+
+func (flow *engineFlow) applyTrialReclassification(
+	ctx context.Context,
+	watch *watchRuntime,
+	decision *ResultDecision,
+	r *ActionCompletion,
+	bl *Baseline,
+) (bool, error) {
+	if decision.PermissionFlow != permissionFlowNone {
+		if permOutcome, handled := flow.decidePermissionOutcome(ctx, decision, r, bl); handled {
+			if !permOutcome.Matched {
+				return false, nil
+			}
+			if err := flow.clearBlockedRetryWorkForScope(ctx, retryWorkKeyForCompletion(r), r.TrialScopeKey); err != nil {
+				return false, err
+			}
+			_, err := flow.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
+			return true, err
+		}
+		return false, nil
+	}
+
+	if decision.Class == errclass.ClassBlockScopeingTransient && decision.ScopeKey == SKDiskLocal() {
+		if err := flow.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey); err != nil {
+			return false, err
+		}
+		return true, flow.applyBlockScope(ctx, watch, ScopeUpdateResult{
+			Block:         true,
+			ScopeKey:      decision.ScopeKey,
+			ConditionType: decision.ScopeKey.ConditionType(),
+		})
+	}
+
+	return false, nil
+}

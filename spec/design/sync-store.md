@@ -117,7 +117,9 @@ Supporting outcome mutations should stay separate by owner:
 `retry_work` is the single durable lane for exact pending roots regardless of
 whether their next execution boundary is worker-side I/O or engine-side
 publication reduction. The store does not split publication retries into a
-second durable table.
+second durable table. Admission, completion, held-release, and
+permission-driven runtime mutation all act on that same durable lane; the
+store owns the rows, while the engine owns the policy around them.
 
 The store does not own a mixed failure table, failure-role transitions,
 timer-time stale-row cleanup, or a store-owned grouped condition projection.
