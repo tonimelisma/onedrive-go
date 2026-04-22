@@ -425,8 +425,8 @@ func (o *LocalObserver) scanNewDirectoryChildDir(
 // (RWMutex-protected, updated in-place by CommitMutation). If an action is
 // in-flight (dispatched to workers but not yet committed to baseline), the safety scan
 // may re-emit an event for something already being processed. This is safe:
-// the watch loop turns that event into a fresh dirty replan instead of trying
-// to mutate the currently running graph in place.
+// the watch loop turns that event into a fresh steady-state replan instead of
+// trying to mutate the currently running graph in place.
 func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name string) {
 	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {

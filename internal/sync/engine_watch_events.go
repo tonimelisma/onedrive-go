@@ -9,8 +9,8 @@ type watchEventKind string
 
 const (
 	watchEventDispatchReady        watchEventKind = "dispatch_ready"
-	watchEventBatchReady           watchEventKind = "batch_ready"
-	watchEventBatchClosed          watchEventKind = "batch_closed"
+	watchEventReplanReady          watchEventKind = "replan_ready"
+	watchEventReplanClosed         watchEventKind = "replan_closed"
 	watchEventActionCompletion     watchEventKind = "action_completion"
 	watchEventCompletionsClosed    watchEventKind = "completions_closed"
 	watchEventLocalChange          watchEventKind = "local_change"
@@ -49,12 +49,12 @@ func (rt *watchRuntime) waitWatchEvent(ctx context.Context, p *watchPipeline) wa
 	select {
 	case dispatchCh <- nextAction:
 		return watchEvent{kind: watchEventDispatchReady, dispatched: nextAction}
-	case batch, ok := <-p.batchReady:
+	case batch, ok := <-p.replanReady:
 		if !ok {
-			return watchEvent{kind: watchEventBatchClosed}
+			return watchEvent{kind: watchEventReplanClosed}
 		}
 
-		return watchEvent{kind: watchEventBatchReady, batch: batch}
+		return watchEvent{kind: watchEventReplanReady, batch: batch}
 	case change, ok := <-p.localEvents:
 		if !ok {
 			return watchEvent{kind: watchEventLocalEventsClosed}
@@ -115,13 +115,13 @@ func (rt *watchRuntime) handleWatchEvent(
 		rt.markRunning(event.dispatched)
 		rt.consumeOutboxHead()
 		return false, nil
-	case watchEventBatchReady:
+	case watchEventReplanReady:
 		if !rt.canPrepareNow() {
-			rt.queueDirtyReplan(event.batch)
+			rt.queuePendingReplan(event.batch)
 			return false, nil
 		}
 		return false, rt.runSteadyStateReplan(ctx, p, event.batch)
-	case watchEventBatchClosed:
+	case watchEventReplanClosed:
 		return true, nil
 	case watchEventActionCompletion:
 		return false, rt.handleWatchActionCompletion(ctx, p, event.completion)
@@ -180,14 +180,7 @@ func (rt *watchRuntime) handleWatchActionCompletion(
 	p *watchPipeline,
 	completion *ActionCompletion,
 ) error {
-	ready, completionErr := rt.processActionCompletion(ctx, rt, completion, p.bl)
-	if completionErr != nil {
-		rt.clearSyncStatusBatch()
-		rt.completeOutboxAsShutdown(ready)
-		return completionErr
-	}
-
-	return rt.appendCompletionReadyToOutbox(ctx, p, ready)
+	return rt.applyRuntimeCompletion(ctx, p, completion)
 }
 
 func (rt *watchRuntime) handleWatchCompletionsClosed(
@@ -240,41 +233,9 @@ func (rt *watchRuntime) handleWatchHeldRelease(
 	p *watchPipeline,
 	trial bool,
 ) error {
-	if rt.hasPendingDirtyReplan() {
+	if rt.hasPendingReplan() {
 		return nil
 	}
 
-	var (
-		released []*TrackedAction
-		err      error
-	)
-	if trial {
-		released, err = rt.releaseDueHeldTrialsNow(ctx)
-	} else {
-		released, err = rt.releaseDueHeldRetriesNow(ctx)
-	}
-	if err != nil {
-		return err
-	}
-
-	reduced, err := rt.reduceReadyFrontier(ctx, rt, p.bl, released)
-	rt.replaceOutbox(append(rt.currentOutbox(), reduced...))
-	return err
-}
-
-func (rt *watchRuntime) appendCompletionReadyToOutbox(
-	ctx context.Context,
-	p *watchPipeline,
-	ready []*TrackedAction,
-) error {
-	reduced, err := rt.reduceReadyFrontier(ctx, rt, p.bl, ready)
-	nextOutbox := append(rt.currentOutbox(), reduced...)
-	if err != nil {
-		rt.clearSyncStatusBatch()
-		rt.completeOutboxAsShutdown(nextOutbox)
-		return err
-	}
-	rt.maybeFinishSyncStatusBatch(ctx, p.mode, nextOutbox)
-	rt.replaceOutbox(nextOutbox)
-	return nil
+	return rt.releaseHeldFrontier(ctx, p, trial)
 }
