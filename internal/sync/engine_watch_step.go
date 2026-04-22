@@ -153,8 +153,7 @@ func (rt *watchRuntime) handleDispatchEvent(
 			rt.queueDirtyReplan(event.batch)
 			return false, nil
 		}
-		rt.appendOutbox(rt.processDirtyBatch(ctx, event.batch, p.bl, p.mode))
-		return false, nil
+		return false, rt.runSteadyStateReplan(ctx, p, event.batch)
 	case watchEventBatchClosed:
 		return true, nil
 	case watchEventActionCompletion:

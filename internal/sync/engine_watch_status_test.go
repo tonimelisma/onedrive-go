@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestRunWatch_BootstrapNoChanges_WritesSyncStatusForBidirectional(t *testing
 	assert.Zero(t, status.LastFailedCount)
 }
 
-func TestProcessDirtyBatch_BidirectionalWritesSyncStatus(t *testing.T) {
+func TestRunSteadyStateReplan_BidirectionalWritesSyncStatus(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -100,17 +101,22 @@ func TestProcessDirtyBatch_BidirectionalWritesSyncStatus(t *testing.T) {
 		Size:     5,
 	}}, ""))
 
-	dispatch := testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
+	rt := testWatchRuntime(t, eng)
+	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
+		bl:   bl,
+		mode: SyncBidirectional,
+	}, DirtyBatch{
 		Paths: []string{"already-synced.txt"},
-	}, bl, SyncBidirectional)
-	assert.Nil(t, dispatch)
+	})
+	require.NoError(t, err)
+	assert.Empty(t, rt.currentOutbox())
 
 	status, err := eng.baseline.ReadSyncStatus(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, clock.Now().UnixNano(), status.LastSyncedAt)
 }
 
-func TestProcessDirtyBatch_BidirectionalWritesSyncStatusWhenOnlyFutureHeldWorkRemains(t *testing.T) {
+func TestRunSteadyStateReplan_BidirectionalWritesSyncStatusWhenOnlyFutureHeldWorkRemains(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -142,10 +148,14 @@ func TestProcessDirtyBatch_BidirectionalWritesSyncStatusWhenOnlyFutureHeldWorkRe
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	dispatch := rt.processDirtyBatch(ctx, DirtyBatch{
+	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
+		bl:   bl,
+		mode: SyncBidirectional,
+	}, DirtyBatch{
 		Paths: []string{"held.txt"},
-	}, bl, SyncBidirectional)
-	assert.Nil(t, dispatch)
+	})
+	require.NoError(t, err)
+	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.syncBatch.active, "future-held work should not leave the sync-status batch open")
 
 	status, err := eng.baseline.ReadSyncStatus(ctx)
@@ -153,7 +163,7 @@ func TestProcessDirtyBatch_BidirectionalWritesSyncStatusWhenOnlyFutureHeldWorkRe
 	assert.Equal(t, clock.Now().UnixNano(), status.LastSyncedAt)
 }
 
-func TestProcessDirtyBatch_DirectionalDoesNotWriteSyncStatus(t *testing.T) {
+func TestRunSteadyStateReplan_DirectionalDoesNotWriteSyncStatus(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -200,12 +210,89 @@ func TestProcessDirtyBatch_DirectionalDoesNotWriteSyncStatus(t *testing.T) {
 		Size:     5,
 	}}, ""))
 
-	dispatch := testWatchRuntime(t, eng).processDirtyBatch(ctx, DirtyBatch{
+	rt := testWatchRuntime(t, eng)
+	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
+		bl:   bl,
+		mode: SyncUploadOnly,
+	}, DirtyBatch{
 		Paths: []string{"already-synced.txt"},
-	}, bl, SyncUploadOnly)
-	assert.Nil(t, dispatch)
+	})
+	require.NoError(t, err)
+	assert.Empty(t, rt.currentOutbox())
 
 	status, err := eng.baseline.ReadSyncStatus(ctx)
 	require.NoError(t, err)
 	assert.Zero(t, status.LastSyncedAt, "directional watch batches must not persist sync status")
+}
+
+func TestRunSteadyStateReplan_LocalObserveFailureDropsBatch(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	require.NoError(t, os.RemoveAll(syncRoot))
+
+	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
+		bl:   bl,
+		mode: SyncBidirectional,
+	}, DirtyBatch{
+		Paths: []string{"missing.txt"},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, rt.currentOutbox())
+	assert.False(t, rt.syncBatch.active)
+
+	status, err := eng.baseline.ReadSyncStatus(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, status.LastSyncedAt, "recoverable local observe failure must not publish a successful sync-status batch")
+}
+
+func TestRunSteadyStateReplan_LocalSnapshotCommitFailureStopsWatch(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	require.NoError(t, eng.baseline.Close(ctx))
+
+	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
+		bl:   bl,
+		mode: SyncBidirectional,
+	}, DirtyBatch{
+		Paths: []string{"fatal.txt"},
+	})
+	require.ErrorContains(t, err, "watch local snapshot commit")
+	assert.Empty(t, rt.currentOutbox())
+	assert.False(t, rt.syncBatch.active)
 }
