@@ -160,6 +160,11 @@ can see the flow at a glance. The prepare half should read from
 should read from `engine_current_observe.go`; planner-input and dry-run
 helpers should read from `engine_current_inputs.go`.
 
+Once one-shot shutdown has started, late worker completions no longer re-enter
+the normal outbox path. The engine runs them through the same shutdown
+completion boundary watch drain uses, immediately collapsing any newly-ready
+frontier back into shutdown completion instead of handing it to dispatch.
+
 Full-remote-refresh cadence is restart-safe even when a full remote refresh returns
 no delta cursor. The engine still advances the persisted cadence in
 `observation_state` so enumerate-only and shared-root sessions do not fall into
@@ -260,7 +265,9 @@ Once shutdown drain has sealed new admission, late action-completion
 classification or persistence errors are treated as shutdown bookkeeping only.
 The loop logs them, keeps draining the already-owned completion sources, and
 returns clean shutdown rather than converting cancellation timing into a fatal
-watch error.
+watch error. That same shutdown-completion boundary now lives in
+`engine_runtime_shutdown.go` and is shared by watch drain plus one-shot
+late-completion handling after fatal shutdown or cancellation.
 
 ### Maintenance And Refresh
 
