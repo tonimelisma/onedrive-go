@@ -158,13 +158,15 @@ func (rt *watchRuntime) handleDispatchEvent(
 	case watchEventBatchClosed:
 		return true, nil
 	case watchEventActionCompletion:
-		outcome := rt.processActionCompletion(ctx, rt, event.completion, p.bl)
-		if outcome.terminate {
+		ready, completionErr := rt.processActionCompletion(ctx, rt, event.completion, p.bl)
+		if completionErr != nil {
 			rt.clearSyncStatusBatch()
-			return false, outcome.terminateErr
+			rt.completeOutboxAsShutdown(ready)
+			return false, completionErr
 		}
 
-		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), outcome.dispatched)
+		reduced, err := rt.reduceReadyFrontier(ctx, rt, p.bl, ready)
+		nextOutbox := append(rt.currentOutbox(), reduced...)
 		if err != nil {
 			rt.clearSyncStatusBatch()
 			rt.completeOutboxAsShutdown(nextOutbox)
@@ -360,7 +362,8 @@ func (rt *watchRuntime) handleMaintenanceEvent(
 		if err != nil {
 			return err
 		}
-		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), released)
+		reduced, err := rt.reduceReadyFrontier(ctx, rt, p.bl, released)
+		nextOutbox := append(rt.currentOutbox(), reduced...)
 		rt.replaceOutbox(nextOutbox)
 		return err
 	case watchEventRetryTick:
@@ -371,7 +374,8 @@ func (rt *watchRuntime) handleMaintenanceEvent(
 		if err != nil {
 			return err
 		}
-		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), released)
+		reduced, err := rt.reduceReadyFrontier(ctx, rt, p.bl, released)
+		nextOutbox := append(rt.currentOutbox(), reduced...)
 		rt.replaceOutbox(nextOutbox)
 		return err
 	case watchEventContextCanceled:

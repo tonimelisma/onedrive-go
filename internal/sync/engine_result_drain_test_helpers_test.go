@@ -79,15 +79,15 @@ func runResultDrainLoopIdleForTest(
 	case <-rt.trialTimerChan():
 		released, err := rt.releaseDueHeldTrialsNow(ctx)
 		mustNoDrainLoopError(err)
-		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, bl, nil, released)
+		reduced, err := rt.reduceReadyFrontier(ctx, rt, bl, released)
 		mustNoDrainLoopError(err)
-		return nextOutbox, false
+		return reduced, false
 	case <-rt.retryTimerChan():
 		released, err := rt.releaseDueHeldRetriesNow(ctx)
 		mustNoDrainLoopError(err)
-		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, bl, nil, released)
+		reduced, err := rt.reduceReadyFrontier(ctx, rt, bl, released)
 		mustNoDrainLoopError(err)
-		return nextOutbox, false
+		return reduced, false
 	case <-ctx.Done():
 		return nil, true
 	}
@@ -111,15 +111,15 @@ func runResultDrainLoopWithOutboxForTest(
 	case <-rt.trialTimerChan():
 		released, err := rt.releaseDueHeldTrialsNow(ctx)
 		mustNoDrainLoopError(err)
-		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, bl, outbox, released)
+		reduced, err := rt.reduceReadyFrontier(ctx, rt, bl, released)
 		mustNoDrainLoopError(err)
-		return nextOutbox, false
+		return append(outbox, reduced...), false
 	case <-rt.retryTimerChan():
 		released, err := rt.releaseDueHeldRetriesNow(ctx)
 		mustNoDrainLoopError(err)
-		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, bl, outbox, released)
+		reduced, err := rt.reduceReadyFrontier(ctx, rt, bl, released)
 		mustNoDrainLoopError(err)
-		return nextOutbox, false
+		return append(outbox, reduced...), false
 	case <-ctx.Done():
 		return outbox, true
 	}
@@ -132,14 +132,14 @@ func appendDrainOutcome(
 	outbox []*TrackedAction,
 	workerResult *ActionCompletion,
 ) ([]*TrackedAction, bool) {
-	outcome := rt.processActionCompletion(ctx, rt, workerResult, bl)
-	if outcome.terminate {
+	ready, completionErr := rt.processActionCompletion(ctx, rt, workerResult, bl)
+	if completionErr != nil {
 		return outbox, true
 	}
 
-	nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, bl, outbox, outcome.dispatched)
+	reduced, err := rt.reduceReadyFrontier(ctx, rt, bl, ready)
 	mustNoDrainLoopError(err)
-	return nextOutbox, false
+	return append(outbox, reduced...), false
 }
 
 func mustNoDrainLoopError(err error) {
