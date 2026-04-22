@@ -78,7 +78,7 @@ func (flow *engineFlow) reconcileObservationFindingsBatch(
 	}
 
 	if watch != nil {
-		if err := flow.scopeController().loadActiveScopes(ctx, watch); err != nil {
+		if err := flow.loadActiveScopes(ctx, watch); err != nil {
 			eng.logger.Warn("failed to refresh watch scopes after observation reconcile",
 				slog.String("error", err.Error()),
 			)

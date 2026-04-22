@@ -10,7 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-func (controller *scopeController) applyPermissionOutcome(
+func (flow *engineFlow) applyPermissionOutcome(
 	ctx context.Context,
 	watch *watchRuntime,
 	flowKind permissionFlow,
@@ -20,15 +20,15 @@ func (controller *scopeController) applyPermissionOutcome(
 		return false, nil
 	}
 
-	if err := controller.applyPermissionOutcomeMutation(ctx, watch, outcome); err != nil {
+	if err := flow.applyPermissionOutcomeMutation(ctx, watch, outcome); err != nil {
 		return true, err
 	}
-	controller.logPermissionOutcome(flowKind, outcome)
+	flow.logPermissionOutcome(flowKind, outcome)
 
 	return true, nil
 }
 
-func (controller *scopeController) applyPermissionOutcomeMutation(
+func (flow *engineFlow) applyPermissionOutcomeMutation(
 	ctx context.Context,
 	watch *watchRuntime,
 	outcome *PermissionOutcome,
@@ -39,14 +39,14 @@ func (controller *scopeController) applyPermissionOutcomeMutation(
 	case permissionOutcomeRecordFileFailure,
 		permissionOutcomeActivateBoundaryScope,
 		permissionOutcomeActivateDerivedScope:
-		if err := controller.recordRetryWorkFailure(ctx, outcome.Kind, outcome.RetryWorkFailure); err != nil {
+		if err := flow.recordRetryWorkFailure(ctx, outcome.Kind, outcome.RetryWorkFailure); err != nil {
 			return err
 		}
 		if watch != nil && shouldArmPermissionRetryTimer(outcome) {
 			watch.armRetryTimer()
 		}
 		if !outcome.ScopeKey.IsZero() && outcome.ScopeKey.PersistsInBlockScopes() {
-			if err := controller.applyBlockScope(ctx, watch, ScopeUpdateResult{
+			if err := flow.applyBlockScope(ctx, watch, ScopeUpdateResult{
 				Block:         true,
 				ScopeKey:      outcome.ScopeKey,
 				ConditionType: outcome.ScopeKey.ConditionType(),
@@ -60,7 +60,7 @@ func (controller *scopeController) applyPermissionOutcomeMutation(
 	}
 }
 
-func (controller *scopeController) logPermissionOutcome(
+func (flow *engineFlow) logPermissionOutcome(
 	flowKind permissionFlow,
 	outcome *PermissionOutcome,
 ) {
@@ -70,10 +70,10 @@ func (controller *scopeController) logPermissionOutcome(
 	case permissionFlowNone:
 		return
 	case permissionFlowRemote403:
-		controller.logRemotePermissionOutcome(outcome, conditionKey)
+		flow.logRemotePermissionOutcome(outcome, conditionKey)
 	case permissionFlowLocalPermission:
 		if outcome.Kind == permissionOutcomeActivateBoundaryScope {
-			fields := append(controller.flow.summaryLogFields(
+			fields := append(flow.summaryLogFields(
 				errclass.ClassActionable,
 				conditionKey,
 				outcome.TriggerPath,
@@ -82,14 +82,14 @@ func (controller *scopeController) logPermissionOutcome(
 				slog.String("boundary", outcome.BoundaryPath),
 				slog.String("trigger_path", outcome.TriggerPath),
 			)
-			controller.flow.engine.logger.Info("local permission denied: directory blocked", fields...)
+			flow.engine.logger.Info("local permission denied: directory blocked", fields...)
 		}
 	default:
 		panic(fmt.Sprintf("unknown permission flow %d", flowKind))
 	}
 }
 
-func (controller *scopeController) logRemotePermissionOutcome(
+func (flow *engineFlow) logRemotePermissionOutcome(
 	outcome *PermissionOutcome,
 	conditionKey ConditionKey,
 ) {
@@ -98,7 +98,7 @@ func (controller *scopeController) logRemotePermissionOutcome(
 	}
 
 	scopeKey := outcome.ScopeKey
-	fields := append(controller.flow.summaryLogFields(
+	fields := append(flow.summaryLogFields(
 		errclass.ClassActionable,
 		conditionKey,
 		outcome.TriggerPath,
@@ -107,10 +107,10 @@ func (controller *scopeController) logRemotePermissionOutcome(
 		slog.String("boundary", outcome.BoundaryPath),
 		slog.String("trigger_path", outcome.TriggerPath),
 	)
-	controller.flow.engine.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively", fields...)
+	flow.engine.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively", fields...)
 }
 
-func (controller *scopeController) recordRetryWorkFailure(
+func (flow *engineFlow) recordRetryWorkFailure(
 	ctx context.Context,
 	kind PermissionOutcomeKind,
 	failure *RetryWorkFailure,
@@ -119,7 +119,6 @@ func (controller *scopeController) recordRetryWorkFailure(
 		return nil
 	}
 
-	flow := controller.flow
 	conditionKey := ConditionKeyForStoredCondition(failure.ConditionType, failure.ScopeKey)
 	logClass := errclass.ClassActionable
 	if failure.Blocked {

@@ -29,7 +29,7 @@ func (flow *engineFlow) startPreparedRuntime(
 	}
 
 	ready := flow.registerPlanActions(plan)
-	ready, err := flow.scopeController().admitReady(ctx, watch, ready)
+	ready, err := flow.admitReady(ctx, watch, ready)
 	if err != nil {
 		return nil, false, err
 	}

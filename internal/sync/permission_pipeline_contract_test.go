@@ -71,10 +71,10 @@ func TestPermissionApply_ActivateTimedRemoteWriteScope_PersistsRetryWorkAndScope
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
-	matched, err := controller.applyPermissionOutcome(t.Context(), nil, permissionFlowRemote403, &PermissionOutcome{
+	matched, err := flow.applyPermissionOutcome(t.Context(), nil, permissionFlowRemote403, &PermissionOutcome{
 		Matched:      true,
 		Kind:         permissionOutcomeActivateDerivedScope,
 		ScopeKey:     scopeKey,
@@ -111,10 +111,10 @@ func TestPermissionApply_ReadBoundaryScope_DoesNotPersistBlockScopeRow(t *testin
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 	scopeKey := SKPermLocalRead("Private")
 
-	matched, err := controller.applyPermissionOutcome(t.Context(), nil, permissionFlowLocalPermission, &PermissionOutcome{
+	matched, err := flow.applyPermissionOutcome(t.Context(), nil, permissionFlowLocalPermission, &PermissionOutcome{
 		Matched:      true,
 		Kind:         permissionOutcomeActivateBoundaryScope,
 		ScopeKey:     scopeKey,
@@ -151,7 +151,7 @@ func TestPermissionApply_KnownActiveBoundary_DoesNotPersistOrArmRetryTimer(t *te
 	eng := newSingleOwnerEngine(t)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	controller := testEngineFlow(t, eng).scopeController()
+	flow := testEngineFlow(t, eng)
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
@@ -161,7 +161,7 @@ func TestPermissionApply_KnownActiveBoundary_DoesNotPersistOrArmRetryTimer(t *te
 		NextTrialAt:   time.Unix(61, 0),
 	}))
 
-	matched, err := controller.applyPermissionOutcome(t.Context(), rt, permissionFlowRemote403, &PermissionOutcome{
+	matched, err := flow.applyPermissionOutcome(t.Context(), rt, permissionFlowRemote403, &PermissionOutcome{
 		Matched:      true,
 		Kind:         permissionOutcomeNone,
 		BoundaryPath: "Shared/Docs",
