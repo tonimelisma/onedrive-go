@@ -98,7 +98,7 @@ func TestDepGraph_Complete_ReturnsDependents(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Complete — deletes from actions map (D-10 fix)
+// Complete deletes finished actions from the tracked actions map.
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.5
@@ -118,7 +118,7 @@ func TestDepGraph_Complete_DeletesFromActions(t *testing.T) {
 	// After Complete, action 1 should be gone from the actions map.
 	// InFlightCount uses len(actions), so it should be 0.
 	assert.Equal(t, 0, dg.InFlightCount(),
-		"D-10: Complete must delete from actions map")
+		"Complete must delete from actions map")
 
 	// A new action depending on the completed ID should treat it as
 	// satisfied (dep not found in actions → skip → depsLeft stays 0).
@@ -128,7 +128,7 @@ func TestDepGraph_Complete_DeletesFromActions(t *testing.T) {
 	}, 2, []int64{1})
 
 	require.NotNil(t, ta,
-		"D-10: action depending on completed (and deleted) ID should be immediately ready")
+		"action depending on completed (and deleted) ID should be immediately ready")
 }
 
 // ---------------------------------------------------------------------------
@@ -353,7 +353,7 @@ func TestDepGraph_ConcurrentMultiAdd(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// D-10 regression: completed dep treated as satisfied for new action
+// Regression: completed dependencies must stay satisfied for later actions.
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.10.5
@@ -378,6 +378,6 @@ func TestDepGraph_D10_CompletedDepSatisfiedForNewAction(t *testing.T) {
 	}, 2, []int64{1})
 
 	require.NotNil(t, ta,
-		"D-10: new action depending on completed ID must be immediately ready")
+		"new action depending on completed ID must be immediately ready")
 	assert.Equal(t, int64(2), ta.ID)
 }

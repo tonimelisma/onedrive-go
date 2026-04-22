@@ -25,7 +25,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	}
 
 	rt.beginSyncStatusBatch(rt.engine.nowFunc())
-	rt.engine.logger.Info("processing watch dirty batch",
+	rt.engine.logger.Info("processing watch steady-state replan",
 		slog.Int("paths", len(batch.Paths)),
 		slog.Bool("full_refresh", batch.FullRefresh),
 	)
@@ -35,28 +35,31 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	localResult, err := rt.observeLocalChanges(ctx, rt, p.bl)
 	if err != nil {
 		rt.clearSyncStatusBatch()
-		rt.engine.logger.Error("watch local refresh failed, dropping dirty batch",
+		if isWatchShutdownError(ctx, err) {
+			return nil
+		}
+		rt.engine.logger.Error("watch local refresh failed, dropping replan trigger",
 			slog.String("error", err.Error()),
 		)
 		return nil
 	}
+	if rt.afterSteadyStateObserve != nil {
+		rt.afterSteadyStateObserve()
+	}
 	commitErr := rt.commitObservedLocalSnapshot(ctx, false, localResult)
 	if commitErr != nil {
-		rt.clearSyncStatusBatch()
-		return fmt.Errorf("sync: watch local snapshot commit: %w", commitErr)
+		return rt.finishSteadyStateReplanStep(ctx, "local snapshot commit", commitErr)
 	}
 	rt.engine.collector().RecordObserve(len(batch.Paths), rt.engine.since(observeStart))
 
 	prepared, err := rt.prepareDirtyCurrentPlan(ctx, p.bl, p.mode)
 	if err != nil {
-		rt.clearSyncStatusBatch()
-		return fmt.Errorf("sync: watch replan prepare: %w", err)
+		return rt.finishSteadyStateReplanStep(ctx, "prepare", err)
 	}
 
 	dispatch, dispatched, err := rt.startPreparedRuntime(ctx, prepared, p.bl, rt)
 	if err != nil {
-		rt.clearSyncStatusBatch()
-		return fmt.Errorf("sync: watch replan start runtime: %w", err)
+		return rt.finishSteadyStateReplanStep(ctx, "start runtime", err)
 	}
 	rt.replaceOutbox(dispatch)
 	if !dispatched {
@@ -66,4 +69,21 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	rt.maybeFinishSyncStatusBatch(ctx, p.mode, rt.currentOutbox())
 
 	return nil
+}
+
+func (rt *watchRuntime) finishSteadyStateReplanStep(
+	ctx context.Context,
+	step string,
+	err error,
+) error {
+	rt.clearSyncStatusBatch()
+	if isWatchShutdownError(ctx, err) {
+		rt.engine.logger.Debug("steady-state replan stopped by shutdown",
+			slog.String("step", step),
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+
+	return fmt.Errorf("sync: watch replan %s: %w", step, err)
 }
