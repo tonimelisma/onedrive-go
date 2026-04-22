@@ -43,6 +43,11 @@ the target is known.
 - dial and TLS handshake deadlines protect connection setup
 - keepalives detect dead connections without bounding total transfer duration
 
+`graphtransport` also treats `http.DefaultTransport` being anything other than
+`*http.Transport` as an invariant violation. The stdlib guarantees the default
+shape; a global replacement would silently drop the tuned clone settings, so
+the builder panics instead of constructing a degraded fallback transport.
+
 This boundary exists to prevent one blunt client-wide timeout from becoming a competing owner of caller deadlines. Total operation budgets still belong to caller contexts. Transport stall detection belongs to `graphtransport`.
 
 ## Internal Domain Layout
