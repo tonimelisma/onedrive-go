@@ -222,10 +222,19 @@ mutation, then release any due held work back into the ready frontier. It does
 not mix that decision step with worker-queue ownership.
 
 Watch replan failure policy is also explicit. Pre-authority local observation
-failure is recoverable and drops that dirty batch. Once the engine starts
+failure is recoverable and drops that replan trigger. Once the engine starts
 depending on authoritative local snapshot or runtime state, failure is fatal to
 the current watch session: local snapshot commit, prepare-from-committed-truth,
-and runtime startup/admission all fail closed.
+and runtime startup/admission all fail closed. Shutdown cancellation is the
+one exception: if context cancellation lands during that steady-state replan
+handoff, the loop clears the best-effort sync-status batch and exits cleanly
+into shutdown instead of surfacing a fatal watch error.
+
+Once shutdown drain has sealed new admission, late action-completion
+classification or persistence errors are treated as shutdown bookkeeping only.
+The loop logs them, keeps draining the already-owned completion sources, and
+returns clean shutdown rather than converting cancellation timing into a fatal
+watch error.
 
 ### Maintenance And Refresh
 

@@ -89,6 +89,11 @@ type watchRuntimeState struct {
 	// are written only after the loop has exhausted all currently admissible
 	// work and returned to quiescence.
 	syncBatch watchSyncBatchState
+
+	// afterSteadyStateObserve is a test-only hook called after steady-state
+	// local observation succeeds but before the watch loop commits the local
+	// snapshot. Nil in production.
+	afterSteadyStateObserve func()
 }
 
 type watchSyncBatchState struct {

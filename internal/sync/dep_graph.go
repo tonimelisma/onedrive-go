@@ -183,8 +183,8 @@ func (g *DepGraph) Get(id int64) (*TrackedAction, bool) {
 	return node.TrackedAction, true
 }
 
-// Complete marks an action as done, deletes it from the graph (D-10 fix), and
-// decrements the depsLeft counter on all dependents. Returns (newly-ready
+// Complete marks an action as done, deletes it from the graph, and decrements
+// the depsLeft counter on all dependents. Returns (newly-ready
 // dependents as TrackedAction pointers, true) on success.
 //
 // If id is unknown (not in the graph), a warning is logged and (nil, false)
@@ -207,9 +207,8 @@ func (g *DepGraph) Complete(id int64) ([]*TrackedAction, bool) {
 	dependents := make([]*trackedNode, len(node.dependents))
 	copy(dependents, node.dependents)
 
-	// D-10 fix: delete the completed action so future Add/Register callers
-	// treat the ID as already satisfied instead of wiring new dependents to a
-	// stale node.
+	// Delete the completed action so future Add/Register callers treat the ID
+	// as already satisfied instead of wiring new dependents to a stale node.
 	delete(g.actions, id)
 
 	g.mu.Unlock()
@@ -227,9 +226,8 @@ func (g *DepGraph) Complete(id int64) ([]*TrackedAction, bool) {
 	return ready, true
 }
 
-// InFlightCount returns the number of actions currently in the graph that
-// have not yet completed. Accurate because Complete deletes from the
-// actions map (D-10 fix).
+// InFlightCount returns the number of actions currently in the graph that have
+// not yet completed.
 func (g *DepGraph) InFlightCount() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()

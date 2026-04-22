@@ -292,7 +292,41 @@ func TestRunSteadyStateReplan_LocalSnapshotCommitFailureStopsWatch(t *testing.T)
 	}, DirtyBatch{
 		Paths: []string{"fatal.txt"},
 	})
-	require.ErrorContains(t, err, "watch local snapshot commit")
+	require.ErrorContains(t, err, "watch replan local snapshot commit")
+	assert.Empty(t, rt.currentOutbox())
+	assert.False(t, rt.syncBatch.active)
+}
+
+func TestRunSteadyStateReplan_ContextCancellationAfterObservationIsCleanShutdown(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, _ := newTestEngine(t, mock)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.afterSteadyStateObserve = cancel
+
+	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
+		bl:   bl,
+		mode: SyncBidirectional,
+	}, DirtyBatch{
+		Paths: []string{"cancel.txt"},
+	})
+	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.syncBatch.active)
 }
