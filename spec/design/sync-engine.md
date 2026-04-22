@@ -132,10 +132,11 @@ stage sequence: load planner inputs, build the current action plan from those
 observed inputs, then prepare the runtime handoff by reconciling durable
 retry/scope state and loading surviving `retry_work` / `block_scopes`. In
 code, `engine_current_observe.go` owns live observation plus durable snapshot
-commits, `engine_current_inputs.go` owns planner-input loads and dry-run
-scratch planning, and `engine_runtime_prepare.go` owns the observed-state ->
-build -> prepare handoff. Stale `retry_work` and empty `block_scopes` are
-pruned there, not from timer held-release paths.
+commits, `engine_current_projection.go` owns planner-input loads,
+`engine_current_dry_run.go` owns scratch-store dry-run planning, and
+`engine_runtime_prepare.go` owns the observed-state -> build -> prepare
+handoff. Stale `retry_work` and empty `block_scopes` are pruned there, not
+from timer held-release paths.
 
 Scope startup cleanup follows the same policy with a deliberate
 decision-then-apply split: the engine first derives which persisted scopes are
@@ -157,8 +158,9 @@ bookkeeping. The same rule applies to execution-only publication drain
 helpers and post-sync housekeeping: keep them next to their stage so a reader
 can see the flow at a glance. The prepare half should read from
 `engine_runtime_prepare.go`; live observation and durable snapshot helpers
-should read from `engine_current_observe.go`; planner-input and dry-run
-helpers should read from `engine_current_inputs.go`.
+should read from `engine_current_observe.go`; planner-input helpers should
+read from `engine_current_projection.go`; dry-run scratch planning should read
+from `engine_current_dry_run.go`.
 
 Once one-shot shutdown has started, late worker completions no longer re-enter
 the normal outbox path. The engine runs them through the same shutdown
