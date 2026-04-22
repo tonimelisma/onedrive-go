@@ -18,8 +18,7 @@ func (rt *watchRuntime) runBootstrapStep(
 
 	select {
 	case dispatchCh <- nextAction:
-		rt.markRunning(nextAction)
-		rt.consumeOutboxHead()
+		rt.handleWatchDispatchReady(nextAction)
 		return false, nil
 	case batch, ok := <-p.replanReady:
 		return rt.handleBootstrapReplan(ctx, p, batch, ok)

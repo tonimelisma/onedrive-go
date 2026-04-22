@@ -10,6 +10,19 @@ func (rt *watchRuntime) handleWatchDispatchReady(dispatched *TrackedAction) {
 	rt.consumeOutboxHead()
 }
 
+func (rt *watchRuntime) handleWatchReplanChannel(
+	ctx context.Context,
+	p *watchPipeline,
+	batch DirtyBatch,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		return true, nil
+	}
+
+	return false, rt.handleWatchReplanReady(ctx, p, batch)
+}
+
 func (rt *watchRuntime) handleWatchReplanReady(
 	ctx context.Context,
 	p *watchPipeline,
@@ -21,6 +34,19 @@ func (rt *watchRuntime) handleWatchReplanReady(
 	}
 
 	return rt.runSteadyStateReplan(ctx, p, batch)
+}
+
+func (rt *watchRuntime) handleWatchCompletionChannel(
+	ctx context.Context,
+	p *watchPipeline,
+	completion *ActionCompletion,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		return false, rt.handleWatchCompletionsClosed(ctx, p)
+	}
+
+	return false, rt.handleWatchActionCompletion(ctx, p, completion)
 }
 
 func (rt *watchRuntime) handleWatchActionCompletion(
@@ -44,6 +70,20 @@ func (rt *watchRuntime) handleWatchCompletionsClosed(
 	return fmt.Errorf("sync: action completions channel closed unexpectedly")
 }
 
+func (rt *watchRuntime) handleWatchLocalChangeChannel(
+	p *watchPipeline,
+	change *ChangeEvent,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		p.localEvents = nil
+		return false, nil
+	}
+
+	rt.handleWatchLocalChange(change)
+	return false, nil
+}
+
 func (rt *watchRuntime) handleWatchLocalChange(change *ChangeEvent) {
 	if change == nil || rt.dirtyBuf == nil {
 		return
@@ -54,6 +94,63 @@ func (rt *watchRuntime) handleWatchLocalChange(change *ChangeEvent) {
 	if change.OldPath != "" {
 		rt.dirtyBuf.MarkPath(change.OldPath)
 	}
+}
+
+func (rt *watchRuntime) handleWatchRemoteBatchChannel(
+	ctx context.Context,
+	p *watchPipeline,
+	batch *remoteObservationBatch,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		p.remoteBatches = nil
+		return false, nil
+	}
+
+	return false, rt.handleRemoteObservationBatch(ctx, batch)
+}
+
+func (rt *watchRuntime) handleWatchSkippedChannel(
+	ctx context.Context,
+	p *watchPipeline,
+	skipped []SkippedItem,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		p.skippedCh = nil
+		return false, nil
+	}
+
+	rt.reconcileSkippedObservationFindings(ctx, rt, skipped)
+	return false, nil
+}
+
+func (rt *watchRuntime) handleWatchRefreshResultChannel(
+	ctx context.Context,
+	p *watchPipeline,
+	result *remoteRefreshResult,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		p.refreshResults = nil
+		return false, nil
+	}
+
+	return false, rt.applyRemoteRefreshResult(ctx, result)
+}
+
+func (rt *watchRuntime) handleWatchObserverErrorChannel(
+	ctx context.Context,
+	p *watchPipeline,
+	observerErr error,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		p.errs = nil
+		return false, nil
+	}
+
+	return false, rt.handleWatchObserverError(ctx, p, observerErr)
 }
 
 func (rt *watchRuntime) handleWatchObserverError(
