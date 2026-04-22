@@ -124,7 +124,9 @@ rows are also canonicalized engine-side: all runtime paths persist
 `blocked=true`, the scope-derived `condition_type`, the exact `scope_key`, and
 the canonical `"blocked by scope: <scope>"` durable message.
 Current-truth loading for that policy lives in `engine_current_observe.go`,
-while durable prune/load for runtime startup lives in `engine_runtime_prepare.go`.
+planner-input loading and dry-run scratch preparation live in
+`engine_current_inputs.go`, and durable prune/load for runtime startup lives
+in `engine_runtime_prepare.go`.
 
 The store does not own a mixed failure table, failure-role transitions,
 timer-time stale-row cleanup, or a store-owned grouped condition projection.
