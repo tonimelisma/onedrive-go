@@ -179,15 +179,18 @@ back-to-back expensive full refreshes.
 - graceful drain on shutdown
 
 The watch loop is the single owner of mutable scheduling/runtime state:
-outbox, dispatch admission, held-work timing, refresh coordination, and drain
-behavior. Remote observation commits now follow the same single-owner rule:
+bootstrap/running/drain phase, outbox, dispatch admission, held-work timing,
+refresh coordination, and drain behavior. Remote observation commits now
+follow the same single-owner rule:
 watch observers and full-refresh goroutines emit one loop-applied
 `remoteObservationBatch` value, and the loop itself owns projected remote
 observation commits, cursor commits, observation-finding reconciliation, dirty
 marking, and refresh-timer re-arm.
-That owner boundary stays concrete in code too: `runWatchStep` keeps the
-`select` directly in the loop owner instead of routing through an intermediate
-event-envelope type.
+That owner boundary stays concrete in code too: `runWatchLoop` is the shared
+outer owner for bootstrap, steady-state, and drain, while `runWatchStepIdle`
+and `runWatchStepWithOutbox` keep the steady-state `select` direct and
+concrete instead of routing through an intermediate event-envelope type or
+phase callback layer.
 
 Local watcher events, remote delta batches, websocket wakes, and full remote
 refresh results are scheduler hints only. After debounce or wake, watch
@@ -199,6 +202,12 @@ current plan, prepare the runtime handoff, then append the resulting concrete
 worker frontier through the watch-owned frontier helpers. DirtyBuffer still
 emits `DirtyBatch` scheduler hints, but those hints feed only this steady-state
 replan path; they do not define a second planning model.
+
+Bootstrap uses that same outer owner after the initial
+observe/prepare/start-runtime handoff. The only bootstrap-specific semantics
+that remain are the bootstrap quiescence rule, bootstrap wait logging, and the
+fact that observers do not start until that bootstrap-owned quiescent boundary
+has been reached.
 
 Watch runtime replacement is linear: one current runtime graph at a time.
 Dirty observation while work is still queued or running sets a pending replan

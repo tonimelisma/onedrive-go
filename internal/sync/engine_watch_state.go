@@ -104,8 +104,9 @@ type watchRuntime struct {
 type watchRuntimePhase string
 
 const (
-	watchRuntimePhaseRunning  watchRuntimePhase = "running"
-	watchRuntimePhaseDraining watchRuntimePhase = "draining"
+	watchRuntimePhaseBootstrap watchRuntimePhase = "bootstrap"
+	watchRuntimePhaseRunning   watchRuntimePhase = "running"
+	watchRuntimePhaseDraining  watchRuntimePhase = "draining"
 )
 
 func newWatchRuntime(engine *Engine) *watchRuntime {
@@ -139,6 +140,14 @@ func (rt *watchRuntime) phase() watchRuntimePhase {
 
 func (rt *watchRuntime) isDraining() bool {
 	return rt.phase() == watchRuntimePhaseDraining
+}
+
+func (rt *watchRuntime) enterBootstrap() {
+	rt.loop.phase = watchRuntimePhaseBootstrap
+}
+
+func (rt *watchRuntime) enterRunning() {
+	rt.loop.phase = watchRuntimePhaseRunning
 }
 
 func (rt *watchRuntime) enterDraining() bool {
