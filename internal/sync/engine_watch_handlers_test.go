@@ -10,7 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func TestHandleWatchEvent_ActionCompletionDrainsPublicationOnlyDependents(t *testing.T) {
+func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependents(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -48,19 +48,15 @@ func TestHandleWatchEvent_ActionCompletionDrainsPublicationOnlyDependents(t *tes
 	assert.Nil(t, dependent, "cleanup dependent should wait on its parent before completion")
 
 	p := &watchPipeline{bl: bl}
-	done, err := rt.handleWatchEvent(ctx, p, &watchEvent{
-		kind: watchEventActionCompletion,
-		completion: &ActionCompletion{
-			Path:       "sync.txt",
-			ItemID:     "sync-item",
-			DriveID:    driveID,
-			ActionType: ActionDownload,
-			Success:    true,
-			ActionID:   1,
-		},
+	err = rt.handleWatchActionCompletion(ctx, p, &ActionCompletion{
+		Path:       "sync.txt",
+		ItemID:     "sync-item",
+		DriveID:    driveID,
+		ActionType: ActionDownload,
+		Success:    true,
+		ActionID:   1,
 	})
 	require.NoError(t, err)
-	assert.False(t, done)
 	assert.Empty(t, rt.currentOutbox(), "publication-only dependents should drain on the engine side")
 	assert.Equal(t, 0, rt.depGraph.InFlightCount())
 
@@ -165,7 +161,7 @@ func TestReduceReadyFrontier_PersistsRetryWorkOnPublicationCommitFailure(t *test
 }
 
 // Validates: R-2.10.33
-func TestHandleWatchEvent_RetryTickReducesReleasedPublicationRetryOnEngineSide(t *testing.T) {
+func TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -206,11 +202,8 @@ func TestHandleWatchEvent_RetryTickReducesReleasedPublicationRetryOnEngineSide(t
 	require.NotNil(t, publication)
 	rt.holdAction(publication, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
 
-	done, err := rt.handleWatchEvent(ctx, &watchPipeline{bl: bl}, &watchEvent{
-		kind: watchEventRetryTick,
-	})
+	err = rt.handleWatchHeldRelease(ctx, &watchPipeline{bl: bl}, false)
 	require.NoError(t, err)
-	assert.False(t, done)
 	assert.Empty(t, rt.currentOutbox(), "released publication retries must reduce on the engine side before any worker dispatch")
 	assert.Empty(t, rt.heldByKey)
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))

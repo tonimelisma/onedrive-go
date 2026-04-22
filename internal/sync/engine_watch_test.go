@@ -474,17 +474,13 @@ func TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare(t *t
 	rt := testWatchRuntime(t, eng)
 	rt.runningCount = 1
 
-	done, err := rt.handleWatchEvent(ctx, &watchPipeline{
+	err = rt.handleWatchReplanReady(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, &watchEvent{
-		kind: watchEventReplanReady,
-		batch: DirtyBatch{
-			Paths: []string{"overlapping.txt"},
-		},
+	}, DirtyBatch{
+		Paths: []string{"overlapping.txt"},
 	})
 	require.NoError(t, err)
-	assert.False(t, done)
 	assert.Empty(t, rt.currentOutbox())
 	assert.True(t, rt.hasPendingReplan())
 

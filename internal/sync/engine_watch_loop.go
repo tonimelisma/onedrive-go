@@ -104,12 +104,73 @@ func (rt *watchRuntime) runPendingReplan(
 	return true, rt.runSteadyStateReplan(ctx, p, batch)
 }
 
+//nolint:gocyclo // The watch loop keeps one direct owner select over all watch control flow.
 func (rt *watchRuntime) runWatchStep(
 	ctx context.Context,
 	p *watchPipeline,
 ) (bool, error) {
-	event := rt.waitWatchEvent(ctx, p)
-	return rt.handleWatchEvent(ctx, p, &event)
+	dispatchCh, nextAction := rt.dispatchChannelForOutbox()
+
+	select {
+	case dispatchCh <- nextAction:
+		rt.handleWatchDispatchReady(nextAction)
+		return false, nil
+	case batch, ok := <-p.replanReady:
+		if !ok {
+			return true, nil
+		}
+		return false, rt.handleWatchReplanReady(ctx, p, batch)
+	case completion, ok := <-p.completions:
+		if !ok {
+			return false, rt.handleWatchCompletionsClosed(ctx, p)
+		}
+		return false, rt.handleWatchActionCompletion(ctx, p, &completion)
+	case change, ok := <-p.localEvents:
+		if !ok {
+			p.localEvents = nil
+			return false, nil
+		}
+		rt.handleWatchLocalChange(&change)
+		return false, nil
+	case batch, ok := <-p.remoteBatches:
+		if !ok {
+			p.remoteBatches = nil
+			return false, nil
+		}
+		return false, rt.handleRemoteObservationBatch(ctx, &batch)
+	case skipped, ok := <-p.skippedCh:
+		if !ok {
+			p.skippedCh = nil
+			return false, nil
+		}
+		rt.reconcileSkippedObservationFindings(ctx, rt, skipped)
+		return false, nil
+	case <-p.refreshC:
+		rt.runFullRemoteRefreshAsync(ctx, p.bl)
+		return false, nil
+	case result, ok := <-p.refreshResults:
+		if !ok {
+			p.refreshResults = nil
+			return false, nil
+		}
+		return false, rt.applyRemoteRefreshResult(ctx, &result)
+	case <-p.maintenanceC:
+		rt.handleMaintenanceTick(ctx)
+		return false, nil
+	case observerErr, ok := <-p.errs:
+		if !ok {
+			p.errs = nil
+			return false, nil
+		}
+		return false, rt.handleWatchObserverError(ctx, p, observerErr)
+	case <-rt.trialTimerChan():
+		return false, rt.handleWatchHeldRelease(ctx, p, true)
+	case <-rt.retryTimerChan():
+		return false, rt.handleWatchHeldRelease(ctx, p, false)
+	case <-ctx.Done():
+		rt.beginWatchDrain(ctx, p)
+		return false, nil
+	}
 }
 
 func (rt *watchRuntime) appendReadyFrontier(
