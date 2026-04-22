@@ -58,7 +58,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Behavior | Evidence |
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
-| One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestHandleWatchEvent_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunBootstrapStep_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
+| One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunBootstrapStep_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 
 ## Construction
 
@@ -183,6 +183,9 @@ watch observers and full-refresh goroutines emit one loop-applied
 `remoteObservationBatch` value, and the loop itself owns projected remote
 observation commits, cursor commits, observation-finding reconciliation, dirty
 marking, and refresh-timer re-arm.
+That owner boundary stays concrete in code too: `runWatchStep` keeps the
+`select` directly in the loop owner instead of routing through an intermediate
+event-envelope type.
 
 Local watcher events, remote delta batches, websocket wakes, and full remote
 refresh results are scheduler hints only. After debounce or wake, watch

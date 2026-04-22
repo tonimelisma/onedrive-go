@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 )
@@ -54,7 +53,7 @@ func (rt *watchRuntime) handleBootstrapReplan(
 		return false, nil
 	}
 
-	if err := rt.runSteadyStateReplan(ctx, p, batch); err != nil {
+	if err := rt.handleWatchReplanReady(ctx, p, batch); err != nil {
 		return false, err
 	}
 
@@ -68,27 +67,16 @@ func (rt *watchRuntime) handleBootstrapCompletion(
 	ok bool,
 ) (bool, error) {
 	if !ok {
+		if err := rt.handleWatchCompletionsClosed(ctx, p); err != nil {
+			return false, err
+		}
 		if contextIsCanceled(ctx) {
-			p.completions = nil
-			rt.beginWatchDrain(ctx, p)
 			return rt.drainLoopDone(p), nil
 		}
-		return rt.handleBootstrapResultsClosed(ctx)
+		return false, nil
 	}
 
-	return false, rt.applyRuntimeCompletion(ctx, p, completion)
-}
-
-func (rt *watchRuntime) handleBootstrapResultsClosed(
-	ctx context.Context,
-) (bool, error) {
-	select {
-	case <-ctx.Done():
-		return false, fmt.Errorf("sync: watch bootstrap context done: %w", ctx.Err())
-	default:
-	}
-
-	return false, fmt.Errorf("sync: action completions channel closed unexpectedly")
+	return false, rt.handleWatchActionCompletion(ctx, p, completion)
 }
 
 func (rt *watchRuntime) logBootstrapWait() {
