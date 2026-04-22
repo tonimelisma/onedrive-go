@@ -207,7 +207,15 @@ crossing into the worker pool.
 Action completion drain stays inside the engine boundary. When a completion
 unlocks publication-only dependents, watch mode commits those mutations
 synchronously and keeps draining them on the engine/store side until concrete
-worker actions are the only dispatchable work left.
+worker actions are the only dispatchable work left. That frontier reduction is
+transform-only: it takes exact ready actions and returns only the concrete
+worker frontier. One-shot and watch coordinators still own their outbox state
+explicitly.
+
+Runtime completion handling follows the same boundary shape everywhere:
+classify the finished exact action, apply the resulting durable/runtime
+mutation, then release any due held work back into the ready frontier. It does
+not mix that decision step with worker-queue ownership.
 
 ### Maintenance And Refresh
 

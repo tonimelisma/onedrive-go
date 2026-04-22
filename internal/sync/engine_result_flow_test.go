@@ -23,7 +23,7 @@ func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsRetryWork(t
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	outcome := flow.processNormalDecision(t.Context(), nil, &ResultDecision{
+	ready, err := flow.processNormalDecision(t.Context(), nil, &ResultDecision{
 		Class:         errclass.ClassInvalid,
 		ConditionKey:  ConditionInvalidFilename,
 		Persistence:   persistRetryWork,
@@ -35,9 +35,8 @@ func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsRetryWork(t
 		ErrMsg:     "invalid filename",
 	}, nil)
 
-	require.True(t, outcome.terminate)
-	require.ErrorContains(t, outcome.terminateErr, "invalid failure class")
-	assert.Empty(t, outcome.dispatched)
+	require.ErrorContains(t, err, "invalid failure class")
+	assert.Empty(t, ready)
 	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -53,7 +52,7 @@ func TestEngineFlow_ProcessNormalDecision_ShutdownReturnsWithoutPersistence(t *t
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	outcome := flow.processNormalDecision(t.Context(), nil, &ResultDecision{
+	ready, err := flow.processNormalDecision(t.Context(), nil, &ResultDecision{
 		Class:     errclass.ClassShutdown,
 		TrialHint: trialHintShutdown,
 	}, nil, &ActionCompletion{
@@ -61,9 +60,8 @@ func TestEngineFlow_ProcessNormalDecision_ShutdownReturnsWithoutPersistence(t *t
 		ActionType: ActionUpload,
 	}, nil)
 
-	assert.False(t, outcome.terminate)
-	require.NoError(t, outcome.terminateErr)
-	assert.Empty(t, outcome.dispatched)
+	require.NoError(t, err)
+	assert.Empty(t, ready)
 	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 }
@@ -75,7 +73,7 @@ func TestEngineFlow_ProcessNormalDecision_FatalTerminatesWithFatalResultError(t 
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	outcome := flow.processNormalDecision(t.Context(), nil, &ResultDecision{
+	ready, err := flow.processNormalDecision(t.Context(), nil, &ResultDecision{
 		Class:        errclass.ClassFatal,
 		ConditionKey: ConditionAuthenticationRequired,
 		TrialHint:    trialHintFatal,
@@ -84,9 +82,8 @@ func TestEngineFlow_ProcessNormalDecision_FatalTerminatesWithFatalResultError(t 
 		ActionType: ActionUpload,
 	}, nil)
 
-	require.True(t, outcome.terminate)
-	require.EqualError(t, outcome.terminateErr, "sync: unauthorized action completion for auth.txt")
-	assert.Empty(t, outcome.dispatched)
+	require.EqualError(t, err, "sync: unauthorized action completion for auth.txt")
+	assert.Empty(t, ready)
 }
 
 // Validates: R-2.10.5
@@ -97,7 +94,7 @@ func TestEngineFlow_ProcessNormalDecision_RetryableTransientScopeEvidenceStaysUn
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
 
-	outcome := flow.processNormalDecision(t.Context(), rt, &ResultDecision{
+	ready, err := flow.processNormalDecision(t.Context(), rt, &ResultDecision{
 		Class:             errclass.ClassRetryableTransient,
 		ConditionKey:      ConditionServiceOutage,
 		ScopeEvidence:     SKService(),
@@ -112,9 +109,8 @@ func TestEngineFlow_ProcessNormalDecision_RetryableTransientScopeEvidenceStaysUn
 		ErrMsg:     "temporary outage",
 	}, nil)
 
-	assert.False(t, outcome.terminate)
-	require.NoError(t, outcome.terminateErr)
-	assert.Empty(t, outcome.dispatched)
+	require.NoError(t, err)
+	assert.Empty(t, ready)
 	assert.False(t, rt.hasActiveScope(SKService()))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -167,11 +163,10 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelaye
 			}
 			decision := classifyResult(r)
 
-			outcome := flow.processNormalDecision(t.Context(), nil, &decision, nil, r, nil)
+			ready, err := flow.processNormalDecision(t.Context(), nil, &decision, nil, r, nil)
 
-			assert.False(t, outcome.terminate)
-			require.NoError(t, outcome.terminateErr)
-			assert.Empty(t, outcome.dispatched)
+			require.NoError(t, err)
+			assert.Empty(t, ready)
 			assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
 
 			retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -210,11 +205,10 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionArmsRetryTimer
 	}, 1, nil)
 	require.NotNil(t, current)
 
-	outcome := flow.processNormalDecision(t.Context(), rt, &decision, current, r, nil)
+	ready, err := flow.processNormalDecision(t.Context(), rt, &decision, current, r, nil)
 
-	assert.False(t, outcome.terminate)
-	require.NoError(t, outcome.terminateErr)
-	assert.Empty(t, outcome.dispatched)
+	require.NoError(t, err)
+	assert.Empty(t, ready)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -249,16 +243,15 @@ func TestEngineFlow_ProcessNormalDecision_RemoteBoundaryPermissionDoesNotArmRetr
 		ErrMsg:     "folder is read-only",
 	}
 
-	outcome := flow.processNormalDecision(t.Context(), rt, &ResultDecision{
+	ready, err := flow.processNormalDecision(t.Context(), rt, &ResultDecision{
 		Class:          errclass.ClassActionable,
 		ConditionKey:   ConditionRemoteWriteDenied,
 		ConditionType:  IssueRemoteWriteDenied,
 		PermissionFlow: permissionFlowRemote403,
 	}, nil, r, &Baseline{})
 
-	assert.False(t, outcome.terminate)
-	require.NoError(t, outcome.terminateErr)
-	assert.Empty(t, outcome.dispatched)
+	require.NoError(t, err)
+	assert.Empty(t, ready)
 	assert.False(t, rt.hasRetryTimer(), "boundary-blocked permission failures should not arm the ordinary retry timer")
 	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
 
@@ -299,16 +292,15 @@ func TestEngineFlow_ProcessNormalDecision_KnownRemoteBoundaryNoOpDoesNotPersistO
 		ErrMsg:     "still read-only",
 	}
 
-	outcome := flow.processNormalDecision(t.Context(), rt, &ResultDecision{
+	ready, err := flow.processNormalDecision(t.Context(), rt, &ResultDecision{
 		Class:          errclass.ClassActionable,
 		ConditionKey:   ConditionRemoteWriteDenied,
 		ConditionType:  IssueRemoteWriteDenied,
 		PermissionFlow: permissionFlowRemote403,
 	}, nil, r, &Baseline{})
 
-	assert.False(t, outcome.terminate)
-	require.NoError(t, outcome.terminateErr)
-	assert.Empty(t, outcome.dispatched)
+	require.NoError(t, err)
+	assert.Empty(t, ready)
 	assert.False(t, rt.hasRetryTimer())
 	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
@@ -327,7 +319,7 @@ func TestEngineFlow_ProcessTrialDecision_RearmOrDiscardRecordsFailureWithoutTerm
 	flow := testEngineFlow(t, eng)
 	scopeKey := SKService()
 
-	outcome := flow.processTrialDecision(t.Context(), nil, scopeKey, &ResultDecision{
+	ready, err := flow.processTrialDecision(t.Context(), nil, scopeKey, &ResultDecision{
 		Class:         errclass.ClassActionable,
 		ConditionKey:  ConditionInvalidFilename,
 		ConditionType: IssueInvalidFilename,
@@ -340,9 +332,8 @@ func TestEngineFlow_ProcessTrialDecision_RearmOrDiscardRecordsFailureWithoutTerm
 		ErrMsg:        "still invalid",
 	}, nil)
 
-	assert.False(t, outcome.terminate)
-	require.NoError(t, outcome.terminateErr)
-	assert.Empty(t, outcome.dispatched)
+	require.NoError(t, err)
+	assert.Empty(t, ready)
 
 	succeeded, failed, errs := flow.resultStats()
 	assert.Equal(t, 0, succeeded)
@@ -402,7 +393,7 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionOutcomeFallsBackToRe
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	outcome := flow.processTrialDecision(t.Context(), rt, scopeKey, &ResultDecision{
+	ready, err := flow.processTrialDecision(t.Context(), rt, scopeKey, &ResultDecision{
 		Class:          errclass.ClassActionable,
 		ConditionKey:   ConditionRemoteWriteDenied,
 		ConditionType:  IssueRemoteWriteDenied,
@@ -419,9 +410,8 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionOutcomeFallsBackToRe
 		TrialScopeKey: scopeKey,
 	}, bl)
 
-	assert.False(t, outcome.terminate)
-	require.NoError(t, outcome.terminateErr)
-	assert.Empty(t, outcome.dispatched)
+	require.NoError(t, err)
+	assert.Empty(t, ready)
 	assert.True(t, rt.hasRetryTimer(), "generic retry fallback should arm the ordinary retry timer")
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -465,7 +455,7 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 	}, 2, []int64{1})
 	assert.Nil(t, dependent)
 
-	outcome := rt.processActionCompletion(t.Context(), rt, &ActionCompletion{
+	ready, err := rt.processActionCompletion(t.Context(), rt, &ActionCompletion{
 		ActionID:      1,
 		Path:          "trial.txt",
 		ActionType:    ActionUpload,
@@ -475,11 +465,10 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 		TrialScopeKey: scopeKey,
 	}, &Baseline{})
 
-	assert.False(t, outcome.terminate)
-	require.NoError(t, outcome.terminateErr)
-	require.Len(t, outcome.dispatched, 1)
-	assert.Equal(t, int64(2), outcome.dispatched[0].ID)
-	assert.Equal(t, "dependent.txt", outcome.dispatched[0].Action.Path)
+	require.NoError(t, err)
+	require.Len(t, ready, 1)
+	assert.Equal(t, int64(2), ready[0].ID)
+	assert.Equal(t, "dependent.txt", ready[0].Action.Path)
 	assert.False(t, rt.hasActiveScope(scopeKey))
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 }
@@ -491,16 +480,15 @@ func TestEngineFlow_ProcessTrialDecision_ShutdownCompletesWithoutTerminating(t *
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	outcome := flow.processTrialDecision(t.Context(), nil, SKService(), &ResultDecision{
+	ready, err := flow.processTrialDecision(t.Context(), nil, SKService(), &ResultDecision{
 		TrialHint: trialHintShutdown,
 	}, nil, &ActionCompletion{
 		Path:       "trial-shutdown.txt",
 		ActionType: ActionUpload,
 	}, nil)
 
-	assert.False(t, outcome.terminate)
-	require.NoError(t, outcome.terminateErr)
-	assert.Empty(t, outcome.dispatched)
+	require.NoError(t, err)
+	assert.Empty(t, ready)
 }
 
 // Validates: R-2.10.5
@@ -510,7 +498,7 @@ func TestEngineFlow_ProcessTrialDecision_FatalTerminatesWithFatalResultError(t *
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	outcome := flow.processTrialDecision(t.Context(), nil, SKService(), &ResultDecision{
+	ready, err := flow.processTrialDecision(t.Context(), nil, SKService(), &ResultDecision{
 		Class:        errclass.ClassFatal,
 		ConditionKey: ConditionAuthenticationRequired,
 		TrialHint:    trialHintFatal,
@@ -519,9 +507,8 @@ func TestEngineFlow_ProcessTrialDecision_FatalTerminatesWithFatalResultError(t *
 		ActionType: ActionUpload,
 	}, nil)
 
-	require.True(t, outcome.terminate)
-	require.EqualError(t, outcome.terminateErr, "sync: unauthorized action completion for trial-auth.txt")
-	assert.Empty(t, outcome.dispatched)
+	require.EqualError(t, err, "sync: unauthorized action completion for trial-auth.txt")
+	assert.Empty(t, ready)
 }
 
 // Validates: R-6.8
@@ -540,7 +527,7 @@ func TestEngineFlow_ProcessActionCompletion_RetryPersistenceFailureTerminatesAnd
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	outcome := flow.processActionCompletion(t.Context(), nil, &ActionCompletion{
+	ready, err := flow.processActionCompletion(t.Context(), nil, &ActionCompletion{
 		ActionID:   1,
 		Path:       "retry.txt",
 		ActionType: ActionUpload,
@@ -548,9 +535,8 @@ func TestEngineFlow_ProcessActionCompletion_RetryPersistenceFailureTerminatesAnd
 		ErrMsg:     "temporary outage",
 	}, nil)
 
-	require.True(t, outcome.terminate)
-	require.ErrorContains(t, outcome.terminateErr, "record retry_work")
-	assert.Empty(t, outcome.dispatched)
+	require.ErrorContains(t, err, "record retry_work")
+	assert.Empty(t, ready)
 	assert.Zero(t, flow.runningCount, "control-state persistence failure must still finish the completed action bookkeeping")
 	assert.Empty(t, flow.runningByID)
 	assert.Equal(t, 1, flow.depGraph.InFlightCount(), "the unresolved action must remain in the graph when the runtime fails closed")

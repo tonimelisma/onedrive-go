@@ -33,7 +33,7 @@ func (flow *engineFlow) startPreparedRuntime(
 	if err != nil {
 		return nil, false, err
 	}
-	outbox, err := flow.appendReadyThroughPublicationFrontier(ctx, watch, bl, nil, ready)
+	outbox, err := flow.reduceReadyFrontier(ctx, watch, bl, ready)
 	if err != nil {
 		flow.completeOutboxAsShutdown(outbox)
 		return nil, false, err
@@ -44,11 +44,13 @@ func (flow *engineFlow) startPreparedRuntime(
 		return nil, false, err
 	}
 	if len(dueHeld) > 0 {
-		outbox, err = flow.appendReadyThroughPublicationFrontier(ctx, watch, bl, outbox, dueHeld)
+		reduced, err := flow.reduceReadyFrontier(ctx, watch, bl, dueHeld)
 		if err != nil {
+			outbox = append(outbox, reduced...)
 			flow.completeOutboxAsShutdown(outbox)
 			return nil, false, err
 		}
+		outbox = append(outbox, reduced...)
 	}
 
 	return outbox, flow.depGraph.InFlightCount() > 0, nil

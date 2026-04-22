@@ -63,6 +63,9 @@ func (rt *watchRuntime) processDirtyBatch(
 		return nil
 	}
 	rt.maybeFinishSyncStatusBatch(ctx, mode, dispatch)
+	if len(dispatch) == 0 {
+		return nil
+	}
 
 	return dispatch
 }

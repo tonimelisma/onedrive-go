@@ -31,21 +31,17 @@ func (flow *engineFlow) commitPublicationAction(ctx context.Context, ta *Tracked
 	return err
 }
 
-// reducePublicationFrontier keeps publication-only actions on the engine side
-// of the boundary. It commits those actions synchronously, unlocks their
-// dependents directly through the engine-owned publication success path, and
-// returns only executable work for worker dispatch. Publication failures still
-// route through the ordinary result classifier so exact retry_work persists and
-// the current runtime can hold the failed publication node instead of tearing
-// down the whole loop on a transient store error.
-func (flow *engineFlow) reducePublicationFrontier(
+// reduceReadyFrontier keeps publication-only actions on the engine side of the
+// boundary. On success it returns only concrete work for worker dispatch. If it
+// returns an error, the returned slice contains any exact actions the caller
+// still owns and should complete as shutdown instead of dispatching.
+func (flow *engineFlow) reduceReadyFrontier(
 	ctx context.Context,
 	watch *watchRuntime,
 	bl *Baseline,
-	outbox []*TrackedAction,
 	ready []*TrackedAction,
 ) ([]*TrackedAction, error) {
-	nextOutbox := append([]*TrackedAction(nil), outbox...)
+	concrete := make([]*TrackedAction, 0, len(ready))
 	queue := append([]*TrackedAction(nil), ready...)
 
 	for len(queue) > 0 {
@@ -55,43 +51,25 @@ func (flow *engineFlow) reducePublicationFrontier(
 			continue
 		}
 		if !isPublicationOnlyActionType(ta.Action.Type) {
-			nextOutbox = append(nextOutbox, ta)
+			concrete = append(concrete, ta)
 			continue
 		}
 
 		if err := flow.commitPublicationAction(ctx, ta); err != nil {
 			completion := actionCompletionFromTrackedAction(ta, nil, err)
-			outcome := flow.processActionCompletion(ctx, watch, &completion, bl)
-			if outcome.terminate {
-				nextOutbox = append(nextOutbox, queue...)
-				return nextOutbox, outcome.terminateErr
+			released, completionErr := flow.processActionCompletion(ctx, watch, &completion, bl)
+			if completionErr != nil {
+				return append(concrete, queue...), completionErr
 			}
-			queue = append(queue, outcome.dispatched...)
+			queue = append(queue, released...)
 			continue
 		}
 		unlocked, err := flow.applyPublicationSuccess(ctx, watch, ta)
 		if err != nil {
-			nextOutbox = append(nextOutbox, queue...)
-			return nextOutbox, err
+			return append(concrete, queue...), err
 		}
 		queue = append(queue, unlocked...)
 	}
 
-	_ = bl
-	return nextOutbox, nil
-}
-
-// appendReadyThroughPublicationFrontier is the shared engine-owned re-entry
-// point for exact ready actions. Timer-released held work, startup admission,
-// and completion-unlocked dependents must pass through publication reduction
-// before any executable outbox append so publication-only actions never reach
-// workers.
-func (flow *engineFlow) appendReadyThroughPublicationFrontier(
-	ctx context.Context,
-	watch *watchRuntime,
-	bl *Baseline,
-	outbox []*TrackedAction,
-	ready []*TrackedAction,
-) ([]*TrackedAction, error) {
-	return flow.reducePublicationFrontier(ctx, watch, bl, outbox, ready)
+	return concrete, nil
 }

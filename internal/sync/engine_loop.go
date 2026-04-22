@@ -145,20 +145,20 @@ func (r *oneShotRunner) handleOneShotCompletion(
 	fatalErr error,
 	completion *ActionCompletion,
 ) ([]*TrackedAction, error) {
-	outcome := r.processActionCompletion(ctx, nil, completion, bl)
-	if !outcome.terminate {
-		nextOutbox, err := r.appendReadyThroughPublicationFrontier(ctx, nil, bl, outbox, outcome.dispatched)
+	ready, completionErr := r.processActionCompletion(ctx, nil, completion, bl)
+	if completionErr == nil {
+		reduced, err := r.reduceReadyFrontier(ctx, nil, bl, ready)
 		if err == nil || fatalErr != nil {
-			return nextOutbox, fatalErr
+			return append(outbox, reduced...), fatalErr
 		}
-		outbox = nextOutbox
+		outbox = append(outbox, reduced...)
 		fatalErr = err
 	} else {
-		outbox = append(outbox, outcome.dispatched...)
+		outbox = append(outbox, ready...)
 		if fatalErr != nil {
 			return outbox, fatalErr
 		}
-		fatalErr = outcome.terminateErr
+		fatalErr = completionErr
 	}
 
 	if cancel != nil {
@@ -448,7 +448,8 @@ func (rt *watchRuntime) runBootstrapStep(
 		if err != nil {
 			return false, err
 		}
-		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), released)
+		reduced, err := rt.reduceReadyFrontier(ctx, rt, p.bl, released)
+		nextOutbox := append(rt.currentOutbox(), reduced...)
 		rt.replaceOutbox(nextOutbox)
 		return false, err
 	case <-rt.retryTimerChan():
@@ -456,7 +457,8 @@ func (rt *watchRuntime) runBootstrapStep(
 		if err != nil {
 			return false, err
 		}
-		nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, rt.currentOutbox(), released)
+		reduced, err := rt.reduceReadyFrontier(ctx, rt, p.bl, released)
+		nextOutbox := append(rt.currentOutbox(), reduced...)
 		rt.replaceOutbox(nextOutbox)
 		return false, err
 	case <-logC:
@@ -513,17 +515,18 @@ func (rt *watchRuntime) handleBootstrapCompletion(
 		return rt.handleBootstrapResultsClosed(ctx)
 	}
 
-	outcome := rt.processActionCompletion(ctx, rt, completion, p.bl)
-	if outcome.terminate {
-		return outbox, false, outcome.terminateErr
+	ready, completionErr := rt.processActionCompletion(ctx, rt, completion, p.bl)
+	if completionErr != nil {
+		return append(outbox, ready...), false, completionErr
 	}
-	nextOutbox, err := rt.appendReadyThroughPublicationFrontier(ctx, rt, p.bl, outbox, outcome.dispatched)
+	reduced, err := rt.reduceReadyFrontier(ctx, rt, p.bl, ready)
+	outbox = append(outbox, reduced...)
 	if err != nil {
-		rt.completeOutboxAsShutdown(nextOutbox)
+		rt.completeOutboxAsShutdown(outbox)
 		return nil, false, err
 	}
-	rt.maybeFinishSyncStatusBatch(ctx, p.mode, nextOutbox)
-	return nextOutbox, false, nil
+	rt.maybeFinishSyncStatusBatch(ctx, p.mode, outbox)
+	return outbox, false, nil
 }
 
 func (rt *watchRuntime) handleBootstrapResultsClosed(
@@ -567,8 +570,11 @@ func (rt *watchRuntime) handleDrainingCompletion(
 		return rt.drainLoopDone(p), nil
 	}
 
-	outcome := rt.processActionCompletion(ctx, rt, completion, p.bl)
-	rt.completeOutboxAsShutdown(outcome.dispatched)
+	ready, err := rt.processActionCompletion(ctx, rt, completion, p.bl)
+	rt.completeOutboxAsShutdown(ready)
+	if err != nil {
+		return false, err
+	}
 	rt.mustAssertInvariants(ctx, rt, "handle draining completion")
 
 	return false, nil

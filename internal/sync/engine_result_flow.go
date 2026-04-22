@@ -11,12 +11,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
-type routeOutcome struct {
-	dispatched   []*TrackedAction
-	terminate    bool
-	terminateErr error
-}
-
 func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []*TrackedAction {
 	if flow.depGraph == nil {
 		panic(fmt.Sprintf("dep_graph: complete action %d during %s with nil graph", actionID, reason))
@@ -30,53 +24,43 @@ func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []
 	return ready
 }
 
-func (flow *engineFlow) terminateAfterControlStateError(
-	current *TrackedAction,
-	err error,
-) routeOutcome {
+func (flow *engineFlow) failAfterControlStateError(current *TrackedAction, err error) error {
 	flow.markFinished(current)
-	return routeOutcome{
-		terminate:    true,
-		terminateErr: err,
-	}
+	return err
 }
 
-// processActionCompletion owns completion classification plus failure-aware
-// dependent dispatch.
+// processActionCompletion is the runtime completion boundary: classify the
+// finished exact action, apply the resulting mutation/persistence decision, and
+// then release any due held work back into the ready frontier.
 func (flow *engineFlow) processActionCompletion(
 	ctx context.Context,
 	watch *watchRuntime,
 	r *ActionCompletion,
 	bl *Baseline,
-) routeOutcome {
+) ([]*TrackedAction, error) {
 	if r == nil {
-		return routeOutcome{}
+		return nil, nil
 	}
 
 	decision := classifyResult(r)
 	current := flow.trackedActionForCompletion(r)
 
-	var outcome routeOutcome
+	var dispatched []*TrackedAction
+	var err error
 	if r.IsTrial && !r.TrialScopeKey.IsZero() {
-		outcome = flow.processTrialDecision(ctx, watch, r.TrialScopeKey, &decision, current, r, bl)
+		dispatched, err = flow.processTrialDecision(ctx, watch, r.TrialScopeKey, &decision, current, r, bl)
 	} else {
-		outcome = flow.processNormalDecision(ctx, watch, &decision, current, r, bl)
+		dispatched, err = flow.processNormalDecision(ctx, watch, &decision, current, r, bl)
 	}
-
-	if outcome.terminate {
-		return outcome
+	if err != nil {
+		return dispatched, err
 	}
 
 	dueHeld, err := flow.drainDueHeldWorkNow(ctx, watch)
 	if err != nil {
-		return routeOutcome{
-			dispatched:   outcome.dispatched,
-			terminate:    true,
-			terminateErr: err,
-		}
+		return dispatched, err
 	}
-	outcome.dispatched = append(outcome.dispatched, dueHeld...)
-	return outcome
+	return append(dispatched, dueHeld...), nil
 }
 
 func (flow *engineFlow) applySuccessEffects(ctx context.Context, r *ActionCompletion) {
@@ -217,30 +201,30 @@ func (flow *engineFlow) maybeHandlePermissionOutcome(
 	current *TrackedAction,
 	r *ActionCompletion,
 	bl *Baseline,
-) (routeOutcome, bool) {
+) (bool, error) {
 	scopeCtrl := flow.scopeController()
 
 	if decision.PermissionFlow == permissionFlowNone {
-		return routeOutcome{}, false
+		return false, nil
 	}
 
 	permOutcome, handled := scopeCtrl.decidePermissionOutcome(ctx, decision, r, bl)
 	if !handled || !permOutcome.Matched {
-		return routeOutcome{}, false
+		return false, nil
 	}
 
 	if _, err := scopeCtrl.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome); err != nil {
-		return flow.terminateAfterControlStateError(current, err), true
+		return true, flow.failAfterControlStateError(current, err)
 	}
 	if err := flow.applyPermissionOutcomeHold(ctx, watch, current, r, &permOutcome); err != nil {
-		return flow.terminateAfterControlStateError(current, err), true
+		return true, flow.failAfterControlStateError(current, err)
 	}
 	if watch != nil {
 		watch.armHeldTimers()
 	}
 	flow.recordError(decision, r)
 
-	return routeOutcome{}, true
+	return true, nil
 }
 
 func (flow *engineFlow) applyPermissionOutcomeHold(
@@ -274,45 +258,41 @@ func (flow *engineFlow) processNormalDecision(
 	current *TrackedAction,
 	r *ActionCompletion,
 	bl *Baseline,
-) routeOutcome {
+) ([]*TrackedAction, error) {
 	scopeCtrl := flow.scopeController()
 
-	if outcome, handled := flow.maybeHandlePermissionOutcome(ctx, watch, decision, current, r, bl); handled {
-		return outcome
+	if handled, err := flow.maybeHandlePermissionOutcome(ctx, watch, decision, current, r, bl); handled {
+		return nil, err
 	}
-
-	outcome := routeOutcome{}
 
 	switch decision.Class {
 	case errclass.ClassInvalid:
 		if err := flow.applyResultPersistence(ctx, decision, r); err != nil {
-			return flow.terminateAfterControlStateError(current, err)
+			return nil, flow.failAfterControlStateError(current, err)
 		}
 		flow.markFinished(current)
-		outcome.terminate = true
-		outcome.terminateErr = fmt.Errorf("classify action completion: invalid failure class")
+		return nil, fmt.Errorf("classify action completion: invalid failure class")
 	case errclass.ClassSuccess:
 		dispatched, err := flow.applyCompletionSuccess(ctx, watch, current, r)
 		if err != nil {
-			return flow.terminateAfterControlStateError(nil, err)
+			return nil, flow.failAfterControlStateError(nil, err)
 		}
-		outcome.dispatched = dispatched
+		return dispatched, nil
 	case errclass.ClassShutdown:
 		flow.applyCompletedSubtree(current, r.ActionID, "shutdown action completion")
-		return outcome
+		return nil, nil
 	case errclass.ClassFatal:
 		flow.applyCompletedSubtree(current, r.ActionID, "fatal action completion")
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
 		flow.recordError(decision, r)
-		outcome.terminate = true
-		outcome.terminateErr = fatalResultError(r)
+		return nil, fatalResultError(r)
 	case errclass.ClassRetryableTransient, errclass.ClassBlockScopeingTransient, errclass.ClassActionable:
 		if err := flow.applyOrdinaryFailureEffects(ctx, watch, current, decision, r); err != nil {
-			return flow.terminateAfterControlStateError(current, err)
+			return nil, flow.failAfterControlStateError(current, err)
 		}
 	}
 
-	return outcome
+	return nil, nil
 }
 
 func (flow *engineFlow) processTrialDecision(
@@ -323,38 +303,39 @@ func (flow *engineFlow) processTrialDecision(
 	current *TrackedAction,
 	r *ActionCompletion,
 	bl *Baseline,
-) routeOutcome {
+) ([]*TrackedAction, error) {
 	scopeCtrl := flow.scopeController()
-	outcome := routeOutcome{}
 
 	switch evaluateScopeTrialOutcome(trialScopeKey, decision) {
 	case scopeTrialOutcomeRelease:
 		dispatched, err := flow.applyTrialReleaseDecision(ctx, watch, current, r, trialScopeKey)
 		if err != nil {
-			return flow.terminateAfterControlStateError(current, err)
+			return nil, flow.failAfterControlStateError(current, err)
 		}
-		outcome.dispatched = dispatched
+		return dispatched, nil
 	case scopeTrialOutcomeShutdown:
 		flow.applyCompletedSubtree(current, r.ActionID, "trial shutdown action completion")
+		return nil, nil
 	case scopeTrialOutcomeExtend:
 		if err := flow.applyTrialExtendDecision(ctx, watch, current, r, trialScopeKey); err != nil {
-			return flow.terminateAfterControlStateError(nil, err)
+			return nil, flow.failAfterControlStateError(nil, err)
 		}
 		flow.recordError(decision, r)
+		return nil, nil
 	case scopeTrialOutcomeRearmOrDiscard:
 		if err := flow.applyTrialRearmOrDiscardDecision(ctx, watch, current, decision, r, bl, trialScopeKey); err != nil {
-			return flow.terminateAfterControlStateError(nil, err)
+			return nil, flow.failAfterControlStateError(nil, err)
 		}
 		flow.recordError(decision, r)
+		return nil, nil
 	case scopeTrialOutcomeFatal:
 		flow.applyCompletedSubtree(current, r.ActionID, "trial fatal action completion")
 		scopeCtrl.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
 		flow.recordError(decision, r)
-		outcome.terminate = true
-		outcome.terminateErr = fatalResultError(r)
+		return nil, fatalResultError(r)
 	}
 
-	return outcome
+	return nil, nil
 }
 
 func (flow *engineFlow) applyTrialReleaseDecision(

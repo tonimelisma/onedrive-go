@@ -68,7 +68,7 @@ func TestHandleWatchEvent_ActionCompletionDrainsPublicationOnlyDependents(t *tes
 	assert.False(t, found, "cleanup publication should commit immediately instead of waiting for worker dispatch")
 }
 
-func TestReducePublicationFrontier_DoesNotReleaseUnrelatedHeldWork(t *testing.T) {
+func TestReduceReadyFrontier_DoesNotReleaseUnrelatedHeldWork(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -116,7 +116,7 @@ func TestReducePublicationFrontier_DoesNotReleaseUnrelatedHeldWork(t *testing.T)
 	require.NotNil(t, held)
 	rt.holdAction(held, heldReasonRetry, ScopeKey{}, eng.nowFunc().Add(-time.Second))
 
-	outbox, err := rt.reducePublicationFrontier(ctx, rt, bl, nil, []*TrackedAction{publication})
+	outbox, err := rt.reduceReadyFrontier(ctx, rt, bl, []*TrackedAction{publication})
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, int64(2), outbox[0].ID, "publication reduction should only enqueue dependents unlocked by publication success")
@@ -124,7 +124,7 @@ func TestReducePublicationFrontier_DoesNotReleaseUnrelatedHeldWork(t *testing.T)
 }
 
 // Validates: R-2.10.5, R-2.10.33
-func TestReducePublicationFrontier_PersistsRetryWorkOnPublicationCommitFailure(t *testing.T) {
+func TestReduceReadyFrontier_PersistsRetryWorkOnPublicationCommitFailure(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -151,7 +151,7 @@ func TestReducePublicationFrontier_PersistsRetryWorkOnPublicationCommitFailure(t
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	outbox, err := rt.reducePublicationFrontier(ctx, rt, &Baseline{}, nil, []*TrackedAction{publication})
+	outbox, err := rt.reduceReadyFrontier(ctx, rt, &Baseline{}, []*TrackedAction{publication})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 
@@ -220,7 +220,7 @@ func TestHandleWatchEvent_RetryTickReducesReleasedPublicationRetryOnEngineSide(t
 }
 
 // Validates: R-6.8
-func TestReducePublicationFrontier_TerminatesWhenPublicationRetryPersistenceFails(t *testing.T) {
+func TestReduceReadyFrontier_TerminatesWhenPublicationRetryPersistenceFails(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -239,7 +239,7 @@ func TestReducePublicationFrontier_TerminatesWhenPublicationRetryPersistenceFail
 
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	outbox, err := rt.reducePublicationFrontier(ctx, rt, &Baseline{}, nil, []*TrackedAction{publication})
+	outbox, err := rt.reduceReadyFrontier(ctx, rt, &Baseline{}, []*TrackedAction{publication})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "record retry_work")
 	assert.Empty(t, outbox)

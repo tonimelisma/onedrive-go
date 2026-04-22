@@ -146,7 +146,9 @@ Startup normalization applies persisted-scope policy before admission begins:
 
 Timer release never revalidates current truth. Once startup preparation has
 loaded surviving `retry_work` / `block_scopes`, held exact work is released
-only from runtime-owned held state.
+only from runtime-owned held state. Released exact work re-enters the engine's
+ready frontier reduction before any worker dispatch; timer callbacks do not own
+or append directly to a worker queue.
 
 ## Deleted Mechanisms
 
