@@ -2,6 +2,7 @@ package graphtransport
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"testing"
@@ -17,6 +18,8 @@ import (
 func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
+
+var errRoundTripUnexpected = errors.New("unexpected round trip")
 
 // Validates: R-6.2.10, R-6.8.8
 func TestBootstrapMetadataClient(t *testing.T) {
@@ -65,6 +68,24 @@ func TestSyncClientSet_NoRetryTransport(t *testing.T) {
 	transferTransport, ok := transferPerfRT.Inner.(*http.Transport)
 	require.True(t, ok, "sync transfer inner transport should be *http.Transport")
 	assert.Equal(t, transferResponseHeaderTimeout, transferTransport.ResponseHeaderTimeout)
+}
+
+// Validates: R-6.2.10
+func TestBuildTransport_PanicsWhenDefaultTransportIsNotHTTPTransport(t *testing.T) {
+	original := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errRoundTripUnexpected
+	})
+	t.Cleanup(func() {
+		http.DefaultTransport = original
+	})
+
+	require.PanicsWithValue(t,
+		"BUG: http.DefaultTransport is not *http.Transport",
+		func() {
+			_ = buildTransport(metadataResponseHeaderTimeout)
+		},
+	)
 }
 
 // Validates: R-6.8.8

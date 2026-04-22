@@ -97,10 +97,10 @@ func transferTransport() *http.Transport {
 func buildTransport(responseHeaderTimeout time.Duration) *http.Transport {
 	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		return &http.Transport{
-			ResponseHeaderTimeout: responseHeaderTimeout,
-			TLSHandshakeTimeout:   tlsHandshakeTimeout,
-		}
+		// The stdlib guarantees http.DefaultTransport is a *http.Transport.
+		// Any other type means global process state was replaced behind this
+		// boundary, which would silently degrade Graph transport tuning.
+		panic("BUG: http.DefaultTransport is not *http.Transport")
 	}
 
 	transport := defaultTransport.Clone()
