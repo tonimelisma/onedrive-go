@@ -154,7 +154,7 @@ only from runtime-owned held state. Released exact work re-enters the engine's
 ready frontier reduction before any worker dispatch; timer callbacks do not own
 or append directly to a worker queue. In code, current-truth loading lives in
 `engine_current_observe.go`, planner-input and dry-run scratch loading live in
-`engine_current_inputs.go`, the durable prepare handoff lives in
+`engine_current_projection.go` / `engine_current_dry_run.go`, the durable prepare handoff lives in
 `engine_runtime_prepare.go`, and completion-time persistence, held release,
 and trial reclassification now live in one `engine_runtime_*` family rather
 than being spread across controller-shaped helpers.

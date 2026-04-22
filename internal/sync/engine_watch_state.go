@@ -27,6 +27,11 @@ type watchRuntimeState struct {
 	// local observation succeeds but before the watch loop commits the local
 	// snapshot. Nil in production.
 	afterSteadyStateObserve func()
+
+	// afterAppendReadyFrontier is a test-only hook called immediately before the
+	// watch runtime appends the reduced concrete frontier to its outbox. Nil in
+	// production.
+	afterAppendReadyFrontier func()
 }
 
 type watchSyncBatchState struct {

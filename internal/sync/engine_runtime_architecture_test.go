@@ -208,6 +208,88 @@ func TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError(t *tes
 	assert.Nil(t, p.remoteBatches)
 }
 
+// Validates: R-2.10.33
+func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testing.T) {
+	t.Parallel()
+
+	type frontierPathCase struct {
+		name string
+		run  func(t *testing.T, eng *testEngine, rt *watchRuntime, bl *Baseline)
+	}
+
+	cases := []frontierPathCase{
+		{
+			name: "steady-state completion",
+			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *Baseline) {
+				t.Helper()
+				addPublicationDependencyPair(t, rt)
+				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
+					Path:       "sync.txt",
+					ItemID:     "sync-item",
+					DriveID:    rt.engine.driveID,
+					ActionType: ActionDownload,
+					Success:    true,
+					ActionID:   1,
+				})
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "bootstrap completion",
+			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *Baseline) {
+				t.Helper()
+				addPublicationDependencyPair(t, rt)
+				done, err := rt.handleBootstrapCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
+					Path:       "sync.txt",
+					ItemID:     "sync-item",
+					DriveID:    rt.engine.driveID,
+					ActionType: ActionDownload,
+					Success:    true,
+					ActionID:   1,
+				}, true)
+				require.NoError(t, err)
+				assert.False(t, done)
+			},
+		},
+		{
+			name: "retry tick",
+			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *Baseline) {
+				t.Helper()
+				seedDueRetryPublication(t, rt)
+				err := rt.handleWatchHeldRelease(t.Context(), &watchPipeline{bl: bl}, false)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "trial tick",
+			run: func(t *testing.T, eng *testEngine, rt *watchRuntime, bl *Baseline) {
+				t.Helper()
+				seedDueTrialPublication(t, eng, rt)
+				err := rt.handleWatchHeldRelease(t.Context(), &watchPipeline{bl: bl}, true)
+				require.NoError(t, err)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			eng := newSingleOwnerEngine(t)
+			rt := testWatchRuntime(t, eng)
+			bl := seedPublicationBaseline(t, eng)
+			appendCount := 0
+			rt.afterAppendReadyFrontier = func() {
+				appendCount++
+			}
+
+			tc.run(t, eng, rt, bl)
+
+			assert.Equal(t, 1, appendCount, "watch path should re-enter the shared appendReadyFrontier boundary exactly once")
+		})
+	}
+}
+
 func seedPublicationBaseline(t *testing.T, eng *testEngine) *Baseline {
 	t.Helper()
 
