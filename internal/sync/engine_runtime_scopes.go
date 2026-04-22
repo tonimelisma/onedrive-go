@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
 func (flow *engineFlow) activateScope(ctx context.Context, watch *watchRuntime, block *ActiveScope) error {
@@ -230,39 +228,4 @@ func (flow *engineFlow) discardScope(ctx context.Context, watch *watchRuntime, k
 	flow.mustAssertInvariants(ctx, watch, "discard scope")
 
 	return nil
-}
-
-func (flow *engineFlow) applyTrialReclassification(
-	ctx context.Context,
-	watch *watchRuntime,
-	decision *ResultDecision,
-	r *ActionCompletion,
-	bl *Baseline,
-) (bool, error) {
-	if decision.PermissionFlow != permissionFlowNone {
-		if permOutcome, handled := flow.decidePermissionOutcome(ctx, decision, r, bl); handled {
-			if !permOutcome.Matched {
-				return false, nil
-			}
-			if err := flow.clearBlockedRetryWorkForScope(ctx, retryWorkKeyForCompletion(r), r.TrialScopeKey); err != nil {
-				return false, err
-			}
-			_, err := flow.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
-			return true, err
-		}
-		return false, nil
-	}
-
-	if decision.Class == errclass.ClassBlockScopeingTransient && decision.ScopeKey == SKDiskLocal() {
-		if err := flow.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey); err != nil {
-			return false, err
-		}
-		return true, flow.applyBlockScope(ctx, watch, ScopeUpdateResult{
-			Block:         true,
-			ScopeKey:      decision.ScopeKey,
-			ConditionType: decision.ScopeKey.ConditionType(),
-		})
-	}
-
-	return false, nil
 }

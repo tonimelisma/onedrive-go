@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/engine_watch*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_policy.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
+GOVERNS: internal/sync/engine*.go, internal/sync/engine_watch*.go, internal/sync/engine_runtime*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_policy.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
 Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
@@ -82,9 +82,11 @@ Permission handling is intentionally split three ways:
   filesystem or Graph facts only
 - pure policy (`permission_policy.go`) turns one action completion plus
   permission evidence into an engine-facing `PermissionOutcome`
-- direct engine runtime application (`permission_decisions.go`) persists
-  blocked `retry_work`, activates or releases timed write scopes, and emits
-  engine-owned logs without a separate controller shell
+- direct engine runtime application (`engine_runtime_permissions.go`,
+  `engine_runtime_permission_bridge.go`, and `engine_runtime_held.go`)
+  persists blocked `retry_work`, applies permission outcomes, activates or
+  releases timed write scopes, and emits engine-owned logs without a separate
+  controller shell
 
 Normal completion handling and trial reclassification both reuse the same
 engine helper to gather permission evidence and call `DecidePermissionOutcome`.
@@ -221,7 +223,11 @@ explicitly.
 Runtime completion handling follows the same boundary shape everywhere:
 classify the finished exact action, apply the resulting durable/runtime
 mutation, then release any due held work back into the ready frontier. It does
-not mix that decision step with worker-queue ownership.
+not mix that decision step with worker-queue ownership. In code, that runtime
+mutation now lives in the `engine_runtime_completion*.go`,
+`engine_runtime_permissions.go`, `engine_runtime_held.go`, and
+`engine_runtime_scopes.go` families instead of one mixed result-flow file plus
+separate controller-shaped helpers.
 
 Watch replan failure policy is also explicit. Pre-authority local observation
 failure is recoverable and drops that replan trigger. Once the engine starts
