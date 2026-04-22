@@ -85,7 +85,10 @@ must never send those actions to the worker pool.
 
 Publication reduction itself is not an outbox helper. It is a frontier
 transform owned by the engine: callers hand it exact ready actions and receive
-back only concrete worker work to append to their own dispatch queue.
+back only concrete worker work to append to their own dispatch queue. Watch
+bootstrap, steady-state completions, and held-release ticks all re-enter that
+same transform through watch-owned frontier helpers before anything reaches the
+worker outbox.
 
 ## File And Folder Mutation
 

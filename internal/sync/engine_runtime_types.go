@@ -75,11 +75,11 @@ func newOneShotRunner(engine *Engine) *oneShotRunner {
 }
 
 type watchLoopState struct {
-	phase           watchRuntimePhase
-	outbox          []*TrackedAction
-	replanPending   bool
-	pendingDirty    DirtyBatch
-	hasPendingDirty bool
+	phase            watchRuntimePhase
+	outbox           []*TrackedAction
+	replanQueued     bool
+	pendingReplan    DirtyBatch
+	hasPendingReplan bool
 }
 
 type watchRuntimeState struct {

@@ -448,10 +448,10 @@ func (rt *watchRuntime) prepareBootstrapCurrentPlan(
 	return prepared, nil
 }
 
-// prepareDirtyCurrentPlan loads already-committed watch truth after the
-// dirty-batch path has refreshed the local snapshot, then runs the same
-// build-and-runtime-prepare stages bootstrap uses.
-func (rt *watchRuntime) prepareDirtyCurrentPlan(
+// prepareSteadyStateCurrentPlan loads already-committed watch truth after the
+// steady-state replan path has refreshed the local snapshot, then runs the
+// same build-and-runtime-prepare stages bootstrap uses.
+func (rt *watchRuntime) prepareSteadyStateCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
 	mode Mode,

@@ -447,11 +447,11 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	assert.Empty(t, rt.currentOutbox())
 }
 
-// TestRunWatch_BusyRuntimeQueuesDirtyReplanInsteadOfOverlappingPrepare
+// TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare
 // verifies that a replan trigger observed while work is still running is
 // queued for the next linear prepare cycle instead of mutating the current
 // runtime in place.
-func TestRunWatch_BusyRuntimeQueuesDirtyReplanInsteadOfOverlappingPrepare(t *testing.T) {
+func TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -478,7 +478,7 @@ func TestRunWatch_BusyRuntimeQueuesDirtyReplanInsteadOfOverlappingPrepare(t *tes
 		bl:   bl,
 		mode: SyncBidirectional,
 	}, &watchEvent{
-		kind: watchEventBatchReady,
+		kind: watchEventReplanReady,
 		batch: DirtyBatch{
 			Paths: []string{"overlapping.txt"},
 		},
@@ -486,9 +486,9 @@ func TestRunWatch_BusyRuntimeQueuesDirtyReplanInsteadOfOverlappingPrepare(t *tes
 	require.NoError(t, err)
 	assert.False(t, done)
 	assert.Empty(t, rt.currentOutbox())
-	assert.True(t, rt.hasPendingDirtyReplan())
+	assert.True(t, rt.hasPendingReplan())
 
-	queued, ok := rt.takePendingDirtyReplan()
+	queued, ok := rt.takePendingReplan()
 	require.True(t, ok)
 	assert.Equal(t, []string{"overlapping.txt"}, queued.Paths)
 }

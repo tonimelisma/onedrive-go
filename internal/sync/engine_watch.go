@@ -50,7 +50,8 @@ func (rt *watchRuntime) loadWatchState(ctx context.Context) error {
 }
 
 // RunWatch runs a continuous sync loop: bootstrap sync through the watch
-// pipeline, then watches for remote and local changes in batches.
+// pipeline, then watches for remote and local changes that feed the shared
+// steady-state replan path.
 // Blocks until the context is canceled, returning nil on clean shutdown.
 //
 // Flow: initWatchInfra → bootstrapSync → startObservers → runWatchLoop.
@@ -151,7 +152,7 @@ func isWatchShutdownError(ctx context.Context, err error) bool {
 type watchPipeline struct {
 	runtime        *watchRuntime
 	bl             *Baseline
-	batchReady     <-chan DirtyBatch
+	replanReady    <-chan DirtyBatch
 	completions    <-chan ActionCompletion
 	errs           <-chan error
 	localEvents    <-chan ChangeEvent
@@ -216,7 +217,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// paths/scopes only; snapshot refresh and planning happen after debounce.
 	dirtyBuf := NewDirtyBuffer(rt.engine.logger)
 	rt.dirtyBuf = dirtyBuf
-	batchReady := dirtyBuf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
+	replanReady := dirtyBuf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
 	// Tickers/timers.
 	rt.resetRefreshTimer(nil)
@@ -228,7 +229,7 @@ func (rt *watchRuntime) initWatchInfra(
 
 	pipe := &watchPipeline{
 		runtime:        rt,
-		batchReady:     batchReady,
+		replanReady:    replanReady,
 		completions:    pool.Completions(),
 		refreshC:       rt.refreshCh,
 		refreshResults: rt.refreshResults,
@@ -305,7 +306,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	}
 	rt.beginSyncStatusBatch(bootstrapStart)
 
-	// Dispatch through watch pipeline (same path as steady-state batches).
+	// Dispatch through the watch runtime (same frontier path steady-state uses).
 	initialOutbox, _, err := rt.startPreparedRuntime(ctx, prepared, bl, rt)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap dispatch failed: %w", err)

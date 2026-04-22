@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/watch_*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_policy.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
+GOVERNS: internal/sync/engine*.go, internal/sync/engine_watch*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/engine_scope_invariants.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_policy.go, internal/sync/permission_decisions.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
 Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
@@ -143,7 +143,7 @@ Within that one-shot flow, the engine now treats "prepare current plan" as an
 explicit stage sequence: observe current truth, build the current plan from
 that observed state, then either prepare a runtime handoff or keep the
 dry-run build in memory without touching durable held-work state. Live,
-dry-run, watch bootstrap, and watch dirty replans all use that same
+dry-run, watch bootstrap, and steady-state watch replans all use that same
 observed-state -> build -> prepare boundary; they differ only in how they
 collected the observed state and whether a deferred cursor commit is present.
 The top-level coordinators should stay at that stage level rather than
@@ -185,7 +185,9 @@ current actionable set in Go, reconciles durable retry/blocker state, and then
 admits runnable actions. There is one steady-state replan entry for that work:
 refresh local truth, load the already-committed remote/current state, build the
 current plan, prepare the runtime handoff, then append the resulting concrete
-worker frontier.
+worker frontier through the watch-owned frontier helpers. DirtyBuffer still
+emits `DirtyBatch` scheduler hints, but those hints feed only this steady-state
+replan path; they do not define a second planning model.
 
 Watch runtime replacement is linear: one current runtime graph at a time.
 Dirty observation while work is still queued or running sets a pending replan

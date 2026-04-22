@@ -90,17 +90,17 @@ func (rt *watchRuntime) canPrepareNow() bool {
 	return len(rt.loop.outbox) == 0 && rt.runningCount == 0
 }
 
-func (rt *watchRuntime) queueDirtyReplan(batch DirtyBatch) {
-	rt.loop.replanPending = true
+func (rt *watchRuntime) queuePendingReplan(batch DirtyBatch) {
+	rt.loop.replanQueued = true
 	if batch.FullRefresh {
-		rt.loop.pendingDirty.FullRefresh = true
+		rt.loop.pendingReplan.FullRefresh = true
 	}
 	if len(batch.Paths) == 0 {
 		return
 	}
 
-	pathSet := make(map[string]struct{}, len(rt.loop.pendingDirty.Paths)+len(batch.Paths))
-	for _, path := range rt.loop.pendingDirty.Paths {
+	pathSet := make(map[string]struct{}, len(rt.loop.pendingReplan.Paths)+len(batch.Paths))
+	for _, path := range rt.loop.pendingReplan.Paths {
 		if path == "" {
 			continue
 		}
@@ -113,29 +113,29 @@ func (rt *watchRuntime) queueDirtyReplan(batch DirtyBatch) {
 		pathSet[path] = struct{}{}
 	}
 
-	paths := rt.loop.pendingDirty.Paths[:0]
+	paths := rt.loop.pendingReplan.Paths[:0]
 	for path := range pathSet {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
 
-	rt.loop.pendingDirty.Paths = paths
-	rt.loop.hasPendingDirty = rt.loop.pendingDirty.FullRefresh || len(paths) > 0
+	rt.loop.pendingReplan.Paths = paths
+	rt.loop.hasPendingReplan = rt.loop.pendingReplan.FullRefresh || len(paths) > 0
 }
 
-func (rt *watchRuntime) hasPendingDirtyReplan() bool {
-	return rt.loop.replanPending && rt.loop.hasPendingDirty
+func (rt *watchRuntime) hasPendingReplan() bool {
+	return rt.loop.replanQueued && rt.loop.hasPendingReplan
 }
 
-func (rt *watchRuntime) takePendingDirtyReplan() (DirtyBatch, bool) {
-	if !rt.hasPendingDirtyReplan() {
+func (rt *watchRuntime) takePendingReplan() (DirtyBatch, bool) {
+	if !rt.hasPendingReplan() {
 		return DirtyBatch{}, false
 	}
 
-	batch := rt.loop.pendingDirty
-	rt.loop.pendingDirty = DirtyBatch{}
-	rt.loop.hasPendingDirty = false
-	rt.loop.replanPending = false
+	batch := rt.loop.pendingReplan
+	rt.loop.pendingReplan = DirtyBatch{}
+	rt.loop.hasPendingReplan = false
+	rt.loop.replanQueued = false
 
 	return batch, true
 }
