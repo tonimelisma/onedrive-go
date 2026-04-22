@@ -33,7 +33,7 @@ Promotion contract:
 | LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-19 | yes |
 | LI-20260405-09 | Recently created parent folder lagged child create routes | mitigated | graph quirk | 2026-04-12 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
-| LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-10 | yes |
+| LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-22 | yes |
 | LI-20260407-04 | Shared-file preflight assumed only one configured recipient could open the raw link | fixed | test bug | 2026-04-07 | no |
 | LI-20260407-03 | Exact delete-target path lookup lagged parent listing during repeated sibling deletes | fixed | graph quirk | 2026-04-07 | no |
 | LI-20260407-02 | Keep-local conflict resolution used parent-route upload despite known item identity | fixed | product bug | 2026-04-07 | no |
@@ -422,7 +422,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 ## LI-20260408-01: Immediate post-simple-upload mtime PATCH returned `404 itemNotFound`
 
 First seen: 2026-04-08
-Last seen: 2026-04-10
+Last seen: 2026-04-22
 Area: fast E2E, CLI `put`, simple-upload finalization
 Suite / test: local `go run ./cmd/devtool verify default`, `TestE2E_RoundTrip/rm_permanent` setup `put`
 Classification: graph quirk
@@ -874,6 +874,21 @@ Evidence:
   `90d90008-00f9-47f7-bec4-aff991088c22`,
   `aa642558-d6d9-40c6-b50b-d61301f0cf37`, and
   `dd6863d6-e576-42dd-84ba-901a9808143f`.
+- On April 22, 2026 local `go run ./cmd/devtool verify default` hit the same
+  product-owned convergence boundary directly in `TestE2E_FileOpsSmokeCRUD`.
+  `mkdir /onedrive-go-e2e-smoke-1776877833458381000` succeeded, the follow-on
+  `put .../smoke.txt` uploaded 20 bytes successfully, but the command's own
+  visibility confirmation still spent its full bounded window getting exact-path
+  `404 itemNotFound`, parent-children `404 itemNotFound`, and root listings that
+  omitted the freshly created folder before surfacing `confirming upload
+  visibility: remote path not yet visible`.
+  Representative request IDs from that recurrence included exact-path failures
+  `fdaecb9a-9953-4b3e-980f-dd708cffb493`,
+  `cdbc5e66-dfaf-4e23-8e9c-9486b5f032e1`, and
+  `cc69ae76-1e24-4921-bbf8-a609cfcad950`, paired with parent-route failures
+  `832c6052-c6e7-4f60-b1f4-ffb484bbf131`,
+  `b703b405-d8cd-4ae1-bcf3-a0508f769b7a`, and
+  `c3861e06-fd8f-419c-91e4-160eb909ffbb`.
 Resolution / mitigation: CLI mutation flows now treat destination visibility as
 a bounded driveops-owned convergence concern. `mkdir`, single-file `put`, and
 `mv` wait for the destination path to become readable before reporting success,

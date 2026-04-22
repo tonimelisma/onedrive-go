@@ -220,7 +220,9 @@ Watch runtime replacement is linear: one current runtime graph at a time.
 Dirty observation while work is still queued or running sets a pending replan
 flag instead of appending a second graph into the current runtime. Once the
 runtime reaches the idle boundary, the loop rebuilds from current committed
-truth plus durable `retry_work` / `block_scopes`.
+truth plus durable `retry_work` / `block_scopes`. The idle watch-step owner
+still receives debounced `DirtyBatch` hints directly; an empty outbox does not
+mean steady-state replans can be deferred until some other watch event arrives.
 
 Retry/trial is not an alternate planner. Timer-driven follow-up only
 re-releases exact held actions that are already part of the current runtime.
