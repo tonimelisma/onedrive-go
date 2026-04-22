@@ -47,6 +47,143 @@ func TestEngineFlow_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *testi
 }
 
 // Validates: R-2.10.5
+func TestEngineFlow_PersistBlockedRetryWork_CanonicalizesRowsAcrossRuntimePaths(t *testing.T) {
+	t.Parallel()
+
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
+	wantMessage := blockedRetryWorkMessage(scopeKey)
+
+	type persistCase struct {
+		name    string
+		persist func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime)
+	}
+
+	normalize := func(row RetryWorkRow) RetryWorkRow {
+		row.AttemptCount = 0
+		row.FirstSeenAt = 0
+		row.LastSeenAt = 0
+		row.HTTPStatus = 0
+		return row
+	}
+
+	cases := []persistCase{
+		{
+			name:    "admission",
+			persist: persistBlockedRetryViaAdmission(scopeKey),
+		},
+		{
+			name:    "hold under scope",
+			persist: persistBlockedRetryViaHeldScope(scopeKey),
+		},
+		{
+			name:    "trial rehome",
+			persist: persistBlockedRetryViaTrialRehome(scopeKey),
+		},
+		{
+			name:    "permission outcome",
+			persist: persistBlockedRetryViaPermissionOutcome(scopeKey),
+		},
+	}
+
+	var want RetryWorkRow
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			eng := newSingleOwnerEngine(t)
+			rt := testWatchRuntime(t, eng)
+			flow := testEngineFlow(t, eng)
+
+			tc.persist(t, eng, flow, rt)
+
+			retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+			require.Len(t, retryRows, 1)
+			got := normalize(retryRows[0])
+			assert.Equal(t, scopeKey.ConditionType(), got.ConditionType)
+			assert.Equal(t, scopeKey, got.ScopeKey)
+			assert.True(t, got.Blocked)
+			assert.Equal(t, wantMessage, got.LastError)
+			assert.Equal(t, int64(0), got.NextRetryAt)
+
+			if i == 0 {
+				want = got
+				return
+			}
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+func persistBlockedRetryViaAdmission(scopeKey ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
+	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
+		t.Helper()
+		action := &Action{
+			Type:    ActionUpload,
+			Path:    "Shared/Docs/file.txt",
+			OldPath: "Shared/Docs/old.txt",
+			DriveID: driveid.New("drive1"),
+		}
+		require.NoError(t, flow.recordBlockedRetryWork(t.Context(), action, scopeKey))
+	}
+}
+
+func persistBlockedRetryViaHeldScope(scopeKey ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
+	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
+		t.Helper()
+		current := rt.depGraph.Add(&Action{
+			Type:    ActionUpload,
+			Path:    "Shared/Docs/file.txt",
+			OldPath: "Shared/Docs/old.txt",
+			DriveID: driveid.New("drive1"),
+		}, 1, nil)
+		require.NotNil(t, current)
+		require.NoError(t, flow.holdActionUnderScope(t.Context(), nil, current, &ActionCompletion{
+			Path:       "Shared/Docs/file.txt",
+			OldPath:    "Shared/Docs/old.txt",
+			ActionType: ActionUpload,
+			HTTPStatus: 403,
+		}, scopeKey))
+	}
+}
+
+func persistBlockedRetryViaTrialRehome(scopeKey ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
+	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
+		t.Helper()
+		require.NoError(t, flow.rehomeBlockedRetryWork(t.Context(), &ActionCompletion{
+			Path:       "Shared/Docs/file.txt",
+			OldPath:    "Shared/Docs/old.txt",
+			ActionType: ActionUpload,
+			HTTPStatus: 403,
+		}, scopeKey))
+	}
+}
+
+func persistBlockedRetryViaPermissionOutcome(scopeKey ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
+	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
+		t.Helper()
+		matched, err := flow.applyPermissionOutcome(t.Context(), nil, permissionFlowRemote403, &PermissionOutcome{
+			Matched:      true,
+			Kind:         permissionOutcomeActivateDerivedScope,
+			ScopeKey:     scopeKey,
+			BoundaryPath: "Shared/Docs",
+			TriggerPath:  "Shared/Docs/file.txt",
+			RetryWorkFailure: &RetryWorkFailure{
+				Path:          "Shared/Docs/file.txt",
+				OldPath:       "Shared/Docs/old.txt",
+				ActionType:    ActionUpload,
+				ConditionType: IssueRemoteWriteDenied,
+				ScopeKey:      scopeKey,
+				LastError:     "folder is read-only",
+				HTTPStatus:    403,
+				Blocked:       true,
+			},
+		})
+		require.NoError(t, err)
+		require.True(t, matched)
+	}
+}
+
+// Validates: R-2.10.5
 func TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t *testing.T) {
 	t.Parallel()
 

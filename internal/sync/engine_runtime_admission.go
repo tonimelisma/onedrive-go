@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
@@ -189,22 +188,12 @@ func (flow *engineFlow) persistHeldScopeDecision(
 		return nil
 	}
 
-	persisted, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          ta.Action.Path,
-		OldPath:       ta.Action.OldPath,
-		ActionType:    ta.Action.Type,
-		ConditionType: decision.ScopeKey.ConditionType(),
-		ScopeKey:      decision.ScopeKey,
-		LastError:     "blocked by scope: " + decision.ScopeKey.String(),
-		Blocked:       true,
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("persist blocked retry_work for %s under %s: %w", ta.Action.Path, decision.ScopeKey.String(), err)
+	work := decision.RetryWorkKey
+	if work == (RetryWorkKey{}) {
+		work = retryWorkKeyForAction(&ta.Action)
 	}
-	if persisted == nil {
-		return fmt.Errorf("persist blocked retry_work for %s under %s: missing persisted row", ta.Action.Path, decision.ScopeKey.String())
-	}
-	flow.retryRowsByKey[decision.RetryWorkKey] = *persisted
-
-	return nil
+	_, err := flow.persistBlockedRetryWork(ctx, work, &RetryWorkFailure{
+		ScopeKey: decision.ScopeKey,
+	})
+	return err
 }

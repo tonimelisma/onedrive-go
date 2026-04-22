@@ -119,7 +119,10 @@ whether their next execution boundary is worker-side I/O or engine-side
 publication reduction. The store does not split publication retries into a
 second durable table. Admission, completion, held-release, and
 permission-driven runtime mutation all act on that same durable lane; the
-store owns the rows, while the engine owns the policy around them.
+store owns the rows, while the engine owns the policy around them. Blocked
+rows are also canonicalized engine-side: all runtime paths persist
+`blocked=true`, the scope-derived `condition_type`, the exact `scope_key`, and
+the canonical `"blocked by scope: <scope>"` durable message.
 Current-truth loading for that policy lives in `engine_current_observe.go`,
 while durable prune/load for runtime startup lives in `engine_runtime_prepare.go`.
 
