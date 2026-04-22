@@ -232,9 +232,9 @@ classify the finished exact action, apply the resulting durable/runtime
 mutation, then release any due held work back into the ready frontier. It does
 not mix that decision step with worker-queue ownership. In code, that runtime
 mutation now lives in the `engine_runtime_completion*.go`,
-`engine_runtime_permissions.go`, `engine_runtime_held.go`, and
-`engine_runtime_scopes.go` families instead of one mixed result-flow file plus
-separate controller-shaped helpers.
+`engine_runtime_graph.go`, `engine_runtime_permissions.go`,
+`engine_runtime_held.go`, and `engine_runtime_scopes.go` families instead of
+one mixed result-flow file plus separate controller-shaped helpers.
 
 Watch replan failure policy is also explicit. Pre-authority local observation
 failure is recoverable and drops that replan trigger. Once the engine starts

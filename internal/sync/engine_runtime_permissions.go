@@ -125,10 +125,27 @@ func (flow *engineFlow) recordRetryWorkFailure(
 		logClass = errclass.ClassBlockScopeingTransient
 	}
 
-	delayFn := permissionOutcomeRetryDelay(kind, failure)
-	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, failure, delayFn)
-	if err != nil {
-		return fmt.Errorf("record permission retry_work for %s: %w", failure.Path, err)
+	var (
+		row RetryWorkRow
+		err error
+	)
+	if failure.Blocked {
+		conditionKey = ConditionKeyForStoredCondition(failure.ScopeKey.ConditionType(), failure.ScopeKey)
+		row, err = flow.persistBlockedRetryWork(ctx, retryWorkKey(failure.Path, failure.OldPath, failure.ActionType), failure)
+		if err != nil {
+			return fmt.Errorf("record permission retry_work for %s: %w", failure.Path, err)
+		}
+	} else {
+		delayFn := permissionOutcomeRetryDelay(kind, failure)
+		persisted, persistErr := flow.engine.baseline.RecordRetryWorkFailure(ctx, failure, delayFn)
+		if persistErr != nil {
+			return fmt.Errorf("record permission retry_work for %s: %w", failure.Path, persistErr)
+		}
+		if persisted == nil {
+			return fmt.Errorf("record permission retry_work for %s: missing persisted row", failure.Path)
+		}
+		row = *persisted
+		flow.retryRowsByKey[retryWorkKeyForRetryWork(persisted)] = row
 	}
 
 	fields := append(flow.summaryLogFields(
@@ -137,12 +154,8 @@ func (flow *engineFlow) recordRetryWorkFailure(
 		failure.Path,
 		failure.ScopeKey,
 	),
-		slog.String("condition_type", failure.ConditionType),
+		slog.String("condition_type", row.ConditionType),
 	)
-	if row == nil {
-		return fmt.Errorf("record permission retry_work for %s: missing persisted row", failure.Path)
-	}
-	flow.retryRowsByKey[retryWorkKeyForRetryWork(row)] = *row
 	flow.engine.logger.Debug("retry_work permission failure recorded", fields...)
 
 	return nil
