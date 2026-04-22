@@ -75,16 +75,6 @@ type Engine struct {
 		SocketIOWakeSourceOptions,
 	) socketIOWakeSourceRunner
 
-	// watchRuntimeHook is a test-only seam that exposes the newly constructed
-	// watch runtime before initWatchInfra wires timers, observers, and workers.
-	// Production keeps this nil.
-	watchRuntimeHook func(*watchRuntime)
-
-	// beforeRemoteObservationFindingsReconcile is a test-only seam fired after
-	// remote observation commit work has completed but before the engine
-	// reconciles remote observation findings. Production keeps this nil.
-	beforeRemoteObservationFindingsReconcile func()
-
 	afterFunc func(time.Duration, func()) syncTimer
 	newTicker func(time.Duration) syncTicker
 	sleepFn   func(context.Context, time.Duration) error

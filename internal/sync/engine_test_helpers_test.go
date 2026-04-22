@@ -502,15 +502,25 @@ type debugEventRecorder struct {
 const debugEventTimeout = 10 * time.Second
 
 func attachDebugEventRecorder(eng *testEngine) *debugEventRecorder {
+	return attachDebugEventRecorderWithHook(eng, nil)
+}
+
+func attachDebugEventRecorderWithHook(
+	eng *testEngine,
+	hook func(engineDebugEvent),
+) *debugEventRecorder {
 	recorder := &debugEventRecorder{
 		events: make(chan engineDebugEvent, 128),
 	}
-	eng.debugEventHook = func(event engineDebugEvent) {
+	eng.SetDebugEventHook(func(event DebugEvent) {
 		recorder.mu.Lock()
 		recorder.history = append(recorder.history, event)
 		recorder.mu.Unlock()
 		recorder.events <- event
-	}
+		if hook != nil {
+			hook(event)
+		}
+	})
 	return recorder
 }
 

@@ -47,9 +47,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	if findingsErr != nil {
 		return rt.finishSteadyStateReplanStep(ctx, "local observation findings reconcile", findingsErr)
 	}
-	if rt.afterSteadyStateObserve != nil {
-		rt.afterSteadyStateObserve()
-	}
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventSteadyStateObservationCompleted})
 	commitErr := rt.commitObservedLocalSnapshot(ctx, false, localResult)
 	if commitErr != nil {
 		return rt.finishSteadyStateReplanStep(ctx, "local snapshot commit", commitErr)

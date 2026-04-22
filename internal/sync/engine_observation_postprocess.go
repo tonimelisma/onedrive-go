@@ -155,6 +155,7 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 		ctx,
 		&findings,
 		batchObservationFailureMessage(batch.source),
+		batchObservationDebugNote(batch.source),
 	); err != nil {
 		return err
 	}
@@ -181,6 +182,19 @@ func batchObservationFailureMessage(source remoteObservationBatchSource) string 
 	}
 }
 
+func batchObservationDebugNote(source remoteObservationBatchSource) string {
+	switch source {
+	case remoteObservationBatchPrimaryWatch:
+		return engineDebugNotePrimaryWatch
+	case remoteObservationBatchSharedRoot:
+		return engineDebugNoteSharedRootWatch
+	case remoteObservationBatchFullRefresh:
+		return engineDebugNoteFullRefresh
+	default:
+		return ""
+	}
+}
+
 func (rt *watchRuntime) handleRemoteObservationBatch(
 	ctx context.Context,
 	batch *remoteObservationBatch,
@@ -199,8 +213,8 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 		return rt.handleRemoteObservationBatchApplyFailure(ctx, batch, err)
 	}
 
-	if batch.source == remoteObservationBatchFullRefresh && rt.afterRefreshCommit != nil {
-		rt.afterRefreshCommit()
+	if batch.source == remoteObservationBatchFullRefresh {
+		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRemoteRefreshCommitted})
 	}
 
 	if batch.source == remoteObservationBatchFullRefresh && ctx.Err() != nil {
@@ -272,13 +286,4 @@ func (rt *watchRuntime) markDirtyFromRemoteBatch(batch *remoteObservationBatch) 
 			rt.dirtyBuf.MarkPath(batch.emitted[i].OldPath)
 		}
 	}
-}
-
-func (rt *watchRuntime) logCommittedSharedRootBatchFailure(step string, err error, eventCount int) {
-	attrs := []any{slog.String("error", err.Error())}
-	if eventCount > 0 {
-		attrs = append(attrs, slog.Int("events", eventCount))
-	}
-
-	rt.engine.logger.Error(fmt.Sprintf("failed to %s for shared-root watch batch", step), attrs...)
 }

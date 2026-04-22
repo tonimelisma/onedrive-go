@@ -44,7 +44,8 @@ const quiescenceLogInterval = 30 * time.Second
 // steady-state replan path.
 // Blocks until the context is canceled, returning nil on clean shutdown.
 //
-// Flow: initWatchInfra → bootstrapSync → startObservers → runWatchLoop.
+// Flow: prepareStartupBaseline → initWatchInfra → bootstrapSync →
+// startObservers → runWatchLoop.
 // Unlike the old approach (calling RunOnce with throwaway infrastructure),
 // bootstrapSync dispatches through the same DepGraph, active scope working
 // set, and WorkerPool that the steady-state watch loop uses.
@@ -56,9 +57,6 @@ func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) err
 	)
 
 	rt := newWatchRuntime(e)
-	if e.watchRuntimeHook != nil {
-		e.watchRuntimeHook(rt)
-	}
 	bl, err := rt.prepareStartupBaseline(ctx, rt)
 	if err != nil {
 		if isWatchShutdownError(ctx, err) {
@@ -230,20 +228,13 @@ func (rt *watchRuntime) initWatchInfra(
 // DepGraph, active scope working set, and WorkerPool that the steady-state
 // watch loop uses. Blocks until all bootstrap actions due now complete.
 //
-// Must be called after initWatchInfra and before startObservers.
+// Must be called after startup prep + initWatchInfra and before startObservers.
 func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watchPipeline) error {
 	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 	bootstrapStart := rt.engine.nowFunc()
 
 	if pipe == nil || pipe.bl == nil {
-		bl, err := rt.engine.baseline.Load(ctx)
-		if err != nil {
-			return fmt.Errorf("sync: loading baseline for bootstrap sync: %w", err)
-		}
-		if pipe == nil {
-			pipe = &watchPipeline{}
-		}
-		pipe.bl = bl
+		return fmt.Errorf("sync: bootstrap requires startup-prepared baseline")
 	}
 
 	prepared, err := rt.prepareBootstrapCurrentPlan(ctx, pipe.bl, mode)

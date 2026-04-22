@@ -289,17 +289,3 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 	require.NoError(t, err)
 	assert.Empty(t, prepared.Plan.Actions, "read-denied observation findings should suppress planning without reloading active scopes")
 }
-
-// Validates: R-2.1.2
-func TestLogCommittedSharedRootBatchFailure_DoesNotPanic(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	setupWatchEngine(t, eng)
-	rt := testWatchRuntime(t, eng)
-
-	assert.NotPanics(t, func() {
-		rt.logCommittedSharedRootBatchFailure("commit observations", assert.AnError, 2)
-		rt.logCommittedSharedRootBatchFailure("commit observations", assert.AnError, 0)
-	})
-}

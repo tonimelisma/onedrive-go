@@ -220,12 +220,10 @@ func (rt *watchRuntime) appendReadyFrontier(
 		rt.completeOutboxAsShutdown(nextOutbox)
 		return err
 	}
-	if rt.afterAppendReadyFrontier != nil {
-		rt.afterAppendReadyFrontier()
-	}
 
 	rt.maybeFinishSyncStatusBatch(ctx, p.mode, nextOutbox)
 	rt.replaceOutbox(nextOutbox)
+	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReadyFrontierAppended})
 	return nil
 }
 
