@@ -55,19 +55,29 @@ func (flow *engineFlow) reconcileSkippedObservationFindings(
 	}
 
 	batch := localObservationFindingsBatchFromSkippedItems(eng.driveID, skipped)
-	return flow.applyObservationFindingsBatch(ctx, &batch, "failed to reconcile local observation findings")
+	return flow.applyObservationFindingsBatch(
+		ctx,
+		&batch,
+		"failed to reconcile local observation findings",
+		engineDebugNoteLocalSkipped,
+	)
 }
 
 func (flow *engineFlow) applyObservationFindingsBatch(
 	ctx context.Context,
 	batch *ObservationFindingsBatch,
 	failureMessage string,
+	reconcileNote string,
 ) error {
 	eng := flow.engine
 	if batch == nil {
 		return nil
 	}
 
+	eng.emitDebugEvent(engineDebugEvent{
+		Type: engineDebugEventObservationFindingsReconcileStarted,
+		Note: reconcileNote,
+	})
 	if err := eng.baseline.ReconcileObservationFindings(ctx, batch, eng.nowFunc()); err != nil {
 		return fmt.Errorf("%s: %w", failureMessage, err)
 	}

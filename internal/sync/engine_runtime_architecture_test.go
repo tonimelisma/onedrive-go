@@ -276,16 +276,15 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 			t.Parallel()
 
 			eng := newSingleOwnerEngine(t)
+			recorder := attachDebugEventRecorder(eng)
 			rt := testWatchRuntime(t, eng)
 			bl := seedPublicationBaseline(t, eng)
-			appendCount := 0
-			rt.afterAppendReadyFrontier = func() {
-				appendCount++
-			}
 
 			tc.run(t, eng, rt, bl)
 
-			assert.Equal(t, 1, appendCount, "watch path should re-enter the shared appendReadyFrontier boundary exactly once")
+			recorder.requireEventCount(t, func(event engineDebugEvent) bool {
+				return event.Type == engineDebugEventReadyFrontierAppended
+			}, 1, "watch path should re-enter the shared appendReadyFrontier boundary exactly once")
 		})
 	}
 }

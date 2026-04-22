@@ -803,7 +803,6 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 		},
 	}
 	eng, _ := newTestEngine(t, mock)
-	recorder := attachDebugEventRecorder(eng)
 	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
 	installManualClock(eng.Engine, clock)
 	watcher := newSignalingWatcher()
@@ -819,11 +818,11 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 	))
 
 	watchCtx, cancel := context.WithCancel(t.Context())
-	eng.watchRuntimeHook = func(rt *watchRuntime) {
-		rt.afterRefreshCommit = func() {
+	recorder := attachDebugEventRecorderWithHook(eng, func(event engineDebugEvent) {
+		if event.Type == engineDebugEventRemoteRefreshCommitted {
 			cancel()
 		}
-	}
+	})
 
 	done := make(chan error, 1)
 	go func() {

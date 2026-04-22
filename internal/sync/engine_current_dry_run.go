@@ -38,7 +38,7 @@ func (flow *engineFlow) buildDryRunCurrentActionPlan(
 
 	projectedRemote := projectRemoteObservations(flow.engine.logger, fetchResult.events)
 
-	localResult, err := flow.observeLocalChanges(ctx, bl)
+	localResult, err := flow.observeAndReconcileLocalTruth(ctx, bl)
 	if err != nil {
 		return nil, err
 	}
