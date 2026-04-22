@@ -178,6 +178,8 @@ func (rt *watchRuntime) runWatchStepIdle(
 	p *watchPipeline,
 ) (bool, error) {
 	select {
+	case batch, ok := <-p.replanReady:
+		return rt.handleWatchReplanChannel(ctx, p, batch, ok)
 	case completion, ok := <-p.completions:
 		return rt.handleWatchCompletionChannel(ctx, p, &completion, ok)
 	case change, ok := <-p.localEvents:
