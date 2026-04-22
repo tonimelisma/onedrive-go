@@ -148,7 +148,9 @@ Timer release never revalidates current truth. Once startup preparation has
 loaded surviving `retry_work` / `block_scopes`, held exact work is released
 only from runtime-owned held state. Released exact work re-enters the engine's
 ready frontier reduction before any worker dispatch; timer callbacks do not own
-or append directly to a worker queue.
+or append directly to a worker queue. In code, completion-time persistence,
+held release, and trial reclassification now live in one `engine_runtime_*`
+family rather than being spread across controller-shaped helpers.
 
 ## Deleted Mechanisms
 
