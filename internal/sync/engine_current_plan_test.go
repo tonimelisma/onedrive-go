@@ -25,7 +25,7 @@ func assertRuntimePlanEqual(t *testing.T, expected *runtimePlan, actual *runtime
 	assert.Equal(t, expected.BlockScopes, actual.BlockScopes)
 }
 
-func seedStaleRetryAndBlockScopeForPrepareTest(t *testing.T, ctx context.Context, eng *testEngine) {
+func seedStaleRetryAndBlockScopeForCurrentPlanTest(t *testing.T, ctx context.Context, eng *testEngine) {
 	t.Helper()
 
 	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
@@ -60,7 +60,7 @@ func TestRunBootstrapCurrentPlan_MatchesOneShotLiveCurrentPlan(t *testing.T) {
 					Size:         10,
 					QuickXorHash: "hash-1",
 				},
-			}, "token-prepare"), nil
+			}, "token-current-plan"), nil
 		},
 	}
 
@@ -72,7 +72,7 @@ func TestRunBootstrapCurrentPlan_MatchesOneShotLiveCurrentPlan(t *testing.T) {
 	require.NoError(t, err)
 	fullReconcile, err := oneShotEng.shouldRunFullRemoteRefresh(ctx, false)
 	require.NoError(t, err)
-	oneShotPrepared, err := newOneShotRunner(oneShotEng.Engine).runLiveCurrentPlan(ctx, oneShotBaseline, SyncDownloadOnly, RunOptions{
+	oneShotRuntime, err := newOneShotRunner(oneShotEng.Engine).runLiveCurrentPlan(ctx, oneShotBaseline, SyncDownloadOnly, RunOptions{
 		FullReconcile: fullReconcile,
 	})
 	require.NoError(t, err)
@@ -80,10 +80,10 @@ func TestRunBootstrapCurrentPlan_MatchesOneShotLiveCurrentPlan(t *testing.T) {
 	setupWatchEngine(t, watchEng)
 	watchBaseline, err := watchEng.baseline.Load(ctx)
 	require.NoError(t, err)
-	watchPrepared, err := testWatchRuntime(t, watchEng).runBootstrapCurrentPlan(ctx, watchBaseline, SyncDownloadOnly)
+	watchRuntimePlan, err := testWatchRuntime(t, watchEng).runBootstrapCurrentPlan(ctx, watchBaseline, SyncDownloadOnly)
 	require.NoError(t, err)
 
-	assertRuntimePlanEqual(t, oneShotPrepared, watchPrepared)
+	assertRuntimePlanEqual(t, oneShotRuntime, watchRuntimePlan)
 }
 
 // Validates: R-2.10.5
@@ -142,7 +142,7 @@ func TestRunLiveCurrentPlan_FailsClosedWhenRemoteObservationReconcileFails(t *te
 					Size:         10,
 					QuickXorHash: "hash-1",
 				},
-			}, "token-prepare"), nil
+			}, "token-current-plan"), nil
 		},
 	}
 
@@ -215,7 +215,7 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 }
 
 // Validates: R-2.10.5
-func TestBootstrapSync_RequiresStartupPreparedBaseline(t *testing.T) {
+func TestBootstrapSync_RequiresStartupBaseline(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -229,7 +229,7 @@ func TestBootstrapSync_RequiresStartupPreparedBaseline(t *testing.T) {
 }
 
 // Validates: R-2.10.5
-func TestRunSteadyStateReplan_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare(t *testing.T) {
+func TestRunSteadyStateReplan_PrunesStaleDurableRuntimeStateLikeBootstrapCurrentPlan(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -245,16 +245,16 @@ func TestRunSteadyStateReplan_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare
 	dirtyEng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	seedStaleRetryAndBlockScopeForPrepareTest(t, ctx, bootstrapEng)
-	seedStaleRetryAndBlockScopeForPrepareTest(t, ctx, dirtyEng)
+	seedStaleRetryAndBlockScopeForCurrentPlanTest(t, ctx, bootstrapEng)
+	seedStaleRetryAndBlockScopeForCurrentPlanTest(t, ctx, dirtyEng)
 
 	setupWatchEngine(t, bootstrapEng)
 	bootstrapBaseline, err := bootstrapEng.baseline.Load(ctx)
 	require.NoError(t, err)
-	bootstrapPrepared, err := testWatchRuntime(t, bootstrapEng).runBootstrapCurrentPlan(ctx, bootstrapBaseline, SyncBidirectional)
+	bootstrapRuntime, err := testWatchRuntime(t, bootstrapEng).runBootstrapCurrentPlan(ctx, bootstrapBaseline, SyncBidirectional)
 	require.NoError(t, err)
-	assert.Empty(t, bootstrapPrepared.RetryRows)
-	assert.Empty(t, bootstrapPrepared.BlockScopes)
+	assert.Empty(t, bootstrapRuntime.RetryRows)
+	assert.Empty(t, bootstrapRuntime.BlockScopes)
 
 	setupWatchEngine(t, dirtyEng)
 	dirtyBaseline, err := dirtyEng.baseline.Load(ctx)
@@ -285,20 +285,20 @@ func TestReconcileRuntimeStateStage_PrunesAndLoadsDurableRuntimeState(t *testing
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return deltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-runtime-prepare"), nil
+			}, "token-runtime-current-plan"), nil
 		},
 	}
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
-	seedStaleRetryAndBlockScopeForPrepareTest(t, ctx, eng)
+	seedStaleRetryAndBlockScopeForCurrentPlanTest(t, ctx, eng)
 
 	setupWatchEngine(t, eng)
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
 	rt := testWatchRuntime(t, eng)
-	observed, err := rt.loadObservedCurrentInputs(ctx, nil)
+	observed, err := rt.loadCommittedCurrentObservation(ctx, nil)
 	require.NoError(t, err)
 
 	build, err := rt.buildCurrentPlanStage(ctx, bl, SyncBidirectional, RunOptions{}, observed)
@@ -320,19 +320,19 @@ func TestKeepCurrentPlanBuild_LeavesDurableRuntimeStateUntouched(t *testing.T) {
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return deltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-dry-runtime-prepare"), nil
+			}, "token-dry-runtime-current-plan"), nil
 		},
 	}
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
-	seedStaleRetryAndBlockScopeForPrepareTest(t, ctx, eng)
+	seedStaleRetryAndBlockScopeForCurrentPlanTest(t, ctx, eng)
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
 	runner := newOneShotRunner(eng.Engine)
-	observed, err := runner.observeDryRunCurrentState(ctx, bl, false)
+	observed, err := runner.loadDryRunCurrentObservation(ctx, bl, false)
 	require.NoError(t, err)
 
 	build, err := runner.buildCurrentPlanStage(ctx, bl, SyncBidirectional, RunOptions{DryRun: true}, observed)

@@ -323,7 +323,7 @@ func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *
 		ContentIdentity: "hash",
 	}}))
 
-	inputs, err := flow.loadCurrentInputsStageTx(ctx, eng.baseline, tx, eng.driveID)
+	inputs, err := flow.loadCurrentInputsTx(ctx, eng.baseline, tx, eng.driveID)
 	require.NoError(t, err)
 	require.Len(t, inputs.localRows, 1)
 	assert.Equal(t, "tx-only.txt", inputs.localRows[0].Path)

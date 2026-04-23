@@ -282,7 +282,40 @@ func TestRunSteadyStateReplan_LocalSnapshotCommitFailureStopsWatch(t *testing.T)
 		bl:   bl,
 		mode: SyncBidirectional,
 	}, dirtyBatch{})
-	require.ErrorContains(t, err, "watch replan local observation findings reconcile")
+	require.ErrorContains(t, err, "watch replan local_observation_findings_reconcile")
+	assert.Empty(t, rt.currentOutbox())
+	assert.False(t, rt.loop.syncBatch.active)
+}
+
+// Validates: R-2.10.5
+func TestRunSteadyStateReplan_LocalObservationFailureDropsReplanTrigger(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	require.NoError(t, os.RemoveAll(syncRoot))
+
+	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
+		bl:   bl,
+		mode: SyncBidirectional,
+	}, dirtyBatch{})
+	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.loop.syncBatch.active)
 }

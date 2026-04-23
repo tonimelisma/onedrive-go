@@ -46,7 +46,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 
 	dispatch, dispatched, err := rt.startRuntimeStage(ctx, runtime, p.bl, rt)
 	if err != nil {
-		return rt.finishSteadyStateReplanStep(ctx, "start runtime", err)
+		return rt.finishSteadyStateReplanStep(ctx, "start_runtime", err)
 	}
 	rt.replaceOutbox(dispatch)
 	if !dispatched {
@@ -88,12 +88,12 @@ func (rt *watchRuntime) handleSteadyStateLocalRefreshError(
 	if !ok {
 		return fmt.Errorf("sync: watch replan local refresh: %w", err)
 	}
-	if step == "local observation" {
+	if step == localCurrentRefreshStepObservation {
 		rt.engine.logger.Error("watch local refresh failed, dropping replan trigger",
 			slog.String("error", err.Error()),
 		)
 		return nil
 	}
 
-	return rt.finishSteadyStateReplanStep(ctx, step, err)
+	return rt.finishSteadyStateReplanStep(ctx, string(step), err)
 }

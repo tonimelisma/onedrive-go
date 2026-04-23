@@ -17,10 +17,16 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 	mode Mode,
 	opts RunOptions,
 ) (*runtimePlan, error) {
-	observation, err := r.observeLiveCurrentState(ctx, bl, opts.FullReconcile)
+	observeStart := r.engine.nowFunc()
+	pendingCursorCommit, err := r.observeAndCommitCurrentState(ctx, bl, false, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
+	observation, err := r.loadCommittedCurrentObservation(ctx, pendingCursorCommit)
+	if err != nil {
+		return nil, err
+	}
+	r.engine.collector().RecordObserve(observation.observedPaths, r.engine.since(observeStart))
 
 	build, err := r.buildCurrentPlanStage(ctx, bl, mode, opts, observation)
 	if err != nil {
@@ -36,10 +42,12 @@ func (r *oneShotRunner) runDryRunCurrentPlan(
 	mode Mode,
 	opts RunOptions,
 ) (*runtimePlan, error) {
-	observation, err := r.observeDryRunCurrentState(ctx, bl, opts.FullReconcile)
+	observeStart := r.engine.nowFunc()
+	observation, err := r.loadDryRunCurrentObservation(ctx, bl, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
+	r.engine.collector().RecordObserve(observation.observedPaths, r.engine.since(observeStart))
 
 	build, err := r.buildCurrentPlanStage(ctx, bl, mode, opts, observation)
 	if err != nil {
@@ -59,10 +67,16 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 		return nil, fmt.Errorf("sync: deciding bootstrap full remote refresh: %w", err)
 	}
 
-	observation, err := rt.observeBootstrapCurrentState(ctx, bl, fullRefresh)
+	observeStart := rt.engine.nowFunc()
+	pendingCursorCommit, err := rt.observeAndCommitCurrentState(ctx, bl, false, fullRefresh)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
+	observation, err := rt.loadCommittedCurrentObservation(ctx, pendingCursorCommit)
+	if err != nil {
+		return nil, fmt.Errorf("sync: bootstrap load_current_inputs: %w", err)
+	}
+	rt.engine.collector().RecordObserve(observation.observedPaths, rt.engine.since(observeStart))
 
 	build, err := rt.buildCurrentPlanStage(ctx, bl, mode, RunOptions{}, observation)
 	if err != nil {
@@ -77,9 +91,9 @@ func (rt *watchRuntime) runSteadyStateCurrentPlan(
 	bl *Baseline,
 	mode Mode,
 ) (*runtimePlan, error) {
-	observation, err := rt.observeSteadyStateCurrent(ctx)
+	observation, err := rt.loadCommittedCurrentObservation(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("sync: watch current-input load failed: %w", err)
+		return nil, fmt.Errorf("sync: watch load_current_inputs: %w", err)
 	}
 
 	build, err := rt.buildCurrentPlanStage(ctx, bl, mode, RunOptions{}, observation)
@@ -96,8 +110,16 @@ type currentObservation struct {
 	pendingCursorCommit *pendingPrimaryCursorCommit
 }
 
+type localCurrentRefreshStep string
+
+const (
+	localCurrentRefreshStepObservation       localCurrentRefreshStep = "local_observation"
+	localCurrentRefreshStepFindingsReconcile localCurrentRefreshStep = "local_observation_findings_reconcile"
+	localCurrentRefreshStepSnapshotCommit    localCurrentRefreshStep = "local_snapshot_commit"
+)
+
 type localCurrentRefreshError struct {
-	step string
+	step localCurrentRefreshStep
 	err  error
 }
 
@@ -113,7 +135,7 @@ func (e localCurrentRefreshError) Unwrap() error {
 	return e.err
 }
 
-func localCurrentRefreshFailure(step string, err error) error {
+func localCurrentRefreshFailure(step localCurrentRefreshStep, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -121,7 +143,7 @@ func localCurrentRefreshFailure(step string, err error) error {
 	return localCurrentRefreshError{step: step, err: err}
 }
 
-func currentLocalRefreshStep(err error) (string, bool) {
+func currentLocalRefreshStep(err error) (localCurrentRefreshStep, bool) {
 	var refreshErr localCurrentRefreshError
 	if !errors.As(err, &refreshErr) {
 		return "", false
@@ -150,63 +172,6 @@ type currentInputs struct {
 	localRows         []LocalStateRow
 	remoteRows        []RemoteStateRow
 	observationIssues []ObservationIssueRow
-}
-
-func (r *oneShotRunner) observeLiveCurrentState(
-	ctx context.Context,
-	bl *Baseline,
-	fullReconcile bool,
-) (*currentObservation, error) {
-	observeStart := r.engine.nowFunc()
-	pendingCursorCommit, err := r.observeAndCommitCurrentState(ctx, bl, false, fullReconcile)
-	if err != nil {
-		return nil, err
-	}
-	observed, err := r.loadObservedCurrentInputs(ctx, pendingCursorCommit)
-	if err != nil {
-		return nil, err
-	}
-	r.engine.collector().RecordObserve(observed.observedPaths, r.engine.since(observeStart))
-
-	return observed, nil
-}
-
-func (r *oneShotRunner) observeDryRunCurrentState(
-	ctx context.Context,
-	bl *Baseline,
-	fullReconcile bool,
-) (*currentObservation, error) {
-	observeStart := r.engine.nowFunc()
-	observation, err := r.loadDryRunCurrentObservation(ctx, bl, fullReconcile)
-	if err != nil {
-		return nil, err
-	}
-	r.engine.collector().RecordObserve(observation.observedPaths, r.engine.since(observeStart))
-
-	return observation, nil
-}
-
-func (rt *watchRuntime) observeBootstrapCurrentState(
-	ctx context.Context,
-	bl *Baseline,
-	fullRefresh bool,
-) (*currentObservation, error) {
-	observeStart := rt.engine.nowFunc()
-	pendingCursorCommit, err := rt.observeAndCommitCurrentState(ctx, bl, false, fullRefresh)
-	if err != nil {
-		return nil, fmt.Errorf("sync: bootstrap observation failed: %w", err)
-	}
-	observation, err := rt.loadObservedCurrentInputs(ctx, pendingCursorCommit)
-	if err != nil {
-		return nil, fmt.Errorf("sync: bootstrap current-input load failed: %w", err)
-	}
-	rt.engine.collector().RecordObserve(observation.observedPaths, rt.engine.since(observeStart))
-
-	return observation, nil
-}
-
-func (rt *watchRuntime) observeSteadyStateCurrent(ctx context.Context) (*currentObservation, error) {
-	return rt.loadObservedCurrentInputs(ctx, nil)
 }
 
 func (flow *engineFlow) observeAndCommitCurrentState(
@@ -269,11 +234,11 @@ func (flow *engineFlow) refreshLocalCurrentState(
 ) (ScanResult, error) {
 	localResult, err := flow.observeLocal(ctx, bl)
 	if err != nil {
-		return ScanResult{}, localCurrentRefreshFailure("local observation", err)
+		return ScanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepObservation, err)
 	}
 
 	if err := flow.reconcileSkippedObservationFindings(ctx, localResult.Skipped); err != nil {
-		return ScanResult{}, localCurrentRefreshFailure("local observation findings reconcile", err)
+		return ScanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepFindingsReconcile, err)
 	}
 
 	return localResult, nil
@@ -289,7 +254,7 @@ func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 		return ScanResult{}, err
 	}
 	if err := flow.commitCurrentLocalSnapshot(ctx, dryRun, localResult); err != nil {
-		return ScanResult{}, localCurrentRefreshFailure("local snapshot commit", err)
+		return ScanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepSnapshotCommit, err)
 	}
 
 	return localResult, nil
@@ -420,7 +385,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 		return nil, fmt.Errorf("sync: replacing dry-run local snapshot in scratch store: %w", replaceErr)
 	}
 
-	inputs, err := flow.loadCurrentInputsStage(ctx, scratchStore, flow.engine.driveID)
+	inputs, err := flow.loadCurrentInputs(ctx, scratchStore, flow.engine.driveID)
 	if err != nil {
 		return nil, err
 	}
@@ -431,11 +396,11 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 	}, nil
 }
 
-func (flow *engineFlow) loadObservedCurrentInputs(
+func (flow *engineFlow) loadCommittedCurrentObservation(
 	ctx context.Context,
 	pendingCursorCommit *pendingPrimaryCursorCommit,
 ) (*currentObservation, error) {
-	inputs, err := flow.loadCurrentInputsStage(ctx, flow.engine.baseline, flow.engine.driveID)
+	inputs, err := flow.loadCurrentInputs(ctx, flow.engine.baseline, flow.engine.driveID)
 	if err != nil {
 		return nil, err
 	}
@@ -447,7 +412,7 @@ func (flow *engineFlow) loadObservedCurrentInputs(
 	}, nil
 }
 
-func (flow *engineFlow) loadCurrentInputsStage(
+func (flow *engineFlow) loadCurrentInputs(
 	ctx context.Context,
 	store *SyncStore,
 	defaultDriveID driveid.ID,
@@ -464,10 +429,10 @@ func (flow *engineFlow) loadCurrentInputsStage(
 		}
 	}()
 
-	return flow.loadCurrentInputsStageTx(ctx, store, tx, defaultDriveID)
+	return flow.loadCurrentInputsTx(ctx, store, tx, defaultDriveID)
 }
 
-func (flow *engineFlow) loadCurrentInputsStageTx(
+func (flow *engineFlow) loadCurrentInputsTx(
 	ctx context.Context,
 	store *SyncStore,
 	tx sqlTxRunner,
