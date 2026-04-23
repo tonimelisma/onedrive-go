@@ -31,14 +31,14 @@ const (
 
 // ListRemoteState returns the current remote mirror rows.
 func (m *SyncStore) ListRemoteState(ctx context.Context) ([]RemoteStateRow, error) {
-	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveid.ID{})
+	mountDriveID, err := m.mountDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
-		return nil, fmt.Errorf("sync: reading configured drive for remote_state: %w", err)
+		return nil, fmt.Errorf("sync: reading mount drive for remote_state: %w", err)
 	}
 
 	return queryRemoteStateRowsWithRunner(ctx, m.db,
 		`SELECT `+sqlSelectRemoteStateCols+` FROM remote_state`,
-		configuredDriveID,
+		mountDriveID,
 	)
 }
 
@@ -46,7 +46,7 @@ func queryRemoteStateRowsWithRunner(
 	ctx context.Context,
 	runner sqlTxRunner,
 	query string,
-	configuredDriveID driveid.ID,
+	mountDriveID driveid.ID,
 	args ...any,
 ) ([]RemoteStateRow, error) {
 	rows, err := runner.QueryContext(ctx, query, args...)
@@ -74,7 +74,7 @@ func queryRemoteStateRowsWithRunner(
 			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
 		}
 
-		row.DriveID = remoteStateDriveID(rawDriveID, configuredDriveID)
+		row.DriveID = remoteStateDriveID(rawDriveID, mountDriveID)
 		row.Hash = hash.String
 		row.ETag = etag.String
 
@@ -102,16 +102,16 @@ func (m *SyncStore) getRemoteStateRow(
 	arg string,
 	contextLabel string,
 ) (*RemoteStateRow, bool, error) {
-	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveID)
+	mountDriveID, err := m.mountDriveIDForRead(ctx, driveID)
 	if err != nil {
-		return nil, false, fmt.Errorf("sync: reading configured drive for %s: %w", contextLabel, err)
+		return nil, false, fmt.Errorf("sync: reading mount drive for %s: %w", contextLabel, err)
 	}
-	if matchErr := ensureMatchingConfiguredDriveID(driveID, configuredDriveID); matchErr != nil {
+	if matchErr := ensureMatchingMountDriveID(driveID, mountDriveID); matchErr != nil {
 		return nil, false, matchErr
 	}
 
 	row, err := scanRemoteStateRowWithQuerier(
-		configuredDriveID,
+		mountDriveID,
 		func(dest ...any) error {
 			return m.db.QueryRowContext(ctx, query, arg).Scan(dest...)
 		},

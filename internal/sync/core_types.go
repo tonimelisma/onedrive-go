@@ -105,7 +105,7 @@ func DirLowerKeyFromPath(path string) DirLowerKey {
 type Baseline struct {
 	mu         sync.RWMutex
 	ByPath     map[string]*BaselineEntry
-	ByID       map[string]*BaselineEntry        // keyed by item_id within this per-drive DB
+	ByID       map[string]*BaselineEntry        // keyed by item_id within this per-mount DB
 	ByDirLower map[DirLowerKey][]*BaselineEntry // case-insensitive sibling index
 }
 

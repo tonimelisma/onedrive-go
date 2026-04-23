@@ -82,11 +82,11 @@ func (m *SyncStore) commitObservationTx(
 	if err != nil {
 		return err
 	}
-	if ensureErr := m.ensureConfiguredDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
+	if ensureErr := m.ensureMountDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
 		return ensureErr
 	}
 	if driveID.IsZero() {
-		driveID = state.ConfiguredDriveID
+		driveID = state.MountDriveID
 	}
 
 	for i := range events {
@@ -164,9 +164,9 @@ func observedRemoteStateUpdate(
 }
 
 func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *RemoteStateRow {
-	configuredDriveID := driveid.New(driveID)
+	mountDriveID := driveid.New(driveID)
 	row, err := scanRemoteStateRowWithQuerier(
-		configuredDriveID,
+		mountDriveID,
 		func(dest ...any) error {
 			return tx.QueryRowContext(ctx, sqlGetRemoteStateRow, itemID).Scan(dest...)
 		},
