@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
@@ -92,61 +91,4 @@ func NewMountEngine(
 	}
 
 	return newEngine(ctx, cfg)
-}
-
-// NewDriveEngine constructs an Engine from the authenticated drive session and
-// resolved drive config for transitional resolved-drive callers.
-func NewDriveEngine(
-	ctx context.Context,
-	session *driveops.Session,
-	resolved *config.ResolvedDrive,
-	logger *slog.Logger,
-	perfCollector *perf.Collector,
-	verifyDrive bool,
-) (*Engine, error) {
-	if session == nil {
-		return nil, fmt.Errorf("sync: session is required")
-	}
-
-	if resolved == nil {
-		return nil, fmt.Errorf("sync: resolved drive is required")
-	}
-
-	if logger == nil {
-		logger = slog.Default()
-	}
-
-	syncDir := resolved.SyncDir
-	if syncDir == "" {
-		return nil, fmt.Errorf("sync_dir not configured — set it in the config file or add a drive with 'onedrive-go drive add'")
-	}
-
-	dbPath := resolved.StatePath()
-	if dbPath == "" {
-		return nil, fmt.Errorf("cannot determine state DB path for drive %q", resolved.CanonicalID)
-	}
-
-	minFree, err := config.ParseSize(resolved.MinFreeSpace)
-	if err != nil {
-		return nil, fmt.Errorf("invalid min_free_space %q: %w", resolved.MinFreeSpace, err)
-	}
-
-	return NewMountEngine(ctx, session, &EngineMountConfig{
-		DBPath:                    dbPath,
-		SyncRoot:                  syncDir,
-		DataDir:                   config.DefaultDataDir(),
-		DriveID:                   resolved.DriveID,
-		DriveType:                 resolved.CanonicalID.DriveType(),
-		AccountEmail:              resolved.CanonicalID.Email(),
-		RootItemID:                resolved.RootItemID,
-		RootedSubtreeDeltaCapable: resolved.SharedRootDeltaCapable,
-		EnableWebsocket:           resolved.Websocket,
-		LocalFilter:               LocalFilterConfig{},
-		LocalRules: LocalObservationRules{
-			RejectSharePointRootForms: resolved.CanonicalID.IsSharePoint(),
-		},
-		TransferWorkers: resolved.TransferWorkers,
-		CheckWorkers:    resolved.CheckWorkers,
-		MinFreeSpace:    minFree,
-	}, logger, perfCollector, verifyDrive)
 }

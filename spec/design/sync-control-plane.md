@@ -70,7 +70,7 @@ Each current `mountSpec` owns:
 
 `mountSpec` no longer carries `ResolvedDrive`. Configured drives are compiled
 into mount-owned runtime facts once, and sync session construction now consumes
-that mount-owned identity directly.
+those facts through `driveops.MountSessionConfig`.
 
 Engine construction is no longer drive-shaped. `internal/multisync` now derives
 `sync.EngineMountConfig` from `mountSpec` and passes that sync-owned mount
@@ -250,8 +250,9 @@ to the control-plane boundary.
 
 - No mount-to-mount coordination state exists in memory or in SQLite.
 - Each mount gets its own engine instance and state DB.
-- Session creation goes through `driveops.SessionRuntime`, which remains the
-  single owner of token-source caching.
+- Session creation goes through `driveops.SessionRuntime` with
+  `driveops.MountSessionConfig`, keeping token-source caching owned in one
+  place and keeping `ResolvedDrive` out of runtime construction.
 - Reload updates config through one shared `config.Holder`, so both the
   control plane and session runtime see the same config snapshot.
 

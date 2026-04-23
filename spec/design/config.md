@@ -12,7 +12,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 
 - Owns: Config-file schema, catalog schema, durable lifecycle mutation rules for config/catalog-managed inventory, override resolution, path discovery, drive-section resolution, token-path resolution, and validation policy.
 - Does Not Own: OAuth exchange, Graph request behavior, sync runtime orchestration, or durable sync-store contents.
-- Source of Truth: The loaded `Config` snapshot plus derived `ResolvedDrive` values. `Holder` is the single in-process source of truth for reloadable config state.
+- Source of Truth: The loaded `Config` snapshot plus derived `ResolvedDrive` values at the config/CLI selection boundary. `Holder` is the single in-process source of truth for reloadable config state; runtime session and engine construction consume mount-owned identity compiled above their boundaries.
 - Allowed Side Effects: Reading and writing config and managed inventory/state files through `fsroot`, plus statting arbitrary user-selected local paths through `localpath`.
 - Mutable Runtime Owner: `config.Holder` owns the current `*Config` pointer behind `Holder.mu`. The package starts no background goroutines, owns no long-lived channels, and uses no timers.
 - Error Boundary: `config` translates parse/load/validation outcomes into either fatal errors or warnings before callers act, following [error-model.md](error-model.md).
@@ -24,7 +24,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Shared-root drives always preserve the canonical shared root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
-| Shared-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestNewDriveEngine_PropagatesWatchCapabilities` |
+| Shared-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestBuildConfiguredMountSpecs_PreservesRootedMountFields` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 

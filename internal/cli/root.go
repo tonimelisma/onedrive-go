@@ -230,11 +230,13 @@ func mustCLIContext(ctx context.Context) *CLIContext {
 	return cc
 }
 
-// Session is a shorthand for cc.Runtime.Session(ctx, cc.Cfg).
+// Session is the file-command helper for creating an interactive session from
+// the resolved CLI drive at the config boundary.
 // Eliminates 7 identical boilerplate blocks across file operation commands.
 func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
-	if cc.Runtime != nil && cc.GraphBaseURL != "" {
-		cc.Runtime.GraphBaseURL = cc.GraphBaseURL
+	runtime := cc.runtime()
+	if cc.GraphBaseURL != "" {
+		runtime.GraphBaseURL = cc.GraphBaseURL
 	}
 
 	accountCID, err := config.TokenAccountCanonicalID(cc.Cfg.CanonicalID)
@@ -247,14 +249,19 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 			return nil, fmt.Errorf("probe account identity: %w", probeErr)
 		}
 		if result.Changed() {
-			cc.Runtime.FlushTokenCache()
+			runtime.FlushTokenCache()
 			if reloadErr := cc.reloadResolvedDriveFromFlags(); reloadErr != nil {
 				return nil, reloadErr
 			}
 		}
 	}
 
-	session, err := cc.Runtime.Session(ctx, cc.Cfg)
+	mountCfg, err := interactiveMountSessionConfigFromResolvedDrive(cc.Cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	session, err := runtime.InteractiveSession(ctx, mountCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create drive session: %w", err)
 	}
@@ -265,6 +272,29 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
 	attachDriveAuthProof(session, newAuthProofRecorder(cc.Logger), "drive-session")
 
 	return session, nil
+}
+
+func interactiveMountSessionConfigFromResolvedDrive(rd *config.ResolvedDrive) (*driveops.MountSessionConfig, error) {
+	if rd == nil {
+		return nil, fmt.Errorf("resolved drive is required")
+	}
+
+	tokenOwnerCanonical, err := config.TokenAccountCanonicalID(rd.CanonicalID)
+	if err != nil {
+		return nil, fmt.Errorf("token owner for drive %q: %w", rd.CanonicalID, err)
+	}
+
+	accountEmail := rd.CanonicalID.Email()
+	if accountEmail == "" {
+		accountEmail = tokenOwnerCanonical.Email()
+	}
+
+	return &driveops.MountSessionConfig{
+		TokenOwnerCanonical: tokenOwnerCanonical,
+		DriveID:             rd.DriveID,
+		RootItemID:          rd.RootItemID,
+		AccountEmail:        accountEmail,
+	}, nil
 }
 
 // newGraphClient creates a graph.Client with the standard HTTP client,
