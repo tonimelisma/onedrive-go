@@ -574,7 +574,7 @@ func TestSession_ResolveItem_MountedRootRelativePath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "file-id", item.ID)
 	assert.Equal(t, []string{
-		"/drives/abcdef0123456789/items/" + sharedRootItemID + "/children",
+		"/drives/abcdef0123456789/items/" + mountedRootItemID + "/children",
 		"/drives/abcdef0123456789/items/folder-id/children",
 	}, gotPaths)
 }
