@@ -21,6 +21,10 @@ observer goroutine commits remote rows or observation cursors directly. Once the
 engine starts applying that batch as durable current truth, failures in remote
 row commits, cursor commits, or observation-findings reconciliation are
 fail-closed for that run/session rather than best-effort warnings.
+Those observer outputs are runtime-owned too: the watch runtime owns the local
+event stream, remote-batch stream, skipped-item stream, observer error stream,
+refresh channels, and active-observer count, while the pipeline shell keeps
+only the non-runtime dependencies needed by the loop.
 
 The observation stack has four main pieces:
 
