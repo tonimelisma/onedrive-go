@@ -105,7 +105,7 @@ func TestRunSteadyStateReplan_BidirectionalWritesSyncStatus(t *testing.T) {
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{})
+	}, dirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 
@@ -149,7 +149,7 @@ func TestRunSteadyStateReplan_BidirectionalWritesSyncStatusWhenOnlyFutureHeldWor
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{})
+	}, dirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.loop.syncBatch.active, "future-held work should not leave the sync-status batch open")
@@ -210,7 +210,7 @@ func TestRunSteadyStateReplan_DirectionalDoesNotWriteSyncStatus(t *testing.T) {
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncUploadOnly,
-	}, DirtyBatch{})
+	}, dirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 
@@ -245,7 +245,7 @@ func TestRunSteadyStateReplan_LocalObserveFailureDropsBatch(t *testing.T) {
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{})
+	}, dirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.loop.syncBatch.active)
@@ -281,7 +281,7 @@ func TestRunSteadyStateReplan_LocalSnapshotCommitFailureStopsWatch(t *testing.T)
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{})
+	}, dirtyBatch{})
 	require.ErrorContains(t, err, "watch replan local observation findings reconcile")
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.loop.syncBatch.active)
@@ -317,7 +317,7 @@ func TestRunSteadyStateReplan_ContextCancellationAfterObservationIsCleanShutdown
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, DirtyBatch{})
+	}, dirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.False(t, rt.loop.syncBatch.active)
