@@ -9,7 +9,7 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 	flow.retryRowsByKey = make(map[RetryWorkKey]RetryWorkRow, len(runtime.RetryRows))
 	for i := range runtime.RetryRows {
 		row := runtime.RetryRows[i]
-		flow.retryRowsByKey[retryWorkKeyForRetryWork(&row)] = row
+		flow.retryRowsByKey[row.WorkKey()] = row
 	}
 
 	flow.heldByKey = make(map[RetryWorkKey]*heldAction)

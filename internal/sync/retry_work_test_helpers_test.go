@@ -7,38 +7,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func listObservationIssuesForTest(
-	t *testing.T,
-	store *SyncStore,
-	ctx context.Context,
-) []ObservationIssueRow {
-	t.Helper()
-
-	rows, err := store.ListObservationIssues(ctx)
-	require.NoError(t, err)
-
-	return rows
+func testRetryWorkKey(path string, oldPath string, actionType ActionType) RetryWorkKey {
+	return RetryWorkKey{
+		Path:       path,
+		OldPath:    oldPath,
+		ActionType: actionType,
+	}
 }
 
-func actionableObservationIssuesForTest(
-	t *testing.T,
-	store *SyncStore,
-	ctx context.Context,
-) []ObservationIssueRow {
-	t.Helper()
-
-	return listObservationIssuesForTest(t, store, ctx)
+func testRetryWorkFailure(path string, oldPath string, actionType ActionType) *RetryWorkFailure {
+	return &RetryWorkFailure{
+		Work: testRetryWorkKey(path, oldPath, actionType),
+	}
 }
 
-func listRetryWorkForTest(
-	t *testing.T,
-	store *SyncStore,
-	ctx context.Context,
-) []RetryWorkRow {
+func testRetryWorkRow(path string, oldPath string, actionType ActionType) RetryWorkRow {
+	return RetryWorkRow{
+		Path:       path,
+		OldPath:    oldPath,
+		ActionType: actionType,
+	}
+}
+
+func listRetryWorkForTest(t *testing.T, store *SyncStore, ctx context.Context) []RetryWorkRow {
 	t.Helper()
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
+	return rows
+}
 
+func actionableObservationIssuesForTest(t *testing.T, store *SyncStore, ctx context.Context) []ObservationIssueRow {
+	t.Helper()
+
+	rows, err := store.ListObservationIssues(ctx)
+	require.NoError(t, err)
 	return rows
 }

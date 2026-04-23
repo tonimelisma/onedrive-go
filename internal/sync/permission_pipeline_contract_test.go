@@ -74,23 +74,15 @@ func TestPermissionApply_ActivateTimedRemoteWriteScope_PersistsRetryWorkAndScope
 	flow := testEngineFlow(t, eng)
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
-	matched, err := flow.applyPermissionOutcome(t.Context(), nil, permissionFlowRemote403, &PermissionOutcome{
-		Matched:      true,
-		Kind:         permissionOutcomeActivateDerivedScope,
-		ScopeKey:     scopeKey,
+	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, nil, &ActionCompletion{
+		Path:       "Shared/Docs/file.txt",
+		ActionType: ActionUpload,
+	}, PermissionEvidence{
+		Kind:         permissionEvidenceBoundaryDenied,
 		BoundaryPath: "Shared/Docs",
 		TriggerPath:  "Shared/Docs/file.txt",
-		RetryWorkFailure: &RetryWorkFailure{
-			Path:          "Shared/Docs/file.txt",
-			ActionType:    ActionUpload,
-			ConditionType: IssueRemoteWriteDenied,
-			ScopeKey:      scopeKey,
-			Blocked:       true,
-		},
-	})
-
-	require.NoError(t, err)
-	require.True(t, matched)
+		IssueType:    IssueRemoteWriteDenied,
+	}, true))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -112,23 +104,15 @@ func TestPermissionApply_ReadBoundaryScope_DoesNotPersistBlockScopeRow(t *testin
 	flow := testEngineFlow(t, eng)
 	scopeKey := SKPermLocalRead("Private")
 
-	matched, err := flow.applyPermissionOutcome(t.Context(), nil, permissionFlowLocalPermission, &PermissionOutcome{
-		Matched:      true,
-		Kind:         permissionOutcomeActivateBoundaryScope,
-		ScopeKey:     scopeKey,
+	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, nil, &ActionCompletion{
+		Path:       "Private/file.txt",
+		ActionType: ActionDownload,
+	}, PermissionEvidence{
+		Kind:         permissionEvidenceBoundaryDenied,
 		BoundaryPath: "Private",
 		TriggerPath:  "Private/file.txt",
-		RetryWorkFailure: &RetryWorkFailure{
-			Path:          "Private/file.txt",
-			ActionType:    ActionDownload,
-			ConditionType: IssueLocalReadDenied,
-			ScopeKey:      scopeKey,
-			Blocked:       true,
-		},
-	})
-
-	require.NoError(t, err)
-	require.True(t, matched)
+		IssueType:    IssueLocalReadDenied,
+	}, false))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -157,15 +141,15 @@ func TestPermissionApply_KnownActiveBoundary_DoesNotPersistOrArmRetryTimer(t *te
 		NextTrialAt:   time.Unix(61, 0),
 	}))
 
-	matched, err := flow.applyPermissionOutcome(t.Context(), rt, permissionFlowRemote403, &PermissionOutcome{
-		Matched:      true,
-		Kind:         permissionOutcomeNone,
+	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), rt, nil, &ActionCompletion{
+		Path:       "Shared/Docs/file.txt",
+		ActionType: ActionUpload,
+	}, PermissionEvidence{
+		Kind:         permissionEvidenceKnownActiveBoundary,
 		BoundaryPath: "Shared/Docs",
 		TriggerPath:  "Shared/Docs/file.txt",
-	})
-
-	require.NoError(t, err)
-	require.True(t, matched)
+		IssueType:    IssueRemoteWriteDenied,
+	}, true))
 	assert.False(t, rt.hasRetryTimer())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 

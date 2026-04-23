@@ -235,48 +235,32 @@ func TestRecordRetryWorkFailure_RejectsInvalidInput(t *testing.T) {
 	assert.Contains(t, err.Error(), "nil failure")
 
 	err = func() error {
-		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-			ActionType:    ActionUpload,
-			ConditionType: IssueServiceOutage,
-		}, func(int) time.Duration { return time.Minute })
+		_, recordErr := store.RecordRetryWorkFailure(ctx, testRetryWorkFailure("", "", ActionUpload), func(int) time.Duration { return time.Minute })
 		return recordErr
 	}()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing path")
 
 	err = func() error {
-		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-			Path:          "bad-action.txt",
-			ActionType:    ActionType(-1),
-			ConditionType: IssueServiceOutage,
-		}, func(int) time.Duration { return time.Minute })
+		_, recordErr := store.RecordRetryWorkFailure(ctx, testRetryWorkFailure("bad-action.txt", "", ActionType(-1)), func(int) time.Duration { return time.Minute })
 		return recordErr
 	}()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid action type")
 
 	err = func() error {
-		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-			Path:          "needs-delay.txt",
-			ActionType:    ActionUpload,
-			ConditionType: IssueServiceOutage,
-		}, nil)
+		_, recordErr := store.RecordRetryWorkFailure(ctx, testRetryWorkFailure("needs-delay.txt", "", ActionUpload), nil)
 		return recordErr
 	}()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requires delay function")
 
 	err = func() error {
-		_, recordErr := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-			Path:          "blocked-without-scope.txt",
-			ActionType:    ActionUpload,
-			ConditionType: IssueRemoteWriteDenied,
-			Blocked:       true,
-		}, nil)
+		_, recordErr := store.RecordBlockedRetryWork(ctx, testRetryWorkKey("blocked-without-scope.txt", "", ActionUpload), ScopeKey{})
 		return recordErr
 	}()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "requires scope key")
+	assert.Contains(t, err.Error(), "missing scope key")
 }
 
 // Validates: R-2.10.33
@@ -288,20 +272,10 @@ func TestRecordRetryWorkFailure_PopulatesRetryAndBlockedRows(t *testing.T) {
 	now := time.Unix(100, 0)
 	setStoreTestNow(store, now)
 
-	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "retry.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-	}, func(int) time.Duration { return time.Minute })
+	_, err := store.RecordRetryWorkFailure(ctx, testRetryWorkFailure("retry.txt", "", ActionUpload), func(int) time.Duration { return time.Minute })
 	require.NoError(t, err)
 
-	_, err = store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "blocked.txt",
-		ActionType:    ActionRemoteDelete,
-		ConditionType: IssueServiceOutage,
-		ScopeKey:      SKService(),
-		Blocked:       true,
-	}, nil)
+	_, err = store.RecordBlockedRetryWork(ctx, testRetryWorkKey("blocked.txt", "", ActionRemoteDelete), SKService())
 	require.NoError(t, err)
 
 	rows, err := store.ListRetryWork(ctx)
@@ -328,12 +302,7 @@ func TestRecordRetryWorkFailure_PreservesMoveOldPath(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "dest.txt",
-		OldPath:       "src.txt",
-		ActionType:    ActionRemoteMove,
-		ConditionType: IssueServiceOutage,
-	}, func(int) time.Duration { return time.Minute })
+	_, err := store.RecordRetryWorkFailure(ctx, testRetryWorkFailure("dest.txt", "src.txt", ActionRemoteMove), func(int) time.Duration { return time.Minute })
 	require.NoError(t, err)
 
 	rows, err := store.ListRetryWork(ctx)
@@ -350,16 +319,10 @@ func TestClearBlockedRetryWork_RemovesOnlyMatchingScopedWork(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "blocked.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-		ScopeKey:      SKService(),
-		Blocked:       true,
-	}, nil)
+	_, err := store.RecordBlockedRetryWork(ctx, testRetryWorkKey("blocked.txt", "", ActionUpload), SKService())
 	require.NoError(t, err)
 
-	other := retryWorkIdentityForWork("blocked.txt", "old.txt", ActionRemoteMove)
+	other := testRetryWorkRow("blocked.txt", "old.txt", ActionRemoteMove)
 	other.ScopeKey = SKService()
 	other.Blocked = true
 	other.AttemptCount = 2
@@ -385,11 +348,7 @@ func TestResolveRetryWork_ReturnsAndDeletesMatchingWork(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "docs/report.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-	}, func(int) time.Duration { return time.Minute })
+	_, err := store.RecordRetryWorkFailure(ctx, testRetryWorkFailure("docs/report.txt", "", ActionUpload), func(int) time.Duration { return time.Minute })
 	require.NoError(t, err)
 
 	row, found, err := store.ResolveRetryWork(ctx, RetryWorkKey{
@@ -415,14 +374,10 @@ func TestResolveRetryWork_PreservesUnrelatedRetryWorkOnSamePath(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "docs/report.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-	}, func(int) time.Duration { return time.Minute })
+	_, err := store.RecordRetryWorkFailure(ctx, testRetryWorkFailure("docs/report.txt", "", ActionUpload), func(int) time.Duration { return time.Minute })
 	require.NoError(t, err)
 
-	other := retryWorkIdentityForWork("docs/report.txt", "old.txt", ActionRemoteMove)
+	other := testRetryWorkRow("docs/report.txt", "old.txt", ActionRemoteMove)
 	other.AttemptCount = 2
 	other.NextRetryAt = time.Now().Add(time.Minute).UnixNano()
 	require.NoError(t, store.UpsertRetryWork(ctx, &other))
@@ -447,7 +402,7 @@ func TestResolveRetryWork_DeletesRetryWorkWithoutIssueRow(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	row := retryWorkIdentityForWork("docs/report.txt", "old.txt", ActionRemoteMove)
+	row := testRetryWorkRow("docs/report.txt", "old.txt", ActionRemoteMove)
 	row.AttemptCount = 3
 	row.NextRetryAt = time.Now().Add(time.Minute).UnixNano()
 	require.NoError(t, store.UpsertRetryWork(ctx, &row))

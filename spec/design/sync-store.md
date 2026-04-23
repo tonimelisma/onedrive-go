@@ -118,12 +118,13 @@ Supporting outcome mutations should stay separate by owner:
 whether their next execution boundary is worker-side I/O or the engine-owned
 publication-drain stage. The store does not split publication retries into a
 second durable table. Admission, completion, held-release, and
-permission-driven runtime mutation all act on that same durable lane; the
-store owns the rows, while the engine owns the policy around them. Blocked
-rows are also canonicalized engine-side: all runtime paths persist
-`blocked=true`, the exact `scope_key`, and the next due retry/trial time.
-Condition family, HTTP status, and error text remain runtime/log concerns
-instead of durable retry-row columns.
+direct permission handlers all act on that same durable lane; the store owns
+the rows, while the engine owns the policy around them. Delayed exact retries
+and blocked scope retries now use separate store helpers, but they still land
+in the same `retry_work` table shape. Blocked rows are canonicalized
+engine-side: all runtime paths persist `blocked=true`, the exact `scope_key`,
+and the next due retry/trial time. Condition family, HTTP status, and error
+text remain runtime/log concerns instead of durable retry-row columns.
 Current-truth loading, planner-input loading, and dry-run scratch preparation
 for that policy live in `engine_current_plan.go`, while startup/runtime
 reconcile and admission live in `engine_startup.go` and

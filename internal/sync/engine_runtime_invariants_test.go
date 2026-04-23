@@ -39,13 +39,7 @@ func TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockS
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFn().Add(time.Minute),
 	}))
-	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:          "Shared/Docs/file.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueRemoteWriteDenied,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("Shared/Docs/file.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
 
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
