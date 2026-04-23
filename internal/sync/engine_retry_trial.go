@@ -6,7 +6,7 @@ import (
 	"log/slog"
 )
 
-const retryResolutionSourceWorkerSuccess = "worker_success"
+const retryResolutionSourceActionSuccess = "action_success"
 
 // releaseDueHeldTrialsNow releases due held scope trials that are already
 // present in the runtime. It never rebuilds plan structure or revalidates
@@ -70,7 +70,7 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 	if clearErr := flow.resolveRetryWorkAndLogResolution(
 		ctx,
 		retryWorkKeyForAction(action),
-		retryResolutionSourceWorkerSuccess,
+		retryResolutionSourceActionSuccess,
 	); clearErr != nil {
 		path := ""
 		if action != nil {
