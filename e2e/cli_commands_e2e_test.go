@@ -414,7 +414,7 @@ func TestE2E_Mv_Rename(t *testing.T) {
 	// Create folder and file.
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/original.txt", "mv rename content")
-	pollCLIWithConfigContains(t, cfgPath, nil, "original.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "original.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Rename.
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mv", "/"+testFolder+"/original.txt", "/"+testFolder+"/renamed.txt")
@@ -440,7 +440,7 @@ func TestE2E_Mv_MoveToFolder(t *testing.T) {
 	// Create parent folder, subfolder, and file.
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder+"/sub")
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/moveme.txt", "mv to folder content")
-	pollCLIWithConfigContains(t, cfgPath, nil, "moveme.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "moveme.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Move file into subfolder.
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mv", "/"+testFolder+"/moveme.txt", "/"+testFolder+"/sub")
@@ -467,7 +467,7 @@ func TestE2E_Mv_JSON(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/a.txt", "mv json content")
-	pollCLIWithConfigContains(t, cfgPath, nil, "a.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "a.txt", pollTimeout, "ls", "/"+testFolder)
 
 	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "mv", "--json", "/"+testFolder+"/a.txt", "/"+testFolder+"/b.txt")
 
@@ -508,14 +508,14 @@ func TestE2E_Cp_File(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/source.txt", "cp file content")
-	pollCLIWithConfigContains(t, cfgPath, nil, "source.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "source.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Copy to a new name.
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "cp", "/"+testFolder+"/source.txt", "/"+testFolder+"/copy.txt")
 	assert.Contains(t, stderr, "Copied", "cp should confirm the copy")
 
 	// Verify both files exist after the remote copy settles.
-	stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "copy.txt", remoteWritePropagationTimeout, "ls", "/"+testFolder)
+	stdout, _ := waitForRemoteReadContains(t, cfgPath, nil, "", "copy.txt", remoteWritePropagationTimeout, "ls", "/"+testFolder)
 	assert.Contains(t, stdout, "source.txt", "source file should still exist")
 	assert.Contains(t, stdout, "copy.txt", "copied file should exist")
 
@@ -536,16 +536,16 @@ func TestE2E_Cp_IntoFolder(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder+"/dest")
-	pollCLIWithConfigContains(t, cfgPath, nil, "dest", remoteWritePropagationTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "dest", remoteWritePropagationTimeout, "ls", "/"+testFolder)
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/src.txt", "cp into folder")
-	pollCLIWithConfigContains(t, cfgPath, nil, "src.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "src.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Copy into the dest folder.
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "cp", "/"+testFolder+"/src.txt", "/"+testFolder+"/dest")
 	assert.Contains(t, stderr, "Copied", "cp should confirm the copy")
 
 	// Verify the copy is in the dest folder.
-	stdout, _ := pollCLIWithConfigContains(t, cfgPath, nil, "src.txt", remoteWritePropagationTimeout, "ls", "/"+testFolder+"/dest")
+	stdout, _ := waitForRemoteReadContains(t, cfgPath, nil, "", "src.txt", remoteWritePropagationTimeout, "ls", "/"+testFolder+"/dest")
 	assert.Contains(t, stdout, "src.txt", "copied file should appear in dest folder")
 }
 
@@ -562,7 +562,7 @@ func TestE2E_Cp_JSON(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/j.txt", "cp json")
-	pollCLIWithConfigContains(t, cfgPath, nil, "j.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "j.txt", pollTimeout, "ls", "/"+testFolder)
 
 	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "cp", "--json", "/"+testFolder+"/j.txt", "/"+testFolder+"/j-copy.txt")
 
@@ -606,8 +606,8 @@ func TestE2E_Mv_ForceOverwrite(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/src.txt", "new content")
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt", "old content")
-	pollCLIWithConfigContains(t, cfgPath, nil, "src.txt", pollTimeout, "ls", "/"+testFolder)
-	pollCLIWithConfigContains(t, cfgPath, nil, "dst.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "src.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "dst.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// mv without --force should fail (destination already exists).
 	output := runCLIWithConfigExpectError(t, cfgPath, nil, "mv", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
@@ -642,8 +642,8 @@ func TestE2E_Cp_ForceOverwrite(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/src.txt", "copied content")
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt", "old content")
-	pollCLIWithConfigContains(t, cfgPath, nil, "src.txt", pollTimeout, "ls", "/"+testFolder)
-	pollCLIWithConfigContains(t, cfgPath, nil, "dst.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "src.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "dst.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// cp without --force should fail (destination already exists).
 	output := runCLIWithConfigExpectError(t, cfgPath, nil, "cp", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
@@ -682,7 +682,7 @@ func TestE2E_Mv_Folder(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder+"/source-dir")
 	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/source-dir/inner.txt", "preserved")
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder+"/dest-parent")
-	pollCLIWithConfigContains(t, cfgPath, nil, "source-dir", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "source-dir", pollTimeout, "ls", "/"+testFolder)
 
 	// Move folder into dest-parent with a new name.
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mv",

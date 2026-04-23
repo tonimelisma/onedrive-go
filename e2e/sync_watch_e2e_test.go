@@ -102,7 +102,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 
 	// Poll until the file appears remotely.
 	remotePath := "/" + testFolder + "/watch-test.txt"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "watch-test.txt", 3*time.Minute, "stat", remotePath)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "watch-test.txt", 3*time.Minute, "stat", remotePath)
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -264,7 +264,7 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "resume")
 
 	// Poll until the file appears remotely after resume.
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "paused-file.txt", 3*time.Minute, "stat", remotePath)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "paused-file.txt", 3*time.Minute, "stat", remotePath)
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -353,7 +353,7 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 
 	// Poll until drive1's file appears remotely.
 	remotePath1 := "/" + testFolder1 + "/before-reload.txt"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "before-reload.txt", 3*time.Minute, "stat", remotePath1)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "before-reload.txt", 3*time.Minute, "stat", remotePath1)
 
 	// Rewrite config to add drive2.
 	updatedCfg := fmt.Sprintf("[%q]\nsync_dir = %q\n\n[%q]\nsync_dir = %q\n",

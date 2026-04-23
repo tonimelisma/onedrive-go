@@ -159,7 +159,14 @@ For detailed module design, see:
 | OneDrive sync behavior | [../reference/onedrive-sync-behavior.md](../reference/onedrive-sync-behavior.md) |
 | OneDrive glossary | [../reference/onedrive-glossary.md](../reference/onedrive-glossary.md) |
 | Live incidents ledger | [../reference/live-incidents.md](../reference/live-incidents.md) |
+| Live recurring families | [../reference/live-recurring-families.md](../reference/live-recurring-families.md) |
 | Sync ecosystem patterns | [../reference/sync-ecosystem.md](../reference/sync-ecosystem.md) |
+
+For live CI / E2E / integration debugging, open
+[live-incidents.md](../reference/live-incidents.md) first for chronology and
+evidence, then use
+[live-recurring-families.md](../reference/live-recurring-families.md) as the
+compact current-policy companion for recurring families.
 
 ## Source Of Truth Map
 
@@ -245,10 +252,10 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Known shared-folder fixture visibility through `drive list --json` is
   eventual because the command depends on best-effort
   `GET /me/drive/root/search(q='*')` discovery. Full-suite tests that validate
-  exact shared selectors must poll for selector visibility across one ordinary
-  read-only propagation window and skip that assertion if Graph never exposes
-  the fixture on that run, rather than treating one empty search pass as a
-  product regression.
+  exact shared selectors or compare successive shared-discovery outputs must
+  poll across one ordinary read-only propagation window and skip that
+  assertion if Graph never exposes the same known fixture on that run, rather
+  than treating one empty search pass as a product regression.
 - Full-suite sync tests that stress concurrent uploads must assert eventual
   sync convergence, not single-pass perfection. A one-shot `sync --upload-only`
   run may legitimately persist retryable transient `retry_work` when one exact
