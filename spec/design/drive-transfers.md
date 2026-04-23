@@ -79,7 +79,9 @@ second false-negative point.
 When simple upload succeeds and mtime preservation is required, the immediate
 follow-on `UpdateFileSystemInfo` PATCH can also briefly return `404
 itemNotFound` for the returned item ID. That retry stays in the graph boundary
-and only applies to the post-simple-upload finalization path; transfer-manager
+and only applies to the post-simple-upload finalization path, with a bounded
+window sized for the longer shared-root item-ID lag seen in live E2E;
+transfer-manager
 and CLI callers still see one success or one failure outcome.
 
 Shared-file `put` reuses the same transfer machinery, but targets an existing
@@ -120,6 +122,9 @@ delete-target path recovery in the same owner:
   overhead and roughly a two-minute wall-clock budget, because live Graph
   evidence has shown a path can become readable, regress to `404 itemNotFound`,
   and only recover again well after the older ~32-second budget
+- shared-root path creation still starts from the configured shared root item,
+  not the backing drive root, so recursive `mkdir` walks create descendants in
+  the same subtree that later `ResolveItem()` / `WaitPathVisible()` calls read
 - `ResolveDeleteTarget()` so path-oriented deletes can fall back from an exact
   path `itemNotFound` to the parent collection before they decide the target
   is already gone; when the parent-path listing itself is in a transient

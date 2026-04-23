@@ -45,7 +45,7 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 
 	// Walk path segments, creating each missing folder.
 	segments := strings.Split(remotePath, "/")
-	parentID := "root"
+	parentID := mkdirStartParentID(session)
 
 	for _, seg := range segments {
 		if seg == "" {
@@ -74,6 +74,14 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	cc.Statusf("Created %s\n", remotePath)
 
 	return nil
+}
+
+func mkdirStartParentID(session *driveops.Session) string {
+	if session == nil || session.RootItem == "" {
+		return "root"
+	}
+
+	return session.RootItem
 }
 
 // printMkdirJSON writes the mkdir command's JSON output to w.

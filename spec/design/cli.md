@@ -55,6 +55,10 @@ are inserted, updated, pruned, and validated.
 
 There is no `resolve` command family anymore.
 
+Configured shared-root drives keep `/` anchored at the configured shared root,
+not the backing drive root. Path-oriented file operations such as `mkdir`
+therefore walk and mutate only inside that configured subtree.
+
 ## Status And Read-Only Sync State
 
 `status` is intentionally read-only and account-centric. It is the only
@@ -151,6 +155,12 @@ One-shot sync resolves the full selected drive set, but it validates only
 runnable non-paused drives before startup. Paused drives remain in the startup
 summary as skipped drives; an invalid paused drive must not block unrelated
 runnable drives from executing.
+
+One-shot and watch sync both materialize the resolved `sync_dir` before they
+hand a runnable drive to the sync runtime. Config validation is allowed to
+accept a missing directory, but startup must create that root first so the
+scanner never receives a runnable drive whose local sync tree still does not
+exist.
 
 Generated follow-up commands in startup messages are shell-safe. Canonical IDs
 and other user-controlled values are single-quoted before they are rendered

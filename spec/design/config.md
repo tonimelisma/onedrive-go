@@ -23,6 +23,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | --- | --- |
 | Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
+| Shared-root drives always preserve the canonical shared root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 
@@ -207,6 +208,12 @@ canonical ID before command-specific validation runs. Drive resolution
 suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` —
 the raw config is needed by shared drive token resolution.
 
+For `shared:email:sourceDriveID:sourceItemID` drives, `buildResolvedDrive`
+always preserves `RootItemID` from the canonical ID even when `DriveID` is
+resolved from a catalog drive record. Catalog-backed shared drives therefore
+keep the configured shared-root observation boundary instead of silently
+falling back to whole-drive observation.
+
 `websocket` is a live watch-mode control. When `websocket = true`, watch mode
 fetches a OneDrive Socket.IO endpoint and establishes an outbound websocket
 wake source. The wake source does not replace delta: it only interrupts the
@@ -312,7 +319,7 @@ step into the shared failure model: fatal read/parse errors map to `fatal`,
 successful loads with warnings map to `actionable`, and clean loads map to
 `success`.
 
-**Sync-specific validation** (`ValidateResolvedForSync`): enforces that the resolved `sync_dir` is set, absolute, and not a regular file. That validation happens after `buildResolvedDrive` has already applied either the explicit per-drive `sync_dir` or the deterministic runtime default for drives that omit it. Non-existent paths are allowed because sync creates them on first run; other stat failures are fatal. Called only by the `sync` command — file operations do not require an explicit `sync_dir` in config.
+**Sync-specific validation** (`ValidateResolvedForSync`): enforces that the resolved `sync_dir` is set, absolute, and not a regular file. That validation happens after `buildResolvedDrive` has already applied either the explicit per-drive `sync_dir` or the deterministic runtime default for drives that omit it. Non-existent paths are allowed because sync creates them on first run; other stat failures are fatal. The CLI then materializes the validated directory before launching one-shot or watch sync. Called only by the `sync` command — file operations do not require an explicit `sync_dir` in config.
 
 ## Config Holder
 

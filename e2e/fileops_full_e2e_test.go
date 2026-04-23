@@ -135,10 +135,12 @@ func TestE2E_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("status", func(t *testing.T) {
-		stdout, _ := runCLIWithConfig(t, cfgPath, nil, "status")
+		stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
+			t, cfgPath, nil, drive, transientGraphRetryTimeout, "status",
+		)
 		assert.Contains(t, stdout, drive, "status should show the configured drive section")
 		assert.Contains(t, stdout, "Auth:", "status should show auth state")
-		assert.Contains(t, stdout, "State DB:  missing", "status should surface missing state DB for unsynced drives")
+		assert.Contains(t, stdout, "Last sync: never", "status should collapse an unsynced drive to an empty sync snapshot")
 	})
 }
 

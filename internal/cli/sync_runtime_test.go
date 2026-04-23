@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -220,6 +221,40 @@ func TestRunSyncDaemonWithFactory_CallsOrchestrator(t *testing.T) {
 	assert.True(t, orch.called)
 	assert.Equal(t, syncengine.SyncBidirectional, orch.mode)
 	assert.Equal(t, opts, orch.opts)
+}
+
+func TestRunSyncDaemonWithFactory_CreatesMissingSyncDirBeforeOrchestrator(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:watch@example.com")
+	syncDir := filepath.Join(t.TempDir(), "missing", "watch-sync-root")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+	holder := loadSyncTestHolder(t, cfgPath)
+
+	called := false
+	err := runSyncDaemonWithFactory(
+		t.Context(),
+		holder,
+		nil,
+		syncengine.SyncBidirectional,
+		syncengine.WatchOptions{},
+		slog.New(slog.DiscardHandler),
+		io.Discard,
+		"/tmp/control.sock",
+		func(_ *multisync.OrchestratorConfig) syncDaemonOrchestrator {
+			called = true
+
+			info, statErr := os.Stat(syncDir)
+			require.NoError(t, statErr)
+			assert.True(t, info.IsDir())
+
+			return &testSyncDaemonOrchestrator{}
+		},
+	)
+	require.NoError(t, err)
+	assert.True(t, called)
 }
 
 func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoDriveStarts(t *testing.T) {

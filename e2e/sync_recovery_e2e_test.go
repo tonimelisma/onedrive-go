@@ -49,23 +49,42 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
-	// Re-sync should show no changes (delta token persisted).
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	assert.Contains(t, stderr, "No changes detected",
-		"incremental sync should detect no changes after all files uploaded")
+	// Re-sync should not schedule fresh uploads for the unchanged local tree
+	// even if unrelated remote churn elsewhere on the shared live drive makes
+	// the global delta feed non-idle.
+	stderr := assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--upload-only")
+	assert.NotContains(t, stderr, "Uploads:",
+		"incremental upload-only sync should not re-upload unchanged files once the delta token is established")
 
 	// Add a new file remotely.
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/delta-new.txt", "new from remote")
 
-	// Download-only sync — should pick up only the new file.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
-	assert.Contains(t, stderr, "Downloads:",
-		"incremental download should report the new file")
-
 	// Verify the new file was downloaded locally.
 	newFilePath := filepath.Join(localDir, "delta-new.txt")
-	data, err := os.ReadFile(newFilePath)
-	require.NoError(t, err)
+	var data []byte
+	attempt := requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		120*time.Second,
+		"incremental download should eventually materialize a newly visible remote file after delta catches up",
+		func(result syncAttemptResult) bool {
+			if result.Err != nil {
+				return false
+			}
+
+			downloaded, readErr := os.ReadFile(newFilePath)
+			if readErr != nil {
+				return false
+			}
+
+			data = downloaded
+			return string(downloaded) == "new from remote"
+		},
+		"--download-only",
+	)
+	assert.Contains(t, attempt.Stderr, "Downloads:",
+		"incremental download should report the new file once delta catches up")
 	assert.Equal(t, "new from remote", string(data))
 }
 

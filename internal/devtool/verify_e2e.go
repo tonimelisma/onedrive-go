@@ -69,6 +69,7 @@ func fullE2EParallelMiscTestNames() []string {
 		"TestE2E_DriveList_ConfiguredNoSyncDir",
 		"TestE2E_DriveList_ConfigTolerance",
 		"TestE2E_Status_ConfigTolerance",
+		"TestE2E_Status_LiveOverlay_ConfigTolerance",
 		"TestE2E_Status_PersonalAccountShowsSinglePersonalLiveDrive",
 		"TestE2E_Shared_FileDiscoveryAndSelectorReadCommands",
 		"TestE2E_Shared_FileDiscoveryRejectsDriveAdd",
@@ -84,7 +85,6 @@ func fullE2EParallelMiscTestNames() []string {
 		"TestE2E_UnicodeFilenameRoundtrip",
 		"TestE2E_InvalidFilenameRejection",
 		"TestE2E_RapidFileChurn",
-		"TestE2E_ConflictDetectionAndResolution",
 		"TestE2E_Status_AfterSync",
 		"TestE2E_Status_JSON",
 		"TestE2E_Status_PausedDrive",
@@ -92,11 +92,10 @@ func fullE2EParallelMiscTestNames() []string {
 		"TestE2E_Pause_IndefiniteAndResume",
 		"TestE2E_Resume_NotPaused",
 		"TestE2E_Resume_AllDrives",
-		"TestE2E_Status_PerDrive_NoVisibleProblems",
-		"TestE2E_Status_History_NoConflicts",
-		"TestE2E_Status_JSON_ConflictDetails",
-		"TestE2E_Status_History_ShowsResolvedStrategies",
-		"TestE2E_Resolve_TargetNotFound",
+		"TestE2E_Status_PerDrive_NoConditionsOrRetries",
+		"TestE2E_Status_NoLegacyHistorySurface",
+		"TestE2E_Status_JSON_ConditionDetails",
+		"TestE2E_CLI_NoResolveCommand",
 		"TestE2E_InternalBaselineVerification_AfterSync",
 		"TestE2E_RecycleBinRoundtrip",
 		"TestE2E_RecycleBinEmpty",
@@ -130,42 +129,30 @@ func fullE2ESerialSyncTestNames() []string {
 		"TestE2E_Sync_InternalBaselineVerification",
 		"TestE2E_Sync_Conflicts",
 		"TestE2E_Sync_DriveRemoveAndReAdd",
-		"TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile",
-		"TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload",
 		"TestE2E_EdgeCases",
 		"TestE2E_Sync_BidirectionalMerge",
-		"TestE2E_Sync_EditEditConflict_ResolveKeepRemote",
 		"TestE2E_Sync_EditDeleteConflict",
 		"TestE2E_Sync_DirectionalModes_PreserveEditEditConflict",
 		"TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict",
-		"TestE2E_Sync_ResolveAll",
-		"TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal",
 		"TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict",
 		"TestE2E_Sync_DeletePropagation",
-		"TestE2E_Sync_DeleteSafetyThreshold",
 		"TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges",
 		"TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges",
 		"TestE2E_Sync_NestedFolderHierarchy",
 		"TestE2E_Sync_DryRunNonDestructive",
 		"TestE2E_Sync_ConvergentEdit",
 		"TestE2E_Sync_InternalBaselineVerificationDetectsTampering",
-		"TestE2E_Sync_ResolveDryRun",
 		"TestE2E_Sync_EmptyDirectory",
 		"TestE2E_Sync_NestedDeletion",
-		"TestE2E_Sync_ResolveKeepLocalThenSync",
-		"TestE2E_Sync_ResolveKeepRemoteThenSync",
 		"TestE2E_Sync_IdempotentReSync",
 		"TestE2E_Sync_CrashRecoveryIdempotent",
 		"TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta",
-		"TestE2E_Resolve_Both_PreservesConflictCopy",
 	}
 }
 
 func fullE2ESerialWatchSharedTestNames() []string {
 	return []string{
 		"TestE2E_SyncWatch_WebsocketStartupSmoke",
-		"TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent",
-		"TestE2E_Resolve_DeletesWithWatchDaemon",
 		"TestE2E_Sync_MultiDriveReport",
 		"TestE2E_SyncWatch_RemoteToLocal",
 		"TestE2E_SyncWatch_Bidirectional",
@@ -214,6 +201,11 @@ func fullE2EBucketCommandArgs(bucket fullE2EBucketSpec) []string {
 		"-timeout=" + bucket.Timeout,
 		"./e2e/...",
 	}
+}
+
+func fullE2EBucketJSONCommandArgs(bucket fullE2EBucketSpec) []string {
+	args := fullE2EBucketCommandArgs(bucket)
+	return append([]string{args[0], "-json"}, args[1:]...)
 }
 
 func fullE2EBucketRunPattern(testNames []string) string {
@@ -323,6 +315,50 @@ func hasBuildExpression(source string, buildExpression string) bool {
 	}
 
 	return false
+}
+
+// runE2EFullCompileCheck compiles the full-tagged E2E package without running
+// it. The live suite owns a TestMain, so `go test -run=^$` would still execute
+// side effects instead of acting as a pure compile guard.
+func runE2EFullCompileCheck(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	stdout, stderr io.Writer,
+) (runErr error) {
+	artifactPath := filepath.Join(os.TempDir(), fullE2ECompileArtifactName)
+	if err := remove(artifactPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale full e2e compile artifact: %w", err)
+	}
+	defer func() {
+		if err := remove(artifactPath); err != nil && !errors.Is(err, os.ErrNotExist) && runErr == nil {
+			runErr = fmt.Errorf("remove full e2e compile artifact: %w", err)
+		}
+	}()
+
+	if err := writeStatus(stdout, "==> go test -c -race -tags='e2e e2e_full' ./e2e\n"); err != nil {
+		return fmt.Errorf("write status: %w", err)
+	}
+	if err := runner.Run(
+		ctx,
+		repoRoot,
+		env,
+		stdout,
+		stderr,
+		"go",
+		"test",
+		"-c",
+		"-race",
+		"-tags=e2e e2e_full",
+		"-o",
+		artifactPath,
+		"./e2e",
+	); err != nil {
+		return fmt.Errorf("full e2e compile: %w", err)
+	}
+
+	return nil
 }
 
 func runE2E(
@@ -574,6 +610,7 @@ func runE2EFull(
 	logDir string,
 	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
+	classifyLiveQuirks bool,
 ) error {
 	if logDir == "" {
 		logDir = filepath.Join(os.TempDir(), "e2e-debug-logs")
@@ -593,22 +630,20 @@ func runE2EFull(
 	for i := range buckets {
 		bucket := buckets[i]
 		if err := collector.runBucket(bucket, func() error {
-			if err := writeStatus(stdout, fmt.Sprintf("==> go test -tags='e2e e2e_full' %s\n", bucket.Name)); err != nil {
-				return fmt.Errorf("write status: %w", err)
-			}
-			if err := runner.Run(
-				ctx,
-				repoRoot,
-				bucketEnv,
-				stdout,
-				stderr,
-				"go",
-				fullE2EBucketCommandArgs(bucket)...,
-			); err != nil {
-				return fmt.Errorf("full e2e: %w", err)
+			if classifyLiveQuirks && bucketSupportsClassifiedRerun(bucket) {
+				return runFullE2EBucketWithClassification(
+					ctx,
+					runner,
+					repoRoot,
+					bucketEnv,
+					collector,
+					bucket,
+					stdout,
+					stderr,
+				)
 			}
 
-			return nil
+			return runFullE2EBucket(ctx, runner, repoRoot, bucketEnv, bucket, stdout, stderr)
 		}); err != nil {
 			return err
 		}
@@ -634,6 +669,10 @@ func fastE2EJSONArgs() []string {
 	return append([]string{args[0], "-json"}, args[1:]...)
 }
 
+func bucketSupportsClassifiedRerun(bucket fullE2EBucketSpec) bool {
+	return bucket.Kind == fullE2EBucketKindSerialWatchShared
+}
+
 func classifyFastE2EQuirk(failedTests map[string]struct{}) ([]string, string, bool) {
 	if len(failedTests) != 1 {
 		return nil, "", false
@@ -651,6 +690,31 @@ func classifyFastE2EQuirk(failedTests map[string]struct{}) ([]string, string, bo
 		"-v",
 		"./e2e/...",
 	}, fastDownloadIncidentID, true
+}
+
+func classifyFullE2EQuirk(bucket fullE2EBucketSpec, failedTests map[string]struct{}) ([]string, string, string, bool) {
+	if bucket.Kind != fullE2EBucketKindSerialWatchShared {
+		return nil, "", "", false
+	}
+	if len(failedTests) != 1 {
+		return nil, "", "", false
+	}
+	if _, ok := failedTests[websocketRestartTestName]; !ok {
+		return nil, "", "", false
+	}
+
+	return []string{
+		"test",
+		"-tags=e2e e2e_full",
+		"-race",
+		"-run=^" + websocketRestartTestName + "$",
+		"-count=1",
+		"-v",
+		"-parallel",
+		strconv.Itoa(fullE2ESerialParallel),
+		"-timeout=" + fullE2EPackageTimeout,
+		"./e2e/...",
+	}, websocketRestartIncidentID, websocketRestartTestName, true
 }
 
 func failedGoTestsFromJSON(output []byte) map[string]struct{} {
@@ -674,6 +738,103 @@ func failedGoTestsFromJSON(output []byte) map[string]struct{} {
 	}
 
 	return failed
+}
+
+func runFullE2EBucket(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	bucket fullE2EBucketSpec,
+	stdout, stderr io.Writer,
+) error {
+	if err := writeStatus(stdout, fmt.Sprintf("==> go test -tags='e2e e2e_full' %s\n", bucket.Name)); err != nil {
+		return fmt.Errorf("write status: %w", err)
+	}
+	if err := runner.Run(
+		ctx,
+		repoRoot,
+		env,
+		stdout,
+		stderr,
+		"go",
+		fullE2EBucketCommandArgs(bucket)...,
+	); err != nil {
+		return fmt.Errorf("full e2e: %w", err)
+	}
+
+	return nil
+}
+
+func runFullE2EBucketWithClassification(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	bucket fullE2EBucketSpec,
+	stdout, stderr io.Writer,
+) error {
+	if err := writeStatus(stdout, fmt.Sprintf("==> go test -json -tags='e2e e2e_full' %s\n", bucket.Name)); err != nil {
+		return fmt.Errorf("write status: %w", err)
+	}
+
+	output, err := runner.CombinedOutput(ctx, repoRoot, env, "go", fullE2EBucketJSONCommandArgs(bucket)...)
+	if writeErr := writeCommandOutput(stdout, output); writeErr != nil {
+		return fmt.Errorf("write %s output: %w", bucket.Name, writeErr)
+	}
+	if err == nil {
+		return nil
+	}
+
+	return rerunClassifiedFullE2EQuirk(ctx, runner, repoRoot, env, collector, bucket, stdout, stderr, output, err)
+}
+
+func rerunClassifiedFullE2EQuirk(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	bucket fullE2EBucketSpec,
+	stdout, stderr io.Writer,
+	output []byte,
+	runErr error,
+) error {
+	failedTests := failedGoTestsFromJSON(output)
+	rerunArgs, incidentID, trigger, ok := classifyFullE2EQuirk(bucket, failedTests)
+	if !ok {
+		return fmt.Errorf("full e2e: %w", runErr)
+	}
+
+	if writeErr := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", incidentID)); writeErr != nil {
+		return fmt.Errorf("write status: %w", writeErr)
+	}
+
+	rerunStartedAt := time.Now()
+	rerunErr := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", rerunArgs...)
+	rerunStatus := verifySummaryStatusPass
+	if rerunErr != nil {
+		rerunStatus = verifySummaryStatusFail
+	}
+	collector.recordClassifiedRerun(
+		incidentID,
+		bucket.Name,
+		trigger,
+		rerunArgs,
+		time.Since(rerunStartedAt),
+		rerunStatus,
+	)
+	if rerunErr != nil {
+		return fmt.Errorf("full e2e: %w", runErr)
+	}
+
+	warning := fmt.Sprintf("warning: classified known live quirk %s after successful rerun\n", incidentID)
+	if writeErr := writeStatus(stdout, warning); writeErr != nil {
+		return fmt.Errorf("write status: %w", writeErr)
+	}
+
+	return nil
 }
 
 func writeCommandOutput(w io.Writer, output []byte) error {

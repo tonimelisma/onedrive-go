@@ -17,6 +17,8 @@ type VerifyProfile string
 const (
 	defaultCoverageThreshold         = 75.5
 	defaultCoveragePattern           = "onedrive-go-cover.*"
+	fullE2ECompileStepName           = "e2e-full compile"
+	fullE2ECompileArtifactName       = "onedrive-go-e2e-full.test"
 	authE2EPreflightPattern          = "^TestE2E_AuthPreflight_Fast$"
 	fastE2EPreflightPattern          = "^TestE2E_FixturePreflight_Fast$"
 	fullE2EPreflightPattern          = "^TestE2E_FixturePreflight_Full$"
@@ -30,6 +32,8 @@ const (
 	authPreflightIncidentID          = "LI-20260405-06"
 	fastDownloadIncidentID           = "LI-20260405-04"
 	fastDownloadTestName             = "TestE2E_Sync_DownloadOnly"
+	websocketRestartIncidentID       = "LI-20260405-03"
+	websocketRestartTestName         = "TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart"
 	e2eSkipSuiteScrubEnvVar          = "ONEDRIVE_E2E_SKIP_SUITE_SCRUB"
 	e2eRunAuthPreflightEnvVar        = "ONEDRIVE_E2E_RUN_AUTH_PREFLIGHT"
 	e2eRunFastFixturePreflightEnvVar = "ONEDRIVE_E2E_RUN_FAST_FIXTURE_PREFLIGHT"
@@ -318,6 +322,11 @@ func runPublicVerification(
 	}); err != nil {
 		return err
 	}
+	if err := collector.runStep(fullE2ECompileStepName, func() error {
+		return runE2EFullCompileCheck(ctx, runner, repoRoot, env, stdout, stderr)
+	}); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -348,7 +357,17 @@ func runOptionalVerification(
 	}
 
 	if plan.runE2EFull {
-		if err := runE2EFull(ctx, runner, opts.RepoRoot, e2eEnv, effectiveE2ELogDir, collector, stdout, stderr); err != nil {
+		if err := runE2EFull(
+			ctx,
+			runner,
+			opts.RepoRoot,
+			e2eEnv,
+			effectiveE2ELogDir,
+			collector,
+			stdout,
+			stderr,
+			opts.ClassifyLiveQuirks,
+		); err != nil {
 			return err
 		}
 	}

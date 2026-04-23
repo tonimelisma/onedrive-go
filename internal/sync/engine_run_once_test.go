@@ -190,6 +190,63 @@ func TestRunOnce_DownloadOnly_PersistsStatusForDeferredOnlyPass(t *testing.T) {
 	assert.Zero(t, status.LastFailedCount)
 }
 
+// Validates: R-2.1.3
+func TestRunOnce_DownloadOnly_DefersEditDeleteAutoResolveUpload(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	writeLocalFile(t, syncRoot, "edit-delete.txt", "baseline content")
+	baselineHash := hashContentQuickXor(t, "baseline content")
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
+		Action:          ActionDownload,
+		Success:         true,
+		Path:            "edit-delete.txt",
+		DriveID:         driveID,
+		ItemID:          "item-edit-delete",
+		ItemType:        ItemTypeFile,
+		LocalHash:       baselineHash,
+		RemoteHash:      baselineHash,
+		LocalSize:       int64(len("baseline content")),
+		LocalSizeKnown:  true,
+		RemoteSize:      int64(len("baseline content")),
+		RemoteSizeKnown: true,
+		LocalMtime:      time.Now().UnixNano(),
+		RemoteMtime:     time.Now().UnixNano(),
+		ETag:            "etag-edit-delete",
+	}}, "")
+
+	writeLocalFile(t, syncRoot, "edit-delete.txt", "locally modified content")
+	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now()))
+
+	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
+	require.NoError(t, err, "RunOnce")
+
+	assert.Zero(t, report.Uploads, "download-only should defer the local-wins edit-delete upload")
+	assert.Equal(t, 1, report.DeferredByMode.Uploads, "download-only should report the deferred edit-delete upload")
+
+	data, err := localpath.ReadFile(filepath.Join(syncRoot, "edit-delete.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "locally modified content", string(data))
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	entry, ok := bl.GetByPath("edit-delete.txt")
+	require.True(t, ok)
+	assert.Equal(t, "item-edit-delete", entry.ItemID)
+}
+
 // Validates: R-2.1.4
 func TestRunOnce_UploadOnly_StillObservesRemoteDelta(t *testing.T) {
 	t.Parallel()

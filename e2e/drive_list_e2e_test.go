@@ -284,10 +284,11 @@ func TestE2E_Status_ConfigTolerance(t *testing.T) {
 }
 
 // Validates: R-4.8.4
-// TestE2E_Status_ConfigTolerance verifies that `status` succeeds (exit 0)
-// even when the config file contains unknown keys. Status uses lenient
-// config loading for informational reads.
-func TestE2E_Status_ConfigTolerance(t *testing.T) {
+// TestE2E_Status_LiveOverlay_ConfigTolerance verifies that `status --json`
+// still loads the live account overlay when the config file contains unknown
+// keys. This covers the live identity/catalog path that `status` absorbed
+// when the separate `whoami` command was removed.
+func TestE2E_Status_LiveOverlay_ConfigTolerance(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -311,12 +312,46 @@ func TestE2E_Status_ConfigTolerance(t *testing.T) {
 	}
 
 	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-		t, cfgPath, env, "", transientGraphRetryTimeout, "status",
+		t, cfgPath, env, "", transientGraphRetryTimeout, "status", "--json",
 	)
 
-	// Status output should contain account/auth information.
-	assert.NotEmpty(t, stdout,
-		"status should produce output despite unknown config key")
+	var result struct {
+		Accounts []struct {
+			Email       string `json:"email"`
+			AuthState   string `json:"auth_state"`
+			UserID      string `json:"user_id"`
+			DisplayName string `json:"display_name"`
+			LiveDrives  []struct {
+				DriveType string `json:"drive_type"`
+			} `json:"live_drives"`
+		} `json:"accounts"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+
+	var configuredAccount *struct {
+		Email       string `json:"email"`
+		AuthState   string `json:"auth_state"`
+		UserID      string `json:"user_id"`
+		DisplayName string `json:"display_name"`
+		LiveDrives  []struct {
+			DriveType string `json:"drive_type"`
+		} `json:"live_drives"`
+	}
+	for i := range result.Accounts {
+		account := &result.Accounts[i]
+		if account.Email == strings.SplitN(drive, ":", 2)[1] && account.AuthState == "ready" {
+			configuredAccount = account
+			break
+		}
+	}
+
+	require.NotNil(t, configuredAccount, "status should still include the configured ready account despite unknown config key")
+	assert.NotEmpty(t, configuredAccount.UserID,
+		"status should preserve live user identity despite unknown config key")
+	assert.NotEmpty(t, configuredAccount.DisplayName,
+		"status should preserve live display name despite unknown config key")
+	assert.NotEmpty(t, configuredAccount.LiveDrives,
+		"status should preserve live drive catalog despite unknown config key")
 }
 
 // Validates: R-6.7.11
@@ -337,20 +372,28 @@ func TestE2E_Status_PersonalAccountShowsSinglePersonalLiveDrive(t *testing.T) {
 
 	var result struct {
 		Accounts []struct {
+			Email      string `json:"email"`
+			AuthState  string `json:"auth_state"`
 			LiveDrives []struct {
 				DriveType string `json:"drive_type"`
 			} `json:"live_drives"`
 		} `json:"accounts"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
-	require.Len(t, result.Accounts, 1)
 
 	personalCount := 0
-	for _, driveInfo := range result.Accounts[0].LiveDrives {
-		if driveInfo.DriveType == "personal" {
-			personalCount++
+	readyPersonalAccountFound := false
+	for _, account := range result.Accounts {
+		if account.AuthState == "ready" && account.Email == strings.SplitN(drive, ":", 2)[1] {
+			readyPersonalAccountFound = true
+		}
+		for _, driveInfo := range account.LiveDrives {
+			if driveInfo.DriveType == "personal" {
+				personalCount++
+			}
 		}
 	}
 
+	assert.True(t, readyPersonalAccountFound, "status should still include the configured ready personal account")
 	assert.Equal(t, 1, personalCount, "status should show exactly one personal live drive for Personal accounts")
 }

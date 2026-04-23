@@ -130,7 +130,7 @@ func readVerifySummaryFile(t *testing.T, path string, summary *VerifySummary) {
 	require.NoError(t, json.Unmarshal(data, summary))
 }
 
-func assertVerifySummaryHasStep(t *testing.T, summary VerifySummary, name string, status string) {
+func assertVerifySummaryHasStep(t *testing.T, summary VerifySummary, name string) {
 	t.Helper()
 
 	for _, step := range summary.Steps {
@@ -138,7 +138,7 @@ func assertVerifySummaryHasStep(t *testing.T, summary VerifySummary, name string
 			continue
 		}
 
-		assert.Equal(t, status, step.Status)
+		assert.Equal(t, verifySummaryStatusPass, step.Status)
 		return
 	}
 

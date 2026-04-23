@@ -60,6 +60,7 @@ comparison_state AS (
 		CASE
 			WHEN b.path IS NULL OR l.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(l.item_type, '') THEN 1
+			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
 			WHEN COALESCE(b.local_hash, '') <> '' OR COALESCE(l.hash, '') <> '' THEN
 				CASE WHEN COALESCE(b.local_hash, '') <> COALESCE(l.hash, '') THEN 1 ELSE 0 END
 			WHEN COALESCE(b.local_size, 0) <> COALESCE(l.size, 0) THEN 1
@@ -69,6 +70,7 @@ comparison_state AS (
 		CASE
 			WHEN b.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
+			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
 			WHEN COALESCE(b.remote_hash, '') <> '' OR COALESCE(r.hash, '') <> '' THEN
 				CASE WHEN COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '') THEN 1 ELSE 0 END
 			WHEN COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0) THEN 1
@@ -79,6 +81,7 @@ comparison_state AS (
 		CASE
 			WHEN l.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(l.item_type, '') <> COALESCE(r.item_type, '') THEN 0
+			WHEN COALESCE(l.item_type, '') = 'folder' THEN 1
 			WHEN COALESCE(l.hash, '') <> COALESCE(r.hash, '') THEN 0
 			WHEN COALESCE(l.size, 0) <> COALESCE(r.size, 0) THEN 0
 			ELSE 1
@@ -98,27 +101,47 @@ comparison_state AS (
 			WHEN b.path IS NULL AND l.path IS NULL AND r.path IS NOT NULL THEN 'remote_only_create'
 			WHEN b.path IS NULL AND l.path IS NOT NULL AND r.path IS NOT NULL AND (
 				COALESCE(l.item_type, '') = COALESCE(r.item_type, '')
-				AND COALESCE(l.hash, '') = COALESCE(r.hash, '')
-				AND COALESCE(l.size, 0) = COALESCE(r.size, 0)
+				AND (
+					COALESCE(l.item_type, '') = 'folder'
+					OR (
+						COALESCE(l.hash, '') = COALESCE(r.hash, '')
+						AND COALESCE(l.size, 0) = COALESCE(r.size, 0)
+					)
+				)
 			) THEN 'create_equal'
 			WHEN b.path IS NULL AND l.path IS NOT NULL AND r.path IS NOT NULL THEN 'create_conflict'
 			WHEN b.path IS NOT NULL AND l.path IS NOT NULL AND r.path IS NOT NULL AND
 				(
 					COALESCE(b.item_type, '') = COALESCE(l.item_type, '')
-					AND COALESCE(b.local_hash, '') = COALESCE(l.hash, '')
-					AND COALESCE(b.local_size, 0) = COALESCE(l.size, 0)
-					AND COALESCE(b.local_mtime, 0) = COALESCE(l.mtime, 0)
+					AND (
+						COALESCE(b.item_type, '') = 'folder'
+						OR (
+							COALESCE(b.local_hash, '') = COALESCE(l.hash, '')
+							AND COALESCE(b.local_size, 0) = COALESCE(l.size, 0)
+							AND COALESCE(b.local_mtime, 0) = COALESCE(l.mtime, 0)
+						)
+					)
 				) AND (
 					COALESCE(b.item_type, '') = COALESCE(r.item_type, '')
-					AND COALESCE(b.remote_hash, '') = COALESCE(r.hash, '')
-					AND COALESCE(b.remote_size, 0) = COALESCE(r.size, 0)
-					AND COALESCE(b.remote_mtime, 0) = COALESCE(r.mtime, 0)
-					AND COALESCE(b.etag, '') = COALESCE(r.etag, '')
+					AND (
+						COALESCE(b.item_type, '') = 'folder'
+						OR (
+							COALESCE(b.remote_hash, '') = COALESCE(r.hash, '')
+							AND COALESCE(b.remote_size, 0) = COALESCE(r.size, 0)
+							AND COALESCE(b.remote_mtime, 0) = COALESCE(r.mtime, 0)
+							AND COALESCE(b.etag, '') = COALESCE(r.etag, '')
+						)
+					)
 				) THEN 'unchanged'
 			WHEN b.path IS NOT NULL AND l.path IS NOT NULL AND r.path IS NOT NULL AND (
 				COALESCE(l.item_type, '') = COALESCE(r.item_type, '')
-				AND COALESCE(l.hash, '') = COALESCE(r.hash, '')
-				AND COALESCE(l.size, 0) = COALESCE(r.size, 0)
+				AND (
+					COALESCE(l.item_type, '') = 'folder'
+					OR (
+						COALESCE(l.hash, '') = COALESCE(r.hash, '')
+						AND COALESCE(l.size, 0) = COALESCE(r.size, 0)
+					)
+				)
 			) THEN 'equal_again'
 			WHEN b.path IS NOT NULL AND l.path IS NULL AND r.path IS NOT NULL THEN 'local_missing'
 			WHEN b.path IS NOT NULL AND l.path IS NOT NULL AND r.path IS NULL THEN 'remote_missing'
@@ -205,6 +228,7 @@ comparison_flags AS (
 		CASE
 			WHEN b.path IS NULL OR l.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(l.item_type, '') THEN 1
+			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
 			WHEN COALESCE(b.local_hash, '') <> '' OR COALESCE(l.hash, '') <> '' THEN
 				CASE WHEN COALESCE(b.local_hash, '') <> COALESCE(l.hash, '') THEN 1 ELSE 0 END
 			WHEN COALESCE(b.local_size, 0) <> COALESCE(l.size, 0) THEN 1
@@ -214,6 +238,7 @@ comparison_flags AS (
 		CASE
 			WHEN b.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
+			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
 			WHEN COALESCE(b.remote_hash, '') <> '' OR COALESCE(r.hash, '') <> '' THEN
 				CASE WHEN COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '') THEN 1 ELSE 0 END
 			WHEN COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0) THEN 1
@@ -224,6 +249,7 @@ comparison_flags AS (
 		CASE
 			WHEN l.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(l.item_type, '') <> COALESCE(r.item_type, '') THEN 0
+			WHEN COALESCE(l.item_type, '') = 'folder' THEN 1
 			WHEN COALESCE(l.hash, '') <> COALESCE(r.hash, '') THEN 0
 			WHEN COALESCE(l.size, 0) <> COALESCE(r.size, 0) THEN 0
 			ELSE 1
