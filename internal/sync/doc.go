@@ -13,7 +13,8 @@
 // Durable owners:
 //   - current truth and sync control state live in SyncStore tables
 //   - run-scoped mutable state lives in engineFlow
-//   - watch-only scheduling state lives in watchRuntime
+//   - watch-only scheduling state, observer-produced channels, and refresh
+//     lifecycle live in watchRuntime
 //
 // Side-effect boundaries:
 //   - observation commit helpers own remote/local snapshot writes

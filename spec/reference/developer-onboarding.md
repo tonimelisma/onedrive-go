@@ -125,6 +125,9 @@ Inside `internal/sync`, the runtime has a snapshot-first sync pipeline:
   refresh -> SQLite comparison/reconciliation -> blocked-truth overlay ->
   Go actionable set ->
   executor -> baseline/store updates
+- watch runtime owns the observer/error/refresh channels directly; the shell
+  pipeline keeps only baseline, debounce output, completions, maintenance, and
+  cleanup wiring
 - `observation_issues`, `retry_work`, and `block_scopes` persist durable
   status, exact delayed work, and blocker timing without becoming a durable
   executable plan

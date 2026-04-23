@@ -53,6 +53,15 @@ type watchResources struct {
 	// from SQLite current truth after the debounce window closes.
 	dirtyBuf *DirtyBuffer
 
+	// Observer lifecycle is runtime-owned. startObservers populates these fields
+	// directly; the watch loop nils channels as sources close and tracks how many
+	// observer goroutines still own the shared error stream.
+	observerErrs    <-chan error
+	localEvents     <-chan ChangeEvent
+	remoteBatches   <-chan remoteObservationBatch
+	skippedItems    <-chan []SkippedItem
+	activeObservers int
+
 	// Observer references — set in startObservers, nil'd on shutdown.
 	remoteObs *RemoteObserver
 	localObs  *LocalObserver
