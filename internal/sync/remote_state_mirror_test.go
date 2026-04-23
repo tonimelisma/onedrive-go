@@ -55,7 +55,7 @@ func readObservationCursor(t *testing.T, db *sql.DB, driveID string) string {
 
 	var token string
 	err := db.QueryRowContext(t.Context(),
-		`SELECT cursor FROM observation_state WHERE configured_drive_id = ? LIMIT 1`,
+		`SELECT cursor FROM observation_state WHERE mount_drive_id = ? LIMIT 1`,
 		driveID,
 	).Scan(&token)
 	if err == sql.ErrNoRows {
@@ -129,7 +129,7 @@ func TestCommitObservation_PreservesObservedDriveIDPerRemoteStateRow(t *testing.
 
 	mgr := newTestStore(t)
 	ctx := context.Background()
-	configuredDriveID := driveid.New(testDriveID)
+	mountDriveID := driveid.New(testDriveID)
 	sharedDriveID := driveid.New("shared-drive-id")
 
 	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
@@ -141,11 +141,11 @@ func TestCommitObservation_PreservesObservedDriveIDPerRemoteStateRow(t *testing.
 		Size:     64,
 		Mtime:    1234,
 		ETag:     "shared-etag",
-	}}, "delta-token-shared", configuredDriveID))
+	}}, "delta-token-shared", mountDriveID))
 
 	state, err := mgr.ReadObservationState(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, configuredDriveID, state.ConfiguredDriveID)
+	assert.Equal(t, mountDriveID, state.MountDriveID)
 
 	row := readRemoteStateRow(t, mgr.rawDB(), "shared-item")
 	require.NotNil(t, row)

@@ -48,8 +48,8 @@ type SyncStore struct {
 	logger     *slog.Logger
 	nowFunc    func() time.Time // injectable for deterministic tests
 
-	configuredDriveMu       stdsync.RWMutex
-	cachedConfiguredDriveID driveid.ID
+	mountDriveMu       stdsync.RWMutex
+	cachedMountDriveID driveid.ID
 }
 
 // NewSyncStore opens the SQLite database at dbPath, applies the canonical

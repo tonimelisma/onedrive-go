@@ -6,14 +6,16 @@ Implements: R-2.5.1 [designed], R-2.5.2 [verified], R-2.5.4 [designed], R-2.10.3
 
 | Behavior | Evidence |
 | --- | --- |
-| The per-drive SQLite store remains intentionally narrow, transactional, and explicit-reset based instead of migration-driven. | `internal/sync/schema_test.go`, `internal/sync/baseline_test.go`, `internal/sync/engine_run_once_test.go` |
+| The per-mount SQLite store remains intentionally narrow, transactional, and explicit-reset based instead of migration-driven. | `internal/sync/schema_test.go`, `internal/sync/baseline_test.go`, `internal/sync/engine_run_once_test.go` |
 | Remote-truth recovery from durable `remote_state` plus replanning remains part of the crash-recovery foundation. | `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewEngine_RequiresResetForUnsupportedStoreGeneration`, `TestBootstrapSync_WithChanges` |
 
-## One Database Per Drive
+## One Database Per Mount
 
-Each configured drive owns one SQLite state DB. The DB is the durable authority
-for restart-safe sync state; watch-mode runtime state is a rebuildable
-in-memory projection.
+Each runtime mount owns one SQLite state DB. Top-level configured drives are
+compiled into standalone mounts before reaching the sync engine, and managed
+child mounts get their own stores too. The DB is the durable authority for
+restart-safe sync state; watch-mode runtime state is a rebuildable in-memory
+projection.
 
 The target schema is intentionally narrow. It stores only:
 
@@ -52,7 +54,7 @@ runtime-only facts:
 | `observation_issues` | Durable current-truth/content problems | stable issue identity per path/boundary |
 | `retry_work` | Exact delayed retry or blocked work for the current semantic intent | `(path, old_path, action_type)` |
 | `block_scopes` | Shared blocker timing and lifecycle | `scope_key` |
-| `observation_state` | Configured drive owner, primary cursor, and remote refresh cadence | zero-or-one row |
+| `observation_state` | Mount drive owner, primary cursor, and remote refresh cadence | zero-or-one row |
 
 ## `baseline`
 
@@ -78,7 +80,7 @@ saw. It stores:
 
 The row-level `drive_id` is durable authority. Shared-root and cross-drive
 remote rows keep the drive that actually owns the item, even though the state
-DB itself belongs to one configured drive session.
+DB itself belongs to one mounted content root.
 
 Remote parent ancestry is intentionally not persisted in `remote_state`.
 Observation reconstructs sparse paths from the current delta item plus baseline
@@ -175,10 +177,10 @@ as boundary tags on `observation_issues`. They are not persisted as
 
 ## `observation_state`
 
-`observation_state` is the single durable owner of per-drive observation
+`observation_state` is the single durable owner of per-mount observation
 identity and cadence:
 
-- `configured_drive_id`
+- `mount_drive_id`
 - `cursor`
 - `next_full_remote_refresh_at`
 
@@ -201,8 +203,9 @@ observation is capability-driven:
 Local watch safety-scan cadence is runtime-owned rather than persisted in
 SQLite.
 
-`configured_drive_id` identifies the configured drive session that owns the DB
-and cursor. It does not replace the per-row `remote_state.drive_id` authority.
+`mount_drive_id` identifies the remote drive for the mounted content root that
+owns the DB and cursor. It does not replace the per-row
+`remote_state.drive_id` authority.
 
 ## Schema Discipline
 
@@ -212,5 +215,5 @@ bootstrap that schema in one transaction, seed the zero-or-one-row
 
 Existing DBs are trusted only when they already match the current canonical
 table and column layout. Stores with stale or incompatible shapes are rejected
-loudly so startup can require an explicit per-drive reset instead of migrating
-or guessing forward.
+loudly so startup can require an explicit mount-state reset instead of
+migrating or guessing forward.

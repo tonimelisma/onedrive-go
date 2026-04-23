@@ -54,12 +54,12 @@ func TestSyncStore_ListRemoteState_PreservesPerRowDriveOwnership(t *testing.T) {
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	configuredDriveID := driveid.New("configured-drive")
+	mountDriveID := driveid.New("mount-drive")
 	sharedDriveID := driveid.New("shared-drive")
 
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
 		{
-			DriveID:  configuredDriveID,
+			DriveID:  mountDriveID,
 			ItemID:   "item-configured",
 			Path:     "docs/configured.txt",
 			ItemType: ItemTypeFile,
@@ -72,7 +72,7 @@ func TestSyncStore_ListRemoteState_PreservesPerRowDriveOwnership(t *testing.T) {
 			ItemType: ItemTypeFile,
 			Hash:     "hash-shared",
 		},
-	}, "delta-token", configuredDriveID))
+	}, "delta-token", mountDriveID))
 
 	rows, err := store.ListRemoteState(ctx)
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestSyncStore_ListRemoteState_PreservesPerRowDriveOwnership(t *testing.T) {
 		byPath[rows[i].Path] = rows[i]
 	}
 
-	assert.Equal(t, configuredDriveID, byPath["docs/configured.txt"].DriveID)
+	assert.Equal(t, mountDriveID, byPath["docs/configured.txt"].DriveID)
 	assert.Equal(t, sharedDriveID, byPath["Shared/shared.txt"].DriveID)
 }
 
@@ -93,16 +93,16 @@ func TestSyncStore_GetRemoteStateByPath_RejectsMismatchedDriveWhenStateAlreadyCo
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	configuredDriveID := driveid.New("configured-drive")
+	mountDriveID := driveid.New("mount-drive")
 	attemptedDriveID := driveid.New("attempted-drive")
 
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
-		DriveID:  configuredDriveID,
+		DriveID:  mountDriveID,
 		ItemID:   "item-a",
 		Path:     "docs/a.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash-a",
-	}}, "delta-token", configuredDriveID))
+	}}, "delta-token", mountDriveID))
 
 	row, found, err := store.GetRemoteStateByPath(ctx, "docs/a.txt", attemptedDriveID)
 	require.Error(t, err)
@@ -117,7 +117,7 @@ func TestSyncStore_CommitObservation_UpdatesPerRowDriveOwnershipWithoutOtherMeta
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	configuredDriveID := driveid.New("configured-drive")
+	mountDriveID := driveid.New("mount-drive")
 	sharedDriveID := driveid.New("shared-drive")
 
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
@@ -128,7 +128,7 @@ func TestSyncStore_CommitObservation_UpdatesPerRowDriveOwnershipWithoutOtherMeta
 		Size:     42,
 		Mtime:    1234,
 		ETag:     "etag-shared",
-	}}, "delta-1", configuredDriveID))
+	}}, "delta-1", mountDriveID))
 
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  sharedDriveID,
@@ -139,9 +139,9 @@ func TestSyncStore_CommitObservation_UpdatesPerRowDriveOwnershipWithoutOtherMeta
 		Size:     42,
 		Mtime:    1234,
 		ETag:     "etag-shared",
-	}}, "delta-2", configuredDriveID))
+	}}, "delta-2", mountDriveID))
 
-	row, found, err := store.GetRemoteStateByPath(ctx, "Shared/shared.txt", configuredDriveID)
+	row, found, err := store.GetRemoteStateByPath(ctx, "Shared/shared.txt", mountDriveID)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.NotNil(t, row)

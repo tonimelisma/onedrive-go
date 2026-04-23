@@ -975,8 +975,8 @@ func readObservationCursorForTest(t *testing.T, mgr *SyncStore, ctx context.Cont
 
 	state, err := mgr.ReadObservationState(ctx)
 	require.NoError(t, err)
-	if expectedDriveID != "" && (!state.ConfiguredDriveID.IsZero() || state.Cursor != "") {
-		require.Equal(t, driveid.New(expectedDriveID).String(), state.ConfiguredDriveID.String())
+	if expectedDriveID != "" && (!state.MountDriveID.IsZero() || state.Cursor != "") {
+		require.Equal(t, driveid.New(expectedDriveID).String(), state.MountDriveID.String())
 	}
 
 	return state.Cursor

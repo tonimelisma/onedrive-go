@@ -19,27 +19,27 @@ func TestRemoteRefreshIntervalForMode_CoversDegradedAndDefault(t *testing.T) {
 	assert.Equal(t, fullRemoteRefreshInterval, remoteRefreshIntervalForMode("unexpected"))
 }
 
-func TestConfiguredDriveIDForRead_UsesFallbackAndCache(t *testing.T) {
+func TestMountDriveIDForRead_UsesFallbackAndCache(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	got, err := store.configuredDriveIDForRead(ctx, driveid.ID{})
+	got, err := store.mountDriveIDForRead(ctx, driveid.ID{})
 	require.NoError(t, err)
 	assert.True(t, got.IsZero())
 
 	fallback := driveid.New(testDriveID)
-	got, err = store.configuredDriveIDForRead(ctx, fallback)
+	got, err = store.mountDriveIDForRead(ctx, fallback)
 	require.NoError(t, err)
 	assert.Equal(t, fallback, got)
 
-	got, err = store.configuredDriveIDForRead(ctx, driveid.ID{})
+	got, err = store.mountDriveIDForRead(ctx, driveid.ID{})
 	require.NoError(t, err)
 	assert.Equal(t, fallback, got)
 }
 
-func TestConfiguredDriveIDForRead_ReadsPersistedValueFromDB(t *testing.T) {
+func TestMountDriveIDForRead_ReadsPersistedValueFromDB(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -54,16 +54,16 @@ func TestConfiguredDriveIDForRead_ReadsPersistedValueFromDB(t *testing.T) {
 		assert.NoError(t, reopened.Close(context.Background()))
 	})
 
-	got, err := reopened.configuredDriveIDForRead(ctx, driveid.ID{})
+	got, err := reopened.mountDriveIDForRead(ctx, driveid.ID{})
 	require.NoError(t, err)
 	assert.Equal(t, driveID, got)
-	assert.Equal(t, driveID, reopened.configuredDriveID())
+	assert.Equal(t, driveID, reopened.mountDriveID())
 }
 
-func TestEnsureMatchingConfiguredDriveID_RejectsMismatch(t *testing.T) {
+func TestEnsureMatchingMountDriveID_RejectsMismatch(t *testing.T) {
 	t.Parallel()
 
-	err := ensureMatchingConfiguredDriveID(driveid.New("attempted"), driveid.New("configured"))
+	err := ensureMatchingMountDriveID(driveid.New("attempted"), driveid.New("configured"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "state DB drive mismatch")
 }

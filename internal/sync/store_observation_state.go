@@ -11,13 +11,13 @@ import (
 
 const (
 	sqlReadObservationState = `SELECT
-				configured_drive_id,
+				mount_drive_id,
 				cursor,
 				next_full_remote_refresh_at
 			FROM observation_state
 			LIMIT 1`
 	sqlEnsureObservationStateRow = `INSERT INTO observation_state
-		(configured_drive_id, cursor, next_full_remote_refresh_at)
+		(mount_drive_id, cursor, next_full_remote_refresh_at)
 		SELECT '', '', 0
 		WHERE NOT EXISTS (SELECT 1 FROM observation_state)`
 )
@@ -27,7 +27,7 @@ const (
 )
 
 type ObservationState struct {
-	ConfiguredDriveID       driveid.ID
+	MountDriveID            driveid.ID
 	Cursor                  string
 	NextFullRemoteRefreshAt int64
 }
@@ -47,40 +47,40 @@ func applyRemoteRefreshSchedule(state *ObservationState, at time.Time, mode remo
 	state.NextFullRemoteRefreshAt = at.Add(remoteRefreshIntervalForMode(mode)).UnixNano()
 }
 
-func (m *SyncStore) configuredDriveIDForRead(
+func (m *SyncStore) mountDriveIDForRead(
 	ctx context.Context,
 	fallback driveid.ID,
 ) (driveid.ID, error) {
-	if cached := m.configuredDriveID(); !cached.IsZero() {
+	if cached := m.mountDriveID(); !cached.IsZero() {
 		return cached, nil
 	}
 
-	configuredDriveID, err := configuredDriveIDForDB(ctx, m.db)
+	mountDriveID, err := mountDriveIDForDB(ctx, m.db)
 	if err != nil {
 		return driveid.ID{}, err
 	}
-	if !configuredDriveID.IsZero() {
-		m.rememberConfiguredDriveID(configuredDriveID)
-		return configuredDriveID, nil
+	if !mountDriveID.IsZero() {
+		m.rememberMountDriveID(mountDriveID)
+		return mountDriveID, nil
 	}
 
 	if !fallback.IsZero() {
-		m.rememberConfiguredDriveID(fallback)
+		m.rememberMountDriveID(fallback)
 		return fallback, nil
 	}
 
 	return driveid.ID{}, nil
 }
 
-func configuredDriveIDForDB(ctx context.Context, runner sqlTxRunner) (driveid.ID, error) {
+func mountDriveIDForDB(ctx context.Context, runner sqlTxRunner) (driveid.ID, error) {
 	var raw string
 	if err := runner.QueryRowContext(ctx,
-		`SELECT configured_drive_id FROM observation_state LIMIT 1`,
+		`SELECT mount_drive_id FROM observation_state LIMIT 1`,
 	).Scan(&raw); err != nil {
 		if err == sql.ErrNoRows {
 			return driveid.ID{}, nil
 		}
-		return driveid.ID{}, fmt.Errorf("sync: reading configured drive ID: %w", err)
+		return driveid.ID{}, fmt.Errorf("sync: reading mount drive ID: %w", err)
 	}
 	if raw == "" {
 		return driveid.ID{}, nil
@@ -89,7 +89,7 @@ func configuredDriveIDForDB(ctx context.Context, runner sqlTxRunner) (driveid.ID
 	return driveid.New(raw), nil
 }
 
-func ensureMatchingConfiguredDriveID(expected, actual driveid.ID) error {
+func ensureMatchingMountDriveID(expected, actual driveid.ID) error {
 	if expected.IsZero() || actual.IsZero() {
 		return nil
 	}
@@ -97,7 +97,7 @@ func ensureMatchingConfiguredDriveID(expected, actual driveid.ID) error {
 		return nil
 	}
 
-	return fmt.Errorf("sync: state DB drive mismatch: configured %s, attempted %s", actual, expected)
+	return fmt.Errorf("sync: state DB drive mismatch: mount %s, attempted %s", actual, expected)
 }
 
 func (m *SyncStore) ReadObservationState(ctx context.Context) (*ObservationState, error) {
@@ -106,21 +106,21 @@ func (m *SyncStore) ReadObservationState(ctx context.Context) (*ObservationState
 	}
 
 	var (
-		configuredDriveID string
-		state             ObservationState
+		mountDriveID string
+		state        ObservationState
 	)
 
 	if err := m.db.QueryRowContext(ctx, sqlReadObservationState).Scan(
-		&configuredDriveID,
+		&mountDriveID,
 		&state.Cursor,
 		&state.NextFullRemoteRefreshAt,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
 
-	if configuredDriveID != "" {
-		state.ConfiguredDriveID = driveid.New(configuredDriveID)
-		m.rememberConfiguredDriveID(state.ConfiguredDriveID)
+	if mountDriveID != "" {
+		state.MountDriveID = driveid.New(mountDriveID)
+		m.rememberMountDriveID(state.MountDriveID)
 	}
 
 	return &state, nil
@@ -143,7 +143,7 @@ func (m *SyncStore) CommitObservationCursor(
 	if err != nil {
 		return err
 	}
-	if ensureErr := m.ensureConfiguredDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
+	if ensureErr := m.ensureMountDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
 		return ensureErr
 	}
 
@@ -233,7 +233,7 @@ func (m *SyncStore) markObservationRefresh(
 	if err != nil {
 		return err
 	}
-	if ensureErr := m.ensureConfiguredDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
+	if ensureErr := m.ensureMountDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
 		return ensureErr
 	}
 
@@ -249,22 +249,22 @@ func (m *SyncStore) markObservationRefresh(
 	return nil
 }
 
-func (m *SyncStore) configuredDriveID() driveid.ID {
-	m.configuredDriveMu.RLock()
-	defer m.configuredDriveMu.RUnlock()
+func (m *SyncStore) mountDriveID() driveid.ID {
+	m.mountDriveMu.RLock()
+	defer m.mountDriveMu.RUnlock()
 
-	return m.cachedConfiguredDriveID
+	return m.cachedMountDriveID
 }
 
-func (m *SyncStore) rememberConfiguredDriveID(id driveid.ID) {
+func (m *SyncStore) rememberMountDriveID(id driveid.ID) {
 	if id.IsZero() {
 		return
 	}
 
-	m.configuredDriveMu.Lock()
-	defer m.configuredDriveMu.Unlock()
+	m.mountDriveMu.Lock()
+	defer m.mountDriveMu.Unlock()
 
-	m.cachedConfiguredDriveID = id
+	m.cachedMountDriveID = id
 }
 
 func (m *SyncStore) readObservationStateTx(
@@ -276,26 +276,26 @@ func (m *SyncStore) readObservationStateTx(
 	}
 
 	var (
-		configuredDriveID string
-		state             ObservationState
+		mountDriveID string
+		state        ObservationState
 	)
 
 	if err := tx.QueryRowContext(ctx, sqlReadObservationState).Scan(
-		&configuredDriveID,
+		&mountDriveID,
 		&state.Cursor,
 		&state.NextFullRemoteRefreshAt,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
 
-	if configuredDriveID != "" {
-		state.ConfiguredDriveID = driveid.New(configuredDriveID)
+	if mountDriveID != "" {
+		state.MountDriveID = driveid.New(mountDriveID)
 	}
 
 	return &state, nil
 }
 
-func (m *SyncStore) ensureConfiguredDriveIDTx(
+func (m *SyncStore) ensureMountDriveIDTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 	driveID driveid.ID,
@@ -305,20 +305,20 @@ func (m *SyncStore) ensureConfiguredDriveIDTx(
 		return nil
 	}
 
-	if state.ConfiguredDriveID.IsZero() {
-		state.ConfiguredDriveID = driveID
+	if state.MountDriveID.IsZero() {
+		state.MountDriveID = driveID
 		if err := m.writeObservationStateTx(ctx, tx, state); err != nil {
 			return err
 		}
-		m.rememberConfiguredDriveID(driveID)
+		m.rememberMountDriveID(driveID)
 		return nil
 	}
 
-	if err := ensureMatchingConfiguredDriveID(driveID, state.ConfiguredDriveID); err != nil {
+	if err := ensureMatchingMountDriveID(driveID, state.MountDriveID); err != nil {
 		return err
 	}
 
-	m.rememberConfiguredDriveID(state.ConfiguredDriveID)
+	m.rememberMountDriveID(state.MountDriveID)
 	return nil
 }
 
@@ -333,17 +333,17 @@ func (m *SyncStore) writeObservationStateTx(
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO observation_state
-			(configured_drive_id, cursor, next_full_remote_refresh_at)
+			(mount_drive_id, cursor, next_full_remote_refresh_at)
 		VALUES (?, ?, ?)`,
-		state.ConfiguredDriveID.String(),
+		state.MountDriveID.String(),
 		state.Cursor,
 		state.NextFullRemoteRefreshAt,
 	); err != nil {
 		return fmt.Errorf("sync: writing observation_state: %w", err)
 	}
 
-	if !state.ConfiguredDriveID.IsZero() {
-		m.rememberConfiguredDriveID(state.ConfiguredDriveID)
+	if !state.MountDriveID.IsZero() {
+		m.rememberMountDriveID(state.MountDriveID)
 	}
 
 	return nil

@@ -78,7 +78,7 @@ func queryObservationIssueRowsWithRunner(
 	ctx context.Context,
 	runner sqlTxRunner,
 ) ([]ObservationIssueRow, error) {
-	configuredDriveID, err := configuredDriveIDForDB(ctx, runner)
+	mountDriveID, err := mountDriveIDForDB(ctx, runner)
 	if err != nil {
 		return nil, err
 	}
@@ -91,13 +91,13 @@ func queryObservationIssueRowsWithRunner(
 	}
 	defer rows.Close()
 
-	return scanObservationIssueRows(rows, configuredDriveID)
+	return scanObservationIssueRows(rows, mountDriveID)
 }
 
 func (m *SyncStore) ListObservationIssues(ctx context.Context) ([]ObservationIssueRow, error) {
-	configuredDriveID, err := m.configuredDriveIDForRead(ctx, driveid.ID{})
+	mountDriveID, err := m.mountDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
-		return nil, fmt.Errorf("sync: reading configured drive for observation issues: %w", err)
+		return nil, fmt.Errorf("sync: reading mount drive for observation issues: %w", err)
 	}
 
 	rows, err := m.db.QueryContext(ctx,
@@ -107,7 +107,7 @@ func (m *SyncStore) ListObservationIssues(ctx context.Context) ([]ObservationIss
 	}
 	defer rows.Close()
 
-	return scanObservationIssueRows(rows, configuredDriveID)
+	return scanObservationIssueRows(rows, mountDriveID)
 }
 
 type observationIssueScanner interface {
@@ -127,7 +127,7 @@ func (m *SyncStore) upsertObservationIssuesTx(
 		if issues[i].DriveID.IsZero() {
 			continue
 		}
-		if ensureErr := m.ensureConfiguredDriveIDTx(ctx, tx, issues[i].DriveID, state); ensureErr != nil {
+		if ensureErr := m.ensureMountDriveIDTx(ctx, tx, issues[i].DriveID, state); ensureErr != nil {
 			return ensureErr
 		}
 		break
@@ -196,7 +196,7 @@ func deleteObservationIssuesTx(
 func scanObservationIssueRow(
 	scanner observationIssueScanner,
 	row *ObservationIssueRow,
-	configuredDriveID driveid.ID,
+	mountDriveID driveid.ID,
 ) error {
 	if row == nil {
 		return fmt.Errorf("sync: scanning observation issue row: nil destination")
@@ -211,17 +211,17 @@ func scanObservationIssueRow(
 		return fmt.Errorf("sync: scanning observation issue row: %w", err)
 	}
 
-	row.DriveID = configuredDriveID
+	row.DriveID = mountDriveID
 	row.ScopeKey = ParseScopeKey(scopeKey)
 	return nil
 }
 
-func scanObservationIssueRows(rows *sql.Rows, configuredDriveID driveid.ID) ([]ObservationIssueRow, error) {
+func scanObservationIssueRows(rows *sql.Rows, mountDriveID driveid.ID) ([]ObservationIssueRow, error) {
 	var result []ObservationIssueRow
 
 	for rows.Next() {
 		var row ObservationIssueRow
-		if err := scanObservationIssueRow(rows, &row, configuredDriveID); err != nil {
+		if err := scanObservationIssueRow(rows, &row, mountDriveID); err != nil {
 			return nil, fmt.Errorf("sync: scanning observation issue row: %w", err)
 		}
 		result = append(result, row)

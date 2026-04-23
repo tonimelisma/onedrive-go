@@ -81,7 +81,7 @@ type Engine struct {
 	nextRunID atomic.Int64
 }
 
-// newEngine creates an Engine and opens the per-drive SyncStore. Existing
+// newEngine creates an Engine and opens the per-mount SyncStore. Existing
 // unreadable, incompatible, or unsupported state DBs fail with a typed
 // store-incompatible error so higher layers can guide the user without mutating
 // durable state during startup. Returns an error if DB init fails or if
@@ -235,7 +235,7 @@ func (e *Engine) proveDriveIdentity(ctx context.Context) (driveIdentityProof, er
 
 	if drive.ID != e.driveID {
 		return driveIdentityProof{attempted: true, drive: drive}, fmt.Errorf(
-			"sync: drive ID mismatch: configured %s, remote returned %s", e.driveID, drive.ID)
+			"sync: drive ID mismatch: mount %s, remote returned %s", e.driveID, drive.ID)
 	}
 
 	return driveIdentityProof{attempted: true, drive: drive}, nil

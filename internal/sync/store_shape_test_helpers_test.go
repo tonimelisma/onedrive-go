@@ -56,12 +56,12 @@ func testBlockScope(
 }
 
 func testObservationState(
-	configuredDriveID driveid.ID,
+	mountDriveID driveid.ID,
 	cursor string,
 	nextFullRemoteRefreshAt int64,
 ) ObservationState {
 	return ObservationState{
-		ConfiguredDriveID:       configuredDriveID,
+		MountDriveID:            mountDriveID,
 		Cursor:                  cursor,
 		NextFullRemoteRefreshAt: nextFullRemoteRefreshAt,
 	}

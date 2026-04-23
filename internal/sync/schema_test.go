@@ -31,6 +31,14 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"store_metadata",
 	}, tables)
 
+	columns, err := listTableColumns(ctx, store.rawDB(), "observation_state")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{
+		"mount_drive_id",
+		"cursor",
+		"next_full_remote_refresh_at",
+	}, columns)
+
 	state, err := store.ReadObservationState(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, state)
@@ -105,7 +113,7 @@ func TestApplySchema_RejectsGeneration6RemoteStateDriveOwnership(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `
 		UPDATE observation_state
-		SET configured_drive_id = 'drive-configured'`)
+		SET mount_drive_id = 'drive-mounted'`)
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `
 		INSERT INTO remote_state (item_id, path, item_type, hash)
