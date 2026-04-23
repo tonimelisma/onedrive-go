@@ -1,10 +1,6 @@
 package sync
 
-import (
-	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
-)
+import "github.com/tonimelisma/onedrive-go/internal/driveid"
 
 // BaselineMutation is the store-owned persistence input produced from one
 // executed action result.
@@ -31,14 +27,4 @@ type BaselineMutation struct {
 	ETag            string
 	ConflictType    string
 	ResolvedBy      string
-}
-
-// SyncStatusUpdate is the product-facing sync status projection persisted
-// after a successful best-effort bidirectional batch.
-type SyncStatusUpdate struct {
-	SyncedAt  time.Time
-	Duration  time.Duration
-	Succeeded int
-	Failed    int
-	Errors    []error
 }

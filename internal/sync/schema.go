@@ -13,18 +13,14 @@ const (
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
 	//
-	// Generation 9 renames run_status to sync_status, removes
-	// local_state.observed_at, and standardizes status timing semantics around
-	// the last successful bidirectional sync batch. Older stores require an
-	// explicit reset rather than migration.
-	currentSyncStoreGeneration = 9
-	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata
-		(singleton_id, schema_generation)
-	VALUES (1, ?)
-	ON CONFLICT(singleton_id) DO UPDATE SET schema_generation = excluded.schema_generation`
+	// Generation 12 removes runtime-only refresh/status baggage from the sync
+	// store and keeps schema changes reset-only rather than migratable.
+	currentSyncStoreGeneration = 12
+	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
+		SELECT ?
+		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
 	canonicalSchemaSQL = `
 CREATE TABLE IF NOT EXISTS store_metadata (
-    singleton_id       INTEGER PRIMARY KEY CHECK(singleton_id = 1),
     schema_generation  INTEGER NOT NULL
 );
 
@@ -45,66 +41,41 @@ CREATE TABLE IF NOT EXISTS baseline (
 CREATE INDEX IF NOT EXISTS idx_baseline_parent ON baseline(parent_id);
 
 CREATE TABLE IF NOT EXISTS observation_state (
-    singleton_id                  INTEGER PRIMARY KEY CHECK(singleton_id = 1),
-    configured_drive_id           TEXT    NOT NULL DEFAULT '',
-    cursor                        TEXT    NOT NULL DEFAULT '',
-    remote_refresh_mode           TEXT    NOT NULL DEFAULT 'delta_healthy',
-    last_full_remote_refresh_at   INTEGER NOT NULL DEFAULT 0,
-    next_full_remote_refresh_at   INTEGER NOT NULL DEFAULT 0,
-    local_refresh_mode            TEXT    NOT NULL DEFAULT 'watch_healthy',
-    last_full_local_refresh_at    INTEGER NOT NULL DEFAULT 0,
-    next_full_local_refresh_at    INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS sync_status (
-    singleton_id           INTEGER PRIMARY KEY CHECK(singleton_id = 1),
-    last_synced_at         INTEGER NOT NULL DEFAULT 0,
-    last_sync_duration_ms  INTEGER NOT NULL DEFAULT 0,
-    last_succeeded_count   INTEGER NOT NULL DEFAULT 0,
-    last_failed_count      INTEGER NOT NULL DEFAULT 0,
-    last_error             TEXT    NOT NULL DEFAULT ''
+    configured_drive_id         TEXT    NOT NULL DEFAULT '',
+    cursor                      TEXT    NOT NULL DEFAULT '',
+    next_full_remote_refresh_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS remote_state (
     drive_id      TEXT    NOT NULL DEFAULT '',
     item_id       TEXT    NOT NULL PRIMARY KEY,
     path          TEXT    NOT NULL UNIQUE,
-    parent_id     TEXT,
     item_type     TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
     hash          TEXT,
     size          INTEGER,
     mtime         INTEGER,
-    etag          TEXT,
-    content_identity TEXT,
-    previous_path TEXT
+    etag          TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_remote_state_parent ON remote_state(parent_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_state_path ON remote_state(path);
 
 CREATE TABLE IF NOT EXISTS local_state (
-    path             TEXT    NOT NULL PRIMARY KEY,
-    item_type        TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
-    hash             TEXT,
-    size             INTEGER,
-    mtime            INTEGER,
-    content_identity TEXT
+    path       TEXT    NOT NULL PRIMARY KEY,
+    item_type  TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
+    hash       TEXT,
+    size       INTEGER,
+    mtime      INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS retry_work (
-    work_key        TEXT    NOT NULL PRIMARY KEY,
     path            TEXT    NOT NULL,
     old_path        TEXT    NOT NULL DEFAULT '',
     action_type     TEXT    NOT NULL,
-    condition_type  TEXT    NOT NULL DEFAULT '',
     scope_key       TEXT    NOT NULL DEFAULT '',
     blocked         INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0, 1)),
     attempt_count   INTEGER NOT NULL DEFAULT 0,
     next_retry_at   INTEGER NOT NULL DEFAULT 0,
-    last_error      TEXT    NOT NULL DEFAULT '',
-    http_status     INTEGER NOT NULL DEFAULT 0,
-    first_seen_at   INTEGER NOT NULL DEFAULT 0,
-    last_seen_at    INTEGER NOT NULL DEFAULT 0
+    PRIMARY KEY (path, old_path, action_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_retry_work_scope_key ON retry_work(scope_key);
@@ -114,28 +85,17 @@ CREATE INDEX IF NOT EXISTS idx_retry_work_retrying ON retry_work(attempt_count)
 
 CREATE TABLE IF NOT EXISTS observation_issues (
     path           TEXT    NOT NULL PRIMARY KEY,
-    action_type    TEXT    NOT NULL CHECK(action_type IN (
-                    'download', 'upload', 'local_delete', 'remote_delete',
-                    'local_move', 'remote_move', 'folder_create', 'conflict_copy',
-                    'update_synced', 'cleanup')),
     issue_type     TEXT    NOT NULL DEFAULT '',
-    item_id        TEXT    NOT NULL DEFAULT '',
-    last_error     TEXT    NOT NULL DEFAULT '',
-    first_seen_at  INTEGER NOT NULL DEFAULT 0,
-    last_seen_at   INTEGER NOT NULL DEFAULT 0,
-    file_size      INTEGER NOT NULL DEFAULT 0,
-    local_hash     TEXT    NOT NULL DEFAULT '',
     scope_key      TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_observation_issues_issue_type
-    ON observation_issues(issue_type, last_seen_at DESC);
+    ON observation_issues(issue_type);
 CREATE INDEX IF NOT EXISTS idx_observation_issues_scope_key
     ON observation_issues(scope_key);
 
 CREATE TABLE IF NOT EXISTS block_scopes (
     scope_key      TEXT PRIMARY KEY,
-    blocked_at     INTEGER NOT NULL,
     trial_interval INTEGER NOT NULL,
     next_trial_at  INTEGER NOT NULL
 		);`
@@ -153,34 +113,27 @@ var ErrIncompatibleSchema = errors.New("sync: incompatible sync store schema")
 func canonicalSyncStoreColumns() map[string][]string {
 	return map[string][]string{
 		"store_metadata": {
-			"singleton_id", "schema_generation",
+			"schema_generation",
 		},
 		"baseline": {
 			"item_id", "path", "parent_id", "item_type", "local_hash", "remote_hash",
 			"local_size", "remote_size", "local_mtime", "remote_mtime", "etag",
 		},
 		"observation_state": {
-			"singleton_id", "configured_drive_id", "cursor", "remote_refresh_mode",
-			"last_full_remote_refresh_at", "next_full_remote_refresh_at",
-			"local_refresh_mode", "last_full_local_refresh_at", "next_full_local_refresh_at",
-		},
-		"sync_status": {
-			"singleton_id", "last_synced_at", "last_sync_duration_ms", "last_succeeded_count", "last_failed_count", "last_error",
+			"configured_drive_id", "cursor", "next_full_remote_refresh_at",
 		},
 		"remote_state": {
-			"drive_id", "item_id", "path", "parent_id", "item_type", "hash", "size", "mtime", "etag", "content_identity", "previous_path",
+			"drive_id", "item_id", "path", "item_type", "hash", "size", "mtime", "etag",
 		},
-		"local_state": {"path", "item_type", "hash", "size", "mtime", "content_identity"},
+		"local_state": {"path", "item_type", "hash", "size", "mtime"},
 		"retry_work": {
-			"work_key", "path", "old_path", "action_type", "condition_type", "scope_key", "blocked",
-			"attempt_count", "next_retry_at", "last_error", "http_status", "first_seen_at", "last_seen_at",
+			"path", "old_path", "action_type", "scope_key", "blocked", "attempt_count", "next_retry_at",
 		},
 		"observation_issues": {
-			"path", "action_type", "issue_type", "item_id", "last_error",
-			"first_seen_at", "last_seen_at", "file_size", "local_hash", "scope_key",
+			"path", "issue_type", "scope_key",
 		},
 		"block_scopes": {
-			"scope_key", "blocked_at", "trial_interval", "next_trial_at",
+			"scope_key", "trial_interval", "next_trial_at",
 		},
 	}
 }
@@ -205,9 +158,6 @@ func applySchema(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
 		return fmt.Errorf("sync: ensuring observation_state row: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, sqlEnsureSyncStatusRow); err != nil {
-		return fmt.Errorf("sync: ensuring sync_status row: %w", err)
-	}
 
 	return nil
 }
@@ -228,9 +178,6 @@ func createCanonicalSchema(ctx context.Context, db *sql.DB) (err error) {
 	}
 	if _, err = tx.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
 		return fmt.Errorf("seed observation_state row: %w", err)
-	}
-	if _, err = tx.ExecContext(ctx, sqlEnsureSyncStatusRow); err != nil {
-		return fmt.Errorf("seed sync_status row: %w", err)
 	}
 	if metadataErr := ensureStoreCompatibilityMetadata(ctx, tx); metadataErr != nil {
 		return metadataErr
@@ -318,7 +265,7 @@ func validateStoreGeneration(ctx context.Context, db *sql.DB) error {
 func readStoreCompatibilityMetadata(ctx context.Context, db *sql.DB) (storeCompatibilityMetadata, error) {
 	metadata := storeCompatibilityMetadata{}
 	err := db.QueryRowContext(ctx,
-		`SELECT schema_generation FROM store_metadata WHERE singleton_id = 1`,
+		`SELECT schema_generation FROM store_metadata LIMIT 1`,
 	).Scan(&metadata.SchemaGeneration)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

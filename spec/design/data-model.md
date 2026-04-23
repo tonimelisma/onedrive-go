@@ -23,7 +23,6 @@ The target schema is intentionally narrow. It stores only:
 - durable current-truth problems
 - exact delayed work
 - shared blocker timing
-- product-facing sync status metadata
 
 It does not store a durable executable plan or a mixed failure ledger.
 
@@ -35,10 +34,9 @@ It does not store a durable executable plan or a mixed failure ledger.
 | `local_state` | Latest admissible local snapshot truth | `path` |
 | `remote_state` | Latest observed remote mirror truth | `item_id` |
 | `observation_issues` | Durable current-truth/content problems | stable issue identity per path/boundary |
-| `retry_work` | Exact delayed retry or blocked work for the current semantic intent | `work_key` |
+| `retry_work` | Exact delayed retry or blocked work for the current semantic intent | `(path, old_path, action_type)` |
 | `block_scopes` | Shared blocker timing and lifecycle | `scope_key` |
-| `observation_state` | Configured drive owner, primary cursor, and refresh cadence | singleton row |
-| `sync_status` | Typed product-facing sync status metadata for `status` | singleton row |
+| `observation_state` | Configured drive owner, primary cursor, and remote refresh cadence | zero-or-one row |
 
 ## `baseline`
 
@@ -58,14 +56,18 @@ instead of delete/reinsert churn.
 `remote_state` is the durable mirror of what remote observation most recently
 saw. It stores:
 
-- identity: persisted owning `drive_id`, `item_id`, `parent_id`
-- materialized path: `path`, `previous_path`
-- remote facts: `item_type`, `hash`, `size`, `mtime`, `etag`,
-  `content_identity`
+- identity: persisted owning `drive_id`, `item_id`
+- materialized path: `path`
+- remote facts: `item_type`, `hash`, `size`, `mtime`, `etag`
 
 The row-level `drive_id` is durable authority. Shared-root and cross-drive
 remote rows keep the drive that actually owns the item, even though the state
 DB itself belongs to one configured drive session.
+
+Remote parent ancestry is intentionally not persisted in `remote_state`.
+Observation reconstructs sparse paths from the current delta item plus baseline
+context, and successful execution reconstructs outcome parent IDs before
+publishing baseline mutations.
 
 Remote deletion is represented by row absence. If a baseline row exists and the
 corresponding `remote_state` row is missing, later runs rediscover remote delete
@@ -76,7 +78,7 @@ drift from durable state alone.
 `local_state` is the durable mirror of the latest admissible local snapshot:
 
 - identity/materialization: `path`, `item_type`
-- local facts: `hash`, `size`, `mtime`, `content_identity`
+- local facts: `hash`, `size`, `mtime`
 
 Ignored content does not enter `local_state`. The table stores only current
 local truth that can participate in reconciliation.
@@ -114,16 +116,13 @@ tagged boundary fact to block descendants.
 `retry_work` is the durable ledger for exact delayed work aligned with the
 latest runtime-owned actionable set:
 
-- semantic work identity: `work_key`, `path`, `old_path`, `action_type`
+- semantic work identity: `path`, `old_path`, `action_type`
 - block linkage: `scope_key`, `blocked`
 - retry timing: `attempt_count`, `next_retry_at`
-- operator/debug facts: `last_error`
-- timestamps: `first_seen_at`, `last_seen_at`
 
-`work_key` is the stable serialized identity for one semantic unit of work. It
-is derived from the action type plus paths so replans can prune stale delayed
-work against the current actionable set without inventing a durable action-plan
-table.
+The composite `(path, old_path, action_type)` identity is the durable key for
+one semantic unit of work. Replans prune stale delayed work against the current
+actionable set without inventing a second durable action-plan table.
 
 ## `block_scopes`
 
@@ -131,7 +130,7 @@ table.
 process:
 
 - identity: `scope_key`
-- timing: `blocked_at`, `trial_interval`, `next_trial_at`
+- timing: `trial_interval`, `next_trial_at`
 
 `block_scopes` is timing and lifecycle authority only. Concrete blocked work
 belongs in `retry_work`.
@@ -165,40 +164,35 @@ identity and cadence:
 
 - `configured_drive_id`
 - `cursor`
-- `remote_refresh_mode`, `last_full_remote_refresh_at`,
-  `next_full_remote_refresh_at`
-- `local_refresh_mode`, `last_full_local_refresh_at`,
-  `next_full_local_refresh_at`
+- `next_full_remote_refresh_at`
 
 The cursor is committed atomically with the corresponding remote observation
-writes. The stored refresh timestamps and modes make periodic full-refresh
-cadence restart-safe in one-shot and watch mode.
+writes. The stored next-refresh deadline makes periodic remote full-refresh
+cadence restart-safe in one-shot and watch mode without persisting a fake
+durable observation mode. Runtime decides the interval from the current remote
+observation capability:
+
+- delta-based watch path -> next full refresh in 24 hours
+- enumerate-only watch path -> next full refresh in 1 hour
+
+Whole-drive observation remains delta-based in this increment. Shared-root
+observation is capability-driven:
+
+- business/sharepoint shared roots skip folder delta and stay enumerate-only
+- personal shared roots prefer folder delta, but may fall back to recursive
+  enumeration until a later delta pass succeeds again
+
+Local watch safety-scan cadence is runtime-owned rather than persisted in
+SQLite.
 
 `configured_drive_id` identifies the configured drive session that owns the DB
 and cursor. It does not replace the per-row `remote_state.drive_id` authority.
 
-## `sync_status`
-
-`sync_status` stores typed product-facing sync status metadata used by
-`status`:
-
-- `last_synced_at`
-- `last_sync_duration_ms`
-- `last_succeeded_count`
-- `last_failed_count`
-- `last_error`
-
-It is explicitly non-authoritative for planning and observation.
-`last_synced_at` means the most recent successful best-effort bidirectional
-sync batch. It updates in one-shot or watch mode only after the engine
-finishes a bidirectional, non-dry-run batch and exhausts all currently
-admissible work for that cycle.
-
 ## Schema Discipline
 
 `internal/sync/schema.go` owns the canonical schema directly. Fresh DBs
-bootstrap that schema in one transaction, seed the singleton
-`observation_state` row, and reopen against the same shape.
+bootstrap that schema in one transaction, seed the zero-or-one-row
+`observation_state` table when absent, and reopen against the same shape.
 
 Existing DBs are trusted only when they already match the current canonical
 table and column layout. Stores with stale or incompatible shapes are rejected

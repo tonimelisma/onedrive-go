@@ -21,10 +21,10 @@ local_move_sources AS (
 		b.path AS source_path,
 		MIN(l.path) AS target_path,
 		COUNT(*) AS candidate_count
-	FROM baseline b
-	JOIN local_state l
-		ON l.path <> b.path
-		AND COALESCE(NULLIF(l.content_identity, ''), NULLIF(l.hash, '')) = NULLIF(b.local_hash, '')
+		FROM baseline b
+		JOIN local_state l
+			ON l.path <> b.path
+			AND NULLIF(l.hash, '') = NULLIF(b.local_hash, '')
 	WHERE b.local_hash IS NOT NULL AND b.local_hash <> ''
 	GROUP BY b.path
 ),
@@ -191,10 +191,10 @@ local_move_sources AS (
 		b.path AS source_path,
 		MIN(l.path) AS target_path,
 		COUNT(*) AS candidate_count
-	FROM baseline b
-	JOIN local_state l
-		ON l.path <> b.path
-		AND COALESCE(NULLIF(l.content_identity, ''), NULLIF(l.hash, '')) = NULLIF(b.local_hash, '')
+		FROM baseline b
+		JOIN local_state l
+			ON l.path <> b.path
+			AND NULLIF(l.hash, '') = NULLIF(b.local_hash, '')
 	WHERE b.local_hash IS NOT NULL AND b.local_hash <> ''
 	GROUP BY b.path
 ),

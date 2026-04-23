@@ -7,7 +7,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // maxHashRetries is the number of additional download attempts when the
@@ -80,7 +79,6 @@ func (e *Executor) downloadOutcome(
 
 	if action.View != nil && action.View.Remote != nil {
 		o.ETag = action.View.Remote.ETag
-		o.ParentID = action.View.Remote.ParentID
 		o.LocalMtime = action.View.Remote.Mtime
 		o.RemoteMtime = action.View.Remote.Mtime
 		o.RemoteSize = action.View.Remote.Size
@@ -89,6 +87,7 @@ func (e *Executor) downloadOutcome(
 			o.RemoteHash = action.View.Remote.Hash
 		}
 	}
+	o.ParentID = e.resolvedParentIDForOutcome(action, nil)
 
 	return o
 }
@@ -153,7 +152,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 				inferFailureCapabilityFromError(err, PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite),
 			)
 		}
-		parentID = resolvedUploadParentID(action, result.Item)
+		parentID = e.resolvedParentIDForOutcome(action, result.Item)
 	} else {
 		parentID, err = e.ResolveParentID(action.Path)
 		if err != nil {
@@ -221,21 +220,4 @@ func shouldOverwriteKnownRemoteItem(action *Action) bool {
 	}
 
 	return true
-}
-
-func resolvedUploadParentID(action *Action, item *graph.Item) string {
-	if item != nil && item.ParentID != "" {
-		return item.ParentID
-	}
-	if action == nil || action.View == nil {
-		return ""
-	}
-	if action.View.Remote != nil && action.View.Remote.ParentID != "" {
-		return action.View.Remote.ParentID
-	}
-	if action.View.Baseline != nil {
-		return action.View.Baseline.ParentID
-	}
-
-	return ""
 }

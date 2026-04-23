@@ -51,7 +51,7 @@ func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) Action
 				DriveID:  e.resolveDriveID(action),
 				ItemID:   action.ItemID,
 				OldPath:  action.Path,
-				ParentID: resolvedUploadParentID(action, nil),
+				ParentID: e.resolvedParentIDForOutcome(action, nil),
 			}
 			decorateConflictOutcome(action, &outcome)
 			return outcome

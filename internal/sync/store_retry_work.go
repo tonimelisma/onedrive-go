@@ -10,37 +10,23 @@ import (
 
 const (
 	sqlUpsertRetryWork = `INSERT INTO retry_work
-		(work_key, path, old_path, action_type, condition_type, scope_key, blocked,
-		 attempt_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(work_key) DO UPDATE SET
-			path = excluded.path,
-			old_path = excluded.old_path,
-			action_type = excluded.action_type,
-			condition_type = excluded.condition_type,
+		(path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(path, old_path, action_type) DO UPDATE SET
 			scope_key = excluded.scope_key,
 			blocked = excluded.blocked,
 			attempt_count = excluded.attempt_count,
-			next_retry_at = excluded.next_retry_at,
-			last_error = excluded.last_error,
-			http_status = excluded.http_status,
-			first_seen_at = excluded.first_seen_at,
-			last_seen_at = excluded.last_seen_at`
+			next_retry_at = excluded.next_retry_at`
 	sqlDeleteRetryWorkByPathType = `DELETE FROM retry_work WHERE path = ? AND old_path = ? AND action_type = ?`
-	sqlSelectRetryWorkCols       = `work_key, path, old_path, action_type, condition_type, scope_key, blocked, ` +
-		`attempt_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at`
-	sqlListRetryWork = `SELECT ` + sqlSelectRetryWorkCols + `
+	sqlSelectRetryWorkCols       = `path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at`
+	sqlListRetryWork             = `SELECT ` + sqlSelectRetryWorkCols + `
 		FROM retry_work
-		ORDER BY path, work_key`
+		ORDER BY path, old_path, action_type`
 	sqlListRetryWorkBlocked = `SELECT ` + sqlSelectRetryWorkCols + `
 		FROM retry_work
 		WHERE blocked = 1
-		ORDER BY scope_key, path, work_key`
+		ORDER BY scope_key, path, old_path, action_type`
 )
-
-func serializeRetryWorkKey(key RetryWorkKey) string {
-	return fmt.Sprintf("%s\x00%s\x00%s", key.ActionType.String(), key.OldPath, key.Path)
-}
 
 func (m *SyncStore) UpsertRetryWork(ctx context.Context, row *RetryWorkRow) error {
 	return upsertRetryWorkTx(ctx, m.db, row)
@@ -50,24 +36,15 @@ func upsertRetryWorkTx(ctx context.Context, runner sqlTxRunner, row *RetryWorkRo
 	if row == nil {
 		return fmt.Errorf("sync: upserting retry_work: nil row")
 	}
-	if row.WorkKey == "" {
-		row.WorkKey = serializeRetryWorkKey(retryWorkKey(row.Path, row.OldPath, row.ActionType))
-	}
 
 	_, err := runner.ExecContext(ctx, sqlUpsertRetryWork,
-		row.WorkKey,
 		row.Path,
 		row.OldPath,
 		row.ActionType.String(),
-		row.ConditionType,
 		row.ScopeKey.String(),
 		row.Blocked,
 		row.AttemptCount,
 		row.NextRetryAt,
-		row.LastError,
-		row.HTTPStatus,
-		row.FirstSeenAt,
-		row.LastSeenAt,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: upserting retry_work for %s: %w", row.Path, err)
@@ -77,9 +54,7 @@ func upsertRetryWorkTx(ctx context.Context, runner sqlTxRunner, row *RetryWorkRo
 }
 
 func retryWorkIdentityForWork(path string, oldPath string, actionType ActionType) RetryWorkRow {
-	work := retryWorkKey(path, oldPath, actionType)
 	return RetryWorkRow{
-		WorkKey:    serializeRetryWorkKey(work),
 		Path:       path,
 		OldPath:    oldPath,
 		ActionType: actionType,
@@ -165,24 +140,16 @@ func (m *SyncStore) RecordRetryWorkFailure(
 		return nil, err
 	}
 
-	nowNano := m.nowFunc().UnixNano()
 	row = &RetryWorkRow{
-		WorkKey:       serializeRetryWorkKey(workKey),
-		Path:          failure.Path,
-		OldPath:       failure.OldPath,
-		ActionType:    failure.ActionType,
-		ConditionType: failure.ConditionType,
-		ScopeKey:      failure.ScopeKey,
-		Blocked:       failure.Blocked,
-		AttemptCount:  1,
-		LastError:     failure.LastError,
-		HTTPStatus:    failure.HTTPStatus,
-		FirstSeenAt:   nowNano,
-		LastSeenAt:    nowNano,
+		Path:         failure.Path,
+		OldPath:      failure.OldPath,
+		ActionType:   failure.ActionType,
+		ScopeKey:     failure.ScopeKey,
+		Blocked:      failure.Blocked,
+		AttemptCount: 1,
 	}
 	if found && existing != nil {
 		row.AttemptCount = existing.AttemptCount + 1
-		row.FirstSeenAt = existing.FirstSeenAt
 	}
 	if !failure.Blocked {
 		row.NextRetryAt = m.nowFunc().Add(delayFn(row.AttemptCount - 1)).UnixNano()
@@ -361,19 +328,13 @@ func scanRetryWorkRow(scanner retryWorkScanner, row *RetryWorkRow) error {
 
 	var scopeKey string
 	if err := scanner.Scan(
-		&row.WorkKey,
 		&row.Path,
 		&row.OldPath,
 		&row.ActionType,
-		&row.ConditionType,
 		&scopeKey,
 		&row.Blocked,
 		&row.AttemptCount,
 		&row.NextRetryAt,
-		&row.LastError,
-		&row.HTTPStatus,
-		&row.FirstSeenAt,
-		&row.LastSeenAt,
 	); err != nil {
 		return fmt.Errorf("sync: scanning retry_work row: %w", err)
 	}
@@ -396,4 +357,12 @@ func scanRetryWorkRows(rows *sql.Rows) ([]RetryWorkRow, error) {
 	}
 
 	return result, nil
+}
+
+func retryConditionTypeForRow(row *RetryWorkRow) string {
+	if row == nil || row.ScopeKey.IsZero() {
+		return ""
+	}
+
+	return row.ScopeKey.ConditionType()
 }

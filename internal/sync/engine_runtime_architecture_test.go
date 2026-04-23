@@ -336,8 +336,6 @@ func seedDueRetryPublication(t *testing.T, rt *watchRuntime) {
 		ActionType:   ActionCleanup,
 		AttemptCount: 1,
 		NextRetryAt:  now.Add(-time.Second).UnixNano(),
-		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:   now.UnixNano(),
 	}
 	require.NoError(t, rt.engine.baseline.UpsertRetryWork(t.Context(), &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
@@ -359,7 +357,6 @@ func seedDueTrialPublication(t *testing.T, eng *testEngine, rt *watchRuntime) {
 	now := rt.engine.nowFunc()
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     now.Add(-time.Minute),
 		NextTrialAt:   now.Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	})

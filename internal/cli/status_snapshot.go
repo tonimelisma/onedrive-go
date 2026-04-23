@@ -54,13 +54,10 @@ type statusDrive struct {
 
 // syncStateInfo holds the full per-drive status payload rendered by `status`.
 type syncStateInfo struct {
-	LastSyncTime          string                `json:"last_sync_time,omitempty"`
-	LastSyncDuration      string                `json:"last_sync_duration,omitempty"`
 	FileCount             int                   `json:"file_count"`
 	ConditionCount        int                   `json:"condition_count"`
 	RemoteDrift           int                   `json:"remote_drift"`
 	Retrying              int                   `json:"retrying"`
-	LastError             string                `json:"last_error,omitempty"`
 	Conditions            []statusConditionJSON `json:"conditions,omitempty"`
 	ExamplesLimit         int                   `json:"examples_limit"`
 	Verbose               bool                  `json:"verbose"`

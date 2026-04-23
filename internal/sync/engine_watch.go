@@ -224,7 +224,6 @@ func (rt *watchRuntime) initWatchInfra(
 // Must be called after startup + initWatchInfra and before startObservers.
 func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watchPipeline) error {
 	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
-	bootstrapStart := rt.engine.nowFunc()
 
 	if pipe == nil || pipe.bl == nil {
 		return fmt.Errorf("sync: bootstrap requires startup baseline")
@@ -235,7 +234,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 		return err
 	}
 	if len(runtime.Plan.Actions) == 0 {
-		return rt.finishBootstrapWithoutActions(ctx, mode, bootstrapStart, runtime.PendingCursorCommit)
+		return rt.finishBootstrapWithoutActions(ctx, runtime.PendingCursorCommit)
 	}
 
 	// Commit the deferred delta token before dispatching bootstrap actions.
@@ -243,8 +242,6 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 	if cursorCommitErr != nil {
 		return cursorCommitErr
 	}
-	rt.beginSyncStatusBatch(bootstrapStart)
-
 	// Dispatch through the watch runtime (same frontier path steady-state uses).
 	initialOutbox, _, err := rt.startRuntimeStage(ctx, runtime, pipe.bl, rt)
 	if err != nil {
@@ -253,45 +250,35 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 
 	// Wait for all bootstrap actions to complete.
 	if err := rt.runWatchUntilQuiescent(ctx, pipe, initialOutbox); err != nil {
-		rt.clearSyncStatusBatch()
 		return fmt.Errorf("sync: bootstrap quiescence failed: %w", err)
 	}
 
-	return rt.finishBootstrapAfterActions(ctx, mode)
+	return rt.finishBootstrapAfterActions(ctx)
 }
 
 func (rt *watchRuntime) finishBootstrapWithoutActions(
 	ctx context.Context,
-	mode Mode,
-	startedAt time.Time,
 	pendingCursorCommit *pendingPrimaryCursorCommit,
 ) error {
-	rt.beginSyncStatusBatch(startedAt)
 	if err := rt.commitPendingPrimaryCursor(ctx, pendingCursorCommit); err != nil {
-		rt.clearSyncStatusBatch()
 		return err
 	}
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
-		rt.clearSyncStatusBatch()
 		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
 	}
-	rt.finishSyncStatusBatch(ctx, mode)
 	rt.engine.logger.Info("bootstrap sync complete: no changes detected")
 	return nil
 }
 
 func (rt *watchRuntime) finishBootstrapAfterActions(
 	ctx context.Context,
-	mode Mode,
 ) error {
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 	rt.postSyncHousekeeping()
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
-		rt.clearSyncStatusBatch()
 		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
 	}
-	rt.finishSyncStatusBatch(ctx, mode)
 	rt.engine.logger.Info("bootstrap sync complete")
 	return nil
 }
@@ -325,19 +312,6 @@ func (rt *watchRuntime) startObservers(
 	localObs.SetObservationRules(rt.engine.localRules)
 	localObs.SetSkippedChannel(skippedCh)
 	localObs.safetyScanInterval = localRefreshIntervalForMode(localRefreshModeWatchHealthy)
-	localObs.AfterSafetyScan = func() {
-		refreshCtx := context.WithoutCancel(ctx)
-		if err := rt.engine.baseline.MarkFullLocalRefresh(
-			refreshCtx,
-			rt.engine.driveID,
-			rt.engine.nowFunc(),
-			localRefreshModeWatchHealthy,
-		); err != nil {
-			rt.engine.logger.Warn("failed to mark healthy local refresh after safety scan",
-				slog.String("error", err.Error()),
-			)
-		}
-	}
 
 	if rt.engine.localWatcherFactory != nil {
 		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
@@ -356,16 +330,6 @@ func (rt *watchRuntime) startObservers(
 
 		watchErr := localObs.Watch(ctx, rt.engine.syncTree, localEvents)
 		if errors.Is(watchErr, ErrWatchLimitExhausted) {
-			if err := rt.engine.baseline.MarkFullLocalRefresh(
-				context.WithoutCancel(ctx),
-				rt.engine.driveID,
-				rt.engine.nowFunc(),
-				localRefreshModeWatchDegraded,
-			); err != nil {
-				rt.engine.logger.Warn("failed to mark degraded local refresh before fallback",
-					slog.String("error", err.Error()),
-				)
-			}
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
 			rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
 				slog.Duration("scan_interval", localRefreshIntervalForMode(localRefreshModeWatchDegraded)),
@@ -380,17 +344,6 @@ func (rt *watchRuntime) startObservers(
 
 		errs <- watchErr
 	}()
-
-	if err := rt.engine.baseline.MarkFullLocalRefresh(
-		context.WithoutCancel(ctx),
-		rt.engine.driveID,
-		rt.engine.nowFunc(),
-		localRefreshModeWatchHealthy,
-	); err != nil {
-		rt.engine.logger.Warn("failed to mark healthy local refresh at watcher startup",
-			slog.String("error", err.Error()),
-		)
-	}
 
 	rt.observerErrs = errs
 	rt.activeObservers = count
@@ -543,16 +496,6 @@ func (rt *watchRuntime) runPeriodicFullScan(
 			if len(result.Skipped) > 0 {
 				rt.engine.logger.Debug("periodic scan: skipped items",
 					slog.Int("count", len(result.Skipped)))
-			}
-			if err := rt.engine.baseline.MarkFullLocalRefresh(
-				context.WithoutCancel(ctx),
-				rt.engine.driveID,
-				rt.engine.nowFunc(),
-				localRefreshModeWatchDegraded,
-			); err != nil {
-				rt.engine.logger.Warn("failed to mark degraded local refresh after periodic scan",
-					slog.String("error", err.Error()),
-				)
 			}
 		case <-ctx.Done():
 			return

@@ -35,8 +35,6 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedP
 		ActionType:   ActionCleanup,
 		AttemptCount: 1,
 		NextRetryAt:  now.Add(-time.Second).UnixNano(),
-		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:   now.UnixNano(),
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})

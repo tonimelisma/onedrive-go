@@ -9,10 +9,10 @@ import (
 const (
 	sqlDeleteLocalState = `DELETE FROM local_state`
 	sqlInsertLocalState = `INSERT INTO local_state
-		(path, item_type, hash, size, mtime, content_identity)
-		VALUES (?, ?, ?, ?, ?, ?)`
+		(path, item_type, hash, size, mtime)
+		VALUES (?, ?, ?, ?, ?)`
 	sqlListLocalState = `SELECT
-		path, item_type, hash, size, mtime, content_identity
+		path, item_type, hash, size, mtime
 		FROM local_state
 		ORDER BY path`
 )
@@ -64,7 +64,6 @@ func replaceLocalStateTx(
 			nullString(row.Hash),
 			nullKnownInt64(row.Size, true),
 			nullOptionalInt64(row.Mtime),
-			nullString(row.ContentIdentity),
 		); err != nil {
 			return fmt.Errorf("sync: inserting local_state row for %s: %w", row.Path, err)
 		}
@@ -83,11 +82,10 @@ func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]LocalStateRo
 	var result []LocalStateRow
 	for rows.Next() {
 		var (
-			row             LocalStateRow
-			hash            sql.NullString
-			size            sql.NullInt64
-			mtime           sql.NullInt64
-			contentIdentity sql.NullString
+			row   LocalStateRow
+			hash  sql.NullString
+			size  sql.NullInt64
+			mtime sql.NullInt64
 		)
 		if err := rows.Scan(
 			&row.Path,
@@ -95,7 +93,6 @@ func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]LocalStateRo
 			&hash,
 			&size,
 			&mtime,
-			&contentIdentity,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning local_state row: %w", err)
 		}
@@ -106,7 +103,6 @@ func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]LocalStateRo
 		if mtime.Valid {
 			row.Mtime = mtime.Int64
 		}
-		row.ContentIdentity = contentIdentity.String
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {

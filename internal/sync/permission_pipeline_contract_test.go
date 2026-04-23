@@ -85,8 +85,6 @@ func TestPermissionApply_ActivateTimedRemoteWriteScope_PersistsRetryWorkAndScope
 			ActionType:    ActionUpload,
 			ConditionType: IssueRemoteWriteDenied,
 			ScopeKey:      scopeKey,
-			LastError:     "folder is read-only",
-			HTTPStatus:    403,
 			Blocked:       true,
 		},
 	})
@@ -125,7 +123,6 @@ func TestPermissionApply_ReadBoundaryScope_DoesNotPersistBlockScopeRow(t *testin
 			ActionType:    ActionDownload,
 			ConditionType: IssueLocalReadDenied,
 			ScopeKey:      scopeKey,
-			LastError:     "directory not accessible",
 			Blocked:       true,
 		},
 	})
@@ -156,7 +153,6 @@ func TestPermissionApply_KnownActiveBoundary_DoesNotPersistOrArmRetryTimer(t *te
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     time.Unix(1, 0),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(61, 0),
 	}))

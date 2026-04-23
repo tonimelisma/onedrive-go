@@ -9,19 +9,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-const sqlSelectObservationIssueCols = `path, action_type, issue_type, item_id, last_error, first_seen_at, ` +
-	`last_seen_at, file_size, local_hash, scope_key`
+const sqlSelectObservationIssueCols = `path, issue_type, scope_key`
 
 func (m *SyncStore) ReconcileObservationFindings(
 	ctx context.Context,
 	batch *ObservationFindingsBatch,
-	now time.Time,
+	_ time.Time,
 ) (err error) {
 	if batch == nil {
 		return nil
 	}
-
-	nowNano := now.UnixNano()
 
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
@@ -37,7 +34,7 @@ func (m *SyncStore) ReconcileObservationFindings(
 	}
 	plan := buildObservationReconcilePlan(batch, state)
 
-	if applyErr := m.applyObservationFindingsReconcilePlanTx(ctx, tx, plan, nowNano); applyErr != nil {
+	if applyErr := m.applyObservationFindingsReconcilePlanTx(ctx, tx, plan); applyErr != nil {
 		return applyErr
 	}
 
@@ -52,9 +49,8 @@ func (m *SyncStore) applyObservationFindingsReconcilePlanTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 	plan observationReconcilePlan,
-	nowNano int64,
 ) error {
-	if err := m.upsertObservationIssuesTx(ctx, tx, plan.issueUpserts, nowNano); err != nil {
+	if err := m.upsertObservationIssuesTx(ctx, tx, plan.issueUpserts); err != nil {
 		return err
 	}
 	if err := deleteObservationIssuesTx(ctx, tx, plan.issueDeletes); err != nil {
@@ -89,7 +85,7 @@ func queryObservationIssueRowsWithRunner(
 
 	rows, err := runner.QueryContext(ctx,
 		`SELECT `+sqlSelectObservationIssueCols+` FROM observation_issues
-		ORDER BY last_seen_at DESC, path`)
+		ORDER BY path`)
 	if err != nil {
 		return nil, fmt.Errorf("query observation issues: %w", err)
 	}
@@ -105,7 +101,7 @@ func (m *SyncStore) ListObservationIssues(ctx context.Context) ([]ObservationIss
 	}
 
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT `+sqlSelectObservationIssueCols+` FROM observation_issues ORDER BY last_seen_at DESC`)
+		`SELECT `+sqlSelectObservationIssueCols+` FROM observation_issues ORDER BY path`)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing observation issues: %w", err)
 	}
@@ -122,7 +118,6 @@ func (m *SyncStore) upsertObservationIssuesTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 	issues []ObservationIssue,
-	nowNano int64,
 ) error {
 	state, err := m.readObservationStateTx(ctx, tx)
 	if err != nil {
@@ -144,16 +139,10 @@ func (m *SyncStore) upsertObservationIssuesTx(
 
 	stmt, err := tx.PrepareContext(ctx,
 		`INSERT INTO observation_issues
-			(path, action_type, issue_type, item_id, last_error, first_seen_at, last_seen_at, file_size, local_hash, scope_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(path, issue_type, scope_key)
+		VALUES (?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
-			action_type = excluded.action_type,
 			issue_type = excluded.issue_type,
-			item_id = excluded.item_id,
-			last_error = excluded.last_error,
-			last_seen_at = excluded.last_seen_at,
-			file_size = excluded.file_size,
-			local_hash = excluded.local_hash,
 			scope_key = excluded.scope_key`)
 	if err != nil {
 		return fmt.Errorf("sync: prepare observation issue upsert: %w", err)
@@ -165,20 +154,10 @@ func (m *SyncStore) upsertObservationIssuesTx(
 		if issue.Path == "" {
 			return fmt.Errorf("sync: upsert observation issue: missing path")
 		}
-		if _, valueErr := issue.ActionType.Value(); valueErr != nil {
-			return fmt.Errorf("sync: upsert observation issue for %s: invalid action type: %w", issue.Path, valueErr)
-		}
 
 		if _, execErr := stmt.ExecContext(ctx,
 			issue.Path,
-			issue.ActionType.String(),
 			issue.IssueType,
-			issue.ItemID,
-			issue.Error,
-			nowNano,
-			nowNano,
-			issue.FileSize,
-			issue.LocalHash,
 			issue.ScopeKey.String(),
 		); execErr != nil {
 			return fmt.Errorf("sync: upsert observation issue for %s: %w", issue.Path, execErr)
@@ -226,14 +205,7 @@ func scanObservationIssueRow(
 	var scopeKey string
 	if err := scanner.Scan(
 		&row.Path,
-		&row.ActionType,
 		&row.IssueType,
-		&row.ItemID,
-		&row.LastError,
-		&row.FirstSeenAt,
-		&row.LastSeenAt,
-		&row.FileSize,
-		&row.LocalHash,
 		&scopeKey,
 	); err != nil {
 		return fmt.Errorf("sync: scanning observation issue row: %w", err)

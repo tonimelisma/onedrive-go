@@ -141,7 +141,7 @@ func TestCheckpoint_DoesNotPruneRemoteMirrorRows(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCheckpoint_PrunesStaleObservationIssues(t *testing.T) {
+func TestCheckpoint_PreservesObservationIssuesAndRetryWork(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -149,28 +149,30 @@ func TestCheckpoint_PrunesStaleObservationIssues(t *testing.T) {
 
 	now := time.Now()
 	oldTime := now.Add(-48 * time.Hour).UnixNano()
-	newTime := now.Add(-12 * time.Hour).UnixNano()
 	retention := 24 * time.Hour
 
-	// Insert an observation issue older than retention (should be pruned).
+	// Observation issues are durable truth-status inputs and are no longer
+	// checkpoint-pruned by timestamp.
 	_, err := mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO observation_issues (path, action_type, issue_type, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"/old-issue.txt", "upload", "invalid_name", oldTime, oldTime)
+		`INSERT INTO observation_issues (path, issue_type, scope_key)
+		 VALUES (?, ?, ?)`,
+		"/old-issue.txt", "invalid_name", "")
 	require.NoError(t, err)
 
-	// Insert an observation issue newer than retention (should survive).
+	// Insert a second issue so we prove checkpoint preserves all rows rather
+	// than leaving a degenerate single-row case behind.
 	_, err = mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO observation_issues (path, action_type, issue_type, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"/new-issue.txt", "upload", "invalid_name", newTime, newTime)
+		`INSERT INTO observation_issues (path, issue_type, scope_key)
+		 VALUES (?, ?, ?)`,
+		"/new-issue.txt", "invalid_name", "")
 	require.NoError(t, err)
 
-	// retry_work is not part of retention pruning.
+	// retry_work is no longer timestamp-diagnostic storage and is likewise not
+	// checkpoint-pruned.
 	_, err = mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO retry_work (work_key, path, old_path, action_type, condition_type, scope_key, blocked, attempt_count, next_retry_at, last_error, http_status, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"upload\x00\x00/pending-issue.txt", "/pending-issue.txt", "", "upload", "service_unavailable", "", 0, 1, oldTime, "temporary", 503, oldTime, oldTime)
+		`INSERT INTO retry_work (path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"/pending-issue.txt", "", "upload", "", 0, 1, oldTime)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Checkpoint(ctx, retention))
@@ -178,7 +180,7 @@ func TestCheckpoint_PrunesStaleObservationIssues(t *testing.T) {
 	var count int
 	err = mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_issues`).Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count, "old observation issue should be pruned while fresh issues remain")
+	assert.Equal(t, 2, count, "checkpoint must preserve observation issues")
 
 	err = mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM retry_work`).Scan(&count)
 	require.NoError(t, err)
@@ -580,23 +582,6 @@ func TestReadObservationState_EmptyCursor(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestMarkFullLocalRefresh_PersistsNextRefreshAt(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-	at := time.Unix(10_000, 0)
-
-	require.NoError(t, mgr.MarkFullLocalRefresh(ctx, driveid.New("drive-1"), at, localRefreshModeWatchDegraded))
-
-	state, err := mgr.ReadObservationState(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, localRefreshModeWatchDegraded, state.LocalRefreshMode)
-	assert.Equal(t, at.UnixNano(), state.LastFullLocalRefreshAt)
-	assert.Equal(t, at.Add(time.Hour).UnixNano(), state.NextFullLocalRefreshAt)
-}
-
-// Validates: R-2.2
 func TestMarkFullRemoteRefresh_PersistsNextRefreshAt(t *testing.T) {
 	t.Parallel()
 
@@ -604,12 +589,10 @@ func TestMarkFullRemoteRefresh_PersistsNextRefreshAt(t *testing.T) {
 	ctx := t.Context()
 	at := time.Unix(20_000, 0)
 
-	require.NoError(t, mgr.MarkFullRemoteRefresh(ctx, driveid.New("drive-1"), at))
+	require.NoError(t, mgr.MarkFullRemoteRefresh(ctx, driveid.New("drive-1"), at, remoteObservationModeDelta))
 
 	state, err := mgr.ReadObservationState(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, remoteRefreshModeDeltaHealthy, state.RemoteRefreshMode)
-	assert.Equal(t, at.UnixNano(), state.LastFullRemoteRefreshAt)
 	assert.Equal(t, at.Add(24*time.Hour).UnixNano(), state.NextFullRemoteRefreshAt)
 }
 
@@ -1520,7 +1503,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	// Verify all expected tables exist by querying sqlite_master.
 	expectedTables := []string{
 		"baseline", "local_state", "observation_state",
-		"observation_issues", "retry_work", "sync_status", "remote_state", "block_scopes",
+		"observation_issues", "retry_work", "remote_state", "block_scopes",
 	}
 
 	for _, table := range expectedTables {
@@ -1547,9 +1530,9 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	// Verify observation_issues table structure: insert + query.
 	_, err = mgr.rawDB().ExecContext(ctx,
-		`INSERT INTO observation_issues (path, action_type, issue_type, first_seen_at, last_seen_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		"/bad-file.txt", "upload", "invalid_filename", 1700000000, 1700000000)
+		`INSERT INTO observation_issues (path, issue_type, scope_key)
+		 VALUES (?, ?, ?)`,
+		"/bad-file.txt", "invalid_filename", "")
 	require.NoError(t, err)
 
 	// Verify remote_state CHECK constraint rejects invalid item types.
@@ -1580,96 +1563,6 @@ func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
 		 VALUES (?, ?, ?)`,
 		"item2", "/test.txt", "file")
 	require.Error(t, err, "duplicate active path should be rejected")
-}
-
-// --- Sync status tests (6.2b) ---
-
-// Validates: R-2.2
-func TestWriteSyncStatus_RoundTrip(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-	syncedAt := time.Date(2026, 4, 3, 10, 30, 0, 0, time.UTC)
-
-	status := &SyncStatus{
-		LastSyncedAt:       syncedAt.UnixNano(),
-		LastSyncDurationMs: 1500,
-		LastSucceededCount: 42,
-		LastFailedCount:    3,
-		LastError:          "some sync error",
-	}
-
-	require.NoError(t, mgr.WriteSyncStatus(ctx, status))
-
-	got, err := mgr.ReadSyncStatus(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, syncedAt.UnixNano(), got.LastSyncedAt)
-	assert.Equal(t, int64(1500), got.LastSyncDurationMs)
-	assert.Equal(t, 42, got.LastSucceededCount)
-	assert.Equal(t, 3, got.LastFailedCount)
-	assert.Equal(t, "some sync error", got.LastError)
-}
-
-// Validates: R-2.2
-func TestWriteSyncStatus_Upsert(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	status1 := &SyncStatus{LastSyncedAt: time.Unix(10, 0).UnixNano(), LastSyncDurationMs: 1000, LastSucceededCount: 10}
-	require.NoError(t, mgr.WriteSyncStatus(ctx, status1))
-
-	status2 := &SyncStatus{LastSyncedAt: time.Unix(20, 0).UnixNano(), LastSyncDurationMs: 2000, LastSucceededCount: 20}
-	require.NoError(t, mgr.WriteSyncStatus(ctx, status2))
-
-	status, err := mgr.ReadSyncStatus(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, time.Unix(20, 0).UnixNano(), status.LastSyncedAt)
-	assert.Equal(t, 20, status.LastSucceededCount, "should be from second write")
-	assert.Equal(t, int64(2000), status.LastSyncDurationMs)
-}
-
-// Validates: R-2.2
-func TestWriteSyncStatus_NoErrors(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	status := &SyncStatus{LastSyncedAt: time.Unix(30, 0).UnixNano(), LastSyncDurationMs: 500, LastSucceededCount: 5}
-	require.NoError(t, mgr.WriteSyncStatus(ctx, status))
-
-	status, err := mgr.ReadSyncStatus(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, status.LastError)
-}
-
-// Validates: R-2.2
-func TestReadSyncStatus_EmptyDB(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	status, err := mgr.ReadSyncStatus(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, &SyncStatus{}, status)
-}
-
-// Validates: R-2.2
-func TestReadSyncStatus_MissingTableFails(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := t.Context()
-
-	_, err := mgr.db.ExecContext(ctx, `DROP TABLE sync_status`)
-	require.NoError(t, err)
-
-	_, err = mgr.ReadSyncStatus(ctx)
-	require.Error(t, err)
 }
 
 // Validates: R-2.2

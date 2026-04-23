@@ -5,11 +5,11 @@ import (
 	"fmt"
 )
 
-type sharedRootObservationMode string
+type remoteObservationMode string
 
 const (
-	sharedRootObservationDelta     sharedRootObservationMode = "delta"
-	sharedRootObservationEnumerate sharedRootObservationMode = "enumerate"
+	remoteObservationModeDelta     remoteObservationMode = "delta"
+	remoteObservationModeEnumerate remoteObservationMode = "enumerate"
 )
 
 type pendingPrimaryCursorCommit struct {
@@ -17,6 +17,7 @@ type pendingPrimaryCursorCommit struct {
 	rootID                string
 	token                 string
 	markFullRemoteRefresh bool
+	observationMode       remoteObservationMode
 }
 
 type remoteObservationBatchSource string
@@ -29,6 +30,7 @@ const (
 
 type remoteObservationBatch struct {
 	source                remoteObservationBatchSource
+	observationMode       remoteObservationMode
 	observed              []ObservedItem
 	emitted               []ChangeEvent
 	pending               *pendingPrimaryCursorCommit
@@ -39,9 +41,10 @@ type remoteObservationBatch struct {
 }
 
 type remoteFetchResult struct {
-	events   []ChangeEvent
-	pending  *pendingPrimaryCursorCommit
-	findings ObservationFindingsBatch
+	observationMode remoteObservationMode
+	events          []ChangeEvent
+	pending         *pendingPrimaryCursorCommit
+	findings        ObservationFindingsBatch
 }
 
 func (r *remoteFetchResult) hasObservationFindings() bool {
@@ -64,12 +67,12 @@ type primaryRootObservationPlan struct {
 	fullReconcile bool
 }
 
-func (e *Engine) sharedRootObservationMode() sharedRootObservationMode {
-	if e.folderDelta != nil {
-		return sharedRootObservationDelta
+func (e *Engine) preferredSharedRootObservationMode() remoteObservationMode {
+	if e.sharedRootDeltaSupported() && e.folderDelta != nil {
+		return remoteObservationModeDelta
 	}
 
-	return sharedRootObservationEnumerate
+	return remoteObservationModeEnumerate
 }
 
 func (flow *engineFlow) buildPrimaryRootObservationPlan(fullReconcile bool) primaryRootObservationPlan {
@@ -108,26 +111,30 @@ func (flow *engineFlow) executeDriveRootObservation(
 		events, token, err := flow.observeRemoteFull(ctx, bl)
 		if err != nil && isObservationRemoteReadDenied(err) {
 			return remoteFetchResult{
-				findings: rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID, err),
+				observationMode: remoteObservationModeDelta,
+				findings:        rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID),
 			}, nil
 		}
 		return remoteFetchResult{
-			events:   events,
-			pending:  primaryCursorCommit(token, flow.engine, true, len(events)),
-			findings: newRemoteObservationFindingsBatch(),
+			observationMode: remoteObservationModeDelta,
+			events:          events,
+			pending:         primaryCursorCommit(token, flow.engine, true, len(events), remoteObservationModeDelta),
+			findings:        newRemoteObservationFindingsBatch(),
 		}, err
 	}
 
 	events, token, err := flow.observeRemote(ctx, bl)
 	if err != nil && isObservationRemoteReadDenied(err) {
 		return remoteFetchResult{
-			findings: rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID, err),
+			observationMode: remoteObservationModeDelta,
+			findings:        rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID),
 		}, nil
 	}
 	return remoteFetchResult{
-		events:   events,
-		pending:  primaryCursorCommit(token, flow.engine, false, len(events)),
-		findings: newRemoteObservationFindingsBatch(),
+		observationMode: remoteObservationModeDelta,
+		events:          events,
+		pending:         primaryCursorCommit(token, flow.engine, false, len(events), remoteObservationModeDelta),
+		findings:        newRemoteObservationFindingsBatch(),
 	}, err
 }
 
@@ -136,16 +143,18 @@ func (flow *engineFlow) executeSharedRootObservation(
 	bl *Baseline,
 	fullReconcile bool,
 ) (remoteFetchResult, error) {
-	events, token, err := flow.observeSharedRootRemote(ctx, bl, fullReconcile)
+	events, token, mode, err := flow.observeSharedRootRemote(ctx, bl, fullReconcile)
 	if err != nil && isObservationRemoteReadDenied(err) {
 		return remoteFetchResult{
-			findings: rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID, err),
+			observationMode: mode,
+			findings:        rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID),
 		}, nil
 	}
 	return remoteFetchResult{
-		events:   events,
-		pending:  primaryCursorCommit(token, flow.engine, fullReconcile, len(events)),
-		findings: newRemoteObservationFindingsBatch(),
+		observationMode: mode,
+		events:          events,
+		pending:         primaryCursorCommit(token, flow.engine, fullReconcile, len(events), mode),
+		findings:        newRemoteObservationFindingsBatch(),
 	}, err
 }
 
@@ -154,11 +163,13 @@ func primaryCursorCommit(
 	eng *Engine,
 	fullReconcile bool,
 	eventCount int,
+	mode remoteObservationMode,
 ) *pendingPrimaryCursorCommit {
-	if token == "" && !fullReconcile {
+	needsEnumerateClamp := mode == remoteObservationModeEnumerate
+	if token == "" && !fullReconcile && !needsEnumerateClamp {
 		return nil
 	}
-	if !fullReconcile && eventCount == 0 {
+	if !fullReconcile && eventCount == 0 && !needsEnumerateClamp {
 		return nil
 	}
 
@@ -172,5 +183,6 @@ func primaryCursorCommit(
 		rootID:                rootID,
 		token:                 token,
 		markFullRemoteRefresh: fullReconcile,
+		observationMode:       mode,
 	}
 }

@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	sqlSelectRemoteStateCols = `drive_id, item_id, path, parent_id, item_type,
-		hash, size, mtime, etag, content_identity, previous_path`
+	sqlSelectRemoteStateCols = `drive_id, item_id, path, item_type,
+		hash, size, mtime, etag`
 	sqlGetRemoteStateByPath = `SELECT ` + sqlSelectRemoteStateCols + `
 		FROM remote_state
 		WHERE path = ?`
@@ -59,32 +59,24 @@ func queryRemoteStateRowsWithRunner(
 
 	for rows.Next() {
 		var (
-			rawDriveID      string
-			row             RemoteStateRow
-			parentID        sql.NullString
-			hash            sql.NullString
-			size            sql.NullInt64
-			mtime           sql.NullInt64
-			etag            sql.NullString
-			contentIdentity sql.NullString
-			prevPath        sql.NullString
+			rawDriveID string
+			row        RemoteStateRow
+			hash       sql.NullString
+			size       sql.NullInt64
+			mtime      sql.NullInt64
+			etag       sql.NullString
 		)
 
 		if err := rows.Scan(
-			&rawDriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+			&rawDriveID, &row.ItemID, &row.Path, &row.ItemType,
 			&hash, &size, &mtime, &etag,
-			&contentIdentity,
-			&prevPath,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
 		}
 
 		row.DriveID = remoteStateDriveID(rawDriveID, configuredDriveID)
-		row.ParentID = parentID.String
 		row.Hash = hash.String
 		row.ETag = etag.String
-		row.ContentIdentity = contentIdentity.String
-		row.PreviousPath = prevPath.String
 
 		if size.Valid {
 			row.Size = size.Int64
@@ -157,32 +149,24 @@ func scanRemoteStateRowWithQuerier(
 	scan func(dest ...any) error,
 ) (*RemoteStateRow, error) {
 	var (
-		rawDriveID      string
-		row             RemoteStateRow
-		parentID        sql.NullString
-		hash            sql.NullString
-		size            sql.NullInt64
-		mtime           sql.NullInt64
-		etag            sql.NullString
-		contentIdentity sql.NullString
-		prevPath        sql.NullString
+		rawDriveID string
+		row        RemoteStateRow
+		hash       sql.NullString
+		size       sql.NullInt64
+		mtime      sql.NullInt64
+		etag       sql.NullString
 	)
 
 	if err := scan(
-		&rawDriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+		&rawDriveID, &row.ItemID, &row.Path, &row.ItemType,
 		&hash, &size, &mtime, &etag,
-		&contentIdentity,
-		&prevPath,
 	); err != nil {
 		return nil, err
 	}
 
 	row.DriveID = remoteStateDriveID(rawDriveID, fallbackDriveID)
-	row.ParentID = parentID.String
 	row.Hash = hash.String
 	row.ETag = etag.String
-	row.ContentIdentity = contentIdentity.String
-	row.PreviousPath = prevPath.String
 
 	if size.Valid {
 		row.Size = size.Int64

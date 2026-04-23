@@ -89,12 +89,9 @@ func appendSkippedObservationFinding(
 	}
 
 	issue := ObservationIssue{
-		Path:       item.Path,
-		DriveID:    driveID,
-		ActionType: ActionUpload,
-		IssueType:  item.Reason,
-		Error:      item.Detail,
-		FileSize:   item.FileSize,
+		Path:      item.Path,
+		DriveID:   driveID,
+		IssueType: item.Reason,
 	}
 	if item.Reason == IssueLocalReadDenied && item.BlocksReadBoundary {
 		issue.ScopeKey = SKPermLocalRead(item.Path)
@@ -105,25 +102,21 @@ func appendSkippedObservationFinding(
 
 func rootRemoteReadDeniedObservationFindingsBatch(
 	driveID driveid.ID,
-	err error,
 ) ObservationFindingsBatch {
-	return remoteReadDeniedObservationBatch(driveID, "/", SKPermRemoteRead(""), err)
+	return remoteReadDeniedObservationBatch(driveID, "/", SKPermRemoteRead(""))
 }
 
 func remoteReadDeniedObservationBatch(
 	driveID driveid.ID,
 	path string,
 	scopeKey ScopeKey,
-	err error,
 ) ObservationFindingsBatch {
 	batch := newRemoteObservationFindingsBatch()
 	batch.Issues = []ObservationIssue{{
-		Path:       path,
-		DriveID:    driveID,
-		ActionType: ActionDownload,
-		IssueType:  IssueRemoteReadDenied,
-		Error:      err.Error(),
-		ScopeKey:   scopeKey,
+		Path:      path,
+		DriveID:   driveID,
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  scopeKey,
 	}}
 	return batch
 }

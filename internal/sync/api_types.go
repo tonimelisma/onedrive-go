@@ -114,6 +114,7 @@ type engineInputs struct {
 	DriveType              string
 	AccountEmail           string
 	RootItemID             string
+	SharedRootSourceType   string
 	Fetcher                DeltaFetcher
 	SocketIOFetcher        SocketIOEndpointFetcher
 	Items                  ItemClient

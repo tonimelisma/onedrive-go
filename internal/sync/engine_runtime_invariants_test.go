@@ -17,7 +17,6 @@ func TestEngineFlow_AssertPersistedInvariants_RejectsOrphanBlockScope(t *testing
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           SKService(),
-		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFn().Add(time.Minute),
 	}))
@@ -37,7 +36,6 @@ func TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockS
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFn().Add(time.Minute),
 	}))
@@ -46,7 +44,6 @@ func TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockS
 		ActionType:    ActionUpload,
 		ConditionType: IssueRemoteWriteDenied,
 		ScopeKey:      scopeKey,
-		LastError:     "write denied",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)

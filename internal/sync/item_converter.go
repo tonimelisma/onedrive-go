@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"log/slog"
 	"path"
 	"slices"
@@ -35,6 +36,7 @@ type ItemConverter struct {
 	DriveID  driveid.ID
 	Logger   *slog.Logger
 	Stats    *ObserverCounters // nil-safe: primary observer provides this
+	Items    ItemClient        // nil-safe: sparse parent enrich is best-effort
 
 	// PathPrefix is prepended to materialized paths. Empty for the primary
 	// drive; set for shared-root observation that maps a remote subtree into a
@@ -54,12 +56,19 @@ type ItemConverter struct {
 // NewPrimaryConverter creates an ItemConverter for primary-drive or
 // separately-configured shared-root observation. Embedded shared-folder items
 // are ignored; shared content syncs only when configured as its own drive.
-func NewPrimaryConverter(baseline *Baseline, driveID driveid.ID, logger *slog.Logger, stats *ObserverCounters) *ItemConverter {
+func NewPrimaryConverter(
+	baseline *Baseline,
+	driveID driveid.ID,
+	logger *slog.Logger,
+	stats *ObserverCounters,
+	items ItemClient,
+) *ItemConverter {
 	return &ItemConverter{
 		Baseline:          baseline,
 		DriveID:           driveID,
 		Logger:            logger,
 		Stats:             stats,
+		Items:             items,
 		EnableVaultFilter: true,
 	}
 }
@@ -67,7 +76,9 @@ func NewPrimaryConverter(baseline *Baseline, driveID driveid.ID, logger *slog.Lo
 // ConvertItems converts a batch of graph.Items into ChangeEvents using
 // two-pass processing: register all items in inflight, then classify all.
 // Used by shared-root observation where all items arrive in a single batch.
-func (c *ItemConverter) ConvertItems(items []graph.Item) []ChangeEvent {
+func (c *ItemConverter) ConvertItems(ctx context.Context, items []graph.Item) []ChangeEvent {
+	c.enrichSparseParentRefs(ctx, items)
+
 	inflight := make(map[string]InflightParent, len(items))
 
 	// Pass 1: register all items so parent-chain walks see every item.
@@ -85,6 +96,68 @@ func (c *ItemConverter) ConvertItems(items []graph.Item) []ChangeEvent {
 	}
 
 	return events
+}
+
+func (c *ItemConverter) enrichSparseParentRefs(ctx context.Context, items []graph.Item) {
+	if c == nil || c.Items == nil || len(items) == 0 {
+		return
+	}
+
+	seen := make(map[string]struct{}, len(items))
+	for i := range items {
+		item := &items[i]
+		if !c.shouldEnrichSparseParent(item) {
+			continue
+		}
+		if _, ok := seen[item.ID]; ok {
+			continue
+		}
+		seen[item.ID] = struct{}{}
+
+		itemDriveID := c.resolveItemDriveID(item)
+		enriched, err := c.Items.GetItem(ctx, itemDriveID, item.ID)
+		if err != nil {
+			if c.Logger != nil {
+				c.Logger.Debug("sparse remote item parent enrich failed",
+					slog.String("item_id", item.ID),
+					slog.String("drive_id", itemDriveID.String()),
+					slog.String("error", err.Error()),
+				)
+			}
+
+			continue
+		}
+		if enriched == nil || enriched.ParentID == "" {
+			continue
+		}
+
+		for j := range items {
+			if items[j].ID != item.ID || items[j].ParentID != "" {
+				continue
+			}
+
+			items[j].ParentID = enriched.ParentID
+			if items[j].ParentDriveID.IsZero() {
+				items[j].ParentDriveID = enriched.ParentDriveID
+			}
+		}
+	}
+}
+
+func (c *ItemConverter) shouldEnrichSparseParent(item *graph.Item) bool {
+	if c == nil || c.Items == nil || item == nil {
+		return false
+	}
+	if item.IsDeleted || item.IsRoot || item.ID == "" || item.ParentID != "" {
+		return false
+	}
+
+	if c.Baseline == nil {
+		return true
+	}
+
+	existing, found := c.Baseline.GetByID(item.ID)
+	return !found || existing.ParentID == ""
 }
 
 // registerInflight adds an item to the inflight parent map without

@@ -36,13 +36,7 @@ func TestDescribeStatusCondition_CoversFamiliesAndFallback(t *testing.T) {
 func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 	t.Parallel()
 
-	lastSync := time.Date(2026, time.April, 18, 12, 34, 56, 0, time.UTC)
 	snapshot := &syncengine.DriveStatusSnapshot{
-		SyncStatus: syncengine.SyncStatus{
-			LastSyncedAt:       lastSync.UnixNano(),
-			LastSyncDurationMs: 987,
-			LastError:          "sync: transient timeout",
-		},
 		BaselineEntryCount: 11,
 		RemoteDriftItems:   2,
 		RetryingItems:      3,
@@ -59,13 +53,11 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 		BlockScopes: []*syncengine.BlockScope{
 			{
 				Key:           syncengine.SKPermRemoteWrite("Shared/A"),
-				BlockedAt:     time.Unix(0, 0).UTC(),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
 			{
 				Key:           syncengine.SKPermRemoteWrite("Shared/B"),
-				BlockedAt:     time.Unix(0, 0).UTC(),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
@@ -84,12 +76,9 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 
 	info := buildSyncStateInfo(snapshot, false, 1)
 	require.Len(t, info.Conditions, 3)
-	assert.Equal(t, lastSync.Format(time.RFC3339), info.LastSyncTime)
-	assert.Equal(t, "987", info.LastSyncDuration)
 	assert.Equal(t, 11, info.FileCount)
 	assert.Equal(t, 2, info.RemoteDrift)
 	assert.Equal(t, 3, info.Retrying)
-	assert.Equal(t, "sync: transient timeout", info.LastError)
 	assert.Equal(t, 10, info.ConditionCount)
 	assert.Equal(t, 1, info.ExamplesLimit)
 	assert.False(t, info.Verbose)
@@ -118,7 +107,6 @@ func TestBuildStatusConditionJSON_UsesCliOwnedPresentationBoundary(t *testing.T)
 		BlockScopes: []*syncengine.BlockScope{
 			{
 				Key:           syncengine.SKPermRemoteWrite("Shared/Docs"),
-				BlockedAt:     time.Unix(0, 0).UTC(),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
@@ -153,8 +141,8 @@ func TestBuildSyncStateInfo_NilSnapshotUsesDefaults(t *testing.T) {
 	assert.Nil(t, info.Conditions)
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusLastSyncLine(&buf, &info))
-	assert.Equal(t, "Last sync: never", string(bytes.TrimSpace(buf.Bytes())))
+	require.NoError(t, printSyncStateText(&buf, &info, false))
+	assert.Contains(t, buf.String(), "No active conditions.")
 }
 
 func TestStatusScopeKindFromScopeKey_CoversKinds(t *testing.T) {
@@ -211,7 +199,6 @@ func TestProjectStoredConditionGroups_MergesScopeFamiliesAndDedupesPaths(t *test
 		BlockScopes: []*syncengine.BlockScope{
 			{
 				Key:           syncengine.SKPermRemoteWrite("Shared/Docs"),
-				BlockedAt:     time.Unix(0, 0).UTC(),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
@@ -424,13 +411,10 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 				SyncDir:     "",
 				State:       driveStateReady,
 				SyncState: &syncStateInfo{
-					LastSyncTime:     "2026-04-18T12:34:56Z",
-					LastSyncDuration: "123",
-					FileCount:        7,
-					ConditionCount:   1,
-					RemoteDrift:      2,
-					Retrying:         1,
-					LastError:        "sync: timeout",
+					FileCount:      7,
+					ConditionCount: 1,
+					RemoteDrift:    2,
+					Retrying:       1,
 					Conditions: []statusConditionJSON{
 						{
 							Title:  "INVALID FILENAME",
@@ -461,13 +445,10 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 	assert.Contains(t, output, "      Quota: 1.0 KB / 2.0 KB")
 	assert.Contains(t, output, "  Documents (business:alice@example.com)")
 	assert.Contains(t, output, "    Sync dir:  (not set)")
-	assert.Contains(t, output, "    Last sync: 2026-04-18T12:34:56Z")
-	assert.Contains(t, output, "    Duration:  123ms")
 	assert.Contains(t, output, "    Files:     7")
 	assert.Contains(t, output, "    Remote drift: 2 items")
 	assert.Contains(t, output, "    Conditions: 1")
 	assert.Contains(t, output, "    Retrying:  1 items")
-	assert.Contains(t, output, "    Last error: sync: timeout")
 }
 
 func TestPrintStatusNextLine_EmptyHintProducesNoOutput(t *testing.T) {
@@ -501,7 +482,6 @@ func TestPrintStatusText_RendersMultiAccountSummary(t *testing.T) {
 					State:       driveStateReady,
 					SyncDir:     "/sync/ready",
 					SyncState: &syncStateInfo{
-						LastSyncTime:   "2026-04-19T09:00:00Z",
 						FileCount:      5,
 						ConditionCount: 2,
 						RemoteDrift:    1,

@@ -19,12 +19,7 @@ func (e *Engine) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, err
 		return 0, fmt.Errorf("sync: reading observation state for remote refresh cadence: %w", err)
 	}
 	if state.NextFullRemoteRefreshAt == 0 {
-		if state.LastFullRemoteRefreshAt == 0 {
-			return 0, nil
-		}
-		state.NextFullRemoteRefreshAt = time.Unix(0, state.LastFullRemoteRefreshAt).
-			Add(remoteRefreshIntervalForMode(state.RemoteRefreshMode)).
-			UnixNano()
+		return 0, nil
 	}
 
 	dueAt := time.Unix(0, state.NextFullRemoteRefreshAt)
@@ -62,7 +57,6 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("sync: reading observation state for remote refresh timer: %w", err)
 	}
-	interval := remoteRefreshIntervalForMode(state.RemoteRefreshMode)
 
 	rt.resetRefreshTimer(rt.engine.afterFunc(delay, func() {
 		select {
@@ -73,7 +67,7 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 
 	rt.engine.logger.Info("full remote refresh armed",
 		slog.Duration("delay", delay),
-		slog.Duration("interval", interval),
+		slog.Time("due_at", time.Unix(0, state.NextFullRemoteRefreshAt)),
 	)
 
 	return nil

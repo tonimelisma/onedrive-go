@@ -204,7 +204,7 @@ func TestStatusPerfOverlayLookupAndPersistentFlags(t *testing.T) {
 	assert.Equal(t, statusPerfUnavailableCollecting, reason)
 
 	state := &syncStateInfo{
-		LastSyncTime: "yesterday",
+		FileCount: 1,
 	}
 	assert.True(t, state.hasPersistentSummaryData())
 	assert.True(t, state.hasPersistentStatusData())

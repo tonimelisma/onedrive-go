@@ -250,8 +250,6 @@ func TestPhase0_RunWatch_BootstrapQuiescesWithFutureHeldRetryWork(t *testing.T) 
 		ActionType:   ActionUpload,
 		AttemptCount: 1,
 		NextRetryAt:  now.Add(time.Hour).UnixNano(),
-		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:   now.UnixNano(),
 	}))
 
 	recorder := attachDebugEventRecorder(eng)
@@ -319,18 +317,14 @@ func TestPhase0_RunWatch_DueTrialDrainsDuringBootstrapBeforeObserversStart(t *te
 	writeLocalFile(t, syncRoot, "trial-held.txt", "trial upload")
 	now := eng.nowFunc()
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
-		Path:          "trial-held.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-		AttemptCount:  1,
-		FirstSeenAt:   now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:    now.UnixNano(),
+		Path:         "trial-held.txt",
+		ActionType:   ActionUpload,
+		ScopeKey:     scopeKey,
+		Blocked:      true,
+		AttemptCount: 1,
 	}))
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     now.Add(-time.Minute),
 		TrialInterval: 10 * time.Second,
 		NextTrialAt:   now.Add(-time.Second),
 	}))
@@ -531,7 +525,6 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
-		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 30 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(30 * time.Millisecond),
 	})
@@ -595,7 +588,6 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           testThrottleScope(),
-		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
 	})
@@ -604,7 +596,6 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		ActionType:    ActionDownload,
 		ConditionType: IssueRateLimited,
 		ScopeKey:      testThrottleScope(),
-		LastError:     "rate limited",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
@@ -658,18 +649,14 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, "docs", "file.txt"), []byte("ok"), 0o600))
 
 	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
-		Path:       "docs/file.txt",
-		DriveID:    eng.driveID,
-		ActionType: ActionUpload,
-		IssueType:  IssueLocalReadDenied,
-		Error:      "permission denied",
+		Path:      "docs/file.txt",
+		DriveID:   eng.driveID,
+		IssueType: IssueLocalReadDenied,
 	})
 
 	retryRow := retryWorkIdentityForWork("docs/file.txt", "", ActionUpload)
 	retryRow.AttemptCount = 3
 	retryRow.NextRetryAt = eng.nowFn().Add(time.Minute).UnixNano()
-	retryRow.FirstSeenAt = eng.nowFn().UnixNano()
-	retryRow.LastSeenAt = eng.nowFn().UnixNano()
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &retryRow))
 
 	bl, err := eng.baseline.Load(ctx)

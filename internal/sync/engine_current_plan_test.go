@@ -32,12 +32,10 @@ func seedStaleRetryAndBlockScopeForCurrentPlanTest(t *testing.T, ctx context.Con
 		Path:          "stale.txt",
 		ActionType:    ActionUpload,
 		ConditionType: IssueServiceOutage,
-		LastError:     "stale retry row",
 	}, func(int) time.Duration { return time.Minute })
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
-		BlockedAt:     eng.nowFunc(),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}))
@@ -96,13 +94,11 @@ func TestRunStartupStage_OneShotAndWatchShareStartupNormalization(t *testing.T) 
 
 	require.NoError(t, oneShotEng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
-		BlockedAt:     oneShotEng.nowFunc(),
 		TrialInterval: time.Minute,
 		NextTrialAt:   oneShotEng.nowFunc().Add(time.Minute),
 	}))
 	require.NoError(t, watchEng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
-		BlockedAt:     watchEng.nowFunc(),
 		TrialInterval: time.Minute,
 		NextTrialAt:   watchEng.nowFunc().Add(time.Minute),
 	}))

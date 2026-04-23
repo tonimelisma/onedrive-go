@@ -296,7 +296,6 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 				Remote: &RemoteState{
 					ItemID:   "folder-doc",
 					DriveID:  driveid.New("0000000000000001"),
-					ParentID: "root",
 					ItemType: ItemTypeFolder,
 				},
 			},
@@ -344,7 +343,6 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 				Remote: &RemoteState{
 					ItemID:   "newdir-id",
 					DriveID:  driveid.New("0000000000000001"),
-					ParentID: "root",
 					ItemType: ItemTypeFolder,
 				},
 			},
@@ -356,11 +354,10 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 			ItemID:  "file-id",
 			View: &PathView{
 				Remote: &RemoteState{
-					ItemID:   "file-id",
-					DriveID:  driveid.New("0000000000000001"),
-					ParentID: "newdir-id",
-					Size:     12,
-					Hash:     "testhash",
+					ItemID:  "file-id",
+					DriveID: driveid.New("0000000000000001"),
+					Size:    12,
+					Hash:    "testhash",
 				},
 			},
 		},
@@ -573,7 +570,6 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 				Remote: &RemoteState{
 					ItemID:   "uploads-folder-id",
 					DriveID:  driveid.New("0000000000000001"),
-					ParentID: "root",
 					ItemType: ItemTypeFolder,
 				},
 			},

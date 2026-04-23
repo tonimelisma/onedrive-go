@@ -42,7 +42,7 @@ func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsRetryWork(t
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
 	assert.Equal(t, "invalid.txt", retryRows[0].Path)
-	assert.Equal(t, IssueInvalidFilename, retryRows[0].ConditionType)
+	assert.True(t, retryRows[0].ScopeKey.IsZero())
 }
 
 // Validates: R-2.10.5
@@ -132,14 +132,10 @@ func TestEngineFlow_ApplyCompletionSuccess_ClearsRetryWorkAndAdmitsDependents(t 
 	now := eng.nowFn()
 
 	row := RetryWorkRow{
-		Path:          "sync.txt",
-		ActionType:    ActionDownload,
-		ConditionType: IssueServiceOutage,
-		AttemptCount:  1,
-		NextRetryAt:   now.Add(time.Minute).UnixNano(),
-		LastError:     "retry later",
-		FirstSeenAt:   now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:    now.UnixNano(),
+		Path:         "sync.txt",
+		ActionType:   ActionDownload,
+		AttemptCount: 1,
+		NextRetryAt:  now.Add(time.Minute).UnixNano(),
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
@@ -181,18 +177,15 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelaye
 		name              string
 		actionType        ActionType
 		failureCapability PermissionCapability
-		wantIssueType     string
 	}{
 		{
-			name:          "local read denied",
-			actionType:    ActionDownload,
-			wantIssueType: IssueLocalReadDenied,
+			name:       "local read denied",
+			actionType: ActionDownload,
 		},
 		{
 			name:              "local write denied",
 			actionType:        ActionUpload,
 			failureCapability: PermissionCapabilityLocalWrite,
-			wantIssueType:     IssueLocalWriteDenied,
 		},
 	}
 
@@ -224,7 +217,7 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelaye
 			retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 			require.Len(t, retryRows, 1)
 			assert.Equal(t, "accessible/file.txt", retryRows[0].Path)
-			assert.Equal(t, tc.wantIssueType, retryRows[0].ConditionType)
+			assert.True(t, retryRows[0].ScopeKey.IsZero(), "file-level permission retries no longer persist condition_type")
 			assert.False(t, retryRows[0].Blocked)
 			assert.Equal(t, 1, retryRows[0].AttemptCount)
 			assert.Greater(t, retryRows[0].NextRetryAt, now.UnixNano())
@@ -332,7 +325,6 @@ func TestEngineFlow_ProcessNormalDecision_KnownRemoteBoundaryNoOpDoesNotPersistO
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFunc().Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc(),
 	}))
@@ -416,21 +408,16 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionOutcomeFallsBackToRe
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFunc().Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc(),
 	})
 
 	blockedRow := &RetryWorkRow{
-		Path:          "file.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-		AttemptCount:  1,
-		LastError:     "blocked",
-		FirstSeenAt:   1,
-		LastSeenAt:    2,
+		Path:         "file.txt",
+		ActionType:   ActionUpload,
+		ScopeKey:     scopeKey,
+		Blocked:      true,
+		AttemptCount: 1,
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blockedRow))
 	flow.retryRowsByKey[retryWorkKeyForRetryWork(blockedRow)] = *blockedRow
@@ -489,20 +476,15 @@ func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedSco
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           trialScopeKey,
-		BlockedAt:     eng.nowFunc().Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc(),
 	})
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
-		Path:          "file.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-		ScopeKey:      trialScopeKey,
-		Blocked:       true,
-		AttemptCount:  1,
-		LastError:     "blocked",
-		FirstSeenAt:   1,
-		LastSeenAt:    2,
+		Path:         "file.txt",
+		ActionType:   ActionUpload,
+		ScopeKey:     trialScopeKey,
+		Blocked:      true,
+		AttemptCount: 1,
 	}))
 
 	current := rt.depGraph.Add(&Action{
@@ -559,13 +541,12 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           trialScopeKey,
-		BlockedAt:     eng.nowFunc().Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc(),
 	})
 
-	upsertBlockedRetryWorkForTest(t, eng, "file.txt", trialScopeKey, 1, 2)
-	upsertBlockedRetryWorkForTest(t, eng, "other.txt", trialScopeKey, 3, 4)
+	upsertBlockedRetryWorkForTest(t, eng, "file.txt", trialScopeKey)
+	upsertBlockedRetryWorkForTest(t, eng, "other.txt", trialScopeKey)
 
 	other := rt.depGraph.Add(&Action{
 		Type:    ActionUpload,
@@ -628,19 +609,15 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 	assert.Equal(t, eng.nowFunc().Add(time.Minute), blockScopes[throttleScopeKey].NextTrialAt)
 }
 
-func upsertBlockedRetryWorkForTest(t *testing.T, eng *testEngine, path string, scopeKey ScopeKey, firstSeenAt int64, lastSeenAt int64) {
+func upsertBlockedRetryWorkForTest(t *testing.T, eng *testEngine, path string, scopeKey ScopeKey) {
 	t.Helper()
 
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
-		Path:          path,
-		ActionType:    ActionUpload,
-		ConditionType: IssueRateLimited,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-		AttemptCount:  1,
-		LastError:     "blocked",
-		FirstSeenAt:   firstSeenAt,
-		LastSeenAt:    lastSeenAt,
+		Path:         path,
+		ActionType:   ActionUpload,
+		ScopeKey:     scopeKey,
+		Blocked:      true,
+		AttemptCount: 1,
 	}))
 }
 
@@ -683,7 +660,6 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFunc().Add(-time.Minute),
 		NextTrialAt:   eng.nowFunc().Add(-time.Second),
 		TrialInterval: time.Minute,
 	})

@@ -452,10 +452,8 @@ func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
 	}
 
 	syncState := &syncStateInfo{
-		LastSyncTime:     "2026-03-02T10:30:00Z",
-		LastSyncDuration: "1500",
-		FileCount:        45,
-		ConditionCount:   2,
+		FileCount:      45,
+		ConditionCount: 2,
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
@@ -469,8 +467,6 @@ func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
 	require.NotNil(t, accounts[0].Drives[0].SyncState)
 
 	ss := accounts[0].Drives[0].SyncState
-	assert.Equal(t, "2026-03-02T10:30:00Z", ss.LastSyncTime)
-	assert.Equal(t, "1500", ss.LastSyncDuration)
 	assert.Equal(t, 45, ss.FileCount)
 	assert.Equal(t, 2, ss.ConditionCount)
 }
@@ -499,7 +495,6 @@ func TestQuerySyncState_NoDB(t *testing.T) {
 
 	info := querySyncState("/nonexistent/path/state.db", logger)
 	require.NotNil(t, info)
-	assert.Empty(t, info.LastSyncTime)
 	assert.Zero(t, info.FileCount)
 }
 
@@ -515,12 +510,11 @@ func TestQuerySyncState_EmptyDB(t *testing.T) {
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
-	assert.Empty(t, info.LastSyncTime)
 	assert.Equal(t, 0, info.FileCount)
 	assert.Equal(t, 0, info.ConditionCount)
 }
 
-func TestQuerySyncState_WithMetadata(t *testing.T) {
+func TestQuerySyncState_WithBaselineEntries(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.DiscardHandler)
@@ -529,19 +523,11 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 
 	createTestStateDB(t, dbPath)
 
-	// Insert sync metadata.
 	db, err := sql.Open("sqlite", "file:"+dbPath)
 	require.NoError(t, err)
 	defer db.Close()
 
 	ctx := t.Context()
-
-	_, err = db.ExecContext(ctx, `UPDATE sync_status
-		SET last_synced_at = ?, last_sync_duration_ms = 1500, last_succeeded_count = 0, last_failed_count = 0, last_error = ''
-		WHERE singleton_id = 1`,
-		time.Date(2026, 3, 2, 10, 30, 0, 0, time.UTC).UnixNano(),
-	)
-	require.NoError(t, err)
 
 	// Insert a baseline entry.
 	_, err = db.ExecContext(ctx, `INSERT INTO baseline (path, item_id, parent_id, item_type)
@@ -552,9 +538,6 @@ func TestQuerySyncState_WithMetadata(t *testing.T) {
 
 	info := querySyncState(dbPath, logger)
 	require.NotNil(t, info)
-	assert.Equal(t, "2026-03-02T10:30:00Z", info.LastSyncTime)
-	assert.Equal(t, "1500", info.LastSyncDuration)
-	assert.Empty(t, info.LastError)
 	assert.Equal(t, 1, info.FileCount)
 	assert.Zero(t, info.ConditionCount)
 }
@@ -575,11 +558,11 @@ func TestQuerySyncState_RemoteDriftAndConditions(t *testing.T) {
 	testDriveID := driveid.New("test-drive-id")
 
 	// Insert remote_state rows with mixed drift shapes.
-	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, item_id, parent_id, item_type) VALUES
-		('/a.txt', 'i1', 'root', 'file'),
-		('/b.txt', 'i2', 'root', 'file'),
-		('/c.txt', 'i3', 'root', 'file'),
-		('/e.txt', 'i5', 'root', 'file')`)
+	_, err = db.ExecContext(ctx, `INSERT INTO remote_state (path, item_id, item_type) VALUES
+		('/a.txt', 'i1', 'file'),
+		('/b.txt', 'i2', 'file'),
+		('/c.txt', 'i3', 'file'),
+		('/e.txt', 'i5', 'file')`)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `INSERT INTO baseline (item_id, path, parent_id, item_type, remote_hash, remote_mtime) VALUES
 		('i1', '/a.txt', 'root', 'file', '', 0),
@@ -598,57 +581,48 @@ func TestQuerySyncState_RemoteDriftAndConditions(t *testing.T) {
 		Path:          "/x.txt",
 		ActionType:    syncengine.ActionUpload,
 		ConditionType: syncengine.IssueServiceOutage,
-		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
 		Path:          "/x.txt",
 		ActionType:    syncengine.ActionUpload,
 		ConditionType: syncengine.IssueServiceOutage,
-		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
 		Path:          "/x.txt",
 		ActionType:    syncengine.ActionUpload,
 		ConditionType: syncengine.IssueServiceOutage,
-		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
 		Path:          "/y.txt",
 		ActionType:    syncengine.ActionUpload,
 		ConditionType: syncengine.IssueServiceOutage,
-		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
 		Path:          "/y.txt",
 		ActionType:    syncengine.ActionUpload,
 		ConditionType: syncengine.IssueServiceOutage,
-		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
 		Path:          "/y.txt",
 		ActionType:    syncengine.ActionUpload,
 		ConditionType: syncengine.IssueServiceOutage,
-		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
 		Path:          "/y.txt",
 		ActionType:    syncengine.ActionUpload,
 		ConditionType: syncengine.IssueServiceOutage,
-		LastError:     "temporary",
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	seedObservationIssueForStatusTest(t, store, &syncengine.ObservationIssue{
-		Path:       "/z.txt",
-		DriveID:    testDriveID,
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueInvalidFilename,
-		Error:      "invalid filename",
+		Path:      "/z.txt",
+		DriveID:   testDriveID,
+		IssueType: syncengine.IssueInvalidFilename,
 	})
 
 	info := querySyncState(dbPath, logger)
@@ -682,7 +656,6 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 	scopeKey := syncengine.SKPermRemoteWrite("Shared/Docs")
 	require.NoError(t, store.UpsertBlockScope(ctx, &syncengine.BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     time.Unix(0, 0).UTC(),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 	}))
@@ -691,7 +664,6 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 		ActionType:    syncengine.ActionUpload,
 		ConditionType: syncengine.IssueRemoteWriteDenied,
 		ScopeKey:      scopeKey,
-		LastError:     "blocked",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
@@ -700,16 +672,13 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 		ActionType:    syncengine.ActionUpload,
 		ConditionType: syncengine.IssueRemoteWriteDenied,
 		ScopeKey:      scopeKey,
-		LastError:     "blocked",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
 	seedObservationIssueForStatusTest(t, store, &syncengine.ObservationIssue{
-		Path:       "/actionable.txt",
-		DriveID:    driveid.New("test-drive-id"),
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueInvalidFilename,
-		Error:      "invalid filename",
+		Path:      "/actionable.txt",
+		DriveID:   driveid.New("test-drive-id"),
+		IssueType: syncengine.IssueInvalidFilename,
 	})
 
 	info := querySyncState(dbPath, logger)
@@ -783,15 +752,12 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 
 	scopeKey := syncengine.SKPermRemoteWrite("Shared/Team Docs")
 	seedObservationIssueForStatusTest(t, store, &syncengine.ObservationIssue{
-		Path:       "/invalid:name.txt",
-		DriveID:    driveid.New("test-drive-id"),
-		ActionType: syncengine.ActionUpload,
-		IssueType:  syncengine.IssueInvalidFilename,
-		Error:      "invalid filename",
+		Path:      "/invalid:name.txt",
+		DriveID:   driveid.New("test-drive-id"),
+		IssueType: syncengine.IssueInvalidFilename,
 	})
 	require.NoError(t, store.UpsertBlockScope(ctx, &syncengine.BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     time.Unix(0, 0).UTC(),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 	}))
@@ -800,7 +766,6 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 		ActionType:    syncengine.ActionUpload,
 		ConditionType: syncengine.IssueRemoteWriteDenied,
 		ScopeKey:      scopeKey,
-		LastError:     "blocked",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
@@ -809,7 +774,6 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 		ActionType:    syncengine.ActionUpload,
 		ConditionType: syncengine.IssueRemoteWriteDenied,
 		ScopeKey:      scopeKey,
-		LastError:     "blocked",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
@@ -1158,36 +1122,7 @@ func TestPrintStatusText_SyncStateNever(t *testing.T) {
 	require.NoError(t, printStatusText(&buf, accounts, false))
 
 	output := buf.String()
-	assert.Contains(t, output, "Last sync: never")
-}
-
-func TestPrintStatusText_SyncStateWithError(t *testing.T) {
-	t.Parallel()
-
-	accounts := []statusAccount{
-		{
-			Email:     "bob@example.com",
-			DriveType: "personal",
-			AuthState: authStateReady,
-			Drives: []statusDrive{
-				{
-					CanonicalID: "personal:bob@example.com",
-					SyncDir:     "~/OneDrive",
-					State:       driveStateReady,
-					SyncState: &syncStateInfo{
-						LastSyncTime: "2026-03-02T10:30:00Z",
-						LastError:    "network timeout",
-					},
-				},
-			},
-		},
-	}
-
-	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, accounts, false))
-
-	output := buf.String()
-	assert.Contains(t, output, "Last error: network timeout")
+	assert.Contains(t, output, "No active conditions.")
 }
 
 func TestPrintStatusText_EmptySyncDir(t *testing.T) {
@@ -1261,7 +1196,6 @@ func TestPrintSyncStateText_WithPendingAndConditions(t *testing.T) {
 	t.Parallel()
 
 	ss := &syncStateInfo{
-		LastSyncTime:   "2026-03-02T10:30:00Z",
 		FileCount:      45,
 		ConditionCount: 0,
 		RemoteDrift:    3,
@@ -1388,7 +1322,6 @@ func TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState(t *testing.
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
 	_, syncState := requireSingleStatusDriveJSON(t, decoded, cid.String())
 	require.NotNil(t, syncState)
-	assert.Empty(t, syncState.LastSyncTime)
 	assert.Zero(t, syncState.FileCount)
 }
 

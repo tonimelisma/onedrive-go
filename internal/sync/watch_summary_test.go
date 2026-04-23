@@ -47,13 +47,11 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 		BlockScopes: []*BlockScope{
 			{
 				Key:           SKPermRemoteWrite("Shared/Docs"),
-				BlockedAt:     time.Unix(0, 0).UTC(),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
 			{
 				Key:           SKService(),
-				BlockedAt:     time.Unix(0, 0).UTC(),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},

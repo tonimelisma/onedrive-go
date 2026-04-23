@@ -24,7 +24,6 @@ func (rt *watchRuntime) runSteadyStateReplan(
 		return fmt.Errorf("sync: steady-state replan requires loaded baseline")
 	}
 
-	rt.beginSyncStatusBatch(rt.engine.nowFunc())
 	rt.engine.logger.Info("processing watch steady-state replan",
 		slog.Bool("dirty_signal", true),
 		slog.Bool("full_refresh", batch.FullRefresh),
@@ -50,10 +49,8 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	}
 	rt.replaceOutbox(dispatch)
 	if !dispatched {
-		rt.finishSyncStatusBatch(ctx, p.mode)
 		return nil
 	}
-	rt.maybeFinishSyncStatusBatch(ctx, p.mode, rt.currentOutbox())
 
 	return nil
 }
@@ -63,7 +60,6 @@ func (rt *watchRuntime) finishSteadyStateReplanStep(
 	step string,
 	err error,
 ) error {
-	rt.clearSyncStatusBatch()
 	if isWatchShutdownError(ctx, err) {
 		rt.engine.logger.Debug("steady-state replan stopped by shutdown",
 			slog.String("step", step),
@@ -79,7 +75,6 @@ func (rt *watchRuntime) handleSteadyStateLocalRefreshError(
 	ctx context.Context,
 	err error,
 ) error {
-	rt.clearSyncStatusBatch()
 	if isWatchShutdownError(ctx, err) {
 		return nil
 	}

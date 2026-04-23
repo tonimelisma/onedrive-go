@@ -10,7 +10,6 @@ func (rt *watchRuntime) beginWatchDrain(
 	p *watchPipeline,
 ) {
 	if rt.enterDraining() {
-		rt.clearSyncStatusBatch()
 		rt.stopDrainTimers()
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventShutdownStarted})
 		rt.engine.logger.Info("graceful shutdown: sealing new work admission",

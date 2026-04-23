@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -271,6 +270,7 @@ func (flow *engineFlow) observeRemote(ctx context.Context, bl *Baseline) ([]Chan
 	savedToken := state.Cursor
 
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
+	obs.SetItemClient(eng.itemsClient)
 
 	events, token, err := obs.FullDelta(ctx, savedToken)
 	if err != nil {
@@ -321,23 +321,9 @@ func (flow *engineFlow) commitCurrentLocalSnapshot(
 		return nil
 	}
 
-	observedAt := flow.engine.nowFunc().UnixNano()
 	rows := buildLocalStateRows(localResult)
 	if err := flow.engine.baseline.ReplaceLocalState(ctx, rows); err != nil {
 		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
-	}
-	mode := localRefreshModeWatchHealthy
-	state, err := flow.engine.baseline.ReadObservationState(ctx)
-	if err == nil && state != nil {
-		mode = state.LocalRefreshMode
-	}
-	if err := flow.engine.baseline.MarkFullLocalRefresh(
-		ctx,
-		flow.engine.driveID,
-		time.Unix(0, observedAt),
-		mode,
-	); err != nil {
-		return fmt.Errorf("sync: marking full local refresh: %w", err)
 	}
 
 	return nil

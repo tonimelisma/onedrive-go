@@ -6,13 +6,10 @@ Account: Alice Example (alice@example.com) [personal]
   Alice Personal (personal:alice@example.com)
     Sync dir:  /Users/alice/OneDrive
     State:     ready
-    Last sync: 2026-04-03T10:30:00Z
-    Duration:  1500ms
     Files:     42
     Remote drift: 2 items
     Conditions: 3
     Retrying:  1 items
-    Last error: sync: network timeout
 
     CONDITIONS
     INVALID FILENAME (1 item)

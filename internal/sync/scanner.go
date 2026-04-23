@@ -270,12 +270,11 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 				if existing, found := o.Baseline.GetByPath(job.dbRelPath); found && hash == existing.LocalHash {
 					mu.Lock()
 					rows = append(rows, LocalStateRow{
-						Path:            job.dbRelPath,
-						ItemType:        ItemTypeFile,
-						Hash:            hash,
-						Size:            job.size,
-						Mtime:           job.mtime,
-						ContentIdentity: hash,
+						Path:     job.dbRelPath,
+						ItemType: ItemTypeFile,
+						Hash:     hash,
+						Size:     job.size,
+						Mtime:    job.mtime,
 					})
 					mu.Unlock()
 					return nil
@@ -302,12 +301,11 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 			mu.Lock()
 			events = append(events, ev)
 			rows = append(rows, LocalStateRow{
-				Path:            job.dbRelPath,
-				ItemType:        itemType,
-				Hash:            hash,
-				Size:            job.size,
-				Mtime:           job.mtime,
-				ContentIdentity: hash,
+				Path:     job.dbRelPath,
+				ItemType: itemType,
+				Hash:     hash,
+				Size:     job.size,
+				Mtime:    job.mtime,
 			})
 			mu.Unlock()
 
@@ -567,12 +565,11 @@ func (o *LocalObserver) classifyFileChange(
 		o.Logger.Debug("fast path: mtime+size match, skipping hash",
 			slog.String("path", dbRelPath))
 		currentRows[dbRelPath] = LocalStateRow{
-			Path:            dbRelPath,
-			ItemType:        ItemTypeFile,
-			Hash:            base.LocalHash,
-			Size:            currentSize,
-			Mtime:           currentMtime,
-			ContentIdentity: base.LocalHash,
+			Path:     dbRelPath,
+			ItemType: ItemTypeFile,
+			Hash:     base.LocalHash,
+			Size:     currentSize,
+			Mtime:    currentMtime,
 		}
 
 		return nil

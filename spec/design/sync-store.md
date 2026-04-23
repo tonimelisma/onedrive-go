@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/block_scope_rows.go, internal/sync/store_sync_status.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_projection.go, internal/sync/blocked_retry_projection.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/scope_block.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/block_scope_rows.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_projection.go, internal/sync/blocked_retry_projection.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/scope_block.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
 Implements: R-2.5 [designed], R-2.7 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -17,11 +17,11 @@ architecture it owns:
 - retry-work persistence
 - block-scope persistence
 - observation resume/cadence persistence
-- product-facing sync-status persistence
 - state-DB diagnosis and explicit reset support
 - read-only raw row access used by `status`
 
-It does not own planning policy, execution policy, or a competing status model.
+It does not own planning policy, execution policy, or a competing history/status
+model.
 
 ## Ownership Contract
 
@@ -121,8 +121,9 @@ second durable table. Admission, completion, held-release, and
 permission-driven runtime mutation all act on that same durable lane; the
 store owns the rows, while the engine owns the policy around them. Blocked
 rows are also canonicalized engine-side: all runtime paths persist
-`blocked=true`, the scope-derived `condition_type`, the exact `scope_key`, and
-the canonical `"blocked by scope: <scope>"` durable message.
+`blocked=true`, the exact `scope_key`, and the next due retry/trial time.
+Condition family, HTTP status, and error text remain runtime/log concerns
+instead of durable retry-row columns.
 Current-truth loading, planner-input loading, and dry-run scratch preparation
 for that policy live in `engine_current_plan.go`, while startup/runtime
 reconcile and admission live in `engine_startup.go` and
@@ -152,7 +153,6 @@ truth availability on their own.
 
 Administrative write helpers are split by authority:
 
-- `store_sync_status.go` owns product-facing sync-status writes
 - store compatibility helpers diagnose incompatible DBs
 - `store_reset.go` owns explicit delete-and-recreate reset
 
@@ -161,7 +161,7 @@ Administrative write helpers are split by authority:
 Read-only store helpers are intentionally narrow:
 
 - raw/narrow reads for `remote_state`, `local_state`, `baseline`,
-  `observation_state`, `sync_status`
+  `observation_state`
 - raw/narrow reads for `observation_issues`
 - raw/narrow reads for `retry_work`
 - raw/narrow reads for `block_scopes`
@@ -172,8 +172,15 @@ Read-only store helpers are intentionally narrow:
 itself. Fallback configured drive IDs exist only for legacy or absent durable
 state and must not overwrite a stored row owner on read.
 
-`status` should compose its output directly from those authorities. The store
-must not own grouping or rendering policy for `status` or watch summaries.
+`remote_state` intentionally does not persist remote parent ancestry. Sparse
+path recovery during observation still uses baseline parent context, and
+successful execution reconstructs outcome parent IDs from live Graph results or
+baseline path resolution before baseline publication.
+
+`status` composes directly from those authorities plus counts derived from
+`baseline` and `remote_state`. The store must not own grouping or rendering
+policy for `status` or watch summaries, and it no longer persists a separate
+last-sync history table.
 Shared condition-family grouping and ordering belong to
 `internal/sync/condition_keys.go`, while raw grouped projection over durable
 authorities belongs to `internal/sync/condition_projection.go`; neither
@@ -199,7 +206,6 @@ still-blocked scope may delete the blocked work under it.
 `block_scopes` persists only:
 
 - `scope_key`
-- `blocked_at`
 - `trial_interval`
 - `next_trial_at`
 
@@ -212,6 +218,11 @@ second copy of parsed metadata in SQLite.
 `ScopeKey.PersistsInBlockScopes()` is the single sync-domain rule for whether a
 scope belongs in `block_scopes`. Timed blocked-work scopes persist there;
 observation-owned read boundaries do not.
+
+`observation_state` persists only the restart-safe next full-remote refresh
+deadline, not the runtime mode that produced it. Runtime decides whether the
+current observation path is delta-based or enumerate-only and then stores the
+next due time accordingly.
 
 `retry_work` stores only exact held roots. Dependents blocked behind those
 roots remain dependency state in the current runtime; they are not persisted as

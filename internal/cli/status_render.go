@@ -243,15 +243,6 @@ func printSyncStateText(w io.Writer, ss *syncStateInfo, history bool) error {
 }
 
 func printSyncStateSummaryLines(w io.Writer, ss *syncStateInfo) error {
-	if err := printStatusLastSyncLine(w, ss); err != nil {
-		return err
-	}
-	if ss.LastSyncDuration != "" {
-		if err := writef(w, "    Duration:  %sms\n", ss.LastSyncDuration); err != nil {
-			return err
-		}
-	}
-
 	countLines := []struct {
 		count  int
 		format string
@@ -271,27 +262,7 @@ func printSyncStateSummaryLines(w io.Writer, ss *syncStateInfo) error {
 }
 
 func printSyncStateStoreLines(w io.Writer, ss *syncStateInfo) error {
-	valueLines := []struct {
-		value  string
-		format string
-	}{
-		{value: ss.LastError, format: "    Last error: %s\n"},
-	}
-	for i := range valueLines {
-		if err := writeOptionalStatusValueLine(w, valueLines[i].value, valueLines[i].format); err != nil {
-			return err
-		}
-	}
-
 	return nil
-}
-
-func printStatusLastSyncLine(w io.Writer, ss *syncStateInfo) error {
-	if ss.LastSyncTime == "" {
-		return writef(w, "    Last sync: never\n")
-	}
-
-	return writef(w, "    Last sync: %s\n", ss.LastSyncTime)
 }
 
 func writeOptionalStatusCountLine(w io.Writer, count int, format string) error {
@@ -300,14 +271,6 @@ func writeOptionalStatusCountLine(w io.Writer, count int, format string) error {
 	}
 
 	return writef(w, format, count)
-}
-
-func writeOptionalStatusValueLine(w io.Writer, value string, format string) error {
-	if value == "" {
-		return nil
-	}
-
-	return writef(w, format, value)
 }
 
 func printSummaryText(w io.Writer, s statusSummary) error {

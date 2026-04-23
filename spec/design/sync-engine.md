@@ -28,8 +28,8 @@ It does not use a mixed failure table as durable control state.
 `retry_work` and `block_scopes` are engine-owned control state, not
 best-effort diagnostics. If the runtime cannot durably record or transition
 required retry/scope state after an exact action result or admission decision,
-it fails closed and terminates the current runtime. Product-facing
-`sync_status` writes remain best-effort.
+it fails closed and terminates the current runtime. Product-facing last-sync
+history is not a durable engine authority.
 
 `observation_findings.go` is the engine-owned constructor boundary for
 observation batches. Engine orchestration chooses when to reconcile those
@@ -172,6 +172,23 @@ Full-remote-refresh cadence is restart-safe even when a full remote refresh retu
 no delta cursor. The engine still advances the persisted cadence in
 `observation_state` so enumerate-only and shared-root sessions do not fall into
 back-to-back expensive full refreshes.
+
+That cadence is capability-driven, not websocket-driven:
+
+- delta-based observation schedules the next full remote refresh 24 hours out
+- enumerate-only observation schedules it 1 hour out
+
+Websocket wakeups are additive only. They wake delta polling sooner, but they
+do not replace delta polling and they do not change the full-refresh cadence.
+
+In this increment, "degraded" means exactly "running without delta." The main
+whole-drive watch path remains delta-based. Shared-root watch chooses its mode
+from the configured drive surface:
+
+- business/sharepoint shared roots skip folder delta and use recursive
+  enumeration
+- personal shared roots try folder delta first and retry it on later passes
+  after any temporary enumerate fallback
 
 ## Watch Mode
 

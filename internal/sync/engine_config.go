@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
@@ -75,6 +76,7 @@ func newEngineConfigForDrive(
 		DriveType:              resolved.CanonicalID.DriveType(),
 		AccountEmail:           resolved.CanonicalID.Email(),
 		RootItemID:             resolved.RootItemID,
+		SharedRootSourceType:   sharedRootSourceType(resolved, logger),
 		Fetcher:                session.Meta,
 		SocketIOFetcher:        session.Meta,
 		Items:                  session.Meta,
@@ -101,4 +103,39 @@ func newEngineConfigForDrive(
 	}
 
 	return ecfg, nil
+}
+
+func sharedRootSourceType(resolved *config.ResolvedDrive, logger *slog.Logger) string {
+	if resolved == nil {
+		return ""
+	}
+	if !resolved.CanonicalID.IsShared() {
+		return resolved.CanonicalID.DriveType()
+	}
+
+	catalog, err := config.LoadCatalog()
+	if err != nil {
+		logger.Debug("could not load catalog for shared-root source type",
+			"canonical_id", resolved.CanonicalID.String(),
+			"error", err,
+		)
+		return ""
+	}
+
+	drive, found := catalog.DriveByCanonicalID(resolved.CanonicalID)
+	if !found || drive.OwnerAccountCanonical == "" {
+		return ""
+	}
+
+	ownerCID, err := driveid.NewCanonicalID(drive.OwnerAccountCanonical)
+	if err != nil {
+		logger.Debug("could not parse shared-root owner account type",
+			"canonical_id", resolved.CanonicalID.String(),
+			"owner_account_canonical", drive.OwnerAccountCanonical,
+			"error", err,
+		)
+		return ""
+	}
+
+	return ownerCID.DriveType()
 }

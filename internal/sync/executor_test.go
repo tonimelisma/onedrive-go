@@ -190,9 +190,8 @@ func TestExecutor_CreateLocalFolder(t *testing.T) {
 		CreateSide: CreateLocal,
 		View: &PathView{
 			Remote: &RemoteState{
-				ItemID:   "folder1",
-				ParentID: "root",
-				Mtime:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano(),
+				ItemID: "folder1",
+				Mtime:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano(),
 			},
 		},
 	}
@@ -562,10 +561,9 @@ func TestExecutor_Download_Success(t *testing.T) {
 		DriveID: driveid.New(synctest.TestDriveID),
 		View: &PathView{
 			Remote: &RemoteState{
-				ItemID:   "item1",
-				ParentID: "root",
-				ETag:     "etag1",
-				Mtime:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano(),
+				ItemID: "item1",
+				ETag:   "etag1",
+				Mtime:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano(),
 			},
 		},
 	}
@@ -1456,9 +1454,8 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 		DriveID: driveid.New(synctest.TestDriveID),
 		View: &PathView{
 			Remote: &RemoteState{
-				ItemID:   "item1",
-				ParentID: "root",
-				ETag:     "etag1",
+				ItemID: "item1",
+				ETag:   "etag1",
 			},
 		},
 		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
@@ -1521,9 +1518,8 @@ func TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix(t *
 		DriveID: driveid.New(synctest.TestDriveID),
 		View: &PathView{
 			Remote: &RemoteState{
-				ItemID:   "item1",
-				ParentID: "root",
-				ETag:     "etag1",
+				ItemID: "item1",
+				ETag:   "etag1",
 			},
 		},
 		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
@@ -1595,7 +1591,6 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 			Remote: &RemoteState{
 				ItemID:    "deleted-item",
 				DriveID:   driveid.New(synctest.TestDriveID),
-				ParentID:  "parent-folder",
 				ItemType:  ItemTypeFile,
 				IsDeleted: true,
 			},
@@ -1678,7 +1673,6 @@ func TestPublicationMutation_SyncedUpdate(t *testing.T) {
 		View: &PathView{
 			Remote: &RemoteState{
 				ItemID:   "item1",
-				ParentID: "root",
 				Hash:     "hash1",
 				Size:     1024,
 				ETag:     "etag1",
@@ -1833,7 +1827,7 @@ func TestExecutor_ConflictDownloadFails_LeavesConflictCopy(t *testing.T) {
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
 		View: &PathView{
-			Remote: &RemoteState{ItemID: "item1", ParentID: "root"},
+			Remote: &RemoteState{ItemID: "item1"},
 		},
 		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
 	}

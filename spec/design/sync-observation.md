@@ -9,10 +9,10 @@ Implements: R-2.1.2 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [
 Observation turns local filesystem changes and Graph delta/enumeration results
 into live observation facts. The low-level observers do not write the sync DB
 directly. The engine-owned observation orchestration persists the resulting
-observation batch as one coherent durable set. `observation_state` still owns
-snapshot cadence and cursors; observation produces wake signals, dirty
-path/scope hints, observation findings, and direct local-snapshot rows for
-`local_state`.
+observation batch as one coherent durable set. `observation_state` owns the
+remote cursor plus remote full-refresh cadence; local watch safety-scan cadence
+is runtime-only. Observation produces wake signals, dirty path/scope hints,
+observation findings, and direct local-snapshot rows for `local_state`.
 
 In watch mode, that ownership is explicit: local observers emit only local
 change hints, while remote observers and full-refresh workers emit one
@@ -63,7 +63,9 @@ Important properties:
 - observation emits wake/dirty signals plus normalized remote facts
 - zero-event delta responses do **not** advance the saved cursor
 - HTTP 410 delta expiry is surfaced as a restart/re-enumerate condition
-- sparse delta items recover omitted name/parent data from the baseline when possible
+- sparse delta items recover omitted name/parent data from baseline when
+  possible, and missing parent IDs trigger one best-effort item-by-ID enrich
+  before baseline fallback
 - deleted-item names may also be recovered from baseline context
 - explicit remote read denial discovered during observation is emitted as an
   observation-owned finding (`remote_read_denied`) plus
@@ -105,6 +107,7 @@ It owns:
 
 - NFC normalization
 - drive/item identity handling
+- best-effort item-by-ID enrich for sparse delta items missing `ParentID`
 - path reconstruction from parent chains
 - move detection against baseline
 - malformed sparse-item rejection
@@ -113,6 +116,19 @@ It owns:
 `ChangeEvent.TargetRootItemID` carries the configured remote root for shared-root
 drives so later snapshot refresh, planning, and execution can derive the
 correct target root.
+
+Sparse parent recovery is intentionally layered:
+
+- first use the delta item directly when it already carries `ParentID`
+- otherwise try one best-effort `GetItem(driveID, itemID)` enrich before
+  materializing the path
+- if enrich still leaves the parent missing, fall back to baseline ancestry for
+  path reconstruction when possible
+
+Observation does not fail the batch when that enrich step misses or the direct
+read returns an error. The enrich read exists only to reduce sparse-delta blind
+spots before path materialization; durable ancestry still lives in `baseline`,
+not in a second remote-observation store field.
 
 ## Local Observation
 

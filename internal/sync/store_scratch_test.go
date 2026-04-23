@@ -48,32 +48,28 @@ func seedScratchPlanningSource(t *testing.T, store *SyncStore, driveID driveid.I
 
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
 		{
-			DriveID:         driveID,
-			ItemID:          "remote-1",
-			ParentID:        "root",
-			Path:            "remote-one.txt",
-			ItemType:        ItemTypeFile,
-			Hash:            "remote-hash-1",
-			Size:            11,
-			Mtime:           101,
-			ETag:            "etag-1",
-			ContentIdentity: "cid-1",
+			DriveID:  driveID,
+			ItemID:   "remote-1",
+			Path:     "remote-one.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "remote-hash-1",
+			Size:     11,
+			Mtime:    101,
+			ETag:     "etag-1",
 		},
 		{
-			DriveID:         driveID,
-			ItemID:          "remote-2",
-			ParentID:        "root",
-			Path:            "folder/remote-two.txt",
-			ItemType:        ItemTypeFile,
-			Hash:            "remote-hash-2",
-			Size:            22,
-			Mtime:           202,
-			ETag:            "etag-2",
-			ContentIdentity: "cid-2",
+			DriveID:  driveID,
+			ItemID:   "remote-2",
+			Path:     "folder/remote-two.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "remote-hash-2",
+			Size:     22,
+			Mtime:    202,
+			ETag:     "etag-2",
 		},
 	}, "cursor-seeded", driveID))
-	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, time.Unix(1700000000, 0).UTC()))
-	require.NoError(t, store.MarkFullLocalRefresh(ctx, driveID, time.Unix(1700003600, 0).UTC(), localRefreshModeWatchDegraded))
+	refreshAt := time.Unix(1700000000, 0).UTC()
+	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, refreshAt, remoteObservationModeDelta))
 }
 
 func scratchPlanningBaseline(driveID driveid.ID) *Baseline {
@@ -120,13 +116,13 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 	require.NotNil(t, cleanup)
 
 	scratchPath := scratchMainDBPath(t, scratch.rawDB())
+	refreshAt := time.Unix(1700000000, 0).UTC()
 
 	state, err := scratch.ReadObservationState(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, driveID, state.ConfiguredDriveID)
 	assert.Equal(t, "cursor-seeded", state.Cursor)
-	assert.Equal(t, localRefreshModeWatchDegraded, state.LocalRefreshMode)
-	assert.Equal(t, remoteRefreshModeDeltaHealthy, state.RemoteRefreshMode)
+	assert.Equal(t, refreshAt.Add(fullRemoteRefreshInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 
 	remoteRows, err := listScratchRemoteStateRows(ctx, scratch.rawDB())
 	require.NoError(t, err)

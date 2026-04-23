@@ -123,8 +123,9 @@ through trial actions:
   `block_scopes` row immediately instead of preserving timing with no work
 
 Blocked retry rows use one engine-owned durable shape no matter which runtime
-path persisted them: `blocked=true`, the scope-derived `condition_type`, the
-exact `scope_key`, and the canonical `"blocked by scope: <scope>"` message.
+path persisted them: `blocked=true`, the exact `scope_key`, and the retry/trial
+timing needed to re-admit the work. Condition family, HTTP status, and error
+text stay in runtime classification and logs rather than durable retry rows.
 
 `block_scopes` remains the only durable owner of shared trial timing.
 

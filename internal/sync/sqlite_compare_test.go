@@ -62,22 +62,22 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = store.rawDB().ExecContext(ctx, `
-		INSERT INTO local_state (path, item_type, hash, size, mtime, content_identity)
+		INSERT INTO local_state (path, item_type, hash, size, mtime)
 		VALUES
-			('upload.txt', 'file', 'new-local', 2, 2, 'new-local'),
-			('download.txt', 'file', 'same', 1, 1, 'same'),
-			('conflict.txt', 'file', 'local-conflict', 2, 2, 'local-conflict'),
-			('new-local.txt', 'file', 'local-create', 3, 3, 'local-create')`)
+			('upload.txt', 'file', 'new-local', 2, 2),
+			('download.txt', 'file', 'same', 1, 1),
+			('conflict.txt', 'file', 'local-conflict', 2, 2),
+			('new-local.txt', 'file', 'local-create', 3, 3)`)
 	require.NoError(t, err)
 
 	_, err = store.rawDB().ExecContext(ctx, `
-		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag, content_identity)
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES
-			('item-upload', 'upload.txt', 'file', 'old', 1, 1, 'etag-old', 'old'),
-			('item-download', 'download.txt', 'file', 'remote-new', 2, 2, 'etag-new', 'remote-new'),
-			('item-conflict', 'conflict.txt', 'file', 'remote-conflict', 3, 3, 'etag-remote', 'remote-conflict'),
-			('item-redownload', 'redownload.txt', 'file', 'remote-redownload', 5, 5, 'etag-remote', 'remote-redownload'),
-			('item-new-remote', 'new-remote.txt', 'file', 'remote-create', 4, 4, 'etag-create', 'remote-create')`)
+			('item-upload', 'upload.txt', 'file', 'old', 1, 1, 'etag-old'),
+			('item-download', 'download.txt', 'file', 'remote-new', 2, 2, 'etag-new'),
+			('item-conflict', 'conflict.txt', 'file', 'remote-conflict', 3, 3, 'etag-remote'),
+			('item-redownload', 'redownload.txt', 'file', 'remote-redownload', 5, 5, 'etag-remote'),
+			('item-new-remote', 'new-remote.txt', 'file', 'remote-create', 4, 4, 'etag-create')`)
 	require.NoError(t, err)
 
 	reconciliationRows, err := store.QueryReconciliationState(ctx)

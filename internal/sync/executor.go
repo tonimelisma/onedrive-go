@@ -290,6 +290,23 @@ func (e *Executor) createLocalFolder(action *Action) ActionOutcome {
 	return e.folderOutcome(action)
 }
 
+func (e *Executor) resolvedParentIDForOutcome(action *Action, item *graph.Item) string {
+	if item != nil && item.ParentID != "" {
+		return item.ParentID
+	}
+	if action != nil {
+		parentID, err := e.ResolveParentID(action.Path)
+		if err == nil {
+			return parentID
+		}
+	}
+	if action != nil && action.View != nil && action.View.Baseline != nil {
+		return action.View.Baseline.ParentID
+	}
+
+	return ""
+}
+
 // createRemoteFolder creates a folder on OneDrive. The DAG guarantees parent
 // folder creates complete before children, so ResolveParentID finds the parent
 // in the baseline (committed by CommitMutation before depGraph.Complete).
@@ -586,11 +603,11 @@ func (e *Executor) folderOutcome(action *Action) ActionOutcome {
 		DriveID:  e.resolveDriveID(action),
 		ItemID:   action.ItemID,
 		ItemType: ItemTypeFolder,
+		ParentID: e.resolvedParentIDForOutcome(action, nil),
 	}
 
 	if action.View != nil && action.View.Remote != nil {
 		o.ItemID = action.View.Remote.ItemID
-		o.ParentID = action.View.Remote.ParentID
 		o.ETag = action.View.Remote.ETag
 	}
 
@@ -600,12 +617,13 @@ func (e *Executor) folderOutcome(action *Action) ActionOutcome {
 // moveOutcome builds a successful ActionOutcome for a move action.
 func (e *Executor) moveOutcome(action *Action) ActionOutcome {
 	o := ActionOutcome{
-		Action:  action.Type,
-		Success: true,
-		Path:    action.Path,
-		OldPath: action.OldPath,
-		DriveID: e.resolveDriveID(action),
-		ItemID:  action.ItemID,
+		Action:   action.Type,
+		Success:  true,
+		Path:     action.Path,
+		OldPath:  action.OldPath,
+		DriveID:  e.resolveDriveID(action),
+		ItemID:   action.ItemID,
+		ParentID: e.resolvedParentIDForOutcome(action, nil),
 	}
 
 	if action.View != nil {

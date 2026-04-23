@@ -15,15 +15,12 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 	t.Helper()
 
 	var (
-		rawDriveID      string
-		row             RemoteStateRow
-		parentID        sql.NullString
-		hash            sql.NullString
-		size            sql.NullInt64
-		mtime           sql.NullInt64
-		etag            sql.NullString
-		contentIdentity sql.NullString
-		prevPath        sql.NullString
+		rawDriveID string
+		row        RemoteStateRow
+		hash       sql.NullString
+		size       sql.NullInt64
+		mtime      sql.NullInt64
+		etag       sql.NullString
 	)
 
 	err := db.QueryRowContext(t.Context(),
@@ -31,10 +28,8 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 		FROM remote_state WHERE item_id = ?`,
 		itemID,
 	).Scan(
-		&rawDriveID, &row.ItemID, &row.Path, &parentID, &row.ItemType,
+		&rawDriveID, &row.ItemID, &row.Path, &row.ItemType,
 		&hash, &size, &mtime, &etag,
-		&contentIdentity,
-		&prevPath,
 	)
 	if err == sql.ErrNoRows {
 		return nil
@@ -43,11 +38,8 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow
 	require.NoError(t, err)
 
 	row.DriveID = remoteStateDriveID(rawDriveID, driveid.ID{})
-	row.ParentID = parentID.String
 	row.Hash = hash.String
 	row.ETag = etag.String
-	row.ContentIdentity = contentIdentity.String
-	row.PreviousPath = prevPath.String
 	if size.Valid {
 		row.Size = size.Int64
 	}
@@ -63,7 +55,7 @@ func readObservationCursor(t *testing.T, db *sql.DB, driveID string) string {
 
 	var token string
 	err := db.QueryRowContext(t.Context(),
-		`SELECT cursor FROM observation_state WHERE singleton_id = 1 AND configured_drive_id = ?`,
+		`SELECT cursor FROM observation_state WHERE configured_drive_id = ? LIMIT 1`,
 		driveID,
 	).Scan(&token)
 	if err == sql.ErrNoRows {
@@ -85,7 +77,6 @@ func TestCommitObservation_NewItemCreatesMirrorRowAndToken(t *testing.T) {
 	err := mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
-		ParentID: "root",
 		Path:     "hello.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash1",
@@ -115,7 +106,6 @@ func TestCommitObservation_DeleteRemovesMirrorRow(t *testing.T) {
 	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
-		ParentID: "root",
 		Path:     "hello.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash1",
@@ -134,38 +124,6 @@ func TestCommitObservation_DeleteRemovesMirrorRow(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCommitObservation_MoveUpdatesPreviousPath(t *testing.T) {
-	t.Parallel()
-
-	mgr := newTestStore(t)
-	ctx := context.Background()
-	driveID := driveid.New(testDriveID)
-
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
-		DriveID:  driveID,
-		ItemID:   "item1",
-		ParentID: "root",
-		Path:     "old.txt",
-		ItemType: ItemTypeFile,
-		Hash:     "hash1",
-	}}, "delta-token-1", driveID))
-
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
-		DriveID:  driveID,
-		ItemID:   "item1",
-		ParentID: "root",
-		Path:     "new.txt",
-		ItemType: ItemTypeFile,
-		Hash:     "hash1",
-	}}, "delta-token-2", driveID))
-
-	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
-	require.NotNil(t, row)
-	assert.Equal(t, "new.txt", row.Path)
-	assert.Equal(t, "old.txt", row.PreviousPath)
-}
-
-// Validates: R-2.2
 func TestCommitObservation_PreservesObservedDriveIDPerRemoteStateRow(t *testing.T) {
 	t.Parallel()
 
@@ -177,7 +135,6 @@ func TestCommitObservation_PreservesObservedDriveIDPerRemoteStateRow(t *testing.
 	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  sharedDriveID,
 		ItemID:   "shared-item",
-		ParentID: "shared-root",
 		Path:     "Shared/inside.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "shared-hash",
@@ -212,7 +169,6 @@ func TestCommitObservation_UnchangedItemDoesNotRewriteStateOrCursor(t *testing.T
 	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
-		ParentID: "root",
 		Path:     "same.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash1",
@@ -224,7 +180,6 @@ func TestCommitObservation_UnchangedItemDoesNotRewriteStateOrCursor(t *testing.T
 	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
-		ParentID: "root",
 		Path:     "same.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash1",
@@ -236,7 +191,6 @@ func TestCommitObservation_UnchangedItemDoesNotRewriteStateOrCursor(t *testing.T
 	row := readRemoteStateRow(t, mgr.rawDB(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, "same.txt", row.Path)
-	assert.Empty(t, row.PreviousPath)
 	assert.Equal(t, "delta-token-1", readObservationCursor(t, mgr.rawDB(), testDriveID))
 }
 
@@ -271,7 +225,6 @@ func TestCommitObservation_IgnoresSymmetricJunkRows(t *testing.T) {
 	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-junk",
-		ParentID: "root",
 		Path:     ".DS_Store",
 		ItemType: ItemTypeFile,
 		Hash:     "hash-junk",

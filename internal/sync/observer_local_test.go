@@ -440,7 +440,6 @@ func TestFullScan_RacilyCleanUnchangedFileStillProducesSnapshotRow(t *testing.T)
 	require.Len(t, result.Rows, 1, "unchanged racily clean file must still remain in the local snapshot")
 	assert.Equal(t, "stable.txt", result.Rows[0].Path)
 	assert.Equal(t, hash, result.Rows[0].Hash)
-	assert.Equal(t, hash, result.Rows[0].ContentIdentity)
 }
 
 func TestFullScan_SizeChangeForcesHash(t *testing.T) {

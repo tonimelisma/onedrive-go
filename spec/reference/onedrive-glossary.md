@@ -75,7 +75,7 @@ called scopes.
 
 The per-drive SQLite database containing `baseline`, `local_state`,
 `remote_state`, `observation_issues`, `retry_work`, `block_scopes`,
-`observation_state`, and `sync_status`.
+and `observation_state`.
 
 ### Observation Issues
 

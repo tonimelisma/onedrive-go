@@ -154,7 +154,7 @@ func (flow *engineFlow) recordRetryWorkFailure(
 		failure.Path,
 		failure.ScopeKey,
 	),
-		slog.String("condition_type", row.ConditionType),
+		slog.String("condition_type", retryConditionTypeForRow(&row)),
 	)
 	flow.engine.logger.Debug("retry_work permission failure recorded", fields...)
 
