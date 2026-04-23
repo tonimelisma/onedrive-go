@@ -173,7 +173,7 @@ issues, and block scopes unchanged during preview.
 
 - debounce bursts of local or remote dirty signals
 - wait 5 seconds from the last local or remote observation before triggering replanning by default
-- keep one pending entry per path plus a full-refresh bit
+- keep one pending coarse dirty signal plus a full-refresh bit
 - flush deterministically on shutdown/final drain
 
 It is not a durable queue, not a semantic event journal, and not a second

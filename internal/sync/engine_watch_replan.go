@@ -18,7 +18,7 @@ import (
 func (rt *watchRuntime) runSteadyStateReplan(
 	ctx context.Context,
 	p *watchPipeline,
-	batch DirtyBatch,
+	batch dirtyBatch,
 ) error {
 	if p == nil || p.bl == nil {
 		return fmt.Errorf("sync: steady-state replan requires loaded baseline")

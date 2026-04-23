@@ -807,13 +807,40 @@ func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Baseline is empty — delta returns a new file and the watch loop gets
-	// a dirty path signal back from the remote refresh.
+	// a coarse dirty signal back from the remote refresh.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForRefreshDone(t, t.Context(), e)
 
 	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
-	require.NotNil(t, batch, "dirty scheduler should contain paths from reconciliation")
+	require.NotNil(t, batch, "dirty scheduler should contain a coarse dirty signal from reconciliation")
 	assert.False(t, batch.FullRefresh)
+}
+
+// Validates: R-2.1.2
+func TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+
+	rt.handleWatchLocalChange(&ChangeEvent{
+		Path:    "new-name.txt",
+		OldPath: "old-name.txt",
+	})
+	rt.markDirtyFromRemoteBatch(&remoteObservationBatch{
+		emitted: []ChangeEvent{
+			{Path: "alpha.txt"},
+			{OldPath: "beta.txt"},
+			{Path: "gamma.txt", OldPath: "delta.txt"},
+		},
+	})
+
+	batch := rt.dirtyBuf.FlushImmediate()
+	require.NotNil(t, batch)
+	assert.False(t, batch.FullRefresh)
+	assert.Nil(t, rt.dirtyBuf.FlushImmediate())
 }
 
 // Validates: R-2.8.4

@@ -20,5 +20,5 @@
 //   - reduceReadyFrontierStage owns publication drain plus due-held release
 //   - runPublicationDrainStage owns publication-only mutation writes
 //   - applyRuntimeCompletionStage owns exact-action completion mutation
-//   - runWatchLoop owns watch scheduling, debounce intake, and graceful drain
+//   - runWatchLoop owns watch scheduling, coarse dirty/full-refresh intake, and graceful drain
 package sync

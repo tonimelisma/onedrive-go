@@ -174,7 +174,7 @@ func (rt *watchRuntime) handleWatchDispatch(nextAction *TrackedAction) {
 func (rt *watchRuntime) handleWatchReplanSignal(
 	ctx context.Context,
 	p *watchPipeline,
-	batch DirtyBatch,
+	batch dirtyBatch,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -365,7 +365,7 @@ func firstOutbox(outbox []*TrackedAction) *TrackedAction {
 func (rt *watchRuntime) handleWatchReplanReady(
 	ctx context.Context,
 	p *watchPipeline,
-	batch DirtyBatch,
+	batch dirtyBatch,
 ) error {
 	if !rt.canPrepareNow() {
 		rt.queuePendingReplan(batch)
@@ -409,11 +409,8 @@ func (rt *watchRuntime) handleWatchLocalChange(change *ChangeEvent) {
 	if change == nil || rt.dirtyBuf == nil {
 		return
 	}
-	if change.Path != "" {
-		rt.dirtyBuf.MarkPath(change.Path)
-	}
-	if change.OldPath != "" {
-		rt.dirtyBuf.MarkPath(change.OldPath)
+	if change.Path != "" || change.OldPath != "" {
+		rt.dirtyBuf.MarkDirty()
 	}
 }
 

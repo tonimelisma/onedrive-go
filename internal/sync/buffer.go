@@ -48,10 +48,10 @@ func newRealDebounceTimer(delay time.Duration) debounceTimer {
 	return &realDebounceTimer{timer: time.NewTimer(delay)}
 }
 
-// DirtyBatch is a debounced scheduling signal for refresh/replan work. The
+// dirtyBatch is a debounced scheduling signal for refresh/replan work. The
 // signal itself means "replan from current truth now"; FullRefresh is the only
 // additional scheduler hint the runtime preserves.
-type DirtyBatch struct {
+type dirtyBatch struct {
 	FullRefresh bool
 }
 
@@ -74,13 +74,11 @@ func NewDirtyBuffer(logger *slog.Logger) *DirtyBuffer {
 	}
 }
 
-func (b *DirtyBuffer) MarkPath(path string) {
+func (b *DirtyBuffer) MarkDirty() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if path != "" {
-		b.dirty = true
-	}
+	b.dirty = true
 	b.signalNewLocked()
 }
 
@@ -92,7 +90,7 @@ func (b *DirtyBuffer) MarkFullRefresh() {
 	b.signalNewLocked()
 }
 
-func (b *DirtyBuffer) FlushImmediate() *DirtyBatch {
+func (b *DirtyBuffer) FlushImmediate() *dirtyBatch {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -100,7 +98,7 @@ func (b *DirtyBuffer) FlushImmediate() *DirtyBatch {
 		return nil
 	}
 
-	batch := &DirtyBatch{
+	batch := &dirtyBatch{
 		FullRefresh: b.fullRefresh,
 	}
 	b.dirty = false
@@ -109,8 +107,8 @@ func (b *DirtyBuffer) FlushImmediate() *DirtyBatch {
 	return batch
 }
 
-func (b *DirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-chan DirtyBatch {
-	out := make(chan DirtyBatch, 1)
+func (b *DirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-chan dirtyBatch {
+	out := make(chan dirtyBatch, 1)
 
 	b.mu.Lock()
 	if b.notify != nil {
@@ -126,7 +124,7 @@ func (b *DirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration
 	return out
 }
 
-func (b *DirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- DirtyBatch) {
+func (b *DirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- dirtyBatch) {
 	defer close(out)
 
 	timer := b.newTimer(debounce)

@@ -278,12 +278,7 @@ func (rt *watchRuntime) markDirtyFromRemoteBatch(batch *remoteObservationBatch) 
 		rt.dirtyBuf.MarkFullRefresh()
 	}
 
-	for i := range batch.emitted {
-		if batch.emitted[i].Path != "" {
-			rt.dirtyBuf.MarkPath(batch.emitted[i].Path)
-		}
-		if batch.emitted[i].OldPath != "" {
-			rt.dirtyBuf.MarkPath(batch.emitted[i].OldPath)
-		}
+	if len(batch.emitted) > 0 {
+		rt.dirtyBuf.MarkDirty()
 	}
 }

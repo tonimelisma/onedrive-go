@@ -263,7 +263,7 @@ func TestRunSteadyStateReplan_PrunesStaleDurableRuntimeStateLikeBootstrapPrepare
 	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   dirtyBaseline,
 		mode: SyncBidirectional,
-	}, DirtyBatch{})
+	}, dirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 

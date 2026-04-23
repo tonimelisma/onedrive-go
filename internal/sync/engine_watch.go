@@ -112,7 +112,7 @@ func isWatchShutdownError(ctx context.Context, err error) bool {
 type watchPipeline struct {
 	runtime        *watchRuntime
 	bl             *Baseline
-	replanReady    <-chan DirtyBatch
+	replanReady    <-chan dirtyBatch
 	completions    <-chan ActionCompletion
 	errs           <-chan error
 	localEvents    <-chan ChangeEvent
@@ -165,8 +165,9 @@ func (rt *watchRuntime) initWatchInfra(
 	pool := NewWorkerPool(rt.engine.execCfg, rt.dispatchCh, rt.engine.baseline, rt.engine.logger, watchResultBuf)
 	pool.Start(ctx, rt.engine.transferWorkers)
 
-	// DirtyBuffer is the watch scheduler boundary. Observation marks dirty
-	// paths/scopes only; snapshot refresh and planning happen after debounce.
+	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse
+	// dirty/full-refresh signals only; snapshot refresh and planning happen
+	// after debounce.
 	dirtyBuf := NewDirtyBuffer(rt.engine.logger)
 	rt.dirtyBuf = dirtyBuf
 	replanReady := dirtyBuf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
