@@ -577,8 +577,7 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 		inputs.observationIssues,
 		bl,
 		plannerMountContext{
-			DriveID:    e.driveID,
-			RootItemID: e.rootItemID,
+			DriveID: e.driveID,
 		},
 		mode,
 	)

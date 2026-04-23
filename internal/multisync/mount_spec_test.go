@@ -1,6 +1,7 @@
 package multisync
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,9 +43,11 @@ func TestBuildConfiguredMountSpecs_PreservesOrderAndReportingFields(t *testing.T
 	assert.Equal(t, first.SyncDir, mounts[0].syncRoot)
 	assert.Equal(t, first.StatePath(), mounts[0].statePath)
 	assert.Equal(t, first.DriveID, mounts[0].remoteDriveID)
+	assert.Equal(t, first.CanonicalID, mounts[0].tokenOwnerCanonical)
 	assert.Equal(t, first.CanonicalID.Email(), mounts[0].accountEmail)
 	assert.False(t, mounts[0].paused)
-	assert.Same(t, first, mounts[0].resolved)
+	assert.Equal(t, first.TransferWorkers, mounts[0].transferWorkers)
+	assert.Equal(t, first.CheckWorkers, mounts[0].checkWorkers)
 
 	assert.Equal(t, mountID(second.CanonicalID.String()), mounts[1].mountID)
 	assert.Equal(t, 9, mounts[1].selectionIndex)
@@ -55,7 +58,7 @@ func TestBuildConfiguredMountSpecs_PreservesOrderAndReportingFields(t *testing.T
 func TestBuildConfiguredMountSpecs_PreservesRootedMountFields(t *testing.T) {
 	t.Parallel()
 
-	shared := testResolvedDrive(t, "shared:owner@example.com:test-drive:test-item", "Shared")
+	shared := testResolvedDrive(t, "business:owner@example.com", "Shared")
 	shared.RootItemID = testRootedSubtreeItemID
 	shared.SharedRootDeltaCapable = true
 	shared.Websocket = true
@@ -72,7 +75,7 @@ func TestBuildConfiguredMountSpecs_PreservesRootedMountFields(t *testing.T) {
 
 	assert.Equal(t, testRootedSubtreeItemID, mounts[0].remoteRootItemID)
 	assert.Equal(t, driveid.New("remote-drive-id"), mounts[0].remoteDriveID)
-	assert.True(t, mounts[0].rootedSubtreeDeltaCapable)
+	assert.False(t, mounts[0].rootedSubtreeDeltaCapable)
 	assert.True(t, mounts[0].enableWebsocket)
 }
 
@@ -136,13 +139,111 @@ func TestEngineMountConfigForMount_InvalidMinFreeSpaceFails(t *testing.T) {
 	rd := testResolvedDrive(t, "personal:first@example.com", "First")
 	rd.MinFreeSpace = "not-a-size"
 
-	mounts, err := buildConfiguredMountSpecs([]*resolvedDriveWithSelection{{
+	_, err := buildConfiguredMountSpecs([]*resolvedDriveWithSelection{{
 		SelectionIndex: 0,
 		Drive:          rd,
 	}})
-	require.NoError(t, err)
-
-	_, err = engineMountConfigForMount(mounts[0])
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid min_free_space")
+}
+
+// Validates: R-2.8.1
+func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testResolvedDrive(t, "personal:owner@example.com", "Parent")
+	parent.TransferWorkers = 7
+	parent.CheckWorkers = 8
+	parent.MinFreeSpace = "5MiB"
+
+	compiled, err := compileRuntimeMounts(
+		resolvedDrivesWithSelection([]*config.ResolvedDrive{parent}),
+		&config.MountInventory{
+			Mounts: map[string]config.MountRecord{
+				"child-docs": {
+					MountID:           "child-docs",
+					ParentMountID:     parent.CanonicalID.String(),
+					DisplayName:       "Docs",
+					RelativeLocalPath: "Shortcuts/Docs",
+					RemoteDriveID:     "remote-drive",
+					RemoteRootItemID:  "remote-root",
+				},
+			},
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 2)
+	assert.Empty(t, compiled.Skipped)
+
+	parentMount := compiled.Mounts[0]
+	childMount := compiled.Mounts[1]
+
+	assert.Equal(t, mountProjectionStandalone, parentMount.projectionKind)
+	assert.Equal(t, []string{"Shortcuts/Docs"}, parentMount.localSkipDirs)
+	assert.Equal(t, mountProjectionChild, childMount.projectionKind)
+	assert.Equal(t, mountID("child-docs"), childMount.mountID)
+	assert.Equal(t, driveid.MustCanonicalID("shared:owner@example.com:remote-drive:remote-root"), childMount.canonicalID)
+	assert.Equal(t, filepath.Join(parent.SyncDir, "Shortcuts", "Docs"), childMount.syncRoot)
+	assert.Equal(t, config.MountStatePath("child-docs"), childMount.statePath)
+	assert.Equal(t, driveid.MustCanonicalID("personal:owner@example.com"), childMount.tokenOwnerCanonical)
+	assert.Equal(t, "owner@example.com", childMount.accountEmail)
+	assert.Equal(t, 7, childMount.transferWorkers)
+	assert.Equal(t, 8, childMount.checkWorkers)
+	assert.Equal(t, int64(5*1024*1024), childMount.minFreeSpace)
+}
+
+// Validates: R-2.8.1
+func TestCompileRuntimeMounts_StandaloneContentRootSuppressesChild(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testResolvedDrive(t, "business:owner@example.com", "Parent")
+	standalone := testResolvedDrive(t, "sharepoint:owner@example.com:site:Docs", "Standalone")
+	standalone.DriveID = driveid.New("remote-drive")
+	standalone.RootItemID = "remote-root"
+
+	compiled, err := compileRuntimeMounts(
+		resolvedDrivesWithSelection([]*config.ResolvedDrive{parent, standalone}),
+		&config.MountInventory{
+			Mounts: map[string]config.MountRecord{
+				"child-docs": {
+					MountID:           "child-docs",
+					ParentMountID:     parent.CanonicalID.String(),
+					RelativeLocalPath: "Shortcuts/Docs",
+					RemoteDriveID:     "remote-drive",
+					RemoteRootItemID:  "remote-root",
+				},
+			},
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 2)
+	require.Len(t, compiled.Skipped, 1)
+	assert.Empty(t, compiled.Mounts[0].localSkipDirs)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), "standalone mount")
+}
+
+// Validates: R-2.8.1
+func TestCompileRuntimeMounts_MissingParentSkipsChild(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testResolvedDrive(t, "personal:owner@example.com", "Parent")
+
+	compiled, err := compileRuntimeMounts(
+		resolvedDrivesWithSelection([]*config.ResolvedDrive{parent}),
+		&config.MountInventory{
+			Mounts: map[string]config.MountRecord{
+				"child-docs": {
+					MountID:           "child-docs",
+					ParentMountID:     "missing-parent",
+					RelativeLocalPath: "Shortcuts/Docs",
+					RemoteDriveID:     "remote-drive",
+					RemoteRootItemID:  "remote-root",
+				},
+			},
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 1)
+	require.Len(t, compiled.Skipped, 1)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), "missing parent mount")
 }

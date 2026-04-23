@@ -135,6 +135,13 @@ not in a second remote-observation store field.
 `LocalObserver` and `Scanner` observe the whole configured local root. There is
 no user-configured bidirectional narrowing of the synced tree.
 
+`LocalFilterConfig.SkipDirs` is now interpreted as a list of root-relative slash
+paths beneath the mount root. A skip entry excludes that exact subtree only; it
+does not exclude every directory elsewhere with the same leaf name. The control
+plane uses that capability to exclude managed child-mount subtrees from a
+parent mount's local scan/watch surface while still letting the child mount
+observe its own subtree normally.
+
 Built-in local observation policy remains:
 
 - validate OneDrive-invalid names before they become upload work

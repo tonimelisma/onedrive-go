@@ -245,7 +245,7 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 
 	// Skip the configured observation root itself.
 	if c.RootItemID != "" && item.ID == c.RootItemID {
-		c.Logger.Debug("skipping configured shared root item", slog.String("item_id", item.ID))
+		c.Logger.Debug("skipping configured rooted-subtree root item", slog.String("item_id", item.ID))
 
 		return nil
 	}

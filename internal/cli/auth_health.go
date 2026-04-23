@@ -101,7 +101,7 @@ func attachAccountAuthProof(client *graph.Client, recorder *authProofRecorder, e
 }
 
 func attachDriveAuthProof(session interface {
-	ResolvedDriveEmail() string
+	AccountEmail() string
 	SetAuthenticatedSuccessHooks(func(context.Context))
 }, recorder *authProofRecorder, proofSource string,
 ) {
@@ -109,7 +109,7 @@ func attachDriveAuthProof(session interface {
 		return
 	}
 
-	email := session.ResolvedDriveEmail()
+	email := session.AccountEmail()
 	if email == "" {
 		return
 	}

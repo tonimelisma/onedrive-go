@@ -19,8 +19,7 @@ type Planner struct {
 }
 
 type plannerMountContext struct {
-	DriveID    driveid.ID
-	RootItemID string
+	DriveID driveid.ID
 }
 
 // NewPlanner creates a Planner with the given logger.

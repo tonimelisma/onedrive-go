@@ -1043,7 +1043,8 @@ func shouldSkipConfiguredPath(
 	kind observedKind,
 	filter LocalFilterConfig,
 ) bool {
-	parts := observedPathParts(path)
+	normalizedPath := strings.TrimPrefix(filepath.ToSlash(path), "/")
+	parts := observedPathParts(normalizedPath)
 	if len(parts) == 0 {
 		return false
 	}
@@ -1052,15 +1053,11 @@ func shouldSkipConfiguredPath(
 		return true
 	}
 
-	if hasSkippedParentDir(parts, filter.SkipDirs) {
+	if matchesConfiguredDirPath(normalizedPath, filter.SkipDirs) {
 		return true
 	}
 
-	if kind == observedKindDir && matchesConfiguredDir(name, filter.SkipDirs) {
-		return true
-	}
-
-	if kind == observedKindFile && matchesConfiguredFile(name, path, filter.SkipFiles) {
+	if kind == observedKindFile && matchesConfiguredFile(name, normalizedPath, filter.SkipFiles) {
 		return true
 	}
 
@@ -1081,23 +1078,23 @@ func hasDotfileComponent(parts []string) bool {
 	return false
 }
 
-func hasSkippedParentDir(parts, skipDirs []string) bool {
-	if len(skipDirs) == 0 || len(parts) < 2 {
+func matchesConfiguredDirPath(observedPath string, skipDirs []string) bool {
+	if observedPath == "" {
 		return false
 	}
 
-	for _, part := range parts[:len(parts)-1] {
-		if matchesConfiguredDir(part, skipDirs) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func matchesConfiguredDir(name string, skipDirs []string) bool {
 	for _, skipDir := range skipDirs {
-		if name == skipDir {
+		normalized := strings.TrimPrefix(filepath.ToSlash(skipDir), "/")
+		if normalized == "" {
+			continue
+		}
+
+		cleaned := slashpath.Clean(normalized)
+		if cleaned == "." || cleaned == "" {
+			continue
+		}
+
+		if observedPath == cleaned || strings.HasPrefix(observedPath, cleaned+"/") {
 			return true
 		}
 	}

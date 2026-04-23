@@ -111,7 +111,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	if len(selected) == 0 {
 		return RunOnceResult{}
 	}
-	mounts, err := buildConfiguredMountSpecs(selected)
+	compiled, err := o.buildRuntimeMountSet(selected)
 	if err != nil {
 		return controlFailureRunOnceResult(o.cfg.Drives, fmt.Errorf("building mount specs: %w", err))
 	}
@@ -133,11 +133,11 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	}
 
 	o.logger.Info("orchestrator starting RunOnce",
-		slog.Int("mounts", len(mounts)),
+		slog.Int("mounts", len(compiled.Mounts)),
 		slog.String("mode", mode.String()),
 	)
 
-	work, startup, reports := o.prepareRunOnceWork(ctx, mode, mounts, opts)
+	work, startup, reports := o.prepareRunOnceWork(ctx, mode, compiled.Mounts, compiled.Skipped, opts)
 
 	// Run all mounts concurrently.
 	var wg gosync.WaitGroup
@@ -182,6 +182,15 @@ func controlFailureRunOnceResult(drives []*config.ResolvedDrive, err error) RunO
 	}
 }
 
+func (o *Orchestrator) buildRuntimeMountSet(selected []*resolvedDriveWithSelection) (*compiledMountSet, error) {
+	inventory, err := config.LoadMountInventory()
+	if err != nil {
+		return nil, fmt.Errorf("loading mount inventory: %w", err)
+	}
+
+	return compileRuntimeMounts(selected, inventory, o.logger)
+}
+
 // prepareRunOnceWork resolves sessions and builds engines for each selected
 // mount. Errors are captured as closures that return the error when the
 // DriveRunner executes — no early abort for individual mount failures.
@@ -189,11 +198,12 @@ func (o *Orchestrator) prepareRunOnceWork(
 	ctx context.Context,
 	mode syncengine.SyncMode,
 	mounts []*mountSpec,
+	initialStartup []DriveStartupResult,
 	opts syncengine.RunOptions,
 ) ([]indexedDriveWork, StartupSelectionSummary, []*DriveReport) {
 	work := make([]indexedDriveWork, 0, len(mounts))
 	reports := make([]*DriveReport, 0, len(mounts))
-	startResults := make([]DriveStartupResult, 0, len(mounts))
+	startResults := append([]DriveStartupResult(nil), initialStartup...)
 
 	for i := range mounts {
 		mount := mounts[i]
@@ -207,7 +217,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 			continue
 		}
 
-		session, err := o.cfg.Runtime.SyncSession(ctx, mount.resolved)
+		session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 		if err != nil {
 			startResults = append(startResults, driveStartupResultForMount(
 				mount,
@@ -309,13 +319,13 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	if len(selected) == 0 {
 		return fmt.Errorf("sync: no drives configured")
 	}
-	mounts, err := buildConfiguredMountSpecs(selected)
+	compiled, err := o.buildRuntimeMountSet(selected)
 	if err != nil {
 		return fmt.Errorf("sync: building mount specs: %w", err)
 	}
 
 	o.logger.Info("orchestrator starting RunWatch",
-		slog.Int("mounts", len(mounts)),
+		slog.Int("mounts", len(compiled.Mounts)),
 		slog.String("mode", mode.String()),
 	)
 
@@ -336,7 +346,7 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 		}()
 	}
 
-	runners, startResults := o.startInitialWatchRunners(ctx, mode, mounts, opts)
+	runners, startResults := o.startInitialWatchRunners(ctx, mode, compiled.Mounts, compiled.Skipped, opts)
 	startSummary := summarizeStartupResults(startResults)
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
 		return err
@@ -378,10 +388,11 @@ func (o *Orchestrator) startInitialWatchRunners(
 	ctx context.Context,
 	mode syncengine.SyncMode,
 	mounts []*mountSpec,
+	initialStartup []DriveStartupResult,
 	opts syncengine.WatchOptions,
 ) (map[mountID]*watchRunner, []DriveStartupResult) {
 	runners := make(map[mountID]*watchRunner)
-	startResults := make([]DriveStartupResult, 0, len(mounts))
+	startResults := append([]DriveStartupResult(nil), initialStartup...)
 
 	for i := range mounts {
 		mount := mounts[i]
@@ -449,7 +460,7 @@ func (o *Orchestrator) emitStartWarning(summary StartupSelectionSummary) {
 func (o *Orchestrator) startWatchRunner(
 	ctx context.Context, mount *mountSpec, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 ) (*watchRunner, error) {
-	session, err := o.cfg.Runtime.SyncSession(ctx, mount.resolved)
+	session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 	if err != nil {
 		return nil, fmt.Errorf("session error for drive %s: %w", mount.canonicalID, err)
 	}
@@ -532,13 +543,13 @@ func (o *Orchestrator) reload(
 		return
 	}
 
-	newActive := make(map[mountID]*mountSpec, len(newMounts))
-	for i := range newMounts {
-		newActive[newMounts[i].mountID] = newMounts[i]
+	newActive := make(map[mountID]*mountSpec, len(newMounts.Mounts))
+	for i := range newMounts.Mounts {
+		newActive[newMounts.Mounts[i].mountID] = newMounts.Mounts[i]
 	}
 
 	stopped := o.stopInactiveWatchRunners(ctx, runners, newActive)
-	started, startResults := o.startReloadWatchRunners(ctx, runners, newActive, mode, opts)
+	started, startResults := o.startReloadWatchRunners(ctx, runners, newActive, newMounts.Skipped, mode, opts)
 
 	// Single-point config update — both Orchestrator and SessionRuntime
 	// read through the shared Holder.
@@ -560,7 +571,7 @@ func (o *Orchestrator) reload(
 	)
 }
 
-func (o *Orchestrator) loadReloadMounts() (*config.Config, []*mountSpec, error) {
+func (o *Orchestrator) loadReloadMounts() (*config.Config, *compiledMountSet, error) {
 	newCfg, err := config.LoadOrDefault(o.cfg.Holder.Path(), o.logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config for reload: %w", err)
@@ -576,7 +587,12 @@ func (o *Orchestrator) loadReloadMounts() (*config.Config, []*mountSpec, error) 
 		return nil, nil, fmt.Errorf("resolving drives after reload: %w", err)
 	}
 
-	newMounts, err := buildConfiguredMountSpecs(resolvedDrivesWithSelection(newDrives))
+	inventory, err := config.LoadMountInventory()
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading mount inventory after reload: %w", err)
+	}
+
+	newMounts, err := compileRuntimeMounts(resolvedDrivesWithSelection(newDrives), inventory, o.logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building mount specs after reload: %w", err)
 	}
@@ -620,11 +636,12 @@ func (o *Orchestrator) startReloadWatchRunners(
 	ctx context.Context,
 	runners map[mountID]*watchRunner,
 	active map[mountID]*mountSpec,
+	initialStartup []DriveStartupResult,
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 ) (int, []DriveStartupResult) {
 	started := 0
-	startResults := make([]DriveStartupResult, 0)
+	startResults := append([]DriveStartupResult(nil), initialStartup...)
 
 	for id, mount := range active {
 		if _, ok := runners[id]; ok {

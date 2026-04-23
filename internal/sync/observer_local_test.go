@@ -815,7 +815,8 @@ func TestIsAlwaysExcluded(t *testing.T) {
 		{"db in middle", "data.db.backup", false},
 	}
 
-	for _, tt := range tests {
+	for i := range tests {
+		tt := tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -918,7 +919,8 @@ func TestValidateOneDriveName(t *testing.T) {
 		{"pipe", "file|name", false},
 	}
 
-	for _, tt := range tests {
+	for i := range tests {
+		tt := tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1364,19 +1366,47 @@ func TestFullScan_PathTooLong(t *testing.T) {
 // ShouldObserve unit tests
 // ---------------------------------------------------------------------------
 
+type shouldObserveCase struct {
+	name       string
+	fileName   string
+	path       string
+	filter     LocalFilterConfig
+	rules      LocalObservationRules
+	wantNil    bool
+	wantReason string
+}
+
+func runShouldObserveCases(t *testing.T, tests []shouldObserveCase) {
+	t.Helper()
+
+	for i := range tests {
+		tt := tests[i]
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			skip := shouldObserveWithFilter(tt.fileName, tt.path, observedKindUnknown, tt.filter, tt.rules)
+
+			if tt.wantNil {
+				assert.Nil(t, skip, "ShouldObserve(%q, %q) should return nil", tt.fileName, tt.path)
+				return
+			}
+
+			require.NotNil(t, skip, "ShouldObserve(%q, %q) should return non-nil", tt.fileName, tt.path)
+			assert.Equal(t, tt.wantReason, skip.Reason)
+
+			if tt.wantReason != "" {
+				assert.Equal(t, tt.path, skip.Path)
+				assert.NotEmpty(t, skip.Detail)
+			}
+		})
+	}
+}
+
 // Validates: R-2.11.1, R-2.11.2, R-2.11.3, R-2.11.4
-func TestShouldObserve_AllCases(t *testing.T) {
+func TestShouldObserve_BasicCases(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name       string
-		fileName   string
-		path       string
-		filter     LocalFilterConfig
-		rules      LocalObservationRules
-		wantNil    bool   // expect nil (observe)
-		wantReason string // expected Reason if non-nil; "" for internal exclusions
-	}{
+	runShouldObserveCases(t, []shouldObserveCase{
 		{
 			name:     "normal file",
 			fileName: "hello.txt",
@@ -1388,7 +1418,6 @@ func TestShouldObserve_AllCases(t *testing.T) {
 			fileName: "temp.tmp",
 			path:     "temp.tmp",
 			wantNil:  false,
-			// internal exclusion → Reason==""
 		},
 		{
 			name:       "invalid name (CON)",
@@ -1440,27 +1469,42 @@ func TestShouldObserve_AllCases(t *testing.T) {
 			path:       strings.Repeat("a", 401),
 			wantReason: IssuePathTooLong,
 		},
-	}
+	})
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+// Validates: R-2.11.1, R-2.11.2, R-2.11.3, R-2.11.4
+func TestShouldObserve_PathScopedSkipDirs(t *testing.T) {
+	t.Parallel()
 
-			skip := shouldObserveWithFilter(tt.fileName, tt.path, observedKindUnknown, tt.filter, tt.rules)
-
-			if tt.wantNil {
-				assert.Nil(t, skip, "ShouldObserve(%q, %q) should return nil", tt.fileName, tt.path)
-			} else {
-				require.NotNil(t, skip, "ShouldObserve(%q, %q) should return non-nil", tt.fileName, tt.path)
-				assert.Equal(t, tt.wantReason, skip.Reason)
-
-				if tt.wantReason != "" {
-					assert.Equal(t, tt.path, skip.Path)
-					assert.NotEmpty(t, skip.Detail)
-				}
-			}
-		})
-	}
+	runShouldObserveCases(t, []shouldObserveCase{
+		{
+			name:     "skip configured child root path",
+			fileName: "Docs",
+			path:     "Shared/Docs",
+			filter: LocalFilterConfig{
+				SkipDirs: []string{"Shared/Docs"},
+			},
+			wantNil: false,
+		},
+		{
+			name:     "skip configured child subtree path",
+			fileName: "file.txt",
+			path:     "Shared/Docs/file.txt",
+			filter: LocalFilterConfig{
+				SkipDirs: []string{"Shared/Docs"},
+			},
+			wantNil: false,
+		},
+		{
+			name:     "same leaf outside skipped subtree still observed",
+			fileName: "file.txt",
+			path:     "Other/Docs/file.txt",
+			filter: LocalFilterConfig{
+				SkipDirs: []string{"Shared/Docs"},
+			},
+			wantNil: true,
+		},
+	})
 }
 
 // ---------------------------------------------------------------------------

@@ -286,6 +286,31 @@ func TestSessionRuntime_FlushTokenCache(t *testing.T) {
 	assert.Equal(t, 2, callCount, "TokenSourceFn should be re-invoked after FlushTokenCache")
 }
 
+func TestSessionRuntime_SyncSession_UsesMountOwnedTokenOwner(t *testing.T) {
+	holder := config.NewHolder(config.DefaultConfig(), "")
+	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
+
+	var tokenPath string
+	p.TokenSourceFn = func(_ context.Context, path string, _ *slog.Logger) (graph.TokenSource, error) {
+		tokenPath = path
+		return &stubTokenSource{}, nil
+	}
+
+	ownerCID := driveid.MustCanonicalID("business:owner@example.com")
+
+	session, err := p.SyncSession(t.Context(), &SyncMountSessionConfig{
+		TokenOwnerCanonical: ownerCID,
+		DriveID:             driveid.New("remote-drive"),
+		RootItemID:          "root-item",
+		AccountEmail:        "owner@example.com",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, config.DriveTokenPath(ownerCID), tokenPath)
+	assert.Equal(t, "owner@example.com", session.AccountEmail())
+	assert.Equal(t, "root-item", session.RootItem)
+}
+
 // --- Thread safety ---
 
 func TestSessionRuntime_ThreadSafety(t *testing.T) {
@@ -330,7 +355,7 @@ func TestSession_Fields(t *testing.T) {
 	assert.Nil(t, s.Meta)
 	assert.Nil(t, s.Transfer)
 	assert.True(t, s.DriveID.IsZero())
-	assert.Nil(t, s.Resolved)
+	assert.Empty(t, s.AccountEmail())
 }
 
 // --- TokenSourceFn error propagation ---

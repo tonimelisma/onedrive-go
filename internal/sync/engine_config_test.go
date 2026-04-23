@@ -42,14 +42,11 @@ func testEngineMountConfig(syncDir string) *EngineMountConfig {
 
 func testEngineSession() *driveops.Session {
 	return &driveops.Session{
-		Meta:     &graph.Client{},
-		Transfer: &graph.Client{},
-		DriveID:  driveid.New("session-drive-id"),
-		RootItem: "session-root-id",
-		Resolved: &config.ResolvedDrive{
-			CanonicalID: driveid.MustCanonicalID("personal:session@example.com"),
-			RootItemID:  "session-root-id",
-		},
+		Meta:              &graph.Client{},
+		Transfer:          &graph.Client{},
+		DriveID:           driveid.New("session-drive-id"),
+		RootItem:          "session-root-id",
+		AccountEmailValue: "session@example.com",
 	}
 }
 
@@ -161,7 +158,7 @@ func TestNewMountEngine_UsesMountConfigNotSessionResolvedFields(t *testing.T) {
 	assert.False(t, eng.localRules.RejectSharePointRootForms)
 	assert.NotEqual(t, session.DriveID, eng.driveID)
 	assert.NotEqual(t, session.RootItem, eng.rootItemID)
-	assert.NotEqual(t, session.Resolved.CanonicalID.Email(), eng.permHandler.accountEmail)
+	assert.NotEqual(t, session.AccountEmail(), eng.permHandler.accountEmail)
 }
 
 func TestNewMountEngine_RequiresSyncRoot(t *testing.T) {

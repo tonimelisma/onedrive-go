@@ -13,7 +13,8 @@ import (
 
 // LocalFilterConfig controls local-only observation exclusions. These filters
 // affect what the scanner/watch pipeline turns into change events; they do not
-// rewrite remote observation semantics.
+// rewrite remote observation semantics. SkipDirs entries are rooted relative
+// slash paths beneath the mount root, not basename-only directory names.
 type LocalFilterConfig struct {
 	SkipDotfiles bool
 	SkipSymlinks bool
