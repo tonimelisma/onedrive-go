@@ -265,18 +265,18 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionArmsRetryTimer
 func TestEngineFlow_ProcessNormalDecision_RemoteBoundaryPermissionDoesNotArmRetryTimerInWatchMode(t *testing.T) {
 	t.Parallel()
 
-	const sharedRootItemID = "shared-root-id"
+	const rootedSubtreeItemID = "rooted-subtree-id"
 
 	eng, _ := newTestEngine(t, &engineMockClient{
 		listItemPermissionsFn: func(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error) {
-			assert.Equal(t, sharedRootItemID, itemID)
+			assert.Equal(t, rootedSubtreeItemID, itemID)
 			return []graph.Permission{{
 				Roles: []string{"read"},
 			}}, nil
 		},
 	})
-	eng.rootItemID = sharedRootItemID
-	eng.permHandler.rootItemID = sharedRootItemID
+	eng.rootItemID = rootedSubtreeItemID
+	eng.permHandler.rootItemID = rootedSubtreeItemID
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
@@ -387,18 +387,18 @@ func TestEngineFlow_ProcessTrialDecision_RearmOrDiscardRecordsFailureWithoutTerm
 func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionEvidenceFallsBackToRetryPersistence(t *testing.T) {
 	t.Parallel()
 
-	const sharedRootItemID = "shared-root-id"
+	const rootedSubtreeItemID = "rooted-subtree-id"
 
 	eng, _ := newTestEngine(t, &engineMockClient{
 		listItemPermissionsFn: func(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error) {
-			assert.Equal(t, sharedRootItemID, itemID)
+			assert.Equal(t, rootedSubtreeItemID, itemID)
 			return []graph.Permission{{
 				Roles: []string{"write"},
 			}}, nil
 		},
 	})
-	eng.rootItemID = sharedRootItemID
-	eng.permHandler.rootItemID = sharedRootItemID
+	eng.rootItemID = rootedSubtreeItemID
+	eng.permHandler.rootItemID = rootedSubtreeItemID
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)

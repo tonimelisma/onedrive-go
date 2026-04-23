@@ -15,13 +15,13 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	errs chan<- error,
 	pollInterval time.Duration,
 ) {
-	if rt.engine.hasSharedRoot() {
-		rt.warnSharedRootWebsocketFallback()
+	if rt.engine.hasRootedSubtree() {
+		rt.warnRootedSubtreeWebsocketFallback()
 		go func() {
 			defer obsWg.Done()
 			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
 			defer close(batches)
-			errs <- rt.watchSharedRootRemote(ctx, bl, batches, pollInterval)
+			errs <- rt.watchRootedSubtreeRemote(ctx, bl, batches, pollInterval)
 		}()
 		return
 	}
@@ -61,16 +61,16 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	}()
 }
 
-func (rt *watchRuntime) warnSharedRootWebsocketFallback() {
+func (rt *watchRuntime) warnRootedSubtreeWebsocketFallback() {
 	if !rt.engine.enableWebsocket {
 		return
 	}
 
 	rt.engine.emitDebugEvent(engineDebugEvent{
 		Type: engineDebugEventWebsocketFallback,
-		Note: "shared_root",
+		Note: "rooted_subtree",
 	})
-	rt.engine.logger.Warn("websocket watch is not supported for shared-root drives; falling back to polling",
+	rt.engine.logger.Warn("websocket watch is not supported for rooted-subtree engines; falling back to polling",
 		slog.String("drive_id", rt.engine.driveID.String()),
 		slog.String("root_item_id", rt.engine.rootItemID),
 	)

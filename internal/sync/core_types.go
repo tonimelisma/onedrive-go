@@ -59,7 +59,7 @@ type ChangeEvent struct {
 	ETag             string // remote only
 	CTag             string // remote only
 	IsDeleted        bool
-	TargetRootItemID string // configured remote root item for shared-root observation
+	TargetRootItemID string // configured remote root item for rooted-subtree observation
 }
 
 // BaselineEntry represents the confirmed synced state of a single path.
@@ -259,7 +259,7 @@ func (b *Baseline) DescendantsOf(prefix string) []*BaselineEntry {
 // narrow window and permanently lost if the client's token advances past them.
 //
 // When pathPrefix is non-empty, only entries under that prefix are considered
-// (used for shared-root observation). When empty, all entries for the given
+// (used for rooted-subtree observation). When empty, all entries for the given
 // driveID are checked.
 //
 // Returns synthesized ChangeDelete events for each orphan, which can be fed

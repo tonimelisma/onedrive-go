@@ -35,7 +35,7 @@ type ExecutorConfig struct {
 	uploads    driveops.Uploader
 	syncTree   *synctree.Root
 	driveID    driveid.ID // per-drive context (B-068)
-	rootItemID string     // configured remote root for shared-root drives; empty = drive root
+	rootItemID string     // configured remote root for rooted-subtree engines; empty = drive root
 	logger     *slog.Logger
 
 	// transferMgr handles unified download/upload with resume and disk
@@ -85,7 +85,7 @@ func (cfg *ExecutorConfig) SetTransferMgr(mgr *driveops.TransferManager) {
 	cfg.transferMgr = mgr
 }
 
-// SetRootItemID sets the configured remote root item for shared-root drives.
+// SetRootItemID sets the configured remote root item for rooted-subtree engines.
 // Empty keeps the normal owner-drive root semantics.
 func (cfg *ExecutorConfig) SetRootItemID(itemID string) {
 	cfg.rootItemID = itemID

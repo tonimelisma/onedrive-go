@@ -87,14 +87,14 @@ type DriveVerifier interface {
 	Drive(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
 }
 
-// FolderDeltaFetcher provides shared-root delta enumeration for separately
-// configured shared-root drives.
+// FolderDeltaFetcher provides rooted-subtree delta enumeration for engines
+// rooted below the remote drive root.
 type FolderDeltaFetcher interface {
 	DeltaFolderAll(ctx context.Context, driveID driveid.ID, folderID, token string) ([]graph.Item, string, error)
 }
 
-// RecursiveLister provides recursive children enumeration for shared-root
-// observation when shared-root delta is not supported.
+// RecursiveLister provides recursive children enumeration for rooted-subtree
+// observation when rooted-subtree delta is not supported.
 type RecursiveLister interface {
 	ListChildrenRecursive(ctx context.Context, driveID driveid.ID, folderID string) ([]graph.Item, error)
 }
@@ -105,30 +105,30 @@ type PermissionChecker interface {
 }
 
 type engineInputs struct {
-	DBPath                 string
-	SyncRoot               string
-	DataDir                string
-	DriveID                driveid.ID
-	DriveType              string
-	AccountEmail           string
-	RootItemID             string
-	SharedRootDeltaCapable bool
-	Fetcher                DeltaFetcher
-	SocketIOFetcher        SocketIOEndpointFetcher
-	Items                  ItemClient
-	Downloads              driveops.Downloader
-	Uploads                driveops.Uploader
-	PathConvergenceFactory driveops.PathConvergenceFactory
-	DriveVerifier          DriveVerifier
-	FolderDelta            FolderDeltaFetcher
-	RecursiveLister        RecursiveLister
-	PermChecker            PermissionChecker
-	Logger                 *slog.Logger
-	LocalFilter            LocalFilterConfig
-	LocalRules             LocalObservationRules
-	EnableWebsocket        bool
-	TransferWorkers        int
-	CheckWorkers           int
-	MinFreeSpace           int64
-	PerfCollector          *perf.Collector
+	DBPath                    string
+	SyncRoot                  string
+	DataDir                   string
+	DriveID                   driveid.ID
+	DriveType                 string
+	AccountEmail              string
+	RootItemID                string
+	RootedSubtreeDeltaCapable bool
+	Fetcher                   DeltaFetcher
+	SocketIOFetcher           SocketIOEndpointFetcher
+	Items                     ItemClient
+	Downloads                 driveops.Downloader
+	Uploads                   driveops.Uploader
+	PathConvergenceFactory    driveops.PathConvergenceFactory
+	DriveVerifier             DriveVerifier
+	FolderDelta               FolderDeltaFetcher
+	RecursiveLister           RecursiveLister
+	PermChecker               PermissionChecker
+	Logger                    *slog.Logger
+	LocalFilter               LocalFilterConfig
+	LocalRules                LocalObservationRules
+	EnableWebsocket           bool
+	TransferWorkers           int
+	CheckWorkers              int
+	MinFreeSpace              int64
+	PerfCollector             *perf.Collector
 }

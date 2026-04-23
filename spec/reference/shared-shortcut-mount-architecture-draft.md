@@ -699,11 +699,11 @@ Current design docs intentionally define these facts:
 - the engine is a single-drive runtime owner
 - the engine supports exactly two root shapes today:
   - drive-root sessions
-  - shared-root sessions rooted below the remote drive root
+  - rooted-subtree sessions rooted below the remote drive root
 - embedded shared-folder links discovered inside another synced drive are
   ignored
 - each configured drive owns one SQLite state DB
-- shared-root target metadata is threaded through planning and execution so the
+- rooted-subtree target metadata is threaded through planning and execution so the
   existing single-root engine can operate on a remote subtree
 - shared drives currently have their own deterministic `sync_dir`, usually under
   `~/OneDrive-Shared/...`
@@ -1078,20 +1078,21 @@ still in use.
 `internal/sync/engine_primary_root.go`
 
 - The engine builds a single `primaryRootObservationPlan` with exactly two
-  variants: drive root or shared root.
+  variants: drive root or rooted subtree.
 - This is still singular runtime ownership and therefore works only for one
-  configured shared root per engine.
-- Cleanup target: preserve one-root-per-engine; remove "shared-root" special
+  configured rooted subtree per engine.
+- Cleanup target: preserve one-root-per-engine; remove rooted-subtree-specialized
   terminology after mount-engine refactor.
 
-`internal/sync/engine_shared_root.go`
+`internal/sync/engine_rooted_subtree.go`
 
-- Entire remote observation path specialized around "shared-root drives".
+- Entire remote observation path specialized around the engine's rooted-subtree
+  runtime path.
 - This is not dead code if we keep one engine per shortcut mount.
 - Transitional reuse: strong candidate for the first mount-engine observation
   implementation.
-- Cleanup target: rename to mount-root observation; remove assumptions that it
-  is tied to configured shared drives.
+- Cleanup target: keep the rooted-subtree implementation but remove
+  assumptions that it is tied to configured shared drives.
 
 `internal/sync/engine_primary_root_watch.go`
 
@@ -1401,7 +1402,7 @@ Goal:
 Code areas:
 
 - `internal/sync/engine_primary_root.go`
-- `internal/sync/engine_shared_root.go`
+- `internal/sync/engine_rooted_subtree.go`
 - `internal/sync/engine_primary_root_watch.go`
 - `internal/sync/engine_config.go`
 - `internal/sync/item_converter.go`
@@ -1779,6 +1780,6 @@ several physical drives". It is:
 - shared capability layer for reusable process-wide resources
 
 The current repository already contains reusable pieces of a mount engine in the
-shared-root observation and execution path. Those pieces should be harvested
+rooted-subtree observation and execution path. Those pieces should be harvested
 deliberately as transitional implementation material, not treated as proof that
 shared shortcuts naturally belong inside the current single-drive engine model.

@@ -78,7 +78,7 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 	}
 
 	// Watch mode must rearm the live refresh timer in the same control path that
-	// shortens the persisted deadline, otherwise shared-root enumerate fallback
+	// shortens the persisted deadline, otherwise rooted-subtree enumerate fallback
 	// can leave the process sleeping on an outdated timer.
 	armFullRefreshTimer := batch.armFullRefreshTimer
 	if deferredProgress := progress.deferredProgress(); deferredProgress != nil {
@@ -112,8 +112,8 @@ func batchObservationFailureMessage(source remoteObservationBatchSource) string 
 	switch source {
 	case remoteObservationBatchPrimaryWatch:
 		return "failed to reconcile primary remote observation findings"
-	case remoteObservationBatchSharedRoot:
-		return "failed to reconcile shared-root remote observation findings"
+	case remoteObservationBatchRootedSubtree:
+		return "failed to reconcile rooted-subtree remote observation findings"
 	case remoteObservationBatchFullRefresh:
 		return "failed to reconcile full remote refresh observation findings"
 	default:
@@ -125,8 +125,8 @@ func batchObservationDebugNote(source remoteObservationBatchSource) string {
 	switch source {
 	case remoteObservationBatchPrimaryWatch:
 		return engineDebugNotePrimaryWatch
-	case remoteObservationBatchSharedRoot:
-		return engineDebugNoteSharedRootWatch
+	case remoteObservationBatchRootedSubtree:
+		return engineDebugNoteRootedSubtreeWatch
 	case remoteObservationBatchFullRefresh:
 		return engineDebugNoteFullRefresh
 	default:
@@ -185,7 +185,7 @@ func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 	}
 
 	switch batch.source {
-	case remoteObservationBatchPrimaryWatch, remoteObservationBatchSharedRoot:
+	case remoteObservationBatchPrimaryWatch, remoteObservationBatchRootedSubtree:
 		batch.finishApplied(err)
 		if ctx.Err() != nil {
 			return err

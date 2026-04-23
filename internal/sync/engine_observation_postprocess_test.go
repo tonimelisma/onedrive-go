@@ -28,7 +28,7 @@ func testRemoteCreateEvent(path string, itemID string, driveID string) ChangeEve
 	}
 }
 
-func testSharedRootWatchBatch(
+func testRootedSubtreeWatchBatch(
 	engine *Engine,
 	mode remoteObservationMode,
 	events []ChangeEvent,
@@ -43,7 +43,7 @@ func testSharedRootWatchBatch(
 		false,
 		findings,
 	)
-	batch.source = remoteObservationBatchSharedRoot
+	batch.source = remoteObservationBatchRootedSubtree
 	batch.applyAck = make(chan error, 1)
 
 	return batch
@@ -80,7 +80,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t
 }
 
 // Validates: R-2.1.2
-func TestHandleRemoteObservationBatch_SharedRootWatchCommitsObservedRowsAndPendingCursor(t *testing.T) {
+func TestHandleRemoteObservationBatch_RootedSubtreeWatchCommitsObservedRowsAndPendingCursor(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -89,7 +89,7 @@ func TestHandleRemoteObservationBatch_SharedRootWatchCommitsObservedRowsAndPendi
 	ctx := t.Context()
 
 	pendingCursor := "cursor-shared"
-	batch := testSharedRootWatchBatch(
+	batch := testRootedSubtreeWatchBatch(
 		eng.Engine,
 		remoteObservationModeDelta,
 		[]ChangeEvent{
@@ -109,7 +109,7 @@ func TestHandleRemoteObservationBatch_SharedRootWatchCommitsObservedRowsAndPendi
 }
 
 // Validates: R-2.8.3
-func TestHandleRemoteObservationBatch_SharedRootEnumerateClampRearmsRefreshTimerImmediately(t *testing.T) {
+func TestHandleRemoteObservationBatch_RootedSubtreeEnumerateClampRearmsRefreshTimerImmediately(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -134,7 +134,7 @@ func TestHandleRemoteObservationBatch_SharedRootEnumerateClampRearmsRefreshTimer
 	assert.True(t, clock.HasPendingTimerAt(initialDueAt))
 	assert.False(t, clock.HasPendingTimerAt(enumerateDueAt))
 
-	batch := testSharedRootWatchBatch(
+	batch := testRootedSubtreeWatchBatch(
 		eng.Engine,
 		remoteObservationModeEnumerate,
 		nil,
@@ -152,7 +152,7 @@ func TestHandleRemoteObservationBatch_SharedRootEnumerateClampRearmsRefreshTimer
 }
 
 // Validates: R-2.10.4
-func TestHandleRemoteObservationBatch_SharedRootReconcilesRemoteReadDeniedFindings(t *testing.T) {
+func TestHandleRemoteObservationBatch_RootedSubtreeReconcilesRemoteReadDeniedFindings(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -160,7 +160,7 @@ func TestHandleRemoteObservationBatch_SharedRootReconcilesRemoteReadDeniedFindin
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	batch := testSharedRootWatchBatch(
+	batch := testRootedSubtreeWatchBatch(
 		eng.Engine,
 		remoteObservationModeEnumerate,
 		nil,
@@ -179,7 +179,7 @@ func TestHandleRemoteObservationBatch_SharedRootReconcilesRemoteReadDeniedFindin
 
 	scopes, err := eng.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, scopes, "shared-root remote read-denied findings should not create block scope rows")
+	assert.Empty(t, scopes, "rooted-subtree remote read-denied findings should not create block scope rows")
 }
 
 // Validates: R-2.10.4

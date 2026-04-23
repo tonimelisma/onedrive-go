@@ -14,20 +14,20 @@ import (
 // EngineMountConfig carries the non-client runtime facts needed to construct an
 // engine for one mounted content root.
 type EngineMountConfig struct {
-	DBPath                 string
-	SyncRoot               string
-	DataDir                string
-	DriveID                driveid.ID
-	DriveType              string
-	AccountEmail           string
-	RootItemID             string
-	SharedRootDeltaCapable bool
-	EnableWebsocket        bool
-	LocalFilter            LocalFilterConfig
-	LocalRules             LocalObservationRules
-	TransferWorkers        int
-	CheckWorkers           int
-	MinFreeSpace           int64
+	DBPath                    string
+	SyncRoot                  string
+	DataDir                   string
+	DriveID                   driveid.ID
+	DriveType                 string
+	AccountEmail              string
+	RootItemID                string
+	RootedSubtreeDeltaCapable bool
+	EnableWebsocket           bool
+	LocalFilter               LocalFilterConfig
+	LocalRules                LocalObservationRules
+	TransferWorkers           int
+	CheckWorkers              int
+	MinFreeSpace              int64
 }
 
 // NewMountEngine constructs an Engine directly from the authenticated session
@@ -60,31 +60,31 @@ func NewMountEngine(
 	}
 
 	cfg := &engineInputs{
-		DBPath:                 mountCfg.DBPath,
-		SyncRoot:               mountCfg.SyncRoot,
-		DataDir:                mountCfg.DataDir,
-		DriveID:                mountCfg.DriveID,
-		DriveType:              mountCfg.DriveType,
-		AccountEmail:           mountCfg.AccountEmail,
-		RootItemID:             mountCfg.RootItemID,
-		SharedRootDeltaCapable: mountCfg.SharedRootDeltaCapable,
-		Fetcher:                session.Meta,
-		SocketIOFetcher:        session.Meta,
-		Items:                  session.Meta,
-		Downloads:              session.Transfer,
-		Uploads:                session.Transfer,
-		PathConvergenceFactory: session,
-		FolderDelta:            session.Meta,
-		RecursiveLister:        session.Meta,
-		PermChecker:            session.Meta,
-		Logger:                 logger,
-		EnableWebsocket:        mountCfg.EnableWebsocket,
-		LocalFilter:            mountCfg.LocalFilter,
-		LocalRules:             mountCfg.LocalRules,
-		TransferWorkers:        mountCfg.TransferWorkers,
-		CheckWorkers:           mountCfg.CheckWorkers,
-		MinFreeSpace:           mountCfg.MinFreeSpace,
-		PerfCollector:          perfCollector,
+		DBPath:                    mountCfg.DBPath,
+		SyncRoot:                  mountCfg.SyncRoot,
+		DataDir:                   mountCfg.DataDir,
+		DriveID:                   mountCfg.DriveID,
+		DriveType:                 mountCfg.DriveType,
+		AccountEmail:              mountCfg.AccountEmail,
+		RootItemID:                mountCfg.RootItemID,
+		RootedSubtreeDeltaCapable: mountCfg.RootedSubtreeDeltaCapable,
+		Fetcher:                   session.Meta,
+		SocketIOFetcher:           session.Meta,
+		Items:                     session.Meta,
+		Downloads:                 session.Transfer,
+		Uploads:                   session.Transfer,
+		PathConvergenceFactory:    session,
+		FolderDelta:               session.Meta,
+		RecursiveLister:           session.Meta,
+		PermChecker:               session.Meta,
+		Logger:                    logger,
+		EnableWebsocket:           mountCfg.EnableWebsocket,
+		LocalFilter:               mountCfg.LocalFilter,
+		LocalRules:                mountCfg.LocalRules,
+		TransferWorkers:           mountCfg.TransferWorkers,
+		CheckWorkers:              mountCfg.CheckWorkers,
+		MinFreeSpace:              mountCfg.MinFreeSpace,
+		PerfCollector:             perfCollector,
 	}
 
 	if verifyDrive {
@@ -132,16 +132,16 @@ func NewDriveEngine(
 	}
 
 	return NewMountEngine(ctx, session, &EngineMountConfig{
-		DBPath:                 dbPath,
-		SyncRoot:               syncDir,
-		DataDir:                config.DefaultDataDir(),
-		DriveID:                resolved.DriveID,
-		DriveType:              resolved.CanonicalID.DriveType(),
-		AccountEmail:           resolved.CanonicalID.Email(),
-		RootItemID:             resolved.RootItemID,
-		SharedRootDeltaCapable: resolved.SharedRootDeltaCapable,
-		EnableWebsocket:        resolved.Websocket,
-		LocalFilter:            LocalFilterConfig{},
+		DBPath:                    dbPath,
+		SyncRoot:                  syncDir,
+		DataDir:                   config.DefaultDataDir(),
+		DriveID:                   resolved.DriveID,
+		DriveType:                 resolved.CanonicalID.DriveType(),
+		AccountEmail:              resolved.CanonicalID.Email(),
+		RootItemID:                resolved.RootItemID,
+		RootedSubtreeDeltaCapable: resolved.SharedRootDeltaCapable,
+		EnableWebsocket:           resolved.Websocket,
+		LocalFilter:               LocalFilterConfig{},
 		LocalRules: LocalObservationRules{
 			RejectSharePointRootForms: resolved.CanonicalID.IsSharePoint(),
 		},
