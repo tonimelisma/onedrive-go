@@ -85,8 +85,17 @@ func TestEngineFlow_PersistBlockedRetryWork_CanonicalizesRowsAcrossRuntimePaths(
 		},
 	}
 
-	var want RetryWorkRow
-	for i, tc := range cases {
+	want := normalize(RetryWorkRow{
+		WorkKey:       serializeRetryWorkKey(retryWorkKey("Shared/Docs/file.txt", "Shared/Docs/old.txt", ActionUpload)),
+		Path:          "Shared/Docs/file.txt",
+		OldPath:       "Shared/Docs/old.txt",
+		ActionType:    ActionUpload,
+		ConditionType: scopeKey.ConditionType(),
+		ScopeKey:      scopeKey,
+		Blocked:       true,
+		LastError:     wantMessage,
+	})
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			eng := newSingleOwnerEngine(t)
 			rt := testWatchRuntime(t, eng)
@@ -102,11 +111,6 @@ func TestEngineFlow_PersistBlockedRetryWork_CanonicalizesRowsAcrossRuntimePaths(
 			assert.True(t, got.Blocked)
 			assert.Equal(t, wantMessage, got.LastError)
 			assert.Equal(t, int64(0), got.NextRetryAt)
-
-			if i == 0 {
-				want = got
-				return
-			}
 			assert.Equal(t, want, got)
 		})
 	}

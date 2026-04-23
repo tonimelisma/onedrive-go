@@ -477,6 +477,77 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionOutcomeFallsBackToRe
 }
 
 // Validates: R-2.10.5
+func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedScope(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+	trialScopeKey := SKService()
+	throttleScopeKey := SKThrottleDrive(eng.driveID)
+
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:           trialScopeKey,
+		BlockedAt:     eng.nowFunc().Add(-time.Minute),
+		TrialInterval: time.Minute,
+		NextTrialAt:   eng.nowFunc(),
+	})
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		Path:          "file.txt",
+		ActionType:    ActionUpload,
+		ConditionType: IssueServiceOutage,
+		ScopeKey:      trialScopeKey,
+		Blocked:       true,
+		AttemptCount:  1,
+		LastError:     "blocked",
+		FirstSeenAt:   1,
+		LastSeenAt:    2,
+	}))
+
+	current := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "file.txt",
+		DriveID: eng.driveID,
+	}, 1, nil)
+	require.NotNil(t, current)
+
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), rt, trialScopeKey, &ResultDecision{
+		Class:             errclass.ClassBlockScopeingTransient,
+		ConditionKey:      ConditionRateLimited,
+		ConditionType:     IssueRateLimited,
+		ScopeKey:          throttleScopeKey,
+		ScopeEvidence:     throttleScopeKey,
+		Persistence:       persistRetryWork,
+		RunScopeDetection: true,
+		TrialHint:         trialHintExtendOnMatchingScope,
+	}, current, &ActionCompletion{
+		ActionID:      current.ID,
+		Path:          "file.txt",
+		ActionType:    ActionUpload,
+		DriveID:       eng.driveID,
+		HTTPStatus:    http.StatusTooManyRequests,
+		RetryAfter:    time.Minute,
+		ErrMsg:        "throttled",
+		IsTrial:       true,
+		TrialScopeKey: trialScopeKey,
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, ready)
+	assert.True(t, rt.hasActiveScope(throttleScopeKey),
+		"trial retry fallback should activate the newly classified blocked scope")
+	assert.False(t, rt.hasActiveScope(trialScopeKey),
+		"the old trial scope should be discarded once its blocked work is reclassified")
+	assert.True(t, rt.hasTrialTimer(), "new blocked scope should arm the watch trial timer")
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, throttleScopeKey, retryRows[0].ScopeKey)
+	assert.True(t, retryRows[0].Blocked)
+}
+
+// Validates: R-2.10.5
 func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmittingDependents(t *testing.T) {
 	t.Parallel()
 

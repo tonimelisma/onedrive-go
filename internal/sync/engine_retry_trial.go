@@ -20,7 +20,7 @@ func (rt *watchRuntime) releaseDueHeldTrialsNow(
 
 	dispatch, err := rt.reduceReadyFrontierStage(ctx, rt, bl, nil)
 	if err != nil {
-		return nil, err
+		return dispatch, err
 	}
 	rt.armHeldTimers()
 	rt.engine.emitDebugEvent(engineDebugEvent{
@@ -42,7 +42,7 @@ func (rt *watchRuntime) releaseDueHeldRetriesNow(
 
 	dispatch, err := rt.reduceReadyFrontierStage(ctx, rt, bl, nil)
 	if err != nil {
-		return nil, err
+		return dispatch, err
 	}
 	rt.armHeldTimers()
 	rt.engine.emitDebugEvent(engineDebugEvent{

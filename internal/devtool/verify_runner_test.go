@@ -47,7 +47,13 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	assert.Equal(t, "go", runner.runCommands[3].name)
 	assert.Equal(t, []string{"build", "./..."}, runner.runCommands[3].args)
 	assert.Equal(t, []string{"test", "-race", "-coverprofile=" + filepath.Join(repoRoot, "cover.out"), "./..."}, runner.runCommands[4].args)
-	assert.Equal(t, []string{"test", "-c", "-race", "-tags=e2e e2e_full", "-o", filepath.Join(os.TempDir(), "onedrive-go-e2e-full.test"), "./e2e"}, runner.runCommands[5].args)
+	assert.Equal(t, "test", runner.runCommands[5].args[0])
+	assert.Equal(t, "-c", runner.runCommands[5].args[1])
+	assert.Equal(t, "-race", runner.runCommands[5].args[2])
+	assert.Equal(t, "-tags=e2e e2e_full", runner.runCommands[5].args[3])
+	assert.Equal(t, "-o", runner.runCommands[5].args[4])
+	assert.Contains(t, filepath.Base(runner.runCommands[5].args[5]), strings.TrimSuffix(fullE2ECompileArtifactName, ".test"))
+	assert.Equal(t, "./e2e", runner.runCommands[5].args[6])
 	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[6].args)
 	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[7].args)
 	assert.Equal(t, []string{"test", "-tags=e2e", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[8].args)
@@ -62,6 +68,29 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	assertCommandLacksEnvVar(t, runner.runCommands[8], e2eRunFastFixturePreflightEnvVar+"=1")
 	require.Len(t, runner.outputCommands, 1)
 	assert.Contains(t, stdout.String(), "==> coverage")
+}
+
+func TestRunE2EFullCompileCheck_UsesUniqueArtifactPath(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+
+	err := runE2EFullCompileCheck(
+		context.Background(),
+		runner,
+		t.TempDir(),
+		nil,
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+	require.NoError(t, err)
+	require.Len(t, runner.runCommands, 1)
+
+	args := runner.runCommands[0].args
+	require.Len(t, args, 7)
+	assert.Equal(t, "-o", args[4])
+	assert.NotEqual(t, filepath.Join(os.TempDir(), fullE2ECompileArtifactName), args[5])
+	assert.Contains(t, filepath.Base(args[5]), strings.TrimSuffix(fullE2ECompileArtifactName, ".test"))
 }
 
 // Validates: R-6.2.1, R-6.2.2
@@ -88,7 +117,13 @@ func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, runner.runCommands, 6)
-	assert.Equal(t, []string{"test", "-c", "-race", "-tags=e2e e2e_full", "-o", filepath.Join(os.TempDir(), "onedrive-go-e2e-full.test"), "./e2e"}, runner.runCommands[5].args)
+	assert.Equal(t, "test", runner.runCommands[5].args[0])
+	assert.Equal(t, "-c", runner.runCommands[5].args[1])
+	assert.Equal(t, "-race", runner.runCommands[5].args[2])
+	assert.Equal(t, "-tags=e2e e2e_full", runner.runCommands[5].args[3])
+	assert.Equal(t, "-o", runner.runCommands[5].args[4])
+	assert.Contains(t, filepath.Base(runner.runCommands[5].args[5]), strings.TrimSuffix(fullE2ECompileArtifactName, ".test"))
+	assert.Equal(t, "./e2e", runner.runCommands[5].args[6])
 }
 
 func TestRunVerifyE2EFullRunsPreflightsBeforeSuites(t *testing.T) {

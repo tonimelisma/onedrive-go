@@ -71,8 +71,10 @@ type watchResources struct {
 	socketIOWakeDone chan struct{}
 
 	// Full remote refresh is started by the watch loop and hands one loop-applied
-	// remote observation batch back over refreshResults. The loop owns
-	// refreshActive, durable apply, and dirty marking on receipt.
+	// remote observation batch back over refreshResults. These channels stay
+	// stable for the runtime lifetime because timer callbacks and refresh
+	// goroutines send through them asynchronously; the loop disables select cases
+	// by phase instead of racing those senders by niling channel fields.
 	refreshActive  bool
 	refreshTimer   syncTimer
 	refreshCh      chan time.Time

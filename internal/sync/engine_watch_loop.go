@@ -230,7 +230,17 @@ func (rt *watchRuntime) handleWatchSkippedSignal(
 		return false, nil
 	}
 
-	return false, rt.reconcileSkippedObservationFindings(ctx, skipped)
+	reconcileCtx := ctx
+	if ctx.Err() != nil {
+		reconcileCtx = context.WithoutCancel(ctx)
+	}
+
+	err := rt.reconcileSkippedObservationFindings(reconcileCtx, skipped)
+	if err != nil && isWatchShutdownError(ctx, err) {
+		return false, nil
+	}
+
+	return false, err
 }
 
 func (rt *watchRuntime) handleWatchRefreshResultSignal(
@@ -299,6 +309,8 @@ func (rt *watchRuntime) releaseHeldFrontier(
 		released, err = rt.releaseDueHeldRetriesNow(ctx, p.bl)
 	}
 	if err != nil {
+		rt.clearSyncStatusBatch()
+		rt.completeOutboxAsShutdown(released)
 		return err
 	}
 

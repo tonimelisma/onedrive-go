@@ -45,13 +45,9 @@ func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	rt.remoteBatches = nil
 	rt.skippedItems = nil
 	p.maintenanceC = nil
-	rt.refreshCh = nil
 }
 
 func (rt *watchRuntime) refreshDrainCompletionSources() {
-	if !rt.refreshActive {
-		rt.refreshResults = nil
-	}
 	if rt.activeObservers == 0 {
 		rt.observerErrs = nil
 	}
@@ -79,7 +75,7 @@ func (rt *watchRuntime) runDrainStep(
 }
 
 func (rt *watchRuntime) drainLoopDone(p *watchPipeline) bool {
-	return p.completions == nil && rt.refreshResults == nil && rt.activeObservers == 0
+	return p.completions == nil && !rt.refreshActive && rt.activeObservers == 0
 }
 
 func (rt *watchRuntime) handleDrainingCompletion(
@@ -110,13 +106,12 @@ func (rt *watchRuntime) handleDrainingRefreshResult(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		rt.refreshResults = nil
+		rt.refreshActive = false
 		return rt.drainLoopDone(p), nil
 	}
 
 	rt.dropRemoteRefreshResultOnShutdown()
 	rt.mustAssertRefreshBookkeepingCleared(rt, "handle draining refresh result")
-	rt.refreshResults = nil
 	rt.mustAssertInvariants(ctx, rt, "handle draining refresh result")
 
 	return rt.drainLoopDone(p), nil

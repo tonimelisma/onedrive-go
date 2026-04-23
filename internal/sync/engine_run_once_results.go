@@ -88,6 +88,10 @@ func (r *oneShotRunner) runResultsLoopIdle(
 	completions <-chan ActionCompletion,
 	fatalErr error,
 ) ([]*TrackedAction, error, bool) {
+	if nextOutbox, nextFatal, handled := r.releaseIdleDueHeldWork(ctx, bl); handled {
+		return nextOutbox, nextFatal, false
+	}
+
 	select {
 	case completion, ok := <-completions:
 		if !ok {
@@ -98,6 +102,22 @@ func (r *oneShotRunner) runResultsLoopIdle(
 	case <-resultsLoopCtxDone(ctx, fatalErr):
 		return nil, fatalErr, r.runningCount == 0
 	}
+}
+
+func (r *oneShotRunner) releaseIdleDueHeldWork(
+	ctx context.Context,
+	bl *Baseline,
+) ([]*TrackedAction, error, bool) {
+	if r.runningCount != 0 || !r.hasDueHeldWork(r.engine.nowFunc()) {
+		return nil, nil, false
+	}
+
+	outbox, err := r.reduceReadyFrontierStage(ctx, nil, bl, nil)
+	if err != nil {
+		r.completeOutboxAsShutdown(outbox)
+	}
+
+	return outbox, err, true
 }
 
 func (r *oneShotRunner) runResultsLoopWithOutbox(

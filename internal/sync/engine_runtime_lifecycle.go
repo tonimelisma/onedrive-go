@@ -238,6 +238,61 @@ func (flow *engineFlow) applyBlockScope(ctx context.Context, watch *watchRuntime
 	return nil
 }
 
+func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
+	ctx context.Context,
+	watch *watchRuntime,
+	from ScopeKey,
+	to ScopeKey,
+	conditionType string,
+	retryAfter time.Duration,
+) error {
+	if to.IsZero() {
+		return nil
+	}
+
+	now := flow.engine.nowFunc()
+	interval := computeTrialInterval(retryAfter)
+	block := &ActiveScope{
+		Key:           to,
+		BlockedAt:     now,
+		TrialInterval: interval,
+		NextTrialAt:   now.Add(interval),
+	}
+	persisted, err := blockScopeRowFromActiveScope(*block)
+	if err != nil {
+		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
+	}
+	if err := flow.engine.baseline.UpsertBlockScope(ctx, persisted); err != nil {
+		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
+	}
+
+	flow.upsertActiveScope(block)
+	flow.engine.emitDebugEvent(engineDebugEvent{
+		Type:     engineDebugEventScopeActivated,
+		ScopeKey: to,
+	})
+
+	if from != to && !from.IsZero() {
+		if err := flow.engine.baseline.DiscardScope(ctx, from); err != nil {
+			return fmt.Errorf("transition blocked scope %s -> %s: discard old scope: %w", from.String(), to.String(), err)
+		}
+		flow.removeActiveScope(from)
+		flow.engine.emitDebugEvent(engineDebugEvent{
+			Type:     engineDebugEventScopeDiscarded,
+			ScopeKey: from,
+		})
+	}
+
+	flow.engine.logger.Warn("block scope active — actions blocked",
+		slog.String("scope_key", to.String()),
+		slog.String("condition_type", conditionType),
+		slog.Duration("trial_interval", interval),
+	)
+
+	flow.mustAssertInvariants(ctx, watch, "transition blocked scope")
+	return nil
+}
+
 // releaseScope atomically removes the block scope and makes blocked retry work
 // under that scope eligible to run again.
 func (flow *engineFlow) releaseScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {

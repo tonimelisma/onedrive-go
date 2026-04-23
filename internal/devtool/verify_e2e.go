@@ -327,9 +327,22 @@ func runE2EFullCompileCheck(
 	env []string,
 	stdout, stderr io.Writer,
 ) (runErr error) {
-	artifactPath := filepath.Join(os.TempDir(), fullE2ECompileArtifactName)
+	artifactFile, err := os.CreateTemp(
+		os.TempDir(),
+		strings.TrimSuffix(fullE2ECompileArtifactName, ".test")+"-*.test",
+	)
+	if err != nil {
+		return fmt.Errorf("create full e2e compile artifact: %w", err)
+	}
+	artifactPath := artifactFile.Name()
+	if err := artifactFile.Close(); err != nil {
+		if removeErr := remove(artifactPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return fmt.Errorf("close full e2e compile artifact: %w; cleanup error: %s", err, removeErr.Error())
+		}
+		return fmt.Errorf("close full e2e compile artifact: %w", err)
+	}
 	if err := remove(artifactPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove stale full e2e compile artifact: %w", err)
+		return fmt.Errorf("remove reserved full e2e compile artifact: %w", err)
 	}
 	defer func() {
 		if err := remove(artifactPath); err != nil && !errors.Is(err, os.ErrNotExist) && runErr == nil {
