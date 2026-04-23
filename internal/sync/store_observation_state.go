@@ -23,26 +23,13 @@ const (
 )
 
 const (
-	localRefreshModeWatchHealthy  = "watch_healthy"
-	localRefreshModeWatchDegraded = "watch_degraded"
-
 	remoteRefreshEnumerateInterval = time.Hour
-	localRefreshDegradedInterval   = time.Hour
 )
 
 type ObservationState struct {
 	ConfiguredDriveID       driveid.ID
 	Cursor                  string
 	NextFullRemoteRefreshAt int64
-}
-
-func normalizeLocalRefreshMode(mode string) string {
-	switch mode {
-	case localRefreshModeWatchHealthy, localRefreshModeWatchDegraded:
-		return mode
-	default:
-		return localRefreshModeWatchHealthy
-	}
 }
 
 func remoteRefreshIntervalForMode(mode remoteObservationMode) time.Duration {
@@ -53,15 +40,6 @@ func remoteRefreshIntervalForMode(mode remoteObservationMode) time.Duration {
 		return remoteRefreshEnumerateInterval
 	default:
 		return fullRemoteRefreshInterval
-	}
-}
-
-func localRefreshIntervalForMode(mode string) time.Duration {
-	switch normalizeLocalRefreshMode(mode) {
-	case localRefreshModeWatchDegraded:
-		return localRefreshDegradedInterval
-	default:
-		return localFullScanInterval
 	}
 }
 
@@ -212,13 +190,14 @@ func (m *SyncStore) ClampFullRemoteRefreshDeadline(
 	ctx context.Context,
 	driveID driveid.ID,
 	notAfter time.Time,
-) error {
+) (bool, error) {
 	if notAfter.IsZero() {
-		return nil
+		return false, nil
 	}
 
 	deadline := notAfter.UnixNano()
-	return m.markObservationRefresh(
+	changed := false
+	err := m.markObservationRefresh(
 		ctx,
 		driveID,
 		"sync: beginning full remote refresh clamp transaction",
@@ -227,9 +206,11 @@ func (m *SyncStore) ClampFullRemoteRefreshDeadline(
 		func(state *ObservationState) {
 			if state.NextFullRemoteRefreshAt == 0 || state.NextFullRemoteRefreshAt > deadline {
 				state.NextFullRemoteRefreshAt = deadline
+				changed = true
 			}
 		},
 	)
+	return changed, err
 }
 
 func (m *SyncStore) markObservationRefresh(

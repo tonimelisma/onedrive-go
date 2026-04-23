@@ -31,8 +31,9 @@ const (
 )
 
 const (
-	fullRemoteRefreshInterval = 24 * time.Hour
-	localFullScanInterval     = 5 * time.Minute
+	fullRemoteRefreshInterval           = 24 * time.Hour
+	localWatchHealthySafetyScanInterval = 5 * time.Minute
+	localWatchDegradedFullScanInterval  = time.Hour
 )
 
 // quiescenceLogInterval is how often bootstrapSync logs while waiting
@@ -311,7 +312,7 @@ func (rt *watchRuntime) startObservers(
 	localObs.SetFilterConfig(rt.engine.localFilter)
 	localObs.SetObservationRules(rt.engine.localRules)
 	localObs.SetSkippedChannel(skippedCh)
-	localObs.safetyScanInterval = localRefreshIntervalForMode(localRefreshModeWatchHealthy)
+	localObs.safetyScanInterval = localWatchHealthySafetyScanInterval
 
 	if rt.engine.localWatcherFactory != nil {
 		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
@@ -332,10 +333,10 @@ func (rt *watchRuntime) startObservers(
 		if errors.Is(watchErr, ErrWatchLimitExhausted) {
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
 			rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
-				slog.Duration("scan_interval", localRefreshIntervalForMode(localRefreshModeWatchDegraded)),
+				slog.Duration("scan_interval", localWatchDegradedFullScanInterval),
 			)
 
-			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, localEvents, localRefreshIntervalForMode(localRefreshModeWatchDegraded))
+			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, localEvents, localWatchDegradedFullScanInterval)
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
 			errs <- nil // clean exit after context cancel
 

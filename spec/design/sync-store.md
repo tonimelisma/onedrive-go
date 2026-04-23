@@ -222,7 +222,9 @@ observation-owned read boundaries do not.
 `observation_state` persists only the restart-safe next full-remote refresh
 deadline, not the runtime mode that produced it. Runtime decides whether the
 current observation path is delta-based or enumerate-only and then stores the
-next due time accordingly.
+next due time accordingly. When watch mode shortens that persisted deadline
+after startup, the same watch step must rearm the live timer immediately so
+the process does not keep sleeping on the superseded later deadline.
 
 `retry_work` stores only exact held roots. Dependents blocked behind those
 roots remain dependency state in the current runtime; they are not persisted as

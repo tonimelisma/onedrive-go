@@ -115,3 +115,22 @@ func TestClearObservationCursor_PreservesRefreshSchedules(t *testing.T) {
 	assert.Empty(t, state.Cursor)
 	assert.Equal(t, remoteAt.Add(remoteRefreshEnumerateInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 }
+
+func TestClampFullRemoteRefreshDeadline_ReturnsWhetherDeadlineMovedEarlier(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+	now := time.Date(2026, 4, 20, 15, 0, 0, 0, time.UTC)
+
+	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, now, remoteObservationModeDelta))
+
+	changed, err := store.ClampFullRemoteRefreshDeadline(ctx, driveID, now.Add(remoteRefreshEnumerateInterval))
+	require.NoError(t, err)
+	assert.True(t, changed)
+
+	changed, err = store.ClampFullRemoteRefreshDeadline(ctx, driveID, now.Add(2*remoteRefreshEnumerateInterval))
+	require.NoError(t, err)
+	assert.False(t, changed)
+}
