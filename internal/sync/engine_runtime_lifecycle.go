@@ -358,37 +358,26 @@ func (flow *engineFlow) discardScope(ctx context.Context, watch *watchRuntime, k
 func (flow *engineFlow) persistBlockedRetryWork(
 	ctx context.Context,
 	work RetryWorkKey,
-	failure *RetryWorkFailure,
-) (RetryWorkRow, error) {
-	if failure == nil {
-		return RetryWorkRow{}, fmt.Errorf("persist blocked retry_work for %s: missing failure", work.Path)
-	}
-	if failure.ScopeKey.IsZero() {
-		return RetryWorkRow{}, fmt.Errorf("persist blocked retry_work for %s: missing scope key", work.Path)
+	scopeKey ScopeKey,
+) error {
+	if scopeKey.IsZero() {
+		return fmt.Errorf("persist blocked retry_work for %s: missing scope key", work.Path)
 	}
 
-	persisted := &RetryWorkFailure{
-		Path:          work.Path,
-		OldPath:       work.OldPath,
-		ActionType:    work.ActionType,
-		ConditionType: failure.ScopeKey.ConditionType(),
-		ScopeKey:      failure.ScopeKey,
-		Blocked:       true,
-	}
-	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, persisted, nil)
+	row, err := flow.engine.baseline.RecordBlockedRetryWork(ctx, work, scopeKey)
 	if err != nil {
-		return RetryWorkRow{}, fmt.Errorf("persist blocked retry_work for %s under %s: %w", work.Path, failure.ScopeKey.String(), err)
+		return fmt.Errorf("persist blocked retry_work for %s under %s: %w", work.Path, scopeKey.String(), err)
 	}
 	if row == nil {
-		return RetryWorkRow{}, fmt.Errorf(
+		return fmt.Errorf(
 			"persist blocked retry_work for %s under %s: missing persisted row",
 			work.Path,
-			failure.ScopeKey.String(),
+			scopeKey.String(),
 		)
 	}
 
-	flow.retryRowsByKey[work] = *row
-	return *row, nil
+	flow.retryRowsByKey[row.WorkKey()] = *row
+	return nil
 }
 
 func (flow *engineFlow) clearBlockedRetryWorkForScope(
@@ -414,10 +403,7 @@ func (flow *engineFlow) clearBlockedRetryWorkForScope(
 // blocked by an active scope. Blocked rows have no retry timing until the
 // scope is released or trialed.
 func (flow *engineFlow) recordBlockedRetryWork(ctx context.Context, action *Action, scopeKey ScopeKey) error {
-	_, err := flow.persistBlockedRetryWork(ctx, retryWorkKeyForAction(action), &RetryWorkFailure{
-		ScopeKey: scopeKey,
-	})
-	return err
+	return flow.persistBlockedRetryWork(ctx, retryWorkKeyForAction(action), scopeKey)
 }
 
 func (flow *engineFlow) holdActionFromPersistedRetryState(
@@ -456,9 +442,7 @@ func (flow *engineFlow) holdActionUnderScope(
 		return nil
 	}
 
-	if _, err := flow.persistBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), &RetryWorkFailure{
-		ScopeKey: scopeKey,
-	}); err != nil {
+	if err := flow.persistBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), scopeKey); err != nil {
 		return err
 	}
 	flow.holdAction(current, heldReasonScope, scopeKey, time.Time{})
@@ -473,10 +457,7 @@ func (flow *engineFlow) rehomeBlockedRetryWork(
 	r *ActionCompletion,
 	scopeKey ScopeKey,
 ) error {
-	_, err := flow.persistBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), &RetryWorkFailure{
-		ScopeKey: scopeKey,
-	})
-	return err
+	return flow.persistBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), scopeKey)
 }
 
 func (flow *engineFlow) drainDueHeldWorkNow(

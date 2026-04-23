@@ -36,14 +36,12 @@ type ObservationIssueRow struct {
 }
 
 // RetryWorkFailure records one exact work item that still needs a retry. The
-// retry_work table owns attempt counting and backoff state.
+// retry_work table owns attempt counting and backoff state for delayed exact
+// retry rows. Blocked scope rows use the exact RetryWorkKey plus ScopeKey
+// directly; they are not modeled as the same failure shape.
 type RetryWorkFailure struct {
-	Path          string
-	OldPath       string
-	ActionType    ActionType
-	ConditionType string
-	ScopeKey      ScopeKey
-	Blocked       bool
+	Work     RetryWorkKey
+	ScopeKey ScopeKey
 }
 
 // ObservedItem represents a single item from a delta API response, ready

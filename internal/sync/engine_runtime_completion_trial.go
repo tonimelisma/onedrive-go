@@ -120,18 +120,8 @@ func (flow *engineFlow) applyTrialReclassification(
 	r *ActionCompletion,
 	bl *Baseline,
 ) (bool, error) {
-	if decision.PermissionFlow != permissionFlowNone {
-		if permOutcome, handled := flow.decidePermissionOutcome(ctx, decision, r, bl); handled {
-			if !permOutcome.Matched {
-				return false, nil
-			}
-			if err := flow.clearBlockedRetryWorkForScope(ctx, retryWorkKeyForCompletion(r), r.TrialScopeKey); err != nil {
-				return false, err
-			}
-			_, err := flow.applyPermissionOutcome(ctx, watch, decision.PermissionFlow, &permOutcome)
-			return true, err
-		}
-		return false, nil
+	if handled, err := flow.applyTrialPermissionReclassification(ctx, watch, r, bl); handled {
+		return true, err
 	}
 
 	if decision.Class == errclass.ClassBlockScopeingTransient && decision.ScopeKey == SKDiskLocal() {

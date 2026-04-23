@@ -9,7 +9,7 @@ import (
 )
 
 // PermissionHandler owns permission probing and revalidation. It gathers
-// evidence only; the engine-owned policy/apply path turns that evidence into
+// evidence only; the engine-owned runtime handlers turn that evidence into
 // durable retry/scope mutations.
 type PermissionHandler struct {
 	store        *SyncStore

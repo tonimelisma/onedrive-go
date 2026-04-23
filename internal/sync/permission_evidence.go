@@ -10,8 +10,8 @@ const (
 )
 
 // PermissionEvidence is the pure probe-layer result for one permission check.
-// It carries only observed facts; persistence and logging policy live
-// downstream in permission_policy.go and the engine_runtime permission files.
+// It carries only observed facts; the engine-owned runtime permission handlers
+// decide persistence, blocking, and logging from this evidence.
 type PermissionEvidence struct {
 	Kind         PermissionEvidenceKind
 	TriggerPath  string

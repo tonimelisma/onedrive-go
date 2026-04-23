@@ -289,10 +289,9 @@ func TestEngineFlow_ProcessNormalDecision_RemoteBoundaryPermissionDoesNotArmRetr
 	}
 
 	ready, err := flow.applyNormalCompletionDecision(t.Context(), rt, &ResultDecision{
-		Class:          errclass.ClassActionable,
-		ConditionKey:   ConditionRemoteWriteDenied,
-		ConditionType:  IssueRemoteWriteDenied,
-		PermissionFlow: permissionFlowRemote403,
+		Class:         errclass.ClassActionable,
+		ConditionKey:  ConditionRemoteWriteDenied,
+		ConditionType: IssueRemoteWriteDenied,
 	}, nil, r, &Baseline{})
 
 	require.NoError(t, err)
@@ -337,10 +336,9 @@ func TestEngineFlow_ProcessNormalDecision_KnownRemoteBoundaryNoOpDoesNotPersistO
 	}
 
 	ready, err := flow.applyNormalCompletionDecision(t.Context(), rt, &ResultDecision{
-		Class:          errclass.ClassActionable,
-		ConditionKey:   ConditionRemoteWriteDenied,
-		ConditionType:  IssueRemoteWriteDenied,
-		PermissionFlow: permissionFlowRemote403,
+		Class:         errclass.ClassActionable,
+		ConditionKey:  ConditionRemoteWriteDenied,
+		ConditionType: IssueRemoteWriteDenied,
 	}, nil, r, &Baseline{})
 
 	require.NoError(t, err)
@@ -386,7 +384,7 @@ func TestEngineFlow_ProcessTrialDecision_RearmOrDiscardRecordsFailureWithoutTerm
 }
 
 // Validates: R-2.10.5, R-2.10.33, R-2.14.1
-func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionOutcomeFallsBackToRetryPersistence(t *testing.T) {
+func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionEvidenceFallsBackToRetryPersistence(t *testing.T) {
 	t.Parallel()
 
 	const sharedRootItemID = "shared-root-id"
@@ -420,7 +418,7 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionOutcomeFallsBackToRe
 		AttemptCount: 1,
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blockedRow))
-	flow.retryRowsByKey[retryWorkKeyForRetryWork(blockedRow)] = *blockedRow
+	flow.retryRowsByKey[blockedRow.WorkKey()] = *blockedRow
 
 	current := rt.depGraph.Add(&Action{
 		Type:    ActionUpload,
@@ -433,12 +431,11 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionOutcomeFallsBackToRe
 	require.NoError(t, err)
 
 	ready, err := flow.applyTrialCompletionDecision(t.Context(), rt, scopeKey, &ResultDecision{
-		Class:          errclass.ClassActionable,
-		ConditionKey:   ConditionRemoteWriteDenied,
-		ConditionType:  IssueRemoteWriteDenied,
-		Persistence:    persistRetryWork,
-		PermissionFlow: permissionFlowRemote403,
-		TrialHint:      trialHintReclassify,
+		Class:         errclass.ClassActionable,
+		ConditionKey:  ConditionRemoteWriteDenied,
+		ConditionType: IssueRemoteWriteDenied,
+		Persistence:   persistRetryWork,
+		TrialHint:     trialHintReclassify,
 	}, current, &ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "file.txt",

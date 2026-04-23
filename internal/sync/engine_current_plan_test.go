@@ -28,11 +28,7 @@ func assertRuntimePlanEqual(t *testing.T, expected *runtimePlan, actual *runtime
 func seedStaleRetryAndBlockScopeForCurrentPlanTest(t *testing.T, ctx context.Context, eng *testEngine) {
 	t.Helper()
 
-	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "stale.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-	}, func(int) time.Duration { return time.Minute })
+	_, err := eng.baseline.RecordRetryWorkFailure(ctx, testRetryWorkFailure("stale.txt", "", ActionUpload), func(int) time.Duration { return time.Minute })
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),

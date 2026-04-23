@@ -76,8 +76,8 @@ func TestEngineFlow_PersistBlockedRetryWork_CanonicalizesRowsAcrossRuntimePaths(
 			persist: persistBlockedRetryViaTrialRehome(scopeKey),
 		},
 		{
-			name:    "permission outcome",
-			persist: persistBlockedRetryViaPermissionOutcome(scopeKey),
+			name:    "permission evidence",
+			persist: persistBlockedRetryViaPermissionEvidence(scopeKey),
 		},
 	}
 
@@ -151,26 +151,20 @@ func persistBlockedRetryViaTrialRehome(scopeKey ScopeKey) func(*testing.T, *test
 	}
 }
 
-func persistBlockedRetryViaPermissionOutcome(scopeKey ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
+func persistBlockedRetryViaPermissionEvidence(scopeKey ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
 	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
 		t.Helper()
-		matched, err := flow.applyPermissionOutcome(t.Context(), nil, permissionFlowRemote403, &PermissionOutcome{
-			Matched:      true,
-			Kind:         permissionOutcomeActivateDerivedScope,
-			ScopeKey:     scopeKey,
+		err := flow.applyPermissionFailureEvidence(t.Context(), nil, nil, &ActionCompletion{
+			Path:       "Shared/Docs/file.txt",
+			OldPath:    "Shared/Docs/old.txt",
+			ActionType: ActionUpload,
+		}, PermissionEvidence{
+			Kind:         permissionEvidenceBoundaryDenied,
 			BoundaryPath: "Shared/Docs",
 			TriggerPath:  "Shared/Docs/file.txt",
-			RetryWorkFailure: &RetryWorkFailure{
-				Path:          "Shared/Docs/file.txt",
-				OldPath:       "Shared/Docs/old.txt",
-				ActionType:    ActionUpload,
-				ConditionType: IssueRemoteWriteDenied,
-				ScopeKey:      scopeKey,
-				Blocked:       true,
-			},
-		})
+			IssueType:    IssueRemoteWriteDenied,
+		}, true)
 		require.NoError(t, err)
-		require.True(t, matched)
 	}
 }
 
@@ -202,7 +196,7 @@ func TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t *test
 }
 
 // Validates: R-2.10.5, R-2.10.33, R-2.14.1
-func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissionOutcomePath(t *testing.T) {
+func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissionEvidencePath(t *testing.T) {
 	t.Parallel()
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
@@ -221,9 +215,7 @@ func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissi
 		AttemptCount: 1,
 	}))
 
-	handled, err := flow.applyTrialReclassification(t.Context(), rt, &ResultDecision{
-		PermissionFlow: permissionFlowLocalPermission,
-	}, &ActionCompletion{
+	handled, err := flow.applyTrialReclassification(t.Context(), rt, &ResultDecision{}, &ActionCompletion{
 		Path:          "accessible/file.txt",
 		ActionType:    ActionDownload,
 		Err:           os.ErrPermission,
@@ -332,13 +324,7 @@ func TestEngineFlow_ClearBlockedRetryWorkForScope_RemovesScopedRetryWork(t *test
 	flow := testEngineFlow(t, eng)
 	scopeKey := SKService()
 
-	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:          "blocked.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("blocked.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
 
 	require.NoError(t, flow.clearBlockedRetryWorkForScope(t.Context(), RetryWorkKey{
@@ -393,13 +379,7 @@ func TestEngineFlow_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenScopeNoL
 	flow := testEngineFlow(t, eng)
 	scopeKey := SKQuotaOwn()
 
-	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:          "trial.txt",
-		ActionType:    ActionDownload,
-		ConditionType: scopeKey.ConditionType(),
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("trial.txt", "", ActionDownload), scopeKey)
 	require.NoError(t, err)
 
 	ready := rt.depGraph.Add(&Action{
@@ -428,13 +408,7 @@ func TestEngineFlow_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWithout
 	flow := testEngineFlow(t, eng)
 	scopeKey := SKQuotaOwn()
 
-	_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:          "trial.txt",
-		ActionType:    ActionUpload,
-		ConditionType: scopeKey.ConditionType(),
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("trial.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
 
 	ready := rt.depGraph.Add(&Action{

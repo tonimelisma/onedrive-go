@@ -192,8 +192,5 @@ func (flow *engineFlow) persistHeldScopeDecision(
 	if work == (RetryWorkKey{}) {
 		work = retryWorkKeyForAction(&ta.Action)
 	}
-	_, err := flow.persistBlockedRetryWork(ctx, work, &RetryWorkFailure{
-		ScopeKey: decision.ScopeKey,
-	})
-	return err
+	return flow.persistBlockedRetryWork(ctx, work, decision.ScopeKey)
 }

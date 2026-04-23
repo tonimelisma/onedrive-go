@@ -316,12 +316,11 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 				DriveID:    driveID,
 			},
 			want: ResultDecision{
-				Class:          resultSkip,
-				ConditionKey:   ConditionLocalReadDenied,
-				Persistence:    persistRetryWork,
-				PermissionFlow: permissionFlowLocalPermission,
-				TrialHint:      trialHintReclassify,
-				ConditionType:  IssueLocalReadDenied,
+				Class:         resultSkip,
+				ConditionKey:  ConditionLocalReadDenied,
+				Persistence:   persistRetryWork,
+				TrialHint:     trialHintReclassify,
+				ConditionType: IssueLocalReadDenied,
 			},
 		},
 	})
