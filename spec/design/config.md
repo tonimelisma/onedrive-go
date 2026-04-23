@@ -65,17 +65,22 @@ Config entrypoints still accept full path strings, so `managed_io.go` establishe
 ## Persisted Facts And Lifecycle
 
 `config.toml` persists drive sections only. It never contains account sections.
-Durable account and drive lifecycle facts are split across managed files:
+Durable account, drive, and managed-mount lifecycle facts are split across
+managed files:
 
 - `config.toml`: configured drive sections keyed by canonical drive ID
 - `catalog.json`: durable account inventory, drive inventory, profile cache, ownership, and account-level auth requirement
+- `mounts.json`: durable managed child-mount bindings owned by the local namespace/runtime boundary
 - `token_*.json`: saved login owned by the account
-- `state_*.db`: retained per-drive sync state
+- `state_*.db`: retained configured-standalone-drive sync state
+- `state_mount_*.db`: retained managed-child-mount sync state
 
 `config` owns both the persistence mechanics and the durable lifecycle rules
 that coordinate these artifacts. CLI commands may still own Graph/OAuth flows,
 token deletion, and user interaction, but they do not hand-edit `CatalogAccount`
-or `CatalogDrive` records directly for product behavior.
+or `CatalogDrive` records directly for product behavior. Managed child-mount
+records are also config-owned durable facts; they are not inferred solely from
+the drive catalog at runtime.
 
 The config file itself is durable even when it has zero drive sections. Removing
 the final configured drive or logging out the final configured account leaves
@@ -216,15 +221,18 @@ keep the configured shared-root observation boundary instead of silently
 falling back to whole-drive observation.
 
 `buildResolvedDrive` also resolves `ResolvedDrive.SharedRootDeltaCapable`.
-That boolean is derived once from catalog ownership facts:
+That boolean is derived once from token-owner identity facts through the shared
+helper `RootedSubtreeDeltaCapableForTokenOwner(...)`:
 
 - personal owner account -> folder delta capable
 - business/sharepoint owner account -> enumerate only
 - unknown or malformed owner metadata -> default to capable and let runtime
   fallback prove otherwise
 
-The sync engine consumes that resolved boolean directly; it does not reload
-catalog metadata just to rediscover shared-root delta support during startup.
+The sync engine consumes that resolved boolean directly for configured
+standalone drives, while managed child mounts derive the same capability from
+their explicit token-owner identity. Runtime startup does not reload catalog
+metadata just to rediscover rooted-subtree delta support.
 
 `websocket` is a live watch-mode control. When `websocket = true`, watch mode
 fetches a OneDrive Socket.IO endpoint and establishes an outbound websocket
@@ -282,7 +290,8 @@ authorities.
 
 ### Catalog JSON Policy
 
-`catalog.json` is the single durable inventory authority, so decode is strict:
+`catalog.json` is the durable authority for accounts and drives, so decode is
+strict:
 
 - unknown JSON fields are rejected
 - `schema_version` is required
@@ -294,6 +303,23 @@ authorities.
 Runtime callers do not silently accept future or partially shaped catalog
 files. A malformed or unsupported catalog is treated as an actionable local
 state error that must be repaired explicitly.
+
+### Mount Inventory JSON Policy
+
+`mounts.json` is the separate durable authority for managed child-mount
+bindings, so it follows the same managed-file discipline:
+
+- unknown JSON fields are rejected
+- `schema_version` is required
+- only the exact supported version is accepted
+- sibling child mounts under the same parent may not reuse or nest local
+  relative paths
+- every save is a full atomic rewrite of the file
+
+`MountStatePath(mountID)` gives each managed child mount a stable retained-state
+DB path independent of configured drive canonical IDs. Configured standalone
+drives still use `DriveStatePath(...)`; managed child mounts now own their own
+durable store namespace instead of pretending to be synthetic configured drives.
 
 ## Optional Catalog Fields
 

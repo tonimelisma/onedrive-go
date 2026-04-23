@@ -1117,11 +1117,11 @@ still in use.
 
 - `RootItemID` is threaded through item conversion so events can carry the
   configured remote root.
-- The converter skips the configured shared root item itself.
+- The converter skips the configured rooted-subtree root item itself.
 - Embedded shared-folder items are ignored in a normal drive.
 - Transitional reuse:
   - keep ignoring embedded shortcuts inside normal content observation
-  - shared-root conversion can continue to back mount engines for now
+  - rooted-subtree conversion can continue to back mount engines for now
 - Cleanup target:
   - keep "ignore embedded shortcuts in ordinary content observation"
   - remove per-event root metadata once engine-local mount context is enough
@@ -1487,108 +1487,67 @@ Exit criteria:
 - ordinary engine execution, path convergence, and scope routing are mount-local
 - direct shared-item CLI paths still keep explicit target scoping above sync
 
-### Increment 6: Introduce Dedicated Managed Mount Inventory
+### Increment 5: Durable Child-Mount Inventory + Child-Projection Seams [completed]
 
 Goal:
 
-- add a durable authority for managed shortcut mounts without overloading generic
-  drive catalog/config
+- add a durable authority for managed child shortcut mounts and make the sync
+  runtime consume mount-owned identity directly
 
 Code areas:
 
-- a new managed mount inventory file/boundary, preferably separate from
-  `catalog.json`
-- `internal/config/` for persistence helpers and validation
-- `internal/multisync/` mount-spec builder
-- docs: `spec/design/config.md`, `spec/design/drive-identity.md`,
-  `spec/design/sync-control-plane.md`
+- `internal/config/` for `mounts.json`, validation, and mount state-path helpers
+- `internal/driveops/` for mount-shaped sync session construction
+- `internal/multisync/` for merged parent + child mount compilation
+- `internal/sync/` local observation filters for child subtree exclusions
+- docs: `spec/design/config.md`, `spec/design/sync-control-plane.md`,
+  `spec/design/drive-transfers.md`, `spec/design/sync-observation.md`
 
 Concrete work:
 
-- introduce a dedicated mount inventory store, recommended shape:
-  - separate file such as `mounts.json`
-  - separate validation and lifecycle helpers
-- define `MountRecord` for managed mounts with fields such as:
-  - `MountID`
-  - `ProjectionKind`
-  - `LocalAlias`
-  - `LocalMountPath`
-  - `OwnerAccountCanonical`
-  - `RemoteDriveID`
-  - `RemoteItemID`
-  - optional placeholder identity
-  - lifecycle state
-- teach the mount-spec builder to merge:
-  - explicit configured standalone drives
-  - managed mount records
-- introduce mount-owned state paths for managed mounts rather than deriving them
-  from configured drive canonical IDs
+- landed separate `mounts.json` inventory instead of extending `catalog.json`
+- defined child-focused `MountRecord` durable state with validation for:
+  - stable mount ID
+  - parent mount ID
+  - relative local path
+  - remote content-root identity
+- added `MountStatePath(...)` so managed child mounts get their own retained
+  state DBs
+- removed `mountSpec.resolved` and promoted sync/runtime identity into
+  mount-owned fields
+- changed `SessionRuntime.SyncSession(...)` to accept mount-owned identity
+  instead of `*config.ResolvedDrive`
+- taught the control plane to merge:
+  - configured standalone parent mounts
+  - managed child-mount records
+- installed exact child subtree exclusions on parent mounts through
+  `LocalFilterConfig.SkipDirs`
+- defined duplicate projection policy:
+  - explicit standalone mount wins over conflicting child projection for the
+    same content root
+  - conflicting child projections are skipped before engine startup
 
 Must not do:
 
 - no automatic shortcut reconciliation yet
-- no child-mount local namespace ownership yet
+- no placeholder/tombstone lifecycle yet
+- no automatic user-facing shortcut sync rollout yet
 
 Tests:
 
 - inventory load/save/validation tests
-- mount-spec merge tests
+- mount-spec merge and conflict tests
 - state-path tests proving managed mounts get stable durable store paths
+- local observation tests proving parent mounts skip exact child subtrees
 
 Exit criteria:
 
-- managed mounts can exist durably without pretending to be ordinary configured
-  drives
+- managed child mounts can exist durably without pretending to be ordinary
+  configured drives
+- sync session creation is mount-shaped
+- parent mounts exclude child subtrees without reintroducing nested engines
 
-### Increment 7: Add Child-Projection Infrastructure Before Automatic Shortcut Sync
-
-Goal:
-
-- make namespace-owned child projection real before automatic shortcut sync is
-  exposed to users
-
-Code areas:
-
-- new namespace manager boundary
-- local observer filter/exclusion wiring in `internal/sync/`
-- control plane / mount-spec builder
-- docs: `spec/design/sync-control-plane.md`, `spec/design/sync-engine.md`,
-  `spec/design/sync-observation.md`, `spec/design/config.md`
-
-Concrete work:
-
-- introduce namespace-owned child mount projections
-- install `LocalFilterConfig.SkipDirs` exclusions so parent mounts do not scan
-  child mount subtrees
-- move mount-root rename/delete/add semantics above the content engine
-- define duplicate projection policy:
-  - explicit standalone mount wins over conflicting shortcut child projection for
-    the same content root
-  - conflicting shortcut child projection stays inactive or conflicted until
-    resolved
-- keep explicit standalone shared-folder drive add support working in parallel
-
-Must not do:
-
-- do not reintroduce nested engine internals inside a parent drive engine
-- do not expose automatic shortcut sync as separate user-facing synced roots
-
-Tests:
-
-- parent engine excludes child subtree
-- child mount rename updates local projection without remote rename
-- child mount removal stops engine without remote delete
-- no overlapping local subtree ownership
-- explicit standalone mount suppresses conflicting child shortcut projection for
-  the same content root
-
-Exit criteria:
-
-- child projection works without changing the one-engine-per-mount invariant
-- the product no longer needs a permanent separate-root fallback for automatic
-  shortcuts
-
-### Increment 8: Add Automatic Shortcut Runtime As Child Projections
+### Increment 6: Add Automatic Shortcut Runtime As Child Projections
 
 Goal:
 
@@ -1638,7 +1597,7 @@ Exit criteria:
 - automatic shortcuts do not create their own user-facing synced roots in steady
   state
 
-### Increment 9: Remove Shared-Drive-Only Coupling And Finish Terminology Cleanup
+### Increment 7: Remove Shared-Drive-Only Coupling And Finish Terminology Cleanup
 
 Goal:
 
