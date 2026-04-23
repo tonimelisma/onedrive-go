@@ -181,6 +181,11 @@ That cadence is capability-driven, not websocket-driven:
 Websocket wakeups are additive only. They wake delta polling sooner, but they
 do not replace delta polling and they do not change the full-refresh cadence.
 
+If watch mode shortens `observation_state.next_full_remote_refresh_at` after
+startup, it must rearm the in-memory timer in that same control path. Shared-root
+enumerate fallback therefore clamps the persisted deadline and immediately
+rebuilds the active timer instead of waiting for a later full refresh commit.
+
 In this increment, "degraded" means exactly "running without delta." The main
 whole-drive watch path remains delta-based. Shared-root watch chooses its mode
 from the configured drive surface:

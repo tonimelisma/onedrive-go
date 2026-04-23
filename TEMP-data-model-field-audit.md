@@ -180,9 +180,9 @@ to remove the field cleanly.
 
 ### `observation_state.next_full_local_refresh_at`
 
-- Current writes: `applyLocalRefreshSchedule` computes it from `localRefreshIntervalForMode`, and `MarkFullLocalRefresh` persists it.
+- Current writes: `applyLocalRefreshSchedule` computes it from the runtime-owned local full-scan interval, and `MarkFullLocalRefresh` persists it.
 - Current reads: I did not find a non-test consumer that uses it to decide whether a local refresh is due.
-- Runtime effect today: unlike `next_full_remote_refresh_at`, this field does not appear in any restart scheduling path. Local degraded-scan timing is driven directly by `runPeriodicFullScan(..., localRefreshIntervalForMode(localRefreshModeWatchDegraded))` in `internal/sync/engine_watch.go`.
+- Runtime effect today: unlike `next_full_remote_refresh_at`, this field does not appear in any restart scheduling path. Local degraded-scan timing is driven directly by `runPeriodicFullScan(..., localWatchDegradedFullScanInterval)` in `internal/sync/engine_watch.go`.
 - If dropped: remove it from schema and the observation-state helpers. No local timer arming logic appears to need a replacement because I did not find any code arming from this stored deadline.
 - Decision signal: strong drop candidate.
 

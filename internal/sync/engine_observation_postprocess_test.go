@@ -88,6 +88,43 @@ func TestHandleRemoteObservationBatch_SharedRootWatchCommitsObservedRowsAndPendi
 	assert.Equal(t, pendingCursor, readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
 }
 
+// Validates: R-2.8.3
+func TestHandleRemoteObservationBatch_SharedRootEnumerateClampRearmsRefreshTimerImmediately(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+
+	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
+	installManualClock(eng.Engine, clock)
+
+	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, eng.driveID, "cursor-shared"))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(
+		ctx,
+		eng.driveID,
+		clock.Now(),
+		remoteObservationModeDelta,
+	))
+	require.NoError(t, rt.armFullRefreshTimer(ctx))
+
+	initialDueAt := clock.Now().Add(fullRemoteRefreshInterval)
+	enumerateDueAt := clock.Now().Add(remoteRefreshEnumerateInterval)
+	assert.True(t, clock.HasPendingTimerAt(initialDueAt))
+	assert.False(t, clock.HasPendingTimerAt(enumerateDueAt))
+
+	batch := buildSharedRootWatchBatch(eng.Engine, nil)
+	err := rt.handleRemoteObservationBatch(ctx, &batch)
+	require.NoError(t, err)
+
+	state, err := eng.baseline.ReadObservationState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, enumerateDueAt.UnixNano(), state.NextFullRemoteRefreshAt)
+	assert.False(t, clock.HasPendingTimerAt(initialDueAt))
+	assert.True(t, clock.HasPendingTimerAt(enumerateDueAt))
+}
+
 // Validates: R-2.1.2
 func TestHandleRemoteObservationBatch_SharedRootCursorCommitFailureLeavesStateUntouched(t *testing.T) {
 	t.Parallel()

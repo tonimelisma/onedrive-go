@@ -247,7 +247,7 @@ func (flow *engineFlow) commitPendingPrimaryCursor(
 			return fmt.Errorf("sync: marking full remote refresh for root %q: %w", pending.rootID, err)
 		}
 	} else if pending.observationMode == remoteObservationModeEnumerate {
-		if err := flow.engine.baseline.ClampFullRemoteRefreshDeadline(
+		if _, err := flow.engine.baseline.ClampFullRemoteRefreshDeadline(
 			ctx,
 			driveid.New(pending.driveID),
 			flow.engine.nowFunc().Add(remoteRefreshEnumerateInterval),
