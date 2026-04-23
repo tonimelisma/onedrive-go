@@ -62,7 +62,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 
 ## Construction
 
-`newEngine()` wires one resolved drive into a runtime:
+`newEngine()` wires one mounted content root into a runtime:
 
 - rooted sync tree
 - store
@@ -72,18 +72,27 @@ assemble overlapping observation-managed batch shapes ad hoc.
 - permission handler
 - optional websocket wake source
 
-Production entrypoints call `NewDriveEngine()` directly with the resolved
-drive, authenticated session, logger, perf collector, and drive-verification
-flag. There is no exported options wrapper or second config-builder layer.
-`engineInputs` remains an internal seam for focused engine tests, not a
-parallel production construction model.
+Production entrypoints now call `NewMountEngine()` with:
+
+- the authenticated session capabilities for the target mount
+- `EngineMountConfig`, the sync-owned constructor input carrying the non-client
+  runtime facts for that mount
+- logger, perf collector, and drive-verification flag
+
+`NewDriveEngine()` remains as the transitional resolved-drive constructor for
+callers that still hold a `ResolvedDrive`. It validates the resolved drive,
+parses config-shaped fields such as `min_free_space`, builds
+`EngineMountConfig`, and then delegates to `NewMountEngine()`. There is no
+extra exported builder layer above `EngineMountConfig`, and `engineInputs`
+remains an internal seam for focused engine tests rather than a parallel
+production construction model.
 
 For separately configured shared-root drives, the engine also carries the
 configured `rootItemID`. That root item defines the remote boundary for scoped
 observation and execution metadata. Shared-root delta capability is resolved in
-config as `ResolvedDrive.SharedRootDeltaCapable` and passed into the engine as
-construction input; the engine does not reopen catalog state just to decide
-whether a shared root should try folder delta.
+config today and passed into the engine as construction input; the engine does
+not reopen catalog state just to decide whether a shared root should try folder
+delta.
 
 Permission handling is intentionally split three ways:
 
