@@ -129,7 +129,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		ctx,
 		bl,
 		false,
-		testEngineFlow(t, e).buildPrimaryRootObservationPlan(false),
+		false,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, events, "should return 0 events (root is skipped)")
@@ -188,13 +188,13 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 		ctx,
 		bl,
 		false,
-		testEngineFlow(t, e).buildPrimaryRootObservationPlan(false),
+		false,
 	)
 	require.NoError(t, err)
 	assert.Len(t, events, 1, "should return 1 event (root is skipped)")
 
 	require.NotNil(t, pendingCursor)
-	assert.Equal(t, "new-token", pendingCursor.token, "pending cursor should be returned")
+	assert.Equal(t, "new-token", pendingCursor.cursorToken, "pending cursor should be returned")
 
 	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Equal(t, "old-token", savedToken,
@@ -499,7 +499,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 		ctx,
 		bl,
 		false,
-		testEngineFlow(t, e).buildPrimaryRootObservationPlan(true),
+		true,
 	)
 	require.NoError(t, err)
 
@@ -523,7 +523,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	require.NotNil(t, pendingCursor)
 
 	// Cursor should be returned as pending — NOT committed to DB.
-	assert.Equal(t, "full-token", pendingCursor.token, "pending cursor should be returned")
+	assert.Equal(t, "full-token", pendingCursor.cursorToken, "pending cursor should be returned")
 
 	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Empty(t, savedToken, "cursor should NOT be committed to DB by observeAndCommitRemoteCurrentState — it is deferred")
@@ -566,7 +566,7 @@ func TestObserveAndCommitRemoteTruth_RemoteReadDeniedPersistsObservationFindings
 		ctx,
 		bl,
 		false,
-		testEngineFlow(t, e).buildPrimaryRootObservationPlan(false),
+		false,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, events)

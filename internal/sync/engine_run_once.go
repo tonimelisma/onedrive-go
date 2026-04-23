@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // RunOnce executes a single sync pass:
@@ -47,8 +45,8 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		return nil, err
 	}
 
-	// SQLite-derived plan approved — commit the deferred delta token now.
-	if err := runner.commitPendingPrimaryCursor(ctx, runtime.PendingCursorCommit); err != nil {
+	// SQLite-derived plan approved — commit the deferred observation progress now.
+	if _, err := runner.commitPendingRemoteObservation(ctx, runtime.PendingRemoteObservation); err != nil {
 		return nil, err
 	}
 
@@ -217,46 +215,51 @@ func buildReportFromCounts(
 	}
 }
 
-// commitPendingPrimaryCursor advances the primary observation cursor after the
-// planner approves the changes. Full remote refreshes also persist the
-// restart-safe full-remote cadence timestamp here.
-func (flow *engineFlow) commitPendingPrimaryCursor(
+// commitPendingRemoteObservation advances the deferred primary observation
+// cursor after the planner approves the changes. Full remote refreshes also
+// persist the restart-safe full-remote cadence timestamp here.
+func (flow *engineFlow) commitPendingRemoteObservation(
 	ctx context.Context,
-	pending *pendingPrimaryCursorCommit,
-) error {
-	if pending == nil {
-		return nil
+	observation *remoteObservationBatch,
+) (bool, error) {
+	if observation == nil {
+		return false, nil
 	}
 
-	if pending.token != "" {
+	if observation.cursorToken != "" {
 		if err := flow.engine.baseline.CommitObservationCursor(
 			ctx,
-			driveid.New(pending.driveID),
-			pending.token,
+			flow.engine.driveID,
+			observation.cursorToken,
 		); err != nil {
-			return fmt.Errorf("sync: committing primary observation cursor for root %q: %w", pending.rootID, err)
+			return false, fmt.Errorf("sync: committing primary observation cursor: %w", err)
 		}
 	}
-	if pending.markFullRemoteRefresh {
+	if observation.markFullRemoteRefresh {
 		if err := flow.engine.baseline.MarkFullRemoteRefresh(
 			ctx,
-			driveid.New(pending.driveID),
+			flow.engine.driveID,
 			flow.engine.nowFunc(),
-			pending.observationMode,
+			observation.observationMode,
 		); err != nil {
-			return fmt.Errorf("sync: marking full remote refresh for root %q: %w", pending.rootID, err)
+			return false, fmt.Errorf("sync: marking full remote refresh: %w", err)
 		}
-	} else if pending.observationMode == remoteObservationModeEnumerate {
-		if _, err := flow.engine.baseline.ClampFullRemoteRefreshDeadline(
+		return false, nil
+	}
+	if observation.observationMode == remoteObservationModeEnumerate {
+		deadlineChanged, err := flow.engine.baseline.ClampFullRemoteRefreshDeadline(
 			ctx,
-			driveid.New(pending.driveID),
+			flow.engine.driveID,
 			flow.engine.nowFunc().Add(remoteRefreshEnumerateInterval),
-		); err != nil {
-			return fmt.Errorf("sync: clamping full remote refresh for root %q: %w", pending.rootID, err)
+		)
+		if err != nil {
+			return false, fmt.Errorf("sync: clamping full remote refresh: %w", err)
 		}
+
+		return deadlineChanged, nil
 	}
 
-	return nil
+	return false, nil
 }
 
 // observeRemoteFull runs a fresh delta with empty token (enumerates ALL remote

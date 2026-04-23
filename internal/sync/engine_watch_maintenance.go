@@ -105,8 +105,7 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 
 	rt.engine.logger.Info("periodic full remote refresh starting")
 
-	plan := rt.buildPrimaryRootObservationPlan(true)
-	fetchResult, err := rt.executePrimaryRootObservation(ctx, bl, plan)
+	observationBatch, err := rt.executePrimaryRootObservation(ctx, bl, true)
 	if err != nil {
 		if ctx.Err() == nil {
 			rt.engine.logger.Error("full remote refresh failed",
@@ -117,7 +116,10 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 		return result
 	}
 
-	result = buildFullRemoteRefreshBatch(rt.engine, fetchResult)
+	observationBatch.source = remoteObservationBatchFullRefresh
+	observationBatch.armFullRefreshTimer = true
+	observationBatch.markFullRefreshIfIdle = len(observationBatch.emitted) == 0
+	result = observationBatch
 	if len(result.emitted) == 0 {
 		rt.engine.logger.Info("periodic full remote refresh complete: no changes",
 			slog.Duration("duration", rt.engine.since(start)),

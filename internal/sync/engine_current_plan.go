@@ -17,11 +17,11 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 	opts RunOptions,
 ) (*runtimePlan, error) {
 	observeStart := r.engine.nowFunc()
-	pendingCursorCommit, err := r.observeAndCommitCurrentState(ctx, bl, false, opts.FullReconcile)
+	pendingRemoteObservation, err := r.observeAndCommitCurrentState(ctx, bl, false, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
-	observation, err := r.loadCommittedCurrentObservation(ctx, pendingCursorCommit)
+	observation, err := r.loadCommittedCurrentObservation(ctx, pendingRemoteObservation)
 	if err != nil {
 		return nil, err
 	}
@@ -67,11 +67,11 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 	}
 
 	observeStart := rt.engine.nowFunc()
-	pendingCursorCommit, err := rt.observeAndCommitCurrentState(ctx, bl, false, fullRefresh)
+	pendingRemoteObservation, err := rt.observeAndCommitCurrentState(ctx, bl, false, fullRefresh)
 	if err != nil {
 		return nil, fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
-	observation, err := rt.loadCommittedCurrentObservation(ctx, pendingCursorCommit)
+	observation, err := rt.loadCommittedCurrentObservation(ctx, pendingRemoteObservation)
 	if err != nil {
 		return nil, fmt.Errorf("sync: bootstrap load_current_inputs: %w", err)
 	}
@@ -104,9 +104,9 @@ func (rt *watchRuntime) runSteadyStateCurrentPlan(
 }
 
 type currentObservation struct {
-	inputs              currentInputs
-	observedPaths       int
-	pendingCursorCommit *pendingPrimaryCursorCommit
+	inputs                   currentInputs
+	observedPaths            int
+	pendingRemoteObservation *remoteObservationBatch
 }
 
 type localCurrentRefreshStep string
@@ -152,17 +152,17 @@ func currentLocalRefreshStep(err error) (localCurrentRefreshStep, bool) {
 }
 
 type builtCurrentPlan struct {
-	Plan                *ActionPlan
-	Report              *Report
-	PendingCursorCommit *pendingPrimaryCursorCommit
+	Plan                     *ActionPlan
+	Report                   *Report
+	PendingRemoteObservation *remoteObservationBatch
 }
 
 type runtimePlan struct {
-	Plan                *ActionPlan
-	Report              *Report
-	PendingCursorCommit *pendingPrimaryCursorCommit
-	RetryRows           []RetryWorkRow
-	BlockScopes         []*BlockScope
+	Plan                     *ActionPlan
+	Report                   *Report
+	PendingRemoteObservation *remoteObservationBatch
+	RetryRows                []RetryWorkRow
+	BlockScopes              []*BlockScope
 }
 
 type currentInputs struct {
@@ -177,9 +177,8 @@ func (flow *engineFlow) observeAndCommitCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 	dryRun, fullReconcile bool,
-) (*pendingPrimaryCursorCommit, error) {
-	plan := flow.buildPrimaryRootObservationPlan(fullReconcile)
-	_, pendingCursorCommit, err := flow.observeAndCommitRemoteCurrentState(ctx, bl, dryRun, plan)
+) (*remoteObservationBatch, error) {
+	_, pendingRemoteObservation, err := flow.observeAndCommitRemoteCurrentState(ctx, bl, dryRun, fullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -188,35 +187,35 @@ func (flow *engineFlow) observeAndCommitCurrentState(
 		return nil, err
 	}
 
-	return pendingCursorCommit, nil
+	return pendingRemoteObservation, nil
 }
 
 func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 	dryRun bool,
-	plan primaryRootObservationPlan,
-) ([]ChangeEvent, *pendingPrimaryCursorCommit, error) {
-	fetchResult, err := flow.executePrimaryRootObservation(ctx, bl, plan)
+	fullReconcile bool,
+) ([]ChangeEvent, *remoteObservationBatch, error) {
+	observationBatch, err := flow.executePrimaryRootObservation(ctx, bl, fullReconcile)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Dry-run previews must never advance remote observation cursors.
 	if dryRun {
-		fetchResult.pending = nil
+		observationBatch.cursorToken = ""
+		observationBatch.markFullRemoteRefresh = false
 	}
 
-	projectedRemote := projectRemoteObservations(flow.engine.logger, fetchResult.events)
-	if !dryRun && len(projectedRemote.observed) > 0 {
-		if err := flow.commitObservedItems(ctx, projectedRemote.observed, ""); err != nil {
+	if !dryRun && len(observationBatch.observed) > 0 {
+		if err := flow.commitObservedItems(ctx, observationBatch.observed, ""); err != nil {
 			return nil, nil, err
 		}
 	}
 	if !dryRun {
 		if err := flow.applyObservationFindingsBatch(
 			ctx,
-			&fetchResult.findings,
+			&observationBatch.findings,
 			"failed to reconcile remote observation findings",
 			engineDebugNoteRemoteCurrent,
 		); err != nil {
@@ -224,7 +223,7 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 		}
 	}
 
-	return projectedRemote.emitted, fetchResult.pending, nil
+	return observationBatch.emitted, observationBatch.deferredProgress(), nil
 }
 
 func (flow *engineFlow) refreshLocalCurrentState(
@@ -334,13 +333,10 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 	bl *Baseline,
 	fullReconcile bool,
 ) (result *currentObservation, err error) {
-	plan := flow.buildPrimaryRootObservationPlan(fullReconcile)
-	fetchResult, err := flow.executePrimaryRootObservation(ctx, bl, plan)
+	observationBatch, err := flow.executePrimaryRootObservation(ctx, bl, fullReconcile)
 	if err != nil {
 		return nil, err
 	}
-
-	projectedRemote := projectRemoteObservations(flow.engine.logger, fetchResult.events)
 
 	localResult, err := flow.refreshLocalCurrentState(ctx, bl)
 	if err != nil {
@@ -357,11 +353,11 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 		}
 	}()
 
-	commitErr := scratchStore.CommitObservation(ctx, projectedRemote.observed, "", flow.engine.driveID)
+	commitErr := scratchStore.CommitObservation(ctx, observationBatch.observed, "", flow.engine.driveID)
 	if commitErr != nil {
 		return nil, fmt.Errorf("sync: committing dry-run remote snapshot to scratch store: %w", commitErr)
 	}
-	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &fetchResult.findings, flow.engine.nowFunc()); reconcileErr != nil {
+	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &observationBatch.findings, flow.engine.nowFunc()); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run remote observation findings in scratch store: %w", reconcileErr)
 	}
 
@@ -384,7 +380,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 
 func (flow *engineFlow) loadCommittedCurrentObservation(
 	ctx context.Context,
-	pendingCursorCommit *pendingPrimaryCursorCommit,
+	pendingRemoteObservation *remoteObservationBatch,
 ) (*currentObservation, error) {
 	inputs, err := flow.loadCurrentInputs(ctx, flow.engine.baseline, flow.engine.driveID)
 	if err != nil {
@@ -392,9 +388,9 @@ func (flow *engineFlow) loadCommittedCurrentObservation(
 	}
 
 	return &currentObservation{
-		inputs:              inputs,
-		observedPaths:       len(inputs.localRows) + len(inputs.remoteRows),
-		pendingCursorCommit: pendingCursorCommit,
+		inputs:                   inputs,
+		observedPaths:            len(inputs.localRows) + len(inputs.remoteRows),
+		pendingRemoteObservation: pendingRemoteObservation,
 	}, nil
 }
 
@@ -494,9 +490,9 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
 
 	return &builtCurrentPlan{
-		Plan:                plan,
-		Report:              report,
-		PendingCursorCommit: observation.pendingCursorCommit,
+		Plan:                     plan,
+		Report:                   report,
+		PendingRemoteObservation: observation.pendingRemoteObservation,
 	}, nil
 }
 
@@ -520,11 +516,11 @@ func (flow *engineFlow) reconcileRuntimeStateStage(
 	}
 
 	return &runtimePlan{
-		Plan:                build.Plan,
-		Report:              build.Report,
-		PendingCursorCommit: build.PendingCursorCommit,
-		RetryRows:           retryRows,
-		BlockScopes:         blockScopes,
+		Plan:                     build.Plan,
+		Report:                   build.Report,
+		PendingRemoteObservation: build.PendingRemoteObservation,
+		RetryRows:                retryRows,
+		BlockScopes:              blockScopes,
 	}, nil
 }
 
@@ -536,9 +532,9 @@ func (flow *engineFlow) keepBuiltCurrentPlan(build *builtCurrentPlan) *runtimePl
 	}
 
 	return &runtimePlan{
-		Plan:                build.Plan,
-		Report:              build.Report,
-		PendingCursorCommit: build.PendingCursorCommit,
+		Plan:                     build.Plan,
+		Report:                   build.Report,
+		PendingRemoteObservation: build.PendingRemoteObservation,
 	}
 }
 

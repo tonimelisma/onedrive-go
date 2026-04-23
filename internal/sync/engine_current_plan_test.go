@@ -18,7 +18,7 @@ func assertRuntimePlanEqual(t *testing.T, expected *runtimePlan, actual *runtime
 
 	require.NotNil(t, expected)
 	require.NotNil(t, actual)
-	assert.Equal(t, expected.PendingCursorCommit, actual.PendingCursorCommit)
+	assert.Equal(t, expected.PendingRemoteObservation, actual.PendingRemoteObservation)
 	assert.Equal(t, expected.Report, actual.Report)
 	assert.Equal(t, expected.Plan, actual.Plan)
 	assert.Equal(t, expected.RetryRows, actual.RetryRows)

@@ -17,16 +17,7 @@ func (e *Engine) hasSharedRoot() bool {
 }
 
 func (e *Engine) sharedRootDeltaSupported() bool {
-	if e == nil {
-		return false
-	}
-
-	switch e.sharedRootSourceType {
-	case driveid.DriveTypeBusiness, driveid.DriveTypeSharePoint:
-		return false
-	default:
-		return true
-	}
+	return e != nil && e.sharedRootDeltaCapable && e.folderDelta != nil
 }
 
 func (flow *engineFlow) observeSharedRootRemote(
@@ -150,7 +141,7 @@ func (rt *watchRuntime) watchSharedRootRemote(
 	bo.SetMaxOverride(interval)
 
 	for {
-		result, err := rt.executeSharedRootObservation(ctx, bl, false)
+		observationBatch, err := rt.executeSharedRootObservation(ctx, bl, false)
 		if err != nil {
 			stop, handleErr := rt.handleSharedRootPollError(ctx, bo, err)
 			if handleErr != nil || stop {
@@ -158,7 +149,7 @@ func (rt *watchRuntime) watchSharedRootRemote(
 			}
 			continue
 		}
-		if err := rt.handleSharedRootObservationResult(ctx, batches, interval, bo, &result); err != nil {
+		if err := rt.handleSharedRootObservationResult(ctx, batches, interval, bo, &observationBatch); err != nil {
 			if sharedRootWatchStopped(ctx, err) {
 				return nil
 			}
@@ -172,9 +163,9 @@ func (rt *watchRuntime) handleSharedRootObservationResult(
 	batches chan<- remoteObservationBatch,
 	interval time.Duration,
 	bo *retry.Backoff,
-	result *remoteFetchResult,
+	observationBatch *remoteObservationBatch,
 ) error {
-	if shouldSkipSharedRootWatchBatch(result) {
+	if shouldSkipSharedRootWatchBatch(observationBatch) {
 		bo.Reset()
 		stop, sleepErr := rt.sleepSharedRootWatch(ctx, interval, "zero-event")
 		if stop || sleepErr != nil {
@@ -183,8 +174,9 @@ func (rt *watchRuntime) handleSharedRootObservationResult(
 		return nil
 	}
 
-	batch := buildSharedRootWatchBatch(rt.engine, result)
-	if dispatchErr := rt.dispatchSharedRootBatch(ctx, batches, &batch); dispatchErr != nil {
+	observationBatch.source = remoteObservationBatchSharedRoot
+	observationBatch.applyAck = make(chan error, 1)
+	if dispatchErr := rt.dispatchSharedRootBatch(ctx, batches, observationBatch); dispatchErr != nil {
 		return dispatchErr
 	}
 
@@ -197,15 +189,15 @@ func (rt *watchRuntime) handleSharedRootObservationResult(
 	return nil
 }
 
-func shouldSkipSharedRootWatchBatch(result *remoteFetchResult) bool {
-	if result == nil {
+func shouldSkipSharedRootWatchBatch(batch *remoteObservationBatch) bool {
+	if batch == nil {
 		return true
 	}
 
-	return len(result.events) == 0 &&
-		!result.hasObservationFindings() &&
-		result.pending == nil &&
-		result.observationMode != remoteObservationModeEnumerate
+	return len(batch.emitted) == 0 &&
+		!batch.hasObservationFindings() &&
+		batch.deferredProgress() == nil &&
+		batch.observationMode != remoteObservationModeEnumerate
 }
 
 func (rt *watchRuntime) handleSharedRootPollError(

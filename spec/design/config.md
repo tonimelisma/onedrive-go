@@ -24,6 +24,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Shared-root drives always preserve the canonical shared root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
+| Shared-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestNewDriveEngine_PropagatesWatchCapabilities` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 
@@ -213,6 +214,17 @@ always preserves `RootItemID` from the canonical ID even when `DriveID` is
 resolved from a catalog drive record. Catalog-backed shared drives therefore
 keep the configured shared-root observation boundary instead of silently
 falling back to whole-drive observation.
+
+`buildResolvedDrive` also resolves `ResolvedDrive.SharedRootDeltaCapable`.
+That boolean is derived once from catalog ownership facts:
+
+- personal owner account -> folder delta capable
+- business/sharepoint owner account -> enumerate only
+- unknown or malformed owner metadata -> default to capable and let runtime
+  fallback prove otherwise
+
+The sync engine consumes that resolved boolean directly; it does not reload
+catalog metadata just to rediscover shared-root delta support during startup.
 
 `websocket` is a live watch-mode control. When `websocket = true`, watch mode
 fetches a OneDrive Socket.IO endpoint and establishes an outbound websocket

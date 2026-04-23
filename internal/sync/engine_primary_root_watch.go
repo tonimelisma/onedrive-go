@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	stdsync "sync"
 	"time"
@@ -15,10 +14,8 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	batches chan<- remoteObservationBatch,
 	errs chan<- error,
 	pollInterval time.Duration,
-	plan primaryRootObservationPlan,
 ) {
-	switch plan.kind {
-	case primaryRootObservationSharedRoot:
+	if rt.engine.hasSharedRoot() {
 		rt.warnSharedRootWebsocketFallback()
 		go func() {
 			defer obsWg.Done()
@@ -26,47 +23,42 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			defer close(batches)
 			errs <- rt.watchSharedRootRemote(ctx, bl, batches, pollInterval)
 		}()
-	case primaryRootObservationDriveRoot:
-		remoteObs := NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
-		remoteObs.SetItemClient(rt.engine.itemsClient)
-		rt.remoteObs = remoteObs
-		wakeCh := rt.startSocketIOWakeSource(ctx)
-
-		state, tokenErr := rt.engine.baseline.ReadObservationState(ctx)
-		if tokenErr != nil {
-			rt.engine.logger.Warn("failed to get delta token for watch",
-				slog.String("error", tokenErr.Error()),
-			)
-		}
-		savedToken := ""
-		if state != nil {
-			savedToken = state.Cursor
-		}
-
-		go func() {
-			defer obsWg.Done()
-			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
-			defer close(batches)
-			errs <- remoteObs.Watch(
-				ctx,
-				savedToken,
-				batches,
-				pollInterval,
-				wakeCh,
-				func(ctx context.Context, polledEvents []ChangeEvent, newToken string) (remoteObservationBatch, error) {
-					_ = ctx
-					_ = bl
-					return buildPrimaryWatchBatch(rt.engine, polledEvents, newToken), nil
-				},
-			)
-		}()
-	default:
-		go func() {
-			defer obsWg.Done()
-			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
-			errs <- fmt.Errorf("start primary root watch: unknown plan kind %q", plan.kind)
-		}()
+		return
 	}
+
+	remoteObs := NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
+	remoteObs.SetItemClient(rt.engine.itemsClient)
+	rt.remoteObs = remoteObs
+	wakeCh := rt.startSocketIOWakeSource(ctx)
+
+	state, tokenErr := rt.engine.baseline.ReadObservationState(ctx)
+	if tokenErr != nil {
+		rt.engine.logger.Warn("failed to get delta token for watch",
+			slog.String("error", tokenErr.Error()),
+		)
+	}
+	savedToken := ""
+	if state != nil {
+		savedToken = state.Cursor
+	}
+
+	go func() {
+		defer obsWg.Done()
+		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+		defer close(batches)
+		errs <- remoteObs.Watch(
+			ctx,
+			savedToken,
+			batches,
+			pollInterval,
+			wakeCh,
+			func(ctx context.Context, polledEvents []ChangeEvent, newToken string) (remoteObservationBatch, error) {
+				_ = ctx
+				_ = bl
+				return buildPrimaryWatchBatch(rt.engine, polledEvents, newToken), nil
+			},
+		)
+	}()
 }
 
 func (rt *watchRuntime) warnSharedRootWebsocketFallback() {

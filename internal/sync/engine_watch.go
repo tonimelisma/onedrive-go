@@ -235,11 +235,11 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 		return err
 	}
 	if len(runtime.Plan.Actions) == 0 {
-		return rt.finishBootstrapWithoutActions(ctx, runtime.PendingCursorCommit)
+		return rt.finishBootstrapWithoutActions(ctx, runtime.PendingRemoteObservation)
 	}
 
 	// Commit the deferred delta token before dispatching bootstrap actions.
-	cursorCommitErr := rt.commitPendingPrimaryCursor(ctx, runtime.PendingCursorCommit)
+	_, cursorCommitErr := rt.commitPendingRemoteObservation(ctx, runtime.PendingRemoteObservation)
 	if cursorCommitErr != nil {
 		return cursorCommitErr
 	}
@@ -259,9 +259,9 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watc
 
 func (rt *watchRuntime) finishBootstrapWithoutActions(
 	ctx context.Context,
-	pendingCursorCommit *pendingPrimaryCursorCommit,
+	pendingRemoteObservation *remoteObservationBatch,
 ) error {
-	if err := rt.commitPendingPrimaryCursor(ctx, pendingCursorCommit); err != nil {
+	if _, err := rt.commitPendingRemoteObservation(ctx, pendingRemoteObservation); err != nil {
 		return err
 	}
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
@@ -362,8 +362,7 @@ func (rt *watchRuntime) startRemoteObserver(
 	opts WatchOptions,
 ) {
 	pollInterval := rt.engine.resolvePollInterval(opts)
-	plan := rt.buildPrimaryRootObservationPlan(false)
-	rt.startPrimaryRootWatch(ctx, obsWg, bl, remoteBatches, errs, pollInterval, plan)
+	rt.startPrimaryRootWatch(ctx, obsWg, bl, remoteBatches, errs, pollInterval)
 }
 
 func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan struct{} {
