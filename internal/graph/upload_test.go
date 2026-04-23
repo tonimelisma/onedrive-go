@@ -1361,71 +1361,103 @@ func TestUpload_SimpleMtimePatchFailure(t *testing.T) {
 }
 
 // Validates: R-5.6.5
-func TestUpload_SimpleMtimePatchTransientNotFoundRetries(t *testing.T) {
-	content := []byte("patch-retry")
-	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
+func TestUpload_SimpleMtimePatchTransientRetries(t *testing.T) {
+	tests := []struct {
+		name       string
+		fileName   string
+		itemID     string
+		content    []byte
+		statusCode int
+		requestID  string
+		errorBody  string
+	}{
+		{
+			name:       "item not found",
+			fileName:   "retry.txt",
+			itemID:     "patch-retry-item",
+			content:    []byte("patch-retry"),
+			statusCode: http.StatusNotFound,
+			requestID:  "req-patch-404",
+			errorBody:  `{"error":{"code":"itemNotFound","message":"not ready"}}`,
+		},
+		{
+			name:       "gateway timeout",
+			fileName:   "retry-gateway.txt",
+			itemID:     "patch-retry-gateway-item",
+			content:    []byte("patch-retry-gateway"),
+			statusCode: http.StatusGatewayTimeout,
+			requestID:  "req-patch-504",
+			errorBody:  `{"error":{"code":"UnknownError","message":"gateway timeout"}}`,
+		},
+	}
 
-	var patchCalls atomic.Int32
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+			var patchCalls atomic.Int32
 
-		if r.Method == http.MethodPut {
-			w.WriteHeader(http.StatusCreated)
-			writeTestResponsef(t, w, `{
-				"id": "patch-retry-item",
-				"name": "retry.txt",
-				"size": %d,
-				"createdDateTime": "2024-06-01T12:00:00Z",
-				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-				"parentReference": {"id": "parent", "driveId": "d"},
-				"file": {"mimeType": "text/plain"}
-			}`, len(content))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
 
-			return
-		}
+				if r.Method == http.MethodPut {
+					w.WriteHeader(http.StatusCreated)
+					writeTestResponsef(t, w, `{
+						"id": %q,
+						"name": %q,
+						"size": %d,
+						"createdDateTime": "2024-06-01T12:00:00Z",
+						"lastModifiedDateTime": "2024-06-01T12:00:00Z",
+						"parentReference": {"id": "parent", "driveId": "d"},
+						"file": {"mimeType": "text/plain"}
+					}`, tt.itemID, tt.fileName, len(tt.content))
 
-		if r.Method == http.MethodPatch {
-			call := patchCalls.Add(1)
-			if call == 1 {
-				w.Header().Set("request-id", "req-patch-404")
-				w.WriteHeader(http.StatusNotFound)
-				writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not ready"}}`)
+					return
+				}
 
-				return
-			}
+				if r.Method == http.MethodPatch {
+					call := patchCalls.Add(1)
+					if call == 1 {
+						w.Header().Set("request-id", tt.requestID)
+						w.WriteHeader(tt.statusCode)
+						writeTestResponse(t, w, tt.errorBody)
 
-			w.WriteHeader(http.StatusOK)
-			writeTestResponsef(t, w, `{
-				"id": "patch-retry-item",
-				"name": "retry.txt",
-				"size": %d,
-				"createdDateTime": "2024-06-01T12:00:00Z",
-				"lastModifiedDateTime": "2024-07-10T09:00:00Z",
-				"parentReference": {"id": "parent", "driveId": "d"},
-				"file": {"mimeType": "text/plain"}
-			}`, len(content))
+						return
+					}
 
-			return
-		}
+					w.WriteHeader(http.StatusOK)
+					writeTestResponsef(t, w, `{
+						"id": %q,
+						"name": %q,
+						"size": %d,
+						"createdDateTime": "2024-06-01T12:00:00Z",
+						"lastModifiedDateTime": "2024-07-10T09:00:00Z",
+						"parentReference": {"id": "parent", "driveId": "d"},
+						"file": {"mimeType": "text/plain"}
+					}`, tt.itemID, tt.fileName, len(tt.content))
 
-		assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
-	}))
-	defer srv.Close()
+					return
+				}
 
-	client := newTestClient(t, srv.URL)
-	client.simpleUploadMtimePolicy = testRetryPolicy()
+				assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
+			}))
+			defer srv.Close()
 
-	item, err := client.Upload(
-		t.Context(), driveid.New("d"), "parent", "retry.txt",
-		bytes.NewReader(content), int64(len(content)), mtime, nil,
-	)
-	require.NoError(t, err)
-	require.NotNil(t, item)
-	assert.Equal(t, int32(2), patchCalls.Load())
-	assert.Equal(t, "patch-retry-item", item.ID)
-	assert.Equal(t, 2024, item.ModifiedAt.Year())
-	assert.Equal(t, time.July, item.ModifiedAt.Month())
+			client := newTestClient(t, srv.URL)
+			client.simpleUploadMtimePolicy = testRetryPolicy()
+
+			item, err := client.Upload(
+				t.Context(), driveid.New("d"), "parent", tt.fileName,
+				bytes.NewReader(tt.content), int64(len(tt.content)), mtime, nil,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, item)
+			assert.Equal(t, int32(2), patchCalls.Load())
+			assert.Equal(t, tt.itemID, item.ID)
+			assert.Equal(t, 2024, item.ModifiedAt.Year())
+			assert.Equal(t, time.July, item.ModifiedAt.Month())
+		})
+	}
 }
 
 // Validates: R-5.6.5

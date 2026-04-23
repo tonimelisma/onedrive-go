@@ -120,7 +120,7 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify all 5 exist remotely.
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "crash-5.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "crash-5.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Delete 2 remotely.
 	runCLIWithConfig(t, opsCfgPath, nil, "rm", "/"+testFolder+"/crash-1.txt")
@@ -165,7 +165,7 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 	require.NoError(t, os.WriteFile(remoteDeletePath, []byte("original remote delete"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "remote-delete.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "remote-delete.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Establish a real delta token plus remote mirror rows for this live drive
 	// before creating fresh remote drift.
@@ -230,7 +230,7 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify files exist remotely.
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "purge-a.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "purge-a.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Delete all state DB files (simulate purge).
 	dataDir := filepath.Join(env["XDG_DATA_HOME"], "onedrive-go")

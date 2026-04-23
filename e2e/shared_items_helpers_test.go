@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -160,7 +159,7 @@ func discoverSharedFileFixture(_ *testing.T, rawLink string) (resolvedSharedFile
 			return resolvedSharedFileFixture{}, err
 		}
 
-		stdout, stderr, err := runCLICoreRaw(
+		_, stdout, stderr, err := execCLI(
 			cfgPath,
 			env,
 			"",
@@ -444,34 +443,8 @@ func copyFixtureFile(src, dst string, perm os.FileMode) error {
 	return nil
 }
 
-func runCLICoreRaw(cfgPath string, env map[string]string, driveID string, args ...string) (string, string, error) {
-	var fullArgs []string
-	if cfgPath != "" {
-		fullArgs = append(fullArgs, "--config", cfgPath)
-	}
-
-	if driveID != "" {
-		fullArgs = append(fullArgs, "--drive", driveID)
-	}
-
-	if shouldAddDebug(args) {
-		fullArgs = append(fullArgs, "--debug")
-	}
-
-	fullArgs = append(fullArgs, args...)
-	cmd := makeCmd(fullArgs, env)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-
-	return stdout.String(), stderr.String(), err
-}
-
 func sharedListForRecipientRaw(cfgPath string, env map[string]string, recipientEmail string) (sharedListE2EOutput, error) {
-	stdout, stderr, err := runCLICoreRaw(cfgPath, env, "", "--account", recipientEmail, "shared", "--json")
+	_, stdout, stderr, err := execCLI(cfgPath, env, "", "--account", recipientEmail, "shared", "--json")
 	if err != nil {
 		return sharedListE2EOutput{}, fmt.Errorf("shared --json for %s: %w (%s)", recipientEmail, err, strings.TrimSpace(stderr))
 	}
@@ -498,15 +471,6 @@ func expandHomePath(path string, env map[string]string) string {
 	}
 
 	return filepath.Join(home, path[2:])
-}
-
-func runCLIWithoutDrive(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
-	t.Helper()
-
-	stdout, stderr, err := runCLICore(t, cfgPath, env, "", args...)
-	require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s", args, stdout, stderr)
-
-	return stdout, stderr
 }
 
 func waitForDriveListSharedSelectorVisible(

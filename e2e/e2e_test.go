@@ -3,18 +3,15 @@
 package e2e
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/testutil"
@@ -176,7 +173,7 @@ func scrubRemoteSuiteArtifacts(cfgPath string, drives ...string) error {
 }
 
 func scrubRemoteDriveArtifacts(cfgPath string, driveID string) error {
-	stdout, stderr, err := runCLIProcess(cfgPath, nil, driveID, "ls", "--json", "/")
+	_, stdout, stderr, err := execCLI(cfgPath, nil, driveID, "ls", "--json", "/")
 	if err != nil {
 		return fmt.Errorf("listing root for preflight scrub on %s: %w\nstdout: %s\nstderr: %s", driveID, err, stdout, stderr)
 	}
@@ -194,7 +191,7 @@ func scrubRemoteDriveArtifacts(cfgPath string, driveID string) error {
 		remotePath := "/" + item.Name
 		fmt.Fprintf(os.Stderr, "E2E preflight scrub: drive=%s deleting %s\n", driveID, remotePath)
 
-		delStdout, delStderr, delErr := runCLIProcess(cfgPath, nil, driveID, "rm", "-r", remotePath)
+		_, delStdout, delStderr, delErr := execCLI(cfgPath, nil, driveID, "rm", "-r", remotePath)
 		if delErr != nil && !isRemoteNotFoundCleanup(delStderr) {
 			return fmt.Errorf("deleting %s during preflight scrub on %s: %w\nstdout: %s\nstderr: %s", remotePath, driveID, delErr, delStdout, delStderr)
 		}
@@ -349,43 +346,6 @@ func makeCmd(args []string, envOverrides map[string]string) *exec.Cmd {
 	return cmd
 }
 
-func runCLIProcess(cfgPath string, env map[string]string, driveID string, args ...string) (string, string, error) {
-	var fullArgs []string
-	if cfgPath != "" {
-		fullArgs = append(fullArgs, "--config", cfgPath)
-	}
-
-	if driveID != "" {
-		fullArgs = append(fullArgs, "--drive", driveID)
-	}
-
-	if shouldAddDebug(args) {
-		fullArgs = append(fullArgs, "--debug")
-	}
-
-	fullArgs = append(fullArgs, args...)
-	cmd := makeCmd(fullArgs, env)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	return stdout.String(), stderr.String(), err
-}
-
-// runCLIWithConfigExpectError runs the CLI with a config file and expects failure.
-func runCLIWithConfigExpectError(t *testing.T, cfgPath string, env map[string]string, args ...string) string {
-	t.Helper()
-
-	stdout, stderr, err := runCLICore(t, cfgPath, env, selectedDriveForEnv(env), args...)
-
-	require.Error(t, err, "expected CLI to fail for args %v, but it succeeded\nstdout: %s\nstderr: %s",
-		args, stdout, stderr)
-
-	return stdout + stderr
-}
-
 // pollTimeout is the default timeout for polling helpers waiting on Graph API
 // eventual consistency. 30 seconds covers observed propagation delays.
 const pollTimeout = 30 * time.Second
@@ -419,68 +379,6 @@ func pollBackoff(attempt int) time.Duration {
 	}
 
 	return d
-}
-
-// pollCLIWithConfigContains retries a CLI command with a config file until
-// stdout contains the expected string or timeout is reached.
-// env overrides (if non-nil) are applied to the child process environment.
-func pollCLIWithConfigContains(
-	t *testing.T, cfgPath string, env map[string]string, expected string, timeout time.Duration, args ...string,
-) (string, string) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	resolvedDriveID := effectiveDriveID(env, "")
-
-	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, args...)
-		if err == nil && strings.Contains(stdout, expected) {
-			return stdout, stderr
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(t, "pollCLIWithConfigContains: timed out",
-				"after %v waiting for %q in output of %v\nlast stdout: %s\nlast stderr: %s",
-				timeout, expected, args, stdout, stderr)
-		}
-
-		if shouldRefreshSharedRootListingForRemoteRead(resolvedDriveID, stderr) {
-			waitForSharedRootListingVisibleWithin(
-				t,
-				cfgPath,
-				env,
-				resolvedDriveID,
-				time.Until(deadline),
-			)
-			continue
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
-}
-
-// pollCLIWithConfigSuccess retries a CLI command with a config file until
-// it succeeds (exit 0).
-// env overrides (if non-nil) are applied to the child process environment.
-func pollCLIWithConfigSuccess(t *testing.T, cfgPath string, env map[string]string, timeout time.Duration, args ...string) (string, string) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-
-	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, args...)
-		if err == nil {
-			return stdout, stderr
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(t, "pollCLIWithConfigSuccess: timed out",
-				"after %v waiting for success of %v\nlast stdout: %s\nlast stderr: %s",
-				timeout, args, stdout, stderr)
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
 }
 
 func isRetryableGraphGatewayFailure(stderr string) bool {
@@ -520,394 +418,6 @@ func pollCLIWithConfigRetryingTransientGraphFailures(
 	}
 }
 
-// pollCLIWithConfigNotContains retries a CLI command until stdout does NOT
-// contain the unexpected string. For delete propagation, parent listings can
-// transiently collapse to not-found while Graph converges, so those cleanup
-// responses also satisfy disappearance.
-func pollCLIWithConfigNotContains(
-	t *testing.T, cfgPath string, env map[string]string, unexpected string, timeout time.Duration, args ...string,
-) (string, string) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-
-	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, args...)
-		if deleteDisappearanceReady(stdout, stderr, err, unexpected) {
-			return stdout, stderr
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(t, "pollCLIWithConfigNotContains: timed out",
-				"after %v waiting for %q to disappear from output of %v\nlast stdout: %s\nlast stderr: %s",
-				timeout, unexpected, args, stdout, stderr)
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
-}
-
-func pollRemoteEventually(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-	timeout time.Duration,
-	eventKind string,
-	description string,
-	ready func(stdout, stderr string, err error) bool,
-	args ...string,
-) (string, string) {
-	t.Helper()
-
-	startedAt := time.Now()
-	deadline := time.Now().Add(timeout)
-	resolvedDriveID := effectiveDriveID(env, driveID)
-
-	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLICore(t, cfgPath, env, resolvedDriveID, args...)
-		if ready(stdout, stderr, err) {
-			recordTimingEvent(
-				t,
-				eventKind,
-				description,
-				resolvedDriveID,
-				args,
-				timeout,
-				time.Since(startedAt),
-				attempt+1,
-				timingOutcomeSuccess,
-			)
-			return stdout, stderr
-		}
-
-		if time.Now().After(deadline) {
-			recordTimingEvent(
-				t,
-				eventKind,
-				description,
-				resolvedDriveID,
-				args,
-				timeout,
-				time.Since(startedAt),
-				attempt+1,
-				timingOutcomeTimeout,
-			)
-			require.Failf(t, "pollRemoteEventually: timed out",
-				"after %v waiting for %s via %v\nlast stdout: %s\nlast stderr: %s",
-				timeout, description, args, stdout, stderr)
-		}
-
-		if shouldRefreshSharedRootListingForRemoteRead(resolvedDriveID, stderr) {
-			waitForSharedRootListingVisibleWithin(
-				t,
-				cfgPath,
-				env,
-				resolvedDriveID,
-				time.Until(deadline),
-			)
-			continue
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
-}
-
-// waitForRemoteExactStatVisible is for tests whose contract is the exact path
-// route itself. It should not be used for generic fixture seeding.
-func waitForRemoteExactStatVisible(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-	remotePath string,
-) (string, string) {
-	t.Helper()
-
-	return pollRemoteEventually(
-		t,
-		cfgPath,
-		env,
-		driveID,
-		remoteWritePropagationTimeout,
-		timingKindRemoteWriteVisibility,
-		fmt.Sprintf("remote exact-path visibility for %q", remotePath),
-		func(_ string, _ string, err error) bool {
-			return err == nil
-		},
-		"stat", remotePath,
-	)
-}
-
-// waitForRemoteParentListingContains proves list-visible availability under a
-// parent path without asserting exact-path convergence.
-func waitForRemoteParentListingContains(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-	parentPath string,
-	expected string,
-) (string, string) {
-	t.Helper()
-
-	return pollRemoteEventually(
-		t,
-		cfgPath,
-		env,
-		driveID,
-		remoteWritePropagationTimeout,
-		timingKindRemoteWriteVisibility,
-		fmt.Sprintf("remote parent listing contains %q under %q", expected, parentPath),
-		func(stdout, _ string, err error) bool {
-			return err == nil && strings.Contains(stdout, expected)
-		},
-		"ls", parentPath,
-	)
-}
-
-type fixtureSeedVisibilityOutcome uint8
-
-const (
-	fixtureSeedVisibilityKeepPolling fixtureSeedVisibilityOutcome = iota
-	fixtureSeedVisibilityExactSuccess
-	fixtureSeedVisibilitySoftenedByParentListing
-)
-
-// classifyFixtureSeedVisibilityAttempt keeps the fixture-readiness contract
-// pure: exact stat success wins immediately, otherwise a visible parent listing
-// softens the lag into the documented post-mutation destination recurrence.
-func classifyFixtureSeedVisibilityAttempt(
-	targetBase string,
-	statErr error,
-	parentListStdout string,
-	parentListErr error,
-) fixtureSeedVisibilityOutcome {
-	switch {
-	case statErr == nil:
-		return fixtureSeedVisibilityExactSuccess
-	case parentListErr == nil && strings.Contains(parentListStdout, targetBase):
-		return fixtureSeedVisibilitySoftenedByParentListing
-	default:
-		return fixtureSeedVisibilityKeepPolling
-	}
-}
-
-// waitForRemoteFixtureSeedVisible is the shared fixture-readiness contract for
-// remote writes that are only setup for later assertions. It accepts either
-// exact stat success or parent-list visibility so unrelated tests do not depend
-// on one stricter read path winning a provider convergence race.
-func waitForRemoteFixtureSeedVisible(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-	remotePath string,
-) {
-	t.Helper()
-
-	driveID = effectiveDriveID(env, driveID)
-
-	cleanPath := path.Clean(remotePath)
-	if cleanPath == "." || cleanPath == "/" || cleanPath == "" {
-		return
-	}
-
-	base := path.Base(cleanPath)
-	if base == "." || base == "/" || base == "" {
-		return
-	}
-
-	parentPath := path.Dir(cleanPath)
-	if parentPath == "." || parentPath == "" {
-		parentPath = "/"
-	}
-
-	deadline := time.Now().Add(remoteWritePropagationTimeout)
-	startedAt := time.Now()
-
-	var lastStdout string
-	var lastStderr string
-
-	for attempt := 0; ; attempt++ {
-		statStdout, statStderr, statErr := runCLIWithConfigAllowError(t, cfgPath, env, "stat", cleanPath)
-		switch classifyFixtureSeedVisibilityAttempt(base, statErr, "", nil) {
-		case fixtureSeedVisibilityExactSuccess:
-			recordTimingEvent(
-				t,
-				timingKindRemoteWriteVisibility,
-				fmt.Sprintf("remote fixture seed visibility for %q", cleanPath),
-				driveID,
-				[]string{"stat", cleanPath},
-				remoteWritePropagationTimeout,
-				time.Since(startedAt),
-				attempt+1,
-				timingOutcomeSuccess,
-			)
-			return
-		}
-
-		lastStdout = statStdout
-		lastStderr = statStderr
-
-		listStdout, listStderr, listErr := runCLIWithConfigAllowError(t, cfgPath, env, "ls", parentPath)
-		switch classifyFixtureSeedVisibilityAttempt(base, statErr, listStdout, listErr) {
-		case fixtureSeedVisibilitySoftenedByParentListing:
-			recordLiveProviderRecurrenceEvent(
-				t,
-				fmt.Sprintf("fixture visibility %s", cleanPath),
-				liveProviderRecurrenceDecision{
-					Reason: liveProviderRecurrencePostMutationDestinationPathLag,
-					Retry:  false,
-				},
-				quirkOutcomeSoftened,
-				lastStderr,
-			)
-			recordTimingEvent(
-				t,
-				timingKindRemoteWriteVisibility,
-				fmt.Sprintf("remote fixture seed visibility for %q", cleanPath),
-				driveID,
-				[]string{"ls", parentPath},
-				remoteWritePropagationTimeout,
-				time.Since(startedAt),
-				attempt+1,
-				timingOutcomeSuccess,
-			)
-			return
-		}
-
-		lastStdout = listStdout
-		lastStderr = listStderr
-
-		if time.Now().After(deadline) {
-			recordTimingEvent(
-				t,
-				timingKindRemoteWriteVisibility,
-				fmt.Sprintf("remote fixture seed visibility for %q", cleanPath),
-				driveID,
-				[]string{"stat", cleanPath, "ls", parentPath},
-				remoteWritePropagationTimeout,
-				time.Since(startedAt),
-				attempt+1,
-				timingOutcomeTimeout,
-			)
-			require.Failf(
-				t,
-				"waitForRemoteFixtureSeedVisible: timed out",
-				"after %v waiting for fixture visibility of %q via stat %q or ls %q\nlast stdout: %s\nlast stderr: %s",
-				remoteWritePropagationTimeout,
-				cleanPath,
-				cleanPath,
-				parentPath,
-				lastStdout,
-				lastStderr,
-			)
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
-}
-
-func TestClassifyFixtureSeedVisibilityAttempt(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, fixtureSeedVisibilityExactSuccess, classifyFixtureSeedVisibilityAttempt(
-		"test.txt",
-		nil,
-		"",
-		nil,
-	))
-	assert.Equal(t, fixtureSeedVisibilitySoftenedByParentListing, classifyFixtureSeedVisibilityAttempt(
-		"test.txt",
-		assert.AnError,
-		"test.txt\nother.txt\n",
-		nil,
-	))
-	assert.Equal(t, fixtureSeedVisibilityKeepPolling, classifyFixtureSeedVisibilityAttempt(
-		"test.txt",
-		assert.AnError,
-		"other.txt\n",
-		nil,
-	))
-	assert.Equal(t, fixtureSeedVisibilityKeepPolling, classifyFixtureSeedVisibilityAttempt(
-		"test.txt",
-		assert.AnError,
-		"",
-		assert.AnError,
-	))
-}
-
-func waitForRemoteDeleteDisappearance(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-	unexpected string,
-	args ...string,
-) (string, string) {
-	t.Helper()
-
-	return pollRemoteEventually(
-		t,
-		cfgPath,
-		env,
-		driveID,
-		remoteDeletePropagationTimeout,
-		timingKindRemoteDeleteDisappearance,
-		fmt.Sprintf("remote delete disappearance for %q", unexpected),
-		func(stdout, stderr string, err error) bool {
-			return deleteDisappearanceReady(stdout, stderr, err, unexpected)
-		},
-		args...,
-	)
-}
-
-func deleteDisappearanceReady(stdout string, stderr string, err error, unexpected string) bool {
-	switch {
-	case err == nil:
-		return !strings.Contains(stdout, unexpected)
-	case isRemoteNotFoundCleanup(stderr):
-		return true
-	default:
-		return false
-	}
-}
-
-func waitForRemoteScopeTransition(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-	expected string,
-	args ...string,
-) (string, string) {
-	t.Helper()
-
-	return pollRemoteEventually(
-		t,
-		cfgPath,
-		env,
-		driveID,
-		remoteScopeTransitionTimeout,
-		timingKindRemoteScopeTransition,
-		fmt.Sprintf("remote scope transition for %q", expected),
-		func(stdout, _ string, err error) bool {
-			return err == nil && strings.Contains(stdout, expected)
-		},
-		args...,
-	)
-}
-
-func TestDeleteDisappearanceReady(t *testing.T) {
-	t.Parallel()
-
-	assert.True(t, deleteDisappearanceReady("other.txt\n", "", nil, "target.txt"))
-	assert.False(t, deleteDisappearanceReady("target.txt\n", "", nil, "target.txt"))
-	assert.True(t, deleteDisappearanceReady("", "The resource could not be found.", assert.AnError, "target.txt"))
-	assert.False(t, deleteDisappearanceReady("", "transport timeout", assert.AnError, "target.txt"))
-}
-
 func requireSyncEventuallyConverges(
 	t *testing.T,
 	cfgPath string,
@@ -923,7 +433,7 @@ func requireSyncEventuallyConverges(
 	syncArgs := append([]string{"sync"}, args...)
 	startedAt := time.Now()
 	deadline := time.Now().Add(timeout)
-	driveID := selectedDriveForEnv(env)
+	driveID := resolveDriveSelection(env, "")
 
 	for attempt := 0; ; attempt++ {
 		last.Stdout, last.Stderr, last.Err = runCLIWithConfigAllowError(t, cfgPath, env, syncArgs...)

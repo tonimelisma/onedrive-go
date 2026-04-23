@@ -41,7 +41,7 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify it exists remotely (poll for eventual consistency).
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "empty.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "empty.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Download via get (bypasses sync state) and verify zero-byte content.
 	downloadPath := filepath.Join(t.TempDir(), "empty-downloaded.txt")
@@ -75,7 +75,7 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify it exists remotely via ls (poll for eventual consistency).
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "caf", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "caf", pollTimeout, "ls", "/"+testFolder)
 
 	// Download via get and verify content roundtrip.
 	downloadPath := filepath.Join(t.TempDir(), unicodeName)
@@ -115,7 +115,7 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 		"should log debug message about invalid filename")
 
 	// Verify only valid.txt appeared remotely (poll for eventual consistency).
-	stdout, _ := pollCLIWithConfigContains(t, opsCfgPath, nil, "valid.txt", pollTimeout, "ls", "/"+testFolder)
+	stdout, _ := waitForRemoteReadContains(t, opsCfgPath, nil, "", "valid.txt", pollTimeout, "ls", "/"+testFolder)
 	assert.NotContains(t, stdout, "CON",
 		"invalid filename should not be uploaded")
 }
@@ -151,7 +151,7 @@ func TestE2E_RapidFileChurn(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify final content remotely (poll for eventual consistency).
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "churn.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "churn.txt", pollTimeout, "ls", "/"+testFolder)
 	remoteContent := getRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/churn.txt")
 	assert.Equal(t, finalContent, remoteContent,
 		"final state should be the last written content")

@@ -67,7 +67,7 @@ func TestE2E_Orchestrator_SimultaneousSync(t *testing.T) {
 
 	// Verify drive1's file exists remotely.
 	remotePath1 := "/" + testFolder1 + "/drive1-file.txt"
-	pollCLIWithConfigContains(t, cfgPath, env, "drive1-file.txt", pollTimeout, "stat", remotePath1)
+	waitForRemoteReadContains(t, cfgPath, env, "", "drive1-file.txt", pollTimeout, "stat", remotePath1)
 
 	// Verify drive2's file exists remotely (using drive2's --drive flag).
 	remotePath2 := "/" + testFolder2 + "/drive2-file.txt"
@@ -193,7 +193,7 @@ func TestE2E_Orchestrator_OneDriveFails(t *testing.T) {
 
 	// drive1's file should still have been uploaded.
 	remotePath := "/" + testFolder + "/survive.txt"
-	pollCLIWithConfigContains(t, cfgPath, env, "survive.txt", pollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, cfgPath, env, "", "survive.txt", pollTimeout, "stat", remotePath)
 }
 
 // TestE2E_Orchestrator_SelectiveDrive creates files in both sync dirs but
@@ -231,7 +231,7 @@ func TestE2E_Orchestrator_SelectiveDrive(t *testing.T) {
 
 	// drive1's file should be uploaded.
 	remotePath1 := "/" + testFolder1 + "/selected.txt"
-	pollCLIWithConfigContains(t, cfgPath, env, "selected.txt", pollTimeout, "stat", remotePath1)
+	waitForRemoteReadContains(t, cfgPath, env, "", "selected.txt", pollTimeout, "stat", remotePath1)
 
 	// drive2's file should NOT be uploaded (drive2 was not synced).
 	// Use --drive drive2 to check drive2's remote.
@@ -303,7 +303,7 @@ func TestE2E_Orchestrator_WatchSimultaneous(t *testing.T) {
 
 	// Poll both remotes until files appear.
 	remotePath1 := "/" + testFolder1 + "/watch-d1.txt"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "watch-d1.txt", 3*time.Minute, "stat", remotePath1)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "watch-d1.txt", 3*time.Minute, "stat", remotePath1)
 
 	remotePath2 := "/" + testFolder2 + "/watch-d2.txt"
 	pollForDrive2File(t, cfgPath, env, drive2, "watch-d2.txt", 3*time.Minute, "stat", remotePath2)
@@ -360,7 +360,7 @@ func TestE2E_Orchestrator_WatchDriveIsolation(t *testing.T) {
 
 	// Wait for drive1's file to appear remotely.
 	remotePath := "/" + testFolder + "/isolated.txt"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "isolated.txt", 3*time.Minute, "stat", remotePath)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "isolated.txt", 3*time.Minute, "stat", remotePath)
 
 	// Verify file does NOT appear on drive2.
 	d2Args := []string{"--config", cfgPath, "--drive", drive2, "--debug", "stat", "/" + testFolder + "/isolated.txt"}
@@ -451,7 +451,7 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 
 	// Verify drive1 syncs.
 	remotePath1 := "/" + testFolder1 + "/active.txt"
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "active.txt", 3*time.Minute, "stat", remotePath1)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "active.txt", 3*time.Minute, "stat", remotePath1)
 
 	// Bounded negative check: poll a few times over 10s to confirm file not on drive2.
 	negDeadline := time.Now().Add(10 * time.Second)

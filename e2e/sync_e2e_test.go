@@ -31,50 +31,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
-type statusJSON struct {
-	Accounts []statusAccountJSON `json:"accounts"`
-	Summary  statusSummaryJSON   `json:"summary"`
-}
-
-type statusSummaryJSON struct {
-	TotalDrives int `json:"total_drives"`
-}
-
-type statusAccountJSON struct {
-	Email  string            `json:"email"`
-	Drives []statusDriveJSON `json:"drives"`
-}
-
-type statusDriveJSON struct {
-	CanonicalID string               `json:"canonical_id"`
-	SyncState   *statusSyncStateJSON `json:"sync_state,omitempty"`
-}
-
-type statusSyncStateJSON struct {
-	LastSyncTime     string                `json:"last_sync_time"`
-	LastSyncDuration string                `json:"last_sync_duration"`
-	FileCount        int                   `json:"file_count"`
-	ConditionCount   int                   `json:"condition_count"`
-	RemoteDrift      int                   `json:"remote_drift"`
-	Retrying         int                   `json:"retrying"`
-	LastError        string                `json:"last_error"`
-	Conditions       []statusConditionJSON `json:"conditions"`
-	ExamplesLimit    int                   `json:"examples_limit"`
-	Verbose          bool                  `json:"verbose"`
-}
-
-type statusConditionJSON struct {
-	ConditionKey  string   `json:"condition_key"`
-	ConditionType string   `json:"condition_type"`
-	Title         string   `json:"title"`
-	Reason        string   `json:"reason"`
-	Action        string   `json:"action"`
-	ScopeKind     string   `json:"scope_kind"`
-	Scope         string   `json:"scope"`
-	Count         int      `json:"count"`
-	Paths         []string `json:"paths"`
-}
-
 type statIDJSON struct {
 	ID string `json:"id"`
 }
@@ -82,24 +38,6 @@ type statIDJSON struct {
 // ---------------------------------------------------------------------------
 // Sync test helpers (available under the base e2e tag for both fast and full)
 // ---------------------------------------------------------------------------
-
-func selectedDriveForEnv(env map[string]string) string {
-	if env != nil {
-		if driveID := env["ONEDRIVE_GO_DRIVE"]; driveID != "" {
-			return driveID
-		}
-	}
-
-	return drive
-}
-
-func effectiveDriveID(env map[string]string, driveID string) string {
-	if driveID == "" || driveID == drive {
-		return selectedDriveForEnv(env)
-	}
-
-	return driveID
-}
 
 // writeSyncConfig creates a minimal TOML config file pointing to the given
 // syncDir for the test drive. Each test gets per-test state DB isolation via
@@ -213,259 +151,6 @@ sync_dir = %q
 	return cfgPath, env
 }
 
-func waitForSharedRootListingVisible(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-) {
-	t.Helper()
-
-	waitForSharedRootListingVisibleWithin(
-		t,
-		cfgPath,
-		env,
-		driveID,
-		remoteWritePropagationTimeout,
-	)
-}
-
-func waitForSharedRootListingVisibleWithin(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-	timeout time.Duration,
-) {
-	t.Helper()
-
-	pollRemoteEventually(
-		t,
-		cfgPath,
-		env,
-		driveID,
-		timeout,
-		timingKindRemoteWriteVisibility,
-		fmt.Sprintf("shared-root listing visibility for %q", driveID),
-		func(_ string, _ string, err error) bool {
-			return err == nil
-		},
-		"ls",
-		"/",
-	)
-}
-
-// runCLICore is the shared implementation for all config-aware CLI runner
-// helpers. It builds the argument list (optionally adding --config, --drive,
-// and --debug), executes the binary, logs output, and returns stdout, stderr,
-// and the execution error. driveID="" omits --drive (all-drives mode).
-func runCLICore(t *testing.T, cfgPath string, env map[string]string, driveID string, args ...string) (string, string, error) {
-	t.Helper()
-
-	var fullArgs []string
-	if cfgPath != "" {
-		fullArgs = append(fullArgs, "--config", cfgPath)
-	}
-
-	if driveID != "" {
-		fullArgs = append(fullArgs, "--drive", driveID)
-	}
-
-	if shouldAddDebug(args) {
-		fullArgs = append(fullArgs, "--debug")
-	}
-
-	fullArgs = append(fullArgs, args...)
-	cmd := makeCmd(fullArgs, env)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	recordCLIQuirkEvents(t, fullArgs, stderr.String(), err)
-	logCLIExecution(t, fullArgs, stdout.String(), stderr.String())
-
-	return stdout.String(), stderr.String(), err
-}
-
-// runCLIWithConfig runs the CLI binary with a custom config file.
-// env overrides (if non-nil) are applied to the child process environment.
-func runCLIWithConfig(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
-	t.Helper()
-
-	stdout, stderr, err := runCLICore(t, cfgPath, env, selectedDriveForEnv(env), args...)
-	require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s",
-		args, stdout, stderr)
-
-	return stdout, stderr
-}
-
-func runStatusAllowError(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	args ...string,
-) (statusJSON, string, string, error) {
-	t.Helper()
-
-	statusArgs := append([]string{"status"}, args...)
-	statusArgs = append(statusArgs, "--json")
-	stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, statusArgs...)
-	if err != nil {
-		return statusJSON{}, stdout, stderr, err
-	}
-
-	var output statusJSON
-	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
-		return statusJSON{}, stdout, stderr, fmt.Errorf("decode status json: %w", err)
-	}
-
-	return output, stdout, stderr, nil
-}
-
-func runStatusAllDrivesAllowError(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	args ...string,
-) (statusJSON, string, string, error) {
-	t.Helper()
-
-	statusArgs := append([]string{"status"}, args...)
-	statusArgs = append(statusArgs, "--json")
-	stdout, stderr, err := runCLIWithConfigAllDrivesAllowError(t, cfgPath, env, statusArgs...)
-	if err != nil {
-		return statusJSON{}, stdout, stderr, err
-	}
-
-	var output statusJSON
-	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
-		return statusJSON{}, stdout, stderr, fmt.Errorf("decode status json: %w", err)
-	}
-
-	return output, stdout, stderr, nil
-}
-
-func readStatus(t *testing.T, cfgPath string, env map[string]string, args ...string) statusJSON {
-	t.Helper()
-
-	output, stdout, stderr, err := runStatusAllowError(t, cfgPath, env, args...)
-	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s", stdout, stderr)
-
-	return output
-}
-
-func readStatusAllDrives(t *testing.T, cfgPath string, env map[string]string, args ...string) statusJSON {
-	t.Helper()
-
-	output, stdout, stderr, err := runStatusAllDrivesAllowError(t, cfgPath, env, args...)
-	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s", stdout, stderr)
-
-	return output
-}
-
-func requireStatusDrive(
-	t *testing.T,
-	status statusJSON,
-	canonicalID string,
-) statusDriveJSON {
-	t.Helper()
-
-	for i := range status.Accounts {
-		for j := range status.Accounts[i].Drives {
-			driveStatus := status.Accounts[i].Drives[j]
-			if driveStatus.CanonicalID == canonicalID {
-				return driveStatus
-			}
-		}
-	}
-
-	require.FailNowf(t, "missing status drive", "canonical_id=%s", canonicalID)
-	return statusDriveJSON{}
-}
-
-func readStatusSyncState(t *testing.T, cfgPath string, env map[string]string, args ...string) statusSyncStateJSON {
-	t.Helper()
-	return readStatusSyncStateForDrive(t, cfgPath, env, selectedDriveForEnv(env), args...)
-}
-
-func readStatusSyncStateForDrive(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	canonicalID string,
-	args ...string,
-) statusSyncStateJSON {
-	t.Helper()
-
-	status := readStatus(t, cfgPath, env, args...)
-	driveStatus := requireStatusDrive(t, status, canonicalID)
-	require.NotNil(t, driveStatus.SyncState, "expected sync_state for %s", canonicalID)
-	return *driveStatus.SyncState
-}
-
-func pollStatusSyncState(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	timeout time.Duration,
-	ready func(statusSyncStateJSON) bool,
-	args ...string,
-) statusSyncStateJSON {
-	return pollStatusSyncStateForDrive(t, cfgPath, env, selectedDriveForEnv(env), timeout, ready, args...)
-}
-
-func pollStatusSyncStateForDrive(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	canonicalID string,
-	timeout time.Duration,
-	ready func(statusSyncStateJSON) bool,
-	args ...string,
-) statusSyncStateJSON {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	var lastStatus statusSyncStateJSON
-	var lastStdout string
-	var lastStderr string
-	var lastErr error
-
-	for attempt := 0; ; attempt++ {
-		status, stdout, stderr, err := runStatusAllowError(t, cfgPath, env, args...)
-		lastStdout = stdout
-		lastStderr = stderr
-		lastErr = err
-		if err == nil {
-			driveStatus := requireStatusDrive(t, status, canonicalID)
-			if driveStatus.SyncState != nil {
-				lastStatus = *driveStatus.SyncState
-				if ready(lastStatus) {
-					return lastStatus
-				}
-			}
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(
-				t,
-				"pollStatusSyncState: timed out",
-				"after %v waiting for status predicate with args %v\nlast error: %v\nlast status: %+v\nlast stdout: %s\nlast stderr: %s",
-				timeout,
-				args,
-				lastErr,
-				lastStatus,
-				lastStdout,
-				lastStderr,
-			)
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
-}
-
 func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (*syncverify.Report, error) {
 	t.Helper()
 
@@ -473,7 +158,7 @@ func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (
 	cfg, err := config.Load(cfgPath, logger)
 	require.NoError(t, err)
 
-	canonicalID, driveCfg, err := config.MatchDrive(cfg, selectedDriveForEnv(env), logger)
+	canonicalID, driveCfg, err := config.MatchDrive(cfg, resolveDriveSelection(env, ""), logger)
 	require.NoError(t, err)
 
 	dbPath := stateDBPathForEnv(canonicalID, env)
@@ -523,26 +208,6 @@ func stateDBPathForEnv(canonicalID driveid.CanonicalID, env map[string]string) s
 
 	sanitized := strings.ReplaceAll(canonicalID.String(), ":", "_")
 	return filepath.Join(dataDir, "state_"+sanitized+".db")
-}
-
-// runCLIWithConfigAllowError runs the CLI binary with a custom config file
-// and returns the output even on error.
-func runCLIWithConfigAllowError(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string, error) {
-	t.Helper()
-
-	return runCLICore(t, cfgPath, env, selectedDriveForEnv(env), args...)
-}
-
-func runCLIWithConfigAllowErrorForDrive(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-	args ...string,
-) (string, string, error) {
-	t.Helper()
-
-	return runCLICore(t, cfgPath, env, effectiveDriveID(env, driveID), args...)
 }
 
 // snapshotLocalTree captures a deterministic view of a test-owned local
@@ -649,7 +314,7 @@ const (
 func mkdirRemoteFolder(t *testing.T, cfgPath string, env map[string]string, remotePath string) {
 	t.Helper()
 
-	mkdirRemoteFolderForDrive(t, cfgPath, env, selectedDriveForEnv(env), remotePath)
+	mkdirRemoteFolderForDrive(t, cfgPath, env, resolveDriveSelection(env, ""), remotePath)
 }
 
 func mkdirRemoteFolderForDrive(
@@ -703,7 +368,7 @@ func mkdirRemoteFolderForDrive(
 func putRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePath, content string) {
 	t.Helper()
 
-	putRemoteFileForDrive(t, cfgPath, env, selectedDriveForEnv(env), remotePath, content)
+	putRemoteFileForDrive(t, cfgPath, env, resolveDriveSelection(env, ""), remotePath, content)
 }
 
 func putRemoteFileForDrive(
@@ -868,125 +533,9 @@ func TestClassifyFixtureMkdirCommandFailure_RejectsUnrelatedFailures(t *testing.
 	))
 }
 
-func isSharedCanonicalDriveID(driveID string) bool {
-	canonicalID, err := driveid.NewCanonicalID(driveID)
-	if err != nil {
-		return false
-	}
-
-	return canonicalID.IsShared()
-}
-
-func shouldRefreshSharedRootListingForRemoteRead(driveID string, stderr string) bool {
-	return isSharedCanonicalDriveID(driveID) &&
-		strings.Contains(stderr, "resolve item path") &&
-		strings.Contains(stderr, "list children for segment") &&
-		strings.Contains(stderr, "graph: HTTP 404")
-}
-
-func TestShouldRefreshSharedRootListingForRemoteRead(t *testing.T) {
-	t.Parallel()
-
-	sharedCID, err := driveid.ConstructShared("user@example.com", "drive-id", "item-id")
-	require.NoError(t, err)
-
-	personalCID, err := driveid.NewCanonicalID("personal:user@example.com")
-	require.NoError(t, err)
-
-	const sharedRootRoute404 = `Error: resolving "/folder/file.txt": resolve item path "folder/file.txt": list children for segment "folder": graph: HTTP 404 (request-id: req-123): The resource could not be found.`
-
-	require.True(t, shouldRefreshSharedRootListingForRemoteRead(sharedCID.String(), sharedRootRoute404))
-	require.False(t, shouldRefreshSharedRootListingForRemoteRead(personalCID.String(), sharedRootRoute404))
-	require.False(t, shouldRefreshSharedRootListingForRemoteRead(sharedCID.String(), `Error: creating folder "data": graph: HTTP 403: Access denied`))
-	require.False(t, shouldRefreshSharedRootListingForRemoteRead("not-a-canonical-id", sharedRootRoute404))
-}
-
 // getRemoteFile downloads a remote file and returns its content as a string.
 // cfgPath must point to a valid config with the drive section; env overrides
 // (if non-nil) are forwarded to the CLI child process.
-func getRemoteFile(t *testing.T, cfgPath string, env map[string]string, remotePath string) string {
-	t.Helper()
-
-	return getRemoteFileForDrive(t, cfgPath, env, selectedDriveForEnv(env), remotePath)
-}
-
-func getRemoteFileForDrive(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-	remotePath string,
-) string {
-	t.Helper()
-
-	resolvedDriveID := effectiveDriveID(env, driveID)
-	waitForRemoteFixtureSeedVisible(t, cfgPath, env, resolvedDriveID, remotePath)
-
-	tmpDir := t.TempDir()
-	localPath := filepath.Join(tmpDir, "downloaded")
-	deadline := time.Now().Add(remoteWritePropagationTimeout)
-
-	var (
-		lastStdout string
-		lastStderr string
-		lastErr    error
-	)
-
-	if isSharedCanonicalDriveID(resolvedDriveID) {
-		waitForSharedRootListingVisibleWithin(
-			t,
-			cfgPath,
-			env,
-			resolvedDriveID,
-			time.Until(deadline),
-		)
-	}
-
-	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLIWithConfigAllowErrorForDrive(
-			t,
-			cfgPath,
-			env,
-			resolvedDriveID,
-			"get",
-			remotePath,
-			localPath,
-		)
-		lastStdout = stdout
-		lastStderr = stderr
-		lastErr = err
-		if err == nil {
-			data, readErr := os.ReadFile(localPath)
-			require.NoError(t, readErr)
-			return string(data)
-		}
-
-		if time.Now().After(deadline) {
-			require.NoErrorf(
-				t,
-				lastErr,
-				"get %q did not converge after visibility wait\nstdout: %s\nstderr: %s",
-				remotePath,
-				lastStdout,
-				lastStderr,
-			)
-		}
-
-		if shouldRefreshSharedRootListingForRemoteRead(resolvedDriveID, lastStderr) {
-			waitForSharedRootListingVisibleWithin(
-				t,
-				cfgPath,
-				env,
-				resolvedDriveID,
-				time.Until(deadline),
-			)
-			continue
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
-}
-
 // cleanupRemoteFolder is a best-effort remote cleanup for use in t.Cleanup.
 func cleanupRemoteFolder(t *testing.T, folder string) {
 	t.Helper()
@@ -1273,36 +822,6 @@ func copyTokenFileForDrive(t *testing.T, srcDir, dstDir, driveID string) {
 	testutil.CopyCatalogFile(srcDir, dstDir)
 }
 
-// runCLIWithConfigAllDrives runs the CLI without --drive flag (syncs all drives).
-func runCLIWithConfigAllDrives(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
-	t.Helper()
-
-	stdout, stderr, err := runCLICore(t, cfgPath, env, "", args...)
-	require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s",
-		args, stdout, stderr)
-
-	return stdout, stderr
-}
-
-// runCLIWithConfigAllDrivesAllowError runs the CLI without --drive flag and
-// returns the output even on error.
-func runCLIWithConfigAllDrivesAllowError(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string, error) {
-	t.Helper()
-
-	return runCLICore(t, cfgPath, env, "", args...)
-}
-
-// runCLIWithConfigForDrive runs the CLI with a specific --drive flag.
-func runCLIWithConfigForDrive(t *testing.T, cfgPath string, env map[string]string, driveID string, args ...string) (string, string) {
-	t.Helper()
-
-	stdout, stderr, err := runCLICore(t, cfgPath, env, driveID, args...)
-	require.NoErrorf(t, err, "CLI command %v (drive=%s) failed\nstdout: %s\nstderr: %s",
-		args, driveID, stdout, stderr)
-
-	return stdout, stderr
-}
-
 // cleanupRemoteFolderForDrive is like cleanupRemoteFolder but for a specific
 // drive. Cleanup is best-effort: the suite preflight already scrubs old E2E
 // artifacts, so teardown should not fail a passing test because Graph lies
@@ -1345,7 +864,7 @@ func openDriveStateDBForSyncTest(t *testing.T, env map[string]string) *sql.DB {
 	dataHome := env["XDG_DATA_HOME"]
 	require.NotEmpty(t, dataHome)
 
-	sanitizedDrive := strings.ReplaceAll(selectedDriveForEnv(env), ":", "_")
+	sanitizedDrive := strings.ReplaceAll(resolveDriveSelection(env, ""), ":", "_")
 	dbPath := filepath.Join(dataHome, "onedrive-go", "state_"+sanitizedDrive+".db")
 	require.FileExists(t, dbPath)
 

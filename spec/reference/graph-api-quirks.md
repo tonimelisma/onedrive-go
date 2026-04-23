@@ -232,12 +232,13 @@ Runtime policy:
 - transfer-manager callers and sync workers do not add their own second retry
   loop for this quirk; the graph boundary is the single owner
 
-### Transient 404 on Immediate Post-Simple-Upload Mtime Patch
+### Transient Failures on Immediate Post-Simple-Upload Mtime Patch
 
 After a small-file simple upload succeeds, the immediate
 `PATCH /drives/{driveID}/items/{itemID}` used to restore
 `fileSystemInfo.lastModifiedDateTime` can return HTTP 404 with Graph code
-`itemNotFound` even though the upload response already returned that item ID.
+`itemNotFound`, or a transient 502/503/504 server failure, even though the
+upload response already returned that item ID.
 
 Observed local evidence on April 8, 2026 during `go run ./cmd/devtool verify default`:
 
@@ -249,14 +250,26 @@ Observed local evidence on April 8, 2026 during `go run ./cmd/devtool verify def
 - the cascading fast-suite failure later surfaced in
   `TestE2E_RoundTrip/rm_permanent` only because the preceding `put` had already
   failed on that false negative
+- local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on
+  April 23, 2026 hit the same boundary again in
+  `TestE2E_SyncWatch_FileDeletion`
+- the simple upload itself succeeded and returned item ID
+  `BD50CF43646E28E6!s5bf7484a62804c52a3304385a4586cfd`, but the immediate
+  follow-on `PATCH /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s5bf7484a62804c52a3304385a4586cfd`
+  returned HTTP 504 `UnknownError` with request ID
+  `0bb61a88-1a17-44e0-bed9-e92c3b6bc0b7`
+- the later watch deletion failure was secondary: the file content already
+  existed remotely, but the failed finalization PATCH left the upload in a
+  false-failed state that blocked the later upload-only delete from being
+  planned as a remote delete
 
 Runtime policy:
 
 - only the immediate post-simple-upload mtime PATCH gets the retry
-- retry remains narrow: only HTTP 404, only Graph code `itemNotFound`, only
-  the simple-upload finalization path
-- the current production retry budget is 4 total attempts with 250ms base, 2x
-  multiplier, no jitter, and 2s max
+- retry remains narrow: only HTTP 404 `itemNotFound` or transient 502/503/504
+  server failures, and only on the simple-upload finalization path
+- the current production retry budget is 7 total attempts with 250ms base, 2x
+  multiplier, no jitter, and 8s max
 - direct `UpdateFileSystemInfo()` calls outside simple-upload finalization stay
   strict; callers should not assume all metadata PATCH paths are retried
 

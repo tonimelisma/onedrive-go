@@ -84,7 +84,7 @@ func testLargeFileUploadDownload(t *testing.T, opsCfgPath, testFolder string) {
 	assert.Contains(t, stderr, "Uploaded")
 
 	// Poll for eventual consistency — file may not be visible immediately.
-	pollCLIWithConfigContains(t, opsCfgPath, nil, fmt.Sprintf("%d bytes", fileSize), pollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", fmt.Sprintf("%d bytes", fileSize), pollTimeout, "stat", remotePath)
 
 	// Download and verify byte-for-byte content integrity.
 	downloadDir := t.TempDir()
@@ -124,7 +124,7 @@ func testUnicodeFilename(t *testing.T, opsCfgPath, testFolder string) {
 	assert.Contains(t, stderr, "Uploaded")
 
 	// Poll for eventual consistency — file may not be visible immediately.
-	pollCLIWithConfigContains(t, opsCfgPath, nil, remoteName, pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", remoteName, pollTimeout, "ls", "/"+testFolder)
 
 	// Download and verify content.
 	downloadDir := t.TempDir()
@@ -164,7 +164,7 @@ func testSpacesInFilename(t *testing.T, opsCfgPath, testFolder string) {
 	assert.Contains(t, stderr, "Uploaded")
 
 	// Poll for eventual consistency — file may not be visible immediately.
-	pollCLIWithConfigContains(t, opsCfgPath, nil, remoteName, pollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", remoteName, pollTimeout, "stat", remotePath)
 
 	// Download and verify content.
 	downloadDir := t.TempDir()
@@ -243,7 +243,7 @@ func testConcurrentUploads(t *testing.T, opsCfgPath, testFolder string) {
 
 	// Poll for eventual consistency — files may not all be visible immediately.
 	// Wait until the last uploaded file appears in the listing.
-	stdout, _ := pollCLIWithConfigContains(t, opsCfgPath, nil, files[len(files)-1].remoteName, pollTimeout, "ls", "/"+testFolder)
+	stdout, _ := waitForRemoteReadContains(t, opsCfgPath, nil, "", files[len(files)-1].remoteName, pollTimeout, "ls", "/"+testFolder)
 	for _, f := range files {
 		assert.Contains(t, stdout, f.remoteName,
 			"expected %s in folder listing", f.remoteName)
@@ -278,7 +278,7 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Step 3: Assert files exist remotely (poll for eventual consistency).
-	stdout, _ := pollCLIWithConfigContains(t, cfgPath, env, "readme.txt", pollTimeout, "ls", "/"+testFolder+"/docs")
+	stdout, _ := waitForRemoteReadContains(t, cfgPath, env, "", "readme.txt", pollTimeout, "ls", "/"+testFolder+"/docs")
 	assert.Contains(t, stdout, "notes.txt")
 
 	// Step 4: Create new local folder + file (EF13 + ED5).
@@ -350,7 +350,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	// Step 4b: Wait for the remote delete to propagate (Graph API eventual
 	// consistency). Without this, sync may not see the deletion and won't
 	// detect the edit-delete conflict.
-	pollCLIWithConfigNotContains(t, cfgPath, env, "fragile.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "fragile.txt", "ls", "/"+testFolder)
 
 	requireSyncEventuallyConverges(
 		t,
@@ -414,7 +414,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 
 	// Verify all files exist remotely (poll for eventual consistency).
-	stdout, _ := pollCLIWithConfigContains(t, cfgPath, env, "keep.txt", pollTimeout, "ls", "/"+testFolder)
+	stdout, _ := waitForRemoteReadContains(t, cfgPath, env, "", "keep.txt", pollTimeout, "ls", "/"+testFolder)
 	assert.Contains(t, stdout, "del-local.txt")
 	assert.Contains(t, stdout, "del-remote.txt")
 	assert.Contains(t, stdout, "del-both.txt")
@@ -441,9 +441,9 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "rm", "-r", "/"+testFolder+"/sub")
 
 	// Wait for remote deletes to propagate via REST before sync sees them via delta.
-	pollCLIWithConfigNotContains(t, cfgPath, env, "del-remote.txt", pollTimeout, "ls", "/"+testFolder)
-	pollCLIWithConfigNotContains(t, cfgPath, env, "del-both.txt", pollTimeout, "ls", "/"+testFolder)
-	pollCLIWithConfigNotContains(t, cfgPath, env, "sub", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "del-remote.txt", "ls", "/"+testFolder)
+	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "del-both.txt", "ls", "/"+testFolder)
+	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "sub", "ls", "/"+testFolder)
 
 	// Step 4: Bidirectional sync — retry until delta catches up with ALL
 	// remote deletions (ci_issues.md §17). The retry loop uses normal sync so
@@ -473,7 +473,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 
 	// Step 5: Assert remaining results.
 	// EF6: del-local.txt gone remotely (poll for eventual consistency).
-	pollCLIWithConfigNotContains(t, cfgPath, env, "del-local", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "del-local", "ls", "/"+testFolder)
 
 	// EF10: del-both.txt gone everywhere.
 	_, err := os.Stat(filepath.Join(localDir, "del-both.txt"))
@@ -554,7 +554,7 @@ func TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "local-deferred.txt"), []byte("initial local-deferred"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	pollCLIWithConfigContains(t, cfgPath, env, "remote-owned.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, env, "", "remote-owned.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Step 2: Diverge one file remotely and a different file locally.
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/remote-owned.txt", "remote modification")
@@ -597,7 +597,7 @@ func TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges(t *testing.T) {
 	// Step 5: A later upload-only pass should publish the deferred local-only changes.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 	assert.Contains(t, stderr, "Mode: upload-only")
-	pollCLIWithConfigContains(t, cfgPath, env, "local-new.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, env, "", "local-new.txt", pollTimeout, "ls", "/"+testFolder)
 	assert.Equal(t, "local deferred modification", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/local-deferred.txt"))
 
 	report, err := verifyBaselineReport(t, cfgPath, env)
@@ -620,7 +620,7 @@ func TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "remote-deferred.txt"), []byte("initial remote-deferred"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	pollCLIWithConfigContains(t, cfgPath, env, "remote-deferred.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, env, "", "remote-deferred.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Step 2: Diverge one file locally and a different file remotely.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "local-owned.txt"), []byte("local modification"), 0o600))
@@ -651,7 +651,7 @@ func TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges(t *testing.T) {
 		"--upload-only",
 	)
 	assert.Contains(t, attempt.Stderr, "Mode: upload-only")
-	pollCLIWithConfigContains(t, cfgPath, env, "local-owned.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, env, "", "local-owned.txt", pollTimeout, "ls", "/"+testFolder)
 	assert.Equal(t, "local modification", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/local-owned.txt"))
 	assert.Equal(t, "remote deferred modification", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/remote-deferred.txt"))
 
@@ -705,7 +705,7 @@ func TestE2E_Sync_DirectionalModes_PreserveEditEditConflict(t *testing.T) {
 			require.NoError(t, os.WriteFile(conflictFile, []byte("original v1"), 0o600))
 
 			runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-			pollCLIWithConfigContains(t, cfgPath, env, "shared.txt", pollTimeout, "ls", "/"+testFolder)
+			waitForRemoteReadContains(t, cfgPath, env, "", "shared.txt", pollTimeout, "ls", "/"+testFolder)
 
 			require.NoError(t, os.WriteFile(conflictFile, []byte("local edit v2"), 0o600))
 			putRemoteFile(t, cfgPath, env, "/"+testFolder+"/shared.txt", "remote edit v2")
@@ -762,11 +762,11 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 
 			runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 			runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
-			pollCLIWithConfigContains(t, cfgPath, env, "fragile.txt", pollTimeout, "ls", "/"+testFolder)
+			waitForRemoteReadContains(t, cfgPath, env, "", "fragile.txt", pollTimeout, "ls", "/"+testFolder)
 
 			require.NoError(t, os.WriteFile(fragileFile, []byte("locally modified precious data"), 0o600))
 			runCLIWithConfig(t, cfgPath, env, "rm", "/"+testFolder+"/fragile.txt")
-			pollCLIWithConfigNotContains(t, cfgPath, env, "fragile.txt", pollTimeout, "ls", "/"+testFolder)
+			waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "fragile.txt", "ls", "/"+testFolder)
 
 			attempt := requireSyncWithModeEventuallyConverges(
 				t,
@@ -816,12 +816,12 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 			if mode.flag == "--download-only" {
 				assert.Contains(t, attempt.Stderr, "Deferred by mode:")
 				assert.Contains(t, attempt.Stderr, "Uploads:")
-				waitForRemoteDeleteDisappearance(t, cfgPath, env, selectedDriveForEnv(env), "fragile.txt", "ls", "/"+testFolder)
+				waitForRemoteDeleteDisappearance(t, cfgPath, env, resolveDriveSelection(env, ""), "fragile.txt", "ls", "/"+testFolder)
 				assert.Empty(t, conflictCopiesForPath(t, fragileFile), "directional edit-delete should preserve the local canonical file without a conflict copy")
 				return
 			}
 
-			pollCLIWithConfigContains(t, cfgPath, env, "fragile.txt", pollTimeout, "ls", "/"+testFolder)
+			waitForRemoteReadContains(t, cfgPath, env, "", "fragile.txt", pollTimeout, "ls", "/"+testFolder)
 			assert.Equal(t, "locally modified precious data", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/fragile.txt"))
 			assert.Empty(t, conflictCopiesForPath(t, fragileFile), "edit-delete auto-resolution should not create a conflict copy")
 		})
@@ -902,7 +902,7 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify deep files exist remotely (poll for eventual consistency).
-	pollCLIWithConfigContains(t, cfgPath, env, "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
+	waitForRemoteReadContains(t, cfgPath, env, "", "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
 
 	// Step 3: Set up mixed changes.
 	// New remote deeper folder.
@@ -977,7 +977,7 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 
 	// Step 4: Verify NO side effects.
 	// pending-upload.txt NOT remotely uploaded.
-	lsOut, _ := pollCLIWithConfigContains(t, cfgPath, env, "existing.txt", pollTimeout, "ls", "/"+testFolder)
+	lsOut, _ := waitForRemoteReadContains(t, cfgPath, env, "", "existing.txt", pollTimeout, "ls", "/"+testFolder)
 	assert.NotContains(t, lsOut, "pending-upload.txt", "dry-run should not upload")
 
 	// pending-download.txt NOT locally downloaded.
@@ -991,8 +991,8 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Step 6: All changes applied (poll for eventual consistency).
-	lsOut, _ = pollCLIWithConfigContains(t, cfgPath, env, "pending-upload.txt", pollTimeout, "ls", "/"+testFolder)
-	pollCLIWithConfigNotContains(t, cfgPath, env, "existing.txt", pollTimeout, "ls", "/"+testFolder)
+	lsOut, _ = waitForRemoteReadContains(t, cfgPath, env, "", "pending-upload.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "existing.txt", "ls", "/"+testFolder)
 	assert.Contains(t, lsOut, "pending-upload.txt")
 
 	dlData, err := os.ReadFile(filepath.Join(localDir, "pending-download.txt"))

@@ -34,7 +34,7 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify folder exists remotely.
-	pollCLIWithConfigContains(t, cfgPath, env, "emptyFolder", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, env, "", "emptyFolder", pollTimeout, "ls", "/"+testFolder)
 
 	// Advance the delta token past the creation by running a no-op sync.
 	// The subsequent deletion must occur AFTER the saved delta token for
@@ -45,7 +45,7 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "rm", "-r", "/"+testFolder+"/emptyFolder")
 
 	// Wait for deletion to propagate via REST.
-	pollCLIWithConfigNotContains(t, cfgPath, env, "emptyFolder", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "emptyFolder", "ls", "/"+testFolder)
 
 	// Delta endpoint may lag behind REST item endpoints (ci_issues.md §17).
 	// Re-run sync until delta catches up and the deletion propagates locally.
@@ -92,7 +92,7 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify deep file exists remotely.
-	pollCLIWithConfigContains(t, cfgPath, env, "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
+	waitForRemoteReadContains(t, cfgPath, env, "", "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
 
 	// Advance delta token past the creation (ci_issues.md §17).
 	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
@@ -101,7 +101,7 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "rm", "-r", "/"+testFolder+"/a")
 
 	// Wait for deletion to propagate via REST.
-	pollCLIWithConfigNotContains(t, cfgPath, env, "a", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "a", "ls", "/"+testFolder)
 
 	// Delta endpoint may lag behind REST (ci_issues.md §17). Re-sync until
 	// delta catches up and the tree deletion propagates locally.

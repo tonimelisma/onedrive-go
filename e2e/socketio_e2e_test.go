@@ -111,7 +111,7 @@ func TestE2E_SyncWatch_WebsocketDisabledLongPollRegression(t *testing.T) {
 		0o644,
 	))
 
-	pollCLIWithConfigContains(t, opsCfgPath, nil, "upload.txt", 3*time.Minute, "stat", "/"+testFolder+"/upload.txt")
+	waitForRemoteReadContains(t, opsCfgPath, nil, "", "upload.txt", 3*time.Minute, "stat", "/"+testFolder+"/upload.txt")
 
 	require.NoError(t, daemon.Process.Signal(syscall.SIGTERM))
 	_ = daemon.Wait()
