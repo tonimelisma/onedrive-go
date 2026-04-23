@@ -75,17 +75,16 @@ func (ph *PermissionHandler) handle403(
 		}
 	}
 
-	root := ph.permissionRoot()
-	if root == nil {
+	if ph.rootItemID == "" {
 		return PermissionEvidence{}
 	}
 
-	remoteDriveID := driveid.New(root.remoteDrive)
-	parentFolder := remoteParentPath(failedPath, root.localPath)
-	parentItemID := resolveBoundaryRemoteItemID(bl, parentFolder, remoteDriveID, root)
+	remoteDriveID := ph.driveID
+	parentFolder := remoteParentPath(failedPath)
+	parentItemID := resolveBoundaryRemoteItemID(bl, parentFolder, remoteDriveID, ph.rootItemID)
 	if parentItemID == "" {
-		parentFolder = root.localPath
-		parentItemID = root.remoteItem
+		parentFolder = ""
+		parentItemID = ph.rootItemID
 	}
 
 	perms, err := ph.permChecker.ListItemPermissions(ctx, remoteDriveID, parentItemID)
@@ -117,7 +116,7 @@ func (ph *PermissionHandler) handle403(
 	case graph.PermissionWriteAccessReadOnly:
 	}
 
-	boundary := ph.walkPermissionBoundary(ctx, bl, parentFolder, root, remoteDriveID)
+	boundary := ph.walkPermissionBoundary(ctx, bl, parentFolder, ph.rootItemID, remoteDriveID)
 
 	return ph.remoteBoundaryEvidence(
 		boundary,
@@ -193,18 +192,18 @@ func (ph *PermissionHandler) walkPermissionBoundary(
 	ctx context.Context,
 	bl *Baseline,
 	startFolder string,
-	root *remoteBoundaryRoot,
+	rootItemID string,
 	remoteDriveID driveid.ID,
 ) string {
 	boundary := startFolder
 
 	for {
-		parent, ok := remoteBoundaryParent(boundary, root.localPath)
+		parent, ok := remoteBoundaryParent(boundary)
 		if !ok {
 			break
 		}
 
-		parentID := resolveBoundaryRemoteItemID(bl, parent, remoteDriveID, root)
+		parentID := resolveBoundaryRemoteItemID(bl, parent, remoteDriveID, rootItemID)
 		if parentID == "" {
 			break
 		}
@@ -225,35 +224,23 @@ func (ph *PermissionHandler) walkPermissionBoundary(
 	return boundary
 }
 
-func (ph *PermissionHandler) permissionRoot() *remoteBoundaryRoot {
-	if ph.rootItemID == "" {
-		return nil
-	}
-
-	return &remoteBoundaryRoot{
-		remoteDrive: ph.driveID.String(),
-		remoteItem:  ph.rootItemID,
-		localPath:   "",
-	}
-}
-
 func resolveBoundaryRemoteItemID(
 	bl *Baseline,
 	boundaryPath string,
 	driveID driveid.ID,
-	root *remoteBoundaryRoot,
+	rootItemID string,
 ) string {
-	if root != nil && boundaryPath == root.localPath {
-		return root.remoteItem
+	if rootItemID != "" && boundaryPath == "" {
+		return rootItemID
 	}
 
 	return resolveRemoteItemID(bl, boundaryPath, driveID)
 }
 
-func remoteParentPath(path string, rootPath string) string {
+func remoteParentPath(path string) string {
 	parent := filepath.Dir(path)
 	if parent == "." || parent == "/" {
-		return rootPath
+		return ""
 	}
 
 	return parent
@@ -267,17 +254,14 @@ func remoteBoundaryContainsPath(path string, boundary string) bool {
 	return path == boundary || strings.HasPrefix(path, boundary+"/")
 }
 
-func remoteBoundaryParent(boundary string, rootPath string) (string, bool) {
-	if boundary == rootPath {
+func remoteBoundaryParent(boundary string) (string, bool) {
+	if boundary == "" {
 		return "", false
 	}
 
 	parent := filepath.Dir(boundary)
 	if parent == "." || parent == "/" {
-		return rootPath, true
-	}
-	if rootPath != "" && !remoteBoundaryContainsPath(parent, rootPath) {
-		return "", false
+		return "", true
 	}
 
 	return parent, true

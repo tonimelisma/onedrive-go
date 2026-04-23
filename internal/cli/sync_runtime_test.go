@@ -20,12 +20,12 @@ import (
 
 type testSyncDaemonOrchestrator struct {
 	called bool
-	mode   syncengine.Mode
+	mode   syncengine.SyncMode
 	opts   syncengine.WatchOptions
 	err    error
 }
 
-func (o *testSyncDaemonOrchestrator) RunWatch(ctx context.Context, mode syncengine.Mode, opts syncengine.WatchOptions) error {
+func (o *testSyncDaemonOrchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
 	_ = ctx
 	o.called = true
 	o.mode = mode
@@ -54,7 +54,7 @@ func TestRunSyncWatch_UsesInjectedRunner(t *testing.T) {
 		ctx context.Context,
 		gotHolder *config.Holder,
 		selectors []string,
-		mode syncengine.Mode,
+		mode syncengine.SyncMode,
 		opts syncengine.WatchOptions,
 		logger *slog.Logger,
 		statusWriter io.Writer,
@@ -107,7 +107,7 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		ctx context.Context,
 		gotHolder *config.Holder,
 		drives []*config.ResolvedDrive,
-		mode syncengine.Mode,
+		mode syncengine.SyncMode,
 		opts syncengine.RunOptions,
 		logger *slog.Logger,
 		controlSocketPath string,

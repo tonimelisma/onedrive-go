@@ -94,7 +94,7 @@ func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *Basel
 func (rt *watchRuntime) performFullRemoteRefresh(
 	ctx context.Context,
 	bl *Baseline,
-) remoteRefreshResult {
+) remoteObservationBatch {
 	result := remoteObservationBatch{
 		source: remoteObservationBatchFullRefresh,
 	}
@@ -135,7 +135,7 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 	return result
 }
 
-func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result *remoteRefreshResult) {
+func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result *remoteObservationBatch) {
 	select {
 	case rt.refreshResults <- *result:
 	case <-ctx.Done():
@@ -148,7 +148,7 @@ func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result *rem
 
 func (rt *watchRuntime) applyRemoteRefreshResult(
 	ctx context.Context,
-	result *remoteRefreshResult,
+	result *remoteObservationBatch,
 ) error {
 	return rt.handleRemoteObservationBatch(ctx, result)
 }

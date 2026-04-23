@@ -17,7 +17,7 @@ func (p *Planner) PlanCurrentState(
 	remoteRows []RemoteStateRow,
 	observationIssues []ObservationIssueRow,
 	baseline *Baseline,
-	mode Mode,
+	mode SyncMode,
 ) (*ActionPlan, error) {
 	p.logger.Info("planning current actionable set from sqlite reconciliation",
 		slog.Int("comparison_rows", len(comparisons)),
@@ -270,7 +270,7 @@ func buildRemoteMoveReconciliationActions(
 	return []Action{action}, nil
 }
 
-func deferredCountsForCurrentActions(actions []Action, mode Mode) DeferredCounts {
+func deferredCountsForCurrentActions(actions []Action, mode SyncMode) DeferredCounts {
 	if mode == SyncBidirectional || len(actions) == 0 {
 		return DeferredCounts{}
 	}
@@ -285,7 +285,7 @@ func deferredCountsForCurrentActions(actions []Action, mode Mode) DeferredCounts
 	return deferred
 }
 
-func filterCurrentActionsForMode(actions []Action, mode Mode) []Action {
+func filterCurrentActionsForMode(actions []Action, mode SyncMode) []Action {
 	if mode == SyncBidirectional || len(actions) == 0 {
 		return actions
 	}

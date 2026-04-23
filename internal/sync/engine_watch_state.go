@@ -64,7 +64,7 @@ type watchResources struct {
 	refreshActive  bool
 	refreshTimer   syncTimer
 	refreshCh      chan time.Time
-	refreshResults chan remoteRefreshResult
+	refreshResults chan remoteObservationBatch
 }
 
 // watchRuntime owns all mutable watch-mode state. It is created by RunWatch
@@ -97,7 +97,7 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 		},
 		watchResources: watchResources{
 			refreshCh:      make(chan time.Time, 1),
-			refreshResults: make(chan remoteRefreshResult, 1),
+			refreshResults: make(chan remoteObservationBatch, 1),
 		},
 	}
 

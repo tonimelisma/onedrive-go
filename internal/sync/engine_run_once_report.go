@@ -7,7 +7,7 @@ import (
 
 func (e *Engine) completeRunOnceWithoutChanges(
 	start time.Time,
-	mode Mode,
+	mode SyncMode,
 	opts RunOptions,
 ) *Report {
 	e.logger.Info("sync pass complete: no changes detected",

@@ -19,8 +19,8 @@ import (
 // engineRunner is the interface the Orchestrator uses to run sync passes.
 // Implemented by *sync.Engine; mock implementations are used in tests.
 type engineRunner interface {
-	RunOnce(ctx context.Context, mode syncengine.Mode, opts syncengine.RunOptions) (*syncengine.Report, error)
-	RunWatch(ctx context.Context, mode syncengine.Mode, opts syncengine.WatchOptions) error
+	RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error)
+	RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error
 	Close(ctx context.Context) error
 }
 
@@ -67,11 +67,14 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{
 		cfg: cfg,
 		engineFactory: func(ctx context.Context, req engineFactoryRequest) (engineRunner, error) {
-			engine, err := syncengine.NewDriveEngine(ctx, req.Session, req.Drive, syncengine.DriveEngineOptions{
-				Logger:        req.Logger,
-				PerfCollector: req.PerfCollector,
-				VerifyDrive:   req.VerifyDrive,
-			})
+			engine, err := syncengine.NewDriveEngine(
+				ctx,
+				req.Session,
+				req.Drive,
+				req.Logger,
+				req.PerfCollector,
+				req.VerifyDrive,
+			)
 			if err != nil {
 				return nil, fmt.Errorf("new engine: %w", err)
 			}
@@ -100,7 +103,7 @@ type indexedDriveWork struct {
 // runs in its own goroutine via a DriveRunner with panic recovery. RunOnce
 // never returns an error — individual drive errors are captured in each
 // syncengine.Report. The caller inspects reports to determine success or failure.
-func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.Mode, opts syncengine.RunOptions) RunOnceResult {
+func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) RunOnceResult {
 	drives := o.cfg.Drives
 	if len(drives) == 0 {
 		return RunOnceResult{}
@@ -167,7 +170,7 @@ func controlFailureRunOnceResult(drives []*config.ResolvedDrive, err error) RunO
 // DriveRunner executes — no early abort for individual drive failures.
 func (o *Orchestrator) prepareRunOnceWork(
 	ctx context.Context,
-	mode syncengine.Mode,
+	mode syncengine.SyncMode,
 	opts syncengine.RunOptions,
 ) ([]indexedDriveWork, StartupSelectionSummary, []*DriveReport) {
 	drives := o.cfg.Drives
@@ -236,7 +239,7 @@ func (o *Orchestrator) buildEngineWork(
 	rd *config.ResolvedDrive,
 	selectionIndex int,
 	session *driveops.Session,
-	mode syncengine.Mode,
+	mode syncengine.SyncMode,
 	opts syncengine.RunOptions,
 ) (driveWork, error) {
 	driveCollector := o.registerDrivePerfCollector(rd.CanonicalID.String())
@@ -289,7 +292,7 @@ type watchRunner struct {
 // control-socket reload, it re-reads the config file and diffs the active drive
 // set: stopped drives are removed, new drives are started. Returns nil on
 // clean context cancel.
-func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.Mode, opts syncengine.WatchOptions) error {
+func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
 	drives := o.cfg.Drives
 	if len(drives) == 0 {
 		return fmt.Errorf("sync: no drives configured")
@@ -358,7 +361,7 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.Mode, opts 
 func (o *Orchestrator) startInitialWatchRunners(
 	ctx context.Context,
 	drives []*config.ResolvedDrive,
-	mode syncengine.Mode,
+	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 ) (map[driveid.CanonicalID]*watchRunner, []DriveStartupResult) {
 	runners := make(map[driveid.CanonicalID]*watchRunner)
@@ -425,7 +428,7 @@ func (o *Orchestrator) emitStartWarning(summary StartupSelectionSummary) {
 
 // startWatchRunner creates and starts a watch-mode engine for a single drive.
 func (o *Orchestrator) startWatchRunner(
-	ctx context.Context, rd *config.ResolvedDrive, mode syncengine.Mode, opts syncengine.WatchOptions,
+	ctx context.Context, rd *config.ResolvedDrive, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 ) (*watchRunner, error) {
 	session, err := o.cfg.Runtime.SyncSession(ctx, rd)
 	if err != nil {
@@ -497,7 +500,7 @@ func (o *Orchestrator) removeDrivePerfCollector(canonicalID string) {
 // reload re-reads the config file, diffs the active drive set against running
 // runners, stops removed/paused drives, and starts newly added/resumed drives.
 func (o *Orchestrator) reload(
-	ctx context.Context, mode syncengine.Mode, opts syncengine.WatchOptions,
+	ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 	runners map[driveid.CanonicalID]*watchRunner,
 ) {
 	newCfg, err := config.LoadOrDefault(o.cfg.Holder.Path(), o.logger)

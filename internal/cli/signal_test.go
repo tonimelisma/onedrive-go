@@ -204,7 +204,7 @@ func runSyncWatchFirstSignalHelper() {
 			ctx context.Context,
 			_ *config.Holder,
 			_ []string,
-			_ syncengine.Mode,
+			_ syncengine.SyncMode,
 			_ syncengine.WatchOptions,
 			_ *slog.Logger,
 			_ io.Writer,
@@ -231,7 +231,7 @@ type fakeSyncDaemonOrchestrator struct{}
 
 func (o *fakeSyncDaemonOrchestrator) RunWatch(
 	ctx context.Context,
-	_ syncengine.Mode,
+	_ syncengine.SyncMode,
 	_ syncengine.WatchOptions,
 ) error {
 	mustWriteHelperLine("watch-daemon-ready")

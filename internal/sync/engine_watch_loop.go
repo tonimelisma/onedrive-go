@@ -245,7 +245,7 @@ func (rt *watchRuntime) handleWatchSkippedSignal(
 
 func (rt *watchRuntime) handleWatchRefreshResultSignal(
 	ctx context.Context,
-	result *remoteRefreshResult,
+	result *remoteObservationBatch,
 	ok bool,
 ) (bool, error) {
 	if !ok {
