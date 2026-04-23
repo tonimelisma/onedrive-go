@@ -171,20 +171,22 @@ executor then performs that upload as ordinary concrete work:
 No conflict copy is needed for this case, and the executor does not invent the
 upload from a stale local delete.
 
-## Shared-Root Execution
+## Mount-Local Execution
 
-For configured drives rooted below the remote drive root, execution uses
-planner-supplied target metadata:
+For engines rooted below the remote drive root, execution uses the engine's own
+mount context:
 
-- `TargetDriveID`
-- `TargetRootItemID`
-- `TargetRootLocalPath`
+- `ExecutorConfig.driveID`
+- `ExecutorConfig.rootItemID`
+- `Action.DriveID`
 
-That metadata is used for:
+Path convergence checks after successful remote mutation are resolved relative
+to that mounted subtree, not via per-action target-root overrides. Scope
+classification likewise uses the action completion's authoritative `DriveID`.
 
-- target-scoped remote calls
-- path convergence checks after successful remote mutation
-- correct scope classification for target-drive results
+Direct shared-item CLI flows still keep explicit target-scoped behavior above
+sync through `driveops.SharedTargetClients(...)` and `Session.ResolveItem(...)`.
+That is a transfer/CLI boundary, not ordinary sync execution.
 
 ## Scope Helpers
 

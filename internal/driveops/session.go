@@ -31,10 +31,7 @@ type Session struct {
 	sleepFunc              func(context.Context, time.Duration) error
 }
 
-var (
-	_ PathConvergence        = (*Session)(nil)
-	_ PathConvergenceFactory = (*Session)(nil)
-)
+var _ PathConvergence = (*Session)(nil)
 
 // AccountClients holds authenticated Graph clients for an account-scoped
 // command that does not target a configured drive.
@@ -51,25 +48,6 @@ func (s *Session) ResolvedDriveEmail() string {
 	}
 
 	return s.Resolved.CanonicalID.Email()
-}
-
-// ForTarget returns a drive-scoped path-convergence view for the requested
-// drive/root pair. Sessions already carry the authenticated Graph clients and
-// convergence schedule; target switching only changes the resolved drive/root
-// identity used by path-based operations.
-func (s *Session) ForTarget(driveID driveid.ID, rootItemID string) PathConvergence {
-	if s == nil {
-		return nil
-	}
-	if driveID.IsZero() || (driveID.Equal(s.DriveID) && rootItemID == s.RootItem) {
-		return s
-	}
-
-	clone := *s
-	clone.DriveID = driveID
-	clone.RootItem = rootItemID
-
-	return &clone
 }
 
 // SetAuthenticatedSuccessHooks installs the same best-effort success hook on

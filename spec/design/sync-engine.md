@@ -89,7 +89,9 @@ production construction model.
 
 For rooted-subtree runtimes, the engine also carries the configured
 `rootItemID`. That root item defines the remote boundary for scoped
-observation and execution metadata. Rooted-subtree delta capability is
+observation, planning, and execution. Planner and executor consume that
+engine-owned root context directly; ordinary actions do not re-thread
+per-action target-root overrides. Rooted-subtree delta capability is
 resolved in config today and passed into the engine as construction input; the
 engine does not reopen catalog state just to decide whether a rooted subtree
 should try folder delta. Today, separately configured shared folders happen to
@@ -375,7 +377,7 @@ The engine supports two runtime shapes:
 The constructor chooses the runtime shape from `EngineMountConfig.RootItemID`.
 A blank `RootItemID` means drive-root observation and execution. A non-blank
 `RootItemID` means the engine must stay scoped below that remote boundary for
-observation, planning metadata, and execution preconditions.
+observation, planning, and execution.
 
 Today, separately configured shared folders happen to use the rooted-subtree
 path, but that product surface should not be confused with the engine's

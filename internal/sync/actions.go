@@ -58,40 +58,20 @@ type Action struct {
 	CreateSide   FolderCreateSide // for folder creates
 	View         *PathView        // full three-way context
 	ConflictInfo *ConflictRecord
-
-	// TargetDriveID is the actual remote drive targeted by this action. For
-	// normal drives, equals DriveID. For shared-folder drives rooted below the
-	// remote drive root, it still names the real backing drive so execution,
-	// scope detection, and post-mutation visibility probing all agree.
-	TargetDriveID driveid.ID
-
-	// TargetRootItemID identifies the configured remote root item that owns this
-	// action's remote path when the sync drive is rooted below drive root.
-	TargetRootItemID string
-
-	// TargetRootLocalPath is the local sync path corresponding to TargetRootItemID.
-	// Cross-drive convergence strips this prefix to compute the target-drive-
-	// relative path after a successful mutation.
-	TargetRootLocalPath string
 }
 
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked
 // after a 429 for this action. The engine currently scopes throttle blocks by
-// target drive, regardless of whether the sync drive is rooted at drive root
-// or below a shared-folder root.
+// action drive, regardless of whether the sync drive is rooted at drive root
+// or below a rooted subtree.
 func (a *Action) ThrottleTargetKey() string {
 	if a == nil {
 		return ""
 	}
-
-	targetDriveID := a.TargetDriveID
-	if targetDriveID.IsZero() {
-		targetDriveID = a.DriveID
-	}
-	if targetDriveID.IsZero() {
+	if a.DriveID.IsZero() {
 		return ""
 	}
-	return throttleDriveParam(targetDriveID)
+	return throttleDriveParam(a.DriveID)
 }
 
 // ActionPlan contains a flat list of actions with explicit dependency edges.

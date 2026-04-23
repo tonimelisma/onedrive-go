@@ -44,22 +44,21 @@ type ScanResult struct {
 //	  IsDeleted. Never sets: ItemID, ParentID, DriveID, ETag, CTag.
 //	  For ChangeDelete: Hash is empty; Size/Mtime from baseline entry.
 type ChangeEvent struct {
-	Source           ChangeSource
-	Type             ChangeType
-	Path             string     // NFC-normalized, relative to sync root
-	OldPath          string     // for moves only
-	ItemID           string     // server-assigned (remote only; empty for local)
-	ParentID         string     // server parent ID (remote only)
-	DriveID          driveid.ID // normalized (lowercase, zero-padded to 16 chars)
-	ItemType         ItemType
-	Name             string // URL-decoded, NFC-normalized
-	Size             int64
-	Hash             string // QuickXorHash (base64); empty for folders
-	Mtime            int64  // Unix nanoseconds
-	ETag             string // remote only
-	CTag             string // remote only
-	IsDeleted        bool
-	TargetRootItemID string // configured remote root item for rooted-subtree observation
+	Source    ChangeSource
+	Type      ChangeType
+	Path      string     // NFC-normalized, relative to sync root
+	OldPath   string     // for moves only
+	ItemID    string     // server-assigned (remote only; empty for local)
+	ParentID  string     // server parent ID (remote only)
+	DriveID   driveid.ID // normalized (lowercase, zero-padded to 16 chars)
+	ItemType  ItemType
+	Name      string // URL-decoded, NFC-normalized
+	Size      int64
+	Hash      string // QuickXorHash (base64); empty for folders
+	Mtime     int64  // Unix nanoseconds
+	ETag      string // remote only
+	CTag      string // remote only
+	IsDeleted bool
 }
 
 // BaselineEntry represents the confirmed synced state of a single path.
@@ -320,17 +319,16 @@ func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
 // RemoteState captures the current state of a path as observed from
 // the Graph API delta response.
 type RemoteState struct {
-	ItemID           string
-	DriveID          driveid.ID // normalized (lowercase, zero-padded to 16 chars)
-	Name             string
-	ItemType         ItemType
-	Size             int64
-	Hash             string
-	Mtime            int64
-	ETag             string
-	CTag             string
-	IsDeleted        bool
-	TargetRootItemID string
+	ItemID    string
+	DriveID   driveid.ID // normalized (lowercase, zero-padded to 16 chars)
+	Name      string
+	ItemType  ItemType
+	Size      int64
+	Hash      string
+	Mtime     int64
+	ETag      string
+	CTag      string
+	IsDeleted bool
 }
 
 // LocalState captures the current state of a path as observed from

@@ -18,33 +18,14 @@ type Planner struct {
 	logger *slog.Logger
 }
 
+type plannerMountContext struct {
+	DriveID    driveid.ID
+	RootItemID string
+}
+
 // NewPlanner creates a Planner with the given logger.
 func NewPlanner(logger *slog.Logger) *Planner {
 	return &Planner{logger: logger}
-}
-
-// ---------------------------------------------------------------------------
-// Cross-drive move guard
-// ---------------------------------------------------------------------------
-
-// resolvePathDriveID determines which drive owns a path by checking the
-// baseline. If the path itself has no baseline entry, walks up parent
-// directories until an ancestor with a baseline entry is found. Returns
-// zero ID if no ancestry has a baseline entry.
-func resolvePathDriveID(p string, bl *Baseline) driveid.ID {
-	// Check the path itself first.
-	if entry, ok := bl.GetByPath(p); ok {
-		return entry.DriveID
-	}
-
-	// Walk up parent directories.
-	for dir := filepath.Dir(p); dir != "." && dir != "" && dir != "/"; dir = filepath.Dir(dir) {
-		if entry, ok := bl.GetByPath(dir); ok {
-			return entry.DriveID
-		}
-	}
-
-	return driveid.ID{}
 }
 
 func filterActionsForMode(actions []Action, mode SyncMode) []Action {
@@ -447,8 +428,8 @@ func resolveItemType(view *PathView) ItemType {
 //   - Remote.DriveID is authoritative for cross-drive items (shared folders
 //     from Drive A appearing in Drive B's delta carry Drive A's DriveID).
 //   - Baseline.DriveID is the fallback for items with no remote observation.
-//   - Empty DriveID for new local items (EF13, ED5) — the executor fills
-//     this from its per-drive Engine context before making API calls.
+//   - Empty DriveID for new local items (EF13, ED5) — planner fills this from
+//     the mounted engine drive before execution.
 //   - Empty ItemID for new items — assigned by the API on creation.
 func MakeAction(actionType ActionType, view *PathView) Action {
 	a := Action{
@@ -480,117 +461,12 @@ func MakeAction(actionType ActionType, view *PathView) Action {
 	return a
 }
 
-func enrichActionTargets(actions []Action, baseline *Baseline) {
+func bindMountContext(actions []Action, mount plannerMountContext) {
 	for i := range actions {
-		enrichActionTarget(&actions[i], baseline)
-	}
-}
-
-func enrichActionTarget(action *Action, baseline *Baseline) {
-	if action == nil || baseline == nil {
-		return
-	}
-
-	action.TargetDriveID = resolveActionTargetDriveID(action, baseline)
-	if action.TargetDriveID.IsZero() {
-		return
-	}
-
-	populateActionTargetRootFromRemote(action, baseline)
-	populateActionTargetRootFromBaseline(action, baseline)
-}
-
-func resolveActionTargetDriveID(action *Action, baseline *Baseline) driveid.ID {
-	if action == nil {
-		return driveid.ID{}
-	}
-	if !action.TargetDriveID.IsZero() {
-		return action.TargetDriveID
-	}
-	if !action.DriveID.IsZero() {
-		return action.DriveID
-	}
-
-	return resolvePathDriveID(action.Path, baseline)
-}
-
-func populateActionTargetRootFromRemote(action *Action, baseline *Baseline) {
-	if action.TargetRootItemID == "" && action.View != nil && action.View.Remote != nil {
-		action.TargetRootItemID = action.View.Remote.TargetRootItemID
-	}
-	if action.TargetRootItemID == "" || action.TargetRootLocalPath != "" {
-		return
-	}
-
-	rootPath := findTargetRootPath(action.Path, action.TargetDriveID, action.TargetRootItemID, baseline)
-	if rootPath != "" {
-		action.TargetRootLocalPath = rootPath
-		return
-	}
-	if action.ItemID == action.TargetRootItemID {
-		action.TargetRootLocalPath = action.Path
-	}
-}
-
-func populateActionTargetRootFromBaseline(action *Action, baseline *Baseline) {
-	if action.TargetRootItemID != "" && action.TargetRootLocalPath != "" {
-		return
-	}
-
-	root := findTargetRootEntry(action.Path, action.TargetDriveID, baseline)
-	if root == nil {
-		return
-	}
-	if action.TargetRootItemID == "" {
-		action.TargetRootItemID = root.ItemID
-	}
-	if action.TargetRootLocalPath == "" {
-		action.TargetRootLocalPath = root.Path
-	}
-}
-
-func findTargetRootPath(
-	path string,
-	targetDriveID driveid.ID,
-	targetRootItemID string,
-	baseline *Baseline,
-) string {
-	if baseline == nil || targetDriveID.IsZero() || targetRootItemID == "" {
-		return ""
-	}
-
-	for current := filepath.ToSlash(path); current != "." && current != "" && current != "/"; current = filepath.ToSlash(
-		filepath.Dir(current),
-	) {
-		entry, ok := baseline.GetByPath(current)
-		if !ok || !entry.DriveID.Equal(targetDriveID) {
-			continue
-		}
-		if entry.ItemID == targetRootItemID {
-			return current
+		if actions[i].DriveID.IsZero() {
+			actions[i].DriveID = mount.DriveID
 		}
 	}
-
-	return ""
-}
-
-func findTargetRootEntry(path string, targetDriveID driveid.ID, baseline *Baseline) *BaselineEntry {
-	if baseline == nil || targetDriveID.IsZero() {
-		return nil
-	}
-
-	var root *BaselineEntry
-	for current := filepath.ToSlash(path); current != "." && current != "" && current != "/"; current = filepath.ToSlash(
-		filepath.Dir(current),
-	) {
-		entry, ok := baseline.GetByPath(current)
-		if !ok || !entry.DriveID.Equal(targetDriveID) {
-			continue
-		}
-		root = entry
-	}
-
-	return root
 }
 
 func makeConflictRecord(view *PathView, driveID driveid.ID, conflictType string) *ConflictRecord {

@@ -78,17 +78,11 @@ type RangeDownloader interface {
 	) (int64, error)
 }
 
-// PathConvergence owns post-success path settling for one resolved drive
+// PathConvergence owns post-success path settling for one mounted drive/root
 // session. Callers use it after successful mutations when Graph can lag on
 // follow-on path reads or path-authoritative delete routes.
 type PathConvergence interface {
 	WaitPathVisible(ctx context.Context, remotePath string) (*graph.Item, error)
 	DeleteResolvedPath(ctx context.Context, remotePath, itemID string) error
 	PermanentDeleteResolvedPath(ctx context.Context, remotePath, itemID string) error
-}
-
-// PathConvergenceFactory resolves a path-convergence capability for the
-// concrete remote drive/root that an action targets.
-type PathConvergenceFactory interface {
-	ForTarget(driveID driveid.ID, rootItemID string) PathConvergence
 }

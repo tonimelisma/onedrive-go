@@ -284,19 +284,18 @@ func (c *ItemConverter) classifyAndConvert(
 	}
 
 	ev := ChangeEvent{
-		Source:           SourceRemote,
-		ItemID:           item.ID,
-		ParentID:         item.ParentID,
-		DriveID:          itemDriveID,
-		ItemType:         ClassifyItemType(item),
-		Name:             name,
-		Size:             item.Size,
-		Hash:             hash,
-		Mtime:            ToUnixNano(item.ModifiedAt),
-		ETag:             item.ETag,
-		CTag:             item.CTag,
-		IsDeleted:        item.IsDeleted,
-		TargetRootItemID: c.RootItemID,
+		Source:    SourceRemote,
+		ItemID:    item.ID,
+		ParentID:  item.ParentID,
+		DriveID:   itemDriveID,
+		ItemType:  ClassifyItemType(item),
+		Name:      name,
+		Size:      item.Size,
+		Hash:      hash,
+		Mtime:     ToUnixNano(item.ModifiedAt),
+		ETag:      item.ETag,
+		CTag:      item.CTag,
+		IsDeleted: item.IsDeleted,
 	}
 
 	switch {

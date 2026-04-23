@@ -213,11 +213,7 @@ func withRuntimeSummary(decision *ResultDecision) ResultDecision {
 // ScopeKeyForResult — single source of truth for HTTP status → scope
 // key mapping. Returns the zero-value ScopeKey for non-scope statuses.
 func deriveScopeKey(r *ActionCompletion) ScopeKey {
-	targetDriveID := r.TargetDriveID
-	if targetDriveID.IsZero() {
-		targetDriveID = r.DriveID
-	}
-	return ScopeKeyForResult(r.HTTPStatus, targetDriveID)
+	return ScopeKeyForResult(r.HTTPStatus, r.DriveID)
 }
 
 func issueTypeForResult(r *ActionCompletion) string {
@@ -358,5 +354,5 @@ func hasPermissionActionContext(r *ActionCompletion) bool {
 		return false
 	}
 
-	return r.ActionID != 0 || r.Path != "" || !r.DriveID.IsZero() || !r.TargetDriveID.IsZero()
+	return r.ActionID != 0 || r.Path != "" || !r.DriveID.IsZero()
 }

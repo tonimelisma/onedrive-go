@@ -41,13 +41,8 @@ func TestActionThrottleTargetKeyUsesNarrowestDriveBoundary(t *testing.T) {
 	t.Parallel()
 
 	remoteDriveID := driveid.New("drive-remote")
-	targetDriveID := driveid.New("drive-target")
 
 	assert.Empty(t, (*Action)(nil).ThrottleTargetKey())
 	assert.Empty(t, (&Action{}).ThrottleTargetKey())
 	assert.Equal(t, throttleDriveParam(remoteDriveID), (&Action{DriveID: remoteDriveID}).ThrottleTargetKey())
-	assert.Equal(t, throttleDriveParam(targetDriveID), (&Action{
-		DriveID:       remoteDriveID,
-		TargetDriveID: targetDriveID,
-	}).ThrottleTargetKey())
 }

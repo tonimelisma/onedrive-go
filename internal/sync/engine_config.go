@@ -73,7 +73,7 @@ func NewMountEngine(
 		Items:                     session.Meta,
 		Downloads:                 session.Transfer,
 		Uploads:                   session.Transfer,
-		PathConvergenceFactory:    session,
+		PathConvergence:           session,
 		FolderDelta:               session.Meta,
 		RecursiveLister:           session.Meta,
 		PermChecker:               session.Meta,

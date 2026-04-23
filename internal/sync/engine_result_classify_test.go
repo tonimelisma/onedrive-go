@@ -216,10 +216,10 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 		{
 			name: "target throttle",
 			in: &ActionCompletion{
-				HTTPStatus:    http.StatusTooManyRequests,
-				ActionType:    ActionUpload,
-				Path:          "retry.txt",
-				TargetDriveID: driveID,
+				HTTPStatus: http.StatusTooManyRequests,
+				ActionType: ActionUpload,
+				Path:       "retry.txt",
+				DriveID:    driveID,
 			},
 			want: ResultDecision{
 				Class:             resultBlockScope,
@@ -389,13 +389,13 @@ func TestPermissionCapabilityFallbacks(t *testing.T) {
 		DriveID:           driveID,
 	}))
 	assert.Equal(t, SKThrottleDrive(driveID), deriveScopeKey(&ActionCompletion{
-		HTTPStatus:    http.StatusTooManyRequests,
-		TargetDriveID: driveID,
+		HTTPStatus: http.StatusTooManyRequests,
+		DriveID:    driveID,
 	}))
 	assert.Equal(t, SKService(), deriveScopeKey(&ActionCompletion{
 		HTTPStatus: http.StatusServiceUnavailable,
 	}))
 	assert.Equal(t, ScopeKey{}, deriveScopeKey(&ActionCompletion{HTTPStatus: http.StatusForbidden}))
-	assert.Equal(t, "drive:"+driveID.String(), (&ActionCompletion{TargetDriveID: driveID}).ThrottleTargetKey())
+	assert.Equal(t, "drive:"+driveID.String(), (&ActionCompletion{DriveID: driveID}).ThrottleTargetKey())
 	assert.Empty(t, (&ActionCompletion{}).ThrottleTargetKey())
 }

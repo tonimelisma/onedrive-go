@@ -11,10 +11,7 @@ func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *ActionCompl
 		return nil
 	}
 
-	driveID := r.TargetDriveID
-	if driveID.IsZero() {
-		driveID = r.DriveID
-	}
+	driveID := r.DriveID
 	if driveID.IsZero() {
 		driveID = flow.engine.driveID
 	}

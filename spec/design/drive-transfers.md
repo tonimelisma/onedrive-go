@@ -108,7 +108,6 @@ exact path route itself can also lie with `GET ...root:/path: = 404
 itemNotFound` even though the parent collection still lists the leaf, while
 that same parent collection can lag positively after a successful delete. The
 package boundary therefore exposes the `PathConvergence` capability plus the
-`PathConvergenceFactory`, both satisfied by `driveops.Session`, and keeps
 delete-target path recovery in the same owner:
 
 - `WaitPathVisible()` so command handlers can require destination-path
@@ -122,9 +121,10 @@ delete-target path recovery in the same owner:
   overhead and roughly a two-minute wall-clock budget, because live Graph
   evidence has shown a path can become readable, regress to `404 itemNotFound`,
   and only recover again well after the older ~32-second budget
-- shared-root path creation still starts from the configured shared root item,
-  not the backing drive root, so recursive `mkdir` walks create descendants in
-  the same subtree that later `ResolveItem()` / `WaitPathVisible()` calls read
+- rooted-subtree path creation still starts from the configured subtree root
+  item, not the backing drive root, so recursive `mkdir` walks create
+  descendants in the same subtree that later `ResolveItem()` /
+  `WaitPathVisible()` calls read
 - `ResolveDeleteTarget()` so path-oriented deletes can fall back from an exact
   path `itemNotFound` to the parent collection before they decide the target
   is already gone; when the parent-path listing itself is in a transient
@@ -150,12 +150,10 @@ target path is gone.
 Sync execution consumes the same capability for post-success visibility
 confirmation after remote folder create, upload, and move. Those sync probes
 stay best-effort and warn-only, but they no longer own a second retry budget
-or sleep loop. For same-drive actions the executor reuses its current session.
-For cross-drive shared-root actions it asks the factory for a target-scoped
-session and probes the target-drive-relative path rooted at that configured
-shared root's
-remote root item. If that root metadata is missing, sync skips the probe
-instead of guessing and touching the wrong remote boundary.
+or sleep loop. Ordinary sync execution now always probes relative to the
+executor's mounted drive/root session. Direct shared-item CLI flows keep any
+explicit target-scoped path work above sync via `SharedTargetClients(...)` and
+`ResolveItem(...)`.
 
 ## SessionStore
 

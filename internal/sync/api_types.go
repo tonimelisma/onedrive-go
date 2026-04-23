@@ -118,7 +118,7 @@ type engineInputs struct {
 	Items                     ItemClient
 	Downloads                 driveops.Downloader
 	Uploads                   driveops.Uploader
-	PathConvergenceFactory    driveops.PathConvergenceFactory
+	PathConvergence           driveops.PathConvergence
 	DriveVerifier             DriveVerifier
 	FolderDelta               FolderDeltaFetcher
 	RecursiveLister           RecursiveLister

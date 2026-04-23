@@ -108,7 +108,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		syncTree,
 		cfg.DriveID,
 		cfg.Logger,
-		cfg.PathConvergenceFactory,
+		cfg.PathConvergence,
 	)
 	execCfg.SetRootItemID(cfg.RootItemID)
 
