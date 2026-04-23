@@ -1002,6 +1002,15 @@ Evidence:
   `ed1d7224-518c-45db-ba3d-ec2187e371b9`,
   `89564bf8-ccbd-441c-a666-f17a127c9e30`, and
   `4d344132-5657-489b-a0c6-1e895f1ff486` until the shared-root route caught up.
+- The same family recurred again on April 22, 2026 during the rebased local
+  `go run ./cmd/devtool verify e2e-full --classify-live-quirks` rerun in
+  `TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges` and
+  `TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges`. Both tests had already
+  proved the target files visible through the shared-root config, but the
+  later remote-content verification helper still failed in `onedrive-go get`
+  after `GET /drives/{driveID}/items/{rootID}/children` returned
+  `404 itemNotFound` again while resolving the first path segment under the
+  shared root.
 Resolution / mitigation: `graph.Client.CreateUploadSession()` now owns a
 bounded retry for the exact fresh-parent `404 itemNotFound` case, and flows
 that already know the authoritative remote `itemID` avoid parent-route create
@@ -1021,7 +1030,11 @@ freshly created parent item ID into the same documented Graph lag family.
 Isolated shared-root fixture setup now also waits for `ls /` under the derived
 shared-root drive before handing that root to upload-only or watch tests, so
 those tests no longer assume owner-drive path visibility proves the shared-root
-children route is ready.
+children route is ready. Shared-root remote-read helpers now re-establish the
+same `ls /` boundary before and after known `get` path-resolution `404`
+failures, so later sync assertions do not treat this documented route-lag
+family as a product regression once the shared-root drive has already been
+selected successfully.
 Promoted docs: [graph-api-quirks.md#fresh-parent-child-create-lag](graph-api-quirks.md#fresh-parent-child-create-lag), [system.md](../design/system.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [sync-execution.md](../design/sync-execution.md)
 
 ## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup

@@ -221,12 +221,30 @@ func waitForSharedRootListingVisible(
 ) {
 	t.Helper()
 
-	pollRemoteEventually(
+	waitForSharedRootListingVisibleWithin(
 		t,
 		cfgPath,
 		env,
 		driveID,
 		remoteWritePropagationTimeout,
+	)
+}
+
+func waitForSharedRootListingVisibleWithin(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	timeout time.Duration,
+) {
+	t.Helper()
+
+	pollRemoteEventually(
+		t,
+		cfgPath,
+		env,
+		driveID,
+		timeout,
 		timingKindRemoteWriteVisibility,
 		fmt.Sprintf("shared-root listing visibility for %q", driveID),
 		func(_ string, _ string, err error) bool {
@@ -850,6 +868,39 @@ func TestClassifyFixtureMkdirCommandFailure_RejectsUnrelatedFailures(t *testing.
 	))
 }
 
+func isSharedCanonicalDriveID(driveID string) bool {
+	canonicalID, err := driveid.NewCanonicalID(driveID)
+	if err != nil {
+		return false
+	}
+
+	return canonicalID.IsShared()
+}
+
+func shouldRefreshSharedRootListingForRemoteRead(driveID string, stderr string) bool {
+	return isSharedCanonicalDriveID(driveID) &&
+		strings.Contains(stderr, "resolve item path") &&
+		strings.Contains(stderr, "list children for segment") &&
+		strings.Contains(stderr, "graph: HTTP 404")
+}
+
+func TestShouldRefreshSharedRootListingForRemoteRead(t *testing.T) {
+	t.Parallel()
+
+	sharedCID, err := driveid.ConstructShared("user@example.com", "drive-id", "item-id")
+	require.NoError(t, err)
+
+	personalCID, err := driveid.NewCanonicalID("personal:user@example.com")
+	require.NoError(t, err)
+
+	const sharedRootRoute404 = `Error: resolving "/folder/file.txt": resolve item path "folder/file.txt": list children for segment "folder": graph: HTTP 404 (request-id: req-123): The resource could not be found.`
+
+	require.True(t, shouldRefreshSharedRootListingForRemoteRead(sharedCID.String(), sharedRootRoute404))
+	require.False(t, shouldRefreshSharedRootListingForRemoteRead(personalCID.String(), sharedRootRoute404))
+	require.False(t, shouldRefreshSharedRootListingForRemoteRead(sharedCID.String(), `Error: creating folder "data": graph: HTTP 403: Access denied`))
+	require.False(t, shouldRefreshSharedRootListingForRemoteRead("not-a-canonical-id", sharedRootRoute404))
+}
+
 // getRemoteFile downloads a remote file and returns its content as a string.
 // cfgPath must point to a valid config with the drive section; env overrides
 // (if non-nil) are forwarded to the CLI child process.
@@ -868,7 +919,8 @@ func getRemoteFileForDrive(
 ) string {
 	t.Helper()
 
-	waitForRemoteFixtureSeedVisible(t, cfgPath, env, driveID, remotePath)
+	resolvedDriveID := effectiveDriveID(env, driveID)
+	waitForRemoteFixtureSeedVisible(t, cfgPath, env, resolvedDriveID, remotePath)
 
 	tmpDir := t.TempDir()
 	localPath := filepath.Join(tmpDir, "downloaded")
@@ -880,12 +932,22 @@ func getRemoteFileForDrive(
 		lastErr    error
 	)
 
+	if isSharedCanonicalDriveID(resolvedDriveID) {
+		waitForSharedRootListingVisibleWithin(
+			t,
+			cfgPath,
+			env,
+			resolvedDriveID,
+			time.Until(deadline),
+		)
+	}
+
 	for attempt := 0; ; attempt++ {
 		stdout, stderr, err := runCLIWithConfigAllowErrorForDrive(
 			t,
 			cfgPath,
 			env,
-			driveID,
+			resolvedDriveID,
 			"get",
 			remotePath,
 			localPath,
@@ -908,6 +970,17 @@ func getRemoteFileForDrive(
 				lastStdout,
 				lastStderr,
 			)
+		}
+
+		if shouldRefreshSharedRootListingForRemoteRead(resolvedDriveID, lastStderr) {
+			waitForSharedRootListingVisibleWithin(
+				t,
+				cfgPath,
+				env,
+				resolvedDriveID,
+				time.Until(deadline),
+			)
+			continue
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
