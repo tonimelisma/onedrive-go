@@ -37,18 +37,19 @@ type engineFactoryRequest struct {
 type engineFactoryFunc func(ctx context.Context, req engineFactoryRequest) (engineRunner, error)
 
 // OrchestratorConfig holds the inputs for creating an Orchestrator.
-// The CLI layer populates this from resolved config and HTTP clients.
+// The CLI layer populates this from standalone mount config and HTTP clients.
 // Config and config path are accessed via Holder — a single source of truth
 // shared with SessionRuntime. Control-socket reload updates config in one place.
 type OrchestratorConfig struct {
-	Holder            *config.Holder
-	Drives            []*config.ResolvedDrive
-	Runtime           *driveops.SessionRuntime // token caching + Session creation
-	Logger            *slog.Logger
-	ControlSocketPath string
-	StartWarning      func(StartupWarning)
-	DebugEventHook    func(syncengine.DebugEvent)
-	PerfParent        *perf.Collector
+	Holder                 *config.Holder
+	StandaloneMounts       []StandaloneMountConfig
+	ReloadStandaloneMounts func(*config.Config) ([]StandaloneMountConfig, error)
+	Runtime                *driveops.SessionRuntime // token caching + Session creation
+	Logger                 *slog.Logger
+	ControlSocketPath      string
+	StartWarning           func(StartupWarning)
+	DebugEventHook         func(syncengine.DebugEvent)
+	PerfParent             *perf.Collector
 }
 
 // Orchestrator manages per-mount sync runners. It is always used, even for a
@@ -119,13 +120,12 @@ type indexedDriveWork struct {
 // never returns an error — individual drive errors are captured in each
 // syncengine.Report. The caller inspects reports to determine success or failure.
 func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) RunOnceResult {
-	selected := resolvedDrivesWithSelection(o.cfg.Drives)
-	if len(selected) == 0 {
+	if len(o.cfg.StandaloneMounts) == 0 {
 		return RunOnceResult{}
 	}
-	compiled, err := o.buildRuntimeMountSet(ctx, selected)
+	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts)
 	if err != nil {
-		return controlFailureRunOnceResult(o.cfg.Drives, fmt.Errorf("building mount specs: %w", err))
+		return controlFailureRunOnceResult(o.cfg.StandaloneMounts, fmt.Errorf("building mount specs: %w", err))
 	}
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
@@ -136,7 +136,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 
 	control, err := o.startControlServer(ctx, synccontrol.OwnerModeOneShot, nil)
 	if err != nil {
-		return controlFailureRunOnceResult(o.cfg.Drives, err)
+		return controlFailureRunOnceResult(o.cfg.StandaloneMounts, err)
 	}
 	if control != nil {
 		defer func() {
@@ -179,8 +179,8 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	}
 }
 
-func controlFailureRunOnceResult(drives []*config.ResolvedDrive, err error) RunOnceResult {
-	mounts, buildErr := buildConfiguredMountSpecs(resolvedDrivesWithSelection(drives))
+func controlFailureRunOnceResult(configs []StandaloneMountConfig, err error) RunOnceResult {
+	mounts, buildErr := buildStandaloneMountSpecs(configs)
 	if buildErr != nil {
 		return RunOnceResult{
 			Startup: summarizeStartupResults([]MountStartupResult{{
@@ -202,9 +202,9 @@ func controlFailureRunOnceResult(drives []*config.ResolvedDrive, err error) RunO
 
 func (o *Orchestrator) buildRuntimeMountSet(
 	ctx context.Context,
-	selected []*resolvedDriveWithSelection,
+	standaloneMounts []StandaloneMountConfig,
 ) (*compiledMountSet, error) {
-	parents, err := buildConfiguredMountSpecs(selected)
+	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +221,7 @@ func (o *Orchestrator) buildRuntimeMountSet(
 		return nil, fmt.Errorf("loading mount inventory: %w", err)
 	}
 
-	compiled, err := compileRuntimeMounts(selected, inventory, o.logger)
+	compiled, err := compileRuntimeMounts(standaloneMounts, inventory, o.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -413,12 +413,11 @@ func (o *Orchestrator) startWatchRuntime(
 	opts syncengine.WatchOptions,
 	commands chan controlCommand,
 ) (map[mountID]*watchRunner, *controlSocketServer, error) {
-	selected := resolvedDrivesWithSelection(o.cfg.Drives)
-	if len(selected) == 0 {
+	if len(o.cfg.StandaloneMounts) == 0 {
 		return nil, nil, fmt.Errorf("sync: no drives configured")
 	}
 
-	compiled, err := o.buildRuntimeMountSet(ctx, selected)
+	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sync: building mount specs: %w", err)
 	}
@@ -601,7 +600,7 @@ func (o *Orchestrator) reload(
 	ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 ) {
-	newCfg, newDrives, newMounts, err := o.loadReloadMounts(ctx)
+	newCfg, newStandaloneMounts, newMounts, err := o.loadReloadMounts(ctx)
 	if err != nil {
 		o.logger.Warn("config reload failed, keeping current state",
 			slog.String("error", err.Error()),
@@ -613,7 +612,7 @@ func (o *Orchestrator) reload(
 	// Single-point config update — both Orchestrator and SessionRuntime
 	// read through the shared Holder.
 	o.cfg.Holder.Update(newCfg)
-	o.cfg.Drives = newDrives
+	o.cfg.StandaloneMounts = newStandaloneMounts
 
 	// Flush cached token sources so the next Session() call re-reads
 	// token files from disk. Handles logout + re-login between reloads.
@@ -638,7 +637,7 @@ func (o *Orchestrator) reconcileWatchRunners(
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 ) {
-	compiled, err := o.buildRuntimeMountSet(ctx, resolvedDrivesWithSelection(o.cfg.Drives))
+	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts)
 	if err != nil {
 		o.logger.Warn("shortcut reconciliation refresh failed, keeping current runners",
 			slog.String("error", err.Error()),
@@ -660,28 +659,31 @@ func (o *Orchestrator) reconcileWatchRunners(
 
 func (o *Orchestrator) loadReloadMounts(
 	ctx context.Context,
-) (*config.Config, []*config.ResolvedDrive, *compiledMountSet, error) {
+) (*config.Config, []StandaloneMountConfig, *compiledMountSet, error) {
 	newCfg, err := config.LoadOrDefault(o.cfg.Holder.Path(), o.logger)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("loading config for reload: %w", err)
 	}
 
-	// Clear expired timed pauses before resolving, so newly unpaused drives
-	// are included in the active set. Pause semantics are owned by the config
-	// package — the orchestrator is a consumer, not an implementor.
+	// Clear expired timed pauses before standalone mount compilation, so newly
+	// unpaused drives are included in the active set. Pause semantics are owned
+	// by the config package — the orchestrator is a consumer, not an implementor.
 	config.ClearExpiredPauses(o.cfg.Holder.Path(), newCfg, time.Now(), o.logger)
 
-	newDrives, err := config.ResolveDrives(newCfg, nil, false, o.logger)
+	if o.cfg.ReloadStandaloneMounts == nil {
+		return nil, nil, nil, fmt.Errorf("standalone mount reload compiler is required")
+	}
+	newStandaloneMounts, err := o.cfg.ReloadStandaloneMounts(newCfg)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("resolving drives after reload: %w", err)
+		return nil, nil, nil, fmt.Errorf("compiling standalone mounts after reload: %w", err)
 	}
 
-	newMounts, err := o.buildRuntimeMountSet(ctx, resolvedDrivesWithSelection(newDrives))
+	newMounts, err := o.buildRuntimeMountSet(ctx, newStandaloneMounts)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("building mount specs after reload: %w", err)
 	}
 
-	return newCfg, newDrives, newMounts, nil
+	return newCfg, newStandaloneMounts, newMounts, nil
 }
 
 func (o *Orchestrator) applyWatchMountSet(
