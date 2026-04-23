@@ -140,7 +140,8 @@ func TestE2E_RoundTrip(t *testing.T) {
 		)
 		assert.Contains(t, stdout, drive, "status should show the configured drive section")
 		assert.Contains(t, stdout, "Auth:", "status should show auth state")
-		assert.Contains(t, stdout, "Last sync: never", "status should collapse an unsynced drive to an empty sync snapshot")
+		assert.Contains(t, stdout, "No active conditions.", "status should collapse an unsynced drive to an empty sync snapshot")
+		assert.NotContains(t, stdout, "Last sync:", "status should not reintroduce the removed legacy history block")
 	})
 }
 
