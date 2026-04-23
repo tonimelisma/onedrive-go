@@ -9,6 +9,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Validates: R-2.10.10
+func TestWatchRuntime_BeginWatchDrain_ObserverChannelsStayRuntimeOwned(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.localEvents = make(chan ChangeEvent)
+	rt.remoteBatches = make(chan remoteObservationBatch)
+	rt.skippedItems = make(chan []SkippedItem)
+	rt.observerErrs = make(chan error)
+	rt.activeObservers = 1
+
+	p := &watchPipeline{
+		runtime:      rt,
+		replanReady:  make(chan dirtyBatch),
+		maintenanceC: make(chan time.Time),
+	}
+
+	rt.beginWatchDrain(t.Context(), p)
+
+	assert.Nil(t, p.replanReady)
+	assert.Nil(t, p.maintenanceC)
+	assert.Nil(t, rt.localEvents)
+	assert.Nil(t, rt.remoteBatches)
+	assert.Nil(t, rt.skippedItems)
+	assert.NotNil(t, rt.observerErrs, "runtime must keep draining observer exits while observers are still active")
+	assert.Equal(t, 1, rt.activeObservers)
+}
+
 func TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesAndReturnsToRunning(t *testing.T) {
 	t.Parallel()
 

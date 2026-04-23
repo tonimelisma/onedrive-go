@@ -20,7 +20,7 @@ func (rt *watchRuntime) beginWatchDrain(
 
 	rt.completeDrainOutbox()
 	rt.disableDrainInputs(p)
-	rt.refreshDrainCompletionSources(p)
+	rt.refreshDrainCompletionSources()
 	rt.mustAssertInvariants(ctx, rt, "begin watch drain")
 }
 
@@ -41,19 +41,19 @@ func (rt *watchRuntime) completeDrainOutbox() {
 
 func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.replanReady = nil
-	p.localEvents = nil
-	p.remoteBatches = nil
-	p.skippedCh = nil
+	rt.localEvents = nil
+	rt.remoteBatches = nil
+	rt.skippedItems = nil
 	p.maintenanceC = nil
-	p.refreshC = nil
+	rt.refreshCh = nil
 }
 
-func (rt *watchRuntime) refreshDrainCompletionSources(p *watchPipeline) {
+func (rt *watchRuntime) refreshDrainCompletionSources() {
 	if !rt.refreshActive {
-		p.refreshResults = nil
+		rt.refreshResults = nil
 	}
-	if p.activeObs == 0 {
-		p.errs = nil
+	if rt.activeObservers == 0 {
+		rt.observerErrs = nil
 	}
 }
 
@@ -71,15 +71,15 @@ func (rt *watchRuntime) runDrainStep(
 	select {
 	case completion, ok := <-p.completions:
 		return rt.handleDrainingCompletion(ctx, p, &completion, ok)
-	case _, ok := <-p.refreshResults:
+	case _, ok := <-rt.refreshResults:
 		return rt.handleDrainingRefreshResult(ctx, p, ok)
-	case obsErr, ok := <-p.errs:
+	case obsErr, ok := <-rt.observerErrs:
 		return rt.handleDrainingObserverError(p, obsErr, ok)
 	}
 }
 
 func (rt *watchRuntime) drainLoopDone(p *watchPipeline) bool {
-	return p.completions == nil && p.refreshResults == nil && p.activeObs == 0
+	return p.completions == nil && rt.refreshResults == nil && rt.activeObservers == 0
 }
 
 func (rt *watchRuntime) handleDrainingCompletion(
@@ -110,13 +110,13 @@ func (rt *watchRuntime) handleDrainingRefreshResult(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		p.refreshResults = nil
+		rt.refreshResults = nil
 		return rt.drainLoopDone(p), nil
 	}
 
 	rt.dropRemoteRefreshResultOnShutdown()
 	rt.mustAssertRefreshBookkeepingCleared(rt, "handle draining refresh result")
-	p.refreshResults = nil
+	rt.refreshResults = nil
 	rt.mustAssertInvariants(ctx, rt, "handle draining refresh result")
 
 	return rt.drainLoopDone(p), nil
@@ -128,7 +128,7 @@ func (rt *watchRuntime) handleDrainingObserverError(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		p.errs = nil
+		rt.observerErrs = nil
 		return rt.drainLoopDone(p), nil
 	}
 
@@ -136,8 +136,8 @@ func (rt *watchRuntime) handleDrainingObserverError(
 	if err := rt.handleObserverExit(p, true); err != nil {
 		return false, err
 	}
-	if p.activeObs == 0 {
-		p.errs = nil
+	if rt.activeObservers == 0 {
+		rt.observerErrs = nil
 	}
 
 	return rt.drainLoopDone(p), nil

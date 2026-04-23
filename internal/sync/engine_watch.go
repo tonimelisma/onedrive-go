@@ -88,12 +88,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) err
 	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
-	errs, activeObs, skippedCh, localEvents, remoteBatches := rt.startObservers(ctx, pipe.bl, opts)
-	pipe.errs = errs
-	pipe.activeObs = activeObs
-	pipe.skippedCh = skippedCh
-	pipe.localEvents = localEvents
-	pipe.remoteBatches = remoteBatches
+	rt.startObservers(ctx, pipe.bl, opts)
 
 	// Step 4: Run the watch loop.
 	return rt.runWatchLoop(ctx, pipe)
@@ -107,24 +102,17 @@ func isWatchShutdownError(ctx context.Context, err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-// watchPipeline holds all handles needed by the watch select loop.
+// watchPipeline holds watch-loop dependencies that are not already runtime-owned.
 // Created by initWatchInfra; cleaned up by its cleanup method.
 type watchPipeline struct {
-	runtime        *watchRuntime
-	bl             *Baseline
-	replanReady    <-chan dirtyBatch
-	completions    <-chan ActionCompletion
-	errs           <-chan error
-	localEvents    <-chan ChangeEvent
-	remoteBatches  <-chan remoteObservationBatch
-	skippedCh      <-chan []SkippedItem
-	refreshC       <-chan time.Time
-	refreshResults <-chan remoteRefreshResult
-	maintenanceC   <-chan time.Time
-	activeObs      int
-	mode           Mode
-	pool           *WorkerPool // for bootstrapSync to access Completions()
-	cleanup        func()
+	runtime      *watchRuntime
+	bl           *Baseline
+	replanReady  <-chan dirtyBatch
+	completions  <-chan ActionCompletion
+	maintenanceC <-chan time.Time
+	mode         Mode
+	pool         *WorkerPool // for bootstrapSync to access Completions()
+	cleanup      func()
 }
 
 type socketIOWakeSourceRunner interface {
@@ -181,14 +169,12 @@ func (rt *watchRuntime) initWatchInfra(
 	rt.armTrialTimer()
 
 	pipe := &watchPipeline{
-		runtime:        rt,
-		replanReady:    replanReady,
-		completions:    pool.Completions(),
-		refreshC:       rt.refreshCh,
-		refreshResults: rt.refreshResults,
-		maintenanceC:   tickerChan(maintenanceTicker),
-		mode:           mode,
-		pool:           pool,
+		runtime:      rt,
+		replanReady:  replanReady,
+		completions:  pool.Completions(),
+		maintenanceC: tickerChan(maintenanceTicker),
+		mode:         mode,
+		pool:         pool,
 	}
 
 	pipe.cleanup = func() {
@@ -214,6 +200,13 @@ func (rt *watchRuntime) initWatchInfra(
 		rt.stopRetryTimer()
 		rt.stopTrialTimer()
 		pool.Stop() // closes completions channel after workers exit
+		rt.observerErrs = nil
+		rt.localEvents = nil
+		rt.remoteBatches = nil
+		rt.skippedItems = nil
+		rt.activeObservers = 0
+		rt.refreshCh = nil
+		rt.refreshResults = nil
 		rt.remoteObs = nil
 		rt.localObs = nil
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventWatchStopped})
@@ -305,12 +298,13 @@ func (rt *watchRuntime) finishBootstrapAfterActions(
 	return nil
 }
 
-// startObservers launches remote and local observer goroutines. The watch loop
-// owns remote batch application and dirty marking; observers emit only local
-// change hints or loop-applied remote batches.
+// startObservers launches remote and local observer goroutines and stores
+// their channels on the watch runtime. The watch loop owns remote batch
+// application and dirty marking; observers emit only local change hints or
+// loop-applied remote batches.
 func (rt *watchRuntime) startObservers(
 	ctx context.Context, bl *Baseline, opts WatchOptions,
-) (<-chan error, int, <-chan []SkippedItem, <-chan ChangeEvent, <-chan remoteObservationBatch) {
+) {
 	localEvents := make(chan ChangeEvent, watchObservationBuf)
 	remoteBatches := make(chan remoteObservationBatch, watchObservationBuf)
 	errs := make(chan error, 2)
@@ -400,7 +394,11 @@ func (rt *watchRuntime) startObservers(
 		)
 	}
 
-	return errs, count, skippedCh, localEvents, remoteBatches
+	rt.observerErrs = errs
+	rt.activeObservers = count
+	rt.skippedItems = skippedCh
+	rt.localEvents = localEvents
+	rt.remoteBatches = remoteBatches
 }
 
 func (rt *watchRuntime) startRemoteObserver(

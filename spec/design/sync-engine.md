@@ -194,6 +194,12 @@ watch observers and full-refresh goroutines emit one loop-applied
 `remoteObservationBatch` value, and the loop itself owns projected remote
 observation commits, cursor commits, observation-finding reconciliation, dirty
 marking, and refresh-timer re-arm.
+Observer lifecycle follows that same runtime-owned model. `startObservers`
+populates the watch runtime's observer error stream, local-event stream,
+remote-batch stream, skipped-item stream, refresh channels, and active-observer
+count directly. `watchPipeline` keeps only loop inputs that are not already
+runtime-owned: baseline, replan-ready debounce output, worker completions,
+maintenance ticks, worker pool, and cleanup.
 That owner boundary stays concrete in code too: `runWatchLoop` is the shared
 outer owner for bootstrap, steady-state, and drain; `runNonDrainingWatchStep`
 is the one gated non-draining `select`; and `runDrainStep` remains the only

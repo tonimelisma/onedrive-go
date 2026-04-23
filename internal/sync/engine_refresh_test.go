@@ -874,14 +874,13 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
 
 	refreshC := make(chan time.Time, 1)
+	rt.refreshCh = refreshC
 	done := make(chan error, 1)
 	go func() {
 		done <- rt.runWatchLoop(ctx, &watchPipeline{
-			runtime:        rt,
-			bl:             bl,
-			mode:           SyncBidirectional,
-			refreshC:       refreshC,
-			refreshResults: rt.refreshResults,
+			runtime: rt,
+			bl:      bl,
+			mode:    SyncBidirectional,
 		})
 	}()
 
