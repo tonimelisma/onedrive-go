@@ -430,6 +430,7 @@ func pollCLIWithConfigContains(
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
+	resolvedDriveID := effectiveDriveID(env, "")
 
 	for attempt := 0; ; attempt++ {
 		stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, args...)
@@ -441,6 +442,17 @@ func pollCLIWithConfigContains(
 			require.Failf(t, "pollCLIWithConfigContains: timed out",
 				"after %v waiting for %q in output of %v\nlast stdout: %s\nlast stderr: %s",
 				timeout, expected, args, stdout, stderr)
+		}
+
+		if shouldRefreshSharedRootListingForRemoteRead(resolvedDriveID, stderr) {
+			waitForSharedRootListingVisibleWithin(
+				t,
+				cfgPath,
+				env,
+				resolvedDriveID,
+				time.Until(deadline),
+			)
+			continue
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
@@ -584,6 +596,17 @@ func pollRemoteEventually(
 			require.Failf(t, "pollRemoteEventually: timed out",
 				"after %v waiting for %s via %v\nlast stdout: %s\nlast stderr: %s",
 				timeout, description, args, stdout, stderr)
+		}
+
+		if shouldRefreshSharedRootListingForRemoteRead(resolvedDriveID, stderr) {
+			waitForSharedRootListingVisibleWithin(
+				t,
+				cfgPath,
+				env,
+				resolvedDriveID,
+				time.Until(deadline),
+			)
+			continue
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))

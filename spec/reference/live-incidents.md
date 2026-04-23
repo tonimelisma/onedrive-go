@@ -19,7 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
-| LI-20260422-01 | Nightly `e2e_full` buckets still carried removed manual-resolution and path-narrowing workflows | fixed | test bug | 2026-04-22 | yes |
+| LI-20260422-01 | Nightly `e2e_full` buckets still carried removed manual-resolution and path-narrowing workflows | fixed | test bug | 2026-04-23 | yes |
 | LI-20260422-02 | Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair | fixed | product bug | 2026-04-22 | no |
 | LI-20260422-03 | Shared-drive sync startup still aborted when `sync_dir` did not exist yet | fixed | product bug | 2026-04-22 | no |
 | LI-20260422-04 | Shared-folder `drive list` exact-selector check assumed one-pass search visibility | fixed | test harness | 2026-04-22 | yes |
@@ -38,7 +38,7 @@ Promotion contract:
 | LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
 | LI-20260408-01 | Immediate post-simple-upload mtime PATCH returned `404 itemNotFound` | mitigated | graph quirk | 2026-04-22 | yes |
 | LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-19 | yes |
-| LI-20260405-09 | Recently created parent folder lagged child create and child-list routes | mitigated | graph quirk | 2026-04-22 | yes |
+| LI-20260405-09 | Recently created parent folder lagged child create and child-list routes | mitigated | graph quirk | 2026-04-23 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
 | LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-22 | yes |
 | LI-20260407-04 | Shared-file preflight assumed only one configured recipient could open the raw link | fixed | test bug | 2026-04-07 | no |
@@ -104,7 +104,7 @@ Promoted docs: [system.md](../design/system.md)
 ## LI-20260422-01: Nightly `e2e_full` buckets still carried removed manual-resolution and path-narrowing workflows
 
 First seen: 2026-04-22
-Last seen: 2026-04-22
+Last seen: 2026-04-23
 Area: scheduled/manual `e2e_full`, verifier bucket curation, stale live-only contract drift
 Suite / test: local `go run ./cmd/devtool verify e2e-full`; verifier buckets `full-parallel-misc`, `full-serial-sync`, and `full-serial-watch-shared`
 Classification: test bug
@@ -155,6 +155,17 @@ Evidence:
   delete-approval mutations, and [`spec/design/cli.md`](../design/cli.md)
   states that `status` no longer exposes separate conflict-history or
   delete-safety sections.
+- Scheduled CI run `24830652647` on April 23, 2026 progressed through fast
+  E2E and full fixture preflight, then failed `full-parallel-misc` only in
+  [`TestE2E_RoundTrip/status`](../../e2e/fileops_full_e2e_test.go) because the
+  direct file-op roundtrip still asserted `Last sync: never`.
+- The failing nightly log showed the current product surface instead:
+  `Sync dir:  (not set)`, `State:     ready`, and `No active conditions.`
+  under the configured drive with no `Last sync:` line. A focused local rerun
+  at commit `307d6bf54957fe071650f588e0750f7799338104` reproduced the same
+  mismatch with
+  `go test -tags='e2e e2e_full' -run '^TestE2E_RoundTrip$' -count=1 -v ./e2e/...`,
+  and the updated assertion passed immediately afterward.
 Resolution / mitigation: the stale full-suite tests were removed or rewritten
 to match the current product contract. Nightly coverage now keeps the
 condition-based `status` assertions, rejects removed `resolve` / `--history`
@@ -165,9 +176,13 @@ to the surviving coverage. The remaining per-drive status smoke now asserts
 the stable “no durable conditions / no retrying work” contract instead of
 assuming zero shared-drive remote drift, and the stale non-functional
 delete-safety requirement wording was aligned with the existing
-no-manual-approval design. The shared-root product bugs that this cleanup
-unmasked are tracked in [LI-20260422-02](#li-20260422-02-shared-root-full-sync-commands-widened-or-destabilized-the-configured-subtree-after-nightly-harness-repair).
-Promoted docs: [system.md](../design/system.md), [non-functional.md](../requirements/non-functional.md)
+no-manual-approval design. The same stale-contract family recurred on April 23
+in direct file-operation coverage, so `TestE2E_RoundTrip/status` now asserts
+the current empty status snapshot (`No active conditions.`) and explicitly
+rejects reintroduced `Last sync:` history text. The shared-root product bugs
+that this cleanup unmasked are tracked in
+[LI-20260422-02](#li-20260422-02-shared-root-full-sync-commands-widened-or-destabilized-the-configured-subtree-after-nightly-harness-repair).
+Promoted docs: [system.md](../design/system.md), [cli.md](../design/cli.md), [non-functional.md](../requirements/non-functional.md)
 
 ## LI-20260422-02: Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair
 
@@ -1011,6 +1026,19 @@ Evidence:
   after `GET /drives/{driveID}/items/{rootID}/children` returned
   `404 itemNotFound` again while resolving the first path segment under the
   shared root.
+- The same family recurred again on April 23, 2026 during local
+  `go run ./cmd/devtool verify e2e-full` in
+  `TestE2E_SyncWatch_ConflictDuringWatch`. The isolated shared-root watch test
+  had already created `/e2e-watch-conf-1776958144182171000/conflict-watch.txt`
+  locally and started polling
+  `stat /e2e-watch-conf-1776958144182171000/conflict-watch.txt` through the
+  derived shared-root canonical drive, but the read kept failing with
+  `resolve item path ... list children for segment ... graph: HTTP 404`
+  against `GET /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s43ecd2615dbd421488246c4c51cdb6cd/children?$top=200`
+  until the 3-minute poll budget expired. A focused rerun of
+  `go test -tags='e2e e2e_full' -run '^TestE2E_SyncWatch_ConflictDuringWatch$' -count=1 -v ./e2e/...`
+  passed immediately after the shared-root read pollers were taught to
+  re-establish `ls /` on that exact failure family.
 Resolution / mitigation: `graph.Client.CreateUploadSession()` now owns a
 bounded retry for the exact fresh-parent `404 itemNotFound` case, and flows
 that already know the authoritative remote `itemID` avoid parent-route create
@@ -1031,10 +1059,10 @@ Isolated shared-root fixture setup now also waits for `ls /` under the derived
 shared-root drive before handing that root to upload-only or watch tests, so
 those tests no longer assume owner-drive path visibility proves the shared-root
 children route is ready. Shared-root remote-read helpers now re-establish the
-same `ls /` boundary before and after known `get` path-resolution `404`
-failures, so later sync assertions do not treat this documented route-lag
-family as a product regression once the shared-root drive has already been
-selected successfully.
+same `ls /` boundary before and after known exact-path `stat`, `get`, or
+equivalent CLI read-poller `404` failures, so later sync assertions do not
+treat this documented route-lag family as a product regression once the
+shared-root drive has already been selected successfully.
 Promoted docs: [graph-api-quirks.md#fresh-parent-child-create-lag](graph-api-quirks.md#fresh-parent-child-create-lag), [system.md](../design/system.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [sync-execution.md](../design/sync-execution.md)
 
 ## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup

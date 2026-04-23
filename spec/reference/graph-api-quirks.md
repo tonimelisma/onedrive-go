@@ -761,11 +761,11 @@ Runtime policy:
   `ls /` boundary before returning, because owner-drive path visibility alone
   does not prove the shared-root children route is ready for later upload/watch
   coverage
-- shared-root remote-read helpers that verify later file contents through
-  `get` must re-establish the same `ls /` boundary before reading and after
-  known `resolve item path ... list children for segment ... HTTP 404`
-  failures, because the route can regress again after earlier sync or mutation
-  success
+- shared-root remote-read helpers that verify later exact-path visibility or
+  file contents through `stat`, `get`, or equivalent CLI read pollers must
+  re-establish the same `ls /` boundary before reading and after known
+  `resolve item path ... list children for segment ... HTTP 404` failures,
+  because the route can regress again after earlier sync or mutation success
 - that fixture policy remains narrow: it does not absorb unrelated failures,
   and it does not replace tests that are explicitly asserting exact-route
   behavior after the create succeeds
