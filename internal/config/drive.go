@@ -249,6 +249,13 @@ func sharedRootDeltaCapable(
 		return true
 	}
 
+	return RootedSubtreeDeltaCapableForTokenOwner(ownerCID)
+}
+
+// RootedSubtreeDeltaCapableForTokenOwner reports whether a rooted-subtree
+// mount owned by the given token account can use folder delta. Personal owner
+// accounts can; business/SharePoint owners still require recursive fallback.
+func RootedSubtreeDeltaCapableForTokenOwner(ownerCID driveid.CanonicalID) bool {
 	switch ownerCID.DriveType() {
 	case driveid.DriveTypeBusiness, driveid.DriveTypeSharePoint:
 		return false

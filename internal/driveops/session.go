@@ -17,15 +17,15 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-// Session holds authenticated clients and the resolved drive identity for a
-// single drive. Wraps a pair of graph.Client instances: Meta for Graph
-// metadata operations and Transfer for upload/download traffic.
+// Session holds authenticated clients and mounted-root identity for one
+// interactive or sync surface. Wraps a pair of graph.Client instances: Meta
+// for Graph metadata operations and Transfer for upload/download traffic.
 type Session struct {
-	Meta     *graph.Client // metadata ops (transport-level stall detection)
-	Transfer *graph.Client // uploads/downloads (no client-level timeout)
-	DriveID  driveid.ID
-	RootItem string
-	Resolved *config.ResolvedDrive
+	Meta              *graph.Client // metadata ops (transport-level stall detection)
+	Transfer          *graph.Client // uploads/downloads (no client-level timeout)
+	DriveID           driveid.ID
+	RootItem          string
+	AccountEmailValue string
 
 	visibilityWaitSchedule []time.Duration
 	sleepFunc              func(context.Context, time.Duration) error
@@ -41,13 +41,22 @@ type AccountClients struct {
 	Account  driveid.CanonicalID
 }
 
-// ResolvedDriveEmail returns the account email for the resolved drive.
-func (s *Session) ResolvedDriveEmail() string {
-	if s == nil || s.Resolved == nil {
+// SyncMountSessionConfig is the mount-owned identity required to create the
+// authenticated session used by sync workers.
+type SyncMountSessionConfig struct {
+	TokenOwnerCanonical driveid.CanonicalID
+	DriveID             driveid.ID
+	RootItemID          string
+	AccountEmail        string
+}
+
+// AccountEmail returns the account email associated with this session.
+func (s *Session) AccountEmail() string {
+	if s == nil {
 		return ""
 	}
 
-	return s.Resolved.CanonicalID.Email()
+	return s.AccountEmailValue
 }
 
 // SetAuthenticatedSuccessHooks installs the same best-effort success hook on
@@ -110,23 +119,32 @@ func NewSessionRuntime(holder *config.Holder, userAgent string, logger *slog.Log
 // given resolved drive. Configured shared roots use a shared-target throttle
 // key so interactive metadata retries stay scoped to the concrete remote root.
 func (r *SessionRuntime) Session(ctx context.Context, rd *config.ResolvedDrive) (*Session, error) {
-	return r.session(ctx, rd, r.interactiveClientsForDrive(rd))
+	sessionCfg, err := syncMountSessionConfigForResolvedDrive(rd)
+	if err != nil {
+		return nil, err
+	}
+
+	return r.session(ctx, &sessionCfg, r.interactiveClientsForDrive(rd))
 }
 
 // SyncSession creates or retrieves the authenticated Session used by sync
 // workers. Sync paths intentionally bypass retry-wrapped HTTP clients.
-func (r *SessionRuntime) SyncSession(ctx context.Context, rd *config.ResolvedDrive) (*Session, error) {
-	return r.session(ctx, rd, r.syncClientSet())
+func (r *SessionRuntime) SyncSession(ctx context.Context, mount *SyncMountSessionConfig) (*Session, error) {
+	return r.session(ctx, mount, r.syncClientSet())
 }
 
 func (r *SessionRuntime) session(
 	ctx context.Context,
-	rd *config.ResolvedDrive,
+	mount *SyncMountSessionConfig,
 	httpClients graphtransport.ClientSet,
 ) (*Session, error) {
-	tokenPath := config.DriveTokenPath(rd.CanonicalID)
+	if mount == nil {
+		return nil, fmt.Errorf("sync mount session config is required")
+	}
+
+	tokenPath := config.DriveTokenPath(mount.TokenOwnerCanonical)
 	if tokenPath == "" {
-		return nil, fmt.Errorf("cannot determine token path for drive %q", rd.CanonicalID)
+		return nil, fmt.Errorf("cannot determine token path for mount %q", mount.TokenOwnerCanonical)
 	}
 
 	meta, transfer, err := r.clientsForTokenPath(ctx, tokenPath, httpClients)
@@ -138,24 +156,47 @@ func (r *SessionRuntime) session(
 		return nil, err
 	}
 
-	if rd.DriveID.IsZero() {
+	if mount.DriveID.IsZero() {
 		return nil, fmt.Errorf(
-			"drive ID not resolved for %s — token file may be missing or corrupted; re-run 'onedrive-go login'",
-			rd.CanonicalID,
+			"drive ID not resolved for token owner %s — token file may be missing or corrupted; re-run 'onedrive-go login'",
+			mount.TokenOwnerCanonical,
 		)
 	}
 
 	r.logger.Debug("session created",
-		slog.String("drive_id", rd.DriveID.String()),
-		slog.String("canonical_id", rd.CanonicalID.String()),
+		slog.String("drive_id", mount.DriveID.String()),
+		slog.String("token_owner_canonical_id", mount.TokenOwnerCanonical.String()),
 	)
 
 	return &Session{
-		Meta:     meta,
-		Transfer: transfer,
-		DriveID:  rd.DriveID,
-		RootItem: rd.RootItemID,
-		Resolved: rd,
+		Meta:              meta,
+		Transfer:          transfer,
+		DriveID:           mount.DriveID,
+		RootItem:          mount.RootItemID,
+		AccountEmailValue: mount.AccountEmail,
+	}, nil
+}
+
+func syncMountSessionConfigForResolvedDrive(rd *config.ResolvedDrive) (SyncMountSessionConfig, error) {
+	if rd == nil {
+		return SyncMountSessionConfig{}, fmt.Errorf("resolved drive is required")
+	}
+
+	tokenOwnerCanonical, err := config.TokenAccountCanonicalID(rd.CanonicalID)
+	if err != nil {
+		return SyncMountSessionConfig{}, fmt.Errorf("token owner for drive %q: %w", rd.CanonicalID, err)
+	}
+
+	accountEmail := rd.CanonicalID.Email()
+	if accountEmail == "" {
+		accountEmail = tokenOwnerCanonical.Email()
+	}
+
+	return SyncMountSessionConfig{
+		TokenOwnerCanonical: tokenOwnerCanonical,
+		DriveID:             rd.DriveID,
+		RootItemID:          rd.RootItemID,
+		AccountEmail:        accountEmail,
 	}, nil
 }
 

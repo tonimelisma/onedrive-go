@@ -9,19 +9,11 @@ import (
 
 // engineMountConfigForMount derives the sync-owned engine constructor input from
 // the control plane's runtime mount spec. Mount-owned fields stay authoritative
-// here; unresolved sync tunables continue to flow from the config-backed
-// resolved drive until later increments promote them into mount specs.
+// here, including token-owner identity, sync tunables, and local child
+// projection exclusions.
 func engineMountConfigForMount(mount *mountSpec) (*syncengine.EngineMountConfig, error) {
 	if mount == nil {
 		return nil, fmt.Errorf("multisync: mount is required")
-	}
-	if mount.resolved == nil {
-		return nil, fmt.Errorf("multisync: resolved drive is required for mount %s", mount.mountID)
-	}
-
-	minFree, err := config.ParseSize(mount.resolved.MinFreeSpace)
-	if err != nil {
-		return nil, fmt.Errorf("invalid min_free_space %q: %w", mount.resolved.MinFreeSpace, err)
 	}
 
 	return &syncengine.EngineMountConfig{
@@ -34,12 +26,14 @@ func engineMountConfigForMount(mount *mountSpec) (*syncengine.EngineMountConfig,
 		RootItemID:                mount.remoteRootItemID,
 		RootedSubtreeDeltaCapable: mount.rootedSubtreeDeltaCapable,
 		EnableWebsocket:           mount.enableWebsocket,
-		LocalFilter:               syncengine.LocalFilterConfig{},
+		LocalFilter: syncengine.LocalFilterConfig{
+			SkipDirs: append([]string(nil), mount.localSkipDirs...),
+		},
 		LocalRules: syncengine.LocalObservationRules{
 			RejectSharePointRootForms: mount.canonicalID.IsSharePoint(),
 		},
-		TransferWorkers: mount.resolved.TransferWorkers,
-		CheckWorkers:    mount.resolved.CheckWorkers,
-		MinFreeSpace:    minFree,
+		TransferWorkers: mount.transferWorkers,
+		CheckWorkers:    mount.checkWorkers,
+		MinFreeSpace:    mount.minFreeSpace,
 	}, nil
 }

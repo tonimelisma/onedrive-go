@@ -40,14 +40,22 @@ runtime package that implements it.
 
 ## Runtime Mount Specs
 
-The control plane now compiles resolved config drives into runtime `mountSpec`
-values before session creation and engine construction.
+The control plane now compiles runtime `mountSpec` values before session
+creation and engine construction.
 
-In this increment, configured drives are still the only source of mounts, so
-every runtime mount is currently a standalone projection backed by one resolved
-drive. That seam exists so later increments can add shortcut child projections
-and managed mount inventory without keeping `ResolvedDrive` as the permanent
-runtime unit.
+Configured standalone drives are still the only explicit user-facing selection
+surface, but they are no longer the only runtime mount source. On startup and
+reload the control plane now:
+
+1. resolves the selected configured drives
+2. compiles those resolved drives into standalone runtime mounts
+3. loads `mounts.json`
+4. attaches valid managed child mounts beneath selected standalone parents
+5. installs precise local subtree exclusions on those parents before engine
+   construction
+
+Managed child mounts are durable runtime facts, not synthetic follow-up drives
+invented by the engine.
 
 Each current `mountSpec` owns:
 
@@ -55,17 +63,24 @@ Each current `mountSpec` owns:
 - stable reporting identity and selection index
 - local sync root and state DB path
 - remote drive/root identity for rooted mounts
+- token-owner identity and account email for sync session creation
+- transfer/check/min-free-space tunables
 - resolved pause state and rooted-observation hints
+- parent-owned child subtree exclusions
 
-`mountSpec` still carries the resolved drive in this increment, but only for:
-
-- `SessionRuntime`, which remains drive-shaped for session creation
-- the sync tunables that have not yet been promoted into mount-owned runtime
-  state
+`mountSpec` no longer carries `ResolvedDrive`. Configured drives are compiled
+into mount-owned runtime facts once, and sync session construction now consumes
+that mount-owned identity directly.
 
 Engine construction is no longer drive-shaped. `internal/multisync` now derives
 `sync.EngineMountConfig` from `mountSpec` and passes that sync-owned mount
 config into `sync.NewMountEngine(...)`.
+
+Managed child mounts currently inherit their token owner, pause state, and sync
+tunables from the selected standalone parent mount. Conflicting content roots
+are resolved in the control plane before engine startup: explicit standalone
+mounts win over duplicate child projections, and duplicate child projections
+for the same content root are skipped with structured startup outcomes.
 
 ## Boundary To The Engine
 
@@ -95,32 +110,34 @@ for startup, shutdown, and reload.
 
 `RunOnce` compiles runtime mount specs, resolves sessions, builds one engine per
 mount, and runs all mounts concurrently. Startup eligibility is classified per
-mount first, including paused drives. Runnable drives then produce one completed
-`DriveReport` each, while startup-ineligible drives remain startup outcomes
-instead of synthetic completed reports. The control plane never aborts the
-whole pass because one mount failed; partial failure is isolated per mount.
-Both startup results and completed reports carry a stable `SelectionIndex`
-matching the original selection order so repeated selectors for the same
-canonical drive remain distinct through orchestration, rendering, and
-bookkeeping.
+mount first, including paused drives and managed child mounts skipped because
+their parent is missing or their content root conflicts. Runnable mounts then
+produce one completed `DriveReport` each, while startup-ineligible mounts
+remain startup outcomes instead of synthetic completed reports. The control
+plane never aborts the whole pass because one mount failed; partial failure is
+isolated per mount. Both startup results and completed reports carry a stable
+`SelectionIndex` matching the compiled runtime order so standalone parents and
+their attached child mounts remain deterministic through orchestration,
+rendering, and bookkeeping.
 
 ### RunWatch
 
-`RunWatch` starts one watch-mode engine per runnable non-paused mount and then owns the
-long-running control loop. It listens for:
+`RunWatch` starts one watch-mode engine per runnable non-paused mount and then
+owns the long-running control loop. It listens for:
 
 - `ctx.Done()` for shutdown
 - JSON-over-HTTP requests on the Unix control socket
 
 Pause semantics come from `config.Drive.IsPaused()` and
-`config.ClearExpiredPauses()`. The control plane consumes those rules; it does
-not redefine them.
+`config.ClearExpiredPauses()` for configured parents plus managed child-mount
+pause inheritance (`parent paused || child paused`). The control plane consumes
+those rules; it does not redefine them inside the engine.
 
 Existing state DBs that fail store compatibility checks are reported as
-per-drive startup outcomes. Watch startup warns about those mounts immediately,
-keeps healthy mounts running, and exits non-zero only when no runnable mount
-starts. A paused-only selection is a structured startup refusal, not a special
-string-only path.
+per-mount startup outcomes. Watch startup warns about those mounts
+immediately, keeps healthy mounts running, and exits non-zero only when no
+runnable mount starts. A paused-only selection is a structured startup refusal,
+not a special string-only path.
 
 ### Control Socket
 
