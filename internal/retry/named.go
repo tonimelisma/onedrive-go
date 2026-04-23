@@ -93,11 +93,13 @@ func DownloadMetadataPolicy() Policy {
 }
 
 // SimpleUploadMtimePatchPolicy is the bounded retry policy for transient
-// item-not-found misfires when the immediate post-simple-upload
-// UpdateFileSystemInfo PATCH races Graph's item-by-ID visibility. It is longer
-// than the other item-ID readback policies because freshly created shared-root
-// uploads can lag patch visibility for well over ten seconds even after the
-// upload itself succeeded.
+// immediate post-simple-upload UpdateFileSystemInfo failures after Graph has
+// already accepted the file content. It covers the documented item-not-found
+// visibility race and the transient 502/503/504 gateway/service failures we
+// have seen on that same finalization edge. It is longer than the other
+// item-ID readback policies because freshly created shared-root uploads can lag
+// patch visibility for well over ten seconds even after the upload itself
+// succeeded.
 func SimpleUploadMtimePatchPolicy() Policy {
 	return Policy{
 		MaxAttempts: simpleUploadMtimeAttempts,

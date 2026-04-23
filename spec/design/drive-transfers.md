@@ -78,11 +78,12 @@ second false-negative point.
 
 When simple upload succeeds and mtime preservation is required, the immediate
 follow-on `UpdateFileSystemInfo` PATCH can also briefly return `404
-itemNotFound` for the returned item ID. That retry stays in the graph boundary
-and only applies to the post-simple-upload finalization path, with a bounded
-window sized for the longer shared-root item-ID lag seen in live E2E;
-transfer-manager
-and CLI callers still see one success or one failure outcome.
+itemNotFound` for the returned item ID, or hit a transient 502/503/504
+service failure after the content write has already succeeded. That retry stays
+in the graph boundary and only applies to the post-simple-upload finalization
+path, with a bounded window sized for the longer shared-root item-ID lag seen
+in live E2E; transfer-manager and CLI callers still see one success or one
+failure outcome.
 
 Shared-file `put` reuses the same transfer machinery, but targets an existing
 item by `(driveID, itemID)` instead of resolving a destination parent path.

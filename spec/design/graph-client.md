@@ -253,9 +253,10 @@ slightly longer convergence window on own-drive parents.
 
 For simple uploads with non-zero mtime, the follow-on `PATCH /items/{itemID}`
 used to restore `fileSystemInfo.lastModifiedDateTime` can also race item-ID
-visibility and return transient `404 itemNotFound` even though the upload
-response already returned the new item identity. The graph boundary retries
-that exact post-simple-upload patch with a bounded policy tuned for the longer
+visibility and return transient `404 itemNotFound`, or hit a bounded
+502/503/504 service failure, even though the upload response already returned
+the new item identity. The graph boundary retries that exact
+post-simple-upload patch with a bounded policy tuned for the longer
 shared-root visibility lag observed in live coverage. Direct
 `UpdateFileSystemInfo` calls outside the immediate simple-upload finalization
 path remain strict.
@@ -285,7 +286,7 @@ consume that normalized boundary contract via [error-model.md](error-model.md).
 
 Implements: R-6.8.8 [verified]
 
-Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives`, transient 404 on root-child listing, transient 404 on item-by-ID download metadata fetch before a pre-authenticated download begins, transient 404 on the immediate post-simple-upload `UpdateFileSystemInfo` PATCH, and transient 404 on create-upload-session requests against freshly created parents. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
+Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives`, transient 404 on root-child listing, transient 404 on item-by-ID download metadata fetch before a pre-authenticated download begins, transient 404 or 502/503/504 on the immediate post-simple-upload `UpdateFileSystemInfo` PATCH, and transient 404 on create-upload-session requests against freshly created parents. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
 
 `NewClient` accepts an `*http.Client` and returns `(*Client, error)` after validating the base URL and token source. `MustNewClient` is reserved for static/test setup where panic-on-bad-construction is intentional. `driveops.SessionRuntime` is the normal production runtime owner for those clients, and it composes the stateless `internal/graphtransport` builders into the concrete profiles the app needs:
 

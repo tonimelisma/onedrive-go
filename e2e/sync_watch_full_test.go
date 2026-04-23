@@ -93,7 +93,7 @@ func TestE2E_SyncWatch_RemoteToLocal(t *testing.T) {
 
 	// Start download-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", selectedDriveForEnv(env), "sync", "--download-only", "--watch")
+		"--drive", resolveDriveSelection(env, ""), "sync", "--download-only", "--watch")
 
 	// Create remote folder and file.
 	mkdirRemoteFolder(t, cfgPath, env, "/"+testFolder)
@@ -125,7 +125,7 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 
 	// Start bidirectional daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", selectedDriveForEnv(env), "sync", "--watch")
+		"--drive", resolveDriveSelection(env, ""), "sync", "--watch")
 
 	// Phase 1: local → remote.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -138,7 +138,7 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 
 	// Poll until file appears remotely.
 	remotePath := "/" + testFolder + "/local-to-remote.txt"
-	pollCLIWithConfigContains(t, cfgPath, env, "local-to-remote.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, cfgPath, env, "", "local-to-remote.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Phase 2: remote → local.
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/remote-to-local.txt", "from remote")
@@ -168,7 +168,7 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 
 	// Start bidirectional daemon with stderr access to wait for watch setup.
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", selectedDriveForEnv(env), "sync", "--watch")
+		"--drive", resolveDriveSelection(env, ""), "sync", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
 	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
@@ -181,7 +181,7 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 
 	// Wait for upload.
 	remotePath := "/" + testFolder + "/conflict-watch.txt"
-	pollCLIWithConfigContains(t, cfgPath, env, "conflict-watch.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, cfgPath, env, "", "conflict-watch.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Modify remote FIRST: put a new version and confirm it propagated via
 	// stat. This ensures the delta feed has the remote change before we
@@ -237,7 +237,7 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 
 	// Start upload-only daemon with stderr access to wait for watch setup.
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
+		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
 	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
@@ -250,7 +250,7 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 
 	// Wait for initial upload.
 	remotePath := "/" + testFolder + "/modifiable.txt"
-	pollCLIWithConfigContains(t, cfgPath, env, "modifiable.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, cfgPath, env, "", "modifiable.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Modify the file.
 	require.NoError(t, os.WriteFile(filePath, []byte("version 2 modified"), 0o600))
@@ -293,7 +293,7 @@ func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 
 	// Start upload-only daemon with stderr access to wait for watch setup.
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
+		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
 	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
@@ -306,13 +306,13 @@ func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 
 	// Wait for upload.
 	remotePath := "/" + testFolder + "/deleteme.txt"
-	pollCLIWithConfigContains(t, cfgPath, env, "deleteme.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, cfgPath, env, "", "deleteme.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Delete local file.
 	require.NoError(t, os.Remove(filePath))
 
 	// Poll until file disappears from remote.
-	pollCLIWithConfigNotContains(t, cfgPath, env, "deleteme.txt", daemonPollTimeout, "ls", "/"+testFolder)
+	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "deleteme.txt", "ls", "/"+testFolder)
 
 	// Graceful shutdown.
 	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
@@ -331,7 +331,7 @@ func TestE2E_SyncWatch_FolderCreation(t *testing.T) {
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
+		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 
 	// Create deeply nested structure.
 	localDir := filepath.Join(syncDir, testFolder, "a", "b", "c")
@@ -343,7 +343,7 @@ func TestE2E_SyncWatch_FolderCreation(t *testing.T) {
 	))
 
 	// Poll until the deep file appears remotely.
-	pollCLIWithConfigContains(t, cfgPath, env, "deep.txt", daemonPollTimeout, "ls", "/"+testFolder+"/a/b/c")
+	waitForRemoteReadContains(t, cfgPath, env, "", "deep.txt", daemonPollTimeout, "ls", "/"+testFolder+"/a/b/c")
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -362,7 +362,7 @@ func TestE2E_SyncWatch_MultipleFiles(t *testing.T) {
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
+		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 
 	// Create 5 files.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -380,7 +380,7 @@ func TestE2E_SyncWatch_MultipleFiles(t *testing.T) {
 	// Poll until all 5 files appear remotely.
 	for i := 1; i <= 5; i++ {
 		name := fmt.Sprintf("multi-%d.txt", i)
-		pollCLIWithConfigContains(t, cfgPath, env, name, daemonPollTimeout, "ls", "/"+testFolder)
+		waitForRemoteReadContains(t, cfgPath, env, "", name, daemonPollTimeout, "ls", "/"+testFolder)
 	}
 
 	// Graceful shutdown.
@@ -400,7 +400,7 @@ func TestE2E_SyncWatch_LargeFile(t *testing.T) {
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
+		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 
 	// Create 5 MiB file with deterministic content.
 	const fileSize = 5 * 1024 * 1024
@@ -416,7 +416,7 @@ func TestE2E_SyncWatch_LargeFile(t *testing.T) {
 
 	// Poll until the file appears remotely with correct size.
 	remotePath := "/" + testFolder + "/large-watch.bin"
-	pollCLIWithConfigContains(t, cfgPath, env, fmt.Sprintf("%d bytes", fileSize), daemonPollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, cfgPath, env, "", fmt.Sprintf("%d bytes", fileSize), daemonPollTimeout, "stat", remotePath)
 
 	// Download and verify byte-for-byte integrity.
 	downloadDir := t.TempDir()
@@ -444,7 +444,7 @@ func TestE2E_SyncWatch_RapidChurn(t *testing.T) {
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
+		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 
 	// Create file and rapidly modify it.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -457,7 +457,7 @@ func TestE2E_SyncWatch_RapidChurn(t *testing.T) {
 
 	// Wait for file to appear remotely.
 	remotePath := "/" + testFolder + "/churn-watch.txt"
-	pollCLIWithConfigContains(t, cfgPath, env, "churn-watch.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, cfgPath, env, "", "churn-watch.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Poll remote until content matches final version.
 	deadline := time.Now().Add(daemonPollTimeout)
@@ -493,7 +493,7 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 
 	// Start upload-only daemon.
 	cmd := startDaemon(t, cfgPath, env,
-		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
+		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 
 	// Create first file and wait for daemon to sync it.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -505,7 +505,7 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	))
 
 	remotePath := "/" + testFolder + "/before-shutdown.txt"
-	pollCLIWithConfigContains(t, cfgPath, env, "before-shutdown.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, cfgPath, env, "", "before-shutdown.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -528,8 +528,8 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	assert.Contains(t, stderr, "Uploads:", "one-shot should report uploads")
 
 	// Verify both files exist remotely.
-	pollCLIWithConfigContains(t, cfgPath, env, "after-shutdown.txt", pollTimeout, "stat", "/"+testFolder+"/after-shutdown.txt")
-	pollCLIWithConfigContains(t, cfgPath, env, "before-shutdown.txt", pollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, cfgPath, env, "", "after-shutdown.txt", pollTimeout, "stat", "/"+testFolder+"/after-shutdown.txt")
+	waitForRemoteReadContains(t, cfgPath, env, "", "before-shutdown.txt", pollTimeout, "stat", remotePath)
 }
 
 // TestE2E_SyncWatch_TimedPauseExpiry starts a daemon, pauses the drive with
@@ -545,7 +545,7 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 
 	// Start upload-only daemon (with stderr access for polling).
 	h := startDaemonWithStderr(t, cfgPath, env,
-		"--drive", selectedDriveForEnv(env), "sync", "--upload-only", "--watch")
+		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 	cmd := h.Cmd
 
 	// Pause for 5 seconds.
@@ -581,7 +581,7 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	postControlSocket(t, env, "/v1/reload")
 
 	// Poll until file appears remotely (daemon should now be unpaused).
-	pollCLIWithConfigContains(t, cfgPath, env, "paused-file.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteReadContains(t, cfgPath, env, "", "paused-file.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))

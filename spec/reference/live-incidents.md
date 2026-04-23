@@ -22,7 +22,7 @@ Promotion contract:
 | LI-20260422-01 | Nightly `e2e_full` buckets still carried removed manual-resolution and path-narrowing workflows | fixed | test bug | 2026-04-23 | yes |
 | LI-20260422-02 | Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair | fixed | product bug | 2026-04-22 | no |
 | LI-20260422-03 | Shared-drive sync startup still aborted when `sync_dir` did not exist yet | fixed | product bug | 2026-04-22 | no |
-| LI-20260422-04 | Shared-folder `drive list` exact-selector check assumed one-pass search visibility | fixed | test harness | 2026-04-22 | yes |
+| LI-20260422-04 | Shared-folder `drive list` exact-selector check assumed one-pass search visibility | fixed | test harness | 2026-04-23 | yes |
 | LI-20260422-05 | Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work | fixed | test harness | 2026-04-22 | yes |
 | LI-20260417-01 | Nightly `e2e_full` preflight duplicated `TestE2E_Status_ConfigTolerance` and stopped before live full-suite coverage | fixed | test bug | 2026-04-22 | yes |
 | LI-20260420-01 | Fast E2E smoke `get` exhausted the documented download-metadata `404` quirk budget | mitigated | graph quirk | 2026-04-20 | yes |
@@ -36,7 +36,7 @@ Promotion contract:
 | LI-20260410-01 | Server-side copy rejected a freshly visible destination folder | fixed | graph quirk | 2026-04-10 | no |
 | LI-20260408-03 | Serialized `e2e_full` package exceeded the old 30-minute harness timeout | fixed | test harness | 2026-04-08 | no |
 | LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
-| LI-20260408-01 | Immediate post-simple-upload mtime PATCH returned `404 itemNotFound` | mitigated | graph quirk | 2026-04-22 | yes |
+| LI-20260408-01 | Immediate post-simple-upload mtime PATCH failed transiently after successful create | mitigated | graph quirk | 2026-04-23 | yes |
 | LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-19 | yes |
 | LI-20260405-09 | Recently created parent folder lagged child create and child-list routes | mitigated | graph quirk | 2026-04-23 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
@@ -55,7 +55,7 @@ Promotion contract:
 ## LI-20260417-01: Nightly `e2e_full` preflight duplicated `TestE2E_Status_ConfigTolerance` and stopped before live full-suite coverage
 
 First seen: 2026-04-17
-Last seen: 2026-04-22
+Last seen: 2026-04-23
 Area: scheduled `e2e_full`, drive-list/status tolerance coverage
 Suite / test: scheduled CI runs `24560684468`, `24602596763`,
 `24662080702`, `24717800559`, and `24773770364`; `e2e` job,
@@ -323,6 +323,12 @@ Evidence:
 - The fixture selectors in `.testdata/fixtures.env` already matched those
   exact IDs, which ruled out stale fixture configuration and isolated the
   failure to one provider search-visibility window.
+- Local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on April
+  23, 2026 recurred in `TestE2E_DriveList_AllFlag`: the first
+  `drive list --json` returned one shared available canonical ID, while the
+  immediate follow-on `drive list --json --all` on the same config returned
+  `"available": []`. That showed the same provider family can also break
+  repeated-output comparisons, not just exact-selector assertions.
 Resolution / mitigation: the full-suite shared-folder drive-list assertion now
 polls `drive list --json` for the exact selector across one ordinary read-only
 propagation window. If Graph still never exposes the known fixture on that run,
@@ -330,6 +336,10 @@ the test skips with the last live command output instead of failing the nightly
 lane as though the product regressed. The promoted system and Graph quirk docs
 now say explicitly that repo-owned live fixture validation must treat one empty
 search pass as a provider limitation window, not a deterministic product fact.
+The same policy now also applies to `default` versus `--all` comparisons:
+nightly drive-list checks poll `drive list --json --all` until it contains the
+default-visible shared entries from the earlier pass, and skip if Graph never
+stabilizes within one ordinary read-only window.
 Promoted docs: [system.md](../design/system.md), [graph-api-quirks.md](graph-api-quirks.md)
 
 ## LI-20260422-05: Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work
@@ -789,10 +799,10 @@ re-listing the parent collection under the bounded post-mutation visibility
 budget instead of replaying the create request.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md)
 
-## LI-20260408-01: Immediate post-simple-upload mtime PATCH returned `404 itemNotFound`
+## LI-20260408-01: Immediate post-simple-upload mtime PATCH failed transiently after successful create
 
 First seen: 2026-04-08
-Last seen: 2026-04-22
+Last seen: 2026-04-23
 Area: fast E2E, full E2E, CLI `put`, simple-upload finalization
 Suite / test: local `go run ./cmd/devtool verify default`, `TestE2E_RoundTrip/rm_permanent` setup `put`
 Classification: graph quirk
@@ -800,9 +810,9 @@ Status: mitigated
 Recurring: yes
 Summary: Graph can return a concrete item ID from a successful small-file
 simple upload and then immediately reject the follow-on
-`UpdateFileSystemInfo` PATCH for that same item with `404 itemNotFound`. The
-file creation itself succeeded; the failure is a false negative in the mtime
-preservation step.
+`UpdateFileSystemInfo` PATCH for that same item with a transient false
+negative (`404 itemNotFound`) or a transient 502/503/504 service failure. The
+file creation itself succeeded; the failure is in the mtime preservation step.
 Evidence:
 - Local `go run ./cmd/devtool verify default` on April 8, 2026 uploaded
   `/onedrive-go-e2e-1775667044557991000/perm-test.txt` successfully via
@@ -825,15 +835,30 @@ Evidence:
   follow-on `PATCH /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s092611d0ad674c02b5d0f2b7c48d00b1`
   still returned HTTP 404 `itemNotFound` on six straight attempts between
   14:12:48 and 14:12:59 PDT before the old budget exhausted.
+- Local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on
+  April 23, 2026 hit the same boundary again in
+  `TestE2E_SyncWatch_FileDeletion`.
+- The simple upload itself succeeded and returned item ID
+  `BD50CF43646E28E6!s5bf7484a62804c52a3304385a4586cfd`, but the immediate
+  follow-on `PATCH /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s5bf7484a62804c52a3304385a4586cfd`
+  returned HTTP 504 `UnknownError` with request ID
+  `0bb61a88-1a17-44e0-bed9-e92c3b6bc0b7`.
+- The later watch deletion failure was secondary: the file content already
+  existed remotely, but the failed finalization PATCH left the upload in a
+  false-failed state, so upload-only watch planned the later local delete as
+  deferred remote drift instead of a remote delete.
 Resolution / mitigation: simple-upload finalization now owns a bounded retry
-for the exact follow-on `UpdateFileSystemInfo` `404 itemNotFound` case.
-Direct `UpdateFileSystemInfo()` calls remain strict; only the immediate
+for the exact follow-on `UpdateFileSystemInfo` `404 itemNotFound` case and the
+same immediate boundary's transient 502/503/504 service failures. Direct
+`UpdateFileSystemInfo()` calls remain strict; only the immediate
 post-simple-upload patch gets this normalization. The April 10, 2026
 recurrence widened the budget to 6 total attempts with a 250ms base, 2x
 multiplier, no jitter, and 4s max. The April 22, 2026 shared-root recurrence
 showed that budget still under-ran live item-ID visibility, so the production
 policy is now 7 total attempts with the same 250ms / 2x / no-jitter curve and
-an 8s max delay.
+an 8s max delay. The April 23, 2026 watch recurrence broadened the same
+bounded quirk matcher to include transient 502/503/504 server failures on
+that exact post-upload PATCH edge.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [transfers.md](../requirements/transfers.md)
 
 ## LI-20260405-06: Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure

@@ -242,8 +242,13 @@ lessons:
 1. `spec/reference/graph-api-quirks.md`
 2. `spec/reference/onedrive-sync-behavior.md`
 3. `spec/reference/live-incidents.md`
-4. `spec/reference/onedrive-glossary.md`
-5. `spec/reference/sync-ecosystem.md`
+4. `spec/reference/live-recurring-families.md`
+5. `spec/reference/onedrive-glossary.md`
+6. `spec/reference/sync-ecosystem.md`
+
+For live failures, read `live-incidents.md` first to find the chronology and
+matching evidence. Then use `live-recurring-families.md` to open the current
+repo policy for that family without replaying the whole ledger.
 
 This step is what keeps a new developer from treating Graph, OneDrive, and live
 sync behavior as a clean-room abstraction.
@@ -654,8 +659,9 @@ use this:
 1. `spec/reference/graph-api-quirks.md`
 2. `spec/reference/onedrive-sync-behavior.md`
 3. `spec/reference/live-incidents.md`
-4. `internal/devtool/*`
-5. `e2e/*`
+4. `spec/reference/live-recurring-families.md`
+5. `internal/devtool/*`
+6. `e2e/*`
 
 ### Week 3
 

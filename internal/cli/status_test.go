@@ -1022,6 +1022,52 @@ func TestPrintStatusJSON_WithConditions(t *testing.T) {
 	assert.Equal(t, "Shared/Team Docs", result.Accounts[0].Drives[0].SyncState.Conditions[0].Scope)
 }
 
+func TestPrintStatusJSON_SyncStateOmitsLegacyHistoryKeys(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Email:     "alice@example.com",
+			DriveType: "personal",
+			AuthState: authStateReady,
+			Drives: []statusDrive{
+				{
+					CanonicalID: "personal:alice@example.com",
+					SyncDir:     "~/OneDrive",
+					State:       driveStateReady,
+					SyncState: &syncStateInfo{
+						FileCount:      12,
+						ConditionCount: 0,
+						ExamplesLimit:  5,
+					},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusJSON(&buf, accounts))
+
+	var decoded struct {
+		Accounts []struct {
+			Drives []struct {
+				SyncState json.RawMessage `json:"sync_state"`
+			} `json:"drives"`
+		} `json:"accounts"`
+	}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+	require.Len(t, decoded.Accounts, 1)
+	require.Len(t, decoded.Accounts[0].Drives, 1)
+	require.NotEmpty(t, decoded.Accounts[0].Drives[0].SyncState)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(decoded.Accounts[0].Drives[0].SyncState, &raw))
+	assert.Contains(t, raw, "file_count")
+	assert.NotContains(t, raw, "last_sync_time")
+	assert.NotContains(t, raw, "last_sync_duration")
+	assert.NotContains(t, raw, "last_error")
+}
+
 // --- printStatusText ---
 
 func TestPrintStatusText_NoDrives(t *testing.T) {

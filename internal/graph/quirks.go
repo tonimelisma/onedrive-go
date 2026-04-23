@@ -121,7 +121,25 @@ func isTransientDownloadMetadataError(err error) (*GraphError, bool) {
 }
 
 func isTransientSimpleUploadMtimeError(err error) (*GraphError, bool) {
-	return isTransientItemNotFoundError(err)
+	if graphErr, ok := isTransientItemNotFoundError(err); ok {
+		return graphErr, true
+	}
+
+	if !errors.Is(err, ErrServerError) {
+		return nil, false
+	}
+
+	var graphErr *GraphError
+	if !errors.As(err, &graphErr) {
+		return nil, false
+	}
+
+	switch graphErr.StatusCode {
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return graphErr, true
+	default:
+		return nil, false
+	}
 }
 
 func isTransientSimpleUploadCreateError(err error) (*GraphError, bool) {
