@@ -374,7 +374,7 @@ func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
 	mounts, err := buildConfiguredMountSpecs(resolvedDrivesWithSelection(cfg.Drives))
 	require.NoError(t, err)
 
-	work, summary, reports := orch.prepareRunOnceWork(t.Context(), mounts, syncengine.SyncBidirectional, syncengine.RunOptions{})
+	work, summary, reports := orch.prepareRunOnceWork(t.Context(), syncengine.SyncBidirectional, mounts, syncengine.RunOptions{})
 	require.Len(t, work, 1)
 	require.Len(t, summary.Results, 1)
 	require.Len(t, reports, 1)

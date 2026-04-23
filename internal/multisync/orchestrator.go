@@ -133,7 +133,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		slog.String("mode", mode.String()),
 	)
 
-	work, startup, reports := o.prepareRunOnceWork(ctx, mounts, mode, opts)
+	work, startup, reports := o.prepareRunOnceWork(ctx, mode, mounts, opts)
 
 	// Run all mounts concurrently.
 	var wg gosync.WaitGroup
@@ -332,7 +332,7 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 		}()
 	}
 
-	runners, startResults := o.startInitialWatchRunners(ctx, mounts, mode, opts)
+	runners, startResults := o.startInitialWatchRunners(ctx, mode, mounts, opts)
 	startSummary := summarizeStartupResults(startResults)
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
 		return err
