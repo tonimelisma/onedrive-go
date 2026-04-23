@@ -25,31 +25,22 @@ func TestValidateBlockScope(t *testing.T) {
 	}{
 		{
 			name:    "missing key",
-			block:   &BlockScope{},
+			block:   testBlockScope(ScopeKey{}, 0, time.Time{}),
 			wantErr: "missing scope key",
 		},
 		{
-			name: "missing interval",
-			block: &BlockScope{
-				Key: SKService(),
-			},
+			name:    "missing interval",
+			block:   testBlockScope(SKService(), 0, time.Time{}),
 			wantErr: "positive trial interval",
 		},
 		{
-			name: "missing next trial",
-			block: &BlockScope{
-				Key:           SKService(),
-				TrialInterval: time.Second,
-			},
+			name:    "missing next trial",
+			block:   testBlockScope(SKService(), time.Second, time.Time{}),
 			wantErr: "timed scope requires next_trial_at",
 		},
 		{
-			name: "valid scope",
-			block: &BlockScope{
-				Key:           SKService(),
-				TrialInterval: time.Second,
-				NextTrialAt:   nextTrialAt,
-			},
+			name:  "valid scope",
+			block: testBlockScope(SKService(), time.Second, nextTrialAt),
 		},
 	}
 
@@ -74,11 +65,11 @@ func TestSyncStore_UpsertBlockScope(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	block := &BlockScope{
-		Key:           SKThrottleDrive(driveid.New("0000000000000001")),
-		TrialInterval: 5 * time.Second,
-		NextTrialAt:   time.Date(2025, 6, 15, 10, 0, 5, 0, time.UTC),
-	}
+	block := testBlockScope(
+		SKThrottleDrive(driveid.New("0000000000000001")),
+		5*time.Second,
+		time.Date(2025, 6, 15, 10, 0, 5, 0, time.UTC),
+	)
 
 	require.NoError(t, store.UpsertBlockScope(ctx, block))
 
@@ -107,11 +98,11 @@ func TestSyncStore_UpsertBlockScope_RejectsReadBoundaryScopes(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
 
-	err := store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermRemoteRead("Shared/TeamDocs"),
-		TrialInterval: time.Second,
-		NextTrialAt:   now.Add(time.Second),
-	})
+	err := store.UpsertBlockScope(ctx, testBlockScope(
+		SKPermRemoteRead("Shared/TeamDocs"),
+		time.Second,
+		now.Add(time.Second),
+	))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read boundaries belong in observation_issues")
 }
@@ -123,11 +114,7 @@ func TestSyncStore_DeleteBlockScope(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	block := &BlockScope{
-		Key:           SKService(),
-		TrialInterval: 10 * time.Second,
-		NextTrialAt:   time.Now().Add(10 * time.Second).UTC(),
-	}
+	block := testBlockScope(SKService(), 10*time.Second, time.Now().Add(10*time.Second).UTC())
 
 	require.NoError(t, store.UpsertBlockScope(ctx, block))
 	require.NoError(t, store.DeleteBlockScope(ctx, SKService()))
@@ -166,11 +153,7 @@ func TestSyncStore_ListBlockScopes_SkipsZeroScopeKeys(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKService(),
-		TrialInterval: 5 * time.Second,
-		NextTrialAt:   now.Add(5 * time.Second),
-	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, testBlockScope(SKService(), 5*time.Second, now.Add(5*time.Second))))
 
 	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -231,11 +214,11 @@ func TestSyncStore_BlockScope_Roundtrip(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	original := &BlockScope{
-		Key:           SKPermRemoteWrite("Shared/TeamDocs"),
-		TrialInterval: 2*time.Minute + 500*time.Millisecond,
-		NextTrialAt:   time.Date(2025, 3, 14, 9, 28, 53, 987654321, time.UTC),
-	}
+	original := testBlockScope(
+		SKPermRemoteWrite("Shared/TeamDocs"),
+		2*time.Minute+500*time.Millisecond,
+		time.Date(2025, 3, 14, 9, 28, 53, 987654321, time.UTC),
+	)
 
 	require.NoError(t, store.UpsertBlockScope(ctx, original))
 
