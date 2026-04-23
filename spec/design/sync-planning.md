@@ -68,7 +68,7 @@ same derivation rather than a second planner-shaped helper.
 5. Emit the current runtime action set, including conflict expansion into
    concrete actions.
 6. Expand folder delete cascades so descendants get explicit work.
-7. Enrich actions with target-drive and target-root metadata.
+7. Bind ordinary actions to the engine's mounted drive/root context.
 8. Build dependency edges and reject dependency cycles.
 
 ## File Decisions
@@ -170,18 +170,21 @@ Local or remote moves that stay within one drive become move actions. Moves
 that cross drive ownership are decomposed into delete + upload because Graph
 move is a single-drive operation.
 
-## Shared-Root Target Metadata
+## Mount-Local Planning
 
-Some configured drives are rooted below the remote drive root. The planner
-therefore enriches actions with:
+Some engines are rooted below the remote drive root. The planner therefore
+receives engine-owned mount context:
 
-- `TargetDriveID`
-- `TargetRootItemID`
-- `TargetRootLocalPath`
+- `DriveID`
+- `RootItemID`
 
-This lets execution and post-mutation path convergence address the correct
-remote drive and strip the correct local shared-root prefix without
-rediscovering that ownership ad hoc.
+Ordinary sync actions are bound directly to that mounted subtree. When
+`MakeAction(...)` leaves `Action.DriveID` empty for brand-new local work, the
+planner fills it from the mount context before runtime admission. Ordinary
+actions do not carry separate target-drive or target-root override fields.
+
+Cross-drive move decomposition still happens in planning. By the time work
+reaches execution, ordinary actions are mount-local concrete work.
 
 ## Directional Suppression
 

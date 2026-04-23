@@ -19,9 +19,9 @@ func TestScope_429FallbackInterval(t *testing.T) {
 
 	// 429 without Retry-After should use the defaultInitialTrialInterval fallback.
 	r := ActionCompletion{
-		Path:          "/file-a.txt",
-		HTTPStatus:    429,
-		TargetDriveID: driveid.New("0000000000000001"),
+		Path:       "/file-a.txt",
+		HTTPStatus: 429,
+		DriveID:    driveid.New("0000000000000001"),
 	}
 	result := ss.UpdateScope(&r)
 
@@ -66,10 +66,10 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 			ss := NewScopeState(clock, discardLogger())
 
 			result := ss.UpdateScope(&ActionCompletion{
-				Path:          tt.path,
-				HTTPStatus:    tt.status,
-				RetryAfter:    tt.retryAfter,
-				TargetDriveID: driveid.New("0000000000000001"),
+				Path:       tt.path,
+				HTTPStatus: tt.status,
+				RetryAfter: tt.retryAfter,
+				DriveID:    driveid.New("0000000000000001"),
 			})
 
 			require.True(t, result.Block, "Retry-After should force an immediate block scope")
@@ -496,7 +496,7 @@ func TestScopeKeyForResult(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), ScopeKeyForResult(429, driveid.New("0000000000000001")))
-	assert.True(t, ScopeKeyForResult(429, driveid.ID{}).IsZero(), "429 without a target drive should be zero")
+	assert.True(t, ScopeKeyForResult(429, driveid.ID{}).IsZero(), "429 without a drive id should be zero")
 	assert.Equal(t, SKService(), ScopeKeyForResult(503, driveid.ID{}))
 	assert.Equal(t, SKService(), ScopeKeyForResult(500, driveid.ID{}))
 	assert.Equal(t, SKService(), ScopeKeyForResult(502, driveid.ID{}))

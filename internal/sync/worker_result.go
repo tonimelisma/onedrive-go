@@ -31,12 +31,6 @@ type ActionCompletion struct {
 	// for initial trial timing (R-2.10.7, R-2.10.8).
 	RetryAfter time.Duration
 
-	// TargetDriveID is the actual drive ID targeted by this action. For
-	// normal drives, equals DriveID. For shared-folder drives rooted below the
-	// remote drive root, it still names the backing drive so classification and
-	// cleanup use one consistent authority boundary.
-	TargetDriveID driveid.ID
-
 	// IsTrial is true if this was a scope trial action (R-2.10.5).
 	IsTrial bool
 
@@ -54,15 +48,10 @@ func (r *ActionCompletion) ThrottleTargetKey() string {
 	if r == nil {
 		return ""
 	}
-
-	targetDriveID := r.TargetDriveID
-	if targetDriveID.IsZero() {
-		targetDriveID = r.DriveID
-	}
-	if targetDriveID.IsZero() {
+	if r.DriveID.IsZero() {
 		return ""
 	}
-	return throttleDriveParam(targetDriveID)
+	return throttleDriveParam(r.DriveID)
 }
 
 // actionCompletionFromTrackedAction builds the shared runtime result shape for
@@ -77,11 +66,6 @@ func actionCompletionFromTrackedAction(
 	driveID := ta.Action.DriveID
 	if outcome != nil && !outcome.DriveID.IsZero() {
 		driveID = outcome.DriveID
-	} else if driveID.IsZero() && !ta.Action.TargetDriveID.IsZero() {
-		// Shortcut-targeted actions may defer drive resolution to execution time.
-		// When no concrete action drive was planned, retain the intended target
-		// drive so failure persistence and success cleanup address the same row.
-		driveID = ta.Action.TargetDriveID
 	}
 
 	r := ActionCompletion{
@@ -94,7 +78,6 @@ func actionCompletionFromTrackedAction(
 		ErrMsg:        "",
 		HTTPStatus:    ExtractHTTPStatus(actionErr),
 		RetryAfter:    ExtractRetryAfter(actionErr),
-		TargetDriveID: ta.Action.TargetDriveID,
 		IsTrial:       ta.IsTrial,
 		TrialScopeKey: ta.TrialScopeKey,
 		ActionID:      ta.ID,

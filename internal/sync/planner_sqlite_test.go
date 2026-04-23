@@ -77,6 +77,7 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 		remoteRows,
 		nil,
 		bl,
+		plannerMountContext{DriveID: driveID},
 		SyncBidirectional,
 	)
 	require.NoError(t, err)
@@ -146,6 +147,7 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 		remoteRows,
 		nil,
 		bl,
+		plannerMountContext{DriveID: driveID},
 		SyncBidirectional,
 	)
 	require.NoError(t, err)
@@ -254,6 +256,7 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteConflictResolutionWithout
 		remoteRows,
 		nil,
 		bl,
+		plannerMountContext{DriveID: driveID},
 		SyncUploadOnly,
 	)
 	require.NoError(t, err)
@@ -288,6 +291,7 @@ func planCurrentStateForStore(t *testing.T, store *SyncStore) *ActionPlan {
 		remoteRows,
 		observationIssues,
 		bl,
+		plannerMountContext{DriveID: driveid.New(engineTestDriveID)},
 		SyncBidirectional,
 	)
 	require.NoError(t, err)
@@ -314,6 +318,7 @@ func planCurrentStateForInputs(
 		remoteRows,
 		observationIssues,
 		baseline,
+		plannerMountContext{DriveID: driveid.New(engineTestDriveID)},
 		SyncBidirectional,
 	)
 	require.NoError(t, err)

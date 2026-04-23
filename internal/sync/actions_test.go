@@ -13,7 +13,6 @@ func TestAction_ThrottleTargetKey(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New("0000000000000001")
-	targetDriveID := driveid.New("0000000000000002")
 
 	tests := []struct {
 		name   string
@@ -26,15 +25,7 @@ func TestAction_ThrottleTargetKey(t *testing.T) {
 			want:   "",
 		},
 		{
-			name: "uses target drive id when present",
-			action: &Action{
-				DriveID:       driveID,
-				TargetDriveID: targetDriveID,
-			},
-			want: throttleDriveParam(targetDriveID),
-		},
-		{
-			name: "falls back to planned drive id",
+			name: "uses action drive id",
 			action: &Action{
 				DriveID: driveID,
 			},
