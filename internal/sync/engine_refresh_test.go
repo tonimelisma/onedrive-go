@@ -777,7 +777,7 @@ func TestWatchPipelineCleanup_KeepsRefreshResultChannelUsable(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		rt.finishFullRemoteRefresh(context.Background(), &remoteRefreshResult{})
+		rt.finishFullRemoteRefresh(context.Background(), &remoteObservationBatch{})
 		close(done)
 	}()
 

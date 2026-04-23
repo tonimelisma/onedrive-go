@@ -72,6 +72,12 @@ assemble overlapping observation-managed batch shapes ad hoc.
 - permission handler
 - optional websocket wake source
 
+Production entrypoints call `NewDriveEngine()` directly with the resolved
+drive, authenticated session, logger, perf collector, and drive-verification
+flag. There is no exported options wrapper or second config-builder layer.
+`engineInputs` remains an internal seam for focused engine tests, not a
+parallel production construction model.
+
 For separately configured shared-root drives, the engine also carries the
 configured `rootItemID`. That root item defines the remote boundary for scoped
 observation and execution metadata. Shared-root delta capability is resolved in
@@ -95,6 +101,11 @@ engine-owned permission-evidence handlers. The probe still returns facts only;
 the engine decides directly whether to persist delayed retry work, persist
 blocked retry work, activate a timed scope, or fall back to generic result
 handling.
+
+The remote permission probe walks boundaries directly from the engine-owned
+`driveID` and `rootItemID`. There is no separate remote-root carrier object;
+the root item ID is the only special case, and all ancestor walking uses the
+same boundary-path helpers the probe already owns.
 
 Permission timing follows the engine-owned runtime decision, not the probe:
 

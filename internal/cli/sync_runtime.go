@@ -30,7 +30,7 @@ func ensureResolvedSyncDir(rd *config.ResolvedDrive) error {
 }
 
 type syncDaemonOrchestrator interface {
-	RunWatch(context.Context, syncengine.Mode, syncengine.WatchOptions) error
+	RunWatch(context.Context, syncengine.SyncMode, syncengine.WatchOptions) error
 }
 
 type syncDaemonOrchestratorFactory func(*multisync.OrchestratorConfig) syncDaemonOrchestrator
@@ -46,7 +46,7 @@ func runSyncDaemon(
 	ctx context.Context,
 	holder *config.Holder,
 	selectors []string,
-	mode syncengine.Mode,
+	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	logger *slog.Logger,
 	statusWriter io.Writer,
@@ -69,7 +69,7 @@ func runSyncDaemonWithFactory(
 	ctx context.Context,
 	holder *config.Holder,
 	selectors []string,
-	mode syncengine.Mode,
+	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	logger *slog.Logger,
 	statusWriter io.Writer,

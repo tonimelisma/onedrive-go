@@ -47,7 +47,7 @@ func resolvePathDriveID(p string, bl *Baseline) driveid.ID {
 	return driveid.ID{}
 }
 
-func filterActionsForMode(actions []Action, mode Mode) []Action {
+func filterActionsForMode(actions []Action, mode SyncMode) []Action {
 	if len(actions) == 0 || mode == SyncBidirectional {
 		return actions
 	}
@@ -62,7 +62,7 @@ func filterActionsForMode(actions []Action, mode Mode) []Action {
 	return filtered
 }
 
-func actionAllowedInMode(action *Action, mode Mode) bool {
+func actionAllowedInMode(action *Action, mode SyncMode) bool {
 	switch action.Type {
 	case ActionDownload:
 		return mode != SyncUploadOnly
@@ -664,7 +664,7 @@ func expandFolderDeleteCascades(
 	actions []Action,
 	baseline *Baseline,
 	views map[string]*PathView,
-	mode Mode,
+	mode SyncMode,
 	logger *slog.Logger,
 ) []Action {
 	// Track the current action index for each path. Initial classification
@@ -790,7 +790,7 @@ func applyFolderDeleteCascade(
 	existingActionIndex map[string]actionLocation,
 	descendants []*BaselineEntry,
 	views map[string]*PathView,
-	mode Mode,
+	mode SyncMode,
 	cascadeKind cascadeDeleteKind,
 	cascaded *[]Action,
 ) bool {
@@ -888,7 +888,7 @@ func buildCascadedDescendantView(
 	return descView
 }
 
-func classifyCascadedDescendant(view *PathView, mode Mode) []Action {
+func classifyCascadedDescendant(view *PathView, mode SyncMode) []Action {
 	if view == nil {
 		return nil
 	}

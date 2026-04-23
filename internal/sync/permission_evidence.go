@@ -20,7 +20,3 @@ type PermissionEvidence struct {
 	LastError    string
 	HTTPStatus   int
 }
-
-func (e PermissionEvidence) Matched() bool {
-	return e.Kind != permissionEvidenceNone
-}

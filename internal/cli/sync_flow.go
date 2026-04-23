@@ -15,7 +15,7 @@ import (
 )
 
 type syncCommandOptions struct {
-	Mode          syncengine.Mode
+	Mode          syncengine.SyncMode
 	Watch         bool
 	DryRun        *bool
 	FullReconcile bool
@@ -25,7 +25,7 @@ type syncWatchRunner func(
 	ctx context.Context,
 	holder *config.Holder,
 	selectors []string,
-	mode syncengine.Mode,
+	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	logger *slog.Logger,
 	statusWriter io.Writer,
@@ -36,7 +36,7 @@ type syncRunOnceRunner func(
 	ctx context.Context,
 	holder *config.Holder,
 	drives []*config.ResolvedDrive,
-	mode syncengine.Mode,
+	mode syncengine.SyncMode,
 	opts syncengine.RunOptions,
 	logger *slog.Logger,
 	controlSocketPath string,
@@ -109,7 +109,7 @@ func runSyncWatch(
 	cc *CLIContext,
 	holder *config.Holder,
 	selectors []string,
-	mode syncengine.Mode,
+	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	logger *slog.Logger,
 	statusWriter io.Writer,
@@ -140,7 +140,7 @@ func runSyncOnce(
 	cc *CLIContext,
 	holder *config.Holder,
 	drives []*config.ResolvedDrive,
-	mode syncengine.Mode,
+	mode syncengine.SyncMode,
 	opts syncengine.RunOptions,
 	logger *slog.Logger,
 	controlSocketPath string,

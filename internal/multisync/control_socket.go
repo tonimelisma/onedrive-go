@@ -467,7 +467,7 @@ func perfCaptureErrorStatus(err error) (int, synccontrol.ErrorCode) {
 func (o *Orchestrator) handleControlCommand(
 	ctx context.Context,
 	cmd *controlCommand,
-	mode syncengine.Mode,
+	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runners map[driveid.CanonicalID]*watchRunner,
 ) bool {

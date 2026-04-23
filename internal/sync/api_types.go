@@ -28,8 +28,6 @@ type LocalObservationRules struct {
 	RejectSharePointRootForms bool
 }
 
-type Mode = SyncMode
-
 type (
 	RunOptions struct {
 		DryRun        bool
@@ -40,7 +38,7 @@ type (
 		Debounce     time.Duration // local/remote observation debounce window before replanning (0 -> 5s)
 	}
 	Report struct {
-		Mode     Mode
+		Mode     SyncMode
 		DryRun   bool
 		Duration time.Duration
 

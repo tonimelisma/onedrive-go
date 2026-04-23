@@ -22,10 +22,7 @@ func TestNewSyncEngine_EmptySyncDir(t *testing.T) {
 	}
 	logger := buildLogger(nil, CLIFlags{})
 
-	_, err := syncengine.NewDriveEngine(t.Context(), session, resolved, syncengine.DriveEngineOptions{
-		Logger:      logger,
-		VerifyDrive: false,
-	})
+	_, err := syncengine.NewDriveEngine(t.Context(), session, resolved, logger, nil, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sync_dir not configured")
 }
@@ -39,10 +36,7 @@ func TestNewSyncEngine_EmptyStatePath(t *testing.T) {
 	}
 	logger := buildLogger(nil, CLIFlags{})
 
-	_, err := syncengine.NewDriveEngine(t.Context(), session, resolved, syncengine.DriveEngineOptions{
-		Logger:      logger,
-		VerifyDrive: false,
-	})
+	_, err := syncengine.NewDriveEngine(t.Context(), session, resolved, logger, nil, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "state DB path")
 }
@@ -72,10 +66,7 @@ func TestNewSyncEngine_InvalidMinFreeSpace(t *testing.T) {
 		},
 	}
 
-	_, err = syncengine.NewDriveEngine(t.Context(), session, resolved, syncengine.DriveEngineOptions{
-		Logger:      logger,
-		VerifyDrive: false,
-	})
+	_, err = syncengine.NewDriveEngine(t.Context(), session, resolved, logger, nil, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid min_free_space")
 }
@@ -109,10 +100,7 @@ func TestNewSyncEngine_Success(t *testing.T) {
 		},
 	}
 
-	engine, err := syncengine.NewDriveEngine(t.Context(), session, resolved, syncengine.DriveEngineOptions{
-		Logger:      logger,
-		VerifyDrive: true,
-	})
+	engine, err := syncengine.NewDriveEngine(t.Context(), session, resolved, logger, nil, true)
 	require.NoError(t, err)
 	require.NotNil(t, engine)
 	require.NoError(t, engine.Close(t.Context()))

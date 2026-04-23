@@ -101,7 +101,7 @@ func resolveSyncDryRun(cfgDryRun bool, override *bool, watch bool) (bool, error)
 // false, so GetBool() would work identically. Changed() is preferred because
 // it directly expresses intent: "did the user explicitly set this flag?" This
 // is the standard Cobra pattern for flags where presence equals activation.
-func syncModeFromFlags(cmd *cobra.Command) syncengine.Mode {
+func syncModeFromFlags(cmd *cobra.Command) syncengine.SyncMode {
 	if cmd.Flags().Changed("download-only") {
 		return syncengine.SyncDownloadOnly
 	}

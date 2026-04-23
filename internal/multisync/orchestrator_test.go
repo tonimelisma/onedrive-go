@@ -400,7 +400,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		captured = &req
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				select {
 				case started <- struct{}{}:
 				default:
@@ -575,7 +575,7 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runOnceFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+			runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 				close(started)
 				select {
 				case <-release:
@@ -625,11 +625,11 @@ type mockEngine struct {
 	err         error
 	shouldPanic bool
 	closed      bool
-	runOnceFn   func(ctx context.Context, mode syncengine.Mode, opts syncengine.RunOptions) (*syncengine.Report, error)
-	runWatchFn  func(ctx context.Context, mode syncengine.Mode, opts syncengine.WatchOptions) error
+	runOnceFn   func(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error)
+	runWatchFn  func(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error
 }
 
-func (m *mockEngine) RunOnce(ctx context.Context, mode syncengine.Mode, opts syncengine.RunOptions) (*syncengine.Report, error) {
+func (m *mockEngine) RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error) {
 	if m.shouldPanic {
 		panic("mock engine panic")
 	}
@@ -640,7 +640,7 @@ func (m *mockEngine) RunOnce(ctx context.Context, mode syncengine.Mode, opts syn
 	return m.report, m.err
 }
 
-func (m *mockEngine) RunWatch(ctx context.Context, mode syncengine.Mode, opts syncengine.WatchOptions) error {
+func (m *mockEngine) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
 	if m.runWatchFn != nil {
 		return m.runWatchFn(ctx, mode, opts)
 	}
@@ -671,7 +671,7 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				close(watchStarted)
 				<-ctx.Done()
 				return ctx.Err()
@@ -718,7 +718,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				return ctx.Err()
@@ -769,7 +769,7 @@ func TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts
 		}
 
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				close(watchStarted)
 				<-ctx.Done()
 				return ctx.Err()
@@ -861,7 +861,7 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	watchStarted := make(chan struct{})
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				close(watchStarted)
 				<-ctx.Done()
 				return ctx.Err()
@@ -963,7 +963,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				return ctx.Err()
@@ -1019,7 +1019,7 @@ func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				stopped.Add(1)
@@ -1075,7 +1075,7 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				stopped.Add(1)
@@ -1130,7 +1130,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				return ctx.Err()
@@ -1190,7 +1190,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.Mode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				stopped.Add(1)
