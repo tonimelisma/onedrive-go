@@ -196,6 +196,40 @@ func TestCLIContextSession_Success(t *testing.T) {
 	assert.Equal(t, cc.Cfg.DriveID, session.DriveID)
 }
 
+func TestCLIContextSession_ConfiguredRootItemReachesInteractiveSession(t *testing.T) {
+	setTestDriveHome(t)
+
+	logger := slog.New(slog.DiscardHandler)
+	provider := driveops.NewSessionRuntime(nil, "test-agent", logger)
+	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
+		return staticTokenSource{}, nil
+	}
+
+	ownerCID := driveid.MustCanonicalID("personal:user@example.com")
+	sharedCID := driveid.MustCanonicalID("shared:user@example.com:remote-drive:root-item")
+	seedCatalogDrive(t, sharedCID, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = "remote-drive"
+		drive.OwnerAccountCanonical = ownerCID.String()
+	})
+
+	cc := &CLIContext{
+		Logger: logger,
+		Cfg: &config.ResolvedDrive{
+			CanonicalID: sharedCID,
+			DriveID:     driveid.New("remote-drive"),
+			RootItemID:  "root-item",
+		},
+		Runtime: provider,
+	}
+
+	session, err := cc.Session(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, driveid.New("remote-drive"), session.DriveID)
+	assert.Equal(t, "root-item", session.MountedRootItemID)
+	assert.Equal(t, "user@example.com", session.AccountEmail())
+}
+
 func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 	setTestDriveHome(t)
 

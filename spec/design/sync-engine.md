@@ -79,13 +79,11 @@ Production entrypoints now call `NewMountEngine()` with:
   runtime facts for that mount
 - logger, perf collector, and drive-verification flag
 
-`NewDriveEngine()` remains as the transitional resolved-drive constructor for
-callers that still hold a `ResolvedDrive`. It validates the resolved drive,
-parses config-shaped fields such as `min_free_space`, builds
-`EngineMountConfig`, and then delegates to `NewMountEngine()`. There is no
-extra exported builder layer above `EngineMountConfig`, and `engineInputs`
-remains an internal seam for focused engine tests rather than a parallel
-production construction model.
+`NewMountEngine()` is the only exported engine constructor. Config-shaped
+inputs such as `ResolvedDrive` are compiled into `EngineMountConfig` above the
+engine boundary; there is no extra exported builder layer above
+`EngineMountConfig`, and `engineInputs` remains an internal seam for focused
+engine tests rather than a parallel production construction model.
 
 For rooted-subtree runtimes, the engine also carries the configured
 `rootItemID`. That root item defines the remote boundary for scoped

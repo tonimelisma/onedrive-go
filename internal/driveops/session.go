@@ -41,9 +41,9 @@ type AccountClients struct {
 	Account  driveid.CanonicalID
 }
 
-// SyncMountSessionConfig is the mount-owned identity required to create the
-// authenticated session used by sync workers.
-type SyncMountSessionConfig struct {
+// MountSessionConfig is the mount-owned identity required to create an
+// authenticated interactive or sync session.
+type MountSessionConfig struct {
 	TokenOwnerCanonical driveid.CanonicalID
 	DriveID             driveid.ID
 	RootItemID          string
@@ -115,31 +115,26 @@ func NewSessionRuntime(holder *config.Holder, userAgent string, logger *slog.Log
 	}
 }
 
-// Session creates or retrieves an authenticated interactive Session for the
-// given resolved drive. Mounted-root sessions use a root-scoped throttle key so
-// interactive metadata retries stay scoped to the concrete remote root.
-func (r *SessionRuntime) Session(ctx context.Context, rd *config.ResolvedDrive) (*Session, error) {
-	sessionCfg, err := syncMountSessionConfigForResolvedDrive(rd)
-	if err != nil {
-		return nil, err
-	}
-
-	return r.session(ctx, &sessionCfg, r.interactiveClientsForDrive(rd))
+// InteractiveSession creates or retrieves an authenticated interactive Session
+// for one mounted remote root. Mounted-root sessions use a root-scoped throttle
+// key so interactive metadata retries stay scoped to the concrete remote root.
+func (r *SessionRuntime) InteractiveSession(ctx context.Context, mount *MountSessionConfig) (*Session, error) {
+	return r.session(ctx, mount, r.interactiveClientsForMount(mount))
 }
 
 // SyncSession creates or retrieves the authenticated Session used by sync
 // workers. Sync paths intentionally bypass retry-wrapped HTTP clients.
-func (r *SessionRuntime) SyncSession(ctx context.Context, mount *SyncMountSessionConfig) (*Session, error) {
+func (r *SessionRuntime) SyncSession(ctx context.Context, mount *MountSessionConfig) (*Session, error) {
 	return r.session(ctx, mount, r.syncClientSet())
 }
 
 func (r *SessionRuntime) session(
 	ctx context.Context,
-	mount *SyncMountSessionConfig,
+	mount *MountSessionConfig,
 	httpClients graphtransport.ClientSet,
 ) (*Session, error) {
 	if mount == nil {
-		return nil, fmt.Errorf("sync mount session config is required")
+		return nil, fmt.Errorf("mount session config is required")
 	}
 
 	tokenPath := config.DriveTokenPath(mount.TokenOwnerCanonical)
@@ -168,35 +163,17 @@ func (r *SessionRuntime) session(
 		slog.String("token_owner_canonical_id", mount.TokenOwnerCanonical.String()),
 	)
 
+	accountEmail := mount.AccountEmail
+	if accountEmail == "" {
+		accountEmail = mount.TokenOwnerCanonical.Email()
+	}
+
 	return &Session{
 		Meta:              meta,
 		Transfer:          transfer,
 		DriveID:           mount.DriveID,
 		MountedRootItemID: mount.RootItemID,
-		AccountEmailValue: mount.AccountEmail,
-	}, nil
-}
-
-func syncMountSessionConfigForResolvedDrive(rd *config.ResolvedDrive) (SyncMountSessionConfig, error) {
-	if rd == nil {
-		return SyncMountSessionConfig{}, fmt.Errorf("resolved drive is required")
-	}
-
-	tokenOwnerCanonical, err := config.TokenAccountCanonicalID(rd.CanonicalID)
-	if err != nil {
-		return SyncMountSessionConfig{}, fmt.Errorf("token owner for drive %q: %w", rd.CanonicalID, err)
-	}
-
-	accountEmail := rd.CanonicalID.Email()
-	if accountEmail == "" {
-		accountEmail = tokenOwnerCanonical.Email()
-	}
-
-	return SyncMountSessionConfig{
-		TokenOwnerCanonical: tokenOwnerCanonical,
-		DriveID:             rd.DriveID,
-		RootItemID:          rd.RootItemID,
-		AccountEmail:        accountEmail,
+		AccountEmailValue: accountEmail,
 	}, nil
 }
 
@@ -319,20 +296,23 @@ func (r *SessionRuntime) BootstrapMeta() *http.Client {
 	return r.bootstrapMeta
 }
 
-func (r *SessionRuntime) interactiveClientsForDrive(rd *config.ResolvedDrive) graphtransport.ClientSet {
-	if rd == nil {
+func (r *SessionRuntime) interactiveClientsForMount(mount *MountSessionConfig) graphtransport.ClientSet {
+	if mount == nil {
 		return graphtransport.ClientSet{
 			Meta:     r.BootstrapMeta(),
 			Transfer: r.syncClientSet().Transfer,
 		}
 	}
 
-	account := rd.CanonicalID.Email()
-	if rd.RootItemID != "" {
-		return r.interactiveClientsForSharedTarget(account, rd.DriveID.String(), rd.RootItemID)
+	account := mount.AccountEmail
+	if account == "" {
+		account = mount.TokenOwnerCanonical.Email()
+	}
+	if mount.RootItemID != "" {
+		return r.interactiveClientsForSharedTarget(account, mount.DriveID.String(), mount.RootItemID)
 	}
 
-	return r.interactiveClientsForKey(interactiveDriveKey(account, rd.DriveID))
+	return r.interactiveClientsForKey(interactiveDriveKey(account, mount.DriveID))
 }
 
 func (r *SessionRuntime) interactiveClientsForSharedTarget(
