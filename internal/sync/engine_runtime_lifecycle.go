@@ -253,7 +253,6 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 	interval := computeTrialInterval(retryAfter)
 	block := &ActiveScope{
 		Key:           to,
-		BlockedAt:     now,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
 	}
@@ -356,10 +355,6 @@ func (flow *engineFlow) discardScope(ctx context.Context, watch *watchRuntime, k
 	return nil
 }
 
-func blockedRetryWorkMessage(scopeKey ScopeKey) string {
-	return "blocked by scope: " + scopeKey.String()
-}
-
 func (flow *engineFlow) persistBlockedRetryWork(
 	ctx context.Context,
 	work RetryWorkKey,
@@ -378,8 +373,6 @@ func (flow *engineFlow) persistBlockedRetryWork(
 		ActionType:    work.ActionType,
 		ConditionType: failure.ScopeKey.ConditionType(),
 		ScopeKey:      failure.ScopeKey,
-		LastError:     blockedRetryWorkMessage(failure.ScopeKey),
-		HTTPStatus:    failure.HTTPStatus,
 		Blocked:       true,
 	}
 	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, persisted, nil)
@@ -464,8 +457,7 @@ func (flow *engineFlow) holdActionUnderScope(
 	}
 
 	if _, err := flow.persistBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), &RetryWorkFailure{
-		ScopeKey:   scopeKey,
-		HTTPStatus: r.HTTPStatus,
+		ScopeKey: scopeKey,
 	}); err != nil {
 		return err
 	}
@@ -482,8 +474,7 @@ func (flow *engineFlow) rehomeBlockedRetryWork(
 	scopeKey ScopeKey,
 ) error {
 	_, err := flow.persistBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), &RetryWorkFailure{
-		ScopeKey:   scopeKey,
-		HTTPStatus: r.HTTPStatus,
+		ScopeKey: scopeKey,
 	})
 	return err
 }

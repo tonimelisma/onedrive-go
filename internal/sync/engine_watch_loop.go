@@ -304,7 +304,6 @@ func (rt *watchRuntime) releaseHeldFrontier(
 		released, err = rt.releaseDueHeldRetriesNow(ctx, p.bl)
 	}
 	if err != nil {
-		rt.clearSyncStatusBatch()
 		rt.completeOutboxAsShutdown(released)
 		return err
 	}

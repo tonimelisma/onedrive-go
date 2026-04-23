@@ -82,14 +82,11 @@ func TestEngineFlow_PersistBlockedRetryWork_CanonicalizesRowsAcrossRuntimePaths(
 	}
 
 	want := normalize(RetryWorkRow{
-		WorkKey:       serializeRetryWorkKey(retryWorkKey("Shared/Docs/file.txt", "Shared/Docs/old.txt", ActionUpload)),
-		Path:          "Shared/Docs/file.txt",
-		OldPath:       "Shared/Docs/old.txt",
-		ActionType:    ActionUpload,
-		ConditionType: scopeKey.ConditionType(),
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-		LastError:     wantMessage,
+		Path:       "Shared/Docs/file.txt",
+		OldPath:    "Shared/Docs/old.txt",
+		ActionType: ActionUpload,
+		ScopeKey:   scopeKey,
+		Blocked:    true,
 	})
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -281,7 +278,6 @@ func TestEngineFlow_LoadActiveScopes_PopulatesRuntimeLifecycleWorkingSet(t *test
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     now.Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   now.Add(time.Minute),
 	}))

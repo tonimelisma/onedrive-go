@@ -145,9 +145,6 @@ func TestRunPublicationDrainStage_PublicationSuccessClearsRetryWorkAndAdmitsDepe
 		ActionType:   ActionCleanup,
 		AttemptCount: 1,
 		NextRetryAt:  now.Add(time.Minute).UnixNano(),
-		LastError:    "retry later",
-		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:   now.UnixNano(),
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
