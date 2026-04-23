@@ -183,7 +183,7 @@ func TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError(t *tes
 
 	p := &watchPipeline{
 		bl:            bl,
-		replanReady:   make(chan DirtyBatch),
+		replanReady:   make(chan dirtyBatch),
 		localEvents:   make(chan ChangeEvent),
 		remoteBatches: make(chan remoteObservationBatch),
 	}

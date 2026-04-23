@@ -68,8 +68,8 @@ func TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady(t *testing.T) 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	replanReady := make(chan DirtyBatch, 1)
-	replanReady <- DirtyBatch{}
+	replanReady := make(chan dirtyBatch, 1)
+	replanReady <- dirtyBatch{}
 
 	type idleResult struct {
 		done bool

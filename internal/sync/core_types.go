@@ -31,7 +31,7 @@ type ScanResult struct {
 }
 
 // ChangeEvent is an immutable observation fact produced by observers. The
-// runtime uses these facts to mark dirty paths/scopes and to describe local or
+// runtime uses these facts to mark coarse dirty/full-refresh signals and to describe local or
 // remote observation results, but they are not the durable sync truth and are
 // never stored in the database.
 //

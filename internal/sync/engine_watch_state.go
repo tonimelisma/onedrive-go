@@ -9,7 +9,7 @@ import (
 type watchLoopState struct {
 	phase            watchRuntimePhase
 	outbox           []*TrackedAction
-	pendingReplan    DirtyBatch
+	pendingReplan    dirtyBatch
 	hasPendingReplan bool
 
 	// syncBatch tracks the current best-effort watch batch so status updates are
@@ -199,7 +199,7 @@ func (rt *watchRuntime) canPrepareNow() bool {
 	return len(rt.loop.outbox) == 0 && rt.runningCount == 0
 }
 
-func (rt *watchRuntime) queuePendingReplan(batch DirtyBatch) {
+func (rt *watchRuntime) queuePendingReplan(batch dirtyBatch) {
 	rt.loop.hasPendingReplan = true
 	if batch.FullRefresh {
 		rt.loop.pendingReplan.FullRefresh = true
@@ -210,13 +210,13 @@ func (rt *watchRuntime) hasPendingReplan() bool {
 	return rt.loop.hasPendingReplan
 }
 
-func (rt *watchRuntime) takePendingReplan() (DirtyBatch, bool) {
+func (rt *watchRuntime) takePendingReplan() (dirtyBatch, bool) {
 	if !rt.hasPendingReplan() {
-		return DirtyBatch{}, false
+		return dirtyBatch{}, false
 	}
 
 	batch := rt.loop.pendingReplan
-	rt.loop.pendingReplan = DirtyBatch{}
+	rt.loop.pendingReplan = dirtyBatch{}
 	rt.loop.hasPendingReplan = false
 
 	return batch, true
