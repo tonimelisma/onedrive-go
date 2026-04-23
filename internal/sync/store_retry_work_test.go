@@ -15,18 +15,8 @@ func TestUpsertRetryWorkAndPruneToCurrentActions(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "keep.txt",
-		ActionType:   ActionUpload,
-		AttemptCount: 2,
-		NextRetryAt:  10,
-	}))
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "drop.txt",
-		ActionType:   ActionDownload,
-		AttemptCount: 1,
-		NextRetryAt:  20,
-	}))
+	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("keep.txt", "", ActionUpload, 2, 10)))
+	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("drop.txt", "", ActionDownload, 1, 20)))
 
 	require.NoError(t, store.PruneRetryWorkToCurrentActions(ctx, []RetryWorkKey{
 		{Path: "keep.txt", ActionType: ActionUpload},
@@ -46,18 +36,8 @@ func TestRetryWorkPruneDistinguishesOldPathSemanticWork(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "dest.txt",
-		OldPath:      "src-a.txt",
-		ActionType:   ActionRemoteMove,
-		AttemptCount: 1,
-	}))
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "dest.txt",
-		OldPath:      "src-b.txt",
-		ActionType:   ActionRemoteMove,
-		AttemptCount: 1,
-	}))
+	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("dest.txt", "src-a.txt", ActionRemoteMove, 1, 0)))
+	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("dest.txt", "src-b.txt", ActionRemoteMove, 1, 0)))
 
 	require.NoError(t, store.PruneRetryWorkToCurrentActions(ctx, []RetryWorkKey{
 		{Path: "dest.txt", OldPath: "src-b.txt", ActionType: ActionRemoteMove},
@@ -78,25 +58,9 @@ func TestRetryWorkReadyAndTrialCandidateQueries(t *testing.T) {
 	ctx := t.Context()
 	now := time.Unix(50, 0)
 
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "retry-now.txt",
-		ActionType:   ActionDownload,
-		AttemptCount: 1,
-		NextRetryAt:  now.UnixNano(),
-	}))
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "retry-later.txt",
-		ActionType:   ActionUpload,
-		AttemptCount: 1,
-		NextRetryAt:  now.Add(time.Hour).UnixNano(),
-	}))
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "blocked.txt",
-		ActionType:   ActionRemoteDelete,
-		ScopeKey:     SKService(),
-		Blocked:      true,
-		AttemptCount: 2,
-	}))
+	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("retry-now.txt", "", ActionDownload, 1, now.UnixNano())))
+	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("retry-later.txt", "", ActionUpload, 1, now.Add(time.Hour).UnixNano())))
+	require.NoError(t, store.UpsertRetryWork(ctx, testBlockedRetryWorkRow("blocked.txt", "", ActionRemoteDelete, SKService(), 2)))
 
 	blocked, err := store.ListBlockedRetryWork(ctx)
 	require.NoError(t, err)
@@ -124,31 +88,10 @@ func TestCountRetryingWork_IgnoresBlockedAndLowAttemptRows(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "retrying-a.txt",
-		ActionType:   ActionUpload,
-		AttemptCount: 3,
-		NextRetryAt:  10,
-	}))
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "retrying-b.txt",
-		ActionType:   ActionDownload,
-		AttemptCount: 4,
-		NextRetryAt:  20,
-	}))
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "blocked.txt",
-		ActionType:   ActionRemoteDelete,
-		ScopeKey:     SKService(),
-		Blocked:      true,
-		AttemptCount: 7,
-	}))
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "fresh.txt",
-		ActionType:   ActionUpload,
-		AttemptCount: 2,
-		NextRetryAt:  30,
-	}))
+	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("retrying-a.txt", "", ActionUpload, 3, 10)))
+	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("retrying-b.txt", "", ActionDownload, 4, 20)))
+	require.NoError(t, store.UpsertRetryWork(ctx, testBlockedRetryWorkRow("blocked.txt", "", ActionRemoteDelete, SKService(), 7)))
+	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("fresh.txt", "", ActionUpload, 2, 30)))
 
 	count, err := store.CountRetryingWork(ctx)
 	require.NoError(t, err)
@@ -163,25 +106,9 @@ func TestRetryWorkScopeReadyAndDeleteHelpers(t *testing.T) {
 	ctx := t.Context()
 	now := time.Unix(75, 0).UnixNano()
 
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "delete-me.txt",
-		ActionType:   ActionUpload,
-		AttemptCount: 1,
-	}))
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "blocked-a.txt",
-		ActionType:   ActionRemoteDelete,
-		ScopeKey:     SKService(),
-		Blocked:      true,
-		AttemptCount: 2,
-	}))
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "blocked-b.txt",
-		ActionType:   ActionRemoteDelete,
-		ScopeKey:     SKService(),
-		Blocked:      true,
-		AttemptCount: 3,
-	}))
+	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("delete-me.txt", "", ActionUpload, 1, 0)))
+	require.NoError(t, store.UpsertRetryWork(ctx, testBlockedRetryWorkRow("blocked-a.txt", "", ActionRemoteDelete, SKService(), 2)))
+	require.NoError(t, store.UpsertRetryWork(ctx, testBlockedRetryWorkRow("blocked-b.txt", "", ActionRemoteDelete, SKService(), 3)))
 
 	require.NoError(t, deleteRetryWorkByWorkTx(ctx, store.db, RetryWorkKey{
 		Path:       "delete-me.txt",
@@ -323,9 +250,7 @@ func TestClearBlockedRetryWork_RemovesOnlyMatchingScopedWork(t *testing.T) {
 	require.NoError(t, err)
 
 	other := testRetryWorkRow("blocked.txt", "old.txt", ActionRemoteMove)
-	other.ScopeKey = SKService()
-	other.Blocked = true
-	other.AttemptCount = 2
+	other = *testBlockedRetryWorkRow(other.Path, other.OldPath, other.ActionType, SKService(), 2)
 	require.NoError(t, store.UpsertRetryWork(ctx, &other))
 
 	require.NoError(t, store.ClearBlockedRetryWork(ctx, RetryWorkKey{
@@ -378,8 +303,7 @@ func TestResolveRetryWork_PreservesUnrelatedRetryWorkOnSamePath(t *testing.T) {
 	require.NoError(t, err)
 
 	other := testRetryWorkRow("docs/report.txt", "old.txt", ActionRemoteMove)
-	other.AttemptCount = 2
-	other.NextRetryAt = time.Now().Add(time.Minute).UnixNano()
+	other = *testDelayedRetryWorkRow(other.Path, other.OldPath, other.ActionType, 2, time.Now().Add(time.Minute).UnixNano())
 	require.NoError(t, store.UpsertRetryWork(ctx, &other))
 
 	_, found, err := store.ResolveRetryWork(ctx, RetryWorkKey{
@@ -403,8 +327,7 @@ func TestResolveRetryWork_DeletesRetryWorkWithoutIssueRow(t *testing.T) {
 	ctx := t.Context()
 
 	row := testRetryWorkRow("docs/report.txt", "old.txt", ActionRemoteMove)
-	row.AttemptCount = 3
-	row.NextRetryAt = time.Now().Add(time.Minute).UnixNano()
+	row = *testDelayedRetryWorkRow(row.Path, row.OldPath, row.ActionType, 3, time.Now().Add(time.Minute).UnixNano())
 	require.NoError(t, store.UpsertRetryWork(ctx, &row))
 
 	resolved, found, err := store.ResolveRetryWork(ctx, RetryWorkKey{

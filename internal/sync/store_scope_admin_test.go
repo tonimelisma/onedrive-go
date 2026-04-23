@@ -94,11 +94,7 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 		DriveID:   driveID,
 		IssueType: IssueInvalidFilename,
 	})
-	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:           scopeKey,
-		TrialInterval: time.Second,
-		NextTrialAt:   time.Unix(2, 0),
-	}))
+	require.NoError(t, store.UpsertBlockScope(t.Context(), testBlockScope(scopeKey, time.Second, time.Unix(2, 0))))
 	_, err := store.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("Shared/Docs/a.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
 
@@ -127,11 +123,7 @@ func TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities(t *te
 		DriveID:   driveID,
 		IssueType: IssueInvalidFilename,
 	})
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermRemoteWrite("Private"),
-		TrialInterval: time.Minute,
-		NextTrialAt:   time.Unix(61, 0),
-	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, testBlockScope(SKPermRemoteWrite("Private"), time.Minute, time.Unix(61, 0))))
 
 	dbPath := syncStorePathForStoreScopeTest(t, store)
 	statuses, err := ReadPathTruthStatus(ctx, dbPath, testLogger(t), []string{
@@ -205,11 +197,7 @@ func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndPreservesObservatio
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
 	now := time.Date(2026, 4, 19, 9, 30, 0, 0, time.UTC)
 
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           scopeKey,
-		TrialInterval: 5 * time.Second,
-		NextTrialAt:   now,
-	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, testBlockScope(scopeKey, 5*time.Second, now)))
 	seedObservationIssueForTest(t, store, "Shared/Docs/bad.txt", IssueRemoteWriteDenied, scopeKey)
 	seedObservationIssueForTest(t, store, "other/problem.txt", IssueInvalidFilename, ScopeKey{})
 	_, err := store.RecordBlockedRetryWork(ctx, testRetryWorkKey("Shared/Docs/file.txt", "", ActionUpload), scopeKey)
@@ -247,24 +235,14 @@ func TestPruneBlockScopesWithoutBlockedWork(t *testing.T) {
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKService(),
-		TrialInterval: time.Minute,
-		NextTrialAt:   time.Unix(160, 0),
-	}))
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKThrottleDrive(driveid.New("0000000000000001")),
-		TrialInterval: time.Minute,
-		NextTrialAt:   time.Unix(360, 0),
-	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, testBlockScope(SKService(), time.Minute, time.Unix(160, 0))))
+	require.NoError(t, store.UpsertBlockScope(ctx, testBlockScope(
+		SKThrottleDrive(driveid.New("0000000000000001")),
+		time.Minute,
+		time.Unix(360, 0),
+	)))
 
-	require.NoError(t, store.UpsertRetryWork(ctx, &RetryWorkRow{
-		Path:         "blocked.txt",
-		ActionType:   ActionUpload,
-		ScopeKey:     SKService(),
-		Blocked:      true,
-		AttemptCount: 1,
-	}))
+	require.NoError(t, store.UpsertRetryWork(ctx, testBlockedRetryWorkRow("blocked.txt", "", ActionUpload, SKService(), 1)))
 
 	require.NoError(t, store.PruneBlockScopesWithoutBlockedWork(ctx))
 
@@ -282,11 +260,11 @@ func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndPreservesObservationIs
 	ctx := t.Context()
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
-	require.NoError(t, store.UpsertBlockScope(ctx, &BlockScope{
-		Key:           scopeKey,
-		TrialInterval: time.Minute,
-		NextTrialAt:   time.Date(2026, 4, 19, 8, 1, 0, 0, time.UTC),
-	}))
+	require.NoError(t, store.UpsertBlockScope(ctx, testBlockScope(
+		scopeKey,
+		time.Minute,
+		time.Date(2026, 4, 19, 8, 1, 0, 0, time.UTC),
+	)))
 	seedObservationIssueForTest(t, store, "Shared/Docs/bad.txt", IssueRemoteWriteDenied, scopeKey)
 	seedObservationIssueForTest(t, store, "keep.txt", IssueInvalidFilename, ScopeKey{})
 	_, err := store.RecordBlockedRetryWork(ctx, testRetryWorkKey("Shared/Docs/file.txt", "", ActionUpload), scopeKey)
