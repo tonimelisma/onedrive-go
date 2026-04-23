@@ -115,6 +115,7 @@ func (r *oneShotRunner) releaseIdleDueHeldWork(
 	outbox, err := r.reduceReadyFrontierStage(ctx, nil, bl, nil)
 	if err != nil {
 		r.completeOutboxAsShutdown(outbox)
+		return nil, err, true
 	}
 
 	return outbox, err, true
