@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 const retryResolutionSourceWorkerSuccess = "worker_success"
@@ -15,11 +13,12 @@ const retryResolutionSourceWorkerSuccess = "worker_success"
 // durable rows.
 func (rt *watchRuntime) releaseDueHeldTrialsNow(
 	ctx context.Context,
+	bl *Baseline,
 ) ([]*TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed(rt, "releaseDueHeldTrialsNow", "release due held trials")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialHeldReleaseStarted})
 
-	dispatch, err := rt.drainDueHeldWorkNow(ctx, rt)
+	dispatch, err := rt.reduceReadyFrontierStage(ctx, rt, bl, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -36,11 +35,12 @@ func (rt *watchRuntime) releaseDueHeldTrialsNow(
 // durable rows.
 func (rt *watchRuntime) releaseDueHeldRetriesNow(
 	ctx context.Context,
+	bl *Baseline,
 ) ([]*TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed(rt, "releaseDueHeldRetriesNow", "release due held retries")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryHeldReleaseStarted})
 
-	dispatch, err := rt.drainDueHeldWorkNow(ctx, rt)
+	dispatch, err := rt.reduceReadyFrontierStage(ctx, rt, bl, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -108,19 +108,4 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 	)
 
 	return nil
-}
-
-func (flow *engineFlow) applyResultPersistence(
-	ctx context.Context,
-	decision *ResultDecision,
-	r *ActionCompletion,
-) error {
-	switch decision.Persistence {
-	case persistNone:
-		return nil
-	case persistRetryWork:
-		return flow.recordRetryWork(ctx, decision, r, retry.ReconcilePolicy().Delay)
-	default:
-		panic(fmt.Sprintf("unknown failure persistence mode %d", decision.Persistence))
-	}
 }

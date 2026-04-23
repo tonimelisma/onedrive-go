@@ -8,20 +8,20 @@ import (
 
 func (flow *engineFlow) startRuntimeStage(
 	ctx context.Context,
-	prepared *PreparedCurrentPlan,
+	runtime *runtimePlan,
 	bl *Baseline,
 	watch *watchRuntime,
 ) ([]*TrackedAction, bool, error) {
-	if prepared == nil || prepared.Plan == nil {
+	if runtime == nil || runtime.Plan == nil {
 		return nil, false, nil
 	}
 
-	plan := prepared.Plan
+	plan := runtime.Plan
 	if len(plan.Actions) != len(plan.Deps) {
 		return nil, false, fmt.Errorf("plan invariant violation: %d actions but %d deps", len(plan.Actions), len(plan.Deps))
 	}
 
-	flow.initializePreparedRuntime(prepared)
+	flow.initializeRuntimeState(runtime)
 	flow.depGraph = NewDepGraph(flow.engine.logger)
 
 	if len(plan.Actions) == 0 {
@@ -33,27 +33,40 @@ func (flow *engineFlow) startRuntimeStage(
 	if err != nil {
 		return nil, false, err
 	}
-	outbox, err := flow.runPublicationDrainStage(ctx, watch, bl, ready)
+	outbox, err := flow.reduceReadyFrontierStage(ctx, watch, bl, ready)
 	if err != nil {
 		flow.completeOutboxAsShutdown(outbox)
 		return nil, false, err
-	}
-	dueHeld, err := flow.drainDueHeldWorkNow(ctx, watch)
-	if err != nil {
-		flow.completeOutboxAsShutdown(outbox)
-		return nil, false, err
-	}
-	if len(dueHeld) > 0 {
-		reduced, err := flow.runPublicationDrainStage(ctx, watch, bl, dueHeld)
-		if err != nil {
-			outbox = append(outbox, reduced...)
-			flow.completeOutboxAsShutdown(outbox)
-			return nil, false, err
-		}
-		outbox = append(outbox, reduced...)
 	}
 
 	return outbox, flow.depGraph.InFlightCount() > 0, nil
+}
+
+// reduceReadyFrontierStage owns the runtime handoff from "actions now ready"
+// to "worker-dispatchable frontier". It keeps publication-only work on the
+// engine side, releases already-due held retry/trial work, and re-runs
+// publication drain on any newly released frontier.
+func (flow *engineFlow) reduceReadyFrontierStage(
+	ctx context.Context,
+	watch *watchRuntime,
+	bl *Baseline,
+	ready []*TrackedAction,
+) ([]*TrackedAction, error) {
+	reduced, err := flow.runPublicationDrainStage(ctx, watch, bl, ready)
+	if err != nil {
+		return reduced, err
+	}
+
+	dueHeld, err := flow.drainDueHeldWorkNow(ctx, watch)
+	if err != nil {
+		return reduced, err
+	}
+	if len(dueHeld) == 0 {
+		return reduced, nil
+	}
+
+	released, err := flow.runPublicationDrainStage(ctx, watch, bl, dueHeld)
+	return append(reduced, released...), err
 }
 
 func (flow *engineFlow) registerPlanActions(plan *ActionPlan) []*TrackedAction {

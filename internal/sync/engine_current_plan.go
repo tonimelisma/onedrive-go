@@ -11,27 +11,23 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-type currentPlanPipelineRequest struct {
-	mode                  Mode
-	opts                  RunOptions
-	observeCurrentState   func(context.Context, *Baseline) (*observedCurrentState, error)
-	reconcileRuntimeState bool
-}
-
 func (r *oneShotRunner) runLiveCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
 	mode Mode,
 	opts RunOptions,
-) (*PreparedCurrentPlan, error) {
-	return r.runCurrentPlanPipeline(ctx, bl, currentPlanPipelineRequest{
-		mode: mode,
-		opts: opts,
-		observeCurrentState: func(ctx context.Context, bl *Baseline) (*observedCurrentState, error) {
-			return r.observeLiveCurrentState(ctx, bl, opts.FullReconcile)
-		},
-		reconcileRuntimeState: true,
-	})
+) (*runtimePlan, error) {
+	observation, err := r.observeLiveCurrentState(ctx, bl, opts.FullReconcile)
+	if err != nil {
+		return nil, err
+	}
+
+	build, err := r.buildCurrentPlanStage(ctx, bl, mode, opts, observation)
+	if err != nil {
+		return nil, err
+	}
+
+	return r.reconcileRuntimeStateStage(ctx, build)
 }
 
 func (r *oneShotRunner) runDryRunCurrentPlan(
@@ -39,110 +35,108 @@ func (r *oneShotRunner) runDryRunCurrentPlan(
 	bl *Baseline,
 	mode Mode,
 	opts RunOptions,
-) (*PreparedCurrentPlan, error) {
-	return r.runCurrentPlanPipeline(ctx, bl, currentPlanPipelineRequest{
-		mode: mode,
-		opts: opts,
-		observeCurrentState: func(ctx context.Context, bl *Baseline) (*observedCurrentState, error) {
-			return r.observeDryRunCurrentState(ctx, bl, opts.FullReconcile)
-		},
-		reconcileRuntimeState: false,
-	})
+) (*runtimePlan, error) {
+	observation, err := r.observeDryRunCurrentState(ctx, bl, opts.FullReconcile)
+	if err != nil {
+		return nil, err
+	}
+
+	build, err := r.buildCurrentPlanStage(ctx, bl, mode, opts, observation)
+	if err != nil {
+		return nil, err
+	}
+
+	return r.keepBuiltCurrentPlan(build), nil
 }
 
 func (rt *watchRuntime) runBootstrapCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
 	mode Mode,
-) (*PreparedCurrentPlan, error) {
+) (*runtimePlan, error) {
 	fullRefresh, err := rt.engine.shouldRunFullRemoteRefresh(ctx, false)
 	if err != nil {
 		return nil, fmt.Errorf("sync: deciding bootstrap full remote refresh: %w", err)
 	}
 
-	return rt.runCurrentPlanPipeline(ctx, bl, currentPlanPipelineRequest{
-		mode: mode,
-		opts: RunOptions{},
-		observeCurrentState: func(ctx context.Context, bl *Baseline) (*observedCurrentState, error) {
-			observeStart := rt.engine.nowFunc()
-			pendingCursorCommit, err := rt.observeAndCommitCurrentState(ctx, bl, false, fullRefresh)
-			if err != nil {
-				return nil, fmt.Errorf("sync: bootstrap observation failed: %w", err)
-			}
-			observed, err := rt.loadObservedCurrentInputs(ctx, pendingCursorCommit)
-			if err != nil {
-				return nil, fmt.Errorf("sync: bootstrap observed-state load failed: %w", err)
-			}
-			rt.engine.collector().RecordObserve(observed.observedPaths, rt.engine.since(observeStart))
-			return observed, nil
-		},
-		reconcileRuntimeState: true,
-	})
+	observation, err := rt.observeBootstrapCurrentState(ctx, bl, fullRefresh)
+	if err != nil {
+		return nil, err
+	}
+
+	build, err := rt.buildCurrentPlanStage(ctx, bl, mode, RunOptions{}, observation)
+	if err != nil {
+		return nil, err
+	}
+
+	return rt.reconcileRuntimeStateStage(ctx, build)
 }
 
 func (rt *watchRuntime) runSteadyStateCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
 	mode Mode,
-) (*PreparedCurrentPlan, error) {
-	return rt.runCurrentPlanPipeline(ctx, bl, currentPlanPipelineRequest{
-		mode: mode,
-		opts: RunOptions{},
-		observeCurrentState: func(ctx context.Context, _ *Baseline) (*observedCurrentState, error) {
-			observed, err := rt.loadObservedCurrentInputs(ctx, nil)
-			if err != nil {
-				return nil, fmt.Errorf("sync: watch observed-state load failed: %w", err)
-			}
-			return observed, nil
-		},
-		reconcileRuntimeState: true,
-	})
-}
-
-func (flow *engineFlow) runCurrentPlanPipeline(
-	ctx context.Context,
-	bl *Baseline,
-	req currentPlanPipelineRequest,
-) (*PreparedCurrentPlan, error) {
-	if req.observeCurrentState == nil {
-		return nil, fmt.Errorf("sync: current plan pipeline: missing current-state observation")
+) (*runtimePlan, error) {
+	observation, err := rt.observeSteadyStateCurrent(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: watch current-input load failed: %w", err)
 	}
 
-	observed, err := req.observeCurrentState(ctx, bl)
+	build, err := rt.buildCurrentPlanStage(ctx, bl, mode, RunOptions{}, observation)
 	if err != nil {
 		return nil, err
 	}
 
-	build, err := flow.buildCurrentPlanStage(ctx, bl, req.mode, req.opts, observed)
-	if err != nil {
-		return nil, err
-	}
-
-	if !req.reconcileRuntimeState {
-		return flow.keepCurrentPlanBuild(build), nil
-	}
-
-	return flow.reconcileRuntimeStateStage(ctx, build)
+	return rt.reconcileRuntimeStateStage(ctx, build)
 }
 
-type dryRunPlanInput struct {
-	currentActionPlanInputs
-	observedPaths int
-}
-
-type observedCurrentState struct {
-	inputs              currentActionPlanInputs
+type currentObservation struct {
+	inputs              currentInputs
 	observedPaths       int
 	pendingCursorCommit *pendingPrimaryCursorCommit
 }
 
-type currentPlanBuild struct {
+type localCurrentRefreshError struct {
+	step string
+	err  error
+}
+
+func (e localCurrentRefreshError) Error() string {
+	if e.err == nil {
+		return ""
+	}
+
+	return e.err.Error()
+}
+
+func (e localCurrentRefreshError) Unwrap() error {
+	return e.err
+}
+
+func localCurrentRefreshFailure(step string, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	return localCurrentRefreshError{step: step, err: err}
+}
+
+func currentLocalRefreshStep(err error) (string, bool) {
+	var refreshErr localCurrentRefreshError
+	if !errors.As(err, &refreshErr) {
+		return "", false
+	}
+
+	return refreshErr.step, true
+}
+
+type builtCurrentPlan struct {
 	Plan                *ActionPlan
 	Report              *Report
 	PendingCursorCommit *pendingPrimaryCursorCommit
 }
 
-type PreparedCurrentPlan struct {
+type runtimePlan struct {
 	Plan                *ActionPlan
 	Report              *Report
 	PendingCursorCommit *pendingPrimaryCursorCommit
@@ -150,7 +144,7 @@ type PreparedCurrentPlan struct {
 	BlockScopes         []*BlockScope
 }
 
-type currentActionPlanInputs struct {
+type currentInputs struct {
 	comparisons       []SQLiteComparisonRow
 	reconciliations   []SQLiteReconciliationRow
 	localRows         []LocalStateRow
@@ -162,7 +156,7 @@ func (r *oneShotRunner) observeLiveCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) (*observedCurrentState, error) {
+) (*currentObservation, error) {
 	observeStart := r.engine.nowFunc()
 	pendingCursorCommit, err := r.observeAndCommitCurrentState(ctx, bl, false, fullReconcile)
 	if err != nil {
@@ -181,19 +175,38 @@ func (r *oneShotRunner) observeDryRunCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) (*observedCurrentState, error) {
+) (*currentObservation, error) {
 	observeStart := r.engine.nowFunc()
-	inputs, err := r.loadDryRunCurrentInputs(ctx, bl, fullReconcile)
+	observation, err := r.loadDryRunCurrentObservation(ctx, bl, fullReconcile)
 	if err != nil {
 		return nil, err
 	}
-	observed := observedCurrentState{
-		inputs:        inputs.currentActionPlanInputs,
-		observedPaths: inputs.observedPaths,
-	}
-	r.engine.collector().RecordObserve(observed.observedPaths, r.engine.since(observeStart))
+	r.engine.collector().RecordObserve(observation.observedPaths, r.engine.since(observeStart))
 
-	return &observed, nil
+	return observation, nil
+}
+
+func (rt *watchRuntime) observeBootstrapCurrentState(
+	ctx context.Context,
+	bl *Baseline,
+	fullRefresh bool,
+) (*currentObservation, error) {
+	observeStart := rt.engine.nowFunc()
+	pendingCursorCommit, err := rt.observeAndCommitCurrentState(ctx, bl, false, fullRefresh)
+	if err != nil {
+		return nil, fmt.Errorf("sync: bootstrap observation failed: %w", err)
+	}
+	observation, err := rt.loadObservedCurrentInputs(ctx, pendingCursorCommit)
+	if err != nil {
+		return nil, fmt.Errorf("sync: bootstrap current-input load failed: %w", err)
+	}
+	rt.engine.collector().RecordObserve(observation.observedPaths, rt.engine.since(observeStart))
+
+	return observation, nil
+}
+
+func (rt *watchRuntime) observeSteadyStateCurrent(ctx context.Context) (*currentObservation, error) {
+	return rt.loadObservedCurrentInputs(ctx, nil)
 }
 
 func (flow *engineFlow) observeAndCommitCurrentState(
@@ -207,7 +220,7 @@ func (flow *engineFlow) observeAndCommitCurrentState(
 		return nil, err
 	}
 
-	if _, err := flow.observeAndCommitLocalCurrentState(ctx, bl, dryRun); err != nil {
+	if _, err := flow.refreshAndCommitLocalCurrentState(ctx, bl, dryRun); err != nil {
 		return nil, err
 	}
 
@@ -250,33 +263,33 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	return projectedRemote.emitted, fetchResult.pending, nil
 }
 
-func (flow *engineFlow) observeLocalCurrentState(
+func (flow *engineFlow) refreshLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 ) (ScanResult, error) {
 	localResult, err := flow.observeLocal(ctx, bl)
 	if err != nil {
-		return ScanResult{}, err
+		return ScanResult{}, localCurrentRefreshFailure("local observation", err)
 	}
 
 	if err := flow.reconcileSkippedObservationFindings(ctx, localResult.Skipped); err != nil {
-		return ScanResult{}, err
+		return ScanResult{}, localCurrentRefreshFailure("local observation findings reconcile", err)
 	}
 
 	return localResult, nil
 }
 
-func (flow *engineFlow) observeAndCommitLocalCurrentState(
+func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 	dryRun bool,
 ) (ScanResult, error) {
-	localResult, err := flow.observeLocalCurrentState(ctx, bl)
+	localResult, err := flow.refreshLocalCurrentState(ctx, bl)
 	if err != nil {
 		return ScanResult{}, err
 	}
-	if err := flow.commitObservedLocalSnapshot(ctx, dryRun, localResult); err != nil {
-		return ScanResult{}, err
+	if err := flow.commitCurrentLocalSnapshot(ctx, dryRun, localResult); err != nil {
+		return ScanResult{}, localCurrentRefreshFailure("local snapshot commit", err)
 	}
 
 	return localResult, nil
@@ -334,7 +347,7 @@ func (flow *engineFlow) observeLocal(
 	return result, nil
 }
 
-func (flow *engineFlow) commitObservedLocalSnapshot(
+func (flow *engineFlow) commitCurrentLocalSnapshot(
 	ctx context.Context,
 	dryRun bool,
 	localResult ScanResult,
@@ -365,11 +378,11 @@ func (flow *engineFlow) commitObservedLocalSnapshot(
 	return nil
 }
 
-func (flow *engineFlow) loadDryRunCurrentInputs(
+func (flow *engineFlow) loadDryRunCurrentObservation(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) (result *dryRunPlanInput, err error) {
+) (result *currentObservation, err error) {
 	plan := flow.buildPrimaryRootObservationPlan(fullReconcile)
 	fetchResult, err := flow.executePrimaryRootObservation(ctx, bl, plan)
 	if err != nil {
@@ -378,7 +391,7 @@ func (flow *engineFlow) loadDryRunCurrentInputs(
 
 	projectedRemote := projectRemoteObservations(flow.engine.logger, fetchResult.events)
 
-	localResult, err := flow.observeLocalCurrentState(ctx, bl)
+	localResult, err := flow.refreshLocalCurrentState(ctx, bl)
 	if err != nil {
 		return nil, err
 	}
@@ -412,22 +425,22 @@ func (flow *engineFlow) loadDryRunCurrentInputs(
 		return nil, err
 	}
 
-	return &dryRunPlanInput{
-		currentActionPlanInputs: inputs,
-		observedPaths:           len(inputs.localRows) + len(inputs.remoteRows),
+	return &currentObservation{
+		inputs:        inputs,
+		observedPaths: len(inputs.localRows) + len(inputs.remoteRows),
 	}, nil
 }
 
 func (flow *engineFlow) loadObservedCurrentInputs(
 	ctx context.Context,
 	pendingCursorCommit *pendingPrimaryCursorCommit,
-) (*observedCurrentState, error) {
+) (*currentObservation, error) {
 	inputs, err := flow.loadCurrentInputsStage(ctx, flow.engine.baseline, flow.engine.driveID)
 	if err != nil {
 		return nil, err
 	}
 
-	return &observedCurrentState{
+	return &currentObservation{
 		inputs:              inputs,
 		observedPaths:       len(inputs.localRows) + len(inputs.remoteRows),
 		pendingCursorCommit: pendingCursorCommit,
@@ -438,10 +451,10 @@ func (flow *engineFlow) loadCurrentInputsStage(
 	ctx context.Context,
 	store *SyncStore,
 	defaultDriveID driveid.ID,
-) (currentActionPlanInputs, error) {
+) (currentInputs, error) {
 	tx, err := beginPerfTx(ctx, store.db)
 	if err != nil {
-		return currentActionPlanInputs{}, fmt.Errorf("sync: beginning current action planner read transaction: %w", err)
+		return currentInputs{}, fmt.Errorf("sync: beginning current action planner read transaction: %w", err)
 	}
 	defer func() {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
@@ -459,22 +472,22 @@ func (flow *engineFlow) loadCurrentInputsStageTx(
 	store *SyncStore,
 	tx sqlTxRunner,
 	defaultDriveID driveid.ID,
-) (currentActionPlanInputs, error) {
+) (currentInputs, error) {
 	comparisons, err := queryComparisonStateWithRunner(ctx, tx)
 	if err != nil {
-		return currentActionPlanInputs{}, fmt.Errorf("sync: querying comparison state: %w", err)
+		return currentInputs{}, fmt.Errorf("sync: querying comparison state: %w", err)
 	}
 	reconciliations, err := queryReconciliationStateWithRunner(ctx, tx)
 	if err != nil {
-		return currentActionPlanInputs{}, fmt.Errorf("sync: querying reconciliation state: %w", err)
+		return currentInputs{}, fmt.Errorf("sync: querying reconciliation state: %w", err)
 	}
 	localRows, err := listLocalStateRows(ctx, tx)
 	if err != nil {
-		return currentActionPlanInputs{}, fmt.Errorf("sync: listing local_state rows: %w", err)
+		return currentInputs{}, fmt.Errorf("sync: listing local_state rows: %w", err)
 	}
 	observationState, err := store.readObservationStateTx(ctx, tx)
 	if err != nil {
-		return currentActionPlanInputs{}, fmt.Errorf("sync: reading observation state for remote_state: %w", err)
+		return currentInputs{}, fmt.Errorf("sync: reading observation state for remote_state: %w", err)
 	}
 	configuredDriveID := observationState.ConfiguredDriveID
 	if configuredDriveID.IsZero() {
@@ -487,13 +500,13 @@ func (flow *engineFlow) loadCurrentInputsStageTx(
 		configuredDriveID,
 	)
 	if err != nil {
-		return currentActionPlanInputs{}, fmt.Errorf("sync: listing remote_state rows: %w", err)
+		return currentInputs{}, fmt.Errorf("sync: listing remote_state rows: %w", err)
 	}
 	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, tx)
 	if err != nil {
-		return currentActionPlanInputs{}, fmt.Errorf("sync: listing observation issues: %w", err)
+		return currentInputs{}, fmt.Errorf("sync: listing observation issues: %w", err)
 	}
-	return currentActionPlanInputs{
+	return currentInputs{
 		comparisons:       comparisons,
 		reconciliations:   reconciliations,
 		localRows:         localRows,
@@ -510,9 +523,9 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	bl *Baseline,
 	mode Mode,
 	opts RunOptions,
-	observed *observedCurrentState,
-) (*currentPlanBuild, error) {
-	if observed == nil {
+	observation *currentObservation,
+) (*builtCurrentPlan, error) {
+	if observation == nil {
 		return nil, fmt.Errorf("sync: building current plan: missing observed state")
 	}
 	if err := ctx.Err(); err != nil {
@@ -520,7 +533,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	}
 
 	planStart := flow.engine.nowFunc()
-	plan, err := flow.engine.buildCurrentActionPlanFromInputs(&observed.inputs, bl, mode)
+	plan, err := flow.engine.buildCurrentActionPlanFromInputs(&observation.inputs, bl, mode)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
@@ -529,10 +542,10 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	counts := CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
 
-	return &currentPlanBuild{
+	return &builtCurrentPlan{
 		Plan:                plan,
 		Report:              report,
-		PendingCursorCommit: observed.pendingCursorCommit,
+		PendingCursorCommit: observation.pendingCursorCommit,
 	}, nil
 }
 
@@ -541,8 +554,8 @@ func (flow *engineFlow) buildCurrentPlanStage(
 // retry/block-scope rows the runtime owns.
 func (flow *engineFlow) reconcileRuntimeStateStage(
 	ctx context.Context,
-	build *currentPlanBuild,
-) (*PreparedCurrentPlan, error) {
+	build *builtCurrentPlan,
+) (*runtimePlan, error) {
 	if build == nil {
 		return nil, fmt.Errorf("sync: reconciling runtime state: missing current plan build")
 	}
@@ -555,7 +568,7 @@ func (flow *engineFlow) reconcileRuntimeStateStage(
 		return nil, err
 	}
 
-	return &PreparedCurrentPlan{
+	return &runtimePlan{
 		Plan:                build.Plan,
 		Report:              build.Report,
 		PendingCursorCommit: build.PendingCursorCommit,
@@ -564,14 +577,14 @@ func (flow *engineFlow) reconcileRuntimeStateStage(
 	}, nil
 }
 
-// keepCurrentPlanBuild preserves the build-stage handoff without reconciling
-// or loading durable runtime state.
-func (flow *engineFlow) keepCurrentPlanBuild(build *currentPlanBuild) *PreparedCurrentPlan {
+// keepBuiltCurrentPlan preserves the build-stage handoff without reconciling or
+// loading durable runtime state.
+func (flow *engineFlow) keepBuiltCurrentPlan(build *builtCurrentPlan) *runtimePlan {
 	if build == nil {
 		return nil
 	}
 
-	return &PreparedCurrentPlan{
+	return &runtimePlan{
 		Plan:                build.Plan,
 		Report:              build.Report,
 		PendingCursorCommit: build.PendingCursorCommit,
@@ -593,19 +606,19 @@ func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *ActionP
 func (flow *engineFlow) loadRuntimeState(ctx context.Context) ([]RetryWorkRow, []*BlockScope, error) {
 	retryRows, err := flow.engine.baseline.ListRetryWork(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sync: listing retry_work for prepared runtime state: %w", err)
+		return nil, nil, fmt.Errorf("sync: listing retry_work for runtime-state handoff: %w", err)
 	}
 
 	blockScopes, err := flow.engine.baseline.ListBlockScopes(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sync: listing block_scopes for prepared runtime state: %w", err)
+		return nil, nil, fmt.Errorf("sync: listing block_scopes for runtime-state handoff: %w", err)
 	}
 
 	return retryRows, blockScopes, nil
 }
 
 func (e *Engine) buildCurrentActionPlanFromInputs(
-	inputs *currentActionPlanInputs,
+	inputs *currentInputs,
 	bl *Baseline,
 	mode Mode,
 ) (*ActionPlan, error) {
