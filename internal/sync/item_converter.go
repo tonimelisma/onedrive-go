@@ -25,11 +25,11 @@ type InflightParent struct {
 
 // ItemConverter converts []graph.Item into []ChangeEvent with full path
 // materialization, NFC normalization, move detection, and deleted-item name
-// recovery. Drive-root and shared-root observation both use this single
+// recovery. Drive-root and rooted-subtree observation both use this single
 // conversion pipeline, configured by path-prefix and root-item fields.
 //
 // Design: the inflight map is a parameter, not a field. RemoteObserver
-// accumulates inflight across delta pages; shared-root callers populate it once per
+// accumulates inflight across delta pages; rooted-subtree callers populate it once per
 // batch. Same methods, different lifetime.
 type ItemConverter struct {
 	Baseline *Baseline
@@ -39,11 +39,11 @@ type ItemConverter struct {
 	Items    ItemClient        // nil-safe: sparse parent enrich is best-effort
 
 	// PathPrefix is prepended to materialized paths. Empty for the primary
-	// drive; set for shared-root observation that maps a remote subtree into a
+	// drive; set for rooted-subtree observation that maps a remote subtree into a
 	// local subpath.
 	PathPrefix string
 
-	// RootItemID is the configured remote root item for shared-root observation.
+	// RootItemID is the configured remote root item for rooted-subtree observation.
 	// Items with this ID are the root itself and should be skipped because the
 	// sync root owns that directory already. Empty for full-drive observation.
 	RootItemID string
@@ -54,7 +54,7 @@ type ItemConverter struct {
 }
 
 // NewPrimaryConverter creates an ItemConverter for primary-drive or
-// separately-configured shared-root observation. Embedded shared-folder items
+// rooted-subtree observation. Embedded shared-folder items
 // are ignored; shared content syncs only when configured as its own drive.
 func NewPrimaryConverter(
 	baseline *Baseline,
@@ -75,7 +75,7 @@ func NewPrimaryConverter(
 
 // ConvertItems converts a batch of graph.Items into ChangeEvents using
 // two-pass processing: register all items in inflight, then classify all.
-// Used by shared-root observation where all items arrive in a single batch.
+// Used by rooted-subtree observation where all items arrive in a single batch.
 func (c *ItemConverter) ConvertItems(ctx context.Context, items []graph.Item) []ChangeEvent {
 	c.enrichSparseParentRefs(ctx, items)
 
@@ -193,7 +193,7 @@ func (c *ItemConverter) registerInflight(item *graph.Item, inflight map[string]I
 func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]InflightParent) *ChangeEvent {
 	itemDriveID := c.resolveItemDriveID(item)
 
-	// Skip root items for both full-drive and shared-root observation.
+	// Skip root items for both full-drive and rooted-subtree observation.
 	if item.IsRoot {
 		c.Logger.Debug("skipping root item", slog.String("item_id", item.ID))
 

@@ -87,12 +87,13 @@ extra exported builder layer above `EngineMountConfig`, and `engineInputs`
 remains an internal seam for focused engine tests rather than a parallel
 production construction model.
 
-For separately configured shared-root drives, the engine also carries the
-configured `rootItemID`. That root item defines the remote boundary for scoped
-observation and execution metadata. Shared-root delta capability is resolved in
-config today and passed into the engine as construction input; the engine does
-not reopen catalog state just to decide whether a shared root should try folder
-delta.
+For rooted-subtree runtimes, the engine also carries the configured
+`rootItemID`. That root item defines the remote boundary for scoped
+observation and execution metadata. Rooted-subtree delta capability is
+resolved in config today and passed into the engine as construction input; the
+engine does not reopen catalog state just to decide whether a rooted subtree
+should try folder delta. Today, separately configured shared folders happen to
+use this rooted-subtree engine path.
 
 Permission handling is intentionally split three ways:
 
@@ -192,10 +193,10 @@ reduction fails after shutdown-completing a returned exact frontier, the
 one-shot runner consumes that shutdown work immediately instead of surfacing the
 same outbox to a second shutdown-completion pass.
 
-Full-remote-refresh cadence is restart-safe even when a full remote refresh returns
-no delta cursor. The engine still advances the persisted cadence in
-`observation_state` so enumerate-only and shared-root sessions do not fall into
-back-to-back expensive full refreshes.
+Full-remote-refresh cadence is restart-safe even when a full remote refresh
+returns no delta cursor. The engine still advances the persisted cadence in
+`observation_state` so enumerate-only and rooted-subtree sessions do not fall
+into back-to-back expensive full refreshes.
 
 That cadence is capability-driven, not websocket-driven:
 
@@ -206,17 +207,18 @@ Websocket wakeups are additive only. They wake delta polling sooner, but they
 do not replace delta polling and they do not change the full-refresh cadence.
 
 If watch mode shortens `observation_state.next_full_remote_refresh_at` after
-startup, it must rearm the in-memory timer in that same control path. Shared-root
-enumerate fallback therefore clamps the persisted deadline and immediately
-rebuilds the active timer instead of waiting for a later full refresh commit.
+startup, it must rearm the in-memory timer in that same control path.
+Rooted-subtree enumerate fallback therefore clamps the persisted deadline and
+immediately rebuilds the active timer instead of waiting for a later full
+refresh commit.
 
 In this increment, "degraded" means exactly "running without delta." The main
-whole-drive watch path remains delta-based. Shared-root watch chooses its mode
-from the config-resolved capability surface:
+drive-root watch path remains delta-based. Rooted-subtree watch chooses its
+mode from the config-resolved capability surface:
 
-- business/sharepoint shared roots skip folder delta and use recursive
+- business/sharepoint rooted subtrees skip folder delta and use recursive
   enumeration
-- personal shared roots try folder delta first and retry it on later passes
+- personal rooted subtrees try folder delta first and retry it on later passes
   after any temporary enumerate fallback
 
 ## Watch Mode
@@ -363,16 +365,25 @@ boundary too, but the fingerprint itself must stay raw-only and must not
 depend on the current human-readable breakdown wording. The store does not own
 grouped watch-condition projections or watch-specific presentation.
 
-## Shared-Root Drives
+## Drive-Root And Rooted-Subtree Runtime Shapes
 
-Shared folders are separate configured drives. The engine therefore supports
-two drive shapes:
+The engine supports two runtime shapes:
 
-- ordinary drive-root sessions
-- shared-root sessions rooted below the remote drive root
+- drive-root sessions rooted at the remote drive root
+- rooted-subtree sessions rooted below the remote drive root
 
-Embedded shared-folder links discovered inside another synced drive are ignored
-by observation and never become nested engine-owned sub-sessions.
+The constructor chooses the runtime shape from `EngineMountConfig.RootItemID`.
+A blank `RootItemID` means drive-root observation and execution. A non-blank
+`RootItemID` means the engine must stay scoped below that remote boundary for
+observation, planning metadata, and execution preconditions.
+
+Today, separately configured shared folders happen to use the rooted-subtree
+path, but that product surface should not be confused with the engine's
+internal runtime model.
+
+Embedded shared-folder links discovered inside another synced drive are still
+ignored by ordinary drive-root observation and never become nested
+engine-owned sub-sessions.
 
 ## Conflict Handling
 

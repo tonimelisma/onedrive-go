@@ -223,7 +223,7 @@ func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 }
 
 // Validates: R-2.8.5
-func TestRunWatch_SharedRootKeepsPollingOnly(t *testing.T) {
+func TestRunWatch_RootedSubtreeKeepsPollingOnly(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -237,7 +237,7 @@ func TestRunWatch_SharedRootKeepsPollingOnly(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	eng.enableWebsocket = true
-	eng.rootItemID = "shared-root"
+	eng.rootItemID = "rooted-subtree-root"
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
 	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
@@ -259,15 +259,15 @@ func TestRunWatch_SharedRootKeepsPollingOnly(t *testing.T) {
 
 	select {
 	case <-started:
-		require.FailNow(t, "wake source should not start for shared-root watch")
+		require.FailNow(t, "wake source should not start for rooted-subtree watch")
 	case <-time.After(100 * time.Millisecond):
 	}
 
 	cancel()
 	require.NoError(t, <-done)
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventWebsocketFallback && event.Note == "shared_root"
-	}, "websocket shared-root fallback")
+		return event.Type == engineDebugEventWebsocketFallback && event.Note == "rooted_subtree"
+	}, "websocket rooted-subtree fallback")
 }
 
 // Validates: R-2.8.3, R-6.8.9, R-6.10.10

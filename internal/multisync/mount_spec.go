@@ -33,20 +33,20 @@ type resolvedDriveWithSelection struct {
 // drive as a temporary adapter for drive-shaped session creation and the sync
 // tunables that have not yet been promoted into mount-owned runtime state.
 type mountSpec struct {
-	mountID                mountID
-	projectionKind         mountProjectionKind
-	selectionIndex         int
-	canonicalID            driveid.CanonicalID
-	displayName            string
-	syncRoot               string
-	statePath              string
-	remoteDriveID          driveid.ID
-	remoteRootItemID       string
-	accountEmail           string
-	paused                 bool
-	enableWebsocket        bool
-	sharedRootDeltaCapable bool
-	resolved               *config.ResolvedDrive
+	mountID                   mountID
+	projectionKind            mountProjectionKind
+	selectionIndex            int
+	canonicalID               driveid.CanonicalID
+	displayName               string
+	syncRoot                  string
+	statePath                 string
+	remoteDriveID             driveid.ID
+	remoteRootItemID          string
+	accountEmail              string
+	paused                    bool
+	enableWebsocket           bool
+	rootedSubtreeDeltaCapable bool
+	resolved                  *config.ResolvedDrive
 }
 
 func buildConfiguredMountSpecs(selected []*resolvedDriveWithSelection) ([]*mountSpec, error) {
@@ -74,20 +74,20 @@ func buildConfiguredMountSpec(selected *resolvedDriveWithSelection) (*mountSpec,
 	}
 
 	return &mountSpec{
-		mountID:                mountID(rd.CanonicalID.String()),
-		projectionKind:         mountProjectionStandalone,
-		selectionIndex:         selected.SelectionIndex,
-		canonicalID:            rd.CanonicalID,
-		displayName:            rd.DisplayName,
-		syncRoot:               rd.SyncDir,
-		statePath:              statePath,
-		remoteDriveID:          rd.DriveID,
-		remoteRootItemID:       rd.RootItemID,
-		accountEmail:           rd.CanonicalID.Email(),
-		paused:                 rd.Paused,
-		enableWebsocket:        rd.Websocket,
-		sharedRootDeltaCapable: rd.SharedRootDeltaCapable,
-		resolved:               rd,
+		mountID:                   mountID(rd.CanonicalID.String()),
+		projectionKind:            mountProjectionStandalone,
+		selectionIndex:            selected.SelectionIndex,
+		canonicalID:               rd.CanonicalID,
+		displayName:               rd.DisplayName,
+		syncRoot:                  rd.SyncDir,
+		statePath:                 statePath,
+		remoteDriveID:             rd.DriveID,
+		remoteRootItemID:          rd.RootItemID,
+		accountEmail:              rd.CanonicalID.Email(),
+		paused:                    rd.Paused,
+		enableWebsocket:           rd.Websocket,
+		rootedSubtreeDeltaCapable: rd.SharedRootDeltaCapable,
+		resolved:                  rd,
 	}, nil
 }
 

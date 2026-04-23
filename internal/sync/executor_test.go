@@ -520,7 +520,7 @@ func TestExecutor_RemoteMove_CrossDriveUsesTargetScopedPathConvergence(t *testin
 		OldPath:             "shared/original.txt",
 		ItemID:              "item1",
 		DriveID:             driveid.New("00000000000000ff"),
-		TargetRootItemID:    "shared-root-id",
+		TargetRootItemID:    "rooted-subtree-id",
 		TargetRootLocalPath: "shared",
 		View:                &PathView{Path: "shared/renamed.txt"},
 	}
@@ -529,7 +529,7 @@ func TestExecutor_RemoteMove_CrossDriveUsesTargetScopedPathConvergence(t *testin
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, []executorPathConvergenceTarget{{
 		driveID:    driveid.New("00000000000000ff"),
-		rootItemID: "shared-root-id",
+		rootItemID: "rooted-subtree-id",
 	}}, pathConvergence.targets)
 	assert.Equal(t, []string{"renamed.txt"}, pathConvergence.waitCalls)
 }
@@ -1761,16 +1761,16 @@ func TestExecutor_ResolveParentID_Baseline(t *testing.T) {
 	}
 }
 
-func TestExecutor_ResolveParentID_SharedRoot(t *testing.T) {
+func TestExecutor_ResolveParentID_RootedSubtree(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	cfg.SetRootItemID("shared-root-id")
+	cfg.SetRootItemID("rooted-subtree-id")
 	e := NewExecution(cfg, emptyBaseline())
 
 	id, err := e.ResolveParentID("exec-file.txt")
 	require.NoError(t, err)
-	assert.Equal(t, "shared-root-id", id)
+	assert.Equal(t, "rooted-subtree-id", id)
 }
 
 // ---------------------------------------------------------------------------

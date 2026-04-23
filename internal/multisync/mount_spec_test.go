@@ -11,7 +11,7 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-const testSharedRootItemID = "shared-root-id"
+const testRootedSubtreeItemID = "rooted-subtree-id"
 
 // Validates: R-2.8.1
 func TestBuildConfiguredMountSpecs_PreservesOrderAndReportingFields(t *testing.T) {
@@ -56,7 +56,7 @@ func TestBuildConfiguredMountSpecs_PreservesRootedMountFields(t *testing.T) {
 	t.Parallel()
 
 	shared := testResolvedDrive(t, "shared:owner@example.com:test-drive:test-item", "Shared")
-	shared.RootItemID = testSharedRootItemID
+	shared.RootItemID = testRootedSubtreeItemID
 	shared.SharedRootDeltaCapable = true
 	shared.Websocket = true
 	shared.DriveID = driveid.New("remote-drive-id")
@@ -70,9 +70,9 @@ func TestBuildConfiguredMountSpecs_PreservesRootedMountFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mounts, 1)
 
-	assert.Equal(t, testSharedRootItemID, mounts[0].remoteRootItemID)
+	assert.Equal(t, testRootedSubtreeItemID, mounts[0].remoteRootItemID)
 	assert.Equal(t, driveid.New("remote-drive-id"), mounts[0].remoteDriveID)
-	assert.True(t, mounts[0].sharedRootDeltaCapable)
+	assert.True(t, mounts[0].rootedSubtreeDeltaCapable)
 	assert.True(t, mounts[0].enableWebsocket)
 }
 
@@ -95,7 +95,7 @@ func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
 	t.Parallel()
 
 	shared := testResolvedDrive(t, "sharepoint:owner@example.com:site:Documents", "Shared")
-	shared.RootItemID = testSharedRootItemID
+	shared.RootItemID = testRootedSubtreeItemID
 	shared.SharedRootDeltaCapable = true
 	shared.Websocket = true
 	shared.DriveID = driveid.New("remote-drive-id")
@@ -120,7 +120,7 @@ func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
 	assert.Equal(t, mounts[0].canonicalID.DriveType(), cfg.DriveType)
 	assert.Equal(t, mounts[0].accountEmail, cfg.AccountEmail)
 	assert.Equal(t, mounts[0].remoteRootItemID, cfg.RootItemID)
-	assert.Equal(t, mounts[0].sharedRootDeltaCapable, cfg.SharedRootDeltaCapable)
+	assert.Equal(t, mounts[0].rootedSubtreeDeltaCapable, cfg.RootedSubtreeDeltaCapable)
 	assert.Equal(t, mounts[0].enableWebsocket, cfg.EnableWebsocket)
 	assert.Equal(t, syncengine.LocalFilterConfig{}, cfg.LocalFilter)
 	assert.True(t, cfg.LocalRules.RejectSharePointRootForms)
