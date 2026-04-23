@@ -154,7 +154,8 @@ publication-drain, and post-sync housekeeping stages: keep them next to their
 stage so a reader can see the flow at a glance. Current-plan construction
 should read from `engine_current_plan.go`; runtime-start/admission should read
 from `engine_runtime_start.go`; and completion plus publication drain should
-read from the `engine_runtime_completion*.go` family.
+read from `engine_runtime_completion.go` plus the trial-specific
+`engine_runtime_completion_trial.go`.
 
 Once one-shot shutdown has started, late worker completions no longer re-enter
 the normal outbox path. The engine runs them through the same shutdown
@@ -179,10 +180,10 @@ back-to-back expensive full refreshes.
 - periodic maintenance ticks and full remote refresh
 - graceful drain on shutdown
 
-`RunWatch` starts with the same shared startup-prep boundary one-shot uses.
+`RunWatch` starts with the same shared startup boundary one-shot uses.
 That startup boundary owns persisted-scope normalization, account-auth
 normalization, and the single startup baseline load. `bootstrapSync`
-consumes that prepared baseline; it is not allowed to lazily reload or
+consumes that startup baseline; it is not allowed to lazily reload or
 recreate startup state.
 
 The watch loop is the single owner of mutable scheduling/runtime state:
@@ -213,7 +214,7 @@ only a coarse dirty/full-refresh scheduler signal, and that signal feeds only
 this steady-state replan path; it does not define a second planning model.
 
 Bootstrap uses that same outer owner after the initial
-observe/prepare/start-runtime handoff. The only bootstrap-specific semantics
+observe/build/reconcile/start-runtime handoff. The only bootstrap-specific semantics
 that remain are the bootstrap quiescence rule, bootstrap wait logging, and the
 fact that observers do not start until that bootstrap-owned quiescent boundary
 has been reached.
@@ -232,7 +233,7 @@ The engine holds dependency-ready exact work in memory, keyed by exact
 `RetryWorkKey` and grouped by `ScopeKey` for blocked scopes. Timer ticks do
 not rebuild subset plans, do not compute dependency closure, and do not
 revalidate stale rows. Stale-row cleanup belongs only to normal
-prepare/reconcile. Dependency tracking stays inside `DepGraph`, but runtime
+current-plan build/runtime-state reconcile. Dependency tracking stays inside `DepGraph`, but runtime
 completion does not: the engine owns quiescence and no longer waits on a
 graph-owned completion signal.
 
@@ -252,17 +253,18 @@ One-shot and watch coordinators still own their outbox state explicitly.
 
 Runtime completion handling follows the same boundary shape everywhere:
 classify the finished exact action, apply the resulting durable/runtime
-mutation, then release any due held work back into the ready frontier. It does
-not mix that decision step with worker-queue ownership. In code, the top-level
-effectful boundary is `applyRuntimeCompletionStage`, while the explicit
-publication stage is `runPublicationDrainStage`.
+mutation, then reduce the ready frontier through publication drain plus due-
+held release. It does not mix that decision step with worker-queue ownership.
+In code, the top-level effectful boundary is `applyRuntimeCompletionStage`,
+while `reduceReadyFrontierStage` owns the frontier reduction and
+`runPublicationDrainStage` remains the publication-only substage.
 
 Watch replan failure policy is also explicit. Pre-authority local observation
 failure is recoverable and drops that replan trigger. Once the engine starts
 depending on authoritative current-truth writes or runtime state, failure is
 fatal to the current watch session: remote observation apply, observation
-findings reconciliation, local snapshot commit, prepare-from-committed-truth,
-and runtime startup/admission all fail closed. Shutdown cancellation is the
+findings reconciliation, local snapshot commit, current-plan build from
+committed truth, and runtime startup/admission all fail closed. Shutdown cancellation is the
 one exception: if context cancellation lands during that steady-state replan
 handoff, the loop clears the best-effort sync-status batch and exits cleanly
 into shutdown instead of surfacing a fatal watch error.
@@ -336,7 +338,7 @@ The engine classifies results into:
 - execution may still persist `retry_work` for a failed exact action even when
   a later observation pass may record the corresponding durable current-truth
   issue; planning suppression plus retry pruning collapses that overlap on the
-  next normal prepare cycle
+  next normal current-plan cycle
 - durable `retry_work` / `block_scopes` mutations are fail-closed runtime
   control writes; if the engine cannot persist or transition them, it stops
   the current runtime instead of logging and continuing
@@ -355,7 +357,7 @@ admission after dependency readiness:
 Held work stays unresolved in the dependency graph. Dependents are not
 persisted as cascade retry rows; they remain blocked naturally until the exact
 parent action succeeds, is released for retry, or the whole runtime is
-replaced by a fresh prepare cycle.
+replaced by a fresh current-plan cycle.
 
 The benchmark target is earlier durable reconciliation, not removal of the
 post-graph admission gate.

@@ -284,14 +284,7 @@ func (rt *watchRuntime) appendReadyFrontier(
 	p *watchPipeline,
 	ready []*TrackedAction,
 ) error {
-	reduced, err := rt.runPublicationDrainStage(ctx, rt, p.bl, ready)
-	nextOutbox := append(rt.currentOutbox(), reduced...)
-	if err != nil {
-		rt.clearSyncStatusBatch()
-		rt.completeOutboxAsShutdown(nextOutbox)
-		return err
-	}
-
+	nextOutbox := append(rt.currentOutbox(), ready...)
 	rt.maybeFinishSyncStatusBatch(ctx, p.mode, nextOutbox)
 	rt.replaceOutbox(nextOutbox)
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReadyFrontierAppended})
@@ -308,9 +301,9 @@ func (rt *watchRuntime) releaseHeldFrontier(
 		err      error
 	)
 	if trial {
-		released, err = rt.releaseDueHeldTrialsNow(ctx)
+		released, err = rt.releaseDueHeldTrialsNow(ctx, p.bl)
 	} else {
-		released, err = rt.releaseDueHeldRetriesNow(ctx)
+		released, err = rt.releaseDueHeldRetriesNow(ctx, p.bl)
 	}
 	if err != nil {
 		return err

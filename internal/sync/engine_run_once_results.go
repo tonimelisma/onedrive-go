@@ -2,15 +2,6 @@ package sync
 
 import "context"
 
-func (r *oneShotRunner) runResultsLoop(
-	ctx context.Context,
-	cancel context.CancelFunc,
-	bl *Baseline,
-	completions <-chan ActionCompletion,
-) error {
-	return r.runResultsLoopWithInitialOutbox(ctx, cancel, bl, completions, nil)
-}
-
 func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -81,7 +72,7 @@ func (r *oneShotRunner) pollImmediateCompletion(
 
 func (r *oneShotRunner) finishResultsLoopIfSettled(outbox []*TrackedAction, fatalErr error) (bool, error) {
 	switch {
-	case fatalErr == nil && r.isOneShotQuiescent(outbox):
+	case fatalErr == nil && len(outbox) == 0 && r.runningCount == 0 && !r.hasDueHeldWork(r.engine.nowFunc()):
 		return true, nil
 	case fatalErr != nil && len(outbox) == 0 && r.runningCount == 0:
 		return true, fatalErr
@@ -149,12 +140,7 @@ func (r *oneShotRunner) handleOneShotCompletion(
 
 	ready, completionErr := r.applyRuntimeCompletionStage(ctx, nil, completion, bl)
 	if completionErr == nil {
-		reduced, err := r.runPublicationDrainStage(ctx, nil, bl, ready)
-		if err == nil {
-			return append(outbox, reduced...), nil
-		}
-		outbox = append(outbox, reduced...)
-		fatalErr = err
+		return append(outbox, ready...), nil
 	} else {
 		outbox = append(outbox, ready...)
 		fatalErr = completionErr
@@ -172,14 +158,6 @@ func (r *oneShotRunner) handleOneShotCompletion(
 	return outbox, fatalErr
 }
 
-func resultsLoopCtxDone(ctx context.Context, fatalErr error) <-chan struct{} {
-	if fatalErr != nil {
-		return nil
-	}
-
-	return ctx.Done()
-}
-
 func (r *oneShotRunner) completeQueuedDispatchAsShutdown() {
 	for {
 		select {
@@ -191,6 +169,10 @@ func (r *oneShotRunner) completeQueuedDispatchAsShutdown() {
 	}
 }
 
-func (r *oneShotRunner) isOneShotQuiescent(outbox []*TrackedAction) bool {
-	return len(outbox) == 0 && r.runningCount == 0 && !r.hasDueHeldWork(r.engine.nowFunc())
+func resultsLoopCtxDone(ctx context.Context, fatalErr error) <-chan struct{} {
+	if fatalErr != nil {
+		return nil
+	}
+
+	return ctx.Done()
 }

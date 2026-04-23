@@ -154,13 +154,13 @@ func TestRuntimeArchitecture_SteadyStatePrepareUsesCommittedTruthOnly(t *testing
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	prepared, err := rt.runSteadyStateCurrentPlan(ctx, bl, SyncDownloadOnly)
+	runtime, err := rt.runSteadyStateCurrentPlan(ctx, bl, SyncDownloadOnly)
 	require.NoError(t, err)
-	require.NotNil(t, prepared)
-	require.Len(t, prepared.Plan.Actions, 1)
-	assert.Zero(t, remoteCalls, "steady-state prepare must load committed truth instead of observing remote again")
-	assert.Equal(t, ActionDownload, prepared.Plan.Actions[0].Type)
-	assert.Equal(t, "remote.txt", prepared.Plan.Actions[0].Path)
+	require.NotNil(t, runtime)
+	require.Len(t, runtime.Plan.Actions, 1)
+	assert.Zero(t, remoteCalls, "steady-state current-plan load must use committed truth instead of observing remote again")
+	assert.Equal(t, ActionDownload, runtime.Plan.Actions[0].Type)
+	assert.Equal(t, "remote.txt", runtime.Plan.Actions[0].Path)
 }
 
 // Validates: R-6.10.10
@@ -340,7 +340,7 @@ func seedDueRetryPublication(t *testing.T, rt *watchRuntime) {
 		LastSeenAt:   now.UnixNano(),
 	}
 	require.NoError(t, rt.engine.baseline.UpsertRetryWork(t.Context(), &row))
-	rt.initializePreparedRuntime(&PreparedCurrentPlan{RetryRows: []RetryWorkRow{row}})
+	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
 
 	publication := rt.depGraph.Add(&Action{
 		Type:    ActionCleanup,

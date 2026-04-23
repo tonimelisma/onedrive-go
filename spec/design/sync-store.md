@@ -189,7 +189,8 @@ Store maintenance must also keep `block_scopes` honest:
 That liveness rule is shared with engine startup normalization and runtime
 scope release/rearm handling. The store does not invent a separate notion of
 when an empty timed scope may survive; it applies the same "blocked work or
-discard" policy the engine uses during normal prepare/reconcile.
+discard" policy the engine uses during normal current-plan build/runtime-state
+reconcile.
 
 Pruning an empty scope removes only the scope row. Ready `retry_work` that no
 longer depends on that scope must survive pruning; only explicit discard of a

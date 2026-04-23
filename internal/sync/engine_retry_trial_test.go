@@ -22,7 +22,7 @@ func TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 
 	rt.holdAction(ta, heldReasonRetry, ScopeKey{}, eng.nowFn().Add(-time.Second))
 
-	outbox, err := rt.releaseDueHeldRetriesNow(t.Context())
+	outbox, err := rt.releaseDueHeldRetriesNow(t.Context(), nil)
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, "retry.txt", outbox[0].Action.Path)
@@ -47,7 +47,7 @@ func TestReleaseDueHeldRetriesNow_DoesNotConsultDurableRetryRowsWithoutHeldRunti
 		LastSeenAt:   now.UnixNano(),
 	}))
 
-	outbox, err := rt.releaseDueHeldRetriesNow(t.Context())
+	outbox, err := rt.releaseDueHeldRetriesNow(t.Context(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 
@@ -85,7 +85,7 @@ func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testi
 	rt.holdAction(first, heldReasonScope, scopeKey, time.Time{})
 	rt.holdAction(second, heldReasonScope, scopeKey, time.Time{})
 
-	outbox, err := rt.releaseDueHeldTrialsNow(t.Context())
+	outbox, err := rt.releaseDueHeldTrialsNow(t.Context(), nil)
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, "first.txt", outbox[0].Action.Path)
@@ -111,7 +111,7 @@ func TestReleaseDueHeldTrialsNow_SkipsScopesWithoutHeldDependencyReadyCandidates
 		TrialInterval: 10 * time.Second,
 	})
 
-	outbox, err := rt.releaseDueHeldTrialsNow(t.Context())
+	outbox, err := rt.releaseDueHeldTrialsNow(t.Context(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 	assert.True(t, isTestBlockScopeed(eng, scopeKey))
@@ -141,7 +141,7 @@ func TestReleaseDueHeldTrialsNow_DoesNotConsultDurableBlockedRetryRowsWithoutHel
 	}, nil)
 	require.NoError(t, err)
 
-	outbox, err := rt.releaseDueHeldTrialsNow(t.Context())
+	outbox, err := rt.releaseDueHeldTrialsNow(t.Context(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 	assert.True(t, isTestBlockScopeed(eng, scopeKey))

@@ -5,10 +5,10 @@ import (
 	"time"
 )
 
-func (flow *engineFlow) initializePreparedRuntime(prepared *PreparedCurrentPlan) {
-	flow.retryRowsByKey = make(map[RetryWorkKey]RetryWorkRow, len(prepared.RetryRows))
-	for i := range prepared.RetryRows {
-		row := prepared.RetryRows[i]
+func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
+	flow.retryRowsByKey = make(map[RetryWorkKey]RetryWorkRow, len(runtime.RetryRows))
+	for i := range runtime.RetryRows {
+		row := runtime.RetryRows[i]
 		flow.retryRowsByKey[retryWorkKeyForRetryWork(&row)] = row
 	}
 
@@ -19,12 +19,12 @@ func (flow *engineFlow) initializePreparedRuntime(prepared *PreparedCurrentPlan)
 	flow.runningCount = 0
 	flow.nextHeldOrder = 0
 
-	activeScopes := make([]ActiveScope, 0, len(prepared.BlockScopes))
-	for i := range prepared.BlockScopes {
-		if prepared.BlockScopes[i] == nil {
+	activeScopes := make([]ActiveScope, 0, len(runtime.BlockScopes))
+	for i := range runtime.BlockScopes {
+		if runtime.BlockScopes[i] == nil {
 			continue
 		}
-		activeScopes = append(activeScopes, activeScopeFromBlockScopeRow(prepared.BlockScopes[i]))
+		activeScopes = append(activeScopes, activeScopeFromBlockScopeRow(runtime.BlockScopes[i]))
 	}
 	flow.replaceActiveScopes(activeScopes)
 	if flow.scopeState == nil {

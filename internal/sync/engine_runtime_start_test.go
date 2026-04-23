@@ -20,7 +20,7 @@ func TestStartRuntimeStage_ReleasesDueHeldTrialImmediately(t *testing.T) {
 	require.NoError(t, err)
 
 	scopeKey := SKService()
-	prepared := &PreparedCurrentPlan{
+	runtime := &runtimePlan{
 		Plan: &ActionPlan{
 			Actions: []Action{{
 				Type: ActionUpload,
@@ -47,7 +47,7 @@ func TestStartRuntimeStage_ReleasesDueHeldTrialImmediately(t *testing.T) {
 		}},
 	}
 
-	outbox, dispatched, err := flow.startRuntimeStage(ctx, prepared, bl, nil)
+	outbox, dispatched, err := flow.startRuntimeStage(ctx, runtime, bl, nil)
 	require.NoError(t, err)
 	require.True(t, dispatched)
 	require.Len(t, outbox, 1)

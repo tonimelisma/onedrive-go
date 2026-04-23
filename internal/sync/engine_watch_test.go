@@ -447,7 +447,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 
 // TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare
 // verifies that a replan trigger observed while work is still running is
-// queued for the next linear prepare cycle instead of mutating the current
+// queued for the next linear replan cycle instead of mutating the current
 // runtime in place.
 func TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare(t *testing.T) {
 	t.Parallel()
@@ -944,8 +944,9 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 // Plan invariant guard tests
 // ---------------------------------------------------------------------------
 
-// TestExecutePlan_ActionsDepsLengthMismatch verifies that executePlan returns
-// cleanly (no panic) when plan.Actions and plan.Deps have mismatched lengths.
+// TestExecutePlan_ActionsDepsLengthMismatch verifies that executePreparedPlan
+// returns cleanly (no panic) when plan.Actions and plan.Deps have mismatched
+// lengths.
 func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -964,7 +965,10 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	report := &Report{}
 
 	// Should return cleanly without panic.
-	require.NoError(t, newOneShotRunner(eng.Engine).executePlan(t.Context(), plan, report, nil))
+	require.NoError(t, newOneShotRunner(eng.Engine).executePreparedPlan(t.Context(), &runtimePlan{
+		Plan:   plan,
+		Report: report,
+	}, nil))
 
 	// Invariant violation should surface in the report.
 	assert.Equal(t, len(plan.Actions), report.Failed)

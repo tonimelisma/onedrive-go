@@ -13,7 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-func assertPreparedCurrentPlanEqual(t *testing.T, expected *PreparedCurrentPlan, actual *PreparedCurrentPlan) {
+func assertRuntimePlanEqual(t *testing.T, expected *runtimePlan, actual *runtimePlan) {
 	t.Helper()
 
 	require.NotNil(t, expected)
@@ -83,7 +83,7 @@ func TestRunBootstrapCurrentPlan_MatchesOneShotLiveCurrentPlan(t *testing.T) {
 	watchPrepared, err := testWatchRuntime(t, watchEng).runBootstrapCurrentPlan(ctx, watchBaseline, SyncDownloadOnly)
 	require.NoError(t, err)
 
-	assertPreparedCurrentPlanEqual(t, oneShotPrepared, watchPrepared)
+	assertRuntimePlanEqual(t, oneShotPrepared, watchPrepared)
 }
 
 // Validates: R-2.10.5
@@ -225,7 +225,7 @@ func TestBootstrapSync_RequiresStartupPreparedBaseline(t *testing.T) {
 		completions: make(chan ActionCompletion),
 	})
 	require.Error(t, err)
-	require.ErrorContains(t, err, "bootstrap requires startup-prepared baseline")
+	require.ErrorContains(t, err, "bootstrap requires startup baseline")
 }
 
 // Validates: R-2.10.5
@@ -304,11 +304,11 @@ func TestReconcileRuntimeStateStage_PrunesAndLoadsDurableRuntimeState(t *testing
 	build, err := rt.buildCurrentPlanStage(ctx, bl, SyncBidirectional, RunOptions{}, observed)
 	require.NoError(t, err)
 
-	prepared, err := rt.reconcileRuntimeStateStage(ctx, build)
+	runtime, err := rt.reconcileRuntimeStateStage(ctx, build)
 	require.NoError(t, err)
 
-	assert.Empty(t, prepared.RetryRows)
-	assert.Empty(t, prepared.BlockScopes)
+	assert.Empty(t, runtime.RetryRows)
+	assert.Empty(t, runtime.BlockScopes)
 }
 
 // Validates: R-2.10.5
@@ -338,10 +338,10 @@ func TestKeepCurrentPlanBuild_LeavesDurableRuntimeStateUntouched(t *testing.T) {
 	build, err := runner.buildCurrentPlanStage(ctx, bl, SyncBidirectional, RunOptions{DryRun: true}, observed)
 	require.NoError(t, err)
 
-	prepared := runner.keepCurrentPlanBuild(build)
-	require.NotNil(t, prepared)
-	assert.Empty(t, prepared.RetryRows)
-	assert.Empty(t, prepared.BlockScopes)
+	runtime := runner.keepBuiltCurrentPlan(build)
+	require.NotNil(t, runtime)
+	assert.Empty(t, runtime.RetryRows)
+	assert.Empty(t, runtime.BlockScopes)
 
 	retryRows, err := eng.baseline.ListRetryWork(ctx)
 	require.NoError(t, err)

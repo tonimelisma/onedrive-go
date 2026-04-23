@@ -9,41 +9,18 @@ import (
 type watchLoopState struct {
 	phase            watchRuntimePhase
 	outbox           []*TrackedAction
-	replanQueued     bool
 	pendingReplan    DirtyBatch
 	hasPendingReplan bool
-}
-
-type watchRuntimeState struct {
-	loop watchLoopState
 
 	// syncBatch tracks the current best-effort watch batch so status updates are
 	// written only after the loop has exhausted all currently admissible work and
 	// returned to quiescence.
 	syncBatch watchSyncBatchState
-}
 
-type watchSyncBatchState struct {
-	active        bool
-	startedAt     time.Time
-	succeededBase int
-	failedBase    int
-	errorBase     int
-}
-
-type watchObservationState struct {
-	// Dirty debounce buffer. Local and remote observers mark coarse replan or
-	// full-refresh requests here; the watch loop refreshes snapshots and replans
-	// from SQLite current truth after the debounce window closes.
-	dirtyBuf *DirtyBuffer
-
-	// Observer references — set in startObservers, nil'd on shutdown.
-	remoteObs *RemoteObserver
-	localObs  *LocalObserver
-
-	// Socket.IO wake source lifecycle, when enabled for full-drive watch.
-	socketIOWakeStop chan struct{}
-	socketIOWakeDone chan struct{}
+	// Deduplication: caches the last watch-condition signature and per-scope
+	// shared-folder child-set signatures for watch summaries.
+	lastSummarySignature string
+	lastRemoteBlocked    map[ScopeKey]string
 }
 
 type watchTimerState struct {
@@ -62,14 +39,28 @@ type watchTimerState struct {
 	retryTimerCh chan struct{} // persistent, buffered(1)
 }
 
-type watchSummaryState struct {
-	// Deduplication: caches the last watch-condition signature and per-scope
-	// shared-folder child-set signatures for watch summaries.
-	lastSummarySignature string
-	lastRemoteBlocked    map[ScopeKey]string
+type watchSyncBatchState struct {
+	active        bool
+	startedAt     time.Time
+	succeededBase int
+	failedBase    int
+	errorBase     int
 }
 
-type watchRefreshState struct {
+type watchResources struct {
+	// Dirty debounce buffer. Local and remote observers mark coarse replan or
+	// full-refresh requests here; the watch loop refreshes snapshots and replans
+	// from SQLite current truth after the debounce window closes.
+	dirtyBuf *DirtyBuffer
+
+	// Observer references — set in startObservers, nil'd on shutdown.
+	remoteObs *RemoteObserver
+	localObs  *LocalObserver
+
+	// Socket.IO wake source lifecycle, when enabled for full-drive watch.
+	socketIOWakeStop chan struct{}
+	socketIOWakeDone chan struct{}
+
 	// Full remote refresh is started by the watch loop and hands one loop-applied
 	// remote observation batch back over refreshResults. The loop owns
 	// refreshActive, durable apply, and dirty marking on receipt.
@@ -83,11 +74,9 @@ type watchRefreshState struct {
 // and discarded when the watch session ends.
 type watchRuntime struct {
 	*engineFlow
-	watchRuntimeState
-	watchObservationState
+	loop watchLoopState
+	watchResources
 	watchTimerState
-	watchSummaryState
-	watchRefreshState
 }
 
 type watchRuntimePhase string
@@ -101,19 +90,15 @@ const (
 func newWatchRuntime(engine *Engine) *watchRuntime {
 	rt := &watchRuntime{
 		engineFlow: newEngineFlow(engine),
-		watchRuntimeState: watchRuntimeState{
-			loop: watchLoopState{
-				phase: watchRuntimePhaseRunning,
-			},
+		loop: watchLoopState{
+			phase:             watchRuntimePhaseRunning,
+			lastRemoteBlocked: make(map[ScopeKey]string),
 		},
 		watchTimerState: watchTimerState{
 			trialCh:      make(chan struct{}, 1),
 			retryTimerCh: make(chan struct{}, 1),
 		},
-		watchSummaryState: watchSummaryState{
-			lastRemoteBlocked: make(map[ScopeKey]string),
-		},
-		watchRefreshState: watchRefreshState{
+		watchResources: watchResources{
 			refreshCh:      make(chan time.Time, 1),
 			refreshResults: make(chan remoteRefreshResult, 1),
 		},
@@ -162,11 +147,11 @@ func (rt *watchRuntime) replaceOutbox(outbox []*TrackedAction) {
 }
 
 func (rt *watchRuntime) beginSyncStatusBatch(startedAt time.Time) {
-	if rt.syncBatch.active {
+	if rt.loop.syncBatch.active {
 		return
 	}
 
-	rt.syncBatch = watchSyncBatchState{
+	rt.loop.syncBatch = watchSyncBatchState{
 		active:        true,
 		startedAt:     startedAt,
 		succeededBase: rt.succeeded,
@@ -176,22 +161,22 @@ func (rt *watchRuntime) beginSyncStatusBatch(startedAt time.Time) {
 }
 
 func (rt *watchRuntime) clearSyncStatusBatch() {
-	rt.syncBatch = watchSyncBatchState{}
+	rt.loop.syncBatch = watchSyncBatchState{}
 }
 
 func (rt *watchRuntime) finishSyncStatusBatch(ctx context.Context, mode Mode) {
-	if !rt.syncBatch.active {
+	if !rt.loop.syncBatch.active {
 		return
 	}
 
 	update := &SyncStatusUpdate{
 		SyncedAt:  rt.engine.nowFunc(),
-		Duration:  rt.engine.since(rt.syncBatch.startedAt),
-		Succeeded: rt.succeeded - rt.syncBatch.succeededBase,
-		Failed:    rt.failed - rt.syncBatch.failedBase,
+		Duration:  rt.engine.since(rt.loop.syncBatch.startedAt),
+		Succeeded: rt.succeeded - rt.loop.syncBatch.succeededBase,
+		Failed:    rt.failed - rt.loop.syncBatch.failedBase,
 	}
-	if rt.syncBatch.errorBase < len(rt.syncErrors) {
-		update.Errors = append(update.Errors, rt.syncErrors[rt.syncBatch.errorBase:]...)
+	if rt.loop.syncBatch.errorBase < len(rt.syncErrors) {
+		update.Errors = append(update.Errors, rt.syncErrors[rt.loop.syncBatch.errorBase:]...)
 	}
 
 	rt.clearSyncStatusBatch()
@@ -215,7 +200,6 @@ func (rt *watchRuntime) canPrepareNow() bool {
 }
 
 func (rt *watchRuntime) queuePendingReplan(batch DirtyBatch) {
-	rt.loop.replanQueued = true
 	rt.loop.hasPendingReplan = true
 	if batch.FullRefresh {
 		rt.loop.pendingReplan.FullRefresh = true
@@ -223,7 +207,7 @@ func (rt *watchRuntime) queuePendingReplan(batch DirtyBatch) {
 }
 
 func (rt *watchRuntime) hasPendingReplan() bool {
-	return rt.loop.replanQueued && rt.loop.hasPendingReplan
+	return rt.loop.hasPendingReplan
 }
 
 func (rt *watchRuntime) takePendingReplan() (DirtyBatch, bool) {
@@ -234,7 +218,6 @@ func (rt *watchRuntime) takePendingReplan() (DirtyBatch, bool) {
 	batch := rt.loop.pendingReplan
 	rt.loop.pendingReplan = DirtyBatch{}
 	rt.loop.hasPendingReplan = false
-	rt.loop.replanQueued = false
 
 	return batch, true
 }

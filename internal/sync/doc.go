@@ -17,6 +17,7 @@
 //
 // Side-effect boundaries:
 //   - observation commit helpers own remote/local snapshot writes
+//   - reduceReadyFrontierStage owns publication drain plus due-held release
 //   - runPublicationDrainStage owns publication-only mutation writes
 //   - applyRuntimeCompletionStage owns exact-action completion mutation
 //   - runWatchLoop owns watch scheduling, debounce intake, and graceful drain

@@ -85,7 +85,7 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	rt.initializePreparedRuntime(&PreparedCurrentPlan{})
+	rt.initializeRuntimeState(&runtimePlan{})
 
 	publication := rt.depGraph.Add(&Action{
 		Type:    ActionCleanup,
@@ -137,7 +137,7 @@ func TestRunPublicationDrainStage_PersistsRetryWorkOnPublicationCommitFailure(t 
 		ItemType: ItemTypeFile,
 	}))
 
-	rt.initializePreparedRuntime(&PreparedCurrentPlan{})
+	rt.initializeRuntimeState(&runtimePlan{})
 
 	publication := rt.depGraph.Add(&Action{
 		Type:    ActionCleanup,
@@ -191,7 +191,7 @@ func TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublication
 		LastSeenAt:   now.UnixNano(),
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
-	rt.initializePreparedRuntime(&PreparedCurrentPlan{RetryRows: []RetryWorkRow{row}})
+	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
 
 	publication := rt.depGraph.Add(&Action{
 		Type:    ActionCleanup,
@@ -220,7 +220,7 @@ func TestRunPublicationDrainStage_TerminatesWhenPublicationRetryPersistenceFails
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	rt.initializePreparedRuntime(&PreparedCurrentPlan{})
+	rt.initializeRuntimeState(&runtimePlan{})
 
 	publication := rt.depGraph.Add(&Action{
 		Type:    ActionCleanup,

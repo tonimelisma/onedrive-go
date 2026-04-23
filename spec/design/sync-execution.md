@@ -6,9 +6,9 @@ Implements: R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4
 
 ## Overview
 
-Execution takes a prepared current runtime, dispatches concrete side-effecting
+Execution takes a runtime plan, dispatches concrete side-effecting
 work through a dependency graph, runs workers, and reports one
-`ActionCompletion` per finished action. That prepared runtime handoff is
+`ActionCompletion` per finished action. That runtime-plan handoff is
 assembled on the engine side by the shared pipeline in
 `engine_current_plan.go`, then admitted through `engine_runtime_start.go`
 before execution begins. Publication-only planner actions are not executor
@@ -91,12 +91,14 @@ publication-only action types only as an invariant guard; normal runtime flow
 must never send those actions to the worker pool.
 
 Publication drain itself is not an outbox helper. It is an effectful
-engine/store stage: callers hand it exact ready actions, the engine durably
-applies publication mutations and routes publication failures through normal
-completion handling, and only the surviving concrete worker work is returned to
-the caller's dispatch queue. Watch bootstrap, steady-state completions, and
-held-release ticks all re-enter that same stage through watch-owned frontier
-helpers before anything reaches the worker outbox.
+engine/store stage, and `reduceReadyFrontierStage` is the owning runtime stage
+that sequences publication drain plus due-held release. Callers hand the engine
+exact ready actions, the engine durably applies publication mutations, routes
+publication failures through normal completion handling, releases any already-
+due held work, and returns only the surviving concrete worker frontier to the
+caller’s dispatch queue. Watch bootstrap, steady-state completions, and held-
+release ticks all re-enter that same stage before anything reaches the worker
+outbox.
 
 ## File And Folder Mutation
 

@@ -511,19 +511,19 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	result, err := flow.loadDryRunCurrentInputs(ctx, bl, false)
+	result, err := flow.loadDryRunCurrentObservation(ctx, bl, false)
 	require.NoError(t, err)
 
-	localPaths := make([]string, 0, len(result.localRows))
-	for i := range result.localRows {
-		localPaths = append(localPaths, result.localRows[i].Path)
+	localPaths := make([]string, 0, len(result.inputs.localRows))
+	for i := range result.inputs.localRows {
+		localPaths = append(localPaths, result.inputs.localRows[i].Path)
 	}
 	assert.Contains(t, localPaths, "fresh-local.txt")
 	assert.NotContains(t, localPaths, "stale-local.txt")
 
-	remotePaths := make([]string, 0, len(result.remoteRows))
-	for i := range result.remoteRows {
-		remotePaths = append(remotePaths, result.remoteRows[i].Path)
+	remotePaths := make([]string, 0, len(result.inputs.remoteRows))
+	for i := range result.inputs.remoteRows {
+		remotePaths = append(remotePaths, result.inputs.remoteRows[i].Path)
 	}
 	assert.Contains(t, remotePaths, "remote-preview.txt")
 
@@ -583,7 +583,7 @@ func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	_, err = flow.loadDryRunCurrentInputs(ctx, bl, false)
+	_, err = flow.loadDryRunCurrentObservation(ctx, bl, false)
 	require.NoError(t, err)
 
 	liveObservationIssues, err := eng.baseline.ListObservationIssues(ctx)

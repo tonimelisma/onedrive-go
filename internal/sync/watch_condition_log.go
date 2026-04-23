@@ -21,19 +21,19 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 
 	totalConditions := summary.ConditionTotal
 	if totalConditions == 0 {
-		if rt.lastSummarySignature != "" {
+		if rt.loop.lastSummarySignature != "" {
 			rt.engine.logger.Info("sync conditions cleared")
 		}
-		rt.lastSummarySignature = ""
+		rt.loop.lastSummarySignature = ""
 		return
 	}
 
 	signature := watchConditionSummaryFingerprint(summary)
-	if signature == rt.lastSummarySignature {
+	if signature == rt.loop.lastSummarySignature {
 		return
 	}
 
-	rt.lastSummarySignature = signature
+	rt.loop.lastSummarySignature = signature
 
 	rt.engine.logger.Warn("sync conditions",
 		slog.Int("total", totalConditions),
@@ -80,7 +80,7 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup
 		signature := strings.Join(group.BlockedPaths, "\x00")
 		current[group.ScopeKey] = signature
 
-		switch previous, ok := rt.lastRemoteBlocked[group.ScopeKey]; {
+		switch previous, ok := rt.loop.lastRemoteBlocked[group.ScopeKey]; {
 		case !ok:
 			rt.engine.logger.Warn("shared-folder writes blocked",
 				slog.String("boundary", boundary),
@@ -94,7 +94,7 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup
 		}
 	}
 
-	for scopeKey := range rt.lastRemoteBlocked {
+	for scopeKey := range rt.loop.lastRemoteBlocked {
 		if _, ok := current[scopeKey]; ok {
 			continue
 		}
@@ -103,5 +103,5 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup
 		)
 	}
 
-	rt.lastRemoteBlocked = current
+	rt.loop.lastRemoteBlocked = current
 }

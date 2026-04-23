@@ -284,7 +284,7 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	prepared, err := rt.runSteadyStateCurrentPlan(ctx, bl, SyncBidirectional)
+	runtime, err := rt.runSteadyStateCurrentPlan(ctx, bl, SyncBidirectional)
 	require.NoError(t, err)
-	assert.Empty(t, prepared.Plan.Actions, "read-denied observation findings should suppress planning without reloading active scopes")
+	assert.Empty(t, runtime.Plan.Actions, "read-denied observation findings should suppress planning without reloading active scopes")
 }
