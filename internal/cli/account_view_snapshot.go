@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -16,9 +17,10 @@ import (
 // handling, and account-view construction in one place prevents each command
 // family from rebuilding its own auth/account semantics.
 type accountViewSnapshot struct {
-	Config   *config.Config
-	Stored   *config.Catalog
-	Accounts []accountView
+	Config         *config.Config
+	Stored         *config.Catalog
+	MountInventory *config.MountInventory
+	Accounts       []accountView
 }
 
 type driveListSnapshot struct {
@@ -42,9 +44,10 @@ func loadAccountViewSnapshot(ctx context.Context, cc *CLIContext) (accountViewSn
 	}
 
 	return accountViewSnapshot{
-		Config:   validated.Config,
-		Stored:   validated.Catalog,
-		Accounts: buildAccountViews(ctx, validated.Config, validated.Catalog, logger),
+		Config:         validated.Config,
+		Stored:         validated.Catalog,
+		MountInventory: mustLoadMountInventory(logger),
+		Accounts:       buildAccountViews(ctx, validated.Config, validated.Catalog, logger),
 	}, nil
 }
 
@@ -89,12 +92,26 @@ func loadAccountViewSnapshotWithBestEffortIdentityRefresh(
 }
 
 func statusAccounts(cc *CLIContext, snapshot accountViewSnapshot, history bool) []statusAccount {
-	return buildStatusAccountsFromViews(snapshot.Config, snapshot.Accounts, &liveSyncStateQuerier{
+	return buildStatusAccountsFromViews(snapshot.Config, snapshot.MountInventory, snapshot.Accounts, &liveSyncStateQuerier{
 		logger:        cc.Logger,
 		history:       history,
 		verbose:       cc.Flags.Verbose,
 		examplesLimit: defaultVisiblePaths,
 	})
+}
+
+func mustLoadMountInventory(logger *slog.Logger) *config.MountInventory {
+	inventory, err := config.LoadMountInventory()
+	if err != nil {
+		if logger != nil {
+			logger.Warn("loading mount inventory for status snapshot",
+				"error", err,
+			)
+		}
+		return config.DefaultMountInventory()
+	}
+
+	return inventory
 }
 
 func authRequirements(

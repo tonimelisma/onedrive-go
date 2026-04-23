@@ -8,21 +8,21 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-// DriveRunner manages a single drive's sync lifecycle with panic recovery
-// and error isolation. Each DriveRunner runs independently, so one drive can
-// fail without destabilizing the rest of the multi-drive control plane.
-type DriveRunner struct {
+// MountRunner manages a single mount's sync lifecycle with panic recovery
+// and error isolation. Each MountRunner runs independently, so one mount can
+// fail without destabilizing the rest of the multi-mount control plane.
+type MountRunner struct {
 	selectionIndex int
 	canonID        driveid.CanonicalID
 	displayName    string
 }
 
 // run executes the provided sync function with panic recovery. The control
-// plane injects the per-drive RunOnce closure instead of holding a direct
+// plane injects the per-mount RunOnce closure instead of holding a direct
 // Engine reference so tests can exercise panic isolation without a real
 // engine stack.
-func (dr *DriveRunner) run(ctx context.Context, fn func(context.Context) (*syncengine.Report, error)) (result *DriveReport) {
-	result = &DriveReport{
+func (dr *MountRunner) run(ctx context.Context, fn func(context.Context) (*syncengine.Report, error)) (result *MountReport) {
+	result = &MountReport{
 		SelectionIndex: dr.selectionIndex,
 		CanonicalID:    dr.canonID,
 		DisplayName:    dr.displayName,
@@ -31,7 +31,7 @@ func (dr *DriveRunner) run(ctx context.Context, fn func(context.Context) (*synce
 	defer func() {
 		if r := recover(); r != nil {
 			result.Report = nil
-			result.Err = fmt.Errorf("panic in drive %s: %v", dr.canonID, r)
+			result.Err = fmt.Errorf("panic in mount %s: %v", dr.canonID, r)
 		}
 	}()
 

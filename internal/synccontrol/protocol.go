@@ -43,7 +43,7 @@ const (
 
 type StatusResponse struct {
 	OwnerMode OwnerMode `json:"owner_mode"`
-	Drives    []string  `json:"drives"`
+	Mounts    []string  `json:"mounts"`
 }
 
 type MutationResponse struct {
@@ -55,7 +55,7 @@ type MutationResponse struct {
 type PerfStatusResponse struct {
 	OwnerMode OwnerMode                `json:"owner_mode"`
 	Aggregate perf.Snapshot            `json:"aggregate"`
-	Drives    map[string]perf.Snapshot `json:"drives,omitempty"`
+	Mounts    map[string]perf.Snapshot `json:"mounts,omitempty"`
 }
 
 type PerfCaptureRequest struct {

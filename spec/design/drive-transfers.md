@@ -81,7 +81,7 @@ follow-on `UpdateFileSystemInfo` PATCH can also briefly return `404
 itemNotFound` for the returned item ID, or hit a transient 502/503/504
 service failure after the content write has already succeeded. That retry stays
 in the graph boundary and only applies to the post-simple-upload finalization
-path, with a bounded window sized for the longer shared-root item-ID lag seen
+path, with a bounded window sized for the longer mounted-root item-ID lag seen
 in live E2E; transfer-manager and CLI callers still see one success or one
 failure outcome.
 
@@ -168,6 +168,11 @@ shaped. Sync workers receive authenticated sessions from explicit
 That keeps sync auth ownership aligned with runtime mounts, including managed
 child projections, instead of carrying `ResolvedDrive` through transfer/runtime
 construction as a second source of truth.
+
+The resulting `driveops.Session` is also mount-rooted in its own vocabulary.
+Interactive and sync path operations anchor themselves at
+`MountedRootItemID` when one is configured, instead of treating rooted-subtree
+operation as a special generic "mounted-root" session mode.
 
 ## SessionStore
 

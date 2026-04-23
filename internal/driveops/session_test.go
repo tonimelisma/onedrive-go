@@ -308,7 +308,7 @@ func TestSessionRuntime_SyncSession_UsesMountOwnedTokenOwner(t *testing.T) {
 	require.NotNil(t, session)
 	assert.Equal(t, config.DriveTokenPath(ownerCID), tokenPath)
 	assert.Equal(t, "owner@example.com", session.AccountEmail())
-	assert.Equal(t, "root-item", session.RootItem)
+	assert.Equal(t, "root-item", session.MountedRootItemID)
 }
 
 // --- Thread safety ---
@@ -550,17 +550,17 @@ func TestSession_ResolveItem_SlashRoot(t *testing.T) {
 	assert.Equal(t, "/drives/abcdef0123456789/items/root", gotPath)
 }
 
-func TestSession_ResolveItem_SharedRootRelativePath(t *testing.T) {
+func TestSession_ResolveItem_MountedRootRelativePath(t *testing.T) {
 	t.Parallel()
 
-	const sharedRootItemID = "shared-root"
+	const mountedRootItemID = "mounted-root"
 
 	var gotPaths []string
 
 	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPaths = append(gotPaths, r.URL.Path)
 		switch r.URL.Path {
-		case "/drives/abcdef0123456789/items/" + sharedRootItemID + "/children":
+		case "/drives/abcdef0123456789/items/" + mountedRootItemID + "/children":
 			writeTestResponsef(t, w, `{"value":[{"id":"folder-id","name":"Documents","folder":{"childCount":1}}]}`)
 		case "/drives/abcdef0123456789/items/folder-id/children":
 			writeTestResponsef(t, w, `{"value":[{"id":"file-id","name":"report.docx"}]}`)
@@ -568,7 +568,7 @@ func TestSession_ResolveItem_SharedRootRelativePath(t *testing.T) {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 	}))
-	s.RootItem = sharedRootItemID
+	s.MountedRootItemID = mountedRootItemID
 
 	item, err := s.ResolveItem(t.Context(), "Documents/report.docx")
 	require.NoError(t, err)
@@ -608,10 +608,10 @@ func TestSession_ResolveDeleteTarget_RecoversWhenParentPathListingLags(t *testin
 	}, *gotPaths)
 }
 
-func TestSession_ListChildren_SharedRootUsesSharedRootItem(t *testing.T) {
+func TestSession_ListChildren_MountedRootUsesMountedRootItem(t *testing.T) {
 	t.Parallel()
 
-	const sharedRootItemID = "shared-root"
+	const mountedRootItemID = "mounted-root"
 
 	var gotPath string
 
@@ -619,13 +619,13 @@ func TestSession_ListChildren_SharedRootUsesSharedRootItem(t *testing.T) {
 		gotPath = r.URL.Path
 		writeTestResponsef(t, w, `{"value":[{"id":"child1","name":"docs","folder":{"childCount":0}}]}`)
 	}))
-	s.RootItem = sharedRootItemID
+	s.MountedRootItemID = mountedRootItemID
 
 	items, err := s.ListChildren(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, "child1", items[0].ID)
-	assert.Equal(t, "/drives/abcdef0123456789/items/"+sharedRootItemID+"/children", gotPath)
+	assert.Equal(t, "/drives/abcdef0123456789/items/"+mountedRootItemID+"/children", gotPath)
 }
 
 // --- ListChildren ---

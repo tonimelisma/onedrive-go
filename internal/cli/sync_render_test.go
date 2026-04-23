@@ -20,22 +20,22 @@ func TestPrintRunOnceResult_MatchesReportsBySelectionIndex(t *testing.T) {
 
 	printRunOnceResult(multisync.RunOnceResult{
 		Startup: multisync.StartupSelectionSummary{
-			Results: []multisync.DriveStartupResult{
+			Results: []multisync.MountStartupResult{
 				{
 					SelectionIndex: 0,
 					CanonicalID:    cid,
 					DisplayName:    "First selector",
-					Status:         multisync.DriveStartupRunnable,
+					Status:         multisync.MountStartupRunnable,
 				},
 				{
 					SelectionIndex: 1,
 					CanonicalID:    cid,
 					DisplayName:    "Second selector",
-					Status:         multisync.DriveStartupRunnable,
+					Status:         multisync.MountStartupRunnable,
 				},
 			},
 		},
-		Reports: []*multisync.DriveReport{
+		Reports: []*multisync.MountReport{
 			{
 				SelectionIndex: 1,
 				CanonicalID:    cid,

@@ -39,7 +39,7 @@ func defaultSyncDaemonOrchestratorFactory(cfg *multisync.OrchestratorConfig) syn
 	return multisync.NewOrchestrator(cfg)
 }
 
-// runSyncDaemon starts multi-drive watch mode via the Orchestrator. The Unix
+// runSyncDaemon starts multi-mount watch mode via the Orchestrator. The Unix
 // control socket prevents duplicate sync owners and handles reload/status/user
 // intent RPCs.
 func runSyncDaemon(

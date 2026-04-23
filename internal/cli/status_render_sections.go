@@ -2,24 +2,23 @@ package cli
 
 import "io"
 
-const statusNextIndent = "      "
-
-func printDriveSyncSections(w io.Writer, ss *syncStateInfo, history bool) error {
+func printMountSyncSections(w io.Writer, indent string, ss *syncStateInfo, history bool) error {
 	_ = history
+	nextIndent := indent + "  "
 
 	if err := writeln(w); err != nil {
 		return err
 	}
-	if err := writeln(w, "    CONDITIONS"); err != nil {
+	if err := writeln(w, indent+"CONDITIONS"); err != nil {
 		return err
 	}
 
-	return printConditionSection(w, ss.Conditions)
+	return printConditionSection(w, indent, nextIndent, ss.Conditions)
 }
 
-func printConditionSection(w io.Writer, groups []statusConditionJSON) error {
+func printConditionSection(w io.Writer, indent string, nextIndent string, groups []statusConditionJSON) error {
 	if len(groups) == 0 {
-		return writeln(w, "    No active conditions.")
+		return writeln(w, indent+"No active conditions.")
 	}
 
 	for i := range groups {
@@ -29,21 +28,21 @@ func printConditionSection(w io.Writer, groups []statusConditionJSON) error {
 				return err
 			}
 		}
-		if err := writef(w, "    %s (%d %s)\n", group.Title, group.Count, itemNoun(group.Count)); err != nil {
+		if err := writef(w, "%s%s (%d %s)\n", indent, group.Title, group.Count, itemNoun(group.Count)); err != nil {
 			return err
 		}
-		if err := writef(w, "      %s %s\n", group.Reason, group.Action); err != nil {
+		if err := writef(w, "%s%s %s\n", nextIndent, group.Reason, group.Action); err != nil {
 			return err
 		}
 		if group.Scope != "" {
-			if err := writef(w, "      Scope: %s\n", group.Scope); err != nil {
+			if err := writef(w, "%sScope: %s\n", nextIndent, group.Scope); err != nil {
 				return err
 			}
 		}
-		if err := printConditionPaths(w, group.Paths, group.Count); err != nil {
+		if err := printConditionPaths(w, nextIndent, group.Paths, group.Count); err != nil {
 			return err
 		}
-		if err := printStatusNextLine(w, group.Action); err != nil {
+		if err := printStatusNextLine(w, nextIndent, group.Action); err != nil {
 			return err
 		}
 	}
@@ -51,7 +50,7 @@ func printConditionSection(w io.Writer, groups []statusConditionJSON) error {
 	return nil
 }
 
-func printConditionPaths(w io.Writer, paths []string, totalCount int) error {
+func printConditionPaths(w io.Writer, indent string, paths []string, totalCount int) error {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -59,14 +58,14 @@ func printConditionPaths(w io.Writer, paths []string, totalCount int) error {
 		return err
 	}
 	for i := range paths {
-		if err := writef(w, "      %s\n", paths[i]); err != nil {
+		if err := writef(w, "%s%s\n", indent, paths[i]); err != nil {
 			return err
 		}
 	}
 
 	remaining := totalCount - len(paths)
 	if remaining > 0 {
-		if err := writef(w, "      ... and %d more (use --verbose to see all)\n", remaining); err != nil {
+		if err := writef(w, "%s... and %d more (use --verbose to see all)\n", indent, remaining); err != nil {
 			return err
 		}
 	}
@@ -74,10 +73,10 @@ func printConditionPaths(w io.Writer, paths []string, totalCount int) error {
 	return nil
 }
 
-func printStatusNextLine(w io.Writer, hint string) error {
+func printStatusNextLine(w io.Writer, indent string, hint string) error {
 	if hint == "" {
 		return nil
 	}
 
-	return writef(w, "%sNext: %s\n", statusNextIndent, hint)
+	return writef(w, "%sNext: %s\n", indent, hint)
 }

@@ -1,3 +1,3 @@
-// Package multisync implements the multi-drive sync control plane: drive
-// orchestration, per-drive panic isolation, and watch-mode config reload.
+// Package multisync implements the multi-mount sync control plane: runtime
+// mount orchestration, per-mount panic isolation, and watch-mode config reload.
 package multisync

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -19,7 +21,12 @@ const (
 	syncDirNotSet    = "(not set)"
 )
 
-// statusAccount groups drives under a single account email.
+const (
+	statusProjectionStandalone = "standalone"
+	statusProjectionChild      = "child"
+)
+
+// statusAccount groups runtime mounts under a single account email.
 type statusAccount struct {
 	Email          string            `json:"email"`
 	DriveType      string            `json:"drive_type"`
@@ -32,7 +39,7 @@ type statusAccount struct {
 	DegradedReason string            `json:"degraded_reason,omitempty"`
 	DegradedAction string            `json:"degraded_action,omitempty"`
 	LiveDrives     []statusLiveDrive `json:"live_drives,omitempty"`
-	Drives         []statusDrive     `json:"drives"`
+	Mounts         []statusMount     `json:"mounts"`
 }
 
 type statusLiveDrive struct {
@@ -43,16 +50,19 @@ type statusLiveDrive struct {
 	QuotaTotal int64  `json:"quota_total"`
 }
 
-// statusDrive holds status information for a single drive.
-type statusDrive struct {
-	CanonicalID string         `json:"canonical_id"`
-	DisplayName string         `json:"display_name,omitempty"`
-	SyncDir     string         `json:"sync_dir"`
-	State       string         `json:"state"`
-	SyncState   *syncStateInfo `json:"sync_state,omitempty"`
+// statusMount holds status information for one runtime mount.
+type statusMount struct {
+	MountID        string         `json:"mount_id"`
+	ParentMountID  string         `json:"parent_mount_id,omitempty"`
+	ProjectionKind string         `json:"projection_kind"`
+	CanonicalID    string         `json:"canonical_id"`
+	DisplayName    string         `json:"display_name,omitempty"`
+	SyncDir        string         `json:"sync_dir"`
+	State          string         `json:"state"`
+	SyncState      *syncStateInfo `json:"sync_state,omitempty"`
 }
 
-// syncStateInfo holds the full per-drive status payload rendered by `status`.
+// syncStateInfo holds the full per-mount status payload rendered by `status`.
 type syncStateInfo struct {
 	FileCount             int                   `json:"file_count"`
 	ConditionCount        int                   `json:"condition_count"`
@@ -65,9 +75,9 @@ type syncStateInfo struct {
 	PerfUnavailableReason string                `json:"perf_unavailable_reason,omitempty"`
 }
 
-// statusSummary aggregates health info across all drives.
+// statusSummary aggregates health info across all runtime mounts.
 type statusSummary struct {
-	TotalDrives           int `json:"total_drives"`
+	TotalMounts           int `json:"total_mounts"`
 	Ready                 int `json:"ready"`
 	Paused                int `json:"paused"`
 	AccountsRequiringAuth int `json:"accounts_requiring_auth"`
@@ -147,9 +157,10 @@ func filterStatusSnapshot(
 	}
 
 	return accountViewSnapshot{
-		Config:   &filtered,
-		Stored:   snapshot.Stored,
-		Accounts: filterSnapshotAccounts(snapshot.Accounts, selectedAccounts),
+		Config:         &filtered,
+		Stored:         snapshot.Stored,
+		MountInventory: snapshot.MountInventory,
+		Accounts:       filterSnapshotAccounts(snapshot.Accounts, selectedAccounts),
 	}, nil
 }
 
@@ -234,13 +245,13 @@ type accountNameReader interface {
 	ReadAccountNames(account string, driveIDs []driveid.CanonicalID) (displayName, orgName string)
 }
 
-// syncStateQuerier abstracts querying per-drive sync state from state DBs.
+// syncStateQuerier abstracts querying per-mount sync state from state DBs.
 // Enables testing without real SQLite databases on disk.
 type syncStateQuerier interface {
-	QuerySyncState(cid driveid.CanonicalID) *syncStateInfo
+	QuerySyncState(statePath string) *syncStateInfo
 }
 
-// liveSyncStateQuerier queries per-drive sync state from real state DBs.
+// liveSyncStateQuerier queries per-mount sync state from real state DBs.
 type liveSyncStateQuerier struct {
 	logger        *slog.Logger
 	history       bool
@@ -248,8 +259,7 @@ type liveSyncStateQuerier struct {
 	examplesLimit int
 }
 
-func (q *liveSyncStateQuerier) QuerySyncState(cid driveid.CanonicalID) *syncStateInfo {
-	statePath := config.DriveStatePath(cid)
+func (q *liveSyncStateQuerier) QuerySyncState(statePath string) *syncStateInfo {
 	return querySyncStateWithOptions(statePath, q.logger, q.history, q.verbose, q.examplesLimit)
 }
 
@@ -269,7 +279,7 @@ func buildStatusAccountsWith(
 			return driveIDs[i].String() < driveIDs[j].String()
 		})
 
-		acct := buildSingleAccountStatusWith(cfg, email, driveIDs, names, checker, syncQ)
+		acct := buildSingleAccountStatusWith(cfg, email, driveIDs, nil, names, checker, syncQ)
 		accounts = append(accounts, acct)
 	}
 
@@ -278,9 +288,11 @@ func buildStatusAccountsWith(
 
 func buildStatusAccountsFromViews(
 	cfg *config.Config,
+	inventory *config.MountInventory,
 	views []accountView,
 	syncQ syncStateQuerier,
 ) []statusAccount {
+	childrenByParent := groupChildMountsByParent(inventory)
 	accounts := make([]statusAccount, 0, len(views))
 
 	for i := range views {
@@ -296,28 +308,15 @@ func buildStatusAccountsFromViews(
 			AuthAction:  view.AuthHealth.Action,
 			DisplayName: view.DisplayName,
 			OrgName:     view.OrgName,
-			Drives:      make([]statusDrive, 0, len(driveIDs)),
+			Mounts:      make([]statusMount, 0, len(driveIDs)),
 		}
 
 		for _, cid := range driveIDs {
 			d := cfg.Drives[cid]
-			driveDisplayName := d.DisplayName
-			if driveDisplayName == "" {
-				driveDisplayName = config.DefaultDisplayName(cid)
+			acct.Mounts = append(acct.Mounts, buildConfiguredStatusMount(cid, d, syncQ))
+			for _, child := range childrenByParent[cid] {
+				acct.Mounts = append(acct.Mounts, buildChildStatusMount(cid, d, child, syncQ))
 			}
-
-			sd := statusDrive{
-				CanonicalID: cid.String(),
-				DisplayName: driveDisplayName,
-				SyncDir:     d.SyncDir,
-				State:       driveState(&d),
-			}
-
-			if syncQ != nil {
-				sd.SyncState = syncQ.QuerySyncState(cid)
-			}
-
-			acct.Drives = append(acct.Drives, sd)
 		}
 
 		accounts = append(accounts, acct)
@@ -350,13 +349,14 @@ func buildSingleAccountStatusWith(
 	cfg *config.Config,
 	email string,
 	driveIDs []driveid.CanonicalID,
+	childrenByParent map[driveid.CanonicalID][]config.MountRecord,
 	names accountNameReader,
 	checker accountAuthChecker,
 	syncQ syncStateQuerier,
 ) statusAccount {
 	acct := statusAccount{
 		Email:  email,
-		Drives: make([]statusDrive, 0, len(driveIDs)),
+		Mounts: make([]statusMount, 0, len(driveIDs)),
 	}
 
 	for _, cid := range driveIDs {
@@ -379,23 +379,10 @@ func buildSingleAccountStatusWith(
 
 	for _, cid := range driveIDs {
 		d := cfg.Drives[cid]
-		driveDisplayName := d.DisplayName
-		if driveDisplayName == "" {
-			driveDisplayName = config.DefaultDisplayName(cid)
+		acct.Mounts = append(acct.Mounts, buildConfiguredStatusMount(cid, d, syncQ))
+		for _, child := range childrenByParent[cid] {
+			acct.Mounts = append(acct.Mounts, buildChildStatusMount(cid, d, child, syncQ))
 		}
-
-		sd := statusDrive{
-			CanonicalID: cid.String(),
-			DisplayName: driveDisplayName,
-			SyncDir:     d.SyncDir,
-			State:       driveState(&d),
-		}
-
-		if syncQ != nil {
-			sd.SyncState = syncQ.QuerySyncState(cid)
-		}
-
-		acct.Drives = append(acct.Drives, sd)
 	}
 
 	return acct
@@ -425,6 +412,97 @@ func driveState(d *config.Drive) string {
 	}
 
 	return driveStateReady
+}
+
+func groupChildMountsByParent(inventory *config.MountInventory) map[driveid.CanonicalID][]config.MountRecord {
+	grouped := make(map[driveid.CanonicalID][]config.MountRecord)
+	if inventory == nil {
+		return grouped
+	}
+
+	for _, record := range inventory.Mounts {
+		parentID, err := driveid.NewCanonicalID(record.ParentMountID)
+		if err != nil {
+			continue
+		}
+		grouped[parentID] = append(grouped[parentID], record)
+	}
+
+	for parentID := range grouped {
+		sort.Slice(grouped[parentID], func(i, j int) bool {
+			left := grouped[parentID][i]
+			right := grouped[parentID][j]
+			if left.RelativeLocalPath == right.RelativeLocalPath {
+				return left.MountID < right.MountID
+			}
+
+			return left.RelativeLocalPath < right.RelativeLocalPath
+		})
+	}
+
+	return grouped
+}
+
+func buildConfiguredStatusMount(
+	cid driveid.CanonicalID,
+	drive config.Drive,
+	syncQ syncStateQuerier,
+) statusMount {
+	driveDisplayName := drive.DisplayName
+	if driveDisplayName == "" {
+		driveDisplayName = config.DefaultDisplayName(cid)
+	}
+
+	mount := statusMount{
+		MountID:        cid.String(),
+		ProjectionKind: statusProjectionStandalone,
+		CanonicalID:    cid.String(),
+		DisplayName:    driveDisplayName,
+		SyncDir:        drive.SyncDir,
+		State:          driveState(&drive),
+	}
+	if syncQ != nil {
+		mount.SyncState = syncQ.QuerySyncState(config.DriveStatePath(cid))
+	}
+
+	return mount
+}
+
+func buildChildStatusMount(
+	parentCID driveid.CanonicalID,
+	parentDrive config.Drive,
+	record config.MountRecord,
+	syncQ syncStateQuerier,
+) statusMount {
+	displayName := record.DisplayName
+	if displayName == "" {
+		displayName = path.Base(record.RelativeLocalPath)
+	}
+
+	canonicalID := record.MountID
+	if sharedID, err := driveid.ConstructShared(parentCID.Email(), record.RemoteDriveID, record.RemoteRootItemID); err == nil {
+		canonicalID = sharedID.String()
+	}
+
+	state := driveState(&parentDrive)
+	if !parentDrive.IsPaused(time.Now()) && !record.Paused {
+		state = driveStateReady
+	}
+
+	mount := statusMount{
+		MountID:        record.MountID,
+		ParentMountID:  record.ParentMountID,
+		ProjectionKind: statusProjectionChild,
+		CanonicalID:    canonicalID,
+		DisplayName:    displayName,
+		SyncDir:        filepath.Join(parentDrive.SyncDir, filepath.FromSlash(record.RelativeLocalPath)),
+		State:          state,
+	}
+	if syncQ != nil {
+		mount.SyncState = syncQ.QuerySyncState(config.MountStatePath(record.MountID))
+	}
+
+	return mount
 }
 
 func querySyncState(

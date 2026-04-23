@@ -1,6 +1,6 @@
 # Configuration
 
-GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/catalog_lifecycle.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
+GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/catalog_lifecycle.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/mount_inventory.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
 
 Implements: R-3.7 [verified], R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -312,6 +312,18 @@ bindings, so it follows the same managed-file discipline:
 - unknown JSON fields are rejected
 - `schema_version` is required
 - only the exact supported version is accepted
+- current schema version is `2`
+- automatic child-mount records are binding-owned and therefore require:
+  - `MountID`
+  - `ParentMountID`
+  - `BindingItemID`
+  - `RelativeLocalPath`
+  - `RemoteDriveID`
+  - `RemoteRootItemID`
+- parent discovery state is stored alongside mount records:
+  - `ParentMountID`
+  - `DeltaLink`
+  - `DiscoveryMode`
 - sibling child mounts under the same parent may not reuse or nest local
   relative paths
 - every save is a full atomic rewrite of the file
@@ -320,6 +332,17 @@ bindings, so it follows the same managed-file discipline:
 DB path independent of configured drive canonical IDs. Configured standalone
 drives still use `DriveStatePath(...)`; managed child mounts now own their own
 durable store namespace instead of pretending to be synthetic configured drives.
+
+Automatic child mount IDs are stable across placeholder rename or move because
+they are derived from `(ParentMountID, BindingItemID)`, not from the local
+projection path or the content-root identity. A shortcut can therefore move to
+another folder inside the parent namespace without losing its retained child
+mount state DB.
+
+When config encounters an older `mounts.json` schema version, it does not keep
+that format alive through compatibility shims. Schema v1 inventories are moved
+aside to `mounts.json.v1.bak`, and config starts from an empty v2 inventory.
+That preserves operator evidence while keeping one active durable format.
 
 ## Optional Catalog Fields
 
