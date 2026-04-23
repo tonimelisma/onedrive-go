@@ -154,14 +154,9 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 		}
 	}
 
-	if batch.observationMode == remoteObservationModeEnumerate {
-		if err := rt.engine.baseline.ClampFullRemoteRefreshDeadline(
-			ctx,
-			rt.engine.driveID,
-			rt.engine.nowFunc().Add(remoteRefreshEnumerateInterval),
-		); err != nil {
-			return fmt.Errorf("clamp full remote refresh deadline: %w", err)
-		}
+	armFullRefreshTimer, err := rt.refreshTimerRearmNeededForBatch(ctx, batch)
+	if err != nil {
+		return err
 	}
 
 	findings := batch.findings
@@ -174,13 +169,37 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 		return err
 	}
 
-	if batch.armFullRefreshTimer {
+	if armFullRefreshTimer {
 		if err := rt.armFullRefreshTimer(ctx); err != nil {
 			return fmt.Errorf("arm full remote refresh timer: %w", err)
 		}
 	}
 
 	return nil
+}
+
+func (rt *watchRuntime) refreshTimerRearmNeededForBatch(
+	ctx context.Context,
+	batch *remoteObservationBatch,
+) (bool, error) {
+	// Watch mode must rearm the live refresh timer in the same control path that
+	// shortens the persisted deadline, otherwise shared-root enumerate fallback
+	// can leave the process sleeping on an outdated timer.
+	armFullRefreshTimer := batch.armFullRefreshTimer
+	if batch.observationMode != remoteObservationModeEnumerate {
+		return armFullRefreshTimer, nil
+	}
+
+	deadlineChanged, err := rt.engine.baseline.ClampFullRemoteRefreshDeadline(
+		ctx,
+		rt.engine.driveID,
+		rt.engine.nowFunc().Add(remoteRefreshEnumerateInterval),
+	)
+	if err != nil {
+		return false, fmt.Errorf("clamp full remote refresh deadline: %w", err)
+	}
+
+	return armFullRefreshTimer || deadlineChanged, nil
 }
 
 func batchObservationFailureMessage(source remoteObservationBatchSource) string {
