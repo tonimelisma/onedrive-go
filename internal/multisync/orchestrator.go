@@ -66,10 +66,14 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{
 		cfg: cfg,
 		engineFactory: func(ctx context.Context, req engineFactoryRequest) (engineRunner, error) {
-			engine, err := syncengine.NewDriveEngine(
+			mountCfg, err := engineMountConfigForMount(req.Mount)
+			if err != nil {
+				return nil, fmt.Errorf("engine mount config: %w", err)
+			}
+			engine, err := syncengine.NewMountEngine(
 				ctx,
 				req.Session,
-				req.Mount.resolved,
+				mountCfg,
 				req.Logger,
 				req.PerfCollector,
 				req.VerifyDrive,

@@ -6,8 +6,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
+
+const testSharedRootItemID = "shared-root-id"
 
 // Validates: R-2.8.1
 func TestBuildConfiguredMountSpecs_PreservesOrderAndReportingFields(t *testing.T) {
@@ -52,7 +56,7 @@ func TestBuildConfiguredMountSpecs_PreservesRootedMountFields(t *testing.T) {
 	t.Parallel()
 
 	shared := testResolvedDrive(t, "shared:owner@example.com:test-drive:test-item", "Shared")
-	shared.RootItemID = "shared-root-id"
+	shared.RootItemID = testSharedRootItemID
 	shared.SharedRootDeltaCapable = true
 	shared.Websocket = true
 	shared.DriveID = driveid.New("remote-drive-id")
@@ -66,7 +70,7 @@ func TestBuildConfiguredMountSpecs_PreservesRootedMountFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mounts, 1)
 
-	assert.Equal(t, "shared-root-id", mounts[0].remoteRootItemID)
+	assert.Equal(t, testSharedRootItemID, mounts[0].remoteRootItemID)
 	assert.Equal(t, driveid.New("remote-drive-id"), mounts[0].remoteDriveID)
 	assert.True(t, mounts[0].sharedRootDeltaCapable)
 	assert.True(t, mounts[0].enableWebsocket)
@@ -84,4 +88,61 @@ func TestBuildConfiguredMountSpecs_NilDriveFails(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolved drive is required")
+}
+
+// Validates: R-2.8.1
+func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
+	t.Parallel()
+
+	shared := testResolvedDrive(t, "sharepoint:owner@example.com:site:Documents", "Shared")
+	shared.RootItemID = testSharedRootItemID
+	shared.SharedRootDeltaCapable = true
+	shared.Websocket = true
+	shared.DriveID = driveid.New("remote-drive-id")
+	shared.TransferWorkers = 7
+	shared.CheckWorkers = 8
+	shared.MinFreeSpace = "3MiB"
+
+	mounts, err := buildConfiguredMountSpecs([]*resolvedDriveWithSelection{{
+		SelectionIndex: 2,
+		Drive:          shared,
+	}})
+	require.NoError(t, err)
+	require.Len(t, mounts, 1)
+
+	cfg, err := engineMountConfigForMount(mounts[0])
+	require.NoError(t, err)
+
+	assert.Equal(t, mounts[0].statePath, cfg.DBPath)
+	assert.Equal(t, mounts[0].syncRoot, cfg.SyncRoot)
+	assert.Equal(t, config.DefaultDataDir(), cfg.DataDir)
+	assert.Equal(t, mounts[0].remoteDriveID, cfg.DriveID)
+	assert.Equal(t, mounts[0].canonicalID.DriveType(), cfg.DriveType)
+	assert.Equal(t, mounts[0].accountEmail, cfg.AccountEmail)
+	assert.Equal(t, mounts[0].remoteRootItemID, cfg.RootItemID)
+	assert.Equal(t, mounts[0].sharedRootDeltaCapable, cfg.SharedRootDeltaCapable)
+	assert.Equal(t, mounts[0].enableWebsocket, cfg.EnableWebsocket)
+	assert.Equal(t, syncengine.LocalFilterConfig{}, cfg.LocalFilter)
+	assert.True(t, cfg.LocalRules.RejectSharePointRootForms)
+	assert.Equal(t, 7, cfg.TransferWorkers)
+	assert.Equal(t, 8, cfg.CheckWorkers)
+	assert.Equal(t, int64(3*1024*1024), cfg.MinFreeSpace)
+}
+
+// Validates: R-2.8.1
+func TestEngineMountConfigForMount_InvalidMinFreeSpaceFails(t *testing.T) {
+	t.Parallel()
+
+	rd := testResolvedDrive(t, "personal:first@example.com", "First")
+	rd.MinFreeSpace = "not-a-size"
+
+	mounts, err := buildConfiguredMountSpecs([]*resolvedDriveWithSelection{{
+		SelectionIndex: 0,
+		Drive:          rd,
+	}})
+	require.NoError(t, err)
+
+	_, err = engineMountConfigForMount(mounts[0])
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid min_free_space")
 }

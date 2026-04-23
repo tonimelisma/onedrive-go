@@ -30,7 +30,8 @@ type resolvedDriveWithSelection struct {
 
 // mountSpec is the control plane's runtime unit. In this increment configured
 // drives are the only source of mounts, so the spec still carries the resolved
-// drive as a temporary adapter for drive-shaped session and engine constructors.
+// drive as a temporary adapter for drive-shaped session creation and the sync
+// tunables that have not yet been promoted into mount-owned runtime state.
 type mountSpec struct {
 	mountID                mountID
 	projectionKind         mountProjectionKind
