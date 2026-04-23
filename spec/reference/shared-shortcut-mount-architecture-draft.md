@@ -1632,6 +1632,10 @@ Concrete work:
 - remove transitional resolved-drive runtime constructors and session APIs:
   `sync.NewDriveEngine` is gone, `SessionRuntime.Session` is gone, and both
   interactive and sync session construction now consume `driveops.MountSessionConfig`
+- remove resolved-drive values from multisync orchestration:
+  `multisync.OrchestratorConfig` now accepts `StandaloneMountConfig`, and
+  `ResolvedDrive` is consumed at the CLI/config edge before top-level mount
+  construction
 - rename remaining store owner vocabulary from configured-drive-centric to
   mount-centric where appropriate
 - keep only the minimal explicit standalone-mount surface the product still

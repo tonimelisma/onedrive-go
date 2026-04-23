@@ -29,6 +29,66 @@ func ensureResolvedSyncDir(rd *config.ResolvedDrive) error {
 	return nil
 }
 
+func standaloneMountConfigsFromResolvedDrives(drives []*config.ResolvedDrive) ([]multisync.StandaloneMountConfig, error) {
+	mounts := make([]multisync.StandaloneMountConfig, 0, len(drives))
+	for i := range drives {
+		mount, err := standaloneMountConfigFromResolvedDrive(i, drives[i])
+		if err != nil {
+			return nil, err
+		}
+		mounts = append(mounts, mount)
+	}
+
+	return mounts, nil
+}
+
+func standaloneMountConfigFromResolvedDrive(
+	selectionIndex int,
+	rd *config.ResolvedDrive,
+) (multisync.StandaloneMountConfig, error) {
+	if rd == nil {
+		return multisync.StandaloneMountConfig{}, fmt.Errorf("resolved drive is required")
+	}
+
+	statePath := rd.StatePath()
+	if statePath == "" {
+		return multisync.StandaloneMountConfig{}, fmt.Errorf("state path is required for %s", rd.CanonicalID)
+	}
+
+	tokenOwnerCanonical, err := config.TokenAccountCanonicalID(rd.CanonicalID)
+	if err != nil {
+		return multisync.StandaloneMountConfig{}, fmt.Errorf("token owner for %s: %w", rd.CanonicalID, err)
+	}
+
+	minFreeSpace, err := config.ParseSize(rd.MinFreeSpace)
+	if err != nil {
+		return multisync.StandaloneMountConfig{}, fmt.Errorf("invalid min_free_space %q for %s: %w", rd.MinFreeSpace, rd.CanonicalID, err)
+	}
+
+	accountEmail := rd.CanonicalID.Email()
+	if accountEmail == "" {
+		accountEmail = tokenOwnerCanonical.Email()
+	}
+
+	return multisync.StandaloneMountConfig{
+		SelectionIndex:            selectionIndex,
+		CanonicalID:               rd.CanonicalID,
+		DisplayName:               rd.DisplayName,
+		SyncRoot:                  rd.SyncDir,
+		StatePath:                 statePath,
+		RemoteDriveID:             rd.DriveID,
+		RemoteRootItemID:          rd.RootItemID,
+		TokenOwnerCanonical:       tokenOwnerCanonical,
+		AccountEmail:              accountEmail,
+		Paused:                    rd.Paused,
+		EnableWebsocket:           rd.Websocket,
+		RootedSubtreeDeltaCapable: config.RootedSubtreeDeltaCapableForTokenOwner(tokenOwnerCanonical),
+		TransferWorkers:           rd.TransferWorkers,
+		CheckWorkers:              rd.CheckWorkers,
+		MinFreeSpaceBytes:         minFreeSpace,
+	}, nil
+}
+
 type syncDaemonOrchestrator interface {
 	RunWatch(context.Context, syncengine.SyncMode, syncengine.WatchOptions) error
 }
@@ -98,6 +158,10 @@ func runSyncDaemonWithFactory(
 	if len(drives) == 0 {
 		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
+	standaloneMounts, err := standaloneMountConfigsFromResolvedDrives(drives)
+	if err != nil {
+		return fmt.Errorf("compile standalone mount configs: %w", err)
+	}
 
 	runtime := driveops.NewSessionRuntime(holder, "onedrive-go/"+version, logger)
 
@@ -121,11 +185,12 @@ func runSyncDaemonWithFactory(
 	}
 
 	orch := orchestratorFactory(&multisync.OrchestratorConfig{
-		Holder:            holder,
-		Drives:            drives,
-		Runtime:           runtime,
-		Logger:            logger,
-		ControlSocketPath: controlSocketPath,
+		Holder:                 holder,
+		StandaloneMounts:       standaloneMounts,
+		ReloadStandaloneMounts: reloadStandaloneMountsFunc(selectors, logger),
+		Runtime:                runtime,
+		Logger:                 logger,
+		ControlSocketPath:      controlSocketPath,
 		StartWarning: func(warning multisync.StartupWarning) {
 			writeWatchStartWarnings(statusWriter, warning)
 		},
@@ -138,6 +203,22 @@ func runSyncDaemonWithFactory(
 	}
 
 	return nil
+}
+
+func reloadStandaloneMountsFunc(
+	selectors []string,
+	logger *slog.Logger,
+) func(*config.Config) ([]multisync.StandaloneMountConfig, error) {
+	selectors = append([]string(nil), selectors...)
+
+	return func(cfg *config.Config) ([]multisync.StandaloneMountConfig, error) {
+		drives, err := config.ResolveDrives(cfg, selectors, false, logger)
+		if err != nil {
+			return nil, fmt.Errorf("resolve drives: %w", err)
+		}
+
+		return standaloneMountConfigsFromResolvedDrives(drives)
+	}
 }
 
 // parsePollInterval converts the config poll_interval string to a

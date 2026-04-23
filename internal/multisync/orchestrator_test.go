@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,9 +32,8 @@ import (
 // --- helpers ---
 
 // setupXDGIsolation sets XDG_DATA_HOME to a temp dir and creates catalog drive
-// records for each CID. This gives buildResolvedDrive (called during
-// control-socket reload → ResolveDrives) a non-zero DriveID, which is required
-// for Session() to succeed.
+// records for each CID. Reload tests use those records to compile non-zero
+// remote drive IDs without routing through runtime mount construction.
 func setupXDGIsolation(t *testing.T, cids ...driveid.CanonicalID) {
 	t.Helper()
 
@@ -53,40 +53,35 @@ func setupXDGIsolation(t *testing.T, cids ...driveid.CanonicalID) {
 	}
 }
 
-func testOrchestratorConfig(t *testing.T, drives ...*config.ResolvedDrive) *OrchestratorConfig {
+func testOrchestratorConfig(t *testing.T, mounts ...StandaloneMountConfig) *OrchestratorConfig {
 	t.Helper()
 
-	return testOrchestratorConfigWithPath(t, "/tmp/test-config.toml", drives...)
+	return testOrchestratorConfigWithPath(t, "/tmp/test-config.toml", mounts...)
 }
 
 // testOrchestratorConfigWithPath creates an OrchestratorConfig with a real
 // config path. Use this when the test needs a writable config file (e.g.,
 // control-socket reload tests that modify config on disk).
-func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, drives ...*config.ResolvedDrive) *OrchestratorConfig {
+func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, mounts ...StandaloneMountConfig) *OrchestratorConfig {
 	t.Helper()
 
 	if _, err := os.Stat(cfgPath); err == nil {
 		cfg, loadErr := config.LoadOrDefault(cfgPath, slog.Default())
 		require.NoError(t, loadErr)
-		resolved, resolveErr := config.ResolveDrives(cfg, nil, false, slog.Default())
-		require.NoError(t, resolveErr)
+		configuredMounts, compileErr := testStandaloneMountsFromConfig(cfg)
+		require.NoError(t, compileErr)
 
-		resolvedByID := make(map[driveid.CanonicalID]*config.ResolvedDrive, len(resolved))
-		for _, candidate := range resolved {
-			resolvedByID[candidate.CanonicalID] = candidate
+		configuredByID := make(map[driveid.CanonicalID]*StandaloneMountConfig, len(configuredMounts))
+		for i := range configuredMounts {
+			configuredByID[configuredMounts[i].CanonicalID] = &configuredMounts[i]
 		}
 
-		for _, drive := range drives {
-			if drive == nil {
-				continue
-			}
-
-			configured, ok := resolvedByID[drive.CanonicalID]
+		for i := range mounts {
+			configured, ok := configuredByID[mounts[i].CanonicalID]
 			if !ok {
 				continue
 			}
-
-			overlayConfiguredTestDrive(drive, configured)
+			overlayConfiguredTestMount(&mounts[i], configured)
 		}
 	}
 
@@ -94,82 +89,133 @@ func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, drives ...*con
 	provider := driveops.NewSessionRuntime(holder, "test/1.0", slog.Default())
 
 	return &OrchestratorConfig{
-		Holder:  holder,
-		Drives:  drives,
-		Runtime: provider,
-		Logger:  slog.Default(),
+		Holder:                 holder,
+		StandaloneMounts:       mounts,
+		ReloadStandaloneMounts: testStandaloneMountsFromConfig,
+		Runtime:                provider,
+		Logger:                 slog.Default(),
 	}
 }
 
-func overlayConfiguredTestDrive(drive *config.ResolvedDrive, configured *config.ResolvedDrive) {
-	if drive == nil || configured == nil {
+func overlayConfiguredTestMount(mount *StandaloneMountConfig, configured *StandaloneMountConfig) {
+	if mount == nil || configured == nil {
 		return
 	}
 
-	original := *drive
-	originalDisplayName := drive.DisplayName
-	applyConfiguredTestDriveDefaults(drive, configured)
-	restoreOriginalTestDriveOverrides(drive, &original, originalDisplayName)
-}
+	original := *mount
+	mount.SyncRoot = configured.SyncRoot
+	mount.StatePath = configured.StatePath
+	mount.TokenOwnerCanonical = configured.TokenOwnerCanonical
+	mount.AccountEmail = configured.AccountEmail
+	mount.Paused = configured.Paused
+	mount.EnableWebsocket = configured.EnableWebsocket
+	mount.RootedSubtreeDeltaCapable = configured.RootedSubtreeDeltaCapable
+	mount.TransferWorkers = configured.TransferWorkers
+	mount.CheckWorkers = configured.CheckWorkers
+	mount.MinFreeSpaceBytes = configured.MinFreeSpaceBytes
+	if !configured.RemoteDriveID.IsZero() {
+		mount.RemoteDriveID = configured.RemoteDriveID
+	}
+	if configured.RemoteRootItemID != "" {
+		mount.RemoteRootItemID = configured.RemoteRootItemID
+	}
 
-func applyConfiguredTestDriveDefaults(drive *config.ResolvedDrive, configured *config.ResolvedDrive) {
-	drive.SyncDir = configured.SyncDir
-	drive.Paused = configured.Paused
-	drive.PausedUntil = configured.PausedUntil
-	drive.TransfersConfig = configured.TransfersConfig
-	drive.SafetyConfig = configured.SafetyConfig
-	drive.SyncConfig = configured.SyncConfig
-	drive.LoggingConfig = configured.LoggingConfig
-	if !configured.DriveID.IsZero() {
-		drive.DriveID = configured.DriveID
-	}
-	if configured.RootItemID != "" {
-		drive.RootItemID = configured.RootItemID
-	}
-	drive.SharedRootDeltaCapable = configured.SharedRootDeltaCapable
-}
-
-func restoreOriginalTestDriveOverrides(
-	drive *config.ResolvedDrive,
-	original *config.ResolvedDrive,
-	originalDisplayName string,
-) {
-	if drive == nil || original == nil {
-		return
-	}
-	if originalDisplayName != "" {
-		drive.DisplayName = originalDisplayName
+	if original.DisplayName != "" {
+		mount.DisplayName = original.DisplayName
 	}
 	if original.Paused {
-		drive.Paused = true
+		mount.Paused = true
 	}
-	if original.PausedUntil != "" {
-		drive.PausedUntil = original.PausedUntil
+	if original.EnableWebsocket {
+		mount.EnableWebsocket = true
 	}
-	if original.Websocket {
-		drive.Websocket = true
+	if original.RootedSubtreeDeltaCapable {
+		mount.RootedSubtreeDeltaCapable = true
 	}
 	if original.TransferWorkers != 0 {
-		drive.TransferWorkers = original.TransferWorkers
+		mount.TransferWorkers = original.TransferWorkers
 	}
 	if original.CheckWorkers != 0 {
-		drive.CheckWorkers = original.CheckWorkers
+		mount.CheckWorkers = original.CheckWorkers
 	}
-	if original.MinFreeSpace != "" {
-		drive.MinFreeSpace = original.MinFreeSpace
+	if original.MinFreeSpaceBytes != 0 {
+		mount.MinFreeSpaceBytes = original.MinFreeSpaceBytes
 	}
-	if original.DryRun {
-		drive.DryRun = true
+	if !original.RemoteDriveID.IsZero() {
+		mount.RemoteDriveID = original.RemoteDriveID
 	}
-	if !original.DriveID.IsZero() {
-		drive.DriveID = original.DriveID
+	if original.RemoteRootItemID != "" {
+		mount.RemoteRootItemID = original.RemoteRootItemID
 	}
-	if original.RootItemID != "" {
-		drive.RootItemID = original.RootItemID
+}
+
+func testStandaloneMountsFromConfig(cfg *config.Config) ([]StandaloneMountConfig, error) {
+	if cfg == nil || len(cfg.Drives) == 0 {
+		return nil, nil
 	}
-	if original.SharedRootDeltaCapable {
-		drive.SharedRootDeltaCapable = true
+
+	catalog, err := config.LoadCatalog()
+	if err != nil {
+		return nil, fmt.Errorf("loading catalog: %w", err)
 	}
+
+	cids := make([]driveid.CanonicalID, 0, len(cfg.Drives))
+	for cid := range cfg.Drives {
+		cids = append(cids, cid)
+	}
+	sort.Slice(cids, func(i, j int) bool {
+		return cids[i].String() < cids[j].String()
+	})
+
+	mounts := make([]StandaloneMountConfig, 0, len(cids))
+	for i, cid := range cids {
+		drive := cfg.Drives[cid]
+		tokenOwner, err := config.TokenAccountCanonicalID(cid)
+		if err != nil {
+			return nil, fmt.Errorf("token owner for %s: %w", cid, err)
+		}
+
+		remoteDriveID := driveid.ID{}
+		if catalogDrive, found := catalog.DriveByCanonicalID(cid); found && catalogDrive.RemoteDriveID != "" {
+			remoteDriveID = driveid.New(catalogDrive.RemoteDriveID)
+		} else if cid.IsShared() {
+			remoteDriveID = driveid.New(cid.SourceDriveID())
+		}
+
+		displayName := drive.DisplayName
+		if displayName == "" {
+			displayName = config.DefaultDisplayName(cid)
+		}
+
+		accountEmail := cid.Email()
+		if accountEmail == "" {
+			accountEmail = tokenOwner.Email()
+		}
+		minFreeSpace, err := config.ParseSize(cfg.MinFreeSpace)
+		if err != nil {
+			return nil, fmt.Errorf("parse min_free_space for %s: %w", cid, err)
+		}
+
+		mounts = append(mounts, StandaloneMountConfig{
+			SelectionIndex:            i,
+			CanonicalID:               cid,
+			DisplayName:               displayName,
+			SyncRoot:                  drive.SyncDir,
+			StatePath:                 config.DriveStatePath(cid),
+			RemoteDriveID:             remoteDriveID,
+			RemoteRootItemID:          cid.SourceItemID(),
+			TokenOwnerCanonical:       tokenOwner,
+			AccountEmail:              accountEmail,
+			Paused:                    drive.IsPaused(time.Now()),
+			EnableWebsocket:           cfg.Websocket,
+			RootedSubtreeDeltaCapable: config.RootedSubtreeDeltaCapableForTokenOwner(tokenOwner),
+			TransferWorkers:           cfg.TransferWorkers,
+			CheckWorkers:              cfg.CheckWorkers,
+			MinFreeSpaceBytes:         minFreeSpace,
+		})
+	}
+
+	return mounts, nil
 }
 
 func postControlReload(t *testing.T, socketPath string) {
@@ -287,16 +333,27 @@ func TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval(t *test
 	assert.NoDirExists(t, runtimeDir)
 }
 
-func testResolvedDrive(t *testing.T, cidStr, displayName string) *config.ResolvedDrive {
+func testStandaloneMount(t *testing.T, cidStr, displayName string) StandaloneMountConfig {
 	t.Helper()
 
 	cid := testCanonicalID(t, cidStr)
+	tokenOwner, err := config.TokenAccountCanonicalID(cid)
+	require.NoError(t, err)
 
-	return &config.ResolvedDrive{
-		CanonicalID: cid,
-		DisplayName: displayName,
-		SyncDir:     t.TempDir(),
-		DriveID:     driveid.New("test-drive-id"),
+	accountEmail := cid.Email()
+	if accountEmail == "" {
+		accountEmail = tokenOwner.Email()
+	}
+
+	return StandaloneMountConfig{
+		CanonicalID:               cid,
+		DisplayName:               displayName,
+		SyncRoot:                  t.TempDir(),
+		StatePath:                 config.DriveStatePath(cid),
+		RemoteDriveID:             driveid.New("test-drive-id"),
+		TokenOwnerCanonical:       tokenOwner,
+		AccountEmail:              accountEmail,
+		RootedSubtreeDeltaCapable: config.RootedSubtreeDeltaCapableForTokenOwner(tokenOwner),
 	}
 }
 
@@ -345,7 +402,7 @@ func TestRunOnce_ZeroDrives(t *testing.T) {
 
 // Validates: R-2.4
 func TestRunOnce_OneDrive_Success(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:test@example.com", "Test")
+	rd := testStandaloneMount(t, "personal:test@example.com", "Test")
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
@@ -372,8 +429,8 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 
 // Validates: R-2.4
 func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
-	rd1 := testResolvedDrive(t, "personal:fail@example.com", "Failing")
-	rd2 := testResolvedDrive(t, "personal:ok@example.com", "Working")
+	rd1 := testStandaloneMount(t, "personal:fail@example.com", "Failing")
+	rd2 := testStandaloneMount(t, "personal:ok@example.com", "Working")
 	cfg := testOrchestratorConfig(t, rd1, rd2)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
@@ -382,7 +439,7 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
-		if req.Mount.syncRoot == rd1.SyncDir {
+		if req.Mount.syncRoot == rd1.SyncRoot {
 			return &mockEngine{err: errDelta}, nil
 		}
 
@@ -414,8 +471,8 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 
 // Validates: R-2.4, R-6.8
 func TestRunOnce_PanicRecovery(t *testing.T) {
-	rd1 := testResolvedDrive(t, "personal:panic@example.com", "Panicking")
-	rd2 := testResolvedDrive(t, "personal:stable@example.com", "Stable")
+	rd1 := testStandaloneMount(t, "personal:panic@example.com", "Panicking")
+	rd2 := testStandaloneMount(t, "personal:stable@example.com", "Stable")
 	cfg := testOrchestratorConfig(t, rd1, rd2)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
@@ -423,7 +480,7 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
-		if req.Mount.syncRoot == rd1.SyncDir {
+		if req.Mount.syncRoot == rd1.SyncRoot {
 			return &mockEngine{shouldPanic: true}, nil
 		}
 
@@ -455,8 +512,8 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 
 // Validates: R-2.8.5
 func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:websocket@example.com", "Websocket")
-	rd.Websocket = true
+	rd := testStandaloneMount(t, "personal:websocket@example.com", "Websocket")
+	rd.EnableWebsocket = true
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
@@ -467,7 +524,7 @@ func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
 		return &mockEngine{report: &syncengine.Report{}}, nil
 	}
 
-	mounts, err := buildConfiguredMountSpecs(resolvedDrivesWithSelection(cfg.Drives))
+	mounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
 	require.NoError(t, err)
 
 	work, summary, reports := orch.prepareRunOnceWork(t.Context(), syncengine.SyncBidirectional, mounts, nil, syncengine.RunOptions{})
@@ -487,8 +544,8 @@ func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
 
 // Validates: R-2.8.5
 func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:watch-websocket@example.com", "WatchWebsocket")
-	rd.Websocket = true
+	rd := testStandaloneMount(t, "personal:watch-websocket@example.com", "WatchWebsocket")
+	rd.EnableWebsocket = true
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -511,7 +568,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	mounts, err := buildConfiguredMountSpecs(resolvedDrivesWithSelection([]*config.ResolvedDrive{rd}))
+	mounts, err := buildStandaloneMountSpecs([]StandaloneMountConfig{rd})
 	require.NoError(t, err)
 
 	wr, err := orch.startWatchRunner(ctx, mounts[0], syncengine.SyncDownloadOnly, syncengine.WatchOptions{})
@@ -521,7 +578,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	assert.True(t, captured.VerifyDrive)
 	assert.NotNil(t, captured.Session)
 	assert.NotNil(t, captured.Session.Meta)
-	assert.Equal(t, rd.RootItemID, captured.Mount.remoteRootItemID)
+	assert.Equal(t, rd.RemoteRootItemID, captured.Mount.remoteRootItemID)
 	assert.Equal(t, rd.CanonicalID.Email(), captured.Mount.accountEmail)
 
 	select {
@@ -538,7 +595,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 
 // Validates: R-2.4
 func TestRunOnce_ContextCanceled(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:cancel@example.com", "Cancel")
+	rd := testStandaloneMount(t, "personal:cancel@example.com", "Cancel")
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
@@ -557,7 +614,7 @@ func TestRunOnce_ContextCanceled(t *testing.T) {
 
 // Validates: R-2.4
 func TestRunOnce_EngineFactoryError(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:factory-err@example.com", "FactoryErr")
+	rd := testStandaloneMount(t, "personal:factory-err@example.com", "FactoryErr")
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
@@ -575,8 +632,8 @@ func TestRunOnce_EngineFactoryError(t *testing.T) {
 
 // Validates: R-6.10.7
 func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
-	rd1 := testResolvedDrive(t, "personal:storefail@example.com", "StoreFail")
-	rd2 := testResolvedDrive(t, "personal:healthy@example.com", "Healthy")
+	rd1 := testStandaloneMount(t, "personal:storefail@example.com", "StoreFail")
+	rd2 := testStandaloneMount(t, "personal:healthy@example.com", "Healthy")
 	cfg := testOrchestratorConfig(t, rd1, rd2)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
@@ -584,7 +641,7 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
-		if req.Mount.syncRoot == rd1.SyncDir {
+		if req.Mount.syncRoot == rd1.SyncRoot {
 			return nil, errors.New("open sync store: corrupted database")
 		}
 
@@ -621,7 +678,7 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 
 // Validates: R-2.4
 func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:notoken@example.com", "NoToken")
+	rd := testStandaloneMount(t, "personal:notoken@example.com", "NoToken")
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return nil, errors.New("token file not found")
@@ -642,13 +699,18 @@ func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
 func TestRunOnce_ZeroDriveID_ReportsError(t *testing.T) {
 	cid := testCanonicalID(t, "personal:zero-id@example.com")
 
-	rd := &config.ResolvedDrive{
-		CanonicalID: cid,
-		DisplayName: "ZeroID",
-		SyncDir:     t.TempDir(),
-		// DriveID intentionally zero — should produce an error, not trigger discovery.
+	tokenOwner, err := config.TokenAccountCanonicalID(cid)
+	require.NoError(t, err)
+	rd := StandaloneMountConfig{
+		CanonicalID:         cid,
+		DisplayName:         "ZeroID",
+		SyncRoot:            t.TempDir(),
+		StatePath:           config.DriveStatePath(cid),
+		TokenOwnerCanonical: tokenOwner,
+		AccountEmail:        cid.Email(),
+		// RemoteDriveID intentionally zero — should produce an error, not trigger discovery.
 	}
-	require.True(t, rd.DriveID.IsZero())
+	require.True(t, rd.RemoteDriveID.IsZero())
 
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -665,7 +727,7 @@ func TestRunOnce_ZeroDriveID_ReportsError(t *testing.T) {
 
 // Validates: R-2.9.1
 func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:owner-lock@example.com", "OwnerLock")
+	rd := testStandaloneMount(t, "personal:owner-lock@example.com", "OwnerLock")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
@@ -762,7 +824,7 @@ func (m *mockEngine) Close(context.Context) error {
 
 // Validates: R-2.4
 func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:watch1@example.com", "Watch1")
+	rd := testStandaloneMount(t, "personal:watch1@example.com", "Watch1")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -808,8 +870,8 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 
 // Validates: R-2.4
 func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
-	rd1 := testResolvedDrive(t, "personal:multi1@example.com", "Multi1")
-	rd2 := testResolvedDrive(t, "personal:multi2@example.com", "Multi2")
+	rd1 := testStandaloneMount(t, "personal:multi1@example.com", "Multi1")
+	rd2 := testStandaloneMount(t, "personal:multi2@example.com", "Multi2")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -852,8 +914,8 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 }
 
 func TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts(t *testing.T) {
-	rd1 := testResolvedDrive(t, "personal:healthy@example.com", "Healthy")
-	rd2 := testResolvedDrive(t, "personal:reset@example.com", "Reset")
+	rd1 := testStandaloneMount(t, "personal:healthy@example.com", "Healthy")
+	rd2 := testStandaloneMount(t, "personal:reset@example.com", "Reset")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -914,7 +976,7 @@ func TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts
 }
 
 func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoDriveStarts(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:reset@example.com", "Reset")
+	rd := testStandaloneMount(t, "personal:reset@example.com", "Reset")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -935,7 +997,7 @@ func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoDriveStarts(t *testing
 }
 
 func TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:paused@example.com", "Paused")
+	rd := testStandaloneMount(t, "personal:paused@example.com", "Paused")
 	rd.Paused = true
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
@@ -952,7 +1014,7 @@ func TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused(t *testing.T) {
 
 // Validates: R-2.9.1, R-2.9.2
 func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:control@example.com", "Control")
+	rd := testStandaloneMount(t, "personal:control@example.com", "Control")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
@@ -1009,7 +1071,7 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 
 // Validates: R-2.9.1
 func TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:oneshot@example.com", "OneShot")
+	rd := testStandaloneMount(t, "personal:oneshot@example.com", "OneShot")
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
 	orch := NewOrchestrator(cfg)
@@ -1048,10 +1110,10 @@ func TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus(t *testing.
 
 // Validates: R-2.4
 func TestOrchestrator_Reload_AddDrive(t *testing.T) {
-	rd1 := testResolvedDrive(t, "personal:existing@example.com", "Existing")
+	rd1 := testStandaloneMount(t, "personal:existing@example.com", "Existing")
 	rd2CID := driveid.MustCanonicalID("personal:added@example.com")
 
-	// XDG isolation so buildResolvedDrive finds catalog drive identity during reload.
+	// XDG isolation so reload mount compilation finds catalog drive identity.
 	setupXDGIsolation(t, rd1.CanonicalID, rd2CID)
 
 	cfgPath := writeTestConfig(t, rd1.CanonicalID)
@@ -1087,7 +1149,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 
 	// Add a second drive to the config and request a control-socket reload.
-	writeTestConfigMulti(t, cfgPath, rd1.CanonicalID, rd1.SyncDir, rd2CID, t.TempDir())
+	writeTestConfigMulti(t, cfgPath, rd1.CanonicalID, rd1.SyncRoot, rd2CID, t.TempDir())
 	postControlReload(t, cfg.ControlSocketPath)
 
 	// Wait for the second drive to start.
@@ -1107,8 +1169,8 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 
 // Validates: R-2.4
 func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
-	rd1 := testResolvedDrive(t, "personal:keep@example.com", "Keep")
-	rd2 := testResolvedDrive(t, "personal:remove@example.com", "Remove")
+	rd1 := testStandaloneMount(t, "personal:keep@example.com", "Keep")
+	rd2 := testStandaloneMount(t, "personal:remove@example.com", "Remove")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
@@ -1144,7 +1206,7 @@ func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 
 	// Remove rd2 from config and request a control-socket reload.
-	writeTestConfigSingle(t, cfgPath, rd1.CanonicalID, rd1.SyncDir)
+	writeTestConfigSingle(t, cfgPath, rd1.CanonicalID, rd1.SyncRoot)
 	postControlReload(t, cfg.ControlSocketPath)
 
 	// Wait for one runner to stop (the removed drive).
@@ -1164,7 +1226,7 @@ func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
 
 // Validates: R-2.4
 func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:pausetest@example.com", "PauseTest")
+	rd := testStandaloneMount(t, "personal:pausetest@example.com", "PauseTest")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
@@ -1220,7 +1282,7 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 
 // Validates: R-2.4
 func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:invalidcfg@example.com", "InvalidCfg")
+	rd := testStandaloneMount(t, "personal:invalidcfg@example.com", "InvalidCfg")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
@@ -1274,10 +1336,10 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 
 // Validates: R-2.4
 func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:timedpause@example.com", "TimedPause")
+	rd := testStandaloneMount(t, "personal:timedpause@example.com", "TimedPause")
 
-	// XDG isolation — defensive, so buildResolvedDrive during reload can
-	// find metadata if needed.
+	// XDG isolation — defensive, so reload mount compilation can find metadata
+	// if needed.
 	setupXDGIsolation(t, rd.CanonicalID)
 
 	cfgPath := writeTestConfig(t, rd.CanonicalID)

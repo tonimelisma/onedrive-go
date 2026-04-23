@@ -273,6 +273,8 @@ Self-review every change against coding standards proceeding to the Definition o
 
 After each increment, run through this entire checklist. If something fails, fix and re-run from the top. If you rebase, resolve conflicts, or otherwise rewrite branch history, re-run the checklist from item 1 on the rebased branch before creating the PR. **When complete, present this checklist to the human with pass/fail status for each item.**
 
+**DoD report format:** List all 12 checklist items in order. Prefix every item with a status emoji and text: `✅ PASS` when complete, `❌ FAIL` when failed, blocked, skipped, or not run. Do not collapse items together; include the command, PR, CI, or cleanup evidence that proves each status.
+
 1. [ ] **Format**: reported by `go run ./cmd/devtool verify default`
 2. [ ] **Lint**: reported by `go run ./cmd/devtool verify default`
 3. [ ] **Build**: reported by `go run ./cmd/devtool verify default`

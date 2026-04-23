@@ -390,7 +390,7 @@ func (o *Orchestrator) controlStatus(ctx context.Context, mode synccontrol.Owner
 	_ = ctx
 	mounts := o.controlMountIDs()
 	if len(mounts) == 0 {
-		configured, err := buildConfiguredMountSpecs(resolvedDrivesWithSelection(o.cfg.Drives))
+		configured, err := buildStandaloneMountSpecs(o.cfg.StandaloneMounts)
 		if err == nil {
 			mounts = mountIDsForSpecs(configured)
 		}

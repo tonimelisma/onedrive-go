@@ -94,10 +94,13 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
 
-	result := runSyncOnce(ctx, cc, holder, drives, opts.Mode, syncengine.RunOptions{
+	result, err := runSyncOnce(ctx, cc, holder, drives, opts.Mode, syncengine.RunOptions{
 		DryRun:        effectiveDryRun,
 		FullReconcile: opts.FullReconcile,
 	}, logger, controlSocketPath)
+	if err != nil {
+		return err
+	}
 
 	printRunOnceResult(result, cc)
 
@@ -144,23 +147,28 @@ func runSyncOnce(
 	opts syncengine.RunOptions,
 	logger *slog.Logger,
 	controlSocketPath string,
-) multisync.RunOnceResult {
+) (multisync.RunOnceResult, error) {
 	if cc != nil && cc.syncRunOnceRunner != nil {
-		return cc.syncRunOnceRunner(ctx, holder, drives, mode, opts, logger, controlSocketPath)
+		return cc.syncRunOnceRunner(ctx, holder, drives, mode, opts, logger, controlSocketPath), nil
 	}
 
 	runtime := driveops.NewSessionRuntime(holder, "onedrive-go/"+version, logger)
+	standaloneMounts, err := standaloneMountConfigsFromResolvedDrives(drives)
+	if err != nil {
+		return multisync.RunOnceResult{}, fmt.Errorf("compile standalone mount configs: %w", err)
+	}
 
 	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
-		Holder:            holder,
-		Drives:            drives,
-		Runtime:           runtime,
-		Logger:            logger,
-		ControlSocketPath: controlSocketPath,
-		PerfParent:        perf.FromContext(ctx),
+		Holder:                 holder,
+		StandaloneMounts:       standaloneMounts,
+		ReloadStandaloneMounts: reloadStandaloneMountsFunc(nil, logger),
+		Runtime:                runtime,
+		Logger:                 logger,
+		ControlSocketPath:      controlSocketPath,
+		PerfParent:             perf.FromContext(ctx),
 	})
 
-	return orch.RunOnce(ctx, mode, opts)
+	return orch.RunOnce(ctx, mode, opts), nil
 }
 
 func loadSyncConfigWithEmailReconcile(

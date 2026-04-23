@@ -25,12 +25,25 @@ const (
 	mountProjectionChild      mountProjectionKind = "child"
 )
 
-// resolvedDriveWithSelection keeps config-owned drive resolution separate from
-// the control plane's runtime mount identity while preserving deterministic
-// parent ordering.
-type resolvedDriveWithSelection struct {
-	SelectionIndex int
-	Drive          *config.ResolvedDrive
+// StandaloneMountConfig is the CLI/config to multisync boundary for a
+// configured top-level mount. Config resolution owns producing these values;
+// multisync consumes them without reaching back into config-owned drive shapes.
+type StandaloneMountConfig struct {
+	SelectionIndex            int
+	CanonicalID               driveid.CanonicalID
+	DisplayName               string
+	SyncRoot                  string
+	StatePath                 string
+	RemoteDriveID             driveid.ID
+	RemoteRootItemID          string
+	TokenOwnerCanonical       driveid.CanonicalID
+	AccountEmail              string
+	Paused                    bool
+	EnableWebsocket           bool
+	RootedSubtreeDeltaCapable bool
+	TransferWorkers           int
+	CheckWorkers              int
+	MinFreeSpaceBytes         int64
 }
 
 // mountSpec is the control plane's runtime unit.
@@ -70,10 +83,10 @@ type childMountCandidate struct {
 	skipErr           error
 }
 
-func buildConfiguredMountSpecs(selected []*resolvedDriveWithSelection) ([]*mountSpec, error) {
-	mounts := make([]*mountSpec, 0, len(selected))
-	for i := range selected {
-		mount, err := buildConfiguredMountSpec(selected[i])
+func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, error) {
+	mounts := make([]*mountSpec, 0, len(configs))
+	for i := range configs {
+		mount, err := buildStandaloneMountSpec(&configs[i])
 		if err != nil {
 			return nil, err
 		}
@@ -84,11 +97,11 @@ func buildConfiguredMountSpecs(selected []*resolvedDriveWithSelection) ([]*mount
 }
 
 func compileRuntimeMounts(
-	selected []*resolvedDriveWithSelection,
+	standaloneMounts []StandaloneMountConfig,
 	inventory *config.MountInventory,
 	logger *slog.Logger,
 ) (*compiledMountSet, error) {
-	parents, err := buildConfiguredMountSpecs(selected)
+	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
@@ -269,45 +282,36 @@ func unmatchedChildStartupResults(records []config.MountRecord, startIndex int) 
 	return results
 }
 
-func buildConfiguredMountSpec(selected *resolvedDriveWithSelection) (*mountSpec, error) {
-	if selected == nil || selected.Drive == nil {
-		return nil, fmt.Errorf("multisync: resolved drive is required")
+func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
+	if cfg == nil || cfg.CanonicalID.IsZero() {
+		return nil, fmt.Errorf("multisync: standalone mount canonical ID is required")
 	}
-
-	rd := selected.Drive
-	statePath := rd.StatePath()
-	if statePath == "" {
-		return nil, fmt.Errorf("multisync: state path is required for %s", rd.CanonicalID)
+	if cfg.StatePath == "" {
+		return nil, fmt.Errorf("multisync: state path is required for %s", cfg.CanonicalID)
 	}
-
-	tokenOwnerCanonical, err := config.TokenAccountCanonicalID(rd.CanonicalID)
-	if err != nil {
-		return nil, fmt.Errorf("multisync: token owner for %s: %w", rd.CanonicalID, err)
-	}
-
-	minFreeSpace, err := config.ParseSize(rd.MinFreeSpace)
-	if err != nil {
-		return nil, fmt.Errorf("multisync: invalid min_free_space %q: %w", rd.MinFreeSpace, err)
+	accountEmail := cfg.AccountEmail
+	if accountEmail == "" {
+		accountEmail = cfg.TokenOwnerCanonical.Email()
 	}
 
 	return &mountSpec{
-		mountID:                   mountID(rd.CanonicalID.String()),
+		mountID:                   mountID(cfg.CanonicalID.String()),
 		projectionKind:            mountProjectionStandalone,
-		selectionIndex:            selected.SelectionIndex,
-		canonicalID:               rd.CanonicalID,
-		displayName:               rd.DisplayName,
-		syncRoot:                  rd.SyncDir,
-		statePath:                 statePath,
-		remoteDriveID:             rd.DriveID,
-		remoteRootItemID:          rd.RootItemID,
-		tokenOwnerCanonical:       tokenOwnerCanonical,
-		accountEmail:              tokenOwnerCanonical.Email(),
-		paused:                    rd.Paused,
-		enableWebsocket:           rd.Websocket,
-		rootedSubtreeDeltaCapable: config.RootedSubtreeDeltaCapableForTokenOwner(tokenOwnerCanonical),
-		transferWorkers:           rd.TransferWorkers,
-		checkWorkers:              rd.CheckWorkers,
-		minFreeSpace:              minFreeSpace,
+		selectionIndex:            cfg.SelectionIndex,
+		canonicalID:               cfg.CanonicalID,
+		displayName:               cfg.DisplayName,
+		syncRoot:                  cfg.SyncRoot,
+		statePath:                 cfg.StatePath,
+		remoteDriveID:             cfg.RemoteDriveID,
+		remoteRootItemID:          cfg.RemoteRootItemID,
+		tokenOwnerCanonical:       cfg.TokenOwnerCanonical,
+		accountEmail:              accountEmail,
+		paused:                    cfg.Paused,
+		enableWebsocket:           cfg.EnableWebsocket,
+		rootedSubtreeDeltaCapable: cfg.RootedSubtreeDeltaCapable,
+		transferWorkers:           cfg.TransferWorkers,
+		checkWorkers:              cfg.CheckWorkers,
+		minFreeSpace:              cfg.MinFreeSpaceBytes,
 	}, nil
 }
 
@@ -344,7 +348,7 @@ func buildChildMountCandidate(parent *mountSpec, record config.MountRecord) (*ch
 		accountEmail:              parent.accountEmail,
 		paused:                    parent.paused || record.Paused,
 		enableWebsocket:           parent.enableWebsocket,
-		rootedSubtreeDeltaCapable: config.RootedSubtreeDeltaCapableForTokenOwner(parent.tokenOwnerCanonical),
+		rootedSubtreeDeltaCapable: parent.rootedSubtreeDeltaCapable,
 		transferWorkers:           parent.transferWorkers,
 		checkWorkers:              parent.checkWorkers,
 		minFreeSpace:              parent.minFreeSpace,
@@ -405,16 +409,4 @@ func (m *mountSpec) syncSessionConfig() *driveops.MountSessionConfig {
 		RootItemID:          m.remoteRootItemID,
 		AccountEmail:        m.accountEmail,
 	}
-}
-
-func resolvedDrivesWithSelection(drives []*config.ResolvedDrive) []*resolvedDriveWithSelection {
-	selected := make([]*resolvedDriveWithSelection, 0, len(drives))
-	for i := range drives {
-		selected = append(selected, &resolvedDriveWithSelection{
-			SelectionIndex: i,
-			Drive:          drives[i],
-		})
-	}
-
-	return selected
 }

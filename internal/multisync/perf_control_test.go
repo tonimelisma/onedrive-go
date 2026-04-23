@@ -19,7 +19,7 @@ import (
 
 // Validates: R-6.6.15, R-6.6.16
 func TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:perf-control@example.com", "PerfControl")
+	rd := testStandaloneMount(t, "personal:perf-control@example.com", "PerfControl")
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
 	orch := NewOrchestrator(cfg)
@@ -95,7 +95,7 @@ func TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture(t *testing.T) {
 
 // Validates: R-6.6.16
 func TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration(t *testing.T) {
-	rd := testResolvedDrive(t, "personal:perf-invalid@example.com", "PerfInvalid")
+	rd := testStandaloneMount(t, "personal:perf-invalid@example.com", "PerfInvalid")
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
 	orch := NewOrchestrator(cfg)

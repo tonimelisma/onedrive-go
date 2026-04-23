@@ -122,7 +122,7 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		return expectedResult
 	}
 
-	result := runSyncOnce(
+	result, err := runSyncOnce(
 		t.Context(),
 		cc,
 		holder,
@@ -132,7 +132,98 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		slog.New(slog.DiscardHandler),
 		"/tmp/control.sock",
 	)
+	require.NoError(t, err)
 	assert.Equal(t, expectedResult, result)
+}
+
+// Validates: R-2.8.1
+func TestStandaloneMountConfigsFromResolvedDrives_PreservesMountBoundaryFields(t *testing.T) {
+	t.Parallel()
+
+	first := &config.ResolvedDrive{
+		CanonicalID: driveid.MustCanonicalID("personal:first@example.com"),
+		DisplayName: "First",
+		SyncDir:     filepath.Join(t.TempDir(), "first"),
+		DriveID:     driveid.New("first-drive"),
+		RootItemID:  "first-root",
+		TransfersConfig: config.TransfersConfig{
+			TransferWorkers: 7,
+			CheckWorkers:    8,
+		},
+		SafetyConfig: config.SafetyConfig{MinFreeSpace: "3MiB"},
+		SyncConfig:   config.SyncConfig{Websocket: true},
+	}
+	second := &config.ResolvedDrive{
+		CanonicalID:  driveid.MustCanonicalID("business:second@example.com"),
+		DisplayName:  "Second",
+		SyncDir:      filepath.Join(t.TempDir(), "second"),
+		DriveID:      driveid.New("second-drive"),
+		Paused:       true,
+		SafetyConfig: config.SafetyConfig{MinFreeSpace: "0"},
+	}
+
+	mounts, err := standaloneMountConfigsFromResolvedDrives([]*config.ResolvedDrive{first, second})
+	require.NoError(t, err)
+	require.Len(t, mounts, 2)
+
+	assert.Equal(t, 0, mounts[0].SelectionIndex)
+	assert.Equal(t, first.CanonicalID, mounts[0].CanonicalID)
+	assert.Equal(t, first.DisplayName, mounts[0].DisplayName)
+	assert.Equal(t, first.SyncDir, mounts[0].SyncRoot)
+	assert.Equal(t, first.StatePath(), mounts[0].StatePath)
+	assert.Equal(t, first.DriveID, mounts[0].RemoteDriveID)
+	assert.Equal(t, first.RootItemID, mounts[0].RemoteRootItemID)
+	assert.Equal(t, first.CanonicalID, mounts[0].TokenOwnerCanonical)
+	assert.Equal(t, first.CanonicalID.Email(), mounts[0].AccountEmail)
+	assert.True(t, mounts[0].EnableWebsocket)
+	assert.True(t, mounts[0].RootedSubtreeDeltaCapable)
+	assert.Equal(t, 7, mounts[0].TransferWorkers)
+	assert.Equal(t, 8, mounts[0].CheckWorkers)
+	assert.Equal(t, int64(3*1024*1024), mounts[0].MinFreeSpaceBytes)
+
+	assert.Equal(t, 1, mounts[1].SelectionIndex)
+	assert.True(t, mounts[1].Paused)
+	assert.False(t, mounts[1].RootedSubtreeDeltaCapable)
+}
+
+// Validates: R-2.8.1
+func TestStandaloneMountConfigsFromResolvedDrives_InvalidMinFreeSpaceFails(t *testing.T) {
+	t.Parallel()
+
+	drive := &config.ResolvedDrive{
+		CanonicalID:  driveid.MustCanonicalID("personal:bad-size@example.com"),
+		SyncDir:      t.TempDir(),
+		DriveID:      driveid.New("bad-size-drive"),
+		SafetyConfig: config.SafetyConfig{MinFreeSpace: "not-a-size"},
+	}
+
+	_, err := standaloneMountConfigsFromResolvedDrives([]*config.ResolvedDrive{drive})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid min_free_space")
+	assert.Contains(t, err.Error(), drive.CanonicalID.String())
+}
+
+// Validates: R-2.8.1
+func TestReloadStandaloneMountsFunc_UsesWatchSelectors(t *testing.T) {
+	t.Parallel()
+
+	firstCID := driveid.MustCanonicalID("personal:first-reload@example.com")
+	secondCID := driveid.MustCanonicalID("personal:second-reload@example.com")
+	cfg := config.DefaultConfig()
+	cfg.Drives[firstCID] = config.Drive{
+		SyncDir:     filepath.Join(t.TempDir(), "first"),
+		DisplayName: "First",
+	}
+	cfg.Drives[secondCID] = config.Drive{
+		SyncDir:     filepath.Join(t.TempDir(), "second"),
+		DisplayName: "Second",
+	}
+
+	compile := reloadStandaloneMountsFunc([]string{"Second"}, slog.New(slog.DiscardHandler))
+	mounts, err := compile(cfg)
+	require.NoError(t, err)
+	require.Len(t, mounts, 1)
+	assert.Equal(t, secondCID, mounts[0].CanonicalID)
 }
 
 // Validates: R-2.1, R-2.10.3
@@ -208,8 +299,9 @@ func TestRunSyncDaemonWithFactory_CallsOrchestrator(t *testing.T) {
 		func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			factoryCalls++
 			require.Same(t, holder, cfg.Holder)
-			require.Len(t, cfg.Drives, 1)
-			assert.Equal(t, cid, cfg.Drives[0].CanonicalID)
+			require.Len(t, cfg.StandaloneMounts, 1)
+			assert.Equal(t, cid, cfg.StandaloneMounts[0].CanonicalID)
+			assert.NotNil(t, cfg.ReloadStandaloneMounts)
 			assert.Same(t, logger, cfg.Logger)
 			assert.Equal(t, "/tmp/control.sock", cfg.ControlSocketPath)
 			assert.NotNil(t, cfg.Runtime)
