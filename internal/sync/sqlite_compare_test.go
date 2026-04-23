@@ -130,3 +130,37 @@ func TestQueryReconciliationState_FolderDecisionMatrix(t *testing.T) {
 	assert.Equal(t, "folder_create_remote", got["new-local-folder"])
 	assert.Equal(t, "folder_create_local", got["new-remote-folder"])
 }
+
+// Validates: R-2.1.3, R-2.1.4
+func TestQueryReconciliationState_FolderMetadataChurnIsNoop(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (
+			item_id, path, item_type, local_size, remote_size, local_mtime, remote_mtime, etag
+		)
+		VALUES
+			('item-folder', 'stable-folder', 'folder', 0, 0, 100, 100, 'etag-old')`)
+	require.NoError(t, err)
+
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO local_state (path, item_type, size, mtime)
+		VALUES ('stable-folder', 'folder', 4096, 200)`)
+	require.NoError(t, err)
+
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, size, mtime, etag)
+		VALUES ('item-folder', 'stable-folder', 'folder', 1234, 300, 'etag-new')`)
+	require.NoError(t, err)
+
+	comparisonRows, err := store.QueryComparisonState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "unchanged", comparisonKindsByPath(comparisonRows)["stable-folder"])
+
+	reconciliationRows, err := store.QueryReconciliationState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "noop", reconciliationKindsByPath(reconciliationRows)["stable-folder"])
+}

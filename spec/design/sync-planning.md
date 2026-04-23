@@ -162,6 +162,10 @@ Folder decisions are symmetric with file decisions, but folder deletes also
 trigger descendant cascade expansion because Graph delta only reports the
 deleted parent folder.
 
+Folder reconciliation is existence/type-based, not metadata-based. Folder
+size, mtime, and ETag churn caused by child mutations must not be treated as
+content drift or expanded into conflict/download actions.
+
 Local or remote moves that stay within one drive become move actions. Moves
 that cross drive ownership are decomposed into delete + upload because Graph
 move is a single-drive operation.

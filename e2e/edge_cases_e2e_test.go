@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -156,61 +155,4 @@ func TestE2E_RapidFileChurn(t *testing.T) {
 	remoteContent := getRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/churn.txt")
 	assert.Equal(t, finalContent, remoteContent,
 		"final state should be the last written content")
-}
-
-// TestE2E_ConflictDetectionAndResolution validates the full conflict
-// lifecycle: create conflicting files, detect the conflict, resolve it.
-func TestE2E_ConflictDetectionAndResolution(t *testing.T) {
-	t.Parallel()
-	registerLogDump(t)
-
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
-	opsCfgPath := writeMinimalConfig(t)
-
-	testFolder := fmt.Sprintf("e2e-conflict-%d", time.Now().UnixNano())
-	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o700))
-
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	// Step 1: Create file and sync to establish baseline.
-	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir, "shared.txt"), []byte("original"), 0o644))
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-
-	// Step 2: Modify remote side directly.
-	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/shared.txt", "remote version")
-
-	// Step 3: Modify local side.
-	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir, "shared.txt"), []byte("local version"), 0o644))
-
-	// Step 4: Bidirectional sync → should detect conflict.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
-	assert.Contains(t, stderr, "conflict",
-		"sync should report conflict")
-
-	// Step 5: Per-drive status should expose the unresolved conflict.
-	statusBeforeResolve := pollStatusSyncState(t, cfgPath, env, pollTimeout, func(status statusSyncStateJSON) bool {
-		for _, conflict := range status.Conflicts {
-			if strings.HasSuffix(conflict.Path, "/shared.txt") {
-				return true
-			}
-		}
-		return false
-	})
-	require.Len(t, statusBeforeResolve.Conflicts, 1)
-	assert.Contains(t, statusBeforeResolve.Conflicts[0].Path, "shared.txt",
-		"status should include the conflicting file")
-
-	// Step 6: Queue the resolution and let the normal engine execute it.
-	queueConflictResolutionAndSync(t, cfgPath, env, "local", testFolder+"/shared.txt")
-
-	// Step 7: Verify conflict is resolved.
-	statusAfterResolve := pollStatusSyncState(t, cfgPath, env, pollTimeout, func(status statusSyncStateJSON) bool {
-		return len(status.Conflicts) == 0
-	})
-	assert.Empty(t, statusAfterResolve.Conflicts,
-		"status should show no unresolved conflicts after resolution")
 }

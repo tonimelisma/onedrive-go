@@ -9,7 +9,7 @@ const (
 	driveDiscoveryAttempts       = 5
 	rootChildrenAttempts         = 3
 	downloadMetadataAttempts     = 4
-	simpleUploadMtimeAttempts    = 6
+	simpleUploadMtimeAttempts    = 7
 	uploadSessionCreateAttempts  = 6
 	copyDestinationAttempts      = 6
 	simpleUploadCreateAttempts   = 7
@@ -24,7 +24,7 @@ const (
 	downloadMetadataBaseDelay    = 250 * time.Millisecond
 	downloadMetadataMaxDelay     = 2 * time.Second
 	simpleUploadMtimeBaseDelay   = 250 * time.Millisecond
-	simpleUploadMtimeMaxDelay    = 4 * time.Second
+	simpleUploadMtimeMaxDelay    = 8 * time.Second
 	uploadSessionCreateBaseDelay = 250 * time.Millisecond
 	uploadSessionCreateMaxDelay  = 4 * time.Second
 	copyDestinationBaseDelay     = 250 * time.Millisecond
@@ -92,9 +92,12 @@ func DownloadMetadataPolicy() Policy {
 	}
 }
 
-// SimpleUploadMtimePatchPolicy is the quick-retry policy for transient
+// SimpleUploadMtimePatchPolicy is the bounded retry policy for transient
 // item-not-found misfires when the immediate post-simple-upload
-// UpdateFileSystemInfo PATCH races Graph's item-by-ID visibility.
+// UpdateFileSystemInfo PATCH races Graph's item-by-ID visibility. It is longer
+// than the other item-ID readback policies because freshly created shared-root
+// uploads can lag patch visibility for well over ten seconds even after the
+// upload itself succeeded.
 func SimpleUploadMtimePatchPolicy() Policy {
 	return Policy{
 		MaxAttempts: simpleUploadMtimeAttempts,

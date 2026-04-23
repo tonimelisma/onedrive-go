@@ -160,6 +160,10 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		LoggingConfig:   cfg.LoggingConfig,
 	}
 
+	if canonicalID.IsShared() {
+		resolved.RootItemID = canonicalID.SourceItemID()
+	}
+
 	// Two-source drive ID resolution: prefer the catalog-backed drive record
 	// (per-drive, accurate for SharePoint libraries and shared drives), then
 	// the shared canonical ID (embeds the remote drive ID). Otherwise DriveID
@@ -175,7 +179,6 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	} else if canonicalID.IsShared() {
 		// Shared drives embed the remote drive ID in the canonical ID.
 		resolved.DriveID = driveid.New(canonicalID.SourceDriveID())
-		resolved.RootItemID = canonicalID.SourceItemID()
 		logger.Debug("resolved drive ID from canonical ID",
 			"drive_id", resolved.DriveID.String(),
 			"canonical_id", canonicalID.String(),

@@ -255,7 +255,8 @@ For simple uploads with non-zero mtime, the follow-on `PATCH /items/{itemID}`
 used to restore `fileSystemInfo.lastModifiedDateTime` can also race item-ID
 visibility and return transient `404 itemNotFound` even though the upload
 response already returned the new item identity. The graph boundary retries
-that exact post-simple-upload patch with a short bounded policy. Direct
+that exact post-simple-upload patch with a bounded policy tuned for the longer
+shared-root visibility lag observed in live coverage. Direct
 `UpdateFileSystemInfo` calls outside the immediate simple-upload finalization
 path remain strict.
 

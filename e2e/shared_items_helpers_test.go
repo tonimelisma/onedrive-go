@@ -56,6 +56,32 @@ type driveListE2EOutput struct {
 	} `json:"available"`
 }
 
+func driveListAvailableContainsCanonicalID(parsed driveListE2EOutput, canonicalID string) bool {
+	for i := range parsed.Available {
+		if parsed.Available[i].CanonicalID == canonicalID {
+			return true
+		}
+	}
+
+	return false
+}
+
+func TestDriveListAvailableContainsCanonicalID(t *testing.T) {
+	t.Parallel()
+
+	parsed := driveListE2EOutput{
+		Available: []struct {
+			CanonicalID string `json:"canonical_id"`
+		}{
+			{CanonicalID: "shared:user@example.com:drive-a:item-1"},
+			{CanonicalID: "shared:user@example.com:drive-b:item-2"},
+		},
+	}
+
+	require.True(t, driveListAvailableContainsCanonicalID(parsed, "shared:user@example.com:drive-a:item-1"))
+	require.False(t, driveListAvailableContainsCanonicalID(parsed, "shared:user@example.com:drive-c:item-3"))
+}
+
 type resolvedSharedFileFixture struct {
 	RecipientDriveID string
 	RecipientEmail   string
@@ -481,6 +507,49 @@ func runCLIWithoutDrive(t *testing.T, cfgPath string, env map[string]string, arg
 	require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s", args, stdout, stderr)
 
 	return stdout, stderr
+}
+
+func waitForDriveListSharedSelectorVisible(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	selector string,
+) driveListE2EOutput {
+	t.Helper()
+
+	deadline := time.Now().Add(pollTimeout)
+	var lastStdout string
+	var lastStderr string
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, err := runCLIWithConfigAllDrivesAllowError(t, cfgPath, env, "drive", "list", "--json")
+		lastStdout = stdout
+		lastStderr = stderr
+
+		if err != nil {
+			if !isRetryableGraphGatewayFailure(stderr) {
+				require.NoErrorf(t, err, "drive list --json should succeed\nstdout: %s\nstderr: %s", stdout, stderr)
+			}
+		} else {
+			var parsed driveListE2EOutput
+			require.NoErrorf(t, json.Unmarshal([]byte(stdout), &parsed), "drive list --json output should be valid JSON, got: %s", stdout)
+			if driveListAvailableContainsCanonicalID(parsed, selector) {
+				return parsed
+			}
+		}
+
+		if time.Now().After(deadline) {
+			t.Skipf(
+				"live drive list shared discovery did not expose selector %q within %v; Graph search omitted the known fixture on this run\nlast stdout: %s\nlast stderr: %s",
+				selector,
+				pollTimeout,
+				lastStdout,
+				lastStderr,
+			)
+		}
+
+		sleepForLiveTestPropagation(pollBackoff(attempt))
+	}
 }
 
 func sharedListForRecipient(t *testing.T, cfgPath string, env map[string]string, recipientEmail string) sharedListE2EOutput {
