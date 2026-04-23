@@ -221,6 +221,7 @@ func TestBuildResolvedDrive_SharedCanonicalSetsRootItem(t *testing.T) {
 
 	assert.Equal(t, driveid.New("b!drive123"), resolved.DriveID)
 	assert.Equal(t, "item456", resolved.RootItemID)
+	assert.True(t, resolved.SharedRootDeltaCapable)
 }
 
 func TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem(t *testing.T) {
@@ -244,6 +245,39 @@ func TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem(t *testing.T) {
 
 	assert.Equal(t, driveid.New("b!drive123"), resolved.DriveID)
 	assert.Equal(t, "item456", resolved.RootItemID)
+	assert.True(t, resolved.SharedRootDeltaCapable)
+}
+
+func assertSharedRootDeltaCapabilityForOwner(t *testing.T, ownerCanonical string, expected bool) {
+	t.Helper()
+
+	dataDir := setTestDataDir(t)
+	sharedCID := driveid.MustCanonicalID("shared:user@example.com:b!drive123:item456")
+	require.NoError(t, UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
+		catalog.UpsertDrive(&CatalogDrive{
+			CanonicalID:           sharedCID.String(),
+			OwnerAccountCanonical: ownerCanonical,
+			DriveType:             driveid.DriveTypeShared,
+			DisplayName:           "Shared Folder",
+			RemoteDriveID:         "b!drive123",
+		})
+		return nil
+	}))
+
+	cfg := DefaultConfig()
+	drive := &Drive{SyncDir: "~/OneDrive-Shared"}
+
+	resolved := buildResolvedDrive(cfg, sharedCID, drive, testLogger(t))
+
+	assert.Equal(t, expected, resolved.SharedRootDeltaCapable)
+}
+
+func TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta(t *testing.T) {
+	assertSharedRootDeltaCapabilityForOwner(t, "business:user@example.com", false)
+}
+
+func TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable(t *testing.T) {
+	assertSharedRootDeltaCapabilityForOwner(t, "not-a-canonical-id", true)
 }
 
 func TestBuildResolvedDrive_TildeExpanded(t *testing.T) {

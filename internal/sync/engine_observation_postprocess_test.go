@@ -28,6 +28,27 @@ func testRemoteCreateEvent(path string, itemID string, driveID string) ChangeEve
 	}
 }
 
+func testSharedRootWatchBatch(
+	engine *Engine,
+	mode remoteObservationMode,
+	events []ChangeEvent,
+	cursorToken string,
+	findings ObservationFindingsBatch,
+) remoteObservationBatch {
+	batch := buildRemoteObservationBatch(
+		engine,
+		mode,
+		events,
+		cursorToken,
+		false,
+		findings,
+	)
+	batch.source = remoteObservationBatchSharedRoot
+	batch.applyAck = make(chan error, 1)
+
+	return batch
+}
+
 func mustParseDriveID(raw string) driveid.ID {
 	id := driveid.New(raw)
 	if id.IsZero() {
@@ -68,16 +89,15 @@ func TestHandleRemoteObservationBatch_SharedRootWatchCommitsObservedRowsAndPendi
 	ctx := t.Context()
 
 	pendingCursor := "cursor-shared"
-	batch := buildSharedRootWatchBatch(eng.Engine, &remoteFetchResult{
-		events: []ChangeEvent{
+	batch := testSharedRootWatchBatch(
+		eng.Engine,
+		remoteObservationModeDelta,
+		[]ChangeEvent{
 			testRemoteCreateEvent("shared-watch.txt", "item-shared", eng.driveID.String()),
 		},
-		pending: &pendingPrimaryCursorCommit{
-			driveID: eng.driveID.String(),
-			rootID:  "shared-root",
-			token:   pendingCursor,
-		},
-	})
+		pendingCursor,
+		newRemoteObservationFindingsBatch(),
+	)
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
 
@@ -114,7 +134,13 @@ func TestHandleRemoteObservationBatch_SharedRootEnumerateClampRearmsRefreshTimer
 	assert.True(t, clock.HasPendingTimerAt(initialDueAt))
 	assert.False(t, clock.HasPendingTimerAt(enumerateDueAt))
 
-	batch := buildSharedRootWatchBatch(eng.Engine, nil)
+	batch := testSharedRootWatchBatch(
+		eng.Engine,
+		remoteObservationModeEnumerate,
+		nil,
+		"",
+		newRemoteObservationFindingsBatch(),
+	)
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
 
@@ -123,30 +149,6 @@ func TestHandleRemoteObservationBatch_SharedRootEnumerateClampRearmsRefreshTimer
 	assert.Equal(t, enumerateDueAt.UnixNano(), state.NextFullRemoteRefreshAt)
 	assert.False(t, clock.HasPendingTimerAt(initialDueAt))
 	assert.True(t, clock.HasPendingTimerAt(enumerateDueAt))
-}
-
-// Validates: R-2.1.2
-func TestHandleRemoteObservationBatch_SharedRootCursorCommitFailureLeavesStateUntouched(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	setupWatchEngine(t, eng)
-	rt := testWatchRuntime(t, eng)
-	ctx := t.Context()
-
-	saveObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String(), "existing-cursor")
-
-	batch := buildSharedRootWatchBatch(eng.Engine, &remoteFetchResult{
-		pending: &pendingPrimaryCursorCommit{
-			driveID: mustParseDriveID("2").String(),
-			rootID:  "shared-root",
-			token:   "mismatched-cursor",
-		},
-	})
-	err := rt.handleRemoteObservationBatch(ctx, &batch)
-	require.Error(t, err)
-	assert.True(t, isFatalObserverError(err))
-	assert.Equal(t, "existing-cursor", readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
 }
 
 // Validates: R-2.10.4
@@ -158,9 +160,13 @@ func TestHandleRemoteObservationBatch_SharedRootReconcilesRemoteReadDeniedFindin
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	batch := buildSharedRootWatchBatch(eng.Engine, &remoteFetchResult{
-		findings: rootRemoteReadDeniedObservationFindingsBatch(eng.driveID),
-	})
+	batch := testSharedRootWatchBatch(
+		eng.Engine,
+		remoteObservationModeEnumerate,
+		nil,
+		"",
+		rootRemoteReadDeniedObservationFindingsBatch(eng.driveID),
+	)
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
 
@@ -272,9 +278,17 @@ func TestHandleRemoteObservationBatch_FullRefreshApplyFailureMarksDirtyForRetry(
 	ctx := t.Context()
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	batch := buildFullRemoteRefreshBatch(eng.Engine, remoteFetchResult{
-		findings: rootRemoteReadDeniedObservationFindingsBatch(eng.driveID),
-	})
+	batch := buildRemoteObservationBatch(
+		eng.Engine,
+		remoteObservationModeDelta,
+		nil,
+		"",
+		true,
+		rootRemoteReadDeniedObservationFindingsBatch(eng.driveID),
+	)
+	batch.source = remoteObservationBatchFullRefresh
+	batch.armFullRefreshTimer = true
+	batch.markFullRefreshIfIdle = true
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
 

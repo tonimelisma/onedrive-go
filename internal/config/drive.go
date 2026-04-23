@@ -18,14 +18,15 @@ import (
 // merging global defaults with per-drive overrides and CLI/env flags. This
 // is the final product consumed by the CLI and sync engine.
 type ResolvedDrive struct {
-	CanonicalID driveid.CanonicalID
-	DisplayName string
-	Owner       string // drive owner name; populated for shared drives
-	Paused      bool
-	PausedUntil string // RFC3339 timestamp; empty when not timed
-	SyncDir     string // absolute path after tilde expansion
-	DriveID     driveid.ID
-	RootItemID  string // configured remote root item for shared-root drives; empty = drive root
+	CanonicalID            driveid.CanonicalID
+	DisplayName            string
+	Owner                  string // drive owner name; populated for shared drives
+	Paused                 bool
+	PausedUntil            string // RFC3339 timestamp; empty when not timed
+	SyncDir                string // absolute path after tilde expansion
+	DriveID                driveid.ID
+	RootItemID             string // configured remote root item for shared-root drives; empty = drive root
+	SharedRootDeltaCapable bool   // true when folder delta is supported for the configured shared root
 
 	TransfersConfig
 	SafetyConfig
@@ -164,13 +165,18 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		resolved.RootItemID = canonicalID.SourceItemID()
 	}
 
+	var catalog *Catalog
 	// Two-source drive ID resolution: prefer the catalog-backed drive record
 	// (per-drive, accurate for SharePoint libraries and shared drives), then
 	// the shared canonical ID (embeds the remote drive ID). Otherwise DriveID
 	// stays zero.
-	if catalog, err := LoadCatalog(); err != nil {
+	if loadedCatalog, err := LoadCatalog(); err != nil {
 		logger.Debug("could not load catalog drive record", "canonical_id", canonicalID.String(), "error", err)
-	} else if drive, found := catalog.DriveByCanonicalID(canonicalID); found && drive.RemoteDriveID != "" {
+	} else {
+		catalog = loadedCatalog
+	}
+
+	if drive, found := catalogDriveRecord(catalog, canonicalID); found && drive.RemoteDriveID != "" {
 		resolved.DriveID = driveid.New(drive.RemoteDriveID)
 		logger.Debug("resolved drive ID from catalog drive record",
 			"drive_id", resolved.DriveID.String(),
@@ -183,6 +189,10 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 			"drive_id", resolved.DriveID.String(),
 			"canonical_id", canonicalID.String(),
 		)
+	}
+
+	if canonicalID.IsShared() {
+		resolved.SharedRootDeltaCapable = sharedRootDeltaCapable(canonicalID, catalog, logger)
 	}
 
 	// Compute runtime default sync_dir when the drive has none configured.
@@ -209,6 +219,42 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	applyDriveOverrides(resolved, drive, logger)
 
 	return resolved
+}
+
+func catalogDriveRecord(catalog *Catalog, canonicalID driveid.CanonicalID) (CatalogDrive, bool) {
+	if catalog == nil {
+		return CatalogDrive{}, false
+	}
+
+	return catalog.DriveByCanonicalID(canonicalID)
+}
+
+func sharedRootDeltaCapable(
+	canonicalID driveid.CanonicalID,
+	catalog *Catalog,
+	logger *slog.Logger,
+) bool {
+	drive, found := catalogDriveRecord(catalog, canonicalID)
+	if !found || drive.OwnerAccountCanonical == "" {
+		return true
+	}
+
+	ownerCID, err := driveid.NewCanonicalID(drive.OwnerAccountCanonical)
+	if err != nil {
+		logger.Debug("could not parse shared-root owner account type",
+			"canonical_id", canonicalID.String(),
+			"owner_account_canonical", drive.OwnerAccountCanonical,
+			"error", err,
+		)
+		return true
+	}
+
+	switch ownerCID.DriveType() {
+	case driveid.DriveTypeBusiness, driveid.DriveTypeSharePoint:
+		return false
+	default:
+		return true
+	}
 }
 
 // CollectOtherSyncDirs collects sync_dir values from all drives in the config

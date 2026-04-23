@@ -74,7 +74,10 @@ assemble overlapping observation-managed batch shapes ad hoc.
 
 For separately configured shared-root drives, the engine also carries the
 configured `rootItemID`. That root item defines the remote boundary for scoped
-observation and execution metadata.
+observation and execution metadata. Shared-root delta capability is resolved in
+config as `ResolvedDrive.SharedRootDeltaCapable` and passed into the engine as
+construction input; the engine does not reopen catalog state just to decide
+whether a shared root should try folder delta.
 
 Permission handling is intentionally split three ways:
 
@@ -188,7 +191,7 @@ rebuilds the active timer instead of waiting for a later full refresh commit.
 
 In this increment, "degraded" means exactly "running without delta." The main
 whole-drive watch path remains delta-based. Shared-root watch chooses its mode
-from the configured drive surface:
+from the config-resolved capability surface:
 
 - business/sharepoint shared roots skip folder delta and use recursive
   enumeration

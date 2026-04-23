@@ -58,9 +58,10 @@ func TestNewDriveEngine_PropagatesWatchCapabilities(t *testing.T) {
 		RootItem: "shared-root-id",
 	}
 	resolved := &config.ResolvedDrive{
-		CanonicalID: driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents"),
-		SyncDir:     syncDir,
-		RootItemID:  "shared-root-id",
+		CanonicalID:            driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents"),
+		SyncDir:                syncDir,
+		RootItemID:             "shared-root-id",
+		SharedRootDeltaCapable: false,
 		TransfersConfig: config.TransfersConfig{
 			TransferWorkers: 3,
 			CheckWorkers:    4,
@@ -86,6 +87,7 @@ func TestNewDriveEngine_PropagatesWatchCapabilities(t *testing.T) {
 	assert.Equal(t, session.DriveID, eng.driveID)
 	assert.Equal(t, resolved.CanonicalID.DriveType(), eng.driveType)
 	assert.Equal(t, "shared-root-id", eng.rootItemID)
+	assert.False(t, eng.sharedRootDeltaCapable)
 	assert.True(t, eng.enableWebsocket)
 	assert.NotNil(t, eng.socketIOFetcher)
 	assert.NotNil(t, eng.driveVerifier)

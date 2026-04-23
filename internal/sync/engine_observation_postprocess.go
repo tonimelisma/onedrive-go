@@ -32,77 +32,6 @@ func isFatalObserverError(err error) bool {
 	return errors.As(err, &fatal)
 }
 
-func buildPrimaryWatchBatch(
-	engine *Engine,
-	primaryEvents []ChangeEvent,
-	newToken string,
-) remoteObservationBatch {
-	projected := projectRemoteObservations(engine.logger, primaryEvents)
-
-	return remoteObservationBatch{
-		source:          remoteObservationBatchPrimaryWatch,
-		observationMode: remoteObservationModeDelta,
-		observed:        projected.observed,
-		emitted:         append([]ChangeEvent(nil), projected.emitted...),
-		pending:         primaryCursorCommit(newToken, engine, false, len(projected.emitted), remoteObservationModeDelta),
-		findings:        newRemoteObservationFindingsBatch(),
-		applyAck:        make(chan error, 1),
-	}
-}
-
-func buildSharedRootWatchBatch(
-	engine *Engine,
-	result *remoteFetchResult,
-) remoteObservationBatch {
-	if result == nil {
-		return remoteObservationBatch{
-			source:          remoteObservationBatchSharedRoot,
-			observationMode: remoteObservationModeEnumerate,
-			findings:        newRemoteObservationFindingsBatch(),
-			applyAck:        make(chan error, 1),
-		}
-	}
-
-	projected := projectRemoteObservations(engine.logger, result.events)
-
-	return remoteObservationBatch{
-		source:          remoteObservationBatchSharedRoot,
-		observationMode: result.observationMode,
-		observed:        projected.observed,
-		emitted:         append([]ChangeEvent(nil), projected.emitted...),
-		pending:         clonePendingPrimaryCursorCommit(result.pending),
-		findings:        result.findings,
-		applyAck:        make(chan error, 1),
-	}
-}
-
-func buildFullRemoteRefreshBatch(
-	engine *Engine,
-	result remoteFetchResult,
-) remoteRefreshResult {
-	projected := projectRemoteObservations(engine.logger, result.events)
-
-	return remoteObservationBatch{
-		source:                remoteObservationBatchFullRefresh,
-		observationMode:       result.observationMode,
-		observed:              projected.observed,
-		emitted:               append([]ChangeEvent(nil), projected.emitted...),
-		pending:               clonePendingPrimaryCursorCommit(result.pending),
-		findings:              result.findings,
-		armFullRefreshTimer:   true,
-		markFullRefreshIfIdle: len(projected.emitted) == 0,
-	}
-}
-
-func clonePendingPrimaryCursorCommit(pending *pendingPrimaryCursorCommit) *pendingPrimaryCursorCommit {
-	if pending == nil {
-		return nil
-	}
-
-	clone := *pending
-	return &clone
-}
-
 func (batch *remoteObservationBatch) waitApplied(ctx context.Context) error {
 	if batch == nil || batch.applyAck == nil {
 		return nil
@@ -136,10 +65,10 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 	}
 
 	commitToken := ""
-	pending := clonePendingPrimaryCursorCommit(batch.pending)
-	if batch.source == remoteObservationBatchPrimaryWatch && pending != nil && !pending.markFullRemoteRefresh {
-		commitToken = pending.token
-		pending = nil
+	progress := *batch
+	if batch.source == remoteObservationBatchPrimaryWatch && !batch.markFullRemoteRefresh {
+		commitToken = batch.cursorToken
+		progress.cursorToken = ""
 	}
 
 	if len(batch.observed) > 0 || commitToken != "" {
@@ -148,15 +77,16 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 		}
 	}
 
-	if pending != nil {
-		if err := rt.commitPendingPrimaryCursor(ctx, pending); err != nil {
+	// Watch mode must rearm the live refresh timer in the same control path that
+	// shortens the persisted deadline, otherwise shared-root enumerate fallback
+	// can leave the process sleeping on an outdated timer.
+	armFullRefreshTimer := batch.armFullRefreshTimer
+	if deferredProgress := progress.deferredProgress(); deferredProgress != nil {
+		deadlineChanged, err := rt.commitPendingRemoteObservation(ctx, deferredProgress)
+		if err != nil {
 			return err
 		}
-	}
-
-	armFullRefreshTimer, err := rt.refreshTimerRearmNeededForBatch(ctx, batch)
-	if err != nil {
-		return err
+		armFullRefreshTimer = armFullRefreshTimer || deadlineChanged
 	}
 
 	findings := batch.findings
@@ -176,30 +106,6 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 	}
 
 	return nil
-}
-
-func (rt *watchRuntime) refreshTimerRearmNeededForBatch(
-	ctx context.Context,
-	batch *remoteObservationBatch,
-) (bool, error) {
-	// Watch mode must rearm the live refresh timer in the same control path that
-	// shortens the persisted deadline, otherwise shared-root enumerate fallback
-	// can leave the process sleeping on an outdated timer.
-	armFullRefreshTimer := batch.armFullRefreshTimer
-	if batch.observationMode != remoteObservationModeEnumerate {
-		return armFullRefreshTimer, nil
-	}
-
-	deadlineChanged, err := rt.engine.baseline.ClampFullRemoteRefreshDeadline(
-		ctx,
-		rt.engine.driveID,
-		rt.engine.nowFunc().Add(remoteRefreshEnumerateInterval),
-	)
-	if err != nil {
-		return false, fmt.Errorf("clamp full remote refresh deadline: %w", err)
-	}
-
-	return armFullRefreshTimer || deadlineChanged, nil
 }
 
 func batchObservationFailureMessage(source remoteObservationBatchSource) string {
