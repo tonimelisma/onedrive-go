@@ -1,8 +1,8 @@
 // Package driveops provides authenticated drive access, token caching, Graph
-// HTTP runtime reuse, and transfer operations. It is the single owner of the
-// "resolved drive -> authenticated Graph API client" glue logic, shared
-// between the CLI (file-op commands), the multi-drive control plane, and the
-// sync engine.
+// HTTP runtime reuse, and transfer operations. It is the single owner of
+// mount-session identity -> authenticated Graph API client construction,
+// shared between the CLI (file-op commands), the multi-mount control plane,
+// and the sync engine.
 //
 // SessionRuntime caches TokenSources by token file path and owns the reused
 // bootstrap, interactive, and sync HTTP client profiles. That keeps one

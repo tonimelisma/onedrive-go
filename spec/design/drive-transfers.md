@@ -156,17 +156,19 @@ executor's mounted drive/root session. Direct shared-item CLI flows keep any
 explicit target-scoped path work above sync via `SharedTargetClients(...)` and
 `ResolveItem(...)`.
 
-`SessionRuntime.SyncSession(...)` is now mount-shaped rather than resolved-drive
-shaped. Sync workers receive authenticated sessions from explicit
-`SyncMountSessionConfig` identity:
+`SessionRuntime.InteractiveSession(...)` and
+`SessionRuntime.SyncSession(...)` are mount-shaped rather than resolved-drive
+shaped. File-op commands translate the selected `ResolvedDrive` into explicit
+`MountSessionConfig` only at the CLI boundary, while sync workers receive the
+same mount-owned identity from `mountSpec`:
 
 - token owner canonical ID
 - mounted remote drive ID
 - mounted remote root item ID
 - account email for auth-proof attribution
 
-That keeps sync auth ownership aligned with runtime mounts, including managed
-child projections, instead of carrying `ResolvedDrive` through transfer/runtime
+That keeps auth ownership aligned with runtime mounts, including managed child
+projections, instead of carrying `ResolvedDrive` through transfer/runtime
 construction as a second source of truth.
 
 The resulting `driveops.Session` is also mount-rooted in its own vocabulary.
@@ -226,7 +228,7 @@ Design properties:
 - Managed session files use `internal/fsroot`.
 - Sync-engine runtime cleanup of `.partial` files under one configured sync root uses `internal/synctree`.
 - Arbitrary local source/target paths use `internal/localpath`, making the three filesystem trust boundaries explicit instead of routing them through one helper package.
-- `driveops.SessionRuntime` owns the reused Graph HTTP clients together with token-source caching. It chooses target-scoped interactive or sync HTTP profiles by composing the stateless builders in `internal/graphtransport`; callers no longer inject one cache owner into another. Sync session creation takes explicit mount-owned identity instead of a generic resolved-drive wrapper.
+- `driveops.SessionRuntime` owns the reused Graph HTTP clients together with token-source caching. It chooses target-scoped interactive or sync HTTP profiles by composing the stateless builders in `internal/graphtransport`; callers no longer inject one cache owner into another. Interactive and sync session creation take explicit mount-owned identity instead of a generic resolved-drive wrapper.
 - `driveops.Session` may install a proof hook onto its authenticated Graph clients so successful live file operations can clear stale catalog auth requirements. Pre-authenticated upload and download URLs bypass that hook and do not count as auth proof.
 - Guard `.partial` file cleanup with `ctx.Err() == nil`: a 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Only intentional deletions (hash mismatch) should remove partials.
 - **Connection-level deadlines** (`internal/graphtransport` transfer profiles): both interactive and sync transfer clients use the shared transfer transport with `ResponseHeaderTimeout: 2m` (detects servers that accept but never respond) and TCP keepalives (30s idle, 10s interval, 3 probes — detects dead connections within ~60s). No `http.Client.Timeout` — transfer duration varies with file size and bandwidth. [verified]

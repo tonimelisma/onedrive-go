@@ -120,17 +120,13 @@ func TestNewSessionRuntime(t *testing.T) {
 	assert.NotNil(t, p.TokenSourceFn, "default TokenSourceFn should be set")
 }
 
-// --- SessionRuntime.Session error paths ---
+// --- SessionRuntime interactive session error paths ---
 
 func TestSessionRuntime_EmptyTokenPath(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
 	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 
-	resolved := &config.ResolvedDrive{
-		CanonicalID: driveid.CanonicalID{}, // zero value → empty token path
-	}
-
-	_, err := p.Session(t.Context(), resolved)
+	_, err := p.InteractiveSession(t.Context(), &MountSessionConfig{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "token path")
 }
@@ -145,12 +141,13 @@ func TestSessionRuntime_NotLoggedIn(t *testing.T) {
 	cid, err := driveid.NewCanonicalID("personal:nobody@example.com")
 	require.NoError(t, err)
 
-	resolved := &config.ResolvedDrive{
-		CanonicalID: cid,
-		DriveID:     driveid.New("abc123"),
+	mount := &MountSessionConfig{
+		TokenOwnerCanonical: cid,
+		DriveID:             driveid.New("abc123"),
+		AccountEmail:        cid.Email(),
 	}
 
-	_, err = p.Session(t.Context(), resolved)
+	_, err = p.InteractiveSession(t.Context(), mount)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "login")
 }
@@ -165,12 +162,13 @@ func TestSessionRuntime_ZeroDriveID(t *testing.T) {
 	cid, err := driveid.NewCanonicalID("personal:test@example.com")
 	require.NoError(t, err)
 
-	resolved := &config.ResolvedDrive{
-		CanonicalID: cid,
-		// DriveID intentionally zero
+	mount := &MountSessionConfig{
+		TokenOwnerCanonical: cid,
+		AccountEmail:        cid.Email(),
+		// DriveID intentionally zero.
 	}
 
-	_, err = p.Session(t.Context(), resolved)
+	_, err = p.InteractiveSession(t.Context(), mount)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "drive ID not resolved")
 }
@@ -191,16 +189,17 @@ func TestSessionRuntime_TokenCaching(t *testing.T) {
 	cid, err := driveid.NewCanonicalID("personal:cache@example.com")
 	require.NoError(t, err)
 
-	rd := &config.ResolvedDrive{
-		CanonicalID: cid,
-		DriveID:     driveid.New("d1"),
+	mount := &MountSessionConfig{
+		TokenOwnerCanonical: cid,
+		DriveID:             driveid.New("d1"),
+		AccountEmail:        cid.Email(),
 	}
 
-	s1, err := p.Session(t.Context(), rd)
+	s1, err := p.InteractiveSession(t.Context(), mount)
 	require.NoError(t, err)
 	require.NotNil(t, s1)
 
-	s2, err := p.Session(t.Context(), rd)
+	s2, err := p.InteractiveSession(t.Context(), mount)
 	require.NoError(t, err)
 	require.NotNil(t, s2)
 
@@ -208,24 +207,43 @@ func TestSessionRuntime_TokenCaching(t *testing.T) {
 	assert.Equal(t, 1, callCount, "TokenSourceFn should be called exactly once for the same token path")
 }
 
-func TestSessionRuntime_InteractiveClientsReuseThrottleGatePerTarget(t *testing.T) {
+func TestSessionRuntime_InteractiveClientsReuseThrottleGatePerMountTarget(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
 	runtime := NewSessionRuntime(holder, "test/1.0", discardLogger())
 
-	driveA := runtime.interactiveClientsForDrive(&config.ResolvedDrive{
-		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
-		DriveID:     driveid.New("drive-a"),
+	ownerCID := driveid.MustCanonicalID("personal:user@example.com")
+	driveA := runtime.interactiveClientsForMount(&MountSessionConfig{
+		TokenOwnerCanonical: ownerCID,
+		DriveID:             driveid.New("drive-a"),
+		AccountEmail:        ownerCID.Email(),
 	})
-	driveAAgain := runtime.interactiveClientsForDrive(&config.ResolvedDrive{
-		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
-		DriveID:     driveid.New("drive-a"),
+	driveAAgain := runtime.interactiveClientsForMount(&MountSessionConfig{
+		TokenOwnerCanonical: ownerCID,
+		DriveID:             driveid.New("drive-a"),
+		AccountEmail:        ownerCID.Email(),
 	})
-	driveB := runtime.interactiveClientsForDrive(&config.ResolvedDrive{
-		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
-		DriveID:     driveid.New("drive-b"),
+	driveB := runtime.interactiveClientsForMount(&MountSessionConfig{
+		TokenOwnerCanonical: ownerCID,
+		DriveID:             driveid.New("drive-b"),
+		AccountEmail:        ownerCID.Email(),
 	})
-	shared := runtime.interactiveClientsForSharedTarget("user@example.com", "remote-drive", "remote-item")
-	sharedAgain := runtime.interactiveClientsForSharedTarget("user@example.com", "remote-drive", "remote-item")
+	rooted := runtime.interactiveClientsForMount(&MountSessionConfig{
+		TokenOwnerCanonical: ownerCID,
+		DriveID:             driveid.New("drive-a"),
+		RootItemID:          "remote-root",
+		AccountEmail:        ownerCID.Email(),
+	})
+	rootedAgain := runtime.interactiveClientsForMount(&MountSessionConfig{
+		TokenOwnerCanonical: ownerCID,
+		DriveID:             driveid.New("drive-a"),
+		RootItemID:          "remote-root",
+		AccountEmail:        ownerCID.Email(),
+	})
+	rootedWithFallbackEmail := runtime.interactiveClientsForMount(&MountSessionConfig{
+		TokenOwnerCanonical: ownerCID,
+		DriveID:             driveid.New("drive-a"),
+		RootItemID:          "remote-root",
+	})
 
 	firstRetry, ok := driveA.Meta.Transport.(*retry.RetryTransport)
 	require.True(t, ok)
@@ -233,18 +251,19 @@ func TestSessionRuntime_InteractiveClientsReuseThrottleGatePerTarget(t *testing.
 	require.True(t, ok)
 	thirdRetry, ok := driveB.Meta.Transport.(*retry.RetryTransport)
 	require.True(t, ok)
-	sharedRetry, ok := shared.Meta.Transport.(*retry.RetryTransport)
+	rootedRetry, ok := rooted.Meta.Transport.(*retry.RetryTransport)
 	require.True(t, ok)
-	sharedRetryAgain, ok := sharedAgain.Meta.Transport.(*retry.RetryTransport)
+	rootedRetryAgain, ok := rootedAgain.Meta.Transport.(*retry.RetryTransport)
 	require.True(t, ok)
 
 	assert.Same(t, driveA.Meta, driveAAgain.Meta)
 	assert.Same(t, driveA.Transfer, driveAAgain.Transfer)
 	assert.Same(t, firstRetry.ThrottleGate, secondRetry.ThrottleGate)
 	assert.NotSame(t, firstRetry.ThrottleGate, thirdRetry.ThrottleGate)
-	assert.Same(t, sharedRetry.ThrottleGate, sharedRetryAgain.ThrottleGate)
-	assert.NotSame(t, firstRetry.ThrottleGate, sharedRetry.ThrottleGate)
-	assert.Same(t, driveA.Transfer, shared.Transfer, "interactive transfer client should be shared across targets")
+	assert.Same(t, rooted.Meta, rootedWithFallbackEmail.Meta)
+	assert.Same(t, rootedRetry.ThrottleGate, rootedRetryAgain.ThrottleGate)
+	assert.NotSame(t, firstRetry.ThrottleGate, rootedRetry.ThrottleGate)
+	assert.Same(t, driveA.Transfer, rooted.Transfer, "interactive transfer client should be shared across targets")
 }
 
 // --- FlushTokenCache ---
@@ -262,18 +281,19 @@ func TestSessionRuntime_FlushTokenCache(t *testing.T) {
 	cid, err := driveid.NewCanonicalID("personal:flush@example.com")
 	require.NoError(t, err)
 
-	rd := &config.ResolvedDrive{
-		CanonicalID: cid,
-		DriveID:     driveid.New("d-flush"),
+	mount := &MountSessionConfig{
+		TokenOwnerCanonical: cid,
+		DriveID:             driveid.New("d-flush"),
+		AccountEmail:        cid.Email(),
 	}
 
 	// First call creates the cached entry.
-	_, err = p.Session(t.Context(), rd)
+	_, err = p.InteractiveSession(t.Context(), mount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, callCount)
 
 	// Second call reuses cache — no new TokenSourceFn invocation.
-	_, err = p.Session(t.Context(), rd)
+	_, err = p.InteractiveSession(t.Context(), mount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, callCount)
 
@@ -281,12 +301,12 @@ func TestSessionRuntime_FlushTokenCache(t *testing.T) {
 	p.FlushTokenCache()
 
 	// Third call must re-invoke TokenSourceFn.
-	_, err = p.Session(t.Context(), rd)
+	_, err = p.InteractiveSession(t.Context(), mount)
 	require.NoError(t, err)
 	assert.Equal(t, 2, callCount, "TokenSourceFn should be re-invoked after FlushTokenCache")
 }
 
-func TestSessionRuntime_SyncSession_UsesMountOwnedTokenOwner(t *testing.T) {
+func TestSessionRuntime_SyncSession_UsesMountSessionConfig(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
 	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 
@@ -298,7 +318,7 @@ func TestSessionRuntime_SyncSession_UsesMountOwnedTokenOwner(t *testing.T) {
 
 	ownerCID := driveid.MustCanonicalID("business:owner@example.com")
 
-	session, err := p.SyncSession(t.Context(), &SyncMountSessionConfig{
+	session, err := p.SyncSession(t.Context(), &MountSessionConfig{
 		TokenOwnerCanonical: ownerCID,
 		DriveID:             driveid.New("remote-drive"),
 		RootItemID:          "root-item",
@@ -323,9 +343,10 @@ func TestSessionRuntime_ThreadSafety(t *testing.T) {
 	cid, err := driveid.NewCanonicalID("personal:race@example.com")
 	require.NoError(t, err)
 
-	rd := &config.ResolvedDrive{
-		CanonicalID: cid,
-		DriveID:     driveid.New("d-race"),
+	mount := &MountSessionConfig{
+		TokenOwnerCanonical: cid,
+		DriveID:             driveid.New("d-race"),
+		AccountEmail:        cid.Email(),
 	}
 
 	var wg sync.WaitGroup
@@ -337,7 +358,7 @@ func TestSessionRuntime_ThreadSafety(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 
-			_, errs[idx] = p.Session(t.Context(), rd)
+			_, errs[idx] = p.InteractiveSession(t.Context(), mount)
 		}(i)
 	}
 
@@ -370,12 +391,13 @@ func TestSessionRuntime_TokenSourceError(t *testing.T) {
 	cid, err := driveid.NewCanonicalID("personal:err@example.com")
 	require.NoError(t, err)
 
-	rd := &config.ResolvedDrive{
-		CanonicalID: cid,
-		DriveID:     driveid.New("d-err"),
+	mount := &MountSessionConfig{
+		TokenOwnerCanonical: cid,
+		DriveID:             driveid.New("d-err"),
+		AccountEmail:        cid.Email(),
 	}
 
-	_, err = p.Session(t.Context(), rd)
+	_, err = p.InteractiveSession(t.Context(), mount)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disk read failed")
 }

@@ -398,8 +398,8 @@ func (m *mountSpec) contentRootKey() string {
 	return fmt.Sprintf("%s|%s|%s", m.tokenOwnerCanonical.String(), m.remoteDriveID.String(), rootItemID)
 }
 
-func (m *mountSpec) syncSessionConfig() *driveops.SyncMountSessionConfig {
-	return &driveops.SyncMountSessionConfig{
+func (m *mountSpec) syncSessionConfig() *driveops.MountSessionConfig {
+	return &driveops.MountSessionConfig{
 		TokenOwnerCanonical: m.tokenOwnerCanonical,
 		DriveID:             m.remoteDriveID,
 		RootItemID:          m.remoteRootItemID,

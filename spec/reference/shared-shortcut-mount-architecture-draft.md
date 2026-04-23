@@ -840,7 +840,7 @@ This section intentionally separates:
 | Current concept | Current role | Transitional role | Target home | Final fate |
 | --- | --- | --- | --- | --- |
 | `shared:<email>:<sourceDriveID>:<sourceItemID>` canonical drive ID | Configured shared drive identity | Temporary way to synthesize child mount-engine specs | Mount inventory content-root binding | Remove as a first-class configured-drive concept |
-| `ResolvedDrive.RootItemID` | Engine root override for shared drives | Temporary mount-engine input | `MountRecord.RemoteItemID` | Move out of generic drive resolution |
+| `ResolvedDrive.RootItemID` | Explicit standalone shared-folder root item | Temporary top-level mount-spec input | `MountRecord.RemoteRootItemID` for managed child mounts | Keep only for explicit standalone shared-folder config |
 | Shared drive `display_name` | User-facing name for configured shared drive | Temporary alias seed | `MountRecord.LocalAlias` | Remove shared-drive-specific display ownership from config |
 | `CatalogDrive.OwnerAccountCanonical` | Shared drive token owner | Temporary auth owner for generated mounts | `MountRecord.TokenOwnerAccount` | Move to dedicated mount inventory or explicit mount metadata |
 | `CatalogDrive.RemoteDriveID` | Backing drive ID for configured drives | Temporary content-root field | `MountRecord.RemoteDriveID` | Keep as mount metadata, not drive-config metadata |
@@ -1040,10 +1040,10 @@ still in use.
 - `ResolvedDrive.RootItemID` is a shared-root-specific override on a generic
   drive shape.
 - This is a shortcut/mount concern living inside generic drive resolution.
-- Transitional reuse: child mount engines can still be built from synthetic
-  `ResolvedDrive` values.
-- Cleanup target: root item identity leaves generic drive resolution and becomes
-  part of mount-engine specification.
+- Transitional reuse: top-level standalone mounts still start from
+  `ResolvedDrive` before the control plane compiles them into mount specs.
+- Cleanup target: root item identity leaves generic drive resolution anywhere
+  it is not part of the explicit standalone shared-folder product surface.
 
 `internal/config/catalog.go`, `internal/config/catalog_lifecycle.go`
 
@@ -1197,12 +1197,12 @@ still in use.
 
 `internal/multisync`
 
-- The current control plane already has the right high-level shape:
-  one engine per resolved drive.
-- The vestige is not that this exists; the vestige is that the only legal input
-  model is "configured drives" rather than "runtime mounts".
-- Cleanup target: promote the control plane from configured-drive orchestration
-  to mount-spec orchestration.
+- The current control plane already has the right high-level runtime shape:
+  one engine per runtime mount.
+- The remaining transition seam is that top-level standalone mounts still start
+  from configured drives before they are compiled into mount specs.
+- Cleanup target: keep moving authority from configured-drive vocabulary into
+  explicit mount specs and mount inventory where those concepts own the truth.
 
 ### Docs, Tests, And Historical Vocabulary Vestiges
 
@@ -1362,7 +1362,7 @@ Code areas:
 
 Concrete work:
 
-- replace `NewDriveEngine(session, resolved, ...)` as the primary orchestration
+- replace resolved-drive engine construction as the primary orchestration
   boundary with a mount-engine constructor fed by:
   - authenticated clients/session capabilities
   - a `MountSpec`
@@ -1373,8 +1373,8 @@ Concrete work:
   - sync root
   - remote root item ID
   - rooted-observation capability hints
-- keep a thin compatibility adapter temporarily if some CLI entrypoints still
-  need it, but do not let it remain the main boundary
+- remove any thin compatibility adapter once CLI/control-plane entrypoints can
+  compile explicit mount identity before engine construction
 
 Must not do:
 
@@ -1516,7 +1516,9 @@ Concrete work:
 - removed `mountSpec.resolved` and promoted sync/runtime identity into
   mount-owned fields
 - changed `SessionRuntime.SyncSession(...)` to accept mount-owned identity
-  instead of `*config.ResolvedDrive`
+  instead of `*config.ResolvedDrive`; Increment 7a later generalized that
+  identity as `driveops.MountSessionConfig` for both sync and interactive
+  sessions
 - taught the control plane to merge:
   - configured standalone parent mounts
   - managed child-mount records
@@ -1627,6 +1629,9 @@ Concrete work:
   managed mount identity rather than an explicit standalone mount surface
 - remove generic config/catalog/session fields that only existed to carry mount
   semantics in drive-shaped types
+- remove transitional resolved-drive runtime constructors and session APIs:
+  `sync.NewDriveEngine` is gone, `SessionRuntime.Session` is gone, and both
+  interactive and sync session construction now consume `driveops.MountSessionConfig`
 - rename remaining store owner vocabulary from configured-drive-centric to
   mount-centric where appropriate
 - keep only the minimal explicit standalone-mount surface the product still
