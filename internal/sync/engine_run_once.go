@@ -16,7 +16,7 @@ import (
 //  6. Return early if dry-run
 //  7. Build DepGraph, start worker pool
 //  8. Wait for completion, commit delta token
-func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Report, error) {
+func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*Report, error) {
 	start := e.nowFunc()
 	runner := newOneShotRunner(e)
 
@@ -84,7 +84,7 @@ func (e *Engine) runOnceDryRun(
 	ctx context.Context,
 	runner *oneShotRunner,
 	bl *Baseline,
-	mode Mode,
+	mode SyncMode,
 	opts RunOptions,
 	start time.Time,
 ) (*Report, error) {
@@ -196,7 +196,7 @@ func buildReportFromCounts(
 	counts map[ActionType]int,
 	conflicts int,
 	deferred DeferredCounts,
-	mode Mode,
+	mode SyncMode,
 	opts RunOptions,
 ) *Report {
 	return &Report{

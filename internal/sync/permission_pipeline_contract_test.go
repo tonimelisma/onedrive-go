@@ -44,7 +44,7 @@ func TestPermissionProbe_HandleLocalPermission_DoesNotPersistDurableState(t *tes
 		FailureCapability: PermissionCapabilityLocalRead,
 	})
 
-	require.True(t, evidence.Matched())
+	require.NotEqual(t, permissionEvidenceNone, evidence.Kind)
 	assert.Equal(t, permissionEvidenceFileDenied, evidence.Kind)
 	assertNoDurablePermissionPipelineState(t, ph.store)
 }
@@ -62,7 +62,7 @@ func TestPermissionProbe_HandlePermissionCheckError_DoesNotPersistDurableState(t
 		ActionUpload,
 	)
 
-	assert.False(t, evidence.Matched())
+	assert.Equal(t, permissionEvidenceNone, evidence.Kind)
 	assertNoDurablePermissionPipelineState(t, ph.store)
 }
 

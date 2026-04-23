@@ -166,7 +166,7 @@ func TestSyncModeFromFlags(t *testing.T) {
 	tests := []struct {
 		name string
 		flag string
-		want syncengine.Mode
+		want syncengine.SyncMode
 	}{
 		{"default bidirectional", "", syncengine.SyncBidirectional},
 		{"download-only", "download-only", syncengine.SyncDownloadOnly},
@@ -493,7 +493,7 @@ sync_dir = %q
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
-		mode syncengine.Mode,
+		mode syncengine.SyncMode,
 		opts syncengine.RunOptions,
 		_ *slog.Logger,
 		controlSocketPath string,
@@ -552,7 +552,7 @@ sync_dir = %q
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
-		mode syncengine.Mode,
+		mode syncengine.SyncMode,
 		_ syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,
@@ -612,7 +612,7 @@ sync_dir = %q
 		_ context.Context,
 		_ *config.Holder,
 		_ []*config.ResolvedDrive,
-		_ syncengine.Mode,
+		_ syncengine.SyncMode,
 		opts syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,
@@ -658,7 +658,7 @@ sync_dir = %q
 			context.Context,
 			*config.Holder,
 			[]string,
-			syncengine.Mode,
+			syncengine.SyncMode,
 			syncengine.WatchOptions,
 			*slog.Logger,
 			io.Writer,
@@ -702,7 +702,7 @@ sync_dir = %q
 		context.Context,
 		*config.Holder,
 		[]*config.ResolvedDrive,
-		syncengine.Mode,
+		syncengine.SyncMode,
 		syncengine.RunOptions,
 		*slog.Logger,
 		string,
@@ -742,7 +742,7 @@ sync_dir = %q
 		context.Context,
 		*config.Holder,
 		[]string,
-		syncengine.Mode,
+		syncengine.SyncMode,
 		syncengine.WatchOptions,
 		*slog.Logger,
 		io.Writer,
@@ -788,7 +788,7 @@ paused = true
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
-		mode syncengine.Mode,
+		mode syncengine.SyncMode,
 		_ syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,

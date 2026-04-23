@@ -74,10 +74,7 @@ func TestNewDriveEngine_PropagatesWatchCapabilities(t *testing.T) {
 		},
 	}
 
-	eng, err := NewDriveEngine(t.Context(), session, resolved, DriveEngineOptions{
-		Logger:      logger,
-		VerifyDrive: true,
-	})
+	eng, err := NewDriveEngine(t.Context(), session, resolved, logger, nil, true)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close(t.Context()))
@@ -118,9 +115,7 @@ func TestNewDriveEngine_InvalidMinFreeSpace(t *testing.T) {
 		},
 	}
 
-	_, err := NewDriveEngine(t.Context(), session, resolved, DriveEngineOptions{
-		Logger: logger,
-	})
+	_, err := NewDriveEngine(t.Context(), session, resolved, logger, nil, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid min_free_space")
 }

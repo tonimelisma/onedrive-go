@@ -13,7 +13,7 @@ import (
 func (r *oneShotRunner) runLiveCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
-	mode Mode,
+	mode SyncMode,
 	opts RunOptions,
 ) (*runtimePlan, error) {
 	observeStart := r.engine.nowFunc()
@@ -38,7 +38,7 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 func (r *oneShotRunner) runDryRunCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
-	mode Mode,
+	mode SyncMode,
 	opts RunOptions,
 ) (*runtimePlan, error) {
 	observeStart := r.engine.nowFunc()
@@ -59,7 +59,7 @@ func (r *oneShotRunner) runDryRunCurrentPlan(
 func (rt *watchRuntime) runBootstrapCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
-	mode Mode,
+	mode SyncMode,
 ) (*runtimePlan, error) {
 	fullRefresh, err := rt.engine.shouldRunFullRemoteRefresh(ctx, false)
 	if err != nil {
@@ -88,7 +88,7 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 func (rt *watchRuntime) runSteadyStateCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
-	mode Mode,
+	mode SyncMode,
 ) (*runtimePlan, error) {
 	observation, err := rt.loadCommittedCurrentObservation(ctx, nil)
 	if err != nil {
@@ -468,7 +468,7 @@ func (flow *engineFlow) loadCurrentInputsTx(
 func (flow *engineFlow) buildCurrentPlanStage(
 	ctx context.Context,
 	bl *Baseline,
-	mode Mode,
+	mode SyncMode,
 	opts RunOptions,
 	observation *currentObservation,
 ) (*builtCurrentPlan, error) {
@@ -567,7 +567,7 @@ func (flow *engineFlow) loadRuntimeState(ctx context.Context) ([]RetryWorkRow, [
 func (e *Engine) buildCurrentActionPlanFromInputs(
 	inputs *currentInputs,
 	bl *Baseline,
-	mode Mode,
+	mode SyncMode,
 ) (*ActionPlan, error) {
 	return e.planner.PlanCurrentState(
 		inputs.comparisons,

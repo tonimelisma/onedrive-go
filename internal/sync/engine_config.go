@@ -10,35 +10,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
-// DriveEngineOptions carries the small set of construction decisions that are
-// not owned by the resolved drive/session pair itself.
-type DriveEngineOptions struct {
-	Logger        *slog.Logger
-	PerfCollector *perf.Collector
-	VerifyDrive   bool
-}
-
 // NewDriveEngine constructs an Engine directly from the authenticated drive
 // session and resolved drive config used by production entrypoints.
 func NewDriveEngine(
 	ctx context.Context,
 	session *driveops.Session,
 	resolved *config.ResolvedDrive,
-	opts DriveEngineOptions,
+	logger *slog.Logger,
+	perfCollector *perf.Collector,
+	verifyDrive bool,
 ) (*Engine, error) {
-	cfg, err := newEngineConfigForDrive(session, resolved, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	return newEngine(ctx, cfg)
-}
-
-func newEngineConfigForDrive(
-	session *driveops.Session,
-	resolved *config.ResolvedDrive,
-	opts DriveEngineOptions,
-) (*engineInputs, error) {
 	if session == nil {
 		return nil, fmt.Errorf("sync: session is required")
 	}
@@ -47,7 +28,6 @@ func newEngineConfigForDrive(
 		return nil, fmt.Errorf("sync: resolved drive is required")
 	}
 
-	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -67,7 +47,7 @@ func newEngineConfigForDrive(
 		return nil, fmt.Errorf("invalid min_free_space %q: %w", resolved.MinFreeSpace, err)
 	}
 
-	ecfg := &engineInputs{
+	cfg := &engineInputs{
 		DBPath:                 dbPath,
 		SyncRoot:               syncDir,
 		DataDir:                config.DefaultDataDir(),
@@ -94,12 +74,12 @@ func newEngineConfigForDrive(
 		TransferWorkers: resolved.TransferWorkers,
 		CheckWorkers:    resolved.CheckWorkers,
 		MinFreeSpace:    minFree,
-		PerfCollector:   opts.PerfCollector,
+		PerfCollector:   perfCollector,
 	}
 
-	if opts.VerifyDrive {
-		ecfg.DriveVerifier = session.Meta
+	if verifyDrive {
+		cfg.DriveVerifier = session.Meta
 	}
 
-	return ecfg, nil
+	return newEngine(ctx, cfg)
 }

@@ -21,14 +21,3 @@ type PermissionHandler struct {
 	logger       *slog.Logger
 	nowFn        func() time.Time
 }
-
-type remoteBoundaryRoot struct {
-	remoteDrive string
-	remoteItem  string
-	localPath   string
-}
-
-// HasPermChecker reports whether a remote permission checker is configured.
-func (ph *PermissionHandler) HasPermChecker() bool {
-	return ph.permChecker != nil
-}

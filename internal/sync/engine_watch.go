@@ -50,7 +50,7 @@ const quiescenceLogInterval = 30 * time.Second
 // Unlike the old approach (calling RunOnce with throwaway infrastructure),
 // bootstrapSync dispatches through the same DepGraph, active scope working
 // set, and WorkerPool that the steady-state watch loop uses.
-func (e *Engine) RunWatch(ctx context.Context, mode Mode, opts WatchOptions) error {
+func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions) error {
 	e.logger.Info("watch mode starting",
 		slog.String("mode", mode.String()),
 		slog.Duration("poll_interval", e.resolvePollInterval(opts)),
@@ -111,7 +111,7 @@ type watchPipeline struct {
 	replanReady  <-chan dirtyBatch
 	completions  <-chan ActionCompletion
 	maintenanceC <-chan time.Time
-	mode         Mode
+	mode         SyncMode
 	pool         *WorkerPool // for bootstrapSync to access Completions()
 	cleanup      func()
 }
@@ -133,7 +133,7 @@ type socketIOWakeSourceRunner interface {
 //     and the current actionable set is rebuilt.
 func (rt *watchRuntime) initWatchInfra(
 	ctx context.Context,
-	mode Mode,
+	mode SyncMode,
 	opts WatchOptions,
 ) (*watchPipeline, error) {
 	// DepGraph tracks action dependencies. Active scope state is loaded from
@@ -223,7 +223,7 @@ func (rt *watchRuntime) initWatchInfra(
 // watch loop uses. Blocks until all bootstrap actions due now complete.
 //
 // Must be called after startup + initWatchInfra and before startObservers.
-func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watchPipeline) error {
+func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode SyncMode, pipe *watchPipeline) error {
 	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 
 	if pipe == nil || pipe.bl == nil {
