@@ -155,7 +155,7 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 	} else {
 		flow.clearRetryWorkOnSuccess(ctx, r)
 	}
-	if flow.scopeState != nil {
+	if flow.scopeState != nil && r != nil {
 		flow.scopeState.RecordSuccess(r)
 	}
 

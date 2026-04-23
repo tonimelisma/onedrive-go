@@ -119,6 +119,6 @@ func TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady(t *testing.T) 
 		assert.False(t, result.done)
 		require.ErrorContains(t, result.err, "steady-state replan requires loaded baseline")
 	case <-time.After(time.Second):
-		t.Fatalf("runNonDrainingWatchStep did not consume replanReady while idle")
+		require.FailNow(t, "runNonDrainingWatchStep did not consume replanReady while idle")
 	}
 }

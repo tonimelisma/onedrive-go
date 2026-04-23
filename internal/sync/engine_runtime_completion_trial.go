@@ -59,9 +59,32 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 			return err
 		}
 	} else {
-		if err := flow.applyTrialRetryFallback(ctx, watch, current, decision, r); err != nil {
+		persisted, err := flow.applyTrialRetryFallback(ctx, current, decision, r)
+		if err != nil {
 			return err
 		}
+		if shouldTransitionTrialFallbackScope(decision) {
+			if err := flow.transitionTrialScopeToPersistedBlock(
+				ctx,
+				watch,
+				trialScopeKey,
+				decision.ScopeKey,
+				decision.ConditionType,
+				r.RetryAfter,
+			); err != nil {
+				return err
+			}
+			flow.armFailureTimers(watch, decision, persisted)
+			return nil
+		}
+		if err := flow.rearmOrDiscardScope(ctx, watch, trialScopeKey); err != nil {
+			return err
+		}
+		if err := flow.applyPersistedFailureScopeEffects(ctx, watch, decision, r, persisted); err != nil {
+			return err
+		}
+		flow.armFailureTimers(watch, decision, persisted)
+		return nil
 	}
 
 	return flow.rearmOrDiscardScope(ctx, watch, trialScopeKey)
@@ -69,25 +92,25 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 
 func (flow *engineFlow) applyTrialRetryFallback(
 	ctx context.Context,
-	watch *watchRuntime,
 	current *TrackedAction,
 	decision *ResultDecision,
 	r *ActionCompletion,
-) error {
+) (bool, error) {
 	if decision.Persistence != persistRetryWork {
-		return fmt.Errorf("trial retry fallback for %s: missing retry_work persistence", r.Path)
+		return false, fmt.Errorf("trial retry fallback for %s: missing retry_work persistence", r.Path)
 	}
-	if err := flow.applyResultPersistence(ctx, decision, r); err != nil {
-		return err
-	}
-	if err := flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r)); err != nil {
-		return err
-	}
-	if watch != nil {
-		watch.armRetryTimer()
+	persisted, err := flow.persistAndHoldFailure(ctx, current, decision, r)
+	if err != nil {
+		return false, err
 	}
 
-	return nil
+	return persisted, nil
+}
+
+func shouldTransitionTrialFallbackScope(decision *ResultDecision) bool {
+	return decision != nil &&
+		decision.Class == errclass.ClassBlockScopeingTransient &&
+		!decision.ScopeKey.IsZero()
 }
 
 func (flow *engineFlow) applyTrialReclassification(
