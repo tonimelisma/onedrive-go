@@ -83,7 +83,7 @@ Permission handling is intentionally split three ways:
 - pure policy (`permission_policy.go`) turns one action completion plus
   permission evidence into an engine-facing `PermissionOutcome`
 - direct engine runtime application (`engine_runtime_permissions.go`,
-  `engine_runtime_permission_bridge.go`, and `engine_runtime_held.go`)
+  `engine_runtime_permission_bridge.go`, and `engine_runtime_lifecycle.go`)
   persists blocked `retry_work`, applies permission outcomes, activates or
   releases timed write scopes, and emits engine-owned logs without a separate
   wrapper layer
