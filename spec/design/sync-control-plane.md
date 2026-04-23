@@ -57,18 +57,24 @@ Each current `mountSpec` owns:
 - remote drive/root identity for rooted mounts
 - resolved pause state and rooted-observation hints
 
-The engine remains drive-shaped in this increment. `mountSpec` therefore still
-carries a temporary resolved-drive adapter for `SessionRuntime` and
-`sync.NewDriveEngine(...)`. That compatibility hop is transitional and is the
-only place where `ResolvedDrive` remains the runtime constructor input.
+`mountSpec` still carries the resolved drive in this increment, but only for:
+
+- `SessionRuntime`, which remains drive-shaped for session creation
+- the sync tunables that have not yet been promoted into mount-owned runtime
+  state
+
+Engine construction is no longer drive-shaped. `internal/multisync` now derives
+`sync.EngineMountConfig` from `mountSpec` and passes that sync-owned mount
+config into `sync.NewMountEngine(...)`.
 
 ## Boundary To The Engine
 
 The control plane does not observe, plan, execute, or persist sync state
 itself. Those responsibilities remain in the single-drive engine.
 
-- `internal/multisync` owns runtime mount selection, session resolution, engine
-  construction, per-mount goroutines, reload, and shutdown.
+- `internal/multisync` owns runtime mount selection, session resolution,
+  derivation of sync-owned engine mount config, per-mount goroutines, reload,
+  and shutdown.
 - `internal/sync` owns one-shot execution, watch-mode runtime state, conflict
   execution, retry/trial logic, scope lifecycle, and reconciliation.
 

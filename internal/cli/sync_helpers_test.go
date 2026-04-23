@@ -61,6 +61,7 @@ func TestNewSyncEngine_InvalidMinFreeSpace(t *testing.T) {
 	resolved := &config.ResolvedDrive{
 		SyncDir:     syncDir,
 		CanonicalID: driveid.MustCanonicalID("personal:test@example.com"),
+		DriveID:     session.DriveID,
 		SafetyConfig: config.SafetyConfig{
 			MinFreeSpace: "not-a-size",
 		},
@@ -91,6 +92,7 @@ func TestNewSyncEngine_Success(t *testing.T) {
 	resolved := &config.ResolvedDrive{
 		SyncDir:     syncDir,
 		CanonicalID: driveid.MustCanonicalID("personal:test@example.com"),
+		DriveID:     session.DriveID,
 		TransfersConfig: config.TransfersConfig{
 			TransferWorkers: 2,
 			CheckWorkers:    3,
