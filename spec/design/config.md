@@ -12,7 +12,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 
 - Owns: Config-file schema, catalog schema, durable lifecycle mutation rules for config/catalog-managed inventory, override resolution, path discovery, drive-section resolution, token-path resolution, and validation policy.
 - Does Not Own: OAuth exchange, Graph request behavior, sync runtime orchestration, or durable sync-store contents.
-- Source of Truth: The loaded `Config` snapshot plus derived `ResolvedDrive` values at the config/CLI selection boundary. `Holder` is the single in-process source of truth for reloadable config state; runtime session and engine construction consume mount-owned identity compiled above their boundaries.
+- Source of Truth: The loaded `Config` snapshot plus derived `ResolvedDrive` values at the config/CLI selection boundary. `Holder` is the single in-process source of truth for reloadable config state; sync orchestration receives `multisync.StandaloneMountConfig` values compiled at the CLI edge, and runtime session/engine construction consume mount-owned identity compiled above their boundaries.
 - Allowed Side Effects: Reading and writing config and managed inventory/state files through `fsroot`, plus statting arbitrary user-selected local paths through `localpath`.
 - Mutable Runtime Owner: `config.Holder` owns the current `*Config` pointer behind `Holder.mu`. The package starts no background goroutines, owns no long-lived channels, and uses no timers.
 - Error Boundary: `config` translates parse/load/validation outcomes into either fatal errors or warnings before callers act, following [error-model.md](error-model.md).
@@ -24,7 +24,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Shared-root drives always preserve the canonical shared root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
-| Shared-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestBuildConfiguredMountSpecs_PreservesRootedMountFields` |
+| Shared-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountConfigsFromResolvedDrives_PreservesMountBoundaryFields` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 
@@ -380,11 +380,11 @@ step into the shared failure model: fatal read/parse errors map to `fatal`,
 successful loads with warnings map to `actionable`, and clean loads map to
 `success`.
 
-**Sync-specific validation** (`ValidateResolvedForSync`): enforces that the resolved `sync_dir` is set, absolute, and not a regular file. That validation happens after `buildResolvedDrive` has already applied either the explicit per-drive `sync_dir` or the deterministic runtime default for drives that omit it. Non-existent paths are allowed because sync creates them on first run; other stat failures are fatal. The CLI then materializes the validated directory before launching one-shot or watch sync. Called only by the `sync` command — file operations do not require an explicit `sync_dir` in config.
+**Sync-specific validation** (`ValidateResolvedForSync`): enforces that the resolved `sync_dir` is set, absolute, and not a regular file. That validation happens after `buildResolvedDrive` has already applied either the explicit per-drive `sync_dir` or the deterministic runtime default for drives that omit it. Non-existent paths are allowed because sync creates them on first run; other stat failures are fatal. The CLI then materializes the validated directory and compiles selected `ResolvedDrive` values into `multisync.StandaloneMountConfig` before launching one-shot or watch sync. Called only by the `sync` command — file operations do not require an explicit `sync_dir` in config.
 
 ## Config Holder
 
-`config.Holder` wraps `*Config` + immutable config path behind an `RWMutex`. Both `SessionRuntime` and `multisync.OrchestratorConfig` share the same `*Holder` instance. On control-socket reload, one `holder.Update(newCfg)` call atomically updates config for all consumers.
+`config.Holder` wraps `*Config` + immutable config path behind an `RWMutex`. Both `SessionRuntime` and `multisync.OrchestratorConfig` share the same `*Holder` instance. On control-socket reload, multisync reloads the config file, uses the CLI-supplied standalone-mount compiler, then one `holder.Update(newCfg)` call atomically updates config for all consumers.
 
 ## Runtime Ownership
 

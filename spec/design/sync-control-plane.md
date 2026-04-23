@@ -23,7 +23,7 @@ runtime package that implements it.
 
 - Owns: Multi-mount sync lifecycle, runtime mount-spec compilation, automatic shortcut reconciliation, per-mount engine startup/shutdown, reload diffing, control-socket ownership, and per-mount panic/error isolation.
 - Does Not Own: Single-mount observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
-- Source of Truth: The current `config.Holder` snapshot plus the runtime mount set and `runners` map owned by the watch-mode orchestrator loop.
+- Source of Truth: The current `config.Holder` snapshot, the CLI-compiled standalone mount configs, plus the runtime mount set and `runners` map owned by the watch-mode orchestrator loop.
 - Allowed Side Effects: Session creation, engine construction/closure, Unix control-socket bind/unlink, per-mount goroutine startup, live perf capture, and control-plane logging.
 - Mutable Runtime Owner: `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one mount.
 - Error Boundary: The control plane converts mount startup into structured per-mount startup outcomes, returns one-shot startup classification separately from completed `MountReport` values, and keeps watch-runner failures isolated to the affected mount or log path. Engine-internal errors remain inside the single-mount boundary.
@@ -44,11 +44,13 @@ The control plane now compiles runtime `mountSpec` values before session
 creation and engine construction.
 
 Configured standalone drives are still the only explicit user-facing selection
-surface, but they are no longer the only runtime mount source. On startup and
-reload the control plane now:
+surface, but they are no longer the runtime construction shape. The CLI resolves
+configured drives and compiles them into `multisync.StandaloneMountConfig`
+values before constructing the orchestrator. On startup and reload the control
+plane now:
 
-1. resolves the selected configured drives
-2. compiles those resolved drives into standalone runtime mounts
+1. consumes the CLI-compiled standalone mount configs
+2. compiles those standalone configs into runtime mounts
 3. loads `mounts.json`
 4. attaches valid managed child mounts beneath selected standalone parents
 5. installs precise local subtree exclusions on those parents before engine
@@ -68,9 +70,10 @@ Each current `mountSpec` owns:
 - resolved pause state and rooted-observation hints
 - parent-owned child subtree exclusions
 
-`mountSpec` no longer carries `ResolvedDrive`. Configured drives are compiled
-into mount-owned runtime facts once, and sync session construction now consumes
-those facts through `driveops.MountSessionConfig`.
+`mountSpec` no longer carries `ResolvedDrive`, and `OrchestratorConfig` no
+longer accepts resolved-drive values. Configured drives are compiled at the CLI
+edge into `StandaloneMountConfig`, and sync session construction consumes those
+facts through `driveops.MountSessionConfig`.
 
 Engine construction is no longer drive-shaped. `internal/multisync` now derives
 `sync.EngineMountConfig` from `mountSpec` and passes that sync-owned mount
@@ -231,7 +234,8 @@ a process-wide crash or a cross-mount failure cascade.
 ## CLI Contract
 
 The `sync` Cobra command resolves drives, validates sync eligibility,
-constructs an `Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
+compiles selected drives into `multisync.StandaloneMountConfig`, constructs an
+`Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
 
 - `--watch` selects daemon mode
 - `--download-only` and `--upload-only` select sync mode
@@ -253,8 +257,10 @@ to the control-plane boundary.
 - Session creation goes through `driveops.SessionRuntime` with
   `driveops.MountSessionConfig`, keeping token-source caching owned in one
   place and keeping `ResolvedDrive` out of runtime construction.
-- Reload updates config through one shared `config.Holder`, so both the
-  control plane and session runtime see the same config snapshot.
+- Reload updates config through one shared `config.Holder` and uses the
+  CLI-supplied standalone-mount compiler, so both the control plane and session
+  runtime see the same config snapshot without giving multisync authority over
+  resolved-drive construction.
 
 ## Rationale
 
