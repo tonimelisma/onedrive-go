@@ -26,6 +26,22 @@ The target schema is intentionally narrow. It stores only:
 
 It does not store a durable executable plan or a mixed failure ledger.
 
+## Intentional Omissions
+
+The sync store intentionally does not persist several tempting history or
+runtime-only facts:
+
+- `sync_status`-style last-sync history. Status and watch summaries read
+  current durable authorities directly instead of treating old success/error
+  snapshots as sync truth.
+- local watch refresh modes or timestamps. Local degraded/healthy scan cadence
+  is runtime-owned.
+- remote refresh mode or a redundant "last full refresh" timestamp. The only
+  durable remote cadence fact is `observation_state.next_full_remote_refresh_at`.
+- duplicate content-identity columns. Local move matching uses the persisted
+  local hash directly, and `remote_state` stores only remote facts with live
+  non-test readers.
+
 ## Core Tables
 
 | Table | Purpose | Key |
