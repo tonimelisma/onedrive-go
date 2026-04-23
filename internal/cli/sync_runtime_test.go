@@ -96,12 +96,12 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 	drive := &config.ResolvedDrive{CanonicalID: driveid.MustCanonicalID("personal:sync-once@example.com")}
 	expectedResult := multisync.RunOnceResult{
 		Startup: multisync.StartupSelectionSummary{
-			Results: []multisync.DriveStartupResult{{
+			Results: []multisync.MountStartupResult{{
 				CanonicalID: drive.CanonicalID,
-				Status:      multisync.DriveStartupRunnable,
+				Status:      multisync.MountStartupRunnable,
 			}},
 		},
-		Reports: []*multisync.DriveReport{{CanonicalID: drive.CanonicalID}},
+		Reports: []*multisync.MountReport{{CanonicalID: drive.CanonicalID}},
 	}
 	cc.syncRunOnceRunner = func(
 		ctx context.Context,
@@ -280,9 +280,9 @@ func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoDriveStarts(t *testi
 			return &testSyncDaemonOrchestrator{
 				err: &multisync.WatchStartupError{
 					Summary: multisync.StartupSelectionSummary{
-						Results: []multisync.DriveStartupResult{{
+						Results: []multisync.MountStartupResult{{
 							CanonicalID: cid,
-							Status:      multisync.DriveStartupIncompatibleStore,
+							Status:      multisync.MountStartupIncompatibleStore,
 							Err: &syncengine.StateStoreIncompatibleError{
 								Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
 							},
@@ -320,9 +320,9 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 			require.NotNil(t, cfg.StartWarning)
 			cfg.StartWarning(multisync.StartupWarning{
 				Summary: multisync.StartupSelectionSummary{
-					Results: []multisync.DriveStartupResult{{
+					Results: []multisync.MountStartupResult{{
 						CanonicalID: cid,
-						Status:      multisync.DriveStartupIncompatibleStore,
+						Status:      multisync.MountStartupIncompatibleStore,
 						Err: &syncengine.StateStoreIncompatibleError{
 							Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
 						},
@@ -337,5 +337,5 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, status.String(), "pause --drive '"+cid.String()+"'")
 	assert.Contains(t, status.String(), "drive reset-sync-state --drive '"+cid.String()+"'")
-	assert.Contains(t, status.String(), "--drive selecting only other drives")
+	assert.Contains(t, status.String(), "--drive selecting only other configured parent drives")
 }

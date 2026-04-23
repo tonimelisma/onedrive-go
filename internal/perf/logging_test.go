@@ -57,7 +57,7 @@ func TestSession_EmitsPeriodicUpdateAndSummary(t *testing.T) {
 func TestRuntimeCapture_DefaultManifestOmitsDriveSnapshots(t *testing.T) {
 	runtime := NewRuntime(nil)
 	runtime.Collector().RecordHTTPRequest(200, time.Millisecond, nil)
-	runtime.RegisterDrive("personal:alice@example.com").RecordTransfer(TransferKindUpload, 1, time.Millisecond)
+	runtime.RegisterMount("personal:alice@example.com").RecordTransfer(TransferKindUpload, 1, time.Millisecond)
 	outputDir := filepath.Join(t.TempDir(), "bundle")
 
 	result, err := runtime.Capture(t.Context(), CaptureOptions{
@@ -84,7 +84,7 @@ func TestRuntimeCapture_DefaultManifestOmitsDriveSnapshots(t *testing.T) {
 func TestRuntimeCapture_FullDetailManifestIncludesDriveSnapshots(t *testing.T) {
 	runtime := NewRuntime(nil)
 	runtime.Collector().RecordDBTransaction(time.Millisecond)
-	runtime.RegisterDrive("personal:bob@example.com").RecordTransfer(TransferKindDownload, 2, time.Millisecond)
+	runtime.RegisterMount("personal:bob@example.com").RecordTransfer(TransferKindDownload, 2, time.Millisecond)
 	outputDir := filepath.Join(t.TempDir(), "bundle")
 
 	result, err := runtime.Capture(t.Context(), CaptureOptions{

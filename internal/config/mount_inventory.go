@@ -11,27 +11,48 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
 const (
 	mountsFileName   = "mounts.json"
 	mountsSchemaV1   = 1
+	mountsSchemaV2   = 2
 	stateMountPrefix = "state_mount_"
+)
+
+type DiscoveryMode string
+
+const (
+	DiscoveryModeDelta     DiscoveryMode = "delta"
+	DiscoveryModeEnumerate DiscoveryMode = "enumerate"
 )
 
 // MountInventory is the managed durable authority for local child-mount
 // bindings. Catalog keeps account/drive discovery state; mount inventory keeps
 // local projection ownership.
 type MountInventory struct {
-	SchemaVersion int                    `json:"schema_version"`
-	Mounts        map[string]MountRecord `json:"mounts"`
+	SchemaVersion int                             `json:"schema_version"`
+	Parents       map[string]ParentDiscoveryState `json:"parents,omitempty"`
+	Mounts        map[string]MountRecord          `json:"mounts"`
+}
+
+// ParentDiscoveryState is the durable discovery cursor/state for one selected
+// standalone parent mount that owns automatic child shortcut reconciliation.
+type ParentDiscoveryState struct {
+	ParentMountID string        `json:"parent_mount_id"`
+	DeltaLink     string        `json:"delta_link,omitempty"`
+	DiscoveryMode DiscoveryMode `json:"discovery_mode,omitempty"`
 }
 
 // MountRecord describes one child mount projected inside a selected parent
-// sync root. It does not own remote discovery; it only owns the local binding.
+// sync root. The record is binding-owned: the local shortcut placeholder item
+// ID is the durable identity, while the remote content root may change.
 type MountRecord struct {
 	MountID           string `json:"mount_id"`
 	ParentMountID     string `json:"parent_mount_id"`
+	BindingItemID     string `json:"binding_item_id"`
 	DisplayName       string `json:"display_name,omitempty"`
 	RelativeLocalPath string `json:"relative_local_path"`
 	RemoteDriveID     string `json:"remote_drive_id"`
@@ -41,7 +62,8 @@ type MountRecord struct {
 
 func DefaultMountInventory() *MountInventory {
 	return &MountInventory{
-		SchemaVersion: mountsSchemaV1,
+		SchemaVersion: mountsSchemaV2,
+		Parents:       make(map[string]ParentDiscoveryState),
 		Mounts:        make(map[string]MountRecord),
 	}
 }
@@ -93,7 +115,14 @@ func loadMountInventoryFromPath(path string) (*MountInventory, error) {
 
 		return nil, fmt.Errorf("decoding mount inventory trailing data: %w", err)
 	}
-	if inventory.SchemaVersion != mountsSchemaV1 {
+	switch inventory.SchemaVersion {
+	case mountsSchemaV2:
+	case mountsSchemaV1:
+		if err := moveAsideLegacyMountInventory(path); err != nil {
+			return nil, err
+		}
+		return DefaultMountInventory(), nil
+	default:
 		return nil, fmt.Errorf("decoding mount inventory: unsupported schema version %d", inventory.SchemaVersion)
 	}
 
@@ -157,10 +186,26 @@ func (i *MountInventory) normalizeAndValidate() error {
 		return nil
 	}
 	if i.SchemaVersion == 0 {
-		i.SchemaVersion = mountsSchemaV1
+		i.SchemaVersion = mountsSchemaV2
+	}
+	if i.Parents == nil {
+		i.Parents = make(map[string]ParentDiscoveryState)
 	}
 	if i.Mounts == nil {
 		i.Mounts = make(map[string]MountRecord)
+	}
+
+	for key, parent := range i.Parents {
+		if parent.ParentMountID == "" {
+			parent.ParentMountID = key
+		}
+		if err := validateParentDiscoveryState(parent, key); err != nil {
+			return err
+		}
+		i.Parents[parent.ParentMountID] = parent
+		if parent.ParentMountID != key {
+			delete(i.Parents, key)
+		}
 	}
 
 	for key, record := range i.Mounts {
@@ -198,6 +243,9 @@ func validateMountRecord(record MountRecord, key string) error {
 	if record.ParentMountID == "" {
 		return fmt.Errorf("validating mount %q: parent_mount_id is required", record.MountID)
 	}
+	if record.BindingItemID == "" {
+		return fmt.Errorf("validating mount %q: binding_item_id is required", record.MountID)
+	}
 	if record.RelativeLocalPath == "" {
 		return fmt.Errorf("validating mount %q: relative_local_path is required", record.MountID)
 	}
@@ -209,6 +257,22 @@ func validateMountRecord(record MountRecord, key string) error {
 	}
 
 	return nil
+}
+
+func validateParentDiscoveryState(parent ParentDiscoveryState, key string) error {
+	if parent.ParentMountID == "" {
+		return fmt.Errorf("validating parent discovery state %q: parent_mount_id is required", key)
+	}
+	switch parent.DiscoveryMode {
+	case "", DiscoveryModeDelta, DiscoveryModeEnumerate:
+		return nil
+	default:
+		return fmt.Errorf(
+			"validating parent discovery state %q: unsupported discovery_mode %q",
+			parent.ParentMountID,
+			parent.DiscoveryMode,
+		)
+	}
 }
 
 func validateSiblingMountPaths(mounts map[string]MountRecord) error {
@@ -293,6 +357,16 @@ func MountStatePath(mountID string) string {
 	return filepath.Join(dataDir, stateMountPrefix+sanitizeManagedID(mountID)+".db")
 }
 
+func ChildMountID(parentMountID, bindingItemID string) string {
+	parent := strings.TrimSpace(parentMountID)
+	binding := strings.TrimSpace(bindingItemID)
+	if parent == "" || binding == "" {
+		return ""
+	}
+
+	return parent + "|binding:" + binding
+}
+
 func sanitizeManagedID(id string) string {
 	if id == "" {
 		return ""
@@ -316,4 +390,33 @@ func sanitizeManagedID(id string) string {
 	}
 
 	return b.String()
+}
+
+func moveAsideLegacyMountInventory(path string) error {
+	backupPath := path + ".v1.bak"
+	if err := removeManagedPathIfExists(backupPath); err != nil {
+		return fmt.Errorf("preparing legacy mount inventory backup: %w", err)
+	}
+
+	root, name, err := fsroot.OpenPath(path)
+	if err != nil {
+		return fmt.Errorf("opening managed root for legacy mount inventory %s: %w", path, err)
+	}
+	if err := root.Rename(name, filepath.Base(backupPath)); err != nil {
+		return fmt.Errorf("moving legacy mount inventory aside: %w", err)
+	}
+
+	return nil
+}
+
+func removeManagedPathIfExists(path string) error {
+	root, name, err := fsroot.OpenPath(path)
+	if err != nil {
+		return fmt.Errorf("opening managed root for %s: %w", path, err)
+	}
+	if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing managed path %s: %w", path, err)
+	}
+
+	return nil
 }

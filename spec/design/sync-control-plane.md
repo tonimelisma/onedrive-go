@@ -6,8 +6,8 @@ Implements: R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 
 
 ## Overview
 
-The control plane owns multi-drive sync lifecycle. It sits above the
-single-drive engine in `internal/sync` and answers questions the engine should
+The control plane owns multi-mount sync lifecycle. It sits above the
+single-mount engine in `internal/sync` and answers questions the engine should
 not answer:
 
 - which runtime mounts are active right now
@@ -21,22 +21,22 @@ runtime package that implements it.
 
 ## Ownership Contract
 
-- Owns: Multi-drive sync lifecycle, runtime mount-spec compilation, per-mount engine startup/shutdown, reload diffing, control-socket ownership, and per-mount panic/error isolation.
-- Does Not Own: Single-drive observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
+- Owns: Multi-mount sync lifecycle, runtime mount-spec compilation, automatic shortcut reconciliation, per-mount engine startup/shutdown, reload diffing, control-socket ownership, and per-mount panic/error isolation.
+- Does Not Own: Single-mount observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
 - Source of Truth: The current `config.Holder` snapshot plus the runtime mount set and `runners` map owned by the watch-mode orchestrator loop.
 - Allowed Side Effects: Session creation, engine construction/closure, Unix control-socket bind/unlink, per-mount goroutine startup, live perf capture, and control-plane logging.
 - Mutable Runtime Owner: `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one mount.
-- Error Boundary: The control plane converts mount startup into structured per-drive startup outcomes, returns one-shot startup classification separately from completed `DriveReport` values, and keeps watch-runner failures isolated to the affected mount or log path. Engine-internal errors remain inside the single-drive boundary.
+- Error Boundary: The control plane converts mount startup into structured per-mount startup outcomes, returns one-shot startup classification separately from completed `MountReport` values, and keeps watch-runner failures isolated to the affected mount or log path. Engine-internal errors remain inside the single-mount boundary.
 
 ## Verified By
 
 | Behavior | Evidence |
 | --- | --- |
-| `RunWatch` starts the configured runnable drive set, skips incompatible-store drives with immediate warnings, and rejects all-paused startup through the same startup-summary model. | `TestOrchestrator_RunWatch_SingleDrive`, `TestOrchestrator_RunWatch_MultiDrive`, `TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts`, `TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused` |
+| `RunWatch` starts the runnable runtime mount set, skips incompatible-store mounts with immediate warnings, and rejects all-paused startup through the same startup-summary model. | `TestOrchestrator_RunWatch_SingleDrive`, `TestOrchestrator_RunWatch_MultiDrive`, `TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts`, `TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused` |
 | The Unix control socket is the single live-owner lock for one-shot and watch sync, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
-| Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected drives. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveDrive`, `TestOrchestrator_Reload_PausedDrive`, `TestOrchestrator_Reload_TimedPauseExpiry` |
+| Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedDrive`, `TestOrchestrator_Reload_TimedPauseExpiry` |
 
 ## Runtime Mount Specs
 
@@ -82,10 +82,23 @@ are resolved in the control plane before engine startup: explicit standalone
 mounts win over duplicate child projections, and duplicate child projections
 for the same content root are skipped with structured startup outcomes.
 
+Automatic shortcut reconciliation is also control-plane owned. Before one-shot
+startup, before watch startup, on control-socket reload, and on the watch-mode
+reconcile ticker, `internal/multisync` now:
+
+- discovers shortcut placeholders under each selected standalone parent mount
+- reconciles those bindings into `mounts.json`
+- recompiles the runtime mount set
+- starts or stops only the affected child mounts
+
+Authoritative removal comes only from completed delta enumeration. Recursive
+children enumeration remains positive-only: it can create or update child mount
+records, but it never deletes them based on absence alone.
+
 ## Boundary To The Engine
 
 The control plane does not observe, plan, execute, or persist sync state
-itself. Those responsibilities remain in the single-drive engine.
+itself. Those responsibilities remain in the single-mount engine.
 
 - `internal/multisync` owns runtime mount selection, session resolution,
   derivation of sync-owned engine mount config, per-mount goroutines, reload,
@@ -93,16 +106,16 @@ itself. Those responsibilities remain in the single-drive engine.
 - `internal/sync` owns one-shot execution, watch-mode runtime state, conflict
   execution, retry/trial logic, scope lifecycle, and reconciliation.
 
-This split keeps the engine package focused on one drive at a time while
-allowing the CLI to run any number of drives through one consistent control
+This split keeps the engine package focused on one mounted content root at a
+time while allowing the CLI to run any number of mounts through one consistent control
 surface.
 
 ## `Orchestrator`
 
-`Orchestrator` is the multi-drive coordinator used by both one-shot `sync` and
+`Orchestrator` is the multi-mount coordinator used by both one-shot `sync` and
 watch-mode `sync --watch`.
 
-It is always used, even for a single drive. There is no separate single-drive
+It is always used, even for a single configured drive. There is no separate single-drive
 CLI path, because special-casing `n=1` would create a second lifecycle model
 for startup, shutdown, and reload.
 
@@ -110,9 +123,9 @@ for startup, shutdown, and reload.
 
 `RunOnce` compiles runtime mount specs, resolves sessions, builds one engine per
 mount, and runs all mounts concurrently. Startup eligibility is classified per
-mount first, including paused drives and managed child mounts skipped because
+mount first, including paused standalone parents, managed child mounts skipped because
 their parent is missing or their content root conflicts. Runnable mounts then
-produce one completed `DriveReport` each, while startup-ineligible mounts
+produce one completed `MountReport` each, while startup-ineligible mounts
 remain startup outcomes instead of synthetic completed reports. The control
 plane never aborts the whole pass because one mount failed; partial failure is
 isolated per mount. Both startup results and completed reports carry a stable
@@ -161,8 +174,8 @@ lifecycle stays in `internal/multisync`; CLI transport stays in `internal/cli`.
 
 The socket speaks JSON over HTTP:
 
-- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed drives.
-- `GET /v1/perf` returns the owner mode plus the live aggregate and per-drive perf snapshots currently owned by the active sync runtime. This surface is live-only and returns whatever the owner has collected so far; it does not materialize historical perf state from SQLite.
+- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed mounts.
+- `GET /v1/perf` returns the owner mode plus the live aggregate and per-mount perf snapshots currently owned by the active sync runtime. This surface is live-only and returns whatever the owner has collected so far; it does not materialize historical perf state from SQLite.
 - `POST /v1/perf/capture` triggers an explicit local capture bundle from the active owner. The request carries bounded duration plus optional output-dir, trace, and full-detail toggles; the response returns the local artifact paths for the completed bundle.
 - `POST /v1/reload` reloads config in the watch owner.
 - `POST /v1/stop` asks the watch owner to stop cleanly.
@@ -208,10 +221,10 @@ runner set.
   the control plane only exposes that state through the local socket and
   forwards explicit capture requests into the owning runtime.
 
-## `DriveRunner`
+## `MountRunner`
 
-`DriveRunner` wraps a single mount's sync function with panic recovery and
-error isolation. One mount panicking must become one isolated drive outcome,
+`MountRunner` wraps a single mount's sync function with panic recovery and
+error isolation. One mount panicking must become one isolated mount outcome,
 not
 a process-wide crash or a cross-mount failure cascade.
 
@@ -244,10 +257,10 @@ to the control-plane boundary.
 
 ## Rationale
 
-- **Separate control plane from runtime**: multi-drive lifecycle code changes
-  for different reasons than single-drive execution logic. Keeping them in one
+- **Separate control plane from runtime**: multi-mount lifecycle code changes
+  for different reasons than single-mount execution logic. Keeping them in one
   package made both harder to reason about.
-- **Always use the same top-level path**: one drive and many drives share the
+- **Always use the same top-level path**: one configured drive and many mounts share the
   same shutdown, reload, and panic-isolation semantics.
 - **Per-mount isolation is explicit**: the control plane collects one report
   per mount and one panic cannot poison unrelated mounts.

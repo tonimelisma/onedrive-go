@@ -40,7 +40,7 @@ func newPerfCaptureCmd() *cobra.Command {
 	cmd.Flags().Duration("duration", perfCaptureDefaultDuration, "capture duration")
 	cmd.Flags().String("output", "", "output directory for the capture bundle")
 	cmd.Flags().Bool("trace", false, "include a Go execution trace in the bundle")
-	cmd.Flags().Bool("full-detail", false, "include per-drive live perf details in the capture manifest")
+	cmd.Flags().Bool("full-detail", false, "include per-mount live perf details in the capture manifest")
 
 	return cmd
 }

@@ -28,7 +28,7 @@ func TestStatusPerf_SummaryJSON_WithLivePerf(t *testing.T) {
 
 	startCLIControlSocket(t, synccontrol.StatusResponse{
 		OwnerMode: synccontrol.OwnerModeWatch,
-		Drives:    []string{cid.String()},
+		Mounts:    []string{cid.String()},
 	}, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == synccontrol.PathPerfStatus:
@@ -37,7 +37,7 @@ func TestStatusPerf_SummaryJSON_WithLivePerf(t *testing.T) {
 			if err := json.NewEncoder(w).Encode(synccontrol.PerfStatusResponse{
 				OwnerMode: synccontrol.OwnerModeWatch,
 				Aggregate: perf.Snapshot{HTTPRequestCount: 4},
-				Drives: map[string]perf.Snapshot{
+				Mounts: map[string]perf.Snapshot{
 					cid.String(): {
 						DurationMS:         4200,
 						HTTPRequestCount:   4,
@@ -66,12 +66,12 @@ func TestStatusPerf_SummaryJSON_WithLivePerf(t *testing.T) {
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
 	require.Len(t, decoded.Accounts, 1)
-	require.Len(t, decoded.Accounts[0].Drives, 1)
-	require.NotNil(t, decoded.Accounts[0].Drives[0].SyncState)
-	require.NotNil(t, decoded.Accounts[0].Drives[0].SyncState.Perf)
-	assert.Equal(t, int64(4200), decoded.Accounts[0].Drives[0].SyncState.Perf.DurationMS)
-	assert.Equal(t, 4, decoded.Accounts[0].Drives[0].SyncState.Perf.HTTPRequestCount)
-	assert.Empty(t, decoded.Accounts[0].Drives[0].SyncState.PerfUnavailableReason)
+	require.Len(t, decoded.Accounts[0].Mounts, 1)
+	require.NotNil(t, decoded.Accounts[0].Mounts[0].SyncState)
+	require.NotNil(t, decoded.Accounts[0].Mounts[0].SyncState.Perf)
+	assert.Equal(t, int64(4200), decoded.Accounts[0].Mounts[0].SyncState.Perf.DurationMS)
+	assert.Equal(t, 4, decoded.Accounts[0].Mounts[0].SyncState.Perf.HTTPRequestCount)
+	assert.Empty(t, decoded.Accounts[0].Mounts[0].SyncState.PerfUnavailableReason)
 }
 
 // Validates: R-6.6.15
@@ -100,7 +100,7 @@ func TestStatusPerf_FilteredJSON_WithPerfUnavailableFromActiveOwner(t *testing.T
 	cfgPath := writeStatusPerfConfig(t, cid)
 	startCLIControlSocket(t, synccontrol.StatusResponse{
 		OwnerMode: synccontrol.OwnerModeWatch,
-		Drives:    []string{cid.String()},
+		Mounts:    []string{cid.String()},
 	}, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == synccontrol.PathPerfStatus:
@@ -128,10 +128,10 @@ func TestStatusPerf_FilteredJSON_WithPerfUnavailableFromActiveOwner(t *testing.T
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
 	require.Len(t, decoded.Accounts, 1)
-	require.Len(t, decoded.Accounts[0].Drives, 1)
-	require.NotNil(t, decoded.Accounts[0].Drives[0].SyncState)
-	assert.Nil(t, decoded.Accounts[0].Drives[0].SyncState.Perf)
-	assert.Equal(t, statusPerfUnavailableGeneric, decoded.Accounts[0].Drives[0].SyncState.PerfUnavailableReason)
+	require.Len(t, decoded.Accounts[0].Mounts, 1)
+	require.NotNil(t, decoded.Accounts[0].Mounts[0].SyncState)
+	assert.Nil(t, decoded.Accounts[0].Mounts[0].SyncState.Perf)
+	assert.Equal(t, statusPerfUnavailableGeneric, decoded.Accounts[0].Mounts[0].SyncState.PerfUnavailableReason)
 }
 
 // Validates: R-6.6.15
@@ -161,7 +161,7 @@ func TestStatusPerf_PrintStatusPerfText_UsesActionableCountFallback(t *testing.T
 		},
 	}
 
-	require.NoError(t, printStatusPerfText(&out, state))
+	require.NoError(t, printStatusPerfText(&out, "    ", state))
 	rendered := out.String()
 	assert.Contains(t, rendered, "PERF")
 	assert.Contains(t, rendered, "HTTP:")
@@ -183,7 +183,7 @@ func TestStatusPerfOverlayLookupAndPersistentFlags(t *testing.T) {
 	overlay := statusPerfOverlay{
 		enabled:       true,
 		ownerPresent:  true,
-		managedDrives: map[string]struct{}{"drive:a": {}},
+		managedMounts: map[string]struct{}{"drive:a": {}},
 		snapshots: map[string]perf.Snapshot{
 			"drive:a": {HTTPRequestCount: 11},
 		},
@@ -198,7 +198,7 @@ func TestStatusPerfOverlayLookupAndPersistentFlags(t *testing.T) {
 	assert.Nil(t, snapshot)
 	assert.Equal(t, statusPerfUnavailableInactive, reason)
 
-	overlay.managedDrives["drive:b"] = struct{}{}
+	overlay.managedMounts["drive:b"] = struct{}{}
 	snapshot, reason = overlay.lookup("drive:b")
 	assert.Nil(t, snapshot)
 	assert.Equal(t, statusPerfUnavailableCollecting, reason)
@@ -215,7 +215,7 @@ func TestStatusPerfOverlayApplyAndUnavailableBranches(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
-	require.NoError(t, printStatusPerfText(&out, &syncStateInfo{
+	require.NoError(t, printStatusPerfText(&out, "    ", &syncStateInfo{
 		PerfUnavailableReason: statusPerfUnavailableGeneric,
 	}))
 	assert.Contains(t, out.String(), "Live performance unavailable: "+statusPerfUnavailableGeneric)
@@ -234,7 +234,8 @@ func TestStatusPerfOverlayApplyAndUnavailableBranches(t *testing.T) {
 	assert.Equal(t, statusPerfUnavailableNoOwner, noOwnerReason)
 
 	accounts := []statusAccount{{
-		Drives: []statusDrive{{
+		Mounts: []statusMount{{
+			MountID:     "drive:a",
 			CanonicalID: "drive:a",
 			SyncState:   nil,
 		}},
@@ -242,14 +243,14 @@ func TestStatusPerfOverlayApplyAndUnavailableBranches(t *testing.T) {
 	applyStatusPerfOverlay(accounts, statusPerfOverlay{
 		enabled:       true,
 		ownerPresent:  true,
-		managedDrives: map[string]struct{}{"drive:a": {}},
+		managedMounts: map[string]struct{}{"drive:a": {}},
 		snapshots: map[string]perf.Snapshot{
 			"drive:a": {DurationMS: 1500},
 		},
 	})
-	require.NotNil(t, accounts[0].Drives[0].SyncState)
-	require.NotNil(t, accounts[0].Drives[0].SyncState.Perf)
-	assert.Equal(t, int64(1500), accounts[0].Drives[0].SyncState.Perf.DurationMS)
+	require.NotNil(t, accounts[0].Mounts[0].SyncState)
+	require.NotNil(t, accounts[0].Mounts[0].SyncState.Perf)
+	assert.Equal(t, int64(1500), accounts[0].Mounts[0].SyncState.Perf.DurationMS)
 
 	var nilState *syncStateInfo
 	assert.False(t, nilState.hasPersistentStatusData())

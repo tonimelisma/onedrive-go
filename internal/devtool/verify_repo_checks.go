@@ -128,7 +128,7 @@ func ensureNoResurrectedFiles(repoRoot string) error {
 			err:  "control-plane files resurrected under internal/sync",
 		},
 		{
-			path: filepath.Join(repoRoot, "internal", "sync", "drive_runner.go"),
+			path: filepath.Join(repoRoot, "internal", "sync", "mount_runner.go"),
 			err:  "control-plane files resurrected under internal/sync",
 		},
 		{

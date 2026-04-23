@@ -7,35 +7,35 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-type DriveStartupStatus string
+type MountStartupStatus string
 
 const (
-	DriveStartupRunnable          DriveStartupStatus = "runnable"
-	DriveStartupPaused            DriveStartupStatus = "paused"
-	DriveStartupIncompatibleStore DriveStartupStatus = "incompatible_store"
-	DriveStartupFatal             DriveStartupStatus = "fatal"
+	MountStartupRunnable          MountStartupStatus = "runnable"
+	MountStartupPaused            MountStartupStatus = "paused"
+	MountStartupIncompatibleStore MountStartupStatus = "incompatible_store"
+	MountStartupFatal             MountStartupStatus = "fatal"
 )
 
-// DriveStartupResult captures per-drive startup eligibility before any one-shot
+// MountStartupResult captures per-mount startup eligibility before any one-shot
 // pass or watch runner actually runs. It keeps expected startup policy separate
 // from completed sync reports.
-type DriveStartupResult struct {
+type MountStartupResult struct {
 	SelectionIndex int
 	CanonicalID    driveid.CanonicalID
 	DisplayName    string
-	Status         DriveStartupStatus
+	Status         MountStartupStatus
 	Err            error
 }
 
-func classifyDriveStartupError(err error) DriveStartupStatus {
+func classifyMountStartupError(err error) MountStartupStatus {
 	if err == nil {
-		return DriveStartupRunnable
+		return MountStartupRunnable
 	}
 	if isIncompatibleStoreStartupError(err) {
-		return DriveStartupIncompatibleStore
+		return MountStartupIncompatibleStore
 	}
 
-	return DriveStartupFatal
+	return MountStartupFatal
 }
 
 func isIncompatibleStoreStartupError(err error) bool {
@@ -43,12 +43,12 @@ func isIncompatibleStoreStartupError(err error) bool {
 }
 
 type StartupSelectionSummary struct {
-	Results []DriveStartupResult
+	Results []MountStartupResult
 }
 
-func summarizeStartupResults(results []DriveStartupResult) StartupSelectionSummary {
+func summarizeStartupResults(results []MountStartupResult) StartupSelectionSummary {
 	return StartupSelectionSummary{
-		Results: append([]DriveStartupResult(nil), results...),
+		Results: append([]MountStartupResult(nil), results...),
 	}
 }
 
@@ -59,7 +59,7 @@ func (s StartupSelectionSummary) SelectedCount() int {
 func (s StartupSelectionSummary) RunnableCount() int {
 	count := 0
 	for i := range s.Results {
-		if s.Results[i].Status == DriveStartupRunnable {
+		if s.Results[i].Status == MountStartupRunnable {
 			count++
 		}
 	}
@@ -70,7 +70,7 @@ func (s StartupSelectionSummary) RunnableCount() int {
 func (s StartupSelectionSummary) PausedCount() int {
 	count := 0
 	for i := range s.Results {
-		if s.Results[i].Status == DriveStartupPaused {
+		if s.Results[i].Status == MountStartupPaused {
 			count++
 		}
 	}
@@ -82,10 +82,10 @@ func (s StartupSelectionSummary) AllPaused() bool {
 	return len(s.Results) > 0 && s.PausedCount() == len(s.Results)
 }
 
-func (s StartupSelectionSummary) SkippedResults() []DriveStartupResult {
-	skipped := make([]DriveStartupResult, 0, len(s.Results))
+func (s StartupSelectionSummary) SkippedResults() []MountStartupResult {
+	skipped := make([]MountStartupResult, 0, len(s.Results))
 	for i := range s.Results {
-		if s.Results[i].Status == DriveStartupRunnable || s.Results[i].Status == DriveStartupPaused {
+		if s.Results[i].Status == MountStartupRunnable || s.Results[i].Status == MountStartupPaused {
 			continue
 		}
 		skipped = append(skipped, s.Results[i])
@@ -100,12 +100,12 @@ type StartupWarning struct {
 
 type RunOnceResult struct {
 	Startup StartupSelectionSummary
-	Reports []*DriveReport
+	Reports []*MountReport
 }
 
-// DriveReport summarizes the result of a single drive's sync run.
+// MountReport summarizes the result of a single mount's sync run.
 // Err and Report are mutually exclusive: when Err is set, Report is nil.
-type DriveReport struct {
+type MountReport struct {
 	SelectionIndex int
 	CanonicalID    driveid.CanonicalID
 	DisplayName    string
@@ -122,7 +122,7 @@ func (e *WatchStartupError) Error() string {
 		return "watch startup failed"
 	}
 	if e.Summary.AllPaused() {
-		return "watch startup failed: all selected drives are paused"
+		return "watch startup failed: all selected mounts are paused"
 	}
 	failures := e.Summary.SkippedResults()
 	if len(failures) == 1 {
@@ -130,5 +130,5 @@ func (e *WatchStartupError) Error() string {
 		return fmt.Sprintf("watch startup failed for %s: %v", failure.CanonicalID, failure.Err)
 	}
 
-	return fmt.Sprintf("%d drives failed to start in watch mode", len(failures))
+	return fmt.Sprintf("%d mounts failed to start in watch mode", len(failures))
 }
