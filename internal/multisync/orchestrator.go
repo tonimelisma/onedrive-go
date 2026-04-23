@@ -10,7 +10,6 @@ import (
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -26,14 +25,14 @@ type engineRunner interface {
 
 type engineFactoryRequest struct {
 	Session       *driveops.Session
-	Drive         *config.ResolvedDrive
+	Mount         *mountSpec
 	Logger        *slog.Logger
 	VerifyDrive   bool
 	PerfCollector *perf.Collector
 }
 
-// engineFactoryFunc creates an engineRunner from the resolved drive/session
-// pair used by production orchestration. Tests inject mocks at this boundary.
+// engineFactoryFunc creates an engineRunner from the runtime mount/session pair
+// used by production orchestration. Tests inject mocks at this boundary.
 type engineFactoryFunc func(ctx context.Context, req engineFactoryRequest) (engineRunner, error)
 
 // OrchestratorConfig holds the inputs for creating an Orchestrator.
@@ -51,8 +50,8 @@ type OrchestratorConfig struct {
 	PerfParent        *perf.Collector
 }
 
-// Orchestrator manages per-drive sync runners. It is always used, even for a
-// single drive, so one-shot and watch mode share the same top-level lifecycle.
+// Orchestrator manages per-mount sync runners. It is always used, even for a
+// single mount, so one-shot and watch mode share the same top-level lifecycle.
 type Orchestrator struct {
 	cfg           *OrchestratorConfig
 	engineFactory engineFactoryFunc // injectable for tests
@@ -70,7 +69,7 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			engine, err := syncengine.NewDriveEngine(
 				ctx,
 				req.Session,
-				req.Drive,
+				req.Mount.resolved,
 				req.Logger,
 				req.PerfCollector,
 				req.VerifyDrive,
@@ -99,19 +98,23 @@ type indexedDriveWork struct {
 	work  driveWork
 }
 
-// RunOnce executes a single sync pass for all configured drives. Each drive
+// RunOnce executes a single sync pass for all configured runtime mounts. Each mount
 // runs in its own goroutine via a DriveRunner with panic recovery. RunOnce
 // never returns an error — individual drive errors are captured in each
 // syncengine.Report. The caller inspects reports to determine success or failure.
 func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) RunOnceResult {
-	drives := o.cfg.Drives
-	if len(drives) == 0 {
+	selected := resolvedDrivesWithSelection(o.cfg.Drives)
+	if len(selected) == 0 {
 		return RunOnceResult{}
+	}
+	mounts, err := buildConfiguredMountSpecs(selected)
+	if err != nil {
+		return controlFailureRunOnceResult(o.cfg.Drives, fmt.Errorf("building mount specs: %w", err))
 	}
 
 	control, err := o.startControlServer(ctx, synccontrol.OwnerModeOneShot, nil)
 	if err != nil {
-		return controlFailureRunOnceResult(drives, err)
+		return controlFailureRunOnceResult(o.cfg.Drives, err)
 	}
 	if control != nil {
 		defer func() {
@@ -126,13 +129,13 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	}
 
 	o.logger.Info("orchestrator starting RunOnce",
-		slog.Int("drives", len(drives)),
+		slog.Int("mounts", len(mounts)),
 		slog.String("mode", mode.String()),
 	)
 
-	work, startup, reports := o.prepareRunOnceWork(ctx, mode, opts)
+	work, startup, reports := o.prepareRunOnceWork(ctx, mode, mounts, opts)
 
-	// Run all drives concurrently.
+	// Run all mounts concurrently.
 	var wg gosync.WaitGroup
 
 	for _, w := range work {
@@ -155,9 +158,19 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 }
 
 func controlFailureRunOnceResult(drives []*config.ResolvedDrive, err error) RunOnceResult {
-	results := make([]DriveStartupResult, 0, len(drives))
-	for selectionIndex, rd := range drives {
-		results = append(results, driveStartupResultForRunOnce(rd, selectionIndex, err))
+	mounts, buildErr := buildConfiguredMountSpecs(resolvedDrivesWithSelection(drives))
+	if buildErr != nil {
+		return RunOnceResult{
+			Startup: summarizeStartupResults([]DriveStartupResult{{
+				Status: DriveStartupFatal,
+				Err:    fmt.Errorf("building mount specs: %w", buildErr),
+			}}),
+		}
+	}
+
+	results := make([]DriveStartupResult, 0, len(mounts))
+	for i := range mounts {
+		results = append(results, driveStartupResultForMount(mounts[i], err))
 	}
 
 	return RunOnceResult{
@@ -165,49 +178,49 @@ func controlFailureRunOnceResult(drives []*config.ResolvedDrive, err error) RunO
 	}
 }
 
-// prepareDriveWork resolves sessions and builds engines for each configured
-// drive. Errors are captured as closures that return the error when the
-// DriveRunner executes — no early abort for individual drive failures.
+// prepareRunOnceWork resolves sessions and builds engines for each selected
+// mount. Errors are captured as closures that return the error when the
+// DriveRunner executes — no early abort for individual mount failures.
 func (o *Orchestrator) prepareRunOnceWork(
 	ctx context.Context,
 	mode syncengine.SyncMode,
+	mounts []*mountSpec,
 	opts syncengine.RunOptions,
 ) ([]indexedDriveWork, StartupSelectionSummary, []*DriveReport) {
-	drives := o.cfg.Drives
-	work := make([]indexedDriveWork, 0, len(drives))
-	reports := make([]*DriveReport, 0, len(drives))
-	startResults := make([]DriveStartupResult, 0, len(drives))
+	work := make([]indexedDriveWork, 0, len(mounts))
+	reports := make([]*DriveReport, 0, len(mounts))
+	startResults := make([]DriveStartupResult, 0, len(mounts))
 
-	for selectionIndex, rd := range drives {
-		if rd.Paused {
+	for i := range mounts {
+		mount := mounts[i]
+		if mount.paused {
 			startResults = append(startResults, DriveStartupResult{
-				SelectionIndex: selectionIndex,
-				CanonicalID:    rd.CanonicalID,
-				DisplayName:    rd.DisplayName,
+				SelectionIndex: mount.selectionIndex,
+				CanonicalID:    mount.canonicalID,
+				DisplayName:    mount.displayName,
 				Status:         DriveStartupPaused,
 			})
 			continue
 		}
 
-		session, err := o.cfg.Runtime.SyncSession(ctx, rd)
+		session, err := o.cfg.Runtime.SyncSession(ctx, mount.resolved)
 		if err != nil {
-			startResults = append(startResults, driveStartupResultForRunOnce(
-				rd,
-				selectionIndex,
-				fmt.Errorf("session error for drive %s: %w", rd.CanonicalID, err),
+			startResults = append(startResults, driveStartupResultForMount(
+				mount,
+				fmt.Errorf("session error for drive %s: %w", mount.canonicalID, err),
 			))
 			continue
 		}
 
-		w, engineErr := o.buildEngineWork(ctx, rd, selectionIndex, session, mode, opts)
+		w, engineErr := o.buildEngineWork(ctx, mount, session, mode, opts)
 		if engineErr != nil {
-			startResults = append(startResults, driveStartupResultForRunOnce(rd, selectionIndex, engineErr))
+			startResults = append(startResults, driveStartupResultForMount(mount, engineErr))
 			continue
 		}
 		startResults = append(startResults, DriveStartupResult{
-			SelectionIndex: selectionIndex,
-			CanonicalID:    rd.CanonicalID,
-			DisplayName:    rd.DisplayName,
+			SelectionIndex: mount.selectionIndex,
+			CanonicalID:    mount.canonicalID,
+			DisplayName:    mount.displayName,
 			Status:         DriveStartupRunnable,
 		})
 		work = append(work, indexedDriveWork{index: len(reports), work: w})
@@ -217,56 +230,50 @@ func (o *Orchestrator) prepareRunOnceWork(
 	return work, summarizeStartupResults(startResults), reports
 }
 
-func driveStartupResultForDrive(rd *config.ResolvedDrive, err error) DriveStartupResult {
+func driveStartupResultForMount(mount *mountSpec, err error) DriveStartupResult {
 	return DriveStartupResult{
-		CanonicalID: rd.CanonicalID,
-		DisplayName: rd.DisplayName,
-		Status:      classifyDriveStartupError(err),
-		Err:         err,
+		SelectionIndex: mount.selectionIndex,
+		CanonicalID:    mount.canonicalID,
+		DisplayName:    mount.displayName,
+		Status:         classifyDriveStartupError(err),
+		Err:            err,
 	}
 }
 
-func driveStartupResultForRunOnce(rd *config.ResolvedDrive, selectionIndex int, err error) DriveStartupResult {
-	result := driveStartupResultForDrive(rd, err)
-	result.SelectionIndex = selectionIndex
-	return result
-}
-
-// buildEngineWork creates a driveWork item for a successfully-resolved drive.
+// buildEngineWork creates a driveWork item for a successfully-resolved mount.
 // If engine creation fails, the error is captured and reported at run time.
 func (o *Orchestrator) buildEngineWork(
 	ctx context.Context,
-	rd *config.ResolvedDrive,
-	selectionIndex int,
+	mount *mountSpec,
 	session *driveops.Session,
 	mode syncengine.SyncMode,
 	opts syncengine.RunOptions,
 ) (driveWork, error) {
-	driveCollector := o.registerDrivePerfCollector(rd.CanonicalID.String())
+	driveCollector := o.registerDrivePerfCollector(mount.canonicalID.String())
 	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
 		Session:       session,
-		Drive:         rd,
+		Mount:         mount,
 		Logger:        o.logger,
 		VerifyDrive:   true,
 		PerfCollector: driveCollector,
 	})
 	if engineErr != nil {
-		o.removeDrivePerfCollector(rd.CanonicalID.String())
-		return driveWork{}, fmt.Errorf("engine creation failed for %s: %w", rd.CanonicalID, engineErr)
+		o.removeDrivePerfCollector(mount.canonicalID.String())
+		return driveWork{}, fmt.Errorf("engine creation failed for %s: %w", mount.canonicalID, engineErr)
 	}
 
 	return driveWork{
 		runner: &DriveRunner{
-			selectionIndex: selectionIndex,
-			canonID:        rd.CanonicalID,
-			displayName:    rd.DisplayName,
+			selectionIndex: mount.selectionIndex,
+			canonID:        mount.canonicalID,
+			displayName:    mount.displayName,
 		},
 		fn: func(c context.Context) (*syncengine.Report, error) {
 			defer func() {
-				o.removeDrivePerfCollector(rd.CanonicalID.String())
+				o.removeDrivePerfCollector(mount.canonicalID.String())
 				if closeErr := engine.Close(c); closeErr != nil {
 					o.logger.Warn("engine close error",
-						slog.String("drive", rd.CanonicalID.String()),
+						slog.String("drive", mount.canonicalID.String()),
 						slog.String("error", closeErr.Error()))
 				}
 			}()
@@ -280,26 +287,31 @@ func (o *Orchestrator) buildEngineWork(
 // RunWatch — multi-drive daemon mode
 // ---------------------------------------------------------------------------
 
-// watchRunner holds per-drive state for a running watch-mode engine.
+// watchRunner holds per-mount state for a running watch-mode engine.
 type watchRunner struct {
-	canonID driveid.CanonicalID
-	engine  engineRunner
-	cancel  context.CancelFunc
-	done    chan struct{} // closed exactly once by the goroutine started in startWatchRunner
+	mount  *mountSpec
+	engine engineRunner
+	cancel context.CancelFunc
+	done   chan struct{} // closed exactly once by the goroutine started in startWatchRunner
 }
 
-// RunWatch runs all configured (non-paused) drives in watch mode. On
-// control-socket reload, it re-reads the config file and diffs the active drive
-// set: stopped drives are removed, new drives are started. Returns nil on
+// RunWatch runs all configured runnable mounts in watch mode. On control-socket
+// reload, it re-reads the config file, rebuilds runtime mount specs, and diffs
+// the active mount set: stopped mounts are removed, new mounts are started.
+// Returns nil on
 // clean context cancel.
 func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
-	drives := o.cfg.Drives
-	if len(drives) == 0 {
+	selected := resolvedDrivesWithSelection(o.cfg.Drives)
+	if len(selected) == 0 {
 		return fmt.Errorf("sync: no drives configured")
+	}
+	mounts, err := buildConfiguredMountSpecs(selected)
+	if err != nil {
+		return fmt.Errorf("sync: building mount specs: %w", err)
 	}
 
 	o.logger.Info("orchestrator starting RunWatch",
-		slog.Int("drives", len(drives)),
+		slog.Int("mounts", len(mounts)),
 		slog.String("mode", mode.String()),
 	)
 
@@ -320,7 +332,7 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 		}()
 	}
 
-	runners, startResults := o.startInitialWatchRunners(ctx, drives, mode, opts)
+	runners, startResults := o.startInitialWatchRunners(ctx, mode, mounts, opts)
 	startSummary := summarizeStartupResults(startResults)
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
 		return err
@@ -330,13 +342,13 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	}
 
 	defer func() {
-		for cid, wr := range runners {
+		for id, wr := range runners {
 			wr.cancel()
 			<-wr.done
 
 			if closeErr := wr.engine.Close(ctx); closeErr != nil {
 				o.logger.Warn("engine close error on shutdown",
-					slog.String("drive", cid.String()),
+					slog.String("drive", id.String()),
 					slog.String("error", closeErr.Error()),
 				)
 			}
@@ -360,54 +372,57 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 
 func (o *Orchestrator) startInitialWatchRunners(
 	ctx context.Context,
-	drives []*config.ResolvedDrive,
 	mode syncengine.SyncMode,
+	mounts []*mountSpec,
 	opts syncengine.WatchOptions,
-) (map[driveid.CanonicalID]*watchRunner, []DriveStartupResult) {
-	runners := make(map[driveid.CanonicalID]*watchRunner)
-	startResults := make([]DriveStartupResult, 0, len(drives))
+) (map[mountID]*watchRunner, []DriveStartupResult) {
+	runners := make(map[mountID]*watchRunner)
+	startResults := make([]DriveStartupResult, 0, len(mounts))
 
-	for _, rd := range drives {
-		// Pause semantics are handled by config.Drive.IsPaused() — the
-		// ResolvedDrive.Paused field is already expiry-aware after
-		// buildResolvedDrive uses IsPaused(time.Now()).
-		if rd.Paused {
+	for i := range mounts {
+		mount := mounts[i]
+		// Pause semantics are handled by config before runtime mount specs are
+		// built. The control plane consumes the resolved pause state; it does not
+		// recompute pause policy itself.
+		if mount.paused {
 			o.logger.Info("skipping paused drive",
-				slog.String("drive", rd.CanonicalID.String()),
+				slog.String("drive", mount.canonicalID.String()),
 			)
 			startResults = append(startResults, DriveStartupResult{
-				CanonicalID: rd.CanonicalID,
-				DisplayName: rd.DisplayName,
-				Status:      DriveStartupPaused,
+				SelectionIndex: mount.selectionIndex,
+				CanonicalID:    mount.canonicalID,
+				DisplayName:    mount.displayName,
+				Status:         DriveStartupPaused,
 			})
 
 			continue
 		}
 
-		wr, err := o.startWatchRunner(ctx, rd, mode, opts)
+		wr, err := o.startWatchRunner(ctx, mount, mode, opts)
 		if err != nil {
 			o.logger.Error("failed to start watch runner",
-				slog.String("drive", rd.CanonicalID.String()),
+				slog.String("drive", mount.canonicalID.String()),
 				slog.String("error", err.Error()),
 			)
-			startResults = append(startResults, driveStartupResultForDrive(rd, err))
+			startResults = append(startResults, driveStartupResultForMount(mount, err))
 
 			continue
 		}
 
 		startResults = append(startResults, DriveStartupResult{
-			CanonicalID: rd.CanonicalID,
-			DisplayName: rd.DisplayName,
-			Status:      DriveStartupRunnable,
+			SelectionIndex: mount.selectionIndex,
+			CanonicalID:    mount.canonicalID,
+			DisplayName:    mount.displayName,
+			Status:         DriveStartupRunnable,
 		})
-		runners[rd.CanonicalID] = wr
+		runners[mount.mountID] = wr
 	}
 
 	return runners, startResults
 }
 
 func validateInitialWatchStart(
-	runners map[driveid.CanonicalID]*watchRunner,
+	runners map[mountID]*watchRunner,
 	startSummary StartupSelectionSummary,
 ) error {
 	if len(runners) > 0 {
@@ -426,48 +441,48 @@ func (o *Orchestrator) emitStartWarning(summary StartupSelectionSummary) {
 	o.cfg.StartWarning(StartupWarning{Summary: summarizeStartupResults(failures)})
 }
 
-// startWatchRunner creates and starts a watch-mode engine for a single drive.
+// startWatchRunner creates and starts a watch-mode engine for a single mount.
 func (o *Orchestrator) startWatchRunner(
-	ctx context.Context, rd *config.ResolvedDrive, mode syncengine.SyncMode, opts syncengine.WatchOptions,
+	ctx context.Context, mount *mountSpec, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 ) (*watchRunner, error) {
-	session, err := o.cfg.Runtime.SyncSession(ctx, rd)
+	session, err := o.cfg.Runtime.SyncSession(ctx, mount.resolved)
 	if err != nil {
-		return nil, fmt.Errorf("session error for drive %s: %w", rd.CanonicalID, err)
+		return nil, fmt.Errorf("session error for drive %s: %w", mount.canonicalID, err)
 	}
 
-	driveCollector := o.registerDrivePerfCollector(rd.CanonicalID.String())
+	driveCollector := o.registerDrivePerfCollector(mount.canonicalID.String())
 	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
 		Session:       session,
-		Drive:         rd,
+		Mount:         mount,
 		Logger:        o.logger,
 		VerifyDrive:   true,
 		PerfCollector: driveCollector,
 	})
 	if engineErr != nil {
-		o.removeDrivePerfCollector(rd.CanonicalID.String())
-		return nil, fmt.Errorf("engine creation failed for %s: %w", rd.CanonicalID, engineErr)
+		o.removeDrivePerfCollector(mount.canonicalID.String())
+		return nil, fmt.Errorf("engine creation failed for %s: %w", mount.canonicalID, engineErr)
 	}
 
 	driveCtx, driveCancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 
 	wr := &watchRunner{
-		canonID: rd.CanonicalID,
-		engine:  engine,
-		cancel:  driveCancel,
-		done:    done,
+		mount:  mount,
+		engine: engine,
+		cancel: driveCancel,
+		done:   done,
 	}
 
 	go func() {
 		defer close(done)
 		defer driveCancel()
-		defer o.removeDrivePerfCollector(rd.CanonicalID.String())
+		defer o.removeDrivePerfCollector(mount.canonicalID.String())
 
 		if watchErr := engine.RunWatch(driveCtx, mode, opts); watchErr != nil {
 			// Context cancellation is normal shutdown — don't log as error.
 			if driveCtx.Err() == nil {
 				o.logger.Error("watch runner exited with error",
-					slog.String("drive", rd.CanonicalID.String()),
+					slog.String("drive", mount.canonicalID.String()),
 					slog.String("error", watchErr.Error()),
 				)
 			}
@@ -475,7 +490,7 @@ func (o *Orchestrator) startWatchRunner(
 	}()
 
 	o.logger.Info("watch runner started",
-		slog.String("drive", rd.CanonicalID.String()),
+		slog.String("drive", mount.canonicalID.String()),
 	)
 
 	return wr, nil
@@ -497,13 +512,14 @@ func (o *Orchestrator) removeDrivePerfCollector(canonicalID string) {
 	o.perfRuntime.RemoveDrive(canonicalID)
 }
 
-// reload re-reads the config file, diffs the active drive set against running
-// runners, stops removed/paused drives, and starts newly added/resumed drives.
+// reload re-reads the config file, rebuilds runtime mount specs, diffs the
+// active mount set against running runners, stops removed/paused mounts, and
+// starts newly added/resumed mounts.
 func (o *Orchestrator) reload(
 	ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions,
-	runners map[driveid.CanonicalID]*watchRunner,
+	runners map[mountID]*watchRunner,
 ) {
-	newCfg, err := config.LoadOrDefault(o.cfg.Holder.Path(), o.logger)
+	newCfg, newMounts, err := o.loadReloadMounts()
 	if err != nil {
 		o.logger.Warn("config reload failed, keeping current state",
 			slog.String("error", err.Error()),
@@ -512,82 +528,13 @@ func (o *Orchestrator) reload(
 		return
 	}
 
-	// Clear expired timed pauses before resolving, so newly unpaused drives
-	// are included in the active set. Pause semantics are owned by the config
-	// package — the orchestrator is a consumer, not an implementor.
-	config.ClearExpiredPauses(o.cfg.Holder.Path(), newCfg, time.Now(), o.logger)
-
-	// Resolve non-paused drives from the new config. Use the same selectors
-	// as initial startup (none — all drives).
-	newDrives, resolveErr := config.ResolveDrives(newCfg, nil, false, o.logger)
-	if resolveErr != nil {
-		o.logger.Warn("drive resolution failed after pause clearing, keeping current state",
-			slog.String("error", resolveErr.Error()),
-		)
-
-		return
+	newActive := make(map[mountID]*mountSpec, len(newMounts))
+	for i := range newMounts {
+		newActive[newMounts[i].mountID] = newMounts[i]
 	}
 
-	// Build set of new active drive CIDs.
-	newActive := make(map[driveid.CanonicalID]*config.ResolvedDrive, len(newDrives))
-	for _, rd := range newDrives {
-		newActive[rd.CanonicalID] = rd
-	}
-
-	// Stop runners for removed/paused drives.
-	var stopped int
-
-	for cid, wr := range runners {
-		if _, ok := newActive[cid]; ok {
-			continue
-		}
-
-		o.logger.Info("stopping watch runner for removed/paused drive",
-			slog.String("drive", cid.String()),
-		)
-
-		wr.cancel()
-		<-wr.done
-
-		if closeErr := wr.engine.Close(ctx); closeErr != nil {
-			o.logger.Warn("engine close error during reload",
-				slog.String("drive", cid.String()),
-				slog.String("error", closeErr.Error()),
-			)
-		}
-
-		delete(runners, cid)
-		stopped++
-	}
-
-	// Start runners for newly added/resumed drives.
-	var started int
-	startResults := make([]DriveStartupResult, 0)
-
-	for cid, rd := range newActive {
-		if _, ok := runners[cid]; ok {
-			continue // already running
-		}
-
-		wr, startErr := o.startWatchRunner(ctx, rd, mode, opts)
-		if startErr != nil {
-			o.logger.Error("failed to start watch runner during reload",
-				slog.String("drive", cid.String()),
-				slog.String("error", startErr.Error()),
-			)
-			startResults = append(startResults, driveStartupResultForDrive(rd, startErr))
-
-			continue
-		}
-
-		startResults = append(startResults, DriveStartupResult{
-			CanonicalID: rd.CanonicalID,
-			DisplayName: rd.DisplayName,
-			Status:      DriveStartupRunnable,
-		})
-		runners[cid] = wr
-		started++
-	}
+	stopped := o.stopInactiveWatchRunners(ctx, runners, newActive)
+	started, startResults := o.startReloadWatchRunners(ctx, runners, newActive, mode, opts)
 
 	// Single-point config update — both Orchestrator and SessionRuntime
 	// read through the shared Holder.
@@ -607,4 +554,98 @@ func (o *Orchestrator) reload(
 		slog.Int("active", len(runners)),
 		slog.Int("skipped", len(summarizeStartupResults(startResults).SkippedResults())),
 	)
+}
+
+func (o *Orchestrator) loadReloadMounts() (*config.Config, []*mountSpec, error) {
+	newCfg, err := config.LoadOrDefault(o.cfg.Holder.Path(), o.logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading config for reload: %w", err)
+	}
+
+	// Clear expired timed pauses before resolving, so newly unpaused drives
+	// are included in the active set. Pause semantics are owned by the config
+	// package — the orchestrator is a consumer, not an implementor.
+	config.ClearExpiredPauses(o.cfg.Holder.Path(), newCfg, time.Now(), o.logger)
+
+	newDrives, err := config.ResolveDrives(newCfg, nil, false, o.logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving drives after reload: %w", err)
+	}
+
+	newMounts, err := buildConfiguredMountSpecs(resolvedDrivesWithSelection(newDrives))
+	if err != nil {
+		return nil, nil, fmt.Errorf("building mount specs after reload: %w", err)
+	}
+
+	return newCfg, newMounts, nil
+}
+
+func (o *Orchestrator) stopInactiveWatchRunners(
+	ctx context.Context,
+	runners map[mountID]*watchRunner,
+	active map[mountID]*mountSpec,
+) int {
+	stopped := 0
+	for id, wr := range runners {
+		if _, ok := active[id]; ok {
+			continue
+		}
+
+		o.logger.Info("stopping watch runner for removed/paused mount",
+			slog.String("drive", id.String()),
+		)
+
+		wr.cancel()
+		<-wr.done
+
+		if closeErr := wr.engine.Close(ctx); closeErr != nil {
+			o.logger.Warn("engine close error during reload",
+				slog.String("drive", id.String()),
+				slog.String("error", closeErr.Error()),
+			)
+		}
+
+		delete(runners, id)
+		stopped++
+	}
+
+	return stopped
+}
+
+func (o *Orchestrator) startReloadWatchRunners(
+	ctx context.Context,
+	runners map[mountID]*watchRunner,
+	active map[mountID]*mountSpec,
+	mode syncengine.SyncMode,
+	opts syncengine.WatchOptions,
+) (int, []DriveStartupResult) {
+	started := 0
+	startResults := make([]DriveStartupResult, 0)
+
+	for id, mount := range active {
+		if _, ok := runners[id]; ok {
+			continue
+		}
+
+		wr, err := o.startWatchRunner(ctx, mount, mode, opts)
+		if err != nil {
+			o.logger.Error("failed to start watch runner during reload",
+				slog.String("drive", id.String()),
+				slog.String("error", err.Error()),
+			)
+			startResults = append(startResults, driveStartupResultForMount(mount, err))
+			continue
+		}
+
+		startResults = append(startResults, DriveStartupResult{
+			SelectionIndex: mount.selectionIndex,
+			CanonicalID:    mount.canonicalID,
+			DisplayName:    mount.displayName,
+			Status:         DriveStartupRunnable,
+		})
+		runners[id] = wr
+		started++
+	}
+
+	return started, startResults
 }

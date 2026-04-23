@@ -17,7 +17,6 @@ import (
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -388,19 +387,20 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	}
 }
 
-func resolvedDriveIDs(drives []*config.ResolvedDrive) []string {
-	ids := make([]string, 0, len(drives))
-	for _, drive := range drives {
-		ids = append(ids, drive.CanonicalID.String())
+func configuredMountIDs(drives []*config.ResolvedDrive) []string {
+	mounts, err := buildConfiguredMountSpecs(resolvedDrivesWithSelection(drives))
+	if err != nil {
+		return nil
 	}
-	return ids
+
+	return mountCanonicalIDs(mounts)
 }
 
 func (o *Orchestrator) controlStatus(ctx context.Context, mode synccontrol.OwnerMode) synccontrol.StatusResponse {
 	_ = ctx
 	return synccontrol.StatusResponse{
 		OwnerMode: mode,
-		Drives:    resolvedDriveIDs(o.cfg.Drives),
+		Drives:    configuredMountIDs(o.cfg.Drives),
 	}
 }
 
@@ -469,7 +469,7 @@ func (o *Orchestrator) handleControlCommand(
 	cmd *controlCommand,
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
-	runners map[driveid.CanonicalID]*watchRunner,
+	runners map[mountID]*watchRunner,
 ) bool {
 	switch cmd.kind {
 	case controlCommandStatus:
