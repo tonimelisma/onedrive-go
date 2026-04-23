@@ -66,15 +66,10 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 //   - 507 → sliding window quota:own (3 unique paths / 10s)
 //   - 5xx (no Retry-After) → sliding window service (5 unique paths / 30s)
 func (ss *ScopeState) UpdateScope(r *ActionCompletion) ScopeUpdateResult {
-	targetDriveID := r.TargetDriveID
-	if targetDriveID.IsZero() {
-		targetDriveID = r.DriveID
-	}
-
 	switch {
 	case r.HTTPStatus == http.StatusTooManyRequests:
 		// Immediate block — server signal, single response triggers (R-2.10.26).
-		scopeKey := ScopeKeyForResult(r.HTTPStatus, targetDriveID)
+		scopeKey := ScopeKeyForResult(r.HTTPStatus, r.DriveID)
 		if scopeKey.IsZero() {
 			return ScopeUpdateResult{}
 		}
@@ -97,12 +92,12 @@ func (ss *ScopeState) UpdateScope(r *ActionCompletion) ScopeUpdateResult {
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		// Quota failure — a drive-scoped quota block suppresses uploads until the
 		// backing drive has space again.
-		sk := ScopeKeyForResult(r.HTTPStatus, targetDriveID)
+		sk := ScopeKeyForResult(r.HTTPStatus, r.DriveID)
 		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded)
 
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
-		sk := ScopeKeyForResult(r.HTTPStatus, targetDriveID)
+		sk := ScopeKeyForResult(r.HTTPStatus, r.DriveID)
 		return ss.checkWindow(sk, r.Path,
 			serviceWindowThreshold, serviceWindowDuration,
 			IssueServiceOutage)

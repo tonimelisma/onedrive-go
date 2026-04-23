@@ -44,9 +44,9 @@ type ExecutorConfig struct {
 	transferMgr *driveops.TransferManager
 
 	// Injectable for testing.
-	nowFunc                func() time.Time
-	hashFunc               func(filePath string) (string, error)
-	pathConvergenceFactory driveops.PathConvergenceFactory
+	nowFunc         func() time.Time
+	hashFunc        func(filePath string) (string, error)
+	pathConvergence driveops.PathConvergence
 }
 
 // Executor executes individual actions against the Graph API and local
@@ -61,18 +61,18 @@ type Executor struct {
 // specific drive and sync root. Use NewExecution to create per-call executors.
 func NewExecutorConfig(
 	items ItemClient, downloads driveops.Downloader, uploads driveops.Uploader,
-	syncTree *synctree.Root, driveID driveid.ID, logger *slog.Logger, pathConvergenceFactory driveops.PathConvergenceFactory,
+	syncTree *synctree.Root, driveID driveid.ID, logger *slog.Logger, pathConvergence driveops.PathConvergence,
 ) *ExecutorConfig {
 	cfg := &ExecutorConfig{
-		items:                  items,
-		downloads:              downloads,
-		uploads:                uploads,
-		syncTree:               syncTree,
-		driveID:                driveID,
-		logger:                 logger,
-		nowFunc:                time.Now,
-		hashFunc:               driveops.ComputeQuickXorHash,
-		pathConvergenceFactory: pathConvergenceFactory,
+		items:           items,
+		downloads:       downloads,
+		uploads:         uploads,
+		syncTree:        syncTree,
+		driveID:         driveID,
+		logger:          logger,
+		nowFunc:         time.Now,
+		hashFunc:        driveops.ComputeQuickXorHash,
+		pathConvergence: pathConvergence,
 	}
 
 	return cfg
@@ -129,7 +129,7 @@ func (e *Executor) pathConvergenceForAction(action *Action) (driveops.PathConver
 }
 
 func (e *Executor) pathConvergenceForPath(action *Action, actionPath string) (driveops.PathConvergence, string, bool) {
-	if e.pathConvergenceFactory == nil || action == nil {
+	if e.pathConvergence == nil || action == nil {
 		return nil, "", false
 	}
 
@@ -138,42 +138,7 @@ func (e *Executor) pathConvergenceForPath(action *Action, actionPath string) (dr
 		return nil, "", false
 	}
 
-	targetDriveID := e.resolveDriveID(action)
-	if targetDriveID.IsZero() {
-		return nil, "", false
-	}
-
-	if targetDriveID.Equal(e.driveID) {
-		return e.pathConvergenceFactory.ForTarget(targetDriveID, e.rootItemID), cleanPath, true
-	}
-
-	if action.TargetRootItemID == "" || action.TargetRootLocalPath == "" {
-		e.logger.Debug("skip cross-drive path convergence without target root metadata",
-			slog.String("path", actionPath),
-			slog.String("target_drive_id", targetDriveID.String()),
-			slog.String("target_root_item_id", action.TargetRootItemID),
-			slog.String("target_root_local_path", action.TargetRootLocalPath),
-		)
-
-		return nil, "", false
-	}
-
-	targetPath, ok := targetRelativePath(cleanPath, action.TargetRootLocalPath)
-	if !ok {
-		e.logger.Debug("skip cross-drive path convergence with mismatched target root prefix",
-			slog.String("path", actionPath),
-			slog.String("target_drive_id", targetDriveID.String()),
-			slog.String("target_root_local_path", action.TargetRootLocalPath),
-		)
-
-		return nil, "", false
-	}
-
-	if targetPath == "" {
-		return nil, "", false
-	}
-
-	return e.pathConvergenceFactory.ForTarget(targetDriveID, action.TargetRootItemID), targetPath, true
+	return e.pathConvergence, cleanPath, true
 }
 
 // waitRemoteParentVisible blocks parent-based remote creates until the already
@@ -200,21 +165,6 @@ func (e *Executor) waitRemoteParentVisible(ctx context.Context, action *Action) 
 	}
 
 	return nil
-}
-
-func targetRelativePath(actionPath, targetRootLocalPath string) (string, bool) {
-	cleanPath := filepath.ToSlash(actionPath)
-	cleanRoot := filepath.ToSlash(targetRootLocalPath)
-	if cleanPath == cleanRoot {
-		return "", true
-	}
-
-	prefix := cleanRoot + "/"
-	if !strings.HasPrefix(cleanPath, prefix) {
-		return "", false
-	}
-
-	return strings.TrimPrefix(cleanPath, prefix), true
 }
 
 // SetNowFunc overrides the time source. Used in tests to produce deterministic

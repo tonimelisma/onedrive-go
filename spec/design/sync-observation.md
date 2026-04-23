@@ -112,11 +112,10 @@ It owns:
 - path reconstruction from parent chains
 - move detection against baseline
 - malformed sparse-item rejection
-- remote-root metadata propagation for rooted-subtree runtimes
+- rooted-subtree path materialization relative to the engine's configured root
 
-`ChangeEvent.TargetRootItemID` carries the configured remote root for
-rooted-subtree engines so later snapshot refresh, planning, and execution can
-derive the correct target root.
+Observation emits current truth for the mounted root only. It does not carry a
+separate per-event target-root field for later planning or execution.
 
 Sparse parent recovery is intentionally layered:
 

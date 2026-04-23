@@ -736,12 +736,11 @@ func TestActionCompletion_PopulatesFromAction(t *testing.T) {
 
 	actions := []Action{
 		{
-			Type:          ActionLocalDelete,
-			Path:          "shared-action.txt",
-			DriveID:       driveid.New("0000000000000001"),
-			ItemID:        "del-id",
-			View:          &PathView{},
-			TargetDriveID: driveid.New("0000000000000002"),
+			Type:    ActionLocalDelete,
+			Path:    "shared-action.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "del-id",
+			View:    &PathView{},
 		},
 	}
 
@@ -761,8 +760,6 @@ func TestActionCompletion_PopulatesFromAction(t *testing.T) {
 
 	assert.Equal(t, "shared-action.txt", result.Path)
 	assert.Equal(t, driveid.New("0000000000000001"), result.DriveID)
-	assert.Equal(t, driveid.New("0000000000000002"), result.TargetDriveID,
-		"TargetDriveID should flow through from Action")
 	assert.False(t, result.IsTrial, "should not be a trial action")
 	assert.Empty(t, result.TrialScopeKey, "no trial scope key")
 	assert.Equal(t, int64(77), result.ActionID, "ActionID should match TrackedAction.ID")

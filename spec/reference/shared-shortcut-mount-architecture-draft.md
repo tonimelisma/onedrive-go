@@ -435,8 +435,9 @@ Within a mount engine:
 - every local path is relative to the mount's local subtree
 - path convergence and permission probing are mount-local
 
-The executor should not need to keep rediscovering target root item IDs on every
-action once the engine itself is mount-rooted.
+The executor should not need to keep rediscovering root item IDs on every
+action once the engine itself is mount-rooted. Increment 4 now enforces that
+for ordinary sync actions.
 
 ### Retry, Permissions, And Block Scopes
 
@@ -674,8 +675,8 @@ That choice explains most of the current shared-root machinery:
 
 - shared folders became separate configured drives rather than nested children
 - the engine gained one-root-below-drive-root support via `RootItemID`
-- planning/execution gained target-root metadata instead of the engine becoming
-  multi-root
+- before Increment 4, planning/execution gained target-root metadata instead of
+  the engine becoming multi-root
 - config/catalog/token resolution learned to treat shared folders as drive-like
   runtime units
 
@@ -703,8 +704,9 @@ Current design docs intentionally define these facts:
 - embedded shared-folder links discovered inside another synced drive are
   ignored
 - each configured drive owns one SQLite state DB
-- rooted-subtree target metadata is threaded through planning and execution so the
-  existing single-root engine can operate on a remote subtree
+- rooted-subtree planning/execution used to thread target metadata through
+  ordinary actions so the pre-Increment-4 single-root engine could operate on a
+  remote subtree
 - shared drives currently have their own deterministic `sync_dir`, usually under
   `~/OneDrive-Shared/...`
 
@@ -774,7 +776,7 @@ The refactor plan should preserve these current strengths:
   all remote operations for subtree-backed runtimes must stay rooted at the
   configured remote root, never silently widen to the backing drive root
 - embedded-shortcut ignore semantics in ordinary content observation
-- target-scoped throttle / path-visibility logic for rooted remote subtrees
+- target-scoped transfer/CLI helpers for rooted remote subtrees
 - snapshot-first SQLite planning flow instead of introducing a second durable
   coordinator
 
@@ -783,7 +785,8 @@ The plan should also preserve a practical transition strategy:
 - compile new mount records into synthetic current-style engine inputs at first
 - reuse the current shared-root engine path as the first mount-engine
   implementation
-- defer deletion of target-root metadata until engines are truly mount-local
+- keep deleting transitional target-root metadata tied to ordinary sync actions
+  once engines become truly mount-local
 
 ### What The Plan Must Incorporate From The Specs
 
@@ -856,10 +859,10 @@ This section intentionally separates:
 
 | Current concept | Current role | Transitional role | Target home | Final fate |
 | --- | --- | --- | --- | --- |
-| `ChangeEvent.TargetRootItemID` | Per-event shared-root propagation | Temporary support for current engine path | Engine-local mount context | Remove from normal event shape once engines are mount-local |
-| `Action.TargetDriveID` | Correct remote drive for shared-root actions | Transitional support for shared-root engine reuse | Maybe only boundary-crossing logic above engines | Remove from ordinary mount-local actions |
-| `Action.TargetRootItemID` | Per-action remote root override | Transitional support for shared-root engine reuse | Engine-local root context | Remove from ordinary mount-local actions |
-| `Action.TargetRootLocalPath` | Per-action local root prefix stripping | Transitional support for shared-root engine reuse | Engine-local local-root context | Remove from ordinary mount-local actions |
+| `ChangeEvent.TargetRootItemID` | Per-event shared-root propagation | Transitional support for the pre-mount-local engine | Engine-local mount context | Removed in Increment 4 when observation became mount-local |
+| `Action.TargetDriveID` | Correct remote drive for shared-root actions | Transitional support for shared-root engine reuse | Maybe only boundary-crossing logic above engines | Removed from ordinary sync actions in Increment 4 |
+| `Action.TargetRootItemID` | Per-action remote root override | Transitional support for shared-root engine reuse | Engine-local root context | Removed from ordinary sync actions in Increment 4 |
+| `Action.TargetRootLocalPath` | Per-action local root prefix stripping | Transitional support for shared-root engine reuse | Engine-local local-root context | Removed from ordinary sync actions in Increment 4 |
 | Cross-drive path convergence helpers | Makes one engine aware of non-local remote root | Transitional support only | Cross-mount orchestration or none | Remove from mount-local executor path |
 
 ### Store And State Mapping
@@ -947,7 +950,7 @@ architecture fairly naturally:
 - drive resolution can collapse them into `DriveID + RootItemID`
 - `multisync` can stay drive-shaped
 - the engine can stay "drive-root vs shared-root"
-- planner/executor/store can stay target-root-aware
+- planner/executor/store were able to stay target-root-aware during transition
 
 That argument should now be read primarily as a smell map, not as an endorsed
 end-state design. Many of those "easy fits" are easy precisely because the repo
@@ -971,10 +974,10 @@ The main smoking guns are:
   that is evidence a useful rooted-engine capability exists, but not evidence
   that "shared-root drive" is the right long-term framing or owning abstraction.
 
-- `If ordinary actions need `TargetDriveID`, `TargetRootItemID`, and
-  `TargetRootLocalPath``
+- `If ordinary actions need per-action target-root overrides`
   that is a strong sign the engine is not actually rooted locally enough and is
-  reconstructing mount context at action time.
+  reconstructing mount context at action time. Increment 4 removed this
+  scaffolding by making ordinary planning and execution mount-local.
 
 - `If the store remains coherent only because each shortcut becomes its own
   synthetic drive/store pair`
@@ -1000,7 +1003,7 @@ compatibilities:
 | Ignoring embedded shortcuts in ordinary drive observation | Preserve | Prevents nested engine ownership from creeping back in | Keep |
 | Shared-folder support via rooted-below-drive-root engines | Preserve as capability, not current framing | This is real runtime capability | Keep, rename later |
 | `RootItemID`-based shared-root engine path | Transitional reuse | Useful current implementation of a rooted engine | Reframe, then simplify |
-| `TargetRoot*` and ordinary `TargetDriveID` action plumbing | Transitional reuse | Needed only because the engine is not yet fully mount-local | Delete after mount-local engine shift |
+| `TargetRoot*` and ordinary `TargetDriveID` action plumbing | Removed | It existed only because the engine was not yet fully mount-local | Deleted in Increment 4 |
 | Shared folders represented only as configured shared drives | Transitional reuse | Works today, but too drive-centric as the only model | Replace with mount inventory / mount specs |
 | Generic session/config/catalog types carrying mount-root semantics | Transitional reuse | Shortcut/mount behavior is living in the wrong abstractions | Move after control-plane refactor |
 | Historical language implying shortcut content belongs inside a parent drive engine | Remove early | This is exactly the old accidental architecture we do not want to normalize | Start immediately |
@@ -1135,21 +1138,19 @@ still in use.
 
 `internal/sync/actions.go`
 
-- `TargetDriveID`, `TargetRootItemID`, and `TargetRootLocalPath` exist because
-  the engine is not truly mount-local and has to re-thread root identity into
-  every action.
-- This is one of the strongest signals that shortcut support was being pushed
-  through a single-drive engine rather than moving the boundary above it.
-- Cleanup target: once each engine is mount-local, ordinary actions should not
-  carry mount-root metadata.
+- `TargetDriveID`, `TargetRootItemID`, and `TargetRootLocalPath` were one of
+  the strongest signals that shortcut support had been pushed through a
+  single-drive engine rather than moving the boundary above it.
+- Increment 4 removed those ordinary action fields and made planning plus
+  execution consume engine-owned mount context directly.
 
 `internal/sync/planner.go`
 
-- `enrichActionTargets` reconstructs target-root data from baseline/remote state
-  after planning.
-- Transitional reuse: supports current shared-root engines.
-- Cleanup target: delete for ordinary mount-local planning; keep only if a
-  future explicit cross-boundary action type truly needs boundary metadata.
+- `enrichActionTargets` reconstructed target-root data from baseline/remote
+  state after planning.
+- Historical transitional reuse: it supported pre-Increment-4 shared-root
+  engines.
+- Removed in Increment 4 for ordinary mount-local planning.
 
 `internal/sync/executor.go`
 
@@ -1437,7 +1438,7 @@ Exit criteria:
 - the engine no longer claims to have a special "shared-drive" mode internally;
   it has a rooted-mount capability
 
-### Increment 4: Make Observation And Planning Mount-Local
+### Increment 4: Make Observation, Planning, Execution, And Scope Logic Mount-Local [completed]
 
 Goal:
 
@@ -1455,13 +1456,16 @@ Code areas:
 
 Concrete work:
 
-- remove `TargetRootItemID` from ordinary change-event/current-view propagation
-- stop using `enrichActionTargets()` to rediscover root metadata for ordinary
-  in-mount actions
-- make planner decisions entirely relative to the engine's mounted local root
-  and mounted remote root
-- keep only the minimal metadata needed if a true boundary-crossing action type
-  still exists
+- removed `TargetRootItemID` from ordinary change-event/current-view
+  propagation
+- removed `enrichActionTargets()` and the action-level root rediscovery helpers
+- made planner decisions relative to the engine's mounted local root and
+  mounted remote root
+- removed ordinary `TargetDriveID`, `TargetRootItemID`, and
+  `TargetRootLocalPath` from sync actions and results
+- made executor path convergence and scope routing mount-local
+- removed `driveops.PathConvergenceFactory` and `Session.ForTarget(...)` from
+  ordinary sync execution
 
 Must not do:
 
@@ -1472,60 +1476,16 @@ Tests:
 
 - planner golden tests for ordinary standalone shared-root drives before/after
   the change
-- regression tests proving no ordinary action needs target-root metadata inside a
-  rooted mount
+- regression tests proving ordinary rooted-subtree actions bind to concrete
+  `DriveID` without target-root metadata
+- executor and scope tests proving rooted-subtree execution/path convergence are
+  mount-local
 
 Exit criteria:
 
 - ordinary planner output is mount-local
-- `TargetRootItemID` is gone or reduced to explicit boundary cases only
-
-### Increment 5: Make Execution, Path Convergence, And Scope Logic Mount-Local
-
-Goal:
-
-- remove ordinary per-action root/target-drive plumbing from execution
-
-Code areas:
-
-- `internal/sync/executor.go`
-- `internal/sync/actions.go`
-- `internal/sync/worker_result.go`
-- `internal/sync/scope.go`
-- `internal/driveops/session.go`
-- docs: `spec/design/sync-execution.md`, `spec/design/drive-transfers.md`,
-  `spec/design/retry.md`
-
-Concrete work:
-
-- remove ordinary-action dependence on:
-  - `Action.TargetDriveID`
-  - `Action.TargetRootLocalPath`
-  - executor cross-target path rewriting for normal in-mount actions
-- make path visibility confirmation operate against the mount's own remote root
-  by default
-- shrink `driveops.Session` / path-convergence APIs so generic session objects no
-  longer need to look like mutable target-switching drive wrappers for ordinary
-  engine work
-- preserve target-scoped throttling and visibility functionality, but move it to
-  a mount-owned or explicit target-scope boundary
-
-Must not do:
-
-- do not break direct shared-item CLI commands that legitimately need explicit
-  target scoping
-
-Tests:
-
-- executor tests for rooted mounts with no `TargetRootLocalPath`
-- throttle/path-visibility tests proving mount-local behavior remains correct
-- tests proving direct shared-item CLI paths still work
-
-Exit criteria:
-
-- ordinary engine execution is mount-local
-- `TargetDriveID` remains only where a real explicit boundary crossing still
-  exists
+- ordinary engine execution, path convergence, and scope routing are mount-local
+- direct shared-item CLI paths still keep explicit target scoping above sync
 
 ### Increment 6: Introduce Dedicated Managed Mount Inventory
 

@@ -17,6 +17,7 @@ func (p *Planner) PlanCurrentState(
 	remoteRows []RemoteStateRow,
 	observationIssues []ObservationIssueRow,
 	baseline *Baseline,
+	mount plannerMountContext,
 	mode SyncMode,
 ) (*ActionPlan, error) {
 	p.logger.Info("planning current actionable set from sqlite reconciliation",
@@ -56,7 +57,7 @@ func (p *Planner) PlanCurrentState(
 
 	deferred := deferredCountsForCurrentActions(allActions, mode)
 	admitted := filterCurrentActionsForMode(allActions, mode)
-	enrichActionTargets(admitted, baseline)
+	bindMountContext(admitted, mount)
 
 	deps := buildDependencies(admitted)
 	if err := detectDependencyCycle(deps); err != nil {

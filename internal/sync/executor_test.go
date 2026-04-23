@@ -74,20 +74,6 @@ type executorPathConvergenceStub struct {
 	waitCalls                []string
 	deleteResolvedCalls      []string
 	permanentDeletePathCalls []string
-	targets                  []executorPathConvergenceTarget
-}
-
-type executorPathConvergenceTarget struct {
-	driveID    driveid.ID
-	rootItemID string
-}
-
-func (s *executorPathConvergenceStub) ForTarget(driveID driveid.ID, rootItemID string) driveops.PathConvergence {
-	s.targets = append(s.targets, executorPathConvergenceTarget{
-		driveID:    driveID,
-		rootItemID: rootItemID,
-	})
-	return s
 }
 
 func (s *executorPathConvergenceStub) WaitPathVisible(_ context.Context, remotePath string) (*graph.Item, error) {
@@ -127,7 +113,7 @@ func newTestExecutorConfigWithPathConvergence(
 	items *executorMockItemClient,
 	dl *executorMockDownloader,
 	ul *executorMockUploader,
-	pathConvergenceFactory driveops.PathConvergenceFactory,
+	pathConvergence driveops.PathConvergence,
 ) (*ExecutorConfig, string) {
 	t.Helper()
 
@@ -137,7 +123,7 @@ func newTestExecutorConfigWithPathConvergence(
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergenceFactory)
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergence)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 
@@ -166,12 +152,12 @@ func requireOutcomeFailure(t *testing.T, o *ActionOutcome) {
 	require.False(t, o.Success, "expected failure but got success")
 }
 
-func TestNewExecutorConfig_AllowsNilPathConvergenceFactory(t *testing.T) {
+func TestNewExecutorConfig_AllowsNilPathConvergence(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 
-	require.Nil(t, cfg.pathConvergenceFactory)
+	require.Nil(t, cfg.pathConvergence)
 }
 
 // ---------------------------------------------------------------------------
@@ -321,7 +307,7 @@ func TestExecutor_CreateRemoteFolder_WaitsForParentVisibilityBeforeCreate(t *tes
 	assert.Equal(t, []string{"parent", "parent/child"}, pathConvergence.waitCalls)
 }
 
-func TestExecutor_CreateRemoteFolder_CrossDriveParentUsesTargetScopedPathConvergence(t *testing.T) {
+func TestExecutor_CreateRemoteFolder_RootedSubtreeUsesMountLocalPathConvergence(t *testing.T) {
 	t.Parallel()
 
 	const sharedParent = "shared-parent-id"
@@ -338,29 +324,20 @@ func TestExecutor_CreateRemoteFolder_CrossDriveParentUsesTargetScopedPathConverg
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
-		Path:     "shared",
-		ItemID:   sharedParent,
-		DriveID:  driveid.New("00000000000000ff"),
-		ItemType: ItemTypeFolder,
-	}))
+	cfg.SetRootItemID(sharedParent)
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
-		Type:                ActionFolderCreate,
-		Path:                "shared/photos",
-		CreateSide:          CreateRemote,
-		TargetRootItemID:    sharedParent,
-		TargetRootLocalPath: "shared",
-		View:                &PathView{Path: "shared/photos"},
+		Type:       ActionFolderCreate,
+		Path:       "photos",
+		CreateSide: CreateRemote,
+		DriveID:    driveid.New("00000000000000ff"),
+		View:       &PathView{Path: "photos"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, driveid.New("00000000000000ff"), capturedDriveID)
-	assert.Equal(t, []executorPathConvergenceTarget{{
-		driveID:    driveid.New("00000000000000ff"),
-		rootItemID: sharedParent,
-	}}, pathConvergence.targets)
 	assert.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
 }
 
@@ -475,13 +452,7 @@ func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
-		Path:     "shared",
-		ItemID:   "shared-parent-id",
-		DriveID:  driveid.New("00000000000000ff"),
-		ItemType: ItemTypeFolder,
-	}))
-
+	e := NewExecution(cfg, emptyBaseline())
 	action := &Action{
 		Type:    ActionRemoteMove,
 		Path:    "renamed.txt",
@@ -496,7 +467,7 @@ func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
 	require.Equal(t, []string{"renamed.txt"}, pathConvergence.waitCalls)
 }
 
-func TestExecutor_RemoteMove_CrossDriveUsesTargetScopedPathConvergence(t *testing.T) {
+func TestExecutor_RemoteMove_RootedSubtreeUsesMountLocalPathConvergence(t *testing.T) {
 	t.Parallel()
 
 	items := &executorMockItemClient{
@@ -507,30 +478,20 @@ func TestExecutor_RemoteMove_CrossDriveUsesTargetScopedPathConvergence(t *testin
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
-		Path:     "shared",
-		ItemID:   "shared-parent-id",
-		DriveID:  driveid.New("00000000000000ff"),
-		ItemType: ItemTypeFolder,
-	}))
-
 	action := &Action{
-		Type:                ActionRemoteMove,
-		Path:                "shared/renamed.txt",
-		OldPath:             "shared/original.txt",
-		ItemID:              "item1",
-		DriveID:             driveid.New("00000000000000ff"),
-		TargetRootItemID:    "rooted-subtree-id",
-		TargetRootLocalPath: "shared",
-		View:                &PathView{Path: "shared/renamed.txt"},
+		Type:    ActionRemoteMove,
+		Path:    "renamed.txt",
+		OldPath: "original.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New("00000000000000ff"),
+		View:    &PathView{Path: "renamed.txt"},
 	}
+
+	cfg.SetRootItemID("rooted-subtree-id")
+	e := NewExecution(cfg, emptyBaseline())
 
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
-	assert.Equal(t, []executorPathConvergenceTarget{{
-		driveID:    driveid.New("00000000000000ff"),
-		rootItemID: "rooted-subtree-id",
-	}}, pathConvergence.targets)
 	assert.Equal(t, []string{"renamed.txt"}, pathConvergence.waitCalls)
 }
 
@@ -948,34 +909,25 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
-		Path:     "shared",
-		ItemID:   sharedParent,
-		DriveID:  driveid.New("00000000000000ff"),
-		ItemType: ItemTypeFolder,
-	}))
+	cfg.SetRootItemID(sharedParent)
+	e := NewExecution(cfg, emptyBaseline())
 
-	writeExecTestFile(t, syncRoot, "shared/exec-small.txt", "hello")
+	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
 	action := &Action{
-		Type:                ActionUpload,
-		Path:                "shared/exec-small.txt",
-		TargetRootItemID:    sharedParent,
-		TargetRootLocalPath: "shared",
-		View:                &PathView{Path: "shared/exec-small.txt"},
+		Type:    ActionUpload,
+		Path:    "exec-small.txt",
+		DriveID: driveid.New("00000000000000ff"),
+		View:    &PathView{Path: "exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, driveid.New("00000000000000ff"), capturedDriveID)
-	assert.Equal(t, []executorPathConvergenceTarget{{
-		driveID:    driveid.New("00000000000000ff"),
-		rootItemID: sharedParent,
-	}}, pathConvergence.targets)
 	assert.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
 }
 
-func TestExecutor_Upload_CrossDriveWithoutTargetRootMetadataSkipsPathConvergence(t *testing.T) {
+func TestExecutor_Upload_RootedSubtreeUsesMountLocalPathConvergence(t *testing.T) {
 	t.Parallel()
 
 	const sharedParent = "shared-parent-id"
@@ -989,25 +941,21 @@ func TestExecutor_Upload_CrossDriveWithoutTargetRootMetadataSkipsPathConvergence
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
-		Path:     "shared",
-		ItemID:   sharedParent,
-		DriveID:  driveid.New("00000000000000ff"),
-		ItemType: ItemTypeFolder,
-	}))
+	cfg.SetRootItemID(sharedParent)
+	e := NewExecution(cfg, emptyBaseline())
 
-	writeExecTestFile(t, syncRoot, "shared/exec-small.txt", "hello")
+	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
 	action := &Action{
-		Type: ActionUpload,
-		Path: "shared/exec-small.txt",
-		View: &PathView{Path: "shared/exec-small.txt"},
+		Type:    ActionUpload,
+		Path:    "exec-small.txt",
+		DriveID: driveid.New("00000000000000ff"),
+		View:    &PathView{Path: "exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
-	assert.Empty(t, pathConvergence.targets)
-	assert.Empty(t, pathConvergence.waitCalls)
+	assert.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
 }
 
 func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
