@@ -88,13 +88,14 @@ The target `status` surface projects the full sync model directly from:
 - `observation_issues`
 - `retry_work`
 - `block_scopes`
-- `sync_status`
+- `baseline` / `remote_state` counts and drift facts
 - account/auth/degraded overlays
 - optional live perf
 
 There is no second sync-health command. There is no separate history-only
 surface for resolved conflicts, and `status` no longer exposes delete-safety or
-manual conflict-request sections.
+manual conflict-request sections. It also no longer persists or renders a
+store-owned "last sync / duration / last error" history block.
 
 ## Control Socket
 

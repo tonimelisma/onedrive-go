@@ -42,7 +42,7 @@ func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsRetryWork(t
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
 	assert.Equal(t, "invalid.txt", retryRows[0].Path)
-	assert.Equal(t, IssueInvalidFilename, retryRows[0].ConditionType)
+	assert.True(t, retryRows[0].ScopeKey.IsZero())
 }
 
 // Validates: R-2.10.5
@@ -181,18 +181,15 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelaye
 		name              string
 		actionType        ActionType
 		failureCapability PermissionCapability
-		wantIssueType     string
 	}{
 		{
-			name:          "local read denied",
-			actionType:    ActionDownload,
-			wantIssueType: IssueLocalReadDenied,
+			name:       "local read denied",
+			actionType: ActionDownload,
 		},
 		{
 			name:              "local write denied",
 			actionType:        ActionUpload,
 			failureCapability: PermissionCapabilityLocalWrite,
-			wantIssueType:     IssueLocalWriteDenied,
 		},
 	}
 
@@ -224,7 +221,7 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelaye
 			retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 			require.Len(t, retryRows, 1)
 			assert.Equal(t, "accessible/file.txt", retryRows[0].Path)
-			assert.Equal(t, tc.wantIssueType, retryRows[0].ConditionType)
+			assert.True(t, retryRows[0].ScopeKey.IsZero(), "file-level permission retries no longer persist condition_type")
 			assert.False(t, retryRows[0].Blocked)
 			assert.Equal(t, 1, retryRows[0].AttemptCount)
 			assert.Greater(t, retryRows[0].NextRetryAt, now.UnixNano())
@@ -332,7 +329,6 @@ func TestEngineFlow_ProcessNormalDecision_KnownRemoteBoundaryNoOpDoesNotPersistO
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFunc().Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc(),
 	}))
@@ -416,21 +412,16 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionOutcomeFallsBackToRe
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFunc().Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc(),
 	})
 
 	blockedRow := &RetryWorkRow{
-		Path:          "file.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueServiceOutage,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-		AttemptCount:  1,
-		LastError:     "blocked",
-		FirstSeenAt:   1,
-		LastSeenAt:    2,
+		Path:         "file.txt",
+		ActionType:   ActionUpload,
+		ScopeKey:     scopeKey,
+		Blocked:      true,
+		AttemptCount: 1,
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blockedRow))
 	flow.retryRowsByKey[retryWorkKeyForRetryWork(blockedRow)] = *blockedRow
@@ -683,7 +674,6 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFunc().Add(-time.Minute),
 		NextTrialAt:   eng.nowFunc().Add(-time.Second),
 		TrialInterval: time.Minute,
 	})

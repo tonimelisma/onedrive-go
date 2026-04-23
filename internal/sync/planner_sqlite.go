@@ -322,7 +322,6 @@ func remoteStateFromSnapshotRow(row *RemoteStateRow) *RemoteState {
 	return &RemoteState{
 		ItemID:    row.ItemID,
 		DriveID:   row.DriveID,
-		ParentID:  row.ParentID,
 		Name:      path.Base(row.Path),
 		ItemType:  row.ItemType,
 		Size:      row.Size,

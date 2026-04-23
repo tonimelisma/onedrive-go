@@ -10,15 +10,10 @@ import (
 // observation and shown to the user until the underlying path becomes
 // syncable again.
 type ObservationIssue struct {
-	Path       string
-	DriveID    driveid.ID
-	ActionType ActionType
-	IssueType  string
-	Error      string
-	ItemID     string
-	ScopeKey   ScopeKey
-	FileSize   int64
-	LocalHash  string
+	Path      string
+	DriveID   driveid.ID
+	IssueType string
+	ScopeKey  ScopeKey
 }
 
 // ObservationFindingsBatch is one coherent observation-owned durable batch.
@@ -34,17 +29,10 @@ type ObservationFindingsBatch struct {
 
 // ObservationIssueRow represents a row from the observation_issues table.
 type ObservationIssueRow struct {
-	Path        string
-	DriveID     driveid.ID
-	ActionType  ActionType
-	IssueType   string
-	ItemID      string
-	LastError   string
-	FirstSeenAt int64
-	LastSeenAt  int64
-	FileSize    int64
-	LocalHash   string
-	ScopeKey    ScopeKey
+	Path      string
+	DriveID   driveid.ID
+	IssueType string
+	ScopeKey  ScopeKey
 }
 
 // RetryWorkFailure records one exact work item that still needs a retry. The
@@ -55,77 +43,53 @@ type RetryWorkFailure struct {
 	ActionType    ActionType
 	ConditionType string
 	ScopeKey      ScopeKey
-	LastError     string
-	HTTPStatus    int
 	Blocked       bool
 }
 
 // ObservedItem represents a single item from a delta API response, ready
 // for CommitObservation to process against existing remote_state.
 type ObservedItem struct {
-	DriveID         driveid.ID
-	ItemID          string
-	ParentID        string
-	Path            string
-	ItemType        ItemType
-	Hash            string
-	Size            int64
-	Mtime           int64
-	ETag            string
-	ContentIdentity string
-	IsDeleted       bool
+	DriveID   driveid.ID
+	ItemID    string
+	Path      string
+	ItemType  ItemType
+	Hash      string
+	Size      int64
+	Mtime     int64
+	ETag      string
+	IsDeleted bool
 }
 
 // RemoteStateRow represents a row from the remote_state table.
 type RemoteStateRow struct {
-	DriveID         driveid.ID
-	ItemID          string
-	Path            string
-	ParentID        string
-	ItemType        ItemType
-	Hash            string
-	Size            int64
-	Mtime           int64
-	ETag            string
-	ContentIdentity string
-	PreviousPath    string
+	DriveID  driveid.ID
+	ItemID   string
+	Path     string
+	ItemType ItemType
+	Hash     string
+	Size     int64
+	Mtime    int64
+	ETag     string
 }
 
 // LocalStateRow represents a row from the local_state table.
 type LocalStateRow struct {
-	Path            string
-	ItemType        ItemType
-	Hash            string
-	Size            int64
-	Mtime           int64
-	ContentIdentity string
+	Path     string
+	ItemType ItemType
+	Hash     string
+	Size     int64
+	Mtime    int64
 }
 
 // RetryWorkRow represents a row from the retry_work table.
 type RetryWorkRow struct {
-	WorkKey       string
-	Path          string
-	OldPath       string
-	ActionType    ActionType
-	ConditionType string
-	ScopeKey      ScopeKey
-	Blocked       bool
-	AttemptCount  int
-	NextRetryAt   int64
-	LastError     string
-	HTTPStatus    int
-	FirstSeenAt   int64
-	LastSeenAt    int64
-}
-
-// SyncStatus is the typed product-facing status row persisted for the most
-// recent successful bidirectional sync batch.
-type SyncStatus struct {
-	LastSyncedAt       int64
-	LastSyncDurationMs int64
-	LastSucceededCount int
-	LastFailedCount    int
-	LastError          string
+	Path         string
+	OldPath      string
+	ActionType   ActionType
+	ScopeKey     ScopeKey
+	Blocked      bool
+	AttemptCount int
+	NextRetryAt  int64
 }
 
 // PendingRetryGroup aggregates transient failures by scope_key, with the

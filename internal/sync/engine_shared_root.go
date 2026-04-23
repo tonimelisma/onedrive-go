@@ -16,22 +16,35 @@ func (e *Engine) hasSharedRoot() bool {
 	return e != nil && e.rootItemID != ""
 }
 
+func (e *Engine) sharedRootDeltaSupported() bool {
+	if e == nil {
+		return false
+	}
+
+	switch e.sharedRootSourceType {
+	case driveid.DriveTypeBusiness, driveid.DriveTypeSharePoint:
+		return false
+	default:
+		return true
+	}
+}
+
 func (flow *engineFlow) observeSharedRootRemote(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) ([]ChangeEvent, string, error) {
+) ([]ChangeEvent, string, remoteObservationMode, error) {
 	eng := flow.engine
 	if !eng.hasSharedRoot() {
-		return nil, "", fmt.Errorf("sync: shared-root observation requires a root item ID")
+		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: shared-root observation requires a root item ID")
 	}
 
-	if eng.sharedRootObservationMode() == sharedRootObservationDelta {
+	if eng.preferredSharedRootObservationMode() == remoteObservationModeDelta {
 		token := ""
 		if !fullReconcile {
 			state, err := eng.baseline.ReadObservationState(ctx)
 			if err != nil {
-				return nil, "", fmt.Errorf("sync: reading observation state: %w", err)
+				return nil, "", remoteObservationModeDelta, fmt.Errorf("sync: reading observation state: %w", err)
 			}
 
 			token = state.Cursor
@@ -48,16 +61,16 @@ func (flow *engineFlow) observeSharedRootRemote(
 			fullReconcile = true
 		}
 		if err == nil {
-			events := convertSharedRootItems(items, eng.rootItemID, eng.driveID, bl, eng.logger)
+			events := convertSharedRootItems(ctx, items, eng.rootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
 			if fullReconcile {
 				events = append(events, detectSharedRootOrphans(items, eng.driveID, bl)...)
 			}
 
-			return events, newToken, nil
+			return events, newToken, remoteObservationModeDelta, nil
 		}
 
 		if eng.recursiveLister == nil || !shouldFallbackSharedRootDelta(err) {
-			return nil, "", fmt.Errorf("sync: shared-root delta: %w", err)
+			return nil, "", remoteObservationModeDelta, fmt.Errorf("sync: shared-root delta: %w", err)
 		}
 
 		eng.logger.Warn("shared-root delta unsupported or not ready, falling back to recursive listing",
@@ -68,30 +81,32 @@ func (flow *engineFlow) observeSharedRootRemote(
 	}
 
 	if eng.recursiveLister == nil {
-		return nil, "", fmt.Errorf("sync: recursive lister not available for shared root %s", eng.rootItemID)
+		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: recursive lister not available for shared root %s", eng.rootItemID)
 	}
 
 	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, eng.driveID, eng.rootItemID)
 	if err != nil {
-		return nil, "", fmt.Errorf("sync: shared-root recursive listing: %w", err)
+		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: shared-root recursive listing: %w", err)
 	}
 
-	events := convertSharedRootItems(items, eng.rootItemID, eng.driveID, bl, eng.logger)
+	events := convertSharedRootItems(ctx, items, eng.rootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
 	events = append(events, detectSharedRootOrphans(items, eng.driveID, bl)...)
 
-	return events, "", nil
+	return events, "", remoteObservationModeEnumerate, nil
 }
 
 func convertSharedRootItems(
+	ctx context.Context,
 	items []graph.Item,
 	rootItemID string,
 	remoteDriveID driveid.ID,
 	bl *Baseline,
 	logger *slog.Logger,
+	itemClient ItemClient,
 ) []ChangeEvent {
-	converter := NewPrimaryConverter(bl, remoteDriveID, logger, nil)
+	converter := NewPrimaryConverter(bl, remoteDriveID, logger, nil, itemClient)
 	converter.RootItemID = rootItemID
-	return converter.ConvertItems(items)
+	return converter.ConvertItems(ctx, items)
 }
 
 func shouldFallbackSharedRootDelta(err error) bool {
@@ -143,28 +158,54 @@ func (rt *watchRuntime) watchSharedRootRemote(
 			}
 			continue
 		}
-
-		if len(result.events) == 0 && !(&result).hasObservationFindings() && result.pending == nil {
-			bo.Reset()
-			stop, sleepErr := rt.sleepSharedRootWatch(ctx, interval, "zero-event")
-			if sleepErr != nil || stop {
-				return sleepErr
-			}
-			continue
-		}
-
-		batch := buildSharedRootWatchBatch(rt.engine, &result)
-		if dispatchErr := rt.dispatchSharedRootBatch(ctx, batches, &batch); dispatchErr != nil {
-			if sharedRootWatchStopped(ctx, dispatchErr) {
+		if err := rt.handleSharedRootObservationResult(ctx, batches, interval, bo, &result); err != nil {
+			if sharedRootWatchStopped(ctx, err) {
 				return nil
 			}
-			return dispatchErr
-		}
-		bo.Reset()
-		if stop, sleepErr := rt.sleepSharedRootWatch(ctx, interval, "interval"); sleepErr != nil || stop {
-			return sleepErr
+			return err
 		}
 	}
+}
+
+func (rt *watchRuntime) handleSharedRootObservationResult(
+	ctx context.Context,
+	batches chan<- remoteObservationBatch,
+	interval time.Duration,
+	bo *retry.Backoff,
+	result *remoteFetchResult,
+) error {
+	if shouldSkipSharedRootWatchBatch(result) {
+		bo.Reset()
+		stop, sleepErr := rt.sleepSharedRootWatch(ctx, interval, "zero-event")
+		if stop || sleepErr != nil {
+			return sleepErr
+		}
+		return nil
+	}
+
+	batch := buildSharedRootWatchBatch(rt.engine, result)
+	if dispatchErr := rt.dispatchSharedRootBatch(ctx, batches, &batch); dispatchErr != nil {
+		return dispatchErr
+	}
+
+	bo.Reset()
+	stop, sleepErr := rt.sleepSharedRootWatch(ctx, interval, "interval")
+	if stop || sleepErr != nil {
+		return sleepErr
+	}
+
+	return nil
+}
+
+func shouldSkipSharedRootWatchBatch(result *remoteFetchResult) bool {
+	if result == nil {
+		return true
+	}
+
+	return len(result.events) == 0 &&
+		!result.hasObservationFindings() &&
+		result.pending == nil &&
+		result.observationMode != remoteObservationModeEnumerate
 }
 
 func (rt *watchRuntime) handleSharedRootPollError(

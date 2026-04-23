@@ -26,12 +26,11 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 
 	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{
-			Path:            "upload.txt",
-			ItemType:        ItemTypeFile,
-			Hash:            "new-local",
-			Size:            2,
-			Mtime:           2,
-			ContentIdentity: "new-local",
+			Path:     "upload.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "new-local",
+			Size:     2,
+			Mtime:    2,
 		},
 		{
 			Path:     "new-folder",
@@ -109,12 +108,11 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 	require.NoError(t, err)
 
 	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
-		Path:            "conflict.txt",
-		ItemType:        ItemTypeFile,
-		Hash:            "local-new",
-		Size:            2,
-		Mtime:           2,
-		ContentIdentity: "local-new",
+		Path:     "conflict.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "local-new",
+		Size:     2,
+		Mtime:    2,
 	}}))
 
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
@@ -218,12 +216,11 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteConflictResolutionWithout
 	require.NoError(t, err)
 
 	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
-		Path:            "conflict.txt",
-		ItemType:        ItemTypeFile,
-		Hash:            "local-new",
-		Size:            2,
-		Mtime:           2,
-		ContentIdentity: "local-new",
+		Path:     "conflict.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "local-new",
+		Size:     2,
+		Mtime:    2,
 	}}))
 
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
@@ -346,12 +343,10 @@ func planForUnavailableLocalReadBoundaryDescendant(t *testing.T) *ActionPlan {
 		ETag:     "etag-private",
 	}}, "", driveID))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "Private",
-		DriveID:    driveID,
-		ActionType: ActionFolderCreate,
-		IssueType:  IssueLocalReadDenied,
-		Error:      "directory not accessible",
-		ScopeKey:   SKPermLocalRead("Private"),
+		Path:      "Private",
+		DriveID:   driveID,
+		IssueType: IssueLocalReadDenied,
+		ScopeKey:  SKPermLocalRead("Private"),
 	})
 
 	return planCurrentStateForStore(t, store)
@@ -369,20 +364,17 @@ func planForUnavailableRemoteReadBoundaryDescendant(t *testing.T) *ActionPlan {
 		VALUES ('item-shared', 'Shared/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-shared')`)
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
-		Path:            "Shared/sub/file.txt",
-		ItemType:        ItemTypeFile,
-		Hash:            "hash",
-		Size:            10,
-		Mtime:           1,
-		ContentIdentity: "hash",
+		Path:     "Shared/sub/file.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash",
+		Size:     10,
+		Mtime:    1,
 	}}))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "Shared",
-		DriveID:    driveID,
-		ActionType: ActionDownload,
-		IssueType:  IssueRemoteReadDenied,
-		Error:      "remote subtree unreadable",
-		ScopeKey:   SKPermRemoteRead("Shared"),
+		Path:      "Shared",
+		DriveID:   driveID,
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead("Shared"),
 	})
 
 	return planCurrentStateForStore(t, store)
@@ -400,12 +392,10 @@ func planForUnavailableLocalReadBoundaryCleanupCandidate(t *testing.T) *ActionPl
 		       ('item-private-file', 'Private/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
 	require.NoError(t, err)
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "Private",
-		DriveID:    driveid.New(engineTestDriveID),
-		ActionType: ActionFolderCreate,
-		IssueType:  IssueLocalReadDenied,
-		Error:      "directory not accessible",
-		ScopeKey:   SKPermLocalRead("Private"),
+		Path:      "Private",
+		DriveID:   driveid.New(engineTestDriveID),
+		IssueType: IssueLocalReadDenied,
+		ScopeKey:  SKPermLocalRead("Private"),
 	})
 
 	return planCurrentStateForStore(t, store)
@@ -429,21 +419,18 @@ func planForUnavailableRemoteReadBoundaryCleanupCandidate(t *testing.T) *ActionP
 			ItemType: ItemTypeFolder,
 		},
 		{
-			Path:            "Shared/sub/file.txt",
-			ItemType:        ItemTypeFile,
-			Hash:            "hash",
-			Size:            10,
-			Mtime:           1,
-			ContentIdentity: "hash",
+			Path:     "Shared/sub/file.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "hash",
+			Size:     10,
+			Mtime:    1,
 		},
 	}))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "Shared",
-		DriveID:    driveID,
-		ActionType: ActionDownload,
-		IssueType:  IssueRemoteReadDenied,
-		Error:      "remote subtree unreadable",
-		ScopeKey:   SKPermRemoteRead("Shared"),
+		Path:      "Shared",
+		DriveID:   driveID,
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead("Shared"),
 	})
 
 	return planCurrentStateForStore(t, store)
@@ -574,11 +561,9 @@ func TestPlannerPlanCurrentState_LocalReadDeniedDoesNotDeleteRemoteData(t *testi
 		ETag:     "etag-danger",
 	}}, "", driveID))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "danger.txt",
-		DriveID:    driveID,
-		ActionType: ActionUpload,
-		IssueType:  IssueLocalReadDenied,
-		Error:      "file not accessible",
+		Path:      "danger.txt",
+		DriveID:   driveID,
+		IssueType: IssueLocalReadDenied,
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -599,20 +584,17 @@ func TestPlannerPlanCurrentState_RemoteReadBoundaryDoesNotDeleteLocalData(t *tes
 	require.NoError(t, err)
 
 	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
-		Path:            "Shared/a.txt",
-		ItemType:        ItemTypeFile,
-		Hash:            "hash",
-		Size:            10,
-		Mtime:           1,
-		ContentIdentity: "hash",
+		Path:     "Shared/a.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash",
+		Size:     10,
+		Mtime:    1,
 	}}))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "Shared",
-		DriveID:    driveid.New(engineTestDriveID),
-		ActionType: ActionDownload,
-		IssueType:  IssueRemoteReadDenied,
-		Error:      "remote subtree unreadable",
-		ScopeKey:   SKPermRemoteRead("Shared"),
+		Path:      "Shared",
+		DriveID:   driveid.New(engineTestDriveID),
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead("Shared"),
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -643,12 +625,10 @@ func TestPlannerPlanCurrentState_LocalReadBoundaryBlocksRemoteDeletesForDescenda
 		ETag:     "etag-private",
 	}}, "", driveID))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "Private",
-		DriveID:    driveID,
-		ActionType: ActionFolderCreate,
-		IssueType:  IssueLocalReadDenied,
-		Error:      "directory not accessible",
-		ScopeKey:   SKPermLocalRead("Private"),
+		Path:      "Private",
+		DriveID:   driveID,
+		IssueType: IssueLocalReadDenied,
+		ScopeKey:  SKPermLocalRead("Private"),
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -671,29 +651,25 @@ func TestPlannerPlanCurrentState_RemoteReadBoundaryBlocksLocalDeletesForDescenda
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{
-			Path:            "Team/a.txt",
-			ItemType:        ItemTypeFile,
-			Hash:            "hash-a",
-			Size:            10,
-			Mtime:           1,
-			ContentIdentity: "hash-a",
+			Path:     "Team/a.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "hash-a",
+			Size:     10,
+			Mtime:    1,
 		},
 		{
-			Path:            "Team/sub/b.txt",
-			ItemType:        ItemTypeFile,
-			Hash:            "hash-b",
-			Size:            11,
-			Mtime:           2,
-			ContentIdentity: "hash-b",
+			Path:     "Team/sub/b.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "hash-b",
+			Size:     11,
+			Mtime:    2,
 		},
 	}))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "Team",
-		DriveID:    driveid.New(engineTestDriveID),
-		ActionType: ActionDownload,
-		IssueType:  IssueRemoteReadDenied,
-		Error:      "remote subtree unreadable",
-		ScopeKey:   SKPermRemoteRead("Team"),
+		Path:      "Team",
+		DriveID:   driveid.New(engineTestDriveID),
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead("Team"),
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -735,12 +711,10 @@ func TestPlannerPlanCurrentState_LocalReadBoundarySuppressesRemoteOnlySubtreeAct
 		},
 	}, "", driveID))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "Private",
-		DriveID:    driveID,
-		ActionType: ActionFolderCreate,
-		IssueType:  IssueLocalReadDenied,
-		Error:      "directory not accessible",
-		ScopeKey:   SKPermLocalRead("Private"),
+		Path:      "Private",
+		DriveID:   driveID,
+		IssueType: IssueLocalReadDenied,
+		ScopeKey:  SKPermLocalRead("Private"),
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -767,21 +741,18 @@ func TestPlannerPlanCurrentState_RemoteReadBoundarySuppressesLocalOnlySubtreeAct
 			ItemType: ItemTypeFolder,
 		},
 		{
-			Path:            "Shared/sub/file.txt",
-			ItemType:        ItemTypeFile,
-			Hash:            "hash-shared",
-			Size:            10,
-			Mtime:           1,
-			ContentIdentity: "hash-shared",
+			Path:     "Shared/sub/file.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "hash-shared",
+			Size:     10,
+			Mtime:    1,
 		},
 	}))
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "Shared",
-		DriveID:    driveid.New(engineTestDriveID),
-		ActionType: ActionDownload,
-		IssueType:  IssueRemoteReadDenied,
-		Error:      "remote subtree unreadable",
-		ScopeKey:   SKPermRemoteRead("Shared"),
+		Path:      "Shared",
+		DriveID:   driveid.New(engineTestDriveID),
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead("Shared"),
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -800,11 +771,9 @@ func TestPlannerPlanCurrentState_NewUnreadableLocalPathProducesNoActions(t *test
 	driveID := driveid.New(engineTestDriveID)
 
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "blocked/new.txt",
-		DriveID:    driveID,
-		ActionType: ActionUpload,
-		IssueType:  IssueLocalReadDenied,
-		Error:      "file not accessible",
+		Path:      "blocked/new.txt",
+		DriveID:   driveID,
+		IssueType: IssueLocalReadDenied,
 	})
 
 	plan := planCurrentStateForStore(t, store)

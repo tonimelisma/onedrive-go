@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"sync"
 	"time"
 )
@@ -11,11 +10,6 @@ type watchLoopState struct {
 	outbox           []*TrackedAction
 	pendingReplan    dirtyBatch
 	hasPendingReplan bool
-
-	// syncBatch tracks the current best-effort watch batch so status updates are
-	// written only after the loop has exhausted all currently admissible work and
-	// returned to quiescence.
-	syncBatch watchSyncBatchState
 
 	// Deduplication: caches the last watch-condition signature and per-scope
 	// shared-folder child-set signatures for watch summaries.
@@ -37,14 +31,6 @@ type watchTimerState struct {
 	// Retry timer — the watch loop releases due held retries on each tick.
 	retryTimer   syncTimer
 	retryTimerCh chan struct{} // persistent, buffered(1)
-}
-
-type watchSyncBatchState struct {
-	active        bool
-	startedAt     time.Time
-	succeededBase int
-	failedBase    int
-	errorBase     int
 }
 
 type watchResources struct {
@@ -155,55 +141,6 @@ func (rt *watchRuntime) replaceOutbox(outbox []*TrackedAction) {
 	}
 
 	rt.loop.outbox = append(rt.loop.outbox[:0], outbox...)
-}
-
-func (rt *watchRuntime) beginSyncStatusBatch(startedAt time.Time) {
-	if rt.loop.syncBatch.active {
-		return
-	}
-
-	rt.loop.syncBatch = watchSyncBatchState{
-		active:        true,
-		startedAt:     startedAt,
-		succeededBase: rt.succeeded,
-		failedBase:    rt.failed,
-		errorBase:     len(rt.syncErrors),
-	}
-}
-
-func (rt *watchRuntime) clearSyncStatusBatch() {
-	rt.loop.syncBatch = watchSyncBatchState{}
-}
-
-func (rt *watchRuntime) finishSyncStatusBatch(ctx context.Context, mode Mode) {
-	if !rt.loop.syncBatch.active {
-		return
-	}
-
-	update := &SyncStatusUpdate{
-		SyncedAt:  rt.engine.nowFunc(),
-		Duration:  rt.engine.since(rt.loop.syncBatch.startedAt),
-		Succeeded: rt.succeeded - rt.loop.syncBatch.succeededBase,
-		Failed:    rt.failed - rt.loop.syncBatch.failedBase,
-	}
-	if rt.loop.syncBatch.errorBase < len(rt.syncErrors) {
-		update.Errors = append(update.Errors, rt.syncErrors[rt.loop.syncBatch.errorBase:]...)
-	}
-
-	rt.clearSyncStatusBatch()
-	rt.engine.writeSyncStatusBestEffort(ctx, mode, false, update)
-}
-
-func (rt *watchRuntime) maybeFinishSyncStatusBatch(
-	ctx context.Context,
-	mode Mode,
-	outbox []*TrackedAction,
-) {
-	if len(outbox) > 0 || rt.runningCount > 0 || rt.hasDueHeldWork(rt.engine.nowFunc()) {
-		return
-	}
-
-	rt.finishSyncStatusBatch(ctx, mode)
 }
 
 func (rt *watchRuntime) canPrepareNow() bool {

@@ -217,7 +217,6 @@ func (flow *engineFlow) applyBlockScope(ctx context.Context, watch *watchRuntime
 
 	block := &ActiveScope{
 		Key:           sr.ScopeKey,
-		BlockedAt:     now,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
 	}

@@ -51,7 +51,6 @@ func TestEngineFlow_PersistBlockedRetryWork_CanonicalizesRowsAcrossRuntimePaths(
 	t.Parallel()
 
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
-	wantMessage := blockedRetryWorkMessage(scopeKey)
 
 	type persistCase struct {
 		name    string
@@ -60,9 +59,6 @@ func TestEngineFlow_PersistBlockedRetryWork_CanonicalizesRowsAcrossRuntimePaths(
 
 	normalize := func(row RetryWorkRow) RetryWorkRow {
 		row.AttemptCount = 0
-		row.FirstSeenAt = 0
-		row.LastSeenAt = 0
-		row.HTTPStatus = 0
 		return row
 	}
 
@@ -106,10 +102,8 @@ func TestEngineFlow_PersistBlockedRetryWork_CanonicalizesRowsAcrossRuntimePaths(
 			retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 			require.Len(t, retryRows, 1)
 			got := normalize(retryRows[0])
-			assert.Equal(t, scopeKey.ConditionType(), got.ConditionType)
 			assert.Equal(t, scopeKey, got.ScopeKey)
 			assert.True(t, got.Blocked)
-			assert.Equal(t, wantMessage, got.LastError)
 			assert.Equal(t, int64(0), got.NextRetryAt)
 			assert.Equal(t, want, got)
 		})
@@ -175,8 +169,6 @@ func persistBlockedRetryViaPermissionOutcome(scopeKey ScopeKey) func(*testing.T,
 				ActionType:    ActionUpload,
 				ConditionType: IssueRemoteWriteDenied,
 				ScopeKey:      scopeKey,
-				LastError:     "folder is read-only",
-				HTTPStatus:    403,
 				Blocked:       true,
 			},
 		})
@@ -225,15 +217,11 @@ func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissi
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
 	seedObservationIssueForTest(t, eng.baseline, "keep.txt", IssueInvalidFilename, ScopeKey{})
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
-		Path:          "accessible/file.txt",
-		ActionType:    ActionDownload,
-		ConditionType: IssueServiceOutage,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-		AttemptCount:  1,
-		LastError:     "blocked",
-		FirstSeenAt:   1,
-		LastSeenAt:    2,
+		Path:         "accessible/file.txt",
+		ActionType:   ActionDownload,
+		ScopeKey:     scopeKey,
+		Blocked:      true,
+		AttemptCount: 1,
 	}))
 
 	handled, err := flow.applyTrialReclassification(t.Context(), rt, &ResultDecision{
@@ -271,7 +259,6 @@ func TestEngineFlow_NormalizePersistedScopes_DiscardsEmptyScopeWithoutBlockedWor
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           SKDiskLocal(),
-		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFn().Add(time.Minute),
 	}))
@@ -318,21 +305,16 @@ func TestEngineFlow_NormalizePersistedScopes_RemovesStaleScopeAndPreservesReadyR
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     now.Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   now.Add(time.Minute),
 	}))
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
-		Path:          "retry-now.txt",
-		ActionType:    ActionDownload,
-		ConditionType: IssueDiskFull,
-		ScopeKey:      scopeKey,
-		Blocked:       false,
-		AttemptCount:  1,
-		NextRetryAt:   now.UnixNano(),
-		LastError:     "ready retry should survive stale-scope cleanup",
-		FirstSeenAt:   now.UnixNano(),
-		LastSeenAt:    now.UnixNano(),
+		Path:         "retry-now.txt",
+		ActionType:   ActionDownload,
+		ScopeKey:     scopeKey,
+		Blocked:      false,
+		AttemptCount: 1,
+		NextRetryAt:  now.UnixNano(),
 	}))
 
 	require.NoError(t, flow.normalizePersistedScopes(t.Context(), nil))
@@ -359,7 +341,6 @@ func TestEngineFlow_ClearBlockedRetryWorkForScope_RemovesScopedRetryWork(t *test
 		ActionType:    ActionUpload,
 		ConditionType: IssueServiceOutage,
 		ScopeKey:      scopeKey,
-		LastError:     "blocked retry",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
@@ -383,7 +364,6 @@ func TestEngineFlow_AdmitReady_BlocksNormalActionUnderActiveScope(t *testing.T) 
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFn().Add(time.Minute),
 	})
@@ -422,7 +402,6 @@ func TestEngineFlow_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenScopeNoL
 		ActionType:    ActionDownload,
 		ConditionType: scopeKey.ConditionType(),
 		ScopeKey:      scopeKey,
-		LastError:     "stale blocked retry",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
@@ -458,7 +437,6 @@ func TestEngineFlow_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWithout
 		ActionType:    ActionUpload,
 		ConditionType: scopeKey.ConditionType(),
 		ScopeKey:      scopeKey,
-		LastError:     "blocked retry",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
@@ -496,7 +474,6 @@ func TestEngineFlow_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFails(t
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFn().Add(time.Minute),
 	})

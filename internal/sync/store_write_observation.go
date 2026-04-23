@@ -14,7 +14,6 @@ package sync
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	slashpath "path"
@@ -27,13 +26,11 @@ const (
 		FROM remote_state WHERE item_id = ?`
 
 	sqlInsertRemoteState = `INSERT INTO remote_state
-		(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-		 previous_path)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		(drive_id, item_id, path, item_type, hash, size, mtime, etag)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
 	sqlUpdateRemoteState = `UPDATE remote_state SET
-		drive_id = ?, path = ?, parent_id = ?, item_type = ?, hash = ?, size = ?, mtime = ?, etag = ?,
-		previous_path = ?
+		drive_id = ?, path = ?, item_type = ?, hash = ?, size = ?, mtime = ?, etag = ?
 		WHERE item_id = ?`
 )
 
@@ -127,12 +124,12 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 		return deleteObservedRemoteState(ctx, tx, item, existing.Path)
 	}
 
-	changed, previousPath := observedRemoteStateUpdate(existing, item)
+	changed := observedRemoteStateUpdate(existing, item)
 	if !changed {
 		return nil
 	}
 
-	return m.updateRemoteStateFromObs(ctx, tx, item, previousPath)
+	return m.updateRemoteStateFromObs(ctx, tx, item)
 }
 
 func deleteObservedRemoteState(
@@ -154,23 +151,16 @@ func deleteObservedRemoteState(
 func observedRemoteStateUpdate(
 	existing *RemoteStateRow,
 	item *ObservedItem,
-) (changed bool, previousPath string) {
+) bool {
 	pathChanged := item.Path != "" && item.Path != existing.Path
 	driveChanged := !item.DriveID.IsZero() && item.DriveID != existing.DriveID
-	changed = pathChanged ||
+	return pathChanged ||
 		driveChanged ||
-		item.ParentID != existing.ParentID ||
 		item.ItemType != existing.ItemType ||
 		item.Hash != existing.Hash ||
 		item.Size != existing.Size ||
 		item.Mtime != existing.Mtime ||
 		item.ETag != existing.ETag
-
-	if pathChanged {
-		previousPath = existing.Path
-	}
-
-	return changed, previousPath
 }
 
 func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *RemoteStateRow {
@@ -192,10 +182,9 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item 
 	_, err := tx.ExecContext(ctx, sqlInsertRemoteState,
 		item.DriveID.String(),
 		item.ItemID, item.Path,
-		nullString(item.ParentID), item.ItemType,
+		item.ItemType,
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
-		sql.NullString{},
 	)
 	if err != nil {
 		return fmt.Errorf("sync: inserting remote_state for %s: %w", item.Path, err)
@@ -208,14 +197,12 @@ func (m *SyncStore) updateRemoteStateFromObs(
 	ctx context.Context,
 	tx sqlTxRunner,
 	item *ObservedItem,
-	previousPath string,
 ) error {
 	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
 		item.DriveID.String(),
-		item.Path, nullString(item.ParentID), item.ItemType,
+		item.Path, item.ItemType,
 		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
-		nullString(previousPath),
 		item.ItemID,
 	)
 	if err != nil {

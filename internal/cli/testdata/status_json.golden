@@ -13,13 +13,10 @@
           "sync_dir": "/Users/alice/OneDrive",
           "state": "ready",
           "sync_state": {
-            "last_sync_time": "2026-04-03T10:30:00Z",
-            "last_sync_duration": "1500",
             "file_count": 42,
             "condition_count": 3,
             "remote_drift": 2,
             "retrying": 1,
-            "last_error": "sync: network timeout",
             "conditions": [
               {
                 "condition_key": "invalid_filename",

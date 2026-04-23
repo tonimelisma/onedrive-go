@@ -282,13 +282,8 @@ func (rt *watchRuntime) handleWatchHeldReleaseSignal(
 	return rt.handleWatchHeldRelease(ctx, p, trial)
 }
 
-func (rt *watchRuntime) appendReadyFrontier(
-	ctx context.Context,
-	p *watchPipeline,
-	ready []*TrackedAction,
-) error {
+func (rt *watchRuntime) appendReadyFrontier(ready []*TrackedAction) error {
 	nextOutbox := append(rt.currentOutbox(), ready...)
-	rt.maybeFinishSyncStatusBatch(ctx, p.mode, nextOutbox)
 	rt.replaceOutbox(nextOutbox)
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReadyFrontierAppended})
 	return nil
@@ -314,7 +309,7 @@ func (rt *watchRuntime) releaseHeldFrontier(
 		return err
 	}
 
-	return rt.appendReadyFrontier(ctx, p, released)
+	return rt.appendReadyFrontier(released)
 }
 
 func (rt *watchRuntime) handleObserverExit(_ *watchPipeline, shuttingDown bool) error {
@@ -387,12 +382,11 @@ func (rt *watchRuntime) handleWatchActionCompletion(
 ) error {
 	ready, err := rt.applyRuntimeCompletionStage(ctx, rt, completion, p.bl)
 	if err != nil {
-		rt.clearSyncStatusBatch()
 		rt.completeOutboxAsShutdown(ready)
 		return err
 	}
 
-	return rt.appendReadyFrontier(ctx, p, ready)
+	return rt.appendReadyFrontier(ready)
 }
 
 func (rt *watchRuntime) handleWatchCompletionsClosed(

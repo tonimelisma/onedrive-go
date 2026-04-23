@@ -45,7 +45,6 @@ SELECT COUNT(*) FROM (
 // product-facing status command. The store owns the read-only database access,
 // but the CLI owns grouping and presentation policy.
 type DriveStatusSnapshot struct {
-	SyncStatus         SyncStatus
 	BaselineEntryCount int
 	RemoteDriftItems   int
 	RetryingItems      int
@@ -193,20 +192,6 @@ func (i *storeInspector) Close() error {
 // the product-facing status command.
 func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSnapshot, error) {
 	snapshot := DriveStatusSnapshot{}
-
-	if err := i.db.QueryRowContext(ctx, `
-		SELECT last_synced_at, last_sync_duration_ms, last_succeeded_count, last_failed_count, last_error
-		FROM sync_status
-		WHERE singleton_id = 1`,
-	).Scan(
-		&snapshot.SyncStatus.LastSyncedAt,
-		&snapshot.SyncStatus.LastSyncDurationMs,
-		&snapshot.SyncStatus.LastSucceededCount,
-		&snapshot.SyncStatus.LastFailedCount,
-		&snapshot.SyncStatus.LastError,
-	); err != nil && err != sql.ErrNoRows {
-		return DriveStatusSnapshot{}, fmt.Errorf("read drive status sync status: %w", err)
-	}
 
 	var err error
 	snapshot.BaselineEntryCount, err = i.readCount(ctx, "SELECT COUNT(*) FROM baseline")

@@ -28,14 +28,11 @@ func goldenStatusAccounts() []statusAccount {
 					SyncDir:     "/Users/alice/OneDrive",
 					State:       driveStateReady,
 					SyncState: &syncStateInfo{
-						LastSyncTime:     "2026-04-03T10:30:00Z",
-						LastSyncDuration: "1500",
-						FileCount:        42,
-						ConditionCount:   3,
-						RemoteDrift:      2,
-						Retrying:         1,
-						LastError:        "sync: network timeout",
-						ExamplesLimit:    defaultVisiblePaths,
+						FileCount:      42,
+						ConditionCount: 3,
+						RemoteDrift:    2,
+						Retrying:       1,
+						ExamplesLimit:  defaultVisiblePaths,
 						Conditions: []statusConditionJSON{
 							{
 								ConditionKey:  string(syncengine.ConditionInvalidFilename),

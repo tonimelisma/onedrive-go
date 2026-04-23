@@ -57,7 +57,6 @@ func appendObservedEvent(
 	return append(items, ObservedItem{
 		DriveID:   ev.DriveID,
 		ItemID:    ev.ItemID,
-		ParentID:  ev.ParentID,
 		Path:      ev.Path,
 		ItemType:  ev.ItemType,
 		Hash:      ev.Hash,

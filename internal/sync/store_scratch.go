@@ -21,9 +21,8 @@ const (
 		FROM remote_state
 		ORDER BY path`
 	sqlInsertScratchRemoteState = `INSERT INTO remote_state
-		(drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-		 content_identity, previous_path)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		(drive_id, item_id, path, item_type, hash, size, mtime, etag)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 )
 
 type scratchPlanningSeed struct {
@@ -205,39 +204,30 @@ func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]Remo
 	var result []RemoteStateRow
 	for rows.Next() {
 		var (
-			rawDriveID      string
-			row             RemoteStateRow
-			parentID        sql.NullString
-			hash            sql.NullString
-			size            sql.NullInt64
-			mtime           sql.NullInt64
-			etag            sql.NullString
-			contentIdentity sql.NullString
-			previousPath    sql.NullString
+			rawDriveID string
+			row        RemoteStateRow
+			hash       sql.NullString
+			size       sql.NullInt64
+			mtime      sql.NullInt64
+			etag       sql.NullString
 		)
 
 		if err := rows.Scan(
 			&rawDriveID,
 			&row.ItemID,
 			&row.Path,
-			&parentID,
 			&row.ItemType,
 			&hash,
 			&size,
 			&mtime,
 			&etag,
-			&contentIdentity,
-			&previousPath,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning scratch remote_state seed row: %w", err)
 		}
 
 		row.DriveID = remoteStateDriveID(rawDriveID, driveid.ID{})
-		row.ParentID = parentID.String
 		row.Hash = hash.String
 		row.ETag = etag.String
-		row.ContentIdentity = contentIdentity.String
-		row.PreviousPath = previousPath.String
 		if size.Valid {
 			row.Size = size.Int64
 		}
@@ -266,14 +256,11 @@ func insertScratchRemoteStateRows(
 			row.DriveID.String(),
 			row.ItemID,
 			row.Path,
-			nullString(row.ParentID),
 			row.ItemType,
 			nullString(row.Hash),
 			nullKnownInt64(row.Size, true),
 			nullOptionalInt64(row.Mtime),
 			nullString(row.ETag),
-			nullString(row.ContentIdentity),
-			nullString(row.PreviousPath),
 		); err != nil {
 			return fmt.Errorf("sync: inserting scratch remote_state row for %s: %w", row.Path, err)
 		}

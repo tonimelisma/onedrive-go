@@ -322,7 +322,6 @@ func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
 type RemoteState struct {
 	ItemID           string
 	DriveID          driveid.ID // normalized (lowercase, zero-padded to 16 chars)
-	ParentID         string
 	Name             string
 	ItemType         ItemType
 	Size             int64

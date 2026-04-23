@@ -276,7 +276,6 @@ func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*
 	if action.View != nil {
 		if action.View.Remote != nil {
 			mutation.ItemID = action.View.Remote.ItemID
-			mutation.ParentID = action.View.Remote.ParentID
 			mutation.RemoteHash = action.View.Remote.Hash
 			mutation.RemoteSize = action.View.Remote.Size
 			mutation.RemoteSizeKnown = true
@@ -642,22 +641,19 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 	case ActionUpload, ActionFolderCreate:
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO remote_state (
-				drive_id, item_id, path, parent_id, item_type, hash, size, mtime, etag,
-				previous_path
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				drive_id, item_id, path, item_type, hash, size, mtime, etag
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(item_id) DO UPDATE SET
 				drive_id = excluded.drive_id,
 				path = excluded.path,
-				parent_id = excluded.parent_id,
 				item_type = excluded.item_type,
 				hash = excluded.hash,
 				size = excluded.size,
 				mtime = excluded.mtime,
-				etag = excluded.etag,
-				previous_path = excluded.previous_path`,
-			o.DriveID.String(), o.ItemID, o.Path, nullString(o.ParentID), o.ItemType,
+				etag = excluded.etag`,
+			o.DriveID.String(), o.ItemID, o.Path, o.ItemType,
 			nullString(o.RemoteHash), nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown), nullOptionalInt64(o.RemoteMtime),
-			nullString(o.ETag), sql.NullString{},
+			nullString(o.ETag),
 		)
 		if err != nil {
 			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
@@ -674,9 +670,9 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 	case ActionRemoteMove:
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE remote_state
-			 SET drive_id = ?, path = ?, previous_path = ?
+			 SET drive_id = ?, path = ?
 			 WHERE item_id = ?`,
-			o.DriveID.String(), o.Path, nullString(o.OldPath), o.ItemID,
+			o.DriveID.String(), o.Path, o.ItemID,
 		); err != nil {
 			return fmt.Errorf("sync: updating remote_state for remote move %s: %w", o.Path, err)
 		}

@@ -57,10 +57,9 @@ func TestProjectStoredConditionGroups_DoesNotDoubleCountObservationBackedScope(t
 
 	groups := ProjectStoredConditionGroups(&DriveStatusSnapshot{
 		ObservationIssues: []ObservationIssueRow{{
-			Path:       "Shared/Docs/file.txt",
-			IssueType:  IssueRemoteWriteDenied,
-			ScopeKey:   SKPermRemoteWrite("Shared/Docs"),
-			ActionType: ActionUpload,
+			Path:      "Shared/Docs/file.txt",
+			IssueType: IssueRemoteWriteDenied,
+			ScopeKey:  SKPermRemoteWrite("Shared/Docs"),
 		}},
 		BlockScopes: []*BlockScope{{
 			Key: SKPermRemoteWrite("Shared/Docs"),

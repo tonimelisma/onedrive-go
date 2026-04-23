@@ -91,9 +91,17 @@ func NewRemoteObserver(
 		driveID:   driveID,
 		SleepFunc: TimeSleep,
 	}
-	obs.Converter = NewPrimaryConverter(baseline, driveID, logger, &obs.stats)
+	obs.Converter = NewPrimaryConverter(baseline, driveID, logger, &obs.stats, nil)
 
 	return obs
+}
+
+func (o *RemoteObserver) SetItemClient(items ItemClient) {
+	if o == nil || o.Converter == nil {
+		return
+	}
+
+	o.Converter.Items = items
 }
 
 // FullDelta fetches all delta pages and returns the accumulated change events
@@ -468,6 +476,8 @@ func (o *RemoteObserver) fetchPage(
 
 		return nil, "", false, fmt.Errorf("sync: fetching delta page %d: %w", page, err)
 	}
+
+	o.Converter.enrichSparseParentRefs(ctx, dp.Items)
 
 	// Pass 1: register all items in inflight so parent-chain walks
 	// in pass 2 see every item regardless of arrival order.

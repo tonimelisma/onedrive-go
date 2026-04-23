@@ -59,16 +59,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		if report.DeferredByMode.Total() > 0 {
 			report.Duration = e.since(start)
 			e.logRunOnceCompletion(report)
-			e.writeSyncStatusBestEffort(ctx, mode, opts.DryRun, &SyncStatusUpdate{
-				SyncedAt:  e.nowFunc(),
-				Duration:  report.Duration,
-				Succeeded: report.Succeeded,
-				Failed:    report.Failed,
-				Errors:    report.Errors,
-			})
 			return report, nil
 		}
-		return e.completeRunOnceWithoutChanges(ctx, start, mode, opts), nil
+		return e.completeRunOnceWithoutChanges(start, mode, opts), nil
 	}
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
@@ -85,14 +78,6 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 	e.logRunOnceCompletion(report)
 
 	runner.postSyncHousekeeping()
-
-	e.writeSyncStatusBestEffort(ctx, mode, opts.DryRun, &SyncStatusUpdate{
-		SyncedAt:  e.nowFunc(),
-		Duration:  report.Duration,
-		Succeeded: report.Succeeded,
-		Failed:    report.Failed,
-		Errors:    report.Errors,
-	})
 
 	return report, nil
 }
@@ -257,8 +242,17 @@ func (flow *engineFlow) commitPendingPrimaryCursor(
 			ctx,
 			driveid.New(pending.driveID),
 			flow.engine.nowFunc(),
+			pending.observationMode,
 		); err != nil {
 			return fmt.Errorf("sync: marking full remote refresh for root %q: %w", pending.rootID, err)
+		}
+	} else if pending.observationMode == remoteObservationModeEnumerate {
+		if err := flow.engine.baseline.ClampFullRemoteRefreshDeadline(
+			ctx,
+			driveid.New(pending.driveID),
+			flow.engine.nowFunc().Add(remoteRefreshEnumerateInterval),
+		); err != nil {
+			return fmt.Errorf("sync: clamping full remote refresh for root %q: %w", pending.rootID, err)
 		}
 	}
 
@@ -273,6 +267,7 @@ func (flow *engineFlow) commitPendingPrimaryCursor(
 func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
 	eng := flow.engine
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
+	obs.SetItemClient(eng.itemsClient)
 
 	// Full enumeration: empty token returns ALL items as create/modify events.
 	events, token, err := obs.FullDelta(ctx, "")

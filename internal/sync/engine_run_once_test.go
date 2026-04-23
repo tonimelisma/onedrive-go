@@ -161,36 +161,6 @@ func TestRunOnce_DownloadOnly_ObservesLocalScanButSuppressesUploads(t *testing.T
 }
 
 // Validates: R-2.1.3
-func TestRunOnce_DownloadOnly_PersistsStatusForDeferredOnlyPass(t *testing.T) {
-	t.Parallel()
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
-			}, "token-1"), nil
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
-	writeLocalFile(t, syncRoot, "local-only.txt", "should not be uploaded")
-
-	ctx := t.Context()
-
-	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
-	require.NoError(t, err, "RunOnce")
-	assert.Equal(t, 1, report.DeferredByMode.Uploads)
-
-	status, err := eng.baseline.ReadSyncStatus(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, status)
-	assert.Zero(t, status.LastSyncedAt, "directional passes must not persist sync status")
-	assert.Zero(t, status.LastSyncDurationMs)
-	assert.Zero(t, status.LastSucceededCount)
-	assert.Zero(t, status.LastFailedCount)
-}
-
-// Validates: R-2.1.3
 func TestRunOnce_DownloadOnly_DefersEditDeleteAutoResolveUpload(t *testing.T) {
 	t.Parallel()
 
@@ -228,7 +198,7 @@ func TestRunOnce_DownloadOnly_DefersEditDeleteAutoResolveUpload(t *testing.T) {
 
 	writeLocalFile(t, syncRoot, "edit-delete.txt", "locally modified content")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now()))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), remoteObservationModeDelta))
 
 	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err, "RunOnce")
@@ -315,12 +285,11 @@ func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *
 	}()
 
 	require.NoError(t, replaceLocalStateTx(ctx, tx, []LocalStateRow{{
-		Path:            "tx-only.txt",
-		ItemType:        ItemTypeFile,
-		Hash:            "hash",
-		Size:            4,
-		Mtime:           5,
-		ContentIdentity: "hash",
+		Path:     "tx-only.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash",
+		Size:     4,
+		Mtime:    5,
 	}}))
 
 	inputs, err := flow.loadCurrentInputsTx(ctx, eng.baseline, tx, eng.driveID)
@@ -341,25 +310,19 @@ func TestReconcileRuntimeState_PrunesRetryAndScopeState(t *testing.T) {
 		Path:         "keep.txt",
 		ActionType:   ActionUpload,
 		AttemptCount: 1,
-		FirstSeenAt:  1,
-		LastSeenAt:   2,
 	}))
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &RetryWorkRow{
 		Path:         "drop.txt",
 		ActionType:   ActionDownload,
 		AttemptCount: 1,
-		FirstSeenAt:  3,
-		LastSeenAt:   4,
 	}))
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKService(),
-		BlockedAt:     time.Unix(100, 0),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(160, 0),
 	}))
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKThrottleDrive(driveid.New("drive1")),
-		BlockedAt:     time.Unix(200, 0),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(260, 0),
 	}))
@@ -369,8 +332,6 @@ func TestReconcileRuntimeState_PrunesRetryAndScopeState(t *testing.T) {
 		ScopeKey:     SKService(),
 		Blocked:      true,
 		AttemptCount: 1,
-		FirstSeenAt:  5,
-		LastSeenAt:   6,
 	}))
 
 	err := flow.reconcileRuntimeState(ctx, &ActionPlan{
@@ -409,7 +370,6 @@ func TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation(t *testin
 	require.Len(t, localRows, 1)
 	assert.Equal(t, "local.txt", localRows[0].Path)
 	assert.NotEmpty(t, localRows[0].Hash)
-	assert.Equal(t, localRows[0].Hash, localRows[0].ContentIdentity)
 
 	reconciliationRows, err := eng.baseline.QueryReconciliationState(t.Context())
 	require.NoError(t, err)
@@ -491,12 +451,11 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 	ctx := t.Context()
 
 	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
-		Path:            "stale-local.txt",
-		ItemType:        ItemTypeFile,
-		Hash:            "stale-local-hash",
-		Size:            5,
-		Mtime:           11,
-		ContentIdentity: "stale-local-hash",
+		Path:     "stale-local.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "stale-local-hash",
+		Size:     5,
+		Mtime:    11,
 	}}))
 	_, err := eng.baseline.rawDB().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
@@ -566,16 +525,13 @@ func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T
 	ctx := t.Context()
 
 	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
-		Path:       "/",
-		DriveID:    driveID,
-		ActionType: ActionDownload,
-		IssueType:  IssueRemoteReadDenied,
-		Error:      "remote unreadable before dry-run",
-		ScopeKey:   SKPermRemoteRead(""),
+		Path:      "/",
+		DriveID:   driveID,
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead(""),
 	})
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKPermRemoteWrite(""),
-		BlockedAt:     time.Unix(100, 0),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(160, 0),
 	}))
@@ -650,6 +606,8 @@ func TestRunOnce_SharedConfiguredRootUsesScopedDeltaAndToken(t *testing.T) {
 		Logger:          testLogger(t),
 	})
 	require.NoError(t, err)
+	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
+	installManualClock(eng, clock)
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
@@ -714,6 +672,8 @@ func TestRunOnce_DryRun_SharedConfiguredRootDoesNotSaveScopedDeltaToken(t *testi
 		Logger:          testLogger(t),
 	})
 	require.NoError(t, err)
+	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
+	installManualClock(eng, clock)
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
@@ -766,6 +726,8 @@ func TestRunOnce_SharedConfiguredRootEnumerateStillPersistsFullReconcileCadenceW
 		Logger:          testLogger(t),
 	})
 	require.NoError(t, err)
+	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
+	installManualClock(eng, clock)
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
@@ -777,8 +739,7 @@ func TestRunOnce_SharedConfiguredRootEnumerateStillPersistsFullReconcileCadenceW
 	state, err := eng.baseline.ReadObservationState(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, state.Cursor)
-	assert.NotZero(t, state.LastFullRemoteRefreshAt)
-	assert.NotZero(t, state.NextFullRemoteRefreshAt)
+	assert.Equal(t, clock.Now().Add(remoteRefreshEnumerateInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 }
 
 func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
@@ -1036,7 +997,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 		ItemID:  "seed-1",
 	}}
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "stale-token")
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now()))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), remoteObservationModeDelta))
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
@@ -1288,7 +1249,7 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 	)
 	require.NoError(t, err, "seed remote mirror edit row")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now()))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), remoteObservationModeDelta))
 
 	report, runErr := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
@@ -1356,7 +1317,7 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 	)
 	require.NoError(t, err, "seed remote mirror row")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now()))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), remoteObservationModeDelta))
 
 	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
@@ -1419,24 +1380,4 @@ func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 	require.NoError(t, err)
 	_, found := bl.GetByPath("retry-delete.txt")
 	assert.False(t, found)
-}
-
-func TestSyncStatusFromUpdate_RequiresEngineOwnedTimestamp(t *testing.T) {
-	t.Parallel()
-
-	status := syncStatusFromUpdate(&SyncStatusUpdate{
-		Duration:  2 * time.Second,
-		Succeeded: 3,
-		Failed:    1,
-	})
-	assert.Nil(t, status)
-
-	status = syncStatusFromUpdate(&SyncStatusUpdate{
-		SyncedAt:  time.Unix(123, 456).UTC(),
-		Duration:  2 * time.Second,
-		Succeeded: 3,
-		Failed:    1,
-	})
-	require.NotNil(t, status)
-	assert.Equal(t, time.Unix(123, 456).UTC().UnixNano(), status.LastSyncedAt)
 }

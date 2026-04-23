@@ -112,6 +112,20 @@ Execution delegates transfer mechanics to `driveops.TransferManager`.
 - true creates still use parent-path upload because no remote item identity
   exists yet
 
+Successful outcomes still preserve remote ancestry for later baseline writes,
+but execution no longer reloads that parent ID from `remote_state`. Outcome
+parent recovery is:
+
+- use the live Graph item returned by the mutation when it already carries
+  `ParentID`
+- otherwise resolve the parent from the action path against current baseline
+  state (`ResolveParentID`)
+- finally fall back to the baseline view already attached to the action when a
+  durable parent is known there
+
+That keeps `baseline.parent_id` as the durable ancestry authority without
+requiring a second persisted parent field in `remote_state`.
+
 Execution-time validation is always-on where it matters. Upload overwrite
 preflight and similar validation-before-mutate checks are executor-owned and
 apply in both one-shot and watch mode; they are not gated on a watch-only

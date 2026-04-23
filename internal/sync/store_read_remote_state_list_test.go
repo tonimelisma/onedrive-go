@@ -21,7 +21,6 @@ func TestSyncStore_ListRemoteStateAndRejectMismatchedDriveLookup(t *testing.T) {
 		{
 			DriveID:  driveID,
 			ItemID:   "item-b",
-			ParentID: "root",
 			Path:     "docs/b.txt",
 			ItemType: ItemTypeFile,
 			Hash:     "hash-b",
@@ -29,7 +28,6 @@ func TestSyncStore_ListRemoteStateAndRejectMismatchedDriveLookup(t *testing.T) {
 		{
 			DriveID:  driveID,
 			ItemID:   "item-a",
-			ParentID: "root",
 			Path:     "docs/a.txt",
 			ItemType: ItemTypeFile,
 			Hash:     "hash-a",
@@ -63,7 +61,6 @@ func TestSyncStore_ListRemoteState_PreservesPerRowDriveOwnership(t *testing.T) {
 		{
 			DriveID:  configuredDriveID,
 			ItemID:   "item-configured",
-			ParentID: "root",
 			Path:     "docs/configured.txt",
 			ItemType: ItemTypeFile,
 			Hash:     "hash-configured",
@@ -71,7 +68,6 @@ func TestSyncStore_ListRemoteState_PreservesPerRowDriveOwnership(t *testing.T) {
 		{
 			DriveID:  sharedDriveID,
 			ItemID:   "item-shared",
-			ParentID: "shared-root",
 			Path:     "Shared/shared.txt",
 			ItemType: ItemTypeFile,
 			Hash:     "hash-shared",
@@ -103,7 +99,6 @@ func TestSyncStore_GetRemoteStateByPath_RejectsMismatchedDriveWhenStateAlreadyCo
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  configuredDriveID,
 		ItemID:   "item-a",
-		ParentID: "root",
 		Path:     "docs/a.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash-a",
@@ -127,7 +122,6 @@ func TestSyncStore_CommitObservation_UpdatesPerRowDriveOwnershipWithoutOtherMeta
 
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		ItemID:   "item-shared",
-		ParentID: "shared-root",
 		Path:     "Shared/shared.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash-shared",
@@ -139,7 +133,6 @@ func TestSyncStore_CommitObservation_UpdatesPerRowDriveOwnershipWithoutOtherMeta
 	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  sharedDriveID,
 		ItemID:   "item-shared",
-		ParentID: "shared-root",
 		Path:     "Shared/shared.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash-shared",

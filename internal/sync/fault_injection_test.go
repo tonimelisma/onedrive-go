@@ -45,7 +45,7 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 		Type:   ActionUpload,
 		Path:   "file.txt",
 		ItemID: "item-1",
-		View:   &PathView{Remote: &RemoteState{ItemID: "parent", ParentID: "root"}},
+		View:   &PathView{Remote: &RemoteState{ItemID: "parent"}},
 	}
 	ta := dg.Add(action, 0, nil)
 	if ta != nil {

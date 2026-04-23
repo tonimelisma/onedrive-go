@@ -28,10 +28,6 @@ func validateBlockScope(block *BlockScope) error {
 	if !block.Key.PersistsInBlockScopes() {
 		return fmt.Errorf("sync: upserting block scope %s: read boundaries belong in observation_issues, not block_scopes", block.Key.String())
 	}
-
-	if block.BlockedAt.IsZero() {
-		return fmt.Errorf("sync: upserting block scope %s: missing blocked_at", block.Key.String())
-	}
 	if block.TrialInterval <= 0 {
 		return fmt.Errorf("sync: upserting block scope %s: timed scope requires positive trial interval", block.Key.String())
 	}
@@ -62,10 +58,9 @@ func upsertBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, block *
 
 	_, err := runner.ExecContext(ctx,
 		`INSERT OR REPLACE INTO block_scopes
-			(scope_key, blocked_at, trial_interval, next_trial_at)
-		VALUES (?, ?, ?, ?)`,
+			(scope_key, trial_interval, next_trial_at)
+		VALUES (?, ?, ?)`,
 		block.Key.String(),
-		block.BlockedAt.UnixNano(),
 		int64(block.TrialInterval),
 		nextTrialAtNano,
 	)

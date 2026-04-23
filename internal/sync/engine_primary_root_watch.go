@@ -28,6 +28,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		}()
 	case primaryRootObservationDriveRoot:
 		remoteObs := NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
+		remoteObs.SetItemClient(rt.engine.itemsClient)
 		rt.remoteObs = remoteObs
 		wakeCh := rt.startSocketIOWakeSource(ctx)
 

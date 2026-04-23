@@ -68,7 +68,6 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 
 	assert.Equal(t, driveID, items[0].DriveID)
 	assert.Equal(t, "item1", items[0].ItemID)
-	assert.Equal(t, "parent1", items[0].ParentID)
 	assert.Equal(t, "docs/file.txt", items[0].Path)
 	assert.Equal(t, ItemTypeFile, items[0].ItemType)
 	assert.Equal(t, "qxh1", items[0].Hash)
@@ -404,6 +403,7 @@ func TestShouldRunFullRemoteRefresh_Overdue(t *testing.T) {
 		t.Context(),
 		e.driveID,
 		clock.Now().Add(-fullRemoteRefreshInterval-time.Minute),
+		remoteObservationModeDelta,
 	))
 
 	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
@@ -422,6 +422,7 @@ func TestShouldRunFullRemoteRefresh_WithinCadence(t *testing.T) {
 		t.Context(),
 		e.driveID,
 		clock.Now().Add(-23*time.Hour),
+		remoteObservationModeDelta,
 	))
 
 	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
@@ -439,6 +440,7 @@ func TestFullRemoteRefreshDelay_UsesPersistedTimestamp(t *testing.T) {
 		t.Context(),
 		e.driveID,
 		clock.Now().Add(-23*time.Hour),
+		remoteObservationModeDelta,
 	))
 
 	delay, err := e.fullRemoteRefreshDelay(t.Context())

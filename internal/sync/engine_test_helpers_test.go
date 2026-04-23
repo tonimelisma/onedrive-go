@@ -441,14 +441,11 @@ func setTestBlockScope(t *testing.T, eng *testEngine, block *BlockScope) {
 
 	require.NotNil(t, block)
 
-	if block.BlockedAt.IsZero() {
-		block.BlockedAt = eng.nowFunc()
-	}
 	if block.TrialInterval <= 0 {
 		block.TrialInterval = time.Minute
 	}
 	if block.NextTrialAt.IsZero() {
-		block.NextTrialAt = block.BlockedAt.Add(block.TrialInterval)
+		block.NextTrialAt = eng.nowFunc().Add(block.TrialInterval)
 	}
 	require.NoError(t, eng.baseline.UpsertBlockScope(context.Background(), block))
 	if eng.runtime != nil {

@@ -62,7 +62,7 @@ func TestSinglePathObservationFindingsBatch_UnreadableDescendantKeepsBoundaryIss
 func TestRootRemoteReadDeniedObservationFindingsBatch_CreatesBoundaryIssue(t *testing.T) {
 	t.Parallel()
 
-	batch := rootRemoteReadDeniedObservationFindingsBatch(driveid.New(testDriveID), assert.AnError)
+	batch := rootRemoteReadDeniedObservationFindingsBatch(driveid.New(testDriveID))
 
 	require.Len(t, batch.Issues, 1)
 	assert.Equal(t, "/", batch.Issues[0].Path)

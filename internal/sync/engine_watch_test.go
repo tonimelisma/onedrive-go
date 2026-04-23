@@ -655,7 +655,6 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	ctx := t.Context()
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           SKService(),
-		BlockedAt:     eng.nowFunc(),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   eng.nowFunc().Add(5 * time.Second),
 	})
@@ -664,7 +663,6 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 		ActionType:    ActionUpload,
 		ConditionType: IssueServiceOutage,
 		ScopeKey:      SKService(),
-		LastError:     "held by service scope",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
@@ -673,7 +671,6 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 		Path:          "retry.txt",
 		ActionType:    ActionDownload,
 		ConditionType: IssueServiceOutage,
-		LastError:     "retry later",
 	}, func(_ int) time.Duration {
 		return 5 * time.Second
 	})
@@ -811,6 +808,7 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 		t.Context(),
 		driveid.New(engineTestDriveID),
 		clock.Now().Add(-fullRemoteRefreshInterval+15*time.Minute),
+		remoteObservationModeDelta,
 	))
 
 	watchCtx, cancel := context.WithCancel(t.Context())
