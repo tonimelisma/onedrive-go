@@ -10,23 +10,23 @@ The control plane owns multi-drive sync lifecycle. It sits above the
 single-drive engine in `internal/sync` and answers questions the engine should
 not answer:
 
-- which drives are active right now
-- how those drives are started and stopped
-- how control-socket reload changes the active drive set
+- which runtime mounts are active right now
+- how those mounts are started and stopped
+- how control-socket reload changes the active mount set
 - how live control-socket requests are serialized through the running control loop
-- how per-drive failures are isolated from one another
+- how per-mount failures are isolated from one another
 
 `sync.go` is the CLI entrypoint for this layer. `internal/multisync` is the
 runtime package that implements it.
 
 ## Ownership Contract
 
-- Owns: Multi-drive sync lifecycle, drive-set resolution for sync, per-drive engine startup/shutdown, reload diffing, control-socket ownership, and per-drive panic/error isolation.
+- Owns: Multi-drive sync lifecycle, runtime mount-spec compilation, per-mount engine startup/shutdown, reload diffing, control-socket ownership, and per-mount panic/error isolation.
 - Does Not Own: Single-drive observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
-- Source of Truth: The current `config.Holder` snapshot plus the `runners` map owned by the watch-mode orchestrator loop.
-- Allowed Side Effects: Session creation, engine construction/closure, Unix control-socket bind/unlink, per-drive goroutine startup, live perf capture, and control-plane logging.
-- Mutable Runtime Owner: `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one drive.
-- Error Boundary: The control plane converts drive startup into structured per-drive startup outcomes, returns one-shot startup classification separately from completed `DriveReport` values, and keeps watch-runner failures isolated to the affected drive or log path. Engine-internal errors remain inside the single-drive boundary.
+- Source of Truth: The current `config.Holder` snapshot plus the runtime mount set and `runners` map owned by the watch-mode orchestrator loop.
+- Allowed Side Effects: Session creation, engine construction/closure, Unix control-socket bind/unlink, per-mount goroutine startup, live perf capture, and control-plane logging.
+- Mutable Runtime Owner: `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one mount.
+- Error Boundary: The control plane converts mount startup into structured per-drive startup outcomes, returns one-shot startup classification separately from completed `DriveReport` values, and keeps watch-runner failures isolated to the affected mount or log path. Engine-internal errors remain inside the single-drive boundary.
 
 ## Verified By
 
@@ -38,13 +38,37 @@ runtime package that implements it.
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected drives. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveDrive`, `TestOrchestrator_Reload_PausedDrive`, `TestOrchestrator_Reload_TimedPauseExpiry` |
 
+## Runtime Mount Specs
+
+The control plane now compiles resolved config drives into runtime `mountSpec`
+values before session creation and engine construction.
+
+In this increment, configured drives are still the only source of mounts, so
+every runtime mount is currently a standalone projection backed by one resolved
+drive. That seam exists so later increments can add shortcut child projections
+and managed mount inventory without keeping `ResolvedDrive` as the permanent
+runtime unit.
+
+Each current `mountSpec` owns:
+
+- stable runtime mount identity
+- stable reporting identity and selection index
+- local sync root and state DB path
+- remote drive/root identity for rooted mounts
+- resolved pause state and rooted-observation hints
+
+The engine remains drive-shaped in this increment. `mountSpec` therefore still
+carries a temporary resolved-drive adapter for `SessionRuntime` and
+`sync.NewDriveEngine(...)`. That compatibility hop is transitional and is the
+only place where `ResolvedDrive` remains the runtime constructor input.
+
 ## Boundary To The Engine
 
 The control plane does not observe, plan, execute, or persist sync state
 itself. Those responsibilities remain in the single-drive engine.
 
-- `internal/multisync` owns drive selection, session resolution, engine
-  construction, per-drive goroutines, reload, and shutdown.
+- `internal/multisync` owns runtime mount selection, session resolution, engine
+  construction, per-mount goroutines, reload, and shutdown.
 - `internal/sync` owns one-shot execution, watch-mode runtime state, conflict
   execution, retry/trial logic, scope lifecycle, and reconciliation.
 
@@ -63,12 +87,12 @@ for startup, shutdown, and reload.
 
 ### RunOnce
 
-`RunOnce` resolves sessions, builds one engine per configured drive, and runs
-all drives concurrently. Startup eligibility is classified per drive first,
-including paused drives. Runnable drives then produce one completed
+`RunOnce` compiles runtime mount specs, resolves sessions, builds one engine per
+mount, and runs all mounts concurrently. Startup eligibility is classified per
+mount first, including paused drives. Runnable drives then produce one completed
 `DriveReport` each, while startup-ineligible drives remain startup outcomes
 instead of synthetic completed reports. The control plane never aborts the
-whole pass because one drive failed; partial failure is isolated per drive.
+whole pass because one mount failed; partial failure is isolated per mount.
 Both startup results and completed reports carry a stable `SelectionIndex`
 matching the original selection order so repeated selectors for the same
 canonical drive remain distinct through orchestration, rendering, and
@@ -76,7 +100,7 @@ bookkeeping.
 
 ### RunWatch
 
-`RunWatch` starts one watch-mode engine per runnable non-paused drive and then owns the
+`RunWatch` starts one watch-mode engine per runnable non-paused mount and then owns the
 long-running control loop. It listens for:
 
 - `ctx.Done()` for shutdown
@@ -87,8 +111,8 @@ Pause semantics come from `config.Drive.IsPaused()` and
 not redefine them.
 
 Existing state DBs that fail store compatibility checks are reported as
-per-drive startup outcomes. Watch startup warns about those drives immediately,
-keeps healthy drives running, and exits non-zero only when no runnable drive
+per-drive startup outcomes. Watch startup warns about those mounts immediately,
+keeps healthy mounts running, and exits non-zero only when no runnable mount
 starts. A paused-only selection is a structured startup refusal, not a special
 string-only path.
 
@@ -137,15 +161,15 @@ Control-socket reload does four things in order:
 
 1. load config from disk
 2. clear expired timed pauses
-3. resolve the new active drive set
-4. diff that set against running drives
+3. compile the new active runtime mount set
+4. diff that set against running mounts
 
-Removed or newly paused drives are stopped and closed. Newly added or newly
-resumed drives are started when they are runnable; incompatible-store drives
-are warned and skipped without bouncing healthy runners. Already-running drives
+Removed or newly paused mounts are stopped and closed. Newly added or newly
+resumed mounts are started when they are runnable; incompatible-store mounts
+are warned and skipped without bouncing healthy runners. Already-running mounts
 remain running. When a
 timed pause has already expired by reload time, the config keys are cleaned up
-but the running drive is not bounced.
+but the running mount is not bounced.
 
 ## Runtime Ownership
 
@@ -153,20 +177,20 @@ The control plane has one mutable runtime structure in watch mode: the active
 runner set.
 
 - The `RunWatch` select loop is the single writer for the `runners` map.
-- `startWatchRunner` creates one goroutine per running drive. That goroutine owns closing the runner's `done` channel exactly once on exit.
+- `startWatchRunner` creates one goroutine per running mount. That goroutine owns closing the runner's `done` channel exactly once on exit.
 - The control command channel is internal to `RunWatch`; socket handlers send commands into that channel and wait for one response.
 - The control plane itself owns no timers; reload, stop, and perf capture are event-driven through control-socket requests and context cancellation.
-- The control plane owns live perf registration for active drives, but not the
+- The control plane owns live perf registration for active mounts, but not the
   counters themselves. `internal/perf` owns the aggregate/live snapshot state;
   the control plane only exposes that state through the local socket and
   forwards explicit capture requests into the owning runtime.
 
 ## `DriveRunner`
 
-`DriveRunner` wraps a single drive's sync function with panic recovery and
-error isolation. One drive panicking must become one isolated drive outcome,
+`DriveRunner` wraps a single mount's sync function with panic recovery and
+error isolation. One mount panicking must become one isolated drive outcome,
 not
-a process-wide crash or a cross-drive failure cascade.
+a process-wide crash or a cross-mount failure cascade.
 
 ## CLI Contract
 
@@ -176,20 +200,20 @@ constructs an `Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
 - `--watch` selects daemon mode
 - `--download-only` and `--upload-only` select sync mode
 - `--dry-run` and `--full` apply only to one-shot mode
-- first SIGINT/SIGTERM cancels the shared watch contexts and lets each drive's
+- first SIGINT/SIGTERM cancels the shared watch contexts and lets each mount's
   engine seal new admission and follow its normal shutdown path
 - second signal forces exit
 
 No timer escalates the first signal; forced exit is owned only by the second
 signal.
 
-The CLI command does not reach into per-drive engine internals. It only speaks
+The CLI command does not reach into per-mount engine internals. It only speaks
 to the control-plane boundary.
 
 ## Design Constraints
 
-- No drive-to-drive coordination state exists in memory or in SQLite.
-- Each drive gets its own engine instance and state DB.
+- No mount-to-mount coordination state exists in memory or in SQLite.
+- Each mount gets its own engine instance and state DB.
 - Session creation goes through `driveops.SessionRuntime`, which remains the
   single owner of token-source caching.
 - Reload updates config through one shared `config.Holder`, so both the
@@ -202,5 +226,5 @@ to the control-plane boundary.
   package made both harder to reason about.
 - **Always use the same top-level path**: one drive and many drives share the
   same shutdown, reload, and panic-isolation semantics.
-- **Per-drive isolation is explicit**: the control plane collects one report
-  per drive and one panic cannot poison unrelated drives.
+- **Per-mount isolation is explicit**: the control plane collects one report
+  per mount and one panic cannot poison unrelated mounts.

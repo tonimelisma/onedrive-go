@@ -286,7 +286,7 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
-		if req.Drive.SyncDir == rd1.SyncDir {
+		if req.Mount.syncRoot == rd1.SyncDir {
 			return &mockEngine{err: errDelta}, nil
 		}
 
@@ -327,7 +327,7 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
-		if req.Drive.SyncDir == rd1.SyncDir {
+		if req.Mount.syncRoot == rd1.SyncDir {
 			return &mockEngine{shouldPanic: true}, nil
 		}
 
@@ -371,16 +371,19 @@ func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
 		return &mockEngine{report: &syncengine.Report{}}, nil
 	}
 
-	work, summary, reports := orch.prepareRunOnceWork(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	mounts, err := buildConfiguredMountSpecs(resolvedDrivesWithSelection(cfg.Drives))
+	require.NoError(t, err)
+
+	work, summary, reports := orch.prepareRunOnceWork(t.Context(), syncengine.SyncBidirectional, mounts, syncengine.RunOptions{})
 	require.Len(t, work, 1)
 	require.Len(t, summary.Results, 1)
 	require.Len(t, reports, 1)
 	require.Nil(t, reports[0])
 
-	_, err := work[0].work.fn(t.Context())
+	_, err = work[0].work.fn(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, captured)
-	assert.True(t, captured.Drive.Websocket)
+	assert.True(t, captured.Mount.enableWebsocket)
 	assert.True(t, captured.VerifyDrive)
 	assert.NotNil(t, captured.Session)
 	assert.NotNil(t, captured.Session.Meta)
@@ -412,15 +415,18 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	wr, err := orch.startWatchRunner(ctx, rd, syncengine.SyncDownloadOnly, syncengine.WatchOptions{})
+	mounts, err := buildConfiguredMountSpecs(resolvedDrivesWithSelection([]*config.ResolvedDrive{rd}))
+	require.NoError(t, err)
+
+	wr, err := orch.startWatchRunner(ctx, mounts[0], syncengine.SyncDownloadOnly, syncengine.WatchOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, captured)
-	assert.True(t, captured.Drive.Websocket)
+	assert.True(t, captured.Mount.enableWebsocket)
 	assert.True(t, captured.VerifyDrive)
 	assert.NotNil(t, captured.Session)
 	assert.NotNil(t, captured.Session.Meta)
-	assert.Equal(t, rd.RootItemID, captured.Drive.RootItemID)
-	assert.Equal(t, rd.CanonicalID.Email(), captured.Drive.CanonicalID.Email())
+	assert.Equal(t, rd.RootItemID, captured.Mount.remoteRootItemID)
+	assert.Equal(t, rd.CanonicalID.Email(), captured.Mount.accountEmail)
 
 	select {
 	case <-started:
@@ -482,7 +488,7 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
-		if req.Drive.SyncDir == rd1.SyncDir {
+		if req.Mount.syncRoot == rd1.SyncDir {
 			return nil, errors.New("open sync store: corrupted database")
 		}
 
@@ -764,7 +770,7 @@ func TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts
 
 	watchStarted := make(chan struct{})
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
-		if req.Drive.CanonicalID == rd2.CanonicalID {
+		if req.Mount.canonicalID == rd2.CanonicalID {
 			return nil, &syncengine.StateStoreIncompatibleError{Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema}
 		}
 
