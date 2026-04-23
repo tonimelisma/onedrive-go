@@ -207,19 +207,11 @@ func (flow *engineFlow) replaceActiveScopes(blocks []ActiveScope) {
 	flow.activeScopes = append(flow.activeScopes, blocks...)
 }
 
-func (rt *watchRuntime) replaceActiveScopes(blocks []ActiveScope) {
-	rt.engineFlow.replaceActiveScopes(blocks)
-}
-
 func (flow *engineFlow) upsertActiveScope(block *ActiveScope) {
 	flow.activeScopesMu.Lock()
 	defer flow.activeScopesMu.Unlock()
 
 	flow.activeScopes = UpsertScope(flow.activeScopes, block)
-}
-
-func (rt *watchRuntime) upsertActiveScope(block *ActiveScope) {
-	rt.engineFlow.upsertActiveScope(block)
 }
 
 func (flow *engineFlow) removeActiveScope(key ScopeKey) {
@@ -236,19 +228,11 @@ func (flow *engineFlow) lookupActiveScope(key ScopeKey) (ActiveScope, bool) {
 	return LookupScope(flow.activeScopes, key)
 }
 
-func (rt *watchRuntime) lookupActiveScope(key ScopeKey) (ActiveScope, bool) {
-	return rt.engineFlow.lookupActiveScope(key)
-}
-
 func (flow *engineFlow) hasActiveScope(key ScopeKey) bool {
 	flow.activeScopesMu.RLock()
 	defer flow.activeScopesMu.RUnlock()
 
 	return HasScope(flow.activeScopes, key)
-}
-
-func (rt *watchRuntime) hasActiveScope(key ScopeKey) bool {
-	return rt.engineFlow.hasActiveScope(key)
 }
 
 func (flow *engineFlow) findBlockingScope(ta *TrackedAction) ScopeKey {
@@ -266,8 +250,4 @@ func (flow *engineFlow) snapshotActiveScopes() []ActiveScope {
 	copy(blocks, flow.activeScopes)
 
 	return blocks
-}
-
-func (rt *watchRuntime) snapshotActiveScopes() []ActiveScope {
-	return rt.engineFlow.snapshotActiveScopes()
 }
