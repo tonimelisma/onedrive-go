@@ -13,7 +13,7 @@ const (
 	admissionHoldScope
 )
 
-type AdmissionDecision struct {
+type admissionDecision struct {
 	Action        *TrackedAction
 	Kind          admissionDecisionKind
 	ScopeKey      ScopeKey
@@ -37,8 +37,8 @@ func (flow *engineFlow) admitReady(
 func (flow *engineFlow) decideAdmission(
 	now time.Time,
 	ready []*TrackedAction,
-) []AdmissionDecision {
-	decisions := make([]AdmissionDecision, 0, len(ready))
+) []admissionDecision {
+	decisions := make([]admissionDecision, 0, len(ready))
 
 	for _, ta := range ready {
 		if ta == nil {
@@ -54,8 +54,8 @@ func (flow *engineFlow) decideAdmission(
 	return decisions
 }
 
-func (flow *engineFlow) newAdmissionDecision(ta *TrackedAction) AdmissionDecision {
-	decision := AdmissionDecision{
+func (flow *engineFlow) newAdmissionDecision(ta *TrackedAction) admissionDecision {
+	decision := admissionDecision{
 		Action:       ta,
 		Kind:         admissionDispatchNow,
 		RetryWorkKey: retryWorkKeyForAction(&ta.Action),
@@ -72,7 +72,7 @@ func (flow *engineFlow) newAdmissionDecision(ta *TrackedAction) AdmissionDecisio
 func (flow *engineFlow) applyPersistedRetryAdmission(
 	now time.Time,
 	ta *TrackedAction,
-	decision *AdmissionDecision,
+	decision *admissionDecision,
 ) {
 	if ta == nil || decision == nil {
 		return
@@ -99,7 +99,7 @@ func (flow *engineFlow) applyPersistedRetryAdmission(
 
 func (flow *engineFlow) applyActiveScopeAdmission(
 	ta *TrackedAction,
-	decision *AdmissionDecision,
+	decision *admissionDecision,
 ) {
 	if ta == nil || decision == nil || decision.Kind != admissionDispatchNow {
 		return
@@ -120,7 +120,7 @@ func (flow *engineFlow) applyActiveScopeAdmission(
 func (flow *engineFlow) applyAdmissionDecisions(
 	ctx context.Context,
 	watch *watchRuntime,
-	decisions []AdmissionDecision,
+	decisions []admissionDecision,
 ) ([]*TrackedAction, error) {
 	var dispatch []*TrackedAction
 
@@ -158,7 +158,7 @@ func (flow *engineFlow) applyAdmissionDecisions(
 
 func (flow *engineFlow) applyAdmissionScopeClear(
 	ctx context.Context,
-	decision *AdmissionDecision,
+	decision *admissionDecision,
 ) error {
 	if decision == nil || decision.ClearScopeKey.IsZero() {
 		return nil
@@ -177,7 +177,7 @@ func (flow *engineFlow) applyAdmissionScopeClear(
 func (flow *engineFlow) persistHeldScopeDecision(
 	ctx context.Context,
 	ta *TrackedAction,
-	decision *AdmissionDecision,
+	decision *admissionDecision,
 ) error {
 	if ta == nil || decision == nil || decision.ScopeKey.IsZero() {
 		return nil

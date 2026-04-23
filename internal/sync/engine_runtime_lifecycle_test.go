@@ -278,6 +278,31 @@ func TestEngineFlow_NormalizePersistedScopes_DiscardsEmptyScopeWithoutBlockedWor
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 }
 
+// Validates: R-2.10.5
+func TestEngineFlow_LoadActiveScopes_PopulatesRuntimeLifecycleWorkingSet(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	flow := rt.engineFlow
+	scopeKey := SKQuotaOwn()
+	now := eng.nowFn()
+
+	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
+		Key:           scopeKey,
+		BlockedAt:     now.Add(-time.Minute),
+		TrialInterval: time.Minute,
+		NextTrialAt:   now.Add(time.Minute),
+	}))
+
+	require.NoError(t, flow.loadActiveScopes(t.Context(), rt))
+
+	assert.True(t, rt.hasActiveScope(scopeKey))
+	activeScopes := rt.snapshotActiveScopes()
+	require.Len(t, activeScopes, 1)
+	assert.Equal(t, scopeKey, activeScopes[0].Key)
+}
+
 // Validates: R-2.10.33
 func TestEngineFlow_NormalizePersistedScopes_RemovesStaleScopeAndPreservesReadyRetryWork(t *testing.T) {
 	t.Parallel()
