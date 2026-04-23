@@ -763,6 +763,29 @@ func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
 	testWatchRuntime(t, e).refreshActive = false
 }
 
+func TestWatchPipelineCleanup_KeepsRefreshResultChannelUsable(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+
+	pipe, err := rt.initWatchInfra(t.Context(), SyncDownloadOnly, WatchOptions{})
+	require.NoError(t, err)
+	pipe.cleanup()
+
+	done := make(chan struct{})
+	go func() {
+		rt.finishFullRemoteRefresh(context.Background(), &remoteRefreshResult{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "watch cleanup left refresh result senders blocked")
+	}
+}
+
 func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 	t.Parallel()
 

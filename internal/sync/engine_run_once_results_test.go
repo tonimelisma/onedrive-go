@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -243,4 +244,51 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReady
 	require.NoError(t, err)
 	assert.Empty(t, outbox, "canceled shutdown completion should consume newly-ready dependents immediately")
 	assert.Equal(t, 0, runner.depGraph.InFlightCount(), "released dependents should complete as shutdown work after cancellation too")
+}
+
+// Validates: R-2.10.33
+func TestOneShotRunner_RunResultsLoopIdle_ReleasesDueHeldWorkBeforeBlocking(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	runner := newOneShotRunner(eng.Engine)
+	runner.depGraph = NewDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *TrackedAction, 1)
+
+	action := runner.depGraph.Add(&Action{
+		Type: ActionUpload,
+		Path: "retry.txt",
+	}, 1, nil)
+	require.NotNil(t, action)
+	runner.holdAction(action, heldReasonRetry, ScopeKey{}, eng.nowFn().Add(-time.Second))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	results := make(chan ActionCompletion, 1)
+	done := make(chan error, 1)
+
+	go func() {
+		defer close(results)
+		dispatched := <-runner.dispatchCh
+		results <- ActionCompletion{
+			ActionID:   dispatched.ID,
+			Path:       dispatched.Action.Path,
+			ActionType: dispatched.Action.Type,
+			Success:    true,
+		}
+		cancel()
+	}()
+
+	go func() {
+		done <- runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, results, nil)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "one-shot results loop did not release due held work while idle")
+	}
+
+	assert.Equal(t, 0, runner.depGraph.InFlightCount())
+	assert.Empty(t, runner.heldByKey)
 }

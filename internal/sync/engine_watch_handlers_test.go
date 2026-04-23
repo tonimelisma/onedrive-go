@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -178,6 +179,53 @@ func TestRunPublicationDrainStage_PublicationSuccessClearsRetryWorkAndAdmitsDepe
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
 }
 
+func TestRunPublicationDrainStage_PublicationSuccessDoesNotResetScopeFailureWindows(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
+		Action:   ActionDownload,
+		Success:  true,
+		Path:     "cleanup.txt",
+		DriveID:  driveID,
+		ItemID:   "cleanup-item",
+		ParentID: "root",
+		ItemType: ItemTypeFile,
+	}))
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	rt.initializeRuntimeState(&runtimePlan{})
+	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
+	rt.scopeState.UpdateScope(&ActionCompletion{
+		Path:       "service.txt",
+		ActionType: ActionUpload,
+		DriveID:    driveID,
+		HTTPStatus: 503,
+		ErrMsg:     "service unavailable",
+	})
+	require.Contains(t, rt.scopeState.windows, SKService())
+
+	publication := rt.depGraph.Add(&Action{
+		Type:    ActionCleanup,
+		Path:    "cleanup.txt",
+		DriveID: driveID,
+		ItemID:  "cleanup-item",
+	}, 1, nil)
+	require.NotNil(t, publication)
+
+	outbox, err := rt.runPublicationDrainStage(ctx, rt, bl, []*TrackedAction{publication})
+	require.NoError(t, err)
+	assert.Empty(t, outbox)
+	assert.Contains(t, rt.scopeState.windows, SKService(),
+		"publication-only successes must not clear unrelated scope failure windows")
+}
+
 // Validates: R-2.10.5, R-2.10.33
 func TestRunPublicationDrainStage_PersistsRetryWorkOnPublicationCommitFailure(t *testing.T) {
 	t.Parallel()
@@ -297,4 +345,61 @@ func TestRunPublicationDrainStage_TerminatesWhenPublicationRetryPersistenceFails
 	assert.Empty(t, outbox)
 	assert.Empty(t, rt.heldByKey)
 	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "publication failure must terminate instead of pretending the unresolved node was handled")
+}
+
+func TestWatchRuntime_HandleWatchSkippedSignal_ShutdownCancellationIsNonFatal(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	done, err := rt.handleWatchSkippedSignal(ctx, []SkippedItem{{
+		Path:   "bad?.txt",
+		Reason: IssueInvalidFilename,
+		Detail: "invalid filename",
+	}}, true)
+
+	require.NoError(t, err)
+	assert.False(t, done)
+}
+
+func TestWatchRuntime_HandleWatchHeldRelease_CompletesReleasedConcreteActionsOnReductionFailure(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+	now := eng.nowFunc()
+
+	rt.initializeRuntimeState(&runtimePlan{})
+
+	concrete := rt.depGraph.Add(&Action{
+		Type: ActionUpload,
+		Path: "retry.txt",
+	}, 1, nil)
+	require.NotNil(t, concrete)
+	rt.holdAction(concrete, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+
+	publication := rt.depGraph.Add(&Action{
+		Type:    ActionCleanup,
+		Path:    "cleanup.txt",
+		DriveID: eng.driveID,
+		ItemID:  "cleanup-item",
+	}, 2, nil)
+	require.NotNil(t, publication)
+	rt.holdAction(publication, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+
+	require.NoError(t, eng.baseline.Close(ctx))
+
+	err := rt.handleWatchHeldRelease(ctx, &watchPipeline{bl: &Baseline{}}, false)
+	require.ErrorContains(t, err, "record retry_work")
+	assert.Empty(t, rt.currentOutbox(), "released frontier should be shutdown-completed when reduction fails")
+	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "only the publication action should remain unresolved on fail-closed termination")
+
+	_, concretePresent := rt.depGraph.Get(1)
+	assert.False(t, concretePresent)
+	_, publicationPresent := rt.depGraph.Get(2)
+	assert.True(t, publicationPresent)
 }

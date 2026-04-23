@@ -161,6 +161,9 @@ Once one-shot shutdown has started, late worker completions no longer re-enter
 the normal outbox path. The engine runs them through the same shutdown
 completion boundary watch drain uses, immediately collapsing any newly-ready
 frontier back into shutdown completion instead of handing it to dispatch.
+Likewise, one-shot idle waiting must release any already-due held retry or
+trial work before blocking on worker completions; held-work timing remains part
+of the shared engine runtime, not a watch-only side path.
 
 Full-remote-refresh cadence is restart-safe even when a full remote refresh returns
 no delta cursor. The engine still advances the persisted cadence in
@@ -207,6 +210,11 @@ distinct shutdown shell instead of routing bootstrap, idle, and outbox cases
 through overlapping wrappers.
 Engine debug events expose those lifecycle points for tests and diagnostics
 only; they do not own or redirect control flow.
+Refresh timer callbacks and full-refresh goroutines signal through stable
+runtime-owned channels for the lifetime of the watch session. The watch loop
+disables select cases by phase instead of mutating those channel pointers
+mid-shutdown, so asynchronous senders never race the single-owner runtime over
+which signal channel is authoritative.
 
 Local watcher events, remote delta batches, websocket wakes, and full remote
 refresh results are scheduler hints only. After debounce or wake, watch

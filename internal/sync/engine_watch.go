@@ -205,8 +205,6 @@ func (rt *watchRuntime) initWatchInfra(
 		rt.remoteBatches = nil
 		rt.skippedItems = nil
 		rt.activeObservers = 0
-		rt.refreshCh = nil
-		rt.refreshResults = nil
 		rt.remoteObs = nil
 		rt.localObs = nil
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventWatchStopped})
