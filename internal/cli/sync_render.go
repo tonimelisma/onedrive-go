@@ -7,10 +7,9 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-// printDriveReports prints sync reports for all drives. When there's only
-// one drive, the output is identical to the pre-Orchestrator format. For
-// multiple drives, each drive's output is prefixed with a header.
-func printDriveReports(reports []*multisync.DriveReport, cc *CLIContext) {
+// printMountReports prints sync reports for all selected runtime mounts. When
+// there's only one mount, the output is identical to the single-sync case.
+func printMountReports(reports []*multisync.MountReport, cc *CLIContext) {
 	multiDrive := len(reports) > 1
 
 	for _, dr := range reports {
@@ -19,7 +18,7 @@ func printDriveReports(reports []*multisync.DriveReport, cc *CLIContext) {
 		}
 
 		if dr.Err != nil {
-			cc.Statusf("Error: %s\n", formatDriveReportErrorMessage(dr))
+			cc.Statusf("Error: %s\n", formatMountReportErrorMessage(dr))
 
 			continue
 		}
@@ -32,7 +31,7 @@ func printDriveReports(reports []*multisync.DriveReport, cc *CLIContext) {
 
 func printRunOnceResult(result multisync.RunOnceResult, cc *CLIContext) {
 	multiDrive := result.Startup.SelectedCount() > 1
-	reportBySelection := make(map[int]*multisync.DriveReport, len(result.Reports))
+	reportBySelection := make(map[int]*multisync.MountReport, len(result.Reports))
 	for _, report := range result.Reports {
 		if report == nil {
 			continue
@@ -46,9 +45,9 @@ func printRunOnceResult(result multisync.RunOnceResult, cc *CLIContext) {
 			cc.Statusf("\n--- %s ---\n", startup.DisplayName)
 		}
 
-		if startup.Status != multisync.DriveStartupRunnable {
+		if startup.Status != multisync.MountStartupRunnable {
 			label := "Skipped"
-			if startup.Status != multisync.DriveStartupPaused {
+			if startup.Status != multisync.MountStartupPaused {
 				label = "Error"
 			}
 			cc.Statusf("%s: %s\n", label, formatStartupResultMessage(startup))
@@ -57,12 +56,12 @@ func printRunOnceResult(result multisync.RunOnceResult, cc *CLIContext) {
 
 		report := reportBySelection[startup.SelectionIndex]
 		if report == nil {
-			cc.Statusf("Error: missing sync report for drive startup result\n")
+			cc.Statusf("Error: missing sync report for mount startup result\n")
 			continue
 		}
 
 		if report.Err != nil {
-			cc.Statusf("Error: %s\n", formatDriveReportErrorMessage(report))
+			cc.Statusf("Error: %s\n", formatMountReportErrorMessage(report))
 			continue
 		}
 
@@ -72,9 +71,8 @@ func printRunOnceResult(result multisync.RunOnceResult, cc *CLIContext) {
 	}
 }
 
-// driveReportsError returns an error if any drive report has an error.
-// Returns nil when all drives succeeded.
-func driveReportsError(reports []*multisync.DriveReport) error {
+// mountReportsError returns an error if any mount report has an error.
+func mountReportsError(reports []*multisync.MountReport) error {
 	var firstErr error
 
 	failCount := 0
@@ -97,12 +95,12 @@ func driveReportsError(reports []*multisync.DriveReport) error {
 		return firstErr
 	}
 
-	return fmt.Errorf("%d of %d drives failed: %w", failCount, len(reports), firstErr)
+	return fmt.Errorf("%d of %d mounts failed: %w", failCount, len(reports), firstErr)
 }
 
 func runOnceResultError(result multisync.RunOnceResult) error {
 	if result.Startup.AllPaused() {
-		return fmt.Errorf("all selected drives are paused — run 'onedrive-go resume' to unpause")
+		return fmt.Errorf("all selected mounts are paused — run 'onedrive-go resume' to unpause")
 	}
 
 	var firstErr error
@@ -135,14 +133,14 @@ func runOnceResultError(result multisync.RunOnceResult) error {
 		return firstErr
 	}
 
-	return fmt.Errorf("%d of %d selected drives failed or were skipped: %w",
+	return fmt.Errorf("%d of %d selected mounts failed or were skipped: %w",
 		failCount,
 		result.Startup.SelectedCount(),
 		firstErr,
 	)
 }
 
-func formatDriveReportErrorMessage(dr *multisync.DriveReport) string {
+func formatMountReportErrorMessage(dr *multisync.MountReport) string {
 	if dr == nil || dr.Err == nil {
 		return ""
 	}

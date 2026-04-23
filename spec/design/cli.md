@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-2.3.3 [designed], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.11 [designed]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.11 [verified]
 
 ## Overview
 
@@ -55,16 +55,18 @@ are inserted, updated, pruned, and validated.
 
 There is no `resolve` command family anymore.
 
-Configured shared-root drives keep `/` anchored at the configured shared root,
-not the backing drive root. Path-oriented file operations such as `mkdir`
-therefore walk and mutate only inside that configured subtree.
+Configured standalone rooted-subtree mounts keep `/` anchored at the configured
+mounted root, not the backing drive root. Path-oriented file operations such
+as `mkdir` therefore walk and mutate only inside that configured subtree.
 
 ## Status And Read-Only Sync State
 
 `status` is intentionally read-only and account-centric. It is the only
 sync-health command.
 
-- account and drive identity come from the validated config+catalog snapshot
+- account identity comes from the validated config+catalog snapshot
+- runtime mount identity comes from configured standalone drives plus managed
+  child-mount records in `mounts.json`
 - sync-state snapshots come from store-owned raw authority reads
 - the CLI renders status conditions from the sync-owned stored-condition
   projection, using the sync-owned `ConditionKey` taxonomy and ordering helpers
@@ -79,9 +81,18 @@ sync-health command.
 - live perf comes from the active owner over the control socket when requested
 
 When both `--account` and `--drive` selectors are present, `status` applies
-them as an intersection. A row must satisfy both selectors to appear; the CLI
-does not widen the result to the union of independently matched accounts and
-drives.
+them as an intersection. `--drive` still selects configured standalone parent
+drives, but each selected parent row automatically includes its attached child
+mount rows. The CLI does not widen the result to the union of independently
+matched accounts and configured drives.
+
+The runtime status read model is now mount-shaped:
+
+- standalone configured drives render as standalone mount rows
+- managed shortcut child mounts render as child rows immediately under their
+  parent drive row
+- child rows carry their own sync-state snapshot and live perf overlay
+- parent rows do not absorb child state or child perf totals
 
 The target `status` surface projects the full sync model directly from:
 
@@ -115,6 +126,13 @@ it for:
 
 One-shot owners expose status/perf and reject live control mutations. Watch
 owners expose the remaining daemon controls above.
+
+The control-socket protocol is now mount-shaped:
+
+- `GET /v1/status` returns `mounts`, not `drives`
+- `GET /v1/perf` returns per-mount live snapshots keyed by mount ID
+- the CLI status/perf overlay matches those mount IDs against the runtime mount
+  rows it renders
 
 The socket is no longer a sync-decision submission surface because the
 architecture no longer has manual conflict or delete-approval workflows.

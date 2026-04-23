@@ -110,7 +110,7 @@ func ensureNoLiveStateResetOwner(ctx context.Context, canonicalID driveid.Canoni
 		return nil
 	}
 
-	for _, drive := range probe.client.status.Drives {
+	for _, drive := range probe.client.status.Mounts {
 		if strings.EqualFold(drive, canonicalID.String()) {
 			return fmt.Errorf(
 				"cannot reset sync state while a sync owner is active for %s (owner mode: %s); stop sync first",

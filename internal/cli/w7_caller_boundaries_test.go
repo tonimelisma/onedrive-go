@@ -151,7 +151,7 @@ func TestRunStatusCommand_AuthRequiredOnlyJSON(t *testing.T) {
 	assert.Equal(t, "orphan@example.com", decoded.Accounts[0].Email)
 	assert.Equal(t, authStateAuthenticationNeeded, decoded.Accounts[0].AuthState)
 	assert.Equal(t, string(authReasonMissingLogin), decoded.Accounts[0].AuthReason)
-	assert.Empty(t, decoded.Accounts[0].Drives)
+	assert.Empty(t, decoded.Accounts[0].Mounts)
 }
 
 // Validates: R-3.5.1, R-3.1.5

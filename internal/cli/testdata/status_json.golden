@@ -6,8 +6,10 @@
       "auth_state": "ready",
       "display_name": "Alice Example",
       "org_name": "Contoso",
-      "drives": [
+      "mounts": [
         {
+          "mount_id": "personal:alice@example.com",
+          "projection_kind": "standalone",
           "canonical_id": "personal:alice@example.com",
           "display_name": "Alice Personal",
           "sync_dir": "/Users/alice/OneDrive",
@@ -66,8 +68,10 @@
       "auth_state": "authentication_required",
       "auth_reason": "invalid_saved_login",
       "auth_action": "Run 'onedrive-go login' to sign in.",
-      "drives": [
+      "mounts": [
         {
+          "mount_id": "business:bob@example.com",
+          "projection_kind": "standalone",
           "canonical_id": "business:bob@example.com",
           "display_name": "Bob Work",
           "sync_dir": "/Users/bob/WorkDrive",
@@ -77,7 +81,7 @@
     }
   ],
   "summary": {
-    "total_drives": 2,
+    "total_mounts": 2,
     "ready": 1,
     "paused": 1,
     "accounts_requiring_auth": 1,

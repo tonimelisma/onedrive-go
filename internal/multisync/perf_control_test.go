@@ -25,7 +25,7 @@ func TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture(t *testing.T) {
 	orch := NewOrchestrator(cfg)
 
 	orch.perfRuntime.Collector().RecordHTTPRequest(http.StatusOK, 15*time.Millisecond, nil)
-	driveCollector := orch.perfRuntime.RegisterDrive(rd.CanonicalID.String())
+	driveCollector := orch.perfRuntime.RegisterMount(rd.CanonicalID.String())
 	driveCollector.RecordTransfer(perf.TransferKindUpload, 256, 20*time.Millisecond)
 	driveCollector.RecordPlan(2, 5*time.Millisecond)
 
@@ -55,9 +55,9 @@ func TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture(t *testing.T) {
 	require.NoError(t, json.NewDecoder(statusResp.Body).Decode(&status))
 	assert.Equal(t, synccontrol.OwnerModeOneShot, status.OwnerMode)
 	assert.Equal(t, 1, status.Aggregate.HTTPRequestCount)
-	require.Contains(t, status.Drives, rd.CanonicalID.String())
-	assert.Equal(t, 1, status.Drives[rd.CanonicalID.String()].UploadCount)
-	assert.Equal(t, int64(256), status.Drives[rd.CanonicalID.String()].UploadBytes)
+	require.Contains(t, status.Mounts, rd.CanonicalID.String())
+	assert.Equal(t, 1, status.Mounts[rd.CanonicalID.String()].UploadCount)
+	assert.Equal(t, int64(256), status.Mounts[rd.CanonicalID.String()].UploadBytes)
 
 	outputDir := filepath.Join(t.TempDir(), "capture-bundle")
 	requestBody, err := json.Marshal(synccontrol.PerfCaptureRequest{

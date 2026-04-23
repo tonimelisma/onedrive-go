@@ -45,7 +45,8 @@ The most important repo-wide idea is ownership.
 - `internal/graphtransport` owns stateless Graph-facing HTTP transport profile construction.
 - `internal/driveops` owns `SessionRuntime`, authenticated sessions, and
   transfer operations.
-- `internal/multisync` owns multi-drive orchestration and control-socket
+- `internal/multisync` owns multi-mount orchestration, automatic shortcut
+  reconciliation, and control-socket
   lifecycle.
 - `internal/sync` owns the single-drive sync runtime and durable sync-state
   mutation rules.
@@ -163,7 +164,7 @@ reuse from collapsing into one owner.
 
 **Why are `multisync` and `sync` separate?**
 
-`multisync` owns multi-drive orchestration, startup eligibility classification,
+`multisync` owns multi-mount orchestration, startup eligibility classification,
 watch lifecycle, and the control socket. `sync` owns one drive's runtime,
 policy, and store mutation rules.
 

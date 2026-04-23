@@ -10,7 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
-// ResetStateDB deletes one per-drive state DB file family and recreates a
+// ResetStateDB deletes one per-mount state DB file family and recreates a
 // fresh canonical store in place.
 func ResetStateDB(ctx context.Context, dbPath string, logger *slog.Logger) error {
 	if logger != nil {
@@ -19,7 +19,7 @@ func ResetStateDB(ctx context.Context, dbPath string, logger *slog.Logger) error
 		)
 	}
 
-	if err := removeStateDBFiles(dbPath); err != nil {
+	if err := RemoveStateDBFiles(dbPath); err != nil {
 		return err
 	}
 
@@ -34,7 +34,8 @@ func ResetStateDB(ctx context.Context, dbPath string, logger *slog.Logger) error
 	return nil
 }
 
-func removeStateDBFiles(dbPath string) error {
+// RemoveStateDBFiles deletes the SQLite DB family rooted at dbPath.
+func RemoveStateDBFiles(dbPath string) error {
 	for _, candidate := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
 		if err := localpath.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove state DB file %s: %w", candidate, err)

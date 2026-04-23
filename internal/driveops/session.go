@@ -24,7 +24,7 @@ type Session struct {
 	Meta              *graph.Client // metadata ops (transport-level stall detection)
 	Transfer          *graph.Client // uploads/downloads (no client-level timeout)
 	DriveID           driveid.ID
-	RootItem          string
+	MountedRootItemID string
 	AccountEmailValue string
 
 	visibilityWaitSchedule []time.Duration
@@ -116,8 +116,8 @@ func NewSessionRuntime(holder *config.Holder, userAgent string, logger *slog.Log
 }
 
 // Session creates or retrieves an authenticated interactive Session for the
-// given resolved drive. Configured shared roots use a shared-target throttle
-// key so interactive metadata retries stay scoped to the concrete remote root.
+// given resolved drive. Mounted-root sessions use a root-scoped throttle key so
+// interactive metadata retries stay scoped to the concrete remote root.
 func (r *SessionRuntime) Session(ctx context.Context, rd *config.ResolvedDrive) (*Session, error) {
 	sessionCfg, err := syncMountSessionConfigForResolvedDrive(rd)
 	if err != nil {
@@ -172,7 +172,7 @@ func (r *SessionRuntime) session(
 		Meta:              meta,
 		Transfer:          transfer,
 		DriveID:           mount.DriveID,
-		RootItem:          mount.RootItemID,
+		MountedRootItemID: mount.RootItemID,
 		AccountEmailValue: mount.AccountEmail,
 	}, nil
 }
@@ -395,15 +395,15 @@ func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.It
 			return nil, fmt.Errorf("resolve root item: %w", err)
 		}
 
-		if s.hasSharedRoot() {
+		if s.hasMountedRoot() {
 			item.IsRoot = true
 		}
 
 		return item, nil
 	}
 
-	if s.hasSharedRoot() {
-		item, err := s.resolveItemFromSharedRoot(ctx, clean)
+	if s.hasMountedRoot() {
+		item, err := s.resolveItemFromMountedRoot(ctx, clean)
 		if err != nil {
 			return nil, fmt.Errorf("resolve item path %q: %w", clean, err)
 		}
@@ -503,8 +503,8 @@ func (s *Session) ListChildren(ctx context.Context, remotePath string) ([]graph.
 		return items, nil
 	}
 
-	if s.hasSharedRoot() {
-		parent, err := s.resolveItemFromSharedRoot(ctx, clean)
+	if s.hasMountedRoot() {
+		parent, err := s.resolveItemFromMountedRoot(ctx, clean)
 		if err != nil {
 			return nil, fmt.Errorf("list children for %q: %w", clean, err)
 		}
@@ -701,19 +701,19 @@ func (s *Session) RestoreItem(ctx context.Context, itemID string) (*graph.Item, 
 
 const driveRootItemID = "root"
 
-func (s *Session) hasSharedRoot() bool {
-	return s != nil && s.RootItem != "" && s.RootItem != driveRootItemID
+func (s *Session) hasMountedRoot() bool {
+	return s != nil && s.MountedRootItemID != "" && s.MountedRootItemID != driveRootItemID
 }
 
 func (s *Session) rootItemID() string {
-	if s.hasSharedRoot() {
-		return s.RootItem
+	if s.hasMountedRoot() {
+		return s.MountedRootItemID
 	}
 
 	return driveRootItemID
 }
 
-func (s *Session) resolveItemFromSharedRoot(ctx context.Context, remotePath string) (*graph.Item, error) {
+func (s *Session) resolveItemFromMountedRoot(ctx context.Context, remotePath string) (*graph.Item, error) {
 	currentID := s.rootItemID()
 	segments := strings.Split(remotePath, "/")
 	var current *graph.Item
@@ -738,7 +738,7 @@ func (s *Session) resolveItemFromSharedRoot(ctx context.Context, remotePath stri
 	}
 
 	if current == nil {
-		return nil, fmt.Errorf("resolve shared-root item %q: %w", remotePath, graph.ErrNotFound)
+		return nil, fmt.Errorf("resolve mounted-root item %q: %w", remotePath, graph.ErrNotFound)
 	}
 
 	return current, nil

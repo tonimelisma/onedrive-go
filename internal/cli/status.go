@@ -9,12 +9,12 @@ import (
 func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show sync status and drive health",
-		Long: `Display the status of all configured accounts and drives.
+		Short: "Show sync status and mount health",
+		Long: `Display the status of all configured accounts and runtime mounts.
 
-Status always shows the same per-drive sync-health contract for every displayed
-drive. Use --drive to filter which drives are shown and --verbose to expand
-sampled path and row lists.`,
+Status always shows the same per-mount sync-health contract for every displayed
+mount. Use --drive to filter which configured parent drive set is shown, and
+--verbose to expand sampled path and row lists.`,
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runStatus,
 	}

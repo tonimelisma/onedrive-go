@@ -19,9 +19,9 @@ func computeSummary(accounts []statusAccount) statusSummary {
 			s.AccountsRequiringAuth++
 		}
 
-		for j := range acct.Drives {
-			d := &acct.Drives[j]
-			s.TotalDrives++
+		for j := range acct.Mounts {
+			d := &acct.Mounts[j]
+			s.TotalMounts++
 
 			switch d.State {
 			case driveStateReady:
@@ -105,8 +105,8 @@ func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool, his
 		}
 	}
 
-	for _, drive := range acct.Drives {
-		if err := printDriveStatus(w, drive, history); err != nil {
+	for _, mount := range acct.Mounts {
+		if err := printMountStatus(w, mount, history); err != nil {
 			return err
 		}
 	}
@@ -174,34 +174,43 @@ func statusAccountLabel(acct *statusAccount) string {
 	return fmt.Sprintf("%s (%s)", acct.DisplayName, acct.Email)
 }
 
-func printDriveStatus(w io.Writer, drive statusDrive, history bool) error {
-	syncDir := drive.SyncDir
+func printMountStatus(w io.Writer, mount statusMount, history bool) error {
+	const childMountIndent = "    "
+
+	syncDir := mount.SyncDir
 	if syncDir == "" {
 		syncDir = syncDirNotSet
 	}
 
-	if err := writef(w, "  %s\n", statusDriveLabel(drive)); err != nil {
+	indent := "  "
+	detailIndent := childMountIndent
+	if mount.ParentMountID != "" {
+		indent = childMountIndent
+		detailIndent = "      "
+	}
+
+	if err := writef(w, "%s%s\n", indent, statusMountLabel(mount)); err != nil {
 		return err
 	}
-	if err := writef(w, "    Sync dir:  %s\n", syncDir); err != nil {
+	if err := writef(w, "%sSync dir:  %s\n", detailIndent, syncDir); err != nil {
 		return err
 	}
-	if err := writef(w, "    State:     %s\n", drive.State); err != nil {
+	if err := writef(w, "%sState:     %s\n", detailIndent, mount.State); err != nil {
 		return err
 	}
-	if drive.SyncState == nil {
+	if mount.SyncState == nil {
 		return nil
 	}
 
-	return printSyncStateText(w, drive.SyncState, history)
+	return printSyncStateText(w, detailIndent, mount.SyncState, history)
 }
 
-func statusDriveLabel(drive statusDrive) string {
-	if drive.DisplayName == "" || drive.DisplayName == drive.CanonicalID {
-		return drive.CanonicalID
+func statusMountLabel(mount statusMount) string {
+	if mount.DisplayName == "" || mount.DisplayName == mount.CanonicalID {
+		return mount.CanonicalID
 	}
 
-	return fmt.Sprintf("%s (%s)", drive.DisplayName, drive.CanonicalID)
+	return fmt.Sprintf("%s (%s)", mount.DisplayName, mount.CanonicalID)
 }
 
 func printStatusLiveDrives(w io.Writer, drives []statusLiveDrive) error {
@@ -222,35 +231,35 @@ func printStatusLiveDrives(w io.Writer, drives []statusLiveDrive) error {
 	return nil
 }
 
-func printSyncStateText(w io.Writer, ss *syncStateInfo, history bool) error {
+func printSyncStateText(w io.Writer, indent string, ss *syncStateInfo, history bool) error {
 	if ss == nil {
 		return nil
 	}
 
 	if ss.hasPersistentStatusData() || (ss.Perf == nil && ss.PerfUnavailableReason == "") {
-		if err := printSyncStateSummaryLines(w, ss); err != nil {
+		if err := printSyncStateSummaryLines(w, indent, ss); err != nil {
 			return err
 		}
-		if err := printSyncStateStoreLines(w, ss); err != nil {
+		if err := printSyncStateStoreLines(w, indent, ss); err != nil {
 			return err
 		}
-		if err := printDriveSyncSections(w, ss, history); err != nil {
+		if err := printMountSyncSections(w, indent, ss, history); err != nil {
 			return err
 		}
 	}
 
-	return printStatusPerfText(w, ss)
+	return printStatusPerfText(w, indent, ss)
 }
 
-func printSyncStateSummaryLines(w io.Writer, ss *syncStateInfo) error {
+func printSyncStateSummaryLines(w io.Writer, indent string, ss *syncStateInfo) error {
 	countLines := []struct {
 		count  int
 		format string
 	}{
-		{count: ss.FileCount, format: "    Files:     %d\n"},
-		{count: ss.RemoteDrift, format: "    Remote drift: %d items\n"},
-		{count: ss.ConditionCount, format: "    Conditions: %d\n"},
-		{count: ss.Retrying, format: "    Retrying:  %d items\n"},
+		{count: ss.FileCount, format: indent + "Files:     %d\n"},
+		{count: ss.RemoteDrift, format: indent + "Remote drift: %d items\n"},
+		{count: ss.ConditionCount, format: indent + "Conditions: %d\n"},
+		{count: ss.Retrying, format: indent + "Retrying:  %d items\n"},
 	}
 	for i := range countLines {
 		if err := writeOptionalStatusCountLine(w, countLines[i].count, countLines[i].format); err != nil {
@@ -261,7 +270,8 @@ func printSyncStateSummaryLines(w io.Writer, ss *syncStateInfo) error {
 	return nil
 }
 
-func printSyncStateStoreLines(w io.Writer, ss *syncStateInfo) error {
+func printSyncStateStoreLines(w io.Writer, _ string, ss *syncStateInfo) error {
+	_ = ss
 	return nil
 }
 
@@ -301,8 +311,8 @@ func printSummaryText(w io.Writer, s statusSummary) error {
 	}
 
 	if stateStr == "" {
-		return writef(w, "Summary: %d drives, %s\n", s.TotalDrives, extra)
+		return writef(w, "Summary: %d mounts, %s\n", s.TotalMounts, extra)
 	}
 
-	return writef(w, "Summary: %d drives (%s), %s\n", s.TotalDrives, stateStr, extra)
+	return writef(w, "Summary: %d mounts (%s), %s\n", s.TotalMounts, stateStr, extra)
 }

@@ -21,12 +21,14 @@ func goldenStatusAccounts() []statusAccount {
 			AuthState:   authStateReady,
 			DisplayName: "Alice Example",
 			OrgName:     "Contoso",
-			Drives: []statusDrive{
+			Mounts: []statusMount{
 				{
-					CanonicalID: "personal:alice@example.com",
-					DisplayName: "Alice Personal",
-					SyncDir:     "/Users/alice/OneDrive",
-					State:       driveStateReady,
+					MountID:        "personal:alice@example.com",
+					ProjectionKind: statusProjectionStandalone,
+					CanonicalID:    "personal:alice@example.com",
+					DisplayName:    "Alice Personal",
+					SyncDir:        "/Users/alice/OneDrive",
+					State:          driveStateReady,
 					SyncState: &syncStateInfo{
 						FileCount:      42,
 						ConditionCount: 3,
@@ -76,12 +78,14 @@ func goldenStatusAccounts() []statusAccount {
 			AuthState:  authStateAuthenticationNeeded,
 			AuthReason: string(authReasonInvalidSavedLogin),
 			AuthAction: authAction(authReasonInvalidSavedLogin),
-			Drives: []statusDrive{
+			Mounts: []statusMount{
 				{
-					CanonicalID: "business:bob@example.com",
-					DisplayName: "Bob Work",
-					SyncDir:     "/Users/bob/WorkDrive",
-					State:       driveStatePaused,
+					MountID:        "business:bob@example.com",
+					ProjectionKind: statusProjectionStandalone,
+					CanonicalID:    "business:bob@example.com",
+					DisplayName:    "Bob Work",
+					SyncDir:        "/Users/bob/WorkDrive",
+					State:          driveStatePaused,
 				},
 			},
 		},

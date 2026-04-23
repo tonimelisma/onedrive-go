@@ -21,9 +21,9 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-// --- driveReportsError ---
+// --- mountReportsError ---
 
-func TestDriveReportsError(t *testing.T) {
+func TestMountReportsError(t *testing.T) {
 	t.Parallel()
 
 	errDelta := fmt.Errorf("delta expired")
@@ -31,7 +31,7 @@ func TestDriveReportsError(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		reports []*multisync.DriveReport
+		reports []*multisync.MountReport
 		wantNil bool
 		wantMsg string // substring, only checked when wantNil is false
 	}{
@@ -42,21 +42,21 @@ func TestDriveReportsError(t *testing.T) {
 		},
 		{
 			name: "one success",
-			reports: []*multisync.DriveReport{
+			reports: []*multisync.MountReport{
 				{Report: &syncengine.Report{Mode: syncengine.SyncBidirectional}},
 			},
 			wantNil: true,
 		},
 		{
 			name: "one failure",
-			reports: []*multisync.DriveReport{
+			reports: []*multisync.MountReport{
 				{Err: errDelta},
 			},
 			wantMsg: "delta expired",
 		},
 		{
 			name: "reset required includes guidance",
-			reports: []*multisync.DriveReport{
+			reports: []*multisync.MountReport{
 				{
 					CanonicalID: driveid.MustCanonicalID("personal:reset@example.com"),
 					Err: &syncengine.StateStoreIncompatibleError{
@@ -67,20 +67,20 @@ func TestDriveReportsError(t *testing.T) {
 			wantMsg: "drive reset-sync-state --drive 'personal:reset@example.com'",
 		},
 		{
-			name: "multi-drive mixed",
-			reports: []*multisync.DriveReport{
+			name: "multi-mount mixed",
+			reports: []*multisync.MountReport{
 				{Report: &syncengine.Report{}},
 				{Err: errDelta},
 			},
-			wantMsg: "1 of 2 drives failed",
+			wantMsg: "1 of 2 mounts failed",
 		},
 		{
 			name: "all failures",
-			reports: []*multisync.DriveReport{
+			reports: []*multisync.MountReport{
 				{Err: errDelta},
 				{Err: errAuth},
 			},
-			wantMsg: "2 of 2 drives failed",
+			wantMsg: "2 of 2 mounts failed",
 		},
 	}
 
@@ -88,7 +88,7 @@ func TestDriveReportsError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := driveReportsError(tt.reports)
+			err := mountReportsError(tt.reports)
 			if tt.wantNil {
 				assert.NoError(t, err)
 			} else {
@@ -99,7 +99,7 @@ func TestDriveReportsError(t *testing.T) {
 	}
 }
 
-// --- printDriveReports ---
+// --- printMountReports ---
 
 // quietCC returns a CLIContext with Quiet=true for tests that call status-printing
 // functions. Only populates the Flags field — other fields are nil/zero.
@@ -125,24 +125,24 @@ func newSyncTestContext(parent context.Context, cfgPath string, statusWriter io.
 	return context.WithValue(parent, cliContextKey{}, cc)
 }
 
-func TestPrintDriveReports_SingleDrive_NoHeader(t *testing.T) {
+func TestPrintMountReports_SingleMount_NoHeader(t *testing.T) {
 	t.Parallel()
 
-	reports := []*multisync.DriveReport{
+	reports := []*multisync.MountReport{
 		{
 			DisplayName: "Personal",
 			Report:      &syncengine.Report{Mode: syncengine.SyncBidirectional},
 		},
 	}
 
-	// Should not panic or produce headers for single drive.
-	printDriveReports(reports, quietCC())
+	// Should not panic or produce headers for a single mount.
+	printMountReports(reports, quietCC())
 }
 
-func TestPrintDriveReports_MultiDrive_WithError(t *testing.T) {
+func TestPrintMountReports_MultiMount_WithError(t *testing.T) {
 	t.Parallel()
 
-	reports := []*multisync.DriveReport{
+	reports := []*multisync.MountReport{
 		{
 			DisplayName: "Personal",
 			Report:      &syncengine.Report{Mode: syncengine.SyncBidirectional},
@@ -154,7 +154,7 @@ func TestPrintDriveReports_MultiDrive_WithError(t *testing.T) {
 	}
 
 	// Should not panic. Output goes to stderr via statusf.
-	printDriveReports(reports, quietCC())
+	printMountReports(reports, quietCC())
 }
 
 // --- syncModeFromFlags ---
@@ -441,7 +441,7 @@ paused = true
 
 	err := runSync(cmd, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "all selected drives are paused")
+	assert.Contains(t, err.Error(), "all selected mounts are paused")
 }
 
 // Validates: R-6.6.4
@@ -506,13 +506,13 @@ sync_dir = %q
 
 		return multisync.RunOnceResult{
 			Startup: multisync.StartupSelectionSummary{
-				Results: []multisync.DriveStartupResult{{
+				Results: []multisync.MountStartupResult{{
 					CanonicalID: drives[0].CanonicalID,
 					DisplayName: drives[0].DisplayName,
-					Status:      multisync.DriveStartupRunnable,
+					Status:      multisync.MountStartupRunnable,
 				}},
 			},
-			Reports: []*multisync.DriveReport{
+			Reports: []*multisync.MountReport{
 				{
 					CanonicalID: drives[0].CanonicalID,
 					DisplayName: drives[0].DisplayName,
@@ -567,13 +567,13 @@ sync_dir = %q
 
 		return multisync.RunOnceResult{
 			Startup: multisync.StartupSelectionSummary{
-				Results: []multisync.DriveStartupResult{{
+				Results: []multisync.MountStartupResult{{
 					CanonicalID: drives[0].CanonicalID,
 					DisplayName: drives[0].DisplayName,
-					Status:      multisync.DriveStartupRunnable,
+					Status:      multisync.MountStartupRunnable,
 				}},
 			},
-			Reports: []*multisync.DriveReport{{
+			Reports: []*multisync.MountReport{{
 				CanonicalID: drives[0].CanonicalID,
 				DisplayName: drives[0].DisplayName,
 				Report: &syncengine.Report{
@@ -621,11 +621,11 @@ sync_dir = %q
 
 		return multisync.RunOnceResult{
 			Startup: multisync.StartupSelectionSummary{
-				Results: []multisync.DriveStartupResult{{
-					Status: multisync.DriveStartupRunnable,
+				Results: []multisync.MountStartupResult{{
+					Status: multisync.MountStartupRunnable,
 				}},
 			},
-			Reports: []*multisync.DriveReport{{Report: &syncengine.Report{Mode: syncengine.SyncBidirectional}}},
+			Reports: []*multisync.MountReport{{Report: &syncengine.Report{Mode: syncengine.SyncBidirectional}}},
 		}
 	}
 
@@ -795,27 +795,27 @@ paused = true
 	) multisync.RunOnceResult {
 		called = true
 
-		results := make([]multisync.DriveStartupResult, 0, len(drives))
-		reports := make([]*multisync.DriveReport, 0, len(drives))
+		results := make([]multisync.MountStartupResult, 0, len(drives))
+		reports := make([]*multisync.MountReport, 0, len(drives))
 		for i := range drives {
 			rd := drives[i]
 			if rd.Paused {
-				results = append(results, multisync.DriveStartupResult{
+				results = append(results, multisync.MountStartupResult{
 					SelectionIndex: i,
 					CanonicalID:    rd.CanonicalID,
 					DisplayName:    rd.DisplayName,
-					Status:         multisync.DriveStartupPaused,
+					Status:         multisync.MountStartupPaused,
 				})
 				continue
 			}
 
-			results = append(results, multisync.DriveStartupResult{
+			results = append(results, multisync.MountStartupResult{
 				SelectionIndex: i,
 				CanonicalID:    rd.CanonicalID,
 				DisplayName:    rd.DisplayName,
-				Status:         multisync.DriveStartupRunnable,
+				Status:         multisync.MountStartupRunnable,
 			})
-			reports = append(reports, &multisync.DriveReport{
+			reports = append(reports, &multisync.MountReport{
 				SelectionIndex: i,
 				CanonicalID:    rd.CanonicalID,
 				DisplayName:    rd.DisplayName,
@@ -834,5 +834,5 @@ paused = true
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
 	require.NoError(t, err)
 	assert.True(t, called)
-	assert.Contains(t, status.String(), "Skipped: drive is paused")
+	assert.Contains(t, status.String(), "Skipped: mount is paused")
 }

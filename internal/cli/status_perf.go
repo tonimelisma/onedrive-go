@@ -12,7 +12,7 @@ import (
 const (
 	statusPerfUnavailableNoOwner    = "no active sync owner; check logs"
 	statusPerfUnavailableGeneric    = "live perf unavailable; check logs"
-	statusPerfUnavailableInactive   = "drive is not active in the current sync owner; check logs"
+	statusPerfUnavailableInactive   = "mount is not active in the current sync owner; check logs"
 	statusPerfUnavailableCollecting = "collecting live perf data; check logs"
 )
 
@@ -20,7 +20,7 @@ type statusPerfOverlay struct {
 	enabled           bool
 	ownerPresent      bool
 	unavailableReason string
-	managedDrives     map[string]struct{}
+	managedMounts     map[string]struct{}
 	snapshots         map[string]perf.Snapshot
 }
 
@@ -42,10 +42,10 @@ func loadStatusPerfOverlay(ctx context.Context, showPerf bool) statusPerfOverlay
 		overlay := statusPerfOverlay{
 			enabled:       true,
 			ownerPresent:  true,
-			managedDrives: make(map[string]struct{}, len(probe.client.status.Drives)),
+			managedMounts: make(map[string]struct{}, len(probe.client.status.Mounts)),
 		}
-		for _, canonicalID := range probe.client.status.Drives {
-			overlay.managedDrives[canonicalID] = struct{}{}
+		for _, canonicalID := range probe.client.status.Mounts {
+			overlay.managedMounts[canonicalID] = struct{}{}
 		}
 
 		response, perfErr := probe.client.perfStatus(ctx)
@@ -54,7 +54,7 @@ func loadStatusPerfOverlay(ctx context.Context, showPerf bool) statusPerfOverlay
 			return overlay
 		}
 
-		overlay.snapshots = response.Drives
+		overlay.snapshots = response.Mounts
 		return overlay
 	case controlOwnerStateNoSocket:
 		return statusPerfOverlay{
@@ -80,19 +80,19 @@ func applyStatusPerfOverlay(accounts []statusAccount, overlay statusPerfOverlay)
 	}
 
 	for i := range accounts {
-		for j := range accounts[i].Drives {
-			drive := &accounts[i].Drives[j]
-			drive.SyncState = overlaySyncState(drive.CanonicalID, drive.SyncState, overlay)
+		for j := range accounts[i].Mounts {
+			mount := &accounts[i].Mounts[j]
+			mount.SyncState = overlaySyncState(mount.MountID, mount.SyncState, overlay)
 		}
 	}
 }
 
 func overlaySyncState(
-	canonicalID string,
+	mountID string,
 	state *syncStateInfo,
 	overlay statusPerfOverlay,
 ) *syncStateInfo {
-	snapshot, unavailableReason := overlay.lookup(canonicalID)
+	snapshot, unavailableReason := overlay.lookup(mountID)
 	if snapshot == nil && unavailableReason == "" {
 		return state
 	}
@@ -107,12 +107,12 @@ func overlaySyncState(
 	return state
 }
 
-func (overlay statusPerfOverlay) lookup(canonicalID string) (*perf.Snapshot, string) {
+func (overlay statusPerfOverlay) lookup(mountID string) (*perf.Snapshot, string) {
 	if !overlay.enabled {
 		return nil, ""
 	}
 
-	if snapshot, ok := overlay.snapshots[canonicalID]; ok {
+	if snapshot, ok := overlay.snapshots[mountID]; ok {
 		snapshotCopy := snapshot
 		return &snapshotCopy, ""
 	}
@@ -121,7 +121,7 @@ func (overlay statusPerfOverlay) lookup(canonicalID string) (*perf.Snapshot, str
 		return nil, overlay.unavailableReason
 	}
 
-	if _, ok := overlay.managedDrives[canonicalID]; !ok {
+	if _, ok := overlay.managedMounts[mountID]; !ok {
 		return nil, statusPerfUnavailableInactive
 	}
 
@@ -148,7 +148,7 @@ func (ss *syncStateInfo) hasPersistentSummaryData() bool {
 		ss.Retrying > 0
 }
 
-func printStatusPerfText(w io.Writer, ss *syncStateInfo) error {
+func printStatusPerfText(w io.Writer, indent string, ss *syncStateInfo) error {
 	if ss == nil || (ss.Perf == nil && ss.PerfUnavailableReason == "") {
 		return nil
 	}
@@ -156,12 +156,12 @@ func printStatusPerfText(w io.Writer, ss *syncStateInfo) error {
 	if err := writeln(w); err != nil {
 		return err
 	}
-	if err := writeln(w, "    PERF"); err != nil {
+	if err := writeln(w, indent+"PERF"); err != nil {
 		return err
 	}
 
 	if ss.Perf == nil {
-		return writef(w, "    Live performance unavailable: %s\n", ss.PerfUnavailableReason)
+		return writef(w, "%sLive performance unavailable: %s\n", indent, ss.PerfUnavailableReason)
 	}
 
 	snapshot := ss.Perf
@@ -188,7 +188,7 @@ func printStatusPerfText(w io.Writer, ss *syncStateInfo) error {
 
 	for i := range lines {
 		line := lines[i]
-		if err := writef(w, "    %-10s %s\n", line.label+":", line.value); err != nil {
+		if err := writef(w, "%s%-10s %s\n", indent, line.label+":", line.value); err != nil {
 			return err
 		}
 	}

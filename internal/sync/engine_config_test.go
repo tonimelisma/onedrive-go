@@ -45,7 +45,7 @@ func testEngineSession() *driveops.Session {
 		Meta:              &graph.Client{},
 		Transfer:          &graph.Client{},
 		DriveID:           driveid.New("session-drive-id"),
-		RootItem:          "session-root-id",
+		MountedRootItemID: "session-root-id",
 		AccountEmailValue: "session@example.com",
 	}
 }
@@ -157,7 +157,7 @@ func TestNewMountEngine_UsesMountConfigNotSessionResolvedFields(t *testing.T) {
 	assert.False(t, eng.enableWebsocket)
 	assert.False(t, eng.localRules.RejectSharePointRootForms)
 	assert.NotEqual(t, session.DriveID, eng.driveID)
-	assert.NotEqual(t, session.RootItem, eng.rootItemID)
+	assert.NotEqual(t, session.MountedRootItemID, eng.rootItemID)
 	assert.NotEqual(t, session.AccountEmail(), eng.permHandler.accountEmail)
 }
 
@@ -203,10 +203,10 @@ func TestNewDriveEngine_PropagatesWatchCapabilities(t *testing.T) {
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
 
 	session := &driveops.Session{
-		Meta:     &graph.Client{},
-		Transfer: &graph.Client{},
-		DriveID:  driveid.New("abc123"),
-		RootItem: "rooted-subtree-id",
+		Meta:              &graph.Client{},
+		Transfer:          &graph.Client{},
+		DriveID:           driveid.New("abc123"),
+		MountedRootItemID: "rooted-subtree-id",
 	}
 	resolved := &config.ResolvedDrive{
 		CanonicalID:            driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents"),

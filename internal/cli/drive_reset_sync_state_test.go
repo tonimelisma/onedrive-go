@@ -98,7 +98,7 @@ func TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner(t *testing.T) {
 
 	startCLIControlSocket(t, synccontrol.StatusResponse{
 		OwnerMode: synccontrol.OwnerModeWatch,
-		Drives:    []string{cid.String()},
+		Mounts:    []string{cid.String()},
 	}, func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unexpected mutation", http.StatusInternalServerError)
 	})
@@ -157,7 +157,7 @@ func TestEnsureNoLiveStateResetOwner_AllowsUnmanagedActiveOwner(t *testing.T) {
 
 	startCLIControlSocket(t, synccontrol.StatusResponse{
 		OwnerMode: synccontrol.OwnerModeWatch,
-		Drives:    []string{"personal:someone-else@example.com"},
+		Mounts:    []string{"personal:someone-else@example.com"},
 	}, func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unexpected mutation", http.StatusInternalServerError)
 	})

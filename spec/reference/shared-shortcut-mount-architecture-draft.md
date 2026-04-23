@@ -849,7 +849,7 @@ This section intentionally separates:
 
 | Current concept | Current role | Transitional role | Target home | Final fate |
 | --- | --- | --- | --- | --- |
-| `driveops.Session.RootItem` | Shared-root session scoping | Temporary mount-root input to child engines | Mount-engine remote-root config | Remove from generic drive session shape |
+| `driveops.Session.MountedRootItemID` | Mount-root session scoping | Temporary mount-root input to child engines | Mount-engine remote-root config | Remove from generic drive session shape |
 | `Engine.rootItemID` | Non-drive-root remote boundary | Reusable implementation for mount-local engines | Mount engine root config | Rename/reframe as generic mount root, not shared-root special case |
 | `sharedRootSourceType` | Shared-root observation capability branch | Temporary capability selector | Mount-engine observation capability | Keep capability logic, remove shared-root terminology |
 | `FolderDeltaFetcher` for shared-root | Folder-root delta for shared drives | Reusable mount-root observation path | Mount-engine remote observer | Keep, rename around mount-root observation |
@@ -885,7 +885,7 @@ This table maps today's major code areas to their target architectural home.
 | `internal/config/catalog.go` | Managed inventory for accounts and drives | Split into drive catalog plus mount inventory, or add a distinct mount inventory boundary | Blank-slate preference is a separate mount inventory authority |
 | `internal/config/drive.go` + resolver | Builds `ResolvedDrive` from config/catalog | Keep for configured namespace roots; stop using as the permanent home for shortcut mounts | Synthetic reuse may be acceptable during transition |
 | `internal/driveid` shared canonical IDs | Encodes shared folders as configured drives | Move shortcut durable identity into mount inventory | Configured-drive identity and managed mount identity should diverge |
-| `internal/driveops/session.go` | Authenticated drive/session plus some shared-root behavior | Shared capability layer plus mount-engine inputs | `RootItem` should leave generic session shape |
+| `internal/driveops/session.go` | Authenticated drive/session plus some shared-root behavior | Shared capability layer plus mount-engine inputs | `MountedRootItemID` should leave generic session shape |
 | `internal/graph/*` shared-target resolution | Resolves raw share inputs to owner-side identity | Namespace discovery/reconciliation input | The owner-side target identity remains useful |
 | `internal/sync/engine*.go` | Single-drive engine with shared-root specializations | Mount engine | This is the main reusable runtime core |
 | `internal/sync/item_converter.go` | Remote item normalization plus embedded-shortcut ignore rules | Mount-engine observation normalizer, plus namespace-lifecycle detection at the boundary | The ignore rule for embedded shortcuts in ordinary content observation remains correct |
@@ -1055,10 +1055,10 @@ still in use.
 
 `internal/driveops/session.go`
 
-- Generic drive sessions carry `RootItem`.
+- Generic drive sessions carry `MountedRootItemID`.
 - Interactive throttle scoping treats configured shared roots as a special
   "shared target" shape.
-- Path resolution helpers such as `resolveItemFromSharedRoot` make session logic
+- Path resolution helpers such as `resolveItemFromMountedRoot` make session logic
   aware of mount-rooted operation.
 - Transitional reuse: useful while child mount engines still piggyback on
   session APIs.
@@ -1414,7 +1414,7 @@ Concrete work:
 - rename "shared root" engine terminology toward neutral rooted-mount or
   subtree-root terminology
 - rename helpers such as:
-  - `hasSharedRoot()`
+  - `hasMountedRoot()`
   - `sharedRootSourceType`
   - `executeSharedRootObservation()`
   when their real semantics are "engine rooted below drive root"
@@ -1547,7 +1547,7 @@ Exit criteria:
 - sync session creation is mount-shaped
 - parent mounts exclude child subtrees without reintroducing nested engines
 
-### Increment 6: Add Automatic Shortcut Runtime As Child Projections
+### Increment 6: Add Automatic Shortcut Runtime As Child Projections [completed]
 
 Goal:
 
@@ -1564,11 +1564,18 @@ Code areas:
 
 Concrete work:
 
-- reconcile discovered shortcut placeholders against mount inventory
-- create/update/remove managed child mount records automatically
-- start one engine per shortcut content root
-- project each automatic shortcut mount inside the parent drive's `sync_dir` at
-  the shortcut path
+- reconciler now runs in `internal/multisync` before one-shot startup, before
+  watch startup, on control-socket reload, and on the watch reconcile ticker
+- discovered shortcut placeholders now create/update/remove managed child mount
+  records automatically in `mounts.json`
+- authoritative removal now requires a completed delta pass to a terminal
+  delta token; recursive `children` enumeration remains positive-only
+- runtime status/control/perf surfaces are now mount-shaped end to end:
+  - `MountRunner`, `MountReport`, and mount startup results in `multisync`
+  - `StatusResponse.Mounts` and `PerfStatusResponse.Mounts`
+  - per-mount perf collectors keyed by mount ID
+  - `status` child rows rendered beneath the selected parent drive rows
+- `driveops.Session` now uses mounted-root terminology
 - keep explicit standalone shared-folder drive add support working in parallel
 - if a temporary separate-root fallback is used during rollout:
   - keep it clearly labeled migration-only
@@ -1584,10 +1591,11 @@ Must not do:
 
 Tests:
 
-- shortcut appears -> managed child mount record created -> engine starts
+- delta full enumeration updates a binding in place without changing `MountID`
+- authoritative delta removal removes absent bindings and returns removed mount IDs
+- `410 Gone` resets parent discovery state without removing existing child mounts
+- recursive listing adds/updates child bindings but does not remove on absence
 - shortcut appears inside the parent drive `sync_dir` at the shortcut path
-- shortcut disappears -> child engine stops without deleting owner content
-- restart stability tests for managed mount records and per-content-root state DBs
 - duplicate explicit + child projection detection
 
 Exit criteria:

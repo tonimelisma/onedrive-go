@@ -56,8 +56,9 @@ type mountSpec struct {
 }
 
 type compiledMountSet struct {
-	Mounts  []*mountSpec
-	Skipped []DriveStartupResult
+	Mounts          []*mountSpec
+	Skipped         []MountStartupResult
+	RemovedMountIDs []string
 }
 
 type childMountCandidate struct {
@@ -189,9 +190,9 @@ func assembleRuntimeMountSet(
 	conflictedChildRoots map[string]struct{},
 	unmatchedChildren []config.MountRecord,
 	logger *slog.Logger,
-) ([]*mountSpec, []DriveStartupResult) {
+) ([]*mountSpec, []MountStartupResult) {
 	finalMounts := make([]*mountSpec, 0, len(parents))
-	skipped := make([]DriveStartupResult, 0, len(unmatchedChildren))
+	skipped := make([]MountStartupResult, 0, len(unmatchedChildren))
 	nextIndex := 0
 	for _, parent := range parents {
 		parent.selectionIndex = nextIndex
@@ -230,7 +231,7 @@ func assembleRuntimeMountSet(
 	return finalMounts, skipped
 }
 
-func skippedChildMountResult(candidate *childMountCandidate, parentID mountID, logger *slog.Logger) DriveStartupResult {
+func skippedChildMountResult(candidate *childMountCandidate, parentID mountID, logger *slog.Logger) MountStartupResult {
 	if logger != nil {
 		logger.Warn("skipping child mount",
 			"mount_id", candidate.mount.mountID.String(),
@@ -243,19 +244,19 @@ func skippedChildMountResult(candidate *childMountCandidate, parentID mountID, l
 	return driveStartupResultForMount(candidate.mount, candidate.skipErr)
 }
 
-func unmatchedChildStartupResults(records []config.MountRecord, startIndex int) []DriveStartupResult {
-	results := make([]DriveStartupResult, 0, len(records))
+func unmatchedChildStartupResults(records []config.MountRecord, startIndex int) []MountStartupResult {
+	results := make([]MountStartupResult, 0, len(records))
 	nextIndex := startIndex
 	for _, record := range records {
 		displayName := record.DisplayName
 		if displayName == "" {
 			displayName = path.Base(record.RelativeLocalPath)
 		}
-		results = append(results, DriveStartupResult{
+		results = append(results, MountStartupResult{
 			SelectionIndex: nextIndex,
 			CanonicalID:    driveid.CanonicalID{},
 			DisplayName:    displayName,
-			Status:         DriveStartupFatal,
+			Status:         MountStartupFatal,
 			Err: fmt.Errorf(
 				"child mount %s references missing parent mount %s",
 				record.MountID,
@@ -416,13 +417,4 @@ func resolvedDrivesWithSelection(drives []*config.ResolvedDrive) []*resolvedDriv
 	}
 
 	return selected
-}
-
-func mountCanonicalIDs(mounts []*mountSpec) []string {
-	ids := make([]string, 0, len(mounts))
-	for i := range mounts {
-		ids = append(ids, mounts[i].canonicalID.String())
-	}
-
-	return ids
 }

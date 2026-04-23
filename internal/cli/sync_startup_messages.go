@@ -19,19 +19,19 @@ func syncPauseDriveCommand(canonicalID driveid.CanonicalID) string {
 	return fmt.Sprintf("onedrive-go pause --drive %s", shellQuoteArg(canonicalID.String()))
 }
 
-func formatStartupResultMessage(result *multisync.DriveStartupResult) string {
+func formatStartupResultMessage(result *multisync.MountStartupResult) string {
 	if result == nil {
 		return ""
 	}
 
 	switch result.Status {
-	case multisync.DriveStartupRunnable:
+	case multisync.MountStartupRunnable:
 		return ""
-	case multisync.DriveStartupPaused:
-		return "drive is paused"
-	case multisync.DriveStartupIncompatibleStore:
+	case multisync.MountStartupPaused:
+		return "mount is paused"
+	case multisync.MountStartupIncompatibleStore:
 		return formatStateStoreIncompatibleMessage(result.CanonicalID, result.Err)
-	case multisync.DriveStartupFatal:
+	case multisync.MountStartupFatal:
 		if result.Err == nil {
 			return ""
 		}
@@ -51,8 +51,8 @@ func formatStateStoreIncompatibleMessage(canonicalID driveid.CanonicalID, err er
 	}
 
 	return fmt.Sprintf(
-		"%s. To continue, either pause or stop this drive first ('%s'), "+
-			"rerun sync with --drive selecting only other drives, or fix the DB with '%s'.",
+		"%s. To continue, either pause or stop this mount first ('%s'), "+
+			"rerun sync with --drive selecting only other configured parent drives, or fix the DB with '%s'.",
 		incompatibleErr.Error(),
 		syncPauseDriveCommand(canonicalID),
 		syncStateResetCommand(canonicalID),
@@ -77,7 +77,7 @@ func formatWatchStartupError(err error) error {
 		return err
 	}
 	if startupErr.Summary.AllPaused() {
-		return fmt.Errorf("all selected drives are paused — run 'onedrive-go resume' to unpause")
+		return fmt.Errorf("all selected mounts are paused — run 'onedrive-go resume' to unpause")
 	}
 
 	failures := startupErr.Summary.SkippedResults()
@@ -101,7 +101,7 @@ func writeWatchStartWarnings(output io.Writer, warning multisync.StartupWarning)
 
 	for i := range results {
 		result := results[i]
-		writeWarningf(output, "warning: drive %s did not start: %s\n",
+		writeWarningf(output, "warning: mount %s did not start: %s\n",
 			result.CanonicalID.String(),
 			formatStartupResultMessage(&result),
 		)

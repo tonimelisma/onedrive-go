@@ -65,6 +65,31 @@ func testOrchestratorConfig(t *testing.T, drives ...*config.ResolvedDrive) *Orch
 func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, drives ...*config.ResolvedDrive) *OrchestratorConfig {
 	t.Helper()
 
+	if _, err := os.Stat(cfgPath); err == nil {
+		cfg, loadErr := config.LoadOrDefault(cfgPath, slog.Default())
+		require.NoError(t, loadErr)
+		resolved, resolveErr := config.ResolveDrives(cfg, nil, false, slog.Default())
+		require.NoError(t, resolveErr)
+
+		resolvedByID := make(map[driveid.CanonicalID]*config.ResolvedDrive, len(resolved))
+		for _, candidate := range resolved {
+			resolvedByID[candidate.CanonicalID] = candidate
+		}
+
+		for _, drive := range drives {
+			if drive == nil {
+				continue
+			}
+
+			configured, ok := resolvedByID[drive.CanonicalID]
+			if !ok {
+				continue
+			}
+
+			overlayConfiguredTestDrive(drive, configured)
+		}
+	}
+
 	holder := config.NewHolder(config.DefaultConfig(), cfgPath)
 	provider := driveops.NewSessionRuntime(holder, "test/1.0", slog.Default())
 
@@ -73,6 +98,77 @@ func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, drives ...*con
 		Drives:  drives,
 		Runtime: provider,
 		Logger:  slog.Default(),
+	}
+}
+
+func overlayConfiguredTestDrive(drive *config.ResolvedDrive, configured *config.ResolvedDrive) {
+	if drive == nil || configured == nil {
+		return
+	}
+
+	original := *drive
+	originalDisplayName := drive.DisplayName
+	applyConfiguredTestDriveDefaults(drive, configured)
+	restoreOriginalTestDriveOverrides(drive, &original, originalDisplayName)
+}
+
+func applyConfiguredTestDriveDefaults(drive *config.ResolvedDrive, configured *config.ResolvedDrive) {
+	drive.SyncDir = configured.SyncDir
+	drive.Paused = configured.Paused
+	drive.PausedUntil = configured.PausedUntil
+	drive.TransfersConfig = configured.TransfersConfig
+	drive.SafetyConfig = configured.SafetyConfig
+	drive.SyncConfig = configured.SyncConfig
+	drive.LoggingConfig = configured.LoggingConfig
+	if !configured.DriveID.IsZero() {
+		drive.DriveID = configured.DriveID
+	}
+	if configured.RootItemID != "" {
+		drive.RootItemID = configured.RootItemID
+	}
+	drive.SharedRootDeltaCapable = configured.SharedRootDeltaCapable
+}
+
+func restoreOriginalTestDriveOverrides(
+	drive *config.ResolvedDrive,
+	original *config.ResolvedDrive,
+	originalDisplayName string,
+) {
+	if drive == nil || original == nil {
+		return
+	}
+	if originalDisplayName != "" {
+		drive.DisplayName = originalDisplayName
+	}
+	if original.Paused {
+		drive.Paused = true
+	}
+	if original.PausedUntil != "" {
+		drive.PausedUntil = original.PausedUntil
+	}
+	if original.Websocket {
+		drive.Websocket = true
+	}
+	if original.TransferWorkers != 0 {
+		drive.TransferWorkers = original.TransferWorkers
+	}
+	if original.CheckWorkers != 0 {
+		drive.CheckWorkers = original.CheckWorkers
+	}
+	if original.MinFreeSpace != "" {
+		drive.MinFreeSpace = original.MinFreeSpace
+	}
+	if original.DryRun {
+		drive.DryRun = true
+	}
+	if !original.DriveID.IsZero() {
+		drive.DriveID = original.DriveID
+	}
+	if original.RootItemID != "" {
+		drive.RootItemID = original.RootItemID
+	}
+	if original.SharedRootDeltaCapable {
+		drive.SharedRootDeltaCapable = true
 	}
 }
 
@@ -265,7 +361,7 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 
 	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 	require.Len(t, result.Startup.Results, 1)
-	assert.Equal(t, DriveStartupRunnable, result.Startup.Results[0].Status)
+	assert.Equal(t, MountStartupRunnable, result.Startup.Results[0].Status)
 	require.Len(t, result.Reports, 1)
 	assert.Equal(t, rd.CanonicalID, result.Reports[0].CanonicalID)
 	assert.Equal(t, "Test", result.Reports[0].DisplayName)
@@ -298,12 +394,12 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 	require.Len(t, result.Reports, 2)
 
 	// Find each drive's report by canonical ID.
-	var failReport, okDriveReport *DriveReport
+	var failReport, okMountReport *MountReport
 	for i := range result.Reports {
 		if result.Reports[i].CanonicalID == rd1.CanonicalID {
 			failReport = result.Reports[i]
 		} else {
-			okDriveReport = result.Reports[i]
+			okMountReport = result.Reports[i]
 		}
 	}
 
@@ -311,9 +407,9 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 	require.ErrorIs(t, failReport.Err, errDelta)
 	assert.Nil(t, failReport.Report)
 
-	require.NotNil(t, okDriveReport)
-	require.NoError(t, okDriveReport.Err)
-	assert.Equal(t, 2, okDriveReport.Report.Uploads)
+	require.NotNil(t, okMountReport)
+	require.NoError(t, okMountReport.Err)
+	assert.Equal(t, 2, okMountReport.Report.Uploads)
 }
 
 // Validates: R-2.4, R-6.8
@@ -338,12 +434,12 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 	require.Len(t, result.Startup.Results, 2)
 	require.Len(t, result.Reports, 2)
 
-	var panicReport, stableDriveReport *DriveReport
+	var panicReport, stableMountReport *MountReport
 	for i := range result.Reports {
 		if result.Reports[i].CanonicalID == rd1.CanonicalID {
 			panicReport = result.Reports[i]
 		} else {
-			stableDriveReport = result.Reports[i]
+			stableMountReport = result.Reports[i]
 		}
 	}
 
@@ -352,9 +448,9 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 	assert.Contains(t, panicReport.Err.Error(), "panic")
 	assert.Nil(t, panicReport.Report)
 
-	require.NotNil(t, stableDriveReport)
-	require.NoError(t, stableDriveReport.Err)
-	assert.Equal(t, 1, stableDriveReport.Report.Downloads)
+	require.NotNil(t, stableMountReport)
+	require.NoError(t, stableMountReport.Err)
+	assert.Equal(t, 1, stableMountReport.Report.Downloads)
 }
 
 // Validates: R-2.8.5
@@ -499,8 +595,8 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 	require.Len(t, result.Startup.Results, 2)
 	require.Len(t, result.Reports, 1)
 
-	var failedResult *DriveStartupResult
-	var healthyReport *DriveReport
+	var failedResult *MountStartupResult
+	var healthyReport *MountReport
 	for i := range result.Startup.Results {
 		if result.Startup.Results[i].CanonicalID == rd1.CanonicalID {
 			failedResult = &result.Startup.Results[i]
@@ -515,7 +611,7 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 	require.NotNil(t, failedResult)
 	require.Error(t, failedResult.Err)
 	assert.Contains(t, failedResult.Err.Error(), "open sync store")
-	assert.Equal(t, DriveStartupFatal, failedResult.Status)
+	assert.Equal(t, MountStartupFatal, failedResult.Status)
 
 	require.NotNil(t, healthyReport)
 	require.NoError(t, healthyReport.Err)
@@ -802,7 +898,7 @@ func TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts
 		results := warning.Summary.SkippedResults()
 		require.Len(t, results, 1)
 		assert.Equal(t, rd2.CanonicalID, results[0].CanonicalID)
-		assert.Equal(t, DriveStartupIncompatibleStore, results[0].Status)
+		assert.Equal(t, MountStartupIncompatibleStore, results[0].Status)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not emit startup warning")
 	}
@@ -835,7 +931,7 @@ func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoDriveStarts(t *testing
 	require.ErrorAs(t, err, &startupErr)
 	require.Len(t, startupErr.Summary.Results, 1)
 	assert.Equal(t, rd.CanonicalID, startupErr.Summary.Results[0].CanonicalID)
-	assert.Equal(t, DriveStartupIncompatibleStore, startupErr.Summary.Results[0].Status)
+	assert.Equal(t, MountStartupIncompatibleStore, startupErr.Summary.Results[0].Status)
 }
 
 func TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused(t *testing.T) {
@@ -898,7 +994,7 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	var status synccontrol.StatusResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&status))
 	assert.Equal(t, synccontrol.OwnerModeWatch, status.OwnerMode)
-	assert.Equal(t, []string{rd.CanonicalID.String()}, status.Drives)
+	assert.Equal(t, []string{rd.CanonicalID.String()}, status.Mounts)
 
 	stop := postControlJSON(t, cfg.ControlSocketPath, synccontrol.PathStop, nil)
 	assert.Equal(t, synccontrol.StatusStopping, stop.Status)
@@ -926,7 +1022,7 @@ func TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus(t *testing.
 
 	status := getControlStatus(t, cfg.ControlSocketPath)
 	assert.Equal(t, synccontrol.OwnerModeOneShot, status.OwnerMode)
-	assert.Equal(t, []string{rd.CanonicalID.String()}, status.Drives)
+	assert.Equal(t, []string{rd.CanonicalID.String()}, status.Mounts)
 
 	client := controlTestClient(cfg.ControlSocketPath)
 	req, err := http.NewRequestWithContext(
@@ -1010,7 +1106,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestOrchestrator_Reload_RemoveDrive(t *testing.T) {
+func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
 	rd1 := testResolvedDrive(t, "personal:keep@example.com", "Keep")
 	rd2 := testResolvedDrive(t, "personal:remove@example.com", "Remove")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)

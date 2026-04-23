@@ -1,6 +1,6 @@
 package cli
 
-// defaultVisiblePaths caps sampled per-drive status rows and condition paths
+// defaultVisiblePaths caps sampled per-mount status rows and condition paths
 // when --verbose is not set.
 const defaultVisiblePaths = 5
 

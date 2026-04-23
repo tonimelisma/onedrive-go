@@ -16,7 +16,6 @@ import (
 
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -387,20 +386,19 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	}
 }
 
-func configuredMountIDs(drives []*config.ResolvedDrive) []string {
-	mounts, err := buildConfiguredMountSpecs(resolvedDrivesWithSelection(drives))
-	if err != nil {
-		return nil
-	}
-
-	return mountCanonicalIDs(mounts)
-}
-
 func (o *Orchestrator) controlStatus(ctx context.Context, mode synccontrol.OwnerMode) synccontrol.StatusResponse {
 	_ = ctx
+	mounts := o.controlMountIDs()
+	if len(mounts) == 0 {
+		configured, err := buildConfiguredMountSpecs(resolvedDrivesWithSelection(o.cfg.Drives))
+		if err == nil {
+			mounts = mountIDsForSpecs(configured)
+		}
+	}
+
 	return synccontrol.StatusResponse{
 		OwnerMode: mode,
-		Drives:    configuredMountIDs(o.cfg.Drives),
+		Mounts:    mounts,
 	}
 }
 
@@ -413,7 +411,7 @@ func (o *Orchestrator) controlPerfStatus(mode synccontrol.OwnerMode) synccontrol
 	}
 
 	status.Aggregate = o.perfRuntime.AggregateSnapshot()
-	status.Drives = o.perfRuntime.SnapshotByDrive()
+	status.Mounts = o.perfRuntime.SnapshotByMount()
 
 	return status
 }

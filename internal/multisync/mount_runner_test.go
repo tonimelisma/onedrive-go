@@ -13,9 +13,9 @@ import (
 )
 
 // Validates: R-2.4
-func TestDriveRunner_Run_Success(t *testing.T) {
+func TestMountRunner_Run_Success(t *testing.T) {
 	cid := testCanonicalID(t, "personal:test@example.com")
-	dr := &DriveRunner{
+	dr := &MountRunner{
 		canonID:     cid,
 		displayName: "Test Drive",
 	}
@@ -39,9 +39,9 @@ func TestDriveRunner_Run_Success(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestDriveRunner_Run_Error(t *testing.T) {
+func TestMountRunner_Run_Error(t *testing.T) {
 	cid := testCanonicalID(t, "personal:test@example.com")
-	dr := &DriveRunner{
+	dr := &MountRunner{
 		canonID:     cid,
 		displayName: "Failing Drive",
 	}
@@ -59,9 +59,9 @@ func TestDriveRunner_Run_Error(t *testing.T) {
 }
 
 // Validates: R-6.8
-func TestDriveRunner_Run_Panic(t *testing.T) {
+func TestMountRunner_Run_Panic(t *testing.T) {
 	cid := testCanonicalID(t, "personal:panic@example.com")
-	dr := &DriveRunner{
+	dr := &MountRunner{
 		canonID:     cid,
 		displayName: "Panic Drive",
 	}
@@ -79,9 +79,9 @@ func TestDriveRunner_Run_Panic(t *testing.T) {
 }
 
 // Validates: R-6.8
-func TestDriveRunner_Run_PanicWithError(t *testing.T) {
+func TestMountRunner_Run_PanicWithError(t *testing.T) {
 	cid := testCanonicalID(t, "personal:panic-err@example.com")
-	dr := &DriveRunner{
+	dr := &MountRunner{
 		canonID:     cid,
 		displayName: "Panic Error Drive",
 	}
@@ -98,9 +98,9 @@ func TestDriveRunner_Run_PanicWithError(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestDriveRunner_Run_ContextCanceled(t *testing.T) {
+func TestMountRunner_Run_ContextCanceled(t *testing.T) {
 	cid := testCanonicalID(t, "personal:cancel@example.com")
-	dr := &DriveRunner{
+	dr := &MountRunner{
 		canonID:     cid,
 		displayName: "Cancel Drive",
 	}
