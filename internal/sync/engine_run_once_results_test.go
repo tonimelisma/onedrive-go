@@ -292,3 +292,43 @@ func TestOneShotRunner_RunResultsLoopIdle_ReleasesDueHeldWorkBeforeBlocking(t *t
 	assert.Equal(t, 0, runner.depGraph.InFlightCount())
 	assert.Empty(t, runner.heldByKey)
 }
+
+// Validates: R-2.10.33
+func TestOneShotRunner_ReleaseIdleDueHeldWork_ClearsShutdownCompletedOutboxOnReductionFailure(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	runner := newOneShotRunner(eng.Engine)
+	runner.depGraph = NewDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *TrackedAction, 1)
+	now := eng.nowFunc()
+
+	concrete := runner.depGraph.Add(&Action{
+		Type: ActionUpload,
+		Path: "retry.txt",
+	}, 1, nil)
+	require.NotNil(t, concrete)
+	runner.holdAction(concrete, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+
+	publication := runner.depGraph.Add(&Action{
+		Type:    ActionCleanup,
+		Path:    "cleanup.txt",
+		DriveID: eng.driveID,
+		ItemID:  "cleanup-item",
+	}, 2, nil)
+	require.NotNil(t, publication)
+	runner.holdAction(publication, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+
+	require.NoError(t, eng.baseline.Close(t.Context()))
+
+	outbox, err, handled := runner.releaseIdleDueHeldWork(t.Context(), &Baseline{})
+	require.True(t, handled)
+	require.ErrorContains(t, err, "record retry_work")
+	assert.Empty(t, outbox, "shutdown-completed releases must not be returned for a second completion pass")
+	assert.Equal(t, 1, runner.depGraph.InFlightCount(), "only the failing publication action should remain unresolved")
+
+	_, concretePresent := runner.depGraph.Get(1)
+	assert.False(t, concretePresent)
+	_, publicationPresent := runner.depGraph.Get(2)
+	assert.True(t, publicationPresent)
+}

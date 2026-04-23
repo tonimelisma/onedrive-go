@@ -548,6 +548,129 @@ func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedSco
 }
 
 // Validates: R-2.10.5
+func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemainingBlockedWork(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+	trialScopeKey := SKService()
+	throttleScopeKey := SKThrottleDrive(driveid.New("drive-throttle"))
+
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:           trialScopeKey,
+		BlockedAt:     eng.nowFunc().Add(-time.Minute),
+		TrialInterval: time.Minute,
+		NextTrialAt:   eng.nowFunc(),
+	})
+
+	upsertBlockedRetryWorkForTest(t, eng, "file.txt", trialScopeKey, 1, 2)
+	upsertBlockedRetryWorkForTest(t, eng, "other.txt", trialScopeKey, 3, 4)
+
+	other := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "other.txt",
+		DriveID: eng.driveID,
+	}, 1, nil)
+	require.NotNil(t, other)
+	rt.holdAction(other, heldReasonScope, trialScopeKey, time.Time{})
+
+	current := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "file.txt",
+		DriveID: eng.driveID,
+	}, 2, nil)
+	require.NotNil(t, current)
+
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), rt, trialScopeKey, &ResultDecision{
+		Class:             errclass.ClassBlockScopeingTransient,
+		ConditionKey:      ConditionRateLimited,
+		ConditionType:     IssueRateLimited,
+		ScopeKey:          throttleScopeKey,
+		ScopeEvidence:     throttleScopeKey,
+		Persistence:       persistRetryWork,
+		RunScopeDetection: true,
+		TrialHint:         trialHintExtendOnMatchingScope,
+	}, current, &ActionCompletion{
+		ActionID:      current.ID,
+		Path:          "file.txt",
+		ActionType:    ActionUpload,
+		DriveID:       eng.driveID,
+		HTTPStatus:    http.StatusTooManyRequests,
+		RetryAfter:    time.Minute,
+		ErrMsg:        "throttled",
+		IsTrial:       true,
+		TrialScopeKey: trialScopeKey,
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, ready)
+	assert.True(t, rt.hasActiveScope(throttleScopeKey),
+		"trial retry fallback should activate the newly classified blocked scope")
+	assert.True(t, rt.hasActiveScope(trialScopeKey),
+		"the original scope must stay active while unrelated blocked work still remains under it")
+	assert.Contains(t, rt.heldByKey, retryWorkKeyForAction(&other.Action),
+		"existing blocked work under the original scope must remain held in the runtime")
+
+	rowsByPath := retryRowsByPathForTest(t, eng)
+	require.Contains(t, rowsByPath, "file.txt")
+	require.Contains(t, rowsByPath, "other.txt")
+	assert.Equal(t, throttleScopeKey, rowsByPath["file.txt"].ScopeKey)
+	assert.True(t, rowsByPath["file.txt"].Blocked)
+	assert.Equal(t, trialScopeKey, rowsByPath["other.txt"].ScopeKey)
+	assert.True(t, rowsByPath["other.txt"].Blocked)
+
+	assertBlockScopesPresentForTest(t, eng, trialScopeKey, throttleScopeKey)
+}
+
+func upsertBlockedRetryWorkForTest(t *testing.T, eng *testEngine, path string, scopeKey ScopeKey, firstSeenAt int64, lastSeenAt int64) {
+	t.Helper()
+
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		Path:          path,
+		ActionType:    ActionUpload,
+		ConditionType: IssueRateLimited,
+		ScopeKey:      scopeKey,
+		Blocked:       true,
+		AttemptCount:  1,
+		LastError:     "blocked",
+		FirstSeenAt:   firstSeenAt,
+		LastSeenAt:    lastSeenAt,
+	}))
+}
+
+func retryRowsByPathForTest(t *testing.T, eng *testEngine) map[string]RetryWorkRow {
+	t.Helper()
+
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 2)
+
+	rowsByPath := make(map[string]RetryWorkRow, len(retryRows))
+	for i := range retryRows {
+		row := retryRows[i]
+		rowsByPath[row.Path] = row
+	}
+
+	return rowsByPath
+}
+
+func assertBlockScopesPresentForTest(t *testing.T, eng *testEngine, keys ...ScopeKey) {
+	t.Helper()
+
+	blockScopes, err := eng.baseline.ListBlockScopes(t.Context())
+	require.NoError(t, err)
+	require.Len(t, blockScopes, len(keys))
+
+	present := make(map[ScopeKey]struct{}, len(blockScopes))
+	for _, block := range blockScopes {
+		present[block.Key] = struct{}{}
+	}
+	for _, key := range keys {
+		assert.Contains(t, present, key)
+	}
+}
+
+// Validates: R-2.10.5
 func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmittingDependents(t *testing.T) {
 	t.Parallel()
 

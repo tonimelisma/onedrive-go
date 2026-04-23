@@ -273,14 +273,20 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 	})
 
 	if from != to && !from.IsZero() {
-		if err := flow.engine.baseline.DiscardScope(ctx, from); err != nil {
-			return fmt.Errorf("transition blocked scope %s -> %s: discard old scope: %w", from.String(), to.String(), err)
+		hasBlockedWork, err := flow.scopeHasBlockedRetryWork(ctx, from)
+		if err != nil {
+			return fmt.Errorf("transition blocked scope %s -> %s: check old scope blocked work: %w", from.String(), to.String(), err)
 		}
-		flow.removeActiveScope(from)
-		flow.engine.emitDebugEvent(engineDebugEvent{
-			Type:     engineDebugEventScopeDiscarded,
-			ScopeKey: from,
-		})
+		if !hasBlockedWork {
+			if err := flow.engine.baseline.DiscardScope(ctx, from); err != nil {
+				return fmt.Errorf("transition blocked scope %s -> %s: discard old scope: %w", from.String(), to.String(), err)
+			}
+			flow.removeActiveScope(from)
+			flow.engine.emitDebugEvent(engineDebugEvent{
+				Type:     engineDebugEventScopeDiscarded,
+				ScopeKey: from,
+			})
+		}
 	}
 
 	flow.engine.logger.Warn("block scope active — actions blocked",

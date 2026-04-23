@@ -163,7 +163,10 @@ completion boundary watch drain uses, immediately collapsing any newly-ready
 frontier back into shutdown completion instead of handing it to dispatch.
 Likewise, one-shot idle waiting must release any already-due held retry or
 trial work before blocking on worker completions; held-work timing remains part
-of the shared engine runtime, not a watch-only side path.
+of the shared engine runtime, not a watch-only side path. If idle held-release
+reduction fails after shutdown-completing a returned exact frontier, the
+one-shot runner consumes that shutdown work immediately instead of surfacing the
+same outbox to a second shutdown-completion pass.
 
 Full-remote-refresh cadence is restart-safe even when a full remote refresh returns
 no delta cursor. The engine still advances the persisted cadence in
@@ -465,7 +468,11 @@ the engine keeps a blocker active only while blocked `retry_work` still
 exists. Scope release updates both authorities in one logical step: store-side
 blocked rows become ready immediately, and the current runtime flips the
 matching held entries into due retry-held work so one-shot and watch can
-continue without waiting for a replan.
+continue without waiting for a replan. Trial-driven reclassification from one
+blocked scope to another follows that same ownership rule: the newly
+reclassified exact work moves to the new scope immediately, but the old scope is
+discarded only after its prior `scope_key` no longer owns any blocked
+`retry_work`.
 
 ## What The Engine Does Not Own
 
