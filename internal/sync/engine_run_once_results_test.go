@@ -52,7 +52,7 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork(t *testing
 	}
 	close(results)
 
-	err := runner.runResultsLoop(t.Context(), nil, nil, results)
+	err := runner.runResultsLoopWithInitialOutbox(t.Context(), nil, nil, results, nil)
 	require.NoError(t, err)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -99,7 +99,7 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 	}
 	close(results)
 
-	err := runner.runResultsLoop(t.Context(), nil, nil, results)
+	err := runner.runResultsLoopWithInitialOutbox(t.Context(), nil, nil, results, nil)
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
 	assert.Equal(t, 0, runner.depGraph.InFlightCount())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))

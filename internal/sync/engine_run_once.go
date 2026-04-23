@@ -27,7 +27,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		slog.Bool("dry_run", opts.DryRun),
 	)
 
-	bl, err := e.prepareRunOnceBaseline(ctx, runner)
+	bl, err := e.runRunOnceStartup(ctx, runner)
 	if err != nil {
 		return nil, err
 	}
@@ -42,18 +42,18 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 		return e.runOnceDryRun(ctx, runner, bl, mode, opts, start)
 	}
 
-	prepared, err := runner.runLiveCurrentPlan(ctx, bl, mode, opts)
+	runtime, err := runner.runLiveCurrentPlan(ctx, bl, mode, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	// SQLite-derived plan approved — commit the deferred delta token now.
-	if err := runner.commitPendingPrimaryCursor(ctx, prepared.PendingCursorCommit); err != nil {
+	if err := runner.commitPendingPrimaryCursor(ctx, runtime.PendingCursorCommit); err != nil {
 		return nil, err
 	}
 
-	plan := prepared.Plan
-	report := prepared.Report
+	plan := runtime.Plan
+	report := runtime.Report
 
 	if len(plan.Actions) == 0 {
 		if report.DeferredByMode.Total() > 0 {
@@ -73,7 +73,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode Mode, opts RunOptions) (*Repo
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
 	executeStart := e.nowFunc()
-	if err := runner.executePreparedPlan(ctx, prepared, bl); err != nil {
+	if err := runner.executePreparedPlan(ctx, runtime, bl); err != nil {
 		report.Duration = e.since(start)
 		e.collector().RecordExecute(len(plan.Actions), report.Succeeded, report.Failed, e.since(executeStart))
 		return report, err
@@ -105,45 +105,32 @@ func (e *Engine) runOnceDryRun(
 	opts RunOptions,
 	start time.Time,
 ) (*Report, error) {
-	prepared, err := runner.runDryRunCurrentPlan(ctx, bl, mode, opts)
+	runtime, err := runner.runDryRunCurrentPlan(ctx, bl, mode, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	return e.completeDryRunReport(start, prepared.Report), nil
+	return e.completeDryRunReport(start, runtime.Report), nil
 }
 
-func (e *Engine) prepareRunOnceBaseline(
+func (e *Engine) runRunOnceStartup(
 	ctx context.Context,
 	runner *oneShotRunner,
 ) (*Baseline, error) {
 	return runner.runStartupStage(ctx, nil)
 }
 
-// executePlan populates the dependency graph and runs the worker pool.
-// The engine processes results concurrently while workers run, classifying
-// each result and calling depGraph.Complete (R-6.8.9).
-func (r *oneShotRunner) executePlan(
-	ctx context.Context, plan *ActionPlan, report *Report,
-	bl *Baseline,
-) error {
-	return r.executePreparedPlan(ctx, &PreparedCurrentPlan{
-		Plan:   plan,
-		Report: report,
-	}, bl)
-}
-
 func (r *oneShotRunner) executePreparedPlan(
 	ctx context.Context,
-	prepared *PreparedCurrentPlan,
+	runtime *runtimePlan,
 	bl *Baseline,
 ) error {
-	if prepared == nil {
+	if runtime == nil {
 		return nil
 	}
 
-	plan := prepared.Plan
-	report := prepared.Report
+	plan := runtime.Plan
+	report := runtime.Report
 	if len(plan.Actions) == 0 {
 		return nil
 	}
@@ -166,7 +153,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	// Reset engine counters for this pass.
 	r.resetResultStats()
 	r.dispatchCh = make(chan *TrackedAction, len(plan.Actions))
-	initialOutbox, done, err := r.dispatchInitialReadyActions(ctx, bl, prepared, report)
+	initialOutbox, done, err := r.dispatchInitialReadyActions(ctx, bl, runtime, report)
 	if err != nil {
 		return err
 	}
@@ -201,10 +188,10 @@ func (r *oneShotRunner) executePreparedPlan(
 func (r *oneShotRunner) dispatchInitialReadyActions(
 	ctx context.Context,
 	bl *Baseline,
-	prepared *PreparedCurrentPlan,
+	runtime *runtimePlan,
 	report *Report,
 ) ([]*TrackedAction, bool, error) {
-	initialOutbox, dispatched, err := r.startRuntimeStage(ctx, prepared, bl, nil)
+	initialOutbox, dispatched, err := r.startRuntimeStage(ctx, runtime, bl, nil)
 	if err != nil {
 		report.Succeeded, report.Failed, report.Errors = r.resultStats()
 		report.Errors = append(report.Errors, err)

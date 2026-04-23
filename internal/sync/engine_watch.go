@@ -135,7 +135,7 @@ type socketIOWakeSourceRunner interface {
 // worker pool, dirty scheduler, persisted scope state, and tickers. Does NOT load
 // baseline or start observers — those happen in bootstrapSync and RunWatch.
 //
-// Key differences from one-shot mode (executePlan):
+// Key differences from one-shot mode:
 //   - Active scopes are loaded from DB into engine-owned runtime state
 //   - Workers exit only via ctx.Done(); the watch runtime owns settle/draintime
 //     instead of relying on dependency-graph completion
@@ -223,37 +223,38 @@ func (rt *watchRuntime) initWatchInfra(
 }
 
 // bootstrapSync performs the initial sync using the watch pipeline. It
-// observes current truth, builds and prepares the current runtime through the
+// observes current truth, builds the current plan, reconciles runtime state,
+// and starts the shared runtime through the
 // shared current-plan stage sequence, then dispatches through the same
 // DepGraph, active scope working set, and WorkerPool that the steady-state
 // watch loop uses. Blocks until all bootstrap actions due now complete.
 //
-// Must be called after startup prep + initWatchInfra and before startObservers.
+// Must be called after startup + initWatchInfra and before startObservers.
 func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode Mode, pipe *watchPipeline) error {
 	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 	bootstrapStart := rt.engine.nowFunc()
 
 	if pipe == nil || pipe.bl == nil {
-		return fmt.Errorf("sync: bootstrap requires startup-prepared baseline")
+		return fmt.Errorf("sync: bootstrap requires startup baseline")
 	}
 
-	prepared, err := rt.runBootstrapCurrentPlan(ctx, pipe.bl, mode)
+	runtime, err := rt.runBootstrapCurrentPlan(ctx, pipe.bl, mode)
 	if err != nil {
 		return err
 	}
-	if len(prepared.Plan.Actions) == 0 {
-		return rt.finishBootstrapWithoutActions(ctx, mode, bootstrapStart, prepared.PendingCursorCommit)
+	if len(runtime.Plan.Actions) == 0 {
+		return rt.finishBootstrapWithoutActions(ctx, mode, bootstrapStart, runtime.PendingCursorCommit)
 	}
 
 	// Commit the deferred delta token before dispatching bootstrap actions.
-	cursorCommitErr := rt.commitPendingPrimaryCursor(ctx, prepared.PendingCursorCommit)
+	cursorCommitErr := rt.commitPendingPrimaryCursor(ctx, runtime.PendingCursorCommit)
 	if cursorCommitErr != nil {
 		return cursorCommitErr
 	}
 	rt.beginSyncStatusBatch(bootstrapStart)
 
 	// Dispatch through the watch runtime (same frontier path steady-state uses).
-	initialOutbox, _, err := rt.startRuntimeStage(ctx, prepared, pipe.bl, rt)
+	initialOutbox, _, err := rt.startRuntimeStage(ctx, runtime, pipe.bl, rt)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap dispatch failed: %w", err)
 	}

@@ -152,7 +152,7 @@ func TestRunSteadyStateReplan_BidirectionalWritesSyncStatusWhenOnlyFutureHeldWor
 	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
-	assert.False(t, rt.syncBatch.active, "future-held work should not leave the sync-status batch open")
+	assert.False(t, rt.loop.syncBatch.active, "future-held work should not leave the sync-status batch open")
 
 	status, err := eng.baseline.ReadSyncStatus(ctx)
 	require.NoError(t, err)
@@ -248,7 +248,7 @@ func TestRunSteadyStateReplan_LocalObserveFailureDropsBatch(t *testing.T) {
 	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
-	assert.False(t, rt.syncBatch.active)
+	assert.False(t, rt.loop.syncBatch.active)
 
 	status, err := eng.baseline.ReadSyncStatus(ctx)
 	require.NoError(t, err)
@@ -284,7 +284,7 @@ func TestRunSteadyStateReplan_LocalSnapshotCommitFailureStopsWatch(t *testing.T)
 	}, DirtyBatch{})
 	require.ErrorContains(t, err, "watch replan local observation findings reconcile")
 	assert.Empty(t, rt.currentOutbox())
-	assert.False(t, rt.syncBatch.active)
+	assert.False(t, rt.loop.syncBatch.active)
 }
 
 func TestRunSteadyStateReplan_ContextCancellationAfterObservationIsCleanShutdown(t *testing.T) {
@@ -320,7 +320,7 @@ func TestRunSteadyStateReplan_ContextCancellationAfterObservationIsCleanShutdown
 	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
-	assert.False(t, rt.syncBatch.active)
+	assert.False(t, rt.loop.syncBatch.active)
 	localRows, err := eng.baseline.ListLocalState(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, localRows, "cancellation before local snapshot commit must not write local_state")

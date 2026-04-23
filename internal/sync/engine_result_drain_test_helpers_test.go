@@ -77,17 +77,13 @@ func runResultDrainLoopIdleForTest(
 		}
 		return appendDrainOutcome(rt, ctx, bl, nil, &workerResult)
 	case <-rt.trialTimerChan():
-		released, err := rt.releaseDueHeldTrialsNow(ctx)
+		released, err := rt.releaseDueHeldTrialsNow(ctx, bl)
 		mustNoDrainLoopError(err)
-		reduced, err := rt.runPublicationDrainStage(ctx, rt, bl, released)
-		mustNoDrainLoopError(err)
-		return reduced, false
+		return released, false
 	case <-rt.retryTimerChan():
-		released, err := rt.releaseDueHeldRetriesNow(ctx)
+		released, err := rt.releaseDueHeldRetriesNow(ctx, bl)
 		mustNoDrainLoopError(err)
-		reduced, err := rt.runPublicationDrainStage(ctx, rt, bl, released)
-		mustNoDrainLoopError(err)
-		return reduced, false
+		return released, false
 	case <-ctx.Done():
 		return nil, true
 	}
@@ -109,17 +105,13 @@ func runResultDrainLoopWithOutboxForTest(
 		}
 		return appendDrainOutcome(rt, ctx, bl, outbox, &workerResult)
 	case <-rt.trialTimerChan():
-		released, err := rt.releaseDueHeldTrialsNow(ctx)
+		released, err := rt.releaseDueHeldTrialsNow(ctx, bl)
 		mustNoDrainLoopError(err)
-		reduced, err := rt.runPublicationDrainStage(ctx, rt, bl, released)
-		mustNoDrainLoopError(err)
-		return append(outbox, reduced...), false
+		return append(outbox, released...), false
 	case <-rt.retryTimerChan():
-		released, err := rt.releaseDueHeldRetriesNow(ctx)
+		released, err := rt.releaseDueHeldRetriesNow(ctx, bl)
 		mustNoDrainLoopError(err)
-		reduced, err := rt.runPublicationDrainStage(ctx, rt, bl, released)
-		mustNoDrainLoopError(err)
-		return append(outbox, reduced...), false
+		return append(outbox, released...), false
 	case <-ctx.Done():
 		return outbox, true
 	}
@@ -137,9 +129,7 @@ func appendDrainOutcome(
 		return outbox, true
 	}
 
-	reduced, err := rt.runPublicationDrainStage(ctx, rt, bl, ready)
-	mustNoDrainLoopError(err)
-	return append(outbox, reduced...), false
+	return append(outbox, ready...), false
 }
 
 func mustNoDrainLoopError(err error) {

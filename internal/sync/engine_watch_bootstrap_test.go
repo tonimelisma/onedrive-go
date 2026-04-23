@@ -39,7 +39,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedP
 		LastSeenAt:   now.UnixNano(),
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
-	rt.initializePreparedRuntime(&PreparedCurrentPlan{RetryRows: []RetryWorkRow{row}})
+	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
 
 	publication := rt.depGraph.Add(&Action{
 		Type:    ActionCleanup,
