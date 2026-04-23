@@ -442,7 +442,7 @@ when you treat it as several file families sharing one single-drive owner.
 | `store_read_*.go`, `store_write_*.go` | Store I/O: raw authority reads (remote state, observation state, snapshots) and write operations (baseline, observation, retry work, block scopes) |
 | `condition_keys.go`, `watch_summary.go`, `truth_status.go`, `issue_types.go` | Shared condition taxonomy and ordering, derived truth-availability reads, and raw engine-owned watch-summary aggregation |
 | `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |
-| `inotify_*`, `symlink_observation.go`, `engine_shared_root.go` | Platform or feature-specific observation/runtime helpers |
+| `inotify_*`, `symlink_observation.go`, `engine_rooted_subtree.go` | Platform or feature-specific observation/runtime helpers |
 
 If you are debugging sync behavior, first decide which stage owns the problem:
 

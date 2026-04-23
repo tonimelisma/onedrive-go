@@ -27,16 +27,16 @@ type configTestPathConvergenceTarget struct {
 
 func testEngineMountConfig(syncDir string) *EngineMountConfig {
 	return &EngineMountConfig{
-		DBPath:                 filepath.Join(filepath.Dir(syncDir), "state.db"),
-		SyncRoot:               syncDir,
-		DataDir:                config.DefaultDataDir(),
-		DriveID:                driveid.New("mount-drive-id"),
-		DriveType:              driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents").DriveType(),
-		AccountEmail:           "mount-user@example.com",
-		RootItemID:             "mount-root-id",
-		SharedRootDeltaCapable: false,
-		EnableWebsocket:        true,
-		LocalFilter:            LocalFilterConfig{},
+		DBPath:                    filepath.Join(filepath.Dir(syncDir), "state.db"),
+		SyncRoot:                  syncDir,
+		DataDir:                   config.DefaultDataDir(),
+		DriveID:                   driveid.New("mount-drive-id"),
+		DriveType:                 driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents").DriveType(),
+		AccountEmail:              "mount-user@example.com",
+		RootItemID:                "mount-root-id",
+		RootedSubtreeDeltaCapable: false,
+		EnableWebsocket:           true,
+		LocalFilter:               LocalFilterConfig{},
 		LocalRules: LocalObservationRules{
 			RejectSharePointRootForms: true,
 		},
@@ -128,7 +128,7 @@ func TestNewMountEngine_PropagatesRootedMountConfig(t *testing.T) {
 	assert.Equal(t, mountCfg.DriveID, eng.driveID)
 	assert.Equal(t, mountCfg.DriveType, eng.driveType)
 	assert.Equal(t, mountCfg.RootItemID, eng.rootItemID)
-	assert.False(t, eng.sharedRootDeltaCapable)
+	assert.False(t, eng.rootedSubtreeDeltaCapable)
 	assert.True(t, eng.enableWebsocket)
 	assert.NotNil(t, eng.socketIOFetcher)
 	assert.NotNil(t, eng.driveVerifier)
@@ -220,13 +220,13 @@ func TestNewDriveEngine_PropagatesWatchCapabilities(t *testing.T) {
 		Meta:     &graph.Client{},
 		Transfer: &graph.Client{},
 		DriveID:  driveid.New("abc123"),
-		RootItem: "shared-root-id",
+		RootItem: "rooted-subtree-id",
 	}
 	resolved := &config.ResolvedDrive{
 		CanonicalID:            driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents"),
 		SyncDir:                syncDir,
 		DriveID:                session.DriveID,
-		RootItemID:             "shared-root-id",
+		RootItemID:             "rooted-subtree-id",
 		SharedRootDeltaCapable: false,
 		TransfersConfig: config.TransfersConfig{
 			TransferWorkers: 3,
@@ -249,8 +249,8 @@ func TestNewDriveEngine_PropagatesWatchCapabilities(t *testing.T) {
 	assert.Equal(t, syncDir, eng.syncRoot)
 	assert.Equal(t, resolved.DriveID, eng.driveID)
 	assert.Equal(t, resolved.CanonicalID.DriveType(), eng.driveType)
-	assert.Equal(t, "shared-root-id", eng.rootItemID)
-	assert.False(t, eng.sharedRootDeltaCapable)
+	assert.Equal(t, "rooted-subtree-id", eng.rootItemID)
+	assert.False(t, eng.rootedSubtreeDeltaCapable)
 	assert.True(t, eng.enableWebsocket)
 	assert.NotNil(t, eng.socketIOFetcher)
 	assert.NotNil(t, eng.driveVerifier)
@@ -277,7 +277,7 @@ func TestNewDriveEngine_WrapsMountConstructorEquivalently(t *testing.T) {
 		CanonicalID:            driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents"),
 		SyncDir:                syncDir,
 		DriveID:                session.DriveID,
-		RootItemID:             "shared-root-id",
+		RootItemID:             "rooted-subtree-id",
 		SharedRootDeltaCapable: false,
 		TransfersConfig: config.TransfersConfig{
 			TransferWorkers: 5,
@@ -298,16 +298,16 @@ func TestNewDriveEngine_WrapsMountConstructorEquivalently(t *testing.T) {
 	})
 
 	mountEngine, err := NewMountEngine(t.Context(), session, &EngineMountConfig{
-		DBPath:                 resolved.StatePath(),
-		SyncRoot:               resolved.SyncDir,
-		DataDir:                config.DefaultDataDir(),
-		DriveID:                resolved.DriveID,
-		DriveType:              resolved.CanonicalID.DriveType(),
-		AccountEmail:           resolved.CanonicalID.Email(),
-		RootItemID:             resolved.RootItemID,
-		SharedRootDeltaCapable: resolved.SharedRootDeltaCapable,
-		EnableWebsocket:        resolved.Websocket,
-		LocalFilter:            LocalFilterConfig{},
+		DBPath:                    resolved.StatePath(),
+		SyncRoot:                  resolved.SyncDir,
+		DataDir:                   config.DefaultDataDir(),
+		DriveID:                   resolved.DriveID,
+		DriveType:                 resolved.CanonicalID.DriveType(),
+		AccountEmail:              resolved.CanonicalID.Email(),
+		RootItemID:                resolved.RootItemID,
+		RootedSubtreeDeltaCapable: resolved.SharedRootDeltaCapable,
+		EnableWebsocket:           resolved.Websocket,
+		LocalFilter:               LocalFilterConfig{},
 		LocalRules: LocalObservationRules{
 			RejectSharePointRootForms: resolved.CanonicalID.IsSharePoint(),
 		},
@@ -324,7 +324,7 @@ func TestNewDriveEngine_WrapsMountConstructorEquivalently(t *testing.T) {
 	assert.Equal(t, driveEngine.driveID, mountEngine.driveID)
 	assert.Equal(t, driveEngine.driveType, mountEngine.driveType)
 	assert.Equal(t, driveEngine.rootItemID, mountEngine.rootItemID)
-	assert.Equal(t, driveEngine.sharedRootDeltaCapable, mountEngine.sharedRootDeltaCapable)
+	assert.Equal(t, driveEngine.rootedSubtreeDeltaCapable, mountEngine.rootedSubtreeDeltaCapable)
 	assert.Equal(t, driveEngine.enableWebsocket, mountEngine.enableWebsocket)
 	assert.Equal(t, driveEngine.transferWorkers, mountEngine.transferWorkers)
 	assert.Equal(t, driveEngine.checkWorkers, mountEngine.checkWorkers)
