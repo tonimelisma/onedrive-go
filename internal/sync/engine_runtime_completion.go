@@ -138,13 +138,38 @@ func (flow *engineFlow) applyCompletionSuccess(
 	current *TrackedAction,
 	r *ActionCompletion,
 ) ([]*TrackedAction, error) {
+	return flow.applyTrackedActionSuccess(ctx, watch, current, r, "successful action completion")
+}
+
+func (flow *engineFlow) applyTrackedActionSuccess(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	r *ActionCompletion,
+	depGraphReason string,
+) ([]*TrackedAction, error) {
 	flow.markFinished(current)
 	flow.succeeded++
-	flow.clearRetryWorkOnSuccess(ctx, r)
+	if current != nil {
+		flow.clearRetryWorkOnActionSuccess(ctx, &current.Action)
+	} else {
+		flow.clearRetryWorkOnSuccess(ctx, r)
+	}
 	if flow.scopeState != nil {
 		flow.scopeState.RecordSuccess(r)
 	}
-	return flow.admitReadyAfterSuccessfulAction(ctx, watch, r.ActionID, "successful action completion")
+
+	actionID := int64(0)
+	switch {
+	case current != nil:
+		actionID = current.ID
+	case r != nil:
+		actionID = r.ActionID
+	default:
+		return nil, nil
+	}
+
+	return flow.admitReadyAfterSuccessfulAction(ctx, watch, actionID, depGraphReason)
 }
 
 // applyOrdinaryFailureEffects handles post-routing side effects for normal
@@ -351,10 +376,7 @@ func (flow *engineFlow) completePublicationDrainAction(
 		return nil, nil
 	}
 
-	flow.markFinished(current)
-	flow.succeeded++
-	flow.clearRetryWorkOnActionSuccess(ctx, &current.Action)
-	return flow.admitReadyAfterSuccessfulAction(ctx, watch, current.ID, "publication action completion")
+	return flow.applyTrackedActionSuccess(ctx, watch, current, nil, "successful action completion")
 }
 
 // runPublicationDrainStage keeps publication-only actions on the engine/store

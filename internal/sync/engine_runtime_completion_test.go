@@ -121,6 +121,58 @@ func TestEngineFlow_ProcessNormalDecision_RetryableTransientScopeEvidenceStaysUn
 	assert.NotZero(t, retryRows[0].NextRetryAt)
 }
 
+// Validates: R-2.10.5, R-2.10.33
+func TestEngineFlow_ApplyCompletionSuccess_ClearsRetryWorkAndAdmitsDependents(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+	now := eng.nowFn()
+
+	row := RetryWorkRow{
+		Path:          "sync.txt",
+		ActionType:    ActionDownload,
+		ConditionType: IssueServiceOutage,
+		AttemptCount:  1,
+		NextRetryAt:   now.Add(time.Minute).UnixNano(),
+		LastError:     "retry later",
+		FirstSeenAt:   now.Add(-time.Minute).UnixNano(),
+		LastSeenAt:    now.UnixNano(),
+	}
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
+	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
+
+	current := rt.depGraph.Add(&Action{
+		Type:    ActionDownload,
+		Path:    "sync.txt",
+		DriveID: eng.driveID,
+		ItemID:  "sync-item",
+	}, 1, nil)
+	require.NotNil(t, current)
+
+	dependent := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "next.txt",
+		DriveID: eng.driveID,
+		ItemID:  "next-item",
+	}, 2, []int64{1})
+	assert.Nil(t, dependent)
+
+	dispatched, err := flow.applyCompletionSuccess(t.Context(), rt, current, &ActionCompletion{
+		ActionID:   1,
+		Path:       "sync.txt",
+		ActionType: ActionDownload,
+		Success:    true,
+	})
+	require.NoError(t, err)
+	require.Len(t, dispatched, 1)
+	assert.Equal(t, int64(2), dispatched[0].ID)
+	assert.Equal(t, 1, flow.succeeded)
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+}
+
 // Validates: R-2.10.5
 func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelayedRetryWork(t *testing.T) {
 	t.Parallel()

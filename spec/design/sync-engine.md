@@ -255,6 +255,10 @@ worker actions are the only dispatchable work left. That publication drain is
 an effectful engine/store stage, not a pure transform: it durably applies
 publication mutations, routes publication failures through normal completion
 classification, and returns only the remaining concrete worker frontier.
+Successful worker actions and successful publication-only actions still reuse
+the same exact-action success bookkeeping: mark finished, increment success
+counts, clear exact retry state, optionally feed scope-success detection, then
+admit newly-ready dependents.
 One-shot and watch coordinators still own their outbox state explicitly.
 
 Runtime completion handling follows the same boundary shape everywhere:
