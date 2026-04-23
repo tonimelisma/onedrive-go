@@ -22,15 +22,12 @@ func TestResetStateDB_RecreatesFreshCanonicalStore(t *testing.T) {
 	require.NoError(t, err)
 
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "bad:name.txt",
-		DriveID:    driveid.New(testDriveID),
-		ActionType: ActionUpload,
-		IssueType:  IssueInvalidFilename,
-		Error:      "invalid filename",
+		Path:      "bad:name.txt",
+		DriveID:   driveid.New(testDriveID),
+		IssueType: IssueInvalidFilename,
 	})
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           SKService(),
-		BlockedAt:     store.nowFunc(),
 		TrialInterval: time.Minute,
 		NextTrialAt:   store.nowFunc().Add(time.Minute),
 	}))

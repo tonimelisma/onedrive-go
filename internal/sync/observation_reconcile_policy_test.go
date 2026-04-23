@@ -2,7 +2,6 @@ package sync
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,11 +38,9 @@ func TestBuildObservationReconcilePlan_UpsertsCurrentIssuesOnly(t *testing.T) {
 
 	batch := &ObservationFindingsBatch{
 		Issues: []ObservationIssue{{
-			Path:       "same.txt",
-			DriveID:    driveid.New(testDriveID),
-			ActionType: ActionUpload,
-			IssueType:  IssuePathTooLong,
-			Error:      "new",
+			Path:      "same.txt",
+			DriveID:   driveid.New(testDriveID),
+			IssueType: IssuePathTooLong,
 		}},
 		ManagedIssueTypes: []string{IssuePathTooLong},
 		ManagedPaths:      []string{"same.txt"},
@@ -68,18 +65,14 @@ func TestBuildObservationReconcilePlan_ReconcilesExactManagedIssueSet(t *testing
 	batch := &ObservationFindingsBatch{
 		Issues: []ObservationIssue{
 			{
-				Path:       "same.txt",
-				DriveID:    driveid.New(testDriveID),
-				ActionType: ActionUpload,
-				IssueType:  IssuePathTooLong,
-				Error:      "still too long",
+				Path:      "same.txt",
+				DriveID:   driveid.New(testDriveID),
+				IssueType: IssuePathTooLong,
 			},
 			{
-				Path:       "keep.txt",
-				DriveID:    driveid.New(testDriveID),
-				ActionType: ActionUpload,
-				IssueType:  IssueInvalidFilename,
-				Error:      "still invalid",
+				Path:      "keep.txt",
+				DriveID:   driveid.New(testDriveID),
+				IssueType: IssueInvalidFilename,
 			},
 		},
 		ManagedIssueTypes: []string{IssuePathTooLong, IssueInvalidFilename},
@@ -107,14 +100,11 @@ func TestSyncStore_ApplyObservationReconcilePlan_DeletesByPreviousIssueType(t *t
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	now := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
 
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       "same.txt",
-		DriveID:    driveid.New(testDriveID),
-		ActionType: ActionUpload,
-		IssueType:  IssueInvalidFilename,
-		Error:      "old",
+		Path:      "same.txt",
+		DriveID:   driveid.New(testDriveID),
+		IssueType: IssueInvalidFilename,
 	})
 
 	tx, err := beginPerfTx(ctx, store.rawDB())
@@ -122,11 +112,9 @@ func TestSyncStore_ApplyObservationReconcilePlan_DeletesByPreviousIssueType(t *t
 
 	plan := observationReconcilePlan{
 		issueUpserts: []ObservationIssue{{
-			Path:       "same.txt",
-			DriveID:    driveid.New(testDriveID),
-			ActionType: ActionUpload,
-			IssueType:  IssuePathTooLong,
-			Error:      "new",
+			Path:      "same.txt",
+			DriveID:   driveid.New(testDriveID),
+			IssueType: IssuePathTooLong,
 		}},
 		issueDeletes: []managedObservationIssueKey{{
 			path:      "same.txt",
@@ -134,7 +122,7 @@ func TestSyncStore_ApplyObservationReconcilePlan_DeletesByPreviousIssueType(t *t
 		}},
 	}
 
-	require.NoError(t, store.applyObservationFindingsReconcilePlanTx(ctx, tx, plan, now.UnixNano()))
+	require.NoError(t, store.applyObservationFindingsReconcilePlanTx(ctx, tx, plan))
 	require.NoError(t, tx.Commit())
 
 	rows, err := store.ListObservationIssues(ctx)

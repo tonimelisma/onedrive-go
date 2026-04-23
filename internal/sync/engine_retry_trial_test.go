@@ -43,8 +43,6 @@ func TestReleaseDueHeldRetriesNow_DoesNotConsultDurableRetryRowsWithoutHeldRunti
 		ActionType:   ActionUpload,
 		AttemptCount: 1,
 		NextRetryAt:  now.Add(-time.Second).UnixNano(),
-		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
-		LastSeenAt:   now.UnixNano(),
 	}))
 
 	outbox, err := rt.releaseDueHeldRetriesNow(t.Context(), nil)
@@ -66,7 +64,6 @@ func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testi
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		NextTrialAt:   eng.nowFn().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	})
@@ -106,7 +103,6 @@ func TestReleaseDueHeldTrialsNow_SkipsScopesWithoutHeldDependencyReadyCandidates
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		NextTrialAt:   eng.nowFn().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	})
@@ -127,7 +123,6 @@ func TestReleaseDueHeldTrialsNow_DoesNotConsultDurableBlockedRetryRowsWithoutHel
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		BlockedAt:     eng.nowFn().Add(-time.Minute),
 		NextTrialAt:   eng.nowFn().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	})
@@ -136,7 +131,6 @@ func TestReleaseDueHeldTrialsNow_DoesNotConsultDurableBlockedRetryRowsWithoutHel
 		ActionType:    ActionUpload,
 		ConditionType: IssueServiceOutage,
 		ScopeKey:      scopeKey,
-		LastError:     "blocked",
 		Blocked:       true,
 	}, nil)
 	require.NoError(t, err)
@@ -164,8 +158,6 @@ func TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow(t *testing.T) {
 		ActionType:   ActionUpload,
 		AttemptCount: 2,
 		NextRetryAt:  now,
-		FirstSeenAt:  now - 10,
-		LastSeenAt:   now,
 	}))
 
 	flow.clearRetryWorkOnSuccess(t.Context(), &ActionCompletion{

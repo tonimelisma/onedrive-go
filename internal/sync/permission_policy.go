@@ -80,8 +80,6 @@ func DecidePermissionOutcome(
 				Path:          r.Path,
 				ActionType:    r.ActionType,
 				ConditionType: evidence.IssueType,
-				LastError:     evidence.LastError,
-				HTTPStatus:    evidence.HTTPStatus,
 			},
 		}
 	case permissionEvidenceBoundaryDenied:
@@ -95,8 +93,6 @@ func DecidePermissionOutcome(
 				ActionType:    r.ActionType,
 				ConditionType: evidence.IssueType,
 				ScopeKey:      scopeKey,
-				LastError:     evidence.LastError,
-				HTTPStatus:    evidence.HTTPStatus,
 				Blocked:       true,
 			},
 			BoundaryPath: evidence.BoundaryPath,

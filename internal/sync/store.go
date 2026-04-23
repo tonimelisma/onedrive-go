@@ -1,5 +1,5 @@
 // Package sync persists sync baseline, observation issues, retry work,
-// block-scope, and sync-status state.
+// block-scope, and observation cadence state.
 //
 // Contents:
 //   - SyncStore:    struct definition (db, baseline, logger, nowFunc)
@@ -16,7 +16,6 @@
 //   - store_observation_issues.go: observation issue recording and read helpers
 //   - store_retry_work.go:         exact retry work persistence and mutation helpers
 //   - store_inspect.go:            read-only raw status snapshot helpers and inspector lifecycle
-//   - store_sync_status.go:        product-facing sync-status persistence
 //   - store_scope_admin.go:        scope release/discard mutation helpers
 //   - store_compatibility.go:      startup diagnosis for unsupported existing DBs
 //   - store_reset.go:              explicit delete-and-recreate helper
@@ -135,17 +134,6 @@ func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) err
 
 	if retention <= 0 {
 		return nil
-	}
-
-	cutoff := m.nowFunc().Add(-retention).UnixNano()
-
-	// Observation issues are user-visible current-truth problems and can be
-	// rebuilt from fresh observation, so stale rows are pruned after retention
-	// to prevent unbounded growth.
-	if _, err := m.db.ExecContext(ctx,
-		`DELETE FROM observation_issues WHERE last_seen_at < ?`,
-		cutoff); err != nil {
-		return fmt.Errorf("prune stale observation issues: %w", err)
 	}
 
 	return nil

@@ -34,12 +34,10 @@ func seedObservationIssueForTest(
 	t.Helper()
 
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:       path,
-		DriveID:    driveid.New(testDriveID),
-		ActionType: ActionUpload,
-		IssueType:  issueType,
-		Error:      issueType,
-		ScopeKey:   scopeKey,
+		Path:      path,
+		DriveID:   driveid.New(testDriveID),
+		IssueType: issueType,
+		ScopeKey:  scopeKey,
 	})
 }
 
@@ -65,9 +63,8 @@ func TestSyncStore_ReconcileObservationFindings_RejectsInvalidIssueInput(t *test
 
 	err := store.ReconcileObservationFindings(t.Context(), &ObservationFindingsBatch{
 		Issues: []ObservationIssue{{
-			DriveID:    driveid.New(testDriveID),
-			ActionType: ActionUpload,
-			IssueType:  IssueInvalidFilename,
+			DriveID:   driveid.New(testDriveID),
+			IssueType: IssueInvalidFilename,
 		}},
 		ManagedIssueTypes: []string{IssueInvalidFilename},
 	}, time.Now().UTC())
@@ -89,19 +86,15 @@ func TestSyncStore_ReconcileObservationFindings_ReplacesManagedIssueSet(t *testi
 	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
 		Issues: []ObservationIssue{
 			{
-				Path:       "keep-invalid.txt",
-				DriveID:    driveid.New(testDriveID),
-				ActionType: ActionUpload,
-				IssueType:  IssueInvalidFilename,
-				Error:      "invalid",
+				Path:      "keep-invalid.txt",
+				DriveID:   driveid.New(testDriveID),
+				IssueType: IssueInvalidFilename,
 			},
 			{
-				Path:       "Private",
-				DriveID:    driveid.New(testDriveID),
-				ActionType: ActionUpload,
-				IssueType:  IssueLocalReadDenied,
-				Error:      "directory not accessible",
-				ScopeKey:   SKPermLocalRead("Private"),
+				Path:      "Private",
+				DriveID:   driveid.New(testDriveID),
+				IssueType: IssueLocalReadDenied,
+				ScopeKey:  SKPermLocalRead("Private"),
 			},
 		},
 		ManagedIssueTypes: []string{IssueInvalidFilename, IssueLocalReadDenied},
@@ -123,11 +116,9 @@ func TestSyncStore_ReconcileObservationFindings_FileReadDeniedDoesNotCreateReadB
 
 	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
 		Issues: []ObservationIssue{{
-			Path:       "Private/file.txt",
-			DriveID:    driveid.New(testDriveID),
-			ActionType: ActionUpload,
-			IssueType:  IssueLocalReadDenied,
-			Error:      "file not accessible",
+			Path:      "Private/file.txt",
+			DriveID:   driveid.New(testDriveID),
+			IssueType: IssueLocalReadDenied,
 		}},
 		ManagedIssueTypes: []string{IssueLocalReadDenied},
 	}, now))
@@ -155,12 +146,10 @@ func TestSyncStore_ReconcileObservationFindings_OnlyClearsManagedFamilies(t *tes
 
 	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
 		Issues: []ObservationIssue{{
-			Path:       "/",
-			DriveID:    driveid.New(testDriveID),
-			ActionType: ActionDownload,
-			IssueType:  IssueRemoteReadDenied,
-			Error:      "remote root unreadable",
-			ScopeKey:   SKPermRemoteRead(""),
+			Path:      "/",
+			DriveID:   driveid.New(testDriveID),
+			IssueType: IssueRemoteReadDenied,
+			ScopeKey:  SKPermRemoteRead(""),
 		}},
 		ManagedIssueTypes: []string{IssueRemoteReadDenied},
 	}, now))

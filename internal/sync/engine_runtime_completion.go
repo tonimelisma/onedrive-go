@@ -437,8 +437,6 @@ func (flow *engineFlow) recordRetryWork(
 		ActionType:    r.ActionType,
 		ConditionType: decision.ConditionType,
 		ScopeKey:      scopeKey,
-		LastError:     r.ErrMsg,
-		HTTPStatus:    r.HTTPStatus,
 		Blocked:       blocked,
 	}, delayFn)
 	if recErr != nil {

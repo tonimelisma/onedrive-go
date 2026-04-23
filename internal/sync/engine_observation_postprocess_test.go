@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func testRemoteCreateEvent(path string, itemID string, driveID string) ChangeEvent {
@@ -123,7 +122,7 @@ func TestHandleRemoteObservationBatch_SharedRootReconcilesRemoteReadDeniedFindin
 	ctx := t.Context()
 
 	batch := buildSharedRootWatchBatch(eng.Engine, &remoteFetchResult{
-		findings: rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden),
+		findings: rootRemoteReadDeniedObservationFindingsBatch(eng.driveID),
 	})
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
@@ -149,7 +148,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchClearsRemoteReadDeniedFindings
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	findings := rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden)
+	findings := rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &findings, eng.nowFunc()))
 
 	batch := buildPrimaryWatchBatch(eng.Engine, []ChangeEvent{
@@ -198,7 +197,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchReconcileFailureIsFatal(t *tes
 	require.NoError(t, eng.baseline.Close(ctx))
 
 	batch := buildPrimaryWatchBatch(eng.Engine, nil, "")
-	batch.findings = rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden)
+	batch.findings = rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
 
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.Error(t, err)
@@ -237,7 +236,7 @@ func TestHandleRemoteObservationBatch_FullRefreshApplyFailureMarksDirtyForRetry(
 	require.NoError(t, eng.baseline.Close(ctx))
 
 	batch := buildFullRemoteRefreshBatch(eng.Engine, remoteFetchResult{
-		findings: rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden),
+		findings: rootRemoteReadDeniedObservationFindingsBatch(eng.driveID),
 	})
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
@@ -268,14 +267,13 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 
 	serviceScope := &ActiveScope{
 		Key:           SKService(),
-		BlockedAt:     eng.nowFunc(),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}
 	rt.upsertActiveScope(serviceScope)
 
 	batch := buildPrimaryWatchBatch(eng.Engine, nil, "")
-	batch.findings = rootRemoteReadDeniedObservationFindingsBatch(eng.driveID, graph.ErrForbidden)
+	batch.findings = rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
 	require.NoError(t, rt.handleRemoteObservationBatch(ctx, &batch))
 
 	activeScopes := rt.snapshotActiveScopes()

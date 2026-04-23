@@ -141,14 +141,11 @@ func (ss *syncStateInfo) hasPersistentStatusData() bool {
 }
 
 func (ss *syncStateInfo) hasPersistentSummaryData() bool {
-	return ss.LastSyncTime != "" ||
-		ss.LastSyncDuration != "" ||
-		ss.FileCount > 0 ||
+	return ss.FileCount > 0 ||
 		ss.ConditionCount > 0 ||
 		len(ss.Conditions) > 0 ||
 		ss.RemoteDrift > 0 ||
-		ss.Retrying > 0 ||
-		ss.LastError != ""
+		ss.Retrying > 0
 }
 
 func printStatusPerfText(w io.Writer, ss *syncStateInfo) error {

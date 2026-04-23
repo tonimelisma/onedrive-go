@@ -10,20 +10,18 @@ type blockScopeRowScanner interface {
 	Scan(dest ...any) error
 }
 
-const sqlSelectBlockScopeRows = `SELECT scope_key, blocked_at, trial_interval, next_trial_at
+const sqlSelectBlockScopeRows = `SELECT scope_key, trial_interval, next_trial_at
 	FROM block_scopes`
 
 func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 	var (
 		wireKey       string
-		blockedAtNano int64
 		intervalNano  int64
 		nextTrialNano int64
 	)
 
 	if err := scanner.Scan(
 		&wireKey,
-		&blockedAtNano,
 		&intervalNano,
 		&nextTrialNano,
 	); err != nil {
@@ -48,7 +46,6 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 
 	return &BlockScope{
 		Key:           key,
-		BlockedAt:     time.Unix(0, blockedAtNano).UTC(),
 		TrialInterval: time.Duration(intervalNano),
 		NextTrialAt:   nextTrialAt,
 	}, nil

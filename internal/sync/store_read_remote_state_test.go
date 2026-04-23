@@ -21,7 +21,6 @@ func TestSyncStore_GetRemoteStateByID(t *testing.T) {
 		{
 			DriveID:  driveID,
 			ItemID:   "item-1",
-			ParentID: "root",
 			Path:     "docs/report.txt",
 			ItemType: ItemTypeFile,
 			Hash:     "hash-1",
@@ -37,7 +36,6 @@ func TestSyncStore_GetRemoteStateByID(t *testing.T) {
 	require.NotNil(t, row)
 	assert.Equal(t, driveID, row.DriveID)
 	assert.Equal(t, "docs/report.txt", row.Path)
-	assert.Equal(t, "root", row.ParentID)
 	assert.Equal(t, "hash-1", row.Hash)
 	assert.Equal(t, int64(42), row.Size)
 	assert.Equal(t, int64(1234), row.Mtime)

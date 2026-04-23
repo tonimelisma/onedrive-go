@@ -40,12 +40,13 @@ func buildPrimaryWatchBatch(
 	projected := projectRemoteObservations(engine.logger, primaryEvents)
 
 	return remoteObservationBatch{
-		source:   remoteObservationBatchPrimaryWatch,
-		observed: projected.observed,
-		emitted:  append([]ChangeEvent(nil), projected.emitted...),
-		pending:  primaryCursorCommit(newToken, engine, false, len(projected.emitted)),
-		findings: newRemoteObservationFindingsBatch(),
-		applyAck: make(chan error, 1),
+		source:          remoteObservationBatchPrimaryWatch,
+		observationMode: remoteObservationModeDelta,
+		observed:        projected.observed,
+		emitted:         append([]ChangeEvent(nil), projected.emitted...),
+		pending:         primaryCursorCommit(newToken, engine, false, len(projected.emitted), remoteObservationModeDelta),
+		findings:        newRemoteObservationFindingsBatch(),
+		applyAck:        make(chan error, 1),
 	}
 }
 
@@ -55,21 +56,23 @@ func buildSharedRootWatchBatch(
 ) remoteObservationBatch {
 	if result == nil {
 		return remoteObservationBatch{
-			source:   remoteObservationBatchSharedRoot,
-			findings: newRemoteObservationFindingsBatch(),
-			applyAck: make(chan error, 1),
+			source:          remoteObservationBatchSharedRoot,
+			observationMode: remoteObservationModeEnumerate,
+			findings:        newRemoteObservationFindingsBatch(),
+			applyAck:        make(chan error, 1),
 		}
 	}
 
 	projected := projectRemoteObservations(engine.logger, result.events)
 
 	return remoteObservationBatch{
-		source:   remoteObservationBatchSharedRoot,
-		observed: projected.observed,
-		emitted:  append([]ChangeEvent(nil), projected.emitted...),
-		pending:  clonePendingPrimaryCursorCommit(result.pending),
-		findings: result.findings,
-		applyAck: make(chan error, 1),
+		source:          remoteObservationBatchSharedRoot,
+		observationMode: result.observationMode,
+		observed:        projected.observed,
+		emitted:         append([]ChangeEvent(nil), projected.emitted...),
+		pending:         clonePendingPrimaryCursorCommit(result.pending),
+		findings:        result.findings,
+		applyAck:        make(chan error, 1),
 	}
 }
 
@@ -81,6 +84,7 @@ func buildFullRemoteRefreshBatch(
 
 	return remoteObservationBatch{
 		source:                remoteObservationBatchFullRefresh,
+		observationMode:       result.observationMode,
 		observed:              projected.observed,
 		emitted:               append([]ChangeEvent(nil), projected.emitted...),
 		pending:               clonePendingPrimaryCursorCommit(result.pending),
@@ -147,6 +151,16 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 	if pending != nil {
 		if err := rt.commitPendingPrimaryCursor(ctx, pending); err != nil {
 			return err
+		}
+	}
+
+	if batch.observationMode == remoteObservationModeEnumerate {
+		if err := rt.engine.baseline.ClampFullRemoteRefreshDeadline(
+			ctx,
+			rt.engine.driveID,
+			rt.engine.nowFunc().Add(remoteRefreshEnumerateInterval),
+		); err != nil {
+			return fmt.Errorf("clamp full remote refresh deadline: %w", err)
 		}
 	}
 

@@ -178,7 +178,6 @@ func TestExtendScopeTrial(t *testing.T) {
 	blocks := []ActiveScope{
 		{
 			Key:           SKThrottleDrive(driveid.New("d")),
-			BlockedAt:     now.Add(-time.Minute),
 			NextTrialAt:   now.Add(10 * time.Second),
 			TrialInterval: 10 * time.Second,
 		},

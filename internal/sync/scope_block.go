@@ -9,7 +9,6 @@ import (
 // block_scopes for restart, admission, and read-side projections.
 type BlockScope struct {
 	Key           ScopeKey
-	BlockedAt     time.Time     // when the block was created
 	TrialInterval time.Duration // current interval between trial actions
 	NextTrialAt   time.Time     // when to dispatch the next trial
 }
@@ -19,7 +18,6 @@ type BlockScope struct {
 // persisted scope row remains the durable/read-side shape.
 type ActiveScope struct {
 	Key           ScopeKey
-	BlockedAt     time.Time
 	TrialInterval time.Duration
 	NextTrialAt   time.Time
 }
@@ -31,7 +29,6 @@ func activeScopeFromBlockScopeRow(row *BlockScope) ActiveScope {
 
 	return ActiveScope{
 		Key:           row.Key,
-		BlockedAt:     row.BlockedAt,
 		TrialInterval: row.TrialInterval,
 		NextTrialAt:   row.NextTrialAt,
 	}
@@ -47,7 +44,6 @@ func blockScopeRowFromActiveScope(scope ActiveScope) (*BlockScope, error) {
 
 	return &BlockScope{
 		Key:           scope.Key,
-		BlockedAt:     scope.BlockedAt,
 		TrialInterval: scope.TrialInterval,
 		NextTrialAt:   scope.NextTrialAt,
 	}, nil
