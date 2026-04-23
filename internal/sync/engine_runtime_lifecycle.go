@@ -277,7 +277,11 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 		if err != nil {
 			return fmt.Errorf("transition blocked scope %s -> %s: check old scope blocked work: %w", from.String(), to.String(), err)
 		}
-		if !hasBlockedWork {
+		if hasBlockedWork {
+			if err := flow.rearmScopeTrial(ctx, watch, from); err != nil {
+				return fmt.Errorf("transition blocked scope %s -> %s: rearm old scope: %w", from.String(), to.String(), err)
+			}
+		} else {
 			if err := flow.engine.baseline.DiscardScope(ctx, from); err != nil {
 				return fmt.Errorf("transition blocked scope %s -> %s: discard old scope: %w", from.String(), to.String(), err)
 			}

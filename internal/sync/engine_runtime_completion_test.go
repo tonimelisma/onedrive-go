@@ -620,7 +620,12 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 	assert.Equal(t, trialScopeKey, rowsByPath["other.txt"].ScopeKey)
 	assert.True(t, rowsByPath["other.txt"].Blocked)
 
-	assertBlockScopesPresentForTest(t, eng, trialScopeKey, throttleScopeKey)
+	blockScopes := blockScopesByKeyForTest(t, eng)
+	require.Contains(t, blockScopes, trialScopeKey)
+	require.Contains(t, blockScopes, throttleScopeKey)
+	assert.Equal(t, eng.nowFunc().Add(time.Minute), blockScopes[trialScopeKey].NextTrialAt,
+		"retained original scope must rearm to the next trial interval instead of staying immediately due")
+	assert.Equal(t, eng.nowFunc().Add(time.Minute), blockScopes[throttleScopeKey].NextTrialAt)
 }
 
 func upsertBlockedRetryWorkForTest(t *testing.T, eng *testEngine, path string, scopeKey ScopeKey, firstSeenAt int64, lastSeenAt int64) {
@@ -654,20 +659,18 @@ func retryRowsByPathForTest(t *testing.T, eng *testEngine) map[string]RetryWorkR
 	return rowsByPath
 }
 
-func assertBlockScopesPresentForTest(t *testing.T, eng *testEngine, keys ...ScopeKey) {
+func blockScopesByKeyForTest(t *testing.T, eng *testEngine) map[ScopeKey]BlockScope {
 	t.Helper()
 
 	blockScopes, err := eng.baseline.ListBlockScopes(t.Context())
 	require.NoError(t, err)
-	require.Len(t, blockScopes, len(keys))
 
-	present := make(map[ScopeKey]struct{}, len(blockScopes))
+	byKey := make(map[ScopeKey]BlockScope, len(blockScopes))
 	for _, block := range blockScopes {
-		present[block.Key] = struct{}{}
+		byKey[block.Key] = *block
 	}
-	for _, key := range keys {
-		assert.Contains(t, present, key)
-	}
+
+	return byKey
 }
 
 // Validates: R-2.10.5

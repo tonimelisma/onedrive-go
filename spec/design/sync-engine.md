@@ -472,7 +472,9 @@ continue without waiting for a replan. Trial-driven reclassification from one
 blocked scope to another follows that same ownership rule: the newly
 reclassified exact work moves to the new scope immediately, but the old scope is
 discarded only after its prior `scope_key` no longer owns any blocked
-`retry_work`.
+`retry_work`. If blocked work remains under the old scope, the engine rearms that
+retained scope's next trial interval in the same transition so it does not stay
+immediately due after the just-finished trial.
 
 ## What The Engine Does Not Own
 
