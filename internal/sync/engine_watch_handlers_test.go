@@ -120,6 +120,65 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 }
 
 // Validates: R-2.10.5, R-2.10.33
+func TestRunPublicationDrainStage_PublicationSuccessClearsRetryWorkAndAdmitsDependents(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+	now := eng.nowFn()
+	driveID := driveid.New(engineTestDriveID)
+
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
+		Action:   ActionDownload,
+		Success:  true,
+		Path:     "cleanup.txt",
+		DriveID:  driveID,
+		ItemID:   "cleanup-item",
+		ParentID: "root",
+		ItemType: ItemTypeFile,
+	}))
+
+	row := RetryWorkRow{
+		Path:         "cleanup.txt",
+		ActionType:   ActionCleanup,
+		AttemptCount: 1,
+		NextRetryAt:  now.Add(time.Minute).UnixNano(),
+		LastError:    "retry later",
+		FirstSeenAt:  now.Add(-time.Minute).UnixNano(),
+		LastSeenAt:   now.UnixNano(),
+	}
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
+	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	publication := rt.depGraph.Add(&Action{
+		Type:    ActionCleanup,
+		Path:    "cleanup.txt",
+		DriveID: driveID,
+		ItemID:  "cleanup-item",
+	}, 1, nil)
+	require.NotNil(t, publication)
+
+	dependent := rt.depGraph.Add(&Action{
+		Type:    ActionDownload,
+		Path:    "after.txt",
+		DriveID: driveID,
+		ItemID:  "after-item",
+	}, 2, []int64{1})
+	assert.Nil(t, dependent)
+
+	outbox, err := rt.runPublicationDrainStage(ctx, rt, bl, []*TrackedAction{publication})
+	require.NoError(t, err)
+	require.Len(t, outbox, 1)
+	assert.Equal(t, int64(2), outbox[0].ID)
+	assert.Equal(t, 1, rt.succeeded)
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
+}
+
+// Validates: R-2.10.5, R-2.10.33
 func TestRunPublicationDrainStage_PersistsRetryWorkOnPublicationCommitFailure(t *testing.T) {
 	t.Parallel()
 
