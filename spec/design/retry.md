@@ -89,6 +89,9 @@ engine.
 ### Per-item transient retry
 
 - transient exact work is persisted in `retry_work`
+- delayed exact retry rows use the store's retry-failure helper; blocked scope
+  rows use the store's blocked-retry helper, but both land in the same durable
+  `retry_work` table
 - `next_retry_at` is computed from `ReconcilePolicy()`
 - current-plan preparation prunes stale retry rows against the latest
   actionable set and loads the surviving rows into runtime state

@@ -55,13 +55,7 @@ func TestSyncStore_ClearBlockedRetryWork(t *testing.T) {
 	store := newTestStore(t)
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
-	_, err := store.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:          "blocked.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueRemoteWriteDenied,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err := store.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("blocked.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
 
 	require.NoError(t, store.ClearBlockedRetryWork(t.Context(), RetryWorkKey{
@@ -105,13 +99,7 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 		TrialInterval: time.Second,
 		NextTrialAt:   time.Unix(2, 0),
 	}))
-	_, err := store.RecordRetryWorkFailure(t.Context(), &RetryWorkFailure{
-		Path:          "Shared/Docs/a.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueRemoteWriteDenied,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err := store.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("Shared/Docs/a.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
 
 	dbPath := syncStorePathForStoreScopeTest(t, store)
@@ -224,13 +212,7 @@ func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndPreservesObservatio
 	}))
 	seedObservationIssueForTest(t, store, "Shared/Docs/bad.txt", IssueRemoteWriteDenied, scopeKey)
 	seedObservationIssueForTest(t, store, "other/problem.txt", IssueInvalidFilename, ScopeKey{})
-	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "Shared/Docs/file.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueRemoteWriteDenied,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err := store.RecordBlockedRetryWork(ctx, testRetryWorkKey("Shared/Docs/file.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
 
 	require.NoError(t, store.ReleaseScope(ctx, scopeKey, now))
@@ -307,13 +289,7 @@ func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndPreservesObservationIs
 	}))
 	seedObservationIssueForTest(t, store, "Shared/Docs/bad.txt", IssueRemoteWriteDenied, scopeKey)
 	seedObservationIssueForTest(t, store, "keep.txt", IssueInvalidFilename, ScopeKey{})
-	_, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          "Shared/Docs/file.txt",
-		ActionType:    ActionUpload,
-		ConditionType: IssueRemoteWriteDenied,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err := store.RecordBlockedRetryWork(ctx, testRetryWorkKey("Shared/Docs/file.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
 
 	require.NoError(t, store.DiscardScope(ctx, scopeKey))

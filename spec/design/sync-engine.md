@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/engine_watch*.go, internal/sync/engine_runtime*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permission_policy.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
+GOVERNS: internal/sync/engine*.go, internal/sync/engine_watch*.go, internal/sync/engine_runtime*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
 Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
@@ -83,19 +83,20 @@ Permission handling is intentionally split three ways:
 
 - probe/evidence (`permission_probe_*.go`, `permission_evidence.go`) gathers
   filesystem or Graph facts only
-- pure policy (`permission_policy.go`) turns one action completion plus
-  permission evidence into an engine-facing `PermissionOutcome`
-- direct engine runtime application (`engine_runtime_permissions.go`,
-  `engine_runtime_permission_bridge.go`, and `engine_runtime_lifecycle.go`)
-  persists blocked `retry_work`, applies permission outcomes, activates or
-  releases timed write scopes, and emits engine-owned logs without a separate
-  wrapper layer
+- runtime classification (`engine_result_classify.go`) owns the condition
+  family and ordinary retry/scope class for the finished action
+- direct engine runtime permission handlers (`engine_runtime_permissions.go`
+  and `engine_runtime_lifecycle.go`) gather probe evidence when needed,
+  persist exact retry work or blocked scope rows, activate or release timed
+  write scopes, and emit engine-owned logs without an intermediate policy DTO
 
 Normal completion handling and trial reclassification both reuse the same
-engine helper to gather permission evidence and call `DecidePermissionOutcome`.
-That shared helper decides once; it does not persist anything itself.
+engine-owned permission-evidence handlers. The probe still returns facts only;
+the engine decides directly whether to persist delayed retry work, persist
+blocked retry work, activate a timed scope, or fall back to generic result
+handling.
 
-Permission timing follows the policy result, not the probe:
+Permission timing follows the engine-owned runtime decision, not the probe:
 
 - file-scoped permission failures persist delayed `retry_work` and arm the
   ordinary retry timer in watch mode
@@ -432,9 +433,8 @@ manual maintenance CLI for them. Observation may create or clear read-boundary
 facts directly when current truth proves the blocker or its recovery. Probe and
 execution may create or clear persisted write scopes when write access is
 affirmatively denied or restored. A raw `403` or `os.ErrPermission` is only a
-trigger to probe; the probe returns evidence only, the pure permission policy
-maps that evidence to an engine-facing outcome, and only the engine apply path
-may activate or release a write-side scope.
+trigger to probe; the probe returns evidence only, and only the engine-owned
+permission handlers may activate or release a write-side scope.
 
 Ownership splits by access kind:
 
@@ -446,7 +446,7 @@ Ownership splits by access kind:
   normal reconcile backoff; they are not promoted into `block_scopes` unless a
   later probe proves a subtree-wide boundary
 
-Permission outcomes may still tag blocked `retry_work` with a read-boundary
+Permission handling may still tag blocked `retry_work` with a read-boundary
 `ScopeKey` for derived truth and reporting, but only
 `ScopeKey.PersistsInBlockScopes()` outcomes may materialize `block_scopes`
 rows.

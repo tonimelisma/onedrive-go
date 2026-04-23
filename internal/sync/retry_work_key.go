@@ -27,10 +27,6 @@ func retryWorkKeyForCompletion(completion *ActionCompletion) RetryWorkKey {
 	return retryWorkKey(completion.Path, completion.OldPath, completion.ActionType)
 }
 
-func retryWorkKeyForRetryWork(row *RetryWorkRow) RetryWorkKey {
-	if row == nil {
-		return RetryWorkKey{}
-	}
-
+func (row RetryWorkRow) WorkKey() RetryWorkKey {
 	return retryWorkKey(row.Path, row.OldPath, row.ActionType)
 }

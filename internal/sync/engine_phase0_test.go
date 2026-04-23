@@ -591,13 +591,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
 	})
-	_, err := eng.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          blockedPath,
-		ActionType:    ActionDownload,
-		ConditionType: IssueRateLimited,
-		ScopeKey:      testThrottleScope(),
-		Blocked:       true,
-	}, nil)
+	_, err := eng.baseline.RecordBlockedRetryWork(ctx, testRetryWorkKey(blockedPath, "", ActionDownload), testThrottleScope())
 	require.NoError(t, err)
 	blocked := rt.depGraph.Add(&Action{
 		Type:    ActionDownload,
@@ -654,7 +648,7 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 		IssueType: IssueLocalReadDenied,
 	})
 
-	retryRow := retryWorkIdentityForWork("docs/file.txt", "", ActionUpload)
+	retryRow := testRetryWorkRow("docs/file.txt", "", ActionUpload)
 	retryRow.AttemptCount = 3
 	retryRow.NextRetryAt = eng.nowFn().Add(time.Minute).UnixNano()
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &retryRow))

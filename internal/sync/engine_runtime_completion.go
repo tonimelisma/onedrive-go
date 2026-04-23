@@ -57,7 +57,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 	r *ActionCompletion,
 	bl *Baseline,
 ) ([]*TrackedAction, error) {
-	if handled, err := flow.maybeHandlePermissionOutcome(ctx, watch, decision, current, r, bl); handled {
+	if handled, err := flow.maybeHandlePermissionFailure(ctx, watch, decision, current, r, bl); handled {
 		return nil, err
 	}
 
@@ -432,13 +432,12 @@ func (flow *engineFlow) recordRetryWork(
 	}
 
 	row, recErr := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Path:          r.Path,
-		OldPath:       r.OldPath,
-		ActionType:    r.ActionType,
-		ConditionType: decision.ConditionType,
-		ScopeKey:      scopeKey,
-		Blocked:       blocked,
+		Work:     retryWorkKeyForCompletion(r),
+		ScopeKey: scopeKey,
 	}, delayFn)
+	if blocked {
+		row, recErr = flow.engine.baseline.RecordBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), scopeKey)
+	}
 	if recErr != nil {
 		return fmt.Errorf("record retry_work for %s: %w", r.Path, recErr)
 	}
@@ -452,7 +451,7 @@ func (flow *engineFlow) recordRetryWork(
 	if row == nil {
 		return fmt.Errorf("record retry_work for %s: missing persisted row", r.Path)
 	}
-	flow.retryRowsByKey[retryWorkKeyForCompletion(r)] = *row
+	flow.retryRowsByKey[row.WorkKey()] = *row
 	fields = append(fields, slog.Int("attempt_count", row.AttemptCount))
 	flow.engine.logger.Debug("retry_work recorded", fields...)
 

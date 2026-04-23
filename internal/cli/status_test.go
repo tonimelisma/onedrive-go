@@ -578,45 +578,52 @@ func TestQuerySyncState_RemoteDriftAndConditions(t *testing.T) {
 	}()
 
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:          "/x.txt",
-		ActionType:    syncengine.ActionUpload,
-		ConditionType: syncengine.IssueServiceOutage,
+		Work: syncengine.RetryWorkKey{
+			Path:       "/x.txt",
+			ActionType: syncengine.ActionUpload,
+		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:          "/x.txt",
-		ActionType:    syncengine.ActionUpload,
-		ConditionType: syncengine.IssueServiceOutage,
+		Work: syncengine.RetryWorkKey{
+			Path:       "/x.txt",
+			ActionType: syncengine.ActionUpload,
+		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:          "/x.txt",
-		ActionType:    syncengine.ActionUpload,
-		ConditionType: syncengine.IssueServiceOutage,
+		Work: syncengine.RetryWorkKey{
+			Path:       "/x.txt",
+			ActionType: syncengine.ActionUpload,
+		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:          "/y.txt",
-		ActionType:    syncengine.ActionUpload,
-		ConditionType: syncengine.IssueServiceOutage,
+		Work: syncengine.RetryWorkKey{
+			Path:       "/y.txt",
+			ActionType: syncengine.ActionUpload,
+		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:          "/y.txt",
-		ActionType:    syncengine.ActionUpload,
-		ConditionType: syncengine.IssueServiceOutage,
+		Work: syncengine.RetryWorkKey{
+			Path:       "/y.txt",
+			ActionType: syncengine.ActionUpload,
+		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:          "/y.txt",
-		ActionType:    syncengine.ActionUpload,
-		ConditionType: syncengine.IssueServiceOutage,
+		Work: syncengine.RetryWorkKey{
+			Path:       "/y.txt",
+			ActionType: syncengine.ActionUpload,
+		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:          "/y.txt",
-		ActionType:    syncengine.ActionUpload,
-		ConditionType: syncengine.IssueServiceOutage,
+		Work: syncengine.RetryWorkKey{
+			Path:       "/y.txt",
+			ActionType: syncengine.ActionUpload,
+		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
 	seedObservationIssueForStatusTest(t, store, &syncengine.ObservationIssue{
@@ -659,21 +666,15 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 	}))
-	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:          "/blocked/a.txt",
-		ActionType:    syncengine.ActionUpload,
-		ConditionType: syncengine.IssueRemoteWriteDenied,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err = store.RecordBlockedRetryWork(ctx, syncengine.RetryWorkKey{
+		Path:       "/blocked/a.txt",
+		ActionType: syncengine.ActionUpload,
+	}, scopeKey)
 	require.NoError(t, err)
-	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:          "/blocked/b.txt",
-		ActionType:    syncengine.ActionUpload,
-		ConditionType: syncengine.IssueRemoteWriteDenied,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err = store.RecordBlockedRetryWork(ctx, syncengine.RetryWorkKey{
+		Path:       "/blocked/b.txt",
+		ActionType: syncengine.ActionUpload,
+	}, scopeKey)
 	require.NoError(t, err)
 	seedObservationIssueForStatusTest(t, store, &syncengine.ObservationIssue{
 		Path:      "/actionable.txt",
@@ -761,21 +762,15 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 	}))
-	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:          "/blocked/a.txt",
-		ActionType:    syncengine.ActionUpload,
-		ConditionType: syncengine.IssueRemoteWriteDenied,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err = store.RecordBlockedRetryWork(ctx, syncengine.RetryWorkKey{
+		Path:       "/blocked/a.txt",
+		ActionType: syncengine.ActionUpload,
+	}, scopeKey)
 	require.NoError(t, err)
-	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Path:          "/blocked/b.txt",
-		ActionType:    syncengine.ActionUpload,
-		ConditionType: syncengine.IssueRemoteWriteDenied,
-		ScopeKey:      scopeKey,
-		Blocked:       true,
-	}, nil)
+	_, err = store.RecordBlockedRetryWork(ctx, syncengine.RetryWorkKey{
+		Path:       "/blocked/b.txt",
+		ActionType: syncengine.ActionUpload,
+	}, scopeKey)
 	require.NoError(t, err)
 
 	info := querySyncState(dbPath, logger)
