@@ -41,7 +41,7 @@ SELECT COUNT(*) FROM (
 	WHERE rs.item_id IS NULL
 ) remote_drift`
 
-// DriveStatusSnapshot is the raw per-drive authority snapshot consumed by the
+// DriveStatusSnapshot is the raw per-mount authority snapshot consumed by the
 // product-facing status command. The store owns the read-only database access,
 // but the CLI owns grouping and presentation policy.
 type DriveStatusSnapshot struct {
@@ -53,7 +53,7 @@ type DriveStatusSnapshot struct {
 	BlockedRetryWork   []RetryWorkRow
 }
 
-// ReadDriveStatusSnapshot opens a read-only inspector for one per-drive status
+// ReadDriveStatusSnapshot opens a read-only inspector for one per-mount status
 // snapshot and closes it before returning so callers do not own inspector
 // lifecycle.
 func ReadDriveStatusSnapshot(
@@ -80,7 +80,7 @@ func ReadPathTruthStatus(
 	})
 }
 
-// ReadDriveStatusSnapshot reads the raw per-drive authority snapshot from an
+// ReadDriveStatusSnapshot reads the raw per-mount authority snapshot from an
 // already-open sync store.
 func (m *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSnapshot, error) {
 	if m == nil {
@@ -188,7 +188,7 @@ func (i *storeInspector) Close() error {
 	return nil
 }
 
-// ReadDriveStatusSnapshot returns the per-drive raw authority snapshot used by
+// ReadDriveStatusSnapshot returns the per-mount raw authority snapshot used by
 // the product-facing status command.
 func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSnapshot, error) {
 	snapshot := DriveStatusSnapshot{}

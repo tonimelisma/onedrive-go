@@ -48,7 +48,7 @@ func (m *SyncStore) ReleaseScope(
 // it are no longer valid" transition.
 //
 // This is used when the blocked subtree itself disappears, for example when a
-// configured root disappears. Discarding differs from release: blocked retry
+// mounted root disappears. Discarding differs from release: blocked retry
 // work is deleted instead of made retryable.
 func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err error) {
 	if scopeKey.IsZero() {

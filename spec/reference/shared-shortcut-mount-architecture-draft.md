@@ -664,10 +664,11 @@ The current shared-root behavior is not just accidental old code. Much of it now
 works the way it does because the repository deliberately chose to fit shared
 folders into the existing core invariants:
 
-- one engine per configured drive
-- one store per configured drive
+- one engine per runtime mount
+- one store per runtime mount
 - one primary remote root per engine
-- one local `sync_dir` per configured drive
+- one top-level `sync_dir` per configured standalone mount, with managed child
+  mounts attached below a parent namespace
 - control plane above engines, not inside them
 - snapshot-first SQLite durability
 
@@ -695,15 +696,15 @@ configured shared-root drives" model.
 
 Current design docs intentionally define these facts:
 
-- shared folders are separate configured drives
-- the control plane builds one engine per configured drive
+- shared folders can still be separate configured drives at the CLI/config edge
+- the control plane builds one engine per runtime mount
 - the engine is a single-drive runtime owner
 - the engine supports exactly two root shapes today:
   - drive-root sessions
   - rooted-subtree sessions rooted below the remote drive root
 - embedded shared-folder links discovered inside another synced drive are
   ignored
-- each configured drive owns one SQLite state DB
+- each runtime mount owns one SQLite state DB
 - rooted-subtree planning/execution used to thread target metadata through
   ordinary actions so the pre-Increment-4 single-root engine could operate on a
   remote subtree
@@ -752,11 +753,10 @@ over the same runtime primitive:
 - `Standalone mount projection`
   a shared folder is intentionally surfaced as its own top-level synced root
 
-The current repo/spec model today mostly implements only the second shape for
-shared folders:
+The current repo/spec model now implements both projection shapes:
 
-- one local sync root per configured drive
-- shared folders as separate configured-drive roots, not child mounts inside a
+- explicit configured shared folders compile into standalone runtime mounts
+- discovered shortcut children compile into managed child mounts inside a
   primary local namespace
 
 That means:
@@ -792,10 +792,11 @@ The plan should also preserve a practical transition strategy:
 
 The plan should explicitly acknowledge and stage around these spec-backed facts:
 
-- "shared folders are separate configured drives" is the current supported model
-- `sync_dir` is currently per configured drive, including shared drives
-- the current durable schema is per configured drive/store and is not designed
-  to hold several independent shortcut roots in one store
+- explicit shared folders remain valid configured drives at the CLI/config edge
+- `sync_dir` is currently per configured standalone mount, including explicit
+  shared drives
+- the current durable schema is per runtime mount/store and is not designed to
+  hold several independent shortcut roots in one store
 
 So the plan needs an explicit decision point about projection, not about engine
 ownership:
@@ -869,10 +870,10 @@ This section intentionally separates:
 
 | Current concept | Current role | Transitional role | Target home | Final fate |
 | --- | --- | --- | --- | --- |
-| One state DB per configured drive | Runtime durability boundary | Temporary one DB per generated mount spec | One DB per mount | Keep per-mount principle, change owner vocabulary |
-| `observation_state.configured_drive_id` | Store owner identity | Temporary owner field | `MountID` or mount-owned store identity | Rename to mount-owned identity |
+| One state DB per runtime mount | Runtime durability boundary | One DB per compiled mount spec | One DB per mount | Keep per-mount principle |
+| `observation_state.mount_drive_id` | Store owner drive identity | Mount-owned remote drive for the store cursor | Maybe `MountID` or another store-owner identity later | Renamed from configured-drive vocabulary in Increment 7c; re-evaluate only if a distinct durable mount identity becomes necessary |
 | `remote_state.drive_id` | Per-row remote owner | Still useful within mount store | Per-row backing drive identity | Keep if still needed |
-| `baseline.DriveID` | Current row-level drive identity in a per-drive DB | Still useful during transition | Optional mount-store row field | Re-evaluate after mount-local simplification |
+| `baseline.DriveID` | Current row-level drive identity in a per-mount DB | Still useful during transition | Optional mount-store row field | Re-evaluate after mount-local simplification |
 
 ### Current Package And File Mapping
 
@@ -880,8 +881,8 @@ This table maps today's major code areas to their target architectural home.
 
 | Current area | Current role | Target owner in new model | Notes |
 | --- | --- | --- | --- |
-| `internal/multisync` | Starts one engine per configured drive | Namespace/control-plane orchestration for mount specs | Strong base to keep and retarget above engines |
-| `internal/config/config.go` + drive sections | User-configured drive roots and per-drive settings | User-configured namespace roots and explicit top-level mounts only | Shortcut child mounts should stop living in ordinary drive config |
+| `internal/multisync` | Starts one engine per runtime mount | Namespace/control-plane orchestration for mount specs | Strong base to keep and retarget above engines |
+| `internal/config/config.go` + drive sections | User-configured namespace roots and drive-section settings | User-configured namespace roots and explicit top-level mounts only | Shortcut child mounts should stop living in ordinary drive config |
 | `internal/config/catalog.go` | Managed inventory for accounts and drives | Split into drive catalog plus mount inventory, or add a distinct mount inventory boundary | Blank-slate preference is a separate mount inventory authority |
 | `internal/config/drive.go` + resolver | Builds `ResolvedDrive` from config/catalog | Keep for configured namespace roots; stop using as the permanent home for shortcut mounts | Synthetic reuse may be acceptable during transition |
 | `internal/driveid` shared canonical IDs | Encodes shared folders as configured drives | Move shortcut durable identity into mount inventory | Configured-drive identity and managed mount identity should diverge |
@@ -891,7 +892,7 @@ This table maps today's major code areas to their target architectural home.
 | `internal/sync/item_converter.go` | Remote item normalization plus embedded-shortcut ignore rules | Mount-engine observation normalizer, plus namespace-lifecycle detection at the boundary | The ignore rule for embedded shortcuts in ordinary content observation remains correct |
 | `internal/sync/planner.go` + `actions.go` | Mount-external metadata rethreaded through actions | Mount-local planner | Target-root action metadata should largely disappear |
 | `internal/sync/executor.go` | Per-action execution with shared-root target overrides | Mount-local executor | Cross-mount behavior should move above the engine |
-| `internal/sync/store*.go` | Per-configured-drive durable state | Per-mount durable state | Store semantics stay valuable; owner vocabulary changes |
+| `internal/sync/store*.go` | Per-mount-drive durable state | Per-mount durable state | Store semantics stay valuable; owner vocabulary changes |
 | `internal/cli/shared*.go` and direct shared commands | User-facing shared-item discovery and ad hoc shared-target operations | Optional product surface outside automatic shortcut runtime | Not required for "shortcut just works" architecture |
 
 ### Current Durable State Mapping
@@ -1033,7 +1034,7 @@ still in use.
 - This was useful for explicit `drive add`, but in the blank-slate model a
   shortcut is a managed mount, not a configured drive type.
 - Cleanup target: move shared shortcut durable identity into mount inventory and
-  remove "shared is a drive type" from the core configured-drive model.
+  remove "shared is a drive type" from the core mount-drive model.
 
 `internal/config/drive.go`
 
@@ -1083,7 +1084,7 @@ still in use.
 - The engine builds a single `primaryRootObservationPlan` with exactly two
   variants: drive root or rooted subtree.
 - This is still singular runtime ownership and therefore works only for one
-  configured rooted subtree per engine.
+  mounted rooted subtree per engine.
 - Cleanup target: preserve one-root-per-engine; remove rooted-subtree-specialized
   terminology after mount-engine refactor.
 
@@ -1109,15 +1110,15 @@ still in use.
 - Shared-root source-type detection reaches back into config/catalog to decide
   runtime observation policy.
 - Cleanup target: mount-engine spec should carry the already-resolved capability
-  inputs it needs instead of rediscovering them from configured-drive state.
+  inputs it needs instead of rediscovering them from mount-drive state.
 
 ### Observation Vestiges
 
 `internal/sync/item_converter.go`
 
 - `RootItemID` is threaded through item conversion so events can carry the
-  configured remote root.
-- The converter skips the configured rooted-subtree root item itself.
+  mounted remote root.
+- The converter skips the mounted rooted-subtree root item itself.
 - Embedded shared-folder items are ignored in a normal drive.
 - Transitional reuse:
   - keep ignoring embedded shortcuts inside normal content observation
@@ -1172,8 +1173,8 @@ still in use.
 
 `internal/sync/schema.go`
 
-- The schema still assumes one store per configured drive.
-- `observation_state` has one owner row.
+- The schema now assumes one store per runtime mount.
+- `observation_state` has one `mount_drive_id` owner row.
 - `baseline` and `remote_state` are keyed by bare `item_id`, which is a strong
   hint that one DB is not intended to hold multiple independent remote authority
   sets.
@@ -1182,8 +1183,10 @@ still in use.
 
 `internal/sync/store_observation_state.go`
 
-- Owner vocabulary is configured-drive-centric.
-- Cleanup target: store identity should become mount-owned.
+- Owner vocabulary is mount-owned and remote-drive-specific.
+- Future cleanup target: re-evaluate whether the store should persist a
+  distinct `MountID` only if the remote drive ID stops being sufficient for the
+  store cursor owner.
 
 `internal/sync/store_write_observation.go`, `internal/sync/store_write_baseline.go`,
 `internal/sync/sqlite_compare.go`, `internal/sync/core_types.go`
@@ -1199,10 +1202,12 @@ still in use.
 
 - The current control plane already has the right high-level runtime shape:
   one engine per runtime mount.
-- The remaining transition seam is that top-level standalone mounts still start
-  from configured drives before they are compiled into mount specs.
-- Cleanup target: keep moving authority from configured-drive vocabulary into
-  explicit mount specs and mount inventory where those concepts own the truth.
+- The previous transition seam where multisync consumed `ResolvedDrive` directly
+  is gone: the CLI now compiles configured drives into `StandaloneMountConfig`
+  before multisync builds runtime mount specs.
+- Cleanup target: keep moving durable child-shortcut authority from
+  drive-shaped config/catalog vocabulary into explicit mount specs and mount
+  inventory where those concepts own the truth.
 
 ### Docs, Tests, And Historical Vocabulary Vestiges
 
@@ -1637,7 +1642,9 @@ Concrete work:
   `ResolvedDrive` is consumed at the CLI/config edge before top-level mount
   construction
 - rename remaining store owner vocabulary from configured-drive-centric to
-  mount-centric where appropriate
+  mount-owned terminology: `observation_state.mount_drive_id`,
+  `ObservationState.MountDriveID`, and related helpers now describe the mounted
+  content root rather than a configured-drive runtime owner
 - keep only the minimal explicit standalone-mount surface the product still
   wants
 

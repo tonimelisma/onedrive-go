@@ -8,7 +8,8 @@ Project-specific vocabulary. For standard Microsoft Graph API terms such as
 ### Configured Drive
 
 One user-configured sync target. A configured drive owns exactly one config
-entry, one sync engine, one state DB, and one primary remote observation root.
+entry. Sync compiles configured drives into standalone runtime mounts before
+engine construction.
 
 ### Canonical ID
 
@@ -31,8 +32,9 @@ backing drive root and is identified by `RootItemID`.
 
 ### Shared-Root Drive
 
-A separately configured shared folder added with `drive add`. It is mounted as
-its own configured drive and synced as its own engine and DB.
+A separately configured shared folder added with `drive add`. It remains an
+explicit configured drive at the CLI/config edge, then compiles into its own
+standalone runtime mount with its own engine and DB.
 
 ### Embedded Shared-Folder Shortcut Item
 
@@ -43,19 +45,20 @@ Sync ignores these instead of creating nested sync runtimes.
 
 ### Baseline
 
-The authoritative durable record of successfully converged item truth for this
-configured drive. It stores per-item identity plus local and remote comparison
-facts used by planning.
+The authoritative durable record of successfully converged item truth for one
+mount. It stores per-item identity plus local and remote comparison facts used
+by planning.
 
 ### Remote State
 
-The durable mirror of the latest observed remote truth for this configured
-drive. It stores only the latest remote facts, not a per-row state machine.
+The durable mirror of the latest observed remote truth for one mount. It
+stores only the latest remote facts, not a per-row state machine.
 
 ### Primary Observation Cursor
 
-The one persisted remote observation cursor for a configured drive. It lives in
-`observation_state.cursor`.
+The one persisted remote observation cursor for a mount. It lives in
+`observation_state.cursor`; `observation_state.mount_drive_id` records the
+remote drive for the mounted content root that owns the cursor.
 
 ### Full Remote Refresh
 
@@ -73,7 +76,7 @@ called scopes.
 
 ### Sync Store
 
-The per-drive SQLite database containing `baseline`, `local_state`,
+The per-mount SQLite database containing `baseline`, `local_state`,
 `remote_state`, `observation_issues`, `retry_work`, `block_scopes`,
 and `observation_state`.
 

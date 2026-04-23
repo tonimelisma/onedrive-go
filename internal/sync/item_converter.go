@@ -26,7 +26,7 @@ type InflightParent struct {
 // ItemConverter converts []graph.Item into []ChangeEvent with full path
 // materialization, NFC normalization, move detection, and deleted-item name
 // recovery. Drive-root and rooted-subtree observation both use this single
-// conversion pipeline, configured by path-prefix and root-item fields.
+// conversion pipeline, shaped by path-prefix and root-item fields.
 //
 // Design: the inflight map is a parameter, not a field. RemoteObserver
 // accumulates inflight across delta pages; rooted-subtree callers populate it once per
@@ -43,7 +43,7 @@ type ItemConverter struct {
 	// local subpath.
 	PathPrefix string
 
-	// RootItemID is the configured remote root item for rooted-subtree observation.
+	// RootItemID is the mounted remote root item for rooted-subtree observation.
 	// Items with this ID are the root itself and should be skipped because the
 	// sync root owns that directory already. Empty for full-drive observation.
 	RootItemID string
@@ -54,8 +54,9 @@ type ItemConverter struct {
 }
 
 // NewPrimaryConverter creates an ItemConverter for primary-drive or
-// rooted-subtree observation. Embedded shared-folder items
-// are ignored; shared content syncs only when configured as its own drive.
+// rooted-subtree observation. Embedded shared-folder items are ignored here;
+// shared content syncs through explicit standalone mounts or managed child
+// mounts.
 func NewPrimaryConverter(
 	baseline *Baseline,
 	driveID driveid.ID,
@@ -188,7 +189,7 @@ func (c *ItemConverter) registerInflight(item *graph.Item, inflight map[string]I
 }
 
 // ClassifyItem converts a single graph.Item into a ChangeEvent. Returns nil
-// for items that should be skipped (root, vault descendants, configured root,
+// for items that should be skipped (root, vault descendants, mounted root,
 // embedded shared-folder items).
 func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]InflightParent) *ChangeEvent {
 	itemDriveID := c.resolveItemDriveID(item)
@@ -243,15 +244,15 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 		return nil
 	}
 
-	// Skip the configured observation root itself.
+	// Skip the mounted observation root itself.
 	if c.RootItemID != "" && item.ID == c.RootItemID {
-		c.Logger.Debug("skipping configured rooted-subtree root item", slog.String("item_id", item.ID))
+		c.Logger.Debug("skipping mounted rooted-subtree root item", slog.String("item_id", item.ID))
 
 		return nil
 	}
 
-	// Embedded shared-folder items are never synced inside another drive.
-	// Shared content must be configured as its own drive root instead.
+	// Embedded shared-folder items are mount boundaries, not ordinary files or
+	// folders in this engine's content root.
 	if item.RemoteDriveID != "" || item.RemoteItemID != "" {
 		c.Logger.Debug("ignoring embedded shared-folder item",
 			slog.String("item_id", item.ID),
@@ -408,7 +409,7 @@ func (c *ItemConverter) materializePathFromParts(
 				break
 			}
 
-			// Stop at the configured observation root — it is the sync root,
+			// Stop at the mounted observation root: it is the sync root,
 			// not a real parent segment in the local relative path.
 			if c.RootItemID != "" && parentID == c.RootItemID {
 				break
@@ -445,7 +446,7 @@ func (c *ItemConverter) materializePathFromParts(
 	return c.applyPrefix(relPath)
 }
 
-// applyPrefix prepends the configured local root prefix to a relative path.
+// applyPrefix prepends the mounted local root prefix to a relative path.
 // Returns the path unchanged when no prefix is configured.
 func (c *ItemConverter) applyPrefix(relPath string) string {
 	if c.PathPrefix == "" {

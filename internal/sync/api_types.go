@@ -82,7 +82,7 @@ type ItemClient interface {
 	PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
 }
 
-// DriveVerifier verifies that a configured drive ID is reachable and matches
+// DriveVerifier verifies that a mount drive ID is reachable and matches
 // the remote API.
 type DriveVerifier interface {
 	Drive(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)

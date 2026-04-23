@@ -6,7 +6,7 @@ Implements: R-2.5 [designed], R-2.7 [verified], R-2.10.33 [designed], R-2.15.1 [
 
 ## Overview
 
-`SyncStore` is the sole durable owner of per-drive sync state. In the target
+`SyncStore` is the sole durable owner of per-mount sync state. In the target
 architecture it owns:
 
 - canonical schema application and validation
@@ -53,12 +53,12 @@ model.
 - advances `observation_state.cursor`
 
 Each `remote_state` row persists the true owning remote `drive_id` seen during
-observation. `observation_state.configured_drive_id` identifies the configured
-session that owns the DB and cursor; it is not the durable owner of every
-remote row. If a later observation corrects a row's owning `drive_id` without
-changing path/hash/mtime metadata, `CommitObservation()` still updates the
-stored row owner so downstream planning and execution read the repaired durable
-truth.
+observation. `observation_state.mount_drive_id` identifies the remote drive
+for the mounted content root that owns the DB and cursor; it is not the
+durable owner of every remote row. If a later observation corrects a row's
+owning `drive_id` without changing path/hash/mtime metadata,
+`CommitObservation()` still updates the stored row owner so downstream planning
+and execution read the repaired durable truth.
 
 Local observation writes belong to `local_state`. Full scans replace the entire
 `local_state` snapshot in one transaction.
@@ -170,8 +170,8 @@ Read-only store helpers are intentionally narrow:
   query-scoped debug views such as per-path truth availability
 
 `remote_state` reads return the durable per-row `drive_id` from the table
-itself. Fallback configured drive IDs exist only for legacy or absent durable
-state and must not overwrite a stored row owner on read.
+itself. Fallback mount drive IDs exist only for empty stores or absent per-row
+durable state and must not overwrite a stored row owner on read.
 
 `remote_state` intentionally does not persist remote parent ancestry. Sparse
 path recovery during observation still uses baseline parent context, and

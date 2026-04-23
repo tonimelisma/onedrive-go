@@ -34,8 +34,8 @@ type ExecutorConfig struct {
 	downloads  driveops.Downloader
 	uploads    driveops.Uploader
 	syncTree   *synctree.Root
-	driveID    driveid.ID // per-drive context (B-068)
-	rootItemID string     // configured remote root for rooted-subtree engines; empty = drive root
+	driveID    driveid.ID // mount remote drive context (B-068)
+	rootItemID string     // mounted remote root for rooted-subtree engines; empty = drive root
 	logger     *slog.Logger
 
 	// transferMgr handles unified download/upload with resume and disk
@@ -85,7 +85,7 @@ func (cfg *ExecutorConfig) SetTransferMgr(mgr *driveops.TransferManager) {
 	cfg.transferMgr = mgr
 }
 
-// SetRootItemID sets the configured remote root item for rooted-subtree engines.
+// SetRootItemID sets the mounted remote root item for rooted-subtree engines.
 // Empty keeps the normal owner-drive root semantics.
 func (cfg *ExecutorConfig) SetRootItemID(itemID string) {
 	cfg.rootItemID = itemID
@@ -474,8 +474,7 @@ func (e *Executor) ResolveParentID(relPath string) (string, error) {
 
 // resolveDriveID returns the action's DriveID when present. Brand-new local
 // items can still arrive with a zero action DriveID, so inherit the parent
-// folder's baseline drive before falling back to the executor's configured
-// default drive.
+// folder's baseline drive before falling back to the executor's mount drive.
 func (e *Executor) resolveDriveID(action *Action) driveid.ID {
 	if !action.DriveID.IsZero() {
 		return action.DriveID
