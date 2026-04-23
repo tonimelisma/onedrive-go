@@ -592,18 +592,19 @@ func TestRunOnce_SharedConfiguredRootUsesScopedDeltaAndToken(t *testing.T) {
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
 	eng, err := newEngine(t.Context(), &engineInputs{
-		DBPath:          dbPath,
-		SyncRoot:        syncRoot,
-		DriveID:         driveID,
-		RootItemID:      "shared-root",
-		Fetcher:         mock,
-		Items:           mock,
-		Downloads:       mock,
-		Uploads:         mock,
-		FolderDelta:     mock,
-		RecursiveLister: mock,
-		PermChecker:     mock,
-		Logger:          testLogger(t),
+		DBPath:                 dbPath,
+		SyncRoot:               syncRoot,
+		DriveID:                driveID,
+		RootItemID:             "shared-root",
+		SharedRootDeltaCapable: true,
+		Fetcher:                mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		FolderDelta:            mock,
+		RecursiveLister:        mock,
+		PermChecker:            mock,
+		Logger:                 testLogger(t),
 	})
 	require.NoError(t, err)
 	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
@@ -658,18 +659,19 @@ func TestRunOnce_DryRun_SharedConfiguredRootDoesNotSaveScopedDeltaToken(t *testi
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
 	eng, err := newEngine(t.Context(), &engineInputs{
-		DBPath:          dbPath,
-		SyncRoot:        syncRoot,
-		DriveID:         driveID,
-		RootItemID:      "shared-root",
-		Fetcher:         mock,
-		Items:           mock,
-		Downloads:       mock,
-		Uploads:         mock,
-		FolderDelta:     mock,
-		RecursiveLister: mock,
-		PermChecker:     mock,
-		Logger:          testLogger(t),
+		DBPath:                 dbPath,
+		SyncRoot:               syncRoot,
+		DriveID:                driveID,
+		RootItemID:             "shared-root",
+		SharedRootDeltaCapable: true,
+		Fetcher:                mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		FolderDelta:            mock,
+		RecursiveLister:        mock,
+		PermChecker:            mock,
+		Logger:                 testLogger(t),
 	})
 	require.NoError(t, err)
 	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
@@ -690,6 +692,57 @@ func TestRunOnce_DryRun_SharedConfiguredRootDoesNotSaveScopedDeltaToken(t *testi
 
 	token := readObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
 	assert.Empty(t, token)
+}
+
+// Validates: R-2.8.3
+func TestRunOnce_SharedConfiguredRootDeltaIncapableSkipsFolderDelta(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	folderDeltaCalled := false
+	listCalls := 0
+	mock := &engineMockClient{
+		folderDeltaFn: func(_ context.Context, _ driveid.ID, _, _ string) ([]graph.Item, string, error) {
+			folderDeltaCalled = true
+			return nil, "", nil
+		},
+		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
+			listCalls++
+			assert.Equal(t, driveID, gotDriveID)
+			assert.Equal(t, "shared-root", folderID)
+			return nil, nil
+		},
+	}
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	syncRoot := filepath.Join(tmpDir, "sync")
+	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
+
+	eng, err := newEngine(t.Context(), &engineInputs{
+		DBPath:                 dbPath,
+		SyncRoot:               syncRoot,
+		DriveID:                driveID,
+		RootItemID:             "shared-root",
+		SharedRootDeltaCapable: false,
+		Fetcher:                mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		FolderDelta:            mock,
+		RecursiveLister:        mock,
+		PermChecker:            mock,
+		Logger:                 testLogger(t),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, eng.Close(t.Context()))
+	})
+
+	_, err = eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
+	require.NoError(t, err)
+	assert.False(t, folderDeltaCalled)
+	assert.Equal(t, 1, listCalls)
 }
 
 // Validates: R-2.1.2

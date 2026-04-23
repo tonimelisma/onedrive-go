@@ -1048,14 +1048,12 @@ func testPrimaryWatchBatchHandler(driveID driveid.ID) RemoteWatchBatchHandler {
 	return func(_ context.Context, events []ChangeEvent, newToken string) (remoteObservationBatch, error) {
 		projected := projectRemoteObservations(nil, events)
 		return remoteObservationBatch{
-			source:   remoteObservationBatchPrimaryWatch,
-			observed: projected.observed,
-			emitted:  append([]ChangeEvent(nil), projected.emitted...),
-			pending: &pendingPrimaryCursorCommit{
-				driveID: driveID.String(),
-				token:   newToken,
-			},
-			applyAck: make(chan error, 1),
+			source:          remoteObservationBatchPrimaryWatch,
+			observationMode: remoteObservationModeDelta,
+			observed:        projected.observed,
+			emitted:         append([]ChangeEvent(nil), projected.emitted...),
+			cursorToken:     newToken,
+			applyAck:        make(chan error, 1),
 		}, nil
 	}
 }
@@ -1341,7 +1339,7 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 		)
 	}()
 	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
-		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.pending.token, driveID)
+		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
 	})
 
 	require.Eventually(t, func() bool {
@@ -1974,7 +1972,7 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
 	events := startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
-		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.pending.token, driveID)
+		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
 	})
 
 	go func() {
@@ -2089,7 +2087,7 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		testPrimaryWatchBatchHandler(driveID),
 	)
 	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
-		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.pending.token, driveID)
+		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
 	})
 	require.NoError(t, err)
 
