@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -13,8 +14,7 @@ import (
 )
 
 const (
-	childProjectionDirPerm = 0o700
-	parentPathSegment      = ".."
+	parentPathSegment = ".."
 )
 
 type childProjectionMoveError struct {
@@ -160,23 +160,87 @@ func projectionUnavailable(move childProjectionMove, action string, err error) e
 	}
 }
 
-func createProjectionTarget(move childProjectionMove, target string) error {
-	if err := localpath.MkdirAll(target, childProjectionDirPerm); err != nil {
-		return projectionUnavailable(move, "creating current local path", err)
-	}
-
-	return nil
+func createProjectionTarget(move childProjectionMove, _ string) error {
+	return materializeProjectionPath(move, "creating current local path", move.toRelativeLocalPath)
 }
 
 func renameProjectionSource(move childProjectionMove, source string, target string) error {
-	if err := localpath.MkdirAll(filepath.Dir(target), childProjectionDirPerm); err != nil {
-		return projectionUnavailable(move, "creating current local path parent", err)
+	if err := materializeProjectionParent(move); err != nil {
+		return err
 	}
 	if err := localpath.Rename(source, target); err != nil {
 		return projectionUnavailable(move, "moving local projection", err)
 	}
 
 	return nil
+}
+
+func materializeProjectionParent(move childProjectionMove) error {
+	parentRel := path.Dir(move.toRelativeLocalPath)
+	if parentRel == "." || parentRel == "/" {
+		state, reason := existingDirectoryState(move.parentSyncRoot)
+		if state == config.MountStateActive {
+			return nil
+		}
+		return projectionMaterializeError(move, "validating current local path parent", state, reason)
+	}
+
+	return materializeProjectionPath(move, "creating current local path parent", parentRel)
+}
+
+func materializeProjectionPath(move childProjectionMove, action string, rel string) error {
+	state, reason := materializeChildMountRoot(move.parentSyncRoot, rel)
+	if state == config.MountStateActive {
+		return nil
+	}
+
+	return projectionMaterializeError(move, action, state, reason)
+}
+
+func projectionMaterializeError(
+	move childProjectionMove,
+	action string,
+	state config.MountState,
+	reason string,
+) error {
+	switch state {
+	case config.MountStateActive:
+		return nil
+	case config.MountStateConflict:
+		return &childProjectionMoveError{
+			state:  config.MountStateConflict,
+			reason: config.MountStateReasonLocalProjectionConflict,
+			err: fmt.Errorf(
+				"%s for child mount %s: %s",
+				action,
+				move.mountID,
+				reason,
+			),
+		}
+	case config.MountStatePendingRemoval:
+		return projectionUnavailable(
+			move,
+			action,
+			fmt.Errorf("unexpected pending-removal local projection"),
+		)
+	case config.MountStateUnavailable:
+		return &childProjectionMoveError{
+			state:  config.MountStateUnavailable,
+			reason: config.MountStateReasonLocalProjectionUnavailable,
+			err: fmt.Errorf(
+				"%s for child mount %s: %s",
+				action,
+				move.mountID,
+				reason,
+			),
+		}
+	default:
+		return projectionUnavailable(
+			move,
+			action,
+			fmt.Errorf("unsupported local projection state %q", state),
+		)
+	}
 }
 
 func childProjectionAbsolutePath(parentSyncRoot string, rel string) (string, error) {
@@ -207,7 +271,7 @@ func childProjectionAbsolutePath(parentSyncRoot string, rel string) (string, err
 }
 
 func projectionPathState(path string) (exists bool, isDir bool, err error) {
-	info, err := localpath.Stat(path)
+	info, err := localpath.Lstat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, false, nil

@@ -155,6 +155,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		)
 	}
 	applyChildProjectionMoves(compiled, o.logger)
+	validateCompiledChildMountRoots(compiled, o.logger)
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
 	o.logger.Info("orchestrator starting RunOnce",
@@ -486,7 +487,6 @@ func (o *Orchestrator) startWatchRuntime(
 	if err != nil {
 		return nil, control, fmt.Errorf("sync: building mount specs: %w", err)
 	}
-	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
 		o.logger.Warn("purging removed child mount state during watch startup",
 			slog.String("error", purgeErr.Error()),
@@ -497,6 +497,8 @@ func (o *Orchestrator) startWatchRuntime(
 		)
 	}
 	applyChildProjectionMoves(compiled, o.logger)
+	validateCompiledChildMountRoots(compiled, o.logger)
+	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
 	o.logger.Info("orchestrator starting RunWatch",
 		slog.Int("mounts", len(compiled.Mounts)),
@@ -773,6 +775,9 @@ func (o *Orchestrator) applyWatchMountSet(
 	runnable := runnableMountMap(compiled.Mounts)
 	stopped := o.stopInactiveWatchRunners(ctx, runners, runnable)
 	applyChildProjectionMoves(compiled, o.logger)
+	validateCompiledChildMountRoots(compiled, o.logger)
+	runnable = runnableMountMap(compiled.Mounts)
+	stopped += o.stopInactiveWatchRunners(ctx, runners, runnable)
 	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
 		o.logger.Warn("purging removed child mount state after mount diff",
 			slog.String("error", purgeErr.Error()),
@@ -782,7 +787,6 @@ func (o *Orchestrator) applyWatchMountSet(
 			slog.String("error", finalizeErr.Error()),
 		)
 	}
-	runnable = runnableMountMap(compiled.Mounts)
 	started, startResults := o.startReloadWatchRunners(ctx, runners, runnable, compiled.Skipped, mode, opts)
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 
