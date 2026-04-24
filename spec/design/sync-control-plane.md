@@ -110,9 +110,11 @@ Shortcut rename and move are local projection changes, not new child mounts.
 Because child `MountID` comes from `(NamespaceID, BindingItemID)`, the control
 plane reuses the same child state DB. While the filesystem move is pending,
 `mounts.json` keeps the new path plus `reserved_local_paths` for old paths so
-the parent mount excludes both. The orchestrator applies those local projection
-moves after stopping any old runner and before starting the new runner. If the
-move conflicts with existing local content, the child becomes `conflict` with
+the parent mount excludes both. Records with reserved projection paths do not
+eagerly create the new child root; the orchestrator first applies the local
+projection move after stopping any old runner, then validates or creates the
+resulting child root before starting the new runner. If the move conflicts with
+existing local content, the child becomes `conflict` with
 `state_reason: local_projection_conflict`; if the move cannot be attempted due
 to local filesystem failure, it becomes `unavailable` with
 `state_reason: local_projection_unavailable`.
@@ -126,9 +128,10 @@ reconcile ticker, `internal/multisync` now:
   its `remoteItem.folder` facet identifies a folder target
 - reconciles those bindings into `mounts.json`
 - updates namespace discovery state and child mount lifecycle state
-- creates missing child local roots component-by-component and marks file,
-  final-symlink, symlinked-ancestor, or traversal collisions as durable
-  child-mount conflicts before child engine startup
+- creates missing child local roots component-by-component after any pending
+  projection move, and marks file, final-symlink, symlinked-ancestor, or
+  traversal collisions as durable child-mount conflicts before child engine
+  startup
 - logs and continues from the in-memory child-root classification when the
   follow-on `mounts.json` save fails, so a durability failure for one child
   root does not turn into a startup outage for unrelated mounts
