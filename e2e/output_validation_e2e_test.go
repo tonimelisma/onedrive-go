@@ -22,7 +22,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // TestE2E_Status_JSONShape validates that status --json emits one top-level
-// summary plus nested per-drive sync-state sections.
+// summary plus nested per-mount sync-state sections.
 func TestE2E_Status_JSONShape(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -41,12 +41,12 @@ func TestE2E_Status_JSONShape(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	status := readStatus(t, cfgPath, env)
-	assert.Equal(t, 1, status.Summary.TotalDrives)
+	assert.Equal(t, 1, status.Summary.TotalMounts)
 
-	driveStatus := requireStatusDrive(t, status, drive)
-	require.NotNil(t, driveStatus.SyncState)
-	assert.Equal(t, 5, driveStatus.SyncState.ExamplesLimit)
-	assert.False(t, driveStatus.SyncState.Verbose)
+	mountStatus := requireStatusMount(t, status, drive)
+	require.NotNil(t, mountStatus.SyncState)
+	assert.Equal(t, 5, mountStatus.SyncState.ExamplesLimit)
+	assert.False(t, mountStatus.SyncState.Verbose)
 }
 
 func TestE2E_Status_FilteredDriveIsSubsetOfAllDrives(t *testing.T) {
@@ -59,17 +59,17 @@ func TestE2E_Status_FilteredDriveIsSubsetOfAllDrives(t *testing.T) {
 	cfgPath, env := writeMultiDriveConfig(t, syncDir1, syncDir2)
 
 	statusAll := readStatusAllDrives(t, cfgPath, env)
-	assert.Equal(t, 2, statusAll.Summary.TotalDrives)
-	requireStatusDrive(t, statusAll, drive)
-	requireStatusDrive(t, statusAll, drive2)
+	assert.Equal(t, 2, statusAll.Summary.TotalMounts)
+	requireStatusMount(t, statusAll, drive)
+	requireStatusMount(t, statusAll, drive2)
 
 	statusFiltered := readStatus(t, cfgPath, env)
-	assert.Equal(t, 1, statusFiltered.Summary.TotalDrives)
-	requireStatusDrive(t, statusFiltered, drive)
+	assert.Equal(t, 1, statusFiltered.Summary.TotalMounts)
+	requireStatusMount(t, statusFiltered, drive)
 
 	for i := range statusFiltered.Accounts {
-		for j := range statusFiltered.Accounts[i].Drives {
-			assert.NotEqual(t, drive2, statusFiltered.Accounts[i].Drives[j].CanonicalID)
+		for j := range statusFiltered.Accounts[i].Mounts {
+			assert.NotEqual(t, drive2, statusFiltered.Accounts[i].Mounts[j].CanonicalID)
 		}
 	}
 }

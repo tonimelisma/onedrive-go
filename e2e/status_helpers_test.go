@@ -18,15 +18,15 @@ type statusJSON struct {
 }
 
 type statusSummaryJSON struct {
-	TotalDrives int `json:"total_drives"`
+	TotalMounts int `json:"total_mounts"`
 }
 
 type statusAccountJSON struct {
 	Email  string            `json:"email"`
-	Drives []statusDriveJSON `json:"drives"`
+	Mounts []statusMountJSON `json:"mounts"`
 }
 
-type statusDriveJSON struct {
+type statusMountJSON struct {
 	CanonicalID string               `json:"canonical_id"`
 	SyncState   *statusSyncStateJSON `json:"sync_state,omitempty"`
 }
@@ -119,33 +119,33 @@ func readStatusAllDrives(t *testing.T, cfgPath string, env map[string]string, ar
 	return output
 }
 
-func requireStatusDrive(
+func requireStatusMount(
 	t *testing.T,
 	status statusJSON,
 	canonicalID string,
-) statusDriveJSON {
+) statusMountJSON {
 	t.Helper()
 
 	for i := range status.Accounts {
-		for j := range status.Accounts[i].Drives {
-			driveStatus := status.Accounts[i].Drives[j]
-			if driveStatus.CanonicalID == canonicalID {
-				return driveStatus
+		for j := range status.Accounts[i].Mounts {
+			mountStatus := status.Accounts[i].Mounts[j]
+			if mountStatus.CanonicalID == canonicalID {
+				return mountStatus
 			}
 		}
 	}
 
-	require.FailNowf(t, "missing status drive", "canonical_id=%s", canonicalID)
-	return statusDriveJSON{}
+	require.FailNowf(t, "missing status mount", "canonical_id=%s", canonicalID)
+	return statusMountJSON{}
 }
 
 func readStatusSyncState(t *testing.T, cfgPath string, env map[string]string, args ...string) statusSyncStateJSON {
 	t.Helper()
 
-	return readStatusSyncStateForDrive(t, cfgPath, env, resolveDriveSelection(env, ""), args...)
+	return readStatusSyncStateForMount(t, cfgPath, env, resolveDriveSelection(env, ""), args...)
 }
 
-func readStatusSyncStateForDrive(
+func readStatusSyncStateForMount(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
@@ -155,9 +155,9 @@ func readStatusSyncStateForDrive(
 	t.Helper()
 
 	status := readStatus(t, cfgPath, env, args...)
-	driveStatus := requireStatusDrive(t, status, canonicalID)
-	require.NotNil(t, driveStatus.SyncState, "expected sync_state for %s", canonicalID)
-	return *driveStatus.SyncState
+	mountStatus := requireStatusMount(t, status, canonicalID)
+	require.NotNil(t, mountStatus.SyncState, "expected sync_state for %s", canonicalID)
+	return *mountStatus.SyncState
 }
 
 func pollStatusSyncState(
@@ -168,10 +168,10 @@ func pollStatusSyncState(
 	ready func(statusSyncStateJSON) bool,
 	args ...string,
 ) statusSyncStateJSON {
-	return pollStatusSyncStateForDrive(t, cfgPath, env, resolveDriveSelection(env, ""), timeout, ready, args...)
+	return pollStatusSyncStateForMount(t, cfgPath, env, resolveDriveSelection(env, ""), timeout, ready, args...)
 }
 
-func pollStatusSyncStateForDrive(
+func pollStatusSyncStateForMount(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
@@ -194,9 +194,9 @@ func pollStatusSyncStateForDrive(
 		lastStderr = stderr
 		lastErr = err
 		if err == nil {
-			driveStatus := requireStatusDrive(t, status, canonicalID)
-			if driveStatus.SyncState != nil {
-				lastStatus = *driveStatus.SyncState
+			mountStatus := requireStatusMount(t, status, canonicalID)
+			if mountStatus.SyncState != nil {
+				lastStatus = *mountStatus.SyncState
 				if ready(lastStatus) {
 					return lastStatus
 				}

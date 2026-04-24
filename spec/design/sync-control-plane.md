@@ -110,8 +110,11 @@ records, but it never deletes them based on absence alone.
 Authoritative removal is a lifecycle transition. A removed shortcut is first
 marked `pending_removal`, the control plane stops any active child runner,
 purges the managed child state DB, and only then deletes the inventory record.
-Parent namespace mounts continue to reserve every child mount path they own
-while records are active, paused, conflicted, unavailable, or pending removal.
+Parent namespace mounts reserve child mount paths only while records still own a
+runtime subtree: active, paused, conflicted, or unavailable records keep the
+parent exclusion. `pending_removal` records are cleanup tombstones, so runtime
+mount compilation ignores them; watch diffing stops the old child runner before
+starting a parent runner whose exclusion list no longer contains that subtree.
 
 ## Boundary To The Engine
 
