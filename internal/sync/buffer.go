@@ -1,4 +1,4 @@
-// Package sync owns the single-drive runtime, including the debounced dirty
+// Package sync owns the single mounted content-root runtime, including the debounced dirty
 // scheduler that turns local and remote observations into "refresh/replan now"
 // signals. It does not buffer planner semantics or preserve event history.
 package sync

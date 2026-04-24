@@ -1,4 +1,4 @@
-// Package sync owns the single-drive runtime, including pure helpers for
+// Package sync owns the single mounted content-root runtime, including pure helpers for
 // active-scope evaluation used by watch-mode execution and its tests.
 //
 // This file contains the pure helper functions for evaluating active scope

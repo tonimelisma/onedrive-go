@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -15,16 +16,12 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-type reconcileResult struct {
-	RemovedMountIDs []string
-}
-
 type discoveredShortcutBinding struct {
 	BindingItemID     string
-	DisplayName       string
+	LocalAlias        string
 	RelativeLocalPath string
 	RemoteDriveID     string
-	RemoteRootItemID  string
+	RemoteItemID      string
 }
 
 const (
@@ -37,48 +34,67 @@ type parentReconcileResult struct {
 	removedMountIDs []string
 }
 
+type namespaceReconcileResult struct {
+	inventory       *config.MountInventory
+	removedMountIDs []string
+}
+
+type namespaceRuntime struct {
+	cfg    *OrchestratorConfig
+	logger *slog.Logger
+}
+
 func (o *Orchestrator) reconcileManagedShortcutMounts(
 	ctx context.Context,
 	parents []*mountSpec,
-) (reconcileResult, error) {
-	if len(parents) == 0 {
-		return reconcileResult{}, nil
+) (namespaceReconcileResult, error) {
+	runtime := &namespaceRuntime{
+		cfg:    o.cfg,
+		logger: o.logger,
 	}
+	return runtime.reconcile(ctx, parents)
+}
 
+func (n *namespaceRuntime) reconcile(
+	ctx context.Context,
+	parents []*mountSpec,
+) (namespaceReconcileResult, error) {
 	inventory, err := config.LoadMountInventory()
 	if err != nil {
-		return reconcileResult{}, fmt.Errorf("loading mount inventory: %w", err)
+		return namespaceReconcileResult{}, fmt.Errorf("loading mount inventory: %w", err)
 	}
 
-	result := reconcileResult{}
+	result := namespaceReconcileResult{inventory: inventory}
 	changed := false
 	for _, parent := range parents {
-		parentResult, parentErr := o.reconcileParentMount(ctx, inventory, parent)
+		parentResult, parentErr := n.reconcileNamespaceMount(ctx, inventory, parent)
 		if parentErr != nil {
-			if o.logger != nil {
-				o.logger.Warn("shortcut reconciliation failed",
-					"parent_mount_id", parent.mountID.String(),
+			if n.logger != nil {
+				n.logger.Warn("shortcut reconciliation failed",
+					"namespace_id", parent.mountID.String(),
 					"error", parentErr,
 				)
 			}
 			continue
 		}
 		changed = changed || parentResult.changed
-		result.RemovedMountIDs = append(result.RemovedMountIDs, parentResult.removedMountIDs...)
+		result.removedMountIDs = append(result.removedMountIDs, parentResult.removedMountIDs...)
 	}
+	changed = applyDurableProjectionConflicts(inventory, parents) || changed
+	result.removedMountIDs = appendUniqueStrings(result.removedMountIDs, pendingRemovalMountIDs(inventory)...)
 
 	if !changed {
 		return result, nil
 	}
 
 	if err := config.SaveMountInventory(inventory); err != nil {
-		return reconcileResult{}, fmt.Errorf("saving mount inventory: %w", err)
+		return namespaceReconcileResult{}, fmt.Errorf("saving mount inventory: %w", err)
 	}
 
 	return result, nil
 }
 
-func (o *Orchestrator) reconcileParentMount(
+func (n *namespaceRuntime) reconcileNamespaceMount(
 	ctx context.Context,
 	inventory *config.MountInventory,
 	parent *mountSpec,
@@ -87,9 +103,9 @@ func (o *Orchestrator) reconcileParentMount(
 		return parentReconcileResult{}, nil
 	}
 
-	session, err := o.cfg.Runtime.SyncSession(ctx, parent.syncSessionConfig())
+	session, err := n.cfg.Runtime.SyncSession(ctx, parent.syncSessionConfig())
 	if err != nil {
-		return parentReconcileResult{}, fmt.Errorf("session for parent mount %s: %w", parent.mountID, err)
+		return parentReconcileResult{}, fmt.Errorf("session for namespace mount %s: %w", parent.mountID, err)
 	}
 	sessionView := newDriveopsSessionView(session)
 
@@ -98,35 +114,35 @@ func (o *Orchestrator) reconcileParentMount(
 		return parentReconcileResult{}, err
 	}
 
-	state := inventory.Parents[parent.mountID.String()]
-	if state.ParentMountID == "" {
-		state.ParentMountID = parent.mountID.String()
+	state := inventory.Namespaces[parent.mountID.String()]
+	if state.NamespaceID == "" {
+		state.NamespaceID = parent.mountID.String()
 	}
 
 	switch {
 	case parent.remoteRootItemID == "":
-		return o.reconcileParentMountDelta(ctx, inventory, parent, sessionView, rootPathPrefix, state, false)
+		return n.reconcileNamespaceMountDelta(ctx, inventory, parent, sessionView, rootPathPrefix, state, false)
 	case parent.remoteRootDeltaCapable:
-		result, deltaErr := o.reconcileParentMountDelta(ctx, inventory, parent, sessionView, rootPathPrefix, state, true)
+		result, deltaErr := n.reconcileNamespaceMountDelta(ctx, inventory, parent, sessionView, rootPathPrefix, state, true)
 		if deltaErr == nil {
 			return result, nil
 		}
 		if errors.Is(deltaErr, graph.ErrMethodNotAllowed) || errors.Is(deltaErr, graph.ErrNotFound) {
-			return o.reconcileParentMountByListing(ctx, inventory, parent, sessionView, rootPathPrefix, state)
+			return n.reconcileNamespaceMountByListing(ctx, inventory, parent, sessionView, rootPathPrefix, state)
 		}
 		return parentReconcileResult{}, deltaErr
 	default:
-		return o.reconcileParentMountByListing(ctx, inventory, parent, sessionView, rootPathPrefix, state)
+		return n.reconcileNamespaceMountByListing(ctx, inventory, parent, sessionView, rootPathPrefix, state)
 	}
 }
 
-func (o *Orchestrator) reconcileParentMountDelta(
+func (n *namespaceRuntime) reconcileNamespaceMountDelta(
 	ctx context.Context,
 	inventory *config.MountInventory,
 	parent *mountSpec,
 	session *driveopsSessionView,
 	rootPathPrefix string,
-	state config.ParentDiscoveryState,
+	state config.NamespaceDiscoveryState,
 	folderScoped bool,
 ) (parentReconcileResult, error) {
 	var (
@@ -146,17 +162,17 @@ func (o *Orchestrator) reconcileParentMountDelta(
 			changed := state.DeltaLink != "" || state.DiscoveryMode != config.DiscoveryModeDelta
 			state.DeltaLink = ""
 			state.DiscoveryMode = config.DiscoveryModeDelta
-			inventory.Parents[parent.mountID.String()] = state
+			inventory.Namespaces[parent.mountID.String()] = state
 			return parentReconcileResult{changed: changed}, nil
 		}
-		return parentReconcileResult{}, fmt.Errorf("delta discovery for parent mount %s: %w", parent.mountID, err)
+		return parentReconcileResult{}, fmt.Errorf("delta discovery for namespace mount %s: %w", parent.mountID, err)
 	}
 
 	state.DeltaLink = newToken
 	state.DiscoveryMode = config.DiscoveryModeDelta
-	inventory.Parents[parent.mountID.String()] = state
+	inventory.Namespaces[parent.mountID.String()] = state
 
-	existingByBinding := existingBindingsForParent(inventory, parent.mountID)
+	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
 	if fullEnumeration {
 		discovered := make(map[string]discoveredShortcutBinding)
 		for i := range items {
@@ -169,34 +185,34 @@ func (o *Orchestrator) reconcileParentMountDelta(
 			}
 			discovered[binding.BindingItemID] = binding
 		}
-		return applyFullParentEnumeration(inventory, parent.mountID, existingByBinding, discovered)
+		return applyFullParentEnumeration(inventory, parent, existingByBinding, discovered)
 	}
 
-	return applyIncrementalParentDelta(ctx, inventory, parent.mountID, existingByBinding, session, parent, rootPathPrefix, items)
+	return applyIncrementalParentDelta(ctx, inventory, existingByBinding, session, parent, rootPathPrefix, items)
 }
 
-func (o *Orchestrator) reconcileParentMountByListing(
+func (n *namespaceRuntime) reconcileNamespaceMountByListing(
 	ctx context.Context,
 	inventory *config.MountInventory,
 	parent *mountSpec,
 	session *driveopsSessionView,
 	rootPathPrefix string,
-	state config.ParentDiscoveryState,
+	state config.NamespaceDiscoveryState,
 ) (parentReconcileResult, error) {
 	bindings, err := enumerateShortcutBindings(ctx, session, parent, rootPathPrefix)
 	if err != nil {
 		return parentReconcileResult{}, err
 	}
 
-	state.ParentMountID = parent.mountID.String()
+	state.NamespaceID = parent.mountID.String()
 	state.DeltaLink = ""
 	state.DiscoveryMode = config.DiscoveryModeEnumerate
-	inventory.Parents[parent.mountID.String()] = state
+	inventory.Namespaces[parent.mountID.String()] = state
 
 	changed := false
-	existingByBinding := existingBindingsForParent(inventory, parent.mountID)
+	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
 	for _, binding := range bindings {
-		updated, err := upsertChildMountRecord(inventory, parent.mountID, existingByBinding, binding)
+		updated, err := upsertChildMountRecord(inventory, parent, existingByBinding, binding)
 		if err != nil {
 			return parentReconcileResult{}, err
 		}
@@ -217,10 +233,11 @@ type graphDiscoveryClient interface {
 	ListChildren(ctx context.Context, driveID string, parentID string) ([]graph.Item, error)
 }
 
-func existingBindingsForParent(inventory *config.MountInventory, parentID mountID) map[string]config.MountRecord {
+func existingBindingsForNamespace(inventory *config.MountInventory, namespaceID mountID) map[string]config.MountRecord {
 	byBinding := make(map[string]config.MountRecord)
-	for _, record := range inventory.Mounts {
-		if record.ParentMountID != parentID.String() || record.BindingItemID == "" {
+	for mountID := range inventory.Mounts {
+		record := inventory.Mounts[mountID]
+		if record.NamespaceID != namespaceID.String() || record.BindingItemID == "" {
 			continue
 		}
 		byBinding[record.BindingItemID] = record
@@ -230,14 +247,14 @@ func existingBindingsForParent(inventory *config.MountInventory, parentID mountI
 
 func applyFullParentEnumeration(
 	inventory *config.MountInventory,
-	parentID mountID,
+	parent *mountSpec,
 	existingByBinding map[string]config.MountRecord,
 	discovered map[string]discoveredShortcutBinding,
 ) (parentReconcileResult, error) {
 	changed := false
 	removed := make([]string, 0)
 	for bindingID, binding := range discovered {
-		updated, err := upsertChildMountRecord(inventory, parentID, existingByBinding, binding)
+		updated, err := upsertChildMountRecord(inventory, parent, existingByBinding, binding)
 		if err != nil {
 			return parentReconcileResult{}, err
 		}
@@ -245,11 +262,14 @@ func applyFullParentEnumeration(
 		delete(existingByBinding, bindingID)
 	}
 
-	for bindingID, record := range existingByBinding {
-		delete(inventory.Mounts, record.MountID)
+	for bindingID := range existingByBinding {
+		record := existingByBinding[bindingID]
+		updated := markMountPendingRemoval(inventory, &record)
 		delete(existingByBinding, bindingID)
-		removed = append(removed, record.MountID)
-		changed = true
+		if updated {
+			removed = append(removed, record.MountID)
+			changed = true
+		}
 	}
 
 	return parentReconcileResult{changed: changed, removedMountIDs: removed}, nil
@@ -258,7 +278,6 @@ func applyFullParentEnumeration(
 func applyIncrementalParentDelta(
 	ctx context.Context,
 	inventory *config.MountInventory,
-	parentID mountID,
 	existingByBinding map[string]config.MountRecord,
 	session *driveopsSessionView,
 	parent *mountSpec,
@@ -275,9 +294,10 @@ func applyIncrementalParentDelta(
 		record, found := existingByBinding[item.ID]
 		if item.IsDeleted {
 			if found {
-				delete(inventory.Mounts, record.MountID)
-				removed = append(removed, record.MountID)
-				changed = true
+				if markMountPendingRemoval(inventory, &record) {
+					removed = append(removed, record.MountID)
+					changed = true
+				}
 			}
 			continue
 		}
@@ -288,14 +308,15 @@ func applyIncrementalParentDelta(
 		}
 		if !ok {
 			if found {
-				delete(inventory.Mounts, record.MountID)
-				removed = append(removed, record.MountID)
-				changed = true
+				if markMountPendingRemoval(inventory, &record) {
+					removed = append(removed, record.MountID)
+					changed = true
+				}
 			}
 			continue
 		}
 
-		updated, err := upsertChildMountRecord(inventory, parentID, existingByBinding, binding)
+		updated, err := upsertChildMountRecord(inventory, parent, existingByBinding, binding)
 		if err != nil {
 			return parentReconcileResult{}, err
 		}
@@ -307,30 +328,33 @@ func applyIncrementalParentDelta(
 
 func upsertChildMountRecord(
 	inventory *config.MountInventory,
-	parentID mountID,
+	parent *mountSpec,
 	existingByBinding map[string]config.MountRecord,
 	binding discoveredShortcutBinding,
 ) (bool, error) {
 	record, found := existingByBinding[binding.BindingItemID]
 	if !found {
 		record = config.MountRecord{
-			MountID:       config.ChildMountID(parentID.String(), binding.BindingItemID),
-			ParentMountID: parentID.String(),
+			MountID:       config.ChildMountID(parent.mountID.String(), binding.BindingItemID),
+			NamespaceID:   parent.mountID.String(),
 			BindingItemID: binding.BindingItemID,
 		}
 	}
 
 	if record.MountID == "" {
-		return false, fmt.Errorf("constructing child mount ID for parent %s binding %s", parentID, binding.BindingItemID)
+		return false, fmt.Errorf("constructing child mount ID for namespace %s binding %s", parent.mountID, binding.BindingItemID)
 	}
 
 	next := record
-	next.ParentMountID = parentID.String()
+	next.NamespaceID = parent.mountID.String()
 	next.BindingItemID = binding.BindingItemID
-	next.DisplayName = binding.DisplayName
+	next.LocalAlias = binding.LocalAlias
 	next.RelativeLocalPath = binding.RelativeLocalPath
+	next.TokenOwnerCanonical = parent.tokenOwnerCanonical.String()
 	next.RemoteDriveID = binding.RemoteDriveID
-	next.RemoteRootItemID = binding.RemoteRootItemID
+	next.RemoteItemID = binding.RemoteItemID
+	next.State = config.MountStateActive
+	next.StateReason = ""
 
 	if found && next == record {
 		return false, nil
@@ -342,6 +366,138 @@ func upsertChildMountRecord(
 	inventory.Mounts[next.MountID] = next
 	existingByBinding[binding.BindingItemID] = next
 	return true, nil
+}
+
+func markMountPendingRemoval(inventory *config.MountInventory, record *config.MountRecord) bool {
+	if inventory == nil || record == nil || record.MountID == "" {
+		return false
+	}
+	if record.State == config.MountStatePendingRemoval &&
+		record.StateReason == config.MountStateReasonShortcutRemoved {
+		return false
+	}
+
+	record.State = config.MountStatePendingRemoval
+	record.StateReason = config.MountStateReasonShortcutRemoved
+	inventory.Mounts[record.MountID] = *record
+	return true
+}
+
+func applyDurableProjectionConflicts(inventory *config.MountInventory, parents []*mountSpec) bool {
+	if inventory == nil {
+		return false
+	}
+
+	_, standaloneByRoot := indexStandaloneMounts(parents)
+	recordsByNamespaceRoot := make(map[string][]config.MountRecord)
+	changed := false
+	records := sortedMountRecords(inventory)
+	for i := range records {
+		record := &records[i]
+		if record.State == config.MountStatePendingRemoval ||
+			record.State == config.MountStateUnavailable {
+			continue
+		}
+		key, err := contentRootKeyForRecord(record)
+		if err != nil {
+			continue
+		}
+		if _, found := standaloneByRoot[key]; found {
+			changed = setMountLifecycleState(
+				inventory,
+				record,
+				config.MountStateConflict,
+				config.MountStateReasonExplicitStandaloneContentRoot,
+			) || changed
+			continue
+		}
+
+		namespaceRootKey := record.NamespaceID + "|" + key
+		recordsByNamespaceRoot[namespaceRootKey] = append(recordsByNamespaceRoot[namespaceRootKey], *record)
+	}
+
+	for _, records := range recordsByNamespaceRoot {
+		sort.SliceStable(records, func(i, j int) bool {
+			if records[i].RelativeLocalPath == records[j].RelativeLocalPath {
+				return records[i].MountID < records[j].MountID
+			}
+
+			return records[i].RelativeLocalPath < records[j].RelativeLocalPath
+		})
+
+		for i := range records {
+			state := config.MountStateActive
+			reason := ""
+			if i > 0 {
+				state = config.MountStateConflict
+				reason = config.MountStateReasonDuplicateContentRoot
+			}
+			changed = setMountLifecycleState(inventory, &records[i], state, reason) || changed
+		}
+	}
+
+	return changed
+}
+
+func setMountLifecycleState(
+	inventory *config.MountInventory,
+	record *config.MountRecord,
+	state config.MountState,
+	reason string,
+) bool {
+	if record == nil || record.State == state && record.StateReason == reason {
+		return false
+	}
+
+	record.State = state
+	record.StateReason = reason
+	inventory.Mounts[record.MountID] = *record
+	return true
+}
+
+func contentRootKeyForRecord(record *config.MountRecord) (string, error) {
+	tokenOwner, err := driveid.NewCanonicalID(record.TokenOwnerCanonical)
+	if err != nil {
+		return "", fmt.Errorf("parsing mount %s token owner: %w", record.MountID, err)
+	}
+
+	return fmt.Sprintf("%s|%s|%s", tokenOwner.String(), driveid.New(record.RemoteDriveID).String(), record.RemoteItemID), nil
+}
+
+func pendingRemovalMountIDs(inventory *config.MountInventory) []string {
+	if inventory == nil {
+		return nil
+	}
+
+	ids := make([]string, 0)
+	records := sortedMountRecords(inventory)
+	for i := range records {
+		record := &records[i]
+		if record.State == config.MountStatePendingRemoval {
+			ids = append(ids, record.MountID)
+		}
+	}
+
+	return ids
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, value := range additions {
+		if value == "" {
+			continue
+		}
+		if _, found := seen[value]; found {
+			continue
+		}
+		values = append(values, value)
+		seen[value] = struct{}{}
+	}
+
+	return values
 }
 
 func enumerateShortcutBindings(
@@ -431,10 +587,10 @@ func resolveDiscoveredShortcutBinding(
 
 	return discoveredShortcutBinding{
 		BindingItemID:     current.ID,
-		DisplayName:       current.Name,
+		LocalAlias:        current.Name,
 		RelativeLocalPath: relativeLocalPath,
 		RemoteDriveID:     current.RemoteDriveID,
-		RemoteRootItemID:  current.RemoteItemID,
+		RemoteItemID:      current.RemoteItemID,
 	}, true, nil
 }
 
@@ -572,4 +728,25 @@ func purgeManagedMountStateDBs(logger *slog.Logger, mountIDs []string) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+func finalizePendingMountRemovals(mountIDs []string) error {
+	if len(mountIDs) == 0 {
+		return nil
+	}
+
+	if err := config.UpdateMountInventory(func(inventory *config.MountInventory) error {
+		for _, mountID := range mountIDs {
+			record, found := inventory.Mounts[mountID]
+			if !found || record.State != config.MountStatePendingRemoval {
+				continue
+			}
+			delete(inventory.Mounts, mountID)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("updating mount inventory after child mount removal: %w", err)
+	}
+
+	return nil
 }

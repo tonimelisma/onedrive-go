@@ -185,8 +185,9 @@ to that mounted subtree, not via per-action target-root overrides. Scope
 classification likewise uses the action completion's authoritative `DriveID`.
 
 Direct shared-item CLI flows still keep explicit target-scoped behavior above
-sync through `driveops.SharedTargetClients(...)` and `Session.ResolveItem(...)`.
-That is a transfer/CLI boundary, not ordinary sync execution.
+sync through `driveops.SharedTargetClients(...)` and root-aware
+`driveops.MountSession` path operations. That is a transfer/CLI boundary, not
+ordinary sync execution.
 
 ## Scope Helpers
 

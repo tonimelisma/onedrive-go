@@ -99,8 +99,8 @@ edits and local-wins edit/delete conflict recovery on the narrower overwrite
 boundary and avoids teaching parent-creation consistency gaps to flows that
 already have stable remote identity.
 
-`driveops` is the single owner of post-success path convergence and
-path-authoritative delete reconciliation for one resolved drive session.
+`driveops.MountSession` is the single owner of post-success path convergence
+and path-authoritative delete reconciliation for one interactive mounted root.
 Graph can acknowledge folder creation, upload, or move before an immediate
 follow-on path lookup stops returning `itemNotFound`, and it can briefly
 return `DELETE .../items/{id} = 404 itemNotFound` even though the same
@@ -152,9 +152,9 @@ Sync execution consumes the same capability for post-success visibility
 confirmation after remote folder create, upload, and move. Those sync probes
 stay best-effort and warn-only, but they no longer own a second retry budget
 or sleep loop. Ordinary sync execution now always probes relative to the
-executor's mounted drive/root session. Direct shared-item CLI flows keep any
+executor's mounted drive/root context. Direct shared-item CLI flows keep any
 explicit target-scoped path work above sync via `SharedTargetClients(...)` and
-`ResolveItem(...)`.
+`MountSession.ResolveItem(...)`.
 
 `SessionRuntime.InteractiveSession(...)` and
 `SessionRuntime.SyncSession(...)` are mount-shaped rather than resolved-drive

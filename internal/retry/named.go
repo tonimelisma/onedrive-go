@@ -97,7 +97,7 @@ func DownloadMetadataPolicy() Policy {
 // already accepted the file content. It covers the documented item-not-found
 // visibility race and the transient 502/503/504 gateway/service failures we
 // have seen on that same finalization edge. It is longer than the other
-// item-ID readback policies because freshly created shared-root uploads can lag
+// item-ID readback policies because freshly created mount-root uploads can lag
 // patch visibility for well over ten seconds even after the upload itself
 // succeeded.
 func SimpleUploadMtimePatchPolicy() Policy {

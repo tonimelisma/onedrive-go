@@ -1,4 +1,4 @@
-// Package sync owns the single-drive runtime, including local observation.
+// Package sync owns the single mounted content-root runtime, including local observation.
 //
 // Contents:
 //   - LocalObserver struct + NewLocalObserver constructor
