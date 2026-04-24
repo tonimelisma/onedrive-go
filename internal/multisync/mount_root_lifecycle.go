@@ -2,6 +2,7 @@ package multisync
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -91,6 +92,10 @@ func logChildRootLifecycle(
 }
 
 func childRootNeedsReconciliation(record *config.MountRecord) bool {
+	if record == nil || len(record.ReservedLocalPaths) > 0 {
+		return false
+	}
+
 	switch record.State {
 	case "", config.MountStateActive:
 		return true
@@ -187,4 +192,130 @@ func childMountRootCreateErrorState(err error) (config.MountState, string) {
 	}
 
 	return config.MountStateUnavailable, config.MountStateReasonLocalRootUnavailable
+}
+
+func validateCompiledChildMountRoots(compiled *compiledMountSet, logger *slog.Logger) {
+	if compiled == nil || len(compiled.Mounts) == 0 {
+		return
+	}
+
+	parentByID := standaloneParentMountsByID(compiled.Mounts)
+	filtered := compiled.Mounts[:0]
+	for _, mount := range compiled.Mounts {
+		if mount == nil || mount.projectionKind != MountProjectionChild {
+			filtered = append(filtered, mount)
+			continue
+		}
+
+		parent := parentByID[mount.parentMountID]
+		if parent == nil {
+			filtered = append(filtered, mount)
+			continue
+		}
+
+		state, reason, err := validateCompiledChildMountRoot(parent, mount)
+		if err != nil {
+			compiled.Skipped = append(compiled.Skipped, mountStartupResultForMount(mount, err))
+			recordCompiledChildRootState(mount.mountID, state, reason, logger)
+			continue
+		}
+
+		filtered = append(filtered, mount)
+	}
+	compiled.Mounts = filtered
+}
+
+func standaloneParentMountsByID(mounts []*mountSpec) map[mountID]*mountSpec {
+	parents := make(map[mountID]*mountSpec)
+	for i := range mounts {
+		if mounts[i] == nil || mounts[i].projectionKind != MountProjectionStandalone {
+			continue
+		}
+		parents[mounts[i].mountID] = mounts[i]
+	}
+
+	return parents
+}
+
+func validateCompiledChildMountRoot(
+	parent *mountSpec,
+	child *mountSpec,
+) (config.MountState, string, error) {
+	relativeLocalPath, err := childMountRelativePath(parent, child)
+	if err != nil {
+		return config.MountStateUnavailable,
+			config.MountStateReasonLocalRootUnavailable,
+			fmt.Errorf("child mount %s local root: %w", child.mountID, err)
+	}
+
+	state, reason := materializeChildMountRoot(parent.syncRoot, relativeLocalPath)
+	if state == config.MountStateActive {
+		return state, reason, nil
+	}
+
+	return state, reason, childRootStateError(child.mountID, state, reason)
+}
+
+func childMountRelativePath(parent *mountSpec, child *mountSpec) (string, error) {
+	parentRoot, err := filepath.Abs(filepath.Clean(parent.syncRoot))
+	if err != nil {
+		return "", fmt.Errorf("resolving parent sync root %q: %w", parent.syncRoot, err)
+	}
+	childRoot, err := filepath.Abs(filepath.Clean(child.syncRoot))
+	if err != nil {
+		return "", fmt.Errorf("resolving child sync root %q: %w", child.syncRoot, err)
+	}
+
+	relativePath, err := filepath.Rel(parentRoot, childRoot)
+	if err != nil {
+		return "", fmt.Errorf("relativizing child sync root %q: %w", child.syncRoot, err)
+	}
+	relativePath = filepath.ToSlash(relativePath)
+	if _, ok := cleanChildMountRootRelativePath(relativePath); !ok {
+		return "", fmt.Errorf("path %q escapes parent sync root", relativePath)
+	}
+
+	return relativePath, nil
+}
+
+func childRootStateError(mountID mountID, state config.MountState, reason string) error {
+	switch state {
+	case config.MountStateActive:
+		return nil
+	case config.MountStateConflict:
+		if reason != "" {
+			return fmt.Errorf("child mount %s is conflicted: %s", mountID, reason)
+		}
+		return fmt.Errorf("child mount %s is conflicted", mountID)
+	case config.MountStatePendingRemoval:
+		return fmt.Errorf("child mount %s is pending removal", mountID)
+	case config.MountStateUnavailable:
+		if reason != "" {
+			return fmt.Errorf("child mount %s is unavailable: %s", mountID, reason)
+		}
+		return fmt.Errorf("child mount %s is unavailable", mountID)
+	default:
+		return fmt.Errorf("child mount %s local root has unsupported state %q", mountID, state)
+	}
+}
+
+func recordCompiledChildRootState(
+	childMountID mountID,
+	state config.MountState,
+	reason string,
+	logger *slog.Logger,
+) {
+	if err := config.UpdateMountInventory(func(inventory *config.MountInventory) error {
+		record, found := inventory.Mounts[childMountID.String()]
+		if !found {
+			return nil
+		}
+		setMountLifecycleState(inventory, &record, state, reason)
+		return nil
+	}); err != nil && logger != nil {
+		logger.Warn("recording child mount local root failure",
+			slog.String("mount_id", childMountID.String()),
+			slog.String("error", err.Error()),
+		)
+	}
 }
