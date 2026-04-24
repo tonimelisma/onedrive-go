@@ -1635,12 +1635,19 @@ Concrete work:
 - remove generic config/catalog/session fields that only existed to carry mount
   semantics in drive-shaped types
 - remove transitional resolved-drive runtime constructors and session APIs:
-  `sync.NewDriveEngine` is gone, `SessionRuntime.Session` is gone, and both
-  interactive and sync session construction now consume `driveops.MountSessionConfig`
+  the resolved-drive engine constructor and resolved-drive session entrypoint
+  are gone, and both interactive and sync session construction now consume
+  `driveops.MountSessionConfig`
 - remove resolved-drive values from multisync orchestration:
   `multisync.OrchestratorConfig` now accepts `StandaloneMountConfig`, and
   `ResolvedDrive` is consumed at the CLI/config edge before top-level mount
   construction
+- harden the mount boundary after review:
+  `StandaloneMountSelection` carries valid top-level mounts plus mount-local
+  conversion failures, watch startup now closes the control socket when startup
+  validation fails after bind, paused child mounts still reserve their parent
+  subtree, and managed mount state paths use collision-resistant encoded mount
+  IDs
 - rename remaining store owner vocabulary from configured-drive-centric to
   mount-owned terminology: `observation_state.mount_drive_id`,
   `ObservationState.MountDriveID`, and related helpers now describe the mounted

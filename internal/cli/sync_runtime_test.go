@@ -122,7 +122,7 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		return expectedResult
 	}
 
-	result, err := runSyncOnce(
+	result := runSyncOnce(
 		t.Context(),
 		cc,
 		holder,
@@ -132,12 +132,11 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		slog.New(slog.DiscardHandler),
 		"/tmp/control.sock",
 	)
-	require.NoError(t, err)
 	assert.Equal(t, expectedResult, result)
 }
 
 // Validates: R-2.8.1
-func TestStandaloneMountConfigsFromResolvedDrives_PreservesMountBoundaryFields(t *testing.T) {
+func TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields(t *testing.T) {
 	t.Parallel()
 
 	first := &config.ResolvedDrive{
@@ -162,9 +161,10 @@ func TestStandaloneMountConfigsFromResolvedDrives_PreservesMountBoundaryFields(t
 		SafetyConfig: config.SafetyConfig{MinFreeSpace: "0"},
 	}
 
-	mounts, err := standaloneMountConfigsFromResolvedDrives([]*config.ResolvedDrive{first, second})
-	require.NoError(t, err)
+	selection := standaloneMountSelectionFromResolvedDrives([]*config.ResolvedDrive{first, second})
+	mounts := selection.Mounts
 	require.Len(t, mounts, 2)
+	assert.Empty(t, selection.StartupResults)
 
 	assert.Equal(t, 0, mounts[0].SelectionIndex)
 	assert.Equal(t, first.CanonicalID, mounts[0].CanonicalID)
@@ -187,7 +187,37 @@ func TestStandaloneMountConfigsFromResolvedDrives_PreservesMountBoundaryFields(t
 }
 
 // Validates: R-2.8.1
-func TestStandaloneMountConfigsFromResolvedDrives_InvalidMinFreeSpaceFails(t *testing.T) {
+func TestStandaloneMountSelectionFromResolvedDrives_PrefersTokenOwnerAccountEmail(t *testing.T) {
+	setTestDriveHome(t)
+
+	sharedCID := driveid.MustCanonicalID("shared:shared@example.com:remote-drive:remote-root")
+	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+		catalog.UpsertDrive(&config.CatalogDrive{
+			CanonicalID:           sharedCID.String(),
+			OwnerAccountCanonical: "personal:owner@example.com",
+			DriveType:             sharedCID.DriveType(),
+			RemoteDriveID:         "remote-drive",
+		})
+		return nil
+	}))
+
+	drive := &config.ResolvedDrive{
+		CanonicalID: sharedCID,
+		DisplayName: "Shared",
+		SyncDir:     t.TempDir(),
+		DriveID:     driveid.New("remote-drive"),
+		RootItemID:  "remote-root",
+	}
+
+	selection := standaloneMountSelectionFromResolvedDrives([]*config.ResolvedDrive{drive})
+	require.Len(t, selection.Mounts, 1)
+	assert.Empty(t, selection.StartupResults)
+	assert.Equal(t, "owner@example.com", selection.Mounts[0].AccountEmail)
+	assert.Equal(t, "remote-root", selection.Mounts[0].RemoteRootItemID)
+}
+
+// Validates: R-2.8.1
+func TestStandaloneMountSelectionFromResolvedDrives_InvalidMinFreeSpaceIsMountLocal(t *testing.T) {
 	t.Parallel()
 
 	drive := &config.ResolvedDrive{
@@ -197,10 +227,46 @@ func TestStandaloneMountConfigsFromResolvedDrives_InvalidMinFreeSpaceFails(t *te
 		SafetyConfig: config.SafetyConfig{MinFreeSpace: "not-a-size"},
 	}
 
-	_, err := standaloneMountConfigsFromResolvedDrives([]*config.ResolvedDrive{drive})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid min_free_space")
-	assert.Contains(t, err.Error(), drive.CanonicalID.String())
+	selection := standaloneMountSelectionFromResolvedDrives([]*config.ResolvedDrive{drive})
+	assert.Empty(t, selection.Mounts)
+	require.Len(t, selection.StartupResults, 1)
+	assert.Equal(t, 0, selection.StartupResults[0].SelectionIndex)
+	assert.Equal(t, drive.CanonicalID, selection.StartupResults[0].CanonicalID)
+	assert.Equal(t, multisync.MountStartupFatal, selection.StartupResults[0].Status)
+	require.Error(t, selection.StartupResults[0].Err)
+	assert.Contains(t, selection.StartupResults[0].Err.Error(), "invalid min_free_space")
+	assert.Contains(t, selection.StartupResults[0].Err.Error(), drive.CanonicalID.String())
+}
+
+// Validates: R-2.8.1
+func TestStandaloneMountSelectionFromResolvedDrives_TokenOwnerFailureIsMountLocal(t *testing.T) {
+	setTestDriveHome(t)
+
+	sharedCID := driveid.MustCanonicalID("shared:missing@example.com:remote-drive:remote-root")
+	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+		catalog.UpsertDrive(&config.CatalogDrive{
+			CanonicalID:           sharedCID.String(),
+			OwnerAccountCanonical: "not-a-canonical-id",
+			DriveType:             sharedCID.DriveType(),
+			RemoteDriveID:         "remote-drive",
+		})
+		return nil
+	}))
+
+	drive := &config.ResolvedDrive{
+		CanonicalID: sharedCID,
+		SyncDir:     t.TempDir(),
+		DriveID:     driveid.New("remote-drive"),
+		RootItemID:  "remote-root",
+	}
+
+	selection := standaloneMountSelectionFromResolvedDrives([]*config.ResolvedDrive{drive})
+	assert.Empty(t, selection.Mounts)
+	require.Len(t, selection.StartupResults, 1)
+	assert.Equal(t, drive.CanonicalID, selection.StartupResults[0].CanonicalID)
+	assert.Equal(t, multisync.MountStartupFatal, selection.StartupResults[0].Status)
+	require.Error(t, selection.StartupResults[0].Err)
+	assert.Contains(t, selection.StartupResults[0].Err.Error(), "token owner")
 }
 
 // Validates: R-2.8.1
@@ -220,9 +286,11 @@ func TestReloadStandaloneMountsFunc_UsesWatchSelectors(t *testing.T) {
 	}
 
 	compile := reloadStandaloneMountsFunc([]string{"Second"}, slog.New(slog.DiscardHandler))
-	mounts, err := compile(cfg)
+	selection, err := compile(cfg)
 	require.NoError(t, err)
+	mounts := selection.Mounts
 	require.Len(t, mounts, 1)
+	assert.Empty(t, selection.StartupResults)
 	assert.Equal(t, secondCID, mounts[0].CanonicalID)
 }
 
@@ -300,6 +368,7 @@ func TestRunSyncDaemonWithFactory_CallsOrchestrator(t *testing.T) {
 			factoryCalls++
 			require.Same(t, holder, cfg.Holder)
 			require.Len(t, cfg.StandaloneMounts, 1)
+			assert.Empty(t, cfg.InitialStartupResults)
 			assert.Equal(t, cid, cfg.StandaloneMounts[0].CanonicalID)
 			assert.NotNil(t, cfg.ReloadStandaloneMounts)
 			assert.Same(t, logger, cfg.Logger)

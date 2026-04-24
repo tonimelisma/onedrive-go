@@ -160,6 +160,37 @@ func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
 }
 
 // Validates: R-2.8.1
+func TestCompileRuntimeMounts_PausedChildStillFiltersParentSubtree(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+
+	compiled, err := compileRuntimeMounts(
+		[]StandaloneMountConfig{parent},
+		&config.MountInventory{
+			Mounts: map[string]config.MountRecord{
+				"child-docs": {
+					MountID:           "child-docs",
+					ParentMountID:     parent.CanonicalID.String(),
+					RelativeLocalPath: "Shortcuts/Docs",
+					RemoteDriveID:     "remote-drive",
+					RemoteRootItemID:  "remote-root",
+					Paused:            true,
+				},
+			},
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 2)
+	assert.Empty(t, compiled.Skipped)
+
+	parentMount := compiled.Mounts[0]
+	childMount := compiled.Mounts[1]
+	assert.Equal(t, []string{"Shortcuts/Docs"}, parentMount.localSkipDirs)
+	assert.True(t, childMount.paused)
+}
+
+// Validates: R-2.8.1
 func TestCompileRuntimeMounts_StandaloneContentRootSuppressesChild(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "business:owner@example.com", "Parent")

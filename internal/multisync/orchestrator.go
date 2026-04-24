@@ -43,7 +43,8 @@ type engineFactoryFunc func(ctx context.Context, req engineFactoryRequest) (engi
 type OrchestratorConfig struct {
 	Holder                 *config.Holder
 	StandaloneMounts       []StandaloneMountConfig
-	ReloadStandaloneMounts func(*config.Config) ([]StandaloneMountConfig, error)
+	InitialStartupResults  []MountStartupResult
+	ReloadStandaloneMounts func(*config.Config) (StandaloneMountSelection, error)
 	Runtime                *driveops.SessionRuntime // token caching + Session creation
 	Logger                 *slog.Logger
 	ControlSocketPath      string
@@ -121,11 +122,20 @@ type indexedDriveWork struct {
 // syncengine.Report. The caller inspects reports to determine success or failure.
 func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) RunOnceResult {
 	if len(o.cfg.StandaloneMounts) == 0 {
+		if len(o.cfg.InitialStartupResults) > 0 {
+			return RunOnceResult{
+				Startup: summarizeStartupResults(o.cfg.InitialStartupResults),
+			}
+		}
 		return RunOnceResult{}
 	}
-	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts)
+	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
-		return controlFailureRunOnceResult(o.cfg.StandaloneMounts, fmt.Errorf("building mount specs: %w", err))
+		return controlFailureRunOnceResult(
+			o.cfg.StandaloneMounts,
+			o.cfg.InitialStartupResults,
+			fmt.Errorf("building mount specs: %w", err),
+		)
 	}
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
@@ -136,18 +146,10 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 
 	control, err := o.startControlServer(ctx, synccontrol.OwnerModeOneShot, nil)
 	if err != nil {
-		return controlFailureRunOnceResult(o.cfg.StandaloneMounts, err)
+		return controlFailureRunOnceResult(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults, err)
 	}
 	if control != nil {
-		defer func() {
-			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlCloseTimeout)
-			defer cancel()
-			if closeErr := control.Close(closeCtx); closeErr != nil {
-				o.logger.Warn("control socket close error",
-					slog.String("error", closeErr.Error()),
-				)
-			}
-		}()
+		defer o.closeControlSocket(ctx, control)
 	}
 
 	o.logger.Info("orchestrator starting RunOnce",
@@ -179,18 +181,24 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	}
 }
 
-func controlFailureRunOnceResult(configs []StandaloneMountConfig, err error) RunOnceResult {
+func controlFailureRunOnceResult(
+	configs []StandaloneMountConfig,
+	initialStartup []MountStartupResult,
+	err error,
+) RunOnceResult {
 	mounts, buildErr := buildStandaloneMountSpecs(configs)
 	if buildErr != nil {
+		results := append([]MountStartupResult(nil), initialStartup...)
+		results = append(results, MountStartupResult{
+			Status: MountStartupFatal,
+			Err:    fmt.Errorf("building mount specs: %w", buildErr),
+		})
 		return RunOnceResult{
-			Startup: summarizeStartupResults([]MountStartupResult{{
-				Status: MountStartupFatal,
-				Err:    fmt.Errorf("building mount specs: %w", buildErr),
-			}}),
+			Startup: summarizeStartupResults(results),
 		}
 	}
 
-	results := make([]MountStartupResult, 0, len(mounts))
+	results := append([]MountStartupResult(nil), initialStartup...)
 	for i := range mounts {
 		results = append(results, driveStartupResultForMount(mounts[i], err))
 	}
@@ -203,6 +211,7 @@ func controlFailureRunOnceResult(configs []StandaloneMountConfig, err error) Run
 func (o *Orchestrator) buildRuntimeMountSet(
 	ctx context.Context,
 	standaloneMounts []StandaloneMountConfig,
+	initialStartup []MountStartupResult,
 ) (*compiledMountSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
@@ -228,8 +237,33 @@ func (o *Orchestrator) buildRuntimeMountSet(
 	if reconcileErr == nil {
 		compiled.RemovedMountIDs = append(compiled.RemovedMountIDs, reconcileResult.RemovedMountIDs...)
 	}
+	offsetCompiledSelectionIndexes(compiled, nextStartupSelectionIndex(initialStartup))
+	compiled.Skipped = append(append([]MountStartupResult(nil), initialStartup...), compiled.Skipped...)
 
 	return compiled, nil
+}
+
+func nextStartupSelectionIndex(results []MountStartupResult) int {
+	next := 0
+	for i := range results {
+		if results[i].SelectionIndex >= next {
+			next = results[i].SelectionIndex + 1
+		}
+	}
+
+	return next
+}
+
+func offsetCompiledSelectionIndexes(compiled *compiledMountSet, offset int) {
+	if compiled == nil || offset == 0 {
+		return
+	}
+	for i := range compiled.Mounts {
+		compiled.Mounts[i].selectionIndex += offset
+	}
+	for i := range compiled.Skipped {
+		compiled.Skipped[i].SelectionIndex += offset
+	}
 }
 
 // prepareRunOnceWork resolves sessions and builds engines for each selected
@@ -359,18 +393,13 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	commands := make(chan controlCommand)
 	runners, control, err := o.startWatchRuntime(ctx, mode, opts, commands)
 	if err != nil {
+		if control != nil {
+			o.closeControlSocket(ctx, control)
+		}
 		return err
 	}
 	if control != nil {
-		defer func() {
-			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlCloseTimeout)
-			defer cancel()
-			if closeErr := control.Close(closeCtx); closeErr != nil {
-				o.logger.Warn("control socket close error",
-					slog.String("error", closeErr.Error()),
-				)
-			}
-		}()
+		defer o.closeControlSocket(ctx, control)
 	}
 
 	defer func() {
@@ -414,10 +443,15 @@ func (o *Orchestrator) startWatchRuntime(
 	commands chan controlCommand,
 ) (map[mountID]*watchRunner, *controlSocketServer, error) {
 	if len(o.cfg.StandaloneMounts) == 0 {
+		if len(o.cfg.InitialStartupResults) > 0 {
+			return nil, nil, &WatchStartupError{
+				Summary: summarizeStartupResults(o.cfg.InitialStartupResults),
+			}
+		}
 		return nil, nil, fmt.Errorf("sync: no drives configured")
 	}
 
-	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts)
+	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sync: building mount specs: %w", err)
 	}
@@ -522,6 +556,16 @@ func (o *Orchestrator) emitStartWarning(summary StartupSelectionSummary) {
 	o.cfg.StartWarning(StartupWarning{Summary: summarizeStartupResults(failures)})
 }
 
+func (o *Orchestrator) closeControlSocket(ctx context.Context, control *controlSocketServer) {
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlCloseTimeout)
+	defer cancel()
+	if closeErr := control.Close(closeCtx); closeErr != nil {
+		o.logger.Warn("control socket close error",
+			slog.String("error", closeErr.Error()),
+		)
+	}
+}
+
 // startWatchRunner creates and starts a watch-mode engine for a single mount.
 func (o *Orchestrator) startWatchRunner(
 	ctx context.Context, mount *mountSpec, mode syncengine.SyncMode, opts syncengine.WatchOptions,
@@ -600,7 +644,7 @@ func (o *Orchestrator) reload(
 	ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 ) {
-	newCfg, newStandaloneMounts, newMounts, err := o.loadReloadMounts(ctx)
+	newCfg, newSelection, newMounts, err := o.loadReloadMounts(ctx)
 	if err != nil {
 		o.logger.Warn("config reload failed, keeping current state",
 			slog.String("error", err.Error()),
@@ -612,7 +656,8 @@ func (o *Orchestrator) reload(
 	// Single-point config update — both Orchestrator and SessionRuntime
 	// read through the shared Holder.
 	o.cfg.Holder.Update(newCfg)
-	o.cfg.StandaloneMounts = newStandaloneMounts
+	o.cfg.StandaloneMounts = newSelection.Mounts
+	o.cfg.InitialStartupResults = newSelection.StartupResults
 
 	// Flush cached token sources so the next Session() call re-reads
 	// token files from disk. Handles logout + re-login between reloads.
@@ -637,7 +682,7 @@ func (o *Orchestrator) reconcileWatchRunners(
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 ) {
-	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts)
+	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
 		o.logger.Warn("shortcut reconciliation refresh failed, keeping current runners",
 			slog.String("error", err.Error()),
@@ -659,10 +704,10 @@ func (o *Orchestrator) reconcileWatchRunners(
 
 func (o *Orchestrator) loadReloadMounts(
 	ctx context.Context,
-) (*config.Config, []StandaloneMountConfig, *compiledMountSet, error) {
+) (*config.Config, StandaloneMountSelection, *compiledMountSet, error) {
 	newCfg, err := config.LoadOrDefault(o.cfg.Holder.Path(), o.logger)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("loading config for reload: %w", err)
+		return nil, StandaloneMountSelection{}, nil, fmt.Errorf("loading config for reload: %w", err)
 	}
 
 	// Clear expired timed pauses before standalone mount compilation, so newly
@@ -671,19 +716,19 @@ func (o *Orchestrator) loadReloadMounts(
 	config.ClearExpiredPauses(o.cfg.Holder.Path(), newCfg, time.Now(), o.logger)
 
 	if o.cfg.ReloadStandaloneMounts == nil {
-		return nil, nil, nil, fmt.Errorf("standalone mount reload compiler is required")
+		return nil, StandaloneMountSelection{}, nil, fmt.Errorf("standalone mount reload compiler is required")
 	}
-	newStandaloneMounts, err := o.cfg.ReloadStandaloneMounts(newCfg)
+	newSelection, err := o.cfg.ReloadStandaloneMounts(newCfg)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("compiling standalone mounts after reload: %w", err)
+		return nil, StandaloneMountSelection{}, nil, fmt.Errorf("compiling standalone mounts after reload: %w", err)
 	}
 
-	newMounts, err := o.buildRuntimeMountSet(ctx, newStandaloneMounts)
+	newMounts, err := o.buildRuntimeMountSet(ctx, newSelection.Mounts, newSelection.StartupResults)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("building mount specs after reload: %w", err)
+		return nil, StandaloneMountSelection{}, nil, fmt.Errorf("building mount specs after reload: %w", err)
 	}
 
-	return newCfg, newStandaloneMounts, newMounts, nil
+	return newCfg, newSelection, newMounts, nil
 }
 
 func (o *Orchestrator) applyWatchMountSet(

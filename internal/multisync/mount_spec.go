@@ -46,6 +46,14 @@ type StandaloneMountConfig struct {
 	MinFreeSpaceBytes         int64
 }
 
+// StandaloneMountSelection carries the configured top-level mounts that are
+// eligible for runtime construction plus mount-local startup failures discovered
+// while compiling selected config drives at the CLI boundary.
+type StandaloneMountSelection struct {
+	Mounts         []StandaloneMountConfig
+	StartupResults []MountStartupResult
+}
+
 // mountSpec is the control plane's runtime unit.
 type mountSpec struct {
 	mountID                   mountID
@@ -234,9 +242,7 @@ func assembleRuntimeMountSet(
 			}
 
 			finalMounts = append(finalMounts, candidate.mount)
-			if !candidate.mount.paused {
-				parent.localSkipDirs = append(parent.localSkipDirs, candidate.relativeLocalPath)
-			}
+			parent.localSkipDirs = append(parent.localSkipDirs, candidate.relativeLocalPath)
 		}
 	}
 
