@@ -227,8 +227,8 @@ Runtime policy:
 - retry remains narrow: only item-by-ID metadata fetches used to obtain the
   pre-authenticated download URL, only HTTP 404, only Graph code
   `itemNotFound`
-- the current production retry budget is 7 total attempts with 250ms base, 2x
-  multiplier, no jitter, and 8s max
+- the current production retry budget is 4 total attempts with 250ms base, 2x
+  multiplier, no jitter, and 2s max
 - transfer-manager callers and sync workers do not add their own second retry
   loop for this quirk; the graph boundary is the single owner
 
@@ -268,8 +268,8 @@ Runtime policy:
 - only the immediate post-simple-upload mtime PATCH gets the retry
 - retry remains narrow: only HTTP 404 `itemNotFound` or transient 502/503/504
   server failures, and only on the simple-upload finalization path
-- the current production retry budget is 7 total attempts with 250ms base, 2x
-  multiplier, no jitter, and 8s max
+- the current production retry budget is 8 total attempts with 250ms base, 2x
+  multiplier, no jitter, and 16s max
 - direct `UpdateFileSystemInfo()` calls outside simple-upload finalization stay
   strict; callers should not assume all metadata PATCH paths are retried
 

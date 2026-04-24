@@ -135,6 +135,19 @@ func MkdirAll(path string, perm os.FileMode) error {
 	return nil
 }
 
+func Mkdir(path string, perm os.FileMode) error {
+	abs, err := absolutePath(path)
+	if err != nil {
+		return err
+	}
+
+	if err := os.Mkdir(abs, perm); err != nil {
+		return fmt.Errorf("creating directory %s: %w", path, err)
+	}
+
+	return nil
+}
+
 func Chmod(path string, perm os.FileMode) error {
 	abs, err := absolutePath(path)
 	if err != nil {

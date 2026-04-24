@@ -69,6 +69,7 @@ type Item struct {
 	SpecialFolderName string      // "vault", "documents", etc.; empty if not a special folder (B-271)
 	RemoteDriveID     string      // normalized owner-side driveId for embedded shared-folder items
 	RemoteItemID      string      // from remoteItem.id for embedded shared-folder items
+	RemoteIsFolder    bool        // true when remoteItem.folder is present, even if the local placeholder is not a folder
 	SharedOwnerName   string      // sharer identity: remoteItem.shared.sharedBy → .owner → .createdBy → shared.owner
 	SharedOwnerEmail  string      // sharer email via same fallback chain as SharedOwnerName
 }

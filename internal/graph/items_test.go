@@ -1687,10 +1687,46 @@ func TestToItem_SharedOwner_FallbackChain(t *testing.T) {
 			assert.Equal(t, tt.wantEmail, item.SharedOwnerEmail)
 			assert.Equal(t, tt.wantRemoteID, item.RemoteItemID)
 			assert.Equal(t, tt.wantDriveID, item.RemoteDriveID)
+			assert.True(t, item.RemoteIsFolder)
 			assert.True(t, item.IsFolder)
 			assert.Equal(t, tt.wantChildCnt, item.ChildCount)
 		})
 	}
+}
+
+func TestToItem_RemoteItemFolderOnNonFolderPlaceholder(t *testing.T) {
+	raw := `{
+		"id": "shortcut-placeholder",
+		"name": "Shared Project",
+		"size": 0,
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"parentReference": {
+			"id": "parent",
+			"driveId": "recipient-drive",
+			"path": "/drives/recipient-drive/root:"
+		},
+		"remoteItem": {
+			"id": "owner-folder",
+			"parentReference": {
+				"driveId": "owner-drive"
+			},
+			"folder": {
+				"childCount": 7
+			}
+		}
+	}`
+
+	var dir driveItemResponse
+	require.NoError(t, json.Unmarshal([]byte(raw), &dir))
+
+	item := dir.toItem(slog.New(slog.DiscardHandler))
+
+	assert.False(t, item.IsFolder)
+	assert.True(t, item.RemoteIsFolder)
+	assert.Equal(t, "owner-folder", item.RemoteItemID)
+	assert.Equal(t, driveid.New("owner-drive").String(), item.RemoteDriveID)
+	assert.Equal(t, ChildCountUnknown, item.ChildCount)
 }
 
 func TestToItem_NilRemoteItem(t *testing.T) {

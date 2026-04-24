@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
@@ -94,6 +97,23 @@ type resolvedSharedFolderFixture struct {
 	FolderItem       sharedItemE2E
 }
 
+type shortcutFixtureKind string
+
+const (
+	shortcutFixtureWritable shortcutFixtureKind = "writable"
+	shortcutFixtureReadOnly shortcutFixtureKind = "read-only"
+)
+
+type resolvedShortcutFixture struct {
+	Kind         shortcutFixtureKind
+	ParentDrive  string
+	ParentEmail  string
+	ShortcutName string
+	SharerEmail  string
+	SentinelPath string
+	SharedItem   sharedItemE2E
+}
+
 type sharedFileFixtureCacheEntry struct {
 	once    sync.Once
 	fixture resolvedSharedFileFixture
@@ -124,6 +144,227 @@ func requireSharedFileLink(t *testing.T) string {
 		"shared-file fixture missing: set ONEDRIVE_TEST_SHARED_LINK in exported env, root .env, or .testdata/fixtures.env")
 
 	return rawLink
+}
+
+func requireShortcutFixture(t *testing.T, kind shortcutFixtureKind) resolvedShortcutFixture {
+	t.Helper()
+
+	return requireShortcutFixtureWithSharedDiscovery(t, kind, false)
+}
+
+func requireShortcutFixtureWithCatalog(t *testing.T, kind shortcutFixtureKind) resolvedShortcutFixture {
+	t.Helper()
+
+	return requireShortcutFixtureWithSharedDiscovery(t, kind, true)
+}
+
+func requireShortcutFixtureWithSharedDiscovery(
+	t *testing.T,
+	kind shortcutFixtureKind,
+	requireSharedCatalog bool,
+) resolvedShortcutFixture {
+	t.Helper()
+
+	fixtures := liveConfig.Fixtures
+	fixture := resolvedShortcutFixture{Kind: kind}
+	switch kind {
+	case shortcutFixtureWritable:
+		fixture.ParentDrive = fixtures.WritableShortcutParentDrive
+		fixture.ShortcutName = fixtures.WritableShortcutName
+		fixture.SharerEmail = fixtures.WritableShortcutSharerEmail
+		fixture.SentinelPath = fixtures.WritableShortcutSentinelPath
+	case shortcutFixtureReadOnly:
+		fixture.ParentDrive = fixtures.ReadOnlyShortcutParentDrive
+		fixture.ShortcutName = fixtures.ReadOnlyShortcutName
+		fixture.SharerEmail = fixtures.ReadOnlyShortcutSharerEmail
+		fixture.SentinelPath = fixtures.ReadOnlyShortcutSentinelPath
+	default:
+		require.FailNowf(t, "unknown shortcut fixture kind", "kind=%s", kind)
+	}
+
+	require.NotEmptyf(t, fixture.ParentDrive,
+		"shortcut fixture missing: set ONEDRIVE_TEST_SHORTCUT_%s_PARENT_DRIVE in exported env, root .env, or .testdata/fixtures.env",
+		shortcutFixtureEnvStem(kind))
+	require.NotEmptyf(t, fixture.ShortcutName,
+		"shortcut fixture missing: set ONEDRIVE_TEST_SHORTCUT_%s_NAME in exported env, root .env, or .testdata/fixtures.env",
+		shortcutFixtureEnvStem(kind))
+	require.NotEmptyf(t, fixture.SharerEmail,
+		"shortcut fixture missing: set ONEDRIVE_TEST_SHORTCUT_%s_SHARER_EMAIL in exported env, root .env, or .testdata/fixtures.env",
+		shortcutFixtureEnvStem(kind))
+	require.NotEmptyf(t, fixture.SentinelPath,
+		"shortcut fixture missing: set ONEDRIVE_TEST_SHORTCUT_%s_SENTINEL_PATH in exported env, root .env, or .testdata/fixtures.env",
+		shortcutFixtureEnvStem(kind))
+
+	parentEmail, err := recipientEmailFromCanonicalDriveID(fixture.ParentDrive)
+	require.NoError(t, err)
+	fixture.ParentEmail = parentEmail
+
+	return discoverShortcutFixture(t, fixture, requireSharedCatalog)
+}
+
+func shortcutFixtureEnvStem(kind shortcutFixtureKind) string {
+	switch kind {
+	case shortcutFixtureWritable:
+		return "WRITABLE"
+	case shortcutFixtureReadOnly:
+		return "READONLY"
+	default:
+		return strings.ToUpper(string(kind))
+	}
+}
+
+func discoverShortcutFixture(
+	t *testing.T,
+	fixture resolvedShortcutFixture,
+	requireSharedCatalog bool,
+) resolvedShortcutFixture {
+	t.Helper()
+
+	cfgPath, env, cleanup, err := writeFixtureConfigForDriveID(fixture.ParentDrive)
+	require.NoError(t, err)
+	defer cleanup()
+
+	if item, ok := waitForShortcutSharedItem(t, cfgPath, env, fixture, requireSharedCatalog); ok {
+		fixture.SharedItem = item
+		requireShortcutSentinelVisible(t, cfgPath, env, fixture)
+	}
+
+	requireShortcutRootEntry(t, cfgPath, env, fixture)
+
+	return fixture
+}
+
+func waitForShortcutSharedItem(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	fixture resolvedShortcutFixture,
+	required bool,
+) (sharedItemE2E, bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(pollTimeout)
+	var lastListing sharedListE2EOutput
+	var lastErr error
+
+	for attempt := 0; ; attempt++ {
+		listing, err := sharedListForRecipientRaw(cfgPath, env, fixture.ParentEmail)
+		if err == nil {
+			lastListing = listing
+			for i := range listing.Items {
+				item := listing.Items[i]
+				if item.Name != fixture.ShortcutName || item.Type != "folder" {
+					continue
+				}
+				if fixture.SharerEmail != "" && !strings.EqualFold(item.SharedByEmail, fixture.SharerEmail) {
+					continue
+				}
+
+				return item, true
+			}
+		} else {
+			lastErr = err
+		}
+
+		if time.Now().After(deadline) {
+			message := fmt.Sprintf(
+				"shortcut fixture %q did not appear in shared --json for %s with shared_by_email=%s within %v; last_items=%d last_err=%v",
+				fixture.ShortcutName,
+				fixture.ParentEmail,
+				fixture.SharerEmail,
+				pollTimeout,
+				len(lastListing.Items),
+				lastErr,
+			)
+			if required {
+				require.FailNow(t, message)
+			}
+
+			t.Log(message)
+			return sharedItemE2E{}, false
+		}
+
+		sleepForLiveTestPropagation(pollBackoff(attempt))
+	}
+}
+
+func requireShortcutRootEntry(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	fixture resolvedShortcutFixture,
+) {
+	t.Helper()
+
+	stdout, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "ls", "--json", "/")
+	var items []remoteListJSONItem
+	require.NoErrorf(t, json.Unmarshal([]byte(stdout), &items), "ls --json root output should be valid JSON, got: %s", stdout)
+
+	for i := range items {
+		if items[i].Name == fixture.ShortcutName {
+			return
+		}
+	}
+
+	require.Failf(t,
+		"shortcut fixture root entry missing",
+		"expected %q in root of %s",
+		fixture.ShortcutName,
+		fixture.ParentDrive,
+	)
+}
+
+func requireShortcutSentinelVisible(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	fixture resolvedShortcutFixture,
+) {
+	t.Helper()
+
+	downloadRoot := filepath.Join(t.TempDir(), "shared-target")
+	runCLIWithoutDrive(t, cfgPath, env, "get", fixture.SharedItem.Selector, downloadRoot)
+
+	sentinelPath := filepath.Join(downloadRoot, filepath.FromSlash(strings.TrimPrefix(path.Clean(fixture.SentinelPath), "/")))
+	assert.FileExists(t, sentinelPath)
+}
+
+func requireActiveShortcutChild(
+	t *testing.T,
+	env map[string]string,
+	fixture resolvedShortcutFixture,
+) config.MountRecord {
+	t.Helper()
+
+	dataDir := filepath.Join(env["XDG_DATA_HOME"], "onedrive-go")
+	inventory, err := config.LoadMountInventoryForDataDir(dataDir)
+	require.NoError(t, err)
+
+	for _, record := range inventory.Mounts {
+		if record.NamespaceID != fixture.ParentDrive ||
+			record.RelativeLocalPath != fixture.ShortcutName {
+			continue
+		}
+		if fixture.SharedItem.RemoteDriveID != "" && record.RemoteDriveID != fixture.SharedItem.RemoteDriveID {
+			continue
+		}
+		if fixture.SharedItem.RemoteItemID != "" && record.RemoteItemID != fixture.SharedItem.RemoteItemID {
+			continue
+		}
+		assert.Equal(t, config.MountStateActive, record.State)
+		assert.Empty(t, record.StateReason)
+		return record
+	}
+
+	require.Failf(t,
+		"active shortcut child mount missing",
+		"parent=%s shortcut=%q remote=%s/%s",
+		fixture.ParentDrive,
+		fixture.ShortcutName,
+		fixture.SharedItem.RemoteDriveID,
+		fixture.SharedItem.RemoteItemID,
+	)
+	return config.MountRecord{}
 }
 
 func resolveSharedFileFixture(t *testing.T, rawLink string) resolvedSharedFileFixture {

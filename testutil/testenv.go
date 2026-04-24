@@ -23,6 +23,15 @@ const (
 	testConfigFilePerms   = 0o644
 )
 
+const (
+	defaultWritableShortcutRecipientEmail = "testitesti18@outlook.com"
+	defaultReadOnlyShortcutRecipientEmail = "kikkelimies123@outlook.com"
+	defaultWritableShortcutName           = "Kikkeli Shared Test Folder"
+	defaultReadOnlyShortcutName           = "Read-only Shared Folder"
+	defaultStandaloneSharedFolderName     = "Testi2 Shared Folder"
+	defaultShortcutSentinelPath           = "shortcut-sentinel.txt"
+)
+
 // LiveFixtures captures durable live Graph fixtures loaded from the test
 // environment. The values stay as strings so testutil's exported API does not
 // leak internal package types.
@@ -31,6 +40,15 @@ type LiveFixtures struct {
 	SharedFolderLink             string
 	WritableSharedFolderSelector string
 	ReadOnlySharedFolderSelector string
+	WritableShortcutParentDrive  string
+	WritableShortcutName         string
+	WritableShortcutSharerEmail  string
+	WritableShortcutSentinelPath string
+	ReadOnlyShortcutParentDrive  string
+	ReadOnlyShortcutName         string
+	ReadOnlyShortcutSharerEmail  string
+	ReadOnlyShortcutSentinelPath string
+	StandaloneSharedFolderName   string
 }
 
 // LiveTestConfig is the typed live-test view over the loaded environment.
@@ -85,12 +103,23 @@ func LoadLiveTestConfig(moduleRoot string) (LiveTestConfig, error) {
 			SharedFolderLink:             os.Getenv("ONEDRIVE_TEST_SHARED_FOLDER_LINK"),
 			WritableSharedFolderSelector: os.Getenv("ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER"),
 			ReadOnlySharedFolderSelector: os.Getenv("ONEDRIVE_TEST_READONLY_SHARED_FOLDER"),
+			WritableShortcutParentDrive:  os.Getenv("ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE"),
+			WritableShortcutName:         os.Getenv("ONEDRIVE_TEST_SHORTCUT_WRITABLE_NAME"),
+			WritableShortcutSharerEmail:  os.Getenv("ONEDRIVE_TEST_SHORTCUT_WRITABLE_SHARER_EMAIL"),
+			WritableShortcutSentinelPath: os.Getenv("ONEDRIVE_TEST_SHORTCUT_WRITABLE_SENTINEL_PATH"),
+			ReadOnlyShortcutParentDrive:  os.Getenv("ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE"),
+			ReadOnlyShortcutName:         os.Getenv("ONEDRIVE_TEST_SHORTCUT_READONLY_NAME"),
+			ReadOnlyShortcutSharerEmail:  os.Getenv("ONEDRIVE_TEST_SHORTCUT_READONLY_SHARER_EMAIL"),
+			ReadOnlyShortcutSentinelPath: os.Getenv("ONEDRIVE_TEST_SHORTCUT_READONLY_SENTINEL_PATH"),
+			StandaloneSharedFolderName:   os.Getenv("ONEDRIVE_TEST_STANDALONE_SHARED_FOLDER_NAME"),
 		},
 	}
 
 	if cfg.PrimaryDrive == "" {
 		return LiveTestConfig{}, fmt.Errorf("load live test config: ONEDRIVE_TEST_DRIVE not set")
 	}
+
+	applyShortcutFixtureDefaults(&cfg)
 
 	for _, selector := range []struct {
 		name  string
@@ -117,8 +146,44 @@ func LoadLiveTestConfig(moduleRoot string) (LiveTestConfig, error) {
 	return cfg, nil
 }
 
+func applyShortcutFixtureDefaults(cfg *LiveTestConfig) {
+	if cfg.Fixtures.WritableShortcutParentDrive == "" {
+		if driveID, ok := cfg.DriveIDForEmail(defaultWritableShortcutRecipientEmail); ok {
+			cfg.Fixtures.WritableShortcutParentDrive = driveID
+		}
+	}
+	if cfg.Fixtures.ReadOnlyShortcutParentDrive == "" {
+		if driveID, ok := cfg.DriveIDForEmail(defaultReadOnlyShortcutRecipientEmail); ok {
+			cfg.Fixtures.ReadOnlyShortcutParentDrive = driveID
+		}
+	}
+
+	if cfg.Fixtures.WritableShortcutName == "" {
+		cfg.Fixtures.WritableShortcutName = defaultWritableShortcutName
+	}
+	if cfg.Fixtures.ReadOnlyShortcutName == "" {
+		cfg.Fixtures.ReadOnlyShortcutName = defaultReadOnlyShortcutName
+	}
+	if cfg.Fixtures.WritableShortcutSentinelPath == "" {
+		cfg.Fixtures.WritableShortcutSentinelPath = defaultShortcutSentinelPath
+	}
+	if cfg.Fixtures.ReadOnlyShortcutSentinelPath == "" {
+		cfg.Fixtures.ReadOnlyShortcutSentinelPath = defaultShortcutSentinelPath
+	}
+	if cfg.Fixtures.StandaloneSharedFolderName == "" {
+		cfg.Fixtures.StandaloneSharedFolderName = defaultStandaloneSharedFolderName
+	}
+
+	if cfg.Fixtures.WritableShortcutSharerEmail == "" {
+		cfg.Fixtures.WritableShortcutSharerEmail = driveEmailFromCanonicalID(cfg.Fixtures.ReadOnlyShortcutParentDrive)
+	}
+	if cfg.Fixtures.ReadOnlyShortcutSharerEmail == "" {
+		cfg.Fixtures.ReadOnlyShortcutSharerEmail = driveEmailFromCanonicalID(cfg.Fixtures.WritableShortcutParentDrive)
+	}
+}
+
 // CandidateDriveIDs returns the configured live drive IDs without duplicates.
-func (cfg LiveTestConfig) CandidateDriveIDs() []string {
+func (cfg *LiveTestConfig) CandidateDriveIDs() []string {
 	candidates := make([]string, 0, 2)
 	seen := map[string]struct{}{}
 
@@ -139,7 +204,7 @@ func (cfg LiveTestConfig) CandidateDriveIDs() []string {
 
 // DriveIDForEmail returns the configured drive whose canonical ID embeds the
 // given recipient email.
-func (cfg LiveTestConfig) DriveIDForEmail(email string) (string, bool) {
+func (cfg *LiveTestConfig) DriveIDForEmail(email string) (string, bool) {
 	for _, driveID := range cfg.CandidateDriveIDs() {
 		if driveEmailFromCanonicalID(driveID) == email {
 			return driveID, true
