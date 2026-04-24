@@ -158,6 +158,11 @@ func buildChildMountCandidates(
 	records := sortedMountRecords(inventory)
 	for i := range records {
 		record := &records[i]
+		if record.State == config.MountStatePendingRemoval {
+			// Pending-removal records only drive cleanup; they no longer own a
+			// child runner or reserve the parent subtree during runtime compile.
+			continue
+		}
 		parent := parentByID[mountID(record.NamespaceID)]
 		if parent == nil {
 			unmatchedChildren = append(unmatchedChildren, *record)

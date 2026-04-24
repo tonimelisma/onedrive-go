@@ -94,6 +94,11 @@ The runtime status read model is now mount-shaped:
 - child rows carry their own sync-state snapshot and live perf overlay
 - parent rows do not absorb child state or child perf totals
 
+The JSON surface follows that same mount boundary: summary counts use
+`summary.total_mounts`, and per-account rows use `accounts[].mounts`. The
+legacy drive-shaped status fields (`total_drives`, `accounts[].drives`) are not
+part of the current contract.
+
 The target `status` surface projects the full sync model directly from:
 
 - `observation_issues`

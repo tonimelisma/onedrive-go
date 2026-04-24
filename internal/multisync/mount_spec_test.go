@@ -230,6 +230,24 @@ func TestCompileRuntimeMounts_ConflictChildStillFiltersParentSubtree(t *testing.
 }
 
 // Validates: R-2.8.1
+func TestCompileRuntimeMounts_PendingRemovalChildReleasesParentSubtree(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	record := testMountRecordForParent(&parent)
+	record.State = config.MountStatePendingRemoval
+	record.StateReason = config.MountStateReasonShortcutRemoved
+
+	compiled, err := compileRuntimeMounts(
+		[]StandaloneMountConfig{parent},
+		&config.MountInventory{Mounts: map[string]config.MountRecord{"child-docs": record}},
+	)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 1)
+	assert.Empty(t, compiled.Skipped)
+	assert.Empty(t, compiled.Mounts[0].localSkipDirs)
+}
+
+// Validates: R-2.8.1
 func TestCompileRuntimeMounts_ChildDeltaCapabilityComesFromMountTokenOwner(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "business:owner@example.com", "Parent")

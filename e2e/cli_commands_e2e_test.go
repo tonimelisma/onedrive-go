@@ -48,7 +48,7 @@ func TestE2E_Status_AfterSync(t *testing.T) {
 }
 
 // TestE2E_Status_JSON validates that status --json exposes the unified
-// summary-plus-per-drive schema.
+// summary-plus-per-mount schema.
 func TestE2E_Status_JSON(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -57,11 +57,11 @@ func TestE2E_Status_JSON(t *testing.T) {
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	status := readStatus(t, cfgPath, env)
-	assert.Equal(t, 1, status.Summary.TotalDrives)
-	driveStatus := requireStatusDrive(t, status, drive)
-	require.NotNil(t, driveStatus.SyncState)
-	assert.Equal(t, 5, driveStatus.SyncState.ExamplesLimit)
-	assert.False(t, driveStatus.SyncState.Verbose)
+	assert.Equal(t, 1, status.Summary.TotalMounts)
+	mountStatus := requireStatusMount(t, status, drive)
+	require.NotNil(t, mountStatus.SyncState)
+	assert.Equal(t, 5, mountStatus.SyncState.ExamplesLimit)
+	assert.False(t, mountStatus.SyncState.Verbose)
 }
 
 // TestE2E_Status_PausedDrive validates that pausing a drive changes its
@@ -214,7 +214,7 @@ func TestE2E_Status_NoLegacyHistorySurface(t *testing.T) {
 }
 
 // Validates: R-2.3.4, R-2.3.10
-// TestE2E_Status_JSON_ConditionDetails validates that per-drive status JSON
+// TestE2E_Status_JSON_ConditionDetails validates that per-mount status JSON
 // exposes the current structured condition payload rather than legacy
 // conflict-request rows.
 func TestE2E_Status_JSON_ConditionDetails(t *testing.T) {
