@@ -32,12 +32,17 @@ Four drive types:
 - `personal:email` — one per personal Microsoft account
 - `business:email` — one per business/work account
 - `sharepoint:email:site:library` — many per business account (same token)
-- `shared:email:sourceDriveID:sourceItemID` — shared folders synced as separate drives
+- `shared:email:sourceDriveID:sourceItemID` — explicit standalone shared-folder drives
 
 Rules:
 - Constructed from real data (drive type from API, email from `mail` field with `userPrincipalName` fallback)
 - `:` is the separator in display/config form, replaced with `_` in filenames
 - Drive type auto-detected from auth endpoint + `driveType` field
+
+Automatic shared-shortcut child mounts are not canonical drives. Their durable
+identity is the managed mount `MountID` in `mounts.json`; they inherit token
+ownership from the selected standalone parent and report through mount identity
+instead of a synthesized `shared:` canonical ID.
 
 ## ID Type (`driveid.ID`)
 
@@ -69,6 +74,7 @@ drive ID shape, but it is not the same concept:
 
 - `driveid.CanonicalID` still means "configured drive identity"
 - `internal/sharedref.Ref` means "one shared item target for one recipient account"
+- automatic child shortcut mounts use `MountID`, not `shared:` drive IDs
 
 Shared folders may flow into `drive add` from either selector form or the
 original raw share URL. Both inputs are normalized immediately to the canonical

@@ -104,7 +104,11 @@ func standaloneMountStartupFailure(
 		Err:            err,
 	}
 	if rd != nil {
-		result.CanonicalID = rd.CanonicalID
+		result.Identity = multisync.MountIdentity{
+			MountID:        rd.CanonicalID.String(),
+			ProjectionKind: multisync.MountProjectionStandalone,
+			CanonicalID:    rd.CanonicalID,
+		}
 		result.DisplayName = rd.DisplayName
 	}
 

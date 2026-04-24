@@ -420,7 +420,7 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 	require.Len(t, result.Startup.Results, 1)
 	assert.Equal(t, MountStartupRunnable, result.Startup.Results[0].Status)
 	require.Len(t, result.Reports, 1)
-	assert.Equal(t, rd.CanonicalID, result.Reports[0].CanonicalID)
+	assert.Equal(t, testStandaloneMountIdentity(rd.CanonicalID), result.Reports[0].Identity)
 	assert.Equal(t, "Test", result.Reports[0].DisplayName)
 	require.NoError(t, result.Reports[0].Err)
 	require.NotNil(t, result.Reports[0].Report)
@@ -453,7 +453,7 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 	// Find each drive's report by canonical ID.
 	var failReport, okMountReport *MountReport
 	for i := range result.Reports {
-		if result.Reports[i].CanonicalID == rd1.CanonicalID {
+		if result.Reports[i].Identity.CanonicalID == rd1.CanonicalID {
 			failReport = result.Reports[i]
 		} else {
 			okMountReport = result.Reports[i]
@@ -494,7 +494,7 @@ func TestRunOnce_InitialStartupFailureDoesNotBlockRunnableMount(t *testing.T) {
 	assert.Contains(t, result.Startup.Results[0].Err.Error(), "bad min_free_space")
 	assert.Equal(t, MountStartupRunnable, result.Startup.Results[1].Status)
 	assert.NotEqual(t, result.Startup.Results[0].SelectionIndex, result.Startup.Results[1].SelectionIndex)
-	assert.Equal(t, rd.CanonicalID, result.Reports[0].CanonicalID)
+	assert.Equal(t, testStandaloneMountIdentity(rd.CanonicalID), result.Reports[0].Identity)
 	assert.Equal(t, result.Startup.Results[1].SelectionIndex, result.Reports[0].SelectionIndex)
 }
 
@@ -522,7 +522,7 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 
 	var panicReport, stableMountReport *MountReport
 	for i := range result.Reports {
-		if result.Reports[i].CanonicalID == rd1.CanonicalID {
+		if result.Reports[i].Identity.CanonicalID == rd1.CanonicalID {
 			panicReport = result.Reports[i]
 		} else {
 			stableMountReport = result.Reports[i]
@@ -684,12 +684,12 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 	var failedResult *MountStartupResult
 	var healthyReport *MountReport
 	for i := range result.Startup.Results {
-		if result.Startup.Results[i].CanonicalID == rd1.CanonicalID {
+		if result.Startup.Results[i].Identity.CanonicalID == rd1.CanonicalID {
 			failedResult = &result.Startup.Results[i]
 		}
 	}
 	for i := range result.Reports {
-		if result.Reports[i].CanonicalID == rd2.CanonicalID {
+		if result.Reports[i].Identity.CanonicalID == rd2.CanonicalID {
 			healthyReport = result.Reports[i]
 		}
 	}
@@ -988,7 +988,7 @@ func TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts
 	case warning := <-warnings:
 		results := warning.Summary.SkippedResults()
 		require.Len(t, results, 1)
-		assert.Equal(t, rd2.CanonicalID, results[0].CanonicalID)
+		assert.Equal(t, testStandaloneMountIdentity(rd2.CanonicalID), results[0].Identity)
 		assert.Equal(t, MountStartupIncompatibleStore, results[0].Status)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunWatch did not emit startup warning")
@@ -1021,7 +1021,7 @@ func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoDriveStarts(t *testing
 	var startupErr *WatchStartupError
 	require.ErrorAs(t, err, &startupErr)
 	require.Len(t, startupErr.Summary.Results, 1)
-	assert.Equal(t, rd.CanonicalID, startupErr.Summary.Results[0].CanonicalID)
+	assert.Equal(t, testStandaloneMountIdentity(rd.CanonicalID), startupErr.Summary.Results[0].Identity)
 	assert.Equal(t, MountStartupIncompatibleStore, startupErr.Summary.Results[0].Status)
 }
 

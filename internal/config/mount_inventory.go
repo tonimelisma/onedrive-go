@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -355,8 +356,9 @@ func MountStatePath(mountID string) string {
 		return ""
 	}
 
-	encodedID := base64.RawURLEncoding.EncodeToString([]byte(mountID))
-	return filepath.Join(dataDir, stateMountPrefix+encodedID+".db")
+	sum := sha256.Sum256([]byte(mountID))
+	encodedDigest := base64.RawURLEncoding.EncodeToString(sum[:])
+	return filepath.Join(dataDir, stateMountPrefix+encodedDigest+".db")
 }
 
 func ChildMountID(parentMountID, bindingItemID string) string {

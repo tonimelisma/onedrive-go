@@ -23,13 +23,13 @@ func TestPrintRunOnceResult_MatchesReportsBySelectionIndex(t *testing.T) {
 			Results: []multisync.MountStartupResult{
 				{
 					SelectionIndex: 0,
-					CanonicalID:    cid,
+					Identity:       testStandaloneMountIdentity(cid),
 					DisplayName:    "First selector",
 					Status:         multisync.MountStartupRunnable,
 				},
 				{
 					SelectionIndex: 1,
-					CanonicalID:    cid,
+					Identity:       testStandaloneMountIdentity(cid),
 					DisplayName:    "Second selector",
 					Status:         multisync.MountStartupRunnable,
 				},
@@ -38,7 +38,7 @@ func TestPrintRunOnceResult_MatchesReportsBySelectionIndex(t *testing.T) {
 		Reports: []*multisync.MountReport{
 			{
 				SelectionIndex: 1,
-				CanonicalID:    cid,
+				Identity:       testStandaloneMountIdentity(cid),
 				DisplayName:    "Second selector",
 				Report: &syncengine.Report{
 					Mode: syncengine.SyncUploadOnly,
@@ -46,7 +46,7 @@ func TestPrintRunOnceResult_MatchesReportsBySelectionIndex(t *testing.T) {
 			},
 			{
 				SelectionIndex: 0,
-				CanonicalID:    cid,
+				Identity:       testStandaloneMountIdentity(cid),
 				DisplayName:    "First selector",
 				Report: &syncengine.Report{
 					Mode: syncengine.SyncDownloadOnly,

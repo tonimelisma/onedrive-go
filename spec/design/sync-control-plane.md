@@ -80,6 +80,12 @@ Engine construction is no longer drive-shaped. `internal/multisync` now derives
 `sync.EngineMountConfig` from `mountSpec` and passes that sync-owned mount
 config into `sync.NewMountEngine(...)`.
 
+Runtime reporting is mount-identified. Standalone mounts keep their configured
+canonical drive ID inside `MountIdentity`, but managed child mounts report by
+durable `MountID` and do not synthesize `shared:` canonical drive IDs. CLI
+status output follows the same boundary: child rows expose `mount_id` and omit
+`canonical_id`, while standalone rows retain `canonical_id`.
+
 Managed child mounts currently inherit their token owner, pause state, and sync
 tunables from the selected standalone parent mount. Conflicting content roots
 are resolved in the control plane before engine startup: explicit standalone
@@ -134,8 +140,9 @@ while startup-ineligible mounts remain startup outcomes instead of synthetic
 completed reports. The control plane never aborts the whole pass because one
 mount failed; partial failure is isolated per mount. Both startup results and
 completed reports carry a stable `SelectionIndex` matching the compiled runtime
-order so standalone parents and their attached child mounts remain
-deterministic through orchestration, rendering, and bookkeeping.
+order plus a `MountIdentity` matching the current boundary, so standalone
+parents and their attached child mounts remain deterministic through
+orchestration, rendering, and bookkeeping.
 
 ### RunWatch
 

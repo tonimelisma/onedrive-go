@@ -55,7 +55,7 @@ type statusMount struct {
 	MountID        string         `json:"mount_id"`
 	ParentMountID  string         `json:"parent_mount_id,omitempty"`
 	ProjectionKind string         `json:"projection_kind"`
-	CanonicalID    string         `json:"canonical_id"`
+	CanonicalID    string         `json:"canonical_id,omitempty"`
 	DisplayName    string         `json:"display_name,omitempty"`
 	SyncDir        string         `json:"sync_dir"`
 	State          string         `json:"state"`
@@ -315,7 +315,7 @@ func buildStatusAccountsFromViews(
 			d := cfg.Drives[cid]
 			acct.Mounts = append(acct.Mounts, buildConfiguredStatusMount(cid, d, syncQ))
 			for _, child := range childrenByParent[cid] {
-				acct.Mounts = append(acct.Mounts, buildChildStatusMount(cid, d, child, syncQ))
+				acct.Mounts = append(acct.Mounts, buildChildStatusMount(d, child, syncQ))
 			}
 		}
 
@@ -381,7 +381,7 @@ func buildSingleAccountStatusWith(
 		d := cfg.Drives[cid]
 		acct.Mounts = append(acct.Mounts, buildConfiguredStatusMount(cid, d, syncQ))
 		for _, child := range childrenByParent[cid] {
-			acct.Mounts = append(acct.Mounts, buildChildStatusMount(cid, d, child, syncQ))
+			acct.Mounts = append(acct.Mounts, buildChildStatusMount(d, child, syncQ))
 		}
 	}
 
@@ -469,7 +469,6 @@ func buildConfiguredStatusMount(
 }
 
 func buildChildStatusMount(
-	parentCID driveid.CanonicalID,
 	parentDrive config.Drive,
 	record config.MountRecord,
 	syncQ syncStateQuerier,
@@ -477,11 +476,6 @@ func buildChildStatusMount(
 	displayName := record.DisplayName
 	if displayName == "" {
 		displayName = path.Base(record.RelativeLocalPath)
-	}
-
-	canonicalID := record.MountID
-	if sharedID, err := driveid.ConstructShared(parentCID.Email(), record.RemoteDriveID, record.RemoteRootItemID); err == nil {
-		canonicalID = sharedID.String()
 	}
 
 	state := driveState(&parentDrive)
@@ -495,7 +489,6 @@ func buildChildStatusMount(
 		MountID:        record.MountID,
 		ParentMountID:  record.ParentMountID,
 		ProjectionKind: statusProjectionChild,
-		CanonicalID:    canonicalID,
 		DisplayName:    displayName,
 		SyncDir:        filepath.Join(parentDrive.SyncDir, filepath.FromSlash(record.RelativeLocalPath)),
 		State:          state,
