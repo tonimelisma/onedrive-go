@@ -484,13 +484,13 @@ func applyDurableProjectionConflicts(inventory *config.MountInventory, parents [
 			return records[i].RelativeLocalPath < records[j].RelativeLocalPath
 		})
 
+		state := config.MountStateActive
+		reason := ""
+		if len(records) > 1 {
+			state = config.MountStateConflict
+			reason = config.MountStateReasonDuplicateContentRoot
+		}
 		for i := range records {
-			state := config.MountStateActive
-			reason := ""
-			if i > 0 {
-				state = config.MountStateConflict
-				reason = config.MountStateReasonDuplicateContentRoot
-			}
 			changed = setMountLifecycleState(inventory, &records[i], state, reason) || changed
 		}
 	}
@@ -691,7 +691,9 @@ func requiresShortcutBindingRefresh(item *graph.Item) bool {
 		return false
 	}
 
-	return item.Name == "" || item.ParentPath == "" || item.RemoteDriveID == "" || item.RemoteItemID == ""
+	needsRemoteKind := item.RemoteDriveID != "" && item.RemoteItemID != "" && !item.IsFolder && !item.RemoteIsFolder
+
+	return item.Name == "" || item.ParentPath == "" || item.RemoteDriveID == "" || item.RemoteItemID == "" || needsRemoteKind
 }
 
 func hasShortcutBindingEvidence(item *graph.Item) bool {
@@ -703,7 +705,7 @@ func isShortcutPlaceholder(item *graph.Item) bool {
 		return false
 	}
 
-	return item.IsFolder && item.RemoteDriveID != "" && item.RemoteItemID != ""
+	return (item.RemoteIsFolder || item.IsFolder) && item.RemoteDriveID != "" && item.RemoteItemID != ""
 }
 
 func shortcutRelativeLocalPath(rootPathPrefix string, item *graph.Item) (string, error) {

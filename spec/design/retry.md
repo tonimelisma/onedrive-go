@@ -44,7 +44,7 @@ rely on transport-level retry loops for action execution.
 | `DriveDiscoveryPolicy()` | Drive enumeration retry | 5 | 1s | 60s |
 | `RootChildrenPolicy()` | Exact `root/children` quirk retry | 3 | 250ms | 1s |
 | `DownloadMetadataPolicy()` | Exact item-by-ID download metadata quirk retry | 4 | 250ms | 2s |
-| `SimpleUploadMtimePatchPolicy()` | Exact post-simple-upload `UpdateFileSystemInfo` retry | 7 | 250ms | 8s |
+| `SimpleUploadMtimePatchPolicy()` | Exact post-simple-upload `UpdateFileSystemInfo` retry | 8 | 250ms | 16s |
 | `UploadSessionCreatePolicy()` | Exact create-upload-session fresh-parent quirk retry | 6 | 250ms | 4s |
 | `SimpleUploadCreatePolicy()` | Final simple-upload create retry after session-path disambiguation | 7 | 250ms | 8s |
 | `PathVisibilityPolicy()` | Post-success path-read/delete convergence at the CLI/session boundary | 10 | 250ms | 32s |

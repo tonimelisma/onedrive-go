@@ -239,7 +239,7 @@ Static verification is a first-class architectural constraint, not a best-effort
 - `go run ./cmd/devtool worktree add --path <path> --branch <branch>` is the canonical way to create new worktrees from `origin/main`. It applies `.worktreeinclude` immediately so the new worktree is ready for fast E2E and local development.
 - `cmd/devtool` is exercised both through package-level command assembly tests and black-box process tests for `verify` profile parsing plus `worktree bootstrap/add` semantics, including explicit `--source-root` selection. The documented developer entrypoint and the shipped binary must stay aligned.
 - Fast E2E is mandatory in the default local `default` profile. The harness loads typed live-test config from exported env plus root `.env` and durable `.testdata/fixtures.env` defaults; verification does not silently skip fast E2E based on exported shell variables.
-- `verify e2e` is intentionally a minimal live smoke lane: verifier-owned auth preflight, verifier-owned fast fixture preflight, `TestE2E_FileOpsSmokeCRUD`, `TestE2E_Sync_UploadOnly`, `TestE2E_Sync_DownloadOnly`, and `TestE2E_SyncWatch_WebsocketDisabledLongPollRegression`, plus any non-live helper tests that happen to share the package.
+- `verify e2e` is intentionally a minimal live smoke lane: verifier-owned auth preflight, verifier-owned fast fixture preflight, `TestE2E_FileOpsSmokeCRUD`, `TestE2E_Sync_UploadOnly`, `TestE2E_Sync_DownloadOnly`, `TestE2E_ShortcutSmoke_DownloadOnlyProjectsChildMount`, and `TestE2E_SyncWatch_WebsocketDisabledLongPollRegression`, plus any non-live helper tests that happen to share the package.
 - Repo verification regression-tests that contract via tagged-test discovery: `internal/devtool/verify_runner_test.go` asserts the `//go:build e2e` set still contains only the intended smoke live tests while the demoted live coverage remains full-only.
 - The dedicated fast preflight tests are verifier-owned entrypoints, not part of the main fast suite contract. The verifier sets `ONEDRIVE_E2E_RUN_AUTH_PREFLIGHT=1` only for `TestE2E_AuthPreflight_Fast` and `ONEDRIVE_E2E_RUN_FAST_FIXTURE_PREFLIGHT=1` only for `TestE2E_FixturePreflight_Fast`, so the subsequent `go test -tags=e2e` pass does not silently rerun them.
 - The fast auth preflight owns the one scrub of live suite artifacts. Later fast invocations set `ONEDRIVE_E2E_SKIP_SUITE_SCRUB=1`, so the fast fixture preflight and the main smoke suite reuse the already-scrubbed drive state instead of redoing the remote cleanup work.
@@ -257,13 +257,28 @@ Static verification is a first-class architectural constraint, not a best-effort
   poll across one ordinary read-only propagation window and skip that
   assertion if Graph never exposes the same known fixture on that run, rather
   than treating one empty search pass as a product regression.
+- Shortcut fixture coverage uses stable manually-created placeholders rather
+  than trying to create shortcuts through Graph. The durable fixture contract in
+  `.testdata/fixtures.env` names the writable shortcut parent drive, writable
+  shortcut alias, sharer email, and sentinel path; the read-only shortcut parent
+  drive, alias, sharer email, and sentinel path; plus the standalone shared
+  folder name used to prove explicit shared-folder drives remain standalone.
+  The canonical two-account CI fixture set infers those non-secret names from
+  `ONEDRIVE_TEST_DRIVE` and `ONEDRIVE_TEST_DRIVE_2`, while custom accounts set
+  the fixture env vars explicitly.
+  The current canonical manual fixture set is:
+  `Kikkeli Shared Test Folder` owned by kikkelimies and shortcut-added in
+  testitesti18's root, `Read-only Shared Folder` owned by testitesti18 and
+  shortcut-added in kikkelimies's root, and `Testi2 Shared Folder` owned by
+  testitesti18 and added as an explicit `shared:` drive for standalone shared
+  folder coverage.
 - Full-suite sync tests that stress concurrent uploads must assert eventual
   sync convergence, not single-pass perfection. A one-shot `sync --upload-only`
   run may legitimately persist retryable transient `retry_work` when one exact
   upload hits a live 5xx service outage, and the next sync pass is the
   contract-owned recovery path.
 - The nightly/manual full E2E suite is layered on top of the fast suite. Its files use `//go:build e2e && e2e_full`, so the canonical invocation is the verifier's `e2e-full` profile, which sets both tags, preserves the fast-then-full ordering, and runs the full shared-folder fixture preflight before the `e2e_full` buckets.
-- `e2e_full` owns the demoted live coverage that no longer runs on every PR: drive-list catalog checks, shared-file discovery checks, richer caller-proof/logout coverage, extended direct file-operation coverage, current condition/status rendering, slower sync state/recovery checks, engine-owned conflict preservation, and websocket startup smoke.
+- `e2e_full` owns the demoted live coverage that no longer runs on every PR: drive-list catalog checks, shared-file discovery checks, richer caller-proof/logout coverage, extended direct file-operation coverage, current condition/status rendering, slower sync state/recovery checks, engine-owned conflict preservation, richer shortcut child-mount checks (`TestE2E_Shortcut_ReadOnlyDownloadOnlyProjectsChildMount`, `TestE2E_Shortcut_ExplicitStandaloneSharedFolderRemainsConfiguredDrive`, and `TestE2E_Shortcut_RestartIdempotentKeepsChildMountVisible`), and websocket startup smoke.
 - `e2e_full` runs as three explicit verifier-owned buckets instead of one monolithic package invocation: `full-parallel-misc` (`-parallel 5` for tests already marked safe), `full-serial-sync`, and `full-serial-watch-shared`. The verifier executes those buckets sequentially after the single full-suite preflight so only the vetted misc bucket regains concurrency. The bucket lists intentionally exclude removed manual-resolution, delete-approval, and path-narrowing workflows; nightly coverage only names tests that still match the current product contract.
 - The one-time full-suite preflight still owns the global live-drive artifact scrub. Bucketed `go test` runs set `ONEDRIVE_E2E_SKIP_SUITE_SCRUB=1` so they reuse that cleaned fixture state instead of re-scrubbing both configured drives before every bucket process.
 - When `verify e2e` or `verify e2e-full` runs without an explicit `--e2e-log-dir`, the verifier resolves the repo-owned default temp log dir once up front, scrubs stale timing and quirk artifacts there, and passes that same `E2E_LOG_DIR` through the fast suite, the full-suite preflight, and every full bucket so live diagnostics stay in one place.

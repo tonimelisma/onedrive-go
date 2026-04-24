@@ -576,6 +576,7 @@ func TestFastE2EExecutionManifestKeepsOnlySmokeLiveTests(t *testing.T) {
 	assert.Contains(t, fastTests, "TestE2E_Sync_UploadOnly")
 	assert.Contains(t, fastTests, "TestE2E_Sync_DownloadOnly")
 	assert.Contains(t, fastTests, "TestE2E_SyncWatch_WebsocketDisabledLongPollRegression")
+	assert.Contains(t, fastTests, "TestE2E_ShortcutSmoke_DownloadOnlyProjectsChildMount")
 
 	assert.NotContains(t, fastTests, "TestE2E_FileOps_Whoami")
 	assert.NotContains(t, fastTests, "TestE2E_FileOps_LsRoot")
@@ -622,6 +623,9 @@ func TestFullE2EBucketsOwnDemotedFastTests(t *testing.T) {
 	assert.NotContains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_ResolveDryRun")
 
 	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_SyncWatch_WebsocketStartupSmoke")
+	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_ReadOnlyDownloadOnlyProjectsChildMount")
+	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_ExplicitStandaloneSharedFolderRemainsConfiguredDrive")
+	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_RestartIdempotentKeepsChildMountVisible")
 	assert.NotContains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent")
 	assert.NotContains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Resolve_DeletesWithWatchDaemon")
 }

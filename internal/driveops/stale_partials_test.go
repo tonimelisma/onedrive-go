@@ -65,6 +65,31 @@ func TestCleanStalePartials_NestedDir(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "nested partial should have been deleted")
 }
 
+// Validates: R-2.4.10
+func TestCleanStalePartialsWithOptions_SkipsConfiguredDirs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	childDir := filepath.Join(dir, "Shortcuts", "Docs")
+	require.NoError(t, os.MkdirAll(childDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(childDir, "child.partial"), []byte("child"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "root.partial"), []byte("root"), 0o600))
+
+	n, err := CleanStalePartialsWithOptions(
+		mustOpenSyncTree(t, dir),
+		testLogger(t),
+		StalePartialCleanupOptions{
+			SkipDirs: []string{"Shortcuts/Docs"},
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	assert.NoFileExists(t, filepath.Join(dir, "root.partial"))
+	assert.FileExists(t, filepath.Join(childDir, "child.partial"))
+}
+
 func TestCleanStalePartials_MultipleFiles(t *testing.T) {
 	t.Parallel()
 

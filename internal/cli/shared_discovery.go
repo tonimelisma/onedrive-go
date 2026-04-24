@@ -244,7 +244,7 @@ func searchSharedTargets(
 				RemoteDriveID: item.RemoteDriveID,
 				RemoteItemID:  item.RemoteItemID,
 			}.String(),
-			IsFolder:            item.IsFolder,
+			IsFolder:            item.IsFolder || item.RemoteIsFolder,
 			Name:                item.Name,
 			AccountEmail:        accountEmail,
 			SharedByName:        item.SharedOwnerName,

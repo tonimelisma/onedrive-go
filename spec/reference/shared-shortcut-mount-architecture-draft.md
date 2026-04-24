@@ -1,6 +1,10 @@
 # Shared Shortcut Mount Architecture Draft
 
-Status: temporary working draft for a multi-increment refactor. This is not yet a governed module design doc.
+Status: historical working draft for the multi-increment refactor. Governed
+behavior now lives in `spec/design/sync-control-plane.md`,
+`spec/design/sync-observation.md`, `spec/design/config.md`, and
+`spec/requirements/sync.md`. Keep this file as rationale/reference only; update
+the governed specs for current behavior.
 
 ## Purpose
 

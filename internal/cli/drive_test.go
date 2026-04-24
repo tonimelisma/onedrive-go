@@ -1453,6 +1453,8 @@ func TestEnrichSharedTarget_AvailableNameOnlyStillFetchesMissingEmail(t *testing
 
 // --- searchSharedTargets tests ---
 
+const sharedDiscoveryRemoteItemPath = "/drives/00000b!remote123/items/remote-1"
+
 // sharedItemJSON returns a minimal JSON representation of a shared folder.
 func sharedItemJSON(name string) string {
 	return fmt.Sprintf(`{
@@ -1476,7 +1478,7 @@ func TestSearchSharedTargets_SearchSucceeds(t *testing.T) {
 		switch r.URL.Path {
 		case testDriveSearchAllPath:
 			writeTestResponsef(t, w, `{"value": [%s]}`, sharedItemJSON("SearchResult"))
-		case "/drives/00000b!remote123/items/remote-1":
+		case sharedDiscoveryRemoteItemPath:
 			writeTestResponse(t, w, `{
 				"id":"remote-1",
 				"name":"SearchResult",
@@ -1496,6 +1498,40 @@ func TestSearchSharedTargets_SearchSucceeds(t *testing.T) {
 	require.Len(t, items, 1)
 	assert.Equal(t, "SearchResult", items[0].Name)
 	assert.Equal(t, "shared:test@example.com:00000b!remote123:remote-1", items[0].Selector)
+}
+
+// Validates: R-3.6.2
+func TestSearchSharedTargets_RemoteFolderPlaceholderIsFolder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case testDriveSearchAllPath:
+			writeTestResponse(t, w, `{"value": [{
+				"id": "shortcut-placeholder",
+				"name": "Shortcut Shared Folder",
+				"createdDateTime": "2024-01-15T10:00:00Z",
+				"lastModifiedDateTime": "2024-01-15T10:00:00Z",
+				"parentReference": {"driveId": "b!abc123"},
+				"remoteItem": {
+					"id": "remote-1",
+					"parentReference": {"driveId": "b!remote123"},
+					"folder": {"childCount": 1}
+				}
+			}]}`)
+		case sharedDiscoveryRemoteItemPath:
+			writeTestResponse(t, w, `{"id":"remote-1","name":"Shortcut Shared Folder"}`)
+		default:
+			assert.Failf(t, "unexpected path", "path=%s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestGraphClient(t, srv.URL)
+	items, err := searchSharedTargets(t.Context(), client, "test@example.com", slog.Default())
+
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.True(t, items[0].IsFolder)
 }
 
 // Validates: R-3.6.2

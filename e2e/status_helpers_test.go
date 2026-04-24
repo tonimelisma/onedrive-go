@@ -18,16 +18,36 @@ type statusJSON struct {
 }
 
 type statusSummaryJSON struct {
+	TotalDrives int `json:"total_drives"`
 	TotalMounts int `json:"total_mounts"`
+}
+
+func (summary *statusSummaryJSON) UnmarshalJSON(data []byte) error {
+	type rawStatusSummaryJSON statusSummaryJSON
+	var raw rawStatusSummaryJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("decode status summary: %w", err)
+	}
+
+	*summary = statusSummaryJSON(raw)
+	if summary.TotalDrives == 0 && summary.TotalMounts != 0 {
+		summary.TotalDrives = summary.TotalMounts
+	}
+	if summary.TotalMounts == 0 && summary.TotalDrives != 0 {
+		summary.TotalMounts = summary.TotalDrives
+	}
+	return nil
 }
 
 type statusAccountJSON struct {
 	Email  string            `json:"email"`
 	Mounts []statusMountJSON `json:"mounts"`
+	Drives []statusMountJSON `json:"drives"`
 }
 
 type statusMountJSON struct {
 	CanonicalID string               `json:"canonical_id"`
+	MountID     string               `json:"mount_id"`
 	SyncState   *statusSyncStateJSON `json:"sync_state,omitempty"`
 }
 
@@ -127,16 +147,27 @@ func requireStatusMount(
 	t.Helper()
 
 	for i := range status.Accounts {
-		for j := range status.Accounts[i].Mounts {
-			mountStatus := status.Accounts[i].Mounts[j]
-			if mountStatus.CanonicalID == canonicalID {
-				return mountStatus
+		driveStatuses := append(status.Accounts[i].Drives, status.Accounts[i].Mounts...)
+		for j := range driveStatuses {
+			driveStatus := driveStatuses[j]
+			if driveStatus.CanonicalID == canonicalID || driveStatus.MountID == canonicalID {
+				return driveStatus
 			}
 		}
 	}
 
 	require.FailNowf(t, "missing status mount", "canonical_id=%s", canonicalID)
 	return statusMountJSON{}
+}
+
+func requireStatusDrive(
+	t *testing.T,
+	status statusJSON,
+	canonicalID string,
+) statusMountJSON {
+	t.Helper()
+
+	return requireStatusMount(t, status, canonicalID)
 }
 
 func readStatusSyncState(t *testing.T, cfgPath string, env map[string]string, args ...string) statusSyncStateJSON {

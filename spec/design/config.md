@@ -25,6 +25,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Standalone shared-folder drives always preserve the canonical remote root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
 | Mount-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields` |
+| Managed child mount inventory persists shortcut lifecycle state, duplicate/content-root conflicts, explicit-standalone suppression, and local-root collision/unavailable reasons without creating synthetic configured drives. | `internal/config/mount_inventory_test.go`, `internal/multisync/shortcut_reconcile_test.go`, `internal/multisync/mount_root_lifecycle_test.go` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 | Mount inventory schema v4 owns child lifecycle reasons, unavailable shortcut-binding records, and reserved projection paths. | `TestMountInventory_RoundTrip`, `TestMountInventory_UnavailableShortcutBindingMayOmitRemoteTarget`, `TestMountInventory_RemoteTargetRequiredForOtherLifecycleStates`, `TestMountInventory_ReservedLocalPathsNormalizeAndValidate` |
@@ -335,6 +336,16 @@ bindings, so it follows the same managed-file discipline:
 - sibling child mounts under the same namespace may not reuse or nest local
   relative paths; reserved local paths participate in that ownership check
 - every save is a full atomic rewrite of the file
+
+Child mount lifecycle reasons are durable control-plane facts. Duplicate
+automatic projections use `duplicate_content_root`; automatic children
+suppressed by an explicitly configured standalone shared-folder drive use
+`explicit_standalone_content_root`; removed shortcuts use `shortcut_removed`;
+bindings that cannot be refreshed use `shortcut_binding_unavailable`; child
+projection move collisions use `local_projection_conflict`; projection move
+filesystem failures use `local_projection_unavailable`; child local-root
+file/symlink collisions use `local_root_collision`; and transient local-root
+stat/create failures use `local_root_unavailable`.
 
 `MountStatePath(mountID)` gives each managed child mount a stable retained-state
 DB path independent of configured drive canonical IDs. Configured standalone

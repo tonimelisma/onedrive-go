@@ -530,6 +530,10 @@ func childMountStateDetail(state config.MountState, reason string) string {
 		return "The old and new shortcut paths both exist locally. Move or merge one path before resuming this child mount."
 	case config.MountStateReasonLocalProjectionUnavailable:
 		return "The local shortcut path could not be moved. Fix the filesystem error, then rerun sync."
+	case config.MountStateReasonLocalRootCollision:
+		return "The child mount path collides with a local file or unsafe link. Move that local path before rerunning sync."
+	case config.MountStateReasonLocalRootUnavailable:
+		return "The child mount path could not be created or checked. Fix the filesystem error, then rerun sync."
 	}
 
 	switch state {

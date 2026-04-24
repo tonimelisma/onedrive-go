@@ -2,7 +2,7 @@
 
 GOVERNS: internal/multisync/*.go, internal/synccontrol/*.go, sync.go
 
-Implements: R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Overview
 
@@ -33,11 +33,11 @@ runtime package that implements it.
 | Behavior | Evidence |
 | --- | --- |
 | `RunWatch` starts the runnable runtime mount set, skips incompatible-store mounts with immediate warnings, and rejects all-paused startup through the same startup-summary model. | `TestOrchestrator_RunWatch_SingleMount`, `TestOrchestrator_RunWatch_MultiMount`, `TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts`, `TestOrchestrator_RunWatch_ReturnsErrorWhenAllMountsPaused` |
-| The Unix control socket is the single live-owner lock for one-shot and watch sync, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
+| The Unix control socket is the single live-owner lock for one-shot and watch sync, is acquired before any mount-inventory reconciliation or removed-child cleanup, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestRunOnce_BindsControlSocketBeforeInventoryReconciliation`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry` |
-| Managed shortcut lifecycle stays control-plane owned: unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, and shortcut projection moves reserve old paths until the local move completes. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestReconcileParentMountDelta_SuccessfulRefreshReactivatesUnavailableShortcut`, `TestApplyDurableProjectionConflicts_DuplicateChildrenKeepDeterministicWinner`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips` |
+| Managed shortcut lifecycle stays control-plane owned: unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, local root collisions skip only affected child mounts, and shortcut projection moves reserve old paths until the local move completes. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestReconcileParentMountDelta_SuccessfulRefreshReactivatesUnavailableShortcut`, `TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict`, `TestBuildRuntimeMountSet_LocalRootSaveFailureDoesNotBlockStandaloneMount`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips` |
 
 ## Runtime Mount Specs
 
@@ -49,7 +49,10 @@ surface, but they are no longer the runtime construction shape. The CLI resolves
 configured drives and compiles them into `multisync.StandaloneMountSelection`:
 valid selections become `StandaloneMountConfig` values, while per-drive
 conversion failures become `MountStartupResult` values before the orchestrator
-is constructed. On startup and reload the control plane now:
+is constructed. One-shot and watch startup bind the owner control socket before
+the following inventory-mutating work so a losing sync process cannot reconcile
+`mounts.json`, finalize pending removals, or purge child state. On startup and
+reload the control plane now:
 
 1. consumes the CLI-compiled standalone mount selection
 2. compiles those standalone configs into runtime mounts
@@ -118,9 +121,17 @@ Automatic shortcut reconciliation is also control-plane owned. Before one-shot
 startup, before watch startup, on control-socket reload, and on the watch-mode
 reconcile ticker, `internal/multisync` now:
 
-- discovers shortcut placeholders under each selected standalone namespace mount
+- discovers shortcut placeholders under each selected standalone namespace mount,
+  including live Graph shapes where the placeholder itself is not a folder but
+  its `remoteItem.folder` facet identifies a folder target
 - reconciles those bindings into `mounts.json`
 - updates namespace discovery state and child mount lifecycle state
+- creates missing child local roots component-by-component and marks file,
+  final-symlink, symlinked-ancestor, or traversal collisions as durable
+  child-mount conflicts before child engine startup
+- logs and continues from the in-memory child-root classification when the
+  follow-on `mounts.json` save fails, so a durability failure for one child
+  root does not turn into a startup outage for unrelated mounts
 - recompiles the runtime mount set
 - starts or stops only the affected child mounts
 
@@ -135,6 +146,14 @@ Parent namespace mounts continue to reserve every child mount path they own
 while records are active, paused, conflicted, unavailable, or pending removal.
 Reserved old projection paths are included in the same parent exclusion set
 until the move completes or the operator resolves the conflict.
+The namespace owner therefore owns child root materialization and conflict
+classification; the child engine starts only after its mount root exists as a
+directory inside the parent sync-root boundary. A failed inventory save after
+local-root classification is logged and retried by a later reconciliation; the
+current run still uses the classified in-memory inventory so unrelated mounts
+can start. Parent engines must apply that reservation consistently to local
+scan/watch surfaces and post-sync transfer housekeeping, so parent cleanup
+never walks into a child mount's in-flight transfer artifacts.
 
 ## Boundary To The Engine
 

@@ -93,6 +93,15 @@ func TestLoadLiveTestConfig(t *testing.T) {
 		"ONEDRIVE_TEST_SHARED_FOLDER_LINK",
 		"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER",
 		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_NAME",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_SHARER_EMAIL",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_SENTINEL_PATH",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_NAME",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_SHARER_EMAIL",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_SENTINEL_PATH",
+		"ONEDRIVE_TEST_STANDALONE_SHARED_FOLDER_NAME",
 	} {
 		t.Setenv(key, "")
 	}
@@ -109,6 +118,15 @@ func TestLoadLiveTestConfig(t *testing.T) {
 		"ONEDRIVE_TEST_SHARED_FOLDER_LINK=https://1drv.ms/shared-folder",
 		"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER=shared:secondary@example.com:drive123:item123",
 		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER=shared:primary@example.com:drive456:item456",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE=personal:secondary@example.com",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_NAME=Owner Shortcut",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_SHARER_EMAIL=primary@example.com",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_SENTINEL_PATH=sentinel.txt",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE=personal:primary@example.com",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_NAME=Read-only Shortcut",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_SHARER_EMAIL=secondary@example.com",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_SENTINEL_PATH=readonly.txt",
+		"ONEDRIVE_TEST_STANDALONE_SHARED_FOLDER_NAME=Standalone Shared Folder",
 	}, "\n")+"\n"), 0o600))
 
 	cfg, err := LoadLiveTestConfig(moduleRoot)
@@ -120,6 +138,15 @@ func TestLoadLiveTestConfig(t *testing.T) {
 	assert.Equal(t, "https://1drv.ms/shared-folder", cfg.Fixtures.SharedFolderLink)
 	assert.Equal(t, "shared:secondary@example.com:drive123:item123", cfg.Fixtures.WritableSharedFolderSelector)
 	assert.Equal(t, "shared:primary@example.com:drive456:item456", cfg.Fixtures.ReadOnlySharedFolderSelector)
+	assert.Equal(t, "personal:secondary@example.com", cfg.Fixtures.WritableShortcutParentDrive)
+	assert.Equal(t, "Owner Shortcut", cfg.Fixtures.WritableShortcutName)
+	assert.Equal(t, "primary@example.com", cfg.Fixtures.WritableShortcutSharerEmail)
+	assert.Equal(t, "sentinel.txt", cfg.Fixtures.WritableShortcutSentinelPath)
+	assert.Equal(t, "personal:primary@example.com", cfg.Fixtures.ReadOnlyShortcutParentDrive)
+	assert.Equal(t, "Read-only Shortcut", cfg.Fixtures.ReadOnlyShortcutName)
+	assert.Equal(t, "secondary@example.com", cfg.Fixtures.ReadOnlyShortcutSharerEmail)
+	assert.Equal(t, "readonly.txt", cfg.Fixtures.ReadOnlyShortcutSentinelPath)
+	assert.Equal(t, "Standalone Shared Folder", cfg.Fixtures.StandaloneSharedFolderName)
 }
 
 func TestLoadLiveTestConfig_Precedence(t *testing.T) {
@@ -130,6 +157,15 @@ func TestLoadLiveTestConfig_Precedence(t *testing.T) {
 		"ONEDRIVE_TEST_SHARED_FOLDER_LINK",
 		"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER",
 		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_NAME",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_SHARER_EMAIL",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_SENTINEL_PATH",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_NAME",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_SHARER_EMAIL",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_SENTINEL_PATH",
+		"ONEDRIVE_TEST_STANDALONE_SHARED_FOLDER_NAME",
 	} {
 		t.Setenv(key, "")
 	}
@@ -157,6 +193,43 @@ func TestLoadLiveTestConfig_Precedence(t *testing.T) {
 	assert.Equal(t, "https://1drv.ms/f/env", cfg.Fixtures.SharedFolderLink)
 }
 
+func TestLoadLiveTestConfig_DefaultShortcutFixtures(t *testing.T) {
+	for _, key := range []string{
+		"ONEDRIVE_TEST_DRIVE",
+		"ONEDRIVE_TEST_DRIVE_2",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_NAME",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_SHARER_EMAIL",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_SENTINEL_PATH",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_NAME",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_SHARER_EMAIL",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_SENTINEL_PATH",
+		"ONEDRIVE_TEST_STANDALONE_SHARED_FOLDER_NAME",
+	} {
+		t.Setenv(key, "")
+	}
+
+	moduleRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, ".env"), []byte(
+		"ONEDRIVE_TEST_DRIVE=personal:kikkelimies123@outlook.com\n"+
+			"ONEDRIVE_TEST_DRIVE_2=personal:testitesti18@outlook.com\n",
+	), 0o600))
+
+	cfg, err := LoadLiveTestConfig(moduleRoot)
+	require.NoError(t, err)
+
+	assert.Equal(t, "personal:testitesti18@outlook.com", cfg.Fixtures.WritableShortcutParentDrive)
+	assert.Equal(t, "Kikkeli Shared Test Folder", cfg.Fixtures.WritableShortcutName)
+	assert.Equal(t, "kikkelimies123@outlook.com", cfg.Fixtures.WritableShortcutSharerEmail)
+	assert.Equal(t, "shortcut-sentinel.txt", cfg.Fixtures.WritableShortcutSentinelPath)
+	assert.Equal(t, "personal:kikkelimies123@outlook.com", cfg.Fixtures.ReadOnlyShortcutParentDrive)
+	assert.Equal(t, "Read-only Shared Folder", cfg.Fixtures.ReadOnlyShortcutName)
+	assert.Equal(t, "testitesti18@outlook.com", cfg.Fixtures.ReadOnlyShortcutSharerEmail)
+	assert.Equal(t, "shortcut-sentinel.txt", cfg.Fixtures.ReadOnlyShortcutSentinelPath)
+	assert.Equal(t, "Testi2 Shared Folder", cfg.Fixtures.StandaloneSharedFolderName)
+}
+
 func TestLoadLiveTestConfig_InvalidSharedSelector(t *testing.T) {
 	for _, key := range []string{
 		"ONEDRIVE_TEST_DRIVE",
@@ -164,6 +237,15 @@ func TestLoadLiveTestConfig_InvalidSharedSelector(t *testing.T) {
 		"ONEDRIVE_TEST_SHARED_LINK",
 		"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER",
 		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_NAME",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_SHARER_EMAIL",
+		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_SENTINEL_PATH",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_NAME",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_SHARER_EMAIL",
+		"ONEDRIVE_TEST_SHORTCUT_READONLY_SENTINEL_PATH",
+		"ONEDRIVE_TEST_STANDALONE_SHARED_FOLDER_NAME",
 	} {
 		t.Setenv(key, "")
 	}

@@ -310,6 +310,39 @@ func TestMountInventory_RemoteTargetRequiredForOtherLifecycleStates(t *testing.T
 }
 
 // Validates: R-2.8.1, R-4.1.4
+func TestMountInventory_LocalRootReasonsValidate(t *testing.T) {
+	setTestDataDir(t)
+
+	err := SaveMountInventory(&MountInventory{
+		Mounts: map[string]MountRecord{
+			"collision": {
+				MountID:             "collision",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-a",
+				RelativeLocalPath:   "Shared/Collision",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-a",
+				RemoteItemID:        "root-a",
+				State:               MountStateConflict,
+				StateReason:         MountStateReasonLocalRootCollision,
+			},
+			"unavailable": {
+				MountID:             "unavailable",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-b",
+				RelativeLocalPath:   "Shared/Unavailable",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-b",
+				RemoteItemID:        "root-b",
+				State:               MountStateUnavailable,
+				StateReason:         MountStateReasonLocalRootUnavailable,
+			},
+		},
+	})
+	require.NoError(t, err)
+}
+
+// Validates: R-2.8.1, R-4.1.4
 func TestMountInventory_InvalidStateReasonRejected(t *testing.T) {
 	setTestDataDir(t)
 

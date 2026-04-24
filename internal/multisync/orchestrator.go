@@ -129,6 +129,14 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		}
 		return RunOnceResult{}
 	}
+	control, err := o.startControlServer(ctx, synccontrol.OwnerModeOneShot, nil)
+	if err != nil {
+		return controlFailureRunOnceResult(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults, err)
+	}
+	if control != nil {
+		defer o.closeControlSocket(ctx, control)
+	}
+
 	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
 		return controlFailureRunOnceResult(
@@ -148,14 +156,6 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	}
 	applyChildProjectionMoves(compiled, o.logger)
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
-
-	control, err := o.startControlServer(ctx, synccontrol.OwnerModeOneShot, nil)
-	if err != nil {
-		return controlFailureRunOnceResult(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults, err)
-	}
-	if control != nil {
-		defer o.closeControlSocket(ctx, control)
-	}
 
 	o.logger.Info("orchestrator starting RunOnce",
 		slog.Int("mounts", len(compiled.Mounts)),
@@ -239,6 +239,13 @@ func (o *Orchestrator) buildRuntimeMountSet(
 		inventory = loadedInventory
 	}
 
+	localRootChanged := reconcileChildMountLocalRoots(parents, inventory, o.logger)
+	if localRootChanged {
+		if saveErr := config.SaveMountInventory(inventory); saveErr != nil {
+			o.warnChildRootReconciliationSaveFailure(saveErr)
+		}
+	}
+
 	compiled, err := compileRuntimeMountsForParents(parents, inventory, o.logger)
 	if err != nil {
 		return nil, err
@@ -250,6 +257,16 @@ func (o *Orchestrator) buildRuntimeMountSet(
 	compiled.Skipped = append(append([]MountStartupResult(nil), initialStartup...), compiled.Skipped...)
 
 	return compiled, nil
+}
+
+func (o *Orchestrator) warnChildRootReconciliationSaveFailure(err error) {
+	if err == nil || o.logger == nil {
+		return
+	}
+
+	o.logger.Warn("child mount local root reconciliation was not persisted; continuing with in-memory mount inventory",
+		slog.String("error", err.Error()),
+	)
 }
 
 func nextStartupSelectionIndex(results []MountStartupResult) int {
@@ -460,10 +477,16 @@ func (o *Orchestrator) startWatchRuntime(
 		return nil, nil, fmt.Errorf("sync: no standalone mounts configured")
 	}
 
+	control, err := o.startControlServer(ctx, synccontrol.OwnerModeWatch, commands)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sync: building mount specs: %w", err)
+		return nil, control, fmt.Errorf("sync: building mount specs: %w", err)
 	}
+	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
 		o.logger.Warn("purging removed child mount state during watch startup",
 			slog.String("error", purgeErr.Error()),
@@ -479,11 +502,6 @@ func (o *Orchestrator) startWatchRuntime(
 		slog.Int("mounts", len(compiled.Mounts)),
 		slog.String("mode", mode.String()),
 	)
-
-	control, err := o.startControlServer(ctx, synccontrol.OwnerModeWatch, commands)
-	if err != nil {
-		return nil, nil, err
-	}
 
 	runners, startResults := o.startInitialWatchRunners(ctx, mode, compiled.Mounts, compiled.Skipped, opts)
 	startSummary := summarizeStartupResults(startResults)

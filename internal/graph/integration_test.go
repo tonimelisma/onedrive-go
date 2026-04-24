@@ -255,7 +255,7 @@ func TestIntegration_SearchDriveItems(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, item := range items {
-		if item.IsFolder && item.RemoteDriveID != "" {
+		if (item.IsFolder || item.RemoteIsFolder) && item.RemoteDriveID != "" {
 			t.Logf("shared folder: %s (owner=%s, remoteDrive=%s, remoteItem=%s)",
 				item.Name, item.SharedOwnerEmail, item.RemoteDriveID, item.RemoteItemID)
 		}
