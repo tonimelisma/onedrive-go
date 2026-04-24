@@ -19,6 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260424-01 | Nightly status E2Es decoded deleted drive-shaped status JSON fields | fixed | test bug | 2026-04-24 | no |
 | LI-20260422-01 | Nightly `e2e_full` buckets still carried removed manual-resolution and path-narrowing workflows | fixed | test bug | 2026-04-23 | yes |
 | LI-20260422-02 | Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair | fixed | product bug | 2026-04-22 | no |
 | LI-20260422-03 | Shared-drive sync startup still aborted when `sync_dir` did not exist yet | fixed | product bug | 2026-04-22 | no |
@@ -51,6 +52,47 @@ Promotion contract:
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-22 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260424-01: Nightly status E2Es decoded deleted drive-shaped status JSON fields
+
+First seen: 2026-04-24
+Last seen: 2026-04-24
+Area: scheduled `e2e_full`, status JSON E2E helpers
+Suite / test: scheduled CI run `24885266572`; `e2e` job,
+`full-parallel-misc`; `TestE2E_Status_JSON`,
+`TestE2E_Status_JSONShape`,
+`TestE2E_Status_FilteredDriveIsSubsetOfAllDrives`,
+`TestE2E_Status_PerDrive_NoConditionsOrRetries`,
+`TestE2E_Status_NoLegacyHistorySurface`,
+`TestE2E_Status_JSON_ConditionDetails`, and
+`TestE2E_Status_ConditionLifecycle`
+Classification: test bug
+Status: fixed
+Recurring: no
+Summary: The nightly full-suite status tests failed after the CLI status
+contract moved to mount-shaped JSON. Product output in the debug logs contained
+the expected `summary.total_mounts` and `accounts[].mounts` payload, but the
+shared E2E status decoder still read deleted `summary.total_drives` and
+`accounts[].drives` fields. That made every status lookup see zero mounts and
+fail with `missing status drive` even when the CLI emitted the selected mount.
+Evidence:
+- Scheduled run `24885266572` reached `full-parallel-misc` after auth, fast
+  fixture, fast E2E, and full fixture preflight all passed. The verifier
+  reported no classified live quirks and no rerun candidates.
+- The failing logs showed the affected status tests all failing in the shared
+  helper with empty decoded drive rows or `missing status drive`.
+- The corresponding debug stdout for `TestE2E_Status_JSON` contained
+  `summary.total_mounts: 1` and a standalone row under `accounts[].mounts` for
+  `personal:kikkelimies123@outlook.com`, matching the documented status
+  contract in [cli.md](../design/cli.md).
+- On April 24, 2026, the narrowed local rerun
+  `go test -tags='e2e e2e_full' -race -run '^(TestE2E_Status_ConditionLifecycle|TestE2E_Status_FilteredDriveIsSubsetOfAllDrives|TestE2E_Status_JSON_ConditionDetails|TestE2E_Status_NoLegacyHistorySurface|TestE2E_Status_JSONShape|TestE2E_Status_JSON|TestE2E_Status_PerDrive_NoConditionsOrRetries)$' -count=1 -v ./e2e/...`
+  passed all seven affected tests in 34.427 seconds.
+Resolution / mitigation: E2E status helpers now decode the current mount-shaped
+status schema and the failing status tests assert `total_mounts` and
+`accounts[].mounts`. This is intentionally not classified as a live-provider
+quirk because the failure was deterministic repo-local test drift.
+Promoted docs: [cli.md](../design/cli.md)
 
 ## LI-20260417-01: Nightly `e2e_full` preflight duplicated `TestE2E_Status_ConfigTolerance` and stopped before live full-suite coverage
 
