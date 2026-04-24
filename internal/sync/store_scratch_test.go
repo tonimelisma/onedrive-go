@@ -120,7 +120,7 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 
 	state, err := scratch.ReadObservationState(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, driveID, state.MountDriveID)
+	assert.Equal(t, driveID, state.ContentDriveID)
 	assert.Equal(t, "cursor-seeded", state.Cursor)
 	assert.Equal(t, refreshAt.Add(fullRemoteRefreshInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 

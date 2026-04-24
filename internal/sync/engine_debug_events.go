@@ -56,11 +56,11 @@ const (
 )
 
 const (
-	engineDebugNoteRemoteCurrent      = "remote_current"
-	engineDebugNoteLocalSkipped       = "local_skipped"
-	engineDebugNotePrimaryWatch       = "primary_watch"
-	engineDebugNoteRootedSubtreeWatch = "rooted_subtree_watch"
-	engineDebugNoteFullRefresh        = "full_refresh"
+	engineDebugNoteRemoteCurrent  = "remote_current"
+	engineDebugNoteLocalSkipped   = "local_skipped"
+	engineDebugNotePrimaryWatch   = "primary_watch"
+	engineDebugNoteMountRootWatch = "mount_root_watch"
+	engineDebugNoteFullRefresh    = "full_refresh"
 )
 
 type engineDebugEvent struct {

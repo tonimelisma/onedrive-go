@@ -15,13 +15,13 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	errs chan<- error,
 	pollInterval time.Duration,
 ) {
-	if rt.engine.hasRootedSubtree() {
-		rt.warnRootedSubtreeWebsocketFallback()
+	if rt.engine.hasRemoteMountRoot() {
+		rt.warnMountRootWebsocketFallback()
 		go func() {
 			defer obsWg.Done()
 			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
 			defer close(batches)
-			errs <- rt.watchRootedSubtreeRemote(ctx, bl, batches, pollInterval)
+			errs <- rt.watchMountRootRemote(ctx, bl, batches, pollInterval)
 		}()
 		return
 	}
@@ -61,17 +61,17 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	}()
 }
 
-func (rt *watchRuntime) warnRootedSubtreeWebsocketFallback() {
+func (rt *watchRuntime) warnMountRootWebsocketFallback() {
 	if !rt.engine.enableWebsocket {
 		return
 	}
 
 	rt.engine.emitDebugEvent(engineDebugEvent{
 		Type: engineDebugEventWebsocketFallback,
-		Note: "rooted_subtree",
+		Note: "mount_root",
 	})
-	rt.engine.logger.Warn("websocket watch is not supported for rooted-subtree engines; falling back to polling",
+	rt.engine.logger.Warn("websocket watch is not supported for mount-root engines; falling back to polling",
 		slog.String("drive_id", rt.engine.driveID.String()),
-		slog.String("root_item_id", rt.engine.rootItemID),
+		slog.String("remote_root_item_id", rt.engine.remoteRootItemID),
 	)
 }

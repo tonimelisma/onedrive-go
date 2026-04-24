@@ -17,21 +17,39 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-// Session holds authenticated clients and mounted-root identity for one
-// interactive or sync surface. Wraps a pair of graph.Client instances: Meta
-// for Graph metadata operations and Transfer for upload/download traffic.
+// Session holds authenticated clients for one remote drive. Mount-root path
+// scoping is owned by MountSession so sync engine construction does not infer
+// runtime root identity from generic authenticated clients.
 type Session struct {
 	Meta              *graph.Client // metadata ops (transport-level stall detection)
 	Transfer          *graph.Client // uploads/downloads (no client-level timeout)
 	DriveID           driveid.ID
-	MountedRootItemID string
 	AccountEmailValue string
 
 	visibilityWaitSchedule []time.Duration
 	sleepFunc              func(context.Context, time.Duration) error
 }
 
-var _ PathConvergence = (*Session)(nil)
+var _ PathConvergence = (*MountSession)(nil)
+
+// MountSession adds mount-root path semantics to an authenticated Session.
+// Direct file commands use this wrapper because their path operations are
+// relative to the configured mount root, not necessarily the Graph drive root.
+type MountSession struct {
+	*Session
+	RemoteRootItemID string
+}
+
+func NewMountSession(session *Session, remoteRootItemID string) *MountSession {
+	if session == nil {
+		return nil
+	}
+
+	return &MountSession{
+		Session:          session,
+		RemoteRootItemID: remoteRootItemID,
+	}
+}
 
 // AccountClients holds authenticated Graph clients for an account-scoped
 // command that does not target a configured drive.
@@ -46,7 +64,7 @@ type AccountClients struct {
 type MountSessionConfig struct {
 	TokenOwnerCanonical driveid.CanonicalID
 	DriveID             driveid.ID
-	RootItemID          string
+	RemoteRootItemID    string
 	AccountEmail        string
 }
 
@@ -116,10 +134,15 @@ func NewSessionRuntime(holder *config.Holder, userAgent string, logger *slog.Log
 }
 
 // InteractiveSession creates or retrieves an authenticated interactive Session
-// for one mounted remote root. Mounted-root sessions use a root-scoped throttle
+// for one mounted remote root. Mount-root sessions use a root-scoped throttle
 // key so interactive metadata retries stay scoped to the concrete remote root.
-func (r *SessionRuntime) InteractiveSession(ctx context.Context, mount *MountSessionConfig) (*Session, error) {
-	return r.session(ctx, mount, r.interactiveClientsForMount(mount))
+func (r *SessionRuntime) InteractiveSession(ctx context.Context, mount *MountSessionConfig) (*MountSession, error) {
+	session, err := r.session(ctx, mount, r.interactiveClientsForMount(mount))
+	if err != nil {
+		return nil, err
+	}
+
+	return NewMountSession(session, mount.RemoteRootItemID), nil
 }
 
 // SyncSession creates or retrieves the authenticated Session used by sync
@@ -172,7 +195,6 @@ func (r *SessionRuntime) session(
 		Meta:              meta,
 		Transfer:          transfer,
 		DriveID:           mount.DriveID,
-		MountedRootItemID: mount.RootItemID,
 		AccountEmailValue: accountEmail,
 	}, nil
 }
@@ -308,8 +330,8 @@ func (r *SessionRuntime) interactiveClientsForMount(mount *MountSessionConfig) g
 	if account == "" {
 		account = mount.TokenOwnerCanonical.Email()
 	}
-	if mount.RootItemID != "" {
-		return r.interactiveClientsForSharedTarget(account, mount.DriveID.String(), mount.RootItemID)
+	if mount.RemoteRootItemID != "" {
+		return r.interactiveClientsForSharedTarget(account, mount.DriveID.String(), mount.RemoteRootItemID)
 	}
 
 	return r.interactiveClientsForKey(interactiveDriveKey(account, mount.DriveID))
@@ -363,27 +385,57 @@ func interactiveSharedKey(account, remoteDriveID, remoteItemID string) string {
 	return account + "|shared:" + remoteDriveID + ":" + remoteItemID
 }
 
+func (s *Session) driveRootMountSession() *MountSession {
+	return NewMountSession(s, "")
+}
+
+// ResolveItem resolves paths relative to the Graph drive root. Root-aware
+// callers should use MountSession so the configured mount root stays explicit.
+func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.Item, error) {
+	return s.driveRootMountSession().ResolveItem(ctx, remotePath)
+}
+
+func (s *Session) ResolveDeleteTarget(ctx context.Context, remotePath string) (*graph.Item, error) {
+	return s.driveRootMountSession().ResolveDeleteTarget(ctx, remotePath)
+}
+
+func (s *Session) WaitPathVisible(ctx context.Context, remotePath string) (*graph.Item, error) {
+	return s.driveRootMountSession().WaitPathVisible(ctx, remotePath)
+}
+
+func (s *Session) ListChildren(ctx context.Context, remotePath string) ([]graph.Item, error) {
+	return s.driveRootMountSession().ListChildren(ctx, remotePath)
+}
+
+func (s *Session) DeleteResolvedPath(ctx context.Context, remotePath, itemID string) error {
+	return s.driveRootMountSession().DeleteResolvedPath(ctx, remotePath, itemID)
+}
+
+func (s *Session) PermanentDeleteResolvedPath(ctx context.Context, remotePath, itemID string) error {
+	return s.driveRootMountSession().PermanentDeleteResolvedPath(ctx, remotePath, itemID)
+}
+
 // ResolveItem resolves a remote path to an Item. For root (""), uses GetItem
 // with "root". Otherwise uses GetItemByPath. "/" normalizes to "" via
 // CleanRemotePath, so callers can pass either "/" or "" to mean root.
-func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.Item, error) {
+func (s *MountSession) ResolveItem(ctx context.Context, remotePath string) (*graph.Item, error) {
 	clean := CleanRemotePath(remotePath)
 	if clean == "" {
-		rootID := s.rootItemID()
+		rootID := s.remoteRootItemID()
 		item, err := s.Meta.GetItem(ctx, s.DriveID, rootID)
 		if err != nil {
 			return nil, fmt.Errorf("resolve root item: %w", err)
 		}
 
-		if s.hasMountedRoot() {
+		if s.hasMountRoot() {
 			item.IsRoot = true
 		}
 
 		return item, nil
 	}
 
-	if s.hasMountedRoot() {
-		item, err := s.resolveItemFromMountedRoot(ctx, clean)
+	if s.hasMountRoot() {
+		item, err := s.resolveItemFromMountRoot(ctx, clean)
 		if err != nil {
 			return nil, fmt.Errorf("resolve item path %q: %w", clean, err)
 		}
@@ -403,7 +455,7 @@ func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.It
 // Delete intent is authoritative on the path, so when the exact path route
 // lies with itemNotFound we fall back to the parent collection before
 // declaring the target missing.
-func (s *Session) ResolveDeleteTarget(ctx context.Context, remotePath string) (*graph.Item, error) {
+func (s *MountSession) ResolveDeleteTarget(ctx context.Context, remotePath string) (*graph.Item, error) {
 	item, err := s.ResolveItem(ctx, remotePath)
 	if err == nil {
 		return item, nil
@@ -424,7 +476,7 @@ func (s *Session) ResolveDeleteTarget(ctx context.Context, remotePath string) (*
 // path resolution after a successful mutation. Graph can acknowledge mkdir,
 // put, or move before follow-on path reads stop returning itemNotFound, so the
 // command boundary treats visibility convergence as part of mutation success.
-func (s *Session) WaitPathVisible(ctx context.Context, remotePath string) (*graph.Item, error) {
+func (s *MountSession) WaitPathVisible(ctx context.Context, remotePath string) (*graph.Item, error) {
 	item, err := s.resolveConvergingPath(ctx, remotePath)
 	if err == nil {
 		return item, nil
@@ -450,7 +502,7 @@ func (s *Session) WaitPathVisible(ctx context.Context, remotePath string) (*grap
 	return nil, &PathNotVisibleError{Path: remotePath}
 }
 
-func (s *Session) resolveConvergingPath(ctx context.Context, remotePath string) (*graph.Item, error) {
+func (s *MountSession) resolveConvergingPath(ctx context.Context, remotePath string) (*graph.Item, error) {
 	item, err := s.ResolveItem(ctx, remotePath)
 	if err == nil {
 		return item, nil
@@ -472,10 +524,10 @@ func (s *Session) resolveConvergingPath(ctx context.Context, remotePath string) 
 
 // ListChildren lists children of a remote path. For root (""), uses
 // ListChildren with "root". Otherwise uses ListChildrenByPath.
-func (s *Session) ListChildren(ctx context.Context, remotePath string) ([]graph.Item, error) {
+func (s *MountSession) ListChildren(ctx context.Context, remotePath string) ([]graph.Item, error) {
 	clean := CleanRemotePath(remotePath)
 	if clean == "" {
-		items, err := s.Meta.ListChildren(ctx, s.DriveID, s.rootItemID())
+		items, err := s.Meta.ListChildren(ctx, s.DriveID, s.remoteRootItemID())
 		if err != nil {
 			return nil, fmt.Errorf("list root children: %w", err)
 		}
@@ -483,8 +535,8 @@ func (s *Session) ListChildren(ctx context.Context, remotePath string) ([]graph.
 		return items, nil
 	}
 
-	if s.hasMountedRoot() {
-		parent, err := s.resolveItemFromMountedRoot(ctx, clean)
+	if s.hasMountRoot() {
+		parent, err := s.resolveItemFromMountRoot(ctx, clean)
 		if err != nil {
 			return nil, fmt.Errorf("list children for %q: %w", clean, err)
 		}
@@ -546,7 +598,7 @@ func (s *Session) sleep(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (s *Session) deleteResolvedPath(
+func (s *MountSession) deleteResolvedPath(
 	ctx context.Context,
 	remotePath string,
 	itemID string,
@@ -610,7 +662,7 @@ func (s *Session) DeleteItem(ctx context.Context, itemID string) error {
 // itemNotFound on the delete route even though the same path resolved moments
 // earlier, so this method re-resolves and retries until the path disappears or
 // the bounded visibility schedule is exhausted.
-func (s *Session) DeleteResolvedPath(ctx context.Context, remotePath, itemID string) error {
+func (s *MountSession) DeleteResolvedPath(ctx context.Context, remotePath, itemID string) error {
 	return s.deleteResolvedPath(ctx, remotePath, itemID, s.DeleteItem)
 }
 
@@ -625,7 +677,7 @@ func (s *Session) PermanentDeleteItem(ctx context.Context, itemID string) error 
 
 // PermanentDeleteResolvedPath mirrors DeleteResolvedPath for the permanent
 // delete route.
-func (s *Session) PermanentDeleteResolvedPath(ctx context.Context, remotePath, itemID string) error {
+func (s *MountSession) PermanentDeleteResolvedPath(ctx context.Context, remotePath, itemID string) error {
 	return s.deleteResolvedPath(ctx, remotePath, itemID, s.PermanentDeleteItem)
 }
 
@@ -679,22 +731,22 @@ func (s *Session) RestoreItem(ctx context.Context, itemID string) (*graph.Item, 
 	return item, nil
 }
 
-const driveRootItemID = "root"
+const graphDriveRootItemID = "root"
 
-func (s *Session) hasMountedRoot() bool {
-	return s != nil && s.MountedRootItemID != "" && s.MountedRootItemID != driveRootItemID
+func (s *MountSession) hasMountRoot() bool {
+	return s != nil && s.RemoteRootItemID != "" && s.RemoteRootItemID != graphDriveRootItemID
 }
 
-func (s *Session) rootItemID() string {
-	if s.hasMountedRoot() {
-		return s.MountedRootItemID
+func (s *MountSession) remoteRootItemID() string {
+	if s.hasMountRoot() {
+		return s.RemoteRootItemID
 	}
 
-	return driveRootItemID
+	return graphDriveRootItemID
 }
 
-func (s *Session) resolveItemFromMountedRoot(ctx context.Context, remotePath string) (*graph.Item, error) {
-	currentID := s.rootItemID()
+func (s *MountSession) resolveItemFromMountRoot(ctx context.Context, remotePath string) (*graph.Item, error) {
+	currentID := s.remoteRootItemID()
 	segments := strings.Split(remotePath, "/")
 	var current *graph.Item
 
@@ -718,7 +770,7 @@ func (s *Session) resolveItemFromMountedRoot(ctx context.Context, remotePath str
 	}
 
 	if current == nil {
-		return nil, fmt.Errorf("resolve mounted-root item %q: %w", remotePath, graph.ErrNotFound)
+		return nil, fmt.Errorf("resolve mount-root item %q: %w", remotePath, graph.ErrNotFound)
 	}
 
 	return current, nil
@@ -753,7 +805,7 @@ const (
 	deleteConvergenceMissing
 )
 
-func (s *Session) resolveDeleteConvergenceTarget(
+func (s *MountSession) resolveDeleteConvergenceTarget(
 	ctx context.Context,
 	remotePath string,
 ) (deleteConvergenceResolution, *graph.Item, error) {
@@ -776,7 +828,7 @@ func (s *Session) resolveDeleteConvergenceTarget(
 	return deleteConvergenceResolutionUnknown, nil, err
 }
 
-func (s *Session) resolveItemFromParentListing(ctx context.Context, remotePath string) (*graph.Item, error) {
+func (s *MountSession) resolveItemFromParentListing(ctx context.Context, remotePath string) (*graph.Item, error) {
 	clean := CleanRemotePath(remotePath)
 	if clean == "" {
 		return nil, fmt.Errorf("resolve delete target %q: %w", remotePath, graph.ErrNotFound)
@@ -796,7 +848,7 @@ func (s *Session) resolveItemFromParentListing(ctx context.Context, remotePath s
 	return &match, nil
 }
 
-func (s *Session) listDeleteParentChildren(ctx context.Context, parentPath string) ([]graph.Item, error) {
+func (s *MountSession) listDeleteParentChildren(ctx context.Context, parentPath string) ([]graph.Item, error) {
 	children, err := s.ListChildren(ctx, parentPath)
 	if err == nil {
 		return children, nil

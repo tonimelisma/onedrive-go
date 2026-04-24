@@ -233,7 +233,7 @@ func mustCLIContext(ctx context.Context) *CLIContext {
 // Session is the file-command helper for creating an interactive session from
 // the resolved CLI drive at the config boundary.
 // Eliminates 7 identical boilerplate blocks across file operation commands.
-func (cc *CLIContext) Session(ctx context.Context) (*driveops.Session, error) {
+func (cc *CLIContext) Session(ctx context.Context) (*driveops.MountSession, error) {
 	runtime := cc.runtime()
 	if cc.GraphBaseURL != "" {
 		runtime.GraphBaseURL = cc.GraphBaseURL
@@ -292,7 +292,7 @@ func interactiveMountSessionConfigFromResolvedDrive(rd *config.ResolvedDrive) (*
 	return &driveops.MountSessionConfig{
 		TokenOwnerCanonical: tokenOwnerCanonical,
 		DriveID:             rd.DriveID,
-		RootItemID:          rd.RootItemID,
+		RemoteRootItemID:    rd.RemoteRootItemID,
 		AccountEmail:        accountEmail,
 	}, nil
 }

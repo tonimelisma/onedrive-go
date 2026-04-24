@@ -75,16 +75,16 @@ func (ph *PermissionHandler) handle403(
 		}
 	}
 
-	if ph.rootItemID == "" {
+	if ph.remoteRootItemID == "" {
 		return PermissionEvidence{}
 	}
 
 	remoteDriveID := ph.driveID
 	parentFolder := remoteParentPath(failedPath)
-	parentItemID := resolveBoundaryRemoteItemID(bl, parentFolder, remoteDriveID, ph.rootItemID)
+	parentItemID := resolveBoundaryRemoteItemID(bl, parentFolder, remoteDriveID, ph.remoteRootItemID)
 	if parentItemID == "" {
 		parentFolder = ""
-		parentItemID = ph.rootItemID
+		parentItemID = ph.remoteRootItemID
 	}
 
 	perms, err := ph.permChecker.ListItemPermissions(ctx, remoteDriveID, parentItemID)
@@ -116,7 +116,7 @@ func (ph *PermissionHandler) handle403(
 	case graph.PermissionWriteAccessReadOnly:
 	}
 
-	boundary := ph.walkPermissionBoundary(ctx, bl, parentFolder, ph.rootItemID, remoteDriveID)
+	boundary := ph.walkPermissionBoundary(ctx, bl, parentFolder, ph.remoteRootItemID, remoteDriveID)
 
 	return ph.remoteBoundaryEvidence(
 		boundary,
@@ -192,7 +192,7 @@ func (ph *PermissionHandler) walkPermissionBoundary(
 	ctx context.Context,
 	bl *Baseline,
 	startFolder string,
-	rootItemID string,
+	remoteRootItemID string,
 	remoteDriveID driveid.ID,
 ) string {
 	boundary := startFolder
@@ -203,7 +203,7 @@ func (ph *PermissionHandler) walkPermissionBoundary(
 			break
 		}
 
-		parentID := resolveBoundaryRemoteItemID(bl, parent, remoteDriveID, rootItemID)
+		parentID := resolveBoundaryRemoteItemID(bl, parent, remoteDriveID, remoteRootItemID)
 		if parentID == "" {
 			break
 		}
@@ -228,10 +228,10 @@ func resolveBoundaryRemoteItemID(
 	bl *Baseline,
 	boundaryPath string,
 	driveID driveid.ID,
-	rootItemID string,
+	remoteRootItemID string,
 ) string {
-	if rootItemID != "" && boundaryPath == "" {
-		return rootItemID
+	if remoteRootItemID != "" && boundaryPath == "" {
+		return remoteRootItemID
 	}
 
 	return resolveRemoteItemID(bl, boundaryPath, driveID)

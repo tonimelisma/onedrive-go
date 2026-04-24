@@ -24,33 +24,33 @@ type driveIdentityProof struct {
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
 // Single-drive only; multi-drive orchestration is handled by internal/multisync.
 type Engine struct {
-	baseline                  *SyncStore
-	planner                   *Planner
-	execCfg                   *ExecutorConfig
-	fetcher                   DeltaFetcher
-	socketIOFetcher           SocketIOEndpointFetcher
-	itemsClient               ItemClient
-	driveVerifier             DriveVerifier      // optional (B-074)
-	folderDelta               FolderDeltaFetcher // optional: rooted-subtree delta observation
-	recursiveLister           RecursiveLister    // optional: rooted-subtree recursive enumeration fallback
-	permHandler               *PermissionHandler // encapsulates all permission logic (6.4c)
-	dataDir                   string
-	syncRoot                  string
-	syncTree                  *synctree.Root
-	driveID                   driveid.ID
-	driveType                 string
-	rootItemID                string
-	rootedSubtreeDeltaCapable bool
-	logger                    *slog.Logger
-	perfCollector             *perf.Collector
-	sessionStore              *driveops.SessionStore // for CleanStale() housekeeping
-	transferWorkers           int                    // goroutine count for the worker pool
-	checkWorkers              int                    // goroutine limit for parallel file hashing
-	localFilter               LocalFilterConfig
-	localRules                LocalObservationRules
-	enableWebsocket           bool
-	minFreeSpace              int64 // startup disk-scope revalidation threshold
-	diskAvailableFn           func(string) (uint64, error)
+	baseline               *SyncStore
+	planner                *Planner
+	execCfg                *ExecutorConfig
+	fetcher                DeltaFetcher
+	socketIOFetcher        SocketIOEndpointFetcher
+	itemsClient            ItemClient
+	driveVerifier          DriveVerifier      // optional (B-074)
+	folderDelta            FolderDeltaFetcher // optional: mount-root delta observation
+	recursiveLister        RecursiveLister    // optional: mount-root recursive enumeration fallback
+	permHandler            *PermissionHandler // encapsulates all permission logic (6.4c)
+	dataDir                string
+	syncRoot               string
+	syncTree               *synctree.Root
+	driveID                driveid.ID
+	driveType              string
+	remoteRootItemID       string
+	remoteRootDeltaCapable bool
+	logger                 *slog.Logger
+	perfCollector          *perf.Collector
+	sessionStore           *driveops.SessionStore // for CleanStale() housekeeping
+	transferWorkers        int                    // goroutine count for the worker pool
+	checkWorkers           int                    // goroutine limit for parallel file hashing
+	localFilter            LocalFilterConfig
+	localRules             LocalObservationRules
+	enableWebsocket        bool
+	minFreeSpace           int64 // startup disk-scope revalidation threshold
+	diskAvailableFn        func(string) (uint64, error)
 
 	// Test/debug-only invariant checks. Production keeps this disabled;
 	// tests enable it to catch lifecycle and scope regressions immediately.
@@ -110,7 +110,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		cfg.Logger,
 		cfg.PathConvergence,
 	)
-	execCfg.SetRootItemID(cfg.RootItemID)
+	execCfg.SetRemoteRootItemID(cfg.RemoteRootItemID)
 
 	// Construct sessionStore and TransferManager together so the TM is
 	// immutable after creation (no post-hoc field mutation). Disk space
@@ -126,37 +126,37 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	))
 
 	e := &Engine{
-		baseline:                  bm,
-		planner:                   NewPlanner(cfg.Logger),
-		execCfg:                   execCfg,
-		fetcher:                   cfg.Fetcher,
-		socketIOFetcher:           cfg.SocketIOFetcher,
-		itemsClient:               cfg.Items,
-		driveVerifier:             cfg.DriveVerifier,
-		folderDelta:               cfg.FolderDelta,
-		recursiveLister:           cfg.RecursiveLister,
-		sessionStore:              sessionStore,
-		dataDir:                   cfg.DataDir,
-		syncRoot:                  cfg.SyncRoot,
-		syncTree:                  syncTree,
-		driveID:                   cfg.DriveID,
-		driveType:                 cfg.DriveType,
-		rootItemID:                cfg.RootItemID,
-		rootedSubtreeDeltaCapable: cfg.RootedSubtreeDeltaCapable,
-		logger:                    cfg.Logger,
-		perfCollector:             cfg.PerfCollector,
-		transferWorkers:           cfg.TransferWorkers,
-		checkWorkers:              cfg.CheckWorkers,
-		localFilter:               cfg.LocalFilter,
-		localRules:                cfg.LocalRules,
-		enableWebsocket:           cfg.EnableWebsocket,
-		minFreeSpace:              cfg.MinFreeSpace,
-		diskAvailableFn:           driveops.DiskAvailable,
-		nowFn:                     time.Now,
-		afterFunc:                 realAfterFunc,
-		newTicker:                 realNewTicker,
-		sleepFn:                   realSleep,
-		jitterFn:                  realJitter,
+		baseline:               bm,
+		planner:                NewPlanner(cfg.Logger),
+		execCfg:                execCfg,
+		fetcher:                cfg.Fetcher,
+		socketIOFetcher:        cfg.SocketIOFetcher,
+		itemsClient:            cfg.Items,
+		driveVerifier:          cfg.DriveVerifier,
+		folderDelta:            cfg.FolderDelta,
+		recursiveLister:        cfg.RecursiveLister,
+		sessionStore:           sessionStore,
+		dataDir:                cfg.DataDir,
+		syncRoot:               cfg.SyncRoot,
+		syncTree:               syncTree,
+		driveID:                cfg.DriveID,
+		driveType:              cfg.DriveType,
+		remoteRootItemID:       cfg.RemoteRootItemID,
+		remoteRootDeltaCapable: cfg.RemoteRootDeltaCapable,
+		logger:                 cfg.Logger,
+		perfCollector:          cfg.PerfCollector,
+		transferWorkers:        cfg.TransferWorkers,
+		checkWorkers:           cfg.CheckWorkers,
+		localFilter:            cfg.LocalFilter,
+		localRules:             cfg.LocalRules,
+		enableWebsocket:        cfg.EnableWebsocket,
+		minFreeSpace:           cfg.MinFreeSpace,
+		diskAvailableFn:        driveops.DiskAvailable,
+		nowFn:                  time.Now,
+		afterFunc:              realAfterFunc,
+		newTicker:              realNewTicker,
+		sleepFn:                realSleep,
+		jitterFn:               realJitter,
 		socketIOWakeSourceFactory: func(
 			fetcher SocketIOEndpointFetcher,
 			driveID driveid.ID,
@@ -167,14 +167,14 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 
 	e.permHandler = &PermissionHandler{
-		store:        e.baseline,
-		permChecker:  cfg.PermChecker,
-		syncTree:     syncTree,
-		driveID:      cfg.DriveID,
-		accountEmail: cfg.AccountEmail,
-		rootItemID:   cfg.RootItemID,
-		logger:       cfg.Logger,
-		nowFn:        e.nowFunc,
+		store:            e.baseline,
+		permChecker:      cfg.PermChecker,
+		syncTree:         syncTree,
+		driveID:          cfg.DriveID,
+		accountEmail:     cfg.AccountEmail,
+		remoteRootItemID: cfg.RemoteRootItemID,
+		logger:           cfg.Logger,
+		nowFn:            e.nowFunc,
 	}
 
 	return e, nil

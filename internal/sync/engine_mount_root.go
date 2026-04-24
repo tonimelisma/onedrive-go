@@ -12,25 +12,25 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-func (e *Engine) hasRootedSubtree() bool {
-	return e != nil && e.rootItemID != ""
+func (e *Engine) hasRemoteMountRoot() bool {
+	return e != nil && e.remoteRootItemID != ""
 }
 
-func (e *Engine) rootedSubtreeDeltaSupported() bool {
-	return e != nil && e.rootedSubtreeDeltaCapable && e.folderDelta != nil
+func (e *Engine) mountRootDeltaSupported() bool {
+	return e != nil && e.remoteRootDeltaCapable && e.folderDelta != nil
 }
 
-func (flow *engineFlow) observeRootedSubtreeRemote(
+func (flow *engineFlow) observeMountRootRemote(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
 ) ([]ChangeEvent, string, remoteObservationMode, error) {
 	eng := flow.engine
-	if !eng.hasRootedSubtree() {
-		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: rooted-subtree observation requires a root item ID")
+	if !eng.hasRemoteMountRoot() {
+		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: mount-root observation requires a remote root item ID")
 	}
 
-	if eng.preferredRootedSubtreeObservationMode() == remoteObservationModeDelta {
+	if eng.preferredMountRootObservationMode() == remoteObservationModeDelta {
 		token := ""
 		if !fullReconcile {
 			state, err := eng.baseline.ReadObservationState(ctx)
@@ -41,70 +41,70 @@ func (flow *engineFlow) observeRootedSubtreeRemote(
 			token = state.Cursor
 		}
 
-		items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.rootItemID, token)
+		items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.remoteRootItemID, token)
 		if err != nil && errors.Is(err, graph.ErrGone) && !fullReconcile {
-			eng.logger.Warn("rooted-subtree delta token expired, performing full rooted-subtree resync",
+			eng.logger.Warn("mount-root delta token expired, performing full mount-root resync",
 				slog.String("drive_id", eng.driveID.String()),
-				slog.String("root_item_id", eng.rootItemID),
+				slog.String("remote_root_item_id", eng.remoteRootItemID),
 			)
 
-			items, newToken, err = eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.rootItemID, "")
+			items, newToken, err = eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.remoteRootItemID, "")
 			fullReconcile = true
 		}
 		if err == nil {
-			events := convertRootedSubtreeItems(ctx, items, eng.rootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
+			events := convertMountRootItems(ctx, items, eng.remoteRootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
 			if fullReconcile {
-				events = append(events, detectRootedSubtreeOrphans(items, eng.driveID, bl)...)
+				events = append(events, detectMountRootOrphans(items, eng.driveID, bl)...)
 			}
 
 			return events, newToken, remoteObservationModeDelta, nil
 		}
 
-		if eng.recursiveLister == nil || !shouldFallbackRootedSubtreeDelta(err) {
-			return nil, "", remoteObservationModeDelta, fmt.Errorf("sync: rooted-subtree delta: %w", err)
+		if eng.recursiveLister == nil || !shouldFallbackMountRootDelta(err) {
+			return nil, "", remoteObservationModeDelta, fmt.Errorf("sync: mount-root delta: %w", err)
 		}
 
-		eng.logger.Warn("rooted-subtree delta unsupported or not ready, falling back to recursive listing",
+		eng.logger.Warn("mount-root delta unsupported or not ready, falling back to recursive listing",
 			slog.String("drive_id", eng.driveID.String()),
-			slog.String("root_item_id", eng.rootItemID),
+			slog.String("remote_root_item_id", eng.remoteRootItemID),
 			slog.String("error", err.Error()),
 		)
 	}
 
 	if eng.recursiveLister == nil {
-		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: recursive lister not available for rooted subtree %s", eng.rootItemID)
+		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: recursive lister not available for mount root %s", eng.remoteRootItemID)
 	}
 
-	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, eng.driveID, eng.rootItemID)
+	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, eng.driveID, eng.remoteRootItemID)
 	if err != nil {
-		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: rooted-subtree recursive listing: %w", err)
+		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: mount-root recursive listing: %w", err)
 	}
 
-	events := convertRootedSubtreeItems(ctx, items, eng.rootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
-	events = append(events, detectRootedSubtreeOrphans(items, eng.driveID, bl)...)
+	events := convertMountRootItems(ctx, items, eng.remoteRootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
+	events = append(events, detectMountRootOrphans(items, eng.driveID, bl)...)
 
 	return events, "", remoteObservationModeEnumerate, nil
 }
 
-func convertRootedSubtreeItems(
+func convertMountRootItems(
 	ctx context.Context,
 	items []graph.Item,
-	rootItemID string,
+	remoteRootItemID string,
 	remoteDriveID driveid.ID,
 	bl *Baseline,
 	logger *slog.Logger,
 	itemClient ItemClient,
 ) []ChangeEvent {
 	converter := NewPrimaryConverter(bl, remoteDriveID, logger, nil, itemClient)
-	converter.RootItemID = rootItemID
+	converter.RemoteRootItemID = remoteRootItemID
 	return converter.ConvertItems(ctx, items)
 }
 
-func shouldFallbackRootedSubtreeDelta(err error) bool {
+func shouldFallbackMountRootDelta(err error) bool {
 	return errors.Is(err, graph.ErrMethodNotAllowed) || errors.Is(err, graph.ErrNotFound)
 }
 
-func detectRootedSubtreeOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []ChangeEvent {
+func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []ChangeEvent {
 	seen := make(map[string]struct{}, len(items))
 	for i := range items {
 		seen[items[i].ID] = struct{}{}
@@ -127,7 +127,7 @@ func (flow *engineFlow) commitObservedItems(
 	return nil
 }
 
-func (rt *watchRuntime) watchRootedSubtreeRemote(
+func (rt *watchRuntime) watchMountRootRemote(
 	ctx context.Context,
 	bl *Baseline,
 	batches chan<- remoteObservationBatch,
@@ -141,16 +141,16 @@ func (rt *watchRuntime) watchRootedSubtreeRemote(
 	bo.SetMaxOverride(interval)
 
 	for {
-		observationBatch, err := rt.executeRootedSubtreeObservation(ctx, bl, false)
+		observationBatch, err := rt.executeMountRootObservation(ctx, bl, false)
 		if err != nil {
-			stop, handleErr := rt.handleRootedSubtreePollError(ctx, bo, err)
+			stop, handleErr := rt.handleMountRootPollError(ctx, bo, err)
 			if handleErr != nil || stop {
 				return handleErr
 			}
 			continue
 		}
-		if err := rt.handleRootedSubtreeObservationResult(ctx, batches, interval, bo, &observationBatch); err != nil {
-			if rootedSubtreeWatchStopped(ctx, err) {
+		if err := rt.handleMountRootObservationResult(ctx, batches, interval, bo, &observationBatch); err != nil {
+			if mountRootWatchStopped(ctx, err) {
 				return nil
 			}
 			return err
@@ -158,30 +158,30 @@ func (rt *watchRuntime) watchRootedSubtreeRemote(
 	}
 }
 
-func (rt *watchRuntime) handleRootedSubtreeObservationResult(
+func (rt *watchRuntime) handleMountRootObservationResult(
 	ctx context.Context,
 	batches chan<- remoteObservationBatch,
 	interval time.Duration,
 	bo *retry.Backoff,
 	observationBatch *remoteObservationBatch,
 ) error {
-	if shouldSkipRootedSubtreeWatchBatch(observationBatch) {
+	if shouldSkipMountRootWatchBatch(observationBatch) {
 		bo.Reset()
-		stop, sleepErr := rt.sleepRootedSubtreeWatch(ctx, interval, "zero-event")
+		stop, sleepErr := rt.sleepMountRootWatch(ctx, interval, "zero-event")
 		if stop || sleepErr != nil {
 			return sleepErr
 		}
 		return nil
 	}
 
-	observationBatch.source = remoteObservationBatchRootedSubtree
+	observationBatch.source = remoteObservationBatchMountRoot
 	observationBatch.applyAck = make(chan error, 1)
-	if dispatchErr := rt.dispatchRootedSubtreeBatch(ctx, batches, observationBatch); dispatchErr != nil {
+	if dispatchErr := rt.dispatchMountRootBatch(ctx, batches, observationBatch); dispatchErr != nil {
 		return dispatchErr
 	}
 
 	bo.Reset()
-	stop, sleepErr := rt.sleepRootedSubtreeWatch(ctx, interval, "interval")
+	stop, sleepErr := rt.sleepMountRootWatch(ctx, interval, "interval")
 	if stop || sleepErr != nil {
 		return sleepErr
 	}
@@ -189,7 +189,7 @@ func (rt *watchRuntime) handleRootedSubtreeObservationResult(
 	return nil
 }
 
-func shouldSkipRootedSubtreeWatchBatch(batch *remoteObservationBatch) bool {
+func shouldSkipMountRootWatchBatch(batch *remoteObservationBatch) bool {
 	if batch == nil {
 		return true
 	}
@@ -200,27 +200,27 @@ func shouldSkipRootedSubtreeWatchBatch(batch *remoteObservationBatch) bool {
 		batch.observationMode != remoteObservationModeEnumerate
 }
 
-func (rt *watchRuntime) handleRootedSubtreePollError(
+func (rt *watchRuntime) handleMountRootPollError(
 	ctx context.Context,
 	bo *retry.Backoff,
 	err error,
 ) (bool, error) {
-	if rootedSubtreeWatchStopped(ctx, err) {
+	if mountRootWatchStopped(ctx, err) {
 		return true, nil
 	}
 
 	delay := bo.Next()
-	rt.engine.logger.Warn("rooted-subtree watch poll failed, backing off",
+	rt.engine.logger.Warn("mount-root watch poll failed, backing off",
 		slog.String("error", err.Error()),
 		slog.Duration("backoff", delay),
 		slog.String("drive_id", rt.engine.driveID.String()),
-		slog.String("root_item_id", rt.engine.rootItemID),
+		slog.String("remote_root_item_id", rt.engine.remoteRootItemID),
 	)
 
-	return rt.sleepRootedSubtreeWatch(ctx, delay, "backoff")
+	return rt.sleepMountRootWatch(ctx, delay, "backoff")
 }
 
-func (rt *watchRuntime) dispatchRootedSubtreeBatch(
+func (rt *watchRuntime) dispatchMountRootBatch(
 	ctx context.Context,
 	batches chan<- remoteObservationBatch,
 	batch *remoteObservationBatch,
@@ -232,13 +232,13 @@ func (rt *watchRuntime) dispatchRootedSubtreeBatch(
 	select {
 	case batches <- *batch:
 	case <-ctx.Done():
-		return fmt.Errorf("dispatch rooted-subtree watch batch: %w", ctx.Err())
+		return fmt.Errorf("dispatch mount-root watch batch: %w", ctx.Err())
 	}
 
 	return batch.waitApplied(ctx)
 }
 
-func (rt *watchRuntime) sleepRootedSubtreeWatch(
+func (rt *watchRuntime) sleepMountRootWatch(
 	ctx context.Context,
 	delay time.Duration,
 	label string,
@@ -247,13 +247,13 @@ func (rt *watchRuntime) sleepRootedSubtreeWatch(
 	if sleepErr == nil {
 		return false, nil
 	}
-	if rootedSubtreeWatchStopped(ctx, sleepErr) {
+	if mountRootWatchStopped(ctx, sleepErr) {
 		return true, nil
 	}
 
-	return false, fmt.Errorf("rooted-subtree watch %s sleep: %w", label, sleepErr)
+	return false, fmt.Errorf("mount-root watch %s sleep: %w", label, sleepErr)
 }
 
-func rootedSubtreeWatchStopped(ctx context.Context, err error) bool {
+func mountRootWatchStopped(ctx context.Context, err error) bool {
 	return ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

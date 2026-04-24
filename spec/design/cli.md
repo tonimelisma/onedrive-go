@@ -55,8 +55,8 @@ are inserted, updated, pruned, and validated.
 
 There is no `resolve` command family anymore.
 
-Configured standalone rooted-subtree mounts keep `/` anchored at the configured
-mounted root, not the backing drive root. Path-oriented file operations such
+Configured standalone mount-root mounts keep `/` anchored at the configured
+mount root, not the backing drive root. Path-oriented file operations such
 as `mkdir` therefore walk and mutate only inside that configured subtree.
 
 ## Status And Read-Only Sync State
@@ -173,7 +173,7 @@ same guidance in one-shot and watch flows: pause that drive first, rerun with
 ...`. One-shot renders startup-ineligible drives through the shared startup
 message path, reports completed runs separately, and exits non-zero after
 reporting any affected drives. Watch mode warns immediately about each skipped
-drive and continues healthy drives unless none can start.
+drive and continues healthy mounts unless none can start.
 
 One-shot sync resolves the full selected drive set, but it validates only
 runnable non-paused drives before startup. Paused drives remain in the startup

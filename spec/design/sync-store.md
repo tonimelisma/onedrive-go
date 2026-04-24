@@ -53,7 +53,7 @@ model.
 - advances `observation_state.cursor`
 
 Each `remote_state` row persists the true owning remote `drive_id` seen during
-observation. `observation_state.mount_drive_id` identifies the remote drive
+observation. `observation_state.content_drive_id` identifies the remote drive
 for the mounted content root that owns the DB and cursor; it is not the
 durable owner of every remote row. If a later observation corrects a row's
 owning `drive_id` without changing path/hash/mtime metadata,
@@ -170,7 +170,7 @@ Read-only store helpers are intentionally narrow:
   query-scoped debug views such as per-path truth availability
 
 `remote_state` reads return the durable per-row `drive_id` from the table
-itself. Fallback mount drive IDs exist only for empty stores or absent per-row
+itself. Fallback content drive IDs exist only for empty stores or absent per-row
 durable state and must not overwrite a stored row owner on read.
 
 `remote_state` intentionally does not persist remote parent ancestry. Sparse

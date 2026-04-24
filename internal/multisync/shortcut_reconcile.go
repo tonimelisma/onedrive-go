@@ -28,7 +28,7 @@ type discoveredShortcutBinding struct {
 }
 
 const (
-	driveRootItemID           = "root"
+	driveRemoteRootItemID     = "root"
 	initialSeenFolderCapacity = 16
 )
 
@@ -106,7 +106,7 @@ func (o *Orchestrator) reconcileParentMount(
 	switch {
 	case parent.remoteRootItemID == "":
 		return o.reconcileParentMountDelta(ctx, inventory, parent, sessionView, rootPathPrefix, state, false)
-	case parent.rootedSubtreeDeltaCapable:
+	case parent.remoteRootDeltaCapable:
 		result, deltaErr := o.reconcileParentMountDelta(ctx, inventory, parent, sessionView, rootPathPrefix, state, true)
 		if deltaErr == nil {
 			return result, nil
@@ -350,12 +350,12 @@ func enumerateShortcutBindings(
 	parent *mountSpec,
 	rootPathPrefix string,
 ) ([]discoveredShortcutBinding, error) {
-	rootItemID := parent.remoteRootItemID
-	if rootItemID == "" {
-		rootItemID = driveRootItemID
+	remoteRootItemID := parent.remoteRootItemID
+	if remoteRootItemID == "" {
+		remoteRootItemID = driveRemoteRootItemID
 	}
 
-	queue := []string{rootItemID}
+	queue := []string{remoteRootItemID}
 	bindings := make([]discoveredShortcutBinding, 0)
 	seenFolders := make(map[string]struct{}, initialSeenFolderCapacity)
 
@@ -477,7 +477,7 @@ func shortcutRelativeLocalPath(rootPathPrefix string, item *graph.Item) (string,
 		return "", fmt.Errorf("shortcut placeholder path resolves to the mount root")
 	}
 	if !strings.HasPrefix(fullPath+"/", rootPrefix+"/") {
-		return "", fmt.Errorf("shortcut placeholder path %q escapes mounted root %q", fullPath, rootPrefix)
+		return "", fmt.Errorf("shortcut placeholder path %q escapes mount root %q", fullPath, rootPrefix)
 	}
 
 	return strings.TrimPrefix(fullPath, rootPrefix+"/"), nil
@@ -489,10 +489,10 @@ func mountedRootPathPrefix(ctx context.Context, session *driveops.Session, paren
 	}
 	root, err := session.Meta.GetItem(ctx, parent.remoteDriveID, parent.remoteRootItemID)
 	if err != nil {
-		return "", fmt.Errorf("resolving mounted root item %s for parent mount %s: %w", parent.remoteRootItemID, parent.mountID, err)
+		return "", fmt.Errorf("resolving mount root item %s for parent mount %s: %w", parent.remoteRootItemID, parent.mountID, err)
 	}
 	if root == nil || root.Name == "" {
-		return "", fmt.Errorf("resolving mounted root item %s for parent mount %s: missing folder name", parent.remoteRootItemID, parent.mountID)
+		return "", fmt.Errorf("resolving mount root item %s for parent mount %s: missing folder name", parent.remoteRootItemID, parent.mountID)
 	}
 
 	if root.ParentPath == "" {

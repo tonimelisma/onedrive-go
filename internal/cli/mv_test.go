@@ -21,7 +21,7 @@ type stubTS struct{}
 
 func (s stubTS) Token() (string, error) { return "test", nil }
 
-func makeTestSession(t *testing.T, handler http.Handler) *driveops.Session {
+func makeTestSession(t *testing.T, handler http.Handler) *driveops.MountSession {
 	t.Helper()
 
 	srv := httptest.NewServer(handler)
@@ -30,10 +30,10 @@ func makeTestSession(t *testing.T, handler http.Handler) *driveops.Session {
 	client := graph.MustNewClient(srv.URL, srv.Client(), stubTS{},
 		slog.New(slog.DiscardHandler), "test/1.0")
 
-	return &driveops.Session{
+	return driveops.NewMountSession(&driveops.Session{
 		Meta:    client,
 		DriveID: driveid.New("test-drive-id"),
-	}
+	}, "")
 }
 
 // --- resolveDest ---

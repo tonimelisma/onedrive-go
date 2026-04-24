@@ -63,7 +63,7 @@ type Action struct {
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked
 // after a 429 for this action. The engine currently scopes throttle blocks by
 // action drive, regardless of whether the sync drive is rooted at drive root
-// or below a rooted subtree.
+// or below a mount root.
 func (a *Action) ThrottleTargetKey() string {
 	if a == nil {
 		return ""

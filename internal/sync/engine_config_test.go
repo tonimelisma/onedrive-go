@@ -21,16 +21,16 @@ type configTestPathConvergenceStub struct {
 
 func testEngineMountConfig(syncDir string) *EngineMountConfig {
 	return &EngineMountConfig{
-		DBPath:                    filepath.Join(filepath.Dir(syncDir), "state.db"),
-		SyncRoot:                  syncDir,
-		DataDir:                   config.DefaultDataDir(),
-		DriveID:                   driveid.New("mount-drive-id"),
-		DriveType:                 driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents").DriveType(),
-		AccountEmail:              "mount-user@example.com",
-		RootItemID:                "mount-root-id",
-		RootedSubtreeDeltaCapable: false,
-		EnableWebsocket:           true,
-		LocalFilter:               LocalFilterConfig{},
+		DBPath:                 filepath.Join(filepath.Dir(syncDir), "state.db"),
+		SyncRoot:               syncDir,
+		DataDir:                config.DefaultDataDir(),
+		DriveID:                driveid.New("mount-drive-id"),
+		DriveType:              driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents").DriveType(),
+		AccountEmail:           "mount-user@example.com",
+		RemoteRootItemID:       "mount-root-id",
+		RemoteRootDeltaCapable: false,
+		EnableWebsocket:        true,
+		LocalFilter:            LocalFilterConfig{},
 		LocalRules: LocalObservationRules{
 			RejectSharePointRootForms: true,
 		},
@@ -45,7 +45,6 @@ func testEngineSession() *driveops.Session {
 		Meta:              &graph.Client{},
 		Transfer:          &graph.Client{},
 		DriveID:           driveid.New("session-drive-id"),
-		MountedRootItemID: "session-root-id",
 		AccountEmailValue: "session@example.com",
 	}
 }
@@ -72,7 +71,7 @@ func TestNewMountEngine_PropagatesOrdinaryMountConfig(t *testing.T) {
 
 	mountCfg := testEngineMountConfig(syncDir)
 	mountCfg.DriveType = driveid.MustCanonicalID("personal:test@example.com").DriveType()
-	mountCfg.RootItemID = ""
+	mountCfg.RemoteRootItemID = ""
 	mountCfg.EnableWebsocket = false
 	mountCfg.LocalRules = LocalObservationRules{}
 
@@ -85,7 +84,7 @@ func TestNewMountEngine_PropagatesOrdinaryMountConfig(t *testing.T) {
 	assert.Equal(t, mountCfg.SyncRoot, eng.syncRoot)
 	assert.Equal(t, mountCfg.DriveID, eng.driveID)
 	assert.Equal(t, mountCfg.DriveType, eng.driveType)
-	assert.Empty(t, eng.rootItemID)
+	assert.Empty(t, eng.remoteRootItemID)
 	assert.False(t, eng.enableWebsocket)
 	assert.False(t, eng.localRules.RejectSharePointRootForms)
 	assert.Equal(t, mountCfg.AccountEmail, eng.permHandler.accountEmail)
@@ -113,8 +112,8 @@ func TestNewMountEngine_PropagatesRootedMountConfig(t *testing.T) {
 	assert.Equal(t, mountCfg.SyncRoot, eng.syncRoot)
 	assert.Equal(t, mountCfg.DriveID, eng.driveID)
 	assert.Equal(t, mountCfg.DriveType, eng.driveType)
-	assert.Equal(t, mountCfg.RootItemID, eng.rootItemID)
-	assert.False(t, eng.rootedSubtreeDeltaCapable)
+	assert.Equal(t, mountCfg.RemoteRootItemID, eng.remoteRootItemID)
+	assert.False(t, eng.remoteRootDeltaCapable)
 	assert.True(t, eng.enableWebsocket)
 	assert.NotNil(t, eng.socketIOFetcher)
 	assert.NotNil(t, eng.driveVerifier)
@@ -140,7 +139,7 @@ func TestNewMountEngine_UsesMountConfigNotSessionResolvedFields(t *testing.T) {
 	mountCfg.DriveID = driveid.New("mount-owned-drive-id")
 	mountCfg.DriveType = driveid.MustCanonicalID("business:mount@example.com").DriveType()
 	mountCfg.AccountEmail = "mount-owner@example.com"
-	mountCfg.RootItemID = "mount-owned-root-id"
+	mountCfg.RemoteRootItemID = "mount-owned-root-id"
 	mountCfg.EnableWebsocket = false
 	mountCfg.LocalRules = LocalObservationRules{}
 
@@ -152,13 +151,16 @@ func TestNewMountEngine_UsesMountConfigNotSessionResolvedFields(t *testing.T) {
 
 	assert.Equal(t, mountCfg.DriveID, eng.driveID)
 	assert.Equal(t, mountCfg.DriveType, eng.driveType)
-	assert.Equal(t, mountCfg.RootItemID, eng.rootItemID)
+	assert.Equal(t, mountCfg.RemoteRootItemID, eng.remoteRootItemID)
 	assert.Equal(t, mountCfg.AccountEmail, eng.permHandler.accountEmail)
 	assert.False(t, eng.enableWebsocket)
 	assert.False(t, eng.localRules.RejectSharePointRootForms)
 	assert.NotEqual(t, session.DriveID, eng.driveID)
-	assert.NotEqual(t, session.MountedRootItemID, eng.rootItemID)
 	assert.NotEqual(t, session.AccountEmail(), eng.permHandler.accountEmail)
+
+	mountSession, ok := eng.execCfg.pathConvergence.(*driveops.MountSession)
+	require.True(t, ok)
+	assert.Equal(t, mountCfg.RemoteRootItemID, mountSession.RemoteRootItemID)
 }
 
 func TestNewMountEngine_RequiresSyncRoot(t *testing.T) {

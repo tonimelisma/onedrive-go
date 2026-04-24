@@ -436,15 +436,15 @@ func (flow *engineFlow) loadCurrentInputsTx(
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: reading observation state for remote_state: %w", err)
 	}
-	mountDriveID := observationState.MountDriveID
-	if mountDriveID.IsZero() {
-		mountDriveID = defaultDriveID
+	contentDriveID := observationState.ContentDriveID
+	if contentDriveID.IsZero() {
+		contentDriveID = defaultDriveID
 	}
 	remoteRows, err := queryRemoteStateRowsWithRunner(
 		ctx,
 		tx,
 		`SELECT `+sqlSelectRemoteStateCols+` FROM remote_state`,
-		mountDriveID,
+		contentDriveID,
 	)
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: listing remote_state rows: %w", err)

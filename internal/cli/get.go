@@ -170,7 +170,7 @@ type downloadState struct {
 func downloadFolder(
 	cmd *cobra.Command,
 	cc *CLIContext,
-	session *driveops.Session,
+	session *driveops.MountSession,
 	remotePath, localPath string,
 ) error {
 	ctx := cmd.Context()
@@ -222,7 +222,7 @@ func downloadFolder(
 	return nil
 }
 
-func countRemoteFiles(ctx context.Context, session *driveops.Session, remotePath string, state *downloadState) error {
+func countRemoteFiles(ctx context.Context, session *driveops.MountSession, remotePath string, state *downloadState) error {
 	children, err := session.ListChildren(ctx, remotePath)
 	if err != nil {
 		return fmt.Errorf("listing %q: %w", remotePath, err)
@@ -248,7 +248,7 @@ func countRemoteFiles(ctx context.Context, session *driveops.Session, remotePath
 func downloadRecursive(
 	ctx context.Context,
 	cc *CLIContext,
-	session *driveops.Session,
+	session *driveops.MountSession,
 	tm *driveops.TransferManager,
 	state *downloadState,
 	remotePath, localPath string,

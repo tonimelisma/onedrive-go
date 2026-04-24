@@ -53,7 +53,7 @@ type destInfo struct {
 // file's ID so the caller can delete it before the operation.
 func resolveDest(
 	ctx context.Context,
-	session *driveops.Session,
+	session *driveops.MountSession,
 	destPath, sourceName string,
 	force bool,
 ) (info destInfo, err error) {

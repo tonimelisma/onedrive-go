@@ -12,9 +12,9 @@ const (
 type remoteObservationBatchSource string
 
 const (
-	remoteObservationBatchPrimaryWatch  remoteObservationBatchSource = "primary_watch"
-	remoteObservationBatchRootedSubtree remoteObservationBatchSource = "rooted_subtree_watch"
-	remoteObservationBatchFullRefresh   remoteObservationBatchSource = "full_refresh"
+	remoteObservationBatchPrimaryWatch remoteObservationBatchSource = "primary_watch"
+	remoteObservationBatchMountRoot    remoteObservationBatchSource = "mount_root_watch"
+	remoteObservationBatchFullRefresh  remoteObservationBatchSource = "full_refresh"
 )
 
 type remoteObservationBatch struct {
@@ -115,8 +115,8 @@ func buildPrimaryWatchBatch(
 	return batch
 }
 
-func (e *Engine) preferredRootedSubtreeObservationMode() remoteObservationMode {
-	if e.rootedSubtreeDeltaSupported() {
+func (e *Engine) preferredMountRootObservationMode() remoteObservationMode {
+	if e.mountRootDeltaSupported() {
 		return remoteObservationModeDelta
 	}
 
@@ -128,8 +128,8 @@ func (flow *engineFlow) executePrimaryRootObservation(
 	bl *Baseline,
 	fullReconcile bool,
 ) (remoteObservationBatch, error) {
-	if flow.engine.hasRootedSubtree() {
-		return flow.executeRootedSubtreeObservation(ctx, bl, fullReconcile)
+	if flow.engine.hasRemoteMountRoot() {
+		return flow.executeMountRootObservation(ctx, bl, fullReconcile)
 	}
 
 	return flow.executeDriveRootObservation(ctx, bl, fullReconcile)
@@ -185,12 +185,12 @@ func (flow *engineFlow) executeDriveRootObservation(
 	), err
 }
 
-func (flow *engineFlow) executeRootedSubtreeObservation(
+func (flow *engineFlow) executeMountRootObservation(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
 ) (remoteObservationBatch, error) {
-	events, token, mode, err := flow.observeRootedSubtreeRemote(ctx, bl, fullReconcile)
+	events, token, mode, err := flow.observeMountRootRemote(ctx, bl, fullReconcile)
 	if err != nil && isObservationRemoteReadDenied(err) {
 		return buildRemoteObservationBatch(
 			flow.engine,

@@ -31,14 +31,14 @@ const (
 
 // ListRemoteState returns the current remote mirror rows.
 func (m *SyncStore) ListRemoteState(ctx context.Context) ([]RemoteStateRow, error) {
-	mountDriveID, err := m.mountDriveIDForRead(ctx, driveid.ID{})
+	contentDriveID, err := m.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
-		return nil, fmt.Errorf("sync: reading mount drive for remote_state: %w", err)
+		return nil, fmt.Errorf("sync: reading content drive for remote_state: %w", err)
 	}
 
 	return queryRemoteStateRowsWithRunner(ctx, m.db,
 		`SELECT `+sqlSelectRemoteStateCols+` FROM remote_state`,
-		mountDriveID,
+		contentDriveID,
 	)
 }
 
@@ -46,7 +46,7 @@ func queryRemoteStateRowsWithRunner(
 	ctx context.Context,
 	runner sqlTxRunner,
 	query string,
-	mountDriveID driveid.ID,
+	contentDriveID driveid.ID,
 	args ...any,
 ) ([]RemoteStateRow, error) {
 	rows, err := runner.QueryContext(ctx, query, args...)
@@ -74,7 +74,7 @@ func queryRemoteStateRowsWithRunner(
 			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
 		}
 
-		row.DriveID = remoteStateDriveID(rawDriveID, mountDriveID)
+		row.DriveID = remoteStateDriveID(rawDriveID, contentDriveID)
 		row.Hash = hash.String
 		row.ETag = etag.String
 
@@ -102,16 +102,16 @@ func (m *SyncStore) getRemoteStateRow(
 	arg string,
 	contextLabel string,
 ) (*RemoteStateRow, bool, error) {
-	mountDriveID, err := m.mountDriveIDForRead(ctx, driveID)
+	contentDriveID, err := m.contentDriveIDForRead(ctx, driveID)
 	if err != nil {
-		return nil, false, fmt.Errorf("sync: reading mount drive for %s: %w", contextLabel, err)
+		return nil, false, fmt.Errorf("sync: reading content drive for %s: %w", contextLabel, err)
 	}
-	if matchErr := ensureMatchingMountDriveID(driveID, mountDriveID); matchErr != nil {
+	if matchErr := ensureMatchingContentDriveID(driveID, contentDriveID); matchErr != nil {
 		return nil, false, matchErr
 	}
 
 	row, err := scanRemoteStateRowWithQuerier(
-		mountDriveID,
+		contentDriveID,
 		func(dest ...any) error {
 			return m.db.QueryRowContext(ctx, query, arg).Scan(dest...)
 		},

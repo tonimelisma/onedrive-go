@@ -13,10 +13,10 @@ const (
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
 	//
-	// Generation 13 renames the observation-state owner from configured-drive
-	// vocabulary to mount-owned vocabulary. Store schema changes remain
-	// reset-only instead of migratable while the app is pre-launch.
-	currentSyncStoreGeneration = 13
+	// Generation 14 renames the observation-state remote owner to
+	// content-drive vocabulary. Store schema changes remain reset-only instead
+	// of migratable while the app is pre-launch.
+	currentSyncStoreGeneration = 14
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS baseline (
 CREATE INDEX IF NOT EXISTS idx_baseline_parent ON baseline(parent_id);
 
 CREATE TABLE IF NOT EXISTS observation_state (
-    mount_drive_id         TEXT    NOT NULL DEFAULT '',
+    content_drive_id         TEXT    NOT NULL DEFAULT '',
     cursor                      TEXT    NOT NULL DEFAULT '',
     next_full_remote_refresh_at INTEGER NOT NULL DEFAULT 0
 );
@@ -121,7 +121,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"local_size", "remote_size", "local_mtime", "remote_mtime", "etag",
 		},
 		"observation_state": {
-			"mount_drive_id", "cursor", "next_full_remote_refresh_at",
+			"content_drive_id", "cursor", "next_full_remote_refresh_at",
 		},
 		"remote_state": {
 			"drive_id", "item_id", "path", "item_type", "hash", "size", "mtime", "etag",

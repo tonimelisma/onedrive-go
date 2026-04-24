@@ -85,15 +85,15 @@ engine boundary; there is no extra exported builder layer above
 `EngineMountConfig`, and `engineInputs` remains an internal seam for focused
 engine tests rather than a parallel production construction model.
 
-For rooted-subtree runtimes, the engine also carries the configured
-`rootItemID`. That root item defines the remote boundary for scoped
+For mount-root runtimes, the engine also carries the configured
+`remoteRootItemID`. That root item defines the remote boundary for scoped
 observation, planning, and execution. Planner and executor consume that
 engine-owned root context directly; ordinary actions do not re-thread
-per-action target-root overrides. Rooted-subtree delta capability is
+per-action target-root overrides. Mount-root delta capability is
 resolved in config today and passed into the engine as construction input; the
-engine does not reopen catalog state just to decide whether a rooted subtree
+engine does not reopen catalog state just to decide whether a mount root
 should try folder delta. Today, separately configured shared folders happen to
-use this rooted-subtree engine path.
+use this mount-root engine path.
 
 Permission handling is intentionally split three ways:
 
@@ -113,7 +113,7 @@ blocked retry work, activate a timed scope, or fall back to generic result
 handling.
 
 The remote permission probe walks boundaries directly from the engine-owned
-`driveID` and `rootItemID`. There is no separate remote-root carrier object;
+`driveID` and `remoteRootItemID`. There is no separate remote-root carrier object;
 the root item ID is the only special case, and all ancestor walking uses the
 same boundary-path helpers the probe already owns.
 
@@ -195,7 +195,7 @@ same outbox to a second shutdown-completion pass.
 
 Full-remote-refresh cadence is restart-safe even when a full remote refresh
 returns no delta cursor. The engine still advances the persisted cadence in
-`observation_state` so enumerate-only and rooted-subtree sessions do not fall
+`observation_state` so enumerate-only and mount-root sessions do not fall
 into back-to-back expensive full refreshes.
 
 That cadence is capability-driven, not websocket-driven:
@@ -208,17 +208,17 @@ do not replace delta polling and they do not change the full-refresh cadence.
 
 If watch mode shortens `observation_state.next_full_remote_refresh_at` after
 startup, it must rearm the in-memory timer in that same control path.
-Rooted-subtree enumerate fallback therefore clamps the persisted deadline and
+Mount-root enumerate fallback therefore clamps the persisted deadline and
 immediately rebuilds the active timer instead of waiting for a later full
 refresh commit.
 
 In this increment, "degraded" means exactly "running without delta." The main
-drive-root watch path remains delta-based. Rooted-subtree watch chooses its
+drive-root watch path remains delta-based. Mount-root watch chooses its
 mode from the config-resolved capability surface:
 
-- business/sharepoint rooted subtrees skip folder delta and use recursive
+- business/sharepoint mount roots skip folder delta and use recursive
   enumeration
-- personal rooted subtrees try folder delta first and retry it on later passes
+- personal mount roots try folder delta first and retry it on later passes
   after any temporary enumerate fallback
 
 ## Watch Mode
@@ -365,19 +365,19 @@ boundary too, but the fingerprint itself must stay raw-only and must not
 depend on the current human-readable breakdown wording. The store does not own
 grouped watch-condition projections or watch-specific presentation.
 
-## Drive-Root And Rooted-Subtree Runtime Shapes
+## Drive-Root And Mount-Root Runtime Shapes
 
 The engine supports two runtime shapes:
 
 - drive-root sessions rooted at the remote drive root
-- rooted-subtree sessions rooted below the remote drive root
+- mount-root sessions rooted below the remote drive root
 
-The constructor chooses the runtime shape from `EngineMountConfig.RootItemID`.
-A blank `RootItemID` means drive-root observation and execution. A non-blank
-`RootItemID` means the engine must stay scoped below that remote boundary for
+The constructor chooses the runtime shape from `EngineMountConfig.RemoteRootItemID`.
+A blank `RemoteRootItemID` means drive-root observation and execution. A non-blank
+`RemoteRootItemID` means the engine must stay scoped below that remote boundary for
 observation, planning, and execution.
 
-Today, separately configured shared folders happen to use the rooted-subtree
+Today, separately configured shared folders happen to use the mount-root
 path, but that product surface should not be confused with the engine's
 internal runtime model.
 

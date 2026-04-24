@@ -76,12 +76,12 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func mkdirStartParentID(session *driveops.Session) string {
-	if session == nil || session.MountedRootItemID == "" {
+func mkdirStartParentID(session *driveops.MountSession) string {
+	if session == nil || session.RemoteRootItemID == "" {
 		return "root"
 	}
 
-	return session.MountedRootItemID
+	return session.RemoteRootItemID
 }
 
 // printMkdirJSON writes the mkdir command's JSON output to w.

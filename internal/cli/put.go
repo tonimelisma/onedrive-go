@@ -170,7 +170,7 @@ type uploadWalkState struct {
 func uploadFolder(
 	cmd *cobra.Command,
 	cc *CLIContext,
-	session *driveops.Session,
+	session *driveops.MountSession,
 	localPath, remotePath string,
 ) error {
 	ctx := cmd.Context()
@@ -298,7 +298,7 @@ func isFatalUploadWalkError(err error) bool {
 func uploadWalkEntry(
 	ctx context.Context,
 	cc *CLIContext,
-	session *driveops.Session,
+	session *driveops.MountSession,
 	tm *driveops.TransferManager,
 	state *uploadWalkState,
 	localRoot, remotePath, path string,
@@ -337,7 +337,7 @@ func uploadWalkEntry(
 func uploadFileEntry(
 	ctx context.Context,
 	cc *CLIContext,
-	session *driveops.Session,
+	session *driveops.MountSession,
 	tm *driveops.TransferManager,
 	state *uploadWalkState,
 	localRoot, remotePath, path string,

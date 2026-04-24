@@ -30,7 +30,7 @@ func TestMkdirStartParentID(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, "root", mkdirStartParentID(nil))
-	assert.Equal(t, "root", mkdirStartParentID(&driveops.Session{}))
-	assert.Equal(t, "root", mkdirStartParentID(&driveops.Session{MountedRootItemID: "root"}))
-	assert.Equal(t, "shared-root-id", mkdirStartParentID(&driveops.Session{MountedRootItemID: "shared-root-id"}))
+	assert.Equal(t, "root", mkdirStartParentID(driveops.NewMountSession(&driveops.Session{}, "")))
+	assert.Equal(t, "root", mkdirStartParentID(driveops.NewMountSession(&driveops.Session{}, "root")))
+	assert.Equal(t, "shared-root-id", mkdirStartParentID(driveops.NewMountSession(&driveops.Session{}, "shared-root-id")))
 }

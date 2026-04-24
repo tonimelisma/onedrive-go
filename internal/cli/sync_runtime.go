@@ -75,21 +75,21 @@ func standaloneMountConfigFromResolvedDrive(
 	}
 
 	return multisync.StandaloneMountConfig{
-		SelectionIndex:            selectionIndex,
-		CanonicalID:               rd.CanonicalID,
-		DisplayName:               rd.DisplayName,
-		SyncRoot:                  rd.SyncDir,
-		StatePath:                 statePath,
-		RemoteDriveID:             rd.DriveID,
-		RemoteRootItemID:          rd.RootItemID,
-		TokenOwnerCanonical:       tokenOwnerCanonical,
-		AccountEmail:              accountEmail,
-		Paused:                    rd.Paused,
-		EnableWebsocket:           rd.Websocket,
-		RootedSubtreeDeltaCapable: config.RootedSubtreeDeltaCapableForTokenOwner(tokenOwnerCanonical),
-		TransferWorkers:           rd.TransferWorkers,
-		CheckWorkers:              rd.CheckWorkers,
-		MinFreeSpaceBytes:         minFreeSpace,
+		SelectionIndex:         selectionIndex,
+		CanonicalID:            rd.CanonicalID,
+		DisplayName:            rd.DisplayName,
+		SyncRoot:               rd.SyncDir,
+		StatePath:              statePath,
+		RemoteDriveID:          rd.DriveID,
+		RemoteRootItemID:       rd.RemoteRootItemID,
+		TokenOwnerCanonical:    tokenOwnerCanonical,
+		AccountEmail:           accountEmail,
+		Paused:                 rd.Paused,
+		EnableWebsocket:        rd.Websocket,
+		RemoteRootDeltaCapable: config.RemoteRootDeltaCapableForTokenOwner(tokenOwnerCanonical),
+		TransferWorkers:        rd.TransferWorkers,
+		CheckWorkers:           rd.CheckWorkers,
+		MinFreeSpaceBytes:      minFreeSpace,
 	}, nil
 }
 

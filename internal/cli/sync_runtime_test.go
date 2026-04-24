@@ -140,11 +140,11 @@ func TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields
 	t.Parallel()
 
 	first := &config.ResolvedDrive{
-		CanonicalID: driveid.MustCanonicalID("personal:first@example.com"),
-		DisplayName: "First",
-		SyncDir:     filepath.Join(t.TempDir(), "first"),
-		DriveID:     driveid.New("first-drive"),
-		RootItemID:  "first-root",
+		CanonicalID:      driveid.MustCanonicalID("personal:first@example.com"),
+		DisplayName:      "First",
+		SyncDir:          filepath.Join(t.TempDir(), "first"),
+		DriveID:          driveid.New("first-drive"),
+		RemoteRootItemID: "first-root",
 		TransfersConfig: config.TransfersConfig{
 			TransferWorkers: 7,
 			CheckWorkers:    8,
@@ -172,18 +172,18 @@ func TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields
 	assert.Equal(t, first.SyncDir, mounts[0].SyncRoot)
 	assert.Equal(t, first.StatePath(), mounts[0].StatePath)
 	assert.Equal(t, first.DriveID, mounts[0].RemoteDriveID)
-	assert.Equal(t, first.RootItemID, mounts[0].RemoteRootItemID)
+	assert.Equal(t, first.RemoteRootItemID, mounts[0].RemoteRootItemID)
 	assert.Equal(t, first.CanonicalID, mounts[0].TokenOwnerCanonical)
 	assert.Equal(t, first.CanonicalID.Email(), mounts[0].AccountEmail)
 	assert.True(t, mounts[0].EnableWebsocket)
-	assert.True(t, mounts[0].RootedSubtreeDeltaCapable)
+	assert.True(t, mounts[0].RemoteRootDeltaCapable)
 	assert.Equal(t, 7, mounts[0].TransferWorkers)
 	assert.Equal(t, 8, mounts[0].CheckWorkers)
 	assert.Equal(t, int64(3*1024*1024), mounts[0].MinFreeSpaceBytes)
 
 	assert.Equal(t, 1, mounts[1].SelectionIndex)
 	assert.True(t, mounts[1].Paused)
-	assert.False(t, mounts[1].RootedSubtreeDeltaCapable)
+	assert.False(t, mounts[1].RemoteRootDeltaCapable)
 }
 
 // Validates: R-2.8.1
@@ -202,11 +202,11 @@ func TestStandaloneMountSelectionFromResolvedDrives_PrefersTokenOwnerAccountEmai
 	}))
 
 	drive := &config.ResolvedDrive{
-		CanonicalID: sharedCID,
-		DisplayName: "Shared",
-		SyncDir:     t.TempDir(),
-		DriveID:     driveid.New("remote-drive"),
-		RootItemID:  "remote-root",
+		CanonicalID:      sharedCID,
+		DisplayName:      "Shared",
+		SyncDir:          t.TempDir(),
+		DriveID:          driveid.New("remote-drive"),
+		RemoteRootItemID: "remote-root",
 	}
 
 	selection := standaloneMountSelectionFromResolvedDrives([]*config.ResolvedDrive{drive})
@@ -254,10 +254,10 @@ func TestStandaloneMountSelectionFromResolvedDrives_TokenOwnerFailureIsMountLoca
 	}))
 
 	drive := &config.ResolvedDrive{
-		CanonicalID: sharedCID,
-		SyncDir:     t.TempDir(),
-		DriveID:     driveid.New("remote-drive"),
-		RootItemID:  "remote-root",
+		CanonicalID:      sharedCID,
+		SyncDir:          t.TempDir(),
+		DriveID:          driveid.New("remote-drive"),
+		RemoteRootItemID: "remote-root",
 	}
 
 	selection := standaloneMountSelectionFromResolvedDrives([]*config.ResolvedDrive{drive})
@@ -418,7 +418,7 @@ func TestRunSyncDaemonWithFactory_CreatesMissingSyncDirBeforeOrchestrator(t *tes
 	assert.True(t, called)
 }
 
-func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoDriveStarts(t *testing.T) {
+func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoMountStarts(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")

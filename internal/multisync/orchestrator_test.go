@@ -109,7 +109,7 @@ func overlayConfiguredTestMount(mount *StandaloneMountConfig, configured *Standa
 	mount.AccountEmail = configured.AccountEmail
 	mount.Paused = configured.Paused
 	mount.EnableWebsocket = configured.EnableWebsocket
-	mount.RootedSubtreeDeltaCapable = configured.RootedSubtreeDeltaCapable
+	mount.RemoteRootDeltaCapable = configured.RemoteRootDeltaCapable
 	mount.TransferWorkers = configured.TransferWorkers
 	mount.CheckWorkers = configured.CheckWorkers
 	mount.MinFreeSpaceBytes = configured.MinFreeSpaceBytes
@@ -129,8 +129,8 @@ func overlayConfiguredTestMount(mount *StandaloneMountConfig, configured *Standa
 	if original.EnableWebsocket {
 		mount.EnableWebsocket = true
 	}
-	if original.RootedSubtreeDeltaCapable {
-		mount.RootedSubtreeDeltaCapable = true
+	if original.RemoteRootDeltaCapable {
+		mount.RemoteRootDeltaCapable = true
 	}
 	if original.TransferWorkers != 0 {
 		mount.TransferWorkers = original.TransferWorkers
@@ -197,21 +197,21 @@ func testStandaloneMountsFromConfig(cfg *config.Config) (StandaloneMountSelectio
 		}
 
 		mounts = append(mounts, StandaloneMountConfig{
-			SelectionIndex:            i,
-			CanonicalID:               cid,
-			DisplayName:               displayName,
-			SyncRoot:                  drive.SyncDir,
-			StatePath:                 config.DriveStatePath(cid),
-			RemoteDriveID:             remoteDriveID,
-			RemoteRootItemID:          cid.SourceItemID(),
-			TokenOwnerCanonical:       tokenOwner,
-			AccountEmail:              accountEmail,
-			Paused:                    drive.IsPaused(time.Now()),
-			EnableWebsocket:           cfg.Websocket,
-			RootedSubtreeDeltaCapable: config.RootedSubtreeDeltaCapableForTokenOwner(tokenOwner),
-			TransferWorkers:           cfg.TransferWorkers,
-			CheckWorkers:              cfg.CheckWorkers,
-			MinFreeSpaceBytes:         minFreeSpace,
+			SelectionIndex:         i,
+			CanonicalID:            cid,
+			DisplayName:            displayName,
+			SyncRoot:               drive.SyncDir,
+			StatePath:              config.DriveStatePath(cid),
+			RemoteDriveID:          remoteDriveID,
+			RemoteRootItemID:       cid.SourceItemID(),
+			TokenOwnerCanonical:    tokenOwner,
+			AccountEmail:           accountEmail,
+			Paused:                 drive.IsPaused(time.Now()),
+			EnableWebsocket:        cfg.Websocket,
+			RemoteRootDeltaCapable: config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
+			TransferWorkers:        cfg.TransferWorkers,
+			CheckWorkers:           cfg.CheckWorkers,
+			MinFreeSpaceBytes:      minFreeSpace,
 		})
 	}
 
@@ -346,14 +346,14 @@ func testStandaloneMount(t *testing.T, cidStr, displayName string) StandaloneMou
 	}
 
 	return StandaloneMountConfig{
-		CanonicalID:               cid,
-		DisplayName:               displayName,
-		SyncRoot:                  t.TempDir(),
-		StatePath:                 config.DriveStatePath(cid),
-		RemoteDriveID:             driveid.New("test-drive-id"),
-		TokenOwnerCanonical:       tokenOwner,
-		AccountEmail:              accountEmail,
-		RootedSubtreeDeltaCapable: config.RootedSubtreeDeltaCapableForTokenOwner(tokenOwner),
+		CanonicalID:            cid,
+		DisplayName:            displayName,
+		SyncRoot:               t.TempDir(),
+		StatePath:              config.DriveStatePath(cid),
+		RemoteDriveID:          driveid.New("test-drive-id"),
+		TokenOwnerCanonical:    tokenOwner,
+		AccountEmail:           accountEmail,
+		RemoteRootDeltaCapable: config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
 	}
 }
 
@@ -391,7 +391,7 @@ func TestNewOrchestrator_DefaultFactories(t *testing.T) {
 // --- RunOnce ---
 
 // Validates: R-2.4
-func TestRunOnce_ZeroDrives(t *testing.T) {
+func TestRunOnce_ZeroMounts(t *testing.T) {
 	cfg := testOrchestratorConfig(t)
 	orch := NewOrchestrator(cfg)
 
@@ -401,7 +401,7 @@ func TestRunOnce_ZeroDrives(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestRunOnce_OneDrive_Success(t *testing.T) {
+func TestRunOnce_OneMount_Success(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:test@example.com", "Test")
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -428,7 +428,7 @@ func TestRunOnce_OneDrive_Success(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
+func TestRunOnce_TwoMounts_OneFailsOneSucceeds(t *testing.T) {
 	rd1 := testStandaloneMount(t, "personal:fail@example.com", "Failing")
 	rd2 := testStandaloneMount(t, "personal:ok@example.com", "Working")
 	cfg := testOrchestratorConfig(t, rd1, rd2)
@@ -450,7 +450,7 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 	require.Len(t, result.Startup.Results, 2)
 	require.Len(t, result.Reports, 2)
 
-	// Find each drive's report by canonical ID.
+	// Find each mount's report by canonical ID.
 	var failReport, okMountReport *MountReport
 	for i := range result.Reports {
 		if result.Reports[i].Identity.CanonicalID == rd1.CanonicalID {
@@ -540,7 +540,7 @@ func TestRunOnce_PanicRecovery(t *testing.T) {
 }
 
 // Validates: R-2.8.5
-func TestPrepareDriveWork_ThreadsWebsocketConfig(t *testing.T) {
+func TestPrepareMountWork_ThreadsWebsocketConfig(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:websocket@example.com", "Websocket")
 	rd.EnableWebsocket = true
 	cfg := testOrchestratorConfig(t, rd)
@@ -660,7 +660,7 @@ func TestRunOnce_EngineFactoryError(t *testing.T) {
 }
 
 // Validates: R-6.10.7
-func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
+func TestRunOnce_EngineFactoryError_IsolatesAffectedMount(t *testing.T) {
 	rd1 := testStandaloneMount(t, "personal:storefail@example.com", "StoreFail")
 	rd2 := testStandaloneMount(t, "personal:healthy@example.com", "Healthy")
 	cfg := testOrchestratorConfig(t, rd1, rd2)
@@ -706,7 +706,7 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedDrive(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestRunOnce_TokenError_ReportsPerDrive(t *testing.T) {
+func TestRunOnce_TokenError_ReportsPerMount(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:notoken@example.com", "NoToken")
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
@@ -852,7 +852,7 @@ func (m *mockEngine) Close(context.Context) error {
 // --- RunWatch ---
 
 // Validates: R-2.4
-func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
+func TestOrchestrator_RunWatch_SingleMount(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:watch1@example.com", "Watch1")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
@@ -898,7 +898,7 @@ func TestOrchestrator_RunWatch_SingleDrive(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
+func TestOrchestrator_RunWatch_MultiMount(t *testing.T) {
 	rd1 := testStandaloneMount(t, "personal:multi1@example.com", "Multi1")
 	rd2 := testStandaloneMount(t, "personal:multi2@example.com", "Multi2")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
@@ -927,7 +927,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
-	// Wait until both drives have started.
+	// Wait until both mounts have started.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 2
 	}, 5*time.Second, 10*time.Millisecond)
@@ -942,7 +942,7 @@ func TestOrchestrator_RunWatch_MultiDrive(t *testing.T) {
 	}
 }
 
-func TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts(t *testing.T) {
+func TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts(t *testing.T) {
 	rd1 := testStandaloneMount(t, "personal:healthy@example.com", "Healthy")
 	rd2 := testStandaloneMount(t, "personal:reset@example.com", "Reset")
 	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
@@ -981,7 +981,7 @@ func TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts
 	select {
 	case <-watchStarted:
 	case <-time.After(5 * time.Second):
-		require.Fail(t, "RunWatch did not start healthy drive in time")
+		require.Fail(t, "RunWatch did not start healthy mount in time")
 	}
 
 	select {
@@ -1004,7 +1004,7 @@ func TestOrchestrator_RunWatch_SkipsIncompatibleStoreDriveWhenAnotherDriveStarts
 	}
 }
 
-func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoDriveStarts(t *testing.T) {
+func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoMountStarts(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:reset@example.com", "Reset")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
@@ -1025,7 +1025,7 @@ func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoDriveStarts(t *testing
 	assert.Equal(t, MountStartupIncompatibleStore, startupErr.Summary.Results[0].Status)
 }
 
-func TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused(t *testing.T) {
+func TestOrchestrator_RunWatch_ReturnsErrorWhenAllMountsPaused(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:paused@example.com", "Paused")
 	rd.Paused = true
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
@@ -1187,16 +1187,16 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
-	// Wait for first drive to start.
+	// Wait for first mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
 	}, 5*time.Second, 10*time.Millisecond)
 
-	// Add a second drive to the config and request a control-socket reload.
+	// Add a second mount to the config and request a control-socket reload.
 	writeTestConfigMulti(t, cfgPath, rd1.CanonicalID, rd1.SyncRoot, rd2CID, t.TempDir())
 	postControlReload(t, cfg.ControlSocketPath)
 
-	// Wait for the second drive to start.
+	// Wait for the second mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 2
 	}, 5*time.Second, 10*time.Millisecond)
@@ -1244,7 +1244,7 @@ func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
 		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
-	// Wait for both drives to start.
+	// Wait for both mounts to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 2
 	}, 5*time.Second, 10*time.Millisecond)
@@ -1253,7 +1253,7 @@ func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
 	writeTestConfigSingle(t, cfgPath, rd1.CanonicalID, rd1.SyncRoot)
 	postControlReload(t, cfg.ControlSocketPath)
 
-	// Wait for one runner to stop (the removed drive).
+	// Wait for one runner to stop (the removed mount).
 	require.Eventually(t, func() bool {
 		return stopped.Load() >= 1
 	}, 5*time.Second, 10*time.Millisecond)
@@ -1269,7 +1269,7 @@ func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
+func TestOrchestrator_Reload_PausedMount(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:pausetest@example.com", "PauseTest")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
@@ -1300,16 +1300,16 @@ func TestOrchestrator_Reload_PausedDrive(t *testing.T) {
 		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
-	// Wait for drive to start.
+	// Wait for mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
 	}, 5*time.Second, 10*time.Millisecond)
 
-	// Pause the drive and request a control-socket reload.
+	// Pause the mount and request a control-socket reload.
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
 	postControlReload(t, cfg.ControlSocketPath)
 
-	// The drive runner should stop.
+	// The mount runner should stop.
 	require.Eventually(t, func() bool {
 		return stopped.Load() >= 1
 	}, 5*time.Second, 10*time.Millisecond)
@@ -1354,7 +1354,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
-	// Wait for drive to start.
+	// Wait for mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
 	}, 5*time.Second, 10*time.Millisecond)
@@ -1365,8 +1365,8 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 
 	assert.Never(t, func() bool {
 		return started.Load() > 1
-	}, 200*time.Millisecond, 10*time.Millisecond, "drive should still be running after invalid config reload")
-	assert.Equal(t, int32(1), started.Load(), "drive should still be running after invalid config reload")
+	}, 200*time.Millisecond, 10*time.Millisecond, "mount should still be running after invalid config reload")
+	assert.Equal(t, int32(1), started.Load(), "mount should still be running after invalid config reload")
 
 	cancel()
 
@@ -1491,7 +1491,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
 
-	// Wait for drive to start.
+	// Wait for mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
 	}, 5*time.Second, 10*time.Millisecond)
@@ -1510,8 +1510,8 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 		return d.Paused == nil && d.PausedUntil == nil
 	}, 5*time.Second, 10*time.Millisecond)
 
-	assert.Equal(t, int32(0), stopped.Load(), "drive should NOT be stopped — expired pause is cleared, drive stays running")
-	assert.Equal(t, int32(1), started.Load(), "drive should NOT be restarted — it was already running")
+	assert.Equal(t, int32(0), stopped.Load(), "mount should NOT be stopped — expired pause is cleared, mount stays running")
+	assert.Equal(t, int32(1), started.Load(), "mount should NOT be restarted — the mount was already running")
 
 	// Verify paused keys were cleared from config file.
 	reloadedCfg, err := config.LoadOrDefault(cfgPath, slog.Default())
@@ -1531,13 +1531,13 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestOrchestrator_RunWatch_ZeroDrives(t *testing.T) {
+func TestOrchestrator_RunWatch_ZeroMounts(t *testing.T) {
 	cfg := testOrchestratorConfig(t)
 	orch := NewOrchestrator(cfg)
 
 	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no drives")
+	assert.Contains(t, err.Error(), "no standalone mounts")
 }
 
 // --- test config helpers ---

@@ -23,8 +23,8 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | --- | --- |
 | Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
-| Shared-root drives always preserve the canonical shared root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
-| Shared-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields` |
+| Standalone shared-folder drives always preserve the canonical remote root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
+| Mount-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 
@@ -215,14 +215,14 @@ suggestions. `ResolveDrive()` returns both `*ResolvedDrive` and `*Config` —
 the raw config is needed by shared drive token resolution.
 
 For `shared:email:sourceDriveID:sourceItemID` drives, `buildResolvedDrive`
-always preserves `RootItemID` from the canonical ID even when `DriveID` is
+always preserves `RemoteRootItemID` from the canonical ID even when `DriveID` is
 resolved from a catalog drive record. Catalog-backed shared drives therefore
-keep the configured shared-root observation boundary instead of silently
+keep the configured mount-root observation boundary instead of silently
 falling back to whole-drive observation.
 
-`buildResolvedDrive` also resolves `ResolvedDrive.SharedRootDeltaCapable`.
+`buildResolvedDrive` also resolves `ResolvedDrive.RemoteRootDeltaCapable`.
 That boolean is derived once from token-owner identity facts through the shared
-helper `RootedSubtreeDeltaCapableForTokenOwner(...)`:
+helper `RemoteRootDeltaCapableForTokenOwner(...)`:
 
 - personal owner account -> folder delta capable
 - business/sharepoint owner account -> enumerate only
@@ -232,7 +232,7 @@ helper `RootedSubtreeDeltaCapableForTokenOwner(...)`:
 The sync engine consumes that resolved boolean directly for configured
 standalone drives, while managed child mounts derive the same capability from
 their explicit token-owner identity. Runtime startup does not reload catalog
-metadata just to rediscover rooted-subtree delta support.
+metadata just to rediscover mount-root delta support.
 
 `websocket` is a live watch-mode control. When `websocket = true`, watch mode
 fetches a OneDrive Socket.IO endpoint and establishes an outbound websocket

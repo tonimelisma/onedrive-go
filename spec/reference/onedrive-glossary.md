@@ -19,18 +19,18 @@ The structured config identity string for a configured drive, such as
 ### Backing Drive ID
 
 The Microsoft Graph drive ID of the remote drive behind a configured drive.
-For shared-root drives this is still the sharer's real drive ID.
+For standalone shared-folder drives this is still the sharer's real drive ID.
 
 ### Drive Root
 
 The actual root of the backing drive in Microsoft Graph.
 
-### Shared Root
+### Mount Root
 
-The configured remote root item for a shared-root drive. This is below the
-backing drive root and is identified by `RootItemID`.
+The configured remote root item for a standalone mount. This can be below the
+backing drive root and is identified by `RemoteRootItemID`.
 
-### Shared-Root Drive
+### Standalone Shared-Folder Drive
 
 A separately configured shared folder added with `drive add`. It remains an
 explicit configured drive at the CLI/config edge, then compiles into its own
@@ -57,7 +57,7 @@ stores only the latest remote facts, not a per-row state machine.
 ### Primary Observation Cursor
 
 The one persisted remote observation cursor for a mount. It lives in
-`observation_state.cursor`; `observation_state.mount_drive_id` records the
+`observation_state.cursor`; `observation_state.content_drive_id` records the
 remote drive for the mounted content root that owns the cursor.
 
 ### Full Remote Refresh

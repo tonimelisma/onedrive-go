@@ -19,27 +19,27 @@ func TestRemoteRefreshIntervalForMode_CoversDegradedAndDefault(t *testing.T) {
 	assert.Equal(t, fullRemoteRefreshInterval, remoteRefreshIntervalForMode("unexpected"))
 }
 
-func TestMountDriveIDForRead_UsesFallbackAndCache(t *testing.T) {
+func TestContentDriveIDForRead_UsesFallbackAndCache(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	got, err := store.mountDriveIDForRead(ctx, driveid.ID{})
+	got, err := store.contentDriveIDForRead(ctx, driveid.ID{})
 	require.NoError(t, err)
 	assert.True(t, got.IsZero())
 
 	fallback := driveid.New(testDriveID)
-	got, err = store.mountDriveIDForRead(ctx, fallback)
+	got, err = store.contentDriveIDForRead(ctx, fallback)
 	require.NoError(t, err)
 	assert.Equal(t, fallback, got)
 
-	got, err = store.mountDriveIDForRead(ctx, driveid.ID{})
+	got, err = store.contentDriveIDForRead(ctx, driveid.ID{})
 	require.NoError(t, err)
 	assert.Equal(t, fallback, got)
 }
 
-func TestMountDriveIDForRead_ReadsPersistedValueFromDB(t *testing.T) {
+func TestContentDriveIDForRead_ReadsPersistedValueFromDB(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -54,18 +54,18 @@ func TestMountDriveIDForRead_ReadsPersistedValueFromDB(t *testing.T) {
 		assert.NoError(t, reopened.Close(context.Background()))
 	})
 
-	got, err := reopened.mountDriveIDForRead(ctx, driveid.ID{})
+	got, err := reopened.contentDriveIDForRead(ctx, driveid.ID{})
 	require.NoError(t, err)
 	assert.Equal(t, driveID, got)
-	assert.Equal(t, driveID, reopened.mountDriveID())
+	assert.Equal(t, driveID, reopened.contentDriveID())
 }
 
-func TestEnsureMatchingMountDriveID_RejectsMismatch(t *testing.T) {
+func TestEnsureMatchingContentDriveID_RejectsMismatch(t *testing.T) {
 	t.Parallel()
 
-	err := ensureMatchingMountDriveID(driveid.New("attempted"), driveid.New("configured"))
+	err := ensureMatchingContentDriveID(driveid.New("attempted"), driveid.New("configured"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "state DB drive mismatch")
+	assert.Contains(t, err.Error(), "state DB content drive mismatch")
 }
 
 func TestCommitObservationCursor_RejectsMismatchedDriveID(t *testing.T) {
@@ -78,7 +78,7 @@ func TestCommitObservationCursor_RejectsMismatchedDriveID(t *testing.T) {
 
 	err := store.CommitObservationCursor(ctx, driveid.New("drive-b"), "token-b")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "state DB drive mismatch")
+	assert.Contains(t, err.Error(), "state DB content drive mismatch")
 }
 
 func TestMarkFullRemoteRefresh_UpdatesNextDeadlineForLatestMode(t *testing.T) {
