@@ -23,6 +23,12 @@ architecture it owns:
 It does not own planning policy, execution policy, or a competing history/status
 model.
 
+It also does not own child shortcut lifecycle. A managed child mount marked
+`unavailable` in `mounts.json` is a control-plane namespace fact before engine
+construction: no child engine starts, no retry work is recorded, no block scope
+is created, and no observation issue is synthesized. Existing child state DBs
+remain on disk for later reactivation or explicit cleanup.
+
 ## Ownership Contract
 
 - Owns: SQLite truth, transactions, restart-safe rows, and narrow read helpers.
@@ -42,6 +48,7 @@ model.
 | --- | --- |
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
+| Child shortcut unavailable state is kept outside sync-store retry/block/observation tables by skipping engine construction before a child mount starts. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersParentSubtree` |
 
 ## Write Responsibilities
 

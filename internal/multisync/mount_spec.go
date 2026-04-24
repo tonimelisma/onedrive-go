@@ -76,15 +76,25 @@ type compiledMountSet struct {
 	Mounts          []*mountSpec
 	Skipped         []MountStartupResult
 	RemovedMountIDs []string
+	ProjectionMoves []childProjectionMove
 }
 
 type childMountCandidate struct {
-	namespaceID       mountID
-	relativeLocalPath string
-	record            config.MountRecord
-	mount             *mountSpec
-	contentRootKey    string
-	skipErr           error
+	namespaceID        mountID
+	relativeLocalPath  string
+	reservedLocalPaths []string
+	record             config.MountRecord
+	mount              *mountSpec
+	contentRootKey     string
+	skipErr            error
+}
+
+type childProjectionMove struct {
+	mountID               mountID
+	parentMountID         mountID
+	parentSyncRoot        string
+	fromRelativeLocalPath string
+	toRelativeLocalPath   string
 }
 
 func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, error) {
@@ -122,11 +132,18 @@ func compileRuntimeMountsForParents(
 		return nil, err
 	}
 	conflictedChildRoots := markChildProjectionConflicts(parents, candidatesByParent, standaloneByRoot)
-	finalMounts, skipped := assembleRuntimeMountSet(parents, candidatesByParent, conflictedChildRoots, unmatchedChildren, logger)
+	finalMounts, skipped, projectionMoves := assembleRuntimeMountSet(
+		parents,
+		candidatesByParent,
+		conflictedChildRoots,
+		unmatchedChildren,
+		logger,
+	)
 
 	return &compiledMountSet{
-		Mounts:  finalMounts,
-		Skipped: skipped,
+		Mounts:          finalMounts,
+		Skipped:         skipped,
+		ProjectionMoves: projectionMoves,
 	}, nil
 }
 
@@ -158,11 +175,6 @@ func buildChildMountCandidates(
 	records := sortedMountRecords(inventory)
 	for i := range records {
 		record := &records[i]
-		if record.State == config.MountStatePendingRemoval {
-			// Pending-removal records only drive cleanup; they no longer own a
-			// child runner or reserve the parent subtree during runtime compile.
-			continue
-		}
 		parent := parentByID[mountID(record.NamespaceID)]
 		if parent == nil {
 			unmatchedChildren = append(unmatchedChildren, *record)
@@ -221,9 +233,10 @@ func assembleRuntimeMountSet(
 	conflictedChildRoots map[string]struct{},
 	unmatchedChildren []config.MountRecord,
 	logger *slog.Logger,
-) ([]*mountSpec, []MountStartupResult) {
+) ([]*mountSpec, []MountStartupResult, []childProjectionMove) {
 	finalMounts := make([]*mountSpec, 0, len(parents))
 	skipped := make([]MountStartupResult, 0, len(unmatchedChildren))
+	projectionMoves := make([]childProjectionMove, 0)
 	nextIndex := 0
 	for _, parent := range parents {
 		parent.selectionIndex = nextIndex
@@ -248,17 +261,27 @@ func assembleRuntimeMountSet(
 			candidate.mount.selectionIndex = nextIndex
 			nextIndex++
 			parent.localSkipDirs = append(parent.localSkipDirs, candidate.relativeLocalPath)
+			parent.localSkipDirs = append(parent.localSkipDirs, candidate.reservedLocalPaths...)
 			if candidate.skipErr != nil {
 				skipped = append(skipped, skippedChildMountResult(candidate, parent.mountID, logger))
 				continue
 			}
 
+			for _, reservedPath := range candidate.reservedLocalPaths {
+				projectionMoves = append(projectionMoves, childProjectionMove{
+					mountID:               candidate.mount.mountID,
+					parentMountID:         parent.mountID,
+					parentSyncRoot:        parent.syncRoot,
+					fromRelativeLocalPath: reservedPath,
+					toRelativeLocalPath:   candidate.relativeLocalPath,
+				})
+			}
 			finalMounts = append(finalMounts, candidate.mount)
 		}
 	}
 
 	skipped = append(skipped, unmatchedChildStartupResults(unmatchedChildren, nextIndex)...)
-	return finalMounts, skipped
+	return finalMounts, skipped, projectionMoves
 }
 
 func skippedChildMountResult(candidate *childMountCandidate, parentID mountID, logger *slog.Logger) MountStartupResult {
@@ -376,12 +399,13 @@ func buildChildMountCandidate(parent *mountSpec, record *config.MountRecord) (*c
 	skipErr := childMountStateSkipError(record)
 
 	return &childMountCandidate{
-		namespaceID:       parent.mountID,
-		relativeLocalPath: record.RelativeLocalPath,
-		record:            *record,
-		mount:             child,
-		contentRootKey:    child.contentRootKey(),
-		skipErr:           skipErr,
+		namespaceID:        parent.mountID,
+		relativeLocalPath:  record.RelativeLocalPath,
+		reservedLocalPaths: append([]string(nil), record.ReservedLocalPaths...),
+		record:             *record,
+		mount:              child,
+		contentRootKey:     child.contentRootKey(),
+		skipErr:            skipErr,
 	}, nil
 }
 

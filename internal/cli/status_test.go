@@ -149,6 +149,7 @@ func TestBuildChildStatusMount_RendersLifecycleState(t *testing.T) {
 				RemoteDriveID:       "remote-drive",
 				RemoteItemID:        "remote-root",
 				State:               state,
+				StateReason:         statusLifecycleReasonForTest(state),
 			}
 			mount := buildChildStatusMount(
 				config.Drive{SyncDir: "/tmp/sync-root"},
@@ -157,8 +158,47 @@ func TestBuildChildStatusMount_RendersLifecycleState(t *testing.T) {
 			)
 
 			assert.Equal(t, string(state), mount.State)
+			assert.Equal(t, record.StateReason, mount.StateReason)
+			assert.NotEmpty(t, mount.StateDetail)
 		})
 	}
+}
+
+func statusLifecycleReasonForTest(state config.MountState) string {
+	switch state {
+	case config.MountStateActive:
+		return ""
+	case config.MountStateConflict:
+		return config.MountStateReasonDuplicateContentRoot
+	case config.MountStateUnavailable:
+		return config.MountStateReasonShortcutBindingUnavailable
+	case config.MountStatePendingRemoval:
+		return config.MountStateReasonShortcutRemoved
+	default:
+		return ""
+	}
+}
+
+// Validates: R-2.10.1
+func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := printMountStatus(&buf, &statusMount{
+		MountID:        "child-docs",
+		NamespaceID:    "personal:alice@example.com",
+		ProjectionKind: statusProjectionChild,
+		DisplayName:    "Docs",
+		SyncDir:        "/tmp/sync-root/Shortcuts/Docs",
+		State:          string(config.MountStateUnavailable),
+		StateReason:    config.MountStateReasonShortcutBindingUnavailable,
+		StateDetail:    childMountStateDetail(config.MountStateUnavailable, config.MountStateReasonShortcutBindingUnavailable),
+	}, false)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "Reason:    "+config.MountStateReasonShortcutBindingUnavailable)
+	assert.Contains(t, output, "Next:      OneDrive did not return a usable shortcut target")
 }
 
 // Validates: R-2.10.1
@@ -172,7 +212,8 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 		TokenOwnerCanonical: parentCID.String(),
 		RemoteDriveID:       "remote-drive",
 		RemoteItemID:        "remote-root",
-		State:               config.MountStateActive,
+		State:               config.MountStateConflict,
+		StateReason:         config.MountStateReasonExplicitStandaloneContentRoot,
 	}
 	mount := buildChildStatusMount(
 		config.Drive{SyncDir: "/tmp/sync-root"},
@@ -183,12 +224,16 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	assert.Equal(t, "child-docs", mount.MountID)
 	assert.Equal(t, statusProjectionChild, mount.ProjectionKind)
 	assert.Empty(t, mount.CanonicalID)
-	assert.Equal(t, "Docs (child-docs)", statusMountLabel(mount))
+	assert.Equal(t, "Docs (child-docs)", statusMountLabel(&mount))
+	assert.Equal(t, config.MountStateReasonExplicitStandaloneContentRoot, mount.StateReason)
+	assert.Contains(t, mount.StateDetail, "standalone mount")
 
 	encoded, err := json.Marshal(mount)
 	require.NoError(t, err)
 	assert.Contains(t, string(encoded), `"mount_id":"child-docs"`)
 	assert.Contains(t, string(encoded), `"namespace_id":"personal:alice@example.com"`)
+	assert.Contains(t, string(encoded), `"state_reason":"explicit_standalone_content_root"`)
+	assert.Contains(t, string(encoded), `"state_detail":`)
 	assert.NotContains(t, string(encoded), "canonical_id")
 	assert.NotContains(t, string(encoded), "shared:")
 }

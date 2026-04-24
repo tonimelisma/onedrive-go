@@ -37,6 +37,7 @@ runtime package that implements it.
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry` |
+| Managed shortcut lifecycle stays control-plane owned: unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, and shortcut projection moves reserve old paths until the local move completes. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestReconcileParentMountDelta_SuccessfulRefreshReactivatesUnavailableShortcut`, `TestApplyDurableProjectionConflicts_DuplicateChildrenKeepDeterministicWinner`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips` |
 
 ## Runtime Mount Specs
 
@@ -93,6 +94,26 @@ mounts win over duplicate child projections, and duplicate child projections
 for the same namespace/content root are marked `conflict` with a structured
 reason and reported as skipped startup outcomes.
 
+Unavailable child mounts are also durable control-plane lifecycle state. If
+Graph returns a shortcut binding item but cannot return enough target metadata
+to materialize it, reconciliation stores or updates the child record as
+`unavailable` with `state_reason: shortcut_binding_unavailable`. The child
+engine is not started, the existing child state DB is left untouched, and the
+parent namespace continues to reserve the child path. A later successful
+binding refresh reactivates the same `MountID`, fills the remote target IDs,
+and clears the reason.
+
+Shortcut rename and move are local projection changes, not new child mounts.
+Because child `MountID` comes from `(NamespaceID, BindingItemID)`, the control
+plane reuses the same child state DB. While the filesystem move is pending,
+`mounts.json` keeps the new path plus `reserved_local_paths` for old paths so
+the parent mount excludes both. The orchestrator applies those local projection
+moves after stopping any old runner and before starting the new runner. If the
+move conflicts with existing local content, the child becomes `conflict` with
+`state_reason: local_projection_conflict`; if the move cannot be attempted due
+to local filesystem failure, it becomes `unavailable` with
+`state_reason: local_projection_unavailable`.
+
 Automatic shortcut reconciliation is also control-plane owned. Before one-shot
 startup, before watch startup, on control-socket reload, and on the watch-mode
 reconcile ticker, `internal/multisync` now:
@@ -110,11 +131,10 @@ records, but it never deletes them based on absence alone.
 Authoritative removal is a lifecycle transition. A removed shortcut is first
 marked `pending_removal`, the control plane stops any active child runner,
 purges the managed child state DB, and only then deletes the inventory record.
-Parent namespace mounts reserve child mount paths only while records still own a
-runtime subtree: active, paused, conflicted, or unavailable records keep the
-parent exclusion. `pending_removal` records are cleanup tombstones, so runtime
-mount compilation ignores them; watch diffing stops the old child runner before
-starting a parent runner whose exclusion list no longer contains that subtree.
+Parent namespace mounts continue to reserve every child mount path they own
+while records are active, paused, conflicted, unavailable, or pending removal.
+Reserved old projection paths are included in the same parent exclusion set
+until the move completes or the operator resolves the conflict.
 
 ## Boundary To The Engine
 

@@ -230,7 +230,7 @@ func TestCompileRuntimeMounts_ConflictChildStillFiltersParentSubtree(t *testing.
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_PendingRemovalChildReleasesParentSubtree(t *testing.T) {
+func TestCompileRuntimeMounts_PendingRemovalChildStillFiltersParentSubtree(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	record := testMountRecordForParent(&parent)
@@ -243,8 +243,51 @@ func TestCompileRuntimeMounts_PendingRemovalChildReleasesParentSubtree(t *testin
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 1)
-	assert.Empty(t, compiled.Skipped)
-	assert.Empty(t, compiled.Mounts[0].localSkipDirs)
+	require.Len(t, compiled.Skipped, 1)
+	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), "pending removal")
+}
+
+// Validates: R-2.8.1
+func TestCompileRuntimeMounts_ReservedChildPathStillFiltersParentSubtree(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	record := testMountRecordForParent(&parent)
+	record.RelativeLocalPath = "Shortcuts/New Docs"
+	record.ReservedLocalPaths = []string{"Shortcuts/Old Docs"}
+
+	compiled, err := compileRuntimeMounts(
+		[]StandaloneMountConfig{parent},
+		&config.MountInventory{Mounts: map[string]config.MountRecord{"child-docs": record}},
+	)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 2)
+	require.Len(t, compiled.ProjectionMoves, 1)
+	assert.Equal(t, []string{"Shortcuts/New Docs", "Shortcuts/Old Docs"}, compiled.Mounts[0].localSkipDirs)
+	assert.Equal(t, mountID("child-docs"), compiled.ProjectionMoves[0].mountID)
+	assert.Equal(t, "Shortcuts/Old Docs", compiled.ProjectionMoves[0].fromRelativeLocalPath)
+	assert.Equal(t, "Shortcuts/New Docs", compiled.ProjectionMoves[0].toRelativeLocalPath)
+}
+
+// Validates: R-2.8.1
+func TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersParentSubtree(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	record := testMountRecordForParent(&parent)
+	record.RemoteDriveID = ""
+	record.RemoteItemID = ""
+	record.State = config.MountStateUnavailable
+	record.StateReason = config.MountStateReasonShortcutBindingUnavailable
+
+	compiled, err := compileRuntimeMounts(
+		[]StandaloneMountConfig{parent},
+		&config.MountInventory{Mounts: map[string]config.MountRecord{"child-docs": record}},
+	)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 1)
+	require.Len(t, compiled.Skipped, 1)
+	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), config.MountStateReasonShortcutBindingUnavailable)
 }
 
 // Validates: R-2.8.1

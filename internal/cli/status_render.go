@@ -105,8 +105,8 @@ func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool, his
 		}
 	}
 
-	for _, mount := range acct.Mounts {
-		if err := printMountStatus(w, mount, history); err != nil {
+	for i := range acct.Mounts {
+		if err := printMountStatus(w, &acct.Mounts[i], history); err != nil {
 			return err
 		}
 	}
@@ -174,8 +174,11 @@ func statusAccountLabel(acct *statusAccount) string {
 	return fmt.Sprintf("%s (%s)", acct.DisplayName, acct.Email)
 }
 
-func printMountStatus(w io.Writer, mount statusMount, history bool) error {
+func printMountStatus(w io.Writer, mount *statusMount, history bool) error {
 	const childMountIndent = "    "
+	if mount == nil {
+		return nil
+	}
 
 	syncDir := mount.SyncDir
 	if syncDir == "" {
@@ -198,6 +201,16 @@ func printMountStatus(w io.Writer, mount statusMount, history bool) error {
 	if err := writef(w, "%sState:     %s\n", detailIndent, mount.State); err != nil {
 		return err
 	}
+	if mount.StateReason != "" {
+		if err := writef(w, "%sReason:    %s\n", detailIndent, mount.StateReason); err != nil {
+			return err
+		}
+	}
+	if mount.StateDetail != "" {
+		if err := writef(w, "%sNext:      %s\n", detailIndent, mount.StateDetail); err != nil {
+			return err
+		}
+	}
 	if mount.SyncState == nil {
 		return nil
 	}
@@ -205,7 +218,11 @@ func printMountStatus(w io.Writer, mount statusMount, history bool) error {
 	return printSyncStateText(w, detailIndent, mount.SyncState, history)
 }
 
-func statusMountLabel(mount statusMount) string {
+func statusMountLabel(mount *statusMount) string {
+	if mount == nil {
+		return ""
+	}
+
 	identity := mount.CanonicalID
 	if identity == "" {
 		identity = mount.MountID

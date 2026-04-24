@@ -842,8 +842,8 @@ This section intentionally separates:
 | --- | --- | --- | --- | --- |
 | `shared:<email>:<sourceDriveID>:<sourceItemID>` canonical drive ID | Explicit standalone shared-folder identity | No managed-child role after Increment 7d | Explicit standalone drive config only | Keep only if the product still wants explicit standalone shared-folder mounts |
 | `ResolvedDrive.RemoteRootItemID` | Explicit standalone shared-folder root item | Top-level CLI/config input only | `MountRecord.RemoteItemID` for managed child mounts | Keep only for explicit standalone shared-folder config |
-| Shared drive `display_name` | User-facing name for configured shared drive | No managed-child role after schema v3 | `MountRecord.LocalAlias` | Config display ownership stays standalone-only |
-| `CatalogDrive.OwnerAccountCanonical` | Shared drive token owner | No managed-child role after schema v3 | `MountRecord.TokenOwnerCanonical` | Config/catalog token owner remains standalone-only |
+| Shared drive `display_name` | User-facing name for configured shared drive | No managed-child role after mount-inventory schema cleanup | `MountRecord.LocalAlias` | Config display ownership stays standalone-only |
+| `CatalogDrive.OwnerAccountCanonical` | Shared drive token owner | No managed-child role after mount-inventory schema cleanup | `MountRecord.TokenOwnerCanonical` | Config/catalog token owner remains standalone-only |
 | `CatalogDrive.RemoteDriveID` | Backing drive ID for configured drives | Temporary content-root field | `MountRecord.RemoteDriveID` | Keep as mount metadata, not drive-config metadata |
 
 ### Runtime Mapping
@@ -1620,9 +1620,12 @@ construction, moved multisync to standalone mount inputs, applied PR-feedback
 hardening, moved managed child identity to `MountIdentity`, and split generic
 sessions from mount-root path scoping while renaming sync-store and engine
 runtime owner vocabulary. Increment 7f made generic sessions path-free,
-promoted `mounts.json` schema v3 namespace vocabulary, persisted child
+promoted `mounts.json` namespace vocabulary, persisted child
 lifecycle/conflict state, and moved namespace inventory mutation behind an
-unexported multisync owner.
+unexported multisync owner. Increment 8 then made unavailable shortcut
+bindings producer-owned durable lifecycle state, added schema v4
+`reserved_local_paths` for shortcut projection moves, and surfaced child
+lifecycle reasons in status/startup reporting.
 
 Goal:
 
@@ -1659,16 +1662,19 @@ Concrete work:
   subtree, and managed mount state paths use bounded collision-resistant digest
   filenames
 - make `mounts.json` the durable namespace/mount authority:
-  schema v3 uses `namespaces`, `namespace_id`, `local_alias`, `remote_item_id`,
+  schema v4 uses `namespaces`, `namespace_id`, `local_alias`, `remote_item_id`,
   `token_owner_canonical`, and explicit `MountState` lifecycle values instead
-  of parent-drive vocabulary
+  of parent-drive vocabulary; `reserved_local_paths` preserves parent subtree
+  ownership while shortcut rename/move local projection is still settling
 - move child namespace reconciliation into an unexported multisync namespace
   runtime owner that loads/saves inventory, reconciles shortcut placeholders,
   computes conflicts/removals, and returns runtime inputs to the orchestrator
 - persist lifecycle decisions for managed child mounts:
   duplicate child projections and explicit-standalone conflicts become durable
   `conflict` records, authoritative removals become `pending_removal` until the
-  runner is stopped and the child state DB is purged
+  runner is stopped and the child state DB is purged, and item-level shortcut
+  target materialization failures become `unavailable` records instead of sync
+  store retry/block/observation rows
 - move managed child runtime/report/status identity off fabricated `shared:`
   drive IDs:
   `MountIdentity` keeps canonical IDs for standalone mounts while managed child
@@ -1689,8 +1695,8 @@ Tests:
 
 - deleted-name sweep tests / repo checks
 - drive add / managed mount / optional child mount regression coverage
-- schema v3 load/save/validation, namespace conflict, pending-removal, and
-  parent-subtree reservation coverage
+- schema v4 load/save/validation, namespace conflict, unavailable,
+  pending-removal, projection-move, and parent-subtree reservation coverage
 
 Exit criteria:
 
@@ -1699,7 +1705,8 @@ Exit criteria:
   not the architectural center of the implementation
 - generic sessions have no path helper API; root-aware operations use
   `MountSession`
-- managed child lifecycle and conflict decisions are durable inventory state
+- managed child lifecycle, conflict, unavailable, and projection-move decisions
+  are durable inventory state
 
 ## Temporary Coexistence Rules During Refactor
 
@@ -1744,10 +1751,11 @@ Behavior checks:
 - Should the namespace manager watch only top-level shortcut placeholders or the
   whole namespace root for mount-lifecycle events?
 - What is the retention/GC policy for per-mount state after shortcut removal?
-- Do we want a process-wide transfer semaphore from the first increment with
-  managed mounts, or only after profiling shows pressure?
-- What exact duplicate-shortcut policy should the product expose if Graph or the
-  user can create multiple aliases to the same remote content root?
+- Process-wide transfer semaphore: deferred until profiling shows pressure.
+- Duplicate-shortcut policy: one active projection per namespace/content root;
+  explicit standalone mounts win over automatic child mounts, and duplicate
+  child shortcuts keep the deterministic first path as active while later
+  aliases are durable `conflict` records.
 
 ## Summary
 
