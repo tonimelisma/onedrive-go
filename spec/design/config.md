@@ -332,9 +332,11 @@ bindings, so it follows the same managed-file discipline:
 DB path independent of configured drive canonical IDs. Configured standalone
 drives still use `DriveStatePath(...)`; managed child mounts now own their own
 durable store namespace instead of pretending to be synthetic configured drives.
-The filename encodes the full managed mount ID with collision-resistant raw URL
-base64 under the `state_mount_*.db` prefix, so IDs that differ only by path or
-punctuation characters cannot collapse onto the same state DB.
+The filename uses a fixed-length SHA-256 digest of the managed mount ID encoded
+with raw URL base64 under the `state_mount_*.db` prefix. That keeps every
+managed child state filename below common filesystem basename limits while
+preserving collision-resistant separation for IDs that differ only by path or
+punctuation characters.
 
 Automatic child mount IDs are stable across placeholder rename or move because
 they are derived from `(ParentMountID, BindingItemID)`, not from the local

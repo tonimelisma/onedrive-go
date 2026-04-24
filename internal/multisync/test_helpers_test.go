@@ -16,3 +16,11 @@ func testCanonicalID(t *testing.T, s string) driveid.CanonicalID {
 
 	return cid
 }
+
+func testStandaloneMountIdentity(cid driveid.CanonicalID) MountIdentity {
+	return MountIdentity{
+		MountID:        cid.String(),
+		ProjectionKind: MountProjectionStandalone,
+		CanonicalID:    cid,
+	}
+}

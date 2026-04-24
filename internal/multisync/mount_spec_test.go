@@ -30,8 +30,10 @@ func TestBuildStandaloneMountSpecs_PreservesOrderAndReportingFields(t *testing.T
 
 	assert.Equal(t, mountID(first.CanonicalID.String()), mounts[0].mountID)
 	assert.Equal(t, 4, mounts[0].selectionIndex)
-	assert.Equal(t, mountProjectionStandalone, mounts[0].projectionKind)
+	assert.Equal(t, MountProjectionStandalone, mounts[0].projectionKind)
 	assert.Equal(t, first.CanonicalID, mounts[0].canonicalID)
+	assert.Equal(t, first.CanonicalID.DriveType(), mounts[0].driveType)
+	assert.False(t, mounts[0].rejectSharePointRootForms)
 	assert.Equal(t, first.DisplayName, mounts[0].displayName)
 	assert.Equal(t, first.SyncRoot, mounts[0].syncRoot)
 	assert.Equal(t, first.StatePath, mounts[0].statePath)
@@ -102,7 +104,7 @@ func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
 	assert.Equal(t, mounts[0].syncRoot, cfg.SyncRoot)
 	assert.Equal(t, config.DefaultDataDir(), cfg.DataDir)
 	assert.Equal(t, mounts[0].remoteDriveID, cfg.DriveID)
-	assert.Equal(t, mounts[0].canonicalID.DriveType(), cfg.DriveType)
+	assert.Equal(t, mounts[0].driveType, cfg.DriveType)
 	assert.Equal(t, mounts[0].accountEmail, cfg.AccountEmail)
 	assert.Equal(t, mounts[0].remoteRootItemID, cfg.RootItemID)
 	assert.Equal(t, mounts[0].rootedSubtreeDeltaCapable, cfg.RootedSubtreeDeltaCapable)
@@ -145,11 +147,14 @@ func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
 	parentMount := compiled.Mounts[0]
 	childMount := compiled.Mounts[1]
 
-	assert.Equal(t, mountProjectionStandalone, parentMount.projectionKind)
+	assert.Equal(t, MountProjectionStandalone, parentMount.projectionKind)
 	assert.Equal(t, []string{"Shortcuts/Docs"}, parentMount.localSkipDirs)
-	assert.Equal(t, mountProjectionChild, childMount.projectionKind)
+	assert.Equal(t, MountProjectionChild, childMount.projectionKind)
 	assert.Equal(t, mountID("child-docs"), childMount.mountID)
-	assert.Equal(t, driveid.MustCanonicalID("shared:owner@example.com:remote-drive:remote-root"), childMount.canonicalID)
+	assert.Equal(t, parentMount.mountID, childMount.parentMountID)
+	assert.True(t, childMount.canonicalID.IsZero())
+	assert.Empty(t, childMount.driveType)
+	assert.False(t, childMount.rejectSharePointRootForms)
 	assert.Equal(t, filepath.Join(parent.SyncRoot, "Shortcuts", "Docs"), childMount.syncRoot)
 	assert.Equal(t, config.MountStatePath("child-docs"), childMount.statePath)
 	assert.Equal(t, driveid.MustCanonicalID("personal:owner@example.com"), childMount.tokenOwnerCanonical)
@@ -157,6 +162,13 @@ func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
 	assert.Equal(t, 7, childMount.transferWorkers)
 	assert.Equal(t, 8, childMount.checkWorkers)
 	assert.Equal(t, int64(5*1024*1024), childMount.minFreeSpace)
+
+	engineCfg, err := engineMountConfigForMount(childMount)
+	require.NoError(t, err)
+	assert.Equal(t, driveid.New("remote-drive"), engineCfg.DriveID)
+	assert.Equal(t, "remote-root", engineCfg.RootItemID)
+	assert.Empty(t, engineCfg.DriveType)
+	assert.False(t, engineCfg.LocalRules.RejectSharePointRootForms)
 }
 
 // Validates: R-2.8.1

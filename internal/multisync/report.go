@@ -16,12 +16,48 @@ const (
 	MountStartupFatal             MountStartupStatus = "fatal"
 )
 
+type MountProjectionKind string
+
+const (
+	MountProjectionStandalone MountProjectionKind = "standalone"
+	MountProjectionChild      MountProjectionKind = "child"
+)
+
+type MountIdentity struct {
+	MountID        string
+	ParentMountID  string
+	ProjectionKind MountProjectionKind
+	CanonicalID    driveid.CanonicalID
+}
+
+func (id *MountIdentity) Label() string {
+	if id == nil {
+		return ""
+	}
+	if id.MountID != "" {
+		return id.MountID
+	}
+	if !id.CanonicalID.IsZero() {
+		return id.CanonicalID.String()
+	}
+
+	return ""
+}
+
+func (id *MountIdentity) IsStandalone() bool {
+	if id == nil {
+		return false
+	}
+
+	return id.ProjectionKind == MountProjectionStandalone && !id.CanonicalID.IsZero()
+}
+
 // MountStartupResult captures per-mount startup eligibility before any one-shot
 // pass or watch runner actually runs. It keeps expected startup policy separate
 // from completed sync reports.
 type MountStartupResult struct {
 	SelectionIndex int
-	CanonicalID    driveid.CanonicalID
+	Identity       MountIdentity
 	DisplayName    string
 	Status         MountStartupStatus
 	Err            error
@@ -107,7 +143,7 @@ type RunOnceResult struct {
 // Err and Report are mutually exclusive: when Err is set, Report is nil.
 type MountReport struct {
 	SelectionIndex int
-	CanonicalID    driveid.CanonicalID
+	Identity       MountIdentity
 	DisplayName    string
 	Report         *syncengine.Report
 	Err            error
@@ -127,7 +163,7 @@ func (e *WatchStartupError) Error() string {
 	failures := e.Summary.SkippedResults()
 	if len(failures) == 1 {
 		failure := failures[0]
-		return fmt.Sprintf("watch startup failed for %s: %v", failure.CanonicalID, failure.Err)
+		return fmt.Sprintf("watch startup failed for %s: %v", failure.Identity.Label(), failure.Err)
 	}
 
 	return fmt.Sprintf("%d mounts failed to start in watch mode", len(failures))

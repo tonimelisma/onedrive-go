@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -30,7 +31,7 @@ func formatStartupResultMessage(result *multisync.MountStartupResult) string {
 	case multisync.MountStartupPaused:
 		return "mount is paused"
 	case multisync.MountStartupIncompatibleStore:
-		return formatStateStoreIncompatibleMessage(result.CanonicalID, result.Err)
+		return formatStateStoreIncompatibleMessage(&result.Identity, result.Err)
 	case multisync.MountStartupFatal:
 		if result.Err == nil {
 			return ""
@@ -41,7 +42,7 @@ func formatStartupResultMessage(result *multisync.MountStartupResult) string {
 	return ""
 }
 
-func formatStateStoreIncompatibleMessage(canonicalID driveid.CanonicalID, err error) string {
+func formatStateStoreIncompatibleMessage(identity *multisync.MountIdentity, err error) string {
 	var incompatibleErr *syncengine.StateStoreIncompatibleError
 	if !errors.As(err, &incompatibleErr) {
 		if err == nil {
@@ -50,17 +51,42 @@ func formatStateStoreIncompatibleMessage(canonicalID driveid.CanonicalID, err er
 		return err.Error()
 	}
 
+	if identity.IsStandalone() {
+		return fmt.Sprintf(
+			"%s. To continue, either pause or stop this mount first ('%s'), "+
+				"rerun sync with --drive selecting only other configured parent drives, or fix the DB with '%s'.",
+			incompatibleErr.Error(),
+			syncPauseDriveCommand(identity.CanonicalID),
+			syncStateResetCommand(identity.CanonicalID),
+		)
+	}
+
+	label := identity.Label()
+	if label == "" {
+		label = "managed child mount"
+	}
+	statePath := ""
+	if identity != nil && identity.MountID != "" {
+		statePath = config.MountStatePath(identity.MountID)
+	}
+	if statePath != "" {
+		return fmt.Sprintf(
+			"%s. To continue, pause or stop child mount %s first, rerun sync selecting only other mounts, or inspect its state DB at %s.",
+			incompatibleErr.Error(),
+			label,
+			statePath,
+		)
+	}
+
 	return fmt.Sprintf(
-		"%s. To continue, either pause or stop this mount first ('%s'), "+
-			"rerun sync with --drive selecting only other configured parent drives, or fix the DB with '%s'.",
+		"%s. To continue, pause or stop child mount %s first, then rerun sync selecting only other mounts.",
 		incompatibleErr.Error(),
-		syncPauseDriveCommand(canonicalID),
-		syncStateResetCommand(canonicalID),
+		label,
 	)
 }
 
-func formatStateStoreIncompatibleError(canonicalID driveid.CanonicalID, err error) error {
-	message := formatStateStoreIncompatibleMessage(canonicalID, err)
+func formatStateStoreIncompatibleError(identity *multisync.MountIdentity, err error) error {
+	message := formatStateStoreIncompatibleMessage(identity, err)
 	if message == "" {
 		return err
 	}
@@ -102,7 +128,7 @@ func writeWatchStartWarnings(output io.Writer, warning multisync.StartupWarning)
 	for i := range results {
 		result := results[i]
 		writeWarningf(output, "warning: mount %s did not start: %s\n",
-			result.CanonicalID.String(),
+			result.Identity.Label(),
 			formatStartupResultMessage(&result),
 		)
 	}

@@ -175,7 +175,12 @@ func TestMountStatePath_UsesManagedMountPrefix(t *testing.T) {
 
 	path := MountStatePath("parent/shared:docs")
 	require.NotEmpty(t, path)
-	assert.Equal(t, filepath.Join(dataDir, "state_mount_cGFyZW50L3NoYXJlZDpkb2Nz.db"), path)
+	assert.Equal(t, dataDir, filepath.Dir(path))
+	base := filepath.Base(path)
+	assert.True(t, strings.HasPrefix(base, stateMountPrefix))
+	assert.True(t, strings.HasSuffix(base, ".db"))
+	assert.Len(t, base, len(stateMountPrefix)+43+len(".db"))
+	assert.LessOrEqual(t, len(base), 255)
 }
 
 // Validates: R-2.8.1
@@ -201,6 +206,18 @@ func TestMountStatePath_EncodesManagedMountIDWithoutCollisions(t *testing.T) {
 		}
 		seen[path] = struct{}{}
 	}
+}
+
+// Validates: R-2.8.1
+func TestMountStatePath_LongIDUsesBoundedFilename(t *testing.T) {
+	dataDir := setTestDataDir(t)
+
+	path := MountStatePath(strings.Repeat("parent/binding:", 100))
+	require.NotEmpty(t, path)
+	assert.Equal(t, dataDir, filepath.Dir(path))
+	base := filepath.Base(path)
+	assert.Len(t, base, len(stateMountPrefix)+43+len(".db"))
+	assert.LessOrEqual(t, len(base), 255)
 }
 
 // Validates: R-2.8.1
