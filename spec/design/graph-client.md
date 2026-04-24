@@ -257,7 +257,8 @@ visibility and return transient `404 itemNotFound`, or hit a bounded
 502/503/504 service failure, even though the upload response already returned
 the new item identity. The graph boundary retries that exact
 post-simple-upload patch with a bounded policy tuned for the longer
-shared-root visibility lag observed in live coverage. Direct
+mount-root visibility lag observed in live coverage for separately configured
+shared-folder mounts. Direct
 `UpdateFileSystemInfo` calls outside the immediate simple-upload finalization
 path remain strict.
 

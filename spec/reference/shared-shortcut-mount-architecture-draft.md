@@ -1636,6 +1636,11 @@ symlinked projection ancestors, handling case-only projection renames, avoiding
 empty-root creation when both old and new projection paths are missing,
 recompiling after lifecycle mutations so parent skip dirs are current in the
 same run, and limiting inventory-save failures to dirty child records.
+Increment 8c then moved the stricter projection filesystem policy into opt-in
+`synctree` helpers, gated projection moves by the same admitted child set used
+for startup after inventory persist failures, nested child status rows under
+their parent drive, and added full-suite live coverage for shortcut rename/move
+projection reuse against the manual shortcut fixtures.
 
 Goal:
 

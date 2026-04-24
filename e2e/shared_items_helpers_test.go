@@ -336,23 +336,8 @@ func requireActiveShortcutChild(
 ) config.MountRecord {
 	t.Helper()
 
-	dataDir := filepath.Join(env["XDG_DATA_HOME"], "onedrive-go")
-	inventory, err := config.LoadMountInventoryForDataDir(dataDir)
-	require.NoError(t, err)
-
-	for _, record := range inventory.Mounts {
-		if record.NamespaceID != fixture.ParentDrive ||
-			record.RelativeLocalPath != fixture.ShortcutName {
-			continue
-		}
-		if fixture.SharedItem.RemoteDriveID != "" && record.RemoteDriveID != fixture.SharedItem.RemoteDriveID {
-			continue
-		}
-		if fixture.SharedItem.RemoteItemID != "" && record.RemoteItemID != fixture.SharedItem.RemoteItemID {
-			continue
-		}
-		assert.Equal(t, config.MountStateActive, record.State)
-		assert.Empty(t, record.StateReason)
+	record, ok := findActiveShortcutChild(t, env, fixture, fixture.ShortcutName)
+	if ok {
 		return record
 	}
 
@@ -365,6 +350,123 @@ func requireActiveShortcutChild(
 		fixture.SharedItem.RemoteItemID,
 	)
 	return config.MountRecord{}
+}
+
+func requireActiveShortcutChildAtPath(
+	t *testing.T,
+	env map[string]string,
+	fixture resolvedShortcutFixture,
+	relativeLocalPath string,
+) config.MountRecord {
+	t.Helper()
+
+	record, ok := findActiveShortcutChild(t, env, fixture, relativeLocalPath)
+	if ok {
+		return record
+	}
+
+	require.Failf(t,
+		"active shortcut child mount missing at projection path",
+		"parent=%s shortcut=%q relative_path=%q remote=%s/%s",
+		fixture.ParentDrive,
+		fixture.ShortcutName,
+		relativeLocalPath,
+		fixture.SharedItem.RemoteDriveID,
+		fixture.SharedItem.RemoteItemID,
+	)
+	return config.MountRecord{}
+}
+
+func findActiveShortcutChild(
+	t *testing.T,
+	env map[string]string,
+	fixture resolvedShortcutFixture,
+	relativeLocalPath string,
+) (config.MountRecord, bool) {
+	t.Helper()
+
+	dataDir := filepath.Join(env["XDG_DATA_HOME"], "onedrive-go")
+	inventory, err := config.LoadMountInventoryForDataDir(dataDir)
+	require.NoError(t, err)
+
+	for _, record := range inventory.Mounts {
+		if record.NamespaceID != fixture.ParentDrive ||
+			record.RelativeLocalPath != relativeLocalPath {
+			continue
+		}
+		if fixture.SharedItem.RemoteDriveID != "" && record.RemoteDriveID != fixture.SharedItem.RemoteDriveID {
+			continue
+		}
+		if fixture.SharedItem.RemoteItemID != "" && record.RemoteItemID != fixture.SharedItem.RemoteItemID {
+			continue
+		}
+		assert.Equal(t, config.MountStateActive, record.State)
+		assert.Empty(t, record.StateReason)
+		return record, true
+	}
+
+	return config.MountRecord{}, false
+}
+
+func requireSharedListContainsShortcutFixture(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	fixture resolvedShortcutFixture,
+) {
+	t.Helper()
+
+	listing := sharedListForRecipient(t, cfgPath, env, fixture.ParentEmail)
+	var names []string
+	for i := range listing.Items {
+		names = append(names, listing.Items[i].Name)
+		if listing.Items[i].Name != fixture.ShortcutName || listing.Items[i].Type != "folder" {
+			continue
+		}
+		if fixture.SharerEmail != "" && !strings.EqualFold(listing.Items[i].SharedByEmail, fixture.SharerEmail) {
+			continue
+		}
+
+		return
+	}
+
+	require.Failf(t,
+		"shortcut fixture missing from shared list",
+		"expected folder %q shared_by=%s for %s; shared_list_names=%v",
+		fixture.ShortcutName,
+		fixture.SharerEmail,
+		fixture.ParentEmail,
+		names,
+	)
+}
+
+func requireRootPlaceholderContainsShortcutFixture(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	fixture resolvedShortcutFixture,
+) {
+	t.Helper()
+
+	stdout, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "ls", "--json", "/")
+	var items []remoteListJSONItem
+	require.NoErrorf(t, json.Unmarshal([]byte(stdout), &items), "ls --json root output should be valid JSON, got: %s", stdout)
+
+	var names []string
+	for i := range items {
+		names = append(names, items[i].Name)
+		if items[i].Name == fixture.ShortcutName {
+			return
+		}
+	}
+
+	require.Failf(t,
+		"shortcut fixture root placeholder missing",
+		"expected %q in root of %s; root_names=%v",
+		fixture.ShortcutName,
+		fixture.ParentDrive,
+		names,
+	)
 }
 
 func resolveSharedFileFixture(t *testing.T, rawLink string) resolvedSharedFileFixture {

@@ -20,25 +20,35 @@ func computeSummary(accounts []statusAccount) statusSummary {
 		}
 
 		for j := range acct.Mounts {
-			d := &acct.Mounts[j]
-			s.TotalMounts++
-
-			switch d.State {
-			case driveStateReady:
-				s.Ready++
-			case driveStatePaused:
-				s.Paused++
-			}
-
-			if d.SyncState != nil {
-				s.TotalConditions += d.SyncState.ConditionCount
-				s.TotalRemoteDrift += d.SyncState.RemoteDrift
-				s.TotalRetrying += d.SyncState.Retrying
-			}
+			addMountToSummary(&s, &acct.Mounts[j])
 		}
 	}
 
 	return s
+}
+
+func addMountToSummary(s *statusSummary, mount *statusMount) {
+	if s == nil || mount == nil {
+		return
+	}
+
+	s.TotalMounts++
+	switch mount.State {
+	case driveStateReady:
+		s.Ready++
+	case driveStatePaused:
+		s.Paused++
+	}
+
+	if mount.SyncState != nil {
+		s.TotalConditions += mount.SyncState.ConditionCount
+		s.TotalRemoteDrift += mount.SyncState.RemoteDrift
+		s.TotalRetrying += mount.SyncState.Retrying
+	}
+
+	for i := range mount.ChildMounts {
+		addMountToSummary(s, &mount.ChildMounts[i])
+	}
 }
 
 func printStatusJSON(w io.Writer, accounts []statusAccount) error {
@@ -201,6 +211,11 @@ func printMountStatus(w io.Writer, mount *statusMount, history bool) error {
 	if err := writef(w, "%sState:     %s\n", detailIndent, mount.State); err != nil {
 		return err
 	}
+	if mount.NamespaceID != "" {
+		if err := writef(w, "%sControl:   Parent drive pause/resume and the OneDrive shortcut\n", detailIndent); err != nil {
+			return err
+		}
+	}
 	if mount.StateReason != "" {
 		if err := writef(w, "%sReason:    %s\n", detailIndent, mount.StateReason); err != nil {
 			return err
@@ -212,10 +227,24 @@ func printMountStatus(w io.Writer, mount *statusMount, history bool) error {
 		}
 	}
 	if mount.SyncState == nil {
-		return nil
+		return printChildMountStatuses(w, mount.ChildMounts, history)
 	}
 
-	return printSyncStateText(w, detailIndent, mount.SyncState, history)
+	if err := printSyncStateText(w, detailIndent, mount.SyncState, history); err != nil {
+		return err
+	}
+
+	return printChildMountStatuses(w, mount.ChildMounts, history)
+}
+
+func printChildMountStatuses(w io.Writer, mounts []statusMount, history bool) error {
+	for i := range mounts {
+		if err := printMountStatus(w, &mounts[i], history); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func statusMountLabel(mount *statusMount) string {

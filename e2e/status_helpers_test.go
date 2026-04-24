@@ -48,6 +48,7 @@ type statusAccountJSON struct {
 type statusMountJSON struct {
 	CanonicalID string               `json:"canonical_id"`
 	MountID     string               `json:"mount_id"`
+	ChildMounts []statusMountJSON    `json:"child_mounts,omitempty"`
 	SyncState   *statusSyncStateJSON `json:"sync_state,omitempty"`
 }
 
@@ -150,14 +151,27 @@ func requireStatusMount(
 		driveStatuses := append(status.Accounts[i].Drives, status.Accounts[i].Mounts...)
 		for j := range driveStatuses {
 			driveStatus := driveStatuses[j]
-			if driveStatus.CanonicalID == canonicalID || driveStatus.MountID == canonicalID {
-				return driveStatus
+			if found, ok := findStatusMountJSON(driveStatus, canonicalID); ok {
+				return found
 			}
 		}
 	}
 
 	require.FailNowf(t, "missing status mount", "canonical_id=%s", canonicalID)
 	return statusMountJSON{}
+}
+
+func findStatusMountJSON(mount statusMountJSON, canonicalID string) (statusMountJSON, bool) {
+	if mount.CanonicalID == canonicalID || mount.MountID == canonicalID {
+		return mount, true
+	}
+	for i := range mount.ChildMounts {
+		if found, ok := findStatusMountJSON(mount.ChildMounts[i], canonicalID); ok {
+			return found, true
+		}
+	}
+
+	return statusMountJSON{}, false
 }
 
 func requireStatusDrive(

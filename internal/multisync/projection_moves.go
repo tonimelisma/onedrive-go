@@ -6,16 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 const (
-	parentPathSegment = ".."
+	parentPathSegment                = ".."
+	caseOnlyProjectionRenameAttempts = 10
 )
 
 type childProjectionMoveError struct {
@@ -100,84 +100,85 @@ func mountStartupResultForProjectionMove(move *childProjectionMove, err error) M
 }
 
 func applyChildProjectionMove(move *childProjectionMove) error {
-	source, err := childProjectionAbsolutePath(move.parentSyncRoot, move.fromRelativeLocalPath)
+	root, err := synctree.Open(move.parentSyncRoot)
+	if err != nil {
+		return projectionUnavailable(move, "opening parent sync root", err)
+	}
+	sourceRel, err := childProjectionRelativePath(move.fromRelativeLocalPath)
 	if err != nil {
 		return projectionUnavailable(move, "resolving previous local path", err)
 	}
-	target, err := childProjectionAbsolutePath(move.parentSyncRoot, move.toRelativeLocalPath)
+	targetRel, err := childProjectionRelativePath(move.toRelativeLocalPath)
 	if err != nil {
 		return projectionUnavailable(move, "resolving current local path", err)
 	}
-	if source == target {
+	if sourceRel == targetRel {
 		return nil
 	}
 
-	return applyChildProjectionMovePaths(move, source, target)
+	return applyChildProjectionMovePaths(move, root, sourceRel, targetRel)
 }
 
-func applyChildProjectionMovePaths(move *childProjectionMove, source string, target string) error {
-	parentRoot, err := filepath.Abs(filepath.Clean(move.parentSyncRoot))
-	if err != nil {
-		return projectionUnavailable(move, "resolving parent sync root", err)
-	}
-	if ancestorErr := validateProjectionAncestors(move, parentRoot, source); ancestorErr != nil {
+func applyChildProjectionMovePaths(
+	move *childProjectionMove,
+	root *synctree.Root,
+	sourceRel string,
+	targetRel string,
+) error {
+	if ancestorErr := validateProjectionAncestors(move, root, sourceRel); ancestorErr != nil {
 		return ancestorErr
 	}
-	if ancestorErr := validateProjectionAncestors(move, parentRoot, target); ancestorErr != nil {
+	if ancestorErr := validateProjectionAncestors(move, root, targetRel); ancestorErr != nil {
 		return ancestorErr
 	}
 
-	sourceExists, sourceIsDir, err := projectionPathState(source)
+	sourceState, err := projectionPathState(root, sourceRel)
 	if err != nil {
 		return projectionUnavailable(move, "reading previous local path", err)
 	}
-	targetExists, targetIsDir, err := projectionPathState(target)
+	targetState, err := projectionPathState(root, targetRel)
 	if err != nil {
 		return projectionUnavailable(move, "reading current local path", err)
 	}
 
 	return applyProjectionPathDecision(
 		move,
-		parentRoot,
-		source,
-		target,
-		sourceExists,
-		sourceIsDir,
-		targetExists,
-		targetIsDir,
+		root,
+		sourceRel,
+		targetRel,
+		sourceState,
+		targetState,
 	)
 }
 
 func applyProjectionPathDecision(
 	move *childProjectionMove,
-	parentRoot string,
-	source string,
-	target string,
-	sourceExists bool,
-	sourceIsDir bool,
-	targetExists bool,
-	targetIsDir bool,
+	root *synctree.Root,
+	sourceRel string,
+	targetRel string,
+	sourceState synctree.PathState,
+	targetState synctree.PathState,
 ) error {
 	switch {
-	case sourceExists && !sourceIsDir:
+	case sourceState.Exists && !sourceState.IsDir:
 		return projectionConflict(move, "previous local path is not a directory")
-	case targetExists && !targetIsDir:
+	case targetState.Exists && !targetState.IsDir:
 		return projectionConflict(move, "current local path is not a directory")
-	case sourceExists && targetExists:
-		same, sameErr := projectionPathsSameFile(source, target)
+	case sourceState.Exists && targetState.Exists:
+		same, sameErr := projectionPathsSameFile(root, sourceRel, targetRel)
 		if sameErr != nil {
 			return projectionUnavailable(move, "comparing projection paths", sameErr)
 		}
 		if same {
-			return renameCaseOnlyProjection(move, source, target)
+			return renameCaseOnlyProjection(move, root, sourceRel, targetRel)
 		}
 		return projectionConflict(move, "previous and current local paths both exist")
-	case !sourceExists && targetExists:
+	case !sourceState.Exists && targetState.Exists:
 		return nil
-	case !sourceExists && !targetExists:
+	case !sourceState.Exists && !targetState.Exists:
 		return projectionUnavailable(move, "moving local projection", fmt.Errorf("previous and current local paths are both missing"))
 	default:
-		return renameProjectionSource(move, parentRoot, source, target)
+		return renameProjectionSource(move, root, sourceRel, targetRel)
 	}
 }
 
@@ -204,72 +205,48 @@ func projectionUnavailable(move *childProjectionMove, action string, err error) 
 	}
 }
 
-func renameProjectionSource(move *childProjectionMove, parentRoot string, source string, target string) error {
-	if err := createProjectionParentDirs(move, parentRoot, filepath.Dir(target)); err != nil {
+func renameProjectionSource(
+	move *childProjectionMove,
+	root *synctree.Root,
+	sourceRel string,
+	targetRel string,
+) error {
+	if err := createProjectionParentDirs(root, filepath.Dir(targetRel)); err != nil {
 		var moveErr *childProjectionMoveError
 		if errors.As(err, &moveErr) {
 			return err
 		}
+		if errors.Is(err, synctree.ErrUnsafePath) {
+			return projectionConflict(move, "projection path ancestor is not a directory")
+		}
 		return projectionUnavailable(move, "creating current local path parent", err)
 	}
-	if err := localpath.Rename(source, target); err != nil {
+	if err := root.Rename(sourceRel, targetRel); err != nil {
 		return projectionUnavailable(move, "moving local projection", err)
 	}
 
 	return nil
 }
 
-func renameCaseOnlyProjection(move *childProjectionMove, source string, target string) error {
-	if source == target {
+func renameCaseOnlyProjection(move *childProjectionMove, root *synctree.Root, sourceRel string, targetRel string) error {
+	if sourceRel == targetRel {
 		return nil
 	}
 
-	tempPath, err := caseOnlyProjectionTempPath(move, target)
-	if err != nil {
-		return projectionUnavailable(move, "choosing temporary projection rename path", err)
-	}
-	if err := localpath.Rename(source, tempPath); err != nil {
-		return projectionUnavailable(move, "moving local projection to temporary path", err)
-	}
-	if err := localpath.Rename(tempPath, target); err != nil {
-		if rollbackErr := localpath.Rename(tempPath, source); rollbackErr != nil {
-			return projectionUnavailable(
-				move,
-				"moving local projection from temporary path",
-				errors.Join(err, fmt.Errorf("rolling back temporary projection rename: %w", rollbackErr)),
-			)
-		}
+	tempStem := caseOnlyProjectionTempStem(move, targetRel)
+	if err := root.RenameWithTemporarySibling(sourceRel, targetRel, tempStem, caseOnlyProjectionRenameAttempts); err != nil {
 		return projectionUnavailable(move, "moving local projection from temporary path", err)
 	}
 
 	return nil
 }
 
-func caseOnlyProjectionTempPath(move *childProjectionMove, target string) (string, error) {
-	sum := sha256.Sum256([]byte(move.mountID.String() + "\x00" + target))
-	stem := ".onedrive-go-projection-rename-" + hex.EncodeToString(sum[:])[:16]
-	parent := filepath.Dir(target)
-	for i := 0; i < 10; i++ {
-		name := stem
-		if i > 0 {
-			name = fmt.Sprintf("%s-%d", stem, i)
-		}
-		candidate := filepath.Join(parent, name)
-		if _, err := localpath.Lstat(candidate); errors.Is(err, os.ErrNotExist) {
-			return candidate, nil
-		} else if err != nil {
-			return "", fmt.Errorf("checking temporary projection rename path %s: %w", candidate, err)
-		}
-	}
-
-	return "", fmt.Errorf("temporary projection rename path already exists for %s", move.mountID)
+func caseOnlyProjectionTempStem(move *childProjectionMove, targetRel string) string {
+	sum := sha256.Sum256([]byte(move.mountID.String() + "\x00" + targetRel))
+	return ".onedrive-go-projection-rename-" + hex.EncodeToString(sum[:])[:16]
 }
 
-func childProjectionAbsolutePath(parentSyncRoot string, rel string) (string, error) {
-	parentRoot, err := filepath.Abs(filepath.Clean(parentSyncRoot))
-	if err != nil {
-		return "", fmt.Errorf("resolving parent sync root %q: %w", parentSyncRoot, err)
-	}
+func childProjectionRelativePath(rel string) (string, error) {
 	cleanRel := filepath.Clean(filepath.FromSlash(rel))
 	if cleanRel == "." || cleanRel == "" || filepath.IsAbs(cleanRel) {
 		return "", fmt.Errorf("path %q must be relative", rel)
@@ -279,143 +256,45 @@ func childProjectionAbsolutePath(parentSyncRoot string, rel string) (string, err
 		return "", fmt.Errorf("path %q escapes parent sync root", rel)
 	}
 
-	fullPath := filepath.Join(parentRoot, cleanRel)
-	relativeToRoot, err := filepath.Rel(parentRoot, fullPath)
+	return cleanRel, nil
+}
+
+func projectionPathState(root *synctree.Root, rel string) (synctree.PathState, error) {
+	state, err := root.PathStateNoFollow(rel)
 	if err != nil {
-		return "", fmt.Errorf("relativizing child projection path %q: %w", rel, err)
-	}
-	if relativeToRoot == parentPathSegment ||
-		strings.HasPrefix(relativeToRoot, parentPathSegment+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q escapes parent sync root", rel)
+		return synctree.PathState{}, fmt.Errorf("reading projection path %s: %w", rel, err)
 	}
 
-	return fullPath, nil
+	return state, nil
 }
 
-func projectionPathState(path string) (exists bool, isDir bool, err error) {
-	info, err := localpath.Lstat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, false, nil
-		}
-		return false, false, fmt.Errorf("reading projection path %s: %w", path, err)
-	}
-
-	if info.Mode()&os.ModeSymlink != 0 {
-		return true, false, nil
-	}
-
-	return true, info.IsDir(), nil
-}
-
-func validateProjectionAncestors(move *childProjectionMove, parentRoot string, fullPath string) error {
-	targetParent := filepath.Dir(fullPath)
-	relativeParent, err := filepath.Rel(parentRoot, targetParent)
-	if err != nil {
-		return projectionUnavailable(move, "relativizing projection path parent", err)
-	}
-	if relativeParent == "." {
-		return nil
-	}
-	if relativeParent == parentPathSegment ||
-		strings.HasPrefix(relativeParent, parentPathSegment+string(filepath.Separator)) {
-		return projectionConflict(move, "projection path escapes parent sync root")
-	}
-
-	current := parentRoot
-	for _, component := range strings.Split(relativeParent, string(filepath.Separator)) {
-		if component == "" || component == "." {
-			continue
-		}
-		current = filepath.Join(current, component)
-		info, statErr := localpath.Lstat(current)
-		if errors.Is(statErr, os.ErrNotExist) {
-			return nil
-		}
-		if statErr != nil {
-			return projectionUnavailable(move, "checking projection path ancestor", statErr)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return projectionConflict(move, "projection path ancestor is not a directory")
-		}
-	}
-
-	return nil
-}
-
-func createProjectionParentDirs(move *childProjectionMove, parentRoot string, targetParent string) error {
-	relativeParent, err := filepath.Rel(parentRoot, targetParent)
-	if err != nil {
-		return fmt.Errorf("relativizing current local path parent: %w", err)
-	}
-	if relativeParent == "." {
-		return nil
-	}
-	if relativeParent == parentPathSegment ||
-		strings.HasPrefix(relativeParent, parentPathSegment+string(filepath.Separator)) {
-		return projectionConflict(move, "projection path escapes parent sync root")
-	}
-
-	current := parentRoot
-	for _, component := range strings.Split(relativeParent, string(filepath.Separator)) {
-		if component == "" || component == "." {
-			continue
-		}
-		current = filepath.Join(current, component)
-		if err := ensureProjectionParentComponent(move, current); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func ensureProjectionParentComponent(move *childProjectionMove, current string) error {
-	info, statErr := localpath.Lstat(current)
-	if statErr == nil {
-		return ensureProjectionParentInfo(move, info)
-	}
-	if !errors.Is(statErr, os.ErrNotExist) {
-		return fmt.Errorf("checking current local path parent %s: %w", current, statErr)
-	}
-	if err := localpath.Mkdir(current, childMountRootDirPerms); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return validateProjectionParentAfterCreateRace(move, current)
-		}
-		return fmt.Errorf("creating current local path parent %s: %w", current, err)
-	}
-
-	return nil
-}
-
-func validateProjectionParentAfterCreateRace(move *childProjectionMove, current string) error {
-	info, statErr := localpath.Lstat(current)
-	if statErr != nil {
-		return fmt.Errorf("checking current local path parent %s after create race: %w", current, statErr)
-	}
-
-	return ensureProjectionParentInfo(move, info)
-}
-
-func ensureProjectionParentInfo(move *childProjectionMove, info os.FileInfo) error {
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+func validateProjectionAncestors(move *childProjectionMove, root *synctree.Root, rel string) error {
+	err := root.ValidateNoSymlinkAncestors(rel)
+	if errors.Is(err, synctree.ErrUnsafePath) {
 		return projectionConflict(move, "projection path ancestor is not a directory")
 	}
+	if err != nil {
+		return projectionUnavailable(move, "checking projection path ancestor", err)
+	}
 
 	return nil
 }
 
-func projectionPathsSameFile(source string, target string) (bool, error) {
-	sourceInfo, err := localpath.Stat(source)
-	if err != nil {
-		return false, fmt.Errorf("stat previous local path %s: %w", source, err)
-	}
-	targetInfo, err := localpath.Stat(target)
-	if err != nil {
-		return false, fmt.Errorf("stat current local path %s: %w", target, err)
+func createProjectionParentDirs(root *synctree.Root, targetParentRel string) error {
+	if err := root.MkdirAllNoFollow(targetParentRel, childMountRootDirPerms); err != nil {
+		return fmt.Errorf("creating projection parent directories: %w", err)
 	}
 
-	return os.SameFile(sourceInfo, targetInfo), nil
+	return nil
+}
+
+func projectionPathsSameFile(root *synctree.Root, sourceRel string, targetRel string) (bool, error) {
+	same, err := root.SameFile(sourceRel, targetRel)
+	if err != nil {
+		return false, fmt.Errorf("comparing projection paths: %w", err)
+	}
+
+	return same, nil
 }
 
 func recordProjectionMoveSuccess(move *childProjectionMove) error {

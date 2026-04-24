@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,9 +177,24 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 
 	// Upload-only should still observe remote truth and advance the delta token,
 	// but it must not settle the download-only side effects yet.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	assert.NotContains(t, stderr, "No changes detected",
-		"upload-only should observe remote drift even when it cannot apply it")
+	attempt := requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		120*time.Second,
+		"upload-only should observe remote drift before durable mirror recovery",
+		func(result syncAttemptResult) bool {
+			return result.Err == nil &&
+				strings.Contains(result.Stderr, "Deferred by mode:") &&
+				strings.Contains(result.Stderr, "Downloads:") &&
+				strings.Contains(result.Stderr, "Local deletes:")
+		},
+		"--upload-only",
+	)
+	assert.Contains(t, attempt.Stderr, "Deferred by mode:",
+		"upload-only should report remote drift even when it cannot apply it")
+	assert.Contains(t, attempt.Stderr, "Downloads:")
+	assert.Contains(t, attempt.Stderr, "Local deletes:")
 
 	editData, err := os.ReadFile(remoteEditPath)
 	require.NoError(t, err)
@@ -189,9 +205,31 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 
 	// The next download-only run should settle the already-observed remote
 	// drift from durable mirror truth, even without fresh delta events.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
-	assert.NotContains(t, stderr, "No changes detected",
+	attempt = requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		120*time.Second,
+		"download-only should settle durable remote mirror drift",
+		func(result syncAttemptResult) bool {
+			if result.Err != nil {
+				return false
+			}
+
+			editData, err := os.ReadFile(remoteEditPath)
+			if err != nil || string(editData) != "updated from remote" {
+				return false
+			}
+
+			_, err = os.Stat(remoteDeletePath)
+			return os.IsNotExist(err)
+		},
+		"--download-only",
+	)
+	assert.Contains(t, attempt.Stderr, "Plan:",
 		"download-only should settle durable remote mirror drift")
+	assert.Contains(t, attempt.Stderr, "Downloads:")
+	assert.Contains(t, attempt.Stderr, "Local deletes:")
 
 	editData, err = os.ReadFile(remoteEditPath)
 	require.NoError(t, err)
@@ -201,7 +239,7 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 	assert.ErrorIs(t, err, os.ErrNotExist)
 
 	snapshot := snapshotLocalTree(t, localDir)
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 	assert.Contains(t, stderr, "No changes detected",
 		"immediate rerun after durable mirror settlement should be idle")
 	assert.Equal(t, snapshot, snapshotLocalTree(t, localDir))

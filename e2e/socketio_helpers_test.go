@@ -79,6 +79,9 @@ func waitForSocketIOConnected(t *testing.T, eventsPath string, timeout time.Dura
 			case "websocket_connect_failed":
 				require.FailNowf(t, "socket.io connection failed", "%+v", event)
 			case "websocket_fallback":
+				if isExpectedMountRootWebsocketFallback(event) {
+					continue
+				}
 				require.FailNowf(t, "socket.io fell back to polling", "%+v", event)
 			}
 		}
@@ -88,6 +91,10 @@ func waitForSocketIOConnected(t *testing.T, eventsPath string, timeout time.Dura
 
 	require.FailNowf(t, "socket.io did not connect within the startup window", "events: %+v", readSocketIODebugEvents(t, eventsPath))
 	return syncengine.DebugEvent{}
+}
+
+func isExpectedMountRootWebsocketFallback(event syncengine.DebugEvent) bool {
+	return event.Note == "mount_root"
 }
 
 func waitForObserverStarted(

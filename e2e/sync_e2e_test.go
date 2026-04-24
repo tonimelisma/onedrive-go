@@ -424,6 +424,12 @@ func putRemoteFileForDrive(
 
 func classifyFixturePutCommandFailure(stderr string) liveProviderRecurrenceDecision {
 	switch {
+	case strings.Contains(stderr, "probe account identity") &&
+		isRetryableGraphGatewayFailure(stderr):
+		return liveProviderRecurrenceDecision{
+			Reason: liveProviderRecurrenceTransientGraphGatewayFailure,
+			Retry:  true,
+		}
 	case strings.Contains(stderr, "simple-upload-create-transient-404 retry exhausted"),
 		strings.Contains(stderr, "upload-session-create-transient-404 retry exhausted"):
 		return liveProviderRecurrenceDecision{
@@ -446,6 +452,12 @@ func classifyFixturePutCommandFailure(stderr string) liveProviderRecurrenceDecis
 
 func classifyFixtureMkdirCommandFailure(stderr string) liveProviderRecurrenceDecision {
 	switch {
+	case strings.Contains(stderr, "probe account identity") &&
+		isRetryableGraphGatewayFailure(stderr):
+		return liveProviderRecurrenceDecision{
+			Reason: liveProviderRecurrenceTransientGraphGatewayFailure,
+			Retry:  true,
+		}
 	case strings.Contains(stderr, "remote path not yet visible"):
 		return liveProviderRecurrenceDecision{
 			Reason: liveProviderRecurrenceFreshParentParentPathLag,
@@ -479,6 +491,12 @@ func TestClassifyFixturePutCommandFailure_KnownConvergenceFamilies(t *testing.T)
 		Retry:  true,
 	}, classifyFixturePutCommandFailure(
 		`Error: resolving parent "e2e-fast-conflict": remote path not yet visible: "e2e-fast-conflict"`,
+	))
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrenceTransientGraphGatewayFailure,
+		Retry:  true,
+	}, classifyFixturePutCommandFailure(
+		`Error: probe account identity: fetch authenticated user for personal:testitesti18@outlook.com: graph: HTTP 504 (request-id: 50f613df-8467-4734-a771-524f70af34cc): ProfileException`,
 	))
 }
 
@@ -519,6 +537,12 @@ func TestClassifyFixtureMkdirCommandFailure_KnownConvergenceFamilies(t *testing.
 		Retry:  true,
 	}, classifyFixtureMkdirCommandFailure(
 		`Error: confirming folder "e2e-sync-bidi-123/data" visibility: remote path not yet visible: "e2e-sync-bidi-123/data"`,
+	))
+	assert.Equal(t, liveProviderRecurrenceDecision{
+		Reason: liveProviderRecurrenceTransientGraphGatewayFailure,
+		Retry:  true,
+	}, classifyFixtureMkdirCommandFailure(
+		`Error: probe account identity: fetch authenticated user for personal:testitesti18@outlook.com: graph: HTTP 504 (request-id: 50f613df-8467-4734-a771-524f70af34cc): ProfileException`,
 	))
 }
 
