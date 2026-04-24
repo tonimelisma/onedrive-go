@@ -81,7 +81,7 @@ follow-on `UpdateFileSystemInfo` PATCH can also briefly return `404
 itemNotFound` for the returned item ID, or hit a transient 502/503/504
 service failure after the content write has already succeeded. That retry stays
 in the graph boundary and only applies to the post-simple-upload finalization
-path, with a bounded window sized for the longer mounted-root item-ID lag seen
+path, with a bounded window sized for the longer mount-root item-ID lag seen
 in live E2E; transfer-manager and CLI callers still see one success or one
 failure outcome.
 
@@ -122,7 +122,7 @@ delete-target path recovery in the same owner:
   overhead and roughly a two-minute wall-clock budget, because live Graph
   evidence has shown a path can become readable, regress to `404 itemNotFound`,
   and only recover again well after the older ~32-second budget
-- rooted-subtree path creation still starts from the configured subtree root
+- mount-root path creation still starts from the configured subtree root
   item, not the backing drive root, so recursive `mkdir` walks create
   descendants in the same subtree that later `ResolveItem()` /
   `WaitPathVisible()` calls read
@@ -171,10 +171,11 @@ That keeps auth ownership aligned with runtime mounts, including managed child
 projections, instead of carrying `ResolvedDrive` through transfer/runtime
 construction as a second source of truth.
 
-The resulting `driveops.Session` is also mount-rooted in its own vocabulary.
-Interactive and sync path operations anchor themselves at
-`MountedRootItemID` when one is configured, instead of treating rooted-subtree
-operation as a special generic "mounted-root" session mode.
+The resulting `driveops.MountSession` carries mount-root path vocabulary.
+Interactive path operations anchor themselves at `RemoteRootItemID` when one
+is configured. Generic `driveops.Session` stays an authenticated drive-client
+shape, so sync engine construction receives mount-root scope from
+`EngineMountConfig` rather than session state.
 
 ## SessionStore
 

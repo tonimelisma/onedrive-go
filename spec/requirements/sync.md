@@ -27,7 +27,7 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.3.5: For edit/edit and create/create conflicts, the engine shall preserve both versions by renaming the local loser to a conflict copy and restoring the remote winner at the canonical path. [verified]
 - R-2.3.6: For local-edit vs remote-delete conflicts, the engine shall auto-resolve with local-wins behavior by uploading local content to recreate the remote item. [verified]
 - R-2.3.7: When `status` encounters more than 10 conditions of the same type for a displayed mount, the system shall group them under a single heading with count and show the first 5 paths. When `--verbose` is passed, the system shall show all paths. Default sampling shall apply equally to text and JSON output. [designed]
-- R-2.3.8: When displaying scope-level conditions where drives have independent scopes, the system shall preserve those groups distinctly within each drive's status output. Separately configured shared-root drives appear as separate drives rather than embedded nested scopes. [verified]
+- R-2.3.8: When displaying scope-level conditions where drives have independent scopes, the system shall preserve those groups distinctly within each drive's status output. Separately configured standalone shared-folder drives appear as separate drives rather than embedded nested scopes. [verified]
 - R-2.3.9: When displaying drive-specific failures for a separately configured shared-root drive, the system shall use that drive's user-facing identity rather than opaque internal identifiers. [verified]
 - R-2.3.10: When `--json` is passed to `status`, the JSON contract shall stay the same regardless of whether `--drive` is used. Each displayed mount's nested `sync_state` shall expose structured `conditions` together with sampling metadata (`examples_limit`, `verbose`) and sampled-section totals. [verified]
 - R-2.3.11: Shared-folder write blocks shall have no manual CLI retry or recheck command. The system shall revalidate them automatically during normal sync/watch blocker trials while blocked writes still exist. [verified]
@@ -41,7 +41,7 @@ control. Separately configured shared folders remain supported as their own
 drives.
 
 - R-2.4.1: Removed path-filtering configuration keys shall be rejected as unknown configuration rather than silently ignored. [verified]
-- R-2.4.2: Observation shall not invent out-of-scope filtered remote state; separately configured shared-root drives are independent drives with independent observation roots. [verified]
+- R-2.4.2: Observation shall not invent out-of-scope filtered remote state; separately configured standalone shared-folder drives are independent drives with independent observation roots. [verified]
 - R-2.4.3: Embedded shared-folder link items discovered inside a normal drive shall be ignored instead of becoming nested synced subtrees. [verified]
 - R-2.4.4: Observation shall cover the whole configured local root without marker-file-driven scope changes. [verified]
 - R-2.4.5: The product shall not expose user-configured bidirectional path subsets inside a drive. [verified]
@@ -126,8 +126,8 @@ Failure tracking, scope-based classification, and lifecycle management. Each fai
 - R-2.10.36: When 429 is discovered independently per engine (same token), no shared state shall be required. [verified]
 - R-2.10.37: Scope blocks shall be engine-internal. One drive engine's scope state shall have no effect on another drive engine. [verified]
 - R-2.10.38: When a configured drive is removed, its scope state disappears with that drive's state DB and shall not leak into other drives. [verified]
-- R-2.10.39: Two separately configured shared-root drives to the same sharer's drive shall remain independent. A 507 on one shall not auto-block the other. [verified]
-- R-2.10.40: Permission boundary walking on shared-root drives shall not walk above the configured remote root. [verified]
+- R-2.10.39: Two separately configured standalone shared-folder drives to the same sharer's drive shall remain independent. A 507 on one shall not auto-block the other. [verified]
+- R-2.10.40: Permission boundary walking on standalone shared-folder drives shall not walk above the configured remote root. [verified]
 - R-2.10.41: When a download, delete, or move action succeeds, the system shall clear any corresponding retry-work rows that no longer apply to that path. Observation-owned durable current-truth rows clear only after a later observation pass proves they no longer apply. [designed]
 - R-2.10.42: The scope detection sliding window shall accept results from concurrent workers. A success from any path in the scope shall reset the unique-path failure counter, preventing false block scopes from interleaved results. [verified]
 - R-2.10.43: When available disk space falls below `min_free_space`, the system shall set a `disk:local` block scope suppressing all downloads. Trial timing follows the unified local block-scope interval in R-2.10.14. [verified]

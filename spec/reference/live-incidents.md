@@ -195,7 +195,7 @@ Status: fixed
 Recurring: no
 Summary: Once the nightly-only stale tests were removed, the repaired full
 suite still exposed three repo-local shared-root bugs. Catalog-backed shared
-drives could drop their canonical `RootItemID` during config resolution and
+drives could drop their canonical `RemoteRootItemID` during config resolution and
 widen sync back to the sharer's whole drive, CLI `mkdir` still walked from the
 backing drive root instead of the configured shared root, and SQLite
 reconciliation still treated folder size/mtime/ETag churn as edit/edit drift
@@ -208,11 +208,11 @@ Evidence:
   `shared:testitesti18@outlook.com:<driveID>:<itemID>`, which isolated the
   problem to config/session resolution rather than test selection.
 - Config inspection showed `buildResolvedDrive` only preserving shared
-  `RootItemID` on the fallback branch that also derived `DriveID` from the
+  `RemoteRootItemID` on the fallback branch that also derived `DriveID` from the
   canonical ID. When a catalog drive record already supplied `DriveID`, the
   resolved shared root was silently dropped, which widened sync back to
   whole-drive observation.
-- After preserving `RootItemID`, the same focused re-sync still failed with
+- After preserving `RemoteRootItemID`, the same focused re-sync still failed with
   two conflict copies plus two download actions targeted at folders. A new
   regression test,
   [`TestQueryReconciliationState_FolderMetadataChurnIsNoop`](../../internal/sync/sqlite_compare_test.go),
@@ -226,7 +226,7 @@ Evidence:
   folder outside that subtree, exhausting the bounded visibility budget with
   `remote path not yet visible`.
 Resolution / mitigation: fixed in three product boundaries. Shared-root config
-resolution now always preserves the canonical `RootItemID` even when the
+resolution now always preserves the canonical `RemoteRootItemID` even when the
 backing drive ID comes from the catalog. CLI `mkdir` now anchors its recursive
 path walk at the session's configured root item, so shared-root commands
 create descendants inside the configured subtree instead of the backing drive

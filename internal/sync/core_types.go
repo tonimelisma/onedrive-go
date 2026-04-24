@@ -258,7 +258,7 @@ func (b *Baseline) DescendantsOf(prefix string) []*BaselineEntry {
 // narrow window and permanently lost if the client's token advances past them.
 //
 // When pathPrefix is non-empty, only entries under that prefix are considered
-// (used for rooted-subtree observation). When empty, all entries for the given
+// (used for mount-root observation). When empty, all entries for the given
 // driveID are checked.
 //
 // Returns synthesized ChangeDelete events for each orphan, which can be fed

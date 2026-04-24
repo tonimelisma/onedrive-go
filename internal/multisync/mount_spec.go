@@ -22,21 +22,21 @@ func (id mountID) String() string {
 // configured top-level mount. Config resolution owns producing these values;
 // multisync consumes them without reaching back into config-owned drive shapes.
 type StandaloneMountConfig struct {
-	SelectionIndex            int
-	CanonicalID               driveid.CanonicalID
-	DisplayName               string
-	SyncRoot                  string
-	StatePath                 string
-	RemoteDriveID             driveid.ID
-	RemoteRootItemID          string
-	TokenOwnerCanonical       driveid.CanonicalID
-	AccountEmail              string
-	Paused                    bool
-	EnableWebsocket           bool
-	RootedSubtreeDeltaCapable bool
-	TransferWorkers           int
-	CheckWorkers              int
-	MinFreeSpaceBytes         int64
+	SelectionIndex         int
+	CanonicalID            driveid.CanonicalID
+	DisplayName            string
+	SyncRoot               string
+	StatePath              string
+	RemoteDriveID          driveid.ID
+	RemoteRootItemID       string
+	TokenOwnerCanonical    driveid.CanonicalID
+	AccountEmail           string
+	Paused                 bool
+	EnableWebsocket        bool
+	RemoteRootDeltaCapable bool
+	TransferWorkers        int
+	CheckWorkers           int
+	MinFreeSpaceBytes      int64
 }
 
 // StandaloneMountSelection carries the configured top-level mounts that are
@@ -65,7 +65,7 @@ type mountSpec struct {
 	accountEmail              string
 	paused                    bool
 	enableWebsocket           bool
-	rootedSubtreeDeltaCapable bool
+	remoteRootDeltaCapable    bool
 	transferWorkers           int
 	checkWorkers              int
 	minFreeSpace              int64
@@ -316,7 +316,7 @@ func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
 		accountEmail:              accountEmail,
 		paused:                    cfg.Paused,
 		enableWebsocket:           cfg.EnableWebsocket,
-		rootedSubtreeDeltaCapable: cfg.RootedSubtreeDeltaCapable,
+		remoteRootDeltaCapable:    cfg.RemoteRootDeltaCapable,
 		transferWorkers:           cfg.TransferWorkers,
 		checkWorkers:              cfg.CheckWorkers,
 		minFreeSpace:              cfg.MinFreeSpaceBytes,
@@ -335,23 +335,23 @@ func buildChildMountCandidate(parent *mountSpec, record config.MountRecord) (*ch
 	}
 
 	child := &mountSpec{
-		mountID:                   mountID(record.MountID),
-		parentMountID:             parent.mountID,
-		projectionKind:            MountProjectionChild,
-		canonicalID:               driveid.CanonicalID{},
-		displayName:               displayName,
-		syncRoot:                  filepath.Join(parent.syncRoot, filepath.FromSlash(record.RelativeLocalPath)),
-		statePath:                 statePath,
-		remoteDriveID:             driveid.New(record.RemoteDriveID),
-		remoteRootItemID:          record.RemoteRootItemID,
-		tokenOwnerCanonical:       parent.tokenOwnerCanonical,
-		accountEmail:              parent.accountEmail,
-		paused:                    parent.paused || record.Paused,
-		enableWebsocket:           parent.enableWebsocket,
-		rootedSubtreeDeltaCapable: parent.rootedSubtreeDeltaCapable,
-		transferWorkers:           parent.transferWorkers,
-		checkWorkers:              parent.checkWorkers,
-		minFreeSpace:              parent.minFreeSpace,
+		mountID:                mountID(record.MountID),
+		parentMountID:          parent.mountID,
+		projectionKind:         MountProjectionChild,
+		canonicalID:            driveid.CanonicalID{},
+		displayName:            displayName,
+		syncRoot:               filepath.Join(parent.syncRoot, filepath.FromSlash(record.RelativeLocalPath)),
+		statePath:              statePath,
+		remoteDriveID:          driveid.New(record.RemoteDriveID),
+		remoteRootItemID:       record.RemoteRootItemID,
+		tokenOwnerCanonical:    parent.tokenOwnerCanonical,
+		accountEmail:           parent.accountEmail,
+		paused:                 parent.paused || record.Paused,
+		enableWebsocket:        parent.enableWebsocket,
+		remoteRootDeltaCapable: parent.remoteRootDeltaCapable,
+		transferWorkers:        parent.transferWorkers,
+		checkWorkers:           parent.checkWorkers,
+		minFreeSpace:           parent.minFreeSpace,
 	}
 
 	return &childMountCandidate{
@@ -394,12 +394,12 @@ func sortedMountRecords(inventory *config.MountInventory) []config.MountRecord {
 }
 
 func (m *mountSpec) contentRootKey() string {
-	rootItemID := m.remoteRootItemID
-	if rootItemID == "" {
-		rootItemID = "root"
+	remoteRootItemID := m.remoteRootItemID
+	if remoteRootItemID == "" {
+		remoteRootItemID = "root"
 	}
 
-	return fmt.Sprintf("%s|%s|%s", m.tokenOwnerCanonical.String(), m.remoteDriveID.String(), rootItemID)
+	return fmt.Sprintf("%s|%s|%s", m.tokenOwnerCanonical.String(), m.remoteDriveID.String(), remoteRootItemID)
 }
 
 func (m *mountSpec) identity() MountIdentity {
@@ -424,7 +424,7 @@ func (m *mountSpec) syncSessionConfig() *driveops.MountSessionConfig {
 	return &driveops.MountSessionConfig{
 		TokenOwnerCanonical: m.tokenOwnerCanonical,
 		DriveID:             m.remoteDriveID,
-		RootItemID:          m.remoteRootItemID,
+		RemoteRootItemID:    m.remoteRootItemID,
 		AccountEmail:        m.accountEmail,
 	}
 }

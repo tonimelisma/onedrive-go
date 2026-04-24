@@ -91,9 +91,9 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 		return m.baseline, nil
 	}
 
-	mountDriveID, err := m.mountDriveIDForRead(ctx, driveid.ID{})
+	contentDriveID, err := m.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
-		return nil, fmt.Errorf("sync: loading mount drive for baseline: %w", err)
+		return nil, fmt.Errorf("sync: loading content drive for baseline: %w", err)
 	}
 
 	rows, err := m.db.QueryContext(ctx, sqlLoadBaseline)
@@ -109,7 +109,7 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 	}
 
 	for rows.Next() {
-		entry, err := scanBaselineRow(rows, mountDriveID)
+		entry, err := scanBaselineRow(rows, contentDriveID)
 		if err != nil {
 			return nil, err
 		}
@@ -133,7 +133,7 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 
 // scanBaselineRow scans a single row from the baseline table, handling
 // nullable columns with sql.Null* types.
-func scanBaselineRow(rows *sql.Rows, mountDriveID driveid.ID) (*BaselineEntry, error) {
+func scanBaselineRow(rows *sql.Rows, contentDriveID driveid.ID) (*BaselineEntry, error) {
 	var (
 		e           BaselineEntry
 		parentID    sql.NullString
@@ -154,7 +154,7 @@ func scanBaselineRow(rows *sql.Rows, mountDriveID driveid.ID) (*BaselineEntry, e
 		return nil, fmt.Errorf("sync: scanning baseline row: %w", err)
 	}
 
-	e.DriveID = mountDriveID
+	e.DriveID = contentDriveID
 	e.ParentID = parentID.String
 	e.LocalHash = localHash.String
 	e.RemoteHash = remoteHash.String
@@ -335,11 +335,11 @@ func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 	if err != nil {
 		return err
 	}
-	if ensureErr := m.ensureMountDriveIDTx(ctx, tx, outcome.DriveID, state); ensureErr != nil {
+	if ensureErr := m.ensureContentDriveIDTx(ctx, tx, outcome.DriveID, state); ensureErr != nil {
 		return ensureErr
 	}
-	if !state.MountDriveID.IsZero() {
-		outcome.DriveID = state.MountDriveID
+	if !state.ContentDriveID.IsZero() {
+		outcome.DriveID = state.ContentDriveID
 	}
 
 	if applyErr := applySingleMutation(ctx, tx, outcome); applyErr != nil {
@@ -405,11 +405,11 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 	if err != nil {
 		return err
 	}
-	if ensureErr := m.ensureMountDriveIDTx(ctx, tx, entry.DriveID, state); ensureErr != nil {
+	if ensureErr := m.ensureContentDriveIDTx(ctx, tx, entry.DriveID, state); ensureErr != nil {
 		return ensureErr
 	}
-	if !state.MountDriveID.IsZero() {
-		entry.DriveID = state.MountDriveID
+	if !state.ContentDriveID.IsZero() {
+		entry.DriveID = state.ContentDriveID
 	}
 
 	_, err = tx.ExecContext(ctx, sqlUpsertBaseline,
@@ -699,9 +699,9 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	mountDriveID, err := m.mountDriveIDForRead(ctx, driveid.ID{})
+	contentDriveID, err := m.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
-		return 0, fmt.Errorf("sync: loading mount drive for consistency check: %w", err)
+		return 0, fmt.Errorf("sync: loading content drive for consistency check: %w", err)
 	}
 
 	rows, err := m.db.QueryContext(ctx, sqlLoadBaseline)
@@ -713,7 +713,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	dbEntries := make(map[string]*BaselineEntry)
 
 	for rows.Next() {
-		entry, scanErr := scanBaselineRow(rows, mountDriveID)
+		entry, scanErr := scanBaselineRow(rows, contentDriveID)
 		if scanErr != nil {
 			return 0, scanErr
 		}

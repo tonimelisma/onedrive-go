@@ -230,19 +230,19 @@ func TestSessionRuntime_InteractiveClientsReuseThrottleGatePerMountTarget(t *tes
 	rooted := runtime.interactiveClientsForMount(&MountSessionConfig{
 		TokenOwnerCanonical: ownerCID,
 		DriveID:             driveid.New("drive-a"),
-		RootItemID:          "remote-root",
+		RemoteRootItemID:    "remote-root",
 		AccountEmail:        ownerCID.Email(),
 	})
 	rootedAgain := runtime.interactiveClientsForMount(&MountSessionConfig{
 		TokenOwnerCanonical: ownerCID,
 		DriveID:             driveid.New("drive-a"),
-		RootItemID:          "remote-root",
+		RemoteRootItemID:    "remote-root",
 		AccountEmail:        ownerCID.Email(),
 	})
 	rootedWithFallbackEmail := runtime.interactiveClientsForMount(&MountSessionConfig{
 		TokenOwnerCanonical: ownerCID,
 		DriveID:             driveid.New("drive-a"),
-		RootItemID:          "remote-root",
+		RemoteRootItemID:    "remote-root",
 	})
 
 	firstRetry, ok := driveA.Meta.Transport.(*retry.RetryTransport)
@@ -321,14 +321,13 @@ func TestSessionRuntime_SyncSession_UsesMountSessionConfig(t *testing.T) {
 	session, err := p.SyncSession(t.Context(), &MountSessionConfig{
 		TokenOwnerCanonical: ownerCID,
 		DriveID:             driveid.New("remote-drive"),
-		RootItemID:          "root-item",
+		RemoteRootItemID:    "root-item",
 		AccountEmail:        "owner@example.com",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, config.DriveTokenPath(ownerCID), tokenPath)
 	assert.Equal(t, "owner@example.com", session.AccountEmail())
-	assert.Equal(t, "root-item", session.MountedRootItemID)
 }
 
 // --- Thread safety ---
@@ -572,17 +571,17 @@ func TestSession_ResolveItem_SlashRoot(t *testing.T) {
 	assert.Equal(t, "/drives/abcdef0123456789/items/root", gotPath)
 }
 
-func TestSession_ResolveItem_MountedRootRelativePath(t *testing.T) {
+func TestMountSession_ResolveItem_MountRootRelativePath(t *testing.T) {
 	t.Parallel()
 
-	const mountedRootItemID = "mounted-root"
+	const mountedRemoteRootItemID = "mount-root-item"
 
 	var gotPaths []string
 
 	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPaths = append(gotPaths, r.URL.Path)
 		switch r.URL.Path {
-		case "/drives/abcdef0123456789/items/" + mountedRootItemID + "/children":
+		case "/drives/abcdef0123456789/items/" + mountedRemoteRootItemID + "/children":
 			writeTestResponsef(t, w, `{"value":[{"id":"folder-id","name":"Documents","folder":{"childCount":1}}]}`)
 		case "/drives/abcdef0123456789/items/folder-id/children":
 			writeTestResponsef(t, w, `{"value":[{"id":"file-id","name":"report.docx"}]}`)
@@ -590,13 +589,13 @@ func TestSession_ResolveItem_MountedRootRelativePath(t *testing.T) {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 	}))
-	s.MountedRootItemID = mountedRootItemID
+	mountSession := NewMountSession(s, mountedRemoteRootItemID)
 
-	item, err := s.ResolveItem(t.Context(), "Documents/report.docx")
+	item, err := mountSession.ResolveItem(t.Context(), "Documents/report.docx")
 	require.NoError(t, err)
 	assert.Equal(t, "file-id", item.ID)
 	assert.Equal(t, []string{
-		"/drives/abcdef0123456789/items/" + mountedRootItemID + "/children",
+		"/drives/abcdef0123456789/items/" + mountedRemoteRootItemID + "/children",
 		"/drives/abcdef0123456789/items/folder-id/children",
 	}, gotPaths)
 }
@@ -630,10 +629,10 @@ func TestSession_ResolveDeleteTarget_RecoversWhenParentPathListingLags(t *testin
 	}, *gotPaths)
 }
 
-func TestSession_ListChildren_MountedRootUsesMountedRootItem(t *testing.T) {
+func TestMountSession_ListChildren_MountRootUsesMountRootItem(t *testing.T) {
 	t.Parallel()
 
-	const mountedRootItemID = "mounted-root"
+	const mountedRemoteRootItemID = "mount-root-item"
 
 	var gotPath string
 
@@ -641,13 +640,13 @@ func TestSession_ListChildren_MountedRootUsesMountedRootItem(t *testing.T) {
 		gotPath = r.URL.Path
 		writeTestResponsef(t, w, `{"value":[{"id":"child1","name":"docs","folder":{"childCount":0}}]}`)
 	}))
-	s.MountedRootItemID = mountedRootItemID
+	mountSession := NewMountSession(s, mountedRemoteRootItemID)
 
-	items, err := s.ListChildren(t.Context(), "")
+	items, err := mountSession.ListChildren(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, "child1", items[0].ID)
-	assert.Equal(t, "/drives/abcdef0123456789/items/"+mountedRootItemID+"/children", gotPath)
+	assert.Equal(t, "/drives/abcdef0123456789/items/"+mountedRemoteRootItemID+"/children", gotPath)
 }
 
 // --- ListChildren ---

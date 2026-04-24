@@ -215,9 +215,9 @@ func TestCLIContextSession_ConfiguredRootItemReachesInteractiveSession(t *testin
 	cc := &CLIContext{
 		Logger: logger,
 		Cfg: &config.ResolvedDrive{
-			CanonicalID: sharedCID,
-			DriveID:     driveid.New("remote-drive"),
-			RootItemID:  "root-item",
+			CanonicalID:      sharedCID,
+			DriveID:          driveid.New("remote-drive"),
+			RemoteRootItemID: "root-item",
 		},
 		Runtime: provider,
 	}
@@ -226,7 +226,7 @@ func TestCLIContextSession_ConfiguredRootItemReachesInteractiveSession(t *testin
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, driveid.New("remote-drive"), session.DriveID)
-	assert.Equal(t, "root-item", session.MountedRootItemID)
+	assert.Equal(t, "root-item", session.RemoteRootItemID)
 	assert.Equal(t, "user@example.com", session.AccountEmail())
 }
 

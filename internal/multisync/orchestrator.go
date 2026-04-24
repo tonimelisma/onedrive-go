@@ -338,13 +338,13 @@ func (o *Orchestrator) buildEngineWork(
 	mode syncengine.SyncMode,
 	opts syncengine.RunOptions,
 ) (mountWork, error) {
-	driveCollector := o.registerMountPerfCollector(mount.mountID.String())
+	mountCollector := o.registerMountPerfCollector(mount.mountID.String())
 	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
 		Session:       session,
 		Mount:         mount,
 		Logger:        o.logger,
 		VerifyDrive:   true,
-		PerfCollector: driveCollector,
+		PerfCollector: mountCollector,
 	})
 	if engineErr != nil {
 		o.removeMountPerfCollector(mount.mountID.String())
@@ -448,7 +448,7 @@ func (o *Orchestrator) startWatchRuntime(
 				Summary: summarizeStartupResults(o.cfg.InitialStartupResults),
 			}
 		}
-		return nil, nil, fmt.Errorf("sync: no drives configured")
+		return nil, nil, fmt.Errorf("sync: no standalone mounts configured")
 	}
 
 	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
@@ -575,37 +575,37 @@ func (o *Orchestrator) startWatchRunner(
 		return nil, fmt.Errorf("session error for mount %s: %w", mount.label(), err)
 	}
 
-	driveCollector := o.registerMountPerfCollector(mount.mountID.String())
+	mountCollector := o.registerMountPerfCollector(mount.mountID.String())
 	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
 		Session:       session,
 		Mount:         mount,
 		Logger:        o.logger,
 		VerifyDrive:   true,
-		PerfCollector: driveCollector,
+		PerfCollector: mountCollector,
 	})
 	if engineErr != nil {
 		o.removeMountPerfCollector(mount.mountID.String())
 		return nil, fmt.Errorf("engine creation failed for mount %s: %w", mount.label(), engineErr)
 	}
 
-	driveCtx, driveCancel := context.WithCancel(ctx)
+	mountCtx, mountCancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 
 	wr := &watchRunner{
 		mount:  mount,
 		engine: engine,
-		cancel: driveCancel,
+		cancel: mountCancel,
 		done:   done,
 	}
 
 	go func() {
 		defer close(done)
-		defer driveCancel()
+		defer mountCancel()
 		defer o.removeMountPerfCollector(mount.mountID.String())
 
-		if watchErr := engine.RunWatch(driveCtx, mode, opts); watchErr != nil {
+		if watchErr := engine.RunWatch(mountCtx, mode, opts); watchErr != nil {
 			// Context cancellation is normal shutdown — don't log as error.
-			if driveCtx.Err() == nil {
+			if mountCtx.Err() == nil {
 				o.logger.Error("watch runner exited with error",
 					slog.String("mount_id", mount.mountID.String()),
 					slog.String("error", watchErr.Error()),
@@ -869,7 +869,7 @@ func mountSpecRuntimeEquivalent(current *mountSpec, next *mountSpec) bool {
 	return current.syncRoot == next.syncRoot &&
 		current.statePath == next.statePath &&
 		current.enableWebsocket == next.enableWebsocket &&
-		current.rootedSubtreeDeltaCapable == next.rootedSubtreeDeltaCapable
+		current.remoteRootDeltaCapable == next.remoteRootDeltaCapable
 }
 
 func mountSpecTuningEquivalent(current *mountSpec, next *mountSpec) bool {

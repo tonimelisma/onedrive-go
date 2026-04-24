@@ -48,7 +48,7 @@ The observation stack has four main pieces:
 | --- | --- |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestNosyncGuard_PreventsAllSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
 | Normal drives ignore embedded shared-folder shortcut items instead of creating nested follow-up sync runtimes. | `internal/sync/observer_remote_test.go`, `internal/sync/remote_state_mirror_test.go` |
-| Rooted-subtree runtimes still support remote observation rooted at their configured remote root. Today, separately configured shared folders use this path. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
+| Mount-root runtimes still support remote observation rooted at their configured remote root. Today, separately configured shared folders use this path. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 
 ## Remote Observation
 
@@ -75,23 +75,23 @@ Important properties:
   boundary issue rather than through synthetic per-descendant issue rows or
   execution-time permission retries
 
-### Drive-root and rooted-subtree observation
+### Drive-root and mount-root observation
 
 The engine now has two remote observation shapes:
 
 - drive-root observation for ordinary drives
-- rooted-subtree observation for runtimes scoped below the remote drive root
+- mount-root observation for runtimes scoped below the remote drive root
 
 There is no nested shared-folder-following runtime inside another synced drive.
 If a normal drive's delta stream contains an embedded shared-folder link item,
 observation ignores it.
 
-Today, separately configured shared folders happen to use the rooted-subtree
-path. Rooted-subtree observation may use folder delta or recursive enumeration
+Today, separately configured shared folders happen to use the mount-root
+path. Mount-root observation may use folder delta or recursive enumeration
 depending on drive type and Graph support.
 
 Remote read-denied boundaries are observation-owned facts. When drive-root or
-rooted-subtree observation proves that remote truth is unreadable, the engine
+mount-root observation proves that remote truth is unreadable, the engine
 persists one managed observation batch containing:
 
 - `observation_issues` rows for `remote_read_denied`
@@ -112,9 +112,9 @@ It owns:
 - path reconstruction from parent chains
 - move detection against baseline
 - malformed sparse-item rejection
-- rooted-subtree path materialization relative to the engine's configured root
+- mount-root path materialization relative to the engine's configured root
 
-Observation emits current truth for the mounted root only. It does not carry a
+Observation emits current truth for the mount root only. It does not carry a
 separate per-event target-root field for later planning or execution.
 
 Sparse parent recovery is intentionally layered:
