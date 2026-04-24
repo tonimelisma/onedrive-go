@@ -298,7 +298,7 @@ Mount inventory should own these durable facts:
   - `child`
 - `LocalMountPath`
 - `LocalAlias`
-- `TokenOwnerAccount`
+- `TokenOwnerCanonical`
 - `RemoteDriveID`
 - `RemoteItemID`
 - `PlaceholderIdentity` when available and useful for lifecycle reconciliation
@@ -698,7 +698,7 @@ Current design docs intentionally define these facts:
 
 - shared folders can still be separate configured drives at the CLI/config edge
 - the control plane builds one engine per runtime mount
-- the engine is a single-drive runtime owner
+- the engine is a single mounted content-root runtime owner
 - the engine supports exactly two root shapes today:
   - drive-root sessions
   - mount-root sessions rooted below the remote drive root
@@ -841,9 +841,9 @@ This section intentionally separates:
 | Current concept | Current role | Transitional role | Target home | Final fate |
 | --- | --- | --- | --- | --- |
 | `shared:<email>:<sourceDriveID>:<sourceItemID>` canonical drive ID | Explicit standalone shared-folder identity | No managed-child role after Increment 7d | Explicit standalone drive config only | Keep only if the product still wants explicit standalone shared-folder mounts |
-| `ResolvedDrive.RemoteRootItemID` | Explicit standalone shared-folder root item | Temporary top-level mount-spec input | `MountRecord.RemoteRootItemID` for managed child mounts | Keep only for explicit standalone shared-folder config |
-| Shared drive `display_name` | User-facing name for configured shared drive | Temporary alias seed | `MountRecord.LocalAlias` | Remove shared-drive-specific display ownership from config |
-| `CatalogDrive.OwnerAccountCanonical` | Shared drive token owner | Temporary auth owner for generated mounts | `MountRecord.TokenOwnerAccount` | Move to dedicated mount inventory or explicit mount metadata |
+| `ResolvedDrive.RemoteRootItemID` | Explicit standalone shared-folder root item | Top-level CLI/config input only | `MountRecord.RemoteItemID` for managed child mounts | Keep only for explicit standalone shared-folder config |
+| Shared drive `display_name` | User-facing name for configured shared drive | No managed-child role after schema v3 | `MountRecord.LocalAlias` | Config display ownership stays standalone-only |
+| `CatalogDrive.OwnerAccountCanonical` | Shared drive token owner | No managed-child role after schema v3 | `MountRecord.TokenOwnerCanonical` | Config/catalog token owner remains standalone-only |
 | `CatalogDrive.RemoteDriveID` | Backing drive ID for configured drives | Temporary content-root field | `MountRecord.RemoteDriveID` | Keep as mount metadata, not drive-config metadata |
 
 ### Runtime Mapping
@@ -851,10 +851,10 @@ This section intentionally separates:
 | Current concept | Current role | Transitional role | Target home | Final fate |
 | --- | --- | --- | --- | --- |
 | `driveops.MountSession.RemoteRootItemID` | Mount-root path scoping | Mount-root input for interactive file operations | Mount-engine remote-root config | Generic drive sessions no longer carry it |
-| `Engine.remoteRootItemID` | Non-drive-root remote boundary | Reusable implementation for mount-local engines | Mount engine root config | Rename/reframe as generic mount root, not shared-root special case |
+| `Engine.remoteRootItemID` | Non-drive-root remote boundary | Reusable implementation for mount-local engines | Mount engine root config | Generic mount-root input after Increment 7e |
 | `RemoteRootDeltaCapable` | Mount-root observation capability branch | Capability selector for mount-root engines | Mount-engine observation capability | Keep capability logic, remove shared-root terminology |
-| `FolderDeltaFetcher` for shared-root | Folder-root delta for shared drives | Reusable mount-root observation path | Mount-engine remote observer | Keep, rename around mount-root observation |
-| `RecursiveLister` fallback for shared-root | Enumeration fallback | Reusable mount-root fallback | Mount-engine remote observer | Keep, rename around mount-root observation |
+| `FolderDeltaFetcher` for mount roots | Folder-root delta for capable mounted roots | Reusable mount-root observation path | Mount-engine remote observer | Keep as mount-root observation |
+| `RecursiveLister` fallback for mount roots | Enumeration fallback | Reusable mount-root fallback | Mount-engine remote observer | Keep as mount-root observation |
 
 ### Planning And Execution Mapping
 
@@ -886,12 +886,12 @@ This table maps today's major code areas to their target architectural home.
 | `internal/config/catalog.go` | Managed inventory for accounts and drives | Split into drive catalog plus mount inventory, or add a distinct mount inventory boundary | Blank-slate preference is a separate mount inventory authority |
 | `internal/config/drive.go` + resolver | Builds `ResolvedDrive` from config/catalog | Keep for configured namespace roots; stop using as the permanent home for shortcut mounts | Synthetic reuse may be acceptable during transition |
 | `internal/driveid` shared `CanonicalID` values | Encodes explicit standalone shared-folder drives | Managed shortcut identity moved to `MountID` in Increment 7d | Configured-drive identity only | Keep only if explicit standalone shared-folder mounts remain a product surface |
-| `internal/driveops/session.go` | Authenticated drive/session plus some shared-root behavior | Shared capability layer plus mount-engine inputs | `RemoteRootItemID` should leave generic session shape |
+| `internal/driveops/session.go` | Authenticated drive/session plus root-aware `MountSession` wrapper | Shared capability layer plus explicit interactive mount wrapper | Generic sessions are path-free; mount-root path operations live on `MountSession` |
 | `internal/graph/*` shared-target resolution | Resolves raw share inputs to owner-side identity | Namespace discovery/reconciliation input | The owner-side target identity remains useful |
-| `internal/sync/engine*.go` | Single-drive engine with shared-root specializations | Mount engine | This is the main reusable runtime core |
+| `internal/sync/engine*.go` | Single mounted content-root engine | Mount engine | This is the main reusable runtime core |
 | `internal/sync/item_converter.go` | Remote item normalization plus embedded-shortcut ignore rules | Mount-engine observation normalizer, plus namespace-lifecycle detection at the boundary | The ignore rule for embedded shortcuts in ordinary content observation remains correct |
 | `internal/sync/planner.go` + `actions.go` | Mount-external metadata rethreaded through actions | Mount-local planner | Target-root action metadata should largely disappear |
-| `internal/sync/executor.go` | Per-action execution with shared-root target overrides | Mount-local executor | Cross-mount behavior should move above the engine |
+| `internal/sync/executor.go` | Per-action execution inside one mounted content root | Mount-local executor | Cross-mount behavior should move above the engine |
 | `internal/sync/store*.go` | Per-mount-drive durable state | Per-mount durable state | Store semantics stay valuable; owner vocabulary changes |
 | `internal/cli/shared*.go` and direct shared commands | User-facing shared-item discovery and ad hoc shared-target operations | Optional product surface outside automatic shortcut runtime | Not required for "shortcut just works" architecture |
 
@@ -950,7 +950,7 @@ architecture fairly naturally:
 - config/catalog can remember them as shared drives
 - drive resolution can collapse them into `DriveID + RemoteRootItemID`
 - `multisync` can stay drive-shaped
-- the engine can stay "drive-root vs shared-root"
+- the engine can stay "drive-root vs mount-root"
 - planner/executor/store were able to stay target-root-aware during transition
 
 That argument should now be read primarily as a smell map, not as an endorsed
@@ -965,13 +965,16 @@ The main smoking guns are:
   not evidence that the shortcut really belongs in generic drive config forever.
 
 - `If generic drive resolution needs `RemoteRootItemID` to make shortcut runtimes work`
-  that is evidence mount-root identity leaked into a generic drive abstraction.
+  that was evidence mount-root identity leaked into a generic drive abstraction;
+  after Increment 7, `ResolvedDrive` is a CLI/config-edge input only.
 
 - `If generic session/runtime scoping needs shared-target and shared-root
   special cases`
-  that is evidence mount policy is living inside account/drive session types.
+  that was evidence mount policy was living inside account/drive session types;
+  after Increment 7f, generic sessions are path-free and root-aware path work
+  uses `MountSession`.
 
-- `If the engine only needs a small branch between drive-root and shared-root`
+- `If the engine only needs a small branch between drive-root and mount-root`
   that is evidence a useful rooted-engine capability exists, but not evidence
   that "shared-root drive" is the right long-term framing or owning abstraction.
 
@@ -1059,8 +1062,8 @@ still in use.
 
 - Generic drive sessions no longer carry `RemoteRootItemID`; `MountSession`
   owns interactive mount-root path scoping.
-- Interactive throttle scoping treats configured shared roots as a special
-  "shared target" shape.
+- Interactive throttle scoping treats configured mount roots as a target-scoped
+  shape.
 - Path resolution helpers such as `resolveItemFromMountRoot` make the
   `MountSession` wrapper aware of mount-rooted operation.
 - Transitional reuse: useful while child mount engines still piggyback on
@@ -1075,11 +1078,10 @@ still in use.
 
 - `remoteRootItemID` and `remoteRootDeltaCapable` are injected into an engine
   whose published contract is still "single-mount runtime owner".
-- These are the clearest signs that shortcut support was pushed downward into
-  the engine as a special case.
-- Transitional reuse: can become the implementation core for a mount engine.
-- Cleanup target: rename/reframe around mount-root engines, not shared-root
-  drives.
+- After Increment 7e these are mount-root engine inputs, not session-derived
+  shared-drive state.
+- Remaining cleanup target: preserve one-root-per-engine and keep capability
+  naming tied to mount-root semantics.
 
 `internal/sync/engine_primary_root.go`
 
@@ -1095,24 +1097,21 @@ still in use.
 - Entire remote observation path specialized around the engine's mount-root
   runtime path.
 - This is not dead code if we keep one engine per shortcut mount.
-- Transitional reuse: strong candidate for the first mount-engine observation
-  implementation.
-- Cleanup target: keep the mount-root implementation but remove
-  assumptions that it is tied to configured shared drives.
+- This is the mount-engine observation implementation for roots below the drive
+  root. It remains valid for explicit standalone shared-folder mounts and
+  managed child mounts.
 
 `internal/sync/engine_primary_root_watch.go`
 
-- Watch startup branches between drive-root and shared-root primary watches.
-- Transitional reuse: same as above.
-- Cleanup target: keep branch by observation capability or root kind if needed,
-  but remove configured-shared-drive framing.
+- Watch startup branches between drive-root and mount-root primary watches.
+- The branch is now by observation capability/root kind, not by configured
+  shared-drive framing.
 
 `internal/sync/engine_config.go`
 
-- Shared-root source-type detection reaches back into config/catalog to decide
-  runtime observation policy.
-- Cleanup target: mount-engine spec should carry the already-resolved capability
-  inputs it needs instead of rediscovering them from mount-drive state.
+- `EngineMountConfig` carries the already-resolved `RemoteRootDeltaCapable`
+  input. Standalone mounts derive it at the CLI/config edge; managed children
+  derive it from `MountRecord.TokenOwnerCanonical`.
 
 ### Observation Vestiges
 
@@ -1143,7 +1142,7 @@ still in use.
 
 - `TargetDriveID`, `TargetRemoteRootItemID`, and `TargetRootLocalPath` were one of
   the strongest signals that shortcut support had been pushed through a
-  single-drive engine rather than moving the boundary above it.
+  single mounted content-root engine rather than moving the boundary above it.
 - Increment 4 removed those ordinary action fields and made planning plus
   execution consume engine-owned mount context directly.
 
@@ -1157,19 +1156,17 @@ still in use.
 
 `internal/sync/executor.go`
 
-- `ExecutorConfig.remoteRootItemID` and cross-drive path-convergence logic make the
-  executor aware that actions may target a different remote root than the engine
-  itself.
-- Transitional reuse: needed while one engine still carries shared-root target
-  metadata through actions.
-- Cleanup target: ordinary executor path should become mount-local. Cross-mount
-  operations should be decomposed above the engine boundary.
+- `ExecutorConfig.remoteRootItemID` makes create, move, upload, and delete
+  convergence relative to the engine's configured mount root.
+- Cleanup target: keep ordinary executor path convergence mount-local.
+  Cross-mount operations should be decomposed above the engine boundary.
 
 `spec/design/sync-planning.md`, `spec/design/sync-execution.md`
 
-- Both docs now contain shared-root metadata sections.
-- Cleanup target: either collapse these into generic mount-local execution rules
-  or restrict boundary metadata to explicit cross-mount orchestration.
+- Planning and execution docs now describe mount-local engine context rather
+  than per-action shared-root target metadata.
+- Cleanup target: keep boundary metadata restricted to explicit cross-mount
+  orchestration if that product surface is added later.
 
 ### Store And Schema Vestiges
 
@@ -1616,13 +1613,16 @@ Exit criteria:
 - automatic shortcuts do not create their own user-facing synced roots in steady
   state
 
-### Increment 7: Remove Shared-Drive-Only Coupling And Finish Terminology Cleanup
+### Increment 7: Remove Shared-Drive-Only Coupling And Finish Terminology Cleanup [completed]
 
-Status: sub-slices 7a through 7e have removed resolved-drive runtime
+Status: sub-slices 7a through 7f have removed resolved-drive runtime
 construction, moved multisync to standalone mount inputs, applied PR-feedback
 hardening, moved managed child identity to `MountIdentity`, and split generic
 sessions from mount-root path scoping while renaming sync-store and engine
-runtime owner vocabulary.
+runtime owner vocabulary. Increment 7f made generic sessions path-free,
+promoted `mounts.json` schema v3 namespace vocabulary, persisted child
+lifecycle/conflict state, and moved namespace inventory mutation behind an
+unexported multisync owner.
 
 Goal:
 
@@ -1658,6 +1658,17 @@ Concrete work:
   validation fails after bind, paused child mounts still reserve their parent
   subtree, and managed mount state paths use bounded collision-resistant digest
   filenames
+- make `mounts.json` the durable namespace/mount authority:
+  schema v3 uses `namespaces`, `namespace_id`, `local_alias`, `remote_item_id`,
+  `token_owner_canonical`, and explicit `MountState` lifecycle values instead
+  of parent-drive vocabulary
+- move child namespace reconciliation into an unexported multisync namespace
+  runtime owner that loads/saves inventory, reconciles shortcut placeholders,
+  computes conflicts/removals, and returns runtime inputs to the orchestrator
+- persist lifecycle decisions for managed child mounts:
+  duplicate child projections and explicit-standalone conflicts become durable
+  `conflict` records, authoritative removals become `pending_removal` until the
+  runner is stopped and the child state DB is purged
 - move managed child runtime/report/status identity off fabricated `shared:`
   drive IDs:
   `MountIdentity` keeps canonical IDs for standalone mounts while managed child
@@ -1678,12 +1689,17 @@ Tests:
 
 - deleted-name sweep tests / repo checks
 - drive add / managed mount / optional child mount regression coverage
+- schema v3 load/save/validation, namespace conflict, pending-removal, and
+  parent-subtree reservation coverage
 
 Exit criteria:
 
 - the runtime architecture is mount-based end to end
 - any remaining configured shared-drive surface is a deliberate product choice,
   not the architectural center of the implementation
+- generic sessions have no path helper API; root-aware operations use
+  `MountSession`
+- managed child lifecycle and conflict decisions are durable inventory state
 
 ## Temporary Coexistence Rules During Refactor
 
@@ -1746,4 +1762,5 @@ several physical drives". It is:
 The current repository already contains reusable pieces of a mount engine in the
 mount-root observation and execution path. Those pieces should be harvested
 deliberately as transitional implementation material, not treated as proof that
-shared shortcuts naturally belong inside the current single-drive engine model.
+shared shortcuts naturally belong inside a single mounted content-root engine
+model.

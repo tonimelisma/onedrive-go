@@ -2,6 +2,7 @@ package multisync
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,22 +47,41 @@ func (f *fakeShortcutDiscoveryClient) ListChildren(_ context.Context, _ string, 
 
 func testParentMountSpec() *mountSpec {
 	return &mountSpec{
-		mountID:       mountID("personal:owner@example.com"),
-		canonicalID:   driveid.MustCanonicalID("personal:owner@example.com"),
-		remoteDriveID: driveid.New("parent-drive"),
+		mountID:             mountID("personal:owner@example.com"),
+		canonicalID:         driveid.MustCanonicalID("personal:owner@example.com"),
+		tokenOwnerCanonical: driveid.MustCanonicalID("personal:owner@example.com"),
+		remoteDriveID:       driveid.New("parent-drive"),
 	}
 }
 
-func testChildRecord(parentID mountID, bindingID, relativePath string) config.MountRecord {
+func testChildRecord(namespaceID mountID, bindingID, relativePath string) config.MountRecord {
 	return config.MountRecord{
-		MountID:           config.ChildMountID(parentID.String(), bindingID),
-		ParentMountID:     parentID.String(),
-		BindingItemID:     bindingID,
-		DisplayName:       "Shortcut",
-		RelativeLocalPath: relativePath,
-		RemoteDriveID:     "remote-drive",
-		RemoteRootItemID:  "remote-root",
+		MountID:             config.ChildMountID(namespaceID.String(), bindingID),
+		NamespaceID:         namespaceID.String(),
+		BindingItemID:       bindingID,
+		LocalAlias:          "Shortcut",
+		RelativeLocalPath:   relativePath,
+		TokenOwnerCanonical: "personal:owner@example.com",
+		RemoteDriveID:       "remote-drive",
+		RemoteItemID:        "remote-root",
+		State:               config.MountStateActive,
 	}
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestNamespaceRuntime_ReconcileWithoutParentsKeepsInventoryForSkippedChildren(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	require.NoError(t, os.MkdirAll(config.DefaultDataDir(), 0o700))
+	orphan := testChildRecord(mountID("personal:missing@example.com"), "binding-orphan", "Shortcut")
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[orphan.MountID] = orphan
+	require.NoError(t, config.SaveMountInventory(inventory))
+
+	result, err := (&namespaceRuntime{}).reconcile(t.Context(), nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.inventory)
+	assert.Contains(t, result.inventory.Mounts, orphan.MountID)
 }
 
 // Validates: R-2.8.1, R-4.1.4
@@ -73,8 +93,8 @@ func TestReconcileParentMountDelta_FullEnumerationUpdatesBindingInPlace(t *testi
 	inventory := config.DefaultMountInventory()
 	inventory.Mounts[existing.MountID] = existing
 
-	orchestrator := &Orchestrator{}
-	result, err := orchestrator.reconcileParentMountDelta(
+	namespaceRuntime := &namespaceRuntime{}
+	result, err := namespaceRuntime.reconcileNamespaceMountDelta(
 		t.Context(),
 		inventory,
 		parent,
@@ -90,7 +110,7 @@ func TestReconcileParentMountDelta_FullEnumerationUpdatesBindingInPlace(t *testi
 			deltaAllToken: "delta-token-1",
 		}},
 		"",
-		config.ParentDiscoveryState{ParentMountID: parent.mountID.String()},
+		config.NamespaceDiscoveryState{NamespaceID: parent.mountID.String()},
 		false,
 	)
 	require.NoError(t, err)
@@ -99,10 +119,10 @@ func TestReconcileParentMountDelta_FullEnumerationUpdatesBindingInPlace(t *testi
 
 	record := inventory.Mounts[existing.MountID]
 	assert.Equal(t, existing.MountID, record.MountID)
-	assert.Equal(t, "Docs Renamed", record.DisplayName)
+	assert.Equal(t, "Docs Renamed", record.LocalAlias)
 	assert.Equal(t, "Shortcuts/Docs Renamed", record.RelativeLocalPath)
-	assert.Equal(t, config.DiscoveryModeDelta, inventory.Parents[parent.mountID.String()].DiscoveryMode)
-	assert.Equal(t, "delta-token-1", inventory.Parents[parent.mountID.String()].DeltaLink)
+	assert.Equal(t, config.DiscoveryModeDelta, inventory.Namespaces[parent.mountID.String()].DiscoveryMode)
+	assert.Equal(t, "delta-token-1", inventory.Namespaces[parent.mountID.String()].DeltaLink)
 }
 
 // Validates: R-2.8.1, R-4.1.4
@@ -114,8 +134,8 @@ func TestReconcileParentMountDelta_FullEnumerationRemovesMissingBindings(t *test
 	inventory := config.DefaultMountInventory()
 	inventory.Mounts[existing.MountID] = existing
 
-	orchestrator := &Orchestrator{}
-	result, err := orchestrator.reconcileParentMountDelta(
+	namespaceRuntime := &namespaceRuntime{}
+	result, err := namespaceRuntime.reconcileNamespaceMountDelta(
 		t.Context(),
 		inventory,
 		parent,
@@ -131,20 +151,20 @@ func TestReconcileParentMountDelta_FullEnumerationRemovesMissingBindings(t *test
 			deltaAllToken: "delta-token-2",
 		}},
 		"",
-		config.ParentDiscoveryState{ParentMountID: parent.mountID.String()},
+		config.NamespaceDiscoveryState{NamespaceID: parent.mountID.String()},
 		false,
 	)
 	require.NoError(t, err)
 	assert.True(t, result.changed)
 	assert.Equal(t, []string{existing.MountID}, result.removedMountIDs)
-	assert.NotContains(t, inventory.Mounts, existing.MountID)
+	assert.Equal(t, config.MountStatePendingRemoval, inventory.Mounts[existing.MountID].State)
 
 	newMountID := config.ChildMountID(parent.mountID.String(), "binding-new")
 	record := inventory.Mounts[newMountID]
-	assert.Equal(t, "Team Docs", record.DisplayName)
+	assert.Equal(t, "Team Docs", record.LocalAlias)
 	assert.Equal(t, "Shared/Team Docs", record.RelativeLocalPath)
 	assert.Equal(t, "remote-next", record.RemoteDriveID)
-	assert.Equal(t, "remote-item-next", record.RemoteRootItemID)
+	assert.Equal(t, "remote-item-next", record.RemoteItemID)
 }
 
 // Validates: R-2.8.1, R-4.1.4
@@ -156,8 +176,8 @@ func TestReconcileParentMountDelta_GoneResetsTokenWithoutRemovingBindings(t *tes
 	inventory := config.DefaultMountInventory()
 	inventory.Mounts[existing.MountID] = existing
 
-	orchestrator := &Orchestrator{}
-	result, err := orchestrator.reconcileParentMountDelta(
+	namespaceRuntime := &namespaceRuntime{}
+	result, err := namespaceRuntime.reconcileNamespaceMountDelta(
 		t.Context(),
 		inventory,
 		parent,
@@ -165,8 +185,8 @@ func TestReconcileParentMountDelta_GoneResetsTokenWithoutRemovingBindings(t *tes
 			deltaAllErr: graph.ErrGone,
 		}},
 		"",
-		config.ParentDiscoveryState{
-			ParentMountID: parent.mountID.String(),
+		config.NamespaceDiscoveryState{
+			NamespaceID:   parent.mountID.String(),
 			DeltaLink:     "stale-token",
 			DiscoveryMode: config.DiscoveryModeDelta,
 		},
@@ -176,8 +196,8 @@ func TestReconcileParentMountDelta_GoneResetsTokenWithoutRemovingBindings(t *tes
 	assert.True(t, result.changed)
 	assert.Empty(t, result.removedMountIDs)
 	assert.Contains(t, inventory.Mounts, existing.MountID)
-	assert.Empty(t, inventory.Parents[parent.mountID.String()].DeltaLink)
-	assert.Equal(t, config.DiscoveryModeDelta, inventory.Parents[parent.mountID.String()].DiscoveryMode)
+	assert.Empty(t, inventory.Namespaces[parent.mountID.String()].DeltaLink)
+	assert.Equal(t, config.DiscoveryModeDelta, inventory.Namespaces[parent.mountID.String()].DiscoveryMode)
 }
 
 // Validates: R-2.8.1, R-4.1.4
@@ -189,8 +209,8 @@ func TestReconcileParentMountByListing_PositiveOnlyKeepsExistingBindings(t *test
 	inventory := config.DefaultMountInventory()
 	inventory.Mounts[existing.MountID] = existing
 
-	orchestrator := &Orchestrator{}
-	result, err := orchestrator.reconcileParentMountByListing(
+	namespaceRuntime := &namespaceRuntime{}
+	result, err := namespaceRuntime.reconcileNamespaceMountByListing(
 		t.Context(),
 		inventory,
 		parent,
@@ -220,7 +240,7 @@ func TestReconcileParentMountByListing_PositiveOnlyKeepsExistingBindings(t *test
 			},
 		}},
 		"",
-		config.ParentDiscoveryState{ParentMountID: parent.mountID.String()},
+		config.NamespaceDiscoveryState{NamespaceID: parent.mountID.String()},
 	)
 	require.NoError(t, err)
 	assert.True(t, result.changed)
@@ -230,6 +250,72 @@ func TestReconcileParentMountByListing_PositiveOnlyKeepsExistingBindings(t *test
 	newMountID := config.ChildMountID(parent.mountID.String(), "binding-new")
 	record := inventory.Mounts[newMountID]
 	assert.Equal(t, "Shared/Docs", record.RelativeLocalPath)
-	assert.Equal(t, config.DiscoveryModeEnumerate, inventory.Parents[parent.mountID.String()].DiscoveryMode)
-	assert.Empty(t, inventory.Parents[parent.mountID.String()].DeltaLink)
+	assert.Equal(t, config.DiscoveryModeEnumerate, inventory.Namespaces[parent.mountID.String()].DiscoveryMode)
+	assert.Empty(t, inventory.Namespaces[parent.mountID.String()].DeltaLink)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestApplyDurableProjectionConflicts_DuplicateChildrenKeepDeterministicWinner(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	first := testChildRecord(parent.mountID, "binding-a", "Shortcuts/A")
+	second := testChildRecord(parent.mountID, "binding-b", "Shortcuts/B")
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[first.MountID] = first
+	inventory.Mounts[second.MountID] = second
+
+	changed := applyDurableProjectionConflicts(inventory, []*mountSpec{parent})
+
+	assert.True(t, changed)
+	assert.Equal(t, config.MountStateActive, inventory.Mounts[first.MountID].State)
+	assert.Empty(t, inventory.Mounts[first.MountID].StateReason)
+	assert.Equal(t, config.MountStateConflict, inventory.Mounts[second.MountID].State)
+	assert.Equal(t, config.MountStateReasonDuplicateContentRoot, inventory.Mounts[second.MountID].StateReason)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestApplyDurableProjectionConflicts_DuplicateChildrenAreNamespaceLocal(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	otherParent := *parent
+	otherParent.mountID = mountID("personal:owner@example.com:secondary")
+	first := testChildRecord(parent.mountID, "binding-a", "Shortcuts/A")
+	second := testChildRecord(otherParent.mountID, "binding-b", "Other/A")
+	second.State = config.MountStateConflict
+	second.StateReason = config.MountStateReasonDuplicateContentRoot
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[first.MountID] = first
+	inventory.Mounts[second.MountID] = second
+
+	changed := applyDurableProjectionConflicts(inventory, []*mountSpec{parent, &otherParent})
+
+	assert.True(t, changed)
+	assert.Equal(t, config.MountStateActive, inventory.Mounts[first.MountID].State)
+	assert.Empty(t, inventory.Mounts[first.MountID].StateReason)
+	assert.Equal(t, config.MountStateActive, inventory.Mounts[second.MountID].State)
+	assert.Empty(t, inventory.Mounts[second.MountID].StateReason)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestApplyDurableProjectionConflicts_StandaloneContentRootWins(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	standalone := &mountSpec{
+		mountID:             mountID("shared:owner@example.com:remote-drive:remote-root"),
+		tokenOwnerCanonical: parent.tokenOwnerCanonical,
+		remoteDriveID:       driveid.New("remote-drive"),
+		remoteRootItemID:    "remote-root",
+	}
+	child := testChildRecord(parent.mountID, "binding-a", "Shortcuts/A")
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[child.MountID] = child
+
+	changed := applyDurableProjectionConflicts(inventory, []*mountSpec{parent, standalone})
+
+	assert.True(t, changed)
+	assert.Equal(t, config.MountStateConflict, inventory.Mounts[child.MountID].State)
+	assert.Equal(t, config.MountStateReasonExplicitStandaloneContentRoot, inventory.Mounts[child.MountID].StateReason)
 }

@@ -14,6 +14,26 @@ import (
 
 const testMountRemoteRootItemID = "mount-root-id"
 
+func testMountRecordForParent(parent *StandaloneMountConfig) config.MountRecord {
+	const (
+		mountID       = "child-docs"
+		relativePath  = "Shortcuts/Docs"
+		remoteDriveID = "remote-drive"
+		remoteItemID  = "remote-root"
+	)
+	return config.MountRecord{
+		MountID:             mountID,
+		NamespaceID:         parent.CanonicalID.String(),
+		BindingItemID:       "binding-" + mountID,
+		LocalAlias:          filepath.Base(relativePath),
+		RelativeLocalPath:   relativePath,
+		TokenOwnerCanonical: parent.TokenOwnerCanonical.String(),
+		RemoteDriveID:       remoteDriveID,
+		RemoteItemID:        remoteItemID,
+		State:               config.MountStateActive,
+	}
+}
+
 // Validates: R-2.8.1
 func TestBuildStandaloneMountSpecs_PreservesOrderAndReportingFields(t *testing.T) {
 	t.Parallel()
@@ -128,17 +148,9 @@ func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
 		[]StandaloneMountConfig{parent},
 		&config.MountInventory{
 			Mounts: map[string]config.MountRecord{
-				"child-docs": {
-					MountID:           "child-docs",
-					ParentMountID:     parent.CanonicalID.String(),
-					DisplayName:       "Docs",
-					RelativeLocalPath: "Shortcuts/Docs",
-					RemoteDriveID:     "remote-drive",
-					RemoteRootItemID:  "remote-root",
-				},
+				"child-docs": testMountRecordForParent(&parent),
 			},
 		},
-		nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
@@ -180,17 +192,13 @@ func TestCompileRuntimeMounts_PausedChildStillFiltersParentSubtree(t *testing.T)
 		[]StandaloneMountConfig{parent},
 		&config.MountInventory{
 			Mounts: map[string]config.MountRecord{
-				"child-docs": {
-					MountID:           "child-docs",
-					ParentMountID:     parent.CanonicalID.String(),
-					RelativeLocalPath: "Shortcuts/Docs",
-					RemoteDriveID:     "remote-drive",
-					RemoteRootItemID:  "remote-root",
-					Paused:            true,
-				},
+				"child-docs": func() config.MountRecord {
+					record := testMountRecordForParent(&parent)
+					record.Paused = true
+					return record
+				}(),
 			},
 		},
-		nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
@@ -200,6 +208,43 @@ func TestCompileRuntimeMounts_PausedChildStillFiltersParentSubtree(t *testing.T)
 	childMount := compiled.Mounts[1]
 	assert.Equal(t, []string{"Shortcuts/Docs"}, parentMount.localSkipDirs)
 	assert.True(t, childMount.paused)
+}
+
+// Validates: R-2.8.1
+func TestCompileRuntimeMounts_ConflictChildStillFiltersParentSubtree(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	record := testMountRecordForParent(&parent)
+	record.State = config.MountStateConflict
+	record.StateReason = config.MountStateReasonDuplicateContentRoot
+
+	compiled, err := compileRuntimeMounts(
+		[]StandaloneMountConfig{parent},
+		&config.MountInventory{Mounts: map[string]config.MountRecord{"child-docs": record}},
+	)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 1)
+	require.Len(t, compiled.Skipped, 1)
+	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), config.MountStateReasonDuplicateContentRoot)
+}
+
+// Validates: R-2.8.1
+func TestCompileRuntimeMounts_ChildDeltaCapabilityComesFromMountTokenOwner(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testStandaloneMount(t, "business:owner@example.com", "Parent")
+	parent.RemoteRootDeltaCapable = false
+	record := testMountRecordForParent(&parent)
+	record.TokenOwnerCanonical = "personal:owner@example.com"
+
+	compiled, err := compileRuntimeMounts(
+		[]StandaloneMountConfig{parent},
+		&config.MountInventory{Mounts: map[string]config.MountRecord{"child-docs": record}},
+	)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 2)
+	assert.True(t, compiled.Mounts[1].remoteRootDeltaCapable)
+	assert.Equal(t, driveid.MustCanonicalID("personal:owner@example.com"), compiled.Mounts[1].tokenOwnerCanonical)
 }
 
 // Validates: R-2.8.1
@@ -214,21 +259,14 @@ func TestCompileRuntimeMounts_StandaloneContentRootSuppressesChild(t *testing.T)
 		[]StandaloneMountConfig{parent, standalone},
 		&config.MountInventory{
 			Mounts: map[string]config.MountRecord{
-				"child-docs": {
-					MountID:           "child-docs",
-					ParentMountID:     parent.CanonicalID.String(),
-					RelativeLocalPath: "Shortcuts/Docs",
-					RemoteDriveID:     "remote-drive",
-					RemoteRootItemID:  "remote-root",
-				},
+				"child-docs": testMountRecordForParent(&parent),
 			},
 		},
-		nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
 	require.Len(t, compiled.Skipped, 1)
-	assert.Empty(t, compiled.Mounts[0].localSkipDirs)
+	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
 	assert.Contains(t, compiled.Skipped[0].Err.Error(), "standalone mount")
 }
 
@@ -242,15 +280,17 @@ func TestCompileRuntimeMounts_MissingParentSkipsChild(t *testing.T) {
 		&config.MountInventory{
 			Mounts: map[string]config.MountRecord{
 				"child-docs": {
-					MountID:           "child-docs",
-					ParentMountID:     "missing-parent",
-					RelativeLocalPath: "Shortcuts/Docs",
-					RemoteDriveID:     "remote-drive",
-					RemoteRootItemID:  "remote-root",
+					MountID:             "child-docs",
+					NamespaceID:         "missing-parent",
+					BindingItemID:       "binding-child-docs",
+					RelativeLocalPath:   "Shortcuts/Docs",
+					TokenOwnerCanonical: "personal:owner@example.com",
+					RemoteDriveID:       "remote-drive",
+					RemoteItemID:        "remote-root",
+					State:               config.MountStateActive,
 				},
 			},
 		},
-		nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 1)

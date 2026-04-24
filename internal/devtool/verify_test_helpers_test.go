@@ -374,8 +374,8 @@ func repoConsistencyDesignDocFixtures() []struct {
 			"- Error Boundary: worker results",
 		}, nil),
 		repoConsistencyBehaviorDocFixture("sync-control-plane.md", "Sync Control Plane", "internal/multisync/*.go", []string{
-			"- Owns: multi-drive lifecycle",
-			"- Does Not Own: single-drive execution",
+			"- Owns: multi-mount lifecycle",
+			"- Does Not Own: single-mount execution",
 			"- Source of Truth: config holder",
 			"- Allowed Side Effects: orchestrator startup",
 			"- Mutable Runtime Owner: watch orchestrator",

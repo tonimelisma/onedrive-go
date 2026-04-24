@@ -112,16 +112,19 @@ func TestDriveState_PausedOverridesNoToken(t *testing.T) {
 // Validates: R-2.10.1
 func TestBuildChildStatusMount_PausedChildOverridesReadyParent(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
+	record := config.MountRecord{
+		MountID:             "child-docs",
+		NamespaceID:         parentCID.String(),
+		RelativeLocalPath:   "Shortcuts/Docs",
+		TokenOwnerCanonical: parentCID.String(),
+		RemoteDriveID:       "remote-drive",
+		RemoteItemID:        "remote-root",
+		State:               config.MountStateActive,
+		Paused:              true,
+	}
 	mount := buildChildStatusMount(
 		config.Drive{SyncDir: "/tmp/sync-root"},
-		config.MountRecord{
-			MountID:           "child-docs",
-			ParentMountID:     parentCID.String(),
-			RelativeLocalPath: "Shortcuts/Docs",
-			RemoteDriveID:     "remote-drive",
-			RemoteRootItemID:  "remote-root",
-			Paused:            true,
-		},
+		&record,
 		nil,
 	)
 
@@ -129,18 +132,51 @@ func TestBuildChildStatusMount_PausedChildOverridesReadyParent(t *testing.T) {
 }
 
 // Validates: R-2.10.1
+func TestBuildChildStatusMount_RendersLifecycleState(t *testing.T) {
+	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
+
+	for _, state := range []config.MountState{
+		config.MountStateConflict,
+		config.MountStateUnavailable,
+		config.MountStatePendingRemoval,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			record := config.MountRecord{
+				MountID:             "child-docs",
+				NamespaceID:         parentCID.String(),
+				RelativeLocalPath:   "Shortcuts/Docs",
+				TokenOwnerCanonical: parentCID.String(),
+				RemoteDriveID:       "remote-drive",
+				RemoteItemID:        "remote-root",
+				State:               state,
+			}
+			mount := buildChildStatusMount(
+				config.Drive{SyncDir: "/tmp/sync-root"},
+				&record,
+				nil,
+			)
+
+			assert.Equal(t, string(state), mount.State)
+		})
+	}
+}
+
+// Validates: R-2.10.1
 func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
+	record := config.MountRecord{
+		MountID:             "child-docs",
+		NamespaceID:         parentCID.String(),
+		LocalAlias:          "Docs",
+		RelativeLocalPath:   "Shortcuts/Docs",
+		TokenOwnerCanonical: parentCID.String(),
+		RemoteDriveID:       "remote-drive",
+		RemoteItemID:        "remote-root",
+		State:               config.MountStateActive,
+	}
 	mount := buildChildStatusMount(
 		config.Drive{SyncDir: "/tmp/sync-root"},
-		config.MountRecord{
-			MountID:           "child-docs",
-			ParentMountID:     parentCID.String(),
-			DisplayName:       "Docs",
-			RelativeLocalPath: "Shortcuts/Docs",
-			RemoteDriveID:     "remote-drive",
-			RemoteRootItemID:  "remote-root",
-		},
+		&record,
 		nil,
 	)
 
@@ -152,6 +188,7 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	encoded, err := json.Marshal(mount)
 	require.NoError(t, err)
 	assert.Contains(t, string(encoded), `"mount_id":"child-docs"`)
+	assert.Contains(t, string(encoded), `"namespace_id":"personal:alice@example.com"`)
 	assert.NotContains(t, string(encoded), "canonical_id")
 	assert.NotContains(t, string(encoded), "shared:")
 }

@@ -14,13 +14,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tonimelisma/onedrive-go/internal/fsroot"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 const (
 	mountsFileName   = "mounts.json"
-	mountsSchemaV1   = 1
-	mountsSchemaV2   = 2
+	mountsSchemaV3   = 3
 	stateMountPrefix = "state_mount_"
 )
 
@@ -31,19 +30,36 @@ const (
 	DiscoveryModeEnumerate DiscoveryMode = "enumerate"
 )
 
+type MountState string
+
+const (
+	MountStateActive         MountState = "active"
+	MountStatePendingRemoval MountState = "pending_removal"
+	MountStateConflict       MountState = "conflict"
+	MountStateUnavailable    MountState = "unavailable"
+)
+
+const (
+	MountStateReasonDuplicateContentRoot          = "duplicate_content_root"
+	MountStateReasonExplicitStandaloneContentRoot = "explicit_standalone_content_root"
+	MountStateReasonShortcutRemoved               = "shortcut_removed"
+	MountStateReasonShortcutBindingUnavailable    = "shortcut_binding_unavailable"
+)
+
 // MountInventory is the managed durable authority for local child-mount
 // bindings. Catalog keeps account/drive discovery state; mount inventory keeps
 // local projection ownership.
 type MountInventory struct {
-	SchemaVersion int                             `json:"schema_version"`
-	Parents       map[string]ParentDiscoveryState `json:"parents,omitempty"`
-	Mounts        map[string]MountRecord          `json:"mounts"`
+	SchemaVersion int                                `json:"schema_version"`
+	Namespaces    map[string]NamespaceDiscoveryState `json:"namespaces,omitempty"`
+	Mounts        map[string]MountRecord             `json:"mounts"`
 }
 
-// ParentDiscoveryState is the durable discovery cursor/state for one selected
-// standalone parent mount that owns automatic child shortcut reconciliation.
-type ParentDiscoveryState struct {
-	ParentMountID string        `json:"parent_mount_id"`
+// NamespaceDiscoveryState is the durable discovery cursor/state for one
+// selected standalone namespace mount that owns automatic child shortcut
+// reconciliation.
+type NamespaceDiscoveryState struct {
+	NamespaceID   string        `json:"namespace_id"`
 	DeltaLink     string        `json:"delta_link,omitempty"`
 	DiscoveryMode DiscoveryMode `json:"discovery_mode,omitempty"`
 }
@@ -52,20 +68,23 @@ type ParentDiscoveryState struct {
 // sync root. The record is binding-owned: the local shortcut placeholder item
 // ID is the durable identity, while the remote content root may change.
 type MountRecord struct {
-	MountID           string `json:"mount_id"`
-	ParentMountID     string `json:"parent_mount_id"`
-	BindingItemID     string `json:"binding_item_id"`
-	DisplayName       string `json:"display_name,omitempty"`
-	RelativeLocalPath string `json:"relative_local_path"`
-	RemoteDriveID     string `json:"remote_drive_id"`
-	RemoteRootItemID  string `json:"remote_root_item_id"`
-	Paused            bool   `json:"paused,omitempty"`
+	MountID             string     `json:"mount_id"`
+	NamespaceID         string     `json:"namespace_id"`
+	BindingItemID       string     `json:"binding_item_id"`
+	LocalAlias          string     `json:"local_alias,omitempty"`
+	RelativeLocalPath   string     `json:"relative_local_path"`
+	TokenOwnerCanonical string     `json:"token_owner_canonical"`
+	RemoteDriveID       string     `json:"remote_drive_id"`
+	RemoteItemID        string     `json:"remote_item_id"`
+	State               MountState `json:"state,omitempty"`
+	StateReason         string     `json:"state_reason,omitempty"`
+	Paused              bool       `json:"paused,omitempty"`
 }
 
 func DefaultMountInventory() *MountInventory {
 	return &MountInventory{
-		SchemaVersion: mountsSchemaV2,
-		Parents:       make(map[string]ParentDiscoveryState),
+		SchemaVersion: mountsSchemaV3,
+		Namespaces:    make(map[string]NamespaceDiscoveryState),
 		Mounts:        make(map[string]MountRecord),
 	}
 }
@@ -104,6 +123,16 @@ func loadMountInventoryFromPath(path string) (*MountInventory, error) {
 		return nil, fmt.Errorf("reading mount inventory: %w", err)
 	}
 
+	var header struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return nil, fmt.Errorf("decoding mount inventory: %w", err)
+	}
+	if header.SchemaVersion != mountsSchemaV3 {
+		return nil, fmt.Errorf("decoding mount inventory: unsupported schema version %d", header.SchemaVersion)
+	}
+
 	var inventory MountInventory
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -116,16 +145,6 @@ func loadMountInventoryFromPath(path string) (*MountInventory, error) {
 		}
 
 		return nil, fmt.Errorf("decoding mount inventory trailing data: %w", err)
-	}
-	switch inventory.SchemaVersion {
-	case mountsSchemaV2:
-	case mountsSchemaV1:
-		if err := moveAsideLegacyMountInventory(path); err != nil {
-			return nil, err
-		}
-		return DefaultMountInventory(), nil
-	default:
-		return nil, fmt.Errorf("decoding mount inventory: unsupported schema version %d", inventory.SchemaVersion)
 	}
 
 	if err := inventory.normalizeAndValidate(); err != nil {
@@ -188,38 +207,63 @@ func (i *MountInventory) normalizeAndValidate() error {
 		return nil
 	}
 	if i.SchemaVersion == 0 {
-		i.SchemaVersion = mountsSchemaV2
+		i.SchemaVersion = mountsSchemaV3
 	}
-	if i.Parents == nil {
-		i.Parents = make(map[string]ParentDiscoveryState)
+	if i.SchemaVersion != mountsSchemaV3 {
+		return fmt.Errorf("validating mount inventory: unsupported schema version %d", i.SchemaVersion)
+	}
+	if i.Namespaces == nil {
+		i.Namespaces = make(map[string]NamespaceDiscoveryState)
 	}
 	if i.Mounts == nil {
 		i.Mounts = make(map[string]MountRecord)
 	}
 
-	for key, parent := range i.Parents {
-		if parent.ParentMountID == "" {
-			parent.ParentMountID = key
+	if err := i.normalizeAndValidateNamespaces(); err != nil {
+		return err
+	}
+	if err := i.normalizeAndValidateMounts(); err != nil {
+		return err
+	}
+	if err := validateSiblingMountPaths(i.Mounts); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (i *MountInventory) normalizeAndValidateNamespaces() error {
+	for key, namespace := range i.Namespaces {
+		if namespace.NamespaceID == "" {
+			namespace.NamespaceID = key
 		}
-		if err := validateParentDiscoveryState(parent, key); err != nil {
+		if err := validateNamespaceDiscoveryState(namespace, key); err != nil {
 			return err
 		}
-		i.Parents[parent.ParentMountID] = parent
-		if parent.ParentMountID != key {
-			delete(i.Parents, key)
+		i.Namespaces[namespace.NamespaceID] = namespace
+		if namespace.NamespaceID != key {
+			delete(i.Namespaces, key)
 		}
 	}
 
-	for key, record := range i.Mounts {
+	return nil
+}
+
+func (i *MountInventory) normalizeAndValidateMounts() error {
+	for key := range i.Mounts {
+		record := i.Mounts[key]
 		if record.MountID == "" {
 			record.MountID = key
+		}
+		if record.State == "" {
+			record.State = MountStateActive
 		}
 		normalized, err := normalizeMountRelativePath(record.RelativeLocalPath)
 		if err != nil {
 			return fmt.Errorf("validating mount %q relative_local_path: %w", record.MountID, err)
 		}
 		record.RelativeLocalPath = normalized
-		if err := validateMountRecord(record, key); err != nil {
+		if err := validateMountRecord(&record, key); err != nil {
 			return err
 		}
 		i.Mounts[record.MountID] = record
@@ -228,22 +272,18 @@ func (i *MountInventory) normalizeAndValidate() error {
 		}
 	}
 
-	if err := validateSiblingMountPaths(i.Mounts); err != nil {
-		return err
-	}
-
 	return nil
 }
 
-func validateMountRecord(record MountRecord, key string) error {
+func validateMountRecord(record *MountRecord, key string) error {
 	if record.MountID == "" {
 		return fmt.Errorf("validating mount inventory: mount key %q has empty mount_id", key)
 	}
 	if record.MountID != key {
 		return fmt.Errorf("validating mount inventory: mount key %q does not match mount_id %q", key, record.MountID)
 	}
-	if record.ParentMountID == "" {
-		return fmt.Errorf("validating mount %q: parent_mount_id is required", record.MountID)
+	if record.NamespaceID == "" {
+		return fmt.Errorf("validating mount %q: namespace_id is required", record.MountID)
 	}
 	if record.BindingItemID == "" {
 		return fmt.Errorf("validating mount %q: binding_item_id is required", record.MountID)
@@ -251,28 +291,39 @@ func validateMountRecord(record MountRecord, key string) error {
 	if record.RelativeLocalPath == "" {
 		return fmt.Errorf("validating mount %q: relative_local_path is required", record.MountID)
 	}
+	if record.TokenOwnerCanonical == "" {
+		return fmt.Errorf("validating mount %q: token_owner_canonical is required", record.MountID)
+	}
+	if _, err := driveid.NewCanonicalID(record.TokenOwnerCanonical); err != nil {
+		return fmt.Errorf("validating mount %q token_owner_canonical: %w", record.MountID, err)
+	}
 	if record.RemoteDriveID == "" {
 		return fmt.Errorf("validating mount %q: remote_drive_id is required", record.MountID)
 	}
-	if record.RemoteRootItemID == "" {
-		return fmt.Errorf("validating mount %q: remote_root_item_id is required", record.MountID)
+	if record.RemoteItemID == "" {
+		return fmt.Errorf("validating mount %q: remote_item_id is required", record.MountID)
+	}
+	switch record.State {
+	case MountStateActive, MountStatePendingRemoval, MountStateConflict, MountStateUnavailable:
+	default:
+		return fmt.Errorf("validating mount %q: unsupported state %q", record.MountID, record.State)
 	}
 
 	return nil
 }
 
-func validateParentDiscoveryState(parent ParentDiscoveryState, key string) error {
-	if parent.ParentMountID == "" {
-		return fmt.Errorf("validating parent discovery state %q: parent_mount_id is required", key)
+func validateNamespaceDiscoveryState(namespace NamespaceDiscoveryState, key string) error {
+	if namespace.NamespaceID == "" {
+		return fmt.Errorf("validating namespace discovery state %q: namespace_id is required", key)
 	}
-	switch parent.DiscoveryMode {
+	switch namespace.DiscoveryMode {
 	case "", DiscoveryModeDelta, DiscoveryModeEnumerate:
 		return nil
 	default:
 		return fmt.Errorf(
-			"validating parent discovery state %q: unsupported discovery_mode %q",
-			parent.ParentMountID,
-			parent.DiscoveryMode,
+			"validating namespace discovery state %q: unsupported discovery_mode %q",
+			namespace.NamespaceID,
+			namespace.DiscoveryMode,
 		)
 	}
 }
@@ -284,8 +335,9 @@ func validateSiblingMountPaths(mounts map[string]MountRecord) error {
 	}
 
 	byParent := make(map[string][]siblingMount)
-	for _, record := range mounts {
-		byParent[record.ParentMountID] = append(byParent[record.ParentMountID], siblingMount{
+	for mountID := range mounts {
+		record := mounts[mountID]
+		byParent[record.NamespaceID] = append(byParent[record.NamespaceID], siblingMount{
 			mountID: record.MountID,
 			path:    record.RelativeLocalPath,
 		})
@@ -369,33 +421,4 @@ func ChildMountID(parentMountID, bindingItemID string) string {
 	}
 
 	return parent + "|binding:" + binding
-}
-
-func moveAsideLegacyMountInventory(path string) error {
-	backupPath := path + ".v1.bak"
-	if err := removeManagedPathIfExists(backupPath); err != nil {
-		return fmt.Errorf("preparing legacy mount inventory backup: %w", err)
-	}
-
-	root, name, err := fsroot.OpenPath(path)
-	if err != nil {
-		return fmt.Errorf("opening managed root for legacy mount inventory %s: %w", path, err)
-	}
-	if err := root.Rename(name, filepath.Base(backupPath)); err != nil {
-		return fmt.Errorf("moving legacy mount inventory aside: %w", err)
-	}
-
-	return nil
-}
-
-func removeManagedPathIfExists(path string) error {
-	root, name, err := fsroot.OpenPath(path)
-	if err != nil {
-		return fmt.Errorf("opening managed root for %s: %w", path, err)
-	}
-	if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("removing managed path %s: %w", path, err)
-	}
-
-	return nil
 }
