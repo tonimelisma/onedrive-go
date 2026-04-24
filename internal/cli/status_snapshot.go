@@ -485,7 +485,9 @@ func buildChildStatusMount(
 	}
 
 	state := driveState(&parentDrive)
-	if !parentDrive.IsPaused(time.Now()) && !record.Paused {
+	if record.Paused {
+		state = driveStatePaused
+	} else if !parentDrive.IsPaused(time.Now()) {
 		state = driveStateReady
 	}
 

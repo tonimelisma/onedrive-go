@@ -109,6 +109,26 @@ func TestDriveState_PausedOverridesNoToken(t *testing.T) {
 	assert.Equal(t, "paused", driveState(d))
 }
 
+// Validates: R-2.10.1
+func TestBuildChildStatusMount_PausedChildOverridesReadyParent(t *testing.T) {
+	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
+	mount := buildChildStatusMount(
+		parentCID,
+		config.Drive{SyncDir: "/tmp/sync-root"},
+		config.MountRecord{
+			MountID:           "child-docs",
+			ParentMountID:     parentCID.String(),
+			RelativeLocalPath: "Shortcuts/Docs",
+			RemoteDriveID:     "remote-drive",
+			RemoteRootItemID:  "remote-root",
+			Paused:            true,
+		},
+		nil,
+	)
+
+	assert.Equal(t, driveStatePaused, mount.State)
+}
+
 func TestGroupDrivesByAccount(t *testing.T) {
 	cfg := &config.Config{
 		Drives: map[driveid.CanonicalID]config.Drive{

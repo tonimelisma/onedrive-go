@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -168,10 +169,43 @@ func TestLoadMountInventory_V1MovesAsideAndReturnsEmptyV2(t *testing.T) {
 	assert.FileExists(t, backupPath)
 }
 
+// Validates: R-2.8.1
 func TestMountStatePath_UsesManagedMountPrefix(t *testing.T) {
 	dataDir := setTestDataDir(t)
 
 	path := MountStatePath("parent/shared:docs")
 	require.NotEmpty(t, path)
-	assert.Equal(t, filepath.Join(dataDir, "state_mount_parent_shared_docs.db"), path)
+	assert.Equal(t, filepath.Join(dataDir, "state_mount_cGFyZW50L3NoYXJlZDpkb2Nz.db"), path)
+}
+
+// Validates: R-2.8.1
+func TestMountStatePath_EncodesManagedMountIDWithoutCollisions(t *testing.T) {
+	dataDir := setTestDataDir(t)
+
+	paths := []string{
+		MountStatePath("parent/a/b"),
+		MountStatePath("parent/a:b"),
+		MountStatePath("parent/a|b"),
+		MountStatePath("parent/a b"),
+	}
+
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		require.NotEmpty(t, path)
+		assert.Equal(t, dataDir, filepath.Dir(path))
+		base := filepath.Base(path)
+		assert.True(t, strings.HasPrefix(base, stateMountPrefix))
+		assert.True(t, strings.HasSuffix(base, ".db"))
+		if _, exists := seen[path]; exists {
+			assert.Failf(t, "duplicate state path", "path %q should be unique", path)
+		}
+		seen[path] = struct{}{}
+	}
+}
+
+// Validates: R-2.8.1
+func TestMountStatePath_EmptyIDReturnsEmpty(t *testing.T) {
+	setTestDataDir(t)
+
+	assert.Empty(t, MountStatePath(""))
 }

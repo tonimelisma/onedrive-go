@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -354,7 +355,8 @@ func MountStatePath(mountID string) string {
 		return ""
 	}
 
-	return filepath.Join(dataDir, stateMountPrefix+sanitizeManagedID(mountID)+".db")
+	encodedID := base64.RawURLEncoding.EncodeToString([]byte(mountID))
+	return filepath.Join(dataDir, stateMountPrefix+encodedID+".db")
 }
 
 func ChildMountID(parentMountID, bindingItemID string) string {
@@ -365,31 +367,6 @@ func ChildMountID(parentMountID, bindingItemID string) string {
 	}
 
 	return parent + "|binding:" + binding
-}
-
-func sanitizeManagedID(id string) string {
-	if id == "" {
-		return ""
-	}
-
-	var b strings.Builder
-	b.Grow(len(id))
-	for _, r := range id {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '@' || r == '.' || r == '_' || r == '-':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-
-	return b.String()
 }
 
 func moveAsideLegacyMountInventory(path string) error {

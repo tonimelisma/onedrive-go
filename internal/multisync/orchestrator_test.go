@@ -68,12 +68,12 @@ func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, mounts ...Stan
 	if _, err := os.Stat(cfgPath); err == nil {
 		cfg, loadErr := config.LoadOrDefault(cfgPath, slog.Default())
 		require.NoError(t, loadErr)
-		configuredMounts, compileErr := testStandaloneMountsFromConfig(cfg)
+		configuredSelection, compileErr := testStandaloneMountsFromConfig(cfg)
 		require.NoError(t, compileErr)
 
-		configuredByID := make(map[driveid.CanonicalID]*StandaloneMountConfig, len(configuredMounts))
-		for i := range configuredMounts {
-			configuredByID[configuredMounts[i].CanonicalID] = &configuredMounts[i]
+		configuredByID := make(map[driveid.CanonicalID]*StandaloneMountConfig, len(configuredSelection.Mounts))
+		for i := range configuredSelection.Mounts {
+			configuredByID[configuredSelection.Mounts[i].CanonicalID] = &configuredSelection.Mounts[i]
 		}
 
 		for i := range mounts {
@@ -149,14 +149,14 @@ func overlayConfiguredTestMount(mount *StandaloneMountConfig, configured *Standa
 	}
 }
 
-func testStandaloneMountsFromConfig(cfg *config.Config) ([]StandaloneMountConfig, error) {
+func testStandaloneMountsFromConfig(cfg *config.Config) (StandaloneMountSelection, error) {
 	if cfg == nil || len(cfg.Drives) == 0 {
-		return nil, nil
+		return StandaloneMountSelection{}, nil
 	}
 
 	catalog, err := config.LoadCatalog()
 	if err != nil {
-		return nil, fmt.Errorf("loading catalog: %w", err)
+		return StandaloneMountSelection{}, fmt.Errorf("loading catalog: %w", err)
 	}
 
 	cids := make([]driveid.CanonicalID, 0, len(cfg.Drives))
@@ -172,7 +172,7 @@ func testStandaloneMountsFromConfig(cfg *config.Config) ([]StandaloneMountConfig
 		drive := cfg.Drives[cid]
 		tokenOwner, err := config.TokenAccountCanonicalID(cid)
 		if err != nil {
-			return nil, fmt.Errorf("token owner for %s: %w", cid, err)
+			return StandaloneMountSelection{}, fmt.Errorf("token owner for %s: %w", cid, err)
 		}
 
 		remoteDriveID := driveid.ID{}
@@ -187,13 +187,13 @@ func testStandaloneMountsFromConfig(cfg *config.Config) ([]StandaloneMountConfig
 			displayName = config.DefaultDisplayName(cid)
 		}
 
-		accountEmail := cid.Email()
+		accountEmail := tokenOwner.Email()
 		if accountEmail == "" {
-			accountEmail = tokenOwner.Email()
+			accountEmail = cid.Email()
 		}
 		minFreeSpace, err := config.ParseSize(cfg.MinFreeSpace)
 		if err != nil {
-			return nil, fmt.Errorf("parse min_free_space for %s: %w", cid, err)
+			return StandaloneMountSelection{}, fmt.Errorf("parse min_free_space for %s: %w", cid, err)
 		}
 
 		mounts = append(mounts, StandaloneMountConfig{
@@ -215,7 +215,7 @@ func testStandaloneMountsFromConfig(cfg *config.Config) ([]StandaloneMountConfig
 		})
 	}
 
-	return mounts, nil
+	return StandaloneMountSelection{Mounts: mounts}, nil
 }
 
 func postControlReload(t *testing.T, socketPath string) {
@@ -467,6 +467,35 @@ func TestRunOnce_TwoDrives_OneFailsOneSucceeds(t *testing.T) {
 	require.NotNil(t, okMountReport)
 	require.NoError(t, okMountReport.Err)
 	assert.Equal(t, 2, okMountReport.Report.Uploads)
+}
+
+// Validates: R-2.4
+func TestRunOnce_InitialStartupFailureDoesNotBlockRunnableMount(t *testing.T) {
+	rd := testStandaloneMount(t, "personal:healthy@example.com", "Healthy")
+	cfg := testOrchestratorConfig(t, rd)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	cfg.InitialStartupResults = []MountStartupResult{{
+		SelectionIndex: 1,
+		DisplayName:    "Bad",
+		Status:         MountStartupFatal,
+		Err:            errors.New("compile standalone mount config: bad min_free_space"),
+	}}
+
+	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		return &mockEngine{report: &syncengine.Report{Mode: syncengine.SyncBidirectional, Uploads: 1}}, nil
+	}
+
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	require.Len(t, result.Startup.Results, 2)
+	require.Len(t, result.Reports, 1)
+	assert.Equal(t, MountStartupFatal, result.Startup.Results[0].Status)
+	require.Error(t, result.Startup.Results[0].Err)
+	assert.Contains(t, result.Startup.Results[0].Err.Error(), "bad min_free_space")
+	assert.Equal(t, MountStartupRunnable, result.Startup.Results[1].Status)
+	assert.NotEqual(t, result.Startup.Results[0].SelectionIndex, result.Startup.Results[1].SelectionIndex)
+	assert.Equal(t, rd.CanonicalID, result.Reports[0].CanonicalID)
+	assert.Equal(t, result.Startup.Results[1].SelectionIndex, result.Reports[0].SelectionIndex)
 }
 
 // Validates: R-2.4, R-6.8
@@ -1012,6 +1041,21 @@ func TestOrchestrator_RunWatch_ReturnsErrorWhenAllDrivesPaused(t *testing.T) {
 	assert.True(t, startupErr.Summary.AllPaused())
 }
 
+// Validates: R-2.9.1
+func TestOrchestrator_RunWatch_ClosesControlSocketWhenStartupValidationFails(t *testing.T) {
+	rd := testStandaloneMount(t, "personal:paused-close@example.com", "PausedClose")
+	rd.Paused = true
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.ControlSocketPath = shortControlSocketPath(t)
+
+	orch := NewOrchestrator(cfg)
+
+	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	require.Error(t, err)
+	assert.NoFileExists(t, cfg.ControlSocketPath)
+}
+
 // Validates: R-2.9.1, R-2.9.2
 func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:control@example.com", "Control")
@@ -1323,6 +1367,82 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 		return started.Load() > 1
 	}, 200*time.Millisecond, 10*time.Millisecond, "drive should still be running after invalid config reload")
 	assert.Equal(t, int32(1), started.Load(), "drive should still be running after invalid config reload")
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not stop in time")
+	}
+}
+
+// Validates: R-2.4
+func TestOrchestrator_Reload_EmitsMountLocalCompilationFailures(t *testing.T) {
+	rd := testStandaloneMount(t, "personal:reload-healthy@example.com", "ReloadHealthy")
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.ControlSocketPath = shortControlSocketPath(t)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	currentMount := cfg.StandaloneMounts[0]
+	reloadErr := errors.New("compile standalone mount config: token owner")
+	cfg.ReloadStandaloneMounts = func(*config.Config) (StandaloneMountSelection, error) {
+		return StandaloneMountSelection{
+			Mounts: []StandaloneMountConfig{currentMount},
+			StartupResults: []MountStartupResult{{
+				SelectionIndex: 1,
+				DisplayName:    "BadReloadMount",
+				Status:         MountStartupFatal,
+				Err:            reloadErr,
+			}},
+		}, nil
+	}
+	warnings := make(chan StartupWarning, 1)
+	cfg.StartWarning = func(warning StartupWarning) {
+		warnings <- warning
+	}
+
+	orch := NewOrchestrator(cfg)
+
+	var started atomic.Int32
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+				started.Add(1)
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}, nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	}()
+
+	require.Eventually(t, func() bool {
+		return started.Load() >= 1
+	}, 5*time.Second, 10*time.Millisecond)
+
+	postControlReload(t, cfg.ControlSocketPath)
+
+	select {
+	case warning := <-warnings:
+		results := warning.Summary.SkippedResults()
+		require.Len(t, results, 1)
+		assert.Equal(t, MountStartupFatal, results[0].Status)
+		require.ErrorIs(t, results[0].Err, reloadErr)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "reload warning was not emitted")
+	}
+
+	assert.Never(t, func() bool {
+		return started.Load() > 1
+	}, 200*time.Millisecond, 10*time.Millisecond)
 
 	cancel()
 

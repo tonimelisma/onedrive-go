@@ -24,7 +24,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Shared-root drives always preserve the canonical shared root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
-| Shared-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountConfigsFromResolvedDrives_PreservesMountBoundaryFields` |
+| Shared-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 
@@ -332,6 +332,9 @@ bindings, so it follows the same managed-file discipline:
 DB path independent of configured drive canonical IDs. Configured standalone
 drives still use `DriveStatePath(...)`; managed child mounts now own their own
 durable store namespace instead of pretending to be synthetic configured drives.
+The filename encodes the full managed mount ID with collision-resistant raw URL
+base64 under the `state_mount_*.db` prefix, so IDs that differ only by path or
+punctuation characters cannot collapse onto the same state DB.
 
 Automatic child mount IDs are stable across placeholder rename or move because
 they are derived from `(ParentMountID, BindingItemID)`, not from the local
