@@ -42,11 +42,14 @@ drives.
 
 - R-2.4.1: Removed path-filtering configuration keys shall be rejected as unknown configuration rather than silently ignored. [verified]
 - R-2.4.2: Observation shall not invent out-of-scope filtered remote state; separately configured standalone shared-folder drives are independent drives with independent observation roots. [verified]
-- R-2.4.3: Embedded shared-folder link items discovered inside a normal drive shall be ignored instead of becoming nested synced subtrees. [verified]
+- R-2.4.3: The content sync engine shall ignore embedded shared-folder link and shortcut placeholder items discovered inside a normal drive. The namespace control plane, not the content engine, owns any automatic child-mount lifecycle for shortcut placeholders. [verified]
 - R-2.4.4: Observation shall cover the whole configured local root without marker-file-driven scope changes. [verified]
 - R-2.4.5: The product shall not expose user-configured bidirectional path subsets inside a drive. [verified]
 - R-2.4.6: Symlink targets shall be observed at the alias path with cycle protection; there is no user-configurable symlink-skip switch. [verified]
 - R-2.4.7: When an item belongs to the Personal Vault, the system shall exclude it. Vault auto-locks after 20 minutes, causing locked items to appear deleted in delta responses — syncing vault items would cause data loss. [verified]
+- R-2.4.8: For selected standalone namespace mounts, the control plane shall discover OneDrive shortcut placeholders whose `remoteItem` points at a folder, persist a managed child mount in `mounts.json`, create or validate the child local root before starting that child engine, and keep the parent engine from owning the reserved child subtree. If persisting a child-root reconciliation result fails after in-memory classification, startup shall continue from the in-memory mount inventory and retry persistence on a later reconciliation instead of blocking unrelated mounts. [verified]
+- R-2.4.9: Managed child mounts shall own independent engine state and status rows. They shall not synthesize or add explicit `shared:` drive sections to `config.toml`; separately configured shared-folder drives remain standalone configured mounts. [verified]
+- R-2.4.10: Shortcut projection conflicts shall be durable lifecycle facts. Duplicate child projections for the same namespace/content root are all marked conflicted, and an explicit standalone shared-folder mount for the same content root suppresses the automatic child projection. Local child-root file, final-symlink, symlinked-ancestor, or traversal collisions are recorded as child mount conflicts instead of letting the child engine start on an unsafe path. [verified]
 
 ## R-2.5 Crash Recovery [verified]
 

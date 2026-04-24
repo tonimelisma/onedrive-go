@@ -46,6 +46,8 @@ const (
 	MountStateReasonShortcutBindingUnavailable    = "shortcut_binding_unavailable"
 	MountStateReasonLocalProjectionConflict       = "local_projection_conflict"
 	MountStateReasonLocalProjectionUnavailable    = "local_projection_unavailable"
+	MountStateReasonLocalRootCollision            = "local_root_collision"
+	MountStateReasonLocalRootUnavailable          = "local_root_unavailable"
 )
 
 // MountInventory is the managed durable authority for local child-mount
@@ -335,7 +337,9 @@ func validateMountStateReason(state MountState, reason string) error {
 		MountStateReasonShortcutRemoved,
 		MountStateReasonShortcutBindingUnavailable,
 		MountStateReasonLocalProjectionConflict,
-		MountStateReasonLocalProjectionUnavailable:
+		MountStateReasonLocalProjectionUnavailable,
+		MountStateReasonLocalRootCollision,
+		MountStateReasonLocalRootUnavailable:
 	default:
 		return fmt.Errorf("unsupported state_reason %q", reason)
 	}
@@ -343,7 +347,8 @@ func validateMountStateReason(state MountState, reason string) error {
 	switch reason {
 	case MountStateReasonDuplicateContentRoot,
 		MountStateReasonExplicitStandaloneContentRoot,
-		MountStateReasonLocalProjectionConflict:
+		MountStateReasonLocalProjectionConflict,
+		MountStateReasonLocalRootCollision:
 		if state != MountStateConflict {
 			return fmt.Errorf("state_reason %q requires state %q", reason, MountStateConflict)
 		}
@@ -352,7 +357,8 @@ func validateMountStateReason(state MountState, reason string) error {
 			return fmt.Errorf("state_reason %q requires state %q", reason, MountStatePendingRemoval)
 		}
 	case MountStateReasonShortcutBindingUnavailable,
-		MountStateReasonLocalProjectionUnavailable:
+		MountStateReasonLocalProjectionUnavailable,
+		MountStateReasonLocalRootUnavailable:
 		if state != MountStateUnavailable {
 			return fmt.Errorf("state_reason %q requires state %q", reason, MountStateUnavailable)
 		}

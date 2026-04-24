@@ -100,6 +100,7 @@ type folderFacet struct {
 type remoteItemFacet struct {
 	ID              string            `json:"id"`
 	ParentReference *parentRef        `json:"parentReference"`
+	Folder          *folderFacet      `json:"folder"`
 	CreatedBy       *identitySetFacet `json:"createdBy"`
 	Shared          *sharedFacet      `json:"shared"`
 }
@@ -199,6 +200,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	// Remote item metadata for embedded shared-folder items surfaced by Graph.
 	if d.RemoteItem != nil {
 		item.RemoteItemID = d.RemoteItem.ID
+		item.RemoteIsFolder = d.RemoteItem.Folder != nil
 		if d.RemoteItem.ParentReference != nil {
 			item.RemoteDriveID = driveid.New(d.RemoteItem.ParentReference.DriveID).String()
 		}

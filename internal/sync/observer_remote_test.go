@@ -2125,7 +2125,7 @@ func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
 	assert.Equal(t, ChangeCreate, ev.Type, "regular file without RemoteDriveID should be ChangeCreate")
 }
 
-func TestClassifyItem_EmbeddedSharedLinkIgnored(t *testing.T) {
+func TestClassifyItem_EmbeddedSharedPlaceholdersIgnored(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
@@ -2135,19 +2135,45 @@ func TestClassifyItem_EmbeddedSharedLinkIgnored(t *testing.T) {
 		"root": {Name: "", IsRoot: true},
 	}
 
-	item := &graph.Item{
-		ID:            "shared-link-1",
-		Name:          "TeamDocs",
-		ParentID:      "root",
-		DriveID:       driveID,
-		IsFolder:      true,
-		IsDeleted:     true,
-		RemoteDriveID: "source-drive-abc",
-		RemoteItemID:  "source-item-123",
+	tests := []struct {
+		name string
+		item graph.Item
+	}{
+		{
+			name: "top level folder-shaped shared link",
+			item: graph.Item{
+				ID:            "shared-link-1",
+				Name:          "TeamDocs",
+				ParentID:      "root",
+				DriveID:       driveID,
+				IsFolder:      true,
+				IsDeleted:     true,
+				RemoteDriveID: "source-drive-abc",
+				RemoteItemID:  "source-item-123",
+			},
+		},
+		{
+			name: "remote folder shortcut placeholder",
+			item: graph.Item{
+				ID:             "shortcut-placeholder-1",
+				Name:           "TeamDocs",
+				ParentID:       "root",
+				DriveID:        driveID,
+				IsFolder:       false,
+				RemoteIsFolder: true,
+				RemoteDriveID:  "source-drive-abc",
+				RemoteItemID:   "source-item-123",
+			},
+		},
 	}
 
-	ev := obs.Converter.ClassifyItem(item, inflight)
-	assert.Nil(t, ev, "embedded shared-folder links should be ignored in a normal drive")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := tt.item
+			ev := obs.Converter.ClassifyItem(&item, inflight)
+			assert.Nil(t, ev, "embedded shared placeholders should be ignored inside the content engine")
+		})
+	}
 }
 
 func TestFullDelta_EmbeddedSharedLinksIgnored(t *testing.T) {

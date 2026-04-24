@@ -110,7 +110,7 @@ func TestNamedPolicies_RequestPathPolicies(t *testing.T) {
 func TestNamedPolicies_UploadAndVisibilityPolicies(t *testing.T) {
 	t.Parallel()
 
-	assertPolicyShape(t, SimpleUploadMtimePatchPolicy(), 7, 250*time.Millisecond, 8*time.Second, 0.0)
+	assertPolicyShape(t, SimpleUploadMtimePatchPolicy(), 8, 250*time.Millisecond, 16*time.Second, 0.0)
 	assertPolicyShape(t, UploadSessionCreatePolicy(), 6, 250*time.Millisecond, 4*time.Second, 0.0)
 	assertPolicyShape(t, CopyDestinationPolicy(), 6, 250*time.Millisecond, 4*time.Second, 0.0)
 	assertPolicyShape(t, SimpleUploadCreatePolicy(), 7, 250*time.Millisecond, 8*time.Second, 0.0)

@@ -127,6 +127,43 @@ func TestReconcileParentMountDelta_FullEnumerationUpdatesBindingInPlace(t *testi
 }
 
 // Validates: R-2.8.1, R-4.1.4
+func TestReconcileParentMountDelta_DetectsRemoteFolderPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	inventory := config.DefaultMountInventory()
+
+	namespaceRuntime := &namespaceRuntime{}
+	result, err := namespaceRuntime.reconcileNamespaceMountDelta(
+		t.Context(),
+		inventory,
+		parent,
+		&driveopsSessionView{meta: &fakeShortcutDiscoveryClient{
+			deltaAllItems: []graph.Item{{
+				ID:             "binding-1",
+				Name:           "Shortcut",
+				ParentPath:     "Shortcuts",
+				IsFolder:       false,
+				RemoteIsFolder: true,
+				RemoteDriveID:  "remote-drive",
+				RemoteItemID:   "remote-root",
+			}},
+			deltaAllToken: "delta-token-1",
+		}},
+		"",
+		config.NamespaceDiscoveryState{NamespaceID: parent.mountID.String()},
+		false,
+	)
+	require.NoError(t, err)
+	assert.True(t, result.changed)
+
+	record := inventory.Mounts[config.ChildMountID(parent.mountID.String(), "binding-1")]
+	assert.Equal(t, "Shortcuts/Shortcut", record.RelativeLocalPath)
+	assert.Equal(t, "remote-drive", record.RemoteDriveID)
+	assert.Equal(t, "remote-root", record.RemoteItemID)
+}
+
+// Validates: R-2.8.1, R-4.1.4
 func TestReconcileParentMountDelta_FullEnumerationRemovesMissingBindings(t *testing.T) {
 	t.Parallel()
 
@@ -378,7 +415,7 @@ func TestReconcileParentMountByListing_PositiveOnlyKeepsExistingBindings(t *test
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestApplyDurableProjectionConflicts_DuplicateChildrenKeepDeterministicWinner(t *testing.T) {
+func TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
@@ -391,8 +428,8 @@ func TestApplyDurableProjectionConflicts_DuplicateChildrenKeepDeterministicWinne
 	changed := applyDurableProjectionConflicts(inventory, []*mountSpec{parent})
 
 	assert.True(t, changed)
-	assert.Equal(t, config.MountStateActive, inventory.Mounts[first.MountID].State)
-	assert.Empty(t, inventory.Mounts[first.MountID].StateReason)
+	assert.Equal(t, config.MountStateConflict, inventory.Mounts[first.MountID].State)
+	assert.Equal(t, config.MountStateReasonDuplicateContentRoot, inventory.Mounts[first.MountID].StateReason)
 	assert.Equal(t, config.MountStateConflict, inventory.Mounts[second.MountID].State)
 	assert.Equal(t, config.MountStateReasonDuplicateContentRoot, inventory.Mounts[second.MountID].StateReason)
 }

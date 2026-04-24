@@ -388,6 +388,47 @@ func TestNewOrchestrator_DefaultFactories(t *testing.T) {
 	assert.NotNil(t, orch.engineFactory)
 }
 
+// Validates: R-2.4.8
+func TestBuildRuntimeMountSet_LocalRootSaveFailureDoesNotBlockStandaloneMount(t *testing.T) {
+	xdgHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdgHome)
+
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	parent.RemoteDriveID = driveid.ID{}
+	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-a", "Shortcuts/A")
+	childRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "A")
+	require.NoError(t, os.MkdirAll(filepath.Dir(childRoot), 0o700))
+	require.NoError(t, os.WriteFile(childRoot, []byte("not a directory"), 0o600))
+
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[child.MountID] = child
+	require.NoError(t, config.SaveMountInventory(inventory))
+
+	dataDir := config.DefaultDataDir()
+	//nolint:gosec // Directory needs read/execute but no write to simulate inventory save failure.
+	require.NoError(t, os.Chmod(dataDir, 0o500))
+	t.Cleanup(func() {
+		//nolint:gosec // Restore owner access so the temp tree can be cleaned up.
+		require.NoError(t, os.Chmod(dataDir, 0o700))
+	})
+
+	var logBuf bytes.Buffer
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.Logger = slog.New(slog.NewJSONHandler(&logBuf, nil))
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+
+	compiled, err := orch.buildRuntimeMountSet(t.Context(), cfg.StandaloneMounts, nil)
+
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 1)
+	assert.Equal(t, mountID(parent.CanonicalID.String()), compiled.Mounts[0].mountID)
+	require.Len(t, compiled.Skipped, 1)
+	require.Error(t, compiled.Skipped[0].Err)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), config.MountStateReasonLocalRootCollision)
+	assert.Contains(t, logBuf.String(), "continuing with in-memory mount inventory")
+}
+
 // --- RunOnce ---
 
 // Validates: R-2.4
@@ -808,6 +849,51 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "RunOnce did not stop in time")
 	}
+}
+
+// Validates: R-2.9.1
+func TestRunOnce_BindsControlSocketBeforeInventoryReconciliation(t *testing.T) {
+	rd := testStandaloneMount(t, "personal:owner-lock-first@example.com", "OwnerLockFirst")
+	setupXDGIsolation(t, rd.CanonicalID)
+	require.NoError(t, os.WriteFile(config.MountsPath(), []byte(`{not-json`), 0o600))
+
+	socketPath := shortControlSocketPath(t)
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "unix", socketPath)
+	require.NoError(t, err)
+
+	acceptDone := make(chan struct{})
+	go func() {
+		defer close(acceptDone)
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			if closeErr := conn.Close(); closeErr != nil {
+				return
+			}
+		}
+	}()
+
+	cfg := testOrchestratorConfig(t, rd)
+	cfg.ControlSocketPath = socketPath
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
+		require.Fail(t, "engine factory should not run when control socket is already owned")
+		return nil, assert.AnError
+	}
+
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+
+	require.Len(t, result.Startup.Results, 1)
+	var inUse *ControlSocketInUseError
+	require.ErrorAs(t, result.Startup.Results[0].Err, &inUse)
+	assert.Equal(t, MountStartupFatal, result.Startup.Results[0].Status)
+
+	require.NoError(t, listener.Close())
+	<-acceptDone
 }
 
 // --- mockEngine ---

@@ -37,7 +37,7 @@ Promotion contract:
 | LI-20260410-01 | Server-side copy rejected a freshly visible destination folder | fixed | graph quirk | 2026-04-10 | no |
 | LI-20260408-03 | Serialized `e2e_full` package exceeded the old 30-minute harness timeout | fixed | test harness | 2026-04-08 | no |
 | LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
-| LI-20260408-01 | Immediate post-simple-upload mtime PATCH failed transiently after successful create | mitigated | graph quirk | 2026-04-23 | yes |
+| LI-20260408-01 | Immediate post-simple-upload mtime PATCH failed transiently after successful create | mitigated | graph quirk | 2026-04-24 | yes |
 | LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-19 | yes |
 | LI-20260405-09 | Recently created parent folder lagged child create and child-list routes | mitigated | graph quirk | 2026-04-23 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
@@ -844,7 +844,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 ## LI-20260408-01: Immediate post-simple-upload mtime PATCH failed transiently after successful create
 
 First seen: 2026-04-08
-Last seen: 2026-04-23
+Last seen: 2026-04-24
 Area: fast E2E, full E2E, CLI `put`, simple-upload finalization
 Suite / test: local `go run ./cmd/devtool verify default`, `TestE2E_RoundTrip/rm_permanent` setup `put`
 Classification: graph quirk
@@ -889,6 +889,11 @@ Evidence:
   existed remotely, but the failed finalization PATCH left the upload in a
   false-failed state, so upload-only watch planned the later local delete as
   deferred remote drift instead of a remote delete.
+- PR #626 CI `e2e` on April 24, 2026 hit the same `404 itemNotFound`
+  item-ID visibility lag in `TestE2E_Sync_DownloadOnly` setup after a simple
+  upload created `download-test.txt`. The previous 7-attempt budget exhausted
+  while Graph still rejected the follow-on mtime PATCH, even though the content
+  create had already returned an item identity.
 Resolution / mitigation: simple-upload finalization now owns a bounded retry
 for the exact follow-on `UpdateFileSystemInfo` `404 itemNotFound` case and the
 same immediate boundary's transient 502/503/504 service failures. Direct
@@ -900,7 +905,10 @@ showed that budget still under-ran live item-ID visibility, so the production
 policy is now 7 total attempts with the same 250ms / 2x / no-jitter curve and
 an 8s max delay. The April 23, 2026 watch recurrence broadened the same
 bounded quirk matcher to include transient 502/503/504 server failures on
-that exact post-upload PATCH edge.
+that exact post-upload PATCH edge. The April 24, 2026 PR recurrence showed
+that item-ID visibility can outlive that window, so the current production
+policy is 8 total attempts with the same base and multiplier, no jitter, and a
+16s max delay.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [transfers.md](../requirements/transfers.md)
 
 ## LI-20260405-06: Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure

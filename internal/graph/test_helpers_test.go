@@ -142,6 +142,9 @@ func sharedFolderResponse(itemID, remoteItemID, remoteDriveID string, childCount
 		},
 		RemoteItem: &remoteItemFacet{
 			ID: remoteItemID,
+			Folder: &folderFacet{
+				ChildCount: childCount,
+			},
 			ParentReference: &parentRef{
 				DriveID: remoteDriveID,
 			},
