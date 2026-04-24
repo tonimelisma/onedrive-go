@@ -93,6 +93,9 @@ The runtime status read model is now mount-shaped:
   parent drive row
 - child rows carry their own sync-state snapshot and live perf overlay
 - parent rows do not absorb child state or child perf totals
+- child rows are read-only sub-status. There is no child `--mount`, pause,
+  resume, reset, or config surface; the user controls the projection by
+  changing the OneDrive shortcut or pausing the parent drive.
 
 The JSON surface follows that same mount boundary: summary counts use
 `summary.total_mounts`, and per-account rows use `accounts[].mounts`. The
@@ -179,6 +182,12 @@ same guidance in one-shot and watch flows: pause that drive first, rerun with
 message path, reports completed runs separately, and exits non-zero after
 reporting any affected drives. Watch mode warns immediately about each skipped
 drive and continues healthy mounts unless none can start.
+
+That standalone-drive guidance is never rendered for managed child mounts. A
+child startup or state-store warning names the child `mount_id`, may include the
+child state DB path for diagnosis, and states that control belongs to the
+parent drive or the OneDrive shortcut. It must not suggest `--drive ''`,
+`--mount`, child pause/resume, or child reset commands.
 
 One-shot sync resolves the full selected drive set, but it validates only
 runnable non-paused drives before startup. Paused drives remain in the startup

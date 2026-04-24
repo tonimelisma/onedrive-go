@@ -92,6 +92,9 @@ type childMountCandidate struct {
 type childProjectionMove struct {
 	mountID               mountID
 	parentMountID         mountID
+	selectionIndex        int
+	identity              MountIdentity
+	displayName           string
 	parentSyncRoot        string
 	fromRelativeLocalPath string
 	toRelativeLocalPath   string
@@ -262,26 +265,58 @@ func assembleRuntimeMountSet(
 			nextIndex++
 			parent.localSkipDirs = append(parent.localSkipDirs, candidate.relativeLocalPath)
 			parent.localSkipDirs = append(parent.localSkipDirs, candidate.reservedLocalPaths...)
+			projectionMoves = append(projectionMoves, projectionMovesForCandidate(candidate, parent)...)
 			if candidate.skipErr != nil {
 				skipped = append(skipped, skippedChildMountResult(candidate, parent.mountID, logger))
 				continue
 			}
 
-			for _, reservedPath := range candidate.reservedLocalPaths {
-				projectionMoves = append(projectionMoves, childProjectionMove{
-					mountID:               candidate.mount.mountID,
-					parentMountID:         parent.mountID,
-					parentSyncRoot:        parent.syncRoot,
-					fromRelativeLocalPath: reservedPath,
-					toRelativeLocalPath:   candidate.relativeLocalPath,
-				})
-			}
 			finalMounts = append(finalMounts, candidate.mount)
 		}
 	}
 
 	skipped = append(skipped, unmatchedChildStartupResults(unmatchedChildren, nextIndex)...)
 	return finalMounts, skipped, projectionMoves
+}
+
+func projectionMovesForCandidate(candidate *childMountCandidate, parent *mountSpec) []childProjectionMove {
+	if candidate == nil || candidate.mount == nil || parent == nil || len(candidate.reservedLocalPaths) == 0 {
+		return nil
+	}
+	if !projectionMoveRetriableForState(candidate.record.State, candidate.record.StateReason) {
+		return nil
+	}
+
+	moves := make([]childProjectionMove, 0, len(candidate.reservedLocalPaths))
+	for _, reservedPath := range candidate.reservedLocalPaths {
+		moves = append(moves, childProjectionMove{
+			mountID:               candidate.mount.mountID,
+			parentMountID:         parent.mountID,
+			selectionIndex:        candidate.mount.selectionIndex,
+			identity:              candidate.mount.identity(),
+			displayName:           candidate.mount.displayName,
+			parentSyncRoot:        parent.syncRoot,
+			fromRelativeLocalPath: reservedPath,
+			toRelativeLocalPath:   candidate.relativeLocalPath,
+		})
+	}
+
+	return moves
+}
+
+func projectionMoveRetriableForState(state config.MountState, reason string) bool {
+	switch state {
+	case "", config.MountStateActive:
+		return true
+	case config.MountStateConflict:
+		return reason == config.MountStateReasonLocalProjectionConflict
+	case config.MountStateUnavailable:
+		return reason == config.MountStateReasonLocalProjectionUnavailable
+	case config.MountStatePendingRemoval:
+		return false
+	default:
+		return false
+	}
 }
 
 func skippedChildMountResult(candidate *childMountCandidate, parentID mountID, logger *slog.Logger) MountStartupResult {
@@ -389,7 +424,7 @@ func buildChildMountCandidate(parent *mountSpec, record *config.MountRecord) (*c
 		remoteRootItemID:       record.RemoteItemID,
 		tokenOwnerCanonical:    tokenOwner,
 		accountEmail:           tokenOwner.Email(),
-		paused:                 parent.paused || record.Paused,
+		paused:                 parent.paused,
 		enableWebsocket:        parent.enableWebsocket,
 		remoteRootDeltaCapable: config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
 		transferWorkers:        parent.transferWorkers,

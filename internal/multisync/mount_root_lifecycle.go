@@ -19,9 +19,9 @@ func reconcileChildMountLocalRoots(
 	parents []*mountSpec,
 	inventory *config.MountInventory,
 	logger *slog.Logger,
-) bool {
+) mountInventoryMutationResult {
 	if inventory == nil || len(inventory.Mounts) == 0 {
-		return false
+		return mountInventoryMutationResult{}
 	}
 
 	parentsByID := make(map[string]*mountSpec, len(parents))
@@ -32,7 +32,7 @@ func reconcileChildMountLocalRoots(
 		parentsByID[parents[i].mountID.String()] = parents[i]
 	}
 
-	changed := false
+	result := mountInventoryMutationResult{}
 	records := sortedMountRecords(inventory)
 	for i := range records {
 		record := records[i]
@@ -44,10 +44,13 @@ func reconcileChildMountLocalRoots(
 			continue
 		}
 
-		changed = reconcileChildMountRootRecord(inventory, &record, parent, logger) || changed
+		if reconcileChildMountRootRecord(inventory, &record, parent, logger) {
+			result.changed = true
+			result.dirtyMountIDs = appendUniqueStrings(result.dirtyMountIDs, record.MountID)
+		}
 	}
 
-	return changed
+	return result
 }
 
 func reconcileChildMountRootRecord(

@@ -1629,7 +1629,13 @@ lifecycle/conflict state, and moved namespace inventory mutation behind an
 unexported multisync owner. Increment 8 then made unavailable shortcut
 bindings producer-owned durable lifecycle state, added schema v4
 `reserved_local_paths` for shortcut projection moves, and surfaced child
-lifecycle reasons in status/startup reporting.
+lifecycle reasons in status/startup reporting. Increment 8b hardened that
+model by retrying unavailable shortcut bindings on every reconciliation cycle,
+making child projections fully transparent to user controls, rejecting
+symlinked projection ancestors, handling case-only projection renames, avoiding
+empty-root creation when both old and new projection paths are missing,
+recompiling after lifecycle mutations so parent skip dirs are current in the
+same run, and limiting inventory-save failures to dirty child records.
 
 Goal:
 
@@ -1662,8 +1668,9 @@ Concrete work:
 - harden the mount boundary after review:
   `StandaloneMountSelection` carries valid top-level mounts plus mount-local
   conversion failures, watch startup now closes the control socket when startup
-  validation fails after bind, paused child mounts still reserve their parent
-  subtree, and managed mount state paths use bounded collision-resistant digest
+  validation fails after bind, child lifecycle paths still reserve their parent
+  subtree while they are unavailable, conflicted, or pending removal, and
+  managed mount state paths use bounded collision-resistant digest
   filenames
 - make `mounts.json` the durable namespace/mount authority:
   schema v4 uses `namespaces`, `namespace_id`, `local_alias`, `remote_item_id`,

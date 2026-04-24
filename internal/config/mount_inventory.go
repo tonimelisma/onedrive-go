@@ -83,7 +83,6 @@ type MountRecord struct {
 	RemoteItemID        string     `json:"remote_item_id"`
 	State               MountState `json:"state,omitempty"`
 	StateReason         string     `json:"state_reason,omitempty"`
-	Paused              bool       `json:"paused,omitempty"`
 }
 
 func DefaultMountInventory() *MountInventory {

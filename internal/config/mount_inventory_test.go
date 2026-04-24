@@ -35,7 +35,6 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 				RemoteItemID:        "remote-root",
 				State:               MountStateConflict,
 				StateReason:         MountStateReasonDuplicateContentRoot,
-				Paused:              true,
 			},
 		},
 	})
@@ -59,7 +58,6 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 	assert.Equal(t, "remote-root", record.RemoteItemID)
 	assert.Equal(t, MountStateConflict, record.State)
 	assert.Equal(t, MountStateReasonDuplicateContentRoot, record.StateReason)
-	assert.True(t, record.Paused)
 	assert.Equal(t, NamespaceDiscoveryState{
 		NamespaceID:   "personal:owner@example.com",
 		DeltaLink:     "https://graph.microsoft.com/v1.0/drives/drive/root/delta?token=abc",
@@ -76,6 +74,31 @@ func TestMountInventory_UnknownFieldRejected(t *testing.T) {
   "namespaces": {},
   "mounts": {},
   "unknown": true
+}`), 0o600))
+
+	_, err := LoadMountInventoryForDataDir(dataDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field")
+}
+
+func TestMountInventory_ChildPauseFieldRejected(t *testing.T) {
+	dataDir := setTestDataDir(t)
+	path := MountsPathForDataDir(dataDir)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(`{
+  "schema_version": 4,
+  "mounts": {
+    "child-docs": {
+      "mount_id": "child-docs",
+      "namespace_id": "personal:owner@example.com",
+      "binding_item_id": "binding-a",
+      "relative_local_path": "Shortcuts/Docs",
+      "token_owner_canonical": "personal:owner@example.com",
+      "remote_drive_id": "remote-drive",
+      "remote_item_id": "remote-root",
+      "paused": true
+    }
+  }
 }`), 0o600))
 
 	_, err := LoadMountInventoryForDataDir(dataDir)

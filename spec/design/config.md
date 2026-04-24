@@ -337,6 +337,12 @@ bindings, so it follows the same managed-file discipline:
   relative paths; reserved local paths participate in that ownership check
 - every save is a full atomic rewrite of the file
 
+Managed child mount records do not contain pause, resume, reset, or tuning
+controls. They are transparent projections of OneDrive shortcuts under the
+selected parent drive. The user controls them by adding, removing, renaming, or
+moving the OneDrive shortcut; operational pause remains a parent-drive config
+fact only.
+
 Child mount lifecycle reasons are durable control-plane facts. Duplicate
 automatic projections use `duplicate_content_root`; automatic children
 suppressed by an explicitly configured standalone shared-folder drive use
@@ -365,9 +371,10 @@ mount state DB.
 
 During a shortcut rename or move, schema v4 stores the new
 `RelativeLocalPath` plus any old `ReservedLocalPaths` that must remain excluded
-from the parent namespace until the local projection move is completed. If
-Graph returns a shortcut placeholder but does not return a usable target,
-config accepts an `unavailable` record with
+from the parent namespace until the local projection move is completed. Reserved
+paths are validated as safe relative paths and are not user controls. If Graph
+returns a shortcut placeholder but does not return a usable target, config
+accepts an `unavailable` record with
 `state_reason: shortcut_binding_unavailable` and no remote target IDs. That
 state belongs to mount inventory; it is not a sync-store retry/block/observation
 condition.

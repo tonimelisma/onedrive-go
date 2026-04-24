@@ -110,7 +110,7 @@ func TestDriveState_PausedOverridesNoToken(t *testing.T) {
 }
 
 // Validates: R-2.10.1
-func TestBuildChildStatusMount_PausedChildOverridesReadyParent(t *testing.T) {
+func TestBuildChildStatusMount_InheritsParentPause(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
 	record := config.MountRecord{
 		MountID:             "child-docs",
@@ -120,10 +120,10 @@ func TestBuildChildStatusMount_PausedChildOverridesReadyParent(t *testing.T) {
 		RemoteDriveID:       "remote-drive",
 		RemoteItemID:        "remote-root",
 		State:               config.MountStateActive,
-		Paused:              true,
 	}
+	paused := true
 	mount := buildChildStatusMount(
-		config.Drive{SyncDir: "/tmp/sync-root"},
+		config.Drive{SyncDir: "/tmp/sync-root", Paused: &paused},
 		&record,
 		nil,
 	)
@@ -199,6 +199,9 @@ func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T)
 	output := buf.String()
 	assert.Contains(t, output, "Reason:    "+config.MountStateReasonShortcutBindingUnavailable)
 	assert.Contains(t, output, "Next:      OneDrive did not return a usable shortcut target")
+	assert.NotContains(t, output, "--mount")
+	assert.NotContains(t, output, "pause child")
+	assert.NotContains(t, output, "resume child")
 }
 
 // Validates: R-2.10.1
@@ -226,7 +229,8 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	assert.Empty(t, mount.CanonicalID)
 	assert.Equal(t, "Docs (child-docs)", statusMountLabel(&mount))
 	assert.Equal(t, config.MountStateReasonExplicitStandaloneContentRoot, mount.StateReason)
-	assert.Contains(t, mount.StateDetail, "standalone mount")
+	assert.Contains(t, mount.StateDetail, "configured standalone shared-folder drive")
+	assert.NotContains(t, mount.StateDetail, "pause")
 
 	encoded, err := json.Marshal(mount)
 	require.NoError(t, err)
