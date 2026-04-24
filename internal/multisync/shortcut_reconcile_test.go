@@ -121,6 +121,7 @@ func TestReconcileParentMountDelta_FullEnumerationUpdatesBindingInPlace(t *testi
 	assert.Equal(t, existing.MountID, record.MountID)
 	assert.Equal(t, "Docs Renamed", record.LocalAlias)
 	assert.Equal(t, "Shortcuts/Docs Renamed", record.RelativeLocalPath)
+	assert.Equal(t, []string{"Shortcut"}, record.ReservedLocalPaths)
 	assert.Equal(t, config.DiscoveryModeDelta, inventory.Namespaces[parent.mountID.String()].DiscoveryMode)
 	assert.Equal(t, "delta-token-1", inventory.Namespaces[parent.mountID.String()].DeltaLink)
 }
@@ -198,6 +199,128 @@ func TestReconcileParentMountDelta_GoneResetsTokenWithoutRemovingBindings(t *tes
 	assert.Contains(t, inventory.Mounts, existing.MountID)
 	assert.Empty(t, inventory.Namespaces[parent.mountID.String()].DeltaLink)
 	assert.Equal(t, config.DiscoveryModeDelta, inventory.Namespaces[parent.mountID.String()].DiscoveryMode)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	existing := testChildRecord(parent.mountID, "binding-1", "Shortcut")
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[existing.MountID] = existing
+
+	namespaceRuntime := &namespaceRuntime{}
+	result, err := namespaceRuntime.reconcileNamespaceMountDelta(
+		t.Context(),
+		inventory,
+		parent,
+		&driveopsSessionView{meta: &fakeShortcutDiscoveryClient{
+			deltaAllItems: []graph.Item{{
+				ID:         "binding-1",
+				Name:       "Shortcut",
+				ParentPath: "Shortcuts",
+				IsFolder:   true,
+			}},
+			deltaAllToken: "delta-token-1",
+			itemsByID:     map[string]*graph.Item{},
+		}},
+		"",
+		config.NamespaceDiscoveryState{NamespaceID: parent.mountID.String()},
+		false,
+	)
+	require.NoError(t, err)
+	assert.True(t, result.changed)
+	assert.Empty(t, result.removedMountIDs)
+
+	record := inventory.Mounts[existing.MountID]
+	assert.Equal(t, config.MountStateUnavailable, record.State)
+	assert.Equal(t, config.MountStateReasonShortcutBindingUnavailable, record.StateReason)
+	assert.Equal(t, existing.RemoteDriveID, record.RemoteDriveID)
+	assert.Equal(t, existing.RemoteItemID, record.RemoteItemID)
+	assert.Equal(t, "Shortcuts/Shortcut", record.RelativeLocalPath)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestReconcileParentMountDelta_SuccessfulRefreshReactivatesUnavailableShortcut(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	existing := testChildRecord(parent.mountID, "binding-1", "Shortcut")
+	existing.State = config.MountStateUnavailable
+	existing.StateReason = config.MountStateReasonShortcutBindingUnavailable
+	existing.RemoteDriveID = ""
+	existing.RemoteItemID = ""
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[existing.MountID] = existing
+
+	namespaceRuntime := &namespaceRuntime{}
+	result, err := namespaceRuntime.reconcileNamespaceMountDelta(
+		t.Context(),
+		inventory,
+		parent,
+		&driveopsSessionView{meta: &fakeShortcutDiscoveryClient{
+			deltaAllItems: []graph.Item{{
+				ID:            "binding-1",
+				Name:          "Shortcut",
+				ParentPath:    "Shortcuts",
+				IsFolder:      true,
+				RemoteDriveID: "remote-drive-next",
+				RemoteItemID:  "remote-root-next",
+			}},
+			deltaAllToken: "delta-token-1",
+		}},
+		"",
+		config.NamespaceDiscoveryState{NamespaceID: parent.mountID.String()},
+		false,
+	)
+	require.NoError(t, err)
+	assert.True(t, result.changed)
+
+	record := inventory.Mounts[existing.MountID]
+	assert.Equal(t, config.MountStateActive, record.State)
+	assert.Empty(t, record.StateReason)
+	assert.Equal(t, "remote-drive-next", record.RemoteDriveID)
+	assert.Equal(t, "remote-root-next", record.RemoteItemID)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestReconcileParentMountDelta_FirstSeenPartialShortcutPersistsUnavailableWhenPathKnown(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	inventory := config.DefaultMountInventory()
+
+	namespaceRuntime := &namespaceRuntime{}
+	result, err := namespaceRuntime.reconcileNamespaceMountDelta(
+		t.Context(),
+		inventory,
+		parent,
+		&driveopsSessionView{meta: &fakeShortcutDiscoveryClient{
+			deltaAllItems: []graph.Item{{
+				ID:            "binding-1",
+				Name:          "Shortcut",
+				ParentPath:    "Shortcuts",
+				IsFolder:      true,
+				RemoteDriveID: "remote-drive",
+			}},
+			deltaAllToken: "delta-token-1",
+			itemsByID:     map[string]*graph.Item{},
+		}},
+		"",
+		config.NamespaceDiscoveryState{NamespaceID: parent.mountID.String()},
+		false,
+	)
+	require.NoError(t, err)
+	assert.True(t, result.changed)
+
+	mountID := config.ChildMountID(parent.mountID.String(), "binding-1")
+	record := inventory.Mounts[mountID]
+	assert.Equal(t, config.MountStateUnavailable, record.State)
+	assert.Equal(t, config.MountStateReasonShortcutBindingUnavailable, record.StateReason)
+	assert.Equal(t, "Shortcuts/Shortcut", record.RelativeLocalPath)
+	assert.Equal(t, "remote-drive", record.RemoteDriveID)
+	assert.Empty(t, record.RemoteItemID)
 }
 
 // Validates: R-2.8.1, R-4.1.4

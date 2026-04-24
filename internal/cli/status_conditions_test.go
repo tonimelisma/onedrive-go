@@ -330,7 +330,7 @@ func TestPrintDriveStatus_WithoutSyncStateUsesSyncDirFallback(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printMountStatus(&buf, statusMount{
+	require.NoError(t, printMountStatus(&buf, &statusMount{
 		CanonicalID: "personal:blank@example.com",
 		State:       driveStatePaused,
 	}, false))

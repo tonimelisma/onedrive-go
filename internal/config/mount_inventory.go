@@ -19,7 +19,7 @@ import (
 
 const (
 	mountsFileName   = "mounts.json"
-	mountsSchemaV3   = 3
+	mountsSchemaV4   = 4
 	stateMountPrefix = "state_mount_"
 )
 
@@ -44,6 +44,8 @@ const (
 	MountStateReasonExplicitStandaloneContentRoot = "explicit_standalone_content_root"
 	MountStateReasonShortcutRemoved               = "shortcut_removed"
 	MountStateReasonShortcutBindingUnavailable    = "shortcut_binding_unavailable"
+	MountStateReasonLocalProjectionConflict       = "local_projection_conflict"
+	MountStateReasonLocalProjectionUnavailable    = "local_projection_unavailable"
 )
 
 // MountInventory is the managed durable authority for local child-mount
@@ -73,6 +75,7 @@ type MountRecord struct {
 	BindingItemID       string     `json:"binding_item_id"`
 	LocalAlias          string     `json:"local_alias,omitempty"`
 	RelativeLocalPath   string     `json:"relative_local_path"`
+	ReservedLocalPaths  []string   `json:"reserved_local_paths,omitempty"`
 	TokenOwnerCanonical string     `json:"token_owner_canonical"`
 	RemoteDriveID       string     `json:"remote_drive_id"`
 	RemoteItemID        string     `json:"remote_item_id"`
@@ -83,7 +86,7 @@ type MountRecord struct {
 
 func DefaultMountInventory() *MountInventory {
 	return &MountInventory{
-		SchemaVersion: mountsSchemaV3,
+		SchemaVersion: mountsSchemaV4,
 		Namespaces:    make(map[string]NamespaceDiscoveryState),
 		Mounts:        make(map[string]MountRecord),
 	}
@@ -129,7 +132,7 @@ func loadMountInventoryFromPath(path string) (*MountInventory, error) {
 	if err := json.Unmarshal(data, &header); err != nil {
 		return nil, fmt.Errorf("decoding mount inventory: %w", err)
 	}
-	if header.SchemaVersion != mountsSchemaV3 {
+	if header.SchemaVersion != mountsSchemaV4 {
 		return nil, fmt.Errorf("decoding mount inventory: unsupported schema version %d", header.SchemaVersion)
 	}
 
@@ -207,9 +210,9 @@ func (i *MountInventory) normalizeAndValidate() error {
 		return nil
 	}
 	if i.SchemaVersion == 0 {
-		i.SchemaVersion = mountsSchemaV3
+		i.SchemaVersion = mountsSchemaV4
 	}
-	if i.SchemaVersion != mountsSchemaV3 {
+	if i.SchemaVersion != mountsSchemaV4 {
 		return fmt.Errorf("validating mount inventory: unsupported schema version %d", i.SchemaVersion)
 	}
 	if i.Namespaces == nil {
@@ -263,6 +266,10 @@ func (i *MountInventory) normalizeAndValidateMounts() error {
 			return fmt.Errorf("validating mount %q relative_local_path: %w", record.MountID, err)
 		}
 		record.RelativeLocalPath = normalized
+		record.ReservedLocalPaths, err = normalizeReservedLocalPaths(record.RelativeLocalPath, record.ReservedLocalPaths)
+		if err != nil {
+			return fmt.Errorf("validating mount %q reserved_local_paths: %w", record.MountID, err)
+		}
 		if err := validateMountRecord(&record, key); err != nil {
 			return err
 		}
@@ -297,19 +304,65 @@ func validateMountRecord(record *MountRecord, key string) error {
 	if _, err := driveid.NewCanonicalID(record.TokenOwnerCanonical); err != nil {
 		return fmt.Errorf("validating mount %q token_owner_canonical: %w", record.MountID, err)
 	}
-	if record.RemoteDriveID == "" {
-		return fmt.Errorf("validating mount %q: remote_drive_id is required", record.MountID)
-	}
-	if record.RemoteItemID == "" {
-		return fmt.Errorf("validating mount %q: remote_item_id is required", record.MountID)
-	}
 	switch record.State {
 	case MountStateActive, MountStatePendingRemoval, MountStateConflict, MountStateUnavailable:
 	default:
 		return fmt.Errorf("validating mount %q: unsupported state %q", record.MountID, record.State)
 	}
+	if err := validateMountStateReason(record.State, record.StateReason); err != nil {
+		return fmt.Errorf("validating mount %q: %w", record.MountID, err)
+	}
+	if requiresRemoteContentIdentity(record.State, record.StateReason) {
+		if record.RemoteDriveID == "" {
+			return fmt.Errorf("validating mount %q: remote_drive_id is required", record.MountID)
+		}
+		if record.RemoteItemID == "" {
+			return fmt.Errorf("validating mount %q: remote_item_id is required", record.MountID)
+		}
+	}
 
 	return nil
+}
+
+func validateMountStateReason(state MountState, reason string) error {
+	if reason == "" {
+		return nil
+	}
+
+	switch reason {
+	case MountStateReasonDuplicateContentRoot,
+		MountStateReasonExplicitStandaloneContentRoot,
+		MountStateReasonShortcutRemoved,
+		MountStateReasonShortcutBindingUnavailable,
+		MountStateReasonLocalProjectionConflict,
+		MountStateReasonLocalProjectionUnavailable:
+	default:
+		return fmt.Errorf("unsupported state_reason %q", reason)
+	}
+
+	switch reason {
+	case MountStateReasonDuplicateContentRoot,
+		MountStateReasonExplicitStandaloneContentRoot,
+		MountStateReasonLocalProjectionConflict:
+		if state != MountStateConflict {
+			return fmt.Errorf("state_reason %q requires state %q", reason, MountStateConflict)
+		}
+	case MountStateReasonShortcutRemoved:
+		if state != MountStatePendingRemoval {
+			return fmt.Errorf("state_reason %q requires state %q", reason, MountStatePendingRemoval)
+		}
+	case MountStateReasonShortcutBindingUnavailable,
+		MountStateReasonLocalProjectionUnavailable:
+		if state != MountStateUnavailable {
+			return fmt.Errorf("state_reason %q requires state %q", reason, MountStateUnavailable)
+		}
+	}
+
+	return nil
+}
+
+func requiresRemoteContentIdentity(state MountState, reason string) bool {
+	return state != MountStateUnavailable || reason != MountStateReasonShortcutBindingUnavailable
 }
 
 func validateNamespaceDiscoveryState(namespace NamespaceDiscoveryState, key string) error {
@@ -337,10 +390,13 @@ func validateSiblingMountPaths(mounts map[string]MountRecord) error {
 	byParent := make(map[string][]siblingMount)
 	for mountID := range mounts {
 		record := mounts[mountID]
-		byParent[record.NamespaceID] = append(byParent[record.NamespaceID], siblingMount{
-			mountID: record.MountID,
-			path:    record.RelativeLocalPath,
-		})
+		paths := append([]string{record.RelativeLocalPath}, record.ReservedLocalPaths...)
+		for _, path := range paths {
+			byParent[record.NamespaceID] = append(byParent[record.NamespaceID], siblingMount{
+				mountID: record.MountID,
+				path:    path,
+			})
+		}
 	}
 
 	for parentID, siblings := range byParent {
@@ -349,6 +405,9 @@ func validateSiblingMountPaths(mounts map[string]MountRecord) error {
 		})
 		for i := 0; i < len(siblings); i++ {
 			for j := i + 1; j < len(siblings); j++ {
+				if siblings[i].mountID == siblings[j].mountID {
+					continue
+				}
 				if siblings[i].path == siblings[j].path {
 					return fmt.Errorf(
 						"validating mount inventory: parent %q has duplicate child path %q (%s, %s)",
@@ -393,6 +452,35 @@ func normalizeMountRelativePath(raw string) (string, error) {
 	}
 
 	return cleaned, nil
+}
+
+func normalizeReservedLocalPaths(relativeLocalPath string, raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]struct{}, len(raw))
+	normalized := make([]string, 0, len(raw))
+	for _, value := range raw {
+		path, err := normalizeMountRelativePath(value)
+		if err != nil {
+			return nil, err
+		}
+		if path == relativeLocalPath {
+			continue
+		}
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+		normalized = append(normalized, path)
+	}
+	sort.Strings(normalized)
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+
+	return normalized, nil
 }
 
 func slashAncestorOrDescendant(a, b string) bool {

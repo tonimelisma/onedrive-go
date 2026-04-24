@@ -14,7 +14,7 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 	setTestDataDir(t)
 
 	err := SaveMountInventory(&MountInventory{
-		SchemaVersion: mountsSchemaV3,
+		SchemaVersion: mountsSchemaV4,
 		Namespaces: map[string]NamespaceDiscoveryState{
 			"personal:owner@example.com": {
 				NamespaceID:   "personal:owner@example.com",
@@ -29,6 +29,7 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 				BindingItemID:       "placeholder-item-id",
 				LocalAlias:          "Docs",
 				RelativeLocalPath:   "Team/Docs",
+				ReservedLocalPaths:  []string{"Team Docs"},
 				TokenOwnerCanonical: "personal:owner@example.com",
 				RemoteDriveID:       "remote-drive",
 				RemoteItemID:        "remote-root",
@@ -42,7 +43,7 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 
 	loaded, err := LoadMountInventory()
 	require.NoError(t, err)
-	assert.Equal(t, mountsSchemaV3, loaded.SchemaVersion)
+	assert.Equal(t, mountsSchemaV4, loaded.SchemaVersion)
 	require.Len(t, loaded.Mounts, 1)
 	require.Len(t, loaded.Namespaces, 1)
 
@@ -52,6 +53,7 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 	assert.Equal(t, "placeholder-item-id", record.BindingItemID)
 	assert.Equal(t, "Docs", record.LocalAlias)
 	assert.Equal(t, "Team/Docs", record.RelativeLocalPath)
+	assert.Equal(t, []string{"Team Docs"}, record.ReservedLocalPaths)
 	assert.Equal(t, "personal:owner@example.com", record.TokenOwnerCanonical)
 	assert.Equal(t, "remote-drive", record.RemoteDriveID)
 	assert.Equal(t, "remote-root", record.RemoteItemID)
@@ -70,7 +72,7 @@ func TestMountInventory_UnknownFieldRejected(t *testing.T) {
 	path := MountsPathForDataDir(dataDir)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, []byte(`{
-  "schema_version": 3,
+  "schema_version": 4,
   "namespaces": {},
   "mounts": {},
   "unknown": true
@@ -241,6 +243,135 @@ func TestLoadMountInventory_OlderSchemaRejected(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported schema version 1")
 	assert.FileExists(t, path)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestLoadMountInventory_SchemaV3Rejected(t *testing.T) {
+	dataDir := setTestDataDir(t)
+	path := MountsPathForDataDir(dataDir)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(`{
+  "schema_version": 3,
+  "mounts": {}
+}`), 0o600))
+
+	_, err := LoadMountInventoryForDataDir(dataDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported schema version 3")
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestMountInventory_UnavailableShortcutBindingMayOmitRemoteTarget(t *testing.T) {
+	setTestDataDir(t)
+
+	err := SaveMountInventory(&MountInventory{
+		Mounts: map[string]MountRecord{
+			"docs": {
+				MountID:             "docs",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-a",
+				RelativeLocalPath:   "Shared/Docs",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				State:               MountStateUnavailable,
+				StateReason:         MountStateReasonShortcutBindingUnavailable,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	loaded, err := LoadMountInventory()
+	require.NoError(t, err)
+	record := loaded.Mounts["docs"]
+	assert.Equal(t, MountStateUnavailable, record.State)
+	assert.Equal(t, MountStateReasonShortcutBindingUnavailable, record.StateReason)
+	assert.Empty(t, record.RemoteDriveID)
+	assert.Empty(t, record.RemoteItemID)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestMountInventory_RemoteTargetRequiredForOtherLifecycleStates(t *testing.T) {
+	setTestDataDir(t)
+
+	err := SaveMountInventory(&MountInventory{
+		Mounts: map[string]MountRecord{
+			"docs": {
+				MountID:             "docs",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-a",
+				RelativeLocalPath:   "Shared/Docs",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				State:               MountStateUnavailable,
+				StateReason:         MountStateReasonLocalProjectionUnavailable,
+			},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "remote_drive_id")
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestMountInventory_InvalidStateReasonRejected(t *testing.T) {
+	setTestDataDir(t)
+
+	err := SaveMountInventory(&MountInventory{
+		Mounts: map[string]MountRecord{
+			"docs": {
+				MountID:             "docs",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-a",
+				RelativeLocalPath:   "Shared/Docs",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-a",
+				RemoteItemID:        "root-a",
+				State:               MountStateActive,
+				StateReason:         "mystery",
+			},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported state_reason")
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestMountInventory_ReservedLocalPathsNormalizeAndValidate(t *testing.T) {
+	setTestDataDir(t)
+
+	err := SaveMountInventory(&MountInventory{
+		Mounts: map[string]MountRecord{
+			"docs": {
+				MountID:             "docs",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-a",
+				RelativeLocalPath:   "Shared/Docs",
+				ReservedLocalPaths:  []string{" Shared/Old Docs ", "Shared/Old Docs", "Shared/Docs"},
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-a",
+				RemoteItemID:        "root-a",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	loaded, err := LoadMountInventory()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Shared/Old Docs"}, loaded.Mounts["docs"].ReservedLocalPaths)
+
+	err = SaveMountInventory(&MountInventory{
+		Mounts: map[string]MountRecord{
+			"bad": {
+				MountID:             "bad",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-b",
+				RelativeLocalPath:   "Shared/Bad",
+				ReservedLocalPaths:  []string{"../escape"},
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-b",
+				RemoteItemID:        "root-b",
+			},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved_local_paths")
 }
 
 // Validates: R-2.8.1
