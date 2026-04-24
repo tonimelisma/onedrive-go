@@ -322,6 +322,79 @@ func TestReconcileParentMountDelta_SuccessfulRefreshReactivatesUnavailableShortc
 }
 
 // Validates: R-2.8.1, R-4.1.4
+func TestRetryUnavailableShortcutBindings_ReactivatesWithoutDeltaEvent(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	existing := testChildRecord(parent.mountID, "binding-1", "Shortcuts/Shortcut")
+	existing.State = config.MountStateUnavailable
+	existing.StateReason = config.MountStateReasonShortcutBindingUnavailable
+	existing.RemoteDriveID = ""
+	existing.RemoteItemID = ""
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[existing.MountID] = existing
+
+	namespaceRuntime := &namespaceRuntime{}
+	result := namespaceRuntime.retryUnavailableShortcutBindings(
+		t.Context(),
+		inventory,
+		parent,
+		&driveopsSessionView{meta: &fakeShortcutDiscoveryClient{
+			itemsByID: map[string]*graph.Item{
+				"binding-1": {
+					ID:            "binding-1",
+					Name:          "Shortcut",
+					ParentPath:    "Shortcuts",
+					IsFolder:      true,
+					RemoteDriveID: "remote-drive-next",
+					RemoteItemID:  "remote-root-next",
+				},
+			},
+		}},
+		"",
+	)
+
+	assert.True(t, result.changed)
+	assert.Equal(t, []string{existing.MountID}, result.dirtyMountIDs)
+	record := inventory.Mounts[existing.MountID]
+	assert.Equal(t, config.MountStateActive, record.State)
+	assert.Empty(t, record.StateReason)
+	assert.Equal(t, "remote-drive-next", record.RemoteDriveID)
+	assert.Equal(t, "remote-root-next", record.RemoteItemID)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestRetryUnavailableShortcutBindings_FailedRefreshKeepsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	existing := testChildRecord(parent.mountID, "binding-1", "Shortcuts/Shortcut")
+	existing.State = config.MountStateUnavailable
+	existing.StateReason = config.MountStateReasonShortcutBindingUnavailable
+	existing.RemoteDriveID = ""
+	existing.RemoteItemID = ""
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[existing.MountID] = existing
+
+	namespaceRuntime := &namespaceRuntime{}
+	result := namespaceRuntime.retryUnavailableShortcutBindings(
+		t.Context(),
+		inventory,
+		parent,
+		&driveopsSessionView{meta: &fakeShortcutDiscoveryClient{}},
+		"",
+	)
+
+	assert.False(t, result.changed)
+	assert.Empty(t, result.dirtyMountIDs)
+	record := inventory.Mounts[existing.MountID]
+	assert.Equal(t, config.MountStateUnavailable, record.State)
+	assert.Equal(t, config.MountStateReasonShortcutBindingUnavailable, record.StateReason)
+	assert.Empty(t, record.RemoteDriveID)
+	assert.Empty(t, record.RemoteItemID)
+}
+
+// Validates: R-2.8.1, R-4.1.4
 func TestReconcileParentMountDelta_FirstSeenPartialShortcutPersistsUnavailableWhenPathKnown(t *testing.T) {
 	t.Parallel()
 
@@ -427,7 +500,7 @@ func TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict(t *testing
 
 	changed := applyDurableProjectionConflicts(inventory, []*mountSpec{parent})
 
-	assert.True(t, changed)
+	assert.True(t, changed.changed)
 	assert.Equal(t, config.MountStateConflict, inventory.Mounts[first.MountID].State)
 	assert.Equal(t, config.MountStateReasonDuplicateContentRoot, inventory.Mounts[first.MountID].StateReason)
 	assert.Equal(t, config.MountStateConflict, inventory.Mounts[second.MountID].State)
@@ -451,7 +524,7 @@ func TestApplyDurableProjectionConflicts_DuplicateChildrenAreNamespaceLocal(t *t
 
 	changed := applyDurableProjectionConflicts(inventory, []*mountSpec{parent, &otherParent})
 
-	assert.True(t, changed)
+	assert.True(t, changed.changed)
 	assert.Equal(t, config.MountStateActive, inventory.Mounts[first.MountID].State)
 	assert.Empty(t, inventory.Mounts[first.MountID].StateReason)
 	assert.Equal(t, config.MountStateActive, inventory.Mounts[second.MountID].State)
@@ -475,7 +548,36 @@ func TestApplyDurableProjectionConflicts_StandaloneContentRootWins(t *testing.T)
 
 	changed := applyDurableProjectionConflicts(inventory, []*mountSpec{parent, standalone})
 
-	assert.True(t, changed)
+	assert.True(t, changed.changed)
 	assert.Equal(t, config.MountStateConflict, inventory.Mounts[child.MountID].State)
 	assert.Equal(t, config.MountStateReasonExplicitStandaloneContentRoot, inventory.Mounts[child.MountID].StateReason)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestFinalizePendingMountRemovals_RecompileReleasesParentSkipDir(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	record := testMountRecordForParent(&parent)
+	record.State = config.MountStatePendingRemoval
+	record.StateReason = config.MountStateReasonShortcutRemoved
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[record.MountID] = record
+	require.NoError(t, config.SaveMountInventory(inventory))
+
+	compiled, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, inventory)
+	require.NoError(t, err)
+	require.NotEmpty(t, compiled.Mounts)
+	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
+
+	finalized, err := finalizePendingMountRemovals([]string{record.MountID})
+	require.NoError(t, err)
+	assert.True(t, finalized)
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	refreshed, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, loaded)
+	require.NoError(t, err)
+	require.NotEmpty(t, refreshed.Mounts)
+	assert.Empty(t, refreshed.Mounts[0].localSkipDirs)
 }

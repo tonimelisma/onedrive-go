@@ -37,7 +37,7 @@ runtime package that implements it.
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry` |
-| Managed shortcut lifecycle stays control-plane owned: unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, local root collisions skip only affected child mounts, and shortcut projection moves reserve old paths until the local move completes. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestReconcileParentMountDelta_SuccessfulRefreshReactivatesUnavailableShortcut`, `TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict`, `TestBuildRuntimeMountSet_LocalRootSaveFailureDoesNotBlockStandaloneMount`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips` |
+| Managed shortcut lifecycle stays control-plane owned: unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, local root collisions skip only affected child mounts, and shortcut projection moves reserve old paths until the local move completes. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestRetryUnavailableShortcutBindings_ReactivatesWithoutDeltaEvent`, `TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict`, `TestBuildRuntimeMountSet_LocalRootSaveFailureDoesNotBlockStandaloneMount`, `TestApplyInventoryPersistFailureSkipsOnlyDirtyChild`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips`, `TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable`, `TestFinalizePendingMountRemovals_RecompileReleasesParentSkipDir` |
 
 ## Runtime Mount Specs
 
@@ -91,11 +91,13 @@ status output follows the same boundary: child rows expose `mount_id` and omit
 `canonical_id`, while standalone rows retain `canonical_id`.
 
 Managed child mounts persist their token owner in `mounts.json`; pause and sync
-tunables still come from the selected standalone namespace mount. Conflicting
-content roots are resolved durably before engine startup: explicit standalone
-mounts win over duplicate child projections, and duplicate child projections
-for the same namespace/content root are marked `conflict` with a structured
-reason and reported as skipped startup outcomes.
+tunables still come from the selected standalone namespace mount. There is no
+child pause, resume, reset, config, or CLI control surface. A child projection
+is controlled by the OneDrive shortcut itself and by the parent drive's pause
+state. Conflicting content roots are resolved durably before engine startup:
+explicit standalone mounts win over duplicate child projections, and duplicate
+child projections for the same namespace/content root are marked `conflict`
+with a structured reason and reported as skipped startup outcomes.
 
 Unavailable child mounts are also durable control-plane lifecycle state. If
 Graph returns a shortcut binding item but cannot return enough target metadata
@@ -104,7 +106,9 @@ to materialize it, reconciliation stores or updates the child record as
 engine is not started, the existing child state DB is left untouched, and the
 parent namespace continues to reserve the child path. A later successful
 binding refresh reactivates the same `MountID`, fills the remote target IDs,
-and clears the reason.
+and clears the reason. Reconciliation retries unavailable shortcut bindings at
+one-shot startup, watch startup, control-socket reload, and each watch
+reconcile tick, so recovery does not require a fresh delta event.
 
 Shortcut rename and move are local projection changes, not new child mounts.
 Because child `MountID` comes from `(NamespaceID, BindingItemID)`, the control
@@ -117,7 +121,19 @@ resulting child root before starting the new runner. If the move conflicts with
 existing local content, the child becomes `conflict` with
 `state_reason: local_projection_conflict`; if the move cannot be attempted due
 to local filesystem failure, it becomes `unavailable` with
-`state_reason: local_projection_unavailable`.
+`state_reason: local_projection_unavailable`. If the source and target are both
+missing, the control plane keeps the child unavailable rather than creating an
+empty root that could be mistaken for a real remote delete. Case-only renames on
+case-insensitive filesystems use a temporary sibling rename, and symlinked
+projection ancestors are rejected before creating or moving child roots.
+
+After pending-removal finalization or a successful projection move, the
+orchestrator reloads `mounts.json` and recompiles runtime mounts in the same
+cycle. Parent `localSkipDirs` therefore releases finalized or moved paths
+immediately. If saving lifecycle mutations to `mounts.json` fails, the
+orchestrator keeps standalone parents and already-durable children eligible,
+skips only dirty child records whose in-memory state could not be trusted, and
+keeps their parent skip dirs reserved for that run.
 
 Automatic shortcut reconciliation is also control-plane owned. Before one-shot
 startup, before watch startup, on control-socket reload, and on the watch-mode
@@ -206,9 +222,9 @@ owns the long-running control loop. It listens for:
 - JSON-over-HTTP requests on the Unix control socket
 
 Pause semantics come from `config.Drive.IsPaused()` and
-`config.ClearExpiredPauses()` for configured parents plus managed child-mount
-pause inheritance (`parent paused || child paused`). The control plane consumes
-those rules; it does not redefine them inside the engine.
+`config.ClearExpiredPauses()` for configured parents. Managed child mounts
+inherit the parent drive state and have no independent pause state. The control
+plane consumes those rules; it does not redefine them inside the engine.
 
 Existing state DBs that fail store compatibility checks are reported as
 per-mount startup outcomes. CLI conversion failures use the same startup-result

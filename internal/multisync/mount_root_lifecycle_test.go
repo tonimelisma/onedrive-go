@@ -23,7 +23,7 @@ func TestReconcileChildMountLocalRoots_CreatesMissingRoot(t *testing.T) {
 
 	changed := reconcileChildMountLocalRoots([]*mountSpec{parent}, inventory, nil)
 
-	assert.False(t, changed)
+	assert.False(t, changed.changed)
 	assert.DirExists(t, filepath.Join(parent.syncRoot, "Shortcuts", "A"))
 	assert.Equal(t, config.MountStateActive, inventory.Mounts[child.MountID].State)
 	assert.Empty(t, inventory.Mounts[child.MountID].StateReason)
@@ -44,7 +44,8 @@ func TestReconcileChildMountLocalRoots_FileCollisionConflictsChild(t *testing.T)
 
 	changed := reconcileChildMountLocalRoots([]*mountSpec{parent}, inventory, nil)
 
-	assert.True(t, changed)
+	assert.True(t, changed.changed)
+	assert.Equal(t, []string{child.MountID}, changed.dirtyMountIDs)
 	assert.Equal(t, config.MountStateConflict, inventory.Mounts[child.MountID].State)
 	assert.Equal(t, config.MountStateReasonLocalRootCollision, inventory.Mounts[child.MountID].StateReason)
 }
@@ -63,7 +64,8 @@ func TestReconcileChildMountLocalRoots_SymlinkAncestorConflictsChild(t *testing.
 
 	changed := reconcileChildMountLocalRoots([]*mountSpec{parent}, inventory, nil)
 
-	assert.True(t, changed)
+	assert.True(t, changed.changed)
+	assert.Equal(t, []string{child.MountID}, changed.dirtyMountIDs)
 	assert.NoDirExists(t, filepath.Join(outside, "A"))
 	assert.Equal(t, config.MountStateConflict, inventory.Mounts[child.MountID].State)
 	assert.Equal(t, config.MountStateReasonLocalRootCollision, inventory.Mounts[child.MountID].StateReason)
@@ -81,7 +83,8 @@ func TestReconcileChildMountLocalRoots_PathTraversalConflictsChild(t *testing.T)
 
 	changed := reconcileChildMountLocalRoots([]*mountSpec{parent}, inventory, nil)
 
-	assert.True(t, changed)
+	assert.True(t, changed.changed)
+	assert.Equal(t, []string{child.MountID}, changed.dirtyMountIDs)
 	assert.Equal(t, config.MountStateConflict, inventory.Mounts[child.MountID].State)
 	assert.Equal(t, config.MountStateReasonLocalRootCollision, inventory.Mounts[child.MountID].StateReason)
 }
@@ -102,7 +105,8 @@ func TestReconcileChildMountLocalRoots_ClearsResolvedCollision(t *testing.T) {
 
 	changed := reconcileChildMountLocalRoots([]*mountSpec{parent}, inventory, nil)
 
-	assert.True(t, changed)
+	assert.True(t, changed.changed)
+	assert.Equal(t, []string{child.MountID}, changed.dirtyMountIDs)
 	assert.Equal(t, config.MountStateActive, inventory.Mounts[child.MountID].State)
 	assert.Empty(t, inventory.Mounts[child.MountID].StateReason)
 }

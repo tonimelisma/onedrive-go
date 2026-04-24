@@ -486,16 +486,11 @@ func buildChildStatusMount(
 	case config.MountStateConflict, config.MountStateUnavailable, config.MountStatePendingRemoval:
 		state = string(record.State)
 	case config.MountStateActive, "":
-		if record.Paused {
-			state = driveStatePaused
-		} else if !parentDrive.IsPaused(time.Now()) {
+		if !parentDrive.IsPaused(time.Now()) {
 			state = driveStateReady
 		}
 	default:
 		state = string(record.State)
-	}
-	if record.Paused && state == driveStateReady {
-		state = driveStatePaused
 	}
 
 	mount := statusMount{
@@ -521,13 +516,14 @@ func childMountStateDetail(state config.MountState, reason string) string {
 		return "OneDrive did not return a usable shortcut target. " +
 			"Wait for Microsoft Graph to recover, or remove and recreate the shortcut if it no longer resolves."
 	case config.MountStateReasonDuplicateContentRoot:
-		return "Another child shortcut owns this same content root. Remove or pause one duplicate shortcut."
+		return "Another child shortcut owns this same content root. Remove, move, or rename one duplicate OneDrive shortcut."
 	case config.MountStateReasonExplicitStandaloneContentRoot:
-		return "This content root is already configured as a standalone mount. Remove the child shortcut or remove or pause the standalone mount."
+		return "This content root is already configured as a standalone mount. " +
+			"Remove the OneDrive shortcut or remove the configured standalone shared-folder drive."
 	case config.MountStateReasonShortcutRemoved:
 		return "The shortcut was removed. The child mount will be finalized after its runner stops and state is purged."
 	case config.MountStateReasonLocalProjectionConflict:
-		return "The old and new shortcut paths both exist locally. Move or merge one path before resuming this child mount."
+		return "The old and new shortcut paths both exist locally. Move or merge one path, then rerun sync."
 	case config.MountStateReasonLocalProjectionUnavailable:
 		return "The local shortcut path could not be moved. Fix the filesystem error, then rerun sync."
 	case config.MountStateReasonLocalRootCollision:

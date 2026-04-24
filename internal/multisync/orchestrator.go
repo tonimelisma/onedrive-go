@@ -2,6 +2,7 @@ package multisync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -145,16 +146,32 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 			fmt.Errorf("building mount specs: %w", err),
 		)
 	}
+	inventoryMutated := false
 	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
 		o.logger.Warn("purging removed child mount state during startup",
 			slog.String("error", purgeErr.Error()),
 		)
-	} else if finalizeErr := finalizePendingMountRemovals(compiled.RemovedMountIDs); finalizeErr != nil {
-		o.logger.Warn("finalizing removed child mounts during startup",
-			slog.String("error", finalizeErr.Error()),
-		)
+	} else {
+		finalized, finalizeErr := finalizePendingMountRemovals(compiled.RemovedMountIDs)
+		if finalizeErr != nil {
+			o.logger.Warn("finalizing removed child mounts during startup",
+				slog.String("error", finalizeErr.Error()),
+			)
+		}
+		inventoryMutated = inventoryMutated || finalized
 	}
-	applyChildProjectionMoves(compiled, o.logger)
+	inventoryMutated = applyChildProjectionMoves(compiled, o.logger) || inventoryMutated
+	if inventoryMutated {
+		refreshed, refreshErr := o.compileRuntimeMountSetFromInventory(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+		if refreshErr != nil {
+			return controlFailureRunOnceResult(
+				o.cfg.StandaloneMounts,
+				o.cfg.InitialStartupResults,
+				fmt.Errorf("rebuilding mount specs after lifecycle mutation: %w", refreshErr),
+			)
+		}
+		compiled = refreshed
+	}
 	validateCompiledChildMountRoots(compiled, o.logger)
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
@@ -240,10 +257,17 @@ func (o *Orchestrator) buildRuntimeMountSet(
 		inventory = loadedInventory
 	}
 
-	localRootChanged := reconcileChildMountLocalRoots(parents, inventory, o.logger)
-	if localRootChanged {
+	dirtyMountIDs := appendUniqueStrings(nil, namespaceResult.dirtyMountIDs...)
+	var persistErr error
+	if namespaceResult.persistErr != nil {
+		persistErr = namespaceResult.persistErr
+	}
+	localRootResult := reconcileChildMountLocalRoots(parents, inventory, o.logger)
+	dirtyMountIDs = appendUniqueStrings(dirtyMountIDs, localRootResult.dirtyMountIDs...)
+	if localRootResult.changed {
 		if saveErr := config.SaveMountInventory(inventory); saveErr != nil {
 			o.warnChildRootReconciliationSaveFailure(saveErr)
+			persistErr = errors.Join(persistErr, fmt.Errorf("saving mount inventory after child root reconciliation: %w", saveErr))
 		}
 	}
 
@@ -251,13 +275,64 @@ func (o *Orchestrator) buildRuntimeMountSet(
 	if err != nil {
 		return nil, err
 	}
-	if reconcileErr == nil {
+	if reconcileErr == nil && namespaceResult.persistErr == nil {
 		compiled.RemovedMountIDs = append(compiled.RemovedMountIDs, namespaceResult.removedMountIDs...)
+	}
+	applyInventoryPersistFailure(compiled, dirtyMountIDs, persistErr)
+	offsetCompiledSelectionIndexes(compiled, nextStartupSelectionIndex(initialStartup))
+	compiled.Skipped = append(append([]MountStartupResult(nil), initialStartup...), compiled.Skipped...)
+
+	return compiled, nil
+}
+
+func (o *Orchestrator) compileRuntimeMountSetFromInventory(
+	standaloneMounts []StandaloneMountConfig,
+	initialStartup []MountStartupResult,
+) (*compiledMountSet, error) {
+	parents, err := buildStandaloneMountSpecs(standaloneMounts)
+	if err != nil {
+		return nil, err
+	}
+	inventory, err := config.LoadMountInventory()
+	if err != nil {
+		return nil, fmt.Errorf("loading mount inventory: %w", err)
+	}
+	compiled, err := compileRuntimeMountsForParents(parents, inventory, o.logger)
+	if err != nil {
+		return nil, err
 	}
 	offsetCompiledSelectionIndexes(compiled, nextStartupSelectionIndex(initialStartup))
 	compiled.Skipped = append(append([]MountStartupResult(nil), initialStartup...), compiled.Skipped...)
 
 	return compiled, nil
+}
+
+func applyInventoryPersistFailure(compiled *compiledMountSet, dirtyMountIDs []string, err error) {
+	if compiled == nil || err == nil || len(dirtyMountIDs) == 0 {
+		return
+	}
+
+	dirty := make(map[mountID]struct{}, len(dirtyMountIDs))
+	for _, id := range dirtyMountIDs {
+		if id != "" {
+			dirty[mountID(id)] = struct{}{}
+		}
+	}
+
+	filtered := compiled.Mounts[:0]
+	for _, mount := range compiled.Mounts {
+		if mount.projectionKind == MountProjectionChild {
+			if _, found := dirty[mount.mountID]; found {
+				compiled.Skipped = append(compiled.Skipped, mountStartupResultForMount(
+					mount,
+					fmt.Errorf("child mount %s has unpersisted lifecycle state: %w", mount.mountID, err),
+				))
+				continue
+			}
+		}
+		filtered = append(filtered, mount)
+	}
+	compiled.Mounts = filtered
 }
 
 func (o *Orchestrator) warnChildRootReconciliationSaveFailure(err error) {
@@ -487,16 +562,27 @@ func (o *Orchestrator) startWatchRuntime(
 	if err != nil {
 		return nil, control, fmt.Errorf("sync: building mount specs: %w", err)
 	}
+	inventoryMutated := false
 	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
 		o.logger.Warn("purging removed child mount state during watch startup",
 			slog.String("error", purgeErr.Error()),
 		)
-	} else if finalizeErr := finalizePendingMountRemovals(compiled.RemovedMountIDs); finalizeErr != nil {
-		o.logger.Warn("finalizing removed child mounts during watch startup",
-			slog.String("error", finalizeErr.Error()),
-		)
+	} else {
+		finalized, finalizeErr := finalizePendingMountRemovals(compiled.RemovedMountIDs)
+		if finalizeErr != nil {
+			o.logger.Warn("finalizing removed child mounts during watch startup",
+				slog.String("error", finalizeErr.Error()),
+			)
+		}
+		inventoryMutated = inventoryMutated || finalized
 	}
-	applyChildProjectionMoves(compiled, o.logger)
+	inventoryMutated = applyChildProjectionMoves(compiled, o.logger) || inventoryMutated
+	if inventoryMutated {
+		compiled, err = o.compileRuntimeMountSetFromInventory(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+		if err != nil {
+			return nil, control, fmt.Errorf("sync: rebuilding mount specs after lifecycle mutation: %w", err)
+		}
+	}
 	validateCompiledChildMountRoots(compiled, o.logger)
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
@@ -774,23 +860,78 @@ func (o *Orchestrator) applyWatchMountSet(
 ) (int, int, []MountStartupResult) {
 	runnable := runnableMountMap(compiled.Mounts)
 	stopped := o.stopInactiveWatchRunners(ctx, runners, runnable)
-	applyChildProjectionMoves(compiled, o.logger)
-	validateCompiledChildMountRoots(compiled, o.logger)
-	runnable = runnableMountMap(compiled.Mounts)
-	stopped += o.stopInactiveWatchRunners(ctx, runners, runnable)
+	stopped += o.stopProjectionMoveWatchRunners(ctx, runners, compiled.ProjectionMoves)
+	inventoryMutated := applyChildProjectionMoves(compiled, o.logger)
 	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
 		o.logger.Warn("purging removed child mount state after mount diff",
 			slog.String("error", purgeErr.Error()),
 		)
-	} else if finalizeErr := finalizePendingMountRemovals(compiled.RemovedMountIDs); finalizeErr != nil {
-		o.logger.Warn("finalizing removed child mounts after mount diff",
-			slog.String("error", finalizeErr.Error()),
-		)
+	} else {
+		finalized, finalizeErr := finalizePendingMountRemovals(compiled.RemovedMountIDs)
+		if finalizeErr != nil {
+			o.logger.Warn("finalizing removed child mounts after mount diff",
+				slog.String("error", finalizeErr.Error()),
+			)
+		}
+		inventoryMutated = inventoryMutated || finalized
 	}
+	if inventoryMutated {
+		refreshed, refreshErr := o.compileRuntimeMountSetFromInventory(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+		if refreshErr != nil {
+			o.logger.Warn("rebuilding mount specs after lifecycle mutation failed; using current mount set",
+				slog.String("error", refreshErr.Error()),
+			)
+		} else {
+			compiled = refreshed
+		}
+	}
+	validateCompiledChildMountRoots(compiled, o.logger)
+	runnable = runnableMountMap(compiled.Mounts)
+	stopped += o.stopInactiveWatchRunners(ctx, runners, runnable)
 	started, startResults := o.startReloadWatchRunners(ctx, runners, runnable, compiled.Skipped, mode, opts)
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 
 	return stopped, started, startResults
+}
+
+func (o *Orchestrator) stopProjectionMoveWatchRunners(
+	ctx context.Context,
+	runners map[mountID]*watchRunner,
+	moves []childProjectionMove,
+) int {
+	if len(moves) == 0 || len(runners) == 0 {
+		return 0
+	}
+
+	stopped := 0
+	seen := make(map[mountID]struct{}, len(moves))
+	for i := range moves {
+		move := &moves[i]
+		if _, done := seen[move.mountID]; done {
+			continue
+		}
+		seen[move.mountID] = struct{}{}
+		wr := runners[move.mountID]
+		if wr == nil {
+			continue
+		}
+
+		o.logger.Info("stopping watch runner before child projection move",
+			slog.String("mount_id", move.mountID.String()),
+		)
+		wr.cancel()
+		<-wr.done
+		if closeErr := wr.engine.Close(ctx); closeErr != nil {
+			o.logger.Warn("engine close error before child projection move",
+				slog.String("mount_id", move.mountID.String()),
+				slog.String("error", closeErr.Error()),
+			)
+		}
+		delete(runners, move.mountID)
+		stopped++
+	}
+
+	return stopped
 }
 
 func runnableMountMap(mounts []*mountSpec) map[mountID]*mountSpec {
