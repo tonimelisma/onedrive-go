@@ -29,17 +29,21 @@ func ensureResolvedSyncDir(rd *config.ResolvedDrive) error {
 	return nil
 }
 
-func standaloneMountConfigsFromResolvedDrives(drives []*config.ResolvedDrive) ([]multisync.StandaloneMountConfig, error) {
-	mounts := make([]multisync.StandaloneMountConfig, 0, len(drives))
+func standaloneMountSelectionFromResolvedDrives(drives []*config.ResolvedDrive) multisync.StandaloneMountSelection {
+	selection := multisync.StandaloneMountSelection{
+		Mounts:         make([]multisync.StandaloneMountConfig, 0, len(drives)),
+		StartupResults: make([]multisync.MountStartupResult, 0),
+	}
 	for i := range drives {
 		mount, err := standaloneMountConfigFromResolvedDrive(i, drives[i])
 		if err != nil {
-			return nil, err
+			selection.StartupResults = append(selection.StartupResults, standaloneMountStartupFailure(i, drives[i], err))
+			continue
 		}
-		mounts = append(mounts, mount)
+		selection.Mounts = append(selection.Mounts, mount)
 	}
 
-	return mounts, nil
+	return selection
 }
 
 func standaloneMountConfigFromResolvedDrive(
@@ -65,9 +69,9 @@ func standaloneMountConfigFromResolvedDrive(
 		return multisync.StandaloneMountConfig{}, fmt.Errorf("invalid min_free_space %q for %s: %w", rd.MinFreeSpace, rd.CanonicalID, err)
 	}
 
-	accountEmail := rd.CanonicalID.Email()
+	accountEmail := tokenOwnerCanonical.Email()
 	if accountEmail == "" {
-		accountEmail = tokenOwnerCanonical.Email()
+		accountEmail = rd.CanonicalID.Email()
 	}
 
 	return multisync.StandaloneMountConfig{
@@ -87,6 +91,24 @@ func standaloneMountConfigFromResolvedDrive(
 		CheckWorkers:              rd.CheckWorkers,
 		MinFreeSpaceBytes:         minFreeSpace,
 	}, nil
+}
+
+func standaloneMountStartupFailure(
+	selectionIndex int,
+	rd *config.ResolvedDrive,
+	err error,
+) multisync.MountStartupResult {
+	result := multisync.MountStartupResult{
+		SelectionIndex: selectionIndex,
+		Status:         multisync.MountStartupFatal,
+		Err:            err,
+	}
+	if rd != nil {
+		result.CanonicalID = rd.CanonicalID
+		result.DisplayName = rd.DisplayName
+	}
+
+	return result
 }
 
 type syncDaemonOrchestrator interface {
@@ -158,10 +180,7 @@ func runSyncDaemonWithFactory(
 	if len(drives) == 0 {
 		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
-	standaloneMounts, err := standaloneMountConfigsFromResolvedDrives(drives)
-	if err != nil {
-		return fmt.Errorf("compile standalone mount configs: %w", err)
-	}
+	standaloneSelection := standaloneMountSelectionFromResolvedDrives(drives)
 
 	runtime := driveops.NewSessionRuntime(holder, "onedrive-go/"+version, logger)
 
@@ -186,7 +205,8 @@ func runSyncDaemonWithFactory(
 
 	orch := orchestratorFactory(&multisync.OrchestratorConfig{
 		Holder:                 holder,
-		StandaloneMounts:       standaloneMounts,
+		StandaloneMounts:       standaloneSelection.Mounts,
+		InitialStartupResults:  standaloneSelection.StartupResults,
 		ReloadStandaloneMounts: reloadStandaloneMountsFunc(selectors, logger),
 		Runtime:                runtime,
 		Logger:                 logger,
@@ -208,16 +228,16 @@ func runSyncDaemonWithFactory(
 func reloadStandaloneMountsFunc(
 	selectors []string,
 	logger *slog.Logger,
-) func(*config.Config) ([]multisync.StandaloneMountConfig, error) {
+) func(*config.Config) (multisync.StandaloneMountSelection, error) {
 	selectors = append([]string(nil), selectors...)
 
-	return func(cfg *config.Config) ([]multisync.StandaloneMountConfig, error) {
+	return func(cfg *config.Config) (multisync.StandaloneMountSelection, error) {
 		drives, err := config.ResolveDrives(cfg, selectors, false, logger)
 		if err != nil {
-			return nil, fmt.Errorf("resolve drives: %w", err)
+			return multisync.StandaloneMountSelection{}, fmt.Errorf("resolve drives: %w", err)
 		}
 
-		return standaloneMountConfigsFromResolvedDrives(drives)
+		return standaloneMountSelectionFromResolvedDrives(drives), nil
 	}
 }
 

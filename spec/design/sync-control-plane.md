@@ -45,11 +45,12 @@ creation and engine construction.
 
 Configured standalone drives are still the only explicit user-facing selection
 surface, but they are no longer the runtime construction shape. The CLI resolves
-configured drives and compiles them into `multisync.StandaloneMountConfig`
-values before constructing the orchestrator. On startup and reload the control
-plane now:
+configured drives and compiles them into `multisync.StandaloneMountSelection`:
+valid selections become `StandaloneMountConfig` values, while per-drive
+conversion failures become `MountStartupResult` values before the orchestrator
+is constructed. On startup and reload the control plane now:
 
-1. consumes the CLI-compiled standalone mount configs
+1. consumes the CLI-compiled standalone mount selection
 2. compiles those standalone configs into runtime mounts
 3. loads `mounts.json`
 4. attaches valid managed child mounts beneath selected standalone parents
@@ -126,15 +127,15 @@ for startup, shutdown, and reload.
 
 `RunOnce` compiles runtime mount specs, resolves sessions, builds one engine per
 mount, and runs all mounts concurrently. Startup eligibility is classified per
-mount first, including paused standalone parents, managed child mounts skipped because
-their parent is missing or their content root conflicts. Runnable mounts then
-produce one completed `MountReport` each, while startup-ineligible mounts
-remain startup outcomes instead of synthetic completed reports. The control
-plane never aborts the whole pass because one mount failed; partial failure is
-isolated per mount. Both startup results and completed reports carry a stable
-`SelectionIndex` matching the compiled runtime order so standalone parents and
-their attached child mounts remain deterministic through orchestration,
-rendering, and bookkeeping.
+mount first, including CLI conversion failures, paused standalone parents, and
+managed child mounts skipped because their parent is missing or their content
+root conflicts. Runnable mounts then produce one completed `MountReport` each,
+while startup-ineligible mounts remain startup outcomes instead of synthetic
+completed reports. The control plane never aborts the whole pass because one
+mount failed; partial failure is isolated per mount. Both startup results and
+completed reports carry a stable `SelectionIndex` matching the compiled runtime
+order so standalone parents and their attached child mounts remain
+deterministic through orchestration, rendering, and bookkeeping.
 
 ### RunWatch
 
@@ -150,10 +151,12 @@ pause inheritance (`parent paused || child paused`). The control plane consumes
 those rules; it does not redefine them inside the engine.
 
 Existing state DBs that fail store compatibility checks are reported as
-per-mount startup outcomes. Watch startup warns about those mounts
-immediately, keeps healthy mounts running, and exits non-zero only when no
-runnable mount starts. A paused-only selection is a structured startup refusal,
-not a special string-only path.
+per-mount startup outcomes. CLI conversion failures use the same startup-result
+path, including on reload, so one bad selected mount does not prevent healthy
+mounts from running. Watch startup warns about those mounts immediately, keeps
+healthy mounts running, and exits non-zero only when no runnable mount starts.
+A paused-only or all-failed selection is a structured startup refusal, not a
+special string-only path.
 
 ### Control Socket
 
@@ -170,6 +173,8 @@ only the socket there; durable sync state remains in the drive state DB. If the
 normal path and the hashed runtime fallback both exceed the Unix socket budget,
 path derivation fails explicitly. `RunOnce` and `RunWatch` treat that as fatal
 startup because the control socket is the single-owner lock.
+If watch startup fails after the socket is bound, the control plane closes and
+unlinks that socket before returning the startup error.
 
 Wire facts live in `internal/synccontrol`: endpoint constants, owner modes,
 request/response structs, response statuses, and stable error codes. Server
@@ -234,8 +239,8 @@ a process-wide crash or a cross-mount failure cascade.
 ## CLI Contract
 
 The `sync` Cobra command resolves drives, validates sync eligibility,
-compiles selected drives into `multisync.StandaloneMountConfig`, constructs an
-`Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
+compiles selected drives into `multisync.StandaloneMountSelection`, constructs
+an `Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
 
 - `--watch` selects daemon mode
 - `--download-only` and `--upload-only` select sync mode
@@ -258,9 +263,9 @@ to the control-plane boundary.
   `driveops.MountSessionConfig`, keeping token-source caching owned in one
   place and keeping `ResolvedDrive` out of runtime construction.
 - Reload updates config through one shared `config.Holder` and uses the
-  CLI-supplied standalone-mount compiler, so both the control plane and session
-  runtime see the same config snapshot without giving multisync authority over
-  resolved-drive construction.
+  CLI-supplied standalone-mount selection compiler, so both the control plane
+  and session runtime see the same config snapshot without giving multisync
+  authority over resolved-drive construction.
 
 ## Rationale
 
