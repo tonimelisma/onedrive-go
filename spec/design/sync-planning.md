@@ -176,7 +176,7 @@ Some engines are rooted below the remote drive root. The planner therefore
 receives engine-owned mount context:
 
 - `DriveID`
-- `RootItemID`
+- `RemoteRootItemID`
 
 Ordinary sync actions are bound directly to that mounted subtree. When
 `MakeAction(...)` leaves `Action.DriveID` empty for brand-new local work, the

@@ -25,8 +25,8 @@ type ResolvedDrive struct {
 	PausedUntil            string // RFC3339 timestamp; empty when not timed
 	SyncDir                string // absolute path after tilde expansion
 	DriveID                driveid.ID
-	RootItemID             string // configured remote root item for shared-root drives; empty = drive root
-	SharedRootDeltaCapable bool   // true when folder delta is supported for the configured shared root
+	RemoteRootItemID       string // configured remote root item for standalone mount-root drives; empty = drive root
+	RemoteRootDeltaCapable bool   // true when folder delta is supported for the configured remote root
 
 	TransfersConfig
 	SafetyConfig
@@ -162,7 +162,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	}
 
 	if canonicalID.IsShared() {
-		resolved.RootItemID = canonicalID.SourceItemID()
+		resolved.RemoteRootItemID = canonicalID.SourceItemID()
 	}
 
 	var catalog *Catalog
@@ -192,7 +192,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	}
 
 	if canonicalID.IsShared() {
-		resolved.SharedRootDeltaCapable = sharedRootDeltaCapable(canonicalID, catalog, logger)
+		resolved.RemoteRootDeltaCapable = remoteRootDeltaCapable(canonicalID, catalog, logger)
 	}
 
 	// Compute runtime default sync_dir when the drive has none configured.
@@ -229,7 +229,7 @@ func catalogDriveRecord(catalog *Catalog, canonicalID driveid.CanonicalID) (Cata
 	return catalog.DriveByCanonicalID(canonicalID)
 }
 
-func sharedRootDeltaCapable(
+func remoteRootDeltaCapable(
 	canonicalID driveid.CanonicalID,
 	catalog *Catalog,
 	logger *slog.Logger,
@@ -241,7 +241,7 @@ func sharedRootDeltaCapable(
 
 	ownerCID, err := driveid.NewCanonicalID(drive.OwnerAccountCanonical)
 	if err != nil {
-		logger.Debug("could not parse shared-root owner account type",
+		logger.Debug("could not parse mount-root owner account type",
 			"canonical_id", canonicalID.String(),
 			"owner_account_canonical", drive.OwnerAccountCanonical,
 			"error", err,
@@ -249,13 +249,13 @@ func sharedRootDeltaCapable(
 		return true
 	}
 
-	return RootedSubtreeDeltaCapableForTokenOwner(ownerCID)
+	return RemoteRootDeltaCapableForTokenOwner(ownerCID)
 }
 
-// RootedSubtreeDeltaCapableForTokenOwner reports whether a rooted-subtree
+// RemoteRootDeltaCapableForTokenOwner reports whether a mount-root
 // mount owned by the given token account can use folder delta. Personal owner
 // accounts can; business/SharePoint owners still require recursive fallback.
-func RootedSubtreeDeltaCapableForTokenOwner(ownerCID driveid.CanonicalID) bool {
+func RemoteRootDeltaCapableForTokenOwner(ownerCID driveid.CanonicalID) bool {
 	switch ownerCID.DriveType() {
 	case driveid.DriveTypeBusiness, driveid.DriveTypeSharePoint:
 		return false

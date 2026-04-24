@@ -25,11 +25,11 @@ type InflightParent struct {
 
 // ItemConverter converts []graph.Item into []ChangeEvent with full path
 // materialization, NFC normalization, move detection, and deleted-item name
-// recovery. Drive-root and rooted-subtree observation both use this single
+// recovery. Drive-root and mount-root observation both use this single
 // conversion pipeline, shaped by path-prefix and root-item fields.
 //
 // Design: the inflight map is a parameter, not a field. RemoteObserver
-// accumulates inflight across delta pages; rooted-subtree callers populate it once per
+// accumulates inflight across delta pages; mount-root callers populate it once per
 // batch. Same methods, different lifetime.
 type ItemConverter struct {
 	Baseline *Baseline
@@ -39,14 +39,14 @@ type ItemConverter struct {
 	Items    ItemClient        // nil-safe: sparse parent enrich is best-effort
 
 	// PathPrefix is prepended to materialized paths. Empty for the primary
-	// drive; set for rooted-subtree observation that maps a remote subtree into a
+	// drive; set for mount-root observation that maps a remote subtree into a
 	// local subpath.
 	PathPrefix string
 
-	// RootItemID is the mounted remote root item for rooted-subtree observation.
+	// RemoteRootItemID is the mounted remote root item for mount-root observation.
 	// Items with this ID are the root itself and should be skipped because the
 	// sync root owns that directory already. Empty for full-drive observation.
-	RootItemID string
+	RemoteRootItemID string
 
 	// EnableVaultFilter enables Personal Vault exclusion (B-271). Only
 	// applicable to the primary drive.
@@ -54,7 +54,7 @@ type ItemConverter struct {
 }
 
 // NewPrimaryConverter creates an ItemConverter for primary-drive or
-// rooted-subtree observation. Embedded shared-folder items are ignored here;
+// mount-root observation. Embedded shared-folder items are ignored here;
 // shared content syncs through explicit standalone mounts or managed child
 // mounts.
 func NewPrimaryConverter(
@@ -76,7 +76,7 @@ func NewPrimaryConverter(
 
 // ConvertItems converts a batch of graph.Items into ChangeEvents using
 // two-pass processing: register all items in inflight, then classify all.
-// Used by rooted-subtree observation where all items arrive in a single batch.
+// Used by mount-root observation where all items arrive in a single batch.
 func (c *ItemConverter) ConvertItems(ctx context.Context, items []graph.Item) []ChangeEvent {
 	c.enrichSparseParentRefs(ctx, items)
 
@@ -189,12 +189,12 @@ func (c *ItemConverter) registerInflight(item *graph.Item, inflight map[string]I
 }
 
 // ClassifyItem converts a single graph.Item into a ChangeEvent. Returns nil
-// for items that should be skipped (root, vault descendants, mounted root,
+// for items that should be skipped (root, vault descendants, mount root,
 // embedded shared-folder items).
 func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]InflightParent) *ChangeEvent {
 	itemDriveID := c.resolveItemDriveID(item)
 
-	// Skip root items for both full-drive and rooted-subtree observation.
+	// Skip root items for both full-drive and mount-root observation.
 	if item.IsRoot {
 		c.Logger.Debug("skipping root item", slog.String("item_id", item.ID))
 
@@ -244,9 +244,9 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 		return nil
 	}
 
-	// Skip the mounted observation root itself.
-	if c.RootItemID != "" && item.ID == c.RootItemID {
-		c.Logger.Debug("skipping mounted rooted-subtree root item", slog.String("item_id", item.ID))
+	// Skip the mount observation root itself.
+	if c.RemoteRootItemID != "" && item.ID == c.RemoteRootItemID {
+		c.Logger.Debug("skipping mount root item", slog.String("item_id", item.ID))
 
 		return nil
 	}
@@ -409,9 +409,9 @@ func (c *ItemConverter) materializePathFromParts(
 				break
 			}
 
-			// Stop at the mounted observation root: it is the sync root,
+			// Stop at the mount observation root: it is the sync root,
 			// not a real parent segment in the local relative path.
-			if c.RootItemID != "" && parentID == c.RootItemID {
+			if c.RemoteRootItemID != "" && parentID == c.RemoteRootItemID {
 				break
 			}
 
@@ -446,7 +446,7 @@ func (c *ItemConverter) materializePathFromParts(
 	return c.applyPrefix(relPath)
 }
 
-// applyPrefix prepends the mounted local root prefix to a relative path.
+// applyPrefix prepends the mount local root prefix to a relative path.
 // Returns the path unchanged when no prefix is configured.
 func (c *ItemConverter) applyPrefix(relPath string) string {
 	if c.PathPrefix == "" {

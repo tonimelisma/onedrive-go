@@ -12,7 +12,7 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-const testRootedSubtreeItemID = "rooted-subtree-id"
+const testMountRemoteRootItemID = "mount-root-id"
 
 // Validates: R-2.8.1
 func TestBuildStandaloneMountSpecs_PreservesOrderAndReportingFields(t *testing.T) {
@@ -54,8 +54,8 @@ func TestBuildStandaloneMountSpecs_PreservesRootedMountFields(t *testing.T) {
 	t.Parallel()
 
 	shared := testStandaloneMount(t, "business:owner@example.com", "Shared")
-	shared.RemoteRootItemID = testRootedSubtreeItemID
-	shared.RootedSubtreeDeltaCapable = true
+	shared.RemoteRootItemID = testMountRemoteRootItemID
+	shared.RemoteRootDeltaCapable = true
 	shared.EnableWebsocket = true
 	shared.RemoteDriveID = driveid.New("remote-drive-id")
 	shared.SelectionIndex = 1
@@ -64,9 +64,9 @@ func TestBuildStandaloneMountSpecs_PreservesRootedMountFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mounts, 1)
 
-	assert.Equal(t, testRootedSubtreeItemID, mounts[0].remoteRootItemID)
+	assert.Equal(t, testMountRemoteRootItemID, mounts[0].remoteRootItemID)
 	assert.Equal(t, driveid.New("remote-drive-id"), mounts[0].remoteDriveID)
-	assert.True(t, mounts[0].rootedSubtreeDeltaCapable)
+	assert.True(t, mounts[0].remoteRootDeltaCapable)
 	assert.True(t, mounts[0].enableWebsocket)
 }
 
@@ -84,8 +84,8 @@ func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
 	t.Parallel()
 
 	shared := testStandaloneMount(t, "sharepoint:owner@example.com:site:Documents", "Shared")
-	shared.RemoteRootItemID = testRootedSubtreeItemID
-	shared.RootedSubtreeDeltaCapable = true
+	shared.RemoteRootItemID = testMountRemoteRootItemID
+	shared.RemoteRootDeltaCapable = true
 	shared.EnableWebsocket = true
 	shared.RemoteDriveID = driveid.New("remote-drive-id")
 	shared.TransferWorkers = 7
@@ -106,8 +106,8 @@ func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
 	assert.Equal(t, mounts[0].remoteDriveID, cfg.DriveID)
 	assert.Equal(t, mounts[0].driveType, cfg.DriveType)
 	assert.Equal(t, mounts[0].accountEmail, cfg.AccountEmail)
-	assert.Equal(t, mounts[0].remoteRootItemID, cfg.RootItemID)
-	assert.Equal(t, mounts[0].rootedSubtreeDeltaCapable, cfg.RootedSubtreeDeltaCapable)
+	assert.Equal(t, mounts[0].remoteRootItemID, cfg.RemoteRootItemID)
+	assert.Equal(t, mounts[0].remoteRootDeltaCapable, cfg.RemoteRootDeltaCapable)
 	assert.Equal(t, mounts[0].enableWebsocket, cfg.EnableWebsocket)
 	assert.Equal(t, syncengine.LocalFilterConfig{}, cfg.LocalFilter)
 	assert.True(t, cfg.LocalRules.RejectSharePointRootForms)
@@ -166,7 +166,7 @@ func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
 	engineCfg, err := engineMountConfigForMount(childMount)
 	require.NoError(t, err)
 	assert.Equal(t, driveid.New("remote-drive"), engineCfg.DriveID)
-	assert.Equal(t, "remote-root", engineCfg.RootItemID)
+	assert.Equal(t, "remote-root", engineCfg.RemoteRootItemID)
 	assert.Empty(t, engineCfg.DriveType)
 	assert.False(t, engineCfg.LocalRules.RejectSharePointRootForms)
 }

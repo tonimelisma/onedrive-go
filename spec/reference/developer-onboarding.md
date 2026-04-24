@@ -437,7 +437,7 @@ when you treat it as several file families sharing one single-drive owner.
 | `planner*.go`, `single_path.go`, `actions.go` | Pure planning: turn observed change plus baseline into deterministic actions |
 | `executor*.go`, `worker*.go`, `worker_result.go`, `dep_graph.go`, `active_scopes.go` | Execution: worker dispatch, dependency ordering, scope admission, and conflict-safe file application |
 | `engine.go`, `engine_config.go`, `engine_startup.go`, `engine_current_plan.go`, `engine_run_once*.go`, `engine_watch*.go`, `engine_runtime_start.go` | Runtime orchestration: startup normalization, shared current-truth observe/load/build/reconcile stages, one-shot results, runtime admission/publication drain, shared watch-loop ownership across bootstrap/running/drain, and steady-state replan flow |
-| `engine_primary_root*.go`, `engine_observation_postprocess.go`, `observed_items.go` | Engine-owned primary-root observation: root selection, rooted-subtree fallback, postprocessing, and remote observation projection |
+| `engine_primary_root*.go`, `engine_mount_root.go`, `engine_observation_postprocess.go`, `observed_items.go` | Engine-owned primary-root and mount-root observation: root selection, mount-root fallback, postprocessing, and remote observation projection |
 | `engine_result_classify.go`, `engine_runtime_completion*.go`, `engine_runtime_graph.go`, `engine_results.go`, `engine_retry_trial.go` | Runtime completion: result classification, dep-graph completion/shutdown ownership, and retry-trial timer ownership |
 | `engine_runtime_invariants.go`, `engine_runtime_lifecycle.go`, `engine_runtime_admission.go`, `scope_lifecycle_policy.go` | Runtime lifecycle: startup cleanup, timed blocker activation, held-work persistence/release, admission, release/discard, and shared lifecycle policy for retry/write scopes |
 | `engine_watch_state.go`, `engine_runtime_workset.go`, `engine_runtime_types.go`, `engine_time.go`, `engine_log_fields.go` | Watch-owned runtime state, shared execution worksets, time helpers, and structured logging |
@@ -448,7 +448,7 @@ when you treat it as several file families sharing one single-drive owner.
 | `store_read_*.go`, `store_write_*.go` | Store I/O: raw authority reads (remote state, observation state, snapshots) and write operations (baseline, observation, retry work, block scopes) |
 | `condition_keys.go`, `watch_summary.go`, `truth_status.go`, `issue_types.go` | Shared condition taxonomy and ordering, derived truth-availability reads, and raw engine-owned watch-summary aggregation |
 | `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |
-| `inotify_*`, `symlink_observation.go`, `engine_rooted_subtree.go` | Platform or feature-specific observation/runtime helpers |
+| `inotify_*`, `symlink_observation.go` | Platform or feature-specific observation/runtime helpers |
 
 If you are debugging sync behavior, first decide which stage owns the problem:
 

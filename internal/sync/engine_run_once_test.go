@@ -555,7 +555,7 @@ func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T
 }
 
 // Validates: R-2.1.1, R-3.3.12
-func TestRunOnce_RootedSubtreeUsesScopedDeltaAndToken(t *testing.T) {
+func TestRunOnce_MountRootUsesScopedDeltaAndToken(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -570,12 +570,12 @@ func TestRunOnce_RootedSubtreeUsesScopedDeltaAndToken(t *testing.T) {
 		folderDeltaFn: func(_ context.Context, gotDriveID driveid.ID, folderID, token string) ([]graph.Item, string, error) {
 			folderDeltaCalls++
 			assert.Equal(t, driveID, gotDriveID)
-			assert.Equal(t, "rooted-subtree-root", folderID)
+			assert.Equal(t, "mount-root-root", folderID)
 			assert.Empty(t, token)
 
 			return []graph.Item{
 				{
-					ID: "remote-file-1", Name: "inside.txt", ParentID: "rooted-subtree-root",
+					ID: "remote-file-1", Name: "inside.txt", ParentID: "mount-root-root",
 					DriveID: driveID, Size: 4, QuickXorHash: "hash1",
 				},
 			}, "scoped-token-1", nil
@@ -592,19 +592,19 @@ func TestRunOnce_RootedSubtreeUsesScopedDeltaAndToken(t *testing.T) {
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
 	eng, err := newEngine(t.Context(), &engineInputs{
-		DBPath:                    dbPath,
-		SyncRoot:                  syncRoot,
-		DriveID:                   driveID,
-		RootItemID:                "rooted-subtree-root",
-		RootedSubtreeDeltaCapable: true,
-		Fetcher:                   mock,
-		Items:                     mock,
-		Downloads:                 mock,
-		Uploads:                   mock,
-		FolderDelta:               mock,
-		RecursiveLister:           mock,
-		PermChecker:               mock,
-		Logger:                    testLogger(t),
+		DBPath:                 dbPath,
+		SyncRoot:               syncRoot,
+		DriveID:                driveID,
+		RemoteRootItemID:       "mount-root-root",
+		RemoteRootDeltaCapable: true,
+		Fetcher:                mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		FolderDelta:            mock,
+		RecursiveLister:        mock,
+		PermChecker:            mock,
+		Logger:                 testLogger(t),
 	})
 	require.NoError(t, err)
 	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
@@ -615,7 +615,7 @@ func TestRunOnce_RootedSubtreeUsesScopedDeltaAndToken(t *testing.T) {
 
 	report, err := eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
-	assert.False(t, deltaCalled, "drive-root delta must not be used for rooted-subtree engines")
+	assert.False(t, deltaCalled, "drive-root delta must not be used for mount-root engines")
 	assert.Equal(t, 1, folderDeltaCalls)
 	assert.GreaterOrEqual(t, report.Downloads, 1)
 
@@ -624,7 +624,7 @@ func TestRunOnce_RootedSubtreeUsesScopedDeltaAndToken(t *testing.T) {
 }
 
 // Validates: R-2.1.5
-func TestRunOnce_DryRun_RootedSubtreeDoesNotSaveScopedDeltaToken(t *testing.T) {
+func TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -635,13 +635,13 @@ func TestRunOnce_DryRun_RootedSubtreeDoesNotSaveScopedDeltaToken(t *testing.T) {
 		folderDeltaFn: func(_ context.Context, gotDriveID driveid.ID, folderID, token string) ([]graph.Item, string, error) {
 			folderDeltaCalls++
 			assert.Equal(t, driveID, gotDriveID)
-			assert.Equal(t, "rooted-subtree-root", folderID)
+			assert.Equal(t, "mount-root-root", folderID)
 			assert.Empty(t, token)
 
 			return []graph.Item{{
 				ID:           "remote-file-1",
 				Name:         "inside.txt",
-				ParentID:     "rooted-subtree-root",
+				ParentID:     "mount-root-root",
 				DriveID:      driveID,
 				Size:         4,
 				QuickXorHash: "hash1",
@@ -659,19 +659,19 @@ func TestRunOnce_DryRun_RootedSubtreeDoesNotSaveScopedDeltaToken(t *testing.T) {
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
 	eng, err := newEngine(t.Context(), &engineInputs{
-		DBPath:                    dbPath,
-		SyncRoot:                  syncRoot,
-		DriveID:                   driveID,
-		RootItemID:                "rooted-subtree-root",
-		RootedSubtreeDeltaCapable: true,
-		Fetcher:                   mock,
-		Items:                     mock,
-		Downloads:                 mock,
-		Uploads:                   mock,
-		FolderDelta:               mock,
-		RecursiveLister:           mock,
-		PermChecker:               mock,
-		Logger:                    testLogger(t),
+		DBPath:                 dbPath,
+		SyncRoot:               syncRoot,
+		DriveID:                driveID,
+		RemoteRootItemID:       "mount-root-root",
+		RemoteRootDeltaCapable: true,
+		Fetcher:                mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		FolderDelta:            mock,
+		RecursiveLister:        mock,
+		PermChecker:            mock,
+		Logger:                 testLogger(t),
 	})
 	require.NoError(t, err)
 	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
@@ -695,7 +695,7 @@ func TestRunOnce_DryRun_RootedSubtreeDoesNotSaveScopedDeltaToken(t *testing.T) {
 }
 
 // Validates: R-2.8.3
-func TestRunOnce_RootedSubtreeDeltaIncapableSkipsFolderDelta(t *testing.T) {
+func TestRunOnce_MountRootDeltaIncapableSkipsFolderDelta(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -709,7 +709,7 @@ func TestRunOnce_RootedSubtreeDeltaIncapableSkipsFolderDelta(t *testing.T) {
 		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
 			listCalls++
 			assert.Equal(t, driveID, gotDriveID)
-			assert.Equal(t, "rooted-subtree-root", folderID)
+			assert.Equal(t, "mount-root-root", folderID)
 			return nil, nil
 		},
 	}
@@ -720,19 +720,19 @@ func TestRunOnce_RootedSubtreeDeltaIncapableSkipsFolderDelta(t *testing.T) {
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
 	eng, err := newEngine(t.Context(), &engineInputs{
-		DBPath:                    dbPath,
-		SyncRoot:                  syncRoot,
-		DriveID:                   driveID,
-		RootItemID:                "rooted-subtree-root",
-		RootedSubtreeDeltaCapable: false,
-		Fetcher:                   mock,
-		Items:                     mock,
-		Downloads:                 mock,
-		Uploads:                   mock,
-		FolderDelta:               mock,
-		RecursiveLister:           mock,
-		PermChecker:               mock,
-		Logger:                    testLogger(t),
+		DBPath:                 dbPath,
+		SyncRoot:               syncRoot,
+		DriveID:                driveID,
+		RemoteRootItemID:       "mount-root-root",
+		RemoteRootDeltaCapable: false,
+		Fetcher:                mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		FolderDelta:            mock,
+		RecursiveLister:        mock,
+		PermChecker:            mock,
+		Logger:                 testLogger(t),
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -746,7 +746,7 @@ func TestRunOnce_RootedSubtreeDeltaIncapableSkipsFolderDelta(t *testing.T) {
 }
 
 // Validates: R-2.1.2
-func TestRunOnce_RootedSubtreeEnumerateStillPersistsFullReconcileCadenceWithoutToken(t *testing.T) {
+func TestRunOnce_MountRootEnumerateStillPersistsFullReconcileCadenceWithoutToken(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -755,7 +755,7 @@ func TestRunOnce_RootedSubtreeEnumerateStillPersistsFullReconcileCadenceWithoutT
 		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
 			listCalls++
 			assert.Equal(t, driveID, gotDriveID)
-			assert.Equal(t, "rooted-subtree-root", folderID)
+			assert.Equal(t, "mount-root-root", folderID)
 			return nil, nil
 		},
 	}
@@ -766,17 +766,17 @@ func TestRunOnce_RootedSubtreeEnumerateStillPersistsFullReconcileCadenceWithoutT
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
 	eng, err := newEngine(t.Context(), &engineInputs{
-		DBPath:          dbPath,
-		SyncRoot:        syncRoot,
-		DriveID:         driveID,
-		RootItemID:      "rooted-subtree-root",
-		Fetcher:         mock,
-		Items:           mock,
-		Downloads:       mock,
-		Uploads:         mock,
-		RecursiveLister: mock,
-		PermChecker:     mock,
-		Logger:          testLogger(t),
+		DBPath:           dbPath,
+		SyncRoot:         syncRoot,
+		DriveID:          driveID,
+		RemoteRootItemID: "mount-root-root",
+		Fetcher:          mock,
+		Items:            mock,
+		Downloads:        mock,
+		Uploads:          mock,
+		RecursiveLister:  mock,
+		PermChecker:      mock,
+		Logger:           testLogger(t),
 	})
 	require.NoError(t, err)
 	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))

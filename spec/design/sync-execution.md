@@ -177,7 +177,7 @@ For engines rooted below the remote drive root, execution uses the engine's own
 mount context:
 
 - `ExecutorConfig.driveID`
-- `ExecutorConfig.rootItemID`
+- `ExecutorConfig.remoteRootItemID`
 - `Action.DriveID`
 
 Path convergence checks after successful remote mutation are resolved relative

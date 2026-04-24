@@ -307,7 +307,7 @@ func TestExecutor_CreateRemoteFolder_WaitsForParentVisibilityBeforeCreate(t *tes
 	assert.Equal(t, []string{"parent", "parent/child"}, pathConvergence.waitCalls)
 }
 
-func TestExecutor_CreateRemoteFolder_RootedSubtreeUsesMountLocalPathConvergence(t *testing.T) {
+func TestExecutor_CreateRemoteFolder_MountRootUsesMountLocalPathConvergence(t *testing.T) {
 	t.Parallel()
 
 	const sharedParent = "shared-parent-id"
@@ -324,7 +324,7 @@ func TestExecutor_CreateRemoteFolder_RootedSubtreeUsesMountLocalPathConvergence(
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	cfg.SetRootItemID(sharedParent)
+	cfg.SetRemoteRootItemID(sharedParent)
 	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
@@ -467,7 +467,7 @@ func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
 	require.Equal(t, []string{"renamed.txt"}, pathConvergence.waitCalls)
 }
 
-func TestExecutor_RemoteMove_RootedSubtreeUsesMountLocalPathConvergence(t *testing.T) {
+func TestExecutor_RemoteMove_MountRootUsesMountLocalPathConvergence(t *testing.T) {
 	t.Parallel()
 
 	items := &executorMockItemClient{
@@ -487,7 +487,7 @@ func TestExecutor_RemoteMove_RootedSubtreeUsesMountLocalPathConvergence(t *testi
 		View:    &PathView{Path: "renamed.txt"},
 	}
 
-	cfg.SetRootItemID("rooted-subtree-id")
+	cfg.SetRemoteRootItemID("mount-root-id")
 	e := NewExecution(cfg, emptyBaseline())
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -909,7 +909,7 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	cfg.SetRootItemID(sharedParent)
+	cfg.SetRemoteRootItemID(sharedParent)
 	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
@@ -927,7 +927,7 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 	assert.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
 }
 
-func TestExecutor_Upload_RootedSubtreeUsesMountLocalPathConvergence(t *testing.T) {
+func TestExecutor_Upload_MountRootUsesMountLocalPathConvergence(t *testing.T) {
 	t.Parallel()
 
 	const sharedParent = "shared-parent-id"
@@ -941,7 +941,7 @@ func TestExecutor_Upload_RootedSubtreeUsesMountLocalPathConvergence(t *testing.T
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	cfg.SetRootItemID(sharedParent)
+	cfg.SetRemoteRootItemID(sharedParent)
 	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
@@ -1709,16 +1709,16 @@ func TestExecutor_ResolveParentID_Baseline(t *testing.T) {
 	}
 }
 
-func TestExecutor_ResolveParentID_RootedSubtree(t *testing.T) {
+func TestExecutor_ResolveParentID_MountRoot(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	cfg.SetRootItemID("rooted-subtree-id")
+	cfg.SetRemoteRootItemID("mount-root-id")
 	e := NewExecution(cfg, emptyBaseline())
 
 	id, err := e.ResolveParentID("exec-file.txt")
 	require.NoError(t, err)
-	assert.Equal(t, "rooted-subtree-id", id)
+	assert.Equal(t, "mount-root-id", id)
 }
 
 // ---------------------------------------------------------------------------

@@ -54,7 +54,7 @@ runtime-only facts:
 | `observation_issues` | Durable current-truth/content problems | stable issue identity per path/boundary |
 | `retry_work` | Exact delayed retry or blocked work for the current semantic intent | `(path, old_path, action_type)` |
 | `block_scopes` | Shared blocker timing and lifecycle | `scope_key` |
-| `observation_state` | Mount drive owner, primary cursor, and remote refresh cadence | zero-or-one row |
+| `observation_state` | Content drive owner, primary cursor, and remote refresh cadence | zero-or-one row |
 
 ## `baseline`
 
@@ -180,7 +180,7 @@ as boundary tags on `observation_issues`. They are not persisted as
 `observation_state` is the single durable owner of per-mount observation
 identity and cadence:
 
-- `mount_drive_id`
+- `content_drive_id`
 - `cursor`
 - `next_full_remote_refresh_at`
 
@@ -203,7 +203,7 @@ observation is capability-driven:
 Local watch safety-scan cadence is runtime-owned rather than persisted in
 SQLite.
 
-`mount_drive_id` identifies the remote drive for the mounted content root that
+`content_drive_id` identifies the remote drive for the mounted content root that
 owns the DB and cursor. It does not replace the per-row
 `remote_state.drive_id` authority.
 
