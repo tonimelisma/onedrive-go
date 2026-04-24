@@ -59,6 +59,8 @@ type statusMount struct {
 	DisplayName    string         `json:"display_name,omitempty"`
 	SyncDir        string         `json:"sync_dir"`
 	State          string         `json:"state"`
+	StateReason    string         `json:"state_reason,omitempty"`
+	StateDetail    string         `json:"state_detail,omitempty"`
 	SyncState      *syncStateInfo `json:"sync_state,omitempty"`
 }
 
@@ -503,12 +505,45 @@ func buildChildStatusMount(
 		DisplayName:    displayName,
 		SyncDir:        filepath.Join(parentDrive.SyncDir, filepath.FromSlash(record.RelativeLocalPath)),
 		State:          state,
+		StateReason:    record.StateReason,
+		StateDetail:    childMountStateDetail(record.State, record.StateReason),
 	}
 	if syncQ != nil {
 		mount.SyncState = syncQ.QuerySyncState(config.MountStatePath(record.MountID))
 	}
 
 	return mount
+}
+
+func childMountStateDetail(state config.MountState, reason string) string {
+	switch reason {
+	case config.MountStateReasonShortcutBindingUnavailable:
+		return "OneDrive did not return a usable shortcut target. " +
+			"Wait for Microsoft Graph to recover, or remove and recreate the shortcut if it no longer resolves."
+	case config.MountStateReasonDuplicateContentRoot:
+		return "Another child shortcut owns this same content root. Remove or pause one duplicate shortcut."
+	case config.MountStateReasonExplicitStandaloneContentRoot:
+		return "This content root is already configured as a standalone mount. Remove the child shortcut or remove or pause the standalone mount."
+	case config.MountStateReasonShortcutRemoved:
+		return "The shortcut was removed. The child mount will be finalized after its runner stops and state is purged."
+	case config.MountStateReasonLocalProjectionConflict:
+		return "The old and new shortcut paths both exist locally. Move or merge one path before resuming this child mount."
+	case config.MountStateReasonLocalProjectionUnavailable:
+		return "The local shortcut path could not be moved. Fix the filesystem error, then rerun sync."
+	}
+
+	switch state {
+	case config.MountStateActive:
+		return ""
+	case config.MountStateConflict:
+		return "Resolve the child mount conflict, then rerun sync."
+	case config.MountStateUnavailable:
+		return "Wait for the shortcut or local projection to become available, then rerun sync."
+	case config.MountStatePendingRemoval:
+		return "Wait for runner stop and child state cleanup to finish."
+	default:
+		return ""
+	}
 }
 
 func querySyncState(

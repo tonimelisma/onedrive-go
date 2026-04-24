@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -22,6 +23,8 @@ type discoveredShortcutBinding struct {
 	RelativeLocalPath string
 	RemoteDriveID     string
 	RemoteItemID      string
+	State             config.MountState
+	StateReason       string
 }
 
 const (
@@ -176,7 +179,15 @@ func (n *namespaceRuntime) reconcileNamespaceMountDelta(
 	if fullEnumeration {
 		discovered := make(map[string]discoveredShortcutBinding)
 		for i := range items {
-			binding, ok, bindErr := resolveDiscoveredShortcutBinding(ctx, session, parent, rootPathPrefix, &items[i])
+			_, knownBinding := existingByBinding[items[i].ID]
+			binding, ok, bindErr := resolveDiscoveredShortcutBinding(
+				ctx,
+				session,
+				parent,
+				rootPathPrefix,
+				&items[i],
+				knownBinding,
+			)
 			if bindErr != nil {
 				return parentReconcileResult{}, bindErr
 			}
@@ -199,7 +210,8 @@ func (n *namespaceRuntime) reconcileNamespaceMountByListing(
 	rootPathPrefix string,
 	state config.NamespaceDiscoveryState,
 ) (parentReconcileResult, error) {
-	bindings, err := enumerateShortcutBindings(ctx, session, parent, rootPathPrefix)
+	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
+	bindings, err := enumerateShortcutBindings(ctx, session, parent, rootPathPrefix, existingByBinding)
 	if err != nil {
 		return parentReconcileResult{}, err
 	}
@@ -210,7 +222,6 @@ func (n *namespaceRuntime) reconcileNamespaceMountByListing(
 	inventory.Namespaces[parent.mountID.String()] = state
 
 	changed := false
-	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
 	for _, binding := range bindings {
 		updated, err := upsertChildMountRecord(inventory, parent, existingByBinding, binding)
 		if err != nil {
@@ -302,7 +313,7 @@ func applyIncrementalParentDelta(
 			continue
 		}
 
-		binding, ok, err := resolveDiscoveredShortcutBinding(ctx, session, parent, rootPathPrefix, item)
+		binding, ok, err := resolveDiscoveredShortcutBinding(ctx, session, parent, rootPathPrefix, item, found)
 		if err != nil {
 			return parentReconcileResult{}, err
 		}
@@ -345,18 +356,12 @@ func upsertChildMountRecord(
 		return false, fmt.Errorf("constructing child mount ID for namespace %s binding %s", parent.mountID, binding.BindingItemID)
 	}
 
-	next := record
-	next.NamespaceID = parent.mountID.String()
-	next.BindingItemID = binding.BindingItemID
-	next.LocalAlias = binding.LocalAlias
-	next.RelativeLocalPath = binding.RelativeLocalPath
-	next.TokenOwnerCanonical = parent.tokenOwnerCanonical.String()
-	next.RemoteDriveID = binding.RemoteDriveID
-	next.RemoteItemID = binding.RemoteItemID
-	next.State = config.MountStateActive
-	next.StateReason = ""
+	next := childMountRecordForBinding(parent, &record, found, &binding)
+	if !found && next.RelativeLocalPath == "" {
+		return false, nil
+	}
 
-	if found && next == record {
+	if found && reflect.DeepEqual(next, record) {
 		return false, nil
 	}
 
@@ -366,6 +371,60 @@ func upsertChildMountRecord(
 	inventory.Mounts[next.MountID] = next
 	existingByBinding[binding.BindingItemID] = next
 	return true, nil
+}
+
+func childMountRecordForBinding(
+	parent *mountSpec,
+	record *config.MountRecord,
+	found bool,
+	binding *discoveredShortcutBinding,
+) config.MountRecord {
+	next := *record
+	next.NamespaceID = parent.mountID.String()
+	next.BindingItemID = binding.BindingItemID
+	next.TokenOwnerCanonical = parent.tokenOwnerCanonical.String()
+	applyChildBindingPath(&next, record, found, binding)
+	applyChildBindingRemote(&next, binding)
+	applyChildBindingLifecycle(&next, binding)
+	return next
+}
+
+func applyChildBindingPath(
+	next *config.MountRecord,
+	record *config.MountRecord,
+	found bool,
+	binding *discoveredShortcutBinding,
+) {
+	if binding.LocalAlias != "" {
+		next.LocalAlias = binding.LocalAlias
+	}
+	if binding.RelativeLocalPath == "" {
+		return
+	}
+	if found && record.RelativeLocalPath != "" && record.RelativeLocalPath != binding.RelativeLocalPath {
+		next.ReservedLocalPaths = appendUniqueStrings(next.ReservedLocalPaths, record.RelativeLocalPath)
+	}
+	next.RelativeLocalPath = binding.RelativeLocalPath
+}
+
+func applyChildBindingRemote(next *config.MountRecord, binding *discoveredShortcutBinding) {
+	if binding.RemoteDriveID != "" {
+		next.RemoteDriveID = binding.RemoteDriveID
+	}
+	if binding.RemoteItemID != "" {
+		next.RemoteItemID = binding.RemoteItemID
+	}
+}
+
+func applyChildBindingLifecycle(next *config.MountRecord, binding *discoveredShortcutBinding) {
+	if binding.State == config.MountStateUnavailable {
+		next.State = config.MountStateUnavailable
+		next.StateReason = binding.StateReason
+		return
+	}
+
+	next.State = config.MountStateActive
+	next.StateReason = ""
 }
 
 func markMountPendingRemoval(inventory *config.MountInventory, record *config.MountRecord) bool {
@@ -505,6 +564,7 @@ func enumerateShortcutBindings(
 	session *driveopsSessionView,
 	parent *mountSpec,
 	rootPathPrefix string,
+	existingByBinding map[string]config.MountRecord,
 ) ([]discoveredShortcutBinding, error) {
 	remoteRootItemID := parent.remoteRootItemID
 	if remoteRootItemID == "" {
@@ -529,7 +589,15 @@ func enumerateShortcutBindings(
 		}
 
 		for i := range children {
-			binding, ok, bindErr := resolveDiscoveredShortcutBinding(ctx, session, parent, rootPathPrefix, &children[i])
+			_, knownBinding := existingByBinding[children[i].ID]
+			binding, ok, bindErr := resolveDiscoveredShortcutBinding(
+				ctx,
+				session,
+				parent,
+				rootPathPrefix,
+				&children[i],
+				knownBinding,
+			)
 			if bindErr != nil {
 				return nil, bindErr
 			}
@@ -552,6 +620,7 @@ func resolveDiscoveredShortcutBinding(
 	parent *mountSpec,
 	rootPathPrefix string,
 	item *graph.Item,
+	knownBinding bool,
 ) (discoveredShortcutBinding, bool, error) {
 	if item == nil || item.IsDeleted || item.ID == "" {
 		return discoveredShortcutBinding{}, false, nil
@@ -561,6 +630,9 @@ func resolveDiscoveredShortcutBinding(
 	if requiresShortcutBindingRefresh(current) {
 		refreshed, err := session.meta.GetItem(ctx, parent.remoteDriveID.String(), current.ID)
 		if err != nil {
+			if knownBinding || hasShortcutBindingEvidence(current) {
+				return unavailableShortcutBinding(rootPathPrefix, current), true, nil
+			}
 			return discoveredShortcutBinding{}, false, fmt.Errorf(
 				"refreshing shortcut placeholder %s for parent mount %s: %w",
 				current.ID,
@@ -594,12 +666,36 @@ func resolveDiscoveredShortcutBinding(
 	}, true, nil
 }
 
+func unavailableShortcutBinding(rootPathPrefix string, item *graph.Item) discoveredShortcutBinding {
+	binding := discoveredShortcutBinding{
+		State:       config.MountStateUnavailable,
+		StateReason: config.MountStateReasonShortcutBindingUnavailable,
+	}
+	if item == nil {
+		return binding
+	}
+
+	binding.BindingItemID = item.ID
+	binding.LocalAlias = item.Name
+	binding.RemoteDriveID = item.RemoteDriveID
+	binding.RemoteItemID = item.RemoteItemID
+	if relativeLocalPath, err := shortcutRelativeLocalPath(rootPathPrefix, item); err == nil {
+		binding.RelativeLocalPath = relativeLocalPath
+	}
+
+	return binding
+}
+
 func requiresShortcutBindingRefresh(item *graph.Item) bool {
 	if item == nil {
 		return false
 	}
 
 	return item.Name == "" || item.ParentPath == "" || item.RemoteDriveID == "" || item.RemoteItemID == ""
+}
+
+func hasShortcutBindingEvidence(item *graph.Item) bool {
+	return item != nil && item.IsFolder && (item.RemoteDriveID != "" || item.RemoteItemID != "")
 }
 
 func isShortcutPlaceholder(item *graph.Item) bool {

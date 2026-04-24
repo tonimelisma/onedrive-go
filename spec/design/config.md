@@ -27,6 +27,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | Mount-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
+| Mount inventory schema v4 owns child lifecycle reasons, unavailable shortcut-binding records, and reserved projection paths. | `TestMountInventory_RoundTrip`, `TestMountInventory_UnavailableShortcutBindingMayOmitRemoteTarget`, `TestMountInventory_RemoteTargetRequiredForOtherLifecycleStates`, `TestMountInventory_ReservedLocalPathsNormalizeAndValidate` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
 
@@ -312,23 +313,27 @@ bindings, so it follows the same managed-file discipline:
 - unknown JSON fields are rejected
 - `schema_version` is required
 - only the exact supported version is accepted
-- current schema version is `3`
+- current schema version is `4`
 - automatic child-mount records are binding-owned and therefore require:
   - `MountID`
   - `NamespaceID`
   - `BindingItemID`
   - `LocalAlias` when Graph provides one
   - `RelativeLocalPath`
+  - `ReservedLocalPaths` only while a shortcut rename/move still reserves an
+    old local projection path
   - `TokenOwnerCanonical`
-  - `RemoteDriveID`
-  - `RemoteItemID`
+  - `RemoteDriveID` and `RemoteItemID`, except for unavailable shortcut-binding
+    records whose target could not be materialized yet
   - `MountState`
+  - `StateReason` for conflict, unavailable, and pending-removal lifecycle
+    states
 - namespace discovery state is stored alongside mount records:
   - `NamespaceID`
   - `DeltaLink`
   - `DiscoveryMode`
 - sibling child mounts under the same namespace may not reuse or nest local
-  relative paths
+  relative paths; reserved local paths participate in that ownership check
 - every save is a full atomic rewrite of the file
 
 `MountStatePath(mountID)` gives each managed child mount a stable retained-state
@@ -346,6 +351,15 @@ they are derived from `(NamespaceID, BindingItemID)`, not from the local
 projection path or the content-root identity. A shortcut can therefore move to
 another folder inside the parent namespace without losing its retained child
 mount state DB.
+
+During a shortcut rename or move, schema v4 stores the new
+`RelativeLocalPath` plus any old `ReservedLocalPaths` that must remain excluded
+from the parent namespace until the local projection move is completed. If
+Graph returns a shortcut placeholder but does not return a usable target,
+config accepts an `unavailable` record with
+`state_reason: shortcut_binding_unavailable` and no remote target IDs. That
+state belongs to mount inventory; it is not a sync-store retry/block/observation
+condition.
 
 When config encounters an older `mounts.json` schema version, it does not keep
 that format alive through compatibility shims. Older schemas fail with a clear
