@@ -18,13 +18,6 @@ func (id mountID) String() string {
 	return string(id)
 }
 
-type mountProjectionKind string
-
-const (
-	mountProjectionStandalone mountProjectionKind = "standalone"
-	mountProjectionChild      mountProjectionKind = "child"
-)
-
 // StandaloneMountConfig is the CLI/config to multisync boundary for a
 // configured top-level mount. Config resolution owns producing these values;
 // multisync consumes them without reaching back into config-owned drive shapes.
@@ -57,9 +50,12 @@ type StandaloneMountSelection struct {
 // mountSpec is the control plane's runtime unit.
 type mountSpec struct {
 	mountID                   mountID
-	projectionKind            mountProjectionKind
+	parentMountID             mountID
+	projectionKind            MountProjectionKind
 	selectionIndex            int
 	canonicalID               driveid.CanonicalID
+	driveType                 string
+	rejectSharePointRootForms bool
 	displayName               string
 	syncRoot                  string
 	statePath                 string
@@ -260,7 +256,7 @@ func skippedChildMountResult(candidate *childMountCandidate, parentID mountID, l
 		)
 	}
 
-	return driveStartupResultForMount(candidate.mount, candidate.skipErr)
+	return mountStartupResultForMount(candidate.mount, candidate.skipErr)
 }
 
 func unmatchedChildStartupResults(records []config.MountRecord, startIndex int) []MountStartupResult {
@@ -273,9 +269,13 @@ func unmatchedChildStartupResults(records []config.MountRecord, startIndex int) 
 		}
 		results = append(results, MountStartupResult{
 			SelectionIndex: nextIndex,
-			CanonicalID:    driveid.CanonicalID{},
-			DisplayName:    displayName,
-			Status:         MountStartupFatal,
+			Identity: MountIdentity{
+				MountID:        record.MountID,
+				ParentMountID:  record.ParentMountID,
+				ProjectionKind: MountProjectionChild,
+			},
+			DisplayName: displayName,
+			Status:      MountStartupFatal,
 			Err: fmt.Errorf(
 				"child mount %s references missing parent mount %s",
 				record.MountID,
@@ -302,9 +302,11 @@ func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
 
 	return &mountSpec{
 		mountID:                   mountID(cfg.CanonicalID.String()),
-		projectionKind:            mountProjectionStandalone,
+		projectionKind:            MountProjectionStandalone,
 		selectionIndex:            cfg.SelectionIndex,
 		canonicalID:               cfg.CanonicalID,
+		driveType:                 cfg.CanonicalID.DriveType(),
+		rejectSharePointRootForms: cfg.CanonicalID.IsSharePoint(),
 		displayName:               cfg.DisplayName,
 		syncRoot:                  cfg.SyncRoot,
 		statePath:                 cfg.StatePath,
@@ -322,15 +324,6 @@ func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
 }
 
 func buildChildMountCandidate(parent *mountSpec, record config.MountRecord) (*childMountCandidate, error) {
-	canonicalID, err := driveid.ConstructShared(
-		parent.tokenOwnerCanonical.Email(),
-		record.RemoteDriveID,
-		record.RemoteRootItemID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("multisync: constructing child canonical ID for %s: %w", record.MountID, err)
-	}
-
 	statePath := config.MountStatePath(record.MountID)
 	if statePath == "" {
 		return nil, fmt.Errorf("multisync: state path is required for child mount %s", record.MountID)
@@ -343,8 +336,9 @@ func buildChildMountCandidate(parent *mountSpec, record config.MountRecord) (*ch
 
 	child := &mountSpec{
 		mountID:                   mountID(record.MountID),
-		projectionKind:            mountProjectionChild,
-		canonicalID:               canonicalID,
+		parentMountID:             parent.mountID,
+		projectionKind:            MountProjectionChild,
+		canonicalID:               driveid.CanonicalID{},
 		displayName:               displayName,
 		syncRoot:                  filepath.Join(parent.syncRoot, filepath.FromSlash(record.RelativeLocalPath)),
 		statePath:                 statePath,
@@ -406,6 +400,24 @@ func (m *mountSpec) contentRootKey() string {
 	}
 
 	return fmt.Sprintf("%s|%s|%s", m.tokenOwnerCanonical.String(), m.remoteDriveID.String(), rootItemID)
+}
+
+func (m *mountSpec) identity() MountIdentity {
+	if m == nil {
+		return MountIdentity{}
+	}
+
+	return MountIdentity{
+		MountID:        m.mountID.String(),
+		ParentMountID:  m.parentMountID.String(),
+		ProjectionKind: m.projectionKind,
+		CanonicalID:    m.canonicalID,
+	}
+}
+
+func (m *mountSpec) label() string {
+	identity := m.identity()
+	return identity.Label()
 }
 
 func (m *mountSpec) syncSessionConfig() *driveops.MountSessionConfig {

@@ -16,7 +16,7 @@ import (
 func TestMountRunner_Run_Success(t *testing.T) {
 	cid := testCanonicalID(t, "personal:test@example.com")
 	dr := &MountRunner{
-		canonID:     cid,
+		identity:    testStandaloneMountIdentity(cid),
 		displayName: "Test Drive",
 	}
 
@@ -30,7 +30,7 @@ func TestMountRunner_Run_Success(t *testing.T) {
 		return report, nil
 	})
 
-	assert.Equal(t, cid, result.CanonicalID)
+	assert.Equal(t, testStandaloneMountIdentity(cid), result.Identity)
 	assert.Equal(t, "Test Drive", result.DisplayName)
 	require.NoError(t, result.Err)
 	require.NotNil(t, result.Report)
@@ -42,7 +42,7 @@ func TestMountRunner_Run_Success(t *testing.T) {
 func TestMountRunner_Run_Error(t *testing.T) {
 	cid := testCanonicalID(t, "personal:test@example.com")
 	dr := &MountRunner{
-		canonID:     cid,
+		identity:    testStandaloneMountIdentity(cid),
 		displayName: "Failing Drive",
 	}
 
@@ -52,7 +52,7 @@ func TestMountRunner_Run_Error(t *testing.T) {
 		return nil, errSync
 	})
 
-	assert.Equal(t, cid, result.CanonicalID)
+	assert.Equal(t, testStandaloneMountIdentity(cid), result.Identity)
 	assert.Equal(t, "Failing Drive", result.DisplayName)
 	require.ErrorIs(t, result.Err, errSync)
 	assert.Nil(t, result.Report)
@@ -62,7 +62,7 @@ func TestMountRunner_Run_Error(t *testing.T) {
 func TestMountRunner_Run_Panic(t *testing.T) {
 	cid := testCanonicalID(t, "personal:panic@example.com")
 	dr := &MountRunner{
-		canonID:     cid,
+		identity:    testStandaloneMountIdentity(cid),
 		displayName: "Panic Drive",
 	}
 
@@ -70,7 +70,7 @@ func TestMountRunner_Run_Panic(t *testing.T) {
 		panic("nil pointer dereference in observer")
 	})
 
-	assert.Equal(t, cid, result.CanonicalID)
+	assert.Equal(t, testStandaloneMountIdentity(cid), result.Identity)
 	assert.Equal(t, "Panic Drive", result.DisplayName)
 	assert.Nil(t, result.Report)
 	require.Error(t, result.Err)
@@ -82,7 +82,7 @@ func TestMountRunner_Run_Panic(t *testing.T) {
 func TestMountRunner_Run_PanicWithError(t *testing.T) {
 	cid := testCanonicalID(t, "personal:panic-err@example.com")
 	dr := &MountRunner{
-		canonID:     cid,
+		identity:    testStandaloneMountIdentity(cid),
 		displayName: "Panic Error Drive",
 	}
 
@@ -101,7 +101,7 @@ func TestMountRunner_Run_PanicWithError(t *testing.T) {
 func TestMountRunner_Run_ContextCanceled(t *testing.T) {
 	cid := testCanonicalID(t, "personal:cancel@example.com")
 	dr := &MountRunner{
-		canonID:     cid,
+		identity:    testStandaloneMountIdentity(cid),
 		displayName: "Cancel Drive",
 	}
 

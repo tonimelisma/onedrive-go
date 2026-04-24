@@ -840,7 +840,7 @@ This section intentionally separates:
 
 | Current concept | Current role | Transitional role | Target home | Final fate |
 | --- | --- | --- | --- | --- |
-| `shared:<email>:<sourceDriveID>:<sourceItemID>` canonical drive ID | Configured shared drive identity | Temporary way to synthesize child mount-engine specs | Mount inventory content-root binding | Remove as a first-class configured-drive concept |
+| `shared:<email>:<sourceDriveID>:<sourceItemID>` canonical drive ID | Explicit standalone shared-folder identity | No managed-child role after Increment 7d | Explicit standalone drive config only | Keep only if the product still wants explicit standalone shared-folder mounts |
 | `ResolvedDrive.RootItemID` | Explicit standalone shared-folder root item | Temporary top-level mount-spec input | `MountRecord.RemoteRootItemID` for managed child mounts | Keep only for explicit standalone shared-folder config |
 | Shared drive `display_name` | User-facing name for configured shared drive | Temporary alias seed | `MountRecord.LocalAlias` | Remove shared-drive-specific display ownership from config |
 | `CatalogDrive.OwnerAccountCanonical` | Shared drive token owner | Temporary auth owner for generated mounts | `MountRecord.TokenOwnerAccount` | Move to dedicated mount inventory or explicit mount metadata |
@@ -885,7 +885,7 @@ This table maps today's major code areas to their target architectural home.
 | `internal/config/config.go` + drive sections | User-configured namespace roots and drive-section settings | User-configured namespace roots and explicit top-level mounts only | Shortcut child mounts should stop living in ordinary drive config |
 | `internal/config/catalog.go` | Managed inventory for accounts and drives | Split into drive catalog plus mount inventory, or add a distinct mount inventory boundary | Blank-slate preference is a separate mount inventory authority |
 | `internal/config/drive.go` + resolver | Builds `ResolvedDrive` from config/catalog | Keep for configured namespace roots; stop using as the permanent home for shortcut mounts | Synthetic reuse may be acceptable during transition |
-| `internal/driveid` shared canonical IDs | Encodes shared folders as configured drives | Move shortcut durable identity into mount inventory | Configured-drive identity and managed mount identity should diverge |
+| `internal/driveid` shared `CanonicalID` values | Encodes explicit standalone shared-folder drives | Managed shortcut identity moved to `MountID` in Increment 7d | Configured-drive identity only | Keep only if explicit standalone shared-folder mounts remain a product surface |
 | `internal/driveops/session.go` | Authenticated drive/session plus some shared-root behavior | Shared capability layer plus mount-engine inputs | `MountedRootItemID` should leave generic session shape |
 | `internal/graph/*` shared-target resolution | Resolves raw share inputs to owner-side identity | Namespace discovery/reconciliation input | The owner-side target identity remains useful |
 | `internal/sync/engine*.go` | Single-drive engine with shared-root specializations | Mount engine | This is the main reusable runtime core |
@@ -1579,9 +1579,12 @@ Concrete work:
   delta token; recursive `children` enumeration remains positive-only
 - runtime status/control/perf surfaces are now mount-shaped end to end:
   - `MountRunner`, `MountReport`, and mount startup results in `multisync`
+    carry `MountIdentity`
   - `StatusResponse.Mounts` and `PerfStatusResponse.Mounts`
   - per-mount perf collectors keyed by mount ID
-  - `status` child rows rendered beneath the selected parent drive rows
+  - `status` child rows rendered beneath the selected parent drive rows, with
+    child rows identified by `mount_id` rather than synthetic `shared:`
+    canonical IDs
 - `driveops.Session` now uses mounted-root terminology
 - keep explicit standalone shared-folder drive add support working in parallel
 - if a temporary separate-root fallback is used during rollout:
@@ -1646,8 +1649,12 @@ Concrete work:
   `StandaloneMountSelection` carries valid top-level mounts plus mount-local
   conversion failures, watch startup now closes the control socket when startup
   validation fails after bind, paused child mounts still reserve their parent
-  subtree, and managed mount state paths use collision-resistant encoded mount
-  IDs
+  subtree, and managed mount state paths use bounded collision-resistant digest
+  filenames
+- move managed child runtime/report/status identity off fabricated `shared:`
+  drive IDs:
+  `MountIdentity` keeps canonical IDs for standalone mounts while managed child
+  mounts report by durable `MountID`
 - rename remaining store owner vocabulary from configured-drive-centric to
   mount-owned terminology: `observation_state.mount_drive_id`,
   `ObservationState.MountDriveID`, and related helpers now describe the mounted

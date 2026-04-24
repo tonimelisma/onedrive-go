@@ -115,7 +115,7 @@ func NewCanonicalID(raw string) (CanonicalID, error) {
 	case DriveTypeShared:
 		if len(parts) != canonicalIDMaxParts {
 			return CanonicalID{}, fmt.Errorf(
-				"driveid: shared canonical ID %q must have exactly 4 parts "+
+				"driveid: shared drive canonical ID %q must have exactly 4 parts "+
 					"(shared:email:sourceDriveID:sourceItemID), got %d", raw, len(parts))
 		}
 
@@ -124,7 +124,7 @@ func NewCanonicalID(raw string) (CanonicalID, error) {
 
 		if cid.sourceDriveID == "" || cid.sourceItemID == "" {
 			return CanonicalID{}, fmt.Errorf(
-				"driveid: shared canonical ID %q requires non-empty source drive ID and item ID", raw)
+				"driveid: shared drive canonical ID %q requires non-empty source drive ID and item ID", raw)
 		}
 	}
 
@@ -183,11 +183,11 @@ func ConstructSharePoint(email, site, library string) (CanonicalID, error) {
 // Returns an error if any required field is empty.
 func ConstructShared(email, sourceDriveID, sourceItemID string) (CanonicalID, error) {
 	if email == "" {
-		return CanonicalID{}, fmt.Errorf("driveid: shared canonical ID requires non-empty email")
+		return CanonicalID{}, fmt.Errorf("driveid: shared drive canonical ID requires non-empty email")
 	}
 
 	if sourceDriveID == "" || sourceItemID == "" {
-		return CanonicalID{}, fmt.Errorf("driveid: shared canonical ID requires non-empty source drive ID and item ID")
+		return CanonicalID{}, fmt.Errorf("driveid: shared drive canonical ID requires non-empty source drive ID and item ID")
 	}
 
 	return CanonicalID{

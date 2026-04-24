@@ -82,7 +82,7 @@ func mountReportsError(reports []*multisync.MountReport) error {
 			failCount++
 
 			if firstErr == nil {
-				firstErr = formatStateStoreIncompatibleError(dr.CanonicalID, dr.Err)
+				firstErr = formatStateStoreIncompatibleError(&dr.Identity, dr.Err)
 			}
 		}
 	}
@@ -121,7 +121,7 @@ func runOnceResultError(result multisync.RunOnceResult) error {
 		}
 		failCount++
 		if firstErr == nil {
-			firstErr = formatStateStoreIncompatibleError(dr.CanonicalID, dr.Err)
+			firstErr = formatStateStoreIncompatibleError(&dr.Identity, dr.Err)
 		}
 	}
 
@@ -145,7 +145,7 @@ func formatMountReportErrorMessage(dr *multisync.MountReport) string {
 		return ""
 	}
 
-	return formatStateStoreIncompatibleMessage(dr.CanonicalID, dr.Err)
+	return formatStateStoreIncompatibleMessage(&dr.Identity, dr.Err)
 }
 
 // printNonZero prints a labeled count line only when n > 0.

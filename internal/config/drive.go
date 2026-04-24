@@ -168,7 +168,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	var catalog *Catalog
 	// Two-source drive ID resolution: prefer the catalog-backed drive record
 	// (per-drive, accurate for SharePoint libraries and shared drives), then
-	// the shared canonical ID (embeds the remote drive ID). Otherwise DriveID
+	// the explicit shared-drive canonical ID payload. Otherwise DriveID
 	// stays zero.
 	if loadedCatalog, err := LoadCatalog(); err != nil {
 		logger.Debug("could not load catalog drive record", "canonical_id", canonicalID.String(), "error", err)

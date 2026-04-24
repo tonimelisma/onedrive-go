@@ -105,20 +105,20 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 	}
 }
 
-// driveWork pairs a MountRunner with the sync function it will execute.
-type driveWork struct {
+// mountWork pairs a MountRunner with the sync function it will execute.
+type mountWork struct {
 	runner *MountRunner
 	fn     func(context.Context) (*syncengine.Report, error)
 }
 
-type indexedDriveWork struct {
+type indexedMountWork struct {
 	index int
-	work  driveWork
+	work  mountWork
 }
 
 // RunOnce executes a single sync pass for all configured runtime mounts. Each mount
 // runs in its own goroutine via a MountRunner with panic recovery. RunOnce
-// never returns an error — individual drive errors are captured in each
+// never returns an error — individual mount errors are captured in each
 // syncengine.Report. The caller inspects reports to determine success or failure.
 func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) RunOnceResult {
 	if len(o.cfg.StandaloneMounts) == 0 {
@@ -165,7 +165,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	for _, w := range work {
 		wg.Add(1)
 
-		go func(indexed indexedDriveWork) {
+		go func(indexed indexedMountWork) {
 			defer wg.Done()
 			reports[indexed.index] = indexed.work.runner.run(ctx, indexed.work.fn)
 		}(w)
@@ -200,7 +200,7 @@ func controlFailureRunOnceResult(
 
 	results := append([]MountStartupResult(nil), initialStartup...)
 	for i := range mounts {
-		results = append(results, driveStartupResultForMount(mounts[i], err))
+		results = append(results, mountStartupResultForMount(mounts[i], err))
 	}
 
 	return RunOnceResult{
@@ -275,8 +275,8 @@ func (o *Orchestrator) prepareRunOnceWork(
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.RunOptions,
-) ([]indexedDriveWork, StartupSelectionSummary, []*MountReport) {
-	work := make([]indexedDriveWork, 0, len(mounts))
+) ([]indexedMountWork, StartupSelectionSummary, []*MountReport) {
+	work := make([]indexedMountWork, 0, len(mounts))
 	reports := make([]*MountReport, 0, len(mounts))
 	startResults := append([]MountStartupResult(nil), initialStartup...)
 
@@ -285,7 +285,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 		if mount.paused {
 			startResults = append(startResults, MountStartupResult{
 				SelectionIndex: mount.selectionIndex,
-				CanonicalID:    mount.canonicalID,
+				Identity:       mount.identity(),
 				DisplayName:    mount.displayName,
 				Status:         MountStartupPaused,
 			})
@@ -294,42 +294,42 @@ func (o *Orchestrator) prepareRunOnceWork(
 
 		session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 		if err != nil {
-			startResults = append(startResults, driveStartupResultForMount(
+			startResults = append(startResults, mountStartupResultForMount(
 				mount,
-				fmt.Errorf("session error for drive %s: %w", mount.canonicalID, err),
+				fmt.Errorf("session error for mount %s: %w", mount.label(), err),
 			))
 			continue
 		}
 
 		w, engineErr := o.buildEngineWork(ctx, mount, session, mode, opts)
 		if engineErr != nil {
-			startResults = append(startResults, driveStartupResultForMount(mount, engineErr))
+			startResults = append(startResults, mountStartupResultForMount(mount, engineErr))
 			continue
 		}
 		startResults = append(startResults, MountStartupResult{
 			SelectionIndex: mount.selectionIndex,
-			CanonicalID:    mount.canonicalID,
+			Identity:       mount.identity(),
 			DisplayName:    mount.displayName,
 			Status:         MountStartupRunnable,
 		})
-		work = append(work, indexedDriveWork{index: len(reports), work: w})
+		work = append(work, indexedMountWork{index: len(reports), work: w})
 		reports = append(reports, nil)
 	}
 
 	return work, summarizeStartupResults(startResults), reports
 }
 
-func driveStartupResultForMount(mount *mountSpec, err error) MountStartupResult {
+func mountStartupResultForMount(mount *mountSpec, err error) MountStartupResult {
 	return MountStartupResult{
 		SelectionIndex: mount.selectionIndex,
-		CanonicalID:    mount.canonicalID,
+		Identity:       mount.identity(),
 		DisplayName:    mount.displayName,
 		Status:         classifyMountStartupError(err),
 		Err:            err,
 	}
 }
 
-// buildEngineWork creates a driveWork item for a successfully-resolved mount.
+// buildEngineWork creates a mountWork item for a successfully-resolved mount.
 // If engine creation fails, the error is captured and reported at run time.
 func (o *Orchestrator) buildEngineWork(
 	ctx context.Context,
@@ -337,7 +337,7 @@ func (o *Orchestrator) buildEngineWork(
 	session *driveops.Session,
 	mode syncengine.SyncMode,
 	opts syncengine.RunOptions,
-) (driveWork, error) {
+) (mountWork, error) {
 	driveCollector := o.registerMountPerfCollector(mount.mountID.String())
 	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
 		Session:       session,
@@ -348,13 +348,13 @@ func (o *Orchestrator) buildEngineWork(
 	})
 	if engineErr != nil {
 		o.removeMountPerfCollector(mount.mountID.String())
-		return driveWork{}, fmt.Errorf("engine creation failed for %s: %w", mount.canonicalID, engineErr)
+		return mountWork{}, fmt.Errorf("engine creation failed for mount %s: %w", mount.label(), engineErr)
 	}
 
-	return driveWork{
+	return mountWork{
 		runner: &MountRunner{
 			selectionIndex: mount.selectionIndex,
-			canonID:        mount.canonicalID,
+			identity:       mount.identity(),
 			displayName:    mount.displayName,
 		},
 		fn: func(c context.Context) (*syncengine.Report, error) {
@@ -499,12 +499,12 @@ func (o *Orchestrator) startInitialWatchRunners(
 		// built. The control plane consumes the resolved pause state; it does not
 		// recompute pause policy itself.
 		if mount.paused {
-			o.logger.Info("skipping paused drive",
-				slog.String("drive", mount.canonicalID.String()),
+			o.logger.Info("skipping paused mount",
+				slog.String("mount_id", mount.mountID.String()),
 			)
 			startResults = append(startResults, MountStartupResult{
 				SelectionIndex: mount.selectionIndex,
-				CanonicalID:    mount.canonicalID,
+				Identity:       mount.identity(),
 				DisplayName:    mount.displayName,
 				Status:         MountStartupPaused,
 			})
@@ -515,17 +515,17 @@ func (o *Orchestrator) startInitialWatchRunners(
 		wr, err := o.startWatchRunner(ctx, mount, mode, opts)
 		if err != nil {
 			o.logger.Error("failed to start watch runner",
-				slog.String("drive", mount.canonicalID.String()),
+				slog.String("mount_id", mount.mountID.String()),
 				slog.String("error", err.Error()),
 			)
-			startResults = append(startResults, driveStartupResultForMount(mount, err))
+			startResults = append(startResults, mountStartupResultForMount(mount, err))
 
 			continue
 		}
 
 		startResults = append(startResults, MountStartupResult{
 			SelectionIndex: mount.selectionIndex,
-			CanonicalID:    mount.canonicalID,
+			Identity:       mount.identity(),
 			DisplayName:    mount.displayName,
 			Status:         MountStartupRunnable,
 		})
@@ -572,7 +572,7 @@ func (o *Orchestrator) startWatchRunner(
 ) (*watchRunner, error) {
 	session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 	if err != nil {
-		return nil, fmt.Errorf("session error for drive %s: %w", mount.canonicalID, err)
+		return nil, fmt.Errorf("session error for mount %s: %w", mount.label(), err)
 	}
 
 	driveCollector := o.registerMountPerfCollector(mount.mountID.String())
@@ -585,7 +585,7 @@ func (o *Orchestrator) startWatchRunner(
 	})
 	if engineErr != nil {
 		o.removeMountPerfCollector(mount.mountID.String())
-		return nil, fmt.Errorf("engine creation failed for %s: %w", mount.canonicalID, engineErr)
+		return nil, fmt.Errorf("engine creation failed for mount %s: %w", mount.label(), engineErr)
 	}
 
 	driveCtx, driveCancel := context.WithCancel(ctx)
@@ -819,13 +819,13 @@ func (o *Orchestrator) startReloadWatchRunners(
 				slog.String("mount_id", id.String()),
 				slog.String("error", err.Error()),
 			)
-			startResults = append(startResults, driveStartupResultForMount(mount, err))
+			startResults = append(startResults, mountStartupResultForMount(mount, err))
 			continue
 		}
 
 		startResults = append(startResults, MountStartupResult{
 			SelectionIndex: mount.selectionIndex,
-			CanonicalID:    mount.canonicalID,
+			Identity:       mount.identity(),
 			DisplayName:    mount.displayName,
 			Status:         MountStartupRunnable,
 		})
@@ -844,19 +844,38 @@ func mountSpecsEquivalentForWatchRestart(current *mountSpec, next *mountSpec) bo
 }
 
 func mountSpecCoreEquivalent(current *mountSpec, next *mountSpec) bool {
+	return mountSpecIdentityEquivalent(current, next) &&
+		mountSpecRemoteEquivalent(current, next) &&
+		mountSpecRuntimeEquivalent(current, next) &&
+		mountSpecTuningEquivalent(current, next)
+}
+
+func mountSpecIdentityEquivalent(current *mountSpec, next *mountSpec) bool {
 	return current.mountID == next.mountID &&
-		current.syncRoot == next.syncRoot &&
-		current.statePath == next.statePath &&
-		current.remoteDriveID == next.remoteDriveID &&
+		current.parentMountID == next.parentMountID &&
+		current.projectionKind == next.projectionKind &&
+		current.driveType == next.driveType &&
+		current.rejectSharePointRootForms == next.rejectSharePointRootForms
+}
+
+func mountSpecRemoteEquivalent(current *mountSpec, next *mountSpec) bool {
+	return current.remoteDriveID == next.remoteDriveID &&
 		current.remoteRootItemID == next.remoteRootItemID &&
 		current.tokenOwnerCanonical == next.tokenOwnerCanonical &&
-		current.accountEmail == next.accountEmail &&
+		current.accountEmail == next.accountEmail
+}
+
+func mountSpecRuntimeEquivalent(current *mountSpec, next *mountSpec) bool {
+	return current.syncRoot == next.syncRoot &&
+		current.statePath == next.statePath &&
 		current.enableWebsocket == next.enableWebsocket &&
-		current.rootedSubtreeDeltaCapable == next.rootedSubtreeDeltaCapable &&
-		current.transferWorkers == next.transferWorkers &&
+		current.rootedSubtreeDeltaCapable == next.rootedSubtreeDeltaCapable
+}
+
+func mountSpecTuningEquivalent(current *mountSpec, next *mountSpec) bool {
+	return current.transferWorkers == next.transferWorkers &&
 		current.checkWorkers == next.checkWorkers &&
-		current.minFreeSpace == next.minFreeSpace &&
-		current.projectionKind == next.projectionKind
+		current.minFreeSpace == next.minFreeSpace
 }
 
 func mountSkipDirsEqual(current []string, next []string) bool {

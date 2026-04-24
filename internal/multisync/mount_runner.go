@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -13,7 +12,7 @@ import (
 // fail without destabilizing the rest of the multi-mount control plane.
 type MountRunner struct {
 	selectionIndex int
-	canonID        driveid.CanonicalID
+	identity       MountIdentity
 	displayName    string
 }
 
@@ -24,14 +23,14 @@ type MountRunner struct {
 func (dr *MountRunner) run(ctx context.Context, fn func(context.Context) (*syncengine.Report, error)) (result *MountReport) {
 	result = &MountReport{
 		SelectionIndex: dr.selectionIndex,
-		CanonicalID:    dr.canonID,
+		Identity:       dr.identity,
 		DisplayName:    dr.displayName,
 	}
 
 	defer func() {
 		if r := recover(); r != nil {
 			result.Report = nil
-			result.Err = fmt.Errorf("panic in mount %s: %v", dr.canonID, r)
+			result.Err = fmt.Errorf("panic in mount %s: %v", dr.identity.Label(), r)
 		}
 	}()
 

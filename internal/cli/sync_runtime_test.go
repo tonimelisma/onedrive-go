@@ -97,11 +97,11 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 	expectedResult := multisync.RunOnceResult{
 		Startup: multisync.StartupSelectionSummary{
 			Results: []multisync.MountStartupResult{{
-				CanonicalID: drive.CanonicalID,
-				Status:      multisync.MountStartupRunnable,
+				Identity: testStandaloneMountIdentity(drive.CanonicalID),
+				Status:   multisync.MountStartupRunnable,
 			}},
 		},
-		Reports: []*multisync.MountReport{{CanonicalID: drive.CanonicalID}},
+		Reports: []*multisync.MountReport{{Identity: testStandaloneMountIdentity(drive.CanonicalID)}},
 	}
 	cc.syncRunOnceRunner = func(
 		ctx context.Context,
@@ -231,7 +231,7 @@ func TestStandaloneMountSelectionFromResolvedDrives_InvalidMinFreeSpaceIsMountLo
 	assert.Empty(t, selection.Mounts)
 	require.Len(t, selection.StartupResults, 1)
 	assert.Equal(t, 0, selection.StartupResults[0].SelectionIndex)
-	assert.Equal(t, drive.CanonicalID, selection.StartupResults[0].CanonicalID)
+	assert.Equal(t, testStandaloneMountIdentity(drive.CanonicalID), selection.StartupResults[0].Identity)
 	assert.Equal(t, multisync.MountStartupFatal, selection.StartupResults[0].Status)
 	require.Error(t, selection.StartupResults[0].Err)
 	assert.Contains(t, selection.StartupResults[0].Err.Error(), "invalid min_free_space")
@@ -263,7 +263,7 @@ func TestStandaloneMountSelectionFromResolvedDrives_TokenOwnerFailureIsMountLoca
 	selection := standaloneMountSelectionFromResolvedDrives([]*config.ResolvedDrive{drive})
 	assert.Empty(t, selection.Mounts)
 	require.Len(t, selection.StartupResults, 1)
-	assert.Equal(t, drive.CanonicalID, selection.StartupResults[0].CanonicalID)
+	assert.Equal(t, testStandaloneMountIdentity(drive.CanonicalID), selection.StartupResults[0].Identity)
 	assert.Equal(t, multisync.MountStartupFatal, selection.StartupResults[0].Status)
 	require.Error(t, selection.StartupResults[0].Err)
 	assert.Contains(t, selection.StartupResults[0].Err.Error(), "token owner")
@@ -442,8 +442,8 @@ func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoDriveStarts(t *testi
 				err: &multisync.WatchStartupError{
 					Summary: multisync.StartupSelectionSummary{
 						Results: []multisync.MountStartupResult{{
-							CanonicalID: cid,
-							Status:      multisync.MountStartupIncompatibleStore,
+							Identity: testStandaloneMountIdentity(cid),
+							Status:   multisync.MountStartupIncompatibleStore,
 							Err: &syncengine.StateStoreIncompatibleError{
 								Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
 							},
@@ -482,8 +482,8 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 			cfg.StartWarning(multisync.StartupWarning{
 				Summary: multisync.StartupSelectionSummary{
 					Results: []multisync.MountStartupResult{{
-						CanonicalID: cid,
-						Status:      multisync.MountStartupIncompatibleStore,
+						Identity: testStandaloneMountIdentity(cid),
+						Status:   multisync.MountStartupIncompatibleStore,
 						Err: &syncengine.StateStoreIncompatibleError{
 							Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
 						},

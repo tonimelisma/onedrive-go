@@ -206,11 +206,15 @@ func printMountStatus(w io.Writer, mount statusMount, history bool) error {
 }
 
 func statusMountLabel(mount statusMount) string {
-	if mount.DisplayName == "" || mount.DisplayName == mount.CanonicalID {
-		return mount.CanonicalID
+	identity := mount.CanonicalID
+	if identity == "" {
+		identity = mount.MountID
+	}
+	if mount.DisplayName == "" || mount.DisplayName == identity {
+		return identity
 	}
 
-	return fmt.Sprintf("%s (%s)", mount.DisplayName, mount.CanonicalID)
+	return fmt.Sprintf("%s (%s)", mount.DisplayName, identity)
 }
 
 func printStatusLiveDrives(w io.Writer, drives []statusLiveDrive) error {

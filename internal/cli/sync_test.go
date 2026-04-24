@@ -58,7 +58,9 @@ func TestMountReportsError(t *testing.T) {
 			name: "reset required includes guidance",
 			reports: []*multisync.MountReport{
 				{
-					CanonicalID: driveid.MustCanonicalID("personal:reset@example.com"),
+					Identity: testStandaloneMountIdentity(
+						driveid.MustCanonicalID("personal:reset@example.com"),
+					),
 					Err: &syncengine.StateStoreIncompatibleError{
 						Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
 					},
@@ -507,14 +509,14 @@ sync_dir = %q
 		return multisync.RunOnceResult{
 			Startup: multisync.StartupSelectionSummary{
 				Results: []multisync.MountStartupResult{{
-					CanonicalID: drives[0].CanonicalID,
+					Identity:    testStandaloneMountIdentity(drives[0].CanonicalID),
 					DisplayName: drives[0].DisplayName,
 					Status:      multisync.MountStartupRunnable,
 				}},
 			},
 			Reports: []*multisync.MountReport{
 				{
-					CanonicalID: drives[0].CanonicalID,
+					Identity:    testStandaloneMountIdentity(drives[0].CanonicalID),
 					DisplayName: drives[0].DisplayName,
 					Report: &syncengine.Report{
 						Mode:   mode,
@@ -568,13 +570,13 @@ sync_dir = %q
 		return multisync.RunOnceResult{
 			Startup: multisync.StartupSelectionSummary{
 				Results: []multisync.MountStartupResult{{
-					CanonicalID: drives[0].CanonicalID,
+					Identity:    testStandaloneMountIdentity(drives[0].CanonicalID),
 					DisplayName: drives[0].DisplayName,
 					Status:      multisync.MountStartupRunnable,
 				}},
 			},
 			Reports: []*multisync.MountReport{{
-				CanonicalID: drives[0].CanonicalID,
+				Identity:    testStandaloneMountIdentity(drives[0].CanonicalID),
 				DisplayName: drives[0].DisplayName,
 				Report: &syncengine.Report{
 					Mode: mode,
@@ -802,7 +804,7 @@ paused = true
 			if rd.Paused {
 				results = append(results, multisync.MountStartupResult{
 					SelectionIndex: i,
-					CanonicalID:    rd.CanonicalID,
+					Identity:       testStandaloneMountIdentity(rd.CanonicalID),
 					DisplayName:    rd.DisplayName,
 					Status:         multisync.MountStartupPaused,
 				})
@@ -811,13 +813,13 @@ paused = true
 
 			results = append(results, multisync.MountStartupResult{
 				SelectionIndex: i,
-				CanonicalID:    rd.CanonicalID,
+				Identity:       testStandaloneMountIdentity(rd.CanonicalID),
 				DisplayName:    rd.DisplayName,
 				Status:         multisync.MountStartupRunnable,
 			})
 			reports = append(reports, &multisync.MountReport{
 				SelectionIndex: i,
-				CanonicalID:    rd.CanonicalID,
+				Identity:       testStandaloneMountIdentity(rd.CanonicalID),
 				DisplayName:    rd.DisplayName,
 				Report: &syncengine.Report{
 					Mode: mode,

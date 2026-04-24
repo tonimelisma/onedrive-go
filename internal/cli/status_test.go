@@ -113,7 +113,6 @@ func TestDriveState_PausedOverridesNoToken(t *testing.T) {
 func TestBuildChildStatusMount_PausedChildOverridesReadyParent(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
 	mount := buildChildStatusMount(
-		parentCID,
 		config.Drive{SyncDir: "/tmp/sync-root"},
 		config.MountRecord{
 			MountID:           "child-docs",
@@ -127,6 +126,34 @@ func TestBuildChildStatusMount_PausedChildOverridesReadyParent(t *testing.T) {
 	)
 
 	assert.Equal(t, driveStatePaused, mount.State)
+}
+
+// Validates: R-2.10.1
+func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *testing.T) {
+	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
+	mount := buildChildStatusMount(
+		config.Drive{SyncDir: "/tmp/sync-root"},
+		config.MountRecord{
+			MountID:           "child-docs",
+			ParentMountID:     parentCID.String(),
+			DisplayName:       "Docs",
+			RelativeLocalPath: "Shortcuts/Docs",
+			RemoteDriveID:     "remote-drive",
+			RemoteRootItemID:  "remote-root",
+		},
+		nil,
+	)
+
+	assert.Equal(t, "child-docs", mount.MountID)
+	assert.Equal(t, statusProjectionChild, mount.ProjectionKind)
+	assert.Empty(t, mount.CanonicalID)
+	assert.Equal(t, "Docs (child-docs)", statusMountLabel(mount))
+
+	encoded, err := json.Marshal(mount)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"mount_id":"child-docs"`)
+	assert.NotContains(t, string(encoded), "canonical_id")
+	assert.NotContains(t, string(encoded), "shared:")
 }
 
 func TestGroupDrivesByAccount(t *testing.T) {
