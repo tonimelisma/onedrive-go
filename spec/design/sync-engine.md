@@ -6,7 +6,7 @@ Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [de
 
 ## Overview
 
-The engine is the single-drive runtime owner. It coordinates:
+The engine is the single mounted content-root runtime owner. It coordinates:
 
 - observation
 - planning
@@ -38,10 +38,10 @@ assemble overlapping observation-managed batch shapes ad hoc.
 
 ## Ownership Contract
 
-- Owns: single-drive runtime orchestration, watch-mode mutable state,
+- Owns: single-mount runtime orchestration, watch-mode mutable state,
   worker-result classification, retry/trial scheduling, and scope lifecycle.
 - Does Not Own: SQLite schema, Graph normalization, config parsing, or
-  multi-drive daemon lifecycle.
+  multi-mount daemon lifecycle.
 - Source of Truth: durable sync state in `SyncStore`, plus engine-owned
   in-memory runtime state for the currently running session.
 - Allowed Side Effects: coordinating observers, planner, executor, and store

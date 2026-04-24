@@ -53,7 +53,7 @@ type statusLiveDrive struct {
 // statusMount holds status information for one runtime mount.
 type statusMount struct {
 	MountID        string         `json:"mount_id"`
-	ParentMountID  string         `json:"parent_mount_id,omitempty"`
+	NamespaceID    string         `json:"namespace_id,omitempty"`
 	ProjectionKind string         `json:"projection_kind"`
 	CanonicalID    string         `json:"canonical_id,omitempty"`
 	DisplayName    string         `json:"display_name,omitempty"`
@@ -314,8 +314,9 @@ func buildStatusAccountsFromViews(
 		for _, cid := range driveIDs {
 			d := cfg.Drives[cid]
 			acct.Mounts = append(acct.Mounts, buildConfiguredStatusMount(cid, d, syncQ))
-			for _, child := range childrenByParent[cid] {
-				acct.Mounts = append(acct.Mounts, buildChildStatusMount(d, child, syncQ))
+			children := childrenByParent[cid]
+			for childIndex := range children {
+				acct.Mounts = append(acct.Mounts, buildChildStatusMount(d, &children[childIndex], syncQ))
 			}
 		}
 
@@ -380,8 +381,9 @@ func buildSingleAccountStatusWith(
 	for _, cid := range driveIDs {
 		d := cfg.Drives[cid]
 		acct.Mounts = append(acct.Mounts, buildConfiguredStatusMount(cid, d, syncQ))
-		for _, child := range childrenByParent[cid] {
-			acct.Mounts = append(acct.Mounts, buildChildStatusMount(d, child, syncQ))
+		children := childrenByParent[cid]
+		for childIndex := range children {
+			acct.Mounts = append(acct.Mounts, buildChildStatusMount(d, &children[childIndex], syncQ))
 		}
 	}
 
@@ -420,8 +422,9 @@ func groupChildMountsByParent(inventory *config.MountInventory) map[driveid.Cano
 		return grouped
 	}
 
-	for _, record := range inventory.Mounts {
-		parentID, err := driveid.NewCanonicalID(record.ParentMountID)
+	for mountID := range inventory.Mounts {
+		record := inventory.Mounts[mountID]
+		parentID, err := driveid.NewCanonicalID(record.NamespaceID)
 		if err != nil {
 			continue
 		}
@@ -430,13 +433,11 @@ func groupChildMountsByParent(inventory *config.MountInventory) map[driveid.Cano
 
 	for parentID := range grouped {
 		sort.Slice(grouped[parentID], func(i, j int) bool {
-			left := grouped[parentID][i]
-			right := grouped[parentID][j]
-			if left.RelativeLocalPath == right.RelativeLocalPath {
-				return left.MountID < right.MountID
+			if grouped[parentID][i].RelativeLocalPath == grouped[parentID][j].RelativeLocalPath {
+				return grouped[parentID][i].MountID < grouped[parentID][j].MountID
 			}
 
-			return left.RelativeLocalPath < right.RelativeLocalPath
+			return grouped[parentID][i].RelativeLocalPath < grouped[parentID][j].RelativeLocalPath
 		})
 	}
 
@@ -470,24 +471,34 @@ func buildConfiguredStatusMount(
 
 func buildChildStatusMount(
 	parentDrive config.Drive,
-	record config.MountRecord,
+	record *config.MountRecord,
 	syncQ syncStateQuerier,
 ) statusMount {
-	displayName := record.DisplayName
+	displayName := record.LocalAlias
 	if displayName == "" {
 		displayName = path.Base(record.RelativeLocalPath)
 	}
 
 	state := driveState(&parentDrive)
-	if record.Paused {
+	switch record.State {
+	case config.MountStateConflict, config.MountStateUnavailable, config.MountStatePendingRemoval:
+		state = string(record.State)
+	case config.MountStateActive, "":
+		if record.Paused {
+			state = driveStatePaused
+		} else if !parentDrive.IsPaused(time.Now()) {
+			state = driveStateReady
+		}
+	default:
+		state = string(record.State)
+	}
+	if record.Paused && state == driveStateReady {
 		state = driveStatePaused
-	} else if !parentDrive.IsPaused(time.Now()) {
-		state = driveStateReady
 	}
 
 	mount := statusMount{
 		MountID:        record.MountID,
-		ParentMountID:  record.ParentMountID,
+		NamespaceID:    record.NamespaceID,
 		ProjectionKind: statusProjectionChild,
 		DisplayName:    displayName,
 		SyncDir:        filepath.Join(parentDrive.SyncDir, filepath.FromSlash(record.RelativeLocalPath)),

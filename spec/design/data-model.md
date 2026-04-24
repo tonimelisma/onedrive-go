@@ -193,11 +193,11 @@ observation capability:
 - delta-based watch path -> next full refresh in 24 hours
 - enumerate-only watch path -> next full refresh in 1 hour
 
-Whole-drive observation remains delta-based in this increment. Shared-root
-observation is capability-driven:
+Whole-drive observation remains delta-based. Mount-root observation is
+capability-driven:
 
-- business/sharepoint shared roots skip folder delta and stay enumerate-only
-- personal shared roots prefer folder delta, but may fall back to recursive
+- business/sharepoint mount roots skip folder delta and stay enumerate-only
+- personal mount roots prefer folder delta, but may fall back to recursive
   enumeration until a later delta pass succeeds again
 
 Local watch safety-scan cadence is runtime-owned rather than persisted in

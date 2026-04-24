@@ -8,8 +8,9 @@
 // bootstrap, interactive, and sync HTTP client profiles. That keeps one
 // concrete runtime owner for both auth/session construction and target-scoped
 // Graph transport reuse.
-// Session wraps a pair of graph.Client instances (metadata + transfer) with
-// convenience methods for path resolution and child listing.
+// Session wraps a pair of graph.Client instances (metadata + transfer) for one
+// authenticated drive. MountSession adds root-aware path resolution and child
+// listing when a caller operates below the drive root.
 //
 // TransferManager and SessionStore provide download/upload with resume,
 // hash verification, and upload session persistence.

@@ -86,24 +86,32 @@ durable `MountID` and do not synthesize `shared:` canonical drive IDs. CLI
 status output follows the same boundary: child rows expose `mount_id` and omit
 `canonical_id`, while standalone rows retain `canonical_id`.
 
-Managed child mounts currently inherit their token owner, pause state, and sync
-tunables from the selected standalone parent mount. Conflicting content roots
-are resolved in the control plane before engine startup: explicit standalone
+Managed child mounts persist their token owner in `mounts.json`; pause and sync
+tunables still come from the selected standalone namespace mount. Conflicting
+content roots are resolved durably before engine startup: explicit standalone
 mounts win over duplicate child projections, and duplicate child projections
-for the same content root are skipped with structured startup outcomes.
+for the same namespace/content root are marked `conflict` with a structured
+reason and reported as skipped startup outcomes.
 
 Automatic shortcut reconciliation is also control-plane owned. Before one-shot
 startup, before watch startup, on control-socket reload, and on the watch-mode
 reconcile ticker, `internal/multisync` now:
 
-- discovers shortcut placeholders under each selected standalone parent mount
+- discovers shortcut placeholders under each selected standalone namespace mount
 - reconciles those bindings into `mounts.json`
+- updates namespace discovery state and child mount lifecycle state
 - recompiles the runtime mount set
 - starts or stops only the affected child mounts
 
 Authoritative removal comes only from completed delta enumeration. Recursive
 children enumeration remains positive-only: it can create or update child mount
 records, but it never deletes them based on absence alone.
+
+Authoritative removal is a lifecycle transition. A removed shortcut is first
+marked `pending_removal`, the control plane stops any active child runner,
+purges the managed child state DB, and only then deletes the inventory record.
+Parent namespace mounts continue to reserve every child mount path they own
+while records are active, paused, conflicted, unavailable, or pending removal.
 
 ## Boundary To The Engine
 
@@ -125,9 +133,9 @@ surface.
 `Orchestrator` is the multi-mount coordinator used by both one-shot `sync` and
 watch-mode `sync --watch`.
 
-It is always used, even for a single configured drive. There is no separate single-drive
-CLI path, because special-casing `n=1` would create a second lifecycle model
-for startup, shutdown, and reload.
+It is always used, even for a single configured drive. There is no separate
+single-mount CLI path, because special-casing `n=1` would create a second
+lifecycle model for startup, shutdown, and reload.
 
 ### RunOnce
 

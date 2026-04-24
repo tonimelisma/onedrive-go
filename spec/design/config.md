@@ -148,7 +148,7 @@ against those facts instead of hard-failing before any purge happens.
 - `load.go`: public config-loading entrypoints and the `configLoader` coordinator
 - `decoder.go`: second-pass drive-section decoding for strict and lenient loads
 - `failure_class.go`: shared-domain classification for config load outcomes
-- `resolver.go`: config-path selection plus single-drive and multi-drive resolution
+- `resolver.go`: config-path selection plus single-selection and multi-selection resolution
 - `validator.go`: whole-config validation orchestration
 - `resolved_validator.go`: post-override resolved-drive validation against the local filesystem
 - `validate.go` and `validate_drive.go`: field- and drive-specific validation rules
@@ -312,19 +312,22 @@ bindings, so it follows the same managed-file discipline:
 - unknown JSON fields are rejected
 - `schema_version` is required
 - only the exact supported version is accepted
-- current schema version is `2`
+- current schema version is `3`
 - automatic child-mount records are binding-owned and therefore require:
   - `MountID`
-  - `ParentMountID`
+  - `NamespaceID`
   - `BindingItemID`
+  - `LocalAlias` when Graph provides one
   - `RelativeLocalPath`
+  - `TokenOwnerCanonical`
   - `RemoteDriveID`
-  - `RemoteRootItemID`
-- parent discovery state is stored alongside mount records:
-  - `ParentMountID`
+  - `RemoteItemID`
+  - `MountState`
+- namespace discovery state is stored alongside mount records:
+  - `NamespaceID`
   - `DeltaLink`
   - `DiscoveryMode`
-- sibling child mounts under the same parent may not reuse or nest local
+- sibling child mounts under the same namespace may not reuse or nest local
   relative paths
 - every save is a full atomic rewrite of the file
 
@@ -339,15 +342,14 @@ preserving collision-resistant separation for IDs that differ only by path or
 punctuation characters.
 
 Automatic child mount IDs are stable across placeholder rename or move because
-they are derived from `(ParentMountID, BindingItemID)`, not from the local
+they are derived from `(NamespaceID, BindingItemID)`, not from the local
 projection path or the content-root identity. A shortcut can therefore move to
 another folder inside the parent namespace without losing its retained child
 mount state DB.
 
 When config encounters an older `mounts.json` schema version, it does not keep
-that format alive through compatibility shims. Schema v1 inventories are moved
-aside to `mounts.json.v1.bak`, and config starts from an empty v2 inventory.
-That preserves operator evidence while keeping one active durable format.
+that format alive through compatibility shims. Older schemas fail with a clear
+unsupported-schema error so there is one active durable format.
 
 ## Optional Catalog Fields
 

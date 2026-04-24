@@ -385,36 +385,6 @@ func interactiveSharedKey(account, remoteDriveID, remoteItemID string) string {
 	return account + "|shared:" + remoteDriveID + ":" + remoteItemID
 }
 
-func (s *Session) driveRootMountSession() *MountSession {
-	return NewMountSession(s, "")
-}
-
-// ResolveItem resolves paths relative to the Graph drive root. Root-aware
-// callers should use MountSession so the configured mount root stays explicit.
-func (s *Session) ResolveItem(ctx context.Context, remotePath string) (*graph.Item, error) {
-	return s.driveRootMountSession().ResolveItem(ctx, remotePath)
-}
-
-func (s *Session) ResolveDeleteTarget(ctx context.Context, remotePath string) (*graph.Item, error) {
-	return s.driveRootMountSession().ResolveDeleteTarget(ctx, remotePath)
-}
-
-func (s *Session) WaitPathVisible(ctx context.Context, remotePath string) (*graph.Item, error) {
-	return s.driveRootMountSession().WaitPathVisible(ctx, remotePath)
-}
-
-func (s *Session) ListChildren(ctx context.Context, remotePath string) ([]graph.Item, error) {
-	return s.driveRootMountSession().ListChildren(ctx, remotePath)
-}
-
-func (s *Session) DeleteResolvedPath(ctx context.Context, remotePath, itemID string) error {
-	return s.driveRootMountSession().DeleteResolvedPath(ctx, remotePath, itemID)
-}
-
-func (s *Session) PermanentDeleteResolvedPath(ctx context.Context, remotePath, itemID string) error {
-	return s.driveRootMountSession().PermanentDeleteResolvedPath(ctx, remotePath, itemID)
-}
-
 // ResolveItem resolves a remote path to an Item. For root (""), uses GetItem
 // with "root". Otherwise uses GetItemByPath. "/" normalizes to "" via
 // CleanRemotePath, so callers can pass either "/" or "" to mean root.

@@ -441,10 +441,12 @@ Runtime policy:
 
 - CLI path-oriented deletes use path-authoritative recovery, not one-shot
   item-ID authority
-- `rm` first resolves its target through `driveops.Session.ResolveDeleteTarget()`
+- `rm` first resolves its target through
+  `driveops.MountSession.ResolveDeleteTarget()`
   instead of a one-shot exact path lookup
 - `rm`, `mv --force`, and `cp --force` delete through
-  `driveops.Session.DeleteResolvedPath()` / `PermanentDeleteResolvedPath()`
+  `driveops.MountSession.DeleteResolvedPath()` /
+  `PermanentDeleteResolvedPath()`
 - when the initial exact path lookup or later delete returns exact
   `404 itemNotFound`, the session:
   - first retries target resolution through the parent collection when the

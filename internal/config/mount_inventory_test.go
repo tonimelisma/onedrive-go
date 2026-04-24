@@ -14,24 +14,27 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 	setTestDataDir(t)
 
 	err := SaveMountInventory(&MountInventory{
-		SchemaVersion: mountsSchemaV2,
-		Parents: map[string]ParentDiscoveryState{
+		SchemaVersion: mountsSchemaV3,
+		Namespaces: map[string]NamespaceDiscoveryState{
 			"personal:owner@example.com": {
-				ParentMountID: "personal:owner@example.com",
+				NamespaceID:   "personal:owner@example.com",
 				DeltaLink:     "https://graph.microsoft.com/v1.0/drives/drive/root/delta?token=abc",
 				DiscoveryMode: DiscoveryModeDelta,
 			},
 		},
 		Mounts: map[string]MountRecord{
 			"child-docs": {
-				MountID:           "child-docs",
-				ParentMountID:     "personal:owner@example.com",
-				BindingItemID:     "placeholder-item-id",
-				DisplayName:       "Docs",
-				RelativeLocalPath: "Team/Docs",
-				RemoteDriveID:     "remote-drive",
-				RemoteRootItemID:  "remote-root",
-				Paused:            true,
+				MountID:             "child-docs",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "placeholder-item-id",
+				LocalAlias:          "Docs",
+				RelativeLocalPath:   "Team/Docs",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "remote-drive",
+				RemoteItemID:        "remote-root",
+				State:               MountStateConflict,
+				StateReason:         MountStateReasonDuplicateContentRoot,
+				Paused:              true,
 			},
 		},
 	})
@@ -39,23 +42,27 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 
 	loaded, err := LoadMountInventory()
 	require.NoError(t, err)
-	assert.Equal(t, mountsSchemaV2, loaded.SchemaVersion)
+	assert.Equal(t, mountsSchemaV3, loaded.SchemaVersion)
 	require.Len(t, loaded.Mounts, 1)
-	require.Len(t, loaded.Parents, 1)
+	require.Len(t, loaded.Namespaces, 1)
 
 	record := loaded.Mounts["child-docs"]
 	assert.Equal(t, "child-docs", record.MountID)
-	assert.Equal(t, "personal:owner@example.com", record.ParentMountID)
+	assert.Equal(t, "personal:owner@example.com", record.NamespaceID)
 	assert.Equal(t, "placeholder-item-id", record.BindingItemID)
+	assert.Equal(t, "Docs", record.LocalAlias)
 	assert.Equal(t, "Team/Docs", record.RelativeLocalPath)
+	assert.Equal(t, "personal:owner@example.com", record.TokenOwnerCanonical)
 	assert.Equal(t, "remote-drive", record.RemoteDriveID)
-	assert.Equal(t, "remote-root", record.RemoteRootItemID)
+	assert.Equal(t, "remote-root", record.RemoteItemID)
+	assert.Equal(t, MountStateConflict, record.State)
+	assert.Equal(t, MountStateReasonDuplicateContentRoot, record.StateReason)
 	assert.True(t, record.Paused)
-	assert.Equal(t, ParentDiscoveryState{
-		ParentMountID: "personal:owner@example.com",
+	assert.Equal(t, NamespaceDiscoveryState{
+		NamespaceID:   "personal:owner@example.com",
 		DeltaLink:     "https://graph.microsoft.com/v1.0/drives/drive/root/delta?token=abc",
 		DiscoveryMode: DiscoveryModeDelta,
-	}, loaded.Parents["personal:owner@example.com"])
+	}, loaded.Namespaces["personal:owner@example.com"])
 }
 
 func TestMountInventory_UnknownFieldRejected(t *testing.T) {
@@ -63,8 +70,8 @@ func TestMountInventory_UnknownFieldRejected(t *testing.T) {
 	path := MountsPathForDataDir(dataDir)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, []byte(`{
-  "schema_version": 2,
-  "parents": {},
+  "schema_version": 3,
+  "namespaces": {},
   "mounts": {},
   "unknown": true
 }`), 0o600))
@@ -74,18 +81,98 @@ func TestMountInventory_UnknownFieldRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown field")
 }
 
+func TestMountInventory_EmptyMountStateNormalizesActive(t *testing.T) {
+	setTestDataDir(t)
+
+	err := SaveMountInventory(&MountInventory{
+		Mounts: map[string]MountRecord{
+			"docs": {
+				MountID:             "docs",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-a",
+				RelativeLocalPath:   "Shared/Docs",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-a",
+				RemoteItemID:        "root-a",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	loaded, err := LoadMountInventory()
+	require.NoError(t, err)
+	assert.Equal(t, MountStateActive, loaded.Mounts["docs"].State)
+}
+
+func TestMountInventory_InvalidStateRejected(t *testing.T) {
+	setTestDataDir(t)
+
+	err := SaveMountInventory(&MountInventory{
+		Mounts: map[string]MountRecord{
+			"docs": {
+				MountID:             "docs",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-a",
+				RelativeLocalPath:   "Shared/Docs",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-a",
+				RemoteItemID:        "root-a",
+				State:               MountState("mystery"),
+			},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported state")
+}
+
+func TestMountInventory_TokenOwnerCanonicalRequiredAndValidated(t *testing.T) {
+	setTestDataDir(t)
+
+	err := SaveMountInventory(&MountInventory{
+		Mounts: map[string]MountRecord{
+			"docs": {
+				MountID:           "docs",
+				NamespaceID:       "personal:owner@example.com",
+				BindingItemID:     "binding-a",
+				RelativeLocalPath: "Shared/Docs",
+				RemoteDriveID:     "drive-a",
+				RemoteItemID:      "root-a",
+			},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token_owner_canonical")
+
+	err = SaveMountInventory(&MountInventory{
+		Mounts: map[string]MountRecord{
+			"docs": {
+				MountID:             "docs",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-a",
+				RelativeLocalPath:   "Shared/Docs",
+				TokenOwnerCanonical: "bad",
+				RemoteDriveID:       "drive-a",
+				RemoteItemID:        "root-a",
+			},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token_owner_canonical")
+}
+
 func TestMountInventory_InvalidRelativePathRejected(t *testing.T) {
 	setTestDataDir(t)
 
 	err := SaveMountInventory(&MountInventory{
 		Mounts: map[string]MountRecord{
 			"bad": {
-				MountID:           "bad",
-				ParentMountID:     "parent",
-				BindingItemID:     "binding",
-				RelativeLocalPath: "../escape",
-				RemoteDriveID:     "remote-drive",
-				RemoteRootItemID:  "remote-root",
+				MountID:             "bad",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding",
+				RelativeLocalPath:   "../escape",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "remote-drive",
+				RemoteItemID:        "remote-root",
 			},
 		},
 	})
@@ -99,20 +186,22 @@ func TestMountInventory_NestedSiblingPathsRejected(t *testing.T) {
 	err := SaveMountInventory(&MountInventory{
 		Mounts: map[string]MountRecord{
 			"docs": {
-				MountID:           "docs",
-				ParentMountID:     "parent",
-				BindingItemID:     "binding-a",
-				RelativeLocalPath: "Shared/Docs",
-				RemoteDriveID:     "drive-a",
-				RemoteRootItemID:  "root-a",
+				MountID:             "docs",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-a",
+				RelativeLocalPath:   "Shared/Docs",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-a",
+				RemoteItemID:        "root-a",
 			},
 			"nested": {
-				MountID:           "nested",
-				ParentMountID:     "parent",
-				BindingItemID:     "binding-b",
-				RelativeLocalPath: "Shared/Docs/Deep",
-				RemoteDriveID:     "drive-b",
-				RemoteRootItemID:  "root-b",
+				MountID:             "nested",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-b",
+				RelativeLocalPath:   "Shared/Docs/Deep",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-b",
+				RemoteItemID:        "root-b",
 			},
 		},
 	})
@@ -126,11 +215,12 @@ func TestMountInventory_BindingItemIDRequired(t *testing.T) {
 	err := SaveMountInventory(&MountInventory{
 		Mounts: map[string]MountRecord{
 			"docs": {
-				MountID:           "docs",
-				ParentMountID:     "parent",
-				RelativeLocalPath: "Shared/Docs",
-				RemoteDriveID:     "drive-a",
-				RemoteRootItemID:  "root-a",
+				MountID:             "docs",
+				NamespaceID:         "personal:owner@example.com",
+				RelativeLocalPath:   "Shared/Docs",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-a",
+				RemoteItemID:        "root-a",
 			},
 		},
 	})
@@ -138,35 +228,19 @@ func TestMountInventory_BindingItemIDRequired(t *testing.T) {
 	assert.Contains(t, err.Error(), "binding_item_id")
 }
 
-func TestLoadMountInventory_V1MovesAsideAndReturnsEmptyV2(t *testing.T) {
+func TestLoadMountInventory_OlderSchemaRejected(t *testing.T) {
 	dataDir := setTestDataDir(t)
 	path := MountsPathForDataDir(dataDir)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, []byte(`{
   "schema_version": 1,
-  "mounts": {
-    "child-docs": {
-      "mount_id": "child-docs",
-      "parent_mount_id": "personal:owner@example.com",
-      "display_name": "Docs",
-      "relative_local_path": "Team/Docs",
-      "remote_drive_id": "remote-drive",
-      "remote_root_item_id": "remote-root"
-    }
-  }
+  "mounts": {}
 }`), 0o600))
 
-	loaded, err := LoadMountInventoryForDataDir(dataDir)
-	require.NoError(t, err)
-	assert.Equal(t, mountsSchemaV2, loaded.SchemaVersion)
-	assert.Empty(t, loaded.Mounts)
-	assert.Empty(t, loaded.Parents)
-
-	_, statErr := os.Stat(path)
-	require.ErrorIs(t, statErr, os.ErrNotExist)
-
-	backupPath := path + ".v1.bak"
-	assert.FileExists(t, backupPath)
+	_, err := LoadMountInventoryForDataDir(dataDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported schema version 1")
+	assert.FileExists(t, path)
 }
 
 // Validates: R-2.8.1

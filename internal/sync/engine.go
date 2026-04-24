@@ -22,7 +22,8 @@ type driveIdentityProof struct {
 }
 
 // Engine orchestrates a complete sync pass: observe → plan → execute → commit.
-// Single-drive only; multi-drive orchestration is handled by internal/multisync.
+// Single mounted content root only; multi-mount orchestration is handled by
+// internal/multisync.
 type Engine struct {
 	baseline               *SyncStore
 	planner                *Planner

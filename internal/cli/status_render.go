@@ -184,7 +184,7 @@ func printMountStatus(w io.Writer, mount statusMount, history bool) error {
 
 	indent := "  "
 	detailIndent := childMountIndent
-	if mount.ParentMountID != "" {
+	if mount.NamespaceID != "" {
 		indent = childMountIndent
 		detailIndent = "      "
 	}

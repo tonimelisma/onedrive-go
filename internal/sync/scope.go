@@ -1,4 +1,4 @@
-// Package sync owns the single-drive runtime, including scope-state helpers
+// Package sync owns the single mounted content-root runtime, including scope-state helpers
 // used by execution and scope-lifecycle flows.
 //
 // ScopeState maintains sliding windows for scope escalation. The engine

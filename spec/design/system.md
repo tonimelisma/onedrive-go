@@ -7,7 +7,7 @@ Implements: R-6.2.1 [verified], R-6.2.2 [verified], R-6.3.1 [verified], R-6.10.5
 | Behavior | Evidence |
 | --- | --- |
 | Package boundaries and privileged-call discipline remain verifier-enforced, not convention-only. | `internal/devtool/verify_repo_checks_test.go`, `cmd/devtool/main_test.go` |
-| The product continues to split multi-drive control, single-drive sync, Graph I/O, and rooted filesystem access into explicit authority boundaries. | `spec/design/sync-control-plane.md`, `spec/design/sync-engine.md`, `spec/design/graph-client.md`, `spec/design/drive-transfers.md` |
+| The product continues to split multi-mount control, single mounted content-root sync, Graph I/O, and rooted filesystem access into explicit authority boundaries. | `spec/design/sync-control-plane.md`, `spec/design/sync-engine.md`, `spec/design/graph-client.md`, `spec/design/drive-transfers.md` |
 
 ## Package Structure
 
@@ -31,11 +31,11 @@ internal/
   graphtransport/             Graph-facing HTTP transport profile construction
   localpath/                  Explicit arbitrary-local-path boundary helpers
   logfile/                    Log file creation, rotation, retention
-  multisync/                  Multi-drive sync control plane and watch reload
+  multisync/                  Multi-mount sync control plane and watch reload
   perf/                       Command-scoped and live sync performance instrumentation plus capture bundles
   retry/                      Retry policies, exponential backoff with jitter, retry transport
   sharedref/                  Shared item selector parsing and formatting
-  sync/                       Single-drive sync engine, durable SQLite sync state, and read-only inspection
+  sync/                       Single mounted content-root sync engine, durable SQLite sync state, and read-only inspection
   synccontrol/                JSON-over-HTTP Unix-socket protocol shared by CLI and multisync owner
   synctest/                   Shared sync-package test helpers (test-only)
   synctree/                   Root-bound sync runtime filesystem capability
@@ -62,7 +62,8 @@ root pkg → internal/cli/ → internal/graphtransport/ → internal/retry/
 ```
 
 - No cycles. `driveops` does NOT import `sync`. `graph` does NOT import `config`.
-- `multisync` owns multi-drive lifecycle; `sync` owns the single-drive runtime.
+- `multisync` owns multi-mount lifecycle; `sync` owns the single mounted
+  content-root runtime.
 - `driveid`, `errclass`, `tokenfile`, and `retry` are leaf packages (no internal imports).
 - Both `graph` and `config` import `tokenfile` for token file I/O.
 - Callers pass token paths to `graph` — no config coupling.

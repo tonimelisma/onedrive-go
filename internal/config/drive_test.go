@@ -248,7 +248,7 @@ func TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem(t *testing.T) {
 	assert.True(t, resolved.RemoteRootDeltaCapable)
 }
 
-func assertSharedRootDeltaCapabilityForOwner(t *testing.T, ownerCanonical string, expected bool) {
+func assertRemoteRootDeltaCapabilityForOwner(t *testing.T, ownerCanonical string, expected bool) {
 	t.Helper()
 
 	dataDir := setTestDataDir(t)
@@ -273,11 +273,11 @@ func assertSharedRootDeltaCapabilityForOwner(t *testing.T, ownerCanonical string
 }
 
 func TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta(t *testing.T) {
-	assertSharedRootDeltaCapabilityForOwner(t, "business:user@example.com", false)
+	assertRemoteRootDeltaCapabilityForOwner(t, "business:user@example.com", false)
 }
 
 func TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable(t *testing.T) {
-	assertSharedRootDeltaCapabilityForOwner(t, "not-a-canonical-id", true)
+	assertRemoteRootDeltaCapabilityForOwner(t, "not-a-canonical-id", true)
 }
 
 func TestBuildResolvedDrive_TildeExpanded(t *testing.T) {

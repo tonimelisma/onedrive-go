@@ -33,8 +33,8 @@ func ResolveConfigPath(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) 
 	return newDriveResolver(logger).resolveConfigPath(env, cli)
 }
 
-// driveResolver keeps the override-chain logic in one place so single-drive and
-// multi-drive resolution share the same selection and logging semantics.
+// driveResolver keeps the override-chain logic in one place so single-selection
+// and multi-selection resolution share the same logging semantics.
 type driveResolver struct {
 	logger *slog.Logger
 }

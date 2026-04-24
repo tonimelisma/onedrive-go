@@ -40,7 +40,7 @@ const (
 	testNestedParentByID    = "/drives/abcdef0123456789/items/docs-id/children"
 )
 
-func newSimpleLaggedPathSession(t *testing.T) (*Session, *[]string) {
+func newSimpleLaggedPathSession(t *testing.T) (*MountSession, *[]string) {
 	t.Helper()
 
 	gotPaths := make([]string, 0, 2)
@@ -57,10 +57,10 @@ func newSimpleLaggedPathSession(t *testing.T) (*Session, *[]string) {
 		}
 	}))
 
-	return s, &gotPaths
+	return NewMountSession(s, ""), &gotPaths
 }
 
-func newRecursiveLaggedPathSession(t *testing.T) (*Session, *[]string) {
+func newRecursiveLaggedPathSession(t *testing.T) (*MountSession, *[]string) {
 	t.Helper()
 
 	gotPaths := make([]string, 0, 5)
@@ -85,7 +85,7 @@ func newRecursiveLaggedPathSession(t *testing.T) (*Session, *[]string) {
 		}
 	}))
 
-	return s, &gotPaths
+	return NewMountSession(s, ""), &gotPaths
 }
 
 // --- CleanRemotePath ---
@@ -419,12 +419,18 @@ func newTestSession(t *testing.T, handler http.Handler) *Session {
 	}
 }
 
-func TestSession_ResolveItem_Root(t *testing.T) {
+func newTestDriveRootMountSession(t *testing.T, handler http.Handler) *MountSession {
+	t.Helper()
+
+	return NewMountSession(newTestSession(t, handler), "")
+}
+
+func TestMountSession_ResolveItem_Root(t *testing.T) {
 	t.Parallel()
 
 	var gotPath string
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		writeTestResponsef(t, w, `{"id":"root-id","name":"root"}`)
 	}))
@@ -435,12 +441,12 @@ func TestSession_ResolveItem_Root(t *testing.T) {
 	assert.Equal(t, "/drives/abcdef0123456789/items/root", gotPath)
 }
 
-func TestSession_ResolveItem_Path(t *testing.T) {
+func TestMountSession_ResolveItem_Path(t *testing.T) {
 	t.Parallel()
 
 	var gotPath string
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		writeTestResponsef(t, w, `{"id":"doc-id","name":"file.txt"}`)
 	}))
@@ -451,12 +457,12 @@ func TestSession_ResolveItem_Path(t *testing.T) {
 	assert.Equal(t, "/drives/abcdef0123456789/root:/Documents/file.txt:", gotPath)
 }
 
-func TestSession_WaitPathVisible_TransientNotFoundThenSuccess(t *testing.T) {
+func TestMountSession_WaitPathVisible_TransientNotFoundThenSuccess(t *testing.T) {
 	t.Parallel()
 
 	var attempts int
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
 		if attempts < 3 {
 			w.WriteHeader(http.StatusNotFound)
@@ -474,7 +480,7 @@ func TestSession_WaitPathVisible_TransientNotFoundThenSuccess(t *testing.T) {
 	assert.GreaterOrEqual(t, attempts, 3)
 }
 
-func TestSession_WaitPathVisible_FallsBackToParentListingWhenExactPathLags(t *testing.T) {
+func TestMountSession_WaitPathVisible_FallsBackToParentListingWhenExactPathLags(t *testing.T) {
 	t.Parallel()
 
 	s, gotPaths := newSimpleLaggedPathSession(t)
@@ -485,7 +491,7 @@ func TestSession_WaitPathVisible_FallsBackToParentListingWhenExactPathLags(t *te
 	assert.Equal(t, []string{testDeleteTargetPath, testDeleteParentPath}, *gotPaths)
 }
 
-func TestSession_WaitPathVisible_RecoversWhenParentPathListingLags(t *testing.T) {
+func TestMountSession_WaitPathVisible_RecoversWhenParentPathListingLags(t *testing.T) {
 	t.Parallel()
 
 	s, gotPaths := newRecursiveLaggedPathSession(t)
@@ -502,12 +508,12 @@ func TestSession_WaitPathVisible_RecoversWhenParentPathListingLags(t *testing.T)
 	}, *gotPaths)
 }
 
-func TestSession_WaitPathVisible_FailsImmediatelyOnNonNotFound(t *testing.T) {
+func TestMountSession_WaitPathVisible_FailsImmediatelyOnNonNotFound(t *testing.T) {
 	t.Parallel()
 
 	var attempts int
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
 		w.WriteHeader(http.StatusForbidden)
 		writeTestResponsef(t, w, `{"error":{"code":"accessDenied","message":"denied"}}`)
@@ -520,12 +526,12 @@ func TestSession_WaitPathVisible_FailsImmediatelyOnNonNotFound(t *testing.T) {
 	assert.ErrorContains(t, err, "denied")
 }
 
-func TestSession_WaitPathVisible_ExhaustsNotFoundBudget(t *testing.T) {
+func TestMountSession_WaitPathVisible_ExhaustsNotFoundBudget(t *testing.T) {
 	t.Parallel()
 
 	var attempts int
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
 		w.WriteHeader(http.StatusNotFound)
 		writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"still settling"}}`)
@@ -538,10 +544,10 @@ func TestSession_WaitPathVisible_ExhaustsNotFoundBudget(t *testing.T) {
 	assert.GreaterOrEqual(t, attempts, 3)
 }
 
-func TestSession_WaitPathVisible_ExhaustsNotFoundBudgetReturnsTypedError(t *testing.T) {
+func TestMountSession_WaitPathVisible_ExhaustsNotFoundBudgetReturnsTypedError(t *testing.T) {
 	t.Parallel()
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"still settling"}}`)
 	}))
@@ -555,12 +561,12 @@ func TestSession_WaitPathVisible_ExhaustsNotFoundBudgetReturnsTypedError(t *test
 	assert.Equal(t, "Documents/file.txt", visibilityErr.Path)
 }
 
-func TestSession_ResolveItem_SlashRoot(t *testing.T) {
+func TestMountSession_ResolveItem_SlashRoot(t *testing.T) {
 	t.Parallel()
 
 	var gotPath string
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		writeTestResponsef(t, w, `{"id":"root-id","name":"root"}`)
 	}))
@@ -601,7 +607,7 @@ func TestMountSession_ResolveItem_MountRootRelativePath(t *testing.T) {
 }
 
 // Validates: R-6.7.14
-func TestSession_ResolveDeleteTarget_FallsBackToParentListingAfterPathNotFound(t *testing.T) {
+func TestMountSession_ResolveDeleteTarget_FallsBackToParentListingAfterPathNotFound(t *testing.T) {
 	t.Parallel()
 
 	s, gotPaths := newSimpleLaggedPathSession(t)
@@ -612,7 +618,7 @@ func TestSession_ResolveDeleteTarget_FallsBackToParentListingAfterPathNotFound(t
 	assert.Equal(t, []string{testDeleteTargetPath, testDeleteParentPath}, *gotPaths)
 }
 
-func TestSession_ResolveDeleteTarget_RecoversWhenParentPathListingLags(t *testing.T) {
+func TestMountSession_ResolveDeleteTarget_RecoversWhenParentPathListingLags(t *testing.T) {
 	t.Parallel()
 
 	s, gotPaths := newRecursiveLaggedPathSession(t)
@@ -651,7 +657,7 @@ func TestMountSession_ListChildren_MountRootUsesMountRootItem(t *testing.T) {
 
 // --- ListChildren ---
 
-func TestSession_ListChildren(t *testing.T) {
+func TestMountSession_ListChildren(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -683,7 +689,7 @@ func TestSession_ListChildren(t *testing.T) {
 
 			var gotPath string
 
-			s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotPath = r.URL.Path
 				writeTestResponsef(t, w, `{"value":[{"id":%q,"name":%q}]}`, tt.responseID, tt.responseName)
 			}))
@@ -717,13 +723,13 @@ func TestSession_DeleteItem(t *testing.T) {
 }
 
 // Validates: R-6.7.14
-func TestSession_DeleteResolvedPath_RetriesAfterTransientDeleteNotFound(t *testing.T) {
+func TestMountSession_DeleteResolvedPath_RetriesAfterTransientDeleteNotFound(t *testing.T) {
 	t.Parallel()
 
 	var deleteCalls int
 	var gotDeleteIDs []string
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodDelete && r.URL.Path == testDeleteItemPath:
 			deleteCalls++
@@ -749,13 +755,13 @@ func TestSession_DeleteResolvedPath_RetriesAfterTransientDeleteNotFound(t *testi
 }
 
 // Validates: R-6.7.14
-func TestSession_DeleteResolvedPath_ExactPathFalseNegativeStillRetriesViaParentListing(t *testing.T) {
+func TestMountSession_DeleteResolvedPath_ExactPathFalseNegativeStillRetriesViaParentListing(t *testing.T) {
 	t.Parallel()
 
 	var deleteCalls int
 	var gotMethods []string
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethods = append(gotMethods, r.Method+" "+r.URL.Path)
 		switch {
 		case r.Method == http.MethodDelete && r.URL.Path == testDeleteItemPath:
@@ -788,13 +794,13 @@ func TestSession_DeleteResolvedPath_ExactPathFalseNegativeStillRetriesViaParentL
 }
 
 // Validates: R-6.7.14
-func TestSession_DeleteResolvedPath_TreatsMissingPathAsSuccess(t *testing.T) {
+func TestMountSession_DeleteResolvedPath_TreatsMissingPathAsSuccess(t *testing.T) {
 	t.Parallel()
 
 	var deleteCalls int
 	var gotMethods []string
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethods = append(gotMethods, r.Method+" "+r.URL.Path)
 		switch {
 		case r.Method == http.MethodDelete && r.URL.Path == testDeleteItemPath:
@@ -823,13 +829,13 @@ func TestSession_DeleteResolvedPath_TreatsMissingPathAsSuccess(t *testing.T) {
 }
 
 // Validates: R-6.7.14
-func TestSession_DeleteResolvedPath_StaleParentListingAfterExactPathMissingTreatsExhaustionAsSuccess(t *testing.T) {
+func TestMountSession_DeleteResolvedPath_StaleParentListingAfterExactPathMissingTreatsExhaustionAsSuccess(t *testing.T) {
 	t.Parallel()
 
 	var deleteCalls int
 	var gotMethods []string
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethods = append(gotMethods, r.Method+" "+r.URL.Path)
 		switch {
 		case r.Method == http.MethodDelete && r.URL.Path == testDeleteItemPath:
@@ -863,12 +869,12 @@ func TestSession_DeleteResolvedPath_StaleParentListingAfterExactPathMissingTreat
 }
 
 // Validates: R-6.7.14
-func TestSession_PermanentDeleteResolvedPath_UsesPermanentDeleteRoute(t *testing.T) {
+func TestMountSession_PermanentDeleteResolvedPath_UsesPermanentDeleteRoute(t *testing.T) {
 	t.Parallel()
 
 	var gotMethods []string
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethods = append(gotMethods, r.Method+" "+r.URL.Path)
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == testDeleteItemPath+"/permanentDelete":

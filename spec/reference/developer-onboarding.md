@@ -48,7 +48,7 @@ The most important repo-wide idea is ownership.
 - `internal/multisync` owns multi-mount orchestration, automatic shortcut
   reconciliation, and control-socket
   lifecycle.
-- `internal/sync` owns the single-drive sync runtime and durable sync-state
+- `internal/sync` owns the single mounted content-root sync runtime and durable sync-state
   mutation rules.
 - `internal/devtool` owns verification, worktree creation, benchmarks, cleanup
   audit, and other repo tooling.
@@ -233,7 +233,7 @@ You want to come away understanding:
 - what is executed
 - what is persisted
 - what is read-only authority data
-- what stays single-drive vs multi-drive
+- what stays single-mount vs multi-mount
 
 ### Step 4: Learn the live edges and operational reality
 
@@ -327,11 +327,11 @@ able to scan this table and place every top-level code area.
 | `internal/graphtransport` | Stateless Graph-facing HTTP transport profiles and transport defaults | You are changing HTTP runtime policy or profile construction |
 | `internal/localpath` | Explicit arbitrary local-path filesystem operations | You are doing local file I/O outside a rooted capability |
 | `internal/logfile` | Log file creation, rotation, retention | You are changing logging file lifecycle |
-| `internal/multisync` | Multi-drive sync control plane and watch reload | You are changing `sync` orchestration across drives |
+| `internal/multisync` | Multi-mount sync control plane and watch reload | You are changing `sync` orchestration across mounts |
 | `internal/perf` | Production-visible perf sessions, counters, live snapshots, and capture bundles | You are changing performance instrumentation or capture behavior |
 | `internal/retry` | Retry policies and stateful backoff | You are changing retry semantics |
 | `internal/sharedref` | Shared item selector parsing/formatting | You are working on shared links or shared item targeting |
-| `internal/sync` | Single-drive sync engine, observation, planning, execution, store, and raw status facts | You are changing sync behavior |
+| `internal/sync` | Single mounted content-root sync engine, observation, planning, execution, store, and raw status facts | You are changing sync behavior |
 | `internal/synccontrol` | JSON-over-HTTP Unix-socket protocol shared by CLI and multisync owner | You are changing daemon/control-socket communication |
 | `internal/synctest` | Shared sync-package test helpers | You are writing sync-adjacent tests |
 | `internal/synctree` | Rooted filesystem capability for sync-runtime operations under one sync root | You are changing sync-local filesystem interaction |
@@ -429,7 +429,8 @@ explicit.
 ## 8. How To Read `internal/sync`
 
 `internal/sync` is the densest package in the repo. It is easiest to navigate
-when you treat it as several file families sharing one single-drive owner.
+when you treat it as several file families sharing one single mounted
+content-root owner.
 
 | File family | Role |
 | --- | --- |
@@ -464,7 +465,8 @@ That one decision usually cuts the search space down dramatically.
 
 **Why is `internal/sync` one package instead of several smaller packages?**
 
-Because the repo intentionally keeps the single-drive authority together.
+Because the repo intentionally keeps the single mounted content-root authority
+together.
 Within that owner, file-family organization is the navigation tool.
 
 **What should I read first inside `internal/sync`?**

@@ -166,9 +166,9 @@ Folder reconciliation is existence/type-based, not metadata-based. Folder
 size, mtime, and ETag churn caused by child mutations must not be treated as
 content drift or expanded into conflict/download actions.
 
-Local or remote moves that stay within one drive become move actions. Moves
-that cross drive ownership are decomposed into delete + upload because Graph
-move is a single-drive operation.
+Local or remote moves that stay within one Graph drive become move actions.
+Moves that cross drive ownership are decomposed into delete + upload because
+Graph move cannot cross drive ownership.
 
 ## Mount-Local Planning
 

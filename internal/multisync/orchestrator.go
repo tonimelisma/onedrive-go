@@ -142,6 +142,10 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		o.logger.Warn("purging removed child mount state during startup",
 			slog.String("error", purgeErr.Error()),
 		)
+	} else if finalizeErr := finalizePendingMountRemovals(compiled.RemovedMountIDs); finalizeErr != nil {
+		o.logger.Warn("finalizing removed child mounts during startup",
+			slog.String("error", finalizeErr.Error()),
+		)
 	}
 
 	control, err := o.startControlServer(ctx, synccontrol.OwnerModeOneShot, nil)
@@ -218,24 +222,28 @@ func (o *Orchestrator) buildRuntimeMountSet(
 		return nil, err
 	}
 
-	reconcileResult, reconcileErr := o.reconcileManagedShortcutMounts(ctx, parents)
+	namespaceResult, reconcileErr := o.reconcileManagedShortcutMounts(ctx, parents)
 	if reconcileErr != nil && o.logger != nil {
 		o.logger.Warn("shortcut reconciliation failed; keeping existing mount inventory",
 			slog.String("error", reconcileErr.Error()),
 		)
 	}
 
-	inventory, err := config.LoadMountInventory()
-	if err != nil {
-		return nil, fmt.Errorf("loading mount inventory: %w", err)
+	inventory := namespaceResult.inventory
+	if inventory == nil {
+		loadedInventory, loadErr := config.LoadMountInventory()
+		if loadErr != nil {
+			return nil, fmt.Errorf("loading mount inventory: %w", loadErr)
+		}
+		inventory = loadedInventory
 	}
 
-	compiled, err := compileRuntimeMounts(standaloneMounts, inventory, o.logger)
+	compiled, err := compileRuntimeMountsForParents(parents, inventory, o.logger)
 	if err != nil {
 		return nil, err
 	}
 	if reconcileErr == nil {
-		compiled.RemovedMountIDs = append(compiled.RemovedMountIDs, reconcileResult.RemovedMountIDs...)
+		compiled.RemovedMountIDs = append(compiled.RemovedMountIDs, namespaceResult.removedMountIDs...)
 	}
 	offsetCompiledSelectionIndexes(compiled, nextStartupSelectionIndex(initialStartup))
 	compiled.Skipped = append(append([]MountStartupResult(nil), initialStartup...), compiled.Skipped...)
@@ -458,6 +466,10 @@ func (o *Orchestrator) startWatchRuntime(
 	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
 		o.logger.Warn("purging removed child mount state during watch startup",
 			slog.String("error", purgeErr.Error()),
+		)
+	} else if finalizeErr := finalizePendingMountRemovals(compiled.RemovedMountIDs); finalizeErr != nil {
+		o.logger.Warn("finalizing removed child mounts during watch startup",
+			slog.String("error", finalizeErr.Error()),
 		)
 	}
 
@@ -743,6 +755,10 @@ func (o *Orchestrator) applyWatchMountSet(
 	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
 		o.logger.Warn("purging removed child mount state after mount diff",
 			slog.String("error", purgeErr.Error()),
+		)
+	} else if finalizeErr := finalizePendingMountRemovals(compiled.RemovedMountIDs); finalizeErr != nil {
+		o.logger.Warn("finalizing removed child mounts after mount diff",
+			slog.String("error", finalizeErr.Error()),
 		)
 	}
 	started, startResults := o.startReloadWatchRunners(ctx, runners, runnable, compiled.Skipped, mode, opts)
