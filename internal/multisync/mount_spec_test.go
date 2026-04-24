@@ -184,19 +184,16 @@ func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_PausedChildStillFiltersParentSubtree(t *testing.T) {
+func TestCompileRuntimeMounts_ParentPausePausesChildAndFiltersParentSubtree(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	parent.Paused = true
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
 		&config.MountInventory{
 			Mounts: map[string]config.MountRecord{
-				"child-docs": func() config.MountRecord {
-					record := testMountRecordForParent(&parent)
-					record.Paused = true
-					return record
-				}(),
+				"child-docs": testMountRecordForParent(&parent),
 			},
 		},
 	)
@@ -208,6 +205,40 @@ func TestCompileRuntimeMounts_PausedChildStillFiltersParentSubtree(t *testing.T)
 	childMount := compiled.Mounts[1]
 	assert.Equal(t, []string{"Shortcuts/Docs"}, parentMount.localSkipDirs)
 	assert.True(t, childMount.paused)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestApplyInventoryPersistFailureSkipsOnlyDirtyChild(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	cleanRecord := testMountRecordForParent(&parent)
+	dirtyRecord := testMountRecordForParent(&parent)
+	dirtyRecord.MountID = "child-dirty"
+	dirtyRecord.BindingItemID = "binding-dirty"
+	dirtyRecord.RelativeLocalPath = "Shortcuts/Dirty"
+	dirtyRecord.RemoteItemID = "remote-dirty"
+
+	compiled, err := compileRuntimeMounts(
+		[]StandaloneMountConfig{parent},
+		&config.MountInventory{
+			Mounts: map[string]config.MountRecord{
+				cleanRecord.MountID: cleanRecord,
+				dirtyRecord.MountID: dirtyRecord,
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 3)
+
+	applyInventoryPersistFailure(compiled, []string{dirtyRecord.MountID}, assert.AnError)
+
+	require.Len(t, compiled.Mounts, 2)
+	assert.Equal(t, mountID(parent.CanonicalID.String()), compiled.Mounts[0].mountID)
+	assert.Equal(t, mountID(cleanRecord.MountID), compiled.Mounts[1].mountID)
+	require.Len(t, compiled.Skipped, 1)
+	assert.Equal(t, dirtyRecord.MountID, compiled.Skipped[0].Identity.MountID)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), "unpersisted lifecycle state")
+	assert.Equal(t, []string{"Shortcuts/Dirty", "Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
 }
 
 // Validates: R-2.8.1

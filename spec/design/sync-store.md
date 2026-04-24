@@ -48,7 +48,7 @@ remain on disk for later reactivation or explicit cleanup.
 | --- | --- |
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
-| Child shortcut unavailable state is kept outside sync-store retry/block/observation tables by skipping engine construction before a child mount starts. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersParentSubtree` |
+| Child shortcut unavailable state is kept outside sync-store retry/block/observation tables by skipping engine construction before a child mount starts. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestRetryUnavailableShortcutBindings_FailedRefreshKeepsUnavailable`, `TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersParentSubtree` |
 
 ## Write Responsibilities
 

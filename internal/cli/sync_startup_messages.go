@@ -71,7 +71,8 @@ func formatStateStoreIncompatibleMessage(identity *multisync.MountIdentity, err 
 	}
 	if statePath != "" {
 		return fmt.Sprintf(
-			"%s. To continue, pause or stop child mount %s first, rerun sync selecting only other mounts, or inspect its state DB at %s.",
+			"%s. Managed shortcut mount %s is controlled by its parent drive and OneDrive shortcut. "+
+				"Inspect its state DB at %s, or remove/recreate the shortcut if this persists.",
 			incompatibleErr.Error(),
 			label,
 			statePath,
@@ -79,7 +80,7 @@ func formatStateStoreIncompatibleMessage(identity *multisync.MountIdentity, err 
 	}
 
 	return fmt.Sprintf(
-		"%s. To continue, pause or stop child mount %s first, then rerun sync selecting only other mounts.",
+		"%s. Managed shortcut mount %s is controlled by its parent drive and OneDrive shortcut.",
 		incompatibleErr.Error(),
 		label,
 	)
