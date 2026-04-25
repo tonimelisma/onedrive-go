@@ -92,6 +92,12 @@ before committing remote observation progress. `internal/multisync` consumes
 those facts, updates `mounts.json`, and starts or stops managed children as
 separate mount-root engines.
 
+The engine applies topology batches with `ShortcutTopologyBatch.ShouldApply`.
+Any batch with facts applies, a complete batch applies even when it contains no
+facts, and an empty incremental batch is a non-event. This lets a full parent
+enumeration with no shortcut aliases retire old managed children while keeping
+ordinary zero-event delta polls from advancing observation progress.
+
 Separately configured shared folders and managed shortcut child mounts use the
 mount-root path when their content root is below the backing drive root.
 Mount-root observation may use folder delta or recursive enumeration depending

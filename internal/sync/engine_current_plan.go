@@ -236,7 +236,7 @@ func (flow *engineFlow) applyShortcutTopologyBatch(ctx context.Context, batch *r
 	if flow == nil || flow.engine == nil || flow.engine.shortcutTopologyHandler == nil || batch == nil {
 		return nil
 	}
-	if !batch.shortcutTopology.HasFacts() {
+	if !batch.shortcutTopology.ShouldApply() {
 		return nil
 	}
 

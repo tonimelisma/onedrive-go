@@ -453,24 +453,23 @@ func projectionPathsSameFile(root *synctree.Root, sourceRel string, targetRel st
 }
 
 func recordProjectionMoveSuccess(move *childProjectionMove) error {
+	parent := &mountSpec{syncRoot: move.parentSyncRoot}
+	recordForPath := config.MountRecord{RelativeLocalPath: move.toRelativeLocalPath}
+	identity, identityErr := rootIdentityForRecordPath(parent, &recordForPath)
+	if identityErr != nil {
+		identity = nil
+	}
 	if err := config.UpdateMountInventory(func(inventory *config.MountInventory) error {
 		record, found := inventory.Mounts[move.mountID.String()]
 		if !found {
 			return nil
 		}
 
-		record.ReservedLocalPaths = removeString(record.ReservedLocalPaths, move.fromRelativeLocalPath)
-		record.LocalRootMaterialized = true
-		parent := &mountSpec{syncRoot: move.parentSyncRoot}
-		if identity, identityErr := rootIdentityForRecordPath(parent, &record); identityErr == nil {
-			record.LocalRootIdentity = identity
+		plan, err := planProjectionMoveSuccess(&record, move, identity)
+		if err != nil {
+			return err
 		}
-		if record.StateReason == config.MountStateReasonLocalProjectionUnavailable ||
-			record.StateReason == config.MountStateReasonLocalProjectionConflict {
-			record.State = config.MountStateActive
-			record.StateReason = ""
-		}
-		inventory.Mounts[record.MountID] = record
+		inventory.Mounts[record.MountID] = plan.Record
 		return nil
 	}); err != nil {
 		return fmt.Errorf("updating mount inventory after projection move: %w", err)
@@ -489,25 +488,14 @@ func recordProjectionMoveFailure(move *childProjectionMove, err error, logger *s
 		}
 	}
 
-	if updateErr := config.UpdateMountInventory(func(inventory *config.MountInventory) error {
-		record, found := inventory.Mounts[move.mountID.String()]
-		if !found {
-			return nil
-		}
-		record.State = failure.state
-		record.StateReason = failure.reason
-		record.ReservedLocalPaths = appendUniqueStrings(record.ReservedLocalPaths, move.fromRelativeLocalPath)
-		inventory.Mounts[record.MountID] = record
-		return nil
-	}); updateErr != nil && logger != nil {
-		logger.Warn("recording child projection move failure",
-			slog.String("mount_id", move.mountID.String()),
-			slog.String("error", updateErr.Error()),
-		)
-		return false
-	}
-
-	return true
+	return recordShortcutLifecyclePlan(
+		move.mountID,
+		logger,
+		"recording child projection move failure",
+		func(record *config.MountRecord) (shortcutLifecyclePlan, error) {
+			return planProjectionMoveFailure(record, move, failure.state, failure.reason)
+		},
+	)
 }
 
 func removeString(values []string, remove string) []string {

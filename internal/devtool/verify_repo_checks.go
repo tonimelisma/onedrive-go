@@ -32,6 +32,7 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		ensureFilterSemanticsWording,
 		ensureHTTPClientDoStaysAtApprovedBoundary,
 		ensurePrivilegedPackageCallsStayAtApprovedBoundaries,
+		ensureShortcutAuthorityBoundaries,
 		ensureNoForbiddenProductionPatterns,
 		ensureNoResurrectedFiles,
 	} {
@@ -68,6 +69,106 @@ func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 		if match != "" {
 			return fmt.Errorf("stale architecture/documentation phrase detected (%s): %s", check.name, match)
 		}
+	}
+
+	return nil
+}
+
+func ensureShortcutAuthorityBoundaries(repoRoot string) error {
+	if err := ensureMultisyncDoesNotImportGraph(repoRoot); err != nil {
+		return err
+	}
+	if err := ensureMultisyncDoesNotCallParentGraphDiscovery(repoRoot); err != nil {
+		return err
+	}
+	if err := ensureShortcutTopologyUsesShouldApplyGate(repoRoot); err != nil {
+		return err
+	}
+	if err := ensureFilesystemIdentityOwnedBySynctree(repoRoot); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func ensureMultisyncDoesNotImportGraph(repoRoot string) error {
+	match, err := findTextMatch(
+		[]string{filepath.Join(repoRoot, "internal", "multisync")},
+		regexp.MustCompile(`github\.com/tonimelisma/onedrive-go/internal/graph`),
+		func(path string) bool {
+			return strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go")
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("shortcut authority violation: multisync must not import internal/graph: %s", match)
+	}
+
+	return nil
+}
+
+func ensureMultisyncDoesNotCallParentGraphDiscovery(repoRoot string) error {
+	match, err := findTextMatch(
+		[]string{filepath.Join(repoRoot, "internal", "multisync")},
+		regexp.MustCompile(`\.(Delta|DeltaFolderAll|ListChildrenRecursive|ListChildren|GetItem|GetItemByPath|Drive)\(`),
+		func(path string) bool {
+			return strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go")
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("shortcut authority violation: parent-drive Graph discovery must stay in internal/sync: %s", match)
+	}
+
+	return nil
+}
+
+func ensureShortcutTopologyUsesShouldApplyGate(repoRoot string) error {
+	match, err := findTextMatch(
+		[]string{
+			filepath.Join(repoRoot, "internal", "sync"),
+			filepath.Join(repoRoot, "internal", "multisync"),
+		},
+		regexp.MustCompile(`!\s*[^;\n]*\.HasFacts\(\)`),
+		func(path string) bool {
+			return strings.HasSuffix(path, "_test.go") ||
+				!strings.HasSuffix(path, ".go") ||
+				path == filepath.Join(repoRoot, "internal", "sync", "shortcut_topology.go")
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("shortcut topology apply gate must use ShouldApply, not !HasFacts: %s", match)
+	}
+
+	return nil
+}
+
+func ensureFilesystemIdentityOwnedBySynctree(repoRoot string) error {
+	match, err := findTextMatch(
+		[]string{
+			filepath.Join(repoRoot, "internal", "sync"),
+			filepath.Join(repoRoot, "internal", "multisync"),
+		},
+		regexp.MustCompile(`stat_identity|statIdentity|IdentityFromFileInfo`),
+		func(path string) bool {
+			if strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go") {
+				return true
+			}
+			return path == filepath.Join(repoRoot, "internal", "sync", "managed_roots.go")
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("filesystem identity helpers must live in internal/synctree: %s", match)
 	}
 
 	return nil

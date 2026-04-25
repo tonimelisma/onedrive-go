@@ -1078,8 +1078,44 @@ func TestWatch_TopologyApplyFailureDoesNotAdvanceCursor(t *testing.T) {
 	batches := make(chan remoteObservationBatch, 1)
 	go func() {
 		batch := <-batches
-		if !batch.shortcutTopology.HasFacts() {
-			t.Errorf("expected topology facts in watch batch")
+		if !batch.shortcutTopology.ShouldApply() {
+			t.Errorf("expected applicable topology in watch batch")
+		}
+		batch.finishApplied(applyErr)
+	}()
+
+	err := obs.Watch(ctx, "", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	require.ErrorIs(t, err, applyErr)
+	assert.Empty(t, obs.CurrentDeltaToken())
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestWatch_EmptyCompleteTopologyApplyFailureDoesNotAdvanceCursor(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+				},
+				DeltaLink: "token-1",
+			},
+		}},
+	}
+
+	applyErr := errors.New("persist topology")
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs.SetShortcutTopology("personal:owner@example.com", nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	batches := make(chan remoteObservationBatch, 1)
+	go func() {
+		batch := <-batches
+		if !batch.shortcutTopology.ShouldApply() {
+			t.Errorf("expected empty complete topology batch to be emitted")
 		}
 		batch.finishApplied(applyErr)
 	}()

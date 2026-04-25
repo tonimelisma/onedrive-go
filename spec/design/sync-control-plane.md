@@ -187,6 +187,9 @@ only after they leave the engine boundary:
 - delete facts mark existing child records `pending_removal`
 - unavailable facts persist `unavailable: shortcut_binding_unavailable`
 - complete batches mark previously known but absent bindings pending removal
+- empty complete batches are applied through the same engine handler path
+  because they mean the parent engine completed a parent-drive enumeration and
+  saw no current shortcut aliases; empty incremental batches are skipped
 - same-path replacement stores the incoming binding in
   `deferred_shortcut_bindings` until the old projection finalizes, so
   `mounts.json` never contains duplicate sibling paths
@@ -206,7 +209,21 @@ facts. That empty complete batch means the parent engine enumerated the parent
 drive and saw no current shortcut bindings, so multisync still applies it and
 marks older bindings `pending_removal`. This keeps startup/reload token-reset
 and offline-delete cases on the same parent-engine observation path as ordinary
-incremental deletes.
+incremental deletes. The engine exposes this as `ShortcutTopologyBatch.ShouldApply`:
+facts always apply, complete batches apply even without facts, and empty
+incremental batches do not wake the control plane or advance observation
+progress.
+
+Shortcut lifecycle transition decisions are centralized in a pure multisync
+planner. The planner does not call Graph, touch the filesystem, write inventory,
+log, or start/stop runners. It receives the current durable record plus a
+topology, local-root, projection, or cleanup observation and returns the desired
+record mutation together with required ordering effects such as "persist
+inventory before projection cleanup", "persist inventory before runner
+restart", "stop child before Graph alias mutation", "stop child before
+projection move", "purge child DB only after projection cleanup", and
+"recompile after lifecycle mutation". Existing imperative orchestration executes
+those effects at the I/O boundary.
 
 Runtime mount-set construction then creates missing child local roots
 component-by-component after any pending projection move, marks file,
@@ -247,12 +264,22 @@ by `binding_item_id`, updates the record, and restarts the same child mount ID
 at the new path. If the directory disappears with no same-parent identity
 candidate, the orchestrator stops the child runner, DELETEs only the shortcut
 placeholder, marks the child pending removal, and purges only the child state
-DB. During the short pre-mutation window, parent observation suppresses the
-same-parent renamed directory by stored root identity instead of persisting a
-projection-move reservation that would be ambiguous after a crash. Ambiguous
-identity matches, cross-directory moves, symlink/collision
-states, and Graph mutation failures become durable conflict/unavailable states
-rather than target-content mutations.
+DB after local projection cleanup is proven safe. During the short pre-mutation
+window, parent observation suppresses the managed root so it is not uploaded
+into the parent drive. Cross-folder local moves are not supported in this
+increment: same-parent alias rename is the only rename shape that can mutate
+the OneDrive shortcut alias. Ambiguous same-parent identity matches, symlink
+ancestry, unsafe paths, files at the child root, or Graph mutation failures
+become durable conflict/unavailable records and keep all plausible paths
+reserved until recovery.
+
+Status is the guided recovery surface for these states. Non-active shortcut
+children expose the protected current path, reserved previous/candidate paths,
+state/reason/detail, command-oriented `recovery_action`, `auto_retry`, and any
+deferred same-path replacement. Deferred replacements remain stored only in
+`deferred_shortcut_bindings`; status renders them as "new shortcut is waiting
+for old projection cleanup" under the pending child instead of inventing a
+second persisted child state.
 
 ## Boundary To The Engine
 

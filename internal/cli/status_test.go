@@ -126,6 +126,7 @@ func TestBuildChildStatusMount_InheritsParentPause(t *testing.T) {
 		config.Drive{SyncDir: "/tmp/sync-root", Paused: &paused},
 		&record,
 		nil,
+		nil,
 	)
 
 	assert.Equal(t, driveStatePaused, mount.State)
@@ -155,6 +156,7 @@ func TestBuildChildStatusMount_RendersLifecycleState(t *testing.T) {
 				config.Drive{SyncDir: "/tmp/sync-root"},
 				&record,
 				nil,
+				nil,
 			)
 
 			assert.Equal(t, string(state), mount.State)
@@ -164,6 +166,39 @@ func TestBuildChildStatusMount_RendersLifecycleState(t *testing.T) {
 			assert.NotNil(t, mount.AutoRetry)
 		})
 	}
+}
+
+// Validates: R-2.3.3, R-2.4.8, R-2.10.4
+func TestBuildChildStatusMount_SurfacesProtectedPathsAndDeferredReplacement(t *testing.T) {
+	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
+	record := config.MountRecord{
+		MountID:             "child-docs",
+		NamespaceID:         parentCID.String(),
+		RelativeLocalPath:   "Shortcuts/Docs",
+		ReservedLocalPaths:  []string{"Shortcuts/Old Docs"},
+		TokenOwnerCanonical: parentCID.String(),
+		RemoteDriveID:       "remote-drive",
+		RemoteItemID:        "remote-root",
+		State:               config.MountStatePendingRemoval,
+		StateReason:         config.MountStateReasonRemovedProjectionDirty,
+	}
+	mount := buildChildStatusMount(
+		config.Drive{SyncDir: "/tmp/sync-root"},
+		&record,
+		[]config.DeferredShortcutBinding{{
+			BindingItemID:     "binding-new",
+			LocalAlias:        "Docs",
+			RelativeLocalPath: "Shortcuts/Docs",
+		}},
+		nil,
+	)
+
+	assert.Equal(t, "/tmp/sync-root/Shortcuts/Docs", mount.ProtectedCurrentPath)
+	assert.Equal(t, []string{"/tmp/sync-root/Shortcuts/Old Docs"}, mount.ProtectedReservedPaths)
+	require.Len(t, mount.DeferredReplacements, 1)
+	assert.Equal(t, "binding-new", mount.DeferredReplacements[0].BindingItemID)
+	assert.Equal(t, "new shortcut is waiting for old projection cleanup", mount.DeferredReplacements[0].Detail)
+	assert.Contains(t, mount.RecoveryAction, "Move or delete")
 }
 
 func statusLifecycleReasonForTest(state config.MountState) config.MountStateReason {
@@ -189,8 +224,8 @@ func TestBuildSingleAccountStatusWith_NestsChildMountsUnderParent(t *testing.T) 
 			parentCID: {SyncDir: "/tmp/sync-root"},
 		},
 	}
-	children := map[driveid.CanonicalID][]config.MountRecord{
-		parentCID: {{
+	children := map[driveid.CanonicalID][]childMountStatusInput{
+		parentCID: {{Record: config.MountRecord{
 			MountID:             "child-docs",
 			NamespaceID:         parentCID.String(),
 			LocalAlias:          "Docs",
@@ -199,7 +234,7 @@ func TestBuildSingleAccountStatusWith_NestsChildMountsUnderParent(t *testing.T) 
 			RemoteDriveID:       "remote-drive",
 			RemoteItemID:        "remote-root",
 			State:               config.MountStateActive,
-		}},
+		}}},
 	}
 
 	account := buildSingleAccountStatusWith(
@@ -218,6 +253,37 @@ func TestBuildSingleAccountStatusWith_NestsChildMountsUnderParent(t *testing.T) 
 	require.Len(t, parent.ChildMounts, 1)
 	assert.Equal(t, "child-docs", parent.ChildMounts[0].MountID)
 	assert.Empty(t, parent.ChildMounts[0].CanonicalID)
+}
+
+// Validates: R-2.3.3, R-2.4.8, R-2.10.4
+func TestGroupChildMountsByParent_AttachesDeferredSamePathReplacement(t *testing.T) {
+	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
+	record := config.MountRecord{
+		MountID:             "child-old",
+		NamespaceID:         parentCID.String(),
+		BindingItemID:       "binding-old",
+		RelativeLocalPath:   "Shortcuts/Docs",
+		TokenOwnerCanonical: parentCID.String(),
+		RemoteDriveID:       "remote-drive-old",
+		RemoteItemID:        "remote-root-old",
+		State:               config.MountStatePendingRemoval,
+		StateReason:         config.MountStateReasonShortcutRemoved,
+	}
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[record.MountID] = record
+	inventory.DeferredShortcutBindings["deferred"] = config.DeferredShortcutBinding{
+		NamespaceID:       parentCID.String(),
+		BindingItemID:     "binding-new",
+		RelativeLocalPath: "Shortcuts/Docs",
+		RemoteDriveID:     "remote-drive-new",
+		RemoteItemID:      "remote-root-new",
+	}
+
+	grouped := groupChildMountsByParent(inventory)
+
+	require.Len(t, grouped[parentCID], 1)
+	require.Len(t, grouped[parentCID][0].DeferredReplacements, 1)
+	assert.Equal(t, "binding-new", grouped[parentCID][0].DeferredReplacements[0].BindingItemID)
 }
 
 // Validates: R-2.10.1
@@ -243,6 +309,41 @@ func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T)
 	assert.Contains(t, output, "Control:   Parent drive pause/resume and the OneDrive shortcut")
 }
 
+// Validates: R-2.3.3, R-2.4.8, R-2.10.4
+func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
+	t.Parallel()
+
+	autoRetry := true
+	var buf bytes.Buffer
+	err := printMountStatus(&buf, &statusMount{
+		MountID:                "child-docs",
+		NamespaceID:            "personal:alice@example.com",
+		ProjectionKind:         statusProjectionChild,
+		DisplayName:            "Docs",
+		SyncDir:                "/tmp/sync-root/Shortcuts/Docs",
+		State:                  string(config.MountStatePendingRemoval),
+		StateReason:            string(config.MountStateReasonRemovedProjectionDirty),
+		StateDetail:            childMountStateDetail(config.MountStatePendingRemoval, config.MountStateReasonRemovedProjectionDirty),
+		ProtectedCurrentPath:   "/tmp/sync-root/Shortcuts/Docs",
+		ProtectedReservedPaths: []string{"/tmp/sync-root/Shortcuts/Old Docs"},
+		DeferredReplacements: []statusDeferredReplacement{{
+			BindingItemID: "binding-new",
+			DisplayName:   "Docs",
+			Detail:        "new shortcut is waiting for old projection cleanup",
+		}},
+		RecoveryAction: "Move or delete the listed child projection content, then rerun sync.",
+		AutoRetry:      &autoRetry,
+	}, false)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "Protected current path: /tmp/sync-root/Shortcuts/Docs")
+	assert.Contains(t, output, "Reserved path: /tmp/sync-root/Shortcuts/Old Docs")
+	assert.Contains(t, output, "Deferred replacement: Docs (binding-new) - new shortcut is waiting for old projection cleanup")
+	assert.Contains(t, output, "Action:    Move or delete the listed child projection content")
+	assert.Contains(t, output, "Auto retry: yes")
+}
+
 // Validates: R-2.10.1
 func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
@@ -260,6 +361,7 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	mount := buildChildStatusMount(
 		config.Drive{SyncDir: "/tmp/sync-root"},
 		&record,
+		nil,
 		nil,
 	)
 
