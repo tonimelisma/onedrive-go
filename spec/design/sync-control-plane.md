@@ -37,7 +37,7 @@ runtime package that implements it.
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry` |
-| Managed shortcut lifecycle stays control-plane owned: unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, local root collisions skip only affected child mounts, and shortcut projection moves reserve old paths until the local move completes. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestRetryUnavailableShortcutBindings_ReactivatesWithoutDeltaEvent`, `TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict`, `TestBuildRuntimeMountSet_LocalRootSaveFailureDoesNotBlockStandaloneMount`, `TestApplyInventoryPersistFailureSkipsOnlyDirtyChild`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips`, `TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable`, `TestFinalizePendingMountRemovals_RecompileReleasesParentSkipDir` |
+| Managed shortcut lifecycle stays control-plane owned: unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, local root collisions skip only affected child mounts, and shortcut projection moves reserve old paths until the local move completes. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestRetryUnavailableShortcutBindings_ReactivatesWithoutDeltaEvent`, `TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict`, `TestBuildRuntimeMountSet_LocalRootSaveFailureDoesNotBlockStandaloneMount`, `TestApplyInventoryPersistFailureSkipsOnlyDirtyChild`, `TestApplyChildProjectionMoves_SkipsDirtyChildDroppedAfterPersistFailure`, `TestApplyChildProjectionMoves_PersistFailureStillMovesCleanChild`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips`, `TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable`, `TestFinalizePendingMountRemovals_RecompileReleasesParentSkipDir` |
 
 ## Runtime Mount Specs
 
@@ -88,7 +88,9 @@ Runtime reporting is mount-identified. Standalone mounts keep their configured
 canonical drive ID inside `MountIdentity`, but managed child mounts report by
 durable `MountID` and do not synthesize `shared:` canonical drive IDs. CLI
 status output follows the same boundary: child rows expose `mount_id` and omit
-`canonical_id`, while standalone rows retain `canonical_id`.
+`canonical_id`, while standalone rows retain `canonical_id`. JSON nests child
+rows below their parent mount in `child_mounts`, and text output indents child
+rows beneath the parent drive so the control surface remains parent-owned.
 
 Managed child mounts persist their token owner in `mounts.json`; pause and sync
 tunables still come from the selected standalone namespace mount. There is no
@@ -133,7 +135,10 @@ cycle. Parent `localSkipDirs` therefore releases finalized or moved paths
 immediately. If saving lifecycle mutations to `mounts.json` fails, the
 orchestrator keeps standalone parents and already-durable children eligible,
 skips only dirty child records whose in-memory state could not be trusted, and
-keeps their parent skip dirs reserved for that run.
+keeps their parent skip dirs reserved for that run. The same admitted child
+mount set gates projection moves, skipped startup results, removed-mount
+finalization, and parent exclusions, so dirty child records dropped after a
+persist failure cannot still move local shortcut roots.
 
 Automatic shortcut reconciliation is also control-plane owned. Before one-shot
 startup, before watch startup, on control-socket reload, and on the watch-mode

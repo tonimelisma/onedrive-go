@@ -11,6 +11,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
+const (
+	shortcutOldDocsPath = "Shortcuts/Old Docs"
+	shortcutNewDocsPath = "Shortcuts/New Docs"
+)
+
 func compiledChildProjectionMoveFixture(t *testing.T, oldPath, newPath string) (
 	*compiledMountSet,
 	config.MountRecord,
@@ -39,7 +44,7 @@ func compiledChildProjectionMoveFixture(t *testing.T, oldPath, newPath string) (
 
 // Validates: R-2.8.1, R-4.1.4
 func TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation(t *testing.T) {
-	compiled, record, parentSyncRoot, parent := compiledChildProjectionMoveFixture(t, "Shortcuts/Old Docs", "Shortcuts/New Docs")
+	compiled, record, parentSyncRoot, parent := compiledChildProjectionMoveFixture(t, shortcutOldDocsPath, shortcutNewDocsPath)
 	oldRoot := filepath.Join(parentSyncRoot, "Shortcuts", "Old Docs")
 	newRoot := filepath.Join(parentSyncRoot, "Shortcuts", "New Docs")
 	require.NoError(t, os.MkdirAll(oldRoot, 0o700))
@@ -68,7 +73,7 @@ func TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation(t 
 
 // Validates: R-2.8.1, R-4.1.4
 func TestProjectionMoveLifecycle_DoesNotPrecreateTargetBeforeRename(t *testing.T) {
-	compiled, record, parentSyncRoot, _ := compiledChildProjectionMoveFixture(t, "Shortcuts/Old Docs", "Shortcuts/New Docs")
+	compiled, record, parentSyncRoot, _ := compiledChildProjectionMoveFixture(t, shortcutOldDocsPath, shortcutNewDocsPath)
 	parent := compiled.Mounts[0]
 	oldRoot := filepath.Join(parentSyncRoot, "Shortcuts", "Old Docs")
 	newRoot := filepath.Join(parentSyncRoot, "Shortcuts", "New Docs")
@@ -99,8 +104,92 @@ func TestProjectionMoveLifecycle_DoesNotPrecreateTargetBeforeRename(t *testing.T
 }
 
 // Validates: R-2.8.1, R-4.1.4
+func TestApplyChildProjectionMoves_SkipsDirtyChildDroppedAfterPersistFailure(t *testing.T) {
+	compiled, record, parentSyncRoot, _ := compiledChildProjectionMoveFixture(t, shortcutOldDocsPath, shortcutNewDocsPath)
+	oldRoot := filepath.Join(parentSyncRoot, "Shortcuts", "Old Docs")
+	newRoot := filepath.Join(parentSyncRoot, "Shortcuts", "New Docs")
+	require.NoError(t, os.MkdirAll(oldRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(oldRoot, "kept.txt"), []byte("stateful"), 0o600))
+
+	applyInventoryPersistFailure(compiled, []string{record.MountID}, assert.AnError)
+	require.Empty(t, compiled.ProjectionMoves)
+	changed := applyChildProjectionMoves(compiled, nil)
+
+	assert.False(t, changed)
+	assert.DirExists(t, oldRoot)
+	assert.FileExists(t, filepath.Join(oldRoot, "kept.txt"))
+	assert.NoDirExists(t, newRoot)
+	require.Len(t, compiled.Mounts, 1)
+	require.Len(t, compiled.Skipped, 1)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), "unpersisted lifecycle state")
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	updated := loaded.Mounts[record.MountID]
+	assert.Equal(t, []string{"Shortcuts/Old Docs"}, updated.ReservedLocalPaths)
+	assert.Equal(t, config.MountStateActive, updated.State)
+	assert.Empty(t, updated.StateReason)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestApplyChildProjectionMoves_PersistFailureStillMovesCleanChild(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	parent.SyncRoot = filepath.Join(t.TempDir(), "parent")
+
+	dirty := testMountRecordForParent(&parent)
+	dirty.RelativeLocalPath = "Shortcuts/Dirty New"
+	dirty.ReservedLocalPaths = []string{"Shortcuts/Dirty Old"}
+
+	clean := dirty
+	clean.MountID = "child-clean"
+	clean.BindingItemID = "binding-child-clean"
+	clean.LocalAlias = "Clean New"
+	clean.RelativeLocalPath = "Shortcuts/Clean New"
+	clean.ReservedLocalPaths = []string{"Shortcuts/Clean Old"}
+	clean.RemoteDriveID = "remote-drive-clean"
+	clean.RemoteItemID = "remote-root-clean"
+
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[dirty.MountID] = dirty
+	inventory.Mounts[clean.MountID] = clean
+	require.NoError(t, config.SaveMountInventory(inventory))
+
+	compiled, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, inventory)
+	require.NoError(t, err)
+	require.Len(t, compiled.ProjectionMoves, 2)
+
+	dirtyOldRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Dirty Old")
+	dirtyNewRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Dirty New")
+	cleanOldRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Clean Old")
+	cleanNewRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Clean New")
+	require.NoError(t, os.MkdirAll(dirtyOldRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dirtyOldRoot, "kept.txt"), []byte("dirty"), 0o600))
+	require.NoError(t, os.MkdirAll(cleanOldRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(cleanOldRoot, "kept.txt"), []byte("clean"), 0o600))
+
+	applyInventoryPersistFailure(compiled, []string{dirty.MountID}, assert.AnError)
+	require.Len(t, compiled.ProjectionMoves, 1)
+	changed := applyChildProjectionMoves(compiled, nil)
+
+	assert.True(t, changed)
+	assert.DirExists(t, dirtyOldRoot)
+	assert.FileExists(t, filepath.Join(dirtyOldRoot, "kept.txt"))
+	assert.NoDirExists(t, dirtyNewRoot)
+	assert.NoDirExists(t, cleanOldRoot)
+	assert.FileExists(t, filepath.Join(cleanNewRoot, "kept.txt"))
+	require.Len(t, compiled.Mounts, 2)
+	require.Len(t, compiled.Skipped, 1)
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Shortcuts/Dirty Old"}, loaded.Mounts[dirty.MountID].ReservedLocalPaths)
+	assert.Empty(t, loaded.Mounts[clean.MountID].ReservedLocalPaths)
+}
+
+// Validates: R-2.8.1, R-4.1.4
 func TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips(t *testing.T) {
-	compiled, record, parentSyncRoot, _ := compiledChildProjectionMoveFixture(t, "Shortcuts/Old Docs", "Shortcuts/New Docs")
+	compiled, record, parentSyncRoot, _ := compiledChildProjectionMoveFixture(t, shortcutOldDocsPath, shortcutNewDocsPath)
 	oldRoot := filepath.Join(parentSyncRoot, "Shortcuts", "Old Docs")
 	newRoot := filepath.Join(parentSyncRoot, "Shortcuts", "New Docs")
 	require.NoError(t, os.MkdirAll(oldRoot, 0o700))
@@ -124,7 +213,7 @@ func TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips(t *t
 
 // Validates: R-2.8.1, R-4.1.4
 func TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable(t *testing.T) {
-	compiled, record, parentSyncRoot, _ := compiledChildProjectionMoveFixture(t, "Shortcuts/Old Docs", "Shortcuts/New Docs")
+	compiled, record, parentSyncRoot, _ := compiledChildProjectionMoveFixture(t, shortcutOldDocsPath, shortcutNewDocsPath)
 	newRoot := filepath.Join(parentSyncRoot, "Shortcuts", "New Docs")
 	require.NoError(t, os.MkdirAll(parentSyncRoot, 0o700))
 
@@ -146,7 +235,7 @@ func TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable(t *tes
 
 // Validates: R-2.8.1, R-4.1.4
 func TestApplyChildProjectionMoves_TargetAlreadyInPlaceClearsReservation(t *testing.T) {
-	compiled, record, parentSyncRoot, _ := compiledChildProjectionMoveFixture(t, "Shortcuts/Old Docs", "Shortcuts/New Docs")
+	compiled, record, parentSyncRoot, _ := compiledChildProjectionMoveFixture(t, shortcutOldDocsPath, shortcutNewDocsPath)
 	newRoot := filepath.Join(parentSyncRoot, "Shortcuts", "New Docs")
 	require.NoError(t, os.MkdirAll(newRoot, 0o700))
 
@@ -155,6 +244,44 @@ func TestApplyChildProjectionMoves_TargetAlreadyInPlaceClearsReservation(t *test
 	assert.True(t, changed)
 	assert.DirExists(t, newRoot)
 	assert.Empty(t, compiled.Skipped)
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	updated := loaded.Mounts[record.MountID]
+	assert.Empty(t, updated.ReservedLocalPaths)
+	assert.Equal(t, config.MountStateActive, updated.State)
+	assert.Empty(t, updated.StateReason)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestApplyChildProjectionMoves_RetriesSkippedLifecycleRecoveryMove(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	parent.SyncRoot = filepath.Join(t.TempDir(), "parent")
+
+	record := testMountRecordForParent(&parent)
+	record.RelativeLocalPath = shortcutNewDocsPath
+	record.ReservedLocalPaths = []string{shortcutOldDocsPath}
+	record.State = config.MountStateConflict
+	record.StateReason = config.MountStateReasonLocalProjectionConflict
+
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[record.MountID] = record
+	require.NoError(t, config.SaveMountInventory(inventory))
+
+	compiled, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, inventory)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 1)
+	require.Len(t, compiled.Skipped, 1)
+	require.Len(t, compiled.ProjectionMoves, 1)
+
+	newRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "New Docs")
+	require.NoError(t, os.MkdirAll(newRoot, 0o700))
+
+	changed := applyChildProjectionMoves(compiled, nil)
+
+	assert.True(t, changed)
+	assert.DirExists(t, newRoot)
 
 	loaded, err := config.LoadMountInventory()
 	require.NoError(t, err)

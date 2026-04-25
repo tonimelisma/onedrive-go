@@ -9,17 +9,17 @@ same failure family already has chronology and evidence. After that first
 lookup, use this document to jump directly to the current repo policy without
 replaying the whole incident ledger.
 
-## Shared-Root Children-Route Lag After Derived Shared-Root Bootstrap
+## Mount-Root Children-Route Lag After Shared-Folder Bootstrap
 
 Current repo policy:
 
-- isolated shared-root fixture setup must wait for the derived shared-root
-  `ls /` boundary before handing the drive to later upload, sync, or watch
+- isolated shared-folder fixture setup must wait for the configured mount-root
+  `ls /` boundary before handing the mount to later upload, sync, or watch
   coverage
-- shared-root remote-read helpers (`stat`, `get`, parent `ls`, exact-path
+- mount-root remote-read helpers (`stat`, `get`, parent `ls`, exact-path
   visibility waits) re-establish that same `ls /` boundary after the known
   `resolve item path ... list children for segment ... HTTP 404` family
-- the recovery stays narrow to the documented shared-root route-lag shape; it
+- the recovery stays narrow to the documented mount-root route-lag shape; it
   does not absorb unrelated read failures
 
 Promoted docs:

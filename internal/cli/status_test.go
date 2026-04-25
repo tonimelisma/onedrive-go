@@ -180,6 +180,45 @@ func statusLifecycleReasonForTest(state config.MountState) string {
 }
 
 // Validates: R-2.10.1
+func TestBuildSingleAccountStatusWith_NestsChildMountsUnderParent(t *testing.T) {
+	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
+	cfg := &config.Config{
+		Drives: map[driveid.CanonicalID]config.Drive{
+			parentCID: {SyncDir: "/tmp/sync-root"},
+		},
+	}
+	children := map[driveid.CanonicalID][]config.MountRecord{
+		parentCID: {{
+			MountID:             "child-docs",
+			NamespaceID:         parentCID.String(),
+			LocalAlias:          "Docs",
+			RelativeLocalPath:   "Shortcuts/Docs",
+			TokenOwnerCanonical: parentCID.String(),
+			RemoteDriveID:       "remote-drive",
+			RemoteItemID:        "remote-root",
+			State:               config.MountStateActive,
+		}},
+	}
+
+	account := buildSingleAccountStatusWith(
+		cfg,
+		"alice@example.com",
+		[]driveid.CanonicalID{parentCID},
+		children,
+		&mockNameReader{},
+		&mockSavedLoginChecker{},
+		nil,
+	)
+
+	require.Len(t, account.Mounts, 1)
+	parent := account.Mounts[0]
+	assert.Equal(t, parentCID.String(), parent.CanonicalID)
+	require.Len(t, parent.ChildMounts, 1)
+	assert.Equal(t, "child-docs", parent.ChildMounts[0].MountID)
+	assert.Empty(t, parent.ChildMounts[0].CanonicalID)
+}
+
+// Validates: R-2.10.1
 func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T) {
 	t.Parallel()
 
@@ -199,9 +238,7 @@ func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T)
 	output := buf.String()
 	assert.Contains(t, output, "Reason:    "+config.MountStateReasonShortcutBindingUnavailable)
 	assert.Contains(t, output, "Next:      OneDrive did not return a usable shortcut target")
-	assert.NotContains(t, output, "--mount")
-	assert.NotContains(t, output, "pause child")
-	assert.NotContains(t, output, "resume child")
+	assert.Contains(t, output, "Control:   Parent drive pause/resume and the OneDrive shortcut")
 }
 
 // Validates: R-2.10.1
@@ -1052,6 +1089,28 @@ func TestComputeSummary_Mixed(t *testing.T) {
 	assert.Equal(t, 4, s.TotalConditions)
 }
 
+func TestComputeSummary_IncludesNestedChildMounts(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			AuthState: authStateReady,
+			Mounts: []statusMount{{
+				State: driveStateReady,
+				ChildMounts: []statusMount{
+					{State: driveStatePaused, SyncState: &syncStateInfo{ConditionCount: 2}},
+				},
+			}},
+		},
+	}
+
+	s := computeSummary(accounts)
+	assert.Equal(t, 2, s.TotalMounts)
+	assert.Equal(t, 1, s.Ready)
+	assert.Equal(t, 1, s.Paused)
+	assert.Equal(t, 2, s.TotalConditions)
+}
+
 func TestComputeSummary_Empty(t *testing.T) {
 	t.Parallel()
 
@@ -1458,8 +1517,8 @@ func findStatusDriveJSON(
 	)
 	for i := range decoded.Accounts {
 		for j := range decoded.Accounts[i].Mounts {
-			drive := decoded.Accounts[i].Mounts[j]
-			if drive.CanonicalID == canonicalID {
+			drive, ok := findStatusMountRecursive(&decoded.Accounts[i].Mounts[j], canonicalID)
+			if ok {
 				require.False(t, found, "expected exactly one drive in filtered status output")
 				foundDrive = drive
 				found = true
@@ -1468,6 +1527,22 @@ func findStatusDriveJSON(
 	}
 	require.True(t, found, "expected drive %s in status output", canonicalID)
 	return foundDrive, foundDrive.SyncState
+}
+
+func findStatusMountRecursive(mount *statusMount, identity string) (statusMount, bool) {
+	if mount == nil {
+		return statusMount{}, false
+	}
+	if mount.CanonicalID == identity || mount.MountID == identity {
+		return *mount, true
+	}
+	for i := range mount.ChildMounts {
+		if found, ok := findStatusMountRecursive(&mount.ChildMounts[i], identity); ok {
+			return found, true
+		}
+	}
+
+	return statusMount{}, false
 }
 
 func TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState(t *testing.T) {

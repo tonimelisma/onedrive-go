@@ -626,6 +626,8 @@ func TestFullE2EBucketsOwnDemotedFastTests(t *testing.T) {
 	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_ReadOnlyDownloadOnlyProjectsChildMount")
 	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_ExplicitStandaloneSharedFolderRemainsConfiguredDrive")
 	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_RestartIdempotentKeepsChildMountVisible")
+	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_RenameReusesChildMountState")
+	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_MoveReusesChildMountState")
 	assert.NotContains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent")
 	assert.NotContains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Resolve_DeletesWithWatchDaemon")
 }

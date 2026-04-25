@@ -181,6 +181,8 @@ func fullE2ESerialWatchSharedTestNames() []string {
 		"TestE2E_Shortcut_ReadOnlyDownloadOnlyProjectsChildMount",
 		"TestE2E_Shortcut_ExplicitStandaloneSharedFolderRemainsConfiguredDrive",
 		"TestE2E_Shortcut_RestartIdempotentKeepsChildMountVisible",
+		"TestE2E_Shortcut_RenameReusesChildMountState",
+		"TestE2E_Shortcut_MoveReusesChildMountState",
 		"TestE2E_Orchestrator_SimultaneousSync",
 		"TestE2E_Orchestrator_Status",
 		"TestE2E_Orchestrator_DriveIsolation",

@@ -81,9 +81,19 @@ func applyStatusPerfOverlay(accounts []statusAccount, overlay statusPerfOverlay)
 
 	for i := range accounts {
 		for j := range accounts[i].Mounts {
-			mount := &accounts[i].Mounts[j]
-			mount.SyncState = overlaySyncState(mount.MountID, mount.SyncState, overlay)
+			applyStatusPerfOverlayToMount(&accounts[i].Mounts[j], overlay)
 		}
+	}
+}
+
+func applyStatusPerfOverlayToMount(mount *statusMount, overlay statusPerfOverlay) {
+	if mount == nil {
+		return
+	}
+
+	mount.SyncState = overlaySyncState(mount.MountID, mount.SyncState, overlay)
+	for i := range mount.ChildMounts {
+		applyStatusPerfOverlayToMount(&mount.ChildMounts[i], overlay)
 	}
 }
 

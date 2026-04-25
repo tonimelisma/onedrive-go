@@ -18,6 +18,8 @@ type rootHandle interface {
 	Open(name string) (*os.File, error)
 	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
 	Stat(name string) (os.FileInfo, error)
+	Lstat(name string) (os.FileInfo, error)
+	Mkdir(name string, perm os.FileMode) error
 	FS() fs.FS
 	Close() error
 }
@@ -39,6 +41,16 @@ func (h *osRootHandle) OpenFile(name string, flag int, perm os.FileMode) (*os.Fi
 func (h *osRootHandle) Stat(name string) (os.FileInfo, error) {
 	//nolint:wrapcheck // caller adds rooted path context after containment checks.
 	return h.root.Stat(name)
+}
+
+func (h *osRootHandle) Lstat(name string) (os.FileInfo, error) {
+	//nolint:wrapcheck // caller adds rooted path context after containment checks.
+	return h.root.Lstat(name)
+}
+
+func (h *osRootHandle) Mkdir(name string, perm os.FileMode) error {
+	//nolint:wrapcheck // caller adds rooted path context after containment checks.
+	return h.root.Mkdir(name, perm)
 }
 
 func (h *osRootHandle) FS() fs.FS {
@@ -86,6 +98,14 @@ func defaultRootOps() rootOps {
 type Root struct {
 	dir string
 	ops rootOps
+}
+
+var ErrUnsafePath = errors.New("sync tree path is unsafe")
+
+type PathState struct {
+	Exists    bool
+	IsDir     bool
+	IsSymlink bool
 }
 
 // Open establishes a rooted sync-tree capability for dir.
@@ -257,6 +277,16 @@ func (r *Root) OpenFile(rel string, flag int, perm os.FileMode) (*os.File, error
 }
 
 func (r *Root) Stat(rel string) (os.FileInfo, error) {
+	return r.statWithRoot(rel, "stating %s", func(root rootHandle, clean string) (os.FileInfo, error) {
+		return root.Stat(clean)
+	})
+}
+
+func (r *Root) statWithRoot(
+	rel string,
+	errorFormat string,
+	stat func(root rootHandle, clean string) (os.FileInfo, error),
+) (os.FileInfo, error) {
 	clean, err := cleanRelative(rel)
 	if err != nil {
 		return nil, err
@@ -267,7 +297,7 @@ func (r *Root) Stat(rel string) (os.FileInfo, error) {
 		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
-	info, statErr := root.Stat(clean)
+	info, statErr := stat(root, clean)
 	closeErr := root.Close()
 	if statErr != nil {
 		if closeErr != nil {
@@ -279,7 +309,7 @@ func (r *Root) Stat(rel string) (os.FileInfo, error) {
 			target = filepath.Join(r.dir, clean)
 		}
 
-		return nil, fmt.Errorf("stating %s: %w", target, r.normalizeNotExist(target, statErr))
+		return nil, fmt.Errorf(errorFormat+": %w", target, r.normalizeNotExist(target, statErr))
 	}
 
 	if closeErr != nil {
@@ -296,6 +326,39 @@ func (r *Root) StatAbs(abs string) (os.FileInfo, error) {
 	}
 
 	return r.Stat(rel)
+}
+
+func (r *Root) Lstat(rel string) (os.FileInfo, error) {
+	return r.statWithRoot(rel, "stating %s without following links", func(root rootHandle, clean string) (os.FileInfo, error) {
+		return root.Lstat(clean)
+	})
+}
+
+func (r *Root) LstatAbs(abs string) (os.FileInfo, error) {
+	rel, err := r.Rel(abs)
+	if err != nil {
+		return nil, err
+	}
+
+	return r.Lstat(rel)
+}
+
+func (r *Root) PathStateNoFollow(rel string) (PathState, error) {
+	info, err := r.Lstat(rel)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return PathState{}, nil
+		}
+
+		return PathState{}, err
+	}
+
+	isSymlink := info.Mode()&os.ModeSymlink != 0
+	return PathState{
+		Exists:    true,
+		IsDir:     info.IsDir() && !isSymlink,
+		IsSymlink: isSymlink,
+	}, nil
 }
 
 func (r *Root) ReadDir(rel string) ([]os.DirEntry, error) {
@@ -353,6 +416,76 @@ func (r *Root) MkdirAll(rel string, perm os.FileMode) error {
 	return nil
 }
 
+func (r *Root) ValidateNoSymlinkAncestors(rel string) error {
+	clean, err := cleanRelative(rel)
+	if err != nil {
+		return err
+	}
+	if clean == "." {
+		return nil
+	}
+	parent := filepath.Dir(clean)
+	if parent == "." {
+		return r.validateRootDirectoryNoFollow()
+	}
+
+	root, err := r.openRootNoFollow()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	current := ""
+	for _, component := range strings.Split(parent, string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, statErr := root.Lstat(current)
+		if errors.Is(statErr, os.ErrNotExist) {
+			return nil
+		}
+		if statErr != nil {
+			return fmt.Errorf("checking sync-tree ancestor %s: %w", current, statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("%w: ancestor %s is not a directory", ErrUnsafePath, current)
+		}
+	}
+
+	return nil
+}
+
+func (r *Root) MkdirAllNoFollow(rel string, perm os.FileMode) error {
+	clean, err := cleanRelative(rel)
+	if err != nil {
+		return err
+	}
+
+	root, err := r.openRootNoFollow()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	if clean == "." {
+		return nil
+	}
+
+	current := ""
+	for _, component := range strings.Split(clean, string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		if err := ensureNoFollowDirectory(root, current, perm); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (r *Root) Remove(rel string) error {
 	path, err := r.Abs(rel)
 	if err != nil {
@@ -400,6 +533,63 @@ func (r *Root) Rename(srcRel, dstRel string) error {
 
 	if err := r.ops.rename(srcPath, dstPath); err != nil {
 		return fmt.Errorf("renaming %s to %s: %w", srcPath, dstPath, err)
+	}
+
+	return nil
+}
+
+func (r *Root) SameFile(srcRel, dstRel string) (bool, error) {
+	srcInfo, err := r.Stat(srcRel)
+	if err != nil {
+		return false, fmt.Errorf("stating %s: %w", srcRel, err)
+	}
+	dstInfo, err := r.Stat(dstRel)
+	if err != nil {
+		return false, fmt.Errorf("stating %s: %w", dstRel, err)
+	}
+
+	return os.SameFile(srcInfo, dstInfo), nil
+}
+
+func (r *Root) RenameWithTemporarySibling(srcRel, dstRel, tempStem string, attempts int) error {
+	if attempts <= 0 {
+		attempts = 1
+	}
+	if tempStem == "" {
+		return fmt.Errorf("temporary rename stem is empty")
+	}
+
+	dstClean, err := cleanRelative(dstRel)
+	if err != nil {
+		return err
+	}
+	parent := filepath.Dir(dstClean)
+	tempRel := ""
+	for i := 0; i < attempts; i++ {
+		name := tempStem
+		if i > 0 {
+			name = fmt.Sprintf("%s-%d", tempStem, i)
+		}
+		candidate := filepath.Join(parent, name)
+		if _, err := r.Lstat(candidate); errors.Is(err, os.ErrNotExist) {
+			tempRel = candidate
+			break
+		} else if err != nil {
+			return fmt.Errorf("checking temporary rename path %s: %w", candidate, err)
+		}
+	}
+	if tempRel == "" {
+		return fmt.Errorf("temporary rename path already exists under %s", parent)
+	}
+
+	if err := r.Rename(srcRel, tempRel); err != nil {
+		return err
+	}
+	if err := r.Rename(tempRel, dstRel); err != nil {
+		if rollbackErr := r.Rename(tempRel, srcRel); rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("rolling back temporary rename: %w", rollbackErr))
+		}
+		return err
 	}
 
 	return nil
@@ -482,4 +672,57 @@ func (r *Root) normalizeNotExist(path string, original error) error {
 	}
 
 	return original
+}
+
+func (r *Root) validateRootDirectoryNoFollow() error {
+	info, err := r.ops.lstat(r.dir)
+	if err != nil {
+		return fmt.Errorf("checking sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("%w: root %s is not a directory", ErrUnsafePath, r.dir)
+	}
+
+	return nil
+}
+
+func (r *Root) openRootNoFollow() (rootHandle, error) {
+	if err := r.validateRootDirectoryNoFollow(); err != nil {
+		return nil, err
+	}
+
+	root, err := r.ops.openRoot(r.dir)
+	if err != nil {
+		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+	}
+
+	return root, nil
+}
+
+func ensureNoFollowDirectory(root rootHandle, rel string, perm os.FileMode) error {
+	info, err := root.Lstat(rel)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("%w: path %s is not a directory", ErrUnsafePath, rel)
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("checking directory %s: %w", rel, err)
+	}
+	if err := root.Mkdir(rel, perm); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			info, statErr := root.Lstat(rel)
+			if statErr != nil {
+				return fmt.Errorf("checking directory %s after create race: %w", rel, statErr)
+			}
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return fmt.Errorf("%w: path %s is not a directory", ErrUnsafePath, rel)
+			}
+			return nil
+		}
+		return fmt.Errorf("creating directory %s: %w", rel, err)
+	}
+
+	return nil
 }
