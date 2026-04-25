@@ -4,7 +4,8 @@ import (
 	"io/fs"
 	"path"
 	"path/filepath"
-	"syscall"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 func normalizedManagedRootPath(value string) string {
@@ -46,7 +47,7 @@ func managedRootIdentityReservation(
 	if info == nil || !info.IsDir() {
 		return ManagedRootReservation{}, false
 	}
-	device, inode, ok := fileInfoIdentity(info)
+	identity, ok := synctree.IdentityFromFileInfo(info)
 	if !ok {
 		return ManagedRootReservation{}, false
 	}
@@ -57,7 +58,11 @@ func managedRootIdentityReservation(
 	}
 	parent := path.Dir(normalized)
 	for _, reservation := range reservations {
-		if !reservation.HasIdentity || reservation.Device != device || reservation.Inode != inode {
+		if !reservation.HasIdentity ||
+			!synctree.SameIdentity(
+				synctree.FileIdentity{Device: reservation.Device, Inode: reservation.Inode},
+				identity,
+			) {
 			continue
 		}
 		reservedPath := normalizedManagedRootPath(reservation.Path)
@@ -72,24 +77,6 @@ func managedRootIdentityReservation(
 	}
 
 	return ManagedRootReservation{}, false
-}
-
-func fileInfoIdentity(info fs.FileInfo) (uint64, uint64, bool) {
-	if info == nil {
-		return 0, 0, false
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat == nil {
-		return 0, 0, false
-	}
-
-	device := statDeviceID(stat)
-	inode := stat.Ino
-	if device == 0 && inode == 0 {
-		return 0, 0, false
-	}
-
-	return device, inode, true
 }
 
 func pathHasPrefix(observedPath string, parentPath string) bool {

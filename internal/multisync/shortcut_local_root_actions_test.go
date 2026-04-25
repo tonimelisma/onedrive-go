@@ -252,6 +252,58 @@ func TestFinalizeRuntimeMountSetLifecycle_RecompilesAfterLocalAliasRenameBeforeP
 	assert.Empty(t, record.StateReason)
 }
 
+// Validates: R-2.8.1, R-4.1.4
+func TestApplyChildRootLifecycleActions_FailureFiltersStaleProjectionMoves(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	require.NoError(t, os.MkdirAll(config.DefaultDataDir(), 0o700))
+
+	parentMount := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	parentMount.SyncRoot = filepath.Join(t.TempDir(), "parent")
+	require.NoError(t, os.MkdirAll(parentMount.SyncRoot, 0o700))
+	parentSpecs, err := buildStandaloneMountSpecs([]StandaloneMountConfig{parentMount})
+	require.NoError(t, err)
+	require.Len(t, parentSpecs, 1)
+	parent := parentSpecs[0]
+
+	child := testMountRecordForParent(&parentMount)
+	child.BindingItemID = localRootActionBindingID
+	child.RelativeLocalPath = localRootActionOldPath
+	child.ReservedLocalPaths = []string{localRootActionRenamedPath}
+	require.NoError(t, config.SaveMountInventory(&config.MountInventory{
+		Mounts: map[string]config.MountRecord{child.MountID: child},
+	}))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "rename rejected", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	compiled := &compiledMountSet{
+		Mounts: []*mountSpec{parent},
+		LocalRootActions: []childRootLifecycleAction{{
+			kind:                  childRootLifecycleActionRename,
+			mountID:               mountID(child.MountID),
+			parent:                parent,
+			bindingItemID:         child.BindingItemID,
+			fromRelativeLocalPath: localRootActionOldPath,
+			toRelativeLocalPath:   localRootActionRenamedPath,
+		}},
+		ProjectionMoves: []childProjectionMove{{
+			mountID:               mountID(child.MountID),
+			parentSyncRoot:        parentMount.SyncRoot,
+			fromRelativeLocalPath: localRootActionRenamedPath,
+			toRelativeLocalPath:   localRootActionOldPath,
+		}},
+	}
+
+	changed := applyChildRootLifecycleActions(t.Context(), localRootActionTestOrchestrator(t, server.URL), compiled, nil)
+
+	assert.True(t, changed)
+	assert.Empty(t, compiled.ProjectionMoves)
+	require.Len(t, compiled.Skipped, 1)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), config.MountStateReasonLocalAliasRenameUnavailable)
+}
+
 func localRootActionTestMounts(t *testing.T, relativePath string) (*mountSpec, config.MountRecord) {
 	t.Helper()
 

@@ -3,7 +3,6 @@ package multisync
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path"
@@ -38,7 +37,7 @@ type childRootLifecycleAction struct {
 
 type childRootLifecycleDecision struct {
 	state                 config.MountState
-	reason                string
+	reason                config.MountStateReason
 	identity              *config.RootIdentity
 	localRootMaterialized bool
 	action                *childRootLifecycleAction
@@ -121,7 +120,7 @@ func logChildRootLifecycle(
 	record *config.MountRecord,
 	root string,
 	state config.MountState,
-	reason string,
+	reason config.MountStateReason,
 	logger *slog.Logger,
 ) {
 	if logger == nil {
@@ -140,7 +139,7 @@ func logChildRootLifecycle(
 			slog.String("mount_id", record.MountID),
 			slog.String("path", root),
 			slog.String("state", string(state)),
-			slog.String("reason", reason),
+			slog.String("reason", string(reason)),
 		)
 	}
 }
@@ -247,7 +246,7 @@ func classifyChildMountRoot(parent *mountSpec, record *config.MountRecord) child
 	return decision
 }
 
-func materializeChildMountRoot(parentRoot string, record *config.MountRecord) (config.MountState, string) {
+func materializeChildMountRoot(parentRoot string, record *config.MountRecord) (config.MountState, config.MountStateReason) {
 	state, reason, _, _ := classifyMaterializedChildMountRoot(parentRoot, record)
 	return state, reason
 }
@@ -255,7 +254,7 @@ func materializeChildMountRoot(parentRoot string, record *config.MountRecord) (c
 func classifyMaterializedChildMountRoot(
 	parentRoot string,
 	record *config.MountRecord,
-) (config.MountState, string, *config.RootIdentity, bool) {
+) (config.MountState, config.MountStateReason, *config.RootIdentity, bool) {
 	if record == nil {
 		return config.MountStateConflict, config.MountStateReasonLocalRootCollision, nil, false
 	}
@@ -320,7 +319,7 @@ func cleanChildMountRootRelativePath(relativeLocalPath string) (string, bool) {
 	return relativePath, true
 }
 
-func childMountRootErrorState(err error) (config.MountState, string) {
+func childMountRootErrorState(err error) (config.MountState, config.MountStateReason) {
 	if errors.Is(err, synctree.ErrUnsafePath) {
 		return config.MountStateConflict, config.MountStateReasonLocalRootCollision
 	}
@@ -403,7 +402,7 @@ func sameParentChildRootRenameCandidate(
 	if infoErr != nil || !info.IsDir() {
 		return "", false
 	}
-	identity, identityErr := rootIdentityFromFileInfo(info)
+	identity, identityErr := childRootIdentity(root, candidateRel)
 	if identityErr != nil || !rootIdentityEqual(identity, expected) {
 		return "", false
 	}
@@ -420,26 +419,11 @@ func childRootIdentity(root *synctree.Root, relativePath string) (*config.RootId
 		return nil, fmt.Errorf("local root %s is not a directory", relativePath)
 	}
 
-	return rootIdentityFromFileInfo(info)
-}
-
-func rootIdentityFromFileInfo(info fs.FileInfo) (*config.RootIdentity, error) {
-	if info == nil {
-		return nil, fmt.Errorf("file info is missing")
+	identity, err := root.IdentityNoFollow(relativePath)
+	if err != nil {
+		return nil, fmt.Errorf("reading child root identity: %w", err)
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat == nil {
-		return nil, fmt.Errorf("file info has no stable device/inode identity")
-	}
-	identity := &config.RootIdentity{
-		Device: statDeviceID(stat),
-		Inode:  stat.Ino,
-	}
-	if identity.Device == 0 && identity.Inode == 0 {
-		return nil, fmt.Errorf("file info has zero device/inode identity")
-	}
-
-	return identity, nil
+	return &config.RootIdentity{Device: identity.Device, Inode: identity.Inode}, nil
 }
 
 func rootIdentityEqual(a *config.RootIdentity, b *config.RootIdentity) bool {
@@ -524,7 +508,7 @@ func standaloneParentMountsByID(mounts []*mountSpec) map[mountID]*mountSpec {
 func validateCompiledChildMountRoot(
 	parent *mountSpec,
 	child *mountSpec,
-) (config.MountState, string, error) {
+) (config.MountState, config.MountStateReason, error) {
 	relativeLocalPath, err := childMountRelativePath(parent, child)
 	if err != nil {
 		return config.MountStateUnavailable,
@@ -567,7 +551,7 @@ func childMountRelativePath(parent *mountSpec, child *mountSpec) (string, error)
 	return relativePath, nil
 }
 
-func childRootStateError(mountID mountID, state config.MountState, reason string) error {
+func childRootStateError(mountID mountID, state config.MountState, reason config.MountStateReason) error {
 	switch state {
 	case config.MountStateActive:
 		return nil
@@ -591,7 +575,7 @@ func childRootStateError(mountID mountID, state config.MountState, reason string
 func recordCompiledChildRootState(
 	childMountID mountID,
 	state config.MountState,
-	reason string,
+	reason config.MountStateReason,
 	logger *slog.Logger,
 ) {
 	if err := config.UpdateMountInventory(func(inventory *config.MountInventory) error {

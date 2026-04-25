@@ -1,6 +1,6 @@
 //go:build darwin
 
-package sync
+package synctree
 
 import "syscall"
 

@@ -32,21 +32,23 @@ const (
 	MountStateUnavailable    MountState = "unavailable"
 )
 
+type MountStateReason string
+
 const (
-	MountStateReasonDuplicateContentRoot          = "duplicate_content_root"
-	MountStateReasonExplicitStandaloneContentRoot = "explicit_standalone_content_root"
-	MountStateReasonShortcutRemoved               = "shortcut_removed"
-	MountStateReasonRemovedProjectionDirty        = "removed_projection_dirty"
-	MountStateReasonRemovedProjectionUnavailable  = "removed_projection_unavailable"
-	MountStateReasonShortcutBindingUnavailable    = "shortcut_binding_unavailable"
-	MountStateReasonLocalProjectionConflict       = "local_projection_conflict"
-	MountStateReasonLocalProjectionUnavailable    = "local_projection_unavailable"
-	MountStateReasonLocalAliasRenameConflict      = "local_alias_rename_conflict"
-	MountStateReasonLocalAliasRenameUnavailable   = "local_alias_rename_unavailable"
-	MountStateReasonLocalAliasDeleteUnavailable   = "local_alias_delete_unavailable"
-	MountStateReasonPathReservedByPendingRemoval  = "path_reserved_by_pending_removal"
-	MountStateReasonLocalRootCollision            = "local_root_collision"
-	MountStateReasonLocalRootUnavailable          = "local_root_unavailable"
+	MountStateReasonDuplicateContentRoot          MountStateReason = "duplicate_content_root"
+	MountStateReasonExplicitStandaloneContentRoot MountStateReason = "explicit_standalone_content_root"
+	MountStateReasonShortcutRemoved               MountStateReason = "shortcut_removed"
+	MountStateReasonRemovedProjectionDirty        MountStateReason = "removed_projection_dirty"
+	MountStateReasonRemovedProjectionUnavailable  MountStateReason = "removed_projection_unavailable"
+	MountStateReasonShortcutBindingUnavailable    MountStateReason = "shortcut_binding_unavailable"
+	MountStateReasonLocalProjectionConflict       MountStateReason = "local_projection_conflict"
+	MountStateReasonLocalProjectionUnavailable    MountStateReason = "local_projection_unavailable"
+	MountStateReasonLocalAliasRenameConflict      MountStateReason = "local_alias_rename_conflict"
+	MountStateReasonLocalAliasRenameUnavailable   MountStateReason = "local_alias_rename_unavailable"
+	MountStateReasonLocalAliasDeleteUnavailable   MountStateReason = "local_alias_delete_unavailable"
+	MountStateReasonPathReservedByPendingRemoval  MountStateReason = "path_reserved_by_pending_removal"
+	MountStateReasonLocalRootCollision            MountStateReason = "local_root_collision"
+	MountStateReasonLocalRootUnavailable          MountStateReason = "local_root_unavailable"
 )
 
 // MountInventory is the managed durable authority for local child-mount
@@ -62,19 +64,19 @@ type MountInventory struct {
 // sync root. The record is binding-owned: the local shortcut placeholder item
 // ID is the durable identity, while the remote content root may change.
 type MountRecord struct {
-	MountID               string        `json:"mount_id"`
-	NamespaceID           string        `json:"namespace_id"`
-	BindingItemID         string        `json:"binding_item_id"`
-	LocalAlias            string        `json:"local_alias,omitempty"`
-	RelativeLocalPath     string        `json:"relative_local_path"`
-	ReservedLocalPaths    []string      `json:"reserved_local_paths,omitempty"`
-	LocalRootMaterialized bool          `json:"local_root_materialized,omitempty"`
-	LocalRootIdentity     *RootIdentity `json:"local_root_identity,omitempty"`
-	TokenOwnerCanonical   string        `json:"token_owner_canonical"`
-	RemoteDriveID         string        `json:"remote_drive_id"`
-	RemoteItemID          string        `json:"remote_item_id"`
-	State                 MountState    `json:"state,omitempty"`
-	StateReason           string        `json:"state_reason,omitempty"`
+	MountID               string           `json:"mount_id"`
+	NamespaceID           string           `json:"namespace_id"`
+	BindingItemID         string           `json:"binding_item_id"`
+	LocalAlias            string           `json:"local_alias,omitempty"`
+	RelativeLocalPath     string           `json:"relative_local_path"`
+	ReservedLocalPaths    []string         `json:"reserved_local_paths,omitempty"`
+	LocalRootMaterialized bool             `json:"local_root_materialized,omitempty"`
+	LocalRootIdentity     *RootIdentity    `json:"local_root_identity,omitempty"`
+	TokenOwnerCanonical   string           `json:"token_owner_canonical"`
+	RemoteDriveID         string           `json:"remote_drive_id"`
+	RemoteItemID          string           `json:"remote_item_id"`
+	State                 MountState       `json:"state,omitempty"`
+	StateReason           MountStateReason `json:"state_reason,omitempty"`
 }
 
 // RootIdentity stores the filesystem identity of a materialized managed root.
@@ -86,15 +88,15 @@ type RootIdentity struct {
 }
 
 type DeferredShortcutBinding struct {
-	NamespaceID         string     `json:"namespace_id"`
-	BindingItemID       string     `json:"binding_item_id"`
-	LocalAlias          string     `json:"local_alias,omitempty"`
-	RelativeLocalPath   string     `json:"relative_local_path"`
-	TokenOwnerCanonical string     `json:"token_owner_canonical"`
-	RemoteDriveID       string     `json:"remote_drive_id"`
-	RemoteItemID        string     `json:"remote_item_id"`
-	State               MountState `json:"state,omitempty"`
-	StateReason         string     `json:"state_reason,omitempty"`
+	NamespaceID         string           `json:"namespace_id"`
+	BindingItemID       string           `json:"binding_item_id"`
+	LocalAlias          string           `json:"local_alias,omitempty"`
+	RelativeLocalPath   string           `json:"relative_local_path"`
+	TokenOwnerCanonical string           `json:"token_owner_canonical"`
+	RemoteDriveID       string           `json:"remote_drive_id"`
+	RemoteItemID        string           `json:"remote_item_id"`
+	State               MountState       `json:"state,omitempty"`
+	StateReason         MountStateReason `json:"state_reason,omitempty"`
 }
 
 func DefaultMountInventory() *MountInventory {
@@ -357,60 +359,23 @@ func validateMountRecord(record *MountRecord, key string) error {
 	return nil
 }
 
-func validateMountStateReason(state MountState, reason string) error {
+func validateMountStateReason(state MountState, reason MountStateReason) error {
 	if reason == "" {
 		return nil
 	}
 
-	switch reason {
-	case MountStateReasonDuplicateContentRoot,
-		MountStateReasonExplicitStandaloneContentRoot,
-		MountStateReasonShortcutRemoved,
-		MountStateReasonRemovedProjectionDirty,
-		MountStateReasonRemovedProjectionUnavailable,
-		MountStateReasonShortcutBindingUnavailable,
-		MountStateReasonLocalProjectionConflict,
-		MountStateReasonLocalProjectionUnavailable,
-		MountStateReasonLocalAliasRenameConflict,
-		MountStateReasonLocalAliasRenameUnavailable,
-		MountStateReasonLocalAliasDeleteUnavailable,
-		MountStateReasonPathReservedByPendingRemoval,
-		MountStateReasonLocalRootCollision,
-		MountStateReasonLocalRootUnavailable:
-	default:
+	detail, ok := mountLifecycleDetailForReason(reason)
+	if !ok {
 		return fmt.Errorf("unsupported state_reason %q", reason)
 	}
-
-	switch reason {
-	case MountStateReasonDuplicateContentRoot,
-		MountStateReasonExplicitStandaloneContentRoot,
-		MountStateReasonLocalProjectionConflict,
-		MountStateReasonLocalAliasRenameConflict,
-		MountStateReasonPathReservedByPendingRemoval,
-		MountStateReasonLocalRootCollision:
-		if state != MountStateConflict {
-			return fmt.Errorf("state_reason %q requires state %q", reason, MountStateConflict)
-		}
-	case MountStateReasonShortcutRemoved,
-		MountStateReasonRemovedProjectionDirty,
-		MountStateReasonRemovedProjectionUnavailable:
-		if state != MountStatePendingRemoval {
-			return fmt.Errorf("state_reason %q requires state %q", reason, MountStatePendingRemoval)
-		}
-	case MountStateReasonShortcutBindingUnavailable,
-		MountStateReasonLocalProjectionUnavailable,
-		MountStateReasonLocalAliasRenameUnavailable,
-		MountStateReasonLocalAliasDeleteUnavailable,
-		MountStateReasonLocalRootUnavailable:
-		if state != MountStateUnavailable {
-			return fmt.Errorf("state_reason %q requires state %q", reason, MountStateUnavailable)
-		}
+	if state != detail.RequiredState {
+		return fmt.Errorf("state_reason %q requires state %q", reason, detail.RequiredState)
 	}
 
 	return nil
 }
 
-func requiresRemoteContentIdentity(state MountState, reason string) bool {
+func requiresRemoteContentIdentity(state MountState, reason MountStateReason) bool {
 	return state != MountStateUnavailable || reason != MountStateReasonShortcutBindingUnavailable
 }
 

@@ -77,6 +77,34 @@ func TestApplyShortcutTopologyBatch_CompleteEnumerationUpdatesAndRemovesBindings
 	assert.Equal(t, "remote-item-next", record.RemoteItemID)
 }
 
+// Validates: R-2.4.8, R-2.8.1, R-4.1.4
+func TestApplyShortcutTopologyBatch_EmptyCompleteEnumerationRemovesOldBindings(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	parent := testParentMountSpec()
+	existing := testChildRecord(parent.mountID, "binding-old", "Shortcut")
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[existing.MountID] = existing
+	require.NoError(t, config.SaveMountInventory(inventory))
+
+	changed, err := (&Orchestrator{}).applyShortcutTopologyBatch(
+		t.Context(),
+		parent,
+		syncengine.ShortcutTopologyBatch{
+			NamespaceID: parent.mountID.String(),
+			Kind:        syncengine.ShortcutTopologyObservationComplete,
+		},
+	)
+	require.NoError(t, err)
+	assert.True(t, changed)
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	record := loaded.Mounts[existing.MountID]
+	assert.Equal(t, config.MountStatePendingRemoval, record.State)
+	assert.Equal(t, config.MountStateReasonShortcutRemoved, record.StateReason)
+}
+
 // Validates: R-2.8.1, R-4.1.4
 func TestApplyShortcutTopologyBatch_RemoteDeleteMarksPendingRemoval(t *testing.T) {
 	t.Parallel()
@@ -307,4 +335,32 @@ func TestFinalizePendingMountRemovals_DirtyProjectionStaysReserved(t *testing.T)
 	refreshed := loaded.Mounts[record.MountID]
 	assert.Equal(t, config.MountStatePendingRemoval, refreshed.State)
 	assert.Equal(t, config.MountStateReasonRemovedProjectionDirty, refreshed.StateReason)
+}
+
+// Validates: R-2.4.8, R-4.1.4
+func TestFinalizePendingMountRemovals_ProjectionStatErrorStaysReserved(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	record := testMountRecordForParent(&parent)
+	record.State = config.MountStatePendingRemoval
+	record.StateReason = config.MountStateReasonShortcutRemoved
+	require.NoError(t, os.WriteFile(filepath.Join(parent.SyncRoot, "Shortcuts"), []byte("not a directory"), 0o600))
+
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[record.MountID] = record
+	require.NoError(t, config.SaveMountInventory(inventory))
+
+	compiled, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, inventory)
+	require.NoError(t, err)
+	finalized, err := finalizePendingMountRemovals([]string{record.MountID}, compiled.Mounts, nil)
+	require.NoError(t, err)
+	assert.False(t, finalized)
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	refreshed := loaded.Mounts[record.MountID]
+	assert.Equal(t, config.MountStatePendingRemoval, refreshed.State)
+	assert.Equal(t, config.MountStateReasonRemovedProjectionUnavailable, refreshed.StateReason)
+	assert.Contains(t, compiled.Mounts[0].localSkipDirs, "Shortcuts/Docs")
 }

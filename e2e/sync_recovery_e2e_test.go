@@ -284,8 +284,10 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 
 	// Sync download-only — should do full re-enumeration and re-download.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
-	assert.NotContains(t, stderr, "No changes detected",
-		"sync after purge should re-enumerate, not report no changes")
+	assert.Contains(t, stderr, "Plan:",
+		"sync after purge should report applied work for at least one mount")
+	assert.Contains(t, stderr, "Downloads:",
+		"sync after purge should re-enumerate and re-download the removed local files")
 
 	// Verify files re-downloaded locally.
 	dataA, err := os.ReadFile(filepath.Join(localDir, "purge-a.txt"))
