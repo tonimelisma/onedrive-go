@@ -460,6 +460,11 @@ func recordProjectionMoveSuccess(move *childProjectionMove) error {
 		}
 
 		record.ReservedLocalPaths = removeString(record.ReservedLocalPaths, move.fromRelativeLocalPath)
+		record.LocalRootMaterialized = true
+		parent := &mountSpec{syncRoot: move.parentSyncRoot}
+		if identity, identityErr := rootIdentityForRecordPath(parent, &record); identityErr == nil {
+			record.LocalRootIdentity = identity
+		}
 		if record.StateReason == config.MountStateReasonLocalProjectionUnavailable ||
 			record.StateReason == config.MountStateReasonLocalProjectionConflict {
 			record.State = config.MountStateActive

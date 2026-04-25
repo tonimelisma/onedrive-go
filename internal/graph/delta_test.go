@@ -16,7 +16,7 @@ import (
 func TestDelta_SendsPreferHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify the Prefer header is sent on delta requests.
-		assert.Equal(t, "deltashowremoteitemsaliasid", r.Header.Get("Prefer"))
+		assert.Equal(t, "deltashowremoteitemsaliasid, Include-Feature=AddToOneDrive", r.Header.Get("Prefer"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -365,7 +365,7 @@ func TestDeltaFolder_SinglePage(t *testing.T) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/drives/000000000000000d/items/folder-abc/delta", r.URL.Path)
 		// Folder-scoped delta should also send the Prefer header.
-		assert.Equal(t, "deltashowremoteitemsaliasid", r.Header.Get("Prefer"))
+		assert.Equal(t, "deltashowremoteitemsaliasid, Include-Feature=AddToOneDrive", r.Header.Get("Prefer"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

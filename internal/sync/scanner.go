@@ -459,6 +459,20 @@ func (o *LocalObserver) processObservedInfo(
 	skipped *[]SkippedItem,
 	scanStartNano int64,
 ) error {
+	if reservation, ok := managedRootIdentityReservation(dbRelPath, info, o.filterConfig.ManagedRoots); ok {
+		o.reportManagedRootEvent(ManagedRootEvent{
+			Type:         ManagedRootEventIdentityMatch,
+			Path:         dbRelPath,
+			ReservedPath: reservation.Path,
+			MountID:      reservation.MountID,
+			BindingID:    reservation.BindingID,
+		})
+		o.Logger.Debug("skipping managed root identity match",
+			slog.String("path", dbRelPath),
+			slog.String("reserved_path", reservation.Path))
+		return nil
+	}
+
 	// Stage 2 observation filter: file size check (requires stat, hence here).
 	// FullScan records SkippedItems for oversized files; watch handlers don't
 	// (the safety scan catches them).
@@ -1054,6 +1068,10 @@ func shouldSkipConfiguredPath(
 	}
 
 	if matchesConfiguredDirPath(normalizedPath, filter.SkipDirs) {
+		return true
+	}
+
+	if _, found := managedRootPathReservation(normalizedPath, filter.ManagedRoots); found {
 		return true
 	}
 

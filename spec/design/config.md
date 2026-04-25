@@ -25,10 +25,10 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Standalone shared-folder drives always preserve the canonical remote root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
 | Mount-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields` |
-| Managed child mount inventory persists shortcut lifecycle state, duplicate/content-root conflicts, explicit-standalone suppression, and local-root collision/unavailable reasons without creating synthetic configured drives. | `internal/config/mount_inventory_test.go`, `internal/multisync/shortcut_reconcile_test.go`, `internal/multisync/mount_root_lifecycle_test.go` |
+| Managed child mount inventory persists shortcut lifecycle state, duplicate/content-root conflicts, explicit-standalone suppression, local-root identity, and local alias lifecycle reasons without creating synthetic configured drives. | `internal/config/mount_inventory_test.go`, `internal/multisync/shortcut_reconcile_test.go`, `internal/multisync/mount_root_lifecycle_test.go`, `internal/multisync/shortcut_local_root_actions_test.go` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
-| Mount inventory schema v4 owns child lifecycle reasons, unavailable shortcut-binding records, and reserved projection paths. | `TestMountInventory_RoundTrip`, `TestMountInventory_UnavailableShortcutBindingMayOmitRemoteTarget`, `TestMountInventory_RemoteTargetRequiredForOtherLifecycleStates`, `TestMountInventory_ReservedLocalPathsNormalizeAndValidate` |
+| Mount inventory schema v6 owns child lifecycle reasons, unavailable shortcut-binding records, reserved projection paths, and same-parent local-root identity. | `TestMountInventory_RoundTrip`, `TestMountInventory_UnavailableShortcutBindingMayOmitRemoteTarget`, `TestMountInventory_RemoteTargetRequiredForOtherLifecycleStates`, `TestMountInventory_ReservedLocalPathsNormalizeAndValidate`, `TestMountInventory_LocalRootReasonsValidate` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
 
@@ -314,7 +314,7 @@ bindings, so it follows the same managed-file discipline:
 - unknown JSON fields are rejected
 - `schema_version` is required
 - only the exact supported version is accepted
-- current schema version is `4`
+- current schema version is `6`
 - automatic child-mount records are binding-owned and therefore require:
   - `MountID`
   - `NamespaceID`
@@ -323,6 +323,10 @@ bindings, so it follows the same managed-file discipline:
   - `RelativeLocalPath`
   - `ReservedLocalPaths` only while a shortcut rename/move still reserves an
     old local projection path
+  - `LocalRootMaterialized` once the control plane has created or observed a
+    valid child root at the current projection path
+  - `LocalRootIdentity` after materialization, used only to recognize
+    same-parent local alias renames of the projected root
   - `TokenOwnerCanonical`
   - `RemoteDriveID` and `RemoteItemID`, except for unavailable shortcut-binding
     records whose target could not be materialized yet
@@ -351,7 +355,10 @@ bindings that cannot be refreshed use `shortcut_binding_unavailable`; child
 projection move collisions use `local_projection_conflict`; projection move
 filesystem failures use `local_projection_unavailable`; child local-root
 file/symlink collisions use `local_root_collision`; and transient local-root
-stat/create failures use `local_root_unavailable`.
+stat/create failures use `local_root_unavailable`. Local alias rename
+ambiguity uses `local_alias_rename_conflict`; transient rename/delete Graph or
+filesystem failures use `local_alias_rename_unavailable` or
+`local_alias_delete_unavailable`.
 
 `MountStatePath(mountID)` gives each managed child mount a stable retained-state
 DB path independent of configured drive canonical IDs. Configured standalone
@@ -369,7 +376,7 @@ projection path or the content-root identity. A shortcut can therefore move to
 another folder inside the parent namespace without losing its retained child
 mount state DB.
 
-During a shortcut rename or move, schema v4 stores the new
+During a shortcut rename or move, schema v6 stores the new
 `RelativeLocalPath` plus any old `ReservedLocalPaths` that must remain excluded
 from the parent namespace until the local projection move is completed. Reserved
 paths are validated as safe relative paths and are not user controls. They are
@@ -381,6 +388,16 @@ a shortcut placeholder but does not return a usable target, config accepts an
 `state_reason: shortcut_binding_unavailable` and no remote target IDs. That
 state belongs to mount inventory; it is not a sync-store retry/block/observation
 condition.
+
+Local child-root alias rename/delete is represented in the same inventory
+rather than in engine state. When `LocalRootIdentity` proves that a previously
+materialized child root was renamed to a sibling path, multisync PATCHes the
+shortcut placeholder name by `BindingItemID`, updates `RelativeLocalPath`, and
+keeps the child `MountID` and state DB. When that identity has no sibling
+candidate, multisync DELETEs only the shortcut placeholder, marks the child
+`pending_removal: shortcut_removed`, and purges the child state through the
+normal pending-removal path. The target shared-folder content is never renamed
+or deleted by these local alias operations.
 
 When config encounters an older `mounts.json` schema version, it does not keep
 that format alive through compatibility shims. Older schemas fail with a clear

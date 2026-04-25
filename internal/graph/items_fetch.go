@@ -214,7 +214,7 @@ func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([
 	}
 
 	op := func() (childrenPage, error) {
-		resp, err := c.do(ctx, http.MethodGet, path, nil)
+		resp, err := c.doGetWithHeaders(ctx, path, c.childrenPreferHeader)
 		if err != nil {
 			return childrenPage{}, err
 		}

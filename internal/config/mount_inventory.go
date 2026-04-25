@@ -19,7 +19,7 @@ import (
 
 const (
 	mountsFileName   = "mounts.json"
-	mountsSchemaV4   = 4
+	mountsSchemaV6   = 6
 	stateMountPrefix = "state_mount_"
 )
 
@@ -48,6 +48,9 @@ const (
 	MountStateReasonLocalProjectionUnavailable    = "local_projection_unavailable"
 	MountStateReasonLocalRootCollision            = "local_root_collision"
 	MountStateReasonLocalRootUnavailable          = "local_root_unavailable"
+	MountStateReasonLocalAliasRenameConflict      = "local_alias_rename_conflict"
+	MountStateReasonLocalAliasRenameUnavailable   = "local_alias_rename_unavailable"
+	MountStateReasonLocalAliasDeleteUnavailable   = "local_alias_delete_unavailable"
 )
 
 // MountInventory is the managed durable authority for local child-mount
@@ -72,22 +75,32 @@ type NamespaceDiscoveryState struct {
 // sync root. The record is binding-owned: the local shortcut placeholder item
 // ID is the durable identity, while the remote content root may change.
 type MountRecord struct {
-	MountID             string     `json:"mount_id"`
-	NamespaceID         string     `json:"namespace_id"`
-	BindingItemID       string     `json:"binding_item_id"`
-	LocalAlias          string     `json:"local_alias,omitempty"`
-	RelativeLocalPath   string     `json:"relative_local_path"`
-	ReservedLocalPaths  []string   `json:"reserved_local_paths,omitempty"`
-	TokenOwnerCanonical string     `json:"token_owner_canonical"`
-	RemoteDriveID       string     `json:"remote_drive_id"`
-	RemoteItemID        string     `json:"remote_item_id"`
-	State               MountState `json:"state,omitempty"`
-	StateReason         string     `json:"state_reason,omitempty"`
+	MountID               string        `json:"mount_id"`
+	NamespaceID           string        `json:"namespace_id"`
+	BindingItemID         string        `json:"binding_item_id"`
+	LocalAlias            string        `json:"local_alias,omitempty"`
+	RelativeLocalPath     string        `json:"relative_local_path"`
+	ReservedLocalPaths    []string      `json:"reserved_local_paths,omitempty"`
+	LocalRootMaterialized bool          `json:"local_root_materialized,omitempty"`
+	LocalRootIdentity     *RootIdentity `json:"local_root_identity,omitempty"`
+	TokenOwnerCanonical   string        `json:"token_owner_canonical"`
+	RemoteDriveID         string        `json:"remote_drive_id"`
+	RemoteItemID          string        `json:"remote_item_id"`
+	State                 MountState    `json:"state,omitempty"`
+	StateReason           string        `json:"state_reason,omitempty"`
+}
+
+// RootIdentity stores the filesystem identity of a materialized managed root.
+// Multisync uses it only for same-parent shortcut alias rename detection; it is
+// not a durable content identity and must never authorize cross-directory moves.
+type RootIdentity struct {
+	Device uint64 `json:"device"`
+	Inode  uint64 `json:"inode"`
 }
 
 func DefaultMountInventory() *MountInventory {
 	return &MountInventory{
-		SchemaVersion: mountsSchemaV4,
+		SchemaVersion: mountsSchemaV6,
 		Namespaces:    make(map[string]NamespaceDiscoveryState),
 		Mounts:        make(map[string]MountRecord),
 	}
@@ -133,7 +146,7 @@ func loadMountInventoryFromPath(path string) (*MountInventory, error) {
 	if err := json.Unmarshal(data, &header); err != nil {
 		return nil, fmt.Errorf("decoding mount inventory: %w", err)
 	}
-	if header.SchemaVersion != mountsSchemaV4 {
+	if header.SchemaVersion != mountsSchemaV6 {
 		return nil, fmt.Errorf("decoding mount inventory: unsupported schema version %d", header.SchemaVersion)
 	}
 
@@ -211,9 +224,9 @@ func (i *MountInventory) normalizeAndValidate() error {
 		return nil
 	}
 	if i.SchemaVersion == 0 {
-		i.SchemaVersion = mountsSchemaV4
+		i.SchemaVersion = mountsSchemaV6
 	}
-	if i.SchemaVersion != mountsSchemaV4 {
+	if i.SchemaVersion != mountsSchemaV6 {
 		return fmt.Errorf("validating mount inventory: unsupported schema version %d", i.SchemaVersion)
 	}
 	if i.Namespaces == nil {
@@ -338,7 +351,10 @@ func validateMountStateReason(state MountState, reason string) error {
 		MountStateReasonLocalProjectionConflict,
 		MountStateReasonLocalProjectionUnavailable,
 		MountStateReasonLocalRootCollision,
-		MountStateReasonLocalRootUnavailable:
+		MountStateReasonLocalRootUnavailable,
+		MountStateReasonLocalAliasRenameConflict,
+		MountStateReasonLocalAliasRenameUnavailable,
+		MountStateReasonLocalAliasDeleteUnavailable:
 	default:
 		return fmt.Errorf("unsupported state_reason %q", reason)
 	}
@@ -347,7 +363,8 @@ func validateMountStateReason(state MountState, reason string) error {
 	case MountStateReasonDuplicateContentRoot,
 		MountStateReasonExplicitStandaloneContentRoot,
 		MountStateReasonLocalProjectionConflict,
-		MountStateReasonLocalRootCollision:
+		MountStateReasonLocalRootCollision,
+		MountStateReasonLocalAliasRenameConflict:
 		if state != MountStateConflict {
 			return fmt.Errorf("state_reason %q requires state %q", reason, MountStateConflict)
 		}
@@ -357,7 +374,9 @@ func validateMountStateReason(state MountState, reason string) error {
 		}
 	case MountStateReasonShortcutBindingUnavailable,
 		MountStateReasonLocalProjectionUnavailable,
-		MountStateReasonLocalRootUnavailable:
+		MountStateReasonLocalRootUnavailable,
+		MountStateReasonLocalAliasRenameUnavailable,
+		MountStateReasonLocalAliasDeleteUnavailable:
 		if state != MountStateUnavailable {
 			return fmt.Errorf("state_reason %q requires state %q", reason, MountStateUnavailable)
 		}
@@ -413,7 +432,7 @@ func validateSiblingMountPaths(mounts map[string]MountRecord) error {
 				if siblings[i].mountID == siblings[j].mountID {
 					continue
 				}
-				if siblings[i].path == siblings[j].path {
+				if strings.EqualFold(siblings[i].path, siblings[j].path) {
 					return fmt.Errorf(
 						"validating mount inventory: parent %q has duplicate child path %q (%s, %s)",
 						parentID,
@@ -422,7 +441,7 @@ func validateSiblingMountPaths(mounts map[string]MountRecord) error {
 						siblings[j].mountID,
 					)
 				}
-				if slashAncestorOrDescendant(siblings[i].path, siblings[j].path) {
+				if slashAncestorOrDescendant(strings.ToLower(siblings[i].path), strings.ToLower(siblings[j].path)) {
 					return fmt.Errorf(
 						"validating mount inventory: parent %q has nested child paths %q and %q (%s, %s)",
 						parentID,

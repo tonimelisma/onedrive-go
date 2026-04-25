@@ -3,8 +3,10 @@ package multisync
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -14,6 +16,34 @@ import (
 )
 
 const childMountRootDirPerms os.FileMode = 0o700
+
+type childRootLifecycleActionKind string
+
+const (
+	childRootLifecycleActionRename childRootLifecycleActionKind = "rename"
+	childRootLifecycleActionDelete childRootLifecycleActionKind = "delete"
+)
+
+type childRootLifecycleAction struct {
+	kind                  childRootLifecycleActionKind
+	mountID               mountID
+	parent                *mountSpec
+	selectionIndex        int
+	identity              MountIdentity
+	displayName           string
+	bindingItemID         string
+	fromRelativeLocalPath string
+	toRelativeLocalPath   string
+}
+
+type childRootLifecycleDecision struct {
+	state                 config.MountState
+	reason                string
+	identity              *config.RootIdentity
+	localRootMaterialized bool
+	action                *childRootLifecycleAction
+	reservedLocalPaths    []string
+}
 
 func reconcileChildMountLocalRoots(
 	parents []*mountSpec,
@@ -44,9 +74,13 @@ func reconcileChildMountLocalRoots(
 			continue
 		}
 
-		if reconcileChildMountRootRecord(inventory, &record, parent, logger) {
+		changed, action := reconcileChildMountRootRecord(inventory, &record, parent, logger)
+		if changed {
 			result.changed = true
 			result.dirtyMountIDs = appendUniqueStrings(result.dirtyMountIDs, record.MountID)
+		}
+		if action != nil {
+			result.localRootActions = append(result.localRootActions, *action)
 		}
 	}
 
@@ -58,12 +92,29 @@ func reconcileChildMountRootRecord(
 	record *config.MountRecord,
 	parent *mountSpec,
 	logger *slog.Logger,
-) bool {
+) (bool, *childRootLifecycleAction) {
 	root := filepath.Join(parent.syncRoot, filepath.FromSlash(record.RelativeLocalPath))
-	state, reason := materializeChildMountRoot(parent.syncRoot, record.RelativeLocalPath)
-	logChildRootLifecycle(record, root, state, reason, logger)
+	decision := classifyChildMountRoot(parent, record)
+	logChildRootLifecycle(record, root, decision.state, decision.reason, logger)
 
-	return setMountLifecycleState(inventory, record, state, reason)
+	changed := setMountLifecycleState(inventory, record, decision.state, decision.reason)
+	if decision.localRootMaterialized != record.LocalRootMaterialized {
+		record.LocalRootMaterialized = decision.localRootMaterialized
+		changed = true
+	}
+	if !rootIdentityEqual(record.LocalRootIdentity, decision.identity) {
+		record.LocalRootIdentity = cloneRootIdentity(decision.identity)
+		changed = true
+	}
+	if !stringSlicesEqual(record.ReservedLocalPaths, decision.reservedLocalPaths) {
+		record.ReservedLocalPaths = append([]string(nil), decision.reservedLocalPaths...)
+		changed = true
+	}
+	if changed {
+		inventory.Mounts[record.MountID] = *record
+	}
+
+	return changed, decision.action
 }
 
 func logChildRootLifecycle(
@@ -95,7 +146,10 @@ func logChildRootLifecycle(
 }
 
 func childRootNeedsReconciliation(record *config.MountRecord) bool {
-	if record == nil || len(record.ReservedLocalPaths) > 0 {
+	if record == nil {
+		return false
+	}
+	if len(record.ReservedLocalPaths) > 0 && !childRootReservedPathsAllowRetry(record) {
 		return false
 	}
 
@@ -103,9 +157,12 @@ func childRootNeedsReconciliation(record *config.MountRecord) bool {
 	case "", config.MountStateActive:
 		return true
 	case config.MountStateConflict:
-		return record.StateReason == config.MountStateReasonLocalRootCollision
+		return record.StateReason == config.MountStateReasonLocalRootCollision ||
+			record.StateReason == config.MountStateReasonLocalAliasRenameConflict
 	case config.MountStateUnavailable:
-		return record.StateReason == config.MountStateReasonLocalRootUnavailable
+		return record.StateReason == config.MountStateReasonLocalRootUnavailable ||
+			record.StateReason == config.MountStateReasonLocalAliasRenameUnavailable ||
+			record.StateReason == config.MountStateReasonLocalAliasDeleteUnavailable
 	case config.MountStatePendingRemoval:
 		return false
 	default:
@@ -113,21 +170,138 @@ func childRootNeedsReconciliation(record *config.MountRecord) bool {
 	}
 }
 
-func materializeChildMountRoot(parentRoot, relativeLocalPath string) (config.MountState, string) {
-	relativePath, ok := cleanChildMountRootRelativePath(relativeLocalPath)
-	if !ok {
-		return config.MountStateConflict, config.MountStateReasonLocalRootCollision
+func childRootReservedPathsAllowRetry(record *config.MountRecord) bool {
+	switch record.State {
+	case config.MountStateConflict:
+		return record.StateReason == config.MountStateReasonLocalAliasRenameConflict
+	case config.MountStateUnavailable:
+		return record.StateReason == config.MountStateReasonLocalAliasRenameUnavailable ||
+			record.StateReason == config.MountStateReasonLocalAliasDeleteUnavailable
+	case "", config.MountStateActive, config.MountStatePendingRemoval:
+		return false
+	default:
+		return false
+	}
+}
+
+func classifyChildMountRoot(parent *mountSpec, record *config.MountRecord) childRootLifecycleDecision {
+	decision := childRootLifecycleDecision{
+		state:                 config.MountStateActive,
+		localRootMaterialized: record.LocalRootMaterialized,
+		reservedLocalPaths:    append([]string(nil), record.ReservedLocalPaths...),
+	}
+	state, reason, identity, exists := classifyMaterializedChildMountRoot(parent.syncRoot, record)
+	decision.state = state
+	decision.reason = reason
+	if state == config.MountStateActive {
+		decision.localRootMaterialized = true
+		decision.identity = identity
+		decision.reservedLocalPaths = nil
+		return decision
+	}
+	if !record.LocalRootMaterialized || exists || record.LocalRootIdentity == nil ||
+		state != config.MountStateUnavailable ||
+		reason != config.MountStateReasonLocalRootUnavailable {
+		return decision
 	}
 
-	root, err := synctree.Open(parentRoot)
+	candidates, scanErr := findSameParentChildRootRenameCandidates(parent.syncRoot, record)
+	if scanErr != nil {
+		decision.state = config.MountStateUnavailable
+		decision.reason = config.MountStateReasonLocalAliasRenameUnavailable
+		return decision
+	}
+	switch len(candidates) {
+	case 0:
+		decision.action = &childRootLifecycleAction{
+			kind:                  childRootLifecycleActionDelete,
+			mountID:               mountID(record.MountID),
+			parent:                parent,
+			selectionIndex:        0,
+			identity:              MountIdentity{MountID: record.MountID, ParentMountID: record.NamespaceID, ProjectionKind: MountProjectionChild},
+			displayName:           record.LocalAlias,
+			bindingItemID:         record.BindingItemID,
+			fromRelativeLocalPath: record.RelativeLocalPath,
+		}
+		decision.state = config.MountStateActive
+		decision.reason = ""
+	case 1:
+		decision.action = &childRootLifecycleAction{
+			kind:                  childRootLifecycleActionRename,
+			mountID:               mountID(record.MountID),
+			parent:                parent,
+			identity:              MountIdentity{MountID: record.MountID, ParentMountID: record.NamespaceID, ProjectionKind: MountProjectionChild},
+			displayName:           record.LocalAlias,
+			bindingItemID:         record.BindingItemID,
+			fromRelativeLocalPath: record.RelativeLocalPath,
+			toRelativeLocalPath:   candidates[0],
+		}
+		decision.state = config.MountStateActive
+		decision.reason = ""
+	default:
+		decision.state = config.MountStateConflict
+		decision.reason = config.MountStateReasonLocalAliasRenameConflict
+		decision.reservedLocalPaths = appendUniqueStrings(decision.reservedLocalPaths, candidates...)
+	}
+
+	return decision
+}
+
+func materializeChildMountRoot(parentRoot string, record *config.MountRecord) (config.MountState, string) {
+	state, reason, _, _ := classifyMaterializedChildMountRoot(parentRoot, record)
+	return state, reason
+}
+
+func classifyMaterializedChildMountRoot(
+	parentRoot string,
+	record *config.MountRecord,
+) (config.MountState, string, *config.RootIdentity, bool) {
+	if record == nil {
+		return config.MountStateConflict, config.MountStateReasonLocalRootCollision, nil, false
+	}
+
+	relativePath, ok := cleanChildMountRootRelativePath(record.RelativeLocalPath)
+	if !ok {
+		return config.MountStateConflict, config.MountStateReasonLocalRootCollision, nil, false
+	}
+
+	root, openErr := synctree.Open(parentRoot)
+	if openErr != nil {
+		return config.MountStateUnavailable, config.MountStateReasonLocalRootUnavailable, nil, false
+	}
+	if err := root.ValidateNoSymlinkAncestors(relativePath); err != nil {
+		state, reason := childMountRootErrorState(err)
+		return state, reason, nil, false
+	}
+	pathState, err := root.PathStateNoFollow(relativePath)
 	if err != nil {
-		return config.MountStateUnavailable, config.MountStateReasonLocalRootUnavailable
+		state, reason := childMountRootErrorState(err)
+		return state, reason, nil, false
+	}
+	if pathState.Exists {
+		if !pathState.IsDir {
+			return config.MountStateConflict, config.MountStateReasonLocalRootCollision, nil, true
+		}
+
+		identity, identityErr := childRootIdentity(root, relativePath)
+		if identityErr != nil {
+			return config.MountStateUnavailable, config.MountStateReasonLocalRootUnavailable, nil, true
+		}
+		return config.MountStateActive, "", identity, true
+	}
+	if record.LocalRootMaterialized {
+		return config.MountStateUnavailable, config.MountStateReasonLocalRootUnavailable, nil, false
 	}
 	if err := root.MkdirAllNoFollow(relativePath, childMountRootDirPerms); err != nil {
-		return childMountRootErrorState(err)
+		state, reason := childMountRootErrorState(err)
+		return state, reason, nil, false
 	}
 
-	return config.MountStateActive, ""
+	identity, identityErr := childRootIdentity(root, relativePath)
+	if identityErr != nil {
+		return config.MountStateUnavailable, config.MountStateReasonLocalRootUnavailable, nil, true
+	}
+	return config.MountStateActive, "", identity, true
 }
 
 func cleanChildMountRootRelativePath(relativeLocalPath string) (string, bool) {
@@ -150,11 +324,158 @@ func childMountRootErrorState(err error) (config.MountState, string) {
 	if errors.Is(err, synctree.ErrUnsafePath) {
 		return config.MountStateConflict, config.MountStateReasonLocalRootCollision
 	}
+	if errors.Is(err, os.ErrNotExist) {
+		return config.MountStateUnavailable, config.MountStateReasonLocalRootUnavailable
+	}
 	if errors.Is(err, syscall.ENOTDIR) {
 		return config.MountStateConflict, config.MountStateReasonLocalRootCollision
 	}
 
 	return config.MountStateUnavailable, config.MountStateReasonLocalRootUnavailable
+}
+
+func findSameParentChildRootRenameCandidates(
+	parentRoot string,
+	record *config.MountRecord,
+) ([]string, error) {
+	if record == nil || record.LocalRootIdentity == nil {
+		return nil, nil
+	}
+	relativePath, ok := cleanChildMountRootRelativePath(record.RelativeLocalPath)
+	if !ok {
+		return nil, fmt.Errorf("resolving child mount root %q", record.RelativeLocalPath)
+	}
+	root, openErr := synctree.Open(parentRoot)
+	if openErr != nil {
+		return nil, fmt.Errorf("opening parent sync root: %w", openErr)
+	}
+
+	parentRel := filepath.Dir(relativePath)
+	if parentRel == "." {
+		parentRel = ""
+	}
+	if err := validateCandidateParent(root, parentRel); err != nil {
+		return nil, err
+	}
+	entries, err := root.ReadDir(parentRel)
+	if err != nil {
+		return nil, fmt.Errorf("reading child root parent: %w", err)
+	}
+
+	candidates := make([]string, 0, 1)
+	for _, entry := range entries {
+		candidate, ok := sameParentChildRootRenameCandidate(root, parentRel, relativePath, entry, record.LocalRootIdentity)
+		if ok {
+			candidates = append(candidates, candidate)
+		}
+	}
+
+	return candidates, nil
+}
+
+func validateCandidateParent(root *synctree.Root, parentRel string) error {
+	if parentRel == "" {
+		return nil
+	}
+	if err := root.ValidateNoSymlinkAncestors(parentRel); err != nil {
+		return fmt.Errorf("validating child root parent: %w", err)
+	}
+
+	return nil
+}
+
+func sameParentChildRootRenameCandidate(
+	root *synctree.Root,
+	parentRel string,
+	originalRel string,
+	entry os.DirEntry,
+	expected *config.RootIdentity,
+) (string, bool) {
+	name := entry.Name()
+	candidateRel := name
+	if parentRel != "" {
+		candidateRel = filepath.Join(parentRel, name)
+	}
+	if candidateRel == originalRel {
+		return "", false
+	}
+	info, infoErr := root.Lstat(candidateRel)
+	if infoErr != nil || !info.IsDir() {
+		return "", false
+	}
+	identity, identityErr := rootIdentityFromFileInfo(info)
+	if identityErr != nil || !rootIdentityEqual(identity, expected) {
+		return "", false
+	}
+
+	return filepath.ToSlash(candidateRel), true
+}
+
+func childRootIdentity(root *synctree.Root, relativePath string) (*config.RootIdentity, error) {
+	info, err := root.Lstat(relativePath)
+	if err != nil {
+		return nil, fmt.Errorf("stating child root: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("local root %s is not a directory", relativePath)
+	}
+
+	return rootIdentityFromFileInfo(info)
+}
+
+func rootIdentityFromFileInfo(info fs.FileInfo) (*config.RootIdentity, error) {
+	if info == nil {
+		return nil, fmt.Errorf("file info is missing")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat == nil {
+		return nil, fmt.Errorf("file info has no stable device/inode identity")
+	}
+	identity := &config.RootIdentity{
+		Device: statDeviceID(stat),
+		Inode:  stat.Ino,
+	}
+	if identity.Device == 0 && identity.Inode == 0 {
+		return nil, fmt.Errorf("file info has zero device/inode identity")
+	}
+
+	return identity, nil
+}
+
+func rootIdentityEqual(a *config.RootIdentity, b *config.RootIdentity) bool {
+	switch {
+	case a == nil || b == nil:
+		return a == b
+	default:
+		return a.Device == b.Device && a.Inode == b.Inode
+	}
+}
+
+func cloneRootIdentity(identity *config.RootIdentity) *config.RootIdentity {
+	if identity == nil {
+		return nil
+	}
+	return &config.RootIdentity{Device: identity.Device, Inode: identity.Inode}
+}
+
+func stringSlicesEqual(a []string, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func childRootActionAlias(action *childRootLifecycleAction) string {
+	if action == nil || action.toRelativeLocalPath == "" {
+		return ""
+	}
+
+	return path.Base(action.toRelativeLocalPath)
 }
 
 func validateCompiledChildMountRoots(compiled *compiledMountSet, logger *slog.Logger) {
@@ -211,7 +532,12 @@ func validateCompiledChildMountRoot(
 			fmt.Errorf("child mount %s local root: %w", child.mountID, err)
 	}
 
-	state, reason := materializeChildMountRoot(parent.syncRoot, relativeLocalPath)
+	record := &config.MountRecord{
+		MountID:               child.mountID.String(),
+		RelativeLocalPath:     relativeLocalPath,
+		LocalRootMaterialized: true,
+	}
+	state, reason := materializeChildMountRoot(parent.syncRoot, record)
 	if state == config.MountStateActive {
 		return state, reason, nil
 	}
