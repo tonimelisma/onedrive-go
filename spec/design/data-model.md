@@ -31,7 +31,7 @@ It does not store a durable executable plan or a mixed failure ledger.
 ## Intentional Omissions
 
 The sync store intentionally does not persist several tempting history or
-runtime-only facts:
+rebuildable runtime facts:
 
 - `sync_status`-style last-sync history. Status and watch summaries read
   current durable authorities directly instead of treating old success/error

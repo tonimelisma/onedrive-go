@@ -5,11 +5,14 @@
 package synctree
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -102,10 +105,25 @@ type Root struct {
 
 var ErrUnsafePath = errors.New("sync tree path is unsafe")
 
+var ErrUnsupportedTreeEntry = errors.New("sync tree entry is unsupported")
+
 type PathState struct {
 	Exists    bool
 	IsDir     bool
 	IsSymlink bool
+}
+
+type rootedTreeEntryKind string
+
+const (
+	rootedTreeEntryDir  rootedTreeEntryKind = "dir"
+	rootedTreeEntryFile rootedTreeEntryKind = "file"
+)
+
+type rootedTreeEntry struct {
+	kind rootedTreeEntryKind
+	size int64
+	hash [sha256.Size]byte
 }
 
 // Open establishes a rooted sync-tree capability for dir.
@@ -401,6 +419,201 @@ func (r *Root) ReadDirAbs(abs string) ([]os.DirEntry, error) {
 	}
 
 	return r.ReadDir(rel)
+}
+
+// DirEmptyNoFollow reports whether rel is an empty directory. The final path
+// and every discovered child are inspected with Lstat so projection callers do
+// not follow symlinks while deciding whether a mount-root move is safe.
+func (r *Root) DirEmptyNoFollow(rel string) (bool, error) {
+	info, err := r.Lstat(rel)
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, fmt.Errorf("%w: %s is not a directory", ErrUnsafePath, rel)
+	}
+
+	entries, err := r.ReadDir(rel)
+	if err != nil {
+		return false, err
+	}
+	if len(entries) == 0 {
+		return true, nil
+	}
+
+	for _, entry := range entries {
+		child := filepath.Join(rel, entry.Name())
+		info, err := r.Lstat(child)
+		if err != nil {
+			return false, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return false, fmt.Errorf("%w: symlink %s", ErrUnsupportedTreeEntry, child)
+		}
+	}
+
+	return false, nil
+}
+
+// TreesEqualNoFollow compares two directory trees without following symlinks.
+// It intentionally compares only directory structure plus regular-file size and
+// SHA-256 content. Metadata such as mtime, mode, owner, and xattrs are outside
+// this safety check.
+func (r *Root) TreesEqualNoFollow(leftRel string, rightRel string) (bool, error) {
+	left, err := r.rootedTreeManifestNoFollow(leftRel)
+	if err != nil {
+		return false, fmt.Errorf("reading tree %s: %w", leftRel, err)
+	}
+	right, err := r.rootedTreeManifestNoFollow(rightRel)
+	if err != nil {
+		return false, fmt.Errorf("reading tree %s: %w", rightRel, err)
+	}
+	if len(left) != len(right) {
+		return false, nil
+	}
+
+	for rel, leftEntry := range left {
+		rightEntry, ok := right[rel]
+		if !ok || leftEntry != rightEntry {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+func (r *Root) rootedTreeManifestNoFollow(baseRel string) (map[string]rootedTreeEntry, error) {
+	base, err := cleanRelative(baseRel)
+	if err != nil {
+		return nil, err
+	}
+
+	rootInfo, err := r.Lstat(base)
+	if err != nil {
+		return nil, err
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return nil, fmt.Errorf("%w: tree root %s is not a directory", ErrUnsafePath, baseRel)
+	}
+
+	entries := make(map[string]rootedTreeEntry)
+	if err := r.appendRootedTreeManifest(base, ".", entries); err != nil {
+		return nil, err
+	}
+
+	return entries, nil
+}
+
+func (r *Root) appendRootedTreeManifest(baseRel string, rel string, entries map[string]rootedTreeEntry) error {
+	currentRel := baseRel
+	if rel != "." {
+		currentRel = filepath.Join(baseRel, rel)
+	}
+
+	children, err := r.ReadDir(currentRel)
+	if err != nil {
+		return err
+	}
+	sort.Slice(children, func(i, j int) bool {
+		return children[i].Name() < children[j].Name()
+	})
+
+	for _, child := range children {
+		childRel := filepath.Join(rel, child.Name())
+		rootedChildRel := filepath.Join(baseRel, childRel)
+		info, err := r.Lstat(rootedChildRel)
+		if err != nil {
+			return err
+		}
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf("%w: symlink %s", ErrUnsupportedTreeEntry, rootedChildRel)
+		case info.IsDir():
+			entries[childRel] = rootedTreeEntry{kind: rootedTreeEntryDir}
+			if err := r.appendRootedTreeManifest(baseRel, childRel, entries); err != nil {
+				return err
+			}
+		case info.Mode().IsRegular():
+			hash, err := r.hashRegularFile(rootedChildRel)
+			if err != nil {
+				return err
+			}
+			entries[childRel] = rootedTreeEntry{
+				kind: rootedTreeEntryFile,
+				size: info.Size(),
+				hash: hash,
+			}
+		default:
+			return fmt.Errorf("%w: %s has mode %s", ErrUnsupportedTreeEntry, rootedChildRel, info.Mode())
+		}
+	}
+
+	return nil
+}
+
+func (r *Root) hashRegularFile(rel string) ([sha256.Size]byte, error) {
+	file, err := r.Open(rel)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return [sha256.Size]byte{}, fmt.Errorf("hashing %s: %w", rel, err)
+	}
+
+	var sum [sha256.Size]byte
+	copy(sum[:], hash.Sum(nil))
+	return sum, nil
+}
+
+// RemoveTreeNoFollow removes rel and its descendants without following
+// symlinks. It rejects the root itself and any unsupported entry encountered
+// while walking the tree.
+func (r *Root) RemoveTreeNoFollow(rel string) error {
+	clean, err := cleanRelative(rel)
+	if err != nil {
+		return err
+	}
+	if clean == "." {
+		return fmt.Errorf("%w: refusing to remove sync root", ErrUnsafePath)
+	}
+
+	if err := r.removeTreeNoFollow(clean); err != nil {
+		return fmt.Errorf("removing rooted tree %s: %w", rel, err)
+	}
+
+	return nil
+}
+
+func (r *Root) removeTreeNoFollow(rel string) error {
+	info, err := r.Lstat(rel)
+	if err != nil {
+		return err
+	}
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("%w: symlink %s", ErrUnsupportedTreeEntry, rel)
+	case info.IsDir():
+		children, err := r.ReadDir(rel)
+		if err != nil {
+			return err
+		}
+		sort.Slice(children, func(i, j int) bool {
+			return children[i].Name() < children[j].Name()
+		})
+		for _, child := range children {
+			if err := r.removeTreeNoFollow(filepath.Join(rel, child.Name())); err != nil {
+				return err
+			}
+		}
+		return r.Remove(rel)
+	case info.Mode().IsRegular():
+		return r.Remove(rel)
+	default:
+		return fmt.Errorf("%w: %s has mode %s", ErrUnsupportedTreeEntry, rel, info.Mode())
+	}
 }
 
 func (r *Root) MkdirAll(rel string, perm os.FileMode) error {

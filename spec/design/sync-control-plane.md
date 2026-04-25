@@ -37,7 +37,7 @@ runtime package that implements it.
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry` |
-| Managed shortcut lifecycle stays control-plane owned: unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, local root collisions skip only affected child mounts, and shortcut projection moves reserve old paths until the local move completes. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestRetryUnavailableShortcutBindings_ReactivatesWithoutDeltaEvent`, `TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict`, `TestBuildRuntimeMountSet_LocalRootSaveFailureDoesNotBlockStandaloneMount`, `TestApplyInventoryPersistFailureSkipsOnlyDirtyChild`, `TestApplyChildProjectionMoves_SkipsDirtyChildDroppedAfterPersistFailure`, `TestApplyChildProjectionMoves_PersistFailureStillMovesCleanChild`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips`, `TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable`, `TestFinalizePendingMountRemovals_RecompileReleasesParentSkipDir` |
+| Managed shortcut lifecycle stays control-plane owned: unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, local root collisions skip only affected child mounts, and shortcut projection moves reserve old paths until the local move completes. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestRetryUnavailableShortcutBindings_ReactivatesWithoutDeltaEvent`, `TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict`, `TestBuildRuntimeMountSet_LocalRootSaveFailureDoesNotBlockStandaloneMount`, `TestApplyInventoryPersistFailureSkipsOnlyDirtyChild`, `TestApplyChildProjectionMoves_SkipsDirtyChildDroppedAfterPersistFailure`, `TestApplyChildProjectionMoves_PersistFailureStillMovesCleanChild`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestApplyChildProjectionMoves_TargetEmptyAutoResolves`, `TestApplyChildProjectionMoves_MatchingTreesAutoResolve`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips`, `TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable`, `TestFinalizePendingMountRemovals_RecompileReleasesParentSkipDir` |
 
 ## Runtime Mount Specs
 
@@ -119,15 +119,37 @@ plane reuses the same child state DB. While the filesystem move is pending,
 the parent mount excludes both. Records with reserved projection paths do not
 eagerly create the new child root; the orchestrator first applies the local
 projection move after stopping any old runner, then validates or creates the
-resulting child root before starting the new runner. If the move conflicts with
-existing local content, the child becomes `conflict` with
-`state_reason: local_projection_conflict`; if the move cannot be attempted due
-to local filesystem failure, it becomes `unavailable` with
+resulting child root before starting the new runner. If old and new local
+projection paths both exist, the control plane auto-resolves only the cases
+that are provably data-preserving: an empty target directory is removed and
+replaced by the old projection root, while two byte-identical directory trees
+are collapsed by keeping the new path and removing the old reserved path. Tree
+comparison is a mount-infrastructure safety check, not a metadata clone check:
+it compares relative directory/file structure plus regular-file size and
+SHA-256 content, and it refuses to auto-resolve symlinks or unsupported
+entries. Real content differences become `conflict` with
+`state_reason: local_projection_conflict`; filesystem inspection, hashing, or
+removal failures become `unavailable` with
 `state_reason: local_projection_unavailable`. If the source and target are both
 missing, the control plane keeps the child unavailable rather than creating an
 empty root that could be mistaken for a real remote delete. Case-only renames on
 case-insensitive filesystems use a temporary sibling rename, and symlinked
 projection ancestors are rejected before creating or moving child roots.
+
+Shortcut lifecycle states are intentionally small and producer-owned:
+
+| Situation | Durable state | Runner behavior | Parent exclusion |
+| --- | --- | --- | --- |
+| Shortcut binding is healthy | `active` | child runner may start unless parent is paused | current child path |
+| Parent drive is paused | `active` | child runner is paused with the parent | current child path |
+| Binding target cannot be refreshed | `unavailable: shortcut_binding_unavailable` | child runner skipped, retry on next reconciliation | current child path |
+| Shortcut was authoritatively removed | `pending_removal: shortcut_removed` until state purge/final delete | child runner stopped before purge | current and reserved paths until finalized |
+| Duplicate child content root | `conflict: duplicate_content_root` | duplicate child runners skipped | conflicting child paths |
+| Explicit standalone mount owns same content root | `conflict: explicit_standalone_content_root` | automatic child skipped | child path remains reserved |
+| Projection move source and target differ | `conflict: local_projection_conflict` | child skipped | current and reserved paths |
+| Projection move cannot inspect/hash/remove safely | `unavailable: local_projection_unavailable` | child skipped and retried | current and reserved paths |
+| Child local root is a file, final symlink, or unsafe collision | `conflict: local_root_collision` | child skipped | child path |
+| Child local root stat/create has a transient filesystem error | `unavailable: local_root_unavailable` | child skipped and retried | child path |
 
 After pending-removal finalization or a successful projection move, the
 orchestrator reloads `mounts.json` and recompiles runtime mounts in the same
@@ -135,10 +157,12 @@ cycle. Parent `localSkipDirs` therefore releases finalized or moved paths
 immediately. If saving lifecycle mutations to `mounts.json` fails, the
 orchestrator keeps standalone parents and already-durable children eligible,
 skips only dirty child records whose in-memory state could not be trusted, and
-keeps their parent skip dirs reserved for that run. The same admitted child
-mount set gates projection moves, skipped startup results, removed-mount
-finalization, and parent exclusions, so dirty child records dropped after a
-persist failure cannot still move local shortcut roots.
+keeps their parent skip dirs reserved for that run. Runtime mount-set
+construction uses one pipeline for reconciliation, child-root materialization,
+compilation, dirty-child filtering, removal finalization, projection moves,
+recompile, and final child-root validation. Projection moves, skipped startup
+results, removed-mount finalization, and parent exclusions therefore derive
+from the same current mount inventory view instead of from stale side lists.
 
 Automatic shortcut reconciliation is also control-plane owned. Before one-shot
 startup, before watch startup, on control-socket reload, and on the watch-mode

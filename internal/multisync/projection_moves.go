@@ -172,6 +172,13 @@ func applyProjectionPathDecision(
 		if same {
 			return renameCaseOnlyProjection(move, root, sourceRel, targetRel)
 		}
+		resolved, resolveErr := autoResolveExistingProjectionPaths(move, root, sourceRel, targetRel)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if resolved {
+			return nil
+		}
 		return projectionConflict(move, "previous and current local paths both exist")
 	case !sourceState.Exists && targetState.Exists:
 		return nil
@@ -180,6 +187,48 @@ func applyProjectionPathDecision(
 	default:
 		return renameProjectionSource(move, root, sourceRel, targetRel)
 	}
+}
+
+func autoResolveExistingProjectionPaths(
+	move *childProjectionMove,
+	root *synctree.Root,
+	sourceRel string,
+	targetRel string,
+) (bool, error) {
+	targetEmpty, emptyErr := root.DirEmptyNoFollow(targetRel)
+	if emptyErr != nil {
+		return false, projectionTreeInspectionError(move, "checking current local path", emptyErr)
+	}
+	if targetEmpty {
+		if err := root.RemoveTreeNoFollow(targetRel); err != nil {
+			return false, projectionTreeInspectionError(move, "removing empty current local path", err)
+		}
+		if err := renameProjectionSource(move, root, sourceRel, targetRel); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	matches, matchErr := root.TreesEqualNoFollow(sourceRel, targetRel)
+	if matchErr != nil {
+		return false, projectionTreeInspectionError(move, "comparing projection trees", matchErr)
+	}
+	if !matches {
+		return false, nil
+	}
+
+	if err := root.RemoveTreeNoFollow(sourceRel); err != nil {
+		return false, projectionTreeInspectionError(move, "removing previous matching local path", err)
+	}
+	return true, nil
+}
+
+func projectionTreeInspectionError(move *childProjectionMove, action string, err error) error {
+	if errors.Is(err, synctree.ErrUnsafePath) || errors.Is(err, synctree.ErrUnsupportedTreeEntry) {
+		return projectionConflict(move, "projection tree contains unsupported local content")
+	}
+
+	return projectionUnavailable(move, action, err)
 }
 
 func projectionConflict(move *childProjectionMove, message string) error {
