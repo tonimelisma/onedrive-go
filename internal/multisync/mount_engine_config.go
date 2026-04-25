@@ -27,7 +27,8 @@ func engineMountConfigForMount(mount *mountSpec) (*syncengine.EngineMountConfig,
 		RemoteRootDeltaCapable: mount.remoteRootDeltaCapable,
 		EnableWebsocket:        mount.enableWebsocket,
 		LocalFilter: syncengine.LocalFilterConfig{
-			SkipDirs: append([]string(nil), mount.localSkipDirs...),
+			SkipDirs:     append([]string(nil), mount.localSkipDirs...),
+			ManagedRoots: append([]syncengine.ManagedRootReservation(nil), mount.localReservations...),
 		},
 		LocalRules: syncengine.LocalObservationRules{
 			RejectSharePointRootForms: mount.rejectSharePointRootForms,

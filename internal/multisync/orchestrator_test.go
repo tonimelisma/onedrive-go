@@ -641,7 +641,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	mounts, err := buildStandaloneMountSpecs([]StandaloneMountConfig{rd})
 	require.NoError(t, err)
 
-	wr, err := orch.startWatchRunner(ctx, mounts[0], syncengine.SyncDownloadOnly, syncengine.WatchOptions{})
+	wr, err := orch.startWatchRunner(ctx, mounts[0], syncengine.SyncDownloadOnly, syncengine.WatchOptions{}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.True(t, captured.Mount.enableWebsocket)
@@ -891,6 +891,49 @@ func TestRunOnce_BindsControlSocketBeforeInventoryReconciliation(t *testing.T) {
 	var inUse *ControlSocketInUseError
 	require.ErrorAs(t, result.Startup.Results[0].Err, &inUse)
 	assert.Equal(t, MountStartupFatal, result.Startup.Results[0].Status)
+
+	require.NoError(t, listener.Close())
+	<-acceptDone
+}
+
+// Validates: R-2.9.1
+func TestRunWatch_BindsControlSocketBeforeInventoryReconciliation(t *testing.T) {
+	rd := testStandaloneMount(t, "personal:watch-owner-lock-first@example.com", "WatchOwnerLockFirst")
+	setupXDGIsolation(t, rd.CanonicalID)
+	require.NoError(t, os.WriteFile(config.MountsPath(), []byte(`{not-json`), 0o600))
+
+	socketPath := shortControlSocketPath(t)
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "unix", socketPath)
+	require.NoError(t, err)
+
+	acceptDone := make(chan struct{})
+	go func() {
+		defer close(acceptDone)
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			if closeErr := conn.Close(); closeErr != nil {
+				return
+			}
+		}
+	}()
+
+	cfg := testOrchestratorConfig(t, rd)
+	cfg.ControlSocketPath = socketPath
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
+		require.Fail(t, "engine factory should not run when control socket is already owned")
+		return nil, assert.AnError
+	}
+
+	err = orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+
+	var inUse *ControlSocketInUseError
+	require.ErrorAs(t, err, &inUse)
 
 	require.NoError(t, listener.Close())
 	<-acceptDone

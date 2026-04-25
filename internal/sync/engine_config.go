@@ -24,6 +24,7 @@ type EngineMountConfig struct {
 	EnableWebsocket        bool
 	LocalFilter            LocalFilterConfig
 	LocalRules             LocalObservationRules
+	ManagedRootEvents      ManagedRootEventSink
 	TransferWorkers        int
 	CheckWorkers           int
 	MinFreeSpace           int64
@@ -82,6 +83,7 @@ func NewMountEngine(
 		EnableWebsocket:        mountCfg.EnableWebsocket,
 		LocalFilter:            mountCfg.LocalFilter,
 		LocalRules:             mountCfg.LocalRules,
+		ManagedRootEvents:      mountCfg.ManagedRootEvents,
 		TransferWorkers:        mountCfg.TransferWorkers,
 		CheckWorkers:           mountCfg.CheckWorkers,
 		MinFreeSpace:           mountCfg.MinFreeSpace,

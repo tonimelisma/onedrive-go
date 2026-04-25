@@ -22,11 +22,12 @@ type engineRunner interface {
 }
 
 type engineFactoryRequest struct {
-	Session       *driveops.Session
-	Mount         *mountSpec
-	Logger        *slog.Logger
-	VerifyDrive   bool
-	PerfCollector *perf.Collector
+	Session           *driveops.Session
+	Mount             *mountSpec
+	Logger            *slog.Logger
+	VerifyDrive       bool
+	PerfCollector     *perf.Collector
+	ManagedRootEvents syncengine.ManagedRootEventSink
 }
 
 // engineFactoryFunc creates an engineRunner from the runtime mount/session pair
@@ -73,6 +74,7 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			if err != nil {
 				return nil, fmt.Errorf("engine mount config: %w", err)
 			}
+			mountCfg.ManagedRootEvents = req.ManagedRootEvents
 			engine, err := syncengine.NewMountEngine(
 				ctx,
 				req.Session,

@@ -229,6 +229,10 @@ func TestApplyInventoryPersistFailureSkipsOnlyDirtyChild(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 3)
+	compiled.LocalRootActions = []childRootLifecycleAction{
+		{mountID: mountID(dirtyRecord.MountID)},
+		{mountID: mountID(cleanRecord.MountID)},
+	}
 
 	applyInventoryPersistFailure(compiled, []string{dirtyRecord.MountID}, assert.AnError)
 
@@ -239,6 +243,8 @@ func TestApplyInventoryPersistFailureSkipsOnlyDirtyChild(t *testing.T) {
 	assert.Equal(t, dirtyRecord.MountID, compiled.Skipped[0].Identity.MountID)
 	assert.Contains(t, compiled.Skipped[0].Err.Error(), "unpersisted lifecycle state")
 	assert.Equal(t, []string{"Shortcuts/Dirty", "Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
+	require.Len(t, compiled.LocalRootActions, 1)
+	assert.Equal(t, mountID(cleanRecord.MountID), compiled.LocalRootActions[0].mountID)
 }
 
 // Validates: R-2.8.1

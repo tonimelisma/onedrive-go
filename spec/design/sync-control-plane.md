@@ -37,7 +37,7 @@ runtime package that implements it.
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry` |
-| Managed shortcut lifecycle stays control-plane owned: unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, local root collisions skip only affected child mounts, and shortcut projection moves reserve old paths until the local move completes. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestRetryUnavailableShortcutBindings_ReactivatesWithoutDeltaEvent`, `TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict`, `TestBuildRuntimeMountSet_LocalRootSaveFailureDoesNotBlockStandaloneMount`, `TestApplyInventoryPersistFailureSkipsOnlyDirtyChild`, `TestApplyChildProjectionMoves_SkipsDirtyChildDroppedAfterPersistFailure`, `TestApplyChildProjectionMoves_PersistFailureStillMovesCleanChild`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestApplyChildProjectionMoves_TargetEmptyAutoResolves`, `TestApplyChildProjectionMoves_MatchingTreesAutoResolve`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips`, `TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable`, `TestFinalizePendingMountRemovals_RecompileReleasesParentSkipDir` |
+| Managed shortcut lifecycle stays control-plane owned: unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, local root collisions skip only affected child mounts, shortcut projection moves reserve old paths until the local move completes, and local alias rename/delete mutate only the shortcut placeholder. | `TestReconcileParentMountDelta_KnownShortcutRefreshFailureMarksUnavailable`, `TestRetryUnavailableShortcutBindings_ReactivatesWithoutDeltaEvent`, `TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict`, `TestBuildRuntimeMountSet_LocalRootSaveFailureDoesNotBlockStandaloneMount`, `TestApplyInventoryPersistFailureSkipsOnlyDirtyChild`, `TestApplyChildProjectionMoves_SkipsDirtyChildDroppedAfterPersistFailure`, `TestApplyChildProjectionMoves_PersistFailureStillMovesCleanChild`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestApplyChildProjectionMoves_TargetEmptyAutoResolves`, `TestApplyChildProjectionMoves_MatchingTreesAutoResolve`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips`, `TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable`, `TestReconcileChildMountLocalRoots_RenamedMaterializedRootCreatesAliasRenameAction`, `TestApplyChildRootLifecycleActions_RenamePatchesPlaceholderAndPreservesMount`, `TestApplyChildRootLifecycleActions_DeleteDeletesPlaceholderAndQueuesStatePurge`, `TestFinalizePendingMountRemovals_RecompileReleasesParentSkipDir` |
 
 ## Runtime Mount Specs
 
@@ -149,6 +149,11 @@ Shortcut lifecycle states are intentionally small and producer-owned:
 | Projection move source and target differ | `conflict: local_projection_conflict` | child skipped | current and reserved paths |
 | Projection move cannot inspect/hash/remove safely | `unavailable: local_projection_unavailable` | child skipped and retried | current and reserved paths |
 | Child local root is a file, final symlink, or unsafe collision | `conflict: local_root_collision` | child skipped | child path |
+| Previously materialized child local root is renamed to one same-parent identity match | `active` until the alias PATCH is applied | child runner stopped, placeholder renamed, same child state DB restarts at new path | current path plus same-parent identity reservation |
+| Previously materialized child local root is missing with no same-parent identity match | `pending_removal: shortcut_removed` after placeholder DELETE succeeds | child runner stopped, child state purged | child path until finalized |
+| Previously materialized child local root has multiple same-parent identity matches | `conflict: local_alias_rename_conflict` | child skipped until user resolves ambiguity | current and candidate paths |
+| Local alias rename/delete cannot mutate the placeholder | `unavailable: local_alias_rename_unavailable` or `unavailable: local_alias_delete_unavailable` | child skipped and retried | current and candidate paths |
+| Previously materialized child local root is missing but identity is unavailable | `unavailable: local_root_unavailable` | child skipped and retried after the user restores the directory | child path |
 | Child local root stat/create has a transient filesystem error | `unavailable: local_root_unavailable` | child skipped and retried | child path |
 
 After pending-removal finalization or a successful projection move, the
@@ -208,6 +213,22 @@ can start. Parent engines must apply that reservation consistently to local
 scan/watch surfaces and post-sync transfer housekeeping, so parent cleanup
 never walks into a child mount's in-flight transfer artifacts.
 
+Local child-root deletion and local child-root rename are not target-content
+delete or target-content rename operations. `mounts.json` records whether a
+child root has ever been materialized and stores its filesystem identity. If
+the directory later appears at exactly one sibling path with the same identity,
+the orchestrator stops the child runner, PATCHes the shortcut placeholder name
+by `binding_item_id`, updates the record, and restarts the same child mount ID
+at the new path. If the directory disappears with no same-parent identity
+candidate, the orchestrator stops the child runner, DELETEs only the shortcut
+placeholder, marks the child pending removal, and purges only the child state
+DB. During the short pre-mutation window, parent observation suppresses the
+same-parent renamed directory by stored root identity instead of persisting a
+projection-move reservation that would be ambiguous after a crash. Ambiguous
+identity matches, cross-directory moves, symlink/collision
+states, and Graph mutation failures become durable conflict/unavailable states
+rather than target-content mutations.
+
 ## Boundary To The Engine
 
 The control plane does not observe, plan, execute, or persist sync state
@@ -222,6 +243,14 @@ itself. Those responsibilities remain in the single-mount engine.
 This split keeps the engine package focused on one mounted content root at a
 time while allowing the CLI to run any number of mounts through one consistent control
 surface.
+
+Parent engines receive a narrow managed-root reservation list derived from
+`mounts.json`: reserved relative paths, child mount IDs, binding item IDs, and
+optional filesystem identities. The engine uses those reservations only to
+suppress/report local facts at observation boundaries. It does not decide
+shortcut lifecycle or mutate Graph. Path-reserved events and same-parent
+identity matches are reported back to `Orchestrator`, which triggers shortcut
+reconciliation in the single control-plane owner.
 
 ## `Orchestrator`
 

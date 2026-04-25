@@ -95,6 +95,13 @@ mount-root path when their content root is below the backing drive root.
 Mount-root observation may use folder delta or recursive enumeration depending
 on drive type and Graph support.
 
+Parent local observation accepts managed-root reservations from multisync. A
+reserved path is suppressed from normal local create/move/delete planning, and
+a same-parent directory with a matching stored root identity is reported as a
+managed-root lifecycle fact instead of being uploaded as a new parent-owned
+folder. The observer does not mutate `mounts.json` or Graph; it only wakes the
+control-plane owner.
+
 Remote read-denied boundaries are observation-owned facts. When drive-root or
 mount-root observation proves that remote truth is unreadable, the engine
 persists one managed observation batch containing:

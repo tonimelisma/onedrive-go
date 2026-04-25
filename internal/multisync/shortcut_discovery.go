@@ -161,7 +161,7 @@ func requiresShortcutBindingRefresh(item *graph.Item) bool {
 }
 
 func hasShortcutBindingEvidence(item *graph.Item) bool {
-	return item != nil && item.IsFolder && (item.RemoteDriveID != "" || item.RemoteItemID != "")
+	return item != nil && (item.IsFolder || item.RemoteIsFolder) && (item.RemoteDriveID != "" || item.RemoteItemID != "")
 }
 
 func isShortcutPlaceholder(item *graph.Item) bool {

@@ -49,6 +49,7 @@ type Engine struct {
 	checkWorkers           int                    // goroutine limit for parallel file hashing
 	localFilter            LocalFilterConfig
 	localRules             LocalObservationRules
+	managedRootEvents      ManagedRootEventSink
 	enableWebsocket        bool
 	minFreeSpace           int64 // startup disk-scope revalidation threshold
 	diskAvailableFn        func(string) (uint64, error)
@@ -150,6 +151,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		checkWorkers:           cfg.CheckWorkers,
 		localFilter:            cfg.LocalFilter,
 		localRules:             cfg.LocalRules,
+		managedRootEvents:      cfg.ManagedRootEvents,
 		enableWebsocket:        cfg.EnableWebsocket,
 		minFreeSpace:           cfg.MinFreeSpace,
 		diskAvailableFn:        driveops.DiskAvailable,
