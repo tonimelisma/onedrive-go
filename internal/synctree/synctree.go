@@ -482,6 +482,51 @@ func (r *Root) TreesEqualNoFollow(leftRel string, rightRel string) (bool, error)
 	return true, nil
 }
 
+// ValidateTreeNoFollow verifies that rel is a directory tree made only of
+// directories and regular files. It walks with Lstat so projection callers can
+// reject symlinks and unsupported entries before moving mount infrastructure.
+func (r *Root) ValidateTreeNoFollow(rel string) error {
+	clean, err := cleanRelative(rel)
+	if err != nil {
+		return err
+	}
+
+	if err := r.validateTreeNoFollow(clean); err != nil {
+		return fmt.Errorf("validating tree %s: %w", rel, err)
+	}
+
+	return nil
+}
+
+func (r *Root) validateTreeNoFollow(rel string) error {
+	info, err := r.Lstat(rel)
+	if err != nil {
+		return err
+	}
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("%w: symlink %s", ErrUnsupportedTreeEntry, rel)
+	case info.IsDir():
+		children, err := r.ReadDir(rel)
+		if err != nil {
+			return err
+		}
+		sort.Slice(children, func(i, j int) bool {
+			return children[i].Name() < children[j].Name()
+		})
+		for _, child := range children {
+			if err := r.validateTreeNoFollow(filepath.Join(rel, child.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	case info.Mode().IsRegular():
+		return nil
+	default:
+		return fmt.Errorf("%w: %s has mode %s", ErrUnsupportedTreeEntry, rel, info.Mode())
+	}
+}
+
 func (r *Root) rootedTreeManifestNoFollow(baseRel string) (map[string]rootedTreeEntry, error) {
 	base, err := cleanRelative(baseRel)
 	if err != nil {

@@ -1,6 +1,7 @@
 package multisync
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,12 +10,147 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 const (
 	shortcutOldDocsPath = "Shortcuts/Old Docs"
 	shortcutNewDocsPath = "Shortcuts/New Docs"
 )
+
+// Validates: R-2.8.1, R-4.1.4
+func TestClassifyProjectionPathStates(t *testing.T) {
+	cases := []struct {
+		name          string
+		source        synctree.PathState
+		target        synctree.PathState
+		wantKind      projectionPathDecisionKind
+		wantConflict  string
+		wantAction    string
+		wantErrSubstr string
+	}{
+		{
+			name:         "source file conflicts",
+			source:       synctree.PathState{Exists: true},
+			wantKind:     projectionDecisionConflict,
+			wantConflict: "previous local path is not a directory",
+		},
+		{
+			name:         "target file conflicts",
+			source:       synctree.PathState{Exists: true, IsDir: true},
+			target:       synctree.PathState{Exists: true},
+			wantKind:     projectionDecisionConflict,
+			wantConflict: "current local path is not a directory",
+		},
+		{
+			name:     "both directories need inspection",
+			source:   synctree.PathState{Exists: true, IsDir: true},
+			target:   synctree.PathState{Exists: true, IsDir: true},
+			wantKind: projectionDecisionInspectExistingPaths,
+		},
+		{
+			name:     "target already in place",
+			target:   synctree.PathState{Exists: true, IsDir: true},
+			wantKind: projectionDecisionNoop,
+		},
+		{
+			name:          "both missing is unavailable",
+			wantKind:      projectionDecisionUnavailable,
+			wantAction:    "moving local projection",
+			wantErrSubstr: "previous and current local paths are both missing",
+		},
+		{
+			name:     "source only renames",
+			source:   synctree.PathState{Exists: true, IsDir: true},
+			wantKind: projectionDecisionRenameSource,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decision := classifyProjectionPathStates(tc.source, tc.target)
+
+			assert.Equal(t, tc.wantKind, decision.kind)
+			assert.Equal(t, tc.wantConflict, decision.conflictMessage)
+			assert.Equal(t, tc.wantAction, decision.unavailableAction)
+			if tc.wantErrSubstr == "" {
+				assert.NoError(t, decision.unavailableErr)
+			} else {
+				require.Error(t, decision.unavailableErr)
+				assert.Contains(t, decision.unavailableErr.Error(), tc.wantErrSubstr)
+			}
+		})
+	}
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestClassifyExistingProjectionPathDecision(t *testing.T) {
+	inspectErr := errors.New("stat exploded")
+	cases := []struct {
+		name         string
+		inspection   projectionExistingPathInspection
+		wantKind     projectionPathDecisionKind
+		wantConflict string
+		wantAction   string
+		wantErr      error
+	}{
+		{
+			name: "unsupported tree content conflicts",
+			inspection: projectionExistingPathInspection{
+				issue: projectionExistingPathIssueUnsupported,
+			},
+			wantKind:     projectionDecisionConflict,
+			wantConflict: "projection tree contains unsupported local content",
+		},
+		{
+			name: "inspection error is unavailable",
+			inspection: projectionExistingPathInspection{
+				issue:             projectionExistingPathIssueUnavailable,
+				unavailableAction: "checking current local path",
+				unavailableErr:    inspectErr,
+			},
+			wantKind:   projectionDecisionUnavailable,
+			wantAction: "checking current local path",
+			wantErr:    inspectErr,
+		},
+		{
+			name:       "same file is case-only rename",
+			inspection: projectionExistingPathInspection{sameFile: true},
+			wantKind:   projectionDecisionRenameCaseOnly,
+		},
+		{
+			name:       "empty target is replaced",
+			inspection: projectionExistingPathInspection{targetEmpty: true},
+			wantKind:   projectionDecisionReplaceEmptyTarget,
+		},
+		{
+			name:       "matching trees remove previous source",
+			inspection: projectionExistingPathInspection{treesEqual: true},
+			wantKind:   projectionDecisionRemoveMatchingSource,
+		},
+		{
+			name:         "different trees conflict",
+			inspection:   projectionExistingPathInspection{},
+			wantKind:     projectionDecisionConflict,
+			wantConflict: "previous and current local paths both exist",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decision := classifyExistingProjectionPathDecision(tc.inspection)
+
+			assert.Equal(t, tc.wantKind, decision.kind)
+			assert.Equal(t, tc.wantConflict, decision.conflictMessage)
+			assert.Equal(t, tc.wantAction, decision.unavailableAction)
+			if tc.wantErr == nil {
+				assert.NoError(t, decision.unavailableErr)
+			} else {
+				assert.ErrorIs(t, decision.unavailableErr, tc.wantErr)
+			}
+		})
+	}
+}
 
 func compiledChildProjectionMoveFixture(t *testing.T, oldPath, newPath string) (
 	*compiledMountSet,
@@ -240,6 +376,35 @@ func TestApplyChildProjectionMoves_TargetEmptyAutoResolves(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, refreshed.Mounts)
 	assert.Equal(t, []string{"Shortcuts/New Docs"}, refreshed.Mounts[0].localSkipDirs)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestApplyChildProjectionMoves_TargetEmptyRejectsSourceSymlink(t *testing.T) {
+	compiled, record, parentSyncRoot, _ := compiledChildProjectionMoveFixture(t, shortcutOldDocsPath, shortcutNewDocsPath)
+	oldRoot := filepath.Join(parentSyncRoot, "Shortcuts", "Old Docs")
+	newRoot := filepath.Join(parentSyncRoot, "Shortcuts", "New Docs")
+	require.NoError(t, os.MkdirAll(oldRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(parentSyncRoot, "Shortcuts", "target.txt"), []byte("target"), 0o600))
+	require.NoError(t, os.MkdirAll(newRoot, 0o700))
+	if symlinkErr := os.Symlink(filepath.Join(parentSyncRoot, "Shortcuts", "target.txt"), filepath.Join(oldRoot, "link")); symlinkErr != nil {
+		t.Skipf("symlink not available on this filesystem: %v", symlinkErr)
+	}
+
+	changed := applyChildProjectionMoves(compiled, nil)
+
+	assert.True(t, changed)
+	assert.DirExists(t, oldRoot)
+	assert.DirExists(t, newRoot)
+	require.Len(t, compiled.Mounts, 1)
+	require.Len(t, compiled.Skipped, 1)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), config.MountStateReasonLocalProjectionConflict)
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	updated := loaded.Mounts[record.MountID]
+	assert.Equal(t, config.MountStateConflict, updated.State)
+	assert.Equal(t, config.MountStateReasonLocalProjectionConflict, updated.StateReason)
+	assert.Equal(t, []string{"Shortcuts/Old Docs"}, updated.ReservedLocalPaths)
 }
 
 // Validates: R-2.8.1, R-4.1.4
