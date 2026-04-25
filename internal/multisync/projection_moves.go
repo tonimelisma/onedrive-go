@@ -20,7 +20,7 @@ const (
 
 type childProjectionMoveError struct {
 	state  config.MountState
-	reason string
+	reason config.MountStateReason
 	err    error
 }
 

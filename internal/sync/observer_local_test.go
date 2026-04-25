@@ -19,6 +19,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -1543,7 +1544,7 @@ func TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot(t *testing.T) {
 	require.NoError(t, os.MkdirAll(original, 0o700))
 	info, err := os.Lstat(original)
 	require.NoError(t, err)
-	device, inode, ok := fileInfoIdentity(info)
+	identity, ok := synctree.IdentityFromFileInfo(info)
 	require.True(t, ok)
 	require.NoError(t, os.Rename(original, renamed))
 
@@ -1559,8 +1560,8 @@ func TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot(t *testing.T) {
 			Path:        "Shared/Docs",
 			MountID:     "child",
 			BindingID:   "binding",
-			Device:      device,
-			Inode:       inode,
+			Device:      identity.Device,
+			Inode:       identity.Inode,
 			HasIdentity: true,
 		}},
 	})

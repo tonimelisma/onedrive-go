@@ -1,7 +1,9 @@
 package multisync
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -205,6 +207,53 @@ func TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation(t 
 	require.NoError(t, err)
 	require.NotEmpty(t, refreshed.Mounts)
 	assert.Equal(t, []string{"Shortcuts/New Docs"}, refreshed.Mounts[0].localSkipDirs)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestFinalizeRuntimeMountSetLifecycle_RecompilesAfterProjectionMove(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	record := testMountRecordForParent(&parent)
+	record.RelativeLocalPath = shortcutNewDocsPath
+	record.LocalAlias = filepath.Base(shortcutNewDocsPath)
+	record.ReservedLocalPaths = []string{shortcutOldDocsPath}
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[record.MountID] = record
+	require.NoError(t, config.SaveMountInventory(inventory))
+
+	oldRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Old Docs")
+	newRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "New Docs")
+	require.NoError(t, os.MkdirAll(oldRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(oldRoot, "kept.txt"), []byte("stateful"), 0o600))
+
+	orchestrator := &Orchestrator{logger: slog.Default()}
+	compiled, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, inventory)
+	require.NoError(t, err)
+	require.NotEmpty(t, compiled.Mounts)
+	assert.Equal(t, []string{shortcutNewDocsPath, shortcutOldDocsPath}, compiled.Mounts[0].localSkipDirs)
+
+	refreshed, err := orchestrator.finalizeRuntimeMountSetLifecycle(
+		context.Background(),
+		compiled,
+		[]StandaloneMountConfig{parent},
+		nil,
+		"test",
+		true,
+	)
+	require.NoError(t, err)
+
+	assert.NoDirExists(t, oldRoot)
+	assert.FileExists(t, filepath.Join(newRoot, "kept.txt"))
+	require.NotEmpty(t, refreshed.Mounts)
+	assert.Equal(t, []string{shortcutNewDocsPath}, refreshed.Mounts[0].localSkipDirs)
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	updated := loaded.Mounts[record.MountID]
+	assert.Empty(t, updated.ReservedLocalPaths)
+	assert.Equal(t, config.MountStateActive, updated.State)
+	assert.Empty(t, updated.StateReason)
 }
 
 // Validates: R-2.8.1, R-4.1.4
