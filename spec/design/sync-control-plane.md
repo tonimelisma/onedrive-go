@@ -163,6 +163,11 @@ compilation, dirty-child filtering, removal finalization, projection moves,
 recompile, and final child-root validation. Projection moves, skipped startup
 results, removed-mount finalization, and parent exclusions therefore derive
 from the same current mount inventory view instead of from stale side lists.
+Projection move handling keeps deterministic decision logic separate from
+filesystem mutation: unexported classifiers first decide whether the current
+path state means rename, already-moved success, case-only rename, safe
+auto-resolution, conflict, or unavailable, and only the executor performs the
+rooted filesystem effects for that decision.
 
 Automatic shortcut reconciliation is also control-plane owned. Before one-shot
 startup, before watch startup, on control-socket reload, and on the watch-mode
