@@ -86,7 +86,7 @@ func standaloneMountConfigFromResolvedDrive(
 		AccountEmail:           accountEmail,
 		Paused:                 rd.Paused,
 		EnableWebsocket:        rd.Websocket,
-		RemoteRootDeltaCapable: config.RemoteRootDeltaCapableForTokenOwner(tokenOwnerCanonical),
+		RemoteRootDeltaCapable: rd.RemoteRootDeltaCapable,
 		TransferWorkers:        rd.TransferWorkers,
 		CheckWorkers:           rd.CheckWorkers,
 		MinFreeSpaceBytes:      minFreeSpace,

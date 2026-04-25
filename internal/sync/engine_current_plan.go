@@ -207,6 +207,12 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 		observationBatch.markFullRemoteRefresh = false
 	}
 
+	if !dryRun {
+		if err := flow.applyShortcutTopologyBatch(ctx, &observationBatch); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	if !dryRun && len(observationBatch.observed) > 0 {
 		if err := flow.commitObservedItems(ctx, observationBatch.observed, ""); err != nil {
 			return nil, nil, err
@@ -224,6 +230,21 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	}
 
 	return observationBatch.emitted, observationBatch.deferredProgress(), nil
+}
+
+func (flow *engineFlow) applyShortcutTopologyBatch(ctx context.Context, batch *remoteObservationBatch) error {
+	if flow == nil || flow.engine == nil || flow.engine.shortcutTopologyHandler == nil || batch == nil {
+		return nil
+	}
+	if !batch.shortcutTopology.HasFacts() {
+		return nil
+	}
+
+	topology := batch.shortcutTopology
+	if topology.NamespaceID == "" {
+		topology.NamespaceID = flow.engine.shortcutTopologyNamespaceID
+	}
+	return flow.engine.shortcutTopologyHandler(ctx, topology)
 }
 
 func (flow *engineFlow) refreshLocalCurrentState(
@@ -258,34 +279,36 @@ func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 	return localResult, nil
 }
 
-// observeRemote fetches delta changes from the Graph API. Automatically
-// retries with an empty token if ErrDeltaExpired is returned (full resync).
-func (flow *engineFlow) observeRemote(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
+func (flow *engineFlow) observeRemoteWithShortcutTopology(
+	ctx context.Context,
+	bl *Baseline,
+) ([]ChangeEvent, string, ShortcutTopologyBatch, error) {
 	eng := flow.engine
 	state, err := eng.baseline.ReadObservationState(ctx)
 	if err != nil {
-		return nil, "", fmt.Errorf("sync: reading observation state: %w", err)
+		return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: reading observation state: %w", err)
 	}
 	savedToken := state.Cursor
 
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
+	obs.SetShortcutTopology(eng.shortcutTopologyNamespaceID, eng.localFilter.ManagedRoots)
 
-	events, token, err := obs.FullDelta(ctx, savedToken)
+	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, savedToken)
 	if err != nil {
 		if !errors.Is(err, ErrDeltaExpired) {
-			return nil, "", fmt.Errorf("sync: observing remote delta: %w", err)
+			return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: observing remote delta: %w", err)
 		}
 
 		eng.logger.Warn("delta token expired, performing full resync")
 
-		events, token, err = obs.FullDelta(ctx, "")
+		events, token, topology, err = obs.FullDeltaWithShortcutTopology(ctx, "")
 		if err != nil {
-			return nil, "", fmt.Errorf("sync: full resync after delta expiry: %w", err)
+			return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: full resync after delta expiry: %w", err)
 		}
 	}
 
-	return events, token, nil
+	return events, token, topology, nil
 }
 
 // observeLocal scans the local filesystem for changes and collects skipped

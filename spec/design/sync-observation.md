@@ -48,7 +48,7 @@ The observation stack has four main pieces:
 | Behavior | Evidence |
 | --- | --- |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestNosyncGuard_PreventsAllSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
-| Normal drive content observation ignores embedded shared-folder shortcut placeholders, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Automatic child mounts are discovered above the engine by the control plane. | `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
+| Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines emit those placeholders as shortcut topology facts for the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 
 ## Remote Observation
@@ -85,10 +85,12 @@ The engine now has two remote observation shapes:
 
 There is no nested shared-folder-following runtime inside the content engine. If
 a normal drive's delta stream contains an embedded shared-folder link or
-shortcut placeholder item, observation ignores that item. Selected namespace
-parents may still gain managed child mounts because `internal/multisync`
-discovers shortcut placeholders before engine startup and starts the child as a
-separate mount-root engine.
+shortcut placeholder item, observation suppresses that item from ordinary
+content events. The parent drive engine is still the only Graph observer for
+that drive, so it emits shortcut placeholders as `ShortcutTopologyBatch` facts
+before committing remote observation progress. `internal/multisync` consumes
+those facts, updates `mounts.json`, and starts or stops managed children as
+separate mount-root engines.
 
 Separately configured shared folders and managed shortcut child mounts use the
 mount-root path when their content root is below the backing drive root.

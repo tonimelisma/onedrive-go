@@ -37,6 +37,7 @@ type RemoteWatchBatchHandler func(
 	ctx context.Context,
 	events []ChangeEvent,
 	newToken string,
+	topology ShortcutTopologyBatch,
 ) (remoteObservationBatch, error)
 
 // RemoteObserver transforms Graph API delta responses into []ChangeEvent.
@@ -44,11 +45,13 @@ type RemoteWatchBatchHandler func(
 // normalization (NFC, driveID zero-padding). Delegates item conversion to
 // an embedded ItemConverter configured for primary drive observation.
 type RemoteObserver struct {
-	fetcher   DeltaFetcher
-	Converter *ItemConverter
-	logger    *slog.Logger
-	driveID   driveid.ID
-	SleepFunc func(ctx context.Context, d time.Duration) error
+	fetcher                     DeltaFetcher
+	Converter                   *ItemConverter
+	logger                      *slog.Logger
+	driveID                     driveid.ID
+	shortcutTopologyNamespaceID string
+	managedRootReservations     []ManagedRootReservation
+	SleepFunc                   func(ctx context.Context, d time.Duration) error
 
 	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
 	// The watch loop is the only writer; helper calls may read concurrently.
@@ -104,25 +107,62 @@ func (o *RemoteObserver) SetItemClient(items ItemClient) {
 	o.Converter.Items = items
 }
 
+func (o *RemoteObserver) SetShortcutTopology(
+	namespaceID string,
+	reservations []ManagedRootReservation,
+) {
+	if o == nil {
+		return
+	}
+
+	o.shortcutTopologyNamespaceID = namespaceID
+	o.managedRootReservations = append([]ManagedRootReservation(nil), reservations...)
+	if o.Converter != nil {
+		o.Converter.ManagedRootBindings = managedRootReservationByBinding(reservations)
+	}
+}
+
 // FullDelta fetches all delta pages and returns the accumulated change events
 // plus the new delta token (DeltaLink URL) for the next sync pass.
 func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]ChangeEvent, string, error) {
+	events, token, _, err := o.FullDeltaWithShortcutTopology(ctx, savedToken)
+	return events, token, err
+}
+
+func (o *RemoteObserver) FullDeltaWithShortcutTopology(
+	ctx context.Context,
+	savedToken string,
+) ([]ChangeEvent, string, ShortcutTopologyBatch, error) {
 	o.logger.Info("remote observer starting delta enumeration",
 		slog.String("drive_id", o.driveID.String()),
 		slog.Bool("has_token", savedToken != ""),
 	)
 
 	var events []ChangeEvent
+	topology := ShortcutTopologyBatch{
+		NamespaceID: o.shortcutTopologyNamespaceID,
+		Kind:        ShortcutTopologyObservationIncremental,
+	}
+	if savedToken == "" {
+		topology.Kind = ShortcutTopologyObservationComplete
+	}
 	inflight := make(map[string]InflightParent)
 	token := savedToken
 	lastProgressLog := time.Now()
+	if o.Converter != nil {
+		o.Converter.ShortcutTopology = &topology
+		o.Converter.ManagedRootBindings = managedRootReservationByBinding(o.managedRootReservations)
+		defer func() {
+			o.Converter.ShortcutTopology = nil
+		}()
+	}
 
 	for page := range maxDeltaPaginationGuard {
 		pageEvents, newToken, done, err := o.fetchPage(ctx, token, page, inflight)
 		if err != nil {
 			o.stats.errors.Add(1)
 
-			return nil, "", err
+			return nil, "", ShortcutTopologyBatch{}, err
 		}
 
 		events = append(events, pageEvents...)
@@ -149,13 +189,13 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 				slog.Int("events", len(events)),
 			)
 
-			return events, newToken, nil
+			return events, newToken, topology, nil
 		}
 
 		token = newToken
 	}
 
-	return nil, "", fmt.Errorf("sync: exceeded maximum page count (%d)", maxDeltaPaginationGuard)
+	return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: exceeded maximum page count (%d)", maxDeltaPaginationGuard)
 }
 
 // Watch continuously polls for remote delta changes and sends events to the
@@ -199,7 +239,7 @@ func (o *RemoteObserver) Watch(
 
 		token := o.CurrentDeltaToken()
 
-		polledEvents, newToken, err := o.FullDelta(ctx, token)
+		polledEvents, newToken, topology, err := o.FullDeltaWithShortcutTopology(ctx, token)
 		if err != nil {
 			result := o.handleWatchPollError(ctx, bo, err, wakeCh)
 			if result.err != nil {
@@ -212,7 +252,7 @@ func (o *RemoteObserver) Watch(
 			continue
 		}
 
-		result := o.handleWatchBatch(ctx, batches, polledEvents, newToken, interval, bo, wakeCh, handleBatch)
+		result := o.handleWatchBatch(ctx, batches, polledEvents, newToken, topology, interval, bo, wakeCh, handleBatch)
 		if result.err != nil {
 			return result.err
 		}
@@ -227,12 +267,13 @@ func (o *RemoteObserver) handleWatchBatch(
 	batches chan<- remoteObservationBatch,
 	polledEvents []ChangeEvent,
 	newToken string,
+	topology ShortcutTopologyBatch,
 	interval time.Duration,
 	bo *retry.Backoff,
 	wakeCh <-chan struct{},
 	handleBatch RemoteWatchBatchHandler,
 ) watchStepResult {
-	if len(polledEvents) == 0 {
+	if len(polledEvents) == 0 && !topology.HasFacts() {
 		return o.handleZeroEventPoll(ctx, interval, bo, wakeCh)
 	}
 
@@ -241,7 +282,7 @@ func (o *RemoteObserver) handleWatchBatch(
 	}
 	if handleBatch != nil {
 		var handleErr error
-		batch, handleErr = handleBatch(ctx, polledEvents, newToken)
+		batch, handleErr = handleBatch(ctx, polledEvents, newToken, topology)
 		if handleErr != nil {
 			if watchShouldStop(ctx, handleErr) {
 				return watchStepResult{stop: true}

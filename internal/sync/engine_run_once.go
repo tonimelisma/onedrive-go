@@ -268,14 +268,23 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 // delta. Returns all events (creates/modifies from the full enumeration +
 // synthesized deletes for orphans) and the new delta token.
 func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
+	events, token, _, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl)
+	return events, token, err
+}
+
+func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
+	ctx context.Context,
+	bl *Baseline,
+) ([]ChangeEvent, string, ShortcutTopologyBatch, error) {
 	eng := flow.engine
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
+	obs.SetShortcutTopology(eng.shortcutTopologyNamespaceID, eng.localFilter.ManagedRoots)
 
 	// Full enumeration: empty token returns ALL items as create/modify events.
-	events, token, err := obs.FullDelta(ctx, "")
+	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, "")
 	if err != nil {
-		return nil, "", fmt.Errorf("sync: full remote refresh delta: %w", err)
+		return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: full remote refresh delta: %w", err)
 	}
 
 	// Build seen set from all non-deleted events in the full enumeration.
@@ -304,5 +313,5 @@ func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]
 		slog.Int("orphans", len(orphans)),
 	)
 
-	return events, token, nil
+	return events, token, topology, nil
 }

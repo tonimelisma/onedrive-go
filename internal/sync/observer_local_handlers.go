@@ -18,6 +18,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -95,7 +96,7 @@ func (o *LocalObserver) watchLoop(
 				o.Logger.Error("sync root deleted, stopping watch",
 					slog.String("sync_root", syncRoot))
 
-				return ErrSyncRootDeleted
+				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, ErrSyncRootDeleted)
 			}
 
 		case <-tickCh:
@@ -104,7 +105,7 @@ func (o *LocalObserver) watchLoop(
 				o.Logger.Error("sync root deleted, stopping watch",
 					slog.String("sync_root", syncRoot))
 
-				return ErrSyncRootDeleted
+				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, ErrSyncRootDeleted)
 			}
 
 			o.runSafetyScan(ctx, tree, events)

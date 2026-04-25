@@ -996,6 +996,99 @@ func TestFullDelta_DeletedItem_WithoutRecoverablePathSkipped(t *testing.T) {
 	assert.Empty(t, events, "deletes without recoverable path data should be skipped")
 }
 
+// Validates: R-2.4.3, R-2.4.8
+func TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "shortcuts", Name: "Shortcuts", ParentID: "root", DriveID: driveID, IsFolder: true},
+					{
+						ID:             "binding-1",
+						Name:           "Docs",
+						ParentID:       "shortcuts",
+						DriveID:        driveID,
+						RemoteDriveID:  "remote-drive",
+						RemoteItemID:   "remote-root",
+						RemoteIsFolder: true,
+					},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs.SetShortcutTopology("personal:owner@example.com", nil)
+	events, token, topology, err := obs.FullDeltaWithShortcutTopology(t.Context(), "")
+	require.NoError(t, err)
+	assert.Equal(t, "delta-link", token)
+	require.Len(t, events, 1)
+	assert.Equal(t, "Shortcuts", events[0].Path)
+	assert.Equal(t, "personal:owner@example.com", topology.NamespaceID)
+	assert.Equal(t, ShortcutTopologyObservationComplete, topology.Kind)
+	require.Len(t, topology.Upserts, 1)
+	assert.Equal(t, ShortcutBindingUpsert{
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shortcuts/Docs",
+		LocalAlias:        "Docs",
+		RemoteDriveID:     "remote-drive",
+		RemoteItemID:      "remote-root",
+		RemoteIsFolder:    true,
+		Complete:          true,
+	}, topology.Upserts[0])
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestWatch_TopologyApplyFailureDoesNotAdvanceCursor(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "shortcuts", Name: "Shortcuts", ParentID: "root", DriveID: driveID, IsFolder: true},
+					{
+						ID:             "binding-1",
+						Name:           "Docs",
+						ParentID:       "shortcuts",
+						DriveID:        driveID,
+						RemoteDriveID:  "remote-drive",
+						RemoteItemID:   "remote-root",
+						RemoteIsFolder: true,
+					},
+				},
+				DeltaLink: "token-1",
+			},
+		}},
+	}
+
+	applyErr := errors.New("persist topology")
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs.SetShortcutTopology("personal:owner@example.com", nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	batches := make(chan remoteObservationBatch, 1)
+	go func() {
+		batch := <-batches
+		if !batch.shortcutTopology.HasFacts() {
+			t.Errorf("expected topology facts in watch batch")
+		}
+		batch.finishApplied(applyErr)
+	}()
+
+	err := obs.Watch(ctx, "", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	require.ErrorIs(t, err, applyErr)
+	assert.Empty(t, obs.CurrentDeltaToken())
+}
+
 // ---------------------------------------------------------------------------
 // Watch tests
 // ---------------------------------------------------------------------------
@@ -1045,15 +1138,21 @@ func startTestRemoteBatchDrain(
 }
 
 func testPrimaryWatchBatchHandler(driveID driveid.ID) RemoteWatchBatchHandler {
-	return func(_ context.Context, events []ChangeEvent, newToken string) (remoteObservationBatch, error) {
+	return func(
+		_ context.Context,
+		events []ChangeEvent,
+		newToken string,
+		topology ShortcutTopologyBatch,
+	) (remoteObservationBatch, error) {
 		projected := projectRemoteObservations(nil, events)
 		return remoteObservationBatch{
-			source:          remoteObservationBatchPrimaryWatch,
-			observationMode: remoteObservationModeDelta,
-			observed:        projected.observed,
-			emitted:         append([]ChangeEvent(nil), projected.emitted...),
-			cursorToken:     newToken,
-			applyAck:        make(chan error, 1),
+			source:           remoteObservationBatchPrimaryWatch,
+			observationMode:  remoteObservationModeDelta,
+			observed:         projected.observed,
+			emitted:          append([]ChangeEvent(nil), projected.emitted...),
+			cursorToken:      newToken,
+			shortcutTopology: topology,
+			applyAck:         make(chan error, 1),
 		}, nil
 	}
 }
@@ -2039,7 +2138,12 @@ func TestWatch_BatchHandlerError_ReturnsError(t *testing.T) {
 
 	batches := make(chan remoteObservationBatch, 10)
 	_ = startTestRemoteBatchDrain(ctx, batches, nil)
-	err := obs.Watch(ctx, "", batches, time.Millisecond, nil, func(context.Context, []ChangeEvent, string) (remoteObservationBatch, error) {
+	err := obs.Watch(ctx, "", batches, time.Millisecond, nil, func(
+		context.Context,
+		[]ChangeEvent,
+		string,
+		ShortcutTopologyBatch,
+	) (remoteObservationBatch, error) {
 		return remoteObservationBatch{}, filepath.ErrBadPattern
 	})
 	require.Error(t, err)

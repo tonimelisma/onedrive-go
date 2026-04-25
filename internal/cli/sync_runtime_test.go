@@ -140,11 +140,12 @@ func TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields
 	t.Parallel()
 
 	first := &config.ResolvedDrive{
-		CanonicalID:      driveid.MustCanonicalID("personal:first@example.com"),
-		DisplayName:      "First",
-		SyncDir:          filepath.Join(t.TempDir(), "first"),
-		DriveID:          driveid.New("first-drive"),
-		RemoteRootItemID: "first-root",
+		CanonicalID:            driveid.MustCanonicalID("personal:first@example.com"),
+		DisplayName:            "First",
+		SyncDir:                filepath.Join(t.TempDir(), "first"),
+		DriveID:                driveid.New("first-drive"),
+		RemoteRootItemID:       "first-root",
+		RemoteRootDeltaCapable: true,
 		TransfersConfig: config.TransfersConfig{
 			TransferWorkers: 7,
 			CheckWorkers:    8,

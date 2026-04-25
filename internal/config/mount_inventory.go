@@ -23,13 +23,6 @@ const (
 	stateMountPrefix = "state_mount_"
 )
 
-type DiscoveryMode string
-
-const (
-	DiscoveryModeDelta     DiscoveryMode = "delta"
-	DiscoveryModeEnumerate DiscoveryMode = "enumerate"
-)
-
 type MountState string
 
 const (
@@ -43,32 +36,26 @@ const (
 	MountStateReasonDuplicateContentRoot          = "duplicate_content_root"
 	MountStateReasonExplicitStandaloneContentRoot = "explicit_standalone_content_root"
 	MountStateReasonShortcutRemoved               = "shortcut_removed"
+	MountStateReasonRemovedProjectionDirty        = "removed_projection_dirty"
+	MountStateReasonRemovedProjectionUnavailable  = "removed_projection_unavailable"
 	MountStateReasonShortcutBindingUnavailable    = "shortcut_binding_unavailable"
 	MountStateReasonLocalProjectionConflict       = "local_projection_conflict"
 	MountStateReasonLocalProjectionUnavailable    = "local_projection_unavailable"
-	MountStateReasonLocalRootCollision            = "local_root_collision"
-	MountStateReasonLocalRootUnavailable          = "local_root_unavailable"
 	MountStateReasonLocalAliasRenameConflict      = "local_alias_rename_conflict"
 	MountStateReasonLocalAliasRenameUnavailable   = "local_alias_rename_unavailable"
 	MountStateReasonLocalAliasDeleteUnavailable   = "local_alias_delete_unavailable"
+	MountStateReasonPathReservedByPendingRemoval  = "path_reserved_by_pending_removal"
+	MountStateReasonLocalRootCollision            = "local_root_collision"
+	MountStateReasonLocalRootUnavailable          = "local_root_unavailable"
 )
 
 // MountInventory is the managed durable authority for local child-mount
 // bindings. Catalog keeps account/drive discovery state; mount inventory keeps
 // local projection ownership.
 type MountInventory struct {
-	SchemaVersion int                                `json:"schema_version"`
-	Namespaces    map[string]NamespaceDiscoveryState `json:"namespaces,omitempty"`
-	Mounts        map[string]MountRecord             `json:"mounts"`
-}
-
-// NamespaceDiscoveryState is the durable discovery cursor/state for one
-// selected standalone namespace mount that owns automatic child shortcut
-// reconciliation.
-type NamespaceDiscoveryState struct {
-	NamespaceID   string        `json:"namespace_id"`
-	DeltaLink     string        `json:"delta_link,omitempty"`
-	DiscoveryMode DiscoveryMode `json:"discovery_mode,omitempty"`
+	SchemaVersion            int                                `json:"schema_version"`
+	Mounts                   map[string]MountRecord             `json:"mounts"`
+	DeferredShortcutBindings map[string]DeferredShortcutBinding `json:"deferred_shortcut_bindings,omitempty"`
 }
 
 // MountRecord describes one child mount projected inside a selected parent
@@ -98,11 +85,23 @@ type RootIdentity struct {
 	Inode  uint64 `json:"inode"`
 }
 
+type DeferredShortcutBinding struct {
+	NamespaceID         string     `json:"namespace_id"`
+	BindingItemID       string     `json:"binding_item_id"`
+	LocalAlias          string     `json:"local_alias,omitempty"`
+	RelativeLocalPath   string     `json:"relative_local_path"`
+	TokenOwnerCanonical string     `json:"token_owner_canonical"`
+	RemoteDriveID       string     `json:"remote_drive_id"`
+	RemoteItemID        string     `json:"remote_item_id"`
+	State               MountState `json:"state,omitempty"`
+	StateReason         string     `json:"state_reason,omitempty"`
+}
+
 func DefaultMountInventory() *MountInventory {
 	return &MountInventory{
-		SchemaVersion: mountsSchemaV6,
-		Namespaces:    make(map[string]NamespaceDiscoveryState),
-		Mounts:        make(map[string]MountRecord),
+		SchemaVersion:            mountsSchemaV6,
+		Mounts:                   make(map[string]MountRecord),
+		DeferredShortcutBindings: make(map[string]DeferredShortcutBinding),
 	}
 }
 
@@ -229,38 +228,58 @@ func (i *MountInventory) normalizeAndValidate() error {
 	if i.SchemaVersion != mountsSchemaV6 {
 		return fmt.Errorf("validating mount inventory: unsupported schema version %d", i.SchemaVersion)
 	}
-	if i.Namespaces == nil {
-		i.Namespaces = make(map[string]NamespaceDiscoveryState)
-	}
 	if i.Mounts == nil {
 		i.Mounts = make(map[string]MountRecord)
 	}
-
-	if err := i.normalizeAndValidateNamespaces(); err != nil {
-		return err
+	if i.DeferredShortcutBindings == nil {
+		i.DeferredShortcutBindings = make(map[string]DeferredShortcutBinding)
 	}
+
 	if err := i.normalizeAndValidateMounts(); err != nil {
 		return err
 	}
 	if err := validateSiblingMountPaths(i.Mounts); err != nil {
 		return err
 	}
+	if err := i.normalizeAndValidateDeferredShortcutBindings(); err != nil {
+		return err
+	}
 
 	return nil
 }
 
-func (i *MountInventory) normalizeAndValidateNamespaces() error {
-	for key, namespace := range i.Namespaces {
-		if namespace.NamespaceID == "" {
-			namespace.NamespaceID = key
+func (i *MountInventory) normalizeAndValidateDeferredShortcutBindings() error {
+	for key := range i.DeferredShortcutBindings {
+		record := i.DeferredShortcutBindings[key]
+		if record.NamespaceID == "" {
+			return fmt.Errorf("validating deferred shortcut binding %q: namespace_id is required", key)
 		}
-		if err := validateNamespaceDiscoveryState(namespace, key); err != nil {
-			return err
+		if record.BindingItemID == "" {
+			return fmt.Errorf("validating deferred shortcut binding %q: binding_item_id is required", key)
 		}
-		i.Namespaces[namespace.NamespaceID] = namespace
-		if namespace.NamespaceID != key {
-			delete(i.Namespaces, key)
+		normalized, err := normalizeMountRelativePath(record.RelativeLocalPath)
+		if err != nil {
+			return fmt.Errorf("validating deferred shortcut binding %q relative_local_path: %w", key, err)
 		}
+		record.RelativeLocalPath = normalized
+		if record.TokenOwnerCanonical == "" {
+			return fmt.Errorf("validating deferred shortcut binding %q: token_owner_canonical is required", key)
+		}
+		if _, err := driveid.NewCanonicalID(record.TokenOwnerCanonical); err != nil {
+			return fmt.Errorf("validating deferred shortcut binding %q token_owner_canonical: %w", key, err)
+		}
+		if err := validateMountStateReason(record.State, record.StateReason); err != nil {
+			return fmt.Errorf("validating deferred shortcut binding %q: %w", key, err)
+		}
+		if requiresRemoteContentIdentity(record.State, record.StateReason) {
+			if record.RemoteDriveID == "" {
+				return fmt.Errorf("validating deferred shortcut binding %q: remote_drive_id is required", key)
+			}
+			if record.RemoteItemID == "" {
+				return fmt.Errorf("validating deferred shortcut binding %q: remote_item_id is required", key)
+			}
+		}
+		i.DeferredShortcutBindings[key] = record
 	}
 
 	return nil
@@ -347,14 +366,17 @@ func validateMountStateReason(state MountState, reason string) error {
 	case MountStateReasonDuplicateContentRoot,
 		MountStateReasonExplicitStandaloneContentRoot,
 		MountStateReasonShortcutRemoved,
+		MountStateReasonRemovedProjectionDirty,
+		MountStateReasonRemovedProjectionUnavailable,
 		MountStateReasonShortcutBindingUnavailable,
 		MountStateReasonLocalProjectionConflict,
 		MountStateReasonLocalProjectionUnavailable,
-		MountStateReasonLocalRootCollision,
-		MountStateReasonLocalRootUnavailable,
 		MountStateReasonLocalAliasRenameConflict,
 		MountStateReasonLocalAliasRenameUnavailable,
-		MountStateReasonLocalAliasDeleteUnavailable:
+		MountStateReasonLocalAliasDeleteUnavailable,
+		MountStateReasonPathReservedByPendingRemoval,
+		MountStateReasonLocalRootCollision,
+		MountStateReasonLocalRootUnavailable:
 	default:
 		return fmt.Errorf("unsupported state_reason %q", reason)
 	}
@@ -363,20 +385,23 @@ func validateMountStateReason(state MountState, reason string) error {
 	case MountStateReasonDuplicateContentRoot,
 		MountStateReasonExplicitStandaloneContentRoot,
 		MountStateReasonLocalProjectionConflict,
-		MountStateReasonLocalRootCollision,
-		MountStateReasonLocalAliasRenameConflict:
+		MountStateReasonLocalAliasRenameConflict,
+		MountStateReasonPathReservedByPendingRemoval,
+		MountStateReasonLocalRootCollision:
 		if state != MountStateConflict {
 			return fmt.Errorf("state_reason %q requires state %q", reason, MountStateConflict)
 		}
-	case MountStateReasonShortcutRemoved:
+	case MountStateReasonShortcutRemoved,
+		MountStateReasonRemovedProjectionDirty,
+		MountStateReasonRemovedProjectionUnavailable:
 		if state != MountStatePendingRemoval {
 			return fmt.Errorf("state_reason %q requires state %q", reason, MountStatePendingRemoval)
 		}
 	case MountStateReasonShortcutBindingUnavailable,
 		MountStateReasonLocalProjectionUnavailable,
-		MountStateReasonLocalRootUnavailable,
 		MountStateReasonLocalAliasRenameUnavailable,
-		MountStateReasonLocalAliasDeleteUnavailable:
+		MountStateReasonLocalAliasDeleteUnavailable,
+		MountStateReasonLocalRootUnavailable:
 		if state != MountStateUnavailable {
 			return fmt.Errorf("state_reason %q requires state %q", reason, MountStateUnavailable)
 		}
@@ -387,22 +412,6 @@ func validateMountStateReason(state MountState, reason string) error {
 
 func requiresRemoteContentIdentity(state MountState, reason string) bool {
 	return state != MountStateUnavailable || reason != MountStateReasonShortcutBindingUnavailable
-}
-
-func validateNamespaceDiscoveryState(namespace NamespaceDiscoveryState, key string) error {
-	if namespace.NamespaceID == "" {
-		return fmt.Errorf("validating namespace discovery state %q: namespace_id is required", key)
-	}
-	switch namespace.DiscoveryMode {
-	case "", DiscoveryModeDelta, DiscoveryModeEnumerate:
-		return nil
-	default:
-		return fmt.Errorf(
-			"validating namespace discovery state %q: unsupported discovery_mode %q",
-			namespace.NamespaceID,
-			namespace.DiscoveryMode,
-		)
-	}
 }
 
 func validateSiblingMountPaths(mounts map[string]MountRecord) error {

@@ -25,6 +25,7 @@ type remoteObservationBatch struct {
 	cursorToken           string
 	markFullRemoteRefresh bool
 	findings              ObservationFindingsBatch
+	shortcutTopology      ShortcutTopologyBatch
 	armFullRefreshTimer   bool
 	markFullRefreshIfIdle bool
 	applyAck              chan error
@@ -52,6 +53,7 @@ func (batch *remoteObservationBatch) deferredProgress() *remoteObservationBatch 
 	clone.observed = nil
 	clone.emitted = nil
 	clone.findings = ObservationFindingsBatch{}
+	clone.shortcutTopology = ShortcutTopologyBatch{}
 	clone.armFullRefreshTimer = false
 	clone.markFullRefreshIfIdle = false
 	clone.applyAck = nil
@@ -141,7 +143,7 @@ func (flow *engineFlow) executeDriveRootObservation(
 	fullReconcile bool,
 ) (remoteObservationBatch, error) {
 	if fullReconcile {
-		events, token, err := flow.observeRemoteFull(ctx, bl)
+		events, token, topology, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl)
 		if err != nil && isObservationRemoteReadDenied(err) {
 			return buildRemoteObservationBatch(
 				flow.engine,
@@ -153,17 +155,19 @@ func (flow *engineFlow) executeDriveRootObservation(
 			), nil
 		}
 
-		return buildRemoteObservationBatch(
+		batch := buildRemoteObservationBatch(
 			flow.engine,
 			remoteObservationModeDelta,
 			events,
 			token,
 			true,
 			newRemoteObservationFindingsBatch(),
-		), err
+		)
+		batch.shortcutTopology = topology
+		return batch, err
 	}
 
-	events, token, err := flow.observeRemote(ctx, bl)
+	events, token, topology, err := flow.observeRemoteWithShortcutTopology(ctx, bl)
 	if err != nil && isObservationRemoteReadDenied(err) {
 		return buildRemoteObservationBatch(
 			flow.engine,
@@ -175,14 +179,16 @@ func (flow *engineFlow) executeDriveRootObservation(
 		), nil
 	}
 
-	return buildRemoteObservationBatch(
+	batch := buildRemoteObservationBatch(
 		flow.engine,
 		remoteObservationModeDelta,
 		events,
 		token,
 		false,
 		newRemoteObservationFindingsBatch(),
-	), err
+	)
+	batch.shortcutTopology = topology
+	return batch, err
 }
 
 func (flow *engineFlow) executeMountRootObservation(

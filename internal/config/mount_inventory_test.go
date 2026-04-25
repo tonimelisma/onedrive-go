@@ -15,13 +15,6 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 
 	err := SaveMountInventory(&MountInventory{
 		SchemaVersion: mountsSchemaV6,
-		Namespaces: map[string]NamespaceDiscoveryState{
-			"personal:owner@example.com": {
-				NamespaceID:   "personal:owner@example.com",
-				DeltaLink:     "https://graph.microsoft.com/v1.0/drives/drive/root/delta?token=abc",
-				DiscoveryMode: DiscoveryModeDelta,
-			},
-		},
 		Mounts: map[string]MountRecord{
 			"child-docs": {
 				MountID:               "child-docs",
@@ -39,6 +32,17 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 				StateReason:           MountStateReasonDuplicateContentRoot,
 			},
 		},
+		DeferredShortcutBindings: map[string]DeferredShortcutBinding{
+			"personal:owner@example.com|Team/Docs|placeholder-item-next": {
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "placeholder-item-next",
+				LocalAlias:          "Docs",
+				RelativeLocalPath:   "Team/Docs",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "remote-drive-next",
+				RemoteItemID:        "remote-root-next",
+			},
+		},
 	})
 	require.NoError(t, err)
 
@@ -46,7 +50,6 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, mountsSchemaV6, loaded.SchemaVersion)
 	require.Len(t, loaded.Mounts, 1)
-	require.Len(t, loaded.Namespaces, 1)
 
 	record := loaded.Mounts["child-docs"]
 	assert.Equal(t, "child-docs", record.MountID)
@@ -62,11 +65,10 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 	assert.Equal(t, "remote-root", record.RemoteItemID)
 	assert.Equal(t, MountStateConflict, record.State)
 	assert.Equal(t, MountStateReasonDuplicateContentRoot, record.StateReason)
-	assert.Equal(t, NamespaceDiscoveryState{
-		NamespaceID:   "personal:owner@example.com",
-		DeltaLink:     "https://graph.microsoft.com/v1.0/drives/drive/root/delta?token=abc",
-		DiscoveryMode: DiscoveryModeDelta,
-	}, loaded.Namespaces["personal:owner@example.com"])
+	require.Len(t, loaded.DeferredShortcutBindings, 1)
+	deferred := loaded.DeferredShortcutBindings["personal:owner@example.com|Team/Docs|placeholder-item-next"]
+	assert.Equal(t, "placeholder-item-next", deferred.BindingItemID)
+	assert.Equal(t, "remote-drive-next", deferred.RemoteDriveID)
 }
 
 func TestMountInventory_UnknownFieldRejected(t *testing.T) {
@@ -75,7 +77,6 @@ func TestMountInventory_UnknownFieldRejected(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, []byte(`{
   "schema_version": 6,
-  "namespaces": {},
   "mounts": {},
   "unknown": true
 }`), 0o600))
