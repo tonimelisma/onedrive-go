@@ -53,6 +53,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		)
 	}
 	compiled, err = o.finalizeRuntimeMountSetLifecycle(
+		ctx,
 		compiled,
 		o.cfg.StandaloneMounts,
 		o.cfg.InitialStartupResults,

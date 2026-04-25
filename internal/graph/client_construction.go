@@ -44,6 +44,7 @@ func NewClient(
 		logger:                     logger,
 		userAgent:                  userAgent,
 		deltaPreferHeader:          newDeltaPreferHeader(),
+		childrenPreferHeader:       newChildrenPreferHeader(),
 		maxDeltaPages:              defaultMaxDeltaPages,
 		maxRecursionDepth:          defaultMaxRecursionDepth,
 		driveDiscoveryPolicy:       retry.DriveDiscoveryPolicy(),
@@ -76,6 +77,12 @@ func MustNewClient(
 
 func newDeltaPreferHeader() http.Header {
 	return http.Header{
-		"Prefer": {"deltashowremoteitemsaliasid"},
+		"Prefer": {"deltashowremoteitemsaliasid, Include-Feature=AddToOneDrive"},
+	}
+}
+
+func newChildrenPreferHeader() http.Header {
+	return http.Header{
+		"Prefer": {"Include-Feature=AddToOneDrive"},
 	}
 }

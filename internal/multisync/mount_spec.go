@@ -10,6 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 type mountID string
@@ -70,13 +71,15 @@ type mountSpec struct {
 	checkWorkers              int
 	minFreeSpace              int64
 	localSkipDirs             []string
+	localReservations         []syncengine.ManagedRootReservation
 }
 
 type compiledMountSet struct {
-	Mounts          []*mountSpec
-	Skipped         []MountStartupResult
-	RemovedMountIDs []string
-	ProjectionMoves []childProjectionMove
+	Mounts           []*mountSpec
+	Skipped          []MountStartupResult
+	RemovedMountIDs  []string
+	ProjectionMoves  []childProjectionMove
+	LocalRootActions []childRootLifecycleAction
 }
 
 type childMountCandidate struct {
@@ -265,6 +268,7 @@ func assembleRuntimeMountSet(
 			nextIndex++
 			parent.localSkipDirs = append(parent.localSkipDirs, candidate.relativeLocalPath)
 			parent.localSkipDirs = append(parent.localSkipDirs, candidate.reservedLocalPaths...)
+			parent.localReservations = append(parent.localReservations, managedRootReservationsForCandidate(candidate)...)
 			projectionMoves = append(projectionMoves, projectionMovesForCandidate(candidate, parent)...)
 			if candidate.skipErr != nil {
 				skipped = append(skipped, skippedChildMountResult(candidate, parent.mountID, logger))
@@ -277,6 +281,32 @@ func assembleRuntimeMountSet(
 
 	skipped = append(skipped, unmatchedChildStartupResults(unmatchedChildren, nextIndex)...)
 	return finalMounts, skipped, projectionMoves
+}
+
+func managedRootReservationsForCandidate(candidate *childMountCandidate) []syncengine.ManagedRootReservation {
+	if candidate == nil {
+		return nil
+	}
+	paths := append([]string{candidate.relativeLocalPath}, candidate.reservedLocalPaths...)
+	reservations := make([]syncengine.ManagedRootReservation, 0, len(paths))
+	for _, relPath := range paths {
+		if relPath == "" {
+			continue
+		}
+		reservation := syncengine.ManagedRootReservation{
+			Path:      relPath,
+			MountID:   candidate.record.MountID,
+			BindingID: candidate.record.BindingItemID,
+		}
+		if candidate.record.LocalRootIdentity != nil {
+			reservation.Device = candidate.record.LocalRootIdentity.Device
+			reservation.Inode = candidate.record.LocalRootIdentity.Inode
+			reservation.HasIdentity = true
+		}
+		reservations = append(reservations, reservation)
+	}
+
+	return reservations
 }
 
 func projectionMovesForCandidate(candidate *childMountCandidate, parent *mountSpec) []childProjectionMove {

@@ -39,8 +39,9 @@ type namespaceReconcileResult struct {
 }
 
 type mountInventoryMutationResult struct {
-	changed       bool
-	dirtyMountIDs []string
+	changed          bool
+	dirtyMountIDs    []string
+	localRootActions []childRootLifecycleAction
 }
 
 type namespaceRuntime struct {

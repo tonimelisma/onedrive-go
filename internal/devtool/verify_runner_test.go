@@ -628,6 +628,12 @@ func TestFullE2EBucketsOwnDemotedFastTests(t *testing.T) {
 	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_RestartIdempotentKeepsChildMountVisible")
 	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_RenameReusesChildMountState")
 	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_MoveReusesChildMountState")
+	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_WritableUploadSyncsToSharedTarget")
+	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_ReadOnlyBlockedUploadStatus")
+	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_LocalDeleteRemovesPlaceholderOnlyWithOptIn")
+	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_LocalRootCollisionSkipsChildButParentCompletes")
+	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_WatchLocalUploadSyncsToSharedTarget")
+	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_WatchRemoteWakeUpdatesChildRoot")
 	assert.NotContains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent")
 	assert.NotContains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Resolve_DeletesWithWatchDaemon")
 }

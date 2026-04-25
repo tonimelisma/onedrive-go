@@ -52,6 +52,7 @@ type Client struct {
 	userAgent                  string
 	authSuccessHook            func(context.Context)
 	deltaPreferHeader          http.Header
+	childrenPreferHeader       http.Header
 	maxDeltaPages              int
 	maxRecursionDepth          int
 	driveDiscoveryPolicy       retry.Policy

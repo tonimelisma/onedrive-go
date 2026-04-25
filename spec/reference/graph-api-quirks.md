@@ -796,6 +796,25 @@ and `remoteItem.createdBy`, not top-level `shared`. Four-level fallback chain:
 top-level `shared.owner`. The `email` field in identity responses is
 undocumented but works on both personal and business accounts.
 
+### AddToOneDrive Shortcut Visibility Header
+
+OneDrive folder shortcuts are represented as `remoteItem` placeholders, but
+Graph can omit Add-to-OneDrive shortcuts from children/delta responses unless
+the request sends `Prefer: Include-Feature=AddToOneDrive`. This matches the
+field behavior reported by the abraunegg client and observed provider traces.
+Runtime policy: children listings send `Include-Feature=AddToOneDrive`; delta
+requests combine it with `deltashowremoteitemsaliasid` so shortcut placeholders
+remain discoverable without giving the sync engine shortcut ownership.
+
+Observed fixture repair on April 25, 2026: deleting a personal-account shortcut
+placeholder by item ID removed only the placeholder, but recreating the same
+shortcut with the documented `POST /drive/root/children` + `remoteItem` body
+returned repeated Graph `503 SERVICE UNAVAILABLE` responses across `/me`,
+`/drives/{id}`, `/users/{upn}`, v1.0, beta, and `Include-Feature=AddToOneDrive`
+variants. Runtime policy: production can delete the placeholder when the user
+deletes the local projected root, but recurring live E2E must not exercise that
+destructive path unless the fixture is explicitly marked recreatable.
+
 ### SharedWithMe API Deprecation
 
 `/me/drive/sharedWithMe` and `/me/drive/recent` are deprecated (November 2026

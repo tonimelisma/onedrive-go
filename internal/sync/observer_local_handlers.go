@@ -131,9 +131,27 @@ func (o *LocalObserver) HandleFsEvent(
 
 		return
 	}
+	if relPath == "." {
+		o.Logger.Debug("watch: ignoring sync root lifecycle event",
+			slog.String("path", fsEvent.Name))
+		return
+	}
 
 	dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 	name := nfcNormalize(filepath.Base(fsEvent.Name))
+
+	if reservation, ok := managedRootPathReservation(dbRelPath, o.filterConfig.ManagedRoots); ok {
+		if reservation.Path == dbRelPath {
+			o.reportManagedRootEvent(ManagedRootEvent{
+				Type:         ManagedRootEventPathReserved,
+				Path:         dbRelPath,
+				ReservedPath: reservation.Path,
+				MountID:      reservation.MountID,
+				BindingID:    reservation.BindingID,
+			})
+		}
+		return
+	}
 
 	// Unified observation filter (Stage 1: name + path length).
 	// Watch handlers don't collect SkippedItems — the safety scan (FullScan
@@ -185,6 +203,17 @@ func (o *LocalObserver) handleCreate(
 	}
 
 	o.forgetExcludedSymlink(dbRelPath)
+
+	if reservation, ok := managedRootIdentityReservation(dbRelPath, info, o.filterConfig.ManagedRoots); ok {
+		o.reportManagedRootEvent(ManagedRootEvent{
+			Type:         ManagedRootEventIdentityMatch,
+			Path:         dbRelPath,
+			ReservedPath: reservation.Path,
+			MountID:      reservation.MountID,
+			BindingID:    reservation.BindingID,
+		})
+		return
+	}
 
 	if skip := shouldObserveWithFilter(name, dbRelPath, infoKind(info), o.filterConfig, o.observationRules); skip != nil {
 		return
@@ -317,6 +346,17 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 	}
 
 	if shouldObserveWithFilter(entryName, entryRelPath, kind, o.filterConfig, o.observationRules) != nil {
+		return
+	}
+
+	if reservation, ok := managedRootIdentityReservation(entryRelPath, info, o.filterConfig.ManagedRoots); ok {
+		o.reportManagedRootEvent(ManagedRootEvent{
+			Type:         ManagedRootEventIdentityMatch,
+			Path:         entryRelPath,
+			ReservedPath: reservation.Path,
+			MountID:      reservation.MountID,
+			BindingID:    reservation.BindingID,
+		})
 		return
 	}
 

@@ -181,6 +181,7 @@ func applyChildBindingPath(
 	}
 	if found && record.RelativeLocalPath != "" && record.RelativeLocalPath != binding.RelativeLocalPath {
 		next.ReservedLocalPaths = appendUniqueStrings(next.ReservedLocalPaths, record.RelativeLocalPath)
+		next.LocalRootMaterialized = false
 	}
 	next.RelativeLocalPath = binding.RelativeLocalPath
 }

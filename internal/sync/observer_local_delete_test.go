@@ -461,5 +461,29 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 		"should pass original fsEvent.Name to watcher.Remove()")
 }
 
+// Validates: R-2.8.1
+func TestHandleFsEvent_SyncRootLifecycleEventDoesNotEmitContentDelete(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	watcher := newRecordingFsWatcher()
+	baseline := baselineWith(&BaselineEntry{
+		Path:     "child.txt",
+		DriveID:  driveid.New("d"),
+		ItemID:   "child-id",
+		ItemType: ItemTypeFile,
+	})
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	events := make(chan ChangeEvent, 10)
+
+	obs.HandleFsEvent(t.Context(), fsnotify.Event{
+		Name: syncRoot,
+		Op:   fsnotify.Remove,
+	}, watcher, mustOpenSyncTree(t, syncRoot), events)
+
+	assert.Empty(t, events)
+	assert.Empty(t, watcher.getRemovedPaths())
+}
+
 // Needed for context usage in test helpers — keep the import.
 var _ = context.Background

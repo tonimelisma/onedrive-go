@@ -68,6 +68,8 @@ func (p runtimeMountSetPipeline) build(ctx context.Context) (*compiledMountSet, 
 	if err != nil {
 		return nil, err
 	}
+	compiled.LocalRootActions = append(compiled.LocalRootActions, localRootResult.localRootActions...)
+	attachLocalRootActionPresentation(compiled)
 	if reconcileErr == nil && namespaceResult.persistErr == nil {
 		compiled.RemovedMountIDs = append(compiled.RemovedMountIDs, namespaceResult.removedMountIDs...)
 	}
@@ -76,6 +78,25 @@ func (p runtimeMountSetPipeline) build(ctx context.Context) (*compiledMountSet, 
 	compiled.Skipped = append(append([]MountStartupResult(nil), p.initialStartup...), compiled.Skipped...)
 
 	return compiled, nil
+}
+
+func attachLocalRootActionPresentation(compiled *compiledMountSet) {
+	if compiled == nil || len(compiled.LocalRootActions) == 0 {
+		return
+	}
+	mounts := make(map[mountID]*mountSpec, len(compiled.Mounts))
+	for _, mount := range compiled.Mounts {
+		if mount != nil {
+			mounts[mount.mountID] = mount
+		}
+	}
+	for i := range compiled.LocalRootActions {
+		if mount := mounts[compiled.LocalRootActions[i].mountID]; mount != nil {
+			compiled.LocalRootActions[i].selectionIndex = mount.selectionIndex
+			compiled.LocalRootActions[i].identity = mount.identity()
+			compiled.LocalRootActions[i].displayName = mount.displayName
+		}
+	}
 }
 
 func (o *Orchestrator) compileRuntimeMountSetFromInventory(
@@ -101,6 +122,7 @@ func (o *Orchestrator) compileRuntimeMountSetFromInventory(
 }
 
 func (o *Orchestrator) finalizeRuntimeMountSetLifecycle(
+	ctx context.Context,
 	compiled *compiledMountSet,
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
@@ -108,6 +130,8 @@ func (o *Orchestrator) finalizeRuntimeMountSetLifecycle(
 	strictRecompile bool,
 ) (*compiledMountSet, error) {
 	inventoryMutated := false
+	inventoryMutated = applyChildRootLifecycleActions(ctx, o, compiled, o.logger) || inventoryMutated
+	inventoryMutated = applyChildProjectionMoves(compiled, o.logger) || inventoryMutated
 	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
 		o.logger.Warn("purging removed child mount state",
 			slog.String("phase", phase),
@@ -123,7 +147,6 @@ func (o *Orchestrator) finalizeRuntimeMountSetLifecycle(
 		}
 		inventoryMutated = inventoryMutated || finalized
 	}
-	inventoryMutated = applyChildProjectionMoves(compiled, o.logger) || inventoryMutated
 	if inventoryMutated {
 		refreshed, refreshErr := o.compileRuntimeMountSetFromInventory(standaloneMounts, initialStartup)
 		if refreshErr != nil {
@@ -179,6 +202,16 @@ func applyInventoryPersistFailure(compiled *compiledMountSet, dirtyMountIDs []st
 		filteredMoves = append(filteredMoves, move)
 	}
 	compiled.ProjectionMoves = filteredMoves
+
+	filteredRootActions := compiled.LocalRootActions[:0]
+	for i := range compiled.LocalRootActions {
+		action := compiled.LocalRootActions[i]
+		if _, found := dirty[action.mountID]; found {
+			continue
+		}
+		filteredRootActions = append(filteredRootActions, action)
+	}
+	compiled.LocalRootActions = filteredRootActions
 }
 
 func (o *Orchestrator) warnChildRootReconciliationSaveFailure(err error) {

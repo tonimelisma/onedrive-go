@@ -1507,6 +1507,80 @@ func TestShouldObserve_PathScopedSkipDirs(t *testing.T) {
 	})
 }
 
+// Validates: R-2.8.1, R-2.11.1
+func TestShouldObserve_ManagedRootReservationsSkipPath(t *testing.T) {
+	t.Parallel()
+
+	runShouldObserveCases(t, []shouldObserveCase{
+		{
+			name:     "skip managed root path",
+			fileName: "Docs",
+			path:     "Shared/Docs",
+			filter: LocalFilterConfig{
+				ManagedRoots: []ManagedRootReservation{{Path: "Shared/Docs", MountID: "child"}},
+			},
+			wantNil: false,
+		},
+		{
+			name:     "skip managed root subtree",
+			fileName: "file.txt",
+			path:     "Shared/Docs/file.txt",
+			filter: LocalFilterConfig{
+				ManagedRoots: []ManagedRootReservation{{Path: "Shared/Docs", MountID: "child"}},
+			},
+			wantNil: false,
+		},
+	})
+}
+
+// Validates: R-2.8.1, R-2.11.1
+func TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	original := filepath.Join(syncRoot, "Shared", "Docs")
+	renamed := filepath.Join(syncRoot, "Shared", "Renamed")
+	require.NoError(t, os.MkdirAll(original, 0o700))
+	info, err := os.Lstat(original)
+	require.NoError(t, err)
+	device, inode, ok := fileInfoIdentity(info)
+	require.True(t, ok)
+	require.NoError(t, os.Rename(original, renamed))
+
+	events := make(chan ManagedRootEvent, 1)
+	obs := NewLocalObserver(baselineWith(&BaselineEntry{
+		Path:     "Shared",
+		DriveID:  driveid.New("drive"),
+		ItemID:   "shared-id",
+		ItemType: ItemTypeFolder,
+	}), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(LocalFilterConfig{
+		ManagedRoots: []ManagedRootReservation{{
+			Path:        "Shared/Docs",
+			MountID:     "child",
+			BindingID:   "binding",
+			Device:      device,
+			Inode:       inode,
+			HasIdentity: true,
+		}},
+	})
+	obs.SetManagedRootEventSink(func(event ManagedRootEvent) {
+		events <- event
+	})
+
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
+
+	require.NoError(t, err)
+	assert.Empty(t, result.Events)
+	require.Len(t, events, 1)
+	event := <-events
+	assert.Equal(t, ManagedRootEventIdentityMatch, event.Type)
+	assert.Equal(t, "Shared/Renamed", event.Path)
+	assert.Equal(t, "Shared/Docs", event.ReservedPath)
+	assert.Equal(t, "child", event.MountID)
+	assert.Equal(t, "binding", event.BindingID)
+}
+
 // ---------------------------------------------------------------------------
 // ValidateOneDriveName unit tests
 // ---------------------------------------------------------------------------

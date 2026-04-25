@@ -20,7 +20,42 @@ type LocalFilterConfig struct {
 	SkipSymlinks bool
 	SkipDirs     []string
 	SkipFiles    []string
+	ManagedRoots []ManagedRootReservation
 }
+
+// ManagedRootReservation marks a control-plane-owned subtree inside this mount.
+// The sync engine suppresses normal local content events for these roots and,
+// when it can identify the same directory at a sibling path, reports that fact
+// to the control plane instead of uploading a duplicate folder.
+type ManagedRootReservation struct {
+	Path        string
+	MountID     string
+	BindingID   string
+	Device      uint64
+	Inode       uint64
+	HasIdentity bool
+}
+
+// ManagedRootEventType identifies the lifecycle fact the local observer found.
+type ManagedRootEventType string
+
+const (
+	ManagedRootEventPathReserved  ManagedRootEventType = "path_reserved"
+	ManagedRootEventIdentityMatch ManagedRootEventType = "identity_match"
+)
+
+// ManagedRootEvent is a narrow notification from the engine's parent local
+// observer to multisync. It never mutates shortcut state; it only asks the
+// control plane to reconcile its authoritative shortcut inventory promptly.
+type ManagedRootEvent struct {
+	Type         ManagedRootEventType
+	Path         string
+	ReservedPath string
+	MountID      string
+	BindingID    string
+}
+
+type ManagedRootEventSink func(ManagedRootEvent)
 
 // LocalObservationRules controls platform-derived local validation semantics.
 // These are not user-configured exclusions; they encode rules that depend on
@@ -127,6 +162,7 @@ type engineInputs struct {
 	Logger                 *slog.Logger
 	LocalFilter            LocalFilterConfig
 	LocalRules             LocalObservationRules
+	ManagedRootEvents      ManagedRootEventSink
 	EnableWebsocket        bool
 	TransferWorkers        int
 	CheckWorkers           int

@@ -22,13 +22,16 @@ type watchRunner struct {
 	done   chan struct{} // closed exactly once by the goroutine started in startWatchRunner
 }
 
+const managedRootEventBuffer = 64
+
 // RunWatch runs all configured runnable mounts in watch mode. On control-socket
 // reload, it re-reads the config file, rebuilds runtime mount specs, and diffs
 // the active mount set: stopped mounts are removed, new mounts are started.
 // Returns nil on clean context cancel.
 func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
 	commands := make(chan controlCommand)
-	runners, control, err := o.startWatchRuntime(ctx, mode, opts, commands)
+	managedRootEvents := make(chan syncengine.ManagedRootEvent, managedRootEventBuffer)
+	runners, control, err := o.startWatchRuntime(ctx, mode, opts, commands, managedRootEvents)
 	if err != nil {
 		if control != nil {
 			o.closeControlSocket(ctx, control)
@@ -61,11 +64,19 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	for {
 		select {
 		case cmd := <-commands:
-			if o.handleControlCommand(ctx, &cmd, mode, opts, runners) {
+			if o.handleControlCommand(ctx, &cmd, mode, opts, runners, managedRootEvents) {
 				return nil
 			}
+		case event := <-managedRootEvents:
+			o.logger.Info("managed shortcut root event received",
+				slog.String("type", string(event.Type)),
+				slog.String("path", event.Path),
+				slog.String("reserved_path", event.ReservedPath),
+				slog.String("mount_id", event.MountID),
+			)
+			o.reconcileWatchRunners(ctx, mode, opts, runners, managedRootEvents)
 		case <-reconcileTickCh:
-			o.reconcileWatchRunners(ctx, mode, opts, runners)
+			o.reconcileWatchRunners(ctx, mode, opts, runners, managedRootEvents)
 		case <-ctx.Done():
 			return nil
 		}
@@ -77,6 +88,7 @@ func (o *Orchestrator) startWatchRuntime(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	commands chan controlCommand,
+	managedRootEvents chan<- syncengine.ManagedRootEvent,
 ) (map[mountID]*watchRunner, *controlSocketServer, error) {
 	if len(o.cfg.StandaloneMounts) == 0 {
 		if len(o.cfg.InitialStartupResults) > 0 {
@@ -97,6 +109,7 @@ func (o *Orchestrator) startWatchRuntime(
 		return nil, control, fmt.Errorf("sync: building mount specs: %w", err)
 	}
 	compiled, err = o.finalizeRuntimeMountSetLifecycle(
+		ctx,
 		compiled,
 		o.cfg.StandaloneMounts,
 		o.cfg.InitialStartupResults,
@@ -113,7 +126,7 @@ func (o *Orchestrator) startWatchRuntime(
 		slog.String("mode", mode.String()),
 	)
 
-	runners, startResults := o.startInitialWatchRunners(ctx, mode, compiled.Mounts, compiled.Skipped, opts)
+	runners, startResults := o.startInitialWatchRunners(ctx, mode, compiled.Mounts, compiled.Skipped, opts, managedRootEvents)
 	startSummary := summarizeStartupResults(startResults)
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
 		return nil, control, err
@@ -131,6 +144,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.WatchOptions,
+	managedRootEvents chan<- syncengine.ManagedRootEvent,
 ) (map[mountID]*watchRunner, []MountStartupResult) {
 	runners := make(map[mountID]*watchRunner)
 	startResults := append([]MountStartupResult(nil), initialStartup...)
@@ -151,7 +165,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 			continue
 		}
 
-		wr, err := o.startWatchRunner(ctx, mount, mode, opts)
+		wr, err := o.startWatchRunner(ctx, mount, mode, opts, managedRootEvents)
 		if err != nil {
 			o.logger.Error("failed to start watch runner",
 				slog.String("mount_id", mount.mountID.String()),
@@ -206,7 +220,11 @@ func (o *Orchestrator) closeControlSocket(ctx context.Context, control *controlS
 }
 
 func (o *Orchestrator) startWatchRunner(
-	ctx context.Context, mount *mountSpec, mode syncengine.SyncMode, opts syncengine.WatchOptions,
+	ctx context.Context,
+	mount *mountSpec,
+	mode syncengine.SyncMode,
+	opts syncengine.WatchOptions,
+	managedRootEvents chan<- syncengine.ManagedRootEvent,
 ) (*watchRunner, error) {
 	session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 	if err != nil {
@@ -215,11 +233,12 @@ func (o *Orchestrator) startWatchRunner(
 
 	mountCollector := o.registerMountPerfCollector(mount.mountID.String())
 	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
-		Session:       session,
-		Mount:         mount,
-		Logger:        o.logger,
-		VerifyDrive:   true,
-		PerfCollector: mountCollector,
+		Session:           session,
+		Mount:             mount,
+		Logger:            o.logger,
+		VerifyDrive:       true,
+		PerfCollector:     mountCollector,
+		ManagedRootEvents: o.managedRootEventSink(ctx, managedRootEvents),
 	})
 	if engineErr != nil {
 		o.removeMountPerfCollector(mount.mountID.String())
@@ -258,6 +277,27 @@ func (o *Orchestrator) startWatchRunner(
 	return wr, nil
 }
 
+func (o *Orchestrator) managedRootEventSink(
+	ctx context.Context,
+	events chan<- syncengine.ManagedRootEvent,
+) syncengine.ManagedRootEventSink {
+	if events == nil {
+		return nil
+	}
+
+	return func(event syncengine.ManagedRootEvent) {
+		select {
+		case events <- event:
+		case <-ctx.Done():
+		default:
+			o.logger.Warn("managed shortcut root event channel full; periodic reconciliation will catch up",
+				slog.String("path", event.Path),
+				slog.String("mount_id", event.MountID),
+			)
+		}
+	}
+}
+
 func (o *Orchestrator) registerMountPerfCollector(mountID string) *perf.Collector {
 	if o == nil || o.perfRuntime == nil {
 		return nil
@@ -277,6 +317,7 @@ func (o *Orchestrator) removeMountPerfCollector(mountID string) {
 func (o *Orchestrator) reload(
 	ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
+	managedRootEvents chan<- syncengine.ManagedRootEvent,
 ) {
 	newCfg, newSelection, newMounts, err := o.loadReloadMounts(ctx)
 	if err != nil {
@@ -292,7 +333,7 @@ func (o *Orchestrator) reload(
 	o.cfg.InitialStartupResults = newSelection.StartupResults
 	o.cfg.Runtime.FlushTokenCache()
 
-	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, newMounts, mode, opts)
+	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, newMounts, mode, opts, managedRootEvents)
 	if len(startResults) > 0 {
 		o.emitStartWarning(summarizeStartupResults(startResults))
 	}
@@ -310,6 +351,7 @@ func (o *Orchestrator) reconcileWatchRunners(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
+	managedRootEvents chan<- syncengine.ManagedRootEvent,
 ) {
 	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
@@ -319,7 +361,7 @@ func (o *Orchestrator) reconcileWatchRunners(
 		return
 	}
 
-	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, compiled, mode, opts)
+	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, compiled, mode, opts, managedRootEvents)
 	if len(startResults) > 0 {
 		o.emitStartWarning(summarizeStartupResults(startResults))
 	}
@@ -363,12 +405,15 @@ func (o *Orchestrator) applyWatchMountSet(
 	compiled *compiledMountSet,
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
+	managedRootEvents chan<- syncengine.ManagedRootEvent,
 ) (int, int, []MountStartupResult) {
 	runnable := runnableMountMap(compiled.Mounts)
 	stopped := o.stopInactiveWatchRunners(ctx, runners, runnable)
 	stopped += o.stopProjectionMoveWatchRunners(ctx, runners, compiled.ProjectionMoves)
+	stopped += o.stopLocalRootActionWatchRunners(ctx, runners, compiled.LocalRootActions)
 	var finalizeErr error
 	compiled, finalizeErr = o.finalizeRuntimeMountSetLifecycle(
+		ctx,
 		compiled,
 		o.cfg.StandaloneMounts,
 		o.cfg.InitialStartupResults,
@@ -382,10 +427,51 @@ func (o *Orchestrator) applyWatchMountSet(
 	}
 	runnable = runnableMountMap(compiled.Mounts)
 	stopped += o.stopInactiveWatchRunners(ctx, runners, runnable)
-	started, startResults := o.startReloadWatchRunners(ctx, runners, runnable, compiled.Skipped, mode, opts)
+	started, startResults := o.startReloadWatchRunners(ctx, runners, runnable, compiled.Skipped, mode, opts, managedRootEvents)
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 
 	return stopped, started, startResults
+}
+
+func (o *Orchestrator) stopLocalRootActionWatchRunners(
+	ctx context.Context,
+	runners map[mountID]*watchRunner,
+	actions []childRootLifecycleAction,
+) int {
+	if len(actions) == 0 || len(runners) == 0 {
+		return 0
+	}
+
+	stopped := 0
+	seen := make(map[mountID]struct{}, len(actions))
+	for i := range actions {
+		action := &actions[i]
+		if _, done := seen[action.mountID]; done {
+			continue
+		}
+		seen[action.mountID] = struct{}{}
+		wr := runners[action.mountID]
+		if wr == nil {
+			continue
+		}
+
+		o.logger.Info("stopping watch runner before child root lifecycle action",
+			slog.String("mount_id", action.mountID.String()),
+			slog.String("action", string(action.kind)),
+		)
+		wr.cancel()
+		<-wr.done
+		if closeErr := wr.engine.Close(ctx); closeErr != nil {
+			o.logger.Warn("engine close error before child root lifecycle action",
+				slog.String("mount_id", action.mountID.String()),
+				slog.String("error", closeErr.Error()),
+			)
+		}
+		delete(runners, action.mountID)
+		stopped++
+	}
+
+	return stopped
 }
 
 func (o *Orchestrator) stopProjectionMoveWatchRunners(
@@ -481,6 +567,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 	initialStartup []MountStartupResult,
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
+	managedRootEvents chan<- syncengine.ManagedRootEvent,
 ) (int, []MountStartupResult) {
 	started := 0
 	startResults := append([]MountStartupResult(nil), initialStartup...)
@@ -490,7 +577,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 			continue
 		}
 
-		wr, err := o.startWatchRunner(ctx, mount, mode, opts)
+		wr, err := o.startWatchRunner(ctx, mount, mode, opts, managedRootEvents)
 		if err != nil {
 			o.logger.Error("failed to start watch runner during reload",
 				slog.String("mount_id", id.String()),
@@ -517,7 +604,9 @@ func mountSpecsEquivalentForWatchRestart(current *mountSpec, next *mountSpec) bo
 	if current == nil || next == nil {
 		return current == next
 	}
-	return mountSpecCoreEquivalent(current, next) && mountSkipDirsEqual(current.localSkipDirs, next.localSkipDirs)
+	return mountSpecCoreEquivalent(current, next) &&
+		mountSkipDirsEqual(current.localSkipDirs, next.localSkipDirs) &&
+		mountReservationsEqual(current.localReservations, next.localReservations)
 }
 
 func mountSpecCoreEquivalent(current *mountSpec, next *mountSpec) bool {
@@ -566,6 +655,21 @@ func mountSkipDirsEqual(current []string, next []string) bool {
 		}
 	}
 
+	return true
+}
+
+func mountReservationsEqual(
+	current []syncengine.ManagedRootReservation,
+	next []syncengine.ManagedRootReservation,
+) bool {
+	if len(current) != len(next) {
+		return false
+	}
+	for i := range current {
+		if current[i] != next[i] {
+			return false
+		}
+	}
 	return true
 }
 

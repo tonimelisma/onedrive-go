@@ -14,7 +14,7 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 	setTestDataDir(t)
 
 	err := SaveMountInventory(&MountInventory{
-		SchemaVersion: mountsSchemaV4,
+		SchemaVersion: mountsSchemaV6,
 		Namespaces: map[string]NamespaceDiscoveryState{
 			"personal:owner@example.com": {
 				NamespaceID:   "personal:owner@example.com",
@@ -24,17 +24,19 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 		},
 		Mounts: map[string]MountRecord{
 			"child-docs": {
-				MountID:             "child-docs",
-				NamespaceID:         "personal:owner@example.com",
-				BindingItemID:       "placeholder-item-id",
-				LocalAlias:          "Docs",
-				RelativeLocalPath:   "Team/Docs",
-				ReservedLocalPaths:  []string{"Team Docs"},
-				TokenOwnerCanonical: "personal:owner@example.com",
-				RemoteDriveID:       "remote-drive",
-				RemoteItemID:        "remote-root",
-				State:               MountStateConflict,
-				StateReason:         MountStateReasonDuplicateContentRoot,
+				MountID:               "child-docs",
+				NamespaceID:           "personal:owner@example.com",
+				BindingItemID:         "placeholder-item-id",
+				LocalAlias:            "Docs",
+				RelativeLocalPath:     "Team/Docs",
+				ReservedLocalPaths:    []string{"Team Docs"},
+				LocalRootMaterialized: true,
+				LocalRootIdentity:     &RootIdentity{Device: 42, Inode: 99},
+				TokenOwnerCanonical:   "personal:owner@example.com",
+				RemoteDriveID:         "remote-drive",
+				RemoteItemID:          "remote-root",
+				State:                 MountStateConflict,
+				StateReason:           MountStateReasonDuplicateContentRoot,
 			},
 		},
 	})
@@ -42,7 +44,7 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 
 	loaded, err := LoadMountInventory()
 	require.NoError(t, err)
-	assert.Equal(t, mountsSchemaV4, loaded.SchemaVersion)
+	assert.Equal(t, mountsSchemaV6, loaded.SchemaVersion)
 	require.Len(t, loaded.Mounts, 1)
 	require.Len(t, loaded.Namespaces, 1)
 
@@ -53,6 +55,8 @@ func TestMountInventory_RoundTrip(t *testing.T) {
 	assert.Equal(t, "Docs", record.LocalAlias)
 	assert.Equal(t, "Team/Docs", record.RelativeLocalPath)
 	assert.Equal(t, []string{"Team Docs"}, record.ReservedLocalPaths)
+	assert.True(t, record.LocalRootMaterialized)
+	assert.Equal(t, &RootIdentity{Device: 42, Inode: 99}, record.LocalRootIdentity)
 	assert.Equal(t, "personal:owner@example.com", record.TokenOwnerCanonical)
 	assert.Equal(t, "remote-drive", record.RemoteDriveID)
 	assert.Equal(t, "remote-root", record.RemoteItemID)
@@ -70,7 +74,7 @@ func TestMountInventory_UnknownFieldRejected(t *testing.T) {
 	path := MountsPathForDataDir(dataDir)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, []byte(`{
-  "schema_version": 4,
+  "schema_version": 6,
   "namespaces": {},
   "mounts": {},
   "unknown": true
@@ -86,7 +90,7 @@ func TestMountInventory_ChildPauseFieldRejected(t *testing.T) {
 	path := MountsPathForDataDir(dataDir)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, []byte(`{
-  "schema_version": 4,
+  "schema_version": 6,
   "mounts": {
     "child-docs": {
       "mount_id": "child-docs",
@@ -284,6 +288,21 @@ func TestLoadMountInventory_SchemaV3Rejected(t *testing.T) {
 }
 
 // Validates: R-2.8.1, R-4.1.4
+func TestLoadMountInventory_SchemaV4Rejected(t *testing.T) {
+	dataDir := setTestDataDir(t)
+	path := MountsPathForDataDir(dataDir)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(`{
+  "schema_version": 4,
+  "mounts": {}
+}`), 0o600))
+
+	_, err := LoadMountInventoryForDataDir(dataDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported schema version 4")
+}
+
+// Validates: R-2.8.1, R-4.1.4
 func TestMountInventory_UnavailableShortcutBindingMayOmitRemoteTarget(t *testing.T) {
 	setTestDataDir(t)
 
@@ -360,9 +379,74 @@ func TestMountInventory_LocalRootReasonsValidate(t *testing.T) {
 				State:               MountStateUnavailable,
 				StateReason:         MountStateReasonLocalRootUnavailable,
 			},
+			"rename-conflict": {
+				MountID:             "rename-conflict",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-c",
+				RelativeLocalPath:   "Shared/RenameConflict",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-c",
+				RemoteItemID:        "root-c",
+				State:               MountStateConflict,
+				StateReason:         MountStateReasonLocalAliasRenameConflict,
+			},
+			"rename-unavailable": {
+				MountID:             "rename-unavailable",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-d",
+				RelativeLocalPath:   "Shared/RenameUnavailable",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-d",
+				RemoteItemID:        "root-d",
+				State:               MountStateUnavailable,
+				StateReason:         MountStateReasonLocalAliasRenameUnavailable,
+			},
+			"delete-unavailable": {
+				MountID:             "delete-unavailable",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-e",
+				RelativeLocalPath:   "Shared/DeleteUnavailable",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-e",
+				RemoteItemID:        "root-e",
+				State:               MountStateUnavailable,
+				StateReason:         MountStateReasonLocalAliasDeleteUnavailable,
+			},
 		},
 	})
 	require.NoError(t, err)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestMountInventory_RejectsCaseFoldSiblingChildPathCollision(t *testing.T) {
+	setTestDataDir(t)
+
+	err := SaveMountInventory(&MountInventory{
+		Mounts: map[string]MountRecord{
+			"child-a": {
+				MountID:             "child-a",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-a",
+				RelativeLocalPath:   "Shortcuts/Docs",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-a",
+				RemoteItemID:        "root-a",
+				State:               MountStateActive,
+			},
+			"child-b": {
+				MountID:             "child-b",
+				NamespaceID:         "personal:owner@example.com",
+				BindingItemID:       "binding-b",
+				RelativeLocalPath:   "shortcuts/docs",
+				TokenOwnerCanonical: "personal:owner@example.com",
+				RemoteDriveID:       "drive-b",
+				RemoteItemID:        "root-b",
+				State:               MountStateActive,
+			},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate child path")
 }
 
 // Validates: R-2.8.1, R-4.1.4

@@ -143,7 +143,8 @@ The client owns its safety guards and Graph-specific request metadata:
 - `downloadMetadataPolicy`: transient 404 retry policy for item-by-ID download metadata lookup
 - `uploadSessionCreatePolicy`: transient 404 retry policy for create-upload-session requests against freshly created parents
 - `copyDestinationPolicy`: transient 404 retry policy for copy requests whose destination folder is already visible by path but not yet accepted by Graph's copy verifier
-- `deltaPreferHeader`: prebuilt alias-ID delta header
+- `deltaPreferHeader`: prebuilt alias-ID delta header plus `Include-Feature=AddToOneDrive`
+- `childrenPreferHeader`: prebuilt `Include-Feature=AddToOneDrive` header for child listing
 
 These are instance fields on `graph.Client`, not package globals. Tests in
 package `graph` override them per client instance instead of mutating shared

@@ -159,6 +159,7 @@ type LocalObserver struct {
 	checkWorkers       int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
 	filterConfig       LocalFilterConfig
 	observationRules   LocalObservationRules
+	managedRootEvents  ManagedRootEventSink
 	WatcherFactory     func() (FsWatcher, error)
 	droppedEvents      atomic.Int64                                     // events dropped by TrySend due to full channel
 	droppedRetries     atomic.Int64                                     // hash requests dropped due to full channel
@@ -229,7 +230,15 @@ func (o *LocalObserver) SetFilterConfig(cfg LocalFilterConfig) {
 		SkipSymlinks: cfg.SkipSymlinks,
 		SkipDirs:     append([]string(nil), cfg.SkipDirs...),
 		SkipFiles:    append([]string(nil), cfg.SkipFiles...),
+		ManagedRoots: append([]ManagedRootReservation(nil), cfg.ManagedRoots...),
 	}
+}
+
+// SetManagedRootEventSink installs the control-plane notification sink used
+// for managed-root lifecycle facts. The observer never mutates those roots; it
+// only reports that the owner should reconcile.
+func (o *LocalObserver) SetManagedRootEventSink(sink ManagedRootEventSink) {
+	o.managedRootEvents = sink
 }
 
 // SetObservationRules installs platform-derived local validation rules. These
@@ -237,6 +246,13 @@ func (o *LocalObserver) SetFilterConfig(cfg LocalFilterConfig) {
 // get conflated with local exclusions.
 func (o *LocalObserver) SetObservationRules(rules LocalObservationRules) {
 	o.observationRules = rules
+}
+
+func (o *LocalObserver) reportManagedRootEvent(event ManagedRootEvent) {
+	if o == nil || o.managedRootEvents == nil {
+		return
+	}
+	o.managedRootEvents(event)
 }
 
 func (o *LocalObserver) recordPendingTimer(path string, timer syncTimer) {

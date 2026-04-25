@@ -311,6 +311,7 @@ func (rt *watchRuntime) startObservers(
 	localObs := NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
 	localObs.SetFilterConfig(rt.engine.localFilter)
 	localObs.SetObservationRules(rt.engine.localRules)
+	localObs.SetManagedRootEventSink(rt.engine.managedRootEvents)
 	localObs.SetSkippedChannel(skippedCh)
 	localObs.safetyScanInterval = localWatchHealthySafetyScanInterval
 

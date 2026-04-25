@@ -455,6 +455,7 @@ func TestListChildren_SinglePage(t *testing.T) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Contains(t, r.URL.Path, "/drives/000000000000000d/items/parent/children")
 		assert.Equal(t, "200", r.URL.Query().Get("$top"))
+		assert.Equal(t, "Include-Feature=AddToOneDrive", r.Header.Get("Prefer"))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
