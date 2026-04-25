@@ -1,15 +1,38 @@
 package multisync
 
 import (
-	"context"
 	"fmt"
 	"reflect"
 	"sort"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
+
+type discoveredShortcutBinding struct {
+	BindingItemID     string
+	LocalAlias        string
+	RelativeLocalPath string
+	RemoteDriveID     string
+	RemoteItemID      string
+	State             config.MountState
+	StateReason       string
+}
+
+type mountInventoryMutationResult struct {
+	changed          bool
+	dirtyMountIDs    []string
+	localRootActions []childRootLifecycleAction
+}
+
+func (r *mountInventoryMutationResult) merge(other mountInventoryMutationResult) {
+	if r == nil {
+		return
+	}
+	r.changed = r.changed || other.changed
+	r.dirtyMountIDs = appendUniqueStrings(r.dirtyMountIDs, other.dirtyMountIDs...)
+	r.localRootActions = append(r.localRootActions, other.localRootActions...)
+}
 
 func existingBindingsForNamespace(inventory *config.MountInventory, namespaceID mountID) map[string]config.MountRecord {
 	byBinding := make(map[string]config.MountRecord)
@@ -21,98 +44,6 @@ func existingBindingsForNamespace(inventory *config.MountInventory, namespaceID 
 		byBinding[record.BindingItemID] = record
 	}
 	return byBinding
-}
-
-func applyFullParentEnumeration(
-	inventory *config.MountInventory,
-	parent *mountSpec,
-	existingByBinding map[string]config.MountRecord,
-	discovered map[string]discoveredShortcutBinding,
-) (parentReconcileResult, error) {
-	changed := false
-	removed := make([]string, 0)
-	dirtyMountIDs := make([]string, 0)
-	for bindingID, binding := range discovered {
-		updated, dirtyMountID, err := upsertChildMountRecord(inventory, parent, existingByBinding, binding)
-		if err != nil {
-			return parentReconcileResult{}, err
-		}
-		changed = changed || updated
-		if updated {
-			dirtyMountIDs = appendUniqueStrings(dirtyMountIDs, dirtyMountID)
-		}
-		delete(existingByBinding, bindingID)
-	}
-
-	for bindingID := range existingByBinding {
-		record := existingByBinding[bindingID]
-		updated := markMountPendingRemoval(inventory, &record)
-		delete(existingByBinding, bindingID)
-		if updated {
-			removed = append(removed, record.MountID)
-			changed = true
-			dirtyMountIDs = appendUniqueStrings(dirtyMountIDs, record.MountID)
-		}
-	}
-
-	return parentReconcileResult{changed: changed, removedMountIDs: removed, dirtyMountIDs: dirtyMountIDs}, nil
-}
-
-func applyIncrementalParentDelta(
-	ctx context.Context,
-	inventory *config.MountInventory,
-	existingByBinding map[string]config.MountRecord,
-	session *driveopsSessionView,
-	parent *mountSpec,
-	rootPathPrefix string,
-	items []graph.Item,
-) (parentReconcileResult, error) {
-	changed := false
-	removed := make([]string, 0)
-	dirtyMountIDs := make([]string, 0)
-	for i := range items {
-		item := &items[i]
-		if item.ID == "" {
-			continue
-		}
-		record, found := existingByBinding[item.ID]
-		if item.IsDeleted {
-			if found {
-				if markMountPendingRemoval(inventory, &record) {
-					removed = append(removed, record.MountID)
-					changed = true
-					dirtyMountIDs = appendUniqueStrings(dirtyMountIDs, record.MountID)
-				}
-			}
-			continue
-		}
-
-		binding, ok, err := resolveDiscoveredShortcutBinding(ctx, session, parent, rootPathPrefix, item, found)
-		if err != nil {
-			return parentReconcileResult{}, err
-		}
-		if !ok {
-			if found {
-				if markMountPendingRemoval(inventory, &record) {
-					removed = append(removed, record.MountID)
-					changed = true
-					dirtyMountIDs = appendUniqueStrings(dirtyMountIDs, record.MountID)
-				}
-			}
-			continue
-		}
-
-		updated, dirtyMountID, err := upsertChildMountRecord(inventory, parent, existingByBinding, binding)
-		if err != nil {
-			return parentReconcileResult{}, err
-		}
-		changed = changed || updated
-		if updated {
-			dirtyMountIDs = appendUniqueStrings(dirtyMountIDs, dirtyMountID)
-		}
-	}
-
-	return parentReconcileResult{changed: changed, removedMountIDs: removed, dirtyMountIDs: dirtyMountIDs}, nil
 }
 
 func upsertChildMountRecord(
@@ -138,6 +69,12 @@ func upsertChildMountRecord(
 	if !found && next.RelativeLocalPath == "" {
 		return false, "", nil
 	}
+	if !found {
+		if owner, owned := siblingPathOwner(inventory, parent.mountID.String(), next.RelativeLocalPath, next.MountID); owned {
+			recordDeferredShortcutBinding(inventory, parent, &next)
+			return true, owner.MountID, nil
+		}
+	}
 
 	if found && reflect.DeepEqual(next, record) {
 		return false, "", nil
@@ -148,7 +85,75 @@ func upsertChildMountRecord(
 	}
 	inventory.Mounts[next.MountID] = next
 	existingByBinding[binding.BindingItemID] = next
+	deleteDeferredShortcutBinding(inventory, next.NamespaceID, next.RelativeLocalPath, next.BindingItemID)
 	return true, next.MountID, nil
+}
+
+func siblingPathOwner(
+	inventory *config.MountInventory,
+	namespaceID string,
+	relativeLocalPath string,
+	nextMountID string,
+) (config.MountRecord, bool) {
+	if inventory == nil || relativeLocalPath == "" {
+		return config.MountRecord{}, false
+	}
+	for mountID := range inventory.Mounts {
+		record := inventory.Mounts[mountID]
+		if record.NamespaceID != namespaceID || record.MountID == nextMountID {
+			continue
+		}
+		if record.RelativeLocalPath == relativeLocalPath {
+			return record, true
+		}
+		for _, reservedPath := range record.ReservedLocalPaths {
+			if reservedPath == relativeLocalPath {
+				return record, true
+			}
+		}
+	}
+	return config.MountRecord{}, false
+}
+
+func recordDeferredShortcutBinding(
+	inventory *config.MountInventory,
+	parent *mountSpec,
+	record *config.MountRecord,
+) {
+	if inventory == nil || parent == nil || record == nil || record.BindingItemID == "" || record.RelativeLocalPath == "" {
+		return
+	}
+	if inventory.DeferredShortcutBindings == nil {
+		inventory.DeferredShortcutBindings = make(map[string]config.DeferredShortcutBinding)
+	}
+	key := deferredShortcutBindingKey(record.NamespaceID, record.RelativeLocalPath, record.BindingItemID)
+	inventory.DeferredShortcutBindings[key] = config.DeferredShortcutBinding{
+		NamespaceID:         record.NamespaceID,
+		BindingItemID:       record.BindingItemID,
+		LocalAlias:          record.LocalAlias,
+		RelativeLocalPath:   record.RelativeLocalPath,
+		TokenOwnerCanonical: parent.tokenOwnerCanonical.String(),
+		RemoteDriveID:       record.RemoteDriveID,
+		RemoteItemID:        record.RemoteItemID,
+		State:               record.State,
+		StateReason:         record.StateReason,
+	}
+}
+
+func deleteDeferredShortcutBinding(
+	inventory *config.MountInventory,
+	namespaceID string,
+	relativeLocalPath string,
+	bindingItemID string,
+) {
+	if inventory == nil || len(inventory.DeferredShortcutBindings) == 0 {
+		return
+	}
+	delete(inventory.DeferredShortcutBindings, deferredShortcutBindingKey(namespaceID, relativeLocalPath, bindingItemID))
+}
+
+func deferredShortcutBindingKey(namespaceID string, relativeLocalPath string, bindingItemID string) string {
+	return namespaceID + "|" + relativeLocalPath + "|" + bindingItemID
 }
 
 func childMountRecordForBinding(
@@ -323,6 +328,54 @@ func pendingRemovalMountIDs(inventory *config.MountInventory) []string {
 	}
 
 	return ids
+}
+
+func promoteDeferredShortcutBindings(
+	inventory *config.MountInventory,
+	parents []*mountSpec,
+) mountInventoryMutationResult {
+	if inventory == nil || len(inventory.DeferredShortcutBindings) == 0 {
+		return mountInventoryMutationResult{}
+	}
+
+	parentByID := make(map[string]*mountSpec, len(parents))
+	for i := range parents {
+		parentByID[parents[i].mountID.String()] = parents[i]
+	}
+
+	result := mountInventoryMutationResult{}
+	for key := range inventory.DeferredShortcutBindings {
+		deferred := inventory.DeferredShortcutBindings[key]
+		parent := parentByID[deferred.NamespaceID]
+		if parent == nil {
+			continue
+		}
+		if _, owned := siblingPathOwner(inventory, deferred.NamespaceID, deferred.RelativeLocalPath, ""); owned {
+			continue
+		}
+
+		binding := discoveredShortcutBinding{
+			BindingItemID:     deferred.BindingItemID,
+			LocalAlias:        deferred.LocalAlias,
+			RelativeLocalPath: deferred.RelativeLocalPath,
+			RemoteDriveID:     deferred.RemoteDriveID,
+			RemoteItemID:      deferred.RemoteItemID,
+			State:             deferred.State,
+			StateReason:       deferred.StateReason,
+		}
+		existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
+		updated, dirtyMountID, err := upsertChildMountRecord(inventory, parent, existingByBinding, binding)
+		if err != nil {
+			continue
+		}
+		if updated {
+			result.changed = true
+			result.dirtyMountIDs = appendUniqueStrings(result.dirtyMountIDs, dirtyMountID)
+		}
+		delete(inventory.DeferredShortcutBindings, key)
+	}
+
+	return result
 }
 
 func appendUniqueStrings(values []string, additions ...string) []string {

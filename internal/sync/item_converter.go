@@ -32,11 +32,13 @@ type InflightParent struct {
 // accumulates inflight across delta pages; mount-root callers populate it once per
 // batch. Same methods, different lifetime.
 type ItemConverter struct {
-	Baseline *Baseline
-	DriveID  driveid.ID
-	Logger   *slog.Logger
-	Stats    *ObserverCounters // nil-safe: primary observer provides this
-	Items    ItemClient        // nil-safe: sparse parent enrich is best-effort
+	Baseline            *Baseline
+	DriveID             driveid.ID
+	Logger              *slog.Logger
+	Stats               *ObserverCounters // nil-safe: primary observer provides this
+	Items               ItemClient        // nil-safe: sparse parent enrich is best-effort
+	ShortcutTopology    *ShortcutTopologyBatch
+	ManagedRootBindings map[string]ManagedRootReservation
 
 	// PathPrefix is prepended to materialized paths. Empty for the primary
 	// drive; set for mount-root observation that maps a remote subtree into a
@@ -253,7 +255,8 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 
 	// Embedded shared-folder items are mount boundaries, not ordinary files or
 	// folders in this engine's content root.
-	if item.RemoteDriveID != "" || item.RemoteItemID != "" {
+	if c.isShortcutTopologyItem(item) {
+		c.emitShortcutTopologyFact(item, inflight, itemDriveID, existing)
 		c.Logger.Debug("ignoring embedded shared-folder item",
 			slog.String("item_id", item.ID),
 			slog.String("name", item.Name),
@@ -270,6 +273,92 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 	}
 
 	return c.classifyAndConvert(item, inflight, itemDriveID, existing)
+}
+
+func (c *ItemConverter) isShortcutTopologyItem(item *graph.Item) bool {
+	if item == nil {
+		return false
+	}
+	if item.RemoteDriveID != "" || item.RemoteItemID != "" || item.RemoteIsFolder {
+		return true
+	}
+	if c.ManagedRootBindings == nil {
+		return false
+	}
+	_, known := c.ManagedRootBindings[item.ID]
+	return known
+}
+
+func (c *ItemConverter) emitShortcutTopologyFact(
+	item *graph.Item,
+	inflight map[string]InflightParent,
+	itemDriveID driveid.ID,
+	existing *BaselineEntry,
+) {
+	if c == nil || c.ShortcutTopology == nil || item == nil || item.ID == "" {
+		return
+	}
+
+	if item.IsDeleted {
+		c.ShortcutTopology.appendDelete(ShortcutBindingDelete{BindingItemID: item.ID})
+		return
+	}
+
+	fact := c.shortcutTopologyFact(item, inflight, itemDriveID, existing)
+	remoteIsFolder := item.RemoteIsFolder || item.IsFolder
+	if item.RemoteDriveID != "" && item.RemoteItemID != "" && remoteIsFolder && fact.RelativeLocalPath != "" {
+		c.ShortcutTopology.appendUpsert(ShortcutBindingUpsert{
+			BindingItemID:     item.ID,
+			RelativeLocalPath: fact.RelativeLocalPath,
+			LocalAlias:        fact.LocalAlias,
+			RemoteDriveID:     item.RemoteDriveID,
+			RemoteItemID:      item.RemoteItemID,
+			RemoteIsFolder:    remoteIsFolder,
+			Complete:          true,
+		})
+		return
+	}
+
+	if fact.HasEvidence {
+		c.ShortcutTopology.appendUnavailable(ShortcutBindingUnavailable{
+			BindingItemID:     item.ID,
+			RelativeLocalPath: fact.RelativeLocalPath,
+			LocalAlias:        fact.LocalAlias,
+			RemoteDriveID:     item.RemoteDriveID,
+			RemoteItemID:      item.RemoteItemID,
+			RemoteIsFolder:    remoteIsFolder,
+			Reason:            "shortcut_binding_unavailable",
+		})
+	}
+}
+
+type shortcutTopologyItemFact struct {
+	RelativeLocalPath string
+	LocalAlias        string
+	HasEvidence       bool
+}
+
+func (c *ItemConverter) shortcutTopologyFact(
+	item *graph.Item,
+	inflight map[string]InflightParent,
+	itemDriveID driveid.ID,
+	existing *BaselineEntry,
+) shortcutTopologyItemFact {
+	reservation, known := c.ManagedRootBindings[item.ID]
+	name := effectiveItemName(item, existing)
+	relPath := c.materializePathWithBaselineFallback(item, inflight, itemDriveID, existing, name)
+	if relPath == "" && known {
+		relPath = reservation.Path
+	}
+	if name == "" && relPath != "" {
+		name = managedRootPrimaryName(relPath)
+	}
+
+	return shortcutTopologyItemFact{
+		RelativeLocalPath: relPath,
+		LocalAlias:        name,
+		HasEvidence:       known || item.RemoteDriveID != "" || item.RemoteItemID != "" || item.RemoteIsFolder || item.IsFolder,
+	}
 }
 
 // classifyAndConvert classifies the change type and builds a ChangeEvent.

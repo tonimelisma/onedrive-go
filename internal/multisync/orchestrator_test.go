@@ -89,11 +89,12 @@ func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, mounts ...Stan
 	provider := driveops.NewSessionRuntime(holder, "test/1.0", slog.Default())
 
 	return &OrchestratorConfig{
-		Holder:                 holder,
-		StandaloneMounts:       mounts,
-		ReloadStandaloneMounts: testStandaloneMountsFromConfig,
-		Runtime:                provider,
-		Logger:                 slog.Default(),
+		Holder:                   holder,
+		StandaloneMounts:         mounts,
+		ReloadStandaloneMounts:   testStandaloneMountsFromConfig,
+		Runtime:                  provider,
+		Logger:                   slog.Default(),
+		disableTopologyPreflight: true,
 	}
 }
 
@@ -641,7 +642,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	mounts, err := buildStandaloneMountSpecs([]StandaloneMountConfig{rd})
 	require.NoError(t, err)
 
-	wr, err := orch.startWatchRunner(ctx, mounts[0], syncengine.SyncDownloadOnly, syncengine.WatchOptions{}, nil)
+	wr, err := orch.startWatchRunner(ctx, mounts[0], syncengine.SyncDownloadOnly, syncengine.WatchOptions{}, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.True(t, captured.Mount.enableWebsocket)
@@ -744,6 +745,58 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedMount(t *testing.T) {
 	require.NoError(t, healthyReport.Err)
 	require.NotNil(t, healthyReport.Report)
 	assert.Equal(t, 1, healthyReport.Report.Downloads)
+}
+
+// Validates: R-2.4
+func TestRunOnce_PreflightsParentShortcutTopologyBeforeStartingChildren(t *testing.T) {
+	parent := testStandaloneMount(t, "personal:preflight@example.com", "Preflight")
+	setupXDGIsolation(t, parent.CanonicalID)
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.disableTopologyPreflight = false
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+
+	bindingID := "binding-preflight"
+	childID := config.ChildMountID(parent.CanonicalID.String(), bindingID)
+	preflighted := false
+	runMounts := make([]mountID, 0)
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		if !preflighted && req.Mount.projectionKind == MountProjectionStandalone {
+			preflighted = true
+			return &topologyRefreshEngine{
+				mockEngine: &mockEngine{report: &syncengine.Report{}},
+				refreshFn: func(ctx context.Context) error {
+					return req.Mount.shortcutTopologyHandler(ctx, syncengine.ShortcutTopologyBatch{
+						NamespaceID: req.Mount.mountID.String(),
+						Kind:        syncengine.ShortcutTopologyObservationComplete,
+						Upserts: []syncengine.ShortcutBindingUpsert{{
+							BindingItemID:     bindingID,
+							RelativeLocalPath: "Shortcuts/Preflight",
+							LocalAlias:        "Preflight",
+							RemoteDriveID:     "remote-child-drive",
+							RemoteItemID:      "remote-child-root",
+							RemoteIsFolder:    true,
+							Complete:          true,
+						}},
+					})
+				},
+			}, nil
+		}
+
+		runMounts = append(runMounts, req.Mount.mountID)
+		return &mockEngine{report: &syncengine.Report{}}, nil
+	}
+
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+
+	require.True(t, preflighted)
+	require.Len(t, result.Reports, 2)
+	assert.Contains(t, runMounts, mountID(parent.CanonicalID.String()))
+	assert.Contains(t, runMounts, mountID(childID))
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	require.Contains(t, loaded.Mounts, childID)
 }
 
 // Validates: R-2.4
@@ -976,6 +1029,18 @@ func (m *mockEngine) RunWatch(ctx context.Context, mode syncengine.SyncMode, opt
 func (m *mockEngine) Close(context.Context) error {
 	m.closed = true
 	return nil
+}
+
+type topologyRefreshEngine struct {
+	*mockEngine
+	refreshFn func(context.Context) error
+}
+
+func (m *topologyRefreshEngine) RefreshShortcutTopology(ctx context.Context) error {
+	if m.refreshFn == nil {
+		return nil
+	}
+	return m.refreshFn(ctx)
 }
 
 // --- RunWatch ---

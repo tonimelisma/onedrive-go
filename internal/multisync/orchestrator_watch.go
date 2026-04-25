@@ -2,6 +2,7 @@ package multisync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -14,6 +15,11 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
+const (
+	watchRunnerEventBuffer = 64
+	managedRootEventBuffer = 64
+)
+
 // watchRunner holds per-mount state for a running watch-mode engine.
 type watchRunner struct {
 	mount  *mountSpec
@@ -22,7 +28,10 @@ type watchRunner struct {
 	done   chan struct{} // closed exactly once by the goroutine started in startWatchRunner
 }
 
-const managedRootEventBuffer = 64
+type watchRunnerEvent struct {
+	mountID mountID
+	err     error
+}
 
 // RunWatch runs all configured runnable mounts in watch mode. On control-socket
 // reload, it re-reads the config file, rebuilds runtime mount specs, and diffs
@@ -31,7 +40,8 @@ const managedRootEventBuffer = 64
 func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
 	commands := make(chan controlCommand)
 	managedRootEvents := make(chan syncengine.ManagedRootEvent, managedRootEventBuffer)
-	runners, control, err := o.startWatchRuntime(ctx, mode, opts, commands, managedRootEvents)
+	runnerEvents := make(chan watchRunnerEvent, watchRunnerEventBuffer)
+	runners, control, err := o.startWatchRuntime(ctx, mode, opts, commands, managedRootEvents, runnerEvents)
 	if err != nil {
 		if control != nil {
 			o.closeControlSocket(ctx, control)
@@ -64,7 +74,7 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	for {
 		select {
 		case cmd := <-commands:
-			if o.handleControlCommand(ctx, &cmd, mode, opts, runners, managedRootEvents) {
+			if o.handleControlCommand(ctx, &cmd, mode, opts, runners, managedRootEvents, runnerEvents) {
 				return nil
 			}
 		case event := <-managedRootEvents:
@@ -74,9 +84,11 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 				slog.String("reserved_path", event.ReservedPath),
 				slog.String("mount_id", event.MountID),
 			)
-			o.reconcileWatchRunners(ctx, mode, opts, runners, managedRootEvents)
+			o.reconcileWatchRunners(ctx, mode, opts, runners, managedRootEvents, runnerEvents)
+		case event := <-runnerEvents:
+			o.handleWatchRunnerEvent(ctx, event, mode, opts, runners, managedRootEvents, runnerEvents)
 		case <-reconcileTickCh:
-			o.reconcileWatchRunners(ctx, mode, opts, runners, managedRootEvents)
+			o.reconcileWatchRunners(ctx, mode, opts, runners, managedRootEvents, runnerEvents)
 		case <-ctx.Done():
 			return nil
 		}
@@ -89,6 +101,7 @@ func (o *Orchestrator) startWatchRuntime(
 	opts syncengine.WatchOptions,
 	commands chan controlCommand,
 	managedRootEvents chan<- syncengine.ManagedRootEvent,
+	runnerEvents chan<- watchRunnerEvent,
 ) (map[mountID]*watchRunner, *controlSocketServer, error) {
 	if len(o.cfg.StandaloneMounts) == 0 {
 		if len(o.cfg.InitialStartupResults) > 0 {
@@ -119,6 +132,16 @@ func (o *Orchestrator) startWatchRuntime(
 	if err != nil {
 		return nil, control, fmt.Errorf("sync: finalizing mount lifecycle: %w", err)
 	}
+	compiled, err = o.preflightShortcutTopology(
+		ctx,
+		compiled,
+		o.cfg.StandaloneMounts,
+		o.cfg.InitialStartupResults,
+		"watch startup shortcut topology preflight",
+	)
+	if err != nil {
+		return nil, control, fmt.Errorf("sync: preflighting shortcut topology: %w", err)
+	}
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
 	o.logger.Info("orchestrator starting RunWatch",
@@ -126,7 +149,7 @@ func (o *Orchestrator) startWatchRuntime(
 		slog.String("mode", mode.String()),
 	)
 
-	runners, startResults := o.startInitialWatchRunners(ctx, mode, compiled.Mounts, compiled.Skipped, opts, managedRootEvents)
+	runners, startResults := o.startInitialWatchRunners(ctx, mode, compiled.Mounts, compiled.Skipped, opts, managedRootEvents, runnerEvents)
 	startSummary := summarizeStartupResults(startResults)
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
 		return nil, control, err
@@ -145,6 +168,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 	initialStartup []MountStartupResult,
 	opts syncengine.WatchOptions,
 	managedRootEvents chan<- syncengine.ManagedRootEvent,
+	runnerEvents chan<- watchRunnerEvent,
 ) (map[mountID]*watchRunner, []MountStartupResult) {
 	runners := make(map[mountID]*watchRunner)
 	startResults := append([]MountStartupResult(nil), initialStartup...)
@@ -165,7 +189,8 @@ func (o *Orchestrator) startInitialWatchRunners(
 			continue
 		}
 
-		wr, err := o.startWatchRunner(ctx, mount, mode, opts, managedRootEvents)
+		o.attachShortcutTopologyHandler(mount, true)
+		wr, err := o.startWatchRunner(ctx, mount, mode, opts, managedRootEvents, runnerEvents)
 		if err != nil {
 			o.logger.Error("failed to start watch runner",
 				slog.String("mount_id", mount.mountID.String()),
@@ -225,6 +250,7 @@ func (o *Orchestrator) startWatchRunner(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	managedRootEvents chan<- syncengine.ManagedRootEvent,
+	runnerEvents chan<- watchRunnerEvent,
 ) (*watchRunner, error) {
 	session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 	if err != nil {
@@ -266,6 +292,12 @@ func (o *Orchestrator) startWatchRunner(
 					slog.String("mount_id", mount.mountID.String()),
 					slog.String("error", watchErr.Error()),
 				)
+				if runnerEvents != nil {
+					select {
+					case runnerEvents <- watchRunnerEvent{mountID: mount.mountID, err: watchErr}:
+					case <-ctx.Done():
+					}
+				}
 			}
 		}
 	}()
@@ -318,8 +350,9 @@ func (o *Orchestrator) reload(
 	ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	managedRootEvents chan<- syncengine.ManagedRootEvent,
+	runnerEvents chan<- watchRunnerEvent,
 ) {
-	newCfg, newSelection, newMounts, err := o.loadReloadMounts(ctx)
+	newCfg, newSelection, err := o.loadReloadSelection(ctx)
 	if err != nil {
 		o.logger.Warn("config reload failed, keeping current state",
 			slog.String("error", err.Error()),
@@ -328,12 +361,44 @@ func (o *Orchestrator) reload(
 		return
 	}
 
+	oldCfg := o.cfg.Holder.Config()
+	oldMounts := o.cfg.StandaloneMounts
+	oldStartup := o.cfg.InitialStartupResults
 	o.cfg.Holder.Update(newCfg)
 	o.cfg.StandaloneMounts = newSelection.Mounts
 	o.cfg.InitialStartupResults = newSelection.StartupResults
 	o.cfg.Runtime.FlushTokenCache()
 
-	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, newMounts, mode, opts, managedRootEvents)
+	newMounts, err := o.buildRuntimeMountSet(ctx, newSelection.Mounts, newSelection.StartupResults)
+	if err != nil {
+		o.cfg.Holder.Update(oldCfg)
+		o.cfg.StandaloneMounts = oldMounts
+		o.cfg.InitialStartupResults = oldStartup
+		o.cfg.Runtime.FlushTokenCache()
+		o.logger.Warn("config reload failed, keeping current state",
+			slog.String("error", fmt.Errorf("building mount specs after reload: %w", err).Error()),
+		)
+		return
+	}
+	newMounts, err = o.preflightShortcutTopology(
+		ctx,
+		newMounts,
+		newSelection.Mounts,
+		newSelection.StartupResults,
+		"watch reload shortcut topology preflight",
+	)
+	if err != nil {
+		o.cfg.Holder.Update(oldCfg)
+		o.cfg.StandaloneMounts = oldMounts
+		o.cfg.InitialStartupResults = oldStartup
+		o.cfg.Runtime.FlushTokenCache()
+		o.logger.Warn("config reload failed, keeping current state",
+			slog.String("error", fmt.Errorf("preflighting shortcut topology after reload: %w", err).Error()),
+		)
+		return
+	}
+
+	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, newMounts, mode, opts, managedRootEvents, runnerEvents)
 	if len(startResults) > 0 {
 		o.emitStartWarning(summarizeStartupResults(startResults))
 	}
@@ -352,6 +417,7 @@ func (o *Orchestrator) reconcileWatchRunners(
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	managedRootEvents chan<- syncengine.ManagedRootEvent,
+	runnerEvents chan<- watchRunnerEvent,
 ) {
 	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
@@ -361,7 +427,7 @@ func (o *Orchestrator) reconcileWatchRunners(
 		return
 	}
 
-	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, compiled, mode, opts, managedRootEvents)
+	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, compiled, mode, opts, managedRootEvents, runnerEvents)
 	if len(startResults) > 0 {
 		o.emitStartWarning(summarizeStartupResults(startResults))
 	}
@@ -373,30 +439,69 @@ func (o *Orchestrator) reconcileWatchRunners(
 	)
 }
 
-func (o *Orchestrator) loadReloadMounts(
+func (o *Orchestrator) handleWatchRunnerEvent(
 	ctx context.Context,
-) (*config.Config, StandaloneMountSelection, *compiledMountSet, error) {
+	event watchRunnerEvent,
+	mode syncengine.SyncMode,
+	opts syncengine.WatchOptions,
+	runners map[mountID]*watchRunner,
+	managedRootEvents chan<- syncengine.ManagedRootEvent,
+	runnerEvents chan<- watchRunnerEvent,
+) {
+	wr := runners[event.mountID]
+	if wr != nil {
+		<-wr.done
+		if closeErr := wr.engine.Close(ctx); closeErr != nil {
+			o.logger.Warn("engine close error after watch runner exit",
+				slog.String("mount_id", event.mountID.String()),
+				slog.String("error", closeErr.Error()),
+			)
+		}
+		delete(runners, event.mountID)
+	}
+
+	if event.err != nil && errors.Is(event.err, syncengine.ErrMountTopologyChanged) {
+		o.logger.Info("watch runner requested topology reconciliation",
+			slog.String("mount_id", event.mountID.String()),
+		)
+	} else if event.err != nil && errors.Is(event.err, syncengine.ErrMountRootUnavailable) {
+		o.logger.Info("watch runner stopped because mount root is unavailable",
+			slog.String("mount_id", event.mountID.String()),
+			slog.String("error", event.err.Error()),
+		)
+	} else if event.err != nil {
+		o.logger.Warn("watch runner stopped; reconciling mount set",
+			slog.String("mount_id", event.mountID.String()),
+			slog.String("error", event.err.Error()),
+		)
+	}
+
+	o.reconcileWatchRunners(ctx, mode, opts, runners, managedRootEvents, runnerEvents)
+}
+
+func (o *Orchestrator) loadReloadSelection(
+	ctx context.Context,
+) (*config.Config, StandaloneMountSelection, error) {
+	if ctx == nil {
+		return nil, StandaloneMountSelection{}, fmt.Errorf("reload context is required")
+	}
+
 	newCfg, err := config.LoadOrDefault(o.cfg.Holder.Path(), o.logger)
 	if err != nil {
-		return nil, StandaloneMountSelection{}, nil, fmt.Errorf("loading config for reload: %w", err)
+		return nil, StandaloneMountSelection{}, fmt.Errorf("loading config for reload: %w", err)
 	}
 
 	config.ClearExpiredPauses(o.cfg.Holder.Path(), newCfg, time.Now(), o.logger)
 
 	if o.cfg.ReloadStandaloneMounts == nil {
-		return nil, StandaloneMountSelection{}, nil, fmt.Errorf("standalone mount reload compiler is required")
+		return nil, StandaloneMountSelection{}, fmt.Errorf("standalone mount reload compiler is required")
 	}
 	newSelection, err := o.cfg.ReloadStandaloneMounts(newCfg)
 	if err != nil {
-		return nil, StandaloneMountSelection{}, nil, fmt.Errorf("compiling standalone mounts after reload: %w", err)
+		return nil, StandaloneMountSelection{}, fmt.Errorf("compiling standalone mounts after reload: %w", err)
 	}
 
-	newMounts, err := o.buildRuntimeMountSet(ctx, newSelection.Mounts, newSelection.StartupResults)
-	if err != nil {
-		return nil, StandaloneMountSelection{}, nil, fmt.Errorf("building mount specs after reload: %w", err)
-	}
-
-	return newCfg, newSelection, newMounts, nil
+	return newCfg, newSelection, nil
 }
 
 func (o *Orchestrator) applyWatchMountSet(
@@ -406,6 +511,7 @@ func (o *Orchestrator) applyWatchMountSet(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	managedRootEvents chan<- syncengine.ManagedRootEvent,
+	runnerEvents chan<- watchRunnerEvent,
 ) (int, int, []MountStartupResult) {
 	runnable := runnableMountMap(compiled.Mounts)
 	stopped := o.stopInactiveWatchRunners(ctx, runners, runnable)
@@ -427,7 +533,7 @@ func (o *Orchestrator) applyWatchMountSet(
 	}
 	runnable = runnableMountMap(compiled.Mounts)
 	stopped += o.stopInactiveWatchRunners(ctx, runners, runnable)
-	started, startResults := o.startReloadWatchRunners(ctx, runners, runnable, compiled.Skipped, mode, opts, managedRootEvents)
+	started, startResults := o.startReloadWatchRunners(ctx, runners, runnable, compiled.Skipped, mode, opts, managedRootEvents, runnerEvents)
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 
 	return stopped, started, startResults
@@ -568,6 +674,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	managedRootEvents chan<- syncengine.ManagedRootEvent,
+	runnerEvents chan<- watchRunnerEvent,
 ) (int, []MountStartupResult) {
 	started := 0
 	startResults := append([]MountStartupResult(nil), initialStartup...)
@@ -577,7 +684,8 @@ func (o *Orchestrator) startReloadWatchRunners(
 			continue
 		}
 
-		wr, err := o.startWatchRunner(ctx, mount, mode, opts, managedRootEvents)
+		o.attachShortcutTopologyHandler(mount, true)
+		wr, err := o.startWatchRunner(ctx, mount, mode, opts, managedRootEvents, runnerEvents)
 		if err != nil {
 			o.logger.Error("failed to start watch runner during reload",
 				slog.String("mount_id", id.String()),

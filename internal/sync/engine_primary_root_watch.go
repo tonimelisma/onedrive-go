@@ -28,6 +28,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 
 	remoteObs := NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
 	remoteObs.SetItemClient(rt.engine.itemsClient)
+	remoteObs.SetShortcutTopology(rt.engine.shortcutTopologyNamespaceID, rt.engine.localFilter.ManagedRoots)
 	rt.remoteObs = remoteObs
 	wakeCh := rt.startSocketIOWakeSource(ctx)
 
@@ -52,10 +53,12 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			batches,
 			pollInterval,
 			wakeCh,
-			func(ctx context.Context, polledEvents []ChangeEvent, newToken string) (remoteObservationBatch, error) {
+			func(ctx context.Context, polledEvents []ChangeEvent, newToken string, topology ShortcutTopologyBatch) (remoteObservationBatch, error) {
 				_ = ctx
 				_ = bl
-				return buildPrimaryWatchBatch(rt.engine, polledEvents, newToken), nil
+				batch := buildPrimaryWatchBatch(rt.engine, polledEvents, newToken)
+				batch.shortcutTopology = topology
+				return batch, nil
 			},
 		)
 	}()

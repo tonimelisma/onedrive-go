@@ -67,6 +67,20 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 			fmt.Errorf("finalizing mount lifecycle: %w", err),
 		)
 	}
+	compiled, err = o.preflightShortcutTopology(
+		ctx,
+		compiled,
+		o.cfg.StandaloneMounts,
+		o.cfg.InitialStartupResults,
+		"startup shortcut topology preflight",
+	)
+	if err != nil {
+		return controlFailureRunOnceResult(
+			o.cfg.StandaloneMounts,
+			o.cfg.InitialStartupResults,
+			fmt.Errorf("preflighting shortcut topology: %w", err),
+		)
+	}
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
 	o.logger.Info("orchestrator starting RunOnce",
@@ -158,6 +172,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 			continue
 		}
 
+		o.attachShortcutTopologyHandler(mount, false)
 		w, engineErr := o.buildEngineWork(ctx, mount, session, mode, opts)
 		if engineErr != nil {
 			startResults = append(startResults, mountStartupResultForMount(mount, engineErr))

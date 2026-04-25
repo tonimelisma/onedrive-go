@@ -25,10 +25,10 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Standalone shared-folder drives always preserve the canonical remote root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
 | Mount-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields` |
-| Managed child mount inventory persists shortcut lifecycle state, duplicate/content-root conflicts, explicit-standalone suppression, local-root identity, and local alias lifecycle reasons without creating synthetic configured drives. | `internal/config/mount_inventory_test.go`, `internal/multisync/shortcut_reconcile_test.go`, `internal/multisync/mount_root_lifecycle_test.go`, `internal/multisync/shortcut_local_root_actions_test.go` |
+| Managed child mount inventory persists shortcut lifecycle state, duplicate/content-root conflicts, explicit-standalone suppression, local-root identity, and local alias lifecycle reasons without creating synthetic configured drives. | `internal/config/mount_inventory_test.go`, `internal/multisync/shortcut_topology_test.go`, `internal/multisync/mount_root_lifecycle_test.go`, `internal/multisync/shortcut_local_root_actions_test.go` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
-| Mount inventory schema v6 owns child lifecycle reasons, unavailable shortcut-binding records, reserved projection paths, and same-parent local-root identity. | `TestMountInventory_RoundTrip`, `TestMountInventory_UnavailableShortcutBindingMayOmitRemoteTarget`, `TestMountInventory_RemoteTargetRequiredForOtherLifecycleStates`, `TestMountInventory_ReservedLocalPathsNormalizeAndValidate`, `TestMountInventory_LocalRootReasonsValidate` |
+| Mount inventory schema v6 owns child lifecycle reasons, unavailable shortcut-binding records, deferred same-path shortcut bindings, local-root identity, and reserved projection paths. | `TestMountInventory_RoundTrip`, `TestMountInventory_UnavailableShortcutBindingMayOmitRemoteTarget`, `TestMountInventory_RemoteTargetRequiredForOtherLifecycleStates`, `TestMountInventory_ReservedLocalPathsNormalizeAndValidate`, `TestMountInventory_LocalRootReasonsValidate` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
 
@@ -333,10 +333,9 @@ bindings, so it follows the same managed-file discipline:
   - `MountState`
   - `StateReason` for conflict, unavailable, and pending-removal lifecycle
     states
-- namespace discovery state is stored alongside mount records:
-  - `NamespaceID`
-  - `DeltaLink`
-  - `DiscoveryMode`
+- deferred shortcut bindings are stored separately when a new binding arrives at
+  a path still reserved by a pending-removal mount; they are promoted only after
+  the old projection finalizes
 - sibling child mounts under the same namespace may not reuse or nest local
   relative paths; reserved local paths participate in that ownership check
 - every save is a full atomic rewrite of the file
@@ -354,11 +353,12 @@ suppressed by an explicitly configured standalone shared-folder drive use
 bindings that cannot be refreshed use `shortcut_binding_unavailable`; child
 projection move collisions use `local_projection_conflict`; projection move
 filesystem failures use `local_projection_unavailable`; child local-root
-file/symlink collisions use `local_root_collision`; and transient local-root
-stat/create failures use `local_root_unavailable`. Local alias rename
-ambiguity uses `local_alias_rename_conflict`; transient rename/delete Graph or
-filesystem failures use `local_alias_rename_unavailable` or
-`local_alias_delete_unavailable`.
+file/symlink collisions use `local_root_collision`; transient local-root
+stat/create failures use `local_root_unavailable`; removed shortcut projections
+that still contain local content use `removed_projection_dirty`; removed
+shortcut projection cleanup failures use `removed_projection_unavailable`; and
+local alias lifecycle failures use `local_alias_rename_conflict`,
+`local_alias_rename_unavailable`, or `local_alias_delete_unavailable`.
 
 `MountStatePath(mountID)` gives each managed child mount a stable retained-state
 DB path independent of configured drive canonical IDs. Configured standalone
@@ -382,8 +382,8 @@ from the parent namespace until the local projection move is completed. Reserved
 paths are validated as safe relative paths and are not user controls. They are
 cleared when the control plane proves the local projection moved safely,
 including the safe auto-resolve cases where the new target is empty or the old
-and new projection trees have identical regular-file content. If Graph returns
-a shortcut placeholder but does not return a usable target, config accepts an
+and new projection trees have identical regular-file content. If parent-engine
+topology reports a shortcut placeholder without a usable target, config accepts an
 `unavailable` record with
 `state_reason: shortcut_binding_unavailable` and no remote target IDs. That
 state belongs to mount inventory; it is not a sync-store retry/block/observation
