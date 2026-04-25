@@ -194,6 +194,8 @@ func TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips(t *t
 	newRoot := filepath.Join(parentSyncRoot, "Shortcuts", "New Docs")
 	require.NoError(t, os.MkdirAll(oldRoot, 0o700))
 	require.NoError(t, os.MkdirAll(newRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(oldRoot, "file.txt"), []byte("old"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(newRoot, "file.txt"), []byte("new"), 0o600))
 
 	applyChildProjectionMoves(compiled, nil)
 
@@ -202,6 +204,92 @@ func TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips(t *t
 	assert.Contains(t, compiled.Skipped[0].Err.Error(), config.MountStateReasonLocalProjectionConflict)
 	assert.DirExists(t, oldRoot)
 	assert.DirExists(t, newRoot)
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	updated := loaded.Mounts[record.MountID]
+	assert.Equal(t, config.MountStateConflict, updated.State)
+	assert.Equal(t, config.MountStateReasonLocalProjectionConflict, updated.StateReason)
+	assert.Equal(t, []string{"Shortcuts/Old Docs"}, updated.ReservedLocalPaths)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestApplyChildProjectionMoves_TargetEmptyAutoResolves(t *testing.T) {
+	compiled, record, parentSyncRoot, parent := compiledChildProjectionMoveFixture(t, shortcutOldDocsPath, shortcutNewDocsPath)
+	oldRoot := filepath.Join(parentSyncRoot, "Shortcuts", "Old Docs")
+	newRoot := filepath.Join(parentSyncRoot, "Shortcuts", "New Docs")
+	require.NoError(t, os.MkdirAll(oldRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(oldRoot, "kept.txt"), []byte("stateful"), 0o600))
+	require.NoError(t, os.MkdirAll(newRoot, 0o700))
+
+	changed := applyChildProjectionMoves(compiled, nil)
+
+	assert.True(t, changed)
+	assert.NoDirExists(t, oldRoot)
+	assert.FileExists(t, filepath.Join(newRoot, "kept.txt"))
+	assert.Empty(t, compiled.Skipped)
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	updated := loaded.Mounts[record.MountID]
+	assert.Empty(t, updated.ReservedLocalPaths)
+	assert.Equal(t, config.MountStateActive, updated.State)
+	assert.Empty(t, updated.StateReason)
+
+	refreshed, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, loaded)
+	require.NoError(t, err)
+	require.NotEmpty(t, refreshed.Mounts)
+	assert.Equal(t, []string{"Shortcuts/New Docs"}, refreshed.Mounts[0].localSkipDirs)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestApplyChildProjectionMoves_MatchingTreesAutoResolve(t *testing.T) {
+	compiled, record, parentSyncRoot, parent := compiledChildProjectionMoveFixture(t, shortcutOldDocsPath, shortcutNewDocsPath)
+	oldRoot := filepath.Join(parentSyncRoot, "Shortcuts", "Old Docs")
+	newRoot := filepath.Join(parentSyncRoot, "Shortcuts", "New Docs")
+	for _, root := range []string{oldRoot, newRoot} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "nested", "empty"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "nested", "kept.txt"), []byte("same"), 0o600))
+	}
+
+	changed := applyChildProjectionMoves(compiled, nil)
+
+	assert.True(t, changed)
+	assert.NoDirExists(t, oldRoot)
+	assert.FileExists(t, filepath.Join(newRoot, "nested", "kept.txt"))
+	assert.Empty(t, compiled.Skipped)
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	updated := loaded.Mounts[record.MountID]
+	assert.Empty(t, updated.ReservedLocalPaths)
+	assert.Equal(t, config.MountStateActive, updated.State)
+	assert.Empty(t, updated.StateReason)
+
+	refreshed, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, loaded)
+	require.NoError(t, err)
+	require.NotEmpty(t, refreshed.Mounts)
+	assert.Equal(t, []string{"Shortcuts/New Docs"}, refreshed.Mounts[0].localSkipDirs)
+}
+
+// Validates: R-2.8.1, R-4.1.4
+func TestApplyChildProjectionMoves_SymlinkInExistingTreeConflicts(t *testing.T) {
+	compiled, record, parentSyncRoot, _ := compiledChildProjectionMoveFixture(t, shortcutOldDocsPath, shortcutNewDocsPath)
+	oldRoot := filepath.Join(parentSyncRoot, "Shortcuts", "Old Docs")
+	newRoot := filepath.Join(parentSyncRoot, "Shortcuts", "New Docs")
+	require.NoError(t, os.MkdirAll(oldRoot, 0o700))
+	require.NoError(t, os.MkdirAll(newRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(newRoot, "file.txt"), []byte("target"), 0o600))
+	if symlinkErr := os.Symlink(filepath.Join(newRoot, "file.txt"), filepath.Join(oldRoot, "link")); symlinkErr != nil {
+		t.Skipf("symlink not available on this filesystem: %v", symlinkErr)
+	}
+
+	changed := applyChildProjectionMoves(compiled, nil)
+
+	assert.True(t, changed)
+	require.Len(t, compiled.Mounts, 1)
+	require.Len(t, compiled.Skipped, 1)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), config.MountStateReasonLocalProjectionConflict)
 
 	loaded, err := config.LoadMountInventory()
 	require.NoError(t, err)

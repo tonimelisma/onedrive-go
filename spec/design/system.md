@@ -272,6 +272,10 @@ Static verification is a first-class architectural constraint, not a best-effort
   shortcut-added in kikkelimies's root, and `Testi2 Shared Folder` owned by
   testitesti18 and added as an explicit `shared:` drive for standalone shared
   folder coverage.
+  Full shortcut rename/move tests mutate only the manual shortcut placeholder,
+  restore its original alias and parent path in cleanup, and validate local
+  projection/state reuse through sync output and status. They do not depend on
+  provider-specific direct traversal through `/shortcut` in the parent drive.
 - Full-suite sync tests that stress concurrent uploads must assert eventual
   sync convergence, not single-pass perfection. A one-shot `sync --upload-only`
   run may legitimately persist retryable transient `retry_work` when one exact
@@ -292,7 +296,7 @@ Static verification is a first-class architectural constraint, not a best-effort
 - CI uses `--classify-live-quirks` only for scheduled/manual `e2e-full` runs. Required per-PR verification remains strict.
 - CI keeps the expensive runtime stress lane out of the required per-PR path, but exposes it explicitly on a scheduled cadence and via manual dispatch so race-heavy watch/runtime regressions remain visible. Scheduled/manual stress runs now upload the verifier `--summary-json` artifact so timeout growth and slowest-test evidence remain visible even when the package step stays green.
 - Managed repo-state files use `internal/fsroot` root capabilities.
-- Sync-runtime filesystem operations under one configured sync root use `internal/synctree`. Managed shortcut projection roots use opt-in `synctree` helpers for no-symlink ancestor validation, safe component creation, root-contained path-state checks, and rooted renames; ordinary content sync symlink policy remains owned by the existing sync observation/execution rules.
+- Sync-runtime filesystem operations under one configured sync root use `internal/synctree`. Managed shortcut projection roots use opt-in `synctree` helpers for no-symlink ancestor validation, safe component creation, root-contained path-state checks, rooted renames, empty-target replacement, byte-identical tree comparison, and no-follow tree removal; ordinary content sync symlink policy remains owned by the existing sync observation/execution rules.
 - Arbitrary local file paths outside those rooted domains use `internal/localpath` as the explicit trust boundary. `localpath.AtomicWrite` is the default arbitrary-path writer when replace-in-place semantics matter.
 - Append-only log file creation in `internal/logfile` is the single documented exception to atomic replace-style writes. It is allowed because the log is an append-only operational artifact, not an authoritative config/state file.
 - `fsroot.Root` and `synctree.Root` carry unexported injectable ops so managed-state and sync-runtime I/O failure paths can be tested deterministically without package-level test hooks.

@@ -185,7 +185,6 @@ func statusAccountLabel(acct *statusAccount) string {
 }
 
 func printMountStatus(w io.Writer, mount *statusMount, history bool) error {
-	const childMountIndent = "    "
 	if mount == nil {
 		return nil
 	}
@@ -195,34 +194,29 @@ func printMountStatus(w io.Writer, mount *statusMount, history bool) error {
 		syncDir = syncDirNotSet
 	}
 
-	indent := "  "
-	detailIndent := childMountIndent
-	if mount.NamespaceID != "" {
-		indent = childMountIndent
-		detailIndent = "      "
-	}
+	layout := statusMountTextLayoutFor(mount)
 
-	if err := writef(w, "%s%s\n", indent, statusMountLabel(mount)); err != nil {
+	if err := writef(w, "%s%s\n", layout.headingIndent, statusMountLabel(mount)); err != nil {
 		return err
 	}
-	if err := writef(w, "%sSync dir:  %s\n", detailIndent, syncDir); err != nil {
+	if err := writef(w, "%sSync dir:  %s\n", layout.detailIndent, syncDir); err != nil {
 		return err
 	}
-	if err := writef(w, "%sState:     %s\n", detailIndent, mount.State); err != nil {
+	if err := writef(w, "%sState:     %s\n", layout.detailIndent, mount.State); err != nil {
 		return err
 	}
 	if mount.NamespaceID != "" {
-		if err := writef(w, "%sControl:   Parent drive pause/resume and the OneDrive shortcut\n", detailIndent); err != nil {
+		if err := writef(w, "%sControl:   Parent drive pause/resume and the OneDrive shortcut\n", layout.detailIndent); err != nil {
 			return err
 		}
 	}
 	if mount.StateReason != "" {
-		if err := writef(w, "%sReason:    %s\n", detailIndent, mount.StateReason); err != nil {
+		if err := writef(w, "%sReason:    %s\n", layout.detailIndent, mount.StateReason); err != nil {
 			return err
 		}
 	}
 	if mount.StateDetail != "" {
-		if err := writef(w, "%sNext:      %s\n", detailIndent, mount.StateDetail); err != nil {
+		if err := writef(w, "%sNext:      %s\n", layout.detailIndent, mount.StateDetail); err != nil {
 			return err
 		}
 	}
@@ -230,11 +224,30 @@ func printMountStatus(w io.Writer, mount *statusMount, history bool) error {
 		return printChildMountStatuses(w, mount.ChildMounts, history)
 	}
 
-	if err := printSyncStateText(w, detailIndent, mount.SyncState, history); err != nil {
+	if err := printSyncStateText(w, layout.detailIndent, mount.SyncState, history); err != nil {
 		return err
 	}
 
 	return printChildMountStatuses(w, mount.ChildMounts, history)
+}
+
+type statusMountTextLayout struct {
+	headingIndent string
+	detailIndent  string
+}
+
+func statusMountTextLayoutFor(mount *statusMount) statusMountTextLayout {
+	if mount != nil && mount.NamespaceID != "" {
+		return statusMountTextLayout{
+			headingIndent: "    ",
+			detailIndent:  "      ",
+		}
+	}
+
+	return statusMountTextLayout{
+		headingIndent: "  ",
+		detailIndent:  "    ",
+	}
 }
 
 func printChildMountStatuses(w io.Writer, mounts []statusMount, history bool) error {

@@ -64,7 +64,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
-| Managed child shortcut lifecycle failures are classified before engine construction instead of being mirrored into engine retry or observation state. | `TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersParentSubtree`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips`, `TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable` |
+| Managed child shortcut lifecycle failures are classified before engine construction instead of being mirrored into engine retry or observation state. | `TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersParentSubtree`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips`, `TestApplyChildProjectionMoves_TargetEmptyAutoResolves`, `TestApplyChildProjectionMoves_MatchingTreesAutoResolve`, `TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable` |
 
 ## Construction
 
@@ -96,10 +96,11 @@ For mount-root runtimes, the engine also carries the configured
 observation, planning, and execution. Planner and executor consume that
 engine-owned root context directly; ordinary actions do not re-thread
 per-action target-root overrides. Mount-root delta capability is
-resolved in config today and passed into the engine as construction input; the
+resolved in config and passed into the engine as construction input; the
 engine does not reopen catalog state just to decide whether a mount root
-should try folder delta. Today, separately configured shared folders happen to
-use this mount-root engine path.
+should try folder delta. Separately configured shared folders and managed
+shortcut child mounts both use this mount-root engine path when their remote
+root is below the backing drive root.
 
 Permission handling is intentionally split three ways:
 
@@ -383,9 +384,10 @@ A blank `RemoteRootItemID` means drive-root observation and execution. A non-bla
 `RemoteRootItemID` means the engine must stay scoped below that remote boundary for
 observation, planning, and execution.
 
-Today, separately configured shared folders happen to use the mount-root
-path, but that product surface should not be confused with the engine's
-internal runtime model.
+Separately configured shared folders and managed shortcut child mounts use the
+mount-root path when their content root is below the backing drive root, but
+those product surfaces should not be confused with the engine's internal
+runtime model.
 
 Embedded shared-folder links discovered inside another synced drive are still
 ignored by ordinary drive-root observation and never become nested
