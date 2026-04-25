@@ -7,7 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -131,7 +131,7 @@ func applyChildRootLifecycleAction(
 		}
 		return nil
 	case childRootLifecycleActionDelete:
-		if err := session.DeleteItem(ctx, action.bindingItemID); err != nil && !errors.Is(err, graph.ErrNotFound) {
+		if err := session.DeleteItem(ctx, action.bindingItemID); err != nil && !driveops.IsNotFound(err) {
 			return childRootLifecycleActionUnavailable(action, "deleting shortcut placeholder", err)
 		}
 		return nil
@@ -145,29 +145,25 @@ func applyChildRootLifecycleAction(
 }
 
 func recordChildRootLifecycleActionSuccess(action *childRootLifecycleAction) error {
+	var identity *config.RootIdentity
+	if action.kind == childRootLifecycleActionRename {
+		record := config.MountRecord{RelativeLocalPath: action.toRelativeLocalPath}
+		captured, err := rootIdentityForRecordPath(action.parent, &record)
+		if err == nil {
+			identity = captured
+		}
+	}
 	if err := config.UpdateMountInventory(func(inventory *config.MountInventory) error {
 		record, found := inventory.Mounts[action.mountID.String()]
 		if !found {
 			return nil
 		}
 
-		switch action.kind {
-		case childRootLifecycleActionRename:
-			record.LocalAlias = childRootActionAlias(action)
-			record.RelativeLocalPath = action.toRelativeLocalPath
-			record.ReservedLocalPaths = removeString(record.ReservedLocalPaths, action.toRelativeLocalPath)
-			record.LocalRootMaterialized = true
-			identity, err := rootIdentityForRecordPath(action.parent, &record)
-			if err == nil {
-				record.LocalRootIdentity = identity
-			}
-			record.State = config.MountStateActive
-			record.StateReason = ""
-		case childRootLifecycleActionDelete:
-			record.State = config.MountStatePendingRemoval
-			record.StateReason = config.MountStateReasonShortcutRemoved
+		plan, err := planChildRootLifecycleActionSuccess(&record, action, identity)
+		if err != nil {
+			return err
 		}
-		inventory.Mounts[record.MountID] = record
+		inventory.Mounts[record.MountID] = plan.Record
 		return nil
 	}); err != nil {
 		return fmt.Errorf("updating mount inventory after child root lifecycle action: %w", err)
@@ -190,27 +186,14 @@ func recordChildRootLifecycleActionFailure(
 		}
 	}
 
-	if updateErr := config.UpdateMountInventory(func(inventory *config.MountInventory) error {
-		record, found := inventory.Mounts[action.mountID.String()]
-		if !found {
-			return nil
-		}
-		record.State = failure.state
-		record.StateReason = failure.reason
-		if action.toRelativeLocalPath != "" {
-			record.ReservedLocalPaths = appendUniqueStrings(record.ReservedLocalPaths, action.toRelativeLocalPath)
-		}
-		inventory.Mounts[record.MountID] = record
-		return nil
-	}); updateErr != nil && logger != nil {
-		logger.Warn("recording child root lifecycle action failure",
-			slog.String("mount_id", action.mountID.String()),
-			slog.String("error", updateErr.Error()),
-		)
-		return false
-	}
-
-	return true
+	return recordShortcutLifecyclePlan(
+		action.mountID,
+		logger,
+		"recording child root lifecycle action failure",
+		func(record *config.MountRecord) (shortcutLifecyclePlan, error) {
+			return planChildRootLifecycleActionFailure(record, action, failure.state, failure.reason)
+		},
+	)
 }
 
 func fallbackChildRootLifecycleFailureReason(action *childRootLifecycleAction) config.MountStateReason {

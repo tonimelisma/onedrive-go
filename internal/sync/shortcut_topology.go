@@ -51,6 +51,10 @@ func (b ShortcutTopologyBatch) HasFacts() bool {
 	return len(b.Upserts) > 0 || len(b.Deletes) > 0 || len(b.Unavailable) > 0
 }
 
+func (b ShortcutTopologyBatch) ShouldApply() bool {
+	return b.HasFacts() || b.Kind == ShortcutTopologyObservationComplete
+}
+
 func (b *ShortcutTopologyBatch) appendUpsert(fact ShortcutBindingUpsert) {
 	if fact.BindingItemID == "" {
 		return

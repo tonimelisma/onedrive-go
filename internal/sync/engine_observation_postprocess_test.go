@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -55,6 +56,29 @@ func mustParseDriveID(raw string) driveid.ID {
 		panic("test drive ID must be non-zero")
 	}
 	return id
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestHandleRemoteObservationBatch_EmptyCompleteTopologyApplyFailureDoesNotCommitCursor(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	applyErr := errors.New("persist topology")
+	eng.shortcutTopologyHandler = func(_ context.Context, _ ShortcutTopologyBatch) error {
+		return applyErr
+	}
+
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, "cursor-empty-complete")
+	batch.cursorToken = "cursor-empty-complete"
+	batch.shortcutTopology = ShortcutTopologyBatch{
+		NamespaceID: "personal:owner@example.com",
+		Kind:        ShortcutTopologyObservationComplete,
+	}
+	err := rt.handleRemoteObservationBatch(t.Context(), &batch)
+	require.ErrorIs(t, err, applyErr)
+	assert.Empty(t, readObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
 }
 
 // Validates: R-2.1.2

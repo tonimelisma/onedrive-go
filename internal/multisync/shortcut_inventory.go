@@ -71,6 +71,13 @@ func upsertChildMountRecord(
 	}
 	if !found {
 		if owner, owned := siblingPathOwner(inventory, parent.mountID.String(), next.RelativeLocalPath, next.MountID); owned {
+			plan, err := planDeferredShortcutReplacement(&owner)
+			if err != nil {
+				return false, "", err
+			}
+			if plan.Changed {
+				inventory.Mounts[plan.Record.MountID] = plan.Record
+			}
 			recordDeferredShortcutBinding(inventory, parent, &next)
 			return true, owner.MountID, nil
 		}
@@ -220,9 +227,12 @@ func markMountPendingRemoval(inventory *config.MountInventory, record *config.Mo
 		return false
 	}
 
-	record.State = config.MountStatePendingRemoval
-	record.StateReason = config.MountStateReasonShortcutRemoved
-	inventory.Mounts[record.MountID] = *record
+	plan, err := planShortcutPendingRemoval(record)
+	if err != nil || !plan.Changed {
+		return false
+	}
+	inventory.Mounts[record.MountID] = plan.Record
+	*record = plan.Record
 	return true
 }
 

@@ -235,6 +235,9 @@ func printMountLifecycleStatus(w io.Writer, layout statusMountTextLayout, mount 
 			return err
 		}
 	}
+	if err := printMountProtectionStatus(w, layout, mount); err != nil {
+		return err
+	}
 	if mount.RecoveryAction != "" && mount.RecoveryAction != mount.StateDetail {
 		if err := writef(w, "%sAction:    %s\n", layout.detailIndent, mount.RecoveryAction); err != nil {
 			return err
@@ -249,6 +252,32 @@ func printMountLifecycleStatus(w io.Writer, layout statusMountTextLayout, mount 
 		retryText = "yes"
 	}
 	return writef(w, "%sAuto retry: %s\n", layout.detailIndent, retryText)
+}
+
+func printMountProtectionStatus(w io.Writer, layout statusMountTextLayout, mount *statusMount) error {
+	if mount.ProtectedCurrentPath != "" {
+		if err := writef(w, "%sProtected current path: %s\n", layout.detailIndent, mount.ProtectedCurrentPath); err != nil {
+			return err
+		}
+	}
+	for _, protectedPath := range mount.ProtectedReservedPaths {
+		if err := writef(w, "%sReserved path: %s\n", layout.detailIndent, protectedPath); err != nil {
+			return err
+		}
+	}
+	for _, replacement := range mount.DeferredReplacements {
+		if err := writef(
+			w,
+			"%sDeferred replacement: %s (%s) - %s\n",
+			layout.detailIndent,
+			replacement.DisplayName,
+			replacement.BindingItemID,
+			replacement.Detail,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type statusMountTextLayout struct {

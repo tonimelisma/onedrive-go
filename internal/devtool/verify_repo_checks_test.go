@@ -272,6 +272,85 @@ func TestRunRepoConsistencyChecksFailsOnRawOSFilesystemCallInGuardedPackage(t *t
 	assert.Contains(t, err.Error(), "bad_fs.go")
 }
 
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncGraphImport(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	multisyncDir := filepath.Join(repoRoot, "internal", "multisync")
+	require.NoError(t, os.MkdirAll(multisyncDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(multisyncDir, "bad_graph.go"),
+		[]byte(strings.Join([]string{
+			"package multisync",
+			"",
+			"import \"github.com/tonimelisma/onedrive-go/internal/graph\"",
+			"",
+			"var _ = graph.ErrNotFound",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multisync must not import internal/graph")
+	assert.Contains(t, err.Error(), "bad_graph.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnHasFactsApplyGate(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "sync", "bad_topology_gate.go"), []string{
+		"package sync",
+		"",
+		"func bad(batch ShortcutTopologyBatch) bool {",
+		"\tif !batch.HasFacts() {",
+		"\t\treturn false",
+		"\t}",
+		"\treturn true",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ShouldApply")
+	assert.Contains(t, err.Error(), "bad_topology_gate.go")
+}
+
+// Validates: R-2.4.8, R-2.4.10
+func TestRunRepoConsistencyChecksFailsOnDuplicatedStatIdentityHelper(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	syncDir := filepath.Join(repoRoot, "internal", "sync")
+	require.NoError(t, os.MkdirAll(syncDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(syncDir, "stat_identity_linux.go"),
+		[]byte(strings.Join([]string{
+			"package sync",
+			"",
+			"func statIdentity() {}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal/synctree")
+	assert.Contains(t, err.Error(), "stat_identity_linux.go")
+}
+
 // Validates: R-6.2.1
 func TestRunRepoConsistencyChecksFailsOnStaleFilterSemanticsWording(t *testing.T) {
 	t.Parallel()
@@ -316,4 +395,12 @@ func assertRepoConsistencyRejectsPrivilegedCall(
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), want)
 	assert.Contains(t, err.Error(), filename)
+}
+
+func writeRepoConsistencyGoSource(t *testing.T, repoRoot, relPath string, source []string) {
+	t.Helper()
+
+	target := filepath.Join(repoRoot, relPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o750))
+	require.NoError(t, os.WriteFile(target, []byte(strings.Join(source, "\n")), 0o600))
 }
