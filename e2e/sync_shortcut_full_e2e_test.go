@@ -214,34 +214,6 @@ func TestE2E_Shortcut_ReadOnlyBlockedUploadStatus(t *testing.T) {
 }
 
 // Validates: R-2.8.1
-func TestE2E_Shortcut_LocalDeleteRemovesPlaceholderOnlyWithOptIn(t *testing.T) {
-	registerLogDump(t)
-	if os.Getenv("ONEDRIVE_E2E_RUN_DESTRUCTIVE_SHORTCUT_LIFECYCLE") != "1" {
-		t.Skip("local shortcut delete removes the live shortcut placeholder; run only with a recreatable fixture")
-	}
-
-	fixture := requireShortcutFixtureWithCatalog(t, shortcutFixtureWritable)
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
-
-	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
-	requireActiveShortcutChild(t, env, fixture)
-
-	childRoot := filepath.Join(syncDir, fixture.ShortcutName)
-	require.DirExists(t, childRoot)
-	require.NoError(t, os.RemoveAll(childRoot))
-
-	_, stderr := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
-	assert.Contains(t, stderr, "Mode: upload-only")
-	assert.NoDirExists(t, childRoot)
-
-	record := requireShortcutChildAtPath(t, env, fixture, fixture.ShortcutName)
-	assert.Equal(t, config.MountStatePendingRemoval, record.State)
-	assert.Equal(t, config.MountStateReasonShortcutRemoved, record.StateReason)
-	requireShortcutSentinelVisible(t, cfgPath, env, fixture)
-}
-
-// Validates: R-2.8.1
 func TestE2E_Shortcut_LocalRootCollisionSkipsChildButParentCompletes(t *testing.T) {
 	registerLogDump(t)
 

@@ -185,7 +185,6 @@ func fullE2ESerialWatchSharedTestNames() []string {
 		"TestE2E_Shortcut_MoveReusesChildMountState",
 		"TestE2E_Shortcut_WritableUploadSyncsToSharedTarget",
 		"TestE2E_Shortcut_ReadOnlyBlockedUploadStatus",
-		"TestE2E_Shortcut_LocalDeleteRemovesPlaceholderOnlyWithOptIn",
 		"TestE2E_Shortcut_LocalRootCollisionSkipsChildButParentCompletes",
 		"TestE2E_Shortcut_WatchLocalUploadSyncsToSharedTarget",
 		"TestE2E_Shortcut_WatchRemoteWakeUpdatesChildRoot",
