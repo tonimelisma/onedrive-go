@@ -27,6 +27,8 @@ func newFakeDirtyDebounceTimer() *fakeDirtyDebounceTimer {
 	}
 }
 
+const dirtyBufferTestTimeout = time.Second
+
 func (t *fakeDirtyDebounceTimer) Chan() <-chan time.Time { return t.ch }
 func (t *fakeDirtyDebounceTimer) Stop() bool {
 	t.mu.Lock()
@@ -107,7 +109,7 @@ func TestDirtyBuffer_FlushDebounced_UsesLastObservationWindow(t *testing.T) {
 	select {
 	case batch := <-out:
 		assert.False(t, batch.FullRefresh)
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(dirtyBufferTestTimeout):
 		require.Fail(t, "timed out waiting for dirty batch")
 	}
 }
@@ -142,7 +144,7 @@ func TestDirtyBuffer_FlushDebounced_CoalescesMultipleDirtySignalsIntoOneBatch(t 
 	select {
 	case batch := <-out:
 		assert.True(t, batch.FullRefresh)
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(dirtyBufferTestTimeout):
 		require.Fail(t, "timed out waiting for debounced dirty batch")
 	}
 

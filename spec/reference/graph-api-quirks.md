@@ -807,13 +807,16 @@ requests combine it with `deltashowremoteitemsaliasid` so shortcut placeholders
 remain discoverable without giving the sync engine shortcut ownership.
 
 Observed fixture repair on April 25, 2026: deleting a personal-account shortcut
-placeholder by item ID removed only the placeholder, but recreating the same
-shortcut with the documented `POST /drive/root/children` + `remoteItem` body
-returned repeated Graph `503 SERVICE UNAVAILABLE` responses across `/me`,
-`/drives/{id}`, `/users/{upn}`, v1.0, beta, and `Include-Feature=AddToOneDrive`
-variants. Runtime policy: production can delete the placeholder when the user
-deletes the local projected root, but recurring live E2E must not exercise that
-destructive path unless the fixture is explicitly marked recreatable.
+placeholder by item ID removed only the placeholder. Microsoft documents
+`driveItem.remoteItem` and the nested `remoteItem` fields as read-only, and the
+folder-create API documents creating normal `folder` items rather than
+shortcut placeholders. Community reports describe undocumented `POST
+/drive/root/children` bodies with `remoteItem`, mostly for Business/SharePoint
+shortcuts with app permissions, but that is not a supported or reliable
+contract for recreating personal-account manual fixtures. Runtime policy:
+production can delete the placeholder when the user deletes the local projected
+root, but recurring live E2E must not exercise placeholder delete/recreate
+against manually-created shortcut fixtures.
 
 ### SharedWithMe API Deprecation
 
