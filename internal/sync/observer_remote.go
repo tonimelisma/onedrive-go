@@ -273,7 +273,7 @@ func (o *RemoteObserver) handleWatchBatch(
 	wakeCh <-chan struct{},
 	handleBatch RemoteWatchBatchHandler,
 ) watchStepResult {
-	if len(polledEvents) == 0 && !topology.HasFacts() {
+	if len(polledEvents) == 0 && !topology.ShouldApply() {
 		return o.handleZeroEventPoll(ctx, interval, bo, wakeCh)
 	}
 

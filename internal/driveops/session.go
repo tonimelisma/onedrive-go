@@ -32,6 +32,10 @@ type Session struct {
 
 var _ PathConvergence = (*MountSession)(nil)
 
+func IsNotFound(err error) bool {
+	return errors.Is(err, graph.ErrNotFound)
+}
+
 // MountSession adds mount-root path semantics to an authenticated Session.
 // Direct file commands use this wrapper because their path operations are
 // relative to the configured mount root, not necessarily the Graph drive root.

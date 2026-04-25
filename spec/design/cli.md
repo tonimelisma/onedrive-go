@@ -102,10 +102,15 @@ The JSON surface follows that same mount boundary: summary counts use
 projections are nested under the owning parent row as `child_mounts`. The legacy
 drive-shaped status fields (`total_drives`, `accounts[].drives`) are not part
 of the current contract. Child lifecycle rows also expose `state`,
-`state_reason`, `state_detail`, `recovery_action`, and `auto_retry` from the
-config-owned shortcut lifecycle table, so text and JSON status describe the
-protected reservation state and the next recovery step without duplicating
-control-plane transition policy in the CLI.
+`state_reason`, `state_detail`, `protected_current_path`,
+`protected_reserved_paths`, `deferred_replacements`, `recovery_action`, and
+`auto_retry` from the config-owned shortcut lifecycle table and mount
+inventory. Text and JSON status describe the protected reservation state, the
+deferred "new shortcut is waiting for old projection cleanup" case, and the
+next recovery step without duplicating control-plane transition policy in the
+CLI. Recovery copy uses the same product vocabulary as the control plane:
+"shortcut alias", "child projection", "reserved path", and "parent engine
+topology facts".
 
 The target `status` surface projects the full sync model directly from:
 

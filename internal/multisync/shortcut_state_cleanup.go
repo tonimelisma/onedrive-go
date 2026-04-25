@@ -34,25 +34,11 @@ func finalizePendingMountRemovals(mountIDs []string, mounts []*mountSpec, logger
 			if parent == nil {
 				continue
 			}
-			cleaned, reason := cleanupPendingProjectionRoot(parent, &record)
-			if !cleaned {
-				record.StateReason = reason
-				inventory.Mounts[mountID] = record
-				continue
+			recordFinalized, err := finalizePendingMountRemovalRecord(inventory, mountID, &record, parent, logger)
+			if err != nil {
+				return err
 			}
-			if err := syncengine.RemoveStateDBFiles(config.MountStatePath(mountID)); err != nil {
-				record.StateReason = config.MountStateReasonRemovedProjectionUnavailable
-				inventory.Mounts[mountID] = record
-				if logger != nil {
-					logger.Warn("purging removed child mount state",
-						"mount_id", mountID,
-						"error", err.Error(),
-					)
-				}
-				continue
-			}
-			delete(inventory.Mounts, mountID)
-			finalized = true
+			finalized = finalized || recordFinalized
 		}
 		return nil
 	}); err != nil {
@@ -60,6 +46,47 @@ func finalizePendingMountRemovals(mountIDs []string, mounts []*mountSpec, logger
 	}
 
 	return finalized, nil
+}
+
+func finalizePendingMountRemovalRecord(
+	inventory *config.MountInventory,
+	mountID string,
+	record *config.MountRecord,
+	parent *mountSpec,
+	logger *slog.Logger,
+) (bool, error) {
+	cleaned, reason := cleanupPendingProjectionRoot(parent, record)
+	if !cleaned {
+		plan, err := planPendingRemovalCleanup(record, false, reason)
+		if err != nil {
+			return false, err
+		}
+		inventory.Mounts[mountID] = plan.Record
+		return false, nil
+	}
+
+	plan, err := planPendingRemovalCleanup(record, true, "")
+	if err != nil {
+		return false, err
+	}
+	if err := syncengine.RemoveStateDBFiles(config.MountStatePath(mountID)); err != nil {
+		blocked, blockedErr := planPendingRemovalCleanup(record, false, config.MountStateReasonRemovedProjectionUnavailable)
+		if blockedErr != nil {
+			return false, blockedErr
+		}
+		inventory.Mounts[mountID] = blocked.Record
+		if logger != nil {
+			logger.Warn("purging removed child mount state",
+				"mount_id", mountID,
+				"error", err.Error(),
+			)
+		}
+		return false, nil
+	}
+	if plan.RemoveRecord {
+		delete(inventory.Mounts, mountID)
+	}
+	return true, nil
 }
 
 func cleanupPendingProjectionRoot(parent *mountSpec, record *config.MountRecord) (bool, config.MountStateReason) {

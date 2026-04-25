@@ -34,7 +34,7 @@ func (o *Orchestrator) applyShortcutTopologyBatch(
 	if parent == nil {
 		return false, nil
 	}
-	if !batch.HasFacts() && batch.Kind != syncengine.ShortcutTopologyObservationComplete {
+	if !batch.ShouldApply() {
 		return false, nil
 	}
 	if batch.NamespaceID == "" {

@@ -52,19 +52,29 @@ type statusLiveDrive struct {
 
 // statusMount holds status information for one runtime mount.
 type statusMount struct {
-	MountID        string         `json:"mount_id"`
-	NamespaceID    string         `json:"namespace_id,omitempty"`
-	ProjectionKind string         `json:"projection_kind"`
-	CanonicalID    string         `json:"canonical_id,omitempty"`
-	DisplayName    string         `json:"display_name,omitempty"`
-	SyncDir        string         `json:"sync_dir"`
-	State          string         `json:"state"`
-	StateReason    string         `json:"state_reason,omitempty"`
-	StateDetail    string         `json:"state_detail,omitempty"`
-	RecoveryAction string         `json:"recovery_action,omitempty"`
-	AutoRetry      *bool          `json:"auto_retry,omitempty"`
-	SyncState      *syncStateInfo `json:"sync_state,omitempty"`
-	ChildMounts    []statusMount  `json:"child_mounts,omitempty"`
+	MountID                string                      `json:"mount_id"`
+	NamespaceID            string                      `json:"namespace_id,omitempty"`
+	ProjectionKind         string                      `json:"projection_kind"`
+	CanonicalID            string                      `json:"canonical_id,omitempty"`
+	DisplayName            string                      `json:"display_name,omitempty"`
+	SyncDir                string                      `json:"sync_dir"`
+	State                  string                      `json:"state"`
+	StateReason            string                      `json:"state_reason,omitempty"`
+	StateDetail            string                      `json:"state_detail,omitempty"`
+	ProtectedCurrentPath   string                      `json:"protected_current_path,omitempty"`
+	ProtectedReservedPaths []string                    `json:"protected_reserved_paths,omitempty"`
+	DeferredReplacements   []statusDeferredReplacement `json:"deferred_replacements,omitempty"`
+	RecoveryAction         string                      `json:"recovery_action,omitempty"`
+	AutoRetry              *bool                       `json:"auto_retry,omitempty"`
+	SyncState              *syncStateInfo              `json:"sync_state,omitempty"`
+	ChildMounts            []statusMount               `json:"child_mounts,omitempty"`
+}
+
+type statusDeferredReplacement struct {
+	BindingItemID     string `json:"binding_item_id"`
+	DisplayName       string `json:"display_name,omitempty"`
+	RelativeLocalPath string `json:"relative_local_path"`
+	Detail            string `json:"detail"`
 }
 
 // syncStateInfo holds the full per-mount status payload rendered by `status`.
@@ -291,6 +301,11 @@ func buildStatusAccountsWith(
 	return accounts
 }
 
+type childMountStatusInput struct {
+	Record               config.MountRecord
+	DeferredReplacements []config.DeferredShortcutBinding
+}
+
 func buildStatusAccountsFromViews(
 	cfg *config.Config,
 	inventory *config.MountInventory,
@@ -321,7 +336,12 @@ func buildStatusAccountsFromViews(
 			mount := buildConfiguredStatusMount(cid, d, syncQ)
 			children := childrenByParent[cid]
 			for childIndex := range children {
-				mount.ChildMounts = append(mount.ChildMounts, buildChildStatusMount(d, &children[childIndex], syncQ))
+				mount.ChildMounts = append(mount.ChildMounts, buildChildStatusMount(
+					d,
+					&children[childIndex].Record,
+					children[childIndex].DeferredReplacements,
+					syncQ,
+				))
 			}
 			acct.Mounts = append(acct.Mounts, mount)
 		}
@@ -356,7 +376,7 @@ func buildSingleAccountStatusWith(
 	cfg *config.Config,
 	email string,
 	driveIDs []driveid.CanonicalID,
-	childrenByParent map[driveid.CanonicalID][]config.MountRecord,
+	childrenByParent map[driveid.CanonicalID][]childMountStatusInput,
 	names accountNameReader,
 	checker accountAuthChecker,
 	syncQ syncStateQuerier,
@@ -389,7 +409,12 @@ func buildSingleAccountStatusWith(
 		mount := buildConfiguredStatusMount(cid, d, syncQ)
 		children := childrenByParent[cid]
 		for childIndex := range children {
-			mount.ChildMounts = append(mount.ChildMounts, buildChildStatusMount(d, &children[childIndex], syncQ))
+			mount.ChildMounts = append(mount.ChildMounts, buildChildStatusMount(
+				d,
+				&children[childIndex].Record,
+				children[childIndex].DeferredReplacements,
+				syncQ,
+			))
 		}
 		acct.Mounts = append(acct.Mounts, mount)
 	}
@@ -423,8 +448,8 @@ func driveState(d *config.Drive) string {
 	return driveStateReady
 }
 
-func groupChildMountsByParent(inventory *config.MountInventory) map[driveid.CanonicalID][]config.MountRecord {
-	grouped := make(map[driveid.CanonicalID][]config.MountRecord)
+func groupChildMountsByParent(inventory *config.MountInventory) map[driveid.CanonicalID][]childMountStatusInput {
+	grouped := make(map[driveid.CanonicalID][]childMountStatusInput)
 	if inventory == nil {
 		return grouped
 	}
@@ -435,20 +460,58 @@ func groupChildMountsByParent(inventory *config.MountInventory) map[driveid.Cano
 		if err != nil {
 			continue
 		}
-		grouped[parentID] = append(grouped[parentID], record)
+		grouped[parentID] = append(grouped[parentID], childMountStatusInput{Record: record})
+	}
+
+	for key := range inventory.DeferredShortcutBindings {
+		deferred := inventory.DeferredShortcutBindings[key]
+		parentID, err := driveid.NewCanonicalID(deferred.NamespaceID)
+		if err != nil {
+			continue
+		}
+		children := grouped[parentID]
+		for i := range children {
+			if !childStatusInputOwnsDeferredPath(&children[i], deferred.RelativeLocalPath) {
+				continue
+			}
+			children[i].DeferredReplacements = append(children[i].DeferredReplacements, deferred)
+			grouped[parentID] = children
+			break
+		}
 	}
 
 	for parentID := range grouped {
 		sort.Slice(grouped[parentID], func(i, j int) bool {
-			if grouped[parentID][i].RelativeLocalPath == grouped[parentID][j].RelativeLocalPath {
-				return grouped[parentID][i].MountID < grouped[parentID][j].MountID
+			if grouped[parentID][i].Record.RelativeLocalPath == grouped[parentID][j].Record.RelativeLocalPath {
+				return grouped[parentID][i].Record.MountID < grouped[parentID][j].Record.MountID
 			}
 
-			return grouped[parentID][i].RelativeLocalPath < grouped[parentID][j].RelativeLocalPath
+			return grouped[parentID][i].Record.RelativeLocalPath < grouped[parentID][j].Record.RelativeLocalPath
 		})
+		for i := range grouped[parentID] {
+			sort.Slice(grouped[parentID][i].DeferredReplacements, func(j, k int) bool {
+				return grouped[parentID][i].DeferredReplacements[j].BindingItemID <
+					grouped[parentID][i].DeferredReplacements[k].BindingItemID
+			})
+		}
 	}
 
 	return grouped
+}
+
+func childStatusInputOwnsDeferredPath(input *childMountStatusInput, relativePath string) bool {
+	if input == nil || relativePath == "" {
+		return false
+	}
+	if input.Record.RelativeLocalPath == relativePath {
+		return true
+	}
+	for _, reservedPath := range input.Record.ReservedLocalPaths {
+		if reservedPath == relativePath {
+			return true
+		}
+	}
+	return false
 }
 
 func buildConfiguredStatusMount(
@@ -479,6 +542,7 @@ func buildConfiguredStatusMount(
 func buildChildStatusMount(
 	parentDrive config.Drive,
 	record *config.MountRecord,
+	deferredReplacements []config.DeferredShortcutBinding,
 	syncQ syncStateQuerier,
 ) statusMount {
 	displayName := record.LocalAlias
@@ -508,6 +572,11 @@ func buildChildStatusMount(
 		StateReason:    string(record.StateReason),
 		StateDetail:    childMountStateDetail(record.State, record.StateReason),
 	}
+	if childMountHasProtectedLifecycle(record.State) {
+		mount.ProtectedCurrentPath = mount.SyncDir
+		mount.ProtectedReservedPaths = childProtectedReservedPaths(parentDrive.SyncDir, record.ReservedLocalPaths)
+	}
+	mount.DeferredReplacements = statusDeferredReplacements(deferredReplacements)
 	if detail, ok := config.MountLifecycleDetailFor(record.State, record.StateReason); ok && record.StateReason != "" {
 		autoRetry := detail.AutoRetry
 		mount.RecoveryAction = detail.RecoveryAction
@@ -518,6 +587,46 @@ func buildChildStatusMount(
 	}
 
 	return mount
+}
+
+func childMountHasProtectedLifecycle(state config.MountState) bool {
+	return state == config.MountStateConflict ||
+		state == config.MountStateUnavailable ||
+		state == config.MountStatePendingRemoval
+}
+
+func childProtectedReservedPaths(parentSyncDir string, relativePaths []string) []string {
+	if len(relativePaths) == 0 {
+		return nil
+	}
+	protected := make([]string, 0, len(relativePaths))
+	for _, relativePath := range relativePaths {
+		if relativePath == "" {
+			continue
+		}
+		protected = append(protected, filepath.Join(parentSyncDir, filepath.FromSlash(relativePath)))
+	}
+	return protected
+}
+
+func statusDeferredReplacements(deferred []config.DeferredShortcutBinding) []statusDeferredReplacement {
+	if len(deferred) == 0 {
+		return nil
+	}
+	replacements := make([]statusDeferredReplacement, 0, len(deferred))
+	for i := range deferred {
+		displayName := deferred[i].LocalAlias
+		if displayName == "" {
+			displayName = path.Base(deferred[i].RelativeLocalPath)
+		}
+		replacements = append(replacements, statusDeferredReplacement{
+			BindingItemID:     deferred[i].BindingItemID,
+			DisplayName:       displayName,
+			RelativeLocalPath: deferred[i].RelativeLocalPath,
+			Detail:            "new shortcut is waiting for old projection cleanup",
+		})
+	}
+	return replacements
 }
 
 func childMountStateDetail(state config.MountState, reason config.MountStateReason) string {
