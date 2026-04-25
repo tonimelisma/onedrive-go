@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,7 +27,6 @@ func TestMountLifecycleDetails_CoverEveryStateReason(t *testing.T) {
 		{reason: MountStateReasonLocalAliasRenameConflict, state: MountStateConflict},
 		{reason: MountStateReasonLocalAliasRenameUnavailable, state: MountStateUnavailable},
 		{reason: MountStateReasonLocalAliasDeleteUnavailable, state: MountStateUnavailable},
-		{reason: MountStateReasonPathReservedByPendingRemoval, state: MountStateConflict},
 		{reason: MountStateReasonLocalRootCollision, state: MountStateConflict},
 		{reason: MountStateReasonLocalRootUnavailable, state: MountStateUnavailable},
 	}
@@ -44,6 +44,8 @@ func TestMountLifecycleDetails_CoverEveryStateReason(t *testing.T) {
 			assert.True(t, detail.AutoRetry)
 			assert.NotEmpty(t, detail.StatusDetail)
 			assert.NotEmpty(t, detail.RecoveryAction)
+			assert.NotContains(t, strings.ToLower(detail.StatusDetail), "rerun sync")
+			assert.NotContains(t, strings.ToLower(detail.RecoveryAction), "rerun sync")
 			require.NoError(t, validateMountStateReason(tt.state, tt.reason))
 
 			_, ok = MountLifecycleDetailFor(MountStateActive, tt.reason)

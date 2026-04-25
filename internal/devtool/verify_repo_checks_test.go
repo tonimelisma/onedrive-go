@@ -325,6 +325,31 @@ func TestRunRepoConsistencyChecksFailsOnHasFactsApplyGate(t *testing.T) {
 	assert.Contains(t, err.Error(), "bad_topology_gate.go")
 }
 
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncShortcutAliasMutation(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_alias_mutation.go"), []string{
+		"package multisync",
+		"",
+		"type session struct{}",
+		"func (s session) MoveItem() {}",
+		"",
+		"func bad(s session) {",
+		"\ts.MoveItem()",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parent engine")
+	assert.Contains(t, err.Error(), "bad_alias_mutation.go")
+}
+
 // Validates: R-2.4.8, R-2.4.10
 func TestRunRepoConsistencyChecksFailsOnDuplicatedStatIdentityHelper(t *testing.T) {
 	t.Parallel()

@@ -103,6 +103,10 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
+	localFilter, err := localFilterWithPersistedShortcutRoots(ctx, bm, cfg.LocalFilter, cfg.ShortcutTopologyNamespaceID)
+	if err != nil {
+		return nil, fmt.Errorf("sync: loading parent shortcut root reservations: %w", err)
+	}
 
 	syncTree, err := synctree.Open(cfg.SyncRoot)
 	if err != nil {
@@ -155,7 +159,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		perfCollector:               cfg.PerfCollector,
 		transferWorkers:             cfg.TransferWorkers,
 		checkWorkers:                cfg.CheckWorkers,
-		localFilter:                 cfg.LocalFilter,
+		localFilter:                 localFilter,
 		localRules:                  cfg.LocalRules,
 		managedRootEvents:           cfg.ManagedRootEvents,
 		shortcutTopologyNamespaceID: cfg.ShortcutTopologyNamespaceID,

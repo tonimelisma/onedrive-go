@@ -13,10 +13,9 @@ const (
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
 	//
-	// Generation 14 renames the observation-state remote owner to
-	// content-drive vocabulary. Store schema changes remain reset-only instead
-	// of migratable while the app is pre-launch.
-	currentSyncStoreGeneration = 14
+	// Generation 15 adds parent-owned shortcut_root state. Store schema changes
+	// remain reset-only instead of migratable while the app is pre-launch.
+	currentSyncStoreGeneration = 15
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -99,7 +98,29 @@ CREATE TABLE IF NOT EXISTS block_scopes (
     scope_key      TEXT PRIMARY KEY,
     trial_interval INTEGER NOT NULL,
     next_trial_at  INTEGER NOT NULL
-		);`
+);
+
+CREATE TABLE IF NOT EXISTS shortcut_roots (
+    binding_item_id                  TEXT    NOT NULL PRIMARY KEY,
+    namespace_id                     TEXT    NOT NULL DEFAULT '',
+    relative_local_path              TEXT    NOT NULL DEFAULT '',
+    local_alias                      TEXT    NOT NULL DEFAULT '',
+    remote_drive_id                  TEXT    NOT NULL DEFAULT '',
+    remote_item_id                   TEXT    NOT NULL DEFAULT '',
+    remote_is_folder                 INTEGER NOT NULL DEFAULT 0 CHECK(remote_is_folder IN (0, 1)),
+    state                            TEXT    NOT NULL DEFAULT '',
+    protected_paths_json             TEXT    NOT NULL DEFAULT '[]',
+    blocked_detail                   TEXT    NOT NULL DEFAULT '',
+    local_root_device                INTEGER NOT NULL DEFAULT 0,
+    local_root_inode                 INTEGER NOT NULL DEFAULT 0,
+    local_root_has_identity          INTEGER NOT NULL DEFAULT 0 CHECK(local_root_has_identity IN (0, 1)),
+    waiting_binding_item_id          TEXT    NOT NULL DEFAULT '',
+    waiting_relative_local_path      TEXT    NOT NULL DEFAULT '',
+    waiting_local_alias              TEXT    NOT NULL DEFAULT '',
+    waiting_remote_drive_id          TEXT    NOT NULL DEFAULT '',
+    waiting_remote_item_id           TEXT    NOT NULL DEFAULT '',
+    waiting_remote_is_folder         INTEGER NOT NULL DEFAULT 0 CHECK(waiting_remote_is_folder IN (0, 1))
+);`
 )
 
 type storeCompatibilityMetadata struct {
@@ -135,6 +156,14 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"block_scopes": {
 			"scope_key", "trial_interval", "next_trial_at",
+		},
+		"shortcut_roots": {
+			"binding_item_id", "namespace_id", "relative_local_path", "local_alias",
+			"remote_drive_id", "remote_item_id", "remote_is_folder", "state",
+			"protected_paths_json", "blocked_detail", "local_root_device", "local_root_inode",
+			"local_root_has_identity", "waiting_binding_item_id", "waiting_relative_local_path",
+			"waiting_local_alias", "waiting_remote_drive_id", "waiting_remote_item_id",
+			"waiting_remote_is_folder",
 		},
 	}
 }

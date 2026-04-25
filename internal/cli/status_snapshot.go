@@ -638,11 +638,11 @@ func childMountStateDetail(state config.MountState, reason config.MountStateReas
 	case config.MountStateActive:
 		return ""
 	case config.MountStateConflict:
-		return "Resolve the child mount conflict, then rerun sync."
+		return "The child mount is blocked by a protected-path conflict."
 	case config.MountStateUnavailable:
-		return "Wait for the shortcut or local projection to become available, then rerun sync."
+		return "The child mount is unavailable and will be retried."
 	case config.MountStatePendingRemoval:
-		return "Wait for runner stop and child state cleanup to finish."
+		return "The shortcut was removed and the child projection remains protected until release is safe."
 	default:
 		return ""
 	}

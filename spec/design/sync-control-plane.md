@@ -21,8 +21,8 @@ runtime package that implements it.
 
 ## Ownership Contract
 
-- Owns: Multi-mount sync lifecycle, runtime mount-spec compilation, shortcut topology decisions from parent-engine facts, mount inventory mutation, per-mount engine startup/shutdown, reload diffing, control-socket ownership, and per-mount panic/error isolation.
-- Does Not Own: Parent-drive Graph discovery, single-mount content observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
+- Owns: Multi-mount sync lifecycle, runtime mount-spec compilation from parent-declared child topology, child runner start/skip/final-drain/stop/purge decisions, global cross-mount conflicts, reload diffing, control-socket ownership, and per-mount panic/error isolation.
+- Does Not Own: Parent-drive Graph discovery, shortcut placeholder mutation, parent sync-dir shortcut alias filesystem policy, single-mount content observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
 - Source of Truth: The current `config.Holder` snapshot, the CLI-compiled standalone mount configs, plus the runtime mount set and `runners` map owned by the watch-mode orchestrator loop.
 - Allowed Side Effects: Session creation, engine construction/closure, Unix control-socket bind/unlink, per-mount goroutine startup, live perf capture, and control-plane logging.
 - Mutable Runtime Owner: `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one mount.
@@ -37,7 +37,7 @@ runtime package that implements it.
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry` |
-| Managed shortcut lifecycle stays control-plane owned while parent engines remain the sole parent-drive Graph observers: topology batches update `mounts.json`, persistence failures prevent cursor commit, unavailable binding records skip child runners without touching sync-store state, duplicate content roots persist conflict reasons, local root collisions skip only affected child mounts, shortcut projection moves reserve old paths until the local move completes, and local alias rename/delete mutate only the shortcut placeholder. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestWatch_TopologyApplyFailureDoesNotAdvanceCursor`, `TestApplyShortcutTopologyBatch_CompleteEnumerationUpdatesAndRemovesBindings`, `TestApplyShortcutTopologyBatch_EmptyCompleteEnumerationRemovesOldBindings`, `TestApplyShortcutTopologyBatch_RemoteDeleteMarksPendingRemoval`, `TestApplyShortcutTopologyBatch_SamePathReplacementDefersNewBinding`, `TestApplyShortcutTopologyBatch_UnavailableBindingPersistsUnavailableRecord`, `TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict`, `TestBuildRuntimeMountSet_LocalRootSaveFailureDoesNotBlockStandaloneMount`, `TestApplyInventoryPersistFailureSkipsOnlyDirtyChild`, `TestApplyChildProjectionMoves_SkipsDirtyChildDroppedAfterPersistFailure`, `TestApplyChildProjectionMoves_PersistFailureStillMovesCleanChild`, `TestApplyChildProjectionMoves_RenamesLocalProjectionAndClearsReservation`, `TestFinalizeRuntimeMountSetLifecycle_RecompilesAfterProjectionMove`, `TestApplyChildProjectionMoves_TargetEmptyAutoResolves`, `TestApplyChildProjectionMoves_MatchingTreesAutoResolve`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips`, `TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable`, `TestReconcileChildMountLocalRoots_RenamedMaterializedRootCreatesAliasRenameAction`, `TestApplyChildRootLifecycleActions_RenamePatchesPlaceholderAndPreservesMount`, `TestApplyChildRootLifecycleActions_DeleteDeletesPlaceholderAndQueuesStatePurge`, `TestApplyChildRootLifecycleActions_FailureFiltersStaleProjectionMoves`, `TestFinalizePendingMountRemovals_DirtyProjectionStaysReserved`, `TestFinalizePendingMountRemovals_ProjectionStatErrorStaysReserved`, `TestFinalizePendingMountRemovals_RecompileReleasesParentSkipDir` |
+| Parent engines own shortcut-root state and alias mutation while multisync orchestrates child runners: parent topology is persisted before acknowledgement, persisted roots feed startup reservations, empty complete batches retire old roots, same-path replacements do not downgrade active owners, final-drain children run before release, and production multisync code cannot call parent Graph discovery or shortcut alias mutation APIs. | `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestApplyShortcutTopologyBatch_SamePathReplacementDoesNotDowngradeActiveOwner`, `TestEngine_ApplyShortcutAliasMutationRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ApplyShortcutAliasMutationDeleteMarksParentRootFinalDrain`, `TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess`, `TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved`, `TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile`, `TestRunRepoConsistencyChecksFailsOnMultisyncGraphImport`, `TestRunRepoConsistencyChecksFailsOnMultisyncShortcutAliasMutation` |
 
 ## Runtime Mount Specs
 
@@ -140,22 +140,21 @@ Shortcut lifecycle states are intentionally small and producer-owned:
 
 | Situation | Durable state | Runner behavior | Parent exclusion |
 | --- | --- | --- | --- |
-| Shortcut binding is healthy | `active` | child runner may start unless parent is paused | current child path |
-| Parent drive is paused | `active` | child runner is paused with the parent | current child path |
-| Binding target cannot be refreshed | `unavailable: shortcut_binding_unavailable` | child runner skipped, retry on next reconciliation | current child path |
-| Shortcut was authoritatively removed | `pending_removal: shortcut_removed` until state purge/final delete | child runner stopped before purge | current and reserved paths until finalized |
-| Removed shortcut projection still has local content | `pending_removal: removed_projection_dirty` | child runner stopped; user must move/remove local projection content | current and reserved paths until finalized |
-| Removed shortcut projection cannot be inspected or removed | `pending_removal: removed_projection_unavailable` | child runner stopped and cleanup retried | current and reserved paths until finalized |
-| Same-path replacement arrives before old projection finalizes | old mount remains `pending_removal`; new binding is deferred | old child stopped, new child not started | shared path remains reserved |
+| Shortcut binding is healthy | parent root `active`, child inventory `active` | child runner may start unless parent is paused | current child path |
+| Parent drive is paused | parent root `active`, child inventory `active` | child runner is paused with the parent | current child path |
+| Binding target cannot be refreshed | parent root `target_unavailable`; child inventory `unavailable: shortcut_binding_unavailable` | child runner skipped, retry on parent topology refresh | current child path |
+| Shortcut was authoritatively removed | parent root `removed_final_drain`; child inventory `pending_removal: shortcut_removed` | child runs a final bidirectional full sync, then stops before purge | current and reserved paths until finalized |
+| Removed shortcut cleanup cannot release the alias root | parent root `removed_cleanup_blocked` or child inventory `removed_projection_unavailable` | child is already drained; release cleanup retries | current and reserved paths until finalized |
+| Same-path replacement arrives before old child finalizes | parent root `same_path_replacement_waiting`; new binding is deferred | old child drains first, new child starts after release | shared path remains reserved |
 | Duplicate child content root | `conflict: duplicate_content_root` | duplicate child runners skipped | conflicting child paths |
 | Explicit standalone mount owns same content root | `conflict: explicit_standalone_content_root` | automatic child skipped | child path remains reserved |
 | Projection move source and target differ | `conflict: local_projection_conflict` | child skipped | current and reserved paths |
 | Projection move cannot inspect/hash/remove safely | `unavailable: local_projection_unavailable` | child skipped and retried | current and reserved paths |
 | Child local root is a file, final symlink, or unsafe collision | `conflict: local_root_collision` | child skipped | child path |
-| Previously materialized child local root is renamed to one same-parent identity match | `active` until the alias PATCH is applied | child runner stopped, placeholder renamed, same child state DB restarts at new path | current path plus same-parent identity reservation |
-| Previously materialized child local root is missing with no same-parent identity match | `pending_removal: shortcut_removed` after placeholder DELETE succeeds | child runner stopped, child state purged | child path until finalized |
+| Previously materialized child local root is renamed to one same-parent identity match | parent root remains protected while parent alias rename is applied | child runner stopped, same child state DB restarts at new path | current path plus same-parent identity reservation |
+| Previously materialized child local root is missing with no same-parent identity match | parent deletes only the shortcut alias, then emits retiring child topology | child final-drains if the root still exists, then releases | child path until finalized |
 | Previously materialized child local root has multiple same-parent identity matches | `conflict: local_alias_rename_conflict` | child skipped until user resolves ambiguity | current and candidate paths |
-| Local alias rename/delete cannot mutate the placeholder | `unavailable: local_alias_rename_unavailable` or `unavailable: local_alias_delete_unavailable` | child skipped and retried | current and candidate paths |
+| Local alias rename/delete cannot mutate the placeholder | parent root `alias_mutation_blocked`; child inventory may show `local_alias_*_unavailable` until fully migrated | child skipped and retried | current and candidate paths |
 | Previously materialized child local root is missing but identity is unavailable | `unavailable: local_root_unavailable` | child skipped and retried after the user restores the directory | child path |
 | Child local root stat/create has a transient filesystem error | `unavailable: local_root_unavailable` | child skipped and retried | child path |
 
@@ -179,14 +178,19 @@ rooted filesystem effects for that decision.
 
 Shortcut topology is split by authority. The parent engine is the only runtime
 that calls Graph delta/list/get for the parent drive. It classifies shortcut
-placeholder observations as `ShortcutTopologyBatch` facts and suppresses those
-items from normal content planning. `internal/multisync` consumes those facts
-only after they leave the engine boundary:
+placeholder observations, persists parent-owned `shortcut_roots`, suppresses
+those aliases from normal content planning, and emits parent-declared child
+topology to `internal/multisync`:
 
-- upsert facts create, update, reactivate, or rename child mount records
-- delete facts mark existing child records `pending_removal`
-- unavailable facts persist `unavailable: shortcut_binding_unavailable`
-- complete batches mark previously known but absent bindings pending removal
+- desired child roots create, update, reactivate, or rename child mount records
+- retiring child roots mark existing child records `pending_removal:
+  shortcut_removed`
+- blocked child roots skip child runners while parent-owned retry/block state
+  remains in the parent sync store
+- released child roots let multisync purge the child state after child sync is
+  clean
+- complete batches mark previously known but absent parent roots
+  `removed_final_drain`
 - empty complete batches are applied through the same engine handler path
   because they mean the parent engine completed a parent-drive enumeration and
   saw no current shortcut aliases; empty incremental batches are skipped
@@ -255,27 +259,27 @@ can start. Parent engines must apply that reservation consistently to local
 scan/watch surfaces and post-sync transfer housekeeping, so parent cleanup
 never walks into a child mount's in-flight transfer artifacts.
 
-Local child-root deletion and local child-root rename are not target-content
-delete or target-content rename operations. `mounts.json` records whether a
-child root has ever been materialized and stores its filesystem identity. If
-the directory later appears at exactly one sibling path with the same identity,
-the orchestrator stops the child runner, PATCHes the shortcut placeholder name
-by `binding_item_id`, updates the record, and restarts the same child mount ID
-at the new path. If the directory disappears with no same-parent identity
-candidate, the orchestrator stops the child runner, DELETEs only the shortcut
-placeholder, marks the child pending removal, and purges only the child state
-DB after local projection cleanup is proven safe. During the short pre-mutation
-window, parent observation suppresses the managed root so it is not uploaded
-into the parent drive. Cross-folder local moves are not supported in this
-increment: same-parent alias rename is the only rename shape that can mutate
-the OneDrive shortcut alias. Ambiguous same-parent identity matches, symlink
-ancestry, unsafe paths, files at the child root, or Graph mutation failures
-become durable conflict/unavailable records and keep all plausible paths
-reserved until recovery.
+Local shortcut alias deletion and same-parent local shortcut alias rename are
+not target-content delete or target-content rename operations. Parent engines
+own the shortcut placeholder mutation by `binding_item_id`; multisync only
+coordinates runner shutdown and child final drain around that parent operation.
+If the alias directory later appears at exactly one sibling path with the same
+stored identity, the parent alias rename is applied and the same child mount ID
+restarts at the new path. If the alias disappears with no same-parent identity
+candidate, the parent deletes only the shortcut alias and emits retiring child
+topology. The child engine then runs a final bidirectional full sync when its
+root still exists; only after that clean report may multisync stop the child and
+purge its state. During all blocked or retiring states, parent observation
+suppresses the protected root so it is not uploaded into the parent drive.
+Cross-parent moves are unsupported by design: parent engines are isolated by
+account/namespace authority and never compare shortcut roots across parents.
+Ambiguous same-parent identity matches, symlink ancestry, unsafe paths, files at
+the child root, or parent alias mutation failures keep all plausible paths
+protected until recovery.
 
 Status is the guided recovery surface for these states. Non-active shortcut
 children expose the protected current path, reserved previous/candidate paths,
-state/reason/detail, command-oriented `recovery_action`, `auto_retry`, and any
+state/reason/detail, concise `recovery_action`, `auto_retry`, and any
 deferred same-path replacement. Deferred replacements remain stored only in
 `deferred_shortcut_bindings`; status renders them as "new shortcut is waiting
 for old projection cleanup" under the pending child instead of inventing a
@@ -297,12 +301,14 @@ time while allowing the CLI to run any number of mounts through one consistent c
 surface.
 
 Parent engines receive a narrow managed-root reservation list derived from
-`mounts.json`: reserved relative paths, child mount IDs, binding item IDs, and
+orchestration input and merge it with parent-owned `shortcut_roots` already in
+their sync store: reserved relative paths, child/binding IDs when known, and
 optional filesystem identities. The engine uses those reservations only to
-suppress/report local facts at observation boundaries. It does not decide
-shortcut lifecycle or mutate Graph. Path-reserved events and same-parent
-identity matches are reported back to `Orchestrator`, which triggers shortcut
-reconciliation in the single control-plane owner.
+suppress/report local facts at observation boundaries and to maintain its
+parent-owned shortcut-root state. Parent engines are also the only shortcut
+alias mutators. Path-reserved events and same-parent identity matches wake the
+orchestrator, but the parent namespace decision and retry/block state remain in
+the parent engine.
 
 ## `Orchestrator`
 

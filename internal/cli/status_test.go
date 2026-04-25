@@ -198,7 +198,8 @@ func TestBuildChildStatusMount_SurfacesProtectedPathsAndDeferredReplacement(t *t
 	require.Len(t, mount.DeferredReplacements, 1)
 	assert.Equal(t, "binding-new", mount.DeferredReplacements[0].BindingItemID)
 	assert.Equal(t, "new shortcut is waiting for old projection cleanup", mount.DeferredReplacements[0].Detail)
-	assert.Contains(t, mount.RecoveryAction, "Move or delete")
+	assert.Contains(t, mount.RecoveryAction, "child projection")
+	assert.NotContains(t, mount.RecoveryAction, "rerun sync")
 }
 
 func statusLifecycleReasonForTest(state config.MountState) config.MountStateReason {
@@ -331,7 +332,7 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 			DisplayName:   "Docs",
 			Detail:        "new shortcut is waiting for old projection cleanup",
 		}},
-		RecoveryAction: "Move or delete the listed child projection content, then rerun sync.",
+		RecoveryAction: "Leave the listed child projection empty, or wait for child sync to finish.",
 		AutoRetry:      &autoRetry,
 	}, false)
 	require.NoError(t, err)
@@ -340,7 +341,7 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 	assert.Contains(t, output, "Protected current path: /tmp/sync-root/Shortcuts/Docs")
 	assert.Contains(t, output, "Reserved path: /tmp/sync-root/Shortcuts/Old Docs")
 	assert.Contains(t, output, "Deferred replacement: Docs (binding-new) - new shortcut is waiting for old projection cleanup")
-	assert.Contains(t, output, "Action:    Move or delete the listed child projection content")
+	assert.Contains(t, output, "Action:    Leave the listed child projection empty")
 	assert.Contains(t, output, "Auto retry: yes")
 }
 

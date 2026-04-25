@@ -64,7 +64,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
-| Managed child shortcut lifecycle failures are classified before engine construction instead of being mirrored into engine retry or observation state; the engine only suppresses/reports managed-root observation facts for the control plane. | `TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersParentSubtree`, `TestApplyChildProjectionMoves_TargetConflictMarksChildConflictAndSkips`, `TestApplyChildProjectionMoves_TargetEmptyAutoResolves`, `TestApplyChildProjectionMoves_MatchingTreesAutoResolve`, `TestApplyChildProjectionMoves_MissingSourceAndTargetStaysUnavailable`, `TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot` |
+| Parent engines persist shortcut-root state, merge that state into managed-root observation reservations on startup, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot` |
 
 ## Construction
 
@@ -392,8 +392,18 @@ runtime model.
 Embedded shared-folder links discovered inside another synced drive are still
 suppressed by ordinary drive-root content observation and never become nested
 engine-owned sub-sessions. For parent namespace mounts, the same observer emits
-those placeholders as shortcut topology facts before remote cursor commit; the
-multi-mount control plane consumes those facts and owns child lifecycle.
+those placeholders as shortcut topology facts before remote cursor commit. The
+parent engine also persists parent-owned `shortcut_roots` state in its sync
+store: binding item ID, alias path, target identity, protected parent-local
+paths, lifecycle state, and same-path replacement waiting state. The
+multi-mount control plane consumes the parent-declared child topology only to
+start, drain, skip, or purge child runners.
+
+Shortcut placeholder rename/delete mutations are parent-engine operations by
+binding item ID. Multisync may coordinate runner shutdown before asking for the
+mutation, but the Graph mutation and parent shortcut-root retry/block state stay
+inside this package. Multisync must not rediscover parent remote state or call
+parent-drive alias mutation APIs directly.
 
 If a mounted sync root disappears, the engine treats that as mount lifecycle
 (`ErrMountRootUnavailable`) rather than as content deletion below the root.
