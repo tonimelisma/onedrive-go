@@ -294,6 +294,85 @@ func TestRoot_TreesEqualNoFollow_RejectsSymlinkEntries(t *testing.T) {
 }
 
 // Validates: R-2.10, R-6.2
+func TestRoot_ValidateTreeNoFollow_RejectsSymlinkEntries(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tree"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "target.txt"), []byte("target"), 0o600))
+	if symlinkErr := os.Symlink(filepath.Join(dir, "target.txt"), filepath.Join(dir, "tree", "link")); symlinkErr != nil {
+		t.Skipf("symlink not available on this filesystem: %v", symlinkErr)
+	}
+
+	err = root.ValidateTreeNoFollow("tree")
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnsupportedTreeEntry)
+}
+
+type openRejectingRootHandle struct {
+	root      rootHandle
+	openCalls *int
+}
+
+func (h openRejectingRootHandle) Open(name string) (*os.File, error) {
+	(*h.openCalls)++
+	return nil, errors.New("open should not be called")
+}
+
+func (h openRejectingRootHandle) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	//nolint:wrapcheck // test helper delegates all non-Open behavior.
+	return h.root.OpenFile(name, flag, perm)
+}
+
+func (h openRejectingRootHandle) Stat(name string) (os.FileInfo, error) {
+	//nolint:wrapcheck // test helper delegates all non-Open behavior.
+	return h.root.Stat(name)
+}
+
+func (h openRejectingRootHandle) Lstat(name string) (os.FileInfo, error) {
+	//nolint:wrapcheck // test helper delegates all non-Open behavior.
+	return h.root.Lstat(name)
+}
+
+func (h openRejectingRootHandle) Mkdir(name string, perm os.FileMode) error {
+	//nolint:wrapcheck // test helper delegates all non-Open behavior.
+	return h.root.Mkdir(name, perm)
+}
+
+func (h openRejectingRootHandle) FS() fs.FS {
+	return h.root.FS()
+}
+
+func (h openRejectingRootHandle) Close() error {
+	//nolint:wrapcheck // test helper delegates all non-Open behavior.
+	return h.root.Close()
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_ValidateTreeNoFollow_DoesNotReadFileContent(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tree"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tree", "file.txt"), []byte("payload"), 0o600))
+
+	openRoot := root.ops.openRoot
+	openCalls := 0
+	root.ops.openRoot = func(dir string) (rootHandle, error) {
+		handle, err := openRoot(dir)
+		if err != nil {
+			return nil, err
+		}
+		return openRejectingRootHandle{root: handle, openCalls: &openCalls}, nil
+	}
+
+	require.NoError(t, root.ValidateTreeNoFollow("tree"))
+	assert.Zero(t, openCalls)
+}
+
+// Validates: R-2.10, R-6.2
 func TestRoot_RemoveTreeNoFollow_RemovesRegularTree(t *testing.T) {
 	dir := t.TempDir()
 	root, err := Open(dir)

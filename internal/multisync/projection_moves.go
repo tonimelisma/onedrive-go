@@ -24,6 +24,42 @@ type childProjectionMoveError struct {
 	err    error
 }
 
+type projectionPathDecisionKind string
+
+const (
+	projectionDecisionNoop                 projectionPathDecisionKind = "noop"
+	projectionDecisionRenameSource         projectionPathDecisionKind = "rename_source"
+	projectionDecisionInspectExistingPaths projectionPathDecisionKind = "inspect_existing_paths"
+	projectionDecisionRenameCaseOnly       projectionPathDecisionKind = "rename_case_only"
+	projectionDecisionReplaceEmptyTarget   projectionPathDecisionKind = "replace_empty_target"
+	projectionDecisionRemoveMatchingSource projectionPathDecisionKind = "remove_matching_source"
+	projectionDecisionConflict             projectionPathDecisionKind = "conflict"
+	projectionDecisionUnavailable          projectionPathDecisionKind = "unavailable"
+)
+
+type projectionPathDecision struct {
+	kind              projectionPathDecisionKind
+	conflictMessage   string
+	unavailableAction string
+	unavailableErr    error
+}
+
+type projectionExistingPathIssue string
+
+const (
+	projectionExistingPathIssueUnsupported projectionExistingPathIssue = "unsupported"
+	projectionExistingPathIssueUnavailable projectionExistingPathIssue = "unavailable"
+)
+
+type projectionExistingPathInspection struct {
+	sameFile          bool
+	targetEmpty       bool
+	treesEqual        bool
+	issue             projectionExistingPathIssue
+	unavailableAction string
+	unavailableErr    error
+}
+
 func (f *childProjectionMoveError) Error() string {
 	if f == nil || f.err == nil {
 		return ""
@@ -159,71 +195,141 @@ func applyProjectionPathDecision(
 	sourceState synctree.PathState,
 	targetState synctree.PathState,
 ) error {
+	decision := classifyProjectionPathStates(sourceState, targetState)
+	if decision.kind == projectionDecisionInspectExistingPaths {
+		inspection := inspectExistingProjectionPaths(root, sourceRel, targetRel)
+		decision = classifyExistingProjectionPathDecision(inspection)
+	}
+
+	return executeProjectionPathDecision(move, root, sourceRel, targetRel, decision)
+}
+
+func classifyProjectionPathStates(sourceState synctree.PathState, targetState synctree.PathState) projectionPathDecision {
 	switch {
 	case sourceState.Exists && !sourceState.IsDir:
-		return projectionConflict(move, "previous local path is not a directory")
+		return projectionPathDecision{kind: projectionDecisionConflict, conflictMessage: "previous local path is not a directory"}
 	case targetState.Exists && !targetState.IsDir:
-		return projectionConflict(move, "current local path is not a directory")
+		return projectionPathDecision{kind: projectionDecisionConflict, conflictMessage: "current local path is not a directory"}
 	case sourceState.Exists && targetState.Exists:
-		same, sameErr := projectionPathsSameFile(root, sourceRel, targetRel)
-		if sameErr != nil {
-			return projectionUnavailable(move, "comparing projection paths", sameErr)
-		}
-		if same {
-			return renameCaseOnlyProjection(move, root, sourceRel, targetRel)
-		}
-		resolved, resolveErr := autoResolveExistingProjectionPaths(move, root, sourceRel, targetRel)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		if resolved {
-			return nil
-		}
-		return projectionConflict(move, "previous and current local paths both exist")
+		return projectionPathDecision{kind: projectionDecisionInspectExistingPaths}
 	case !sourceState.Exists && targetState.Exists:
-		return nil
+		return projectionPathDecision{kind: projectionDecisionNoop}
 	case !sourceState.Exists && !targetState.Exists:
-		return projectionUnavailable(move, "moving local projection", fmt.Errorf("previous and current local paths are both missing"))
+		return projectionPathDecision{
+			kind:              projectionDecisionUnavailable,
+			unavailableAction: "moving local projection",
+			unavailableErr:    fmt.Errorf("previous and current local paths are both missing"),
+		}
 	default:
-		return renameProjectionSource(move, root, sourceRel, targetRel)
+		return projectionPathDecision{kind: projectionDecisionRenameSource}
 	}
 }
 
-func autoResolveExistingProjectionPaths(
-	move *childProjectionMove,
-	root *synctree.Root,
-	sourceRel string,
-	targetRel string,
-) (bool, error) {
+func inspectExistingProjectionPaths(root *synctree.Root, sourceRel string, targetRel string) projectionExistingPathInspection {
+	same, sameErr := projectionPathsSameFile(root, sourceRel, targetRel)
+	if sameErr != nil {
+		return projectionExistingPathInspection{
+			issue:             projectionExistingPathIssueUnavailable,
+			unavailableAction: "comparing projection paths",
+			unavailableErr:    sameErr,
+		}
+	}
+	if same {
+		return projectionExistingPathInspection{sameFile: true}
+	}
+
 	targetEmpty, emptyErr := root.DirEmptyNoFollow(targetRel)
 	if emptyErr != nil {
-		return false, projectionTreeInspectionError(move, "checking current local path", emptyErr)
+		return projectionExistingPathInspectionError("checking current local path", emptyErr)
 	}
 	if targetEmpty {
-		if err := root.RemoveTreeNoFollow(targetRel); err != nil {
-			return false, projectionTreeInspectionError(move, "removing empty current local path", err)
+		if validateErr := root.ValidateTreeNoFollow(sourceRel); validateErr != nil {
+			return projectionExistingPathInspectionError("checking previous local path", validateErr)
 		}
-		if err := renameProjectionSource(move, root, sourceRel, targetRel); err != nil {
-			return false, err
-		}
-		return true, nil
+		return projectionExistingPathInspection{targetEmpty: true}
 	}
 
 	matches, matchErr := root.TreesEqualNoFollow(sourceRel, targetRel)
 	if matchErr != nil {
-		return false, projectionTreeInspectionError(move, "comparing projection trees", matchErr)
-	}
-	if !matches {
-		return false, nil
+		return projectionExistingPathInspectionError("comparing projection trees", matchErr)
 	}
 
-	if err := root.RemoveTreeNoFollow(sourceRel); err != nil {
-		return false, projectionTreeInspectionError(move, "removing previous matching local path", err)
-	}
-	return true, nil
+	return projectionExistingPathInspection{treesEqual: matches}
 }
 
-func projectionTreeInspectionError(move *childProjectionMove, action string, err error) error {
+func projectionExistingPathInspectionError(action string, err error) projectionExistingPathInspection {
+	if errors.Is(err, synctree.ErrUnsafePath) || errors.Is(err, synctree.ErrUnsupportedTreeEntry) {
+		return projectionExistingPathInspection{issue: projectionExistingPathIssueUnsupported}
+	}
+
+	return projectionExistingPathInspection{
+		issue:             projectionExistingPathIssueUnavailable,
+		unavailableAction: action,
+		unavailableErr:    err,
+	}
+}
+
+func classifyExistingProjectionPathDecision(inspection projectionExistingPathInspection) projectionPathDecision {
+	switch {
+	case inspection.issue == projectionExistingPathIssueUnsupported:
+		return projectionPathDecision{kind: projectionDecisionConflict, conflictMessage: "projection tree contains unsupported local content"}
+	case inspection.issue == projectionExistingPathIssueUnavailable:
+		return projectionPathDecision{
+			kind:              projectionDecisionUnavailable,
+			unavailableAction: inspection.unavailableAction,
+			unavailableErr:    inspection.unavailableErr,
+		}
+	case inspection.sameFile:
+		return projectionPathDecision{kind: projectionDecisionRenameCaseOnly}
+	case inspection.targetEmpty:
+		return projectionPathDecision{kind: projectionDecisionReplaceEmptyTarget}
+	case inspection.treesEqual:
+		return projectionPathDecision{kind: projectionDecisionRemoveMatchingSource}
+	default:
+		return projectionPathDecision{kind: projectionDecisionConflict, conflictMessage: "previous and current local paths both exist"}
+	}
+}
+
+func executeProjectionPathDecision(
+	move *childProjectionMove,
+	root *synctree.Root,
+	sourceRel string,
+	targetRel string,
+	decision projectionPathDecision,
+) error {
+	switch decision.kind {
+	case projectionDecisionNoop:
+		return nil
+	case projectionDecisionRenameSource:
+		return renameProjectionSource(move, root, sourceRel, targetRel)
+	case projectionDecisionRenameCaseOnly:
+		return renameCaseOnlyProjection(move, root, sourceRel, targetRel)
+	case projectionDecisionReplaceEmptyTarget:
+		if err := root.RemoveTreeNoFollow(targetRel); err != nil {
+			return projectionTreeMutationError(move, "removing empty current local path", err)
+		}
+		return renameProjectionSource(move, root, sourceRel, targetRel)
+	case projectionDecisionRemoveMatchingSource:
+		if err := root.RemoveTreeNoFollow(sourceRel); err != nil {
+			return projectionTreeMutationError(move, "removing previous matching local path", err)
+		}
+		return nil
+	case projectionDecisionConflict:
+		return projectionConflict(move, decision.conflictMessage)
+	case projectionDecisionUnavailable:
+		return projectionUnavailable(move, decision.unavailableAction, decision.unavailableErr)
+	case projectionDecisionInspectExistingPaths:
+		return projectionUnavailable(
+			move,
+			"classifying local projection move",
+			fmt.Errorf("existing projection path inspection was not resolved"),
+		)
+	default:
+		return projectionUnavailable(move, "classifying local projection move", fmt.Errorf("unknown projection path decision %q", decision.kind))
+	}
+}
+
+func projectionTreeMutationError(move *childProjectionMove, action string, err error) error {
 	if errors.Is(err, synctree.ErrUnsafePath) || errors.Is(err, synctree.ErrUnsupportedTreeEntry) {
 		return projectionConflict(move, "projection tree contains unsupported local content")
 	}
