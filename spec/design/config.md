@@ -372,9 +372,12 @@ mount state DB.
 During a shortcut rename or move, schema v4 stores the new
 `RelativeLocalPath` plus any old `ReservedLocalPaths` that must remain excluded
 from the parent namespace until the local projection move is completed. Reserved
-paths are validated as safe relative paths and are not user controls. If Graph
-returns a shortcut placeholder but does not return a usable target, config
-accepts an `unavailable` record with
+paths are validated as safe relative paths and are not user controls. They are
+cleared when the control plane proves the local projection moved safely,
+including the safe auto-resolve cases where the new target is empty or the old
+and new projection trees have identical regular-file content. If Graph returns
+a shortcut placeholder but does not return a usable target, config accepts an
+`unavailable` record with
 `state_reason: shortcut_binding_unavailable` and no remote target IDs. That
 state belongs to mount inventory; it is not a sync-store retry/block/observation
 condition.

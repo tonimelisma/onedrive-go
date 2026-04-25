@@ -193,6 +193,140 @@ func TestRoot_RenameWithTemporarySibling_RenamesThroughTemp(t *testing.T) {
 }
 
 // Validates: R-2.10, R-6.2
+func TestRoot_DirEmptyNoFollow(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "empty"), 0o700))
+	empty, err := root.DirEmptyNoFollow("empty")
+	require.NoError(t, err)
+	assert.True(t, empty)
+
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "nonempty"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nonempty", "file.txt"), []byte("data"), 0o600))
+	empty, err = root.DirEmptyNoFollow("nonempty")
+	require.NoError(t, err)
+	assert.False(t, empty)
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_TreesEqualNoFollow_MatchesStructureAndFileContent(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	for _, base := range []string{"left", "right"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, base, "nested", "empty"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, base, "nested", "file.txt"), []byte("same"), 0o600))
+	}
+
+	equal, err := root.TreesEqualNoFollow("left", "right")
+	require.NoError(t, err)
+	assert.True(t, equal)
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_TreesEqualNoFollow_DetectsMismatches(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, dir string)
+	}{
+		{
+			name: "content differs",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				require.NoError(t, os.MkdirAll(filepath.Join(dir, "left"), 0o700))
+				require.NoError(t, os.MkdirAll(filepath.Join(dir, "right"), 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "left", "file.txt"), []byte("left"), 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "right", "file.txt"), []byte("right"), 0o600))
+			},
+		},
+		{
+			name: "missing file",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				require.NoError(t, os.MkdirAll(filepath.Join(dir, "left"), 0o700))
+				require.NoError(t, os.MkdirAll(filepath.Join(dir, "right"), 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "left", "file.txt"), []byte("left"), 0o600))
+			},
+		},
+		{
+			name: "extra empty directory",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				require.NoError(t, os.MkdirAll(filepath.Join(dir, "left", "empty"), 0o700))
+				require.NoError(t, os.MkdirAll(filepath.Join(dir, "right"), 0o700))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			root, err := Open(dir)
+			require.NoError(t, err)
+			tt.setup(t, dir)
+
+			equal, err := root.TreesEqualNoFollow("left", "right")
+			require.NoError(t, err)
+			assert.False(t, equal)
+		})
+	}
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_TreesEqualNoFollow_RejectsSymlinkEntries(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "left"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "right"), 0o700))
+	if symlinkErr := os.Symlink("../right", filepath.Join(dir, "left", "link")); symlinkErr != nil {
+		t.Skipf("symlink not available on this filesystem: %v", symlinkErr)
+	}
+
+	equal, err := root.TreesEqualNoFollow("left", "right")
+	require.Error(t, err)
+	assert.False(t, equal)
+	require.ErrorIs(t, err, ErrUnsupportedTreeEntry)
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_RemoveTreeNoFollow_RemovesRegularTree(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tree", "nested"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tree", "nested", "file.txt"), []byte("data"), 0o600))
+
+	require.NoError(t, root.RemoveTreeNoFollow("tree"))
+
+	assert.NoDirExists(t, filepath.Join(dir, "tree"))
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_RemoveTreeNoFollow_DoesNotFollowSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "kept.txt"), []byte("outside"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tree"), 0o700))
+	if symlinkErr := os.Symlink(outside, filepath.Join(dir, "tree", "link")); symlinkErr != nil {
+		t.Skipf("symlink not available on this filesystem: %v", symlinkErr)
+	}
+
+	err = root.RemoveTreeNoFollow("tree")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnsupportedTreeEntry)
+	assert.FileExists(t, filepath.Join(outside, "kept.txt"))
+}
+
+// Validates: R-2.10, R-6.2
 func TestRoot_RemoveAllAndChtimes(t *testing.T) {
 	t.Parallel()
 

@@ -11,7 +11,8 @@ into live observation facts. The low-level observers do not write the sync DB
 directly. The engine-owned observation orchestration persists the resulting
 observation batch as one coherent durable set. `observation_state` owns the
 remote cursor plus remote full-refresh cadence; local watch safety-scan cadence
-is runtime-only. Observation produces wake signals, dirty path/scope hints,
+is rebuildable watch runtime state. Observation produces wake signals, dirty
+path/scope hints,
 observation findings, and direct local-snapshot rows for `local_state`.
 
 In watch mode, that ownership is explicit: local observers emit only local
@@ -48,7 +49,7 @@ The observation stack has four main pieces:
 | --- | --- |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestNosyncGuard_PreventsAllSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
 | Normal drive content observation ignores embedded shared-folder shortcut placeholders, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Automatic child mounts are discovered above the engine by the control plane. | `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
-| Mount-root runtimes still support remote observation rooted at their configured remote root. Today, separately configured shared folders use this path. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
+| Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 
 ## Remote Observation
 
@@ -89,9 +90,10 @@ parents may still gain managed child mounts because `internal/multisync`
 discovers shortcut placeholders before engine startup and starts the child as a
 separate mount-root engine.
 
-Today, separately configured shared folders happen to use the mount-root
-path. Mount-root observation may use folder delta or recursive enumeration
-depending on drive type and Graph support.
+Separately configured shared folders and managed shortcut child mounts use the
+mount-root path when their content root is below the backing drive root.
+Mount-root observation may use folder delta or recursive enumeration depending
+on drive type and Graph support.
 
 Remote read-denied boundaries are observation-owned facts. When drive-root or
 mount-root observation proves that remote truth is unreadable, the engine
