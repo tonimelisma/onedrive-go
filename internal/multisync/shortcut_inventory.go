@@ -332,7 +332,26 @@ func pendingRemovalMountIDs(inventory *config.MountInventory) []string {
 	records := sortedMountRecords(inventory)
 	for i := range records {
 		record := &records[i]
-		if record.State == config.MountStatePendingRemoval {
+		if record.State == config.MountStatePendingRemoval &&
+			record.StateReason != config.MountStateReasonShortcutRemoved {
+			ids = append(ids, record.MountID)
+		}
+	}
+
+	return ids
+}
+
+func finalDrainMountIDs(inventory *config.MountInventory) []string {
+	if inventory == nil {
+		return nil
+	}
+
+	ids := make([]string, 0)
+	records := sortedMountRecords(inventory)
+	for i := range records {
+		record := &records[i]
+		if record.State == config.MountStatePendingRemoval &&
+			record.StateReason == config.MountStateReasonShortcutRemoved {
 			ids = append(ids, record.MountID)
 		}
 	}

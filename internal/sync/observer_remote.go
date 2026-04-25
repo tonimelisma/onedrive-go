@@ -262,6 +262,7 @@ func (o *RemoteObserver) Watch(
 	}
 }
 
+//nolint:gocritic // Remote observer batches use value semantics at the watch handler boundary.
 func (o *RemoteObserver) handleWatchBatch(
 	ctx context.Context,
 	batches chan<- remoteObservationBatch,

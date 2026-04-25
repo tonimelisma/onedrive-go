@@ -7,7 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -115,10 +115,11 @@ func applyChildRootLifecycleAction(
 		return childRootLifecycleActionUnavailable(action, "opening parent session", fmt.Errorf("parent mount is missing"))
 	}
 
-	session, err := orchestrator.cfg.Runtime.SyncSession(ctx, action.parent.syncSessionConfig())
+	mutator, closeMutator, err := openParentShortcutAliasMutator(ctx, orchestrator, action.parent)
 	if err != nil {
-		return childRootLifecycleActionUnavailable(action, "opening parent session", err)
+		return childRootLifecycleActionUnavailable(action, "opening parent shortcut alias mutator", err)
 	}
+	defer closeMutator(ctx)
 
 	switch action.kind {
 	case childRootLifecycleActionRename:
@@ -126,12 +127,20 @@ func applyChildRootLifecycleAction(
 		if alias == "" {
 			return childRootLifecycleActionConflict(action, "renamed local alias is empty")
 		}
-		if _, err := session.MoveItem(ctx, action.bindingItemID, "", alias); err != nil {
+		if err := mutator.ApplyShortcutAliasMutation(ctx, syncengine.ShortcutAliasMutation{
+			Kind:              syncengine.ShortcutAliasMutationRename,
+			BindingItemID:     action.bindingItemID,
+			RelativeLocalPath: action.toRelativeLocalPath,
+			LocalAlias:        alias,
+		}); err != nil {
 			return childRootLifecycleActionUnavailable(action, "renaming shortcut placeholder", err)
 		}
 		return nil
 	case childRootLifecycleActionDelete:
-		if err := session.DeleteItem(ctx, action.bindingItemID); err != nil && !driveops.IsNotFound(err) {
+		if err := mutator.ApplyShortcutAliasMutation(ctx, syncengine.ShortcutAliasMutation{
+			Kind:          syncengine.ShortcutAliasMutationDelete,
+			BindingItemID: action.bindingItemID,
+		}); err != nil {
 			return childRootLifecycleActionUnavailable(action, "deleting shortcut placeholder", err)
 		}
 		return nil
@@ -142,6 +151,50 @@ func applyChildRootLifecycleAction(
 			fmt.Errorf("unknown action %q", action.kind),
 		)
 	}
+}
+
+type parentShortcutAliasMutator interface {
+	ApplyShortcutAliasMutation(context.Context, syncengine.ShortcutAliasMutation) error
+}
+
+func openParentShortcutAliasMutator(
+	ctx context.Context,
+	orchestrator *Orchestrator,
+	parent *mountSpec,
+) (parentShortcutAliasMutator, func(context.Context), error) {
+	session, err := orchestrator.cfg.Runtime.SyncSession(ctx, parent.syncSessionConfig())
+	if err != nil {
+		return nil, func(context.Context) {}, fmt.Errorf("opening parent session: %w", err)
+	}
+	engine, err := orchestrator.engineFactory(ctx, engineFactoryRequest{
+		Session:     session,
+		Mount:       parent,
+		Logger:      orchestrator.logger,
+		VerifyDrive: true,
+	})
+	if err != nil {
+		return nil, func(context.Context) {}, fmt.Errorf("creating parent engine: %w", err)
+	}
+	mutator, ok := engine.(parentShortcutAliasMutator)
+	if !ok {
+		if closeErr := engine.Close(ctx); closeErr != nil && orchestrator.logger != nil {
+			orchestrator.logger.Warn("engine close error after shortcut alias mutation setup",
+				slog.String("mount_id", parent.mountID.String()),
+				slog.String("error", closeErr.Error()),
+			)
+		}
+		return nil, func(context.Context) {}, fmt.Errorf("parent engine does not support shortcut alias mutation")
+	}
+
+	closeFn := func(closeCtx context.Context) {
+		if closeErr := engine.Close(closeCtx); closeErr != nil && orchestrator.logger != nil {
+			orchestrator.logger.Warn("engine close error after shortcut alias mutation",
+				slog.String("mount_id", parent.mountID.String()),
+				slog.String("error", closeErr.Error()),
+			)
+		}
+	}
+	return mutator, closeFn, nil
 }
 
 func recordChildRootLifecycleActionSuccess(action *childRootLifecycleAction) error {

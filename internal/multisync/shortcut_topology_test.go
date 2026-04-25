@@ -178,6 +178,136 @@ func TestApplyShortcutTopologyBatch_SamePathReplacementDefersNewBinding(t *testi
 }
 
 // Validates: R-2.8.1, R-4.1.4
+func TestApplyShortcutTopologyBatch_SamePathReplacementDoesNotDowngradeActiveOwner(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	existing := testChildRecord(parent.mountID, "binding-old", "Shortcut Renamed")
+	existing.State = config.MountStateActive
+	existing.ReservedLocalPaths = []string{"Shortcut"}
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[existing.MountID] = existing
+	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
+
+	result, err := applyShortcutTopologyBatchToInventory(
+		inventory,
+		parent,
+		existingByBinding,
+		syncengine.ShortcutTopologyBatch{
+			NamespaceID: parent.mountID.String(),
+			Kind:        syncengine.ShortcutTopologyObservationIncremental,
+			Upserts: []syncengine.ShortcutBindingUpsert{{
+				BindingItemID:     "binding-new",
+				LocalAlias:        "Shortcut",
+				RelativeLocalPath: "Shortcut",
+				RemoteDriveID:     "remote-next",
+				RemoteItemID:      "remote-item-next",
+				RemoteIsFolder:    true,
+				Complete:          true,
+			}},
+		},
+	)
+	require.NoError(t, err)
+	assert.True(t, result.changed)
+	assert.Equal(t, []string{existing.MountID}, result.dirtyMountIDs)
+	assert.NotContains(t, inventory.Mounts, config.ChildMountID(parent.mountID.String(), "binding-new"))
+
+	owner := inventory.Mounts[existing.MountID]
+	assert.Equal(t, config.MountStateActive, owner.State)
+	assert.Empty(t, owner.StateReason)
+	assert.Equal(t, []string{"Shortcut"}, owner.ReservedLocalPaths)
+
+	key := deferredShortcutBindingKey(parent.mountID.String(), "Shortcut", "binding-new")
+	deferred := inventory.DeferredShortcutBindings[key]
+	assert.Equal(t, "remote-next", deferred.RemoteDriveID)
+	assert.Equal(t, "remote-item-next", deferred.RemoteItemID)
+}
+
+// Validates: R-2.4.8, R-2.8.1, R-4.1.4
+func TestApplyShortcutTopologyBatch_ConsumesParentDeclaredShortcutRoots(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	inventory := config.DefaultMountInventory()
+	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
+
+	result, err := applyShortcutTopologyBatchToInventory(
+		inventory,
+		parent,
+		existingByBinding,
+		parentDeclaredShortcutTopologyBatch(syncengine.ShortcutTopologyBatch{
+			NamespaceID: parent.mountID.String(),
+			Kind:        syncengine.ShortcutTopologyObservationIncremental,
+			ParentRoots: []syncengine.ShortcutRootRecord{{
+				NamespaceID:       parent.mountID.String(),
+				BindingItemID:     "binding-1",
+				RelativeLocalPath: "Shared/Docs",
+				LocalAlias:        "Docs",
+				RemoteDriveID:     driveid.New("remote-drive-0001"),
+				RemoteItemID:      "remote-root",
+				RemoteIsFolder:    true,
+				State:             syncengine.ShortcutRootStateActive,
+				ProtectedPaths:    []string{"Shared/Docs"},
+			}},
+		}),
+	)
+	require.NoError(t, err)
+	assert.True(t, result.changed)
+
+	record := inventory.Mounts[config.ChildMountID(parent.mountID.String(), "binding-1")]
+	assert.Equal(t, config.MountStateActive, record.State)
+	assert.Equal(t, "Shared/Docs", record.RelativeLocalPath)
+	assert.Equal(t, "remote-drive-0001", record.RemoteDriveID)
+	assert.Equal(t, "remote-root", record.RemoteItemID)
+}
+
+// Validates: R-2.4.8, R-2.8.1, R-4.1.4
+func TestApplyShortcutTopologyBatch_ParentWaitingReplacementDefersNewBinding(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	existing := testChildRecord(parent.mountID, "binding-old", "Shortcut")
+	existing.State = config.MountStatePendingRemoval
+	existing.StateReason = config.MountStateReasonShortcutRemoved
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[existing.MountID] = existing
+	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
+
+	result, err := applyShortcutTopologyBatchToInventory(
+		inventory,
+		parent,
+		existingByBinding,
+		parentDeclaredShortcutTopologyBatch(syncengine.ShortcutTopologyBatch{
+			NamespaceID: parent.mountID.String(),
+			Kind:        syncengine.ShortcutTopologyObservationIncremental,
+			ParentRoots: []syncengine.ShortcutRootRecord{{
+				NamespaceID:       parent.mountID.String(),
+				BindingItemID:     "binding-old",
+				RelativeLocalPath: "Shortcut",
+				LocalAlias:        "Shortcut",
+				State:             syncengine.ShortcutRootStateSamePathReplacementWaiting,
+				Waiting: &syncengine.ShortcutRootReplacement{
+					BindingItemID:     "binding-new",
+					RelativeLocalPath: "Shortcut",
+					LocalAlias:        "Shortcut",
+					RemoteDriveID:     driveid.New("remote-next-0001"),
+					RemoteItemID:      "remote-item-next",
+					RemoteIsFolder:    true,
+				},
+			}},
+		}),
+	)
+	require.NoError(t, err)
+	assert.True(t, result.changed)
+	assert.NotContains(t, inventory.Mounts, config.ChildMountID(parent.mountID.String(), "binding-new"))
+
+	key := deferredShortcutBindingKey(parent.mountID.String(), "Shortcut", "binding-new")
+	deferred := inventory.DeferredShortcutBindings[key]
+	assert.Equal(t, "remote-next-0001", deferred.RemoteDriveID)
+	assert.Equal(t, "remote-item-next", deferred.RemoteItemID)
+}
+
+// Validates: R-2.8.1, R-4.1.4
 func TestApplyShortcutTopologyBatch_UnavailableBindingPersistsUnavailableRecord(t *testing.T) {
 	t.Parallel()
 

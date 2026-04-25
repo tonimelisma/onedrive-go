@@ -19,6 +19,7 @@ type ShortcutTopologyBatch struct {
 	Upserts     []ShortcutBindingUpsert
 	Deletes     []ShortcutBindingDelete
 	Unavailable []ShortcutBindingUnavailable
+	ParentRoots []ShortcutRootRecord
 }
 
 type ShortcutBindingUpsert struct {
@@ -47,10 +48,12 @@ type ShortcutBindingUnavailable struct {
 
 type ShortcutTopologyHandler func(context.Context, ShortcutTopologyBatch) error
 
+//nolint:gocritic // Value receiver keeps the topology batch API simple at observation boundaries.
 func (b ShortcutTopologyBatch) HasFacts() bool {
 	return len(b.Upserts) > 0 || len(b.Deletes) > 0 || len(b.Unavailable) > 0
 }
 
+//nolint:gocritic // Value receiver keeps the topology batch API simple at observation boundaries.
 func (b ShortcutTopologyBatch) ShouldApply() bool {
 	return b.HasFacts() || b.Kind == ShortcutTopologyObservationComplete
 }

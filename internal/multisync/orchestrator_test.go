@@ -511,6 +511,122 @@ func TestRunOnce_TwoMounts_OneFailsOneSucceeds(t *testing.T) {
 	assert.Equal(t, 2, okMountReport.Report.Uploads)
 }
 
+// Validates: R-2.4.8
+func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	parent := testStandaloneMount(t, "personal:final-drain@example.com", "Parent")
+	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
+	child.State = config.MountStatePendingRemoval
+	child.StateReason = config.MountStateReasonShortcutRemoved
+	child.LocalRootMaterialized = true
+
+	childRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Docs")
+	require.NoError(t, os.MkdirAll(childRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(childRoot, "local-change.txt"), []byte("pending upload"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Dir(config.MountStatePath(child.MountID)), 0o700))
+	require.NoError(t, os.WriteFile(config.MountStatePath(child.MountID), []byte("state"), 0o600))
+
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[child.MountID] = child
+	require.NoError(t, config.SaveMountInventory(inventory))
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+
+	type runCall struct {
+		mountID string
+		mode    syncengine.SyncMode
+		opts    syncengine.RunOptions
+	}
+	calls := make([]runCall, 0, 2)
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		return &mockEngine{
+			runOnceFn: func(_ context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error) {
+				calls = append(calls, runCall{
+					mountID: req.Mount.mountID.String(),
+					mode:    mode,
+					opts:    opts,
+				})
+				return &syncengine.Report{Mode: mode, Succeeded: 1}, nil
+			},
+		}, nil
+	}
+
+	result := orch.RunOnce(t.Context(), syncengine.SyncDownloadOnly, syncengine.RunOptions{})
+
+	require.Len(t, result.Reports, 2)
+	require.Len(t, calls, 2)
+	var parentCall, childCall *runCall
+	for i := range calls {
+		if calls[i].mountID == parent.CanonicalID.String() {
+			parentCall = &calls[i]
+		}
+		if calls[i].mountID == child.MountID {
+			childCall = &calls[i]
+		}
+	}
+	require.NotNil(t, parentCall)
+	assert.Equal(t, syncengine.SyncDownloadOnly, parentCall.mode)
+	assert.False(t, parentCall.opts.FullReconcile)
+	require.NotNil(t, childCall)
+	assert.Equal(t, syncengine.SyncBidirectional, childCall.mode)
+	assert.True(t, childCall.opts.FullReconcile)
+	assert.NoDirExists(t, childRoot)
+	assert.NoFileExists(t, config.MountStatePath(child.MountID))
+
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	assert.NotContains(t, loaded.Mounts, child.MountID)
+}
+
+// Validates: R-2.4.8
+func TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	parent := testStandaloneMount(t, "personal:final-drain-fail@example.com", "Parent")
+	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
+	child.State = config.MountStatePendingRemoval
+	child.StateReason = config.MountStateReasonShortcutRemoved
+	child.LocalRootMaterialized = true
+
+	childRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Docs")
+	require.NoError(t, os.MkdirAll(childRoot, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(childRoot, "local-change.txt"), []byte("pending upload"), 0o600))
+
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[child.MountID] = child
+	require.NoError(t, config.SaveMountInventory(inventory))
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		return &mockEngine{
+			runOnceFn: func(_ context.Context, mode syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+				report := &syncengine.Report{Mode: mode}
+				if req.Mount.mountID.String() == child.MountID {
+					report.Failed = 1
+					report.Errors = []error{errors.New("upload blocked")}
+				}
+				return report, nil
+			},
+		}, nil
+	}
+
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+
+	require.Len(t, result.Reports, 2)
+	assert.DirExists(t, childRoot)
+	loaded, err := config.LoadMountInventory()
+	require.NoError(t, err)
+	require.Contains(t, loaded.Mounts, child.MountID)
+	record := loaded.Mounts[child.MountID]
+	assert.Equal(t, config.MountStatePendingRemoval, record.State)
+	assert.Equal(t, config.MountStateReasonShortcutRemoved, record.StateReason)
+}
+
 // Validates: R-2.4
 func TestRunOnce_InitialStartupFailureDoesNotBlockRunnableMount(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:healthy@example.com", "Healthy")
@@ -662,6 +778,81 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	<-wr.done
 	require.NoError(t, wr.engine.Close(t.Context()))
 	cancel()
+}
+
+// Validates: R-2.4.8
+func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	parent := testStandaloneMount(t, "personal:watch-final-drain@example.com", "Parent")
+	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
+	child.State = config.MountStatePendingRemoval
+	child.StateReason = config.MountStateReasonShortcutRemoved
+	inventory := config.DefaultMountInventory()
+	inventory.Mounts[child.MountID] = child
+	require.NoError(t, config.SaveMountInventory(inventory))
+
+	compiled, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, inventory)
+	require.NoError(t, err)
+	var childMount *mountSpec
+	for i := range compiled.Mounts {
+		if compiled.Mounts[i].mountID.String() == child.MountID {
+			childMount = compiled.Mounts[i]
+			break
+		}
+	}
+	require.NotNil(t, childMount)
+	require.True(t, childMount.finalDrain)
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+	captured := make(chan struct {
+		mode syncengine.SyncMode
+		opts syncengine.RunOptions
+	}, 1)
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		return &mockEngine{
+			runOnceFn: func(_ context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error) {
+				captured <- struct {
+					mode syncengine.SyncMode
+					opts syncengine.RunOptions
+				}{mode: mode, opts: opts}
+				return &syncengine.Report{Mode: mode}, nil
+			},
+		}, nil
+	}
+
+	runnerEvents := make(chan watchRunnerEvent, 1)
+	wr, err := orch.startWatchRunner(
+		t.Context(),
+		childMount,
+		syncengine.SyncDownloadOnly,
+		syncengine.WatchOptions{},
+		nil,
+		runnerEvents,
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, wr.engine.Close(t.Context()))
+	}()
+
+	select {
+	case call := <-captured:
+		assert.Equal(t, syncengine.SyncBidirectional, call.mode)
+		assert.True(t, call.opts.FullReconcile)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "final-drain runner did not run")
+	}
+	select {
+	case event := <-runnerEvents:
+		assert.Equal(t, mountID(child.MountID), event.mountID)
+		require.NoError(t, event.err)
+		require.NotNil(t, event.report)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "final-drain runner did not report completion")
+	}
+	<-wr.done
 }
 
 // Validates: R-2.4

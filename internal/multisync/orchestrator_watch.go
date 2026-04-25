@@ -30,6 +30,7 @@ type watchRunner struct {
 
 type watchRunnerEvent struct {
 	mountID mountID
+	report  *syncengine.Report
 	err     error
 }
 
@@ -286,6 +287,23 @@ func (o *Orchestrator) startWatchRunner(
 		defer mountCancel()
 		defer o.removeMountPerfCollector(mount.mountID.String())
 
+		if mount.finalDrain {
+			report, drainErr := engine.RunOnce(mountCtx, syncengine.SyncBidirectional, syncengine.RunOptions{FullReconcile: true})
+			if drainErr != nil && mountCtx.Err() == nil {
+				o.logger.Error("final-drain watch runner exited with error",
+					slog.String("mount_id", mount.mountID.String()),
+					slog.String("error", drainErr.Error()),
+				)
+			}
+			if runnerEvents != nil {
+				select {
+				case runnerEvents <- watchRunnerEvent{mountID: mount.mountID, report: report, err: drainErr}:
+				case <-ctx.Done():
+				}
+			}
+			return
+		}
+
 		if watchErr := engine.RunWatch(mountCtx, mode, opts); watchErr != nil {
 			if mountCtx.Err() == nil {
 				o.logger.Error("watch runner exited with error",
@@ -460,6 +478,10 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 		delete(runners, event.mountID)
 	}
 
+	if wr != nil && wr.mount.finalDrain {
+		o.handleFinalDrainWatchRunnerEvent(wr, event)
+	}
+
 	if event.err != nil && errors.Is(event.err, syncengine.ErrMountTopologyChanged) {
 		o.logger.Info("watch runner requested topology reconciliation",
 			slog.String("mount_id", event.mountID.String()),
@@ -477,6 +499,45 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 	}
 
 	o.reconcileWatchRunners(ctx, mode, opts, runners, managedRootEvents, runnerEvents)
+}
+
+func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
+	wr *watchRunner,
+	event watchRunnerEvent,
+) {
+	if event.err != nil || event.report == nil || event.report.Failed > 0 || len(event.report.Errors) > 0 {
+		o.logger.Info("final-drain child mount is still waiting",
+			slog.String("mount_id", event.mountID.String()),
+		)
+		return
+	}
+	compiled, err := o.compileRuntimeMountSetFromInventory(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+	if err != nil {
+		o.logger.Warn("compiling mount set after final-drain child completion failed",
+			slog.String("mount_id", event.mountID.String()),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	report := &MountReport{
+		SelectionIndex: wr.mount.selectionIndex,
+		Identity:       wr.mount.identity(),
+		DisplayName:    wr.mount.displayName,
+		Report:         event.report,
+	}
+	finalized, err := finalizeSuccessfulFinalDrainMounts(compiled, []*MountReport{report}, o.logger)
+	if err != nil {
+		o.logger.Warn("finalizing drained shortcut child mount after watch completion failed",
+			slog.String("mount_id", event.mountID.String()),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	if finalized {
+		o.logger.Info("finalized drained shortcut child mount",
+			slog.String("mount_id", event.mountID.String()),
+		)
+	}
 }
 
 func (o *Orchestrator) loadReloadSelection(
