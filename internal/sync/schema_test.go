@@ -28,6 +28,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"observation_state",
 		"remote_state",
 		"retry_work",
+		"shortcut_roots",
 		"store_metadata",
 	}, tables)
 

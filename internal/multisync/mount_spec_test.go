@@ -279,10 +279,11 @@ func TestCompileRuntimeMounts_PendingRemovalChildStillFiltersParentSubtree(t *te
 		&config.MountInventory{Mounts: map[string]config.MountRecord{"child-docs": record}},
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 1)
-	require.Len(t, compiled.Skipped, 1)
+	require.Len(t, compiled.Mounts, 2)
+	require.Empty(t, compiled.Skipped)
 	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
-	assert.Contains(t, compiled.Skipped[0].Err.Error(), "pending removal")
+	assert.Equal(t, []string{"child-docs"}, compiled.FinalDrainMountIDs)
+	assert.True(t, compiled.Mounts[1].finalDrain)
 }
 
 // Validates: R-2.8.1

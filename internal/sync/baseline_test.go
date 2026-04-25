@@ -1504,6 +1504,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	expectedTables := []string{
 		"baseline", "local_state", "observation_state",
 		"observation_issues", "retry_work", "remote_state", "block_scopes",
+		"shortcut_roots",
 	}
 
 	for _, table := range expectedTables {

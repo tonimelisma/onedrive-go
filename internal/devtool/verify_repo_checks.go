@@ -81,6 +81,9 @@ func ensureShortcutAuthorityBoundaries(repoRoot string) error {
 	if err := ensureMultisyncDoesNotCallParentGraphDiscovery(repoRoot); err != nil {
 		return err
 	}
+	if err := ensureMultisyncDoesNotMutateParentShortcutAliases(repoRoot); err != nil {
+		return err
+	}
 	if err := ensureShortcutTopologyUsesShouldApplyGate(repoRoot); err != nil {
 		return err
 	}
@@ -122,6 +125,24 @@ func ensureMultisyncDoesNotCallParentGraphDiscovery(repoRoot string) error {
 	}
 	if match != "" {
 		return fmt.Errorf("shortcut authority violation: parent-drive Graph discovery must stay in internal/sync: %s", match)
+	}
+
+	return nil
+}
+
+func ensureMultisyncDoesNotMutateParentShortcutAliases(repoRoot string) error {
+	match, err := findTextMatch(
+		[]string{filepath.Join(repoRoot, "internal", "multisync")},
+		regexp.MustCompile(`\.(MoveItem|DeleteItem)\(`),
+		func(path string) bool {
+			return strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go")
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("shortcut authority violation: shortcut alias mutation must go through the parent engine: %s", match)
 	}
 
 	return nil

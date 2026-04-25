@@ -311,6 +311,7 @@ func localRootActionTestMounts(t *testing.T, relativePath string) (*mountSpec, c
 	require.NoError(t, os.MkdirAll(config.DefaultDataDir(), 0o700))
 	parent := testParentMountSpec()
 	parent.syncRoot = t.TempDir()
+	parent.statePath = filepath.Join(config.DefaultDataDir(), "parent-shortcut-actions.db")
 	parent.accountEmail = parent.tokenOwnerCanonical.Email()
 	child := testChildRecord(parent.mountID, localRootActionBindingID, relativePath)
 

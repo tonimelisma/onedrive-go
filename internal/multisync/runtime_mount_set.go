@@ -127,6 +127,7 @@ func (o *Orchestrator) finalizeRuntimeMountSetLifecycle(
 	strictRecompile bool,
 ) (*compiledMountSet, error) {
 	rootActionsChanged := applyChildRootLifecycleActions(ctx, o, compiled, o.logger)
+	rootActionRemovedMountIDs := append([]string(nil), compiled.RemovedMountIDs...)
 	if rootActionsChanged {
 		refreshed, recompiled, refreshErr := o.refreshRuntimeMountSetAfterLifecycleMutation(
 			compiled,
@@ -139,6 +140,7 @@ func (o *Orchestrator) finalizeRuntimeMountSetLifecycle(
 			return compiled, refreshErr
 		}
 		compiled = refreshed
+		compiled.RemovedMountIDs = appendUniqueStrings(compiled.RemovedMountIDs, rootActionRemovedMountIDs...)
 		if !recompiled {
 			compiled.ProjectionMoves = nil
 		}

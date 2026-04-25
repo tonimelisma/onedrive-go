@@ -233,7 +233,7 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 }
 
 func (flow *engineFlow) applyShortcutTopologyBatch(ctx context.Context, batch *remoteObservationBatch) error {
-	if flow == nil || flow.engine == nil || flow.engine.shortcutTopologyHandler == nil || batch == nil {
+	if flow == nil || flow.engine == nil || batch == nil {
 		return nil
 	}
 	if !batch.shortcutTopology.ShouldApply() {
@@ -243,6 +243,17 @@ func (flow *engineFlow) applyShortcutTopologyBatch(ctx context.Context, batch *r
 	topology := batch.shortcutTopology
 	if topology.NamespaceID == "" {
 		topology.NamespaceID = flow.engine.shortcutTopologyNamespaceID
+	}
+	if _, err := flow.engine.baseline.ApplyShortcutTopology(ctx, topology); err != nil {
+		return fmt.Errorf("sync: persist parent shortcut root state: %w", err)
+	}
+	parentRoots, err := flow.engine.baseline.ListShortcutRoots(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: read parent shortcut root state: %w", err)
+	}
+	topology.ParentRoots = parentRoots
+	if flow.engine.shortcutTopologyHandler == nil {
+		return nil
 	}
 	return flow.engine.shortcutTopologyHandler(ctx, topology)
 }

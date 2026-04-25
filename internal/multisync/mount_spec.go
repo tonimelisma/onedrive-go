@@ -70,17 +70,19 @@ type mountSpec struct {
 	transferWorkers           int
 	checkWorkers              int
 	minFreeSpace              int64
+	finalDrain                bool
 	localSkipDirs             []string
 	localReservations         []syncengine.ManagedRootReservation
 	shortcutTopologyHandler   syncengine.ShortcutTopologyHandler
 }
 
 type compiledMountSet struct {
-	Mounts           []*mountSpec
-	Skipped          []MountStartupResult
-	RemovedMountIDs  []string
-	ProjectionMoves  []childProjectionMove
-	LocalRootActions []childRootLifecycleAction
+	Mounts             []*mountSpec
+	Skipped            []MountStartupResult
+	RemovedMountIDs    []string
+	FinalDrainMountIDs []string
+	ProjectionMoves    []childProjectionMove
+	LocalRootActions   []childRootLifecycleAction
 }
 
 type childMountCandidate struct {
@@ -148,9 +150,10 @@ func compileRuntimeMountsForParents(
 	)
 
 	return &compiledMountSet{
-		Mounts:          finalMounts,
-		Skipped:         skipped,
-		ProjectionMoves: projectionMoves,
+		Mounts:             finalMounts,
+		Skipped:            skipped,
+		FinalDrainMountIDs: finalDrainMountIDs(inventory),
+		ProjectionMoves:    projectionMoves,
 	}, nil
 }
 
@@ -461,6 +464,7 @@ func buildChildMountCandidate(parent *mountSpec, record *config.MountRecord) (*c
 		transferWorkers:        parent.transferWorkers,
 		checkWorkers:           parent.checkWorkers,
 		minFreeSpace:           parent.minFreeSpace,
+		finalDrain:             record.State == config.MountStatePendingRemoval && record.StateReason == config.MountStateReasonShortcutRemoved,
 	}
 	skipErr := childMountStateSkipError(record)
 
@@ -480,6 +484,9 @@ func childMountStateSkipError(record *config.MountRecord) error {
 	case "", config.MountStateActive:
 		return nil
 	case config.MountStatePendingRemoval:
+		if record.StateReason == config.MountStateReasonShortcutRemoved {
+			return nil
+		}
 		return fmt.Errorf("child mount %s is pending removal", record.MountID)
 	case config.MountStateConflict:
 		if record.StateReason != "" {

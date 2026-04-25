@@ -26,6 +26,7 @@ func (o *Orchestrator) attachShortcutTopologyHandler(mount *mountSpec, restartOn
 	}
 }
 
+//nolint:gocritic // ShortcutTopologyBatch is the sync API value type; this method is the handler boundary.
 func (o *Orchestrator) applyShortcutTopologyBatch(
 	_ context.Context,
 	parent *mountSpec,
@@ -43,6 +44,7 @@ func (o *Orchestrator) applyShortcutTopologyBatch(
 	if batch.NamespaceID != parent.mountID.String() {
 		return false, fmt.Errorf("shortcut topology namespace %q does not match parent %q", batch.NamespaceID, parent.mountID)
 	}
+	batch = parentDeclaredShortcutTopologyBatch(batch)
 
 	changed := false
 	if err := config.UpdateMountInventory(func(inventory *config.MountInventory) error {
@@ -68,6 +70,79 @@ func (o *Orchestrator) applyShortcutTopologyBatch(
 	return changed, nil
 }
 
+//nolint:gocritic // Keep the conversion value-oriented because callers need an immutable derived batch.
+func parentDeclaredShortcutTopologyBatch(batch syncengine.ShortcutTopologyBatch) syncengine.ShortcutTopologyBatch {
+	if len(batch.ParentRoots) == 0 {
+		return batch
+	}
+
+	declared := syncengine.ShortcutTopologyBatch{
+		NamespaceID: batch.NamespaceID,
+		Kind:        syncengine.ShortcutTopologyObservationComplete,
+	}
+	for i := range batch.ParentRoots {
+		root := batch.ParentRoots[i]
+		switch root.State {
+		case syncengine.ShortcutRootStateActive:
+			declared.Upserts = append(declared.Upserts, syncengine.ShortcutBindingUpsert{
+				BindingItemID:     root.BindingItemID,
+				RelativeLocalPath: root.RelativeLocalPath,
+				LocalAlias:        root.LocalAlias,
+				RemoteDriveID:     root.RemoteDriveID.String(),
+				RemoteItemID:      root.RemoteItemID,
+				RemoteIsFolder:    root.RemoteIsFolder,
+				Complete:          true,
+			})
+		case syncengine.ShortcutRootStateRemovedFinalDrain,
+			syncengine.ShortcutRootStateRemovedCleanupBlocked:
+			declared.Deletes = append(declared.Deletes, syncengine.ShortcutBindingDelete{
+				BindingItemID: root.BindingItemID,
+			})
+		case syncengine.ShortcutRootStateSamePathReplacementWaiting:
+			declared.Deletes = append(declared.Deletes, syncengine.ShortcutBindingDelete{
+				BindingItemID: root.BindingItemID,
+			})
+			if root.Waiting != nil {
+				declared.Upserts = append(declared.Upserts, syncengine.ShortcutBindingUpsert{
+					BindingItemID:     root.Waiting.BindingItemID,
+					RelativeLocalPath: root.Waiting.RelativeLocalPath,
+					LocalAlias:        root.Waiting.LocalAlias,
+					RemoteDriveID:     root.Waiting.RemoteDriveID.String(),
+					RemoteItemID:      root.Waiting.RemoteItemID,
+					RemoteIsFolder:    root.Waiting.RemoteIsFolder,
+					Complete:          true,
+				})
+			}
+		case syncengine.ShortcutRootStateTargetUnavailable,
+			syncengine.ShortcutRootStateBlockedPath,
+			syncengine.ShortcutRootStateRenameAmbiguous,
+			syncengine.ShortcutRootStateAliasMutationBlocked:
+			declared.Unavailable = append(declared.Unavailable, syncengine.ShortcutBindingUnavailable{
+				BindingItemID:     root.BindingItemID,
+				RelativeLocalPath: root.RelativeLocalPath,
+				LocalAlias:        root.LocalAlias,
+				RemoteDriveID:     root.RemoteDriveID.String(),
+				RemoteItemID:      root.RemoteItemID,
+				RemoteIsFolder:    root.RemoteIsFolder,
+				Reason:            string(root.State),
+			})
+		default:
+			declared.Unavailable = append(declared.Unavailable, syncengine.ShortcutBindingUnavailable{
+				BindingItemID:     root.BindingItemID,
+				RelativeLocalPath: root.RelativeLocalPath,
+				LocalAlias:        root.LocalAlias,
+				RemoteDriveID:     root.RemoteDriveID.String(),
+				RemoteItemID:      root.RemoteItemID,
+				RemoteIsFolder:    root.RemoteIsFolder,
+				Reason:            string(root.State),
+			})
+		}
+	}
+
+	return declared
+}
+
+//nolint:gocritic // Tests and handlers pass topology batches as values to keep mutation explicit.
 func applyShortcutTopologyBatchToInventory(
 	inventory *config.MountInventory,
 	parent *mountSpec,

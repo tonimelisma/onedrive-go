@@ -12,6 +12,19 @@ import (
 )
 
 func finalizePendingMountRemovals(mountIDs []string, mounts []*mountSpec, logger *slog.Logger) (bool, error) {
+	return finalizePendingMountRemovalsWithCleanupMode(mountIDs, mounts, logger, false)
+}
+
+func finalizePendingMountRemovalsAfterFinalDrain(mountIDs []string, mounts []*mountSpec, logger *slog.Logger) (bool, error) {
+	return finalizePendingMountRemovalsWithCleanupMode(mountIDs, mounts, logger, true)
+}
+
+func finalizePendingMountRemovalsWithCleanupMode(
+	mountIDs []string,
+	mounts []*mountSpec,
+	logger *slog.Logger,
+	removeProjectionAfterDrain bool,
+) (bool, error) {
 	if len(mountIDs) == 0 {
 		return false, nil
 	}
@@ -34,7 +47,14 @@ func finalizePendingMountRemovals(mountIDs []string, mounts []*mountSpec, logger
 			if parent == nil {
 				continue
 			}
-			recordFinalized, err := finalizePendingMountRemovalRecord(inventory, mountID, &record, parent, logger)
+			recordFinalized, err := finalizePendingMountRemovalRecord(
+				inventory,
+				mountID,
+				&record,
+				parent,
+				logger,
+				removeProjectionAfterDrain,
+			)
 			if err != nil {
 				return err
 			}
@@ -54,8 +74,9 @@ func finalizePendingMountRemovalRecord(
 	record *config.MountRecord,
 	parent *mountSpec,
 	logger *slog.Logger,
+	removeProjectionAfterDrain bool,
 ) (bool, error) {
-	cleaned, reason := cleanupPendingProjectionRoot(parent, record)
+	cleaned, reason := cleanupPendingProjectionRoot(parent, record, removeProjectionAfterDrain)
 	if !cleaned {
 		plan, err := planPendingRemovalCleanup(record, false, reason)
 		if err != nil {
@@ -89,7 +110,11 @@ func finalizePendingMountRemovalRecord(
 	return true, nil
 }
 
-func cleanupPendingProjectionRoot(parent *mountSpec, record *config.MountRecord) (bool, config.MountStateReason) {
+func cleanupPendingProjectionRoot(
+	parent *mountSpec,
+	record *config.MountRecord,
+	removeProjectionAfterDrain bool,
+) (bool, config.MountStateReason) {
 	root, err := synctree.Open(parent.syncRoot)
 	if err != nil {
 		return false, config.MountStateReasonRemovedProjectionUnavailable
@@ -110,6 +135,12 @@ func cleanupPendingProjectionRoot(parent *mountSpec, record *config.MountRecord)
 	}
 	if !state.IsDir {
 		return false, config.MountStateReasonRemovedProjectionDirty
+	}
+	if removeProjectionAfterDrain {
+		if removeErr := root.RemoveTreeNoFollow(rel); removeErr != nil {
+			return false, config.MountStateReasonRemovedProjectionUnavailable
+		}
+		return true, ""
 	}
 	empty, err := root.DirEmptyNoFollow(rel)
 	if err != nil {

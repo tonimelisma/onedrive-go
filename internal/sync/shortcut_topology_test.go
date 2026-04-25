@@ -58,6 +58,38 @@ func TestApplyShortcutTopologyBatch_ForwardsEmptyCompleteBatch(t *testing.T) {
 }
 
 // Validates: R-2.4.3, R-2.4.8
+func TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutTopologyHandler = func(ctx context.Context, _ ShortcutTopologyBatch) error {
+		roots, err := eng.baseline.ListShortcutRoots(ctx)
+		require.NoError(t, err)
+		require.Len(t, roots, 1)
+		assert.Equal(t, "binding-1", roots[0].BindingItemID)
+		assert.Equal(t, ShortcutRootStateActive, roots[0].State)
+		return nil
+	}
+
+	err := testEngineFlow(t, eng).applyShortcutTopologyBatch(t.Context(), &remoteObservationBatch{
+		shortcutTopology: ShortcutTopologyBatch{
+			Kind: ShortcutTopologyObservationIncremental,
+			Upserts: []ShortcutBindingUpsert{{
+				BindingItemID:     "binding-1",
+				RelativeLocalPath: "Shared/Docs",
+				LocalAlias:        "Docs",
+				RemoteDriveID:     "drive-1",
+				RemoteItemID:      "target-1",
+				RemoteIsFolder:    true,
+				Complete:          true,
+			}},
+		},
+	})
+	require.NoError(t, err)
+}
+
+// Validates: R-2.4.3, R-2.4.8
 func TestApplyShortcutTopologyBatch_SkipsEmptyIncrementalBatch(t *testing.T) {
 	t.Parallel()
 

@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/block_scope_rows.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/condition_projection.go, internal/sync/blocked_retry_projection.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/scope_block.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
+GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/block_scope_rows.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/shortcut_root_state.go, internal/sync/shortcut_alias_mutation.go, internal/sync/condition_projection.go, internal/sync/blocked_retry_projection.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/scope_block.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
 Implements: R-2.5 [designed], R-2.7 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -23,11 +23,13 @@ architecture it owns:
 It does not own planning policy, execution policy, or a competing history/status
 model.
 
-It also does not own child shortcut lifecycle. A managed child mount marked
-`unavailable` in `mounts.json` is a control-plane namespace fact before engine
-construction: no child engine starts, no retry work is recorded, no block scope
-is created, and no observation issue is synthesized. Existing child state DBs
-remain on disk for later reactivation or explicit cleanup.
+For parent namespace engines, it also owns parent-local shortcut-root state in
+`shortcut_roots`. Those rows are not child content state: they describe the
+shortcut placeholder observed in the parent drive, the protected parent-local
+alias path(s), the known target identity, and parent-owned lifecycle blockers
+such as final drain or same-path replacement waiting. Child content retry,
+observation issues, and target sync state remain in the child engine's own
+state DB.
 
 ## Ownership Contract
 
@@ -48,7 +50,8 @@ remain on disk for later reactivation or explicit cleanup.
 | --- | --- |
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
-| Child shortcut unavailable state is kept outside sync-store retry/block/observation tables by skipping engine construction before a child mount starts. | `TestApplyShortcutTopologyBatch_UnavailableBindingPersistsUnavailableRecord`, `TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersParentSubtree` |
+| Parent shortcut-root topology state is stored in the parent sync store, merged into startup reservations, and applied before topology facts are acknowledged to multisync. Empty complete topology batches are persisted and retire old roots. | `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot`, `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler` |
+| Shortcut alias mutation is a parent-engine operation by binding item ID and updates parent shortcut-root state. | `TestEngine_ApplyShortcutAliasMutationRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ApplyShortcutAliasMutationDeleteMarksParentRootFinalDrain` |
 
 ## Write Responsibilities
 

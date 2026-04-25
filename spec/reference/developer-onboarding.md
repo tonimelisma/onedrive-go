@@ -45,11 +45,11 @@ The most important repo-wide idea is ownership.
 - `internal/graphtransport` owns stateless Graph-facing HTTP transport profile construction.
 - `internal/driveops` owns `SessionRuntime`, authenticated sessions, and
   transfer operations.
-- `internal/multisync` owns multi-mount orchestration, automatic shortcut
-  reconciliation, and control-socket
-  lifecycle.
-- `internal/sync` owns the single mounted content-root sync runtime and durable sync-state
-  mutation rules.
+- `internal/multisync` owns multi-mount orchestration, child runner lifecycle,
+  global mount conflicts, and control-socket lifecycle.
+- `internal/sync` owns the single mounted content-root sync runtime, durable
+  sync-state mutation rules, and parent-engine shortcut-root state/mutation for
+  shortcut aliases inside that parent namespace.
 - `internal/devtool` owns verification, worktree creation, benchmarks, cleanup
   audit, and other repo tooling.
 

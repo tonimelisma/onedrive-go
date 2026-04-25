@@ -102,6 +102,14 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 
 	wg.Wait()
 
+	if finalized, finalizeErr := finalizeSuccessfulFinalDrainMounts(compiled, reports, o.logger); finalizeErr != nil {
+		o.logger.Warn("finalizing drained shortcut child mounts",
+			slog.String("error", finalizeErr.Error()),
+		)
+	} else if finalized {
+		o.logger.Info("finalized drained shortcut child mounts")
+	}
+
 	o.logger.Info("orchestrator RunOnce complete", slog.Int("reports", len(reports)))
 
 	return RunOnceResult{
@@ -239,7 +247,48 @@ func (o *Orchestrator) buildEngineWork(
 				}
 			}()
 
-			return engine.RunOnce(c, mode, opts)
+			runMode := mode
+			runOpts := opts
+			if mount.finalDrain {
+				runMode = syncengine.SyncBidirectional
+				runOpts = syncengine.RunOptions{FullReconcile: true}
+			}
+			return engine.RunOnce(c, runMode, runOpts)
 		},
 	}, nil
+}
+
+func finalizeSuccessfulFinalDrainMounts(
+	compiled *compiledMountSet,
+	reports []*MountReport,
+	logger *slog.Logger,
+) (bool, error) {
+	if compiled == nil || len(compiled.FinalDrainMountIDs) == 0 {
+		return false, nil
+	}
+	successful := make([]string, 0, len(compiled.FinalDrainMountIDs))
+	draining := make(map[string]struct{}, len(compiled.FinalDrainMountIDs))
+	for _, mountID := range compiled.FinalDrainMountIDs {
+		if mountID != "" {
+			draining[mountID] = struct{}{}
+		}
+	}
+	for i := range reports {
+		report := reports[i]
+		if report == nil {
+			continue
+		}
+		if _, ok := draining[report.Identity.MountID]; !ok {
+			continue
+		}
+		if report.Err != nil || report.Report == nil || report.Report.Failed > 0 || len(report.Report.Errors) > 0 {
+			continue
+		}
+		successful = appendUniqueStrings(successful, report.Identity.MountID)
+	}
+	if len(successful) == 0 {
+		return false, nil
+	}
+
+	return finalizePendingMountRemovalsAfterFinalDrain(successful, compiled.Mounts, logger)
 }

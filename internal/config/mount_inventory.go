@@ -46,7 +46,6 @@ const (
 	MountStateReasonLocalAliasRenameConflict      MountStateReason = "local_alias_rename_conflict"
 	MountStateReasonLocalAliasRenameUnavailable   MountStateReason = "local_alias_rename_unavailable"
 	MountStateReasonLocalAliasDeleteUnavailable   MountStateReason = "local_alias_delete_unavailable"
-	MountStateReasonPathReservedByPendingRemoval  MountStateReason = "path_reserved_by_pending_removal"
 	MountStateReasonLocalRootCollision            MountStateReason = "local_root_collision"
 	MountStateReasonLocalRootUnavailable          MountStateReason = "local_root_unavailable"
 )

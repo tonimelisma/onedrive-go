@@ -51,10 +51,6 @@ func planDeferredShortcutReplacement(record *config.MountRecord) (shortcutLifecy
 		return shortcutLifecyclePlan{}, fmt.Errorf("shortcut lifecycle transition requires mount ID")
 	}
 	next := *record
-	if next.State != config.MountStatePendingRemoval {
-		next.State = config.MountStateConflict
-		next.StateReason = config.MountStateReasonPathReservedByPendingRemoval
-	}
 	return shortcutLifecyclePlan{
 		Record:  next,
 		Changed: !reflect.DeepEqual(next, *record),

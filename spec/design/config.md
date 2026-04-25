@@ -334,8 +334,8 @@ bindings, so it follows the same managed-file discipline:
   - `StateReason` for conflict, unavailable, and pending-removal lifecycle
     states
 - deferred shortcut bindings are stored separately when a new binding arrives at
-  a path still reserved by a pending-removal mount; they are promoted only after
-  the old projection finalizes
+  a path still reserved by an existing child owner; they are promoted only after
+  that owner releases the path
 - sibling child mounts under the same namespace may not reuse or nest local
   relative paths; reserved local paths participate in that ownership check
 - every save is a full atomic rewrite of the file
@@ -358,25 +358,26 @@ stat/create failures use `local_root_unavailable`; removed shortcut projections
 that still contain local content use `removed_projection_dirty`; removed
 shortcut projection cleanup failures use `removed_projection_unavailable`; and
 local alias lifecycle failures use `local_alias_rename_conflict`,
-`local_alias_rename_unavailable`, or `local_alias_delete_unavailable`. A
-same-path replacement waiting behind an older removed projection uses
-`path_reserved_by_pending_removal`.
+`local_alias_rename_unavailable`, or `local_alias_delete_unavailable`.
+Same-path replacement is not represented as a second child mount state: the new
+binding stays in `deferred_shortcut_bindings` while the existing owner keeps the
+path reserved, and status presents it as a waiting replacement note.
 
 `internal/config/mount_lifecycle.go` is the canonical lifecycle metadata table
-for those durable reasons. It defines the required `MountState`, whether the
-parent reservation remains active, whether a child runner may start, whether
-the state is automatically retried, the status text, and the user recovery
-action. The control plane owns transitions and side effects; config owns only
-state/reason validity and shared presentation/recovery metadata.
+for child inventory reasons that still live in `mounts.json`. It defines the
+required `MountState`, whether the parent reservation remains active, whether a
+child runner may start, whether the state is automatically retried, the status
+text, and the user recovery action. Parent-engine shortcut-root state lives in
+the parent sync store; config owns only child inventory state/reason validity
+and shared presentation/recovery metadata.
 
 | State/reason | Reservation | Child runner | Autoresolution | User action |
 | --- | --- | --- | --- | --- |
 | `active` | current path | may start | n/a | none |
 | `unavailable: shortcut_binding_unavailable` | current path | skipped | parent engine later emits complete shortcut target | restore target access or recreate the shortcut |
-| `pending_removal: shortcut_removed` | current and reserved paths | stopped | projection is missing/empty and child DB purge succeeds | none unless local projection contains content |
+| `pending_removal: shortcut_removed` | current and reserved paths | final-drain child sync, then stop | child final drain is clean and parent release succeeds | none unless child sync reports blocked content |
 | `pending_removal: removed_projection_dirty` | current and reserved paths | stopped | projection becomes missing or empty | move or remove local projection content |
 | `pending_removal: removed_projection_unavailable` | current and reserved paths | stopped | filesystem/state operation succeeds later | fix permissions, locks, disk, or path issue |
-| `conflict: path_reserved_by_pending_removal` | shared path | skipped | old pending removal finalizes, then deferred binding promotes | clean old projection if dirty |
 | `conflict: duplicate_content_root` | conflicting paths | skipped | topology removes or changes one duplicate | remove, move, or rename one duplicate shortcut |
 | `conflict: explicit_standalone_content_root` | shortcut path | skipped | config removes explicit mount or shortcut disappears | remove the config mount or the shortcut |
 | `conflict: local_projection_conflict` | current and reserved paths | skipped | user leaves one safe tree or trees become provably identical | merge, move, or remove one path |
@@ -403,28 +404,30 @@ projection path or the content-root identity. A shortcut can therefore move to
 another folder inside the parent namespace without losing its retained child
 mount state DB.
 
-During a shortcut rename or move, schema v6 stores the new
+During a shortcut rename or move, child inventory stores the current
 `RelativeLocalPath` plus any old `ReservedLocalPaths` that must remain excluded
-from the parent namespace until the local projection move is completed. Reserved
-paths are validated as safe relative paths and are not user controls. They are
-cleared when the control plane proves the local projection moved safely,
-including the safe auto-resolve cases where the new target is empty or the old
-and new projection trees have identical regular-file content. If parent-engine
-topology reports a shortcut placeholder without a usable target, config accepts an
-`unavailable` record with
+from the parent namespace until the local projection move is completed. Parent
+engines own the authoritative parent protected-path state in `shortcut_roots`;
+`mounts.json` mirrors only the child runner view needed for orchestration and
+status. Reserved paths are validated as safe relative paths and are not user
+controls. They are cleared when the local projection moved safely, including
+the safe auto-resolve cases where the new target is empty or the old and new
+projection trees have identical regular-file content. If parent-engine topology
+reports a shortcut placeholder without a usable target, config accepts an
+`unavailable` child record with
 `state_reason: shortcut_binding_unavailable` and no remote target IDs. That
 state belongs to mount inventory; it is not a sync-store retry/block/observation
 condition.
 
-Local child-root alias rename/delete is represented in the same inventory
-rather than in engine state. When `LocalRootIdentity` proves that a previously
-materialized child root was renamed to a sibling path, multisync PATCHes the
-shortcut placeholder name by `BindingItemID`, updates `RelativeLocalPath`, and
-keeps the child `MountID` and state DB. When that identity has no sibling
-candidate, multisync DELETEs only the shortcut placeholder, marks the child
-`pending_removal: shortcut_removed`, and purges the child state through the
-normal pending-removal path. The target shared-folder content is never renamed
-or deleted by these local alias operations.
+Local child-root alias rename/delete is reflected in child inventory only after
+the parent engine applies the parent-namespace alias mutation by
+`BindingItemID`. When `LocalRootIdentity` proves that a previously materialized
+child root was renamed to a sibling path, the same child `MountID` and state DB
+are retained at the new `RelativeLocalPath`. When that identity has no sibling
+candidate, the parent deletes only the shortcut alias and emits retiring child
+topology; multisync runs the child final drain before purging the child state.
+The target shared-folder content is never renamed or deleted by these local
+alias operations.
 
 When config encounters an older `mounts.json` schema version, it does not keep
 that format alive through compatibility shims. Older schemas fail with a clear
