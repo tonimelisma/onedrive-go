@@ -133,6 +133,66 @@ func TestRoot_FileLifecycleOperations(t *testing.T) {
 }
 
 // Validates: R-2.10, R-6.2
+func TestRoot_PathStateNoFollow_ReportsSymlinkAsUnsafeDirectory(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "target"), 0o700))
+	if symlinkErr := os.Symlink("target", filepath.Join(dir, "link")); symlinkErr != nil {
+		t.Skipf("symlink not available on this filesystem: %v", symlinkErr)
+	}
+
+	state, err := root.PathStateNoFollow("link")
+	require.NoError(t, err)
+	assert.True(t, state.Exists)
+	assert.True(t, state.IsSymlink)
+	assert.False(t, state.IsDir)
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_MkdirAllNoFollow_CreatesComponents(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, root.MkdirAllNoFollow(filepath.Join("shortcuts", "docs"), 0o700))
+
+	assert.DirExists(t, filepath.Join(dir, "shortcuts", "docs"))
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_MkdirAllNoFollow_RejectsSymlinkedAncestor(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	outside := t.TempDir()
+	if symlinkErr := os.Symlink(outside, filepath.Join(dir, "linked")); symlinkErr != nil {
+		t.Skipf("symlink not available on this filesystem: %v", symlinkErr)
+	}
+
+	err = root.MkdirAllNoFollow(filepath.Join("linked", "docs"), 0o700)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnsafePath)
+	assert.NoDirExists(t, filepath.Join(outside, "docs"))
+}
+
+// Validates: R-2.10, R-6.2
+func TestRoot_RenameWithTemporarySibling_RenamesThroughTemp(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "Docs"), 0o700))
+
+	require.NoError(t, root.RenameWithTemporarySibling("Docs", "docs", ".tmp-docs", 3))
+
+	assert.NoDirExists(t, filepath.Join(dir, ".tmp-docs"))
+	assert.DirExists(t, filepath.Join(dir, "docs"))
+}
+
+// Validates: R-2.10, R-6.2
 func TestRoot_RemoveAllAndChtimes(t *testing.T) {
 	t.Parallel()
 
@@ -317,6 +377,8 @@ type fakeRootHandle struct {
 	openErr     error
 	openFileErr error
 	statErr     error
+	lstatErr    error
+	mkdirErr    error
 	closeErr    error
 	fsys        fs.FS
 }
@@ -343,6 +405,22 @@ func (h *fakeRootHandle) Stat(name string) (os.FileInfo, error) {
 	}
 
 	return nil, errUnexpectedFakeRootCall
+}
+
+func (h *fakeRootHandle) Lstat(name string) (os.FileInfo, error) {
+	if h.lstatErr != nil {
+		return nil, h.lstatErr
+	}
+
+	return nil, errUnexpectedFakeRootCall
+}
+
+func (h *fakeRootHandle) Mkdir(name string, perm os.FileMode) error {
+	if h.mkdirErr != nil {
+		return h.mkdirErr
+	}
+
+	return errUnexpectedFakeRootCall
 }
 
 func (h *fakeRootHandle) FS() fs.FS {

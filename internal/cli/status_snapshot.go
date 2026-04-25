@@ -62,6 +62,7 @@ type statusMount struct {
 	StateReason    string         `json:"state_reason,omitempty"`
 	StateDetail    string         `json:"state_detail,omitempty"`
 	SyncState      *syncStateInfo `json:"sync_state,omitempty"`
+	ChildMounts    []statusMount  `json:"child_mounts,omitempty"`
 }
 
 // syncStateInfo holds the full per-mount status payload rendered by `status`.
@@ -315,11 +316,12 @@ func buildStatusAccountsFromViews(
 
 		for _, cid := range driveIDs {
 			d := cfg.Drives[cid]
-			acct.Mounts = append(acct.Mounts, buildConfiguredStatusMount(cid, d, syncQ))
+			mount := buildConfiguredStatusMount(cid, d, syncQ)
 			children := childrenByParent[cid]
 			for childIndex := range children {
-				acct.Mounts = append(acct.Mounts, buildChildStatusMount(d, &children[childIndex], syncQ))
+				mount.ChildMounts = append(mount.ChildMounts, buildChildStatusMount(d, &children[childIndex], syncQ))
 			}
+			acct.Mounts = append(acct.Mounts, mount)
 		}
 
 		accounts = append(accounts, acct)
@@ -382,11 +384,12 @@ func buildSingleAccountStatusWith(
 
 	for _, cid := range driveIDs {
 		d := cfg.Drives[cid]
-		acct.Mounts = append(acct.Mounts, buildConfiguredStatusMount(cid, d, syncQ))
+		mount := buildConfiguredStatusMount(cid, d, syncQ)
 		children := childrenByParent[cid]
 		for childIndex := range children {
-			acct.Mounts = append(acct.Mounts, buildChildStatusMount(d, &children[childIndex], syncQ))
+			mount.ChildMounts = append(mount.ChildMounts, buildChildStatusMount(d, &children[childIndex], syncQ))
 		}
+		acct.Mounts = append(acct.Mounts, mount)
 	}
 
 	return acct

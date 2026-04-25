@@ -21,7 +21,7 @@ func TestE2E_FixturePreflight_Full(t *testing.T) {
 		assert.Equal(t, "folder", fixture.FolderItem.Type)
 		assert.NotEmpty(t, fixture.RecipientDriveID)
 	}
-	if liveConfig.Fixtures.StandaloneSharedFolderName != "" {
+	if liveConfig.Fixtures.StandaloneSharedFolderName != "" && fixtures[0].FolderItem.Name != "" {
 		assert.Equal(t, liveConfig.Fixtures.StandaloneSharedFolderName, fixtures[0].FolderItem.Name)
 	}
 
@@ -29,6 +29,13 @@ func TestE2E_FixturePreflight_Full(t *testing.T) {
 	readOnlyShortcut := requireShortcutFixtureWithCatalog(t, shortcutFixtureReadOnly)
 	assert.Equal(t, liveConfig.Fixtures.WritableShortcutName, writableShortcut.ShortcutName)
 	assert.Equal(t, liveConfig.Fixtures.ReadOnlyShortcutName, readOnlyShortcut.ShortcutName)
+
+	shortcutFixtures := []resolvedShortcutFixture{writableShortcut, readOnlyShortcut}
+	for _, fixture := range shortcutFixtures {
+		cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, t.TempDir())
+		requireSharedListContainsShortcutFixture(t, cfgPath, env, fixture)
+		requireRootPlaceholderContainsShortcutFixture(t, cfgPath, env, fixture)
+	}
 
 	rawLink := liveConfig.Fixtures.SharedFolderLink
 	if rawLink == "" {

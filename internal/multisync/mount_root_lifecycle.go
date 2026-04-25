@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 const childMountRootDirPerms os.FileMode = 0o700
@@ -119,18 +119,12 @@ func materializeChildMountRoot(parentRoot, relativeLocalPath string) (config.Mou
 		return config.MountStateConflict, config.MountStateReasonLocalRootCollision
 	}
 
-	state, reason := existingDirectoryState(parentRoot)
-	if state != config.MountStateActive {
-		return state, reason
+	root, err := synctree.Open(parentRoot)
+	if err != nil {
+		return config.MountStateUnavailable, config.MountStateReasonLocalRootUnavailable
 	}
-
-	current := parentRoot
-	for _, component := range strings.Split(relativePath, string(os.PathSeparator)) {
-		current = filepath.Join(current, component)
-		state, reason := ensureChildMountRootComponent(current)
-		if state != config.MountStateActive {
-			return state, reason
-		}
+	if err := root.MkdirAllNoFollow(relativePath, childMountRootDirPerms); err != nil {
+		return childMountRootErrorState(err)
 	}
 
 	return config.MountStateActive, ""
@@ -152,44 +146,10 @@ func cleanChildMountRootRelativePath(relativeLocalPath string) (string, bool) {
 	return relativePath, true
 }
 
-func ensureChildMountRootComponent(root string) (config.MountState, string) {
-	state, reason := existingDirectoryState(root)
-	if state == config.MountStateActive {
-		return state, reason
-	}
-	if state != config.MountStateUnavailable || reason != config.MountStateReasonLocalRootUnavailable {
-		return state, reason
-	}
-
-	if err := localpath.Mkdir(root, childMountRootDirPerms); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return existingDirectoryState(root)
-		}
-		return childMountRootCreateErrorState(err)
-	}
-
-	return existingDirectoryState(root)
-}
-
-func existingDirectoryState(root string) (config.MountState, string) {
-	info, err := localpath.Lstat(root)
-	if err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return config.MountStateConflict, config.MountStateReasonLocalRootCollision
-		}
-		return config.MountStateActive, ""
-	}
-	if errors.Is(err, syscall.ENOTDIR) {
+func childMountRootErrorState(err error) (config.MountState, string) {
+	if errors.Is(err, synctree.ErrUnsafePath) {
 		return config.MountStateConflict, config.MountStateReasonLocalRootCollision
 	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return config.MountStateUnavailable, config.MountStateReasonLocalRootUnavailable
-	}
-
-	return config.MountStateUnavailable, config.MountStateReasonLocalRootUnavailable
-}
-
-func childMountRootCreateErrorState(err error) (config.MountState, string) {
 	if errors.Is(err, syscall.ENOTDIR) {
 		return config.MountStateConflict, config.MountStateReasonLocalRootCollision
 	}

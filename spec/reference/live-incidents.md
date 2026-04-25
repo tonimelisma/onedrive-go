@@ -19,6 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260424-02 | Durable remote mirror recovery E2E assumed immediate delta visibility after remote edits | fixed | test harness | 2026-04-24 | yes |
 | LI-20260424-01 | Nightly status E2Es decoded deleted drive-shaped status JSON fields | fixed | test bug | 2026-04-24 | no |
 | LI-20260422-01 | Nightly `e2e_full` buckets still carried removed manual-resolution and path-narrowing workflows | fixed | test bug | 2026-04-23 | yes |
 | LI-20260422-02 | Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair | fixed | product bug | 2026-04-22 | no |
@@ -38,7 +39,7 @@ Promotion contract:
 | LI-20260408-03 | Serialized `e2e_full` package exceeded the old 30-minute harness timeout | fixed | test harness | 2026-04-08 | no |
 | LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
 | LI-20260408-01 | Immediate post-simple-upload mtime PATCH failed transiently after successful create | mitigated | graph quirk | 2026-04-24 | yes |
-| LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-19 | yes |
+| LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-24 | yes |
 | LI-20260405-09 | Recently created parent folder lagged child create and child-list routes | mitigated | graph quirk | 2026-04-23 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
 | LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-22 | yes |
@@ -49,7 +50,7 @@ Promotion contract:
 | LI-20260406-01 | Personal scoped delta not ready after path resolution | fixed | graph quirk | 2026-04-06 | no |
 | LI-20260405-05 | One-shot crash recovery left durable work unreplayed | fixed | product bug | 2026-04-05 | no |
 | LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-10 | yes |
-| LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-22 | yes |
+| LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
 
@@ -93,6 +94,50 @@ status schema and the failing status tests assert `total_mounts` and
 `accounts[].mounts`. This is intentionally not classified as a live-provider
 quirk because the failure was deterministic repo-local test drift.
 Promoted docs: [cli.md](../design/cli.md)
+
+## LI-20260424-02: Durable remote mirror recovery E2E assumed immediate delta visibility after remote edits
+
+First seen: 2026-04-24
+Last seen: 2026-04-24
+Area: local/manual `e2e_full`, durable mirror recovery coverage
+Suite / test: `go run ./cmd/devtool verify e2e-full`, `full-serial-sync`,
+`TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta`
+Classification: test harness
+Status: fixed
+Recurring: yes
+Summary: The full-suite durable mirror recovery test created remote edit/delete
+drift and immediately asserted that the next upload-only pass must report
+deferred remote work. On April 24, 2026, the first upload-only pass returned
+`No changes detected` even though direct CLI mutations had succeeded. This
+matches the existing live-provider policy: Microsoft Graph delta visibility is
+state-oriented and can lag recent mutations, so live sync tests must poll until
+the expected remote observation has entered the delta feed before asserting the
+next recovery phase. The same investigation also showed that transparent child
+mounts make global negative checks on `No changes detected` too broad: a parent
+mount can report deferred or applied work while an idle child projection in the
+same orchestrator run still reports no changes.
+Evidence:
+- `go run ./cmd/devtool verify e2e-full` passed auth preflight, fast fixture
+  preflight, fast E2E, full fixture preflight, and `full-parallel-misc`, then
+  failed `full-serial-sync` at
+  `TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta`.
+- The failing assertion was the upload-only observation check, not the later
+  durable mirror settlement. A focused rerun showed the parent mount reporting
+  deferred downloads and local deletes while its managed shortcut child still
+  printed `No changes detected`, so the old whole-stderr negative assertion was
+  no longer a valid parent-mount assertion.
+- The repository already uses `requireSyncEventuallyConverges` for comparable
+  live delta catch-up in incremental and directional-mode E2Es, so this test
+  was the outlier rather than a new product contract.
+Resolution / mitigation: the upload-only observation phase now uses
+`requireSyncEventuallyConverges` and waits until a successful pass reports
+positive deferred remote drift before verifying that local download-only side
+effects remain deferred. The download-only settlement phase now also asserts
+positive parent work and local filesystem convergence rather than assuming no
+other mount in the run can be idle. The rest of the test still proves the
+original contract: a later download-only pass must settle the already observed
+durable remote mirror truth without needing fresh delta events.
+Promoted docs: [sync-store.md](../design/sync-store.md)
 
 ## LI-20260417-01: Nightly `e2e_full` preflight duplicated `TestE2E_Status_ConfigTolerance` and stopped before live full-suite coverage
 
@@ -229,7 +274,7 @@ Promoted docs: [system.md](../design/system.md), [cli.md](../design/cli.md), [no
 ## LI-20260422-02: Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair
 
 First seen: 2026-04-22
-Last seen: 2026-04-22
+Last seen: 2026-04-24
 Area: shared-root sync/config/path operations after nightly full-suite harness cleanup
 Suite / test: focused reruns of `TestE2E_Sync_IdempotentReSync` and `TestE2E_Sync_BidirectionalMerge`; local `go test ./internal/sync`; shared-root config resolution
 Classification: product bug
@@ -914,9 +959,11 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 ## LI-20260405-06: Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure
 
 First seen: 2026-04-05
-Last seen: 2026-04-10
+Last seen: 2026-04-24
 Area: scheduled/full live verification, auth preflight, drive catalog
-Suite / test: scheduled `e2e_full` `whoami`, local `verify default` `TestE2E_AuthPreflight_Fast`
+Suite / test: scheduled `e2e_full` `whoami`, local `verify default`
+`TestE2E_AuthPreflight_Fast`, local `verify e2e-full`
+`TestE2E_Sync_BidirectionalMerge`
 Classification: graph quirk
 Status: mitigated
 Recurring: yes
@@ -971,6 +1018,13 @@ Evidence:
   `GET /me` again returned HTTP 504 `GatewayTimeout` with message
   `ProfileException` and request ID `fff6e081-d5f3-4caf-b745-24583b661130`
   before the rest of the repo gates had already passed.
+- Local `go run ./cmd/devtool verify e2e-full` on April 24, 2026 failed
+  `full-serial-sync` in `TestE2E_Sync_BidirectionalMerge` when test fixture
+  setup called `mkdir /e2e-sync-root-...` and the command exhausted six
+  `GET /me` attempts with HTTP 504 `GatewayTimeout` / `ProfileException`.
+  The next cleanup command for that same test account succeeded against
+  `GET /me`, confirming the failure was another transient profile endpoint
+  outage rather than a durable credential or product regression.
 - An immediate isolated rerun of the same preflight later passed for that
   account, confirming both the `/me/drives` and `/me` failures were transient.
 Resolution / mitigation: `graph.Client.Drives()` now owns a narrow 5-attempt
@@ -980,7 +1034,10 @@ The repo-owned auth preflight now keeps separate bounded endpoint windows:
 `/me` retries only transient gateway/service or transport-read failures,
 while `/me/drives` keeps polling through the already documented projection lag.
 That keeps required lanes strict for durable auth failures while no longer
-failing on a single recoverable `/me` glitch. Scheduled/manual
+failing on a single recoverable `/me` glitch. E2E fixture mkdir/put setup now also
+classifies a pre-mutation account-identity probe 502/503/504 as a retryable
+live-provider recurrence, so a transient `/me` outage before any fixture-create
+side effect does not fail the whole serial sync bucket. Scheduled/manual
 `devtool verify e2e-full --classify-live-quirks` still reruns that exact strict
 preflight once and only downgrades it when the rerun passes; the verifier
 summary records that classified rerun explicitly so nightly/manual CI can
@@ -1639,7 +1696,7 @@ Suite / test: `e2e`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `e2e_full`
 Classification: test bug
 Status: mitigated
 Recurring: yes
-Summary: The websocket harness originally treated an open socket connection as the readiness boundary, even though the product only starts honoring websocket-specific timing after bootstrap sync drains and the steady-state remote observer comes online. The original smoke failure and the later restart failure were both harness timing bugs, not websocket transport regressions.
+Summary: The websocket harness originally treated an open socket connection as the readiness boundary, even though the product only starts honoring websocket-specific timing after bootstrap sync drains and the steady-state remote observer comes online. After managed shortcut projections became part of normal watch startup, the same harness family also treated an expected child mount-root polling fallback as if the parent drive socket had failed. The original smoke failure, later restart failure, and child mount-root fallback false positive were harness bugs, not websocket transport regressions.
 Evidence:
 - [socketio_e2e_test.go](../../e2e/socketio_e2e_test.go#L132) now documents the correct remote-observer-first boundary.
 - [socketio_helpers_test.go](../../e2e/socketio_helpers_test.go#L87) contains the helper that waits for `observer_started(remote)` before websocket-specific timing.
@@ -1647,7 +1704,8 @@ Evidence:
 - On April 8, 2026 local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` reproduced the same harness gap in `TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart`: after daemon restart, the test waited only for `websocket_connected`, so the first post-restart wake could still be consumed by bootstrap catch-up before the steady-state remote observer was ready.
 - On April 8, 2026 a later local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` run still failed the same test even after the remote-observer fix, because the timed assertion also depended on creating the parent folder after daemon startup. The first post-mutation wake could legitimately reflect unrelated live-drive traffic or an incremental delta read that still had not observed the fresh parent subtree.
 - On April 22, 2026 local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` still hit the same single-test family once in `full-serial-watch-shared`, timing out after a post-restart `websocket_notification_wake` without local convergence, while an immediate isolated rerun of `go test -tags='e2e e2e_full' -run '^TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart$' -count=1 -v ./e2e/...` passed in about 90 seconds.
-Resolution / mitigation: Websocket watch tests now wait for `observer_started(remote)` before starting websocket-specific timing on both initial startup and daemon restart paths, and the long full-suite wake/restart test seeds its remote subtree before daemon startup so the timed websocket assertion only covers steady-state remote file creation inside an already materialized subtree. Because the same isolated recurrence can still appear intermittently in scheduled/manual full-suite runs, `devtool verify e2e-full --classify-live-quirks` now reruns exactly `TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart` once when it is the sole failure in `full-serial-watch-shared`; repeated or different failures remain red.
+- On April 24, 2026 local `go run ./cmd/devtool verify e2e-full` reached `full-serial-watch-shared` and failed `TestE2E_SyncWatch_WebsocketStartupSmoke` because the debug event stream included `websocket_fallback` with note `mount_root` for a transparent managed shortcut child projection. The parent primary-root watch was still allowed to connect by socket.io; the child mount-root engine intentionally used polling because websocket watch is not supported for mount-root engines.
+Resolution / mitigation: Websocket watch tests now wait for `observer_started(remote)` before starting websocket-specific timing on both initial startup and daemon restart paths, and the long full-suite wake/restart test seeds its remote subtree before daemon startup so the timed websocket assertion only covers steady-state remote file creation inside an already materialized subtree. The startup smoke helper now ignores `websocket_fallback` events whose note is `mount_root` because those belong to managed child mount-root projections, while endpoint, connect, or primary-root fallback failures still fail the test. Because the same isolated recurrence can still appear intermittently in scheduled/manual full-suite runs, `devtool verify e2e-full --classify-live-quirks` now reruns exactly `TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart` once when it is the sole failure in `full-serial-watch-shared`; repeated or different failures remain red.
 Promoted docs: [system.md](../design/system.md)
 
 ## LI-20260405-02: Stale root-level E2E artifacts inflated bootstrap and polluted live drives

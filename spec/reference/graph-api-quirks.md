@@ -170,14 +170,15 @@ its folder-scoped delta feed is ready. A direct `GET /drives/{driveID}/root:/pat
 can return `200` for the folder while the immediate first
 `GET /drives/{driveID}/items/{folderID}/delta` still returns HTTP 404
 `itemNotFound`. This showed up in the fast E2E lane on April 6, 2026 for a
-fresh shared-root drive bootstrap: the selected folder existed and contained files,
-but initial scoped delta still lagged the folder lookup path.
+fresh separately configured shared-folder mount bootstrap: the selected folder
+existed and contained files, but initial scoped delta still lagged the folder
+lookup path.
 
 Runtime policy:
 - treat this as a Graph readiness quirk, not as proof the configured path is invalid
-- when a personal shared-root bootstrap already resolved the folder by path
-  but folder-scoped delta still fails, fall back to recursive subtree
-  enumeration for that root instead of failing the whole sync pass
+- when a personal mount-root bootstrap already resolved the folder by path but
+  folder-scoped delta still fails, fall back to recursive subtree enumeration
+  for that root instead of failing the whole sync pass
 - keep retrying scoped delta on later passes once the folder feed becomes ready
 
 ### Ephemeral Deletion Events
@@ -746,12 +747,12 @@ upload-session creation for `first.txt`
 (`POST ...:/createUploadSession`, `request-id: d02b9317-d3d5-44ad-a30c-327df8c859d3`)
 still returned HTTP 404 `itemNotFound`.
 
-The same family can also hit shared-root children routes after a freshly
-created folder is converted into a shared-root canonical drive. On April 22,
-2026 the isolated shared-root watch helper could resolve `/e2e-sync-root-...`
-by path and derive its item ID, but the immediate `ls /` against that new
-shared-root drive still returned `404 itemNotFound` on the root item's
-`/children` route until Graph caught up.
+The same family can also hit mount-root children routes after a freshly created
+folder is configured as a standalone shared-folder mount. On April 22, 2026 the
+isolated shared-folder watch helper could resolve `/e2e-sync-root-...` by path
+and derive its item ID, but the immediate `ls /` against that new mount root
+still returned `404 itemNotFound` on the root item's `/children` route until
+Graph caught up.
 
 Runtime policy:
 - `CreateUploadSession()` retries that exact fresh-parent `404 itemNotFound`
@@ -772,12 +773,12 @@ Runtime policy:
   whole fixture `put` operation when Graph either exhausts the documented
   child-create retries or still reports `remote path not yet visible` while
   resolving the freshly created parent for that later command
-- isolated shared-root fixture setup must also wait for the derived shared-root
-  `ls /` boundary before returning, because owner-drive path visibility alone
-  does not prove the shared-root children route is ready for later upload/watch
-  coverage
-- shared-root remote-read helpers that verify later exact-path visibility or
-  file contents through `stat`, `get`, or equivalent CLI read pollers must
+- isolated shared-folder fixture setup must also wait for the configured
+  mount-root `ls /` boundary before returning, because owner-drive path
+  visibility alone does not prove the mount-root children route is ready for
+  later upload/watch coverage
+- mount-root remote-read helpers that verify later exact-path visibility or file
+  contents through `stat`, `get`, or equivalent CLI read pollers must
   re-establish the same `ls /` boundary before reading and after known
   `resolve item path ... list children for segment ... HTTP 404` failures,
   because the route can regress again after earlier sync or mutation success

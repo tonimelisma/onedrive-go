@@ -98,9 +98,10 @@ The runtime status read model is now mount-shaped:
   changing the OneDrive shortcut or pausing the parent drive.
 
 The JSON surface follows that same mount boundary: summary counts use
-`summary.total_mounts`, and per-account rows use `accounts[].mounts`. The
-legacy drive-shaped status fields (`total_drives`, `accounts[].drives`) are not
-part of the current contract.
+`summary.total_mounts`, per-account rows use `accounts[].mounts`, and shortcut
+projections are nested under the owning parent row as `child_mounts`. The legacy
+drive-shaped status fields (`total_drives`, `accounts[].drives`) are not part
+of the current contract.
 
 The target `status` surface projects the full sync model directly from:
 

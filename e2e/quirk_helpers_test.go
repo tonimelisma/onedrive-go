@@ -78,6 +78,7 @@ const (
 	liveProviderRecurrenceFreshParentChildCreateLag      liveProviderRecurrenceReason = "fresh_parent_child_create_lag"
 	liveProviderRecurrenceFreshParentParentPathLag       liveProviderRecurrenceReason = "fresh_parent_parent_path_lag"
 	liveProviderRecurrencePostMutationDestinationPathLag liveProviderRecurrenceReason = "post_mutation_destination_visibility_lag"
+	liveProviderRecurrenceTransientGraphGatewayFailure   liveProviderRecurrenceReason = "transient_graph_gateway_failure"
 	liveProviderRecurrenceUnknown                        liveProviderRecurrenceReason = "unknown"
 )
 

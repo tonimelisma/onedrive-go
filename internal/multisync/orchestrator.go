@@ -333,6 +333,16 @@ func applyInventoryPersistFailure(compiled *compiledMountSet, dirtyMountIDs []st
 		filtered = append(filtered, mount)
 	}
 	compiled.Mounts = filtered
+
+	filteredMoves := compiled.ProjectionMoves[:0]
+	for i := range compiled.ProjectionMoves {
+		move := compiled.ProjectionMoves[i]
+		if _, found := dirty[move.mountID]; found {
+			continue
+		}
+		filteredMoves = append(filteredMoves, move)
+	}
+	compiled.ProjectionMoves = filteredMoves
 }
 
 func (o *Orchestrator) warnChildRootReconciliationSaveFailure(err error) {

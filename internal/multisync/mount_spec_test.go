@@ -284,8 +284,8 @@ func TestCompileRuntimeMounts_ReservedChildPathStillFiltersParentSubtree(t *test
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	record := testMountRecordForParent(&parent)
-	record.RelativeLocalPath = "Shortcuts/New Docs"
-	record.ReservedLocalPaths = []string{"Shortcuts/Old Docs"}
+	record.RelativeLocalPath = shortcutNewDocsPath
+	record.ReservedLocalPaths = []string{shortcutOldDocsPath}
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
@@ -294,10 +294,10 @@ func TestCompileRuntimeMounts_ReservedChildPathStillFiltersParentSubtree(t *test
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
 	require.Len(t, compiled.ProjectionMoves, 1)
-	assert.Equal(t, []string{"Shortcuts/New Docs", "Shortcuts/Old Docs"}, compiled.Mounts[0].localSkipDirs)
+	assert.Equal(t, []string{shortcutNewDocsPath, shortcutOldDocsPath}, compiled.Mounts[0].localSkipDirs)
 	assert.Equal(t, mountID("child-docs"), compiled.ProjectionMoves[0].mountID)
-	assert.Equal(t, "Shortcuts/Old Docs", compiled.ProjectionMoves[0].fromRelativeLocalPath)
-	assert.Equal(t, "Shortcuts/New Docs", compiled.ProjectionMoves[0].toRelativeLocalPath)
+	assert.Equal(t, shortcutOldDocsPath, compiled.ProjectionMoves[0].fromRelativeLocalPath)
+	assert.Equal(t, shortcutNewDocsPath, compiled.ProjectionMoves[0].toRelativeLocalPath)
 }
 
 // Validates: R-2.8.1
