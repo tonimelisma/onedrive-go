@@ -60,6 +60,24 @@ func TestRoot_OpenAbsAndStatAbs(t *testing.T) {
 }
 
 // Validates: R-2.10, R-6.2
+func TestRoot_IdentityNoFollowMatchesFileInfoIdentity(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "docs"), 0o700))
+
+	info, err := root.Lstat("docs")
+	require.NoError(t, err)
+	expected, ok := IdentityFromFileInfo(info)
+	require.True(t, ok)
+
+	actual, err := root.IdentityNoFollow("docs")
+	require.NoError(t, err)
+	assert.True(t, SameIdentity(expected, actual))
+}
+
+// Validates: R-2.10, R-6.2
 func TestRoot_WalkDirUsesAbsolutePaths(t *testing.T) {
 	dir := t.TempDir()
 	root, err := Open(dir)

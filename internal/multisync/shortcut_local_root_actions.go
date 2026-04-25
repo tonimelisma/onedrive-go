@@ -13,7 +13,7 @@ import (
 
 type childRootLifecycleActionError struct {
 	state  config.MountState
-	reason string
+	reason config.MountStateReason
 	err    error
 }
 
@@ -87,6 +87,16 @@ func applyChildRootLifecycleActions(
 		filtered = append(filtered, mount)
 	}
 	compiled.Mounts = filtered
+
+	filteredMoves := compiled.ProjectionMoves[:0]
+	for i := range compiled.ProjectionMoves {
+		move := compiled.ProjectionMoves[i]
+		if _, skip := failed[move.mountID]; skip {
+			continue
+		}
+		filteredMoves = append(filteredMoves, move)
+	}
+	compiled.ProjectionMoves = filteredMoves
 	return changed
 }
 
@@ -203,7 +213,7 @@ func recordChildRootLifecycleActionFailure(
 	return true
 }
 
-func fallbackChildRootLifecycleFailureReason(action *childRootLifecycleAction) string {
+func fallbackChildRootLifecycleFailureReason(action *childRootLifecycleAction) config.MountStateReason {
 	if action != nil && action.kind == childRootLifecycleActionDelete {
 		return config.MountStateReasonLocalAliasDeleteUnavailable
 	}

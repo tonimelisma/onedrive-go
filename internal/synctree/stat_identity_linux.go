@@ -1,9 +1,9 @@
-//go:build darwin
+//go:build linux
 
-package multisync
+package synctree
 
 import "syscall"
 
 func statDeviceID(stat *syscall.Stat_t) uint64 {
-	return uint64(stat.Dev)
+	return stat.Dev
 }

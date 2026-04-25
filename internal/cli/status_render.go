@@ -205,6 +205,21 @@ func printMountStatus(w io.Writer, mount *statusMount, history bool) error {
 	if err := writef(w, "%sState:     %s\n", layout.detailIndent, mount.State); err != nil {
 		return err
 	}
+	if err := printMountLifecycleStatus(w, layout, mount); err != nil {
+		return err
+	}
+	if mount.SyncState == nil {
+		return printChildMountStatuses(w, mount.ChildMounts, history)
+	}
+
+	if err := printSyncStateText(w, layout.detailIndent, mount.SyncState, history); err != nil {
+		return err
+	}
+
+	return printChildMountStatuses(w, mount.ChildMounts, history)
+}
+
+func printMountLifecycleStatus(w io.Writer, layout statusMountTextLayout, mount *statusMount) error {
 	if mount.NamespaceID != "" {
 		if err := writef(w, "%sControl:   Parent drive pause/resume and the OneDrive shortcut\n", layout.detailIndent); err != nil {
 			return err
@@ -220,15 +235,20 @@ func printMountStatus(w io.Writer, mount *statusMount, history bool) error {
 			return err
 		}
 	}
-	if mount.SyncState == nil {
-		return printChildMountStatuses(w, mount.ChildMounts, history)
+	if mount.RecoveryAction != "" && mount.RecoveryAction != mount.StateDetail {
+		if err := writef(w, "%sAction:    %s\n", layout.detailIndent, mount.RecoveryAction); err != nil {
+			return err
+		}
+	}
+	if mount.AutoRetry == nil {
+		return nil
 	}
 
-	if err := printSyncStateText(w, layout.detailIndent, mount.SyncState, history); err != nil {
-		return err
+	retryText := "no"
+	if *mount.AutoRetry {
+		retryText = "yes"
 	}
-
-	return printChildMountStatuses(w, mount.ChildMounts, history)
+	return writef(w, "%sAuto retry: %s\n", layout.detailIndent, retryText)
 }
 
 type statusMountTextLayout struct {

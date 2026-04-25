@@ -19,7 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
-| LI-20260424-02 | Durable remote mirror recovery E2E assumed immediate delta visibility after remote edits | fixed | test harness | 2026-04-24 | yes |
+| LI-20260424-02 | Recovery E2Es overfit whole-run `No changes detected` output in multi-mount sync | fixed | test harness | 2026-04-25 | yes |
 | LI-20260424-01 | Nightly status E2Es decoded deleted drive-shaped status JSON fields | fixed | test bug | 2026-04-24 | no |
 | LI-20260422-01 | Nightly `e2e_full` buckets still carried removed manual-resolution and path-narrowing workflows | fixed | test bug | 2026-04-23 | yes |
 | LI-20260422-02 | Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair | fixed | product bug | 2026-04-22 | no |
@@ -95,13 +95,14 @@ status schema and the failing status tests assert `total_mounts` and
 quirk because the failure was deterministic repo-local test drift.
 Promoted docs: [cli.md](../design/cli.md)
 
-## LI-20260424-02: Durable remote mirror recovery E2E assumed immediate delta visibility after remote edits
+## LI-20260424-02: Recovery E2Es overfit whole-run `No changes detected` output in multi-mount sync
 
 First seen: 2026-04-24
-Last seen: 2026-04-24
+Last seen: 2026-04-25
 Area: local/manual `e2e_full`, durable mirror recovery coverage
 Suite / test: `go run ./cmd/devtool verify e2e-full`, `full-serial-sync`,
-`TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta`
+`TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta`; scheduled
+`e2e` `full-parallel-misc`, `TestE2E_Sync_DriveRemovePurgeResetsState`
 Classification: test harness
 Status: fixed
 Recurring: yes
@@ -115,7 +116,11 @@ the expected remote observation has entered the delta feed before asserting the
 next recovery phase. The same investigation also showed that transparent child
 mounts make global negative checks on `No changes detected` too broad: a parent
 mount can report deferred or applied work while an idle child projection in the
-same orchestrator run still reports no changes.
+same orchestrator run still reports no changes. On April 25, 2026, the same
+test-harness pattern recurred in `TestE2E_Sync_DriveRemovePurgeResetsState`:
+the parent mount re-enumerated and re-downloaded purged local files, but an idle
+managed child mount also printed `No changes detected`, so a whole-stderr
+negative assertion misclassified a valid multi-mount run.
 Evidence:
 - `go run ./cmd/devtool verify e2e-full` passed auth preflight, fast fixture
   preflight, fast E2E, full fixture preflight, and `full-parallel-misc`, then
@@ -129,6 +134,10 @@ Evidence:
 - The repository already uses `requireSyncEventuallyConverges` for comparable
   live delta catch-up in incremental and directional-mode E2Es, so this test
   was the outlier rather than a new product contract.
+- Scheduled run `24928718325` on April 25, 2026 failed the `e2e` job's
+  `full-parallel-misc` bucket at `TestE2E_Sync_DriveRemovePurgeResetsState`
+  because the assertion rejected any `No changes detected` string in the whole
+  multi-mount stderr stream.
 Resolution / mitigation: the upload-only observation phase now uses
 `requireSyncEventuallyConverges` and waits until a successful pass reports
 positive deferred remote drift before verifying that local download-only side
@@ -136,7 +145,10 @@ effects remain deferred. The download-only settlement phase now also asserts
 positive parent work and local filesystem convergence rather than assuming no
 other mount in the run can be idle. The rest of the test still proves the
 original contract: a later download-only pass must settle the already observed
-durable remote mirror truth without needing fresh delta events.
+durable remote mirror truth without needing fresh delta events. The purge-reset
+test now asserts structured positive work (`Plan:` and `Downloads:`) plus the
+local files on disk instead of a whole-output negative `No changes detected`
+check.
 Promoted docs: [sync-store.md](../design/sync-store.md)
 
 ## LI-20260417-01: Nightly `e2e_full` preflight duplicated `TestE2E_Status_ConfigTolerance` and stopped before live full-suite coverage

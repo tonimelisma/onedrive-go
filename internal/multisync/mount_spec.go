@@ -335,7 +335,7 @@ func projectionMovesForCandidate(candidate *childMountCandidate, parent *mountSp
 	return moves
 }
 
-func projectionMoveRetriableForState(state config.MountState, reason string) bool {
+func projectionMoveRetriableForState(state config.MountState, reason config.MountStateReason) bool {
 	switch state {
 	case "", config.MountStateActive:
 		return true

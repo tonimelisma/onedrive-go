@@ -158,13 +158,15 @@ func TestBuildChildStatusMount_RendersLifecycleState(t *testing.T) {
 			)
 
 			assert.Equal(t, string(state), mount.State)
-			assert.Equal(t, record.StateReason, mount.StateReason)
+			assert.Equal(t, string(record.StateReason), mount.StateReason)
 			assert.NotEmpty(t, mount.StateDetail)
+			assert.NotEmpty(t, mount.RecoveryAction)
+			assert.NotNil(t, mount.AutoRetry)
 		})
 	}
 }
 
-func statusLifecycleReasonForTest(state config.MountState) string {
+func statusLifecycleReasonForTest(state config.MountState) config.MountStateReason {
 	switch state {
 	case config.MountStateActive:
 		return ""
@@ -230,13 +232,13 @@ func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T)
 		DisplayName:    "Docs",
 		SyncDir:        "/tmp/sync-root/Shortcuts/Docs",
 		State:          string(config.MountStateUnavailable),
-		StateReason:    config.MountStateReasonShortcutBindingUnavailable,
+		StateReason:    string(config.MountStateReasonShortcutBindingUnavailable),
 		StateDetail:    childMountStateDetail(config.MountStateUnavailable, config.MountStateReasonShortcutBindingUnavailable),
 	}, false)
 	require.NoError(t, err)
 
 	output := buf.String()
-	assert.Contains(t, output, "Reason:    "+config.MountStateReasonShortcutBindingUnavailable)
+	assert.Contains(t, output, "Reason:    "+string(config.MountStateReasonShortcutBindingUnavailable))
 	assert.Contains(t, output, "Next:      OneDrive did not return a usable shortcut target")
 	assert.Contains(t, output, "Control:   Parent drive pause/resume and the OneDrive shortcut")
 }
@@ -265,8 +267,11 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	assert.Equal(t, statusProjectionChild, mount.ProjectionKind)
 	assert.Empty(t, mount.CanonicalID)
 	assert.Equal(t, "Docs (child-docs)", statusMountLabel(&mount))
-	assert.Equal(t, config.MountStateReasonExplicitStandaloneContentRoot, mount.StateReason)
-	assert.Contains(t, mount.StateDetail, "configured standalone shared-folder drive")
+	assert.Equal(t, string(config.MountStateReasonExplicitStandaloneContentRoot), mount.StateReason)
+	assert.Contains(t, mount.StateDetail, "already configured as a standalone mount")
+	assert.Contains(t, mount.RecoveryAction, "Remove the OneDrive shortcut")
+	require.NotNil(t, mount.AutoRetry)
+	assert.True(t, *mount.AutoRetry)
 	assert.NotContains(t, mount.StateDetail, "pause")
 
 	encoded, err := json.Marshal(mount)
@@ -275,6 +280,8 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	assert.Contains(t, string(encoded), `"namespace_id":"personal:alice@example.com"`)
 	assert.Contains(t, string(encoded), `"state_reason":"explicit_standalone_content_root"`)
 	assert.Contains(t, string(encoded), `"state_detail":`)
+	assert.Contains(t, string(encoded), `"recovery_action":`)
+	assert.Contains(t, string(encoded), `"auto_retry":true`)
 	assert.NotContains(t, string(encoded), "canonical_id")
 	assert.NotContains(t, string(encoded), "shared:")
 }

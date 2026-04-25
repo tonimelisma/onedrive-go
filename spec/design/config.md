@@ -25,7 +25,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Standalone shared-folder drives always preserve the canonical remote root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
 | Mount-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields` |
-| Managed child mount inventory persists shortcut lifecycle state, duplicate/content-root conflicts, explicit-standalone suppression, local-root identity, and local alias lifecycle reasons without creating synthetic configured drives. | `internal/config/mount_inventory_test.go`, `internal/multisync/shortcut_topology_test.go`, `internal/multisync/mount_root_lifecycle_test.go`, `internal/multisync/shortcut_local_root_actions_test.go` |
+| Managed child mount inventory persists shortcut lifecycle state, duplicate/content-root conflicts, explicit-standalone suppression, local-root identity, and local alias lifecycle reasons without creating synthetic configured drives. | `internal/config/mount_inventory_test.go`, `internal/config/mount_lifecycle_test.go`, `internal/multisync/shortcut_topology_test.go`, `internal/multisync/mount_root_lifecycle_test.go`, `internal/multisync/shortcut_local_root_actions_test.go` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 | Mount inventory schema v6 owns child lifecycle reasons, unavailable shortcut-binding records, deferred same-path shortcut bindings, local-root identity, and reserved projection paths. | `TestMountInventory_RoundTrip`, `TestMountInventory_UnavailableShortcutBindingMayOmitRemoteTarget`, `TestMountInventory_RemoteTargetRequiredForOtherLifecycleStates`, `TestMountInventory_ReservedLocalPathsNormalizeAndValidate`, `TestMountInventory_LocalRootReasonsValidate` |
@@ -358,7 +358,34 @@ stat/create failures use `local_root_unavailable`; removed shortcut projections
 that still contain local content use `removed_projection_dirty`; removed
 shortcut projection cleanup failures use `removed_projection_unavailable`; and
 local alias lifecycle failures use `local_alias_rename_conflict`,
-`local_alias_rename_unavailable`, or `local_alias_delete_unavailable`.
+`local_alias_rename_unavailable`, or `local_alias_delete_unavailable`. A
+same-path replacement waiting behind an older removed projection uses
+`path_reserved_by_pending_removal`.
+
+`internal/config/mount_lifecycle.go` is the canonical lifecycle metadata table
+for those durable reasons. It defines the required `MountState`, whether the
+parent reservation remains active, whether a child runner may start, whether
+the state is automatically retried, the status text, and the user recovery
+action. The control plane owns transitions and side effects; config owns only
+state/reason validity and shared presentation/recovery metadata.
+
+| State/reason | Reservation | Child runner | Autoresolution | User action |
+| --- | --- | --- | --- | --- |
+| `active` | current path | may start | n/a | none |
+| `unavailable: shortcut_binding_unavailable` | current path | skipped | parent engine later emits complete shortcut target | restore target access or recreate the shortcut |
+| `pending_removal: shortcut_removed` | current and reserved paths | stopped | projection is missing/empty and child DB purge succeeds | none unless local projection contains content |
+| `pending_removal: removed_projection_dirty` | current and reserved paths | stopped | projection becomes missing or empty | move or remove local projection content |
+| `pending_removal: removed_projection_unavailable` | current and reserved paths | stopped | filesystem/state operation succeeds later | fix permissions, locks, disk, or path issue |
+| `conflict: path_reserved_by_pending_removal` | shared path | skipped | old pending removal finalizes, then deferred binding promotes | clean old projection if dirty |
+| `conflict: duplicate_content_root` | conflicting paths | skipped | topology removes or changes one duplicate | remove, move, or rename one duplicate shortcut |
+| `conflict: explicit_standalone_content_root` | shortcut path | skipped | config removes explicit mount or shortcut disappears | remove the config mount or the shortcut |
+| `conflict: local_projection_conflict` | current and reserved paths | skipped | user leaves one safe tree or trees become provably identical | merge, move, or remove one path |
+| `unavailable: local_projection_unavailable` | current and reserved paths | skipped | retry can inspect/move/remove safely | fix filesystem, permission, lock, or disk issue |
+| `conflict: local_root_collision` | child path | skipped | path becomes a safe directory or creatable | remove or rename the blocking local object |
+| `unavailable: local_root_unavailable` | child path | skipped | root becomes statable/creatable and identity can be captured | restore path or permissions |
+| `conflict: local_alias_rename_conflict` | original and candidates | skipped | exactly one same-parent identity candidate remains or original is restored | keep one renamed directory |
+| `unavailable: local_alias_rename_unavailable` | original and candidate | skipped | placeholder PATCH succeeds or user renames back | fix auth, network, permission, or restore original |
+| `unavailable: local_alias_delete_unavailable` | original path | skipped | placeholder DELETE succeeds or root is restored | fix auth, network, permission, or recreate root |
 
 `MountStatePath(mountID)` gives each managed child mount a stable retained-state
 DB path independent of configured drive canonical IDs. Configured standalone

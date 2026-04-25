@@ -16,7 +16,7 @@ type discoveredShortcutBinding struct {
 	RemoteDriveID     string
 	RemoteItemID      string
 	State             config.MountState
-	StateReason       string
+	StateReason       config.MountStateReason
 }
 
 type mountInventoryMutationResult struct {
@@ -272,7 +272,7 @@ func applyDurableProjectionConflicts(inventory *config.MountInventory, parents [
 		})
 
 		state := config.MountStateActive
-		reason := ""
+		reason := config.MountStateReason("")
 		if len(records) > 1 {
 			state = config.MountStateConflict
 			reason = config.MountStateReasonDuplicateContentRoot
@@ -292,7 +292,7 @@ func setMountLifecycleState(
 	inventory *config.MountInventory,
 	record *config.MountRecord,
 	state config.MountState,
-	reason string,
+	reason config.MountStateReason,
 ) bool {
 	if record == nil || record.State == state && record.StateReason == reason {
 		return false

@@ -61,6 +61,8 @@ type statusMount struct {
 	State          string         `json:"state"`
 	StateReason    string         `json:"state_reason,omitempty"`
 	StateDetail    string         `json:"state_detail,omitempty"`
+	RecoveryAction string         `json:"recovery_action,omitempty"`
+	AutoRetry      *bool          `json:"auto_retry,omitempty"`
 	SyncState      *syncStateInfo `json:"sync_state,omitempty"`
 	ChildMounts    []statusMount  `json:"child_mounts,omitempty"`
 }
@@ -503,8 +505,13 @@ func buildChildStatusMount(
 		DisplayName:    displayName,
 		SyncDir:        filepath.Join(parentDrive.SyncDir, filepath.FromSlash(record.RelativeLocalPath)),
 		State:          state,
-		StateReason:    record.StateReason,
+		StateReason:    string(record.StateReason),
 		StateDetail:    childMountStateDetail(record.State, record.StateReason),
+	}
+	if detail, ok := config.MountLifecycleDetailFor(record.State, record.StateReason); ok && record.StateReason != "" {
+		autoRetry := detail.AutoRetry
+		mount.RecoveryAction = detail.RecoveryAction
+		mount.AutoRetry = &autoRetry
 	}
 	if syncQ != nil {
 		mount.SyncState = syncQ.QuerySyncState(config.MountStatePath(record.MountID))
@@ -513,9 +520,9 @@ func buildChildStatusMount(
 	return mount
 }
 
-func childMountStateDetail(state config.MountState, reason string) string {
-	if detail, ok := childMountStateReasonDetails()[reason]; ok {
-		return detail
+func childMountStateDetail(state config.MountState, reason config.MountStateReason) string {
+	if detail, ok := config.MountLifecycleDetailFor(state, reason); ok && detail.StatusDetail != "" {
+		return detail.StatusDetail
 	}
 
 	switch state {
@@ -529,40 +536,6 @@ func childMountStateDetail(state config.MountState, reason string) string {
 		return "Wait for runner stop and child state cleanup to finish."
 	default:
 		return ""
-	}
-}
-
-func childMountStateReasonDetails() map[string]string {
-	return map[string]string{
-		config.MountStateReasonShortcutBindingUnavailable: "OneDrive did not return a usable shortcut target. " +
-			"Wait for Microsoft Graph to recover, or remove and recreate the shortcut if it no longer resolves.",
-		config.MountStateReasonDuplicateContentRoot: "Another child shortcut owns this same content root. " +
-			"Remove, move, or rename one duplicate OneDrive shortcut.",
-		config.MountStateReasonExplicitStandaloneContentRoot: "This content root is already configured as a standalone mount. " +
-			"Remove the OneDrive shortcut or remove the configured standalone shared-folder drive.",
-		config.MountStateReasonShortcutRemoved: "The shortcut was removed. " +
-			"The child mount will be finalized after its local projection is safely handled.",
-		config.MountStateReasonRemovedProjectionDirty: "The shortcut was removed, but the local projection still contains content. " +
-			"Move or remove that local path, then rerun sync.",
-		config.MountStateReasonRemovedProjectionUnavailable: "The shortcut was removed, but the local projection " +
-			"or state could not be checked or removed. " +
-			"Fix the filesystem issue, then rerun sync.",
-		config.MountStateReasonLocalProjectionConflict: "The old and new shortcut paths both exist locally. " +
-			"Move or merge one path, then rerun sync.",
-		config.MountStateReasonLocalProjectionUnavailable: "The local shortcut path could not be moved. " +
-			"Fix the filesystem error, then rerun sync.",
-		config.MountStateReasonLocalAliasRenameConflict: "The local shortcut rename is ambiguous or conflicts with existing content. " +
-			"Resolve the local paths, then rerun sync.",
-		config.MountStateReasonLocalAliasRenameUnavailable: "The local shortcut rename could not be applied. " +
-			"Fix the filesystem or Graph error, then rerun sync.",
-		config.MountStateReasonLocalAliasDeleteUnavailable: "The local shortcut delete could not be applied to the shortcut placeholder. " +
-			"Fix the error, then rerun sync.",
-		config.MountStateReasonPathReservedByPendingRemoval: "A new shortcut is waiting for an older removed shortcut " +
-			"at the same local path to finish cleanup.",
-		config.MountStateReasonLocalRootCollision: "The child mount path collides with a local file or unsafe link. " +
-			"Move that local path before rerunning sync.",
-		config.MountStateReasonLocalRootUnavailable: "The child mount path could not be created or checked. " +
-			"Fix the filesystem error, then rerun sync.",
 	}
 }
 

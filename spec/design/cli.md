@@ -101,7 +101,11 @@ The JSON surface follows that same mount boundary: summary counts use
 `summary.total_mounts`, per-account rows use `accounts[].mounts`, and shortcut
 projections are nested under the owning parent row as `child_mounts`. The legacy
 drive-shaped status fields (`total_drives`, `accounts[].drives`) are not part
-of the current contract.
+of the current contract. Child lifecycle rows also expose `state`,
+`state_reason`, `state_detail`, `recovery_action`, and `auto_retry` from the
+config-owned shortcut lifecycle table, so text and JSON status describe the
+protected reservation state and the next recovery step without duplicating
+control-plane transition policy in the CLI.
 
 The target `status` surface projects the full sync model directly from:
 
