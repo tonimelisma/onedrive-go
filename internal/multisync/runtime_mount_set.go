@@ -29,31 +29,29 @@ func (o *Orchestrator) buildRuntimeMountSet(
 }
 
 func (p runtimeMountSetPipeline) build(ctx context.Context) (*compiledMountSet, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("building runtime mount set: context is required")
+	}
+
 	parents, err := buildStandaloneMountSpecs(p.standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
 
-	namespaceResult, reconcileErr := p.orchestrator.reconcileManagedShortcutMounts(ctx, parents)
-	if reconcileErr != nil && p.orchestrator.logger != nil {
-		p.orchestrator.logger.Warn("shortcut reconciliation failed; keeping existing mount inventory",
-			slog.String("error", reconcileErr.Error()),
-		)
+	inventory, loadErr := config.LoadMountInventory()
+	if loadErr != nil {
+		return nil, fmt.Errorf("loading mount inventory: %w", loadErr)
 	}
 
-	inventory := namespaceResult.inventory
-	if inventory == nil {
-		loadedInventory, loadErr := config.LoadMountInventory()
-		if loadErr != nil {
-			return nil, fmt.Errorf("loading mount inventory: %w", loadErr)
-		}
-		inventory = loadedInventory
-	}
-
-	dirtyMountIDs := appendUniqueStrings(nil, namespaceResult.dirtyMountIDs...)
+	dirtyMountIDs := make([]string, 0)
 	var persistErr error
-	if namespaceResult.persistErr != nil {
-		persistErr = namespaceResult.persistErr
+	deferredResult := promoteDeferredShortcutBindings(inventory, parents)
+	dirtyMountIDs = appendUniqueStrings(dirtyMountIDs, deferredResult.dirtyMountIDs...)
+	if deferredResult.changed {
+		if saveErr := config.SaveMountInventory(inventory); saveErr != nil {
+			p.orchestrator.warnChildRootReconciliationSaveFailure(saveErr)
+			persistErr = errors.Join(persistErr, fmt.Errorf("saving mount inventory after deferred shortcut promotion: %w", saveErr))
+		}
 	}
 	localRootResult := reconcileChildMountLocalRoots(parents, inventory, p.orchestrator.logger)
 	dirtyMountIDs = appendUniqueStrings(dirtyMountIDs, localRootResult.dirtyMountIDs...)
@@ -70,9 +68,7 @@ func (p runtimeMountSetPipeline) build(ctx context.Context) (*compiledMountSet, 
 	}
 	compiled.LocalRootActions = append(compiled.LocalRootActions, localRootResult.localRootActions...)
 	attachLocalRootActionPresentation(compiled)
-	if reconcileErr == nil && namespaceResult.persistErr == nil {
-		compiled.RemovedMountIDs = append(compiled.RemovedMountIDs, namespaceResult.removedMountIDs...)
-	}
+	compiled.RemovedMountIDs = append(compiled.RemovedMountIDs, pendingRemovalMountIDs(inventory)...)
 	applyInventoryPersistFailure(compiled, dirtyMountIDs, persistErr)
 	offsetCompiledSelectionIndexes(compiled, nextStartupSelectionIndex(p.initialStartup))
 	compiled.Skipped = append(append([]MountStartupResult(nil), p.initialStartup...), compiled.Skipped...)
@@ -115,6 +111,7 @@ func (o *Orchestrator) compileRuntimeMountSetFromInventory(
 	if err != nil {
 		return nil, err
 	}
+	compiled.RemovedMountIDs = append(compiled.RemovedMountIDs, pendingRemovalMountIDs(inventory)...)
 	offsetCompiledSelectionIndexes(compiled, nextStartupSelectionIndex(initialStartup))
 	compiled.Skipped = append(append([]MountStartupResult(nil), initialStartup...), compiled.Skipped...)
 
@@ -129,41 +126,72 @@ func (o *Orchestrator) finalizeRuntimeMountSetLifecycle(
 	phase string,
 	strictRecompile bool,
 ) (*compiledMountSet, error) {
-	inventoryMutated := false
-	inventoryMutated = applyChildRootLifecycleActions(ctx, o, compiled, o.logger) || inventoryMutated
-	inventoryMutated = applyChildProjectionMoves(compiled, o.logger) || inventoryMutated
-	if purgeErr := purgeManagedMountStateDBs(o.logger, compiled.RemovedMountIDs); purgeErr != nil {
-		o.logger.Warn("purging removed child mount state",
-			slog.String("phase", phase),
-			slog.String("error", purgeErr.Error()),
+	rootActionsChanged := applyChildRootLifecycleActions(ctx, o, compiled, o.logger)
+	if rootActionsChanged {
+		refreshed, recompiled, refreshErr := o.refreshRuntimeMountSetAfterLifecycleMutation(
+			compiled,
+			standaloneMounts,
+			initialStartup,
+			phase,
+			strictRecompile,
 		)
-	} else {
-		finalized, finalizeErr := finalizePendingMountRemovals(compiled.RemovedMountIDs)
-		if finalizeErr != nil {
-			o.logger.Warn("finalizing removed child mounts",
-				slog.String("phase", phase),
-				slog.String("error", finalizeErr.Error()),
-			)
-		}
-		inventoryMutated = inventoryMutated || finalized
-	}
-	if inventoryMutated {
-		refreshed, refreshErr := o.compileRuntimeMountSetFromInventory(standaloneMounts, initialStartup)
 		if refreshErr != nil {
-			if strictRecompile {
-				return compiled, fmt.Errorf("rebuilding mount specs after lifecycle mutation: %w", refreshErr)
-			}
-			o.logger.Warn("rebuilding mount specs after lifecycle mutation failed; using current mount set",
-				slog.String("phase", phase),
-				slog.String("error", refreshErr.Error()),
-			)
-		} else {
-			compiled = refreshed
+			return compiled, refreshErr
 		}
+		compiled = refreshed
+		if !recompiled {
+			compiled.ProjectionMoves = nil
+		}
+	}
+
+	inventoryMutated := false
+	finalized, finalizeErr := finalizePendingMountRemovals(compiled.RemovedMountIDs, compiled.Mounts, o.logger)
+	if finalizeErr != nil {
+		o.logger.Warn("finalizing removed child mounts",
+			slog.String("phase", phase),
+			slog.String("error", finalizeErr.Error()),
+		)
+	}
+	inventoryMutated = inventoryMutated || finalized
+	inventoryMutated = applyChildProjectionMoves(compiled, o.logger) || inventoryMutated
+	if inventoryMutated {
+		refreshed, _, refreshErr := o.refreshRuntimeMountSetAfterLifecycleMutation(
+			compiled,
+			standaloneMounts,
+			initialStartup,
+			phase,
+			strictRecompile,
+		)
+		if refreshErr != nil {
+			return compiled, refreshErr
+		}
+		compiled = refreshed
 	}
 	validateCompiledChildMountRoots(compiled, o.logger)
 
 	return compiled, nil
+}
+
+func (o *Orchestrator) refreshRuntimeMountSetAfterLifecycleMutation(
+	current *compiledMountSet,
+	standaloneMounts []StandaloneMountConfig,
+	initialStartup []MountStartupResult,
+	phase string,
+	strictRecompile bool,
+) (*compiledMountSet, bool, error) {
+	refreshed, refreshErr := o.compileRuntimeMountSetFromInventory(standaloneMounts, initialStartup)
+	if refreshErr != nil {
+		if strictRecompile {
+			return current, false, fmt.Errorf("rebuilding mount specs after lifecycle mutation: %w", refreshErr)
+		}
+		o.logger.Warn("rebuilding mount specs after lifecycle mutation failed; using current mount set",
+			slog.String("phase", phase),
+			slog.String("error", refreshErr.Error()),
+		)
+		return current, false, nil
+	}
+
+	return refreshed, true, nil
 }
 
 func applyInventoryPersistFailure(compiled *compiledMountSet, dirtyMountIDs []string, err error) {

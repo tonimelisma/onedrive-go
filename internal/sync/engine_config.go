@@ -13,21 +13,23 @@ import (
 // EngineMountConfig carries the non-client runtime facts needed to construct an
 // engine for one mounted content root.
 type EngineMountConfig struct {
-	DBPath                 string
-	SyncRoot               string
-	DataDir                string
-	DriveID                driveid.ID
-	DriveType              string
-	AccountEmail           string
-	RemoteRootItemID       string
-	RemoteRootDeltaCapable bool
-	EnableWebsocket        bool
-	LocalFilter            LocalFilterConfig
-	LocalRules             LocalObservationRules
-	ManagedRootEvents      ManagedRootEventSink
-	TransferWorkers        int
-	CheckWorkers           int
-	MinFreeSpace           int64
+	DBPath                      string
+	SyncRoot                    string
+	DataDir                     string
+	DriveID                     driveid.ID
+	DriveType                   string
+	AccountEmail                string
+	RemoteRootItemID            string
+	RemoteRootDeltaCapable      bool
+	EnableWebsocket             bool
+	LocalFilter                 LocalFilterConfig
+	LocalRules                  LocalObservationRules
+	ManagedRootEvents           ManagedRootEventSink
+	ShortcutTopologyNamespaceID string
+	ShortcutTopologyHandler     ShortcutTopologyHandler
+	TransferWorkers             int
+	CheckWorkers                int
+	MinFreeSpace                int64
 }
 
 // NewMountEngine constructs an Engine directly from the authenticated session
@@ -62,32 +64,34 @@ func NewMountEngine(
 	pathConvergence := driveops.NewMountSession(session, mountCfg.RemoteRootItemID)
 
 	cfg := &engineInputs{
-		DBPath:                 mountCfg.DBPath,
-		SyncRoot:               mountCfg.SyncRoot,
-		DataDir:                mountCfg.DataDir,
-		DriveID:                mountCfg.DriveID,
-		DriveType:              mountCfg.DriveType,
-		AccountEmail:           mountCfg.AccountEmail,
-		RemoteRootItemID:       mountCfg.RemoteRootItemID,
-		RemoteRootDeltaCapable: mountCfg.RemoteRootDeltaCapable,
-		Fetcher:                session.Meta,
-		SocketIOFetcher:        session.Meta,
-		Items:                  session.Meta,
-		Downloads:              session.Transfer,
-		Uploads:                session.Transfer,
-		PathConvergence:        pathConvergence,
-		FolderDelta:            session.Meta,
-		RecursiveLister:        session.Meta,
-		PermChecker:            session.Meta,
-		Logger:                 logger,
-		EnableWebsocket:        mountCfg.EnableWebsocket,
-		LocalFilter:            mountCfg.LocalFilter,
-		LocalRules:             mountCfg.LocalRules,
-		ManagedRootEvents:      mountCfg.ManagedRootEvents,
-		TransferWorkers:        mountCfg.TransferWorkers,
-		CheckWorkers:           mountCfg.CheckWorkers,
-		MinFreeSpace:           mountCfg.MinFreeSpace,
-		PerfCollector:          perfCollector,
+		DBPath:                      mountCfg.DBPath,
+		SyncRoot:                    mountCfg.SyncRoot,
+		DataDir:                     mountCfg.DataDir,
+		DriveID:                     mountCfg.DriveID,
+		DriveType:                   mountCfg.DriveType,
+		AccountEmail:                mountCfg.AccountEmail,
+		RemoteRootItemID:            mountCfg.RemoteRootItemID,
+		RemoteRootDeltaCapable:      mountCfg.RemoteRootDeltaCapable,
+		Fetcher:                     session.Meta,
+		SocketIOFetcher:             session.Meta,
+		Items:                       session.Meta,
+		Downloads:                   session.Transfer,
+		Uploads:                     session.Transfer,
+		PathConvergence:             pathConvergence,
+		FolderDelta:                 session.Meta,
+		RecursiveLister:             session.Meta,
+		PermChecker:                 session.Meta,
+		Logger:                      logger,
+		EnableWebsocket:             mountCfg.EnableWebsocket,
+		LocalFilter:                 mountCfg.LocalFilter,
+		LocalRules:                  mountCfg.LocalRules,
+		ManagedRootEvents:           mountCfg.ManagedRootEvents,
+		ShortcutTopologyNamespaceID: mountCfg.ShortcutTopologyNamespaceID,
+		ShortcutTopologyHandler:     mountCfg.ShortcutTopologyHandler,
+		TransferWorkers:             mountCfg.TransferWorkers,
+		CheckWorkers:                mountCfg.CheckWorkers,
+		MinFreeSpace:                mountCfg.MinFreeSpace,
+		PerfCollector:               perfCollector,
 	}
 
 	if verifyDrive {

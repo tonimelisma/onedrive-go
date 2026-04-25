@@ -72,6 +72,7 @@ type mountSpec struct {
 	minFreeSpace              int64
 	localSkipDirs             []string
 	localReservations         []syncengine.ManagedRootReservation
+	shortcutTopologyHandler   syncengine.ShortcutTopologyHandler
 }
 
 type compiledMountSet struct {

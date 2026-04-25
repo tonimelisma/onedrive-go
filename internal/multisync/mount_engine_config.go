@@ -33,8 +33,10 @@ func engineMountConfigForMount(mount *mountSpec) (*syncengine.EngineMountConfig,
 		LocalRules: syncengine.LocalObservationRules{
 			RejectSharePointRootForms: mount.rejectSharePointRootForms,
 		},
-		TransferWorkers: mount.transferWorkers,
-		CheckWorkers:    mount.checkWorkers,
-		MinFreeSpace:    mount.minFreeSpace,
+		ShortcutTopologyNamespaceID: mount.mountID.String(),
+		ShortcutTopologyHandler:     mount.shortcutTopologyHandler,
+		TransferWorkers:             mount.transferWorkers,
+		CheckWorkers:                mount.checkWorkers,
+		MinFreeSpace:                mount.minFreeSpace,
 	}, nil
 }

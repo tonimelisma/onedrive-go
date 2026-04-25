@@ -390,8 +390,15 @@ those product surfaces should not be confused with the engine's internal
 runtime model.
 
 Embedded shared-folder links discovered inside another synced drive are still
-ignored by ordinary drive-root observation and never become nested
-engine-owned sub-sessions.
+suppressed by ordinary drive-root content observation and never become nested
+engine-owned sub-sessions. For parent namespace mounts, the same observer emits
+those placeholders as shortcut topology facts before remote cursor commit; the
+multi-mount control plane consumes those facts and owns child lifecycle.
+
+If a mounted sync root disappears, the engine treats that as mount lifecycle
+(`ErrMountRootUnavailable`) rather than as content deletion below the root.
+Startup and watch root-loss checks stop or fail the mount before planner input
+can be built from a missing root.
 
 ## Conflict Handling
 
