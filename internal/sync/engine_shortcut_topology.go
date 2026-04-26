@@ -7,8 +7,8 @@ import (
 
 // RefreshShortcutTopology asks the parent-drive observer to publish shortcut
 // topology facts without committing content observations or advancing the
-// remote cursor. Multisync uses this as a startup/reload preflight so child
-// mounts are compiled from parent-observed Graph state before child engines run.
+// remote cursor. Multisync uses this during parent bootstrap so child mounts
+// are compiled from parent-observed Graph state before child engines run.
 func (e *Engine) RefreshShortcutTopology(ctx context.Context) error {
 	_, err := e.PrepareShortcutChildren(ctx)
 	return err

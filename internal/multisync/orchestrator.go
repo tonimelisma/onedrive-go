@@ -55,7 +55,7 @@ type OrchestratorConfig struct {
 	StartWarning             func(StartupWarning)
 	DebugEventHook           func(syncengine.DebugEvent)
 	PerfParent               *perf.Collector
-	disableTopologyPreflight bool
+	disableTopologyBootstrap bool
 }
 
 // Orchestrator manages per-mount sync runners. It is always used, even for a

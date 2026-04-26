@@ -42,7 +42,7 @@ drives.
 
 - R-2.4.1: Removed path-filtering configuration keys shall be rejected as unknown configuration rather than silently ignored. [verified]
 - R-2.4.2: Observation shall not invent out-of-scope filtered remote state; separately configured standalone shared-folder drives are independent drives with independent observation roots. [verified]
-- R-2.4.3: The parent sync engine shall suppress embedded shared-folder link and shortcut placeholder items from normal content planning and surface them as topology facts. The namespace control plane owns automatic child-mount lifecycle for those facts, and no control-plane path shall rediscover parent-drive remote state through Graph. [verified]
+- R-2.4.3: The parent sync engine shall suppress embedded shared-folder link and shortcut placeholder items from normal content planning, own parent-scoped shortcut alias lifecycle for those facts, and surface parent-declared child topology to the namespace control plane. The control plane shall orchestrate automatic child runners from that topology, and no control-plane path shall rediscover parent-drive remote state through Graph. [verified]
 - R-2.4.4: Observation shall cover the whole configured local root without marker-file-driven scope changes. [verified]
 - R-2.4.5: The product shall not expose user-configured bidirectional path subsets inside a drive. [verified]
 - R-2.4.6: Symlink targets shall be observed at the alias path with cycle protection; there is no user-configurable symlink-skip switch. [verified]

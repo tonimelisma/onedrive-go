@@ -46,7 +46,7 @@ func testChildRecord(namespaceID mountID, bindingID, relativePath string) childT
 		tokenOwnerCanonical: "personal:owner@example.com",
 		remoteDriveID:       "remote-drive",
 		remoteItemID:        "remote-root",
-		state:               childTopologyStateActive,
+		state:               syncengine.ShortcutChildDesired,
 	}
 }
 
@@ -89,13 +89,8 @@ func shortcutChildStateForTest(record *childTopologyRecord) syncengine.ShortcutC
 	if record == nil {
 		return syncengine.ShortcutChildBlocked
 	}
-	if record.state == childTopologyStatePendingRemoval &&
-		record.stateReason == childTopologyStateReasonShortcutRemoved {
-		return syncengine.ShortcutChildRetiring
-	}
-	if record.state == childTopologyStateUnavailable ||
-		record.state == childTopologyStateConflict {
-		return syncengine.ShortcutChildBlocked
+	if record.state != "" {
+		return record.state
 	}
 	return syncengine.ShortcutChildDesired
 }
@@ -126,7 +121,7 @@ func TestApplyShortcutTopologyBatch_StoresParentDeclaredChildrenInMemory(t *test
 	assert.True(t, changed)
 	topology := orch.transientShortcutTopology([]*mountSpec{parent})
 	record := topology.mounts[config.ChildMountID(parent.mountID.String(), "binding-1")]
-	assert.Equal(t, childTopologyStateActive, record.state)
+	assert.Equal(t, syncengine.ShortcutChildDesired, record.state)
 	assert.Equal(t, "Shared/Docs", record.relativeLocalPath)
 	assert.Equal(t, "remote-drive-0001", record.remoteDriveID)
 	assert.Equal(t, "remote-root", record.remoteItemID)
@@ -189,7 +184,7 @@ func TestParentWaitingReplacementDoesNotCreateNewChild(t *testing.T) {
 	assert.NotContains(t, topology.mounts, config.ChildMountID(parent.mountID.String(), "binding-new"))
 	assert.Equal(
 		t,
-		childTopologyStatePendingRemoval,
+		syncengine.ShortcutChildRetiring,
 		topology.mounts[config.ChildMountID(parent.mountID.String(), "binding-old")].state,
 	)
 }

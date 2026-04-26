@@ -95,7 +95,7 @@ func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, mounts ...Stan
 		ReloadStandaloneMounts:   testStandaloneMountsFromConfig,
 		Runtime:                  provider,
 		Logger:                   slog.Default(),
-		disableTopologyPreflight: true,
+		disableTopologyBootstrap: true,
 	}
 }
 
@@ -503,8 +503,7 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 
 	parent := testStandaloneMount(t, "personal:final-drain@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-	child.state = childTopologyStatePendingRemoval
-	child.stateReason = childTopologyStateReasonShortcutRemoved
+	child.state = syncengine.ShortcutChildRetiring
 
 	childRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Docs")
 	require.NoError(t, os.MkdirAll(childRoot, 0o700))
@@ -586,8 +585,7 @@ func TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved(t *testing.T) {
 
 	parent := testStandaloneMount(t, "personal:final-drain-fail@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-	child.state = childTopologyStatePendingRemoval
-	child.stateReason = childTopologyStateReasonShortcutRemoved
+	child.state = syncengine.ShortcutChildRetiring
 
 	childRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Docs")
 	require.NoError(t, os.MkdirAll(childRoot, 0o700))
@@ -785,8 +783,7 @@ func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testin
 
 	parent := testStandaloneMount(t, "personal:watch-final-drain@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-	child.state = childTopologyStatePendingRemoval
-	child.stateReason = childTopologyStateReasonShortcutRemoved
+	child.state = syncengine.ShortcutChildRetiring
 	topology := testChildTopology(child)
 
 	compiled, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, topology)
@@ -936,24 +933,24 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedMount(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestRunOnce_PreflightsParentShortcutTopologyBeforeStartingChildren(t *testing.T) {
-	parent := testStandaloneMount(t, "personal:preflight@example.com", "Preflight")
+func TestRunOnce_BootstrapsParentShortcutTopologyBeforeStartingChildren(t *testing.T) {
+	parent := testStandaloneMount(t, "personal:bootstrap@example.com", "Bootstrap")
 	setupXDGIsolation(t, parent.CanonicalID)
 
 	cfg := testOrchestratorConfig(t, parent)
-	cfg.disableTopologyPreflight = false
+	cfg.disableTopologyBootstrap = false
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
 
-	bindingID := "binding-preflight"
+	bindingID := "binding-bootstrap"
 	childID := config.ChildMountID(parent.CanonicalID.String(), bindingID)
-	preflighted := false
+	bootstrapped := false
 	runMounts := make([]mountID, 0)
 	parentRan := false
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
-		if !preflighted && req.Mount.projectionKind == MountProjectionStandalone {
-			preflighted = true
-			return &topologyRefreshEngine{
+		if !bootstrapped && req.Mount.projectionKind == MountProjectionStandalone {
+			bootstrapped = true
+			return &topologyBootstrapEngine{
 				mockEngine: &mockEngine{
 					runOnceFn: func(_ context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 						parentRan = true
@@ -965,8 +962,8 @@ func TestRunOnce_PreflightsParentShortcutTopologyBeforeStartingChildren(t *testi
 						NamespaceID: req.Mount.mountID.String(),
 						Children: []syncengine.ShortcutChildTopology{{
 							BindingItemID:     bindingID,
-							RelativeLocalPath: "Shortcuts/Preflight",
-							LocalAlias:        "Preflight",
+							RelativeLocalPath: "Shortcuts/Bootstrap",
+							LocalAlias:        "Bootstrap",
 							RemoteDriveID:     "remote-child-drive",
 							RemoteItemID:      "remote-child-root",
 							RemoteIsFolder:    true,
@@ -983,7 +980,7 @@ func TestRunOnce_PreflightsParentShortcutTopologyBeforeStartingChildren(t *testi
 
 	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 
-	require.True(t, preflighted)
+	require.True(t, bootstrapped)
 	require.Len(t, result.Reports, 2)
 	assert.True(t, parentRan)
 	assert.NotContains(t, runMounts, mountID(parent.CanonicalID.String()))
@@ -993,6 +990,40 @@ func TestRunOnce_PreflightsParentShortcutTopologyBeforeStartingChildren(t *testi
 		projectionKind:      MountProjectionStandalone,
 		tokenOwnerCanonical: parent.TokenOwnerCanonical,
 	}}).mounts, childID)
+}
+
+// Validates: R-2.4
+func TestBootstrapShortcutTopologyReusesActiveWatchParentRunner(t *testing.T) {
+	parent := testStandaloneMount(t, "personal:bootstrap-watch@example.com", "BootstrapWatch")
+	setupXDGIsolation(t, parent.CanonicalID)
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.disableTopologyBootstrap = false
+	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
+		require.FailNow(t, "bootstrap opened a second parent engine for an unchanged active watch runner")
+		return nil, assert.AnError
+	}
+
+	compiled, err := orch.buildRuntimeMountSet(t.Context(), cfg.StandaloneMounts, cfg.InitialStartupResults)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 1)
+
+	existingRunner := &watchRunner{
+		mount:  compiled.Mounts[0],
+		engine: &mockEngine{},
+	}
+	refreshed, bootstrapped, err := orch.bootstrapShortcutTopology(
+		t.Context(),
+		compiled,
+		cfg.StandaloneMounts,
+		cfg.InitialStartupResults,
+		map[mountID]*watchRunner{compiled.Mounts[0].mountID: existingRunner},
+	)
+
+	require.NoError(t, err)
+	assert.Same(t, compiled, refreshed)
+	assert.Empty(t, bootstrapped)
 }
 
 // Validates: R-2.4
@@ -1236,12 +1267,12 @@ func (m *mockEngine) AcknowledgeChildFinalDrain(
 	return syncengine.ShortcutChildTopologySnapshot{}, nil
 }
 
-type topologyRefreshEngine struct {
+type topologyBootstrapEngine struct {
 	*mockEngine
 	prepareFn func(context.Context) (syncengine.ShortcutChildTopologySnapshot, error)
 }
 
-func (m *topologyRefreshEngine) PrepareShortcutChildren(ctx context.Context) (
+func (m *topologyBootstrapEngine) PrepareShortcutChildren(ctx context.Context) (
 	syncengine.ShortcutChildTopologySnapshot,
 	error,
 ) {

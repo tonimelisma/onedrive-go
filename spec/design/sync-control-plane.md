@@ -33,11 +33,11 @@ runtime package that implements it.
 | Behavior | Evidence |
 | --- | --- |
 | `RunWatch` starts the runnable runtime mount set, skips incompatible-store mounts with immediate warnings, and rejects all-paused startup through the same startup-summary model. | `TestOrchestrator_RunWatch_SingleMount`, `TestOrchestrator_RunWatch_MultiMount`, `TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts`, `TestOrchestrator_RunWatch_ReturnsErrorWhenAllMountsPaused` |
-| The Unix control socket is the single live-owner lock for one-shot and watch sync, is acquired before parent shortcut preflight or engine startup, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestRunOnce_BindsControlSocketBeforeEngineStartup`, `TestRunWatch_BindsControlSocketBeforeEngineStartup`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
+| The Unix control socket is the single live-owner lock for one-shot and watch sync, is acquired before parent shortcut bootstrap or engine startup, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestRunOnce_BindsControlSocketBeforeEngineStartup`, `TestRunWatch_BindsControlSocketBeforeEngineStartup`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry` |
-| Parent engines own shortcut-root state and alias mutation while multisync orchestrates child runners: parent topology is persisted before acknowledgement, persisted roots feed startup reservations, empty complete batches retire old roots, same-path replacements do not downgrade active owners, final-drain children run before release, and production multisync code cannot call parent Graph discovery or shortcut alias mutation APIs. | `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_AcknowledgeShortcutChildFinalDrainRemovesRetiredRoot`, `TestSyncStore_AcknowledgeShortcutChildFinalDrainPromotesWaitingReplacement`, `TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner`, `TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot`, `TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemoved`, `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename`, `TestEngine_ApplyShortcutAliasMutationRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ApplyShortcutAliasMutationDeleteMarksParentRootFinalDrain`, `TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess`, `TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved`, `TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile`, `TestRunRepoConsistencyChecksFailsOnMultisyncGraphImport`, `TestRunRepoConsistencyChecksFailsOnMultisyncShortcutAliasMutation` |
+| Parent engines own shortcut-root state and alias mutation while multisync orchestrates child runners: parent topology is persisted before acknowledgement, persisted roots feed startup reservations, empty complete batches retire old roots, same-path replacements do not downgrade active owners, final-drain children run before release, and production multisync code cannot call parent Graph discovery or shortcut alias mutation APIs. | `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_AcknowledgeShortcutChildFinalDrainRemovesRetiredRoot`, `TestSyncStore_AcknowledgeShortcutChildFinalDrainPromotesWaitingReplacement`, `TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner`, `TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot`, `TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemoved`, `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestNewMountEngine_DoesNotReserveReleasedShortcutRootAfterDrainAck`, `TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename`, `TestWatchRuntime_HandleManagedRootEventOwnsLocalAliasRename`, `TestEngine_ApplyShortcutAliasMutationRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ApplyShortcutAliasMutationDeleteMarksParentRootFinalDrain`, `TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess`, `TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved`, `TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile`, `TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable`, `TestRunRepoConsistencyChecksFailsOnMultisyncGraphImportAlias`, `TestRunRepoConsistencyChecksFailsOnMultisyncShortcutAliasMutation`, `TestRunRepoConsistencyChecksFailsOnMultisyncShortcutRootStoreWrite`, `TestRunRepoConsistencyChecksFailsOnMultisyncLocalpathFilesystemAccessOutsideControlSocket` |
 
 ## Runtime Mount Specs
 
@@ -49,7 +49,7 @@ resolves configured drives and compiles them into
 `MountStartupResult` values before the orchestrator is constructed.
 
 One-shot and watch startup bind the owner control socket before parent shortcut
-preflight and engine startup. On startup and reload the control plane:
+bootstrap and engine startup. On startup and reload the control plane:
 
 1. consumes the CLI-compiled standalone mount selection
 2. constructs parent engines for selected standalone mounts
@@ -159,12 +159,13 @@ Authoritative removal is a two-owner lifecycle transition. The parent marks the
 shortcut root `removed_final_drain` and keeps its protected path active. The
 control plane runs the child as an ordinary bidirectional full reconcile so
 local content changes in the projection can reach the shared-folder target. If
-the child reports retry/block/content failures, the child stays in final-drain
-state and the parent protection remains. When the child reports clean, the
-control plane acknowledges drain to the live parent engine. The parent then
-removes/releases the alias projection and root row, or promotes a waiting
-replacement; only after that parent acknowledgement succeeds may multisync stop
-and forget the retiring child runner.
+the child reports retry/block/content failures, root unavailability, or no mount
+report, the typed final-drain result is not acknowledged and the parent
+protection remains. Only a `clean` final-drain result produces a binding-ID
+acknowledgement to the live parent engine. The parent then removes/releases the
+alias projection and root row, or promotes a waiting replacement; only after
+that parent acknowledgement succeeds may multisync stop and forget the retiring
+child runner.
 
 Local shortcut alias deletion and same-parent local shortcut alias rename are
 not target-content delete or target-content rename operations. Parent engines

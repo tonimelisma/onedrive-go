@@ -30,7 +30,7 @@ func testChildTopologyRecordForParent(parent *StandaloneMountConfig) childTopolo
 		tokenOwnerCanonical: parent.TokenOwnerCanonical.String(),
 		remoteDriveID:       remoteDriveID,
 		remoteItemID:        remoteItemID,
-		state:               childTopologyStateActive,
+		state:               syncengine.ShortcutChildDesired,
 	}
 }
 
@@ -213,8 +213,8 @@ func TestCompileRuntimeMounts_ConflictChildStillFiltersParentSubtree(t *testing.
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	record := testChildTopologyRecordForParent(&parent)
-	record.state = childTopologyStateConflict
-	record.stateReason = childTopologyStateReasonDuplicateContentRoot
+	record.state = syncengine.ShortcutChildBlocked
+	record.blockedDetail = "duplicate_content_root"
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
@@ -224,7 +224,7 @@ func TestCompileRuntimeMounts_ConflictChildStillFiltersParentSubtree(t *testing.
 	require.Len(t, compiled.Mounts, 1)
 	require.Len(t, compiled.Skipped, 1)
 	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
-	assert.Contains(t, compiled.Skipped[0].Err.Error(), childTopologyStateReasonDuplicateContentRoot)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), "duplicate_content_root")
 }
 
 // Validates: R-2.8.1
@@ -232,8 +232,7 @@ func TestCompileRuntimeMounts_PendingRemovalChildStillFiltersParentSubtree(t *te
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	record := testChildTopologyRecordForParent(&parent)
-	record.state = childTopologyStatePendingRemoval
-	record.stateReason = childTopologyStateReasonShortcutRemoved
+	record.state = syncengine.ShortcutChildRetiring
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
@@ -271,8 +270,8 @@ func TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersPar
 	record := testChildTopologyRecordForParent(&parent)
 	record.remoteDriveID = ""
 	record.remoteItemID = ""
-	record.state = childTopologyStateUnavailable
-	record.stateReason = childTopologyStateReasonShortcutBindingUnavailable
+	record.state = syncengine.ShortcutChildBlocked
+	record.blockedDetail = "shortcut_binding_unavailable"
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
@@ -282,7 +281,7 @@ func TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersPar
 	require.Len(t, compiled.Mounts, 1)
 	require.Len(t, compiled.Skipped, 1)
 	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
-	assert.Contains(t, compiled.Skipped[0].Err.Error(), childTopologyStateReasonShortcutBindingUnavailable)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), "shortcut_binding_unavailable")
 }
 
 // Validates: R-2.8.1
@@ -337,7 +336,7 @@ func TestCompileRuntimeMounts_MissingParentSkipsChild(t *testing.T) {
 			tokenOwnerCanonical: "personal:owner@example.com",
 			remoteDriveID:       "remote-drive",
 			remoteItemID:        "remote-root",
-			state:               childTopologyStateActive,
+			state:               syncengine.ShortcutChildDesired,
 		}),
 	)
 	require.NoError(t, err)
