@@ -45,15 +45,25 @@ type ShortcutBindingUnavailable struct {
 	Reason            string
 }
 
-type ShortcutTopologyHandler func(context.Context, ShortcutChildTopologyPublication) error
+type ShortcutChildTopologySink func(context.Context, ShortcutChildTopologyPublication) error
 
-type ShortcutChildTopologyState string
+type ShortcutTopologyHandler = ShortcutChildTopologySink
+
+type (
+	ShortcutChildTopologyState string
+	ShortcutChildRunnerAction  string
+)
 
 const (
 	ShortcutChildDesired            ShortcutChildTopologyState = "desired"
 	ShortcutChildBlocked            ShortcutChildTopologyState = "blocked"
 	ShortcutChildRetiring           ShortcutChildTopologyState = "retiring"
 	ShortcutChildWaitingReplacement ShortcutChildTopologyState = "waiting_replacement"
+
+	ShortcutChildActionRun                    ShortcutChildRunnerAction = "run"
+	ShortcutChildActionFinalDrain             ShortcutChildRunnerAction = "final_drain"
+	ShortcutChildActionSkipParentBlocked      ShortcutChildRunnerAction = "skip_parent_blocked"
+	ShortcutChildActionSkipWaitingReplacement ShortcutChildRunnerAction = "skip_waiting_replacement"
 )
 
 // ShortcutChildTopologyPublication is the parent engine's only shortcut
@@ -73,6 +83,7 @@ type ShortcutChildTopology struct {
 	RemoteDriveID     string
 	RemoteItemID      string
 	RemoteIsFolder    bool
+	RunnerAction      ShortcutChildRunnerAction
 	State             ShortcutChildTopologyState
 	BlockedDetail     string
 	ProtectedPaths    []string

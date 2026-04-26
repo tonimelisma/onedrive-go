@@ -690,9 +690,7 @@ func mountSpecsEquivalentForWatchRestart(current *mountSpec, next *mountSpec) bo
 	if current == nil || next == nil {
 		return current == next
 	}
-	return mountSpecCoreEquivalent(current, next) &&
-		mountSkipDirsEqual(current.localSkipDirs, next.localSkipDirs) &&
-		mountReservationsEqual(current.localReservations, next.localReservations)
+	return mountSpecCoreEquivalent(current, next)
 }
 
 func mountSpecCoreEquivalent(current *mountSpec, next *mountSpec) bool {
@@ -728,35 +726,6 @@ func mountSpecTuningEquivalent(current *mountSpec, next *mountSpec) bool {
 	return current.transferWorkers == next.transferWorkers &&
 		current.checkWorkers == next.checkWorkers &&
 		current.minFreeSpace == next.minFreeSpace
-}
-
-func mountSkipDirsEqual(current []string, next []string) bool {
-	if len(current) != len(next) {
-		return false
-	}
-
-	for i := range current {
-		if current[i] != next[i] {
-			return false
-		}
-	}
-
-	return true
-}
-
-func mountReservationsEqual(
-	current []syncengine.ManagedRootReservation,
-	next []syncengine.ManagedRootReservation,
-) bool {
-	if len(current) != len(next) {
-		return false
-	}
-	for i := range current {
-		if current[i] != next[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func reconcileWatchInterval(pollInterval time.Duration) time.Duration {

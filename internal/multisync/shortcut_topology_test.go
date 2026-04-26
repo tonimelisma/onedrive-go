@@ -43,7 +43,7 @@ func testChildRecord(_ mountID, bindingID, relativePath string) syncengine.Short
 		RemoteDriveID:     "remote-drive",
 		RemoteItemID:      "remote-root",
 		RemoteIsFolder:    true,
-		State:             syncengine.ShortcutChildDesired,
+		RunnerAction:      syncengine.ShortcutChildActionRun,
 		ProtectedPaths:    []string{relativePath},
 	}
 }
@@ -59,28 +59,30 @@ func topologyForTest(root *syncengine.ShortcutRootRecord) syncengine.ShortcutChi
 		RemoteDriveID:     root.RemoteDriveID.String(),
 		RemoteItemID:      root.RemoteItemID,
 		RemoteIsFolder:    root.RemoteIsFolder,
-		State:             shortcutChildStateForRoot(root.State),
+		RunnerAction:      shortcutChildActionForRoot(root.State),
 		ProtectedPaths:    append([]string(nil), root.ProtectedPaths...),
 		Waiting:           shortcutWaitingForTest(root.Waiting),
 	}
 }
 
-func shortcutChildStateForRoot(state syncengine.ShortcutRootState) syncengine.ShortcutChildTopologyState {
+func shortcutChildActionForRoot(state syncengine.ShortcutRootState) syncengine.ShortcutChildRunnerAction {
 	switch state {
 	case "", syncengine.ShortcutRootStateActive:
-		return syncengine.ShortcutChildDesired
+		return syncengine.ShortcutChildActionRun
 	case syncengine.ShortcutRootStateRemovedFinalDrain,
+		syncengine.ShortcutRootStateRemovedReleasePending,
 		syncengine.ShortcutRootStateRemovedCleanupBlocked:
-		return syncengine.ShortcutChildRetiring
+		return syncengine.ShortcutChildActionFinalDrain
 	case syncengine.ShortcutRootStateSamePathReplacementWaiting:
-		return syncengine.ShortcutChildRetiring
+		return syncengine.ShortcutChildActionFinalDrain
 	case syncengine.ShortcutRootStateTargetUnavailable,
 		syncengine.ShortcutRootStateBlockedPath,
 		syncengine.ShortcutRootStateRenameAmbiguous,
-		syncengine.ShortcutRootStateAliasMutationBlocked:
-		return syncengine.ShortcutChildBlocked
+		syncengine.ShortcutRootStateAliasMutationBlocked,
+		syncengine.ShortcutRootStateDuplicateTarget:
+		return syncengine.ShortcutChildActionSkipParentBlocked
 	default:
-		return syncengine.ShortcutChildBlocked
+		return syncengine.ShortcutChildActionSkipParentBlocked
 	}
 }
 
@@ -95,7 +97,7 @@ func shortcutWaitingForTest(waiting *syncengine.ShortcutRootReplacement) *syncen
 		RemoteDriveID:     waiting.RemoteDriveID.String(),
 		RemoteItemID:      waiting.RemoteItemID,
 		RemoteIsFolder:    waiting.RemoteIsFolder,
-		State:             syncengine.ShortcutChildWaitingReplacement,
+		RunnerAction:      syncengine.ShortcutChildActionSkipWaitingReplacement,
 		ProtectedPaths:    []string{waiting.RelativeLocalPath},
 	}
 }
@@ -130,7 +132,7 @@ func TestReceiveParentShortcutTopology_StoresPublicationInMemory(t *testing.T) {
 			RemoteDriveID:     "remote-drive-0001",
 			RemoteItemID:      "remote-root",
 			RemoteIsFolder:    true,
-			State:             syncengine.ShortcutChildDesired,
+			RunnerAction:      syncengine.ShortcutChildActionRun,
 			ProtectedPaths:    []string{"Shared/Docs"},
 		}},
 	})
@@ -138,7 +140,7 @@ func TestReceiveParentShortcutTopology_StoresPublicationInMemory(t *testing.T) {
 	assert.True(t, changed)
 	publication := orch.parentShortcutTopologyFor(parent.mountID)
 	require.Len(t, publication.Children, 1)
-	assert.Equal(t, syncengine.ShortcutChildDesired, publication.Children[0].State)
+	assert.Equal(t, syncengine.ShortcutChildActionRun, publication.Children[0].RunnerAction)
 	assert.Equal(t, "Shared/Docs", publication.Children[0].RelativeLocalPath)
 	assert.Equal(t, "remote-drive-0001", publication.Children[0].RemoteDriveID)
 	assert.Equal(t, "remote-root", publication.Children[0].RemoteItemID)
@@ -158,7 +160,7 @@ func TestReceiveParentShortcutTopology_EmptyPublicationClearsCachedChildren(t *t
 			LocalAlias:        "Shortcut",
 			RemoteDriveID:     "remote-drive",
 			RemoteItemID:      "remote-root",
-			State:             syncengine.ShortcutChildDesired,
+			RunnerAction:      syncengine.ShortcutChildActionRun,
 		}},
 	})
 
@@ -185,7 +187,7 @@ func TestParentShortcutTopologyCache_ClonesPublication(t *testing.T) {
 			LocalAlias:        "Docs",
 			RemoteDriveID:     "remote-drive",
 			RemoteItemID:      "remote-root",
-			State:             syncengine.ShortcutChildDesired,
+			RunnerAction:      syncengine.ShortcutChildActionRun,
 			ProtectedPaths:    []string{"Shortcuts/Docs"},
 			Waiting: &syncengine.ShortcutChildTopology{
 				BindingItemID:     "binding-next",
@@ -237,13 +239,13 @@ func TestParentWaitingReplacementDoesNotCreateNewChild(t *testing.T) {
 	publication := orch.parentShortcutTopologyFor(parent.mountID)
 	require.Len(t, publication.Children, 1)
 	assert.Equal(t, "binding-old", publication.Children[0].BindingItemID)
-	assert.Equal(t, syncengine.ShortcutChildRetiring, publication.Children[0].State)
+	assert.Equal(t, syncengine.ShortcutChildActionFinalDrain, publication.Children[0].RunnerAction)
 	require.NotNil(t, publication.Children[0].Waiting)
 	assert.Equal(t, "binding-new", publication.Children[0].Waiting.BindingItemID)
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestCompileRuntimeMountsFromParentTopology_DuplicateChildrenAllSkip(t *testing.T) {
+func TestCompileRuntimeMountsFromParentTopology_DoesNotClassifyDuplicateAutomaticChildren(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
@@ -264,10 +266,8 @@ func TestCompileRuntimeMountsFromParentTopology_DuplicateChildrenAllSkip(t *test
 		nil,
 	)
 	require.NoError(t, err)
-	assert.Len(t, compiled.Mounts, 1)
-	require.Len(t, compiled.Skipped, 2)
-	assert.Contains(t, compiled.Skipped[0].Err.Error(), "content root")
-	assert.Contains(t, compiled.Skipped[1].Err.Error(), "content root")
+	assert.Len(t, compiled.Mounts, 3)
+	assert.Empty(t, compiled.Skipped)
 }
 
 // Validates: R-2.8.1, R-4.1.4

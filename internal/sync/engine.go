@@ -50,7 +50,7 @@ type Engine struct {
 	localFilter                 LocalFilterConfig
 	localRules                  LocalObservationRules
 	shortcutTopologyNamespaceID string
-	shortcutTopologyHandler     ShortcutTopologyHandler
+	shortcutTopologyHandler     ShortcutChildTopologySink
 	enableWebsocket             bool
 	minFreeSpace                int64 // startup disk-scope revalidation threshold
 	diskAvailableFn             func(string) (uint64, error)
@@ -102,6 +102,8 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
+	storeOwnedByEngine := false
+	defer closeEngineSyncStoreOnStartupFailure(ctx, cfg.Logger, bm, &storeOwnedByEngine)()
 	localFilter, err := localFilterWithPersistedShortcutRoots(ctx, bm, cfg.LocalFilter, cfg.ShortcutTopologyNamespaceID)
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading parent shortcut root reservations: %w", err)
@@ -190,7 +192,26 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		nowFn:            e.nowFunc,
 	}
 
+	storeOwnedByEngine = true
 	return e, nil
+}
+
+func closeEngineSyncStoreOnStartupFailure(
+	ctx context.Context,
+	logger *slog.Logger,
+	store *SyncStore,
+	storeOwnedByEngine *bool,
+) func() {
+	return func() {
+		if storeOwnedByEngine != nil && *storeOwnedByEngine {
+			return
+		}
+		if closeErr := store.Close(context.WithoutCancel(ctx)); closeErr != nil && logger != nil {
+			logger.Warn("closed sync store after engine startup failure",
+				slog.String("error", closeErr.Error()),
+			)
+		}
+	}
 }
 
 func (e *Engine) collector() *perf.Collector {
