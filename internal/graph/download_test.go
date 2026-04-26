@@ -24,6 +24,11 @@ func (errorWriter) Write(_ []byte) (int, error) {
 	return 0, errors.New("write failed")
 }
 
+const (
+	staleDownloadPath = "/stale"
+	freshDownloadPath = "/fresh"
+)
+
 func writeDownloadTestBody(t *testing.T, w http.ResponseWriter, body string) {
 	t.Helper()
 
@@ -283,6 +288,105 @@ func TestDownload_NoAuthOnPreAuthURL(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDownload_RefreshesPreAuthURLAfterUnauthorized(t *testing.T) {
+	var metadataCalls atomic.Int32
+	var staleDownloadCalls atomic.Int32
+	var freshDownloadCalls atomic.Int32
+
+	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Authorization"))
+
+		switch r.URL.Path {
+		case staleDownloadPath:
+			staleDownloadCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("request-id", "req-stale-download-url")
+			w.WriteHeader(http.StatusUnauthorized)
+			writeTestResponse(t, w, `{"error":{"code":"unauthenticated","message":"expired pre-auth URL"}}`)
+		case freshDownloadPath:
+			freshDownloadCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+			writeDownloadTestBody(t, w, "fresh content")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer dlSrv.Close()
+
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/drives/000000000000000d/items/item-refresh-url", r.URL.Path)
+
+		call := metadataCalls.Add(1)
+		downloadPath := staleDownloadPath
+		if call > 1 {
+			downloadPath = freshDownloadPath
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponsef(t, w, `{
+			"id": "item-refresh-url",
+			"name": "refresh.txt",
+			"size": 13,
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "p", "driveId": "d"},
+			"file": {"mimeType": "text/plain"},
+			"@microsoft.graph.downloadUrl": %q
+		}`, dlSrv.URL+downloadPath)
+	}))
+	defer graphSrv.Close()
+
+	client := newTestClient(t, graphSrv.URL)
+	var buf bytes.Buffer
+	n, err := client.Download(t.Context(), driveid.New("d"), "item-refresh-url", &buf)
+	require.NoError(t, err)
+
+	assert.Equal(t, "fresh content", buf.String())
+	assert.Equal(t, int64(len("fresh content")), n)
+	assert.Equal(t, int32(2), metadataCalls.Load())
+	assert.Equal(t, int32(1), staleDownloadCalls.Load())
+	assert.Equal(t, int32(1), freshDownloadCalls.Load())
+}
+
+func TestDownload_DoesNotRefreshPreAuthURLAfterForbidden(t *testing.T) {
+	var metadataCalls atomic.Int32
+
+	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("request-id", "req-forbidden-download-url")
+		w.WriteHeader(http.StatusForbidden)
+		writeTestResponse(t, w, `{"error":{"code":"accessDenied","message":"download forbidden"}}`)
+	}))
+	defer dlSrv.Close()
+
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		metadataCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponsef(t, w, `{
+			"id": "item-forbidden-url",
+			"name": "forbidden.txt",
+			"size": 9,
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "p", "driveId": "d"},
+			"file": {"mimeType": "text/plain"},
+			"@microsoft.graph.downloadUrl": %q
+		}`, dlSrv.URL+"/forbidden")
+	}))
+	defer graphSrv.Close()
+
+	client := newTestClient(t, graphSrv.URL)
+	var buf bytes.Buffer
+	_, err := client.Download(t.Context(), driveid.New("d"), "item-forbidden-url", &buf)
+	require.Error(t, err)
+
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.Equal(t, int32(1), metadataCalls.Load())
+}
+
 // Validates: R-1.2
 func TestDownloadRange_Success(t *testing.T) {
 	fullContent := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -317,6 +421,71 @@ func TestDownloadRange_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fullContent[offset:], buf.String())
 	assert.Equal(t, int64(len(fullContent))-offset, n)
+}
+
+func TestDownloadRange_RefreshesPreAuthURLAfterUnauthorized(t *testing.T) {
+	const fullContent = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	const offset = int64(10)
+
+	var metadataCalls atomic.Int32
+	var staleDownloadCalls atomic.Int32
+	var freshDownloadCalls atomic.Int32
+
+	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Authorization"))
+		assert.Equal(t, fmt.Sprintf("bytes=%d-", offset), r.Header.Get("Range"))
+
+		switch r.URL.Path {
+		case staleDownloadPath:
+			staleDownloadCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("request-id", "req-stale-range-url")
+			w.WriteHeader(http.StatusUnauthorized)
+			writeTestResponse(t, w, `{"error":{"code":"unauthenticated","message":"expired range URL"}}`)
+		case freshDownloadPath:
+			freshDownloadCalls.Add(1)
+			w.WriteHeader(http.StatusPartialContent)
+			writeDownloadTestBody(t, w, fullContent[offset:])
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer dlSrv.Close()
+
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/drives/000000000000000d/items/item-refresh-range-url", r.URL.Path)
+
+		call := metadataCalls.Add(1)
+		downloadPath := staleDownloadPath
+		if call > 1 {
+			downloadPath = freshDownloadPath
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponsef(t, w, `{
+			"id": "item-refresh-range-url",
+			"name": "range.txt",
+			"size": %d,
+			"createdDateTime": "2024-01-01T00:00:00Z",
+			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+			"parentReference": {"id": "p", "driveId": "d"},
+			"file": {"mimeType": "text/plain"},
+			"@microsoft.graph.downloadUrl": %q
+		}`, len(fullContent), dlSrv.URL+downloadPath)
+	}))
+	defer graphSrv.Close()
+
+	client := newTestClient(t, graphSrv.URL)
+	var buf bytes.Buffer
+	n, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-refresh-range-url", &buf, offset)
+	require.NoError(t, err)
+
+	assert.Equal(t, fullContent[offset:], buf.String())
+	assert.Equal(t, int64(len(fullContent))-offset, n)
+	assert.Equal(t, int32(2), metadataCalls.Load())
+	assert.Equal(t, int32(1), staleDownloadCalls.Load())
+	assert.Equal(t, int32(1), freshDownloadCalls.Load())
 }
 
 func TestDownloadRange_NoDownloadURL(t *testing.T) {

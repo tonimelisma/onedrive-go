@@ -88,7 +88,7 @@ a normal drive's delta stream contains an embedded shared-folder link or
 shortcut placeholder item, observation suppresses that item from ordinary
 content events. The parent drive engine is still the only Graph observer for
 that drive, so it converts shortcut placeholders into engine-internal raw
-topology facts before committing remote observation progress. The parent
+shortcut publication facts before committing remote observation progress. The parent
 persists those facts in `shortcut_roots` and publishes parent-declared child
 topology; `internal/multisync` only starts, skips, final-drains, or stops
 managed children as separate mount-root engines.
@@ -161,7 +161,7 @@ read returns an error. The enrich read exists only to reduce sparse-delta blind
 spots before path materialization; durable ancestry still lives in `baseline`,
 not in a second remote-observation store field.
 
-Known managed shortcut aliases also use persisted reservation target metadata
+Known managed shortcut aliases also use persisted protected-root target metadata
 as a same-binding fallback when Graph returns a sparse moved/renamed shortcut
 placeholder without `remoteItem` target fields. The parent engine still owns the
 observation and mutation; this fallback only keeps the same shortcut binding

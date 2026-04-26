@@ -50,6 +50,7 @@ func TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges(t *testing.T) {
 		{"release pending cleanup can promote waiting replacement", ShortcutRootStateRemovedReleasePending, shortcutRootEventWaitingReplacementPromote, ShortcutRootStateActive},
 		{"duplicate target blocks active", ShortcutRootStateActive, shortcutRootEventDuplicateTargetDetected, ShortcutRootStateDuplicateTarget},
 		{"duplicate target resolves to active", ShortcutRootStateDuplicateTarget, shortcutRootEventDuplicateTargetResolved, ShortcutRootStateActive},
+		{"duplicate target local root ready stays duplicate", ShortcutRootStateDuplicateTarget, shortcutRootEventLocalRootReady, ShortcutRootStateDuplicateTarget},
 		{"alias rename success restores blocked root", ShortcutRootStateAliasMutationBlocked, shortcutRootEventAliasMutationSucceeded, ShortcutRootStateActive},
 		{"alias delete success drains active root", ShortcutRootStateActive, shortcutRootEventAliasMutationSucceeded, ShortcutRootStateRemovedFinalDrain},
 	}

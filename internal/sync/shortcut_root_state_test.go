@@ -726,6 +726,56 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 }
 
 // Validates: R-2.4.8
+func TestEngine_ReconcileMissingAliasDetectsLiveRenameWithoutStaleLocalState(t *testing.T) {
+	t.Parallel()
+
+	var moved struct {
+		itemID string
+		name   string
+	}
+	mock := &engineMockClient{
+		moveItemFn: func(_ context.Context, _ driveid.ID, itemID, newParentID, newName string) (*graph.Item, error) {
+			moved.itemID = itemID
+			moved.name = newName
+			assert.Empty(t, newParentID)
+			return &graph.Item{ID: itemID, Name: newName}, nil
+		},
+	}
+	eng, syncRoot := newTestEngine(t, mock)
+	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
+	renamedRoot := filepath.Join(syncRoot, "Shared", "Renamed")
+	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
+	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
+	require.NoError(t, err)
+	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+		NamespaceID:       shortcutTopologyTestNamespaceID,
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		LocalAlias:        "Docs",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-1",
+		RemoteIsFolder:    true,
+		State:             ShortcutRootStateActive,
+		ProtectedPaths:    []string{"Shared/Docs"},
+		LocalRootIdentity: &identity,
+	}}))
+	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
+
+	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Equal(t, "binding-1", moved.itemID)
+	assert.Equal(t, "Renamed", moved.name)
+	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	require.NoError(t, err)
+	require.Len(t, roots, 1)
+	assert.Equal(t, "Shared/Renamed", roots[0].RelativeLocalPath)
+	assert.Equal(t, []string{"Shared/Renamed", "Shared/Docs"}, roots[0].ProtectedPaths)
+}
+
+// Validates: R-2.4.8
 func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(t *testing.T) {
 	t.Parallel()
 

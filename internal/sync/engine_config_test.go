@@ -95,7 +95,7 @@ func TestNewMountEngine_PropagatesOrdinaryMountConfig(t *testing.T) {
 }
 
 // Validates: R-2.4.8
-func TestNewMountEngine_MergesPersistedShortcutRootReservations(t *testing.T) {
+func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	logger := testLogger(t)
@@ -127,15 +127,15 @@ func TestNewMountEngine_MergesPersistedShortcutRootReservations(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	require.Len(t, eng.localFilter.ManagedRoots, 2)
-	assert.Equal(t, "Shared/Docs", eng.localFilter.ManagedRoots[0].Path)
-	assert.Equal(t, "binding-1", eng.localFilter.ManagedRoots[0].BindingID)
-	assert.True(t, eng.localFilter.ManagedRoots[0].HasIdentity)
-	assert.Equal(t, "Shared/Old Docs", eng.localFilter.ManagedRoots[1].Path)
+	require.Len(t, eng.protectedRoots, 2)
+	assert.Equal(t, "Shared/Docs", eng.protectedRoots[0].Path)
+	assert.Equal(t, "binding-1", eng.protectedRoots[0].BindingID)
+	assert.True(t, eng.protectedRoots[0].HasIdentity)
+	assert.Equal(t, "Shared/Old Docs", eng.protectedRoots[1].Path)
 }
 
 // Validates: R-2.4.8
-func TestNewMountEngine_DoesNotReserveReleasedShortcutRootAfterDrainAck(t *testing.T) {
+func TestNewMountEngine_DoesNotProtectReleasedShortcutRootAfterDrainAck(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	logger := testLogger(t)
@@ -171,7 +171,7 @@ func TestNewMountEngine_DoesNotReserveReleasedShortcutRootAfterDrainAck(t *testi
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	assert.Empty(t, eng.localFilter.ManagedRoots)
+	assert.Empty(t, eng.protectedRoots)
 }
 
 func TestNewMountEngine_PropagatesRootedMountConfig(t *testing.T) {

@@ -90,12 +90,12 @@ func testOrchestratorConfigWithPath(t *testing.T, cfgPath string, mounts ...Stan
 	provider := driveops.NewSessionRuntime(holder, "test/1.0", slog.Default())
 
 	return &OrchestratorConfig{
-		Holder:                       holder,
-		StandaloneMounts:             mounts,
-		ReloadStandaloneMounts:       testStandaloneMountsFromConfig,
-		Runtime:                      provider,
-		Logger:                       slog.Default(),
-		disableParentTopologyPrepare: true,
+		Holder:                              holder,
+		StandaloneMounts:                    mounts,
+		ReloadStandaloneMounts:              testStandaloneMountsFromConfig,
+		Runtime:                             provider,
+		Logger:                              slog.Default(),
+		disableParentPlanPublicationPrepare: true,
 	}
 }
 
@@ -1099,12 +1099,12 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedMount(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestRunOnce_PreparesParentTopologyBeforeStartingChildren(t *testing.T) {
+func TestRunOnce_PreparesParentPlanPublicationBeforeStartingChildren(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:bootstrap@example.com", "Bootstrap")
 	setupXDGIsolation(t, parent.CanonicalID)
 
 	cfg := testOrchestratorConfig(t, parent)
-	cfg.disableParentTopologyPrepare = false
+	cfg.disableParentPlanPublicationPrepare = false
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
 
@@ -1115,7 +1115,7 @@ func TestRunOnce_PreparesParentTopologyBeforeStartingChildren(t *testing.T) {
 	parentRan := false
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		if req.Mount.projectionKind == MountProjectionStandalone {
-			require.False(t, prepared, "parent topology was prepared more than once")
+			require.False(t, prepared, "parent plan publication was prepared more than once")
 			prepared = true
 			return &topologyPrepareEngine{
 				mockEngine: &mockEngine{
@@ -1142,7 +1142,7 @@ func TestRunOnce_PreparesParentTopologyBeforeStartingChildren(t *testing.T) {
 			}, nil
 		}
 
-		require.True(t, prepared, "child engine started before parent topology prepare")
+		require.True(t, prepared, "child engine started before parent plan publication prepare")
 		runMounts = append(runMounts, req.Mount.mountID)
 		return &mockEngine{report: &syncengine.Report{}}, nil
 	}
@@ -1160,12 +1160,12 @@ func TestRunOnce_PreparesParentTopologyBeforeStartingChildren(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestPrepareParentTopologyReusesActiveWatchParentRunner(t *testing.T) {
+func TestPrepareParentPlanPublicationReusesActiveWatchParentRunner(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:bootstrap-watch@example.com", "BootstrapWatch")
 	setupXDGIsolation(t, parent.CanonicalID)
 
 	cfg := testOrchestratorConfig(t, parent)
-	cfg.disableParentTopologyPrepare = false
+	cfg.disableParentPlanPublicationPrepare = false
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
 		require.FailNow(t, "prepare opened a second parent engine for an unchanged active watch runner")
@@ -1180,7 +1180,7 @@ func TestPrepareParentTopologyReusesActiveWatchParentRunner(t *testing.T) {
 		mount:  compiled.Mounts[0],
 		engine: &mockEngine{},
 	}
-	refreshed, prepared, err := orch.prepareParentTopology(
+	refreshed, prepared, err := orch.prepareParentPlanPublication(
 		t.Context(),
 		compiled,
 		cfg.StandaloneMounts,
@@ -1196,13 +1196,13 @@ func TestPrepareParentTopologyReusesActiveWatchParentRunner(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestRunWatch_PreparesParentTopologyBeforeStartingChildren(t *testing.T) {
+func TestRunWatch_PreparesParentPlanPublicationBeforeStartingChildren(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:watch-bootstrap@example.com", "WatchBootstrap")
 	cfgPath := writeTestConfig(t, parent.CanonicalID)
 	setupXDGIsolation(t, parent.CanonicalID)
 
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, parent)
-	cfg.disableParentTopologyPrepare = false
+	cfg.disableParentPlanPublicationPrepare = false
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
 
@@ -1232,7 +1232,7 @@ func TestRunWatch_PreparesParentTopologyBeforeStartingChildren(t *testing.T) {
 				},
 			}, nil
 		case MountProjectionChild:
-			require.True(t, prepared, "child engine started before parent topology prepare")
+			require.True(t, prepared, "child engine started before parent plan publication prepare")
 			assert.Equal(t, mountID(childID), req.Mount.mountID)
 			return &mockEngine{
 				runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
@@ -1679,7 +1679,7 @@ type topologyPrepareEngine struct {
 	prepareFn func(context.Context, syncengine.SyncMode, syncengine.RunOptions) (syncengine.ShortcutChildTopologySnapshot, error)
 }
 
-func (m *topologyPrepareEngine) PrepareInitialTopology(
+func (m *topologyPrepareEngine) PrepareInitialPlanPublication(
 	ctx context.Context,
 	mode syncengine.SyncMode,
 	opts syncengine.RunOptions,

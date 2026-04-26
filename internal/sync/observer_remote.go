@@ -50,7 +50,7 @@ type RemoteObserver struct {
 	logger                      *slog.Logger
 	driveID                     driveid.ID
 	shortcutTopologyNamespaceID string
-	managedRootReservations     []ManagedRootReservation
+	protectedRoots              []ProtectedRoot
 	SleepFunc                   func(ctx context.Context, d time.Duration) error
 
 	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
@@ -109,16 +109,16 @@ func (o *RemoteObserver) SetItemClient(items ItemClient) {
 
 func (o *RemoteObserver) SetShortcutTopology(
 	namespaceID string,
-	reservations []ManagedRootReservation,
+	protectedRoots []ProtectedRoot,
 ) {
 	if o == nil {
 		return
 	}
 
 	o.shortcutTopologyNamespaceID = namespaceID
-	o.managedRootReservations = append([]ManagedRootReservation(nil), reservations...)
+	o.protectedRoots = append([]ProtectedRoot(nil), protectedRoots...)
 	if o.Converter != nil {
-		o.Converter.ManagedRootBindings = managedRootReservationByBinding(reservations)
+		o.Converter.ProtectedRootBindings = protectedRootByBinding(protectedRoots)
 	}
 }
 
@@ -151,7 +151,7 @@ func (o *RemoteObserver) FullDeltaWithShortcutTopology(
 	lastProgressLog := time.Now()
 	if o.Converter != nil {
 		o.Converter.ShortcutTopology = &topology
-		o.Converter.ManagedRootBindings = managedRootReservationByBinding(o.managedRootReservations)
+		o.Converter.ProtectedRootBindings = protectedRootByBinding(o.protectedRoots)
 		defer func() {
 			o.Converter.ShortcutTopology = nil
 		}()

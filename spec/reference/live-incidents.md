@@ -19,6 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260426-01 | Pre-authenticated shared download URL returned 401 immediately after fresh metadata | mitigated | graph quirk | 2026-04-26 | yes |
 | LI-20260425-01 | Fast shortcut fixture preflight saw shared target before delayed root placeholder reappeared | mitigated | graph quirk | 2026-04-25 | yes |
 | LI-20260424-02 | Recovery E2Es overfit whole-run `No changes detected` output in multi-mount sync | fixed | test harness | 2026-04-25 | yes |
 | LI-20260424-01 | Nightly status E2Es decoded deleted drive-shaped status JSON fields | fixed | test bug | 2026-04-24 | no |
@@ -54,6 +55,36 @@ Promotion contract:
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260426-01: Pre-authenticated shared download URL returned 401 immediately after fresh metadata
+
+First seen: 2026-04-26
+Last seen: 2026-04-26
+Area: fast E2E, shared fixture preflight, Graph download
+Suite / test: local `go run ./cmd/devtool verify default`,
+`TestE2E_FixturePreflight_Fast`
+Classification: graph quirk
+Status: mitigated
+Recurring: yes
+Summary: A shared-folder sentinel was readable through Graph metadata and
+child enumeration, but the immediately returned
+`@microsoft.graph.downloadUrl` failed with HTTP 401 before content streaming.
+The same fixture succeeded for the other shared target in the same preflight,
+so the account and shared selector were healthy while one pre-authenticated
+download URL was unusable.
+Evidence:
+- The command fetched `/me`, the shared target item, and the target's children
+  successfully.
+- The item metadata request for `shortcut-sentinel.txt` returned HTTP 200.
+- The following pre-authenticated content request returned HTTP 401 with
+  request ID `8aae0da2-d037-c000-f685-3ecafdebf39b`.
+Resolution / mitigation: `graph.Client.Download()` and `DownloadRange()` now
+handle only this narrow class by refetching the item metadata once after a
+pre-authenticated download URL returns HTTP 401, then retrying content download
+with the fresh URL. Authenticated Graph requests keep their existing 401 token
+refresh behavior; 403 download responses are still permanent permission
+failures and are not retried through this path.
+Promoted docs: [graph-api-quirks.md#pre-authenticated-download-url-401](graph-api-quirks.md#pre-authenticated-download-url-401)
 
 ## LI-20260425-01: Fast shortcut fixture preflight saw shared target before delayed root placeholder reappeared
 

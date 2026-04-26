@@ -75,7 +75,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 
 	e.logRunOnceCompletion(report)
 
-	runner.postSyncHousekeeping()
+	runner.postSyncHousekeeping(ctx)
 
 	return report, nil
 }
@@ -279,7 +279,10 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	eng := flow.engine
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
-	obs.SetShortcutTopology(eng.shortcutTopologyNamespaceID, eng.localFilter.ManagedRoots)
+	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
+		return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
+	}
+	obs.SetShortcutTopology(eng.shortcutTopologyNamespaceID, eng.protectedRoots)
 
 	// Full enumeration: empty token returns ALL items as create/modify events.
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, "")

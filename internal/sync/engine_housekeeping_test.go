@@ -26,14 +26,14 @@ func TestPostSyncHousekeeping_SkipsConfiguredChildRoots(t *testing.T) {
 			localFilter: LocalFilterConfig{SkipDirs: []string{"Shortcuts/Docs"}},
 		},
 	}
-	flow.postSyncHousekeeping()
+	flow.postSyncHousekeeping(t.Context())
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, "root.partial"))
 	assert.FileExists(t, filepath.Join(childRoot, "child.partial"))
 }
 
 // Validates: R-2.4.10
-func TestPostSyncHousekeeping_SkipsManagedShortcutRoots(t *testing.T) {
+func TestPostSyncHousekeeping_SkipsProtectedShortcutRoots(t *testing.T) {
 	t.Parallel()
 
 	syncRoot := t.TempDir()
@@ -44,17 +44,16 @@ func TestPostSyncHousekeeping_SkipsManagedShortcutRoots(t *testing.T) {
 
 	flow := &engineFlow{
 		engine: &Engine{
-			syncTree: mustOpenSyncTree(t, syncRoot),
-			logger:   testLogger(t),
-			localFilter: LocalFilterConfig{
-				ManagedRoots: []ManagedRootReservation{{
-					Path:      "Shared Project",
-					BindingID: "shortcut-binding",
-				}},
-			},
+			syncTree:    mustOpenSyncTree(t, syncRoot),
+			logger:      testLogger(t),
+			localFilter: LocalFilterConfig{},
+			protectedRoots: []ProtectedRoot{{
+				Path:      "Shared Project",
+				BindingID: "shortcut-binding",
+			}},
 		},
 	}
-	flow.postSyncHousekeeping()
+	flow.postSyncHousekeeping(t.Context())
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, "root.partial"))
 	assert.FileExists(t, filepath.Join(childRoot, "shortcut-sentinel.txt.partial"))

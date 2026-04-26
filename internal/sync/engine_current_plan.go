@@ -107,6 +107,7 @@ type currentObservation struct {
 	inputs                   currentInputs
 	observedPaths            int
 	pendingRemoteObservation *remoteObservationBatch
+	childPublication         ShortcutChildTopologyPublication
 }
 
 type localCurrentRefreshStep string
@@ -155,12 +156,14 @@ type builtCurrentPlan struct {
 	Plan                     *ActionPlan
 	Report                   *Report
 	PendingRemoteObservation *remoteObservationBatch
+	ChildPublication         ShortcutChildTopologyPublication
 }
 
 type runtimePlan struct {
 	Plan                     *ActionPlan
 	Report                   *Report
 	PendingRemoteObservation *remoteObservationBatch
+	ChildPublication         ShortcutChildTopologyPublication
 	RetryRows                []RetryWorkRow
 	BlockScopes              []*BlockScope
 }
@@ -254,6 +257,9 @@ func (flow *engineFlow) applyShortcutTopologyBatch(ctx context.Context, batch *r
 	if !remoteChanged && !localChanged {
 		return nil
 	}
+	if refreshErr := flow.engine.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
+		return fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
+	}
 	parentRoots, err := flow.engine.baseline.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read parent shortcut root state: %w", err)
@@ -312,7 +318,10 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
-	obs.SetShortcutTopology(eng.shortcutTopologyNamespaceID, eng.localFilter.ManagedRoots)
+	if refreshErr := eng.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
+		return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
+	}
+	obs.SetShortcutTopology(eng.shortcutTopologyNamespaceID, eng.protectedRoots)
 
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, savedToken)
 	if err != nil {
@@ -341,9 +350,13 @@ func (flow *engineFlow) observeLocal(
 	bl *Baseline,
 ) (ScanResult, error) {
 	eng := flow.engine
+	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
+		return ScanResult{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
+	}
 
 	obs := NewLocalObserver(bl, eng.logger, eng.checkWorkers)
 	obs.SetFilterConfig(eng.localFilter)
+	obs.SetProtectedRoots(eng.protectedRoots)
 	obs.SetObservationRules(eng.localRules)
 	obs.SetExpectedRootIdentity(eng.expectedSyncRootIdentity)
 
@@ -430,12 +443,31 @@ func (flow *engineFlow) loadCommittedCurrentObservation(
 	if err != nil {
 		return nil, err
 	}
+	childPublication, err := flow.currentShortcutChildPublication(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	return &currentObservation{
 		inputs:                   inputs,
 		observedPaths:            len(inputs.localRows) + len(inputs.remoteRows),
 		pendingRemoteObservation: pendingRemoteObservation,
+		childPublication:         childPublication,
 	}, nil
+}
+
+func (flow *engineFlow) currentShortcutChildPublication(
+	ctx context.Context,
+) (ShortcutChildTopologyPublication, error) {
+	if flow == nil || flow.engine == nil || flow.engine.baseline == nil ||
+		flow.engine.shortcutTopologyNamespaceID == "" {
+		return ShortcutChildTopologyPublication{}, nil
+	}
+	roots, err := flow.engine.baseline.ListShortcutRoots(ctx)
+	if err != nil {
+		return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: read current shortcut child publication: %w", err)
+	}
+	return shortcutChildTopologyFromRoots(flow.engine.shortcutTopologyNamespaceID, roots), nil
 }
 
 func (flow *engineFlow) loadCurrentInputs(
@@ -537,6 +569,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 		Plan:                     plan,
 		Report:                   report,
 		PendingRemoteObservation: observation.pendingRemoteObservation,
+		ChildPublication:         observation.childPublication,
 	}, nil
 }
 
@@ -563,6 +596,7 @@ func (flow *engineFlow) reconcileRuntimeStateStage(
 		Plan:                     build.Plan,
 		Report:                   build.Report,
 		PendingRemoteObservation: build.PendingRemoteObservation,
+		ChildPublication:         build.ChildPublication,
 		RetryRows:                retryRows,
 		BlockScopes:              blockScopes,
 	}, nil
@@ -579,6 +613,7 @@ func (flow *engineFlow) keepBuiltCurrentPlan(build *builtCurrentPlan) *runtimePl
 		Plan:                     build.Plan,
 		Report:                   build.Report,
 		PendingRemoteObservation: build.PendingRemoteObservation,
+		ChildPublication:         build.ChildPublication,
 	}
 }
 

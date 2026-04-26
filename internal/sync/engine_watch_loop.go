@@ -140,8 +140,8 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 		return rt.handleWatchCompletionSignal(ctx, p, &completion, ok)
 	case change, ok := <-rt.localEvents:
 		return rt.handleWatchLocalChangeSignal(&change, ok)
-	case event, ok := <-rt.managedRootEvents:
-		return rt.handleWatchManagedRootEventSignal(ctx, &event, ok)
+	case event, ok := <-rt.protectedRootEvents:
+		return rt.handleWatchProtectedRootEventSignal(ctx, &event, ok)
 	case batch, ok := <-rt.remoteBatches:
 		return rt.handleWatchRemoteBatchSignal(ctx, &batch, ok)
 	case skipped, ok := <-rt.skippedItems:
@@ -210,13 +210,13 @@ func (rt *watchRuntime) handleWatchLocalChangeSignal(change *ChangeEvent, ok boo
 	return false, nil
 }
 
-func (rt *watchRuntime) handleWatchManagedRootEventSignal(
+func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	ctx context.Context,
-	event *ManagedRootEvent,
+	event *ProtectedRootEvent,
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		rt.managedRootEvents = nil
+		rt.protectedRootEvents = nil
 		return false, nil
 	}
 	if event == nil {
@@ -224,10 +224,10 @@ func (rt *watchRuntime) handleWatchManagedRootEventSignal(
 	}
 	bl, err := rt.engine.baseline.Load(ctx)
 	if err != nil {
-		return false, fmt.Errorf("sync: load baseline for managed root event: %w", err)
+		return false, fmt.Errorf("sync: load baseline for protected root event: %w", err)
 	}
 	if _, refreshErr := rt.refreshAndCommitLocalCurrentState(ctx, bl, false); refreshErr != nil {
-		return false, fmt.Errorf("sync: refresh local_state for managed root event: %w", refreshErr)
+		return false, fmt.Errorf("sync: refresh local_state for protected root event: %w", refreshErr)
 	}
 	changed, err := rt.engine.reconcileShortcutRootLocalState(ctx)
 	if err != nil {
@@ -238,7 +238,7 @@ func (rt *watchRuntime) handleWatchManagedRootEventSignal(
 	}
 	roots, err := rt.engine.baseline.ListShortcutRoots(ctx)
 	if err != nil {
-		return false, fmt.Errorf("sync: read shortcut roots after managed root event: %w", err)
+		return false, fmt.Errorf("sync: read shortcut roots after protected root event: %w", err)
 	}
 	return false, rt.engine.shortcutTopologyHandler(ctx, shortcutChildTopologyFromRoots(
 		rt.engine.shortcutTopologyNamespaceID,

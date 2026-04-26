@@ -129,7 +129,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady(t *testing.T) 
 }
 
 // Validates: R-2.4.8
-func TestWatchRuntime_HandleManagedRootEventOwnsLocalAliasRename(t *testing.T) {
+func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T) {
 	t.Parallel()
 
 	var moved struct {
@@ -174,7 +174,7 @@ func TestWatchRuntime_HandleManagedRootEventOwnsLocalAliasRename(t *testing.T) {
 	}
 	rt := testWatchRuntime(t, eng)
 
-	done, err := rt.handleWatchManagedRootEventSignal(t.Context(), &ManagedRootEvent{}, true)
+	done, err := rt.handleWatchProtectedRootEventSignal(t.Context(), &ProtectedRootEvent{}, true)
 
 	require.NoError(t, err)
 	assert.False(t, done)

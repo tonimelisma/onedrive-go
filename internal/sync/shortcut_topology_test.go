@@ -109,7 +109,7 @@ func TestApplyShortcutTopologyBatch_SkipsEmptyIncrementalBatch(t *testing.T) {
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestPrepareInitialTopology_ForwardsEmptyCompleteBatchWithoutCommittingCursor(t *testing.T) {
+func TestPrepareInitialPlanPublication_ForwardsEmptyCompleteBatchWithoutCommittingCursor(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -128,17 +128,18 @@ func TestPrepareInitialTopology_ForwardsEmptyCompleteBatchWithoutCommittingCurso
 		return nil
 	}
 
-	_, err := eng.PrepareInitialTopology(t.Context(), SyncBidirectional, RunOptions{})
+	snapshot, err := eng.PrepareInitialPlanPublication(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
 	require.Len(t, got, 1)
 	assert.Equal(t, shortcutTopologyTestNamespaceID, got[0].NamespaceID)
 	assert.Empty(t, got[0].Children)
+	assert.Equal(t, got[0], snapshot)
 	assert.Empty(t, readObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestPrepareInitialTopology_ApplyFailureDoesNotCommitCursor(t *testing.T) {
+func TestPrepareInitialPlanPublication_ApplyFailureDoesNotCommitCursor(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -150,12 +151,13 @@ func TestPrepareInitialTopology_ApplyFailureDoesNotCommitCursor(t *testing.T) {
 		},
 	}
 	eng, _ := newTestEngine(t, mock)
+	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
 	applyErr := errors.New("persist topology")
 	eng.shortcutTopologyHandler = func(_ context.Context, _ ShortcutChildTopologyPublication) error {
 		return applyErr
 	}
 
-	_, err := eng.PrepareInitialTopology(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.PrepareInitialPlanPublication(t.Context(), SyncBidirectional, RunOptions{})
 	require.ErrorIs(t, err, applyErr)
 	assert.Empty(t, readObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
 }

@@ -154,20 +154,21 @@ func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
 // is a parameter of FullScan, allowing reuse across passes.
 type LocalObserver struct {
-	Baseline           *Baseline
-	Logger             *slog.Logger
-	checkWorkers       int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
-	filterConfig       LocalFilterConfig
-	observationRules   LocalObservationRules
-	expectedRootID     *synctree.FileIdentity
-	managedRootEvents  ManagedRootEventSink
-	WatcherFactory     func() (FsWatcher, error)
-	droppedEvents      atomic.Int64                                     // events dropped by TrySend due to full channel
-	droppedRetries     atomic.Int64                                     // hash requests dropped due to full channel
-	lastActivityNano   atomic.Int64                                     // liveness: updated on each event emit (B-125)
-	SleepFunc          func(ctx context.Context, d time.Duration) error // injectable for testing
-	SafetyTickFunc     func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
-	safetyScanInterval time.Duration                                    // 0 → default (5 minutes); configurable (B-099)
+	Baseline            *Baseline
+	Logger              *slog.Logger
+	checkWorkers        int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
+	filterConfig        LocalFilterConfig
+	protectedRoots      []ProtectedRoot
+	observationRules    LocalObservationRules
+	expectedRootID      *synctree.FileIdentity
+	protectedRootEvents ProtectedRootEventSink
+	WatcherFactory      func() (FsWatcher, error)
+	droppedEvents       atomic.Int64                                     // events dropped by TrySend due to full channel
+	droppedRetries      atomic.Int64                                     // hash requests dropped due to full channel
+	lastActivityNano    atomic.Int64                                     // liveness: updated on each event emit (B-125)
+	SleepFunc           func(ctx context.Context, d time.Duration) error // injectable for testing
+	SafetyTickFunc      func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
+	safetyScanInterval  time.Duration                                    // 0 → default (5 minutes); configurable (B-099)
 
 	// hashFunc computes the QuickXorHash of a file. Injectable for testing
 	// (e.g., to simulate panics in the hash phase).
@@ -232,15 +233,20 @@ func (o *LocalObserver) SetFilterConfig(cfg LocalFilterConfig) {
 		SkipSymlinks: cfg.SkipSymlinks,
 		SkipDirs:     append([]string(nil), cfg.SkipDirs...),
 		SkipFiles:    append([]string(nil), cfg.SkipFiles...),
-		ManagedRoots: append([]ManagedRootReservation(nil), cfg.ManagedRoots...),
 	}
 }
 
-// SetManagedRootEventSink installs the parent watch-runtime notification sink
-// used for managed-root lifecycle facts. The observer never mutates those
+// SetProtectedRoots installs engine-derived shortcut boundary protection. The
+// roots are derived from parent shortcut_roots state, not user filter config.
+func (o *LocalObserver) SetProtectedRoots(roots []ProtectedRoot) {
+	o.protectedRoots = append([]ProtectedRoot(nil), roots...)
+}
+
+// SetProtectedRootEventSink installs the parent watch-runtime notification sink
+// used for protected-root lifecycle facts. The observer never mutates those
 // roots; it only reports that the parent engine should reconcile.
-func (o *LocalObserver) SetManagedRootEventSink(sink ManagedRootEventSink) {
-	o.managedRootEvents = sink
+func (o *LocalObserver) SetProtectedRootEventSink(sink ProtectedRootEventSink) {
+	o.protectedRootEvents = sink
 }
 
 // SetObservationRules installs platform-derived local validation rules. These
@@ -259,11 +265,11 @@ func (o *LocalObserver) SetExpectedRootIdentity(identity *synctree.FileIdentity)
 	o.expectedRootID = &next
 }
 
-func (o *LocalObserver) reportManagedRootEvent(event ManagedRootEvent) {
-	if o == nil || o.managedRootEvents == nil {
+func (o *LocalObserver) reportProtectedRootEvent(event ProtectedRootEvent) {
+	if o == nil || o.protectedRootEvents == nil {
 		return
 	}
-	o.managedRootEvents(event)
+	o.protectedRootEvents(event)
 }
 
 func (o *LocalObserver) recordPendingTimer(path string, timer syncTimer) {

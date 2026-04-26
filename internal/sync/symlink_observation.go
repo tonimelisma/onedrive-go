@@ -327,7 +327,14 @@ func (o *LocalObserver) walkObservedEntry(
 	}
 
 	kind := dirEntryKind(entry)
-	if skipItem := shouldObserveWithFilter(entryName, entryRelPath, kind, o.filterConfig, o.observationRules); skipItem != nil {
+	if skipItem := shouldObserveWithFilter(
+		entryName,
+		entryRelPath,
+		kind,
+		o.filterConfig,
+		o.protectedRoots,
+		o.observationRules,
+	); skipItem != nil {
 		if skipItem.Reason != "" {
 			*skipped = append(*skipped, *skipItem)
 		}
@@ -430,7 +437,7 @@ func (o *LocalObserver) addObservedDirWatches(
 
 	if dbRelPath != "." {
 		name := nfcNormalize(filepath.Base(fsPath))
-		if shouldObserveWithFilter(name, dbRelPath, observedKindDir, o.filterConfig, o.observationRules) != nil {
+		if shouldObserveWithFilter(name, dbRelPath, observedKindDir, o.filterConfig, o.protectedRoots, o.observationRules) != nil {
 			return nil
 		}
 	}
@@ -556,7 +563,7 @@ func (o *LocalObserver) addObservedChildWatch(
 		return nil
 	}
 
-	if shouldObserveWithFilter(childName, childRelPath, observedKindDir, o.filterConfig, o.observationRules) != nil {
+	if shouldObserveWithFilter(childName, childRelPath, observedKindDir, o.filterConfig, o.protectedRoots, o.observationRules) != nil {
 		return nil
 	}
 
@@ -593,7 +600,7 @@ func (o *LocalObserver) processSymlinkPath(
 	o.forgetExcludedSymlink(dbRelPath)
 
 	kind := observedKindFromInfo(info)
-	if skipItem := shouldObserveWithFilter(name, dbRelPath, kind, o.filterConfig, o.observationRules); skipItem != nil {
+	if skipItem := shouldObserveWithFilter(name, dbRelPath, kind, o.filterConfig, o.protectedRoots, o.observationRules); skipItem != nil {
 		if skipItem.Reason != "" {
 			*skipped = append(*skipped, *skipItem)
 		}

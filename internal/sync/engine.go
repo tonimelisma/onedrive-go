@@ -49,6 +49,7 @@ type Engine struct {
 	transferWorkers             int                    // goroutine count for the worker pool
 	checkWorkers                int                    // goroutine limit for parallel file hashing
 	localFilter                 LocalFilterConfig
+	protectedRoots              []ProtectedRoot
 	localRules                  LocalObservationRules
 	shortcutTopologyNamespaceID string
 	shortcutTopologyHandler     ShortcutChildTopologySink
@@ -105,11 +106,6 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 	storeOwnedByEngine := false
 	defer closeEngineSyncStoreOnStartupFailure(ctx, cfg.Logger, bm, &storeOwnedByEngine)()
-	localFilter, err := localFilterWithPersistedShortcutRoots(ctx, bm, cfg.LocalFilter, cfg.ShortcutTopologyNamespaceID)
-	if err != nil {
-		return nil, fmt.Errorf("sync: loading parent shortcut root reservations: %w", err)
-	}
-
 	syncTree, err := openSyncTreeWithExpectedIdentity(cfg.SyncRoot, cfg.ExpectedSyncRootIdentity)
 	if err != nil {
 		return nil, fmt.Errorf("sync: opening sync tree: %w", err)
@@ -163,7 +159,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		perfCollector:               cfg.PerfCollector,
 		transferWorkers:             cfg.TransferWorkers,
 		checkWorkers:                cfg.CheckWorkers,
-		localFilter:                 localFilter,
+		localFilter:                 cfg.LocalFilter,
 		localRules:                  cfg.LocalRules,
 		shortcutTopologyNamespaceID: cfg.ShortcutTopologyNamespaceID,
 		shortcutTopologyHandler:     cfg.ShortcutTopologyHandler,
@@ -182,6 +178,10 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		) socketIOWakeSourceRunner {
 			return NewSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
 		},
+	}
+
+	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
+		return nil, fmt.Errorf("sync: loading parent shortcut protected roots: %w", err)
 	}
 
 	e.permHandler = newEnginePermissionHandler(e, cfg, syncTree)

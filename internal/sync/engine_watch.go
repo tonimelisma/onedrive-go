@@ -89,6 +89,9 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions)
 	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
+	if err := rt.engine.refreshProtectedRootsFromStore(ctx); err != nil {
+		return fmt.Errorf("sync: refresh shortcut protected roots before watch observers: %w", err)
+	}
 	rt.startObservers(ctx, pipe.bl, opts)
 
 	// Step 4: Run the watch loop.
@@ -276,7 +279,7 @@ func (rt *watchRuntime) finishBootstrapAfterActions(
 	ctx context.Context,
 ) error {
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
-	rt.postSyncHousekeeping()
+	rt.postSyncHousekeeping(ctx)
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
 		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
 	}
@@ -292,7 +295,7 @@ func (rt *watchRuntime) startObservers(
 	ctx context.Context, bl *Baseline, opts WatchOptions,
 ) {
 	localEvents := make(chan ChangeEvent, watchObservationBuf)
-	managedRootEvents := make(chan ManagedRootEvent, watchObservationBuf)
+	protectedRootEvents := make(chan ProtectedRootEvent, watchObservationBuf)
 	remoteBatches := make(chan remoteObservationBatch, watchObservationBuf)
 	errs := make(chan error, 2)
 
@@ -311,11 +314,12 @@ func (rt *watchRuntime) startObservers(
 
 	localObs := NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
 	localObs.SetFilterConfig(rt.engine.localFilter)
+	localObs.SetProtectedRoots(rt.engine.protectedRoots)
 	localObs.SetObservationRules(rt.engine.localRules)
 	localObs.SetExpectedRootIdentity(rt.engine.expectedSyncRootIdentity)
-	localObs.SetManagedRootEventSink(func(event ManagedRootEvent) {
+	localObs.SetProtectedRootEventSink(func(event ProtectedRootEvent) {
 		select {
-		case managedRootEvents <- event:
+		case protectedRootEvents <- event:
 		default:
 			rt.engine.logger.Warn("managed shortcut root event channel full; parent engine reconciliation will retry",
 				slog.String("path", event.Path),
@@ -341,7 +345,7 @@ func (rt *watchRuntime) startObservers(
 		defer obsWg.Done()
 		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
 		defer close(localEvents)
-		defer close(managedRootEvents)
+		defer close(protectedRootEvents)
 
 		watchErr := localObs.Watch(ctx, rt.engine.syncTree, localEvents)
 		if errors.Is(watchErr, ErrWatchLimitExhausted) {
@@ -364,7 +368,7 @@ func (rt *watchRuntime) startObservers(
 	rt.activeObservers = count
 	rt.skippedItems = skippedCh
 	rt.localEvents = localEvents
-	rt.managedRootEvents = managedRootEvents
+	rt.protectedRootEvents = protectedRootEvents
 	rt.remoteBatches = remoteBatches
 }
 

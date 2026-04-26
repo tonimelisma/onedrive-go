@@ -25,7 +25,7 @@ func (o *Orchestrator) shortcutTopologyHandlerForMount(
 	return func(_ context.Context, publication syncengine.ShortcutChildTopologyPublication) error {
 		changed := o.receiveParentShortcutTopology(&parent, publication)
 		if changed && restartOnChange {
-			return syncengine.ErrMountTopologyChanged
+			return syncengine.ErrChildPublicationChanged
 		}
 		return nil
 	}

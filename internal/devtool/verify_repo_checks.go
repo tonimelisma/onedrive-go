@@ -20,6 +20,7 @@ type staleCheck struct {
 func runRepoConsistencyChecks(repoRoot string) error {
 	for _, check := range []func(string) error{
 		ensureNoStaleArchitecturePhrases,
+		ensureDoDRequiresMergedPR,
 		ensureGovernedDesignDocsHaveOwnershipContracts,
 		ensureCrossCuttingDesignDocs,
 		ensureCrossCuttingDesignDocEvidence,
@@ -51,6 +52,16 @@ func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 		{name: "stale retry transport phrase", pattern: regexp.MustCompile(`RetryTransport\{Policy:\s*` + `Transport\}`)},
 		{name: "stale compatibility-wrapper phrase", pattern: regexp.MustCompile("compatibility" + " wrapper")},
 		{name: "stale legacy-bridge phrase", pattern: regexp.MustCompile("migra" + "tion" + " bridge")},
+		{name: "stale shortcut child prepare API", pattern: regexp.MustCompile(`\bPrepareInitial` + `Topology\b`)},
+		{name: "stale shortcut-only prepare API", pattern: regexp.MustCompile(`\bPrepareShortcut` + `Children\b`)},
+		{name: "stale shortcut refresh API", pattern: regexp.MustCompile(`\bRefreshShortcut` + `Topology\b`)},
+		{name: "stale mount-topology sentinel", pattern: regexp.MustCompile(`\bErrMount` + `TopologyChanged\b`)},
+		{name: "stale managed-root reservation type", pattern: regexp.MustCompile(`\bManagedRoot` + `Reservation\b`)},
+		{name: "stale managed-roots type", pattern: regexp.MustCompile(`\bManaged` + `Roots\b`)},
+		{name: "stale managed-root event type", pattern: regexp.MustCompile(`\bManagedRoot` + `Event\b`)},
+		{name: "stale local reservations field", pattern: regexp.MustCompile(`\blocal` + `Reservations\b`)},
+		{name: "stale local skip dirs field", pattern: regexp.MustCompile(`\blocal` + `SkipDirs\b`)},
+		{name: "stale shortcut startup phrase", pattern: regexp.MustCompile(`(?i)shortcut[- ]` + `bootstrap`)},
 	}
 
 	checkRoots := []string{
@@ -58,11 +69,12 @@ func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 		filepath.Join(repoRoot, "internal"),
 		filepath.Join(repoRoot, "cmd"),
 		filepath.Join(repoRoot, ".github", "workflows"),
+		filepath.Join(repoRoot, "AGENTS.md"),
 		filepath.Join(repoRoot, "CLAUDE.md"),
 	}
 
 	for _, check := range staleChecks {
-		match, err := findTextMatch(checkRoots, check.pattern, nil)
+		match, err := findTextMatch(checkRoots, check.pattern, skipRepoConsistencyTestFile)
 		if err != nil {
 			return err
 		}
@@ -72,6 +84,33 @@ func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 	}
 
 	return nil
+}
+
+func ensureDoDRequiresMergedPR(repoRoot string) error {
+	for _, relPath := range []string{"AGENTS.md", "CLAUDE.md"} {
+		path := filepath.Join(repoRoot, relPath)
+		data, err := readFile(path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		text := string(data)
+		for _, required := range []string{
+			"Push, review, CI green, and PR merged to main",
+			"state=MERGED",
+			"mergedAt != null",
+			"`origin/main` contains the merge commit",
+			"git branch -r --list origin/<branch-name>",
+		} {
+			if !strings.Contains(text, required) {
+				return fmt.Errorf("DoD merge evidence missing from %s: %s", relPath, required)
+			}
+		}
+	}
+	return nil
+}
+
+func skipRepoConsistencyTestFile(path string) bool {
+	return strings.HasSuffix(path, "_test.go")
 }
 
 func ensureShortcutAuthorityBoundaries(repoRoot string) error {
@@ -262,9 +301,9 @@ func forbiddenMultisyncIdentReasons() map[string]string {
 		"ShortcutChildBlocked":            "multisync must consume parent-declared runner actions, not map child topology states",
 		"ShortcutChildRetiring":           "multisync must consume parent-declared runner actions, not map child topology states",
 		"ShortcutChildWaitingReplacement": "multisync must consume parent-declared runner actions, not map child topology states",
-		"ManagedRootReservation":          "parent protected-root reservations must stay in internal/sync",
-		"localSkipDirs":                   "parent protected-root skip policy must stay in internal/sync",
-		"localReservations":               "parent protected-root reservation policy must stay in internal/sync",
+		"ProtectedRoot":                   "parent protected-root projection must stay in internal/sync",
+		"local" + "SkipDirs":              "parent protected-root skip policy must stay in internal/sync",
+		"local" + "Reservations":          "parent protected-root projection policy must stay in internal/sync",
 		"RemoveStateDBFiles":              "child DB mutation must stay outside multisync",
 	}
 }
@@ -304,7 +343,7 @@ func ensureMultisyncDoesNotPersistAutomaticShortcutInventory(repoRoot string) er
 	}
 	if match != "" {
 		return fmt.Errorf(
-			"shortcut authority violation: multisync must compile automatic children from parent topology, not persisted child binding state: %s",
+			"shortcut authority violation: multisync must compile automatic children from parent publication, not persisted child binding state: %s",
 			match,
 		)
 	}
@@ -438,7 +477,7 @@ func ensureFilesystemIdentityOwnedBySynctree(repoRoot string) error {
 			if strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go") {
 				return true
 			}
-			return path == filepath.Join(repoRoot, "internal", "sync", "managed_roots.go") ||
+			return path == filepath.Join(repoRoot, "internal", "sync", "protected_roots.go") ||
 				path == filepath.Join(repoRoot, "internal", "sync", "scanner.go")
 		},
 	)

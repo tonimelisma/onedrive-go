@@ -28,7 +28,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 
 	remoteObs := NewRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
 	remoteObs.SetItemClient(rt.engine.itemsClient)
-	remoteObs.SetShortcutTopology(rt.engine.shortcutTopologyNamespaceID, rt.engine.localFilter.ManagedRoots)
+	remoteObs.SetShortcutTopology(rt.engine.shortcutTopologyNamespaceID, rt.engine.protectedRoots)
 	rt.remoteObs = remoteObs
 	wakeCh := rt.startSocketIOWakeSource(ctx)
 

@@ -112,7 +112,7 @@ func (o *Orchestrator) startWatchRuntime(
 		return nil, control, fmt.Errorf("sync: building mount specs: %w", err)
 	}
 	var preparedParents preparedParentEngines
-	compiled, preparedParents, err = o.prepareParentTopology(
+	compiled, preparedParents, err = o.prepareParentPlanPublication(
 		ctx,
 		compiled,
 		o.cfg.StandaloneMounts,
@@ -122,7 +122,7 @@ func (o *Orchestrator) startWatchRuntime(
 		syncengine.RunOptions{},
 	)
 	if err != nil {
-		return nil, control, fmt.Errorf("sync: preparing parent topology: %w", err)
+		return nil, control, fmt.Errorf("sync: preparing parent plan publication: %w", err)
 	}
 	if purgeErr := o.purgeReleasedShortcutChildArtifactsForCompiled(ctx, compiled); purgeErr != nil {
 		o.logger.Warn("purging released shortcut child state artifacts",
@@ -380,7 +380,7 @@ func (o *Orchestrator) reload(
 		return
 	}
 	var preparedParents preparedParentEngines
-	newMounts, preparedParents, err = o.prepareParentTopology(
+	newMounts, preparedParents, err = o.prepareParentPlanPublication(
 		ctx,
 		newMounts,
 		newSelection.Mounts,
@@ -395,7 +395,7 @@ func (o *Orchestrator) reload(
 		o.cfg.InitialStartupResults = oldStartup
 		o.cfg.Runtime.FlushTokenCache()
 		o.logger.Warn("config reload failed, keeping current state",
-			slog.String("error", fmt.Errorf("preparing parent topology after reload: %w", err).Error()),
+			slog.String("error", fmt.Errorf("preparing parent plan publication after reload: %w", err).Error()),
 		)
 		return
 	}
@@ -477,7 +477,7 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 		o.handleFinalDrainWatchRunnerEvent(ctx, runners, wr, event)
 	}
 
-	if event.err != nil && errors.Is(event.err, syncengine.ErrMountTopologyChanged) {
+	if event.err != nil && errors.Is(event.err, syncengine.ErrChildPublicationChanged) {
 		o.logger.Info("watch runner requested topology reconciliation",
 			slog.String("mount_id", event.mountID.String()),
 		)

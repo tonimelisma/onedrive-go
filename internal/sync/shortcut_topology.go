@@ -211,19 +211,19 @@ func (b *ShortcutTopologyBatch) removeUnavailable(bindingItemID string) {
 	})
 }
 
-func managedRootReservationByBinding(reservations []ManagedRootReservation) map[string]ManagedRootReservation {
-	byBinding := make(map[string]ManagedRootReservation, len(reservations))
-	for i := range reservations {
-		reservation := reservations[i]
-		if reservation.BindingID == "" {
+func protectedRootByBinding(protectedRoots []ProtectedRoot) map[string]ProtectedRoot {
+	byBinding := make(map[string]ProtectedRoot, len(protectedRoots))
+	for i := range protectedRoots {
+		protectedRoot := protectedRoots[i]
+		if protectedRoot.BindingID == "" {
 			continue
 		}
-		byBinding[reservation.BindingID] = reservation
+		byBinding[protectedRoot.BindingID] = protectedRoot
 	}
 	return byBinding
 }
 
-func managedRootPrimaryName(relPath string) string {
+func protectedRootPrimaryName(relPath string) string {
 	if relPath == "" {
 		return ""
 	}

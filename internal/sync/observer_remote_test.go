@@ -1083,7 +1083,7 @@ func TestFullDeltaWithShortcutTopology_EnrichesSparseKnownShortcutMove(t *testin
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetItemClient(itemClient)
-	obs.SetShortcutTopology("personal:owner@example.com", []ManagedRootReservation{{
+	obs.SetShortcutTopology("personal:owner@example.com", []ProtectedRoot{{
 		Path:           "Docs",
 		BindingID:      "binding-1",
 		RemoteDriveID:  driveid.New("remote-drive"),
