@@ -8,17 +8,17 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-type parentPlanPublicationPreparer interface {
-	PrepareInitialPlanPublication(
+type parentChildTopologyPublisher interface {
+	PublishInitialChildTopology(
 		context.Context,
 		syncengine.SyncMode,
 		syncengine.RunOptions,
 	) (syncengine.ShortcutChildTopologySnapshot, error)
 }
 
-type preparedParentEngines map[mountID]engineRunner
+type startupParentEngines map[mountID]engineRunner
 
-func (o *Orchestrator) prepareParentPlanPublication(
+func (o *Orchestrator) publishParentStartupChildTopology(
 	ctx context.Context,
 	compiled *compiledMountSet,
 	standaloneMounts []StandaloneMountConfig,
@@ -26,10 +26,10 @@ func (o *Orchestrator) prepareParentPlanPublication(
 	existingWatchRunners map[mountID]*watchRunner,
 	mode syncengine.SyncMode,
 	opts syncengine.RunOptions,
-) (*compiledMountSet, preparedParentEngines, error) {
-	prepared := make(preparedParentEngines)
-	if compiled == nil || o == nil || o.cfg == nil || o.cfg.disableParentPlanPublicationPrepare {
-		return compiled, prepared, nil
+) (*compiledMountSet, startupParentEngines, error) {
+	startup := make(startupParentEngines)
+	if compiled == nil || o == nil || o.cfg == nil || o.cfg.disableParentStartupChildTopology {
+		return compiled, startup, nil
 	}
 
 	changed := false
@@ -38,33 +38,33 @@ func (o *Orchestrator) prepareParentPlanPublication(
 		if mount == nil || mount.paused || mount.projectionKind != MountProjectionStandalone {
 			continue
 		}
-		if canReuseWatchRunnerForParentPlanPublication(existingWatchRunners, mount) {
+		if canReuseWatchRunnerForParentStartupPublication(existingWatchRunners, mount) {
 			continue
 		}
 
-		parentChanged, engine, err := o.preparePlanPublicationForParent(ctx, mount, mode, opts)
+		parentChanged, engine, err := o.publishStartupChildTopologyForParent(ctx, mount, mode, opts)
 		if err != nil {
-			o.closePreparedParentEngines(ctx, prepared)
-			return compiled, nil, fmt.Errorf("prepare parent plan publication for mount %s: %w", mount.label(), err)
+			o.closeStartupParentEngines(ctx, startup)
+			return compiled, nil, fmt.Errorf("publish parent startup child topology for mount %s: %w", mount.label(), err)
 		}
 		if engine != nil {
-			prepared[mount.mountID] = engine
+			startup[mount.mountID] = engine
 		}
 		changed = changed || parentChanged
 	}
 	if !changed {
-		return compiled, prepared, nil
+		return compiled, startup, nil
 	}
 
 	refreshed, err := o.buildRuntimeMountSet(ctx, standaloneMounts, initialStartup)
 	if err != nil {
-		o.closePreparedParentEngines(ctx, prepared)
-		return compiled, nil, fmt.Errorf("rebuilding mount specs after parent plan publication prepare: %w", err)
+		o.closeStartupParentEngines(ctx, startup)
+		return compiled, nil, fmt.Errorf("rebuilding mount specs after parent startup child topology publication: %w", err)
 	}
-	return refreshed, prepared, nil
+	return refreshed, startup, nil
 }
 
-func canReuseWatchRunnerForParentPlanPublication(
+func canReuseWatchRunnerForParentStartupPublication(
 	existingWatchRunners map[mountID]*watchRunner,
 	parent *mountSpec,
 ) bool {
@@ -78,7 +78,7 @@ func canReuseWatchRunnerForParentPlanPublication(
 	return mountSpecCoreEquivalent(runner.mount, parent)
 }
 
-func (o *Orchestrator) preparePlanPublicationForParent(
+func (o *Orchestrator) publishStartupChildTopologyForParent(
 	ctx context.Context,
 	parent *mountSpec,
 	mode syncengine.SyncMode,
@@ -93,11 +93,11 @@ func (o *Orchestrator) preparePlanPublicationForParent(
 		return false, nil, fmt.Errorf("session error for mount %s: %w", parent.label(), err)
 	}
 
-	preparedParent := *parent
+	startupParent := *parent
 	mountCollector := o.registerMountPerfCollector(parent.mountID.String())
 	engine, err := o.engineFactory(ctx, engineFactoryRequest{
 		Session:       session,
-		Mount:         &preparedParent,
+		Mount:         &startupParent,
 		Logger:        o.logger,
 		VerifyDrive:   true,
 		PerfCollector: mountCollector,
@@ -107,31 +107,31 @@ func (o *Orchestrator) preparePlanPublicationForParent(
 		return false, nil, fmt.Errorf("engine creation failed for mount %s: %w", parent.label(), err)
 	}
 
-	preparer, ok := engine.(parentPlanPublicationPreparer)
+	publisher, ok := engine.(parentChildTopologyPublisher)
 	if !ok {
 		return false, engine, nil
 	}
-	snapshot, err := preparer.PrepareInitialPlanPublication(ctx, mode, opts)
+	snapshot, err := publisher.PublishInitialChildTopology(ctx, mode, opts)
 	if err != nil {
-		o.closePreparedParentEngine(ctx, parent.mountID, engine)
-		return false, nil, fmt.Errorf("preparing parent initial plan publication: %w", err)
+		o.closeStartupParentEngine(ctx, parent.mountID, engine)
+		return false, nil, fmt.Errorf("publishing parent initial child topology: %w", err)
 	}
 	changed := o.storeParentShortcutTopology(parent.mountID, snapshot)
 
 	return changed, engine, nil
 }
 
-func (o *Orchestrator) closePreparedParentEngines(
+func (o *Orchestrator) closeStartupParentEngines(
 	ctx context.Context,
-	prepared preparedParentEngines,
+	startup startupParentEngines,
 ) {
-	for id, engine := range prepared {
-		o.closePreparedParentEngine(ctx, id, engine)
-		delete(prepared, id)
+	for id, engine := range startup {
+		o.closeStartupParentEngine(ctx, id, engine)
+		delete(startup, id)
 	}
 }
 
-func (o *Orchestrator) closePreparedParentEngine(
+func (o *Orchestrator) closeStartupParentEngine(
 	ctx context.Context,
 	id mountID,
 	engine engineRunner,
@@ -141,7 +141,7 @@ func (o *Orchestrator) closePreparedParentEngine(
 	}
 	defer o.removeMountPerfCollector(id.String())
 	if closeErr := engine.Close(ctx); closeErr != nil && o.logger != nil {
-		o.logger.Warn("engine close error after parent plan publication prepare",
+		o.logger.Warn("engine close error after parent startup child topology publication",
 			slog.String("mount_id", id.String()),
 			slog.String("error", closeErr.Error()),
 		)

@@ -20,6 +20,7 @@ const (
 	shortcutRootEventProjectionCleanupFailed    shortcutRootLifecycleEvent = "projection_cleanup_failed"
 	shortcutRootEventProjectionCleanupSucceeded shortcutRootLifecycleEvent = "projection_cleanup_succeeded"
 	shortcutRootEventWaitingReplacementPromote  shortcutRootLifecycleEvent = "waiting_replacement_promote"
+	shortcutRootEventChildArtifactsPurged       shortcutRootLifecycleEvent = "child_artifacts_purged"
 	shortcutRootEventDuplicateTargetDetected    shortcutRootLifecycleEvent = "duplicate_target_detected"
 	shortcutRootEventDuplicateTargetResolved    shortcutRootLifecycleEvent = "duplicate_target_resolved"
 )
@@ -120,15 +121,20 @@ func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecyc
 		},
 		ShortcutRootStateRemovedReleasePending: {
 			shortcutRootEventProjectionCleanupFailed:    {ShortcutRootStateRemovedCleanupBlocked},
-			shortcutRootEventProjectionCleanupSucceeded: {},
+			shortcutRootEventProjectionCleanupSucceeded: {ShortcutRootStateRemovedChildCleanupPending},
 			shortcutRootEventWaitingReplacementPromote:  {ShortcutRootStateActive},
 		},
 		ShortcutRootStateRemovedCleanupBlocked: {
-			shortcutRootEventRemoteUpsert:              {ShortcutRootStateActive},
-			shortcutRootEventSamePathReplacement:       {ShortcutRootStateSamePathReplacementWaiting},
-			shortcutRootEventChildFinalDrainClean:      {ShortcutRootStateRemovedReleasePending},
-			shortcutRootEventProjectionCleanupFailed:   {ShortcutRootStateRemovedCleanupBlocked},
-			shortcutRootEventWaitingReplacementPromote: {ShortcutRootStateActive},
+			shortcutRootEventRemoteUpsert:               {ShortcutRootStateActive},
+			shortcutRootEventSamePathReplacement:        {ShortcutRootStateSamePathReplacementWaiting},
+			shortcutRootEventChildFinalDrainClean:       {ShortcutRootStateRemovedReleasePending},
+			shortcutRootEventProjectionCleanupFailed:    {ShortcutRootStateRemovedCleanupBlocked},
+			shortcutRootEventProjectionCleanupSucceeded: {ShortcutRootStateRemovedChildCleanupPending},
+			shortcutRootEventWaitingReplacementPromote:  {ShortcutRootStateActive},
+		},
+		ShortcutRootStateRemovedChildCleanupPending: {
+			shortcutRootEventRemoteUpsert:         {ShortcutRootStateActive},
+			shortcutRootEventChildArtifactsPurged: {},
 		},
 		ShortcutRootStateSamePathReplacementWaiting: {
 			shortcutRootEventRemoteUpsert:              {ShortcutRootStateActive},

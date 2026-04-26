@@ -211,7 +211,7 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	}
 
 	if !dryRun {
-		if err := flow.applyShortcutTopologyBatch(ctx, &observationBatch); err != nil {
+		if err := flow.applyShortcutObservationBatch(ctx, &observationBatch); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -235,7 +235,7 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	return observationBatch.emitted, observationBatch.deferredProgress(), nil
 }
 
-func (flow *engineFlow) applyShortcutTopologyBatch(ctx context.Context, batch *remoteObservationBatch) error {
+func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch *remoteObservationBatch) error {
 	if flow == nil || flow.engine == nil || batch == nil {
 		return nil
 	}
@@ -244,9 +244,9 @@ func (flow *engineFlow) applyShortcutTopologyBatch(ctx context.Context, batch *r
 	if topology.NamespaceID == "" {
 		topology.NamespaceID = flow.engine.shortcutTopologyNamespaceID
 	}
-	remoteChanged := topology.ShouldApply()
+	remoteChanged := topology.shouldApply()
 	if remoteChanged {
-		if _, err := flow.engine.baseline.ApplyShortcutTopology(ctx, topology); err != nil {
+		if _, err := flow.engine.baseline.applyShortcutTopology(ctx, topology); err != nil {
 			return fmt.Errorf("sync: persist parent shortcut root state: %w", err)
 		}
 	}
@@ -264,10 +264,10 @@ func (flow *engineFlow) applyShortcutTopologyBatch(ctx context.Context, batch *r
 	if err != nil {
 		return fmt.Errorf("sync: read parent shortcut root state: %w", err)
 	}
-	if flow.engine.shortcutTopologyHandler == nil {
+	if flow.engine.shortcutChildTopologySink == nil {
 		return nil
 	}
-	return flow.engine.shortcutTopologyHandler(ctx, shortcutChildTopologyFromRoots(
+	return flow.engine.shortcutChildTopologySink(ctx, shortcutChildTopologyFromRoots(
 		topology.NamespaceID,
 		parentRoots,
 	))
@@ -308,32 +308,32 @@ func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	ctx context.Context,
 	bl *Baseline,
-) ([]ChangeEvent, string, ShortcutTopologyBatch, error) {
+) ([]ChangeEvent, string, shortcutTopologyBatch, error) {
 	eng := flow.engine
 	state, err := eng.baseline.ReadObservationState(ctx)
 	if err != nil {
-		return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: reading observation state: %w", err)
+		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: reading observation state: %w", err)
 	}
 	savedToken := state.Cursor
 
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
 	if refreshErr := eng.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
-		return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
+		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
 	obs.SetShortcutTopology(eng.shortcutTopologyNamespaceID, eng.protectedRoots)
 
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, savedToken)
 	if err != nil {
 		if !errors.Is(err, ErrDeltaExpired) {
-			return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: observing remote delta: %w", err)
+			return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: observing remote delta: %w", err)
 		}
 
 		eng.logger.Warn("delta token expired, performing full resync")
 
 		events, token, topology, err = obs.FullDeltaWithShortcutTopology(ctx, "")
 		if err != nil {
-			return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: full resync after delta expiry: %w", err)
+			return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: full resync after delta expiry: %w", err)
 		}
 	}
 

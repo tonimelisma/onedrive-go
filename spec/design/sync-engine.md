@@ -65,7 +65,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
-| Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectReleasedShortcutRootAfterDrainAck`, `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
+| Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
 | Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child runner-action publications reach multisync. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename` |
 
 ## Construction
@@ -193,11 +193,11 @@ read from `engine_runtime_completion.go` plus the trial-specific
 
 Parent child-admission readiness is part of the normal parent startup path.
 Multisync asks selected parent engines to run the normal initial
-plan-publication stage before any child engine is admitted. That stage
+child-topology publication stage before any child engine is admitted. That stage
 performs the same remote
 observation cadence decision, full local observation, current-plan build,
 retry/block reconciliation, and shortcut-root lifecycle publication the parent
-would otherwise need for its first pass. The prepared engine then continues
+would otherwise need for its first pass. The startup parent engine then continues
 into one-shot execution or watch mode, so child topology is derived from fresh
 parent local and remote truth rather than cached control-plane state.
 
@@ -428,12 +428,15 @@ lifecycle.
 
 When a child final drain completes, multisync acknowledges that completion to
 the already-running parent engine. The parent engine first persists
-`removed_release_pending`, then releases its own protected alias projection and
-removes the `shortcut_roots` row, or promotes a waiting same-path replacement
-to `active`, before multisync stops and forgets the retiring child runner. If
-cleanup is interrupted or blocked, startup and later topology refresh retry the
-release from `removed_release_pending` or `removed_cleanup_blocked`; a later
-complete topology batch is not required to release that parent protected-root.
+`removed_release_pending`, then releases its own protected alias projection or
+promotes a waiting same-path replacement to `active`. After parent release, the
+old binding remains in `removed_child_cleanup_pending` without protected paths
+and publishes a child artifact cleanup request. Multisync purges the
+child-owned artifacts and acknowledges cleanup; only then does the parent
+delete the cleanup-pending row. If cleanup is interrupted or blocked, startup
+and later topology refresh retry the release from `removed_release_pending` or
+`removed_cleanup_blocked`; a later complete topology batch is not required to
+release that parent protected-root.
 
 If the parent later observes that a retiring or cleanup-blocked shortcut alias
 directory is gone, it treats that as user-directed manual discard of the local

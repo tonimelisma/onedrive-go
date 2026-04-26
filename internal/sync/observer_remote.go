@@ -37,7 +37,7 @@ type RemoteWatchBatchHandler func(
 	ctx context.Context,
 	events []ChangeEvent,
 	newToken string,
-	topology ShortcutTopologyBatch,
+	topology shortcutTopologyBatch,
 ) (remoteObservationBatch, error)
 
 // RemoteObserver transforms Graph API delta responses into []ChangeEvent.
@@ -132,19 +132,19 @@ func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]Ch
 func (o *RemoteObserver) FullDeltaWithShortcutTopology(
 	ctx context.Context,
 	savedToken string,
-) ([]ChangeEvent, string, ShortcutTopologyBatch, error) {
+) ([]ChangeEvent, string, shortcutTopologyBatch, error) {
 	o.logger.Info("remote observer starting delta enumeration",
 		slog.String("drive_id", o.driveID.String()),
 		slog.Bool("has_token", savedToken != ""),
 	)
 
 	var events []ChangeEvent
-	topology := ShortcutTopologyBatch{
+	topology := shortcutTopologyBatch{
 		NamespaceID: o.shortcutTopologyNamespaceID,
-		Kind:        ShortcutTopologyObservationIncremental,
+		Kind:        shortcutTopologyObservationIncremental,
 	}
 	if savedToken == "" {
-		topology.Kind = ShortcutTopologyObservationComplete
+		topology.Kind = shortcutTopologyObservationComplete
 	}
 	inflight := make(map[string]InflightParent)
 	token := savedToken
@@ -162,7 +162,7 @@ func (o *RemoteObserver) FullDeltaWithShortcutTopology(
 		if err != nil {
 			o.stats.errors.Add(1)
 
-			return nil, "", ShortcutTopologyBatch{}, err
+			return nil, "", shortcutTopologyBatch{}, err
 		}
 
 		events = append(events, pageEvents...)
@@ -195,7 +195,7 @@ func (o *RemoteObserver) FullDeltaWithShortcutTopology(
 		token = newToken
 	}
 
-	return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: exceeded maximum page count (%d)", maxDeltaPaginationGuard)
+	return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: exceeded maximum page count (%d)", maxDeltaPaginationGuard)
 }
 
 // Watch continuously polls for remote delta changes and sends events to the
@@ -267,13 +267,13 @@ func (o *RemoteObserver) handleWatchBatch(
 	batches chan<- remoteObservationBatch,
 	polledEvents []ChangeEvent,
 	newToken string,
-	topology ShortcutTopologyBatch,
+	topology shortcutTopologyBatch,
 	interval time.Duration,
 	bo *retry.Backoff,
 	wakeCh <-chan struct{},
 	handleBatch RemoteWatchBatchHandler,
 ) watchStepResult {
-	if len(polledEvents) == 0 && !topology.ShouldApply() {
+	if len(polledEvents) == 0 && !topology.shouldApply() {
 		return o.handleZeroEventPoll(ctx, interval, bo, wakeCh)
 	}
 

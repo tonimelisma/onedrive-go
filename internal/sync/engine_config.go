@@ -26,7 +26,7 @@ type EngineMountConfig struct {
 	EnableWebsocket             bool
 	LocalRules                  LocalObservationRules
 	ShortcutTopologyNamespaceID string
-	ShortcutTopologyHandler     ShortcutChildTopologySink
+	ShortcutChildTopologySink   ShortcutChildTopologySink
 	TransferWorkers             int
 	CheckWorkers                int
 	MinFreeSpace                int64
@@ -87,7 +87,7 @@ func NewMountEngine(
 		EnableWebsocket:             mountCfg.EnableWebsocket,
 		LocalRules:                  mountCfg.LocalRules,
 		ShortcutTopologyNamespaceID: mountCfg.ShortcutTopologyNamespaceID,
-		ShortcutTopologyHandler:     mountCfg.ShortcutTopologyHandler,
+		ShortcutChildTopologySink:   mountCfg.ShortcutChildTopologySink,
 		TransferWorkers:             mountCfg.TransferWorkers,
 		CheckWorkers:                mountCfg.CheckWorkers,
 		MinFreeSpace:                mountCfg.MinFreeSpace,

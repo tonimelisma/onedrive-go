@@ -168,7 +168,7 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
 
 	var published ShortcutChildTopologyPublication
-	eng.shortcutTopologyHandler = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+	eng.shortcutChildTopologySink = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
 		published = publication
 		return nil
 	}

@@ -25,7 +25,7 @@ type remoteObservationBatch struct {
 	cursorToken           string
 	markFullRemoteRefresh bool
 	findings              ObservationFindingsBatch
-	shortcutTopology      ShortcutTopologyBatch
+	shortcutTopology      shortcutTopologyBatch
 	armFullRefreshTimer   bool
 	markFullRefreshIfIdle bool
 	applyAck              chan error
@@ -53,7 +53,7 @@ func (batch *remoteObservationBatch) deferredProgress() *remoteObservationBatch 
 	clone.observed = nil
 	clone.emitted = nil
 	clone.findings = ObservationFindingsBatch{}
-	clone.shortcutTopology = ShortcutTopologyBatch{}
+	clone.shortcutTopology = shortcutTopologyBatch{}
 	clone.armFullRefreshTimer = false
 	clone.markFullRefreshIfIdle = false
 	clone.applyAck = nil

@@ -8,22 +8,22 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-type ShortcutTopologyObservationKind string
+type shortcutTopologyObservationKind string
 
 const (
-	ShortcutTopologyObservationIncremental ShortcutTopologyObservationKind = "incremental"
-	ShortcutTopologyObservationComplete    ShortcutTopologyObservationKind = "complete"
+	shortcutTopologyObservationIncremental shortcutTopologyObservationKind = "incremental"
+	shortcutTopologyObservationComplete    shortcutTopologyObservationKind = "complete"
 )
 
-type ShortcutTopologyBatch struct {
+type shortcutTopologyBatch struct {
 	NamespaceID string
-	Kind        ShortcutTopologyObservationKind
-	Upserts     []ShortcutBindingUpsert
-	Deletes     []ShortcutBindingDelete
-	Unavailable []ShortcutBindingUnavailable
+	Kind        shortcutTopologyObservationKind
+	Upserts     []shortcutBindingUpsert
+	Deletes     []shortcutBindingDelete
+	Unavailable []shortcutBindingUnavailable
 }
 
-type ShortcutBindingUpsert struct {
+type shortcutBindingUpsert struct {
 	BindingItemID     string
 	RelativeLocalPath string
 	LocalAlias        string
@@ -33,11 +33,11 @@ type ShortcutBindingUpsert struct {
 	Complete          bool
 }
 
-type ShortcutBindingDelete struct {
+type shortcutBindingDelete struct {
 	BindingItemID string
 }
 
-type ShortcutBindingUnavailable struct {
+type shortcutBindingUnavailable struct {
 	BindingItemID     string
 	RelativeLocalPath string
 	LocalAlias        string
@@ -49,19 +49,9 @@ type ShortcutBindingUnavailable struct {
 
 type ShortcutChildTopologySink func(context.Context, ShortcutChildTopologyPublication) error
 
-type ShortcutTopologyHandler = ShortcutChildTopologySink
-
-type (
-	ShortcutChildTopologyState string
-	ShortcutChildRunnerAction  string
-)
+type ShortcutChildRunnerAction string
 
 const (
-	ShortcutChildDesired            ShortcutChildTopologyState = "desired"
-	ShortcutChildBlocked            ShortcutChildTopologyState = "blocked"
-	ShortcutChildRetiring           ShortcutChildTopologyState = "retiring"
-	ShortcutChildWaitingReplacement ShortcutChildTopologyState = "waiting_replacement"
-
 	ShortcutChildActionRun                    ShortcutChildRunnerAction = "run"
 	ShortcutChildActionFinalDrain             ShortcutChildRunnerAction = "final_drain"
 	ShortcutChildActionSkipParentBlocked      ShortcutChildRunnerAction = "skip_parent_blocked"
@@ -72,9 +62,9 @@ const (
 // lifecycle output to multisync. Raw shortcut observations stay inside
 // internal/sync; multisync only sees the already-persisted child runner view.
 type ShortcutChildTopologyPublication struct {
-	NamespaceID string
-	Children    []ShortcutChildTopology
-	Released    []ShortcutChildRelease
+	NamespaceID     string
+	Children        []ShortcutChildTopology
+	CleanupRequests []ShortcutChildArtifactCleanupRequest
 }
 
 type ShortcutChildTopologySnapshot = ShortcutChildTopologyPublication
@@ -87,7 +77,6 @@ type ShortcutChildTopology struct {
 	RemoteItemID      string
 	RemoteIsFolder    bool
 	RunnerAction      ShortcutChildRunnerAction
-	State             ShortcutChildTopologyState
 	BlockedDetail     string
 	ProtectedPaths    []string
 	LocalRootIdentity *ShortcutRootIdentity
@@ -126,30 +115,34 @@ func shortcutRootIdentityToFileIdentity(identity *ShortcutRootIdentity) *synctre
 	}
 }
 
-type ShortcutChildReleaseReason string
+type ShortcutChildArtifactCleanupReason string
 
 const (
-	ShortcutChildReleaseParentRemoved ShortcutChildReleaseReason = "parent_removed"
+	ShortcutChildArtifactCleanupParentRemoved ShortcutChildArtifactCleanupReason = "parent_removed"
 )
 
-type ShortcutChildRelease struct {
+type ShortcutChildArtifactCleanupRequest struct {
 	BindingItemID string
-	Reason        ShortcutChildReleaseReason
+	Reason        ShortcutChildArtifactCleanupReason
 }
 
 type ShortcutChildDrainAck struct {
 	BindingItemID string
 }
 
-func (b ShortcutTopologyBatch) HasFacts() bool {
+type ShortcutChildArtifactCleanupAck struct {
+	BindingItemID string
+}
+
+func (b shortcutTopologyBatch) hasFacts() bool {
 	return len(b.Upserts) > 0 || len(b.Deletes) > 0 || len(b.Unavailable) > 0
 }
 
-func (b ShortcutTopologyBatch) ShouldApply() bool {
-	return b.HasFacts() || b.Kind == ShortcutTopologyObservationComplete
+func (b shortcutTopologyBatch) shouldApply() bool {
+	return b.hasFacts() || b.Kind == shortcutTopologyObservationComplete
 }
 
-func (b *ShortcutTopologyBatch) appendUpsert(fact ShortcutBindingUpsert) {
+func (b *shortcutTopologyBatch) appendUpsert(fact shortcutBindingUpsert) {
 	if fact.BindingItemID == "" {
 		return
 	}
@@ -164,13 +157,13 @@ func (b *ShortcutTopologyBatch) appendUpsert(fact ShortcutBindingUpsert) {
 	b.Upserts = append(b.Upserts, fact)
 }
 
-func (b *ShortcutTopologyBatch) appendDelete(fact ShortcutBindingDelete) {
+func (b *shortcutTopologyBatch) appendDelete(fact shortcutBindingDelete) {
 	if fact.BindingItemID == "" {
 		return
 	}
 	b.removeUpsert(fact.BindingItemID)
 	b.removeUnavailable(fact.BindingItemID)
-	if slices.ContainsFunc(b.Deletes, func(existing ShortcutBindingDelete) bool {
+	if slices.ContainsFunc(b.Deletes, func(existing shortcutBindingDelete) bool {
 		return existing.BindingItemID == fact.BindingItemID
 	}) {
 		return
@@ -178,7 +171,7 @@ func (b *ShortcutTopologyBatch) appendDelete(fact ShortcutBindingDelete) {
 	b.Deletes = append(b.Deletes, fact)
 }
 
-func (b *ShortcutTopologyBatch) appendUnavailable(fact ShortcutBindingUnavailable) {
+func (b *shortcutTopologyBatch) appendUnavailable(fact shortcutBindingUnavailable) {
 	if fact.BindingItemID == "" {
 		return
 	}
@@ -193,20 +186,20 @@ func (b *ShortcutTopologyBatch) appendUnavailable(fact ShortcutBindingUnavailabl
 	b.Unavailable = append(b.Unavailable, fact)
 }
 
-func (b *ShortcutTopologyBatch) removeUpsert(bindingItemID string) {
-	b.Upserts = slices.DeleteFunc(b.Upserts, func(existing ShortcutBindingUpsert) bool {
+func (b *shortcutTopologyBatch) removeUpsert(bindingItemID string) {
+	b.Upserts = slices.DeleteFunc(b.Upserts, func(existing shortcutBindingUpsert) bool {
 		return existing.BindingItemID == bindingItemID
 	})
 }
 
-func (b *ShortcutTopologyBatch) removeDelete(bindingItemID string) {
-	b.Deletes = slices.DeleteFunc(b.Deletes, func(existing ShortcutBindingDelete) bool {
+func (b *shortcutTopologyBatch) removeDelete(bindingItemID string) {
+	b.Deletes = slices.DeleteFunc(b.Deletes, func(existing shortcutBindingDelete) bool {
 		return existing.BindingItemID == bindingItemID
 	})
 }
 
-func (b *ShortcutTopologyBatch) removeUnavailable(bindingItemID string) {
-	b.Unavailable = slices.DeleteFunc(b.Unavailable, func(existing ShortcutBindingUnavailable) bool {
+func (b *shortcutTopologyBatch) removeUnavailable(bindingItemID string) {
+	b.Unavailable = slices.DeleteFunc(b.Unavailable, func(existing shortcutBindingUnavailable) bool {
 		return existing.BindingItemID == bindingItemID
 	})
 }

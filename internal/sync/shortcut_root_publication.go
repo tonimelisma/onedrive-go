@@ -10,6 +10,13 @@ func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootReco
 		if root.NamespaceID != "" && root.NamespaceID != namespaceID {
 			continue
 		}
+		if root.State == ShortcutRootStateRemovedChildCleanupPending {
+			snapshot.CleanupRequests = append(snapshot.CleanupRequests, ShortcutChildArtifactCleanupRequest{
+				BindingItemID: root.BindingItemID,
+				Reason:        ShortcutChildArtifactCleanupParentRemoved,
+			})
+			continue
+		}
 		child := ShortcutChildTopology{
 			BindingItemID:     root.BindingItemID,
 			RelativeLocalPath: root.RelativeLocalPath,
@@ -18,7 +25,6 @@ func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootReco
 			RemoteItemID:      root.RemoteItemID,
 			RemoteIsFolder:    root.RemoteIsFolder,
 			RunnerAction:      shortcutChildRunnerActionForRoot(root.State),
-			State:             shortcutChildStateForRoot(root.State),
 			BlockedDetail:     root.BlockedDetail,
 			ProtectedPaths:    protectedPathsForShortcutRoot(root.RelativeLocalPath, root.ProtectedPaths),
 			LocalRootIdentity: shortcutRootIdentityFromFileIdentity(root.LocalRootIdentity),
@@ -41,7 +47,6 @@ func shortcutChildTopologyFromReplacement(replacement ShortcutRootReplacement) S
 		RemoteItemID:      replacement.RemoteItemID,
 		RemoteIsFolder:    replacement.RemoteIsFolder,
 		RunnerAction:      ShortcutChildActionSkipWaitingReplacement,
-		State:             ShortcutChildWaitingReplacement,
 		ProtectedPaths:    []string{replacement.RelativeLocalPath},
 	}
 }
@@ -59,30 +64,10 @@ func shortcutChildRunnerActionForRoot(state ShortcutRootState) ShortcutChildRunn
 		ShortcutRootStateAliasMutationBlocked,
 		ShortcutRootStateRemovedReleasePending,
 		ShortcutRootStateRemovedCleanupBlocked,
+		ShortcutRootStateRemovedChildCleanupPending,
 		ShortcutRootStateDuplicateTarget:
 		return ShortcutChildActionSkipParentBlocked
 	default:
 		return ShortcutChildActionSkipParentBlocked
-	}
-}
-
-func shortcutChildStateForRoot(state ShortcutRootState) ShortcutChildTopologyState {
-	switch state {
-	case "", ShortcutRootStateActive:
-		return ShortcutChildDesired
-	case ShortcutRootStateRemovedFinalDrain:
-		return ShortcutChildRetiring
-	case ShortcutRootStateSamePathReplacementWaiting:
-		return ShortcutChildRetiring
-	case ShortcutRootStateTargetUnavailable,
-		ShortcutRootStateBlockedPath,
-		ShortcutRootStateRenameAmbiguous,
-		ShortcutRootStateAliasMutationBlocked,
-		ShortcutRootStateRemovedReleasePending,
-		ShortcutRootStateRemovedCleanupBlocked,
-		ShortcutRootStateDuplicateTarget:
-		return ShortcutChildBlocked
-	default:
-		return ShortcutChildBlocked
 	}
 }

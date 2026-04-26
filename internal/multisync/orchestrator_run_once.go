@@ -55,8 +55,8 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 			fmt.Errorf("building mount specs: %w", err),
 		)
 	}
-	var preparedParents preparedParentEngines
-	compiled, preparedParents, err = o.prepareParentPlanPublication(
+	var startupParents startupParentEngines
+	compiled, startupParents, err = o.publishParentStartupChildTopology(
 		ctx,
 		compiled,
 		o.cfg.StandaloneMounts,
@@ -69,12 +69,13 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		return controlFailureRunOnceResult(
 			o.cfg.StandaloneMounts,
 			o.cfg.InitialStartupResults,
-			fmt.Errorf("preparing parent plan publication: %w", err),
+			fmt.Errorf("publishing parent startup child topology: %w", err),
 		)
 	}
-	defer o.closePreparedParentEngines(ctx, preparedParents)
-	if purgeErr := o.purgeReleasedShortcutChildArtifactsForCompiled(ctx, compiled); purgeErr != nil {
-		o.logger.Warn("purging released shortcut child state artifacts",
+	defer o.closeStartupParentEngines(ctx, startupParents)
+	parentArtifactAckers := parentStartupArtifactCleanupAckers(startupParents)
+	if purgeErr := o.purgeShortcutChildArtifactsForCompiled(ctx, compiled, parentArtifactAckers); purgeErr != nil {
+		o.logger.Warn("purging shortcut child state artifacts",
 			slog.String("error", purgeErr.Error()),
 		)
 	}
@@ -85,7 +86,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		slog.String("mode", mode.String()),
 	)
 
-	work, startup, reports := o.prepareRunOnceWork(ctx, mode, compiled.Mounts, compiled.Skipped, opts, preparedParents)
+	work, startup, reports := o.prepareRunOnceWork(ctx, mode, compiled.Mounts, compiled.Skipped, opts, startupParents)
 
 	var wg gosync.WaitGroup
 	for _, w := range work {
@@ -159,7 +160,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.RunOptions,
-	preparedParents preparedParentEngines,
+	startupParents startupParentEngines,
 ) ([]indexedMountWork, StartupSelectionSummary, []*MountReport) {
 	work := make([]indexedMountWork, 0, len(mounts))
 	reports := make([]*MountReport, 0, len(mounts))
@@ -177,11 +178,11 @@ func (o *Orchestrator) prepareRunOnceWork(
 			continue
 		}
 
-		o.attachShortcutTopologyHandler(mount, false)
-		if prepared := preparedParents[mount.mountID]; prepared != nil {
-			delete(preparedParents, mount.mountID)
-			setShortcutTopologyHandler(prepared, mount.shortcutTopologyHandler)
-			w := o.buildEngineWorkFromExisting(mount, prepared, mode, opts)
+		o.attachShortcutChildTopologySink(mount, false)
+		if startup := startupParents[mount.mountID]; startup != nil {
+			delete(startupParents, mount.mountID)
+			setShortcutChildTopologySink(startup, mount.shortcutChildTopologySink)
+			w := o.buildEngineWorkFromExisting(mount, startup, mode, opts)
 			startResults = append(startResults, MountStartupResult{
 				SelectionIndex: mount.selectionIndex,
 				Identity:       mount.identity(),
@@ -328,13 +329,13 @@ func (o *Orchestrator) closeRunOnceEngine(ctx context.Context, mount *mountSpec,
 	}
 }
 
-func runOnceParentDrainAckers(work []indexedMountWork) map[mountID]shortcutChildDrainAcker {
-	ackers := make(map[mountID]shortcutChildDrainAcker)
+func runOnceParentDrainAckers(work []indexedMountWork) map[mountID]shortcutChildLifecycleAcker {
+	ackers := make(map[mountID]shortcutChildLifecycleAcker)
 	for _, item := range work {
 		if item.work.mount == nil || item.work.mount.projectionKind != MountProjectionStandalone {
 			continue
 		}
-		acker, ok := item.work.engine.(shortcutChildDrainAcker)
+		acker, ok := item.work.engine.(shortcutChildLifecycleAcker)
 		if !ok {
 			continue
 		}
@@ -347,7 +348,7 @@ func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	ctx context.Context,
 	compiled *compiledMountSet,
 	reports []*MountReport,
-	parentAckers map[mountID]shortcutChildDrainAcker,
+	parentAckers map[mountID]shortcutChildLifecycleAcker,
 ) (bool, error) {
 	if compiled == nil || len(compiled.FinalDrainMountIDs) == 0 {
 		return false, nil
@@ -359,13 +360,16 @@ func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 		return false, nil
 	}
 
-	if err := acknowledgeSuccessfulFinalDrains(ctx, successful, compiled.Mounts, parentAckers); err != nil {
+	cleanups, err := acknowledgeSuccessfulFinalDrains(ctx, successful, compiled.Mounts, parentAckers)
+	if err != nil {
 		return false, err
 	}
-	if err := purgeShortcutChildArtifactsForResults(ctx, successful, compiled.Mounts, o.logger); err != nil {
+	if err := purgeShortcutChildArtifactsForCleanups(ctx, cleanups, o.logger); err != nil {
 		return false, err
 	}
-	o.forgetReleasedShortcutChildren(releasedShortcutChildrenForDrainResults(successful, compiled.Mounts))
+	if err := o.acknowledgeShortcutChildArtifactCleanups(ctx, cleanups, artifactCleanupAckersFromLifecycle(parentAckers)); err != nil {
+		return false, err
+	}
 	if o.logger != nil {
 		for _, result := range successful {
 			o.logger.Info("parent acknowledged drained shortcut child",
@@ -396,14 +400,15 @@ func acknowledgeSuccessfulFinalDrains(
 	ctx context.Context,
 	successful []shortcutChildDrainResult,
 	mounts []*mountSpec,
-	parentAckers map[mountID]shortcutChildDrainAcker,
-) error {
+	parentAckers map[mountID]shortcutChildLifecycleAcker,
+) ([]shortcutChildArtifactCleanup, error) {
 	mountByID := make(map[string]*mountSpec, len(mounts))
 	for _, mount := range mounts {
 		if mount != nil {
 			mountByID[mount.mountID.String()] = mount
 		}
 	}
+	cleanups := make([]shortcutChildArtifactCleanup, 0, len(successful))
 	for _, result := range successful {
 		mount := mountByID[result.MountID]
 		bindingItemID := result.BindingItemID
@@ -411,77 +416,59 @@ func acknowledgeSuccessfulFinalDrains(
 			bindingItemID = mount.bindingItemID
 		}
 		if mount == nil || bindingItemID == "" {
-			return fmt.Errorf("final-drain child mount %s is missing parent binding identity", result.MountID)
+			return nil, fmt.Errorf("final-drain child mount %s is missing parent binding identity", result.MountID)
 		}
 		acker := parentAckers[mount.parentMountID]
 		if acker == nil {
-			return fmt.Errorf("parent mount %s is unavailable for final-drain acknowledgement", mount.parentMountID)
+			return nil, fmt.Errorf("parent mount %s is unavailable for final-drain acknowledgement", mount.parentMountID)
 		}
-		if _, err := acker.AcknowledgeChildFinalDrain(ctx, syncengine.ShortcutChildDrainAck{
+		snapshot, err := acker.AcknowledgeChildFinalDrain(ctx, syncengine.ShortcutChildDrainAck{
 			BindingItemID: bindingItemID,
-		}); err != nil {
-			return fmt.Errorf("acknowledging final drain for child mount %s: %w", result.MountID, err)
-		}
-	}
-	return nil
-}
-
-func releasedShortcutChildrenForDrainResults(
-	successful []shortcutChildDrainResult,
-	mounts []*mountSpec,
-) []releasedShortcutChild {
-	if len(successful) == 0 {
-		return nil
-	}
-	mountByID := make(map[string]*mountSpec, len(mounts))
-	for _, mount := range mounts {
-		if mount != nil {
-			mountByID[mount.mountID.String()] = mount
-		}
-	}
-	releases := make([]releasedShortcutChild, 0, len(successful))
-	for _, result := range successful {
-		mount := mountByID[result.MountID]
-		if mount == nil {
-			continue
-		}
-		bindingItemID := result.BindingItemID
-		if bindingItemID == "" {
-			bindingItemID = mount.bindingItemID
-		}
-		if bindingItemID == "" {
-			continue
-		}
-		releases = append(releases, releasedShortcutChild{
-			mountID:       result.MountID,
-			namespaceID:   mount.parentMountID.String(),
-			bindingItemID: bindingItemID,
-			reason:        syncengine.ShortcutChildReleaseParentRemoved,
 		})
+		if err != nil {
+			return nil, fmt.Errorf("acknowledging final drain for child mount %s: %w", result.MountID, err)
+		}
+		cleanups = append(cleanups, shortcutChildArtifactCleanups(map[mountID]syncengine.ShortcutChildTopologyPublication{
+			mount.parentMountID: snapshot,
+		})...)
 	}
-	return releases
+	return cleanups, nil
 }
 
-func purgeShortcutChildArtifactsForResults(
+func artifactCleanupAckersFromLifecycle(
+	lifecycle map[mountID]shortcutChildLifecycleAcker,
+) map[mountID]shortcutChildArtifactCleanupAcker {
+	ackers := make(map[mountID]shortcutChildArtifactCleanupAcker, len(lifecycle))
+	for id, acker := range lifecycle {
+		ackers[id] = acker
+	}
+	return ackers
+}
+
+func parentStartupArtifactCleanupAckers(
+	started startupParentEngines,
+) map[mountID]shortcutChildArtifactCleanupAcker {
+	ackers := make(map[mountID]shortcutChildArtifactCleanupAcker)
+	for parentID, engine := range started {
+		acker, ok := engine.(shortcutChildArtifactCleanupAcker)
+		if !ok {
+			continue
+		}
+		ackers[parentID] = acker
+	}
+	return ackers
+}
+
+func purgeShortcutChildArtifactsForCleanups(
 	ctx context.Context,
-	successful []shortcutChildDrainResult,
-	mounts []*mountSpec,
+	cleanups []shortcutChildArtifactCleanup,
 	logger *slog.Logger,
 ) error {
-	mountByID := make(map[string]*mountSpec, len(mounts))
-	for _, mount := range mounts {
-		if mount != nil {
-			mountByID[mount.mountID.String()] = mount
-		}
-	}
 	var errs []error
-	for _, result := range successful {
-		scope := shortcutChildArtifactScope{mountID: result.MountID}
-		if mount := mountByID[result.MountID]; mount != nil {
-			scope.localRoot = mount.syncRoot
-		}
+	for _, cleanup := range cleanups {
+		scope := shortcutChildArtifactScope{mountID: cleanup.mountID}
 		if err := purgeShortcutChildArtifacts(ctx, scope, logger); err != nil {
-			errs = append(errs, fmt.Errorf("purging final-drain child mount %s: %w", result.MountID, err))
+			errs = append(errs, fmt.Errorf("purging final-drain child mount %s: %w", cleanup.mountID, err))
 		}
 	}
 	return errors.Join(errs...)

@@ -64,8 +64,8 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 		return nil
 	}
 
-	if err := rt.applyShortcutTopologyBatch(ctx, batch); err != nil {
-		return fmt.Errorf("apply shortcut topology batch: %w", err)
+	if err := rt.applyShortcutObservationBatch(ctx, batch); err != nil {
+		return fmt.Errorf("apply shortcut observation batch: %w", err)
 	}
 
 	commitToken := ""

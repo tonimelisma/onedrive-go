@@ -15,38 +15,38 @@ import (
 const shortcutTopologyTestNamespaceID = "personal:owner@example.com"
 
 // Validates: R-2.4.3, R-2.4.8
-func TestShortcutTopologyBatch_ShouldApplyCompleteEvenWithoutFacts(t *testing.T) {
+func TestShortcutObservationBatch_ShouldApplyCompleteEvenWithoutFacts(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, ShortcutTopologyBatch{
-		Kind: ShortcutTopologyObservationComplete,
-	}.ShouldApply())
-	assert.True(t, ShortcutTopologyBatch{
-		Kind: ShortcutTopologyObservationIncremental,
-		Deletes: []ShortcutBindingDelete{{
+	assert.True(t, shortcutTopologyBatch{
+		Kind: shortcutTopologyObservationComplete,
+	}.shouldApply())
+	assert.True(t, shortcutTopologyBatch{
+		Kind: shortcutTopologyObservationIncremental,
+		Deletes: []shortcutBindingDelete{{
 			BindingItemID: "binding-1",
 		}},
-	}.ShouldApply())
-	assert.False(t, ShortcutTopologyBatch{
-		Kind: ShortcutTopologyObservationIncremental,
-	}.ShouldApply())
+	}.shouldApply())
+	assert.False(t, shortcutTopologyBatch{
+		Kind: shortcutTopologyObservationIncremental,
+	}.shouldApply())
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestApplyShortcutTopologyBatch_ForwardsEmptyCompleteBatch(t *testing.T) {
+func TestApplyShortcutObservationBatch_ForwardsEmptyCompleteBatch(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
 	var got []ShortcutChildTopologyPublication
-	eng.shortcutTopologyHandler = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+	eng.shortcutChildTopologySink = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
 		got = append(got, publication)
 		return nil
 	}
 
-	err := testEngineFlow(t, eng).applyShortcutTopologyBatch(t.Context(), &remoteObservationBatch{
-		shortcutTopology: ShortcutTopologyBatch{
-			Kind: ShortcutTopologyObservationComplete,
+	err := testEngineFlow(t, eng).applyShortcutObservationBatch(t.Context(), &remoteObservationBatch{
+		shortcutTopology: shortcutTopologyBatch{
+			Kind: shortcutTopologyObservationComplete,
 		},
 	})
 	require.NoError(t, err)
@@ -57,12 +57,12 @@ func TestApplyShortcutTopologyBatch_ForwardsEmptyCompleteBatch(t *testing.T) {
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler(t *testing.T) {
+func TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
-	eng.shortcutTopologyHandler = func(ctx context.Context, publication ShortcutChildTopologyPublication) error {
+	eng.shortcutChildTopologySink = func(ctx context.Context, publication ShortcutChildTopologyPublication) error {
 		roots, err := eng.baseline.ListShortcutRoots(ctx)
 		require.NoError(t, err)
 		require.Len(t, roots, 1)
@@ -73,10 +73,10 @@ func TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler(t *testing.
 		return nil
 	}
 
-	err := testEngineFlow(t, eng).applyShortcutTopologyBatch(t.Context(), &remoteObservationBatch{
-		shortcutTopology: ShortcutTopologyBatch{
-			Kind: ShortcutTopologyObservationIncremental,
-			Upserts: []ShortcutBindingUpsert{{
+	err := testEngineFlow(t, eng).applyShortcutObservationBatch(t.Context(), &remoteObservationBatch{
+		shortcutTopology: shortcutTopologyBatch{
+			Kind: shortcutTopologyObservationIncremental,
+			Upserts: []shortcutBindingUpsert{{
 				BindingItemID:     "binding-1",
 				RelativeLocalPath: "Shared/Docs",
 				LocalAlias:        "Docs",
@@ -91,25 +91,25 @@ func TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler(t *testing.
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestApplyShortcutTopologyBatch_SkipsEmptyIncrementalBatch(t *testing.T) {
+func TestApplyShortcutObservationBatch_SkipsEmptyIncrementalBatch(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
-	eng.shortcutTopologyHandler = func(_ context.Context, _ ShortcutChildTopologyPublication) error {
+	eng.shortcutChildTopologySink = func(_ context.Context, _ ShortcutChildTopologyPublication) error {
 		require.FailNow(t, "empty incremental topology batch should not be applied")
 		return nil
 	}
 
-	err := testEngineFlow(t, eng).applyShortcutTopologyBatch(t.Context(), &remoteObservationBatch{
-		shortcutTopology: ShortcutTopologyBatch{
-			Kind: ShortcutTopologyObservationIncremental,
+	err := testEngineFlow(t, eng).applyShortcutObservationBatch(t.Context(), &remoteObservationBatch{
+		shortcutTopology: shortcutTopologyBatch{
+			Kind: shortcutTopologyObservationIncremental,
 		},
 	})
 	require.NoError(t, err)
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestPrepareInitialPlanPublication_ForwardsEmptyCompleteBatchWithoutCommittingCursor(t *testing.T) {
+func TestPublishInitialChildTopology_ForwardsEmptyCompleteBatchWithoutCommittingCursor(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -123,12 +123,12 @@ func TestPrepareInitialPlanPublication_ForwardsEmptyCompleteBatchWithoutCommitti
 	eng, _ := newTestEngine(t, mock)
 	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
 	var got []ShortcutChildTopologyPublication
-	eng.shortcutTopologyHandler = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+	eng.shortcutChildTopologySink = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
 		got = append(got, publication)
 		return nil
 	}
 
-	snapshot, err := eng.PrepareInitialPlanPublication(t.Context(), SyncBidirectional, RunOptions{})
+	snapshot, err := eng.PublishInitialChildTopology(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
 	require.Len(t, got, 1)
@@ -139,7 +139,7 @@ func TestPrepareInitialPlanPublication_ForwardsEmptyCompleteBatchWithoutCommitti
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestPrepareInitialPlanPublication_ApplyFailureDoesNotCommitCursor(t *testing.T) {
+func TestPublishInitialChildTopology_ApplyFailureDoesNotCommitCursor(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -153,11 +153,11 @@ func TestPrepareInitialPlanPublication_ApplyFailureDoesNotCommitCursor(t *testin
 	eng, _ := newTestEngine(t, mock)
 	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
 	applyErr := errors.New("persist topology")
-	eng.shortcutTopologyHandler = func(_ context.Context, _ ShortcutChildTopologyPublication) error {
+	eng.shortcutChildTopologySink = func(_ context.Context, _ ShortcutChildTopologyPublication) error {
 		return applyErr
 	}
 
-	_, err := eng.PrepareInitialPlanPublication(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.PublishInitialChildTopology(t.Context(), SyncBidirectional, RunOptions{})
 	require.ErrorIs(t, err, applyErr)
 	assert.Empty(t, readObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
 }

@@ -111,8 +111,8 @@ func (o *Orchestrator) startWatchRuntime(
 	if err != nil {
 		return nil, control, fmt.Errorf("sync: building mount specs: %w", err)
 	}
-	var preparedParents preparedParentEngines
-	compiled, preparedParents, err = o.prepareParentPlanPublication(
+	var startupParents startupParentEngines
+	compiled, startupParents, err = o.publishParentStartupChildTopology(
 		ctx,
 		compiled,
 		o.cfg.StandaloneMounts,
@@ -122,10 +122,11 @@ func (o *Orchestrator) startWatchRuntime(
 		syncengine.RunOptions{},
 	)
 	if err != nil {
-		return nil, control, fmt.Errorf("sync: preparing parent plan publication: %w", err)
+		return nil, control, fmt.Errorf("sync: publishing parent startup child topology: %w", err)
 	}
-	if purgeErr := o.purgeReleasedShortcutChildArtifactsForCompiled(ctx, compiled); purgeErr != nil {
-		o.logger.Warn("purging released shortcut child state artifacts",
+	parentArtifactAckers := parentStartupArtifactCleanupAckers(startupParents)
+	if purgeErr := o.purgeShortcutChildArtifactsForCompiled(ctx, compiled, parentArtifactAckers); purgeErr != nil {
+		o.logger.Warn("purging shortcut child state artifacts",
 			slog.String("error", purgeErr.Error()),
 		)
 	}
@@ -143,9 +144,9 @@ func (o *Orchestrator) startWatchRuntime(
 		compiled.Skipped,
 		opts,
 		runnerEvents,
-		preparedParents,
+		startupParents,
 	)
-	o.closePreparedParentEngines(ctx, preparedParents)
+	o.closeStartupParentEngines(ctx, startupParents)
 	startSummary := summarizeStartupResults(startResults)
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
 		return nil, control, err
@@ -164,7 +165,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 	initialStartup []MountStartupResult,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
-	preparedParents preparedParentEngines,
+	startupParents startupParentEngines,
 ) (map[mountID]*watchRunner, []MountStartupResult) {
 	runners := make(map[mountID]*watchRunner)
 	startResults := append([]MountStartupResult(nil), initialStartup...)
@@ -185,13 +186,13 @@ func (o *Orchestrator) startInitialWatchRunners(
 			continue
 		}
 
-		o.attachShortcutTopologyHandler(mount, true)
-		prepared := preparedParents[mount.mountID]
-		if prepared != nil {
-			delete(preparedParents, mount.mountID)
-			setShortcutTopologyHandler(prepared, mount.shortcutTopologyHandler)
+		o.attachShortcutChildTopologySink(mount, true)
+		startup := startupParents[mount.mountID]
+		if startup != nil {
+			delete(startupParents, mount.mountID)
+			setShortcutChildTopologySink(startup, mount.shortcutChildTopologySink)
 		}
-		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents, prepared)
+		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents, startup)
 		if err != nil {
 			o.logger.Error("failed to start watch runner",
 				slog.String("mount_id", mount.mountID.String()),
@@ -251,9 +252,9 @@ func (o *Orchestrator) startWatchRunner(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
-	prepared engineRunner,
+	startup engineRunner,
 ) (*watchRunner, error) {
-	engine := prepared
+	engine := startup
 	if engine == nil {
 		session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 		if err != nil {
@@ -379,8 +380,8 @@ func (o *Orchestrator) reload(
 		)
 		return
 	}
-	var preparedParents preparedParentEngines
-	newMounts, preparedParents, err = o.prepareParentPlanPublication(
+	var startupParents startupParentEngines
+	newMounts, startupParents, err = o.publishParentStartupChildTopology(
 		ctx,
 		newMounts,
 		newSelection.Mounts,
@@ -395,7 +396,7 @@ func (o *Orchestrator) reload(
 		o.cfg.InitialStartupResults = oldStartup
 		o.cfg.Runtime.FlushTokenCache()
 		o.logger.Warn("config reload failed, keeping current state",
-			slog.String("error", fmt.Errorf("preparing parent plan publication after reload: %w", err).Error()),
+			slog.String("error", fmt.Errorf("publishing parent startup child topology after reload: %w", err).Error()),
 		)
 		return
 	}
@@ -407,9 +408,9 @@ func (o *Orchestrator) reload(
 		mode,
 		opts,
 		runnerEvents,
-		preparedParents,
+		startupParents,
 	)
-	o.closePreparedParentEngines(ctx, preparedParents)
+	o.closeStartupParentEngines(ctx, startupParents)
 	if len(startResults) > 0 {
 		o.emitStartWarning(summarizeStartupResults(startResults))
 	}
@@ -537,13 +538,38 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 	}
 }
 
-func watchParentDrainAckers(runners map[mountID]*watchRunner) map[mountID]shortcutChildDrainAcker {
-	ackers := make(map[mountID]shortcutChildDrainAcker)
+func watchParentDrainAckers(runners map[mountID]*watchRunner) map[mountID]shortcutChildLifecycleAcker {
+	ackers := make(map[mountID]shortcutChildLifecycleAcker)
 	for id, runner := range runners {
 		if runner == nil || runner.mount == nil || runner.mount.projectionKind != MountProjectionStandalone {
 			continue
 		}
-		acker, ok := runner.engine.(shortcutChildDrainAcker)
+		acker, ok := runner.engine.(shortcutChildLifecycleAcker)
+		if !ok {
+			continue
+		}
+		ackers[id] = acker
+	}
+	return ackers
+}
+
+func watchParentArtifactCleanupAckers(
+	runners map[mountID]*watchRunner,
+	startupParents startupParentEngines,
+) map[mountID]shortcutChildArtifactCleanupAcker {
+	ackers := make(map[mountID]shortcutChildArtifactCleanupAcker)
+	for id, runner := range runners {
+		if runner == nil || runner.mount == nil || runner.mount.projectionKind != MountProjectionStandalone {
+			continue
+		}
+		acker, ok := runner.engine.(shortcutChildArtifactCleanupAcker)
+		if !ok {
+			continue
+		}
+		ackers[id] = acker
+	}
+	for id, engine := range startupParents {
+		acker, ok := engine.(shortcutChildArtifactCleanupAcker)
 		if !ok {
 			continue
 		}
@@ -584,12 +610,13 @@ func (o *Orchestrator) applyWatchMountSet(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
-	preparedParents preparedParentEngines,
+	startupParents startupParentEngines,
 ) (int, int, []MountStartupResult) {
 	runnable := runnableMountMap(compiled.Mounts)
 	stopped := o.stopInactiveWatchRunners(ctx, runners, runnable)
-	if purgeErr := o.purgeReleasedShortcutChildArtifactsForCompiled(ctx, compiled); purgeErr != nil {
-		o.logger.Warn("purging released shortcut child state artifacts",
+	parentArtifactAckers := watchParentArtifactCleanupAckers(runners, startupParents)
+	if purgeErr := o.purgeShortcutChildArtifactsForCompiled(ctx, compiled, parentArtifactAckers); purgeErr != nil {
+		o.logger.Warn("purging shortcut child state artifacts",
 			slog.String("error", purgeErr.Error()),
 		)
 	}
@@ -601,7 +628,7 @@ func (o *Orchestrator) applyWatchMountSet(
 		mode,
 		opts,
 		runnerEvents,
-		preparedParents,
+		startupParents,
 	)
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 
@@ -713,7 +740,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
-	preparedParents preparedParentEngines,
+	startupParents startupParentEngines,
 ) (int, []MountStartupResult) {
 	started := 0
 	startResults := append([]MountStartupResult(nil), initialStartup...)
@@ -724,13 +751,13 @@ func (o *Orchestrator) startReloadWatchRunners(
 			continue
 		}
 
-		o.attachShortcutTopologyHandler(mount, true)
-		prepared := preparedParents[mount.mountID]
-		if prepared != nil {
-			delete(preparedParents, mount.mountID)
-			setShortcutTopologyHandler(prepared, mount.shortcutTopologyHandler)
+		o.attachShortcutChildTopologySink(mount, true)
+		startup := startupParents[mount.mountID]
+		if startup != nil {
+			delete(startupParents, mount.mountID)
+			setShortcutChildTopologySink(startup, mount.shortcutChildTopologySink)
 		}
-		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents, prepared)
+		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents, startup)
 		if err != nil {
 			o.logger.Error("failed to start watch runner during reload",
 				slog.String("mount_id", id.String()),

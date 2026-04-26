@@ -28,6 +28,18 @@ type shortcutChildDrainAcker interface {
 	) (syncengine.ShortcutChildTopologySnapshot, error)
 }
 
+type shortcutChildArtifactCleanupAcker interface {
+	AcknowledgeChildArtifactsPurged(
+		context.Context,
+		syncengine.ShortcutChildArtifactCleanupAck,
+	) (syncengine.ShortcutChildTopologySnapshot, error)
+}
+
+type shortcutChildLifecycleAcker interface {
+	shortcutChildDrainAcker
+	shortcutChildArtifactCleanupAcker
+}
+
 type engineFactoryRequest struct {
 	Session       *driveops.Session
 	Mount         *mountSpec
@@ -45,17 +57,17 @@ type engineFactoryFunc func(ctx context.Context, req engineFactoryRequest) (engi
 // Config and config path are accessed via Holder — a single source of truth
 // shared with SessionRuntime. Control-socket reload updates config in one place.
 type OrchestratorConfig struct {
-	Holder                              *config.Holder
-	StandaloneMounts                    []StandaloneMountConfig
-	InitialStartupResults               []MountStartupResult
-	ReloadStandaloneMounts              func(*config.Config) (StandaloneMountSelection, error)
-	Runtime                             *driveops.SessionRuntime // token caching + Session creation
-	Logger                              *slog.Logger
-	ControlSocketPath                   string
-	StartWarning                        func(StartupWarning)
-	DebugEventHook                      func(syncengine.DebugEvent)
-	PerfParent                          *perf.Collector
-	disableParentPlanPublicationPrepare bool
+	Holder                            *config.Holder
+	StandaloneMounts                  []StandaloneMountConfig
+	InitialStartupResults             []MountStartupResult
+	ReloadStandaloneMounts            func(*config.Config) (StandaloneMountSelection, error)
+	Runtime                           *driveops.SessionRuntime // token caching + Session creation
+	Logger                            *slog.Logger
+	ControlSocketPath                 string
+	StartWarning                      func(StartupWarning)
+	DebugEventHook                    func(syncengine.DebugEvent)
+	PerfParent                        *perf.Collector
+	disableParentStartupChildTopology bool
 }
 
 // Orchestrator manages per-mount sync runners. It is always used, even for a
