@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
+
+// Validates: R-2.4.8, R-2.11.1
+func TestLocalFilterConfigDoesNotCarryProtectedRoots(t *testing.T) {
+	t.Parallel()
+
+	filterType := reflect.TypeOf(LocalFilterConfig{})
+	_, hasProtectedRoots := filterType.FieldByName("ProtectedRoots")
+
+	assert.False(t, hasProtectedRoots)
+}
 
 // itemTypeFromDirEntry maps a DirEntry to the sync engine's ItemType.
 // Test-only helper — not used in production code.
@@ -1368,13 +1379,14 @@ func TestFullScan_PathTooLong(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type shouldObserveCase struct {
-	name       string
-	fileName   string
-	path       string
-	filter     LocalFilterConfig
-	rules      LocalObservationRules
-	wantNil    bool
-	wantReason string
+	name           string
+	fileName       string
+	path           string
+	filter         LocalFilterConfig
+	protectedRoots []ProtectedRoot
+	rules          LocalObservationRules
+	wantNil        bool
+	wantReason     string
 }
 
 func runShouldObserveCases(t *testing.T, tests []shouldObserveCase) {
@@ -1385,7 +1397,14 @@ func runShouldObserveCases(t *testing.T, tests []shouldObserveCase) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			skip := shouldObserveWithFilter(tt.fileName, tt.path, observedKindUnknown, tt.filter, tt.rules)
+			skip := shouldObserveWithFilter(
+				tt.fileName,
+				tt.path,
+				observedKindUnknown,
+				tt.filter,
+				tt.protectedRoots,
+				tt.rules,
+			)
 
 			if tt.wantNil {
 				assert.Nil(t, skip, "ShouldObserve(%q, %q) should return nil", tt.fileName, tt.path)
@@ -1509,33 +1528,29 @@ func TestShouldObserve_PathScopedSkipDirs(t *testing.T) {
 }
 
 // Validates: R-2.8.1, R-2.11.1
-func TestShouldObserve_ManagedRootReservationsSkipPath(t *testing.T) {
+func TestShouldObserve_ProtectedRootsSkipPath(t *testing.T) {
 	t.Parallel()
 
 	runShouldObserveCases(t, []shouldObserveCase{
 		{
-			name:     "skip managed root path",
-			fileName: "Docs",
-			path:     "Shared/Docs",
-			filter: LocalFilterConfig{
-				ManagedRoots: []ManagedRootReservation{{Path: "Shared/Docs", MountID: "child"}},
-			},
-			wantNil: false,
+			name:           "skip protected root path",
+			fileName:       "Docs",
+			path:           "Shared/Docs",
+			protectedRoots: []ProtectedRoot{{Path: "Shared/Docs", MountID: "child"}},
+			wantNil:        false,
 		},
 		{
-			name:     "skip managed root subtree",
-			fileName: "file.txt",
-			path:     "Shared/Docs/file.txt",
-			filter: LocalFilterConfig{
-				ManagedRoots: []ManagedRootReservation{{Path: "Shared/Docs", MountID: "child"}},
-			},
-			wantNil: false,
+			name:           "skip protected root subtree",
+			fileName:       "file.txt",
+			path:           "Shared/Docs/file.txt",
+			protectedRoots: []ProtectedRoot{{Path: "Shared/Docs", MountID: "child"}},
+			wantNil:        false,
 		},
 	})
 }
 
 // Validates: R-2.8.1, R-2.11.1
-func TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot(t *testing.T) {
+func TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot(t *testing.T) {
 	t.Parallel()
 
 	syncRoot := t.TempDir()
@@ -1548,24 +1563,23 @@ func TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, os.Rename(original, renamed))
 
-	events := make(chan ManagedRootEvent, 1)
+	events := make(chan ProtectedRootEvent, 1)
 	obs := NewLocalObserver(baselineWith(&BaselineEntry{
 		Path:     "Shared",
 		DriveID:  driveid.New("drive"),
 		ItemID:   "shared-id",
 		ItemType: ItemTypeFolder,
 	}), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(LocalFilterConfig{
-		ManagedRoots: []ManagedRootReservation{{
-			Path:        "Shared/Docs",
-			MountID:     "child",
-			BindingID:   "binding",
-			Device:      identity.Device,
-			Inode:       identity.Inode,
-			HasIdentity: true,
-		}},
-	})
-	obs.SetManagedRootEventSink(func(event ManagedRootEvent) {
+	obs.SetFilterConfig(LocalFilterConfig{})
+	obs.SetProtectedRoots([]ProtectedRoot{{
+		Path:        "Shared/Docs",
+		MountID:     "child",
+		BindingID:   "binding",
+		Device:      identity.Device,
+		Inode:       identity.Inode,
+		HasIdentity: true,
+	}})
+	obs.SetProtectedRootEventSink(func(event ProtectedRootEvent) {
 		events <- event
 	})
 
@@ -1575,7 +1589,7 @@ func TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot(t *testing.T) {
 	assert.Empty(t, result.Events)
 	require.Len(t, events, 1)
 	event := <-events
-	assert.Equal(t, ManagedRootEventIdentityMatch, event.Type)
+	assert.Equal(t, ProtectedRootEventIdentityMatch, event.Type)
 	assert.Equal(t, "Shared/Renamed", event.Path)
 	assert.Equal(t, "Shared/Docs", event.ReservedPath)
 	assert.Equal(t, "child", event.MountID)

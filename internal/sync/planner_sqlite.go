@@ -115,7 +115,12 @@ func descendantRemoteMoveCoveredByFolderMove(action Action, folderMoves []remote
 		return false
 	}
 	for _, move := range folderMoves {
-		if strings.HasPrefix(action.OldPath, move.oldPrefix) && strings.HasPrefix(action.Path, move.newPrefix) {
+		if !strings.HasPrefix(action.OldPath, move.oldPrefix) || !strings.HasPrefix(action.Path, move.newPrefix) {
+			continue
+		}
+		oldSuffix := strings.TrimPrefix(action.OldPath, move.oldPrefix)
+		newSuffix := strings.TrimPrefix(action.Path, move.newPrefix)
+		if oldSuffix == newSuffix {
 			return true
 		}
 	}

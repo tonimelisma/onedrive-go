@@ -31,21 +31,29 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 	}
 
 	if item.DownloadURL == "" {
-		// Warn, not Error: this is expected for folders, OneNote packages, and
-		// zero-byte files — not a terminal failure requiring investigation.
-		c.logger.Warn("item has no download URL",
-			slog.String("drive_id", driveID.String()),
-			slog.String("item_id", itemID),
-			slog.Bool("is_folder", item.IsFolder),
-			slog.Bool("is_package", item.IsPackage),
-		)
-
+		c.logMissingDownloadURL(driveID, itemID, item)
 		return 0, ErrNoDownloadURL
 	}
 
 	n, err := c.downloadFromURL(ctx, string(item.DownloadURL), w)
 	if err != nil {
-		return 0, err
+		if !isPreAuthDownloadUnauthorized(err) {
+			return 0, err
+		}
+
+		item, err = c.refreshDownloadItemAfterPreAuthUnauthorized(ctx, driveID, itemID)
+		if err != nil {
+			return 0, err
+		}
+		if item.DownloadURL == "" {
+			c.logMissingDownloadURL(driveID, itemID, item)
+			return 0, ErrNoDownloadURL
+		}
+
+		n, err = c.downloadFromURL(ctx, string(item.DownloadURL), w)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	c.logger.Debug("download complete",
@@ -77,19 +85,29 @@ func (c *Client) DownloadRange(
 	}
 
 	if item.DownloadURL == "" {
-		c.logger.Warn("item has no download URL",
-			slog.String("drive_id", driveID.String()),
-			slog.String("item_id", itemID),
-			slog.Bool("is_folder", item.IsFolder),
-			slog.Bool("is_package", item.IsPackage),
-		)
-
+		c.logMissingDownloadURL(driveID, itemID, item)
 		return 0, ErrNoDownloadURL
 	}
 
 	n, err := c.downloadFromURLWithRange(ctx, string(item.DownloadURL), w, offset)
 	if err != nil {
-		return 0, err
+		if !isPreAuthDownloadUnauthorized(err) {
+			return 0, err
+		}
+
+		item, err = c.refreshDownloadItemAfterPreAuthUnauthorized(ctx, driveID, itemID)
+		if err != nil {
+			return 0, err
+		}
+		if item.DownloadURL == "" {
+			c.logMissingDownloadURL(driveID, itemID, item)
+			return 0, ErrNoDownloadURL
+		}
+
+		n, err = c.downloadFromURLWithRange(ctx, string(item.DownloadURL), w, offset)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	c.logger.Debug("range download complete",
@@ -110,6 +128,44 @@ func (c *Client) downloadItemMetadata(ctx context.Context, driveID driveid.ID, i
 	}, func() (*Item, error) {
 		return c.GetItem(ctx, driveID, itemID)
 	})
+}
+
+func (c *Client) refreshDownloadItemAfterPreAuthUnauthorized(
+	ctx context.Context,
+	driveID driveid.ID,
+	itemID string,
+) (*Item, error) {
+	c.logger.Debug("refreshing pre-authenticated download URL after unauthorized response",
+		slog.String("drive_id", driveID.String()),
+		slog.String("item_id", itemID),
+	)
+
+	item, err := c.downloadItemMetadata(ctx, driveID, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("graph: refreshing item after unauthorized download URL: %w", err)
+	}
+
+	return item, nil
+}
+
+func (c *Client) logMissingDownloadURL(driveID driveid.ID, itemID string, item *Item) {
+	// Warn, not Error: this is expected for folders, OneNote packages, and
+	// zero-byte files, so the caller decides whether it is terminal.
+	c.logger.Warn("item has no download URL",
+		slog.String("drive_id", driveID.String()),
+		slog.String("item_id", itemID),
+		slog.Bool("is_folder", item != nil && item.IsFolder),
+		slog.Bool("is_package", item != nil && item.IsPackage),
+	)
+}
+
+func isPreAuthDownloadUnauthorized(err error) bool {
+	if !errors.Is(err, ErrUnauthorized) {
+		return false
+	}
+
+	var graphErr *GraphError
+	return errors.As(err, &graphErr) && graphErr.StatusCode == http.StatusUnauthorized
 }
 
 // downloadFromURLWithRange streams content from a pre-authenticated URL with

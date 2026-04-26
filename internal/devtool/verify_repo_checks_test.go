@@ -450,19 +450,19 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncChildTopologyStateMapping(t *te
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestRunRepoConsistencyChecksFailsOnMultisyncProtectedReservationSynthesis(t *testing.T) {
+func TestRunRepoConsistencyChecksFailsOnMultisyncProtectedRootSynthesis(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
 	writeRepoConsistencyFixtures(t, repoRoot)
 
-	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_reservation.go"), []string{
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_protected_root.go"), []string{
 		"package multisync",
 		"",
 		"import syncengine \"github.com/tonimelisma/onedrive-go/internal/sync\"",
 		"",
 		"type mountSpec struct {",
-		"\tlocalReservations []syncengine.ManagedRootReservation",
+		"\troots []syncengine.ProtectedRoot",
 		"}",
 		"",
 	})
@@ -470,7 +470,59 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncProtectedReservationSynthesis(t
 	err := runRepoConsistencyChecks(repoRoot)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "protected-root")
-	assert.Contains(t, err.Error(), "bad_reservation.go")
+	assert.Contains(t, err.Error(), "bad_protected_root.go")
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnStaleShortcutLifecycleConcepts(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"prepare old admission API", "func _() { _ = PrepareInitial" + "Topology }"},
+		{"prepare shortcut children", "func _() { _ = PrepareShortcut" + "Children }"},
+		{"refresh shortcut topology", "func _() { _ = RefreshShortcut" + "Topology }"},
+		{"mount topology sentinel", "func _() { _ = ErrMount" + "TopologyChanged }"},
+		{"managed root reservation", "type _ ManagedRoot" + "Reservation"},
+		{"managed roots", "type _ Managed" + "Roots"},
+		{"managed root event", "type _ ManagedRoot" + "Event"},
+		{"local reservations", "type _ struct { local" + "Reservations int }"},
+		{"local skip dirs", "type _ struct { local" + "SkipDirs int }"},
+		{"shortcut startup wording", "// shortcut " + "bootstrap must not be described as a separate phase"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			repoRoot := t.TempDir()
+			writeRepoConsistencyFixtures(t, repoRoot)
+			writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "sync", "bad_stale.go"), []string{
+				"package sync",
+				tt.content,
+			})
+
+			err := runRepoConsistencyChecks(repoRoot)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "stale architecture/documentation phrase")
+			assert.Contains(t, err.Error(), "bad_stale.go")
+		})
+	}
+}
+
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsWhenDoDDoesNotRequireMerge(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+	writeTestFixtureFile(t, filepath.Join(repoRoot, "AGENTS.md"), []byte("10. [ ] **Push, review, and CI green**\n"))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DoD merge evidence")
+	assert.Contains(t, err.Error(), "AGENTS.md")
 }
 
 // Validates: R-2.4.3, R-2.4.8
@@ -591,7 +643,7 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncAutomaticShortcutPersistence(t 
 
 	err := runRepoConsistencyChecks(repoRoot)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parent topology")
+	assert.Contains(t, err.Error(), "parent publication")
 	assert.Contains(t, err.Error(), "bad_child_inventory.go")
 }
 

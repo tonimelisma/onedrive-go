@@ -21,7 +21,7 @@ const (
 )
 
 func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, error) {
-	if e == nil || e.hasRemoteMountRoot() || e.baseline == nil {
+	if e == nil || e.baseline == nil {
 		return false, nil
 	}
 	records, err := e.baseline.ListShortcutRoots(ctx)
@@ -50,10 +50,9 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 	if err := e.baseline.ReplaceShortcutRoots(ctx, nextRecords); err != nil {
 		return false, fmt.Errorf("sync: persist shortcut root local lifecycle: %w", err)
 	}
-	e.localFilter.ManagedRoots = mergeManagedRootReservations(
-		e.localFilter.ManagedRoots,
-		managedRootReservationsForShortcutRoots(nextRecords, e.shortcutTopologyNamespaceID),
-	)
+	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
+		return false, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
+	}
 	return true, nil
 }
 
@@ -175,7 +174,10 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	relativePath string,
 	localRows []LocalStateRow,
 ) (ShortcutRootRecord, bool, bool, error) {
-	candidates := shortcutRootIdentityCandidatesFromLocalState(relativePath, *record.LocalRootIdentity, localRows)
+	candidates, candidateErr := e.shortcutRootIdentityCandidates(relativePath, *record.LocalRootIdentity, localRows)
+	if candidateErr != nil {
+		return unavailableShortcutRoot(record, candidateErr.Error()), true, true, nil
+	}
 	if previousPath, ok := previousProtectedProjectionCandidate(&record, candidates); ok {
 		return e.moveRemoteRenamedShortcutProjection(record, previousPath, relativePath)
 	}
@@ -197,7 +199,7 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 			LocalAlias:        alias,
 		}); err != nil {
 			next := aliasMutationBlockedShortcutRoot(record, err)
-			next.ProtectedPaths = appendUniqueManagedRootPaths(next.ProtectedPaths, candidates[0])
+			next.ProtectedPaths = appendUniqueProtectedRootPaths(next.ProtectedPaths, candidates[0])
 			return next, true, true, nil
 		}
 		identity, identityErr := e.syncTree.IdentityNoFollow(filepath.FromSlash(candidates[0]))
@@ -221,9 +223,23 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 			ShortcutRootStateRenameAmbiguous,
 			"multiple same-parent shortcut alias rename candidates",
 		)
-		next.ProtectedPaths = appendUniqueManagedRootPaths(next.ProtectedPaths, candidates...)
+		next.ProtectedPaths = appendUniqueProtectedRootPaths(next.ProtectedPaths, candidates...)
 		return next, true, true, nil
 	}
+}
+
+func (e *Engine) shortcutRootIdentityCandidates(
+	relativePath string,
+	identity synctree.FileIdentity,
+	localRows []LocalStateRow,
+) ([]string, error) {
+	candidates := shortcutRootIdentityCandidatesFromLocalState(relativePath, identity, localRows)
+	liveCandidates, err := e.shortcutRootIdentityCandidatesFromFilesystem(relativePath, identity)
+	if err != nil {
+		return nil, err
+	}
+	candidates = append(candidates, liveCandidates...)
+	return uniqueSortedShortcutRootCandidates(candidates), nil
 }
 
 func shortcutRootIdentityCandidatesFromLocalState(
@@ -250,20 +266,114 @@ func shortcutRootIdentityCandidatesFromLocalState(
 	return candidates
 }
 
+func (e *Engine) shortcutRootIdentityCandidatesFromFilesystem(
+	relativePath string,
+	identity synctree.FileIdentity,
+) ([]string, error) {
+	if e == nil || e.syncTree == nil {
+		return nil, nil
+	}
+	normalizedCurrent := normalizedProtectedRootPath(relativePath)
+	parent := path.Dir(normalizedCurrent)
+	if parent == "." {
+		parent = ""
+	}
+	entries, err := e.syncTree.ReadDir(parent)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read shortcut alias parent directory: %w", err)
+	}
+	candidates := make([]string, 0)
+	for _, entry := range entries {
+		candidate, found, err := e.shortcutRootIdentityCandidateFromFilesystemEntry(
+			parent,
+			normalizedCurrent,
+			entry.Name(),
+			identity,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return uniqueSortedShortcutRootCandidates(candidates), nil
+}
+
+func (e *Engine) shortcutRootIdentityCandidateFromFilesystemEntry(
+	parent string,
+	normalizedCurrent string,
+	entryName string,
+	identity synctree.FileIdentity,
+) (string, bool, error) {
+	candidate := entryName
+	if parent != "" {
+		candidate = path.Join(parent, candidate)
+	}
+	if candidate == normalizedCurrent {
+		return "", false, nil
+	}
+	state, err := e.syncTree.PathStateNoFollow(candidate)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("stat shortcut alias rename candidate: %w", err)
+	}
+	if !state.Exists || !state.IsDir {
+		return "", false, nil
+	}
+	candidateIdentity, err := e.syncTree.IdentityNoFollow(candidate)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("read shortcut alias rename candidate identity: %w", err)
+	}
+	if !synctree.SameIdentity(identity, candidateIdentity) {
+		return "", false, nil
+	}
+	return candidate, true, nil
+}
+
+func uniqueSortedShortcutRootCandidates(candidates []string) []string {
+	if len(candidates) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	unique := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		normalized := normalizedProtectedRootPath(candidate)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		unique = append(unique, normalized)
+	}
+	slices.Sort(unique)
+	return unique
+}
+
 func previousProtectedProjectionCandidate(record *ShortcutRootRecord, candidates []string) (string, bool) {
 	if record == nil || len(candidates) == 0 {
 		return "", false
 	}
 	protected := make(map[string]struct{}, len(record.ProtectedPaths))
 	for _, protectedPath := range record.ProtectedPaths {
-		normalized := normalizedManagedRootPath(protectedPath)
+		normalized := normalizedProtectedRootPath(protectedPath)
 		if normalized == "" || normalized == record.RelativeLocalPath {
 			continue
 		}
 		protected[normalized] = struct{}{}
 	}
 	for _, candidate := range candidates {
-		normalized := normalizedManagedRootPath(candidate)
+		normalized := normalizedProtectedRootPath(candidate)
 		if _, ok := protected[normalized]; ok {
 			return normalized, true
 		}
@@ -570,10 +680,10 @@ func shortcutRootCleanupBlocked(record ShortcutRootRecord, err error) ShortcutRo
 	)
 }
 
-func appendUniqueManagedRootPaths(paths []string, additions ...string) []string {
+func appendUniqueProtectedRootPaths(paths []string, additions ...string) []string {
 	merged := append([]string(nil), paths...)
 	for _, addition := range additions {
-		normalized := normalizedManagedRootPath(addition)
+		normalized := normalizedProtectedRootPath(addition)
 		if normalized == "" {
 			continue
 		}

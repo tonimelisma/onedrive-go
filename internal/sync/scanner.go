@@ -414,7 +414,14 @@ func (o *LocalObserver) makeWalkFunc(
 		o.forgetExcludedSymlink(dbRelPath)
 
 		// Stage 1 observation filter: name validation + path length (cheap, no syscall).
-		if skipItem := shouldObserveWithFilter(name, dbRelPath, dirEntryKind(d), o.filterConfig, o.observationRules); skipItem != nil {
+		if skipItem := shouldObserveWithFilter(
+			name,
+			dbRelPath,
+			dirEntryKind(d),
+			o.filterConfig,
+			o.protectedRoots,
+			o.observationRules,
+		); skipItem != nil {
 			if skipItem.Reason != "" {
 				*skipped = append(*skipped, *skipItem)
 				o.Logger.Debug("skipping invalid entry",
@@ -481,16 +488,16 @@ func (o *LocalObserver) processObservedInfo(
 	skipped *[]SkippedItem,
 	scanStartNano int64,
 ) error {
-	if reservation, ok := managedRootIdentityReservation(dbRelPath, info, o.filterConfig.ManagedRoots); ok {
-		o.reportManagedRootEvent(ManagedRootEvent{
-			Type:         ManagedRootEventIdentityMatch,
+	if protectedRoot, ok := protectedRootIdentityReservation(dbRelPath, info, o.protectedRoots); ok {
+		o.reportProtectedRootEvent(ProtectedRootEvent{
+			Type:         ProtectedRootEventIdentityMatch,
 			Path:         dbRelPath,
-			ReservedPath: reservation.Path,
-			MountID:      reservation.MountID,
-			BindingID:    reservation.BindingID,
+			ReservedPath: protectedRoot.Path,
+			MountID:      protectedRoot.MountID,
+			BindingID:    protectedRoot.BindingID,
 		})
 		if kind == observedKindDir {
-			identity := synctree.FileIdentity{Device: reservation.Device, Inode: reservation.Inode}
+			identity := synctree.FileIdentity{Device: protectedRoot.Device, Inode: protectedRoot.Inode}
 			if currentIdentity, hasIdentity := synctree.IdentityFromFileInfo(info); hasIdentity {
 				identity = currentIdentity
 			}
@@ -505,9 +512,9 @@ func (o *LocalObserver) processObservedInfo(
 				LocalHasIdentity: true,
 			}
 		}
-		o.Logger.Debug("skipping managed root identity match",
+		o.Logger.Debug("skipping protected root identity match",
 			slog.String("path", dbRelPath),
-			slog.String("reserved_path", reservation.Path))
+			slog.String("reserved_path", protectedRoot.Path))
 		return nil
 	}
 
@@ -973,6 +980,7 @@ func (o *LocalObserver) shouldSuppressDeleteForExcludedPath(path string, entry *
 		path,
 		observedKindFromItemType(entry.ItemType),
 		o.filterConfig,
+		o.protectedRoots,
 		o.observationRules,
 	)
 
@@ -1075,13 +1083,14 @@ func shouldObserveWithFilter(
 	name, path string,
 	kind observedKind,
 	filter LocalFilterConfig,
+	protectedRoots []ProtectedRoot,
 	rules LocalObservationRules,
 ) *SkippedItem {
 	if IsAlwaysExcluded(name) {
 		return &SkippedItem{} // internal exclusion, not reportable
 	}
 
-	if shouldSkipConfiguredPath(name, path, kind, filter) {
+	if shouldSkipConfiguredPath(name, path, kind, filter, protectedRoots) {
 		return &SkippedItem{}
 	}
 
@@ -1112,6 +1121,7 @@ func shouldSkipConfiguredPath(
 	name, path string,
 	kind observedKind,
 	filter LocalFilterConfig,
+	protectedRoots []ProtectedRoot,
 ) bool {
 	normalizedPath := strings.TrimPrefix(filepath.ToSlash(path), "/")
 	parts := observedPathParts(normalizedPath)
@@ -1127,7 +1137,7 @@ func shouldSkipConfiguredPath(
 		return true
 	}
 
-	if _, found := managedRootPathReservation(normalizedPath, filter.ManagedRoots); found {
+	if _, found := protectedRootPathReservation(normalizedPath, protectedRoots); found {
 		return true
 	}
 

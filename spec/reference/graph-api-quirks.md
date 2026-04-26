@@ -233,6 +233,24 @@ Runtime policy:
 - transfer-manager callers and sync workers do not add their own second retry
   loop for this quirk; the graph boundary is the single owner
 
+### Pre-Authenticated Download URL 401
+
+Graph can return a fresh `@microsoft.graph.downloadUrl` that immediately
+responds with HTTP 401 when the client uses it without an Authorization header.
+This has been observed for a shared-folder sentinel after the item metadata and
+parent child listing both returned HTTP 200, so the item was discoverable while
+the pre-authenticated content URL itself was unusable.
+
+Runtime policy:
+
+- authenticated Graph requests keep their ordinary 401 token-refresh behavior;
+  this is not treated as evidence for a general post-refresh 401 retry
+- `graph.Client.Download()` and `DownloadRange()` own the exact recovery path
+- recovery is narrow: only pre-authenticated download content requests, only
+  HTTP 401, and only one metadata refetch to obtain a fresh download URL
+- HTTP 403 remains a permission failure; the client does not refetch metadata
+  or retry content downloads for forbidden shared files
+
 ### Transient Failures on Immediate Post-Simple-Upload Mtime Patch
 
 After a small-file simple upload succeeds, the immediate

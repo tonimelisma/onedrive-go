@@ -105,16 +105,16 @@ of the current contract. Child lifecycle rows also expose `state`,
 `state_reason`, `state_detail`, `protected_current_path`,
 `protected_reserved_paths`, `recovery_action`, and `auto_retry` from parent
 sync-store `shortcut_roots` and child sync-state snapshots. Text and JSON
-status describe the protected reservation state and the next recovery step
+status describe the protected-root state and the next recovery step
 without duplicating engine transition policy in the CLI. Recovery copy uses the
 same product vocabulary as the control plane:
 "shortcut alias", "child projection", "reserved path", and "parent engine
-topology facts".
+shortcut publication facts".
 
 For `removed_final_drain`, status must make the retry/discard choice explicit:
 the child keeps retrying while its state DB owns dirty content state; the user
 can restore shared-folder access for normal retry, or delete the local shortcut
-directory to discard the dirty local projection and let parent topology purge
+directory to discard the dirty local projection and let parent release cleanup purge
 the child state automatically.
 
 Shortcut child status distinguishes the recovery class rather than collapsing
