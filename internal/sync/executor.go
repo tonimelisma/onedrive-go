@@ -590,6 +590,10 @@ func (e *Executor) moveOutcome(action *Action) ActionOutcome {
 			o.LocalSize = action.View.Local.Size
 			o.LocalSizeKnown = true
 			o.LocalMtime = action.View.Local.Mtime
+			o.LocalDevice = action.View.Local.LocalDevice
+			o.LocalInode = action.View.Local.LocalInode
+			o.LocalHasIdentity = action.View.Local.LocalHasIdentity
+			o.LocalIdentityObserved = true
 		}
 
 		fillOutcomeFromBaseline(&o, action.View.Baseline)
@@ -612,6 +616,11 @@ func fillOutcomeFromBaseline(o *ActionOutcome, baseline *BaselineEntry) {
 	}
 	if o.LocalMtime == 0 {
 		o.LocalMtime = baseline.LocalMtime
+	}
+	if !o.LocalIdentityObserved {
+		o.LocalDevice = baseline.LocalDevice
+		o.LocalInode = baseline.LocalInode
+		o.LocalHasIdentity = baseline.LocalHasIdentity
 	}
 	if o.RemoteHash == "" {
 		o.RemoteHash = baseline.RemoteHash

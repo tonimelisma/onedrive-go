@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -29,10 +28,14 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 	if err != nil {
 		return false, fmt.Errorf("sync: read shortcut roots for local lifecycle: %w", err)
 	}
+	localRows, err := e.baseline.ListLocalState(ctx)
+	if err != nil {
+		return false, fmt.Errorf("sync: read local_state for shortcut root local lifecycle: %w", err)
+	}
 	changed := false
 	nextRecords := make([]ShortcutRootRecord, 0, len(records))
 	for i := range records {
-		next, keep, recordChanged, recordErr := e.reconcileShortcutRootRecord(ctx, records[i])
+		next, keep, recordChanged, recordErr := e.reconcileShortcutRootRecord(ctx, records[i], localRows)
 		if recordErr != nil {
 			return false, recordErr
 		}
@@ -58,6 +61,7 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 func (e *Engine) reconcileShortcutRootRecord(
 	ctx context.Context,
 	record ShortcutRootRecord,
+	localRows []LocalStateRow,
 ) (ShortcutRootRecord, bool, bool, error) {
 	record = normalizeShortcutRootRecord(record)
 	switch record.State {
@@ -111,7 +115,7 @@ func (e *Engine) reconcileShortcutRootRecord(
 	if record.LocalRootIdentity == nil {
 		return e.materializeShortcutRoot(record, relativePath)
 	}
-	return e.reconcileMissingMaterializedShortcutRoot(ctx, record, relativePath)
+	return e.reconcileMissingMaterializedShortcutRoot(ctx, record, relativePath, localRows)
 }
 
 //nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
@@ -169,17 +173,9 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	ctx context.Context,
 	record ShortcutRootRecord,
 	relativePath string,
+	localRows []LocalStateRow,
 ) (ShortcutRootRecord, bool, bool, error) {
-	if previousPath, found, err := e.findPreviousProtectedShortcutRootProjection(&record, relativePath); err != nil {
-		return unavailableShortcutRoot(record, err.Error()), true, true, nil
-	} else if found {
-		return e.moveRemoteRenamedShortcutProjection(record, previousPath, relativePath)
-	}
-
-	candidates, err := e.findSameParentShortcutRootRenameCandidates(relativePath, *record.LocalRootIdentity)
-	if err != nil {
-		return unavailableShortcutRoot(record, err.Error()), true, true, nil
-	}
+	candidates := shortcutRootIdentityCandidatesFromLocalState(relativePath, *record.LocalRootIdentity, localRows)
 	if previousPath, ok := previousProtectedProjectionCandidate(&record, candidates); ok {
 		return e.moveRemoteRenamedShortcutProjection(record, previousPath, relativePath)
 	}
@@ -230,64 +226,28 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	}
 }
 
-func (e *Engine) findPreviousProtectedShortcutRootProjection(
-	record *ShortcutRootRecord,
-	currentRelativePath string,
-) (string, bool, error) {
-	if record == nil || record.LocalRootIdentity == nil {
-		return "", false, nil
-	}
-	var matches []string
-	for _, protectedPath := range record.ProtectedPaths {
-		match, matched, err := e.previousProtectedShortcutRootProjectionMatch(record, protectedPath, currentRelativePath)
-		if err != nil {
-			return "", false, err
+func shortcutRootIdentityCandidatesFromLocalState(
+	relativePath string,
+	identity synctree.FileIdentity,
+	localRows []LocalStateRow,
+) []string {
+	normalizedCurrent := filepath.ToSlash(relativePath)
+	candidates := make([]string, 0)
+	for i := range localRows {
+		row := localRows[i]
+		if row.ItemType != ItemTypeFolder || !row.LocalHasIdentity {
+			continue
 		}
-		if matched {
-			matches = append(matches, match)
+		if row.Path == normalizedCurrent {
+			continue
 		}
+		if row.LocalDevice != identity.Device || row.LocalInode != identity.Inode {
+			continue
+		}
+		candidates = append(candidates, row.Path)
 	}
-	switch len(matches) {
-	case 0:
-		return "", false, nil
-	case 1:
-		return matches[0], true, nil
-	default:
-		return "", false, fmt.Errorf("multiple previous shortcut alias projections match stored identity")
-	}
-}
-
-func (e *Engine) previousProtectedShortcutRootProjectionMatch(
-	record *ShortcutRootRecord,
-	protectedPath string,
-	currentRelativePath string,
-) (string, bool, error) {
-	normalized := normalizedManagedRootPath(protectedPath)
-	if normalized == "" || normalized == normalizedManagedRootPath(currentRelativePath) {
-		return "", false, nil
-	}
-	relativePath, ok := cleanShortcutRootRelativePath(normalized)
-	if !ok {
-		return "", false, fmt.Errorf("%w: previous shortcut alias path escapes parent sync root", synctree.ErrUnsafePath)
-	}
-	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
-		return "", false, fmt.Errorf("validating previous shortcut alias projection: %w", err)
-	}
-	state, err := e.syncTree.PathStateNoFollow(relativePath)
-	if err != nil {
-		return "", false, fmt.Errorf("stating previous shortcut alias projection: %w", err)
-	}
-	if !state.Exists {
-		return "", false, nil
-	}
-	if !state.IsDir {
-		return "", false, fmt.Errorf("%w: previous shortcut alias projection is not a directory", synctree.ErrUnsafePath)
-	}
-	identity, err := e.syncTree.IdentityNoFollow(relativePath)
-	if err != nil {
-		return "", false, fmt.Errorf("reading previous shortcut alias identity: %w", err)
-	}
-	return normalized, synctree.SameIdentity(identity, *record.LocalRootIdentity), nil
+	slices.Sort(candidates)
+	return candidates
 }
 
 func previousProtectedProjectionCandidate(record *ShortcutRootRecord, candidates []string) (string, bool) {
@@ -402,53 +362,6 @@ func (e *Engine) validateShortcutRootProjectionMove(fromRelativePath string, toR
 		return fmt.Errorf("%w: previous shortcut alias projection is not a directory", synctree.ErrUnsafePath)
 	}
 	return nil
-}
-
-func (e *Engine) findSameParentShortcutRootRenameCandidates(
-	relativePath string,
-	identity synctree.FileIdentity,
-) ([]string, error) {
-	parentRel := filepath.Dir(relativePath)
-	if err := e.syncTree.ValidateNoSymlinkAncestors(parentRel); err != nil {
-		return nil, fmt.Errorf("validating shortcut alias parent: %w", err)
-	}
-	entries, err := e.syncTree.ReadDir(parentRel)
-	if err != nil {
-		return nil, fmt.Errorf("reading shortcut alias parent: %w", err)
-	}
-	candidates := make([]string, 0)
-	for _, entry := range entries {
-		candidate, ok := sameParentShortcutRootRenameCandidate(e.syncTree, parentRel, relativePath, entry, identity)
-		if ok {
-			candidates = append(candidates, candidate)
-		}
-	}
-	return candidates, nil
-}
-
-func sameParentShortcutRootRenameCandidate(
-	root *synctree.Root,
-	parentRel string,
-	originalRel string,
-	entry fs.DirEntry,
-	identity synctree.FileIdentity,
-) (string, bool) {
-	if root == nil || entry == nil || !entry.IsDir() {
-		return "", false
-	}
-	name := entry.Name()
-	candidateRel := name
-	if parentRel != "." {
-		candidateRel = filepath.Join(parentRel, name)
-	}
-	if candidateRel == originalRel {
-		return "", false
-	}
-	candidateIdentity, err := root.IdentityNoFollow(candidateRel)
-	if err != nil || !synctree.SameIdentity(candidateIdentity, identity) {
-		return "", false
-	}
-	return filepath.ToSlash(candidateRel), true
 }
 
 func cleanShortcutRootRelativePath(relativeLocalPath string) (string, bool) {

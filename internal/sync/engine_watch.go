@@ -325,6 +325,7 @@ func (rt *watchRuntime) startObservers(
 	})
 	localObs.SetSkippedChannel(skippedCh)
 	localObs.safetyScanInterval = localWatchHealthySafetyScanInterval
+	localObs.StartupSafetyScan = true
 
 	if rt.engine.localWatcherFactory != nil {
 		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)

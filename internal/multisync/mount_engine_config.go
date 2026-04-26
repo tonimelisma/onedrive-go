@@ -18,6 +18,7 @@ func engineMountConfigForMount(mount *mountSpec) (*syncengine.EngineMountConfig,
 	}
 
 	return &syncengine.EngineMountConfig{
+		MountID:                  mount.mountID.String(),
 		DBPath:                   mount.statePath,
 		SyncRoot:                 mount.syncRoot,
 		DataDir:                  config.DefaultDataDir(),
@@ -28,7 +29,6 @@ func engineMountConfigForMount(mount *mountSpec) (*syncengine.EngineMountConfig,
 		RemoteRootDeltaCapable:   mount.remoteRootDeltaCapable,
 		ExpectedSyncRootIdentity: cloneChildRootIdentity(mount.expectedSyncRootIdentity),
 		EnableWebsocket:          mount.enableWebsocket,
-		LocalFilter:              syncengine.LocalFilterConfig{},
 		LocalRules: syncengine.LocalObservationRules{
 			RejectSharePointRootForms: mount.rejectSharePointRootForms,
 		},

@@ -40,9 +40,10 @@ rebuildable runtime facts:
   is runtime-owned.
 - remote refresh mode or a redundant "last full refresh" timestamp. The only
   durable remote cadence fact is `observation_state.next_full_remote_refresh_at`.
-- duplicate content-identity columns. Local move matching uses the persisted
-  local hash directly, and `remote_state` stores only remote facts with live
-  non-test readers.
+- duplicate local content-identity tables. Local move matching uses
+  `local_state` and `baseline` filesystem identity (`local_device`,
+  `local_inode`, `local_has_identity`) for both files and directories, with
+  file-hash fallback only when identity is unavailable.
 
 ## Core Tables
 
@@ -63,11 +64,16 @@ converged state for one item:
 
 - identity: `item_id`, `parent_id`, `path`, `item_type`
 - local comparison facts: `local_hash`, `local_size`, `local_mtime`
+- last-synced local filesystem identity: `local_device`, `local_inode`,
+  `local_has_identity`
 - remote comparison facts: `remote_hash`, `remote_size`, `remote_mtime`,
   `etag`
 
-The table is keyed by item identity, not path, so moves stay atomic `UPDATE`s
-instead of delete/reinsert churn.
+The table is keyed by item identity, not path, so remote moves stay atomic
+`UPDATE`s instead of delete/reinsert churn. For local moves, the planner
+compares the last-synced local filesystem identity in `baseline` with the
+current identity in `local_state`; directory identity matches produce one
+remote folder move instead of subtree delete/create churn.
 
 ## `remote_state`
 
@@ -97,6 +103,8 @@ drift from durable state alone.
 
 - identity/materialization: `path`, `item_type`
 - local facts: `hash`, `size`, `mtime`
+- current filesystem identity: `local_device`, `local_inode`,
+  `local_has_identity`
 
 Ignored content does not enter `local_state`. The table stores only current
 local truth that can participate in reconciliation.

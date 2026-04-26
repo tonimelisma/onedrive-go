@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"strings"
 )
 
 // PlanCurrentState builds the current actionable set from SQLite-owned
@@ -54,6 +55,7 @@ func (p *Planner) PlanCurrentState(
 	}
 
 	allActions = expandFolderDeleteCascades(allActions, baseline, views, mode, p.logger)
+	allActions = collapseDescendantRemoteMovesUnderMovedFolders(allActions)
 
 	deferred := deferredCountsForCurrentActions(allActions, mode)
 	admitted := filterCurrentActionsForMode(allActions, mode)
@@ -73,6 +75,52 @@ func (p *Planner) PlanCurrentState(
 	logActionPlanSummary(p.logger, "sqlite actionable-set plan complete", plan)
 
 	return plan, nil
+}
+
+type remoteFolderMoveBoundary struct {
+	oldPrefix string
+	newPrefix string
+}
+
+func collapseDescendantRemoteMovesUnderMovedFolders(actions []Action) []Action {
+	var folderMoves []remoteFolderMoveBoundary
+	for i := range actions {
+		action := actions[i]
+		if action.Type != ActionRemoteMove || resolveItemType(action.View) != ItemTypeFolder || action.OldPath == "" {
+			continue
+		}
+		folderMoves = append(folderMoves, remoteFolderMoveBoundary{
+			oldPrefix: action.OldPath + "/",
+			newPrefix: action.Path + "/",
+		})
+	}
+	if len(folderMoves) == 0 {
+		return actions
+	}
+
+	collapsed := actions[:0]
+	for i := range actions {
+		action := actions[i]
+		if descendantRemoteMoveCoveredByFolderMove(action, folderMoves) {
+			continue
+		}
+		collapsed = append(collapsed, action)
+	}
+
+	return collapsed
+}
+
+func descendantRemoteMoveCoveredByFolderMove(action Action, folderMoves []remoteFolderMoveBoundary) bool {
+	if action.Type != ActionRemoteMove || action.OldPath == "" {
+		return false
+	}
+	for _, move := range folderMoves {
+		if strings.HasPrefix(action.OldPath, move.oldPrefix) && strings.HasPrefix(action.Path, move.newPrefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func comparisonPaths(rows []SQLiteComparisonRow) []string {
@@ -226,7 +274,7 @@ func buildActionsForReconciliation(
 			makeConflictResolvedAction(ActionDownload, view, ConflictCreateCreate),
 		}, nil
 	case strLocalMove:
-		return buildLocalMoveReconciliationActions(rec, cmp, view)
+		return buildLocalMoveReconciliationActions(rec, cmp, view, views)
 	case strRemoteMove:
 		return buildRemoteMoveReconciliationActions(rec, cmp, view)
 	default:
@@ -238,6 +286,7 @@ func buildLocalMoveReconciliationActions(
 	rec *SQLiteReconciliationRow,
 	cmp *SQLiteComparisonRow,
 	view *PathView,
+	views map[string]*PathView,
 ) ([]Action, error) {
 	if cmp.ComparisonKind != "local_move_source" {
 		return nil, nil
@@ -250,7 +299,54 @@ func buildLocalMoveReconciliationActions(
 	action.OldPath = rec.Path
 	action.Path = rec.LocalMoveTarget
 
-	return []Action{action}, nil
+	actions := []Action{action}
+	if upload := localMoveContentUpdateAfterMove(rec.LocalMoveTarget, view, views); upload != nil {
+		actions = append(actions, *upload)
+	}
+
+	return actions, nil
+}
+
+func localMoveContentUpdateAfterMove(
+	targetPath string,
+	sourceView *PathView,
+	views map[string]*PathView,
+) *Action {
+	if sourceView == nil || sourceView.Baseline == nil || sourceView.Baseline.ItemType != ItemTypeFile {
+		return nil
+	}
+	targetView := views[targetPath]
+	if targetView == nil || targetView.Local == nil {
+		return nil
+	}
+	if !localFileDiffersFromBaseline(targetView.Local, sourceView.Baseline) {
+		return nil
+	}
+
+	updateView := *targetView
+	updateView.Baseline = sourceView.Baseline
+	updateView.Remote = sourceView.Remote
+	action := MakeAction(ActionUpload, &updateView)
+	action.Path = targetPath
+
+	return &action
+}
+
+func localFileDiffersFromBaseline(local *LocalState, baseline *BaselineEntry) bool {
+	if local == nil || baseline == nil {
+		return false
+	}
+	if baseline.ItemType != ItemTypeFile || local.ItemType != ItemTypeFile {
+		return false
+	}
+	if baseline.LocalHash != "" || local.Hash != "" {
+		return baseline.LocalHash != local.Hash
+	}
+	if baseline.LocalSizeKnown && baseline.LocalSize != local.Size {
+		return true
+	}
+
+	return baseline.LocalMtime != local.Mtime
 }
 
 func buildRemoteMoveReconciliationActions(
@@ -307,11 +403,14 @@ func localStateFromSnapshotRow(row *LocalStateRow) *LocalState {
 	}
 
 	return &LocalState{
-		Name:     path.Base(row.Path),
-		ItemType: row.ItemType,
-		Size:     row.Size,
-		Hash:     row.Hash,
-		Mtime:    row.Mtime,
+		Name:             path.Base(row.Path),
+		ItemType:         row.ItemType,
+		Size:             row.Size,
+		Hash:             row.Hash,
+		Mtime:            row.Mtime,
+		LocalDevice:      row.LocalDevice,
+		LocalInode:       row.LocalInode,
+		LocalHasIdentity: row.LocalHasIdentity,
 	}
 }
 

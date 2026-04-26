@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/fsroot"
@@ -43,6 +44,8 @@ type SessionRecord struct {
 	Version    int       `json:"version"`
 	DriveID    string    `json:"drive_id"`
 	LocalPath  string    `json:"local_path"`
+	MountID    string    `json:"mount_id,omitempty"`
+	LocalRoot  string    `json:"local_root,omitempty"`
 	SessionURL string    `json:"session_url"`
 	FileHash   string    `json:"file_hash"`
 	FileSize   int64     `json:"file_size"`
@@ -204,6 +207,89 @@ func (s *SessionStore) Delete(driveID, localPath string) error {
 	}
 
 	return nil
+}
+
+// DeleteForScope removes upload sessions owned by a mount scope. MountID is
+// exact; LocalRoot also matches records rooted below that path so child cleanup
+// catches records written while a shortcut root was temporarily nested.
+func (s *SessionStore) DeleteForScope(mountID, localRoot string) (int, error) {
+	mountID = strings.TrimSpace(mountID)
+	localRoot = strings.TrimSpace(localRoot)
+	if mountID == "" && localRoot == "" {
+		return 0, nil
+	}
+
+	root, err := fsroot.Open(s.dir)
+	if err != nil {
+		return 0, fmt.Errorf("opening session root: %w", err)
+	}
+
+	entries, err := root.ReadDir("")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("reading session dir: %w", err)
+	}
+
+	var errs []error
+	deleted := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := root.ReadFile(entry.Name())
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("reading session file %s: %w", entry.Name(), err))
+			continue
+		}
+		var rec SessionRecord
+		if err := json.Unmarshal(data, &rec); err != nil {
+			errs = append(errs, fmt.Errorf("decoding session file %s: %w", entry.Name(), err))
+			continue
+		}
+		if !sessionRecordMatchesScope(&rec, mountID, localRoot) {
+			continue
+		}
+		if err := root.Remove(entry.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("deleting session file %s: %w", entry.Name(), err))
+			continue
+		}
+		deleted++
+	}
+
+	return deleted, errors.Join(errs...)
+}
+
+func sessionRecordMatchesScope(rec *SessionRecord, mountID, localRoot string) bool {
+	if rec == nil {
+		return false
+	}
+	if mountID != "" && rec.MountID == mountID {
+		return true
+	}
+	return localRootContains(localRoot, rec.LocalRoot)
+}
+
+func localRootContains(root, candidate string) bool {
+	root = strings.TrimSpace(root)
+	candidate = strings.TrimSpace(candidate)
+	if root == "" || candidate == "" {
+		return false
+	}
+	root = filepath.Clean(root)
+	candidate = filepath.Clean(candidate)
+	if root == candidate {
+		return true
+	}
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // CleanStale removes session files older than maxAge. Returns the number

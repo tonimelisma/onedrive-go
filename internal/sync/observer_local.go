@@ -177,6 +177,7 @@ type LocalObserver struct {
 	AfterSafetyScan func()                                         // test hook: called after safety-scan state reset completes
 
 	WriteCoalesceCooldown time.Duration // 0 → defaultWriteCoalesceCooldown; injectable for tests
+	StartupSafetyScan     bool          // engine watch mode closes the bootstrap-to-fsnotify startup gap
 
 	// skippedCh forwards SkippedItems from safety scans to the engine for
 	// observation-issue persistence. Nil disables forwarding (pre-existing behavior).
@@ -397,6 +398,13 @@ func (o *LocalObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 		}
 
 		return fmt.Errorf("sync: adding initial watches: %w", walkErr)
+	}
+	if o.StartupSafetyScan {
+		// Close the startup gap between the bootstrap local scan and the point at
+		// which fsnotify watches are fully installed. Any local change that lands in
+		// that window is observed here; subsequent changes are covered by the
+		// installed watcher or the periodic safety scan.
+		o.runSafetyScan(ctx, tree, events)
 	}
 
 	return o.watchLoop(ctx, watcher, tree, events)

@@ -95,6 +95,100 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 	assert.Equal(t, ActionUpload, byPath["upload.txt"].Type)
 }
 
+// Validates: R-2.1.3, R-2.1.4
+func TestPlannerPlanCurrentState_LocalFolderMoveByIdentityPlansSingleRemoteMove(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (
+			item_id, path, item_type, local_hash, remote_hash,
+			local_size, remote_size, local_mtime, remote_mtime,
+			local_device, local_inode, local_has_identity
+		)
+		VALUES
+			('item-folder', 'Projects', 'folder', '', '', NULL, NULL, NULL, NULL, 11, 22, 1),
+			('item-file', 'Projects/a.txt', 'file', 'hash-a', 'hash-a', 5, 5, 1, 1, 33, 44, 1)`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+		{
+			Path:             "Renamed Projects",
+			ItemType:         ItemTypeFolder,
+			LocalDevice:      11,
+			LocalInode:       22,
+			LocalHasIdentity: true,
+		},
+		{
+			Path:             "Renamed Projects/a.txt",
+			ItemType:         ItemTypeFile,
+			Hash:             "hash-a",
+			Size:             5,
+			Mtime:            1,
+			LocalDevice:      33,
+			LocalInode:       44,
+			LocalHasIdentity: true,
+		},
+	}))
+
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES
+			('item-folder', 'Projects', 'folder', '', NULL, NULL),
+			('item-file', 'Projects/a.txt', 'file', 'hash-a', 5, 1)`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	require.Len(t, plan.Actions, 1)
+	assert.Equal(t, ActionRemoteMove, plan.Actions[0].Type)
+	assert.Equal(t, "Projects", plan.Actions[0].OldPath)
+	assert.Equal(t, "Renamed Projects", plan.Actions[0].Path)
+}
+
+// Validates: R-2.1.3, R-2.1.4
+func TestPlannerPlanCurrentState_MovedAndEditedFilePlansMoveBeforeUpload(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (
+			item_id, path, item_type, local_hash, remote_hash,
+			local_size, remote_size, local_mtime, remote_mtime,
+			local_device, local_inode, local_has_identity
+		)
+		VALUES ('item-file', 'old.txt', 'file', 'old-hash', 'old-hash', 10, 10, 1, 1, 5, 6, 1)`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:             "new.txt",
+		ItemType:         ItemTypeFile,
+		Hash:             "new-hash",
+		Size:             20,
+		Mtime:            2,
+		LocalDevice:      5,
+		LocalInode:       6,
+		LocalHasIdentity: true,
+	}}))
+
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES ('item-file', 'old.txt', 'file', 'old-hash', 10, 1)`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	require.Len(t, plan.Actions, 2)
+	assert.Equal(t, ActionRemoteMove, plan.Actions[0].Type)
+	assert.Equal(t, "old.txt", plan.Actions[0].OldPath)
+	assert.Equal(t, "new.txt", plan.Actions[0].Path)
+	assert.Equal(t, ActionUpload, plan.Actions[1].Type)
+	assert.Equal(t, "new.txt", plan.Actions[1].Path)
+	assert.Equal(t, []int{0}, plan.Deps[1])
+}
+
 // Validates: R-2.1.3, R-2.10.4
 func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *testing.T) {
 	t.Parallel()

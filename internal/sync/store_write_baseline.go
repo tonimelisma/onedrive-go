@@ -32,13 +32,15 @@ import (
 // SQL statements for baseline operations.
 const (
 	sqlLoadBaseline = `SELECT item_id, path, parent_id, item_type,
-		local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag
+		local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime,
+		local_device, local_inode, local_has_identity, etag
 		FROM baseline`
 
 	sqlUpsertBaseline = `INSERT INTO baseline
 		(item_id, path, parent_id, item_type, local_hash, remote_hash,
-		 local_size, remote_size, local_mtime, remote_mtime, etag)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 local_size, remote_size, local_mtime, remote_mtime,
+		 local_device, local_inode, local_has_identity, etag)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(item_id) DO UPDATE SET
 		 path = excluded.path,
 		 parent_id = excluded.parent_id,
@@ -49,6 +51,9 @@ const (
 		 remote_size = excluded.remote_size,
 		 local_mtime = excluded.local_mtime,
 		 remote_mtime = excluded.remote_mtime,
+		 local_device = excluded.local_device,
+		 local_inode = excluded.local_inode,
+		 local_has_identity = excluded.local_has_identity,
 		 etag = excluded.etag`
 
 	sqlDeleteBaseline = `DELETE FROM baseline WHERE path = ?`
@@ -57,14 +62,17 @@ const (
 // LocalBaselineRefresh is the explicit reconciliation input used by convergence
 // paths such as keep-both conflict resolution.
 type LocalBaselineRefresh struct {
-	Path           string
-	DriveID        driveid.ID
-	ItemID         string
-	ItemType       ItemType
-	LocalHash      string
-	LocalSize      int64
-	LocalSizeKnown bool
-	LocalMtime     int64
+	Path             string
+	DriveID          driveid.ID
+	ItemID           string
+	ItemType         ItemType
+	LocalHash        string
+	LocalSize        int64
+	LocalSizeKnown   bool
+	LocalMtime       int64
+	LocalDevice      uint64
+	LocalInode       uint64
+	LocalHasIdentity bool
 }
 
 type baselineMutationKind int
@@ -135,20 +143,24 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 // nullable columns with sql.Null* types.
 func scanBaselineRow(rows *sql.Rows, contentDriveID driveid.ID) (*BaselineEntry, error) {
 	var (
-		e           BaselineEntry
-		parentID    sql.NullString
-		localHash   sql.NullString
-		remoteHash  sql.NullString
-		localSize   sql.NullInt64
-		remoteSize  sql.NullInt64
-		localMtime  sql.NullInt64
-		remoteMtime sql.NullInt64
-		etag        sql.NullString
+		e                BaselineEntry
+		parentID         sql.NullString
+		localHash        sql.NullString
+		remoteHash       sql.NullString
+		localSize        sql.NullInt64
+		remoteSize       sql.NullInt64
+		localMtime       sql.NullInt64
+		remoteMtime      sql.NullInt64
+		localDevice      int64
+		localInode       int64
+		localHasIdentity int
+		etag             sql.NullString
 	)
 
 	err := rows.Scan(
 		&e.ItemID, &e.Path, &parentID, &e.ItemType,
-		&localHash, &remoteHash, &localSize, &remoteSize, &localMtime, &remoteMtime, &etag,
+		&localHash, &remoteHash, &localSize, &remoteSize, &localMtime, &remoteMtime,
+		&localDevice, &localInode, &localHasIdentity, &etag,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning baseline row: %w", err)
@@ -177,6 +189,9 @@ func scanBaselineRow(rows *sql.Rows, contentDriveID driveid.ID) (*BaselineEntry,
 	if remoteMtime.Valid {
 		e.RemoteMtime = remoteMtime.Int64
 	}
+	e.LocalDevice = uint64(localDevice)
+	e.LocalInode = uint64(localInode)
+	e.LocalHasIdentity = localHasIdentity != 0
 
 	return &e, nil
 }
@@ -240,6 +255,11 @@ func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *Base
 	if mutation.LocalMtime == 0 {
 		mutation.LocalMtime = baseline.LocalMtime
 	}
+	if !mutation.LocalIdentityObserved {
+		mutation.LocalDevice = baseline.LocalDevice
+		mutation.LocalInode = baseline.LocalInode
+		mutation.LocalHasIdentity = baseline.LocalHasIdentity
+	}
 	if mutation.RemoteHash == "" {
 		mutation.RemoteHash = baseline.RemoteHash
 	}
@@ -292,6 +312,10 @@ func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*
 			mutation.LocalSize = action.View.Local.Size
 			mutation.LocalSizeKnown = true
 			mutation.LocalMtime = action.View.Local.Mtime
+			mutation.LocalDevice = action.View.Local.LocalDevice
+			mutation.LocalInode = action.View.Local.LocalInode
+			mutation.LocalHasIdentity = action.View.Local.LocalHasIdentity
+			mutation.LocalIdentityObserved = true
 		}
 
 		fillMutationFromBaselineDefaults(mutation, action.View.Baseline)
@@ -374,14 +398,17 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 	}
 
 	entry := &BaselineEntry{
-		Path:           refresh.Path,
-		DriveID:        refresh.DriveID,
-		ItemID:         refresh.ItemID,
-		ItemType:       refresh.ItemType,
-		LocalHash:      refresh.LocalHash,
-		LocalSize:      refresh.LocalSize,
-		LocalSizeKnown: refresh.LocalSizeKnown,
-		LocalMtime:     refresh.LocalMtime,
+		Path:             refresh.Path,
+		DriveID:          refresh.DriveID,
+		ItemID:           refresh.ItemID,
+		ItemType:         refresh.ItemType,
+		LocalHash:        refresh.LocalHash,
+		LocalSize:        refresh.LocalSize,
+		LocalSizeKnown:   refresh.LocalSizeKnown,
+		LocalMtime:       refresh.LocalMtime,
+		LocalDevice:      refresh.LocalDevice,
+		LocalInode:       refresh.LocalInode,
+		LocalHasIdentity: refresh.LocalHasIdentity,
 	}
 
 	if existing != nil {
@@ -423,6 +450,9 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 		nullKnownInt64(entry.RemoteSize, entry.RemoteSizeKnown),
 		nullOptionalInt64(entry.LocalMtime),
 		nullOptionalInt64(entry.RemoteMtime),
+		int64(entry.LocalDevice),
+		int64(entry.LocalInode),
+		boolInt(entry.LocalHasIdentity),
 		nullString(entry.ETag),
 	)
 	if err != nil {
@@ -527,20 +557,23 @@ func (m *SyncStore) reloadBaselineCache(ctx context.Context) error {
 // mutationToEntry converts a BaselineMutation into a BaselineEntry for cache update.
 func mutationToEntry(o *BaselineMutation) *BaselineEntry {
 	return &BaselineEntry{
-		Path:            o.Path,
-		DriveID:         o.DriveID,
-		ItemID:          o.ItemID,
-		ParentID:        o.ParentID,
-		ItemType:        o.ItemType,
-		LocalHash:       o.LocalHash,
-		RemoteHash:      o.RemoteHash,
-		LocalSize:       o.LocalSize,
-		LocalSizeKnown:  o.LocalSizeKnown,
-		RemoteSize:      o.RemoteSize,
-		RemoteSizeKnown: o.RemoteSizeKnown,
-		LocalMtime:      o.LocalMtime,
-		RemoteMtime:     o.RemoteMtime,
-		ETag:            o.ETag,
+		Path:             o.Path,
+		DriveID:          o.DriveID,
+		ItemID:           o.ItemID,
+		ParentID:         o.ParentID,
+		ItemType:         o.ItemType,
+		LocalHash:        o.LocalHash,
+		RemoteHash:       o.RemoteHash,
+		LocalSize:        o.LocalSize,
+		LocalSizeKnown:   o.LocalSizeKnown,
+		RemoteSize:       o.RemoteSize,
+		RemoteSizeKnown:  o.RemoteSizeKnown,
+		LocalMtime:       o.LocalMtime,
+		RemoteMtime:      o.RemoteMtime,
+		LocalDevice:      o.LocalDevice,
+		LocalInode:       o.LocalInode,
+		LocalHasIdentity: o.LocalHasIdentity,
+		ETag:             o.ETag,
 	}
 }
 
@@ -553,25 +586,29 @@ func mutationFromActionOutcome(o *ActionOutcome) *BaselineMutation {
 	}
 
 	return &BaselineMutation{
-		Action:          o.Action,
-		Success:         o.Success,
-		Path:            o.Path,
-		OldPath:         o.OldPath,
-		DriveID:         o.DriveID,
-		ItemID:          o.ItemID,
-		ParentID:        o.ParentID,
-		ItemType:        o.ItemType,
-		LocalHash:       o.LocalHash,
-		RemoteHash:      o.RemoteHash,
-		LocalSize:       o.LocalSize,
-		LocalSizeKnown:  o.LocalSizeKnown,
-		RemoteSize:      o.RemoteSize,
-		RemoteSizeKnown: o.RemoteSizeKnown,
-		LocalMtime:      o.LocalMtime,
-		RemoteMtime:     o.RemoteMtime,
-		ETag:            o.ETag,
-		ConflictType:    o.ConflictType,
-		ResolvedBy:      o.ResolvedBy,
+		Action:                o.Action,
+		Success:               o.Success,
+		Path:                  o.Path,
+		OldPath:               o.OldPath,
+		DriveID:               o.DriveID,
+		ItemID:                o.ItemID,
+		ParentID:              o.ParentID,
+		ItemType:              o.ItemType,
+		LocalHash:             o.LocalHash,
+		RemoteHash:            o.RemoteHash,
+		LocalSize:             o.LocalSize,
+		LocalSizeKnown:        o.LocalSizeKnown,
+		RemoteSize:            o.RemoteSize,
+		RemoteSizeKnown:       o.RemoteSizeKnown,
+		LocalMtime:            o.LocalMtime,
+		RemoteMtime:           o.RemoteMtime,
+		LocalDevice:           o.LocalDevice,
+		LocalInode:            o.LocalInode,
+		LocalHasIdentity:      o.LocalHasIdentity,
+		LocalIdentityObserved: o.LocalIdentityObserved,
+		ETag:                  o.ETag,
+		ConflictType:          o.ConflictType,
+		ResolvedBy:            o.ResolvedBy,
 	}
 }
 
@@ -601,6 +638,9 @@ func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) erro
 		nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown),
 		nullOptionalInt64(o.LocalMtime),
 		nullOptionalInt64(o.RemoteMtime),
+		int64(o.LocalDevice),
+		int64(o.LocalInode),
+		boolInt(o.LocalHasIdentity),
 		nullString(o.ETag),
 	)
 	if err != nil {
@@ -778,5 +818,8 @@ func baselineEntriesEqual(a, b *BaselineEntry) bool {
 		a.RemoteSizeKnown == b.RemoteSizeKnown &&
 		a.LocalMtime == b.LocalMtime &&
 		a.RemoteMtime == b.RemoteMtime &&
+		a.LocalDevice == b.LocalDevice &&
+		a.LocalInode == b.LocalInode &&
+		a.LocalHasIdentity == b.LocalHasIdentity &&
 		a.ItemID == b.ItemID
 }

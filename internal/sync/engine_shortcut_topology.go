@@ -5,15 +5,6 @@ import (
 	"fmt"
 )
 
-// RefreshShortcutTopology asks the parent-drive observer to publish shortcut
-// topology facts without committing content observations or advancing the
-// remote cursor. Multisync uses this during parent bootstrap so child mounts
-// are compiled from parent-observed Graph state before child engines run.
-func (e *Engine) RefreshShortcutTopology(ctx context.Context) error {
-	_, err := e.PrepareShortcutChildren(ctx)
-	return err
-}
-
 func (e *Engine) SetShortcutTopologyHandler(handler ShortcutChildTopologySink) {
 	if e == nil {
 		return
@@ -21,45 +12,43 @@ func (e *Engine) SetShortcutTopologyHandler(handler ShortcutChildTopologySink) {
 	e.shortcutTopologyHandler = handler
 }
 
-func (e *Engine) PrepareShortcutChildren(ctx context.Context) (ShortcutChildTopologySnapshot, error) {
+// PrepareInitialTopology runs the normal parent startup/current-plan path far
+// enough to publish shortcut child topology from fresh local and remote truth.
+// It intentionally uses the same observation and planning pipeline as a real
+// pass; multisync consumes only the published topology before admitting child
+// engines.
+func (e *Engine) PrepareInitialTopology(
+	ctx context.Context,
+	mode SyncMode,
+	opts RunOptions,
+) (ShortcutChildTopologySnapshot, error) {
 	if ctx == nil {
-		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: shortcut topology refresh context is required")
+		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: initial topology context is required")
 	}
 	if e == nil || e.hasRemoteMountRoot() {
 		return ShortcutChildTopologySnapshot{}, nil
 	}
 
-	flow := newEngineFlow(e)
-	bl, err := flow.runStartupStage(ctx, nil)
+	runner := newOneShotRunner(e)
+	bl, err := e.runRunOnceStartup(ctx, runner)
 	if err != nil {
-		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: shortcut topology startup: %w", err)
+		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: initial topology startup: %w", err)
 	}
 
-	fullRefresh, err := e.shouldRunFullRemoteRefresh(ctx, false)
+	fullRefresh, err := e.shouldRunFullRemoteRefresh(ctx, opts.FullReconcile)
 	if err != nil {
-		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: shortcut topology refresh cadence: %w", err)
+		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: initial topology refresh cadence: %w", err)
 	}
+	opts.FullReconcile = fullRefresh
 
-	var topology ShortcutTopologyBatch
-	if fullRefresh {
-		_, _, topology, err = flow.observeRemoteFullWithShortcutTopology(ctx, bl)
-	} else {
-		_, _, topology, err = flow.observeRemoteWithShortcutTopology(ctx, bl)
-	}
+	_, err = runner.runLiveCurrentPlan(ctx, bl, mode, opts)
 	if err != nil {
-		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: shortcut topology remote observation: %w", err)
-	}
-
-	applyErr := flow.applyShortcutTopologyBatch(ctx, &remoteObservationBatch{
-		shortcutTopology: topology,
-	})
-	if applyErr != nil {
-		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: shortcut topology apply: %w", applyErr)
+		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: initial topology current plan: %w", err)
 	}
 
 	snapshot, err := e.baseline.ShortcutChildTopology(ctx, e.shortcutTopologyNamespaceID)
 	if err != nil {
-		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: read shortcut child topology: %w", err)
+		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: read initial shortcut child topology: %w", err)
 	}
 	return snapshot, nil
 }

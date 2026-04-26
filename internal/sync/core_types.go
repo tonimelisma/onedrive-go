@@ -64,20 +64,23 @@ type ChangeEvent struct {
 // BaselineEntry represents the confirmed synced state of a single path.
 // This is the ONLY durable per-item state in the system.
 type BaselineEntry struct {
-	Path            string
-	DriveID         driveid.ID
-	ItemID          string
-	ParentID        string
-	ItemType        ItemType
-	LocalHash       string // per-side: handles SharePoint enrichment natively
-	RemoteHash      string // for normal files, LocalHash == RemoteHash
-	LocalSize       int64
-	LocalSizeKnown  bool
-	RemoteSize      int64
-	RemoteSizeKnown bool
-	LocalMtime      int64 // local mtime at sync time (Unix nanoseconds)
-	RemoteMtime     int64 // remote mtime at sync time; zero means unknown
-	ETag            string
+	Path             string
+	DriveID          driveid.ID
+	ItemID           string
+	ParentID         string
+	ItemType         ItemType
+	LocalHash        string // per-side: handles SharePoint enrichment natively
+	RemoteHash       string // for normal files, LocalHash == RemoteHash
+	LocalSize        int64
+	LocalSizeKnown   bool
+	RemoteSize       int64
+	RemoteSizeKnown  bool
+	LocalMtime       int64 // local mtime at sync time (Unix nanoseconds)
+	RemoteMtime      int64 // remote mtime at sync time; zero means unknown
+	LocalDevice      uint64
+	LocalInode       uint64
+	LocalHasIdentity bool
+	ETag             string
 }
 
 // DirLowerKey groups baseline entries by (directory, lowercase name) for
@@ -334,11 +337,14 @@ type RemoteState struct {
 // LocalState captures the current state of a path as observed from
 // the local filesystem.
 type LocalState struct {
-	Name     string
-	ItemType ItemType
-	Size     int64
-	Hash     string
-	Mtime    int64
+	Name             string
+	ItemType         ItemType
+	Size             int64
+	Hash             string
+	Mtime            int64
+	LocalDevice      uint64
+	LocalInode       uint64
+	LocalHasIdentity bool
 }
 
 // TruthAvailability records whether one side of current path truth is safe for

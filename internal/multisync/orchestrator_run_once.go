@@ -55,22 +55,24 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 			fmt.Errorf("building mount specs: %w", err),
 		)
 	}
-	var bootstrappedParents bootstrappedParentEngines
-	compiled, bootstrappedParents, err = o.bootstrapShortcutTopology(
+	var preparedParents preparedParentEngines
+	compiled, preparedParents, err = o.prepareParentTopology(
 		ctx,
 		compiled,
 		o.cfg.StandaloneMounts,
 		o.cfg.InitialStartupResults,
 		nil,
+		mode,
+		opts,
 	)
 	if err != nil {
 		return controlFailureRunOnceResult(
 			o.cfg.StandaloneMounts,
 			o.cfg.InitialStartupResults,
-			fmt.Errorf("bootstrapping shortcut topology: %w", err),
+			fmt.Errorf("preparing parent topology: %w", err),
 		)
 	}
-	defer o.closeBootstrappedShortcutParentEngines(ctx, bootstrappedParents)
+	defer o.closePreparedParentEngines(ctx, preparedParents)
 	if purgeErr := o.purgeReleasedShortcutChildArtifactsForCompiled(ctx, compiled); purgeErr != nil {
 		o.logger.Warn("purging released shortcut child state artifacts",
 			slog.String("error", purgeErr.Error()),
@@ -83,7 +85,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		slog.String("mode", mode.String()),
 	)
 
-	work, startup, reports := o.prepareRunOnceWork(ctx, mode, compiled.Mounts, compiled.Skipped, opts, bootstrappedParents)
+	work, startup, reports := o.prepareRunOnceWork(ctx, mode, compiled.Mounts, compiled.Skipped, opts, preparedParents)
 
 	var wg gosync.WaitGroup
 	for _, w := range work {
@@ -157,7 +159,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.RunOptions,
-	bootstrappedParents bootstrappedParentEngines,
+	preparedParents preparedParentEngines,
 ) ([]indexedMountWork, StartupSelectionSummary, []*MountReport) {
 	work := make([]indexedMountWork, 0, len(mounts))
 	reports := make([]*MountReport, 0, len(mounts))
@@ -176,10 +178,10 @@ func (o *Orchestrator) prepareRunOnceWork(
 		}
 
 		o.attachShortcutTopologyHandler(mount, false)
-		if bootstrapped := bootstrappedParents[mount.mountID]; bootstrapped != nil {
-			delete(bootstrappedParents, mount.mountID)
-			setShortcutTopologyHandler(bootstrapped, mount.shortcutTopologyHandler)
-			w := o.buildEngineWorkFromExisting(mount, bootstrapped, mode, opts)
+		if prepared := preparedParents[mount.mountID]; prepared != nil {
+			delete(preparedParents, mount.mountID)
+			setShortcutTopologyHandler(prepared, mount.shortcutTopologyHandler)
+			w := o.buildEngineWorkFromExisting(mount, prepared, mode, opts)
 			startResults = append(startResults, MountStartupResult{
 				SelectionIndex: mount.selectionIndex,
 				Identity:       mount.identity(),
@@ -360,7 +362,7 @@ func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	if err := acknowledgeSuccessfulFinalDrains(ctx, successful, compiled.Mounts, parentAckers); err != nil {
 		return false, err
 	}
-	if err := purgeShortcutChildArtifactsForResults(ctx, successful, o.logger); err != nil {
+	if err := purgeShortcutChildArtifactsForResults(ctx, successful, compiled.Mounts, o.logger); err != nil {
 		return false, err
 	}
 	o.forgetReleasedShortcutChildren(releasedShortcutChildrenForDrainResults(successful, compiled.Mounts))
@@ -463,11 +465,22 @@ func releasedShortcutChildrenForDrainResults(
 func purgeShortcutChildArtifactsForResults(
 	ctx context.Context,
 	successful []shortcutChildDrainResult,
+	mounts []*mountSpec,
 	logger *slog.Logger,
 ) error {
+	mountByID := make(map[string]*mountSpec, len(mounts))
+	for _, mount := range mounts {
+		if mount != nil {
+			mountByID[mount.mountID.String()] = mount
+		}
+	}
 	var errs []error
 	for _, result := range successful {
-		if err := purgeShortcutChildArtifacts(ctx, result.MountID, logger); err != nil {
+		scope := shortcutChildArtifactScope{mountID: result.MountID}
+		if mount := mountByID[result.MountID]; mount != nil {
+			scope.localRoot = mount.syncRoot
+		}
+		if err := purgeShortcutChildArtifacts(ctx, scope, logger); err != nil {
 			errs = append(errs, fmt.Errorf("purging final-drain child mount %s: %w", result.MountID, err))
 		}
 	}

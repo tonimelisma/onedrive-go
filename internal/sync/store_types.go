@@ -72,11 +72,14 @@ type RemoteStateRow struct {
 
 // LocalStateRow represents a row from the local_state table.
 type LocalStateRow struct {
-	Path     string
-	ItemType ItemType
-	Hash     string
-	Size     int64
-	Mtime    int64
+	Path             string
+	ItemType         ItemType
+	Hash             string
+	Size             int64
+	Mtime            int64
+	LocalDevice      uint64
+	LocalInode       uint64
+	LocalHasIdentity bool
 }
 
 // RetryWorkRow represents a row from the retry_work table.

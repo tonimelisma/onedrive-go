@@ -141,7 +141,6 @@ func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
 	assert.Equal(t, mounts[0].remoteRootItemID, cfg.RemoteRootItemID)
 	assert.Equal(t, mounts[0].remoteRootDeltaCapable, cfg.RemoteRootDeltaCapable)
 	assert.Equal(t, mounts[0].enableWebsocket, cfg.EnableWebsocket)
-	assert.Equal(t, syncengine.LocalFilterConfig{}, cfg.LocalFilter)
 	assert.True(t, cfg.LocalRules.RejectSharePointRootForms)
 	assert.Equal(t, 7, cfg.TransferWorkers)
 	assert.Equal(t, 8, cfg.CheckWorkers)

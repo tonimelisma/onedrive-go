@@ -47,7 +47,7 @@ The observation stack has four main pieces:
 
 | Behavior | Evidence |
 | --- | --- |
-| Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestNosyncGuard_PreventsAllSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
+| Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestNosyncGuard_PreventsAllSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child topology to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 
@@ -105,11 +105,13 @@ Mount-root observation may use folder delta or recursive enumeration depending
 on drive type and Graph support.
 
 Parent local observation rebuilds protected shortcut-root paths from the
-parent sync store. A protected path is suppressed from normal
-create/move/delete planning, and a same-parent directory with a matching stored
-root identity is handled as parent shortcut alias lifecycle instead of being
-uploaded as a new parent-owned folder. Parent alias mutations are executed by
-the parent engine by binding item ID; multisync receives only the resulting
+parent sync store. A protected path records its boundary `local_state` identity
+but suppresses descendants from normal create/move/delete planning. Shortcut
+root rename/move/delete policy is then layered on top of the same generic
+filesystem identity facts used for ordinary local move detection; a unique
+identity match at a new path is a parent shortcut alias move, while ambiguous
+matches become parent-owned recovery state. Parent alias mutations are executed
+by the parent engine by binding item ID; multisync receives only the resulting
 child topology publication.
 
 When remote shortcut topology moves or renames an existing binding inside the
@@ -171,12 +173,17 @@ placeholder delta as ordinary content or an unavailable new child.
 `LocalObserver` and `Scanner` observe the whole configured local root. There is
 no user-configured bidirectional narrowing of the synced tree.
 
-`LocalFilterConfig.SkipDirs` is now interpreted as a list of root-relative slash
+`LocalFilterConfig.SkipDirs` is interpreted as a list of root-relative slash
 paths beneath the mount root. A skip entry excludes that exact subtree only; it
-does not exclude every directory elsewhere with the same leaf name. The control
-plane uses that capability to exclude managed child-mount subtrees from a
-parent mount's local scan/watch surface while still letting the child mount
-observe its own subtree normally.
+does not exclude every directory elsewhere with the same leaf name. Managed
+shortcut child subtrees are not supplied by the control plane as skip dirs;
+parent engines derive those protected roots from `shortcut_roots` and update
+their own observer/filter state internally.
+
+Full local scans persist `local_device`, `local_inode`, and
+`local_has_identity` for files and directories on platforms that expose stable
+device/inode identity. Unsupported platforms persist `local_has_identity=false`
+and keep hash-based file move fallback behavior for files only.
 
 Built-in local observation policy remains:
 

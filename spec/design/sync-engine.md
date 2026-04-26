@@ -191,6 +191,16 @@ from `engine_runtime_start.go`; and completion plus publication drain should
 read from `engine_runtime_completion.go` plus the trial-specific
 `engine_runtime_completion_trial.go`.
 
+Parent child-admission readiness is part of the normal parent startup path.
+Multisync asks selected parent engines to run the normal initial
+topology-preparation stage before any child engine is admitted. That stage
+performs the same remote
+observation cadence decision, full local observation, current-plan build,
+retry/block reconciliation, and shortcut-root lifecycle publication the parent
+would otherwise need for its first pass. The prepared engine then continues
+into one-shot execution or watch mode, so child topology is derived from fresh
+parent local and remote truth rather than cached control-plane state.
+
 Once one-shot shutdown has started, late worker completions no longer re-enter
 the normal outbox path. The engine runs them through the same shutdown
 completion boundary watch drain uses, immediately collapsing any newly-ready

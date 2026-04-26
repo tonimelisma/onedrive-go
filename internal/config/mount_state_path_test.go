@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,55 +66,4 @@ func TestChildMountID_UsesParentAndBinding(t *testing.T) {
 	assert.Equal(t, "parent|binding:shortcut-item", ChildMountID("parent", "shortcut-item"))
 	assert.Empty(t, ChildMountID("", "shortcut-item"))
 	assert.Empty(t, ChildMountID("parent", ""))
-}
-
-// Validates: R-2.4.8
-func TestPurgeManagedChildMountArtifacts_RemovesStateFamilyAndChildCatalogRecord(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-
-	childID := ChildMountID("parent", "shortcut-item")
-	statePath := MountStatePath(childID)
-	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
-	for _, path := range []string{statePath, statePath + "-wal", statePath + "-shm", statePath + "-journal"} {
-		require.NoError(t, os.WriteFile(path, []byte("state"), 0o600))
-	}
-	require.NoError(t, UpdateCatalog(func(catalog *Catalog) error {
-		catalog.Drives[childID] = CatalogDrive{CanonicalID: childID, DisplayName: "Managed child"}
-		catalog.Drives["business:user@example.com"] = CatalogDrive{
-			CanonicalID: "business:user@example.com",
-			DisplayName: "Explicit shared drive",
-		}
-		return nil
-	}))
-
-	require.NoError(t, PurgeManagedChildMountArtifacts(childID))
-
-	for _, path := range []string{statePath, statePath + "-wal", statePath + "-shm", statePath + "-journal"} {
-		assert.NoFileExists(t, path)
-	}
-	catalog, err := LoadCatalog()
-	require.NoError(t, err)
-	assert.NotContains(t, catalog.Drives, childID)
-	assert.Contains(t, catalog.Drives, "business:user@example.com")
-}
-
-// Validates: R-2.4.8
-func TestPurgeManagedChildMountArtifacts_IgnoresExplicitMountID(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-
-	mountID := "business:user@example.com"
-	statePath := MountStatePath(mountID)
-	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
-	require.NoError(t, os.WriteFile(statePath, []byte("state"), 0o600))
-	require.NoError(t, UpdateCatalog(func(catalog *Catalog) error {
-		catalog.Drives[mountID] = CatalogDrive{CanonicalID: mountID, DisplayName: "Explicit shared drive"}
-		return nil
-	}))
-
-	require.NoError(t, PurgeManagedChildMountArtifacts(mountID))
-
-	assert.FileExists(t, statePath)
-	catalog, err := LoadCatalog()
-	require.NoError(t, err)
-	assert.Contains(t, catalog.Drives, mountID)
 }

@@ -46,6 +46,55 @@ func TestReplaceLocalState_ReplacesWholeSnapshot(t *testing.T) {
 }
 
 // Validates: R-2.1.3
+func TestReplaceLocalState_PersistsFilesystemIdentity(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+		{
+			Path:             "folder",
+			ItemType:         ItemTypeFolder,
+			LocalDevice:      101,
+			LocalInode:       202,
+			LocalHasIdentity: true,
+		},
+		{
+			Path:             "folder/file.txt",
+			ItemType:         ItemTypeFile,
+			Hash:             "hash-a",
+			Size:             12,
+			Mtime:            34,
+			LocalDevice:      303,
+			LocalInode:       404,
+			LocalHasIdentity: true,
+		},
+	}))
+
+	rows, err := store.ListLocalState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, LocalStateRow{
+		Path:             "folder",
+		ItemType:         ItemTypeFolder,
+		LocalDevice:      101,
+		LocalInode:       202,
+		LocalHasIdentity: true,
+	}, rows[0])
+	assert.Equal(t, LocalStateRow{
+		Path:             "folder/file.txt",
+		ItemType:         ItemTypeFile,
+		Hash:             "hash-a",
+		Size:             12,
+		Mtime:            34,
+		LocalDevice:      303,
+		LocalInode:       404,
+		LocalHasIdentity: true,
+	}, rows[1])
+}
+
+// Validates: R-2.1.3
 func TestBuildLocalStateRows_UsesDirectSnapshotRows(t *testing.T) {
 	t.Parallel()
 

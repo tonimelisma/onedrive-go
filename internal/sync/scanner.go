@@ -67,12 +67,15 @@ const (
 
 // hashJob describes a file that needs hashing during FullScan phase 2.
 type hashJob struct {
-	fsPath    string
-	dbRelPath string
-	name      string
-	size      int64
-	mtime     int64
-	isNew     bool // true for creates, false for modifies
+	fsPath           string
+	dbRelPath        string
+	name             string
+	size             int64
+	mtime            int64
+	localDevice      uint64
+	localInode       uint64
+	localHasIdentity bool
+	isNew            bool // true for creates, false for modifies
 }
 
 // resolveCheckWorkers returns the effective check worker count.
@@ -283,11 +286,14 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 				if existing, found := o.Baseline.GetByPath(job.dbRelPath); found && hash == existing.LocalHash {
 					mu.Lock()
 					rows = append(rows, LocalStateRow{
-						Path:     job.dbRelPath,
-						ItemType: ItemTypeFile,
-						Hash:     hash,
-						Size:     job.size,
-						Mtime:    job.mtime,
+						Path:             job.dbRelPath,
+						ItemType:         ItemTypeFile,
+						Hash:             hash,
+						Size:             job.size,
+						Mtime:            job.mtime,
+						LocalDevice:      job.localDevice,
+						LocalInode:       job.localInode,
+						LocalHasIdentity: job.localHasIdentity,
 					})
 					mu.Unlock()
 					return nil
@@ -314,11 +320,14 @@ func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]Change
 			mu.Lock()
 			events = append(events, ev)
 			rows = append(rows, LocalStateRow{
-				Path:     job.dbRelPath,
-				ItemType: itemType,
-				Hash:     hash,
-				Size:     job.size,
-				Mtime:    job.mtime,
+				Path:             job.dbRelPath,
+				ItemType:         itemType,
+				Hash:             hash,
+				Size:             job.size,
+				Mtime:            job.mtime,
+				LocalDevice:      job.localDevice,
+				LocalInode:       job.localInode,
+				LocalHasIdentity: job.localHasIdentity,
 			})
 			mu.Unlock()
 
@@ -480,6 +489,22 @@ func (o *LocalObserver) processObservedInfo(
 			MountID:      reservation.MountID,
 			BindingID:    reservation.BindingID,
 		})
+		if kind == observedKindDir {
+			identity := synctree.FileIdentity{Device: reservation.Device, Inode: reservation.Inode}
+			if currentIdentity, hasIdentity := synctree.IdentityFromFileInfo(info); hasIdentity {
+				identity = currentIdentity
+			}
+			observed[dbRelPath] = true
+			currentRows[dbRelPath] = LocalStateRow{
+				Path:             dbRelPath,
+				ItemType:         ItemTypeFolder,
+				Size:             info.Size(),
+				Mtime:            info.ModTime().UnixNano(),
+				LocalDevice:      identity.Device,
+				LocalInode:       identity.Inode,
+				LocalHasIdentity: true,
+			}
+		}
 		o.Logger.Debug("skipping managed root identity match",
 			slog.String("path", dbRelPath),
 			slog.String("reserved_path", reservation.Path))
@@ -504,6 +529,11 @@ func (o *LocalObserver) processObservedInfo(
 		Path:  dbRelPath,
 		Mtime: info.ModTime().UnixNano(),
 	}
+	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
+		row.LocalDevice = identity.Device
+		row.LocalInode = identity.Inode
+		row.LocalHasIdentity = true
+	}
 	switch kind {
 	case observedKindDir:
 		row.ItemType = ItemTypeFolder
@@ -511,6 +541,8 @@ func (o *LocalObserver) processObservedInfo(
 		currentRows[dbRelPath] = row
 	case observedKindFile:
 		row.ItemType = ItemTypeFile
+		row.Size = info.Size()
+		currentRows[dbRelPath] = row
 	case observedKindUnknown:
 		return fmt.Errorf("walk observed entry %s: unknown observed kind", dbRelPath)
 	}
@@ -538,6 +570,7 @@ func (o *LocalObserver) classifyObservedInfo(
 
 	// No baseline entry — this is a new item.
 	if existing == nil {
+		observedRow := currentRows[dbRelPath]
 		if kind == observedKindDir {
 			// Folder creates go directly to events (no hashing needed).
 			*events = append(*events, ChangeEvent{
@@ -552,12 +585,15 @@ func (o *LocalObserver) classifyObservedInfo(
 		} else {
 			// New file — needs hashing in phase 2.
 			*jobs = append(*jobs, hashJob{
-				fsPath:    fsPath,
-				dbRelPath: dbRelPath,
-				name:      name,
-				size:      info.Size(),
-				mtime:     info.ModTime().UnixNano(),
-				isNew:     true,
+				fsPath:           fsPath,
+				dbRelPath:        dbRelPath,
+				name:             name,
+				size:             info.Size(),
+				mtime:            info.ModTime().UnixNano(),
+				localDevice:      observedRow.LocalDevice,
+				localInode:       observedRow.LocalInode,
+				localHasIdentity: observedRow.LocalHasIdentity,
+				isNew:            true,
 			})
 		}
 
@@ -587,16 +623,20 @@ func (o *LocalObserver) classifyFileChange(
 ) error {
 	currentMtime := info.ModTime().UnixNano()
 	currentSize := info.Size()
+	observedRow := currentRows[dbRelPath]
 
 	if CanReuseBaselineHash(info, base, scanStartNano) {
 		o.Logger.Debug("fast path: mtime+size match, skipping hash",
 			slog.String("path", dbRelPath))
 		currentRows[dbRelPath] = LocalStateRow{
-			Path:     dbRelPath,
-			ItemType: ItemTypeFile,
-			Hash:     base.LocalHash,
-			Size:     currentSize,
-			Mtime:    currentMtime,
+			Path:             dbRelPath,
+			ItemType:         ItemTypeFile,
+			Hash:             base.LocalHash,
+			Size:             currentSize,
+			Mtime:            currentMtime,
+			LocalDevice:      observedRow.LocalDevice,
+			LocalInode:       observedRow.LocalInode,
+			LocalHasIdentity: observedRow.LocalHasIdentity,
 		}
 
 		return nil
@@ -609,12 +649,15 @@ func (o *LocalObserver) classifyFileChange(
 
 	// Slow path: metadata differs (or racily clean) — queue for hash phase.
 	*jobs = append(*jobs, hashJob{
-		fsPath:    fsPath,
-		dbRelPath: dbRelPath,
-		name:      name,
-		size:      currentSize,
-		mtime:     currentMtime,
-		isNew:     false,
+		fsPath:           fsPath,
+		dbRelPath:        dbRelPath,
+		name:             name,
+		size:             currentSize,
+		mtime:            currentMtime,
+		localDevice:      observedRow.LocalDevice,
+		localInode:       observedRow.LocalInode,
+		localHasIdentity: observedRow.LocalHasIdentity,
+		isNew:            false,
 	})
 
 	return nil

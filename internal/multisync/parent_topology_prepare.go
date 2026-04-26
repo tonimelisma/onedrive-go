@@ -8,22 +8,28 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-type shortcutTopologyRefresher interface {
-	PrepareShortcutChildren(context.Context) (syncengine.ShortcutChildTopologySnapshot, error)
+type parentTopologyPreparer interface {
+	PrepareInitialTopology(
+		context.Context,
+		syncengine.SyncMode,
+		syncengine.RunOptions,
+	) (syncengine.ShortcutChildTopologySnapshot, error)
 }
 
-type bootstrappedParentEngines map[mountID]engineRunner
+type preparedParentEngines map[mountID]engineRunner
 
-func (o *Orchestrator) bootstrapShortcutTopology(
+func (o *Orchestrator) prepareParentTopology(
 	ctx context.Context,
 	compiled *compiledMountSet,
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
 	existingWatchRunners map[mountID]*watchRunner,
-) (*compiledMountSet, bootstrappedParentEngines, error) {
-	bootstrapped := make(bootstrappedParentEngines)
-	if compiled == nil || o == nil || o.cfg == nil || o.cfg.disableTopologyBootstrap {
-		return compiled, bootstrapped, nil
+	mode syncengine.SyncMode,
+	opts syncengine.RunOptions,
+) (*compiledMountSet, preparedParentEngines, error) {
+	prepared := make(preparedParentEngines)
+	if compiled == nil || o == nil || o.cfg == nil || o.cfg.disableParentTopologyPrepare {
+		return compiled, prepared, nil
 	}
 
 	changed := false
@@ -32,34 +38,33 @@ func (o *Orchestrator) bootstrapShortcutTopology(
 		if mount == nil || mount.paused || mount.projectionKind != MountProjectionStandalone {
 			continue
 		}
-		if canReuseWatchRunnerForParentBootstrap(existingWatchRunners, mount) {
+		if canReuseWatchRunnerForParentPrepare(existingWatchRunners, mount) {
 			continue
 		}
 
-		parentChanged, engine, err := o.bootstrapShortcutTopologyForParent(ctx, mount)
+		parentChanged, engine, err := o.prepareTopologyForParent(ctx, mount, mode, opts)
 		if err != nil {
-			o.closeBootstrappedShortcutParentEngines(ctx, bootstrapped)
-			return compiled, nil, fmt.Errorf("bootstrap shortcut topology for mount %s: %w", mount.label(), err)
+			o.closePreparedParentEngines(ctx, prepared)
+			return compiled, nil, fmt.Errorf("prepare parent topology for mount %s: %w", mount.label(), err)
 		}
 		if engine != nil {
-			bootstrapped[mount.mountID] = engine
+			prepared[mount.mountID] = engine
 		}
 		changed = changed || parentChanged
 	}
 	if !changed {
-		return compiled, bootstrapped, nil
+		return compiled, prepared, nil
 	}
 
 	refreshed, err := o.buildRuntimeMountSet(ctx, standaloneMounts, initialStartup)
 	if err != nil {
-		o.closeBootstrappedShortcutParentEngines(ctx, bootstrapped)
-		return compiled, nil, fmt.Errorf("rebuilding mount specs after shortcut topology bootstrap: %w", err)
+		o.closePreparedParentEngines(ctx, prepared)
+		return compiled, nil, fmt.Errorf("rebuilding mount specs after parent topology prepare: %w", err)
 	}
-	o.closeBootstrappedShortcutParentEngines(ctx, bootstrapped)
-	return refreshed, make(bootstrappedParentEngines), nil
+	return refreshed, prepared, nil
 }
 
-func canReuseWatchRunnerForParentBootstrap(
+func canReuseWatchRunnerForParentPrepare(
 	existingWatchRunners map[mountID]*watchRunner,
 	parent *mountSpec,
 ) bool {
@@ -73,9 +78,11 @@ func canReuseWatchRunnerForParentBootstrap(
 	return mountSpecCoreEquivalent(runner.mount, parent)
 }
 
-func (o *Orchestrator) bootstrapShortcutTopologyForParent(
+func (o *Orchestrator) prepareTopologyForParent(
 	ctx context.Context,
 	parent *mountSpec,
+	mode syncengine.SyncMode,
+	opts syncengine.RunOptions,
 ) (bool, engineRunner, error) {
 	if o == nil || o.cfg == nil || parent == nil {
 		return false, nil, nil
@@ -86,13 +93,11 @@ func (o *Orchestrator) bootstrapShortcutTopologyForParent(
 		return false, nil, fmt.Errorf("session error for mount %s: %w", parent.label(), err)
 	}
 
-	changed := false
-	bootstrapParent := *parent
+	preparedParent := *parent
 	mountCollector := o.registerMountPerfCollector(parent.mountID.String())
-
 	engine, err := o.engineFactory(ctx, engineFactoryRequest{
 		Session:       session,
-		Mount:         &bootstrapParent,
+		Mount:         &preparedParent,
 		Logger:        o.logger,
 		VerifyDrive:   true,
 		PerfCollector: mountCollector,
@@ -102,31 +107,31 @@ func (o *Orchestrator) bootstrapShortcutTopologyForParent(
 		return false, nil, fmt.Errorf("engine creation failed for mount %s: %w", parent.label(), err)
 	}
 
-	refresher, ok := engine.(shortcutTopologyRefresher)
+	preparer, ok := engine.(parentTopologyPreparer)
 	if !ok {
 		return false, engine, nil
 	}
-	snapshot, err := refresher.PrepareShortcutChildren(ctx)
+	snapshot, err := preparer.PrepareInitialTopology(ctx, mode, opts)
 	if err != nil {
-		o.closeBootstrappedShortcutParentEngine(ctx, parent.mountID, engine)
-		return false, nil, fmt.Errorf("preparing shortcut children: %w", err)
+		o.closePreparedParentEngine(ctx, parent.mountID, engine)
+		return false, nil, fmt.Errorf("preparing parent initial topology: %w", err)
 	}
-	changed = o.storeParentShortcutTopology(parent.mountID, snapshot)
+	changed := o.storeParentShortcutTopology(parent.mountID, snapshot)
 
 	return changed, engine, nil
 }
 
-func (o *Orchestrator) closeBootstrappedShortcutParentEngines(
+func (o *Orchestrator) closePreparedParentEngines(
 	ctx context.Context,
-	bootstrapped bootstrappedParentEngines,
+	prepared preparedParentEngines,
 ) {
-	for id, engine := range bootstrapped {
-		o.closeBootstrappedShortcutParentEngine(ctx, id, engine)
-		delete(bootstrapped, id)
+	for id, engine := range prepared {
+		o.closePreparedParentEngine(ctx, id, engine)
+		delete(prepared, id)
 	}
 }
 
-func (o *Orchestrator) closeBootstrappedShortcutParentEngine(
+func (o *Orchestrator) closePreparedParentEngine(
 	ctx context.Context,
 	id mountID,
 	engine engineRunner,
@@ -136,7 +141,7 @@ func (o *Orchestrator) closeBootstrappedShortcutParentEngine(
 	}
 	defer o.removeMountPerfCollector(id.String())
 	if closeErr := engine.Close(ctx); closeErr != nil && o.logger != nil {
-		o.logger.Warn("engine close error after shortcut topology bootstrap",
+		o.logger.Warn("engine close error after parent topology prepare",
 			slog.String("mount_id", id.String()),
 			slog.String("error", closeErr.Error()),
 		)

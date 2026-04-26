@@ -137,6 +137,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 
 	execCfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
 		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
+		driveops.WithSessionScope(cfg.MountID, cfg.SyncRoot),
 	))
 
 	e := &Engine{

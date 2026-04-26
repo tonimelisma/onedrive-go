@@ -13,6 +13,7 @@ import (
 // EngineMountConfig carries the non-client runtime facts needed to construct an
 // engine for one mounted content root.
 type EngineMountConfig struct {
+	MountID                     string
 	DBPath                      string
 	SyncRoot                    string
 	DataDir                     string
@@ -23,7 +24,6 @@ type EngineMountConfig struct {
 	RemoteRootDeltaCapable      bool
 	ExpectedSyncRootIdentity    *ShortcutRootIdentity
 	EnableWebsocket             bool
-	LocalFilter                 LocalFilterConfig
 	LocalRules                  LocalObservationRules
 	ShortcutTopologyNamespaceID string
 	ShortcutTopologyHandler     ShortcutChildTopologySink
@@ -64,6 +64,7 @@ func NewMountEngine(
 	pathConvergence := driveops.NewMountSession(session, mountCfg.RemoteRootItemID)
 
 	cfg := &engineInputs{
+		MountID:                     mountCfg.MountID,
 		DBPath:                      mountCfg.DBPath,
 		SyncRoot:                    mountCfg.SyncRoot,
 		DataDir:                     mountCfg.DataDir,
@@ -84,7 +85,6 @@ func NewMountEngine(
 		PermChecker:                 session.Meta,
 		Logger:                      logger,
 		EnableWebsocket:             mountCfg.EnableWebsocket,
-		LocalFilter:                 mountCfg.LocalFilter,
 		LocalRules:                  mountCfg.LocalRules,
 		ShortcutTopologyNamespaceID: mountCfg.ShortcutTopologyNamespaceID,
 		ShortcutTopologyHandler:     mountCfg.ShortcutTopologyHandler,
