@@ -37,7 +37,7 @@ type ItemConverter struct {
 	Logger                *slog.Logger
 	Stats                 *ObserverCounters // nil-safe: primary observer provides this
 	Items                 ItemClient        // nil-safe: sparse parent enrich is best-effort
-	ShortcutTopology      *ShortcutTopologyBatch
+	ShortcutTopology      *shortcutTopologyBatch
 	ProtectedRootBindings map[string]ProtectedRoot
 
 	// PathPrefix is prepended to materialized paths. Empty for the primary
@@ -346,7 +346,7 @@ func (c *ItemConverter) emitShortcutTopologyFact(
 	}
 
 	if item.IsDeleted {
-		c.ShortcutTopology.appendDelete(ShortcutBindingDelete{BindingItemID: item.ID})
+		c.ShortcutTopology.appendDelete(shortcutBindingDelete{BindingItemID: item.ID})
 		return
 	}
 
@@ -361,7 +361,7 @@ func (c *ItemConverter) emitShortcutTopologyFact(
 	}
 	remoteIsFolder := item.RemoteIsFolder || item.IsFolder || fact.RemoteIsFolder
 	if remoteDriveID != "" && remoteItemID != "" && remoteIsFolder && fact.RelativeLocalPath != "" {
-		c.ShortcutTopology.appendUpsert(ShortcutBindingUpsert{
+		c.ShortcutTopology.appendUpsert(shortcutBindingUpsert{
 			BindingItemID:     item.ID,
 			RelativeLocalPath: fact.RelativeLocalPath,
 			LocalAlias:        fact.LocalAlias,
@@ -374,7 +374,7 @@ func (c *ItemConverter) emitShortcutTopologyFact(
 	}
 
 	if fact.HasEvidence {
-		c.ShortcutTopology.appendUnavailable(ShortcutBindingUnavailable{
+		c.ShortcutTopology.appendUnavailable(shortcutBindingUnavailable{
 			BindingItemID:     item.ID,
 			RelativeLocalPath: fact.RelativeLocalPath,
 			LocalAlias:        fact.LocalAlias,

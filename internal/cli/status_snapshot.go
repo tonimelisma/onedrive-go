@@ -540,7 +540,8 @@ func buildChildStatusMount(
 	if root.Waiting != nil {
 		mount.WaitingReplacement = root.Waiting.RelativeLocalPath
 	}
-	if root.State != "" && root.State != syncengine.ShortcutRootStateActive {
+	metadata := shortcutRootStatusMetadata(root.State)
+	if metadata.protectsPath {
 		mount.ProtectedCurrentPath = mount.SyncDir
 		mount.ProtectedReservedPaths = childProtectedReservedPaths(
 			parentDrive.SyncDir,
@@ -572,23 +573,10 @@ func childProtectedReservedPaths(parentSyncDir string, relativePaths []string) [
 }
 
 func shortcutRootDisplayState(parentDrive config.Drive, state syncengine.ShortcutRootState) string {
-	switch state {
-	case "", syncengine.ShortcutRootStateActive:
+	if state == "" || state == syncengine.ShortcutRootStateActive {
 		return driveState(&parentDrive)
-	case syncengine.ShortcutRootStateTargetUnavailable,
-		syncengine.ShortcutRootStateBlockedPath,
-		syncengine.ShortcutRootStateRenameAmbiguous,
-		syncengine.ShortcutRootStateAliasMutationBlocked:
-		return string(state)
-	case syncengine.ShortcutRootStateRemovedFinalDrain,
-		syncengine.ShortcutRootStateRemovedReleasePending,
-		syncengine.ShortcutRootStateRemovedCleanupBlocked,
-		syncengine.ShortcutRootStateSamePathReplacementWaiting:
-		return "pending_removal"
-	case syncengine.ShortcutRootStateDuplicateTarget:
-		return string(state)
 	}
-	return string(state)
+	return shortcutRootStatusMetadata(state).displayState
 }
 
 func shortcutRootStateReason(state syncengine.ShortcutRootState) string {
@@ -605,44 +593,93 @@ func shortcutRootStatusGuidance(root *syncengine.ShortcutRootRecord) (string, st
 	if root.State == "" || root.State == syncengine.ShortcutRootStateActive {
 		return "", "", false
 	}
-	detail, action := shortcutRootGuidanceText(root.State)
+	metadata := shortcutRootStatusMetadata(root.State)
+	detail, action := metadata.issue, metadata.action
 	if root.BlockedDetail != "" {
 		detail = root.BlockedDetail
 	}
 	return detail, action, true
 }
 
-func shortcutRootGuidanceText(state syncengine.ShortcutRootState) (string, string) {
-	switch state {
-	case "", syncengine.ShortcutRootStateActive:
-		return "", ""
-	case syncengine.ShortcutRootStateTargetUnavailable:
-		return "The shortcut target is unavailable.",
-			"Restore target access or remove the shortcut alias."
-	case syncengine.ShortcutRootStateBlockedPath:
-		return "The shortcut alias path is blocked.",
-			"Clear the blocking local path."
-	case syncengine.ShortcutRootStateRenameAmbiguous:
-		return "Multiple same-folder shortcut alias rename candidates were found.",
-			"Keep exactly one renamed shortcut alias or restore the original name."
-	case syncengine.ShortcutRootStateAliasMutationBlocked:
-		return "The parent engine cannot update the shortcut alias in OneDrive.",
-			"Fix account, network, or permission access, or restore the local alias."
-	case syncengine.ShortcutRootStateRemovedFinalDrain:
-		return "The shortcut alias was removed; child sync is finishing before release.",
-			"Restore access to the shared folder so final drain can retry, or delete the local shortcut directory to discard the dirty local tree."
-	case syncengine.ShortcutRootStateRemovedReleasePending:
-		return "Child sync finished; the parent engine is releasing the protected shortcut alias path.", ""
-	case syncengine.ShortcutRootStateRemovedCleanupBlocked:
-		return "The parent engine cannot release the protected shortcut alias path.",
-			"Clear the local filesystem blocker."
-	case syncengine.ShortcutRootStateSamePathReplacementWaiting:
-		return "A new shortcut is waiting for the old child sync to finish.", ""
-	case syncengine.ShortcutRootStateDuplicateTarget:
-		return "Another shortcut alias in this parent already projects the same target.",
-			"Remove or rename the duplicate shortcut alias."
-	default:
-		return "The shortcut alias is waiting for parent-engine recovery.", ""
+type shortcutRootStatusMetadataEntry struct {
+	displayState string
+	issue        string
+	action       string
+	protectsPath bool
+}
+
+func shortcutRootStatusMetadata(state syncengine.ShortcutRootState) shortcutRootStatusMetadataEntry {
+	if state == "" || state == syncengine.ShortcutRootStateActive {
+		return shortcutRootStatusMetadataEntry{}
+	}
+	if entry, ok := shortcutRootStatusMetadataTable()[state]; ok {
+		return entry
+	}
+	return shortcutRootStatusMetadataEntry{
+		displayState: string(state),
+		issue:        "The shortcut alias is waiting for parent-engine recovery.",
+		protectsPath: true,
+	}
+}
+
+func shortcutRootStatusMetadataTable() map[syncengine.ShortcutRootState]shortcutRootStatusMetadataEntry {
+	return map[syncengine.ShortcutRootState]shortcutRootStatusMetadataEntry{
+		syncengine.ShortcutRootStateTargetUnavailable: {
+			displayState: string(syncengine.ShortcutRootStateTargetUnavailable),
+			issue:        "The shortcut target is unavailable.",
+			action:       "Restore target access or remove the shortcut alias.",
+			protectsPath: true,
+		},
+		syncengine.ShortcutRootStateBlockedPath: {
+			displayState: string(syncengine.ShortcutRootStateBlockedPath),
+			issue:        "The shortcut alias path is blocked.",
+			action:       "Clear the blocking local path.",
+			protectsPath: true,
+		},
+		syncengine.ShortcutRootStateRenameAmbiguous: {
+			displayState: string(syncengine.ShortcutRootStateRenameAmbiguous),
+			issue:        "Multiple same-folder shortcut alias rename candidates were found.",
+			action:       "Keep exactly one renamed shortcut alias or restore the original name.",
+			protectsPath: true,
+		},
+		syncengine.ShortcutRootStateAliasMutationBlocked: {
+			displayState: string(syncengine.ShortcutRootStateAliasMutationBlocked),
+			issue:        "The parent engine cannot update the shortcut alias in OneDrive.",
+			action:       "Fix account, network, or permission access, or restore the local alias.",
+			protectsPath: true,
+		},
+		syncengine.ShortcutRootStateRemovedFinalDrain: {
+			displayState: string(syncengine.ShortcutRootStateRemovedFinalDrain),
+			issue:        "The shortcut alias was removed; child sync is finishing before release.",
+			action:       "Restore access to the shared folder if final drain is blocked.",
+			protectsPath: true,
+		},
+		syncengine.ShortcutRootStateRemovedReleasePending: {
+			displayState: string(syncengine.ShortcutRootStateRemovedReleasePending),
+			issue:        "Child sync finished; the parent engine is releasing the protected shortcut alias path.",
+			protectsPath: true,
+		},
+		syncengine.ShortcutRootStateRemovedCleanupBlocked: {
+			displayState: string(syncengine.ShortcutRootStateRemovedCleanupBlocked),
+			issue:        "The parent engine cannot release the protected shortcut alias path.",
+			action:       "Clear the local filesystem blocker.",
+			protectsPath: true,
+		},
+		syncengine.ShortcutRootStateRemovedChildCleanupPending: {
+			displayState: string(syncengine.ShortcutRootStateRemovedChildCleanupPending),
+			issue:        "The shortcut alias was released; child cleanup is finishing.",
+		},
+		syncengine.ShortcutRootStateSamePathReplacementWaiting: {
+			displayState: string(syncengine.ShortcutRootStateSamePathReplacementWaiting),
+			issue:        "A new shortcut is waiting for the old child sync to finish.",
+			protectsPath: true,
+		},
+		syncengine.ShortcutRootStateDuplicateTarget: {
+			displayState: string(syncengine.ShortcutRootStateDuplicateTarget),
+			issue:        "Another shortcut alias in this parent already projects the same target.",
+			action:       "Remove or rename the duplicate shortcut alias.",
+			protectsPath: true,
+		},
 	}
 }
 

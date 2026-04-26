@@ -169,7 +169,7 @@ type engineInputs struct {
 	LocalFilter                 LocalFilterConfig
 	LocalRules                  LocalObservationRules
 	ShortcutTopologyNamespaceID string
-	ShortcutTopologyHandler     ShortcutChildTopologySink
+	ShortcutChildTopologySink   ShortcutChildTopologySink
 	EnableWebsocket             bool
 	TransferWorkers             int
 	CheckWorkers                int

@@ -15,11 +15,11 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-type releasedShortcutChild struct {
+type shortcutChildArtifactCleanup struct {
 	mountID       string
 	namespaceID   string
 	bindingItemID string
-	reason        syncengine.ShortcutChildReleaseReason
+	reason        syncengine.ShortcutChildArtifactCleanupReason
 }
 
 type shortcutChildArtifactScope struct {
@@ -27,64 +27,92 @@ type shortcutChildArtifactScope struct {
 	localRoot string
 }
 
-func releasedChildren(
+func shortcutChildArtifactCleanups(
 	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
-) []releasedShortcutChild {
+) []shortcutChildArtifactCleanup {
 	if len(topologies) == 0 {
 		return nil
 	}
 
-	releases := make([]releasedShortcutChild, 0)
+	cleanups := make([]shortcutChildArtifactCleanup, 0)
 	for parentID, publication := range topologies {
 		namespaceID := parentID.String()
 		if publication.NamespaceID != "" {
 			namespaceID = publication.NamespaceID
 		}
-		for i := range publication.Released {
-			release := publication.Released[i]
-			if release.BindingItemID == "" {
+		for i := range publication.CleanupRequests {
+			request := publication.CleanupRequests[i]
+			if request.BindingItemID == "" {
 				continue
 			}
-			reason := release.Reason
+			reason := request.Reason
 			if reason == "" {
-				reason = syncengine.ShortcutChildReleaseParentRemoved
+				reason = syncengine.ShortcutChildArtifactCleanupParentRemoved
 			}
-			releases = append(releases, releasedShortcutChild{
-				mountID:       config.ChildMountID(namespaceID, release.BindingItemID),
+			cleanups = append(cleanups, shortcutChildArtifactCleanup{
+				mountID:       config.ChildMountID(namespaceID, request.BindingItemID),
 				namespaceID:   namespaceID,
-				bindingItemID: release.BindingItemID,
+				bindingItemID: request.BindingItemID,
 				reason:        reason,
 			})
 		}
 	}
-	sort.Slice(releases, func(i, j int) bool {
-		if releases[i].mountID == releases[j].mountID {
-			return releases[i].bindingItemID < releases[j].bindingItemID
+	sort.Slice(cleanups, func(i, j int) bool {
+		if cleanups[i].mountID == cleanups[j].mountID {
+			return cleanups[i].bindingItemID < cleanups[j].bindingItemID
 		}
-		return releases[i].mountID < releases[j].mountID
+		return cleanups[i].mountID < cleanups[j].mountID
 	})
-	return releases
+	return cleanups
 }
 
-func (o *Orchestrator) purgeReleasedShortcutChildArtifactsForCompiled(
+func (o *Orchestrator) purgeShortcutChildArtifactsForCompiled(
 	ctx context.Context,
 	compiled *compiledMountSet,
+	parentAckers map[mountID]shortcutChildArtifactCleanupAcker,
 ) error {
-	if compiled == nil || len(compiled.ReleasedChildren) == 0 {
+	if compiled == nil || len(compiled.CleanupChildren) == 0 {
 		return nil
 	}
 	var errs []error
-	purged := make([]releasedShortcutChild, 0, len(compiled.ReleasedChildren))
-	for _, release := range compiled.ReleasedChildren {
-		scope := shortcutChildArtifactScope{mountID: release.mountID}
+	purged := make([]shortcutChildArtifactCleanup, 0, len(compiled.CleanupChildren))
+	for _, cleanup := range compiled.CleanupChildren {
+		scope := shortcutChildArtifactScope{mountID: cleanup.mountID}
 		if err := purgeShortcutChildArtifacts(ctx, scope, o.logger); err != nil {
-			errs = append(errs, fmt.Errorf("purging released child mount %s: %w", release.mountID, err))
+			errs = append(errs, fmt.Errorf("purging shortcut child mount %s: %w", cleanup.mountID, err))
 			continue
 		}
-		purged = append(purged, release)
+		purged = append(purged, cleanup)
 	}
 	if len(purged) > 0 {
-		o.forgetReleasedShortcutChildren(purged)
+		if err := o.acknowledgeShortcutChildArtifactCleanups(ctx, purged, parentAckers); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
+	ctx context.Context,
+	cleanups []shortcutChildArtifactCleanup,
+	parentAckers map[mountID]shortcutChildArtifactCleanupAcker,
+) error {
+	var errs []error
+	for _, cleanup := range cleanups {
+		parentID := mountID(cleanup.namespaceID)
+		acker := parentAckers[parentID]
+		if acker == nil {
+			errs = append(errs, fmt.Errorf("parent mount %s is unavailable for child artifact cleanup acknowledgement", parentID))
+			continue
+		}
+		snapshot, err := acker.AcknowledgeChildArtifactsPurged(ctx, syncengine.ShortcutChildArtifactCleanupAck{
+			BindingItemID: cleanup.bindingItemID,
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("acknowledging child artifact cleanup for mount %s: %w", cleanup.mountID, err))
+			continue
+		}
+		o.storeParentShortcutTopology(parentID, snapshot)
 	}
 	return errors.Join(errs...)
 }

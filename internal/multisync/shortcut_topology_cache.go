@@ -23,12 +23,6 @@ func (o *Orchestrator) storeParentShortcutTopology(
 		o.shortcutChildren = make(map[mountID]syncengine.ShortcutChildTopologyPublication)
 	}
 	current, found := o.shortcutChildren[parentID]
-	if found {
-		publication.Released = mergeReleasedShortcutChildren(current, publication)
-		if len(publication.Released) == 0 {
-			publication.Released = nil
-		}
-	}
 	if found && reflect.DeepEqual(current, publication) {
 		return false
 	}
@@ -67,114 +61,14 @@ func (o *Orchestrator) parentShortcutTopologiesFor(parents []*mountSpec) map[mou
 	return topologies
 }
 
-func mergeReleasedShortcutChildren(
-	current syncengine.ShortcutChildTopologyPublication,
-	next syncengine.ShortcutChildTopologyPublication,
-) []syncengine.ShortcutChildRelease {
-	nextByBinding := make(map[string]struct{}, len(next.Children))
-	for i := range next.Children {
-		if next.Children[i].BindingItemID != "" {
-			nextByBinding[next.Children[i].BindingItemID] = struct{}{}
-		}
-	}
-
-	released := make([]syncengine.ShortcutChildRelease, 0, len(current.Released)+len(next.Released))
-	releasedByBinding := make(map[string]struct{}, len(current.Released)+len(next.Released)+len(current.Children))
-	appendRelease := func(release syncengine.ShortcutChildRelease) {
-		if release.BindingItemID == "" {
-			return
-		}
-		if _, resurrected := nextByBinding[release.BindingItemID]; resurrected {
-			return
-		}
-		if _, alreadyReleased := releasedByBinding[release.BindingItemID]; alreadyReleased {
-			return
-		}
-		if release.Reason == "" {
-			release.Reason = syncengine.ShortcutChildReleaseParentRemoved
-		}
-		released = append(released, release)
-		releasedByBinding[release.BindingItemID] = struct{}{}
-	}
-
-	for i := range current.Released {
-		appendRelease(current.Released[i])
-	}
-	for i := range next.Released {
-		appendRelease(next.Released[i])
-	}
-	for i := range current.Children {
-		child := current.Children[i]
-		if child.BindingItemID == "" {
-			continue
-		}
-		if _, stillPresent := nextByBinding[child.BindingItemID]; stillPresent {
-			continue
-		}
-		appendRelease(syncengine.ShortcutChildRelease{
-			BindingItemID: child.BindingItemID,
-			Reason:        syncengine.ShortcutChildReleaseParentRemoved,
-		})
-	}
-	return released
-}
-
-func (o *Orchestrator) forgetReleasedShortcutChildren(releases []releasedShortcutChild) bool {
-	if o == nil || len(releases) == 0 {
-		return false
-	}
-	byNamespace := make(map[string]map[string]struct{})
-	for i := range releases {
-		release := releases[i]
-		if release.namespaceID == "" || release.bindingItemID == "" {
-			continue
-		}
-		bindings := byNamespace[release.namespaceID]
-		if bindings == nil {
-			bindings = make(map[string]struct{})
-			byNamespace[release.namespaceID] = bindings
-		}
-		bindings[release.bindingItemID] = struct{}{}
-	}
-	if len(byNamespace) == 0 {
-		return false
-	}
-
-	o.shortcutMu.Lock()
-	defer o.shortcutMu.Unlock()
-	changed := false
-	for parentID, publication := range o.shortcutChildren {
-		namespaceID := publication.NamespaceID
-		if namespaceID == "" {
-			namespaceID = parentID.String()
-		}
-		bindings := byNamespace[namespaceID]
-		if len(bindings) == 0 || len(publication.Released) == 0 {
-			continue
-		}
-		parentChanged := false
-		filtered := make([]syncengine.ShortcutChildRelease, 0, len(publication.Released))
-		for i := range publication.Released {
-			if _, forget := bindings[publication.Released[i].BindingItemID]; forget {
-				parentChanged = true
-				continue
-			}
-			filtered = append(filtered, publication.Released[i])
-		}
-		if parentChanged {
-			changed = true
-			publication.Released = filtered
-			o.shortcutChildren[parentID] = publication
-		}
-	}
-	return changed
-}
-
 func cloneShortcutTopologyPublication(
 	publication syncengine.ShortcutChildTopologyPublication,
 ) syncengine.ShortcutChildTopologyPublication {
 	publication.Children = cloneShortcutChildren(publication.Children)
-	publication.Released = append([]syncengine.ShortcutChildRelease(nil), publication.Released...)
+	publication.CleanupRequests = append(
+		[]syncengine.ShortcutChildArtifactCleanupRequest(nil),
+		publication.CleanupRequests...,
+	)
 	return publication
 }
 
@@ -187,8 +81,8 @@ func normalizeShortcutTopologyPublication(
 	if len(publication.Children) == 0 {
 		publication.Children = nil
 	}
-	if len(publication.Released) == 0 {
-		publication.Released = nil
+	if len(publication.CleanupRequests) == 0 {
+		publication.CleanupRequests = nil
 	}
 	for i := range publication.Children {
 		if len(publication.Children[i].ProtectedPaths) == 0 {
@@ -203,7 +97,7 @@ func normalizeShortcutTopologyPublication(
 		}
 		return cmp.Compare(a.RelativeLocalPath, b.RelativeLocalPath)
 	})
-	slices.SortFunc(publication.Released, func(a, b syncengine.ShortcutChildRelease) int {
+	slices.SortFunc(publication.CleanupRequests, func(a, b syncengine.ShortcutChildArtifactCleanupRequest) int {
 		if byBinding := cmp.Compare(a.BindingItemID, b.BindingItemID); byBinding != 0 {
 			return byBinding
 		}

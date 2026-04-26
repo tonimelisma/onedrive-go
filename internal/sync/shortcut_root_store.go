@@ -9,11 +9,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// ApplyShortcutTopology persists parent-owned shortcut-root state. Callers run
+// applyShortcutTopology persists parent-owned shortcut-root state. Callers run
 // this before committing remote observation progress so topology facts replay if
 // the parent namespace state cannot be durably accepted.
-func (m *SyncStore) ApplyShortcutTopology(ctx context.Context, batch ShortcutTopologyBatch) (bool, error) {
-	if m == nil || !batch.ShouldApply() {
+func (m *SyncStore) applyShortcutTopology(ctx context.Context, batch shortcutTopologyBatch) (bool, error) {
+	if m == nil || !batch.shouldApply() {
 		return false, nil
 	}
 	current, err := m.ListShortcutRoots(ctx)
@@ -30,25 +30,7 @@ func (m *SyncStore) ApplyShortcutTopology(ctx context.Context, batch ShortcutTop
 	return true, nil
 }
 
-func (m *SyncStore) AcknowledgeShortcutChildFinalDrain(ctx context.Context, ack ShortcutChildDrainAck) (bool, error) {
-	if m == nil || ack.BindingItemID == "" {
-		return false, nil
-	}
-	current, err := m.ListShortcutRoots(ctx)
-	if err != nil {
-		return false, err
-	}
-	plan := planShortcutRootDrainAck(current, ack)
-	if !plan.Changed {
-		return false, nil
-	}
-	if err := m.ReplaceShortcutRoots(ctx, plan.Records); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func (m *SyncStore) MarkShortcutChildFinalDrainReleasePending(
+func (m *SyncStore) markShortcutChildFinalDrainReleasePending(
 	ctx context.Context,
 	ack ShortcutChildDrainAck,
 ) (bool, error) {
@@ -64,6 +46,37 @@ func (m *SyncStore) MarkShortcutChildFinalDrainReleasePending(
 		return false, nil
 	}
 	if err := m.ReplaceShortcutRoots(ctx, plan.Records); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m *SyncStore) acknowledgeShortcutChildArtifactsPurged(
+	ctx context.Context,
+	ack ShortcutChildArtifactCleanupAck,
+) (bool, error) {
+	if m == nil || ack.BindingItemID == "" {
+		return false, nil
+	}
+	current, err := m.ListShortcutRoots(ctx)
+	if err != nil {
+		return false, err
+	}
+	records := make([]ShortcutRootRecord, 0, len(current))
+	changed := false
+	for i := range current {
+		record := normalizeShortcutRootRecord(current[i])
+		if record.BindingItemID == ack.BindingItemID &&
+			record.State == ShortcutRootStateRemovedChildCleanupPending {
+			changed = true
+			continue
+		}
+		records = append(records, record)
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := m.ReplaceShortcutRoots(ctx, records); err != nil {
 		return false, err
 	}
 	return true, nil

@@ -28,16 +28,24 @@ func seedShortcutLocalStateIdentityForTest(t *testing.T, eng *Engine, relativePa
 	}}))
 }
 
+func shortcutRootByBindingForTest(records []ShortcutRootRecord) map[string]ShortcutRootRecord {
+	byBinding := make(map[string]ShortcutRootRecord, len(records))
+	for i := range records {
+		byBinding[records[i].BindingItemID] = records[i]
+	}
+	return byBinding
+}
+
 // Validates: R-2.4.3, R-2.4.8
-func TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots(t *testing.T) {
+func TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
 
-	changed, err := store.ApplyShortcutTopology(t.Context(), ShortcutTopologyBatch{
+	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
 		NamespaceID: shortcutTopologyTestNamespaceID,
-		Kind:        ShortcutTopologyObservationComplete,
-		Upserts: []ShortcutBindingUpsert{{
+		Kind:        shortcutTopologyObservationComplete,
+		Upserts: []shortcutBindingUpsert{{
 			BindingItemID:     "binding-1",
 			RelativeLocalPath: "Shared/Docs",
 			LocalAlias:        "Docs",
@@ -81,9 +89,9 @@ func TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain(t *testin
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	changed, err := store.ApplyShortcutTopology(t.Context(), ShortcutTopologyBatch{
+	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
 		NamespaceID: shortcutTopologyTestNamespaceID,
-		Kind:        ShortcutTopologyObservationComplete,
+		Kind:        shortcutTopologyObservationComplete,
 	})
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -113,10 +121,10 @@ func TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot(t *testing.T) {
 		LocalRootIdentity: &synctree.FileIdentity{Device: 7, Inode: 9},
 	}}))
 
-	changed, err := store.ApplyShortcutTopology(t.Context(), ShortcutTopologyBatch{
+	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
 		NamespaceID: shortcutTopologyTestNamespaceID,
-		Kind:        ShortcutTopologyObservationIncremental,
-		Upserts: []ShortcutBindingUpsert{{
+		Kind:        shortcutTopologyObservationIncremental,
+		Upserts: []shortcutBindingUpsert{{
 			BindingItemID:     "new-binding",
 			RelativeLocalPath: "Shared/Docs",
 			LocalAlias:        "Docs",
@@ -160,10 +168,10 @@ func TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner(t *testing
 		LocalRootIdentity: &synctree.FileIdentity{Device: 7, Inode: 9},
 	}}))
 
-	changed, err := store.ApplyShortcutTopology(t.Context(), ShortcutTopologyBatch{
+	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
 		NamespaceID: shortcutTopologyTestNamespaceID,
-		Kind:        ShortcutTopologyObservationIncremental,
-		Upserts: []ShortcutBindingUpsert{{
+		Kind:        shortcutTopologyObservationIncremental,
+		Upserts: []shortcutBindingUpsert{{
 			BindingItemID:     "new-binding",
 			RelativeLocalPath: "Shared/Old",
 			LocalAlias:        "Old",
@@ -198,10 +206,10 @@ func TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked(t *testing.T)
 	t.Parallel()
 
 	store := newTestStore(t)
-	changed, err := store.ApplyShortcutTopology(t.Context(), ShortcutTopologyBatch{
+	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
 		NamespaceID: shortcutTopologyTestNamespaceID,
-		Kind:        ShortcutTopologyObservationComplete,
-		Upserts: []ShortcutBindingUpsert{
+		Kind:        shortcutTopologyObservationComplete,
+		Upserts: []shortcutBindingUpsert{
 			{
 				BindingItemID:     "binding-z",
 				RelativeLocalPath: "Shared/Zed",
@@ -257,10 +265,10 @@ func TestSyncStore_RemoteShortcutRenameKeepsPreviousPathProtected(t *testing.T) 
 		LocalRootIdentity: &synctree.FileIdentity{Device: 7, Inode: 9},
 	}}))
 
-	changed, err := store.ApplyShortcutTopology(t.Context(), ShortcutTopologyBatch{
+	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
 		NamespaceID: shortcutTopologyTestNamespaceID,
-		Kind:        ShortcutTopologyObservationIncremental,
-		Upserts: []ShortcutBindingUpsert{{
+		Kind:        shortcutTopologyObservationIncremental,
+		Upserts: []shortcutBindingUpsert{{
 			BindingItemID:     "binding-1",
 			RelativeLocalPath: "Shared/New",
 			LocalAlias:        "New",
@@ -282,7 +290,7 @@ func TestSyncStore_RemoteShortcutRenameKeepsPreviousPathProtected(t *testing.T) 
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestSyncStore_MarkShortcutChildFinalDrainReleasePendingIsDurable(t *testing.T) {
+func TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -298,7 +306,7 @@ func TestSyncStore_MarkShortcutChildFinalDrainReleasePendingIsDurable(t *testing
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	changed, err := store.MarkShortcutChildFinalDrainReleasePending(t.Context(), ShortcutChildDrainAck{
+	changed, err := store.markShortcutChildFinalDrainReleasePending(t.Context(), ShortcutChildDrainAck{
 		BindingItemID: "binding-1",
 	})
 	require.NoError(t, err)
@@ -312,7 +320,7 @@ func TestSyncStore_MarkShortcutChildFinalDrainReleasePendingIsDurable(t *testing
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestSyncStore_AcknowledgeShortcutChildFinalDrainRemovesRetiredRoot(t *testing.T) {
+func TestSyncStore_acknowledgeShortcutChildArtifactsPurgedRemovesCleanupPendingRoot(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -324,11 +332,10 @@ func TestSyncStore_AcknowledgeShortcutChildFinalDrainRemovesRetiredRoot(t *testi
 		RemoteDriveID:     driveid.New("drive-1"),
 		RemoteItemID:      "target-1",
 		RemoteIsFolder:    true,
-		State:             ShortcutRootStateRemovedFinalDrain,
-		ProtectedPaths:    []string{"Shared/Docs"},
+		State:             ShortcutRootStateRemovedChildCleanupPending,
 	}}))
 
-	changed, err := store.AcknowledgeShortcutChildFinalDrain(t.Context(), ShortcutChildDrainAck{
+	changed, err := store.acknowledgeShortcutChildArtifactsPurged(t.Context(), ShortcutChildArtifactCleanupAck{
 		BindingItemID: "binding-1",
 	})
 	require.NoError(t, err)
@@ -340,32 +347,33 @@ func TestSyncStore_AcknowledgeShortcutChildFinalDrainRemovesRetiredRoot(t *testi
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestSyncStore_AcknowledgeShortcutChildFinalDrainPromotesWaitingReplacement(t *testing.T) {
+func TestSyncStore_RemoteUpsertRestoresCleanupPendingRoot(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutTopologyTestNamespaceID,
-		BindingItemID:     "old-binding",
+		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
 		RemoteDriveID:     driveid.New("old-drive"),
 		RemoteItemID:      "old-target",
 		RemoteIsFolder:    true,
-		State:             ShortcutRootStateSamePathReplacementWaiting,
-		ProtectedPaths:    []string{"Shared/Docs"},
-		Waiting: &ShortcutRootReplacement{
-			BindingItemID:     "new-binding",
-			RelativeLocalPath: "Shared/Docs",
-			LocalAlias:        "Docs",
-			RemoteDriveID:     driveid.New("new-drive"),
-			RemoteItemID:      "new-target",
-			RemoteIsFolder:    true,
-		},
+		State:             ShortcutRootStateRemovedChildCleanupPending,
 	}}))
 
-	changed, err := store.AcknowledgeShortcutChildFinalDrain(t.Context(), ShortcutChildDrainAck{
-		BindingItemID: "old-binding",
+	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
+		NamespaceID: shortcutTopologyTestNamespaceID,
+		Kind:        shortcutTopologyObservationIncremental,
+		Upserts: []shortcutBindingUpsert{{
+			BindingItemID:     "binding-1",
+			RelativeLocalPath: "Shared/Docs",
+			LocalAlias:        "Docs",
+			RemoteDriveID:     "new-drive",
+			RemoteItemID:      "new-target",
+			RemoteIsFolder:    true,
+			Complete:          true,
+		}},
 	})
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -373,11 +381,12 @@ func TestSyncStore_AcknowledgeShortcutChildFinalDrainPromotesWaitingReplacement(
 	roots, err := store.ListShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
-	assert.Equal(t, "new-binding", roots[0].BindingItemID)
 	assert.Equal(t, ShortcutRootStateActive, roots[0].State)
-	assert.Nil(t, roots[0].Waiting)
-	assert.Equal(t, "Shared/Docs", roots[0].RelativeLocalPath)
 	assert.True(t, roots[0].RemoteDriveID.Equal(driveid.New("new-drive")))
+	snapshot, err := store.ShortcutChildTopology(t.Context(), shortcutTopologyTestNamespaceID)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Children, 1)
+	assert.Empty(t, snapshot.CleanupRequests)
 }
 
 // Validates: R-2.4.8
@@ -501,10 +510,14 @@ func TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot(t *testing.
 	require.NoError(t, err)
 
 	assert.Empty(t, snapshot.Children)
+	require.Len(t, snapshot.CleanupRequests, 1)
+	assert.Equal(t, "binding-1", snapshot.CleanupRequests[0].BindingItemID)
 	assert.NoDirExists(t, aliasRoot)
 	roots, err := eng.baseline.ListShortcutRoots(t.Context())
 	require.NoError(t, err)
-	assert.Empty(t, roots)
+	require.Len(t, roots, 1)
+	assert.Equal(t, ShortcutRootStateRemovedChildCleanupPending, roots[0].State)
+	assert.Empty(t, roots[0].ProtectedPaths)
 }
 
 // Validates: R-2.4.8
@@ -814,16 +827,16 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 	seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Renamed")
 
 	var published ShortcutChildTopologyPublication
-	eng.shortcutTopologyHandler = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+	eng.shortcutChildTopologySink = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
 		published = publication
 		return nil
 	}
 	flow := newEngineFlow(eng.Engine)
 
-	err = flow.applyShortcutTopologyBatch(t.Context(), &remoteObservationBatch{
-		shortcutTopology: ShortcutTopologyBatch{
+	err = flow.applyShortcutObservationBatch(t.Context(), &remoteObservationBatch{
+		shortcutTopology: shortcutTopologyBatch{
 			NamespaceID: shortcutTopologyTestNamespaceID,
-			Kind:        ShortcutTopologyObservationIncremental,
+			Kind:        shortcutTopologyObservationIncremental,
 		},
 	})
 
@@ -950,7 +963,9 @@ func TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending(t *t
 	assert.NoDirExists(t, aliasRoot)
 	roots, err := eng.baseline.ListShortcutRoots(t.Context())
 	require.NoError(t, err)
-	assert.Empty(t, roots)
+	require.Len(t, roots, 1)
+	assert.Equal(t, ShortcutRootStateRemovedChildCleanupPending, roots[0].State)
+	assert.Empty(t, roots[0].ProtectedPaths)
 }
 
 // Validates: R-2.4.8
@@ -988,8 +1003,12 @@ func TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterRe
 	assert.NoDirExists(t, aliasRoot)
 	roots, err := eng.baseline.ListShortcutRoots(t.Context())
 	require.NoError(t, err)
-	require.Len(t, roots, 1)
-	assert.Equal(t, "new-binding", roots[0].BindingItemID)
-	assert.Equal(t, ShortcutRootStateActive, roots[0].State)
-	assert.True(t, roots[0].RemoteDriveID.Equal(driveid.New("new-drive")))
+	require.Len(t, roots, 2)
+	byBinding := shortcutRootByBindingForTest(roots)
+	require.Contains(t, byBinding, "old-binding")
+	assert.Equal(t, ShortcutRootStateRemovedChildCleanupPending, byBinding["old-binding"].State)
+	assert.Empty(t, byBinding["old-binding"].ProtectedPaths)
+	require.Contains(t, byBinding, "new-binding")
+	assert.Equal(t, ShortcutRootStateActive, byBinding["new-binding"].State)
+	assert.True(t, byBinding["new-binding"].RemoteDriveID.Equal(driveid.New("new-drive")))
 }

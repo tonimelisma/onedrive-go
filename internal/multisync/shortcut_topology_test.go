@@ -70,9 +70,7 @@ func shortcutChildActionForRoot(state syncengine.ShortcutRootState) syncengine.S
 	switch state {
 	case "", syncengine.ShortcutRootStateActive:
 		return syncengine.ShortcutChildActionRun
-	case syncengine.ShortcutRootStateRemovedFinalDrain,
-		syncengine.ShortcutRootStateRemovedReleasePending,
-		syncengine.ShortcutRootStateRemovedCleanupBlocked:
+	case syncengine.ShortcutRootStateRemovedFinalDrain:
 		return syncengine.ShortcutChildActionFinalDrain
 	case syncengine.ShortcutRootStateSamePathReplacementWaiting:
 		return syncengine.ShortcutChildActionFinalDrain
@@ -80,6 +78,9 @@ func shortcutChildActionForRoot(state syncengine.ShortcutRootState) syncengine.S
 		syncengine.ShortcutRootStateBlockedPath,
 		syncengine.ShortcutRootStateRenameAmbiguous,
 		syncengine.ShortcutRootStateAliasMutationBlocked,
+		syncengine.ShortcutRootStateRemovedReleasePending,
+		syncengine.ShortcutRootStateRemovedCleanupBlocked,
+		syncengine.ShortcutRootStateRemovedChildCleanupPending,
 		syncengine.ShortcutRootStateDuplicateTarget:
 		return syncengine.ShortcutChildActionSkipParentBlocked
 	default:
@@ -167,8 +168,8 @@ func TestReceiveParentShortcutTopology_EquivalentPublicationIsStable(t *testing.
 		}},
 	}
 	equivalent := syncengine.ShortcutChildTopologyPublication{
-		NamespaceID: parent.mountID.String(),
-		Released:    []syncengine.ShortcutChildRelease{},
+		NamespaceID:     parent.mountID.String(),
+		CleanupRequests: []syncengine.ShortcutChildArtifactCleanupRequest{},
 		Children: []syncengine.ShortcutChildTopology{{
 			BindingItemID:     "binding-1",
 			RelativeLocalPath: "Shared/Docs",
@@ -253,31 +254,27 @@ func TestParentShortcutTopologyCache_ClonesPublication(t *testing.T) {
 }
 
 // Validates: R-2.4.8, R-4.1.4
-func TestStoreParentShortcutTopology_RecordsReleasedChildren(t *testing.T) {
+func TestStoreParentShortcutTopology_UsesParentCleanupRequests(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
 	orch.storeParentShortcutTopology(parent.mountID, syncengine.ShortcutChildTopologyPublication{
 		NamespaceID: parent.mountID.String(),
-		Children: []syncengine.ShortcutChildTopology{{
-			BindingItemID:     "binding-old",
-			RelativeLocalPath: "Shortcut",
-			LocalAlias:        "Shortcut",
-			RemoteDriveID:     "remote-drive",
-			RemoteItemID:      "remote-root",
-			RunnerAction:      syncengine.ShortcutChildActionFinalDrain,
-		}},
 	})
 
 	changed := orch.storeParentShortcutTopology(parent.mountID, syncengine.ShortcutChildTopologyPublication{
 		NamespaceID: parent.mountID.String(),
+		CleanupRequests: []syncengine.ShortcutChildArtifactCleanupRequest{{
+			BindingItemID: "binding-old",
+			Reason:        syncengine.ShortcutChildArtifactCleanupParentRemoved,
+		}},
 	})
 
 	assert.True(t, changed)
 	publication := orch.parentShortcutTopologyFor(parent.mountID)
-	require.Len(t, publication.Released, 1)
-	assert.Equal(t, "binding-old", publication.Released[0].BindingItemID)
+	require.Len(t, publication.CleanupRequests, 1)
+	assert.Equal(t, "binding-old", publication.CleanupRequests[0].BindingItemID)
 
 	compiled, err := compileRuntimeMountsForParents(
 		[]*mountSpec{parent},
@@ -286,19 +283,20 @@ func TestStoreParentShortcutTopology_RecordsReleasedChildren(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 1)
-	require.Len(t, compiled.ReleasedChildren, 1)
-	assert.Equal(t, config.ChildMountID(parent.mountID.String(), "binding-old"), compiled.ReleasedChildren[0].mountID)
+	require.Len(t, compiled.CleanupChildren, 1)
+	assert.Equal(t, config.ChildMountID(parent.mountID.String(), "binding-old"), compiled.CleanupChildren[0].mountID)
 
 	changed = orch.storeParentShortcutTopology(parent.mountID, syncengine.ShortcutChildTopologyPublication{
 		NamespaceID: parent.mountID.String(),
+		CleanupRequests: []syncengine.ShortcutChildArtifactCleanupRequest{{
+			BindingItemID: "binding-old",
+			Reason:        syncengine.ShortcutChildArtifactCleanupParentRemoved,
+		}},
 	})
 	assert.False(t, changed)
 	publication = orch.parentShortcutTopologyFor(parent.mountID)
-	require.Len(t, publication.Released, 1)
-	assert.Equal(t, "binding-old", publication.Released[0].BindingItemID)
-	assert.True(t, orch.forgetReleasedShortcutChildren(compiled.ReleasedChildren))
-	publication = orch.parentShortcutTopologyFor(parent.mountID)
-	assert.Empty(t, publication.Released)
+	require.Len(t, publication.CleanupRequests, 1)
+	assert.Equal(t, "binding-old", publication.CleanupRequests[0].BindingItemID)
 }
 
 // Validates: R-2.4.8, R-2.8.1, R-4.1.4
@@ -333,7 +331,7 @@ func TestParentWaitingReplacementDoesNotCreateNewChild(t *testing.T) {
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestCompileRuntimeMountsFromParentPlanPublication_DoesNotClassifyDuplicateAutomaticChildren(t *testing.T) {
+func TestCompileRuntimeMountsFromParentChildTopology_DoesNotClassifyDuplicateAutomaticChildren(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
@@ -359,7 +357,7 @@ func TestCompileRuntimeMountsFromParentPlanPublication_DoesNotClassifyDuplicateA
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestCompileRuntimeMountsFromParentPlanPublication_StandaloneContentRootWins(t *testing.T) {
+func TestCompileRuntimeMountsFromParentChildTopology_StandaloneContentRootWins(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()

@@ -73,14 +73,14 @@ type mountSpec struct {
 	minFreeSpace              int64
 	finalDrain                bool
 	expectedSyncRootIdentity  *syncengine.ShortcutRootIdentity
-	shortcutTopologyHandler   syncengine.ShortcutChildTopologySink
+	shortcutChildTopologySink syncengine.ShortcutChildTopologySink
 }
 
 type compiledMountSet struct {
 	Mounts             []*mountSpec
 	Skipped            []MountStartupResult
 	FinalDrainMountIDs []string
-	ReleasedChildren   []releasedShortcutChild
+	CleanupChildren    []shortcutChildArtifactCleanup
 }
 
 type childMountCandidate struct {
@@ -146,7 +146,7 @@ func compileRuntimeMountsForParents(
 		Mounts:             finalMounts,
 		Skipped:            skipped,
 		FinalDrainMountIDs: finalDrainMountIDs(topologies),
-		ReleasedChildren:   releasedChildren(topologies),
+		CleanupChildren:    shortcutChildArtifactCleanups(topologies),
 	}, nil
 }
 

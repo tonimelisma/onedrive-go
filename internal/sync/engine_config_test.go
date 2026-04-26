@@ -135,7 +135,7 @@ func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 }
 
 // Validates: R-2.4.8
-func TestNewMountEngine_DoesNotProtectReleasedShortcutRootAfterDrainAck(t *testing.T) {
+func TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	logger := testLogger(t)
@@ -155,14 +155,8 @@ func TestNewMountEngine_DoesNotProtectReleasedShortcutRootAfterDrainAck(t *testi
 		RemoteDriveID:     driveid.New("drive-1"),
 		RemoteItemID:      "target-1",
 		RemoteIsFolder:    true,
-		State:             ShortcutRootStateRemovedFinalDrain,
-		ProtectedPaths:    []string{"Shared/Docs"},
+		State:             ShortcutRootStateRemovedChildCleanupPending,
 	}}))
-	changed, err := store.AcknowledgeShortcutChildFinalDrain(t.Context(), ShortcutChildDrainAck{
-		BindingItemID: "binding-1",
-	})
-	require.NoError(t, err)
-	assert.True(t, changed)
 	require.NoError(t, store.Close(t.Context()))
 
 	eng, err := NewMountEngine(t.Context(), testEngineSession(), mountCfg, logger, nil, false)

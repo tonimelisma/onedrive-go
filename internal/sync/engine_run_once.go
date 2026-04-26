@@ -275,19 +275,19 @@ func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]
 func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	ctx context.Context,
 	bl *Baseline,
-) ([]ChangeEvent, string, ShortcutTopologyBatch, error) {
+) ([]ChangeEvent, string, shortcutTopologyBatch, error) {
 	eng := flow.engine
 	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
 	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
-		return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
+		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
 	obs.SetShortcutTopology(eng.shortcutTopologyNamespaceID, eng.protectedRoots)
 
 	// Full enumeration: empty token returns ALL items as create/modify events.
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, "")
 	if err != nil {
-		return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: full remote refresh delta: %w", err)
+		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: full remote refresh delta: %w", err)
 	}
 
 	// Build seen set from all non-deleted events in the full enumeration.
