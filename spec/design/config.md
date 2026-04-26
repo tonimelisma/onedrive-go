@@ -81,7 +81,7 @@ Graph/OAuth flows, token deletion, and user interaction, but they do not
 hand-edit `CatalogAccount` or `CatalogDrive` records directly for product
 behavior. Automatic shortcut child topology is not a config-owned durable fact:
 the parent engine stores parent shortcut-root lifecycle in its sync store and
-multisync compiles child runners from parent-declared snapshots.
+multisync compiles child runners from parent-declared topology publications.
 
 The config file itself is durable even when it has zero drive sections. Removing
 the final configured drive or logging out the final configured account leaves

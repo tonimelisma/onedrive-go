@@ -1,137 +1,66 @@
 package multisync
 
 import (
-	"path"
 	"reflect"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-func (o *Orchestrator) storeShortcutChildTopology(
+func (o *Orchestrator) storeParentShortcutTopology(
 	parentID mountID,
-	snapshot syncengine.ShortcutChildTopologySnapshot,
+	publication syncengine.ShortcutChildTopologyPublication,
 ) bool {
 	if o == nil || parentID == "" {
 		return false
 	}
-	snapshot.NamespaceID = parentID.String()
+	publication.NamespaceID = parentID.String()
+	publication = cloneShortcutTopologyPublication(publication)
 	o.shortcutMu.Lock()
 	defer o.shortcutMu.Unlock()
 	if o.shortcutChildren == nil {
-		o.shortcutChildren = make(map[mountID]syncengine.ShortcutChildTopologySnapshot)
+		o.shortcutChildren = make(map[mountID]syncengine.ShortcutChildTopologyPublication)
 	}
 	current, found := o.shortcutChildren[parentID]
-	if found && reflect.DeepEqual(current, snapshot) {
+	if found && reflect.DeepEqual(current, publication) {
 		return false
 	}
-	o.shortcutChildren[parentID] = snapshot
+	o.shortcutChildren[parentID] = publication
 	return true
 }
 
-func (o *Orchestrator) shortcutChildTopologyFor(parentID mountID) syncengine.ShortcutChildTopologySnapshot {
+func (o *Orchestrator) parentShortcutTopologyFor(parentID mountID) syncengine.ShortcutChildTopologyPublication {
 	if o == nil || parentID == "" {
-		return syncengine.ShortcutChildTopologySnapshot{NamespaceID: parentID.String()}
+		return syncengine.ShortcutChildTopologyPublication{NamespaceID: parentID.String()}
 	}
 	o.shortcutMu.Lock()
 	defer o.shortcutMu.Unlock()
-	snapshot := o.shortcutChildren[parentID]
-	snapshot.NamespaceID = parentID.String()
-	snapshot.Children = append([]syncengine.ShortcutChildTopology(nil), snapshot.Children...)
-	for i := range snapshot.Children {
-		if snapshot.Children[i].Waiting != nil {
-			waiting := *snapshot.Children[i].Waiting
-			snapshot.Children[i].Waiting = &waiting
-		}
-		snapshot.Children[i].ProtectedPaths = append([]string(nil), snapshot.Children[i].ProtectedPaths...)
-	}
-	return snapshot
+	publication := o.shortcutChildren[parentID]
+	publication.NamespaceID = parentID.String()
+	return cloneShortcutTopologyPublication(publication)
 }
 
-func (o *Orchestrator) transientShortcutTopology(parents []*mountSpec) *childMountTopology {
-	topology := defaultChildMountTopology()
+func (o *Orchestrator) parentShortcutTopologiesFor(parents []*mountSpec) map[mountID]syncengine.ShortcutChildTopologyPublication {
+	topologies := make(map[mountID]syncengine.ShortcutChildTopologyPublication)
 	for _, parent := range parents {
 		if parent == nil || parent.projectionKind != MountProjectionStandalone {
 			continue
 		}
-		snapshot := o.shortcutChildTopologyFor(parent.mountID)
-		for i := range snapshot.Children {
-			record, ok := childTopologyRecordFromTopology(parent, &snapshot.Children[i])
-			if !ok {
-				continue
-			}
-			topology.mounts[record.mountID] = record
-		}
+		topologies[parent.mountID] = o.parentShortcutTopologyFor(parent.mountID)
 	}
-	return topology
+	return topologies
 }
 
-func childTopologyRecordFromTopology(
-	parent *mountSpec,
-	child *syncengine.ShortcutChildTopology,
-) (childTopologyRecord, bool) {
-	if parent == nil || child == nil || child.BindingItemID == "" {
-		return childTopologyRecord{}, false
-	}
-	relativePath := child.RelativeLocalPath
-	if relativePath == "" {
-		return childTopologyRecord{}, false
-	}
-	localAlias := child.LocalAlias
-	if localAlias == "" {
-		localAlias = path.Base(relativePath)
-	}
-	record := childTopologyRecord{
-		mountID:             config.ChildMountID(parent.mountID.String(), child.BindingItemID),
-		namespaceID:         parent.mountID.String(),
-		bindingItemID:       child.BindingItemID,
-		localAlias:          localAlias,
-		relativeLocalPath:   relativePath,
-		reservedLocalPaths:  reservedPathsFromProtected(relativePath, child.ProtectedPaths),
-		tokenOwnerCanonical: parent.tokenOwnerCanonical.String(),
-		remoteDriveID:       child.RemoteDriveID,
-		remoteItemID:        child.RemoteItemID,
-		state:               child.State,
-		blockedDetail:       child.BlockedDetail,
-	}
-	switch child.State {
-	case "", syncengine.ShortcutChildDesired:
-		record.state = syncengine.ShortcutChildDesired
-	case syncengine.ShortcutChildRetiring:
-		record.state = syncengine.ShortcutChildRetiring
-	case syncengine.ShortcutChildBlocked:
-		record.state = syncengine.ShortcutChildBlocked
-	case syncengine.ShortcutChildWaitingReplacement:
-		record.state = syncengine.ShortcutChildWaitingReplacement
-	default:
-		record.state = syncengine.ShortcutChildBlocked
-		record.blockedDetail = string(child.State)
-	}
-	if record.remoteDriveID == "" || record.remoteItemID == "" {
-		record.state = syncengine.ShortcutChildBlocked
-		if record.blockedDetail == "" {
-			record.blockedDetail = "shortcut binding target is unavailable"
+func cloneShortcutTopologyPublication(
+	publication syncengine.ShortcutChildTopologyPublication,
+) syncengine.ShortcutChildTopologyPublication {
+	publication.Children = append([]syncengine.ShortcutChildTopology(nil), publication.Children...)
+	for i := range publication.Children {
+		if publication.Children[i].Waiting != nil {
+			waiting := *publication.Children[i].Waiting
+			waiting.ProtectedPaths = append([]string(nil), waiting.ProtectedPaths...)
+			publication.Children[i].Waiting = &waiting
 		}
+		publication.Children[i].ProtectedPaths = append([]string(nil), publication.Children[i].ProtectedPaths...)
 	}
-	if _, err := driveid.NewCanonicalID(record.tokenOwnerCanonical); err != nil {
-		return childTopologyRecord{}, false
-	}
-	return record, true
-}
-
-func reservedPathsFromProtected(current string, protected []string) []string {
-	reserved := make([]string, 0, len(protected))
-	seen := map[string]struct{}{current: {}}
-	for _, protectedPath := range protected {
-		if protectedPath == "" {
-			continue
-		}
-		if _, ok := seen[protectedPath]; ok {
-			continue
-		}
-		seen[protectedPath] = struct{}{}
-		reserved = append(reserved, protectedPath)
-	}
-	return reserved
+	return publication
 }

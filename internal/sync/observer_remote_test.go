@@ -1044,6 +1044,71 @@ func TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent(t 
 }
 
 // Validates: R-2.4.3, R-2.4.8
+func TestFullDeltaWithShortcutTopology_EnrichesSparseKnownShortcutMove(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "container", Name: "Moved", ParentID: "root", DriveID: driveID, IsFolder: true},
+					{
+						ID:       "binding-1",
+						ParentID: "container",
+						DriveID:  driveID,
+					},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	itemClient := &testMockItemClient{
+		getItemFn: func(_ context.Context, gotDriveID driveid.ID, itemID string) (*graph.Item, error) {
+			assert.True(t, gotDriveID.Equal(driveID))
+			assert.Equal(t, "binding-1", itemID)
+			return &graph.Item{
+				ID:             "binding-1",
+				Name:           "Docs",
+				ParentID:       "container",
+				DriveID:        driveID,
+				RemoteDriveID:  "remote-drive",
+				RemoteItemID:   "remote-root",
+				RemoteIsFolder: true,
+			}, nil
+		},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs.SetItemClient(itemClient)
+	obs.SetShortcutTopology("personal:owner@example.com", []ManagedRootReservation{{
+		Path:           "Docs",
+		BindingID:      "binding-1",
+		RemoteDriveID:  driveid.New("remote-drive"),
+		RemoteItemID:   "remote-root",
+		RemoteIsFolder: true,
+	}})
+	events, token, topology, err := obs.FullDeltaWithShortcutTopology(t.Context(), "saved-token")
+	require.NoError(t, err)
+	assert.Equal(t, "delta-link", token)
+	require.Len(t, events, 1)
+	assert.Equal(t, "Moved", events[0].Path)
+	require.Len(t, topology.Upserts, 1)
+	assert.Equal(t, ShortcutBindingUpsert{
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Moved/Docs",
+		LocalAlias:        "Docs",
+		RemoteDriveID:     "remote-drive",
+		RemoteItemID:      "remote-root",
+		RemoteIsFolder:    true,
+		Complete:          true,
+	}, topology.Upserts[0])
+	assert.Empty(t, topology.Unavailable)
+}
+
+// Validates: R-2.4.3, R-2.4.8
 func TestWatch_TopologyApplyFailureDoesNotAdvanceCursor(t *testing.T) {
 	t.Parallel()
 

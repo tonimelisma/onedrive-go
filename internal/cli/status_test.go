@@ -148,29 +148,184 @@ func TestBuildChildStatusMount_InheritsParentPause(t *testing.T) {
 	assert.Equal(t, driveStatePaused, mount.State)
 }
 
+type shortcutStatusLifecycleCase struct {
+	name               string
+	state              syncengine.ShortcutRootState
+	displayState       string
+	reason             string
+	detail             string
+	action             string
+	autoRetry          *bool
+	waitingReplacement string
+}
+
+func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
+	return []shortcutStatusLifecycleCase{
+		{
+			name:         "active",
+			state:        syncengine.ShortcutRootStateActive,
+			displayState: driveStateReady,
+		},
+		{
+			name:         "target_unavailable",
+			state:        syncengine.ShortcutRootStateTargetUnavailable,
+			displayState: string(syncengine.ShortcutRootStateTargetUnavailable),
+			reason:       string(syncengine.ShortcutRootStateTargetUnavailable),
+			detail:       "The shortcut target is unavailable.",
+			action:       "Restore target access or remove the shortcut alias.",
+			autoRetry:    boolPtr(true),
+		},
+		{
+			name:         "blocked_path",
+			state:        syncengine.ShortcutRootStateBlockedPath,
+			displayState: string(syncengine.ShortcutRootStateBlockedPath),
+			reason:       string(syncengine.ShortcutRootStateBlockedPath),
+			detail:       "The shortcut alias path is blocked.",
+			action:       "Clear the blocking local path.",
+			autoRetry:    boolPtr(true),
+		},
+		{
+			name:         "rename_ambiguous",
+			state:        syncengine.ShortcutRootStateRenameAmbiguous,
+			displayState: string(syncengine.ShortcutRootStateRenameAmbiguous),
+			reason:       string(syncengine.ShortcutRootStateRenameAmbiguous),
+			detail:       "Multiple same-folder shortcut alias rename candidates were found.",
+			action:       "Keep exactly one renamed shortcut alias or restore the original name.",
+			autoRetry:    boolPtr(true),
+		},
+		{
+			name:         "alias_mutation_blocked",
+			state:        syncengine.ShortcutRootStateAliasMutationBlocked,
+			displayState: string(syncengine.ShortcutRootStateAliasMutationBlocked),
+			reason:       string(syncengine.ShortcutRootStateAliasMutationBlocked),
+			detail:       "The parent engine cannot update the shortcut alias in OneDrive.",
+			action:       "Fix account, network, or permission access, or restore the local alias.",
+			autoRetry:    boolPtr(true),
+		},
+		{
+			name:         "removed_final_drain",
+			state:        syncengine.ShortcutRootStateRemovedFinalDrain,
+			displayState: "pending_removal",
+			reason:       string(syncengine.ShortcutRootStateRemovedFinalDrain),
+			detail:       "The shortcut alias was removed; child sync is finishing before release.",
+			autoRetry:    boolPtr(true),
+		},
+		{
+			name:         "removed_cleanup_blocked",
+			state:        syncengine.ShortcutRootStateRemovedCleanupBlocked,
+			displayState: "pending_removal",
+			reason:       string(syncengine.ShortcutRootStateRemovedCleanupBlocked),
+			detail:       "The parent engine cannot release the protected shortcut alias path.",
+			action:       "Clear the local filesystem blocker.",
+			autoRetry:    boolPtr(true),
+		},
+		{
+			name:               "same_path_replacement_waiting",
+			state:              syncengine.ShortcutRootStateSamePathReplacementWaiting,
+			displayState:       "pending_removal",
+			reason:             string(syncengine.ShortcutRootStateSamePathReplacementWaiting),
+			detail:             "A new shortcut is waiting for the old child sync to finish.",
+			autoRetry:          boolPtr(true),
+			waitingReplacement: "Shortcuts/Docs",
+		},
+	}
+}
+
 // Validates: R-2.10.1
 func TestBuildChildStatusMount_RendersLifecycleState(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
-
-	for _, state := range []syncengine.ShortcutRootState{
-		syncengine.ShortcutRootStateBlockedPath,
-		syncengine.ShortcutRootStateTargetUnavailable,
-		syncengine.ShortcutRootStateRemovedFinalDrain,
-	} {
-		t.Run(string(state), func(t *testing.T) {
-			child := testShortcutStatusChild(parentCID, state)
-			mount := buildChildStatusMount(
-				config.Drive{SyncDir: "/tmp/sync-root"},
-				&child,
-				nil,
-			)
-
-			assert.NotEqual(t, driveStateReady, mount.State)
-			assert.Equal(t, string(state), mount.StateReason)
-			assert.NotEmpty(t, mount.StateDetail)
-			assert.NotNil(t, mount.AutoRetry)
+	tests := shortcutStatusLifecycleCases()
+	for i := range tests {
+		t.Run(tests[i].name, func(t *testing.T) {
+			tc := tests[i]
+			mount := buildStatusLifecycleMount(t, parentCID, tc)
+			assertStatusLifecycleMount(t, &mount, tc)
+			assertStatusLifecycleText(t, &mount, tc)
+			assertStatusLifecycleJSON(t, &mount, tc)
 		})
 	}
+}
+
+func buildStatusLifecycleMount(
+	t *testing.T,
+	parentCID driveid.CanonicalID,
+	tc shortcutStatusLifecycleCase,
+) statusMount {
+	t.Helper()
+
+	child := testShortcutStatusChild(parentCID, tc.state)
+	if tc.waitingReplacement != "" {
+		child.Root.Waiting = &syncengine.ShortcutRootReplacement{
+			BindingItemID:     "binding-new",
+			RelativeLocalPath: tc.waitingReplacement,
+			LocalAlias:        "Docs",
+			RemoteDriveID:     driveid.New("remote-drive-new"),
+			RemoteItemID:      "remote-root-new",
+			RemoteIsFolder:    true,
+		}
+	}
+	return buildChildStatusMount(config.Drive{SyncDir: "/tmp/sync-root"}, &child, nil)
+}
+
+func assertStatusLifecycleMount(t *testing.T, mount *statusMount, tc shortcutStatusLifecycleCase) {
+	t.Helper()
+
+	assert.Equal(t, tc.displayState, mount.State)
+	assert.Equal(t, tc.reason, mount.StateReason)
+	assert.Equal(t, tc.detail, mount.StateDetail)
+	assert.Equal(t, tc.action, mount.RecoveryAction)
+	assert.Equal(t, tc.waitingReplacement, mount.WaitingReplacement)
+	if tc.autoRetry == nil {
+		assert.Nil(t, mount.AutoRetry)
+		assert.Empty(t, mount.ProtectedCurrentPath)
+		return
+	}
+	require.NotNil(t, mount.AutoRetry)
+	assert.Equal(t, *tc.autoRetry, *mount.AutoRetry)
+	assert.Equal(t, "/tmp/sync-root/Shortcuts/Docs", mount.ProtectedCurrentPath)
+}
+
+func assertStatusLifecycleText(t *testing.T, mount *statusMount, tc shortcutStatusLifecycleCase) {
+	t.Helper()
+
+	var text bytes.Buffer
+	require.NoError(t, printMountStatus(&text, mount, false))
+	rendered := text.String()
+	assert.NotContains(t, rendered, "onedrive-go ")
+	assert.NotContains(t, rendered, "Run ")
+	if tc.reason != "" {
+		assert.Contains(t, rendered, "Reason:    "+tc.reason)
+		assert.Contains(t, rendered, "Next:      "+tc.detail)
+		assert.Contains(t, rendered, "Protected current path: /tmp/sync-root/Shortcuts/Docs")
+		assert.Contains(t, rendered, "Auto retry: yes")
+	}
+	if tc.action != "" {
+		assert.Contains(t, rendered, "Action:    "+tc.action)
+	}
+	if tc.waitingReplacement != "" {
+		assert.Contains(t, rendered, "Waiting replacement: "+tc.waitingReplacement)
+	}
+}
+
+func assertStatusLifecycleJSON(t *testing.T, mount *statusMount, tc shortcutStatusLifecycleCase) {
+	t.Helper()
+
+	encoded, err := json.Marshal(mount)
+	require.NoError(t, err)
+	jsonText := string(encoded)
+	if tc.reason == "" {
+		assert.NotContains(t, jsonText, "state_reason")
+		assert.NotContains(t, jsonText, "auto_retry")
+		return
+	}
+	assert.Contains(t, jsonText, `"state_reason":"`+tc.reason+`"`)
+	assert.Contains(t, jsonText, `"state_detail":`)
+	assert.Contains(t, jsonText, `"protected_current_path":`)
+	assert.Contains(t, jsonText, `"auto_retry":true`)
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 // Validates: R-2.3.3, R-2.4.8, R-2.10.4

@@ -234,9 +234,9 @@ func (o *LocalObserver) SetFilterConfig(cfg LocalFilterConfig) {
 	}
 }
 
-// SetManagedRootEventSink installs the control-plane notification sink used
-// for managed-root lifecycle facts. The observer never mutates those roots; it
-// only reports that the owner should reconcile.
+// SetManagedRootEventSink installs the parent watch-runtime notification sink
+// used for managed-root lifecycle facts. The observer never mutates those
+// roots; it only reports that the parent engine should reconcile.
 func (o *LocalObserver) SetManagedRootEventSink(sink ManagedRootEventSink) {
 	o.managedRootEvents = sink
 }

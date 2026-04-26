@@ -48,7 +48,7 @@ The observation stack has four main pieces:
 | Behavior | Evidence |
 | --- | --- |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestNosyncGuard_PreventsAllSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
-| Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines emit those placeholders as shortcut topology facts for the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
+| Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child topology to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 
 ## Remote Observation
@@ -87,11 +87,11 @@ There is no nested shared-folder-following runtime inside the content engine. If
 a normal drive's delta stream contains an embedded shared-folder link or
 shortcut placeholder item, observation suppresses that item from ordinary
 content events. The parent drive engine is still the only Graph observer for
-that drive, so it emits shortcut placeholders as `ShortcutTopologyBatch` facts
-before committing remote observation progress. The parent persists those facts
-in `shortcut_roots` and emits parent-declared child topology; `internal/multisync`
-only starts, skips, final-drains, or stops managed children as separate
-mount-root engines.
+that drive, so it converts shortcut placeholders into engine-internal raw
+topology facts before committing remote observation progress. The parent
+persists those facts in `shortcut_roots` and publishes parent-declared child
+topology; `internal/multisync` only starts, skips, final-drains, or stops
+managed children as separate mount-root engines.
 
 The engine applies topology batches with `ShortcutTopologyBatch.ShouldApply`.
 Any batch with facts applies, a complete batch applies even when it contains no
@@ -110,7 +110,13 @@ create/move/delete planning, and a same-parent directory with a matching stored
 root identity is handled as parent shortcut alias lifecycle instead of being
 uploaded as a new parent-owned folder. Parent alias mutations are executed by
 the parent engine by binding item ID; multisync receives only the resulting
-child topology snapshot.
+child topology publication.
+
+When remote shortcut topology moves or renames an existing binding inside the
+same parent namespace, the parent keeps the previous protected path reserved
+while it moves the local child projection to the new alias path. The child mount
+ID and child content state stay bound to the shortcut binding item ID rather
+than the alias path.
 
 Remote read-denied boundaries are observation-owned facts. When drive-root or
 mount-root observation proves that remote truth is unreadable, the engine
@@ -131,6 +137,7 @@ It owns:
 - NFC normalization
 - drive/item identity handling
 - best-effort item-by-ID enrich for sparse delta items missing `ParentID`
+  or known shortcut target fields
 - path reconstruction from parent chains
 - move detection against baseline
 - malformed sparse-item rejection
@@ -151,6 +158,13 @@ Observation does not fail the batch when that enrich step misses or the direct
 read returns an error. The enrich read exists only to reduce sparse-delta blind
 spots before path materialization; durable ancestry still lives in `baseline`,
 not in a second remote-observation store field.
+
+Known managed shortcut aliases also use persisted reservation target metadata
+as a same-binding fallback when Graph returns a sparse moved/renamed shortcut
+placeholder without `remoteItem` target fields. The parent engine still owns the
+observation and mutation; this fallback only keeps the same shortcut binding
+classified as parent-declared child topology instead of treating an empty
+placeholder delta as ordinary content or an unavailable new child.
 
 ## Local Observation
 

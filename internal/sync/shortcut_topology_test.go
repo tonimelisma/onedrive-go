@@ -38,9 +38,9 @@ func TestApplyShortcutTopologyBatch_ForwardsEmptyCompleteBatch(t *testing.T) {
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
-	var got []ShortcutTopologyBatch
-	eng.shortcutTopologyHandler = func(_ context.Context, batch ShortcutTopologyBatch) error {
-		got = append(got, batch)
+	var got []ShortcutChildTopologyPublication
+	eng.shortcutTopologyHandler = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+		got = append(got, publication)
 		return nil
 	}
 
@@ -53,8 +53,7 @@ func TestApplyShortcutTopologyBatch_ForwardsEmptyCompleteBatch(t *testing.T) {
 
 	require.Len(t, got, 1)
 	assert.Equal(t, shortcutTopologyTestNamespaceID, got[0].NamespaceID)
-	assert.Equal(t, ShortcutTopologyObservationComplete, got[0].Kind)
-	assert.False(t, got[0].HasFacts())
+	assert.Empty(t, got[0].Children)
 }
 
 // Validates: R-2.4.3, R-2.4.8
@@ -63,12 +62,14 @@ func TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler(t *testing.
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
-	eng.shortcutTopologyHandler = func(ctx context.Context, _ ShortcutTopologyBatch) error {
+	eng.shortcutTopologyHandler = func(ctx context.Context, publication ShortcutChildTopologyPublication) error {
 		roots, err := eng.baseline.ListShortcutRoots(ctx)
 		require.NoError(t, err)
 		require.Len(t, roots, 1)
 		assert.Equal(t, "binding-1", roots[0].BindingItemID)
 		assert.Equal(t, ShortcutRootStateActive, roots[0].State)
+		require.Len(t, publication.Children, 1)
+		assert.Equal(t, "binding-1", publication.Children[0].BindingItemID)
 		return nil
 	}
 
@@ -94,7 +95,7 @@ func TestApplyShortcutTopologyBatch_SkipsEmptyIncrementalBatch(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
-	eng.shortcutTopologyHandler = func(_ context.Context, _ ShortcutTopologyBatch) error {
+	eng.shortcutTopologyHandler = func(_ context.Context, _ ShortcutChildTopologyPublication) error {
 		require.FailNow(t, "empty incremental topology batch should not be applied")
 		return nil
 	}
@@ -121,9 +122,9 @@ func TestRefreshShortcutTopology_ForwardsEmptyCompleteBatchWithoutCommittingCurs
 	}
 	eng, _ := newTestEngine(t, mock)
 	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
-	var got []ShortcutTopologyBatch
-	eng.shortcutTopologyHandler = func(_ context.Context, batch ShortcutTopologyBatch) error {
-		got = append(got, batch)
+	var got []ShortcutChildTopologyPublication
+	eng.shortcutTopologyHandler = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+		got = append(got, publication)
 		return nil
 	}
 
@@ -131,8 +132,8 @@ func TestRefreshShortcutTopology_ForwardsEmptyCompleteBatchWithoutCommittingCurs
 	require.NoError(t, err)
 
 	require.Len(t, got, 1)
-	assert.Equal(t, ShortcutTopologyObservationComplete, got[0].Kind)
-	assert.False(t, got[0].HasFacts())
+	assert.Equal(t, shortcutTopologyTestNamespaceID, got[0].NamespaceID)
+	assert.Empty(t, got[0].Children)
 	assert.Empty(t, readObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
 }
 
@@ -150,7 +151,7 @@ func TestRefreshShortcutTopology_ApplyFailureDoesNotCommitCursor(t *testing.T) {
 	}
 	eng, _ := newTestEngine(t, mock)
 	applyErr := errors.New("persist topology")
-	eng.shortcutTopologyHandler = func(_ context.Context, _ ShortcutTopologyBatch) error {
+	eng.shortcutTopologyHandler = func(_ context.Context, _ ShortcutChildTopologyPublication) error {
 		return applyErr
 	}
 

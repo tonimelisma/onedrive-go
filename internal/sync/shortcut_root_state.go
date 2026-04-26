@@ -98,9 +98,12 @@ func managedRootReservationsForShortcutRoots(records []ShortcutRootRecord, names
 		paths := protectedPathsForShortcutRoot(record.RelativeLocalPath, record.ProtectedPaths)
 		for _, protectedPath := range paths {
 			reservation := ManagedRootReservation{
-				Path:      protectedPath,
-				MountID:   record.BindingItemID,
-				BindingID: record.BindingItemID,
+				Path:           protectedPath,
+				MountID:        record.BindingItemID,
+				BindingID:      record.BindingItemID,
+				RemoteDriveID:  record.RemoteDriveID,
+				RemoteItemID:   record.RemoteItemID,
+				RemoteIsFolder: record.RemoteIsFolder,
 			}
 			if record.LocalRootIdentity != nil {
 				reservation.Device = record.LocalRootIdentity.Device
@@ -136,41 +139,64 @@ func mergeManagedRootReservations(current []ManagedRootReservation, persisted []
 	}
 	merged := append([]ManagedRootReservation(nil), current...)
 	for i := range persisted {
-		next := persisted[i]
-		next.Path = normalizedManagedRootPath(next.Path)
-		if next.Path == "" || next.BindingID == "" {
+		next, ok := normalizedPersistedManagedRootReservation(persisted[i])
+		if !ok {
 			continue
 		}
-		replaced := false
-		for j := range merged {
-			if normalizedManagedRootPath(merged[j].Path) != next.Path {
-				continue
-			}
-			if merged[j].BindingID != "" && merged[j].BindingID != next.BindingID {
-				continue
-			}
-			if merged[j].MountID == "" {
-				merged[j].MountID = next.MountID
-			}
-			if merged[j].BindingID == "" {
-				merged[j].BindingID = next.BindingID
-			}
-			if !merged[j].HasIdentity && next.HasIdentity {
-				merged[j].Device = next.Device
-				merged[j].Inode = next.Inode
-				merged[j].HasIdentity = true
-			}
-			replaced = true
-			break
-		}
-		if !replaced {
+		if existing := matchingManagedRootReservationIndex(merged, next); existing >= 0 {
+			mergeManagedRootReservationFields(&merged[existing], next)
+		} else {
 			merged = append(merged, next)
 		}
 	}
 	return merged
 }
 
-//nolint:funlen,gocyclo,gocritic // Topology planning keeps the state transition table in one deterministic pass.
+func normalizedPersistedManagedRootReservation(reservation ManagedRootReservation) (ManagedRootReservation, bool) {
+	reservation.Path = normalizedManagedRootPath(reservation.Path)
+	return reservation, reservation.Path != "" && reservation.BindingID != ""
+}
+
+func matchingManagedRootReservationIndex(
+	reservations []ManagedRootReservation,
+	next ManagedRootReservation,
+) int {
+	for i := range reservations {
+		if normalizedManagedRootPath(reservations[i].Path) != next.Path {
+			continue
+		}
+		if reservations[i].BindingID != "" && reservations[i].BindingID != next.BindingID {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+func mergeManagedRootReservationFields(current *ManagedRootReservation, next ManagedRootReservation) {
+	if current.MountID == "" {
+		current.MountID = next.MountID
+	}
+	if current.BindingID == "" {
+		current.BindingID = next.BindingID
+	}
+	if !current.HasIdentity && next.HasIdentity {
+		current.Device = next.Device
+		current.Inode = next.Inode
+		current.HasIdentity = true
+	}
+	if current.RemoteDriveID.IsZero() && !next.RemoteDriveID.IsZero() {
+		current.RemoteDriveID = next.RemoteDriveID
+	}
+	if current.RemoteItemID == "" {
+		current.RemoteItemID = next.RemoteItemID
+	}
+	if !current.RemoteIsFolder {
+		current.RemoteIsFolder = next.RemoteIsFolder
+	}
+}
+
+//nolint:funlen,gocyclo // Topology planning keeps the state transition table in one deterministic pass.
 func planShortcutRootTopology(
 	current []ShortcutRootRecord,
 	batch ShortcutTopologyBatch,
@@ -621,8 +647,6 @@ func compareString(a, b string) int {
 // ApplyShortcutTopology persists parent-owned shortcut-root state. Callers run
 // this before committing remote observation progress so topology facts replay if
 // the parent namespace state cannot be durably accepted.
-//
-//nolint:gocritic // ShortcutTopologyBatch is the observer boundary value type.
 func (m *SyncStore) ApplyShortcutTopology(ctx context.Context, batch ShortcutTopologyBatch) (bool, error) {
 	if m == nil || !batch.ShouldApply() {
 		return false, nil

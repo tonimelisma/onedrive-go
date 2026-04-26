@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -24,17 +25,17 @@ type shortcutChildDrainResult struct {
 	Detail        string
 }
 
-func finalDrainMountIDs(topology *childMountTopology) []string {
-	if topology == nil {
+func finalDrainMountIDs(topologies map[mountID]syncengine.ShortcutChildTopologyPublication) []string {
+	if len(topologies) == 0 {
 		return nil
 	}
 
 	ids := make([]string, 0)
-	records := sortedChildTopologyRecords(topology)
-	for i := range records {
-		record := &records[i]
-		if record.state == syncengine.ShortcutChildRetiring {
-			ids = append(ids, record.mountID)
+	children := sortedPublishedShortcutChildren(topologies)
+	for i := range children {
+		child := children[i].child
+		if child.State == syncengine.ShortcutChildRetiring {
+			ids = append(ids, config.ChildMountID(children[i].namespaceID.String(), child.BindingItemID))
 		}
 	}
 
