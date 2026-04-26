@@ -21,13 +21,19 @@ type engineRunner interface {
 	Close(ctx context.Context) error
 }
 
+type shortcutChildDrainAcker interface {
+	AcknowledgeChildFinalDrain(
+		context.Context,
+		syncengine.ShortcutChildDrainAck,
+	) (syncengine.ShortcutChildTopologySnapshot, error)
+}
+
 type engineFactoryRequest struct {
-	Session           *driveops.Session
-	Mount             *mountSpec
-	Logger            *slog.Logger
-	VerifyDrive       bool
-	PerfCollector     *perf.Collector
-	ManagedRootEvents syncengine.ManagedRootEventSink
+	Session       *driveops.Session
+	Mount         *mountSpec
+	Logger        *slog.Logger
+	VerifyDrive   bool
+	PerfCollector *perf.Collector
 }
 
 // engineFactoryFunc creates an engineRunner from the runtime mount/session pair
@@ -55,13 +61,15 @@ type OrchestratorConfig struct {
 // Orchestrator manages per-mount sync runners. It is always used, even for a
 // single mount, so one-shot and watch mode share the same top-level lifecycle.
 type Orchestrator struct {
-	cfg            *OrchestratorConfig
-	engineFactory  engineFactoryFunc // injectable for tests
-	logger         *slog.Logger
-	perfRuntime    *perf.Runtime
-	statusMu       gosync.RWMutex
-	controlMounts  []string
-	reconcileTicks func(time.Duration) (<-chan time.Time, func())
+	cfg              *OrchestratorConfig
+	engineFactory    engineFactoryFunc // injectable for tests
+	logger           *slog.Logger
+	perfRuntime      *perf.Runtime
+	statusMu         gosync.RWMutex
+	controlMounts    []string
+	shortcutMu       gosync.Mutex
+	shortcutChildren map[mountID]syncengine.ShortcutChildTopologySnapshot
+	reconcileTicks   func(time.Duration) (<-chan time.Time, func())
 }
 
 // NewOrchestrator creates an Orchestrator with real Engine factory.
@@ -75,7 +83,6 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			if err != nil {
 				return nil, fmt.Errorf("engine mount config: %w", err)
 			}
-			mountCfg.ManagedRootEvents = req.ManagedRootEvents
 			engine, err := syncengine.NewMountEngine(
 				ctx,
 				req.Session,
@@ -92,8 +99,9 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			}
 			return engine, nil
 		},
-		logger:      cfg.Logger,
-		perfRuntime: perf.NewRuntime(cfg.PerfParent),
+		logger:           cfg.Logger,
+		perfRuntime:      perf.NewRuntime(cfg.PerfParent),
+		shortcutChildren: make(map[mountID]syncengine.ShortcutChildTopologySnapshot),
 		reconcileTicks: func(interval time.Duration) (<-chan time.Time, func()) {
 			if interval <= 0 {
 				return nil, func() {}

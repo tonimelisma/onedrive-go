@@ -42,11 +42,12 @@ type watchResources struct {
 	// Observer lifecycle is runtime-owned. startObservers populates these fields
 	// directly; the watch loop nils channels as sources close and tracks how many
 	// observer goroutines still own the shared error stream.
-	observerErrs    <-chan error
-	localEvents     <-chan ChangeEvent
-	remoteBatches   <-chan remoteObservationBatch
-	skippedItems    <-chan []SkippedItem
-	activeObservers int
+	observerErrs      <-chan error
+	localEvents       <-chan ChangeEvent
+	managedRootEvents <-chan ManagedRootEvent
+	remoteBatches     <-chan remoteObservationBatch
+	skippedItems      <-chan []SkippedItem
+	activeObservers   int
 
 	// Observer references — set in startObservers, nil'd on shutdown.
 	remoteObs *RemoteObserver

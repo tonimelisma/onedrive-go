@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 // Validates: R-2.8.1
@@ -234,12 +235,12 @@ func TestE2E_Shortcut_LocalRootCollisionSkipsChildButParentCompletes(t *testing.
 	_, stderr, err := runCLICore(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
 	require.Error(t, err)
 	assert.Contains(t, stderr, "Mode: upload-only")
-	assert.Contains(t, stderr, config.MountStateReasonLocalRootCollision)
+	assert.Contains(t, stderr, string(syncengine.ShortcutRootStateBlockedPath))
 	assert.Contains(t, stderr, "Succeeded: 1")
 
 	record := requireShortcutChildAtPath(t, env, fixture, fixture.ShortcutName)
-	assert.Equal(t, config.MountStateConflict, record.State)
-	assert.Equal(t, config.MountStateReasonLocalRootCollision, record.StateReason)
+	assert.Equal(t, syncengine.ShortcutRootStateBlockedPath, record.State)
+	assert.Equal(t, string(syncengine.ShortcutRootStateBlockedPath), record.StateReason)
 	waitForRemoteReadContains(t, cfgPath, env, fixture.ParentDrive, parentName, pollTimeout, "stat", parentRemotePath)
 }
 
@@ -309,7 +310,7 @@ func syncShortcutDownloadUntilProjected(
 	fixture resolvedShortcutFixture,
 	syncDir string,
 	relativeLocalPath string,
-) config.MountRecord {
+) shortcutChildE2ERecord {
 	t.Helper()
 
 	deadline := time.Now().Add(remoteScopeTransitionTimeout)
@@ -392,7 +393,7 @@ func requireShortcutChildAtPath(
 	env map[string]string,
 	fixture resolvedShortcutFixture,
 	relativeLocalPath string,
-) config.MountRecord {
+) shortcutChildE2ERecord {
 	t.Helper()
 
 	record, ok := findShortcutChildAtPath(t, env, fixture, relativeLocalPath)
@@ -409,7 +410,7 @@ func requireShortcutChildAtPath(
 		fixture.SharedItem.RemoteDriveID,
 		fixture.SharedItem.RemoteItemID,
 	)
-	return config.MountRecord{}
+	return shortcutChildE2ERecord{}
 }
 
 func findShortcutChildAtPath(
@@ -417,14 +418,10 @@ func findShortcutChildAtPath(
 	env map[string]string,
 	fixture resolvedShortcutFixture,
 	relativeLocalPath string,
-) (config.MountRecord, bool) {
+) (shortcutChildE2ERecord, bool) {
 	t.Helper()
 
-	dataDir := filepath.Join(env["XDG_DATA_HOME"], "onedrive-go")
-	inventory, err := config.LoadMountInventoryForDataDir(dataDir)
-	require.NoError(t, err)
-
-	for _, record := range inventory.Mounts {
+	for _, record := range shortcutChildRecords(t, env, fixture) {
 		if record.NamespaceID != fixture.ParentDrive ||
 			record.RelativeLocalPath != relativeLocalPath {
 			continue
@@ -438,7 +435,7 @@ func findShortcutChildAtPath(
 		return record, true
 	}
 
-	return config.MountRecord{}, false
+	return shortcutChildE2ERecord{}, false
 }
 
 func restoreRemoteShortcutPath(

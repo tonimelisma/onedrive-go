@@ -84,6 +84,12 @@ func ensureShortcutAuthorityBoundaries(repoRoot string) error {
 	if err := ensureMultisyncDoesNotMutateParentShortcutAliases(repoRoot); err != nil {
 		return err
 	}
+	if err := ensureMultisyncDoesNotTouchParentSyncDir(repoRoot); err != nil {
+		return err
+	}
+	if err := ensureMultisyncDoesNotPersistAutomaticShortcutInventory(repoRoot); err != nil {
+		return err
+	}
 	if err := ensureShortcutTopologyUsesShouldApplyGate(repoRoot); err != nil {
 		return err
 	}
@@ -91,6 +97,26 @@ func ensureShortcutAuthorityBoundaries(repoRoot string) error {
 		return err
 	}
 
+	return nil
+}
+
+func ensureMultisyncDoesNotPersistAutomaticShortcutInventory(repoRoot string) error {
+	match, err := findTextMatch(
+		[]string{filepath.Join(repoRoot, "internal", "multisync")},
+		regexp.MustCompile(`\b(LoadMountInventory|SaveMountInventory|UpdateMountInventory)\(`),
+		func(path string) bool {
+			return strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go")
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf(
+			"shortcut authority violation: multisync must compile automatic children from parent topology, not persisted child binding state: %s",
+			match,
+		)
+	}
 	return nil
 }
 
@@ -133,7 +159,7 @@ func ensureMultisyncDoesNotCallParentGraphDiscovery(repoRoot string) error {
 func ensureMultisyncDoesNotMutateParentShortcutAliases(repoRoot string) error {
 	match, err := findTextMatch(
 		[]string{filepath.Join(repoRoot, "internal", "multisync")},
-		regexp.MustCompile(`\.(MoveItem|DeleteItem)\(`),
+		regexp.MustCompile(`\.(MoveItem|DeleteItem|ApplyShortcutAliasMutation)\(|ShortcutAliasMutation`),
 		func(path string) bool {
 			return strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go")
 		},
@@ -143,6 +169,40 @@ func ensureMultisyncDoesNotMutateParentShortcutAliases(repoRoot string) error {
 	}
 	if match != "" {
 		return fmt.Errorf("shortcut authority violation: shortcut alias mutation must go through the parent engine: %s", match)
+	}
+
+	return nil
+}
+
+func ensureMultisyncDoesNotTouchParentSyncDir(repoRoot string) error {
+	match, err := findTextMatch(
+		[]string{filepath.Join(repoRoot, "internal", "multisync")},
+		regexp.MustCompile(`internal/synctree|synctree\.|RemoveStateDBFiles\(`),
+		func(path string) bool {
+			return strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go")
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("shortcut authority violation: parent sync-dir filesystem and child DB mutation must stay outside multisync: %s", match)
+	}
+
+	match, err = findTextMatch(
+		[]string{filepath.Join(repoRoot, "internal", "multisync")},
+		regexp.MustCompile(`localpath\.(MkdirAll|Chmod|Remove)\(|os\.(Remove|RemoveAll|Mkdir|MkdirAll|Stat|ReadDir|Open|WriteFile|ReadFile)\(`),
+		func(path string) bool {
+			return strings.HasSuffix(path, "_test.go") ||
+				!strings.HasSuffix(path, ".go") ||
+				path == filepath.Join(repoRoot, "internal", "multisync", "control_socket.go")
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("shortcut authority violation: multisync filesystem access is limited to control-socket paths: %s", match)
 	}
 
 	return nil

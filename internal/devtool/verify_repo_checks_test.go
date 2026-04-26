@@ -337,9 +337,11 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncShortcutAliasMutation(t *testin
 		"",
 		"type session struct{}",
 		"func (s session) MoveItem() {}",
+		"func (s session) ApplyShortcutAliasMutation() {}",
 		"",
 		"func bad(s session) {",
 		"\ts.MoveItem()",
+		"\ts.ApplyShortcutAliasMutation()",
 		"}",
 		"",
 	})
@@ -348,6 +350,79 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncShortcutAliasMutation(t *testin
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parent engine")
 	assert.Contains(t, err.Error(), "bad_alias_mutation.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncParentSyncDirFilesystemAccess(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_parent_fs.go"), []string{
+		"package multisync",
+		"",
+		"import \"github.com/tonimelisma/onedrive-go/internal/synctree\"",
+		"",
+		"func bad(path string) error {",
+		"\t_, err := synctree.Open(path)",
+		"\treturn err",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parent sync-dir filesystem")
+	assert.Contains(t, err.Error(), "bad_parent_fs.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncStateDBPurge(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_state_purge.go"), []string{
+		"package multisync",
+		"",
+		"func RemoveStateDBFiles(string) error { return nil }",
+		"",
+		"func bad() error {",
+		"\treturn RemoveStateDBFiles(\"state.db\")",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "child DB mutation")
+	assert.Contains(t, err.Error(), "bad_state_purge.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncAutomaticShortcutPersistence(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_child_inventory.go"), []string{
+		"package multisync",
+		"",
+		"func UpdateMountInventory(func(any) error) error { return nil }",
+		"",
+		"func bad() error {",
+		"\treturn UpdateMountInventory(nil)",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parent topology")
+	assert.Contains(t, err.Error(), "bad_child_inventory.go")
 }
 
 // Validates: R-2.4.8, R-2.4.10
