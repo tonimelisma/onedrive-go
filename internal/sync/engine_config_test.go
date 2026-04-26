@@ -141,6 +141,46 @@ func TestNewMountEngine_MergesPersistedShortcutRootReservations(t *testing.T) {
 	assert.Equal(t, "Shared/Old Docs", eng.localFilter.ManagedRoots[2].Path)
 }
 
+// Validates: R-2.4.8
+func TestNewMountEngine_DoesNotReserveReleasedShortcutRootAfterDrainAck(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	logger := testLogger(t)
+	syncDir := filepath.Join(t.TempDir(), "sync")
+	require.NoError(t, os.MkdirAll(syncDir, 0o700))
+
+	mountCfg := testEngineMountConfig(syncDir)
+	mountCfg.ShortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+
+	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
+	require.NoError(t, err)
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+		NamespaceID:       shortcutTopologyTestNamespaceID,
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		LocalAlias:        "Docs",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-1",
+		RemoteIsFolder:    true,
+		State:             ShortcutRootStateRemovedFinalDrain,
+		ProtectedPaths:    []string{"Shared/Docs"},
+	}}))
+	changed, err := store.AcknowledgeShortcutChildFinalDrain(t.Context(), ShortcutChildDrainAck{
+		BindingItemID: "binding-1",
+	})
+	require.NoError(t, err)
+	assert.True(t, changed)
+	require.NoError(t, store.Close(t.Context()))
+
+	eng, err := NewMountEngine(t.Context(), testEngineSession(), mountCfg, logger, nil, false)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, eng.Close(t.Context()))
+	})
+
+	assert.Empty(t, eng.localFilter.ManagedRoots)
+}
+
 func TestNewMountEngine_PropagatesRootedMountConfig(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 

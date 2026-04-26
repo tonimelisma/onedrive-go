@@ -459,6 +459,20 @@ func restoreRemoteShortcutPath(
 		return
 	}
 	*currentPath = originalPath
+	parentPath := path.Dir(originalPath)
+	if parentPath == "." {
+		parentPath = "/"
+	}
+	waitForRemoteReadContains(
+		t,
+		cfgPath,
+		env,
+		driveID,
+		path.Base(originalPath),
+		remoteScopeTransitionTimeout,
+		"ls",
+		parentPath,
+	)
 }
 
 func e2eMountStatePath(env map[string]string, mountID string) string {

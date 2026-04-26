@@ -78,6 +78,9 @@ func ensureShortcutAuthorityBoundaries(repoRoot string) error {
 	if err := ensureMultisyncDoesNotImportGraph(repoRoot); err != nil {
 		return err
 	}
+	if err := ensureMultisyncShortcutAuthorityAST(repoRoot); err != nil {
+		return err
+	}
 	if err := ensureMultisyncDoesNotCallParentGraphDiscovery(repoRoot); err != nil {
 		return err
 	}
@@ -98,6 +101,154 @@ func ensureShortcutAuthorityBoundaries(repoRoot string) error {
 	}
 
 	return nil
+}
+
+func ensureMultisyncShortcutAuthorityAST(repoRoot string) error {
+	root := filepath.Join(repoRoot, "internal", "multisync")
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		if err := scanMultisyncShortcutAuthorityFile(repoRoot, path); err != nil {
+			return err
+		}
+		return nil
+	})
+	if walkErr == nil {
+		return nil
+	}
+	if errors.Is(walkErr, os.ErrNotExist) {
+		return nil
+	}
+	var matchErr matchFoundError
+	if errors.As(walkErr, &matchErr) {
+		return errors.New(matchErr.value)
+	}
+	return fmt.Errorf("walk %s: %w", root, walkErr)
+}
+
+func scanMultisyncShortcutAuthorityFile(repoRoot string, path string) error {
+	data, readErr := readFile(path)
+	if readErr != nil {
+		return fmt.Errorf("read %s: %w", path, readErr)
+	}
+	fset := token.NewFileSet()
+	file, parseErr := parser.ParseFile(fset, path, data, 0)
+	if parseErr != nil {
+		return fmt.Errorf("parse %s: %w", path, parseErr)
+	}
+
+	const graphImport = "github.com/tonimelisma/onedrive-go/internal/graph"
+	if importsPackage(file, graphImport) {
+		return matchFoundError{
+			value: fmt.Sprintf("shortcut authority violation: multisync must not import internal/graph: %s", path),
+		}
+	}
+
+	const synctreeImport = "github.com/tonimelisma/onedrive-go/internal/synctree"
+	if importsPackage(file, synctreeImport) {
+		return matchFoundError{
+			value: fmt.Sprintf("shortcut authority violation: parent sync-dir filesystem access must stay in internal/sync: %s", path),
+		}
+	}
+
+	if match := firstForbiddenMultisyncAuthorityCall(repoRoot, path, file, fset); match != "" {
+		return matchFoundError{value: match}
+	}
+
+	return nil
+}
+
+func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *ast.File, fset *token.FileSet) string {
+	localpathAliases := importedNamesForPath(file, "github.com/tonimelisma/onedrive-go/internal/localpath")
+	osAliases := importedNamesForPath(file, "os")
+	controlSocketPath := filepath.Join(repoRoot, "internal", "multisync", "control_socket.go")
+	controlSocketFile := path == controlSocketPath
+
+	forbiddenSelectors := map[string]string{
+		"MoveItem":                           "shortcut alias mutation must go through the parent engine",
+		"DeleteItem":                         "shortcut alias mutation must go through the parent engine",
+		"ApplyShortcutAliasMutation":         "shortcut alias mutation must go through the parent engine",
+		"ApplyShortcutTopology":              "parent shortcut-root persistence must stay in internal/sync",
+		"ReplaceShortcutRoots":               "parent shortcut-root persistence must stay in internal/sync",
+		"AcknowledgeShortcutChildFinalDrain": "parent shortcut-root persistence must stay in internal/sync",
+		"RemoveStateDBFiles":                 "child DB mutation must stay outside multisync",
+	}
+	forbiddenIdents := map[string]string{
+		"ShortcutAliasMutation": "shortcut alias mutation must go through the parent engine",
+		"RemoveStateDBFiles":    "child DB mutation must stay outside multisync",
+	}
+	forbiddenLocalpathSelectors := map[string]struct{}{
+		"MkdirAll": {},
+		"Chmod":    {},
+		"Remove":   {},
+	}
+	forbiddenOSSelectors := map[string]struct{}{
+		"Remove":    {},
+		"RemoveAll": {},
+		"Mkdir":     {},
+		"MkdirAll":  {},
+		"Stat":      {},
+		"ReadDir":   {},
+		"Open":      {},
+		"WriteFile": {},
+		"ReadFile":  {},
+	}
+
+	var match string
+	ast.Inspect(file, func(node ast.Node) bool {
+		if match != "" {
+			return false
+		}
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		switch fun := call.Fun.(type) {
+		case *ast.Ident:
+			if description, forbidden := forbiddenIdents[fun.Name]; forbidden {
+				match = fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, fset.Position(fun.Pos()).Line)
+				return false
+			}
+		case *ast.SelectorExpr:
+			if description, forbidden := forbiddenSelectors[fun.Sel.Name]; forbidden {
+				match = fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, fset.Position(fun.Pos()).Line)
+				return false
+			}
+			x, ok := fun.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if _, imported := localpathAliases[x.Name]; imported && !controlSocketFile {
+				if _, forbidden := forbiddenLocalpathSelectors[fun.Sel.Name]; forbidden {
+					match = fmt.Sprintf(
+						"shortcut authority violation: multisync filesystem access is limited to control-socket paths: %s:%d",
+						path,
+						fset.Position(fun.Pos()).Line,
+					)
+					return false
+				}
+			}
+			if _, imported := osAliases[x.Name]; imported && !controlSocketFile {
+				if _, forbidden := forbiddenOSSelectors[fun.Sel.Name]; forbidden {
+					match = fmt.Sprintf(
+						"shortcut authority violation: multisync parent sync-dir filesystem access is forbidden: %s:%d",
+						path,
+						fset.Position(fun.Pos()).Line,
+					)
+					return false
+				}
+			}
+		}
+
+		return true
+	})
+
+	return match
 }
 
 func ensureMultisyncDoesNotPersistAutomaticShortcutInventory(repoRoot string) error {

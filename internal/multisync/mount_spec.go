@@ -407,10 +407,9 @@ func buildChildMountCandidate(parent *mountSpec, record *childTopologyRecord) (*
 		transferWorkers:        parent.transferWorkers,
 		checkWorkers:           parent.checkWorkers,
 		minFreeSpace:           parent.minFreeSpace,
-		finalDrain: record.state == childTopologyStatePendingRemoval &&
-			record.stateReason == childTopologyStateReasonShortcutRemoved,
+		finalDrain:             record.state == syncengine.ShortcutChildRetiring,
 	}
-	skipErr := childTopologyStateSkipError(record)
+	skipErr := shortcutChildRunnerSkipError(record)
 
 	return &childMountCandidate{
 		namespaceID:        parent.mountID,
@@ -423,25 +422,19 @@ func buildChildMountCandidate(parent *mountSpec, record *childTopologyRecord) (*
 	}, nil
 }
 
-func childTopologyStateSkipError(record *childTopologyRecord) error {
+func shortcutChildRunnerSkipError(record *childTopologyRecord) error {
 	switch record.state {
-	case "", childTopologyStateActive:
+	case "", syncengine.ShortcutChildDesired:
 		return nil
-	case childTopologyStatePendingRemoval:
-		if record.stateReason == childTopologyStateReasonShortcutRemoved {
-			return nil
+	case syncengine.ShortcutChildRetiring:
+		return nil
+	case syncengine.ShortcutChildBlocked:
+		if record.blockedDetail != "" {
+			return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle: %s", record.mountID, record.blockedDetail)
 		}
-		return fmt.Errorf("child mount %s is pending removal", record.mountID)
-	case childTopologyStateConflict:
-		if record.stateReason != "" {
-			return fmt.Errorf("child mount %s is conflicted: %s", record.mountID, record.stateReason)
-		}
-		return fmt.Errorf("child mount %s is conflicted", record.mountID)
-	case childTopologyStateUnavailable:
-		if record.stateReason != "" {
-			return fmt.Errorf("child mount %s is unavailable: %s", record.mountID, record.stateReason)
-		}
-		return fmt.Errorf("child mount %s is unavailable", record.mountID)
+		return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle", record.mountID)
+	case syncengine.ShortcutChildWaitingReplacement:
+		return fmt.Errorf("child mount %s is waiting for an older shortcut at the same path to finish final drain", record.mountID)
 	default:
 		return fmt.Errorf("child mount %s has unsupported state %q", record.mountID, record.state)
 	}

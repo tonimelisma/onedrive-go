@@ -301,6 +301,28 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncGraphImport(t *testing.T) {
 }
 
 // Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncGraphImportAlias(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_graph_alias.go"), []string{
+		"package multisync",
+		"",
+		"import g \"github.com/tonimelisma/onedrive-go/internal/graph\"",
+		"",
+		"var _ = g.ErrNotFound",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multisync must not import internal/graph")
+	assert.Contains(t, err.Error(), "bad_graph_alias.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
 func TestRunRepoConsistencyChecksFailsOnHasFactsApplyGate(t *testing.T) {
 	t.Parallel()
 
@@ -353,6 +375,31 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncShortcutAliasMutation(t *testin
 }
 
 // Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncShortcutRootStoreWrite(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_parent_store.go"), []string{
+		"package multisync",
+		"",
+		"type parentStore struct{}",
+		"func (s parentStore) ApplyShortcutTopology() error { return nil }",
+		"",
+		"func bad(s parentStore) error {",
+		"\treturn s.ApplyShortcutTopology()",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parent shortcut-root persistence")
+	assert.Contains(t, err.Error(), "bad_parent_store.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
 func TestRunRepoConsistencyChecksFailsOnMultisyncParentSyncDirFilesystemAccess(t *testing.T) {
 	t.Parallel()
 
@@ -375,6 +422,30 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncParentSyncDirFilesystemAccess(t
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parent sync-dir filesystem")
 	assert.Contains(t, err.Error(), "bad_parent_fs.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncLocalpathFilesystemAccessOutsideControlSocket(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_localpath.go"), []string{
+		"package multisync",
+		"",
+		"import lp \"github.com/tonimelisma/onedrive-go/internal/localpath\"",
+		"",
+		"func bad(path string) error {",
+		"\treturn lp.Remove(path)",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "control-socket paths")
+	assert.Contains(t, err.Error(), "bad_localpath.go")
 }
 
 // Validates: R-2.4.3, R-2.4.8

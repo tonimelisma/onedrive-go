@@ -54,21 +54,22 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 			fmt.Errorf("building mount specs: %w", err),
 		)
 	}
-	var preparedParents preparedShortcutParentEngines
-	compiled, preparedParents, err = o.preflightShortcutTopology(
+	var bootstrappedParents bootstrappedParentEngines
+	compiled, bootstrappedParents, err = o.bootstrapShortcutTopology(
 		ctx,
 		compiled,
 		o.cfg.StandaloneMounts,
 		o.cfg.InitialStartupResults,
+		nil,
 	)
 	if err != nil {
 		return controlFailureRunOnceResult(
 			o.cfg.StandaloneMounts,
 			o.cfg.InitialStartupResults,
-			fmt.Errorf("preflighting shortcut topology: %w", err),
+			fmt.Errorf("bootstrapping shortcut topology: %w", err),
 		)
 	}
-	defer o.closePreparedShortcutParentEngines(ctx, preparedParents)
+	defer o.closeBootstrappedShortcutParentEngines(ctx, bootstrappedParents)
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
 	o.logger.Info("orchestrator starting RunOnce",
@@ -76,7 +77,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		slog.String("mode", mode.String()),
 	)
 
-	work, startup, reports := o.prepareRunOnceWork(ctx, mode, compiled.Mounts, compiled.Skipped, opts, preparedParents)
+	work, startup, reports := o.prepareRunOnceWork(ctx, mode, compiled.Mounts, compiled.Skipped, opts, bootstrappedParents)
 
 	var wg gosync.WaitGroup
 	for _, w := range work {
@@ -151,7 +152,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.RunOptions,
-	preparedParents preparedShortcutParentEngines,
+	bootstrappedParents bootstrappedParentEngines,
 ) ([]indexedMountWork, StartupSelectionSummary, []*MountReport) {
 	work := make([]indexedMountWork, 0, len(mounts))
 	reports := make([]*MountReport, 0, len(mounts))
@@ -170,10 +171,10 @@ func (o *Orchestrator) prepareRunOnceWork(
 		}
 
 		o.attachShortcutTopologyHandler(mount, false)
-		if prepared := preparedParents[mount.mountID]; prepared != nil {
-			delete(preparedParents, mount.mountID)
-			setShortcutTopologyHandler(prepared, mount.shortcutTopologyHandler)
-			w := o.buildEngineWorkFromExisting(mount, prepared, mode, opts)
+		if bootstrapped := bootstrappedParents[mount.mountID]; bootstrapped != nil {
+			delete(bootstrappedParents, mount.mountID)
+			setShortcutTopologyHandler(bootstrapped, mount.shortcutTopologyHandler)
+			w := o.buildEngineWorkFromExisting(mount, bootstrapped, mode, opts)
 			startResults = append(startResults, MountStartupResult{
 				SelectionIndex: mount.selectionIndex,
 				Identity:       mount.identity(),
@@ -345,8 +346,10 @@ func finalizeSuccessfulFinalDrainMounts(
 	if compiled == nil || len(compiled.FinalDrainMountIDs) == 0 {
 		return false, nil
 	}
-	successful := successfulFinalDrainMountIDs(compiled.FinalDrainMountIDs, reports)
+	results := classifyShortcutChildDrainResults(compiled.FinalDrainMountIDs, compiled.Mounts, reports)
+	successful := cleanShortcutChildDrainResults(results)
 	if len(successful) == 0 {
+		logUnfinishedFinalDrains(results, logger)
 		return false, nil
 	}
 
@@ -354,42 +357,34 @@ func finalizeSuccessfulFinalDrainMounts(
 		return false, err
 	}
 	if logger != nil {
-		for _, mountID := range successful {
+		for _, result := range successful {
 			logger.Info("parent acknowledged drained shortcut child",
-				"mount_id", mountID,
+				"mount_id", result.MountID,
 			)
 		}
 	}
 	return true, nil
 }
 
-func successfulFinalDrainMountIDs(finalDrainMountIDs []string, reports []*MountReport) []string {
-	successful := make([]string, 0, len(finalDrainMountIDs))
-	draining := make(map[string]struct{}, len(finalDrainMountIDs))
-	for _, mountID := range finalDrainMountIDs {
-		if mountID != "" {
-			draining[mountID] = struct{}{}
-		}
+func logUnfinishedFinalDrains(results []shortcutChildDrainResult, logger *slog.Logger) {
+	if logger == nil {
+		return
 	}
-	for i := range reports {
-		report := reports[i]
-		if report == nil {
+	for _, result := range results {
+		if result.Status == shortcutChildDrainClean {
 			continue
 		}
-		if _, ok := draining[report.Identity.MountID]; !ok {
-			continue
-		}
-		if report.Err != nil || report.Report == nil || report.Report.Failed > 0 || len(report.Report.Errors) > 0 {
-			continue
-		}
-		successful = appendUniqueStrings(successful, report.Identity.MountID)
+		logger.Info("shortcut child final drain not ready for parent release",
+			"mount_id", result.MountID,
+			"status", string(result.Status),
+			"detail", result.Detail,
+		)
 	}
-	return successful
 }
 
 func acknowledgeSuccessfulFinalDrains(
 	ctx context.Context,
-	successful []string,
+	successful []shortcutChildDrainResult,
 	mounts []*mountSpec,
 	parentAckers map[mountID]shortcutChildDrainAcker,
 ) error {
@@ -399,19 +394,23 @@ func acknowledgeSuccessfulFinalDrains(
 			mountByID[mount.mountID.String()] = mount
 		}
 	}
-	for _, mountID := range successful {
-		mount := mountByID[mountID]
-		if mount == nil || mount.bindingItemID == "" {
-			return fmt.Errorf("final-drain child mount %s is missing parent binding identity", mountID)
+	for _, result := range successful {
+		mount := mountByID[result.MountID]
+		bindingItemID := result.BindingItemID
+		if bindingItemID == "" && mount != nil {
+			bindingItemID = mount.bindingItemID
+		}
+		if mount == nil || bindingItemID == "" {
+			return fmt.Errorf("final-drain child mount %s is missing parent binding identity", result.MountID)
 		}
 		acker := parentAckers[mount.parentMountID]
 		if acker == nil {
 			return fmt.Errorf("parent mount %s is unavailable for final-drain acknowledgement", mount.parentMountID)
 		}
 		if _, err := acker.AcknowledgeChildFinalDrain(ctx, syncengine.ShortcutChildDrainAck{
-			BindingItemID: mount.bindingItemID,
+			BindingItemID: bindingItemID,
 		}); err != nil {
-			return fmt.Errorf("acknowledging final drain for child mount %s: %w", mountID, err)
+			return fmt.Errorf("acknowledging final drain for child mount %s: %w", result.MountID, err)
 		}
 	}
 	return nil
