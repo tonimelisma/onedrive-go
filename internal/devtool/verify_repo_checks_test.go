@@ -414,7 +414,6 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncRawShortcutObservationTypes(t *
 		"",
 		"type mirror struct {",
 		"\tBatch syncengine.ShortcutTopologyBatch",
-		"\tRoot syncengine.ShortcutRootRecord",
 		"}",
 		"",
 	})
@@ -447,6 +446,28 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncChildTopologyStateMapping(t *te
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "runner actions")
 	assert.Contains(t, err.Error(), "bad_child_state_mapping.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncInferredShortcutRelease(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_inferred_release.go"), []string{
+		"package multisync",
+		"",
+		"func bad() {",
+		"\tmergeReleasedShortcutChildren()",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "explicit parent cleanup requests")
+	assert.Contains(t, err.Error(), "bad_inferred_release.go")
 }
 
 // Validates: R-2.4.3, R-2.4.8

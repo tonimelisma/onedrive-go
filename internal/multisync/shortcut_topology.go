@@ -6,14 +6,14 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-func (o *Orchestrator) attachShortcutTopologyHandler(mount *mountSpec, restartOnChange bool) {
+func (o *Orchestrator) attachShortcutChildTopologySink(mount *mountSpec, restartOnChange bool) {
 	if mount == nil {
 		return
 	}
-	mount.shortcutTopologyHandler = o.shortcutTopologyHandlerForMount(mount, restartOnChange)
+	mount.shortcutChildTopologySink = o.shortcutChildTopologySinkForMount(mount, restartOnChange)
 }
 
-func (o *Orchestrator) shortcutTopologyHandlerForMount(
+func (o *Orchestrator) shortcutChildTopologySinkForMount(
 	mount *mountSpec,
 	restartOnChange bool,
 ) syncengine.ShortcutChildTopologySink {
@@ -31,13 +31,13 @@ func (o *Orchestrator) shortcutTopologyHandlerForMount(
 	}
 }
 
-type shortcutTopologyHandlerSetter interface {
-	SetShortcutTopologyHandler(syncengine.ShortcutChildTopologySink)
+type shortcutChildTopologySinkSetter interface {
+	SetShortcutChildTopologySink(syncengine.ShortcutChildTopologySink)
 }
 
-func setShortcutTopologyHandler(engine engineRunner, handler syncengine.ShortcutChildTopologySink) {
-	if setter, ok := engine.(shortcutTopologyHandlerSetter); ok {
-		setter.SetShortcutTopologyHandler(handler)
+func setShortcutChildTopologySink(engine engineRunner, sink syncengine.ShortcutChildTopologySink) {
+	if setter, ok := engine.(shortcutChildTopologySinkSetter); ok {
+		setter.SetShortcutChildTopologySink(sink)
 	}
 }
 

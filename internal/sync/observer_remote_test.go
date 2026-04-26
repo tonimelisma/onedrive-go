@@ -1030,9 +1030,9 @@ func TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent(t 
 	require.Len(t, events, 1)
 	assert.Equal(t, "Shortcuts", events[0].Path)
 	assert.Equal(t, "personal:owner@example.com", topology.NamespaceID)
-	assert.Equal(t, ShortcutTopologyObservationComplete, topology.Kind)
+	assert.Equal(t, shortcutTopologyObservationComplete, topology.Kind)
 	require.Len(t, topology.Upserts, 1)
-	assert.Equal(t, ShortcutBindingUpsert{
+	assert.Equal(t, shortcutBindingUpsert{
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shortcuts/Docs",
 		LocalAlias:        "Docs",
@@ -1096,7 +1096,7 @@ func TestFullDeltaWithShortcutTopology_EnrichesSparseKnownShortcutMove(t *testin
 	require.Len(t, events, 1)
 	assert.Equal(t, "Moved", events[0].Path)
 	require.Len(t, topology.Upserts, 1)
-	assert.Equal(t, ShortcutBindingUpsert{
+	assert.Equal(t, shortcutBindingUpsert{
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Moved/Docs",
 		LocalAlias:        "Docs",
@@ -1143,7 +1143,7 @@ func TestWatch_TopologyApplyFailureDoesNotAdvanceCursor(t *testing.T) {
 	batches := make(chan remoteObservationBatch, 1)
 	go func() {
 		batch := <-batches
-		if !batch.shortcutTopology.ShouldApply() {
+		if !batch.shortcutTopology.shouldApply() {
 			t.Errorf("expected applicable topology in watch batch")
 		}
 		batch.finishApplied(applyErr)
@@ -1179,7 +1179,7 @@ func TestWatch_EmptyCompleteTopologyApplyFailureDoesNotAdvanceCursor(t *testing.
 	batches := make(chan remoteObservationBatch, 1)
 	go func() {
 		batch := <-batches
-		if !batch.shortcutTopology.ShouldApply() {
+		if !batch.shortcutTopology.shouldApply() {
 			t.Errorf("expected empty complete topology batch to be emitted")
 		}
 		batch.finishApplied(applyErr)
@@ -1243,7 +1243,7 @@ func testPrimaryWatchBatchHandler(driveID driveid.ID) RemoteWatchBatchHandler {
 		_ context.Context,
 		events []ChangeEvent,
 		newToken string,
-		topology ShortcutTopologyBatch,
+		topology shortcutTopologyBatch,
 	) (remoteObservationBatch, error) {
 		projected := projectRemoteObservations(nil, events)
 		return remoteObservationBatch{
@@ -2240,7 +2240,7 @@ func TestWatch_BatchHandlerError_ReturnsError(t *testing.T) {
 		context.Context,
 		[]ChangeEvent,
 		string,
-		ShortcutTopologyBatch,
+		shortcutTopologyBatch,
 	) (remoteObservationBatch, error) {
 		return remoteObservationBatch{}, filepath.ErrBadPattern
 	})

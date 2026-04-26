@@ -66,15 +66,15 @@ func TestHandleRemoteObservationBatch_EmptyCompleteTopologyApplyFailureDoesNotCo
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	applyErr := errors.New("persist topology")
-	eng.shortcutTopologyHandler = func(_ context.Context, _ ShortcutChildTopologyPublication) error {
+	eng.shortcutChildTopologySink = func(_ context.Context, _ ShortcutChildTopologyPublication) error {
 		return applyErr
 	}
 
 	batch := buildPrimaryWatchBatch(eng.Engine, nil, "cursor-empty-complete")
 	batch.cursorToken = "cursor-empty-complete"
-	batch.shortcutTopology = ShortcutTopologyBatch{
+	batch.shortcutTopology = shortcutTopologyBatch{
 		NamespaceID: "personal:owner@example.com",
-		Kind:        ShortcutTopologyObservationComplete,
+		Kind:        shortcutTopologyObservationComplete,
 	}
 	err := rt.handleRemoteObservationBatch(t.Context(), &batch)
 	require.ErrorIs(t, err, applyErr)

@@ -88,12 +88,12 @@ a normal drive's delta stream contains an embedded shared-folder link or
 shortcut placeholder item, observation suppresses that item from ordinary
 content events. The parent drive engine is still the only Graph observer for
 that drive, so it converts shortcut placeholders into engine-internal raw
-shortcut publication facts before committing remote observation progress. The parent
+shortcut observation facts before committing remote observation progress. The parent
 persists those facts in `shortcut_roots` and publishes parent-declared child
 topology; `internal/multisync` only starts, skips, final-drains, or stops
 managed children as separate mount-root engines.
 
-The engine applies topology batches with `ShortcutTopologyBatch.ShouldApply`.
+The engine applies topology batches with its internal `shouldApply` gate.
 Any batch with facts applies, a complete batch applies even when it contains no
 facts, and an empty incremental batch is a non-event. This lets a full parent
 enumeration with no shortcut aliases retire old managed children while keeping

@@ -62,6 +62,8 @@ func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 		{name: "stale local reservations field", pattern: regexp.MustCompile(`\blocal` + `Reservations\b`)},
 		{name: "stale local skip dirs field", pattern: regexp.MustCompile(`\blocal` + `SkipDirs\b`)},
 		{name: "stale shortcut startup phrase", pattern: regexp.MustCompile(`(?i)shortcut[- ]` + `bootstrap`)},
+		{name: "stale shortcut release cleanup phrase", pattern: regexp.MustCompile("(?i)release " + "tomb" + "stone|" + "tomb" + "stone")},
+		{name: "stale released shortcut child type", pattern: regexp.MustCompile(`\bReleased` + `Children\b|\bShortcutChild` + `Release\b`)},
 	}
 
 	checkRoots := []string{
@@ -275,14 +277,19 @@ func multisyncFilesystemAccessAllowed(repoRoot string, path string) bool {
 
 func forbiddenMultisyncSelectorReasons() map[string]string {
 	return map[string]string{
-		"MoveItem":                           "shortcut alias mutation must go through the parent engine",
-		"DeleteItem":                         "shortcut alias mutation must go through the parent engine",
-		"ApplyShortcutAliasMutation":         "shortcut alias mutation must go through the parent engine",
-		"applyShortcutAliasMutation":         "shortcut alias mutation must stay inside the parent engine",
-		"ApplyShortcutTopology":              "parent shortcut-root persistence must stay in internal/sync",
-		"ReplaceShortcutRoots":               "parent shortcut-root persistence must stay in internal/sync",
-		"AcknowledgeShortcutChildFinalDrain": "parent shortcut-root persistence must stay in internal/sync",
-		"RemoveStateDBFiles":                 "child DB mutation must stay outside multisync",
+		"MoveItem":                                  "shortcut alias mutation must go through the parent engine",
+		"DeleteItem":                                "shortcut alias mutation must go through the parent engine",
+		"ApplyShortcutAliasMutation":                "shortcut alias mutation must go through the parent engine",
+		"applyShortcutAliasMutation":                "shortcut alias mutation must stay inside the parent engine",
+		"ApplyShortcutTopology":                     "parent shortcut-root persistence must stay in internal/sync",
+		"applyShortcutTopology":                     "parent shortcut-root persistence must stay in internal/sync",
+		"ReplaceShortcutRoots":                      "parent shortcut-root persistence must stay in internal/sync",
+		"markShortcutChildFinalDrainReleasePending": "parent shortcut-root persistence must stay in internal/sync",
+		"AcknowledgeShortcutChildFinalDrain":        "parent shortcut-root persistence must stay in internal/sync",
+		"acknowledgeShortcutChildArtifactsPurged":   "parent shortcut-root persistence must stay in internal/sync",
+		"mergeReleasedShortcutChildren":             "multisync must use explicit parent cleanup requests, not inferred releases",
+		"forgetReleasedShortcutChildren":            "multisync must use explicit parent cleanup requests, not inferred releases",
+		"RemoveStateDBFiles":                        "child DB mutation must stay outside multisync",
 	}
 }
 
@@ -291,9 +298,18 @@ func forbiddenMultisyncIdentReasons() map[string]string {
 		"ShortcutAliasMutation":           "shortcut alias mutation must go through the parent engine",
 		"shortcutAliasMutation":           "shortcut alias mutation must stay inside the parent engine",
 		"ShortcutTopologyBatch":           "raw parent shortcut observation facts must stay in internal/sync",
+		"shortcutTopologyBatch":           "raw parent shortcut observation facts must stay in internal/sync",
 		"ShortcutBindingUpsert":           "raw parent shortcut observation facts must stay in internal/sync",
+		"shortcutBindingUpsert":           "raw parent shortcut observation facts must stay in internal/sync",
 		"ShortcutBindingDelete":           "raw parent shortcut observation facts must stay in internal/sync",
+		"shortcutBindingDelete":           "raw parent shortcut observation facts must stay in internal/sync",
 		"ShortcutBindingUnavailable":      "raw parent shortcut observation facts must stay in internal/sync",
+		"shortcutBindingUnavailable":      "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutChild" + "Release":       "multisync must use explicit parent cleanup requests, not inferred releases",
+		"ShortcutChild" + "ReleaseReason": "multisync must use explicit parent cleanup requests, not inferred releases",
+		"Released" + "Children":           "multisync must use explicit parent cleanup requests, not inferred releases",
+		"mergeReleasedShortcutChildren":   "multisync must use explicit parent cleanup requests, not inferred releases",
+		"forgetReleasedShortcutChildren":  "multisync must use explicit parent cleanup requests, not inferred releases",
 		"ShortcutRootRecord":              "parent shortcut-root state must stay in internal/sync",
 		"ShortcutRootState":               "parent shortcut-root state must stay in internal/sync",
 		"ShortcutChildTopologyState":      "multisync must consume parent-declared runner actions, not map child topology states",

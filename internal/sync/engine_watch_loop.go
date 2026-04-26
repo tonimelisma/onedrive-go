@@ -233,14 +233,14 @@ func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	if err != nil {
 		return false, err
 	}
-	if !changed || rt.engine.shortcutTopologyHandler == nil {
+	if !changed || rt.engine.shortcutChildTopologySink == nil {
 		return false, nil
 	}
 	roots, err := rt.engine.baseline.ListShortcutRoots(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: read shortcut roots after protected root event: %w", err)
 	}
-	return false, rt.engine.shortcutTopologyHandler(ctx, shortcutChildTopologyFromRoots(
+	return false, rt.engine.shortcutChildTopologySink(ctx, shortcutChildTopologyFromRoots(
 		rt.engine.shortcutTopologyNamespaceID,
 		roots,
 	))
