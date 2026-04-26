@@ -471,6 +471,29 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncInferredShortcutRelease(t *test
 }
 
 // Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncRemoteContentRootConflictPolicy(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_content_root_conflict.go"), []string{
+		"package multisync",
+		"",
+		"func bad() {",
+		"\t_ = content" + "RootKey",
+		"\tmarkChildProjection" + "Conflicts()",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "remote content root")
+	assert.Contains(t, err.Error(), "bad_content_root_conflict.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
 func TestRunRepoConsistencyChecksFailsOnMultisyncProtectedRootSynthesis(t *testing.T) {
 	t.Parallel()
 
@@ -512,6 +535,8 @@ func TestRunRepoConsistencyChecksFailsOnStaleShortcutLifecycleConcepts(t *testin
 		{"local reservations", "type _ struct { local" + "Reservations int }"},
 		{"local skip dirs", "type _ struct { local" + "SkipDirs int }"},
 		{"shortcut startup wording", "// shortcut " + "bootstrap must not be described as a separate phase"},
+		{"deleted parent publisher", "func _() { _ = publishParent" + "StartupChildTopology }"},
+		{"initial child topology publication", "func _() { _ = PublishInitial" + "ChildTopology }"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {

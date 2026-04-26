@@ -34,25 +34,15 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 	}
 	changed := false
 	nextRecords := make([]ShortcutRootRecord, 0, len(records))
+	var releaseCleanupErr error
 	for i := range records {
-		record := normalizeShortcutRootRecord(records[i])
-		if shortcutRootStateAwaitsReleaseCleanup(record.State) {
-			next, recordChanged, recordErr := e.finalizeShortcutRootReleaseRecord(record)
-			changed = changed || recordChanged
-			nextRecords = append(nextRecords, next...)
-			if recordErr != nil {
-				return false, recordErr
-			}
-			continue
-		}
-		next, keep, recordChanged, recordErr := e.reconcileShortcutRootRecord(ctx, records[i], localRows)
+		step, recordErr := e.reconcileShortcutRootLocalStateRecord(ctx, &records[i], localRows)
 		if recordErr != nil {
 			return false, recordErr
 		}
-		if keep {
-			nextRecords = append(nextRecords, next)
-		}
-		changed = changed || recordChanged
+		nextRecords = append(nextRecords, step.records...)
+		changed = changed || step.changed
+		releaseCleanupErr = errors.Join(releaseCleanupErr, step.releaseCleanupErr)
 	}
 	if !changed {
 		return false, nil
@@ -63,7 +53,44 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
 		return false, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
+	if releaseCleanupErr != nil {
+		return false, releaseCleanupErr
+	}
 	return true, nil
+}
+
+type shortcutRootLocalReconcileStep struct {
+	records           []ShortcutRootRecord
+	changed           bool
+	releaseCleanupErr error
+}
+
+func (e *Engine) reconcileShortcutRootLocalStateRecord(
+	ctx context.Context,
+	record *ShortcutRootRecord,
+	localRows []LocalStateRow,
+) (shortcutRootLocalReconcileStep, error) {
+	if record == nil {
+		return shortcutRootLocalReconcileStep{}, nil
+	}
+	normalized := normalizeShortcutRootRecord(*record)
+	if shortcutRootStateAwaitsReleaseCleanup(normalized.State) {
+		next, changed, err := e.finalizeShortcutRootReleaseRecord(normalized)
+		return shortcutRootLocalReconcileStep{
+			records:           next,
+			changed:           changed,
+			releaseCleanupErr: err,
+		}, nil
+	}
+	next, keep, changed, err := e.reconcileShortcutRootRecord(ctx, *record, localRows)
+	if err != nil {
+		return shortcutRootLocalReconcileStep{}, err
+	}
+	step := shortcutRootLocalReconcileStep{changed: changed}
+	if keep {
+		step.records = append(step.records, next)
+	}
+	return step, nil
 }
 
 //nolint:gocritic // ShortcutRootRecord is treated as a value in the planner-style local transition.

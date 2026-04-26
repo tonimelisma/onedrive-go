@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -19,6 +20,7 @@ type shortcutChildArtifactCleanup struct {
 	mountID       string
 	namespaceID   string
 	bindingItemID string
+	localRoot     string
 	reason        syncengine.ShortcutChildArtifactCleanupReason
 }
 
@@ -28,6 +30,7 @@ type shortcutChildArtifactScope struct {
 }
 
 func shortcutChildArtifactCleanups(
+	parentByID map[mountID]*mountSpec,
 	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
 ) []shortcutChildArtifactCleanup {
 	if len(topologies) == 0 {
@@ -53,6 +56,7 @@ func shortcutChildArtifactCleanups(
 				mountID:       config.ChildMountID(namespaceID, request.BindingItemID),
 				namespaceID:   namespaceID,
 				bindingItemID: request.BindingItemID,
+				localRoot:     cleanupLocalRoot(parentByID[mountID(namespaceID)], request.RelativeLocalPath),
 				reason:        reason,
 			})
 		}
@@ -66,6 +70,13 @@ func shortcutChildArtifactCleanups(
 	return cleanups
 }
 
+func cleanupLocalRoot(parent *mountSpec, relativeLocalPath string) string {
+	if parent == nil || parent.syncRoot == "" || relativeLocalPath == "" {
+		return ""
+	}
+	return filepath.Join(parent.syncRoot, filepath.FromSlash(relativeLocalPath))
+}
+
 func (o *Orchestrator) purgeShortcutChildArtifactsForCompiled(
 	ctx context.Context,
 	compiled *compiledMountSet,
@@ -77,7 +88,7 @@ func (o *Orchestrator) purgeShortcutChildArtifactsForCompiled(
 	var errs []error
 	purged := make([]shortcutChildArtifactCleanup, 0, len(compiled.CleanupChildren))
 	for _, cleanup := range compiled.CleanupChildren {
-		scope := shortcutChildArtifactScope{mountID: cleanup.mountID}
+		scope := shortcutChildArtifactScope{mountID: cleanup.mountID, localRoot: cleanup.localRoot}
 		if err := purgeShortcutChildArtifacts(ctx, scope, o.logger); err != nil {
 			errs = append(errs, fmt.Errorf("purging shortcut child mount %s: %w", cleanup.mountID, err))
 			continue

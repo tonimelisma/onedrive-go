@@ -91,13 +91,26 @@ type childMountCandidate struct {
 	runnerAction      syncengine.ShortcutChildRunnerAction
 	blockedDetail     string
 	mount             *mountSpec
-	contentRootKey    string
 	skipErr           error
 }
 
 type unmatchedShortcutChild struct {
 	namespaceID mountID
 	child       syncengine.ShortcutChildTopology
+}
+
+func filterMountSpecsByProjection(
+	mounts []*mountSpec,
+	kind MountProjectionKind,
+) []*mountSpec {
+	filtered := make([]*mountSpec, 0, len(mounts))
+	for _, mount := range mounts {
+		if mount == nil || mount.projectionKind != kind {
+			continue
+		}
+		filtered = append(filtered, mount)
+	}
+	return filtered
 }
 
 func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, error) {
@@ -129,12 +142,11 @@ func compileRuntimeMountsForParents(
 	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
 	logger *slog.Logger,
 ) (*compiledMountSet, error) {
-	parentByID, standaloneByRoot := indexStandaloneMounts(parents)
+	parentByID := indexStandaloneMounts(parents)
 	candidatesByParent, unmatchedChildren, err := buildChildMountCandidates(parentByID, normalizeParentShortcutTopologies(topologies))
 	if err != nil {
 		return nil, err
 	}
-	markChildProjectionConflicts(parents, candidatesByParent, standaloneByRoot)
 	finalMounts, skipped := assembleRuntimeMountSet(
 		parents,
 		candidatesByParent,
@@ -146,7 +158,7 @@ func compileRuntimeMountsForParents(
 		Mounts:             finalMounts,
 		Skipped:            skipped,
 		FinalDrainMountIDs: finalDrainMountIDs(topologies),
-		CleanupChildren:    shortcutChildArtifactCleanups(topologies),
+		CleanupChildren:    shortcutChildArtifactCleanups(parentByID, topologies),
 	}, nil
 }
 
@@ -159,15 +171,13 @@ func normalizeParentShortcutTopologies(
 	return topologies
 }
 
-func indexStandaloneMounts(parents []*mountSpec) (map[mountID]*mountSpec, map[string]mountID) {
+func indexStandaloneMounts(parents []*mountSpec) map[mountID]*mountSpec {
 	parentByID := make(map[mountID]*mountSpec, len(parents))
-	standaloneByRoot := make(map[string]mountID, len(parents))
 	for i := range parents {
 		parentByID[parents[i].mountID] = parents[i]
-		standaloneByRoot[parents[i].contentRootKey()] = parents[i].mountID
 	}
 
-	return parentByID, standaloneByRoot
+	return parentByID
 }
 
 func buildChildMountCandidates(
@@ -232,27 +242,6 @@ func sortedPublishedShortcutChildren(
 		return children[i].namespaceID < children[j].namespaceID
 	})
 	return children
-}
-
-func markChildProjectionConflicts(
-	parents []*mountSpec,
-	candidatesByParent map[mountID][]*childMountCandidate,
-	standaloneByRoot map[string]mountID,
-) {
-	for _, parent := range parents {
-		for _, candidate := range candidatesByParent[parent.mountID] {
-			if candidate.skipErr != nil {
-				continue
-			}
-			if standaloneID, found := standaloneByRoot[candidate.contentRootKey]; found {
-				candidate.skipErr = fmt.Errorf(
-					"content root already projected by standalone mount %s",
-					standaloneID,
-				)
-				continue
-			}
-		}
-	}
 }
 
 func assembleRuntimeMountSet(
@@ -425,7 +414,6 @@ func buildChildMountCandidate(parent *mountSpec, child *syncengine.ShortcutChild
 		runnerAction:      child.RunnerAction,
 		blockedDetail:     child.BlockedDetail,
 		mount:             childMount,
-		contentRootKey:    childMount.contentRootKey(),
 		skipErr:           skipErr,
 	}, nil
 }
@@ -452,15 +440,6 @@ func shortcutChildRunnerSkipError(
 	default:
 		return fmt.Errorf("child mount %s has unsupported runner action %q", childMountID, action)
 	}
-}
-
-func (m *mountSpec) contentRootKey() string {
-	remoteRootItemID := m.remoteRootItemID
-	if remoteRootItemID == "" {
-		remoteRootItemID = "root"
-	}
-
-	return fmt.Sprintf("%s|%s|%s", m.tokenOwnerCanonical.String(), m.remoteDriveID.String(), remoteRootItemID)
 }
 
 func (m *mountSpec) identity() MountIdentity {

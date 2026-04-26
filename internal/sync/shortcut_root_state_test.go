@@ -969,6 +969,39 @@ func TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending(t *t
 }
 
 // Validates: R-2.4.8
+func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
+	require.NoError(t, os.MkdirAll(filepath.Dir(aliasRoot), 0o700))
+	require.NoError(t, os.WriteFile(aliasRoot, []byte("blocking file"), 0o600))
+	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+		NamespaceID:       shortcutTopologyTestNamespaceID,
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		LocalAlias:        "Docs",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-1",
+		RemoteIsFolder:    true,
+		State:             ShortcutRootStateRemovedReleasePending,
+		ProtectedPaths:    []string{"Shared/Docs"},
+	}}))
+
+	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+
+	require.Error(t, err)
+	assert.False(t, changed)
+	roots, listErr := eng.baseline.ListShortcutRoots(t.Context())
+	require.NoError(t, listErr)
+	require.Len(t, roots, 1)
+	assert.Equal(t, ShortcutRootStateRemovedCleanupBlocked, roots[0].State)
+	assert.Contains(t, roots[0].BlockedDetail, "not a directory")
+	assert.Equal(t, []string{"Shared/Docs"}, roots[0].ProtectedPaths)
+}
+
+// Validates: R-2.4.8
 func TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterReleasePending(t *testing.T) {
 	t.Parallel()
 

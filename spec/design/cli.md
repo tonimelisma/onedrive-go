@@ -104,10 +104,11 @@ drive-shaped status fields (`total_drives`, `accounts[].drives`) are not part
 of the current contract. Child lifecycle rows also expose `state`,
 `state_reason`, `state_detail`, `protected_current_path`,
 `protected_reserved_paths`, `recovery_action`, and `auto_retry` from parent
-sync-store `shortcut_roots` and child sync-state snapshots. Text and JSON
-status describe the protected-root state and the next recovery step
-without duplicating engine transition policy in the CLI. Recovery copy uses the
-same product vocabulary as the control plane:
+sync-store `shortcut_roots`, sync-owned shortcut lifecycle status metadata, and
+child sync-state snapshots. Text and JSON status describe the protected-root
+state and the next recovery step without duplicating engine transition policy
+or shortcut-state copy tables in the CLI. Recovery copy uses the same product
+vocabulary as the control plane:
 "shortcut alias", "child projection", "reserved path", and "parent engine
 shortcut publication facts".
 
