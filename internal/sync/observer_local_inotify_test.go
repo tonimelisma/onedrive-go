@@ -179,3 +179,21 @@ func TestFullScan_NonexistentSyncRoot_ReturnsError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSyncRootMissing,
 		"FullScan should return ErrSyncRootMissing, got: %v", err)
 }
+
+func TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	tree := mustOpenSyncTree(t, syncRoot)
+	identity, err := tree.IdentityNoFollow("")
+	require.NoError(t, err)
+	identity.Inode++
+
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetExpectedRootIdentity(&identity)
+
+	_, err = obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrMountRootUnavailable)
+}

@@ -65,7 +65,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
-| Parent engines persist shortcut-root state, merge that state into managed-root observation reservations on startup, and route protected-root lifecycle signals through the parent engine without turning them into parent content. | `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestNewMountEngine_DoesNotReserveReleasedShortcutRootAfterDrainAck`, `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot` |
+| Parent engines persist shortcut-root state, merge that state into managed-root observation reservations on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestNewMountEngine_DoesNotReserveReleasedShortcutRootAfterDrainAck`, `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
 | Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child runner-action publications reach multisync. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleManagedRootEventOwnsLocalAliasRename` |
 
 ## Construction
@@ -401,6 +401,13 @@ paths, lifecycle state, and same-path replacement waiting state. The
 multi-mount control plane consumes the parent-declared child topology only to
 start, drain, skip, or purge child runners.
 
+Managed shortcut child topology also carries the parent-observed local root
+identity when the parent has materialized the alias directory. Child engines
+verify that identity at construction and before full local scans. If the local
+root disappeared, moved away, or was deleted and recreated at the same path, the
+engine reports `ErrMountRootUnavailable` instead of producing an empty local
+snapshot that could plan remote deletes.
+
 Shortcut placeholder rename/delete mutations are parent-engine operations by
 binding item ID. The parent engine observes the need for local alias
 rename/delete from its protected-root scan/watch path, applies the Graph
@@ -417,6 +424,13 @@ to `active`, before multisync stops and forgets the retiring child runner. If
 cleanup is interrupted or blocked, startup and later topology refresh retry the
 release from `removed_release_pending` or `removed_cleanup_blocked`; a later
 complete topology batch is not required to release that parent reservation.
+
+If the parent later observes that a retiring or cleanup-blocked shortcut alias
+directory is gone, it treats that as user-directed manual discard of the local
+projection. The parent removes the shortcut root, or promotes a same-path
+waiting replacement, without calling the shortcut delete/rename Graph mutation
+path and without interpreting the missing directory as child content deletion.
+Multisync receives the release through topology and purges child-owned state.
 
 If a mounted sync root disappears, the engine treats that as mount lifecycle
 (`ErrMountRootUnavailable`) rather than as content deletion below the root.

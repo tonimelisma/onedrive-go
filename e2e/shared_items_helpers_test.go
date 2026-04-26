@@ -309,22 +309,7 @@ func requireShortcutRootEntry(
 ) {
 	t.Helper()
 
-	stdout, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "ls", "--json", "/")
-	var items []remoteListJSONItem
-	require.NoErrorf(t, json.Unmarshal([]byte(stdout), &items), "ls --json root output should be valid JSON, got: %s", stdout)
-
-	for i := range items {
-		if items[i].Name == fixture.ShortcutName {
-			return
-		}
-	}
-
-	require.Failf(t,
-		"shortcut fixture root entry missing",
-		"expected %q in root of %s",
-		fixture.ShortcutName,
-		fixture.ParentDrive,
-	)
+	waitForShortcutRootPlaceholder(t, cfgPath, env, fixture, "shortcut fixture root entry missing")
 }
 
 func requireShortcutSentinelVisible(
@@ -497,25 +482,70 @@ func requireRootPlaceholderContainsShortcutFixture(
 ) {
 	t.Helper()
 
-	stdout, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "ls", "--json", "/")
-	var items []remoteListJSONItem
-	require.NoErrorf(t, json.Unmarshal([]byte(stdout), &items), "ls --json root output should be valid JSON, got: %s", stdout)
+	waitForShortcutRootPlaceholder(t, cfgPath, env, fixture, "shortcut fixture root placeholder missing")
+}
 
+func waitForShortcutRootPlaceholder(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	fixture resolvedShortcutFixture,
+	failureTitle string,
+) {
+	t.Helper()
+
+	deadline := time.Now().Add(pollTimeout)
+	var lastNames []string
+	var lastStdout string
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		stdout, _, err := runCLIWithConfigAllowErrorForDrive(t, cfgPath, env, fixture.ParentDrive, "ls", "--json", "/")
+		lastStdout = stdout
+		lastErr = err
+		if err == nil {
+			var items []remoteListJSONItem
+			if decodeErr := json.Unmarshal([]byte(stdout), &items); decodeErr != nil {
+				lastErr = decodeErr
+			} else {
+				lastNames = rootListingNames(items)
+				if stringsContain(lastNames, fixture.ShortcutName) {
+					return
+				}
+			}
+		}
+
+		if time.Now().After(deadline) {
+			require.Failf(t,
+				failureTitle,
+				"expected %q in root of %s within %v; root_names=%v last_err=%v last_stdout=%s",
+				fixture.ShortcutName,
+				fixture.ParentDrive,
+				pollTimeout,
+				lastNames,
+				lastErr,
+				lastStdout,
+			)
+		}
+
+		sleepForLiveTestPropagation(pollBackoff(attempt))
+	}
+}
+
+func rootListingNames(items []remoteListJSONItem) []string {
 	var names []string
 	for i := range items {
 		names = append(names, items[i].Name)
-		if items[i].Name == fixture.ShortcutName {
-			return
+	}
+	return names
+}
+
+func stringsContain(items []string, needle string) bool {
+	for i := range items {
+		if items[i] == needle {
+			return true
 		}
 	}
-
-	require.Failf(t,
-		"shortcut fixture root placeholder missing",
-		"expected %q in root of %s; root_names=%v",
-		fixture.ShortcutName,
-		fixture.ParentDrive,
-		names,
-	)
+	return false
 }
 
 func resolveSharedFileFixture(t *testing.T, rawLink string) resolvedSharedFileFixture {

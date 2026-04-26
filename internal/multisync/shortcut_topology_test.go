@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -211,6 +212,55 @@ func TestParentShortcutTopologyCache_ClonesPublication(t *testing.T) {
 	cached.Children[0].ProtectedPaths[0] = "mutated-cached"
 	cachedAgain := orch.parentShortcutTopologyFor(parent.mountID)
 	assert.Equal(t, []string{"Shortcuts/Docs"}, cachedAgain.Children[0].ProtectedPaths)
+}
+
+// Validates: R-2.4.8, R-4.1.4
+func TestStoreParentShortcutTopology_RecordsReleasedChildren(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	orch := NewOrchestrator(&OrchestratorConfig{})
+	orch.storeParentShortcutTopology(parent.mountID, syncengine.ShortcutChildTopologyPublication{
+		NamespaceID: parent.mountID.String(),
+		Children: []syncengine.ShortcutChildTopology{{
+			BindingItemID:     "binding-old",
+			RelativeLocalPath: "Shortcut",
+			LocalAlias:        "Shortcut",
+			RemoteDriveID:     "remote-drive",
+			RemoteItemID:      "remote-root",
+			RunnerAction:      syncengine.ShortcutChildActionFinalDrain,
+		}},
+	})
+
+	changed := orch.storeParentShortcutTopology(parent.mountID, syncengine.ShortcutChildTopologyPublication{
+		NamespaceID: parent.mountID.String(),
+	})
+
+	assert.True(t, changed)
+	publication := orch.parentShortcutTopologyFor(parent.mountID)
+	require.Len(t, publication.Released, 1)
+	assert.Equal(t, "binding-old", publication.Released[0].BindingItemID)
+
+	compiled, err := compileRuntimeMountsForParents(
+		[]*mountSpec{parent},
+		orch.parentShortcutTopologiesFor([]*mountSpec{parent}),
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, compiled.Mounts, 1)
+	require.Len(t, compiled.ReleasedChildren, 1)
+	assert.Equal(t, config.ChildMountID(parent.mountID.String(), "binding-old"), compiled.ReleasedChildren[0].mountID)
+
+	changed = orch.storeParentShortcutTopology(parent.mountID, syncengine.ShortcutChildTopologyPublication{
+		NamespaceID: parent.mountID.String(),
+	})
+	assert.False(t, changed)
+	publication = orch.parentShortcutTopologyFor(parent.mountID)
+	require.Len(t, publication.Released, 1)
+	assert.Equal(t, "binding-old", publication.Released[0].BindingItemID)
+	assert.True(t, orch.forgetReleasedShortcutChildren(compiled.ReleasedChildren))
+	publication = orch.parentShortcutTopologyFor(parent.mountID)
+	assert.Empty(t, publication.Released)
 }
 
 // Validates: R-2.4.8, R-2.8.1, R-4.1.4

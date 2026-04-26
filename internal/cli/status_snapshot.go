@@ -629,7 +629,8 @@ func shortcutRootGuidanceText(state syncengine.ShortcutRootState) (string, strin
 		return "The parent engine cannot update the shortcut alias in OneDrive.",
 			"Fix account, network, or permission access, or restore the local alias."
 	case syncengine.ShortcutRootStateRemovedFinalDrain:
-		return "The shortcut alias was removed; child sync is finishing before release.", ""
+		return "The shortcut alias was removed; child sync is finishing before release.",
+			"Restore access to the shared folder so final drain can retry, or delete the local shortcut directory to discard the dirty local tree."
 	case syncengine.ShortcutRootStateRemovedReleasePending:
 		return "Child sync finished; the parent engine is releasing the protected shortcut alias path.", ""
 	case syncengine.ShortcutRootStateRemovedCleanupBlocked:

@@ -159,6 +159,7 @@ type LocalObserver struct {
 	checkWorkers       int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
 	filterConfig       LocalFilterConfig
 	observationRules   LocalObservationRules
+	expectedRootID     *synctree.FileIdentity
 	managedRootEvents  ManagedRootEventSink
 	WatcherFactory     func() (FsWatcher, error)
 	droppedEvents      atomic.Int64                                     // events dropped by TrySend due to full channel
@@ -246,6 +247,15 @@ func (o *LocalObserver) SetManagedRootEventSink(sink ManagedRootEventSink) {
 // get conflated with local exclusions.
 func (o *LocalObserver) SetObservationRules(rules LocalObservationRules) {
 	o.observationRules = rules
+}
+
+func (o *LocalObserver) SetExpectedRootIdentity(identity *synctree.FileIdentity) {
+	if identity == nil {
+		o.expectedRootID = nil
+		return
+	}
+	next := *identity
+	o.expectedRootID = &next
 }
 
 func (o *LocalObserver) reportManagedRootEvent(event ManagedRootEvent) {

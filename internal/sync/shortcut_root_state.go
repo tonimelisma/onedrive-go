@@ -751,6 +751,7 @@ func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootReco
 			State:             shortcutChildStateForRoot(root.State),
 			BlockedDetail:     root.BlockedDetail,
 			ProtectedPaths:    protectedPathsForShortcutRoot(root.RelativeLocalPath, root.ProtectedPaths),
+			LocalRootIdentity: shortcutRootIdentityFromFileIdentity(root.LocalRootIdentity),
 		}
 		if root.Waiting != nil {
 			waiting := shortcutChildTopologyFromReplacement(*root.Waiting)
@@ -759,6 +760,14 @@ func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootReco
 		snapshot.Children = append(snapshot.Children, child)
 	}
 	return snapshot
+}
+
+func cloneFileIdentity(identity *synctree.FileIdentity) *synctree.FileIdentity {
+	if identity == nil {
+		return nil
+	}
+	next := *identity
+	return &next
 }
 
 func shortcutChildTopologyFromReplacement(replacement ShortcutRootReplacement) ShortcutChildTopology {
