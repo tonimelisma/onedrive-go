@@ -220,6 +220,14 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 			autoRetry:    boolPtr(true),
 		},
 		{
+			name:         "removed_release_pending",
+			state:        syncengine.ShortcutRootStateRemovedReleasePending,
+			displayState: "pending_removal",
+			reason:       string(syncengine.ShortcutRootStateRemovedReleasePending),
+			detail:       "Child sync finished; the parent engine is releasing the protected shortcut alias path.",
+			autoRetry:    boolPtr(true),
+		},
+		{
 			name:               "same_path_replacement_waiting",
 			state:              syncengine.ShortcutRootStateSamePathReplacementWaiting,
 			displayState:       "pending_removal",
@@ -227,6 +235,15 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 			detail:             "A new shortcut is waiting for the old child sync to finish.",
 			autoRetry:          boolPtr(true),
 			waitingReplacement: "Shortcuts/Docs",
+		},
+		{
+			name:         "duplicate_target",
+			state:        syncengine.ShortcutRootStateDuplicateTarget,
+			displayState: string(syncengine.ShortcutRootStateDuplicateTarget),
+			reason:       string(syncengine.ShortcutRootStateDuplicateTarget),
+			detail:       "Another shortcut alias in this parent already projects the same target.",
+			action:       "Remove or rename the duplicate shortcut alias.",
+			autoRetry:    boolPtr(true),
 		},
 	}
 }

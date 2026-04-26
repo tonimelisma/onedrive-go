@@ -504,7 +504,7 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 
 	parent := testStandaloneMount(t, "personal:final-drain@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-	child.State = syncengine.ShortcutChildRetiring
+	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
 	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
 
 	childRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Docs")
@@ -587,7 +587,7 @@ func TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved(t *testing.T) {
 
 	parent := testStandaloneMount(t, "personal:final-drain-fail@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-	child.State = syncengine.ShortcutChildRetiring
+	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
 	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
 
 	childRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Docs")
@@ -617,7 +617,7 @@ func TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved(t *testing.T) {
 	assert.DirExists(t, childRoot)
 	snapshot := orch.parentShortcutTopologyFor(mountID(parent.CanonicalID.String()))
 	require.Len(t, snapshot.Children, 1)
-	assert.Equal(t, syncengine.ShortcutChildRetiring, snapshot.Children[0].State)
+	assert.Equal(t, syncengine.ShortcutChildActionFinalDrain, snapshot.Children[0].RunnerAction)
 }
 
 // Validates: R-2.4
@@ -786,7 +786,7 @@ func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testin
 
 	parent := testStandaloneMount(t, "personal:watch-final-drain@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-	child.State = syncengine.ShortcutChildRetiring
+	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
 	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
 	topology := testParentTopologies(&parent, child)
 
@@ -859,7 +859,7 @@ func TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs(t *testi
 
 	parent := testStandaloneMount(t, "personal:watch-final-drain-error@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-	child.State = syncengine.ShortcutChildRetiring
+	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
 	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
 
 	cfg := testOrchestratorConfig(t, parent)
@@ -907,7 +907,7 @@ func TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs(t *testi
 	assert.Equal(t, 0, ackCount)
 	publication := orch.parentShortcutTopologyFor(mountID(parent.CanonicalID.String()))
 	require.Len(t, publication.Children, 1)
-	assert.Equal(t, syncengine.ShortcutChildRetiring, publication.Children[0].State)
+	assert.Equal(t, syncengine.ShortcutChildActionFinalDrain, publication.Children[0].RunnerAction)
 }
 
 // Validates: R-2.4
@@ -1028,7 +1028,7 @@ func TestRunOnce_BootstrapsParentShortcutTopologyBeforeStartingChildren(t *testi
 							RemoteDriveID:     "remote-child-drive",
 							RemoteItemID:      "remote-child-root",
 							RemoteIsFolder:    true,
-							State:             syncengine.ShortcutChildDesired,
+							RunnerAction:      syncengine.ShortcutChildActionRun,
 						}},
 					}, nil
 				},

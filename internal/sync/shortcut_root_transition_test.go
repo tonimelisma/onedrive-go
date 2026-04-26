@@ -18,8 +18,10 @@ func TestShortcutRootTransitionTableCoversStates(t *testing.T) {
 		ShortcutRootStateRenameAmbiguous,
 		ShortcutRootStateAliasMutationBlocked,
 		ShortcutRootStateRemovedFinalDrain,
+		ShortcutRootStateRemovedReleasePending,
 		ShortcutRootStateRemovedCleanupBlocked,
 		ShortcutRootStateSamePathReplacementWaiting,
+		ShortcutRootStateDuplicateTarget,
 	}
 	transitions := shortcutRootTransitionTable()
 	for _, state := range states {
@@ -44,6 +46,10 @@ func TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges(t *testing.T) {
 		{"final drain promotes waiting replacement", ShortcutRootStateSamePathReplacementWaiting, shortcutRootEventWaitingReplacementPromote, ShortcutRootStateActive},
 		{"local ambiguity blocks active", ShortcutRootStateActive, shortcutRootEventAliasRenameAmbiguous, ShortcutRootStateRenameAmbiguous},
 		{"cleanup failure stays protected", ShortcutRootStateRemovedFinalDrain, shortcutRootEventProjectionCleanupFailed, ShortcutRootStateRemovedCleanupBlocked},
+		{"clean drain enters release pending", ShortcutRootStateRemovedFinalDrain, shortcutRootEventChildFinalDrainClean, ShortcutRootStateRemovedReleasePending},
+		{"release pending cleanup can promote waiting replacement", ShortcutRootStateRemovedReleasePending, shortcutRootEventWaitingReplacementPromote, ShortcutRootStateActive},
+		{"duplicate target blocks active", ShortcutRootStateActive, shortcutRootEventDuplicateTargetDetected, ShortcutRootStateDuplicateTarget},
+		{"duplicate target resolves to active", ShortcutRootStateDuplicateTarget, shortcutRootEventDuplicateTargetResolved, ShortcutRootStateActive},
 		{"alias rename success restores blocked root", ShortcutRootStateAliasMutationBlocked, shortcutRootEventAliasMutationSucceeded, ShortcutRootStateActive},
 		{"alias delete success drains active root", ShortcutRootStateActive, shortcutRootEventAliasMutationSucceeded, ShortcutRootStateRemovedFinalDrain},
 	}

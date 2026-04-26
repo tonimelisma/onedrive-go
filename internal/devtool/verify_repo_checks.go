@@ -168,42 +168,10 @@ func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *as
 	controlSocketPath := filepath.Join(repoRoot, "internal", "multisync", "control_socket.go")
 	controlSocketFile := path == controlSocketPath
 
-	forbiddenSelectors := map[string]string{
-		"MoveItem":                           "shortcut alias mutation must go through the parent engine",
-		"DeleteItem":                         "shortcut alias mutation must go through the parent engine",
-		"ApplyShortcutAliasMutation":         "shortcut alias mutation must go through the parent engine",
-		"applyShortcutAliasMutation":         "shortcut alias mutation must stay inside the parent engine",
-		"ApplyShortcutTopology":              "parent shortcut-root persistence must stay in internal/sync",
-		"ReplaceShortcutRoots":               "parent shortcut-root persistence must stay in internal/sync",
-		"AcknowledgeShortcutChildFinalDrain": "parent shortcut-root persistence must stay in internal/sync",
-		"RemoveStateDBFiles":                 "child DB mutation must stay outside multisync",
-	}
-	forbiddenIdents := map[string]string{
-		"ShortcutAliasMutation":      "shortcut alias mutation must go through the parent engine",
-		"shortcutAliasMutation":      "shortcut alias mutation must stay inside the parent engine",
-		"ShortcutTopologyBatch":      "raw parent shortcut observation facts must stay in internal/sync",
-		"ShortcutBindingUpsert":      "raw parent shortcut observation facts must stay in internal/sync",
-		"ShortcutBindingDelete":      "raw parent shortcut observation facts must stay in internal/sync",
-		"ShortcutBindingUnavailable": "raw parent shortcut observation facts must stay in internal/sync",
-		"ShortcutRootRecord":         "parent shortcut-root state must stay in internal/sync",
-		"RemoveStateDBFiles":         "child DB mutation must stay outside multisync",
-	}
-	forbiddenLocalpathSelectors := map[string]struct{}{
-		"MkdirAll": {},
-		"Chmod":    {},
-		"Remove":   {},
-	}
-	forbiddenOSSelectors := map[string]struct{}{
-		"Remove":    {},
-		"RemoveAll": {},
-		"Mkdir":     {},
-		"MkdirAll":  {},
-		"Stat":      {},
-		"ReadDir":   {},
-		"Open":      {},
-		"WriteFile": {},
-		"ReadFile":  {},
-	}
+	forbiddenSelectors := forbiddenMultisyncSelectorReasons()
+	forbiddenIdents := forbiddenMultisyncIdentReasons()
+	forbiddenLocalpathSelectors := forbiddenMultisyncLocalpathSelectors()
+	forbiddenOSSelectors := forbiddenMultisyncOSSelectors()
 
 	var match string
 	ast.Inspect(file, func(node ast.Node) bool {
@@ -255,6 +223,63 @@ func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *as
 	})
 
 	return match
+}
+
+func forbiddenMultisyncSelectorReasons() map[string]string {
+	return map[string]string{
+		"MoveItem":                           "shortcut alias mutation must go through the parent engine",
+		"DeleteItem":                         "shortcut alias mutation must go through the parent engine",
+		"ApplyShortcutAliasMutation":         "shortcut alias mutation must go through the parent engine",
+		"applyShortcutAliasMutation":         "shortcut alias mutation must stay inside the parent engine",
+		"ApplyShortcutTopology":              "parent shortcut-root persistence must stay in internal/sync",
+		"ReplaceShortcutRoots":               "parent shortcut-root persistence must stay in internal/sync",
+		"AcknowledgeShortcutChildFinalDrain": "parent shortcut-root persistence must stay in internal/sync",
+		"RemoveStateDBFiles":                 "child DB mutation must stay outside multisync",
+	}
+}
+
+func forbiddenMultisyncIdentReasons() map[string]string {
+	return map[string]string{
+		"ShortcutAliasMutation":           "shortcut alias mutation must go through the parent engine",
+		"shortcutAliasMutation":           "shortcut alias mutation must stay inside the parent engine",
+		"ShortcutTopologyBatch":           "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutBindingUpsert":           "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutBindingDelete":           "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutBindingUnavailable":      "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutRootRecord":              "parent shortcut-root state must stay in internal/sync",
+		"ShortcutRootState":               "parent shortcut-root state must stay in internal/sync",
+		"ShortcutChildTopologyState":      "multisync must consume parent-declared runner actions, not map child topology states",
+		"ShortcutChildDesired":            "multisync must consume parent-declared runner actions, not map child topology states",
+		"ShortcutChildBlocked":            "multisync must consume parent-declared runner actions, not map child topology states",
+		"ShortcutChildRetiring":           "multisync must consume parent-declared runner actions, not map child topology states",
+		"ShortcutChildWaitingReplacement": "multisync must consume parent-declared runner actions, not map child topology states",
+		"ManagedRootReservation":          "parent protected-root reservations must stay in internal/sync",
+		"localSkipDirs":                   "parent protected-root skip policy must stay in internal/sync",
+		"localReservations":               "parent protected-root reservation policy must stay in internal/sync",
+		"RemoveStateDBFiles":              "child DB mutation must stay outside multisync",
+	}
+}
+
+func forbiddenMultisyncLocalpathSelectors() map[string]struct{} {
+	return map[string]struct{}{
+		"MkdirAll": {},
+		"Chmod":    {},
+		"Remove":   {},
+	}
+}
+
+func forbiddenMultisyncOSSelectors() map[string]struct{} {
+	return map[string]struct{}{
+		"Remove":    {},
+		"RemoveAll": {},
+		"Mkdir":     {},
+		"MkdirAll":  {},
+		"Stat":      {},
+		"ReadDir":   {},
+		"Open":      {},
+		"WriteFile": {},
+		"ReadFile":  {},
+	}
 }
 
 func ensureMultisyncDoesNotPersistAutomaticShortcutInventory(repoRoot string) error {

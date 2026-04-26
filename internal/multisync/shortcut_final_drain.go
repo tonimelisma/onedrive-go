@@ -34,7 +34,7 @@ func finalDrainMountIDs(topologies map[mountID]syncengine.ShortcutChildTopologyP
 	children := sortedPublishedShortcutChildren(topologies)
 	for i := range children {
 		child := children[i].child
-		if child.State == syncengine.ShortcutChildRetiring {
+		if child.RunnerAction == syncengine.ShortcutChildActionFinalDrain {
 			ids = append(ids, config.ChildMountID(children[i].namespaceID.String(), child.BindingItemID))
 		}
 	}

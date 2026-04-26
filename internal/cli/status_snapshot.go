@@ -581,9 +581,12 @@ func shortcutRootDisplayState(parentDrive config.Drive, state syncengine.Shortcu
 		syncengine.ShortcutRootStateAliasMutationBlocked:
 		return string(state)
 	case syncengine.ShortcutRootStateRemovedFinalDrain,
+		syncengine.ShortcutRootStateRemovedReleasePending,
 		syncengine.ShortcutRootStateRemovedCleanupBlocked,
 		syncengine.ShortcutRootStateSamePathReplacementWaiting:
 		return "pending_removal"
+	case syncengine.ShortcutRootStateDuplicateTarget:
+		return string(state)
 	}
 	return string(state)
 }
@@ -627,11 +630,16 @@ func shortcutRootGuidanceText(state syncengine.ShortcutRootState) (string, strin
 			"Fix account, network, or permission access, or restore the local alias."
 	case syncengine.ShortcutRootStateRemovedFinalDrain:
 		return "The shortcut alias was removed; child sync is finishing before release.", ""
+	case syncengine.ShortcutRootStateRemovedReleasePending:
+		return "Child sync finished; the parent engine is releasing the protected shortcut alias path.", ""
 	case syncengine.ShortcutRootStateRemovedCleanupBlocked:
 		return "The parent engine cannot release the protected shortcut alias path.",
 			"Clear the local filesystem blocker."
 	case syncengine.ShortcutRootStateSamePathReplacementWaiting:
 		return "A new shortcut is waiting for the old child sync to finish.", ""
+	case syncengine.ShortcutRootStateDuplicateTarget:
+		return "Another shortcut alias in this parent already projects the same target.",
+			"Remove or rename the duplicate shortcut alias."
 	default:
 		return "The shortcut alias is waiting for parent-engine recovery.", ""
 	}

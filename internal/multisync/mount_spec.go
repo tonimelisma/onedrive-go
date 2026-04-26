@@ -72,9 +72,7 @@ type mountSpec struct {
 	checkWorkers              int
 	minFreeSpace              int64
 	finalDrain                bool
-	localSkipDirs             []string
-	localReservations         []syncengine.ManagedRootReservation
-	shortcutTopologyHandler   syncengine.ShortcutTopologyHandler
+	shortcutTopologyHandler   syncengine.ShortcutChildTopologySink
 }
 
 type compiledMountSet struct {
@@ -84,16 +82,15 @@ type compiledMountSet struct {
 }
 
 type childMountCandidate struct {
-	namespaceID        mountID
-	bindingItemID      string
-	localAlias         string
-	relativeLocalPath  string
-	reservedLocalPaths []string
-	state              syncengine.ShortcutChildTopologyState
-	blockedDetail      string
-	mount              *mountSpec
-	contentRootKey     string
-	skipErr            error
+	namespaceID       mountID
+	bindingItemID     string
+	localAlias        string
+	relativeLocalPath string
+	runnerAction      syncengine.ShortcutChildRunnerAction
+	blockedDetail     string
+	mount             *mountSpec
+	contentRootKey    string
+	skipErr           error
 }
 
 type unmatchedShortcutChild struct {
@@ -135,11 +132,10 @@ func compileRuntimeMountsForParents(
 	if err != nil {
 		return nil, err
 	}
-	conflictedChildRoots := markChildProjectionConflicts(parents, candidatesByParent, standaloneByRoot)
+	markChildProjectionConflicts(parents, candidatesByParent, standaloneByRoot)
 	finalMounts, skipped := assembleRuntimeMountSet(
 		parents,
 		candidatesByParent,
-		conflictedChildRoots,
 		unmatchedChildren,
 		logger,
 	)
@@ -235,29 +231,11 @@ func sortedPublishedShortcutChildren(
 	return children
 }
 
-func reservedPathsFromProtected(current string, protected []string) []string {
-	reserved := make([]string, 0, len(protected))
-	seen := map[string]struct{}{current: {}}
-	for _, protectedPath := range protected {
-		if protectedPath == "" {
-			continue
-		}
-		if _, ok := seen[protectedPath]; ok {
-			continue
-		}
-		seen[protectedPath] = struct{}{}
-		reserved = append(reserved, protectedPath)
-	}
-	return reserved
-}
-
 func markChildProjectionConflicts(
 	parents []*mountSpec,
 	candidatesByParent map[mountID][]*childMountCandidate,
 	standaloneByRoot map[string]mountID,
-) map[string]struct{} {
-	conflictedChildRoots := make(map[string]struct{})
-	firstChildByRoot := make(map[string]*childMountCandidate)
+) {
 	for _, parent := range parents {
 		for _, candidate := range candidatesByParent[parent.mountID] {
 			if candidate.skipErr != nil {
@@ -270,27 +248,13 @@ func markChildProjectionConflicts(
 				)
 				continue
 			}
-			conflictKey := string(candidate.namespaceID) + "|" + candidate.contentRootKey
-			if existing, found := firstChildByRoot[conflictKey]; found {
-				conflictedChildRoots[conflictKey] = struct{}{}
-				candidate.skipErr = fmt.Errorf(
-					"content root also projected by child mount %s",
-					existing.mount.mountID,
-				)
-				continue
-			}
-
-			firstChildByRoot[conflictKey] = candidate
 		}
 	}
-
-	return conflictedChildRoots
 }
 
 func assembleRuntimeMountSet(
 	parents []*mountSpec,
 	candidatesByParent map[mountID][]*childMountCandidate,
-	conflictedChildRoots map[string]struct{},
 	unmatchedChildren []unmatchedShortcutChild,
 	logger *slog.Logger,
 ) ([]*mountSpec, []MountStartupResult) {
@@ -312,16 +276,8 @@ func assembleRuntimeMountSet(
 		})
 
 		for _, candidate := range children {
-			conflictKey := string(candidate.namespaceID) + "|" + candidate.contentRootKey
-			if _, conflicted := conflictedChildRoots[conflictKey]; conflicted && candidate.skipErr == nil {
-				candidate.skipErr = fmt.Errorf("content root is duplicated by another child mount")
-			}
-
 			candidate.mount.selectionIndex = nextIndex
 			nextIndex++
-			parent.localSkipDirs = append(parent.localSkipDirs, candidate.relativeLocalPath)
-			parent.localSkipDirs = append(parent.localSkipDirs, candidate.reservedLocalPaths...)
-			parent.localReservations = append(parent.localReservations, managedRootReservationsForCandidate(candidate)...)
 			if candidate.skipErr != nil {
 				skipped = append(skipped, skippedChildMountResult(candidate, parent.mountID, logger))
 				continue
@@ -333,27 +289,6 @@ func assembleRuntimeMountSet(
 
 	skipped = append(skipped, unmatchedChildStartupResults(unmatchedChildren, nextIndex)...)
 	return finalMounts, skipped
-}
-
-func managedRootReservationsForCandidate(candidate *childMountCandidate) []syncengine.ManagedRootReservation {
-	if candidate == nil {
-		return nil
-	}
-	paths := append([]string{candidate.relativeLocalPath}, candidate.reservedLocalPaths...)
-	reservations := make([]syncengine.ManagedRootReservation, 0, len(paths))
-	for _, relPath := range paths {
-		if relPath == "" {
-			continue
-		}
-		reservation := syncengine.ManagedRootReservation{
-			Path:      relPath,
-			MountID:   candidate.mount.mountID.String(),
-			BindingID: candidate.bindingItemID,
-		}
-		reservations = append(reservations, reservation)
-	}
-
-	return reservations
 }
 
 func skippedChildMountResult(candidate *childMountCandidate, parentID mountID, logger *slog.Logger) MountStartupResult {
@@ -474,43 +409,44 @@ func buildChildMountCandidate(parent *mountSpec, child *syncengine.ShortcutChild
 		transferWorkers:        parent.transferWorkers,
 		checkWorkers:           parent.checkWorkers,
 		minFreeSpace:           parent.minFreeSpace,
-		finalDrain:             child.State == syncengine.ShortcutChildRetiring,
+		finalDrain:             child.RunnerAction == syncengine.ShortcutChildActionFinalDrain,
 	}
-	skipErr := shortcutChildRunnerSkipError(childMountID, child.State, child.BlockedDetail)
+	skipErr := shortcutChildRunnerSkipError(childMountID, child.RunnerAction, child.BlockedDetail)
 
 	return &childMountCandidate{
-		namespaceID:        parent.mountID,
-		bindingItemID:      child.BindingItemID,
-		localAlias:         displayName,
-		relativeLocalPath:  relativePath,
-		reservedLocalPaths: reservedPathsFromProtected(relativePath, child.ProtectedPaths),
-		state:              child.State,
-		blockedDetail:      child.BlockedDetail,
-		mount:              childMount,
-		contentRootKey:     childMount.contentRootKey(),
-		skipErr:            skipErr,
+		namespaceID:       parent.mountID,
+		bindingItemID:     child.BindingItemID,
+		localAlias:        displayName,
+		relativeLocalPath: relativePath,
+		runnerAction:      child.RunnerAction,
+		blockedDetail:     child.BlockedDetail,
+		mount:             childMount,
+		contentRootKey:    childMount.contentRootKey(),
+		skipErr:           skipErr,
 	}, nil
 }
 
 func shortcutChildRunnerSkipError(
 	childMountID string,
-	state syncengine.ShortcutChildTopologyState,
+	action syncengine.ShortcutChildRunnerAction,
 	blockedDetail string,
 ) error {
-	switch state {
-	case "", syncengine.ShortcutChildDesired:
+	switch action {
+	case syncengine.ShortcutChildActionRun:
 		return nil
-	case syncengine.ShortcutChildRetiring:
+	case syncengine.ShortcutChildActionFinalDrain:
 		return nil
-	case syncengine.ShortcutChildBlocked:
+	case syncengine.ShortcutChildActionSkipParentBlocked:
 		if blockedDetail != "" {
 			return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle: %s", childMountID, blockedDetail)
 		}
 		return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle", childMountID)
-	case syncengine.ShortcutChildWaitingReplacement:
+	case syncengine.ShortcutChildActionSkipWaitingReplacement:
 		return fmt.Errorf("child mount %s is waiting for an older shortcut at the same path to finish final drain", childMountID)
+	case "":
+		return fmt.Errorf("child mount %s is missing a parent-declared runner action", childMountID)
 	default:
-		return fmt.Errorf("child mount %s has unsupported state %q", childMountID, state)
+		return fmt.Errorf("child mount %s has unsupported runner action %q", childMountID, action)
 	}
 }
 

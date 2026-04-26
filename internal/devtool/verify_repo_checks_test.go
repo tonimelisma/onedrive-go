@@ -426,6 +426,54 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncRawShortcutObservationTypes(t *
 }
 
 // Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncChildTopologyStateMapping(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_child_state_mapping.go"), []string{
+		"package multisync",
+		"",
+		"import syncengine \"github.com/tonimelisma/onedrive-go/internal/sync\"",
+		"",
+		"func bad(state syncengine.ShortcutChildTopologyState) bool {",
+		"\treturn state == syncengine.ShortcutChildRetiring",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "runner actions")
+	assert.Contains(t, err.Error(), "bad_child_state_mapping.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncProtectedReservationSynthesis(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_reservation.go"), []string{
+		"package multisync",
+		"",
+		"import syncengine \"github.com/tonimelisma/onedrive-go/internal/sync\"",
+		"",
+		"type mountSpec struct {",
+		"\tlocalReservations []syncengine.ManagedRootReservation",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "protected-root")
+	assert.Contains(t, err.Error(), "bad_reservation.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
 func TestRunRepoConsistencyChecksFailsOnMultisyncShortcutRootStoreWrite(t *testing.T) {
 	t.Parallel()
 
