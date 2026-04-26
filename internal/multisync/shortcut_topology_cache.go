@@ -101,6 +101,9 @@ func normalizeShortcutTopologyPublication(
 		if byBinding := cmp.Compare(a.BindingItemID, b.BindingItemID); byBinding != 0 {
 			return byBinding
 		}
+		if byPath := cmp.Compare(a.RelativeLocalPath, b.RelativeLocalPath); byPath != 0 {
+			return byPath
+		}
 		return cmp.Compare(a.Reason, b.Reason)
 	})
 	return publication

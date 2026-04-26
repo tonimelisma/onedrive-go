@@ -51,9 +51,9 @@ func TestApplyShortcutObservationBatch_ForwardsEmptyCompleteBatch(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	require.Len(t, got, 1)
-	assert.Equal(t, shortcutTopologyTestNamespaceID, got[0].NamespaceID)
-	assert.Empty(t, got[0].Children)
+	require.NotEmpty(t, got)
+	assert.Equal(t, shortcutTopologyTestNamespaceID, got[len(got)-1].NamespaceID)
+	assert.Empty(t, got[len(got)-1].Children)
 }
 
 // Validates: R-2.4.3, R-2.4.8
@@ -109,7 +109,7 @@ func TestApplyShortcutObservationBatch_SkipsEmptyIncrementalBatch(t *testing.T) 
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestPublishInitialChildTopology_ForwardsEmptyCompleteBatchWithoutCommittingCursor(t *testing.T) {
+func TestRunOncePublishesEmptyCompleteChildTopologyBeforeCommittingCursor(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -128,18 +128,17 @@ func TestPublishInitialChildTopology_ForwardsEmptyCompleteBatchWithoutCommitting
 		return nil
 	}
 
-	snapshot, err := eng.PublishInitialChildTopology(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
-	require.Len(t, got, 1)
-	assert.Equal(t, shortcutTopologyTestNamespaceID, got[0].NamespaceID)
-	assert.Empty(t, got[0].Children)
-	assert.Equal(t, got[0], snapshot)
-	assert.Empty(t, readObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
+	require.NotEmpty(t, got)
+	assert.Equal(t, shortcutTopologyTestNamespaceID, got[len(got)-1].NamespaceID)
+	assert.Empty(t, got[len(got)-1].Children)
+	assert.Equal(t, "cursor-empty-complete", readObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestPublishInitialChildTopology_ApplyFailureDoesNotCommitCursor(t *testing.T) {
+func TestRunOnceChildTopologyPublishFailureDoesNotCommitCursor(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -157,7 +156,7 @@ func TestPublishInitialChildTopology_ApplyFailureDoesNotCommitCursor(t *testing.
 		return applyErr
 	}
 
-	_, err := eng.PublishInitialChildTopology(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.ErrorIs(t, err, applyErr)
 	assert.Empty(t, readObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
 }

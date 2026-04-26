@@ -55,30 +55,6 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 			fmt.Errorf("building mount specs: %w", err),
 		)
 	}
-	var startupParents startupParentEngines
-	compiled, startupParents, err = o.publishParentStartupChildTopology(
-		ctx,
-		compiled,
-		o.cfg.StandaloneMounts,
-		o.cfg.InitialStartupResults,
-		nil,
-		mode,
-		opts,
-	)
-	if err != nil {
-		return controlFailureRunOnceResult(
-			o.cfg.StandaloneMounts,
-			o.cfg.InitialStartupResults,
-			fmt.Errorf("publishing parent startup child topology: %w", err),
-		)
-	}
-	defer o.closeStartupParentEngines(ctx, startupParents)
-	parentArtifactAckers := parentStartupArtifactCleanupAckers(startupParents)
-	if purgeErr := o.purgeShortcutChildArtifactsForCompiled(ctx, compiled, parentArtifactAckers); purgeErr != nil {
-		o.logger.Warn("purging shortcut child state artifacts",
-			slog.String("error", purgeErr.Error()),
-		)
-	}
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
 	o.logger.Info("orchestrator starting RunOnce",
@@ -86,8 +62,76 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		slog.String("mode", mode.String()),
 	)
 
-	work, startup, reports := o.prepareRunOnceWork(ctx, mode, compiled.Mounts, compiled.Skipped, opts, startupParents)
+	parentWork, parentStartup, parentReports := o.prepareRunOnceWork(
+		ctx,
+		mode,
+		filterMountSpecsByProjection(compiled.Mounts, MountProjectionStandalone),
+		compiled.Skipped,
+		opts,
+	)
 
+	runIndexedMountWork(ctx, parentWork, parentReports)
+	defer o.closeRunOnceParentEngines(ctx, parentWork)
+
+	childCompiled, childCompileErr := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts, nil)
+	if childCompileErr != nil {
+		parentStartup.Results = append(parentStartup.Results, MountStartupResult{
+			Status: MountStartupFatal,
+			Err:    fmt.Errorf("building child mount specs after parent publication: %w", childCompileErr),
+		})
+		return RunOnceResult{
+			Startup: parentStartup,
+			Reports: parentReports,
+		}
+	}
+	parentAckers := runOnceParentDrainAckers(parentWork)
+	if purgeErr := o.purgeShortcutChildArtifactsForCompiled(
+		ctx,
+		childCompiled,
+		artifactCleanupAckersFromLifecycle(parentAckers),
+	); purgeErr != nil {
+		o.logger.Warn("purging shortcut child state artifacts",
+			slog.String("error", purgeErr.Error()),
+		)
+	}
+
+	childMounts := filterMountSpecsByProjection(childCompiled.Mounts, MountProjectionChild)
+	childWork, childStartup, childReports := o.prepareRunOnceWork(
+		ctx,
+		mode,
+		childMounts,
+		childCompiled.Skipped,
+		opts,
+	)
+	runIndexedMountWork(ctx, childWork, childReports)
+	o.closeRunOnceChildEngines(ctx, childWork)
+
+	if finalized, finalizeErr := o.finalizeSuccessfulFinalDrainMounts(
+		ctx,
+		childCompiled,
+		childReports,
+		parentAckers,
+	); finalizeErr != nil {
+		o.logger.Warn("finalizing drained shortcut child mounts",
+			slog.String("error", finalizeErr.Error()),
+		)
+	} else if finalized {
+		o.logger.Info("finalized drained shortcut child mounts")
+	}
+
+	allReports := append([]*MountReport{}, parentReports...)
+	allReports = append(allReports, childReports...)
+	o.logger.Info("orchestrator RunOnce complete", slog.Int("reports", len(allReports)))
+
+	startupResults := append([]MountStartupResult{}, parentStartup.Results...)
+	startupResults = append(startupResults, childStartup.Results...)
+	return RunOnceResult{
+		Startup: summarizeStartupResults(startupResults),
+		Reports: allReports,
+	}
+}
+
+func runIndexedMountWork(ctx context.Context, work []indexedMountWork, reports []*MountReport) {
 	var wg gosync.WaitGroup
 	for _, w := range work {
 		wg.Add(1)
@@ -99,29 +143,6 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	}
 
 	wg.Wait()
-
-	o.closeRunOnceChildEngines(ctx, work)
-	defer o.closeRunOnceParentEngines(ctx, work)
-
-	if finalized, finalizeErr := o.finalizeSuccessfulFinalDrainMounts(
-		ctx,
-		compiled,
-		reports,
-		runOnceParentDrainAckers(work),
-	); finalizeErr != nil {
-		o.logger.Warn("finalizing drained shortcut child mounts",
-			slog.String("error", finalizeErr.Error()),
-		)
-	} else if finalized {
-		o.logger.Info("finalized drained shortcut child mounts")
-	}
-
-	o.logger.Info("orchestrator RunOnce complete", slog.Int("reports", len(reports)))
-
-	return RunOnceResult{
-		Startup: startup,
-		Reports: reports,
-	}
 }
 
 func controlFailureRunOnceResult(
@@ -160,7 +181,6 @@ func (o *Orchestrator) prepareRunOnceWork(
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.RunOptions,
-	startupParents startupParentEngines,
 ) ([]indexedMountWork, StartupSelectionSummary, []*MountReport) {
 	work := make([]indexedMountWork, 0, len(mounts))
 	reports := make([]*MountReport, 0, len(mounts))
@@ -178,21 +198,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 			continue
 		}
 
-		o.attachShortcutChildTopologySink(mount, false)
-		if startup := startupParents[mount.mountID]; startup != nil {
-			delete(startupParents, mount.mountID)
-			setShortcutChildTopologySink(startup, mount.shortcutChildTopologySink)
-			w := o.buildEngineWorkFromExisting(mount, startup, mode, opts)
-			startResults = append(startResults, MountStartupResult{
-				SelectionIndex: mount.selectionIndex,
-				Identity:       mount.identity(),
-				DisplayName:    mount.displayName,
-				Status:         MountStartupRunnable,
-			})
-			work = append(work, indexedMountWork{index: len(reports), work: w})
-			reports = append(reports, nil)
-			continue
-		}
+		o.attachShortcutChildTopologySink(mount, nil)
 
 		session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 		if err != nil {
@@ -271,32 +277,6 @@ func (o *Orchestrator) buildEngineWork(
 			return engine.RunOnce(c, runMode, runOpts)
 		},
 	}, nil
-}
-
-func (o *Orchestrator) buildEngineWorkFromExisting(
-	mount *mountSpec,
-	engine engineRunner,
-	mode syncengine.SyncMode,
-	opts syncengine.RunOptions,
-) mountWork {
-	return mountWork{
-		runner: &MountRunner{
-			selectionIndex: mount.selectionIndex,
-			identity:       mount.identity(),
-			displayName:    mount.displayName,
-		},
-		mount:  mount,
-		engine: engine,
-		fn: func(c context.Context) (*syncengine.Report, error) {
-			runMode := mode
-			runOpts := opts
-			if mount.finalDrain {
-				runMode = syncengine.SyncBidirectional
-				runOpts = syncengine.RunOptions{FullReconcile: true}
-			}
-			return engine.RunOnce(c, runMode, runOpts)
-		},
-	}
 }
 
 func (o *Orchestrator) closeRunOnceChildEngines(ctx context.Context, work []indexedMountWork) {
@@ -408,6 +388,7 @@ func acknowledgeSuccessfulFinalDrains(
 			mountByID[mount.mountID.String()] = mount
 		}
 	}
+	parentByID := indexStandaloneMounts(filterMountSpecsByProjection(mounts, MountProjectionStandalone))
 	cleanups := make([]shortcutChildArtifactCleanup, 0, len(successful))
 	for _, result := range successful {
 		mount := mountByID[result.MountID]
@@ -428,7 +409,7 @@ func acknowledgeSuccessfulFinalDrains(
 		if err != nil {
 			return nil, fmt.Errorf("acknowledging final drain for child mount %s: %w", result.MountID, err)
 		}
-		cleanups = append(cleanups, shortcutChildArtifactCleanups(map[mountID]syncengine.ShortcutChildTopologyPublication{
+		cleanups = append(cleanups, shortcutChildArtifactCleanups(parentByID, map[mountID]syncengine.ShortcutChildTopologyPublication{
 			mount.parentMountID: snapshot,
 		})...)
 	}
@@ -445,20 +426,6 @@ func artifactCleanupAckersFromLifecycle(
 	return ackers
 }
 
-func parentStartupArtifactCleanupAckers(
-	started startupParentEngines,
-) map[mountID]shortcutChildArtifactCleanupAcker {
-	ackers := make(map[mountID]shortcutChildArtifactCleanupAcker)
-	for parentID, engine := range started {
-		acker, ok := engine.(shortcutChildArtifactCleanupAcker)
-		if !ok {
-			continue
-		}
-		ackers[parentID] = acker
-	}
-	return ackers
-}
-
 func purgeShortcutChildArtifactsForCleanups(
 	ctx context.Context,
 	cleanups []shortcutChildArtifactCleanup,
@@ -466,7 +433,7 @@ func purgeShortcutChildArtifactsForCleanups(
 ) error {
 	var errs []error
 	for _, cleanup := range cleanups {
-		scope := shortcutChildArtifactScope{mountID: cleanup.mountID}
+		scope := shortcutChildArtifactScope{mountID: cleanup.mountID, localRoot: cleanup.localRoot}
 		if err := purgeShortcutChildArtifacts(ctx, scope, logger); err != nil {
 			errs = append(errs, fmt.Errorf("purging final-drain child mount %s: %w", cleanup.mountID, err))
 		}

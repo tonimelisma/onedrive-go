@@ -62,6 +62,8 @@ func ensureNoStaleArchitecturePhrases(repoRoot string) error {
 		{name: "stale local reservations field", pattern: regexp.MustCompile(`\blocal` + `Reservations\b`)},
 		{name: "stale local skip dirs field", pattern: regexp.MustCompile(`\blocal` + `SkipDirs\b`)},
 		{name: "stale shortcut startup phrase", pattern: regexp.MustCompile(`(?i)shortcut[- ]` + `bootstrap`)},
+		{name: "deleted parent child topology publisher function", pattern: regexp.MustCompile(`\bpublishParent` + `StartupChildTopology\b`)},
+		{name: "stale initial child topology API", pattern: regexp.MustCompile(`\bPublishInitial` + `ChildTopology\b`)},
 		{name: "stale shortcut release cleanup phrase", pattern: regexp.MustCompile("(?i)release " + "tomb" + "stone|" + "tomb" + "stone")},
 		{name: "stale released shortcut child type", pattern: regexp.MustCompile(`\bReleased` + `Children\b|\bShortcutChild` + `Release\b`)},
 	}
@@ -289,6 +291,7 @@ func forbiddenMultisyncSelectorReasons() map[string]string {
 		"acknowledgeShortcutChildArtifactsPurged":   "parent shortcut-root persistence must stay in internal/sync",
 		"mergeReleasedShortcutChildren":             "multisync must use explicit parent cleanup requests, not inferred releases",
 		"forgetReleasedShortcutChildren":            "multisync must use explicit parent cleanup requests, not inferred releases",
+		"markChildProjection" + "Conflicts":         "multisync must not suppress automatic children by remote content root",
 		"RemoveStateDBFiles":                        "child DB mutation must stay outside multisync",
 	}
 }
@@ -310,6 +313,9 @@ func forbiddenMultisyncIdentReasons() map[string]string {
 		"Released" + "Children":           "multisync must use explicit parent cleanup requests, not inferred releases",
 		"mergeReleasedShortcutChildren":   "multisync must use explicit parent cleanup requests, not inferred releases",
 		"forgetReleasedShortcutChildren":  "multisync must use explicit parent cleanup requests, not inferred releases",
+		"standalone" + "ByRoot":           "multisync must not compare standalone and automatic children by remote content root",
+		"content" + "RootKey":             "multisync must not compare standalone and automatic children by remote content root",
+		"Standalone" + "ContentRootWins":  "explicit standalone and automatic children may both project the same remote content root",
 		"ShortcutRootRecord":              "parent shortcut-root state must stay in internal/sync",
 		"ShortcutRootState":               "parent shortcut-root state must stay in internal/sync",
 		"ShortcutChildTopologyState":      "multisync must consume parent-declared runner actions, not map child topology states",

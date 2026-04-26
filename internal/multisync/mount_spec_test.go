@@ -296,7 +296,7 @@ func TestCompileRuntimeMounts_ChildDeltaCapabilityComesFromMountTokenOwner(t *te
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_StandaloneContentRootSuppressesChild(t *testing.T) {
+func TestCompileRuntimeMounts_StandaloneContentRootDoesNotSuppressChild(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "business:owner@example.com", "Parent")
 	standalone := testStandaloneMount(t, "sharepoint:owner@example.com:site:Docs", "Standalone")
@@ -308,9 +308,8 @@ func TestCompileRuntimeMounts_StandaloneContentRootSuppressesChild(t *testing.T)
 		testParentTopologies(&parent, testPublishedShortcutChild()),
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 2)
-	require.Len(t, compiled.Skipped, 1)
-	assert.Contains(t, compiled.Skipped[0].Err.Error(), "standalone mount")
+	require.Len(t, compiled.Mounts, 3)
+	assert.Empty(t, compiled.Skipped)
 }
 
 // Validates: R-2.8.1

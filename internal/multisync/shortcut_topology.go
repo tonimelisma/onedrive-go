@@ -6,38 +6,35 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-func (o *Orchestrator) attachShortcutChildTopologySink(mount *mountSpec, restartOnChange bool) {
+func (o *Orchestrator) attachShortcutChildTopologySink(
+	mount *mountSpec,
+	watchEvents chan<- watchRunnerEvent,
+) {
 	if mount == nil {
 		return
 	}
-	mount.shortcutChildTopologySink = o.shortcutChildTopologySinkForMount(mount, restartOnChange)
+	mount.shortcutChildTopologySink = o.shortcutChildTopologySinkForMount(mount, watchEvents)
 }
 
 func (o *Orchestrator) shortcutChildTopologySinkForMount(
 	mount *mountSpec,
-	restartOnChange bool,
+	watchEvents chan<- watchRunnerEvent,
 ) syncengine.ShortcutChildTopologySink {
 	if o == nil || mount == nil || mount.projectionKind != MountProjectionStandalone {
 		return nil
 	}
 
 	parent := *mount
-	return func(_ context.Context, publication syncengine.ShortcutChildTopologyPublication) error {
+	return func(ctx context.Context, publication syncengine.ShortcutChildTopologyPublication) error {
 		changed := o.receiveParentShortcutTopology(&parent, publication)
-		if changed && restartOnChange {
-			return syncengine.ErrChildPublicationChanged
+		if changed && watchEvents != nil {
+			select {
+			case watchEvents <- watchRunnerEvent{mountID: parent.mountID, topologyChanged: true}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		return nil
-	}
-}
-
-type shortcutChildTopologySinkSetter interface {
-	SetShortcutChildTopologySink(syncengine.ShortcutChildTopologySink)
-}
-
-func setShortcutChildTopologySink(engine engineRunner, sink syncengine.ShortcutChildTopologySink) {
-	if setter, ok := engine.(shortcutChildTopologySinkSetter); ok {
-		setter.SetShortcutChildTopologySink(sink)
 	}
 }
 
