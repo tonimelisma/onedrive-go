@@ -345,6 +345,7 @@ func (flow *engineFlow) observeLocal(
 	obs := NewLocalObserver(bl, eng.logger, eng.checkWorkers)
 	obs.SetFilterConfig(eng.localFilter)
 	obs.SetObservationRules(eng.localRules)
+	obs.SetExpectedRootIdentity(eng.expectedSyncRootIdentity)
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {

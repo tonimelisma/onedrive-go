@@ -35,7 +35,7 @@ are inserted, updated, pruned, and validated.
 
 | Behavior | Evidence |
 | --- | --- |
-| `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestE2E_Status_NoLegacyHistorySurface`, `TestE2E_RoundTrip` |
+| `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusMount_FinalDrainGuidesAccessRestoreOrManualDiscard`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestE2E_Status_NoLegacyHistorySurface`, `TestE2E_RoundTrip` |
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_SkipsPausedInvalidDrivesDuringValidation`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestPrintRunOnceResult_MatchesReportsBySelectionIndex` |
@@ -110,6 +110,12 @@ without duplicating engine transition policy in the CLI. Recovery copy uses the
 same product vocabulary as the control plane:
 "shortcut alias", "child projection", "reserved path", and "parent engine
 topology facts".
+
+For `removed_final_drain`, status must make the retry/discard choice explicit:
+the child keeps retrying while its state DB owns dirty content state; the user
+can restore shared-folder access for normal retry, or delete the local shortcut
+directory to discard the dirty local projection and let parent topology purge
+the child state automatically.
 
 The target `status` surface projects the full sync model directly from:
 
