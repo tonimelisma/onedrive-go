@@ -5,21 +5,26 @@ import "fmt"
 type shortcutRootLifecycleEvent string
 
 const (
-	shortcutRootEventRemoteUpsert              shortcutRootLifecycleEvent = "remote_upsert"
-	shortcutRootEventRemoteDelete              shortcutRootLifecycleEvent = "remote_delete"
-	shortcutRootEventRemoteUnavailable         shortcutRootLifecycleEvent = "remote_unavailable"
-	shortcutRootEventCompleteOmission          shortcutRootLifecycleEvent = "complete_omission"
-	shortcutRootEventSamePathReplacement       shortcutRootLifecycleEvent = "same_path_replacement"
-	shortcutRootEventProtectedPathConflict     shortcutRootLifecycleEvent = "protected_path_conflict"
-	shortcutRootEventLocalRootReady            shortcutRootLifecycleEvent = "local_root_ready"
-	shortcutRootEventLocalPathBlocked          shortcutRootLifecycleEvent = "local_path_blocked"
-	shortcutRootEventAliasMutationSucceeded    shortcutRootLifecycleEvent = "alias_mutation_succeeded"
-	shortcutRootEventAliasMutationFailed       shortcutRootLifecycleEvent = "alias_mutation_failed"
-	shortcutRootEventAliasRenameAmbiguous      shortcutRootLifecycleEvent = "alias_rename_ambiguous"
-	shortcutRootEventProjectionCleanupFailed   shortcutRootLifecycleEvent = "projection_cleanup_failed"
-	shortcutRootEventWaitingReplacementPromote shortcutRootLifecycleEvent = "waiting_replacement_promote"
+	shortcutRootEventRemoteUpsert               shortcutRootLifecycleEvent = "remote_upsert"
+	shortcutRootEventRemoteDelete               shortcutRootLifecycleEvent = "remote_delete"
+	shortcutRootEventRemoteUnavailable          shortcutRootLifecycleEvent = "remote_unavailable"
+	shortcutRootEventCompleteOmission           shortcutRootLifecycleEvent = "complete_omission"
+	shortcutRootEventSamePathReplacement        shortcutRootLifecycleEvent = "same_path_replacement"
+	shortcutRootEventProtectedPathConflict      shortcutRootLifecycleEvent = "protected_path_conflict"
+	shortcutRootEventLocalRootReady             shortcutRootLifecycleEvent = "local_root_ready"
+	shortcutRootEventLocalPathBlocked           shortcutRootLifecycleEvent = "local_path_blocked"
+	shortcutRootEventAliasMutationSucceeded     shortcutRootLifecycleEvent = "alias_mutation_succeeded"
+	shortcutRootEventAliasMutationFailed        shortcutRootLifecycleEvent = "alias_mutation_failed"
+	shortcutRootEventAliasRenameAmbiguous       shortcutRootLifecycleEvent = "alias_rename_ambiguous"
+	shortcutRootEventChildFinalDrainClean       shortcutRootLifecycleEvent = "child_final_drain_clean"
+	shortcutRootEventProjectionCleanupFailed    shortcutRootLifecycleEvent = "projection_cleanup_failed"
+	shortcutRootEventProjectionCleanupSucceeded shortcutRootLifecycleEvent = "projection_cleanup_succeeded"
+	shortcutRootEventWaitingReplacementPromote  shortcutRootLifecycleEvent = "waiting_replacement_promote"
+	shortcutRootEventDuplicateTargetDetected    shortcutRootLifecycleEvent = "duplicate_target_detected"
+	shortcutRootEventDuplicateTargetResolved    shortcutRootLifecycleEvent = "duplicate_target_resolved"
 )
 
+//nolint:funlen // The shortcut lifecycle table is intentionally centralized for state-machine review.
 func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecycleEvent][]ShortcutRootState {
 	return map[ShortcutRootState]map[shortcutRootLifecycleEvent][]ShortcutRootState{
 		ShortcutRootStateActive: {
@@ -36,6 +41,9 @@ func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecyc
 			},
 			shortcutRootEventAliasMutationFailed:  {ShortcutRootStateAliasMutationBlocked},
 			shortcutRootEventAliasRenameAmbiguous: {ShortcutRootStateRenameAmbiguous},
+			shortcutRootEventDuplicateTargetDetected: {
+				ShortcutRootStateDuplicateTarget,
+			},
 		},
 		ShortcutRootStateTargetUnavailable: {
 			shortcutRootEventRemoteUpsert:          {ShortcutRootStateActive},
@@ -48,6 +56,9 @@ func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecyc
 			shortcutRootEventAliasMutationSucceeded: {
 				ShortcutRootStateActive,
 				ShortcutRootStateRemovedFinalDrain,
+			},
+			shortcutRootEventDuplicateTargetDetected: {
+				ShortcutRootStateDuplicateTarget,
 			},
 		},
 		ShortcutRootStateBlockedPath: {
@@ -64,6 +75,9 @@ func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecyc
 			},
 			shortcutRootEventAliasMutationFailed:  {ShortcutRootStateAliasMutationBlocked},
 			shortcutRootEventAliasRenameAmbiguous: {ShortcutRootStateRenameAmbiguous},
+			shortcutRootEventDuplicateTargetDetected: {
+				ShortcutRootStateDuplicateTarget,
+			},
 		},
 		ShortcutRootStateRenameAmbiguous: {
 			shortcutRootEventRemoteUpsert:     {ShortcutRootStateActive},
@@ -77,6 +91,9 @@ func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecyc
 			},
 			shortcutRootEventAliasMutationFailed:  {ShortcutRootStateAliasMutationBlocked},
 			shortcutRootEventAliasRenameAmbiguous: {ShortcutRootStateRenameAmbiguous},
+			shortcutRootEventDuplicateTargetDetected: {
+				ShortcutRootStateDuplicateTarget,
+			},
 		},
 		ShortcutRootStateAliasMutationBlocked: {
 			shortcutRootEventRemoteUpsert:     {ShortcutRootStateActive},
@@ -90,24 +107,48 @@ func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecyc
 			},
 			shortcutRootEventAliasMutationFailed:  {ShortcutRootStateAliasMutationBlocked},
 			shortcutRootEventAliasRenameAmbiguous: {ShortcutRootStateRenameAmbiguous},
+			shortcutRootEventDuplicateTargetDetected: {
+				ShortcutRootStateDuplicateTarget,
+			},
 		},
 		ShortcutRootStateRemovedFinalDrain: {
 			shortcutRootEventRemoteUpsert:              {ShortcutRootStateActive},
 			shortcutRootEventSamePathReplacement:       {ShortcutRootStateSamePathReplacementWaiting},
+			shortcutRootEventChildFinalDrainClean:      {ShortcutRootStateRemovedReleasePending},
 			shortcutRootEventProjectionCleanupFailed:   {ShortcutRootStateRemovedCleanupBlocked},
 			shortcutRootEventWaitingReplacementPromote: {ShortcutRootStateActive},
+		},
+		ShortcutRootStateRemovedReleasePending: {
+			shortcutRootEventProjectionCleanupFailed:    {ShortcutRootStateRemovedCleanupBlocked},
+			shortcutRootEventProjectionCleanupSucceeded: {},
+			shortcutRootEventWaitingReplacementPromote:  {ShortcutRootStateActive},
 		},
 		ShortcutRootStateRemovedCleanupBlocked: {
 			shortcutRootEventRemoteUpsert:              {ShortcutRootStateActive},
 			shortcutRootEventSamePathReplacement:       {ShortcutRootStateSamePathReplacementWaiting},
+			shortcutRootEventChildFinalDrainClean:      {ShortcutRootStateRemovedReleasePending},
 			shortcutRootEventProjectionCleanupFailed:   {ShortcutRootStateRemovedCleanupBlocked},
 			shortcutRootEventWaitingReplacementPromote: {ShortcutRootStateActive},
 		},
 		ShortcutRootStateSamePathReplacementWaiting: {
 			shortcutRootEventRemoteUpsert:              {ShortcutRootStateActive},
 			shortcutRootEventSamePathReplacement:       {ShortcutRootStateSamePathReplacementWaiting},
+			shortcutRootEventChildFinalDrainClean:      {ShortcutRootStateRemovedReleasePending},
 			shortcutRootEventProjectionCleanupFailed:   {ShortcutRootStateRemovedCleanupBlocked},
 			shortcutRootEventWaitingReplacementPromote: {ShortcutRootStateActive},
+		},
+		ShortcutRootStateDuplicateTarget: {
+			shortcutRootEventRemoteUpsert:            {ShortcutRootStateActive},
+			shortcutRootEventRemoteDelete:            {ShortcutRootStateRemovedFinalDrain},
+			shortcutRootEventRemoteUnavailable:       {ShortcutRootStateTargetUnavailable},
+			shortcutRootEventCompleteOmission:        {ShortcutRootStateRemovedFinalDrain},
+			shortcutRootEventDuplicateTargetDetected: {ShortcutRootStateDuplicateTarget},
+			shortcutRootEventDuplicateTargetResolved: {ShortcutRootStateActive},
+			shortcutRootEventProtectedPathConflict:   {ShortcutRootStateBlockedPath},
+			shortcutRootEventLocalRootReady:          {ShortcutRootStateActive},
+			shortcutRootEventLocalPathBlocked:        {ShortcutRootStateBlockedPath},
+			shortcutRootEventAliasMutationFailed:     {ShortcutRootStateAliasMutationBlocked},
+			shortcutRootEventAliasRenameAmbiguous:    {ShortcutRootStateRenameAmbiguous},
 		},
 	}
 }

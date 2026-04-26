@@ -14,7 +14,7 @@ func (e *Engine) RefreshShortcutTopology(ctx context.Context) error {
 	return err
 }
 
-func (e *Engine) SetShortcutTopologyHandler(handler ShortcutTopologyHandler) {
+func (e *Engine) SetShortcutTopologyHandler(handler ShortcutChildTopologySink) {
 	if e == nil {
 		return
 	}
@@ -74,11 +74,11 @@ func (e *Engine) AcknowledgeChildFinalDrain(
 	if e == nil || e.baseline == nil || e.hasRemoteMountRoot() {
 		return ShortcutChildTopologySnapshot{}, nil
 	}
+	if _, err := e.baseline.MarkShortcutChildFinalDrainReleasePending(ctx, ack); err != nil {
+		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: mark shortcut child final drain release pending: %w", err)
+	}
 	if err := e.releaseShortcutRootProjectionAfterDrain(ctx, ack); err != nil {
 		return ShortcutChildTopologySnapshot{}, err
-	}
-	if _, err := e.baseline.AcknowledgeShortcutChildFinalDrain(ctx, ack); err != nil {
-		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: acknowledge shortcut child final drain: %w", err)
 	}
 	if _, err := e.reconcileShortcutRootLocalState(ctx); err != nil {
 		return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: reconcile shortcut roots after child final drain: %w", err)

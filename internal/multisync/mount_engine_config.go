@@ -9,8 +9,9 @@ import (
 
 // engineMountConfigForMount derives the sync-owned engine constructor input from
 // the control plane's runtime mount spec. Mount-owned fields stay authoritative
-// here, including token-owner identity, sync tunables, and local child
-// projection exclusions.
+// here, including token-owner identity and sync tunables. Parent shortcut-root
+// reservations are rebuilt by parent engines from their own sync stores, not
+// synthesized by multisync.
 func engineMountConfigForMount(mount *mountSpec) (*syncengine.EngineMountConfig, error) {
 	if mount == nil {
 		return nil, fmt.Errorf("multisync: mount is required")
@@ -26,10 +27,7 @@ func engineMountConfigForMount(mount *mountSpec) (*syncengine.EngineMountConfig,
 		RemoteRootItemID:       mount.remoteRootItemID,
 		RemoteRootDeltaCapable: mount.remoteRootDeltaCapable,
 		EnableWebsocket:        mount.enableWebsocket,
-		LocalFilter: syncengine.LocalFilterConfig{
-			SkipDirs:     append([]string(nil), mount.localSkipDirs...),
-			ManagedRoots: append([]syncengine.ManagedRootReservation(nil), mount.localReservations...),
-		},
+		LocalFilter:            syncengine.LocalFilterConfig{},
 		LocalRules: syncengine.LocalObservationRules{
 			RejectSharePointRootForms: mount.rejectSharePointRootForms,
 		},

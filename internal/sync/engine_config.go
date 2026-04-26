@@ -25,7 +25,7 @@ type EngineMountConfig struct {
 	LocalFilter                 LocalFilterConfig
 	LocalRules                  LocalObservationRules
 	ShortcutTopologyNamespaceID string
-	ShortcutTopologyHandler     ShortcutTopologyHandler
+	ShortcutTopologyHandler     ShortcutChildTopologySink
 	TransferWorkers             int
 	CheckWorkers                int
 	MinFreeSpace                int64

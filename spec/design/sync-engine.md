@@ -66,7 +66,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 | Parent engines persist shortcut-root state, merge that state into managed-root observation reservations on startup, and route protected-root lifecycle signals through the parent engine without turning them into parent content. | `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestNewMountEngine_DoesNotReserveReleasedShortcutRootAfterDrainAck`, `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot` |
-| Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child topology publications reach multisync. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleManagedRootEventOwnsLocalAliasRename` |
+| Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child runner-action publications reach multisync. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleManagedRootEventOwnsLocalAliasRename` |
 
 ## Construction
 
@@ -410,11 +410,13 @@ remote state, call parent-drive alias mutation APIs, or decide parent alias
 lifecycle.
 
 When a child final drain completes, multisync acknowledges that completion to
-the already-running parent engine. The parent engine releases its own protected
-alias projection and removes the `shortcut_roots` row, or promotes a waiting
-same-path replacement to `active`, before multisync stops and forgets the
-retiring child runner. A later complete topology batch is not required to
-release that parent reservation.
+the already-running parent engine. The parent engine first persists
+`removed_release_pending`, then releases its own protected alias projection and
+removes the `shortcut_roots` row, or promotes a waiting same-path replacement
+to `active`, before multisync stops and forgets the retiring child runner. If
+cleanup is interrupted or blocked, startup and later topology refresh retry the
+release from `removed_release_pending` or `removed_cleanup_blocked`; a later
+complete topology batch is not required to release that parent reservation.
 
 If a mounted sync root disappears, the engine treats that as mount lifecycle
 (`ErrMountRootUnavailable`) rather than as content deletion below the root.

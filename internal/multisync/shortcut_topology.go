@@ -16,7 +16,7 @@ func (o *Orchestrator) attachShortcutTopologyHandler(mount *mountSpec, restartOn
 func (o *Orchestrator) shortcutTopologyHandlerForMount(
 	mount *mountSpec,
 	restartOnChange bool,
-) syncengine.ShortcutTopologyHandler {
+) syncengine.ShortcutChildTopologySink {
 	if o == nil || mount == nil || mount.projectionKind != MountProjectionStandalone {
 		return nil
 	}
@@ -32,10 +32,10 @@ func (o *Orchestrator) shortcutTopologyHandlerForMount(
 }
 
 type shortcutTopologyHandlerSetter interface {
-	SetShortcutTopologyHandler(syncengine.ShortcutTopologyHandler)
+	SetShortcutTopologyHandler(syncengine.ShortcutChildTopologySink)
 }
 
-func setShortcutTopologyHandler(engine engineRunner, handler syncengine.ShortcutTopologyHandler) {
+func setShortcutTopologyHandler(engine engineRunner, handler syncengine.ShortcutChildTopologySink) {
 	if setter, ok := engine.(shortcutTopologyHandlerSetter); ok {
 		setter.SetShortcutTopologyHandler(handler)
 	}

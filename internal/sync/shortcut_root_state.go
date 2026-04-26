@@ -23,8 +23,10 @@ const (
 	ShortcutRootStateRenameAmbiguous            ShortcutRootState = "rename_ambiguous"
 	ShortcutRootStateAliasMutationBlocked       ShortcutRootState = "alias_mutation_blocked"
 	ShortcutRootStateRemovedFinalDrain          ShortcutRootState = "removed_final_drain"
+	ShortcutRootStateRemovedReleasePending      ShortcutRootState = "removed_release_pending"
 	ShortcutRootStateRemovedCleanupBlocked      ShortcutRootState = "removed_cleanup_blocked"
 	ShortcutRootStateSamePathReplacementWaiting ShortcutRootState = "same_path_replacement_waiting"
+	ShortcutRootStateDuplicateTarget            ShortcutRootState = "duplicate_target"
 )
 
 // ShortcutRootRecord is the persisted parent namespace truth for one shortcut
@@ -125,8 +127,10 @@ func shortcutRootStateKeepsProtectedPaths(state ShortcutRootState) bool {
 		ShortcutRootStateRenameAmbiguous,
 		ShortcutRootStateAliasMutationBlocked,
 		ShortcutRootStateRemovedFinalDrain,
+		ShortcutRootStateRemovedReleasePending,
 		ShortcutRootStateRemovedCleanupBlocked,
-		ShortcutRootStateSamePathReplacementWaiting:
+		ShortcutRootStateSamePathReplacementWaiting,
+		ShortcutRootStateDuplicateTarget:
 		return true
 	default:
 		return false
@@ -309,6 +313,8 @@ func planShortcutRootTopology(
 				continue
 			}
 			if record.State == ShortcutRootStateRemovedFinalDrain ||
+				record.State == ShortcutRootStateRemovedReleasePending ||
+				record.State == ShortcutRootStateRemovedCleanupBlocked ||
 				record.State == ShortcutRootStateSamePathReplacementWaiting {
 				continue
 			}
@@ -323,6 +329,10 @@ func planShortcutRootTopology(
 		}
 	}
 
+	if markDuplicateShortcutTargets(byBinding) {
+		changed = true
+	}
+
 	records := make([]ShortcutRootRecord, 0, len(byBinding))
 	for bindingID := range byBinding {
 		record := byBinding[bindingID]
@@ -335,6 +345,120 @@ func planShortcutRootTopology(
 		return compareString(a.RelativeLocalPath, b.RelativeLocalPath)
 	})
 	return shortcutRootTopologyPlan{Records: records, Changed: changed}
+}
+
+func markDuplicateShortcutTargets(records map[string]ShortcutRootRecord) bool {
+	duplicateBindings := duplicateShortcutTargetDetails(records)
+	return applyDuplicateShortcutTargetDetails(records, duplicateBindings)
+}
+
+type duplicateShortcutTargetKey struct {
+	namespaceID string
+	driveID     string
+	itemID      string
+}
+
+func duplicateShortcutTargetDetails(records map[string]ShortcutRootRecord) map[string]string {
+	byTarget := make(map[duplicateShortcutTargetKey][]ShortcutRootRecord)
+	for bindingID := range records {
+		record := normalizeShortcutRootRecord(records[bindingID])
+		if !shortcutRootParticipatesInDuplicateTargetCheck(&record) {
+			continue
+		}
+		key := duplicateShortcutTargetKey{
+			namespaceID: record.NamespaceID,
+			driveID:     record.RemoteDriveID.String(),
+			itemID:      record.RemoteItemID,
+		}
+		byTarget[key] = append(byTarget[key], record)
+	}
+
+	duplicateBindings := make(map[string]string)
+	for _, group := range byTarget {
+		if len(group) <= 1 {
+			continue
+		}
+		slices.SortFunc(group, func(a, b ShortcutRootRecord) int {
+			if a.RelativeLocalPath == b.RelativeLocalPath {
+				return compareString(a.BindingItemID, b.BindingItemID)
+			}
+			return compareString(a.RelativeLocalPath, b.RelativeLocalPath)
+		})
+		winner := group[0]
+		for i := 1; i < len(group); i++ {
+			duplicateBindings[group[i].BindingItemID] = fmt.Sprintf(
+				"shortcut target already projected by %s at %s",
+				winner.BindingItemID,
+				winner.RelativeLocalPath,
+			)
+		}
+	}
+	return duplicateBindings
+}
+
+func applyDuplicateShortcutTargetDetails(
+	records map[string]ShortcutRootRecord,
+	duplicateBindings map[string]string,
+) bool {
+	changed := false
+	for bindingID := range records {
+		record := normalizeShortcutRootRecord(records[bindingID])
+		detail, isDuplicate := duplicateBindings[bindingID]
+		switch {
+		case isDuplicate && record.State != ShortcutRootStateDuplicateTarget:
+			next := plannedShortcutRootTransition(record,
+				shortcutRootEventDuplicateTargetDetected,
+				ShortcutRootStateDuplicateTarget,
+				detail,
+			)
+			if !shortcutRootRecordsEqual(record, next) {
+				records[bindingID] = next
+				changed = true
+			}
+		case isDuplicate && record.BlockedDetail != detail:
+			record.BlockedDetail = detail
+			records[bindingID] = record
+			changed = true
+		case !isDuplicate && record.State == ShortcutRootStateDuplicateTarget:
+			next := plannedShortcutRootTransition(record,
+				shortcutRootEventDuplicateTargetResolved,
+				ShortcutRootStateActive,
+				"",
+			)
+			if !shortcutRootRecordsEqual(record, next) {
+				records[bindingID] = next
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func shortcutRootParticipatesInDuplicateTargetCheck(record *ShortcutRootRecord) bool {
+	if record == nil {
+		return false
+	}
+	normalized := normalizeShortcutRootRecord(*record)
+	if normalized.RemoteDriveID.IsZero() || normalized.RemoteItemID == "" {
+		return false
+	}
+	switch normalized.State {
+	case ShortcutRootStateActive,
+		ShortcutRootStateDuplicateTarget:
+		return true
+	case "",
+		ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateBlockedPath,
+		ShortcutRootStateRenameAmbiguous,
+		ShortcutRootStateAliasMutationBlocked,
+		ShortcutRootStateRemovedFinalDrain,
+		ShortcutRootStateRemovedReleasePending,
+		ShortcutRootStateRemovedCleanupBlocked,
+		ShortcutRootStateSamePathReplacementWaiting:
+		return false
+	default:
+		return false
+	}
 }
 
 //nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
@@ -391,6 +515,7 @@ func samePathRetiringShortcutRoot(
 			continue
 		}
 		if record.State == ShortcutRootStateRemovedFinalDrain ||
+			record.State == ShortcutRootStateRemovedReleasePending ||
 			record.State == ShortcutRootStateRemovedCleanupBlocked ||
 			record.State == ShortcutRootStateSamePathReplacementWaiting {
 			return record, true
@@ -414,6 +539,7 @@ func activeProtectedShortcutRootForPath(
 			continue
 		}
 		if record.State == ShortcutRootStateRemovedFinalDrain ||
+			record.State == ShortcutRootStateRemovedReleasePending ||
 			record.State == ShortcutRootStateRemovedCleanupBlocked ||
 			record.State == ShortcutRootStateSamePathReplacementWaiting {
 			continue
@@ -571,6 +697,39 @@ func planShortcutRootDrainAck(
 	return shortcutRootDrainAckPlan{Records: records, Changed: changed}
 }
 
+func planShortcutRootDrainReleasePending(
+	current []ShortcutRootRecord,
+	ack ShortcutChildDrainAck,
+) shortcutRootDrainAckPlan {
+	records := make([]ShortcutRootRecord, 0, len(current))
+	changed := false
+	for i := range current {
+		record := normalizeShortcutRootRecord(current[i])
+		if record.BindingItemID != ack.BindingItemID {
+			records = append(records, record)
+			continue
+		}
+		if !shortcutRootStateAwaitsFinalDrainAck(record.State) {
+			records = append(records, record)
+			continue
+		}
+		next := plannedShortcutRootTransition(record,
+			shortcutRootEventChildFinalDrainClean,
+			ShortcutRootStateRemovedReleasePending,
+			"",
+		)
+		records = append(records, next)
+		changed = changed || !shortcutRootRecordsEqual(record, next)
+	}
+	slices.SortFunc(records, func(a, b ShortcutRootRecord) int {
+		if a.RelativeLocalPath == b.RelativeLocalPath {
+			return compareString(a.BindingItemID, b.BindingItemID)
+		}
+		return compareString(a.RelativeLocalPath, b.RelativeLocalPath)
+	})
+	return shortcutRootDrainAckPlan{Records: records, Changed: changed}
+}
+
 func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootRecord) ShortcutChildTopologySnapshot {
 	snapshot := ShortcutChildTopologySnapshot{
 		NamespaceID: namespaceID,
@@ -588,6 +747,7 @@ func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootReco
 			RemoteDriveID:     root.RemoteDriveID.String(),
 			RemoteItemID:      root.RemoteItemID,
 			RemoteIsFolder:    root.RemoteIsFolder,
+			RunnerAction:      shortcutChildRunnerActionForRoot(root.State),
 			State:             shortcutChildStateForRoot(root.State),
 			BlockedDetail:     root.BlockedDetail,
 			ProtectedPaths:    protectedPathsForShortcutRoot(root.RelativeLocalPath, root.ProtectedPaths),
@@ -609,8 +769,29 @@ func shortcutChildTopologyFromReplacement(replacement ShortcutRootReplacement) S
 		RemoteDriveID:     replacement.RemoteDriveID.String(),
 		RemoteItemID:      replacement.RemoteItemID,
 		RemoteIsFolder:    replacement.RemoteIsFolder,
+		RunnerAction:      ShortcutChildActionSkipWaitingReplacement,
 		State:             ShortcutChildWaitingReplacement,
 		ProtectedPaths:    []string{replacement.RelativeLocalPath},
+	}
+}
+
+func shortcutChildRunnerActionForRoot(state ShortcutRootState) ShortcutChildRunnerAction {
+	switch state {
+	case "", ShortcutRootStateActive:
+		return ShortcutChildActionRun
+	case ShortcutRootStateRemovedFinalDrain,
+		ShortcutRootStateSamePathReplacementWaiting:
+		return ShortcutChildActionFinalDrain
+	case ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateBlockedPath,
+		ShortcutRootStateRenameAmbiguous,
+		ShortcutRootStateAliasMutationBlocked,
+		ShortcutRootStateRemovedReleasePending,
+		ShortcutRootStateRemovedCleanupBlocked,
+		ShortcutRootStateDuplicateTarget:
+		return ShortcutChildActionSkipParentBlocked
+	default:
+		return ShortcutChildActionSkipParentBlocked
 	}
 }
 
@@ -626,7 +807,9 @@ func shortcutChildStateForRoot(state ShortcutRootState) ShortcutChildTopologySta
 		ShortcutRootStateBlockedPath,
 		ShortcutRootStateRenameAmbiguous,
 		ShortcutRootStateAliasMutationBlocked,
-		ShortcutRootStateRemovedCleanupBlocked:
+		ShortcutRootStateRemovedReleasePending,
+		ShortcutRootStateRemovedCleanupBlocked,
+		ShortcutRootStateDuplicateTarget:
 		return ShortcutChildBlocked
 	default:
 		return ShortcutChildBlocked
@@ -674,6 +857,27 @@ func (m *SyncStore) AcknowledgeShortcutChildFinalDrain(ctx context.Context, ack 
 		return false, err
 	}
 	plan := planShortcutRootDrainAck(current, ack)
+	if !plan.Changed {
+		return false, nil
+	}
+	if err := m.ReplaceShortcutRoots(ctx, plan.Records); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m *SyncStore) MarkShortcutChildFinalDrainReleasePending(
+	ctx context.Context,
+	ack ShortcutChildDrainAck,
+) (bool, error) {
+	if m == nil || ack.BindingItemID == "" {
+		return false, nil
+	}
+	current, err := m.ListShortcutRoots(ctx)
+	if err != nil {
+		return false, err
+	}
+	plan := planShortcutRootDrainReleasePending(current, ack)
 	if !plan.Changed {
 		return false, nil
 	}

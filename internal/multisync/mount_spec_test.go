@@ -26,7 +26,7 @@ func testPublishedShortcutChild() syncengine.ShortcutChildTopology {
 		RelativeLocalPath: relativePath,
 		RemoteDriveID:     remoteDriveID,
 		RemoteItemID:      remoteItemID,
-		State:             syncengine.ShortcutChildDesired,
+		RunnerAction:      syncengine.ShortcutChildActionRun,
 		ProtectedPaths:    []string{relativePath},
 	}
 }
@@ -168,7 +168,6 @@ func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
 	childMount := compiled.Mounts[1]
 
 	assert.Equal(t, MountProjectionStandalone, parentMount.projectionKind)
-	assert.Equal(t, []string{"Shortcuts/Docs"}, parentMount.localSkipDirs)
 	assert.Equal(t, MountProjectionChild, childMount.projectionKind)
 	assert.Equal(t, mountID(config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")), childMount.mountID)
 	assert.Equal(t, parentMount.mountID, childMount.parentMountID)
@@ -192,7 +191,7 @@ func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_ParentPausePausesChildAndFiltersParentSubtree(t *testing.T) {
+func TestCompileRuntimeMounts_ParentPausePausesChildWithoutParentReservationSynthesis(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	parent.Paused = true
@@ -205,18 +204,16 @@ func TestCompileRuntimeMounts_ParentPausePausesChildAndFiltersParentSubtree(t *t
 	require.Len(t, compiled.Mounts, 2)
 	assert.Empty(t, compiled.Skipped)
 
-	parentMount := compiled.Mounts[0]
 	childMount := compiled.Mounts[1]
-	assert.Equal(t, []string{"Shortcuts/Docs"}, parentMount.localSkipDirs)
 	assert.True(t, childMount.paused)
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_ConflictChildStillFiltersParentSubtree(t *testing.T) {
+func TestCompileRuntimeMounts_ParentBlockedChildDoesNotSynthesizeParentReservation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild()
-	child.State = syncengine.ShortcutChildBlocked
+	child.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
 	child.BlockedDetail = "duplicate_content_root"
 
 	compiled, err := compileRuntimeMounts(
@@ -226,16 +223,15 @@ func TestCompileRuntimeMounts_ConflictChildStillFiltersParentSubtree(t *testing.
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 1)
 	require.Len(t, compiled.Skipped, 1)
-	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
 	assert.Contains(t, compiled.Skipped[0].Err.Error(), "duplicate_content_root")
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_PendingRemovalChildStillFiltersParentSubtree(t *testing.T) {
+func TestCompileRuntimeMounts_FinalDrainChildDoesNotSynthesizeParentReservation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild()
-	child.State = syncengine.ShortcutChildRetiring
+	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
@@ -244,13 +240,12 @@ func TestCompileRuntimeMounts_PendingRemovalChildStillFiltersParentSubtree(t *te
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
 	require.Empty(t, compiled.Skipped)
-	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
 	assert.Equal(t, []string{config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")}, compiled.FinalDrainMountIDs)
 	assert.True(t, compiled.Mounts[1].finalDrain)
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_ReservedChildPathStillFiltersParentSubtree(t *testing.T) {
+func TestCompileRuntimeMounts_ProtectedPathsAreParentOwnedPassThroughOnly(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild()
@@ -263,17 +258,16 @@ func TestCompileRuntimeMounts_ReservedChildPathStillFiltersParentSubtree(t *test
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
-	assert.Equal(t, []string{"Shortcuts/New Docs", "Shortcuts/Old Docs"}, compiled.Mounts[0].localSkipDirs)
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersParentSubtree(t *testing.T) {
+func TestCompileRuntimeMounts_UnavailableChildDoesNotSynthesizeParentReservation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild()
 	child.RemoteDriveID = ""
 	child.RemoteItemID = ""
-	child.State = syncengine.ShortcutChildBlocked
+	child.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
 	child.BlockedDetail = "shortcut_binding_unavailable"
 
 	compiled, err := compileRuntimeMounts(
@@ -283,7 +277,6 @@ func TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersPar
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 1)
 	require.Len(t, compiled.Skipped, 1)
-	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
 	assert.Contains(t, compiled.Skipped[0].Err.Error(), "shortcut_binding_unavailable")
 }
 
@@ -318,7 +311,6 @@ func TestCompileRuntimeMounts_StandaloneContentRootSuppressesChild(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
 	require.Len(t, compiled.Skipped, 1)
-	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
 	assert.Contains(t, compiled.Skipped[0].Err.Error(), "standalone mount")
 }
 
@@ -337,7 +329,7 @@ func TestCompileRuntimeMounts_MissingParentSkipsChild(t *testing.T) {
 					RelativeLocalPath: "Shortcuts/Docs",
 					RemoteDriveID:     "remote-drive",
 					RemoteItemID:      "remote-root",
-					State:             syncengine.ShortcutChildDesired,
+					RunnerAction:      syncengine.ShortcutChildActionRun,
 				}},
 			},
 		},

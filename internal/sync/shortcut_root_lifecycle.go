@@ -15,7 +15,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-const shortcutRootDirPerm = os.FileMode(0o700)
+const (
+	shortcutRootDirPerm             = os.FileMode(0o700)
+	shortcutRootCaseRenameAttempts  = 10
+	shortcutRootCaseRenameTempInfix = ".shortcut-alias-case-rename"
+)
 
 func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, error) {
 	if e == nil || e.hasRemoteMountRoot() || e.baseline == nil {
@@ -62,11 +66,15 @@ func (e *Engine) reconcileShortcutRootRecord(
 		ShortcutRootStateTargetUnavailable,
 		ShortcutRootStateBlockedPath,
 		ShortcutRootStateRenameAmbiguous,
-		ShortcutRootStateAliasMutationBlocked:
+		ShortcutRootStateAliasMutationBlocked,
+		ShortcutRootStateDuplicateTarget:
 	case ShortcutRootStateRemovedFinalDrain,
-		ShortcutRootStateRemovedCleanupBlocked,
 		ShortcutRootStateSamePathReplacementWaiting:
 		return record, true, false, nil
+	case ShortcutRootStateRemovedReleasePending,
+		ShortcutRootStateRemovedCleanupBlocked:
+		next, keep, changed := e.retryShortcutRootReleaseCleanup(&record)
+		return next, keep, changed, nil
 	}
 	relativePath, ok := cleanShortcutRootRelativePath(record.RelativeLocalPath)
 	if !ok {
@@ -214,9 +222,6 @@ func (e *Engine) findPreviousProtectedShortcutRootProjection(
 	}
 	switch len(matches) {
 	case 0:
-		if hasPreviousProtectedShortcutRootPath(record, currentRelativePath) {
-			return "", false, fmt.Errorf("previous shortcut alias projection is unavailable")
-		}
 		return "", false, nil
 	case 1:
 		return matches[0], true, nil
@@ -256,20 +261,6 @@ func (e *Engine) previousProtectedShortcutRootProjectionMatch(
 		return "", false, fmt.Errorf("reading previous shortcut alias identity: %w", err)
 	}
 	return normalized, synctree.SameIdentity(identity, *record.LocalRootIdentity), nil
-}
-
-func hasPreviousProtectedShortcutRootPath(record *ShortcutRootRecord, currentRelativePath string) bool {
-	if record == nil {
-		return false
-	}
-	current := normalizedManagedRootPath(currentRelativePath)
-	for _, protectedPath := range record.ProtectedPaths {
-		normalized := normalizedManagedRootPath(protectedPath)
-		if normalized != "" && normalized != current {
-			return true
-		}
-	}
-	return false
 }
 
 func previousProtectedProjectionCandidate(record *ShortcutRootRecord, candidates []string) (string, bool) {
@@ -321,6 +312,55 @@ func (e *Engine) moveShortcutRootProjection(fromRelativePath string, toRelativeP
 	if fromRelativePath == "" || toRelativePath == "" || fromRelativePath == toRelativePath {
 		return nil
 	}
+	if err := e.validateShortcutRootProjectionMove(fromRelativePath, toRelativePath); err != nil {
+		return err
+	}
+	toState, err := e.syncTree.PathStateNoFollow(toRelativePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stating current shortcut alias projection: %w", err)
+	}
+	if toState.Exists {
+		moved, err := e.moveShortcutRootProjectionOntoExistingTarget(fromRelativePath, toRelativePath)
+		if err != nil {
+			return err
+		}
+		if moved {
+			return nil
+		}
+		return fmt.Errorf("%w: current shortcut alias projection already exists", synctree.ErrUnsafePath)
+	}
+	if err := e.syncTree.MkdirAllNoFollow(filepath.Dir(toRelativePath), shortcutRootDirPerm); err != nil {
+		return fmt.Errorf("creating current shortcut alias parent: %w", err)
+	}
+	if err := e.syncTree.Rename(fromRelativePath, toRelativePath); err != nil {
+		return fmt.Errorf("moving shortcut alias projection: %w", err)
+	}
+	return nil
+}
+
+func (e *Engine) moveShortcutRootProjectionOntoExistingTarget(
+	fromRelativePath string,
+	toRelativePath string,
+) (bool, error) {
+	same, sameErr := e.syncTree.SameFile(fromRelativePath, toRelativePath)
+	if sameErr != nil {
+		return false, fmt.Errorf("comparing shortcut alias projection identity: %w", sameErr)
+	}
+	if !same {
+		return false, nil
+	}
+	if err := e.syncTree.RenameWithTemporarySibling(
+		fromRelativePath,
+		toRelativePath,
+		shortcutRootCaseRenameTempInfix,
+		shortcutRootCaseRenameAttempts,
+	); err != nil {
+		return false, fmt.Errorf("moving case-only shortcut alias projection: %w", err)
+	}
+	return true, nil
+}
+
+func (e *Engine) validateShortcutRootProjectionMove(fromRelativePath string, toRelativePath string) error {
 	if err := e.syncTree.ValidateNoSymlinkAncestors(fromRelativePath); err != nil {
 		return fmt.Errorf("validating previous shortcut alias projection: %w", err)
 	}
@@ -333,19 +373,6 @@ func (e *Engine) moveShortcutRootProjection(fromRelativePath string, toRelativeP
 	}
 	if !fromState.Exists || !fromState.IsDir {
 		return fmt.Errorf("%w: previous shortcut alias projection is not a directory", synctree.ErrUnsafePath)
-	}
-	toState, err := e.syncTree.PathStateNoFollow(toRelativePath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stating current shortcut alias projection: %w", err)
-	}
-	if toState.Exists {
-		return fmt.Errorf("%w: current shortcut alias projection already exists", synctree.ErrUnsafePath)
-	}
-	if err := e.syncTree.MkdirAllNoFollow(filepath.Dir(toRelativePath), shortcutRootDirPerm); err != nil {
-		return fmt.Errorf("creating current shortcut alias parent: %w", err)
-	}
-	if err := e.syncTree.Rename(fromRelativePath, toRelativePath); err != nil {
-		return fmt.Errorf("moving shortcut alias projection: %w", err)
 	}
 	return nil
 }
@@ -458,31 +485,10 @@ func (e *Engine) releaseShortcutRootProjectionAfterDrain(ctx context.Context, ac
 	if e == nil || e.baseline == nil || ack.BindingItemID == "" {
 		return nil
 	}
-	records, err := e.baseline.ListShortcutRoots(ctx)
-	if err != nil {
-		return fmt.Errorf("sync: read shortcut roots before child drain release: %w", err)
-	}
-	for i := range records {
-		record := normalizeShortcutRootRecord(records[i])
-		if record.BindingItemID != ack.BindingItemID {
-			continue
-		}
-		if !shortcutRootStateAwaitsFinalDrainRelease(record.State) {
-			return nil
-		}
-		if err := e.removeShortcutRootProjection(record.RelativeLocalPath); err != nil {
-			records[i] = shortcutRootCleanupBlocked(record, err)
-			if replaceErr := e.baseline.ReplaceShortcutRoots(ctx, records); replaceErr != nil {
-				return fmt.Errorf("sync: persist blocked shortcut root cleanup: %w", replaceErr)
-			}
-			return fmt.Errorf("sync: release shortcut root projection: %w", err)
-		}
-		return nil
-	}
-	return nil
+	return e.finalizeShortcutRootReleaseByBinding(ctx, ack.BindingItemID)
 }
 
-func shortcutRootStateAwaitsFinalDrainRelease(state ShortcutRootState) bool {
+func shortcutRootStateAwaitsFinalDrainAck(state ShortcutRootState) bool {
 	switch state {
 	case ShortcutRootStateRemovedFinalDrain,
 		ShortcutRootStateRemovedCleanupBlocked,
@@ -493,11 +499,98 @@ func shortcutRootStateAwaitsFinalDrainRelease(state ShortcutRootState) bool {
 		ShortcutRootStateTargetUnavailable,
 		ShortcutRootStateBlockedPath,
 		ShortcutRootStateRenameAmbiguous,
-		ShortcutRootStateAliasMutationBlocked:
+		ShortcutRootStateAliasMutationBlocked,
+		ShortcutRootStateRemovedReleasePending,
+		ShortcutRootStateDuplicateTarget:
 		return false
 	default:
 		return false
 	}
+}
+
+func shortcutRootStateAwaitsReleaseCleanup(state ShortcutRootState) bool {
+	switch state {
+	case ShortcutRootStateRemovedReleasePending,
+		ShortcutRootStateRemovedCleanupBlocked:
+		return true
+	case "",
+		ShortcutRootStateActive,
+		ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateBlockedPath,
+		ShortcutRootStateRenameAmbiguous,
+		ShortcutRootStateAliasMutationBlocked,
+		ShortcutRootStateRemovedFinalDrain,
+		ShortcutRootStateSamePathReplacementWaiting,
+		ShortcutRootStateDuplicateTarget:
+		return false
+	default:
+		return false
+	}
+}
+
+func (e *Engine) retryShortcutRootReleaseCleanup(record *ShortcutRootRecord) (ShortcutRootRecord, bool, bool) {
+	if record == nil {
+		return ShortcutRootRecord{}, false, false
+	}
+	next, keep, changed, cleanupErr := e.finalizeShortcutRootReleaseRecord(*record)
+	if cleanupErr != nil {
+		changed = true
+		return next, keep, changed
+	}
+	return next, keep, changed
+}
+
+func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, bindingItemID string) error {
+	records, err := e.baseline.ListShortcutRoots(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: read shortcut roots before child drain release: %w", err)
+	}
+	changed := false
+	nextRecords := make([]ShortcutRootRecord, 0, len(records))
+	var cleanupErr error
+	for i := range records {
+		record := normalizeShortcutRootRecord(records[i])
+		if record.BindingItemID != bindingItemID || !shortcutRootStateAwaitsReleaseCleanup(record.State) {
+			nextRecords = append(nextRecords, record)
+			continue
+		}
+		next, keep, recordChanged, recordErr := e.finalizeShortcutRootReleaseRecord(record)
+		changed = changed || recordChanged
+		if keep {
+			nextRecords = append(nextRecords, next)
+		}
+		if recordErr != nil {
+			cleanupErr = recordErr
+		}
+	}
+	if changed {
+		if err := e.baseline.ReplaceShortcutRoots(ctx, nextRecords); err != nil {
+			return fmt.Errorf("sync: persist shortcut root release: %w", err)
+		}
+	}
+	if cleanupErr != nil {
+		return fmt.Errorf("sync: release shortcut root projection: %w", cleanupErr)
+	}
+	return nil
+}
+
+//nolint:gocritic // ShortcutRootRecord is a value-shaped lifecycle plan output.
+func (e *Engine) finalizeShortcutRootReleaseRecord(
+	record ShortcutRootRecord,
+) (ShortcutRootRecord, bool, bool, error) {
+	record = normalizeShortcutRootRecord(record)
+	if !shortcutRootStateAwaitsReleaseCleanup(record.State) {
+		return record, true, false, nil
+	}
+	if err := e.removeShortcutRootProjection(record.RelativeLocalPath); err != nil {
+		next := shortcutRootCleanupBlocked(record, err)
+		return next, true, !shortcutRootRecordsEqual(record, next), err
+	}
+	if record.Waiting != nil {
+		next := shortcutRootRecordFromReplacement(record.NamespaceID, *record.Waiting)
+		return next, true, true, nil
+	}
+	return ShortcutRootRecord{}, false, true, nil
 }
 
 func (e *Engine) removeShortcutRootProjection(relativeLocalPath string) error {
