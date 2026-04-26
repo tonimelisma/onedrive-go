@@ -238,6 +238,11 @@ func printMountLifecycleStatus(w io.Writer, layout statusMountTextLayout, mount 
 	if err := printMountProtectionStatus(w, layout, mount); err != nil {
 		return err
 	}
+	if mount.WaitingReplacement != "" {
+		if err := writef(w, "%sWaiting replacement: %s\n", layout.detailIndent, mount.WaitingReplacement); err != nil {
+			return err
+		}
+	}
 	if mount.RecoveryAction != "" && mount.RecoveryAction != mount.StateDetail {
 		if err := writef(w, "%sAction:    %s\n", layout.detailIndent, mount.RecoveryAction); err != nil {
 			return err
@@ -262,18 +267,6 @@ func printMountProtectionStatus(w io.Writer, layout statusMountTextLayout, mount
 	}
 	for _, protectedPath := range mount.ProtectedReservedPaths {
 		if err := writef(w, "%sReserved path: %s\n", layout.detailIndent, protectedPath); err != nil {
-			return err
-		}
-	}
-	for _, replacement := range mount.DeferredReplacements {
-		if err := writef(
-			w,
-			"%sDeferred replacement: %s (%s) - %s\n",
-			layout.detailIndent,
-			replacement.DisplayName,
-			replacement.BindingItemID,
-			replacement.Detail,
-		); err != nil {
 			return err
 		}
 	}

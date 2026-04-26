@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,6 +39,5 @@ func TestE2E_ShortcutSmoke_DownloadOnlyProjectsChildMount(t *testing.T) {
 			"automatic shortcut child mounts must not create explicit shared drive config")
 	}
 
-	_, err := os.Stat(filepath.Join(env["XDG_DATA_HOME"], "onedrive-go", "mounts.json"))
-	require.NoError(t, err)
+	assert.NoFileExists(t, filepath.Join(env["XDG_DATA_HOME"], "onedrive-go", "mounts.json"))
 }

@@ -65,8 +65,8 @@ as `mkdir` therefore walk and mutate only inside that configured subtree.
 sync-health command.
 
 - account identity comes from the validated config+catalog snapshot
-- runtime mount identity comes from configured standalone drives plus managed
-  child-mount records in `mounts.json`
+- runtime mount identity comes from configured standalone drives plus
+  parent-declared shortcut child topology
 - sync-state snapshots come from store-owned raw authority reads
 - the CLI renders status conditions from the sync-owned stored-condition
   projection, using the sync-owned `ConditionKey` taxonomy and ordering helpers
@@ -103,12 +103,11 @@ projections are nested under the owning parent row as `child_mounts`. The legacy
 drive-shaped status fields (`total_drives`, `accounts[].drives`) are not part
 of the current contract. Child lifecycle rows also expose `state`,
 `state_reason`, `state_detail`, `protected_current_path`,
-`protected_reserved_paths`, `deferred_replacements`, `recovery_action`, and
-`auto_retry` from the config-owned shortcut lifecycle table and mount
-inventory. Text and JSON status describe the protected reservation state, the
-deferred "new shortcut is waiting for old projection cleanup" case, and the
-next recovery step without duplicating control-plane transition policy in the
-CLI. Recovery copy uses the same product vocabulary as the control plane:
+`protected_reserved_paths`, `recovery_action`, and `auto_retry` from parent
+sync-store `shortcut_roots` and child sync-state snapshots. Text and JSON
+status describe the protected reservation state and the next recovery step
+without duplicating engine transition policy in the CLI. Recovery copy uses the
+same product vocabulary as the control plane:
 "shortcut alias", "child projection", "reserved path", and "parent engine
 topology facts".
 

@@ -88,9 +88,10 @@ a normal drive's delta stream contains an embedded shared-folder link or
 shortcut placeholder item, observation suppresses that item from ordinary
 content events. The parent drive engine is still the only Graph observer for
 that drive, so it emits shortcut placeholders as `ShortcutTopologyBatch` facts
-before committing remote observation progress. `internal/multisync` consumes
-those facts, updates `mounts.json`, and starts or stops managed children as
-separate mount-root engines.
+before committing remote observation progress. The parent persists those facts
+in `shortcut_roots` and emits parent-declared child topology; `internal/multisync`
+only starts, skips, final-drains, or stops managed children as separate
+mount-root engines.
 
 The engine applies topology batches with `ShortcutTopologyBatch.ShouldApply`.
 Any batch with facts applies, a complete batch applies even when it contains no
@@ -103,12 +104,13 @@ mount-root path when their content root is below the backing drive root.
 Mount-root observation may use folder delta or recursive enumeration depending
 on drive type and Graph support.
 
-Parent local observation accepts managed-root reservations from multisync. A
-reserved path is suppressed from normal local create/move/delete planning, and
-a same-parent directory with a matching stored root identity is reported as a
-managed-root lifecycle fact instead of being uploaded as a new parent-owned
-folder. The observer does not mutate `mounts.json` or Graph; it only wakes the
-control-plane owner.
+Parent local observation rebuilds protected shortcut-root paths from the
+parent sync store. A protected path is suppressed from normal
+create/move/delete planning, and a same-parent directory with a matching stored
+root identity is handled as parent shortcut alias lifecycle instead of being
+uploaded as a new parent-owned folder. Parent alias mutations are executed by
+the parent engine by binding item ID; multisync receives only the resulting
+child topology snapshot.
 
 Remote read-denied boundaries are observation-owned facts. When drive-root or
 mount-root observation proves that remote truth is unreadable, the engine

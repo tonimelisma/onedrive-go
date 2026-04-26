@@ -24,7 +24,6 @@ type EngineMountConfig struct {
 	EnableWebsocket             bool
 	LocalFilter                 LocalFilterConfig
 	LocalRules                  LocalObservationRules
-	ManagedRootEvents           ManagedRootEventSink
 	ShortcutTopologyNamespaceID string
 	ShortcutTopologyHandler     ShortcutTopologyHandler
 	TransferWorkers             int
@@ -85,7 +84,6 @@ func NewMountEngine(
 		EnableWebsocket:             mountCfg.EnableWebsocket,
 		LocalFilter:                 mountCfg.LocalFilter,
 		LocalRules:                  mountCfg.LocalRules,
-		ManagedRootEvents:           mountCfg.ManagedRootEvents,
 		ShortcutTopologyNamespaceID: mountCfg.ShortcutTopologyNamespaceID,
 		ShortcutTopologyHandler:     mountCfg.ShortcutTopologyHandler,
 		TransferWorkers:             mountCfg.TransferWorkers,

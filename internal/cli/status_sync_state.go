@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -21,6 +23,35 @@ func readDriveStatusSnapshot(
 	}
 
 	return snapshot
+}
+
+func loadShortcutRootStatusSnapshots(
+	ctx context.Context,
+	cfg *config.Config,
+	logger *slog.Logger,
+) map[driveid.CanonicalID][]syncengine.ShortcutRootRecord {
+	roots := make(map[driveid.CanonicalID][]syncengine.ShortcutRootRecord)
+	if cfg == nil {
+		return roots
+	}
+	for cid := range cfg.Drives {
+		statePath := config.DriveStatePath(cid)
+		if !managedPathExists(statePath) {
+			continue
+		}
+		records, err := syncengine.ReadShortcutRootStatusSnapshot(ctx, statePath, logger)
+		if err != nil {
+			if logger != nil {
+				logger.Debug("skip shortcut root status snapshot",
+					"drive", cid.String(),
+					"error", err,
+				)
+			}
+			continue
+		}
+		roots[cid] = records
+	}
+	return roots
 }
 
 func buildSyncStateInfo(

@@ -49,7 +49,6 @@ type Engine struct {
 	checkWorkers                int                    // goroutine limit for parallel file hashing
 	localFilter                 LocalFilterConfig
 	localRules                  LocalObservationRules
-	managedRootEvents           ManagedRootEventSink
 	shortcutTopologyNamespaceID string
 	shortcutTopologyHandler     ShortcutTopologyHandler
 	enableWebsocket             bool
@@ -161,7 +160,6 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		checkWorkers:                cfg.CheckWorkers,
 		localFilter:                 localFilter,
 		localRules:                  cfg.LocalRules,
-		managedRootEvents:           cfg.ManagedRootEvents,
 		shortcutTopologyNamespaceID: cfg.ShortcutTopologyNamespaceID,
 		shortcutTopologyHandler:     cfg.ShortcutTopologyHandler,
 		enableWebsocket:             cfg.EnableWebsocket,

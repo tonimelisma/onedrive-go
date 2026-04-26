@@ -292,6 +292,7 @@ func (rt *watchRuntime) startObservers(
 	ctx context.Context, bl *Baseline, opts WatchOptions,
 ) {
 	localEvents := make(chan ChangeEvent, watchObservationBuf)
+	managedRootEvents := make(chan ManagedRootEvent, watchObservationBuf)
 	remoteBatches := make(chan remoteObservationBatch, watchObservationBuf)
 	errs := make(chan error, 2)
 
@@ -311,7 +312,16 @@ func (rt *watchRuntime) startObservers(
 	localObs := NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
 	localObs.SetFilterConfig(rt.engine.localFilter)
 	localObs.SetObservationRules(rt.engine.localRules)
-	localObs.SetManagedRootEventSink(rt.engine.managedRootEvents)
+	localObs.SetManagedRootEventSink(func(event ManagedRootEvent) {
+		select {
+		case managedRootEvents <- event:
+		default:
+			rt.engine.logger.Warn("managed shortcut root event channel full; parent engine reconciliation will retry",
+				slog.String("path", event.Path),
+				slog.String("binding_id", event.BindingID),
+			)
+		}
+	})
 	localObs.SetSkippedChannel(skippedCh)
 	localObs.safetyScanInterval = localWatchHealthySafetyScanInterval
 
@@ -329,6 +339,7 @@ func (rt *watchRuntime) startObservers(
 		defer obsWg.Done()
 		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
 		defer close(localEvents)
+		defer close(managedRootEvents)
 
 		watchErr := localObs.Watch(ctx, rt.engine.syncTree, localEvents)
 		if errors.Is(watchErr, ErrWatchLimitExhausted) {
@@ -351,6 +362,7 @@ func (rt *watchRuntime) startObservers(
 	rt.activeObservers = count
 	rt.skippedItems = skippedCh
 	rt.localEvents = localEvents
+	rt.managedRootEvents = managedRootEvents
 	rt.remoteBatches = remoteBatches
 }
 

@@ -39,10 +39,12 @@ Rules:
 - `:` is the separator in display/config form, replaced with `_` in filenames
 - Drive type auto-detected from auth endpoint + `driveType` field
 
-Automatic shared-shortcut child mounts are not canonical drives. Their durable
-identity is the managed mount `MountID` in `mounts.json`; they inherit token
-ownership from the selected standalone parent and report through mount identity
-instead of a synthesized `shared:` canonical ID.
+Automatic shared-shortcut child mounts are not canonical drives. Their stable
+runtime identity is a child `MountID` derived from the parent namespace and
+shortcut binding item ID; parent shortcut-root lifecycle is stored in the
+parent sync store. Child mounts inherit token ownership from the selected
+standalone parent and report through mount identity instead of a synthesized
+`shared:` canonical ID.
 
 ## ID Type (`driveid.ID`)
 

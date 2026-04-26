@@ -1,6 +1,6 @@
 # Configuration
 
-GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/catalog_lifecycle.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/mount_inventory.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
+GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/catalog_lifecycle.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/mount_state_path.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
 
 Implements: R-3.7 [verified], R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -10,7 +10,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 
 ## Ownership Contract
 
-- Owns: Config-file schema, catalog schema, durable lifecycle mutation rules for config/catalog-managed inventory, override resolution, path discovery, drive-section resolution, token-path resolution, and validation policy.
+- Owns: Config-file schema, catalog schema, durable lifecycle mutation rules for config/catalog-managed inventory, child state DB path derivation, override resolution, path discovery, drive-section resolution, token-path resolution, and validation policy.
 - Does Not Own: OAuth exchange, Graph request behavior, sync runtime orchestration, or durable sync-store contents.
 - Source of Truth: The loaded `Config` snapshot plus derived `ResolvedDrive` values at the config/CLI selection boundary. `Holder` is the single in-process source of truth for reloadable config state; sync orchestration receives `multisync.StandaloneMountConfig` values compiled at the CLI edge, and runtime session/engine construction consume mount-owned identity compiled above their boundaries.
 - Allowed Side Effects: Reading and writing config and managed inventory/state files through `fsroot`, plus statting arbitrary user-selected local paths through `localpath`.
@@ -25,10 +25,10 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Standalone shared-folder drives always preserve the canonical remote root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
 | Mount-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields` |
-| Managed child mount inventory persists shortcut lifecycle state, duplicate/content-root conflicts, explicit-standalone suppression, local-root identity, and local alias lifecycle reasons without creating synthetic configured drives. | `internal/config/mount_inventory_test.go`, `internal/config/mount_lifecycle_test.go`, `internal/multisync/shortcut_topology_test.go`, `internal/multisync/mount_root_lifecycle_test.go`, `internal/multisync/shortcut_local_root_actions_test.go` |
+| Managed shortcut children keep stable child mount IDs and retained state DB paths without becoming synthetic configured drives. Parent-owned alias lifecycle state lives in the parent sync store. | `internal/config/mount_state_path_test.go`, `internal/multisync/shortcut_topology_test.go`, `internal/sync/shortcut_root_state_test.go` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
-| Mount inventory schema v6 owns child lifecycle reasons, unavailable shortcut-binding records, deferred same-path shortcut bindings, local-root identity, and reserved projection paths. | `TestMountInventory_RoundTrip`, `TestMountInventory_UnavailableShortcutBindingMayOmitRemoteTarget`, `TestMountInventory_RemoteTargetRequiredForOtherLifecycleStates`, `TestMountInventory_ReservedLocalPathsNormalizeAndValidate`, `TestMountInventory_LocalRootReasonsValidate` |
+| Child mount state DB path derivation is stable, collision-resistant, and bounded by common basename limits. | `TestMountStatePath_UsesManagedMountPrefix`, `TestMountStatePath_EncodesManagedMountIDWithoutCollisions`, `TestMountStatePath_LongIDUsesBoundedFilename` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
 
@@ -67,22 +67,21 @@ Config entrypoints still accept full path strings, so `managed_io.go` establishe
 ## Persisted Facts And Lifecycle
 
 `config.toml` persists drive sections only. It never contains account sections.
-Durable account, drive, and managed-mount lifecycle facts are split across
-managed files:
+Durable account, drive, and sync-state facts are split across managed files:
 
 - `config.toml`: configured drive sections keyed by canonical drive ID
 - `catalog.json`: durable account inventory, drive inventory, profile cache, ownership, and account-level auth requirement
-- `mounts.json`: durable managed child-mount bindings owned by the local namespace/runtime boundary
 - `token_*.json`: saved login owned by the account
 - `state_*.db`: retained configured-standalone-drive sync state
 - `state_mount_*.db`: retained managed-child-mount sync state
 
 `config` owns both the persistence mechanics and the durable lifecycle rules
-that coordinate these artifacts. CLI commands may still own Graph/OAuth flows,
-token deletion, and user interaction, but they do not hand-edit `CatalogAccount`
-or `CatalogDrive` records directly for product behavior. Managed child-mount
-records are also config-owned durable facts; they are not inferred solely from
-the drive catalog at runtime.
+that coordinate config/catalog/token path artifacts. CLI commands may still own
+Graph/OAuth flows, token deletion, and user interaction, but they do not
+hand-edit `CatalogAccount` or `CatalogDrive` records directly for product
+behavior. Automatic shortcut child topology is not a config-owned durable fact:
+the parent engine stores parent shortcut-root lifecycle in its sync store and
+multisync compiles child runners from parent-declared snapshots.
 
 The config file itself is durable even when it has zero drive sections. Removing
 the final configured drive or logging out the final configured account leaves
@@ -306,88 +305,6 @@ Runtime callers do not silently accept future or partially shaped catalog
 files. A malformed or unsupported catalog is treated as an actionable local
 state error that must be repaired explicitly.
 
-### Mount Inventory JSON Policy
-
-`mounts.json` is the separate durable authority for managed child-mount
-bindings, so it follows the same managed-file discipline:
-
-- unknown JSON fields are rejected
-- `schema_version` is required
-- only the exact supported version is accepted
-- current schema version is `6`
-- automatic child-mount records are binding-owned and therefore require:
-  - `MountID`
-  - `NamespaceID`
-  - `BindingItemID`
-  - `LocalAlias` when Graph provides one
-  - `RelativeLocalPath`
-  - `ReservedLocalPaths` only while a shortcut rename/move still reserves an
-    old local projection path
-  - `LocalRootMaterialized` once the control plane has created or observed a
-    valid child root at the current projection path
-  - `LocalRootIdentity` after materialization, used only to recognize
-    same-parent local alias renames of the projected root
-  - `TokenOwnerCanonical`
-  - `RemoteDriveID` and `RemoteItemID`, except for unavailable shortcut-binding
-    records whose target could not be materialized yet
-  - `MountState`
-  - `StateReason` for conflict, unavailable, and pending-removal lifecycle
-    states
-- deferred shortcut bindings are stored separately when a new binding arrives at
-  a path still reserved by an existing child owner; they are promoted only after
-  that owner releases the path
-- sibling child mounts under the same namespace may not reuse or nest local
-  relative paths; reserved local paths participate in that ownership check
-- every save is a full atomic rewrite of the file
-
-Managed child mount records do not contain pause, resume, reset, or tuning
-controls. They are transparent projections of OneDrive shortcuts under the
-selected parent drive. The user controls them by adding, removing, renaming, or
-moving the OneDrive shortcut; operational pause remains a parent-drive config
-fact only.
-
-Child mount lifecycle reasons are durable control-plane facts. Duplicate
-automatic projections use `duplicate_content_root`; automatic children
-suppressed by an explicitly configured standalone shared-folder drive use
-`explicit_standalone_content_root`; removed shortcuts use `shortcut_removed`;
-bindings that cannot be refreshed use `shortcut_binding_unavailable`; child
-projection move collisions use `local_projection_conflict`; projection move
-filesystem failures use `local_projection_unavailable`; child local-root
-file/symlink collisions use `local_root_collision`; transient local-root
-stat/create failures use `local_root_unavailable`; removed shortcut projections
-that still contain local content use `removed_projection_dirty`; removed
-shortcut projection cleanup failures use `removed_projection_unavailable`; and
-local alias lifecycle failures use `local_alias_rename_conflict`,
-`local_alias_rename_unavailable`, or `local_alias_delete_unavailable`.
-Same-path replacement is not represented as a second child mount state: the new
-binding stays in `deferred_shortcut_bindings` while the existing owner keeps the
-path reserved, and status presents it as a waiting replacement note.
-
-`internal/config/mount_lifecycle.go` is the canonical lifecycle metadata table
-for child inventory reasons that still live in `mounts.json`. It defines the
-required `MountState`, whether the parent reservation remains active, whether a
-child runner may start, whether the state is automatically retried, the status
-text, and the user recovery action. Parent-engine shortcut-root state lives in
-the parent sync store; config owns only child inventory state/reason validity
-and shared presentation/recovery metadata.
-
-| State/reason | Reservation | Child runner | Autoresolution | User action |
-| --- | --- | --- | --- | --- |
-| `active` | current path | may start | n/a | none |
-| `unavailable: shortcut_binding_unavailable` | current path | skipped | parent engine later emits complete shortcut target | restore target access or recreate the shortcut |
-| `pending_removal: shortcut_removed` | current and reserved paths | final-drain child sync, then stop | child final drain is clean and parent release succeeds | none unless child sync reports blocked content |
-| `pending_removal: removed_projection_dirty` | current and reserved paths | stopped | projection becomes missing or empty | move or remove local projection content |
-| `pending_removal: removed_projection_unavailable` | current and reserved paths | stopped | filesystem/state operation succeeds later | fix permissions, locks, disk, or path issue |
-| `conflict: duplicate_content_root` | conflicting paths | skipped | topology removes or changes one duplicate | remove, move, or rename one duplicate shortcut |
-| `conflict: explicit_standalone_content_root` | shortcut path | skipped | config removes explicit mount or shortcut disappears | remove the config mount or the shortcut |
-| `conflict: local_projection_conflict` | current and reserved paths | skipped | user leaves one safe tree or trees become provably identical | merge, move, or remove one path |
-| `unavailable: local_projection_unavailable` | current and reserved paths | skipped | retry can inspect/move/remove safely | fix filesystem, permission, lock, or disk issue |
-| `conflict: local_root_collision` | child path | skipped | path becomes a safe directory or creatable | remove or rename the blocking local object |
-| `unavailable: local_root_unavailable` | child path | skipped | root becomes statable/creatable and identity can be captured | restore path or permissions |
-| `conflict: local_alias_rename_conflict` | original and candidates | skipped | exactly one same-parent identity candidate remains or original is restored | keep one renamed directory |
-| `unavailable: local_alias_rename_unavailable` | original and candidate | skipped | placeholder PATCH succeeds or user renames back | fix auth, network, permission, or restore original |
-| `unavailable: local_alias_delete_unavailable` | original path | skipped | placeholder DELETE succeeds or root is restored | fix auth, network, permission, or recreate root |
-
 `MountStatePath(mountID)` gives each managed child mount a stable retained-state
 DB path independent of configured drive canonical IDs. Configured standalone
 drives still use `DriveStatePath(...)`; managed child mounts now own their own
@@ -400,38 +317,11 @@ punctuation characters.
 
 Automatic child mount IDs are stable across placeholder rename or move because
 they are derived from `(NamespaceID, BindingItemID)`, not from the local
-projection path or the content-root identity. A shortcut can therefore move to
-another folder inside the parent namespace without losing its retained child
-mount state DB.
-
-During a shortcut rename or move, child inventory stores the current
-`RelativeLocalPath` plus any old `ReservedLocalPaths` that must remain excluded
-from the parent namespace until the local projection move is completed. Parent
-engines own the authoritative parent protected-path state in `shortcut_roots`;
-`mounts.json` mirrors only the child runner view needed for orchestration and
-status. Reserved paths are validated as safe relative paths and are not user
-controls. They are cleared when the local projection moved safely, including
-the safe auto-resolve cases where the new target is empty or the old and new
-projection trees have identical regular-file content. If parent-engine topology
-reports a shortcut placeholder without a usable target, config accepts an
-`unavailable` child record with
-`state_reason: shortcut_binding_unavailable` and no remote target IDs. That
-state belongs to mount inventory; it is not a sync-store retry/block/observation
-condition.
-
-Local child-root alias rename/delete is reflected in child inventory only after
-the parent engine applies the parent-namespace alias mutation by
-`BindingItemID`. When `LocalRootIdentity` proves that a previously materialized
-child root was renamed to a sibling path, the same child `MountID` and state DB
-are retained at the new `RelativeLocalPath`. When that identity has no sibling
-candidate, the parent deletes only the shortcut alias and emits retiring child
-topology; multisync runs the child final drain before purging the child state.
-The target shared-folder content is never renamed or deleted by these local
-alias operations.
-
-When config encounters an older `mounts.json` schema version, it does not keep
-that format alive through compatibility shims. Older schemas fail with a clear
-unsupported-schema error so there is one active durable format.
+projection path or the content-root identity. A shortcut can therefore move
+inside the parent namespace without losing its retained child mount state DB.
+Parent engines own the authoritative parent protected-path state in
+`shortcut_roots`; config only derives the child state DB path from the stable
+mount ID.
 
 ## Optional Catalog Fields
 

@@ -180,7 +180,7 @@ func executePlainLogout(
 	return writeln(w, "Sync directories untouched — your files remain on disk.")
 }
 
-// purgeOrphanedFiles removes state databases for the given email. Inventory and
+// purgeOrphanedFiles removes state databases for the given email. Account and
 // cached profile metadata live in the managed catalog, so purge cleanup only
 // needs to clear retained per-drive state files. Idempotent — ignores files
 // that don't exist. This handles cleanup after a prior non-purge logout where

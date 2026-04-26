@@ -236,22 +236,32 @@ func (flow *engineFlow) applyShortcutTopologyBatch(ctx context.Context, batch *r
 	if flow == nil || flow.engine == nil || batch == nil {
 		return nil
 	}
-	if !batch.shortcutTopology.ShouldApply() {
-		return nil
-	}
 
 	topology := batch.shortcutTopology
 	if topology.NamespaceID == "" {
 		topology.NamespaceID = flow.engine.shortcutTopologyNamespaceID
 	}
-	if _, err := flow.engine.baseline.ApplyShortcutTopology(ctx, topology); err != nil {
-		return fmt.Errorf("sync: persist parent shortcut root state: %w", err)
+	remoteChanged := topology.ShouldApply()
+	if remoteChanged {
+		if _, err := flow.engine.baseline.ApplyShortcutTopology(ctx, topology); err != nil {
+			return fmt.Errorf("sync: persist parent shortcut root state: %w", err)
+		}
+	}
+	localChanged, err := flow.engine.reconcileShortcutRootLocalState(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: reconcile parent shortcut root local state: %w", err)
+	}
+	if !remoteChanged && !localChanged {
+		return nil
 	}
 	parentRoots, err := flow.engine.baseline.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read parent shortcut root state: %w", err)
 	}
 	topology.ParentRoots = parentRoots
+	if !remoteChanged {
+		topology.Kind = ShortcutTopologyObservationComplete
+	}
 	if flow.engine.shortcutTopologyHandler == nil {
 		return nil
 	}
@@ -336,7 +346,6 @@ func (flow *engineFlow) observeLocal(
 	obs := NewLocalObserver(bl, eng.logger, eng.checkWorkers)
 	obs.SetFilterConfig(eng.localFilter)
 	obs.SetObservationRules(eng.localRules)
-	obs.SetManagedRootEventSink(eng.managedRootEvents)
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {

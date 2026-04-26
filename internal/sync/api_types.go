@@ -162,7 +162,6 @@ type engineInputs struct {
 	Logger                      *slog.Logger
 	LocalFilter                 LocalFilterConfig
 	LocalRules                  LocalObservationRules
-	ManagedRootEvents           ManagedRootEventSink
 	ShortcutTopologyNamespaceID string
 	ShortcutTopologyHandler     ShortcutTopologyHandler
 	EnableWebsocket             bool
