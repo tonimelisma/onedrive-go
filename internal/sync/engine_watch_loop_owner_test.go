@@ -2,11 +2,16 @@ package sync
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // Validates: R-2.10.10
@@ -121,4 +126,62 @@ func TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady(t *testing.T) 
 	case <-time.After(time.Second):
 		require.FailNow(t, "runNonDrainingWatchStep did not consume replanReady while idle")
 	}
+}
+
+// Validates: R-2.4.8
+func TestWatchRuntime_HandleManagedRootEventOwnsLocalAliasRename(t *testing.T) {
+	t.Parallel()
+
+	var moved struct {
+		itemID string
+		name   string
+	}
+	mock := &engineMockClient{
+		moveItemFn: func(_ context.Context, _ driveid.ID, itemID, newParentID, newName string) (*graph.Item, error) {
+			moved.itemID = itemID
+			moved.name = newName
+			assert.Empty(t, newParentID)
+			return &graph.Item{ID: itemID, Name: newName}, nil
+		},
+	}
+	eng, syncRoot := newTestEngine(t, mock)
+	setupWatchEngine(t, eng)
+	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+
+	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
+	renamedRoot := filepath.Join(syncRoot, "Shared", "Renamed")
+	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
+	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
+	require.NoError(t, err)
+	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+		NamespaceID:       shortcutTopologyTestNamespaceID,
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		LocalAlias:        "Docs",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-1",
+		RemoteIsFolder:    true,
+		State:             ShortcutRootStateActive,
+		ProtectedPaths:    []string{"Shared/Docs"},
+		LocalRootIdentity: &identity,
+	}}))
+	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
+
+	var published ShortcutTopologyBatch
+	eng.shortcutTopologyHandler = func(_ context.Context, batch ShortcutTopologyBatch) error {
+		published = batch
+		return nil
+	}
+	rt := testWatchRuntime(t, eng)
+
+	done, err := rt.handleWatchManagedRootEventSignal(t.Context(), &ManagedRootEvent{}, true)
+
+	require.NoError(t, err)
+	assert.False(t, done)
+	assert.Equal(t, "binding-1", moved.itemID)
+	assert.Equal(t, "Renamed", moved.name)
+	assert.Equal(t, ShortcutTopologyObservationComplete, published.Kind)
+	require.Len(t, published.ParentRoots, 1)
+	assert.Equal(t, "Shared/Renamed", published.ParentRoots[0].RelativeLocalPath)
+	assert.Equal(t, []string{"Shared/Renamed", "Shared/Docs"}, published.ParentRoots[0].ProtectedPaths)
 }

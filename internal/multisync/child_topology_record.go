@@ -1,22 +1,6 @@
 package multisync
 
-type childTopologyState string
-
-const (
-	childTopologyStateActive         childTopologyState = "active"
-	childTopologyStatePendingRemoval childTopologyState = "pending_removal"
-	childTopologyStateConflict       childTopologyState = "conflict"
-	childTopologyStateUnavailable    childTopologyState = "unavailable"
-)
-
-type childTopologyStateReason string
-
-const (
-	childTopologyStateReasonDuplicateContentRoot          childTopologyStateReason = "duplicate_content_root"
-	childTopologyStateReasonExplicitStandaloneContentRoot childTopologyStateReason = "explicit_standalone_content_root"
-	childTopologyStateReasonShortcutRemoved               childTopologyStateReason = "shortcut_removed"
-	childTopologyStateReasonShortcutBindingUnavailable    childTopologyStateReason = "shortcut_binding_unavailable"
-)
+import syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 
 type childMountTopology struct {
 	mounts map[string]childTopologyRecord
@@ -32,8 +16,8 @@ type childTopologyRecord struct {
 	tokenOwnerCanonical string
 	remoteDriveID       string
 	remoteItemID        string
-	state               childTopologyState
-	stateReason         childTopologyStateReason
+	state               syncengine.ShortcutChildTopologyState
+	blockedDetail       string
 }
 
 func defaultChildMountTopology() *childMountTopology {

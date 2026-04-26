@@ -190,8 +190,11 @@ func planShortcutRootTopology(
 		if !ok {
 			continue
 		}
-		next := record
-		next.State = ShortcutRootStateRemovedFinalDrain
+		next := plannedShortcutRootTransition(record,
+			shortcutRootEventRemoteDelete,
+			ShortcutRootStateRemovedFinalDrain,
+			"",
+		)
 		next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, next.ProtectedPaths)
 		if !shortcutRootRecordsEqual(record, next) {
 			byBinding[next.BindingItemID] = next
@@ -205,6 +208,11 @@ func planShortcutRootTopology(
 		if existing, ok := byBinding[fact.BindingItemID]; ok {
 			next.LocalRootIdentity = existing.LocalRootIdentity
 			next.Waiting = cloneShortcutRootReplacement(existing.Waiting)
+			next.State = plannedShortcutRootTransition(existing,
+				shortcutRootEventRemoteUnavailable,
+				ShortcutRootStateTargetUnavailable,
+				fact.Reason,
+			).State
 		}
 		changed = upsertShortcutRootRecord(byBinding, next) || changed
 	}
@@ -222,20 +230,34 @@ func planShortcutRootTopology(
 				RemoteIsFolder:    next.RemoteIsFolder,
 			}
 			owner.Waiting = &waiting
-			owner.State = ShortcutRootStateSamePathReplacementWaiting
+			owner = plannedShortcutRootTransition(owner,
+				shortcutRootEventSamePathReplacement,
+				ShortcutRootStateSamePathReplacementWaiting,
+				owner.BlockedDetail,
+			)
 			owner.ProtectedPaths = protectedPathsForShortcutRoot(owner.RelativeLocalPath, owner.ProtectedPaths)
 			byBinding[owner.BindingItemID] = owner
 			changed = true
 			continue
 		}
 		if _, found := activeProtectedShortcutRootForPath(byBinding, next.RelativeLocalPath, next.BindingItemID); found {
-			next.State = ShortcutRootStateBlockedPath
-			next.BlockedDetail = "shortcut alias path is protected by another shortcut root"
+			next = plannedShortcutRootTransition(next,
+				shortcutRootEventProtectedPathConflict,
+				ShortcutRootStateBlockedPath,
+				"shortcut alias path is protected by another shortcut root",
+			)
 			next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, next.ProtectedPaths)
 			changed = upsertShortcutRootRecord(byBinding, next) || changed
 			continue
 		}
 		if existing, ok := byBinding[fact.BindingItemID]; ok {
+			transitioned := plannedShortcutRootTransition(existing,
+				shortcutRootEventRemoteUpsert,
+				ShortcutRootStateActive,
+				"",
+			)
+			next.State = transitioned.State
+			next.BlockedDetail = transitioned.BlockedDetail
 			next.LocalRootIdentity = existing.LocalRootIdentity
 			if existing.RelativeLocalPath != "" && existing.RelativeLocalPath != next.RelativeLocalPath {
 				next.ProtectedPaths = protectedPathsForShortcutRoot(
@@ -264,7 +286,11 @@ func planShortcutRootTopology(
 				record.State == ShortcutRootStateSamePathReplacementWaiting {
 				continue
 			}
-			record.State = ShortcutRootStateRemovedFinalDrain
+			record = plannedShortcutRootTransition(record,
+				shortcutRootEventCompleteOmission,
+				ShortcutRootStateRemovedFinalDrain,
+				"",
+			)
 			record.ProtectedPaths = protectedPathsForShortcutRoot(record.RelativeLocalPath, record.ProtectedPaths)
 			byBinding[bindingID] = record
 			changed = true
@@ -488,6 +514,19 @@ func planShortcutRootDrainAck(
 		}
 		switch {
 		case record.State == ShortcutRootStateSamePathReplacementWaiting && record.Waiting != nil:
+			if err := validateShortcutRootTransition(
+				record.State,
+				shortcutRootEventWaitingReplacementPromote,
+				ShortcutRootStateActive,
+			); err != nil {
+				records = append(records, plannedShortcutRootTransition(record,
+					shortcutRootEventProjectionCleanupFailed,
+					ShortcutRootStateRemovedCleanupBlocked,
+					err.Error(),
+				))
+				changed = true
+				continue
+			}
 			records = append(records, shortcutRootRecordFromReplacement(record.NamespaceID, *record.Waiting))
 			changed = true
 		case record.State == ShortcutRootStateRemovedFinalDrain ||

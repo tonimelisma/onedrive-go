@@ -92,26 +92,27 @@ func childTopologyRecordFromTopology(
 		tokenOwnerCanonical: parent.tokenOwnerCanonical.String(),
 		remoteDriveID:       child.RemoteDriveID,
 		remoteItemID:        child.RemoteItemID,
+		state:               child.State,
+		blockedDetail:       child.BlockedDetail,
 	}
 	switch child.State {
 	case "", syncengine.ShortcutChildDesired:
-		record.state = childTopologyStateActive
+		record.state = syncengine.ShortcutChildDesired
 	case syncengine.ShortcutChildRetiring:
-		record.state = childTopologyStatePendingRemoval
-		record.stateReason = childTopologyStateReasonShortcutRemoved
+		record.state = syncengine.ShortcutChildRetiring
 	case syncengine.ShortcutChildBlocked:
-		record.state = childTopologyStateUnavailable
-		record.stateReason = childTopologyStateReasonShortcutBindingUnavailable
+		record.state = syncengine.ShortcutChildBlocked
 	case syncengine.ShortcutChildWaitingReplacement:
-		record.state = childTopologyStateUnavailable
-		record.stateReason = childTopologyStateReasonShortcutBindingUnavailable
+		record.state = syncengine.ShortcutChildWaitingReplacement
 	default:
-		record.state = childTopologyStateUnavailable
-		record.stateReason = childTopologyStateReasonShortcutBindingUnavailable
+		record.state = syncengine.ShortcutChildBlocked
+		record.blockedDetail = string(child.State)
 	}
 	if record.remoteDriveID == "" || record.remoteItemID == "" {
-		record.state = childTopologyStateUnavailable
-		record.stateReason = childTopologyStateReasonShortcutBindingUnavailable
+		record.state = syncengine.ShortcutChildBlocked
+		if record.blockedDetail == "" {
+			record.blockedDetail = "shortcut binding target is unavailable"
+		}
 	}
 	if _, err := driveid.NewCanonicalID(record.tokenOwnerCanonical); err != nil {
 		return childTopologyRecord{}, false

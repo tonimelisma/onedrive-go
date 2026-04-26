@@ -92,8 +92,11 @@ func (e *Engine) reconcileShortcutRootRecord(
 		if next.State == ShortcutRootStateBlockedPath ||
 			next.State == ShortcutRootStateRenameAmbiguous ||
 			next.State == ShortcutRootStateAliasMutationBlocked {
-			next.State = ShortcutRootStateActive
-			next.BlockedDetail = ""
+			next = plannedShortcutRootTransition(next,
+				shortcutRootEventLocalRootReady,
+				ShortcutRootStateActive,
+				"",
+			)
 		}
 		return next, true, !shortcutRootRecordsEqual(record, next), nil
 	}
@@ -116,8 +119,11 @@ func (e *Engine) materializeShortcutRoot(
 		return unavailableShortcutRoot(record, err.Error()), true, true, nil
 	}
 	next := record
-	next.State = ShortcutRootStateActive
-	next.BlockedDetail = ""
+	next = plannedShortcutRootTransition(next,
+		shortcutRootEventLocalRootReady,
+		ShortcutRootStateActive,
+		"",
+	)
 	next.LocalRootIdentity = &identity
 	next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, next.ProtectedPaths)
 	return next, true, !shortcutRootRecordsEqual(record, next), nil
@@ -164,15 +170,20 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 		next := record
 		next.RelativeLocalPath = candidates[0]
 		next.LocalAlias = alias
-		next.State = ShortcutRootStateActive
-		next.BlockedDetail = ""
+		next = plannedShortcutRootTransition(next,
+			shortcutRootEventLocalRootReady,
+			ShortcutRootStateActive,
+			"",
+		)
 		next.LocalRootIdentity = &identity
 		next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, append(record.ProtectedPaths, record.RelativeLocalPath))
 		return next, true, true, nil
 	default:
-		next := record
-		next.State = ShortcutRootStateRenameAmbiguous
-		next.BlockedDetail = "multiple same-parent shortcut alias rename candidates"
+		next := plannedShortcutRootTransition(record,
+			shortcutRootEventAliasRenameAmbiguous,
+			ShortcutRootStateRenameAmbiguous,
+			"multiple same-parent shortcut alias rename candidates",
+		)
 		next.ProtectedPaths = appendUniqueManagedRootPaths(next.ProtectedPaths, candidates...)
 		return next, true, true, nil
 	}
@@ -213,8 +224,11 @@ func (e *Engine) moveRemoteRenamedShortcutProjection(
 		return unavailableShortcutRoot(record, err.Error()), true, true, nil
 	}
 	next := record
-	next.State = ShortcutRootStateActive
-	next.BlockedDetail = ""
+	next = plannedShortcutRootTransition(next,
+		shortcutRootEventLocalRootReady,
+		ShortcutRootStateActive,
+		"",
+	)
 	next.LocalRootIdentity = &identity
 	next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, nil)
 	return next, true, true, nil
@@ -328,28 +342,33 @@ func shortcutRootWithPathError(record ShortcutRootRecord, err error) ShortcutRoo
 
 //nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
 func blockedShortcutRoot(record ShortcutRootRecord, detail string) ShortcutRootRecord {
-	record.State = ShortcutRootStateBlockedPath
-	record.BlockedDetail = detail
-	record.ProtectedPaths = protectedPathsForShortcutRoot(record.RelativeLocalPath, record.ProtectedPaths)
-	return record
+	return plannedShortcutRootTransition(record,
+		shortcutRootEventLocalPathBlocked,
+		ShortcutRootStateBlockedPath,
+		detail,
+	)
 }
 
 //nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
 func unavailableShortcutRoot(record ShortcutRootRecord, detail string) ShortcutRootRecord {
-	record.State = ShortcutRootStateBlockedPath
-	record.BlockedDetail = detail
-	record.ProtectedPaths = protectedPathsForShortcutRoot(record.RelativeLocalPath, record.ProtectedPaths)
-	return record
+	return plannedShortcutRootTransition(record,
+		shortcutRootEventLocalPathBlocked,
+		ShortcutRootStateBlockedPath,
+		detail,
+	)
 }
 
 //nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
 func aliasMutationBlockedShortcutRoot(record ShortcutRootRecord, err error) ShortcutRootRecord {
-	record.State = ShortcutRootStateAliasMutationBlocked
+	detail := ""
 	if err != nil {
-		record.BlockedDetail = err.Error()
+		detail = err.Error()
 	}
-	record.ProtectedPaths = protectedPathsForShortcutRoot(record.RelativeLocalPath, record.ProtectedPaths)
-	return record
+	return plannedShortcutRootTransition(record,
+		shortcutRootEventAliasMutationFailed,
+		ShortcutRootStateAliasMutationBlocked,
+		detail,
+	)
 }
 
 func (e *Engine) releaseShortcutRootProjectionAfterDrain(ctx context.Context, ack ShortcutChildDrainAck) error {
@@ -424,12 +443,15 @@ func (e *Engine) removeShortcutRootProjection(relativeLocalPath string) error {
 
 //nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
 func shortcutRootCleanupBlocked(record ShortcutRootRecord, err error) ShortcutRootRecord {
-	record.State = ShortcutRootStateRemovedCleanupBlocked
+	detail := ""
 	if err != nil {
-		record.BlockedDetail = err.Error()
+		detail = err.Error()
 	}
-	record.ProtectedPaths = protectedPathsForShortcutRoot(record.RelativeLocalPath, record.ProtectedPaths)
-	return record
+	return plannedShortcutRootTransition(record,
+		shortcutRootEventProjectionCleanupFailed,
+		ShortcutRootStateRemovedCleanupBlocked,
+		detail,
+	)
 }
 
 func appendUniqueManagedRootPaths(paths []string, additions ...string) []string {

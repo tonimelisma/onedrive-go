@@ -17,18 +17,19 @@ The engine is the single mounted content-root runtime owner. It coordinates:
 - scope lifecycle
 - watch-mode refresh and maintenance work
 
-The target engine persists durable status through three authorities:
+The target engine persists durable content-sync status through three authorities:
 
 - `observation_issues`
 - `retry_work`
 - `block_scopes`
 
 It does not use a mixed failure table as durable control state.
-Managed child shortcut lifecycle states such as `unavailable`, duplicate
-projection conflicts, and pending local projection moves are outside this store:
-`internal/multisync` resolves them before engine construction. If a child mount
-is unavailable, no engine is created for it and the engine does not mirror that
-fact into retry, block, or observation tables.
+Parent namespace engines also persist parent-owned shortcut alias lifecycle in
+`shortcut_roots`. Those rows protect child-root paths from ordinary parent
+content planning, record parent-scoped blockers and retries, and declare child
+topology for the control plane. They are not child content retry state: child
+engines still own `observation_issues`, `retry_work`, and `block_scopes` for the
+shared-folder target content inside the child projection.
 
 `retry_work` and `block_scopes` are engine-owned control state, not
 best-effort diagnostics. If the runtime cannot durably record or transition
@@ -64,7 +65,8 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
-| Parent engines persist shortcut-root state, merge that state into managed-root observation reservations on startup, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot` |
+| Parent engines persist shortcut-root state, merge that state into managed-root observation reservations on startup, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestNewMountEngine_DoesNotReserveReleasedShortcutRootAfterDrainAck`, `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ManagedRootIdentityMatchSuppressesRenamedRoot` |
+| Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only topology snapshots reach multisync. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleManagedRootEventOwnsLocalAliasRename` |
 
 ## Construction
 

@@ -12,17 +12,18 @@ type shortcutTopologyRefresher interface {
 	PrepareShortcutChildren(context.Context) (syncengine.ShortcutChildTopologySnapshot, error)
 }
 
-type preparedShortcutParentEngines map[mountID]engineRunner
+type bootstrappedParentEngines map[mountID]engineRunner
 
-func (o *Orchestrator) preflightShortcutTopology(
+func (o *Orchestrator) bootstrapShortcutTopology(
 	ctx context.Context,
 	compiled *compiledMountSet,
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
-) (*compiledMountSet, preparedShortcutParentEngines, error) {
-	prepared := make(preparedShortcutParentEngines)
-	if compiled == nil || o == nil || o.cfg == nil || o.cfg.disableTopologyPreflight {
-		return compiled, prepared, nil
+	existingWatchRunners map[mountID]*watchRunner,
+) (*compiledMountSet, bootstrappedParentEngines, error) {
+	bootstrapped := make(bootstrappedParentEngines)
+	if compiled == nil || o == nil || o.cfg == nil || o.cfg.disableTopologyBootstrap {
+		return compiled, bootstrapped, nil
 	}
 
 	changed := false
@@ -31,30 +32,47 @@ func (o *Orchestrator) preflightShortcutTopology(
 		if mount == nil || mount.paused || mount.projectionKind != MountProjectionStandalone {
 			continue
 		}
+		if canReuseWatchRunnerForParentBootstrap(existingWatchRunners, mount) {
+			continue
+		}
 
-		parentChanged, engine, err := o.preflightShortcutTopologyForParent(ctx, mount)
+		parentChanged, engine, err := o.bootstrapShortcutTopologyForParent(ctx, mount)
 		if err != nil {
-			o.closePreparedShortcutParentEngines(ctx, prepared)
-			return compiled, nil, fmt.Errorf("preflight shortcut topology for mount %s: %w", mount.label(), err)
+			o.closeBootstrappedShortcutParentEngines(ctx, bootstrapped)
+			return compiled, nil, fmt.Errorf("bootstrap shortcut topology for mount %s: %w", mount.label(), err)
 		}
 		if engine != nil {
-			prepared[mount.mountID] = engine
+			bootstrapped[mount.mountID] = engine
 		}
 		changed = changed || parentChanged
 	}
 	if !changed {
-		return compiled, prepared, nil
+		return compiled, bootstrapped, nil
 	}
 
 	refreshed, err := o.buildRuntimeMountSet(ctx, standaloneMounts, initialStartup)
 	if err != nil {
-		o.closePreparedShortcutParentEngines(ctx, prepared)
-		return compiled, nil, fmt.Errorf("rebuilding mount specs after shortcut topology preflight: %w", err)
+		o.closeBootstrappedShortcutParentEngines(ctx, bootstrapped)
+		return compiled, nil, fmt.Errorf("rebuilding mount specs after shortcut topology bootstrap: %w", err)
 	}
-	return refreshed, prepared, nil
+	return refreshed, bootstrapped, nil
 }
 
-func (o *Orchestrator) preflightShortcutTopologyForParent(
+func canReuseWatchRunnerForParentBootstrap(
+	existingWatchRunners map[mountID]*watchRunner,
+	parent *mountSpec,
+) bool {
+	if parent == nil || len(existingWatchRunners) == 0 {
+		return false
+	}
+	runner := existingWatchRunners[parent.mountID]
+	if runner == nil || runner.mount == nil {
+		return false
+	}
+	return mountSpecCoreEquivalent(runner.mount, parent)
+}
+
+func (o *Orchestrator) bootstrapShortcutTopologyForParent(
 	ctx context.Context,
 	parent *mountSpec,
 ) (bool, engineRunner, error) {
@@ -68,12 +86,12 @@ func (o *Orchestrator) preflightShortcutTopologyForParent(
 	}
 
 	changed := false
-	preflightParent := *parent
+	bootstrapParent := *parent
 	mountCollector := o.registerMountPerfCollector(parent.mountID.String())
 
 	engine, err := o.engineFactory(ctx, engineFactoryRequest{
 		Session:       session,
-		Mount:         &preflightParent,
+		Mount:         &bootstrapParent,
 		Logger:        o.logger,
 		VerifyDrive:   true,
 		PerfCollector: mountCollector,
@@ -89,7 +107,7 @@ func (o *Orchestrator) preflightShortcutTopologyForParent(
 	}
 	snapshot, err := refresher.PrepareShortcutChildren(ctx)
 	if err != nil {
-		o.closePreparedShortcutParentEngine(ctx, parent.mountID, engine)
+		o.closeBootstrappedShortcutParentEngine(ctx, parent.mountID, engine)
 		return false, nil, fmt.Errorf("preparing shortcut children: %w", err)
 	}
 	changed = o.storeShortcutChildTopology(parent.mountID, snapshot)
@@ -97,17 +115,17 @@ func (o *Orchestrator) preflightShortcutTopologyForParent(
 	return changed, engine, nil
 }
 
-func (o *Orchestrator) closePreparedShortcutParentEngines(
+func (o *Orchestrator) closeBootstrappedShortcutParentEngines(
 	ctx context.Context,
-	prepared preparedShortcutParentEngines,
+	bootstrapped bootstrappedParentEngines,
 ) {
-	for id, engine := range prepared {
-		o.closePreparedShortcutParentEngine(ctx, id, engine)
-		delete(prepared, id)
+	for id, engine := range bootstrapped {
+		o.closeBootstrappedShortcutParentEngine(ctx, id, engine)
+		delete(bootstrapped, id)
 	}
 }
 
-func (o *Orchestrator) closePreparedShortcutParentEngine(
+func (o *Orchestrator) closeBootstrappedShortcutParentEngine(
 	ctx context.Context,
 	id mountID,
 	engine engineRunner,
@@ -117,7 +135,7 @@ func (o *Orchestrator) closePreparedShortcutParentEngine(
 	}
 	defer o.removeMountPerfCollector(id.String())
 	if closeErr := engine.Close(ctx); closeErr != nil && o.logger != nil {
-		o.logger.Warn("engine close error after shortcut topology preflight",
+		o.logger.Warn("engine close error after shortcut topology bootstrap",
 			slog.String("mount_id", id.String()),
 			slog.String("error", closeErr.Error()),
 		)

@@ -111,15 +111,16 @@ func (o *Orchestrator) startWatchRuntime(
 	if err != nil {
 		return nil, control, fmt.Errorf("sync: building mount specs: %w", err)
 	}
-	var preparedParents preparedShortcutParentEngines
-	compiled, preparedParents, err = o.preflightShortcutTopology(
+	var bootstrappedParents bootstrappedParentEngines
+	compiled, bootstrappedParents, err = o.bootstrapShortcutTopology(
 		ctx,
 		compiled,
 		o.cfg.StandaloneMounts,
 		o.cfg.InitialStartupResults,
+		nil,
 	)
 	if err != nil {
-		return nil, control, fmt.Errorf("sync: preflighting shortcut topology: %w", err)
+		return nil, control, fmt.Errorf("sync: bootstrapping shortcut topology: %w", err)
 	}
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
@@ -135,9 +136,9 @@ func (o *Orchestrator) startWatchRuntime(
 		compiled.Skipped,
 		opts,
 		runnerEvents,
-		preparedParents,
+		bootstrappedParents,
 	)
-	o.closePreparedShortcutParentEngines(ctx, preparedParents)
+	o.closeBootstrappedShortcutParentEngines(ctx, bootstrappedParents)
 	startSummary := summarizeStartupResults(startResults)
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
 		return nil, control, err
@@ -156,7 +157,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 	initialStartup []MountStartupResult,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
-	preparedParents preparedShortcutParentEngines,
+	bootstrappedParents bootstrappedParentEngines,
 ) (map[mountID]*watchRunner, []MountStartupResult) {
 	runners := make(map[mountID]*watchRunner)
 	startResults := append([]MountStartupResult(nil), initialStartup...)
@@ -178,12 +179,12 @@ func (o *Orchestrator) startInitialWatchRunners(
 		}
 
 		o.attachShortcutTopologyHandler(mount, true)
-		prepared := preparedParents[mount.mountID]
-		if prepared != nil {
-			delete(preparedParents, mount.mountID)
-			setShortcutTopologyHandler(prepared, mount.shortcutTopologyHandler)
+		bootstrapped := bootstrappedParents[mount.mountID]
+		if bootstrapped != nil {
+			delete(bootstrappedParents, mount.mountID)
+			setShortcutTopologyHandler(bootstrapped, mount.shortcutTopologyHandler)
 		}
-		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents, prepared)
+		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents, bootstrapped)
 		if err != nil {
 			o.logger.Error("failed to start watch runner",
 				slog.String("mount_id", mount.mountID.String()),
@@ -243,9 +244,9 @@ func (o *Orchestrator) startWatchRunner(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
-	prepared engineRunner,
+	bootstrapped engineRunner,
 ) (*watchRunner, error) {
-	engine := prepared
+	engine := bootstrapped
 	if engine == nil {
 		session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 		if err != nil {
@@ -371,12 +372,13 @@ func (o *Orchestrator) reload(
 		)
 		return
 	}
-	var preparedParents preparedShortcutParentEngines
-	newMounts, preparedParents, err = o.preflightShortcutTopology(
+	var bootstrappedParents bootstrappedParentEngines
+	newMounts, bootstrappedParents, err = o.bootstrapShortcutTopology(
 		ctx,
 		newMounts,
 		newSelection.Mounts,
 		newSelection.StartupResults,
+		runners,
 	)
 	if err != nil {
 		o.cfg.Holder.Update(oldCfg)
@@ -384,7 +386,7 @@ func (o *Orchestrator) reload(
 		o.cfg.InitialStartupResults = oldStartup
 		o.cfg.Runtime.FlushTokenCache()
 		o.logger.Warn("config reload failed, keeping current state",
-			slog.String("error", fmt.Errorf("preflighting shortcut topology after reload: %w", err).Error()),
+			slog.String("error", fmt.Errorf("bootstrapping shortcut topology after reload: %w", err).Error()),
 		)
 		return
 	}
@@ -396,9 +398,9 @@ func (o *Orchestrator) reload(
 		mode,
 		opts,
 		runnerEvents,
-		preparedParents,
+		bootstrappedParents,
 	)
-	o.closePreparedShortcutParentEngines(ctx, preparedParents)
+	o.closeBootstrappedShortcutParentEngines(ctx, bootstrappedParents)
 	if len(startResults) > 0 {
 		o.emitStartWarning(summarizeStartupResults(startResults))
 	}
@@ -487,12 +489,6 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 	wr *watchRunner,
 	event watchRunnerEvent,
 ) {
-	if event.err != nil || event.report == nil || event.report.Failed > 0 || len(event.report.Errors) > 0 {
-		o.logger.Info("final-drain child mount is still waiting",
-			slog.String("mount_id", event.mountID.String()),
-		)
-		return
-	}
 	compiled, err := o.compileRuntimeMountSetFromTopology(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
 		o.logger.Warn("compiling mount set after final-drain child completion failed",
@@ -575,7 +571,7 @@ func (o *Orchestrator) applyWatchMountSet(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
-	preparedParents preparedShortcutParentEngines,
+	bootstrappedParents bootstrappedParentEngines,
 ) (int, int, []MountStartupResult) {
 	runnable := runnableMountMap(compiled.Mounts)
 	stopped := o.stopInactiveWatchRunners(ctx, runners, runnable)
@@ -589,7 +585,7 @@ func (o *Orchestrator) applyWatchMountSet(
 		mode,
 		opts,
 		runnerEvents,
-		preparedParents,
+		bootstrappedParents,
 	)
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 
@@ -650,7 +646,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
-	preparedParents preparedShortcutParentEngines,
+	bootstrappedParents bootstrappedParentEngines,
 ) (int, []MountStartupResult) {
 	started := 0
 	startResults := append([]MountStartupResult(nil), initialStartup...)
@@ -661,12 +657,12 @@ func (o *Orchestrator) startReloadWatchRunners(
 		}
 
 		o.attachShortcutTopologyHandler(mount, true)
-		prepared := preparedParents[mount.mountID]
-		if prepared != nil {
-			delete(preparedParents, mount.mountID)
-			setShortcutTopologyHandler(prepared, mount.shortcutTopologyHandler)
+		bootstrapped := bootstrappedParents[mount.mountID]
+		if bootstrapped != nil {
+			delete(bootstrappedParents, mount.mountID)
+			setShortcutTopologyHandler(bootstrapped, mount.shortcutTopologyHandler)
 		}
-		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents, prepared)
+		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents, bootstrapped)
 		if err != nil {
 			o.logger.Error("failed to start watch runner during reload",
 				slog.String("mount_id", id.String()),
