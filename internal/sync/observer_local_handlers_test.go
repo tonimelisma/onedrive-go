@@ -32,6 +32,7 @@ type mockFsWatcher struct {
 	errs     chan error
 	addOne   stdsync.Once
 	addCh    chan struct{}
+	addHook  func()
 	closeOne stdsync.Once // idempotent Close prevents panic on double-close
 }
 
@@ -47,7 +48,12 @@ func (m *mockFsWatcher) Add(string) error {
 	if m.addCh == nil {
 		m.addCh = make(chan struct{})
 	}
-	m.addOne.Do(func() { close(m.addCh) })
+	m.addOne.Do(func() {
+		if m.addHook != nil {
+			m.addHook()
+		}
+		close(m.addCh)
+	})
 	return nil
 }
 func (m *mockFsWatcher) Remove(string) error           { return nil }
@@ -127,6 +133,37 @@ func (s *sleepRecorder) getCalls() []time.Duration {
 // ---------------------------------------------------------------------------
 // Watch tests
 // ---------------------------------------------------------------------------
+
+func TestWatch_StartupSafetyScanCatchesChangeDuringWatchSetup(t *testing.T) {
+	dir := t.TempDir()
+	mockWatcher := newMockFsWatcher()
+	mockWatcher.addHook = func() {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "during-setup.txt"), []byte("created during setup"), 0o600))
+	}
+
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
+	obs.StartupSafetyScan = true
+	events := make(chan ChangeEvent, 10)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
+	}()
+
+	var observed ChangeEvent
+	select {
+	case observed = <-events:
+	case err := <-done:
+		require.NoError(t, err, "watch exited before startup safety scan observed the change")
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "timeout waiting for startup safety scan event")
+	}
+
+	cancel()
+	require.NoError(t, <-done)
+	assert.Equal(t, ChangeCreate, observed.Type)
+	assert.Equal(t, "during-setup.txt", observed.Path)
+}
 
 func TestWatch_DetectsFileModify(t *testing.T) {
 	t.Parallel()

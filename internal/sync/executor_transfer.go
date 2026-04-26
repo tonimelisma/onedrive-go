@@ -106,23 +106,14 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 	// Always validate the baseline eTag before overwriting a known remote item.
 	// Planning is snapshot-based, so execution must defend against remote drift
 	// regardless of whether the current runtime is one-shot or watch.
-	if action.ItemID != "" &&
-		action.View != nil && action.View.Baseline != nil &&
-		action.View.Baseline.ETag != "" {
-		currentItem, fetchErr := e.items.GetItem(ctx, driveID, action.ItemID)
-		if fetchErr == nil && currentItem.ETag != action.View.Baseline.ETag {
-			return e.failedOutcomeWithFailure(
-				action,
-				ActionUpload,
-				fmt.Errorf("remote eTag changed since last sync (baseline=%s current=%s): potential conflict",
-					action.View.Baseline.ETag, currentItem.ETag),
-				action.Path,
-				PermissionCapabilityUnknown,
-			)
-		}
-		// If GetItem fails (transient error, item deleted), proceed with
-		// the upload — the server-side conflict resolution (or a 404) will
-		// handle it.
+	if freshnessErr := e.remoteUploadFreshnessError(ctx, driveID, action); freshnessErr != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionUpload,
+			freshnessErr,
+			action.Path,
+			PermissionCapabilityUnknown,
+		)
 	}
 
 	localPath, err := e.syncTree.Abs(action.Path)
@@ -202,8 +193,42 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 		RemoteMtime:     remoteMtime,
 		ETag:            result.Item.ETag,
 	}
+	if action.View != nil && action.View.Local != nil {
+		outcome.LocalDevice = action.View.Local.LocalDevice
+		outcome.LocalInode = action.View.Local.LocalInode
+		outcome.LocalHasIdentity = action.View.Local.LocalHasIdentity
+		outcome.LocalIdentityObserved = true
+	}
 	decorateConflictOutcome(action, &outcome)
 	return outcome
+}
+
+func (e *Executor) remoteUploadFreshnessError(ctx context.Context, driveID driveid.ID, action *Action) error {
+	if action.ItemID == "" ||
+		action.View == nil ||
+		action.View.Baseline == nil ||
+		action.View.Baseline.ETag == "" {
+		return nil
+	}
+	currentETag, ok := e.currentUploadETag(ctx, driveID, action.ItemID)
+	if !ok || currentETag == action.View.Baseline.ETag {
+		return nil
+	}
+	return fmt.Errorf(
+		"remote eTag changed since last sync (baseline=%s current=%s): potential conflict",
+		action.View.Baseline.ETag,
+		currentETag,
+	)
+}
+
+func (e *Executor) currentUploadETag(ctx context.Context, driveID driveid.ID, itemID string) (string, bool) {
+	currentItem, err := e.items.GetItem(ctx, driveID, itemID)
+	if err != nil {
+		// If GetItem fails (transient error, item deleted), proceed with the
+		// upload; the server-side conflict resolution or a 404 will handle it.
+		return "", false
+	}
+	return currentItem.ETag, true
 }
 
 func shouldOverwriteKnownRemoteItem(action *Action) bool {

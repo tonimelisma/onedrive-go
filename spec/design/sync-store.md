@@ -59,7 +59,8 @@ DB and other child artifacts after it sees the release.
 | --- | --- |
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState` |
-| Parent shortcut-root topology state is stored in the parent sync store, merged into startup reservations, and applied before the parent publishes child runner actions to multisync. Empty complete topology batches are persisted and retire old roots; child final-drain acknowledgement first persists `removed_release_pending`; release cleanup later removes retired roots or promotes waiting replacements; duplicate automatic shortcut targets are parent-owned blocked roots. | `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_MarkShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterReleasePending`, `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler` |
+| Local filesystem identity is persisted as generic truth for files and directories in `local_state` and `baseline`, allowing local move detection without shortcut-specific sibling scans. | `TestReplaceLocalState_PersistsFilesystemIdentity`, `TestCommitMutation_PersistsLocalFilesystemIdentity`, `TestQueryReconciliationState_LocalFolderMoveUsesFilesystemIdentity` |
+| Parent shortcut-root topology state is stored in the parent sync store, rebuilt into parent-owned observation protection, and applied before the parent publishes child runner actions to multisync. Empty complete topology batches are persisted and retire old roots; child final-drain acknowledgement first persists `removed_release_pending`; release cleanup later removes retired roots or promotes waiting replacements; duplicate automatic shortcut targets are parent-owned blocked roots. | `TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_MarkShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterReleasePending`, `TestNewMountEngine_MergesPersistedShortcutRootReservations`, `TestApplyShortcutTopologyBatch_PersistsParentStateBeforeHandler` |
 | Shortcut alias mutation is a parent-engine-internal operation by binding item ID and updates parent shortcut-root state. | `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain` |
 
 ## Write Responsibilities
@@ -80,7 +81,8 @@ owning `drive_id` without changing path/hash/mtime metadata,
 and execution read the repaired durable truth.
 
 Local observation writes belong to `local_state`. Full scans replace the entire
-`local_state` snapshot in one transaction.
+`local_state` snapshot in one transaction, including filesystem identity for
+files and directories when the platform provides a device/inode pair.
 
 Observation-owned durable problems belong to `observation_issues`, not retry
 lanes or `block_scopes`. Read-denied subtree boundaries are represented as
@@ -105,6 +107,11 @@ Observation-owned reconciliation supports two scopes of authority:
 `CommitMutation()` is the successful-execution boundary. It updates `baseline`
 and, when needed, keeps `remote_state` aligned with the remote truth implied by
 the successful action.
+
+Baseline writes also publish the local filesystem identity observed for the
+successful mutation. Local move detection compares that last-synced identity to
+the next `local_state` snapshot; when identity is unavailable, file moves may
+fall back to unique content-hash candidates, but directory moves do not.
 
 That same store boundary also owns publication-only planner actions:
 

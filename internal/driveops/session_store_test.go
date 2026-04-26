@@ -72,6 +72,54 @@ func TestSessionStore_SaveLoadDelete(t *testing.T) {
 	require.Nil(t, rec)
 }
 
+// Validates: R-5.2
+func TestSessionStore_DeleteForScope_RemovesMatchingMountOrRoot(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, testLogger(t))
+	childMountID := "parent|binding:docs"
+	childRoot := filepath.Join(dir, "Parent", "Shortcuts", "Docs")
+	otherRoot := filepath.Join(dir, "Other")
+
+	require.NoError(t, store.Save(testSessionDriveID, "/child-a.bin", &SessionRecord{
+		MountID:    childMountID,
+		LocalRoot:  childRoot,
+		SessionURL: "https://example.com/a",
+		FileHash:   "a",
+		FileSize:   1,
+	}))
+	require.NoError(t, store.Save(testSessionDriveID, "/child-b.bin", &SessionRecord{
+		MountID:    "other-mount",
+		LocalRoot:  filepath.Join(childRoot, "Nested"),
+		SessionURL: "https://example.com/b",
+		FileHash:   "b",
+		FileSize:   2,
+	}))
+	require.NoError(t, store.Save(testSessionDriveID, "/explicit.bin", &SessionRecord{
+		MountID:    "shared:explicit",
+		LocalRoot:  otherRoot,
+		SessionURL: "https://example.com/c",
+		FileHash:   "c",
+		FileSize:   3,
+	}))
+
+	deleted, err := store.DeleteForScope(childMountID, childRoot)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, deleted)
+	_, found, err := store.Load(testSessionDriveID, "/child-a.bin")
+	require.NoError(t, err)
+	assert.False(t, found)
+	_, found, err = store.Load(testSessionDriveID, "/child-b.bin")
+	require.NoError(t, err)
+	assert.False(t, found)
+	rec, found, err := store.Load(testSessionDriveID, "/explicit.bin")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, otherRoot, rec.LocalRoot)
+}
+
 func TestSessionStore_VersionField(t *testing.T) {
 	t.Parallel()
 

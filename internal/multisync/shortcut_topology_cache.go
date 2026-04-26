@@ -1,7 +1,9 @@
 package multisync
 
 import (
+	"cmp"
 	"reflect"
+	"slices"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -13,8 +15,7 @@ func (o *Orchestrator) storeParentShortcutTopology(
 	if o == nil || parentID == "" {
 		return false
 	}
-	publication.NamespaceID = parentID.String()
-	publication = cloneShortcutTopologyPublication(publication)
+	publication = normalizeShortcutTopologyPublication(parentID, publication)
 
 	o.shortcutMu.Lock()
 	defer o.shortcutMu.Unlock()
@@ -24,6 +25,9 @@ func (o *Orchestrator) storeParentShortcutTopology(
 	current, found := o.shortcutChildren[parentID]
 	if found {
 		publication.Released = mergeReleasedShortcutChildren(current, publication)
+		if len(publication.Released) == 0 {
+			publication.Released = nil
+		}
 	}
 	if found && reflect.DeepEqual(current, publication) {
 		return false
@@ -41,6 +45,15 @@ func (o *Orchestrator) parentShortcutTopologyFor(parentID mountID) syncengine.Sh
 	publication := o.shortcutChildren[parentID]
 	publication.NamespaceID = parentID.String()
 	return cloneShortcutTopologyPublication(publication)
+}
+
+func (o *Orchestrator) forgetParentShortcutTopology(parentID mountID) {
+	if o == nil || parentID == "" {
+		return
+	}
+	o.shortcutMu.Lock()
+	defer o.shortcutMu.Unlock()
+	delete(o.shortcutChildren, parentID)
 }
 
 func (o *Orchestrator) parentShortcutTopologiesFor(parents []*mountSpec) map[mountID]syncengine.ShortcutChildTopologyPublication {
@@ -162,6 +175,40 @@ func cloneShortcutTopologyPublication(
 ) syncengine.ShortcutChildTopologyPublication {
 	publication.Children = cloneShortcutChildren(publication.Children)
 	publication.Released = append([]syncengine.ShortcutChildRelease(nil), publication.Released...)
+	return publication
+}
+
+func normalizeShortcutTopologyPublication(
+	parentID mountID,
+	publication syncengine.ShortcutChildTopologyPublication,
+) syncengine.ShortcutChildTopologyPublication {
+	publication.NamespaceID = parentID.String()
+	publication = cloneShortcutTopologyPublication(publication)
+	if len(publication.Children) == 0 {
+		publication.Children = nil
+	}
+	if len(publication.Released) == 0 {
+		publication.Released = nil
+	}
+	for i := range publication.Children {
+		if len(publication.Children[i].ProtectedPaths) == 0 {
+			publication.Children[i].ProtectedPaths = nil
+		} else {
+			slices.Sort(publication.Children[i].ProtectedPaths)
+		}
+	}
+	slices.SortFunc(publication.Children, func(a, b syncengine.ShortcutChildTopology) int {
+		if byBinding := cmp.Compare(a.BindingItemID, b.BindingItemID); byBinding != 0 {
+			return byBinding
+		}
+		return cmp.Compare(a.RelativeLocalPath, b.RelativeLocalPath)
+	})
+	slices.SortFunc(publication.Released, func(a, b syncengine.ShortcutChildRelease) int {
+		if byBinding := cmp.Compare(a.BindingItemID, b.BindingItemID); byBinding != 0 {
+			return byBinding
+		}
+		return cmp.Compare(a.Reason, b.Reason)
+	})
 	return publication
 }
 

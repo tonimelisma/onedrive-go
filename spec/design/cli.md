@@ -117,6 +117,14 @@ can restore shared-folder access for normal retry, or delete the local shortcut
 directory to discard the dirty local projection and let parent topology purge
 the child state automatically.
 
+Shortcut child status distinguishes the recovery class rather than collapsing
+all failures into one blocked row: target unavailable, local root unavailable,
+unsafe/blocked path, cleanup blocked, and retryable final-drain work use
+distinct `state_reason`/`state_detail` values. Retryable final drain and
+cleanup states set `auto_retry=true`; cleanup or purge failures keep the child
+visible until the next reconciliation succeeds, while resolved manual discard
+removes the child row.
+
 The target `status` surface projects the full sync model directly from:
 
 - `observation_issues`

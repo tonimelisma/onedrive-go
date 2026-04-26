@@ -22,7 +22,7 @@ Unified download/upload manager shared by both CLI file operations and the sync 
 | Behavior | Evidence |
 | --- | --- |
 | Downloads use partial-file resume plus hash verification before the final atomic rename. | `internal/driveops/download_test.go`, `internal/driveops/hash_test.go`, `internal/localpath/localpath_test.go` (`TestAtomicWrite`) |
-| Uploads keep simple-upload and upload-session mechanics inside the transfer boundary. | `internal/driveops/upload_test.go`, `internal/graph/upload_test.go`, `internal/graph/upload_session_test.go` |
+| Uploads keep simple-upload and upload-session mechanics inside the transfer boundary, and persisted sessions carry mount scope so lifecycle owners can purge child-owned sessions. | `internal/driveops/upload_test.go`, `internal/graph/upload_test.go`, `internal/graph/upload_session_test.go`, `TestSessionStore_DeleteForScope_RemovesMatchingMountOrRoot` |
 | Sync execution reuses the same transfer boundary instead of inventing a second transfer path. | `internal/sync/executor_test.go`, `internal/cli/sync_helpers_test.go` |
 
 ### Download
@@ -179,7 +179,15 @@ shape, so sync engine construction receives mount-root scope from
 
 ## SessionStore
 
-File-based upload session persistence. Each session is a JSON file in the data directory containing the upload URL, byte offset, file hash, and expiry. Managed-state access goes through `internal/fsroot` so directory creation, temp files, chmod, fsync, and rename stay under one root capability. On resume, local file hash is recomputed — if it differs from the stored hash, the session is discarded.
+File-based upload session persistence. Each session is a JSON file in the data
+directory containing the upload URL, byte offset, file hash, expiry, and the
+mount scope that created it. Sync engine construction tags transfer managers
+with `(mount_id, local_root)` so managed shortcut child destruction can purge
+only sessions owned by that child without deleting sessions for an explicit
+mount that happens to target the same remote drive. Managed-state access goes
+through `internal/fsroot` so directory creation, temp files, chmod, fsync, and
+rename stay under one root capability. On resume, local file hash is recomputed
+— if it differs from the stored hash, the session is discarded.
 
 ## Transfer Interfaces
 
