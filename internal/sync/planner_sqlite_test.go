@@ -148,6 +148,45 @@ func TestPlannerPlanCurrentState_LocalFolderMoveByIdentityPlansSingleRemoteMove(
 }
 
 // Validates: R-2.1.3, R-2.1.4
+func TestCollapseDescendantRemoteMovesUnderMovedFolders_KeepsDescendantRename(t *testing.T) {
+	t.Parallel()
+
+	actions := []Action{
+		{
+			Type:    ActionRemoteMove,
+			OldPath: "Projects",
+			Path:    "Archive",
+			View: &PathView{
+				Local: &LocalState{ItemType: ItemTypeFolder},
+			},
+		},
+		{
+			Type:    ActionRemoteMove,
+			OldPath: "Projects/kept.txt",
+			Path:    "Archive/kept.txt",
+			View: &PathView{
+				Local: &LocalState{ItemType: ItemTypeFile},
+			},
+		},
+		{
+			Type:    ActionRemoteMove,
+			OldPath: "Projects/old.txt",
+			Path:    "Archive/new.txt",
+			View: &PathView{
+				Local: &LocalState{ItemType: ItemTypeFile},
+			},
+		},
+	}
+
+	collapsed := collapseDescendantRemoteMovesUnderMovedFolders(actions)
+
+	require.Len(t, collapsed, 2)
+	assert.Equal(t, "Projects", collapsed[0].OldPath)
+	assert.Equal(t, "Projects/old.txt", collapsed[1].OldPath)
+	assert.Equal(t, "Archive/new.txt", collapsed[1].Path)
+}
+
+// Validates: R-2.1.3, R-2.1.4
 func TestPlannerPlanCurrentState_MovedAndEditedFilePlansMoveBeforeUpload(t *testing.T) {
 	t.Parallel()
 

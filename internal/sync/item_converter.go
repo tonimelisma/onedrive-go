@@ -32,13 +32,13 @@ type InflightParent struct {
 // accumulates inflight across delta pages; mount-root callers populate it once per
 // batch. Same methods, different lifetime.
 type ItemConverter struct {
-	Baseline            *Baseline
-	DriveID             driveid.ID
-	Logger              *slog.Logger
-	Stats               *ObserverCounters // nil-safe: primary observer provides this
-	Items               ItemClient        // nil-safe: sparse parent enrich is best-effort
-	ShortcutTopology    *ShortcutTopologyBatch
-	ManagedRootBindings map[string]ManagedRootReservation
+	Baseline              *Baseline
+	DriveID               driveid.ID
+	Logger                *slog.Logger
+	Stats                 *ObserverCounters // nil-safe: primary observer provides this
+	Items                 ItemClient        // nil-safe: sparse parent enrich is best-effort
+	ShortcutTopology      *ShortcutTopologyBatch
+	ProtectedRootBindings map[string]ProtectedRoot
 
 	// PathPrefix is prepended to materialized paths. Empty for the primary
 	// drive; set for mount-root observation that maps a remote subtree into a
@@ -164,10 +164,10 @@ func (c *ItemConverter) shouldEnrichSparseRemoteItem(item *graph.Item) bool {
 }
 
 func (c *ItemConverter) shouldEnrichSparseShortcut(item *graph.Item) bool {
-	if c == nil || item == nil || c.ManagedRootBindings == nil {
+	if c == nil || item == nil || c.ProtectedRootBindings == nil {
 		return false
 	}
-	reservation, known := c.ManagedRootBindings[item.ID]
+	protectedRoot, known := c.ProtectedRootBindings[item.ID]
 	if !known {
 		return false
 	}
@@ -175,7 +175,7 @@ func (c *ItemConverter) shouldEnrichSparseShortcut(item *graph.Item) bool {
 		item.ParentID == "" ||
 		item.RemoteDriveID == "" ||
 		item.RemoteItemID == "" ||
-		(!item.RemoteIsFolder && reservation.RemoteIsFolder)
+		(!item.RemoteIsFolder && protectedRoot.RemoteIsFolder)
 }
 
 func mergeSparseRemoteItem(dst *graph.Item, enriched *graph.Item) {
@@ -281,8 +281,8 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 	// recover their name from the baseline later in classifyAndConvert.
 	// Delta query updates are allowed to omit unchanged properties, so an
 	// existing baseline entry can supply the missing name safely.
-	_, knownManagedRoot := c.ManagedRootBindings[item.ID]
-	if !item.IsDeleted && item.Name == "" && existing == nil && !knownManagedRoot {
+	_, knownProtectedRoot := c.ProtectedRootBindings[item.ID]
+	if !item.IsDeleted && item.Name == "" && existing == nil && !knownProtectedRoot {
 		c.Logger.Warn("skipping remote item with empty name",
 			slog.String("item_id", item.ID),
 			slog.String("parent_id", item.ParentID),
@@ -328,10 +328,10 @@ func (c *ItemConverter) isShortcutTopologyItem(item *graph.Item) bool {
 	if item.RemoteDriveID != "" || item.RemoteItemID != "" || item.RemoteIsFolder {
 		return true
 	}
-	if c.ManagedRootBindings == nil {
+	if c.ProtectedRootBindings == nil {
 		return false
 	}
-	_, known := c.ManagedRootBindings[item.ID]
+	_, known := c.ProtectedRootBindings[item.ID]
 	return known
 }
 
@@ -401,22 +401,22 @@ func (c *ItemConverter) shortcutTopologyFact(
 	itemDriveID driveid.ID,
 	existing *BaselineEntry,
 ) shortcutTopologyItemFact {
-	reservation, known := c.ManagedRootBindings[item.ID]
+	protectedRoot, known := c.ProtectedRootBindings[item.ID]
 	name := effectiveItemName(item, existing)
 	relPath := c.materializePathWithBaselineFallback(item, inflight, itemDriveID, existing, name)
 	if relPath == "" && known {
-		relPath = reservation.Path
+		relPath = protectedRoot.Path
 	}
 	if name == "" && relPath != "" {
-		name = managedRootPrimaryName(relPath)
+		name = protectedRootPrimaryName(relPath)
 	}
 
 	return shortcutTopologyItemFact{
 		RelativeLocalPath: relPath,
 		LocalAlias:        name,
-		RemoteDriveID:     reservation.RemoteDriveID.String(),
-		RemoteItemID:      reservation.RemoteItemID,
-		RemoteIsFolder:    reservation.RemoteIsFolder,
+		RemoteDriveID:     protectedRoot.RemoteDriveID.String(),
+		RemoteItemID:      protectedRoot.RemoteItemID,
+		RemoteIsFolder:    protectedRoot.RemoteIsFolder,
 		HasEvidence: known ||
 			item.RemoteDriveID != "" ||
 			item.RemoteItemID != "" ||

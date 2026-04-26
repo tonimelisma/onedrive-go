@@ -21,14 +21,13 @@ type LocalFilterConfig struct {
 	SkipSymlinks bool
 	SkipDirs     []string
 	SkipFiles    []string
-	ManagedRoots []ManagedRootReservation
 }
 
-// ManagedRootReservation marks a parent-engine protected subtree inside this
+// ProtectedRoot marks a parent-engine protected subtree inside this
 // mount. The sync engine suppresses normal local content events for these roots
 // and, when it can identify the same directory at a sibling path, wakes the
 // parent engine shortcut-root lifecycle instead of uploading a duplicate folder.
-type ManagedRootReservation struct {
+type ProtectedRoot struct {
 	Path           string
 	MountID        string
 	BindingID      string
@@ -40,27 +39,27 @@ type ManagedRootReservation struct {
 	HasIdentity    bool
 }
 
-// ManagedRootEventType identifies the lifecycle fact the local observer found.
-type ManagedRootEventType string
+// ProtectedRootEventType identifies the lifecycle fact the local observer found.
+type ProtectedRootEventType string
 
 const (
-	ManagedRootEventPathReserved  ManagedRootEventType = "path_reserved"
-	ManagedRootEventIdentityMatch ManagedRootEventType = "identity_match"
+	ProtectedRootEventPathReserved  ProtectedRootEventType = "path_reserved"
+	ProtectedRootEventIdentityMatch ProtectedRootEventType = "identity_match"
 )
 
-// ManagedRootEvent is a narrow parent-engine-internal notification from the
+// ProtectedRootEvent is a narrow parent-engine-internal notification from the
 // local observer to the watch runtime. It never plans child content work; it
 // only wakes the parent shortcut-root lifecycle so parent-owned state can
 // publish updated child topology promptly.
-type ManagedRootEvent struct {
-	Type         ManagedRootEventType
+type ProtectedRootEvent struct {
+	Type         ProtectedRootEventType
 	Path         string
 	ReservedPath string
 	MountID      string
 	BindingID    string
 }
 
-type ManagedRootEventSink func(ManagedRootEvent)
+type ProtectedRootEventSink func(ProtectedRootEvent)
 
 // LocalObservationRules controls platform-derived local validation semantics.
 // These are not user-configured exclusions; they encode rules that depend on

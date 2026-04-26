@@ -95,7 +95,7 @@ func resolveSinglePathWithoutStat(
 	filter LocalFilterConfig,
 	rules LocalObservationRules,
 ) (SinglePathObservation, bool) {
-	if skip := shouldObserveWithFilter(name, path, observedKindUnknown, filter, rules); skip != nil {
+	if skip := shouldObserveWithFilter(name, path, observedKindUnknown, filter, nil, rules); skip != nil {
 		if skip.Reason == "" {
 			return SinglePathObservation{Resolved: true}, true
 		}
@@ -184,7 +184,7 @@ func resolveSinglePathWithInfo(
 		return SinglePathObservation{Resolved: true}, true
 	}
 
-	if skip := shouldObserveWithFilter(name, path, infoKind(info), filter, rules); skip != nil {
+	if skip := shouldObserveWithFilter(name, path, infoKind(info), filter, nil, rules); skip != nil {
 		if skip.Reason == "" {
 			return SinglePathObservation{Resolved: true}, true
 		}

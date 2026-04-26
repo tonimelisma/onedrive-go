@@ -232,7 +232,13 @@ func writeRepoConsistencyDirectories(t *testing.T, repoRoot string) {
 		filepath.Join(repoRoot, "go.mod"),
 		[]byte(fmt.Sprintf("module github.com/tonimelisma/onedrive-go\n\ngo %s\n", dependencyGraphFixtureGoVersion())),
 	)
-	writeTestFixtureFile(t, filepath.Join(repoRoot, "CLAUDE.md"), []byte("clean\n"))
+	dodText := []byte(strings.Join([]string{
+		"10. [ ] **Push, review, CI green, and PR merged to main**: verify state=MERGED, mergedAt != null, and `origin/main` contains the merge commit.",
+		"11. [ ] **Cleanup**: verify with `git branch -r --list origin/<branch-name>`.",
+		"",
+	}, "\n"))
+	writeTestFixtureFile(t, filepath.Join(repoRoot, "AGENTS.md"), dodText)
+	writeTestFixtureFile(t, filepath.Join(repoRoot, "CLAUDE.md"), dodText)
 }
 
 func writeRepoConsistencyRequirements(t *testing.T, repoRoot string) {

@@ -56,7 +56,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		)
 	}
 	var preparedParents preparedParentEngines
-	compiled, preparedParents, err = o.prepareParentTopology(
+	compiled, preparedParents, err = o.prepareParentPlanPublication(
 		ctx,
 		compiled,
 		o.cfg.StandaloneMounts,
@@ -69,7 +69,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		return controlFailureRunOnceResult(
 			o.cfg.StandaloneMounts,
 			o.cfg.InitialStartupResults,
-			fmt.Errorf("preparing parent topology: %w", err),
+			fmt.Errorf("preparing parent plan publication: %w", err),
 		)
 	}
 	defer o.closePreparedParentEngines(ctx, preparedParents)

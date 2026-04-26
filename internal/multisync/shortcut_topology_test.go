@@ -333,7 +333,7 @@ func TestParentWaitingReplacementDoesNotCreateNewChild(t *testing.T) {
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestCompileRuntimeMountsFromParentTopology_DoesNotClassifyDuplicateAutomaticChildren(t *testing.T) {
+func TestCompileRuntimeMountsFromParentPlanPublication_DoesNotClassifyDuplicateAutomaticChildren(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
@@ -359,7 +359,7 @@ func TestCompileRuntimeMountsFromParentTopology_DoesNotClassifyDuplicateAutomati
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestCompileRuntimeMountsFromParentTopology_StandaloneContentRootWins(t *testing.T) {
+func TestCompileRuntimeMountsFromParentPlanPublication_StandaloneContentRootWins(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
