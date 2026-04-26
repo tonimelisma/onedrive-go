@@ -122,6 +122,7 @@ func (rt *watchRuntime) runPendingWatchReplan(
 	return true, rt.runSteadyStateReplan(ctx, p, batch)
 }
 
+//nolint:gocyclo // The watch select owns one event fan-in point; splitting cases would obscure ownership.
 func (rt *watchRuntime) runNonDrainingWatchStep(
 	ctx context.Context,
 	p *watchPipeline,
@@ -139,6 +140,8 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 		return rt.handleWatchCompletionSignal(ctx, p, &completion, ok)
 	case change, ok := <-rt.localEvents:
 		return rt.handleWatchLocalChangeSignal(&change, ok)
+	case event, ok := <-rt.managedRootEvents:
+		return rt.handleWatchManagedRootEventSignal(ctx, &event, ok)
 	case batch, ok := <-rt.remoteBatches:
 		return rt.handleWatchRemoteBatchSignal(ctx, &batch, ok)
 	case skipped, ok := <-rt.skippedItems:
@@ -205,6 +208,36 @@ func (rt *watchRuntime) handleWatchLocalChangeSignal(change *ChangeEvent, ok boo
 
 	rt.handleWatchLocalChange(change)
 	return false, nil
+}
+
+func (rt *watchRuntime) handleWatchManagedRootEventSignal(
+	ctx context.Context,
+	event *ManagedRootEvent,
+	ok bool,
+) (bool, error) {
+	if !ok {
+		rt.managedRootEvents = nil
+		return false, nil
+	}
+	if event == nil {
+		return false, nil
+	}
+	changed, err := rt.engine.reconcileShortcutRootLocalState(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !changed || rt.engine.shortcutTopologyHandler == nil {
+		return false, nil
+	}
+	roots, err := rt.engine.baseline.ListShortcutRoots(ctx)
+	if err != nil {
+		return false, fmt.Errorf("sync: read shortcut roots after managed root event: %w", err)
+	}
+	return false, rt.engine.shortcutTopologyHandler(ctx, ShortcutTopologyBatch{
+		NamespaceID: rt.engine.shortcutTopologyNamespaceID,
+		Kind:        ShortcutTopologyObservationComplete,
+		ParentRoots: roots,
+	})
 }
 
 func (rt *watchRuntime) handleWatchRemoteBatchSignal(

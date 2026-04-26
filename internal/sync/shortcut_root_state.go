@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -55,6 +56,11 @@ type ShortcutRootReplacement struct {
 }
 
 type shortcutRootTopologyPlan struct {
+	Records []ShortcutRootRecord
+	Changed bool
+}
+
+type shortcutRootDrainAckPlan struct {
 	Records []ShortcutRootRecord
 	Changed bool
 }
@@ -222,8 +228,21 @@ func planShortcutRootTopology(
 			changed = true
 			continue
 		}
+		if _, found := activeProtectedShortcutRootForPath(byBinding, next.RelativeLocalPath, next.BindingItemID); found {
+			next.State = ShortcutRootStateBlockedPath
+			next.BlockedDetail = "shortcut alias path is protected by another shortcut root"
+			next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, next.ProtectedPaths)
+			changed = upsertShortcutRootRecord(byBinding, next) || changed
+			continue
+		}
 		if existing, ok := byBinding[fact.BindingItemID]; ok {
 			next.LocalRootIdentity = existing.LocalRootIdentity
+			if existing.RelativeLocalPath != "" && existing.RelativeLocalPath != next.RelativeLocalPath {
+				next.ProtectedPaths = protectedPathsForShortcutRoot(
+					next.RelativeLocalPath,
+					append(existing.ProtectedPaths, existing.RelativeLocalPath),
+				)
+			}
 		}
 		changed = upsertShortcutRootRecord(byBinding, next) || changed
 	}
@@ -328,6 +347,34 @@ func samePathRetiringShortcutRoot(
 	return ShortcutRootRecord{}, false
 }
 
+func activeProtectedShortcutRootForPath(
+	records map[string]ShortcutRootRecord,
+	relativeLocalPath string,
+	nextBindingID string,
+) (ShortcutRootRecord, bool) {
+	if relativeLocalPath == "" {
+		return ShortcutRootRecord{}, false
+	}
+	normalizedPath := normalizedManagedRootPath(relativeLocalPath)
+	for bindingID := range records {
+		record := normalizeShortcutRootRecord(records[bindingID])
+		if bindingID == nextBindingID || !shortcutRootStateKeepsProtectedPaths(record.State) {
+			continue
+		}
+		if record.State == ShortcutRootStateRemovedFinalDrain ||
+			record.State == ShortcutRootStateRemovedCleanupBlocked ||
+			record.State == ShortcutRootStateSamePathReplacementWaiting {
+			continue
+		}
+		for _, protectedPath := range record.ProtectedPaths {
+			if normalizedManagedRootPath(protectedPath) == normalizedPath {
+				return record, true
+			}
+		}
+	}
+	return ShortcutRootRecord{}, false
+}
+
 //nolint:gocritic // Return-by-value normalization keeps planner mutations explicit.
 func normalizeShortcutRootRecord(record ShortcutRootRecord) ShortcutRootRecord {
 	if record.LocalAlias == "" && record.RelativeLocalPath != "" {
@@ -413,6 +460,114 @@ func cloneShortcutRootReplacement(replacement *ShortcutRootReplacement) *Shortcu
 	return &next
 }
 
+func shortcutRootRecordFromReplacement(namespaceID string, replacement ShortcutRootReplacement) ShortcutRootRecord {
+	return normalizeShortcutRootRecord(ShortcutRootRecord{
+		NamespaceID:       namespaceID,
+		BindingItemID:     replacement.BindingItemID,
+		RelativeLocalPath: replacement.RelativeLocalPath,
+		LocalAlias:        replacement.LocalAlias,
+		RemoteDriveID:     replacement.RemoteDriveID,
+		RemoteItemID:      replacement.RemoteItemID,
+		RemoteIsFolder:    replacement.RemoteIsFolder,
+		State:             ShortcutRootStateActive,
+		ProtectedPaths:    []string{replacement.RelativeLocalPath},
+	})
+}
+
+func planShortcutRootDrainAck(
+	current []ShortcutRootRecord,
+	ack ShortcutChildDrainAck,
+) shortcutRootDrainAckPlan {
+	records := make([]ShortcutRootRecord, 0, len(current))
+	changed := false
+	for i := range current {
+		record := normalizeShortcutRootRecord(current[i])
+		if record.BindingItemID != ack.BindingItemID {
+			records = append(records, record)
+			continue
+		}
+		switch {
+		case record.State == ShortcutRootStateSamePathReplacementWaiting && record.Waiting != nil:
+			records = append(records, shortcutRootRecordFromReplacement(record.NamespaceID, *record.Waiting))
+			changed = true
+		case record.State == ShortcutRootStateRemovedFinalDrain ||
+			record.State == ShortcutRootStateRemovedCleanupBlocked:
+			changed = true
+		default:
+			records = append(records, record)
+		}
+	}
+	slices.SortFunc(records, func(a, b ShortcutRootRecord) int {
+		if a.RelativeLocalPath == b.RelativeLocalPath {
+			return compareString(a.BindingItemID, b.BindingItemID)
+		}
+		return compareString(a.RelativeLocalPath, b.RelativeLocalPath)
+	})
+	return shortcutRootDrainAckPlan{Records: records, Changed: changed}
+}
+
+func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootRecord) ShortcutChildTopologySnapshot {
+	snapshot := ShortcutChildTopologySnapshot{
+		NamespaceID: namespaceID,
+		Children:    make([]ShortcutChildTopology, 0, len(roots)),
+	}
+	for i := range roots {
+		root := normalizeShortcutRootRecord(roots[i])
+		if root.NamespaceID != "" && root.NamespaceID != namespaceID {
+			continue
+		}
+		child := ShortcutChildTopology{
+			BindingItemID:     root.BindingItemID,
+			RelativeLocalPath: root.RelativeLocalPath,
+			LocalAlias:        root.LocalAlias,
+			RemoteDriveID:     root.RemoteDriveID.String(),
+			RemoteItemID:      root.RemoteItemID,
+			RemoteIsFolder:    root.RemoteIsFolder,
+			State:             shortcutChildStateForRoot(root.State),
+			BlockedDetail:     root.BlockedDetail,
+			ProtectedPaths:    protectedPathsForShortcutRoot(root.RelativeLocalPath, root.ProtectedPaths),
+		}
+		if root.Waiting != nil {
+			waiting := shortcutChildTopologyFromReplacement(*root.Waiting)
+			child.Waiting = &waiting
+		}
+		snapshot.Children = append(snapshot.Children, child)
+	}
+	return snapshot
+}
+
+func shortcutChildTopologyFromReplacement(replacement ShortcutRootReplacement) ShortcutChildTopology {
+	return ShortcutChildTopology{
+		BindingItemID:     replacement.BindingItemID,
+		RelativeLocalPath: replacement.RelativeLocalPath,
+		LocalAlias:        replacement.LocalAlias,
+		RemoteDriveID:     replacement.RemoteDriveID.String(),
+		RemoteItemID:      replacement.RemoteItemID,
+		RemoteIsFolder:    replacement.RemoteIsFolder,
+		State:             ShortcutChildWaitingReplacement,
+		ProtectedPaths:    []string{replacement.RelativeLocalPath},
+	}
+}
+
+func shortcutChildStateForRoot(state ShortcutRootState) ShortcutChildTopologyState {
+	switch state {
+	case "", ShortcutRootStateActive:
+		return ShortcutChildDesired
+	case ShortcutRootStateRemovedFinalDrain:
+		return ShortcutChildRetiring
+	case ShortcutRootStateSamePathReplacementWaiting:
+		return ShortcutChildRetiring
+	case ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateBlockedPath,
+		ShortcutRootStateRenameAmbiguous,
+		ShortcutRootStateAliasMutationBlocked,
+		ShortcutRootStateRemovedCleanupBlocked:
+		return ShortcutChildBlocked
+	default:
+		return ShortcutChildBlocked
+	}
+}
+
 func compareString(a, b string) int {
 	switch {
 	case a < b:
@@ -447,9 +602,47 @@ func (m *SyncStore) ApplyShortcutTopology(ctx context.Context, batch ShortcutTop
 	return true, nil
 }
 
+func (m *SyncStore) AcknowledgeShortcutChildFinalDrain(ctx context.Context, ack ShortcutChildDrainAck) (bool, error) {
+	if m == nil || ack.BindingItemID == "" {
+		return false, nil
+	}
+	current, err := m.ListShortcutRoots(ctx)
+	if err != nil {
+		return false, err
+	}
+	plan := planShortcutRootDrainAck(current, ack)
+	if !plan.Changed {
+		return false, nil
+	}
+	if err := m.ReplaceShortcutRoots(ctx, plan.Records); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m *SyncStore) ShortcutChildTopology(ctx context.Context, namespaceID string) (ShortcutChildTopologySnapshot, error) {
+	if m == nil {
+		return ShortcutChildTopologySnapshot{NamespaceID: namespaceID}, nil
+	}
+	records, err := m.ListShortcutRoots(ctx)
+	if err != nil {
+		return ShortcutChildTopologySnapshot{}, err
+	}
+	return shortcutChildTopologyFromRoots(namespaceID, records), nil
+}
+
 // ListShortcutRoots returns parent-engine-owned shortcut root state.
 func (m *SyncStore) ListShortcutRoots(ctx context.Context) ([]ShortcutRootRecord, error) {
-	rows, err := m.db.QueryContext(ctx, `
+	return queryShortcutRootRecords(ctx, m.db, "sync: querying shortcut_roots", "sync: iterating shortcut_roots")
+}
+
+func queryShortcutRootRecords(
+	ctx context.Context,
+	db *sql.DB,
+	queryContext string,
+	iterContext string,
+) ([]ShortcutRootRecord, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT namespace_id, binding_item_id, relative_local_path, local_alias,
 		       remote_drive_id, remote_item_id, remote_is_folder, state,
 		       protected_paths_json, blocked_detail, local_root_device,
@@ -460,7 +653,7 @@ func (m *SyncStore) ListShortcutRoots(ctx context.Context) ([]ShortcutRootRecord
 		FROM shortcut_roots
 		ORDER BY relative_local_path, binding_item_id`)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying shortcut_roots: %w", err)
+		return nil, fmt.Errorf("%s: %w", queryContext, err)
 	}
 	defer rows.Close()
 
@@ -473,7 +666,7 @@ func (m *SyncStore) ListShortcutRoots(ctx context.Context) ([]ShortcutRootRecord
 		records = append(records, record)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating shortcut_roots: %w", err)
+		return nil, fmt.Errorf("%s: %w", iterContext, err)
 	}
 	return records, nil
 }

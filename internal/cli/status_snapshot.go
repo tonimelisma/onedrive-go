@@ -12,6 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 // Drive state constants for status and drive list display.
@@ -52,29 +53,22 @@ type statusLiveDrive struct {
 
 // statusMount holds status information for one runtime mount.
 type statusMount struct {
-	MountID                string                      `json:"mount_id"`
-	NamespaceID            string                      `json:"namespace_id,omitempty"`
-	ProjectionKind         string                      `json:"projection_kind"`
-	CanonicalID            string                      `json:"canonical_id,omitempty"`
-	DisplayName            string                      `json:"display_name,omitempty"`
-	SyncDir                string                      `json:"sync_dir"`
-	State                  string                      `json:"state"`
-	StateReason            string                      `json:"state_reason,omitempty"`
-	StateDetail            string                      `json:"state_detail,omitempty"`
-	ProtectedCurrentPath   string                      `json:"protected_current_path,omitempty"`
-	ProtectedReservedPaths []string                    `json:"protected_reserved_paths,omitempty"`
-	DeferredReplacements   []statusDeferredReplacement `json:"deferred_replacements,omitempty"`
-	RecoveryAction         string                      `json:"recovery_action,omitempty"`
-	AutoRetry              *bool                       `json:"auto_retry,omitempty"`
-	SyncState              *syncStateInfo              `json:"sync_state,omitempty"`
-	ChildMounts            []statusMount               `json:"child_mounts,omitempty"`
-}
-
-type statusDeferredReplacement struct {
-	BindingItemID     string `json:"binding_item_id"`
-	DisplayName       string `json:"display_name,omitempty"`
-	RelativeLocalPath string `json:"relative_local_path"`
-	Detail            string `json:"detail"`
+	MountID                string         `json:"mount_id"`
+	NamespaceID            string         `json:"namespace_id,omitempty"`
+	ProjectionKind         string         `json:"projection_kind"`
+	CanonicalID            string         `json:"canonical_id,omitempty"`
+	DisplayName            string         `json:"display_name,omitempty"`
+	SyncDir                string         `json:"sync_dir"`
+	State                  string         `json:"state"`
+	StateReason            string         `json:"state_reason,omitempty"`
+	StateDetail            string         `json:"state_detail,omitempty"`
+	ProtectedCurrentPath   string         `json:"protected_current_path,omitempty"`
+	ProtectedReservedPaths []string       `json:"protected_reserved_paths,omitempty"`
+	RecoveryAction         string         `json:"recovery_action,omitempty"`
+	AutoRetry              *bool          `json:"auto_retry,omitempty"`
+	WaitingReplacement     string         `json:"waiting_replacement,omitempty"`
+	SyncState              *syncStateInfo `json:"sync_state,omitempty"`
+	ChildMounts            []statusMount  `json:"child_mounts,omitempty"`
 }
 
 // syncStateInfo holds the full per-mount status payload rendered by `status`.
@@ -172,10 +166,10 @@ func filterStatusSnapshot(
 	}
 
 	return accountViewSnapshot{
-		Config:         &filtered,
-		Stored:         snapshot.Stored,
-		MountInventory: snapshot.MountInventory,
-		Accounts:       filterSnapshotAccounts(snapshot.Accounts, selectedAccounts),
+		Config:        &filtered,
+		Stored:        snapshot.Stored,
+		ShortcutRoots: filterShortcutRootSnapshots(snapshot.ShortcutRoots, filtered.Drives),
+		Accounts:      filterSnapshotAccounts(snapshot.Accounts, selectedAccounts),
 	}, nil
 }
 
@@ -254,6 +248,19 @@ func filterSnapshotAccounts(accounts []accountView, selectedAccounts map[string]
 	return filteredAccounts
 }
 
+func filterShortcutRootSnapshots(
+	roots map[driveid.CanonicalID][]syncengine.ShortcutRootRecord,
+	drives map[driveid.CanonicalID]config.Drive,
+) map[driveid.CanonicalID][]syncengine.ShortcutRootRecord {
+	filtered := make(map[driveid.CanonicalID][]syncengine.ShortcutRootRecord)
+	for cid := range drives {
+		if records, ok := roots[cid]; ok {
+			filtered[cid] = append([]syncengine.ShortcutRootRecord(nil), records...)
+		}
+	}
+	return filtered
+}
+
 // accountNameReader abstracts reading display name and org name from account
 // profile files. Enables testing without real files on disk.
 type accountNameReader interface {
@@ -302,17 +309,17 @@ func buildStatusAccountsWith(
 }
 
 type childMountStatusInput struct {
-	Record               config.MountRecord
-	DeferredReplacements []config.DeferredShortcutBinding
+	ParentID driveid.CanonicalID
+	Root     syncengine.ShortcutRootRecord
 }
 
 func buildStatusAccountsFromViews(
 	cfg *config.Config,
-	inventory *config.MountInventory,
+	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootRecord,
 	views []accountView,
 	syncQ syncStateQuerier,
 ) []statusAccount {
-	childrenByParent := groupChildMountsByParent(inventory)
+	childrenByParent := groupChildMountsByParent(shortcutRoots)
 	accounts := make([]statusAccount, 0, len(views))
 
 	for i := range views {
@@ -338,8 +345,7 @@ func buildStatusAccountsFromViews(
 			for childIndex := range children {
 				mount.ChildMounts = append(mount.ChildMounts, buildChildStatusMount(
 					d,
-					&children[childIndex].Record,
-					children[childIndex].DeferredReplacements,
+					&children[childIndex],
 					syncQ,
 				))
 			}
@@ -411,8 +417,7 @@ func buildSingleAccountStatusWith(
 		for childIndex := range children {
 			mount.ChildMounts = append(mount.ChildMounts, buildChildStatusMount(
 				d,
-				&children[childIndex].Record,
-				children[childIndex].DeferredReplacements,
+				&children[childIndex],
 				syncQ,
 			))
 		}
@@ -448,70 +453,34 @@ func driveState(d *config.Drive) string {
 	return driveStateReady
 }
 
-func groupChildMountsByParent(inventory *config.MountInventory) map[driveid.CanonicalID][]childMountStatusInput {
+func groupChildMountsByParent(
+	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootRecord,
+) map[driveid.CanonicalID][]childMountStatusInput {
 	grouped := make(map[driveid.CanonicalID][]childMountStatusInput)
-	if inventory == nil {
+	if shortcutRoots == nil {
 		return grouped
 	}
 
-	for mountID := range inventory.Mounts {
-		record := inventory.Mounts[mountID]
-		parentID, err := driveid.NewCanonicalID(record.NamespaceID)
-		if err != nil {
-			continue
-		}
-		grouped[parentID] = append(grouped[parentID], childMountStatusInput{Record: record})
-	}
-
-	for key := range inventory.DeferredShortcutBindings {
-		deferred := inventory.DeferredShortcutBindings[key]
-		parentID, err := driveid.NewCanonicalID(deferred.NamespaceID)
-		if err != nil {
-			continue
-		}
-		children := grouped[parentID]
-		for i := range children {
-			if !childStatusInputOwnsDeferredPath(&children[i], deferred.RelativeLocalPath) {
-				continue
-			}
-			children[i].DeferredReplacements = append(children[i].DeferredReplacements, deferred)
-			grouped[parentID] = children
-			break
+	for parentID, roots := range shortcutRoots {
+		for i := range roots {
+			grouped[parentID] = append(grouped[parentID], childMountStatusInput{
+				ParentID: parentID,
+				Root:     roots[i],
+			})
 		}
 	}
 
 	for parentID := range grouped {
 		sort.Slice(grouped[parentID], func(i, j int) bool {
-			if grouped[parentID][i].Record.RelativeLocalPath == grouped[parentID][j].Record.RelativeLocalPath {
-				return grouped[parentID][i].Record.MountID < grouped[parentID][j].Record.MountID
+			if grouped[parentID][i].Root.RelativeLocalPath == grouped[parentID][j].Root.RelativeLocalPath {
+				return grouped[parentID][i].Root.BindingItemID < grouped[parentID][j].Root.BindingItemID
 			}
 
-			return grouped[parentID][i].Record.RelativeLocalPath < grouped[parentID][j].Record.RelativeLocalPath
+			return grouped[parentID][i].Root.RelativeLocalPath < grouped[parentID][j].Root.RelativeLocalPath
 		})
-		for i := range grouped[parentID] {
-			sort.Slice(grouped[parentID][i].DeferredReplacements, func(j, k int) bool {
-				return grouped[parentID][i].DeferredReplacements[j].BindingItemID <
-					grouped[parentID][i].DeferredReplacements[k].BindingItemID
-			})
-		}
 	}
 
 	return grouped
-}
-
-func childStatusInputOwnsDeferredPath(input *childMountStatusInput, relativePath string) bool {
-	if input == nil || relativePath == "" {
-		return false
-	}
-	if input.Record.RelativeLocalPath == relativePath {
-		return true
-	}
-	for _, reservedPath := range input.Record.ReservedLocalPaths {
-		if reservedPath == relativePath {
-			return true
-		}
-	}
-	return false
 }
 
 func buildConfiguredStatusMount(
@@ -541,58 +510,51 @@ func buildConfiguredStatusMount(
 
 func buildChildStatusMount(
 	parentDrive config.Drive,
-	record *config.MountRecord,
-	deferredReplacements []config.DeferredShortcutBinding,
+	child *childMountStatusInput,
 	syncQ syncStateQuerier,
 ) statusMount {
-	displayName := record.LocalAlias
+	if child == nil {
+		return statusMount{}
+	}
+	root := child.Root
+	displayName := root.LocalAlias
 	if displayName == "" {
-		displayName = path.Base(record.RelativeLocalPath)
+		displayName = path.Base(root.RelativeLocalPath)
 	}
 
-	state := driveState(&parentDrive)
-	switch record.State {
-	case config.MountStateConflict, config.MountStateUnavailable, config.MountStatePendingRemoval:
-		state = string(record.State)
-	case config.MountStateActive, "":
-		if !parentDrive.IsPaused(time.Now()) {
-			state = driveStateReady
-		}
-	default:
-		state = string(record.State)
-	}
+	state := shortcutRootDisplayState(parentDrive, root.State)
+	mountID := config.ChildMountID(child.ParentID.String(), root.BindingItemID)
+	statusDetail, recoveryAction, autoRetry := shortcutRootStatusGuidance(&root)
 
 	mount := statusMount{
-		MountID:        record.MountID,
-		NamespaceID:    record.NamespaceID,
+		MountID:        mountID,
+		NamespaceID:    child.ParentID.String(),
 		ProjectionKind: statusProjectionChild,
 		DisplayName:    displayName,
-		SyncDir:        filepath.Join(parentDrive.SyncDir, filepath.FromSlash(record.RelativeLocalPath)),
+		SyncDir:        filepath.Join(parentDrive.SyncDir, filepath.FromSlash(root.RelativeLocalPath)),
 		State:          state,
-		StateReason:    string(record.StateReason),
-		StateDetail:    childMountStateDetail(record.State, record.StateReason),
+		StateReason:    shortcutRootStateReason(root.State),
+		StateDetail:    statusDetail,
+		RecoveryAction: recoveryAction,
 	}
-	if childMountHasProtectedLifecycle(record.State) {
+	if root.Waiting != nil {
+		mount.WaitingReplacement = root.Waiting.RelativeLocalPath
+	}
+	if root.State != "" && root.State != syncengine.ShortcutRootStateActive {
 		mount.ProtectedCurrentPath = mount.SyncDir
-		mount.ProtectedReservedPaths = childProtectedReservedPaths(parentDrive.SyncDir, record.ReservedLocalPaths)
+		mount.ProtectedReservedPaths = childProtectedReservedPaths(
+			parentDrive.SyncDir,
+			shortcutRootReservedPaths(root.RelativeLocalPath, root.ProtectedPaths),
+		)
 	}
-	mount.DeferredReplacements = statusDeferredReplacements(deferredReplacements)
-	if detail, ok := config.MountLifecycleDetailFor(record.State, record.StateReason); ok && record.StateReason != "" {
-		autoRetry := detail.AutoRetry
-		mount.RecoveryAction = detail.RecoveryAction
+	if root.State != "" && root.State != syncengine.ShortcutRootStateActive {
 		mount.AutoRetry = &autoRetry
 	}
 	if syncQ != nil {
-		mount.SyncState = syncQ.QuerySyncState(config.MountStatePath(record.MountID))
+		mount.SyncState = syncQ.QuerySyncState(config.MountStatePath(mountID))
 	}
 
 	return mount
-}
-
-func childMountHasProtectedLifecycle(state config.MountState) bool {
-	return state == config.MountStateConflict ||
-		state == config.MountStateUnavailable ||
-		state == config.MountStatePendingRemoval
 }
 
 func childProtectedReservedPaths(parentSyncDir string, relativePaths []string) []string {
@@ -609,43 +571,81 @@ func childProtectedReservedPaths(parentSyncDir string, relativePaths []string) [
 	return protected
 }
 
-func statusDeferredReplacements(deferred []config.DeferredShortcutBinding) []statusDeferredReplacement {
-	if len(deferred) == 0 {
-		return nil
+func shortcutRootDisplayState(parentDrive config.Drive, state syncengine.ShortcutRootState) string {
+	switch state {
+	case "", syncengine.ShortcutRootStateActive:
+		return driveState(&parentDrive)
+	case syncengine.ShortcutRootStateTargetUnavailable,
+		syncengine.ShortcutRootStateBlockedPath,
+		syncengine.ShortcutRootStateRenameAmbiguous,
+		syncengine.ShortcutRootStateAliasMutationBlocked:
+		return string(state)
+	case syncengine.ShortcutRootStateRemovedFinalDrain,
+		syncengine.ShortcutRootStateRemovedCleanupBlocked,
+		syncengine.ShortcutRootStateSamePathReplacementWaiting:
+		return "pending_removal"
 	}
-	replacements := make([]statusDeferredReplacement, 0, len(deferred))
-	for i := range deferred {
-		displayName := deferred[i].LocalAlias
-		if displayName == "" {
-			displayName = path.Base(deferred[i].RelativeLocalPath)
-		}
-		replacements = append(replacements, statusDeferredReplacement{
-			BindingItemID:     deferred[i].BindingItemID,
-			DisplayName:       displayName,
-			RelativeLocalPath: deferred[i].RelativeLocalPath,
-			Detail:            "new shortcut is waiting for old projection cleanup",
-		})
-	}
-	return replacements
+	return string(state)
 }
 
-func childMountStateDetail(state config.MountState, reason config.MountStateReason) string {
-	if detail, ok := config.MountLifecycleDetailFor(state, reason); ok && detail.StatusDetail != "" {
-		return detail.StatusDetail
+func shortcutRootStateReason(state syncengine.ShortcutRootState) string {
+	if state == "" || state == syncengine.ShortcutRootStateActive {
+		return ""
 	}
+	return string(state)
+}
 
-	switch state {
-	case config.MountStateActive:
-		return ""
-	case config.MountStateConflict:
-		return "The child mount is blocked by a protected-path conflict."
-	case config.MountStateUnavailable:
-		return "The child mount is unavailable and will be retried."
-	case config.MountStatePendingRemoval:
-		return "The shortcut was removed and the child projection remains protected until release is safe."
-	default:
-		return ""
+func shortcutRootStatusGuidance(root *syncengine.ShortcutRootRecord) (string, string, bool) {
+	if root == nil {
+		return "", "", false
 	}
+	if root.State == "" || root.State == syncengine.ShortcutRootStateActive {
+		return "", "", false
+	}
+	detail, action := shortcutRootGuidanceText(root.State)
+	if root.BlockedDetail != "" {
+		detail = root.BlockedDetail
+	}
+	return detail, action, true
+}
+
+func shortcutRootGuidanceText(state syncengine.ShortcutRootState) (string, string) {
+	switch state {
+	case "", syncengine.ShortcutRootStateActive:
+		return "", ""
+	case syncengine.ShortcutRootStateTargetUnavailable:
+		return "The shortcut target is unavailable.",
+			"Restore target access or remove the shortcut alias."
+	case syncengine.ShortcutRootStateBlockedPath:
+		return "The shortcut alias path is blocked.",
+			"Clear the blocking local path."
+	case syncengine.ShortcutRootStateRenameAmbiguous:
+		return "Multiple same-folder shortcut alias rename candidates were found.",
+			"Keep exactly one renamed shortcut alias or restore the original name."
+	case syncengine.ShortcutRootStateAliasMutationBlocked:
+		return "The parent engine cannot update the shortcut alias in OneDrive.",
+			"Fix account, network, or permission access, or restore the local alias."
+	case syncengine.ShortcutRootStateRemovedFinalDrain:
+		return "The shortcut alias was removed; child sync is finishing before release.", ""
+	case syncengine.ShortcutRootStateRemovedCleanupBlocked:
+		return "The parent engine cannot release the protected shortcut alias path.",
+			"Clear the local filesystem blocker."
+	case syncengine.ShortcutRootStateSamePathReplacementWaiting:
+		return "A new shortcut is waiting for the old child sync to finish.", ""
+	default:
+		return "The shortcut alias is waiting for parent-engine recovery.", ""
+	}
+}
+
+func shortcutRootReservedPaths(current string, protected []string) []string {
+	reserved := make([]string, 0, len(protected))
+	for _, protectedPath := range protected {
+		if protectedPath == "" || protectedPath == current {
+			continue
+		}
+		reserved = append(reserved, protectedPath)
+	}
+	return reserved
 }
 
 func querySyncState(

@@ -52,6 +52,7 @@ type StandaloneMountSelection struct {
 type mountSpec struct {
 	mountID                   mountID
 	parentMountID             mountID
+	bindingItemID             string
 	projectionKind            MountProjectionKind
 	selectionIndex            int
 	canonicalID               driveid.CanonicalID
@@ -79,31 +80,17 @@ type mountSpec struct {
 type compiledMountSet struct {
 	Mounts             []*mountSpec
 	Skipped            []MountStartupResult
-	RemovedMountIDs    []string
 	FinalDrainMountIDs []string
-	ProjectionMoves    []childProjectionMove
-	LocalRootActions   []childRootLifecycleAction
 }
 
 type childMountCandidate struct {
 	namespaceID        mountID
 	relativeLocalPath  string
 	reservedLocalPaths []string
-	record             config.MountRecord
+	record             childTopologyRecord
 	mount              *mountSpec
 	contentRootKey     string
 	skipErr            error
-}
-
-type childProjectionMove struct {
-	mountID               mountID
-	parentMountID         mountID
-	selectionIndex        int
-	identity              MountIdentity
-	displayName           string
-	parentSyncRoot        string
-	fromRelativeLocalPath string
-	toRelativeLocalPath   string
 }
 
 func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, error) {
@@ -121,27 +108,27 @@ func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, e
 
 func compileRuntimeMounts(
 	standaloneMounts []StandaloneMountConfig,
-	inventory *config.MountInventory,
+	topology *childMountTopology,
 ) (*compiledMountSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
-	return compileRuntimeMountsForParents(parents, inventory, nil)
+	return compileRuntimeMountsForParents(parents, topology, nil)
 }
 
 func compileRuntimeMountsForParents(
 	parents []*mountSpec,
-	inventory *config.MountInventory,
+	topology *childMountTopology,
 	logger *slog.Logger,
 ) (*compiledMountSet, error) {
 	parentByID, standaloneByRoot := indexStandaloneMounts(parents)
-	candidatesByParent, unmatchedChildren, err := buildChildMountCandidates(parentByID, normalizeMountInventory(inventory))
+	candidatesByParent, unmatchedChildren, err := buildChildMountCandidates(parentByID, normalizeChildMountTopology(topology))
 	if err != nil {
 		return nil, err
 	}
 	conflictedChildRoots := markChildProjectionConflicts(parents, candidatesByParent, standaloneByRoot)
-	finalMounts, skipped, projectionMoves := assembleRuntimeMountSet(
+	finalMounts, skipped := assembleRuntimeMountSet(
 		parents,
 		candidatesByParent,
 		conflictedChildRoots,
@@ -152,17 +139,19 @@ func compileRuntimeMountsForParents(
 	return &compiledMountSet{
 		Mounts:             finalMounts,
 		Skipped:            skipped,
-		FinalDrainMountIDs: finalDrainMountIDs(inventory),
-		ProjectionMoves:    projectionMoves,
+		FinalDrainMountIDs: finalDrainMountIDs(topology),
 	}, nil
 }
 
-func normalizeMountInventory(inventory *config.MountInventory) *config.MountInventory {
-	if inventory == nil {
-		return config.DefaultMountInventory()
+func normalizeChildMountTopology(topology *childMountTopology) *childMountTopology {
+	if topology == nil {
+		return defaultChildMountTopology()
+	}
+	if topology.mounts == nil {
+		topology.mounts = make(map[string]childTopologyRecord)
 	}
 
-	return inventory
+	return topology
 }
 
 func indexStandaloneMounts(parents []*mountSpec) (map[mountID]*mountSpec, map[string]mountID) {
@@ -178,14 +167,14 @@ func indexStandaloneMounts(parents []*mountSpec) (map[mountID]*mountSpec, map[st
 
 func buildChildMountCandidates(
 	parentByID map[mountID]*mountSpec,
-	inventory *config.MountInventory,
-) (map[mountID][]*childMountCandidate, []config.MountRecord, error) {
+	topology *childMountTopology,
+) (map[mountID][]*childMountCandidate, []childTopologyRecord, error) {
 	candidatesByParent := make(map[mountID][]*childMountCandidate)
-	unmatchedChildren := make([]config.MountRecord, 0)
-	records := sortedMountRecords(inventory)
+	unmatchedChildren := make([]childTopologyRecord, 0)
+	records := sortedChildTopologyRecords(topology)
 	for i := range records {
 		record := &records[i]
-		parent := parentByID[mountID(record.NamespaceID)]
+		parent := parentByID[mountID(record.namespaceID)]
 		if parent == nil {
 			unmatchedChildren = append(unmatchedChildren, *record)
 			continue
@@ -241,12 +230,11 @@ func assembleRuntimeMountSet(
 	parents []*mountSpec,
 	candidatesByParent map[mountID][]*childMountCandidate,
 	conflictedChildRoots map[string]struct{},
-	unmatchedChildren []config.MountRecord,
+	unmatchedChildren []childTopologyRecord,
 	logger *slog.Logger,
-) ([]*mountSpec, []MountStartupResult, []childProjectionMove) {
+) ([]*mountSpec, []MountStartupResult) {
 	finalMounts := make([]*mountSpec, 0, len(parents))
 	skipped := make([]MountStartupResult, 0, len(unmatchedChildren))
-	projectionMoves := make([]childProjectionMove, 0)
 	nextIndex := 0
 	for _, parent := range parents {
 		parent.selectionIndex = nextIndex
@@ -273,7 +261,6 @@ func assembleRuntimeMountSet(
 			parent.localSkipDirs = append(parent.localSkipDirs, candidate.relativeLocalPath)
 			parent.localSkipDirs = append(parent.localSkipDirs, candidate.reservedLocalPaths...)
 			parent.localReservations = append(parent.localReservations, managedRootReservationsForCandidate(candidate)...)
-			projectionMoves = append(projectionMoves, projectionMovesForCandidate(candidate, parent)...)
 			if candidate.skipErr != nil {
 				skipped = append(skipped, skippedChildMountResult(candidate, parent.mountID, logger))
 				continue
@@ -284,7 +271,7 @@ func assembleRuntimeMountSet(
 	}
 
 	skipped = append(skipped, unmatchedChildStartupResults(unmatchedChildren, nextIndex)...)
-	return finalMounts, skipped, projectionMoves
+	return finalMounts, skipped
 }
 
 func managedRootReservationsForCandidate(candidate *childMountCandidate) []syncengine.ManagedRootReservation {
@@ -299,58 +286,13 @@ func managedRootReservationsForCandidate(candidate *childMountCandidate) []synce
 		}
 		reservation := syncengine.ManagedRootReservation{
 			Path:      relPath,
-			MountID:   candidate.record.MountID,
-			BindingID: candidate.record.BindingItemID,
-		}
-		if candidate.record.LocalRootIdentity != nil {
-			reservation.Device = candidate.record.LocalRootIdentity.Device
-			reservation.Inode = candidate.record.LocalRootIdentity.Inode
-			reservation.HasIdentity = true
+			MountID:   candidate.record.mountID,
+			BindingID: candidate.record.bindingItemID,
 		}
 		reservations = append(reservations, reservation)
 	}
 
 	return reservations
-}
-
-func projectionMovesForCandidate(candidate *childMountCandidate, parent *mountSpec) []childProjectionMove {
-	if candidate == nil || candidate.mount == nil || parent == nil || len(candidate.reservedLocalPaths) == 0 {
-		return nil
-	}
-	if !projectionMoveRetriableForState(candidate.record.State, candidate.record.StateReason) {
-		return nil
-	}
-
-	moves := make([]childProjectionMove, 0, len(candidate.reservedLocalPaths))
-	for _, reservedPath := range candidate.reservedLocalPaths {
-		moves = append(moves, childProjectionMove{
-			mountID:               candidate.mount.mountID,
-			parentMountID:         parent.mountID,
-			selectionIndex:        candidate.mount.selectionIndex,
-			identity:              candidate.mount.identity(),
-			displayName:           candidate.mount.displayName,
-			parentSyncRoot:        parent.syncRoot,
-			fromRelativeLocalPath: reservedPath,
-			toRelativeLocalPath:   candidate.relativeLocalPath,
-		})
-	}
-
-	return moves
-}
-
-func projectionMoveRetriableForState(state config.MountState, reason config.MountStateReason) bool {
-	switch state {
-	case "", config.MountStateActive:
-		return true
-	case config.MountStateConflict:
-		return reason == config.MountStateReasonLocalProjectionConflict
-	case config.MountStateUnavailable:
-		return reason == config.MountStateReasonLocalProjectionUnavailable
-	case config.MountStatePendingRemoval:
-		return false
-	default:
-		return false
-	}
 }
 
 func skippedChildMountResult(candidate *childMountCandidate, parentID mountID, logger *slog.Logger) MountStartupResult {
@@ -366,28 +308,28 @@ func skippedChildMountResult(candidate *childMountCandidate, parentID mountID, l
 	return mountStartupResultForMount(candidate.mount, candidate.skipErr)
 }
 
-func unmatchedChildStartupResults(records []config.MountRecord, startIndex int) []MountStartupResult {
+func unmatchedChildStartupResults(records []childTopologyRecord, startIndex int) []MountStartupResult {
 	results := make([]MountStartupResult, 0, len(records))
 	nextIndex := startIndex
 	for i := range records {
 		record := &records[i]
-		displayName := record.LocalAlias
+		displayName := record.localAlias
 		if displayName == "" {
-			displayName = path.Base(record.RelativeLocalPath)
+			displayName = path.Base(record.relativeLocalPath)
 		}
 		results = append(results, MountStartupResult{
 			SelectionIndex: nextIndex,
 			Identity: MountIdentity{
-				MountID:        record.MountID,
-				ParentMountID:  record.NamespaceID,
+				MountID:        record.mountID,
+				ParentMountID:  record.namespaceID,
 				ProjectionKind: MountProjectionChild,
 			},
 			DisplayName: displayName,
 			Status:      MountStartupFatal,
 			Err: fmt.Errorf(
 				"child mount %s references missing parent mount %s",
-				record.MountID,
-				record.NamespaceID,
+				record.mountID,
+				record.namespaceID,
 			),
 		})
 		nextIndex++
@@ -431,31 +373,32 @@ func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
 	}, nil
 }
 
-func buildChildMountCandidate(parent *mountSpec, record *config.MountRecord) (*childMountCandidate, error) {
-	statePath := config.MountStatePath(record.MountID)
+func buildChildMountCandidate(parent *mountSpec, record *childTopologyRecord) (*childMountCandidate, error) {
+	statePath := config.MountStatePath(record.mountID)
 	if statePath == "" {
-		return nil, fmt.Errorf("multisync: state path is required for child mount %s", record.MountID)
+		return nil, fmt.Errorf("multisync: state path is required for child mount %s", record.mountID)
 	}
 
-	displayName := record.LocalAlias
+	displayName := record.localAlias
 	if displayName == "" {
-		displayName = path.Base(record.RelativeLocalPath)
+		displayName = path.Base(record.relativeLocalPath)
 	}
-	tokenOwner, err := driveid.NewCanonicalID(record.TokenOwnerCanonical)
+	tokenOwner, err := driveid.NewCanonicalID(record.tokenOwnerCanonical)
 	if err != nil {
-		return nil, fmt.Errorf("multisync: token owner for child mount %s: %w", record.MountID, err)
+		return nil, fmt.Errorf("multisync: token owner for child mount %s: %w", record.mountID, err)
 	}
 
 	child := &mountSpec{
-		mountID:                mountID(record.MountID),
+		mountID:                mountID(record.mountID),
 		parentMountID:          parent.mountID,
+		bindingItemID:          record.bindingItemID,
 		projectionKind:         MountProjectionChild,
 		canonicalID:            driveid.CanonicalID{},
 		displayName:            displayName,
-		syncRoot:               filepath.Join(parent.syncRoot, filepath.FromSlash(record.RelativeLocalPath)),
+		syncRoot:               filepath.Join(parent.syncRoot, filepath.FromSlash(record.relativeLocalPath)),
 		statePath:              statePath,
-		remoteDriveID:          driveid.New(record.RemoteDriveID),
-		remoteRootItemID:       record.RemoteItemID,
+		remoteDriveID:          driveid.New(record.remoteDriveID),
+		remoteRootItemID:       record.remoteItemID,
 		tokenOwnerCanonical:    tokenOwner,
 		accountEmail:           tokenOwner.Email(),
 		paused:                 parent.paused,
@@ -464,14 +407,15 @@ func buildChildMountCandidate(parent *mountSpec, record *config.MountRecord) (*c
 		transferWorkers:        parent.transferWorkers,
 		checkWorkers:           parent.checkWorkers,
 		minFreeSpace:           parent.minFreeSpace,
-		finalDrain:             record.State == config.MountStatePendingRemoval && record.StateReason == config.MountStateReasonShortcutRemoved,
+		finalDrain: record.state == childTopologyStatePendingRemoval &&
+			record.stateReason == childTopologyStateReasonShortcutRemoved,
 	}
-	skipErr := childMountStateSkipError(record)
+	skipErr := childTopologyStateSkipError(record)
 
 	return &childMountCandidate{
 		namespaceID:        parent.mountID,
-		relativeLocalPath:  record.RelativeLocalPath,
-		reservedLocalPaths: append([]string(nil), record.ReservedLocalPaths...),
+		relativeLocalPath:  record.relativeLocalPath,
+		reservedLocalPaths: append([]string(nil), record.reservedLocalPaths...),
 		record:             *record,
 		mount:              child,
 		contentRootKey:     child.contentRootKey(),
@@ -479,55 +423,55 @@ func buildChildMountCandidate(parent *mountSpec, record *config.MountRecord) (*c
 	}, nil
 }
 
-func childMountStateSkipError(record *config.MountRecord) error {
-	switch record.State {
-	case "", config.MountStateActive:
+func childTopologyStateSkipError(record *childTopologyRecord) error {
+	switch record.state {
+	case "", childTopologyStateActive:
 		return nil
-	case config.MountStatePendingRemoval:
-		if record.StateReason == config.MountStateReasonShortcutRemoved {
+	case childTopologyStatePendingRemoval:
+		if record.stateReason == childTopologyStateReasonShortcutRemoved {
 			return nil
 		}
-		return fmt.Errorf("child mount %s is pending removal", record.MountID)
-	case config.MountStateConflict:
-		if record.StateReason != "" {
-			return fmt.Errorf("child mount %s is conflicted: %s", record.MountID, record.StateReason)
+		return fmt.Errorf("child mount %s is pending removal", record.mountID)
+	case childTopologyStateConflict:
+		if record.stateReason != "" {
+			return fmt.Errorf("child mount %s is conflicted: %s", record.mountID, record.stateReason)
 		}
-		return fmt.Errorf("child mount %s is conflicted", record.MountID)
-	case config.MountStateUnavailable:
-		if record.StateReason != "" {
-			return fmt.Errorf("child mount %s is unavailable: %s", record.MountID, record.StateReason)
+		return fmt.Errorf("child mount %s is conflicted", record.mountID)
+	case childTopologyStateUnavailable:
+		if record.stateReason != "" {
+			return fmt.Errorf("child mount %s is unavailable: %s", record.mountID, record.stateReason)
 		}
-		return fmt.Errorf("child mount %s is unavailable", record.MountID)
+		return fmt.Errorf("child mount %s is unavailable", record.mountID)
 	default:
-		return fmt.Errorf("child mount %s has unsupported state %q", record.MountID, record.State)
+		return fmt.Errorf("child mount %s has unsupported state %q", record.mountID, record.state)
 	}
 }
 
-func sortedMountRecords(inventory *config.MountInventory) []config.MountRecord {
-	if inventory == nil || len(inventory.Mounts) == 0 {
+func sortedChildTopologyRecords(topology *childMountTopology) []childTopologyRecord {
+	if topology == nil || len(topology.mounts) == 0 {
 		return nil
 	}
 
-	keys := make([]string, 0, len(inventory.Mounts))
-	for key := range inventory.Mounts {
+	keys := make([]string, 0, len(topology.mounts))
+	for key := range topology.mounts {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 
-	records := make([]config.MountRecord, 0, len(keys))
+	records := make([]childTopologyRecord, 0, len(keys))
 	for _, key := range keys {
-		records = append(records, inventory.Mounts[key])
+		records = append(records, topology.mounts[key])
 	}
 	sort.SliceStable(records, func(i, j int) bool {
-		if records[i].NamespaceID == records[j].NamespaceID {
-			if records[i].RelativeLocalPath == records[j].RelativeLocalPath {
-				return records[i].MountID < records[j].MountID
+		if records[i].namespaceID == records[j].namespaceID {
+			if records[i].relativeLocalPath == records[j].relativeLocalPath {
+				return records[i].mountID < records[j].mountID
 			}
 
-			return records[i].RelativeLocalPath < records[j].RelativeLocalPath
+			return records[i].relativeLocalPath < records[j].relativeLocalPath
 		}
 
-		return records[i].NamespaceID < records[j].NamespaceID
+		return records[i].namespaceID < records[j].namespaceID
 	})
 
 	return records

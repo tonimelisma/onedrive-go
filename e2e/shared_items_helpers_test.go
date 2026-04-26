@@ -17,9 +17,22 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
+
+type shortcutChildE2ERecord struct {
+	MountID           string
+	NamespaceID       string
+	BindingItemID     string
+	RelativeLocalPath string
+	RemoteDriveID     string
+	RemoteItemID      string
+	State             syncengine.ShortcutRootState
+	StateReason       string
+}
 
 type sharedItemE2E struct {
 	Selector      string `json:"selector"`
@@ -333,7 +346,7 @@ func requireActiveShortcutChild(
 	t *testing.T,
 	env map[string]string,
 	fixture resolvedShortcutFixture,
-) config.MountRecord {
+) shortcutChildE2ERecord {
 	t.Helper()
 
 	record, ok := findActiveShortcutChild(t, env, fixture, fixture.ShortcutName)
@@ -349,7 +362,7 @@ func requireActiveShortcutChild(
 		fixture.SharedItem.RemoteDriveID,
 		fixture.SharedItem.RemoteItemID,
 	)
-	return config.MountRecord{}
+	return shortcutChildE2ERecord{}
 }
 
 func requireActiveShortcutChildAtPath(
@@ -357,7 +370,7 @@ func requireActiveShortcutChildAtPath(
 	env map[string]string,
 	fixture resolvedShortcutFixture,
 	relativeLocalPath string,
-) config.MountRecord {
+) shortcutChildE2ERecord {
 	t.Helper()
 
 	record, ok := findActiveShortcutChild(t, env, fixture, relativeLocalPath)
@@ -374,7 +387,7 @@ func requireActiveShortcutChildAtPath(
 		fixture.SharedItem.RemoteDriveID,
 		fixture.SharedItem.RemoteItemID,
 	)
-	return config.MountRecord{}
+	return shortcutChildE2ERecord{}
 }
 
 func findActiveShortcutChild(
@@ -382,14 +395,10 @@ func findActiveShortcutChild(
 	env map[string]string,
 	fixture resolvedShortcutFixture,
 	relativeLocalPath string,
-) (config.MountRecord, bool) {
+) (shortcutChildE2ERecord, bool) {
 	t.Helper()
 
-	dataDir := filepath.Join(env["XDG_DATA_HOME"], "onedrive-go")
-	inventory, err := config.LoadMountInventoryForDataDir(dataDir)
-	require.NoError(t, err)
-
-	for _, record := range inventory.Mounts {
+	for _, record := range shortcutChildRecords(t, env, fixture) {
 		if record.NamespaceID != fixture.ParentDrive ||
 			record.RelativeLocalPath != relativeLocalPath {
 			continue
@@ -400,12 +409,52 @@ func findActiveShortcutChild(
 		if fixture.SharedItem.RemoteItemID != "" && record.RemoteItemID != fixture.SharedItem.RemoteItemID {
 			continue
 		}
-		assert.Equal(t, config.MountStateActive, record.State)
+		assert.Equal(t, syncengine.ShortcutRootStateActive, record.State)
 		assert.Empty(t, record.StateReason)
 		return record, true
 	}
 
-	return config.MountRecord{}, false
+	return shortcutChildE2ERecord{}, false
+}
+
+func shortcutChildRecords(
+	t *testing.T,
+	env map[string]string,
+	fixture resolvedShortcutFixture,
+) []shortcutChildE2ERecord {
+	t.Helper()
+
+	parentID := driveid.MustCanonicalID(fixture.ParentDrive)
+	statePath := e2eDriveStatePath(env, parentID)
+	roots, err := syncengine.ReadShortcutRootStatusSnapshot(t.Context(), statePath, nil)
+	require.NoError(t, err)
+	records := make([]shortcutChildE2ERecord, 0, len(roots))
+	for i := range roots {
+		root := roots[i]
+		stateReason := ""
+		if root.State != "" && root.State != syncengine.ShortcutRootStateActive {
+			stateReason = string(root.State)
+		}
+		records = append(records, shortcutChildE2ERecord{
+			MountID:           config.ChildMountID(root.NamespaceID, root.BindingItemID),
+			NamespaceID:       root.NamespaceID,
+			BindingItemID:     root.BindingItemID,
+			RelativeLocalPath: root.RelativeLocalPath,
+			RemoteDriveID:     root.RemoteDriveID.String(),
+			RemoteItemID:      root.RemoteItemID,
+			State:             root.State,
+			StateReason:       stateReason,
+		})
+	}
+	return records
+}
+
+func e2eDriveStatePath(env map[string]string, canonicalID driveid.CanonicalID) string {
+	return filepath.Join(
+		env["XDG_DATA_HOME"],
+		"onedrive-go",
+		"state_"+strings.ReplaceAll(canonicalID.String(), ":", "_")+".db",
+	)
 }
 
 func requireSharedListContainsShortcutFixture(

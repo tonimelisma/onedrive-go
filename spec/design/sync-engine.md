@@ -400,10 +400,19 @@ multi-mount control plane consumes the parent-declared child topology only to
 start, drain, skip, or purge child runners.
 
 Shortcut placeholder rename/delete mutations are parent-engine operations by
-binding item ID. Multisync may coordinate runner shutdown before asking for the
-mutation, but the Graph mutation and parent shortcut-root retry/block state stay
-inside this package. Multisync must not rediscover parent remote state or call
-parent-drive alias mutation APIs directly.
+binding item ID. The parent engine observes the need for local alias
+rename/delete from its protected-root scan/watch path, applies the Graph
+mutation itself, persists the retry/block state in `shortcut_roots`, and then
+publishes the resulting child topology. Multisync must not rediscover parent
+remote state, call parent-drive alias mutation APIs, or decide parent alias
+lifecycle.
+
+When a child final drain completes, multisync acknowledges that completion to
+the already-running parent engine. The parent engine releases its own protected
+alias projection and removes the `shortcut_roots` row, or promotes a waiting
+same-path replacement to `active`, before multisync stops and forgets the
+retiring child runner. A later complete topology batch is not required to
+release that parent reservation.
 
 If a mounted sync root disappears, the engine treats that as mount lifecycle
 (`ErrMountRootUnavailable`) rather than as content deletion below the root.

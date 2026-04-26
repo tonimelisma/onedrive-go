@@ -48,6 +48,46 @@ type ShortcutBindingUnavailable struct {
 
 type ShortcutTopologyHandler func(context.Context, ShortcutTopologyBatch) error
 
+type ShortcutChildTopologyState string
+
+const (
+	ShortcutChildDesired            ShortcutChildTopologyState = "desired"
+	ShortcutChildBlocked            ShortcutChildTopologyState = "blocked"
+	ShortcutChildRetiring           ShortcutChildTopologyState = "retiring"
+	ShortcutChildWaitingReplacement ShortcutChildTopologyState = "waiting_replacement"
+)
+
+type ShortcutChildTopologySnapshot struct {
+	NamespaceID string
+	Children    []ShortcutChildTopology
+}
+
+type ShortcutChildTopology struct {
+	BindingItemID     string
+	RelativeLocalPath string
+	LocalAlias        string
+	RemoteDriveID     string
+	RemoteItemID      string
+	RemoteIsFolder    bool
+	State             ShortcutChildTopologyState
+	BlockedDetail     string
+	ProtectedPaths    []string
+	Waiting           *ShortcutChildTopology
+}
+
+type ShortcutChildDrainAck struct {
+	BindingItemID string
+}
+
+// ChildTopologySnapshot returns the parent-declared child topology carried by
+// this batch. ParentRoots are already persisted and classified by the parent
+// engine; callers must not reinterpret raw shortcut facts as parent policy.
+//
+//nolint:gocritic // Value receiver keeps the topology batch API simple at observation boundaries.
+func (b ShortcutTopologyBatch) ChildTopologySnapshot() ShortcutChildTopologySnapshot {
+	return shortcutChildTopologyFromRoots(b.NamespaceID, b.ParentRoots)
+}
+
 //nolint:gocritic // Value receiver keeps the topology batch API simple at observation boundaries.
 func (b ShortcutTopologyBatch) HasFacts() bool {
 	return len(b.Upserts) > 0 || len(b.Deletes) > 0 || len(b.Unavailable) > 0

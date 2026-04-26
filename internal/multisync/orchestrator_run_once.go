@@ -15,6 +15,8 @@ import (
 // mountWork pairs a MountRunner with the sync function it will execute.
 type mountWork struct {
 	runner *MountRunner
+	mount  *mountSpec
+	engine engineRunner
 	fn     func(context.Context) (*syncengine.Report, error)
 }
 
@@ -52,27 +54,12 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 			fmt.Errorf("building mount specs: %w", err),
 		)
 	}
-	compiled, err = o.finalizeRuntimeMountSetLifecycle(
+	var preparedParents preparedShortcutParentEngines
+	compiled, preparedParents, err = o.preflightShortcutTopology(
 		ctx,
 		compiled,
 		o.cfg.StandaloneMounts,
 		o.cfg.InitialStartupResults,
-		"startup",
-		true,
-	)
-	if err != nil {
-		return controlFailureRunOnceResult(
-			o.cfg.StandaloneMounts,
-			o.cfg.InitialStartupResults,
-			fmt.Errorf("finalizing mount lifecycle: %w", err),
-		)
-	}
-	compiled, err = o.preflightShortcutTopology(
-		ctx,
-		compiled,
-		o.cfg.StandaloneMounts,
-		o.cfg.InitialStartupResults,
-		"startup shortcut topology preflight",
 	)
 	if err != nil {
 		return controlFailureRunOnceResult(
@@ -81,6 +68,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 			fmt.Errorf("preflighting shortcut topology: %w", err),
 		)
 	}
+	defer o.closePreparedShortcutParentEngines(ctx, preparedParents)
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
 	o.logger.Info("orchestrator starting RunOnce",
@@ -88,7 +76,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		slog.String("mode", mode.String()),
 	)
 
-	work, startup, reports := o.prepareRunOnceWork(ctx, mode, compiled.Mounts, compiled.Skipped, opts)
+	work, startup, reports := o.prepareRunOnceWork(ctx, mode, compiled.Mounts, compiled.Skipped, opts, preparedParents)
 
 	var wg gosync.WaitGroup
 	for _, w := range work {
@@ -102,7 +90,16 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 
 	wg.Wait()
 
-	if finalized, finalizeErr := finalizeSuccessfulFinalDrainMounts(compiled, reports, o.logger); finalizeErr != nil {
+	o.closeRunOnceChildEngines(ctx, work)
+	defer o.closeRunOnceParentEngines(ctx, work)
+
+	if finalized, finalizeErr := finalizeSuccessfulFinalDrainMounts(
+		ctx,
+		compiled,
+		reports,
+		runOnceParentDrainAckers(work),
+		o.logger,
+	); finalizeErr != nil {
 		o.logger.Warn("finalizing drained shortcut child mounts",
 			slog.String("error", finalizeErr.Error()),
 		)
@@ -154,6 +151,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.RunOptions,
+	preparedParents preparedShortcutParentEngines,
 ) ([]indexedMountWork, StartupSelectionSummary, []*MountReport) {
 	work := make([]indexedMountWork, 0, len(mounts))
 	reports := make([]*MountReport, 0, len(mounts))
@@ -171,6 +169,22 @@ func (o *Orchestrator) prepareRunOnceWork(
 			continue
 		}
 
+		o.attachShortcutTopologyHandler(mount, false)
+		if prepared := preparedParents[mount.mountID]; prepared != nil {
+			delete(preparedParents, mount.mountID)
+			setShortcutTopologyHandler(prepared, mount.shortcutTopologyHandler)
+			w := o.buildEngineWorkFromExisting(mount, prepared, mode, opts)
+			startResults = append(startResults, MountStartupResult{
+				SelectionIndex: mount.selectionIndex,
+				Identity:       mount.identity(),
+				DisplayName:    mount.displayName,
+				Status:         MountStartupRunnable,
+			})
+			work = append(work, indexedMountWork{index: len(reports), work: w})
+			reports = append(reports, nil)
+			continue
+		}
+
 		session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 		if err != nil {
 			startResults = append(startResults, mountStartupResultForMount(
@@ -180,7 +194,6 @@ func (o *Orchestrator) prepareRunOnceWork(
 			continue
 		}
 
-		o.attachShortcutTopologyHandler(mount, false)
 		w, engineErr := o.buildEngineWork(ctx, mount, session, mode, opts)
 		if engineErr != nil {
 			startResults = append(startResults, mountStartupResultForMount(mount, engineErr))
@@ -237,16 +250,9 @@ func (o *Orchestrator) buildEngineWork(
 			identity:       mount.identity(),
 			displayName:    mount.displayName,
 		},
+		mount:  mount,
+		engine: engine,
 		fn: func(c context.Context) (*syncengine.Report, error) {
-			defer func() {
-				o.removeMountPerfCollector(mount.mountID.String())
-				if closeErr := engine.Close(c); closeErr != nil {
-					o.logger.Warn("engine close error",
-						slog.String("mount_id", mount.mountID.String()),
-						slog.String("error", closeErr.Error()))
-				}
-			}()
-
 			runMode := mode
 			runOpts := opts
 			if mount.finalDrain {
@@ -258,17 +264,109 @@ func (o *Orchestrator) buildEngineWork(
 	}, nil
 }
 
+func (o *Orchestrator) buildEngineWorkFromExisting(
+	mount *mountSpec,
+	engine engineRunner,
+	mode syncengine.SyncMode,
+	opts syncengine.RunOptions,
+) mountWork {
+	return mountWork{
+		runner: &MountRunner{
+			selectionIndex: mount.selectionIndex,
+			identity:       mount.identity(),
+			displayName:    mount.displayName,
+		},
+		mount:  mount,
+		engine: engine,
+		fn: func(c context.Context) (*syncengine.Report, error) {
+			runMode := mode
+			runOpts := opts
+			if mount.finalDrain {
+				runMode = syncengine.SyncBidirectional
+				runOpts = syncengine.RunOptions{FullReconcile: true}
+			}
+			return engine.RunOnce(c, runMode, runOpts)
+		},
+	}
+}
+
+func (o *Orchestrator) closeRunOnceChildEngines(ctx context.Context, work []indexedMountWork) {
+	for _, item := range work {
+		if item.work.mount == nil || item.work.mount.projectionKind != MountProjectionChild {
+			continue
+		}
+		o.closeRunOnceEngine(ctx, item.work.mount, item.work.engine)
+	}
+}
+
+func (o *Orchestrator) closeRunOnceParentEngines(ctx context.Context, work []indexedMountWork) {
+	for _, item := range work {
+		if item.work.mount == nil || item.work.mount.projectionKind != MountProjectionStandalone {
+			continue
+		}
+		o.closeRunOnceEngine(ctx, item.work.mount, item.work.engine)
+	}
+}
+
+func (o *Orchestrator) closeRunOnceEngine(ctx context.Context, mount *mountSpec, engine engineRunner) {
+	if mount == nil || engine == nil {
+		return
+	}
+	defer o.removeMountPerfCollector(mount.mountID.String())
+	if closeErr := engine.Close(ctx); closeErr != nil {
+		o.logger.Warn("engine close error",
+			slog.String("mount_id", mount.mountID.String()),
+			slog.String("error", closeErr.Error()))
+	}
+}
+
+func runOnceParentDrainAckers(work []indexedMountWork) map[mountID]shortcutChildDrainAcker {
+	ackers := make(map[mountID]shortcutChildDrainAcker)
+	for _, item := range work {
+		if item.work.mount == nil || item.work.mount.projectionKind != MountProjectionStandalone {
+			continue
+		}
+		acker, ok := item.work.engine.(shortcutChildDrainAcker)
+		if !ok {
+			continue
+		}
+		ackers[item.work.mount.mountID] = acker
+	}
+	return ackers
+}
+
 func finalizeSuccessfulFinalDrainMounts(
+	ctx context.Context,
 	compiled *compiledMountSet,
 	reports []*MountReport,
+	parentAckers map[mountID]shortcutChildDrainAcker,
 	logger *slog.Logger,
 ) (bool, error) {
 	if compiled == nil || len(compiled.FinalDrainMountIDs) == 0 {
 		return false, nil
 	}
-	successful := make([]string, 0, len(compiled.FinalDrainMountIDs))
-	draining := make(map[string]struct{}, len(compiled.FinalDrainMountIDs))
-	for _, mountID := range compiled.FinalDrainMountIDs {
+	successful := successfulFinalDrainMountIDs(compiled.FinalDrainMountIDs, reports)
+	if len(successful) == 0 {
+		return false, nil
+	}
+
+	if err := acknowledgeSuccessfulFinalDrains(ctx, successful, compiled.Mounts, parentAckers); err != nil {
+		return false, err
+	}
+	if logger != nil {
+		for _, mountID := range successful {
+			logger.Info("parent acknowledged drained shortcut child",
+				"mount_id", mountID,
+			)
+		}
+	}
+	return true, nil
+}
+
+func successfulFinalDrainMountIDs(finalDrainMountIDs []string, reports []*MountReport) []string {
+	successful := make([]string, 0, len(finalDrainMountIDs))
+	draining := make(map[string]struct{}, len(finalDrainMountIDs))
+	for _, mountID := range finalDrainMountIDs {
 		if mountID != "" {
 			draining[mountID] = struct{}{}
 		}
@@ -286,9 +384,35 @@ func finalizeSuccessfulFinalDrainMounts(
 		}
 		successful = appendUniqueStrings(successful, report.Identity.MountID)
 	}
-	if len(successful) == 0 {
-		return false, nil
-	}
+	return successful
+}
 
-	return finalizePendingMountRemovalsAfterFinalDrain(successful, compiled.Mounts, logger)
+func acknowledgeSuccessfulFinalDrains(
+	ctx context.Context,
+	successful []string,
+	mounts []*mountSpec,
+	parentAckers map[mountID]shortcutChildDrainAcker,
+) error {
+	mountByID := make(map[string]*mountSpec, len(mounts))
+	for _, mount := range mounts {
+		if mount != nil {
+			mountByID[mount.mountID.String()] = mount
+		}
+	}
+	for _, mountID := range successful {
+		mount := mountByID[mountID]
+		if mount == nil || mount.bindingItemID == "" {
+			return fmt.Errorf("final-drain child mount %s is missing parent binding identity", mountID)
+		}
+		acker := parentAckers[mount.parentMountID]
+		if acker == nil {
+			return fmt.Errorf("parent mount %s is unavailable for final-drain acknowledgement", mount.parentMountID)
+		}
+		if _, err := acker.AcknowledgeChildFinalDrain(ctx, syncengine.ShortcutChildDrainAck{
+			BindingItemID: mount.bindingItemID,
+		}); err != nil {
+			return fmt.Errorf("acknowledging final drain for child mount %s: %w", mountID, err)
+		}
+	}
+	return nil
 }

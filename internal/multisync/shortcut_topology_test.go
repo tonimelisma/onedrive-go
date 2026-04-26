@@ -1,8 +1,6 @@
 package multisync
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,481 +14,242 @@ import (
 func testParentMountSpec() *mountSpec {
 	return &mountSpec{
 		mountID:             mountID("personal:owner@example.com"),
+		projectionKind:      MountProjectionStandalone,
 		canonicalID:         driveid.MustCanonicalID("personal:owner@example.com"),
 		tokenOwnerCanonical: driveid.MustCanonicalID("personal:owner@example.com"),
 		remoteDriveID:       driveid.New("parent-drive"),
+		syncRoot:            "/tmp/parent",
 	}
 }
 
-func testChildRecord(namespaceID mountID, bindingID, relativePath string) config.MountRecord {
-	return config.MountRecord{
-		MountID:             config.ChildMountID(namespaceID.String(), bindingID),
-		NamespaceID:         namespaceID.String(),
-		BindingItemID:       bindingID,
-		LocalAlias:          "Shortcut",
-		RelativeLocalPath:   relativePath,
-		TokenOwnerCanonical: "personal:owner@example.com",
-		RemoteDriveID:       "remote-drive",
-		RemoteItemID:        "remote-root",
-		State:               config.MountStateActive,
+func testParentRoot(parent *mountSpec, bindingID, relativePath string) syncengine.ShortcutRootRecord {
+	return syncengine.ShortcutRootRecord{
+		NamespaceID:       parent.mountID.String(),
+		BindingItemID:     bindingID,
+		RelativeLocalPath: relativePath,
+		LocalAlias:        "Shortcut",
+		RemoteDriveID:     driveid.New("remote-drive"),
+		RemoteItemID:      "remote-root",
+		RemoteIsFolder:    true,
+		State:             syncengine.ShortcutRootStateActive,
+		ProtectedPaths:    []string{relativePath},
 	}
+}
+
+func testChildRecord(namespaceID mountID, bindingID, relativePath string) childTopologyRecord {
+	return childTopologyRecord{
+		mountID:             config.ChildMountID(namespaceID.String(), bindingID),
+		namespaceID:         namespaceID.String(),
+		bindingItemID:       bindingID,
+		localAlias:          "Shortcut",
+		relativeLocalPath:   relativePath,
+		tokenOwnerCanonical: "personal:owner@example.com",
+		remoteDriveID:       "remote-drive",
+		remoteItemID:        "remote-root",
+		state:               childTopologyStateActive,
+	}
+}
+
+func topologyForTest(root *syncengine.ShortcutRootRecord) syncengine.ShortcutChildTopology {
+	if root == nil {
+		return syncengine.ShortcutChildTopology{}
+	}
+	return syncengine.ShortcutChildTopology{
+		BindingItemID:     root.BindingItemID,
+		RelativeLocalPath: root.RelativeLocalPath,
+		LocalAlias:        root.LocalAlias,
+		RemoteDriveID:     root.RemoteDriveID.String(),
+		RemoteItemID:      root.RemoteItemID,
+		RemoteIsFolder:    root.RemoteIsFolder,
+		State:             syncengine.ShortcutChildDesired,
+		ProtectedPaths:    append([]string(nil), root.ProtectedPaths...),
+	}
+}
+
+func seedShortcutChildTopology(orch *Orchestrator, parent *StandaloneMountConfig, record *childTopologyRecord) {
+	if parent == nil || record == nil {
+		return
+	}
+	orch.storeShortcutChildTopology(mountID(parent.CanonicalID.String()), syncengine.ShortcutChildTopologySnapshot{
+		NamespaceID: parent.CanonicalID.String(),
+		Children: []syncengine.ShortcutChildTopology{{
+			BindingItemID:     record.bindingItemID,
+			RelativeLocalPath: record.relativeLocalPath,
+			LocalAlias:        record.localAlias,
+			RemoteDriveID:     record.remoteDriveID,
+			RemoteItemID:      record.remoteItemID,
+			RemoteIsFolder:    true,
+			State:             shortcutChildStateForTest(record),
+			ProtectedPaths:    append([]string{record.relativeLocalPath}, record.reservedLocalPaths...),
+		}},
+	})
+}
+
+func shortcutChildStateForTest(record *childTopologyRecord) syncengine.ShortcutChildTopologyState {
+	if record == nil {
+		return syncengine.ShortcutChildBlocked
+	}
+	if record.state == childTopologyStatePendingRemoval &&
+		record.stateReason == childTopologyStateReasonShortcutRemoved {
+		return syncengine.ShortcutChildRetiring
+	}
+	if record.state == childTopologyStateUnavailable ||
+		record.state == childTopologyStateConflict {
+		return syncengine.ShortcutChildBlocked
+	}
+	return syncengine.ShortcutChildDesired
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestApplyShortcutTopologyBatch_CompleteEnumerationUpdatesAndRemovesBindings(t *testing.T) {
+func TestApplyShortcutTopologyBatch_StoresParentDeclaredChildrenInMemory(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
-	existing := testChildRecord(parent.mountID, "binding-old", "Shortcut")
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[existing.MountID] = existing
-	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
+	orch := NewOrchestrator(&OrchestratorConfig{})
 
-	result, err := applyShortcutTopologyBatchToInventory(
-		inventory,
-		parent,
-		existingByBinding,
-		syncengine.ShortcutTopologyBatch{
-			NamespaceID: parent.mountID.String(),
-			Kind:        syncengine.ShortcutTopologyObservationComplete,
-			Upserts: []syncengine.ShortcutBindingUpsert{{
-				BindingItemID:     "binding-new",
-				LocalAlias:        "Team Docs",
-				RelativeLocalPath: "Shared/Team Docs",
-				RemoteDriveID:     "remote-next",
-				RemoteItemID:      "remote-item-next",
-				RemoteIsFolder:    true,
-				Complete:          true,
-			}},
-		},
-	)
-	require.NoError(t, err)
-	assert.True(t, result.changed)
-	assert.ElementsMatch(t, []string{existing.MountID, config.ChildMountID(parent.mountID.String(), "binding-new")}, result.dirtyMountIDs)
-	assert.Equal(t, config.MountStatePendingRemoval, inventory.Mounts[existing.MountID].State)
+	changed := orch.applyShortcutTopologyBatch(parent, syncengine.ShortcutTopologyBatch{
+		NamespaceID: parent.mountID.String(),
+		Kind:        syncengine.ShortcutTopologyObservationComplete,
+		ParentRoots: []syncengine.ShortcutRootRecord{{
+			NamespaceID:       parent.mountID.String(),
+			BindingItemID:     "binding-1",
+			RelativeLocalPath: "Shared/Docs",
+			LocalAlias:        "Docs",
+			RemoteDriveID:     driveid.New("remote-drive-0001"),
+			RemoteItemID:      "remote-root",
+			RemoteIsFolder:    true,
+			State:             syncengine.ShortcutRootStateActive,
+			ProtectedPaths:    []string{"Shared/Docs"},
+		}},
+	})
 
-	newMountID := config.ChildMountID(parent.mountID.String(), "binding-new")
-	record := inventory.Mounts[newMountID]
-	assert.Equal(t, "Team Docs", record.LocalAlias)
-	assert.Equal(t, "Shared/Team Docs", record.RelativeLocalPath)
-	assert.Equal(t, "remote-next", record.RemoteDriveID)
-	assert.Equal(t, "remote-item-next", record.RemoteItemID)
-}
-
-// Validates: R-2.4.8, R-2.8.1, R-4.1.4
-func TestApplyShortcutTopologyBatch_EmptyCompleteEnumerationRemovesOldBindings(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-
-	parent := testParentMountSpec()
-	existing := testChildRecord(parent.mountID, "binding-old", "Shortcut")
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[existing.MountID] = existing
-	require.NoError(t, config.SaveMountInventory(inventory))
-
-	changed, err := (&Orchestrator{}).applyShortcutTopologyBatch(
-		t.Context(),
-		parent,
-		syncengine.ShortcutTopologyBatch{
-			NamespaceID: parent.mountID.String(),
-			Kind:        syncengine.ShortcutTopologyObservationComplete,
-		},
-	)
-	require.NoError(t, err)
 	assert.True(t, changed)
-
-	loaded, err := config.LoadMountInventory()
-	require.NoError(t, err)
-	record := loaded.Mounts[existing.MountID]
-	assert.Equal(t, config.MountStatePendingRemoval, record.State)
-	assert.Equal(t, config.MountStateReasonShortcutRemoved, record.StateReason)
-}
-
-// Validates: R-2.8.1, R-4.1.4
-func TestApplyShortcutTopologyBatch_RemoteDeleteMarksPendingRemoval(t *testing.T) {
-	t.Parallel()
-
-	parent := testParentMountSpec()
-	existing := testChildRecord(parent.mountID, "binding-1", "Shortcut")
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[existing.MountID] = existing
-	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
-
-	result, err := applyShortcutTopologyBatchToInventory(
-		inventory,
-		parent,
-		existingByBinding,
-		syncengine.ShortcutTopologyBatch{
-			NamespaceID: parent.mountID.String(),
-			Kind:        syncengine.ShortcutTopologyObservationIncremental,
-			Deletes: []syncengine.ShortcutBindingDelete{{
-				BindingItemID: "binding-1",
-			}},
-		},
-	)
-	require.NoError(t, err)
-	assert.True(t, result.changed)
-	assert.Equal(t, []string{existing.MountID}, result.dirtyMountIDs)
-
-	record := inventory.Mounts[existing.MountID]
-	assert.Equal(t, config.MountStatePendingRemoval, record.State)
-	assert.Equal(t, config.MountStateReasonShortcutRemoved, record.StateReason)
-}
-
-// Validates: R-2.8.1, R-4.1.4
-func TestApplyShortcutTopologyBatch_SamePathReplacementDefersNewBinding(t *testing.T) {
-	t.Parallel()
-
-	parent := testParentMountSpec()
-	existing := testChildRecord(parent.mountID, "binding-old", "Shortcut")
-	existing.State = config.MountStatePendingRemoval
-	existing.StateReason = config.MountStateReasonShortcutRemoved
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[existing.MountID] = existing
-	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
-
-	result, err := applyShortcutTopologyBatchToInventory(
-		inventory,
-		parent,
-		existingByBinding,
-		syncengine.ShortcutTopologyBatch{
-			NamespaceID: parent.mountID.String(),
-			Kind:        syncengine.ShortcutTopologyObservationIncremental,
-			Upserts: []syncengine.ShortcutBindingUpsert{{
-				BindingItemID:     "binding-new",
-				LocalAlias:        "Shortcut",
-				RelativeLocalPath: "Shortcut",
-				RemoteDriveID:     "remote-next",
-				RemoteItemID:      "remote-item-next",
-				RemoteIsFolder:    true,
-				Complete:          true,
-			}},
-		},
-	)
-	require.NoError(t, err)
-	assert.True(t, result.changed)
-	assert.Equal(t, []string{existing.MountID}, result.dirtyMountIDs)
-	assert.NotContains(t, inventory.Mounts, config.ChildMountID(parent.mountID.String(), "binding-new"))
-
-	key := deferredShortcutBindingKey(parent.mountID.String(), "Shortcut", "binding-new")
-	deferred := inventory.DeferredShortcutBindings[key]
-	assert.Equal(t, "remote-next", deferred.RemoteDriveID)
-	assert.Equal(t, "remote-item-next", deferred.RemoteItemID)
-}
-
-// Validates: R-2.8.1, R-4.1.4
-func TestApplyShortcutTopologyBatch_SamePathReplacementDoesNotDowngradeActiveOwner(t *testing.T) {
-	t.Parallel()
-
-	parent := testParentMountSpec()
-	existing := testChildRecord(parent.mountID, "binding-old", "Shortcut Renamed")
-	existing.State = config.MountStateActive
-	existing.ReservedLocalPaths = []string{"Shortcut"}
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[existing.MountID] = existing
-	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
-
-	result, err := applyShortcutTopologyBatchToInventory(
-		inventory,
-		parent,
-		existingByBinding,
-		syncengine.ShortcutTopologyBatch{
-			NamespaceID: parent.mountID.String(),
-			Kind:        syncengine.ShortcutTopologyObservationIncremental,
-			Upserts: []syncengine.ShortcutBindingUpsert{{
-				BindingItemID:     "binding-new",
-				LocalAlias:        "Shortcut",
-				RelativeLocalPath: "Shortcut",
-				RemoteDriveID:     "remote-next",
-				RemoteItemID:      "remote-item-next",
-				RemoteIsFolder:    true,
-				Complete:          true,
-			}},
-		},
-	)
-	require.NoError(t, err)
-	assert.True(t, result.changed)
-	assert.Equal(t, []string{existing.MountID}, result.dirtyMountIDs)
-	assert.NotContains(t, inventory.Mounts, config.ChildMountID(parent.mountID.String(), "binding-new"))
-
-	owner := inventory.Mounts[existing.MountID]
-	assert.Equal(t, config.MountStateActive, owner.State)
-	assert.Empty(t, owner.StateReason)
-	assert.Equal(t, []string{"Shortcut"}, owner.ReservedLocalPaths)
-
-	key := deferredShortcutBindingKey(parent.mountID.String(), "Shortcut", "binding-new")
-	deferred := inventory.DeferredShortcutBindings[key]
-	assert.Equal(t, "remote-next", deferred.RemoteDriveID)
-	assert.Equal(t, "remote-item-next", deferred.RemoteItemID)
+	topology := orch.transientShortcutTopology([]*mountSpec{parent})
+	record := topology.mounts[config.ChildMountID(parent.mountID.String(), "binding-1")]
+	assert.Equal(t, childTopologyStateActive, record.state)
+	assert.Equal(t, "Shared/Docs", record.relativeLocalPath)
+	assert.Equal(t, "remote-drive-0001", record.remoteDriveID)
+	assert.Equal(t, "remote-root", record.remoteItemID)
 }
 
 // Validates: R-2.4.8, R-2.8.1, R-4.1.4
-func TestApplyShortcutTopologyBatch_ConsumesParentDeclaredShortcutRoots(t *testing.T) {
+func TestApplyShortcutTopologyBatch_EmptyCompleteClearsCachedChildren(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
-	inventory := config.DefaultMountInventory()
-	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
+	orch := NewOrchestrator(&OrchestratorConfig{})
+	orch.storeShortcutChildTopology(parent.mountID, syncengine.ShortcutChildTopologySnapshot{
+		NamespaceID: parent.mountID.String(),
+		Children: []syncengine.ShortcutChildTopology{{
+			BindingItemID:     "binding-old",
+			RelativeLocalPath: "Shortcut",
+			LocalAlias:        "Shortcut",
+			RemoteDriveID:     "remote-drive",
+			RemoteItemID:      "remote-root",
+			State:             syncengine.ShortcutChildDesired,
+		}},
+	})
 
-	result, err := applyShortcutTopologyBatchToInventory(
-		inventory,
-		parent,
-		existingByBinding,
-		parentDeclaredShortcutTopologyBatch(syncengine.ShortcutTopologyBatch{
-			NamespaceID: parent.mountID.String(),
-			Kind:        syncengine.ShortcutTopologyObservationIncremental,
-			ParentRoots: []syncengine.ShortcutRootRecord{{
-				NamespaceID:       parent.mountID.String(),
-				BindingItemID:     "binding-1",
-				RelativeLocalPath: "Shared/Docs",
-				LocalAlias:        "Docs",
-				RemoteDriveID:     driveid.New("remote-drive-0001"),
-				RemoteItemID:      "remote-root",
-				RemoteIsFolder:    true,
-				State:             syncengine.ShortcutRootStateActive,
-				ProtectedPaths:    []string{"Shared/Docs"},
-			}},
-		}),
-	)
-	require.NoError(t, err)
-	assert.True(t, result.changed)
+	changed := orch.applyShortcutTopologyBatch(parent, syncengine.ShortcutTopologyBatch{
+		NamespaceID: parent.mountID.String(),
+		Kind:        syncengine.ShortcutTopologyObservationComplete,
+	})
 
-	record := inventory.Mounts[config.ChildMountID(parent.mountID.String(), "binding-1")]
-	assert.Equal(t, config.MountStateActive, record.State)
-	assert.Equal(t, "Shared/Docs", record.RelativeLocalPath)
-	assert.Equal(t, "remote-drive-0001", record.RemoteDriveID)
-	assert.Equal(t, "remote-root", record.RemoteItemID)
+	assert.True(t, changed)
+	topology := orch.transientShortcutTopology([]*mountSpec{parent})
+	assert.Empty(t, topology.mounts)
 }
 
 // Validates: R-2.4.8, R-2.8.1, R-4.1.4
-func TestApplyShortcutTopologyBatch_ParentWaitingReplacementDefersNewBinding(t *testing.T) {
+func TestParentWaitingReplacementDoesNotCreateNewChild(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
-	existing := testChildRecord(parent.mountID, "binding-old", "Shortcut")
-	existing.State = config.MountStatePendingRemoval
-	existing.StateReason = config.MountStateReasonShortcutRemoved
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[existing.MountID] = existing
-	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
+	orch := NewOrchestrator(&OrchestratorConfig{})
+	root := testParentRoot(parent, "binding-old", "Shortcut")
+	root.State = syncengine.ShortcutRootStateSamePathReplacementWaiting
+	root.Waiting = &syncengine.ShortcutRootReplacement{
+		BindingItemID:     "binding-new",
+		RelativeLocalPath: "Shortcut",
+		LocalAlias:        "Shortcut",
+		RemoteDriveID:     driveid.New("remote-next-0001"),
+		RemoteItemID:      "remote-item-next",
+		RemoteIsFolder:    true,
+	}
 
-	result, err := applyShortcutTopologyBatchToInventory(
-		inventory,
-		parent,
-		existingByBinding,
-		parentDeclaredShortcutTopologyBatch(syncengine.ShortcutTopologyBatch{
-			NamespaceID: parent.mountID.String(),
-			Kind:        syncengine.ShortcutTopologyObservationIncremental,
-			ParentRoots: []syncengine.ShortcutRootRecord{{
-				NamespaceID:       parent.mountID.String(),
-				BindingItemID:     "binding-old",
-				RelativeLocalPath: "Shortcut",
-				LocalAlias:        "Shortcut",
-				State:             syncengine.ShortcutRootStateSamePathReplacementWaiting,
-				Waiting: &syncengine.ShortcutRootReplacement{
-					BindingItemID:     "binding-new",
-					RelativeLocalPath: "Shortcut",
-					LocalAlias:        "Shortcut",
-					RemoteDriveID:     driveid.New("remote-next-0001"),
-					RemoteItemID:      "remote-item-next",
-					RemoteIsFolder:    true,
-				},
-			}},
-		}),
+	changed := orch.applyShortcutTopologyBatch(parent, syncengine.ShortcutTopologyBatch{
+		NamespaceID: parent.mountID.String(),
+		Kind:        syncengine.ShortcutTopologyObservationComplete,
+		ParentRoots: []syncengine.ShortcutRootRecord{root},
+	})
+
+	assert.True(t, changed)
+	topology := orch.transientShortcutTopology([]*mountSpec{parent})
+	assert.Contains(t, topology.mounts, config.ChildMountID(parent.mountID.String(), "binding-old"))
+	assert.NotContains(t, topology.mounts, config.ChildMountID(parent.mountID.String(), "binding-new"))
+	assert.Equal(
+		t,
+		childTopologyStatePendingRemoval,
+		topology.mounts[config.ChildMountID(parent.mountID.String(), "binding-old")].state,
 	)
-	require.NoError(t, err)
-	assert.True(t, result.changed)
-	assert.NotContains(t, inventory.Mounts, config.ChildMountID(parent.mountID.String(), "binding-new"))
-
-	key := deferredShortcutBindingKey(parent.mountID.String(), "Shortcut", "binding-new")
-	deferred := inventory.DeferredShortcutBindings[key]
-	assert.Equal(t, "remote-next-0001", deferred.RemoteDriveID)
-	assert.Equal(t, "remote-item-next", deferred.RemoteItemID)
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestApplyShortcutTopologyBatch_UnavailableBindingPersistsUnavailableRecord(t *testing.T) {
+func TestCompileRuntimeMountsFromParentTopology_DuplicateChildrenAllSkip(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
-	inventory := config.DefaultMountInventory()
-	existingByBinding := existingBindingsForNamespace(inventory, parent.mountID)
-
-	result, err := applyShortcutTopologyBatchToInventory(
-		inventory,
-		parent,
-		existingByBinding,
-		syncengine.ShortcutTopologyBatch{
-			NamespaceID: parent.mountID.String(),
-			Kind:        syncengine.ShortcutTopologyObservationIncremental,
-			Unavailable: []syncengine.ShortcutBindingUnavailable{{
-				BindingItemID:     "binding-1",
-				LocalAlias:        "Shortcut",
-				RelativeLocalPath: "Shortcuts/Shortcut",
-				RemoteDriveID:     "remote-drive",
-				RemoteIsFolder:    true,
-				Reason:            "shortcut_binding_unavailable",
-			}},
+	orch := NewOrchestrator(&OrchestratorConfig{})
+	first := testParentRoot(parent, "binding-a", "Shortcuts/A")
+	second := testParentRoot(parent, "binding-b", "Shortcuts/B")
+	orch.storeShortcutChildTopology(parent.mountID, syncengine.ShortcutChildTopologySnapshot{
+		NamespaceID: parent.mountID.String(),
+		Children: []syncengine.ShortcutChildTopology{
+			topologyForTest(&first),
+			topologyForTest(&second),
 		},
+	})
+
+	compiled, err := compileRuntimeMountsForParents(
+		[]*mountSpec{parent},
+		orch.transientShortcutTopology([]*mountSpec{parent}),
+		nil,
 	)
 	require.NoError(t, err)
-	assert.True(t, result.changed)
-
-	record := inventory.Mounts[config.ChildMountID(parent.mountID.String(), "binding-1")]
-	assert.Equal(t, config.MountStateUnavailable, record.State)
-	assert.Equal(t, config.MountStateReasonShortcutBindingUnavailable, record.StateReason)
-	assert.Equal(t, "Shortcuts/Shortcut", record.RelativeLocalPath)
-	assert.Equal(t, "remote-drive", record.RemoteDriveID)
-	assert.Empty(t, record.RemoteItemID)
+	assert.Len(t, compiled.Mounts, 1)
+	require.Len(t, compiled.Skipped, 2)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), "content root")
+	assert.Contains(t, compiled.Skipped[1].Err.Error(), "content root")
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestApplyDurableProjectionConflicts_DuplicateChildrenAllConflict(t *testing.T) {
-	t.Parallel()
-
-	parent := testParentMountSpec()
-	first := testChildRecord(parent.mountID, "binding-a", "Shortcuts/A")
-	second := testChildRecord(parent.mountID, "binding-b", "Shortcuts/B")
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[first.MountID] = first
-	inventory.Mounts[second.MountID] = second
-
-	changed := applyDurableProjectionConflicts(inventory, []*mountSpec{parent})
-
-	assert.True(t, changed.changed)
-	assert.Equal(t, config.MountStateConflict, inventory.Mounts[first.MountID].State)
-	assert.Equal(t, config.MountStateReasonDuplicateContentRoot, inventory.Mounts[first.MountID].StateReason)
-	assert.Equal(t, config.MountStateConflict, inventory.Mounts[second.MountID].State)
-	assert.Equal(t, config.MountStateReasonDuplicateContentRoot, inventory.Mounts[second.MountID].StateReason)
-}
-
-// Validates: R-2.8.1, R-4.1.4
-func TestApplyDurableProjectionConflicts_DuplicateChildrenAreNamespaceLocal(t *testing.T) {
-	t.Parallel()
-
-	parent := testParentMountSpec()
-	otherParent := *parent
-	otherParent.mountID = mountID("personal:owner@example.com:secondary")
-	first := testChildRecord(parent.mountID, "binding-a", "Shortcuts/A")
-	second := testChildRecord(otherParent.mountID, "binding-b", "Other/A")
-	second.State = config.MountStateConflict
-	second.StateReason = config.MountStateReasonDuplicateContentRoot
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[first.MountID] = first
-	inventory.Mounts[second.MountID] = second
-
-	changed := applyDurableProjectionConflicts(inventory, []*mountSpec{parent, &otherParent})
-
-	assert.True(t, changed.changed)
-	assert.Equal(t, config.MountStateActive, inventory.Mounts[first.MountID].State)
-	assert.Empty(t, inventory.Mounts[first.MountID].StateReason)
-	assert.Equal(t, config.MountStateActive, inventory.Mounts[second.MountID].State)
-	assert.Empty(t, inventory.Mounts[second.MountID].StateReason)
-}
-
-// Validates: R-2.8.1, R-4.1.4
-func TestApplyDurableProjectionConflicts_StandaloneContentRootWins(t *testing.T) {
+func TestCompileRuntimeMountsFromParentTopology_StandaloneContentRootWins(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
 	standalone := &mountSpec{
 		mountID:             mountID("shared:owner@example.com:remote-drive:remote-root"),
+		projectionKind:      MountProjectionStandalone,
 		tokenOwnerCanonical: parent.tokenOwnerCanonical,
 		remoteDriveID:       driveid.New("remote-drive"),
 		remoteRootItemID:    "remote-root",
 	}
-	child := testChildRecord(parent.mountID, "binding-a", "Shortcuts/A")
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[child.MountID] = child
+	orch := NewOrchestrator(&OrchestratorConfig{})
+	root := testParentRoot(parent, "binding-a", "Shortcuts/A")
+	orch.storeShortcutChildTopology(parent.mountID, syncengine.ShortcutChildTopologySnapshot{
+		NamespaceID: parent.mountID.String(),
+		Children: []syncengine.ShortcutChildTopology{
+			topologyForTest(&root),
+		},
+	})
 
-	changed := applyDurableProjectionConflicts(inventory, []*mountSpec{parent, standalone})
-
-	assert.True(t, changed.changed)
-	assert.Equal(t, config.MountStateConflict, inventory.Mounts[child.MountID].State)
-	assert.Equal(t, config.MountStateReasonExplicitStandaloneContentRoot, inventory.Mounts[child.MountID].StateReason)
-}
-
-// Validates: R-2.8.1, R-4.1.4
-func TestFinalizePendingMountRemovals_RecompileReleasesParentSkipDir(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-
-	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
-	record := testMountRecordForParent(&parent)
-	record.State = config.MountStatePendingRemoval
-	record.StateReason = config.MountStateReasonShortcutRemoved
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[record.MountID] = record
-	require.NoError(t, config.SaveMountInventory(inventory))
-
-	compiled, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, inventory)
+	compiled, err := compileRuntimeMountsForParents(
+		[]*mountSpec{parent, standalone},
+		orch.transientShortcutTopology([]*mountSpec{parent, standalone}),
+		nil,
+	)
 	require.NoError(t, err)
-	require.NotEmpty(t, compiled.Mounts)
-	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
-
-	finalized, err := finalizePendingMountRemovals([]string{record.MountID}, compiled.Mounts, nil)
-	require.NoError(t, err)
-	assert.True(t, finalized)
-
-	loaded, err := config.LoadMountInventory()
-	require.NoError(t, err)
-	refreshed, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, loaded)
-	require.NoError(t, err)
-	require.NotEmpty(t, refreshed.Mounts)
-	assert.Empty(t, refreshed.Mounts[0].localSkipDirs)
-}
-
-// Validates: R-2.8.1, R-4.1.4
-func TestFinalizePendingMountRemovals_DirtyProjectionStaysReserved(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-
-	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
-	record := testMountRecordForParent(&parent)
-	record.State = config.MountStatePendingRemoval
-	record.StateReason = config.MountStateReasonShortcutRemoved
-	projectionRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Docs")
-	require.NoError(t, os.MkdirAll(projectionRoot, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(projectionRoot, "local.txt"), []byte("dirty"), 0o600))
-
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[record.MountID] = record
-	require.NoError(t, config.SaveMountInventory(inventory))
-
-	compiled, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, inventory)
-	require.NoError(t, err)
-	finalized, err := finalizePendingMountRemovals([]string{record.MountID}, compiled.Mounts, nil)
-	require.NoError(t, err)
-	assert.False(t, finalized)
-
-	loaded, err := config.LoadMountInventory()
-	require.NoError(t, err)
-	refreshed := loaded.Mounts[record.MountID]
-	assert.Equal(t, config.MountStatePendingRemoval, refreshed.State)
-	assert.Equal(t, config.MountStateReasonRemovedProjectionDirty, refreshed.StateReason)
-}
-
-// Validates: R-2.4.8, R-4.1.4
-func TestFinalizePendingMountRemovals_ProjectionStatErrorStaysReserved(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-
-	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
-	record := testMountRecordForParent(&parent)
-	record.State = config.MountStatePendingRemoval
-	record.StateReason = config.MountStateReasonShortcutRemoved
-	require.NoError(t, os.WriteFile(filepath.Join(parent.SyncRoot, "Shortcuts"), []byte("not a directory"), 0o600))
-
-	inventory := config.DefaultMountInventory()
-	inventory.Mounts[record.MountID] = record
-	require.NoError(t, config.SaveMountInventory(inventory))
-
-	compiled, err := compileRuntimeMounts([]StandaloneMountConfig{parent}, inventory)
-	require.NoError(t, err)
-	finalized, err := finalizePendingMountRemovals([]string{record.MountID}, compiled.Mounts, nil)
-	require.NoError(t, err)
-	assert.False(t, finalized)
-
-	loaded, err := config.LoadMountInventory()
-	require.NoError(t, err)
-	refreshed := loaded.Mounts[record.MountID]
-	assert.Equal(t, config.MountStatePendingRemoval, refreshed.State)
-	assert.Equal(t, config.MountStateReasonRemovedProjectionUnavailable, refreshed.StateReason)
-	assert.Contains(t, compiled.Mounts[0].localSkipDirs, "Shortcuts/Docs")
+	assert.Len(t, compiled.Mounts, 2)
+	require.Len(t, compiled.Skipped, 1)
+	assert.Contains(t, compiled.Skipped[0].Err.Error(), "standalone mount")
 }
