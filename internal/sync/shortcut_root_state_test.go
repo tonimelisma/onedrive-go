@@ -291,7 +291,7 @@ func TestSyncStore_AcknowledgeShortcutChildFinalDrainPromotesWaitingReplacement(
 }
 
 // Validates: R-2.4.8
-func TestEngine_ApplyShortcutAliasMutationRenameMutatesThroughParentAndUpdatesRootState(t *testing.T) {
+func TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState(t *testing.T) {
 	t.Parallel()
 
 	var moved struct {
@@ -321,8 +321,8 @@ func TestEngine_ApplyShortcutAliasMutationRenameMutatesThroughParentAndUpdatesRo
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	err := eng.ApplyShortcutAliasMutation(t.Context(), ShortcutAliasMutation{
-		Kind:              ShortcutAliasMutationRename,
+	err := eng.applyShortcutAliasMutation(t.Context(), shortcutAliasMutation{
+		Kind:              shortcutAliasMutationRename,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Renamed",
 		LocalAlias:        "Renamed",
@@ -342,7 +342,7 @@ func TestEngine_ApplyShortcutAliasMutationRenameMutatesThroughParentAndUpdatesRo
 }
 
 // Validates: R-2.4.8
-func TestEngine_ApplyShortcutAliasMutationDeleteMarksParentRootFinalDrain(t *testing.T) {
+func TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain(t *testing.T) {
 	t.Parallel()
 
 	var deleted struct {
@@ -369,8 +369,8 @@ func TestEngine_ApplyShortcutAliasMutationDeleteMarksParentRootFinalDrain(t *tes
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	err := eng.ApplyShortcutAliasMutation(t.Context(), ShortcutAliasMutation{
-		Kind:          ShortcutAliasMutationDelete,
+	err := eng.applyShortcutAliasMutation(t.Context(), shortcutAliasMutation{
+		Kind:          shortcutAliasMutationDelete,
 		BindingItemID: "binding-1",
 	})
 
@@ -536,9 +536,9 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 	}}))
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
 
-	var published ShortcutTopologyBatch
-	eng.shortcutTopologyHandler = func(_ context.Context, batch ShortcutTopologyBatch) error {
-		published = batch
+	var published ShortcutChildTopologyPublication
+	eng.shortcutTopologyHandler = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+		published = publication
 		return nil
 	}
 	flow := newEngineFlow(eng.Engine)
@@ -553,9 +553,8 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 	require.NoError(t, err)
 	assert.Equal(t, "binding-1", moved.itemID)
 	assert.Equal(t, "Renamed", moved.name)
-	assert.Equal(t, ShortcutTopologyObservationComplete, published.Kind)
-	require.Len(t, published.ParentRoots, 1)
-	assert.Equal(t, "Shared/Renamed", published.ParentRoots[0].RelativeLocalPath)
+	require.Len(t, published.Children, 1)
+	assert.Equal(t, "Shared/Renamed", published.Children[0].RelativeLocalPath)
 	roots, err := eng.baseline.ListShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
@@ -602,6 +601,44 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteRenamedProjection(t *t
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateActive, roots[0].State)
 	assert.Equal(t, []string{"Shared/New"}, roots[0].ProtectedPaths)
+	require.NotNil(t, roots[0].LocalRootIdentity)
+	assert.True(t, synctree.SameIdentity(identity, *roots[0].LocalRootIdentity))
+}
+
+// Validates: R-2.4.8
+func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteMovedProjectionAcrossLocalParent(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	oldPath := filepath.Join(syncRoot, "Shared", "Old")
+	require.NoError(t, os.MkdirAll(oldPath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(oldPath, "draft.txt"), []byte("content"), 0o600))
+	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Old"))
+	require.NoError(t, err)
+	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+		NamespaceID:       shortcutTopologyTestNamespaceID,
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Archive/New",
+		LocalAlias:        "New",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-1",
+		RemoteIsFolder:    true,
+		State:             ShortcutRootStateActive,
+		ProtectedPaths:    []string{"Archive/New", "Shared/Old"},
+		LocalRootIdentity: &identity,
+	}}))
+
+	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.NoDirExists(t, oldPath)
+	assert.FileExists(t, filepath.Join(syncRoot, "Archive", "New", "draft.txt"))
+	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	require.NoError(t, err)
+	require.Len(t, roots, 1)
+	assert.Equal(t, ShortcutRootStateActive, roots[0].State)
+	assert.Equal(t, []string{"Archive/New"}, roots[0].ProtectedPaths)
 	require.NotNil(t, roots[0].LocalRootIdentity)
 	assert.True(t, synctree.SameIdentity(identity, *roots[0].LocalRootIdentity))
 }

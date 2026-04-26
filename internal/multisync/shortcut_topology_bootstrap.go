@@ -110,7 +110,7 @@ func (o *Orchestrator) bootstrapShortcutTopologyForParent(
 		o.closeBootstrappedShortcutParentEngine(ctx, parent.mountID, engine)
 		return false, nil, fmt.Errorf("preparing shortcut children: %w", err)
 	}
-	changed = o.storeShortcutChildTopology(parent.mountID, snapshot)
+	changed = o.storeParentShortcutTopology(parent.mountID, snapshot)
 
 	return changed, engine, nil
 }

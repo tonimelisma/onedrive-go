@@ -34,8 +34,8 @@ func (p runtimeMountSetPipeline) build(ctx context.Context) (*compiledMountSet, 
 		return nil, err
 	}
 
-	topology := p.orchestrator.transientShortcutTopology(parents)
-	compiled, err := compileRuntimeMountsForParents(parents, topology, p.orchestrator.logger)
+	parentTopologies := p.orchestrator.parentShortcutTopologiesFor(parents)
+	compiled, err := compileRuntimeMountsForParents(parents, parentTopologies, p.orchestrator.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -53,8 +53,8 @@ func (o *Orchestrator) compileRuntimeMountSetFromTopology(
 	if err != nil {
 		return nil, err
 	}
-	topology := o.transientShortcutTopology(parents)
-	compiled, err := compileRuntimeMountsForParents(parents, topology, o.logger)
+	parentTopologies := o.parentShortcutTopologiesFor(parents)
+	compiled, err := compileRuntimeMountsForParents(parents, parentTopologies, o.logger)
 	if err != nil {
 		return nil, err
 	}

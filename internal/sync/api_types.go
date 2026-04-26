@@ -25,15 +25,18 @@ type LocalFilterConfig struct {
 
 // ManagedRootReservation marks a parent-engine protected subtree inside this
 // mount. The sync engine suppresses normal local content events for these roots
-// and, when it can identify the same directory at a sibling path, reports that
-// fact to multisync instead of uploading a duplicate folder.
+// and, when it can identify the same directory at a sibling path, wakes the
+// parent engine shortcut-root lifecycle instead of uploading a duplicate folder.
 type ManagedRootReservation struct {
-	Path        string
-	MountID     string
-	BindingID   string
-	Device      uint64
-	Inode       uint64
-	HasIdentity bool
+	Path           string
+	MountID        string
+	BindingID      string
+	RemoteDriveID  driveid.ID
+	RemoteItemID   string
+	RemoteIsFolder bool
+	Device         uint64
+	Inode          uint64
+	HasIdentity    bool
 }
 
 // ManagedRootEventType identifies the lifecycle fact the local observer found.
@@ -44,9 +47,10 @@ const (
 	ManagedRootEventIdentityMatch ManagedRootEventType = "identity_match"
 )
 
-// ManagedRootEvent is a narrow notification from the parent local observer to
-// multisync. It never plans child content work; it only wakes orchestration so
-// parent-owned shortcut-root state and child runners can converge promptly.
+// ManagedRootEvent is a narrow parent-engine-internal notification from the
+// local observer to the watch runtime. It never plans child content work; it
+// only wakes the parent shortcut-root lifecycle so parent-owned state can
+// publish updated child topology promptly.
 type ManagedRootEvent struct {
 	Type         ManagedRootEventType
 	Path         string

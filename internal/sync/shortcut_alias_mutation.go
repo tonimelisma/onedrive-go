@@ -8,30 +8,29 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-// ShortcutAliasMutationKind identifies a parent-owned mutation of a OneDrive
+// shortcutAliasMutationKind identifies a parent-owned mutation of a OneDrive
 // shortcut placeholder inside the parent engine's namespace.
-type ShortcutAliasMutationKind string
+type shortcutAliasMutationKind string
 
 const (
-	ShortcutAliasMutationRename ShortcutAliasMutationKind = "rename"
-	ShortcutAliasMutationDelete ShortcutAliasMutationKind = "delete"
+	shortcutAliasMutationRename shortcutAliasMutationKind = "rename"
+	shortcutAliasMutationDelete shortcutAliasMutationKind = "delete"
 )
 
-// ShortcutAliasMutation is intentionally scoped to one shortcut placeholder by
+// shortcutAliasMutation is intentionally scoped to one shortcut placeholder by
 // binding item ID. It is not a discovery API and cannot address content inside
 // the child target.
-type ShortcutAliasMutation struct {
-	Kind              ShortcutAliasMutationKind
+type shortcutAliasMutation struct {
+	Kind              shortcutAliasMutationKind
 	BindingItemID     string
 	RelativeLocalPath string
 	LocalAlias        string
 }
 
-// ApplyShortcutAliasMutation mutates a shortcut placeholder in the parent
-// drive namespace. Multisync may coordinate when parent/child runners stop, but
-// the parent engine owns the actual placeholder mutation and parent shortcut
-// root state.
-func (e *Engine) ApplyShortcutAliasMutation(ctx context.Context, mutation ShortcutAliasMutation) error {
+// applyShortcutAliasMutation mutates a shortcut placeholder in the parent
+// drive namespace. The parent engine owns the Graph mutation and parent
+// shortcut-root state; multisync is never a caller.
+func (e *Engine) applyShortcutAliasMutation(ctx context.Context, mutation shortcutAliasMutation) error {
 	if ctx == nil {
 		return fmt.Errorf("sync: shortcut alias mutation context is required")
 	}
@@ -43,7 +42,7 @@ func (e *Engine) ApplyShortcutAliasMutation(ctx context.Context, mutation Shortc
 	}
 
 	switch mutation.Kind {
-	case ShortcutAliasMutationRename:
+	case shortcutAliasMutationRename:
 		if mutation.LocalAlias == "" {
 			return fmt.Errorf("sync: shortcut alias rename requires local alias")
 		}
@@ -51,7 +50,7 @@ func (e *Engine) ApplyShortcutAliasMutation(ctx context.Context, mutation Shortc
 			return fmt.Errorf("sync: rename shortcut alias: %w", err)
 		}
 		return e.recordShortcutAliasRename(ctx, mutation)
-	case ShortcutAliasMutationDelete:
+	case shortcutAliasMutationDelete:
 		if err := e.itemsClient.DeleteItem(ctx, e.driveID, mutation.BindingItemID); err != nil && !errors.Is(err, graph.ErrNotFound) {
 			return fmt.Errorf("sync: delete shortcut alias: %w", err)
 		}
@@ -61,7 +60,7 @@ func (e *Engine) ApplyShortcutAliasMutation(ctx context.Context, mutation Shortc
 	}
 }
 
-func (e *Engine) recordShortcutAliasRename(ctx context.Context, mutation ShortcutAliasMutation) error {
+func (e *Engine) recordShortcutAliasRename(ctx context.Context, mutation shortcutAliasMutation) error {
 	records, err := e.baseline.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read shortcut roots after alias rename: %w", err)
@@ -71,11 +70,15 @@ func (e *Engine) recordShortcutAliasRename(ctx context.Context, mutation Shortcu
 		if records[i].BindingItemID != mutation.BindingItemID {
 			continue
 		}
-		records[i].RelativeLocalPath = mutation.RelativeLocalPath
-		records[i].LocalAlias = mutation.LocalAlias
-		records[i].State = ShortcutRootStateActive
-		records[i].BlockedDetail = ""
-		records[i].ProtectedPaths = protectedPathsForShortcutRoot(mutation.RelativeLocalPath, records[i].ProtectedPaths)
+		next := plannedShortcutRootTransition(records[i],
+			shortcutRootEventAliasMutationSucceeded,
+			ShortcutRootStateActive,
+			"",
+		)
+		next.RelativeLocalPath = mutation.RelativeLocalPath
+		next.LocalAlias = mutation.LocalAlias
+		next.ProtectedPaths = protectedPathsForShortcutRoot(mutation.RelativeLocalPath, next.ProtectedPaths)
+		records[i] = next
 		changed = true
 		break
 	}
@@ -88,7 +91,7 @@ func (e *Engine) recordShortcutAliasRename(ctx context.Context, mutation Shortcu
 	return nil
 }
 
-func (e *Engine) recordShortcutAliasDelete(ctx context.Context, mutation ShortcutAliasMutation) error {
+func (e *Engine) recordShortcutAliasDelete(ctx context.Context, mutation shortcutAliasMutation) error {
 	records, err := e.baseline.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read shortcut roots after alias delete: %w", err)
@@ -98,9 +101,11 @@ func (e *Engine) recordShortcutAliasDelete(ctx context.Context, mutation Shortcu
 		if records[i].BindingItemID != mutation.BindingItemID {
 			continue
 		}
-		records[i].State = ShortcutRootStateRemovedFinalDrain
-		records[i].BlockedDetail = ""
-		records[i].ProtectedPaths = protectedPathsForShortcutRoot(records[i].RelativeLocalPath, records[i].ProtectedPaths)
+		records[i] = plannedShortcutRootTransition(records[i],
+			shortcutRootEventAliasMutationSucceeded,
+			ShortcutRootStateRemovedFinalDrain,
+			"",
+		)
 		changed = true
 		break
 	}

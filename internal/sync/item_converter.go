@@ -109,7 +109,7 @@ func (c *ItemConverter) enrichSparseParentRefs(ctx context.Context, items []grap
 	seen := make(map[string]struct{}, len(items))
 	for i := range items {
 		item := &items[i]
-		if !c.shouldEnrichSparseParent(item) {
+		if !c.shouldEnrichSparseRemoteItem(item) {
 			continue
 		}
 		if _, ok := seen[item.ID]; ok {
@@ -130,37 +130,82 @@ func (c *ItemConverter) enrichSparseParentRefs(ctx context.Context, items []grap
 
 			continue
 		}
-		if enriched == nil || enriched.ParentID == "" {
+		if enriched == nil {
 			continue
 		}
 
 		for j := range items {
-			if items[j].ID != item.ID || items[j].ParentID != "" {
+			if items[j].ID != item.ID {
 				continue
 			}
 
-			items[j].ParentID = enriched.ParentID
-			if items[j].ParentDriveID.IsZero() {
-				items[j].ParentDriveID = enriched.ParentDriveID
-			}
+			mergeSparseRemoteItem(&items[j], enriched)
 		}
 	}
 }
 
-func (c *ItemConverter) shouldEnrichSparseParent(item *graph.Item) bool {
+func (c *ItemConverter) shouldEnrichSparseRemoteItem(item *graph.Item) bool {
 	if c == nil || c.Items == nil || item == nil {
 		return false
 	}
-	if item.IsDeleted || item.IsRoot || item.ID == "" || item.ParentID != "" {
+	if item.IsDeleted || item.IsRoot || item.ID == "" {
 		return false
 	}
-
-	if c.Baseline == nil {
+	if c.shouldEnrichSparseShortcut(item) {
 		return true
 	}
 
+	if c.Baseline == nil {
+		return item.ParentID == ""
+	}
+
 	existing, found := c.Baseline.GetByID(item.ID)
-	return !found || existing.ParentID == ""
+	return item.ParentID == "" && (!found || existing.ParentID == "")
+}
+
+func (c *ItemConverter) shouldEnrichSparseShortcut(item *graph.Item) bool {
+	if c == nil || item == nil || c.ManagedRootBindings == nil {
+		return false
+	}
+	reservation, known := c.ManagedRootBindings[item.ID]
+	if !known {
+		return false
+	}
+	return item.Name == "" ||
+		item.ParentID == "" ||
+		item.RemoteDriveID == "" ||
+		item.RemoteItemID == "" ||
+		(!item.RemoteIsFolder && reservation.RemoteIsFolder)
+}
+
+func mergeSparseRemoteItem(dst *graph.Item, enriched *graph.Item) {
+	if dst == nil || enriched == nil {
+		return
+	}
+	if dst.Name == "" {
+		dst.Name = enriched.Name
+	}
+	if dst.ParentID == "" {
+		dst.ParentID = enriched.ParentID
+	}
+	if dst.ParentDriveID.IsZero() {
+		dst.ParentDriveID = enriched.ParentDriveID
+	}
+	if dst.DriveID.IsZero() {
+		dst.DriveID = enriched.DriveID
+	}
+	if dst.RemoteDriveID == "" {
+		dst.RemoteDriveID = enriched.RemoteDriveID
+	}
+	if dst.RemoteItemID == "" {
+		dst.RemoteItemID = enriched.RemoteItemID
+	}
+	if !dst.RemoteIsFolder {
+		dst.RemoteIsFolder = enriched.RemoteIsFolder
+	}
+	if !dst.IsFolder {
+		dst.IsFolder = enriched.IsFolder
+	}
 }
 
 // registerInflight adds an item to the inflight parent map without
@@ -236,7 +281,8 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 	// recover their name from the baseline later in classifyAndConvert.
 	// Delta query updates are allowed to omit unchanged properties, so an
 	// existing baseline entry can supply the missing name safely.
-	if !item.IsDeleted && item.Name == "" && existing == nil {
+	_, knownManagedRoot := c.ManagedRootBindings[item.ID]
+	if !item.IsDeleted && item.Name == "" && existing == nil && !knownManagedRoot {
 		c.Logger.Warn("skipping remote item with empty name",
 			slog.String("item_id", item.ID),
 			slog.String("parent_id", item.ParentID),
@@ -305,14 +351,22 @@ func (c *ItemConverter) emitShortcutTopologyFact(
 	}
 
 	fact := c.shortcutTopologyFact(item, inflight, itemDriveID, existing)
-	remoteIsFolder := item.RemoteIsFolder || item.IsFolder
-	if item.RemoteDriveID != "" && item.RemoteItemID != "" && remoteIsFolder && fact.RelativeLocalPath != "" {
+	remoteDriveID := item.RemoteDriveID
+	if remoteDriveID == "" {
+		remoteDriveID = fact.RemoteDriveID
+	}
+	remoteItemID := item.RemoteItemID
+	if remoteItemID == "" {
+		remoteItemID = fact.RemoteItemID
+	}
+	remoteIsFolder := item.RemoteIsFolder || item.IsFolder || fact.RemoteIsFolder
+	if remoteDriveID != "" && remoteItemID != "" && remoteIsFolder && fact.RelativeLocalPath != "" {
 		c.ShortcutTopology.appendUpsert(ShortcutBindingUpsert{
 			BindingItemID:     item.ID,
 			RelativeLocalPath: fact.RelativeLocalPath,
 			LocalAlias:        fact.LocalAlias,
-			RemoteDriveID:     item.RemoteDriveID,
-			RemoteItemID:      item.RemoteItemID,
+			RemoteDriveID:     remoteDriveID,
+			RemoteItemID:      remoteItemID,
 			RemoteIsFolder:    remoteIsFolder,
 			Complete:          true,
 		})
@@ -324,8 +378,8 @@ func (c *ItemConverter) emitShortcutTopologyFact(
 			BindingItemID:     item.ID,
 			RelativeLocalPath: fact.RelativeLocalPath,
 			LocalAlias:        fact.LocalAlias,
-			RemoteDriveID:     item.RemoteDriveID,
-			RemoteItemID:      item.RemoteItemID,
+			RemoteDriveID:     remoteDriveID,
+			RemoteItemID:      remoteItemID,
 			RemoteIsFolder:    remoteIsFolder,
 			Reason:            "shortcut_binding_unavailable",
 		})
@@ -335,6 +389,9 @@ func (c *ItemConverter) emitShortcutTopologyFact(
 type shortcutTopologyItemFact struct {
 	RelativeLocalPath string
 	LocalAlias        string
+	RemoteDriveID     string
+	RemoteItemID      string
+	RemoteIsFolder    bool
 	HasEvidence       bool
 }
 
@@ -357,7 +414,14 @@ func (c *ItemConverter) shortcutTopologyFact(
 	return shortcutTopologyItemFact{
 		RelativeLocalPath: relPath,
 		LocalAlias:        name,
-		HasEvidence:       known || item.RemoteDriveID != "" || item.RemoteItemID != "" || item.RemoteIsFolder || item.IsFolder,
+		RemoteDriveID:     reservation.RemoteDriveID.String(),
+		RemoteItemID:      reservation.RemoteItemID,
+		RemoteIsFolder:    reservation.RemoteIsFolder,
+		HasEvidence: known ||
+			item.RemoteDriveID != "" ||
+			item.RemoteItemID != "" ||
+			item.RemoteIsFolder ||
+			item.IsFolder,
 	}
 }
 

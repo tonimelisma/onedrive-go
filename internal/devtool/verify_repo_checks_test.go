@@ -375,6 +375,57 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncShortcutAliasMutation(t *testin
 }
 
 // Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncUnexportedShortcutAliasMutation(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_unexported_alias_mutation.go"), []string{
+		"package multisync",
+		"",
+		"type shortcutAliasMutation struct{}",
+		"type parentEngine struct{}",
+		"func (p parentEngine) applyShortcutAliasMutation(shortcutAliasMutation) error { return nil }",
+		"",
+		"func bad(p parentEngine) error {",
+		"\treturn p.applyShortcutAliasMutation(shortcutAliasMutation{})",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parent engine")
+	assert.Contains(t, err.Error(), "bad_unexported_alias_mutation.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncRawShortcutObservationTypes(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_raw_shortcut_facts.go"), []string{
+		"package multisync",
+		"",
+		"import syncengine \"github.com/tonimelisma/onedrive-go/internal/sync\"",
+		"",
+		"type mirror struct {",
+		"\tBatch syncengine.ShortcutTopologyBatch",
+		"\tRoot syncengine.ShortcutRootRecord",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "raw parent shortcut observation facts")
+	assert.Contains(t, err.Error(), "bad_raw_shortcut_facts.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
 func TestRunRepoConsistencyChecksFailsOnMultisyncShortcutRootStoreWrite(t *testing.T) {
 	t.Parallel()
 
