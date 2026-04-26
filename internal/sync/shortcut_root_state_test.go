@@ -14,6 +14,20 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
+func seedShortcutLocalStateIdentityForTest(t *testing.T, eng *Engine, relativePath string) {
+	t.Helper()
+
+	identity, err := eng.syncTree.IdentityNoFollow(filepath.FromSlash(relativePath))
+	require.NoError(t, err)
+	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []LocalStateRow{{
+		Path:             relativePath,
+		ItemType:         ItemTypeFolder,
+		LocalDevice:      identity.Device,
+		LocalInode:       identity.Inode,
+		LocalHasIdentity: true,
+	}}))
+}
+
 // Validates: R-2.4.3, R-2.4.8
 func TestSyncStore_ApplyShortcutTopologyPersistsParentShortcutRoots(t *testing.T) {
 	t.Parallel()
@@ -696,6 +710,7 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 		LocalRootIdentity: &identity,
 	}}))
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
+	seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Renamed")
 
 	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
 
@@ -746,6 +761,7 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 		LocalRootIdentity: &identity,
 	}}))
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
+	seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Renamed")
 
 	var published ShortcutChildTopologyPublication
 	eng.shortcutTopologyHandler = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
@@ -800,6 +816,7 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteRenamedProjection(t *t
 		ProtectedPaths:    []string{"Shared/New", "Shared/Old"},
 		LocalRootIdentity: &identity,
 	}}))
+	seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Old")
 
 	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
 
@@ -838,6 +855,7 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteMovedProjectionAcrossL
 		ProtectedPaths:    []string{"Archive/New", "Shared/Old"},
 		LocalRootIdentity: &identity,
 	}}))
+	seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Old")
 
 	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
 

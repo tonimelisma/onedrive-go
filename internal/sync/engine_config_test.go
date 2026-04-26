@@ -31,7 +31,6 @@ func testEngineMountConfig(syncDir string) *EngineMountConfig {
 		RemoteRootItemID:       "mount-root-id",
 		RemoteRootDeltaCapable: false,
 		EnableWebsocket:        true,
-		LocalFilter:            LocalFilterConfig{},
 		LocalRules: LocalObservationRules{
 			RejectSharePointRootForms: true,
 		},
@@ -105,11 +104,6 @@ func TestNewMountEngine_MergesPersistedShortcutRootReservations(t *testing.T) {
 
 	mountCfg := testEngineMountConfig(syncDir)
 	mountCfg.ShortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
-	mountCfg.LocalFilter.ManagedRoots = []ManagedRootReservation{{
-		Path:      "Shared/Existing",
-		MountID:   "child-existing",
-		BindingID: "binding-existing",
-	}}
 
 	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
@@ -133,12 +127,11 @@ func TestNewMountEngine_MergesPersistedShortcutRootReservations(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	require.Len(t, eng.localFilter.ManagedRoots, 3)
-	assert.Equal(t, "Shared/Existing", eng.localFilter.ManagedRoots[0].Path)
-	assert.Equal(t, "Shared/Docs", eng.localFilter.ManagedRoots[1].Path)
-	assert.Equal(t, "binding-1", eng.localFilter.ManagedRoots[1].BindingID)
-	assert.True(t, eng.localFilter.ManagedRoots[1].HasIdentity)
-	assert.Equal(t, "Shared/Old Docs", eng.localFilter.ManagedRoots[2].Path)
+	require.Len(t, eng.localFilter.ManagedRoots, 2)
+	assert.Equal(t, "Shared/Docs", eng.localFilter.ManagedRoots[0].Path)
+	assert.Equal(t, "binding-1", eng.localFilter.ManagedRoots[0].BindingID)
+	assert.True(t, eng.localFilter.ManagedRoots[0].HasIdentity)
+	assert.Equal(t, "Shared/Old Docs", eng.localFilter.ManagedRoots[1].Path)
 }
 
 // Validates: R-2.4.8

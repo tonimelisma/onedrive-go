@@ -205,6 +205,38 @@ func TestFullScan_CaseCollision_NoFalseDeletion(t *testing.T) {
 	}
 }
 
+// Validates: R-2.1.3
+func TestFullScan_StoresFilesystemIdentityForFilesAndDirectories(t *testing.T) {
+	t.Parallel()
+
+	const linuxGOOS = "linux"
+	switch runtime.GOOS {
+	case "darwin", linuxGOOS:
+	default:
+		t.Skip("filesystem identity is only expected on Unix-like supported platforms")
+	}
+
+	syncRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "Docs"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "Docs", "report.txt"), []byte("hello"), 0o600))
+
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
+	require.NoError(t, err)
+
+	rowsByPath := make(map[string]LocalStateRow, len(result.Rows))
+	for i := range result.Rows {
+		rowsByPath[result.Rows[i].Path] = result.Rows[i]
+	}
+
+	require.Contains(t, rowsByPath, "Docs")
+	require.Contains(t, rowsByPath, "Docs/report.txt")
+	assert.True(t, rowsByPath["Docs"].LocalHasIdentity)
+	assert.NotZero(t, rowsByPath["Docs"].LocalInode)
+	assert.True(t, rowsByPath["Docs/report.txt"].LocalHasIdentity)
+	assert.NotZero(t, rowsByPath["Docs/report.txt"].LocalInode)
+}
+
 // ---------------------------------------------------------------------------
 // Platform-aware case collision tests (R-2.12.1)
 // ---------------------------------------------------------------------------

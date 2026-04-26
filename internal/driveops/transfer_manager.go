@@ -96,11 +96,13 @@ type UploadResult struct {
 // .partial files, range-based resume, hash verification with retry, session
 // persistence for uploads, disk space pre-checks, and atomic rename.
 type TransferManager struct {
-	downloads    Downloader
-	uploads      Uploader
-	sessionStore *SessionStore // nil = no session persistence for uploads
-	logger       *slog.Logger
-	hashFunc     func(string) (string, error)
+	downloads        Downloader
+	uploads          Uploader
+	sessionStore     *SessionStore // nil = no session persistence for uploads
+	logger           *slog.Logger
+	hashFunc         func(string) (string, error)
+	sessionMountID   string
+	sessionLocalRoot string
 
 	// minFreeSpace is the minimum free disk space (bytes) required before
 	// downloads. Zero disables the check (R-6.4.7). Configured via WithDiskCheck.
@@ -144,6 +146,16 @@ func WithDiskCheck(minFreeSpace int64, fn func(string) (uint64, error)) Option {
 	return func(tm *TransferManager) {
 		tm.minFreeSpace = minFreeSpace
 		tm.diskAvailableFunc = fn
+	}
+}
+
+// WithSessionScope tags newly persisted upload sessions with the mount that
+// owns them, allowing lifecycle owners to purge orphaned child sessions without
+// touching explicit mounts that happen to target the same drive.
+func WithSessionScope(mountID, localRoot string) Option {
+	return func(tm *TransferManager) {
+		tm.sessionMountID = strings.TrimSpace(mountID)
+		tm.sessionLocalRoot = strings.TrimSpace(localRoot)
 	}
 }
 
@@ -800,6 +812,8 @@ func (tm *TransferManager) sessionUpload(
 	}
 
 	if saveErr := tm.sessionStore.Save(driveStr, localPath, &SessionRecord{
+		MountID:    tm.sessionMountID,
+		LocalRoot:  tm.sessionLocalRoot,
 		SessionURL: string(session.UploadURL),
 		FileHash:   localHash,
 		FileSize:   size,
@@ -879,6 +893,8 @@ func (tm *TransferManager) sessionUploadToItem(
 	}
 
 	if saveErr := tm.sessionStore.Save(driveStr, sessionKey, &SessionRecord{
+		MountID:    tm.sessionMountID,
+		LocalRoot:  tm.sessionLocalRoot,
 		SessionURL: string(session.UploadURL),
 		FileHash:   localHash,
 		FileSize:   size,

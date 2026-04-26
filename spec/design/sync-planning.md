@@ -167,8 +167,17 @@ size, mtime, and ETag churn caused by child mutations must not be treated as
 content drift or expanded into conflict/download actions.
 
 Local or remote moves that stay within one Graph drive become move actions.
-Moves that cross drive ownership are decomposed into delete + upload because
-Graph move cannot cross drive ownership.
+Local move detection first matches unique filesystem identity
+(`local_device`, `local_inode`, `local_has_identity`) between `baseline` and
+`local_state` for both files and directories. File-hash matching is a fallback
+only for files without identity. A local folder move emits one
+`ActionRemoteMove` for the folder and makes descendant work depend on that
+move instead of re-uploading or deleting/recreating the subtree. A moved file
+whose content also changed emits the remote move before the upload/update at
+the moved path. Identity mismatch at the same path is treated as replacement
+or delete/create truth, not as a move. Moves that cross drive ownership are
+decomposed into delete + upload because Graph move cannot cross drive
+ownership.
 
 ## Mount-Local Planning
 

@@ -1610,3 +1610,39 @@ func TestBaselineEntryCount_WithEntries(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 }
+
+// Validates: R-2.1.3
+func TestCommitMutation_PersistsLocalFilesystemIdentity(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+
+	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
+		Action:           ActionDownload,
+		Success:          true,
+		Path:             "Docs/report.txt",
+		DriveID:          driveid.New("d1"),
+		ItemID:           "item-report",
+		ItemType:         ItemTypeFile,
+		LocalHash:        "hash-report",
+		RemoteHash:       "hash-report",
+		LocalSize:        42,
+		LocalSizeKnown:   true,
+		RemoteSize:       42,
+		RemoteSizeKnown:  true,
+		LocalMtime:       123,
+		RemoteMtime:      456,
+		LocalDevice:      700,
+		LocalInode:       900,
+		LocalHasIdentity: true,
+	}))
+
+	bl, err := mgr.Load(ctx)
+	require.NoError(t, err)
+	entry, ok := bl.GetByPath("Docs/report.txt")
+	require.True(t, ok)
+	assert.Equal(t, uint64(700), entry.LocalDevice)
+	assert.Equal(t, uint64(900), entry.LocalInode)
+	assert.True(t, entry.LocalHasIdentity)
+}

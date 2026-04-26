@@ -543,7 +543,7 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncLocalpathFilesystemAccessOutsid
 
 	err := runRepoConsistencyChecks(repoRoot)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "control-socket paths")
+	assert.Contains(t, err.Error(), "child-artifact cleanup paths")
 	assert.Contains(t, err.Error(), "bad_localpath.go")
 }
 

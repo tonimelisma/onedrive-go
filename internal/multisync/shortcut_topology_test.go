@@ -147,6 +147,44 @@ func TestReceiveParentShortcutTopology_StoresPublicationInMemory(t *testing.T) {
 	assert.Equal(t, "remote-root", publication.Children[0].RemoteItemID)
 }
 
+// Validates: R-2.8.1, R-4.1.4
+func TestReceiveParentShortcutTopology_EquivalentPublicationIsStable(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	orch := NewOrchestrator(&OrchestratorConfig{})
+	first := syncengine.ShortcutChildTopologyPublication{
+		NamespaceID: parent.mountID.String(),
+		Children: []syncengine.ShortcutChildTopology{{
+			BindingItemID:     "binding-1",
+			RelativeLocalPath: "Shared/Docs",
+			LocalAlias:        "Docs",
+			RemoteDriveID:     "remote-drive-0001",
+			RemoteItemID:      "remote-root",
+			RemoteIsFolder:    true,
+			RunnerAction:      syncengine.ShortcutChildActionRun,
+			ProtectedPaths:    []string{"Shared/Docs"},
+		}},
+	}
+	equivalent := syncengine.ShortcutChildTopologyPublication{
+		NamespaceID: parent.mountID.String(),
+		Released:    []syncengine.ShortcutChildRelease{},
+		Children: []syncengine.ShortcutChildTopology{{
+			BindingItemID:     "binding-1",
+			RelativeLocalPath: "Shared/Docs",
+			LocalAlias:        "Docs",
+			RemoteDriveID:     "remote-drive-0001",
+			RemoteItemID:      "remote-root",
+			RemoteIsFolder:    true,
+			RunnerAction:      syncengine.ShortcutChildActionRun,
+			ProtectedPaths:    []string{"Shared/Docs"},
+		}},
+	}
+
+	assert.True(t, orch.receiveParentShortcutTopology(parent, first))
+	assert.False(t, orch.receiveParentShortcutTopology(parent, equivalent))
+}
+
 // Validates: R-2.4.8, R-2.8.1, R-4.1.4
 func TestReceiveParentShortcutTopology_EmptyPublicationClearsCachedChildren(t *testing.T) {
 	t.Parallel()

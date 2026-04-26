@@ -262,11 +262,14 @@ func classifyFolderNoBaseline(view *PathView) []Action {
 // paths with no local events (item is unchanged on disk).
 func localStateFromBaseline(entry *BaselineEntry) *LocalState {
 	return &LocalState{
-		Name:     path.Base(entry.Path),
-		ItemType: entry.ItemType,
-		Size:     entry.LocalSize,
-		Hash:     entry.LocalHash,
-		Mtime:    entry.LocalMtime,
+		Name:             path.Base(entry.Path),
+		ItemType:         entry.ItemType,
+		Size:             entry.LocalSize,
+		Hash:             entry.LocalHash,
+		Mtime:            entry.LocalMtime,
+		LocalDevice:      entry.LocalDevice,
+		LocalInode:       entry.LocalInode,
+		LocalHasIdentity: entry.LocalHasIdentity,
 	}
 }
 
@@ -279,6 +282,10 @@ func detectLocalChange(view *PathView) bool {
 
 	// A nil local state means the file was deleted, which counts as a change.
 	if view.Local == nil {
+		return true
+	}
+
+	if localIdentityMismatch(view.Local, view.Baseline) {
 		return true
 	}
 
@@ -300,6 +307,17 @@ func detectLocalChange(view *PathView) bool {
 		"",
 		false,
 	)
+}
+
+func localIdentityMismatch(local *LocalState, baseline *BaselineEntry) bool {
+	if local == nil || baseline == nil {
+		return false
+	}
+	if !local.LocalHasIdentity || !baseline.LocalHasIdentity {
+		return false
+	}
+
+	return local.LocalDevice != baseline.LocalDevice || local.LocalInode != baseline.LocalInode
 }
 
 // detectRemoteChange returns true if the remote state differs from the
@@ -815,6 +833,7 @@ func buildDependencies(actions []Action) [][]int {
 		deps[i] = addParentFolderDep(deps[i], i, &actions[i], folderCreateIdx)
 		deps[i] = addConflictCopyDep(deps[i], i, &actions[i], conflictCopyIdx)
 		deps[i] = addChildDeleteDeps(deps[i], i, &actions[i], deleteIdx)
+		deps[i] = addRemoteMoveDeps(deps[i], i, &actions[i], actions)
 		// Sort dependency indices for reproducible ordering (B-154).
 		sort.Ints(deps[i])
 	}
@@ -865,6 +884,28 @@ func addChildDeleteDeps(deps []int, idx int, a *Action, deleteIdx map[string]int
 	for childPath, childIdx := range deleteIdx {
 		if childIdx != idx && strings.HasPrefix(childPath, prefix) {
 			deps = append(deps, childIdx)
+		}
+	}
+
+	return deps
+}
+
+func addRemoteMoveDeps(deps []int, idx int, a *Action, actions []Action) []int {
+	if a.Type == ActionRemoteMove || a.Type == ActionLocalDelete || a.Type == ActionRemoteDelete || a.Type == ActionCleanup {
+		return deps
+	}
+
+	for moveIdx := range actions {
+		move := &actions[moveIdx]
+		if moveIdx == idx || move.Type != ActionRemoteMove {
+			continue
+		}
+		if move.Path == a.Path {
+			deps = append(deps, moveIdx)
+			continue
+		}
+		if resolveItemType(move.View) == ItemTypeFolder && strings.HasPrefix(a.Path, move.Path+"/") {
+			deps = append(deps, moveIdx)
 		}
 	}
 

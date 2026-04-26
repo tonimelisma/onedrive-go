@@ -165,8 +165,7 @@ func scanMultisyncShortcutAuthorityFile(repoRoot string, path string) error {
 func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *ast.File, fset *token.FileSet) string {
 	localpathAliases := importedNamesForPath(file, "github.com/tonimelisma/onedrive-go/internal/localpath")
 	osAliases := importedNamesForPath(file, "os")
-	controlSocketPath := filepath.Join(repoRoot, "internal", "multisync", "control_socket.go")
-	controlSocketFile := path == controlSocketPath
+	filesystemAccessAllowed := multisyncFilesystemAccessAllowed(repoRoot, path)
 
 	forbiddenSelectors := forbiddenMultisyncSelectorReasons()
 	forbiddenIdents := forbiddenMultisyncIdentReasons()
@@ -197,17 +196,18 @@ func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *as
 			if !ok {
 				return true
 			}
-			if _, imported := localpathAliases[x.Name]; imported && !controlSocketFile {
+			if _, imported := localpathAliases[x.Name]; imported && !filesystemAccessAllowed {
 				if _, forbidden := forbiddenLocalpathSelectors[n.Sel.Name]; forbidden {
 					match = fmt.Sprintf(
-						"shortcut authority violation: multisync filesystem access is limited to control-socket paths: %s:%d",
+						"shortcut authority violation: multisync filesystem access is limited to "+
+							"control-socket and child-artifact cleanup paths: %s:%d",
 						path,
 						fset.Position(n.Pos()).Line,
 					)
 					return false
 				}
 			}
-			if _, imported := osAliases[x.Name]; imported && !controlSocketFile {
+			if _, imported := osAliases[x.Name]; imported && !filesystemAccessAllowed {
 				if _, forbidden := forbiddenOSSelectors[n.Sel.Name]; forbidden {
 					match = fmt.Sprintf(
 						"shortcut authority violation: multisync parent sync-dir filesystem access is forbidden: %s:%d",
@@ -223,6 +223,15 @@ func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *as
 	})
 
 	return match
+}
+
+func multisyncFilesystemAccessAllowed(repoRoot string, path string) bool {
+	allowedFiles := map[string]struct{}{
+		filepath.Join(repoRoot, "internal", "multisync", "control_socket.go"):           {},
+		filepath.Join(repoRoot, "internal", "multisync", "shortcut_child_artifacts.go"): {},
+	}
+	_, allowed := allowedFiles[path]
+	return allowed
 }
 
 func forbiddenMultisyncSelectorReasons() map[string]string {
@@ -377,14 +386,19 @@ func ensureMultisyncDoesNotTouchParentSyncDir(repoRoot string) error {
 		func(path string) bool {
 			return strings.HasSuffix(path, "_test.go") ||
 				!strings.HasSuffix(path, ".go") ||
-				path == filepath.Join(repoRoot, "internal", "multisync", "control_socket.go")
+				path == filepath.Join(repoRoot, "internal", "multisync", "control_socket.go") ||
+				path == filepath.Join(repoRoot, "internal", "multisync", "shortcut_child_artifacts.go")
 		},
 	)
 	if err != nil {
 		return err
 	}
 	if match != "" {
-		return fmt.Errorf("shortcut authority violation: multisync filesystem access is limited to control-socket paths: %s", match)
+		return fmt.Errorf(
+			"shortcut authority violation: multisync filesystem access is limited to control-socket "+
+				"and child-artifact cleanup paths: %s",
+			match,
+		)
 	}
 
 	return nil
@@ -424,7 +438,8 @@ func ensureFilesystemIdentityOwnedBySynctree(repoRoot string) error {
 			if strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go") {
 				return true
 			}
-			return path == filepath.Join(repoRoot, "internal", "sync", "managed_roots.go")
+			return path == filepath.Join(repoRoot, "internal", "sync", "managed_roots.go") ||
+				path == filepath.Join(repoRoot, "internal", "sync", "scanner.go")
 		},
 	)
 	if err != nil {

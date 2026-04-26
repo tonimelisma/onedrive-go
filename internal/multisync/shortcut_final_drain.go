@@ -13,7 +13,6 @@ type shortcutChildDrainStatus string
 const (
 	shortcutChildDrainClean           shortcutChildDrainStatus = "clean"
 	shortcutChildDrainBlocked         shortcutChildDrainStatus = "blocked"
-	shortcutChildDrainRetrying        shortcutChildDrainStatus = "retrying"
 	shortcutChildDrainRootUnavailable shortcutChildDrainStatus = "root_unavailable"
 	shortcutChildDrainFailed          shortcutChildDrainStatus = "failed"
 )

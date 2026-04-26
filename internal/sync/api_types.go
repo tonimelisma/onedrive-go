@@ -146,6 +146,7 @@ type PermissionChecker interface {
 }
 
 type engineInputs struct {
+	MountID                     string
 	DBPath                      string
 	SyncRoot                    string
 	DataDir                     string

@@ -13,9 +13,11 @@ const (
 	// state DBs. store_metadata owns this store-level marker; startup accepts
 	// only the current generation and requires an explicit reset otherwise.
 	//
-	// Generation 15 adds parent-owned shortcut_root state. Store schema changes
+	// Generation 16 adds generic local filesystem identity to local_state and
+	// baseline so move detection can reason over files and directories without
+	// shortcut-specific scans. Store schema changes
 	// remain reset-only instead of migratable while the app is pre-launch.
-	currentSyncStoreGeneration = 15
+	currentSyncStoreGeneration = 16
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -35,6 +37,9 @@ CREATE TABLE IF NOT EXISTS baseline (
     remote_size     INTEGER,
     local_mtime     INTEGER,
     remote_mtime    INTEGER,
+    local_device    INTEGER NOT NULL DEFAULT 0,
+    local_inode     INTEGER NOT NULL DEFAULT 0,
+    local_has_identity INTEGER NOT NULL DEFAULT 0 CHECK(local_has_identity IN (0, 1)),
     etag            TEXT
 );
 
@@ -64,7 +69,10 @@ CREATE TABLE IF NOT EXISTS local_state (
     item_type  TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
     hash       TEXT,
     size       INTEGER,
-    mtime      INTEGER
+    mtime      INTEGER,
+    local_device INTEGER NOT NULL DEFAULT 0,
+    local_inode  INTEGER NOT NULL DEFAULT 0,
+    local_has_identity INTEGER NOT NULL DEFAULT 0 CHECK(local_has_identity IN (0, 1))
 );
 
 CREATE TABLE IF NOT EXISTS retry_work (
@@ -139,7 +147,8 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"baseline": {
 			"item_id", "path", "parent_id", "item_type", "local_hash", "remote_hash",
-			"local_size", "remote_size", "local_mtime", "remote_mtime", "etag",
+			"local_size", "remote_size", "local_mtime", "remote_mtime",
+			"local_device", "local_inode", "local_has_identity", "etag",
 		},
 		"observation_state": {
 			"content_drive_id", "cursor", "next_full_remote_refresh_at",
@@ -147,7 +156,10 @@ func canonicalSyncStoreColumns() map[string][]string {
 		"remote_state": {
 			"drive_id", "item_id", "path", "item_type", "hash", "size", "mtime", "etag",
 		},
-		"local_state": {"path", "item_type", "hash", "size", "mtime"},
+		"local_state": {
+			"path", "item_type", "hash", "size", "mtime",
+			"local_device", "local_inode", "local_has_identity",
+		},
 		"retry_work": {
 			"path", "old_path", "action_type", "scope_key", "blocked", "attempt_count", "next_retry_at",
 		},

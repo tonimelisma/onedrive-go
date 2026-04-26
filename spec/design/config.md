@@ -25,7 +25,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Standalone shared-folder drives always preserve the canonical remote root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
 | Mount-root delta capability is resolved in config from shared-drive ownership facts before sync engine construction. | `TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta`, `TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable`, `TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields` |
-| Managed shortcut children keep stable child mount IDs and retained state DB paths without becoming synthetic configured drives. Parent-owned alias lifecycle state lives in the parent sync store, while config owns child-artifact purge for automatic child IDs only. | `TestMountStatePath_UsesManagedMountPrefix`, `TestPurgeManagedChildMountArtifacts_RemovesStateFamilyAndChildCatalogRecord`, `TestPurgeManagedChildMountArtifacts_IgnoresExplicitMountID`, `internal/multisync/shortcut_topology_test.go`, `internal/sync/shortcut_root_state_test.go` |
+| Managed shortcut children keep stable child mount IDs and retained state DB paths without becoming synthetic configured drives. Parent-owned alias lifecycle state lives in the parent sync store, while multisync owns child-artifact purge using config path/catalog primitives only. | `TestMountStatePath_UsesManagedMountPrefix`, `TestRunOnce_ReleasedShortcutChildPurgesStateArtifacts`, `TestPurgeShortcutChildArtifacts_IgnoresExplicitMountID`, `internal/multisync/shortcut_topology_test.go`, `internal/sync/shortcut_root_state_test.go` |
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 | Child mount state DB path derivation is stable, collision-resistant, and bounded by common basename limits. | `TestMountStatePath_UsesManagedMountPrefix`, `TestMountStatePath_EncodesManagedMountIDWithoutCollisions`, `TestMountStatePath_LongIDUsesBoundedFilename` |
@@ -324,12 +324,14 @@ Parent engines own the authoritative parent protected-path state in
 `shortcut_roots`; config only derives the child state DB path from the stable
 mount ID.
 
-When multisync releases a managed shortcut child, config owns deleting
-child-owned managed-state artifacts: the `state_mount_*.db` SQLite file family
-and any accidental catalog drive record keyed by the automatic child mount ID.
-This purge is guarded by the child-mount ID shape (`parent|binding:<id>`) so an
-explicit user-configured shared-drive catalog entry or parent drive state is not
-removed by shortcut lifecycle cleanup.
+When multisync releases a managed shortcut child, config provides only the
+stable path and catalog mutation primitives. The control plane owns deleting
+child-owned artifacts: the `state_mount_*.db` SQLite file family, upload
+sessions tagged with the child mount scope, and any accidental catalog drive
+record keyed by the automatic child mount ID. This purge is guarded by the
+child-mount ID shape (`parent|binding:<id>`) so an explicit user-configured
+shared-drive catalog entry or parent drive state is not removed by shortcut
+lifecycle cleanup.
 
 ## Optional Catalog Fields
 
