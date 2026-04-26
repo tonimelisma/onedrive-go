@@ -135,6 +135,12 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	record ShortcutRootRecord,
 	relativePath string,
 ) (ShortcutRootRecord, bool, bool, error) {
+	if previousPath, found, err := e.findPreviousProtectedShortcutRootProjection(&record, relativePath); err != nil {
+		return unavailableShortcutRoot(record, err.Error()), true, true, nil
+	} else if found {
+		return e.moveRemoteRenamedShortcutProjection(record, previousPath, relativePath)
+	}
+
 	candidates, err := e.findSameParentShortcutRootRenameCandidates(relativePath, *record.LocalRootIdentity)
 	if err != nil {
 		return unavailableShortcutRoot(record, err.Error()), true, true, nil
@@ -144,8 +150,8 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	}
 	switch len(candidates) {
 	case 0:
-		if err := e.ApplyShortcutAliasMutation(ctx, ShortcutAliasMutation{
-			Kind:          ShortcutAliasMutationDelete,
+		if err := e.applyShortcutAliasMutation(ctx, shortcutAliasMutation{
+			Kind:          shortcutAliasMutationDelete,
 			BindingItemID: record.BindingItemID,
 		}); err != nil {
 			return aliasMutationBlockedShortcutRoot(record, err), true, true, nil
@@ -153,8 +159,8 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 		return ShortcutRootRecord{}, false, true, nil
 	case 1:
 		alias := path.Base(candidates[0])
-		if err := e.ApplyShortcutAliasMutation(ctx, ShortcutAliasMutation{
-			Kind:              ShortcutAliasMutationRename,
+		if err := e.applyShortcutAliasMutation(ctx, shortcutAliasMutation{
+			Kind:              shortcutAliasMutationRename,
 			BindingItemID:     record.BindingItemID,
 			RelativeLocalPath: candidates[0],
 			LocalAlias:        alias,
@@ -187,6 +193,83 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 		next.ProtectedPaths = appendUniqueManagedRootPaths(next.ProtectedPaths, candidates...)
 		return next, true, true, nil
 	}
+}
+
+func (e *Engine) findPreviousProtectedShortcutRootProjection(
+	record *ShortcutRootRecord,
+	currentRelativePath string,
+) (string, bool, error) {
+	if record == nil || record.LocalRootIdentity == nil {
+		return "", false, nil
+	}
+	var matches []string
+	for _, protectedPath := range record.ProtectedPaths {
+		match, matched, err := e.previousProtectedShortcutRootProjectionMatch(record, protectedPath, currentRelativePath)
+		if err != nil {
+			return "", false, err
+		}
+		if matched {
+			matches = append(matches, match)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		if hasPreviousProtectedShortcutRootPath(record, currentRelativePath) {
+			return "", false, fmt.Errorf("previous shortcut alias projection is unavailable")
+		}
+		return "", false, nil
+	case 1:
+		return matches[0], true, nil
+	default:
+		return "", false, fmt.Errorf("multiple previous shortcut alias projections match stored identity")
+	}
+}
+
+func (e *Engine) previousProtectedShortcutRootProjectionMatch(
+	record *ShortcutRootRecord,
+	protectedPath string,
+	currentRelativePath string,
+) (string, bool, error) {
+	normalized := normalizedManagedRootPath(protectedPath)
+	if normalized == "" || normalized == normalizedManagedRootPath(currentRelativePath) {
+		return "", false, nil
+	}
+	relativePath, ok := cleanShortcutRootRelativePath(normalized)
+	if !ok {
+		return "", false, fmt.Errorf("%w: previous shortcut alias path escapes parent sync root", synctree.ErrUnsafePath)
+	}
+	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
+		return "", false, fmt.Errorf("validating previous shortcut alias projection: %w", err)
+	}
+	state, err := e.syncTree.PathStateNoFollow(relativePath)
+	if err != nil {
+		return "", false, fmt.Errorf("stating previous shortcut alias projection: %w", err)
+	}
+	if !state.Exists {
+		return "", false, nil
+	}
+	if !state.IsDir {
+		return "", false, fmt.Errorf("%w: previous shortcut alias projection is not a directory", synctree.ErrUnsafePath)
+	}
+	identity, err := e.syncTree.IdentityNoFollow(relativePath)
+	if err != nil {
+		return "", false, fmt.Errorf("reading previous shortcut alias identity: %w", err)
+	}
+	return normalized, synctree.SameIdentity(identity, *record.LocalRootIdentity), nil
+}
+
+func hasPreviousProtectedShortcutRootPath(record *ShortcutRootRecord, currentRelativePath string) bool {
+	if record == nil {
+		return false
+	}
+	current := normalizedManagedRootPath(currentRelativePath)
+	for _, protectedPath := range record.ProtectedPaths {
+		normalized := normalizedManagedRootPath(protectedPath)
+		if normalized != "" && normalized != current {
+			return true
+		}
+	}
+	return false
 }
 
 func previousProtectedProjectionCandidate(record *ShortcutRootRecord, candidates []string) (string, bool) {

@@ -167,9 +167,9 @@ func TestWatchRuntime_HandleManagedRootEventOwnsLocalAliasRename(t *testing.T) {
 	}}))
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
 
-	var published ShortcutTopologyBatch
-	eng.shortcutTopologyHandler = func(_ context.Context, batch ShortcutTopologyBatch) error {
-		published = batch
+	var published ShortcutChildTopologyPublication
+	eng.shortcutTopologyHandler = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+		published = publication
 		return nil
 	}
 	rt := testWatchRuntime(t, eng)
@@ -180,8 +180,7 @@ func TestWatchRuntime_HandleManagedRootEventOwnsLocalAliasRename(t *testing.T) {
 	assert.False(t, done)
 	assert.Equal(t, "binding-1", moved.itemID)
 	assert.Equal(t, "Renamed", moved.name)
-	assert.Equal(t, ShortcutTopologyObservationComplete, published.Kind)
-	require.Len(t, published.ParentRoots, 1)
-	assert.Equal(t, "Shared/Renamed", published.ParentRoots[0].RelativeLocalPath)
-	assert.Equal(t, []string{"Shared/Renamed", "Shared/Docs"}, published.ParentRoots[0].ProtectedPaths)
+	require.Len(t, published.Children, 1)
+	assert.Equal(t, "Shared/Renamed", published.Children[0].RelativeLocalPath)
+	assert.Equal(t, []string{"Shared/Renamed", "Shared/Docs"}, published.Children[0].ProtectedPaths)
 }

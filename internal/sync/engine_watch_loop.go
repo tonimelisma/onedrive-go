@@ -233,11 +233,10 @@ func (rt *watchRuntime) handleWatchManagedRootEventSignal(
 	if err != nil {
 		return false, fmt.Errorf("sync: read shortcut roots after managed root event: %w", err)
 	}
-	return false, rt.engine.shortcutTopologyHandler(ctx, ShortcutTopologyBatch{
-		NamespaceID: rt.engine.shortcutTopologyNamespaceID,
-		Kind:        ShortcutTopologyObservationComplete,
-		ParentRoots: roots,
-	})
+	return false, rt.engine.shortcutTopologyHandler(ctx, shortcutChildTopologyFromRoots(
+		rt.engine.shortcutTopologyNamespaceID,
+		roots,
+	))
 }
 
 func (rt *watchRuntime) handleWatchRemoteBatchSignal(

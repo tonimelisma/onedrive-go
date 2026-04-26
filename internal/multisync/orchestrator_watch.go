@@ -502,6 +502,7 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 		Identity:       wr.mount.identity(),
 		DisplayName:    wr.mount.displayName,
 		Report:         event.report,
+		Err:            event.err,
 	}
 	finalized, err := finalizeSuccessfulFinalDrainMounts(
 		ctx,

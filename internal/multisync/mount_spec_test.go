@@ -14,33 +14,36 @@ import (
 
 const testMountRemoteRootItemID = "mount-root-id"
 
-func testChildTopologyRecordForParent(parent *StandaloneMountConfig) childTopologyRecord {
+func testPublishedShortcutChild() syncengine.ShortcutChildTopology {
 	const (
-		mountID       = "child-docs"
 		relativePath  = "Shortcuts/Docs"
 		remoteDriveID = "remote-drive"
 		remoteItemID  = "remote-root"
 	)
-	return childTopologyRecord{
-		mountID:             mountID,
-		namespaceID:         parent.CanonicalID.String(),
-		bindingItemID:       "binding-" + mountID,
-		localAlias:          filepath.Base(relativePath),
-		relativeLocalPath:   relativePath,
-		tokenOwnerCanonical: parent.TokenOwnerCanonical.String(),
-		remoteDriveID:       remoteDriveID,
-		remoteItemID:        remoteItemID,
-		state:               syncengine.ShortcutChildDesired,
+	return syncengine.ShortcutChildTopology{
+		BindingItemID:     "binding-child-docs",
+		LocalAlias:        filepath.Base(relativePath),
+		RelativeLocalPath: relativePath,
+		RemoteDriveID:     remoteDriveID,
+		RemoteItemID:      remoteItemID,
+		State:             syncengine.ShortcutChildDesired,
+		ProtectedPaths:    []string{relativePath},
 	}
 }
 
-func testChildTopology(records ...childTopologyRecord) *childMountTopology {
-	topology := defaultChildMountTopology()
-	for i := range records {
-		record := records[i]
-		topology.mounts[record.mountID] = record
+func testParentTopologies(
+	parent *StandaloneMountConfig,
+	children ...syncengine.ShortcutChildTopology,
+) map[mountID]syncengine.ShortcutChildTopologyPublication {
+	if parent == nil {
+		return nil
 	}
-	return topology
+	return map[mountID]syncengine.ShortcutChildTopologyPublication{
+		mountID(parent.CanonicalID.String()): {
+			NamespaceID: parent.CanonicalID.String(),
+			Children:    children,
+		},
+	}
 }
 
 // Validates: R-2.8.1
@@ -155,7 +158,7 @@ func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
-		testChildTopology(testChildTopologyRecordForParent(&parent)),
+		testParentTopologies(&parent, testPublishedShortcutChild()),
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
@@ -167,13 +170,13 @@ func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
 	assert.Equal(t, MountProjectionStandalone, parentMount.projectionKind)
 	assert.Equal(t, []string{"Shortcuts/Docs"}, parentMount.localSkipDirs)
 	assert.Equal(t, MountProjectionChild, childMount.projectionKind)
-	assert.Equal(t, mountID("child-docs"), childMount.mountID)
+	assert.Equal(t, mountID(config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")), childMount.mountID)
 	assert.Equal(t, parentMount.mountID, childMount.parentMountID)
 	assert.True(t, childMount.canonicalID.IsZero())
 	assert.Empty(t, childMount.driveType)
 	assert.False(t, childMount.rejectSharePointRootForms)
 	assert.Equal(t, filepath.Join(parent.SyncRoot, "Shortcuts", "Docs"), childMount.syncRoot)
-	assert.Equal(t, config.MountStatePath("child-docs"), childMount.statePath)
+	assert.Equal(t, config.MountStatePath(config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")), childMount.statePath)
 	assert.Equal(t, driveid.MustCanonicalID("personal:owner@example.com"), childMount.tokenOwnerCanonical)
 	assert.Equal(t, "owner@example.com", childMount.accountEmail)
 	assert.Equal(t, 7, childMount.transferWorkers)
@@ -196,7 +199,7 @@ func TestCompileRuntimeMounts_ParentPausePausesChildAndFiltersParentSubtree(t *t
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
-		testChildTopology(testChildTopologyRecordForParent(&parent)),
+		testParentTopologies(&parent, testPublishedShortcutChild()),
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
@@ -212,13 +215,13 @@ func TestCompileRuntimeMounts_ParentPausePausesChildAndFiltersParentSubtree(t *t
 func TestCompileRuntimeMounts_ConflictChildStillFiltersParentSubtree(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
-	record := testChildTopologyRecordForParent(&parent)
-	record.state = syncengine.ShortcutChildBlocked
-	record.blockedDetail = "duplicate_content_root"
+	child := testPublishedShortcutChild()
+	child.State = syncengine.ShortcutChildBlocked
+	child.BlockedDetail = "duplicate_content_root"
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
-		testChildTopology(record),
+		testParentTopologies(&parent, child),
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 1)
@@ -231,18 +234,18 @@ func TestCompileRuntimeMounts_ConflictChildStillFiltersParentSubtree(t *testing.
 func TestCompileRuntimeMounts_PendingRemovalChildStillFiltersParentSubtree(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
-	record := testChildTopologyRecordForParent(&parent)
-	record.state = syncengine.ShortcutChildRetiring
+	child := testPublishedShortcutChild()
+	child.State = syncengine.ShortcutChildRetiring
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
-		testChildTopology(record),
+		testParentTopologies(&parent, child),
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
 	require.Empty(t, compiled.Skipped)
 	assert.Equal(t, []string{"Shortcuts/Docs"}, compiled.Mounts[0].localSkipDirs)
-	assert.Equal(t, []string{"child-docs"}, compiled.FinalDrainMountIDs)
+	assert.Equal(t, []string{config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")}, compiled.FinalDrainMountIDs)
 	assert.True(t, compiled.Mounts[1].finalDrain)
 }
 
@@ -250,13 +253,13 @@ func TestCompileRuntimeMounts_PendingRemovalChildStillFiltersParentSubtree(t *te
 func TestCompileRuntimeMounts_ReservedChildPathStillFiltersParentSubtree(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
-	record := testChildTopologyRecordForParent(&parent)
-	record.relativeLocalPath = "Shortcuts/New Docs"
-	record.reservedLocalPaths = []string{"Shortcuts/Old Docs"}
+	child := testPublishedShortcutChild()
+	child.RelativeLocalPath = "Shortcuts/New Docs"
+	child.ProtectedPaths = []string{"Shortcuts/New Docs", "Shortcuts/Old Docs"}
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
-		testChildTopology(record),
+		testParentTopologies(&parent, child),
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
@@ -267,15 +270,15 @@ func TestCompileRuntimeMounts_ReservedChildPathStillFiltersParentSubtree(t *test
 func TestCompileRuntimeMounts_UnavailableChildWithoutRemoteTargetStillFiltersParentSubtree(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
-	record := testChildTopologyRecordForParent(&parent)
-	record.remoteDriveID = ""
-	record.remoteItemID = ""
-	record.state = syncengine.ShortcutChildBlocked
-	record.blockedDetail = "shortcut_binding_unavailable"
+	child := testPublishedShortcutChild()
+	child.RemoteDriveID = ""
+	child.RemoteItemID = ""
+	child.State = syncengine.ShortcutChildBlocked
+	child.BlockedDetail = "shortcut_binding_unavailable"
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
-		testChildTopology(record),
+		testParentTopologies(&parent, child),
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 1)
@@ -289,17 +292,15 @@ func TestCompileRuntimeMounts_ChildDeltaCapabilityComesFromMountTokenOwner(t *te
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "business:owner@example.com", "Parent")
 	parent.RemoteRootDeltaCapable = false
-	record := testChildTopologyRecordForParent(&parent)
-	record.tokenOwnerCanonical = "personal:owner@example.com"
-
+	child := testPublishedShortcutChild()
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
-		testChildTopology(record),
+		testParentTopologies(&parent, child),
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
-	assert.True(t, compiled.Mounts[1].remoteRootDeltaCapable)
-	assert.Equal(t, driveid.MustCanonicalID("personal:owner@example.com"), compiled.Mounts[1].tokenOwnerCanonical)
+	assert.False(t, compiled.Mounts[1].remoteRootDeltaCapable)
+	assert.Equal(t, parent.TokenOwnerCanonical, compiled.Mounts[1].tokenOwnerCanonical)
 }
 
 // Validates: R-2.8.1
@@ -312,7 +313,7 @@ func TestCompileRuntimeMounts_StandaloneContentRootSuppressesChild(t *testing.T)
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent, standalone},
-		testChildTopology(testChildTopologyRecordForParent(&parent)),
+		testParentTopologies(&parent, testPublishedShortcutChild()),
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
@@ -328,16 +329,18 @@ func TestCompileRuntimeMounts_MissingParentSkipsChild(t *testing.T) {
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
-		testChildTopology(childTopologyRecord{
-			mountID:             "child-docs",
-			namespaceID:         "missing-parent",
-			bindingItemID:       "binding-child-docs",
-			relativeLocalPath:   "Shortcuts/Docs",
-			tokenOwnerCanonical: "personal:owner@example.com",
-			remoteDriveID:       "remote-drive",
-			remoteItemID:        "remote-root",
-			state:               syncengine.ShortcutChildDesired,
-		}),
+		map[mountID]syncengine.ShortcutChildTopologyPublication{
+			"missing-parent": {
+				NamespaceID: "missing-parent",
+				Children: []syncengine.ShortcutChildTopology{{
+					BindingItemID:     "binding-child-docs",
+					RelativeLocalPath: "Shortcuts/Docs",
+					RemoteDriveID:     "remote-drive",
+					RemoteItemID:      "remote-root",
+					State:             syncengine.ShortcutChildDesired,
+				}},
+			},
+		},
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 1)

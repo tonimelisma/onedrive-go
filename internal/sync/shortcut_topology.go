@@ -19,7 +19,6 @@ type ShortcutTopologyBatch struct {
 	Upserts     []ShortcutBindingUpsert
 	Deletes     []ShortcutBindingDelete
 	Unavailable []ShortcutBindingUnavailable
-	ParentRoots []ShortcutRootRecord
 }
 
 type ShortcutBindingUpsert struct {
@@ -46,7 +45,7 @@ type ShortcutBindingUnavailable struct {
 	Reason            string
 }
 
-type ShortcutTopologyHandler func(context.Context, ShortcutTopologyBatch) error
+type ShortcutTopologyHandler func(context.Context, ShortcutChildTopologyPublication) error
 
 type ShortcutChildTopologyState string
 
@@ -57,10 +56,15 @@ const (
 	ShortcutChildWaitingReplacement ShortcutChildTopologyState = "waiting_replacement"
 )
 
-type ShortcutChildTopologySnapshot struct {
+// ShortcutChildTopologyPublication is the parent engine's only shortcut
+// lifecycle output to multisync. Raw shortcut observations stay inside
+// internal/sync; multisync only sees the already-persisted child runner view.
+type ShortcutChildTopologyPublication struct {
 	NamespaceID string
 	Children    []ShortcutChildTopology
 }
+
+type ShortcutChildTopologySnapshot = ShortcutChildTopologyPublication
 
 type ShortcutChildTopology struct {
 	BindingItemID     string
@@ -79,21 +83,10 @@ type ShortcutChildDrainAck struct {
 	BindingItemID string
 }
 
-// ChildTopologySnapshot returns the parent-declared child topology carried by
-// this batch. ParentRoots are already persisted and classified by the parent
-// engine; callers must not reinterpret raw shortcut facts as parent policy.
-//
-//nolint:gocritic // Value receiver keeps the topology batch API simple at observation boundaries.
-func (b ShortcutTopologyBatch) ChildTopologySnapshot() ShortcutChildTopologySnapshot {
-	return shortcutChildTopologyFromRoots(b.NamespaceID, b.ParentRoots)
-}
-
-//nolint:gocritic // Value receiver keeps the topology batch API simple at observation boundaries.
 func (b ShortcutTopologyBatch) HasFacts() bool {
 	return len(b.Upserts) > 0 || len(b.Deletes) > 0 || len(b.Unavailable) > 0
 }
 
-//nolint:gocritic // Value receiver keeps the topology batch API simple at observation boundaries.
 func (b ShortcutTopologyBatch) ShouldApply() bool {
 	return b.HasFacts() || b.Kind == ShortcutTopologyObservationComplete
 }

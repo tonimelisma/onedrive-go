@@ -258,14 +258,13 @@ func (flow *engineFlow) applyShortcutTopologyBatch(ctx context.Context, batch *r
 	if err != nil {
 		return fmt.Errorf("sync: read parent shortcut root state: %w", err)
 	}
-	topology.ParentRoots = parentRoots
-	if !remoteChanged {
-		topology.Kind = ShortcutTopologyObservationComplete
-	}
 	if flow.engine.shortcutTopologyHandler == nil {
 		return nil
 	}
-	return flow.engine.shortcutTopologyHandler(ctx, topology)
+	return flow.engine.shortcutTopologyHandler(ctx, shortcutChildTopologyFromRoots(
+		topology.NamespaceID,
+		parentRoots,
+	))
 }
 
 func (flow *engineFlow) refreshLocalCurrentState(

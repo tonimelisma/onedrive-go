@@ -68,7 +68,7 @@ type Orchestrator struct {
 	statusMu         gosync.RWMutex
 	controlMounts    []string
 	shortcutMu       gosync.Mutex
-	shortcutChildren map[mountID]syncengine.ShortcutChildTopologySnapshot
+	shortcutChildren map[mountID]syncengine.ShortcutChildTopologyPublication
 	reconcileTicks   func(time.Duration) (<-chan time.Time, func())
 }
 
@@ -101,7 +101,7 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 		},
 		logger:           cfg.Logger,
 		perfRuntime:      perf.NewRuntime(cfg.PerfParent),
-		shortcutChildren: make(map[mountID]syncengine.ShortcutChildTopologySnapshot),
+		shortcutChildren: make(map[mountID]syncengine.ShortcutChildTopologyPublication),
 		reconcileTicks: func(interval time.Duration) (<-chan time.Time, func()) {
 			if interval <= 0 {
 				return nil, func() {}

@@ -85,12 +85,20 @@ type compiledMountSet struct {
 
 type childMountCandidate struct {
 	namespaceID        mountID
+	bindingItemID      string
+	localAlias         string
 	relativeLocalPath  string
 	reservedLocalPaths []string
-	record             childTopologyRecord
+	state              syncengine.ShortcutChildTopologyState
+	blockedDetail      string
 	mount              *mountSpec
 	contentRootKey     string
 	skipErr            error
+}
+
+type unmatchedShortcutChild struct {
+	namespaceID mountID
+	child       syncengine.ShortcutChildTopology
 }
 
 func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, error) {
@@ -108,22 +116,22 @@ func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, e
 
 func compileRuntimeMounts(
 	standaloneMounts []StandaloneMountConfig,
-	topology *childMountTopology,
+	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
 ) (*compiledMountSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
-	return compileRuntimeMountsForParents(parents, topology, nil)
+	return compileRuntimeMountsForParents(parents, topologies, nil)
 }
 
 func compileRuntimeMountsForParents(
 	parents []*mountSpec,
-	topology *childMountTopology,
+	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
 	logger *slog.Logger,
 ) (*compiledMountSet, error) {
 	parentByID, standaloneByRoot := indexStandaloneMounts(parents)
-	candidatesByParent, unmatchedChildren, err := buildChildMountCandidates(parentByID, normalizeChildMountTopology(topology))
+	candidatesByParent, unmatchedChildren, err := buildChildMountCandidates(parentByID, normalizeParentShortcutTopologies(topologies))
 	if err != nil {
 		return nil, err
 	}
@@ -139,19 +147,17 @@ func compileRuntimeMountsForParents(
 	return &compiledMountSet{
 		Mounts:             finalMounts,
 		Skipped:            skipped,
-		FinalDrainMountIDs: finalDrainMountIDs(topology),
+		FinalDrainMountIDs: finalDrainMountIDs(topologies),
 	}, nil
 }
 
-func normalizeChildMountTopology(topology *childMountTopology) *childMountTopology {
-	if topology == nil {
-		return defaultChildMountTopology()
+func normalizeParentShortcutTopologies(
+	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
+) map[mountID]syncengine.ShortcutChildTopologyPublication {
+	if topologies == nil {
+		return make(map[mountID]syncengine.ShortcutChildTopologyPublication)
 	}
-	if topology.mounts == nil {
-		topology.mounts = make(map[string]childTopologyRecord)
-	}
-
-	return topology
+	return topologies
 }
 
 func indexStandaloneMounts(parents []*mountSpec) (map[mountID]*mountSpec, map[string]mountID) {
@@ -167,20 +173,20 @@ func indexStandaloneMounts(parents []*mountSpec) (map[mountID]*mountSpec, map[st
 
 func buildChildMountCandidates(
 	parentByID map[mountID]*mountSpec,
-	topology *childMountTopology,
-) (map[mountID][]*childMountCandidate, []childTopologyRecord, error) {
+	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
+) (map[mountID][]*childMountCandidate, []unmatchedShortcutChild, error) {
 	candidatesByParent := make(map[mountID][]*childMountCandidate)
-	unmatchedChildren := make([]childTopologyRecord, 0)
-	records := sortedChildTopologyRecords(topology)
-	for i := range records {
-		record := &records[i]
-		parent := parentByID[mountID(record.namespaceID)]
+	unmatchedChildren := make([]unmatchedShortcutChild, 0)
+	declaredChildren := sortedPublishedShortcutChildren(topologies)
+	for i := range declaredChildren {
+		declared := declaredChildren[i]
+		parent := parentByID[declared.namespaceID]
 		if parent == nil {
-			unmatchedChildren = append(unmatchedChildren, *record)
+			unmatchedChildren = append(unmatchedChildren, unmatchedShortcutChild(declared))
 			continue
 		}
 
-		candidate, err := buildChildMountCandidate(parent, record)
+		candidate, err := buildChildMountCandidate(parent, &declared.child)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -188,6 +194,61 @@ func buildChildMountCandidates(
 	}
 
 	return candidatesByParent, unmatchedChildren, nil
+}
+
+type publishedShortcutChild struct {
+	namespaceID mountID
+	child       syncengine.ShortcutChildTopology
+}
+
+func sortedPublishedShortcutChildren(
+	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
+) []publishedShortcutChild {
+	if len(topologies) == 0 {
+		return nil
+	}
+	children := make([]publishedShortcutChild, 0)
+	for parentID, publication := range topologies {
+		namespaceID := parentID
+		if publication.NamespaceID != "" {
+			namespaceID = mountID(publication.NamespaceID)
+		}
+		for i := range publication.Children {
+			if publication.Children[i].BindingItemID == "" {
+				continue
+			}
+			children = append(children, publishedShortcutChild{
+				namespaceID: namespaceID,
+				child:       publication.Children[i],
+			})
+		}
+	}
+	sort.SliceStable(children, func(i, j int) bool {
+		if children[i].namespaceID == children[j].namespaceID {
+			if children[i].child.RelativeLocalPath == children[j].child.RelativeLocalPath {
+				return children[i].child.BindingItemID < children[j].child.BindingItemID
+			}
+			return children[i].child.RelativeLocalPath < children[j].child.RelativeLocalPath
+		}
+		return children[i].namespaceID < children[j].namespaceID
+	})
+	return children
+}
+
+func reservedPathsFromProtected(current string, protected []string) []string {
+	reserved := make([]string, 0, len(protected))
+	seen := map[string]struct{}{current: {}}
+	for _, protectedPath := range protected {
+		if protectedPath == "" {
+			continue
+		}
+		if _, ok := seen[protectedPath]; ok {
+			continue
+		}
+		seen[protectedPath] = struct{}{}
+		reserved = append(reserved, protectedPath)
+	}
+	return reserved
 }
 
 func markChildProjectionConflicts(
@@ -230,7 +291,7 @@ func assembleRuntimeMountSet(
 	parents []*mountSpec,
 	candidatesByParent map[mountID][]*childMountCandidate,
 	conflictedChildRoots map[string]struct{},
-	unmatchedChildren []childTopologyRecord,
+	unmatchedChildren []unmatchedShortcutChild,
 	logger *slog.Logger,
 ) ([]*mountSpec, []MountStartupResult) {
 	finalMounts := make([]*mountSpec, 0, len(parents))
@@ -286,8 +347,8 @@ func managedRootReservationsForCandidate(candidate *childMountCandidate) []synce
 		}
 		reservation := syncengine.ManagedRootReservation{
 			Path:      relPath,
-			MountID:   candidate.record.mountID,
-			BindingID: candidate.record.bindingItemID,
+			MountID:   candidate.mount.mountID.String(),
+			BindingID: candidate.bindingItemID,
 		}
 		reservations = append(reservations, reservation)
 	}
@@ -308,28 +369,29 @@ func skippedChildMountResult(candidate *childMountCandidate, parentID mountID, l
 	return mountStartupResultForMount(candidate.mount, candidate.skipErr)
 }
 
-func unmatchedChildStartupResults(records []childTopologyRecord, startIndex int) []MountStartupResult {
-	results := make([]MountStartupResult, 0, len(records))
+func unmatchedChildStartupResults(children []unmatchedShortcutChild, startIndex int) []MountStartupResult {
+	results := make([]MountStartupResult, 0, len(children))
 	nextIndex := startIndex
-	for i := range records {
-		record := &records[i]
-		displayName := record.localAlias
+	for i := range children {
+		child := children[i].child
+		displayName := child.LocalAlias
 		if displayName == "" {
-			displayName = path.Base(record.relativeLocalPath)
+			displayName = path.Base(child.RelativeLocalPath)
 		}
+		childMountID := config.ChildMountID(children[i].namespaceID.String(), child.BindingItemID)
 		results = append(results, MountStartupResult{
 			SelectionIndex: nextIndex,
 			Identity: MountIdentity{
-				MountID:        record.mountID,
-				ParentMountID:  record.namespaceID,
+				MountID:        childMountID,
+				ParentMountID:  children[i].namespaceID.String(),
 				ProjectionKind: MountProjectionChild,
 			},
 			DisplayName: displayName,
 			Status:      MountStartupFatal,
 			Err: fmt.Errorf(
 				"child mount %s references missing parent mount %s",
-				record.mountID,
-				record.namespaceID,
+				childMountID,
+				children[i].namespaceID,
 			),
 		})
 		nextIndex++
@@ -373,32 +435,37 @@ func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
 	}, nil
 }
 
-func buildChildMountCandidate(parent *mountSpec, record *childTopologyRecord) (*childMountCandidate, error) {
-	statePath := config.MountStatePath(record.mountID)
+func buildChildMountCandidate(parent *mountSpec, child *syncengine.ShortcutChildTopology) (*childMountCandidate, error) {
+	if parent == nil || child == nil || child.BindingItemID == "" {
+		return nil, fmt.Errorf("multisync: parent-declared child topology is incomplete")
+	}
+	relativePath := child.RelativeLocalPath
+	if relativePath == "" {
+		return nil, fmt.Errorf("multisync: parent-declared child %s is missing a local path", child.BindingItemID)
+	}
+	childMountID := config.ChildMountID(parent.mountID.String(), child.BindingItemID)
+	statePath := config.MountStatePath(childMountID)
 	if statePath == "" {
-		return nil, fmt.Errorf("multisync: state path is required for child mount %s", record.mountID)
+		return nil, fmt.Errorf("multisync: state path is required for child mount %s", childMountID)
 	}
 
-	displayName := record.localAlias
+	displayName := child.LocalAlias
 	if displayName == "" {
-		displayName = path.Base(record.relativeLocalPath)
+		displayName = path.Base(relativePath)
 	}
-	tokenOwner, err := driveid.NewCanonicalID(record.tokenOwnerCanonical)
-	if err != nil {
-		return nil, fmt.Errorf("multisync: token owner for child mount %s: %w", record.mountID, err)
-	}
+	tokenOwner := parent.tokenOwnerCanonical
 
-	child := &mountSpec{
-		mountID:                mountID(record.mountID),
+	childMount := &mountSpec{
+		mountID:                mountID(childMountID),
 		parentMountID:          parent.mountID,
-		bindingItemID:          record.bindingItemID,
+		bindingItemID:          child.BindingItemID,
 		projectionKind:         MountProjectionChild,
 		canonicalID:            driveid.CanonicalID{},
 		displayName:            displayName,
-		syncRoot:               filepath.Join(parent.syncRoot, filepath.FromSlash(record.relativeLocalPath)),
+		syncRoot:               filepath.Join(parent.syncRoot, filepath.FromSlash(relativePath)),
 		statePath:              statePath,
-		remoteDriveID:          driveid.New(record.remoteDriveID),
-		remoteRootItemID:       record.remoteItemID,
+		remoteDriveID:          driveid.New(child.RemoteDriveID),
+		remoteRootItemID:       child.RemoteItemID,
 		tokenOwnerCanonical:    tokenOwner,
 		accountEmail:           tokenOwner.Email(),
 		paused:                 parent.paused,
@@ -407,67 +474,44 @@ func buildChildMountCandidate(parent *mountSpec, record *childTopologyRecord) (*
 		transferWorkers:        parent.transferWorkers,
 		checkWorkers:           parent.checkWorkers,
 		minFreeSpace:           parent.minFreeSpace,
-		finalDrain:             record.state == syncengine.ShortcutChildRetiring,
+		finalDrain:             child.State == syncengine.ShortcutChildRetiring,
 	}
-	skipErr := shortcutChildRunnerSkipError(record)
+	skipErr := shortcutChildRunnerSkipError(childMountID, child.State, child.BlockedDetail)
 
 	return &childMountCandidate{
 		namespaceID:        parent.mountID,
-		relativeLocalPath:  record.relativeLocalPath,
-		reservedLocalPaths: append([]string(nil), record.reservedLocalPaths...),
-		record:             *record,
-		mount:              child,
-		contentRootKey:     child.contentRootKey(),
+		bindingItemID:      child.BindingItemID,
+		localAlias:         displayName,
+		relativeLocalPath:  relativePath,
+		reservedLocalPaths: reservedPathsFromProtected(relativePath, child.ProtectedPaths),
+		state:              child.State,
+		blockedDetail:      child.BlockedDetail,
+		mount:              childMount,
+		contentRootKey:     childMount.contentRootKey(),
 		skipErr:            skipErr,
 	}, nil
 }
 
-func shortcutChildRunnerSkipError(record *childTopologyRecord) error {
-	switch record.state {
+func shortcutChildRunnerSkipError(
+	childMountID string,
+	state syncengine.ShortcutChildTopologyState,
+	blockedDetail string,
+) error {
+	switch state {
 	case "", syncengine.ShortcutChildDesired:
 		return nil
 	case syncengine.ShortcutChildRetiring:
 		return nil
 	case syncengine.ShortcutChildBlocked:
-		if record.blockedDetail != "" {
-			return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle: %s", record.mountID, record.blockedDetail)
+		if blockedDetail != "" {
+			return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle: %s", childMountID, blockedDetail)
 		}
-		return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle", record.mountID)
+		return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle", childMountID)
 	case syncengine.ShortcutChildWaitingReplacement:
-		return fmt.Errorf("child mount %s is waiting for an older shortcut at the same path to finish final drain", record.mountID)
+		return fmt.Errorf("child mount %s is waiting for an older shortcut at the same path to finish final drain", childMountID)
 	default:
-		return fmt.Errorf("child mount %s has unsupported state %q", record.mountID, record.state)
+		return fmt.Errorf("child mount %s has unsupported state %q", childMountID, state)
 	}
-}
-
-func sortedChildTopologyRecords(topology *childMountTopology) []childTopologyRecord {
-	if topology == nil || len(topology.mounts) == 0 {
-		return nil
-	}
-
-	keys := make([]string, 0, len(topology.mounts))
-	for key := range topology.mounts {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	records := make([]childTopologyRecord, 0, len(keys))
-	for _, key := range keys {
-		records = append(records, topology.mounts[key])
-	}
-	sort.SliceStable(records, func(i, j int) bool {
-		if records[i].namespaceID == records[j].namespaceID {
-			if records[i].relativeLocalPath == records[j].relativeLocalPath {
-				return records[i].mountID < records[j].mountID
-			}
-
-			return records[i].relativeLocalPath < records[j].relativeLocalPath
-		}
-
-		return records[i].namespaceID < records[j].namespaceID
-	})
-
-	return records
 }
 
 func (m *mountSpec) contentRootKey() string {

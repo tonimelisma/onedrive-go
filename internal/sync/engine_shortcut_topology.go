@@ -92,11 +92,10 @@ func (e *Engine) AcknowledgeChildFinalDrain(
 		if rootErr != nil {
 			return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: read parent shortcut roots after final drain: %w", rootErr)
 		}
-		if err := e.shortcutTopologyHandler(ctx, ShortcutTopologyBatch{
-			NamespaceID: e.shortcutTopologyNamespaceID,
-			Kind:        ShortcutTopologyObservationComplete,
-			ParentRoots: roots,
-		}); err != nil {
+		if err := e.shortcutTopologyHandler(ctx, shortcutChildTopologyFromRoots(
+			e.shortcutTopologyNamespaceID,
+			roots,
+		)); err != nil {
 			return ShortcutChildTopologySnapshot{}, fmt.Errorf("sync: publish shortcut topology after final drain: %w", err)
 		}
 	}

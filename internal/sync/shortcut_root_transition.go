@@ -13,6 +13,7 @@ const (
 	shortcutRootEventProtectedPathConflict     shortcutRootLifecycleEvent = "protected_path_conflict"
 	shortcutRootEventLocalRootReady            shortcutRootLifecycleEvent = "local_root_ready"
 	shortcutRootEventLocalPathBlocked          shortcutRootLifecycleEvent = "local_path_blocked"
+	shortcutRootEventAliasMutationSucceeded    shortcutRootLifecycleEvent = "alias_mutation_succeeded"
 	shortcutRootEventAliasMutationFailed       shortcutRootLifecycleEvent = "alias_mutation_failed"
 	shortcutRootEventAliasRenameAmbiguous      shortcutRootLifecycleEvent = "alias_rename_ambiguous"
 	shortcutRootEventProjectionCleanupFailed   shortcutRootLifecycleEvent = "projection_cleanup_failed"
@@ -29,8 +30,12 @@ func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecyc
 			shortcutRootEventProtectedPathConflict: {ShortcutRootStateBlockedPath},
 			shortcutRootEventLocalRootReady:        {ShortcutRootStateActive},
 			shortcutRootEventLocalPathBlocked:      {ShortcutRootStateBlockedPath},
-			shortcutRootEventAliasMutationFailed:   {ShortcutRootStateAliasMutationBlocked},
-			shortcutRootEventAliasRenameAmbiguous:  {ShortcutRootStateRenameAmbiguous},
+			shortcutRootEventAliasMutationSucceeded: {
+				ShortcutRootStateActive,
+				ShortcutRootStateRemovedFinalDrain,
+			},
+			shortcutRootEventAliasMutationFailed:  {ShortcutRootStateAliasMutationBlocked},
+			shortcutRootEventAliasRenameAmbiguous: {ShortcutRootStateRenameAmbiguous},
 		},
 		ShortcutRootStateTargetUnavailable: {
 			shortcutRootEventRemoteUpsert:          {ShortcutRootStateActive},
@@ -40,6 +45,10 @@ func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecyc
 			shortcutRootEventProtectedPathConflict: {ShortcutRootStateBlockedPath},
 			shortcutRootEventLocalRootReady:        {ShortcutRootStateActive},
 			shortcutRootEventLocalPathBlocked:      {ShortcutRootStateBlockedPath},
+			shortcutRootEventAliasMutationSucceeded: {
+				ShortcutRootStateActive,
+				ShortcutRootStateRemovedFinalDrain,
+			},
 		},
 		ShortcutRootStateBlockedPath: {
 			shortcutRootEventRemoteUpsert:          {ShortcutRootStateActive},
@@ -49,24 +58,36 @@ func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecyc
 			shortcutRootEventProtectedPathConflict: {ShortcutRootStateBlockedPath},
 			shortcutRootEventLocalRootReady:        {ShortcutRootStateActive},
 			shortcutRootEventLocalPathBlocked:      {ShortcutRootStateBlockedPath},
-			shortcutRootEventAliasMutationFailed:   {ShortcutRootStateAliasMutationBlocked},
-			shortcutRootEventAliasRenameAmbiguous:  {ShortcutRootStateRenameAmbiguous},
+			shortcutRootEventAliasMutationSucceeded: {
+				ShortcutRootStateActive,
+				ShortcutRootStateRemovedFinalDrain,
+			},
+			shortcutRootEventAliasMutationFailed:  {ShortcutRootStateAliasMutationBlocked},
+			shortcutRootEventAliasRenameAmbiguous: {ShortcutRootStateRenameAmbiguous},
 		},
 		ShortcutRootStateRenameAmbiguous: {
-			shortcutRootEventRemoteUpsert:         {ShortcutRootStateActive},
-			shortcutRootEventRemoteDelete:         {ShortcutRootStateRemovedFinalDrain},
-			shortcutRootEventCompleteOmission:     {ShortcutRootStateRemovedFinalDrain},
-			shortcutRootEventLocalRootReady:       {ShortcutRootStateActive},
-			shortcutRootEventLocalPathBlocked:     {ShortcutRootStateBlockedPath},
+			shortcutRootEventRemoteUpsert:     {ShortcutRootStateActive},
+			shortcutRootEventRemoteDelete:     {ShortcutRootStateRemovedFinalDrain},
+			shortcutRootEventCompleteOmission: {ShortcutRootStateRemovedFinalDrain},
+			shortcutRootEventLocalRootReady:   {ShortcutRootStateActive},
+			shortcutRootEventLocalPathBlocked: {ShortcutRootStateBlockedPath},
+			shortcutRootEventAliasMutationSucceeded: {
+				ShortcutRootStateActive,
+				ShortcutRootStateRemovedFinalDrain,
+			},
 			shortcutRootEventAliasMutationFailed:  {ShortcutRootStateAliasMutationBlocked},
 			shortcutRootEventAliasRenameAmbiguous: {ShortcutRootStateRenameAmbiguous},
 		},
 		ShortcutRootStateAliasMutationBlocked: {
-			shortcutRootEventRemoteUpsert:         {ShortcutRootStateActive},
-			shortcutRootEventRemoteDelete:         {ShortcutRootStateRemovedFinalDrain},
-			shortcutRootEventCompleteOmission:     {ShortcutRootStateRemovedFinalDrain},
-			shortcutRootEventLocalRootReady:       {ShortcutRootStateActive},
-			shortcutRootEventLocalPathBlocked:     {ShortcutRootStateBlockedPath},
+			shortcutRootEventRemoteUpsert:     {ShortcutRootStateActive},
+			shortcutRootEventRemoteDelete:     {ShortcutRootStateRemovedFinalDrain},
+			shortcutRootEventCompleteOmission: {ShortcutRootStateRemovedFinalDrain},
+			shortcutRootEventLocalRootReady:   {ShortcutRootStateActive},
+			shortcutRootEventLocalPathBlocked: {ShortcutRootStateBlockedPath},
+			shortcutRootEventAliasMutationSucceeded: {
+				ShortcutRootStateActive,
+				ShortcutRootStateRemovedFinalDrain,
+			},
 			shortcutRootEventAliasMutationFailed:  {ShortcutRootStateAliasMutationBlocked},
 			shortcutRootEventAliasRenameAmbiguous: {ShortcutRootStateRenameAmbiguous},
 		},

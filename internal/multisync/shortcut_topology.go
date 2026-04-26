@@ -22,8 +22,8 @@ func (o *Orchestrator) shortcutTopologyHandlerForMount(
 	}
 
 	parent := *mount
-	return func(_ context.Context, batch syncengine.ShortcutTopologyBatch) error {
-		changed := o.applyShortcutTopologyBatch(&parent, batch)
+	return func(_ context.Context, publication syncengine.ShortcutChildTopologyPublication) error {
+		changed := o.receiveParentShortcutTopology(&parent, publication)
 		if changed && restartOnChange {
 			return syncengine.ErrMountTopologyChanged
 		}
@@ -41,32 +41,31 @@ func setShortcutTopologyHandler(engine engineRunner, handler syncengine.Shortcut
 	}
 }
 
-//nolint:gocritic // ShortcutTopologyBatch is the sync API value type; this method is the handler boundary.
-func (o *Orchestrator) applyShortcutTopologyBatch(
+func (o *Orchestrator) receiveParentShortcutTopology(
 	parent *mountSpec,
-	batch syncengine.ShortcutTopologyBatch,
+	publication syncengine.ShortcutChildTopologyPublication,
 ) bool {
-	if parent == nil || !batch.ShouldApply() {
+	if parent == nil {
 		return false
 	}
-	if batch.NamespaceID == "" {
-		batch.NamespaceID = parent.mountID.String()
+	if publication.NamespaceID == "" {
+		publication.NamespaceID = parent.mountID.String()
 	}
-	if batch.NamespaceID != parent.mountID.String() {
+	if publication.NamespaceID != parent.mountID.String() {
 		if o != nil && o.logger != nil {
-			o.logger.Warn("ignoring shortcut topology from mismatched namespace",
-				"namespace_id", batch.NamespaceID,
+			o.logger.Warn("ignoring parent shortcut topology from mismatched namespace",
+				"namespace_id", publication.NamespaceID,
 				"parent_id", parent.mountID.String(),
 			)
 		}
 		return false
 	}
 
-	changed := o.storeShortcutChildTopology(parent.mountID, batch.ChildTopologySnapshot())
+	changed := o.storeParentShortcutTopology(parent.mountID, publication)
 	if changed && o != nil && o.logger != nil {
-		o.logger.Info("applied shortcut topology batch",
+		o.logger.Info("received parent shortcut topology",
 			"namespace_id", parent.mountID.String(),
-			"children", len(batch.ParentRoots),
+			"children", len(publication.Children),
 		)
 	}
 	return changed

@@ -172,14 +172,21 @@ func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *as
 		"MoveItem":                           "shortcut alias mutation must go through the parent engine",
 		"DeleteItem":                         "shortcut alias mutation must go through the parent engine",
 		"ApplyShortcutAliasMutation":         "shortcut alias mutation must go through the parent engine",
+		"applyShortcutAliasMutation":         "shortcut alias mutation must stay inside the parent engine",
 		"ApplyShortcutTopology":              "parent shortcut-root persistence must stay in internal/sync",
 		"ReplaceShortcutRoots":               "parent shortcut-root persistence must stay in internal/sync",
 		"AcknowledgeShortcutChildFinalDrain": "parent shortcut-root persistence must stay in internal/sync",
 		"RemoveStateDBFiles":                 "child DB mutation must stay outside multisync",
 	}
 	forbiddenIdents := map[string]string{
-		"ShortcutAliasMutation": "shortcut alias mutation must go through the parent engine",
-		"RemoveStateDBFiles":    "child DB mutation must stay outside multisync",
+		"ShortcutAliasMutation":      "shortcut alias mutation must go through the parent engine",
+		"shortcutAliasMutation":      "shortcut alias mutation must stay inside the parent engine",
+		"ShortcutTopologyBatch":      "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutBindingUpsert":      "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutBindingDelete":      "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutBindingUnavailable": "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutRootRecord":         "parent shortcut-root state must stay in internal/sync",
+		"RemoveStateDBFiles":         "child DB mutation must stay outside multisync",
 	}
 	forbiddenLocalpathSelectors := map[string]struct{}{
 		"MkdirAll": {},
@@ -203,42 +210,41 @@ func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *as
 		if match != "" {
 			return false
 		}
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-
-		switch fun := call.Fun.(type) {
+		switch n := node.(type) {
 		case *ast.Ident:
-			if description, forbidden := forbiddenIdents[fun.Name]; forbidden {
-				match = fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, fset.Position(fun.Pos()).Line)
+			if description, forbidden := forbiddenIdents[n.Name]; forbidden {
+				match = fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, fset.Position(n.Pos()).Line)
 				return false
 			}
 		case *ast.SelectorExpr:
-			if description, forbidden := forbiddenSelectors[fun.Sel.Name]; forbidden {
-				match = fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, fset.Position(fun.Pos()).Line)
+			if description, forbidden := forbiddenSelectors[n.Sel.Name]; forbidden {
+				match = fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, fset.Position(n.Pos()).Line)
 				return false
 			}
-			x, ok := fun.X.(*ast.Ident)
+			if description, forbidden := forbiddenIdents[n.Sel.Name]; forbidden {
+				match = fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, fset.Position(n.Pos()).Line)
+				return false
+			}
+			x, ok := n.X.(*ast.Ident)
 			if !ok {
 				return true
 			}
 			if _, imported := localpathAliases[x.Name]; imported && !controlSocketFile {
-				if _, forbidden := forbiddenLocalpathSelectors[fun.Sel.Name]; forbidden {
+				if _, forbidden := forbiddenLocalpathSelectors[n.Sel.Name]; forbidden {
 					match = fmt.Sprintf(
 						"shortcut authority violation: multisync filesystem access is limited to control-socket paths: %s:%d",
 						path,
-						fset.Position(fun.Pos()).Line,
+						fset.Position(n.Pos()).Line,
 					)
 					return false
 				}
 			}
 			if _, imported := osAliases[x.Name]; imported && !controlSocketFile {
-				if _, forbidden := forbiddenOSSelectors[fun.Sel.Name]; forbidden {
+				if _, forbidden := forbiddenOSSelectors[n.Sel.Name]; forbidden {
 					match = fmt.Sprintf(
 						"shortcut authority violation: multisync parent sync-dir filesystem access is forbidden: %s:%d",
 						path,
-						fset.Position(fun.Pos()).Line,
+						fset.Position(n.Pos()).Line,
 					)
 					return false
 				}
@@ -310,7 +316,7 @@ func ensureMultisyncDoesNotCallParentGraphDiscovery(repoRoot string) error {
 func ensureMultisyncDoesNotMutateParentShortcutAliases(repoRoot string) error {
 	match, err := findTextMatch(
 		[]string{filepath.Join(repoRoot, "internal", "multisync")},
-		regexp.MustCompile(`\.(MoveItem|DeleteItem|ApplyShortcutAliasMutation)\(|ShortcutAliasMutation`),
+		regexp.MustCompile(`\.(MoveItem|DeleteItem|ApplyShortcutAliasMutation|applyShortcutAliasMutation)\(|[Ss]hortcutAliasMutation`),
 		func(path string) bool {
 			return strings.HasSuffix(path, "_test.go") || !strings.HasSuffix(path, ".go")
 		},
