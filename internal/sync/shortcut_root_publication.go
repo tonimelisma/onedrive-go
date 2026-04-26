@@ -1,7 +1,7 @@
 package sync
 
-func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootRecord) ShortcutChildTopologySnapshot {
-	snapshot := ShortcutChildTopologySnapshot{
+func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootRecord) ShortcutChildTopologyPublication {
+	snapshot := ShortcutChildTopologyPublication{
 		NamespaceID: namespaceID,
 		Children:    make([]ShortcutChildTopology, 0, len(roots)),
 	}
@@ -12,8 +12,9 @@ func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootReco
 		}
 		if root.State == ShortcutRootStateRemovedChildCleanupPending {
 			snapshot.CleanupRequests = append(snapshot.CleanupRequests, ShortcutChildArtifactCleanupRequest{
-				BindingItemID: root.BindingItemID,
-				Reason:        ShortcutChildArtifactCleanupParentRemoved,
+				BindingItemID:     root.BindingItemID,
+				RelativeLocalPath: root.RelativeLocalPath,
+				Reason:            ShortcutChildArtifactCleanupParentRemoved,
 			})
 			continue
 		}

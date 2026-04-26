@@ -20,6 +20,7 @@ func TestShortcutRootTransitionTableCoversStates(t *testing.T) {
 		ShortcutRootStateRemovedFinalDrain,
 		ShortcutRootStateRemovedReleasePending,
 		ShortcutRootStateRemovedCleanupBlocked,
+		ShortcutRootStateRemovedChildCleanupPending,
 		ShortcutRootStateSamePathReplacementWaiting,
 		ShortcutRootStateDuplicateTarget,
 	}
@@ -27,6 +28,29 @@ func TestShortcutRootTransitionTableCoversStates(t *testing.T) {
 	for _, state := range states {
 		_, ok := transitions[state]
 		assert.Truef(t, ok, "missing transition table entry for %s", state)
+	}
+}
+
+// Validates: R-2.4.8
+func TestShortcutRootStatusMetadataCoversNonActiveStates(t *testing.T) {
+	t.Parallel()
+
+	states := []ShortcutRootState{
+		ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateBlockedPath,
+		ShortcutRootStateRenameAmbiguous,
+		ShortcutRootStateAliasMutationBlocked,
+		ShortcutRootStateRemovedFinalDrain,
+		ShortcutRootStateRemovedReleasePending,
+		ShortcutRootStateRemovedCleanupBlocked,
+		ShortcutRootStateRemovedChildCleanupPending,
+		ShortcutRootStateSamePathReplacementWaiting,
+		ShortcutRootStateDuplicateTarget,
+	}
+	for _, state := range states {
+		metadata := ShortcutRootStatus(state)
+		assert.Equal(t, string(state), metadata.DisplayState)
+		assert.NotEmpty(t, metadata.Issue)
 	}
 }
 

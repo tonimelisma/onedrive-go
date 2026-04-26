@@ -30,11 +30,6 @@ var ErrWatchLimitExhausted = errors.New("sync: inotify watch limit exhausted")
 // resync is required. Returned when the Graph API responds with HTTP 410.
 var ErrDeltaExpired = errors.New("sync: delta token expired (resync required)")
 
-// ErrChildPublicationChanged is returned by a parent-root watch engine after a
-// shortcut topology batch is durably accepted and the compiled mount view must
-// be rebuilt before remote observation can commit its cursor.
-var ErrChildPublicationChanged = errors.New("sync: child publication changed")
-
 // ErrMountRootUnavailable is returned when the sync root for a mounted content
 // root is missing or inaccessible. Runtimes treat this as mount lifecycle, not
 // a request to delete remote content below that root.

@@ -1,6 +1,7 @@
 package multisync
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -266,8 +267,9 @@ func TestStoreParentShortcutTopology_UsesParentCleanupRequests(t *testing.T) {
 	changed := orch.storeParentShortcutTopology(parent.mountID, syncengine.ShortcutChildTopologyPublication{
 		NamespaceID: parent.mountID.String(),
 		CleanupRequests: []syncengine.ShortcutChildArtifactCleanupRequest{{
-			BindingItemID: "binding-old",
-			Reason:        syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			BindingItemID:     "binding-old",
+			RelativeLocalPath: "Shortcuts/Old",
+			Reason:            syncengine.ShortcutChildArtifactCleanupParentRemoved,
 		}},
 	})
 
@@ -285,12 +287,14 @@ func TestStoreParentShortcutTopology_UsesParentCleanupRequests(t *testing.T) {
 	require.Len(t, compiled.Mounts, 1)
 	require.Len(t, compiled.CleanupChildren, 1)
 	assert.Equal(t, config.ChildMountID(parent.mountID.String(), "binding-old"), compiled.CleanupChildren[0].mountID)
+	assert.Equal(t, filepath.Join(parent.syncRoot, "Shortcuts", "Old"), compiled.CleanupChildren[0].localRoot)
 
 	changed = orch.storeParentShortcutTopology(parent.mountID, syncengine.ShortcutChildTopologyPublication{
 		NamespaceID: parent.mountID.String(),
 		CleanupRequests: []syncengine.ShortcutChildArtifactCleanupRequest{{
-			BindingItemID: "binding-old",
-			Reason:        syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			BindingItemID:     "binding-old",
+			RelativeLocalPath: "Shortcuts/Old",
+			Reason:            syncengine.ShortcutChildArtifactCleanupParentRemoved,
 		}},
 	})
 	assert.False(t, changed)
@@ -357,7 +361,7 @@ func TestCompileRuntimeMountsFromParentChildTopology_DoesNotClassifyDuplicateAut
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestCompileRuntimeMountsFromParentChildTopology_StandaloneContentRootWins(t *testing.T) {
+func TestCompileRuntimeMountsFromParentChildTopology_StandaloneContentRootRunsBesideChild(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
@@ -383,7 +387,6 @@ func TestCompileRuntimeMountsFromParentChildTopology_StandaloneContentRootWins(t
 		nil,
 	)
 	require.NoError(t, err)
-	assert.Len(t, compiled.Mounts, 2)
-	require.Len(t, compiled.Skipped, 1)
-	assert.Contains(t, compiled.Skipped[0].Err.Error(), "standalone mount")
+	assert.Len(t, compiled.Mounts, 3)
+	assert.Empty(t, compiled.Skipped)
 }

@@ -485,7 +485,7 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
 	child := testShortcutStatusChild(parentCID, syncengine.ShortcutRootStateBlockedPath)
-	child.Root.BlockedDetail = "content root already projected by standalone mount"
+	child.Root.BlockedDetail = "shortcut alias path is blocked by a local file"
 	mount := buildChildStatusMount(
 		config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,
@@ -497,7 +497,7 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	assert.Empty(t, mount.CanonicalID)
 	assert.Equal(t, "Docs ("+mount.MountID+")", statusMountLabel(&mount))
 	assert.Equal(t, string(syncengine.ShortcutRootStateBlockedPath), mount.StateReason)
-	assert.Contains(t, mount.StateDetail, "standalone mount")
+	assert.Contains(t, mount.StateDetail, "local file")
 	assert.Contains(t, mount.RecoveryAction, "Clear the blocking local path")
 	require.NotNil(t, mount.AutoRetry)
 	assert.True(t, *mount.AutoRetry)

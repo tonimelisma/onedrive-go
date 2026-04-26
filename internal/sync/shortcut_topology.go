@@ -67,8 +67,6 @@ type ShortcutChildTopologyPublication struct {
 	CleanupRequests []ShortcutChildArtifactCleanupRequest
 }
 
-type ShortcutChildTopologySnapshot = ShortcutChildTopologyPublication
-
 type ShortcutChildTopology struct {
 	BindingItemID     string
 	RelativeLocalPath string
@@ -122,8 +120,9 @@ const (
 )
 
 type ShortcutChildArtifactCleanupRequest struct {
-	BindingItemID string
-	Reason        ShortcutChildArtifactCleanupReason
+	BindingItemID     string
+	RelativeLocalPath string
+	Reason            ShortcutChildArtifactCleanupReason
 }
 
 type ShortcutChildDrainAck struct {

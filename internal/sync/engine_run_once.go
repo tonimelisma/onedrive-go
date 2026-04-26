@@ -44,6 +44,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 	if err != nil {
 		return nil, err
 	}
+	if err := e.publishShortcutChildTopology(ctx, runtime.ChildPublication); err != nil {
+		return nil, err
+	}
 
 	// SQLite-derived plan approved — commit the deferred observation progress now.
 	if _, err := runner.commitPendingRemoteObservation(ctx, runtime.PendingRemoteObservation); err != nil {
