@@ -38,6 +38,7 @@ type Engine struct {
 	dataDir                     string
 	syncRoot                    string
 	syncTree                    *synctree.Root
+	expectedSyncRootIdentity    *synctree.FileIdentity
 	driveID                     driveid.ID
 	driveType                   string
 	remoteRootItemID            string
@@ -109,7 +110,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, fmt.Errorf("sync: loading parent shortcut root reservations: %w", err)
 	}
 
-	syncTree, err := synctree.Open(cfg.SyncRoot)
+	syncTree, err := openSyncTreeWithExpectedIdentity(cfg.SyncRoot, cfg.ExpectedSyncRootIdentity)
 	if err != nil {
 		return nil, fmt.Errorf("sync: opening sync tree: %w", err)
 	}
@@ -152,6 +153,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		dataDir:                     cfg.DataDir,
 		syncRoot:                    cfg.SyncRoot,
 		syncTree:                    syncTree,
+		expectedSyncRootIdentity:    cloneFileIdentity(cfg.ExpectedSyncRootIdentity),
 		driveID:                     cfg.DriveID,
 		driveType:                   cfg.DriveType,
 		remoteRootItemID:            cfg.RemoteRootItemID,
@@ -181,19 +183,27 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		},
 	}
 
-	e.permHandler = &PermissionHandler{
-		store:            e.baseline,
+	e.permHandler = newEnginePermissionHandler(e, cfg, syncTree)
+
+	storeOwnedByEngine = true
+	return e, nil
+}
+
+func newEnginePermissionHandler(
+	engine *Engine,
+	cfg *engineInputs,
+	syncTree *synctree.Root,
+) *PermissionHandler {
+	return &PermissionHandler{
+		store:            engine.baseline,
 		permChecker:      cfg.PermChecker,
 		syncTree:         syncTree,
 		driveID:          cfg.DriveID,
 		accountEmail:     cfg.AccountEmail,
 		remoteRootItemID: cfg.RemoteRootItemID,
 		logger:           cfg.Logger,
-		nowFn:            e.nowFunc,
+		nowFn:            engine.nowFunc,
 	}
-
-	storeOwnedByEngine = true
-	return e, nil
 }
 
 func closeEngineSyncStoreOnStartupFailure(
@@ -212,6 +222,34 @@ func closeEngineSyncStoreOnStartupFailure(
 			)
 		}
 	}
+}
+
+func openSyncTreeWithExpectedIdentity(
+	syncRoot string,
+	expected *synctree.FileIdentity,
+) (*synctree.Root, error) {
+	syncTree, err := synctree.Open(syncRoot)
+	if err != nil {
+		return nil, fmt.Errorf("opening sync tree: %w", err)
+	}
+	if err := validateExpectedSyncRootIdentity(syncTree, expected); err != nil {
+		return nil, err
+	}
+	return syncTree, nil
+}
+
+func validateExpectedSyncRootIdentity(root *synctree.Root, expected *synctree.FileIdentity) error {
+	if root == nil || expected == nil {
+		return nil
+	}
+	actual, err := root.IdentityNoFollow("")
+	if err != nil {
+		return fmt.Errorf("sync: verifying mount root identity: %w: %w", ErrMountRootUnavailable, err)
+	}
+	if !synctree.SameIdentity(actual, *expected) {
+		return fmt.Errorf("sync: verifying mount root identity: %w", ErrMountRootUnavailable)
+	}
+	return nil
 }
 
 func (e *Engine) collector() *perf.Collector {

@@ -9,6 +9,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // LocalFilterConfig controls local-only observation exclusions. These filters
@@ -153,6 +154,7 @@ type engineInputs struct {
 	AccountEmail                string
 	RemoteRootItemID            string
 	RemoteRootDeltaCapable      bool
+	ExpectedSyncRootIdentity    *synctree.FileIdentity
 	Fetcher                     DeltaFetcher
 	SocketIOFetcher             SocketIOEndpointFetcher
 	Items                       ItemClient

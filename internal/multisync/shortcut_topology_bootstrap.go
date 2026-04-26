@@ -55,7 +55,8 @@ func (o *Orchestrator) bootstrapShortcutTopology(
 		o.closeBootstrappedShortcutParentEngines(ctx, bootstrapped)
 		return compiled, nil, fmt.Errorf("rebuilding mount specs after shortcut topology bootstrap: %w", err)
 	}
-	return refreshed, bootstrapped, nil
+	o.closeBootstrappedShortcutParentEngines(ctx, bootstrapped)
+	return refreshed, make(bootstrappedParentEngines), nil
 }
 
 func canReuseWatchRunnerForParentBootstrap(

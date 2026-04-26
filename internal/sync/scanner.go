@@ -102,13 +102,8 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 		slog.Int("baseline_entries", o.Baseline.Len()),
 	)
 
-	// Guard: abort if the sync root directory does not exist. Without this,
-	// WalkDir silently succeeds with zero events (walkFn's SkipEntry returns
-	// filepath.SkipDir for the root error, so WalkDir returns nil).
-	if !SyncRootExists(syncRoot) {
-		o.Logger.Warn("sync root missing, aborting scan",
-			slog.String("sync_root", syncRoot))
-		return ScanResult{}, ErrSyncRootMissing
+	if err := o.validateFullScanRoot(tree, syncRoot); err != nil {
+		return ScanResult{}, err
 	}
 
 	// Guard: abort if .nosync file is present (sync dir may be unmounted).
@@ -203,6 +198,24 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 		Rows:    sortedLocalStateRows(currentRows),
 		Skipped: skipped,
 	}, nil
+}
+
+func (o *LocalObserver) validateFullScanRoot(tree *synctree.Root, syncRoot string) error {
+	// Guard: abort if the sync root directory does not exist. Without this,
+	// WalkDir silently succeeds with zero events (walkFn's SkipEntry returns
+	// filepath.SkipDir for the root error, so WalkDir returns nil).
+	if !SyncRootExists(syncRoot) {
+		o.Logger.Warn("sync root missing, aborting scan",
+			slog.String("sync_root", syncRoot))
+		return ErrSyncRootMissing
+	}
+	if err := validateExpectedSyncRootIdentity(tree, o.expectedRootID); err != nil {
+		o.Logger.Warn("sync root identity changed, aborting scan",
+			slog.String("sync_root", syncRoot),
+			slog.String("error", err.Error()))
+		return err
+	}
+	return nil
 }
 
 // hashPhase runs hash jobs in parallel using errgroup with checkWorkers limit.

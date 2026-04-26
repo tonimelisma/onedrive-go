@@ -122,6 +122,11 @@ func (o *Orchestrator) startWatchRuntime(
 	if err != nil {
 		return nil, control, fmt.Errorf("sync: bootstrapping shortcut topology: %w", err)
 	}
+	if purgeErr := o.purgeReleasedShortcutChildArtifactsForCompiled(ctx, compiled); purgeErr != nil {
+		o.logger.Warn("purging released shortcut child state artifacts",
+			slog.String("error", purgeErr.Error()),
+		)
+	}
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
 	o.logger.Info("orchestrator starting RunWatch",
@@ -504,12 +509,11 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 		Report:         event.report,
 		Err:            event.err,
 	}
-	finalized, err := finalizeSuccessfulFinalDrainMounts(
+	finalized, err := o.finalizeSuccessfulFinalDrainMounts(
 		ctx,
 		compiled,
 		[]*MountReport{report},
 		watchParentDrainAckers(runners),
-		o.logger,
 	)
 	if err != nil {
 		o.logger.Warn("finalizing drained shortcut child mount after watch completion failed",
@@ -578,6 +582,11 @@ func (o *Orchestrator) applyWatchMountSet(
 	stopped := o.stopInactiveWatchRunners(ctx, runners, runnable)
 	runnable = runnableMountMap(compiled.Mounts)
 	stopped += o.stopInactiveWatchRunners(ctx, runners, runnable)
+	if purgeErr := o.purgeReleasedShortcutChildArtifactsForCompiled(ctx, compiled); purgeErr != nil {
+		o.logger.Warn("purging released shortcut child state artifacts",
+			slog.String("error", purgeErr.Error()),
+		)
+	}
 	started, startResults := o.startReloadWatchRunners(
 		ctx,
 		runners,
@@ -719,7 +728,18 @@ func mountSpecRuntimeEquivalent(current *mountSpec, next *mountSpec) bool {
 	return current.syncRoot == next.syncRoot &&
 		current.statePath == next.statePath &&
 		current.enableWebsocket == next.enableWebsocket &&
-		current.remoteRootDeltaCapable == next.remoteRootDeltaCapable
+		current.remoteRootDeltaCapable == next.remoteRootDeltaCapable &&
+		mountRootIdentitiesEqual(current.expectedSyncRootIdentity, next.expectedSyncRootIdentity)
+}
+
+func mountRootIdentitiesEqual(
+	current *syncengine.ShortcutRootIdentity,
+	next *syncengine.ShortcutRootIdentity,
+) bool {
+	if current == nil || next == nil {
+		return current == nil && next == nil
+	}
+	return syncengine.SameShortcutRootIdentity(*current, *next)
 }
 
 func mountSpecTuningEquivalent(current *mountSpec, next *mountSpec) bool {

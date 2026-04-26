@@ -31,6 +31,15 @@ such as final drain or same-path replacement waiting. Child content retry,
 observation issues, and target sync state remain in the child engine's own
 state DB.
 
+`shortcut_roots.local_root_identity` is the parent-owned lease on the concrete
+local alias directory. It lets the parent detect same-folder renames and lets
+managed child engines reject a deleted/recreated projection before observation
+turns it into false local truth. Removed/final-drain roots keep their protected
+paths until either clean child drain is acknowledged or the user deletes the
+local projection directory as manual discard. Manual discard removes the parent
+root row but does not mutate the child target; multisync owns purging the child
+DB and other child artifacts after it sees the release.
+
 ## Ownership Contract
 
 - Owns: SQLite truth, transactions, restart-safe rows, and narrow read helpers.

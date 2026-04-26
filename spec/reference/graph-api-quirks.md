@@ -805,6 +805,10 @@ field behavior reported by the abraunegg client and observed provider traces.
 Runtime policy: children listings send `Include-Feature=AddToOneDrive`; delta
 requests combine it with `deltashowremoteitemsaliasid` so shortcut placeholders
 remain discoverable without giving the sync engine shortcut ownership.
+Even with that header, live root listings can transiently omit a known manual
+shortcut while shared discovery and direct target traversal still work, so live
+fixture checks poll the parent root before declaring the manual shortcut
+fixture broken.
 
 Observed fixture repair on April 25, 2026: deleting a personal-account shortcut
 placeholder by item ID removed only the placeholder. Microsoft documents
@@ -817,6 +821,22 @@ contract for recreating personal-account manual fixtures. Runtime policy:
 production can delete the placeholder when the user deletes the local projected
 root, but recurring live E2E must not exercise placeholder delete/recreate
 against manually-created shortcut fixtures.
+
+Shortcut target contents are a separate authority from the parent placeholder.
+The parent drive delta/list response exposes the shortcut item and its
+[`remoteItem`](https://learn.microsoft.com/en-us/onedrive/developer/rest-api/resources/remoteitem?view=odsp-graph-online)
+target identity; child contents require traversing or syncing the target
+drive/root itself. Microsoft Graph
+[`delta`](https://learn.microsoft.com/en-us/graph/api/driveitem-delta?view=graph-rest-beta)
+token expiry still requires a fresh target enumeration, and a deleted parent
+placeholder is not a delete of the shared target. The
+[abraunegg client](https://github.com/abraunegg/onedrive/blob/master/docs/business-shared-items.md)
+follows the same split in practice: process the account/root delta first, then
+enumerate shared/remote items through their own target identities and preserve
+data when target access is lost. This repo therefore gates managed child starts
+on fresh parent shortcut topology and treats inaccessible child targets during
+final drain as retryable lifecycle, not as permission to delete either side's
+tree.
 
 ### SharedWithMe API Deprecation
 

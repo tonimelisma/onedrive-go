@@ -72,6 +72,7 @@ type mountSpec struct {
 	checkWorkers              int
 	minFreeSpace              int64
 	finalDrain                bool
+	expectedSyncRootIdentity  *syncengine.ShortcutRootIdentity
 	shortcutTopologyHandler   syncengine.ShortcutChildTopologySink
 }
 
@@ -79,6 +80,7 @@ type compiledMountSet struct {
 	Mounts             []*mountSpec
 	Skipped            []MountStartupResult
 	FinalDrainMountIDs []string
+	ReleasedChildren   []releasedShortcutChild
 }
 
 type childMountCandidate struct {
@@ -144,6 +146,7 @@ func compileRuntimeMountsForParents(
 		Mounts:             finalMounts,
 		Skipped:            skipped,
 		FinalDrainMountIDs: finalDrainMountIDs(topologies),
+		ReleasedChildren:   releasedChildren(topologies),
 	}, nil
 }
 
@@ -391,25 +394,26 @@ func buildChildMountCandidate(parent *mountSpec, child *syncengine.ShortcutChild
 	tokenOwner := parent.tokenOwnerCanonical
 
 	childMount := &mountSpec{
-		mountID:                mountID(childMountID),
-		parentMountID:          parent.mountID,
-		bindingItemID:          child.BindingItemID,
-		projectionKind:         MountProjectionChild,
-		canonicalID:            driveid.CanonicalID{},
-		displayName:            displayName,
-		syncRoot:               filepath.Join(parent.syncRoot, filepath.FromSlash(relativePath)),
-		statePath:              statePath,
-		remoteDriveID:          driveid.New(child.RemoteDriveID),
-		remoteRootItemID:       child.RemoteItemID,
-		tokenOwnerCanonical:    tokenOwner,
-		accountEmail:           tokenOwner.Email(),
-		paused:                 parent.paused,
-		enableWebsocket:        parent.enableWebsocket,
-		remoteRootDeltaCapable: config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
-		transferWorkers:        parent.transferWorkers,
-		checkWorkers:           parent.checkWorkers,
-		minFreeSpace:           parent.minFreeSpace,
-		finalDrain:             child.RunnerAction == syncengine.ShortcutChildActionFinalDrain,
+		mountID:                  mountID(childMountID),
+		parentMountID:            parent.mountID,
+		bindingItemID:            child.BindingItemID,
+		projectionKind:           MountProjectionChild,
+		canonicalID:              driveid.CanonicalID{},
+		displayName:              displayName,
+		syncRoot:                 filepath.Join(parent.syncRoot, filepath.FromSlash(relativePath)),
+		statePath:                statePath,
+		remoteDriveID:            driveid.New(child.RemoteDriveID),
+		remoteRootItemID:         child.RemoteItemID,
+		tokenOwnerCanonical:      tokenOwner,
+		accountEmail:             tokenOwner.Email(),
+		paused:                   parent.paused,
+		enableWebsocket:          parent.enableWebsocket,
+		remoteRootDeltaCapable:   config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
+		transferWorkers:          parent.transferWorkers,
+		checkWorkers:             parent.checkWorkers,
+		minFreeSpace:             parent.minFreeSpace,
+		finalDrain:               child.RunnerAction == syncengine.ShortcutChildActionFinalDrain,
+		expectedSyncRootIdentity: cloneChildRootIdentity(child.LocalRootIdentity),
 	}
 	skipErr := shortcutChildRunnerSkipError(childMountID, child.RunnerAction, child.BlockedDetail)
 

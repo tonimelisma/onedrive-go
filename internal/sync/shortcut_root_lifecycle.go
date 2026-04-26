@@ -70,7 +70,7 @@ func (e *Engine) reconcileShortcutRootRecord(
 		ShortcutRootStateDuplicateTarget:
 	case ShortcutRootStateRemovedFinalDrain,
 		ShortcutRootStateSamePathReplacementWaiting:
-		return record, true, false, nil
+		return e.reconcileRetiringShortcutRootLocalState(record)
 	case ShortcutRootStateRemovedReleasePending,
 		ShortcutRootStateRemovedCleanupBlocked:
 		next, keep, changed := e.retryShortcutRootReleaseCleanup(&record)
@@ -112,6 +112,33 @@ func (e *Engine) reconcileShortcutRootRecord(
 		return e.materializeShortcutRoot(record, relativePath)
 	}
 	return e.reconcileMissingMaterializedShortcutRoot(ctx, record, relativePath)
+}
+
+//nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
+func (e *Engine) reconcileRetiringShortcutRootLocalState(
+	record ShortcutRootRecord,
+) (ShortcutRootRecord, bool, bool, error) {
+	relativePath, ok := cleanShortcutRootRelativePath(record.RelativeLocalPath)
+	if !ok {
+		return blockedShortcutRoot(record, "shortcut alias path escapes parent sync root"), true, true, nil
+	}
+	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
+		return shortcutRootWithPathError(record, err), true, true, nil
+	}
+	state, err := e.syncTree.PathStateNoFollow(relativePath)
+	if err != nil {
+		return shortcutRootWithPathError(record, err), true, true, nil
+	}
+	if state.Exists {
+		if !state.IsDir {
+			return shortcutRootCleanupBlocked(record, fmt.Errorf("shortcut alias path is not a directory")), true, true, nil
+		}
+		return record, true, false, nil
+	}
+	if record.State == ShortcutRootStateSamePathReplacementWaiting && record.Waiting != nil {
+		return shortcutRootRecordFromReplacement(record.NamespaceID, *record.Waiting), true, true, nil
+	}
+	return ShortcutRootRecord{}, false, true, nil
 }
 
 //nolint:gocritic // ShortcutRootRecord is treated as a value in the planner-style local transition.

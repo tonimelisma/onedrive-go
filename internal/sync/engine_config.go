@@ -21,6 +21,7 @@ type EngineMountConfig struct {
 	AccountEmail                string
 	RemoteRootItemID            string
 	RemoteRootDeltaCapable      bool
+	ExpectedSyncRootIdentity    *ShortcutRootIdentity
 	EnableWebsocket             bool
 	LocalFilter                 LocalFilterConfig
 	LocalRules                  LocalObservationRules
@@ -71,6 +72,7 @@ func NewMountEngine(
 		AccountEmail:                mountCfg.AccountEmail,
 		RemoteRootItemID:            mountCfg.RemoteRootItemID,
 		RemoteRootDeltaCapable:      mountCfg.RemoteRootDeltaCapable,
+		ExpectedSyncRootIdentity:    shortcutRootIdentityToFileIdentity(mountCfg.ExpectedSyncRootIdentity),
 		Fetcher:                     session.Meta,
 		SocketIOFetcher:             session.Meta,
 		Items:                       session.Meta,

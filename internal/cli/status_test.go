@@ -208,6 +208,7 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 			displayState: "pending_removal",
 			reason:       string(syncengine.ShortcutRootStateRemovedFinalDrain),
 			detail:       "The shortcut alias was removed; child sync is finishing before release.",
+			action:       "Restore access to the shared folder so final drain can retry, or delete the local shortcut directory to discard the dirty local tree.",
 			autoRetry:    boolPtr(true),
 		},
 		{
@@ -475,6 +476,28 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	assert.Contains(t, string(encoded), `"auto_retry":true`)
 	assert.NotContains(t, string(encoded), "canonical_id")
 	assert.NotContains(t, string(encoded), "shared:")
+}
+
+// Validates: R-2.10.1, R-2.4.8
+func TestBuildChildStatusMount_FinalDrainGuidesAccessRestoreOrManualDiscard(t *testing.T) {
+	t.Parallel()
+
+	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
+	child := testShortcutStatusChild(parentCID, syncengine.ShortcutRootStateRemovedFinalDrain)
+
+	mount := buildChildStatusMount(
+		config.Drive{SyncDir: "/tmp/sync-root"},
+		&child,
+		nil,
+	)
+
+	assert.Equal(t, "pending_removal", mount.State)
+	assert.Equal(t, string(syncengine.ShortcutRootStateRemovedFinalDrain), mount.StateReason)
+	assert.Contains(t, mount.StateDetail, "child sync is finishing")
+	assert.Contains(t, mount.RecoveryAction, "Restore access")
+	assert.Contains(t, mount.RecoveryAction, "delete the local shortcut directory")
+	require.NotNil(t, mount.AutoRetry)
+	assert.True(t, *mount.AutoRetry)
 }
 
 func TestGroupDrivesByAccount(t *testing.T) {

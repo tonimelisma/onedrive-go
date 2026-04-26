@@ -19,6 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260425-01 | Fast shortcut fixture preflight saw shared target before delayed root placeholder reappeared | mitigated | graph quirk | 2026-04-25 | yes |
 | LI-20260424-02 | Recovery E2Es overfit whole-run `No changes detected` output in multi-mount sync | fixed | test harness | 2026-04-25 | yes |
 | LI-20260424-01 | Nightly status E2Es decoded deleted drive-shaped status JSON fields | fixed | test bug | 2026-04-24 | no |
 | LI-20260422-01 | Nightly `e2e_full` buckets still carried removed manual-resolution and path-narrowing workflows | fixed | test bug | 2026-04-23 | yes |
@@ -53,6 +54,45 @@ Promotion contract:
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260425-01: Fast shortcut fixture preflight saw shared target before delayed root placeholder reappeared
+
+First seen: 2026-04-25
+Last seen: 2026-04-25
+Area: fast E2E, shortcut fixture preflight
+Suite / test: local `go run ./cmd/devtool verify default`,
+`TestE2E_FixturePreflight_Fast`
+Classification: graph quirk
+Status: mitigated
+Recurring: yes
+Summary: The writable shortcut fixture's target was still discoverable through
+`shared --json` and downloadable by shared selector, but parent root
+`ls --json /` omitted the Add-to-OneDrive shortcut placeholder for the full
+poll budget. A later root listing showed the placeholder again with a fresh
+item ID, so the target and credentials were healthy while the Add-to-OneDrive
+root projection was delayed.
+Evidence:
+- The failed verifier run showed `shared --json` returning
+  `Kikkeli Shared Test Folder` with actionable `remoteDriveID` and
+  `remoteItemID`.
+- The same run successfully downloaded the sentinel file through the shared
+  selector.
+- Repeated parent root listings for `personal:testitesti18@outlook.com`
+  omitted only the writable shortcut placeholder while other root items and
+  shortcut fixtures remained visible.
+- A narrow Graph attempt to recreate the missing `remoteItem` shortcut
+  placeholder returned `503 SERVICE UNAVAILABLE`. Several minutes later, the
+  placeholder materialized in the root with a new item ID and modified time, so
+  this response must be treated as indeterminate rather than proof that no
+  mutation happened.
+Current handling: Shortcut fixture root-placeholder checks poll the parent
+root listing for the standard live Graph propagation budget before failing.
+The failure remains strict after the poll budget and reports the last root
+names, CLI error, and stdout to distinguish a genuinely broken manual fixture
+from a transient listing omission. If the placeholder does not eventually
+appear, recreating the Add-to-OneDrive shortcut from the OneDrive web UI remains
+the supported fallback.
+Promoted docs: [graph-api-quirks.md#addtoonedrive-shortcut-visibility-header](graph-api-quirks.md#addtoonedrive-shortcut-visibility-header)
 
 ## LI-20260424-01: Nightly status E2Es decoded deleted drive-shaped status JSON fields
 

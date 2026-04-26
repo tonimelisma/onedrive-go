@@ -2,6 +2,7 @@ package multisync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	gosync "sync"
@@ -70,6 +71,11 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		)
 	}
 	defer o.closeBootstrappedShortcutParentEngines(ctx, bootstrappedParents)
+	if purgeErr := o.purgeReleasedShortcutChildArtifactsForCompiled(ctx, compiled); purgeErr != nil {
+		o.logger.Warn("purging released shortcut child state artifacts",
+			slog.String("error", purgeErr.Error()),
+		)
+	}
 	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
 
 	o.logger.Info("orchestrator starting RunOnce",
@@ -94,12 +100,11 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	o.closeRunOnceChildEngines(ctx, work)
 	defer o.closeRunOnceParentEngines(ctx, work)
 
-	if finalized, finalizeErr := finalizeSuccessfulFinalDrainMounts(
+	if finalized, finalizeErr := o.finalizeSuccessfulFinalDrainMounts(
 		ctx,
 		compiled,
 		reports,
 		runOnceParentDrainAckers(work),
-		o.logger,
 	); finalizeErr != nil {
 		o.logger.Warn("finalizing drained shortcut child mounts",
 			slog.String("error", finalizeErr.Error()),
@@ -336,12 +341,11 @@ func runOnceParentDrainAckers(work []indexedMountWork) map[mountID]shortcutChild
 	return ackers
 }
 
-func finalizeSuccessfulFinalDrainMounts(
+func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	ctx context.Context,
 	compiled *compiledMountSet,
 	reports []*MountReport,
 	parentAckers map[mountID]shortcutChildDrainAcker,
-	logger *slog.Logger,
 ) (bool, error) {
 	if compiled == nil || len(compiled.FinalDrainMountIDs) == 0 {
 		return false, nil
@@ -349,16 +353,20 @@ func finalizeSuccessfulFinalDrainMounts(
 	results := classifyShortcutChildDrainResults(compiled.FinalDrainMountIDs, compiled.Mounts, reports)
 	successful := cleanShortcutChildDrainResults(results)
 	if len(successful) == 0 {
-		logUnfinishedFinalDrains(results, logger)
+		logUnfinishedFinalDrains(results, o.logger)
 		return false, nil
 	}
 
 	if err := acknowledgeSuccessfulFinalDrains(ctx, successful, compiled.Mounts, parentAckers); err != nil {
 		return false, err
 	}
-	if logger != nil {
+	if err := purgeShortcutChildArtifactsForResults(ctx, successful, o.logger); err != nil {
+		return false, err
+	}
+	o.forgetReleasedShortcutChildren(releasedShortcutChildrenForDrainResults(successful, compiled.Mounts))
+	if o.logger != nil {
 		for _, result := range successful {
-			logger.Info("parent acknowledged drained shortcut child",
+			o.logger.Info("parent acknowledged drained shortcut child",
 				"mount_id", result.MountID,
 			)
 		}
@@ -414,4 +422,54 @@ func acknowledgeSuccessfulFinalDrains(
 		}
 	}
 	return nil
+}
+
+func releasedShortcutChildrenForDrainResults(
+	successful []shortcutChildDrainResult,
+	mounts []*mountSpec,
+) []releasedShortcutChild {
+	if len(successful) == 0 {
+		return nil
+	}
+	mountByID := make(map[string]*mountSpec, len(mounts))
+	for _, mount := range mounts {
+		if mount != nil {
+			mountByID[mount.mountID.String()] = mount
+		}
+	}
+	releases := make([]releasedShortcutChild, 0, len(successful))
+	for _, result := range successful {
+		mount := mountByID[result.MountID]
+		if mount == nil {
+			continue
+		}
+		bindingItemID := result.BindingItemID
+		if bindingItemID == "" {
+			bindingItemID = mount.bindingItemID
+		}
+		if bindingItemID == "" {
+			continue
+		}
+		releases = append(releases, releasedShortcutChild{
+			mountID:       result.MountID,
+			namespaceID:   mount.parentMountID.String(),
+			bindingItemID: bindingItemID,
+			reason:        syncengine.ShortcutChildReleaseParentRemoved,
+		})
+	}
+	return releases
+}
+
+func purgeShortcutChildArtifactsForResults(
+	ctx context.Context,
+	successful []shortcutChildDrainResult,
+	logger *slog.Logger,
+) error {
+	var errs []error
+	for _, result := range successful {
+		if err := purgeShortcutChildArtifacts(ctx, result.MountID, logger); err != nil {
+			errs = append(errs, fmt.Errorf("purging final-drain child mount %s: %w", result.MountID, err))
+		}
+	}
+	return errors.Join(errs...)
 }

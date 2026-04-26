@@ -4,6 +4,8 @@ import (
 	"context"
 	"path"
 	"slices"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 type ShortcutTopologyObservationKind string
@@ -72,6 +74,7 @@ const (
 type ShortcutChildTopologyPublication struct {
 	NamespaceID string
 	Children    []ShortcutChildTopology
+	Released    []ShortcutChildRelease
 }
 
 type ShortcutChildTopologySnapshot = ShortcutChildTopologyPublication
@@ -87,7 +90,51 @@ type ShortcutChildTopology struct {
 	State             ShortcutChildTopologyState
 	BlockedDetail     string
 	ProtectedPaths    []string
+	LocalRootIdentity *ShortcutRootIdentity
 	Waiting           *ShortcutChildTopology
+}
+
+// ShortcutRootIdentity is the parent-engine-issued local directory identity
+// token for a managed shortcut root. Control-plane code may compare this value,
+// but only sync opens the filesystem and decides whether it still matches.
+type ShortcutRootIdentity struct {
+	Device uint64
+	Inode  uint64
+}
+
+func SameShortcutRootIdentity(a ShortcutRootIdentity, b ShortcutRootIdentity) bool {
+	return a.Device == b.Device && a.Inode == b.Inode
+}
+
+func shortcutRootIdentityFromFileIdentity(identity *synctree.FileIdentity) *ShortcutRootIdentity {
+	if identity == nil {
+		return nil
+	}
+	return &ShortcutRootIdentity{
+		Device: identity.Device,
+		Inode:  identity.Inode,
+	}
+}
+
+func shortcutRootIdentityToFileIdentity(identity *ShortcutRootIdentity) *synctree.FileIdentity {
+	if identity == nil {
+		return nil
+	}
+	return &synctree.FileIdentity{
+		Device: identity.Device,
+		Inode:  identity.Inode,
+	}
+}
+
+type ShortcutChildReleaseReason string
+
+const (
+	ShortcutChildReleaseParentRemoved ShortcutChildReleaseReason = "parent_removed"
+)
+
+type ShortcutChildRelease struct {
+	BindingItemID string
+	Reason        ShortcutChildReleaseReason
 }
 
 type ShortcutChildDrainAck struct {

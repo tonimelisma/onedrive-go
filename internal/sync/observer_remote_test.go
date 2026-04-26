@@ -2171,20 +2171,17 @@ func TestWatch_CommitsObservations(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
-	events := startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
-		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
+	committed := make(chan struct{})
+	var committedOnce sync.Once
+	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
+		err := store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
+		committedOnce.Do(func() { close(committed) })
+		return err
 	})
 
 	go func() {
-		// Receive events then cancel.
-		received := 0
-		for range events {
-			received++
-			if received >= 1 {
-				cancel()
-				return
-			}
-		}
+		<-committed
+		cancel()
 	}()
 
 	err := obs.Watch(
