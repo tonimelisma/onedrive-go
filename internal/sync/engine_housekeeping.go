@@ -11,7 +11,18 @@ func (flow *engineFlow) postSyncHousekeeping() {
 		flow.engine.sessionStore,
 		flow.engine.logger,
 		driveops.TransferArtifactCleanupOptions{
-			SkipDirs: flow.engine.localFilter.SkipDirs,
+			SkipDirs: transferArtifactCleanupSkipDirs(flow.engine.localFilter),
 		},
 	)
+}
+
+func transferArtifactCleanupSkipDirs(filter LocalFilterConfig) []string {
+	skipDirs := append([]string(nil), filter.SkipDirs...)
+	for i := range filter.ManagedRoots {
+		if filter.ManagedRoots[i].Path == "" {
+			continue
+		}
+		skipDirs = append(skipDirs, filter.ManagedRoots[i].Path)
+	}
+	return skipDirs
 }
