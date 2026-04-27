@@ -27,7 +27,7 @@ func engineMountConfigForMount(mount *mountSpec) (*syncengine.EngineMountConfig,
 		AccountEmail:             mount.accountEmail,
 		RemoteRootItemID:         mount.remoteRootItemID,
 		RemoteRootDeltaCapable:   mount.remoteRootDeltaCapable,
-		ExpectedSyncRootIdentity: cloneChildRootIdentity(mount.expectedSyncRootIdentity),
+		ExpectedSyncRootIdentity: cloneChildRootIdentity(mount.expectedChildRootIdentity()),
 		EnableWebsocket:          mount.enableWebsocket,
 		LocalRules: syncengine.LocalObservationRules{
 			RejectSharePointRootForms: mount.rejectSharePointRootForms,

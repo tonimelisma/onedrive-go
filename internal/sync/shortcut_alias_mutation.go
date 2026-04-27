@@ -70,15 +70,7 @@ func (e *Engine) recordShortcutAliasRename(ctx context.Context, mutation shortcu
 		if records[i].BindingItemID != mutation.BindingItemID {
 			continue
 		}
-		next := plannedShortcutRootTransition(records[i],
-			shortcutRootEventAliasMutationSucceeded,
-			ShortcutRootStateActive,
-			"",
-		)
-		next.RelativeLocalPath = mutation.RelativeLocalPath
-		next.LocalAlias = mutation.LocalAlias
-		next.ProtectedPaths = protectedPathsForShortcutRoot(mutation.RelativeLocalPath, next.ProtectedPaths)
-		records[i] = next
+		records[i] = planShortcutAliasRenameSuccess(records[i], mutation)
 		changed = true
 		break
 	}
@@ -101,11 +93,7 @@ func (e *Engine) recordShortcutAliasDelete(ctx context.Context, mutation shortcu
 		if records[i].BindingItemID != mutation.BindingItemID {
 			continue
 		}
-		records[i] = plannedShortcutRootTransition(records[i],
-			shortcutRootEventAliasMutationSucceeded,
-			ShortcutRootStateRemovedFinalDrain,
-			"",
-		)
+		records[i] = planShortcutAliasDeleteSuccess(records[i])
 		changed = true
 		break
 	}

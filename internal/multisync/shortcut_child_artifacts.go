@@ -60,9 +60,9 @@ func (o *Orchestrator) childArtifactCleanupExecutor() shortcutChildArtifactClean
 
 func shortcutChildArtifactCleanups(
 	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
-) []shortcutChildArtifactCleanup {
+) ([]shortcutChildArtifactCleanup, error) {
 	if len(publications) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	cleanups := make([]shortcutChildArtifactCleanup, 0)
@@ -74,15 +74,18 @@ func shortcutChildArtifactCleanups(
 		for i := range publication.CleanupRequests {
 			request := publication.CleanupRequests[i]
 			if request.BindingItemID == "" {
-				continue
+				return nil, fmt.Errorf("parent cleanup request from %s is missing binding item ID", namespaceID)
 			}
 			reason := request.Reason
 			if reason == "" {
-				reason = syncengine.ShortcutChildArtifactCleanupParentRemoved
+				return nil, fmt.Errorf("parent cleanup request for binding %s is missing cleanup reason", request.BindingItemID)
 			}
 			childMountID := request.ChildMountID
 			if childMountID == "" {
-				childMountID = config.ChildMountID(namespaceID, request.BindingItemID)
+				return nil, fmt.Errorf("parent cleanup request for binding %s is missing child mount ID", request.BindingItemID)
+			}
+			if request.LocalRoot == "" {
+				return nil, fmt.Errorf("parent cleanup request for binding %s is missing child local root", request.BindingItemID)
 			}
 			cleanups = append(cleanups, shortcutChildArtifactCleanup{
 				mountID:       childMountID,
@@ -99,7 +102,7 @@ func shortcutChildArtifactCleanups(
 		}
 		return cleanups[i].mountID < cleanups[j].mountID
 	})
-	return cleanups
+	return cleanups, nil
 }
 
 func (o *Orchestrator) purgeShortcutChildArtifactsForDecisions(

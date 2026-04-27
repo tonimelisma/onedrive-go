@@ -21,9 +21,9 @@ runtime package that implements it.
 
 ## Ownership Contract
 
-- Owns: Multi-mount sync lifecycle, runtime mount-spec compilation from parent-declared child runner publications, child runner start/skip/final-drain/stop/purge decisions, reload diffing, control-socket ownership, and per-mount panic/error isolation.
+- Owns: Multi-mount sync lifecycle, runner decisions from parent-declared child runner publications, child runner start/skip/final-drain/stop/purge decisions, reload diffing, control-socket ownership, and per-mount panic/error isolation.
 - Does Not Own: Parent-drive Graph discovery, shortcut placeholder mutation, parent sync-dir shortcut alias filesystem policy, single-mount content observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
-- Source of Truth: The current `config.Holder` snapshot, the CLI-compiled standalone mount configs, plus the runtime mount set and `runners` map owned by the watch-mode orchestrator loop.
+- Source of Truth: The current `config.Holder` snapshot, the CLI-compiled standalone mount configs, plus the runtime runner set and `runners` map owned by the watch-mode orchestrator loop.
 - Allowed Side Effects: Session creation, engine construction/closure, Unix control-socket bind/unlink, per-mount goroutine startup, live perf capture, and control-plane logging.
 - Mutable Runtime Owner: `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one mount.
 - Error Boundary: The control plane converts mount startup into structured per-mount startup outcomes, returns one-shot startup classification separately from completed `MountReport` values, and keeps watch-runner failures isolated to the affected mount or log path. Engine-internal errors remain inside the single-mount boundary.
@@ -141,9 +141,10 @@ actions to `internal/multisync`:
 - `skip_parent_blocked` child roots skip child runners while parent-owned
   retry/block state remains in the parent sync store
 - cleanup requests tell multisync to purge child-owned artifacts after child
-  sync is clean and the parent has released its protected alias path; multisync
-  never infers cleanup work from a child disappearing from the parent
-  publication
+  sync is clean and the parent has released its protected alias path; each
+  request carries the binding ID, child mount ID, local root, and cleanup
+  reason, and multisync rejects incomplete requests instead of deriving scope
+  from parent namespace data
 - complete batches mark previously known but absent parent roots
   `removed_final_drain`
 - empty complete batches are applied through the same engine handler path
@@ -161,9 +162,10 @@ actions to `internal/multisync`:
 - in one-shot mode, each configured parent runs as an ordinary engine and
   children are admitted from that parent's final accepted runner publication
   after the parent pass returns; no parent waits for unrelated parents before
-  its children can run. The one-shot child-run coordinator only owns timing,
-  report aggregation, artifact cleanup, and live-parent acknowledgement
-  ordering; children still execute ordinary engine `RunOnce` passes
+  its children can run, and there is no separate parent-done gate after child
+  admission. The one-shot child-run coordinator only owns report aggregation,
+  artifact cleanup, and live-parent acknowledgement ordering; children still
+  execute ordinary engine `RunOnce` passes
 - successful runner-publication mutation in watch mode publishes a new
   parent-owned child snapshot through the live parent runner; multisync
   reconciles only that parent's child runners without stopping the parent
@@ -174,10 +176,11 @@ replay later from the parent engine, preserving the one-observer ownership
 boundary without letting the control plane rediscover remote state.
 
 Parent shortcut lifecycle transition decisions are centralized in the sync
-engine. The parent consumes remote shortcut observations, protected-root local
-observations, stored `shortcut_roots`, and child-drain acknowledgements, then
-persists parent state and executes parent namespace side effects at its own I/O
-boundary. Multisync consumes only the resulting runner-action publication:
+engine planner. The parent shell consumes remote shortcut observations,
+protected-root local observations, stored `shortcut_roots`, and child-drain
+acknowledgements, executes Graph/filesystem/store effects at its own I/O
+boundary, and feeds those value outcomes through planner helpers. Multisync
+consumes only the resulting runner-action publication:
 start `run` children, skip parent-blocked children, run `final_drain` children
 to final drain, acknowledge clean drain through the live parent
 `ShortcutChildAckHandle`, then stop and forget child runtime state after the

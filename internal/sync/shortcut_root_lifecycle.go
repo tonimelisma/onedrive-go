@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -122,34 +121,24 @@ func (e *Engine) reconcileShortcutRootRecord(
 	}
 	relativePath, ok := cleanShortcutRootRelativePath(record.RelativeLocalPath)
 	if !ok {
-		return blockedShortcutRoot(record, "shortcut alias path escapes parent sync root"), true, true, nil
+		return planShortcutRootBlocked(record, "shortcut alias path escapes parent sync root"), true, true, nil
 	}
 	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
-		return shortcutRootWithPathError(record, err), true, true, nil
+		return planShortcutRootPathError(record, err), true, true, nil
 	}
 	state, err := e.syncTree.PathStateNoFollow(relativePath)
 	if err != nil {
-		return shortcutRootWithPathError(record, err), true, true, nil
+		return planShortcutRootPathError(record, err), true, true, nil
 	}
 	if state.Exists {
 		if !state.IsDir {
-			return blockedShortcutRoot(record, "shortcut alias path is not a directory"), true, true, nil
+			return planShortcutRootBlocked(record, "shortcut alias path is not a directory"), true, true, nil
 		}
 		identity, identityErr := e.syncTree.IdentityNoFollow(relativePath)
 		if identityErr != nil {
-			return unavailableShortcutRoot(record, identityErr.Error()), true, true, nil
+			return planShortcutRootUnavailable(record, identityErr.Error()), true, true, nil
 		}
-		next := record
-		next.LocalRootIdentity = &identity
-		if next.State == ShortcutRootStateBlockedPath ||
-			next.State == ShortcutRootStateRenameAmbiguous ||
-			next.State == ShortcutRootStateAliasMutationBlocked {
-			next = plannedShortcutRootTransition(next,
-				shortcutRootEventLocalRootReady,
-				ShortcutRootStateActive,
-				"",
-			)
-		}
+		next := planShortcutRootLocalReady(record, identity)
 		return next, true, !shortcutRootRecordsEqual(record, next), nil
 	}
 	if record.LocalRootIdentity == nil {
@@ -164,25 +153,23 @@ func (e *Engine) reconcileRetiringShortcutRootLocalState(
 ) (ShortcutRootRecord, bool, bool, error) {
 	relativePath, ok := cleanShortcutRootRelativePath(record.RelativeLocalPath)
 	if !ok {
-		return blockedShortcutRoot(record, "shortcut alias path escapes parent sync root"), true, true, nil
+		return planShortcutRootBlocked(record, "shortcut alias path escapes parent sync root"), true, true, nil
 	}
 	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
-		return shortcutRootWithPathError(record, err), true, true, nil
+		return planShortcutRootPathError(record, err), true, true, nil
 	}
 	state, err := e.syncTree.PathStateNoFollow(relativePath)
 	if err != nil {
-		return shortcutRootWithPathError(record, err), true, true, nil
+		return planShortcutRootPathError(record, err), true, true, nil
 	}
 	if state.Exists {
 		if !state.IsDir {
-			return shortcutRootCleanupBlocked(record, fmt.Errorf("shortcut alias path is not a directory")), true, true, nil
+			return planShortcutRootCleanupBlocked(record, fmt.Errorf("shortcut alias path is not a directory")), true, true, nil
 		}
 		return record, true, false, nil
 	}
-	if record.State == ShortcutRootStateSamePathReplacementWaiting && record.Waiting != nil {
-		return shortcutRootRecordFromReplacement(record.NamespaceID, *record.Waiting), true, true, nil
-	}
-	return ShortcutRootRecord{}, false, true, nil
+	next, keep := planRetiringShortcutRootMissing(record)
+	return next, keep, true, nil
 }
 
 //nolint:gocritic // ShortcutRootRecord is treated as a value in the planner-style local transition.
@@ -191,20 +178,13 @@ func (e *Engine) materializeShortcutRoot(
 	relativePath string,
 ) (ShortcutRootRecord, bool, bool, error) {
 	if err := e.syncTree.MkdirAllNoFollow(relativePath, shortcutRootDirPerm); err != nil {
-		return shortcutRootWithPathError(record, err), true, true, nil
+		return planShortcutRootPathError(record, err), true, true, nil
 	}
 	identity, err := e.syncTree.IdentityNoFollow(relativePath)
 	if err != nil {
-		return unavailableShortcutRoot(record, err.Error()), true, true, nil
+		return planShortcutRootUnavailable(record, err.Error()), true, true, nil
 	}
-	next := record
-	next = plannedShortcutRootTransition(next,
-		shortcutRootEventLocalRootReady,
-		ShortcutRootStateActive,
-		"",
-	)
-	next.LocalRootIdentity = &identity
-	next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, next.ProtectedPaths)
+	next := planShortcutRootMaterialized(record, identity)
 	return next, true, !shortcutRootRecordsEqual(record, next), nil
 }
 
@@ -217,7 +197,7 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 ) (ShortcutRootRecord, bool, bool, error) {
 	candidates, candidateErr := e.shortcutRootIdentityCandidates(relativePath, *record.LocalRootIdentity, localRows)
 	if candidateErr != nil {
-		return unavailableShortcutRoot(record, candidateErr.Error()), true, true, nil
+		return planShortcutRootUnavailable(record, candidateErr.Error()), true, true, nil
 	}
 	plan := planMissingMaterializedShortcutRoot(record, relativePath, candidates)
 	switch plan.Action {
@@ -234,7 +214,7 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 		}
 		identity, identityErr := e.syncTree.IdentityNoFollow(filepath.FromSlash(plan.CandidatePath))
 		if identityErr != nil {
-			return unavailableShortcutRoot(record, identityErr.Error()), true, true, nil
+			return planShortcutRootUnavailable(record, identityErr.Error()), true, true, nil
 		}
 		return planMissingAliasRenameSuccess(record, plan.CandidatePath, identity), true, true, nil
 	case shortcutRootMissingAliasRenameAmbiguous:
@@ -406,11 +386,11 @@ func (e *Engine) moveRemoteRenamedShortcutProjection(
 	toRelativePath string,
 ) (ShortcutRootRecord, bool, bool, error) {
 	if err := e.moveShortcutRootProjection(fromRelativePath, toRelativePath); err != nil {
-		return blockedShortcutRoot(record, err.Error()), true, true, nil
+		return planShortcutRootBlocked(record, err.Error()), true, true, nil
 	}
 	identity, err := e.syncTree.IdentityNoFollow(toRelativePath)
 	if err != nil {
-		return unavailableShortcutRoot(record, err.Error()), true, true, nil
+		return planShortcutRootUnavailable(record, err.Error()), true, true, nil
 	}
 	return planShortcutProjectionMoveSuccess(record, identity), true, true, nil
 }
@@ -496,49 +476,6 @@ func cleanShortcutRootRelativePath(relativeLocalPath string) (string, bool) {
 		return "", false
 	}
 	return relativePath, true
-}
-
-//nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
-func shortcutRootWithPathError(record ShortcutRootRecord, err error) ShortcutRootRecord {
-	if errors.Is(err, synctree.ErrUnsafePath) ||
-		errors.Is(err, syscall.ENOTDIR) {
-		return blockedShortcutRoot(record, err.Error())
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return unavailableShortcutRoot(record, err.Error())
-	}
-	return unavailableShortcutRoot(record, err.Error())
-}
-
-//nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
-func blockedShortcutRoot(record ShortcutRootRecord, detail string) ShortcutRootRecord {
-	return plannedShortcutRootTransition(record,
-		shortcutRootEventLocalPathBlocked,
-		ShortcutRootStateBlockedPath,
-		detail,
-	)
-}
-
-//nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
-func unavailableShortcutRoot(record ShortcutRootRecord, detail string) ShortcutRootRecord {
-	return plannedShortcutRootTransition(record,
-		shortcutRootEventLocalPathBlocked,
-		ShortcutRootStateLocalRootUnavailable,
-		detail,
-	)
-}
-
-//nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
-func aliasMutationBlockedShortcutRoot(record ShortcutRootRecord, err error) ShortcutRootRecord {
-	detail := ""
-	if err != nil {
-		detail = err.Error()
-	}
-	return plannedShortcutRootTransition(record,
-		shortcutRootEventAliasMutationFailed,
-		ShortcutRootStateAliasMutationBlocked,
-		detail,
-	)
 }
 
 func (e *Engine) releaseShortcutRootProjectionAfterDrain(ctx context.Context, ack ShortcutChildDrainAck) error {
@@ -658,34 +595,6 @@ func (e *Engine) removeShortcutRootProjection(relativeLocalPath string) error {
 		return fmt.Errorf("removing shortcut alias projection: %w", err)
 	}
 	return nil
-}
-
-//nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
-func shortcutRootCleanupBlocked(record ShortcutRootRecord, err error) ShortcutRootRecord {
-	detail := ""
-	if err != nil {
-		detail = err.Error()
-	}
-	return plannedShortcutRootTransition(record,
-		shortcutRootEventProjectionCleanupFailed,
-		ShortcutRootStateRemovedCleanupBlocked,
-		detail,
-	)
-}
-
-//nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
-func shortcutRootChildCleanupPending(record ShortcutRootRecord) ShortcutRootRecord {
-	record = normalizeShortcutRootRecord(record)
-	record = plannedShortcutRootTransition(record,
-		shortcutRootEventProjectionCleanupSucceeded,
-		ShortcutRootStateRemovedChildCleanupPending,
-		"",
-	)
-	record.BlockedDetail = ""
-	record.ProtectedPaths = nil
-	record.LocalRootIdentity = nil
-	record.Waiting = nil
-	return record
 }
 
 func appendUniqueProtectedRootPaths(paths []string, additions ...string) []string {
