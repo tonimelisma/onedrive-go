@@ -39,32 +39,38 @@ func TestShortcutRootTransitionTableCoversStates(t *testing.T) {
 func TestShortcutRootStatusMetadataCoversNonActiveStates(t *testing.T) {
 	t.Parallel()
 
-	states := []ShortcutRootState{
-		ShortcutRootStateTargetUnavailable,
-		ShortcutRootStateLocalRootUnavailable,
-		ShortcutRootStateBlockedPath,
-		ShortcutRootStateRenameAmbiguous,
-		ShortcutRootStateAliasMutationBlocked,
-		ShortcutRootStateRemovedFinalDrain,
-		ShortcutRootStateRemovedReleasePending,
-		ShortcutRootStateRemovedCleanupBlocked,
-		ShortcutRootStateRemovedChildCleanupPending,
-		ShortcutRootStateSamePathReplacementWaiting,
-		ShortcutRootStateDuplicateTarget,
+	cases := []struct {
+		state        ShortcutRootState
+		issue        ShortcutRootIssueClass
+		recovery     ShortcutRootRecoveryClass
+		protectsPath bool
+	}{
+		{ShortcutRootStateTargetUnavailable, ShortcutRootIssueTargetUnavailable, ShortcutRootRecoveryRestoreTargetOrRemoveAlias, true},
+		{ShortcutRootStateLocalRootUnavailable, ShortcutRootIssueLocalRootUnavailable, ShortcutRootRecoveryRestoreLocalRootOrDiscard, true},
+		{ShortcutRootStateBlockedPath, ShortcutRootIssueBlockedPath, ShortcutRootRecoveryClearBlockedPath, true},
+		{ShortcutRootStateRenameAmbiguous, ShortcutRootIssueRenameAmbiguous, ShortcutRootRecoveryDisambiguateAliasRename, true},
+		{ShortcutRootStateAliasMutationBlocked, ShortcutRootIssueAliasMutationBlocked, ShortcutRootRecoveryFixAliasMutation, true},
+		{ShortcutRootStateRemovedFinalDrain, ShortcutRootIssueRemovedFinalDrain, ShortcutRootRecoveryRestoreTargetOrDiscard, true},
+		{ShortcutRootStateRemovedReleasePending, ShortcutRootIssueRemovedReleasePending, ShortcutRootRecoveryWaitForRetry, true},
+		{ShortcutRootStateRemovedCleanupBlocked, ShortcutRootIssueRemovedCleanupBlocked, ShortcutRootRecoveryClearBlockedPath, true},
+		{ShortcutRootStateRemovedChildCleanupPending, ShortcutRootIssueRemovedChildCleanupPending, ShortcutRootRecoveryWaitForRetry, false},
+		{ShortcutRootStateSamePathReplacementWaiting, ShortcutRootIssueSamePathReplacementWaiting, ShortcutRootRecoveryWaitForRetry, true},
+		{ShortcutRootStateDuplicateTarget, ShortcutRootIssueDuplicateTarget, ShortcutRootRecoveryRemoveDuplicateAlias, true},
 	}
-	for _, state := range states {
-		metadata := ShortcutRootStatus(state)
-		assert.Equal(t, string(state), metadata.DisplayState)
-		assert.Equal(t, string(state), metadata.StateReason)
-		assert.NotEmpty(t, metadata.IssueClass)
+	for _, tt := range cases {
+		metadata := ShortcutRootStatus(tt.state)
+		assert.Equal(t, string(tt.state), metadata.DisplayState)
+		assert.Equal(t, string(tt.state), metadata.StateReason)
+		assert.Equal(t, tt.issue, metadata.IssueClass)
 		assert.NotEmpty(t, metadata.Issue)
-		assert.NotEmpty(t, metadata.RecoveryClass)
+		assert.Equal(t, tt.recovery, metadata.RecoveryClass)
 		assert.True(t, metadata.AutoRetry)
-		lifecycle, ok := shortcutRootLifecycleMetadataFor(state)
-		require.Truef(t, ok, "missing lifecycle metadata for %s", state)
+		assert.Equal(t, tt.protectsPath, metadata.ProtectsPath)
+		lifecycle, ok := shortcutRootLifecycleMetadataFor(tt.state)
+		require.Truef(t, ok, "missing lifecycle metadata for %s", tt.state)
 		assert.Equal(t, metadata, lifecycle.status)
 		assert.Equal(t, metadata.ProtectsPath, lifecycle.protectsPath)
-		assert.Equal(t, lifecycle.protectsPath, shortcutRootStateKeepsProtectedPaths(state))
+		assert.Equal(t, lifecycle.protectsPath, shortcutRootStateKeepsProtectedPaths(tt.state))
 		assert.NotEmpty(t, lifecycle.runnerAction)
 	}
 }

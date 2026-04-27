@@ -23,7 +23,7 @@ const (
 type watchRunner struct {
 	mount     *mountSpec
 	engine    engineRunner
-	parentAck syncengine.ShortcutChildAckHandle
+	parentAck shortcutChildAckHandle
 	cancel    context.CancelFunc
 	done      chan struct{} // closed exactly once by the goroutine started in startWatchRunner
 }
@@ -487,13 +487,13 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 	}
 }
 
-func watchParentDrainAckers(runners map[mountID]*watchRunner) map[mountID]syncengine.ShortcutChildAckHandle {
-	ackers := make(map[mountID]syncengine.ShortcutChildAckHandle)
+func watchParentDrainAckers(runners map[mountID]*watchRunner) map[mountID]shortcutChildAckHandle {
+	ackers := make(map[mountID]shortcutChildAckHandle)
 	for id, runner := range runners {
 		if runner == nil || runner.mount == nil || runner.mount.projectionKind != MountProjectionStandalone {
 			continue
 		}
-		if runner.parentAck.IsZero() {
+		if shortcutChildAckHandleIsZero(runner.parentAck) {
 			continue
 		}
 		ackers[id] = runner.parentAck
@@ -503,13 +503,13 @@ func watchParentDrainAckers(runners map[mountID]*watchRunner) map[mountID]syncen
 
 func watchParentArtifactCleanupAckers(
 	runners map[mountID]*watchRunner,
-) map[mountID]syncengine.ShortcutChildAckHandle {
-	ackers := make(map[mountID]syncengine.ShortcutChildAckHandle)
+) map[mountID]shortcutChildAckHandle {
+	ackers := make(map[mountID]shortcutChildAckHandle)
 	for id, runner := range runners {
 		if runner == nil || runner.mount == nil || runner.mount.projectionKind != MountProjectionStandalone {
 			continue
 		}
-		if runner.parentAck.IsZero() {
+		if shortcutChildAckHandleIsZero(runner.parentAck) {
 			continue
 		}
 		ackers[id] = runner.parentAck

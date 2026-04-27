@@ -19,15 +19,50 @@ type engineRunner interface {
 	RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error)
 	RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error
 	Close(ctx context.Context) error
-	ShortcutChildAckHandle() syncengine.ShortcutChildAckHandle
+	ShortcutChildAckHandle() shortcutChildAckHandle
 }
 
-func shortcutParentAckHandleForMount(
-	mount *mountSpec,
-	engine engineRunner,
-) syncengine.ShortcutChildAckHandle {
+type engineRunnerAdapter struct {
+	engine *syncengine.Engine
+}
+
+func (a engineRunnerAdapter) RunOnce(
+	ctx context.Context,
+	mode syncengine.SyncMode,
+	opts syncengine.RunOptions,
+) (*syncengine.Report, error) {
+	report, err := a.engine.RunOnce(ctx, mode, opts)
+	if err != nil {
+		return report, fmt.Errorf("run sync engine once: %w", err)
+	}
+	return report, nil
+}
+
+func (a engineRunnerAdapter) RunWatch(
+	ctx context.Context,
+	mode syncengine.SyncMode,
+	opts syncengine.WatchOptions,
+) error {
+	if err := a.engine.RunWatch(ctx, mode, opts); err != nil {
+		return fmt.Errorf("run sync engine watch: %w", err)
+	}
+	return nil
+}
+
+func (a engineRunnerAdapter) Close(ctx context.Context) error {
+	if err := a.engine.Close(ctx); err != nil {
+		return fmt.Errorf("close sync engine: %w", err)
+	}
+	return nil
+}
+
+func (a engineRunnerAdapter) ShortcutChildAckHandle() shortcutChildAckHandle {
+	return a.engine.ShortcutChildAckHandle()
+}
+
+func shortcutParentAckHandleForMount(mount *mountSpec, engine engineRunner) shortcutChildAckHandle {
 	if mount == nil || mount.projectionKind != MountProjectionStandalone || engine == nil {
-		return syncengine.ShortcutChildAckHandle{}
+		return nil
 	}
 	return engine.ShortcutChildAckHandle()
 }
@@ -104,7 +139,7 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			if cfg.DebugEventHook != nil {
 				engine.SetDebugEventHook(cfg.DebugEventHook)
 			}
-			return engine, nil
+			return engineRunnerAdapter{engine: engine}, nil
 		},
 		logger:                         cfg.Logger,
 		perfRuntime:                    perf.NewRuntime(cfg.PerfParent),

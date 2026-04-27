@@ -28,6 +28,7 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		ensureRequirementReferencesResolve,
 		ensureEvidenceDocsReferenceRealTests,
 		ensureRecurringIncidentPromotedDocsResolve,
+		ensureNoLiveShortcutDeleteE2E,
 		ensureCLIOutputBoundary,
 		ensureGuardedPackagesAvoidRawOS,
 		ensureFilterSemanticsWording,
@@ -42,6 +43,19 @@ func runRepoConsistencyChecks(repoRoot string) error {
 		}
 	}
 
+	return nil
+}
+
+func ensureNoLiveShortcutDeleteE2E(repoRoot string) error {
+	e2eRoot := filepath.Join(repoRoot, "e2e")
+	pattern := regexp.MustCompile(`TestE2E_.*Shortcut.*(Delete|ManualDiscard)|(?i:live shortcut delete)`)
+	match, err := findTextMatch([]string{e2eRoot}, pattern, func(string) bool { return false })
+	if err != nil {
+		return err
+	}
+	if match != "" {
+		return fmt.Errorf("live shortcut delete E2E is unsupported by Graph fixture policy: %s", match)
+	}
 	return nil
 }
 

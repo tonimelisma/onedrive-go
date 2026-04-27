@@ -65,6 +65,11 @@ from the same current truth and current plan that it uses for ordinary work.
 Children are never admitted from cached runner publication when a parent exits or fails
 before publishing; multisync stops any existing children for that parent and
 waits for a fresh live parent publication before admitting replacements.
+In one-shot, child work starts as soon as that parent publication is received;
+the parent pass does not need to return first, and unrelated parents do not gate
+that child's start. Final-drain and artifact-cleanup acknowledgements remain
+serialized through the same live parent only after that parent reaches its safe
+acknowledgement point.
 
 Managed child mounts are runtime projections declared by the parent engine, not
 synthetic configured drives and not durable control-plane inventory.
