@@ -211,9 +211,11 @@ func scanMultisyncShortcutAuthorityFile(repoRoot string, path string) error {
 }
 
 func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *ast.File, fset *token.FileSet) string {
+	configAliases := importedNamesForPath(file, "github.com/tonimelisma/onedrive-go/internal/config")
 	localpathAliases := importedNamesForPath(file, "github.com/tonimelisma/onedrive-go/internal/localpath")
 	osAliases := importedNamesForPath(file, "os")
 	filesystemAccessAllowed := multisyncFilesystemAccessAllowed(repoRoot, path)
+	cleanupScopeExecutor := path == filepath.Join(repoRoot, "internal", "multisync", "shortcut_child_artifacts.go")
 
 	forbiddenSelectors := forbiddenMultisyncSelectorReasons()
 	forbiddenIdents := forbiddenMultisyncIdentReasons()
@@ -244,6 +246,17 @@ func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *as
 			if !ok {
 				return true
 			}
+			if cleanupScopeMatch := forbiddenMultisyncCleanupScopeDerivation(
+				configAliases,
+				cleanupScopeExecutor,
+				x.Name,
+				n.Sel.Name,
+				path,
+				fset.Position(n.Pos()).Line,
+			); cleanupScopeMatch != "" {
+				match = cleanupScopeMatch
+				return false
+			}
 			if _, imported := localpathAliases[x.Name]; imported && !filesystemAccessAllowed {
 				if _, forbidden := forbiddenLocalpathSelectors[n.Sel.Name]; forbidden {
 					match = fmt.Sprintf(
@@ -273,6 +286,27 @@ func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *as
 	return match
 }
 
+func forbiddenMultisyncCleanupScopeDerivation(
+	configAliases map[string]struct{},
+	cleanupScopeExecutor bool,
+	selectorOwner string,
+	selectorName string,
+	path string,
+	line int,
+) string {
+	if !cleanupScopeExecutor || selectorName != "ChildMountID" {
+		return ""
+	}
+	if _, imported := configAliases[selectorOwner]; !imported {
+		return ""
+	}
+	return fmt.Sprintf(
+		"shortcut authority violation: child artifact cleanup scope must come from parent publication: %s:%d",
+		path,
+		line,
+	)
+}
+
 func multisyncFilesystemAccessAllowed(repoRoot string, path string) bool {
 	allowedFiles := map[string]struct{}{
 		filepath.Join(repoRoot, "internal", "multisync", "control_socket.go"):           {},
@@ -296,7 +330,7 @@ func forbiddenMultisyncSelectorReasons() map[string]string {
 		"NewShortcutChildAckHandle":                 "live parent shortcut ack handles must come from the running parent engine",
 		"AcknowledgeShortcutChildFinalDrain":        "parent shortcut-root persistence must stay in internal/sync",
 		"acknowledgeShortcutChildArtifactsPurged":   "parent shortcut-root persistence must stay in internal/sync",
-		"mergeReleasedShortcutChildren":             "multisync must use explicit parent cleanup requests, not inferred releases",
+		"mergeReleased" + "ShortcutChildren":        "multisync must use explicit parent cleanup requests, not inferred releases",
 		"forgetReleasedShortcutChildren":            "multisync must use explicit parent cleanup requests, not inferred releases",
 		"markChildProjection" + "Conflicts":         "multisync must not suppress automatic children by remote content root",
 		"RemoveStateDBFiles":                        "child DB mutation must stay outside multisync",
@@ -305,38 +339,38 @@ func forbiddenMultisyncSelectorReasons() map[string]string {
 
 func forbiddenMultisyncIdentReasons() map[string]string {
 	return map[string]string{
-		"ShortcutAliasMutation":           "shortcut alias mutation must go through the parent engine",
-		"shortcutAliasMutation":           "shortcut alias mutation must stay inside the parent engine",
-		"ShortcutTopologyBatch":           "raw parent shortcut observation facts must stay in internal/sync",
-		"shortcutTopologyBatch":           "raw parent shortcut observation facts must stay in internal/sync",
-		"ShortcutBindingUpsert":           "raw parent shortcut observation facts must stay in internal/sync",
-		"shortcutBindingUpsert":           "raw parent shortcut observation facts must stay in internal/sync",
-		"ShortcutBindingDelete":           "raw parent shortcut observation facts must stay in internal/sync",
-		"shortcutBindingDelete":           "raw parent shortcut observation facts must stay in internal/sync",
-		"ShortcutBindingUnavailable":      "raw parent shortcut observation facts must stay in internal/sync",
-		"shortcutBindingUnavailable":      "raw parent shortcut observation facts must stay in internal/sync",
-		"ShortcutChild" + "Release":       "multisync must use explicit parent cleanup requests, not inferred releases",
-		"ShortcutChild" + "ReleaseReason": "multisync must use explicit parent cleanup requests, not inferred releases",
-		"Released" + "Children":           "multisync must use explicit parent cleanup requests, not inferred releases",
-		"mergeReleasedShortcutChildren":   "multisync must use explicit parent cleanup requests, not inferred releases",
-		"forgetReleasedShortcutChildren":  "multisync must use explicit parent cleanup requests, not inferred releases",
-		"standalone" + "ByRoot":           "multisync must not compare standalone and automatic children by remote content root",
-		"content" + "RootKey":             "multisync must not compare standalone and automatic children by remote content root",
-		"Standalone" + "ContentRootWins":  "explicit standalone and automatic children may both project the same remote content root",
-		"ShortcutRootRecord":              "parent shortcut-root state must stay in internal/sync",
-		"ShortcutRootState":               "parent shortcut-root state must stay in internal/sync",
-		"ShortcutChildTopologyState":      "multisync must consume parent-declared runner actions, not map child runner states",
-		"ShortcutChildDesired":            "multisync must consume parent-declared runner actions, not map child runner states",
-		"ShortcutChildBlocked":            "multisync must consume parent-declared runner actions, not map child runner states",
-		"ShortcutChildRetiring":           "multisync must consume parent-declared runner actions, not map child runner states",
-		"ShortcutChildWaitingReplacement": "multisync must consume parent-declared runner actions, not map child runner states",
-		"ProtectedPaths":                  "multisync must not branch on parent status-only protected paths",
-		"BlockedDetail":                   "multisync must not branch on parent status-only blocker details",
-		"Waiting":                         "multisync must not branch on parent status-only waiting replacements",
-		"ProtectedRoot":                   "parent protected-root projection must stay in internal/sync",
-		"local" + "SkipDirs":              "parent protected-root skip policy must stay in internal/sync",
-		"local" + "Reservations":          "parent protected-root projection policy must stay in internal/sync",
-		"RemoveStateDBFiles":              "child DB mutation must stay outside multisync",
+		"ShortcutAliasMutation":              "shortcut alias mutation must go through the parent engine",
+		"shortcutAliasMutation":              "shortcut alias mutation must stay inside the parent engine",
+		"ShortcutTopologyBatch":              "raw parent shortcut observation facts must stay in internal/sync",
+		"shortcutTopologyBatch":              "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutBindingUpsert":              "raw parent shortcut observation facts must stay in internal/sync",
+		"shortcutBindingUpsert":              "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutBindingDelete":              "raw parent shortcut observation facts must stay in internal/sync",
+		"shortcutBindingDelete":              "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutBindingUnavailable":         "raw parent shortcut observation facts must stay in internal/sync",
+		"shortcutBindingUnavailable":         "raw parent shortcut observation facts must stay in internal/sync",
+		"ShortcutChild" + "Release":          "multisync must use explicit parent cleanup requests, not inferred releases",
+		"ShortcutChild" + "ReleaseReason":    "multisync must use explicit parent cleanup requests, not inferred releases",
+		"Released" + "Children":              "multisync must use explicit parent cleanup requests, not inferred releases",
+		"mergeReleased" + "ShortcutChildren": "multisync must use explicit parent cleanup requests, not inferred releases",
+		"forgetReleasedShortcutChildren":     "multisync must use explicit parent cleanup requests, not inferred releases",
+		"standalone" + "ByRoot":              "multisync must not compare standalone and automatic children by remote content root",
+		"content" + "RootKey":                "multisync must not compare standalone and automatic children by remote content root",
+		"Standalone" + "ContentRootWins":     "explicit standalone and automatic children may both project the same remote content root",
+		"ShortcutRootRecord":                 "parent shortcut-root state must stay in internal/sync",
+		"ShortcutRootState":                  "parent shortcut-root state must stay in internal/sync",
+		"ShortcutChildTopology" + "State":    "multisync must consume parent-declared runner actions, not map child runner states",
+		"ShortcutChildDesired":               "multisync must consume parent-declared runner actions, not map child runner states",
+		"ShortcutChildBlocked":               "multisync must consume parent-declared runner actions, not map child runner states",
+		"ShortcutChildRetiring":              "multisync must consume parent-declared runner actions, not map child runner states",
+		"ShortcutChildWaitingReplacement":    "multisync must consume parent-declared runner actions, not map child runner states",
+		"ProtectedPaths":                     "multisync must not branch on parent status-only protected paths",
+		"BlockedDetail":                      "multisync must not branch on parent status-only blocker details",
+		"Waiting":                            "multisync must not branch on parent status-only waiting replacements",
+		"ProtectedRoot":                      "parent protected-root projection must stay in internal/sync",
+		"local" + "SkipDirs":                 "parent protected-root skip policy must stay in internal/sync",
+		"local" + "Reservations":             "parent protected-root projection policy must stay in internal/sync",
+		"RemoveStateDBFiles":                 "child DB mutation must stay outside multisync",
 	}
 }
 

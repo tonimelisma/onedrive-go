@@ -7,42 +7,27 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-type runnerDecisionPipeline struct {
-	orchestrator     *Orchestrator
-	standaloneMounts []StandaloneMountConfig
-	initialStartup   []MountStartupResult
-}
-
 func (o *Orchestrator) buildRunnerDecisionSet(
 	ctx context.Context,
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
 ) (*runnerDecisionSet, error) {
-	pipeline := runnerDecisionPipeline{
-		orchestrator:     o,
-		standaloneMounts: standaloneMounts,
-		initialStartup:   initialStartup,
-	}
-	return pipeline.build(ctx)
-}
-
-func (p runnerDecisionPipeline) build(ctx context.Context) (*runnerDecisionSet, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("building runner decisions: context is required")
 	}
 
-	parents, err := buildStandaloneMountSpecs(p.standaloneMounts)
+	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
 
-	parentPublications := p.orchestrator.latestParentRunnerPublicationsFor(parents)
-	decisions, err := buildRunnerDecisionsForParents(parents, parentPublications, p.orchestrator.logger)
+	parentPublications := o.latestParentRunnerPublicationsFor(parents)
+	decisions, err := buildRunnerDecisionsForParents(parents, parentPublications, o.logger)
 	if err != nil {
 		return nil, err
 	}
-	offsetRunnerDecisionSelectionIndexes(decisions, nextStartupSelectionIndex(p.initialStartup))
-	decisions.Skipped = append(append([]MountStartupResult(nil), p.initialStartup...), decisions.Skipped...)
+	offsetRunnerDecisionSelectionIndexes(decisions, nextStartupSelectionIndex(initialStartup))
+	decisions.Skipped = append(append([]MountStartupResult(nil), initialStartup...), decisions.Skipped...)
 
 	return decisions, nil
 }
@@ -105,6 +90,10 @@ func cloneMountSpec(mount *mountSpec) *mountSpec {
 		return nil
 	}
 	cloned := *mount
-	cloned.expectedSyncRootIdentity = cloneChildRootIdentity(mount.expectedSyncRootIdentity)
+	if mount.child != nil {
+		child := *mount.child
+		child.expectedSyncRootIdentity = cloneChildRootIdentity(mount.child.expectedSyncRootIdentity)
+		cloned.child = &child
+	}
 	return &cloned
 }

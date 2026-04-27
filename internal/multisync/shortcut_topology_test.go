@@ -312,6 +312,65 @@ func TestParentCleanupRequestUsesExplicitArtifactScope(t *testing.T) {
 	assert.NotEqual(t, filepath.Join(parent.syncRoot, "Shortcuts", "Old"), decisions.CleanupChildren[0].localRoot)
 }
 
+// Validates: R-2.4.8, R-4.1.4
+func TestParentCleanupRequestRequiresExplicitArtifactScope(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	cases := []struct {
+		name    string
+		request syncengine.ShortcutChildArtifactCleanupRequest
+		want    string
+	}{
+		{
+			name: "child mount ID",
+			request: syncengine.ShortcutChildArtifactCleanupRequest{
+				BindingItemID: "binding-cleanup",
+				LocalRoot:     filepath.Join(t.TempDir(), "child"),
+				Reason:        syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			},
+			want: "missing child mount ID",
+		},
+		{
+			name: "local root",
+			request: syncengine.ShortcutChildArtifactCleanupRequest{
+				BindingItemID: "binding-cleanup",
+				ChildMountID:  config.ChildMountID(parent.mountID.String(), "binding-cleanup"),
+				Reason:        syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			},
+			want: "missing child local root",
+		},
+		{
+			name: "reason",
+			request: syncengine.ShortcutChildArtifactCleanupRequest{
+				BindingItemID: "binding-cleanup",
+				ChildMountID:  config.ChildMountID(parent.mountID.String(), "binding-cleanup"),
+				LocalRoot:     filepath.Join(t.TempDir(), "child"),
+			},
+			want: "missing cleanup reason",
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := buildRunnerDecisionsForParents(
+				[]*mountSpec{parent},
+				map[mountID]syncengine.ShortcutChildRunnerPublication{
+					parent.mountID: {
+						NamespaceID:     parent.mountID.String(),
+						CleanupRequests: []syncengine.ShortcutChildArtifactCleanupRequest{tt.request},
+					},
+				},
+				nil,
+			)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
 // Validates: R-2.4.8, R-2.8.1, R-4.1.4
 func TestParentWaitingReplacementPublishesOnlyOldFinalDrainChild(t *testing.T) {
 	t.Parallel()

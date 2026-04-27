@@ -168,7 +168,7 @@ func TestBuildRunnerDecisions_AddsChildProjectionAfterParent(t *testing.T) {
 	assert.Equal(t, MountProjectionStandalone, parentMount.projectionKind)
 	assert.Equal(t, MountProjectionChild, childMount.projectionKind)
 	assert.Equal(t, mountID(config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")), childMount.mountID)
-	assert.Equal(t, parentMount.mountID, childMount.parentMountID)
+	assert.Equal(t, parentMount.mountID, childMount.childParentMountID())
 	assert.True(t, childMount.canonicalID.IsZero())
 	assert.Empty(t, childMount.driveType)
 	assert.False(t, childMount.rejectSharePointRootForms)
@@ -239,7 +239,7 @@ func TestBuildRunnerDecisions_FinalDrainChildDoesNotSynthesizeParentReservation(
 	require.Len(t, decisions.Mounts, 2)
 	require.Empty(t, decisions.Skipped)
 	assert.Equal(t, []string{config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")}, decisions.FinalDrainMountIDs)
-	assert.True(t, decisions.Mounts[1].finalDrain)
+	assert.True(t, decisions.Mounts[1].isFinalDrainChild())
 }
 
 // Validates: R-2.8.1
