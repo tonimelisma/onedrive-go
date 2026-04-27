@@ -44,7 +44,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := e.publishShortcutChildTopology(ctx, runtime.ChildPublication); err != nil {
+	if err := e.publishShortcutChildRunnerPublication(ctx, runtime.ChildPublication); err != nil {
 		return nil, err
 	}
 
@@ -285,7 +285,7 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
 		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
-	obs.SetShortcutTopology(eng.shortcutTopologyNamespaceID, eng.protectedRoots)
+	obs.SetShortcutTopology(eng.shortcutNamespaceID, eng.protectedRoots)
 
 	// Full enumeration: empty token returns ALL items as create/modify events.
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, "")

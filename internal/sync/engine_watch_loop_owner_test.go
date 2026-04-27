@@ -146,7 +146,7 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	}
 	eng, syncRoot := newTestEngine(t, mock)
 	setupWatchEngine(t, eng)
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	renamedRoot := filepath.Join(syncRoot, "Shared", "Renamed")
@@ -154,7 +154,7 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -167,8 +167,8 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	}}))
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
 
-	var published ShortcutChildTopologyPublication
-	eng.shortcutChildTopologySink = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+	var published ShortcutChildRunnerPublication
+	eng.shortcutChildRunnerSink = func(_ context.Context, publication ShortcutChildRunnerPublication) error {
 		published = publication
 		return nil
 	}
@@ -182,5 +182,8 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	assert.Equal(t, "Renamed", moved.name)
 	require.Len(t, published.Children, 1)
 	assert.Equal(t, "Shared/Renamed", published.Children[0].RelativeLocalPath)
-	assert.Equal(t, []string{"Shared/Renamed", "Shared/Docs"}, published.Children[0].ProtectedPaths)
+	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	require.NoError(t, err)
+	require.Len(t, roots, 1)
+	assert.Equal(t, []string{"Shared/Renamed", "Shared/Docs"}, roots[0].ProtectedPaths)
 }

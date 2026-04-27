@@ -79,9 +79,9 @@ Durable account, drive, and sync-state facts are split across managed files:
 that coordinate config/catalog/token path artifacts. CLI commands may still own
 Graph/OAuth flows, token deletion, and user interaction, but they do not
 hand-edit `CatalogAccount` or `CatalogDrive` records directly for product
-behavior. Automatic shortcut child topology is not a config-owned durable fact:
-the parent engine stores parent shortcut-root lifecycle in its sync store and
-multisync compiles child runners from parent-declared runner-action
+behavior. Automatic shortcut lifecycle is not a config-owned durable fact: the
+parent engine stores parent shortcut-root lifecycle in its sync store and
+multisync compiles child runners from ephemeral parent-declared runner-action
 publications.
 
 The config file itself is durable even when it has zero drive sections. Removing

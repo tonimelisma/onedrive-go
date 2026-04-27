@@ -852,7 +852,7 @@ placeholder is not a delete of the shared target. The
 follows the same split in practice: process the account/root delta first, then
 enumerate shared/remote items through their own target identities and preserve
 data when target access is lost. This repo therefore gates managed child starts
-on fresh parent shortcut topology and treats inaccessible child targets during
+on fresh parent shortcut-root state and treats inaccessible child targets during
 final drain as retryable lifecycle, not as permission to delete either side's
 tree.
 

@@ -45,13 +45,13 @@ type RemoteWatchBatchHandler func(
 // normalization (NFC, driveID zero-padding). Delegates item conversion to
 // an embedded ItemConverter configured for primary drive observation.
 type RemoteObserver struct {
-	fetcher                     DeltaFetcher
-	Converter                   *ItemConverter
-	logger                      *slog.Logger
-	driveID                     driveid.ID
-	shortcutTopologyNamespaceID string
-	protectedRoots              []ProtectedRoot
-	SleepFunc                   func(ctx context.Context, d time.Duration) error
+	fetcher             DeltaFetcher
+	Converter           *ItemConverter
+	logger              *slog.Logger
+	driveID             driveid.ID
+	shortcutNamespaceID string
+	protectedRoots      []ProtectedRoot
+	SleepFunc           func(ctx context.Context, d time.Duration) error
 
 	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
 	// The watch loop is the only writer; helper calls may read concurrently.
@@ -115,7 +115,7 @@ func (o *RemoteObserver) SetShortcutTopology(
 		return
 	}
 
-	o.shortcutTopologyNamespaceID = namespaceID
+	o.shortcutNamespaceID = namespaceID
 	o.protectedRoots = append([]ProtectedRoot(nil), protectedRoots...)
 	if o.Converter != nil {
 		o.Converter.ProtectedRootBindings = protectedRootByBinding(protectedRoots)
@@ -140,7 +140,7 @@ func (o *RemoteObserver) FullDeltaWithShortcutTopology(
 
 	var events []ChangeEvent
 	topology := shortcutTopologyBatch{
-		NamespaceID: o.shortcutTopologyNamespaceID,
+		NamespaceID: o.shortcutNamespaceID,
 		Kind:        shortcutTopologyObservationIncremental,
 	}
 	if savedToken == "" {

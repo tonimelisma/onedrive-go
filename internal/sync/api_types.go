@@ -50,7 +50,7 @@ const (
 // ProtectedRootEvent is a narrow parent-engine-internal notification from the
 // local observer to the watch runtime. It never plans child content work; it
 // only wakes the parent shortcut-root lifecycle so parent-owned state can
-// publish updated child topology promptly.
+// publish updated child runner actions promptly.
 type ProtectedRootEvent struct {
 	Type         ProtectedRootEventType
 	Path         string
@@ -145,34 +145,34 @@ type PermissionChecker interface {
 }
 
 type engineInputs struct {
-	MountID                     string
-	DBPath                      string
-	SyncRoot                    string
-	DataDir                     string
-	DriveID                     driveid.ID
-	DriveType                   string
-	AccountEmail                string
-	RemoteRootItemID            string
-	RemoteRootDeltaCapable      bool
-	ExpectedSyncRootIdentity    *synctree.FileIdentity
-	Fetcher                     DeltaFetcher
-	SocketIOFetcher             SocketIOEndpointFetcher
-	Items                       ItemClient
-	Downloads                   driveops.Downloader
-	Uploads                     driveops.Uploader
-	PathConvergence             driveops.PathConvergence
-	DriveVerifier               DriveVerifier
-	FolderDelta                 FolderDeltaFetcher
-	RecursiveLister             RecursiveLister
-	PermChecker                 PermissionChecker
-	Logger                      *slog.Logger
-	LocalFilter                 LocalFilterConfig
-	LocalRules                  LocalObservationRules
-	ShortcutTopologyNamespaceID string
-	ShortcutChildTopologySink   ShortcutChildTopologySink
-	EnableWebsocket             bool
-	TransferWorkers             int
-	CheckWorkers                int
-	MinFreeSpace                int64
-	PerfCollector               *perf.Collector
+	MountID                  string
+	DBPath                   string
+	SyncRoot                 string
+	DataDir                  string
+	DriveID                  driveid.ID
+	DriveType                string
+	AccountEmail             string
+	RemoteRootItemID         string
+	RemoteRootDeltaCapable   bool
+	ExpectedSyncRootIdentity *synctree.FileIdentity
+	Fetcher                  DeltaFetcher
+	SocketIOFetcher          SocketIOEndpointFetcher
+	Items                    ItemClient
+	Downloads                driveops.Downloader
+	Uploads                  driveops.Uploader
+	PathConvergence          driveops.PathConvergence
+	DriveVerifier            DriveVerifier
+	FolderDelta              FolderDeltaFetcher
+	RecursiveLister          RecursiveLister
+	PermChecker              PermissionChecker
+	Logger                   *slog.Logger
+	LocalFilter              LocalFilterConfig
+	LocalRules               LocalObservationRules
+	ShortcutNamespaceID      string
+	ShortcutChildRunnerSink  ShortcutChildRunnerSink
+	EnableWebsocket          bool
+	TransferWorkers          int
+	CheckWorkers             int
+	MinFreeSpace             int64
+	PerfCollector            *perf.Collector
 }

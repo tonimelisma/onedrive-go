@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	gosync "sync"
 
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
@@ -15,10 +16,11 @@ import (
 
 // mountWork pairs a MountRunner with the sync function it will execute.
 type mountWork struct {
-	runner *MountRunner
-	mount  *mountSpec
-	engine engineRunner
-	fn     func(context.Context) (*syncengine.Report, error)
+	runner    *MountRunner
+	mount     *mountSpec
+	engine    engineRunner
+	parentAck syncengine.ShortcutChildAckCapability
+	fn        func(context.Context) (*syncengine.Report, error)
 }
 
 type indexedMountWork struct {
@@ -47,7 +49,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		defer o.closeControlSocket(ctx, control)
 	}
 
-	compiled, err := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+	parentMounts, err := buildStandaloneMountSpecs(o.cfg.StandaloneMounts)
 	if err != nil {
 		return controlFailureRunOnceResult(
 			o.cfg.StandaloneMounts,
@@ -55,76 +57,35 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 			fmt.Errorf("building mount specs: %w", err),
 		)
 	}
-	o.setControlMountIDs(mountIDsForSpecs(compiled.Mounts))
+	o.setControlMountIDs(mountIDsForSpecs(parentMounts))
 
 	o.logger.Info("orchestrator starting RunOnce",
-		slog.Int("mounts", len(compiled.Mounts)),
+		slog.Int("mounts", len(parentMounts)),
 		slog.String("mode", mode.String()),
 	)
 
+	childCoordinator := newRunOnceChildCoordinator(o, mode, opts, parentMounts)
 	parentWork, parentStartup, parentReports := o.prepareRunOnceWork(
 		ctx,
 		mode,
-		filterMountSpecsByProjection(compiled.Mounts, MountProjectionStandalone),
-		compiled.Skipped,
+		parentMounts,
+		o.cfg.InitialStartupResults,
 		opts,
+		childCoordinator.notifyParentPublication,
 	)
+	childCoordinator.registerParents(parentWork)
 
-	runIndexedMountWork(ctx, parentWork, parentReports)
+	runIndexedParentMountWork(ctx, parentWork, parentReports, childCoordinator)
 	defer o.closeRunOnceParentEngines(ctx, parentWork)
 
-	childCompiled, childCompileErr := o.buildRuntimeMountSet(ctx, o.cfg.StandaloneMounts, nil)
-	if childCompileErr != nil {
-		parentStartup.Results = append(parentStartup.Results, MountStartupResult{
-			Status: MountStartupFatal,
-			Err:    fmt.Errorf("building child mount specs after parent publication: %w", childCompileErr),
-		})
-		return RunOnceResult{
-			Startup: parentStartup,
-			Reports: parentReports,
-		}
-	}
-	parentAckers := runOnceParentDrainAckers(parentWork)
-	if purgeErr := o.purgeShortcutChildArtifactsForCompiled(
-		ctx,
-		childCompiled,
-		artifactCleanupAckersFromLifecycle(parentAckers),
-	); purgeErr != nil {
-		o.logger.Warn("purging shortcut child state artifacts",
-			slog.String("error", purgeErr.Error()),
-		)
-	}
-
-	childMounts := filterMountSpecsByProjection(childCompiled.Mounts, MountProjectionChild)
-	childWork, childStartup, childReports := o.prepareRunOnceWork(
-		ctx,
-		mode,
-		childMounts,
-		childCompiled.Skipped,
-		opts,
-	)
-	runIndexedMountWork(ctx, childWork, childReports)
-	o.closeRunOnceChildEngines(ctx, childWork)
-
-	if finalized, finalizeErr := o.finalizeSuccessfulFinalDrainMounts(
-		ctx,
-		childCompiled,
-		childReports,
-		parentAckers,
-	); finalizeErr != nil {
-		o.logger.Warn("finalizing drained shortcut child mounts",
-			slog.String("error", finalizeErr.Error()),
-		)
-	} else if finalized {
-		o.logger.Info("finalized drained shortcut child mounts")
-	}
+	childCoordinator.wait()
 
 	allReports := append([]*MountReport{}, parentReports...)
-	allReports = append(allReports, childReports...)
+	allReports = append(allReports, childCoordinator.reports()...)
 	o.logger.Info("orchestrator RunOnce complete", slog.Int("reports", len(allReports)))
 
 	startupResults := append([]MountStartupResult{}, parentStartup.Results...)
-	startupResults = append(startupResults, childStartup.Results...)
+	startupResults = append(startupResults, childCoordinator.startupResults()...)
 	return RunOnceResult{
 		Startup: summarizeStartupResults(startupResults),
 		Reports: allReports,
@@ -143,6 +104,259 @@ func runIndexedMountWork(ctx context.Context, work []indexedMountWork, reports [
 	}
 
 	wg.Wait()
+}
+
+func runIndexedParentMountWork(
+	ctx context.Context,
+	work []indexedMountWork,
+	reports []*MountReport,
+	coordinator *runOnceChildCoordinator,
+) {
+	var wg gosync.WaitGroup
+	for _, w := range work {
+		wg.Add(1)
+
+		go func(indexed indexedMountWork) {
+			defer wg.Done()
+			reports[indexed.index] = indexed.work.runner.run(ctx, indexed.work.fn)
+			if coordinator != nil && indexed.work.mount != nil {
+				coordinator.markParentDone(indexed.work.mount.mountID)
+			}
+		}(w)
+	}
+
+	wg.Wait()
+}
+
+type runOnceChildCoordinator struct {
+	orchestrator *Orchestrator
+	mode         syncengine.SyncMode
+	opts         syncengine.RunOptions
+
+	mu            gosync.Mutex
+	parents       map[mountID]*mountSpec
+	parentDone    map[mountID]chan struct{}
+	parentAckers  map[mountID]syncengine.ShortcutChildAckCapability
+	started       map[mountID]bool
+	startup       []MountStartupResult
+	childReports  []*MountReport
+	childRunGroup gosync.WaitGroup
+}
+
+func newRunOnceChildCoordinator(
+	orchestrator *Orchestrator,
+	mode syncengine.SyncMode,
+	opts syncengine.RunOptions,
+	parents []*mountSpec,
+) *runOnceChildCoordinator {
+	parentByID := make(map[mountID]*mountSpec, len(parents))
+	for _, parent := range parents {
+		if parent == nil {
+			continue
+		}
+		parentByID[parent.mountID] = cloneMountSpec(parent)
+	}
+	return &runOnceChildCoordinator{
+		orchestrator: orchestrator,
+		mode:         mode,
+		opts:         opts,
+		parents:      parentByID,
+		parentDone:   make(map[mountID]chan struct{}),
+		parentAckers: make(map[mountID]syncengine.ShortcutChildAckCapability),
+		started:      make(map[mountID]bool),
+	}
+}
+
+func (c *runOnceChildCoordinator) registerParents(work []indexedMountWork) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, item := range work {
+		if item.work.mount == nil || item.work.mount.projectionKind != MountProjectionStandalone {
+			continue
+		}
+		parentID := item.work.mount.mountID
+		if _, found := c.parentDone[parentID]; !found {
+			c.parentDone[parentID] = make(chan struct{})
+		}
+		if item.work.parentAck != nil {
+			c.parentAckers[parentID] = item.work.parentAck
+		}
+	}
+}
+
+func (c *runOnceChildCoordinator) notifyParentPublication(ctx context.Context, parentID mountID) error {
+	if c == nil || parentID == "" {
+		return nil
+	}
+
+	c.mu.Lock()
+	if c.started[parentID] {
+		c.mu.Unlock()
+		return nil
+	}
+	parent := cloneMountSpec(c.parents[parentID])
+	if parent == nil {
+		c.mu.Unlock()
+		return nil
+	}
+	c.started[parentID] = true
+	c.childRunGroup.Add(1)
+	c.mu.Unlock()
+
+	go c.runChildrenForParent(ctx, parentID, parent)
+	return nil
+}
+
+func (c *runOnceChildCoordinator) markParentDone(parentID mountID) {
+	if c == nil || parentID == "" {
+		return
+	}
+	c.mu.Lock()
+	done := c.parentDone[parentID]
+	if done != nil {
+		delete(c.parentDone, parentID)
+	}
+	c.mu.Unlock()
+	if done != nil {
+		close(done)
+	}
+}
+
+func (c *runOnceChildCoordinator) wait() {
+	if c == nil {
+		return
+	}
+	c.childRunGroup.Wait()
+}
+
+func (c *runOnceChildCoordinator) startupResults() []MountStartupResult {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	results := append([]MountStartupResult(nil), c.startup...)
+	sort.SliceStable(results, func(i, j int) bool {
+		return results[i].SelectionIndex < results[j].SelectionIndex
+	})
+	return results
+}
+
+func (c *runOnceChildCoordinator) reports() []*MountReport {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	reports := append([]*MountReport(nil), c.childReports...)
+	sort.SliceStable(reports, func(i, j int) bool {
+		if reports[i] == nil || reports[j] == nil {
+			return reports[j] != nil
+		}
+		return reports[i].SelectionIndex < reports[j].SelectionIndex
+	})
+	return reports
+}
+
+func (c *runOnceChildCoordinator) runChildrenForParent(
+	ctx context.Context,
+	parentID mountID,
+	parent *mountSpec,
+) {
+	defer c.childRunGroup.Done()
+	compiled, err := c.orchestrator.compileRuntimeMountSetForParent(parent)
+	if err != nil {
+		c.appendStartup(MountStartupResult{
+			SelectionIndex: parent.selectionIndex,
+			Identity:       parent.identity(),
+			DisplayName:    parent.displayName,
+			Status:         MountStartupFatal,
+			Err:            fmt.Errorf("building child mount specs after parent publication: %w", err),
+		})
+		return
+	}
+
+	childMounts := filterMountSpecsByProjection(compiled.Mounts, MountProjectionChild)
+	childWork, childStartup, childReports := c.orchestrator.prepareRunOnceWork(
+		ctx,
+		c.mode,
+		childMounts,
+		compiled.Skipped,
+		c.opts,
+		nil,
+	)
+	c.appendStartup(childStartup.Results...)
+	runIndexedMountWork(ctx, childWork, childReports)
+	c.orchestrator.closeRunOnceChildEngines(ctx, childWork)
+	c.appendReports(childReports...)
+
+	c.waitParentDone(parentID)
+	parentAckers := c.parentAckersFor(parentID)
+	if purgeErr := c.orchestrator.purgeShortcutChildArtifactsForCompiled(
+		ctx,
+		compiled,
+		cloneParentAckCapabilities(parentAckers),
+	); purgeErr != nil {
+		c.orchestrator.logger.Warn("purging shortcut child state artifacts",
+			slog.String("parent_mount_id", parentID.String()),
+			slog.String("error", purgeErr.Error()),
+		)
+	}
+	if finalized, finalizeErr := c.orchestrator.finalizeSuccessfulFinalDrainMounts(
+		ctx,
+		compiled,
+		childReports,
+		parentAckers,
+	); finalizeErr != nil {
+		c.orchestrator.logger.Warn("finalizing drained shortcut child mounts",
+			slog.String("parent_mount_id", parentID.String()),
+			slog.String("error", finalizeErr.Error()),
+		)
+	} else if finalized {
+		c.orchestrator.logger.Info("finalized drained shortcut child mounts",
+			slog.String("parent_mount_id", parentID.String()),
+		)
+	}
+}
+
+func (c *runOnceChildCoordinator) waitParentDone(parentID mountID) {
+	c.mu.Lock()
+	done := c.parentDone[parentID]
+	c.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+}
+
+func (c *runOnceChildCoordinator) parentAckersFor(parentID mountID) map[mountID]syncengine.ShortcutChildAckCapability {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	acker := c.parentAckers[parentID]
+	if acker == nil {
+		return nil
+	}
+	return map[mountID]syncengine.ShortcutChildAckCapability{parentID: acker}
+}
+
+func (c *runOnceChildCoordinator) appendStartup(results ...MountStartupResult) {
+	if c == nil || len(results) == 0 {
+		return
+	}
+	c.mu.Lock()
+	c.startup = append(c.startup, results...)
+	c.mu.Unlock()
+}
+
+func (c *runOnceChildCoordinator) appendReports(reports ...*MountReport) {
+	if c == nil || len(reports) == 0 {
+		return
+	}
+	c.mu.Lock()
+	c.childReports = append(c.childReports, reports...)
+	c.mu.Unlock()
 }
 
 func controlFailureRunOnceResult(
@@ -181,6 +395,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.RunOptions,
+	notify parentRunnerPublicationNotify,
 ) ([]indexedMountWork, StartupSelectionSummary, []*MountReport) {
 	work := make([]indexedMountWork, 0, len(mounts))
 	reports := make([]*MountReport, 0, len(mounts))
@@ -198,7 +413,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 			continue
 		}
 
-		o.attachShortcutChildTopologySink(mount, nil)
+		o.attachParentRunnerPublicationSink(mount, nil, notify)
 
 		session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 		if err != nil {
@@ -265,8 +480,9 @@ func (o *Orchestrator) buildEngineWork(
 			identity:       mount.identity(),
 			displayName:    mount.displayName,
 		},
-		mount:  mount,
-		engine: engine,
+		mount:     mount,
+		engine:    engine,
+		parentAck: shortcutParentAckCapabilityForMount(mount, engine),
 		fn: func(c context.Context) (*syncengine.Report, error) {
 			runMode := mode
 			runOpts := opts
@@ -309,26 +525,11 @@ func (o *Orchestrator) closeRunOnceEngine(ctx context.Context, mount *mountSpec,
 	}
 }
 
-func runOnceParentDrainAckers(work []indexedMountWork) map[mountID]shortcutChildLifecycleAcker {
-	ackers := make(map[mountID]shortcutChildLifecycleAcker)
-	for _, item := range work {
-		if item.work.mount == nil || item.work.mount.projectionKind != MountProjectionStandalone {
-			continue
-		}
-		acker, ok := item.work.engine.(shortcutChildLifecycleAcker)
-		if !ok {
-			continue
-		}
-		ackers[item.work.mount.mountID] = acker
-	}
-	return ackers
-}
-
 func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	ctx context.Context,
 	compiled *compiledMountSet,
 	reports []*MountReport,
-	parentAckers map[mountID]shortcutChildLifecycleAcker,
+	parentAckers map[mountID]syncengine.ShortcutChildAckCapability,
 ) (bool, error) {
 	if compiled == nil || len(compiled.FinalDrainMountIDs) == 0 {
 		return false, nil
@@ -347,7 +548,7 @@ func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	if err := purgeShortcutChildArtifactsForCleanups(ctx, cleanups, o.logger); err != nil {
 		return false, err
 	}
-	if err := o.acknowledgeShortcutChildArtifactCleanups(ctx, cleanups, artifactCleanupAckersFromLifecycle(parentAckers)); err != nil {
+	if err := o.acknowledgeShortcutChildArtifactCleanups(ctx, cleanups, cloneParentAckCapabilities(parentAckers)); err != nil {
 		return false, err
 	}
 	if o.logger != nil {
@@ -380,7 +581,7 @@ func acknowledgeSuccessfulFinalDrains(
 	ctx context.Context,
 	successful []shortcutChildDrainResult,
 	mounts []*mountSpec,
-	parentAckers map[mountID]shortcutChildLifecycleAcker,
+	parentAckers map[mountID]syncengine.ShortcutChildAckCapability,
 ) ([]shortcutChildArtifactCleanup, error) {
 	mountByID := make(map[string]*mountSpec, len(mounts))
 	for _, mount := range mounts {
@@ -409,18 +610,18 @@ func acknowledgeSuccessfulFinalDrains(
 		if err != nil {
 			return nil, fmt.Errorf("acknowledging final drain for child mount %s: %w", result.MountID, err)
 		}
-		cleanups = append(cleanups, shortcutChildArtifactCleanups(parentByID, map[mountID]syncengine.ShortcutChildTopologyPublication{
+		cleanups = append(cleanups, shortcutChildArtifactCleanups(parentByID, map[mountID]syncengine.ShortcutChildRunnerPublication{
 			mount.parentMountID: snapshot,
 		})...)
 	}
 	return cleanups, nil
 }
 
-func artifactCleanupAckersFromLifecycle(
-	lifecycle map[mountID]shortcutChildLifecycleAcker,
-) map[mountID]shortcutChildArtifactCleanupAcker {
-	ackers := make(map[mountID]shortcutChildArtifactCleanupAcker, len(lifecycle))
-	for id, acker := range lifecycle {
+func cloneParentAckCapabilities(
+	ackersByParent map[mountID]syncengine.ShortcutChildAckCapability,
+) map[mountID]syncengine.ShortcutChildAckCapability {
+	ackers := make(map[mountID]syncengine.ShortcutChildAckCapability, len(ackersByParent))
+	for id, acker := range ackersByParent {
 		ackers[id] = acker
 	}
 	return ackers
