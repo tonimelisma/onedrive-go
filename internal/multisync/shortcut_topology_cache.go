@@ -37,6 +37,11 @@ func (o *Orchestrator) latestParentRunnerPublicationFor(parentID mountID) syncen
 	return syncengine.NormalizeShortcutChildRunnerPublication(parentID.String(), publication)
 }
 
+func (o *Orchestrator) parentRunnerPublicationHasOneShotWork(parentID mountID) bool {
+	publication := o.latestParentRunnerPublicationFor(parentID)
+	return len(publication.Children) > 0 || len(publication.CleanupRequests) > 0
+}
+
 func (o *Orchestrator) forgetParentRunnerPublication(parentID mountID) {
 	if o == nil || parentID == "" {
 		return
