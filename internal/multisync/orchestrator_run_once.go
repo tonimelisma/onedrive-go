@@ -18,7 +18,7 @@ type mountWork struct {
 	runner    *MountRunner
 	mount     *mountSpec
 	engine    engineRunner
-	parentAck syncengine.ShortcutChildAckHandle
+	parentAck shortcutChildAckHandle
 	fn        func(context.Context) (*syncengine.Report, error)
 }
 
@@ -119,7 +119,7 @@ func runIndexedParentMountWork(
 			defer wg.Done()
 			reports[indexed.index] = indexed.work.runner.run(ctx, indexed.work.fn)
 			if coordinator != nil && indexed.work.mount != nil {
-				coordinator.markParentDone(ctx, indexed.work.mount.mountID)
+				coordinator.markParentDone(indexed.work.mount.mountID)
 			}
 		}(w)
 	}
@@ -297,7 +297,7 @@ func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	ctx context.Context,
 	decisions *runnerDecisionSet,
 	reports []*MountReport,
-	parentAckers map[mountID]syncengine.ShortcutChildAckHandle,
+	parentAckers map[mountID]shortcutChildAckHandle,
 ) (bool, error) {
 	if decisions == nil || len(decisions.FinalDrainMountIDs) == 0 {
 		return false, nil
@@ -349,7 +349,7 @@ func acknowledgeSuccessfulFinalDrains(
 	ctx context.Context,
 	successful []shortcutChildDrainResult,
 	mounts []*mountSpec,
-	parentAckers map[mountID]syncengine.ShortcutChildAckHandle,
+	parentAckers map[mountID]shortcutChildAckHandle,
 ) ([]shortcutChildArtifactCleanup, error) {
 	mountByID := make(map[string]*mountSpec, len(mounts))
 	for _, mount := range mounts {
@@ -369,7 +369,7 @@ func acknowledgeSuccessfulFinalDrains(
 		}
 		parentID := mount.childParentMountID()
 		acker := parentAckers[parentID]
-		if acker.IsZero() {
+		if shortcutChildAckHandleIsZero(acker) {
 			return nil, fmt.Errorf("parent mount %s is unavailable for final-drain acknowledgement", parentID)
 		}
 		snapshot, err := acker.AcknowledgeChildFinalDrain(ctx, syncengine.ShortcutChildDrainAck{
@@ -387,16 +387,6 @@ func acknowledgeSuccessfulFinalDrains(
 		cleanups = append(cleanups, publishedCleanups...)
 	}
 	return cleanups, nil
-}
-
-func cloneParentAckHandles(
-	ackersByParent map[mountID]syncengine.ShortcutChildAckHandle,
-) map[mountID]syncengine.ShortcutChildAckHandle {
-	ackers := make(map[mountID]syncengine.ShortcutChildAckHandle, len(ackersByParent))
-	for id, acker := range ackersByParent {
-		ackers[id] = acker
-	}
-	return ackers
 }
 
 func (o *Orchestrator) purgeShortcutChildArtifactsForCleanups(

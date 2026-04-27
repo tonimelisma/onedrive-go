@@ -75,6 +75,34 @@ func TestRunRepoConsistencyChecksAllowsApprovedHTTPClientDoBoundary(t *testing.T
 	require.NoError(t, runRepoConsistencyChecks(repoRoot))
 }
 
+// Validates: R-6.10.5
+func TestRunRepoConsistencyChecksFailsOnLiveShortcutDeleteE2E(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	e2eDir := filepath.Join(repoRoot, "e2e")
+	require.NoError(t, os.MkdirAll(e2eDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(e2eDir, "sync_shortcut_delete_e2e_test.go"),
+		[]byte(strings.Join([]string{
+			"package e2e",
+			"",
+			"import \"testing\"",
+			"",
+			"func TestE2E_Shortcut_DeleteManualDiscard(t *testing.T) {}",
+			"",
+		}, "\n")),
+		0o600,
+	))
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "live shortcut delete E2E is unsupported")
+	assert.Contains(t, err.Error(), "sync_shortcut_delete_e2e_test.go")
+}
+
 // Validates: R-6.2.1
 func TestRunRepoConsistencyChecksFailsOnCLIProcessGlobalOutput(t *testing.T) {
 	t.Parallel()
@@ -494,6 +522,30 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncDirectLifecycleAckWrappers(t *t
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "lifecycle")
 	assert.Contains(t, err.Error(), "bad_direct_lifecycle_acker.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncSyntheticShortcutAckHandle(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_synthetic_ack.go"), []string{
+		"package multisync",
+		"",
+		"import syncengine \"github.com/tonimelisma/onedrive-go/internal/sync\"",
+		"",
+		"func bad() {",
+		"\t_ = syncengine.NewShortcutChildAckHandle(nil, nil)",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "live parent shortcut ack handles")
+	assert.Contains(t, err.Error(), "bad_synthetic_ack.go")
 }
 
 // Validates: R-2.4.3, R-2.4.8

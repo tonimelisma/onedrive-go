@@ -442,8 +442,8 @@ observed value outcomes. The shell performs Graph, filesystem, and SQLite
 effects only, then feeds those outcomes back through the same transition table.
 
 When a child final drain completes, multisync acknowledges that completion to
-the already-running parent engine through the sync-owned
-`ShortcutChildAckHandle`. The parent engine first persists
+the already-running parent engine through the concrete sync-owned
+`ShortcutChildAckHandle` obtained from that live engine. The parent engine first persists
 `removed_release_pending`, then releases its own protected alias projection or
 promotes a waiting same-path replacement to `active`. After parent release, the
 old binding remains in `removed_child_cleanup_pending` without protected paths

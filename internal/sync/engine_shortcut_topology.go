@@ -32,7 +32,7 @@ func (e *Engine) ShortcutChildAckHandle() ShortcutChildAckHandle {
 	if e == nil {
 		return ShortcutChildAckHandle{}
 	}
-	return NewShortcutChildAckHandle(
+	return newShortcutChildAckHandle(
 		e.acknowledgeChildFinalDrain,
 		e.acknowledgeChildArtifactsPurged,
 	)

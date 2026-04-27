@@ -28,11 +28,8 @@ func TestPurgeShortcutChildArtifacts_IgnoresExplicitMountID(t *testing.T) {
 		return nil
 	}))
 
-	err := purgeShortcutChildArtifacts(
-		context.Background(),
-		shortcutChildArtifactScope{mountID: mountID},
-		slog.New(slog.DiscardHandler),
-	)
+	executor := newShortcutChildArtifactCleanupExecutor(slog.New(slog.DiscardHandler), config.DefaultDataDir())
+	err := executor.purge(context.Background(), shortcutChildArtifactScope{mountID: mountID})
 
 	require.NoError(t, err)
 	assert.FileExists(t, statePath)
@@ -117,6 +114,20 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsUploadSessionFailure(t *tes
 }
 
 // Validates: R-2.4.8
+func TestShortcutChildArtifactCleanupExecutor_RequiresInjectedDependencies(t *testing.T) {
+	t.Parallel()
+
+	childMountID := config.ChildMountID("personal:parent@example.com", "binding-missing-executor")
+	err := shortcutChildArtifactCleanupExecutor{}.purge(
+		context.Background(),
+		shortcutChildArtifactScope{mountID: childMountID},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cleanup executor is not configured")
+}
+
+// Validates: R-2.4.8
 func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor(t *testing.T) {
 	t.Parallel()
 
@@ -151,13 +162,13 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor
 			localRoot:     filepath.Join(t.TempDir(), "Shortcut"),
 		}},
 	}
-	ackers := map[mountID]syncengine.ShortcutChildAckHandle{
-		"personal:parent@example.com": syncengine.NewShortcutChildAckHandle(nil,
-			func(_ context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error) {
+	ackers := map[mountID]shortcutChildAckHandle{
+		"personal:parent@example.com": mockShortcutChildAckHandle{
+			ackCleanupFn: func(_ context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error) {
 				acked = append(acked, ack.BindingItemID)
 				return syncengine.ShortcutChildRunnerPublication{}, nil
 			},
-		),
+		},
 	}
 
 	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers)
@@ -199,12 +210,12 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 			bindingItemID: "binding-ack-fail",
 		}},
 	}
-	ackers := map[mountID]syncengine.ShortcutChildAckHandle{
-		"personal:parent@example.com": syncengine.NewShortcutChildAckHandle(nil,
-			func(context.Context, syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error) {
+	ackers := map[mountID]shortcutChildAckHandle{
+		"personal:parent@example.com": mockShortcutChildAckHandle{
+			ackCleanupFn: func(context.Context, syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error) {
 				return syncengine.ShortcutChildRunnerPublication{}, errors.New("parent store temporarily unavailable")
 			},
-		),
+		},
 	}
 
 	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers)

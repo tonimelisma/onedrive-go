@@ -53,7 +53,7 @@ func newShortcutChildArtifactCleanupExecutor(logger *slog.Logger, dataDir string
 
 func (o *Orchestrator) childArtifactCleanupExecutor() shortcutChildArtifactCleanupExecutor {
 	if o == nil || o.artifactCleanup.remove == nil {
-		return newShortcutChildArtifactCleanupExecutor(nil, config.DefaultDataDir())
+		return shortcutChildArtifactCleanupExecutor{}
 	}
 	return o.artifactCleanup
 }
@@ -108,7 +108,7 @@ func shortcutChildArtifactCleanups(
 func (o *Orchestrator) purgeShortcutChildArtifactsForDecisions(
 	ctx context.Context,
 	decisions *runnerDecisionSet,
-	parentAckers map[mountID]syncengine.ShortcutChildAckHandle,
+	parentAckers map[mountID]shortcutChildAckHandle,
 ) error {
 	if decisions == nil || len(decisions.CleanupChildren) == 0 {
 		return nil
@@ -134,13 +134,13 @@ func (o *Orchestrator) purgeShortcutChildArtifactsForDecisions(
 func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 	ctx context.Context,
 	cleanups []shortcutChildArtifactCleanup,
-	parentAckers map[mountID]syncengine.ShortcutChildAckHandle,
+	parentAckers map[mountID]shortcutChildAckHandle,
 ) error {
 	var errs []error
 	for _, cleanup := range cleanups {
 		parentID := mountID(cleanup.namespaceID)
 		acker := parentAckers[parentID]
-		if acker.IsZero() {
+		if shortcutChildAckHandleIsZero(acker) {
 			errs = append(errs, fmt.Errorf("parent mount %s is unavailable for child artifact cleanup acknowledgement", parentID))
 			continue
 		}
@@ -156,10 +156,6 @@ func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 	return errors.Join(errs...)
 }
 
-func purgeShortcutChildArtifacts(ctx context.Context, scope shortcutChildArtifactScope, logger *slog.Logger) error {
-	return newShortcutChildArtifactCleanupExecutor(logger, config.DefaultDataDir()).purge(ctx, scope)
-}
-
 func (e shortcutChildArtifactCleanupExecutor) purge(
 	ctx context.Context,
 	scope shortcutChildArtifactScope,
@@ -173,6 +169,9 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 	}
 	if !config.IsChildMountID(childMountID) {
 		return nil
+	}
+	if err := e.requireConfigured(); err != nil {
+		return err
 	}
 
 	var errs []error
@@ -198,6 +197,13 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 		e.logger.Info("purged shortcut child state artifacts",
 			slog.String("mount_id", childMountID),
 		)
+	}
+	return nil
+}
+
+func (e shortcutChildArtifactCleanupExecutor) requireConfigured() error {
+	if e.remove == nil || e.pruneCatalogRecord == nil || e.deleteUploadSessions == nil {
+		return fmt.Errorf("purging managed child mount artifacts: cleanup executor is not configured")
 	}
 	return nil
 }

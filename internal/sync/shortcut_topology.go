@@ -89,10 +89,7 @@ type ShortcutChildAckHandle struct {
 	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildRunnerPublication, error)
 }
 
-// NewShortcutChildAckHandle creates a live-parent acknowledgement handle.
-// Production callers should obtain handles from Engine; this constructor exists
-// for package-internal tests that exercise control-plane acknowledgement flows.
-func NewShortcutChildAckHandle(
+func newShortcutChildAckHandle(
 	ackFinalDrain func(context.Context, ShortcutChildDrainAck) (ShortcutChildRunnerPublication, error),
 	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildRunnerPublication, error),
 ) ShortcutChildAckHandle {

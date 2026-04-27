@@ -1439,6 +1439,221 @@ func TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents(t *testing.T)
 	assert.Empty(t, result.Startup.SkippedResults())
 }
 
+// Validates: R-2.4.8
+func TestRunOnce_StartsParentChildrenBeforePublishingParentReturns(t *testing.T) {
+	parent := testStandaloneMount(t, "personal:parent-publishing@example.com", "Parent")
+	setupXDGIsolation(t, parent.CanonicalID)
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+
+	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-publish", "Shortcuts/Publish")
+	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	releaseParent := make(chan struct{})
+	childStarted := make(chan struct{})
+	var parentReturned atomic.Bool
+	var childStartedOnce sync.Once
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		switch req.Mount.mountID.String() {
+		case parent.CanonicalID.String():
+			return &mockEngine{
+				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+					if req.Mount.parentRunnerPublicationSink == nil {
+						return nil, errors.New("missing parent runner publication sink")
+					}
+					if err := req.Mount.parentRunnerPublicationSink(ctx, syncengine.ShortcutChildRunnerPublication{
+						NamespaceID: parent.CanonicalID.String(),
+						Children:    []syncengine.ShortcutChildRunner{child},
+					}); err != nil {
+						return nil, err
+					}
+					select {
+					case <-releaseParent:
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+					parentReturned.Store(true)
+					return &syncengine.Report{}, nil
+				},
+			}, nil
+		case childID:
+			return &mockEngine{
+				runOnceFn: func(context.Context, syncengine.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
+					assert.False(t, parentReturned.Load(), "child should start before publishing parent returns")
+					childStartedOnce.Do(func() { close(childStarted) })
+					return &syncengine.Report{}, nil
+				},
+			}, nil
+		default:
+			return nil, fmt.Errorf("unexpected mount %s", req.Mount.mountID)
+		}
+	}
+
+	resultCh := make(chan RunOnceResult, 1)
+	go func() {
+		resultCh <- orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	}()
+
+	select {
+	case <-childStarted:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "child did not start from parent publication before parent returned")
+	}
+	close(releaseParent)
+
+	var result RunOnceResult
+	select {
+	case result = <-resultCh:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "RunOnce did not finish")
+	}
+	require.Len(t, result.Reports, 2)
+}
+
+// Validates: R-2.4.8
+func TestRunOnce_EmptyPublicationDoesNotConsumeOneShotChildStart(t *testing.T) {
+	parent := testStandaloneMount(t, "personal:empty-then-child@example.com", "Parent")
+	setupXDGIsolation(t, parent.CanonicalID)
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+
+	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-later", "Shortcuts/Later")
+	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	childStarted := make(chan struct{})
+	var childStartedOnce sync.Once
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		switch req.Mount.mountID.String() {
+		case parent.CanonicalID.String():
+			return &mockEngine{
+				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+					if req.Mount.parentRunnerPublicationSink == nil {
+						return nil, errors.New("missing parent runner publication sink")
+					}
+					if err := req.Mount.parentRunnerPublicationSink(ctx, syncengine.ShortcutChildRunnerPublication{
+						NamespaceID: parent.CanonicalID.String(),
+					}); err != nil {
+						return nil, err
+					}
+					if err := req.Mount.parentRunnerPublicationSink(ctx, syncengine.ShortcutChildRunnerPublication{
+						NamespaceID: parent.CanonicalID.String(),
+						Children:    []syncengine.ShortcutChildRunner{child},
+					}); err != nil {
+						return nil, err
+					}
+					return &syncengine.Report{}, nil
+				},
+			}, nil
+		case childID:
+			return &mockEngine{
+				runOnceFn: func(context.Context, syncengine.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
+					childStartedOnce.Do(func() { close(childStarted) })
+					return &syncengine.Report{}, nil
+				},
+			}, nil
+		default:
+			return nil, fmt.Errorf("unexpected mount %s", req.Mount.mountID)
+		}
+	}
+
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+
+	select {
+	case <-childStarted:
+	default:
+		require.Fail(t, "child did not start after later non-empty publication")
+	}
+	require.Len(t, result.Reports, 2)
+}
+
+// Validates: R-2.4.8
+func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	parent := testStandaloneMount(t, "personal:final-drain-safe-point@example.com", "Parent")
+	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain-safe", "Shortcuts/Docs")
+	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
+	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	seedShortcutChildStateArtifactsForTest(t, &parent, &child, true)
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+
+	releaseParent := make(chan struct{})
+	childCompleted := make(chan struct{})
+	acked := make(chan struct{})
+	var childCompletedOnce sync.Once
+	var ackedOnce sync.Once
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		switch req.Mount.mountID.String() {
+		case parent.CanonicalID.String():
+			return &mockEngine{
+				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+					if req.Mount.parentRunnerPublicationSink == nil {
+						return nil, errors.New("missing parent runner publication sink")
+					}
+					if err := req.Mount.parentRunnerPublicationSink(ctx, syncengine.ShortcutChildRunnerPublication{
+						NamespaceID: parent.CanonicalID.String(),
+						Children:    []syncengine.ShortcutChildRunner{child},
+					}); err != nil {
+						return nil, err
+					}
+					select {
+					case <-releaseParent:
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+					return &syncengine.Report{}, nil
+				},
+				ackDrainFn: func(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildRunnerPublication, error) {
+					ackedOnce.Do(func() { close(acked) })
+					return syncengine.ShortcutChildRunnerPublication{}, nil
+				},
+			}, nil
+		case childID:
+			return &mockEngine{
+				runOnceFn: func(context.Context, syncengine.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
+					childCompletedOnce.Do(func() { close(childCompleted) })
+					return &syncengine.Report{Succeeded: 1}, nil
+				},
+			}, nil
+		default:
+			return nil, fmt.Errorf("unexpected mount %s", req.Mount.mountID)
+		}
+	}
+
+	resultCh := make(chan RunOnceResult, 1)
+	go func() {
+		resultCh <- orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	}()
+
+	select {
+	case <-childCompleted:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "final-drain child did not complete")
+	}
+	select {
+	case <-acked:
+		require.FailNow(t, "final-drain ack happened before parent safe point")
+	default:
+	}
+	close(releaseParent)
+	select {
+	case <-acked:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "final-drain ack did not happen after parent safe point")
+	}
+	select {
+	case result := <-resultCh:
+		require.Len(t, result.Reports, 2)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "RunOnce did not finish")
+	}
+}
+
 // Validates: R-2.4
 func TestRunWatch_PublishesParentRunnerPublicationBeforeStartingChildren(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:watch-bootstrap@example.com", "WatchBootstrap")
@@ -2156,21 +2371,43 @@ func (m *mockEngine) Close(context.Context) error {
 	return nil
 }
 
-func (m *mockEngine) ShortcutChildAckHandle() syncengine.ShortcutChildAckHandle {
-	return syncengine.NewShortcutChildAckHandle(
-		func(ctx context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildRunnerPublication, error) {
-			if m.ackDrainFn != nil {
-				return m.ackDrainFn(ctx, ack)
-			}
-			return syncengine.ShortcutChildRunnerPublication{}, nil
-		},
-		func(ctx context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error) {
-			if m.ackCleanupFn != nil {
-				return m.ackCleanupFn(ctx, ack)
-			}
-			return syncengine.ShortcutChildRunnerPublication{}, nil
-		},
-	)
+func (m *mockEngine) ShortcutChildAckHandle() shortcutChildAckHandle {
+	if m.ackDrainFn == nil && m.ackCleanupFn == nil {
+		return nil
+	}
+	return mockShortcutChildAckHandle{
+		ackDrainFn:   m.ackDrainFn,
+		ackCleanupFn: m.ackCleanupFn,
+	}
+}
+
+type mockShortcutChildAckHandle struct {
+	ackDrainFn   func(ctx context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildRunnerPublication, error)
+	ackCleanupFn func(ctx context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error)
+}
+
+func (h mockShortcutChildAckHandle) IsZero() bool {
+	return h.ackDrainFn == nil && h.ackCleanupFn == nil
+}
+
+func (h mockShortcutChildAckHandle) AcknowledgeChildFinalDrain(
+	ctx context.Context,
+	ack syncengine.ShortcutChildDrainAck,
+) (syncengine.ShortcutChildRunnerPublication, error) {
+	if h.ackDrainFn == nil {
+		return syncengine.ShortcutChildRunnerPublication{}, nil
+	}
+	return h.ackDrainFn(ctx, ack)
+}
+
+func (h mockShortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
+	ctx context.Context,
+	ack syncengine.ShortcutChildArtifactCleanupAck,
+) (syncengine.ShortcutChildRunnerPublication, error) {
+	if h.ackCleanupFn == nil {
+		return syncengine.ShortcutChildRunnerPublication{}, nil
+	}
+	return h.ackCleanupFn(ctx, ack)
 }
 
 // --- RunWatch ---
