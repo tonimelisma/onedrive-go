@@ -436,7 +436,7 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncChildRunnerPublicationStateMapp
 		"",
 		"import syncengine \"github.com/tonimelisma/onedrive-go/internal/sync\"",
 		"",
-		"func bad(state syncengine.ShortcutChildTopologyState) bool {",
+		"func bad(state syncengine.ShortcutChildTopology" + "State) bool {",
 		"\treturn state == syncengine.ShortcutChildRetiring",
 		"}",
 		"",
@@ -507,7 +507,7 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncInferredShortcutRelease(t *test
 		"package multisync",
 		"",
 		"func bad() {",
-		"\tmergeReleasedShortcutChildren()",
+		"\tmergeReleased" + "ShortcutChildren()",
 		"}",
 		"",
 	})
@@ -695,6 +695,30 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncLocalpathFilesystemAccessOutsid
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "child-artifact cleanup paths")
 	assert.Contains(t, err.Error(), "bad_localpath.go")
+}
+
+// Validates: R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncCleanupScopeDerivation(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "shortcut_child_artifacts.go"), []string{
+		"package multisync",
+		"",
+		"import \"github.com/tonimelisma/onedrive-go/internal/config\"",
+		"",
+		"func bad() string {",
+		"\treturn config.ChildMountID(\"parent\", \"binding\")",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cleanup scope")
+	assert.Contains(t, err.Error(), "shortcut_child_artifacts.go")
 }
 
 // Validates: R-2.4.3, R-2.4.8

@@ -58,6 +58,56 @@ func TestShortcutChildRunnerPublicationIncludesExplicitCleanupScope(t *testing.T
 	assert.Equal(t, filepath.Join(parentRoot, "Shortcuts", "Old"), cleanup.LocalRoot)
 }
 
+// Validates: R-2.4.8
+func TestShortcutChildRunnerPublicationEqualityIsSyncOwned(t *testing.T) {
+	t.Parallel()
+
+	identity := &ShortcutRootIdentity{Device: 1, Inode: 2}
+	first := NormalizeShortcutChildRunnerPublication(shortcutNamespaceTestID, ShortcutChildRunnerPublication{
+		Children: []ShortcutChildRunner{{
+			BindingItemID:     "binding-b",
+			RelativeLocalPath: "B",
+			RunnerAction:      ShortcutChildActionRun,
+			LocalRootIdentity: identity,
+		}, {
+			BindingItemID:     "binding-a",
+			RelativeLocalPath: "A",
+			RunnerAction:      ShortcutChildActionFinalDrain,
+		}},
+		CleanupRequests: []ShortcutChildArtifactCleanupRequest{{
+			BindingItemID:     "cleanup-b",
+			RelativeLocalPath: "B",
+			ChildMountID:      "personal:owner@example.com|binding:cleanup-b",
+			LocalRoot:         filepath.Join("parent", "B"),
+			Reason:            ShortcutChildArtifactCleanupParentRemoved,
+		}},
+	})
+	identity.Device = 99
+	second := NormalizeShortcutChildRunnerPublication(shortcutNamespaceTestID, ShortcutChildRunnerPublication{
+		NamespaceID: shortcutNamespaceTestID,
+		Children: []ShortcutChildRunner{{
+			BindingItemID:     "binding-a",
+			RelativeLocalPath: "A",
+			RunnerAction:      ShortcutChildActionFinalDrain,
+		}, {
+			BindingItemID:     "binding-b",
+			RelativeLocalPath: "B",
+			RunnerAction:      ShortcutChildActionRun,
+			LocalRootIdentity: &ShortcutRootIdentity{Device: 1, Inode: 2},
+		}},
+		CleanupRequests: []ShortcutChildArtifactCleanupRequest{{
+			BindingItemID:     "cleanup-b",
+			RelativeLocalPath: "B",
+			ChildMountID:      "personal:owner@example.com|binding:cleanup-b",
+			LocalRoot:         filepath.Join("parent", "B"),
+			Reason:            ShortcutChildArtifactCleanupParentRemoved,
+		}},
+	})
+
+	assert.True(t, ShortcutChildRunnerPublicationsEqual(first, second))
+	assert.Equal(t, uint64(1), first.Children[1].LocalRootIdentity.Device)
+}
+
 // Validates: R-2.4.3, R-2.4.8
 func TestApplyShortcutObservationBatch_ForwardsEmptyCompleteBatch(t *testing.T) {
 	t.Parallel()

@@ -64,7 +64,7 @@ func classifyShortcutChildDrainResults(
 			MountID: mountID,
 		}
 		if mount != nil {
-			result.BindingItemID = mount.bindingItemID
+			result.BindingItemID = mount.childBindingItemID()
 		}
 		report := mountReportForID(reports, mountID)
 		result.Status, result.Detail = classifyShortcutChildDrainReport(report)

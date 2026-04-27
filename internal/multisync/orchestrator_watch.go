@@ -262,7 +262,7 @@ func (o *Orchestrator) startWatchRunner(
 		defer mountCancel()
 		defer o.removeMountPerfCollector(mount.mountID.String())
 
-		if mount.finalDrain {
+		if mount.isFinalDrainChild() {
 			report, drainErr := engine.RunOnce(mountCtx, syncengine.SyncBidirectional, syncengine.RunOptions{FullReconcile: true})
 			if drainErr != nil && mountCtx.Err() == nil {
 				o.logger.Error("final-drain watch runner exited with error",
@@ -427,7 +427,7 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 		}
 	}
 
-	if wr != nil && wr.mount.finalDrain {
+	if wr != nil && wr.mount.isFinalDrainChild() {
 		o.handleFinalDrainWatchRunnerEvent(ctx, runners, wr, event)
 	}
 
@@ -748,7 +748,7 @@ func (o *Orchestrator) stopChildWatchRunnersForParent(
 		if wr == nil || wr.mount == nil || wr.mount.projectionKind != MountProjectionChild {
 			continue
 		}
-		if wr.mount.parentMountID != parentID {
+		if wr.mount.childParentMountID() != parentID {
 			continue
 		}
 		o.logger.Info("stopping child watch runner because parent stopped",
@@ -781,7 +781,7 @@ func (o *Orchestrator) stopInactiveChildWatchRunnersForParent(
 		if wr == nil || wr.mount == nil || wr.mount.projectionKind != MountProjectionChild {
 			continue
 		}
-		if wr.mount.parentMountID != parentID {
+		if wr.mount.childParentMountID() != parentID {
 			continue
 		}
 		if next, ok := runnable[id]; ok {
@@ -885,7 +885,7 @@ func mountSpecCoreEquivalent(current *mountSpec, next *mountSpec) bool {
 
 func mountSpecIdentityEquivalent(current *mountSpec, next *mountSpec) bool {
 	return current.mountID == next.mountID &&
-		current.parentMountID == next.parentMountID &&
+		current.childParentMountID() == next.childParentMountID() &&
 		current.projectionKind == next.projectionKind &&
 		current.driveType == next.driveType &&
 		current.rejectSharePointRootForms == next.rejectSharePointRootForms
@@ -903,7 +903,7 @@ func mountSpecRuntimeEquivalent(current *mountSpec, next *mountSpec) bool {
 		current.statePath == next.statePath &&
 		current.enableWebsocket == next.enableWebsocket &&
 		current.remoteRootDeltaCapable == next.remoteRootDeltaCapable &&
-		mountRootIdentitiesEqual(current.expectedSyncRootIdentity, next.expectedSyncRootIdentity)
+		mountRootIdentitiesEqual(current.expectedChildRootIdentity(), next.expectedChildRootIdentity())
 }
 
 func mountRootIdentitiesEqual(

@@ -15,10 +15,10 @@ func TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable(t *testing.T) {
 	t.Parallel()
 
 	mounts := []*mountSpec{
-		{mountID: "clean", bindingItemID: "binding-clean"},
-		{mountID: "failed", bindingItemID: "binding-failed"},
-		{mountID: "missing", bindingItemID: "binding-missing"},
-		{mountID: "root-missing", bindingItemID: "binding-root"},
+		{mountID: "clean", child: &childMountSpec{bindingItemID: "binding-clean"}},
+		{mountID: "failed", child: &childMountSpec{bindingItemID: "binding-failed"}},
+		{mountID: "missing", child: &childMountSpec{bindingItemID: "binding-missing"}},
+		{mountID: "root-missing", child: &childMountSpec{bindingItemID: "binding-root"}},
 	}
 	reports := []*MountReport{
 		{

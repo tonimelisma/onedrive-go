@@ -51,8 +51,6 @@ type StandaloneMountSelection struct {
 // mountSpec is the control plane's runtime unit.
 type mountSpec struct {
 	mountID                     mountID
-	parentMountID               mountID
-	bindingItemID               string
 	projectionKind              MountProjectionKind
 	selectionIndex              int
 	canonicalID                 driveid.CanonicalID
@@ -71,9 +69,15 @@ type mountSpec struct {
 	transferWorkers             int
 	checkWorkers                int
 	minFreeSpace                int64
-	finalDrain                  bool
-	expectedSyncRootIdentity    *syncengine.ShortcutRootIdentity
+	child                       *childMountSpec
 	parentRunnerPublicationSink syncengine.ShortcutChildRunnerSink
+}
+
+type childMountSpec struct {
+	parentMountID            mountID
+	bindingItemID            string
+	finalDrain               bool
+	expectedSyncRootIdentity *syncengine.ShortcutRootIdentity
 }
 
 type runnerDecisionSet struct {
@@ -154,11 +158,16 @@ func buildRunnerDecisionsForParents(
 		logger,
 	)
 
+	cleanupChildren, err := shortcutChildArtifactCleanups(publications)
+	if err != nil {
+		return nil, err
+	}
+
 	return &runnerDecisionSet{
 		Mounts:             finalMounts,
 		Skipped:            skipped,
 		FinalDrainMountIDs: finalDrainMountIDs(publications),
-		CleanupChildren:    shortcutChildArtifactCleanups(publications),
+		CleanupChildren:    cleanupChildren,
 	}, nil
 }
 
@@ -374,26 +383,28 @@ func buildChildRunnerDecision(parent *mountSpec, child *syncengine.ShortcutChild
 	tokenOwner := parent.tokenOwnerCanonical
 
 	childMount := &mountSpec{
-		mountID:                  mountID(childMountID),
-		parentMountID:            parent.mountID,
-		bindingItemID:            child.BindingItemID,
-		projectionKind:           MountProjectionChild,
-		canonicalID:              driveid.CanonicalID{},
-		displayName:              displayName,
-		syncRoot:                 filepath.Join(parent.syncRoot, filepath.FromSlash(relativePath)),
-		statePath:                statePath,
-		remoteDriveID:            driveid.New(child.RemoteDriveID),
-		remoteRootItemID:         child.RemoteItemID,
-		tokenOwnerCanonical:      tokenOwner,
-		accountEmail:             tokenOwner.Email(),
-		paused:                   parent.paused,
-		enableWebsocket:          parent.enableWebsocket,
-		remoteRootDeltaCapable:   config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
-		transferWorkers:          parent.transferWorkers,
-		checkWorkers:             parent.checkWorkers,
-		minFreeSpace:             parent.minFreeSpace,
-		finalDrain:               child.RunnerAction == syncengine.ShortcutChildActionFinalDrain,
-		expectedSyncRootIdentity: cloneChildRootIdentity(child.LocalRootIdentity),
+		mountID:                mountID(childMountID),
+		projectionKind:         MountProjectionChild,
+		canonicalID:            driveid.CanonicalID{},
+		displayName:            displayName,
+		syncRoot:               filepath.Join(parent.syncRoot, filepath.FromSlash(relativePath)),
+		statePath:              statePath,
+		remoteDriveID:          driveid.New(child.RemoteDriveID),
+		remoteRootItemID:       child.RemoteItemID,
+		tokenOwnerCanonical:    tokenOwner,
+		accountEmail:           tokenOwner.Email(),
+		paused:                 parent.paused,
+		enableWebsocket:        parent.enableWebsocket,
+		remoteRootDeltaCapable: config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
+		transferWorkers:        parent.transferWorkers,
+		checkWorkers:           parent.checkWorkers,
+		minFreeSpace:           parent.minFreeSpace,
+		child: &childMountSpec{
+			parentMountID:            parent.mountID,
+			bindingItemID:            child.BindingItemID,
+			finalDrain:               child.RunnerAction == syncengine.ShortcutChildActionFinalDrain,
+			expectedSyncRootIdentity: cloneChildRootIdentity(child.LocalRootIdentity),
+		},
 	}
 	skipErr := shortcutChildRunnerSkipError(childMountID, child.RunnerAction, child.RunnerDetail)
 
@@ -438,10 +449,35 @@ func (m *mountSpec) identity() MountIdentity {
 
 	return MountIdentity{
 		MountID:        m.mountID.String(),
-		ParentMountID:  m.parentMountID.String(),
+		ParentMountID:  m.childParentMountID().String(),
 		ProjectionKind: m.projectionKind,
 		CanonicalID:    m.canonicalID,
 	}
+}
+
+func (m *mountSpec) childBindingItemID() string {
+	if m == nil || m.child == nil {
+		return ""
+	}
+	return m.child.bindingItemID
+}
+
+func (m *mountSpec) childParentMountID() mountID {
+	if m == nil || m.child == nil {
+		return ""
+	}
+	return m.child.parentMountID
+}
+
+func (m *mountSpec) isFinalDrainChild() bool {
+	return m != nil && m.child != nil && m.child.finalDrain
+}
+
+func (m *mountSpec) expectedChildRootIdentity() *syncengine.ShortcutRootIdentity {
+	if m == nil || m.child == nil {
+		return nil
+	}
+	return m.child.expectedSyncRootIdentity
 }
 
 func (m *mountSpec) label() string {

@@ -524,10 +524,17 @@ func buildChildStatusMount(
 		displayName = path.Base(root.RelativeLocalPath)
 	}
 
-	state := shortcutRootDisplayState(parentDrive, root.State)
 	mountID := config.ChildMountID(child.ParentID.String(), root.BindingItemID)
-	statusDetail, recoveryAction, autoRetry := shortcutRootStatusGuidance(&root)
 	metadata := syncengine.ShortcutRootStatus(root.State)
+	state := driveState(&parentDrive)
+	statusDetail := ""
+	if root.State != "" && root.State != syncengine.ShortcutRootStateActive {
+		state = metadata.DisplayState
+		statusDetail = metadata.Issue
+		if root.BlockedDetail != "" {
+			statusDetail = root.BlockedDetail
+		}
+	}
 
 	mount := statusMount{
 		MountID:        mountID,
@@ -536,11 +543,11 @@ func buildChildStatusMount(
 		DisplayName:    displayName,
 		SyncDir:        filepath.Join(parentDrive.SyncDir, filepath.FromSlash(root.RelativeLocalPath)),
 		State:          state,
-		StateReason:    shortcutRootStateReason(root.State),
+		StateReason:    metadata.StateReason,
 		IssueClass:     string(metadata.IssueClass),
 		StateDetail:    statusDetail,
 		RecoveryClass:  string(metadata.RecoveryClass),
-		RecoveryAction: recoveryAction,
+		RecoveryAction: metadata.RecoveryAction,
 	}
 	if root.Waiting != nil {
 		mount.WaitingReplacement = root.Waiting.RelativeLocalPath
@@ -553,6 +560,7 @@ func buildChildStatusMount(
 		)
 	}
 	if root.State != "" && root.State != syncengine.ShortcutRootStateActive {
+		autoRetry := metadata.AutoRetry
 		mount.AutoRetry = &autoRetry
 	}
 	if syncQ != nil {
@@ -574,35 +582,6 @@ func childProtectedReservedPaths(parentSyncDir string, relativePaths []string) [
 		protected = append(protected, filepath.Join(parentSyncDir, filepath.FromSlash(relativePath)))
 	}
 	return protected
-}
-
-func shortcutRootDisplayState(parentDrive config.Drive, state syncengine.ShortcutRootState) string {
-	if state == "" || state == syncengine.ShortcutRootStateActive {
-		return driveState(&parentDrive)
-	}
-	return syncengine.ShortcutRootStatus(state).DisplayState
-}
-
-func shortcutRootStateReason(state syncengine.ShortcutRootState) string {
-	if state == "" || state == syncengine.ShortcutRootStateActive {
-		return ""
-	}
-	return syncengine.ShortcutRootStatus(state).StateReason
-}
-
-func shortcutRootStatusGuidance(root *syncengine.ShortcutRootRecord) (string, string, bool) {
-	if root == nil {
-		return "", "", false
-	}
-	if root.State == "" || root.State == syncengine.ShortcutRootStateActive {
-		return "", "", false
-	}
-	metadata := syncengine.ShortcutRootStatus(root.State)
-	detail, action := metadata.Issue, metadata.RecoveryAction
-	if root.BlockedDetail != "" {
-		detail = root.BlockedDetail
-	}
-	return detail, action, metadata.AutoRetry
 }
 
 func shortcutRootReservedPaths(current string, protected []string) []string {

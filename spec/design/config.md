@@ -326,7 +326,9 @@ mount ID.
 
 When multisync releases a managed shortcut child, config provides only the
 stable path and catalog mutation primitives, wired once into multisync's child
-artifact cleanup executor. The control plane owns deleting child-owned
+artifact cleanup executor. The parent publication supplies the exact child
+mount ID and local-root cleanup scope; multisync must not reconstruct that
+scope from parent namespace facts. The control plane owns deleting child-owned
 artifacts: the `state_mount_*.db` SQLite file family, upload sessions tagged
 with the child mount scope, and any accidental catalog drive record keyed by
 the automatic child mount ID. This purge is guarded by the child-mount ID shape

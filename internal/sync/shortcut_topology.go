@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"cmp"
 	"context"
 	"path"
 	"slices"
@@ -177,6 +178,123 @@ type ShortcutChildDrainAck struct {
 
 type ShortcutChildArtifactCleanupAck struct {
 	BindingItemID string
+}
+
+func NormalizeShortcutChildRunnerPublication(
+	namespaceID string,
+	publication ShortcutChildRunnerPublication,
+) ShortcutChildRunnerPublication {
+	if publication.NamespaceID == "" {
+		publication.NamespaceID = namespaceID
+	}
+	publication.Children = cloneShortcutChildRunnerPublicationChildren(publication.Children)
+	publication.CleanupRequests = append(
+		[]ShortcutChildArtifactCleanupRequest(nil),
+		publication.CleanupRequests...,
+	)
+	if len(publication.Children) == 0 {
+		publication.Children = nil
+	}
+	if len(publication.CleanupRequests) == 0 {
+		publication.CleanupRequests = nil
+	}
+	slices.SortFunc(publication.Children, func(a, b ShortcutChildRunner) int {
+		if byBinding := cmp.Compare(a.BindingItemID, b.BindingItemID); byBinding != 0 {
+			return byBinding
+		}
+		return cmp.Compare(a.RelativeLocalPath, b.RelativeLocalPath)
+	})
+	slices.SortFunc(publication.CleanupRequests, func(a, b ShortcutChildArtifactCleanupRequest) int {
+		if byBinding := cmp.Compare(a.BindingItemID, b.BindingItemID); byBinding != 0 {
+			return byBinding
+		}
+		if byPath := cmp.Compare(a.RelativeLocalPath, b.RelativeLocalPath); byPath != 0 {
+			return byPath
+		}
+		return cmp.Compare(a.Reason, b.Reason)
+	})
+	return publication
+}
+
+func ShortcutChildRunnerPublicationsEqual(
+	a ShortcutChildRunnerPublication,
+	b ShortcutChildRunnerPublication,
+) bool {
+	if a.NamespaceID != b.NamespaceID ||
+		len(a.Children) != len(b.Children) ||
+		len(a.CleanupRequests) != len(b.CleanupRequests) {
+		return false
+	}
+	for i := range a.Children {
+		if !shortcutChildRunnerEqual(&a.Children[i], &b.Children[i]) {
+			return false
+		}
+	}
+	for i := range a.CleanupRequests {
+		if a.CleanupRequests[i] != b.CleanupRequests[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneShortcutChildRunnerPublicationChildren(children []ShortcutChildRunner) []ShortcutChildRunner {
+	cloned := append([]ShortcutChildRunner(nil), children...)
+	for i := range cloned {
+		if cloned[i].LocalRootIdentity != nil {
+			identity := *cloned[i].LocalRootIdentity
+			cloned[i].LocalRootIdentity = &identity
+		}
+	}
+	return cloned
+}
+
+func shortcutChildRunnerEqual(a *ShortcutChildRunner, b *ShortcutChildRunner) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if shortcutChildRunnerComparableFor(a) != shortcutChildRunnerComparableFor(b) {
+		return false
+	}
+	return shortcutRootIdentityPointersEqual(a.LocalRootIdentity, b.LocalRootIdentity)
+}
+
+type shortcutChildRunnerComparable struct {
+	BindingItemID     string
+	RelativeLocalPath string
+	LocalAlias        string
+	RemoteDriveID     string
+	RemoteItemID      string
+	RemoteIsFolder    bool
+	RunnerAction      ShortcutChildRunnerAction
+	RunnerDetail      string
+}
+
+func shortcutChildRunnerComparableFor(child *ShortcutChildRunner) shortcutChildRunnerComparable {
+	if child == nil {
+		return shortcutChildRunnerComparable{}
+	}
+	return shortcutChildRunnerComparable{
+		BindingItemID:     child.BindingItemID,
+		RelativeLocalPath: child.RelativeLocalPath,
+		LocalAlias:        child.LocalAlias,
+		RemoteDriveID:     child.RemoteDriveID,
+		RemoteItemID:      child.RemoteItemID,
+		RemoteIsFolder:    child.RemoteIsFolder,
+		RunnerAction:      child.RunnerAction,
+		RunnerDetail:      child.RunnerDetail,
+	}
+}
+
+func shortcutRootIdentityPointersEqual(a *ShortcutRootIdentity, b *ShortcutRootIdentity) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return SameShortcutRootIdentity(*a, *b)
+	}
 }
 
 func (b shortcutTopologyBatch) hasFacts() bool {

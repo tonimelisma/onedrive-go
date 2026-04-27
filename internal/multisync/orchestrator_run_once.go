@@ -254,7 +254,7 @@ func (o *Orchestrator) buildEngineWork(
 		fn: func(c context.Context) (*syncengine.Report, error) {
 			runMode := mode
 			runOpts := opts
-			if mount.finalDrain {
+			if mount.isFinalDrainChild() {
 				runMode = syncengine.SyncBidirectional
 				runOpts = syncengine.RunOptions{FullReconcile: true}
 			}
@@ -362,14 +362,15 @@ func acknowledgeSuccessfulFinalDrains(
 		mount := mountByID[result.MountID]
 		bindingItemID := result.BindingItemID
 		if bindingItemID == "" && mount != nil {
-			bindingItemID = mount.bindingItemID
+			bindingItemID = mount.childBindingItemID()
 		}
 		if mount == nil || bindingItemID == "" {
 			return nil, fmt.Errorf("final-drain child mount %s is missing parent binding identity", result.MountID)
 		}
-		acker := parentAckers[mount.parentMountID]
+		parentID := mount.childParentMountID()
+		acker := parentAckers[parentID]
 		if acker.IsZero() {
-			return nil, fmt.Errorf("parent mount %s is unavailable for final-drain acknowledgement", mount.parentMountID)
+			return nil, fmt.Errorf("parent mount %s is unavailable for final-drain acknowledgement", parentID)
 		}
 		snapshot, err := acker.AcknowledgeChildFinalDrain(ctx, syncengine.ShortcutChildDrainAck{
 			BindingItemID: bindingItemID,
@@ -377,9 +378,13 @@ func acknowledgeSuccessfulFinalDrains(
 		if err != nil {
 			return nil, fmt.Errorf("acknowledging final drain for child mount %s: %w", result.MountID, err)
 		}
-		cleanups = append(cleanups, shortcutChildArtifactCleanups(map[mountID]syncengine.ShortcutChildRunnerPublication{
-			mount.parentMountID: snapshot,
-		})...)
+		publishedCleanups, cleanupErr := shortcutChildArtifactCleanups(map[mountID]syncengine.ShortcutChildRunnerPublication{
+			parentID: snapshot,
+		})
+		if cleanupErr != nil {
+			return nil, cleanupErr
+		}
+		cleanups = append(cleanups, publishedCleanups...)
 	}
 	return cleanups, nil
 }

@@ -1098,7 +1098,7 @@ func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testin
 		}
 	}
 	require.NotNil(t, childMount)
-	require.True(t, childMount.finalDrain)
+	require.True(t, childMount.isFinalDrainChild())
 
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -1704,7 +1704,7 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 		if mount.projectionKind != MountProjectionChild {
 			continue
 		}
-		switch mount.bindingItemID {
+		switch mount.childBindingItemID() {
 		case firstOld.BindingItemID:
 			firstOldMount = mount
 		case secondChild.BindingItemID:
@@ -1743,7 +1743,7 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 	})
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		require.Equal(t, MountProjectionChild, req.Mount.projectionKind)
-		assert.Equal(t, firstNew.BindingItemID, req.Mount.bindingItemID)
+		assert.Equal(t, firstNew.BindingItemID, req.Mount.childBindingItemID())
 		events = append(events, "start-first")
 		return &mockEngine{}, nil
 	}
@@ -1866,8 +1866,8 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedPublicati
 	require.NotNil(t, parentMount)
 	require.NotNil(t, childMount)
 
-	parentDone := make(chan struct{})
-	close(parentDone)
+	parentRunnerDone := make(chan struct{})
+	close(parentRunnerDone)
 	childDone := make(chan struct{})
 	childCanceled := false
 	runners := map[mountID]*watchRunner{
@@ -1875,7 +1875,7 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedPublicati
 			mount:  parentMount,
 			engine: &mockEngine{},
 			cancel: func() {},
-			done:   parentDone,
+			done:   parentRunnerDone,
 		},
 		childMount.mountID: {
 			mount:  childMount,

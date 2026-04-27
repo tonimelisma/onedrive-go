@@ -22,7 +22,6 @@ type oneShotChildRuns struct {
 
 	mu            gosync.Mutex
 	parents       map[mountID]*mountSpec
-	parentDone    map[mountID]chan struct{}
 	parentAckers  map[mountID]syncengine.ShortcutChildAckHandle
 	published     map[mountID]bool
 	started       map[mountID]bool
@@ -49,7 +48,6 @@ func newOneShotChildRuns(
 		mode:         mode,
 		opts:         opts,
 		parents:      parentByID,
-		parentDone:   make(map[mountID]chan struct{}),
 		parentAckers: make(map[mountID]syncengine.ShortcutChildAckHandle),
 		published:    make(map[mountID]bool),
 		started:      make(map[mountID]bool),
@@ -67,9 +65,6 @@ func (c *oneShotChildRuns) registerParents(work []indexedMountWork) {
 			continue
 		}
 		parentID := item.work.mount.mountID
-		if _, found := c.parentDone[parentID]; !found {
-			c.parentDone[parentID] = make(chan struct{})
-		}
 		// One-shot children must come from the live parent run, not from
 		// an old publication cached before this parent started.
 		c.orchestrator.forgetParentRunnerPublication(parentID)
@@ -94,15 +89,9 @@ func (c *oneShotChildRuns) markParentDone(ctx context.Context, parentID mountID)
 	if c == nil || parentID == "" {
 		return
 	}
-	c.mu.Lock()
-	done := c.parentDone[parentID]
-	if done != nil {
-		delete(c.parentDone, parentID)
-	}
-	c.mu.Unlock()
-	if done != nil {
-		close(done)
-	}
+	// Children are admitted only after the parent run returns with its final
+	// accepted publication, so acknowledgements from child cleanup/final-drain
+	// naturally happen after the parent reaches its one-shot safe point.
 	c.startChildrenForParent(ctx, parentID)
 }
 
@@ -195,7 +184,6 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	c.orchestrator.closeRunOnceChildEngines(ctx, childWork)
 	c.appendReports(childReports...)
 
-	c.waitParentDone(parentID)
 	parentAckers := c.parentAckersFor(parentID)
 	if purgeErr := c.orchestrator.purgeShortcutChildArtifactsForDecisions(
 		ctx,
@@ -221,15 +209,6 @@ func (c *oneShotChildRuns) runChildrenForParent(
 		c.orchestrator.logger.Info("finalized drained shortcut child mounts",
 			slog.String("parent_mount_id", parentID.String()),
 		)
-	}
-}
-
-func (c *oneShotChildRuns) waitParentDone(parentID mountID) {
-	c.mu.Lock()
-	done := c.parentDone[parentID]
-	c.mu.Unlock()
-	if done != nil {
-		<-done
 	}
 }
 
