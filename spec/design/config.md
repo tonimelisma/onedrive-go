@@ -325,13 +325,13 @@ Parent engines own the authoritative parent protected-path state in
 mount ID.
 
 When multisync releases a managed shortcut child, config provides only the
-stable path and catalog mutation primitives. The control plane owns deleting
-child-owned artifacts: the `state_mount_*.db` SQLite file family, upload
-sessions tagged with the child mount scope, and any accidental catalog drive
-record keyed by the automatic child mount ID. This purge is guarded by the
-child-mount ID shape (`parent|binding:<id>`) so an explicit user-configured
-shared-drive catalog entry or parent drive state is not removed by shortcut
-lifecycle cleanup.
+stable path and catalog mutation primitives, wired once into multisync's child
+artifact cleanup executor. The control plane owns deleting child-owned
+artifacts: the `state_mount_*.db` SQLite file family, upload sessions tagged
+with the child mount scope, and any accidental catalog drive record keyed by
+the automatic child mount ID. This purge is guarded by the child-mount ID shape
+(`parent|binding:<id>`) so an explicit user-configured shared-drive catalog
+entry or parent drive state is not removed by shortcut lifecycle cleanup.
 
 ## Optional Catalog Fields
 

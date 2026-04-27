@@ -504,7 +504,7 @@ func TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot(t *testing.
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	snapshot, err := eng.ShortcutChildAckCapability().AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
+	snapshot, err := eng.ShortcutChildAckHandle().AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
 		BindingItemID: "binding-1",
 	})
 	require.NoError(t, err)
@@ -580,7 +580,7 @@ func TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemov
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	snapshot, err := eng.ShortcutChildAckCapability().AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
+	snapshot, err := eng.ShortcutChildAckHandle().AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
 		BindingItemID: "binding-1",
 	})
 

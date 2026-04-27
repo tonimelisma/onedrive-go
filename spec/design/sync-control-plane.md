@@ -161,7 +161,9 @@ actions to `internal/multisync`:
 - in one-shot mode, each configured parent runs as an ordinary engine and the
   first fresh runner publication from that parent starts that parent's child
   work immediately; no parent waits for unrelated parents before its children
-  can run
+  can run. The one-shot child-run coordinator only owns timing, report
+  aggregation, artifact cleanup, and live-parent acknowledgement ordering;
+  children still execute ordinary engine `RunOnce` passes
 - successful runner-publication mutation in watch mode publishes a new
   parent-owned child snapshot through the live parent runner; multisync
   reconciles only that parent's child runners without stopping the parent
@@ -177,8 +179,9 @@ observations, stored `shortcut_roots`, and child-drain acknowledgements, then
 persists parent state and executes parent namespace side effects at its own I/O
 boundary. Multisync consumes only the resulting runner-action publication:
 start `run` children, skip parent-blocked children, run `final_drain` children
-to final drain, acknowledge clean drain to the parent, then stop and forget
-child runtime state after the parent release succeeds.
+to final drain, acknowledge clean drain through the live parent
+`ShortcutChildAckHandle`, then stop and forget child runtime state after the
+parent release succeeds.
 
 Runtime mount-set construction does not inspect or mutate parent shortcut alias
 roots. Parent engines create, reserve, move, block, or release alias
@@ -231,7 +234,8 @@ Status is the guided recovery surface for these states. Non-active shortcut
 children expose the protected current path, reserved previous/candidate paths,
 state/reason/detail, concise `recovery_action`, `auto_retry`, and waiting
 replacement state when present from the parent shortcut-root status snapshot,
-not from multisync runner publications.
+plus sync-owned typed issue/recovery classes for JSON consumers. None of this
+status-only metadata comes from multisync runner publications.
 
 ## Boundary To The Engine
 

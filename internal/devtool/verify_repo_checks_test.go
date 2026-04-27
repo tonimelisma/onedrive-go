@@ -485,6 +485,7 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncDirectLifecycleAckWrappers(t *t
 		"type shortcutChildDrainAcker interface{}",
 		"type shortcutChildArtifactCleanupAcker interface{}",
 		"type shortcutChildLifecycleAcker interface{}",
+		"type ShortcutChildAckCapability interface{}",
 		"type shortcutParentLifecycleHandle struct{}",
 		"",
 	})

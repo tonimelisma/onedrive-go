@@ -56,7 +56,9 @@ func TestShortcutRootStatusMetadataCoversNonActiveStates(t *testing.T) {
 		metadata := ShortcutRootStatus(state)
 		assert.Equal(t, string(state), metadata.DisplayState)
 		assert.Equal(t, string(state), metadata.StateReason)
+		assert.NotEmpty(t, metadata.IssueClass)
 		assert.NotEmpty(t, metadata.Issue)
+		assert.NotEmpty(t, metadata.RecoveryClass)
 		assert.True(t, metadata.AutoRetry)
 	}
 }
@@ -105,6 +107,58 @@ func TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges(t *testing.T
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not allowed")
+}
+
+// Validates: R-2.4.8, R-2.4.10
+func TestPlanMissingMaterializedShortcutRootChoosesAliasEffect(t *testing.T) {
+	t.Parallel()
+
+	record := ShortcutRootRecord{
+		NamespaceID:       "personal:owner@example.com",
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		LocalAlias:        "Docs",
+		RemoteDriveID:     driveid.New("remote-drive"),
+		RemoteItemID:      "remote-root",
+		RemoteIsFolder:    true,
+		State:             ShortcutRootStateActive,
+		ProtectedPaths:    []string{"Shared/Docs"},
+	}
+
+	deletePlan := planMissingMaterializedShortcutRoot(record, "Shared/Docs", nil)
+	assert.Equal(t, shortcutRootMissingAliasDelete, deletePlan.Action)
+	assert.Equal(t, shortcutAliasMutationDelete, deletePlan.Mutation.Kind)
+	assert.Equal(t, "binding-1", deletePlan.Mutation.BindingItemID)
+
+	renamePlan := planMissingMaterializedShortcutRoot(record, "Shared/Docs", []string{"Shared/Renamed"})
+	assert.Equal(t, shortcutRootMissingAliasRename, renamePlan.Action)
+	assert.Equal(t, shortcutAliasMutationRename, renamePlan.Mutation.Kind)
+	assert.Equal(t, "Shared/Renamed", renamePlan.Mutation.RelativeLocalPath)
+	assert.Equal(t, "Renamed", renamePlan.Mutation.LocalAlias)
+
+	ambiguousPlan := planMissingMaterializedShortcutRoot(record, "Shared/Docs", []string{"Shared/A", "Shared/B"})
+	assert.Equal(t, shortcutRootMissingAliasRenameAmbiguous, ambiguousPlan.Action)
+	assert.Equal(t, ShortcutRootStateRenameAmbiguous, ambiguousPlan.Next.State)
+	assert.ElementsMatch(t, []string{"Shared/Docs", "Shared/A", "Shared/B"}, ambiguousPlan.Next.ProtectedPaths)
+}
+
+// Validates: R-2.4.8, R-2.4.10
+func TestPlanMissingMaterializedShortcutRootPrefersHistoricalProjectionMove(t *testing.T) {
+	t.Parallel()
+
+	record := ShortcutRootRecord{
+		NamespaceID:       "personal:owner@example.com",
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		State:             ShortcutRootStateActive,
+		ProtectedPaths:    []string{"Shared/Docs", "Shared/Old"},
+	}
+
+	plan := planMissingMaterializedShortcutRoot(record, "Shared/Docs", []string{"Shared/Old"})
+
+	assert.Equal(t, shortcutRootMissingAliasMoveProjection, plan.Action)
+	assert.Equal(t, "Shared/Old", plan.FromRelativePath)
+	assert.Equal(t, "Shared/Docs", plan.ToRelativePath)
 }
 
 // Validates: R-2.4.8, R-2.4.10

@@ -2096,28 +2096,21 @@ func (m *mockEngine) Close(context.Context) error {
 	return nil
 }
 
-func (m *mockEngine) ShortcutChildAckCapability() syncengine.ShortcutChildAckCapability {
-	return m
-}
-
-func (m *mockEngine) AcknowledgeChildFinalDrain(
-	ctx context.Context,
-	ack syncengine.ShortcutChildDrainAck,
-) (syncengine.ShortcutChildRunnerPublication, error) {
-	if m.ackDrainFn != nil {
-		return m.ackDrainFn(ctx, ack)
-	}
-	return syncengine.ShortcutChildRunnerPublication{}, nil
-}
-
-func (m *mockEngine) AcknowledgeChildArtifactsPurged(
-	ctx context.Context,
-	ack syncengine.ShortcutChildArtifactCleanupAck,
-) (syncengine.ShortcutChildRunnerPublication, error) {
-	if m.ackCleanupFn != nil {
-		return m.ackCleanupFn(ctx, ack)
-	}
-	return syncengine.ShortcutChildRunnerPublication{}, nil
+func (m *mockEngine) ShortcutChildAckHandle() syncengine.ShortcutChildAckHandle {
+	return syncengine.NewShortcutChildAckHandle(
+		func(ctx context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildRunnerPublication, error) {
+			if m.ackDrainFn != nil {
+				return m.ackDrainFn(ctx, ack)
+			}
+			return syncengine.ShortcutChildRunnerPublication{}, nil
+		},
+		func(ctx context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error) {
+			if m.ackCleanupFn != nil {
+				return m.ackCleanupFn(ctx, ack)
+			}
+			return syncengine.ShortcutChildRunnerPublication{}, nil
+		},
+	)
 }
 
 // --- RunWatch ---

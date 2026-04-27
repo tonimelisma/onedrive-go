@@ -19,28 +19,17 @@ type engineRunner interface {
 	RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error)
 	RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error
 	Close(ctx context.Context) error
+	ShortcutChildAckHandle() syncengine.ShortcutChildAckHandle
 }
 
-type shortcutChildAckCapabilityProvider interface {
-	ShortcutChildAckCapability() syncengine.ShortcutChildAckCapability
-}
-
-func shortcutParentAckCapabilityForMount(
+func shortcutParentAckHandleForMount(
 	mount *mountSpec,
 	engine engineRunner,
-) syncengine.ShortcutChildAckCapability {
+) syncengine.ShortcutChildAckHandle {
 	if mount == nil || mount.projectionKind != MountProjectionStandalone || engine == nil {
-		return nil
+		return syncengine.ShortcutChildAckHandle{}
 	}
-	provider, ok := engine.(shortcutChildAckCapabilityProvider)
-	if !ok {
-		return nil
-	}
-	capability := provider.ShortcutChildAckCapability()
-	if capability == nil {
-		return nil
-	}
-	return capability
+	return engine.ShortcutChildAckHandle()
 }
 
 type engineFactoryRequest struct {
@@ -87,6 +76,7 @@ type Orchestrator struct {
 	// shortcut lifecycle policy.
 	latestParentRunnerPublications map[mountID]syncengine.ShortcutChildRunnerPublication
 	reconcileTicks                 func(time.Duration) (<-chan time.Time, func())
+	artifactCleanup                shortcutChildArtifactCleanupExecutor
 }
 
 // NewOrchestrator creates an Orchestrator with real Engine factory.
@@ -119,6 +109,7 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 		logger:                         cfg.Logger,
 		perfRuntime:                    perf.NewRuntime(cfg.PerfParent),
 		latestParentRunnerPublications: make(map[mountID]syncengine.ShortcutChildRunnerPublication),
+		artifactCleanup:                newShortcutChildArtifactCleanupExecutor(cfg.Logger, config.DefaultDataDir()),
 		reconcileTicks: func(interval time.Duration) (<-chan time.Time, func()) {
 			if interval <= 0 {
 				return nil, func() {}

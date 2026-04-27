@@ -219,53 +219,30 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	if candidateErr != nil {
 		return unavailableShortcutRoot(record, candidateErr.Error()), true, true, nil
 	}
-	if previousPath, ok := previousProtectedProjectionCandidate(&record, candidates); ok {
-		return e.moveRemoteRenamedShortcutProjection(record, previousPath, relativePath)
-	}
-	switch len(candidates) {
-	case 0:
-		if err := e.applyShortcutAliasMutation(ctx, shortcutAliasMutation{
-			Kind:          shortcutAliasMutationDelete,
-			BindingItemID: record.BindingItemID,
-		}); err != nil {
-			return aliasMutationBlockedShortcutRoot(record, err), true, true, nil
+	plan := planMissingMaterializedShortcutRoot(record, relativePath, candidates)
+	switch plan.Action {
+	case shortcutRootMissingAliasMoveProjection:
+		return e.moveRemoteRenamedShortcutProjection(record, plan.FromRelativePath, plan.ToRelativePath)
+	case shortcutRootMissingAliasDelete:
+		if err := e.applyShortcutAliasMutation(ctx, plan.Mutation); err != nil {
+			return planMissingAliasMutationFailure(record, "", err), true, true, nil
 		}
 		return ShortcutRootRecord{}, false, true, nil
-	case 1:
-		alias := path.Base(candidates[0])
-		if err := e.applyShortcutAliasMutation(ctx, shortcutAliasMutation{
-			Kind:              shortcutAliasMutationRename,
-			BindingItemID:     record.BindingItemID,
-			RelativeLocalPath: candidates[0],
-			LocalAlias:        alias,
-		}); err != nil {
-			next := aliasMutationBlockedShortcutRoot(record, err)
-			next.ProtectedPaths = appendUniqueProtectedRootPaths(next.ProtectedPaths, candidates[0])
-			return next, true, true, nil
+	case shortcutRootMissingAliasRename:
+		if err := e.applyShortcutAliasMutation(ctx, plan.Mutation); err != nil {
+			return planMissingAliasMutationFailure(record, plan.CandidatePath, err), true, true, nil
 		}
-		identity, identityErr := e.syncTree.IdentityNoFollow(filepath.FromSlash(candidates[0]))
+		identity, identityErr := e.syncTree.IdentityNoFollow(filepath.FromSlash(plan.CandidatePath))
 		if identityErr != nil {
 			return unavailableShortcutRoot(record, identityErr.Error()), true, true, nil
 		}
-		next := record
-		next.RelativeLocalPath = candidates[0]
-		next.LocalAlias = alias
-		next = plannedShortcutRootTransition(next,
-			shortcutRootEventLocalRootReady,
-			ShortcutRootStateActive,
-			"",
-		)
-		next.LocalRootIdentity = &identity
-		next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, append(record.ProtectedPaths, record.RelativeLocalPath))
-		return next, true, true, nil
+		return planMissingAliasRenameSuccess(record, plan.CandidatePath, identity), true, true, nil
+	case shortcutRootMissingAliasRenameAmbiguous:
+		return plan.Next, plan.Keep, plan.Changed, nil
+	case shortcutRootMissingAliasNoop:
+		return record, true, false, nil
 	default:
-		next := plannedShortcutRootTransition(record,
-			shortcutRootEventAliasRenameAmbiguous,
-			ShortcutRootStateRenameAmbiguous,
-			"multiple same-parent shortcut alias rename candidates",
-		)
-		next.ProtectedPaths = appendUniqueProtectedRootPaths(next.ProtectedPaths, candidates...)
-		return next, true, true, nil
+		return record, true, false, nil
 	}
 }
 
@@ -435,15 +412,7 @@ func (e *Engine) moveRemoteRenamedShortcutProjection(
 	if err != nil {
 		return unavailableShortcutRoot(record, err.Error()), true, true, nil
 	}
-	next := record
-	next = plannedShortcutRootTransition(next,
-		shortcutRootEventLocalRootReady,
-		ShortcutRootStateActive,
-		"",
-	)
-	next.LocalRootIdentity = &identity
-	next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, nil)
-	return next, true, true, nil
+	return planShortcutProjectionMoveSuccess(record, identity), true, true, nil
 }
 
 func (e *Engine) moveShortcutRootProjection(fromRelativePath string, toRelativePath string) error {

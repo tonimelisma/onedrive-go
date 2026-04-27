@@ -431,14 +431,23 @@ publishes the resulting child runner actions. Multisync must not rediscover pare
 remote state, call parent-drive alias mutation APIs, or decide parent alias
 lifecycle.
 
+Shortcut-root lifecycle decisions are expressed as deterministic planner
+helpers before the engine shell performs I/O. The planner chooses alias
+delete/rename, historical projection move, ambiguous-rename, cleanup-blocked,
+waiting-replacement, duplicate-target, and local-root-unavailable state
+transitions from stored shortcut-root records plus observed outcomes. The shell
+then performs Graph, filesystem, and SQLite effects and feeds those outcomes
+back through the same transition table.
+
 When a child final drain completes, multisync acknowledges that completion to
-the already-running parent engine. The parent engine first persists
+the already-running parent engine through the sync-owned
+`ShortcutChildAckHandle`. The parent engine first persists
 `removed_release_pending`, then releases its own protected alias projection or
 promotes a waiting same-path replacement to `active`. After parent release, the
 old binding remains in `removed_child_cleanup_pending` without protected paths
 and publishes a child artifact cleanup request. Multisync purges the
-child-owned artifacts and acknowledges cleanup; only then does the parent
-delete the cleanup-pending row. If cleanup is interrupted or blocked, startup
+child-owned artifacts through its injected cleanup executor and acknowledges
+cleanup; only then does the parent delete the cleanup-pending row. If cleanup is interrupted or blocked, startup
 and later topology refresh retry the release from `removed_release_pending` or
 `removed_cleanup_blocked`; a later complete topology batch is not required to
 release that parent protected-root.

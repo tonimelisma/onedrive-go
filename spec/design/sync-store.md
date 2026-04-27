@@ -21,7 +21,8 @@ architecture it owns:
 - read-only raw row access used by `status`
 
 It does not own planning policy, execution policy, or a competing history/status
-model.
+model. Shortcut status display metadata is sync-owned but derived from
+`ShortcutRootState`; the store persists the state rows, not presentation copy.
 
 For parent namespace engines, it also owns parent-local shortcut-root state in
 `shortcut_roots`. Those rows are not child content state: they describe the
