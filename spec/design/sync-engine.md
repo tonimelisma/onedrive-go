@@ -197,11 +197,13 @@ parent engine, then waits for that live parent to publish from the normal
 current-plan pipeline.
 That pipeline performs the same remote observation cadence decision, full local
 observation, current-plan build, retry/block reconciliation, and shortcut-root
-lifecycle publication the parent needs for ordinary work. One-shot publishes
-before committing deferred remote observation progress; each one-shot parent
-publication starts that parent child work immediately, without waiting for
-unrelated parents to finish. Watch bootstrap and steady-state changes publish
-through the live parent runner and reconcile only that parent child runner set.
+lifecycle publication the parent needs for ordinary work. One-shot parents
+publish only after the current parent state and protected-root decisions have
+reached the accepted publication point; multisync admits that parent's children
+from the final accepted publication after the parent pass returns, without
+waiting for unrelated parents to finish. Watch bootstrap and steady-state
+changes publish through the live parent runner and reconcile only that parent
+child runner set.
 Child runner admission is therefore derived from fresh parent local and remote
 truth rather than cached control-plane state, and multisync never constructs a
 temporary startup parent engine for shortcut admission.

@@ -119,7 +119,7 @@ func runIndexedParentMountWork(
 			defer wg.Done()
 			reports[indexed.index] = indexed.work.runner.run(ctx, indexed.work.fn)
 			if coordinator != nil && indexed.work.mount != nil {
-				coordinator.markParentDone(indexed.work.mount.mountID)
+				coordinator.markParentDone(ctx, indexed.work.mount.mountID)
 			}
 		}(w)
 	}
@@ -295,21 +295,21 @@ func (o *Orchestrator) closeRunOnceEngine(ctx context.Context, mount *mountSpec,
 
 func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	ctx context.Context,
-	compiled *compiledMountSet,
+	decisions *runnerDecisionSet,
 	reports []*MountReport,
 	parentAckers map[mountID]syncengine.ShortcutChildAckHandle,
 ) (bool, error) {
-	if compiled == nil || len(compiled.FinalDrainMountIDs) == 0 {
+	if decisions == nil || len(decisions.FinalDrainMountIDs) == 0 {
 		return false, nil
 	}
-	results := classifyShortcutChildDrainResults(compiled.FinalDrainMountIDs, compiled.Mounts, reports)
+	results := classifyShortcutChildDrainResults(decisions.FinalDrainMountIDs, decisions.Mounts, reports)
 	successful := cleanShortcutChildDrainResults(results)
 	if len(successful) == 0 {
 		logUnfinishedFinalDrains(results, o.logger)
 		return false, nil
 	}
 
-	cleanups, err := acknowledgeSuccessfulFinalDrains(ctx, successful, compiled.Mounts, parentAckers)
+	cleanups, err := acknowledgeSuccessfulFinalDrains(ctx, successful, decisions.Mounts, parentAckers)
 	if err != nil {
 		return false, err
 	}
@@ -357,7 +357,6 @@ func acknowledgeSuccessfulFinalDrains(
 			mountByID[mount.mountID.String()] = mount
 		}
 	}
-	parentByID := indexStandaloneMounts(filterMountSpecsByProjection(mounts, MountProjectionStandalone))
 	cleanups := make([]shortcutChildArtifactCleanup, 0, len(successful))
 	for _, result := range successful {
 		mount := mountByID[result.MountID]
@@ -378,7 +377,7 @@ func acknowledgeSuccessfulFinalDrains(
 		if err != nil {
 			return nil, fmt.Errorf("acknowledging final drain for child mount %s: %w", result.MountID, err)
 		}
-		cleanups = append(cleanups, shortcutChildArtifactCleanups(parentByID, map[mountID]syncengine.ShortcutChildRunnerPublication{
+		cleanups = append(cleanups, shortcutChildArtifactCleanups(map[mountID]syncengine.ShortcutChildRunnerPublication{
 			mount.parentMountID: snapshot,
 		})...)
 	}

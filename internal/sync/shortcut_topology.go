@@ -166,6 +166,8 @@ const (
 type ShortcutChildArtifactCleanupRequest struct {
 	BindingItemID     string
 	RelativeLocalPath string
+	ChildMountID      string
+	LocalRoot         string
 	Reason            ShortcutChildArtifactCleanupReason
 }
 
