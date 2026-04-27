@@ -36,13 +36,13 @@ type shortcutChildArtifactCleanupExecutor struct {
 	deleteUploadSessions func(string, string) error
 }
 
-func newShortcutChildArtifactCleanupExecutor(logger *slog.Logger) shortcutChildArtifactCleanupExecutor {
+func newShortcutChildArtifactCleanupExecutor(logger *slog.Logger, dataDir string) shortcutChildArtifactCleanupExecutor {
 	return shortcutChildArtifactCleanupExecutor{
 		logger:             logger,
 		remove:             localpath.Remove,
 		pruneCatalogRecord: pruneShortcutChildCatalogRecord,
 		deleteUploadSessions: func(childMountID string, localRoot string) error {
-			sessionStore := driveops.NewSessionStore(config.DefaultDataDir(), logger)
+			sessionStore := driveops.NewSessionStore(dataDir, logger)
 			_, err := sessionStore.DeleteForScope(childMountID, localRoot)
 			if err != nil {
 				return fmt.Errorf("delete upload sessions for child mount %s: %w", childMountID, err)
@@ -50,6 +50,13 @@ func newShortcutChildArtifactCleanupExecutor(logger *slog.Logger) shortcutChildA
 			return nil
 		},
 	}
+}
+
+func (o *Orchestrator) childArtifactCleanupExecutor() shortcutChildArtifactCleanupExecutor {
+	if o == nil || o.artifactCleanup.remove == nil {
+		return newShortcutChildArtifactCleanupExecutor(nil, config.DefaultDataDir())
+	}
+	return o.artifactCleanup
 }
 
 func shortcutChildArtifactCleanups(
@@ -103,7 +110,7 @@ func cleanupLocalRoot(parent *mountSpec, relativeLocalPath string) string {
 func (o *Orchestrator) purgeShortcutChildArtifactsForCompiled(
 	ctx context.Context,
 	compiled *compiledMountSet,
-	parentAckers map[mountID]syncengine.ShortcutChildAckCapability,
+	parentAckers map[mountID]syncengine.ShortcutChildAckHandle,
 ) error {
 	if compiled == nil || len(compiled.CleanupChildren) == 0 {
 		return nil
@@ -112,7 +119,7 @@ func (o *Orchestrator) purgeShortcutChildArtifactsForCompiled(
 	purged := make([]shortcutChildArtifactCleanup, 0, len(compiled.CleanupChildren))
 	for _, cleanup := range compiled.CleanupChildren {
 		scope := shortcutChildArtifactScope{mountID: cleanup.mountID, localRoot: cleanup.localRoot}
-		if err := purgeShortcutChildArtifacts(ctx, scope, o.logger); err != nil {
+		if err := o.childArtifactCleanupExecutor().purge(ctx, scope); err != nil {
 			errs = append(errs, fmt.Errorf("purging shortcut child mount %s: %w", cleanup.mountID, err))
 			continue
 		}
@@ -129,13 +136,13 @@ func (o *Orchestrator) purgeShortcutChildArtifactsForCompiled(
 func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 	ctx context.Context,
 	cleanups []shortcutChildArtifactCleanup,
-	parentAckers map[mountID]syncengine.ShortcutChildAckCapability,
+	parentAckers map[mountID]syncengine.ShortcutChildAckHandle,
 ) error {
 	var errs []error
 	for _, cleanup := range cleanups {
 		parentID := mountID(cleanup.namespaceID)
 		acker := parentAckers[parentID]
-		if acker == nil {
+		if acker.IsZero() {
 			errs = append(errs, fmt.Errorf("parent mount %s is unavailable for child artifact cleanup acknowledgement", parentID))
 			continue
 		}
@@ -152,7 +159,7 @@ func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 }
 
 func purgeShortcutChildArtifacts(ctx context.Context, scope shortcutChildArtifactScope, logger *slog.Logger) error {
-	return newShortcutChildArtifactCleanupExecutor(logger).purge(ctx, scope)
+	return newShortcutChildArtifactCleanupExecutor(logger, config.DefaultDataDir()).purge(ctx, scope)
 }
 
 func (e shortcutChildArtifactCleanupExecutor) purge(
