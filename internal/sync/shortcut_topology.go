@@ -79,15 +79,50 @@ type ShortcutChildRunner struct {
 	LocalRootIdentity *ShortcutRootIdentity
 }
 
-type ShortcutChildAckCapability interface {
-	AcknowledgeChildFinalDrain(
-		context.Context,
-		ShortcutChildDrainAck,
-	) (ShortcutChildRunnerPublication, error)
-	AcknowledgeChildArtifactsPurged(
-		context.Context,
-		ShortcutChildArtifactCleanupAck,
-	) (ShortcutChildRunnerPublication, error)
+// ShortcutChildAckHandle is the live-parent acknowledgement capability that
+// multisync receives from a running parent engine. It is intentionally a value
+// handle instead of an interface so control-plane code can invoke acknowledgements
+// without owning or re-opening parent shortcut lifecycle state.
+type ShortcutChildAckHandle struct {
+	ackFinalDrain      func(context.Context, ShortcutChildDrainAck) (ShortcutChildRunnerPublication, error)
+	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildRunnerPublication, error)
+}
+
+// NewShortcutChildAckHandle creates a live-parent acknowledgement handle.
+// Production callers should obtain handles from Engine; this constructor exists
+// for package-internal tests that exercise control-plane acknowledgement flows.
+func NewShortcutChildAckHandle(
+	ackFinalDrain func(context.Context, ShortcutChildDrainAck) (ShortcutChildRunnerPublication, error),
+	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildRunnerPublication, error),
+) ShortcutChildAckHandle {
+	return ShortcutChildAckHandle{
+		ackFinalDrain:      ackFinalDrain,
+		ackArtifactsPurged: ackArtifactsPurged,
+	}
+}
+
+func (h ShortcutChildAckHandle) IsZero() bool {
+	return h.ackFinalDrain == nil && h.ackArtifactsPurged == nil
+}
+
+func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
+	ctx context.Context,
+	ack ShortcutChildDrainAck,
+) (ShortcutChildRunnerPublication, error) {
+	if h.ackFinalDrain == nil {
+		return ShortcutChildRunnerPublication{}, nil
+	}
+	return h.ackFinalDrain(ctx, ack)
+}
+
+func (h ShortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
+	ctx context.Context,
+	ack ShortcutChildArtifactCleanupAck,
+) (ShortcutChildRunnerPublication, error) {
+	if h.ackArtifactsPurged == nil {
+		return ShortcutChildRunnerPublication{}, nil
+	}
+	return h.ackArtifactsPurged(ctx, ack)
 }
 
 // ShortcutRootIdentity is the parent-engine-issued local directory identity

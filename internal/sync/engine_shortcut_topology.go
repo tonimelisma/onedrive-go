@@ -28,29 +28,14 @@ func (e *Engine) publishShortcutChildRunnerPublication(
 	return nil
 }
 
-type shortcutChildAckCapability struct {
-	engine *Engine
-}
-
-func (e *Engine) ShortcutChildAckCapability() ShortcutChildAckCapability {
+func (e *Engine) ShortcutChildAckHandle() ShortcutChildAckHandle {
 	if e == nil {
-		return nil
+		return ShortcutChildAckHandle{}
 	}
-	return shortcutChildAckCapability{engine: e}
-}
-
-func (c shortcutChildAckCapability) AcknowledgeChildFinalDrain(
-	ctx context.Context,
-	ack ShortcutChildDrainAck,
-) (ShortcutChildRunnerPublication, error) {
-	return c.engine.acknowledgeChildFinalDrain(ctx, ack)
-}
-
-func (c shortcutChildAckCapability) AcknowledgeChildArtifactsPurged(
-	ctx context.Context,
-	ack ShortcutChildArtifactCleanupAck,
-) (ShortcutChildRunnerPublication, error) {
-	return c.engine.acknowledgeChildArtifactsPurged(ctx, ack)
+	return NewShortcutChildAckHandle(
+		e.acknowledgeChildFinalDrain,
+		e.acknowledgeChildArtifactsPurged,
+	)
 }
 
 func (e *Engine) acknowledgeChildFinalDrain(

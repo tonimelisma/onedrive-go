@@ -61,9 +61,11 @@ type statusMount struct {
 	SyncDir                string         `json:"sync_dir"`
 	State                  string         `json:"state"`
 	StateReason            string         `json:"state_reason,omitempty"`
+	IssueClass             string         `json:"issue_class,omitempty"`
 	StateDetail            string         `json:"state_detail,omitempty"`
 	ProtectedCurrentPath   string         `json:"protected_current_path,omitempty"`
 	ProtectedReservedPaths []string       `json:"protected_reserved_paths,omitempty"`
+	RecoveryClass          string         `json:"recovery_class,omitempty"`
 	RecoveryAction         string         `json:"recovery_action,omitempty"`
 	AutoRetry              *bool          `json:"auto_retry,omitempty"`
 	WaitingReplacement     string         `json:"waiting_replacement,omitempty"`
@@ -525,6 +527,7 @@ func buildChildStatusMount(
 	state := shortcutRootDisplayState(parentDrive, root.State)
 	mountID := config.ChildMountID(child.ParentID.String(), root.BindingItemID)
 	statusDetail, recoveryAction, autoRetry := shortcutRootStatusGuidance(&root)
+	metadata := syncengine.ShortcutRootStatus(root.State)
 
 	mount := statusMount{
 		MountID:        mountID,
@@ -534,13 +537,14 @@ func buildChildStatusMount(
 		SyncDir:        filepath.Join(parentDrive.SyncDir, filepath.FromSlash(root.RelativeLocalPath)),
 		State:          state,
 		StateReason:    shortcutRootStateReason(root.State),
+		IssueClass:     string(metadata.IssueClass),
 		StateDetail:    statusDetail,
+		RecoveryClass:  string(metadata.RecoveryClass),
 		RecoveryAction: recoveryAction,
 	}
 	if root.Waiting != nil {
 		mount.WaitingReplacement = root.Waiting.RelativeLocalPath
 	}
-	metadata := syncengine.ShortcutRootStatus(root.State)
 	if metadata.ProtectsPath {
 		mount.ProtectedCurrentPath = mount.SyncDir
 		mount.ProtectedReservedPaths = childProtectedReservedPaths(
